@@ -147,6 +147,10 @@ export interface DraftColumn {
   /** Title of the bound task — shown in the header, and used as the first message
    *  when the user hits Start with an empty composer. */
   boundTaskTitle?: string;
+  /** The bound task is a project lead (Task.org_role 'lead'): the column is a
+   *  chat with it, so there is no Start Task / Ask Walnut fork and no empty send
+   *  (draftStartMessage). */
+  orgLead?: boolean;
   /** Owner-driven "open the folder picker" signal. Bumped (never reset) when a
    *  Start is attempted with no cwd; the panel opens the picker on each change.
    *  A nonce rather than a boolean so a second attempt after the user dismissed
@@ -629,4 +633,18 @@ export function clearAiFields(draft: DraftColumn, fields: readonly DraftAiField[
   let changed = false;
   for (const f of fields) changed = ai.delete(f) || changed;
   return changed ? { ...draft, aiFields: ai } : draft;
+}
+
+/**
+ * What a draft's Start sends. Nothing typed on a bound task sends the task's title, so
+ * the CLI does not spawn and idle on a task the user asked to work on. A lead's column is
+ * a chat: with nothing typed (and no image) there is nothing to say, so null, and the
+ * Start does not happen ("Start anyway" on a refused start reaches it with no text).
+ */
+export function draftStartMessage(
+  d: Pick<DraftColumn, 'taskId' | 'boundTaskTitle' | 'orgLead'>, text: string, hasImages = false,
+): string | null {
+  if (text.trim()) return text.trim();
+  if (d.orgLead) return hasImages ? text : null;
+  return d.taskId ? d.boundTaskTitle ?? '' : text;
 }

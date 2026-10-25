@@ -81,6 +81,13 @@ import { repairHint, type WalnutRepairTarget } from '@/pages/repair-target';
 const PLACEHOLDER = 'What should this session do?';
 const HINT = 'Nothing runs yet: send to start, or save it as a todo.';
 const BOUND_HINT = 'Start a session on this task: type the first instruction, or send with nothing typed to use its title.';
+/** A project lead's column: what the lead is, so the first message is a chat, not a task brief. */
+function orgLeadHint(title: string | undefined, project: string | undefined): string {
+  const who = title || 'This lead';
+  return project
+    ? `${who} leads ${project}: it reads the project's tasks and reports to Main. Ask how it is going, or hand it work.`
+    : `${who} reads its project's tasks and reports to Main. Ask how it is going, or hand it work.`;
+}
 const BOUND_WALNUT_HINT = 'Ask Walnut about this task: type what you need, or send with nothing typed to use its title.';
 const FORK_HINT = 'Forks the source conversation into a sibling session: type where it should go next, or send with nothing typed to just branch.';
 const FORK_PLACEHOLDER = 'Message for the forked session (optional)';
@@ -787,8 +794,10 @@ export function DraftSessionPanel({
             )}
           </div>
         ) : (
-          <div className="draft-quick-hint">
-            {isFork ? FORK_HINT : isRepair ? repairHint(repairTarget) : isBound ? BOUND_HINT : HINT}
+          <div className="draft-quick-hint" {...(draft.orgLead ? { 'data-testid': 'draft-org-lead-hint' } : {})}>
+            {isFork ? FORK_HINT : isRepair ? repairHint(repairTarget)
+              : draft.orgLead ? orgLeadHint(draft.boundTaskTitle, draft.project)
+                : isBound ? BOUND_HINT : HINT}
           </div>
         )}
       </div>
@@ -835,12 +844,14 @@ export function DraftSessionPanel({
           // only where '' means something: a bound draft sends its task's title, a
           // fork just branches. A plain draft needs words (spawn-and-idle is legal,
           // but an accidental Enter must not start a CLI on nothing).
-          allowEmptySend={isBound || isFork}
+          allowEmptySend={(isBound && !draft.orgLead) || isFork}
           sendTitle={isFork
             ? 'Fork the source session (an empty message just branches the conversation)'
             : isBound && isWalnut
               ? 'Ask Walnut about this task (an empty message sends the task title)'
-              : isBound
+              : draft.orgLead
+                ? `Send to ${draft.boundTaskTitle || 'the lead'}`
+                : isBound
                 ? 'Start the session on this task (an empty message sends the task title)'
                 : isWalnut
                   ? askLabel
@@ -867,7 +878,8 @@ export function DraftSessionPanel({
           draftKey={draftComposerKey(draft.id)}
           placeholder={isFork ? FORK_PLACEHOLDER
             : isRepair ? REPAIR_PLACEHOLDER
-              : askAgent ? `${askLabel} anything…` : isWalnut ? (walnutLabel ? `Ask ${walnutLabel} anything…` : WALNUT_PLACEHOLDER) : PLACEHOLDER}
+              : askAgent ? `${askLabel} anything…` : isWalnut ? (walnutLabel ? `Ask ${walnutLabel} anything…` : WALNUT_PLACEHOLDER)
+                : draft.orgLead ? `Message ${draft.boundTaskTitle || 'the lead'}…` : PLACEHOLDER}
           prefillText={prefill.text}
           prefillNonce={prefill.nonce}
           showCommands={false}

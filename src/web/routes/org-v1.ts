@@ -5,9 +5,11 @@
  *   GET  /org/reports[?of=id] → { of, rows }          one node's direct reports, compact (org_get);
  *                                                     `of` defaults to the calling session's task
  *   POST /org/main            → { task }              the main agent's task, made on first use
- *   POST /org/contact { to }  → { task, kind, project, started }
+ *   POST /org/contact { to }  → { task, kind, project, started, launch? }
  *                                                     who `to` (a project or a task) means; a
- *                                                     project with 2+ teams gets its lead here
+ *                                                     project with 2+ teams gets its lead here;
+ *                                                     `launch` = where a lead with no session
+ *                                                     would start ({ cwd, host }), read only
  *
  * Reads work anywhere; the two writes make tasks, so they run on the primary
  * only (501 on a replica, like every other task create).
@@ -17,7 +19,7 @@ import { Router, type Request, type Response, type NextFunction } from 'express'
 import { role } from '../../core/server-role.js'
 import type { Task } from '../../core/types.js'
 import {
-  OrgError, ensureMainTask, getOrgTree, orgReportsOf, resolveOrgContact,
+  OrgError, contactLaunch, ensureMainTask, getOrgTree, orgReportsOf, resolveOrgContact,
 } from '../../core/org/org-store.js'
 
 export const orgV1Router = Router()
@@ -96,7 +98,9 @@ orgV1Router.post('/org/contact', async (req: Request, res: Response, next: NextF
     primaryOnly('Org contacts are resolved')
     const to = typeof req.body?.to === 'string' ? req.body.to : ''
     const contact = await resolveOrgContact(to)
-    res.json({ task: brief(contact.task), kind: contact.kind, project: contact.project, started: hasSession(contact.task) })
+    const started = hasSession(contact.task)
+    const launch = contact.kind === 'lead' && !started ? await contactLaunch(contact.task) : undefined
+    res.json({ task: brief(contact.task), kind: contact.kind, project: contact.project, started, ...(launch ? { launch } : {}) })
   } catch (err) {
     sendError(res, next, err)
   }

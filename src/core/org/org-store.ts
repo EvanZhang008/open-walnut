@@ -76,7 +76,7 @@ export function ensureProjectLead(project: string): Promise<Task> {
   const name = project.trim();
   if (!name) return Promise.reject(new OrgError('no_lead_for_inbox', 400, 'The Inbox has no lead: talk to its tasks directly.'));
   return serial(async () => {
-    const { addTask, getTask, getProjectMetadata, updateTask } = await import('../task-manager.js');
+    const { addTask, getTask, updateTask } = await import('../task-manager.js');
     const tasks = await orgTasks();
     const existing = pickLead(tasks, name);
     if (existing?.phase === 'COMPLETE') {
@@ -87,19 +87,39 @@ export function ensureProjectLead(project: string): Promise<Task> {
     }
     if (existing) return getTask(existing.id);
     const canonical = tasks.find((t) => isOrgMember(t) && projectKey(t.project) === projectKey(name))?.project?.trim() || name;
-    const meta = await getProjectMetadata(canonical).catch(() => undefined) as { default_cwd?: unknown } | undefined;
-    const cwd = typeof meta?.default_cwd === 'string' && meta.default_cwd.startsWith('/') ? meta.default_cwd : undefined;
+    // No folder of its own: a lead runs where its project's tasks start (contactLaunch), and
+    // a folder recorded here would freeze the project's default as it is today.
     const { task } = await addTask({
       title: `${canonical} lead`,
       project: canonical,
       source: 'local',
       org_role: 'lead',
       description: `Leads the work in project "${canonical}" and reports it to the main agent. Made by Walnut.`,
-      ...(cwd ? { cwd } : {}),
     });
     log.task.info('org: project lead created', { taskId: task.id, project: canonical });
     return task;
   });
+}
+
+/** Where a chat with an org contact would start: a folder and its host (null = this Mac). */
+export interface ContactLaunch { cwd: string; host: string | null }
+
+/**
+ * Where a task with no session would start, read only (task-launch-plan.ts): its
+ * own folder, else its project's, else the project's memory folder, which the
+ * start makes. None when the start would refuse (a remote host with no folder, an
+ * unknown host) or the memory folder would fall outside PROJECTS_MEMORY_DIR.
+ */
+export async function contactLaunch(task: Task): Promise<ContactLaunch | undefined> {
+  try {
+    const { insideMemoryFolders, resolveTaskLaunchReadOnly } = await import('../sessions/task-launch-plan.js');
+    const plan = await resolveTaskLaunchReadOnly(task, { taskIdPrefix: task.id, source: 'org-contact' });
+    if (plan.createLocalDirectory && !insideMemoryFolders(plan.cwd)) return undefined;
+    return { cwd: plan.cwd, host: plan.host || null };
+  } catch (err) {
+    log.task.info('org: no launch place for contact', { taskId: task.id, error: err instanceof Error ? err.message : String(err) });
+    return undefined;
+  }
 }
 
 export interface OrgContact {

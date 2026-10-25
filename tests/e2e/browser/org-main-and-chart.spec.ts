@@ -6,19 +6,26 @@
  *   - the drawer pins Main above the other chats and links the org chart
  *   - the org chart has one column per project; a drag makes a task another's worker,
  *     a drag onto the column makes it a top-level task again
- *   - Chat on a project with two tasks makes its hidden lead and opens a draft bound to it
+ *   - Chat on a project with two tasks makes its hidden lead and opens a plain chat with it
+ *     (no Start Task / Ask Walnut fork, a folder ready); the Tasks page hides the leads too
  *   - a send from Main's composer makes Main, shows its session, and keeps it off the board
+ *     and off the Tasks page
  * The fixture is shared, so this file makes its own project and removes what it made,
  * Main included.
  */
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test'
 import { loadHome, openAskWalnutDrawer } from './draft-helpers'
-import { isolateUiPrefs } from './todo-panel-helpers'
+import { isolateUiPrefs, presetPanelView } from './todo-panel-helpers'
+import { openSessionFromPlus, pinToTier } from './draft-surface-helpers'
 
-const STAMP = Date.now().toString(36)
+// Both browser projects load this file in their own worker at about the same moment: the pid
+// keeps their projects apart (a shared one let one worker's lead answer the other's chat).
+const STAMP = `${Date.now().toString(36)}${process.pid.toString(36)}`
 const PROJECT = `Org spec ${STAMP}`
 const MAIN_PROMPT = `org spec hello ${STAMP}`
 const made: string[] = []
+/** Tasks a test made only to draw a board header; removed with the rest. */
+const anchors: string[] = []
 
 test.describe.configure({ mode: 'serial' })
 test.setTimeout(180_000)
@@ -60,7 +67,7 @@ test.beforeAll(async ({ request }) => {
 
 test.afterAll(async ({ request }) => {
   const lead = (await orgTree(request)).projects.find((p) => p.project === PROJECT)?.lead
-  for (const id of [...made, ...(lead ? [lead.id] : [])]) await removeTask(request, id)
+  for (const id of [...made, ...anchors, ...(lead ? [lead.id] : [])]) await removeTask(request, id)
   await removeMain(request)
 })
 
@@ -108,8 +115,16 @@ test('the org chart: a drag makes a worker, a drag onto the column undoes it', a
   await expect(sheet).toHaveCount(0)
 })
 
-test('Chat on a project with two tasks makes its hidden lead and opens a draft bound to it', async ({ page, request }) => {
+test('Chat on a project with two tasks makes its hidden lead and opens a plain chat with it', async ({ page, request }) => {
+  // A Parked tier header (and its "+") draws only while the tier holds a task: an Inbox
+  // anchor sits there, so the "+" below has a header to live on.
+  const anchor = await request.post('/api/tasks', { data: { title: `Org spec tier anchor ${STAMP}`, source: 'local', project: '' } })
+  expect(anchor.ok(), await anchor.text()).toBe(true)
+  const anchorId = ((await anchor.json()) as { task: { id: string } }).task.id
+  anchors.push(anchorId)
+  await pinToTier(page, anchorId, 'wait')
   await isolateUiPrefs(page)
+  await presetPanelView(page, { section: 'all', project: '' })
   await loadHome(page)
   await sidebarOrgChart(page).click()
   await column(page).scrollIntoViewIfNeeded()
@@ -119,11 +134,79 @@ test('Chat on a project with two tasks makes its hidden lead and opens a draft b
   await expect.poll(async () => (await orgTree(request)).projects.find((p) => p.project === PROJECT)?.lead?.title, { timeout: 15_000 })
     .toBe(`${PROJECT} lead`)
   const lead = (await orgTree(request)).projects.find((p) => p.project === PROJECT)!.lead!
-  await expect(page.locator('.main-page-session-column .draft-session-panel').filter({ hasText: `${PROJECT} lead` }))
-    .toBeVisible({ timeout: 15_000 })
+  const draft = page.locator('.main-page-session-column .draft-session-panel').filter({ hasText: `${PROJECT} lead` })
+  await expect(draft).toBeVisible({ timeout: 15_000 })
+  // A chat with the lead: no Start Task / Ask Walnut fork, a line on who it is, and its name in the composer.
+  await expect(draft.locator('.draft-intent-cards')).toHaveCount(0)
+  await expect(draft.getByTestId('draft-org-lead-hint')).toContainText(`leads ${PROJECT}`)
+  const composer = draft.locator('.chat-input-textarea')
+  await expect(composer).toHaveAttribute('placeholder', `Message ${PROJECT} lead…`)
   await expect(page.locator(`.todo-panel [data-task-id="${lead.id}"]`)).toHaveCount(0)
   // The project's own tasks stay on the board.
   await expect(page.locator(`.todo-panel [data-task-id="${made[0]}"]`).first()).toBeVisible({ timeout: 15_000 })
+
+  // The chat opens where the project's tasks start (its memory folder here), so it never asks
+  // for one, and nothing is written to the lead.
+  const leadFolder = async () => (await draft.locator('.draft-folder-pill').getAttribute('aria-label')) ?? ''
+  await expect.poll(leadFolder).toContain(`/${PROJECT.toLowerCase()} on `)
+  expect((await (await request.get(`/api/tasks/${lead.id}`)).json()).task.cwd).toBeFalsy()
+
+  // A tier "+" while this chat is untouched reuses the column for a plain draft: the
+  // lead's binding, line and folder do not ride along.
+  const header = page.locator('.todo-pinned-sublabel[data-navigation-id="wait"]').first()
+  await expect(header).toBeVisible({ timeout: 25_000 })
+  await openSessionFromPlus(page, header)
+  const drafts = page.locator('.main-page-session-column .draft-session-panel')
+  await expect(drafts).toHaveCount(1)
+  await expect(draft).toHaveCount(0)
+  await expect(drafts.getByTestId('draft-org-lead-hint')).toHaveCount(0)
+  await expect(drafts.locator('.draft-folder-pill')).toHaveAttribute('aria-label', 'Choose folder and host')
+  // Chat on the lead again: the same untouched column becomes the lead chat once more.
+  await sidebarOrgChart(page).click()
+  await column(page).scrollIntoViewIfNeeded()
+  await column(page).getByTestId('org-project-chat').click()
+  await expect(draft).toBeVisible({ timeout: 15_000 })
+  await expect(drafts).toHaveCount(1)
+  await expect.poll(leadFolder).toContain(`/${PROJECT.toLowerCase()} on `)
+
+  // An empty send says nothing (it would hand the lead its own title as a request).
+  let launches = 0
+  const countLaunch = (r: { method(): string; url(): string }) => {
+    if (r.method() === 'POST' && new URL(r.url()).pathname === '/api/sessions/quick-start') launches++
+  }
+  page.on('request', countLaunch)
+  await composer.press('Enter')
+  await page.waitForTimeout(1500)
+  expect(launches).toBe(0)
+  await expect(draft).toBeVisible()
+  await expect(draft.getByTestId('draft-needs-folder')).toHaveCount(0)
+  page.off('request', countLaunch)
+
+  const started = page.waitForResponse((r) => r.request().method() === 'POST' && new URL(r.url()).pathname === '/api/sessions/quick-start')
+  await composer.fill(`status please ${STAMP}`)
+  await composer.press('Enter')
+  const res = await started
+  expect(res.status(), await res.text()).toBe(200)
+  const body = (await res.json()) as { taskId: string; sessionId: string; walnutAgent?: boolean }
+  expect(body.taskId).toBe(lead.id)
+  await expect(page.locator(`.main-page-session-column [data-session-id="${body.sessionId}"]`).getByText(`I processed your message: status please ${STAMP}`).first())
+    .toBeVisible({ timeout: 60_000 })
+  // Still the lead: the launch did not turn it into an Ask Walnut chat.
+  const after = (await (await request.get(`/api/tasks/${lead.id}`)).json()).task as { org_role?: string; walnut_agent?: boolean }
+  expect(after.org_role).toBe('lead')
+  expect(after.walnut_agent).toBeFalsy()
+})
+
+test('the Tasks page hides the leads, like the board', async ({ page, request }) => {
+  // Main is a singleton both browser projects share, so it is checked where the last test
+  // makes it; this one only needs the lead the previous test made.
+  await isolateUiPrefs(page)
+  await loadHome(page)
+  const lead = (await orgTree(request)).projects.find((p) => p.project === PROJECT)?.lead
+  expect(lead, 'the lead the previous test made').toBeTruthy()
+  await page.locator('.sidebar a[href="/tasks"]').first().click()
+  await expect(page.locator(`.tp-row[data-task-id="${made[0]}"]`).first()).toBeVisible({ timeout: 30_000 })
+  await expect(page.locator(`.tp-row[data-task-id="${lead!.id}"]`)).toHaveCount(0)
 })
 
 test('a send from Main\'s composer makes Main, shows its session, and keeps Main off the board', async ({ page, request }) => {
@@ -151,4 +234,9 @@ test('a send from Main\'s composer makes Main, shows its session, and keeps Main
   drawer = await openAskWalnutDrawer(page)
   await drawer.getByTestId('ask-walnut-drawer-main').click()
   await expect(session).toHaveAttribute('data-session-id', sessionId, { timeout: 30_000 })
+
+  // The Tasks page leaves Main out too.
+  await page.locator('.sidebar a[href="/tasks"]').first().click()
+  await expect(page.locator(`.tp-row[data-task-id="${made[0]}"]`).first()).toBeVisible({ timeout: 30_000 })
+  await expect(page.locator(`.tp-row[data-task-id="${taskId}"]`)).toHaveCount(0)
 })

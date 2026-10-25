@@ -382,6 +382,15 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
     // retired here and replaced by the session below.
     const { continueTaskConversation, taskConversation } = await import('./task-session-claim.js');
     const conversation = await taskConversation(updatedTask.id, { retire: true });
+    if (!conversation && (!host || host === '__local__' || host === 'local')) {
+      // The folder a task with no folder starts in is made by its start (task-launch-plan.ts),
+      // also here: a draft opened on that folder (Chat on a project lead) starts through this.
+      const { insideMemoryFolders, taskMemoryFolder } = await import('./task-launch-plan.js');
+      if (cwd === taskMemoryFolder(updatedTask.project) && insideMemoryFolders(cwd)) {
+        const { mkdir } = await import('node:fs/promises');
+        await mkdir(cwd, { recursive: true });
+      }
+    }
     if (conversation) {
       const { refuseDifferentPlace } = await import('./task-start.js');
       refuseDifferentPlace(updatedTask, conversation, { ...(host !== undefined ? { host } : {}), ...(params.engine ? { engine: params.engine } : {}) });

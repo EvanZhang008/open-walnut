@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { PROJECTS_MEMORY_DIR } from '../../constants.js';
 import { getProjectMetadata } from '../task-manager.js';
 import { QuickStartError } from './quick-start.js';
 import { recordedCwd } from './task-start.js';
@@ -14,6 +15,17 @@ export function requireFrozenWorkspaceReady(task: Task, params: Pick<SessionStar
   if (task.workspace && (params.cwd === undefined || belongsToWorkspace(task.workspace, params.cwd)) && !isLaunchReady(task.workspace)) {
     throw new QuickStartError('This task workspace is not ready. Open the task, wait for its workspace, then review this action again.', 409);
   }
+}
+
+/** The folder a task with no folder of its own starts in on this machine; its start makes it. */
+export function taskMemoryFolder(project: string | undefined): string {
+  return path.join(PROJECTS_MEMORY_DIR, (project || 'inbox').toLowerCase());
+}
+
+/** A folder strictly inside PROJECTS_MEMORY_DIR (a project name with `..` lands outside it). */
+export function insideMemoryFolders(dir: string): boolean {
+  const rel = path.relative(PROJECTS_MEMORY_DIR, dir);
+  return !!rel && rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel);
 }
 
 /** Same resolution as task_start, but without mkdir, claiming or writing anything. */
@@ -43,14 +55,10 @@ export async function resolveTaskLaunchReadOnly(task: Task, params: SessionStart
   let createLocalDirectory = false;
   if (!cwd) {
     if (host) throw new QuickStartError(`Task ${task.id} needs a cwd on host "${host}". Pass cwd or set project default_cwd.`, 400);
-    const { PROJECTS_MEMORY_DIR } = await import('../../constants.js');
-    cwd = path.join(PROJECTS_MEMORY_DIR, (task.project || 'inbox').toLowerCase());
+    cwd = taskMemoryFolder(task.project);
     createLocalDirectory = true;
   }
-  if (!host) {
-    const { PROJECTS_MEMORY_DIR } = await import('../../constants.js');
-    if (cwd === path.join(PROJECTS_MEMORY_DIR, (task.project || 'inbox').toLowerCase())) createLocalDirectory = true;
-  }
+  if (!host && cwd === taskMemoryFolder(task.project)) createLocalDirectory = true;
   return { taskId: task.id, project: task.project, cwd, host, model,
     mode: params.mode, ...(params.effort ? { effort: params.effort } : {}), engine: normalizeEngine(params.engine), createLocalDirectory,
     message: params.message?.trim() || task.description || `Working on task: ${task.title}` };

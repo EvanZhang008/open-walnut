@@ -1200,7 +1200,9 @@ team is talked to through that task; the Inbox never gets a lead.
 - `POST /api/v1/org/main` → `200 { task }`: Main's task, made once (local, filed
   under `Ask Walnut`).
 - `POST /api/v1/org/contact { "to": project name | task id }` → `200 { task,
-  kind: "lead" | "team" | "task", project, started }`; `400 no_lead_for_inbox`,
+  kind: "lead" | "team" | "task", project, started, launch? }`; `launch`
+  (`{ cwd, host }`, host `null` = the primary) is where a lead with no session
+  would start, read only and absent when it has no place yet; `400 no_lead_for_inbox`,
   `404 unknown_contact`. Both POSTs answer `501` on a replica.
 
 ### Task actions (additive, Wave 1 2026-08) — detail / delete / field setters / batch / focus

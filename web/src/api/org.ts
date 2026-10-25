@@ -21,6 +21,8 @@ export interface OrgContactAnswer {
   kind: 'lead' | 'team' | 'task';
   project: string;
   started: boolean;
+  /** Where a lead with no session would start (host null = this Mac); absent when it has no place yet. */
+  launch?: { cwd: string; host: string | null };
 }
 
 /** Who answers for a project (its lead, made here when it has 2+ teams, or its one team). */

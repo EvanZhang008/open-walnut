@@ -15,9 +15,11 @@ import { createMockConstants } from '../helpers/mock-constants.js'
 
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-org-v1'))
 
-import { WALNUT_HOME } from '../../src/constants.js'
+import path from 'node:path'
+import { PROJECTS_MEMORY_DIR, WALNUT_HOME } from '../../src/constants.js'
 import { startServer, stopServer } from '../../src/web/server.js'
-import { addTask, completeTask, getTask, listTasks, updateTask } from '../../src/core/task-manager.js'
+import { addTask, completeTask, deleteTask, getTask, listTasks, setProjectMetadata, updateTask, updateTaskRaw } from '../../src/core/task-manager.js'
+import { updateConfig } from '../../src/core/config-manager.js'
 import { createSessionRecord } from '../../src/core/session-tracker.js'
 import { pendingOrgDigest } from '../../src/core/org/org-store.js'
 import { taskDepth } from '../../src/core/sessions/subtask-limits.js'
@@ -77,6 +79,10 @@ describe('/api/v1/org', () => {
     const lead = await getTask([...leadIds][0]!)
     expect(lead).toMatchObject({ title: 'Walnut lead', project: 'Walnut', source: 'local', org_role: 'lead' })
     expect(lead.parent_task_id).toBeFalsy()
+    // No folder of its own; the contact says where a chat with it would start: a project with
+    // no folder runs in its memory folder, as every task start does.
+    expect(lead.cwd).toBeUndefined()
+    for (const c of contacts) expect(c.json).toMatchObject({ started: false, launch: { cwd: path.join(PROJECTS_MEMORY_DIR, 'walnut'), host: null } })
     // The teams were not touched: no parent link, same project.
     for (const id of [a.id, b.id]) expect((await getTask(id)).parent_task_id).toBeFalsy()
     expect((await listTasks()).filter((x) => x.org_role === 'lead')).toHaveLength(1)
@@ -86,6 +92,54 @@ describe('/api/v1/org', () => {
 
     const byId = await api<{ task: { id: string }; kind: string }>('POST', '/org/contact', { to: a.id })
     expect(byId.json).toMatchObject({ kind: 'task', task: { id: a.id } })
+  })
+
+  it('a lead\'s launch follows its project and is never written to the lead', async () => {
+    type Contact = { task: { id: string }; started: boolean; launch?: { cwd: string; host: string | null } }
+    const own = path.join(WALNUT_HOME, 'repos', 'site')
+    await updateConfig({ hosts: { devbox: { label: 'Dev box', hostname: 'org-devbox.invalid', user: 'someone' } } })
+    for (const [project, settings] of [
+      ['Site', { default_cwd: own }],
+      ['Remote', { default_cwd: '/home/dev/app', default_host: 'devbox' }],
+      ['Nowhere', { default_cwd: '/home/dev/app', default_host: 'gone-host' }],
+      ['Bare', { default_host: 'devbox' }],
+    ] as const) {
+      await setProjectMetadata(project, settings)
+      for (const title of ['One', 'Two']) await addTask({ title: `${project} ${title}`, project })
+    }
+    const site = await api<Contact>('POST', '/org/contact', { to: 'Site' })
+    expect(site.json.launch).toEqual({ cwd: own, host: null })
+    // The project's folder moves: the lead follows it, since nothing was recorded on the lead.
+    const moved = path.join(WALNUT_HOME, 'repos', 'site-2')
+    await setProjectMetadata('Site', { default_cwd: moved })
+    expect((await api<Contact>('POST', '/org/contact', { to: 'Site' })).json.launch).toEqual({ cwd: moved, host: null })
+    expect((await getTask(site.json.task.id)).cwd).toBeUndefined()
+    // Another host: the pair rides together. An unknown host, or a host with no folder,
+    // would refuse to start, so there is no place to offer (the chat asks for a folder).
+    expect((await api<Contact>('POST', '/org/contact', { to: 'Remote' })).json.launch).toEqual({ cwd: '/home/dev/app', host: 'devbox' })
+    const nowhere = await api<Contact>('POST', '/org/contact', { to: 'Nowhere' })
+    expect(nowhere.status).toBe(200)
+    expect(nowhere.json.launch).toBeUndefined()
+    expect((await api<Contact>('POST', '/org/contact', { to: 'Bare' })).json.launch).toBeUndefined()
+
+    // A lead from before (v1 copied the project's folder in) keeps it, paired with the project's host.
+    for (const title of ['One', 'Two']) await addTask({ title: `Older ${title}`, project: 'Older' })
+    await setProjectMetadata('Older', { default_cwd: '/home/dev/older', default_host: 'devbox' })
+    const older = (await addTask({ title: 'Older lead', project: 'Older', source: 'local', org_role: 'lead', cwd: '/home/dev/older-then' })).task
+    const byId = await api<Contact>('POST', '/org/contact', { to: older.id })
+    expect(byId.json).toMatchObject({ task: { id: older.id }, launch: { cwd: '/home/dev/older-then', host: 'devbox' } })
+
+    // A started lead is talked to in its session: no launch.
+    await updateTaskRaw(older.id, { session_id: 'org-launch-started' })
+    const started = await api<Contact>('POST', '/org/contact', { to: older.id })
+    expect(started.json.started).toBe(true)
+    expect(started.json.launch).toBeUndefined()
+
+    // The later tests count projects: leave none of these behind.
+    for (const t of await listTasks()) {
+      if (['Site', 'Remote', 'Nowhere', 'Bare', 'Older'].includes(t.project ?? '')) await deleteTask(t.id)
+    }
+    await updateConfig({ hosts: {} })
   })
 
   it('the Inbox has no lead; an unknown contact is a 404 that names it', async () => {

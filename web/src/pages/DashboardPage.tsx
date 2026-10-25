@@ -1,5 +1,6 @@
 import { useState, useMemo, useCallback, useEffect } from 'react';
 import { useTasksContext } from '@/contexts/TasksContext';
+import { isHiddenOrgNode } from '@open-walnut/org-tree';
 import { useOrdering } from '@/hooks/useOrdering';
 import { useProjectRegistry } from '@/hooks/useProjectRegistry';
 import { useFavorites } from '@/hooks/useFavorites';
@@ -65,7 +66,9 @@ function readColumns(): TpColumnId[] {
 
 /** /tasks: dense two-pane workspace: project rail (left) + task table (right). */
 export function DashboardPage() {
-  const { tasks, loading, error, toggleComplete, create, deleteTask, update, completedHidden, ensureAllTasks } = useTasksContext();
+  const { tasks: storeTasks, loading, error, toggleComplete, create, deleteTask, update, completedHidden, ensureAllTasks } = useTasksContext();
+  // Main and project leads are the org's own nodes: hidden here as on the home board (the org chart shows them).
+  const tasks = useMemo(() => storeTasks.filter((t) => !isHiddenOrgNode(t)), [storeTasks]);
   const { projectOrder, reorderProjects } = useOrdering();
   const { projectNames, sourceByName, favoriteByName, refresh: refreshRegistry } = useProjectRegistry();
   const { toggleFavoriteProject } = useFavorites();

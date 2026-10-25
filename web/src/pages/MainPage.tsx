@@ -30,7 +30,7 @@ import { PendingSessionPanel } from '@/components/sessions/PendingSessionPanel';
 import { seedLaunchPrompt } from '@/components/sessions/launch-prompt-seed';
 import { DraftSessionPanel } from '@/components/sessions/DraftSessionPanel';
 import {
-  applyDraftParse, ASK_WALNUT_PROJECT, clearAiFields, draftComposerKey, followProjectRegistryChange,
+  applyDraftParse, ASK_WALNUT_PROJECT, clearAiFields, draftComposerKey, draftStartMessage, followProjectRegistryChange,
   refreshFolderProject, withDirLaunchMemory, suggestDiff,
   type DraftColumn, type DraftParseInput, type DraftParseKind, type DraftTaskField, type DraftTaskFieldPatch,
   type ProjectDefaultLookup,
@@ -50,6 +50,7 @@ import { fetchAskWalnutLaunch, fetchSession, fetchSessionsForTask, fetchWorkingD
 import { fetchProjectDetail, saveProjectMetadata } from '@/api/projects';
 import { adoptAgentSearchSession } from '@/api/agentSearch';
 import { fetchTask, recordSuggestFeedback, updateTask, SUGGEST_RULES_VERSION } from '@/api/tasks';
+import { resolveOrgContact } from '@/api/org';
 import { isBuiltinTier } from '@/api/focus';
 import { fetchConfig, fetchSelfRepair, invalidateSelfRepair, type SelfRepairInfo } from '@/api/config';
 import { ContextInspectorPanel } from '@/components/context/ContextInspectorPanel';
@@ -194,6 +195,8 @@ interface DraftSeed {
    *  Start reuses that task instead of minting a new one. */
   taskId?: string;
   boundTaskTitle?: string;
+  /** The bound task is a project lead: open a plain chat with it (see DraftColumn.orgLead). */
+  orgLead?: boolean;
   /** Fork draft (session Fork button): Start calls the fork API on this session
    *  instead of quick-start. Seeded WITH the source's cwd/host/project, all
    *  pinned/final — a fork resumes the source conversation in place. */
@@ -268,10 +271,18 @@ function rebindDraftToSeed(d: DraftColumn, seed: DraftSeed, projectDefault: Proj
     if (seed.taskId) {
       next.taskId = seed.taskId;
       next.boundTaskTitle = seed.boundTaskTitle;
+      // The lead's folder is the lead's and a plain draft's is not the lead's: either way
+      // a seed with no folder starts from none (the seed's own folder lands below).
+      if (seed.orgLead || next.orgLead) next = withoutDraftFolder(next, seed);
+      if (seed.orgLead) next.orgLead = true; else delete next.orgLead;
     }
     // Rebinding as a fork drops any previous task binding (and vice
     // versa via the assignments above): the two are exclusive exits.
-    if (seed.forkOf) { next.forkOf = seed.forkOf; delete next.taskId; delete next.boundTaskTitle; }
+    if (seed.forkOf) { next.forkOf = seed.forkOf; delete next.taskId; delete next.boundTaskTitle; delete next.orgLead; }
+  } else if (next.orgLead) {
+    // A "+" or another unbound seed on a pristine lead chat: it is no longer that chat.
+    next = withoutDraftFolder(next, seed);
+    delete next.taskId; delete next.boundTaskTitle; delete next.orgLead;
   }
   // The launch TARGET (folder + intent) rides on any seed that carries
   // one, not just a task/fork rebind. "Customize Walnut" is the seed with a
@@ -298,6 +309,12 @@ function rebindDraftToSeed(d: DraftColumn, seed: DraftSeed, projectDefault: Proj
   // repair.
   if (seed.intent) next.intent = seed.intent; else delete next.intent;
   return next;
+}
+
+/** A rebind that changes who the draft talks to keeps no folder the seed did not bring. */
+function withoutDraftFolder(d: DraftColumn, seed: DraftSeed): DraftColumn {
+  if (seed.cwd) return d;
+  return { ...d, cwd: '', host: null, hostLabel: undefined, cwdPinned: false, openedCwd: '', openedHost: null };
 }
 
 /** The repair draft seed: Walnut's own source, pinned (the target, not a suggestion). */
@@ -1166,6 +1183,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
         // the distinction exists so a future rule can tell them apart.
         ...(seed?.project ? { project: seed.project, projectSource: 'seed' as const } : {}),
         ...(seed?.taskId ? { taskId: seed.taskId, boundTaskTitle: seed.boundTaskTitle } : {}),
+        ...(seed?.taskId && seed.orgLead ? { orgLead: true } : {}),
         ...(seed?.forkOf ? { forkOf: seed.forkOf } : {}),
         ...(seed?.intent ? { intent: seed.intent } : {}),
         ...(pinnedSeed ? { cwdPinned: true } : {}),
@@ -1587,6 +1605,17 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     if (!task) { showOperationError('That task is gone.'); return; }
     const sessionId = resolveTaskSessionId(task);
     if (sessionId) { openSessionOrToast(sessionId); return; }
+    if (task.org_role === 'lead') {
+      // A lead runs where its project's tasks start, so the chat opens with that folder
+      // (the server's read-only launch plan, host included) instead of "pick a folder".
+      const launch = (await resolveOrgContact(task.id).catch(() => undefined))?.launch;
+      openDraftColumnRef.current({
+        project: task.project || undefined,
+        taskId: task.id, boundTaskTitle: task.title, orgLead: true,
+        ...(launch ? { cwd: launch.cwd, host: launch.host, cwdPinned: true } : {}),
+      });
+      return;
+    }
     openDraftColumnRef.current({
       project: task.project || undefined,
       taskId: task.id, boundTaskTitle: task.title,
@@ -2633,6 +2662,9 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     // Gone (double-send, closed mid-flight): report success so ChatInput doesn't
     // resurrect text into a composer that no longer exists.
     if (!draft) return true;
+    // null: a lead's chat with nothing to say. Keep the column as it is.
+    const message = draftStartMessage(draft, text, !!images?.length);
+    if (message === null) return false;
     // A new Start replaces the last refusal (a repeat refusal brings a fresh bar).
     clearDraftGateError(draftId);
     const { tierKnown: knownTier } = draftParseOptsRef.current;
@@ -2688,10 +2720,8 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       });
       return true;
     }
-    // A BOUND draft (task ▶ Start on a title-only task) with an empty composer
-    // still has something to say: the task's own title. Without this the CLI
-    // would spawn and idle on a task the user explicitly asked to work on.
-    const message = text.trim() || (draft.taskId ? draft.boundTaskTitle ?? '' : text);
+    // `message` (draftStartMessage, above): a BOUND draft with an empty composer
+    // still has something to say, the task's own title.
     // What the background parse suggested vs. what this launch actually carries.
     // Recorded BEFORE forgetDraft (the row is the only place the suggestions live)
     // and deliberately not awaited (see recordSuggestFeedback). Tagged with the
@@ -3279,8 +3309,8 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
                     isKnownProject={isKnownProjectLoaded}
                     // Back-fills the launch pills from what the user types (R9).
                     onAiParse={handleDraftAiParse}
-                    // Start Task ⇄ Ask Walnut tab switch.
-                    onWalnutToggle={handleDraftWalnutToggle}
+                    // Start Task ⇄ Ask Walnut tab switch. A lead's column is a chat with that lead.
+                    onWalnutToggle={draft.orgLead ? undefined : handleDraftWalnutToggle}
                     // More + decision chips (the panel passes them on only
                     // where a plain draft shows them).
                     onTaskFieldChange={handleDraftTaskFieldChange}

@@ -22,7 +22,7 @@ vi.mock('@/api/sessions', () => ({ peekWorkingDirs: peek }));
 
 const {
   applyDraftParse, clearAiFields, quickDirsFor, projectForFolderPick, suggestDiff, restoreMetaAfterWalnut,
-  followProjectRegistryChange, refreshFolderProject,
+  followProjectRegistryChange, refreshFolderProject, draftStartMessage,
 } = await import('@/components/sessions/draft-column');
 type DraftColumn = import('@/components/sessions/draft-column').DraftColumn;
 
@@ -648,5 +648,24 @@ describe('followProjectRegistryChange — a remembered project follows its delet
   it('a server-owned SEED project is never touched (it has no registry row to lose)', () => {
     expect(followProjectRegistryChange({ project: 'Ask Walnut', projectSource: 'seed' }, { kind: 'deleted', name: 'Ask Walnut' }))
       .toBeNull();
+  });
+});
+
+describe('draftStartMessage: what a Start sends', () => {
+  it('sends the typed text, trimmed, whatever the draft is', () => {
+    expect(draftStartMessage({}, '  fix the bug \n')).toBe('fix the bug');
+    expect(draftStartMessage({ taskId: 't1', boundTaskTitle: 'Title' }, ' go ')).toBe('go');
+    expect(draftStartMessage({ taskId: 'l1', boundTaskTitle: 'Site lead', orgLead: true }, 'how is it going?')).toBe('how is it going?');
+  });
+  it('a bound task with nothing typed sends its title; a plain draft sends what it has', () => {
+    expect(draftStartMessage({ taskId: 't1', boundTaskTitle: 'Title' }, '   ')).toBe('Title');
+    expect(draftStartMessage({ taskId: 't1' }, '')).toBe('');
+    expect(draftStartMessage({}, '')).toBe('');
+  });
+  it('a lead chat with nothing typed has nothing to say (Start anyway included): null, never its title', () => {
+    expect(draftStartMessage({ taskId: 'l1', boundTaskTitle: 'Site lead', orgLead: true }, '')).toBeNull();
+    expect(draftStartMessage({ taskId: 'l1', boundTaskTitle: 'Site lead', orgLead: true }, ' \n ')).toBeNull();
+    // An image alone is something to say.
+    expect(draftStartMessage({ taskId: 'l1', boundTaskTitle: 'Site lead', orgLead: true }, '', true)).toBe('');
   });
 });
