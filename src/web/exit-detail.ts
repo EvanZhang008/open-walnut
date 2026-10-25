@@ -45,15 +45,36 @@ function printedStack(e: Error): string | undefined {
   return e.stack
 }
 
-export function exitDetail(err: unknown): ExitDetail {
-  if (!(err instanceof Error)) return err === undefined ? {} : { detail: err }
+/** A raw text redacted; a value that is not a string is printed first. */
+function redacted(v: unknown): string {
+  return redactSensitiveText(typeof v === 'string' ? v : String(v))
+}
+
+function describe(err: unknown): ExitDetail {
+  if (!(err instanceof Error)) {
+    if (err === undefined) return {}
+    return { detail: typeof err === 'string' ? redacted(err) : err }
+  }
   const e = err as NodeJS.ErrnoException
   const stack = printedStack(e)
   return {
-    detail: redactSensitiveText(e.message),
+    detail: redacted(e.message),
     ...(typeof e.code === 'string' ? { code: e.code } : {}),
     ...(typeof e.syscall === 'string' ? { syscall: e.syscall } : {}),
     ...(typeof e.errno === 'number' ? { errno: e.errno } : {}),
-    ...(stack ? { stack: redactSensitiveText(stack).slice(0, EXIT_STACK_MAX_CHARS) } : {}),
+    ...(stack ? { stack: redacted(stack).slice(0, EXIT_STACK_MAX_CHARS) } : {}),
+  }
+}
+
+/**
+ * Never throws: it runs inside the uncaughtException handler, where a second
+ * throw ends the process with code 7 before the exit record is written (an
+ * error whose message or stack getter throws, say).
+ */
+export function exitDetail(err: unknown): ExitDetail {
+  try {
+    return describe(err)
+  } catch {
+    try { return { detail: redacted(err) } } catch { return { detail: '[unprintable error]' } }
   }
 }

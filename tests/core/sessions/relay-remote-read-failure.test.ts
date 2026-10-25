@@ -25,7 +25,7 @@ vi.mock('../../../src/constants.js', () => createMockConstants('walnut-relay-rem
 
 const REMOTE = 'devbox'
 const LABEL = 'New big devbox'
-const remote = vi.hoisted(() => ({ fail: null as Error | null, content: '' }))
+const remote = vi.hoisted(() => ({ fail: null as Error | null, content: '', boundDelayMs: 0 }))
 
 vi.mock('../../../src/core/daemon-file-reader.js', async () => {
   const { mockLocalDaemonReader } = await import('../../helpers/mock-local-daemon-reader.js')
@@ -51,7 +51,14 @@ vi.mock('../../../src/core/daemon-file-reader.js', async () => {
 
 vi.mock('../../../src/core/hosts/remote-read-bound.js', async (importOriginal) => {
   const real = await importOriginal<typeof import('../../../src/core/hosts/remote-read-bound.js')>()
-  return { ...real, boundByProgress: async <T>(_host: string, work: Promise<T>) => await work }
+  return {
+    ...real,
+    // The real bound awaits its progress clock before it reaches `work`; boundDelayMs stands in for that.
+    boundByProgress: async <T>(_host: string, work: Promise<T>) => {
+      if (remote.boundDelayMs) await new Promise((r) => setTimeout(r, remote.boundDelayMs))
+      return await work
+    },
+  }
 })
 
 import { WALNUT_HOME, CLAUDE_HOME } from '../../../src/constants.js'
@@ -97,6 +104,7 @@ afterAll(async () => {
 beforeEach(() => {
   remote.fail = null
   remote.content = ''
+  remote.boundDelayMs = 0
   warn = vi.spyOn(log.session, 'warn')
   error = vi.spyOn(log.session, 'error')
 })
@@ -116,6 +124,22 @@ describe('the reader keeps the host\'s identity in a remote read failure', () =>
     // The message alone names no host (spaces in the label); the alias does.
     expect(causeKeyForError({ text: e.message })).toBeUndefined()
     expect(causeKeyForError({ text: e.detail, host: e.host })).toBe(`host:${REMOTE}`)
+  })
+
+  it('a read refused at once, while the bound is still getting ready, is never an unhandled rejection', async () => {
+    const unhandled: unknown[] = []
+    const onUnhandled = (reason: unknown) => { unhandled.push(reason) }
+    process.on('unhandledRejection', onUnhandled)
+    try {
+      remote.fail = new Error(PROXY_LOGIN_EXPIRED)
+      remote.boundDelayMs = 50
+      const err = await readSessionJsonlContent(SID, CWD, REMOTE).then(() => null, (e: unknown) => e)
+      expect(err).toBeInstanceOf(RemoteReadError)
+      await new Promise((r) => setTimeout(r, 50))
+      expect(unhandled).toEqual([])
+    } finally {
+      process.off('unhandledRejection', onUnhandled)
+    }
   })
 
   it('a slow read is not proof the host is down', async () => {

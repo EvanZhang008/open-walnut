@@ -339,6 +339,12 @@ export async function readSessionJsonlContent(
           if (findResult) return withFoundCwd(await mergeSyntheticFromLocalStreams(findResult.content), srcLabel, findResult.path, findResult.content.length);
           return null;
         })();
+      // Marked handled the moment it starts: the bound below awaits an import
+      // and its progress clock before it reaches `read`, and a read the pool's
+      // failure cache refuses at once would reject with no handler on it yet
+      // (caught as an unhandled rejection in a test, 2026-10-24). The awaits
+      // below still see the rejection: nothing is swallowed here.
+      read.catch(() => {});
       const result = host
         ? await (await import('./hosts/remote-read-bound.js')).boundByProgress(host, read, {
           idleMs: READ_TIMEOUT, ceilingMs: READ_CEILING, windowMs: 10_000,

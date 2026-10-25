@@ -59,6 +59,26 @@ describe('exitDetail shapes', () => {
     expect(exitDetail('boom')).toEqual({ detail: 'boom' })
   })
 
+  it('a thrown string is redacted like a message', () => {
+    const d = exitDetail('push failed for https://tester:hunter2-not-a-real-one@sync.example.test/repo')
+    expect(String(d.detail)).not.toContain('hunter2-not-a-real-one')
+    expect(String(d.detail)).toContain('sync.example.test')
+  })
+
+  // It runs inside the uncaughtException handler: a throw there exits with code 7
+  // and the record is never written.
+  it('never throws, for an error whose message or stack getter throws', () => {
+    const e = new Error('x')
+    Object.defineProperty(e, 'message', { get() { throw new Error('getter') } })
+    expect(() => exitDetail(e)).not.toThrow()
+    const s = new Error('y')
+    Object.defineProperty(s, 'stack', { get() { throw new Error('getter') } })
+    expect(() => exitDetail(s)).not.toThrow()
+    const odd = new Error('z') as Error & { message: unknown }
+    odd.message = { not: 'a string' }
+    expect(exitDetail(odd).detail).toBe('[object Object]')
+  })
+
   it('caps a very deep stack', () => {
     const e = new Error('deep')
     e.stack = 'Error: deep\n' + '    at frame (file.ts:1:1)\n'.repeat(1_000)
