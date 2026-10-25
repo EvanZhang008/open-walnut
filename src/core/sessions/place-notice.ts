@@ -187,6 +187,9 @@ export async function notePlaceCompaction(sessionId: string, boundaryUuid: strin
       && (!record.lastCompactAt || at > Date.parse(record.lastCompactAt));
     const hookAnswered = answered(hookAt);
     const modeHookAnswered = answered(record.outputModeHookAt ? Date.parse(record.outputModeHookAt) : NaN);
+    // The task routing rules the hook restated (task-routing-notice.ts) answer this boundary too.
+    const routing = record.taskRoutingNoted;
+    const routingHookAnswered = !!routing?.byHookAt && answered(Date.parse(routing.byHookAt));
     await updateSessionRecordConditionally(sessionId, {
       lastCompactUuid: boundaryUuid,
       lastCompactAt: new Date(now).toISOString(),
@@ -196,6 +199,7 @@ export async function notePlaceCompaction(sessionId: string, boundaryUuid: strin
       // replayed boundary never voids an instruction sent after it.
       ...(modeHookAnswered ? {} : { output_mode_injected: undefined }),
       ...(hookAnswered && noted ? { placeNoted: { ...noted, compactUuid: boundaryUuid } } : {}),
+      ...(routingHookAnswered && routing ? { taskRoutingNoted: { ...routing, compactUuid: boundaryUuid } } : {}),
     }, (cur) => cur.lastCompactUuid !== boundaryUuid, { preserveLastActiveAt: true });
   } catch (err) {
     log.session.warn('place notice: compaction not recorded', { sessionId, error: err instanceof Error ? err.message : String(err) });

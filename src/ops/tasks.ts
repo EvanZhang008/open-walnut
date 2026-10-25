@@ -383,7 +383,7 @@ defineOp({
       `Task phase: ${phase}. Execution: ${execution.state}.`,
       execution.state === 'not_started'
         ? dispatchHint(id)
-        : `Read task_history or add context with task_send '{"to":"${id}","text":"..."}'.`,
+        : `Read task_history for its result. Continue the same deliverable with task_send '${JSON.stringify({ to: id, text: '...', ...(phase === 'COMPLETE' ? { force: true, reason: 'What changed in this deliverable' } : {}) })}'; an independent goal needs task_create.`,
     )
   },
   tags: { readonly: true, remote: 'allow' },
@@ -511,7 +511,10 @@ defineOp({
     'yours to do here. A task is a teammate that owns one area with a clear goal, never a step: one task ' +
     'per ask (ask the user before splitting). Continue the SAME deliverable with task_send after checking ' +
     'the exact id and scope; an independent goal needs a new task and fresh session even in the same area. ' +
-    'The result lists the other open subtasks you lead. Words: a "subagent" is Claude Code\'s Agent tool inside your session, never a ' +
+    'Explicit new-task/clean-context requests take priority. Check plausible unfinished work before creating; ' +
+    'use the same idempotency_key and payload for retries or handoffs of one ask, a new key for a new ask. ' +
+    'The first message carries the current request, valid constraints, done condition and necessary evidence only, ' +
+    'never Main\'s or an old task\'s transcript. The result lists the other open subtasks you lead. Words: a "subagent" is Claude Code\'s Agent tool inside your session, never a ' +
     'Walnut task; a "subtask" or "task" is a Walnut task, which this creates. In Walnut\'s own chat, where ' +
     'you dispatch, the user asking for the work is the signal. Pass message for the instruction and cwd/host ' +
     'to override project defaults. Keep the returned task id: task_send adds context, task_history ' +

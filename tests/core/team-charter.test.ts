@@ -90,7 +90,7 @@ describe('task session prompt (buildSessionContext: Claude Code, Codex non-lane,
     const lead = (await buildSessionContext('mt-rule-1', '/x', 'h', { task: task({ org_role: 'lead' } as Partial<Task>) })).systemPrompt
     for (const p of [main, lead]) expect(p).not.toMatch(/in a few lines/)
     expect(main).toMatch(/with the user you run their org as co-CEOs, and you set its direction with them/)
-    expect(main).toMatch(/independent work gets task_create, the same deliverable gets task_send or task_start by its exact task id/)
+    expect(main).toMatch(/independent work gets task_create with its project named, the same deliverable gets task_send or task_start by its exact task id/)
     expect(main).toMatch(/never review implementation details/)
     expect(lead).toMatch(/You assign work, coordinate across teams and unblock/)
     expect(lead).toMatch(/Read a team's work \(task_get, task_history\) only when an outcome looks wrong/)

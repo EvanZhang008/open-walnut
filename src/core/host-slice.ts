@@ -19,6 +19,7 @@ import type { OfflineSliceBoard } from '../providers/offline-board-core.js';
 import type { SessionRecord, Task } from './types.js';
 import { isInfraSessionError } from './session-error-kind.js';
 import { engineCaps } from './agents/engine-registry.js';
+import { taskRoutingPolicyFor } from './sessions/task-routing-notice.js';
 
 /** Newest sessions kept per host; the daemon intersects with what it runs. */
 const MAX_SESSIONS = 200;
@@ -234,6 +235,11 @@ export async function buildHostSlice(hostKey: string, now = Date.now()): Promise
     host: displayHost(key),
     sessions: records.map((s) => ({
       sid: s.claudeSessionId,
+      ...(() => {
+        const task = s.taskId ? own.get(s.taskId) : undefined;
+        const policy = task ? taskRoutingPolicyFor(s, task, { ignoreTold: true }) : null;
+        return policy ? { taskRoutingPolicy: policy } : {};
+      })(),
       ...(s.taskId ? { taskId: s.taskId } : {}),
       ...(s.title ? { title: s.title } : {}),
       // An environment or lane session: never a message's address by name, nor a

@@ -1,6 +1,7 @@
 import { PHASE_ORDER } from './phase.js';
 import type { TaskPhase } from './types.js';
 import { TEAM_CHARTER } from './team-charter.js';
+import { TASK_ROUTING_CONTRACT } from './task-routing-contract.js';
 
 // Budget for the whole bootstrap prompt. Raised from 1,800 when the task board
 // model joined it (2026-08-26): the tiers decide where every created task lands,
@@ -25,7 +26,11 @@ import { TEAM_CHARTER } from './team-charter.js';
 // when a message is worth sending. The Personal AI acts on it from its first
 // turn. It renders 4,713 characters with it; the cap keeps a small margin
 // above that, not room for more.
-export const SELF_KNOWLEDGE_PROMPT_MAX_CHARS = 4_850;
+//
+// Raised to 6,850 the same day for the task routing rules (task-routing-contract.ts):
+// the dispatcher decides new task vs continue on its first call, and the same text
+// rides the Main and lead prompts. It renders 6,687 characters with both.
+export const SELF_KNOWLEDGE_PROMPT_MAX_CHARS = 6_850;
 
 // The phase LIST comes from PHASE_ORDER, so adding or removing a phase updates
 // this prompt with no second edit. The phases the prompt names are typed
@@ -42,7 +47,7 @@ const SELF_KNOWLEDGE_PROMPT = `## Walnut operating contract
 - Start work only on the user's ask. Follow-ups you find are yours to do here, never new tasks.
 - An accepted start is not finished work. A start that errors keeps the task: fix the cause, then \`task_start\` that id; never a second \`task_create\`.
 - Grouping is project, then folder inside it; an empty project means Inbox. A task created from inside another lands in its project and folder unless you name another project.
-- A task holds one conversation. Reuse only with an explicit task ID; never guess from a similar title.
+- A task holds one conversation. Reuse only with an explicit task ID and the same deliverable; never guess from a similar title.
 - Phase is the ONE state field (no \`status\`): ${PHASE_ORDER.join(', ')}. Set \`${READY_PHASE}\` when your work is ready to look at and \`${DONE_PHASE}\` when it is finished. \`WAITING\` parks it until something happens; any new message brings it back. You may set any phase; none is reserved. \`execution\` on a read observes the run; you never set it.
 - When you mention a task, render \`<task-ref id="..." label="..."/>\` for a clickable pill: never a bare id, a markdown link, or a URL. Write tools return the exact tag in \`ref\` — paste it verbatim; otherwise build it from the id and title.
 - Trust current tool schemas for arguments; the \`walnut-self-knowledge\` skill has the workflows. Do not read Walnut databases or source for these basics.
@@ -58,5 +63,5 @@ const SELF_KNOWLEDGE_PROMPT = `## Walnut operating contract
 ${TEAM_CHARTER}`;
 
 export function renderSelfKnowledgeContract(): string {
-  return SELF_KNOWLEDGE_PROMPT;
+  return `${SELF_KNOWLEDGE_PROMPT}\n\n${TASK_ROUTING_CONTRACT}`;
 }

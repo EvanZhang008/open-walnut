@@ -123,6 +123,13 @@ export async function collectOpenItems(
       const { stateOutputModeAfterCompaction } = await import('./output-mode-send.js');
       const rich = await stateOutputModeAfterCompaction(caller.record);
       if (rich) items.text = [items.text, rich].filter(Boolean).join('\n\n');
+      const { taskRoutingPolicyFor } = await import('./task-routing-notice.js');
+      const routing = taskRoutingPolicyFor(caller.record, task, { ignoreTold: true });
+      if (routing) {
+        items.text = [routing, items.text].filter(Boolean).join('\n\n');
+        const { noteTaskRoutingStatedByHook } = await import('./task-routing-notice.js');
+        await noteTaskRoutingStatedByHook(caller.record);
+      }
     }
     return items;
   } catch {

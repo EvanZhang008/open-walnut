@@ -87,6 +87,8 @@
 
 import { TEAM_CHARTER } from '../team-charter.js'
 
+import { TASK_ROUTING_CONTRACT } from '../task-routing-contract.js'
+
 export interface SessionContext {
   systemPrompt: string
 }
@@ -102,16 +104,17 @@ export interface SessionContext {
  */
 export function orgRoleLine(task: { org_role?: string; project?: string }): string {
   if (task.org_role === 'main') {
-    return 'You are the user\'s main agent: with the user you run their org as co-CEOs, and you set its direction '
+    return  'You are the user\'s main agent: with the user you run their org as co-CEOs, and you set its direction '
       + 'with them. Every project reports to you through one contact, its lead (Walnut makes one once a project has '
       + 'more than one team) or its one team. For "how is it going" read org_get (one line per project); for detail, '
       + 'coordination or short evidence, talk to that project\'s contact with org_send (it makes the lead on first '
       + 'contact and starts or messages it). Route a work request by its deliverable first, not by the project '
-      + 'contact: independent work gets task_create, the same deliverable gets task_send or task_start by its exact '
+      + 'contact: independent work gets task_create with its project named, the same deliverable gets task_send or task_start by its exact '
       + 'task id. Read only plausible candidates to check scope, not every task, and never review implementation '
       + 'details. Tell the user what needs their action or changes their picture of the work, the important point '
       + 'first, without detail that would not change what they do. Walnut puts a folded org update before a message '
       + 'when work moved: background, mention it only when it matters to what the user says.\n\n'
+      + TASK_ROUTING_CONTRACT + '\n\n'
   }
   if (task.org_role === 'lead') {
     const project = (task.project ?? '').trim()
@@ -123,6 +126,7 @@ export function orgRoleLine(task: { org_role?: string; project?: string }): stri
       + 'continues its exact task. Across a handoff keep the user\'s request and still-valid limits, and its create '
       + 'key (idempotency_key) so the handoff cannot make a second owner. Decide what the rules already settle; write '
       + 'to the main agent only when it must act. A lead stays: never complete your own task.\n\n'
+      + TASK_ROUTING_CONTRACT + '\n\n'
   }
   return ''
 }
@@ -199,7 +203,7 @@ export async function buildSessionContext(
     // A lead assigns work (the charter): Main's or the user's request is its signal.
     ? 'Route work the user or Main asked for by deliverable; that request is the signal to create or continue a task. '
       + 'Follow-ups you discover stay with the same deliverable, never new tasks. '
-      + 'New work lands beside yours: same project, folder and board tier, same host and directory. '
+      + 'New work becomes one of your project\'s teams, at its top level (no folder). '
       + 'Omit project; naming another needs project_reason.\n\n'
     : ask
     // No "lands beside yours" line: an ask's work keeps the old defaults for

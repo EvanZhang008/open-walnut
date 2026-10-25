@@ -11,7 +11,8 @@ defineOp({
   name: 'task_start',
   title: 'Start an existing task',
   description:
-    'Start work on an existing task. New work needs only task_create, which starts by default. ' +
+    'Start or resume the SAME deliverable on an existing task by exact id. An independent goal, or an explicit ' +
+    'new-task/clean-context request, needs task_create, even in the same project or client. ' +
     'Only start work the user asked for. If already started, use task_send with the same task id ' +
     'to continue it; do not create a duplicate. Replies return to the caller by default. ' +
     'An accepted start is not a completed task: read the execution field.',
@@ -28,7 +29,9 @@ defineOp({
   name: 'task_send',
   title: 'Send a message to a task',
   description:
-    'Message another task (never your own). When another task is the caller, the ' +
+    'Message another task (never your own): continue its SAME deliverable, ask for evidence, or reply to a request. ' +
+    'An independent goal needs task_create and a fresh session, not the old area owner. ' +
+    'Before continuation read task_get to confirm scope and the exact id; never pick by title alone. When another task is the caller, the ' +
     'text is delivered as a <walnut-message kind="peer-note"> envelope, and the receiver treats it as the user\'s ' +
     'request: every task works for the same user. ' +
     'The receiver is asked to reply BY DEFAULT, with a Walnut fallback notification if it ' +

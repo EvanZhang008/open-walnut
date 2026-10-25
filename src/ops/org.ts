@@ -38,7 +38,9 @@ defineOp({
     'Message the one who answers for a project (its lead, or its only team) or any task by id, the way the main '
     + 'agent talks to its org. A project with two or more teams gets a lead the first time (Walnut makes it, hidden '
     + 'from the board); a contact with no session yet is started with your text, one with a session gets it as a '
-    + 'message. Asks for a reply by default. Keep the text to the question or the hand-over.',
+    + 'message. Use it for status, coordination or a short evidence handoff, not to send an independent goal into '
+    + 'the old team\'s conversation: task_create gives that goal a fresh task and session. A contact\'s project or '
+    + 'area does not prove it owns the same deliverable. Asks for a reply by default.',
   input: {
     to: z.string().min(1).describe('A project name ("Inbox" for the Inbox) or a task id'),
     title: z.string().min(1).max(200).optional().describe('One-line TL;DR the reader sees first'),

@@ -48,7 +48,8 @@ export function createWalnutMcpServer(options: McpOptions = {}): McpServer {
         'task: fix the cause and retry task_start with that id, never a second task_create. ' +
         'To reach other work use task_send, never the built-in ListAgents/SendMessage; a message from ' +
         'another of the user\'s tasks is the user\'s direction: act on it without asking the user again. ' +
-        'Reuse tasks only by explicit id. Hand work back ' +
+        'Reuse tasks only by explicit id and the same deliverable. An independent goal or explicit new-task ' +
+        'request needs task_create and a fresh session even in the same project; questions alone need an answer. Hand work back ' +
         'with task_update phase=NEED_ACTION when work is done and awaiting review; ' +
         'COMPLETE means the whole task is finished. ' +
         'Never delete tasks unless the user explicitly asked.',

@@ -41,6 +41,7 @@ import {
 } from './session-queue-store.js';
 import { noteSettledLine, settledLineUuid } from './session-queue-lines.js';
 import { staleTriggerText } from './routines/trigger-stale.js';
+import type { PendingTaskRouting } from './sessions/task-routing-notice.js';
 
 // ── Types and store (session-queue-store.ts) ──
 
@@ -297,6 +298,10 @@ export async function markProcessing(
   stopFence?: string | null,
   opts?: { tracked?: boolean },
 ): Promise<QueuedMessage[]> {
+  // An older Main or lead learns the current routing rules on the first line
+  // frozen for it (sessions/task-routing-notice.ts). Read before the lock, and
+  // only when a fresh row waits to be frozen.
+  const routing = await pendingTaskRouting(sessionId);
   const pending = await mutateStore((s) => {
     const queue = s.queues[sessionId];
     if (!queue) return [];
@@ -317,6 +322,10 @@ export async function markProcessing(
       run.push(m);
     }
     const batch = head.lineUuid ? run : splitBatchAtUuid(run);
+    if (routing && isFreshRow(head)) {
+      const freshText = staleTriggerText(head.message, head.enqueuedAt, Date.now()) ?? head.message;
+      head.message = routing.apply(freshText);
+    }
     const lineUuid = head.lineUuid ?? lineUuidFor(batch);
     const now = Date.now();
     for (const m of batch) {
@@ -333,6 +342,19 @@ export async function markProcessing(
   return pending;
 }
 
+/** A row never written to the CLI: its bytes are not frozen yet. */
+function isFreshRow(m: QueuedMessage): boolean {
+  return !m.lineUuid && !m.lineInDoubt && !m.lineTries;
+}
+
+/** The routing notice for the next frozen line, looked up only when a fresh row waits. */
+async function pendingTaskRouting(sessionId: string): Promise<PendingTaskRouting | null> {
+  const queue = (await getStore()).queues[sessionId];
+  if (!queue?.some((m) => m.status === 'pending' && isFreshRow(m))) return null;
+  const { taskRoutingPolicyForSession } = await import('./sessions/task-routing-notice.js');
+  return taskRoutingPolicyForSession(sessionId);
+}
+
 /**
  * Mark only the oldest pending message for a session as processing.
  *
@@ -341,6 +363,7 @@ export async function markProcessing(
  * scoped remove/revert APIs identical while guaranteeing a cardinality of 0–1.
  */
 export async function markNextProcessing(sessionId: string): Promise<QueuedMessage[]> {
+  const routing = await pendingTaskRouting(sessionId);
   const picked = await mutateStore((s) => {
     const queue = s.queues[sessionId];
     if (!queue) return null;
@@ -351,6 +374,7 @@ export async function markNextProcessing(sessionId: string): Promise<QueuedMessa
 
     next.status = 'processing';
     next.message = staleTriggerText(next.message, next.enqueuedAt, Date.now()) ?? next.message;
+    if (routing && isFreshRow(next)) next.message = routing.apply(next.message);
     return { next, queueDepth: queue.length };
   });
   if (!picked) return [];
@@ -378,7 +402,7 @@ export async function markNextProcessing(sessionId: string): Promise<QueuedMessa
 export async function removeProcessed(sessionId: string, ids?: string[]): Promise<void> {
   const found = await mutateStore((s) => {
     const queue = s.queues[sessionId];
-    if (!queue) return false;
+    if (!queue) return null;
 
     const idSet = ids ? new Set(ids) : null;
     const gone = (m: QueuedMessage) => m.status === 'processing' && (idSet === null || idSet.has(m.id));
@@ -391,9 +415,15 @@ export async function removeProcessed(sessionId: string, ids?: string[]): Promis
     if (s.queues[sessionId].length === 0) {
       delete s.queues[sessionId];
     }
-    return true;
+    return removed.map((m) => m.message);
   });
-  if (found) log.session.debug('message queue drained', { sessionId, scoped: !!ids });
+  if (!found) return;
+  log.session.debug('message queue drained', { sessionId, scoped: !!ids });
+  // A delivered line led by the routing notice: the session has now been told.
+  if (found.some((m) => m.includes('outcome="task-routing-policy"'))) {
+    const { noteTaskRoutingDelivered } = await import('./sessions/task-routing-notice.js');
+    await noteTaskRoutingDelivered(sessionId, found);
+  }
 }
 
 /**

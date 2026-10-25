@@ -344,7 +344,7 @@ describe('task_create says where the task landed', () => {
   })
 
   it('names the other open subtasks the caller leads, and where more work for them goes', async () => {
-    // A subtask owns an area (2026-10-01: a fourth task was opened for the
+    // A subtask owns a deliverable (2026-10-01: a fourth task was opened for the
     // third one's follow-up). The outcome puts the team in view at every create.
     const team = [
       { id: 't_oven', title: 'Fix the oven door', phase: 'IN_PROGRESS' },

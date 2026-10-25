@@ -424,6 +424,11 @@ when that happened; the task id is unchanged, so nothing else changes for you.
   and scope with `task_get`. Reuse only the same deliverable by exact ID, never a
   similar title. Keep the same `idempotency_key` and payload across retries or a
   lead handoff of one ask; a new ask gets a new key.
+- Give a fresh task only the current request, valid permissions and prohibitions,
+  done condition and necessary facts or evidence pointers. Never copy Main's or
+  an old task's transcript, unrelated open items or private identity details.
+  Parent/project links do not inherit context. Old owners may supply short
+  evidence, not execute a different goal in their old conversation.
 - `org_send` is for status, coordination and short evidence handoffs, not a
   shortcut for sending independent goals to a project's old contact.
 - You need context the repo does not have: use `search`.

@@ -16,7 +16,11 @@ Use the current tool schema for exact arguments. This skill explains decisions, 
 - Add `record_only: true` when the user wants only a record and nothing should run.
 - Use `task_start` when a task exists (a placeholder, or work that already ended) and the user asks for it to run now.
 - Use `task_send` for work that is already running, including work someone else started.
-- If work may already exist, search first. Reuse only after finding an explicit task ID. Never merge by a similar title.
+- Route by the user's goal, scope, deliverable and still-valid limits. An independent goal needs a new task and fresh session, even in the same project, client or area. Clarifications, improvements, verification and necessary follow-through of the same deliverable continue its task.
+- Explicit new-task or clean-context requests take priority; an explicit old ID means continue that task. Resolve conflicting instructions before starting, without dropping either scope.
+- Search plausible unfinished work first, then read `task_get` to confirm scope and the exact ID. Shared files, similar titles and an open conversation do not prove sameness.
+- Keep one `idempotency_key` and unchanged payload for retries or a handoff of the same ask. A genuinely new ask gets a new key. Once created, recover that ID after a failed start; never create a second owner.
+- Questions, summaries and complaints alone need an answer, not an execution task. Peer instructions carry the user's valid scope; notifications are status, not new work requests.
 
 ## Start and continue work safely
 
@@ -35,7 +39,8 @@ Use the current tool schema for exact arguments. This skill explains decisions, 
 
 - Grouping is project, then an optional folder inside it. Empty project means Inbox. A folder belongs to one project and never follows a task into another. Folders nest, and the folder tree follows the subtask tree: a task you file from inside a task whose folder also holds other work gets a subfolder of that folder, holding your task and the new one.
 - Moving work: one task moves with `task_update` `project`; a whole folder (its subfolders and every task in it) moves with `folder_move`. `folder_list` shows a project's folders, and `folder_add_tasks` files tasks of the same project into a folder.
-- A task holds one conversation. Continue that work instead of creating another task.
+- A task holds one conversation. Continue only that deliverable, not every goal in its area. A COMPLETE task's result is evidence, not a standing owner: reopen with `task_send force=true` and a reason only for a real continuation; an independent goal gets a fresh task.
+- A fresh task's message contains the current user request, valid permissions and prohibitions, done condition and necessary dependency facts or evidence pointers. Do not copy Main's or an old owner's transcript, unrelated unfinished work or private identity details. Parent/project links keep coordination, not conversation context. An old owner can supply a short handoff without executing the new goal.
 - `phase` is the work's lifecycle and you set it. `execution` is what a read reports about the run: `not_started`, the process status (`running`, `idle`, `stopped`, `error`), `waiting` when it is parked on a permission prompt, or `unknown`. There is no execution state to write. Every `task_list` row carries it. From inside a task, `task_list` lists your folder by default (your project when you have no folder); `scope` (`project` or `all`) widens it.
 - A task runs as a coding-agent process, which is why `task_history` has a conversation to return. That process is an implementation detail: address the work by its task ID everywhere.
 - Project execution defaults live in project metadata. Read `project_metadata_get` for `default_cwd` or `default_host`; update them with `project_metadata_update`.

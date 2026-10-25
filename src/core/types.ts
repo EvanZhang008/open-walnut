@@ -2554,6 +2554,11 @@ export interface SessionRecord {
    */
   placeNoted?: { promptHash: string; compactUuid?: string; byHookAt?: string; project: string; folderId?: string; folder?: string; leaderId?: string; leader?: string };
   /**
+   * The task routing rules version an older Main or lead was last told, against
+   * which prompt and compaction (src/core/sessions/task-routing-notice.ts).
+   */
+  taskRoutingNoted?: { version: string; promptHash: string; compactUuid?: string; byHookAt?: string };
+  /**
    * The uuid of the last compaction boundary Walnut saw in this session's
    * stream. A place note given before it may be gone from the context, so it
    * no longer counts as told (place-notice.ts).
