@@ -686,6 +686,10 @@ let claudeSettingsWatcherStop: (() => void) | null = null
 let unsubscribeHostRecovery: (() => void) | null = null
 /** Unhooks the local daemon's ready → recovery listener (the singleton outlives an in-process restart). */
 let unsubscribeLocalDaemonReady: (() => void) | null = null
+/** The primary's standing link to its own daemon (local-daemon-lane.ts); null elsewhere. */
+let localDaemonLane: { stop(): void } | null = null
+/** Which boot may build and keep the lane, and broadcast daemon status: startServer takes a new number at its entry, stopServer voids it at its entry; both stop the lane there. */
+let localDaemonLaneOwner = 0
 /** The Mac telling the companion a delivery path for held phone sends came up (send-path-announce.ts). */
 let unsubscribeSendPathAnnounce: (() => void) | null = null
 /** Daily error-notification reconcile (expiry + settled-receipt prune). */
@@ -1003,6 +1007,11 @@ async function isWalnutAnsweringOn(port: number): Promise<boolean> {
  */
 export async function startServer(options: ServerOptions = {}): Promise<HttpServer> {
   if (httpServer) throw new Error('Server already running. Call stopServer() first.')
+  // Bound before the first await: a stopServer or a newer boot from here on overtakes this
+  // one's lane. An older boot's lane (its listener and timer) stops in this same tick.
+  const laneOwner = ++localDaemonLaneOwner
+  localDaemonLane?.stop()
+  localDaemonLane = null
   bootCompleted = false // boot in progress → unhandled rejections are fatal again
   const bootStartedAt = Date.now()
   // Until the plugin walk below ends, a task push that finds no plugin waits for
@@ -1372,11 +1381,28 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     const { localDaemon } = await import('../providers/local-daemon.js')
     unsubscribeLocalDaemonReady?.()
     unsubscribeLocalDaemonReady = localDaemon.onReady(observeLocalDaemonReady)
-    await localDaemon.ensureRunning()
-    log.web.info('local daemon ready', {
-      port: localDaemon.port,
-      ...(cloudExec?.enabled ? { cloudExec: true, cwdRoots: cloudExec.cwdRoots.length } : {}),
+    // The primary keeps a link to its own daemon from the first ready edge on, the boot's
+    // own included, so the companion hears a Mac that has no session (local-daemon-lane.ts).
+    // Not a companion's cloud-exec daemon, and not an ephemeral server's (unchanged there).
+    const laneLive = () => laneOwner === localDaemonLaneOwner
+    const lanes = await import('./local-daemon-lane.js')
+    const lane = await lanes.bootPrimaryLocalDaemonLane({
+      daemon: localDaemon,
+      wanted: lanes.wantsLocalDaemonLane({ role: role(), ephemeral: IS_EPHEMERAL }),
+      live: laneLive,
+      install: (built) => { localDaemonLane = built },
+      warn: (msg, meta) => log.web.warn(msg, meta),
     })
+    // The primary's boot that a stopServer or a newer boot overtook during the awaits starts no daemon.
+    if (lane === 'overtaken' || (lane !== 'not-wanted' && !laneLive())) {
+      log.web.info('local daemon: this boot was stopped or replaced before it started the daemon')
+    } else {
+      await localDaemon.ensureRunning()
+      log.web.info('local daemon ready', {
+        port: localDaemon.port,
+        ...(cloudExec?.enabled ? { cloudExec: true, cwdRoots: cloudExec.cwdRoots.length } : {}),
+      })
+    }
   } catch (err) {
     log.web.error('failed to start local daemon — local sessions will fail', {
       error: err instanceof Error ? err.message : String(err),
@@ -3814,7 +3840,11 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     unsubscribeSendPathAnnounce?.()
     const { startSendPathAnnouncements } = await import('../core/send-path-announce.js')
     unsubscribeSendPathAnnounce = startSendPathAnnouncements(addOnDaemonHostConnected)
-    setOnDaemonStatusChange(async () => {
+    // Scoped to this boot, like the lane: the session runner's teardown disconnects every daemon
+    // after stopServer returns, and each of those edges would read config.yaml while the next
+    // boot (or a test) may be writing it.
+    const broadcastDaemonStatus = async () => {
+      if (laneOwner !== localDaemonLaneOwner) return
       try {
         const config = await getConfig()
         const hosts = config.hosts
@@ -3833,7 +3863,11 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         systemHealth.daemons = daemons
         broadcastEvent('system:health', systemHealth)
       } catch { /* config not ready yet */ }
-    })
+    }
+    setOnDaemonStatusChange(broadcastDaemonStatus)
+    // Once now: an edge before this line found no callback (the lane links the Mac's own daemon
+    // from the daemon's ready edge, seconds earlier), and a host that never connects makes none.
+    void broadcastDaemonStatus()
   }
 
   // -- Remote host connect status: live push + startup warmup (primary only) --
@@ -6197,6 +6231,10 @@ function startPluginSyncPolling(): void {
  * Gracefully shut down the server.
  */
 export async function stopServer(): Promise<void> {
+  // At the entry, before any await: no boot owns the lane any more, and it stops now.
+  localDaemonLaneOwner++
+  localDaemonLane?.stop()
+  localDaemonLane = null
   if (heartbeatHandle) {
     heartbeatHandle.stop()
     heartbeatHandle = null

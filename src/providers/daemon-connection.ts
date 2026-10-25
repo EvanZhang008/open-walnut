@@ -779,8 +779,10 @@ export class DaemonConnection {
       // and replaces the wait). The pool announces right after its cache write;
       // this deferred notify only speaks for a failure nobody cached (the
       // reconnect path), once the pool has had its turn.
+      // Checked when it runs, not when it is scheduled: a '__local__' dial the pool let go
+      // of meanwhile speaks for nobody.
       const t = setImmediate(() => {
-        if (this._phase === 'failed' && !failureCache.has(this.hostKey)) notifyDaemonPhaseChange(this.hostKey)
+        if (this._phase === 'failed' && !failureCache.has(this.hostKey) && !this.localDialAbandoned()) notifyDaemonPhaseChange(this.hostKey)
       })
       t.unref?.()
       return
@@ -1402,11 +1404,17 @@ export class DaemonConnection {
       // ordering dependency entirely.
       if (this.hostKey === '__local__') {
         const { localDaemon } = await import('./local-daemon.js')
+        // After every await below: a dial the pool no longer owns stops here (localDialAbandoned).
+        this.throwIfLocalDialAbandoned()
         await localDaemon.ensureRunning()
+        this.throwIfLocalDialAbandoned()
         const wsUrl = localDaemon.wsUrl
         if (!wsUrl) throw new Error('Local daemon has no wsUrl after ensureRunning')
         await this.connectWebSocket(wsUrl)
+        this.throwIfLocalDialAbandoned()
         const ok = await this.verifyCapabilities()
+        // The last await before setConnected(true), the connected edge.
+        this.throwIfLocalDialAbandoned()
         if (!ok) {
           log.session.warn('DaemonConnection: local connect hello failed — proceeding anyway', {
             host: this.hostKey,
@@ -1530,15 +1538,50 @@ export class DaemonConnection {
       // from a previous server run (e.g. server restart while sessions were error).
       this.recoverDisconnectedSessions().catch(() => {})
     } catch (err) {
+      // A dial the pool no longer owns ends quietly: the phase, the reconnect cause and
+      // their notices are keyed by host, so they would speak for the newer owner's dial.
+      if (this.localDialAbandoned()) {
+        this._connecting = false
+        throw err
+      }
       // Ask the local agent why an auth failure happened (expired certificate,
       // no agent) before anyone reads the error. Still inside _connecting, so a
       // second caller keeps waiting on this attempt.
       const annotated = this.sshTarget && !this.isCloudTunnel ? await annotateCredentialFailure(err, this.sshHostString) : err
+      // The annotation yields, even for an error it leaves alone: check again.
+      if (this.localDialAbandoned()) {
+        this._connecting = false
+        throw annotated
+      }
       this._connecting = false
       this.setPhase('failed')
       if (resumeLoop) void this.handleReconnectFailure(annotated, this._reconnectChainDelayMs || DaemonConnection.RECONNECT_DELAY_MS, true)
       throw annotated
     }
+  }
+
+  /**
+   * A '__local__' dial the pool no longer owns: a disconnect (the pool's reset at
+   * shutdown included) came while connect() awaited, or the pool let go of the instance
+   * (releasedFromPool). Such a dial connects nothing: no setConnected(true) and so none
+   * of the connected edge (cleared failure and reconnect cause, notices, bridge, hooks,
+   * triggers, host slice, skills, bulk), no ping. An instance the pool never held (a
+   * direct connection, or WALNUT_LOCAL_CONN_POOL=0's per-session ones) is not abandoned.
+   */
+  private localDialAbandoned(): boolean {
+    return this.hostKey === '__local__' && (this._destroyed || releasedFromPool.has(this))
+  }
+
+  /** Ends an abandoned '__local__' dial: closes only the socket it opened itself after the disconnect. */
+  private throwIfLocalDialAbandoned(): void {
+    if (!this.localDialAbandoned()) return
+    const ws = this.ws
+    this.ws = null
+    if (ws) {
+      this.failPendingOn(ws)
+      try { ws.close() } catch {}
+    }
+    throw new Error(`Connection to ${this.hostKey} was closed while it connected`)
   }
 
   /**
@@ -4188,6 +4231,11 @@ export class DaemonConnection {
       })
 
       ws.on('message', (data) => {
+        // A '__local__' socket that is no longer the instance's own (closed by a disconnect,
+        // the pool's reset included, or replaced), or a dial the pool no longer owns: its
+        // frames are nobody's. Dropped before handleMessage, whose events (offline-journal,
+        // leader-lost, trigger) act for the host key and so for its newer owner.
+        if (this.hostKey === '__local__' && (this.ws !== ws || this.localDialAbandoned())) return
         this.handleMessage(typeof data === 'string' ? data : data.toString())
       })
 
@@ -4250,9 +4298,11 @@ export class DaemonConnection {
    * copied across here rather than duplicated on the wire. Never throws: a bad
    * event must not take the socket down.
    */
-  private dispatchTriggerEvent(event: DaemonEvent): void {
-    void (async () => {
+  private dispatchTriggerEvent(event: DaemonEvent): Promise<void> {
+    return (async () => {
       const { getTriggerEventSink } = await import('../core/routines/trigger-bridge.js')
+      // Likewise: a '__local__' instance the pool let go of during the import delivers nothing.
+      if (this.localDialAbandoned()) return
       const sink = getTriggerEventSink()
       if (!sink) {
         log.session.warn('DaemonConnection: trigger event with no sink registered', {
@@ -4268,7 +4318,7 @@ export class DaemonConnection {
     })
   }
 
-  private handleMessage(raw: string): void {
+  private handleMessage(raw: string): Promise<void> | void {
     this._lastFrameAt = Date.now()
     let msg: Record<string, unknown>
     try { msg = JSON.parse(raw) } catch { return }
@@ -4328,11 +4378,12 @@ export class DaemonConnection {
         this.offlineDrainDue = true
         // Marked due BEFORE the drain starts: only a drain that began after the
         // nudge clears it, and a turn-end hook waits on it meanwhile.
-        void import('../core/offline-handover.js')
-          .then(({ noteHandoverDue }) => noteHandoverDue(this.hostKey))
+        // A '__local__' instance the pool let go of while the import ran (a reset or a
+        // replacement) marks nothing and pushes nothing, on either path: the key is its newer owner's.
+        return import('../core/offline-handover.js')
+          .then(({ noteHandoverDue }) => { if (!this.localDialAbandoned()) noteHandoverDue(this.hostKey) })
           .catch(() => {})
-          .finally(() => this.pushHostSlice())
-        return
+          .finally(() => { if (!this.localDialAbandoned()) this.pushHostSlice() })
       }
       // The cloud companion led this host while we were silent (a sleep the
       // socket outlived): take the handover, then the lead back (core/leader/).
@@ -4346,8 +4397,7 @@ export class DaemonConnection {
       // sink (never to session eventHandlers — a trigger belongs to a ROUTINE,
       // not to a session) before the generic fan-out.
       if (event.ev === 'trigger.checked' || event.ev === 'trigger.fired') {
-        this.dispatchTriggerEvent(event)
-        return
+        return this.dispatchTriggerEvent(event)
       }
       // DUP-DEBUG: if handlerCount > 1, every event below fans out N times.
       // jsonl events are high-frequency — only log when something is off
@@ -5776,6 +5826,20 @@ function notifyHostConnected(hostKey: string, connection: DaemonConnection): voi
 
 /** Pool of DaemonConnections — one per remote host. */
 const connectionPool = new Map<string, DaemonConnection>()
+/** Instances the pool let go of (a reset, a replacement, a changed target). */
+const releasedFromPool = new WeakSet<DaemonConnection>()
+/** Every pool write goes through these two, so an instance the pool no longer holds under any key is marked released. */
+function poolSet(key: string, conn: DaemonConnection): void {
+  const prev = connectionPool.get(key)
+  connectionPool.set(key, conn)
+  releasedFromPool.delete(conn)
+  if (prev && prev !== conn && !isPooledConnection(prev)) releasedFromPool.add(prev)
+}
+function poolDelete(key: string): void {
+  const prev = connectionPool.get(key)
+  connectionPool.delete(key)
+  if (prev && !isPooledConnection(prev)) releasedFromPool.add(prev)
+}
 /** Pending connection promises — prevents concurrent connect() races. */
 const connectingPromises = new Map<string, Promise<DaemonConnection>>()
 /** Cache recent connection failures to avoid repeated 42s SSH timeouts. */
@@ -5945,20 +6009,31 @@ async function getDaemonConnectionOrThrow(hostKey: string, sshTarget: SshTarget)
     // Only while nothing is live: a connected pool entry stays until it drops.
     log.session.info('DaemonConnection: ssh target changed, replacing the pooled connection', { host: hostKey })
     conn.disconnect()
-    connectionPool.delete(hostKey)
+    poolDelete(hostKey)
     conn = undefined
   }
   if (!conn) {
     conn = new DaemonConnection(hostKey, sshTarget)
-    connectionPool.set(hostKey, conn)
+    poolSet(hostKey, conn)
   }
 
-  const promise = conn.connect().then(() => {
-    connectingPromises.delete(hostKey)
+  const mine = conn
+  const promise: Promise<DaemonConnection> = mine.connect().then(() => {
+    if (connectingPromises.get(hostKey) === promise) connectingPromises.delete(hostKey)
+    // The pool let go of this instance after its connect() returned (every removal but
+    // the test seam disconnects what it removes): it is nobody's, and its success is not
+    // reported. No second disconnect here: it would clear the reconnect cause of the
+    // key's newer owner.
+    if (connectionPool.get(hostKey) !== mine) {
+      throw new Error(`Connection to ${hostKey} was closed while it connected`)
+    }
     failureCache.delete(hostKey)  // Clear failure cache on success
-    return conn!
+    return mine
   }).catch((err) => {
-    connectingPromises.delete(hostKey)
+    if (connectingPromises.get(hostKey) === promise) connectingPromises.delete(hostKey)
+    // A dial of an instance the pool no longer holds caches nothing: the failure (or the
+    // close above) is not the newer owner's.
+    if (connectionPool.get(hostKey) !== mine) throw err
     // Cache the failure so subsequent requests fail fast. Store the SUMMARY: this
     // string is re-thrown to (and logged by) every caller for the next 60s.
     const raw = err instanceof Error ? err.message : String(err)
@@ -6006,7 +6081,7 @@ export async function getDirectDaemonConnection(hostKey: string, wsUrl: string):
   let conn = connectionPool.get(poolKey)
   if (!conn) {
     conn = new DaemonConnection(hostKey, null)
-    connectionPool.set(poolKey, conn)
+    poolSet(poolKey, conn)
   }
 
   const promise = conn.connectDirect(wsUrl).then(() => {
@@ -6083,8 +6158,8 @@ export function expediteReconnect(hostKey: string): boolean {
 
 /** Test seam ONLY (@internal): pool a connection built without dialling, or drop it (null). */
 export function setPooledConnectionForTest(hostKey: string, conn: DaemonConnection | null): void {
-  if (conn) connectionPool.set(hostKey, conn)
-  else connectionPool.delete(hostKey)
+  if (conn) poolSet(hostKey, conn)
+  else poolDelete(hostKey)
 }
 
 /** Hosts whose reconnect loop is waiting on a timer or dialling right now. */
@@ -6118,8 +6193,12 @@ export function credentialWaitingHosts(): Array<{ host: string; failedAt: number
 export function disconnectAllDaemons(): void {
   for (const [key, conn] of connectionPool) {
     conn.disconnect({ keepSshMaster: true })
+    releasedFromPool.add(conn)
   }
   connectionPool.clear()
+  // A dial still running belongs to an instance the pool no longer holds: nobody joins it
+  // (its own settle ends it, getDaemonConnectionOrThrow).
+  connectingPromises.clear()
 }
 
 /** Status of a single daemon connection. */

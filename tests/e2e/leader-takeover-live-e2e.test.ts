@@ -291,7 +291,19 @@ const bs = await import(${src('src/core/boards/board-store.ts')})
 await bs.setBoardHtml(lead.id, '<h1>Release</h1><p id="build">Build: red</p>', { by: 'human' })
 const { localDaemon } = await import(${src('src/providers/local-daemon.ts')})
 const dc = await import(${src('src/providers/daemon-connection.ts')})
-if (localDaemon.wsUrl) await dc.getDirectDaemonConnection('__local__', localDaemon.wsUrl)
+const { awaitLocalDaemonLink, failBootLink } = await import(${src('tests/helpers/local-daemon-link.ts')})
+// No hand dial for the Mac's own daemon: the boot's local daemon lane links it.
+// A failure ends through stopServer and a non-zero exit; no signal handler is armed yet here.
+await awaitLocalDaemonLink({
+  wsUrl: localDaemon.wsUrl,
+  connected: () => dc.getConnectedDaemonConnection('__local__') !== null,
+  now: () => Date.now(),
+  sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+}).catch((err) => failBootLink(err, {
+  stop: () => stopServer(),
+  write: (line) => process.stderr.write(line + '\\n'),
+  exit: (code) => process.exit(code),
+}))
 await dc.getDirectDaemonConnection('devbox', 'ws://127.0.0.1:${dev.port}')
 await dc.getDirectDaemonConnection('oldbox', 'ws://127.0.0.1:${old.port}')
 const { createServer } = await import('node:http')

@@ -106,7 +106,19 @@ const { startServer, stopServer, armGracefulSignalExit } = await import(${JSON.s
 const server = await startServer({ port: 0, dev: true })
 ${cloud ? '' : `const { localDaemon } = await import(${JSON.stringify(path.join(REPO_ROOT, 'src/providers/local-daemon.ts'))})
 const dc = await import(${JSON.stringify(path.join(REPO_ROOT, 'src/providers/daemon-connection.ts'))})
-if (localDaemon.wsUrl) await dc.getDirectDaemonConnection('__local__', localDaemon.wsUrl)`}
+const { awaitLocalDaemonLink, failBootLink } = await import(${JSON.stringify(path.join(REPO_ROOT, 'tests/helpers/local-daemon-link.ts'))})
+// No hand dial: the boot's own local daemon lane must link the Mac to its daemon with no session.
+// A failure ends through stopServer and a non-zero exit; no signal handler is armed yet here.
+await awaitLocalDaemonLink({
+  wsUrl: localDaemon.wsUrl,
+  connected: () => dc.getConnectedDaemonConnection('__local__') !== null,
+  now: () => Date.now(),
+  sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+}).catch((err) => failBootLink(err, {
+  stop: () => stopServer(),
+  write: (line) => process.stderr.write(line + '\\n'),
+  exit: (code) => process.exit(code),
+}))`}
 const addr = server.address()
 process.stdout.write(JSON.stringify({ pid: process.pid }) + '\\n')
 process.stdout.write('WALNUT_PORT=' + (typeof addr === 'object' && addr ? addr.port : addr) + '\\n')
