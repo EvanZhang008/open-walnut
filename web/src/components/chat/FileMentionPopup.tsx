@@ -265,11 +265,11 @@ export const FileMentionPopup = forwardRef<FileMentionHandle, FileMentionPopupPr
 
     const recentMatches = useMemo(() => {
       if (!recentsMode) return [];
-      if (!searchActive) return fuzzyMatchRecents('', allRecents, { cwd: rootPath }).slice(0, 40);
+      if (!searchActive) return fuzzyMatchRecents('', allRecents).slice(0, 40);
       const seen = new Set(allRecents.map((r) => r.path));
       const candidates = [...allRecents, ...nearbyFolders.filter((r) => !seen.has(r.path))];
-      return fuzzyMatchRecents(recentQuery, candidates, { cwd: rootPath }).slice(0, 40);
-    }, [recentsMode, recentQuery, searchActive, allRecents, nearby, rootPath]);
+      return fuzzyMatchRecents(recentQuery, candidates).slice(0, 40);
+    }, [recentsMode, recentQuery, searchActive, allRecents, nearby]);
 
     // Filter the current dir by the trailing path segment (case-insensitive,
     // prefix matches rank before substring matches).

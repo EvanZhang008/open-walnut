@@ -278,7 +278,8 @@ filesV1Router.post('/files/record-dir', async (req: Request, res: Response, next
 })
 
 // GET /api/v1/files/recent-dirs — union of session working dirs + "@"-browsed
-// folders, deduped by cwd+host, most-recent first. Same merge as the web route.
+// folders, deduped by cwd+host, most-recent first. Frozen shape: unlike the web
+// route it returns no usage count.
 filesV1Router.get('/files/recent-dirs', async (_req: Request, res: Response, next: NextFunction) => {
   try {
     const { getFrequentDirs } = await import('../../core/frequent-dirs.js')

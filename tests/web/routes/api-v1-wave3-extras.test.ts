@@ -30,7 +30,8 @@ import { sttV1Router } from '../../../src/web/routes/stt-v1.js'
 import { searchMemoryV1Router } from '../../../src/web/routes/search-memory-v1.js'
 import { filesV1Router } from '../../../src/web/routes/files-v1.js'
 import { errorHandler } from '../../../src/web/middleware/error-handler.js'
-import { WALNUT_HOME, NOTES_DIR, DAILY_DIR, SESSIONS_DIR } from '../../../src/constants.js'
+import { WALNUT_HOME, NOTES_DIR, DAILY_DIR, SESSIONS_DIR, FREQUENT_DIRS_FILE, MENTION_DIRS_FILE } from '../../../src/constants.js'
+import { filesRouter } from '../../../src/web/routes/files.js'
 
 function createApp() {
   const app = express()
@@ -44,6 +45,7 @@ function createApp() {
   app.use('/api/v1', sessionExtrasV1Router)
   app.use('/api/v1', filesV1Router)
   app.use('/api/v1', notesExtrasV1Router)
+  app.use('/api/files', filesRouter)
   app.use(errorHandler)
   return app
 }
@@ -211,6 +213,24 @@ describe('memory telemetry + daily-log compact', () => {
 // ── Files record-dir / recent-dirs ───────────────────────────────────────────
 
 describe('files record-dir + recent-dirs', () => {
+  it('preserves usage counts across both stores without mixing hosts or losing recency', async () => {
+    await fs.writeFile(FREQUENT_DIRS_FILE, JSON.stringify({ version: 1, directories: [
+      { cwd: '/projects/walnut', host: null, count: 1186, lastUsed: '2026-09-01T12:00:00Z' },
+      { cwd: '/projects/walnut', host: 'remote', count: 3, lastUsed: '2026-09-03T12:00:00Z' },
+    ] }))
+    await fs.writeFile(MENTION_DIRS_FILE, JSON.stringify({ version: 1, directories: [
+      { cwd: '/projects/walnut', host: null, count: 9, lastUsed: '2026-09-02T12:00:00Z' },
+      { cwd: '/notes/walnut', host: null, count: 1, lastUsed: '2026-09-04T12:00:00Z' },
+    ] }))
+    const res = await request(createApp()).get('/api/files/recent-dirs')
+    expect(res.status).toBe(200)
+    expect(res.body.dirs).toEqual([
+      { cwd: '/notes/walnut', host: null, count: 1 },
+      { cwd: '/projects/walnut', host: 'remote', count: 3 },
+      { cwd: '/projects/walnut', host: null, count: 1195 },
+    ])
+  })
+
   it('record → recents round trip; traversal rejected', async () => {
     const app = createApp()
     const rec = await request(app).post('/api/v1/files/record-dir').send({ path: '/tmp/wave3-demo' })

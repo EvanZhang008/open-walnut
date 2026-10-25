@@ -34,10 +34,7 @@ export function isSubsequence(q: string, p: string): boolean {
  *   +2   per query token that is a substring of some token  (partial)
  *   +2   per query token that hits the last segment         (folder-name bonus)
  *   +1   whole query is a subsequence of the path           (loose fuzzy fallback)
- * These weights are calibrated as ONE scale with the cwd/host boosts in
- * recentFolders.ts (UNDER_CWD_BOOST ≈ a substring hit; SAME_HOST_BOOST ≈ one
- * token hit) — change them together, and note the boosts only re-rank, they
- * never resurrect a 0-score.
+ * Usage frequency only breaks ties between equal relevance scores.
  */
 export function fuzzyScore(query: string, path: string): number {
   const q = query.trim().toLowerCase();

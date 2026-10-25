@@ -1008,8 +1008,8 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
     // Absolute paths are a direct jump — no suggestions needed once it looks like one.
     const q = pathQuery.trim();
     if (!q || q.startsWith('/') || q.startsWith('~')) return [];
-    return fuzzyMatchRecents(q, recents, { cwd }).slice(0, 8);
-  }, [editingPath, pathQuery, recents, cwd]);
+    return fuzzyMatchRecents(q, recents).slice(0, 8);
+  }, [editingPath, pathQuery, recents]);
 
   const commitPath = useCallback((raw: string) => {
     const next = raw.trim();

@@ -913,24 +913,27 @@ filesRouter.post('/record-dir', async (req: Request, res: Response, next: NextFu
 // (a) session working dirs (frequent-dirs) and (b) folders browsed in "@"
 // (mention-dirs), deduped by cwd+host. This is intentionally broader than the
 // /session path picker (which reads frequent-dirs only). Returns {cwd, host}[]
-// with the most-recent first; the client does fuzzy ranking + cwd/host boosting.
+// with the most-recent first; the client ranks by fuzzy match, usage, then recency.
 filesRouter.get('/recent-dirs', async (_req: Request, res: Response, next: NextFunction) => {
   try {
     const [freq, mention] = await Promise.all([getFrequentDirs(), getMentionDirs()])
     // Dedup by cwd+host, keeping the MOST-RECENT lastUsed across both stores — a
     // path can be both a session dir and "@"-browsed, and we want its freshest use
     // (not whichever store we happened to iterate first) to drive recency ranking.
-    const byKey = new Map<string, { cwd: string; host: string | null; lastUsed: string }>()
+    const byKey = new Map<string, { cwd: string; host: string | null; count: number; lastUsed: string }>()
     for (const d of [...mention, ...freq]) {
       const key = `${d.cwd}::${d.host ?? '__local__'}`
       const existing = byKey.get(key)
-      if (!existing || new Date(d.lastUsed).getTime() > new Date(existing.lastUsed).getTime()) {
-        byKey.set(key, { cwd: d.cwd, host: d.host, lastUsed: d.lastUsed })
+      if (!existing) {
+        byKey.set(key, { cwd: d.cwd, host: d.host, count: d.count, lastUsed: d.lastUsed })
+      } else {
+        existing.count += d.count
+        if (new Date(d.lastUsed).getTime() > new Date(existing.lastUsed).getTime()) existing.lastUsed = d.lastUsed
       }
     }
     const merged = [...byKey.values()]
     merged.sort((a, b) => new Date(b.lastUsed).getTime() - new Date(a.lastUsed).getTime())
-    res.json({ dirs: merged.map(({ cwd, host }) => ({ cwd, host })) })
+    res.json({ dirs: merged.map(({ cwd, host, count }) => ({ cwd, host, count })) })
   } catch (err) {
     next(err)
   }

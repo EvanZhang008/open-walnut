@@ -261,6 +261,44 @@ test('Find a folder searches recent and nearby directories without replacing the
   expect(listings.sort()).toEqual(['/fixture/:1', '/fixture/work/:3'])
 })
 
+test('folder search ranks usage before cwd proximity and keeps the draft across reopen', async ({ page }) => {
+  const errors: string[] = []
+  page.on('pageerror', error => errors.push(error.message))
+  const cwd = '/home/demo/.open-walnut'
+  const target = '/home/demo/projects/walnut'
+  await page.route('**/api/files/recent-dirs', route => route.fulfill({ json: { dirs: [
+    { cwd, host: null, count: 117 },
+    { cwd: target, host: null, count: 1186 },
+    { cwd: '/remote/walnut', host: 'remote', count: 9999 },
+  ] } }))
+  await page.route('**/api/sessions/list-dirs?**', route => route.fulfill({ json: {
+    dirs: Array.from({ length: 300 }, (_, i) => `${cwd}/folder-${i}/walnut`), exists: true,
+  } }))
+  const input = await openComposer(page, cwd)
+  const picker = page.locator('.file-mention-popup')
+  for (let i = 0; i < 3; i++) {
+    // Esc dismissal sticks to that "@", so reopen by retyping it as a user would.
+    await input.fill('Review ')
+    await input.pressSequentially('@?walnut')
+    await expect(picker.locator('.fmp-recent-path').first()).toHaveText(target)
+    await expect(picker.locator('.fmp-recent-path')).toHaveCount(40)
+    await expect(picker.locator('.fmp-recent-item', { hasText: '/remote/walnut' })).toHaveCount(0)
+    await input.press('Escape')
+    await expect(picker).toBeHidden()
+    await expect(input).toHaveValue('Review @?walnut')
+  }
+  // An empty query lists recent folders in recency order (the server sends cwd first).
+  await input.fill('Review ')
+  await input.pressSequentially('@?')
+  await expect(picker.locator('.fmp-recent-path').first()).toHaveText(cwd)
+  await input.pressSequentially('walnut')
+  await expect(picker.locator('.fmp-recent-path').first()).toHaveText(target)
+  await picker.locator('.fmp-recent-item').first().getByRole('button', { name: 'Select', exact: true }).click()
+  await expect(input).toHaveValue(`Review @${target} `)
+  await expect(page.getByTestId('sent')).toHaveText('[]')
+  expect(errors).toEqual([])
+})
+
 test('folder search ignores old responses, shows failures, and retries without losing the query', async ({ page }) => {
   const errors: string[] = []
   page.on('pageerror', error => errors.push(error.message))
