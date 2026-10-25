@@ -22,6 +22,7 @@ import { sslipHostname } from '../user-data.js'
 import {
   cliErrorDetail, CliMissingError, cliVerb, parseJsonSafe, runCli, withSecretFile, type CliResult,
 } from './cli-exec.js'
+import type { CloudSetupTarget } from '../job-types.js'
 import type {
   CloudProviderDriver,
   CreateVMParams,
@@ -29,7 +30,9 @@ import type {
   DetectCredsResult,
   DriverInstructions,
   InstructionsParams,
+  ResolveTargetParams,
 } from './types.js'
+import { incompleteTargetError } from './types.js'
 
 const RESOURCE_GROUP = 'walnut-cloud'
 const PUBLIC_IP_NAME = 'walnut-cloud-ip'
@@ -72,12 +75,26 @@ async function az(
   timeoutMs: number,
   signal?: AbortSignal,
 ): Promise<CliResult> {
-  const res = await runCli('az', args, { timeoutMs, onLog, signal })
+  const redact = subscriptionScrubber(args)
+  const res = await runCli('az', args, { timeoutMs, onLog, signal, redact })
   if (res.code !== 0) {
     const detail = cliErrorDetail(res)
-    throw new Error(`az ${cliVerb(args)} failed (exit ${res.code})${detail ? `: ${detail}` : ''}`)
+    throw new Error(redact(`az ${cliVerb(args)} failed (exit ${res.code})${detail ? `: ${detail}` : ''}`))
   }
   return res
+}
+
+/**
+ * Keeps the id `--subscription` names out of the operator log: the echoed
+ * command line, az's JSON (every resource id embeds it) and error text. The
+ * name is what the log says instead, as in detectCreds.
+ */
+function subscriptionScrubber(args: string[]): (text: string) => string {
+  const i = args.indexOf('--subscription')
+  const id = i >= 0 ? args[i + 1] : undefined
+  if (!id) return (text) => text
+  const pattern = new RegExp(id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi')
+  return (text) => text.replace(pattern, '<subscription>')
 }
 
 /** Same call, but a non-zero exit is an ANSWER (absent / already-exists), not a throw. */
@@ -119,14 +136,60 @@ async function detectCreds(): Promise<DetectCredsResult> {
   }
 }
 
+/** Subscription ids are GUIDs; one also reaches argv. */
+const SUBSCRIPTION_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/
+
+/** az's default subscription right now: its id and display name. */
+async function defaultSubscription(signal?: AbortSignal): Promise<{ id: string; name?: string } | null> {
+  const res = await runCli('az', ['account', 'show', '-o', 'json'], { timeoutMs: AZURE_TIMINGS.detectMs, signal })
+  if (res.code !== 0) return null
+  const account = parseJsonSafe<{ id?: string; name?: string }>(res.stdout)
+  return account?.id ? { id: account.id, ...(account.name ? { name: account.name } : {}) } : null
+}
+
+/**
+ * The subscription createVM builds in: az's default one, recorded once for the
+ * job. The id is stored (it is what `--subscription` takes) but only the name is
+ * ever logged, as in detectCreds.
+ */
+async function resolveTarget(params: ResolveTargetParams, onLog: (line: string) => void): Promise<CloudSetupTarget> {
+  const sub = await defaultSubscription(params.signal)
+  if (!sub) throw new Error('The az CLI is not signed in, or has no default subscription. Run `az login`, then retry.')
+  if (!SUBSCRIPTION_RE.test(sub.id)) throw new Error('az reported a default subscription whose id is not a subscription id.')
+  onLog(`Azure target: subscription ${sub.name ?? '(unnamed)'}`)
+  return { subscription: sub.id, ...(sub.name ? { subscriptionName: sub.name } : {}) }
+}
+
+/**
+ * The recorded subscription, or none for a caller that recorded no target. Says
+ * so (by name) when az's default has moved on since.
+ */
+async function pinnedSubscription(
+  target: CloudSetupTarget | undefined,
+  onLog: (line: string) => void,
+  signal?: AbortSignal,
+): Promise<string | undefined> {
+  if (!target) return undefined
+  if (!target.subscription || !SUBSCRIPTION_RE.test(target.subscription)) throw incompleteTargetError('Azure subscription')
+  const now = await defaultSubscription(signal).catch(() => null)
+  if (now && now.id.toLowerCase() !== target.subscription.toLowerCase()) {
+    onLog(
+      `az's default subscription is now ${now.name ?? '(unnamed)'}; this setup keeps building in subscription `
+      + `${target.subscriptionName ?? '(unnamed)'}, where it started`,
+    )
+  }
+  return target.subscription
+}
+
 /** Public IP of an existing VM, via the group+name the adopt path found. */
 async function adoptedVmIp(
   name: string,
+  scope: string[],
   onLog: (line: string) => void,
   signal?: AbortSignal,
 ): Promise<string | undefined> {
   const res = await az(
-    ['vm', 'list-ip-addresses', '-g', RESOURCE_GROUP, '-n', name, '-o', 'json'],
+    ['vm', 'list-ip-addresses', '-g', RESOURCE_GROUP, '-n', name, '-o', 'json', ...scope],
     onLog,
     AZURE_TIMINGS.shortMs,
     signal,
@@ -150,6 +213,7 @@ async function adoptedVmIp(
  */
 async function ensurePublicIp(
   location: string,
+  scope: string[],
   onLog: (line: string) => void,
   signal?: AbortSignal,
 ): Promise<string> {
@@ -158,6 +222,7 @@ async function ensurePublicIp(
     '-g', RESOURCE_GROUP, '-n', PUBLIC_IP_NAME, '-l', location,
     '--sku', 'Standard', '--allocation-method', 'Static',
     '-o', 'json',
+    ...scope,
   ], onLog, AZURE_TIMINGS.shortMs, signal)
   const parsed = parseJson<{ publicIp?: AzurePublicIp } & AzurePublicIp>(res.stdout, 'public-ip create')
   // `create` wraps the resource in {publicIp}; `show` returns it bare. Accept both.
@@ -178,25 +243,30 @@ async function createVM(params: CreateVMParams, onLog: (line: string) => void): 
   }
   const location = params.region ?? DEFAULT_LOCATION
   const size = params.instanceType ?? DEFAULT_SIZE
+  // Every call names the recorded subscription: the resource group has a fixed
+  // name, so the default subscription alone would decide which group (and which
+  // VM) the adopt check sees, and where a second VM would go.
+  const subscription = await pinnedSubscription(params.target, onLog, params.signal)
+  const scope = subscription ? ['--subscription', subscription] : []
 
   // `az group create` is idempotent (PUT) and cheap; running it first means
   // every later call has a group to talk to even on a fresh subscription.
   onLog(`ensuring resource group ${RESOURCE_GROUP} in ${location}`)
   await az(
-    ['group', 'create', '-n', RESOURCE_GROUP, '-l', location, '-o', 'json'],
+    ['group', 'create', '-n', RESOURCE_GROUP, '-l', location, '-o', 'json', ...scope],
     onLog, AZURE_TIMINGS.shortMs, params.signal,
   )
 
   // Adopt before create — the resume contract. A soft call because "not found"
   // is the normal first-run answer, not a failure.
   const existing = await azSoft(
-    ['vm', 'show', '-g', RESOURCE_GROUP, '-n', params.name, '-o', 'json'],
+    ['vm', 'show', '-g', RESOURCE_GROUP, '-n', params.name, '-o', 'json', ...scope],
     AZURE_TIMINGS.shortMs,
     params.signal,
   )
   if (existing.code === 0) {
     onLog(`found an existing Azure VM named ${params.name} in ${RESOURCE_GROUP} — adopting it instead of creating one`)
-    const adoptedIp = await adoptedVmIp(params.name, onLog, params.signal)
+    const adoptedIp = await adoptedVmIp(params.name, scope, onLog, params.signal)
     if (!adoptedIp) {
       throw new Error(
         `Azure VM ${params.name} exists but has no public IP address. Attach one in the portal `
@@ -211,7 +281,7 @@ async function createVM(params: CreateVMParams, onLog: (line: string) => void): 
     }
   }
 
-  const ip = await ensurePublicIp(location, onLog, params.signal)
+  const ip = await ensurePublicIp(location, scope, onLog, params.signal)
   onLog(`static public IP ${PUBLIC_IP_NAME} is ${ip}`)
 
   // The boot script goes through a 0600 tempfile, never the argv: it embeds the
@@ -254,6 +324,7 @@ async function createVM(params: CreateVMParams, onLog: (line: string) => void): 
       '--ssh-key-values', `${keyFile}.pub`,
       '--custom-data', userDataFile,
       '-o', 'json',
+      ...scope,
     ], onLog, AZURE_TIMINGS.createMs, params.signal)
   })
 
@@ -263,6 +334,7 @@ async function createVM(params: CreateVMParams, onLog: (line: string) => void): 
   await az([
     'vm', 'open-port', '-g', RESOURCE_GROUP, '-n', params.name,
     '--port', '80,443', '--priority', '1001', '-o', 'json',
+    ...scope,
   ], onLog, AZURE_TIMINGS.shortMs, params.signal)
 
   log.web.info('cloud-setup: azure vm created', { location, size })
@@ -307,6 +379,7 @@ export const azureDriver: CloudProviderDriver = {
   // No AL2023 on Azure; the boot script must reach for apt first.
   userDataFlavor: 'ubuntu',
   detectCreds,
+  resolveTarget,
   createVM,
   instructions,
   // No teardown on purpose. The honest unit of deletion here is the whole

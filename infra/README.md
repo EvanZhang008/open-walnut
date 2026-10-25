@@ -60,7 +60,9 @@ Public Suffix List, so Let's Encrypt counts every sslip.io user against one shar
 rate-limit bucket — `scripts/cloud/setup.sh` therefore turns on Caddy's Let's
 Encrypt → ZeroSSL issuer failover for those hostnames.
 
-Account and region come from the profile (`CDK_DEFAULT_ACCOUNT` / `CDK_DEFAULT_REGION`).
+Account and region come from the profile (`CDK_DEFAULT_ACCOUNT` / `CDK_DEFAULT_REGION`),
+unless `-c account=<id>` / `-c region=<id>` name them (Walnut's setup passes the place it
+recorded for the job, so a resumed deploy cannot land in another account or region).
 Nothing personal is hardcoded — this repo is public; keep it that way. `cdk.context.json`
 is gitignored on purpose (CDK caches account-specific lookups there).
 
@@ -79,6 +81,8 @@ is gitignored on purpose (CDK caches account-specific lookups there).
 | `instanceType` | no | `t4g.small` | ARM (Graviton) instance type. |
 | `volumeGb` | no | `30` | Root volume size (gp3, encrypted, retained on termination). |
 | `az` | no | `<region>b` | Single AZ for the VPC/subnet. Some accounts lack access to `<region>a` (e.g. this stack defaults to `us-west-1b`). |
+| `account` | no | *(the profile's account)* | Pins the stack to this account id, so credentials for another account cannot deploy it anywhere else. |
+| `region` | no | *(the profile's region)* | Pins the stack to this region. |
 
 ## After deploy
 

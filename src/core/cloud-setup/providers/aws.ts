@@ -17,6 +17,7 @@ import { promisify } from 'node:util'
 import { WALNUT_HOME, WALNUT_INSTALL_DIR, WALNUT_PACKAGE_ROOT } from '../../../constants.js'
 import { log } from '../../../logging/index.js'
 import { sslipHostname } from '../user-data.js'
+import { envForProfile, isAwsRegion, resolveAwsTarget, verifyAwsAccount } from './aws-target.js'
 import { killProcessGroup } from './cli-exec.js'
 import type {
   CloudProviderDriver,
@@ -26,6 +27,8 @@ import type {
   DriverInstructions,
   InstructionsParams,
 } from './types.js'
+import { incompleteTargetError } from './types.js'
+import type { CloudSetupTarget } from '../job-types.js'
 
 const execFileAsync = promisify(execFile)
 
@@ -179,19 +182,6 @@ async function listProfiles(): Promise<string[] | null> {
     // Too old to have the subcommand, or no config at all. Advisory only.
     return null
   }
-}
-
-/**
- * The environment an `aws`/`cdk` child should run with.
- *
- * An explicitly chosen profile wins over whatever Walnut itself was started with,
- * and AWS_DEFAULT_PROFILE is cleared alongside it: the CLI honours that variable
- * too, so leaving a stale one in place could silently send the deploy to a
- * different account than the wizard displayed.
- */
-function envForProfile(profile: string | undefined, base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
-  if (!profile) return base
-  return { ...base, AWS_PROFILE: profile, AWS_DEFAULT_PROFILE: profile }
 }
 
 async function detectCreds(profile?: string): Promise<DetectCredsResult> {
@@ -382,7 +372,24 @@ async function createVM(params: CreateVMParams, onLog: (line: string) => void): 
   if (!sslip && !params.domain) {
     throw new Error('AWS provisioning in own-domain mode requires a domain')
   }
+  // A recorded target decides the account and region; nothing ambient does.
+  const target = params.target
+  if (target && !/^\d{12}$/.test(target.account ?? '')) throw incompleteTargetError('AWS account')
+  if (target && !isAwsRegion(target.region)) throw incompleteTargetError('AWS region')
+  const region = target?.region ?? params.region
+
+  // The profile has to reach the CHILD, not just the probe: cdk resolves the
+  // target account from its own environment, so a deploy without it would land in
+  // whatever [default] points at, a different account than the wizard verified
+  // and displayed.
+  const profileEnv = envForProfile(params.profile)
+  const deployEnv = region
+    ? { ...profileEnv, CDK_DEFAULT_REGION: region, AWS_REGION: region }
+    : profileEnv
   const cwd = await prepareInfra(onLog, params.signal)
+  // Checked after the install (which can take minutes), right before the deploy,
+  // with the deploy's own environment.
+  if (target) await verifyAwsAccount(target.account as string, deployEnv, params.signal)
 
   const outputsFile = path.join(await fsp.mkdtemp(path.join(os.tmpdir(), 'walnut-cdk-')), 'outputs.json')
   const deployArgs = [
@@ -396,19 +403,13 @@ async function createVM(params: CreateVMParams, onLog: (line: string) => void): 
     '--outputs-file', outputsFile,
   ]
   if (params.instanceType) deployArgs.push('-c', `instanceType=${params.instanceType}`)
-  if (params.region) deployArgs.push('-c', `region=${params.region}`)
-
-  // The profile has to reach the CHILD, not just the probe: cdk resolves the
-  // target account from its own environment, so a deploy without it would land in
-  // whatever [default] points at — a different account than the wizard verified
-  // and displayed.
-  const profileEnv = envForProfile(params.profile)
-  const deployEnv = params.region
-    ? { ...profileEnv, CDK_DEFAULT_REGION: params.region, AWS_REGION: params.region }
-    : profileEnv
+  if (region) deployArgs.push('-c', `region=${region}`)
+  // The CDK app pins the stack to this account, so even credentials that change
+  // after the check below cannot deploy it anywhere else.
+  if (target) deployArgs.push('-c', `account=${target.account}`)
 
   const deploy = async (): Promise<{ code: number; output: string }> => {
-    onLog(`deploying ${STACK_NAME}${params.region ? ` in ${params.region}` : ''} — this usually takes 3-6 minutes`)
+    onLog(`deploying ${STACK_NAME}${region ? ` in ${region}` : ''}, this usually takes 3-6 minutes`)
     return runStreaming('npx', deployArgs, cwd, onLog, DEPLOY_TIMEOUT_MS, deployEnv, params.signal)
   }
 
@@ -417,8 +418,12 @@ async function createVM(params: CreateVMParams, onLog: (line: string) => void): 
     onLog('this account/region has never been CDK-bootstrapped — running cdk bootstrap once')
     // Same env as the deploy: bootstrapping a DIFFERENT account than the one the
     // deploy targets would leave the real failure unfixed.
+    // With a recorded target the environment is named outright and the account
+    // checked again, so a bootstrap stack never lands in another account either.
+    if (target) await verifyAwsAccount(target.account as string, deployEnv, params.signal)
+    const bootstrapArgs = target ? ['cdk', 'bootstrap', `aws://${target.account}/${region}`] : ['cdk', 'bootstrap']
     const bootstrap = await runStreaming(
-      'npx', ['cdk', 'bootstrap'], cwd, onLog, BOOTSTRAP_TIMEOUT_MS, deployEnv, params.signal,
+      'npx', bootstrapArgs, cwd, onLog, BOOTSTRAP_TIMEOUT_MS, deployEnv, params.signal,
     )
     if (bootstrap.code !== 0) throw new Error(`cdk bootstrap failed (exit ${bootstrap.code})`)
     result = await deploy()
@@ -476,7 +481,9 @@ function instructions(params: InstructionsParams): DriverInstructions {
 }
 
 /**
- * Destroy the stack. `profile` MUST be the one the job deployed with.
+ * Destroy the stack. `profile` MUST be the one the job deployed with, and a job
+ * that recorded a target passes it: then the destroy runs in exactly that account
+ * and region (checked and pinned like a deploy), whatever the defaults say now.
  *
  * The stack name is a constant, so the ONLY thing deciding which account and
  * region this deletes from is the environment handed to the child. Resolving that
@@ -487,15 +494,21 @@ function instructions(params: InstructionsParams): DriverInstructions {
 async function teardown(
   instanceRef: string,
   onLog: (line: string) => void,
-  opts?: { profile?: string; region?: string },
+  opts?: { profile?: string; region?: string; target?: CloudSetupTarget },
 ): Promise<void> {
+  const target = opts?.target
+  if (target && !/^\d{12}$/.test(target.account ?? '')) throw incompleteTargetError('AWS account')
+  if (target && !isAwsRegion(target.region)) throw incompleteTargetError('AWS region')
+  const region = target?.region ?? opts?.region
   const cwd = await prepareInfra(onLog)
   onLog(`destroying ${STACK_NAME} (instance ${instanceRef})`)
-  const env = opts?.region
-    ? { ...envForProfile(opts.profile), CDK_DEFAULT_REGION: opts.region, AWS_REGION: opts.region }
+  const env = region
+    ? { ...envForProfile(opts?.profile), CDK_DEFAULT_REGION: region, AWS_REGION: region }
     : envForProfile(opts?.profile)
+  if (target) await verifyAwsAccount(target.account as string, env)
+  const pin = target ? ['-c', `account=${target.account}`, '-c', `region=${region}`] : []
   const res = await runStreaming(
-    'npx', ['cdk', 'destroy', STACK_NAME, '--force'], cwd, onLog, DEPLOY_TIMEOUT_MS, env,
+    'npx', ['cdk', 'destroy', STACK_NAME, '--force', ...pin], cwd, onLog, DEPLOY_TIMEOUT_MS, env,
   )
   if (res.code !== 0) throw new Error(`cdk destroy failed (exit ${res.code})`)
 }
@@ -505,6 +518,7 @@ export const awsDriver: CloudProviderDriver = {
   label: 'AWS (EC2 + CDK)',
   costHint: '~$15-20/mo — t4g.small, 30 GB gp3, Elastic IP',
   detectCreds,
+  resolveTarget: resolveAwsTarget,
   createVM,
   instructions,
   teardown,

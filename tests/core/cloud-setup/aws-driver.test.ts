@@ -141,6 +141,8 @@ async function fakeRoot(prefix: string): Promise<string> {
 }
 
 const { awsDriver, resetNpmProbeForTests } = await import('../../../src/core/cloud-setup/providers/aws.js')
+const { CloudTargetChangedError } = await import('../../../src/core/cloud-setup/providers/types.js')
+const { _setEc2ProbeForTesting } = await import('../../../src/core/cloud-setup/providers/aws-target.js')
 
 const USER_DATA = "#!/usr/bin/env bash\nprintf '%s' 'a1b2c3d4e5f60718293a4b5c6d7e8f90' > /etc/walnut/setup-token\n"
 
@@ -679,5 +681,339 @@ describe('awsDriver.detectCreds says what blocks a deploy before the wizard asks
     execFileReplies['--version'] = { stdout: '10.9.0\n' }
     expect((await awsDriver.detectCreds()).available).toBe(true)
     await fsp.rm(packageRoot, { recursive: true, force: true })
+  })
+})
+
+describe('awsDriver: the account and region a job recorded are where it deploys', () => {
+  const IDENTITY = 'sts get-caller-identity --output json'
+  const INI = 'configure get region --profile'
+  const ACCOUNT_A = '111111111111'
+  const ACCOUNT_B = '222222222222'
+  const AMBIENT = ['AWS_REGION', 'AMAZON_REGION', 'AWS_DEFAULT_REGION', 'AMAZON_DEFAULT_REGION', 'AWS_PROFILE', 'AWS_DEFAULT_PROFILE']
+  let saved: Record<string, string | undefined>
+  const logs: string[] = []
+  /**
+   * Where each deploy landed, modelled on the CDK CLI: the stack goes to the
+   * account the credentials reach, in the region its env resolves (AWS_REGION,
+   * AWS_DEFAULT_REGION, the profile's `region`, [default]'s, then us-east-1). A
+   * `-c account` naming another account fails the deploy, as CDK does. The stack
+   * name is fixed, so one place holds at most one stack.
+   */
+  let credsAccount = ACCOUNT_A
+  let ini: Record<string, string> = {}
+  let stacks: Set<string>
+  /** This host as an EC2 instance in that region (IMDS answers), or not one at all. */
+  let ec2Region: string | null = null
+  let imdsCalls: Array<{ url: string; method: string; headers: Record<string, string> }> = []
+
+  function useIdentity(account: string): void {
+    credsAccount = account
+    execFileReplies[IDENTITY] = { stdout: JSON.stringify({ Account: account, Arn: `arn:aws:iam::${account}:user/operator` }) }
+  }
+  /** The `region` of each profile in ~/.aws, as `aws configure get region --profile <p>` reads it. */
+  function useIni(next: Record<string, string>): void {
+    ini = next
+    for (const key of Object.keys(execFileReplies)) if (key.startsWith(INI)) delete execFileReplies[key]
+    for (const [profile, region] of Object.entries(next)) execFileReplies[`${INI} ${profile}`] = { stdout: `${region}\n` }
+  }
+  function cdkRegion(env: NodeJS.ProcessEnv): string {
+    const profile = env.AWS_PROFILE || env.AWS_DEFAULT_PROFILE || 'default'
+    return env.AWS_REGION ?? env.AWS_DEFAULT_REGION ?? ini[profile] ?? ini.default ?? ec2Region ?? 'us-east-1'
+  }
+
+  beforeEach(async () => {
+    saved = Object.fromEntries(AMBIENT.map((k) => [k, process.env[k]]))
+    for (const k of AMBIENT) delete process.env[k]
+    spawnCalls.length = 0
+    execFileCalls.length = 0
+    execFileReplies = {}
+    logs.length = 0
+    stacks = new Set()
+    useIdentity(ACCOUNT_A)
+    useIni({ default: 'eu-west-1' })
+    ec2Region = null
+    imdsCalls = []
+    // Hermetic on any host: whether "this host" is EC2 is the test's choice, and
+    // the metadata service is a stub that never leaves the process.
+    _setEc2ProbeForTesting(async () => ec2Region !== null)
+    vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
+      const headers = (init?.headers ?? {}) as Record<string, string>
+      imdsCalls.push({ url: String(url), method: init?.method ?? 'GET', headers })
+      if (ec2Region === null) throw new Error('test: no metadata service here')
+      if (String(url).endsWith('/latest/api/token') && init?.method === 'PUT') return new Response('imds-token')
+      if (String(url).endsWith('/latest/dynamic/instance-identity/document') && headers['x-aws-ec2-metadata-token'] === 'imds-token') {
+        return new Response(JSON.stringify({ region: ec2Region, instanceId: 'i-0abc' }))
+      }
+      return new Response('', { status: 401 })
+    })
+    stackOutputs = { InstanceId: 'i-0abc', ElasticIp: '203.0.113.77', Domain: 'sslip-auto' }
+    deployOutput = () => {
+      const call = spawnCalls[spawnCalls.length - 1]
+      const pinned = contextFlags(call.args).account
+      if (pinned && pinned !== credsAccount) {
+        return { text: `Need to perform AWS calls for account ${pinned}, but the current credentials are for ${credsAccount}`, code: 1 }
+      }
+      stacks.add(`${credsAccount}/${cdkRegion(call.env ?? {})}`)
+      return { text: 'fake cdk: done', code: 0 }
+    }
+    installDir = await fakeRoot('walnut-aws-target-')
+    await fsp.mkdir(path.join(installDir, 'infra', 'node_modules', 'aws-cdk-lib'), { recursive: true })
+  })
+  afterEach(async () => {
+    for (const k of AMBIENT) {
+      if (saved[k] === undefined) delete process.env[k]
+      else process.env[k] = saved[k]
+    }
+    _setEc2ProbeForTesting()
+    vi.unstubAllGlobals()
+    await fsp.rm(installDir!, { recursive: true, force: true }).catch(() => {})
+    installDir = null
+  })
+
+  async function provision(target: { account?: string; region?: string } | undefined, extra: { profile?: string; region?: string } = {}) {
+    return awsDriver.createVM!(
+      { userData: USER_DATA, name: 'walnut-cloud', domainMode: 'sslip', target, ...extra },
+      (l) => logs.push(l),
+    )
+  }
+  const resolve = (extra: { profile?: string; region?: string } = {}) =>
+    awsDriver.resolveTarget!({ name: 'walnut-cloud', ...extra }, (l) => logs.push(l))
+  const deploys = () => spawnCalls.filter((c) => c.args.includes('deploy'))
+  const bootstraps = () => spawnCalls.filter((c) => c.args.includes('bootstrap'))
+
+  it('records the account and the chosen profile\'s region, reading that profile by name', async () => {
+    useIni({ 'marina-dev': 'eu-west-1', default: 'us-west-2' })
+    const target = await resolve({ profile: 'marina-dev' })
+    expect(target).toEqual({ account: ACCOUNT_A, region: 'eu-west-1' })
+    expect(execFileCalls.find((c) => c.args.join(' ') === `${INI} marina-dev`)?.env?.AWS_PROFILE).toBe('marina-dev')
+    expect(execFileCalls.find((c) => c.args.join(' ') === IDENTITY)?.env?.AWS_PROFILE).toBe('marina-dev')
+    // The profile name is the operator's label and the ARN names a user: neither is logged.
+    expect(logs.join('\n')).not.toContain('marina-dev')
+    expect(logs.join('\n')).not.toContain('operator')
+  })
+
+  it('a profile with no region falls back to [default]\'s, as CDK does', async () => {
+    useIni({ default: 'us-west-2' })
+    const target = await resolve({ profile: 'marina-dev' })
+    expect(target.region).toBe('us-west-2')
+    expect(logs.join('\n')).toMatch(/\[default\] AWS profile config/)
+  })
+
+  it('takes the region from the environment first, in the CDK order, and a chosen one over all of them', async () => {
+    process.env.AWS_DEFAULT_REGION = 'ca-central-1'
+    expect((await resolve()).region).toBe('ca-central-1')
+    process.env.AWS_REGION = 'sa-east-1'
+    expect((await resolve()).region).toBe('sa-east-1')
+    expect((await resolve({ region: 'ap-south-1' })).region).toBe('ap-south-1')
+    expect((await resolve({ region: 'eusc-de-east-1' })).region).toBe('eusc-de-east-1')
+  })
+
+  it('with no region anywhere, records the CDK default us-east-1 and says so', async () => {
+    useIni({})
+    const target = await resolve()
+    expect(target.region).toBe('us-east-1')
+    expect(logs.join('\n')).toMatch(/no region configured, the CDK default/)
+  })
+
+  it('for each case above, the recorded region is the one an unpinned CDK deploy would have used', async () => {
+    const cases: Array<{ env?: Record<string, string>; ini: Record<string, string>; profile?: string }> = [
+      { ini: { default: 'eu-west-1' } },
+      { ini: { 'marina-dev': 'eu-west-1', default: 'us-west-2' }, profile: 'marina-dev' },
+      { ini: { default: 'us-west-2' }, profile: 'marina-dev' },
+      { ini: {} },
+      { env: { AWS_DEFAULT_REGION: 'ca-central-1' }, ini: { default: 'eu-west-1' } },
+    ]
+    for (const c of cases) {
+      for (const k of AMBIENT) delete process.env[k]
+      Object.assign(process.env, c.env ?? {})
+      useIni(c.ini)
+      stacks.clear()
+      spawnCalls.length = 0
+      await provision(undefined, { profile: c.profile })
+      const target = await resolve({ profile: c.profile })
+      expect([...stacks], JSON.stringify(c)).toEqual([`${ACCOUNT_A}/${target.region}`])
+    }
+  })
+
+  it('on an EC2 host with no region configured, records the instance region from IMDSv2, as CDK does', async () => {
+    useIni({})
+    ec2Region = 'us-west-2'
+    const target = await resolve()
+    expect(target.region).toBe('us-west-2')
+    expect(logs.join('\n')).toMatch(/EC2 instance's metadata/)
+    expect(imdsCalls.map((c) => `${c.method} ${c.url}`)).toEqual([
+      'PUT http://169.254.169.254/latest/api/token',
+      'GET http://169.254.169.254/latest/dynamic/instance-identity/document',
+    ])
+  })
+
+  it('a configured region still wins over the instance metadata', async () => {
+    ec2Region = 'us-west-2'
+    expect((await resolve()).region).toBe('eu-west-1')
+    expect(imdsCalls).toHaveLength(0)
+  })
+
+  it('an EC2 host whose metadata service does not answer falls back to us-east-1, as CDK does', async () => {
+    useIni({})
+    ec2Region = 'us-west-2'
+    vi.stubGlobal('fetch', async () => { throw new Error('connect ETIMEDOUT 169.254.169.254:80') })
+    expect((await resolve()).region).toBe('us-east-1')
+  })
+
+  it('a host that is not EC2 never calls the metadata service', async () => {
+    useIni({})
+    expect((await resolve()).region).toBe('us-east-1')
+    expect(imdsCalls).toHaveLength(0)
+  })
+
+  it('a stack an older Walnut deployed on an EC2 host by instance metadata is the one the resumed job pins', async () => {
+    useIni({})
+    ec2Region = 'ap-northeast-1'
+    await provision(undefined)
+    const target = await resolve()
+    await provision(target)
+    expect([...stacks]).toEqual([`${ACCOUNT_A}/ap-northeast-1`])
+  })
+
+  it('teardown with a recorded target destroys in exactly that account and region, or refuses', async () => {
+    const target = await resolve()
+    useIni({ default: 'ap-southeast-2' })
+    await awsDriver.teardown!('i-0abc', (l) => logs.push(l), { target })
+    const destroy = spawnCalls.find((c) => c.args.includes('destroy'))!
+    expect(contextFlags(destroy.args)).toMatchObject({ account: ACCOUNT_A, region: 'eu-west-1' })
+    expect(destroy.env?.AWS_REGION).toBe('eu-west-1')
+
+    spawnCalls.length = 0
+    useIdentity(ACCOUNT_B)
+    await expect(awsDriver.teardown!('i-0abc', () => {}, { target })).rejects.toBeInstanceOf(CloudTargetChangedError)
+    expect(spawnCalls.filter((c) => c.args.includes('destroy'))).toHaveLength(0)
+  })
+
+  it('a missing or expired sign-in and a failed STS call get different advice, and neither quotes the CLI', async () => {
+    const target = await resolve()
+    execFileReplies[IDENTITY] = { error: Object.assign(new Error('Command failed'), { code: 255, stderr: 'Error when retrieving token from sso: Token has expired and refresh failed' }) }
+    const expired = await provision(target).then(() => null, (e: unknown) => e as Error)
+    expect(expired?.message).toMatch(/missing or expired\. Sign in again/)
+    execFileReplies[IDENTITY] = { error: Object.assign(new Error('Command failed'), { code: 255, stderr: 'Could not connect to the endpoint URL: "https://sts.eu-west-1.api.aws/"' }) }
+    const network = await provision(target).then(() => null, (e: unknown) => e as Error)
+    expect(network?.message).toMatch(/network, throttling/)
+    expect(network?.message).not.toContain('endpoint URL')
+    expect(deploys()).toHaveLength(0)
+  })
+
+  it('refuses to record a region that is not a region id', async () => {
+    process.env.AWS_REGION = 'eu west 1; rm'
+    await expect(resolve()).rejects.toThrow(/not an AWS region id/)
+  })
+
+  it('every deploy passes the recorded account and region explicitly', async () => {
+    const target = await resolve()
+    await provision(target)
+    const deploy = deploys()[0]
+    expect(contextFlags(deploy.args)).toMatchObject({ account: ACCOUNT_A, region: 'eu-west-1' })
+    expect(deploy.env?.AWS_REGION).toBe('eu-west-1')
+    expect(deploy.env?.CDK_DEFAULT_REGION).toBe('eu-west-1')
+    expect([...stacks]).toEqual([`${ACCOUNT_A}/eu-west-1`])
+  })
+
+  it('a resume with the same target converges on the one stack', async () => {
+    const target = await resolve()
+    await provision(target)
+    await provision(target)
+    expect(deploys()).toHaveLength(2)
+    expect(stacks.size).toBe(1)
+  })
+
+  it('a resume after the default region changed still deploys where it started', async () => {
+    const target = await resolve()
+    await provision(target)
+    useIni({ default: 'ap-southeast-2' })
+    process.env.AWS_DEFAULT_REGION = 'us-west-2'
+    await provision(target)
+    expect([...stacks]).toEqual([`${ACCOUNT_A}/eu-west-1`])
+  })
+
+  it('without the record, the same region change would have made a second stack (what the record prevents)', async () => {
+    await provision(undefined)
+    useIni({ default: 'ap-southeast-2' })
+    await provision(undefined)
+    expect(stacks.size).toBe(2)
+  })
+
+  it('a resume whose credentials now reach another account refuses, naming both, and deploys nothing', async () => {
+    const target = await resolve()
+    await provision(target)
+    spawnCalls.length = 0
+    useIdentity(ACCOUNT_B)
+    const err = await provision(target).then(() => null, (e: unknown) => e as Error)
+    expect(err).toBeInstanceOf(CloudTargetChangedError)
+    expect(err?.message).toContain(`started in AWS account ${ACCOUNT_A}`)
+    expect(err?.message).toContain(`now reach account ${ACCOUNT_B}`)
+    expect(err?.message).not.toContain('operator')
+    expect(deploys()).toHaveLength(0)
+    expect(bootstraps()).toHaveLength(0)
+    expect(stacks.size).toBe(1)
+  })
+
+  it('a resume that cannot confirm the account deploys nothing', async () => {
+    const target = await resolve()
+    execFileReplies[IDENTITY] = { error: Object.assign(new Error('ExpiredToken for arn:aws:iam::123456789012:user/operator'), { code: 255 }) }
+    const err = await provision(target).then(() => null, (e: unknown) => e as Error)
+    expect(err?.message).toMatch(/could not confirm which AWS account/)
+    expect(err?.message).not.toContain('operator')
+    expect(deploys()).toHaveLength(0)
+  })
+
+  it('even credentials that change after the check cannot land the stack in another account', async () => {
+    // The CDK app is pinned through -c account, so CDK itself fails the deploy.
+    const target = await resolve()
+    // The check still reads account A; the credentials move to B right behind it.
+    const identity = execFileReplies[IDENTITY]
+    Object.defineProperty(execFileReplies, IDENTITY, {
+      configurable: true,
+      enumerable: true,
+      get: () => { credsAccount = ACCOUNT_B; return identity },
+    })
+    await expect(provision(target)).rejects.toThrow(/cdk deploy failed/)
+    expect(stacks.size).toBe(0)
+  })
+
+  it('a pinned bootstrap names the recorded environment and checks the account again first', async () => {
+    const target = await resolve()
+    let n = 0
+    const base = deployOutput
+    deployOutput = () => (++n === 1
+      ? { text: 'Error: WalnutCloudStack: SSM parameter /cdk-bootstrap/hnb659fds/version not found', code: 1 }
+      : base())
+    await provision(target)
+    expect(bootstraps()[0].args).toEqual(['cdk', 'bootstrap', `aws://${ACCOUNT_A}/eu-west-1`])
+    expect(execFileCalls.filter((c) => c.args.join(' ') === IDENTITY).length).toBeGreaterThanOrEqual(3)
+    expect([...stacks]).toEqual([`${ACCOUNT_A}/eu-west-1`])
+  })
+
+  it('credentials that moved before the bootstrap stop it: no bootstrap stack in another account', async () => {
+    const target = await resolve()
+    deployOutput = () => {
+      useIdentity(ACCOUNT_B) // moved while the first deploy ran
+      return { text: 'Error: WalnutCloudStack: SSM parameter /cdk-bootstrap/hnb659fds/version not found', code: 1 }
+    }
+    await expect(provision(target)).rejects.toBeInstanceOf(CloudTargetChangedError)
+    expect(bootstraps()).toHaveLength(0)
+  })
+
+  it('a stack an older Walnut deployed (no record) is the one the resumed job pins and converges on', async () => {
+    // The older Walnut deployed unpinned from a profile with no region of its own...
+    useIni({ default: 'us-west-2' })
+    await provision(undefined, { profile: 'marina-dev' })
+    // ...crashed; the resumed job records the place in force now and deploys there.
+    const target = await resolve({ profile: 'marina-dev' })
+    await provision(target, { profile: 'marina-dev' })
+    expect([...stacks]).toEqual([`${ACCOUNT_A}/us-west-2`])
+  })
+
+  it('refuses a damaged record rather than guessing, and spawns nothing', async () => {
+    await expect(provision({ region: 'eu-west-1' })).rejects.toThrow(/has no AWS account/)
+    await expect(provision({ account: ACCOUNT_A })).rejects.toThrow(/has no AWS region/)
+    expect(spawnCalls).toHaveLength(0)
   })
 })

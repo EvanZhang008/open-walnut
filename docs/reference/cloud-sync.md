@@ -38,6 +38,19 @@ resumable job behind both (`/api/cloud-setup`, driven by
 - **Ask your Personal AI**: "set up my cloud companion" routes to the shipped
   `walnut-setup-cloud-companion` skill.
 
+The job records WHERE it builds before it creates anything: the AWS account and
+region, the gcloud project, the az subscription, or (Hetzner, whose API cannot
+name a token's project) the id of the `walnut-cloud-fw` firewall it made there.
+A job resumed after a crash or restart builds in that place or stops: gcloud and
+az get `--project` / `--subscription` explicitly, so a changed default does not
+move the box; an AWS deploy whose credentials now reach another account fails
+with both account ids named; a Hetzner token that cannot see the recorded
+firewall is refused and the job asks for a token from the original project. A
+job record from a Walnut before this records its place on its next provision
+(the place in force then, the only one left to know). Going back to such a
+Walnut keeps the record readable, but that version ignores the recorded place
+(and its REST view still shows the az subscription id).
+
 The claim step is what mints the device token: the box boots holding a one-shot
 setup token, and `POST /api/v1/setup/claim` trades it for the long-lived device
 token that ends up in the remote URL below. After that, the only manual step

@@ -172,6 +172,12 @@ async function loadFromDisk(): Promise<CloudSetupJobState | null> {
     // Older/partial files may lack step slots added later.
     for (const id of CLOUD_SETUP_STEP_IDS) parsed.steps[id] ??= { status: 'pending' }
     parsed.logTail ??= []
+    // A target that is not an object is a damaged record, not an old one (old
+    // ones have none): keep it as an empty target, which every driver refuses,
+    // rather than dropping it and letting the job re-resolve somewhere else.
+    if (parsed.target !== undefined && (typeof parsed.target !== 'object' || parsed.target === null || Array.isArray(parsed.target))) {
+      parsed.target = {}
+    }
     return parsed
   } catch {
     return null
@@ -212,6 +218,12 @@ export async function deleteCloudSetupJob(): Promise<boolean> {
  */
 export function redactCloudSetupJob(state: CloudSetupJobState): RedactedCloudSetupJobState {
   const { pairingCode: _pairingCode, ...rest } = state
+  // The azure subscription id stays in the record (it is what --subscription
+  // takes) but, as in detectCreds, only its name leaves the process.
+  if (rest.target?.subscription) {
+    const { subscription: _subscription, ...target } = rest.target
+    return { ...rest, target }
+  }
   return rest
 }
 
@@ -421,6 +433,8 @@ async function runJob(state: CloudSetupJobState, opts: { force: boolean }): Prom
       void persistIfCurrent().then(() => emitProgress(state)).catch(() => {})
     },
     confirmed: () => handle.confirmed,
+    persist: persistIfCurrent,
+    forgetCredentials: () => { credentialStore.delete(state.id) },
   }
 
   try {

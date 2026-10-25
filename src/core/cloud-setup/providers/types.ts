@@ -7,7 +7,7 @@
  * a provider never touches the state machine.
  */
 
-import type { CloudSetupDomainMode, CloudSetupProviderId } from '../job-types.js'
+import type { CloudSetupDomainMode, CloudSetupProviderId, CloudSetupTarget } from '../job-types.js'
 import type { UserDataFlavor } from '../user-data.js'
 
 export interface CreateVMParams {
@@ -35,6 +35,13 @@ export interface CreateVMParams {
    */
   profile?: string
   /**
+   * Where to build, as resolveTarget() recorded it for this job. When set, the
+   * driver builds exactly there (passed explicitly to every CLI or API call) or
+   * throws CloudTargetChangedError; it never falls back to an ambient default.
+   * Absent only for a driver without resolveTarget.
+   */
+  target?: CloudSetupTarget
+  /**
    * Fires when the operator cancels the job. A driver MUST kill its child
    * process group / abort its in-flight fetches and reject promptly.
    *
@@ -44,6 +51,32 @@ export interface CreateVMParams {
    * signal is the only thing that reaches a process that is already live.
    */
   signal?: AbortSignal
+}
+
+export interface ResolveTargetParams {
+  /** Same meaning as in CreateVMParams. */
+  region?: string
+  profile?: string
+  credentials?: string
+  /** The resource name createVM will use (hetzner anchors its firewall on it). */
+  name: string
+  signal?: AbortSignal
+}
+
+/**
+ * The place a job recorded is not the place the operator's credentials reach
+ * now. Building anyway would make a second VM somewhere the operator is not
+ * looking, so the driver refuses. `newCredentialHelps` is set when pasting a
+ * different credential is the fix (hetzner: a token from the original project),
+ * so the job asks for one instead of failing.
+ */
+export class CloudTargetChangedError extends Error {
+  readonly newCredentialHelps: boolean
+  constructor(message: string, opts: { newCredentialHelps?: boolean } = {}) {
+    super(message)
+    this.name = 'CloudTargetChangedError'
+    this.newCredentialHelps = opts.newCredentialHelps === true
+  }
 }
 
 export interface CreateVMResult {
@@ -115,17 +148,32 @@ export interface CloudProviderDriver {
    * no such concept ignore the argument — the caller may always pass it.
    */
   detectCreds(profile?: string): Promise<DetectCredsResult>
+  /**
+   * Resolve where createVM would build right now (account, region, project,
+   * subscription), from the operator's CLI or credential. The job calls it once
+   * and records the answer; createVM then gets it back as `params.target`.
+   * Present on every driver whose createVM depends on an ambient default.
+   */
+  resolveTarget?(params: ResolveTargetParams, onLog: (line: string) => void): Promise<CloudSetupTarget>
   createVM?(params: CreateVMParams, onLog: (line: string) => void): Promise<CreateVMResult>
   instructions(params: InstructionsParams): DriverInstructions
   /**
-   * `opts` pins WHERE the deletion happens (aws: the profile + region the job
-   * deployed with). Omitting it lets the driver fall back to the ambient
+   * `opts` pins WHERE the deletion happens (aws: the profile the job deployed
+   * with, and its recorded target, else the region). Omitting it lets the driver fall back to the ambient
    * environment, which for a destroy is how you delete the wrong account's box —
    * callers that know the job's profile must pass it.
    */
   teardown?(
     instanceRef: string,
     onLog: (line: string) => void,
-    opts?: { profile?: string; region?: string },
+    opts?: { profile?: string; region?: string; target?: CloudSetupTarget },
   ): Promise<void>
+}
+
+/** A recorded target without the field this driver builds by: a damaged record, never a guess. */
+export function incompleteTargetError(what: string): Error {
+  return new Error(
+    `This setup's record of where it builds has no ${what}, so Walnut will not guess one. `
+    + 'Cancel this setup and start a new one.',
+  )
 }

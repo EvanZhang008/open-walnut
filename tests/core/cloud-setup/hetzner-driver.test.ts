@@ -9,6 +9,7 @@
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { hetznerDriver, HETZNER_TIMINGS } from '../../../src/core/cloud-setup/providers/hetzner.js'
+import { CloudTargetChangedError } from '../../../src/core/cloud-setup/providers/types.js'
 
 // Real 5s sleeps would put this file at ~20s for no added coverage: what the
 // poll tests assert is the SEQUENCE of calls, not wall-clock patience. The
@@ -589,5 +590,169 @@ describe('hetznerDriver metadata + instructions', () => {
     expect(hetznerDriver.instructions({
       userData: USER_DATA, domain: '', domainMode: 'sslip',
     }).userData).toBe(USER_DATA)
+  })
+})
+
+describe('hetznerDriver: the project a job recorded is where it builds', () => {
+  /**
+   * A small stateful Hetzner: every token belongs to one project, and a token
+   * sees only its own project's firewalls and servers. Ids are global, as the
+   * real API's are, so a firewall id names exactly one project.
+   */
+  const TOKEN_A = 'hcloud-token-project-a-0123456789'
+  const TOKEN_A2 = 'hcloud-token-project-a-second-key'
+  const TOKEN_B = 'hcloud-token-project-b-0123456789'
+  const projectOfToken: Record<string, string> = { [TOKEN_A]: 'A', [TOKEN_A2]: 'A', [TOKEN_B]: 'B' }
+  interface Res { id: number; name: string; project: string }
+  let firewalls: Res[]
+  let servers: Res[]
+  let nextId: number
+  const logs: string[] = []
+  const projectOf = (call: Call): string => projectOfToken[(call.auth ?? '').replace('Bearer ', '')]
+  const nameQuery = (path: string): string => decodeURIComponent(/name=([^&]+)/.exec(path)?.[1] ?? '')
+  const posts = (): Call[] => calls.filter((c) => c.method === 'POST')
+
+  beforeEach(() => {
+    firewalls = []
+    servers = []
+    nextId = 1000
+    logs.length = 0
+    route('GET', /^\/servers\?name=/, (c) => ({
+      body: { servers: servers.filter((s) => s.project === projectOf(c) && s.name === nameQuery(c.path)).map((s) => server({ id: s.id })) },
+    }))
+    route('GET', /^\/servers\/\d+$/, (c) => ({ body: { server: server({ id: Number(c.path.split('/')[2]) }) } }))
+    route('POST', /^\/servers$/, (c) => {
+      const s = { id: nextId++, name: (c.body as { name: string }).name, project: projectOf(c) }
+      servers.push(s)
+      return { body: { server: server({ id: s.id, status: 'initializing' }) } }
+    })
+    route('GET', /^\/firewalls\?name=/, (c) => ({
+      body: { firewalls: firewalls.filter((f) => f.project === projectOf(c) && f.name === nameQuery(c.path)) },
+    }))
+    route('GET', /^\/firewalls\/\d+$/, (c) => {
+      const fw = firewalls.find((f) => f.id === Number(c.path.split('/')[2]) && f.project === projectOf(c))
+      return fw
+        ? { body: { firewall: { id: fw.id, name: fw.name } } }
+        : { status: 404, body: { error: { code: 'not_found', message: 'firewall not found' } } }
+    })
+    route('POST', /^\/firewalls$/, (c) => {
+      const fw = { id: nextId++, name: (c.body as { name: string }).name, project: projectOf(c) }
+      firewalls.push(fw)
+      return { body: { firewall: { id: fw.id } } }
+    })
+  })
+
+  async function provision(token: string, target: { firewallId?: number } | undefined) {
+    return hetznerDriver.createVM!(
+      { userData: USER_DATA, name: 'walnut-cloud', domainMode: 'sslip', credentials: token, target },
+      (l) => logs.push(l),
+    )
+  }
+
+  it('records the id of the project firewall it finds or makes, and stores nothing secret', async () => {
+    const target = await hetznerDriver.resolveTarget!({ name: 'walnut-cloud', credentials: TOKEN_A }, (l) => logs.push(l))
+    expect(target).toEqual({ firewallId: 1000 })
+    expect(firewalls).toEqual([{ id: 1000, name: 'walnut-cloud-fw', project: 'A' }])
+    expect(JSON.stringify(target)).not.toContain(TOKEN_A)
+    // A second resolve in the same project reuses it rather than making another.
+    expect(await hetznerDriver.resolveTarget!({ name: 'walnut-cloud', credentials: TOKEN_A }, () => {})).toEqual({ firewallId: 1000 })
+    expect(firewalls).toHaveLength(1)
+  })
+
+  it('builds behind the recorded firewall without looking it up again', async () => {
+    const target = await hetznerDriver.resolveTarget!({ name: 'walnut-cloud', credentials: TOKEN_A }, () => {})
+    calls = []
+    await provision(TOKEN_A, target)
+    const create = serverCreates()[0]
+    expect((create.body as { firewalls: unknown }).firewalls).toEqual([{ firewall: 1000 }])
+    expect(calls.filter((c) => c.method === 'POST' && c.path === '/firewalls')).toHaveLength(0)
+  })
+
+  it('a resume with a token for the same project adopts the server it already made: one VM', async () => {
+    const target = await hetznerDriver.resolveTarget!({ name: 'walnut-cloud', credentials: TOKEN_A }, () => {})
+    await provision(TOKEN_A, target)
+    calls = []
+    // A different token, but for the same project: the operator re-entered one after a restart.
+    const result = await provision(TOKEN_A2, target)
+    expect(serverCreates()).toHaveLength(0)
+    expect(servers).toHaveLength(1)
+    expect(result.instanceRef).toBe('1001')
+    expect(logs.join('\n')).toMatch(/adopting it instead of creating one/)
+  })
+
+  it('a resume with a token for ANOTHER project refuses, asks for a new token, and creates nothing there', async () => {
+    const target = await hetznerDriver.resolveTarget!({ name: 'walnut-cloud', credentials: TOKEN_A }, () => {})
+    await provision(TOKEN_A, target)
+    calls = []
+    const err = await provision(TOKEN_B, target).then(() => null, (e: unknown) => e)
+    expect(err).toBeInstanceOf(CloudTargetChangedError)
+    expect((err as CloudTargetChangedError).newCredentialHelps).toBe(true)
+    expect((err as Error).message).toMatch(/firewall walnut-cloud-fw \(id 1000\)/)
+    expect((err as Error).message).toMatch(/paste one from the original project/)
+    expect(posts()).toHaveLength(0)
+    expect(servers.filter((s) => s.project === 'B')).toHaveLength(0)
+    expect(firewalls.filter((f) => f.project === 'B')).toHaveLength(0)
+    // Neither token reaches the message.
+    expect((err as Error).message).not.toContain(TOKEN_A)
+    expect((err as Error).message).not.toContain(TOKEN_B)
+  })
+
+  it('names the other project\'s own firewall when it has one, so both places are visible', async () => {
+    const target = await hetznerDriver.resolveTarget!({ name: 'walnut-cloud', credentials: TOKEN_A }, () => {})
+    await hetznerDriver.resolveTarget!({ name: 'walnut-cloud', credentials: TOKEN_B }, () => {}) // B's own, id 1001
+    const err = await provision(TOKEN_B, target).then(() => null, (e: unknown) => e as Error)
+    expect(err?.message).toMatch(/the token's project has a walnut-cloud-fw with id 1001/)
+    expect(servers).toHaveLength(0)
+  })
+
+  it('a token whose project shows the recorded id under ANOTHER name is refused, and nothing is made there', async () => {
+    // Ids are global on Hetzner, but the check does not rest on that alone.
+    const target = await hetznerDriver.resolveTarget!({ name: 'walnut-cloud', credentials: TOKEN_A }, () => {})
+    firewalls.push({ id: target.firewallId!, name: 'office-web', project: 'B' })
+    calls = []
+    const err = await provision(TOKEN_B, target).then(() => null, (e: unknown) => e)
+    expect(err).toBeInstanceOf(CloudTargetChangedError)
+    expect((err as CloudTargetChangedError).newCredentialHelps).toBe(true)
+    expect((err as Error).message).toMatch(/sees id 1000 as "office-web", a different firewall/)
+    expect(posts()).toHaveLength(0)
+    expect(servers).toHaveLength(0)
+  })
+
+  it('a firewall deleted in the SAME project is named as a possible cause, with how to recover', async () => {
+    const target = await hetznerDriver.resolveTarget!({ name: 'walnut-cloud', credentials: TOKEN_A }, () => {})
+    await provision(TOKEN_A, target)
+    firewalls.length = 0 // the operator deleted walnut-cloud-fw in the Console
+    calls = []
+    const err = await provision(TOKEN_A, target).then(() => null, (e: unknown) => e as Error)
+    expect(err?.message).toMatch(/or that firewall was deleted/)
+    expect(err?.message).toMatch(/If the firewall was deleted, cancel this setup/)
+    expect(err?.message).not.toMatch(/token is for a different project, so/)
+    expect(posts()).toHaveLength(0)
+    expect(servers).toHaveLength(1)
+  })
+
+  it('without the record, the same token swap would have made a second VM (what the record prevents)', async () => {
+    await provision(TOKEN_A, undefined)
+    await provision(TOKEN_B, undefined)
+    expect(servers).toHaveLength(2)
+  })
+
+  it('a server an older Walnut made (no record) is the one the resumed job pins and adopts', async () => {
+    await provision(TOKEN_A, undefined) // the older Walnut created it, then crashed
+    const target = await hetznerDriver.resolveTarget!({ name: 'walnut-cloud', credentials: TOKEN_A2 }, () => {})
+    calls = []
+    await provision(TOKEN_A2, target)
+    expect(serverCreates()).toHaveLength(0)
+    expect(servers).toEqual([{ id: 1001, name: 'walnut-cloud', project: 'A' }])
+  })
+
+  it('refuses a damaged record rather than guessing a project, and makes no request', async () => {
+    await expect(provision(TOKEN_A, {})).rejects.toThrow(/has no Hetzner project/)
+    expect(calls).toHaveLength(0)
+  })
+
+  it('resolveTarget needs the token, and makes no request without one', async () => {
+    await expect(hetznerDriver.resolveTarget!({ name: 'walnut-cloud' }, () => {})).rejects.toThrow(/needs a Cloud API token/)
+    expect(calls).toHaveLength(0)
   })
 })

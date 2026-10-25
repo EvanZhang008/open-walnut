@@ -234,6 +234,13 @@ not save it anywhere, do not put it in a summary.
 {"credentials": "<token the user pasted>"}
 ```
 
+Hetzner can also ask again after a token was pasted. The job records the id of
+the `walnut-cloud-fw` firewall it made in the token's project, and a token that
+cannot see that firewall is refused, so no second server is built in another
+project. Relay the prompt as it is: the user either pastes a token from the
+project the setup started in, or (if they deleted that firewall themselves)
+cancels, removes any `walnut-cloud` server it left, and starts over.
+
 Each of these returns **200** `{ job }` and the job continues. **409** means the
 job is not actually waiting for input (someone else answered, or it moved on) —
 re-read `GET /job` before trying again. **400** means the value was rejected
@@ -273,6 +280,13 @@ CloudFormation/quota rejection (the log names it); the box not answering within
 its 20-minute budget — for which the log itself points at
 `/var/log/walnut-setup.log` on the VM; or a box that is already claimed by
 another device, which needs its auth wiped or a redeploy before the code works.
+
+The job records where it builds (AWS account and region, gcloud project, az
+subscription) before it creates anything, and a resume builds there only. On
+AWS, credentials that now reach a different account fail the job with both
+account ids in `job.error`: the user signs back in to the first account (same
+profile, SSO login or environment) and retries, or cancels and starts a new job
+to build in the new one. Never suggest retrying until the account matches.
 
 Retry re-runs from the failed step and keeps everything already done:
 

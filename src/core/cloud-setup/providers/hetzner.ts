@@ -16,6 +16,7 @@
 
 import { log } from '../../../logging/index.js'
 import { sslipHostname } from '../user-data.js'
+import type { CloudSetupTarget } from '../job-types.js'
 import type {
   CloudProviderDriver,
   CreateVMParams,
@@ -23,7 +24,9 @@ import type {
   DetectCredsResult,
   DriverInstructions,
   InstructionsParams,
+  ResolveTargetParams,
 } from './types.js'
+import { CloudTargetChangedError, incompleteTargetError } from './types.js'
 
 const API = 'https://api.hetzner.cloud/v1'
 
@@ -121,6 +124,9 @@ function cancelled(): Error {
   return new Error('Hetzner provisioning cancelled')
 }
 
+/** A 404 from the API: the resource is not visible to this token. */
+class HetznerNotFound extends Error {}
+
 /** One JSON call. Throws a message that names the cause, never the token. */
 async function api<T>(
   token: string,
@@ -163,7 +169,8 @@ async function api<T>(
     const apiError = (parsed as HetznerError | null)?.error
     const detail = apiError?.message ?? `HTTP ${res.status}`
     const code = apiError?.code ? ` [${apiError.code}]` : ''
-    throw new Error(redact(`Hetzner API ${method} ${pathAndQuery} failed: ${detail}${code}`, token))
+    const message = redact(`Hetzner API ${method} ${pathAndQuery} failed: ${detail}${code}`, token)
+    throw res.status === 404 ? new HetznerNotFound(message) : new Error(message)
   }
   return (parsed ?? {}) as T
 }
@@ -275,10 +282,71 @@ async function waitForRunning(
   }
 }
 
+const NEEDS_TOKEN = 'Hetzner provisioning needs a Cloud API token: paste one in the setup wizard.'
+
+/**
+ * The token's project, as the id of the firewall this driver builds behind
+ * (found, or made now; firewalls cost nothing). The API has no call that names a
+ * token's project, and nothing else exists in a fresh project to point at. Ids
+ * are global and a token sees only its own project's resources, so a later token
+ * that can read this firewall is a token for the same project. Nothing secret is
+ * stored: the id is not a credential and the token never leaves memory.
+ */
+async function resolveTarget(params: ResolveTargetParams, onLog: (line: string) => void): Promise<CloudSetupTarget> {
+  const token = params.credentials?.trim()
+  if (!token) throw new Error(NEEDS_TOKEN)
+  const firewallId = await ensureFirewall(token, `${params.name}${FIREWALL_SUFFIX}`, onLog, params.signal)
+  return { firewallId }
+}
+
+/** Refuse a token that cannot see the firewall the job recorded: it belongs to another project. */
+async function verifyProject(
+  token: string,
+  firewallId: number,
+  firewallName: string,
+  signal?: AbortSignal,
+): Promise<void> {
+  let seen: { id?: number; name?: string } | undefined
+  try {
+    seen = (await api<{ firewall?: { id?: number; name?: string } }>(
+      token, 'GET', `/firewalls/${firewallId}`, undefined, signal,
+    )).firewall
+  } catch (err) {
+    if (!(err instanceof HetznerNotFound)) throw err
+  }
+  // The id AND the name: the id alone would trust that ids never repeat across
+  // projects, which nothing here can check.
+  if (seen?.id === firewallId && seen.name === firewallName) return
+  if (seen) {
+    throw new CloudTargetChangedError(
+      `This setup started in the Hetzner project that holds firewall ${firewallName} (id ${firewallId}), `
+      + `but this API token sees id ${firewallId} as ${JSON.stringify(seen.name ?? '')}, a different firewall. `
+      + 'Walnut will not create a second server there. Paste a token from the original project to continue.',
+      { newCredentialHelps: true },
+    )
+  }
+  // Named for the message only: which firewall, if any, this token sees instead.
+  const listed = await api<{ firewalls?: Array<{ id: number; name: string }> }>(
+    token, 'GET', `/firewalls?name=${encodeURIComponent(firewallName)}`, undefined, signal,
+  ).catch(() => ({ firewalls: [] }))
+  const other = (listed.firewalls ?? []).find((f) => f.name === firewallName)
+  // A token for another project and a firewall deleted in this one look the same
+  // from here, so the message names both and how to recover from each.
+  throw new CloudTargetChangedError(
+    `This setup recorded the Hetzner firewall ${firewallName} (id ${firewallId}) as its project's marker, `
+    + `and this API token cannot see it${other ? ` (the token's project has a ${firewallName} with id ${other.id})` : ''}. `
+    + 'Either the token is for a different project, or that firewall was deleted. Walnut will not create a '
+    + 'second server without knowing which. If the token is from another project, paste one from the original '
+    + 'project to continue. If the firewall was deleted, cancel this setup, delete any walnut-cloud server it '
+    + 'left in the Hetzner Console, and start a new one.',
+    { newCredentialHelps: true },
+  )
+}
+
 async function createVM(params: CreateVMParams, onLog: (line: string) => void): Promise<CreateVMResult> {
   const token = params.credentials?.trim()
   if (!token) {
-    throw new Error('Hetzner provisioning needs a Cloud API token — paste one in the setup wizard.')
+    throw new Error(NEEDS_TOKEN)
   }
   const sslip = params.domainMode === 'sslip'
   if (!sslip && !params.domain) {
@@ -296,6 +364,15 @@ async function createVM(params: CreateVMParams, onLog: (line: string) => void): 
 
   const location = params.region ?? DEFAULT_LOCATION
   const serverType = params.instanceType ?? defaultServerType(location)
+  const firewallName = `${params.name}${FIREWALL_SUFFIX}`
+
+  // Same project as the job recorded, before anything is adopted or created: a
+  // token from another project would adopt nothing and build a second server.
+  const target = params.target
+  if (target && (typeof target.firewallId !== 'number' || !Number.isSafeInteger(target.firewallId))) {
+    throw incompleteTargetError('Hetzner project (firewall id)')
+  }
+  if (target) await verifyProject(token, target.firewallId as number, firewallName, params.signal)
 
   // Adopt first — this is the whole resume contract. A job that died between
   // POST /servers and the poll finishing must converge on the box it already
@@ -304,7 +381,7 @@ async function createVM(params: CreateVMParams, onLog: (line: string) => void): 
   if (server) {
     onLog(`found an existing Hetzner server named ${params.name} (id ${server.id}) — adopting it instead of creating one`)
   } else {
-    const firewallId = await ensureFirewall(token, `${params.name}${FIREWALL_SUFFIX}`, onLog, params.signal)
+    const firewallId = target?.firewallId ?? await ensureFirewall(token, firewallName, onLog, params.signal)
     onLog(`creating ${serverType} in ${location} from image ${IMAGE}`)
     const created = await api<{ server?: HetznerServer }>(token, 'POST', '/servers', {
       name: params.name,
@@ -382,6 +459,7 @@ export const hetznerDriver: CloudProviderDriver = {
   // to re-ask for. The CLI drivers read the operator's own login every time.
   credentialInput: 'api-token',
   detectCreds,
+  resolveTarget,
   createVM,
   instructions,
   // No teardown on purpose: the contract is teardown(instanceRef, onLog), which

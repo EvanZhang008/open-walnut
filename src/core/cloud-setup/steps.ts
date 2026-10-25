@@ -23,6 +23,7 @@ import { log } from '../../logging/index.js'
 import { computerSelfReport } from '../device-self-report.js'
 import type { CloudSetupAwaitingInput, CloudSetupJobState, CloudSetupStepId } from './job-types.js'
 import { getDriver } from './providers/index.js'
+import { CloudTargetChangedError, type CloudProviderDriver } from './providers/types.js'
 import {
   buildUserData,
   DEFAULT_BEDROCK_REGION,
@@ -80,6 +81,14 @@ export interface StepContext {
   requestConfirmation: (input: CloudSetupAwaitingInput) => void
   /** True once the operator answered a requestConfirmation prompt. */
   confirmed: () => boolean
+  /**
+   * Write the job record now, mid-step. Provision uses it to make the resolved
+   * target durable BEFORE createVM, so a crash during the create still resumes
+   * in the same place. Resolves without writing once the runner is stopped.
+   */
+  persist?: () => Promise<void>
+  /** Drop this run's provider credential (it reached the wrong place). */
+  forgetCredentials?: () => void
 }
 
 export interface StepOutcome {
@@ -156,6 +165,9 @@ function remoteAlreadyPointsAt(host: string): boolean {
 
 // ── Steps ───────────────────────────────────────────────────────────────────
 
+/** The one resource name every driver builds and adopts by. */
+const VM_NAME = 'walnut-cloud'
+
 async function preflight(ctx: StepContext, force: boolean): Promise<StepOutcome> {
   const { state } = ctx
   const driver = getDriver(state.provider)
@@ -170,7 +182,33 @@ async function preflight(ctx: StepContext, force: boolean): Promise<StepOutcome>
     )
   }
   ctx.log(`provider ${driver.label}, ${state.domainMode === 'sslip' ? 'auto hostname (sslip.io)' : `domain ${state.domain}`}`)
+  // Pinned here, before anything is created; the step's own write makes it durable.
+  if (driver.createVM && driver.resolveTarget && !state.target) {
+    state.target = await driver.resolveTarget(resolveParams(ctx), ctx.log)
+    ctx.log(`this setup builds in ${describeTarget(driver, state.target)}`)
+  }
   return {}
+}
+
+function resolveParams(ctx: StepContext): Parameters<NonNullable<CloudProviderDriver['resolveTarget']>>[0] {
+  return {
+    region: ctx.state.region,
+    profile: ctx.state.profile,
+    credentials: ctx.credentials,
+    name: VM_NAME,
+    signal: ctx.signal,
+  }
+}
+
+/** Operator-facing "where", without the azure subscription id (the name says it). */
+export function describeTarget(driver: CloudProviderDriver, target: NonNullable<CloudSetupJobState['target']>): string {
+  const parts: string[] = []
+  if (target.account) parts.push(`account ${target.account}`)
+  if (target.region) parts.push(`region ${target.region}`)
+  if (target.project) parts.push(`project ${target.project}`)
+  if (target.subscriptionName || target.subscription) parts.push(`subscription ${target.subscriptionName ?? '(unnamed)'}`)
+  if (target.firewallId != null) parts.push(`the project holding firewall ${VM_NAME}-fw (id ${target.firewallId})`)
+  return `${driver.label}: ${parts.length > 0 ? parts.join(', ') : 'its default place'}`
 }
 
 /**
@@ -232,6 +270,20 @@ async function provision(ctx: StepContext): Promise<StepOutcome> {
     }
   }
 
+  if (driver.resolveTarget && !state.target) {
+    // A job an older Walnut started recorded no target. The place in force now is
+    // the only one left to know (that Walnut would resume there too); pin it and
+    // make it durable before the create, so a crash from here on resumes there.
+    state.target = await driver.resolveTarget(resolveParams(ctx), ctx.log)
+    await ctx.persist?.()
+    if (ctx.isCancelled()) throw new CloudSetupCancelled()
+    ctx.log(
+      `this setup was started by an older Walnut that did not record where it builds; it builds in `
+      + `${describeTarget(driver, state.target)}. If you switched accounts or projects since it started, `
+      + 'check the old one for a walnut-cloud machine.',
+    )
+  }
+
   const userData = buildUserData({
     domain: bootScriptDomain(state),
     pairingCode: state.pairingCode,
@@ -239,21 +291,34 @@ async function provision(ctx: StepContext): Promise<StepOutcome> {
     engine: state.engine,
     bedrockRegion: state.bedrockRegion,
   })
-  const result = await driver.createVM({
-    userData,
-    region: state.region,
-    instanceType: state.instanceType,
-    // From the persisted job, not the ambient env: a retry must deploy into the
-    // same account the first attempt did.
-    profile: state.profile,
-    name: 'walnut-cloud',
-    domainMode: state.domainMode,
-    domain: state.domain,
-    credentials: ctx.credentials,
-    // Cancel has to reach the provider CLI itself: a deploy runs for tens of
-    // minutes and would keep creating chargeable resources otherwise.
-    signal: ctx.signal,
-  }, ctx.log)
+  let result: Awaited<ReturnType<NonNullable<CloudProviderDriver['createVM']>>>
+  try {
+    result = await driver.createVM({
+      userData,
+      region: state.region,
+      instanceType: state.instanceType,
+      // From the persisted job, not the ambient env: a retry must deploy into the
+      // same account the first attempt did.
+      profile: state.profile,
+      target: state.target,
+      name: VM_NAME,
+      domainMode: state.domainMode,
+      domain: state.domain,
+      credentials: ctx.credentials,
+      // Cancel has to reach the provider CLI itself: a deploy runs for tens of
+      // minutes and would keep creating chargeable resources otherwise.
+      signal: ctx.signal,
+    }, ctx.log)
+  } catch (err) {
+    // The pasted token reaches another project: ask for one from the original
+    // project instead of failing, since a retry would reuse the same token.
+    if (err instanceof CloudTargetChangedError && err.newCredentialHelps && driver.credentialInput === 'api-token') {
+      ctx.forgetCredentials?.()
+      ctx.log(err.message)
+      return { pause: { kind: 'credentials', prompt: err.message } }
+    }
+    throw err
+  }
   state.ip = result.ip
   state.instanceRef = result.instanceRef
   state.domain = result.domain

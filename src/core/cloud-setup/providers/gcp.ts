@@ -24,6 +24,7 @@ import { sslipHostname } from '../user-data.js'
 import {
   cliErrorDetail, CliMissingError, cliVerb, parseJsonSafe, runCli, withSecretFile, type CliResult,
 } from './cli-exec.js'
+import type { CloudSetupTarget } from '../job-types.js'
 import type {
   CloudProviderDriver,
   CreateVMParams,
@@ -31,7 +32,9 @@ import type {
   DetectCredsResult,
   DriverInstructions,
   InstructionsParams,
+  ResolveTargetParams,
 } from './types.js'
+import { incompleteTargetError } from './types.js'
 
 const ADDRESS_NAME = 'walnut-cloud-ip'
 const FIREWALL_NAME = 'walnut-cloud-web'
@@ -104,6 +107,27 @@ function instanceNatIp(instance: GcpInstance): string | undefined {
   return undefined
 }
 
+/** gcloud's active project, or '' when none is set ('(unset)' exits 0 too). */
+async function activeProject(signal?: AbortSignal): Promise<string> {
+  const res = await runCli('gcloud', ['config', 'get-value', 'project'], { timeoutMs: GCP_TIMINGS.detectMs, signal })
+  const id = res.code === 0 ? res.stdout.trim() : ''
+  return id === '(unset)' ? '' : id
+}
+
+/** Project ids are 6 to 30 lowercase letters, digits and hyphens (some older ones carry a domain prefix). */
+const PROJECT_RE = /^(?:[a-z][a-z0-9.-]*:)?[a-z][a-z0-9-]{4,28}[a-z0-9]$/
+
+/** The project createVM builds in: gcloud's active one, recorded once for the job. */
+async function resolveTarget(params: ResolveTargetParams, onLog: (line: string) => void): Promise<CloudSetupTarget> {
+  const project = await activeProject(params.signal)
+  if (!project) {
+    throw new Error('The gcloud CLI has no project set. Run `gcloud config set project <project-id>`, then retry.')
+  }
+  if (!PROJECT_RE.test(project)) throw new Error(`gcloud reports "${project}" as its project, which is not a project id.`)
+  onLog(`GCP target: project ${project}`)
+  return { project }
+}
+
 async function detectCreds(): Promise<DetectCredsResult> {
   const notReady = (detail: string): DetectCredsResult => ({ available: false, detail, needs: 'cli-login' })
 
@@ -145,11 +169,12 @@ async function detectCreds(): Promise<DetectCredsResult> {
  */
 async function ensureAddress(
   region: string,
+  scope: string[],
   onLog: (line: string) => void,
   signal?: AbortSignal,
 ): Promise<string> {
   const created = await gcloudSoft(
-    ['compute', 'addresses', 'create', ADDRESS_NAME, '--region', region],
+    ['compute', 'addresses', 'create', ADDRESS_NAME, '--region', region, ...scope],
     GCP_TIMINGS.shortMs,
     signal,
   )
@@ -165,7 +190,7 @@ async function ensureAddress(
   // Always describe, whether we just created it or adopted one: `create` prints
   // a human table, not the address, and only `describe --format=json` is stable.
   const shown = await gcloud(
-    ['compute', 'addresses', 'describe', ADDRESS_NAME, '--region', region, '--format=json'],
+    ['compute', 'addresses', 'describe', ADDRESS_NAME, '--region', region, '--format=json', ...scope],
     onLog,
     GCP_TIMINGS.shortMs,
     signal,
@@ -181,7 +206,7 @@ async function ensureAddress(
 }
 
 /** Idempotent firewall rule for 80 + 443, scoped to our network tag. */
-async function ensureFirewall(onLog: (line: string) => void, signal?: AbortSignal): Promise<void> {
+async function ensureFirewall(scope: string[], onLog: (line: string) => void, signal?: AbortSignal): Promise<void> {
   // Tag-scoped rather than open to every instance in the project: the operator's
   // other VMs in this project must not inherit an inbound web rule from us.
   const res = await gcloudSoft([
@@ -191,6 +216,7 @@ async function ensureFirewall(onLog: (line: string) => void, signal?: AbortSigna
     '--target-tags', NETWORK_TAG,
     '--source-ranges', '0.0.0.0/0',
     '--description', 'open-walnut cloud companion: inbound web',
+    ...scope,
   ], GCP_TIMINGS.shortMs, signal)
   if (res.code === 0) {
     onLog(`created firewall rule ${FIREWALL_NAME} — inbound tcp 80 + 443 on tag ${NETWORK_TAG}`)
@@ -212,10 +238,15 @@ async function createVM(params: CreateVMParams, onLog: (line: string) => void): 
   const zone = params.region ?? DEFAULT_ZONE
   const region = regionFromZone(zone)
   const machineType = params.instanceType ?? DEFAULT_MACHINE_TYPE
+  // Every call names the recorded project, so a different active gcloud project
+  // (switched after a crash) can neither hide the instance from the adopt check
+  // nor receive a second one.
+  const project = await pinnedProject(params.target, onLog, params.signal)
+  const scope = project ? ['--project', project] : []
 
   // Adopt before create — the resume contract.
   const existing = await gcloudSoft(
-    ['compute', 'instances', 'describe', params.name, '--zone', zone, '--format=json'],
+    ['compute', 'instances', 'describe', params.name, '--zone', zone, '--format=json', ...scope],
     GCP_TIMINGS.shortMs,
     params.signal,
   )
@@ -236,9 +267,9 @@ async function createVM(params: CreateVMParams, onLog: (line: string) => void): 
     }
   }
 
-  const ip = await ensureAddress(region, onLog, params.signal)
+  const ip = await ensureAddress(region, scope, onLog, params.signal)
   onLog(`static address ${ADDRESS_NAME} is ${ip}`)
-  await ensureFirewall(onLog, params.signal)
+  await ensureFirewall(scope, onLog, params.signal)
 
   // The boot script goes through a 0600 tempfile, never the argv: it embeds the
   // pairing code, and this driver echoes its own command lines to the operator
@@ -257,6 +288,7 @@ async function createVM(params: CreateVMParams, onLog: (line: string) => void): 
       '--address', ip,
       '--metadata-from-file', `startup-script=${userDataFile}`,
       '--format=json',
+      ...scope,
     ], onLog, GCP_TIMINGS.createMs, params.signal)
   })
 
@@ -266,6 +298,25 @@ async function createVM(params: CreateVMParams, onLog: (line: string) => void): 
     instanceRef: `${zone}/${params.name}`,
     domain: sslip ? sslipHostname(ip) : (params.domain as string),
   }
+}
+
+/**
+ * The recorded project, or none for a caller that recorded no target. Says so
+ * when gcloud's active project has moved on since, so the operator sees why the
+ * box goes where it started rather than where gcloud points now.
+ */
+async function pinnedProject(
+  target: CloudSetupTarget | undefined,
+  onLog: (line: string) => void,
+  signal?: AbortSignal,
+): Promise<string | undefined> {
+  if (!target) return undefined
+  if (!target.project || !PROJECT_RE.test(target.project)) throw incompleteTargetError('GCP project')
+  const active = await activeProject(signal).catch(() => '')
+  if (active && active !== target.project) {
+    onLog(`gcloud's active project is now ${active}; this setup keeps building in project ${target.project}, where it started`)
+  }
+  return target.project
 }
 
 function instructions(params: InstructionsParams): DriverInstructions {
@@ -302,6 +353,7 @@ export const gcpDriver: CloudProviderDriver = {
   // No AL2023 on GCP; the boot script must reach for apt first.
   userDataFlavor: 'ubuntu',
   detectCreds,
+  resolveTarget,
   createVM,
   instructions,
   // No teardown on purpose, for the same reason as azure: deleting the instance

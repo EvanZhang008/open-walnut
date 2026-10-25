@@ -61,6 +61,29 @@ export interface CloudSetupAwaitingInput {
   prompt: string
 }
 
+/**
+ * The cloud place a job builds in. Non-secret identifiers only: never a token,
+ * a key or a profile name. Each driver fills the fields it has.
+ */
+export interface CloudSetupTarget {
+  /** aws: the account id the credentials resolved to. */
+  account?: string
+  /** aws: the region the stack deploys in (the chosen one, else the CLI default at resolve time). */
+  region?: string
+  /** gcp: the project id. */
+  project?: string
+  /** azure: the subscription id (never logged; the name is). */
+  subscription?: string
+  /** azure: the subscription's display name, for log lines and errors. */
+  subscriptionName?: string
+  /**
+   * hetzner: id of the walnut-cloud firewall in the token's project. The API has
+   * no call that names a token's project, but every resource id is global and a
+   * token only sees its own project's, so this id is what proves "same project".
+   */
+  firewallId?: number
+}
+
 export interface CloudSetupJobState {
   version: 1
   id: string
@@ -80,6 +103,15 @@ export interface CloudSetupJobState {
    * account (see DetectCredsResult.profiles).
    */
   profile?: string
+  /**
+   * WHERE this job builds, resolved once from the operator's CLI (preflight, or
+   * the provision step for a job an older Walnut started) and written to disk
+   * before any VM is created. Every later createVM builds exactly there or
+   * refuses, so a crash followed by a change of the ambient default (another
+   * gcloud project, az subscription, AWS account) never makes a second VM in
+   * another place. Optional: older files have none, and older readers ignore it.
+   */
+  target?: CloudSetupTarget
   /**
    * Coding-agent engine the box installs (next to Claude Code, which it always
    * gets) and seeds as its own `defaults.engine`. Captured from this machine's

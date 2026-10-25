@@ -655,3 +655,110 @@ describe('gcpDriver.instructions', () => {
     }).userData).toBe(USER_DATA)
   })
 })
+
+describe('gcpDriver: the project a job recorded is where it builds', () => {
+  /**
+   * A small stateful gcloud: one active project (what `gcloud config set project`
+   * changes) and the instances that exist in each project. A call builds in the
+   * project its `--project` names, else in the active one, as the real CLI does.
+   */
+  let active = 'acme-dev'
+  let cloud: Map<string, Set<string>>
+  const logs: string[] = []
+  const projectOf = (args: string[]): string => {
+    const i = args.indexOf('--project')
+    return i >= 0 ? args[i + 1] : active
+  }
+  const instancesIn = (project: string): Set<string> => {
+    if (!cloud.has(project)) cloud.set(project, new Set())
+    return cloud.get(project)!
+  }
+  const total = (): number => [...cloud.values()].reduce((n, s) => n + s.size, 0)
+
+  beforeEach(() => {
+    active = 'acme-dev'
+    cloud = new Map()
+    logs.length = 0
+    route(['config', 'get-value', 'project'], () => ({ code: 0, stdout: `${active}\n` }))
+    route(['compute', 'instances', 'describe'], ({ args }) => (
+      instancesIn(projectOf(args)).has(args[3])
+        ? { code: 0, stdout: INSTANCE_JSON }
+        : { code: 1, stderr: `ERROR: (gcloud.compute.instances.describe) The resource '${args[3]}' was not found` }
+    ))
+    route(['compute', 'addresses', 'create'], () => ({ code: 0, stdout: 'Created address.' }))
+    route(['compute', 'addresses', 'describe'], () => ({ code: 0, stdout: ADDRESS_JSON }))
+    route(['compute', 'firewall-rules', 'create'], () => ({ code: 0, stdout: 'Created rule.' }))
+    route(['compute', 'instances', 'create'], ({ args }) => {
+      instancesIn(projectOf(args)).add(args[3])
+      return { code: 0, stdout: '[]' }
+    })
+  })
+
+  async function provision(target: { project?: string } | undefined) {
+    return gcpDriver.createVM!(
+      { userData: USER_DATA, name: 'walnut-cloud', domainMode: 'sslip', target },
+      (l) => logs.push(l),
+    )
+  }
+
+  it('records the active project, and every later call names it', async () => {
+    const target = await gcpDriver.resolveTarget!({ name: 'walnut-cloud' }, (l) => logs.push(l))
+    expect(target).toEqual({ project: 'acme-dev' })
+    calls = []
+    await provision(target)
+    const cloudCalls = calls.filter((c) => c.args[0] === 'compute')
+    expect(cloudCalls.length).toBeGreaterThan(0)
+    for (const c of cloudCalls) expect(projectOf(c.args), c.args.join(' ')).toBe('acme-dev')
+    expect(cloudCalls.every((c) => c.args.includes('--project'))).toBe(true)
+  })
+
+  it('a resume with the same project adopts the instance it already made: one VM', async () => {
+    const target = await gcpDriver.resolveTarget!({ name: 'walnut-cloud' }, () => {})
+    await provision(target)
+    calls = []
+    await provision(target)
+    expect(invocations('compute', 'instances', 'create')).toHaveLength(0)
+    expect(total()).toBe(1)
+    expect(logs.join('\n')).toMatch(/adopting it instead of creating one/)
+  })
+
+  it('a resume after the active project changed still builds where it started, and makes nothing in the new one', async () => {
+    const target = await gcpDriver.resolveTarget!({ name: 'walnut-cloud' }, () => {})
+    await provision(target)
+    active = 'other-proj' // the operator switched gcloud to another project meanwhile
+    calls = []
+    const result = await provision(target)
+    expect(invocations('compute', 'instances', 'create')).toHaveLength(0)
+    expect(instancesIn('other-proj').size).toBe(0)
+    expect(total()).toBe(1)
+    expect(result.ip).toBe('203.0.113.77')
+    expect(logs.join('\n')).toMatch(/active project is now other-proj; this setup keeps building in project acme-dev/)
+  })
+
+  it('without the pin, the same change would have made a second VM (what the record prevents)', async () => {
+    await provision(undefined)
+    active = 'other-proj'
+    await provision(undefined)
+    expect(total()).toBe(2)
+  })
+
+  it('an instance an older Walnut made (no record) is the one the resumed job pins and adopts', async () => {
+    await provision(undefined) // the older Walnut created it in the active project, then crashed
+    // The resumed job's provision step records the place in force now, then creates.
+    const target = await gcpDriver.resolveTarget!({ name: 'walnut-cloud' }, () => {})
+    calls = []
+    await provision(target)
+    expect(invocations('compute', 'instances', 'create')).toHaveLength(0)
+    expect(total()).toBe(1)
+  })
+
+  it('refuses a damaged record rather than guessing a project, and makes nothing', async () => {
+    await expect(provision({})).rejects.toThrow(/has no GCP project/)
+    expect(calls.filter((c) => c.args[0] === 'compute')).toHaveLength(0)
+  })
+
+  it('resolveTarget refuses when gcloud has no project set', async () => {
+    active = '(unset)'
+    await expect(gcpDriver.resolveTarget!({ name: 'walnut-cloud' }, () => {})).rejects.toThrow(/no project set/)
+  })
+})

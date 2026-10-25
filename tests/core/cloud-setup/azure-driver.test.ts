@@ -635,3 +635,146 @@ describe('azureDriver.instructions', () => {
     }).userData).toBe(USER_DATA)
   })
 })
+
+describe('azureDriver: the subscription a job recorded is where it builds', () => {
+  /**
+   * A small stateful az: one default subscription (what `az account set`
+   * changes) and the VMs in each subscription's walnut-cloud group. A call acts
+   * on the subscription its `--subscription` names, else on the default.
+   */
+  const SUB_A = { id: '11111111-2222-3333-4444-555555555555', name: 'Pay-As-You-Go' }
+  const SUB_B = { id: '99999999-8888-7777-6666-555555555555', name: 'Team Sandbox' }
+  let current = SUB_A
+  let cloud: Map<string, Set<string>>
+  const logs: string[] = []
+  const subOf = (args: string[]): string => {
+    const i = args.indexOf('--subscription')
+    return i >= 0 ? args[i + 1] : current.id
+  }
+  const vmsIn = (sub: string): Set<string> => {
+    if (!cloud.has(sub)) cloud.set(sub, new Set())
+    return cloud.get(sub)!
+  }
+  const total = (): number => [...cloud.values()].reduce((n, s) => n + s.size, 0)
+  const nameOf = (args: string[]): string => args[args.indexOf('-n') + 1]
+
+  beforeEach(() => {
+    current = SUB_A
+    cloud = new Map()
+    logs.length = 0
+    route(['account', 'show'], () => ({
+      code: 0,
+      stdout: JSON.stringify({ id: current.id, name: current.name, user: { name: 'op@example.com' } }),
+    }))
+    route(['group', 'create'], () => ({ code: 0, stdout: '{}' }))
+    route(['vm', 'show'], ({ args }) => (
+      vmsIn(subOf(args)).has(nameOf(args))
+        ? { code: 0, stdout: '{}' }
+        : { code: 3, stderr: "ResourceNotFound: The Resource 'walnut-cloud' was not found" }
+    ))
+    route(['vm', 'list-ip-addresses'], () => ({ code: 0, stdout: VM_IPS_JSON }))
+    route(['network', 'public-ip', 'create'], () => ({ code: 0, stdout: IP_JSON }))
+    route(['vm', 'create'], ({ args }) => {
+      vmsIn(subOf(args)).add(nameOf(args))
+      return { code: 0, stdout: '{}' }
+    })
+    route(['vm', 'open-port'], () => ({ code: 0, stdout: '{}' }))
+  })
+
+  async function provision(target: { subscription?: string; subscriptionName?: string } | undefined) {
+    return azureDriver.createVM!(
+      { userData: USER_DATA, name: 'walnut-cloud', domainMode: 'sslip', target },
+      (l) => logs.push(l),
+    )
+  }
+
+  it('records the default subscription, and every later call names it', async () => {
+    const target = await azureDriver.resolveTarget!({ name: 'walnut-cloud' }, (l) => logs.push(l))
+    expect(target).toEqual({ subscription: SUB_A.id, subscriptionName: SUB_A.name })
+    // The id is stored for --subscription but never written to the log; the account email never at all.
+    expect(logs.join('\n')).toContain(SUB_A.name)
+    expect(logs.join('\n')).not.toContain(SUB_A.id)
+    expect(JSON.stringify(target)).not.toContain('op@example.com')
+    calls = []
+    logs.length = 0
+    await provision(target)
+    const cloudCalls = calls.filter((c) => c.cmd === 'az' && c.args[0] !== 'account')
+    expect(cloudCalls.length).toBeGreaterThan(0)
+    for (const c of cloudCalls) {
+      expect(c.args.slice(-2), c.args.join(' ')).toEqual(['--subscription', SUB_A.id])
+    }
+    // Echoed command lines carry --subscription; the log shows a placeholder instead.
+    expect(logs.some((l) => l.includes('--subscription <subscription>'))).toBe(true)
+    expect(logs.join('\n').toLowerCase()).not.toContain(SUB_A.id)
+  })
+
+  it('keeps the subscription id out of az output and error text too', async () => {
+    const target = await azureDriver.resolveTarget!({ name: 'walnut-cloud' }, () => {})
+    // az's JSON embeds the id in every resource id; an error names it as well.
+    routes.unshift({
+      match: (args) => args[0] === 'group' && args[1] === 'create',
+      handler: () => ({ code: 0, stdout: JSON.stringify({ id: `/subscriptions/${SUB_A.id.toUpperCase()}/resourceGroups/walnut-cloud` }) }),
+    })
+    routes.unshift({
+      match: (args) => args[0] === 'network',
+      handler: () => ({ code: 1, stderr: `ERROR: (AuthorizationFailed) no access to /subscriptions/${SUB_A.id}/resourceGroups/walnut-cloud` }),
+    })
+    logs.length = 0
+    const err = await provision(target).then(() => null, (e: unknown) => e as Error)
+    expect(err?.message).toMatch(/AuthorizationFailed/)
+    expect(err?.message).not.toContain(SUB_A.id)
+    expect(logs.join('\n').toLowerCase()).not.toContain(SUB_A.id)
+    expect(logs.join('\n')).toContain('/subscriptions/<subscription>/resourceGroups')
+  })
+
+  it('a resume with the same subscription adopts the VM it already made: one VM', async () => {
+    const target = await azureDriver.resolveTarget!({ name: 'walnut-cloud' }, () => {})
+    await provision(target)
+    calls = []
+    await provision(target)
+    expect(invocations('vm', 'create')).toHaveLength(0)
+    expect(total()).toBe(1)
+    expect(logs.join('\n')).toMatch(/adopting it instead of creating one/)
+  })
+
+  it('a resume after the default subscription changed still builds where it started, and makes nothing in the new one', async () => {
+    const target = await azureDriver.resolveTarget!({ name: 'walnut-cloud' }, () => {})
+    await provision(target)
+    current = SUB_B // the operator ran `az account set` meanwhile
+    calls = []
+    await provision(target)
+    expect(invocations('vm', 'create')).toHaveLength(0)
+    expect(vmsIn(SUB_B.id).size).toBe(0)
+    expect(total()).toBe(1)
+    const joined = logs.join('\n')
+    expect(joined).toMatch(/default subscription is now Team Sandbox; this setup keeps building in subscription Pay-As-You-Go/)
+    expect(joined).not.toContain(SUB_B.id)
+  })
+
+  it('without the pin, the same change would have made a second VM (what the record prevents)', async () => {
+    await provision(undefined)
+    current = SUB_B
+    await provision(undefined)
+    expect(total()).toBe(2)
+  })
+
+  it('a VM an older Walnut made (no record) is the one the resumed job pins and adopts', async () => {
+    await provision(undefined) // the older Walnut created it in the default subscription, then crashed
+    const target = await azureDriver.resolveTarget!({ name: 'walnut-cloud' }, () => {})
+    calls = []
+    await provision(target)
+    expect(invocations('vm', 'create')).toHaveLength(0)
+    expect(total()).toBe(1)
+  })
+
+  it('refuses a damaged record rather than guessing a subscription, and makes nothing', async () => {
+    await expect(provision({ subscriptionName: 'Pay-As-You-Go' })).rejects.toThrow(/has no Azure subscription/)
+    expect(calls.filter((c) => c.cmd === 'az')).toHaveLength(0)
+  })
+
+  it('resolveTarget refuses when az is signed out', async () => {
+    routes = []
+    route(['account', 'show'], () => ({ code: 1, stderr: 'Please run az login' }))
+    await expect(azureDriver.resolveTarget!({ name: 'walnut-cloud' }, () => {})).rejects.toThrow(/az login/)
+  })
+})
