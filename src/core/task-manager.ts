@@ -10,6 +10,7 @@ import { getConfig, updateConfig } from './config-manager.js';
 import { bus, EventNames } from './event-bus.js';
 import { VALID_PRIORITIES as VALID_PRIORITIES_ARRAY, READ_MARKER_KEYS, PIN_TIER_POLICY, RETIRED_PIN_TIERS, migrateFocusTier, defaultWaitUntil, type Task, type TaskStore, type TaskStatus, type TaskPhase, type TaskPriority, type TaskSource, type DashboardData, type ProjectRecord, type TaskGroupRecord, type CustomTierRecord } from './types.js';
 import { applyPhase, deriveStatusFromPhase, phaseFromStatus, VALID_PHASES, TERMINAL_PHASES, HELD_PHASES } from './phase.js';
+import { isMainAgentTask } from './org/main-stays-active.js';
 import {
   COMPLETION_TO_PHASES,
   compareTasksForQuery,
@@ -4253,6 +4254,11 @@ export async function updateTask(
     } else if (heldPhaseBlocks(task.phase, updates.phase, source)) {
       log.task.info('held phase guard: blocked background phase change', {
         taskId: task.id, currentPhase: task.phase, requestedPhase: updates.phase, source,
+      });
+    } else if (updates.phase === 'WAITING' && isMainAgentTask(task)) {
+      // The main agent stays active and on the list (org/main-stays-active.ts).
+      log.task.info('main agent park not applied: the main agent stays active', {
+        taskId: task.id, currentPhase: task.phase, source, actorSid: eventOptions?.actorSid,
       });
     } else {
       applyPhase(task, updates.phase);

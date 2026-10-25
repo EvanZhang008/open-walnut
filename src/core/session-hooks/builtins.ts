@@ -275,6 +275,14 @@ const SECTION_LABEL_VARIANTS: Partial<Record<NoteSection, string>> = {
   'Executive Summary': 'EXEC(?:UTIVE)?[ _]?SUMMARY',
 };
 
+/** The main agent's NOTE is its tracking note (sessions/session-context.ts 2g): a
+ *  ledger of what it handed to whom, not a log. Its Work Log had grown to 11k chars
+ *  of request ids (rq-…), because the generic contract says to keep every request
+ *  id; for Main those are delivery plumbing, not references. Overrides the generic
+ *  rules below where they differ, including the reorganize's keep-every-id rule. */
+const MAIN_NOTE_CONTRACT = `
+This is the MAIN AGENT's task: its NOTE is the user's tracking note for everything it handed off, and these rules override the generic ones below where they differ. PROGRESS is the ledger, one bullet per item the user asked for: "- [STATUS] <what the user wants> — owner: <task title> (<task id>); waits on: <the user's decision | that task's reply | nothing>; decided: <what the user already decided, or none>". An item the user has the result of becomes one short [DONE] line; fold old [DONE] lines into EXEC_SUMMARY. Request and message ids (rq-…, qm-…) are NOT external ids here: never write them in any section, and remove the ones already there. WORK_LOG keeps only the user's decisions and their reasons, one compressed line each; no play-by-play. The user's lasting rules and preferences belong in memory, not here.`
+
 /** Build the self-report prompt. `existingNote` is injected so the session works
  *  DELTA-FIRST against the task's living NOTE — this is what survives multi-day
  *  sessions and compactions: the prior note is re-fed every time, so the session
@@ -284,7 +292,7 @@ const SECTION_LABEL_VARIANTS: Partial<Record<NoteSection, string>> = {
 export function buildSelfReportPrompt(
   existingNote?: string,
   currentTitle?: string,
-  opts?: { uiLanguage?: string },
+  opts?: { uiLanguage?: string; mainAgent?: boolean },
 ): string {
   const existing = existingNote?.trim() ?? '';
   const reorg = existing.length > NOTE_REORG_CAP;
@@ -308,7 +316,7 @@ NOTE BUDGET: ${existing.length}/${NOTE_REORG_CAP} chars used.${reorg ? `
 The note is ${existing.length} chars — OVER the ${NOTE_REORG_CAP}-char budget. This fire is a MANDATORY REORGANIZE: answer WORK_LOG with \`rewrite: <full section>\` that merges the OLDEST entries into consolidated ones (several old entries → one), and rewrite any other section that carries superseded or duplicated detail. Target: bring the FULL note back under ${NOTE_REORG_CAP} chars — the note must come back SHORTER than it went in. HARD RULE: keep every external ID (tickets, request/approval ids, hosts, URLs) and every decision+reason; commit hashes may be dropped; only drop process narration, dead-end play-by-play, and detail already superseded.` : ''}`;
   }
 
-  return `You just finished a turn. Update this task's NOTE — the single living document that lets a human (or a fresh AI with zero context) pick the task up. You have the full context — be the authoritative source. ${noteBlock}
+  return `You just finished a turn. Update this task's NOTE — the single living document that lets a human (or a fresh AI with zero context) pick the task up. You have the full context — be the authoritative source. ${noteBlock}${opts?.mainAgent ? MAIN_NOTE_CONTRACT : ''}
 
 Section contract (plain text under each label, English, self-contained — never "this bug"/"the feature"). Style rules for ALL sections: any name a zero-context reader wouldn't know (project codenames, internal tools, niche libraries, team jargon) gets a FEW-WORDS parenthetical on first use — "walnut (a personal task manager)" — not a sentence of background; well-known public things (React, S3, GitHub) need none. Reference code by file path only, NEVER line numbers (they drift). Terse beats thorough-sounding.
 EXEC_SUMMARY: For the HUMAN scanning: 2-4 plain sentences — what this task is + where it stands. No jargon. A task that grew to cover SEVERAL distinct workstreams (long sessions and forks often pivot) must mention EVERY workstream in one short clause each — never only the latest one. This summary is a primary search surface: dropping an earlier workstream makes that work unfindable ("which task removed X?" fails). If an earlier summary listed a workstream, keep it (compressed is fine, deleted is not).
@@ -765,6 +773,7 @@ export async function runTriage(p: OnTurnCompletePayload, opts: { final?: boolea
     let taskPhase = '';
     let selfReport = '';
     let uiLanguage: string | undefined;
+    let mainAgent = false;
     const askedAt = Date.now();
     try {
       try {
@@ -776,6 +785,7 @@ export async function runTriage(p: OnTurnCompletePayload, opts: { final?: boolea
         existingNote = (taskRow.note ?? '').trim();
         promptedTitle = (taskRow.title ?? '').trim();
         taskPhase = taskRow.phase;
+        mainAgent = taskRow.org_role === 'main';
       } catch (err) {
         // Do NOT degrade to an empty note: the prompt would say "NOTE is EMPTY,
         // write ALL sections", the model rewrites from scratch, the shrink
@@ -793,7 +803,7 @@ export async function runTriage(p: OnTurnCompletePayload, opts: { final?: boolea
       uiLanguage = await configuredUiLanguage();
       selfReport = (await sessionRunner.requestTurnCompleteSelfReport(
         p.sessionId,
-        buildSelfReportPrompt(existingNote, promptedTitle, { uiLanguage }), SELF_REPORT_TIMEOUT_MS,
+        buildSelfReportPrompt(existingNote, promptedTitle, { uiLanguage, mainAgent }), SELF_REPORT_TIMEOUT_MS,
       )).trim();
     } catch (err) {
       log.session.warn('turn-complete-summary: provider self-report failed — skipped (next turn will merge)', {
@@ -2021,7 +2031,10 @@ export const sessionRequestWatchHook: SessionHookDefinition = {
       const { listTasksByIds } = await import('../task-manager.js');
       task = (await listTasksByIds([taskId]).catch(() => []))[0];
       phase = task?.phase;
-      if (phase !== 'COMPLETE') return;
+      // The main agent never gets that edge: its turn end keeps it In Progress
+      // (org/main-stays-active.ts), so its turn edge speaks for it.
+      const { isMainAgentTask } = await import('../org/main-stays-active.js');
+      if (phase !== 'COMPLETE' && !isMainAgentTask(task)) return;
       lastMessage = (payload as unknown as Partial<OnTurnCompletePayload>).result || undefined;
     }
     if (!task && taskId) {

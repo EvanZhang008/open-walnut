@@ -93,6 +93,7 @@
 
 import { log } from '../logging/index.js'
 import type { TaskPhase, TaskStatus, Task } from './types.js';
+import { isMainAgentTask } from './org/main-stays-active.js'
 
 // ── Phase → Status (5 → 3) ──
 
@@ -473,6 +474,17 @@ export async function applySessionPhase(
     case 'reconciler':      newPhase = opts?.newPhase ?? null; break
   }
 
+  // The main agent's turn end is not a hand-back (org/main-stays-active.ts): it
+  // stays In Progress, and needs the user only when it asks them (a prompt for
+  // the human) or fails (an error, or a reconcile of a session that ended in one).
+  if (newPhase === 'NEED_ACTION' && (trigger === 'session:result' || trigger === 'reconciler') && isMainAgentTask(task)
+    && !(trigger === 'reconciler' && await sessionEndedInError(opts?.sessionId))) {
+    log.session.debug('applySessionPhase: skip (the main agent stays active)', {
+      taskId, currentPhase: task.phase, trigger, source, sessionId: opts?.sessionId,
+    })
+    return { changed: false, oldPhase: task.phase }
+  }
+
   // (The old "triage gate" — skip triage-sync while the session runs the next
   // turn — was deleted with the trigger's retirement above: triage-sync now
   // never produces a phase, so the gate had nothing left to guard.)
@@ -589,6 +601,12 @@ export async function applySessionPhase(
     }
   }
   return { changed: false, oldPhase } // unreachable but TS needs it
+}
+
+async function sessionEndedInError(sessionId: string | undefined): Promise<boolean> {
+  if (!sessionId) return false
+  const { getSessionByClaudeId } = await import('./session-tracker.js')
+  return (await getSessionByClaudeId(sessionId).catch(() => null))?.process_status === 'error'
 }
 
 export async function handBackTaskOnSessionEnd(

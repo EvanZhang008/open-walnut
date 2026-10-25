@@ -238,6 +238,8 @@ async function applyFieldsOnce(
         stored.title = brake.heuristicShortTitle(from);
         st.titleCut = { cut: stored.title as string, from };
       }
+      // The main agent's task never parks (org/main-stays-active.ts), also from a replayed write.
+      if (stored.phase === 'WAITING' && cur.org_role === 'main') { delete stored.phase; delete stored.wait_until; }
       const asked = Object.keys(stored);
       const toPhase = phaseWritten(cur as Task, stored);
       // The pin fields become the online pin write's row fields (pin-fields.ts), refused before anything lands.

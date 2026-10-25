@@ -987,6 +987,12 @@ reconcile, `NOTES_UPDATED` events) with the web UI's `/api/notes-v2`.
     its `wait_report`, echoed back as `wait_receipt`) were removed on
     2026-10-05: a stray `wait_report` is ignored and the response no longer
     carries `wait_receipt`.
+  - The main agent's task never parks (additive, 2026-10-25): `phase: "WAITING"`
+    on it is not applied (the rest of the body is), and the response carries
+    `phase_ignored: { "phase": "WAITING", "reason": "main_stays_active", "message" }`.
+    A `wait_until` alone on it is `400 main_stays_active`. Its turn ends keep it
+    `IN_PROGRESS`; it moves to `NEED_ACTION` only on a prompt for the human or
+    an error.
   - Calendar window (additive, 2026-08): `end_date` joins `start_date` as the
     end of the task's working block, so a client can move or resize a task on a
     calendar with one PATCH. Both accept an ISO-8601 value, and `""` **or**

@@ -94,6 +94,55 @@ export interface SessionContext {
 }
 
 /**
+ * 2e. Main never parks (org/main-stays-active.ts, 2026-10-25): the generic
+ * waiting line below is a worker's, and Main read it as "park at every turn
+ * end", which took it off the user's list. Main gets this line in its place.
+ */
+export const MAIN_STAYS_ACTIVE_LINE =
+  'You stay active: never set your own task to WAITING and never give it a wait_until (Walnut does not apply '
+  + 'either). Your turn ending is not waiting: replies from subtasks, Walnut notices and the user\'s messages wake '
+  + 'you on their own, and your task stays In Progress and on the user\'s list. Parking is for work tasks waiting '
+  + 'on something, not for you. Arm a trigger only to watch an outside event that sends no notice, always with '
+  + 'wait:false. A question that blocks you until the user answers goes through AskUserQuestion: that, not a turn '
+  + 'end, marks your task as needing them.\n\n'
+
+/**
+ * 2f. Main understands and delegates (2026-10-25, the user: "the main agent
+ * should just gather high level understanding and delegate to subtask ... a
+ * generic rule for main agent", then "main agent need to understand what is
+ * walnut, ... what user talking about, ... and even for investigation and
+ * finding, delegate"): asked whether Walnut could move to Rust, Main started
+ * counting lines and reading processes itself. It stands in place of the ask's
+ * "never create a task unless asked / follow-ups are yours" line, which said the
+ * opposite. The overview is the few facts a hand-off needs, true for any install.
+ */
+export const MAIN_DELEGATES_LINE =
+  'Know Walnut and the user\'s meaning at a high level, and delegate the rest. Walnut is the user\'s personal AI: '
+  + 'a TypeScript server on the user\'s main computer keeps the board (tasks, projects, sessions, memory, notes) and serves '
+  + 'the web console; a native iOS app talks to it; a session daemon on each host runs the coding sessions; an '
+  + 'optional cloud companion keeps it reachable while that computer sleeps; plugins connect outside services. Each '
+  + 'project\'s lead and teams know the detail. Gather only the understanding you need to decide who should do '
+  + 'the work and to write a clear hand-over, then stop. Every investigation, check, evaluation, research or '
+  + 'implementation (reading code, reading logs, measuring, finding a cause) goes to a subtask: the task that '
+  + 'already owns that work (task_send), else a new subtask (task_create); never do it yourself. Do only quick '
+  + 'things yourself: one lookup, reading one record, passing on one message.\n\n'
+
+/**
+ * 2g. Main keeps track (2026-10-25, the user: "main agent should also keep a
+ * memory and notes, for tracking"). Main hands everything off, so it must know
+ * what it handed to whom. ONE tracking note: the task note the turn-end self-report
+ * already maintains (session-hooks/builtins.ts writes it, with a Main-only ledger
+ * contract), never a second document that could contradict it.
+ */
+export const MAIN_TRACKING_LINE =
+  'Keep track of what you hand off. Your tracking note is your task note: after each turn Walnut asks you to '
+  + 'update it, and its Progress section is your ledger, one line per item the user asked for: what they want, '
+  + 'the task that owns it, its state, who it waits on (the user\'s decision or a task\'s reply) and what the user '
+  + 'already decided. Keep it short enough to read in one pass, with no request ids or history. Read it back '
+  + '(task_get on your own task) before you answer "where are we". The user\'s lasting rules and preferences go '
+  + 'to memory (memory_read, then memory_write doc "user") so they outlive this session and a compaction.\n\n'
+
+/**
  * 2d. The org above the work (src/core/org/): the main agent talks to one
  * contact per project (its lead, or its one team), never to every task, so its
  * chat stays short. Roles follow the team charter (team-charter.ts): Main sets
@@ -114,6 +163,9 @@ export function orgRoleLine(task: { org_role?: string; project?: string }): stri
       + 'details. Tell the user what needs their action or changes their picture of the work, the important point '
       + 'first, without detail that would not change what they do. Walnut puts a folded org update before a message '
       + 'when work moved: background, mention it only when it matters to what the user says.\n\n'
+      + MAIN_DELEGATES_LINE
+      + MAIN_TRACKING_LINE
+      + MAIN_STAYS_ACTIVE_LINE
       + TASK_ROUTING_CONTRACT + '\n\n'
   }
   if (task.org_role === 'lead') {
@@ -147,6 +199,7 @@ export async function buildSessionContext(
   let taskLine = ''
   let ask = false
   let projectLead = false
+  let mainAgent = false
   if (taskId) {
     try {
       const { getTask } = await import('../task-manager.js')
@@ -195,11 +248,13 @@ export async function buildSessionContext(
       const { isAskTask } = await import('./caller-placement.js')
       ask = isAskTask(task)
       projectLead = task.org_role === 'lead'
+      mainAgent = task.org_role === 'main'
     } catch { /* unknown task — identity + tooling lines still apply */ }
   }
   // A worker splits work with its own tools and makes a Walnut task only on the
   // user's signal; an ask is the dispatcher, whose persona decides (see 4 above).
-  const workRule = projectLead
+  // Main routes work in its role line (2d, 2f), so the ask's rule would contradict it.
+  const workRule = mainAgent ? '' : projectLead
     // A lead assigns work (the charter): Main's or the user's request is its signal.
     ? 'Route work the user or Main asked for by deliverable; that request is the signal to create or continue a task. '
       + 'Follow-ups you discover stay with the same deliverable, never new tasks. '
@@ -243,14 +298,14 @@ export async function buildSessionContext(
     // (2026-09-30: "use a subagent" was answered with a Walnut subtask).
     + 'Words: a "subagent" is Claude Code\'s Agent tool inside this session, '
     + 'never a Walnut task; a "subtask", "worker" or "task" is a Walnut task.\n\n'
-    // Waiting is the session's job (see 6 above).
-    + 'When the rest of the work waits on something outside this session (a review, '
+    // Waiting is the session's job (see 6 above). Not Main's: it never parks (2e).
+    + (mainAgent ? '' : 'When the rest of the work waits on something outside this session (a review, '
     + 'a merge, a deploy, a build, a reply), never ask the user to watch it: arm a '
     + 'trigger yourself (walnut-trigger skill). It parks this task as Waiting, off the '
     + 'user\'s list; the fire brings it back to you. Give it a wait_until for when you '
     + 'expect the event, kept short: when the clock runs out first, the trigger may have '
     + 'missed it, so check the thing and the trigger before parking again. '
-    + 'While work remains here, arm it with wait:false.\n\n'
+    + 'While work remains here, arm it with wait:false.\n\n')
     // The inbox (see 6b above).
     + 'The user\'s inbox is only for what needs them: send a letter (human_inbox_send) '
     + 'when you are blocked on their decision, something needs their review, or they asked '

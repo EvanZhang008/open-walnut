@@ -2952,6 +2952,11 @@ export class ClaudeCodeSession {
         if (task && task.phase !== 'TODO' && task.phase !== 'IN_PROGRESS') {
           taskPhasePastInProgress = true
         }
+        // The main agent stays In Progress after its turns (org/main-stays-active.ts),
+        // so its phase proves nothing: an ended turn counts as processed, as it did
+        // when Main still went to NEED_ACTION.
+        const { isMainAgentTask } = await import('../core/org/main-stays-active.js')
+        if (isMainAgentTask(task)) taskPhasePastInProgress = true
       } catch { /* task not found — assume non-terminal */ }
     }
     let streamEvidence: Awaited<ReturnType<typeof import('../core/session-reconcile.js')['fetchStreamTailFold']>> = 'not-fetched'

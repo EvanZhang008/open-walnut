@@ -468,6 +468,9 @@ export async function applySnapshot(
   }
   const reconcileSettledPhase = async (settled: SessionRecord): Promise<void> => {
     const phaseAt = handbackTask?.phase_changed_at ?? handbackTask?.updated_at
+    // The main agent stays In Progress after a turn; only a session error hands it back (org/main-stays-active.ts).
+    const { isMainAgentTask } = await import('./org/main-stays-active.js')
+    if (isMainAgentTask(handbackTask) && settled.process_status !== 'error') return
     if (!handbackTask || handbackTask.phase !== 'IN_PROGRESS' || !handbackCutoff || !phaseAt
       || !Number.isFinite(Date.parse(phaseAt)) || !Number.isFinite(Date.parse(handbackCutoff))
       || Date.parse(phaseAt) > Date.parse(handbackCutoff)

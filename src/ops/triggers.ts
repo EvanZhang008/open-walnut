@@ -93,6 +93,7 @@ defineOp({
     + 'and only then park again with a fresh wait_until. '
     + 'Pass wait:false while you or the user still have '
     + 'work on this task, and park it later with task_update phase=WAITING once only the wait is left. '
+    + 'The main agent\'s task is never parked: it stays active, so it passes wait:false. '
     + 'Use it on your own whenever the rest of the work is waiting on something outside this session '
     + '(a review, a merge, a deploy, a build, someone\'s reply): do not ask the user to watch it.',
   input: {
@@ -148,6 +149,7 @@ defineOp({
       : ''
     const parked = w?.parked
       ? ` The task is now Waiting, off the user's list, until it fires${w.wait_until ? ` or ${w.wait_until}` : ''}.${unnamed}`
+      : w?.reason === 'main_stays_active' ? ' The task it delivers into is the main agent\'s, which never parks: it stays active and on the user\'s list, and the fire wakes it like any message.'
       : w?.reason === 'wait_false' ? ' The task was left as it is (wait:false); park it with task_update phase=WAITING once only the wait is left.'
       : w?.reason === 'other_task' ? ' The task it delivers into was left as it is (not your task; pass wait:true to park it).'
       : w?.reason === 'complete' ? ' The task it delivers into is complete, so it was not parked and the fire cannot land there.'

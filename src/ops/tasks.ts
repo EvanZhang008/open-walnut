@@ -666,6 +666,7 @@ defineOp({
     'that time when nothing else did. Set it to when you expect the event, kept short: a trigger can miss it, and the ' +
     'clock is how you find out; when it wakes you, check the thing and the trigger before parking again. Left out, a ' +
     'task entering WAITING gets 1 day from now, and "" means no clock at all. A park sends no letter: say what you wait on in your last message. ' +
+    'The main agent\'s task never parks: it stays active, and WAITING on it is not applied. ' +
     '`tags` is a full replacement ([] clears). Pass "" or null to clear due_date/start_date.',
   input: {
     id: z.string().min(1).describe('Task id or a unique id prefix'),
@@ -703,7 +704,7 @@ defineOp({
       throw new Error('task_update needs at least one field to change besides `id`.')
     }
     const patched = await call('PATCH', `/tasks/${encodeURIComponent(String(id))}`, body) as
-      { task?: unknown; title_shortened_from?: string; placement?: LeaderPlacement } | undefined
+      { task?: unknown; title_shortened_from?: string; placement?: LeaderPlacement; phase_ignored?: { message?: string } } | undefined
     const task = patched?.task
     const changed = Object.keys(body).join(', ')
     // A phase write is bookkeeping. It does not start work, and it does not
@@ -718,9 +719,16 @@ defineOp({
     const others = Object.keys(body).filter((k) => k !== 'parent_task_id')
     const fieldsLine = !link ? `Task fields updated (${changed}). `
       : `${link} ${others.length > 0 ? `Other fields updated (${others.join(', ')}). ` : ''}`
-    const outcome = `${fieldsLine}${cut}No session was started or stopped by this. `
+    // The main agent's task takes no park (org/main-stays-active.ts): say so, so
+    // the model never believes it parked.
+    const ignored = patched?.phase_ignored
+      ? `phase=WAITING was NOT applied. ${patched.phase_ignored.message ?? ''} `
+      : ''
+    const outcome = `${ignored}${fieldsLine}${cut}No session was started or stopped by this. `
       + 'Execution is unchanged.'
-    const next = body.phase === 'NEED_ACTION'
+    const next = ignored
+      ? 'Do not park this task again. End your turn as usual; arm a trigger with wait:false only for an outside event that sends no notice.'
+      : body.phase === 'NEED_ACTION'
       ? 'Marked ready for the human to look at. Nothing else is required of you.'
       : body.phase === 'WAITING'
         ? 'The task is waiting. End your turn now: the next message into it (a trigger fire, the user, a peer'

@@ -24,6 +24,11 @@ report into it, and add to it only when asked.
   requested work by its deliverable: an independent goal gets `task_create` and
   a fresh session; a continuation of the same deliverable gets `task_send` or
   `task_start` by exact ID after checking scope. Questions alone need an answer.
+- **The main agent** (a task with `org_role: main`). You run the org with the
+  user. Know Walnut and what the user means at a high level; hand every
+  investigation, check and implementation to a subtask, and do only quick
+  lookups yourself. You stay active (never `WAITING`), and your task note is your
+  tracking note: what you handed to whom, its state, and who it waits on.
 - **A coding session.** You are the worker on one task. The work itself happens
   with your own tools (todo list, subagents, edits, tests). Walnut is the layer
   above you: read your task and the user's data, report where your task stands,
@@ -562,7 +567,7 @@ walnut tools call human_inbox_reply '{"letter":"<letter-id>","text":"..."}'
 ## Safety
 
 - **Read before write.** Search or list first; a duplicate is the most common damage an agent does here.
-- **Report where your task stands.** `task_update phase=NEED_ACTION` when it is done and ready to look at, `COMPLETE` when it is finished. `WAITING` (optional `wait_until`) as the last call of a turn when the task waits on something that has not happened yet (a trigger you armed, a reply, a time): it stays where it is, and the next message into it brings it back. Any phase may be set by anyone.
+- **Report where your task stands.** `task_update phase=NEED_ACTION` when it is done and ready to look at, `COMPLETE` when it is finished. `WAITING` (optional `wait_until`) as the last call of a turn when the task waits on something that has not happened yet (a trigger you armed, a reply, a time): it stays where it is, and the next message into it brings it back. The main agent's task never parks: it stays active, and WAITING on it is not applied. Any phase may be set by anyone.
 - **Nothing new on the board unprompted.** No task, no start, no hand-off to other work without one of the user's signals above. Split big work with your own subagents or agent team instead; your own follow-ups are done where you are.
 - **Never bulk-delete.** Delete only the specific task the user named.
 - **Do not reopen, re-prioritize, or move the user's tasks unprompted.** `phase`, `priority`, and `project` are the user's call.

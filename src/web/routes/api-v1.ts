@@ -3102,6 +3102,11 @@ apiV1Router.patch('/tasks/:id', async (req: Request, res: Response, next: NextFu
     if (waitUntil !== undefined && normalizeDateField(waitUntil) && phase === undefined) {
       const current = await (await import('../../core/task-manager.js')).getTask(id).catch(() => undefined)
       if (current && current.phase !== 'WAITING') {
+        const { isMainAgentTask, MAIN_STAYS_ACTIVE, MAIN_STAYS_ACTIVE_NOTE } = await import('../../core/org/main-stays-active.js')
+        if (isMainAgentTask(current)) {
+          sendError(res, 400, MAIN_STAYS_ACTIVE, `${MAIN_STAYS_ACTIVE_NOTE} It takes no wait_until.`)
+          return
+        }
         sendError(res, 400, 'bad_request', 'wait_until only applies to a WAITING task; send phase=WAITING with it')
         return
       }
@@ -3323,11 +3328,18 @@ apiV1Router.patch('/tasks/:id', async (req: Request, res: Response, next: NextFu
         const { refineShortTitle } = await import('../../core/sessions/task-title-brake.js')
         void refineShortTitle(updated.id, patchTitle, titleShortenedFrom)
       }
+      // `phase_ignored` (additive): a park the main agent's task does not take
+      // (org/main-stays-active.ts). The rest of the patch was applied.
+      const { isMainAgentTask, MAIN_STAYS_ACTIVE, MAIN_STAYS_ACTIVE_NOTE } = await import('../../core/org/main-stays-active.js')
+      const phaseIgnored = phase === 'WAITING' && updated.phase !== 'WAITING' && isMainAgentTask(updated)
+        ? { phase: 'WAITING', reason: MAIN_STAYS_ACTIVE, message: MAIN_STAYS_ACTIVE_NOTE }
+        : undefined
       // `title_shortened_from` (additive): the long title the session sent.
       res.json({
         task: projectTask(updated),
         ...(titleShortenedFrom ? { title_shortened_from: titleShortenedFrom } : {}),
         ...(placement ? { placement } : {}),
+        ...(phaseIgnored ? { phase_ignored: phaseIgnored } : {}),
       })
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)

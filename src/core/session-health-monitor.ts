@@ -27,6 +27,17 @@ import {
   RESCUABLE_STOPPED_WINDOW_MS,
 } from './session-error-kind.js'
 import { engineCaps } from './agents/engine-registry.js'
+import { isMainAgentTask } from './org/main-stays-active.js'
+
+/** Best effort: an unreadable task is not the main agent's. */
+async function isMainAgentTaskId(taskId: string): Promise<boolean> {
+  try {
+    const { getTask } = await import('./task-manager.js')
+    return isMainAgentTask(await getTask(taskId))
+  } catch {
+    return false
+  }
+}
 const HEALTH_CHECK_INTERVAL_MS = 30_000
 /** Adaptive slow-down: with an empty active set there is nothing to watch. */
 const HEALTH_CHECK_IDLE_INTERVAL_MS = 5 * 60_000
@@ -1096,8 +1107,9 @@ export class SessionHealthMonitor {
 
     emitSessionStatusChanged(updated, {}, ['*'], { source: 'health-monitor' })
 
-    // Phase sync: idle timeout → WAIT (we killed the session, not a normal completion)
-    if (session.taskId) {
+    // Phase sync: idle timeout → WAIT (we killed the session, not a normal completion).
+    // Not for the main agent: an idle Main reaped is not a failure (org/main-stays-active.ts).
+    if (session.taskId && !await isMainAgentTaskId(session.taskId)) {
       try {
         const { applySessionPhase } = await import('./phase.js')
         await applySessionPhase(
@@ -1319,6 +1331,8 @@ export class SessionHealthMonitor {
           pendingSessions = candidates.filter(session => {
             if (session.status_reason !== 'snapshot_projection' || session.stopRequest) return false
             const task = taskById.get(session.taskId)
+            // Main stays In Progress between turns: only an error is handed back (org/main-stays-active.ts).
+            if (isMainAgentTask(task) && session.process_status !== 'error') return false
             const phaseAt = Date.parse(task?.phase_changed_at ?? task?.updated_at ?? '')
             return Number.isFinite(phaseAt) && phaseAt <= Date.parse(settledPhaseCutoff(session))
           })
@@ -1408,8 +1422,11 @@ export class SessionHealthMonitor {
       // saw the (swallowed) result — stuck IN_PROGRESS with nothing to advance it.
       const settled = session.process_status === 'idle' || session.process_status === 'stopped'
         || session.process_status === 'error'
+      // Not for the main agent unless its session failed: it stays In Progress
+      // between turns by design (org/main-stays-active.ts), so that shape is no lost result.
       const phaseDebt = !recordDebt && settled && !!session.taskId
         && taskMap?.get(session.taskId)?.phase === 'IN_PROGRESS'
+        && !(isMainAgentTask(taskMap?.get(session.taskId)) && session.process_status !== 'error')
       if (!recordDebt && !phaseDebt) continue
       // Embedded/SDK sessions have no CLI JSONL lifecycle — nothing to reconcile.
       if (session.provider === 'embedded' || session.provider === 'sdk') continue
@@ -1512,7 +1529,7 @@ export class SessionHealthMonitor {
       const { getTask } = await import('./task-manager.js')
       const task = await getTask(s.taskId)
       if (!task) return true
-      return task.phase === 'IN_PROGRESS'
+      return task.phase === 'IN_PROGRESS' && !isMainAgentTask(task)
     } catch {
       return true
     }
@@ -1867,7 +1884,9 @@ export class SessionHealthMonitor {
       // at 'running' when should be 'idle'), propagating it to task phase makes two things
       // wrong. Fix session status accuracy instead.
       let expectedPhase: TaskPhase | null = null
-      if (alive.length === 0 && task.phase === 'IN_PROGRESS') {
+      // The main agent sits In Progress with no live session between turns; only a failed one is drift.
+      if (alive.length === 0 && task.phase === 'IN_PROGRESS'
+        && !(isMainAgentTask(task) && !dead.some((s) => s.process_status === 'error'))) {
         // All dead sessions are remote + unreachable? → connectivity unknown, skip.
         //
         // TWO signals, either one means "the isAlive probe is connectivity noise,

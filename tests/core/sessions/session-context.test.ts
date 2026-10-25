@@ -47,6 +47,33 @@ describe('buildSessionContext (identity note)', () => {
     expect(systemPrompt).toContain('project "marina"')
   })
 
+  it('tells the main agent it stays active, in place of the park rule (2026-10-25)', async () => {
+    // Main read the worker's "it parks this task as Waiting" as "park at every
+    // turn end" and dropped off the user's list (org/main-stays-active.ts).
+    const { MAIN_STAYS_ACTIVE_LINE } = await import('../../../src/core/sessions/session-context.js')
+    const { task } = await addTask({ title: 'Main', project: 'Ask Walnut', walnut_agent: true, org_role: 'main' })
+    const { systemPrompt } = await buildSessionContext(task.id)
+    expect(systemPrompt).toContain(MAIN_STAYS_ACTIVE_LINE)
+    expect(systemPrompt).toMatch(/never set your own task to WAITING and never give it a wait_until/)
+    expect(systemPrompt).toMatch(/always with wait:false/)
+    expect(systemPrompt).not.toMatch(/parks this task as Waiting/)
+    // Main delegates big work (2026-10-25), and the ask's opposite rule is gone.
+    const { MAIN_DELEGATES_LINE } = await import('../../../src/core/sessions/session-context.js')
+    expect(systemPrompt).toContain(MAIN_DELEGATES_LINE)
+    expect(systemPrompt).not.toMatch(/Never create or start a task/)
+    expect(systemPrompt).not.toMatch(/Follow-up work you find is yours to do here/)
+    expect(systemPrompt).toMatch(/Every investigation, check, evaluation, research or implementation/)
+    expect(systemPrompt).toMatch(/Walnut is the user's personal AI: a TypeScript server/)
+    // Main keeps one tracking note, its task note, and lasting rules in memory.
+    const { MAIN_TRACKING_LINE } = await import('../../../src/core/sessions/session-context.js')
+    expect(systemPrompt).toContain(MAIN_TRACKING_LINE)
+    expect(systemPrompt).toMatch(/Your tracking note is your task note/)
+    expect(systemPrompt).toMatch(/memory_write doc "user"/)
+    const worker = await buildSessionContext(await seedTask('marina'))
+    expect(worker.systemPrompt).toMatch(/It parks this task as Waiting/)
+    expect(worker.systemPrompt).not.toContain(MAIN_STAYS_ACTIVE_LINE)
+  })
+
   it('calls out the Inbox for a projectless task', async () => {
     const id = await seedTask('')
     const { systemPrompt } = await buildSessionContext(id)

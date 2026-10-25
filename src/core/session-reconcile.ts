@@ -806,7 +806,9 @@ export async function reconcileProcessStatus(
     try {
       const { getTask } = await import('./task-manager.js')
       const task = await getTask(record.taskId)
-      phaseDebt = task?.phase === 'IN_PROGRESS'
+      // The main agent stays In Progress between turns (org/main-stays-active.ts).
+      const { isMainAgentTask } = await import('./org/main-stays-active.js')
+      phaseDebt = task?.phase === 'IN_PROGRESS' && !(isMainAgentTask(task) && record.process_status !== 'error')
     } catch { /* task gone — no phase to sync */ }
   }
   if (!recordDebt && !phaseDebt) return { converged: false, reason: 'not-running' }

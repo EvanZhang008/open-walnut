@@ -12,6 +12,7 @@
 
 import { SessionControlError } from '../sessions/session-controls.js';
 import { log } from '../../logging/index.js';
+import { isMainAgentTask } from '../org/main-stays-active.js';
 import { MIN_EVERY_MS, clampTimeoutSeconds } from '../../providers/trigger-check-core.js';
 import type { TriggersTestResult } from '../../providers/trigger-check-core.js';
 import { requireTriggerDaemon, triggerHost } from './trigger-daemon.js';
@@ -200,12 +201,18 @@ export interface TriggerWaitResult {
   parked: boolean;
   task_id: string;
   /** Why it was not parked: the caller passed wait:false, the trigger is for another task, or the task is complete. */
-  reason?: 'wait_false' | 'other_task' | 'complete' | 'not_written';
+  reason?: 'wait_false' | 'other_task' | 'complete' | 'not_written' | 'main_stays_active';
   /** The clock the store now holds (null = no clock), when parked. */
   wait_until?: string | null;
   /** The task was already WAITING (its clock is kept unless wait_until was passed). */
   already_waiting?: boolean;
   error?: string;
+}
+
+/** Whether a trigger delivers into the main agent's task, which never parks. */
+async function isMainTarget(taskId: string): Promise<boolean> {
+  const { getTask } = await import('../task-manager.js');
+  return isMainAgentTask(await getTask(taskId).catch(() => null));
 }
 
 /**
@@ -222,6 +229,8 @@ async function parkForTrigger(taskId: string, opts: {
     const { getTask, updateTask } = await import('../task-manager.js');
     const before = await getTask(taskId);
     if (before.phase === 'COMPLETE') return { parked: false, task_id: taskId, reason: 'complete' };
+    // The main agent's task stays active and on the list (org/main-stays-active.ts).
+    if (isMainAgentTask(before)) return { parked: false, task_id: taskId, reason: 'main_stays_active' };
     const { task } = await updateTask(taskId, {
       phase: 'WAITING',
       ...(opts.waitUntil !== undefined ? { wait_until: opts.waitUntil } : {}),
@@ -354,7 +363,9 @@ export async function createTriggerRoutine(body: unknown, callerSid?: string, or
   const park = b.wait === true || (b.wait === undefined && resolved.own);
   const wait: TriggerWaitResult = park
     ? await parkForTrigger(resolved.target, { waitUntil, callerSid })
-    : { parked: false, task_id: resolved.target, reason: b.wait === false ? 'wait_false' : 'other_task' };
+    : await isMainTarget(resolved.target)
+      ? { parked: false, task_id: resolved.target, reason: 'main_stays_active' }
+      : { parked: false, task_id: resolved.target, reason: b.wait === false ? 'wait_false' : 'other_task' };
 
   log.web.info('trigger created', {
     host, target: resolved.target, everyMs, ...(fromTemplate ? { template: fromTemplate.template.id } : {}),

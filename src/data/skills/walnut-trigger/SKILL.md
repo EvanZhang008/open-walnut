@@ -10,7 +10,7 @@ description: >-
   "come back to this when". Use it on your own, without being asked, whenever
   the rest of the work waits on something outside the session (a review, a
   merge, a deploy, a build, a reply): creating the trigger parks the task as
-  Waiting, and the fire brings it back. Check trigger_templates first: a plugin
+  Waiting (never the main agent's task), and the fire brings it back. Check trigger_templates first: a plugin
   (Slack channel, new mail) may already offer the watch with no script.
 ---
 
@@ -321,6 +321,10 @@ task with them.
 
 - A trigger on ANOTHER task does not park it unless you pass `"wait":true`.
   A completed task is never parked.
+- The main agent's task is never parked either: it stays active and on the
+  user's list, since replies, notices and the user's messages wake it. As the
+  main agent, arm a trigger only for an outside event that sends no notice,
+  with `"wait":false`, and never set your task to WAITING.
 - Make the check fire ONCE per event: give each event an item id (the PR's
   state + revision, the message id), so an unchanged state is quiet.
 - Write the `prompt` for the moment it fires: "Check what changed on PR 123 and

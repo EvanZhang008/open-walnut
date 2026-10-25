@@ -139,6 +139,10 @@ function defaultDeps(): AutoRecoverDeps {
       try {
         const { getTask } = await import('./task-manager.js')
         const task = await getTask(taskId)
+        // The main agent sits In Progress between turns too (org/main-stays-active.ts),
+        // so its phase says nothing about a turn in flight: never resumed unattended.
+        const { isMainAgentTask } = await import('./org/main-stays-active.js')
+        if (isMainAgentTask(task)) return null
         return task?.phase ?? null
       } catch {
         return null

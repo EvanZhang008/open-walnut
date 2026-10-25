@@ -462,6 +462,25 @@ describe('buildSelfReportPrompt', () => {
   });
 });
 
+describe('the main agent\'s tracking note (2026-10-25)', () => {
+  // Main's Work Log had grown to 11k chars of request ids: the generic contract
+  // keeps every request id, which for Main is delivery plumbing.
+  it('asks Main for a hand-off ledger and no request ids, and leaves other tasks alone', () => {
+    const main = buildSelfReportPrompt('## Work Log\n- asked rq-0123456789ab', 'Main', { mainAgent: true });
+    expect(main).toContain('This is the MAIN AGENT\'s task');
+    expect(main).toMatch(/owner: <task title> \(<task id>\); waits on: <the user's decision \| that task's reply \| nothing>/);
+    expect(main).toMatch(/Request and message ids \(rq-…, qm-…\) are NOT external ids here/);
+    // It rides before the generic contract it overrides.
+    expect(main.indexOf('MAIN AGENT')).toBeLessThan(main.indexOf('Section contract'));
+    const worker = buildSelfReportPrompt('## Work Log\n- asked rq-0123456789ab', 'Fix login');
+    expect(worker).not.toContain('MAIN AGENT');
+    // The over-budget reorganize still reaches Main, with the override after it.
+    const big = buildSelfReportPrompt(`## Work Log\n${'- entry rq-0123456789ab\n'.repeat(400)}`, 'Main', { mainAgent: true });
+    expect(big).toContain('MANDATORY REORGANIZE');
+    expect(big.indexOf('MANDATORY REORGANIZE')).toBeLessThan(big.indexOf('MAIN AGENT'));
+  });
+});
+
 describe('EXEC_SUMMARY multi-workstream contract (2026-08-15 star incident)', () => {
   // task.summary is derived from EXEC_SUMMARY and is a primary search surface.
   // A fork session that pivoted topics used to end with a summary describing

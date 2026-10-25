@@ -55,7 +55,15 @@ export function ensureMainTask(): Promise<Task> {
   return serial(async () => {
     const { addTask, getTask } = await import('../task-manager.js');
     const existing = pickMain(await orgTasks());
-    if (existing) return getTask(existing.id);
+    if (existing) {
+      // A Main parked by an older build comes back onto the list (main-stays-active.ts).
+      if (existing.phase === 'WAITING') {
+        const { updateTask } = await import('../task-manager.js');
+        await updateTask(existing.id, { phase: 'IN_PROGRESS' }, { source: 'internal' })
+          .catch((err) => log.task.warn('org: parked main agent not restored', { taskId: existing.id, error: err instanceof Error ? err.message : String(err) }));
+      }
+      return getTask(existing.id);
+    }
     const { task } = await addTask({
       title: MAIN_TASK_TITLE,
       project: ASK_WALNUT_PROJECT,
