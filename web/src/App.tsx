@@ -19,6 +19,7 @@ import { usePluginUi, useWebPluginRuntime } from './plugins/hooks';
 import { MainPage } from './pages/MainPage';
 import { TaskDetailPage } from './pages/TaskDetailPage';
 import { AgentsPage } from './pages/AgentsPage';
+import { OrgPage } from './pages/OrgPage';
 import { CommandsPage } from './pages/CommandsPage';
 import { SkillsPage } from './pages/SkillsPage';
 import { MemoryPage } from './pages/MemoryPage';
@@ -129,6 +130,7 @@ export function App() {
         <Route path="/sessions" element={<SessionsRedirect />} />
         <Route path="/cron" element={<Navigate to="/routines" replace />} />
         <Route path="/usage" element={<Navigate to="/settings#usage" replace />} />
+        <Route path="/org" element={<OrgPage />} />
         <Route path="/agents" element={<AgentsPage />} />
         <Route path="/commands" element={<CommandsPage />} />
         <Route path="/skills" element={<SkillsPage />} />

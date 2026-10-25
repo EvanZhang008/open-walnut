@@ -173,10 +173,10 @@ export function Sidebar({
   const handleToggleTodo = homeToggle('sidebar:toggle-todo', todoVisible);
   const handleToggleCalendarPanel = homeToggle('sidebar:toggle-calendar', calendarPanelVisible);
   const handleToggleScratchpad = homeToggle('sidebar:toggle-scratchpad', scratchpadVisible);
-  // The org chart is an overlay of the home page: come home, then open it.
+  // The org is a page of its own (pages/OrgPage.tsx): Main and the project leads.
+  const orgActive = location.pathname === '/org';
   const handleOpenOrg = () => {
-    if (location.pathname !== '/') navigate('/', isPhoneLayout() ? { replace: true } : undefined);
-    window.dispatchEvent(new CustomEvent('org:open'));
+    if (!orgActive) navigate('/org', isPhoneLayout() ? { replace: true } : undefined);
   };
   // A phone mounts neither the agenda nor the scratchpad panel (spec 5.1), so
   // their toggles would be controls that do nothing there (N3).
@@ -205,14 +205,15 @@ export function Sidebar({
         </button>
       )}
       <button
-        className="sidebar-link sidebar-panel-toggle"
+        className={`sidebar-link sidebar-panel-toggle${orgActive ? ' active' : ''}`}
         onClick={handleOpenOrg}
-        aria-label="Org chart"
-        title={collapsed ? 'Org chart' : 'Who works on what: Main, each project and its tasks'}
-        data-testid="sidebar-org-chart"
+        aria-label="Org"
+        aria-current={orgActive ? 'page' : undefined}
+        title={collapsed ? 'Org' : 'Main and your project leads: what each is doing and what needs you'}
+        data-testid="sidebar-org"
       >
         <OrgChartIcon />
-        <span className="sidebar-label">Org chart</span>
+        <span className="sidebar-label">Org</span>
       </button>
       {!phone && (<>
       <button

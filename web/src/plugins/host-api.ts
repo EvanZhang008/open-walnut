@@ -34,6 +34,7 @@ const RESERVED_PAGE_ROOTS = new Set([
   '/hooks',
   '/memory',
   '/notes',
+  '/org',
   '/plugins',
   '/popout',
   '/repos',

@@ -69,6 +69,8 @@ export interface TaskBoardPaneProps {
   onSendToSession?: (text: string) => Promise<unknown> | void;
   /** A narrow kanban's opened card: the host's real session chat (R3-05). */
   renderSession?: KanbanRenderSession;
+  /** An empty board keeps its Add task form closed, so the host keeps the focus (the Org page's list). */
+  quietEmpty?: boolean;
 }
 
 export { ASK_FOR_BOARD_TEXT };
@@ -85,7 +87,7 @@ function writeSeen(taskId: string, seen: BoardSeen): void {
 
 type FrameMsg = Record<string, unknown> & { t: string };
 
-export function TaskBoardPane({ taskId, sessionId, barRightSlot, onOpenTask, onLocateTask, onSendToSession, renderSession }: TaskBoardPaneProps) {
+export function TaskBoardPane({ taskId, sessionId, barRightSlot, onOpenTask, onLocateTask, onSendToSession, renderSession, quietEmpty }: TaskBoardPaneProps) {
   const navigate = useNavigate();
   const store = useTasksContextSafe();
   const storeById = useMemo(() => {
@@ -502,6 +504,7 @@ export function TaskBoardPane({ taskId, sessionId, barRightSlot, onOpenTask, onL
             onOpenSignal={openSignal}
             onAttention={setAttention}
             renderSession={renderSession}
+            quietEmpty={quietEmpty}
             emptyExtra={hasPage ? undefined : <AskLeaderRow taskId={ownerId} onSendToSession={ownerId === taskId ? onSendToSession : undefined} />}
           />
         )}

@@ -116,7 +116,7 @@ interface DrawerProps {
   onToggleInspector: () => void;
   /** Walnut's list only: Main, the main agent, pinned above the other chats (it may not exist yet). */
   main?: { selected: boolean; task?: Task; onPick: () => void };
-  /** The "Org chart" link. Absent hides it. */
+  /** The "Org" link (the Org page). Absent hides it. */
   onOpenOrg?: () => void;
 }
 
@@ -380,9 +380,9 @@ export function AskWalnutDrawer({
                 className="ask-walnut-drawer-link"
                 data-testid="ask-walnut-org"
                 onClick={act(onOpenOrg)}
-                title="Who works on what: Main, each project and its tasks. Drag a task to move it."
+                title="Main and your project leads: what each is doing and what needs you"
               >
-                <span aria-hidden="true">{'⌗'}</span> Org chart
+                <span aria-hidden="true">{'⌗'}</span> Org
               </button>
             )}
             <button

@@ -1,13 +1,14 @@
 /**
  * Main and the org chart, as a user meets them (web/src/components/chat/AskWalnutSlot.tsx,
- * web/src/components/org/OrgChartSheet.tsx, src/web/routes/org-v1.ts):
+ * web/src/pages/OrgPage.tsx, web/src/components/org/OrgChartSheet.tsx, src/web/routes/org-v1.ts):
  *   - a new install opens the chat on Main's composer; the sidebar has the Ask Walnut
- *     toggle and the Org chart
- *   - the drawer pins Main above the other chats and links the org chart
- *   - the org chart has one column per project; a drag makes a task another's worker,
- *     a drag onto the column makes it a top-level task again
- *   - Chat on a project with two tasks makes its hidden lead and opens a plain chat with it
- *     (no Start Task / Ask Walnut fork, a folder ready); the Tasks page hides the leads too
+ *     toggle and the Org page
+ *   - the drawer pins Main above the other chats and links the Org page
+ *   - the org chart (one click from the Org page) has one column per project; a drag makes a
+ *     task another's worker, a drag onto the column makes it a top-level task again
+ *   - on the Org page, chatting with a project with two tasks makes its hidden lead and opens a
+ *     plain chat with it (no Start Task / Ask Walnut fork, a folder ready); the Tasks page hides
+ *     the leads too
  *   - a send from Main's composer makes Main, shows its session, and keeps it off the board
  *     and off the Tasks page
  * The fixture is shared, so this file makes its own project and removes what it made,
@@ -52,7 +53,19 @@ async function removeMain(request: APIRequestContext): Promise<void> {
   if (main) await removeTask(request, main.id)
 }
 
-const sidebarOrgChart = (page: Page) => page.getByTestId('sidebar-org-chart')
+const sidebarOrg = (page: Page) => page.getByTestId('sidebar-org')
+/** The org chart: the Org page's Org chart button. */
+async function openOrgChart(page: Page): Promise<void> {
+  await sidebarOrg(page).click()
+  await page.getByTestId('org-open-chart').click()
+}
+/** On the Org page: the project's Chat tab and its start button (no session yet). */
+async function startProjectChat(page: Page): Promise<void> {
+  await sidebarOrg(page).click()
+  await page.locator(`[data-testid="org-channel"][data-key="project:${PROJECT.toLowerCase()}"]`).click()
+  await page.getByTestId('org-tab-chat').click()
+  await page.getByTestId('org-start-chat').click()
+}
 const column = (page: Page) => page.locator(`[data-testid="org-column"][data-project="${PROJECT}"]`)
 const card = (page: Page, id: string) => column(page).locator(`[data-testid="org-card"][data-task-id="${id}"]`).first()
 
@@ -79,7 +92,7 @@ test('a new install opens the chat on Main, and the drawer pins Main and links t
   await expect(page.getByTestId('ask-walnut-main-intro')).toContainText('Main sees all your work')
   await expect(mainDraft.locator('.chat-input-textarea')).toHaveAttribute('placeholder', /Ask Main anything/)
   await expect(page.locator('.sidebar-panel-toggle', { hasText: 'Ask Walnut' })).toBeVisible()
-  await expect(sidebarOrgChart(page)).toBeVisible()
+  await expect(sidebarOrg(page)).toBeVisible()
 
   const drawer = await openAskWalnutDrawer(page)
   const mainRow = drawer.getByTestId('ask-walnut-drawer-main')
@@ -94,7 +107,7 @@ test('a new install opens the chat on Main, and the drawer pins Main and links t
 test('the org chart: a drag makes a worker, a drag onto the column undoes it', async ({ page, request }) => {
   await isolateUiPrefs(page)
   await loadHome(page)
-  await sidebarOrgChart(page).click()
+  await openOrgChart(page)
   const sheet = page.getByTestId('org-chart')
   await expect(sheet).toBeVisible()
   await expect(page.getByTestId('org-main')).toBeVisible()
@@ -115,7 +128,7 @@ test('the org chart: a drag makes a worker, a drag onto the column undoes it', a
   await expect(sheet).toHaveCount(0)
 })
 
-test('Chat on a project with two tasks makes its hidden lead and opens a plain chat with it', async ({ page, request }) => {
+test('Chat with a project with two tasks makes its hidden lead and opens a plain chat with it', async ({ page, request }) => {
   // A Parked tier header (and its "+") draws only while the tier holds a task: an Inbox
   // anchor sits there, so the "+" below has a header to live on.
   const anchor = await request.post('/api/tasks', { data: { title: `Org spec tier anchor ${STAMP}`, source: 'local', project: '' } })
@@ -126,10 +139,8 @@ test('Chat on a project with two tasks makes its hidden lead and opens a plain c
   await isolateUiPrefs(page)
   await presetPanelView(page, { section: 'all', project: '' })
   await loadHome(page)
-  await sidebarOrgChart(page).click()
-  await column(page).scrollIntoViewIfNeeded()
-  await column(page).getByTestId('org-project-chat').click()
-  await expect(page.getByTestId('org-chart')).toHaveCount(0)
+  await startProjectChat(page)
+  await expect(page).toHaveURL(/\/$/)
 
   await expect.poll(async () => (await orgTree(request)).projects.find((p) => p.project === PROJECT)?.lead?.title, { timeout: 15_000 })
     .toBe(`${PROJECT} lead`)
@@ -162,9 +173,7 @@ test('Chat on a project with two tasks makes its hidden lead and opens a plain c
   await expect(drafts.getByTestId('draft-org-lead-hint')).toHaveCount(0)
   await expect(drafts.locator('.draft-folder-pill')).toHaveAttribute('aria-label', 'Choose folder and host')
   // Chat on the lead again: the same untouched column becomes the lead chat once more.
-  await sidebarOrgChart(page).click()
-  await column(page).scrollIntoViewIfNeeded()
-  await column(page).getByTestId('org-project-chat').click()
+  await startProjectChat(page)
   await expect(draft).toBeVisible({ timeout: 15_000 })
   await expect(drafts).toHaveCount(1)
   await expect.poll(leadFolder).toContain(`/${PROJECT.toLowerCase()} on `)

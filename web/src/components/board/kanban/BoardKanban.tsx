@@ -59,6 +59,8 @@ export interface BoardKanbanProps {
   renderSession?: KanbanRenderSession;
   /** Each card's board project (the Projects view's placement): the card's project chip and the project filter. */
   projectOf?: ProjectOf;
+  /** An empty board keeps its Add task form closed (the host keeps the focus). */
+  quietEmpty?: boolean;
 }
 
 const FLASH_MS = 1200;
@@ -86,7 +88,7 @@ const EMPTY_VM = (ownerId: string): KanbanBoardVM => buildBoardVM({
 
 export function BoardKanban({
   ownerId, payload, threadSeen, fetchStartedAt, reloadKanban, visible, onOpenTask, onOpenSignal, onAttention, emptyExtra, renderSession,
-  projectOf = NO_PROJECTS,
+  projectOf = NO_PROJECTS, quietEmpty = false,
 }: BoardKanbanProps) {
   const navigate = useNavigate();
   const reducedMotion = usePrefersReducedMotion();
@@ -484,7 +486,7 @@ export function BoardKanban({
               <KanbanLanes
                 vm={shown} layout={freeze.layout} lanes={lanesList} mode={mode} view={view} api={api} filter={filter}
                 deletePreview={deletePreview} pending={writes.pending} moved={freeze.moved} flash={flash} flashingLane={flashingLane}
-                tabStops={tabStops} keyDrop={keyDropState} keyDragId={keyDrag?.taskId ?? null} autoAddLane={vm.empty ? firstTodo : null} reducedMotion={reducedMotion}
+                tabStops={tabStops} keyDrop={keyDropState} keyDragId={keyDrag?.taskId ?? null} autoAddLane={vm.empty && !quietEmpty ? firstTodo : null} reducedMotion={reducedMotion}
                 onDragging={(on) => hold('drag', on)} say={say}
                 addLane={<KanbanAddLane lanes={lanesList} mode={mode} api={api} onAdded={onLaneAdded} />}
                 scrollRef={(el) => { scrollEl.current = el; }}

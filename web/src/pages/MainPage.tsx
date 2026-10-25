@@ -14,6 +14,7 @@ import { useFocusBarContext } from '@/contexts/FocusBarContext';
 import { useOrdering } from '@/hooks/useOrdering';
 import { useProjectRegistry } from '@/hooks/useProjectRegistry';
 import { isPhoneLayout, usePhoneLayout } from '@/hooks/usePhoneLayout';
+import { isPhoneOverlayOpen } from '@/hooks/usePhoneOverlayHistory';
 import { deepLinkBaseUrl, usePhoneRestore } from '@/hooks/usePhoneRestore';
 import { useResizablePanel } from '@/hooks/useResizablePanel';
 import { useDragGesture } from '@/hooks/useDragGesture';
@@ -55,7 +56,6 @@ import { isBuiltinTier } from '@/api/focus';
 import { fetchConfig, fetchSelfRepair, invalidateSelfRepair, type SelfRepairInfo } from '@/api/config';
 import { ContextInspectorPanel } from '@/components/context/ContextInspectorPanel';
 import { AskWalnutSlot, MAIN_PICK, showAskInSlot } from '@/components/chat/AskWalnutSlot';
-import { OrgChartSheet } from '@/components/org/OrgChartSheet';
 import { agentOfTask, slotAgents } from '@/components/chat/ask-walnut-slot-model';
 import { getAgentsSnapshot } from '@/stores/agents-store';
 import { log } from '@/utils/log';
@@ -1583,15 +1583,22 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     }
   }, [showOperationError, notify, navigateRef, setPanelMode]);
 
-  // ── The org chart (components/org/OrgChartSheet.tsx) ──
-  const [orgOpen, setOrgOpen] = useState(false);
-  const openOrg = useCallback(() => setOrgOpen(true), []);
-  const closeOrg = useCallback(() => setOrgOpen(false), []);
-  useEffect(() => {
-    const open = () => setOrgOpen(true);
-    window.addEventListener('org:open', open);
-    return () => window.removeEventListener('org:open', open);
-  }, []);
+  // ── The org (pages/OrgPage.tsx): a page of its own; the drawer's link goes there ──
+  const openOrg = useCallback(() => {
+    const go = () => navigateRef?.current?.('/org');
+    // On a phone the asks drawer closes through history.back(), which lands a moment later, and
+    // a push made before it lands is undone by it (usePhoneOverlayHistory.ts): go once it has.
+    if (!isPhoneLayout() || !isPhoneOverlayOpen('asks')) { go(); return; }
+    let done = false;
+    const once = () => {
+      if (done) return;
+      done = true;
+      window.removeEventListener('popstate', once);
+      setTimeout(go, 0);
+    };
+    window.addEventListener('popstate', once);
+    setTimeout(once, 1500);
+  }, [navigateRef]);
   /** Talk to an org node: Main in the chat slot; any other task in its session, or a composer bound to it. */
   const chatWithOrgNode = useCallback(async (taskId: string) => {
     if (taskId === 'main') {
@@ -1622,6 +1629,16 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       ...(task.cwd ? { cwd: task.cwd, host: null, cwdPinned: true } : {}),
     });
   }, [openSessionOrToast, showOperationError]);
+  // The org page starts a chat with a node that has no session yet through here
+  // (OrgPage navigates home in the same tick), so it opens like the chart's Chat did.
+  useEffect(() => {
+    const chat = (e: Event) => {
+      const taskId = (e as CustomEvent<{ taskId?: string }>).detail?.taskId;
+      if (taskId) void chatWithOrgNode(taskId);
+    };
+    window.addEventListener('org:chat', chat);
+    return () => window.removeEventListener('org:chat', chat);
+  }, [chatWithOrgNode]);
 
   const handleToggleSession = openSessionOrToast;
 
@@ -3392,9 +3409,6 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
           onFocusChild={handleFocusTask}
         />
       )}
-
-      {/* The org chart: Main, each project, its tasks. A page-level overlay. */}
-      {orgOpen && <OrgChartSheet onClose={closeOrg} onChat={chatWithOrgNode} />}
 
       {/* Session finder — page-level overlay so ⌘⇧O works even with the chat
           column collapsed. Opens the picked session as a home column. */}

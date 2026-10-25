@@ -1161,9 +1161,9 @@ test('the Scratchpad is a Home panel in the rail, sharing the side column with t
 
     const toggle = page.getByTestId('sidebar-toggle-scratchpad');
     // The Home panels, Scratchpad last. The Ask Walnut toggle is always there now
-    // (home-panel-flags.ts), and the org chart sits beside it.
+    // (home-panel-flags.ts), and the Org page's link sits beside it.
     await expect(page.locator('.sidebar-home-panels .sidebar-link .sidebar-label'))
-      .toHaveText(['Task panel', 'Ask Walnut', 'Org chart', 'Agenda', 'Scratchpad']);
+      .toHaveText(['Task panel', 'Ask Walnut', 'Org', 'Agenda', 'Scratchpad']);
     await expect(page.locator('.sidebar-home-panels .sidebar-link').last()).toHaveAttribute('data-testid', 'sidebar-toggle-scratchpad');
     await expect(toggle).not.toHaveClass(/\bactive\b/);
     await toggle.click();
