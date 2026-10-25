@@ -67,14 +67,22 @@ enum DesktopUpdateBridge {
     /// nil when the window list cannot be read.
     static func contentWindowCount(_ app: NSRunningApplication) -> Int? {
         guard let windows = CGWindowListCopyWindowInfo([.optionAll, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else { return nil }
-        let contentWindows = windows.filter {
-            guard ($0[kCGWindowOwnerPID as String] as? Int32) == app.processIdentifier,
+        return countContentWindows(windows, pid: app.processIdentifier)
+    }
+
+    /// Normal-layer windows bigger than a toolbar that can be seen. A fully transparent one is
+    /// AppKit's own (a popover or menu kept for reuse, measured 2026-10-25: two beside the one real
+    /// window), never a window the person could have typed into. Minimized windows and ones on
+    /// another Space keep their alpha, so they still count.
+    static func countContentWindows(_ windows: [[String: Any]], pid: Int32) -> Int {
+        windows.filter {
+            guard ($0[kCGWindowOwnerPID as String] as? Int32) == pid,
                   ($0[kCGWindowLayer as String] as? Int) == 0,
+                  ($0[kCGWindowAlpha as String] as? Double ?? 1) > 0,
                   let bounds = $0[kCGWindowBounds as String] as? [String: Any],
                   let width = bounds["Width"] as? Double, let height = bounds["Height"] as? Double else { return false }
             return width > 100 && height > 100
-        }
-        return contentWindows.count
+        }.count
     }
 
     /// Exit code 3: other windows are open and nobody checked them.

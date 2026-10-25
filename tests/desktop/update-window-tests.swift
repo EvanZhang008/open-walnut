@@ -183,6 +183,20 @@ private final class UpdateTestDelegate: AppDelegate {
         owner.popoutWatchdogs.removeValue(forKey: listedKey)
         listedWindow.close()
         print("PASS: Restart Anyway installs past unsent work without touching it")
+        // The restart helper's window count: AppKit keeps transparent popover and menu windows
+        // around; counting them told the page other windows were open when only one was.
+        let pid: Int32 = 4242
+        func cgWindow(_ w: Double, _ h: Double, alpha: Double? = 1, layer: Int = 0, owner: Int32 = 4242) -> [String: Any] {
+            var d: [String: Any] = [kCGWindowOwnerPID as String: owner, kCGWindowLayer as String: layer,
+                                    kCGWindowBounds as String: ["X": 0.0, "Y": 0.0, "Width": w, "Height": h]]
+            if let alpha { d[kCGWindowAlpha as String] = alpha }
+            return d
+        }
+        let measured = [cgWindow(1312, 822), cgWindow(156, 161, alpha: 0), cgWindow(416, 432, alpha: 0),
+                        cgWindow(1312, 26), cgWindow(84, 77, layer: 3), cgWindow(800, 600, owner: 1)]
+        precondition(DesktopUpdateBridge.countContentWindows(measured, pid: pid) == 1)
+        precondition(DesktopUpdateBridge.countContentWindows(measured + [cgWindow(900, 700, alpha: nil), cgWindow(700, 500)], pid: pid) == 3)
+        print("PASS: the restart helper counts only windows a person can see")
         precondition(!NSRunningApplication.current.isActive)
         owner.window.close()
         print("PASS: all windows stayed hidden and production was untouched")
