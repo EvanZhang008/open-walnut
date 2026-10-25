@@ -14,7 +14,9 @@
  * names the model file) instead of starting a second one. Its own
  * `--sleep-idle-seconds` unloads the model when nobody has spoken for a while, so
  * an idle daemon holds next to no memory and the next request reloads it (about
- * 8 s for 0.6B on two cores). The pid is written beside the install so a daemon
+ * 2 s for 0.6B on two cores, measured 2026-10-24). `warmup()` reloads it on
+ * purpose: a take being recorded asks for it, so the load is done before the
+ * user stops speaking. The pid is written beside the install so a daemon
  * for another model size can be retired.
  *
  * One request at a time (`-np 1`): every slot would otherwise get a fraction of
@@ -65,7 +67,10 @@ export function maxTokensFor(seconds: number): number {
 
 export function createLlamaEngine(cfg: LlamaEngineConfig): SttEngine {
   const home = cfg.home ?? llamaHome();
-  const port = cfg.port ?? DEFAULT_LLAMA_PORT;
+  // The env override is for a second, isolated server on the same box (tests);
+  // give it its own WALNUT_STT_LLAMA_HOME too, so the pid files stay apart.
+  const envPort = Number(process.env.WALNUT_STT_LLAMA_PORT);
+  const port = cfg.port ?? (Number.isInteger(envPort) && envPort > 0 && envPort < 65536 ? envPort : DEFAULT_LLAMA_PORT);
   const paths = llamaModelPaths(cfg.size, home);
   const pidFile = join(home, 'llama-server.pid');
   let child: ChildProcess | null = null;
@@ -246,6 +251,11 @@ export function createLlamaEngine(cfg: LlamaEngineConfig): SttEngine {
 
     async warmup() {
       await ensureRunning();
+      // Any task wakes a sleeping daemon; tokenizing a word is the cheapest one.
+      await fetch(`http://127.0.0.1:${port}/tokenize`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ content: 'a' }), signal: AbortSignal.timeout(30_000),
+      }).then((res) => res.body?.cancel()).catch(() => {});
     },
 
     shutdown() {

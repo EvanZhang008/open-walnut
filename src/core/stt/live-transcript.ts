@@ -4,20 +4,25 @@
  *
  * The phone sends the growing recording file in pieces (POST
  * /api/v1/stt/recordings/:id/live, { from, audio }) while the take runs. This
- * keeps the samples since the last cut, and once 20 s have gathered it cuts at
- * the quietest moment past 10 s, if that moment is a pause (a word is never cut;
- * without one it waits, up to 40 s), and hands that piece to the local engine,
- * one at a time. When the finished recording is transcribed
- * (voice-archive-transcribe.ts), the pieces already done are reused if the
- * finished file holds exactly the samples they were made from (checked by hash),
- * and only the rest is transcribed. Anything that does not line up (a gap, a
+ * keeps the samples since the last cut, and once 12 s have gathered it cuts at
+ * the quietest moment past 6 s, if that moment is a pause (a word is never cut;
+ * without one it waits, up to 24 s), and hands that piece to the local engine,
+ * one at a time. While another machine is expected to transcribe the take (the
+ * companion while the Mac answers) the pieces are only held: the engine starts
+ * on them the moment that machine is gone, so a Mac that sleeps mid-take still
+ * leaves only the end to do, and a Mac that answers costs this box no CPU.
+ * When the finished recording is transcribed (voice-archive-transcribe.ts), the
+ * pieces already done are reused if the finished file holds exactly the samples
+ * they were made from (checked by hash), and only the rest is transcribed. Anything that does not line up (a gap, a
  * different format, an engine error, a restart that lost this memory) just falls
  * back to transcribing the whole file: live is a head start, never the record.
  *
- * Held in memory only, bounded per take (the samples since the last cut, at most
- * a few pieces waiting for the engine: one that falls further behind gives no
- * head start and stops) and in the number of takes, and dropped when the phone
- * cancels the take or 30 min after its last piece.
+ * Held in memory only, bounded per take (the samples since the last cut, and at
+ * most 5 min of audio held or waiting for the engine: a take past that, an engine
+ * falling that far behind or another machine holding it that long, gives no head
+ * start and stops) and in the number of takes, and dropped when the phone
+ * cancels the take, when another machine answered it, or 30 min after its last
+ * piece.
  */
 
 import { createHash, type Hash } from 'node:crypto'
@@ -26,15 +31,15 @@ import { cafDataLayout } from './caf-to-wav.js'
 import { SAMPLE_RATE, pcmToWav, segmentBoundaries, joinSegmentTexts } from './wav-segment.js'
 
 /** A cut is made once this much is waiting... */
-export const LIVE_CUT_AT_SEC = 20
+export const LIVE_CUT_AT_SEC = 12
 /** ...at the quietest moment at least this far in. */
-export const LIVE_CUT_MIN_SEC = 10
+export const LIVE_CUT_MIN_SEC = 6
 /** Without a pause, a cut is made anyway at this length. */
-export const LIVE_CUT_MAX_SEC = 40
+export const LIVE_CUT_MAX_SEC = 24
+/** Pieces held for an engine that has not started on them yet, at most. */
+export const LIVE_MAX_HELD_SEC = 5 * 60
 /** A pause: a window under a tenth of the pending audio's mean loudness. */
 const PAUSE_RATIO = 0.1
-/** Pieces waiting for the engine before the take is given up. */
-const MAX_QUEUED = 3
 const WINDOW = SAMPLE_RATE / 10
 const MAX_TAKES = 8
 const IDLE_DROP_MS = 30 * 60_000
@@ -63,10 +68,15 @@ interface Take {
   hash: Hash
   pcmBytes: number
   segments: Segment[]
+  /** Cut pieces the engine has not been asked for yet (`eager` is still false). */
+  held: Array<{ from: number; pcm: Int16Array }>
+  heldSamples: number
+  /** This server transcribes the take now; set once, never cleared. */
+  eager: boolean
   queue: Promise<void>
   failed: string | null
-  /** Pieces handed to the engine and not done yet. */
-  queued: number
+  /** Samples handed to the engine and not done yet. */
+  queuedSamples: number
   touched: number
   language?: string
 }
@@ -99,6 +109,8 @@ function fail(id: string, take: Take, why: string): void {
   take.failed = why
   take.pending = []
   take.pendingSamples = 0
+  take.held = []
+  take.heldSamples = 0
   log.stt.info(`live transcript ${id} stops: ${why}`)
 }
 
@@ -124,27 +136,45 @@ function quietCut(pcm: Int16Array, fromSec = LIVE_CUT_MIN_SEC): { at: number; pa
   return { at: best, pause: bestEnergy <= mean * PAUSE_RATIO }
 }
 
-function schedule(id: string, take: Take, from: number, pcm: Int16Array, transcribe: LiveTranscribe): void {
-  if (take.queued >= MAX_QUEUED) {
-    fail(id, take, 'the engine falls behind the recording')
+/** Hand the held pieces to the engine, in order. */
+function release(id: string, take: Take, transcribe: LiveTranscribe): void {
+  while (take.held.length && !take.failed) {
+    const piece = take.held.shift()!
+    take.heldSamples -= piece.pcm.length
+    schedule(id, take, piece.from, piece.pcm, transcribe)
+  }
+}
+
+function hold(id: string, take: Take, from: number, pcm: Int16Array, transcribe: LiveTranscribe): void {
+  take.held.push({ from, pcm })
+  take.heldSamples += pcm.length
+  // Audio not transcribed yet, held or queued, is what this take holds in memory.
+  if (take.heldSamples + take.queuedSamples > LIVE_MAX_HELD_SEC * SAMPLE_RATE) {
+    fail(id, take, take.eager ? 'the engine falls behind the recording' : 'held too long for another machine')
     return
   }
+  if (take.eager) release(id, take, transcribe)
+}
+
+function schedule(id: string, take: Take, from: number, pcm: Int16Array, transcribe: LiveTranscribe): void {
+  // Only the WAV is kept while the piece waits: the closure below must not hold the samples too.
   const wav = pcmToWav(pcm)
-  take.queued++
+  const samples = pcm.length
+  take.queuedSamples += samples
   take.queue = take.queue.then(async () => {
     try {
       // One retry: a busy engine should not cost the whole head start.
       for (let attempt = 0; !take.failed; attempt++) {
         try {
           const text = await transcribe(wav, take.language)
-          take.segments.push({ from, to: from + pcm.length, text })
+          take.segments.push({ from, to: from + samples, text })
           return
         } catch (err) {
           if (attempt >= 1) fail(id, take, `segment failed: ${err instanceof Error ? err.message : String(err)}`)
         }
       }
     } finally {
-      take.queued--
+      take.queuedSamples -= samples
     }
   })
 }
@@ -171,7 +201,7 @@ function addSamples(id: string, take: Take, bytes: Buffer, transcribe: LiveTrans
       }
       cut = quietCut(all, all.length / SAMPLE_RATE - LIVE_CUT_AT_SEC).at
     }
-    schedule(id, take, take.cutAt, all.subarray(0, cut), transcribe)
+    hold(id, take, take.cutAt, all.slice(0, cut), transcribe)
     const rest = all.slice(cut)
     take.cutAt += cut
     take.pending = [rest]
@@ -181,13 +211,22 @@ function addSamples(id: string, take: Take, bytes: Buffer, transcribe: LiveTrans
 
 export interface LiveAck { accepted: boolean; receivedBytes: number; segments: number; reason?: string }
 
+export interface LiveOptions {
+  language?: string
+  /** This server transcribes the take now (default true). False only holds the pieces. */
+  eager?: boolean
+  /** Called once per take, when the engine is first needed: load the model while the user speaks. */
+  wake?: () => void
+}
+
 /**
  * Take one piece of the growing file. Pieces already seen are skipped; a piece
  * past the bytes received is refused with the offset to resend from.
  */
 export function appendLive(
-  id: string, from: number, bytes: Buffer, transcribe: LiveTranscribe, language?: string,
+  id: string, from: number, bytes: Buffer, transcribe: LiveTranscribe, opts: LiveOptions = {},
 ): LiveAck | { gap: true; receivedBytes: number } {
+  const language = opts.language
   let take = takes.get(id)
   if (!take) {
     if (done.has(id)) return { accepted: false, receivedBytes: 0, segments: 0, reason: 'finished' }
@@ -198,14 +237,20 @@ export function appendLive(
     }
     take = {
       fileBytes: 0, head: Buffer.alloc(0), dataStart: null, carry: null, pending: [], pendingSamples: 0,
-      cutAt: 0, hash: createHash('sha256'), pcmBytes: 0, segments: [], queue: Promise.resolve(),
-      failed: null, queued: 0, touched: Date.now(), language,
+      cutAt: 0, hash: createHash('sha256'), pcmBytes: 0, segments: [], held: [], heldSamples: 0, eager: false,
+      queue: Promise.resolve(),
+      failed: null, queuedSamples: 0, touched: Date.now(), language,
     }
     takes.set(id, take)
     sweeper ??= setInterval(sweep, 5 * 60_000)
     sweeper.unref()
   }
   take.touched = Date.now()
+  if ((opts.eager ?? true) && !take.eager && !take.failed) {
+    take.eager = true
+    opts.wake?.()
+    release(id, take, transcribe)
+  }
   if (from > take.fileBytes) return { gap: true, receivedBytes: take.fileBytes }
   const fresh = bytes.subarray(Math.min(bytes.length, take.fileBytes - from))
   if (fresh.length && !take.failed) {
@@ -258,6 +303,7 @@ export async function finishLive(
   if (!take) return null
   takes.delete(id)
   markDone(id)
+  release(id, take, transcribe)
   await take.queue
   if (take.failed) return null
   // Pieces heard in one language are not joined to an end heard in another.

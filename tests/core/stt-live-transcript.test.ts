@@ -14,7 +14,7 @@ vi.mock('../../src/constants.js', () => createMockConstants('stt-live'))
 const engine = vi.hoisted(() => vi.fn())
 vi.mock('../../src/core/stt/index.js', () => ({ transcribeAudio: engine }))
 
-import { appendLive, finishLive, dropLive, hasLiveTake, _resetLiveTakesForTest, LIVE_CUT_AT_SEC, LIVE_CUT_MIN_SEC, LIVE_CUT_MAX_SEC } from '../../src/core/stt/live-transcript.js'
+import { appendLive, finishLive, dropLive, hasLiveTake, _resetLiveTakesForTest, LIVE_CUT_AT_SEC, LIVE_CUT_MIN_SEC, LIVE_CUT_MAX_SEC, LIVE_MAX_HELD_SEC } from '../../src/core/stt/live-transcript.js'
 import { cafToWav, cafDataLayout } from '../../src/core/stt/caf-to-wav.js'
 import { wavPcm, SAMPLE_RATE } from '../../src/core/stt/wav-segment.js'
 import { voiceArchive } from '../../src/core/stt/voice-archive.js'
@@ -69,9 +69,9 @@ function fakeEngine() {
   return { fn, calls }
 }
 
-function sendAll(id: string, file: Buffer, transcribe: ReturnType<typeof fakeEngine>['fn'], piece = PIECE) {
+function sendAll(id: string, file: Buffer, transcribe: ReturnType<typeof fakeEngine>['fn'], piece = PIECE, opts = {}) {
   for (let from = 0; from < file.length; from += piece) {
-    const ack = appendLive(id, from, file.subarray(from, from + piece), transcribe)
+    const ack = appendLive(id, from, file.subarray(from, from + piece), transcribe, opts)
     expect('gap' in ack).toBe(false)
   }
 }
@@ -95,17 +95,17 @@ describe('live transcript', () => {
     const id = randomUUID()
     sendAll(id, live, fn)
     await vi.waitFor(() => expect(calls.length).toBe(3))
-    // Every live piece is between the minimum and the cut length, and ends in a silence.
+    // Every live piece ends in a silence, past the minimum and within the longest.
     for (const s of calls) {
       expect(s).toBeGreaterThanOrEqual(LIVE_CUT_MIN_SEC)
-      expect(s).toBeLessThanOrEqual(LIVE_CUT_AT_SEC)
+      expect(s).toBeLessThanOrEqual(LIVE_CUT_MAX_SEC)
     }
     const final = wavPcm(cafToWav(caf(pcm, true))!)
     const text = await finishLive(id, final, fn)
     expect(calls.length).toBe(4)
     expect(calls.reduce((a, b) => a + b, 0)).toBeCloseTo(65, 1)
-    // The end left to do is under one cut's worth.
-    expect(calls[3]).toBeLessThan(LIVE_CUT_AT_SEC)
+    // The end left to do is under the longest piece.
+    expect(calls[3]).toBeLessThan(LIVE_CUT_MAX_SEC)
     expect(text).toBe(calls.map((s) => `[${s.toFixed(1)}s]`).join(' '))
     expect(hasLiveTake(id)).toBe(false)
   })
@@ -114,10 +114,12 @@ describe('live transcript', () => {
     const { fn, calls } = fakeEngine()
     const id = randomUUID()
     sendAll(id, caf(speech(50), false), fn)
-    await vi.waitFor(() => expect(calls.length).toBe(1))
-    // No pause anywhere: one cut, made only once 40 s had gathered.
-    expect(calls[0]).toBeGreaterThan(LIVE_CUT_AT_SEC)
-    expect(calls[0]).toBeLessThanOrEqual(LIVE_CUT_MAX_SEC)
+    await vi.waitFor(() => expect(calls.length).toBe(2))
+    // No pause anywhere: each cut is made only once the longest piece had gathered.
+    for (const s of calls) {
+      expect(s).toBeGreaterThan(LIVE_CUT_AT_SEC)
+      expect(s).toBeLessThanOrEqual(LIVE_CUT_MAX_SEC)
+    }
   })
 
   it('a cancelled take stops its queued pieces, and a late piece does not start it again', async () => {
@@ -152,6 +154,51 @@ describe('live transcript', () => {
     const pcm = speech(30, [14])
     sendAll(id, caf(pcm, false), fn)
     expect(await finishLive(id, wavPcm(cafToWav(caf(pcm, true))!), fn, 'zh')).toBeNull()
+  })
+
+  it('holds the pieces while another machine is expected, and starts on them the moment it is gone', async () => {
+    const pcm = speech(65, [14, 31, 49])
+    const live = caf(pcm, false)
+    const { fn, calls } = fakeEngine()
+    const wake = vi.fn()
+    const id = randomUUID()
+    const half = Math.floor(live.length / PIECE / 2) * PIECE
+    for (let from = 0; from < half; from += PIECE) appendLive(id, from, live.subarray(from, from + PIECE), fn, { eager: false, wake })
+    await new Promise((r) => setTimeout(r, 20))
+    // The Mac answers: nothing ran on this box, nothing woke its engine.
+    expect(calls).toEqual([])
+    expect(wake).not.toHaveBeenCalled()
+    for (let from = half; from < live.length; from += PIECE) appendLive(id, from, live.subarray(from, from + PIECE), fn, { eager: true, wake })
+    // The Mac left mid-take: the engine woke once and caught up on what was held.
+    expect(wake).toHaveBeenCalledTimes(1)
+    await vi.waitFor(() => expect(calls.length).toBe(3))
+    const text = await finishLive(id, wavPcm(cafToWav(caf(pcm, true))!), fn)
+    expect(calls.length).toBe(4)
+    expect(calls.reduce((a, b) => a + b, 0)).toBeCloseTo(65, 1)
+    expect(text).toBe(calls.map((s) => `[${s.toFixed(1)}s]`).join(' '))
+  })
+
+  it('held pieces are all transcribed at finish when the Mac is gone only at the end', async () => {
+    const pcm = speech(45, [15, 30])
+    const { fn, calls } = fakeEngine()
+    const id = randomUUID()
+    sendAll(id, caf(pcm, false), fn, PIECE, { eager: false })
+    expect(calls).toEqual([])
+    const text = await finishLive(id, wavPcm(cafToWav(caf(pcm, true))!), fn)
+    expect(text).not.toBeNull()
+    expect(calls.reduce((a, b) => a + b, 0)).toBeCloseTo(45, 1)
+  })
+
+  it('a take held longer than the bound gives up instead of growing', async () => {
+    const pcm = speech(LIVE_MAX_HELD_SEC + 40, Array.from({ length: 40 }, (_, i) => 10 + i * 9))
+    const { fn, calls } = fakeEngine()
+    const id = randomUUID()
+    const live = caf(pcm, false)
+    let last: ReturnType<typeof appendLive> | undefined
+    for (let from = 0; from < live.length; from += PIECE) last = appendLive(id, from, live.subarray(from, from + PIECE), fn, { eager: false })
+    expect(last).toMatchObject({ accepted: false })
+    expect(hasLiveTake(id)).toBe(false)
+    expect(calls).toEqual([])
   })
 
   it('takes resent and odd-sized pieces without counting a byte twice', async () => {
@@ -239,7 +286,7 @@ describe('POST /api/v1/stt/recordings/:id/live, then the archive', () => {
     expect(res.status).toBe(200)
     expect(res.body.text).toBe('piece1 piece2 piece3')
     expect(seen.length).toBe(3)
-    expect(seen[2]).toBeLessThan(LIVE_CUT_AT_SEC)
+    expect(seen[2]).toBeLessThan(LIVE_CUT_MAX_SEC)
     expect((await voiceArchive.get(id)).text).toBe('piece1 piece2 piece3')
   })
 

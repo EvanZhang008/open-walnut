@@ -68,10 +68,12 @@ voiceArchiveV1Router.get('/stt/recordings/:id/audio', async (req, res, next) => 
 })
 /**
  * POST /stt/recordings/:id/live { from, audio, language? }: a piece of the file
- * while the take is still being recorded (core/stt/live-transcript.ts). Only a
- * server that transcribes takes itself takes them; any other answers
- * `accepted: false` and the phone stops sending. Every answer names
- * `receivedBytes`, the offset the phone sends from next (after a gap, a resend). Never part of the durable copy: chunks + commit still are.
+ * while the take is still being recorded (core/stt/live-transcript.ts). A server
+ * with its own engine takes them (and only holds them while the Mac is there to
+ * transcribe the take); any other answers `accepted: false` and the phone stops
+ * sending. Every answer names `receivedBytes`, the offset the phone sends from
+ * next (after a gap, a resend). Never part of the durable copy: chunks + commit
+ * still are.
  */
 voiceArchiveV1Router.post('/stt/recordings/:id/live', async (req: Request, res: Response, next: NextFunction) => {
   try {
@@ -81,13 +83,18 @@ voiceArchiveV1Router.post('/stt/recordings/:id/live', async (req: Request, res: 
     if (language !== undefined && (typeof language !== 'string' || language.length > 100)) throw new VoiceArchiveError(400, 'bad_request', 'language must be a short string')
     if (typeof audio === 'string' && audio.length > Math.ceil(VOICE_MAX_CHUNK_BYTES / 3) * 4) throw new VoiceArchiveError(413, 'too_large', 'A live piece exceeds 512KiB')
     const bytes = decodeVoiceAudio(audio)
-    const { transcribesLocally, localTranscribe } = await import('../../core/stt/voice-archive-transcribe.js')
-    if (!(await transcribesLocally())) {
+    const { liveRole, localTranscribe, wakeLocalEngine, probeMacForTake } = await import('../../core/stt/voice-archive-transcribe.js')
+    const role = await liveRole()
+    if (!role.takes) {
       res.json({ accepted: false, receivedBytes: 0, segments: 0, reason: 'not-transcribed-here' })
       return
     }
     const { appendLive } = await import('../../core/stt/live-transcript.js')
-    const ack = appendLive(id, from as number, bytes, localTranscribe, language as string | undefined)
+    // While the Mac looks there, every piece checks that it still answers.
+    if (!role.now) probeMacForTake(id)
+    const ack = appendLive(id, from as number, bytes, localTranscribe, {
+      language: language as string | undefined, eager: role.now, wake: wakeLocalEngine,
+    })
     if ('gap' in ack) {
       res.json({ accepted: true, receivedBytes: ack.receivedBytes, segments: 0, gap: true })
       return
