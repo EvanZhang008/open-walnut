@@ -458,6 +458,113 @@ describe('auth.json is never synced (data-repo gitignore)', () => {
     expect(await fsp.readFile(configPath, 'utf-8')).toContain('marina');
   });
 
+  it('sync never commits a secret file\'s crash-orphaned write temp, fresh or pre-existing', async () => {
+    // Each writer below writes a temp beside its target and renames it; a crash in
+    // between orphans the temp with the secret inside. Names copied from the writers.
+    const SECRET = '0123456789abcdef0123456789abcdef';
+    const orphans = (n: string) => [
+      `cloud-setup-job.json.tmp-4242-0a1b2c${n}`, // cloud-setup/job.ts persist(): pairing code
+      `auth.json.tmp-4242${n}`, // device-store.ts saveAuth(): device token hashes
+      `auth.json.bak.tmp-4242${n}`,
+      `auth.json.unreadable-2026-10-25T00-00-00-000Z${n}`, // set aside by setAsideUnreadable()
+      `config.yaml.tmp-4242-mh3k2${n}`, // config-manager.ts writeFileAtomic(): provider keys
+      `config.yaml.bak.tmp-4242-mh3k2${n}`,
+      `sync/.open-walnut-0a1b2c3d4e5f6a7${n}.tmp`, // writeJsonFile(): sync/ms-todo-tokens.json
+      `cache/revoke-queue/op-${n}.json`, // devices/revoke-queue.ts: token hashes
+    ];
+    const writeAll = async (n: string) => {
+      for (const rel of orphans(n)) {
+        await fsp.mkdir(path.dirname(path.join(tmpDir, rel)), { recursive: true });
+        await fsp.writeFile(path.join(tmpDir, rel), `{"secret":"${SECRET}"}`, 'utf-8');
+      }
+      await fsp.writeFile(path.join(tmpDir, 'normal.txt'), `data ${n}`, 'utf-8');
+    };
+    initSync();
+    await writeAll('1');
+    await sync();
+    let tracked = execSync('git ls-files', { cwd: tmpDir, encoding: 'utf-8' }).split('\n');
+    expect(tracked).toContain('normal.txt');
+    expect(tracked.filter((f) => orphans('1').includes(f))).toEqual([]);
+
+    // An install whose .gitignore predates these rules: the sync tick's repair adds them.
+    await fsp.writeFile(path.join(tmpDir, '.gitignore'), 'images/\n', 'utf-8');
+    execSync('git commit -qam "older gitignore"', { cwd: tmpDir });
+    await writeAll('2');
+    await sync();
+    tracked = execSync('git ls-files', { cwd: tmpDir, encoding: 'utf-8' }).split('\n');
+    expect(tracked.filter((f) => orphans('1').includes(f) || orphans('2').includes(f))).toEqual([]);
+    const repaired = (await fsp.readFile(path.join(tmpDir, '.gitignore'), 'utf-8')).split('\n');
+    expect(repaired).toEqual(expect.arrayContaining([
+      '/cloud-setup-job.json.*', '/auth.json.*', '/config.yaml.*', '.open-walnut-*.tmp', '/cache/',
+    ]));
+    expect(execSync('git log --all -p', { cwd: tmpDir, encoding: 'utf-8' })).not.toContain(SECRET);
+  });
+
+  // Walnut's caches all live at <home>/cache/; a folder the user named cache
+  // inside notes/ or memory/ is their content and must keep syncing.
+  const userCacheNotes = ['notes/dev/cache/eviction-design.md', 'memory/projects/cache/notes.md'];
+  const writeCacheFiles = async (tag: string) => {
+    for (const rel of [...userCacheNotes, `cache/revoke-queue/op-${tag}.json`]) {
+      await fsp.mkdir(path.dirname(path.join(tmpDir, rel)), { recursive: true });
+      await fsp.writeFile(path.join(tmpDir, rel), `content ${tag}`, 'utf-8');
+    }
+  };
+  const expectOnlyUserCacheTracked = (tag: string) => {
+    const tracked = execSync('git ls-files', { cwd: tmpDir, encoding: 'utf-8' }).split('\n');
+    expect(tracked).toEqual(expect.arrayContaining(userCacheNotes));
+    expect(tracked).not.toContain(`cache/revoke-queue/op-${tag}.json`);
+  };
+
+  it('a fresh install ignores the root cache/ but syncs a notes or memory folder named cache', async () => {
+    initSync();
+    const lines = (await fsp.readFile(path.join(tmpDir, '.gitignore'), 'utf-8')).split('\n');
+    expect(lines).toContain('/cache/');
+    expect(lines).not.toContain('cache/');
+    await writeCacheFiles('fresh');
+    await sync();
+    expectOnlyUserCacheTracked('fresh');
+  });
+
+  it('an install with the old unanchored cache/ line gets it re-anchored, and nothing else it wrote changes', async () => {
+    initSync();
+    // The 2026-08-10 template line, among lines the user wrote around it.
+    const before = 'images/\n# mine\nmy-cache/\ncache/\nbuild/cache/\n';
+    await fsp.writeFile(path.join(tmpDir, '.gitignore'), before, 'utf-8');
+    execSync('git commit -qam "template-era gitignore"', { cwd: tmpDir });
+    await writeCacheFiles('old');
+    await sync();
+    const after = await fsp.readFile(path.join(tmpDir, '.gitignore'), 'utf-8');
+    const lines = after.split('\n');
+    expect(lines).not.toContain('cache/');
+    expect(lines).toContain('/cache/');
+    // Only the exact old line moved; the user's own lines are as they were.
+    expect(after.startsWith('images/\n# mine\nmy-cache/\n/cache/\nbuild/cache/\n')).toBe(true);
+    expectOnlyUserCacheTracked('old');
+    ensureCriticalIgnores();
+    expect(await fsp.readFile(path.join(tmpDir, '.gitignore'), 'utf-8')).toBe(after);
+  });
+
+  it('an install older than the cache/ rule gains the anchored one and still syncs a notes folder named cache', async () => {
+    initSync();
+    await fsp.writeFile(path.join(tmpDir, '.gitignore'), 'images/\n', 'utf-8');
+    execSync('git commit -qam "pre-cache gitignore"', { cwd: tmpDir });
+    await writeCacheFiles('older');
+    await sync();
+    const lines = (await fsp.readFile(path.join(tmpDir, '.gitignore'), 'utf-8')).split('\n');
+    expect(lines).toContain('/cache/');
+    expect(lines).not.toContain('cache/');
+    expectOnlyUserCacheTracked('older');
+  });
+
+  it('the root-only temp rules leave a same-named note elsewhere alone', async () => {
+    initSync();
+    await fsp.mkdir(path.join(tmpDir, 'notes'), { recursive: true });
+    await fsp.writeFile(path.join(tmpDir, 'notes', 'config.yaml.example'), 'a: 1', 'utf-8');
+    await sync();
+    expect(execSync('git ls-files', { cwd: tmpDir, encoding: 'utf-8' }).split('\n'))
+      .toContain('notes/config.yaml.example');
+  });
+
   it('sync never commits auth.json', async () => {
     initSync();
     await fsp.writeFile(path.join(tmpDir, 'auth.json'), '{"devices":[]}', 'utf-8');

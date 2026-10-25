@@ -126,20 +126,42 @@ let startInFlight: Promise<CloudSetupJobState> | null = null
 const credentialStore = new Map<string, string>()
 /** Cached state so a GET doesn't have to hit disk on every poll. */
 let cached: CloudSetupJobState | null = null
+/**
+ * Every write, in the order persist() was called. Two writes used to be
+ * independent fs calls, so a runner's write already out when the operator
+ * cancelled could rename AFTER cancel's and leave 'running' on disk: the next
+ * server start resumed the cancelled job and provisioned a VM nobody wanted.
+ */
+let writeChain: Promise<void> = Promise.resolve()
 
 // ── Persistence ─────────────────────────────────────────────────────────────
 
-async function persist(state: CloudSetupJobState): Promise<void> {
+function persist(state: CloudSetupJobState): Promise<void> {
   state.updatedAt = new Date().toISOString()
   cached = state
+  // A failed write must not stop the ones queued behind it; its own caller sees it.
+  const write = writeChain.catch(() => {}).then(() => writeState(state))
+  writeChain = write
+  return write
+}
+
+async function writeState(state: CloudSetupJobState): Promise<void> {
   const file = jobFilePath()
   await fs.mkdir(path.dirname(file), { recursive: true })
-  // Unique per write, not just per process: two overlapping persists (a
-  // requestConfirmation landing while the step loop transitions) would
-  // otherwise share one tmp path and race the rename to ENOENT.
+  // Unique per write, not just per process: before writeChain, two overlapping
+  // persists (a requestConfirmation landing while the step loop transitions)
+  // shared one tmp path and raced the rename to ENOENT. Kept as a second guard.
   const tmp = `${file}.tmp-${process.pid}-${crypto.randomBytes(4).toString('hex')}`
-  await fs.writeFile(tmp, JSON.stringify(state, null, 2) + '\n', { mode: 0o600 })
-  await fs.rename(tmp, file)
+  // The tmp name starts with the job file's name, which is what git-sync's root
+  // `/cloud-setup-job.json.*` ignore matches: it holds the pairing code too. A crash can still orphan it; a failed write
+  // or rename must not.
+  try {
+    await fs.writeFile(tmp, JSON.stringify(state, null, 2) + '\n', { mode: 0o600 })
+    await fs.rename(tmp, file)
+  } catch (err) {
+    await fs.rm(tmp, { force: true }).catch(() => {})
+    throw err
+  }
 }
 
 async function loadFromDisk(): Promise<CloudSetupJobState | null> {
@@ -171,7 +193,14 @@ export async function deleteCloudSetupJob(): Promise<boolean> {
   credentialStore.delete(state.id)
   cached = null
   active = null
-  await fs.rm(jobFilePath(), { force: true })
+  // On the chain too: the job's terminal write may still be on its way, and
+  // landing after the rm would bring the deleted record back.
+  const remove = writeChain.catch(() => {}).then(() => fs.rm(jobFilePath(), { force: true }))
+  writeChain = remove
+  await remove
+  // A GET during that wait could have cached the old record again from disk.
+  // (The cast undoes TypeScript's narrowing from the `cached = null` above the await.)
+  if ((cached as CloudSetupJobState | null)?.id === state.id) cached = null
   return true
 }
 
@@ -315,9 +344,10 @@ async function runJob(state: CloudSetupJobState, opts: { force: boolean }): Prom
   const superseded = (): boolean => active !== handle
   /**
    * Persist only while this runner is still the current one. A cancelled or
-   * force-superseded runner must never write: its in-flight persist would land
-   * AFTER the replacement job's, clobbering the new job's state with the old
-   * job's snapshot (and undoing cancelJob's terminal write).
+   * force-superseded runner must never issue a new write: it would land AFTER
+   * the replacement job's, clobbering the new job's state with the old job's
+   * snapshot (and undoing cancelJob's terminal write). A write it issued
+   * before that is ordered ahead of theirs by writeChain.
    */
   const persistIfCurrent = async (): Promise<void> => {
     if (handle.cancelled || superseded()) return
@@ -641,4 +671,17 @@ export function _resetCloudSetupJobForTesting(): void {
   resumed = false
   startInFlight = null
   credentialStore.clear()
+}
+
+/**
+ * Test-only: wait until every write already issued has landed or failed.
+ * Production never calls it: a real restart is a new process, so the old one
+ * can never write after it, and a simulated restart must match that.
+ */
+export async function _settleCloudSetupWritesForTesting(): Promise<void> {
+  for (;;) {
+    const tail = writeChain
+    await tail.catch(() => {})
+    if (tail === writeChain) return
+  }
 }

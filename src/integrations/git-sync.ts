@@ -617,9 +617,16 @@ time-tracking/outside/
 sync/ms-todo-tokens.json
 auth.json
 auth.json.bak
+# Its write temps (auth.json.tmp-<pid>, auth.json.bak.tmp-<pid>) and the copy a
+# parse failure sets aside (auth.json.unreadable-<time>) hold the same hashes, and
+# a crash between write and rename orphans a temp. Root only.
+/auth.json.*
 # Cloud-provisioning job state — holds the pairing code (a live setup token)
 # until the new instance claims itself. Never syncs, never reaches a remote.
 cloud-setup-job.json
+# Its write temp (job.ts persist(): <file>.tmp-<pid>-<hex>), orphaned by a crash
+# between the write and the rename, holds the same code.
+/cloud-setup-job.json.*
 
 # Machine-local settings — MUST stay out of the sync history. These hold the STT
 # engine, SSH hosts and provider credentials, which differ per box. Keep in sync
@@ -632,6 +639,10 @@ cloud-setup-job.json
 # here would silently make them device-local again.
 config.yaml
 config.yaml.bak
+# Still exact: only config.yaml's own siblings, its write temps
+# (config.yaml.tmp-<pid>-<ms>, config.yaml.bak.tmp-...), which hold the same
+# provider keys and are orphaned by a crash mid-write. Root only.
+/config.yaml.*
 
 # Sync state (ephemeral)
 sync/ms-todo-delta.json
@@ -722,8 +733,9 @@ node_modules/
 # and cache/projections + cache/transcripts (the projection cache: written by
 # the exporters on the primary, bridge-pushed to the cloud; see
 # src/core/projection-cache.ts). Machine-local by definition — the bridge is
-# their transport, never git.
-cache/
+# their transport, never git. Root only: every Walnut cache lives at <home>/cache/,
+# and a folder the user named cache inside notes/ or memory/ is their content.
+/cache/
 
 # Obsidian semantic index — chunks plus a ~71MB embeddings blob, both regenerable
 # from notes/. Binary, so git stores a FULL copy per change (no delta).
@@ -819,7 +831,8 @@ sessions.json.*
  *    file, so it needs both the append and the untrack self-heal.
  *  - cloud-setup-job.json — in-flight cloud provisioning state, including the
  *    pairing code that doubles as the new instance's setup token. A live secret
- *    must never reach the sync history.
+ *    must never reach the sync history. Its write temp is a glob, so it is in
+ *    EXTRA_IGNORE_PATTERNS below, with the auth.json and config.yaml ones.
  *  - models/ — the hybrid-search embedding model cache: a 613MB ONNX file that
  *    the 30s auto-save committed on 2026-08-26 (plus eight partial-download
  *    .tmp copies, 1.3GB), and that every commit since then has carried. Not
@@ -904,6 +917,14 @@ function criticalTrackedTargets(files: string[]): Map<string, { recursive: boole
  */
 const EXTRA_IGNORE_PATTERNS = [
   'memory/**/*.bak.*', 'tmp/', 'time-tracking/outside/', '*.conflicted-*', '*.corrupt-*',
+  // Write temps and set-aside copies of the secret files above, left by a crash
+  // mid-write: they hold the same secret (see GITIGNORE_CONTENT). Root only.
+  '/auth.json.*', '/config.yaml.*', '/cloud-setup-job.json.*',
+  // Template rules since 2026-08-10 that older installs never got: every
+  // writeJsonFile() temp (sync/ms-todo-tokens.json's holds a Graph refresh token,
+  // cache/revoke-queue/'s device token hashes), and the root cache/ itself, whose
+  // revoke queue holds those hashes too.
+  '.open-walnut-*.tmp', '/cache/',
   // quiet.json: machine-local runtime state (see GITIGNORE_CONTENT), new in 2026-09.
   'quiet.json',
   // (/local/, new in 2026-09, is a CRITICAL_IGNORE_DIRS entry since 2026-10: untracked too.)
@@ -1040,9 +1061,17 @@ async function restoreNeverStagePaths(gitOpts: { cwd?: string } | undefined): Pr
 }
 
 /**
+ * Lines an older template wrote too wide, and the line that replaces each. Only
+ * a line that is exactly the old one is rewritten; nothing else the user wrote is.
+ * `cache/` (template 2026-08-10 until its anchoring) also hid every folder named
+ * cache inside notes/ and memory/ from the sync.
+ */
+const REANCHORED_LINES = new Map<string, string>([['cache/', '/cache/']]);
+
+/**
  * Append missing CRITICAL_IGNORES / EXTRA_IGNORE_PATTERNS to an existing
- * .gitignore (idempotent). Called from ensureRepo() so every boot self-heals
- * older installations.
+ * .gitignore (idempotent), after re-anchoring REANCHORED_LINES. Called from
+ * ensureRepo() so every boot self-heals older installations.
  */
 export function ensureCriticalIgnores(): void {
   const gitignorePath = path.join(WALNUT_HOME, '.gitignore');
@@ -1052,13 +1081,16 @@ export function ensureCriticalIgnores(): void {
   } catch {
     return; // no .gitignore yet — initSync writes the full template
   }
-  const lines = new Set(content.split('\n').map((l) => l.trim()));
+  const rewritten = content.split('\n').map((line) => REANCHORED_LINES.get(line) ?? line).join('\n');
+  const lines = new Set(rewritten.split('\n').map((l) => l.trim()));
   const missing = [...CRITICAL_IGNORES, ...EXTRA_IGNORE_PATTERNS].filter((entry) => !lines.has(entry));
-  if (missing.length === 0) return;
-  const suffix = (content.endsWith('\n') ? '' : '\n')
-    + '\n# Machine-local / sensitive — never synced\n'
-    + missing.join('\n') + '\n';
-  fs.writeFileSync(gitignorePath, content + suffix, 'utf-8');
+  if (missing.length === 0 && rewritten === content) return;
+  const suffix = missing.length === 0 ? '' : (
+    (rewritten.endsWith('\n') ? '' : '\n')
+    + '\n# Machine-local / sensitive: never synced\n'
+    + missing.join('\n') + '\n'
+  );
+  fs.writeFileSync(gitignorePath, rewritten + suffix, 'utf-8');
 }
 
 /**

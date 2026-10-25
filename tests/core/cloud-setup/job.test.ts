@@ -61,6 +61,7 @@ import { CONFIG_FILE, WALNUT_HOME } from '../../../src/constants.js'
 import {
   CloudSetupJobExistsError,
   _resetCloudSetupJobForTesting,
+  _settleCloudSetupWritesForTesting,
   cancelCloudSetupJob,
   deleteCloudSetupJob,
   getCloudSetupJob,
@@ -213,10 +214,67 @@ async function waitForOnDisk(
   }
 }
 
-beforeEach(async () => {
-  // Reset the runner FIRST: a leftover runner from a previous file-level failure
-  // must stop writing before the dir is wiped.
+/**
+ * Stop the runner the way a process exit does: no new write starts, and every
+ * write already out lands (or fails) before the caller goes on. Without the
+ * second half, a write of the "dead" runner could land after the caller edited
+ * the file or a resumed runner wrote it, which a real restart can never do.
+ */
+async function stopRunner(): Promise<void> {
   _resetCloudSetupJobForTesting()
+  await _settleCloudSetupWritesForTesting()
+}
+
+/**
+ * Hold the rename of the first job record matching `match`, so a test can cut
+ * the process exactly while that record is on its way to disk. `land()` lets
+ * the rename through (the process died just after it); `drop()` fails it with
+ * the file untouched (for the record, the process died just before it). `finished` settles once
+ * the held rename has really happened or failed, whatever else is queued.
+ */
+function holdJobRename(match: (s: CloudSetupJobState) => boolean): {
+  held: Promise<void>
+  finished: Promise<void>
+  /** The held write's temp file, once held. */
+  tmpPath: () => string | undefined
+  land: () => void
+  drop: () => void
+} {
+  let heldFrom: string | undefined
+  let markHeld!: () => void
+  const held = new Promise<void>((resolve) => { markHeld = resolve })
+  let markFinished!: () => void
+  const finished = new Promise<void>((resolve) => { markFinished = resolve })
+  let decide!: (lands: boolean) => void
+  const decision = new Promise<boolean>((resolve) => { decide = resolve })
+  let taken = false
+  const rename = fs.rename.bind(fs)
+  const spy = vi.spyOn(fs, 'rename').mockImplementation(async (from, to) => {
+    if (to === jobFile() && !taken) {
+      const state = JSON.parse(await fs.readFile(from, 'utf-8')) as CloudSetupJobState
+      if (match(state)) {
+        taken = true
+        heldFrom = String(from)
+        markHeld()
+        try {
+          if (!(await decision)) throw new Error('test: the process died before this rename')
+          return await rename(from, to)
+        } finally {
+          markFinished()
+        }
+      }
+    }
+    return rename(from, to)
+  })
+  // Always freed, so a failing case cannot leave later writes queued behind it.
+  restores.push(() => { decide(true); spy.mockRestore() })
+  return { held, finished, tmpPath: () => heldFrom, land: () => decide(true), drop: () => decide(false) }
+}
+
+beforeEach(async () => {
+  // Stop the runner FIRST: a leftover runner from a previous file-level failure
+  // must stop writing before the dir is wiped.
+  await stopRunner()
   await wipeHome()
   gitCalls.initSync = []; gitCalls.syncCount = 0; gitCalls.lsRemote = 0
   cloudRemote = null
@@ -239,6 +297,7 @@ beforeEach(async () => {
 afterEach(async () => {
   _resetCloudSetupJobForTesting()
   while (restores.length) restores.pop()?.()
+  await _settleCloudSetupWritesForTesting()
   vi.unstubAllGlobals()
   await fs.rm(WALNUT_HOME, { recursive: true, force: true }).catch(() => {})
 })
@@ -383,11 +442,13 @@ describe('manual driver (awaiting-input)', () => {
 
 describe('crash-resume', () => {
   /**
-   * Simulates a process restart: drop all in-memory runner state (the file is
-   * the only thing that survives), then resume from disk.
+   * Simulates a process restart: drop all in-memory runner state, let the writes
+   * the old process already issued land (the file is the only thing that
+   * survives, and the old process never writes after the new one starts), then
+   * resume from disk.
    */
   async function restart(): Promise<void> {
-    _resetCloudSetupJobForTesting()
+    await stopRunner()
     await resumeCloudSetupJobIfAny()
   }
 
@@ -463,8 +524,9 @@ describe('crash-resume', () => {
     it(`resuming right after ${boundary} still reaches done exactly once`, async () => {
       const driver = useDriver(makeAutoDriver())
       await startCloudSetupJob({ provider: 'aws', domainMode: 'own-domain', domain: ORIGIN })
-      // Cut the runner as soon as this boundary's step has been recorded done.
-      await waitFor((s) => s.steps[boundary].status === 'done' || s.status === 'done', `${boundary} done`)
+      // Cut the runner as soon as this boundary's step is recorded done ON DISK:
+      // the in-memory state runs ahead of the file, and a restart reads the file.
+      await waitForOnDisk((s) => s.steps[boundary].status === 'done' || s.status === 'done', `${boundary} done on disk`)
       await restart()
       const done = await waitFor((s) => s.status === 'done' || s.status === 'failed', `terminal after ${boundary}`)
 
@@ -477,22 +539,191 @@ describe('crash-resume', () => {
   }
 
   it('generate reuses the pairing code already baked into a booting VM', async () => {
-    useDriver(makeAutoDriver())
+    const driver = useDriver(makeAutoDriver())
     box.bootedAfter = 10_000
     await startCloudSetupJob({ provider: 'aws', domainMode: 'own-domain', domain: ORIGIN })
-    const first = await waitFor((s) => s.pairingCode != null, 'a pairing code')
-    const code = first.pairingCode
+    // On disk, not in memory: a code only in memory dies with the process (that
+    // case, where regenerating is right, is pinned separately below).
+    await waitForOnDisk((s) => s.steps['await-server'].status === 'running', 'a booting VM on disk')
+    await stopRunner()
+    const state = JSON.parse(await fs.readFile(jobFile(), 'utf-8')) as CloudSetupJobState
+    const code = state.pairingCode
+    expect(code).toMatch(/^[0-9a-f]{32}$/)
+    expect(driver.createVMCalls[0].userData).toContain(code)
+    // Make the resumed job re-enter generate and provision, so the reuse is what
+    // is tested: generate runs again while a code is set, and the box it asks
+    // the driver for must carry that same code.
+    state.currentStep = 'generate'
+    state.steps.generate = { status: 'running' }
+    state.steps.provision = { status: 'pending' }
+    await fs.writeFile(jobFile(), JSON.stringify(state))
+
+    await resumeCloudSetupJobIfAny()
+    await vi.waitFor(() => expect(driver.createVMCalls).toHaveLength(2), { timeout: 10_000 })
+    expect((await getCloudSetupJob())?.pairingCode).toBe(code)
+    expect(driver.createVMCalls[1].userData).toBe(driver.createVMCalls[0].userData)
+    await cancelCloudSetupJob()
+  })
+
+  // The cases below cut the process at an exact write with holdJobRename,
+  // so the window the timing-based cases above only hit by chance is forced
+  // every run: both ways a crash can fall around one rename.
+
+  it('a restart while the pairing code is still being written resumes with that code', async () => {
+    const driver = useDriver(makeAutoDriver())
+    box.bootedAfter = 10_000
+    const hold = holdJobRename((s) => s.pairingCode != null)
+    await startCloudSetupJob({ provider: 'aws', domainMode: 'own-domain', domain: ORIGIN })
+    await hold.held
+    const code = (await getCloudSetupJob())?.pairingCode
+    expect(code).toMatch(/^[0-9a-f]{32}$/)
+
+    const restarted = restart()
+    hold.land() // the process died just after this record reached disk
+    await restarted
+    await vi.waitFor(() => expect(driver.createVMCalls).toHaveLength(1), { timeout: 10_000 })
+    expect(driver.createVMCalls[0].userData).toContain(code)
+    expect((await waitForOnDisk((s) => s.pairingCode != null, 'a code on disk')).pairingCode).toBe(code)
+    await cancelCloudSetupJob()
+  })
+
+  it('a pairing code that never reached disk was never given to a VM, so a new one is right', async () => {
+    const driver = useDriver(makeAutoDriver())
+    box.bootedAfter = 10_000
+    const hold = holdJobRename((s) => s.pairingCode != null)
+    await startCloudSetupJob({ provider: 'aws', domainMode: 'own-domain', domain: ORIGIN })
+    await hold.held
+    const lost = (await getCloudSetupJob())?.pairingCode
+    expect(lost).toMatch(/^[0-9a-f]{32}$/)
+    // generate's record is awaited before provision starts, so no VM has it.
+    expect(driver.createVMCalls).toHaveLength(0)
+
+    // The temp that holds the code sits beside the job file and starts with its
+    // name, which git-sync's root `/cloud-setup-job.json.*` rule ignores, so a
+    // crash orphan never syncs.
+    const tmp = hold.tmpPath()
+    expect(path.dirname(tmp ?? '')).toBe(WALNUT_HOME)
+    expect(path.basename(tmp ?? '')).toMatch(/^cloud-setup-job\.json\.tmp-\d+-[0-9a-f]{8}$/)
+    expect(await fs.readFile(tmp!, 'utf-8')).toContain(lost)
+
+    const restarted = restart()
+    hold.drop() // the process died just before this record reached disk
+    await restarted
+    // A rename that fails while the process lives removes its temp.
+    await expect(fs.access(tmp!)).rejects.toThrow()
+    await vi.waitFor(() => expect(driver.createVMCalls).toHaveLength(1), { timeout: 10_000 })
+    const onDisk = await waitForOnDisk((s) => s.pairingCode != null, 'a code on disk')
+    expect(onDisk.pairingCode).not.toBe(lost)
+    // The one VM carries the code the job will claim with, never the lost one.
+    expect(driver.createVMCalls[0].userData).toContain(onDisk.pairingCode)
+    expect(driver.createVMCalls[0].userData).not.toContain(lost)
+    await cancelCloudSetupJob()
+  })
+
+  it('a restart while "provision done" is still being written does not call createVM again', async () => {
+    const driver = useDriver(makeAutoDriver())
+    const hold = holdJobRename((s) => s.steps.provision.status === 'done')
+    await startCloudSetupJob({ provider: 'aws', domainMode: 'own-domain', domain: ORIGIN })
+    await hold.held
+    expect(driver.createVMCalls).toHaveLength(1)
+
+    const restarted = restart()
+    hold.land()
+    await restarted
+    const done = await waitFor((s) => s.status === 'done' || s.status === 'failed', 'terminal state')
+    expect(done.status, done.error ?? '').toBe('done')
+    expect(driver.createVMCalls).toHaveLength(1)
+    expect(box.claimCalls).toHaveLength(1)
+  })
+
+  it('a crash before "provision done" lands re-asks the driver for the SAME VM, so an adopting driver keeps one', async () => {
+    // createVM returned, then the process died before the step was durable. The
+    // resumed job cannot know a VM exists, so it calls createVM again: by design,
+    // every driver adopts what that call names (aws: the one fixed CDK stack;
+    // hetzner, azure, gcp: an existing server of that name), see their tests.
+    // What the JOB owes them is the same name and the same boot script, so the
+    // adopted box still holds the pairing code the claim will use.
+    const cloud = new Map<string, { ip: string; instanceRef: string }>()
+    const base = makeAutoDriver()
+    const calls: CreateVMParams[] = []
+    const driver: FakeDriver = {
+      ...base,
+      createVMCalls: calls,
+      createVM: async (params) => {
+        calls.push(params)
+        let vm = cloud.get(params.name)
+        if (!vm) {
+          vm = { ip: '203.0.113.10', instanceRef: `i-fake-${cloud.size + 1}` }
+          cloud.set(params.name, vm)
+        }
+        return { ...vm, domain: params.domain as string }
+      },
+    }
+    useDriver(driver)
+    const hold = holdJobRename((s) => s.steps.provision.status === 'done')
+    await startCloudSetupJob({ provider: 'aws', domainMode: 'own-domain', domain: ORIGIN })
+    await hold.held
+
+    const restarted = restart()
+    hold.drop()
+    await restarted
+    const done = await waitFor((s) => s.status === 'done' || s.status === 'failed', 'terminal state')
+    expect(done.status, done.error ?? '').toBe('done')
+    expect(calls).toHaveLength(2)
+    expect(calls[1].name).toBe(calls[0].name)
+    expect(calls[1].userData).toBe(calls[0].userData)
+    expect(cloud.size).toBe(1)
+    expect(done.instanceRef).toBe('i-fake-1')
+    expect(box.claimCalls).toHaveLength(1)
+  })
+
+  it('a cancel while a runner write is still out stays cancelled on disk, so a restart provisions nothing', async () => {
+    // Product bug this pins: the runner's "provision running" write was already
+    // out when the operator cancelled. Its rename landed AFTER cancel's, the file
+    // said 'running' again, and the next server start resumed the job into createVM.
+    const driver = useDriver(makeAutoDriver())
+    const hold = holdJobRename((s) => s.status === 'running' && s.steps.provision.status === 'running')
+    await startCloudSetupJob({ provider: 'aws', domainMode: 'own-domain', domain: ORIGIN })
+    await hold.held
+
+    const cancelled = cancelCloudSetupJob()
+    // Give cancel's own write every chance to land first, as it could before.
+    await Promise.race([cancelled, new Promise((r) => setTimeout(r, 200))])
+    hold.land()
+    await hold.finished
+    await cancelled
+    await _settleCloudSetupWritesForTesting()
+    const onDisk = JSON.parse(await fs.readFile(jobFile(), 'utf-8')) as CloudSetupJobState
+    expect(onDisk.status).toBe('cancelled')
 
     await restart()
-    const after = await waitFor((s) => s.pairingCode != null, 'a pairing code after restart')
-    expect(after.pairingCode).toBe(code)
-    await cancelCloudSetupJob()
+    await new Promise((r) => setTimeout(r, 100))
+    expect(driver.createVMCalls).toHaveLength(0)
+    expect((await getCloudSetupJob())?.status).toBe('cancelled')
+  })
+
+  it('a delete while the terminal write is still out does not bring the record back', async () => {
+    useDriver(makeAutoDriver())
+    const hold = holdJobRename((s) => s.status === 'done')
+    await startCloudSetupJob({ provider: 'aws', domainMode: 'own-domain', domain: ORIGIN })
+    await hold.held
+    // The cache already says done, so a GET shows it and DELETE is allowed.
+    expect((await getCloudSetupJob())?.status).toBe('done')
+
+    const deleted = deleteCloudSetupJob()
+    await Promise.race([deleted, new Promise((r) => setTimeout(r, 200))])
+    hold.land()
+    await hold.finished
+    expect(await deleted).toBe(true)
+    await _settleCloudSetupWritesForTesting()
+    await expect(fs.access(jobFile())).rejects.toThrow()
+    expect(await getCloudSetupJob()).toBeNull()
   })
 
   it('a terminal job is not resumed', async () => {
     useDriver(makeAutoDriver())
     await startCloudSetupJob({ provider: 'aws', domainMode: 'own-domain', domain: ORIGIN })
-    await waitFor((s) => s.status === 'done', 'done')
+    await waitForOnDisk((s) => s.status === 'done', 'done on disk')
     const before = box.claimCalls.length
     await restart()
     await new Promise((r) => setTimeout(r, 50))
@@ -518,7 +749,7 @@ describe('crash-resume', () => {
     // Stop the runner BEFORE editing the file, or it keeps advancing and
     // overwrites the edit (the state file has exactly one writer by design).
     const state = await waitForOnDisk((s) => s.steps['await-server'].status === 'running', 'runner waiting for server on disk')
-    _resetCloudSetupJobForTesting()
+    await stopRunner()
     // Rewind to a not-yet-provisioned job, then restart: the credential lived
     // only in memory, so it cannot silently be reused.
     state.currentStep = 'provision'
@@ -550,7 +781,7 @@ describe('crash-resume', () => {
     await waitFor((s) => s.steps.provision.status === 'done', 'provision done')
 
     const state = await waitForOnDisk((s) => s.steps['await-server'].status === 'running', 'runner waiting for server on disk')
-    _resetCloudSetupJobForTesting()
+    await stopRunner()
     state.currentStep = 'provision'
     state.steps.provision = { status: 'pending' }
     state.status = 'running'
@@ -588,7 +819,7 @@ describe('crash-resume', () => {
     box.bootedAfter = 10_000
     await startCloudSetupJob({ provider: 'aws', domainMode: 'own-domain', domain: ORIGIN })
     await waitForOnDisk((s) => s.steps.provision.status === 'done', 'provision done on disk')
-    _resetCloudSetupJobForTesting()
+    await stopRunner()
 
     box.bootedAfter = 0
     await resumeCloudSetupJobIfAny()
@@ -612,14 +843,14 @@ describe('crash-resume', () => {
 
     // Reload from disk only — the in-memory handle that used to hold `force` is
     // gone, so a retry has nothing but the file to learn the consent from.
-    _resetCloudSetupJobForTesting()
+    await stopRunner()
     const reloaded = await getCloudSetupJob()
     expect(reloaded?.force).toBe(true)
     reloaded!.status = 'failed'
     reloaded!.currentStep = 'preflight'
     reloaded!.steps.preflight = { status: 'error', error: 'boom' }
     await fs.writeFile(jobFile(), JSON.stringify(reloaded))
-    _resetCloudSetupJobForTesting()
+    await stopRunner()
 
     box.bootedAfter = 0
     await retryCloudSetupJob()
@@ -667,6 +898,29 @@ describe('dns step', () => {
     await cancelCloudSetupJob()
   })
 
+  it('the prompt\'s fire-and-forget write cannot land after the answer\'s', async () => {
+    // requestConfirmation persists without awaiting. Held, it used to rename
+    // after the operator's answer was already on disk, putting the prompt back
+    // there: a restart then showed a question that had been answered.
+    useDriver(makeAutoDriver({ ip: '203.0.113.10' }))
+    const hold = holdJobRename((s) => s.awaitingInput?.kind === 'dns-confirm')
+    await startCloudSetupJob({ provider: 'aws', domainMode: 'own-domain', domain: UNRESOLVABLE })
+    await hold.held
+
+    const answered = provideCloudSetupInput({ confirmDnsSkip: true })
+    // Give the answer's own write every chance to land first, as it could before.
+    await Promise.race([answered, new Promise((r) => setTimeout(r, 200))])
+    hold.land()
+    await hold.finished
+    await answered
+    await _settleCloudSetupWritesForTesting()
+    const onDisk = JSON.parse(await fs.readFile(jobFile(), 'utf-8')) as CloudSetupJobState
+    expect(onDisk.status).not.toBe('awaiting-input')
+    expect(onDisk.awaitingInput).toBeUndefined()
+    await waitFor((s) => s.currentStep !== 'dns', 'the job to leave the dns step')
+    await cancelCloudSetupJob()
+  })
+
   it('a confirmation arriving after a restart still advances the job', async () => {
     useDriver(makeAutoDriver({ ip: '203.0.113.10' }))
     await startCloudSetupJob({ provider: 'aws', domainMode: 'own-domain', domain: UNRESOLVABLE })
@@ -677,7 +931,7 @@ describe('dns step', () => {
 
     // Simulate the restart: the polling runner is gone, so there is nothing left
     // to observe an in-memory "confirmed" flag.
-    _resetCloudSetupJobForTesting()
+    await stopRunner()
     await resumeCloudSetupJobIfAny() // awaiting-input → no runner re-armed
 
     await provideCloudSetupInput({ confirmDnsSkip: true })
@@ -1076,7 +1330,7 @@ describe('engine + Bedrock region reach the boot script', () => {
     const driver = useDriver(makeAutoDriver({ failFirst: true }))
     await startCloudSetupJob({ provider: 'aws', domainMode: 'own-domain', domain: ORIGIN })
     const failed = await waitForOnDisk((s) => s.status === 'failed', 'the first provision to fail')
-    _resetCloudSetupJobForTesting()
+    await stopRunner()
     delete failed.engine
     delete failed.bedrockRegion
     await fs.writeFile(jobFile(), JSON.stringify(failed), 'utf-8')
