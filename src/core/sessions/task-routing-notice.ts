@@ -162,3 +162,26 @@ export async function noteTaskRoutingStatedByHook(record: SessionRecord): Promis
     await recordTold(record.claudeSessionId, notedOf(record, { byHookAt: new Date().toISOString() }));
   } catch { /* told again on the next line */ }
 }
+
+/**
+ * The host slice's view (host-slice.ts): the notice and a key naming this "due"
+ * (rules version, prompt, compaction), only while the session is not told. The
+ * host delivers same-host messages itself (offline-host-core.ts handleLocal), so
+ * it adds the notice once per key and journals the key with that delivery.
+ */
+export function taskRoutingForHost(record: RoutingRecord, task: Pick<Task, 'org_role'>): { policy: string; due: string } | null {
+  const policy = taskRoutingPolicyFor(record, task);
+  return policy ? { policy, due: hash(JSON.stringify(notedOf(record))) } : null;
+}
+
+/** A host journaled a delivery led by the notice under `due`: told, if that is still what was due. Never throws. */
+export async function noteTaskRoutingToldByHost(sessionId: string, due: string): Promise<void> {
+  try {
+    const found = await lookup(sessionId);
+    if (!found || hash(JSON.stringify(notedOf(found.record))) !== due) return;
+    claims.delete(sessionId);
+    await recordTold(sessionId, notedOf(found.record));
+  } catch (error) {
+    log.session.warn('Task routing rules: host delivery not recorded', { sessionId, error: String(error) });
+  }
+}

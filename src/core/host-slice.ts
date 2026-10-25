@@ -19,7 +19,7 @@ import type { OfflineSliceBoard } from '../providers/offline-board-core.js';
 import type { SessionRecord, Task } from './types.js';
 import { isInfraSessionError } from './session-error-kind.js';
 import { engineCaps } from './agents/engine-registry.js';
-import { taskRoutingPolicyFor } from './sessions/task-routing-notice.js';
+import { taskRoutingForHost } from './sessions/task-routing-notice.js';
 
 /** Newest sessions kept per host; the daemon intersects with what it runs. */
 const MAX_SESSIONS = 200;
@@ -237,8 +237,9 @@ export async function buildHostSlice(hostKey: string, now = Date.now()): Promise
       sid: s.claudeSessionId,
       ...(() => {
         const task = s.taskId ? own.get(s.taskId) : undefined;
-        const policy = task ? taskRoutingPolicyFor(s, task, { ignoreTold: true }) : null;
-        return policy ? { taskRoutingPolicy: policy } : {};
+        // Only while due: the host adds it once and journals it as told.
+        const routing = task ? taskRoutingForHost(s, task) : null;
+        return routing ? { taskRoutingPolicy: routing.policy, taskRoutingDue: routing.due } : {};
       })(),
       ...(s.taskId ? { taskId: s.taskId } : {}),
       ...(s.title ? { title: s.title } : {}),

@@ -43,7 +43,11 @@ import type { LetterCheck } from '../core/human-inbox/letter-check.js'
  * `noResume`: a session the server would never wake for a trigger (an error of its own making, another
  * agent's engine), so this host does not resume it either.
  */
-export interface OfflineSliceSession { sid: string; taskId?: string; title?: string; aside?: boolean; noResume?: boolean; taskRoutingPolicy?: string }
+export interface OfflineSliceSession {
+  sid: string; taskId?: string; title?: string; aside?: boolean; noResume?: boolean
+  /** The routing notice for an older Main or lead, sent only while it is due, and the key naming that (task-routing-notice.ts). */
+  taskRoutingPolicy?: string; taskRoutingDue?: string
+}
 
 export interface OfflineSliceTask {
   id: string
@@ -151,7 +155,7 @@ export interface OfflineRequestRow {
 export type OfflineRecord =
   | { seq: number; at: number; online?: true; kind: 'row'; row: OfflineRequestRow }
   | { seq: number; at: number; online?: true; kind: 'settle'; requestId: string; status: 'replied' }
-  | { seq: number; at: number; online?: true; kind: 'delivery'; fromSessionId: string; toSessionId: string; toTaskId?: string; messageId: string; requestId?: string; reply?: boolean }
+  | { seq: number; at: number; online?: true; kind: 'delivery'; fromSessionId: string; toSessionId: string; toTaskId?: string; messageId: string; requestId?: string; reply?: boolean; routingTold?: string }
   /**
    * `base`: the copy's updated_at for that task when the write was queued (the server's clock).
    * `trigger`: for a trigger pause, resume or delete made here, the trigger as this host ran it,
@@ -517,6 +521,12 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
   ): import('./offline-journal-core.js').AppendResult {
     const kind = (record as { kind: string }).kind
     if (kind === 'row' || kind === 'settle') journal.markDirty(home)
+    // A delivery this host led with the routing notice tells the server it was said.
+    if (kind === 'delivery') {
+      const mid = (record as { messageId?: unknown }).messageId
+      const due = typeof mid === 'string' ? routedMids.get(mid) : undefined
+      if (due) { routedMids.delete(mid as string); (record as { routingTold?: string }).routingTold = due }
+    }
     const callerSid = (record as { callerSid?: unknown }).callerSid
     const actor = opts.actor ?? (typeof callerSid === 'string' && callerSid ? { kind: 'session' as const, sid: callerSid } : undefined)
     const r = journal.append(home, record as unknown as Record<string, unknown>, {
@@ -834,23 +844,53 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     return slices.get(home)?.sessions.find((s) => s.sid === sid) ?? startedOf(home).find((s) => s.sid === sid)
   }
 
-  function withTaskRouting(home: string, sid: string, text: string): string {
-    const policy = sessionOf(home, sid)?.taskRoutingPolicy
+  /** sid -> the due key this host already led a delivery with (task-routing-notice.ts). */
+  const routingTold = new Map<string, string>()
+  /** messageId -> due key, until that delivery's record is journaled (append). */
+  const routedMids = new Map<string, string>()
+
+  /**
+   * The text an older Main or lead gets: led by the routing notice while the
+   * server says it is due and this host has not delivered it under that key.
+   * `restate` (the compaction hook) states it whatever was said before.
+   */
+  function withTaskRouting(home: string, sid: string, text: string, restate = false): { text: string; due?: string } {
+    const row = sessionOf(home, sid)
+    const policy = row?.taskRoutingPolicy
+    const due = row?.taskRoutingDue
     // A slash command runs only when the raw input starts with "/".
-    if (!policy || text.trimStart().startsWith('/')) return text
+    if (!policy || !due || text.trimStart().startsWith('/')) return { text }
+    if (!restate && routingTold.get(sid) === due) return { text }
     let rest = text.trimStart()
     while (rest.startsWith('<walnut-message ')) {
       const end = rest.indexOf('</walnut-message>')
       if (end < 0) break
       const envelope = rest.slice(0, end + '</walnut-message>'.length)
-      if (envelope === policy) return text
+      if (envelope === policy) return { text }
       rest = rest.slice(end + '</walnut-message>'.length).trimStart()
     }
-    return `${policy}\n\n${text}`
+    return restate ? { text: `${policy}\n\n${text}` } : { text: `${policy}\n\n${text}`, due }
   }
 
-  const deliverWithTaskRouting = (home: string, sid: string, text: string, messageId: string) =>
-    deps.deliver(sid, withTaskRouting(home, sid, text), messageId)
+  function markRouted(sid: string, messageId: string, due: string): void {
+    routingTold.set(sid, due)
+    routedMids.set(messageId, due)
+    if (routedMids.size > 200) routedMids.delete(routedMids.keys().next().value as string)
+  }
+
+  async function deliverWithTaskRouting(home: string, sid: string, text: string, messageId: string): Promise<DeliverResult> {
+    const routed = withTaskRouting(home, sid, text)
+    const delivered = await deps.deliver(sid, routed.text, messageId)
+    if (delivered.ok && routed.due) markRouted(sid, messageId, routed.due)
+    return delivered
+  }
+
+  async function resumeWithTaskRouting(home: string, sid: string, text: string, messageId: string, taskId: string): Promise<DeliverResult> {
+    const routed = withTaskRouting(home, sid, text)
+    const resumed = await deps.resume!(home, sid, routed.text, messageId, taskId)
+    if (resumed.ok && routed.due) markRouted(sid, messageId, routed.due)
+    return resumed
+  }
 
   function callerIdentity(home: string, sid: string): { title: string; taskId?: string } {
     const row = sessionOf(home, sid)
@@ -1048,7 +1088,7 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     }
     const text = deps.openItems!.format(items, now)
     if (args.hook === 'compact') {
-      const context = withTaskRouting(home, callerSid, text)
+      const context = withTaskRouting(home, callerSid, text, true).text
       return ok(context ? { hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: context } } : {})
     }
     return ok({
@@ -2090,7 +2130,7 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     if (roomFor(home)) return { ok: false, reason: 'this host\'s journal for the Walnut server is full' }
     let resumed: DeliverResult
     try {
-      resumed = await deps.resume(home, pick.sid, withTaskRouting(home, pick.sid, text), messageId, taskId)
+      resumed = await resumeWithTaskRouting(home, pick.sid, text, messageId, taskId)
     } catch (err) {
       return { ok: false, reason: (err as Error).message }
     }
@@ -2212,7 +2252,7 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
         if (full) return full
         const mid = messageId(given)
         const taskId = sessionOf(home, sid)?.taskId ?? ''
-        const resumed = await deps.resume(home, sid, withTaskRouting(home, sid, body), mid, taskId)
+        const resumed = await resumeWithTaskRouting(home, sid, body, mid, taskId)
         if (!resumed.ok) return fail('not_running', `this session is stopped and could not be started again here: ${resumed.reason}`)
         append(home, { kind: 'resume', sid, ...(taskId ? { taskId } : {}), messageId: mid })
         deps.log('info', 'offline host: a person\'s message resumed a stopped session while no server leads', { home, sid, taskId, messageId: mid })

@@ -31,7 +31,7 @@ function fixture(dir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-routing-hos
     resume: async (_home, sid, text, messageId) => { writes.push({ sid, text, messageId, resumed: true }); return { ok: true }; },
   });
   const slice: HostSlice = { v: 1, home, hash: 'policy-one', asOf: Date.now(), host: 'fixture',
-    sessions: [{ sid: mainSid, taskId: 'main-task', taskRoutingPolicy: policy }, { sid: workerSid, taskId: 'work-task' }],
+    sessions: [{ sid: mainSid, taskId: 'main-task', taskRoutingPolicy: policy, taskRoutingDue: 'due-one' }, { sid: workerSid, taskId: 'work-task' }],
     tasks: [{ id: 'main-task', title: 'Main', phase: 'IN_PROGRESS', project: 'Ask Walnut' },
       { id: 'work-task', title: 'Sorting', phase: 'IN_PROGRESS', project: 'Mobile' }], requests: [] };
   host.configure(slice);
@@ -40,29 +40,44 @@ function fixture(dir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-routing-hos
 afterEach(() => { for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true }); });
 
 describe('host-local routing policy from the receiving host slice', () => {
-  it('local peers, replies and humans get the rule; normal workers do not', async () => {
+  it('the first same-host delivery carries the rule once, journaled as told; workers never get it', async () => {
     const f = fixture();
     const sent = await local(f.host, workerSid, { to: 'main-task', text: 'User asked for independent descriptions', expect_reply: false });
     expect(sent?.ok).toBe(true);
     expect(f.writes[0].text.startsWith(policy)).toBe(true);
+    // The next deliveries to the same session, whoever sends them, do not repeat it.
     await f.host.deliverHuman(home, mainSid, 'A new user goal', 'qm-human-one');
-    expect(f.writes[1].text.startsWith(policy)).toBe(true);
+    expect(f.writes[1].text).toBe('A new user goal');
     await f.host.deliverHuman(home, workerSid, 'A sorting follow-up', 'qm-worker-one');
     expect(f.writes[2].text).toBe('A sorting follow-up');
     const ask = await local(f.host, mainSid, { to: 'work-task', text: 'Evidence only' });
-    expect(ask?.ok).toBe(true);
     const id = ask!.ok ? ask!.result.requestId : '';
     await local(f.host, workerSid, { in_reply_to: id, text: 'Evidence reply' });
-    expect(f.writes.at(-1)?.text.startsWith(policy)).toBe(true);
+    expect(f.writes.at(-1)?.text.startsWith(policy)).toBe(false);
+    // The server learns it from the journal: only the led delivery names the key.
+    const told = f.host.drain(home).records.filter((r) => r.kind === 'delivery' && (r as { routingTold?: string }).routingTold);
+    expect(told).toHaveLength(1);
+    expect(told[0]).toMatchObject({ toSessionId: mainSid, routingTold: 'due-one' });
   });
 
-  it('restart and an offline compact keep rules even after the server was told', async () => {
+  it('a new due key (after a compaction or a new prompt) carries it once more', async () => {
+    const f = fixture();
+    await f.host.deliverHuman(home, mainSid, 'first', 'qm-a');
+    await f.host.deliverHuman(home, mainSid, 'second', 'qm-b');
+    f.host.configure({ ...f.slice, hash: 'policy-two', sessions: [{ sid: mainSid, taskId: 'main-task', taskRoutingPolicy: policy, taskRoutingDue: 'due-two' }, { sid: workerSid, taskId: 'work-task' }] });
+    await f.host.deliverHuman(home, mainSid, 'third', 'qm-c');
+    await f.host.deliverHuman(home, mainSid, 'fourth', 'qm-d');
+    expect(f.writes.map((w) => w.text.startsWith(policy))).toEqual([true, false, true, false]);
+  });
+
+  it('an offline compact restates the rules even after this host delivered them', async () => {
     const first = fixture();
     await first.host.deliverHuman(home, mainSid, 'first', 'qm-before');
-    const restarted = fixture(first.dir);
-    const compact = await restarted.host.handle(home, mainSid, 'tools.call', { name: 'open_items', args: { hook: 'compact' } });
+    const compact = await first.host.handle(home, mainSid, 'tools.call', { name: 'open_items', args: { hook: 'compact' } });
     expect(compact.ok && (compact.result as any).hookSpecificOutput.additionalContext).toContain(TASK_ROUTING_CONTRACT);
-    await restarted.host.deliverHuman(home, mainSid, 'after compact', 'qm-after');
+    // A restarted host has no memory of it: one more copy at worst, never silence.
+    const restarted = fixture(first.dir);
+    await restarted.host.deliverHuman(home, mainSid, 'after restart', 'qm-after');
     expect(restarted.writes[0].text.startsWith(policy)).toBe(true);
   });
 
@@ -76,6 +91,7 @@ describe('host-local routing policy from the receiving host slice', () => {
     const f = fixture();
     await f.host.deliverHuman(home, mainSid, `${policy}\n\nUser goal`, 'qm-formal');
     expect(f.writes[0].text.split(policy)).toHaveLength(2);
+    // A formal leading copy counts as not added here: the next message still gets one.
     await f.host.deliverHuman(home, mainSid, `Here is a quote:\n${policy}\nNot configuration`, 'qm-quote');
     expect(f.writes[1].text.startsWith(policy)).toBe(true);
     expect(f.writes[1].text.split(policy)).toHaveLength(3);
@@ -88,13 +104,20 @@ describe('host-local routing policy from the receiving host slice', () => {
     f.state.fail = false;
     await Promise.all([1, 2].map(() => f.host.deliverHuman(home, mainSid, 'goal', 'qm-retry')));
     expect(f.writes).toHaveLength(1);
+    expect(f.writes[0].text.startsWith(policy)).toBe(true);
     f.live.delete(mainSid);
     await f.host.deliverHuman(home, mainSid, 'resume goal', 'qm-resume');
     expect(f.writes[1]).toMatchObject({ resumed: true });
-    expect(f.writes[1].text.startsWith(policy)).toBe(true);
+    expect(f.writes[1].text).toBe('resume goal');
+    // A cold resume as the first delivery carries it.
+    const cold = fixture();
+    cold.live.delete(mainSid);
+    await cold.host.deliverHuman(home, mainSid, 'cold goal', 'qm-cold');
+    expect(cold.writes[0]).toMatchObject({ resumed: true });
+    expect(cold.writes[0].text.startsWith(policy)).toBe(true);
   });
 
-  it('updated slice removes rules only when the running prompt itself is current', async () => {
+  it('a slice with no due key (told, or a current prompt) adds nothing', async () => {
     const f = fixture();
     f.host.configure({ ...f.slice, hash: 'current-prompt', sessions: [{ sid: mainSid, taskId: 'main-task' }, { sid: workerSid, taskId: 'work-task' }] });
     await f.host.deliverHuman(home, mainSid, 'goal', 'qm-current');

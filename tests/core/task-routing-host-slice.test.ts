@@ -7,26 +7,43 @@ import { WALNUT_HOME } from '../../src/constants.js';
 import { addTask } from '../../src/core/task-manager.js';
 import { createSessionRecord, updateSessionRecord } from '../../src/core/session-tracker.js';
 import { buildHostSlice } from '../../src/core/host-slice.js';
-import { sendMessageToSession } from '../../src/core/session-message-queue.js';
+import { markProcessing, removeProcessed, sendMessageToSession } from '../../src/core/session-message-queue.js';
+import { noteTaskRoutingToldByHost } from '../../src/core/sessions/task-routing-notice.js';
+import { notePlaceCompaction } from '../../src/core/sessions/place-notice.js';
 import { TASK_ROUTING_CONTRACT } from '../../src/core/task-routing-contract.js';
 
 beforeEach(async () => { await fs.rm(WALNUT_HOME, { recursive: true, force: true }); });
 describe('server supplies canonical policy to old host-local org sessions', () => {
-  it('a queued input never removes the host compact rule; prompt refresh does', async () => {
+  it('the slice carries the rule only while due, and a host delivery under that key makes it told', async () => {
     const { task } = await addTask({ title: 'Main', project: 'Ask Walnut', walnut_agent: true, org_role: 'main' });
     const sid = randomUUID();
     await createSessionRecord(sid, task.id, task.project, WALNUT_HOME);
     await updateSessionRecord(sid, { appliedAppendSystemPrompt: 'Old area routing' });
-    const before = await buildHostSlice('__local__');
-    expect(before.sessions.find((row) => row.sid === sid)?.taskRoutingPolicy).toContain(TASK_ROUTING_CONTRACT);
-    await sendMessageToSession(sid, 'A real new goal');
-    const told = await buildHostSlice('__local__');
-    expect(told.sessions.find((row) => row.sid === sid)?.taskRoutingPolicy).toContain(TASK_ROUTING_CONTRACT);
-    expect(told.hash).toBe(before.hash);
-    await updateSessionRecord(sid, { appliedAppendSystemPrompt: TASK_ROUTING_CONTRACT });
-    const current = await buildHostSlice('__local__');
-    expect(current.sessions.find((row) => row.sid === sid)).not.toHaveProperty('taskRoutingPolicy');
-    expect(current.hash).not.toBe(told.hash);
+    const row = async () => (await buildHostSlice('__local__')).sessions.find((r) => r.sid === sid);
+    const due = await row();
+    expect(due?.taskRoutingPolicy).toContain(TASK_ROUTING_CONTRACT);
+    expect(due?.taskRoutingDue).toBeTruthy();
+    // A stale key (the prompt or compaction moved on) records nothing.
+    await noteTaskRoutingToldByHost(sid, 'not-the-current-key');
+    expect((await row())?.taskRoutingDue).toBe(due?.taskRoutingDue);
+    await noteTaskRoutingToldByHost(sid, due!.taskRoutingDue!);
+    expect(await row()).not.toHaveProperty('taskRoutingPolicy');
+    // The server's own queue now leaves it out too.
+    await sendMessageToSession(sid, 'Next notice');
+    const [line] = await markProcessing(sid);
+    expect(line.message).not.toContain(TASK_ROUTING_CONTRACT);
+    await removeProcessed(sid, [line.id]);
+    // A compaction makes it due again, under a new key.
+    await notePlaceCompaction(sid, 'boundary-1');
+    const again = await row();
+    expect(again?.taskRoutingDue).toBeTruthy();
+    expect(again?.taskRoutingDue).not.toBe(due?.taskRoutingDue);
+    // A line the server delivers itself also makes it told.
+    await sendMessageToSession(sid, 'After compaction');
+    const [led] = await markProcessing(sid);
+    expect(led.message).toContain(TASK_ROUTING_CONTRACT);
+    await removeProcessed(sid, [led.id]);
+    expect(await row()).not.toHaveProperty('taskRoutingPolicy');
   });
   it('ordinary workers and current org prompts add no policy bytes', async () => {
     for (const role of [undefined, 'main', 'lead'] as const) {
