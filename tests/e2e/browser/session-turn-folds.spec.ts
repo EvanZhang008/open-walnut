@@ -2,10 +2,11 @@
  * Finished work folds; what the reader must see does not.
  *
  * Against the fixture `pw-fold-session` (test-server.ts), in the real panel:
- *  · process fold: a turn's finished steps after its narration (two reads, two
- *    edits, a message to the lead) are ONE folded row, "Read 2 files, edited 2
- *    files, sent a message"; the narration and the answer stay on screen; a run
- *    with a failed tool stays out of any fold;
+ *  · turn fold: everything before a turn's answer (narration, two reads, two
+ *    edits, a message to the lead; notices, sends and replies) is ONE folded
+ *    row and only the answer shows; a failure inside says so in the header;
+ *  · hidden turns: a turn a peer's message started that ended with the
+ *    no-action line does not show at all, a quiet toggle opens it;
  *  · no-action fold: a clean finished turn whose answer ends with the no-action
  *    line is one "No action needed" row; opened, the whole answer is there and
  *    copies without the line; a turn with a failure keeps its answer open (the
@@ -78,25 +79,27 @@ async function shot(page: Page, target: Locator, name: string): Promise<void> {
   await page.screenshot({ path: `${SHOTS}/${test.info().project.name}-${name}.png`, clip }).catch(() => {})
 }
 
-test('a turn\'s steps fold into one row; narration and answer stay', async ({ page }) => {
+test('everything before a turn\'s answer is one row; the answer shows', async ({ page }) => {
   test.setTimeout(90_000)
   const panel = await openFoldSession(page)
   const history = panel.locator('.session-history')
-  await expect(history).toContainText('FOLD_NARRATION_A first result is in.')
   await expect(history).toContainText('FOLD_FINAL_A here is the answer.')
-  const fold = history.locator('[data-testid="process-fold"]').first()
-  await expect(fold.locator('.tool-run-label')).toHaveText('Read 2 files, edited 2 files, sent a message')
+  const fold = history.locator('[data-testid="turn-fold"]').first()
+  await expect(fold.locator('.tool-run-label')).toHaveText('Read 2 files, edited 2 files, sent a message, an update')
   await expect(fold).toHaveAttribute('data-open', 'false')
-  // Folded, the steps and the sent card are off screen.
+  // Folded, the narration, the steps and the sent card are off screen.
+  expect(await history.innerText()).not.toContain('FOLD_NARRATION_A')
   expect(await history.innerText()).not.toContain('FOLD_SENT_TITLE')
+  // The person's own message shows.
+  await expect(history.locator('.session-msg-user', { hasText: 'FOLD_ASK_ONE' })).toHaveCount(1)
   await reveal(page, panel, fold)
-  await shot(page, fold, 'process-folded')
+  await shot(page, fold, 'turn-folded')
 
-  await fold.locator('.tool-run-toggle').click()
+  await fold.locator('.tool-run-toggle').first().click()
   await expect(fold).toHaveAttribute('data-open', 'true')
+  await expect(fold).toContainText('FOLD_NARRATION_A first result is in.')
   await expect(fold).toContainText('FOLD_SENT_TITLE')
-  await expect(fold.locator('.tool-run-toggle').nth(1)).toBeVisible()
-  await shot(page, fold, 'process-open')
+  await shot(page, fold, 'turn-open')
 })
 
 test('sends, replies and messaging ops fold with the steps, reasoning included; opened, every card is there', async ({ page }) => {
@@ -104,7 +107,7 @@ test('sends, replies and messaging ops fold with the steps, reasoning included; 
   const panel = await openFoldSession(page)
   const history = panel.locator('.session-history')
   await expect(history).toContainText('FOLD_FINAL_I passed it on.')
-  const fold = history.locator('[data-testid="process-fold"]').filter({ hasText: 'sent 4 messages' })
+  const fold = history.locator('[data-testid="turn-fold"]').filter({ hasText: 'sent 4 messages' })
   await expect(fold).toHaveCount(1)
   expect(await history.innerText()).not.toContain('FOLD_SENT_NINE')
   expect(await history.innerText()).not.toContain('FOLD_REPLY_NINE')
@@ -116,22 +119,18 @@ test('sends, replies and messaging ops fold with the steps, reasoning included; 
   await shot(page, fold, 'sends-open')
 })
 
-test('a failed run stays out of every fold', async ({ page }) => {
+test('a failure folded before an answer says so in the header', async ({ page }) => {
   test.setTimeout(90_000)
   const panel = await openFoldSession(page)
   const history = panel.locator('.session-history')
-  await expect(history).toContainText('FOLD_NARRATION_E starting.')
-  // Turn five's failed run (two failures, unlike turn three's one) is its own
-  // row on screen, never inside a fold; no fold holds a failure at all.
-  await expect(history.locator('.tool-run-fail').filter({ hasText: '2 failed' })).toBeVisible()
-  const folds = history.locator('[data-testid="process-fold"]')
-  for (let i = 0; i < await folds.count(); i++) {
-    await reveal(page, panel, folds.nth(i))
-    await folds.nth(i).locator('.tool-run-toggle').first().click()
-    await expect(folds.nth(i).locator('.tool-run-fail')).toHaveCount(0)
-  }
-  // The sent message after it folds alone (it holds a card); the answer stays.
   await expect(history).toContainText('FOLD_FINAL_E it still fails')
+  const fold = history.locator('[data-testid="turn-fold"]').filter({ hasText: '2 failed' })
+  await expect(fold).toHaveCount(1)
+  await expect(fold.locator('.tool-run-toggle .tool-run-fail')).toHaveText('2 failed')
+  await reveal(page, panel, fold)
+  await fold.locator('.tool-run-toggle').first().click()
+  await expect(fold).toContainText('FOLD_NARRATION_E starting.')
+  await expect(fold.locator('.tool-run-fail').filter({ hasText: '2 failed' })).toHaveCount(2)
 })
 
 test('a clean turn that needs nothing folds to "No action needed"; opened, it is all there', async ({ page }) => {
@@ -164,21 +163,25 @@ test('a clean turn that needs nothing folds to "No action needed"; opened, it is
   expect(copied.at(-1)).toBe('FOLD_NOACTION_B all handled, nothing for you.\n\nSecond paragraph of it.')
 })
 
-test('a background turn that needs nothing ends as one small row, no bubble, no filler', async ({ page }) => {
+test('a turn a peer started that needed nothing is hidden; a quiet toggle opens it', async ({ page }) => {
   test.setTimeout(90_000)
   const panel = await openFoldSession(page)
   const history = panel.locator('.session-history')
-  // Both peer FYIs (after turn five's open answer, and after G's folded one).
-  const marks = history.locator('[data-testid="no-action-mark"]')
-  await expect(marks).toHaveCount(2)
-  const mark = marks.last()
-  await expect(mark).toHaveText('No action needed')
-  await expect(mark.locator('button')).toHaveCount(0)
+  // Both peer FYIs (after turn five's answer, and after G's folded one).
+  const hidden = history.locator('[data-testid="hidden-turns"]')
+  await expect(hidden).toHaveCount(2)
+  await expect(hidden.last().locator('button')).toHaveText('Show 1 hidden turn')
+  expect(await history.innerText()).not.toContain('FOLD_PEER_FYI')
+  await expect(history.locator('[data-testid="no-action-mark"]')).toHaveCount(0)
   // The raw line prints nowhere but in turn four, which quotes it in code.
   await expect(history.locator('.session-msg', { hasText: '<walnut-turn' })).toHaveCount(1)
   await expect(history.locator('.session-msg', { hasText: '<walnut-turn' })).toContainText('FOLD_QUOTED_D')
-  await reveal(page, panel, mark)
-  await shot(page, mark, 'no-action-mark')
+  await reveal(page, panel, hidden.last())
+  await shot(page, hidden.last(), 'hidden-turns')
+  await hidden.last().locator('button').click()
+  await expect(hidden.last()).toContainText('FOLD_PEER_FYI_TWO status only')
+  await expect(hidden.last().locator('[data-testid="no-action-mark"]')).toHaveCount(1)
+  await shot(page, hidden.last(), 'hidden-turns-open')
 })
 
 test('a failure keeps the answer open, the line never prints; a quoted marker is text', async ({ page }) => {
@@ -196,9 +199,9 @@ test('an opened fold stays open through a new turn and a history refetch', async
   test.setTimeout(150_000)
   const panel = await openFoldSession(page)
   const history = panel.locator('.session-history')
-  const fold = history.locator('[data-testid="process-fold"]').first()
+  const fold = history.locator('[data-testid="turn-fold"]').first()
   await reveal(page, panel, fold)
-  await fold.locator('.tool-run-toggle').click()
+  await fold.locator('.tool-run-toggle').first().click()
   await expect(fold).toHaveAttribute('data-open', 'true')
   const box = panel.locator('.chat-input-textarea').first()
   await box.click()
@@ -207,6 +210,6 @@ test('an opened fold stays open through a new turn and a history refetch', async
   await box.fill(`${marker} one more turn`)
   await box.press('Enter')
   await expect(history.locator('.session-msg-assistant', { hasText: marker })).toBeVisible({ timeout: 90_000 })
-  await expect(history.locator('[data-testid="process-fold"]').first()).toHaveAttribute('data-open', 'true')
+  await expect(history.locator('[data-testid="turn-fold"]').first()).toHaveAttribute('data-open', 'true')
   await expect(history.locator('.session-msg-user', { hasText: marker })).toHaveCount(1)
 })

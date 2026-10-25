@@ -36,6 +36,8 @@ export function _clearTurnFolds(): void {
 /** The fold keys the timeline uses, so it can name the fold a row sits in. */
 export const processFoldKey = (foldId: string) => `process:${foldId}`;
 export const noActionFoldKey = (foldId: string) => `no-action:${foldId}`;
+export const turnFoldKey = (foldId: string) => `turn:${foldId}`;
+export const hiddenTurnsKey = (foldId: string) => `hidden:${foldId}`;
 
 function useTurnFold(key: string): [boolean, () => void] {
   const open = useSyncExternalStore(subscribe, () => opened.has(key));
@@ -46,12 +48,20 @@ function useTurnFold(key: string): [boolean, () => void] {
   return [open, toggle];
 }
 
-export function ProcessFoldRow({ foldId, phrase, children }: { foldId: string; phrase: string; children: ReactNode }) {
-  const [open, toggle] = useTurnFold(processFoldKey(foldId));
+/**
+ * `foldKey` defaults to the process fold's; a whole turn's steps before its
+ * answer use the same row under turnFoldKey. `failed` puts the count of failed
+ * steps in the header, so a folded failure is never silent.
+ */
+export function ProcessFoldRow({ foldId, phrase, children, foldKey, failed = 0, testId = 'process-fold' }: {
+  foldId: string; phrase: string; children: ReactNode; foldKey?: string; failed?: number; testId?: string;
+}) {
+  const [open, toggle] = useTurnFold(foldKey ?? processFoldKey(foldId));
   return (
-    <div className="tool-run-row process-fold" data-testid="process-fold" data-open={open ? 'true' : 'false'}>
+    <div className="tool-run-row process-fold" data-testid={testId} data-open={open ? 'true' : 'false'}>
       <button type="button" className="tool-run-toggle" aria-expanded={open} onClick={toggle}>
         <span className="tool-run-label">{phrase}</span>
+        {failed > 0 && <span className="tool-run-fail">{failed} failed</span>}
         <span className={`tool-run-chevron${open ? ' tool-run-chevron--open' : ''}`}>{'›'}</span>
       </button>
       {open && <div className="process-fold-body">{children}</div>}
@@ -68,6 +78,22 @@ export function NoActionMark() {
   return (
     <div className="tool-run-row no-action-mark" data-testid="no-action-mark">
       <span className="tool-run-label">No action needed</span>
+    </div>
+  );
+}
+
+/**
+ * Turns that needed nothing from the person (turn-shape.ts), out of the way: a
+ * quiet line in their place that opens them, everything kept.
+ */
+export function HiddenTurnsRow({ foldId, count, children }: { foldId: string; count: number; children: ReactNode }) {
+  const [open, toggle] = useTurnFold(hiddenTurnsKey(foldId));
+  return (
+    <div className="hidden-turns" data-testid="hidden-turns" data-open={open ? 'true' : 'false'}>
+      <button type="button" className="hidden-turns-toggle" aria-expanded={open} onClick={toggle}>
+        {open ? 'Hide' : 'Show'} {count === 1 ? '1 hidden turn' : `${count} hidden turns`}
+      </button>
+      {open && <div className="process-fold-body">{children}</div>}
     </div>
   );
 }

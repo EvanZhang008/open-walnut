@@ -25,7 +25,7 @@ import { HistoryGapDivider } from './HistoryGapDivider';
 import { gapIndex, type HistoryGap } from '@/hooks/history-gap';
 import { typedUserText } from '@open-walnut/history-injected-banner';
 import { computeRenderWindow, type RenderWindowAnchor } from './render-window';
-import { historyTurnWindowLimit, INITIAL_HISTORY_TURNS, EARLIER_HISTORY_TURNS, isHistorySentRow } from '@open-walnut/history-turn-window';
+import { historyTurnWindowLimit, INITIAL_HISTORY_TURNS, EARLIER_HISTORY_TURNS, isHistorySentRow, isHistoryUserTurn } from '@open-walnut/history-turn-window';
 import { parseHistoryUnavailable, visibleHistoryUnavailable } from './history-unavailable';
 import { shouldRefetchForTurnPrompt, turnPromptMissing, PROMPT_REFETCH_RETRY_DELAYS_MS } from './turn-prompt-refetch';
 import { computeRenderFilter, allBlocksAbsorbed, buildHistoryEvidence } from '@/stream/render-filter';
@@ -52,8 +52,9 @@ import { ThreadStackHeader } from './ThreadStackHeader';
 import { ThreadTurnLabel } from './ThreadTurnLabel';
 import { foldGroupOf, foldOpenKeys, foldParts, isFolded } from '@/utils/thread-fold';
 import { groupProcessParts, processPhrase } from './process-fold';
-import { NoActionFold, NoActionMark, ProcessFoldRow, noActionFoldKey, openTurnFold, processFoldKey } from './TurnFolds';
-import { noActionRows, readTurnMarker } from '@/utils/turn-end-marker';
+import { HiddenTurnsRow, NoActionFold, NoActionMark, ProcessFoldRow, hiddenTurnsKey, noActionFoldKey, openTurnFold, processFoldKey, turnFoldKey } from './TurnFolds';
+import { shapeTurns, type TurnShape } from '@/utils/turn-shape';
+import { noActionRows, readTurnMarker, stripTurnMarker } from '@/utils/turn-end-marker';
 import { fallbackTitle } from './message-fold';
 import { detectOutboundSend } from './session-outbound';
 import { isRoutedQuestion } from './tool-run-phrase';
@@ -1304,12 +1305,16 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     [rowThreadInfo],
   );
   /** Row id → the process / no-action fold it renders inside, filled as rows render. */
-  const turnFoldOfRow = useRef(new Map<string, string>());
+  // Row id → the folds it sits in (a step can sit in a process fold inside a turn's fold).
+  const turnFoldOfRow = useRef(new Map<string, Set<string>>());
+  const markFolded = (rowId: string, key: string) => {
+    const keys = turnFoldOfRow.current.get(rowId);
+    if (keys) keys.add(key); else turnFoldOfRow.current.set(rowId, new Set([key]));
+  };
   /** A jump into a folded question's turns shows them first (the row has to be there to land on). */
   const revealFolded = useCallback((rowId: string) => {
     // A row inside a closed process or no-action fold is not rendered either.
-    const turnFold = turnFoldOfRow.current.get(rowId);
-    if (turnFold) openTurnFold(turnFold);
+    for (const key of turnFoldOfRow.current.get(rowId) ?? []) openTurnFold(key);
     const key = rowThreadKey(rowId);
     if (!convMode || key === ROOT_THREAD_KEY) return;
     const group = foldGroupOf(threadTree, key);
@@ -2771,6 +2776,26 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     for (const i of settled) if (settledNoAction.current.has(keyOf(i))) live.add(i);
     return live;
   }, [messages, isStreaming]);
+  // Each finished turn's shape (turn-shape.ts): hidden, answered, or open. Like
+  // the no-action set, a shape settled while quiet holds while the next turn streams.
+  const settledShapes = useRef<Map<string, TurnShape['kind']>>(new Map());
+  const turnShapes = useMemo(() => {
+    const keyOf = (t: TurnShape) => (t.start >= 0 ? (messages[t.start].msgId ?? `${messages[t.start].timestamp}:${t.start}`) : 'head');
+    const shapes = shapeTurns(messages, {
+      isSent: isHistorySentRow,
+      isPerson: isHistoryUserTurn,
+      isCleanNoAction: (i) => noActionSet.has(i),
+      stripTag: stripQuestionTag,
+      streaming: false,
+    });
+    if (!isStreaming) {
+      settledShapes.current = new Map(shapes.map((t) => [keyOf(t), t.kind]));
+      return shapes;
+    }
+    const last = shapes[shapes.length - 1];
+    if (last && settledShapes.current.get(keyOf(last)) !== last.kind) shapes[shapes.length - 1] = { ...last, kind: 'open', answer: -1 };
+    return shapes;
+  }, [messages, isStreaming, noActionSet]);
   // processToolsOf's per-part answers; a new map whenever what they read changes.
   const processToolsCache = useMemo(
     () => new WeakMap<HistoryPart, SessionHistoryTool[] | null>(),
@@ -3497,7 +3522,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
 
   const noActionFoldIdOf = (rowId: string | undefined, m: SessionHistoryMessage, globalIndex: number): string => {
     const id = rowId ?? `${m.timestamp}:${globalIndex}`;
-    if (rowId) turnFoldOfRow.current.set(rowId, noActionFoldKey(id));
+    if (rowId) markFolded(rowId, noActionFoldKey(id));
     return id;
   };
 
@@ -3540,6 +3565,12 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // A message to someone: a send card, or Walnut's other messaging ops (to a
   // lead, to the inbox, an answer in it), which render as plain tool rows.
   const isOutboundTool = (t: SessionHistoryTool) => !!detectOutboundSend(t) || MESSAGE_OPS.test(t.name);
+  /** A message or notice the session received: a sent-in row with no person's words in it. */
+  const isInboundPart = (part: HistoryPart): boolean => {
+    if (part.kind !== 'msg' || part.m.role !== 'user') return false;
+    if ((forkBoundaryIndex != null && part.globalIndex === forkBoundaryIndex) || gapAt.has(part.globalIndex)) return false;
+    return isHistorySentRow(part.m) && !isHistoryUserTurn(part.m);
+  };
   const renderProcessParts = (parts: HistoryPart[]): React.ReactNode => {
     const first = parts[0];
     const head = first.kind === 'msg' ? { m: first.m, globalIndex: first.globalIndex } : first.members[0];
@@ -3548,12 +3579,12 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     for (const p of parts) {
       for (const { m } of p.kind === 'msg' ? [{ m: p.m }] : p.kind === 'run' ? p.members : []) {
         const memberId = m.msgId ?? m.walnutMessageId;
-        if (memberId) turnFoldOfRow.current.set(memberId, processFoldKey(id));
+        if (memberId) markFolded(memberId, processFoldKey(id));
       }
     }
     return (
       <div key={`proc-${id}`} data-process-fold-index={head.globalIndex} {...threadWrapperProps(head.m.msgId ?? head.m.walnutMessageId, 'session-msg-bare')}>
-        <ProcessFoldRow foldId={id} phrase={processPhrase(tools, isOutboundTool)}>
+        <ProcessFoldRow foldId={id} phrase={processPhrase(tools, isOutboundTool, parts.filter(isInboundPart).length)}>
           {parts.map(renderHistoryPart)}
         </ProcessFoldRow>
       </div>
@@ -3591,7 +3622,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   if (convMode) {
     let pending: HistoryPart[] = [];
     const flushPending = () => {
-      for (const it of groupProcessParts(pending, processToolsOf, isOutboundTool)) {
+      for (const it of groupProcessParts(pending, processToolsOf, isOutboundTool, isInboundPart)) {
         pageRows.push(it.kind === 'one' ? renderHistoryPart(it.part) : renderProcessParts(it.parts));
       }
       pending = [];
@@ -3606,30 +3637,113 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       tailFoldGroup = item.kind === 'fold' ? item.key : null;
     }
     flushPending();
-  } else groupProcessParts(
-    visibleHistoryParts.map((part, i) => ({ part, i })),
-    // A row an Asked-from list follows stays its own row: the list hangs off it.
-    ({ part, i }) => (askedAfter.has(i) ? null : processToolsOf(part)),
-    isOutboundTool,
-  ).forEach((item) => {
-    if (item.kind === 'process') { pageRows.push(renderProcessParts(item.parts.map((p) => p.part))); return; }
-    const { part, i } = item.part;
-    pageRows.push(renderHistoryPart(part));
-    const asked = askedAfter.get(i);
-    if (asked && i === lastPart && pageStrip) { pageRows.push(pageStrip); stripPlaced = true; }
-    if (asked) {
+  } else {
+    type Item = { part: HistoryPart; i: number };
+    const renderDefault = (items: Item[], into: React.ReactNode[]) => groupProcessParts(
+      items,
+      // A row an Asked-from list follows stays its own row: the list hangs off it.
+      ({ part, i }) => (askedAfter.has(i) ? null : processToolsOf(part)),
+      isOutboundTool,
+      ({ part, i }) => !askedAfter.has(i) && isInboundPart(part),
+    ).forEach((item) => {
+      if (item.kind === 'process') { into.push(renderProcessParts(item.parts.map((p) => p.part))); return; }
+      const { part, i } = item.part;
+      into.push(renderHistoryPart(part));
+      const asked = askedAfter.get(i);
+      if (asked && i === lastPart && pageStrip) { into.push(pageStrip); stripPlaced = true; }
+      if (asked) {
+        into.push(
+          <ThreadAskedFromList
+            key={`asked-${asked[0].key}`}
+            rows={asked}
+            onOpen={openFromRow}
+            onRetry={threadsApi.retry}
+            onMarkDone={markDoneFromRow}
+            onNotYet={notYetFromRow}
+          />,
+        );
+      }
+    });
+    const headOf = (part: HistoryPart) => (part.kind === 'msg' ? { m: part.m, globalIndex: part.globalIndex } : part.members[0]);
+    const idOf = (part: HistoryPart) => {
+      const h = headOf(part);
+      return h.m.msgId ?? h.m.walnutMessageId ?? `${h.m.timestamp}:${h.globalIndex}`;
+    };
+    const markAll = (items: Item[], key: string) => {
+      for (const { part } of items) {
+        const rows = part.kind === 'msg' ? [part.m] : part.members.map((x) => x.m);
+        for (const m of rows) { const id = m.msgId ?? m.walnutMessageId; if (id) markFolded(id, key); }
+      }
+    };
+    // Everything before a turn's answer, as one row (turn-shape.ts). Opened, the
+    // rows show as they are, not folded a second time.
+    const pushTurnFold = (items: Item[]) => {
+      const id = idOf(items[0].part);
+      const body = items.map((x) => renderHistoryPart(x.part));
+      markAll(items, turnFoldKey(id));
+      const tools: SessionHistoryTool[] = [];
+      let notes = 0;
+      let errors = 0;
+      for (const { part } of items) {
+        const rows = part.kind === 'msg' ? [part.m] : part.members.map((x) => x.m);
+        for (const m of rows) {
+          if (m.role === 'system' && m.systemVariant === 'error') errors++;
+          if (m.role === 'assistant' && stripTurnMarker(stripQuestionTag(m.text ?? '')).trim()) notes++;
+          if (!(part.kind === 'msg' && part.suppressTools)) tools.push(...(m.tools ?? []));
+        }
+      }
+      const failed = errors + tools.filter((t) => t.isError && !isRoutedQuestion(t.name, t.result)).length;
+      const pieces = [processPhrase(tools, isOutboundTool, items.filter((x) => isInboundPart(x.part)).length)];
+      if (notes > 0) pieces.push(notes === 1 ? 'an update' : `${notes} updates`);
+      const phrase = pieces.filter(Boolean).join(', ');
+      const head = headOf(items[0].part);
       pageRows.push(
-        <ThreadAskedFromList
-          key={`asked-${asked[0].key}`}
-          rows={asked}
-          onOpen={openFromRow}
-          onRetry={threadsApi.retry}
-          onMarkDone={markDoneFromRow}
-          onNotYet={notYetFromRow}
-        />,
+        <div key={`turn-${id}`} data-turn-fold-index={head.globalIndex} {...threadWrapperProps(head.m.msgId ?? head.m.walnutMessageId, 'session-msg-bare')}>
+          <ProcessFoldRow foldId={id} foldKey={turnFoldKey(id)} testId="turn-fold" failed={failed}
+            phrase={phrase ? phrase.charAt(0).toUpperCase() + phrase.slice(1) : 'Thinking'}>
+            {body}
+          </ProcessFoldRow>
+        </div>,
       );
+    };
+    let hidden: Item[] = [];
+    let hiddenTurns = 0;
+    const flushHidden = () => {
+      if (hidden.length === 0) return;
+      const id = idOf(hidden[0].part);
+      const body = hidden.map((x) => renderHistoryPart(x.part));
+      markAll(hidden, hiddenTurnsKey(id));
+      const head = headOf(hidden[0].part);
+      pageRows.push(
+        <div key={`hidden-${id}`} data-hidden-turns-index={head.globalIndex} {...threadWrapperProps(head.m.msgId ?? head.m.walnutMessageId, 'session-msg-bare')}>
+          <HiddenTurnsRow foldId={id} count={hiddenTurns}>{body}</HiddenTurnsRow>
+        </div>,
+      );
+      hidden = [];
+      hiddenTurns = 0;
+    };
+    const items: Item[] = visibleHistoryParts.map((part, i) => ({ part, i }));
+    let at = 0;
+    for (const t of turnShapes) {
+      const mine: Item[] = [];
+      while (at < items.length && headOf(items[at].part).globalIndex < t.end) mine.push(items[at++]);
+      if (mine.length === 0) continue;
+      const kind = mine.some((x) => askedAfter.has(x.i)) ? 'open' : t.kind;
+      if (kind === 'hidden') { hidden.push(...mine); hiddenTurns++; continue; }
+      flushHidden();
+      const ans = kind === 'answered' ? mine.findIndex((x) => x.part.kind === 'msg' && x.part.globalIndex === t.answer) : -1;
+      if (ans < 0) { renderDefault(mine, pageRows); continue; }
+      // The person's own message always shows.
+      const lead = t.byPerson && headOf(mine[0].part).globalIndex === t.start ? 1 : 0;
+      if (lead) renderDefault(mine.slice(0, 1), pageRows);
+      const before = mine.slice(lead, ans);
+      if (before.length === 1 && before[0].part.kind === 'run') renderDefault(before, pageRows);
+      else if (before.length > 0) pushTurnFold(before);
+      renderDefault(mine.slice(ans), pageRows);
     }
-  });
+    flushHidden();
+    if (at < items.length) renderDefault(items.slice(at), pageRows);
+  }
 
   // ── The comment card: the target question beside its passage (Conversation Mode).
   const cardLayerRef = useRef<HTMLDivElement | null>(null);

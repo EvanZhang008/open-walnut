@@ -186,6 +186,14 @@ test('unsafe shapes render as before and lose nothing', async ({ page }) => {
 test('a notice alone, or ahead of a trigger delivery, is still no bubble', async ({ page }) => {
   test.setTimeout(90_000)
   const panel = await openRiderSession(page)
+  // Shapes 8 and 9 started their turns with no person's words: each folds into the
+  // row before its answer (turn-shape.ts). Open those to read the cards.
+  const folds = panel.locator('.session-history [data-testid="turn-fold"]').filter({ hasText: 'Received' })
+  await expect(folds).toHaveCount(2)
+  for (let i = 0; i < 2; i++) {
+    await reveal(page, panel, folds.nth(i))
+    await folds.nth(i).locator('.tool-run-toggle').first().click()
+  }
   // Shape 9: the notice is its own card row, the trigger delivery the envelope row it always was.
   // The trigger card's status line (its `note`), which only that row carries.
   const trigger = rowsWith(panel, 'fired, 1 new item')

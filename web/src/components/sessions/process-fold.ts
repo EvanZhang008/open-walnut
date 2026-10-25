@@ -3,9 +3,11 @@
  *
  * A turn reads "Read 2 files ›", "Edited 2 files ›", then a "To Walnut lead"
  * card, each its own row, so the steps the model took outweigh what it said.
- * Consecutive PROCESS rows (finished tool runs and messages sent to other
- * tasks) become one folded row, "Read 2 files, edited 2 files, sent a message ›",
- * and the rows themselves sit inside it, unchanged, one click away.
+ * Consecutive PROCESS rows (finished tool runs, messages sent to other tasks,
+ * and the messages and notices the session received: a peer's note, a reply,
+ * Walnut's notifications) become one folded row, "Received a message, read 2
+ * files, sent a message ›", and the rows themselves sit inside it, unchanged,
+ * one click away.
  *
  * What stays out, on purpose:
  *  · every piece of text: narration between steps is part of the answer (a turn
@@ -16,7 +18,7 @@
  *  · the live tail: a run still receiving calls is the caller's to leave out
  *    (`isProcess` false), so it stays a running row until it is history.
  * A group of one plain tool run is left alone (it already is one folded row);
- * one that holds a sent message folds, since that card is the bulky part.
+ * one that holds a sent or received message folds, since that card is the bulky part.
  * Pure: the caller says which rows are process and how to read their tools.
  */
 import type { SessionHistoryTool } from '@/types/session';
@@ -41,6 +43,8 @@ export function groupProcessParts<P>(
   parts: readonly P[],
   toolsOf: (part: P) => SessionHistoryTool[] | null,
   isOutbound: (tool: SessionHistoryTool) => boolean,
+  /** A message the session received (a card row, no person's words in it). */
+  isInbound: (part: P) => boolean = () => false,
 ): ProcessItem<P>[] {
   const out: ProcessItem<P>[] = [];
   let run: P[] = [];
@@ -54,6 +58,12 @@ export function groupProcessParts<P>(
     sent = false;
   };
   parts.forEach((part, i) => {
+    if (isInbound(part)) {
+      if (run.length === 0) start = i;
+      run.push(part);
+      sent = true;
+      return;
+    }
     const tools = toolsOf(part);
     if (!tools || tools.length === 0) {
       flush();
@@ -69,10 +79,11 @@ export function groupProcessParts<P>(
 }
 
 /** The folded row's line: what the steps did, in the words a tool run uses. */
-export function processPhrase(tools: readonly SessionHistoryTool[], isOutbound: (tool: SessionHistoryTool) => boolean): string {
+export function processPhrase(tools: readonly SessionHistoryTool[], isOutbound: (tool: SessionHistoryTool) => boolean, received = 0): string {
   const calls = tools.filter((t) => !isOutbound(t));
   const sent = tools.length - calls.length;
   const pieces: string[] = [];
+  if (received > 0) pieces.push(received === 1 ? 'received a message' : `received ${received} messages`);
   if (calls.length > 0) pieces.push(toolRunPhrase(calls).replace(/^./, (c) => c.toLowerCase()));
   if (sent > 0) pieces.push(sent === 1 ? 'sent a message' : `sent ${sent} messages`);
   const phrase = pieces.join(', ');
