@@ -33,9 +33,16 @@ export async function removeTaken(sessionId: string, ids: string[], opts?: { ran
     }
     if (ran) noteDelivered(s, gone);
     if (s.queues[sessionId].length === 0) delete s.queues[sessionId];
-    return gone.length > 0;
+    if (gone.length === 0) return false;
+    return ran ? gone.map((m) => m.message) : [];
   });
-  if (found) log.session.debug('taken messages removed from queue', { sessionId, count: ids.length });
+  if (found === false) return;
+  log.session.debug('taken messages removed from queue', { sessionId, count: ids.length });
+  // The CLI took a line led by the routing notice: the session has now been told.
+  if (found.some((m) => m.includes('outcome="task-routing-policy"'))) {
+    const { noteTaskRoutingDelivered } = await import('./sessions/task-routing-notice.js');
+    await noteTaskRoutingDelivered(sessionId, found);
+  }
 }
 
 /**

@@ -12,7 +12,7 @@ import { TASK_ROUTING_CONTRACT } from '../../src/core/task-routing-contract.js';
 import { buildSessionContext } from '../../src/core/sessions/session-context.js';
 import { renderSelfKnowledgeContract } from '../../src/core/self-knowledge-contract.js';
 import { sendMessageToSession, getQueue, enqueueMessage, resetCache, editMessage, deleteMessage,
-  markProcessing, markNextProcessing, revertToPending, removeProcessed } from '../../src/core/session-message-queue.js';
+  markProcessing, markNextProcessing, revertToPending, removeProcessed, removeTaken } from '../../src/core/session-message-queue.js';
 import { collectOpenItems } from '../../src/core/sessions/open-items.js';
 import { notePlaceCompaction } from '../../src/core/sessions/place-notice.js';
 
@@ -92,6 +92,26 @@ describe('current task routing for an older Main or lead', () => {
     try {
       expect(copies((await deliver(sid, 'Next input'))[0].message)).toBe(1);
       expect((await getSessionByClaudeId(sid))?.taskRoutingNoted?.version).toBeTruthy();
+    } finally { clock.mockRestore(); }
+  });
+  it('a line the CLI reports taking counts as told; a cancelled one does not', async () => {
+    // The live path: rows leave through removeTaken when Claude Code names the line.
+    const { sid } = await seed('main');
+    await sendMessageToSession(sid, 'Cancelled by a Stop');
+    const [cancelled] = await markProcessing(sid);
+    expect(copies(cancelled.message)).toBe(1);
+    await removeTaken(sid, [cancelled.id], { ran: false });
+    expect((await getSessionByClaudeId(sid))?.taskRoutingNoted).toBeUndefined();
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 61_000);
+    try {
+      await sendMessageToSession(sid, 'Taken by the CLI');
+      const [taken] = await markProcessing(sid);
+      expect(copies(taken.message)).toBe(1);
+      await removeTaken(sid, [taken.id]);
+      expect((await getSessionByClaudeId(sid))?.taskRoutingNoted?.version).toBeTruthy();
+      await sendMessageToSession(sid, 'Next notice');
+      const [next] = await markProcessing(sid);
+      expect(copies(next.message)).toBe(0);
     } finally { clock.mockRestore(); }
   });
   it('a batch of queued rows carries the rules once, at the head', async () => {
