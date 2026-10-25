@@ -538,7 +538,7 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
         dedupKey: `plugin:${pluginId}:runtime`,
         recoveryKey: `plugin:${pluginId}`,
       })
-      bus.emit(outcome === 'inserted' ? 'notification:new' : 'notification:updated', record, ['web-ui'], { source: `plugin/${pluginId}` })
+      if (outcome !== 'suppressed') bus.emit(outcome === 'inserted' ? 'notification:new' : 'notification:updated', record, ['web-ui'], { source: `plugin/${pluginId}` })
     } catch (error) {
       context.logger.error('failed to publish Plugin error notification', {
         error: error instanceof Error ? error.message : String(error),

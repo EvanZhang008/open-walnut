@@ -34,8 +34,8 @@
 import { setErrorNotificationSink, type ErrorNotifyPayload } from '../../logging/subsystem.js';
 import { redactSensitiveText } from '../../logging/redact.js';
 import { upsertNotification } from './store.js';
-import { humanizeErrorNotification } from './humanize.js';
-import { causeKeyForError } from './error-cause.js';
+import { hostOutageCopy, humanizeErrorNotification } from './humanize.js';
+import { causeKeyForError, hostOfCauseKey, namesLinkDown } from './error-cause.js';
 import { withOriginNote } from './origin.js';
 import { log } from '../../logging/index.js';
 
@@ -180,6 +180,11 @@ const CORE_SUBSYSTEM_ROOTS = new Set([
  */
 const SESSION_SCOPED_ROOTS = new Set(['session', 'obs']);
 
+/** A card about one session or one task's session start: the family a host outage fans out into. */
+function isSessionFamilyKey(key: string | undefined): boolean {
+  return !!key && (key.startsWith('session:') || key.startsWith('task:'));
+}
+
 /**
  * Which recoverable condition a log error belongs to, or undefined for "no
  * lifecycle" (the record behaves exactly as it did before this feature).
@@ -300,17 +305,8 @@ export function installLogErrorNotifications(
     // lands in the feed TWICE under two different dedup keys.
     if (payload.meta?.skipNotify === true) return;
     const now = Date.now();
-    const dedupKey = `logerr:${payload.subsystem}:${djb2(dedupFingerprint(payload))}`;
+    let dedupKey = `logerr:${payload.subsystem}:${djb2(dedupFingerprint(payload))}`;
 
-    const last = recentKeys.get(dedupKey);
-    if (last && now - last < REPEAT_TTL_MS) return;
-    pruneRecent(now);
-    // Optimistically armed here (async persist below); re-armed OFF in the
-    // catch so a failed write doesn't silence this error for a full TTL.
-    recentKeys.set(dedupKey, now);
-
-    // The RAW line the card keeps behind its Details toggle (was the body).
-    const detail = buildDetail(payload);
     // sessionId/taskId in meta → deep-link targets on the card
     const sessionId = typeof payload.meta?.sessionId === 'string' ? payload.meta.sessionId : undefined;
     const taskId = typeof payload.meta?.taskId === 'string' ? payload.meta.taskId : undefined;
@@ -330,11 +326,34 @@ export function installLogErrorNotifications(
     // Redacted first, like every other consumer of raw log text on this path:
     // a secret sitting where a pattern expects a host would otherwise be
     // persisted into the key and rendered as a group heading.
+    const redactedCause = redactSensitiveText(causeText);
     const causeKey = causeKeyForError({
-      text: redactSensitiveText(causeText),
+      text: redactedCause,
       ...(metaHost ? { host: metaHost } : {}),
     });
-    const releaseKeys = [recoveryKey, causeKey].filter((k): k is string => !!k);
+    // One host outage is ONE card. A dead link to a host fails every session on
+    // it at once, and each failure used to be its own card (2026-10-24: seven
+    // "Couldn't start a session" and seven "A session hit an error" for one
+    // clouddev outage). Folded by the cause, said plainly ("Cannot connect to
+    // clouddev"), and retired by the cause's recovery: the host reconnecting.
+    // Only for wording that says the link itself is down: a command that timed
+    // out on a connected host stays its session's card, retired by that session.
+    const outageHost = causeKey && isSessionFamilyKey(recoveryKey) && namesLinkDown(redactedCause)
+      ? hostOfCauseKey(causeKey) : null;
+    if (outageHost) dedupKey = `logerr:cause:${causeKey}`;
+
+    // The storm absorber, on the card's final key (so a host outage's card is
+    // released by the host's recovery, not held by a per-session key).
+    const last = recentKeys.get(dedupKey);
+    if (last && now - last < REPEAT_TTL_MS) return;
+    pruneRecent(now);
+    // Optimistically armed here (async persist below); re-armed OFF in the
+    // catch so a failed write doesn't silence this error for a full TTL.
+    recentKeys.set(dedupKey, now);
+    // The RAW line the card keeps behind its Details toggle (was the body).
+    const detail = buildDetail(payload);
+    const cardRecoveryKey = outageHost ? causeKey : recoveryKey;
+    const releaseKeys = [cardRecoveryKey, causeKey].filter((k): k is string => !!k);
     if (releaseKeys.length > 0) recentKeyConditions.set(dedupKey, releaseKeys);
 
     // Human copy. Note the ORDER relative to the dedupKey above: the fingerprint
@@ -346,7 +365,7 @@ export function installLogErrorNotifications(
     // a token inside an error string. The humanizer applies it to its inputs
     // before any rule runs — redacting the finished sentence instead would miss a
     // secret whose prefix got cut off by truncation.
-    const human = humanizeErrorNotification({
+    const human = outageHost ? hostOutageCopy(outageHost) : humanizeErrorNotification({
       title: payload.message,
       subsystem: payload.subsystem,
       ...(recoveryKey ? { recoveryKey } : {}),
@@ -366,8 +385,9 @@ export function installLogErrorNotifications(
       // would name, and the thread's transcript renders a TURN error in place.
       // But a thread that never initialized has no transcript to render into —
       // an init/spawn failure must still reach the human. The log line stays
-      // for forensics either way; only the bell card is suppressed.
-      if (sessionId) {
+      // for forensics either way; only the bell card is suppressed. A host
+      // outage card is about every session on the host, so neither check applies.
+      if (sessionId && !outageHost) {
         const [{ getSessionByClaudeId }, { isSideThreadLane }] = await Promise.all([
           import('../session-tracker.js'),
           import('../sessions/side-thread-fork.js'),
@@ -376,7 +396,7 @@ export function installLogErrorNotifications(
         const initialized = !!rec && (!!rec.outputFile || rec.consumedOffset !== undefined);
         if (rec && isSideThreadLane(rec.lane) && initialized) return;
       }
-      if (payload.subsystem === 'session' && payload.message === 'transport start failed' && taskId) {
+      if (!outageHost && payload.subsystem === 'session' && payload.message === 'transport start failed' && taskId) {
         const { inboxOwnsStartFailure } = await import('../human-inbox/item-start-notification.js');
         if (await inboxOwnsStartFailure(taskId, sessionId).catch(() => false)) return;
       }
@@ -385,16 +405,17 @@ export function installLogErrorNotifications(
         timestamp: now, dedupKey,
         category: human.category,
         ...(detail ? { detail } : {}),
-        ...(sessionId ? { sessionId } : {}),
-        ...(taskId ? { taskId } : {}),
-        ...(recoveryKey ? { recoveryKey } : {}),
+        // An outage card is about the host, not one of the sessions it stopped.
+        ...(sessionId && !outageHost ? { sessionId } : {}),
+        ...(taskId && !outageHost ? { taskId } : {}),
+        ...(cardRecoveryKey ? { recoveryKey: cardRecoveryKey } : {}),
         ...(causeKey ? { causeKey } : {}),
       }).then(({ record, outcome }) => {
         // The card exists (new or folded): the condition it names is failing now.
         if (recoveryKey) hooks?.onConditionRaised?.(recoveryKey);
         // A first occurrence toasts; a later one (after the TTL window) patches the
         // existing card's count/body in place rather than re-toasting the UI.
-        if (!broadcast) return;
+        if (!broadcast || outcome === 'suppressed') return;
         broadcast(outcome === 'inserted' ? 'notification:new' : 'notification:updated', record);
       }).catch((err) => {
         // Persist failed → drop the TTL entry so the next occurrence retries

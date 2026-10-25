@@ -61,16 +61,36 @@ describe('server.notifications.cards on the Mac', () => {
     expect((await byKey('cron:mac'))?.title).toBe('Mac own')
   })
 
-  it('upsert: a newer occurrence folds in (count + the box\'s folds, unread again); the same batch twice counts once', async () => {
+  it('upsert: a standing card only refreshes; one that comes back after it settled counts the box\'s folds and is unread; the same batch twice counts once', async () => {
     await send([{ mode: 'upsert', record: card({ dedupKey: 'logerr:sync', count: 1 }) }])
-    // The human read it here, and the card settled once.
     const first = await byKey('logerr:sync')
     expect(first).toMatchObject({ id: 'notif-box-logerr:sync', count: 1, origin: 'replica' })
+    // The human read it here.
     await handleSessionControlRelay('server.notifications.mark', '__server__', { dedupKeys: ['logerr:sync'] })
-    const later = card({ dedupKey: 'logerr:sync', body: 'Sync failed again', count: 4, lastTimestamp: T0 + 60_000 })
+    // Still failing on the box: the latest body and stamp, no count, still read.
+    const standing = card({ dedupKey: 'logerr:sync', body: 'Still failing', lastTimestamp: T0 + 30_000 })
+    expect((await send([{ mode: 'upsert', fires: 2, record: standing }])).applied).toBe(1)
+    expect(await byKey('logerr:sync')).toMatchObject({ count: 1, read: true, body: 'Still failing', lastTimestamp: T0 + 30_000 })
+    // It settles, then fails again: that is news.
+    await send([{ mode: 'state', fires: 0, record: card({ dedupKey: 'logerr:sync', resolved: 'recovered', resolvedAt: T0 + 40_000, severity: 'info', lastTimestamp: T0 + 30_000 }) }])
+    const later = card({ dedupKey: 'logerr:sync', body: 'Sync failed again', count: 2, lastTimestamp: T0 + 60_000 })
     expect((await send([{ mode: 'upsert', fires: 3, record: later }])).applied).toBe(1)
     expect(await send([{ mode: 'upsert', fires: 3, record: later }])).toEqual({ applied: 0, skipped: 1, refused: [] })
     expect(await byKey('logerr:sync')).toMatchObject({ id: 'notif-box-logerr:sync', count: 4, read: false, body: 'Sync failed again', lastTimestamp: T0 + 60_000 })
+    expect((await byKey('logerr:sync'))?.resolved).toBeUndefined()
+  })
+
+  it('upsert: a box card the human dismissed here while it was failing does not come back until it recovers', async () => {
+    await send([{ mode: 'upsert', record: card({ dedupKey: 'logerr:gone', recoveryKey: 'plugin:acme' }) }])
+    await handleSessionControlRelay('server.notifications.dismiss', '__server__', { dedupKeys: ['logerr:gone'] })
+    const again = card({ dedupKey: 'logerr:gone', recoveryKey: 'plugin:acme', lastTimestamp: T0 + 60_000 })
+    expect((await send([{ mode: 'upsert', record: again }])).applied).toBe(0)
+    expect(await byKey('logerr:gone')).toBeUndefined()
+    // A box card that is already settled is not held back by the dismissal.
+    const { recoverNotifications } = await import('../../../src/core/notifications/store.js')
+    await recoverNotifications(['plugin:acme'])
+    const fresh = card({ dedupKey: 'logerr:gone', recoveryKey: 'plugin:acme', lastTimestamp: T0 + 120_000 })
+    expect((await send([{ mode: 'upsert', record: fresh }])).applied).toBe(1)
   })
 
   it('state: stamps the Mac\'s card; a card dismissed here stays gone; an older stamp never settles a newer occurrence', async () => {

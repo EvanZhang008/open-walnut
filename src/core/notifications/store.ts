@@ -21,6 +21,7 @@ import { conditionKeysOf } from './route-condition.js';
 import { WRITER_ORIGIN, type NotificationOrigin } from './origin.js';
 import { reportOwnCards as reportToMirror, type OwnCardChange } from './mirror.js';
 import { isCompanion } from '../server-role.js';
+import { dismissalKeys, dismissalOf, endDismissals, liveDismissals, type DismissedCondition } from './dismissed-conditions.js';
 
 export type { NotificationOrigin } from './origin.js';
 
@@ -173,10 +174,10 @@ export interface NotificationRecord {
 
   // ── Occurrence folding (upsertNotification) ──
   /** Occurrences folded into this record. Absent = 1.
-   *  On a log-bridge record this counts the 60s WINDOWS in which the error
-   *  fired, not raw occurrences: the bridge's TTL absorber swallows repeats
-   *  inside a window and never reaches the store, so the absorber's TTL and
-   *  this counter are the same knob. Same for publishErrorNotification. */
+   *  On an operation-error card: how many times the cause CAME BACK (a fold
+   *  after the card was recovered or expired). A cause that keeps failing
+   *  while its card is open is one occurrence however long it lasts; only
+   *  `lastTimestamp` moves. Other kinds count every fold. */
   count?: number;
   /** Latest occurrence (epoch ms). `timestamp` stays first-seen. */
   lastTimestamp?: number;
@@ -210,6 +211,9 @@ export type NotificationButton =
 interface NotificationsStore {
   version: 1;
   notifications: NotificationRecord[];
+  /** Error cards dismissed while still failing (dismissed-conditions.ts). An older
+   *  build reads past this field and writes it back unchanged. */
+  dismissed?: DismissedCondition[];
 }
 
 /** Fields a caller supplies; id/timestamp/read are stamped here unless given. */
@@ -450,10 +454,13 @@ export const REFRESHABLE_DETAIL_KEYS = [
  *
  * `addNotification` is deliberately "first write wins" (a permission re-ask must
  * not bump the feed). A repeating ERROR wants the opposite: one entry that shows
- * the latest body and how many times it happened. So this variant refreshes the
- * existing record, bumps `count`, stamps `lastTimestamp`, keeps `id`/`timestamp`
- * (first-seen) so the UI's identity is stable, and moves the record to the tail
- * so a live recurring error can't be evicted by the 200-cap.
+ * the latest body. So this variant refreshes the existing record, stamps
+ * `lastTimestamp`, keeps `id`/`timestamp` (first-seen) so the UI's identity is
+ * stable, and moves the record to the tail so a live recurring error can't be
+ * evicted by the 200-cap. An error card's `count` and `read` move only when the
+ * cause comes back after a recovery (see `count`), and a card the user
+ * dismissed while it was failing stays dismissed until its condition recovers
+ * (`suppressed`, dismissed-conditions.ts).
  *
  * `kind: 'permission'` is REJECTED here: a permission re-ask is the same pending
  * request, so folding it would make `count` read as "this happened N times" for
@@ -461,7 +468,7 @@ export const REFRESHABLE_DETAIL_KEYS = [
  */
 export async function upsertNotification(
   input: NewNotification,
-): Promise<{ record: NotificationRecord; outcome: 'inserted' | 'refreshed' }> {
+): Promise<{ record: NotificationRecord; outcome: UpsertOutcome }> {
   if (input.kind === 'permission') {
     throw new Error(
       'upsertNotification does not accept kind:"permission" — a permission re-ask is not a '
@@ -470,6 +477,17 @@ export async function upsertNotification(
   }
   const out = await withWriteLock(() => withStore((store) => {
     const idx = store.notifications.findIndex(n => n.dedupKey === input.dedupKey);
+    const isError = input.kind === 'operation-error';
+    if (idx === -1 && isError && store.dismissed?.length) {
+      // The user dismissed this card while its cause stood, and nothing has
+      // recovered it since: the same cause again is not news.
+      const now = input.timestamp ?? Date.now();
+      store.dismissed = liveDismissals(store.dismissed, now);
+      if (store.dismissed.some(d => d.dedupKey === input.dedupKey)) {
+        const record = { ...input, id: input.id ?? '', timestamp: now, read: true } as NotificationRecord;
+        return { record, outcome: 'suppressed' as const };
+      }
+    }
     if (idx === -1) {
       const record: NotificationRecord = {
         ...input,
@@ -483,6 +501,8 @@ export async function upsertNotification(
     }
 
     const existing = store.notifications[idx];
+    // A standing warning that turns into an error is news, though not a new occurrence.
+    const escalated = isError && !existing.resolved && existing.severity !== 'error' && input.severity === 'error';
     existing.title = input.title;
     existing.severity = input.severity;
     for (const key of REFRESHABLE_DETAIL_KEYS) {
@@ -503,16 +523,22 @@ export async function upsertNotification(
     const stamp = originStamp(existing.kind);
     if (stamp.origin) existing.origin = stamp.origin;
     else delete existing.origin;
-    existing.count = (existing.count ?? 1) + 1;
     existing.lastTimestamp = input.timestamp ?? Date.now();
-    // Deliberate: a re-FIRE re-badges the bell — the thing is happening again,
-    // so it's news even if the user already read the earlier occurrence. The
-    // frontend's sticky-read behavior applies to a re-LOAD of the same
-    // occurrence, which is a different event.
-    existing.read = false;
-    // A stamped outcome only means anything for a permission request; on any
-    // other kind a fresh occurrence means the thing is happening again.
-    if (existing.resolved && existing.kind !== 'permission') {
+    // An ERROR card is one cause, and its count is how many times that cause
+    // came BACK, not how often it was seen while it stood: a standing failure
+    // re-logged every 60 s (or after every restart) only moves lastTimestamp
+    // and never re-badges the bell. The same error after a recovery or an
+    // expiry is news again: it counts, and it is unread. Other kinds keep the
+    // old fold, where every re-fire is an occurrence.
+    const reopening = !!existing.resolved && existing.kind !== 'permission';
+    const standing = isError && !existing.resolved;
+    if (!standing) {
+      existing.count = (existing.count ?? 1) + 1;
+      existing.read = false;
+    } else if (escalated) {
+      existing.read = false;
+    }
+    if (reopening) {
       delete existing.resolved;
       delete existing.resolvedAt;
     }
@@ -522,11 +548,19 @@ export async function upsertNotification(
     // Return a SHALLOW CLONE, not the live store object: callers broadcast the
     // record after awaits, and a concurrent fold would otherwise mutate the
     // payload under them (count/body changing between read and send).
-    return { record: { ...existing }, outcome: 'refreshed' as const };
+    return { record: { ...existing }, outcome: reopening ? 'reopened' as const : 'refreshed' as const };
   }));
-  reportOwnCards([{ mode: 'upsert', key: out.record.dedupKey, record: { ...out.record } }]);
+  if (out.outcome !== 'suppressed') {
+    reportOwnCards([{ mode: 'upsert', key: out.record.dedupKey, record: { ...out.record } }]);
+  }
   return out;
 }
+
+/**
+ * What an upsert did. `suppressed`: an error card the user dismissed while its
+ * cause still stood; nothing was written, and callers broadcast nothing.
+ */
+export type UpsertOutcome = 'inserted' | 'refreshed' | 'reopened' | 'suppressed';
 
 /** The feed (newest-last insertion order) + count of unread entries. */
 export async function listNotifications(): Promise<{ feed: NotificationRecord[]; unreadCount: number }> {
@@ -650,6 +684,15 @@ export async function dismissNotifications(
       gone = store.notifications;
       store.notifications = [];
     }
+    // A dismissed error whose cause still stands keeps a tombstone, so the same
+    // cause does not raise a fresh card a minute later (dismissed-conditions.ts).
+    const now = Date.now();
+    const standing = gone.filter(n => n.kind === 'operation-error' && !n.resolved);
+    if (standing.length > 0 || store.dismissed?.length) {
+      const kept = liveDismissals(store.dismissed, now)
+        .filter(d => !standing.some(n => n.dedupKey === d.dedupKey));
+      store.dismissed = [...kept, ...standing.map(n => dismissalOf(n, now))];
+    }
     return {
       unreadCount: store.notifications.filter(n => !n.read).length,
       removed: before - store.notifications.length,
@@ -763,12 +806,16 @@ export async function recoverNotifications(
   // (the card just recovers on the next signal or the boot reconcile). An
   // UNREADABLE store falls through to the locked path, which repairs it.
   const snapshot = await readStoreOrNull();
-  if (snapshot && !snapshot.notifications.some(
+  const endsDismissal = (list: DismissedCondition[] | undefined): boolean =>
+    !!list?.some(d => d.keys.some(k => keys.has(k)));
+  if (snapshot && !endsDismissal(snapshot.dismissed) && !snapshot.notifications.some(
     n => n.kind === 'operation-error' && !n.resolved && matches(n),
   )) {
     return { recovered: [] };
   }
   const out = await withWriteLock(() => withStore((store) => {
+    // The condition recovered: a dismissal of it is over, and its next failure is news.
+    if (store.dismissed?.length) store.dismissed = endDismissals(store.dismissed, keys, asOf);
     const recovered: NotificationRecord[] = [];
     for (const rec of store.notifications) {
       if (rec.kind !== 'operation-error' || rec.resolved) continue;
@@ -1010,6 +1057,16 @@ export async function resolvePermissionNotification(
  * the cards the cloud companion sends (apply-companion-cards.ts). The cap and
  * the empty-feed backup apply as for every write here.
  */
-export function mutateNotificationStore<R>(fn: (store: { notifications: NotificationRecord[] }) => R): Promise<R> {
+/**
+ * The keys the user's dismissals of still-failing cards wait on. A dismissed
+ * card is gone from the feed, so the boot seeding (which reads unresolved
+ * cards) would otherwise never re-arm the tracker whose recovery ends it.
+ */
+export async function dismissedConditionKeys(now: number = Date.now()): Promise<string[]> {
+  const store = await readStoreOrNull();
+  return store ? dismissalKeys(store.dismissed, now) : [];
+}
+
+export function mutateNotificationStore<R>(fn: (store: { notifications: NotificationRecord[]; dismissed?: DismissedCondition[] }) => R): Promise<R> {
   return withWriteLock(() => withStore(fn));
 }

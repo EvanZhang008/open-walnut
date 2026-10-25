@@ -157,6 +157,14 @@ export function isRemoteIdClaimedByLiveTask(
   return row ? { claimed: true, byTaskId: row.task_id } : { claimed: false };
 }
 
+/** The source of a live task, or null when no task has that id. */
+export function liveTaskSource(taskId: string): string | null {
+  const db = getDb();
+  if (!db) return null;
+  const row = db.prepare('SELECT source FROM tasks WHERE id = ?').get(taskId) as { source: string } | undefined;
+  return row ? row.source : null;
+}
+
 /**
  * Every OTHER live task that holds any of `remoteIds` for `source`. The question
  * deleteTask must ask before writing a 'deleted' tombstone: the ledger PK is

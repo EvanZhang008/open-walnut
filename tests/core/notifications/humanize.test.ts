@@ -633,3 +633,26 @@ describe('the sanitize hook', () => {
     expect(out.message).toContain('secret-abc123');
   });
 });
+
+describe('plain titles for the 2026-10-25 families', () => {
+  it('a failed session action from another device says what failed, not the plumbing', () => {
+    const out = humanizeErrorNotification({
+      title: 'session control relay failed',
+      subsystem: 'session',
+      meta: { action: 'open', error: 'session not found' },
+    });
+    expect(out.title).toBe("Couldn't open a session for another device");
+    expect(out.message).toBe('session not found.');
+    expect(out.category).toBe('Sessions');
+  });
+
+  it('a host outage card is "Cannot connect to <host>", filed under Sessions', async () => {
+    const { hostOutageCopy } = await import('../../../src/core/notifications/humanize.js');
+    expect(hostOutageCopy('devbox')).toEqual({
+      title: 'Cannot connect to devbox',
+      message: 'Walnut cannot reach devbox, so sessions there cannot start or get messages until the connection is back.',
+      category: 'Sessions',
+    });
+    expect(categoryFromRecoveryKey('host:devbox')).toBe('Sessions');
+  });
+});

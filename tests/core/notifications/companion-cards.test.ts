@@ -87,7 +87,7 @@ describe('what the store reports', () => {
       'add:perm:r1', 'upsert:logerr:p', 'upsert:logerr:p', 'replace:plugin:chat:standup',
       'state:perm:r1', 'state:logerr:p', 'remove:plugin:chat:standup',
     ])
-    expect(seen.find((c) => c.mode === 'state' && c.key === 'logerr:p')?.record).toMatchObject({ resolved: 'recovered', origin: 'replica', count: 2 })
+    expect(seen.find((c) => c.mode === 'state' && c.key === 'logerr:p')?.record).toMatchObject({ resolved: 'recovered', origin: 'replica' })
   })
 
   it('a report made before the sink started is handed to it', async () => {
@@ -140,7 +140,7 @@ describe('the outbox', () => {
     await _companionCardsSavedForTesting()
     const onDisk = JSON.parse(fs.readFileSync(OUTBOX, 'utf8'))
     expect(Object.keys(onDisk.cards).sort()).toEqual(['cron:d', 'logerr:storm'])
-    expect(onDisk.cards['logerr:storm']).toMatchObject({ mode: 'upsert', fires: 5, record: { count: 5 } })
+    expect(onDisk.cards['logerr:storm']).toMatchObject({ mode: 'upsert', fires: 5, record: { lastTimestamp: 1_004 } })
     expect(pendingCompanionCards().cards.map((c) => c.dedupKey).sort()).toEqual(['cron:d', 'logerr:storm'])
 
     // A restart keeps them (the file is read again).
@@ -172,7 +172,7 @@ describe('the outbox', () => {
     }
     await flushCompanionCards('test')
     const left = pendingCompanionCards().cards
-    expect(left.map((c) => [c.dedupKey, c.count])).toEqual([['logerr:race', 2]])
+    expect(left.map((c) => [c.dedupKey, c.lastTimestamp])).toEqual([['logerr:race', 20]])
   })
 
   it('startCompanionCards installs the sink: a card made after it is sent soon', async () => {

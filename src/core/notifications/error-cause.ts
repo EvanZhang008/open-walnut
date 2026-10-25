@@ -108,6 +108,15 @@ function usableHost(host: string | undefined): string | null {
   return h;
 }
 
+/**
+ * True when the text is one of the link-down producers above (deploy or start
+ * of the daemon failed, the cached connection failure, no connection at all),
+ * not just an errno a single command can also hit (a timeout, a reset).
+ */
+export function namesLinkDown(text: string): boolean {
+  return TEXT_HOST_RES.some((re) => re.test(text));
+}
+
 /** First host the TEXT names, if any pattern matches. */
 function hostFromText(text: string): string | null {
   for (const re of TEXT_HOST_RES) {

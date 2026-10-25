@@ -180,11 +180,10 @@ describe('flagClientIncidents', () => {
 
     const { feed } = await listNotifications();
     const mine = feed.filter((n) => n.dedupKey.includes('phone-d'));
-    expect(mine).toHaveLength(3);
+    // A stall that recovered on its own is over: no card (the bus event and the
+    // log still carry it). The freeze and the crash are each their own card.
     expect(mine.map((n) => n.dedupKey.split(':')[0]).sort())
-      .toEqual(['ios-crash', 'ios-freeze', 'ios-stall']);
-    // Severity reflects the class: a brief stall is a warning, not an error.
-    expect(mine.find((n) => n.dedupKey.startsWith('ios-stall'))!.severity).toBe('warning');
+      .toEqual(['ios-crash', 'ios-freeze']);
     expect(mine.find((n) => n.dedupKey.startsWith('ios-crash'))!.severity).toBe('error');
   });
 
@@ -200,11 +199,9 @@ describe('flagClientIncidents', () => {
     await flagClientIncidents('phone-stall', [
       { subsystem: 'freeze', message: 'stall sample', level: 'error', m_stalledSeconds: '2.0', m_build: '45' },
     ]);
+    // Not a freeze, and over by the time it arrives: no card at all.
     const { feed } = await listNotifications();
-    const entry = feed.find((n) => n.dedupKey.includes('phone-stall'))!;
-    expect(entry.dedupKey.startsWith('ios-stall')).toBe(true);
-    expect(entry.severity).toBe('warning');
-    expect(entry.title).not.toContain('froze');
+    expect(feed.find((n) => n.dedupKey.includes('phone-stall'))).toBeUndefined();
   });
 
   it('still fails loud on an UNKNOWN freeze message', async () => {

@@ -25,7 +25,8 @@ import {
 } from './task-manager.js';
 import { bus, EventNames } from './event-bus.js';
 import { isLegacyInboxGroup, isRetiredQuickStartGroup } from '../utils/format.js';
-import { isRemoteIdBlocked, isRemoteIdClaimedByLiveTask } from './task-remote-links.js';
+import { isRemoteIdBlocked, isRemoteIdClaimedByLiveTask, liveTaskSource, recordRemoteLink } from './task-remote-links.js';
+import { preLedgerOwnerOf } from './pre-ledger-owners.js';
 import type { RegisteredPlugin, RemoteSyncItem, SyncPollContext } from './integration-types.js';
 import type { Task } from './types.js';
 
@@ -265,6 +266,34 @@ function inFailureBackoff(state: ReconcileState, now: number = Date.now()): bool
 }
 
 /**
+ * A remote item a local task owned before the ledger existed: ledger it as
+ * released (never a new local task, never a remote write) and say so once.
+ * False when there is no such evidence, so the caller reports the refusal.
+ */
+async function releasePreLedgerCopy(pluginId: string, remote: RemoteSyncItem): Promise<boolean> {
+  try {
+    const extId = (remote.fields.ext?.[pluginId] as Record<string, unknown> | undefined)?.id;
+    const ids = [remote.remoteId, ...(typeof extId === 'string' && extId !== remote.remoteId ? [extId] : [])];
+    const owner = await preLedgerOwnerOf(pluginId, ids);
+    if (!owner) return false;
+    // Still a live task of THIS provider: not a departed copy, whatever its ext says now.
+    if (liveTaskSource(owner) === pluginId) return false;
+    for (const remoteId of ids) {
+      recordRemoteLink({ source: pluginId, remoteId, taskId: owner, state: 'released', reason: 'pre-ledger-owner' });
+    }
+    log.web.info('sync-reconciler: remote item is an old copy of a local task from before the ledger, released', {
+      pluginId, remoteId: remote.remoteId, title: remote.title, formerTaskId: owner,
+    });
+    return true;
+  } catch (err) {
+    log.web.warn('sync-reconciler: pre-ledger owner check failed', {
+      pluginId, remoteId: remote.remoteId, error: err instanceof Error ? err.message : String(err),
+    });
+    return false;
+  }
+}
+
+/**
  * Retire the cards of lists that are no longer refused. Lock-free when nothing
  * matches (recoverNotifications pre-checks), so a healthy reconcile pays one
  * store read at most; never throws into the reconcile.
@@ -309,6 +338,28 @@ export class SyncReconciler {
   private isFirstTick = new Map<string, boolean>();
   /** `${pluginId}:${lower(project)}` → consecutive full reconciles refused. */
   private refusalStreaks = new Map<string, number>();
+
+  /**
+   * Re-arm the refusals an earlier process already reported, from the recovery
+   * keys of the unresolved cards (`plugin:<id>:list:<project>`). The streak
+   * lives in memory, so a restart forgot both halves of the card's lifecycle:
+   * the same standing refusal was reported again three reconciles later, and a
+   * refusal that ended across a restart never retired its card (nothing in the
+   * map to end). Seeded at the threshold: already reported, not again.
+   */
+  seedReportedRefusals(recoveryKeys: readonly string[]): number {
+    let n = 0;
+    for (const key of recoveryKeys) {
+      const m = /^plugin:([^:]+):list:(.+)$/.exec(key);
+      if (!m) continue;
+      const streakKey = `${m[1]}:${m[2]}`;
+      if ((this.refusalStreaks.get(streakKey) ?? 0) < REFUSAL_ESCALATE_TICKS) {
+        this.refusalStreaks.set(streakKey, REFUSAL_ESCALATE_TICKS);
+        n++;
+      }
+    }
+    return n;
+  }
   private readonly fullPullTimeoutMs: number;
 
   // The sync dir is made on the first save, never here: this class's singleton is
@@ -707,7 +758,10 @@ export class SyncReconciler {
     // reason and each refused item is counted (see noteRefusal / noteRefusals).
     type Resolution = string | { conflict: RefusalReason; claimedBy?: string };
     const ensuredProjects = new Map<string, Resolution>(); // lower(name) → canonical | refusal
-    const resolveProject = async (fields: Partial<Task>): Promise<'ok' | 'conflict'> => {
+    const resolveProject = async (
+      fields: Partial<Task>,
+      onConflict: (project: string, reason: RefusalReason, claimedBy?: string) => void = noteRefusal,
+    ): Promise<'ok' | 'conflict'> => {
       const name = (fields.project ?? '').trim();
       if (!name) return 'ok';
       const key = name.toLowerCase();
@@ -769,7 +823,7 @@ export class SyncReconciler {
         ensuredProjects.set(key, resolution);
       }
       if (typeof resolution !== 'string') {
-        noteRefusal(name, resolution.conflict, resolution.claimedBy);
+        onConflict(name, resolution.conflict, resolution.claimedBy);
         return 'conflict';
       }
       if (resolution) fields.project = resolution;
@@ -844,7 +898,19 @@ export class SyncReconciler {
         // A remote task pointing at another provider's project is NOT imported:
         // creating it would strand an unpushable minority-source task. It stays
         // remote-only until the claim or the remote grouping is changed.
-        if ((await resolveProject(fields)) === 'conflict') continue;
+        const refusal: { project?: string; reason?: RefusalReason; claimedBy?: string } = {};
+        const resolved = await resolveProject(fields, (project, reason, claimedBy) => {
+          Object.assign(refusal, { project, reason, claimedBy });
+        });
+        if (resolved === 'conflict') {
+          // …unless it is Walnut's own old copy of a task that left this provider
+          // before the ledger existed (pre-ledger-owners.ts): then it was never
+          // the user's to place. It is ledgered as released, which every later
+          // pull honours by skipping it, and it is not a refusal to report.
+          if (await releasePreLedgerCopy(pluginId, remote)) continue;
+          if (refusal.project && refusal.reason) noteRefusal(refusal.project, refusal.reason, refusal.claimedBy);
+          continue;
+        }
         creates.push(fields);
       }
       try {

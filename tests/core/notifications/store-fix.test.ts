@@ -115,7 +115,7 @@ describe('a fold keeps the repair pointer', () => {
     }));
 
     expect(outcome).toBe('refreshed');
-    expect(record.count).toBe(2);
+    expect(record.count).toBeUndefined(); // the same standing problem is one occurrence
     expect(record.body).toBe('The data repo is 4.1 GB.');
     expect(record.fix).toEqual({ taskId: 't-1', sessionId: 's-1', startedAt: 7 });
     expect((await findNotification(DEDUP_KEY))!.fix!.taskId).toBe('t-1');

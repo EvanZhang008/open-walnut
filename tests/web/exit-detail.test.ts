@@ -90,4 +90,15 @@ describe('exitDetail shapes', () => {
     expect(src).toMatch(/\.\.\.exitDetail\(detail\)/)
     expect(src).toMatch(/process\.on\('uncaughtException', \(err\) => \{ exitLog\('uncaughtException', err\)/)
   })
+
+  // A stop signal ends every deploy and every quit: logged, never a card (it
+  // rang the bell once per deploy, 129 times by 2026-10-25). A crash still is one.
+  it('a stop signal is logged without a card', () => {
+    const src = fs.readFileSync(path.join(ROOT, 'src/web/server.ts'), 'utf8')
+    expect(src).toMatch(/exitLog\(reason, undefined, \{ card \}\)/)
+    expect(src).toMatch(/fatalSignal\('SIGTERM', '[^']+', false\)/)
+    // A hangup is not a routine stop: it keeps its card.
+    expect(src).toMatch(/fatalSignal\('SIGHUP', '[^']+'\)\)/)
+    expect(src).toMatch(/opts\.card === false \? \{ skipNotify: true \}/)
+  })
 })

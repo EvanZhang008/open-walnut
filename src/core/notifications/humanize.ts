@@ -204,7 +204,7 @@ export function categoryFromRecoveryKey(recoveryKey: string | undefined): string
     const id = key.slice('plugin:'.length).trim();
     return id ? titleizeId(id) : undefined;
   }
-  if (key.startsWith('session:') || key.startsWith('task:')) return CATEGORY_SESSIONS;
+  if (key.startsWith('session:') || key.startsWith('task:') || key.startsWith('host:')) return CATEGORY_SESSIONS;
   if (key.startsWith('route:')) return CATEGORY_API;
   if (key.startsWith('bus:')) return CATEGORY_INTERNAL;
   switch (key) {
@@ -403,6 +403,18 @@ const RULES: Rule[] = [
       // message was not lost…") — that IS the human message, so it is preserved
       // verbatim rather than re-summarized into a second, weaker copy.
       message: (i.body ?? '').trim() || firstSentence(metaError(i.meta)),
+    }),
+  },
+  {
+    // The primary answering a session action (open, read, stop) the phone or the
+    // cloud companion asked for. The log line names the plumbing; the card says
+    // what the person saw fail.
+    id: 'session-control-relay-failed',
+    category: CATEGORY_SESSIONS,
+    match: (i) => starts(i.title, 'session control relay failed'),
+    render: (i) => ({
+      title: "Couldn't open a session for another device",
+      message: firstSentence(metaError(i.meta)) || 'The Mac could not answer a session request from the phone or the cloud companion.',
     }),
   },
   {
@@ -734,5 +746,18 @@ export function humanizeErrorNotification(
     category: structural,
     title: fallbackTitle(input.title),
     message: prose ? firstSentence(prose) : firstSentence(metaError(input.meta)),
+  };
+}
+
+/**
+ * The ONE card a host outage gets (log-error-bridge.ts folds every session
+ * start, error and delivery failure whose cause is that host's link into it).
+ * Said plainly, the way the user asked for it: what is wrong, and what it means.
+ */
+export function hostOutageCopy(host: string): { title: string; message: string; category: string } {
+  return {
+    title: `Cannot connect to ${host}`,
+    message: `Walnut cannot reach ${host}, so sessions there cannot start or get messages until the connection is back.`,
+    category: CATEGORY_SESSIONS,
   };
 }

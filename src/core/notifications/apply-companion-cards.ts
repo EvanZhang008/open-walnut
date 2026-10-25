@@ -26,6 +26,7 @@
 import { bus, EventNames } from '../event-bus.js'
 import { log } from '../../logging/index.js'
 import { mutateNotificationStore, REFRESHABLE_DETAIL_KEYS, type NotificationRecord } from './store.js'
+import { liveDismissals, type DismissedCondition } from './dismissed-conditions.js'
 import type { OwnCardMode } from './mirror.js'
 
 export const MAX_CARDS_PER_CALL = 100
@@ -94,17 +95,27 @@ function fold(existing: NotificationRecord, card: NotificationRecord, fires: num
   else delete existing.causeKey
   if (card.origin) existing.origin = card.origin
   else delete existing.origin
-  existing.count = (existing.count ?? 1) + Math.max(1, fires)
+  // The same rule as upsertNotification: an error card still failing is one
+  // occurrence (only the stamp moves); one that comes back after it settled counts.
+  const standing = existing.kind === 'operation-error' && !existing.resolved
+  if (!standing) {
+    existing.count = (existing.count ?? 1) + Math.max(1, fires)
+    existing.read = false
+  }
   existing.lastTimestamp = occurrence(card)
-  existing.read = false
   if (card.resolved) { existing.resolved = card.resolved; existing.resolvedAt = card.resolvedAt ?? Date.now() }
   else { delete existing.resolved; delete existing.resolvedAt }
 }
 
-function applyOne(feed: NotificationRecord[], card: Card, events: Event[]): boolean {
+function applyOne(feed: NotificationRecord[], card: Card, events: Event[], dismissed: readonly DismissedCondition[]): boolean {
   const idx = feed.findIndex((n) => n.dedupKey === card.key)
   const existing = idx === -1 ? null : feed[idx]
-  const insert = (): boolean => { const r = { ...card.record }; feed.push(r); events.push({ type: 'new', record: { ...r } }); return true }
+  const insert = (): boolean => {
+    // The user dismissed this error here while it was failing: the box's next
+    // refresh of the same card is not news until the condition recovers.
+    if (card.record.kind === 'operation-error' && !card.record.resolved && dismissed.some((d) => d.dedupKey === card.key)) return false
+    const r = { ...card.record }; feed.push(r); events.push({ type: 'new', record: { ...r } }); return true
+  }
   const stamped = (): boolean => {
     if (!existing || !stamp(existing, card.record)) return false
     events.push({ type: 'updated', record: { ...existing } })
@@ -156,7 +167,8 @@ export async function applyCompanionCards(raw: unknown): Promise<{ applied: numb
   if (cards.length) {
     applied = await mutateNotificationStore((store) => {
       let n = 0
-      for (const card of cards) if (applyOne(store.notifications, card, events)) n++
+      const dismissed = liveDismissals(store.dismissed, Date.now())
+      for (const card of cards) if (applyOne(store.notifications, card, events, dismissed)) n++
       return n
     })
   }

@@ -134,7 +134,7 @@ export function createPluginNotifications(options: {
         taskId: notice.taskId,
         sessionId: notice.sessionId,
       })
-      bus.emit(outcome === 'inserted' ? 'notification:new' : 'notification:updated', record, ['web-ui'], emitSource)
+      if (outcome !== 'suppressed') bus.emit(outcome === 'inserted' ? 'notification:new' : 'notification:updated', record, ['web-ui'], emitSource)
     },
 
     async recover(): Promise<void> {

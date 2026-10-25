@@ -14,8 +14,15 @@ const {
   installLogErrorNotifications, uninstallLogErrorNotifications, recoveryKeyOf,
   dedupFingerprintForTest,
 } = await import('../../../src/core/notifications/log-error-bridge.js');
-const { listNotifications, dismissNotifications } =
+const { listNotifications, dismissNotifications: dismissForReal, recoverNotifications, NOTIFICATIONS_STORE_FILE } =
   await import('../../../src/core/notifications/store.js');
+/** Empty the feed between tests. A real dismiss of a failing card leaves a
+ *  tombstone that would absorb the next test's identical card, so wipe the file. */
+async function dismissNotifications(): Promise<void> {
+  await dismissForReal();
+  fs.rmSync(NOTIFICATIONS_STORE_FILE, { force: true });
+  fs.rmSync(NOTIFICATIONS_STORE_FILE.replace(/\.json$/, '.backup.json'), { force: true });
+}
 const { createSubsystemLogger } = await import('../../../src/logging/index.js');
 
 /** The bridge persists async (fire-and-forget) — poll until the feed has at
@@ -23,7 +30,10 @@ const { createSubsystemLogger } = await import('../../../src/logging/index.js');
 async function feedAfterCount(
   count = 1,
 ): Promise<Awaited<ReturnType<typeof listNotifications>>['feed']> {
-  for (let i = 0; i < 20; i++) {
+  // Up to 5 s: the first card of a family can wait on a cold dynamic import
+  // (session tracker, inbox) that takes over half a second on a loaded machine.
+  // Returns as soon as the feed fills, so a fast run pays nothing.
+  for (let i = 0; i < 200; i++) {
     await new Promise(r => setTimeout(r, 25));
     const { feed } = await listNotifications();
     if (feed.length >= count) return feed;
@@ -158,9 +168,11 @@ describe('log-error → notification bridge', () => {
 
     const { feed } = await listNotifications();
     expect(feed).toHaveLength(1);
-    expect(feed[0].count).toBe(2);
+    // Still the same standing cause: one occurrence, only the latest stamp moves.
+    expect(feed[0].count).toBeUndefined();
+    expect(feed[0].lastTimestamp).toBeGreaterThan(feed[0].timestamp);
     expect(events.map(e => e.name)).toEqual(['notification:new', 'notification:updated']);
-    expect(events[1].count).toBe(2);
+    expect(events[1].count).toBeUndefined();
   });
 
   it('releaseAbsorbedKeys lets a RE-failure notify fresh inside the TTL window', async () => {
@@ -188,6 +200,7 @@ describe('log-error → notification bridge', () => {
     expect(events).toEqual(['notification:new']);
 
     // …released by the recovery, so the next failure folds and re-broadcasts.
+    await recoverNotifications(['route:GET /api/flappy']);
     releaseAbsorbedKeys(['route:GET /api/flappy']);
     logger.error('GET /api/flappy → 500', meta);
     await new Promise(r => setTimeout(r, 200));
@@ -423,7 +436,7 @@ describe('recoveryKeyOf', () => {
     // ONE card that folded, not two.
     expect(feed).toHaveLength(1);
     expect(feed[0].dedupKey).toBe(keyWithout);
-    expect(feed[0].count).toBe(2);
+    expect(feed[0].count).toBeUndefined(); // one standing cause, one occurrence
     // The tag landed on the record…
     expect(feed[0].recoveryKey).toBe('plugin:plugin-a');
     // …but never into the human-facing body (it is plumbing, not context).
@@ -604,7 +617,7 @@ describe('humanized copy on the way into the feed', () => {
     }
     const { feed } = await listNotifications();
     expect(feed).toHaveLength(1);
-    expect(feed[0].count).toBe(2);
+    expect(feed[0].count).toBeUndefined();
   });
 
   it("a PLUGIN condition folds across tasks: one cause, one card, the task as the latest deep link", async () => {
@@ -652,7 +665,7 @@ describe('humanized copy on the way into the feed', () => {
     }
     const { feed } = await listNotifications();
     expect(feed).toHaveLength(1);
-    expect(feed[0].count).toBe(2);
+    expect(feed[0].count).toBeUndefined();
     expect(feed[0].recoveryKey).toBe('plugin:acme');
     expect(feed[0].taskId).toBe('mt-b');
   });
@@ -692,7 +705,8 @@ describe('causeKey derivation through the sink', () => {
 
     const feed = await feedAfterFlush();
     expect(feed).toHaveLength(1);
-    expect(feed[0].recoveryKey).toBe('task:t1');
+    // A host outage is about the host: the card is filed and retired under it.
+    expect(feed[0].recoveryKey).toBe('host:devbox');
     expect(feed[0].causeKey).toBe('host:devbox');
   });
 
@@ -752,6 +766,7 @@ describe('causeKey derivation through the sink', () => {
     expect(events).toEqual(['notification:new']);
 
     // The right cause key releases it, so the next failure folds and re-broadcasts.
+    await recoverNotifications(['host:devbox']);
     releaseAbsorbedKeys(['host:devbox']);
     logger.error('transport start failed', meta);
     await new Promise(r => setTimeout(r, 200));
@@ -759,6 +774,84 @@ describe('causeKey derivation through the sink', () => {
     const { feed } = await listNotifications();
     expect(feed).toHaveLength(1);
     expect(feed[0].count).toBe(2);
+    expect(feed[0].causeKey).toBe('host:devbox');
+  });
+});
+
+/**
+ * One host outage is ONE card (2026-10-24: one link drop to a dev box made seven
+ * "Couldn't start a session" and seven "A session hit an error" cards). Session
+ * and task-start errors whose cause is a host fold under that host, say so
+ * plainly, and are retired by the host's recovery, not by any one session's.
+ */
+describe('a host outage folds into one plain card', () => {
+  beforeEach(async () => {
+    uninstallLogErrorNotifications();
+    await dismissNotifications();
+    installLogErrorNotifications();
+  });
+
+  afterEach(() => {
+    uninstallLogErrorNotifications();
+  });
+
+  const down = (host: string) => `DaemonConnection not connected to ${host}`;
+
+  it('start failures on several tasks and a session error on the same host are one card', async () => {
+    const session = createSubsystemLogger('session');
+    session.error('transport start failed', { host: 'devbox', taskId: 't1', error: down('devbox') });
+    session.error('transport start failed', { host: 'devbox', taskId: 't2', error: down('devbox') });
+    session.error('session turn failed', { host: 'devbox', sessionId: 's9', error: down('devbox') });
+    await new Promise(r => setTimeout(r, 250));
+
+    const { feed } = await listNotifications();
+    expect(feed).toHaveLength(1);
+    expect(feed[0].dedupKey).toBe('logerr:cause:host:devbox');
+    expect(feed[0].title).toBe('Cannot connect to devbox');
+    expect(feed[0].body).toContain('devbox');
+    expect(feed[0].category).toBe('Sessions');
+    expect(feed[0].recoveryKey).toBe('host:devbox');
+    expect(feed[0].taskId).toBeUndefined();
+    expect(feed[0].sessionId).toBeUndefined();
+  });
+
+  it('two hosts down are two cards, and one reconnecting retires only its own', async () => {
+    const session = createSubsystemLogger('session');
+    session.error('transport start failed', { host: 'devbox', taskId: 't1', error: down('devbox') });
+    session.error('transport start failed', { host: 'buildbox', taskId: 't2', error: down('buildbox') });
+    await feedAfterCount(2);
+
+    await recoverNotifications(['host:buildbox']);
+    const { feed } = await listNotifications();
+    expect(feed).toHaveLength(2);
+    expect(feed.find(n => n.recoveryKey === 'host:devbox')?.resolved).toBeUndefined();
+    expect(feed.find(n => n.recoveryKey === 'host:buildbox')?.resolved).toBe('recovered');
+  });
+
+  it('a session error with no host cause stays its own card', async () => {
+    const session = createSubsystemLogger('session');
+    session.error('transport start failed', { host: 'devbox', taskId: 't1', error: down('devbox') });
+    session.error('transport start failed', { host: 'devbox', taskId: 't2', cwd: '/data/gone', error: 'ENOENT: no such file or directory' });
+    const feed = await feedAfterCount(2);
+    expect(feed.map(n => n.recoveryKey).sort()).toEqual(['host:devbox', 'task:t2']);
+  });
+
+  it('a command that timed out on a connected host stays its session\'s card', async () => {
+    // A timeout or a reset can hit one command while the link is up; folded under
+    // the host, the card would wait for a reconnect that never comes.
+    const session = createSubsystemLogger('session');
+    session.error('session turn failed', { host: 'devbox', sessionId: 's1', error: 'daemon command timeout after 30000ms (ECONNRESET)' });
+    const feed = await feedAfterFlush();
+    expect(feed).toHaveLength(1);
+    expect(feed[0].dedupKey).not.toBe('logerr:cause:host:devbox');
+    expect(feed[0].recoveryKey).toBe('session:s1');
+  });
+
+  it('a route card that names the host keeps its own condition', async () => {
+    const web = createSubsystemLogger('web');
+    web.error('GET /api/x → 500', { recoveryKey: 'route:GET /api/x', message: down('devbox') });
+    const feed = await feedAfterFlush();
+    expect(feed[0].recoveryKey).toBe('route:GET /api/x');
     expect(feed[0].causeKey).toBe('host:devbox');
   });
 });

@@ -275,7 +275,7 @@ describe('upsertNotification', () => {
     expect(feed[0].action).toEqual({ label: 'Open Settings', to: '/settings' });
   });
 
-  it('refreshes in place on a dedupKey hit: count grows, latest body wins, id/timestamp stable', async () => {
+  it('refreshes in place on a dedupKey hit: latest body wins, id/timestamp stable, a standing error is one occurrence', async () => {
     const first = await upsertNotification({
       kind: 'operation-error', severity: 'error', title: 'Delivery Failed',
       body: 'attempt 1', timestamp: 1_000, dedupKey: 'error:session:s1:delivery',
@@ -291,19 +291,29 @@ describe('upsertNotification', () => {
     expect(second.record.id).toBe(first.record.id);
     expect(second.record.timestamp).toBe(1_000); // first-seen preserved
     expect(second.record.lastTimestamp).toBe(2_000);
-    expect(second.record.count).toBe(2);
     expect(second.record.body).toBe('attempt 2');
-    expect(second.record.read).toBe(false); // a fresh occurrence is unread again
+    // The same cause still failing is not news: no count, no re-badge.
+    expect(second.record.count).toBeUndefined();
+    expect(second.record.read).toBe(true);
 
     const { feed, unreadCount } = await listNotifications();
     expect(feed).toHaveLength(1);
-    expect(unreadCount).toBe(1);
+    expect(unreadCount).toBe(0);
 
     const third = await upsertNotification({
       kind: 'operation-error', severity: 'error', title: 'Delivery Failed',
       body: 'attempt 3', timestamp: 3_000, dedupKey: 'error:session:s1:delivery',
     });
-    expect(third.record.count).toBe(3);
+    expect(third.record.count).toBeUndefined();
+    expect(third.record.lastTimestamp).toBe(3_000);
+  });
+
+  it('a non-error kind keeps counting every fold and re-badges', async () => {
+    await upsertNotification({ kind: 'cron', severity: 'info', title: 'Job', dedupKey: 'cron:job' });
+    await markRead();
+    const second = await upsertNotification({ kind: 'cron', severity: 'info', title: 'Job', dedupKey: 'cron:job' });
+    expect(second.record.count).toBe(2);
+    expect(second.record.read).toBe(false);
   });
 
   it('copies supplied detail fields onto the refreshed record, leaving unsupplied ones alone', async () => {
@@ -397,16 +407,16 @@ describe('upsertNotification', () => {
       kind: 'operation-error', severity: 'error', title: 'Failed', dedupKey: 'error:clone',
     });
     const { record: second } = await upsertNotification({
-      kind: 'operation-error', severity: 'error', title: 'Failed', body: 'b2', dedupKey: 'error:clone',
+      kind: 'operation-error', severity: 'error', title: 'Failed', body: 'b2', timestamp: 2_000, dedupKey: 'error:clone',
     });
-    expect(second.count).toBe(2);
+    expect(second.lastTimestamp).toBe(2_000);
 
     // Callers broadcast `record` after awaits — a concurrent fold must not
     // change the payload under them.
     await upsertNotification({
-      kind: 'operation-error', severity: 'error', title: 'Failed', body: 'b3', dedupKey: 'error:clone',
+      kind: 'operation-error', severity: 'error', title: 'Failed', body: 'b3', timestamp: 3_000, dedupKey: 'error:clone',
     });
-    expect(second.count).toBe(2);
+    expect(second.lastTimestamp).toBe(2_000);
     expect(second.body).toBe('b2');
   });
 });

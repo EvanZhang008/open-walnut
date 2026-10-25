@@ -156,7 +156,7 @@ import { quietRouter } from './routes/quiet.js'
 import { pluginStatusItemsRouter } from './routes/plugin-status-items.js'
 import { initQuiet, stopQuiet } from '../core/quiet/quiet-state.js'
 import { hooksRouter } from './routes/hooks.js'
-import { addNotification as addFeedNotification, upsertNotification as upsertFeedNotification, resolvePermissionNotification, recoverNotifications, expireOwnCardsOfUnloadedPlugins } from '../core/notifications/store.js'
+import { addNotification as addFeedNotification, upsertNotification as upsertFeedNotification, resolvePermissionNotification, recoverNotifications, expireOwnCardsOfUnloadedPlugins, dismissedConditionKeys } from '../core/notifications/store.js'
 import { createRecoveryTransitionTracker } from '../core/notifications/recovery-transition.js'
 import { humanizeErrorNotification } from '../core/notifications/humanize.js'
 import { withOriginNote } from '../core/notifications/origin.js'
@@ -330,9 +330,10 @@ async function publishErrorNotification(input: {
     errorNotificationRecentScopes.set(input.dedupScope, timestamp)
     const releaseKeys = [input.recoveryKey, causeKey].filter((k): k is string => !!k)
     if (releaseKeys.length > 0) errorNotificationScopeRecoveryKeys.set(input.dedupScope, releaseKeys)
-    // 'inserted' → a new card; 'refreshed' → the same card with a live count and
-    // the latest body, so connected UIs patch in place instead of re-toasting.
-    broadcastEvent(outcome === 'inserted' ? 'notification:new' : 'notification:updated', record)
+    // 'inserted' → a new card; 'refreshed'/'reopened' → the same card with the
+    // latest body, so connected UIs patch in place instead of re-toasting;
+    // 'suppressed' → the user dismissed this standing cause, nothing to send.
+    if (outcome !== 'suppressed') broadcastEvent(outcome === 'inserted' ? 'notification:new' : 'notification:updated', record)
     return true
   } catch (err) {
     log.web.warn('failed to publish error notification', {
@@ -756,7 +757,7 @@ function installExitDiagnostics(): void {
   exitDiagnosticsInstalled = true
 
   // Log WHY the server dies so we can diagnose silent crashes
-  const exitLog = (reason: string, detail?: unknown) => {
+  const exitLog = (reason: string, detail?: unknown, opts: { card?: boolean } = {}) => {
     const msg = `SERVER EXIT: ${reason}`
     // recoveryKey 'server-lifecycle': the next successful boot retires this card
     // (see the publishRecovery(['server-lifecycle']) call in startServer). Without
@@ -767,13 +768,17 @@ function installExitDiagnostics(): void {
       // The error's stack, code and syscall too: a bare message named no owner (exit-detail.ts).
       ...exitDetail(detail),
       recoveryKey: 'server-lifecycle',
+      // A stop signal is how every deploy and every quit ends the server, and the
+      // next boot retires its card a minute later: as a card it only re-rang the
+      // bell once per deploy (129 times by 2026-10-25). The exit log keeps it.
+      ...(opts.card === false ? { skipNotify: true } : {}),
     }
     log.web.error(msg, meta)
     console.error(`[${new Date().toISOString()}] ${msg}`, JSON.stringify(meta))
   }
 
-  const fatalSignal = (name: NodeJS.Signals, reason: string) => {
-    exitLog(reason)
+  const fatalSignal = (name: NodeJS.Signals, reason: string, card = true) => {
+    exitLog(reason, undefined, { card })
     if (signalExitArmed) return // owner runs stopServer() then exits
     // No owner (still booting, or embedded without a handler): honour the signal.
     // Release the instance lock explicitly — otherwise the next server sees a
@@ -789,7 +794,8 @@ function installExitDiagnostics(): void {
     }
   }
 
-  process.on('SIGTERM', () => fatalSignal('SIGTERM', 'SIGTERM (killed by another process)'))
+  // A deploy or a quit ends the server with SIGTERM: logged, not a card. A hangup is not routine.
+  process.on('SIGTERM', () => fatalSignal('SIGTERM', 'SIGTERM (killed by another process)', false))
   process.on('SIGHUP', () => fatalSignal('SIGHUP', 'SIGHUP (terminal closed or parent died)'))
   process.on('uncaughtException', (err) => { exitLog('uncaughtException', err); process.exit(1) })
   process.on('unhandledRejection', (reason) => {
@@ -3730,7 +3736,9 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         // and every tracker fires only on a failing→healthy edge: hand them the
         // store's memory, or the first healthy signal after a restart retires
         // nothing (the rail outlived every deploy that way).
-        const seeded = await unresolvedErrorRecoveryKeys()
+        // A card the user dismissed while it was failing waits on the same
+        // recovery signal, so its keys are armed too (dismissed-conditions.ts).
+        const seeded = [...new Set([...await unresolvedErrorRecoveryKeys(), ...await dismissedConditionKeys()])]
         if (seeded.length > 0) {
           seedFailingRoutes(seeded)
           for (const key of seeded) {
@@ -3741,6 +3749,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
           // A task's refused-create card: the next sync tick retires it once the task has
           // its remote twin (sync-create-retry.ts cardedCreates).
           seedCardedCreates(seeded)
+          // A refused remote list's card: reported once, retired when the refusal ends.
+          syncReconciler.seedReportedRefusals(seeded)
           // A card from an earlier boot whose daemon this boot already started
           // has no later start to wait for.
           if (seeded.includes(LOCAL_DAEMON_RECOVERY_KEY)) {

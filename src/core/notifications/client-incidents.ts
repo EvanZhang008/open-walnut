@@ -183,6 +183,15 @@ export async function flagClientIncidents(
       { source: 'client-incidents' },
     );
 
+    // A stall that recovered on its own is over by the time it reaches us: the
+    // bus event and the log keep it for forensics, but it is not an error card
+    // (2026-10-25, the user: once it works again, stop showing the error). A
+    // freeze or a crash still is.
+    if (kind === 'stall') {
+      log.notif.info('client incident recorded (recovered stall, no card)', { device, kind, dedupKey, count: batchCount });
+      continue;
+    }
+
     try {
       const record = await addNotification({
         kind: 'operation-error',
