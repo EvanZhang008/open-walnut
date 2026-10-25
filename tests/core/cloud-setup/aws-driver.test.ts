@@ -10,15 +10,24 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { EventEmitter } from 'node:events'
 import { PassThrough } from 'node:stream'
+import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
 
-const spawnCalls: Array<{ cmd: string; args: string[]; env?: NodeJS.ProcessEnv }> = []
+const spawnCalls: Array<{ cmd: string; args: string[]; env?: NodeJS.ProcessEnv; cwd?: string }> = []
 /** Written to the --outputs-file of the next deploy, as cdk would. */
 let stackOutputs: Record<string, string> = {}
 /** What the next `cdk deploy` prints and exits with. Reset per test. */
 let deployOutput: () => { text: string; code: number } = () => ({ text: 'fake cdk: done', code: 0 })
+
+/** How the next `npm ci` behaves: its exit code and how long it runs. Reset per test. */
+let npmCi: { code: number; delayMs: number } = { code: 0, delayMs: 0 }
+/** `npm ci` processes running right now, and the most that ever ran at once. */
+let npmActive = 0
+let npmMaxActive = 0
+/** When each `npm ci` exited (its close event), for ordering assertions. */
+const npmClosedAt: number[] = []
 
 /** Every `aws` invocation detectCreds made, with the env it would have run under. */
 const execFileCalls: Array<{ cmd: string; args: string[]; env?: NodeJS.ProcessEnv }> = []
@@ -57,22 +66,37 @@ vi.mock('node:child_process', async (importOriginal) => {
   return {
     ...actual,
     execFile,
-    spawn: (cmd: string, args: string[], opts?: { env?: NodeJS.ProcessEnv }) => {
+    spawn: (cmd: string, args: string[], opts?: { env?: NodeJS.ProcessEnv; cwd?: string }) => {
       // cdk resolves the target ACCOUNT from its own env, so record it.
-      spawnCalls.push({ cmd, args, env: opts?.env })
+      spawnCalls.push({ cmd, args, env: opts?.env, cwd: opts?.cwd })
+      // `npm ci` starts by removing node_modules and leaves the marker the driver
+      // checks for, as the real one does (an interrupted one leaves the marker too).
+      const isNpmCi = cmd === 'npm' && args[0] === 'ci' && !!opts?.cwd
+      if (isNpmCi) {
+        fs.rmSync(path.join(opts!.cwd!, 'node_modules'), { recursive: true, force: true })
+        fs.mkdirSync(path.join(opts!.cwd!, 'node_modules', 'aws-cdk-lib'), { recursive: true })
+        npmActive++
+        npmMaxActive = Math.max(npmMaxActive, npmActive)
+      }
       // Real PassThroughs, not bare EventEmitters: the driver calls
       // stream.setEncoding() on both pipes, so a fake without it would fail for
       // a reason that has nothing to do with what these tests assert.
+      // No pid: killProcessGroup returns before signalling anything. exitCode and
+      // signalCode stay null until close, as on a real running ChildProcess.
       const child = new EventEmitter() as EventEmitter & {
         stdout: PassThrough; stderr: PassThrough; kill: () => void
+        exitCode: number | null; signalCode: NodeJS.Signals | null
       }
       child.stdout = new PassThrough()
       child.stderr = new PassThrough()
       child.kill = () => {}
+      child.exitCode = null
+      child.signalCode = null
       const outFileIdx = args.indexOf('--outputs-file')
       // Only the deploy consults deployOutput, so a test can make the FIRST deploy
       // report "not bootstrapped" and still let the retry succeed.
-      const reply = args.includes('deploy') ? deployOutput() : { text: 'fake cdk: done', code: 0 }
+      const reply = args.includes('deploy') ? deployOutput()
+        : isNpmCi ? { text: 'fake npm: done', code: npmCi.code } : { text: 'fake cdk: done', code: 0 }
       setTimeout(async () => {
         if (outFileIdx !== -1 && reply.code === 0) {
           await fsp.writeFile(
@@ -83,22 +107,40 @@ vi.mock('node:child_process', async (importOriginal) => {
         }
         child.stdout.end(`${reply.text}\n`)
         child.stderr.end()
+        if (isNpmCi) { npmActive--; npmClosedAt.push(Date.now()) }
+        child.exitCode = reply.code
         child.emit('close', reply.code)
-      }, 0)
+      }, isNpmCi ? npmCi.delayMs : 0)
       return child
     },
   }
 })
 
-// The driver refuses to run outside a source checkout with a real infra/cdk.json,
-// so point WALNUT_INSTALL_DIR at a temp checkout containing one.
-let installDir: string
+// The driver needs a CDK app: a source checkout's infra/ (WALNUT_INSTALL_DIR) or
+// the one an npm package carries (WALNUT_PACKAGE_ROOT), run from a copy under
+// WALNUT_HOME. Each test points these at temp dirs.
+let installDir: string | null = null
+let packageRoot: string | null = null
+let walnutHome = os.tmpdir()
 vi.mock('../../../src/constants.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../../src/constants.js')>()
-  return { ...actual, get WALNUT_INSTALL_DIR() { return installDir } }
+  return {
+    ...actual,
+    get WALNUT_INSTALL_DIR() { return installDir },
+    get WALNUT_PACKAGE_ROOT() { return packageRoot },
+    get WALNUT_HOME() { return walnutHome },
+  }
 })
 
-const { awsDriver } = await import('../../../src/core/cloud-setup/providers/aws.js')
+/** A temp dir holding infra/ with a cdk.json, like a checkout or an npm package root. */
+async function fakeRoot(prefix: string): Promise<string> {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), prefix))
+  await fsp.mkdir(path.join(root, 'infra'), { recursive: true })
+  await fsp.writeFile(path.join(root, 'infra', 'cdk.json'), '{}', 'utf-8')
+  return root
+}
+
+const { awsDriver, resetNpmProbeForTests } = await import('../../../src/core/cloud-setup/providers/aws.js')
 
 const USER_DATA = "#!/usr/bin/env bash\nprintf '%s' 'a1b2c3d4e5f60718293a4b5c6d7e8f90' > /etc/walnut/setup-token\n"
 
@@ -127,15 +169,19 @@ describe('awsDriver.detectCreds', () => {
   }
 
   let savedProfile: string | undefined
-  beforeEach(() => {
+  beforeEach(async () => {
+    installDir = await fakeRoot('walnut-aws-detect-')
+    resetNpmProbeForTests()
     execFileCalls.length = 0
     execFileReplies = {}
     savedProfile = process.env.AWS_PROFILE
     delete process.env.AWS_PROFILE
   })
-  afterEach(() => {
+  afterEach(async () => {
     if (savedProfile === undefined) delete process.env.AWS_PROFILE
     else process.env.AWS_PROFILE = savedProfile
+    await fsp.rm(installDir!, { recursive: true, force: true }).catch(() => {})
+    installDir = null
   })
 
   it('reports the account id and nothing else when the CLI authenticates', async () => {
@@ -275,15 +321,15 @@ describe('awsDriver.createVM', () => {
     logs.length = 0
     deployOutput = () => ({ text: 'fake cdk: done', code: 0 })
     stackOutputs = { InstanceId: 'i-0abc', ElasticIp: '203.0.113.77', Domain: 'wn.example.com' }
-    installDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'walnut-aws-driver-'))
     // Minimal fake checkout: infra/cdk.json + a node_modules marker so the
     // driver skips its `npm ci` step.
+    installDir = await fakeRoot('walnut-aws-driver-')
     await fsp.mkdir(path.join(installDir, 'infra', 'node_modules', 'aws-cdk-lib'), { recursive: true })
-    await fsp.writeFile(path.join(installDir, 'infra', 'cdk.json'), '{}', 'utf-8')
   })
 
   afterEach(async () => {
-    await fsp.rm(installDir, { recursive: true, force: true }).catch(() => {})
+    await fsp.rm(installDir!, { recursive: true, force: true }).catch(() => {})
+    installDir = null
   })
 
   it('own-domain mode passes -c domain and no sslip flag', async () => {
@@ -431,5 +477,207 @@ describe('awsDriver.instructions', () => {
     const joined = steps.join('\n')
     expect(joined).toContain('-c domain=wn.example.com')
     expect(joined).toContain('A record')
+  })
+})
+
+/**
+ * An npm install has no source checkout: the CDK app comes from the package
+ * (package.json files[]) and runs from a copy under WALNUT_HOME/cache, because the
+ * package dir can be root-owned and is replaced by every upgrade.
+ */
+describe('awsDriver with the CDK app an npm package carries', () => {
+  const logs: string[] = []
+  let workDir: string
+
+  beforeEach(async () => {
+    spawnCalls.length = 0
+    execFileCalls.length = 0
+    execFileReplies = {}
+    logs.length = 0
+    deployOutput = () => ({ text: 'fake cdk: done', code: 0 })
+    stackOutputs = { InstanceId: 'i-0abc', ElasticIp: '203.0.113.77' }
+    npmCi = { code: 0, delayMs: 0 }
+    npmActive = 0
+    npmMaxActive = 0
+    npmClosedAt.length = 0
+    installDir = null
+    packageRoot = await fakeRoot('walnut-aws-pkg-')
+    await fsp.mkdir(path.join(packageRoot, 'infra', 'lib'), { recursive: true })
+    await fsp.writeFile(path.join(packageRoot, 'infra', 'lib', 'stack.ts'), 'export {}\n', 'utf-8')
+    await fsp.writeFile(path.join(packageRoot, 'infra', 'package-lock.json'), '{"lockfileVersion":3}\n', 'utf-8')
+    walnutHome = await fsp.mkdtemp(path.join(os.tmpdir(), 'walnut-aws-home-'))
+    workDir = path.join(walnutHome, 'cache', 'cloud-infra')
+  })
+
+  afterEach(async () => {
+    await fsp.rm(packageRoot!, { recursive: true, force: true }).catch(() => {})
+    await fsp.rm(walnutHome, { recursive: true, force: true }).catch(() => {})
+    packageRoot = null
+    walnutHome = os.tmpdir()
+  })
+
+  const deploy = () => awsDriver.createVM!(
+    { userData: USER_DATA, name: 'walnut-cloud', domainMode: 'sslip' },
+    (l) => logs.push(l),
+  )
+
+  it('installs and deploys from the copy, never writing into the package', async () => {
+    await deploy()
+    const install = spawnCalls.find((c) => c.cmd === 'npm')!
+    // Dev dependencies carry the cdk CLI and ts-node: a NODE_ENV=production
+    // environment must not drop them.
+    expect(install.args).toEqual(['ci', '--include=dev'])
+    expect(install.cwd).toBe(workDir)
+    expect(spawnCalls.find((c) => c.args.includes('deploy'))!.cwd).toBe(workDir)
+    expect(fs.existsSync(path.join(workDir, 'lib', 'stack.ts'))).toBe(true)
+    expect(fs.existsSync(path.join(packageRoot!, 'infra', 'node_modules'))).toBe(false)
+  })
+
+  it('reuses the install while the shipped lockfile is the same, reinstalls when it changes', async () => {
+    await deploy()
+    spawnCalls.length = 0
+    await deploy()
+    expect(spawnCalls.some((c) => c.cmd === 'npm')).toBe(false)
+
+    // An upgrade ships a new lockfile (a newer CDK): the copy must follow it.
+    await fsp.writeFile(path.join(packageRoot!, 'infra', 'package-lock.json'), '{"lockfileVersion":3,"v":2}\n', 'utf-8')
+    spawnCalls.length = 0
+    await deploy()
+    expect(spawnCalls.filter((c) => c.cmd === 'npm')).toHaveLength(1)
+  })
+
+  it('a refresh drops files the package no longer ships and keeps the build state', async () => {
+    await deploy()
+    await fsp.writeFile(path.join(workDir, 'cdk.context.json'), '{"account":"cached"}', 'utf-8')
+    await fsp.rm(path.join(packageRoot!, 'infra', 'lib', 'stack.ts'))
+    await fsp.writeFile(path.join(packageRoot!, 'infra', 'lib', 'renamed.ts'), 'export {}\n', 'utf-8')
+    await deploy()
+    expect(fs.existsSync(path.join(workDir, 'lib', 'stack.ts'))).toBe(false)
+    expect(fs.existsSync(path.join(workDir, 'lib', 'renamed.ts'))).toBe(true)
+    expect(fs.readFileSync(path.join(workDir, 'cdk.context.json'), 'utf-8')).toContain('cached')
+    expect(fs.existsSync(path.join(workDir, 'node_modules', 'aws-cdk-lib'))).toBe(true)
+  })
+
+  it('a half install (the marker but no stamp, as an interrupted npm ci leaves) is redone', async () => {
+    await fsp.mkdir(path.join(workDir, 'node_modules', 'aws-cdk-lib'), { recursive: true })
+    await deploy()
+    expect(spawnCalls.filter((c) => c.cmd === 'npm')).toHaveLength(1)
+  })
+
+  it('keeps the lock stamp inside node_modules, where npm ci removes it first', async () => {
+    await deploy()
+    expect(fs.existsSync(path.join(workDir, 'node_modules', '.walnut-installed-lock'))).toBe(true)
+    expect(fs.existsSync(path.join(workDir, '.walnut-installed-lock'))).toBe(false)
+  })
+
+  it('an interrupted reinstall never leaves a stamp that matches the older lock', async () => {
+    const lock = path.join(packageRoot!, 'infra', 'package-lock.json')
+    const v1 = fs.readFileSync(lock, 'utf-8')
+    await deploy()                                        // installed and stamped for v1
+    await fsp.writeFile(lock, '{"lockfileVersion":3,"v":2}\n', 'utf-8')
+    npmCi = { code: 1, delayMs: 0 }                       // the upgrade's npm ci fails half way
+    await expect(deploy()).rejects.toThrow(/npm ci failed/)
+    await fsp.writeFile(lock, v1, 'utf-8')                // back to the v1 package
+    npmCi = { code: 0, delayMs: 0 }
+    spawnCalls.length = 0
+    await deploy()
+    expect(spawnCalls.filter((c) => c.cmd === 'npm')).toHaveLength(1)
+  })
+
+  it('a cancelled install settles only after npm has exited', async () => {
+    npmCi = { code: 0, delayMs: 80 }
+    const ac = new AbortController()
+    const run = awsDriver.createVM!(
+      { userData: USER_DATA, name: 'walnut-cloud', domainMode: 'sslip', signal: ac.signal },
+      (l) => logs.push(l),
+    )
+    while (!spawnCalls.some((c) => c.cmd === 'npm')) await new Promise((r) => setTimeout(r, 5))
+    ac.abort()
+    let settledAt = 0
+    await run.catch(() => { settledAt = Date.now() })
+    expect(npmClosedAt).toHaveLength(1)
+    expect(settledAt).toBeGreaterThanOrEqual(npmClosedAt[0])
+    expect(spawnCalls.some((c) => c.args.includes('deploy'))).toBe(false)
+  })
+
+  it('a job restarted while another prepares never runs npm ci beside it', async () => {
+    npmCi = { code: 0, delayMs: 40 }
+    await Promise.all([deploy(), deploy()])
+    expect(npmMaxActive).toBe(1)
+    // The second waited, found the first one's install, and did not reinstall.
+    expect(spawnCalls.filter((c) => c.cmd === 'npm')).toHaveLength(1)
+  })
+
+  it('tears down from the same copy', async () => {
+    await awsDriver.teardown!('i-0abc', (l) => logs.push(l), { profile: 'marina-dev' })
+    const destroy = spawnCalls.find((c) => c.args.includes('destroy'))!
+    expect(destroy.cwd).toBe(workDir)
+    expect(destroy.env?.AWS_PROFILE).toBe('marina-dev')
+  })
+
+  it('the manual steps name the package copy, not a checkout', () => {
+    const { steps } = awsDriver.instructions({ userData: USER_DATA, domain: '', domainMode: 'sslip' })
+    const joined = steps.join('\n')
+    // Quoted (a home dir may hold a space) and with the dev dependencies cdk needs.
+    expect(joined).toContain(`'${path.join(packageRoot!, 'infra')}'/.`)
+    expect(joined).toContain(`'${workDir}'`)
+    expect(joined).toContain('npm ci --include=dev')
+    expect(joined).not.toMatch(/source checkout/)
+  })
+})
+
+describe('awsDriver.detectCreds says what blocks a deploy before the wizard asks anything', () => {
+  beforeEach(() => {
+    resetNpmProbeForTests()
+    execFileCalls.length = 0
+    execFileReplies = { 'sts get-caller-identity --output json': { stdout: '{"Account":"111122223333"}' } }
+  })
+  afterEach(() => { installDir = null; packageRoot = null })
+
+  it('no CDK app at all: not ready, and no aws call is made', async () => {
+    installDir = null
+    packageRoot = null
+    const res = await awsDriver.detectCreds()
+    expect(res.available).toBe(false)
+    expect(res.detail).toMatch(/no CDK app/)
+    expect(execFileCalls).toHaveLength(0)
+  })
+
+  it('no npm on this machine: not ready, saying Node.js and npm are needed', async () => {
+    packageRoot = await fakeRoot('walnut-aws-nonpm-')
+    const enoent = Object.assign(new Error('spawn npm ENOENT'), { code: 'ENOENT' })
+    execFileReplies['--version'] = { error: enoent }
+    const res = await awsDriver.detectCreds()
+    expect(res.available).toBe(false)
+    expect(res.detail).toMatch(/needs Node\.js and npm/)
+    expect(execFileCalls.some((c) => c.cmd === 'aws')).toBe(false)
+    await fsp.rm(packageRoot, { recursive: true, force: true })
+  })
+
+  it('a package with its CDK app and npm present is ready like a checkout', async () => {
+    packageRoot = await fakeRoot('walnut-aws-ready-')
+    execFileReplies['--version'] = { stdout: '10.9.0\n' }
+    const res = await awsDriver.detectCreds()
+    expect(res.available).toBe(true)
+    expect(res.detail).toContain('111122223333')
+    await fsp.rm(packageRoot, { recursive: true, force: true })
+  })
+
+  it('asks npm once: a later check spends its few seconds on the credentials only', async () => {
+    packageRoot = await fakeRoot('walnut-aws-npm-once-')
+    execFileReplies['--version'] = { stdout: '10.9.0\n' }
+    await awsDriver.detectCreds()
+    await awsDriver.detectCreds()
+    expect(execFileCalls.filter((c) => c.cmd === 'npm')).toHaveLength(1)
+    await fsp.rm(packageRoot, { recursive: true, force: true })
+  })
+
+  it('a missing npm is asked again, so installing Node.js shows up on the next check', async () => {
+    packageRoot = await fakeRoot('walnut-aws-npm-later-')
+    execFileReplies['--version'] = { error: Object.assign(new Error('spawn npm ENOENT'), { code: 'ENOENT' }) }
+    expect((await awsDriver.detectCreds()).detail).toMatch(/needs Node\.js and npm/)
+    execFileReplies['--version'] = { stdout: '10.9.0\n' }
+    expect((await awsDriver.detectCreds()).available).toBe(true)
+    await fsp.rm(packageRoot, { recursive: true, force: true })
   })
 })

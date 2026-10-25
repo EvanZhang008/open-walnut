@@ -1307,7 +1307,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     const os = await import('node:os')
     const priority = os.getPriority()
     if (priority > 0) {
-      log.web.error(`server running at nice ${priority} — HTTP latency will suffer under load; restart dev:prod from a non-niced shell`, { nice: priority })
+      log.web.error(`server running at nice ${priority} — HTTP latency will suffer under load; restart Walnut from a normal terminal (not from a background job, which runs at lower priority)`, { nice: priority })
     }
     const cores = os.cpus().length
     const load1 = os.loadavg()[0]

@@ -117,6 +117,9 @@ const mustInclude = [
   'dist/daemon-binaries/daemon-cron-runtime.cjs',
   'dist/daemon-binaries/daemon-instance-lock.cjs',
   'dist/daemon-binaries/daemon-service-cli.cjs',
+  // The AWS one-click setup deploys this CDK app; an install without it can only fail.
+  'infra/cdk.json', 'infra/package.json', 'infra/package-lock.json', 'infra/tsconfig.json',
+  'infra/bin/walnut-cloud.ts', 'infra/lib/walnut-cloud-stack.ts',
   ...dtachFiles.flatMap((f) => [`dist/daemon-binaries/${f}`, `dist/daemon-binaries/${f}.source-hash`]),
 ];
 const notPacked = mustInclude.filter((f) => !files.includes(f));
@@ -124,7 +127,9 @@ if (notPacked.length) {
   console.error('check-publish: files allowlist excludes required artifacts:\n' + notPacked.map((m) => `  - ${m}`).join('\n'));
   process.exit(1);
 }
-const leaked = files.filter((f) => /^dist\/daemon-binaries\/daemon-(linux|darwin)-/.test(f) || f.endsWith('.map') || f.endsWith('.gz'));
+const leaked = files.filter((f) => /^dist\/daemon-binaries\/daemon-(linux|darwin)-/.test(f) || f.endsWith('.map') || f.endsWith('.gz')
+  // CDK build state: cdk.context.json holds the account id, node_modules and cdk.out are local builds.
+  || /^infra\/(node_modules|cdk\.out|test)\//.test(f) || f === 'infra/cdk.context.json');
 if (leaked.length) {
   console.error('check-publish: tarball leaks excluded artifacts:\n' + leaked.slice(0, 10).map((m) => `  - ${m}`).join('\n'));
   process.exit(1);

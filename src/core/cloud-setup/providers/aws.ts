@@ -1,19 +1,20 @@
 /**
  * AWS driver — deploys infra/ (WalnutCloudStack) with the local CDK app.
  *
- * Requires a working `aws` CLI (any credential source: profile, SSO, env) and
- * a source checkout, since the CDK app ships in the repo rather than as a
- * published artifact. Nothing here writes credentials anywhere: `cdk` inherits
- * the operator's own environment.
+ * Requires a working `aws` CLI (any credential source: profile, SSO, env). The
+ * CDK app is infra/ in a source checkout, and an npm install carries the same
+ * directory inside the package. Nothing here writes credentials anywhere: `cdk`
+ * inherits the operator's own environment.
  */
 
 import { execFile, spawn } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { promisify } from 'node:util'
-import { WALNUT_INSTALL_DIR } from '../../../constants.js'
+import { WALNUT_HOME, WALNUT_INSTALL_DIR, WALNUT_PACKAGE_ROOT } from '../../../constants.js'
 import { log } from '../../../logging/index.js'
 import { sslipHostname } from '../user-data.js'
 import { killProcessGroup } from './cli-exec.js'
@@ -34,24 +35,126 @@ const IDENTITY_TIMEOUT_MS = 8_000
 const NPM_CI_TIMEOUT_MS = 10 * 60_000
 const DEPLOY_TIMEOUT_MS = 30 * 60_000
 const BOOTSTRAP_TIMEOUT_MS = 10 * 60_000
+/** After a kill, how long a cancelled or timed-out child may take to exit before we stop waiting. */
+const CHILD_EXIT_WAIT_MS = 15_000
+
+/** Build state inside a CDK app dir: never copied from the package, kept across refreshes. */
+const INFRA_STATE = new Set(['node_modules', 'cdk.out', 'cdk.context.json'])
+/**
+ * Hash of the package-lock the copy's node_modules was installed from. It lives
+ * INSIDE node_modules: `npm ci` removes that directory first, so an install that
+ * is interrupted can never leave an older, matching stamp behind.
+ */
+const LOCK_STAMP = path.join('node_modules', '.walnut-installed-lock')
 
 /**
- * Locate infra/ inside the operator's source checkout. WALNUT_INSTALL_DIR is
- * the same "am I a fixable source checkout?" resolution the Fix Walnut entry
- * uses; null there means an npm install or a cloud bundle, which has no infra/.
+ * Where the CDK app comes from. A source checkout deploys its own infra/ in
+ * place. An npm install ships infra/ inside the package (package.json files[]),
+ * but that directory can be root-owned and is replaced by every upgrade, so it
+ * is only the source: the app runs from a copy under WALNUT_HOME/cache, where
+ * `npm ci` and cdk.out can write (cache/ is never git-synced; node_modules and
+ * cdk.context.json, which holds the account id, must not travel).
  */
-function infraDir(): string {
-  if (!WALNUT_INSTALL_DIR) {
-    throw new Error(
-      'AWS provisioning needs a Walnut source checkout (the CDK app lives in infra/). '
-      + 'Use the manual provider, or run Walnut from a git clone.',
-    )
+function infraSource(): { dir: string; copy: boolean } | null {
+  const has = (root: string | null): root is string => !!root && fs.existsSync(path.join(root, 'infra', 'cdk.json'))
+  if (has(WALNUT_INSTALL_DIR)) return { dir: path.join(WALNUT_INSTALL_DIR, 'infra'), copy: false }
+  if (has(WALNUT_PACKAGE_ROOT)) return { dir: path.join(WALNUT_PACKAGE_ROOT, 'infra'), copy: true }
+  return null
+}
+
+const NO_INFRA = 'This Walnut install has no CDK app (infra/) to deploy the AWS stack with. '
+  + 'Update Walnut, run it from a git clone, or use the manual provider.'
+
+const NO_NPM = 'Deploying the AWS stack needs Node.js and npm on this machine: the CDK app installs '
+  + 'and runs with them. Install Node.js 22 or newer, then re-check, or use the manual provider.'
+
+/**
+ * Whether `npm` runs here. Only a missing binary counts: the deploy needs it,
+ * nothing more. A yes is kept for the life of the process, so the credentials
+ * probe (which has a few seconds in all) pays for this spawn once, not on every
+ * check; a no is asked again, so installing Node.js shows up on the next check.
+ */
+let npmFound = false
+async function hasNpm(): Promise<boolean> {
+  if (npmFound) return true
+  try {
+    await execFileAsync('npm', ['--version'], { timeout: IDENTITY_TIMEOUT_MS })
+    npmFound = true
+  } catch (err) {
+    npmFound = (err as { code?: string }).code !== 'ENOENT'
   }
-  const dir = path.join(WALNUT_INSTALL_DIR, 'infra')
-  if (!fs.existsSync(path.join(dir, 'cdk.json'))) {
-    throw new Error(`infra/ is missing or incomplete at ${dir} — cannot deploy the CDK stack.`)
+  return npmFound
+}
+
+/** Tests only: forget a cached npm answer. */
+export function resetNpmProbeForTests(): void {
+  npmFound = false
+}
+
+/** The directory the npm package's CDK app is copied to and run from. */
+function infraWorkDir(): string {
+  return path.join(WALNUT_HOME, 'cache', 'cloud-infra')
+}
+
+/** Replace the copy's source files with the package's, keeping its build state. */
+async function refreshInfraCopy(src: string, dest: string): Promise<void> {
+  await fsp.mkdir(dest, { recursive: true })
+  for (const name of await fsp.readdir(dest)) {
+    if (INFRA_STATE.has(name)) continue
+    await fsp.rm(path.join(dest, name), { recursive: true, force: true })
   }
-  return dir
+  for (const name of await fsp.readdir(src)) {
+    if (INFRA_STATE.has(name)) continue
+    await fsp.cp(path.join(src, name), path.join(dest, name), { recursive: true })
+  }
+}
+
+async function fileHash(file: string): Promise<string> {
+  return createHash('sha256').update(await fsp.readFile(file)).digest('hex')
+}
+
+/**
+ * One preparation at a time: a job that is cancelled and started again must not
+ * refresh the copy or run `npm ci` while the previous one still works in the
+ * same directory.
+ */
+let infraQueue: Promise<unknown> = Promise.resolve()
+function prepareInfra(onLog: (line: string) => void, signal?: AbortSignal): Promise<string> {
+  const run = infraQueue.then(() => prepareInfraNow(onLog, signal))
+  infraQueue = run.catch(() => {})
+  return run
+}
+
+/**
+ * The directory to run `cdk` in, with its dependencies installed. A checkout
+ * installs once (a fresh clone has no node_modules, and `npx cdk` would then
+ * resolve to a download prompt); the package copy reinstalls whenever the
+ * shipped package-lock changed, so an upgrade brings its CDK version along.
+ */
+async function prepareInfraNow(onLog: (line: string) => void, signal?: AbortSignal): Promise<string> {
+  if (signal?.aborted) throw new Error('cancelled')
+  const source = infraSource()
+  if (!source) throw new Error(NO_INFRA)
+  const cwd = source.copy ? infraWorkDir() : source.dir
+  if (source.copy) await refreshInfraCopy(source.dir, cwd)
+
+  const lock = path.join(cwd, 'package-lock.json')
+  const lockHash = source.copy && fs.existsSync(lock) ? await fileHash(lock) : null
+  const stamp = path.join(cwd, LOCK_STAMP)
+  const installed = fs.existsSync(path.join(cwd, 'node_modules', 'aws-cdk-lib'))
+    && (!lockHash || (fs.existsSync(stamp) && fs.readFileSync(stamp, 'utf-8').trim() === lockHash))
+  if (!installed) {
+    onLog(`installing CDK dependencies in ${cwd} (this takes a few minutes)`)
+    // --include=dev: the cdk CLI, ts-node and typescript are devDependencies, and
+    // a NODE_ENV=production in Walnut's environment would otherwise omit them.
+    // No AWS call here (npm only fetches packages), so the ambient env is right.
+    await fsp.rm(stamp, { force: true })
+    const install = await runStreaming('npm', ['ci', '--include=dev'], cwd, onLog, NPM_CI_TIMEOUT_MS, process.env, signal)
+    if (install.code !== 0) throw new Error(`npm ci failed in ${cwd} (exit ${install.code})`)
+    // Written only after a clean exit, into the directory that run created.
+    if (lockHash) await fsp.writeFile(stamp, `${lockHash}\n`, 'utf-8')
+  }
+  return cwd
 }
 
 /**
@@ -92,6 +195,10 @@ function envForProfile(profile: string | undefined, base: NodeJS.ProcessEnv = pr
 }
 
 async function detectCreds(profile?: string): Promise<DetectCredsResult> {
+  // Said before the operator agrees to anything: without a CDK app the deploy
+  // could only fail after the wizard had already been filled in.
+  if (!infraSource()) return { available: false, detail: NO_INFRA }
+  if (!(await hasNpm())) return { available: false, detail: NO_NPM }
   const chosen = profile?.trim() || undefined
   try {
     const { stdout } = await execFileAsync('aws', ['sts', 'get-caller-identity', '--output', 'json'], {
@@ -186,12 +293,21 @@ async function runStreaming(
     const child = spawn(cmd, args, { cwd, env, stdio: ['ignore', 'pipe', 'pipe'], detached: true })
     let output = ''
     let settled = false
+    // A killed child is waited for (bounded) before the promise settles, so the
+    // caller never starts the next step, or the next job, beside a process that
+    // is still writing in the same directory.
+    const failAfterExit = (err: Error): void => {
+      killProcessGroup(child)
+      if (child.exitCode !== null || child.signalCode !== null) return reject(err)
+      const wait = setTimeout(() => reject(err), CHILD_EXIT_WAIT_MS)
+      wait.unref?.()
+      child.once('close', () => { clearTimeout(wait); reject(err) })
+    }
     const timer = setTimeout(() => {
       if (settled) return
       settled = true
       signal?.removeEventListener('abort', onAbort)
-      killProcessGroup(child)
-      reject(new Error(`${cmd} timed out after ${Math.round(timeoutMs / 1000)}s`))
+      failAfterExit(new Error(`${cmd} timed out after ${Math.round(timeoutMs / 1000)}s`))
     }, timeoutMs)
     timer.unref?.()
 
@@ -199,8 +315,7 @@ async function runStreaming(
       if (settled) return
       settled = true
       clearTimeout(timer)
-      killProcessGroup(child)
-      reject(new Error(`${cmd} cancelled`))
+      failAfterExit(new Error(`${cmd} cancelled`))
     }
     if (signal?.aborted) {
       onAbort()
@@ -267,16 +382,7 @@ async function createVM(params: CreateVMParams, onLog: (line: string) => void): 
   if (!sslip && !params.domain) {
     throw new Error('AWS provisioning in own-domain mode requires a domain')
   }
-  const cwd = infraDir()
-
-  // The CDK app is a normal npm project inside the checkout — a fresh clone has
-  // no node_modules, and `npx cdk` would then resolve to a download prompt.
-  if (!fs.existsSync(path.join(cwd, 'node_modules', 'aws-cdk-lib'))) {
-    onLog('infra/node_modules is missing — installing CDK dependencies (this takes a few minutes)')
-    // No AWS call here — npm only fetches packages — so the ambient env is right.
-    const install = await runStreaming('npm', ['ci'], cwd, onLog, NPM_CI_TIMEOUT_MS, process.env, params.signal)
-    if (install.code !== 0) throw new Error(`npm ci failed in infra/ (exit ${install.code})`)
-  }
+  const cwd = await prepareInfra(onLog, params.signal)
 
   const outputsFile = path.join(await fsp.mkdtemp(path.join(os.tmpdir(), 'walnut-cdk-')), 'outputs.json')
   const deployArgs = [
@@ -336,6 +442,16 @@ async function createVM(params: CreateVMParams, onLog: (line: string) => void): 
   }
 }
 
+/** The manual "get the CDK app ready" step, naming the directory this install has. */
+function infraStep(): string {
+  const source = infraSource()
+  if (!source) return 'Get the CDK app: clone the Walnut repository, then `cd infra && npm ci --include=dev`.'
+  const q = (p: string): string => `'${p.replace(/'/g, `'\\''`)}'`
+  if (!source.copy) return `In the CDK app: \`cd ${q(source.dir)} && npm ci --include=dev\`.`
+  const dest = infraWorkDir()
+  return `Copy the CDK app somewhere writable: \`mkdir -p ${q(dest)} && cp -R ${q(source.dir)}/. ${q(dest)} && cd ${q(dest)} && npm ci --include=dev\`.`
+}
+
 function instructions(params: InstructionsParams): DriverInstructions {
   const region = params.region ? ` (region ${params.region})` : ''
   // Mirror createVM's either/or: sslip mode passes no domain at all, and needs
@@ -348,7 +464,7 @@ function instructions(params: InstructionsParams): DriverInstructions {
   return {
     steps: [
       `Make sure the aws CLI is signed in${region}: \`aws sts get-caller-identity\` must succeed.`,
-      'From a Walnut source checkout: `cd infra && npm ci`.',
+      infraStep(),
       'First time in this account/region only: `npx cdk bootstrap`.',
       `Deploy: \`npx cdk deploy ${STACK_NAME} --require-approval never ${contextFlag}\`.`,
       dnsStep,
@@ -373,7 +489,7 @@ async function teardown(
   onLog: (line: string) => void,
   opts?: { profile?: string; region?: string },
 ): Promise<void> {
-  const cwd = infraDir()
+  const cwd = await prepareInfra(onLog)
   onLog(`destroying ${STACK_NAME} (instance ${instanceRef})`)
   const env = opts?.region
     ? { ...envForProfile(opts.profile), CDK_DEFAULT_REGION: opts.region, AWS_REGION: opts.region }

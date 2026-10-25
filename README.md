@@ -94,7 +94,9 @@ npm install
 npm start
 ```
 
-Open [http://localhost:3456](http://localhost:3456) and follow the setup screen. The
+Open [http://localhost:3456](http://localhost:3456). Walnut runs your sessions with Claude Code: when it
+is installed and signed in, you can start right away; otherwise a banner at the top of the page
+offers to install it and says how to sign in. The
 first start downloads the default local embedding model, Qwen3-Embedding-0.6B
 (approximately 640 MB), in the background.
 
