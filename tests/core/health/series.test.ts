@@ -217,6 +217,33 @@ describe('recording ingest', () => {
     expect(recordingsQuery({ type: 's.HeartbeatSeries' }, NOW).recordings).toEqual([])
   })
 
+  it('recordings outlive no delete: one made by an older build (store id rotated, series untouched) drops them at the next open', () => {
+    sync(rawBatch('s.WorkoutRoute', routeItems(uuid('R'), routePoints(5), 10)))
+    sync(rawBatch('s.Audiogram', [audiogram()]))
+    // This build's own category delete keeps the other recordings across a reopen.
+    deleteHealthData({ categories: ['workouts'] })
+    closeHealthDb()
+    expect(recordingsQuery({ type: 's.Audiogram' }, NOW).recordings).toHaveLength(1)
+    // An older build deleting a category: it rotates the store id and knows no series table.
+    getHealthDb().prepare("UPDATE meta SET value = 'hs-older-build' WHERE key = 'storeId'").run()
+    closeHealthDb()
+    expect(recordingsQuery({ type: 's.Audiogram' }, NOW).recordings).toEqual([])
+    expect((getHealthDb().prepare('SELECT COUNT(*) AS n FROM series_chunks').get() as { n: number }).n).toBe(0)
+    // And it stays a no-op afterwards: new recordings are kept across reopens.
+    updateHealthSettings({ paused: false })
+    sync(rawBatch('s.Audiogram', [audiogram()], { storeId: 'hs-older-build' }))
+    closeHealthDb()
+    expect(recordingsQuery({ type: 's.Audiogram' }, NOW).recordings).toHaveLength(1)
+  })
+
+  it('a store written before recordings existed keeps its rows and starts tracking at the first open', () => {
+    sync(rawBatch('s.Audiogram', [audiogram()]))
+    getHealthDb().prepare("DELETE FROM meta WHERE key = 'seriesStoreId'").run()
+    closeHealthDb()
+    expect(recordingsQuery({ type: 's.Audiogram' }, NOW).recordings).toHaveLength(1)
+    expect(getHealthDb().prepare("SELECT value FROM meta WHERE key = 'seriesStoreId'").get()).toEqual({ value: healthStatus(NOW).storeId })
+  })
+
   it('the stale store id is refused before anything is stored', () => {
     const before = healthStatus(NOW).storeId
     deleteHealthData({})

@@ -15,6 +15,7 @@ import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { CLOUD_MODE, WALNUT_HOME } from '../../constants.js'
+import { log } from '../../logging/index.js'
 
 export function healthDir(): string {
   return path.join(WALNUT_HOME, 'health')
@@ -134,8 +135,42 @@ export function getHealthDb(): DatabaseType {
   handle.exec(SCHEMA)
   try { fs.chmodSync(healthDbPath(), 0o600) } catch { /* best effort */ }
   db = handle
-  if (!getMeta('storeId')) setMeta('storeId', newStoreId())
+  try {
+    if (!getMeta('storeId')) setMeta('storeId', newStoreId())
+    dropSeriesOfAnOlderStore(handle)
+  } catch (err) {
+    // Not cached half-opened: the next call opens again and runs these checks again.
+    db = null
+    try { handle.close() } catch { /* already closed */ }
+    throw err
+  }
   return handle
+}
+
+/**
+ * Recordings carry the store id they were written under (meta `seriesStoreId`).
+ * A build that predates them deletes a category without knowing the series
+ * tables, but every delete rotates the store id, so a mismatch at open means a
+ * delete happened that these rows outlived: drop them all. The phone sends again
+ * what it still has and may still send: the rotated id resets every anchor it
+ * holds, and a recording type the status lists with no `lastSampleAt` has its
+ * anchor forgotten (`typesWithoutMacData`). Recordings of a phone that no longer
+ * syncs are gone for good: the price of not knowing which categories it covered.
+ */
+function dropSeriesOfAnOlderStore(handle: DatabaseType): void {
+  const storeId = getMeta('storeId') as string
+  const seriesStoreId = getMeta('seriesStoreId')
+  if (seriesStoreId === storeId) return
+  handle.transaction(() => {
+    if (seriesStoreId !== undefined) {
+      const dropped = handle.prepare('DELETE FROM series').run().changes
+      handle.prepare('DELETE FROM series_chunks').run()
+      if (dropped) log.web.info('health recordings of an older store dropped', { dropped })
+    }
+    setMeta('seriesStoreId', storeId)
+  })()
+  // Push the deleted pages out of the WAL too, as a delete does.
+  if (seriesStoreId !== undefined) try { handle.pragma('wal_checkpoint(TRUNCATE)') } catch { /* next checkpoint does it */ }
 }
 
 export function closeHealthDb(): void {

@@ -130,7 +130,10 @@ export function deleteHealthData(body: unknown): HealthDeleteResult {
     db.prepare('DELETE FROM days').run()
     const enabled = [...enabledCategories()].filter((c) => !scoped.includes(c))
     saveEnabledCategories(enabled)
-    setMeta('storeId', newStoreId())
+    const storeId = newStoreId()
+    setMeta('storeId', storeId)
+    // This delete covered the recordings itself: they stay under the new id.
+    setMeta('seriesStoreId', storeId)
     setMeta('paused', '1')
     for (const n of names) db.prepare('DELETE FROM meta WHERE key IN (?, ?)').run(`resync:raw:${n}`, `resync:buckets:${n}`)
     // Their unit and agg pins and open resyncs go with them: a fresh sync may pin anew.
