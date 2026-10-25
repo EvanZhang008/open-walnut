@@ -4305,7 +4305,7 @@ export class ClaudeCodeSession {
       this._lostLines.delete(uuid)
       this._queuedLines.delete(uuid)
       // A Retry goes out as a new line: this daemon may not be able to write the old one again.
-      this.parkLineRows(rows, 'Claude Code never read this message (something else read its input). Retry to send it again', true)
+      this.parkLineRows(rows, 'Claude Code did not acknowledge this message. It may have skipped a duplicate UUID, or another process may have read its input. Retry to send it again', true)
       return
     }
     log.session.warn('the CLI read past a line without taking it: it goes out again under the same uuid', {

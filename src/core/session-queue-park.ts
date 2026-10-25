@@ -7,6 +7,7 @@
  * session-message-queue.ts.
  */
 
+import { randomUUID } from 'node:crypto';
 import { log } from '../logging/index.js';
 import { compareEnqueueOrder, mutateStore, readQueueFileFresh, type QueuedMessage } from './session-queue-store.js';
 
@@ -88,7 +89,18 @@ export async function parkIfQueued(
       row.status = 'parked';
       row.parkedAt = parkedAt;
       row.parkedReason = reason;
-      if (opts?.freshLine) { delete row.lineUuid; delete row.lineTries; delete row.lineTracked; delete row.lineInDoubt; }
+      if (opts?.freshLine) {
+        // Plain rows derive their UUID from the unchanged id unless a fresh one is kept.
+        if (!row.userUuid) {
+          row.lineUuid = randomUUID();
+          row.lineTries = 0;
+        } else {
+          delete row.lineUuid;
+          delete row.lineTries;
+        }
+        delete row.lineTracked;
+        delete row.lineInDoubt;
+      }
       done.push({ ...row });
     }
     return done;
@@ -155,6 +167,10 @@ export async function unparkMessage(sessionId: string, messageId: string): Promi
     if (stopFence) msg.stopFence = stopFence;
     else delete msg.stopFence;
     msg.status = 'pending';
+    if (!msg.lineUuid && !msg.userUuid) {
+      msg.lineUuid = randomUUID();
+      msg.lineTries = 0;
+    }
     delete msg.parkedAt;
     delete msg.parkedReason;
     return true;

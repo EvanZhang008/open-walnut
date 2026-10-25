@@ -389,13 +389,16 @@ export async function removeProcessed(sessionId: string, ids?: string[]): Promis
  * Edit a pending message's text. Returns true on success.
  * Returns false if message not found or already processing.
  */
-export async function editMessage(sessionId: string, messageId: string, newText: string): Promise<boolean> {
+export async function editMessage(
+  sessionId: string, messageId: string, newText: string, opts?: { onlyUnsent?: boolean },
+): Promise<boolean> {
   return mutateStore((s) => {
     const queue = s.queues[sessionId];
     if (!queue) return false;
 
     const msg = queue.find((m) => m.id === messageId);
     if (!msg || msg.status !== 'pending') return false;
+    if (opts?.onlyUnsent && (msg.lineUuid || msg.lineTries || msg.lineInDoubt)) return false;
 
     msg.message = newText;
     return true;

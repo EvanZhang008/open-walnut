@@ -48,6 +48,15 @@ describe('lineFate', () => {
     expect(lineFate('', lines(rec(41, ['qm-1'])), { ...q, pid: null })).toBeNull()
   })
 
+  it('a new UUID never inherits an old write or partial begin for the same row id', () => {
+    const old = JSON.stringify({ pid: 41, uuid: 'old', ids: ['qm-1'], at: 1 });
+    expect(lineFate('', lines(old), q)).toBeNull();
+    expect(lineFate('', lines(JSON.stringify({ pid: 41, uuid: 'u-1', ids: ['qm-1'], at: 2 })), q)).toEqual({ fate: 'waiting' });
+    const begin = JSON.stringify({ pid: 41, uuid: 'old', begin: ['qm-1'], at: 1 });
+    expect(lineWriteBegun(lines(begin), q)).toBeNull();
+    expect(lineWriteBegun(lines(JSON.stringify({ pid: 41, uuid: 'u-1', begin: ['qm-1'], at: 2 })), q)).toBe(2);
+  });
+
   it('the CLI\'s own word wins in any process, strongest state first', () => {
     expect(lineFate(lines(lc('u-1', 'started')), '', { ...q, pid: 99 })).toEqual({ fate: 'ran', state: 'started' })
     expect(lineFate(lines(lc('u-1', 'completed')), '', q)).toEqual({ fate: 'ran', state: 'completed' })

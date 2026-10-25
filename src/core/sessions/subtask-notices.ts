@@ -40,9 +40,10 @@
  *  - edges for one parent within COALESCE_MS go out as ONE message of several
  *    envelopes (the web card renders each), and while the parent is busy a
  *    newer `stopped` / `blocked` / `waiting` notice for the same child replaces
- *    the pending one instead of stacking (a stable queue id per child and kind).
+ *    the pending one instead of stacking (a stable coalescing key per child and kind).
  */
 
+import { randomUUID } from 'node:crypto';
 import { log } from '../../logging/index.js';
 import type { SessionRecord, Task } from '../types.js';
 import type { NoticeLastMessage } from '../session-requests.js';
@@ -110,7 +111,7 @@ export async function boardCardLine(parentTaskId: string, childId: string): Prom
   }
 }
 
-/** The stable queue id of a replaceable notice: one row per child and kind. */
+/** The coalescing key, not the delivery id: each new edge needs its own CLI uuid. */
 export function noticeQueueId(n: Pick<SubtaskNotice, 'child' | 'kind'>): string | undefined {
   return REPLACEABLE.has(n.kind) ? `sn-${n.child.id}-${n.kind}` : undefined;
 }
@@ -350,26 +351,22 @@ async function flush(parentSid: string): Promise<void> {
       if (notices.length === 0) return;
     }
     const text = notices.map(buildSubtaskNoticeText).join('\n\n');
-    let stableId = notices.length === 1 ? noticeQueueId(notices[0]) : undefined;
-    if (stableId) {
+    const key = notices.length === 1 ? noticeQueueId(notices[0]) : undefined;
+    const deliveryId = key ? `${key}-${randomUUID()}` : undefined;
+    if (key) {
       const { getQueue, editMessage } = await import('../session-message-queue.js');
-      const row = (await getQueue(parentSid)).find((m) => m.id === stableId);
-      if (row?.status === 'pending') {
-        // Still waiting in the queue: the newer notice replaces it, and the row's
-        // own dispatch (already emitted) delivers the new text.
-        if (await editMessage(parentSid, stableId, text)) {
-          log.session.info('subtask notice replaced a pending one', { parentSid, messageId: stableId, kind: notices[0].kind });
-          return;
-        }
+      const row = [...await getQueue(parentSid)].reverse().find((m) =>
+        (m.id === key || m.id.startsWith(`${key}-`)) && m.status === 'pending'
+        && !m.lineUuid && !m.lineTries && !m.lineInDoubt);
+      if (row && await editMessage(parentSid, row.id, text, { onlyUnsent: true })) {
+        log.session.info('subtask notice replaced a pending one', { parentSid, messageId: row.id, kind: notices[0].kind });
+        return;
       }
-      // In flight under that id: enqueueMessage would dedupe the new text away, so
-      // this one rides a fresh row.
-      if (row) stableId = undefined;
     }
     const { deliverToSession } = await import('./session-send-core.js');
     const { delivery, messageId } = await deliverToSession(target, {
       busText: text, enqueueText: text, source: NOTICE_SOURCE, taskId: target.taskId,
-      ...(stableId ? { messageId: stableId } : {}),
+      ...(deliveryId ? { messageId: deliveryId } : {}),
     });
     log.session.info('subtask notice delivered', {
       parentSid, parentTaskId: target.taskId, delivery, messageId,

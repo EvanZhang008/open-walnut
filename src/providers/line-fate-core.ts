@@ -122,9 +122,10 @@ export function lineFateVerdict(scan: LineFateScan | null, writesText: string, q
     const records = writesText.split('\n')
     for (let i = records.length - 1; i >= 0; i--) {
       if (!records[i]) continue
-      let rec: { pid?: number; ids?: unknown } | null = null
+      let rec: { pid?: number; uuid?: string; ids?: unknown } | null = null
       try { rec = JSON.parse(records[i]) } catch { rec = null }
       if (!rec || rec.pid !== pid || !Array.isArray(rec.ids)) continue
+      if (q.uuid && rec.uuid && rec.uuid !== q.uuid) continue
       const got = rec.ids as unknown[]
       if (ids.every((id) => got.indexOf(id) !== -1)) return { fate: 'waiting' }
     }
@@ -176,9 +177,10 @@ export function lineWriteBegun(writesText: string, q: LineFateQuery): number | n
   let takenBack = 0
   for (let i = records.length - 1; i >= 0; i--) {
     if (!records[i]) continue
-    let rec: { pid?: number; ids?: unknown; begin?: unknown; unbegun?: unknown; at?: unknown } | null = null
+    let rec: { pid?: number; uuid?: string; ids?: unknown; begin?: unknown; unbegun?: unknown; at?: unknown } | null = null
     try { rec = JSON.parse(records[i]) } catch { rec = null }
     if (!rec || rec.pid !== pid) continue
+    if (q.uuid && rec.uuid && rec.uuid !== q.uuid) continue
     const got = Array.isArray(rec.ids) ? rec.ids as unknown[] : Array.isArray(rec.begin) ? rec.begin as unknown[]
       : Array.isArray(rec.unbegun) ? rec.unbegun as unknown[] : null
     if (!got || !ids.every((id) => got.indexOf(id) !== -1)) continue

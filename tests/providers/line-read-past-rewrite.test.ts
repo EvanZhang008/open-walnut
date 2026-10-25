@@ -192,7 +192,8 @@ describe('a line the CLI never names', () => {
     await vi.waitFor(async () => expect(await rows()).toEqual([{ id, status: 'parked' }]), { timeout: 2000 })
     const failed = h.events.find((e) => e.name === EventNames.SESSION_BATCH_FAILED)
     expect(failed?.data).toMatchObject({ sessionId: SID, messageIds: [id] })
-    expect(String(failed?.data.error)).toMatch(/never read this message/)
+    expect(String(failed?.data.error)).toMatch(/did not acknowledge this message/)
+    expect(String(failed?.data.error)).toContain('may have skipped a duplicate UUID')
     expect(h.writes).toHaveLength(1)
   })
 

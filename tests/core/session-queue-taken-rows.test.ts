@@ -20,7 +20,7 @@ vi.mock('../../src/constants.js', () => createMockConstants('walnut-queue-taken-
 
 import {
   enqueueMessage, getQueue, loadQueue, markProcessing, parkIfQueued, removeProcessed, removeTaken, resetCache,
-  revertIfQueued, revertToPending, settledLineUuid,
+  revertIfQueued, revertToPending, settledLineUuid, unparkMessage, editMessage,
 } from '../../src/core/session-message-queue.js';
 import { lineUuidFor } from '../../src/providers/batch-uuid.js';
 import { WALNUT_HOME } from '../../src/constants.js';
@@ -109,9 +109,55 @@ describe('rows whose line may be in a CLI', () => {
     const parked = await parkIfQueued(rows, 'dropped', { freshLine: true });
     expect(parked.map((m) => m.message)).toEqual(['b']);
     const [b] = await getQueue(SID);
-    expect([b.status, b.parkedReason, b.lineUuid, b.lineTries]).toEqual(['parked', 'dropped', undefined, undefined]);
+    expect([b.status, b.parkedReason, b.lineTries]).toEqual(['parked', 'dropped', 0]);
+    expect(b.lineUuid).not.toBe(rows[1].lineUuid);
+    expect(b.userUuid).toBeUndefined();
     // A second park is a no-op (no second failure report).
     expect(await parkIfQueued(rows, 'again')).toEqual([]);
+  });
+
+  it('a fresh-line Retry has a genuinely new uuid even though its row id stays the same', async () => {
+    await enqueueMessage(SID, 'try again', { id: 'qm-retry' });
+    const [first] = await markProcessing(SID);
+    await parkIfQueued([first], 'not acknowledged', { freshLine: true });
+    resetCache();
+    await loadQueue();
+    await unparkMessage(SID, first.id);
+    const [retry] = await markProcessing(SID);
+    expect(retry.id).toBe(first.id);
+    expect(retry.lineUuid).not.toBe(first.lineUuid);
+    expect(retry.userUuid).toBeUndefined();
+    await revertIfQueued([retry]);
+    expect((await markProcessing(SID))[0].lineUuid).toBe(retry.lineUuid);
+  });
+
+  it('a pre-upgrade parked row with no line identity gets a fresh uuid on Retry', async () => {
+    const originalUuid = lineUuidFor([{ id: 'sn-child-a-waiting' }]);
+    const row = await enqueueMessage(SID, 'a later wait', { id: 'sn-child-a-waiting' });
+    const { parkMessages } = await import('../../src/core/session-message-queue.js');
+    await parkMessages([row], 'Claude Code never read this message (something else read its input). Retry to send it again');
+    await unparkMessage(SID, row.id);
+    expect((await markProcessing(SID))[0].lineUuid).not.toBe(originalUuid);
+  });
+
+  it('a never-sent question keeps its preassigned thread identity on Retry', async () => {
+    const uuid = '11111111-1111-4111-8111-111111111111';
+    const row = await enqueueMessage(SID, 'retry the dropped question', { userUuid: uuid });
+    const { parkMessages } = await import('../../src/core/session-message-queue.js');
+    await parkMessages([row], 'not acknowledged');
+    await unparkMessage(SID, row.id);
+    expect((await markProcessing(SID))[0].lineUuid).toBe(uuid);
+  });
+
+  it('a pending row that already went into stdin is immutable even after a restart', async () => {
+    await enqueueMessage(SID, 'original');
+    const [first] = await markProcessing(SID);
+    await revertIfQueued([first]);
+    expect(await editMessage(SID, first.id, 'changed', { onlyUnsent: true })).toBe(false);
+    resetCache();
+    await loadQueue();
+    expect(await editMessage(SID, first.id, 'changed', { onlyUnsent: true })).toBe(false);
+    expect((await getQueue(SID))[0].message).toBe('original');
   });
 
   it('a resend of a row that ran keeps its line uuid; of a cancelled one, not', async () => {
@@ -174,7 +220,8 @@ describe('rows whose line may be in a CLI', () => {
     expect(again.lineTracked).toBe(true);
     // A line the CLI dropped goes out fresh on a Retry: the flag goes with the uuid.
     const [parked] = await parkIfQueued([again], 'dropped', { freshLine: true });
-    expect([parked.lineUuid, parked.lineTracked]).toEqual([undefined, undefined]);
+    expect(parked.lineUuid).not.toBe(again.lineUuid);
+    expect(parked.lineTracked).toBeUndefined();
   });
 
   it('the same rows always get the same line uuid, other rows another one', async () => {

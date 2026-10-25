@@ -260,10 +260,14 @@ describe('delivery to the parent', () => {
     expect(text).toContain('(child-b) completed its task');
   });
 
-  it('a lone replaceable notice carries a stable id; a terminal one never does', async () => {
+  it('each new replaceable notice has its own delivery id; a terminal one uses the default id', async () => {
     await queueSubtaskNotice(notice());
     await vi.advanceTimersByTimeAsync(COALESCE_MS + 10);
-    expect(delivered().opts.messageId).toBe('sn-child-a-stopped');
+    const firstId = delivered().opts.messageId;
+    expect(firstId).toMatch(/^sn-child-a-stopped-[0-9a-f-]{36}$/);
+    await queueSubtaskNotice(notice({ lastWords: { text: 'A later turn ended.' } }));
+    await vi.advanceTimersByTimeAsync(COALESCE_MS + 10);
+    expect(delivered(1).opts.messageId).not.toBe(firstId);
 
     sendMessageToSession.mockClear();
     await queueSubtaskNotice(notice({ kind: 'completed' }));
@@ -283,7 +287,43 @@ describe('delivery to the parent', () => {
     expect(editMessage.mock.calls[0][0]).toBe(PARENT_SID);
     expect(editMessage.mock.calls[0][1]).toBe('sn-child-a-stopped');
     expect(editMessage.mock.calls[0][2]).toContain('the newest state');
+    expect(editMessage.mock.calls[0][3]).toEqual({ onlyUnsent: true });
     expect(sendMessageToSession).not.toHaveBeenCalled();
+  });
+
+  it('a suffixed pending notice is replaced using its actual delivery id', async () => {
+    const id = 'sn-child-a-stopped-11111111-1111-4111-8111-111111111111';
+    getQueue.mockResolvedValue([{ id, status: 'pending', message: 'old' }]);
+    editMessage.mockResolvedValue(true);
+    await queueSubtaskNotice(notice({ lastWords: { text: 'the newest state' } }));
+    await vi.advanceTimersByTimeAsync(COALESCE_MS + 10);
+    expect(editMessage.mock.calls[0].slice(0, 2)).toEqual([PARENT_SID, id]);
+    expect(sendMessageToSession).not.toHaveBeenCalled();
+  });
+
+  it('a pending redelivery or parked notice never absorbs a new event', async () => {
+    for (const row of [
+      { status: 'pending', lineUuid: 'old-line' },
+      { status: 'pending', lineTries: 1 },
+      { status: 'pending', lineInDoubt: true },
+      { status: 'parked' },
+    ]) {
+      getQueue.mockResolvedValue([{ id: 'sn-child-a-stopped', message: 'old', ...row }]);
+      await queueSubtaskNotice(notice());
+      await vi.advanceTimersByTimeAsync(COALESCE_MS + 10);
+    }
+    expect(editMessage).not.toHaveBeenCalled();
+    expect(sendMessageToSession).toHaveBeenCalledTimes(4);
+    expect(new Set(sendMessageToSession.mock.calls.map((c) => c[2].messageId)).size).toBe(4);
+  });
+
+  it('a dispatch winning the pending-edit race makes the new notice a separate event', async () => {
+    getQueue.mockResolvedValue([{ id: 'sn-child-a-stopped', status: 'pending' }]);
+    editMessage.mockResolvedValue(false);
+    await queueSubtaskNotice(notice());
+    await vi.advanceTimersByTimeAsync(COALESCE_MS + 10);
+    expect(editMessage).toHaveBeenCalledOnce();
+    expect(delivered().opts.messageId).toMatch(/^sn-child-a-stopped-[0-9a-f-]{36}$/);
   });
 
   it('a row already in flight under that id: the new notice rides a fresh row (enqueue would dedupe it away)', async () => {
@@ -293,7 +333,7 @@ describe('delivery to the parent', () => {
 
     expect(editMessage).not.toHaveBeenCalled();
     expect(sendMessageToSession).toHaveBeenCalledTimes(1);
-    expect(delivered().opts.messageId).toBeUndefined();
+    expect(delivered().opts.messageId).toMatch(/^sn-child-a-stopped-[0-9a-f-]{36}$/);
   });
 
   it('a parent parked on a permission prompt gets the notice enqueued without a dispatch', async () => {
@@ -302,7 +342,7 @@ describe('delivery to the parent', () => {
     await vi.advanceTimersByTimeAsync(COALESCE_MS + 10);
     expect(sendMessageToSession).not.toHaveBeenCalled();
     expect(enqueueMessage).toHaveBeenCalledTimes(1);
-    expect(enqueueMessage.mock.calls[0][2]).toMatchObject({ id: 'sn-child-a-stopped' });
+    expect(enqueueMessage.mock.calls[0][2].id).toMatch(/^sn-child-a-stopped-[0-9a-f-]{36}$/);
   });
 
   it('a COMPLETE parent, or one with no session, hears nothing', async () => {
