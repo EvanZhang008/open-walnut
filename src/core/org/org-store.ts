@@ -17,8 +17,8 @@ import type { Task } from '../types.js';
 import { ASK_WALNUT_PROJECT } from '../sessions/ask-list.js';
 import { createEnvelopeKit } from '../peers/envelope-kit.js';
 import {
-  DIGEST_MAX_LINES, buildOrgTree, findProjectNode, formatDigestLine, isOrgMember, orgDigest, pickLead, pickMain,
-  projectKey, type OrgDigestState, type OrgTaskLike, type OrgTree,
+  DIGEST_FOLD_MS, DIGEST_MAX_LINES, buildOrgTree, findProjectNode, formatAlertLine, formatDigestLine, isOrgMember, orgDigest, pickLead,
+  pickMain, planOrgNote, projectKey, type OrgAlert, type OrgDigestState, type OrgTaskLike, type OrgTree,
 } from './org-tree.js';
 
 export const MAIN_TASK_TITLE = 'Main';
@@ -268,17 +268,80 @@ function ago(fromIso: string, nowMs: number): string {
   return `${Math.round(hours / 24)} days ago`;
 }
 
-/** The note's text: who it is from, one line per moved project, and where the detail is. */
-export function buildDigestText(mainTask: Pick<Task, 'id' | 'title'>, lines: string[], more: number, since: string, nowMs: number): string {
-  const body = `Org update since ${ago(since, nowMs)}:\n`
-    + lines.map((l) => `- ${l}`).join('\n')
-    + (more > 0 ? `\n- and ${more} more project${more === 1 ? '' : 's'}` : '')
-    + '\nBackground only: mention it when it matters to what the user says. Detail: org_get, or ask that project\'s lead.';
+/**
+ * The note's text: who it is from, what newly needs the user (each alert once),
+ * one line per moved project, and where the detail is.
+ */
+export function buildDigestText(
+  mainTask: Pick<Task, 'id' | 'title'>, lines: string[], more: number, since: string, nowMs: number,
+  alerts: string[] = [], alertsMore = 0,
+): string {
+  const list = (items: string[]) => items.map((l) => `- ${l}`).join('\n');
+  const needs = alerts.length
+    ? `Needs the user now:\n${list(alerts)}${alertsMore > 0 ? `\n- and ${alertsMore} more` : ''}\n`
+    : '';
+  const moved = lines.length
+    ? (alerts.length ? 'Work moved:\n' : '') + list(lines)
+      + (more > 0 ? `\n- and ${more} more project${more === 1 ? '' : 's'}` : '') + '\n'
+    : '';
+  const how = alerts.length
+    ? 'Tell the user what is under "Needs the user now" in your reply, one line each; the rest is background.'
+    : 'Background only: mention it when it matters to what the user says.';
+  const body = (lines.length ? `Org update since ${ago(since, nowMs)}:\n` : 'Org update:\n')
+    + needs + moved + `${how} Detail: org_get, or ask that project's lead.`;
   return kit.buildWalnutMessage({
     kind: 'notification',
     attrs: { from: 'Walnut', about: kit.sessionHandle(mainTask.title, undefined) || 'Main', 'about-task': mainTask.id, outcome: 'org-update', note: 'automated Walnut status notice' },
     body,
   });
+}
+
+/** An infrastructure failure still standing after this long is no longer Walnut's alone to fix. */
+const INFRA_ALERT_AFTER_MS = 15 * 60_000;
+
+/**
+ * What newly needs the user, read off the current session of each open task and
+ * lead in the org (OrgAlert): a question or an approval it waits on, or a failure.
+ * Main's own prompts are its own chat's business.
+ */
+async function orgAlerts(tasks: readonly OrgTaskLike[], nowMs: number): Promise<OrgAlert[]> {
+  const bySession = new Map<string, OrgTaskLike>();
+  for (const t of tasks) {
+    if (!isOrgMember(t) && !(t.org_role === 'lead' && t.phase !== 'COMPLETE')) continue;
+    for (const sid of [t.session_id, t.exec_session_id]) if (sid) bySession.set(sid, t);
+  }
+  if (!bySession.size) return [];
+  const { listSessionsForTasks } = await import('../session-tracker.js');
+  const { isInfraSessionError } = await import('../session-error-kind.js');
+  const alerts: OrgAlert[] = [];
+  const seen = new Set<string>();
+  for (const r of await listSessionsForTasks(new Set(), new Set(bySession.keys()))) {
+    const task = bySession.get(r.claudeSessionId);
+    if (!task || seen.has(task.id)) continue;
+    const base = { project: (task.project ?? '').trim(), title: task.title };
+    const ask = r.pendingPermission;
+    if (ask) {
+      const question = ask.toolName === 'AskUserQuestion';
+      alerts.push({ ...base, key: `ask:${task.id}:${ask.requestId}`, kind: question ? 'question' : 'permission', ...(!question && ask.toolName ? { tool: ask.toolName } : {}) });
+      seen.add(task.id);
+    } else if (r.process_status === 'error') {
+      // One key per failure: the transition into 'error' (newest first), so a failed session
+      // written as failed again is no news and a second failure after a resume is.
+      const entry = r.status_history?.[0]?.process_status === 'error' ? r.status_history[0] : undefined;
+      // A lost host or daemon is Walnut's to recover (session-auto-recover.ts); it is the
+      // user's once it has stayed lost (recovery gave up, or is off).
+      if (isInfraSessionError(r) && !(entry && nowMs - Date.parse(entry.timestamp) >= INFRA_ALERT_AFTER_MS)) continue;
+      alerts.push({ ...base, key: `error:${task.id}:${r.claudeSessionId}:${entry?.timestamp ?? ''}`, kind: 'error' });
+      seen.add(task.id);
+    }
+  }
+  return alerts.sort((a, b) => a.project.localeCompare(b.project) || a.title.localeCompare(b.title));
+}
+
+let digestFoldMs = DIGEST_FOLD_MS;
+/** Tests shorten the fold window (null restores it). */
+export function _setDigestFoldMsForTesting(ms: number | null): void {
+  digestFoldMs = ms ?? DIGEST_FOLD_MS;
 }
 
 /** Notes handed out but not yet recorded: two sends racing into the main agent carry one note. */
@@ -316,22 +379,29 @@ export async function pendingOrgDigest(sessionId: string, nowMs = Date.now()): P
       const tasks = await orgTasks();
       const prev = await readDigestState(mainId);
       const now = new Date(nowMs).toISOString();
-      const { lines, next } = orgDigest(tasks, prev, now);
+      const digest = orgDigest(tasks, prev, now);
+      const alerts = await orgAlerts(tasks, nowMs);
       if (!prev) {
-        await writeDigestState(mainId, next);
+        await writeDigestState(mainId, { ...digest.next, alerts: alerts.map((a) => a.key) });
         return null;
       }
-      if (lines.length === 0) return null;
+      const plan = planOrgNote(prev, digest, alerts, nowMs, digestFoldMs);
+      if (plan.kind === 'none') {
+        // A state from before alerts: what needs the user right now is recorded as known.
+        if (!prev.alerts) await writeDigestState(mainId, plan.next);
+        return null;
+      }
+      const lines = plan.kind === 'full' ? digest.lines : [];
       const shown = lines.slice(0, DIGEST_MAX_LINES).map(formatDigestLine);
       handedOut = true;
       return {
-        text: buildDigestText(own, shown, lines.length - shown.length, prev.at, nowMs),
+        text: buildDigestText(own, shown, lines.length - shown.length, prev.at, nowMs, plan.alerts.map(formatAlertLine), plan.more),
         markTold: async () => {
-          await writeDigestState(mainId, next).catch((err) => log.session.warn('org digest: state not recorded', {
+          await writeDigestState(mainId, plan.next).catch((err) => log.session.warn('org digest: state not recorded', {
             sessionId, error: err instanceof Error ? err.message : String(err),
           }));
           claims.delete(mainId);
-          log.session.info('org digest queued', { sessionId, taskId: mainId, projects: lines.length });
+          log.session.info('org digest queued', { sessionId, taskId: mainId, kind: plan.kind, projects: lines.length, alerts: plan.alerts.length });
         },
       };
     } finally {

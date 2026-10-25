@@ -20,8 +20,8 @@ import { PROJECTS_MEMORY_DIR, WALNUT_HOME } from '../../src/constants.js'
 import { startServer, stopServer } from '../../src/web/server.js'
 import { addTask, completeTask, deleteTask, getTask, listTasks, setProjectMetadata, updateTask, updateTaskRaw } from '../../src/core/task-manager.js'
 import { updateConfig } from '../../src/core/config-manager.js'
-import { createSessionRecord } from '../../src/core/session-tracker.js'
-import { pendingOrgDigest } from '../../src/core/org/org-store.js'
+import { createSessionRecord, updateSessionRecord } from '../../src/core/session-tracker.js'
+import { _setDigestFoldMsForTesting, pendingOrgDigest } from '../../src/core/org/org-store.js'
 import { taskDepth } from '../../src/core/sessions/subtask-limits.js'
 import { buildSessionContext } from '../../src/core/sessions/session-context.js'
 
@@ -222,40 +222,129 @@ describe('/api/v1/org', () => {
     const mainId = (await listTasks()).find((x) => x.org_role === 'main')!.id
     const sid = '11111111-2222-4333-8444-555555555555'
     await createSessionRecord(sid, mainId, 'Ask Walnut', WALNUT_HOME)
-    // Main was made before any work existed, so its first note already names the new work.
-    const first = await pendingOrgDigest(sid, Date.now())
-    expect(first).not.toBeNull()
-    expect(first!.text).toMatch(/- Walnut: \d+ new/)
-    expect(first!.text).toContain('- Health: 1 new')
-    await first!.markTold()
-    expect(await pendingOrgDigest(sid, Date.now() + 500)).toBeNull()
+    // No fold window here: this test is about what a note says (the next one is about when).
+    _setDigestFoldMsForTesting(0)
+    try {
+      // Main was made before any work existed, so its first note already names the new work.
+      const first = await pendingOrgDigest(sid, Date.now())
+      expect(first).not.toBeNull()
+      expect(first!.text).toMatch(/- Walnut: \d+ new/)
+      expect(first!.text).toContain('- Health: 1 new')
+      await first!.markTold()
+      expect(await pendingOrgDigest(sid, Date.now() + 500)).toBeNull()
 
-    const done = (await listTasks()).find((x) => x.title === 'Book the lab recheck')!
-    await completeTask(done.id)
-    await addTask({ title: 'a new walnut task', project: 'Walnut' })
-    const note = await pendingOrgDigest(sid, Date.now() + 1000)
-    expect(note).not.toBeNull()
-    expect(note!.text).toContain('kind="notification"')
-    expect(note!.text).toContain('outcome="org-update"')
-    expect(note!.text).toContain('- Health: 1 done')
-    expect(note!.text).toContain('- Walnut: 1 new')
-    expect(note!.text).not.toContain('Tickets')
-    // A second send after the first carries no second note.
-    expect(await pendingOrgDigest(sid, Date.now() + 1500)).toBeNull()
-    await note!.markTold()
+      const done = (await listTasks()).find((x) => x.title === 'Book the lab recheck')!
+      await completeTask(done.id)
+      await addTask({ title: 'a new walnut task', project: 'Walnut' })
+      const note = await pendingOrgDigest(sid, Date.now() + 1000)
+      expect(note).not.toBeNull()
+      expect(note!.text).toContain('kind="notification"')
+      expect(note!.text).toContain('outcome="org-update"')
+      expect(note!.text).toContain('- Health: 1 done')
+      expect(note!.text).toContain('- Walnut: 1 new')
+      expect(note!.text).not.toContain('Tickets')
+      expect(note!.text).not.toContain('Needs the user now')
+      // A second send after the first carries no second note.
+      expect(await pendingOrgDigest(sid, Date.now() + 1500)).toBeNull()
+      await note!.markTold()
 
-    // Two sends at the same moment: exactly one carries the note. (A change in what waits on
-    // the user moves the note whatever the clocks above say.)
-    const asks = (await addTask({ title: 'a walnut task that needs the user', project: 'Walnut' })).task
-    await updateTask(asks.id, { phase: 'NEED_ACTION' }, { source: 'api' })
-    const racing = await Promise.all([pendingOrgDigest(sid, Date.now() + 1800), pendingOrgDigest(sid, Date.now() + 1800)])
-    expect(racing.filter(Boolean)).toHaveLength(1)
-    await racing.find(Boolean)!.markTold()
-    expect(await pendingOrgDigest(sid, Date.now() + 2000)).toBeNull()
+      // Two sends at the same moment: exactly one carries the note.
+      const asks = (await addTask({ title: 'a walnut task that needs the user', project: 'Walnut' })).task
+      await updateTask(asks.id, { phase: 'NEED_ACTION' }, { source: 'api' })
+      const racing = await Promise.all([pendingOrgDigest(sid, Date.now() + 1800), pendingOrgDigest(sid, Date.now() + 1800)])
+      expect(racing.filter(Boolean)).toHaveLength(1)
+      await racing.find(Boolean)!.markTold()
+      expect(await pendingOrgDigest(sid, Date.now() + 2000)).toBeNull()
+    } finally {
+      _setDigestFoldMsForTesting(null)
+    }
 
     // Any other session never gets one, and pays one indexed read to learn that.
     const other = '22222222-3333-4444-8555-666666666666'
-    await createSessionRecord(other, done.id, 'Health', WALNUT_HOME)
+    const health = (await listTasks()).find((x) => x.title === 'Book the lab recheck')!
+    await createSessionRecord(other, health.id, 'Health', WALNUT_HOME)
     expect(await pendingOrgDigest(other)).toBeNull()
+  })
+
+  it('count moves wait for the fold window; what newly needs the user rides the next message, once', async () => {
+    // Main's session from the test above; this one is last, so what it makes stays.
+    const sid = '11111111-2222-4333-8444-555555555555'
+    const FOLD = 5_000
+    _setDigestFoldMsForTesting(FOLD)
+    try {
+      const t0 = Date.now()
+      // A task handed back moves a count: inside the window it says nothing, after it the note comes.
+      const handed = (await addTask({ title: 'handed back to the user', project: 'Walnut' })).task
+      await updateTask(handed.id, { phase: 'NEED_ACTION' }, { source: 'api' })
+      expect(await pendingOrgDigest(sid, t0 + 1_000)).toBeNull()
+      const folded = await pendingOrgDigest(sid, t0 + FOLD + 2_500)
+      expect(folded!.text).toMatch(/Org update since \d+ min ago:\n- Walnut: [^\n]*waiting on the user/)
+      expect(folded!.text).not.toContain('Needs the user now')
+      await folded!.markTold()
+      const told = t0 + FOLD + 2_500
+
+      // A worker that asks the user a question: told on the next message, the counts still folded.
+      const asking = (await addTask({ title: 'asks a question', project: 'Walnut' })).task
+      const askSid = '33333333-4444-4555-8666-777777777777'
+      await createSessionRecord(askSid, asking.id, 'Walnut', WALNUT_HOME)
+      await updateTaskRaw(asking.id, { session_id: askSid })
+      await updateTask(asking.id, { phase: 'NEED_ACTION' }, { source: 'api' })
+      await updateSessionRecord(askSid, { pendingPermission: { requestId: 'rq-q1', toolName: 'AskUserQuestion', receivedAt: new Date().toISOString() } })
+      const racing = await Promise.all([pendingOrgDigest(sid, told + 100), pendingOrgDigest(sid, told + 100)])
+      expect(racing.filter(Boolean)).toHaveLength(1)
+      const alert = racing.find(Boolean)!
+      expect(alert.text).toContain('Org update:\nNeeds the user now:\n- Walnut: "asks a question" asks the user a question\n')
+      expect(alert.text).toContain('Tell the user what is under "Needs the user now"')
+      expect(alert.text).not.toContain('waiting on the user')
+      await alert.markTold()
+      // Told once: the same prompt is not news, and the count move still waits.
+      expect(await pendingOrgDigest(sid, told + 200)).toBeNull()
+
+      // A worker whose session failed is news too, also inside the window.
+      const broken = (await addTask({ title: 'fails', project: 'Walnut' })).task
+      const brokenSid = '44444444-5555-4666-8777-888888888888'
+      await createSessionRecord(brokenSid, broken.id, 'Walnut', WALNUT_HOME)
+      await updateTaskRaw(broken.id, { session_id: brokenSid })
+      await updateSessionRecord(brokenSid, { process_status: 'error' })
+      const failed = await pendingOrgDigest(sid, told + 300)
+      expect(failed!.text).toContain('- Walnut: "fails" stopped on an error')
+      expect(failed!.text).not.toContain('asks a question')
+      await failed!.markTold()
+
+      // A lost host is Walnut's to recover (auto-resume), not news for the user.
+      const flaky = (await addTask({ title: 'loses its host', project: 'Walnut' })).task
+      const flakySid = '55555555-6666-4777-8888-999999999999'
+      await createSessionRecord(flakySid, flaky.id, 'Walnut', WALNUT_HOME)
+      await updateTaskRaw(flaky.id, { session_id: flakySid })
+      await updateSessionRecord(flakySid, { process_status: 'error', status_reason: 'remote_unreachable' })
+      expect(await pendingOrgDigest(sid, told + 400)).toBeNull()
+      // The failed one is resumed and fails again: a second failure is told again.
+      await updateSessionRecord(brokenSid, { process_status: 'running' })
+      await updateSessionRecord(brokenSid, { process_status: 'error' })
+      const twice = await pendingOrgDigest(sid, told + 450)
+      expect(twice!.text).toContain('- Walnut: "fails" stopped on an error')
+      expect(twice!.text).not.toContain('loses its host')
+      await twice!.markTold()
+      // The host stays lost for 20 minutes (recovery gave up): now it is the user's.
+      const lost = new Date(told - 20 * 60_000).toISOString()
+      await updateSessionRecord(flakySid, { status_history: [{ timestamp: lost, process_status: 'error', reason: 'remote_unreachable', changed_by: 'health-monitor' }] })
+      const stuck = await pendingOrgDigest(sid, told + 460)
+      expect(stuck!.text).toContain('- Walnut: "loses its host" stopped on an error')
+      await stuck!.markTold()
+
+      // The window passes: the folded counts come, without the alerts already told.
+      const later = await pendingOrgDigest(sid, told + FOLD + 500)
+      expect(later!.text).toMatch(/- Walnut: [^\n]*waiting on the user/)
+      expect(later!.text).not.toContain('Needs the user now')
+      await later!.markTold()
+
+      // A new prompt on the same task is a new alert.
+      await updateSessionRecord(askSid, { pendingPermission: { requestId: 'rq-q2', toolName: 'Bash', receivedAt: new Date().toISOString() } })
+      const again = await pendingOrgDigest(sid, told + FOLD + 600)
+      expect(again!.text).toContain('- Walnut: "asks a question" waits for the user to approve Bash')
+      await again!.markTold()
+    } finally {
+      _setDigestFoldMsForTesting(null)
+    }
   })
 })

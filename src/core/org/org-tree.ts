@@ -281,8 +281,11 @@ export function findProjectNode(tree: OrgTree, name: string): OrgProjectNode | u
 
 /** What the main agent was last told, per project key. */
 export interface OrgDigestState {
+  /** When the counts were last told: the folded part of the note waits DIGEST_FOLD_MS from here. */
   at: string;
   needsYou: Record<string, number>;
+  /** OrgAlert keys already told. Absent in a state written before alerts existed. */
+  alerts?: string[];
 }
 
 export interface OrgDigestLine {
@@ -348,4 +351,69 @@ export function formatDigestLine(line: OrgDigestLine): string {
   if (line.needsYou) parts.push(`${line.needsYou} waiting on the user`);
   else if (line.needsYouChanged) parts.push('nothing waiting on the user now');
   return `${line.project || 'Inbox'}: ${parts.join(', ')}`;
+}
+
+/**
+ * Something in the org that newly needs the user, found on the session records
+ * (org-store.ts orgAlerts): an agent asking the user a question, a tool waiting
+ * for approval, a session that failed. Counts going up and down are not alerts.
+ */
+export interface OrgAlert {
+  /** One per occurrence (a new prompt or a new failure is a new key), so each is told once. */
+  key: string;
+  project: string;
+  title: string;
+  kind: 'question' | 'permission' | 'error';
+  tool?: string;
+}
+
+/**
+ * Count-only moves (done, new, what waits on the user) reach the main agent at
+ * most this often, folded into one note; an alert rides the next message. On
+ * 2026-10-24 Main carried 18 notes in ten hours, most of them a count of tasks
+ * handed back moving by one.
+ */
+export const DIGEST_FOLD_MS = 30 * 60_000;
+
+export interface OrgNotePlan {
+  /** 'none' = nothing to say now; 'alerts' = only what newly needs the user; 'full' = the folded counts too. */
+  kind: 'none' | 'alerts' | 'full';
+  /** The alerts to tell: the ones not told before, at most `maxAlerts`. */
+  alerts: OrgAlert[];
+  /** Fresh alerts past `maxAlerts`: counted now, named on a later message (they stay untold). */
+  more: number;
+  /** The state to store once the note is told. */
+  next: OrgDigestState;
+}
+
+/** What the next message into the main agent carries, given the last state told and what stands now. */
+export function planOrgNote(
+  prev: OrgDigestState,
+  digest: { lines: readonly OrgDigestLine[]; next: OrgDigestState },
+  alerts: readonly OrgAlert[],
+  nowMs: number,
+  foldMs = DIGEST_FOLD_MS,
+  maxAlerts = DIGEST_MAX_LINES,
+): OrgNotePlan {
+  // A state from before alerts existed told none of them: what needs the user at that
+  // moment is the baseline, as everything is on a first message.
+  const told = new Set(prev.alerts ?? alerts.map((a) => a.key));
+  const fresh = alerts.filter((a) => !told.has(a.key));
+  const shown = fresh.slice(0, maxAlerts);
+  const unshown = new Set(fresh.slice(maxAlerts).map((a) => a.key));
+  // Recorded as told: what is current, minus what this note only counts.
+  const keys = alerts.map((a) => a.key).filter((k) => !unshown.has(k));
+  const more = fresh.length - shown.length;
+  const foldDue = digest.lines.length > 0 && !(nowMs - Date.parse(prev.at) < foldMs);
+  if (foldDue) return { kind: 'full', alerts: shown, more, next: { ...digest.next, alerts: keys } };
+  const kept: OrgDigestState = { at: prev.at, needsYou: prev.needsYou, alerts: keys };
+  return { kind: fresh.length ? 'alerts' : 'none', alerts: shown, more, next: kept };
+}
+
+/** One short line per alert. */
+export function formatAlertLine(alert: OrgAlert): string {
+  const what = alert.kind === 'question' ? 'asks the user a question'
+    : alert.kind === 'permission' ? `waits for the user to approve ${alert.tool || 'a tool'}`
+      : 'stopped on an error';
+  return `${alert.project || 'Inbox'}: "${alert.title}" ${what}`;
 }

@@ -8,8 +8,8 @@
  */
 import { describe, it, expect } from 'vitest'
 import {
-  buildOrgTree, findProjectNode, formatDigestLine, isOrgMember, orgDigest, pickLead, pickMain,
-  type OrgTaskLike,
+  DIGEST_FOLD_MS, buildOrgTree, findProjectNode, formatAlertLine, formatDigestLine, isOrgMember, orgDigest, pickLead, pickMain,
+  planOrgNote, type OrgAlert, type OrgTaskLike,
 } from '../../../src/core/org/org-tree.js'
 import * as viaAlias from '@open-walnut/org-tree'
 import { isAskTask } from '../../../src/core/sessions/caller-placement.js'
@@ -212,5 +212,71 @@ describe('org digest (the main agent\'s update note)', () => {
     const first = orgDigest(tasks, prev, later)
     expect(first.lines.map(formatDigestLine)).toEqual(['W: nothing waiting on the user now'])
     expect(orgDigest(tasks, first.next, '2026-10-21T13:00:00Z').lines).toEqual([])
+  })
+})
+
+describe('when the main agent\'s note goes (planOrgNote)', () => {
+  const at = '2026-10-21T10:00:00Z'
+  const atMs = Date.parse(at)
+  const moved = { lines: [{ project: 'W', done: 0, added: 0, needsYou: 3, needsYouChanged: true }], next: { at: '2026-10-21T10:10:00Z', needsYou: { w: 3 } } }
+  const still = { lines: [], next: { at: '2026-10-21T10:10:00Z', needsYou: { w: 2 } } }
+  const ask: OrgAlert = { key: 'ask:t1:rq-1', project: 'W', title: 'Fix it', kind: 'question' }
+  const fail: OrgAlert = { key: 'error:t2:s2', project: 'W', title: 'Ship it', kind: 'error' }
+
+  it('a count move inside the half hour says nothing and keeps the baseline; after it, one folded note', () => {
+    const prev = { at, needsYou: { w: 2 }, alerts: [] }
+    const early = planOrgNote(prev, moved, [], atMs + DIGEST_FOLD_MS - 1)
+    expect(early.kind).toBe('none')
+    expect(early.next).toEqual({ at, needsYou: { w: 2 }, alerts: [] })
+    const due = planOrgNote(prev, moved, [], atMs + DIGEST_FOLD_MS)
+    expect(due.kind).toBe('full')
+    expect(due.next).toEqual({ ...moved.next, alerts: [] })
+    expect(DIGEST_FOLD_MS).toBe(30 * 60_000)
+  })
+
+  it('a new alert goes at once, alone; the counts keep waiting from the same baseline', () => {
+    const prev = { at, needsYou: { w: 2 }, alerts: [] }
+    const plan = planOrgNote(prev, moved, [ask], atMs + 60_000)
+    expect(plan.kind).toBe('alerts')
+    expect(plan.alerts).toEqual([ask])
+    expect(plan.next).toEqual({ at, needsYou: { w: 2 }, alerts: [ask.key] })
+    // Told: the same prompt is no news; a second one is.
+    expect(planOrgNote(plan.next, moved, [ask], atMs + 120_000).kind).toBe('none')
+    const second = planOrgNote(plan.next, still, [ask, fail], atMs + 180_000)
+    expect(second.kind).toBe('alerts')
+    expect(second.alerts).toEqual([fail])
+  })
+
+  it('the folded note carries only alerts not told yet, and a resolved alert leaves the record', () => {
+    const prev = { at, needsYou: { w: 2 }, alerts: [ask.key, 'ask:t9:gone'] }
+    const plan = planOrgNote(prev, moved, [ask, fail], atMs + DIGEST_FOLD_MS)
+    expect(plan.kind).toBe('full')
+    expect(plan.alerts).toEqual([fail])
+    expect(plan.next.alerts).toEqual([ask.key, fail.key])
+  })
+
+  it('alerts past the cap are counted, stay untold, and are named on the next message', () => {
+    const many: OrgAlert[] = Array.from({ length: 8 }, (_, i) => ({ key: `ask:t${i}:rq`, project: 'W', title: `T${i}`, kind: 'question' as const }))
+    const prev = { at, needsYou: { w: 2 }, alerts: [] }
+    const first = planOrgNote(prev, still, many, atMs + 60_000, DIGEST_FOLD_MS, 6)
+    expect(first.alerts.map((a) => a.title)).toEqual(['T0', 'T1', 'T2', 'T3', 'T4', 'T5'])
+    expect(first.more).toBe(2)
+    expect(first.next.alerts).toEqual(many.slice(0, 6).map((a) => a.key))
+    const second = planOrgNote(first.next, still, many, atMs + 120_000, DIGEST_FOLD_MS, 6)
+    expect(second.alerts.map((a) => a.title)).toEqual(['T6', 'T7'])
+    expect(second.more).toBe(0)
+  })
+
+  it('a state from before alerts takes what needs the user now as known (no burst after an upgrade)', () => {
+    const prev = { at, needsYou: { w: 2 } }
+    const plan = planOrgNote(prev, still, [ask, fail], atMs + 60_000)
+    expect(plan.kind).toBe('none')
+    expect(plan.next.alerts).toEqual([ask.key, fail.key])
+  })
+
+  it('an alert line names the project, the task and what it waits on', () => {
+    expect(formatAlertLine(ask)).toBe('W: "Fix it" asks the user a question')
+    expect(formatAlertLine({ ...ask, kind: 'permission', tool: 'Bash' })).toBe('W: "Fix it" waits for the user to approve Bash')
+    expect(formatAlertLine({ ...fail, project: '' })).toBe('Inbox: "Ship it" stopped on an error')
   })
 })
