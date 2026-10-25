@@ -7,7 +7,7 @@
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
-  canCheckForUpdate, getAppUpdateActionError, getAppUpdateButtonTooltip, getAppUpdateRailLabel,
+  canCheckForUpdate, getAppUpdateActionError, getAppUpdateButtonTooltip,
   getArm64IntelBuildWarningDescription, isAppUpdateButtonDisabled, resolveAppUpdateButtonAction,
   shouldShowAppUpdateItem, shouldShowArm64IntelBuildWarning, shouldToastAppUpdateActionResult,
 } from '@/components/layout/app-update-logic';
@@ -133,8 +133,8 @@ describe('getAppUpdateButtonTooltip', () => {
   });
 });
 
-describe('the rail item (Walnut: shown only with something to do)', () => {
-  it('stays out of the rail until there is an update, and in it through the download and install', () => {
+describe('the update notice (Walnut: shown only with something to do)', () => {
+  it('stays hidden until there is an update, and shows through the download and install', () => {
     expect(shouldShowAppUpdateItem(null)).toBe(false);
     expect(shouldShowAppUpdateItem({ ...baseState, enabled: false, status: 'disabled' })).toBe(false);
     expect(shouldShowAppUpdateItem({ ...baseState, status: 'idle' })).toBe(false);
@@ -146,12 +146,6 @@ describe('the rail item (Walnut: shown only with something to do)', () => {
     expect(shouldShowAppUpdateItem({ ...baseState, status: 'downloaded', downloadedVersion: '1.1.0', availableVersion: '1.1.0' })).toBe(true);
   });
 
-  it('names the step it is on', () => {
-    expect(getAppUpdateRailLabel({ ...baseState, status: 'available', availableVersion: '1.1.0' })).toBe('Update available');
-    expect(getAppUpdateRailLabel({ ...baseState, status: 'downloading', downloadPercent: 42.9 })).toBe('Downloading 42%');
-    expect(getAppUpdateRailLabel({ ...baseState, status: 'available', availableVersion: '1.1.0', errorContext: 'download', message: 'x' })).toBe('Retry update');
-    expect(getAppUpdateRailLabel({ ...baseState, status: 'downloaded', downloadedVersion: '1.1.0' })).toBe('Restart to update');
-  });
 });
 
 describe('the page side of the bridge', () => {

@@ -1,6 +1,8 @@
 import Cocoa
 import WebKit
 
+private var pendingUpdateConfirmations: Set<ObjectIdentifier> = []
+
 // Where the app's update meets the person: the web console's rail item (through
 // the `walnutUpdate` message handler and the `walnut:app-update` event), the app
 // menu's update item, and the confirmation before a restart. The updater itself
@@ -50,9 +52,16 @@ extension AppDelegate: WKScriptMessageHandlerWithReply {
         case "download":
             updater.download { accepted, completed in reply(["accepted": accepted, "completed": completed]) }
         case "confirmInstall":
-            confirmInstall { ok in replyHandler(ok, nil) }
+            confirmInstall(from: message.webView) { ok in replyHandler(ok, nil) }
         case "install":
-            updater.install { accepted, failed in reply(["accepted": accepted, "completed": false, "failed": failed]) }
+            let source = message.webView
+            checkUpdateWindows { [weak self] clean in
+                guard let self, clean, let source, self.updateWindowViews().contains(where: { $0 === source }) else {
+                    replyHandler(nil, "Save edits and send or clear unsent messages in every Walnut window before restarting.")
+                    return
+                }
+                updater.install { accepted, failed in reply(["accepted": accepted, "completed": false, "failed": failed]) }
+            }
         case "openRelease":
             let version = body["version"] as? String ?? ""
             if let url = updater.releaseURL(version: version) { NSWorkspace.shared.open(url); replyHandler(true, nil) }
@@ -81,7 +90,7 @@ extension AppDelegate: WKScriptMessageHandlerWithReply {
           // Once per arrival at a step, so a failed download is retried once more.
           let last = null;
           const tick = () => {
-            const el = document.querySelector('[data-testid="sidebar-app-update"]');
+            const el = document.querySelector('.stale-build-pill-action');
             const status = el ? el.getAttribute('data-status') : null;
             if (el && status !== last && (status === 'available' || status === 'downloaded')) {
               // The restart waits a moment, so the downloaded state can be seen first.
@@ -106,19 +115,87 @@ extension AppDelegate: WKScriptMessageHandlerWithReply {
 
     // MARK: - Restart to update
 
-    /// T3's confirmation, in Walnut's words: sessions run in the session daemon,
-    /// so a restart closes the console for a few seconds and stops no work.
-    func confirmInstall(_ done: @escaping (Bool) -> Void) {
-        guard let window = window, let version = appUpdater?.state.downloadedVersion ?? appUpdater?.state.availableVersion else {
+    func updateWindowViews() -> [WKWebView] {
+        ([webView].compactMap { $0 } + popoutWindows.values.compactMap { $0.contentView as? WKWebView })
+            .filter { $0.window?.contentView === $0 }
+    }
+
+    func checkUpdateWindows(_ done: @escaping (Bool) -> Void) {
+        let views = updateWindowViews()
+        let identities = Set(views.map { ObjectIdentifier($0) })
+        guard !views.isEmpty else { done(false); return }
+        let group = DispatchGroup()
+        var clean = true
+        for view in views {
+            let watchdog = view === webView ? webContentWatchdog : popoutWatchdogs[ObjectIdentifier(view)]
+            guard let watchdog else { clean = false; continue }
+            group.enter()
+            watchdog.checkUnsavedWork { unsaved in
+                if unsaved || view.window?.contentView !== view { clean = false }
+                group.leave()
+            }
+        }
+        var finished = false
+        let finish: (Bool) -> Void = { result in
+            guard !finished else { return }
+            finished = true
+            done(result)
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { finish(false) }
+        group.notify(queue: .main) { [weak self] in
+            guard let self else { finish(false); return }
+            finish(clean && identities == Set(self.updateWindowViews().map { ObjectIdentifier($0) }))
+        }
+    }
+
+    func confirmInstall(from source: WKWebView? = nil, _ done: @escaping (Bool) -> Void) {
+        guard let window = source?.window ?? NSApp.keyWindow ?? window, let view = window.contentView as? WKWebView,
+              source == nil || source === view,
+              let version = appUpdater?.state.downloadedVersion ?? appUpdater?.state.availableVersion,
+              window.attachedSheet == nil, !pendingUpdateConfirmations.contains(ObjectIdentifier(self)) else {
             done(false); return
         }
-        if Self.e2eClicks { done(true); return }
-        let alert = NSAlert()
-        alert.messageText = "Install Walnut \(version) and restart?"
-        alert.informativeText = "Walnut closes for a few seconds and opens again. Running sessions keep going."
-        alert.addButton(withTitle: "Restart to Update")
-        alert.addButton(withTitle: "Cancel")
-        alert.beginSheetModal(for: window) { response in done(response == .alertFirstButtonReturn) }
+        let key = ObjectIdentifier(self)
+        pendingUpdateConfirmations.insert(key)
+        let finish: (Bool) -> Void = { result in
+            pendingUpdateConfirmations.remove(key)
+            done(result)
+        }
+        let isCurrent = { [weak self, weak window, weak view] in
+            guard let self, let window, let view else { return false }
+            return window.contentView === view && self.updateWindowViews().contains { $0 === view }
+                && (self.appUpdater?.state.downloadedVersion ?? self.appUpdater?.state.availableVersion) == version
+        }
+        checkUpdateWindows { [weak self, weak window] clean in
+            guard let self, let window, isCurrent(), window.attachedSheet == nil else { finish(false); return }
+            if !clean {
+                self.showUpdateAlert("Save your work before restarting", "Save edits and send or clear unsent messages in every Walnut window, then try again.", in: window)
+                finish(false)
+                return
+            }
+            let confirm = {
+                guard isCurrent() else { finish(false); return }
+                self.checkUpdateWindows { clean in
+                    finish(clean && isCurrent())
+                    if !clean && isCurrent() {
+                        self.showUpdateAlert("Save your work before restarting", "New unsaved work was found. Save edits and send or clear unsent messages in every Walnut window, then try again.", in: window)
+                    }
+                }
+            }
+            if Self.e2eClicks { confirm(); return }
+            let alert = NSAlert()
+            alert.messageText = "Install Walnut \(version) and restart?"
+            alert.informativeText = "Walnut closes for a few seconds and opens again. Running sessions keep going."
+            alert.addButton(withTitle: "Restart to Update")
+            alert.addButton(withTitle: "Cancel")
+            alert.beginSheetModal(for: window) { response in
+                // The confirmation sheet detaches after its completion returns.
+                DispatchQueue.main.async {
+                    if response == .alertFirstButtonReturn { confirm() }
+                    else { finish(false) }
+                }
+            }
+        }
     }
 
     /// T3 stops every backend with a 5 s budget before quitAndInstall. A server
@@ -207,11 +284,11 @@ extension AppDelegate: WKScriptMessageHandlerWithReply {
         }
     }
 
-    func showUpdateAlert(_ title: String, _ text: String) {
+    func showUpdateAlert(_ title: String, _ text: String, in target: NSWindow? = nil) {
         let alert = NSAlert()
         alert.messageText = title
         alert.informativeText = text
         alert.addButton(withTitle: "OK")
-        if let window = window { alert.beginSheetModal(for: window, completionHandler: nil) } else { alert.runModal() }
+        if let window = target ?? window { alert.beginSheetModal(for: window, completionHandler: nil) } else { alert.runModal() }
     }
 }

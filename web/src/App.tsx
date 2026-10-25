@@ -93,7 +93,7 @@ export function App() {
   const navigateRef = useRef<NavigateFunction>(navigate);
   navigateRef.current = navigate;
 
-  if (isPopoutPath(location.pathname)) return <PopoutRoot />;
+  if (isPopoutPath(location.pathname)) return <><StaleBuildPill /><PopoutRoot /></>;
 
   const isHome = location.pathname === '/';
 

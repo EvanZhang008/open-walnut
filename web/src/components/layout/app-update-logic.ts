@@ -67,17 +67,6 @@ export function getAppUpdateButtonTooltip(state: AppUpdateState): string {
   return 'Up to date';
 }
 
-/** The rail item's one-word line (the expanded rail shows it beside the icon). */
-export function getAppUpdateRailLabel(state: AppUpdateState): string {
-  const action = resolveAppUpdateButtonAction(state);
-  if (action === 'install') return 'Restart to update';
-  if (state.status === 'downloading') {
-    return typeof state.downloadPercent === 'number' ? `Downloading ${Math.floor(state.downloadPercent)}%` : 'Downloading';
-  }
-  if (action === 'download') return state.errorContext === 'download' ? 'Retry update' : 'Update available';
-  return 'Up to date';
-}
-
 export function getAppUpdateActionError(result: AppUpdateActionResult): string | null {
   if (!result.accepted || result.completed) return null;
   if (typeof result.state.message !== 'string') return null;

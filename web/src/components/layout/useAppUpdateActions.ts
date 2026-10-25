@@ -1,18 +1,8 @@
-/**
- * The clicks of the Mac app's update (T3 Code's SidebarUpdateControl handler),
- * shared by the rail item and the Settings row so both say the same things:
- * download, then a toast once it is in; install after the app's confirmation;
- * a check that could not run says why. Errors are toasts, never banners.
- *
- * The toasts come from the rail item, which is mounted wherever the app is and
- * lends its `notify` here (useLendAppUpdateToasts). The Settings row then shows
- * the same toasts without importing the notification provider, which pulls the
- * markdown renderer into Settings and breaks its DOM-free tests.
- */
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { NotificationInput } from '@/contexts/notifications/types';
 import { appUpdateBridge, type AppUpdateState } from '@/hooks/useAppUpdate';
 import { log } from '@/utils/log';
+import { hasUnsavedWork } from '@/utils/stale-assets';
 import {
   getAppUpdateActionError, getAppUpdateDownloadedVersion, isAppUpdateButtonDisabled,
   resolveAppUpdateButtonAction, shouldToastAppUpdateActionResult,
@@ -35,15 +25,20 @@ function notify(n: NotificationInput): void {
 
 export function useAppUpdateActions(state: AppUpdateState | null) {
   const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const inFlight = useRef(false);
 
   const toastError = useCallback((title: string, body: string) => {
-    notify({ kind: 'operation-error', severity: 'error', persistent: false, title, body, dedupKey: `app-update:${title}` });
+    if (!lent) setError(body || title);
+    else notify({ kind: 'operation-error', severity: 'error', persistent: false, title, body, dedupKey: `app-update:${title}` });
   }, []);
 
   const run = useCallback(async () => {
-    if (!state || pending || isAppUpdateButtonDisabled(state)) return;
+    if (!state || inFlight.current || isAppUpdateButtonDisabled(state)) return;
     const action = resolveAppUpdateButtonAction(state);
+    inFlight.current = true;
     setPending(true);
+    setError(null);
     try {
       if (action === 'download') {
         const result = await appUpdateBridge.download();
@@ -52,7 +47,7 @@ export function useAppUpdateActions(state: AppUpdateState | null) {
           notify({
             kind: 'hint', severity: 'success', persistent: false,
             title: 'Update downloaded',
-            body: 'Restart from the update button in the sidebar to install it.',
+            body: 'Use Restart in the update notice to install it.',
             dedupKey: `app-update-downloaded:${version ?? ''}`,
             ...(version ? {
               action: { label: 'Read more', kind: 'callback' as const },
@@ -63,8 +58,16 @@ export function useAppUpdateActions(state: AppUpdateState | null) {
           toastError('Could not download update', getAppUpdateActionError(result) ?? '');
         }
       } else if (action === 'install') {
+        if (hasUnsavedWork()) {
+          toastError('Could not install update', 'Save your edits and send or clear unsent messages before restarting.');
+          return;
+        }
         const confirmed = await appUpdateBridge.confirmInstall();
         if (!confirmed) return;
+        if (hasUnsavedWork()) {
+          toastError('Could not install update', 'Save your edits and send or clear unsent messages before restarting.');
+          return;
+        }
         const result = await appUpdateBridge.install();
         if (shouldToastAppUpdateActionResult(result)) {
           toastError('Could not install update', getAppUpdateActionError(result) ?? '');
@@ -84,9 +87,10 @@ export function useAppUpdateActions(state: AppUpdateState | null) {
         : action === 'download' ? 'Could not start update download' : 'Could not check for updates';
       toastError(title, err instanceof Error ? err.message : 'An unexpected error occurred.');
     } finally {
+      inFlight.current = false;
       setPending(false);
     }
-  }, [state, pending, toastError]);
+  }, [state, toastError]);
 
-  return { pending, run };
+  return { pending, run, error, clearError: () => setError(null) };
 }
