@@ -78,7 +78,13 @@ function scriptedDaemon(replies: Record<string, Step[]>, deadSendGate?: Promise<
     for (const fn of listeners) fn({ ev: 'exit', sid: SID, code: 1, stderr: 'Error parsing streaming input line' })
   }
   const lines = () => sent.filter((s) => s.cmd === 'send').map((s) => ({ message: String(s.payload.message), uuid: s.payload.uuid, dedupe: s.payload.dedupe === true }))
-  return { conn, sent, exit, lines }
+  // The CLI's init, as every Claude Code process prints at start. It lists no
+  // lifecycle capability, so a line written before it settles by its write once it
+  // comes; until then it is kept, in case the process dies before it runs it.
+  const init = () => {
+    for (const fn of listeners) fn({ ev: 'jsonl', sid: SID, line: JSON.stringify({ type: 'system', subtype: 'init', session_id: SID }) })
+  }
+  return { conn, sent, exit, lines, init }
 }
 
 const rows = async () => (await getQueue(SID)).map((m) => `${m.message}:${m.status}`)
@@ -197,6 +203,7 @@ describe('a process holding a cut copy exits while the next line\'s write is una
     // The next process gets both, in order, each asked first (dedupe), each told once.
     startNext()
     await vi.waitFor(() => expect(next.lines()).toHaveLength(2), { timeout: 10_000 })
+    next.init()
     await vi.waitFor(async () => expect(await rows()).toEqual([]), { timeout: 10_000 })
     await settle()
     expect(next.lines().map((l) => [l.message, l.dedupe])).toEqual([['first message', true], ['second message', true]])

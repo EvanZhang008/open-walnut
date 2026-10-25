@@ -579,7 +579,10 @@ export class MockDaemon {
     const ids = Array.isArray(cmd.markers)
       ? (cmd.markers as Array<{ messageId?: unknown }>).map((m) => m?.messageId).filter((v): v is string => typeof v === 'string')
       : []
-    if (cmd.dedupe === true) {
+    // Only for a live process: the real daemon reaps on the process's exit, before
+    // any send asks a fate, so a line it wrote into the dead process is never
+    // answered "waiting" (the write below then finds no reader: ENXIO, reaped).
+    if (cmd.dedupe === true && session.exitCode === null) {
       let stream = ''
       try { stream = fs.readFileSync(session.jsonlPath, 'utf8') } catch { /* no output yet */ }
       const known = lineFate(stream, this._lineRecords.get(sid) ?? '', { uuid: uuid ?? '', messageIds: ids, pid: session.pid })

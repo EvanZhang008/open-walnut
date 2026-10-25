@@ -2475,6 +2475,7 @@ export class ClaudeCodeSession {
     }
 
     this._active = true
+    this._processEnded = false
     // Init-only spawn (pre-assigned id): NO first turn — the CLI inits then
     // idles on its FIFO. Claiming 'running' here made the pre-spawn status
     // emit (below) mark the stream buffer streaming; the corrective 'idle'
@@ -3690,6 +3691,19 @@ export class ClaudeCodeSession {
     }
     catch (error) { forget(error instanceof SendOutcomeUnknownError); throw error }
     if (!ok) { forget(); return false }
+    // "Waiting" means the line sits in a live process's pipe. This session saw its
+    // process end and has started none since, and the transport has no pipe: nothing
+    // will read the line. Not delivered, as a dead process's refusal is, so the caller
+    // takes it to the next process; a line handed back by that end must never stay
+    // parked on the process that died (2026-10-25: the test daemon answered "waiting"
+    // for one, the real daemon reaps first). A pipe found alive again keeps the answer.
+    if (known?.fate === 'waiting' && this._processEnded && !transport.hasPipe) {
+      log.session.warn('the daemon says the line waits in a process that ended: it goes to the next process', {
+        sessionId: this.claudeSessionId, uuid, ...known, messageIds: rows.map((r) => r.id),
+      })
+      forget()
+      return false
+    }
     // This process already took a line behind a cut copy: it exits on that copy and
     // never reads what is written after it, so this line is held the same way. Asked
     // only now that the write has its answer, and so after every line queued before
@@ -4191,6 +4205,7 @@ export class ClaudeCodeSession {
    */
   reclaimUntakenLines(why: 'exit' | 'death' | 'crash' | 'teardown', announce = false): void {
     this._processEnds++
+    this._processEnded = true
     this._provisionalLines.clear()
     const sid = this.claudeSessionId
     if (!sid) return
@@ -4199,6 +4214,8 @@ export class ClaudeCodeSession {
 
   /** Process ends seen (each calls reclaimUntakenLines once): compare across a write. */
   private _processEnds = 0
+  /** The process this object last started or attached has ended (spawn clears it). */
+  private _processEnded = false
 
   private handBackLines(sid: string, lines: UntakenLine[], why: 'exit' | 'death' | 'crash' | 'teardown', announce: boolean): void {
     if (lines.length === 0) return
