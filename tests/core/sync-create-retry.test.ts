@@ -17,6 +17,8 @@ import { SyncRetrySchedule } from '../../src/core/sync-retry-schedule.js'
 import {
   retryUnsyncedCreates,
   createRecoveryKey,
+  seedCardedCreates,
+  cardedCreatesOf,
   CREATE_ATTEMPTS_BEFORE_NOTICE,
   CREATE_REFUSED_MESSAGE,
   MAX_CREATE_RETRIES_PER_CYCLE,
@@ -319,5 +321,48 @@ describe('the error a refused create raises, as the notification centre sees it'
     expect(human.message).toBe(`${REFUSAL}.`)
     // Grouped under the plugin, next to the rest of that plugin's failures.
     expect(human.category).toBe('Tracker')
+  })
+})
+
+// A restart empties the schedule, and both retirements used to read its streak: three
+// cards (2026-10-17 to 10-23) stayed red over tasks the tracker had long since created.
+describe('a refused-create card from an earlier process', () => {
+  const run = (unsynced: TestTask[], carded: Set<string>, createTask: (t: TestTask) => Promise<Record<string, unknown> | null>) => {
+    const publishRecovery = vi.fn()
+    return retryUnsyncedCreates<TestTask>({
+      pluginId: PLUGIN, unsynced, schedule: new SyncRetrySchedule(), createTask, log: makeLog(), publishRecovery, carded,
+    }).then((r) => ({ r, publishRecovery }))
+  }
+
+  it('seeds only create keys, per plugin', () => {
+    const n = seedCardedCreates([
+      createRecoveryKey('seed-a', 't1'), createRecoveryKey('seed-b', 't2'), 'plugin:seed-a', 'route:GET /api/x', 'session:s1',
+    ])
+    expect(n).toBe(2)
+    expect([...cardedCreatesOf('seed-a')]).toEqual(['t1'])
+    expect([...cardedCreatesOf('seed-b')]).toEqual(['t2'])
+  })
+
+  it('retires when the task already has its twin (created while down, or by an edit)', async () => {
+    const carded = new Set(['landed'])
+    const createTask = vi.fn(async () => ({ [PLUGIN]: { id: 'r' } }))
+    const { publishRecovery } = await run([task('other')], carded, createTask)
+    expect(publishRecovery).toHaveBeenCalledWith([createRecoveryKey(PLUGIN, 'landed')])
+    expect(carded.has('landed')).toBe(false)
+  })
+
+  it('retires on the first create that lands after the restart', async () => {
+    const carded = new Set(['t'])
+    const { r, publishRecovery } = await run([task('t')], carded, async () => ({ [PLUGIN]: { id: 'r' } }))
+    expect(r.succeeded).toBe(1)
+    expect(publishRecovery).toHaveBeenCalledWith([createRecoveryKey(PLUGIN, 't')])
+    expect(carded.size).toBe(0)
+  })
+
+  it('stays while the create is still refused', async () => {
+    const carded = new Set(['t'])
+    const { publishRecovery } = await run([task('t')], carded, async () => { throw new Error(REFUSAL) })
+    expect(publishRecovery).not.toHaveBeenCalled()
+    expect(carded.has('t')).toBe(true)
   })
 })

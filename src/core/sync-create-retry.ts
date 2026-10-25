@@ -50,6 +50,37 @@ export function createRecoveryKey(pluginId: string, taskId: string): string {
   return `plugin:${pluginId}:create:${taskId}`
 }
 
+/**
+ * Tasks whose create card an EARLIER process wrote and no recovery has retired yet, per
+ * plugin. The schedule is per process, so after a restart it holds no streak for them, and
+ * both of the loop's retirements below read the streak: a create that landed after the
+ * restart (or while the server was down) retired nothing, and the card sat red for days
+ * over a task that was long since in the tracker (three such cards, 2026-10-17 to 10-23).
+ * Seeded at boot from the notification store, like every other recovery tracker.
+ */
+const cardedCreates = new Map<string, Set<string>>()
+
+const CREATE_KEY_RE = /^plugin:([^:]+):create:(.+)$/
+
+/** Seed from the unresolved cards' recovery keys; returns how many create cards it took. */
+export function seedCardedCreates(keys: readonly string[]): number {
+  let n = 0
+  for (const key of keys) {
+    const m = CREATE_KEY_RE.exec(key)
+    if (!m) continue
+    cardedCreatesOf(m[1]).add(m[2])
+    n++
+  }
+  return n
+}
+
+/** The live set for one plugin (the loop deletes the ids it retires). */
+export function cardedCreatesOf(pluginId: string): Set<string> {
+  let set = cardedCreates.get(pluginId)
+  if (!set) cardedCreates.set(pluginId, (set = new Set()))
+  return set
+}
+
 /** The little a create needs from a task: an id to schedule by, a title for the card. */
 export interface UnsyncedCreateTask {
   id: string
@@ -79,6 +110,8 @@ export interface RetryUnsyncedCreatesOptions<T extends UnsyncedCreateTask> {
   limit?: number
   /** Retires the notification card for a task whose create finally succeeded. */
   publishRecovery?: (keys: string[]) => void
+  /** Tasks holding a card from an earlier process (cardedCreatesOf); retired ids are removed. */
+  carded?: Set<string>
 }
 
 export interface RetryUnsyncedCreatesResult {
@@ -107,11 +140,13 @@ export async function retryUnsyncedCreates<T extends UnsyncedCreateTask>(
   // stays red after the very fix the card asked for. A deleted task takes the same exit:
   // its condition can never be observed again either.
   const live = new Set(unsynced.map((t) => t.id))
-  for (const id of schedule.trackedIds()) {
+  const carded = options.carded
+  for (const id of new Set([...schedule.trackedIds(), ...(carded ?? [])])) {
     if (live.has(id)) continue
-    if (schedule.attemptsOf(id) < CREATE_ATTEMPTS_BEFORE_NOTICE) continue
+    if (!carded?.has(id) && schedule.attemptsOf(id) < CREATE_ATTEMPTS_BEFORE_NOTICE) continue
     log.info('sync: refused create left the queue', { pluginId, taskId: id })
     options.publishRecovery?.([createRecoveryKey(pluginId, id)])
+    carded?.delete(id)
   }
 
   const batch = schedule.pick(unsynced, limit)
@@ -149,13 +184,14 @@ export async function retryUnsyncedCreates<T extends UnsyncedCreateTask>(
         Object.assign(task, { ext: mergedExt })
         schedule.noteSuccess(task.id)
         succeeded++
-        if (attemptsBefore >= CREATE_ATTEMPTS_BEFORE_NOTICE) {
+        if (attemptsBefore >= CREATE_ATTEMPTS_BEFORE_NOTICE || carded?.has(task.id)) {
           log.info('sync: create succeeded after repeated refusals', {
             pluginId, taskId: task.id, attempts: attemptsBefore,
           })
           // Only when a card can exist: publishRecovery reads the notification store,
           // and a create that never failed has nothing to retire.
           options.publishRecovery?.([createRecoveryKey(pluginId, task.id)])
+          carded?.delete(task.id)
         }
         continue
       }

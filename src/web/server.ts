@@ -82,7 +82,7 @@ import { isClaudeCliInstalled } from '../core/claude-cli-detect.js'
 import { subagentRunner } from '../providers/subagent-runner.js'
 import { getTask, listTasks } from '../core/task-manager.js'
 import { SyncRetrySchedule } from '../core/sync-retry-schedule.js'
-import { retryUnsyncedCreates } from '../core/sync-create-retry.js'
+import { retryUnsyncedCreates, cardedCreatesOf, seedCardedCreates } from '../core/sync-create-retry.js'
 import type { Task } from '../core/types.js'
 import { log } from '../logging/index.js'
 import { usageTracker } from '../core/usage/index.js'
@@ -3712,6 +3712,9 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
             else if (key === 'git' || key === REPO_SIZE_RECOVERY_KEY) gitRecoveryTracker.observe(key, true)
             else if (key === LOCAL_DAEMON_RECOVERY_KEY) localDaemonTracker.observe(key, true)
           }
+          // A task's refused-create card: the next sync tick retires it once the task has
+          // its remote twin (sync-create-retry.ts cardedCreates).
+          seedCardedCreates(seeded)
           // A card from an earlier boot whose daemon this boot already started
           // has no later start to wait for.
           if (seeded.includes(LOCAL_DAEMON_RECOVERY_KEY)) {
@@ -5873,6 +5876,7 @@ function startPluginSyncPolling(): void {
           onYield: yieldToEventLoop,
           yieldEvery: YIELD_EVERY,
           publishRecovery: (keys) => { void publishRecovery(keys) },
+          carded: cardedCreatesOf(plugin.id),
         })
         // Accumulated across the loop and committed in ONE bulk transaction here: each
         // createTask() is awaited serially (network + per-item yield), but the DB write
