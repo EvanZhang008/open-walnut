@@ -85,13 +85,14 @@ const DAEMON_SOURCE_FILES = [
   'src/providers/usage-scan-core.ts',
   'src/providers/session-cost-core.ts',
   'src/providers/usage-reconcile-core.ts',
-  'src/providers/usage-budget-core.ts',
   'src/providers/usage-budget-persistence.ts',
   'src/providers/usage-budget-runtime.ts',
+  'src/providers/usage-budget-store.ts',
   'src/providers/usage-budget-control.ts',
-  'src/providers/usage-budget-tail.ts',
-  'src/providers/usage-budget-index.ts',
   'src/core/usage/pricing.ts',
+  'src/core/usage/price-data.ts',
+  'src/core/usage/price-resolve.ts',
+  'src/core/usage/session-cost-pricing.ts',
   // External-session scan (sessions.discoverExternal) — bundled into the
   // binary AND shipped as the external-scan-core.cjs sidecar. Missing from
   // this list once: a classifier edit produced an identical version, no

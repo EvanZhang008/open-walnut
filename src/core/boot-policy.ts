@@ -90,6 +90,7 @@ export const BOOT_POLICY = [
   { job: 'lane-orphan-passes', leader: true, replica: false, why: OFF_HOST_DATA },
   { job: 'lane-ask-sync', leader: true, replica: false, why: OFF_HOST_DATA },
   { job: 'pin-retirement', leader: true, replica: false, why: OFF_HOST_DATA },
+  { job: 'budget-letters', leader: true, replica: false, why: 'the leader tells the user about budget pauses; the hosts keep each pause until it does' },
   { job: 'session-health-monitor', leader: true, replica: false, why: OFF_HOST_DAEMON },
   // Stage 4d: off on the companion too. Its project skill writes went to the box's disk, a
   // copy of the Mac's skills that git sync no longer brings round.

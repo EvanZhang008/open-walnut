@@ -38,6 +38,11 @@ import readline from 'node:readline';
 import fs from 'node:fs';
 import { spawn } from 'node:child_process';
 
+// MOCK_ACP_WITNESS=<file>: one line per start ({pid, ppid}), so a test can see this
+// process and its parent (the ACP worker) are really gone after a stop.
+if (process.env.MOCK_ACP_WITNESS) {
+  fs.appendFileSync(process.env.MOCK_ACP_WITNESS, JSON.stringify({ event: 'ready', pid: process.pid, ppid: process.ppid }) + '\n');
+}
 let nextOutId = 1000;
 const pendingServerRequests = new Map(); // id -> {resolve}
 let sessionCounter = 0;

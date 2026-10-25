@@ -210,7 +210,7 @@ export function getDaemonSource(): string {
   // external-scan-core.cjs, path-resolve-core.cjs) and daemonCapabilities() in
   // the template adds the capability back at runtime only when that sidecar
   // actually loads.
-  const SIDECAR_GATED_CAPABILITIES = new Set(['changes-v1', 'external-scan-v1', 'external-scan-filter-v1', 'external-describe-v1', 'external-human-v1', 'path-resolve-v1', 'vscode-v1', 'rewind-probe-v1', 'triggers-v1', 'trigger-claim-v1', 'trigger-host-resume-v1', 'offline-triggers-v1', 'clock-routine-v1', 'clock-host-start-v1', 'acp-model-catalog-v1', 'usage-scan-v1', 'session-cost-v1', 'budget-v1'])
+  const SIDECAR_GATED_CAPABILITIES = new Set(['changes-v1', 'external-scan-v1', 'external-scan-filter-v1', 'external-describe-v1', 'external-human-v1', 'path-resolve-v1', 'vscode-v1', 'rewind-probe-v1', 'triggers-v1', 'trigger-claim-v1', 'trigger-host-resume-v1', 'offline-triggers-v1', 'clock-routine-v1', 'clock-host-start-v1', 'acp-model-catalog-v1', 'usage-scan-v1', 'session-cost-v1', 'budget-v2'])
   const capsLiteral = JSON.stringify(
     [...ADVERTISED_DAEMON_CAPABILITIES].filter((c) => !SIDECAR_GATED_CAPABILITIES.has(c)),
   )
@@ -3382,6 +3382,7 @@ function dispatchCommand(ws, id, cmd) {
     case 'usage.sessionCost': return cmdUsageSessionCost(ws, id, cmd);
     case 'usage.budget.get': return cmdUsageBudget(ws, id, cmd, false);
     case 'usage.budget.configure': return cmdUsageBudget(ws, id, cmd, true);
+    case 'usage.budget.list': return cmdUsageBudgetList(ws, id, cmd);
     case 'changes.compute': return cmdChangesCompute(ws, id, cmd);
     case 'changes.file': return cmdChangesFile(ws, id, cmd);
     case 'transcript.rewindProbe': return cmdTranscriptRewindProbe(ws, id, cmd);
@@ -5649,9 +5650,19 @@ function acpUnsupported(ws, id) {
   try { ws.send(JSON.stringify({ id, ok: false, error: 'ACP sessions are not supported on this host yet', errorKind: 'acp_unsupported' })); } catch {}
 }
 
-function cmdAcpStart(ws, id, cmd) {
+async function cmdAcpStart(ws, id, cmd) {
   const params = cmd;
   if (!params.sid || !params.cwd) return sendError(ws, id, 'acpStart: missing sid/cwd');
+  // A resumed session's budget learns its new worker before the worker can take a turn.
+  if (isJournalSid(params.providerSessionId)) {
+    let refused = false;
+    try {
+      if (usageBudget) await usageBudget.bindRuntime(params.providerSessionId, params.sid);
+      // Without the runtime, only a session with a saved budget is held.
+      else refused = await savedBudgetLimit(params.providerSessionId);
+    } catch (error) { refused = true; }
+    if (refused) { try { ws.send(JSON.stringify({ id, ok: false, error: 'acpStart: the session budget could not record this worker; not started yet', errorKind: 'budget_checking', code: 'BUDGET_CHECKING' })); } catch {} return; }
+  }
   // Agent gateway: the same wiring a native claude spawn gets (the socket, and
   // the walnut shim on PATH), because ACP workers never go through cmdStart.
   params.env = Object.assign({}, params.env, {
@@ -5666,11 +5677,34 @@ function cmdAcpStart(ws, id, cmd) {
   });
 }
 
-function cmdAcpOp(ws, id, cmd, op) {
+async function cmdAcpOp(ws, id, cmd, op) {
   const sid = cmd.sid;
   if (!sid) return sendError(ws, id, op + ': missing sid');
   const params = Object.assign({}, cmd);
-  delete params.sid; delete params.cmd; delete params.id; delete params.traceId;
+  const budgetSid = params.budgetSid;
+  delete params.sid; delete params.cmd; delete params.id; delete params.traceId; delete params.budgetSid;
+  // A session over its budget takes no new turn (mirrors the Claude FIFO gate). The server
+  // names the session a turn belongs to, so a worker started again is gated from its first turn.
+  if (op === 'prompt' || op === 'steer') {
+    let verdict = 'budget_checking';
+    try {
+      if (usageBudget) {
+        if (isJournalSid(budgetSid)) await usageBudget.bindRuntime(budgetSid, sid);
+        verdict = budgetGate(await usageBudget.allowRuntime(sid));
+      } else {
+        // Without the runtime, a saved policy is never bypassed.
+        verdict = !isJournalSid(budgetSid) || !await savedBudgetLimit(budgetSid) ? 'ok' : 'budget_paused';
+      }
+    } catch (error) { logMsg('warn', 'budget gate failed; turn held', { sid, error: String(error) }); }
+    if (verdict === 'budget_paused') {
+      try { ws.send(JSON.stringify({ id, ok: false, error: 'Not sent: the session budget is paused. Raise or remove the limit to continue.', errorKind: 'budget_paused', code: 'BUDGET_PAUSED' })); } catch {}
+      return;
+    }
+    if (verdict === 'budget_checking') {
+      try { ws.send(JSON.stringify({ id, ok: false, error: BUDGET_CHECKING_TEXT, errorKind: 'budget_checking', code: 'BUDGET_CHECKING' })); } catch {}
+      return;
+    }
+  }
   return acp.acpOp(sid, op, params).then(function (resp) {
     if (resp.ok) sendOk(ws, id, { result: resp.result });
     else {
@@ -5739,11 +5773,12 @@ async function cmdStart(ws, id, cmd) {
       // A host that cannot run claude answers with the reason itself, not an
       // "internal daemon error". Keep in sync with daemon-standalone.ts.
       if (error && error.code === 'BUDGET_PAUSED') return { runtimeError: Object.assign(error, { errorKind: 'budget_paused' }) };
+      if (error && error.code === 'BUDGET_CHECKING') return { runtimeError: Object.assign(error, { errorKind: 'budget_checking' }) };
       if (error && error.code === 'CLAUDE_RUNTIME') return { runtimeError: error };
       throw error;
     });
   if (!result) return sendOk(ws, id, { ok: false, reason: 'session_stopped', error: 'start: a stop request superseded this start' });
-  if (result.runtimeError) return sendError(ws, id, result.runtimeError.message, { errorKind: result.runtimeError.errorKind, ...(result.runtimeError.errorKind === 'budget_paused' ? { reason: 'budget_paused', code: 'BUDGET_PAUSED' } : {}) });
+  if (result.runtimeError) return sendError(ws, id, result.runtimeError.message, { errorKind: result.runtimeError.errorKind, ...(result.runtimeError.errorKind === 'budget_paused' ? { reason: 'budget_paused', code: 'BUDGET_PAUSED' } : result.runtimeError.errorKind === 'budget_checking' ? { reason: 'budget_checking', code: 'BUDGET_CHECKING' } : {}) });
   addSubscriber(ws, sid, result.offset);
   return sendOk(ws, id, result);
 }
@@ -5842,7 +5877,7 @@ async function startSessionProcess(cmd, isCurrent, canStart) {
           ensureWatcher(sid);
           return { pid: existing.pid, outputFile: existing.jsonlPath, offset: curSize, adopted: true };
         }
-        if (sent.reason === 'budget_paused') throw Object.assign(new Error('budget_paused'), { code: 'BUDGET_PAUSED' });
+        if (sent.reason === 'budget_paused' || sent.reason === 'budget_checking') throw budgetRefusal(sent.reason);
         const afterSend = sessions.get(sid);
         if (afterSend && afterSend.state === 'running') {
           logMsg('warn', 'cmdStart: live-adopt delivery failed but process alive — refusing respawn', { sid, pid: existing.pid, reason: sent.reason || sent.error });
@@ -6109,7 +6144,7 @@ async function startSessionProcess(cmd, isCurrent, canStart) {
   ensureWatcher(sid);
   if (message) {
     const sent = await handleSendCommand(sid, message, initialUuid);
-    if (sent.reason === 'budget_paused') throw Object.assign(new Error('budget_paused'), { code: 'BUDGET_PAUSED' });
+    if (sent.reason === 'budget_paused' || sent.reason === 'budget_checking') throw budgetRefusal(sent.reason);
     if (!sent.ok) throw new Error('start: initial message not delivered (' + (sent.reason || sent.error) + ')');
   }
   return { pid, outputFile: jsonlPath, offset };
@@ -6312,7 +6347,10 @@ async function chainFifoWrite(sid, session, buf, beforeNewline, line, raw) {
     // line written is recorded before the next write may ask.
     const known = line && line.fate ? await line.fate() : null;
     if (known) return known;
-    if ((!raw || !budgetControlExempt(raw)) && !await budgetAllowance(keyNow() || sid)) return 'budget_paused';
+    if (!raw || !budgetControlExempt(raw)) {
+      const gate = await budgetAllowance(keyNow() || sid);
+      if (gate !== 'ok') return gate;
+    }
     if (abandoned()) return 'dead';
     // An earlier attempt that died part way (after its marker, or after its begin record) may have left
     // a piece in the pipe: a newline first ends it (lineTornEnd). The begin is noted before the first byte.
@@ -7869,7 +7907,7 @@ async function checkTurnRetry(sid, session, line, v) {
   if (daemonCommands.stopping || !TURN_RETRY_CFG.enabled || (cronRuntime && cronRuntime.get(sid)) || session.budgetGracefulStop) return;
   const checkVersion = (retryCheckVersions.get(sid) || 0) + 1;
   retryCheckVersions.set(sid, checkVersion);
-  if (!await budgetAllowance(sid) || retryCheckVersions.get(sid) !== checkVersion || sessions.get(sid) !== session || session.state !== 'running' || session.intentionalStopAt != null) return;
+  if (await budgetAllowance(sid) !== 'ok' || retryCheckVersions.get(sid) !== checkVersion || sessions.get(sid) !== session || session.state !== 'running' || session.intentionalStopAt != null) return;
   var parsedErr = parseTurnErrorLine(line);
   if (!parsedErr.isTurnError) {
     // A clean turn ends the streak, so the budget bounds ONE outage.
@@ -8619,7 +8657,7 @@ async function handleSendCommand(sid, message, uuid, inputMarkers, opts) {
       // A rewrite already starts with its newline: one is enough.
       tornEnd: function () { return torn.end && !rewrite; },
     });
-    if (result === 'budget_paused') return { ok: false, reason: 'budget_paused' };
+    if (result === 'budget_paused' || result === 'budget_checking') return { ok: false, reason: result };
     if (result && typeof result === 'object') {
       logMsg('info', 'send: the line was not written again', { sid: sid, pid: session.pid, messageIds: ids, fate: result.fate, state: result.state || null });
       const out = { ok: true, duplicate: true, fate: result.fate };
@@ -8673,7 +8711,7 @@ async function cmdSendRaw(ws, id, cmd) {
   try {
     const buf = Buffer.from(raw.endsWith('\\n') ? raw : raw + '\\n');
     const result = await chainFifoWrite(sid, session, buf, undefined, undefined, raw);
-    if (result === 'budget_paused') return sendOk(ws, id, { ok: false, reason: 'budget_paused' });
+    if (result === 'budget_paused' || result === 'budget_checking') return sendOk(ws, id, { ok: false, reason: result });
     if (result === 'ok') {
       if (session.pendingCtrl) {
         try {
@@ -8719,7 +8757,7 @@ async function writeSessionLine(sid, raw) {
   }
   try {
     const result = await chainFifoWrite(sid, session, Buffer.from(raw.endsWith('\\n') ? raw : raw + '\\n'), undefined, undefined, raw);
-    if (result === 'budget_paused') return 'budget_paused';
+    if (result === 'budget_paused' || result === 'budget_checking') return result;
     if (result === 'ok') return 'ok';
     if (result === 'dead') return 'dead';
     if (result === 'ENXIO') { reapSession(sid, -1, 'sendRaw-enxio'); return 'dead'; }
@@ -10847,13 +10885,46 @@ async function budgetStopPending(sid) {
   await persistBudgetStops();
   return false;
 }
+// 'ok', or why a send is refused: 'budget_paused', or 'budget_checking' (not decided yet; the server
+// sends it again). Keep in sync with daemon-standalone.ts / daemon-core.ts (BudgetGate).
+const BUDGET_CHECKING_TEXT = 'Not sent yet: the session budget is still being checked. Retry in a moment.';
 async function budgetAllowance(sid) {
-  if (!isJournalSid(sid)) return false;
-  if (await budgetStopPending(sid)) return false;
-  if (usageBudget) return await usageBudget.allow(sid) && !await budgetStopPending(sid);
-  // Without the runtime, a saved policy is never bypassed. Unconfigured sessions still work.
-  try { await fs.promises.stat(path.join(BUDGET_DIR, sid + '.json')); return false; }
-  catch (error) { return error.code === 'ENOENT'; }
+  if (!isJournalSid(sid)) return 'budget_paused';
+  if (await budgetStopPending(sid)) return 'budget_paused';
+  if (usageBudget) {
+    const verdict = budgetGate(await usageBudget.allow(sid));
+    if (verdict !== 'ok') return verdict;
+    return await budgetStopPending(sid) ? 'budget_paused' : 'ok';
+  }
+  // Without the runtime, a saved policy (either version) is never bypassed. Unconfigured sessions still work.
+  return !await savedBudgetLimit(sid) ? 'ok' : 'budget_paused';
+}
+function budgetGate(verdict) {
+  return verdict === 'ok' ? 'ok' : verdict === 'paused' ? 'budget_paused' : 'budget_checking';
+}
+function budgetRefusal(reason) {
+  return Object.assign(new Error(reason), { code: reason === 'budget_paused' ? 'BUDGET_PAUSED' : 'BUDGET_CHECKING' });
+}
+// Without the runtime: does a saved budget hold a limit? The v2 file decides when there is one (a
+// removed limit stays as null there); else the first version's last policy line. Unreadable holds.
+async function savedBudgetLimit(sid) {
+  let text;
+  try { text = await fs.promises.readFile(path.join(BUDGET_DIR, 'v2', sid + '.json'), 'utf8'); }
+  catch (error) { if (error.code !== 'ENOENT') return true; }
+  if (text !== undefined) {
+    try { const record = JSON.parse(text); return !(record && record.limitUsd === null); } catch { return true; }
+  }
+  try { await fs.promises.stat(path.join(BUDGET_DIR, sid + '.json')); }
+  catch (error) { return error.code !== 'ENOENT'; }
+  let journal;
+  try { journal = await fs.promises.readFile(path.join(BUDGET_DIR, sid + '.jsonl'), 'utf8'); }
+  catch { return true; }
+  let limit = null;
+  for (const line of journal.split('\\n')) {
+    if (!line.includes('"policy"')) continue;
+    try { const event = JSON.parse(line); if (event && event.kind === 'policy' && event.policy) limit = event.policy.limitUsd; } catch { /* a torn line */ }
+  }
+  return typeof limit === 'number' && limit > 0;
 }
 if (usageCore && typeof usageCore.createUsageBudgetRuntime === 'function' && typeof usageCore.createBudgetControl === 'function') {
   try {
@@ -10861,14 +10932,21 @@ if (usageCore && typeof usageCore.createUsageBudgetRuntime === 'function' && typ
     usageBudget = usageCore.createUsageBudgetRuntime({
       dir: BUDGET_DIR,
       projectsDir: path.join(process.env.CLAUDE_CONFIG_DIR || path.join(HOME_DIR, '.claude'), 'projects'),
-      pause: pauseBudgetSession,
+      codexHome: process.env.CODEX_HOME || path.join(HOME_DIR, '.codex'),
+      pause: function (sid, engine, runtimeId) { return engine === 'claude' ? pauseBudgetSession(sid) : pauseAcpBudgetSession(runtimeId || sid); },
+      active: function (sid, engine, runtimeId) { const s = sessions.get(sid); return engine === 'claude' ? !!s && s.state === 'running' : !!acp && acp.hasWorker(runtimeId || sid); },
       log: function (message, fields) { logMsg('warn', message, fields); },
     });
   } catch (error) { usageBudget = null; logMsg('error', 'budget sidecar failed to initialize', { error: String(error) }); }
 }
 
+// An ACP worker (Codex, OpenCode) over its budget: stop it; its sends are refused in cmdAcpOp.
+async function pauseAcpBudgetSession(runtimeId) {
+  if (acp && acp.hasWorker(runtimeId)) await acp.acpStop(runtimeId);
+}
 async function requireBudgetAllowance(sid) {
-  if (!await budgetAllowance(sid)) throw Object.assign(new Error('budget_paused'), { code: 'BUDGET_PAUSED' });
+  const verdict = await budgetAllowance(sid);
+  if (verdict !== 'ok') throw budgetRefusal(verdict);
 }
 
 async function pauseBudgetSession(sid) {
@@ -10923,17 +11001,39 @@ async function pauseBudgetSession(sid) {
 async function cmdUsageBudget(ws, id, cmd, configure) {
   if (!usageBudget) return sendError(ws, id, 'usage.budget unsupported: sidecar not loaded', { code: 'UNSUPPORTED' });
   const sid = cmd.sid;
-  if (!isJournalSid(sid) || (!sessions.has(sid) && !journaledIds().has(sid))) return sendError(ws, id, 'usage.budget: session not found', { code: 'NOT_FOUND' });
+  const engine = typeof cmd.engine === 'string' ? cmd.engine : 'claude';
+  // An ACP session is keyed by its provider id, which this daemon may not know while it is
+  // stopped; the server names its engine.
+  if (!isJournalSid(sid) || (!sessions.has(sid) && !journaledIds().has(sid) && engine === 'claude')) return sendError(ws, id, 'usage.budget: session not found', { code: 'NOT_FOUND' });
+  // A Claude Code session here is budgeted (and its owner checked) as one, whatever engine the asker names.
+  if ((sessions.has(sid) || journaledIds().has(sid)) && engine !== 'claude') return sendError(ws, id, 'usage.budget: the session runs Claude Code', { code: 'BAD_REQUEST' });
   if (configure) {
     if (['bridge', 'follower', 'lane'].includes(ws.origin)) return sendError(ws, id, 'usage.budget.configure: trusted clients only', { code: 'NOT_OWNED' });
     if (typeof cmd.home !== 'string' || !cmd.home) return sendError(ws, id, 'usage.budget.configure: home must name the asking Walnut', { code: 'BAD_REQUEST' });
-    const refusal = stopOwnerRefusal(sid, { ...cmd, strict: true, initiator: 'automatic' });
-    if (refusal) return sendError(ws, id, 'usage.budget.configure: session ownership is not confirmed', { code: 'NOT_OWNED' });
+    if (engine === 'claude') {
+      const refusal = stopOwnerRefusal(sid, { ...cmd, strict: true, initiator: 'automatic' });
+      if (refusal) return sendError(ws, id, 'usage.budget.configure: session ownership is not confirmed', { code: 'NOT_OWNED' });
+    }
   }
   try {
-    const result = configure ? await usageBudget.configure(sid, { limitUsd: cmd.limitUsd, revision: cmd.revision, proxyLogDir: cmd.proxyLogDir }) : await usageBudget.read(sid);
+    const request = { limitUsd: cmd.limitUsd, revision: cmd.revision, engine: engine, home: cmd.home };
+    if (typeof cmd.cwd === 'string') request.cwd = cmd.cwd;
+    if (typeof cmd.runtimeId === 'string') request.runtimeId = cmd.runtimeId;
+    if (cmd.prices) request.prices = cmd.prices;
+    const result = configure ? await usageBudget.configure(sid, request) : await usageBudget.read(sid);
     return sendOk(ws, id, { result: result });
   } catch (error) { return sendError(ws, id, String(error instanceof Error ? error.message : error), { code: error.code }); }
+}
+// usage.budget.list: every configured budget here, with the hash of the price list it holds.
+async function cmdUsageBudgetList(ws, id, cmd) {
+  if (!usageBudget) return sendError(ws, id, 'usage.budget unsupported: sidecar not loaded', { code: 'UNSUPPORTED' });
+  if (['bridge', 'follower', 'lane'].includes(ws.origin)) return sendError(ws, id, 'usage.budget.list: trusted clients only', { code: 'NOT_OWNED' });
+  try {
+    if (cmd.prices) await usageBudget.setPrices(cmd.prices);
+    const runtimeIds = cmd.runtimeIds && typeof cmd.runtimeIds === 'object' ? cmd.runtimeIds : undefined;
+    const home = typeof cmd.home === 'string' && cmd.home ? cmd.home : undefined;
+    return sendOk(ws, id, { result: { budgets: await usageBudget.list(runtimeIds, home), pricesHash: usageBudget.pricesHash() } });
+  } catch (error) { return sendError(ws, id, String(error instanceof Error ? error.message : error)); }
 }
 
 // External-session scan sidecar (external-scan-core.cjs) — same sidecar
@@ -10988,6 +11088,7 @@ try {
     sendEvent: sendEvent,
     isWsOpen: function (ws) { return ws.readyState === 1; },
     log: logMsg,
+    onTurnEnd: function (sid) { if (usageBudget) usageBudget.observeRuntime(sid); },
   });
 } catch (err) {
   acp = null;
@@ -11024,7 +11125,7 @@ function daemonCapabilities() {
   if (changesCore) caps.push('changes-v1');
   if (usageCore) caps.push('usage-scan-v1');
   if (usageCore && typeof usageCore.scanSessionCost === 'function') caps.push('session-cost-v1');
-  if (usageBudget && budgetControl) caps.push('budget-v1');
+  if (usageBudget && budgetControl) caps.push('budget-v2');
   if (externalScanCore) caps.push('external-scan-v1');
   if (externalScanCore && externalScanCore.isExcludedExternalCwd) caps.push('external-scan-filter-v1');
   if (externalScanCore && externalScanCore.describeExternalSessions) caps.push('external-describe-v1');
@@ -12875,8 +12976,8 @@ async function startDaemon() {
   // Supervision must exist before recovery can disable it, including stopped sessions.
   if (usageBudget) void usageBudget.recover().catch(function (error) { logMsg('error', 'budget recovery failed', { error: String(error) }); });
   else for (const [sid] of sessions) {
-    void budgetAllowance(sid).then(function (allowed) {
-      if (!allowed) return pauseBudgetSession(sid);
+    void budgetAllowance(sid).then(function (gate) {
+      if (gate !== 'ok') return pauseBudgetSession(sid);
     }).catch(function (error) { logMsg('error', 'saved session budget could not be enforced without its sidecar', { sid: sid, error: String(error) }); });
   }
 

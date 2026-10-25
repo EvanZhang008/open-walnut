@@ -160,7 +160,7 @@ export interface DaemonCoreDeps<S extends CoreSessionData = CoreSessionData> {
    *  Default 20s — covers CLI boot (measured 2–7s before it reads stdin). */
   fifoWriteDeadlineMs?: number
   /** Checked inside the final FIFO serializer, before any cost-producing line. */
-  allowBudgetFn?: (sid: string) => Promise<boolean>
+  allowBudgetFn?: (sid: string) => Promise<BudgetGate>
   logger: (level: string, msg: string, meta?: Record<string, unknown>) => void
   /** Broadcasts `{ev:'session_state', sid, state, ...extra}` to all wsClients. */
   broadcastSessionStateFn: (payload: Record<string, unknown>) => void
@@ -247,6 +247,15 @@ export function lockLiveFifo(fs: typeof import('node:fs'), pipePath: string): bo
   try { fs.chmodSync(pipePath, LIVE_FIFO_MODE); return true } catch { return false }
 }
 
+/**
+ * May a cost-producing line go: 'ok'; 'budget_paused' (the session is over its
+ * budget, or being stopped for it); 'budget_checking' (no check decided in time;
+ * the server keeps the message queued and sends it again).
+ */
+export type BudgetGate = 'ok' | 'budget_paused' | 'budget_checking'
+/** Keep in sync with daemon-source.ts. */
+export const BUDGET_CHECKING_TEXT = 'Not sent yet: the session budget is still being checked. Retry in a moment.'
+
 /** A paused session may still receive stop controls and negative permission answers. */
 export function budgetControlExempt(raw: string): boolean {
   try {
@@ -263,7 +272,7 @@ export type SendResult =
   // the line is written, but the CLI may exit on what that write left without running it.
   | { ok: true; duplicate?: true; fate?: LineFateKind; state?: string; cut?: true }
   | { ok: false; reason: 'not_found' }
-  | { ok: false; reason: 'budget_paused' }
+  | { ok: false; reason: 'budget_paused' | 'budget_checking' }
   | { ok: false; reason: 'session_dead'; exitCode: number | null }
   | { ok: false; reason: 'ENXIO'; exitCode: number | null }
   | { ok: false; reason: 'EAGAIN'; retriable: true }
@@ -924,7 +933,7 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
         // A rewrite already starts with its newline: one is enough.
         tornEnd: () => torn.end && !rewrite,
       })
-      if (result === 'budget_paused') return { ok: false, reason: 'budget_paused' }
+      if (result === 'budget_paused' || result === 'budget_checking') return { ok: false, reason: result }
       if (typeof result === 'object') {
         logger('info', 'send: the line was not written again', {
           sid, pid: session.pid, messageIds: ids, fate: result.fate, state: result.state ?? null,
@@ -1011,7 +1020,7 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
     try {
       const buf = Buffer.from(raw.endsWith('\n') ? raw : raw + '\n')
       const result = await chainFifoWrite(sid, session, buf, undefined, undefined, raw)
-      if (result === 'budget_paused') return { ok: false, reason: 'budget_paused' }
+      if (result === 'budget_paused' || result === 'budget_checking') return { ok: false, reason: result }
       if (result === 'ok') {
         // control_response travels Walnut → FIFO and is not echoed to stdout,
         // so the stream watcher cannot observe it. Clear daemon-authoritative
@@ -1223,7 +1232,7 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
      *  `fate`): a newline goes in before the line (lineTornEnd). */
     line?: { fate?: () => Promise<LineFate | null>; begin?: (on: boolean) => void; written?: () => void; tornEnd?: () => boolean },
     raw?: string,
-  ): Promise<'ok' | 'ENXIO' | 'EAGAIN' | 'partial' | 'dead' | 'budget_paused' | LineFate> {
+  ): Promise<'ok' | 'ENXIO' | 'EAGAIN' | 'partial' | 'dead' | 'budget_paused' | 'budget_checking' | LineFate> {
     // Absolute deadline fixed BEFORE queuing behind the chain: chain wait +
     // own write share ONE budget, so the strict-ack always settles inside the
     // walnut client's 30s RPC timeout even when writes stack up.
@@ -1238,7 +1247,10 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
       if (abandoned()) return 'dead' as const
       const known = line?.fate ? await line.fate() : null
       if (known) return known
-      if ((!raw || !budgetControlExempt(raw)) && deps.allowBudgetFn && !await deps.allowBudgetFn(currentSid(sid, session))) return 'budget_paused' as const
+      if ((!raw || !budgetControlExempt(raw)) && deps.allowBudgetFn) {
+        const gate = await deps.allowBudgetFn(currentSid(sid, session))
+        if (gate !== 'ok') return gate
+      }
       if (abandoned()) return 'dead' as const
       const tornEnd = line?.tornEnd?.() === true
       if (tornEnd) logger('info', 'send: resending a line; a newline first ends what a dead write may have left', { sid, pid: session.pid })

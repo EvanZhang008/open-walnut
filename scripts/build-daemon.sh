@@ -74,13 +74,14 @@ SOURCES=(
   src/providers/usage-scan-core.ts
   src/providers/session-cost-core.ts
   src/providers/usage-reconcile-core.ts
-  src/providers/usage-budget-core.ts
   src/providers/usage-budget-persistence.ts
   src/providers/usage-budget-runtime.ts
+  src/providers/usage-budget-store.ts
   src/providers/usage-budget-control.ts
-  src/providers/usage-budget-tail.ts
-  src/providers/usage-budget-index.ts
   src/core/usage/pricing.ts
+  src/core/usage/price-data.ts
+  src/core/usage/price-resolve.ts
+  src/core/usage/session-cost-pricing.ts
   src/providers/external-session-scan-core.ts
   src/providers/path-resolve-core.ts
   src/providers/search-grep-core.ts

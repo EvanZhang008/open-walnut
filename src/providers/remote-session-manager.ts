@@ -24,7 +24,7 @@ import {
 } from '../core/remote-image-mirror.js'
 import { log } from '../logging/index.js'
 import { getDaemonConnection, getDirectDaemonConnection, DaemonConnection, type DaemonEvent, type DaemonTaskState, type DaemonGetStateResult } from './daemon-connection.js'
-import { BudgetPausedError, isDaemonCommandOutcomeUnknown, sendMayHaveLanded, SendHeldError, SendOutcomeUnknownError } from './delivery-failure.js'
+import { BudgetCheckingError, BudgetPausedError, isDaemonCommandOutcomeUnknown, sendMayHaveLanded, SendHeldError, SendOutcomeUnknownError } from './delivery-failure.js'
 import { linkFailureKind } from './link-failure.js'
 import { CloudSessionLink } from './cloud-session-link.js'
 import { isSessionStopSuperseded, SessionStopSupersededError } from '../core/sessions/session-stop.js'
@@ -354,6 +354,7 @@ export class RemoteSessionManager implements SessionManager {
 
     if (!result.ok) {
       if (result.reason === 'budget_paused' || result.errorKind === 'budget_paused') throw new BudgetPausedError()
+      if (result.reason === 'budget_checking' || result.errorKind === 'budget_checking') throw new BudgetCheckingError()
       if (result.reason === 'session_stopped') throw new SessionStopSupersededError('Session start was superseded by a stop request')
       // The daemon's spawn gate already wrote the sentence the user needs (claude
       // not installed / npm build without node, with the install command): pass
@@ -812,6 +813,7 @@ export class RemoteSessionManager implements SessionManager {
 
       const reason = String(result.reason || result.error || '')
       if (reason === 'budget_paused') throw new BudgetPausedError()
+      if (reason === 'budget_checking') throw new BudgetCheckingError()
       if (reason === 'session_stopped') throw new SessionStopSupersededError('Session delivery was superseded by a stop request')
       // Only the daemon's death verdict permits stop/resume. EAGAIN is an
       // intact, full pipe; not_found and identity refusals do not prove death.
@@ -847,7 +849,8 @@ export class RemoteSessionManager implements SessionManager {
       }
       throw new SendHeldError(`Not sent yet: the session host refused delivery (${reason || 'unknown reason'})`)
     } catch (err) {
-      if (isSessionStopSuperseded(err) || err instanceof BudgetPausedError) throw err
+      // A budget refusal is an answer: nothing was written, so later lines are not held behind it.
+      if (isSessionStopSuperseded(err) || err instanceof BudgetPausedError || err instanceof BudgetCheckingError) throw err
       if (err instanceof SendOutcomeUnknownError || err instanceof SendHeldError) {
         this._heldThrough = this._writeSeq
         log.session.warn('RemoteSessionManager: send outcome unknown', { host: this.hostKey, sid, error: err.message })

@@ -50,7 +50,7 @@ export function classifyDeliveryFailure(err: unknown): DeliveryFailureVerdict {
   const reason = message.trim().slice(0, REASON_MAX) || 'delivery failed';
 
   if (err instanceof BudgetPausedError || (err instanceof Error && /\bbudget_paused\b/.test(err.message))) {
-    return { kind: 'permanent', code: 'budget_paused', reason: 'Not sent: the session budget is paused. Raise the limit or resolve unverified cost, then retry.' };
+    return { kind: 'permanent', code: 'budget_paused', reason: 'Not sent: the session budget is paused. Raise or remove the limit, then retry.' };
   }
   if (isSessionStopSuperseded(err)) return { kind: 'permanent', code: 'session_stopped', reason };
   if (err instanceof CwdMissingError) return { kind: 'permanent', code: 'cwd_missing', reason };
@@ -104,24 +104,39 @@ export class SendOutcomeUnknownError extends Error {
   }
 }
 
+/** The session's budget is paused (over its limit, unpriced, unreadable): nothing is sent until the user raises or removes it. */
+export class BudgetPausedError extends Error {
+  readonly code = 'BUDGET_PAUSED';
+  constructor() {
+    super('budget_paused: raise or remove the limit, then retry the message');
+    this.name = 'BudgetPausedError';
+  }
+}
+
 /**
  * A user line that was not sent at all: it was queued behind a line whose
  * outcome stayed unknown, and writing it would let it overtake that line. It
  * goes back to the queue, behind the unknown one.
  */
-export class BudgetPausedError extends Error {
-  readonly code = 'BUDGET_PAUSED';
-  constructor() {
-    super('budget_paused: raise the limit or resolve unverified cost, then retry the message');
-    this.name = 'BudgetPausedError';
-  }
-}
-
 export class SendHeldError extends Error {
-  readonly code = 'SEND_HELD';
+  readonly code: string = 'SEND_HELD';
   constructor(reason = 'Not sent yet: waiting to confirm the previous message') {
     super(reason);
     this.name = 'SendHeldError';
+  }
+}
+
+/**
+ * The session's host has not decided its budget yet (prices not pushed, usage
+ * still being read, a check slower than the send may wait): the line was not
+ * written. Held like any unsent line, so it goes back to the queue and is sent
+ * again, never parked as paused.
+ */
+export class BudgetCheckingError extends SendHeldError {
+  override readonly code = 'BUDGET_CHECKING';
+  constructor() {
+    super('Not sent yet: the session budget is still being checked. Retry in a moment.');
+    this.name = 'BudgetCheckingError';
   }
 }
 

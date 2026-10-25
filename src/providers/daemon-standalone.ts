@@ -68,6 +68,8 @@ import {
   lockLiveFifo,
   LIVE_FIFO_MODE,
   MODE_CLI,
+  BUDGET_CHECKING_TEXT,
+  type BudgetGate,
 } from './daemon-core.js'
 import { ADVERTISED_DAEMON_CAPABILITIES } from './daemon-capabilities.js'
 import { findDeliveryMarkers, validMarkerIds } from './marker-find-core.js'
@@ -163,9 +165,10 @@ import { START_TASK_TOKEN, clockDueMs, clockFireOwed, clockStateOnArm, dropStale
 import { createClockSchedule } from './clock-schedule-core.js'
 import { resolvePathHostLocal } from './path-resolve-core.js'
 import { scanHostUsage, scanCostState, scanSessionCost, createUsagePages } from './usage-host-core.js'
-import { createUsageBudgetRuntime } from './usage-budget-runtime.js'
+import { createUsageBudgetRuntime, type BudgetPrices, type BudgetVerdict } from './usage-budget-runtime.js'
 import { createBudgetControl } from './usage-budget-control.js'
-import { ensureUsageBudgetDirectory } from './usage-budget-core.js'
+import { createBudgetPersistence } from './usage-budget-persistence.js'
+const ensureUsageBudgetDirectory = createBudgetPersistence(fs.promises, path).ensureDirectory
 import { grepReferencesHostLocal } from './search-grep-core.js'
 import { ensureCodeServer, codeServerStatus, reapIdleCodeServer, stopCodeServer, resolveOpenTarget } from './vscode-server-core.js'
 import {
@@ -1948,6 +1951,8 @@ const acp = createAcpDaemon<ServerWebSocket<WsData>>({
   sendEvent,
   isWsOpen: (ws) => ws.readyState === 1,
   log: logMsg,
+  // Called only after startup, when usageBudget exists.
+  onTurnEnd: (sid) => usageBudget.observeRuntime(sid),
 })
 
 // Daemon NEVER auto-exits. It's a permanent process manager on the remote host.
@@ -2120,6 +2125,7 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     case 'usage.sessionCost': return cmdUsageSessionCost(ws, id as number, cmd)
     case 'usage.budget.get': return cmdUsageBudget(ws, id as number, cmd, false)
     case 'usage.budget.configure': return cmdUsageBudget(ws, id as number, cmd, true)
+    case 'usage.budget.list': return cmdUsageBudgetList(ws, id as number, cmd)
     case 'changes.compute': return cmdChangesCompute(ws, id as number, cmd)
     case 'changes.file': return cmdChangesFile(ws, id as number, cmd)
     case 'transcript.rewindProbe': return cmdTranscriptRewindProbe(ws, id as number, cmd)
@@ -2434,17 +2440,33 @@ const budgetControl = createBudgetControl({
 const usageBudget = createUsageBudgetRuntime({
   dir: BUDGET_DIR,
   projectsDir: path.join(process.env.CLAUDE_CONFIG_DIR || path.join(HOME_DIR, '.claude'), 'projects'),
-  pause: pauseBudgetSession,
+  codexHome: process.env.CODEX_HOME || path.join(HOME_DIR, '.codex'),
+  pause: (sid, engine, runtimeId) => engine === 'claude' ? pauseBudgetSession(sid) : pauseAcpBudgetSession(runtimeId ?? sid),
+  active: (sid, engine, runtimeId) => engine === 'claude' ? sessions.get(sid)?.state === 'running' : acp.hasWorker(runtimeId ?? sid),
   log: (message, fields) => logMsg('warn', message, fields),
 })
 
-async function budgetAllowance(sid: string): Promise<boolean> {
-  if (await budgetStopPending(sid)) return false
-  if (!await usageBudget.allow(sid)) return false
-  return !await budgetStopPending(sid)
+/** An ACP worker (Codex, OpenCode) over its budget: stop it; its sends are refused in cmdAcpOp. */
+async function pauseAcpBudgetSession(runtimeId: string): Promise<void> {
+  if (acp.hasWorker(runtimeId)) await acp.acpStop(runtimeId)
+}
+
+/** 'ok', or why a send is refused: 'budget_paused', or 'budget_checking' (not decided yet; the server sends it again). */
+async function budgetAllowance(sid: string): Promise<BudgetGate> {
+  if (await budgetStopPending(sid)) return 'budget_paused'
+  const verdict = budgetGate(await usageBudget.allow(sid))
+  if (verdict !== 'ok') return verdict
+  return await budgetStopPending(sid) ? 'budget_paused' : 'ok'
+}
+function budgetGate(verdict: BudgetVerdict): BudgetGate {
+  return verdict === 'ok' ? 'ok' : verdict === 'paused' ? 'budget_paused' : 'budget_checking'
+}
+function budgetRefusal(reason: 'budget_paused' | 'budget_checking'): Error & { code: string } {
+  return Object.assign(new Error(reason), { code: reason === 'budget_paused' ? 'BUDGET_PAUSED' : 'BUDGET_CHECKING' })
 }
 async function requireBudgetAllowance(sid: string): Promise<void> {
-  if (!await budgetAllowance(sid)) throw Object.assign(new Error('budget_paused'), { code: 'BUDGET_PAUSED' })
+  const verdict = await budgetAllowance(sid)
+  if (verdict !== 'ok') throw budgetRefusal(verdict)
 }
 
 async function pauseBudgetSession(sid: string): Promise<void> {
@@ -2496,17 +2518,40 @@ async function pauseBudgetSession(sid: string): Promise<void> {
 
 async function cmdUsageBudget(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>, configure: boolean) {
   const sid = cmd.sid
-  if (!isJournalSid(sid) || (!sessions.has(sid) && !journaledIds().has(sid))) return sendError(ws, id, 'usage.budget: session not found', { code: 'NOT_FOUND' })
+  const engine = typeof cmd.engine === 'string' ? cmd.engine : 'claude'
+  const known = (s: string) => sessions.has(s) || journaledIds().has(s)
+  // An ACP session is keyed by its provider id, which this daemon may not know while it is
+  // stopped; the server names its engine.
+  if (!isJournalSid(sid) || (!known(sid) && engine === 'claude')) return sendError(ws, id, 'usage.budget: session not found', { code: 'NOT_FOUND' })
+  // A Claude Code session here is budgeted (and its owner checked) as one, whatever engine the asker names.
+  if (known(sid) && engine !== 'claude') return sendError(ws, id, 'usage.budget: the session runs Claude Code', { code: 'BAD_REQUEST' })
   if (configure) {
     if (!isServerClient(ws)) return sendError(ws, id, 'usage.budget.configure: trusted clients only', { code: 'NOT_OWNED' })
     if (typeof cmd.home !== 'string' || !cmd.home) return sendError(ws, id, 'usage.budget.configure: home must name the asking Walnut', { code: 'BAD_REQUEST' })
-    const refusal = stopOwnerRefusal(sid, { ...cmd, strict: true, initiator: 'automatic' })
-    if (refusal) return sendError(ws, id, 'usage.budget.configure: session ownership is not confirmed', { code: 'NOT_OWNED' })
+    if (engine === 'claude') {
+      const refusal = stopOwnerRefusal(sid, { ...cmd, strict: true, initiator: 'automatic' })
+      if (refusal) return sendError(ws, id, 'usage.budget.configure: session ownership is not confirmed', { code: 'NOT_OWNED' })
+    }
   }
   try {
-    const result = configure ? await usageBudget.configure(sid, { limitUsd: cmd.limitUsd as number | null, revision: cmd.revision as number, proxyLogDir: cmd.proxyLogDir as string | undefined }) : await usageBudget.read(sid)
+    const result = configure
+      ? await usageBudget.configure(sid, { limitUsd: cmd.limitUsd as number | null, revision: cmd.revision as number, engine, home: cmd.home as string,
+        ...(typeof cmd.cwd === 'string' ? { cwd: cmd.cwd } : {}), ...(typeof cmd.runtimeId === 'string' ? { runtimeId: cmd.runtimeId } : {}),
+        ...(cmd.prices ? { prices: cmd.prices as BudgetPrices } : {}) })
+      : await usageBudget.read(sid)
     return sendOk(ws, id, { result })
   } catch (error) { return sendError(ws, id, String(error instanceof Error ? error.message : error), { code: (error as { code?: string }).code }) }
+}
+
+/** usage.budget.list: every configured budget here, with the hash of the price list it holds. */
+async function cmdUsageBudgetList(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  if (!isServerClient(ws)) return sendError(ws, id, 'usage.budget.list: trusted clients only', { code: 'NOT_OWNED' })
+  try {
+    if (cmd.prices) await usageBudget.setPrices(cmd.prices as BudgetPrices)
+    const runtimeIds = cmd.runtimeIds && typeof cmd.runtimeIds === 'object' ? cmd.runtimeIds as Record<string, string> : undefined
+    const home = typeof cmd.home === 'string' && cmd.home ? cmd.home : undefined
+    return sendOk(ws, id, { result: { budgets: await usageBudget.list(runtimeIds, home), pricesHash: usageBudget.pricesHash() } })
+  } catch (error) { return sendError(ws, id, String(error instanceof Error ? error.message : error)) }
 }
 
 function spawnRecordOf(sid: string): { args: string[]; cwd: string; mode: string; home?: string } | null {
@@ -4653,9 +4698,14 @@ function writeWalnutShim() {
 // ── ACP session commands (engine=codex etc; see acp-daemon.ts) ──
 // sid here is the Walnut runtimeId; journal = STREAMS_DIR/<sid>.acp.jsonl.
 
-function cmdAcpStart(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+async function cmdAcpStart(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
   const params = cmd as unknown as AcpStartParams
   if (!params.sid || !params.cwd) return sendError(ws, id, 'acpStart: missing sid/cwd')
+  // A resumed session's budget learns its new worker before the worker can take a turn.
+  if (isJournalSid(params.providerSessionId)) {
+    try { await usageBudget.bindRuntime(params.providerSessionId, params.sid) }
+    catch (error) { return safeSend(ws, JSON.stringify({ id, ok: false, error: 'acpStart: the session budget could not record this worker; not started yet', errorKind: 'budget_checking', code: 'BUDGET_CHECKING' })) }
+  }
   // Agent gateway for ACP sessions: same wiring the native `claude` spawn gets.
   // WALNUT_SESSION_ID arrives hub-side (the runtimeId; acp.hasWorker() vouches
   // for it in handleGatewayLine); the daemon owns the socket path and the `walnut`
@@ -4675,9 +4725,26 @@ function cmdAcpStart(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string
   })
 }
 
-function cmdAcpOp(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>, op: string) {
-  const { sid, ...params } = cmd as { sid?: string; cmd?: string }
+async function cmdAcpOp(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>, op: string) {
+  const { sid, ...params } = cmd as { sid?: string; cmd?: string; budgetSid?: string }
   if (!sid) return sendError(ws, id, op + ': missing sid')
+  const budgetSid = (params as { budgetSid?: unknown }).budgetSid
+  delete (params as Record<string, unknown>).budgetSid
+  // A session over its budget takes no new turn (mirrors the Claude FIFO gate). The server
+  // names the session a turn belongs to, so a worker started again is gated from its first turn.
+  if (op === 'prompt' || op === 'steer') {
+    let verdict: BudgetGate = 'budget_checking'
+    try {
+      if (isJournalSid(budgetSid)) await usageBudget.bindRuntime(budgetSid, sid)
+      verdict = budgetGate(await usageBudget.allowRuntime(sid))
+    } catch (error) { logMsg('warn', 'budget gate failed; turn held', { sid, error: String(error) }) }
+    if (verdict === 'budget_paused') {
+      return safeSend(ws, JSON.stringify({ id, ok: false, error: 'Not sent: the session budget is paused. Raise or remove the limit to continue.', errorKind: 'budget_paused', code: 'BUDGET_PAUSED' }))
+    }
+    if (verdict === 'budget_checking') {
+      return safeSend(ws, JSON.stringify({ id, ok: false, error: BUDGET_CHECKING_TEXT, errorKind: 'budget_checking', code: 'BUDGET_CHECKING' }))
+    }
+  }
   delete (params as Record<string, unknown>).cmd
   delete (params as Record<string, unknown>).id
   delete (params as Record<string, unknown>).traceId
@@ -4743,11 +4810,12 @@ async function cmdStart(ws: ServerWebSocket<WsData>, id: number, cmd: Record<str
       // A host that cannot run claude answers with the reason itself, not an
       // "internal daemon error". Keep in sync with daemon-source.ts.
       if (error?.code === 'BUDGET_PAUSED') return Object.assign(error as Error, { errorKind: 'budget_paused' })
+      if (error?.code === 'BUDGET_CHECKING') return Object.assign(error as Error, { errorKind: 'budget_checking' })
       if (error?.code === 'CLAUDE_RUNTIME') return error as Error & { errorKind?: string }
       throw error
     })
   if (!result) return sendOk(ws, id, { ok: false, reason: 'session_stopped', error: 'start: a stop request superseded this start' })
-  if (result instanceof Error) return sendError(ws, id, result.message, { errorKind: result.errorKind, ...(result.errorKind === 'budget_paused' ? { reason: 'budget_paused', code: 'BUDGET_PAUSED' } : {}) })
+  if (result instanceof Error) return sendError(ws, id, result.message, { errorKind: result.errorKind, ...(result.errorKind === 'budget_paused' ? { reason: 'budget_paused', code: 'BUDGET_PAUSED' } : result.errorKind === 'budget_checking' ? { reason: 'budget_checking', code: 'BUDGET_CHECKING' } : {}) })
   addSubscriber(ws, sid, result.offset)
   return sendOk(ws, id, result)
 }
@@ -4847,7 +4915,7 @@ async function startSessionProcess(cmd: Record<string, unknown>, isCurrent?: () 
           ensureWatcher(sid)
           return { pid: existing.pid, outputFile: existing.jsonlPath, offset: curSize, adopted: true }
         }
-        if (sendResult.reason === 'budget_paused') throw Object.assign(new Error('budget_paused'), { code: 'BUDGET_PAUSED' })
+        if (sendResult.reason === 'budget_paused' || sendResult.reason === 'budget_checking') throw budgetRefusal(sendResult.reason)
         // Delivery failed. Only fall through to respawn if handleSendCommand
         // actually reaped the session (ENXIO / precheck-dead / partial-write).
         // A transient EAGAIN (pipe full, process alive) must NOT kill the CLI —
@@ -5179,7 +5247,7 @@ async function startSessionProcess(cmd: Record<string, unknown>, isCurrent?: () 
   ensureWatcher(sid)
   if (message) {
     const sent = await core.handleSendCommand(sid, message, initialUuid)
-    if (sent.reason === 'budget_paused') throw Object.assign(new Error('budget_paused'), { code: 'BUDGET_PAUSED' })
+    if (sent.reason === 'budget_paused' || sent.reason === 'budget_checking') throw budgetRefusal(sent.reason)
     if (!sent.ok) throw new Error(`start: initial message not delivered (${sent.reason ?? sent.error})`)
   }
   return { pid, outputFile: jsonlPath, offset }
@@ -6346,7 +6414,7 @@ async function checkTurnRetry(sid: string, session: SessionData, line: string, v
   if (daemonCommands.stopping || !TURN_RETRY_CFG.enabled || cronRuntime?.get(sid) || session.budgetGracefulStop) return
   const checkVersion = (retryCheckVersions.get(sid) ?? 0) + 1
   retryCheckVersions.set(sid, checkVersion)
-  if (!await budgetAllowance(sid) || retryCheckVersions.get(sid) !== checkVersion || sessions.get(sid) !== session || session.state !== 'running' || session.intentionalStopAt != null) return
+  if (await budgetAllowance(sid) !== 'ok' || retryCheckVersions.get(sid) !== checkVersion || sessions.get(sid) !== session || session.state !== 'running' || session.intentionalStopAt != null) return
   const { isTurnError, text } = parseTurnErrorLine(line)
 
   if (!isTurnError) {

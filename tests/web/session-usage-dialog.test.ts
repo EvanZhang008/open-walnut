@@ -9,16 +9,17 @@ import { ApiError } from '../../web/src/api/client';
 // Geometry and focus trapping are verified by the real browser. These tests cover
 // the dialog's pure React state, request outcomes and exact visible copy.
 vi.mock('@/hooks/useDialogFocus', () => ({ useDialogFocus: () => {} }));
+// The cost breakdown is the picker's own block, tested on its own.
+vi.mock('../../web/src/components/sessions/SessionCostBlock', () => ({ SessionCostBlock: () => null }));
 const { SessionUsageDialog, SessionBudgetStatus } = await import('../../web/src/components/sessions/SessionUsageDialog');
 let root: ReturnType<typeof createRoot>;
 let host: HTMLElement;
 let state: SessionUsageView;
 const close = vi.fn();
 const initial = (): SessionUsage => ({
-  sessionId: 'dialog-session', title: 'A long-running review', verifiedCostUsd: 4, verifiedCalls: 9, unverifiedCalls: 0,
-  byAgent: [{ agent: 'main', costUsd: 3, calls: 7, unverifiedCalls: 0 }, { agent: 'subagent', costUsd: 1, calls: 2, unverifiedCalls: 0 }],
-  byModel: [{ model: 'model-a', costUsd: 4, calls: 9, unverifiedCalls: 0 }], checkedAt: null,
-  budget: { limitUsd: 10, spentUsd: 4, state: 'active', revision: 1, reason: null, updatedAt: null },
+  sessionId: 'dialog-session', title: 'A long-running review', engine: 'opencode', checkEverySec: 30, checkedAt: null,
+  budget: { limitUsd: 10, spentUsd: 4, state: 'active', revision: 1, reason: null, updatedAt: null, responses: 9, unpricedResponses: 0,
+    unpricedModel: null, pausedAt: null, pauseId: null, stopError: null, engine: 'opencode' },
 });
 async function render() { await act(async () => { root.render(createElement(SessionUsageDialog, { sessionId: 'dialog-session', usage: state, onClose: close })); }); }
 function props(node: Element): Record<string, (...args: any[]) => void> {
@@ -43,17 +44,21 @@ afterEach(async () => { await act(async () => { root.unmount(); }); host.remove(
 describe('session Usage & Budget dialog', () => {
   it('opens with immediate loading and closes on Escape without waiting for a request', async () => {
     state.data = null; state.loading = true; await render();
-    expect(text()).toContain('Checking session usage');
+    expect(text()).toContain('Checking the budget');
     const event = new window.Event('keydown', { cancelable: true }); Object.assign(event, { key: 'Escape' });
     document.dispatchEvent(event); expect(close).toHaveBeenCalledTimes(1); expect(event.defaultPrevented).toBe(true);
   });
-  it('keeps incomplete lifetime and breakdown dollars Unverified, with explicitly labeled known portion', async () => {
-    state.data = { ...initial(), unverifiedCalls: 1, byModel: [{ model: 'model-a', costUsd: 4, calls: 10, unverifiedCalls: 1 }] };
-    await render(); expect(document.querySelector('.session-usage-total strong')!.textContent).toBe('Unverified');
-    expect(text()).toContain('Known verified portion: $4.00. Not the lifetime total.');
-    expect(text()).not.toContain('Remaining:');
-    expect(document.querySelector('[aria-label="Usage by model"] .session-usage-row-cost')!.textContent).toBe('Unverified');
-    expect(text()).toContain('Never resets.'); expect(text()).toContain('In-flight requests may exceed the allowance.');
+  it('shows the priced spend, what is left, and how often the engine is checked', async () => {
+    await render();
+    expect(document.querySelector('.session-usage-total strong')!.textContent).toBe('$4.00');
+    expect(text()).toContain('Remaining: $6.00');
+    expect(text()).toContain('9 requests');
+    expect(text()).toContain('Checked at the end of each turn and every 30 s, so a long turn can pass the limit before it stops.');
+    expect(text()).toContain('Never resets.');
+    state.data = { ...initial(), budget: { ...initial().budget, state: 'paused', reason: 'unpriced', unpricedModel: 'new-model', unpricedResponses: 1 } };
+    await render();
+    expect(text()).toContain('Paused: a request on new-model has no price');
+    expect(text()).toContain('1 without a price');
   });
   it('preserves typed limit on polls and retains the original revision until a conflict refresh', async () => {
     await render(); await type('17.35');
@@ -84,10 +89,10 @@ describe('session Usage & Budget dialog', () => {
     await act(async () => { props(remove).onClick(); });
     expect(state.save).toHaveBeenCalledWith(null, 1);
   });
-  it('does not put ordinary unknown costs near the composer, but names configured pauses', async () => {
-    await act(async () => { root.render(createElement(SessionBudgetStatus, { data: { ...initial(), budget: { ...initial().budget, limitUsd: null, state: 'unverified' } }, onOpen: close })); });
+  it('puts only a configured pause by the composer', async () => {
+    await act(async () => { root.render(createElement(SessionBudgetStatus, { data: { ...initial(), budget: { ...initial().budget, limitUsd: null, state: 'unlimited' } }, onOpen: close })); });
     expect(host.textContent).toBe('');
-    await act(async () => { root.render(createElement(SessionBudgetStatus, { data: { ...initial(), budget: { ...initial().budget, state: 'paused' } }, onOpen: close })); });
-    expect(host.textContent).toContain('Paused at budget');
+    await act(async () => { root.render(createElement(SessionBudgetStatus, { data: { ...initial(), budget: { ...initial().budget, state: 'paused', reason: 'limit', spentUsd: 10.2 } }, onOpen: close })); });
+    expect(host.textContent).toContain('Paused at budget: $10.20 of $10.00');
   });
 });

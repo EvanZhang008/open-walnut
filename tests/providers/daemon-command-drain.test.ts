@@ -469,7 +469,7 @@ describe.each([
     expect(order.indexOf('budget-control-close')).toBeLessThan(order.indexOf('persist'))
   })
 
-  function retryFixture(daemonCommands = createDrain(), allowance: () => Promise<boolean> = async () => true) {
+  function retryFixture(daemonCommands = createDrain(), allowance: () => Promise<'ok' | 'budget_paused' | 'budget_checking'> = async () => 'ok') {
     const session = { state: 'running', turnRetry: newTurnRetryState(), turnRetryTimer: null as ReturnType<typeof setTimeout> | null }
     const cmdBridgeResume = vi.fn()
     const persistRegistry = vi.fn()
@@ -559,7 +559,7 @@ describe.each([
   })
 
   it('does not schedule a retry when the owning budget refuses it', async () => {
-    const retry = retryFixture(createDrain(), async () => false)
+    const retry = retryFixture(createDrain(), async () => 'budget_paused' as const)
     await retry.error()
     expect(retry.budgetAllowance).toHaveBeenCalledExactlyOnceWith('test-session')
     expect(retry.session.turnRetry.attempts).toBe(0)
@@ -568,17 +568,17 @@ describe.each([
   })
 
   it.each(['user-stop', 'newer-result'] as const)('does not schedule a stale retry after its awaited allowance and %s', async event => {
-    const allowance = deferred<boolean>()
+    const allowance = deferred<'ok' | 'budget_paused' | 'budget_checking'>()
     const retry = retryFixture(createDrain(), () => allowance.promise)
     const oldCheck = retry.error()
     expect(retry.budgetAllowance).toHaveBeenCalledOnce()
     if (event === 'user-stop') retry.cancel('test-session', 'session-stopped')
     else {
       const newer = retry.success()
-      allowance.resolve(true)
+      allowance.resolve('ok')
       await newer
     }
-    allowance.resolve(true)
+    allowance.resolve('ok')
     await oldCheck
     expect(retry.session.turnRetry.attempts).toBe(0)
     expect(retry.session.turnRetryTimer).toBeNull()
@@ -626,6 +626,8 @@ describe('standalone ACP command lifetime', () => {
       GATEWAY_SHIM_DIR: '/fixture/bin', process: { env: {} }, path,
       sessionStartGate: new DaemonSessionGate(), cancelledStartPath: () => '/fixture/cancelled-starts/fixture',
       fs: { existsSync: () => false },
+      // acpStart binds a resumed session's budget first; this frame names no provider session.
+      isJournalSid: () => false, usageBudget: { bindRuntime: async () => {} },
     })
     const result = handle({}, 1, { sid: 'fixture', cwd: '/fixture' }, 'getState')
     expect(typeof result?.then).toBe('function')

@@ -80,6 +80,7 @@ import {
   migrateSessionQueue,
   rollbackSessionQueueMigration,
 } from '../core/session-message-queue.js'
+import { BudgetCheckingError, BudgetPausedError } from './delivery-failure.js'
 
 const BUNDLED_ADAPTER_ENTRIES: Partial<Record<SessionEngine, string>> = {
   codex: 'node_modules/@agentclientprotocol/codex-acp/dist/index.js',
@@ -995,6 +996,11 @@ export class AcpSession {
     }, ['web-ui'], { source: 'session-runner' })
   }
 
+  /** The session a turn bills to, so the host's budget gates a restarted worker from its first turn. */
+  private budgetTarget(): { budgetSid?: string } {
+    return this._providerSessionId ? { budgetSid: this._providerSessionId } : {}
+  }
+
   /** Records/API key: providerSessionId once known, else runtimeId (pending phase). */
   private trackingId(): string { return this._providerSessionId ?? this.runtimeId }
 
@@ -1308,6 +1314,10 @@ export class AcpSession {
           await this.publishSessionResponse((fresh as { result?: unknown }).result)
           const newSessionId = this.trackingId()
           emitAcpIdentityBoundary(this.taskId, previousSessionId, newSessionId, this.engineId)
+        } else if ((startResp as { errorKind?: string }).errorKind === 'budget_paused') {
+          throw new BudgetPausedError()
+        } else if ((startResp as { errorKind?: string }).errorKind === 'budget_checking') {
+          throw new BudgetCheckingError()
         } else {
           throw new Error('acpStart failed: ' + startResp.error)
         }
@@ -1425,9 +1435,12 @@ export class AcpSession {
       commandId,
       walnutMessageId,
       text: message,
+      ...this.budgetTarget(),
     })
     if (!sendResp.ok) {
       const kind = (sendResp as { errorKind?: string }).errorKind
+      if (kind === 'budget_paused') throw new BudgetPausedError()
+      if (kind === 'budget_checking') throw new BudgetCheckingError()
       if (kind === 'no_worker') {
         // Worker died between start and send (or idle-reaped): one lazy-resume retry.
         this._active = false
@@ -1467,6 +1480,7 @@ export class AcpSession {
       commandId,
       walnutMessageId,
       text: message,
+      ...this.budgetTarget(),
     })
     if (resp.ok) return true
     const kind = (resp as { errorKind?: string }).errorKind
@@ -1935,6 +1949,7 @@ export class AcpSession {
         commandId,
         control: 'self-report',
         text: prompt,
+        ...this.budgetTarget(),
       })
       if (!resp.ok) {
         this.settleSelfReport(commandId, new Error('ACP self-report prompt failed: ' + resp.error))

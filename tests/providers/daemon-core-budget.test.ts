@@ -1,10 +1,12 @@
+import path from 'node:path'
+import os from 'node:os'
 import fs from 'node:fs'
 import vm from 'node:vm'
 import ts from 'typescript'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { budgetControlExempt, createDaemonCore, type CoreSessionData, type DaemonCoreDeps } from '../../src/providers/daemon-core.js'
+import { budgetControlExempt, createDaemonCore, type BudgetGate, type CoreSessionData, type DaemonCoreDeps } from '../../src/providers/daemon-core.js'
 
-function fixture(allow: () => Promise<boolean>) {
+function fixture(allow: () => Promise<BudgetGate>) {
   const writes: string[] = []
   const fakeFs = {
     constants: fs.constants,
@@ -161,7 +163,7 @@ describe('budget stop proof durability in daemon twins', () => {
 
 describe('owning daemon budget FIFO gate', () => {
   it('refuses a paused send before any FIFO bytes or delivery markers', async () => {
-    const f = fixture(async () => false)
+    const f = fixture(async () => 'budget_paused' as const)
     expect(await f.core.handleSendCommand('sid', 'continue', undefined, [{ message: 'continue', messageId: 'message-1' }]))
       .toEqual({ ok: false, reason: 'budget_paused' })
     expect(f.fakeFs.openSync).not.toHaveBeenCalled()
@@ -172,14 +174,14 @@ describe('owning daemon budget FIFO gate', () => {
   })
 
   it('checks the latest policy after a queued FIFO predecessor finishes', async () => {
-    let allowed = true
+    let allowed: 'ok' | 'budget_paused' = 'ok'
     const f = fixture(async () => allowed)
     let release!: () => void
     f.session.fifoWriteChain = new Promise<void>(resolve => { release = resolve })
     const result = f.core.handleSendCommand('sid', 'continue')
     await Promise.resolve()
     expect(f.allowBudgetFn).not.toHaveBeenCalled()
-    allowed = false
+    allowed = 'budget_paused'
     release()
     expect(await result).toEqual({ ok: false, reason: 'budget_paused' })
     expect(f.writes).toEqual([])
@@ -193,7 +195,7 @@ describe('owning daemon budget FIFO gate', () => {
     { type: 'control_response', response: { subtype: 'error' } },
     { type: 'control_cancel_request', request_id: 'request-1' },
   ])('still delivers a non-cost-producing paused control: %j', async frame => {
-    const f = fixture(async () => false)
+    const f = fixture(async () => 'budget_paused' as const)
     const raw = JSON.stringify(frame)
     expect(budgetControlExempt(raw)).toBe(true)
     expect(await f.core.handleSendRawCommand('sid', raw)).toEqual({ ok: true })
@@ -207,7 +209,7 @@ describe('owning daemon budget FIFO gate', () => {
     { type: 'control_request', request: { subtype: 'side_question', question: 'What changed?' } },
     { type: 'control_request', request: { subtype: 'set_model', model: 'example-model' } },
   ])('blocks raw cost-producing input while paused: %j', async frame => {
-    const f = fixture(async () => false)
+    const f = fixture(async () => 'budget_paused' as const)
     const raw = JSON.stringify(frame)
     expect(budgetControlExempt(raw)).toBe(false)
     expect(await f.core.handleSendRawCommand('sid', raw)).toEqual({ ok: false, reason: 'budget_paused' })
@@ -216,7 +218,7 @@ describe('owning daemon budget FIFO gate', () => {
   })
 
   it('does not exempt malformed or multiple raw frames', async () => {
-    const f = fixture(async () => false)
+    const f = fixture(async () => 'budget_paused' as const)
     for (const raw of ['not-json', '{"type":"control_request","request":{"subtype":"interrupt"}}\n{"type":"user"}']) {
       expect(budgetControlExempt(raw)).toBe(false)
       expect(await f.core.handleSendRawCommand('sid', raw)).toEqual({ ok: false, reason: 'budget_paused' })
@@ -224,15 +226,25 @@ describe('owning daemon budget FIFO gate', () => {
     expect(f.writes).toEqual([])
   })
 
+  it('answers a send no budget check decided yet as checking, with nothing written', async () => {
+    const f = fixture(async () => 'budget_checking' as const)
+    expect(await f.core.handleSendCommand('sid', 'continue', undefined, [{ message: 'continue', messageId: 'message-1' }]))
+      .toEqual({ ok: false, reason: 'budget_checking' })
+    expect(await f.core.handleSendRawCommand('sid', JSON.stringify({ type: 'user', message: { role: 'user', content: 'x' } })))
+      .toEqual({ ok: false, reason: 'budget_checking' })
+    expect(f.writes).toEqual([])
+    expect(f.fakeFs.appendFileSync).not.toHaveBeenCalled()
+  })
+
   it('preserves an ordinary send when the budget permits it', async () => {
-    const f = fixture(async () => true)
+    const f = fixture(async () => 'ok' as const)
     expect(await f.core.handleSendCommand('sid', 'continue')).toEqual({ ok: true })
     expect(JSON.parse(f.writes.join(''))).toEqual({ type: 'user', message: { role: 'user', content: 'continue' } })
     expect(f.session.state).toBe('running')
   })
 
   it('persists the graceful budget stop flag in the running registry', () => {
-    const f = fixture(async () => false)
+    const f = fixture(async () => 'budget_paused' as const)
     f.session.budgetGracefulStop = true
     f.core.persistRegistry()
     const body = f.fakeFs.writeFileSync.mock.calls[0]?.[1]
@@ -241,7 +253,7 @@ describe('owning daemon budget FIFO gate', () => {
 
   it('never escalates a graceful budget stop through the reaper', () => {
     vi.useFakeTimers()
-    const f = fixture(async () => false)
+    const f = fixture(async () => 'budget_paused' as const)
     f.session.intentionalStopAt = Date.now()
     f.session.budgetGracefulStop = true
     f.core.reapSession('sid', 1, 'proc-exit')
@@ -250,5 +262,49 @@ describe('owning daemon budget FIFO gate', () => {
     expect(f.session.exitCode).toBe(0)
     expect(f.groupSignal).not.toHaveBeenCalled()
     expect(f.signal.mock.calls.every(call => call[1] === 0)).toBe(true)
+  })
+})
+
+/** The source twin's sidecar-less fallback, run against real files in a temp budget dir. */
+function savedBudgetLimitTwin(dir: string): (sid: string) => Promise<boolean> {
+  const file = new URL('../../src/providers/daemon-source.ts', import.meta.url)
+  const text = fs.readFileSync(file, 'utf8')
+  let body = ''
+  const wrapper = ts.createSourceFile(String(file), text, ts.ScriptTarget.Latest, true)
+  const visit = (node: ts.Node) => {
+    if (ts.isVariableDeclaration(node) && node.name.getText(wrapper) === 'DAEMON_SOURCE' && node.initializer && ts.isNoSubstitutionTemplateLiteral(node.initializer)) body = node.initializer.text
+    ts.forEachChild(node, visit)
+  }
+  visit(wrapper)
+  const source = ts.createSourceFile('daemon.js', body, ts.ScriptTarget.Latest, true)
+  const fn = source.statements.find((n): n is ts.FunctionDeclaration => ts.isFunctionDeclaration(n) && n.name?.text === 'savedBudgetLimit')
+  if (!fn) throw new Error('savedBudgetLimit not found in the source twin')
+  return vm.runInNewContext(`${fn.getText(source)}\nsavedBudgetLimit`, { fs, path, BUDGET_DIR: dir, JSON }) as (sid: string) => Promise<boolean>
+}
+
+describe('source twin without its budget sidecar', () => {
+  it('holds a session only while a saved budget still names a limit', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'budget-fallback-'))
+    try {
+      const held = savedBudgetLimitTwin(dir)
+      expect(await held('none')).toBe(false)
+      // First version only: its last policy line decides.
+      fs.writeFileSync(path.join(dir, 'v1.json'), '{}')
+      fs.writeFileSync(path.join(dir, 'v1.jsonl'), [JSON.stringify({ kind: 'policy', policy: { limitUsd: 5 } }), JSON.stringify({ kind: 'policy', policy: { limitUsd: null } })].join('\n') + '\n')
+      expect(await held('v1')).toBe(false)
+      fs.appendFileSync(path.join(dir, 'v1.jsonl'), JSON.stringify({ kind: 'policy', policy: { limitUsd: 2 } }) + '\n')
+      expect(await held('v1')).toBe(true)
+      // A v2 file decides over the first version's copy, a removed limit included.
+      fs.mkdirSync(path.join(dir, 'v2'))
+      fs.writeFileSync(path.join(dir, 'v2', 'v1.json'), JSON.stringify({ version: 2, limitUsd: null }))
+      expect(await held('v1')).toBe(false)
+      fs.writeFileSync(path.join(dir, 'v2', 'v1.json'), JSON.stringify({ version: 2, limitUsd: 3 }))
+      expect(await held('v1')).toBe(true)
+      // Unreadable holds.
+      fs.writeFileSync(path.join(dir, 'v2', 'bad.json'), '{"version":2,')
+      expect(await held('bad')).toBe(true)
+      fs.writeFileSync(path.join(dir, 'marker-only.json'), '{}')
+      expect(await held('marker-only')).toBe(true)
+    } finally { fs.rmSync(dir, { recursive: true, force: true }) }
   })
 })

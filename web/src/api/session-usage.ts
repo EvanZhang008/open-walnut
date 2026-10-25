@@ -1,29 +1,34 @@
 import { apiGet, apiPatch } from './client';
 
-export interface SessionUsageBreakdown {
-  costUsd: number | null;
-  calls: number;
-  unverifiedCalls: number;
+/** A session's budget, as the daemon on its host keeps it (usage-budget-runtime.ts). */
+export interface SessionBudget {
+  limitUsd: number | null;
+  /** The session's cost so far, priced like the model picker's cost line; null before the first check. */
+  spentUsd: number | null;
+  state: 'unlimited' | 'checking' | 'active' | 'paused';
+  /** Why it paused: the limit, or a request with no price. */
+  reason: 'limit' | 'unpriced' | 'unreadable' | null;
+  revision: number;
+  updatedAt: string | null;
+  responses: number;
+  unpricedResponses: number;
+  unpricedModel?: string | null;
+  /** Why the last check could not read the session's usage. */
+  checkError?: string | null;
+  pausedAt: string | null;
+  pauseId: string | null;
+  stopError?: string | null;
+  engine: string | null;
 }
 
 export interface SessionUsage {
   sessionId: string;
-  title: string;
-  verifiedCostUsd: number | null;
-  verifiedCalls: number;
-  unverifiedCalls: number;
-  byModel: (SessionUsageBreakdown & { model: string })[];
-  byAgent: (SessionUsageBreakdown & { agent: 'main' | 'subagent' })[];
-  budget: {
-    limitUsd: number | null;
-    spentUsd: number | null;
-    state: 'unlimited' | 'active' | 'paused' | 'unverified';
-    reason: string | null;
-    revision: number;
-    updatedAt: string | null;
-    stopError?: string | null;
-  };
+  title?: string;
+  engine: string;
+  budget: SessionBudget;
   checkedAt: string | null;
+  /** How often the host prices the session between responses. */
+  checkEverySec: number;
 }
 
 export function fetchSessionUsage(sessionId: string, signal?: AbortSignal): Promise<SessionUsage> {
@@ -31,5 +36,5 @@ export function fetchSessionUsage(sessionId: string, signal?: AbortSignal): Prom
 }
 
 export function patchSessionBudget(sessionId: string, limitUsd: number | null, revision: number): Promise<SessionUsage> {
-  return apiPatch(`/api/usage/sessions/${encodeURIComponent(sessionId)}/budget`, { limitUsd, revision }, { timeoutMs: 15_000, quietStatuses: [409] });
+  return apiPatch(`/api/usage/sessions/${encodeURIComponent(sessionId)}/budget`, { limitUsd, revision }, { timeoutMs: 35_000, quietStatuses: [409] });
 }

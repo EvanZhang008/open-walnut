@@ -11,6 +11,8 @@ import {
   cacheWriteTokens, costHeadline, costLineLabel, costModelLabel, costTimes, engineName, fmtCost, fmtPriceSource, fmtRate,
   fmtRates, fmtTokenCount, fmtUsd, tierLabel, visibleLines, comparisonLabel, comparisonRates, fmtRatio,
 } from './session-cost-format';
+import { useOpenSessionUsage, useSessionBudgetUsage } from '@/hooks/useSessionBudgetUsage';
+import { budgetSummary } from './session-usage-model';
 import '@/styles/session-cost.css';
 
 const PENDING_RETRIES = 20;
@@ -24,6 +26,29 @@ interface Props {
   liveApiMs?: number | null;
   /** The models the picker offers, for "same usage on other models". */
   compareModels?: CompareModel[];
+  /** The budget row (off where the budget itself is on show, as in Usage & Budget). */
+  budgetRow?: boolean;
+}
+
+/** The session's budget in one line, with the way to set or change it. */
+function BudgetRow({ sessionId }: { sessionId: string }) {
+  const usage = useSessionBudgetUsage(sessionId, false);
+  const open = useOpenSessionUsage();
+  const data = usage.data?.sessionId === sessionId ? usage.data : null;
+  if (!data && (!usage.error || usage.errorStatus === 400 || usage.errorStatus === 404)) return null;
+  const paused = data?.budget.state === 'paused';
+  return (
+    <div className="session-cost-budget" data-testid="session-cost-budget" data-state={data?.budget.state ?? 'error'}>
+      <span className={paused ? 'session-cost-warn' : undefined}>
+        Budget <strong data-testid="session-cost-budget-summary">{data ? budgetSummary(data) : <span className="session-cost-muted">{usage.error}</span>}</strong>
+      </span>
+      {data && open && (
+        <button type="button" className="session-cost-budget-edit" onClick={() => open(sessionId)}>
+          {data.budget.limitUsd === null ? 'Set budget' : 'Change'}
+        </button>
+      )}
+    </div>
+  );
 }
 
 const COMPARE_RETRIES = PENDING_RETRIES;
@@ -190,7 +215,7 @@ function ModelRow({ m }: { m: SessionCostModel }) {
   );
 }
 
-export function SessionCostBlock({ sessionId, liveApiMs, compareModels }: Props) {
+export function SessionCostBlock({ sessionId, liveApiMs, compareModels, budgetRow = true }: Props) {
   const [cost, setCost] = React.useState<SessionCost | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [open, setOpen] = React.useState(false);
@@ -247,6 +272,7 @@ export function SessionCostBlock({ sessionId, liveApiMs, compareModels }: Props)
       {cost?.status === 'unavailable' && cost.reason && (
         <div className="session-cost-muted" data-testid="session-cost-reason">{cost.reason}</div>
       )}
+      {budgetRow && <BudgetRow sessionId={sessionId} />}
       {open && cost && (
         <div className="session-cost-body">
           {cost.models.map((m) => <ModelRow key={`${m.model}:${m.speed}`} m={m} />)}

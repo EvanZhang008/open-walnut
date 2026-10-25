@@ -33,6 +33,15 @@ const EFFORTS = SESSION_EFFORTS;
  *  value/resolvedModel carries the full ID, so derive the versioned name from
  *  it. Falls back to displayName when no version is derivable (legacy alias
  *  rows like 'opus', GPT rows whose displayName is already right). */
+/**
+ * A modal opened over the picker (Usage & Budget, from its cost block) owns its own clicks and
+ * Esc: the picker stays open beneath it and shows the new budget when it closes.
+ */
+function inModalAbove(target: EventTarget | null, pop: HTMLElement | null): boolean {
+  const modal = target instanceof Element ? target.closest('[aria-modal="true"]') : null;
+  return !!modal && !(pop && modal.contains(pop));
+}
+
 export function catalogRowLabel(m: SessionModelCatalogEntry): string {
   const derived = formatModelName(m.resolvedModel ?? m.value);
   const versioned = /^(Opus|Sonnet|Haiku|Fable) \d/.test(derived) ? derived : null;
@@ -576,7 +585,10 @@ export function ModelPicker({
   React.useEffect(() => {
     // document, not window: it must run BEFORE the panel key router (window) so
     // its preventDefault tells the router this Esc is taken.
-    const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.preventDefault(); onClose(); } };
+    const handler = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || inModalAbove(e.target, popRef.current)) return;
+      e.preventDefault(); onClose();
+    };
     document.addEventListener('keydown', handler);
     return () => document.removeEventListener('keydown', handler);
   }, [onClose]);
@@ -599,6 +611,7 @@ export function ModelPicker({
       const t = e.target as Node;
       if (popRef.current?.contains(t)) return;
       if (anchorRef?.current?.contains(t)) return;
+      if (inModalAbove(t, popRef.current)) return;
       onClose();
     };
     document.addEventListener('mousedown', onDown);

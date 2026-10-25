@@ -3,8 +3,7 @@ import type { SessionUsage } from '../../web/src/api/session-usage';
 import { SessionUsageStore } from '../../web/src/stores/session-usage-store';
 
 const value = (sessionId = 'session-a', revision = 1, limitUsd: number | null = 10): SessionUsage => ({
-  sessionId, title: 'Session allowance', verifiedCostUsd: 2, verifiedCalls: 5, unverifiedCalls: 0,
-  byAgent: [], byModel: [], checkedAt: null,
+  sessionId, title: 'Session allowance', engine: 'claude', checkEverySec: 2, checkedAt: null,
   budget: { limitUsd, spentUsd: 2, state: limitUsd === null ? 'unlimited' : 'active', reason: null, revision, updatedAt: null },
 });
 function deferred<T>() {

@@ -54,7 +54,8 @@ const ROOT = ROOTS[0]
  * The runtime dirs are pid-owned (tests/setup/runtime-dir-isolation.ts) and the
  * global test home is created by the runner for every worker.
  */
-const NEVER_OURS = [/^open-walnut-test-runtime-/, /^open-walnut-test-global$/, /^open-walnut-stage\./, /^open-walnut-lkg$/, /^walnut-pw-lease$/, /^walnut-vitest-gate/]
+// walnut-budget-e2e: the ACP budget E2E keeps a scratch root there when its cleanup could not prove its processes gone.
+const NEVER_OURS = [/^open-walnut-test-runtime-/, /^open-walnut-test-global$/, /^open-walnut-stage\./, /^open-walnut-lkg$/, /^walnut-pw-lease$/, /^walnut-vitest-gate/, /^walnut-budget-e2e$/]
 
 function toString(p: fs.PathLike | undefined): string | null {
   if (typeof p === 'string') return p

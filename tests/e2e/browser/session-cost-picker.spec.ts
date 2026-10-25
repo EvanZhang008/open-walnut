@@ -12,8 +12,11 @@ import { test, expect, type Page, type Locator } from '@playwright/test'
 import fs from 'node:fs'
 import { presetPanelView } from './todo-panel-helpers'
 import { REAL_PANEL } from './draft-helpers'
+import { openHome } from './home-navigation-helpers'
 
 const SHOTS = '/tmp/walnut-session-cost'
+// openHome alone may take 90 s on a loaded machine; the default 30 s test budget was spent before the picker opened.
+test.describe.configure({ timeout: 120_000 })
 const SESSION_ID = 'pw-model-switch-session'
 
 const COST = {
@@ -68,18 +71,18 @@ const COST = {
 
 async function openPicker(page: Page): Promise<Locator> {
   await presetPanelView(page)
-  await page.goto('/')
-  await page.waitForLoadState('networkidle')
+  await openHome(page, String(test.info().project.use.baseURL), 90_000)
   await page.locator('.todo-panel-item', { hasText: 'Model switch test task' }).first().click()
   const input = page.locator(`${REAL_PANEL} .chat-input-textarea`)
   await expect(input).toBeVisible({ timeout: 10_000 })
   await input.focus()
   await input.fill('/m')
   const palette = page.locator(`${REAL_PANEL} .command-palette`)
-  await expect(palette).toBeVisible({ timeout: 5_000 })
+  await expect(palette).toBeVisible({ timeout: 15_000 })
   await palette.locator('.command-palette-item.command-palette-control', { hasText: 'model' }).dispatchEvent('mousedown')
   const picker = page.locator('body > .model-picker.model-picker-popout')
-  await expect(picker).toBeVisible({ timeout: 5_000 })
+  // The picker shows once its catalog loads: at load 60, three WebKit workers saw it open just past 5 s.
+  await expect(picker).toBeVisible({ timeout: 20_000 })
   return picker
 }
 
@@ -219,4 +222,53 @@ test('the real route settles on an answer for a session with no transcript', asy
   await expect(block).not.toHaveAttribute('data-status', 'loading', { timeout: 40_000 })
   await expect(block).toHaveAttribute('data-status', /^(unavailable|empty)$/)
   await expect(block.getByTestId('session-cost-total')).not.toHaveText('calculating…')
+})
+
+test('the budget sits under the cost: set from the picker, then shown as spent of limit, and paused when over', async ({ page }, info) => {
+  const errors: string[] = []
+  page.on('pageerror', (e) => errors.push(e.message))
+  await page.route(`**/api/sessions/${SESSION_ID}/cost`, (route) => route.fulfill({ json: { ...COST, status: 'priced', unpricedResponses: 0,
+    totalUsd: 117.2019, models: [COST.models[0]] } }))
+  const budget = { limitUsd: null as number | null, spentUsd: null as number | null, state: 'unlimited', reason: null as string | null, revision: 0,
+    updatedAt: null, responses: 0, unpricedResponses: 0, unpricedModel: null, pausedAt: null, pauseId: null as string | null, stopError: null, engine: 'codex' }
+  let patches = 0
+  await page.route(`**/api/usage/sessions/${SESSION_ID}`, (route) => route.fulfill({ json: {
+    sessionId: SESSION_ID, title: 'Model switch test task', engine: 'codex', checkEverySec: 5, budget, checkedAt: null } }))
+  await page.route(`**/api/usage/sessions/${SESSION_ID}/budget`, async (route) => {
+    patches++
+    const body = route.request().postDataJSON()
+    Object.assign(budget, { limitUsd: body.limitUsd, revision: budget.revision + 1, spentUsd: 117.2019, responses: 1804,
+      state: body.limitUsd !== null && body.limitUsd <= 117.2019 ? 'paused' : 'active', reason: body.limitUsd !== null && body.limitUsd <= 117.2019 ? 'limit' : null })
+    await route.fulfill({ json: { sessionId: SESSION_ID, engine: 'codex', checkEverySec: 5, budget, checkedAt: new Date().toISOString() } })
+  })
+  await page.setViewportSize({ width: 1280, height: 860 })
+  const picker = await openPicker(page)
+  const row = picker.getByTestId('session-cost-budget')
+  await expect(row.getByTestId('session-cost-budget-summary')).toHaveText('No budget')
+  await row.getByRole('button', { name: 'Set budget' }).click()
+  const dialog = page.getByRole('dialog', { name: 'Usage & Budget' })
+  await expect(dialog).toBeVisible()
+  await expect(dialog).toContainText('Checked at the end of each turn and every 5 s.')
+  await dialog.getByRole('textbox', { name: 'Budget for this session (USD)' }).fill('200')
+  await dialog.getByRole('button', { name: 'Save limit' }).click()
+  await expect(dialog.getByText('Saved limit: $200.00')).toBeVisible()
+  await expect(dialog.getByText('Remaining: $82.80')).toBeVisible()
+  await dialog.getByRole('button', { name: 'Close', exact: true }).click()
+  await expect(row.getByTestId('session-cost-budget-summary')).toHaveText('$117.20 of $200.00')
+  await expect(row.getByRole('button', { name: 'Change' })).toBeVisible()
+  // Lowered under what it already spent: paused, and the line says so.
+  await row.getByRole('button', { name: 'Change' }).click()
+  await dialog.getByRole('textbox', { name: 'Budget for this session (USD)' }).fill('100')
+  await dialog.getByRole('button', { name: 'Save limit' }).click()
+  await expect(dialog.getByText('Paused at budget: $117.20 of $100.00').first()).toBeVisible()
+  await dialog.getByRole('button', { name: 'Close', exact: true }).click()
+  await expect(row).toHaveAttribute('data-state', 'paused')
+  await expect(row.getByTestId('session-cost-budget-summary')).toHaveText('Paused at budget: $117.20 of $100.00')
+  await expect(page.locator(`${REAL_PANEL} .session-budget-status`)).toContainText('Paused at budget: $117.20 of $100.00')
+  expect(patches).toBe(2)
+  const pickerBox = (await picker.boundingBox())!
+  const rowBox = (await row.boundingBox())!
+  expect(rowBox.x + rowBox.width).toBeLessThanOrEqual(pickerBox.x + pickerBox.width + 1)
+  await picker.screenshot({ path: `${SHOTS}/budget-row-${info.project.name}.png` })
+  expect(errors).toEqual([])
 })

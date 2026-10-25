@@ -68,6 +68,7 @@ const OLD_TRUTH: Record<BootJob, (cloud: boolean) => boolean> = {
   'lane-orphan-passes': leaderOnly,
   'lane-ask-sync': leaderOnly,
   'pin-retirement': leaderOnly,
+  'budget-letters': leaderOnly,
   'session-health-monitor': leaderOnly,
   'overview-maintainer': leaderOnly, // 4d: its project skill writes would land on the box's copy
   'project-summary': always,

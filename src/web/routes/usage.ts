@@ -51,9 +51,9 @@ usageRouter.get('/sessions/:sid', async (req: Request, res: Response) => {
 })
 usageRouter.patch('/sessions/:sid/budget', async (req: Request, res: Response) => {
   const { limitUsd, revision } = req.body ?? {}
-  if (!(limitUsd === null || (typeof limitUsd === 'number' && Number.isFinite(limitUsd) && limitUsd >= 0.01))
+  if (!(limitUsd === null || (typeof limitUsd === 'number' && Number.isFinite(limitUsd) && limitUsd >= 0.01 && limitUsd <= 1_000_000))
     || !Number.isSafeInteger(revision) || revision < 0) {
-    res.status(400).json({ error: 'Set a limit of at least 0.01 USD or null, and the current revision.' })
+    res.status(400).json({ error: 'Set a limit from 0.01 to 1,000,000 USD or null, and the current revision.' })
     return
   }
   try {

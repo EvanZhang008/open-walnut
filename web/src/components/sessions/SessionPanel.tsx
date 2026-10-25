@@ -26,7 +26,7 @@ import { ThreadTreeDrawer } from './ThreadTreeDrawer';
 import { SessionRewindContext, type SessionRewindApi } from '@/contexts/SessionRewindContext';
 import { SessionRewindDialog } from './SessionRewindDialog';
 import { SessionBudgetStatus, SessionUsageDialog } from './SessionUsageDialog';
-import { useSessionBudgetUsage } from '@/hooks/useSessionBudgetUsage';
+import { SessionUsageOpenContext, useSessionBudgetUsage } from '@/hooks/useSessionBudgetUsage';
 import { SessionFileExplorer } from './SessionFileExplorer';
 import { sessionScope } from '@/utils/file-view-state';
 import { SessionTerminal } from './SessionTerminal';
@@ -347,6 +347,8 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
     setUsageDialogSession(sessionId);
   }, [sessionId]);
   const closeUsageDialog = useCallback(() => setUsageDialogSession(null), []);
+  // The picker's cost block opens the same dialog ("Set budget").
+  const openUsageFor = useCallback((sid: string) => { if (sid === sessionId) openUsageDialog(); }, [sessionId, openUsageDialog]);
   useEffect(() => { setUsageDialogSession(null); }, [sessionId]);
   const pendingPermission = liveStatus?.pendingPermissionTool === undefined
     ? session?.pendingPermission
@@ -1932,6 +1934,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
   };
 
   return (
+    <SessionUsageOpenContext.Provider value={openUsageFor}>
     <PlanContentContext.Provider value={planContentValue}>
     <SessionPinsContext.Provider value={pinsApi}>
     <SessionThreadsContext.Provider value={threadsApi}>
@@ -2913,6 +2916,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
     </SessionThreadsContext.Provider>
     </SessionPinsContext.Provider>
     </PlanContentContext.Provider>
+    </SessionUsageOpenContext.Provider>
   );
 });
 

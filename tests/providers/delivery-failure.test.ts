@@ -10,7 +10,7 @@
  *   - too wide → a plain ssh outage strands a message the user must retry by hand
  */
 import { describe, it, expect } from 'vitest';
-import { BudgetPausedError, classifyDeliveryFailure, isPermanentDeliveryFailure, isDaemonCommandOutcomeUnknown, sendMayHaveLanded } from '../../src/providers/delivery-failure.js';
+import { BudgetCheckingError, BudgetPausedError, classifyDeliveryFailure, isPermanentDeliveryFailure, isDaemonCommandOutcomeUnknown, sendMayHaveLanded } from '../../src/providers/delivery-failure.js';
 import { CwdMissingError } from '../../src/providers/cwd-check.js';
 import { SessionStopSupersededError } from '../../src/core/sessions/session-stop.js';
 
@@ -18,6 +18,10 @@ describe('classifyDeliveryFailure — permanent', () => {
   it('parks a budget refusal rather than automatically resuming it on reconnect', () => {
     expect(classifyDeliveryFailure(new BudgetPausedError())).toMatchObject({ kind: 'permanent', code: 'budget_paused' });
     expect(classifyDeliveryFailure(new Error('Daemon start failed: budget_paused'))).toMatchObject({ kind: 'permanent', code: 'budget_paused' });
+  });
+  it('never parks a send whose budget is still being checked', () => {
+    expect(classifyDeliveryFailure(new BudgetCheckingError())).toMatchObject({ kind: 'transient' });
+    expect(classifyDeliveryFailure(new Error('Daemon start failed: budget_checking')).kind).toBe('transient');
   });
   it('parks a superseded send rather than resuming it on reconnect', () => {
     expect(classifyDeliveryFailure(new SessionStopSupersededError('Session stopped')))

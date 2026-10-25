@@ -72,6 +72,8 @@ export interface AcpDaemonDeps<W> {
   abortWaitMs?: number
   killGraceMs?: number
   setIntervalFn?: typeof setInterval
+  /** A worker's turn ended (the session budget prices it at once). */
+  onTurnEnd?: (sid: string) => void
 }
 
 export interface AcpStartParams {
@@ -206,6 +208,7 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
       entry.terminalVersion++
       entry.activeCommandId = null
       writeBusyFile()
+      try { deps.onTurnEnd?.(entry.sid) } catch { /* A budget check never breaks the journal. */ }
     } else if (record.event.type === 'control-prompt-accepted') {
       entry.activeControlCommandId = record.event.commandId ?? null
       writeBusyFile()

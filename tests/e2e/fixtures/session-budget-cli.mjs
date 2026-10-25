@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import readline from 'node:readline';
 
 // This fixture has no network access or child processes. Cleanup is nonce-scoped and self-directed.
-const required = ['BUDGET_FIXTURE_SID', 'BUDGET_FIXTURE_TRANSCRIPT', 'BUDGET_FIXTURE_PROXY', 'BUDGET_FIXTURE_WITNESS', 'BUDGET_FIXTURE_CLEANUP', 'BUDGET_FIXTURE_NONCE'];
+const required = ['BUDGET_FIXTURE_SID', 'BUDGET_FIXTURE_TRANSCRIPT', 'BUDGET_FIXTURE_UPSTREAM_LOG', 'BUDGET_FIXTURE_WITNESS', 'BUDGET_FIXTURE_CLEANUP', 'BUDGET_FIXTURE_NONCE'];
 for (const key of required) if (!process.env[key]) throw new Error(`Missing fixture setting: ${key}`);
 const sid = process.env.BUDGET_FIXTURE_SID;
 const nonce = process.env.BUDGET_FIXTURE_NONCE;
@@ -35,7 +35,7 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
   const canonical = { type: 'assistant', sessionId: sid, timestamp,
     message: { id, model: 'claude-opus-5-5', stop_reason: 'end_turn', usage } };
   fs.appendFileSync(process.env.BUDGET_FIXTURE_TRANSCRIPT, JSON.stringify(canonical) + '\n');
-  fs.appendFileSync(process.env.BUDGET_FIXTURE_PROXY, 'request CACHE ' + JSON.stringify({ request_id: id, session_id: sid,
+  fs.appendFileSync(process.env.BUDGET_FIXTURE_UPSTREAM_LOG, 'request CACHE ' + JSON.stringify({ request_id: id, session_id: sid,
     started_ms: Date.parse(timestamp) - 1, finished_ms: Date.parse(timestamp), requested_model: 'claude-opus-5-5',
     response_model: 'claude-opus-5-5', forwarded_model: 'global.anthropic.claude-opus-5-5',
     ...usage, outcome: 'complete', usage_present: true }) + '\n');

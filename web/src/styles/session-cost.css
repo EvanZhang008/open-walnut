@@ -200,3 +200,33 @@
 .session-cost-compare-table tbody td:last-child {
   color: var(--fg-muted, #888);
 }
+
+/* The budget line under the cost: what it allows, and the way to change it. */
+.session-cost-budget {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 4px;
+}
+
+.session-cost-budget strong {
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+.session-cost-budget-edit {
+  border: none;
+  background: none;
+  padding: 2px 0;
+  font: inherit;
+  color: var(--accent, inherit);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.session-cost-budget-edit:hover,
+.session-cost-budget-edit:focus-visible {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}

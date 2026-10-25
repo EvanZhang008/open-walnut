@@ -1,8 +1,8 @@
 import { test, expect } from '@playwright/test';
 import { isolateUiPrefs } from './todo-panel-helpers';
 
-test.setTimeout(120_000);
-test('session lifetime allowance keeps dirty edits, conflicts, unknown evidence and recovery honest', async ({ page }, testInfo) => {
+test.setTimeout(180_000);
+test('session budget keeps dirty edits, conflicts, pauses and recovery honest', async ({ page }, testInfo) => {
   await isolateUiPrefs(page);
   let sentMessages = 0;
   let targetSessionId: string | undefined;
@@ -17,19 +17,28 @@ test('session lifetime allowance keeps dirty edits, conflicts, unknown evidence 
   const cdp = await page.context().newCDPSession(page).catch(() => null);
   if (cdp) await cdp.send('Page.navigate', { url: bootUrl });
   else await page.evaluate(url => { location.href = url; }, bootUrl);
-  await expect(page.locator('.app-shell')).toBeVisible({ timeout: 30_000 });
+  // A cold first boot of the app took over 30 s at load 60 (2026-10-25); the picker spec allows 90 s too.
+  await expect(page.locator('.app-shell')).toBeVisible({ timeout: 90_000 });
   const created = await page.request.post('/api/sessions/quick-start', {
     data: { cwd: process.cwd(), message: 'Controlled allowance fixture', project: 'Usage Fixture' },
   });
   expect(created.status(), await created.text()).toBe(200);
   const { sessionId, taskId } = await created.json();
   let current = {
-    sessionId, title: 'Review the monthly usage', verifiedCostUsd: 5.99 as number | null, verifiedCalls: 18, unverifiedCalls: 0,
-    byModel: Array.from({ length: 20 }, (_, index) => ({ model: `example-model-${index}`, costUsd: 0.2, calls: 1, unverifiedCalls: 0 })),
-    byAgent: [{ agent: 'main', costUsd: 4.99, calls: 14, unverifiedCalls: 0 }, { agent: 'subagent', costUsd: 1, calls: 4, unverifiedCalls: 0 }],
-    budget: { limitUsd: 10 as number | null, spentUsd: 5.99 as number | null, state: 'active', reason: null as string | null, revision: 1, updatedAt: new Date().toISOString(), stopError: null },
+    sessionId, title: 'Review the monthly usage', engine: 'claude', checkEverySec: 2,
+    budget: { limitUsd: 10 as number | null, spentUsd: 5.99 as number | null, state: 'active', reason: null as string | null, revision: 1,
+      updatedAt: new Date().toISOString(), responses: 18, unpricedResponses: 0, unpricedModel: null as string | null, pausedAt: null as string | null,
+      pauseId: null as string | null, stopError: null as string | null, engine: 'claude' },
     checkedAt: new Date().toISOString(),
   };
+  // The breakdown is the picker's own cost block, here with twenty models.
+  const models = Array.from({ length: 20 }, (_, index) => ({ model: `example-model-${index}`, speed: 'standard', responses: 1, costUsd: 0.3,
+    unpricedResponses: 0, longResponses: 0, webSearches: 0, usRegionResponses: 0,
+    tokens: { input: 1000, output: 100, cacheRead: 0, cacheWrite5m: 0, cacheWrite1h: 0, cacheWrite: 0 },
+    rates: { input: 3, output: 15 }, tiers: [], firstAt: '2026-10-20T00:00:00.000Z', lastAt: '2026-10-20T01:00:00.000Z' }));
+  await page.route(`**/api/sessions/${sessionId}/cost`, route => route.fulfill({ json: { sessionId, engine: 'claude', source: 'claude-transcript',
+    status: 'priced', totalUsd: 5.99, responses: 18, unpricedResponses: 0, firstAt: '2026-10-20T00:00:00.000Z', lastAt: '2026-10-20T01:00:00.000Z',
+    prices: { source: 'litellm', asOf: '2026-10-20T00:00:00.000Z' }, models } }));
   targetSessionId = sessionId;
   let rejectConflict = false, rejectSave = false, offline = false, patchCount = 0;
   page.on('request', request => { if (request.method() === 'POST' && /\/api\/sessions\/.*\/messages/.test(request.url())) sentMessages++; });
@@ -44,7 +53,8 @@ test('session lifetime allowance keeps dirty edits, conflicts, unknown evidence 
     }
     const body = route.request().postDataJSON();
     current = { ...current, budget: { ...current.budget, limitUsd: body.limitUsd, revision: current.budget.revision + 1,
-      state: body.limitUsd === null ? 'unlimited' : current.unverifiedCalls ? 'unverified' : 'active' } };
+      state: body.limitUsd === null ? 'unlimited' : (current.budget.spentUsd ?? 0) >= body.limitUsd ? 'paused' : 'active',
+      reason: body.limitUsd === null ? null : (current.budget.spentUsd ?? 0) >= body.limitUsd ? 'limit' : null } };
     await route.fulfill({ json: current });
   });
   await page.locator('.todo-search-input').fill(taskId);
@@ -62,8 +72,10 @@ test('session lifetime allowance keeps dirty edits, conflicts, unknown evidence 
   await panel.getByRole('button', { name: 'More actions', exact: true }).click();
   await page.locator('.task-kebab-menu:visible').getByRole('button', { name: 'Usage & Budget', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: 'Usage & Budget' });
-  await expect(dialog).toBeVisible(); await expect(dialog.getByText('$5.99', { exact: true }).first()).toBeVisible();
-  const input = dialog.getByRole('textbox', { name: 'Total lifetime limit (USD)' });
+  await expect(dialog).toBeVisible(); await expect(dialog.locator('.session-usage-total strong')).toHaveText('$5.99');
+  await expect(dialog.getByText('Checked after each response and every 2 s, subagents included.', { exact: false })).toBeVisible();
+  await expect(dialog.getByText('Remaining: $4.01')).toBeVisible();
+  const input = dialog.getByRole('textbox', { name: 'Budget for this session (USD)' });
   await input.fill('20');
   current.budget.revision = 2; current.budget.limitUsd = 15;
   await expect(dialog.getByText('Saved limit: $15.00')).toBeVisible({ timeout: 12_000 });
@@ -84,14 +96,15 @@ test('session lifetime allowance keeps dirty edits, conflicts, unknown evidence 
   await page.setViewportSize({ width: 320, height: 740 });
   await expect(dialog).toBeVisible();
   expect(await dialog.evaluate(element => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
-  await dialog.getByText('example-model-19', { exact: true }).scrollIntoViewIfNeeded();
+  await dialog.locator('.session-cost-head').click();
+  await dialog.getByTestId('session-cost-model').nth(19).scrollIntoViewIfNeeded();
   await page.screenshot({ path: `/tmp/walnut-session-cost/budget/${testInfo.project.name}-dense-320.png` });
-  current = { ...current, verifiedCostUsd: null, unverifiedCalls: 1,
-    budget: { ...current.budget, spentUsd: null, state: 'unverified', reason: 'cost_unverified' } };
-  await expect(dialog.getByText('Unverified', { exact: true }).first()).toBeVisible({ timeout: 12_000 });
-  await expect(dialog.getByText('Paused: cost unverified')).toBeVisible();
+  // A request on a model with no price pauses the session; the host says which model.
+  current = { ...current, budget: { ...current.budget, state: 'paused', reason: 'unpriced', unpricedModel: 'example-new-model', unpricedResponses: 1,
+    pausedAt: new Date().toISOString(), pauseId: 'pause-1' } };
+  await expect(dialog.getByText('Paused: a request on example-new-model has no price').first()).toBeVisible({ timeout: 12_000 });
   await dialog.getByRole('button', { name: 'Close', exact: true }).click();
-  await expect(panel.locator('.session-budget-status')).toContainText('Paused: cost unverified');
+  await expect(panel.locator('.session-budget-status')).toContainText('Paused: a request on example-new-model has no price');
   await panel.locator('.session-budget-status').getByRole('button', { name: 'Usage & Budget' }).click();
   offline = true;
   await expect(dialog.getByRole('button', { name: 'Retry refresh' })).toBeVisible({ timeout: 12_000 });

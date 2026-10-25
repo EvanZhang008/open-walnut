@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdtemp, mkdir, rm, writeFile, appendFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { bucketRows, parseOpenCodeExport, resetSessionCostCachesForTests, scanSessionCost } from '../../src/providers/session-cost-core.js';
+import { bucketRows, foldCodexRollout, parseCodexRollout, parseOpenCodeExport, resetSessionCostCachesForTests, scanSessionCost } from '../../src/providers/session-cost-core.js';
 
 let root: string;
 const SID = '11111111-2222-4333-8444-555555555555';
@@ -147,6 +147,42 @@ describe('codex rollout', () => {
     expect(sol).toMatchObject({ responses: 1, input: 100, cacheRead: 0, cacheWrite: 800, output: 100, band: 0 });
     const luna = scan.buckets.find(b => b.model === 'gpt-6-luna')!;
     expect(luna).toMatchObject({ responses: 1, input: 9_000, cacheRead: 290_000, output: 1_000, band: 3 });
+  });
+
+  it('reads only what a growing rollout gained, a half-written line included, and starts over on a new file', async () => {
+    const file = path.join(root, 'rollout.jsonl');
+    const ctx = { timestamp: '2026-10-12T23:22:44.000Z', type: 'turn_context', payload: { model: 'openai.gpt-6.1-sol', note: '\u00e9\u4e2d' } };
+    const call = (n: number) => count(n * 1_000, { input_tokens: 900, cached_input_tokens: 100, output_tokens: 100 }, '2026-10-12T23:22:45.000Z');
+    await lines(file, [ctx, call(1), call(2)]);
+    const first = await foldCodexRollout(file);
+    expect(first.rows).toHaveLength(2);
+    // A line Codex is still writing waits for its newline; a repeat of the last total is still a repeat.
+    const whole = JSON.stringify(call(3));
+    await appendFile(file, JSON.stringify(call(2)) + '\n' + whole.slice(0, 40));
+    const second = await foldCodexRollout(file, first);
+    expect(second.rows).toHaveLength(2);
+    expect(second.offset).toBeGreaterThan(first.offset);
+    await appendFile(file, whole.slice(40) + '\n');
+    const third = await foldCodexRollout(file, second);
+    expect(third.rows).toHaveLength(3);
+    expect(third.rows.map(r => r.model)).toEqual(['gpt-6-1-sol', 'gpt-6-1-sol', 'gpt-6-1-sol']);
+    expect(first.rows).toHaveLength(2);
+    // The same rows as a full read.
+    expect(third.rows).toEqual(await parseCodexRollout(file));
+    // A replaced file (another inode) is read from the start.
+    await rm(file);
+    await lines(file, [ctx, call(9)]);
+    expect((await foldCodexRollout(file, third)).rows).toHaveLength(1);
+  });
+
+  it('splits on newline bytes, so a chunk ending inside a character loses nothing', async () => {
+    const file = path.join(root, 'wide.jsonl');
+    // Lines past the 4 MB read chunk, full of three-byte characters.
+    const pad = '\u4e2d'.repeat(400_000);
+    const rows: unknown[] = [{ timestamp: 't', type: 'turn_context', payload: { model: 'openai.gpt-6.1-sol', pad } }];
+    for (let i = 1; i <= 6; i++) rows.push({ ...count(i * 1_000, { input_tokens: 900, output_tokens: 100 }, 't'), pad });
+    await lines(file, rows);
+    expect((await foldCodexRollout(file)).rows).toHaveLength(6);
   });
 
   it('reports a missing rollout instead of an empty bill', async () => {

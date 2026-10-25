@@ -68,7 +68,7 @@ import type { SessionManager } from './session-manager.js'
 import type { DaemonTaskState } from './daemon-connection.js'
 import { checkCwdExists, CwdMissingError } from './cwd-check.js'
 import { isWakeupArmed } from './daemon-fold.js'
-import { classifyDeliveryFailure, isDaemonCommandOutcomeUnknown, SendHeldError, SendOutcomeUnknownError } from './delivery-failure.js'
+import { BudgetCheckingError, BudgetPausedError, classifyDeliveryFailure, isDaemonCommandOutcomeUnknown, SendHeldError, SendOutcomeUnknownError } from './delivery-failure.js'
 import { describeClaudeLaunchFailure } from './host-runtime-core.js'
 import { AcpSession, emitAcpIdentityBoundary, sessionMcpServerToAcp, splitAcpModelId } from './acp-session.js'
 import { engineCaps, isAcpEngine, resolveEngine } from '../core/agents/engine-registry.js'
@@ -8925,6 +8925,8 @@ export class SessionRunner {
   private activeProcessingTimers = new Map<string, ReturnType<typeof setTimeout>>()
   /** One bounded retry per held session, tied to the same live process and stop fence. */
   private heldSendRetries = new Map<string, HeldSendRetry>()
+  /** Sends the host's budget had not decided yet ('checking'), sent again on a clock (armBudgetRetry). */
+  private budgetRetries = new Map<string, { timer?: ReturnType<typeof setTimeout>; tries: number }>()
   /** Unregisters this runner from reclaimed-line announcements (line-consumption.ts). */
   private stopReclaimListener?: () => void
   /** Explicit ACP interrupt barrier. A cancelled turn may emit its terminal
@@ -9290,6 +9292,9 @@ export class SessionRunner {
           log.session.info('bare interrupt requested', { sessionId })
           const acp = this.findAcpSession(sessionId)
           if (acp) {
+            // A send the budget held must not go out after the Stop either.
+            this.cancelBudgetRetry(sessionId)
+            if (acp.sessionId) this.cancelBudgetRetry(acp.sessionId)
             this.acpAbortInProgress.add(sessionId)
             try { await this.acpContract(acp).abortTurn() }
             catch (err) { log.session.warn('bare interrupt: acp abort failed', { sessionId, error: err instanceof Error ? err.message : String(err) }) }
@@ -9555,6 +9560,7 @@ export class SessionRunner {
     this.stopReclaimListener?.()
     this.stopReclaimListener = undefined
     for (const sid of this.heldSendRetries.keys()) this.cancelHeldSendRetry(sid)
+    for (const sid of [...this.budgetRetries.keys()]) this.cancelBudgetRetry(sid)
     for (const [, session] of this.sessions) {
       session.detach()
     }
@@ -9600,6 +9606,7 @@ export class SessionRunner {
     this.stopReclaimListener?.()
     this.stopReclaimListener = undefined
     for (const sid of this.heldSendRetries.keys()) this.cancelHeldSendRetry(sid)
+    for (const sid of [...this.budgetRetries.keys()]) this.cancelBudgetRetry(sid)
     for (const [, session] of this.sessions) {
       session.kill()
     }
@@ -10552,16 +10559,27 @@ export class SessionRunner {
       // The durable prompt fact now owns recovery. Remove the queue copy before
       // releasing terminal drain; a terminal frame can race this exact await.
       await removeProcessed(deliverySessionId, [message.id])
+      this.cancelBudgetRetry(deliverySessionId)
       bus.emit(EventNames.SESSION_MESSAGES_DELIVERED, {
         sessionId: deliverySessionId, count: 1, messageIds: [message.id],
       }, ['main-ai'], { source: 'session-runner' })
     } catch (err) {
       this.clearActiveProcessing(sessionId, { kind: 'stopped' })
       const deliverySessionId = session.sessionId ?? sessionId
-      await revertToPending(msgs.map((queued) => ({
-        ...queued,
-        sessionId: deliverySessionId,
-      })))
+      const rows = msgs.map((queued) => ({ ...queued, sessionId: deliverySessionId }))
+      // A paused budget parks the turn for the user (raise or remove the limit, then Retry);
+      // one the host is still checking goes back to pending and is sent again shortly.
+      if (err instanceof BudgetPausedError) {
+        this.cancelBudgetRetry(deliverySessionId)
+        await parkMessages(rows, classifyDeliveryFailure(err).reason).catch(() => {})
+        reportBatchFailed(deliverySessionId, rows.map((m) => m.id), classifyDeliveryFailure(err).reason)
+      } else {
+        await revertToPending(rows)
+        if (err instanceof BudgetCheckingError) {
+          reportBatchFailed(deliverySessionId, rows.map((m) => m.id), err.message)
+          this.armBudgetRetry(deliverySessionId)
+        }
+      }
       throw err
     } finally {
       releaseSettlement()
@@ -11383,6 +11401,7 @@ export class SessionRunner {
 
   private interruptNativeSession(sessionId: string): Promise<void> {
     this.cancelHeldSendRetry(sessionId)
+    this.cancelBudgetRetry(sessionId)
     const existing = this.nativeInterrupts.get(sessionId)
     if (existing) return existing
     const session = this.findSessionByClaudeId(sessionId)
@@ -11637,7 +11656,7 @@ export class SessionRunner {
         this.settleResumeFailure(sessionId, newMsgs, error instanceof Error ? error : new Error(String(error)))
         return
       }
-      if (delivered) this.cancelHeldSendRetry(sessionId)
+      if (delivered) { this.cancelHeldSendRetry(sessionId); this.cancelBudgetRetry(sessionId) }
       // The daemon or the CLI already knew this line's end (a Stop cancelled it, or the
       // CLI dropped it): writeMessage settled the rows and told the user.
       if (delivered && known && known.fate !== 'ran' && known.fate !== 'waiting') {
@@ -11769,6 +11788,7 @@ export class SessionRunner {
   // copy keeps the rows for that process instead of removing them.
   private settleResumeSuccess(sessionId: string, session: ClaudeCodeSession, msgs: QueuedMessage[],
     first: { lineUuid?: string; line?: SpawnLineOutcome; endsBefore?: number } = {}): void {
+    this.cancelBudgetRetry(sessionId)
     const ids = msgs.map((m) => m.id)
     const known = first.line?.fate
     if (known && known.fate !== 'waiting' && first.lineUuid) {
@@ -11832,6 +11852,7 @@ export class SessionRunner {
     // failure path awaits the same way). batch-failed is what offers Retry, and a
     // Retry that ran while the batch still read 'processing' picked nothing up,
     // leaving the message pending with no send to deliver it.
+    if (verdict.kind === 'permanent') this.cancelBudgetRetry(sessionId)
     const settled = verdict.kind === 'permanent' ? parkMessages(msgs, verdict.reason)
       : unanswered ? revertIfQueued(msgs) : revertToPending(msgs)
     void settled.catch(() => {}).then(async () => {
@@ -11840,6 +11861,7 @@ export class SessionRunner {
         ? (await getQueue(sessionId)).filter((m) => ids.has(m.id)).map((m) => m.id)
         : msgs.map((m) => m.id)
       if (failed.length > 0) reportBatchFailed(sessionId, failed, err.message)
+      if (err instanceof BudgetCheckingError) this.armBudgetRetry(sessionId)
       // errorKind 'delivery_failed' = connectivity status, NOT a turn outcome.
       // Consumers (server.ts chat persist, hook dispatcher, push notify, and the
       // session-runner's own handler) all short-circuit on it: no batch-completed,
@@ -12366,7 +12388,7 @@ export class SessionRunner {
    */
   private deliverRest(sessionId: string): void {
     void getQueue(sessionId).then((rows) => {
-      if (!rows.some((m) => m.status === 'pending')) { this.cancelHeldSendRetry(sessionId); return }
+      if (!rows.some((m) => m.status === 'pending')) { this.cancelHeldSendRetry(sessionId); this.cancelBudgetRetry(sessionId); return }
       return this.activeProcessing.has(sessionId) ? this.injectMidTurn(sessionId) : this.processNext(sessionId)
     }).catch((err) => log.session.warn('delivering the rest of the queue failed', {
       sessionId, error: err instanceof Error ? err.message : String(err),
@@ -12490,6 +12512,7 @@ export class SessionRunner {
     revokeEchoClaims(sessionId, msgs.map((m) => m.id))
     if (stopped) {
       this.cancelHeldSendRetry(sessionId)
+      this.cancelBudgetRetry(sessionId)
       const parked = await parkIfQueued(msgs, 'Session stopped by user; retry explicitly to send').catch(() => [])
       if (parked.length > 0) reportBatchFailed(sessionId, parked.map((m) => m.id), 'Stopped before delivery was confirmed; retry to send')
       return
@@ -12497,9 +12520,45 @@ export class SessionRunner {
     await revertIfQueued(msgs).catch(() => {})
     const ids = new Set(msgs.map((m) => m.id))
     const left = (await getQueue(sessionId)).filter((m) => ids.has(m.id) && m.status === 'pending')
-    if (left.length === 0) { this.cancelHeldSendRetry(sessionId); return }
+    if (left.length === 0) { this.cancelHeldSendRetry(sessionId); this.cancelBudgetRetry(sessionId); return }
     reportBatchFailed(sessionId, left.map((m) => m.id), err.message)
-    this.armHeldSendRetry(sessionId, left)
+    // A budget still being checked holds the line on a clock of its own: the held-send
+    // retry needs a live pipe, and a cold resume refused this way has none.
+    if (err instanceof BudgetCheckingError) this.armBudgetRetry(sessionId)
+    else this.armHeldSendRetry(sessionId, left)
+  }
+
+  /**
+   * Send the queue again after the host answered that the session's budget was not
+   * decided yet: 5 s, doubling to 30 s, at most eight times in a row (about three
+   * minutes), then the rows wait for the user's Retry like any failed send. The
+   * delivery re-checks the stop fence and the queue itself (processNext, deliverRest).
+   */
+  private armBudgetRetry(sessionId: string): void {
+    if (this.acpDestroyed) return
+    const entry = this.budgetRetries.get(sessionId) ?? { tries: 0 }
+    if (entry.timer) return
+    if (entry.tries >= 8) {
+      log.session.warn('budget still undecided after eight retries; the message waits for Retry', { sessionId })
+      this.budgetRetries.delete(sessionId)
+      return
+    }
+    const delay = Math.min(30_000, 5_000 * 2 ** entry.tries)
+    entry.tries += 1
+    entry.timer = setTimeout(() => {
+      entry.timer = undefined
+      if (this.acpDestroyed || this.budgetRetries.get(sessionId) !== entry) return
+      log.session.info('sending again after the budget check', { sessionId, attempt: entry.tries })
+      this.deliverRest(sessionId)
+    }, delay)
+    entry.timer.unref?.()
+    this.budgetRetries.set(sessionId, entry)
+  }
+
+  private cancelBudgetRetry(sessionId: string): void {
+    const entry = this.budgetRetries.get(sessionId)
+    if (entry?.timer) clearTimeout(entry.timer)
+    this.budgetRetries.delete(sessionId)
   }
 
   private async processNextNow(sessionId: string, mode?: string): Promise<void> {
@@ -12749,7 +12808,7 @@ export class SessionRunner {
           await this.settleUnansweredLine(sessionId, msgs, error, target.stopEpoch !== stops)
           return
         }
-        if (written) this.cancelHeldSendRetry(sessionId)
+        if (written) { this.cancelHeldSendRetry(sessionId); this.cancelBudgetRetry(sessionId) }
         if (written && known && known.fate !== 'waiting') {
           // Nothing was written: the CLI already ran the line (a resend after a
           // restart), a Stop cancelled it, or the CLI dropped it. writeMessage

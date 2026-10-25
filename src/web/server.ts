@@ -681,6 +681,7 @@ let threadAiHandles: Array<{ stop: () => void }> = []
 let autoRecoverHandle: { stop: () => void } | null = null
 /** Primary box only: daily retirement of completed pins (core/task-pin-retirement.ts). */
 let pinRetirementHandle: import('../core/periodic-task.js').PeriodicHandle | null = null
+let budgetLettersHandle: import('../core/periodic-task.js').PeriodicHandle | null = null
 let claudeSettingsWatcherStop: (() => void) | null = null
 /** Unhooks the host-connected → publishRecovery listener (daemon-connection's
  *  listener set is module-global, so an in-process restart must not stack them). */
@@ -3618,6 +3619,25 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         kick.unref?.()
       } catch (err) {
         log.web.warn('pin retirement wiring failed — completed pins will not retire', {
+          error: err instanceof Error ? err.message : String(err),
+        })
+      }
+    })()
+  }
+
+  // Session budgets: the daemons pause sessions on their own hosts; the leader
+  // tells the user about each pause once (one bounded list call per host).
+  if (bootPolicy('budget-letters')) {
+    void (async () => {
+      try {
+        const { sweepSessionBudgets } = await import('../core/usage/session-budget.js')
+        const { runPeriodic } = await import('../core/periodic-task.js')
+        budgetLettersHandle = runPeriodic('budget-letters', 30_000, 20_000, async (ctx) => {
+          const report = await sweepSessionBudgets({ shouldStop: () => ctx.overBudget() })
+          if (report.sent > 0) log.web.info('budget pause letters sent', report)
+        })
+      } catch (err) {
+        log.web.warn('budget letter wiring failed; budget pauses will not reach the inbox', {
           error: err instanceof Error ? err.message : String(err),
         })
       }
@@ -6562,6 +6582,10 @@ export async function stopServer(): Promise<void> {
     companionCardsHandle = null
   }
   stopMobileEventsFeed()
+  if (budgetLettersHandle) {
+    budgetLettersHandle.stop()
+    budgetLettersHandle = null
+  }
   if (pinRetirementHandle) {
     pinRetirementHandle.stop()
     pinRetirementHandle = null

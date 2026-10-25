@@ -17,8 +17,7 @@ let hidden: boolean;
 let sequence = 0;
 let latest: ReturnType<typeof useSessionBudgetUsage>;
 const data = (id = sid, limitUsd: number | null = null): SessionUsage => ({
-  sessionId: id, title: 'Session allowance', verifiedCostUsd: 2, verifiedCalls: 4, unverifiedCalls: 0,
-  byAgent: [], byModel: [], checkedAt: null,
+  sessionId: id, title: 'Session allowance', engine: 'claude', checkEverySec: 2, checkedAt: null,
   budget: { limitUsd, spentUsd: 2, revision: 1, state: limitUsd === null ? 'unlimited' : 'active', reason: null, updatedAt: null },
 });
 function Probe() { latest = useSessionBudgetUsage(sid, visible); return null; }

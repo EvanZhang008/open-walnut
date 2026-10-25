@@ -6,9 +6,10 @@ import type { SessionUsageView } from '@/hooks/useSessionBudgetUsage';
 import { useModalOverlay } from '@/hooks/useModalOverlay';
 import { useDialogFocus } from '@/hooks/useDialogFocus';
 import {
-  breakdownCost, budgetPauseLabel, draftFromUsage, formatUsageCost, parseBudgetLimit,
-  reconcileBudgetDraft, remainingAllowance, verifiedLifetimeCost, type BudgetDraft,
+  budgetPauseLabel, checkCadence, draftFromUsage, formatUsageCost, parseBudgetLimit,
+  reconcileBudgetDraft, remainingAllowance, type BudgetDraft,
 } from './session-usage-model';
+import { SessionCostBlock } from './SessionCostBlock';
 import '@/styles/session-usage.css';
 
 interface SessionUsageDialogProps {
@@ -87,7 +88,7 @@ export function SessionUsageDialog({ sessionId, title, usage, onClose }: Session
     }
   };
 
-  const total = data ? verifiedLifetimeCost(data) : null;
+  const spent = data ? data.budget.spentUsd : null;
   const remaining = data ? remainingAllowance(data) : null;
   const parsed = draft ? parseBudgetLimit(draft.text) : null;
   const pauseLabel = budgetPauseLabel(data);
@@ -101,31 +102,28 @@ export function SessionUsageDialog({ sessionId, title, usage, onClose }: Session
           </div>
           <button type="button" className="session-usage-close" aria-label="Close Usage & Budget" onClick={onClose}>×</button>
         </header>
-        {!data && <p role="status">{usage.loading ? 'Checking session usage…' : 'Session usage is unavailable.'}</p>}
+        {!data && <p role="status">{usage.loading ? 'Checking the budget…' : 'The budget is unavailable.'}</p>}
         {usage.error && (
           <div className="session-usage-error" role="alert">
-            <span>{data ? 'Usage could not be refreshed. Showing the last check. ' : ''}{usage.error}</span>
+            <span>{data ? 'The budget could not be refreshed. Showing the last check. ' : ''}{usage.error}</span>
             <button type="button" className="app-modal-btn" disabled={usage.loading} onClick={() => void usage.refresh()}>{usage.loading ? 'Refreshing…' : 'Retry refresh'}</button>
           </div>
         )}
         {data && (
           <>
-            <section className="session-usage-total" aria-label="Lifetime usage">
-              <span className="session-usage-label">Lifetime cost</span>
-              <strong>{formatUsageCost(total)}</strong>
-              <span className="session-usage-hint">{data.verifiedCalls} verified {data.verifiedCalls === 1 ? 'call' : 'calls'}{data.unverifiedCalls > 0 ? ` · ${data.unverifiedCalls} unverified` : ''}</span>
-              {total === null && data.verifiedCostUsd !== null && Number.isFinite(data.verifiedCostUsd) && data.verifiedCostUsd >= 0 && (
-                <span className="session-usage-hint">Known verified portion: {formatUsageCost(data.verifiedCostUsd)}. Not the lifetime total.</span>
-              )}
+            <section className="session-usage-total" aria-label="Spent so far">
+              <span className="session-usage-label">Spent so far</span>
+              <strong>{data.budget.limitUsd === null ? 'No budget set' : formatUsageCost(spent)}</strong>
+              {data.budget.limitUsd !== null && <span className="session-usage-hint">{data.budget.responses} {data.budget.responses === 1 ? 'request' : 'requests'}{data.budget.unpricedResponses > 0 ? ` · ${data.budget.unpricedResponses} without a price` : ''}</span>}
             </section>
             <form className="session-usage-budget" onSubmit={event => { event.preventDefault(); void save(); }}>
-              <label htmlFor={`${labelId}-limit`}>Total lifetime limit (USD)</label>
+              <label htmlFor={`${labelId}-limit`}>Budget for this session (USD)</label>
               <div className="session-usage-edit-row">
                 <input id={`${labelId}-limit`} className="app-modal-input" type="text" inputMode="decimal" autoComplete="off" placeholder="No limit" value={draft?.text ?? ''} disabled={!draft || usage.saving} aria-describedby={`${helpId}${saveError ? ` ${errorId}` : ''}`} aria-invalid={draft?.dirty && parsed?.valid === false ? true : undefined}
                   onChange={event => { const text = event.target.value; setDraft(current => current ? { ...current, text, dirty: true } : current); setSaved(false); if (!conflictPending) setSaveError(null); }} />
                 <button type="submit" className="app-modal-btn primary" disabled={!draft?.dirty || usage.saving || conflictPending}>{usage.saving ? 'Saving…' : 'Save limit'}</button>
               </div>
-              <p id={helpId} className="session-usage-hint">Includes prior spending and subagents. Never resets. Leave blank for no limit.</p>
+              <p id={helpId} className="session-usage-hint">Counts every request the session made, priced like the cost in the model picker. Never resets. At the limit, or on a request with no price, the session is stopped and you get an inbox letter. Leave blank for no limit.</p>
               {draft?.dirty && parsed?.valid === false && <p className="session-usage-error-text">{parsed.error}</p>}
               <div className="session-usage-budget-facts">
                 <span>Saved limit: {data.budget.limitUsd === null ? 'No limit' : formatUsageCost(data.budget.limitUsd)}</span>
@@ -133,21 +131,15 @@ export function SessionUsageDialog({ sessionId, title, usage, onClose }: Session
                 {data.budget.limitUsd !== null && <button type="button" className="session-usage-text-button" disabled={usage.saving || conflictPending} onClick={() => void save(true)}>Remove limit</button>}
               </div>
               {pauseLabel && <p className="session-usage-paused" role="status">{pauseLabel}</p>}
+              {data.budget.checkError && <p className="session-usage-error-text" role="alert">Usage could not be read: {data.budget.checkError} Messages wait until it can be; after a minute the session is paused.</p>}
               {data.budget.stopError && <p className="session-usage-error-text" role="alert">Stop could not be confirmed. The session may still be running. {data.budget.stopError}</p>}
               {saveError && <div id={errorId} className="session-usage-error" role="alert"><span>{saveError}</span>{conflictPending && <button type="button" className="app-modal-btn" disabled={usage.loading} onClick={() => void refreshConflict()}>{usage.loading ? 'Refreshing…' : 'Refresh budget'}</button>}</div>}
               {saved && <p className="session-usage-hint" role="status">Budget saved. No message was sent. Send your next message when ready.</p>}
             </form>
-            <section className="session-usage-breakdown" aria-label="Usage by agent">
-              <h3>By agent</h3>
-              {data.byAgent.length === 0 && <p className="session-usage-hint">No recorded calls yet.</p>}
-              {data.byAgent.map(row => <UsageRow key={row.agent} label={row.agent === 'main' ? 'Main agent' : 'Subagents'} cost={formatUsageCost(breakdownCost(row))} calls={row.calls} unverified={row.unverifiedCalls} />)}
+            <section className="session-usage-breakdown" aria-label="Cost by model">
+              <SessionCostBlock sessionId={sessionId} budgetRow={false} />
             </section>
-            <section className="session-usage-breakdown" aria-label="Usage by model">
-              <h3>By model</h3>
-              {data.byModel.length === 0 && <p className="session-usage-hint">No recorded calls yet.</p>}
-              {data.byModel.map(row => <UsageRow key={row.model} label={row.model || 'Unknown model'} cost={formatUsageCost(breakdownCost(row))} calls={row.calls} unverified={row.unverifiedCalls} />)}
-            </section>
-            <p className="session-usage-hint session-usage-disclaimer">Estimated from token usage, not an invoice. In-flight requests may exceed the allowance. Raising or removing a limit does not send a message.</p>
+            <p className="session-usage-hint session-usage-disclaimer">{checkCadence(data)} Estimated from token usage, not an invoice. Requests in flight may pass the limit. Raising or removing a limit does not send a message.</p>
             {data.checkedAt && <p className="session-usage-hint">Last checked: {new Date(data.checkedAt).toLocaleString()}</p>}
           </>
         )}
@@ -155,8 +147,4 @@ export function SessionUsageDialog({ sessionId, title, usage, onClose }: Session
       </div>
     </div>, document.body,
   );
-}
-
-function UsageRow({ label, cost, calls, unverified }: { label: string; cost: string; calls: number; unverified: number }) {
-  return <div className="session-usage-row"><div><span className="session-usage-row-name">{label}</span><span className="session-usage-hint">{calls} {calls === 1 ? 'call' : 'calls'}{unverified > 0 ? ` · ${unverified} unverified` : ''}</span></div><span className="session-usage-row-cost">{cost}</span></div>;
 }

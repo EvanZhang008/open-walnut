@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useSyncExternalStore } from 'react';
+import { createContext, useCallback, useContext, useEffect, useSyncExternalStore } from 'react';
 import { fetchSessionUsage, patchSessionBudget } from '@/api/session-usage';
 import { SessionUsageStore } from '@/stores/session-usage-store';
 import { useEvent } from '@/hooks/useWebSocket';
@@ -12,7 +12,8 @@ export function useSessionBudgetUsage(sessionId: string, dialogVisible: boolean)
   const refresh = useCallback(() => sessionUsageStore.refresh(sessionId), [sessionId]);
   const save = useCallback((limitUsd: number | null, revision: number) => sessionUsageStore.save(sessionId, limitUsd, revision), [sessionId]);
   const configured = snapshot.data?.budget.limitUsd != null;
-  const needsRetry = !snapshot.data;
+  // An engine without per-request usage (400) or a session the server does not know (404) has no budget to wait for.
+  const needsRetry = !snapshot.data && snapshot.errorStatus !== 400 && snapshot.errorStatus !== 404;
 
   useEffect(() => { void refresh(); }, [refresh, dialogVisible]);
   useEffect(() => {
@@ -38,3 +39,7 @@ export function useSessionBudgetUsage(sessionId: string, dialogVisible: boolean)
 }
 
 export type SessionUsageView = ReturnType<typeof useSessionBudgetUsage>;
+
+/** Opens the session's Usage & Budget dialog; provided by SessionPanel, read by the picker's cost block. */
+export const SessionUsageOpenContext = createContext<((sessionId: string) => void) | null>(null);
+export function useOpenSessionUsage() { return useContext(SessionUsageOpenContext); }

@@ -21,7 +21,6 @@ import { constants } from 'node:fs';
 import { lstat, open, readdir, realpath, stat } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { createInterface } from 'node:readline';
 import { normalizeUsageModel, scanCanonicalSessionUsage, type CanonicalCostState, type SessionFoldState } from './usage-scan-core.js';
 
 export interface SessionCostRequest {
@@ -217,43 +216,74 @@ async function codexRollout(codexHome: string, sessionId: string): Promise<strin
   return undefined;
 }
 
-export async function parseCodexRollout(file: string): Promise<UsageRow[]> {
-  const rows: UsageRow[] = [];
+/** What a Codex rollout read so far: a file that only grew is read from where the last read ended. */
+export interface CodexFold { dev: number; ino: number; offset: number; model: string; lastTotal?: number; rows: UsageRow[] }
+
+const CODEX_CHUNK = 4 * 1024 * 1024;
+
+function foldCodexLine(fold: CodexFold, line: string): void {
+  const isCount = line.includes('"token_count"');
+  if (!isCount && !line.includes('"turn_context"')) return;
+  let row: { type?: string; timestamp?: string; payload?: Record<string, unknown> };
+  try { row = JSON.parse(line); } catch { return; }
+  const payload = row.payload;
+  if (!payload || typeof payload !== 'object') return;
+  if (row.type === 'turn_context') {
+    if (typeof payload.model === 'string' && payload.model) fold.model = normalizeUsageModel(payload.model);
+    return;
+  }
+  if (payload.type !== 'token_count') return;
+  const info = payload.info as { total_token_usage?: Record<string, unknown>; last_token_usage?: Record<string, unknown> } | null;
+  const total = finite(info?.total_token_usage?.total_tokens);
+  const last = info?.last_token_usage;
+  // The same call is reported again (a rate-limit refresh) with an unchanged total.
+  if (!last || total === 0 || total === fold.lastTotal) return;
+  fold.lastTotal = total;
+  const prompt = finite(last.input_tokens);
+  const cached = Math.min(finite(last.cached_input_tokens), prompt);
+  const written = Math.min(finite(last.cache_write_input_tokens), prompt - cached);
+  fold.rows.push({
+    model: fold.model, input: prompt - cached - written, output: finite(last.output_tokens),
+    cacheRead: cached, cacheWrite5m: 0, cacheWrite1h: 0, cacheWrite: written,
+    at: typeof row.timestamp === 'string' ? row.timestamp : new Date(0).toISOString(),
+  });
+}
+
+/**
+ * Fold a Codex rollout, continuing `prior` when the file is the same one and only
+ * grew (Codex appends). Reads complete lines only: a line still being written is
+ * read next time.
+ */
+export async function foldCodexRollout(file: string, prior?: CodexFold): Promise<CodexFold> {
   const handle = await open(file, constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW);
   try {
-    if (!(await handle.stat()).isFile()) return rows;
-    const lines = createInterface({ input: handle.createReadStream({ encoding: 'utf8', autoClose: false }), crlfDelay: Infinity });
-    let model = 'unknown';
-    let lastTotal: number | undefined;
-    for await (const line of lines) {
-      const isCount = line.includes('"token_count"');
-      if (!isCount && !line.includes('"turn_context"')) continue;
-      let row: { type?: string; timestamp?: string; payload?: Record<string, unknown> };
-      try { row = JSON.parse(line); } catch { continue; }
-      const payload = row.payload;
-      if (!payload || typeof payload !== 'object') continue;
-      if (row.type === 'turn_context') {
-        if (typeof payload.model === 'string' && payload.model) model = normalizeUsageModel(payload.model);
-        continue;
-      }
-      if (payload.type !== 'token_count') continue;
-      const info = payload.info as { total_token_usage?: Record<string, unknown>; last_token_usage?: Record<string, unknown> } | null;
-      const total = finite(info?.total_token_usage?.total_tokens);
-      const last = info?.last_token_usage;
-      // The same call is reported again (a rate-limit refresh) with an unchanged total.
-      if (!last || total === 0 || total === lastTotal) continue;
-      lastTotal = total;
-      const prompt = finite(last.input_tokens);
-      const cached = Math.min(finite(last.cached_input_tokens), prompt);
-      const written = Math.min(finite(last.cache_write_input_tokens), prompt - cached);
-      rows.push({
-        model, input: prompt - cached - written, output: finite(last.output_tokens),
-        cacheRead: cached, cacheWrite5m: 0, cacheWrite1h: 0, cacheWrite: written,
-        at: typeof row.timestamp === 'string' ? row.timestamp : new Date(0).toISOString(),
-      });
+    const st = await handle.stat();
+    if (!st.isFile()) return { dev: st.dev, ino: st.ino, offset: 0, model: 'unknown', rows: [] };
+    const same = prior && prior.dev === st.dev && prior.ino === st.ino && st.size >= prior.offset;
+    const fold: CodexFold = same
+      ? { ...prior, rows: prior.rows.slice() }
+      : { dev: st.dev, ino: st.ino, offset: 0, model: 'unknown', rows: [] };
+    // Split on newline BYTES: a chunk may end inside a multi-byte character.
+    const buffer = Buffer.alloc(Math.min(CODEX_CHUNK, Math.max(1, st.size - fold.offset)));
+    let carry: Buffer = Buffer.alloc(0);
+    let position = fold.offset;
+    while (position < st.size) {
+      const { bytesRead } = await handle.read(buffer, 0, Math.min(buffer.length, st.size - position), position);
+      if (bytesRead === 0) break;
+      position += bytesRead;
+      const bytes = carry.length ? Buffer.concat([carry, buffer.subarray(0, bytesRead)]) : buffer.subarray(0, bytesRead);
+      const cut = bytes.lastIndexOf(0x0a);
+      if (cut < 0) { carry = Buffer.from(bytes); continue; }
+      for (const line of bytes.toString('utf8', 0, cut).split('\n')) foldCodexLine(fold, line);
+      carry = Buffer.from(bytes.subarray(cut + 1));
+      fold.offset = position - carry.length;
     }
+    return fold;
   } finally { await handle.close().catch(() => {}); }
-  return rows;
+}
+
+export async function parseCodexRollout(file: string): Promise<UsageRow[]> {
+  return (await foldCodexRollout(file)).rows;
 }
 
 // ── OpenCode ────────────────────────────────────────────────────────────────
@@ -306,11 +336,13 @@ interface CacheEntry { stamp: string; result: SessionCostScan; at: number }
 type ClaudeFold = Awaited<ReturnType<typeof scanClaude>>;
 /** Each session's fold so far (a transcript that grew is read from its last offset). */
 const folds = new Map<string, SessionFoldState>();
-const FOLD_LIMIT = 4;
+/** Folds kept (a budget checks each of its sessions every few seconds; an evicted fold is a full reread). */
+const FOLD_LIMIT = 32;
+const codexFolds = new Map<string, { file: string; fold: CodexFold }>();
 const claudeJobs = new Map<string, { promise: Promise<Pick<ClaudeFold, 'rows' | 'engineTotals'>>; progress: { read: number }; totalBytes: number; stamp: string }>();
 
 /** Test seam: forget every cached result and fold. */
-export function resetSessionCostCachesForTests(): void { cache.clear(); folds.clear(); claudeJobs.clear(); }
+export function resetSessionCostCachesForTests(): void { cache.clear(); folds.clear(); claudeJobs.clear(); codexFolds.clear(); }
 
 async function totalSize(files: string[]): Promise<number> {
   let total = 0;
@@ -394,7 +426,12 @@ export async function scanSessionCost(req: SessionCostRequest): Promise<SessionC
     const stamp = await stampOf([file]);
     const hit = cache.get(key);
     if (hit && hit.stamp === stamp) return { ...hit.result, scanMs: Date.now() - started };
-    const result = done({ source: 'codex-rollout', found: true, files: 1 }, await parseCodexRollout(file));
+    const prior = codexFolds.get(req.sessionId);
+    const fold = await foldCodexRollout(file, prior?.file === file ? prior.fold : undefined);
+    codexFolds.delete(req.sessionId);
+    codexFolds.set(req.sessionId, { file, fold });
+    while (codexFolds.size > FOLD_LIMIT) codexFolds.delete(codexFolds.keys().next().value!);
+    const result = done({ source: 'codex-rollout', found: true, files: 1 }, fold.rows);
     remember(key, { stamp, result, at: Date.now() });
     return result;
   }

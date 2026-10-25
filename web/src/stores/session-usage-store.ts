@@ -5,6 +5,8 @@ export interface SessionUsageSnapshot {
   loading: boolean;
   saving: boolean;
   error: string | null;
+  /** The HTTP status of the last failed read (400: this engine has no budget). */
+  errorStatus?: number;
 }
 interface UsageClient {
   fetch: (sessionId: string, signal: AbortSignal) => Promise<SessionUsage>;
@@ -58,10 +60,10 @@ export class SessionUsageStore {
     const pending = this.client.fetch(sessionId, controller.signal).then((data) => {
       if (generation !== entry.generation) return null;
       const accepted = this.accept(sessionId, entry, data);
-      this.publish(entry, { data: accepted, error: null });
+      this.publish(entry, { data: accepted, error: null, errorStatus: undefined });
       return accepted;
     }).catch((error: unknown) => {
-      if (generation === entry.generation) this.publish(entry, { error: messageOf(error) });
+      if (generation === entry.generation) this.publish(entry, { error: messageOf(error), errorStatus: (error as { status?: number })?.status });
       return null;
     }).finally(() => {
       if (generation !== entry.generation) return;

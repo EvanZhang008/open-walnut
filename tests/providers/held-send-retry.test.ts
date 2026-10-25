@@ -7,12 +7,13 @@ vi.mock('../../src/providers/cloud-session-link.js', () => ({ CloudSessionLink: 
 
 import { getQueue, enqueueMessage, markProcessing, removeProcessed } from '../../src/core/session-message-queue.js'
 import { updateSessionRecord } from '../../src/core/session-tracker.js'
-import { SendHeldError, SendOutcomeUnknownError } from '../../src/providers/delivery-failure.js'
+import { BudgetCheckingError, BudgetPausedError, SendHeldError, SendOutcomeUnknownError } from '../../src/providers/delivery-failure.js'
 import { harness, probeSetup, probeTeardown, SID, type Harness } from '../helpers/runner-probe-harness.js'
 
 type RetryInternals = {
   settleUnansweredLine(sid: string, rows: Awaited<ReturnType<typeof getQueue>>, error: Error, stopped: boolean): Promise<void>
   heldSendRetries: Map<string, { delay: number; timer?: ReturnType<typeof setTimeout> }>
+  budgetRetries: Map<string, { tries: number; timer?: ReturnType<typeof setTimeout> }>
   deliverRest(sid: string): void
   sessions: Map<string, Harness['session']>
 }
@@ -157,5 +158,100 @@ describe('held native sends retry the oldest existing queue line', () => {
     await vi.advanceTimersByTimeAsync(30_000)
     expect(deliver).toHaveBeenCalledOnce()
     expect(internals.heldSendRetries.size).toBe(0)
+  })
+})
+
+describe('a send the host budget had not decided yet is sent again on a clock', () => {
+  it('retries even with no live process, backing off, and gives up after eight tries', async () => {
+    Object.assign(h.session, { _active: false })
+    const rows = await hold(new BudgetCheckingError())
+    expect(internals.heldSendRetries.size).toBe(0)
+    const deliver = vi.spyOn(internals, 'deliverRest').mockImplementation(() => {})
+    const delays = [5_000, 10_000, 20_000, 30_000, 30_000, 30_000, 30_000, 30_000]
+    for (const [i, delay] of delays.entries()) {
+      await vi.advanceTimersByTimeAsync(delay - 1)
+      expect(deliver).toHaveBeenCalledTimes(i)
+      await vi.advanceTimersByTimeAsync(1)
+      expect(deliver).toHaveBeenCalledTimes(i + 1)
+      await internals.settleUnansweredLine(SID, rows, new BudgetCheckingError(), false)
+    }
+    // The ninth refusal is left for the user's Retry.
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(deliver).toHaveBeenCalledTimes(8)
+    expect(internals.budgetRetries.size).toBe(0)
+    expect((await getQueue(SID)).map((row) => row.status)).toEqual(['pending'])
+    expect(h.stop).not.toHaveBeenCalled()
+  })
+
+  it('a real runner retry sends the queued line again once the budget lets it through', async () => {
+    const old = h
+    vi.spyOn(old.session, 'detach').mockImplementation(() => {})
+    old.runner.destroy()
+    let writes = 0
+    h = harness({ running: false, lifecycle: false, script: async () => {
+      if (writes++ === 0) throw new BudgetCheckingError()
+      return true
+    } })
+    internals = h.runner as unknown as RetryInternals
+    await enqueueMessage(SID, 'first message')
+    await h.internals.processNext(SID)
+    expect(h.writes).toHaveLength(1)
+    await vi.advanceTimersByTimeAsync(5_000)
+    await vi.waitFor(async () => expect(await getQueue(SID)).toEqual([]))
+    expect(h.writes).toHaveLength(2)
+    expect(internals.budgetRetries.size).toBe(0)
+    expect(h.stop).not.toHaveBeenCalled()
+  })
+})
+
+describe('budget refusals on the cold-resume and ACP paths', () => {
+  it('a cold resume refused as checking is resumed again on the clock', async () => {
+    const old = h
+    vi.spyOn(old.session, 'detach').mockImplementation(() => {})
+    old.runner.destroy()
+    // The live write is refused (the process is gone), so the runner resumes.
+    h = harness({ running: false, script: async () => false })
+    internals = h.runner as unknown as RetryInternals
+    await enqueueMessage(SID, 'resume me')
+    await h.internals.processNext(SID)
+    await vi.waitFor(() => expect(h.resumeSettles).toHaveLength(1))
+    h.resumeSettles[0](false, new BudgetCheckingError())
+    await vi.waitFor(async () => expect((await getQueue(SID)).map((row) => row.status)).toEqual(['pending']))
+    // The rows go back to pending first; the retry is armed once the failure is reported.
+    await vi.waitFor(() => expect(internals.budgetRetries.get(SID)?.timer).toBeDefined())
+    await vi.advanceTimersByTimeAsync(5_000)
+    await vi.waitFor(() => expect(h.resumeSettles).toHaveLength(2))
+    h.resumeSettles[1](true)
+    await vi.waitFor(() => expect(internals.budgetRetries.size).toBe(0))
+    // The same message both times: the retry re-sends the queue, it never writes a new row.
+    expect(h.resumes).toEqual(['resume me', 'resume me'])
+  })
+
+  function acpTarget(error: Error) {
+    return {
+      sessionId: SID, activity: 'idle', canSteer: false,
+      establish: async () => SID, abortTurn: async () => {},
+      send: vi.fn(async () => { throw error }),
+    }
+  }
+  type AcpInternals = { drainAcpQueue(session: unknown, sid: string): Promise<void> }
+
+  it('an ACP turn refused as checking goes back to pending and is sent again', async () => {
+    await enqueueMessage(SID, 'acp message')
+    const deliver = vi.spyOn(internals, 'deliverRest').mockImplementation(() => {})
+    await expect((h.runner as unknown as AcpInternals).drainAcpQueue(acpTarget(new BudgetCheckingError()), SID)).rejects.toBeInstanceOf(BudgetCheckingError)
+    expect((await getQueue(SID)).map((row) => row.status)).toEqual(['pending'])
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(deliver).toHaveBeenCalledExactlyOnceWith(SID)
+  })
+
+  it('an ACP turn refused as paused is parked for the user and never retried', async () => {
+    await enqueueMessage(SID, 'acp message')
+    const deliver = vi.spyOn(internals, 'deliverRest').mockImplementation(() => {})
+    await expect((h.runner as unknown as AcpInternals).drainAcpQueue(acpTarget(new BudgetPausedError()), SID)).rejects.toBeInstanceOf(BudgetPausedError)
+    expect((await getQueue(SID)).map((row) => row.status)).toEqual(['parked'])
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(deliver).not.toHaveBeenCalled()
+    expect(internals.budgetRetries.size).toBe(0)
   })
 })
