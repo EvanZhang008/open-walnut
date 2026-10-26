@@ -130,6 +130,41 @@ final class AskQuestionCardUITests: XCTestCase {
         add(shot)
     }
 
+    /// Gate finding 2026-10-26: an answer that wrapped grew its field below the
+    /// box's edge, so the line being typed and the cursor went out of sight; and
+    /// dragging the cards to put the keyboard away left it stuck halfway (the box's
+    /// height follows the keyboard, so an interactive dismiss resized it under the
+    /// finger).
+    func testTypingAWrappingAnswerKeepsItInViewAndADragPutsTheKeyboardAway() {
+        let app = launch()
+        let stack = id("session.permissionStack", in: app)
+        XCTAssertTrue(stack.waitForExistence(timeout: 30))
+        let firstOther = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier == %@", "session.askQuestion.other")).element(boundBy: 0)
+        XCTAssertTrue(scrollTo(firstOther, in: app))
+        firstOther.tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        let startHeight = firstOther.frame.height
+        firstOther.typeText("First line of a long answer that keeps going well past one row,\nsecond line,\nthird line,\nfourth line where the cursor is")
+        let grown = expectation(for: NSPredicate { _, _ in firstOther.frame.height > startHeight * 2 }, evaluatedWith: nil)
+        wait(for: [grown], timeout: 5)
+        let inView = expectation(for: NSPredicate { _, _ in
+            firstOther.frame.maxY <= stack.frame.maxY + 1
+        }, evaluatedWith: nil)
+        wait(for: [inView], timeout: 5)
+        let typed = XCTAttachment(screenshot: app.screenshot())
+        typed.name = "wrapped-answer-in-view"
+        typed.lifetime = .keepAlways
+        add(typed)
+
+        // Drag through the cards (the drag every other test scrolls them with):
+        // the keyboard goes away, all the way.
+        swipeToward(stack, in: app)
+        let gone = expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: app.keyboards.firstMatch)
+        wait(for: [gone], timeout: 5)
+        XCTAssertTrue(id("askq.harness.composer", in: app).isHittable, "the composer is back once the keyboard is away")
+    }
+
     /// The regression itself: question text and option labels + descriptions are
     /// visible. Before the fix this screen showed the word "AskUserQuestion" and
     /// nothing else.

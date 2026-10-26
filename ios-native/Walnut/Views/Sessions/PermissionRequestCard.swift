@@ -16,9 +16,10 @@ struct PendingPermissionStack: View {
     var onDismissQuestions: (PendingPermission) -> Void
 
     @State private var naturalHeight: CGFloat = 0
-    /// The free-text field being typed in, kept in view when it gains focus and
-    /// when the keyboard shrinks the box.
+    /// The free-text field being typed in, kept in view when it gains focus,
+    /// when the keyboard shrinks the box, and while its text grows a line.
     @State private var focusedField: String?
+    @State private var typedInField = 0
 
     /// Share of the page the cards may take before they scroll.
     static let pageShare: CGFloat = 0.6
@@ -50,7 +51,8 @@ struct PendingPermissionStack: View {
                                 onRespond: { onRespond(request, $0) },
                                 onAnswer: { onAnswer(request, $0) },
                                 onDismissQuestions: { onDismissQuestions(request) },
-                                onFocusField: { focusedField = $0 }
+                                onFocusField: { focusedField = $0 },
+                                onTypeInField: { typedInField &+= 1 }
                             )
                         }
                     }
@@ -60,12 +62,24 @@ struct PendingPermissionStack: View {
                 .onChange(of: focusedField) { reveal(proxy) }
                 // Not on content height: picking an option elsewhere while the
                 // field keeps focus would yank the reader back to the field.
+                // Typing in it does follow it: a wrapped line grows the field
+                // below the box's edge, taking the cursor out of sight. After
+                // the layout pass, so the scroll sees the new height.
+                .onChange(of: typedInField) { DispatchQueue.main.async { reveal(proxy) } }
                 .onChange(of: cap) { reveal(proxy) }
             }
             .scrollBounceBehavior(.basedOnSize)
             .scrollIndicatorsFlash(onAppear: true)
-            .scrollDismissesKeyboard(.interactively)
+            // Not interactively: the box's own height follows the keyboard, so a
+            // drag that tracked the keyboard resized the box under the finger and
+            // left the keyboard stuck halfway down.
+            .scrollDismissesKeyboard(.immediately)
             .frame(height: min(naturalHeight, cap))
+            // A box cut mid-line sat flush on a transcript also cut mid-line;
+            // a hairline marks where the cards end while they scroll.
+            .overlay(alignment: .bottom) {
+                if naturalHeight > cap { Divider() }
+            }
             // Cards scrolled past the box's top edge stay inside it instead of
             // drawing under the navigation bar.
             .clipped()
@@ -97,6 +111,8 @@ struct PermissionRequestCard: View {
     var onDismissQuestions: (() -> Void)?
     /// The scroll id of the free-text field gaining focus, nil when it loses it.
     var onFocusField: ((String?) -> Void)?
+    /// The focused free-text field's text changed (it may have grown a line).
+    var onTypeInField: (() -> Void)?
 
     var body: some View {
         if let questions = request.askQuestions {
@@ -105,6 +121,7 @@ struct PermissionRequestCard: View {
                 answering: answering,
                 fieldScope: request.requestId,
                 onFocusField: onFocusField,
+                onTypeInField: onTypeInField,
                 onSubmit: { answers in
                     if let onAnswer { onAnswer(answers) } else { onRespond(true) }
                 },
@@ -204,6 +221,7 @@ struct AskUserQuestionCard: View {
     /// Prefix that keeps the free-text fields' scroll ids unique across cards.
     var fieldScope: String = ""
     var onFocusField: ((String?) -> Void)?
+    var onTypeInField: (() -> Void)?
     var onSubmit: ([String: String]) -> Void
     var onDismiss: () -> Void
 
@@ -253,6 +271,9 @@ struct AskUserQuestionCard: View {
         .accessibilityIdentifier("session.askQuestionCard")
         .onChange(of: focusedQuestion) { _, question in
             onFocusField?(questions.first { $0.question == question }.map(fieldID))
+        }
+        .onChange(of: otherText) { old, new in
+            if let focusedQuestion, old[focusedQuestion] != new[focusedQuestion] { onTypeInField?() }
         }
     }
 
@@ -360,6 +381,8 @@ struct AskUserQuestionCard: View {
             } label: {
                 Text("Submit")
                     .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 8)
                     .background(
@@ -376,6 +399,8 @@ struct AskUserQuestionCard: View {
             } label: {
                 Text("Dismiss")
                     .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 8)
                     .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
