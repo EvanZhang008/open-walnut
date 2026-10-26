@@ -46,15 +46,20 @@ async function open(page: Page, cold = false) {
   await page.route(`**/api/sessions/${SID}/subagent/**/history**`, route => route.fulfill({ json: { messages: [] } }));
   await page.setContent(`<a href="http://localhost:${PORT}/sessions?id=${SID}">Open session</a>`);
   await page.getByRole('link', { name: 'Open session', exact: true }).click();
-  await expect(page.locator(`.session-panel[data-session-id="${SID}"]`)).toBeVisible({ timeout: 20000 });
+  // The first spec to reach a cold fixture waits on Vite compiling the app (dev mode).
+  await expect(page.locator(`.session-panel[data-session-id="${SID}"]`)).toBeVisible({ timeout: 60_000 });
   await page.waitForFunction(() => (window as any).__indicatorWs?.readyState === WebSocket.OPEN);
 }
 
 const panel = (page: Page) => page.locator(`.session-panel[data-session-id="${SID}"]`);
-const indicator = (page: Page) => panel(page).locator('.session-background-working');
+// The subagents-only line; the after-turn background line shares its look but not this class.
+const indicator = (page: Page) => panel(page).locator('.session-background-working:not(.session-background-after)');
+const backgroundNote = (page: Page) => panel(page).locator('[data-testid="session-background-note"]');
 const ledger = (page: Page, tasks: object[], foregroundActive?: boolean) => inject(page, 'session:background-tasks', { inFlight: 0, foregroundActive, tasks, agents: [], phases: [] });
 
 test.use({ viewport: { width: 1200, height: 800 }, deviceScaleFactor: 1 });
+// A cold fixture boot alone can take most of the default 30s on a loaded box.
+test.describe.configure({ timeout: 120_000 });
 
 test('only background agents get the clickable tail status, across repeated foreground turns', async ({ page }, info) => {
   await open(page);
@@ -65,9 +70,12 @@ test('only background agents get the clickable tail status, across repeated fore
   await ledger(page, [agent('one')]);
   await expect(indicator(page)).toHaveCount(0);
   await expect(panel(page).locator('.session-working-label')).toHaveText('Claude Code is working…');
+  // The foreground turn runs beside the agent: the working line names it after itself.
+  await expect(backgroundNote(page)).toHaveText(/^·\s*1 agent in background\s*›$/);
 
   await ledger(page, [agent('one')], false);
   await inject(page, 'session:result', { result: 'Main reply complete.', isError: false });
+  await expect(backgroundNote(page)).toHaveCount(0);
   await expect(indicator(page)).toHaveText('1 subagent is working…›');
   await expect(panel(page).locator('.session-working-label')).toHaveCount(1);
   await indicator(page).scrollIntoViewIfNeeded();
@@ -98,14 +106,16 @@ test('only background agents get the clickable tail status, across repeated fore
   await expect(indicator(page)).toContainText('1 subagent is working…');
   await ledger(page, [{ ...agent('one'), status: 'completed' }, { ...agent('two'), status: 'failed' }]);
   await expect(indicator(page)).toHaveCount(0);
+  await expect(backgroundNote(page)).toHaveCount(0);
   expect(errors).toEqual([]);
 });
 
 test('cold open and reload restore the foreground final and the running agent', async ({ page }, info) => {
   await open(page, true);
-  await expect(indicator(page)).toContainText('1 subagent is working…');
+  // A cold open and a reload both wait on the ledger fetch; a loaded box takes longer than 5s.
+  await expect(indicator(page)).toContainText('1 subagent is working…', { timeout: 20_000 });
   await page.reload();
-  await expect(indicator(page)).toContainText('1 subagent is working…');
+  await expect(indicator(page)).toContainText('1 subagent is working…', { timeout: 20_000 });
   await indicator(page).scrollIntoViewIfNeeded();
   await page.screenshot({ path: `${EVIDENCE}/${info.project.name}-reload.png` });
 });
@@ -114,12 +124,22 @@ test('commands, mixed jobs, unknown foreground, permission waits, and terminal s
   await open(page);
   await ledger(page, [agent('one')]);
   await expect(indicator(page)).toHaveCount(0);
+  // Not known to wait on it: the quiet after-turn line names the agent instead.
+  await expect(backgroundNote(page).locator('.session-working-label')).toHaveText('1 agent still running in the background');
   await ledger(page, [agent('one')], false);
   await expect(indicator(page)).toBeVisible();
+  await expect(backgroundNote(page)).toHaveCount(0);
   const command = { taskId: 'command', taskType: 'local_bash', status: 'running', isBackgrounded: true };
-  for (const tasks of [[command], [agent('one'), command], [{ ...agent('one'), status: 'paused' }], [{ ...agent('one'), taskType: 'unknown' }]]) {
+  const shapes: Array<[object[], string]> = [
+    [[command], '1 command'],
+    [[agent('one'), command], '1 agent, 1 command'],
+    [[{ ...agent('one'), status: 'paused' }], '1 agent'],
+    [[{ ...agent('one'), taskType: 'unknown' }], '1 task'],
+  ];
+  for (const [tasks, label] of shapes) {
     await ledger(page, tasks, false);
     await expect(indicator(page)).toHaveCount(0);
+    await expect(backgroundNote(page).locator('.session-working-label')).toHaveText(`${label} still running in the background`);
   }
   await ledger(page, [agent('one')], false);
   await expect(indicator(page)).toBeVisible();

@@ -99,7 +99,7 @@ test('a live workflow run: the graph only claims what the clocks prove, as it ha
 
   // The run's card starts collapsed (it never takes over a chat on its own); open it
   // the moment it appears, as a user watching the run would.
-  const wfCard = panel.locator('.wf-card:not(.wf-card--bar)')
+  const wfCard = panel.locator('.wf-card')
   await expect(wfCard).toBeVisible({ timeout: 30_000 })
   await wfCard.locator('.wf-card-collapse').click()
   const overview = wfCard.locator('.wf-overview')

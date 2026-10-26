@@ -14,6 +14,9 @@ import { prefetchVscodeEmbed } from './vscodeEmbedPrefetch';
 import { inboxChipTitle } from '@/components/inbox/session-letters';
 import type { SessionSplitView } from './sessionSplitView';
 import { sessionKebabMetaRows } from './session-kebab-meta';
+import { useBackgroundRunning } from '@/hooks/useBackgroundRunning';
+import { openBackgroundPanel } from '@/stores/background-panel-store';
+import { backgroundRunningLabel } from './background-ledger';
 import {
   useSessionPanelMode,
   MIN_PANELS,
@@ -147,6 +150,7 @@ export function SessionKebabSection({
   useEffect(() => () => clearTimeout(codeHoverTimer.current), [sessionId]);
   // Computed per render: the menu mounts when opened, so "2m ago" is fresh each time.
   const metaRows = sessionKebabMetaRows({ startedAt, lastActiveAt, host, hostname });
+  const { tasks: backgroundTasks, running: bgRunning } = useBackgroundRunning(sessionId);
   const cdPrefix = cwd ? `cd ${cwd} && ` : '';
   const cwdLabel = cwd ? (cwd.split('/').filter(Boolean).pop() || 'CWD') : null;
 
@@ -230,6 +234,26 @@ export function SessionKebabSection({
         <span className="task-kebab-icon">{ICON_CHAT}</span>
         <span>Msgs{msgCount && msgCount > 0 ? ` (${msgCount})` : ''}</span>
       </button>
+
+      {/* The session's background commands and agents, finished ones too: the list the old
+          Background bar's "View all" opened (2026-10-26). Only once there has been some. */}
+      {backgroundTasks.length > 0 && (
+        <button
+          type="button"
+          className="task-kebab-item"
+          data-testid="session-kebab-background"
+          onClick={(e) => { e.stopPropagation(); onAfterAction?.(); openBackgroundPanel(sessionId); }}
+        >
+          <span className="task-kebab-icon" aria-hidden="true">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="3" y="4" width="18" height="16" rx="2.5" />
+              <path d="M7 9l3 3-3 3M12.5 15H17" />
+            </svg>
+          </span>
+          <span>Background tasks</span>
+          {bgRunning.total > 0 && <span className="session-action-chip-count" title={`${backgroundRunningLabel(bgRunning)} running`}>{bgRunning.total}</span>}
+        </button>
+      )}
 
       <div className="task-kebab-divider" />
 

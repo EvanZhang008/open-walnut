@@ -15,7 +15,7 @@
  * The shape now (Claude Code desktop parity): the chat shows ONE chip per spawn
  * burst (`● Agent  explore  opus  <title>  Running  16 tools`; a burst of several
  * reads `3 agents … 2 running · 1 done`), never a card per agent, never an in-place
- * dropdown; the chip and the pinned Background bar both open the two-column
+ * dropdown; the chip and the working line's background note both open the two-column
  * Background tasks panel (agents on the left, the selected agent's transcript on
  * the right). The reader draws the transcript with the MAIN chat's rows: tools,
  * running or finished, fold into one closed "Ran N commands ›" run that breathes
@@ -28,8 +28,8 @@
  *   3. late lane lines with no anchor in the stream render NOWHERE (no box,
  *      no flat text)
  *   4. the pic-1 shape — Agent row already in history + live lane blocks —
- *      shows exactly ONE chip; the pinned Background bar is one line whose click
- *      opens the same panel (no caret, no in-place list)
+ *      shows exactly ONE chip; nothing is pinned at the top, and the working
+ *      line's background note opens the same panel (so does the ⋮ menu, after)
  *   5. three parallel spawns are one `3 agents … 3 running` chip; the panel lists
  *      all three and switches the reader on click
  *   6. the panel survives the turn end: history absorbs the Agent tool_calls, the
@@ -346,17 +346,14 @@ test.describe('Inline-subagent interleave (main text integrity)', () => {
         tokens: 61234, toolUses: 60, durationMs: 95000, startedAt: Date.now() - 95000, isBackgrounded: true,
       }],
     });
-    // The pinned Background bar is ONE line and ONE button: counts + tokens, no
-    // caret, no in-place list. Clicking it opens the same panel the chip opens.
-    const ledger = page.locator('.wf-card');
-    await expect(ledger).toHaveCount(1);
-    await expect(ledger).toHaveClass(/wf-card--bar/);
-    await expect(ledger.locator('.wf-card-title')).toHaveText('Background');
-    await expect(ledger.locator('.wf-card-running')).toContainText('1 running');
-    await expect(ledger.locator('.wf-card-tokens')).toContainText('61k tok');
-    await expect(ledger.locator('.wf-card-caret')).toHaveCount(0);
-    await expect(ledger.locator('.wf-agent-row')).toHaveCount(0);
+    // Nothing is pinned at the top of the session for the run (2026-10-26: the
+    // Background bar is gone, no in-place list either). The working line names it
+    // in one note, and the note opens the same panel the chip opens.
+    await expect(page.locator('.wf-card')).toHaveCount(0);
     await expect(page.locator('.wf-card-tasks')).toHaveCount(0);
+    const note = page.locator(`.session-panel[data-session-id="${SESSION_ID}"] [data-testid="session-background-note"]`);
+    await expect(note).toHaveCount(1);
+    await expect(note).toHaveText(/^·\s*1 agent in background\s*›$/);
     // The chat chip mirrors the ledger: running, pulsing, with the ledger's tool count
     // and the agent's model from the tool input.
     await expect(chip.locator('.bg-tasks-chip-status')).toHaveText('Running');
@@ -364,7 +361,7 @@ test.describe('Inline-subagent interleave (main text integrity)', () => {
     await expect(chip.locator('.task-group-badge')).toHaveText('60 tools');
     await expect(chip.locator('.task-group-streaming-dot')).toHaveCount(1);
 
-    await ledger.click();
+    await note.click();
     const panel = page.locator('.wf-modal--tasks');
     await expect(panel).toHaveCount(1);
     const rows = panel.locator('.bg-task-row');
@@ -414,8 +411,17 @@ test.describe('Inline-subagent interleave (main text integrity)', () => {
         tokens: 70000, toolUses: 64, durationMs: 120000, startedAt: Date.now() - 120000, endedAt: Date.now(),
       }],
     });
-    await expect(ledger.locator('.wf-card-running')).toHaveCount(0);
-    await expect(ledger.locator('.wf-card-count')).toContainText('1/1 agents');
+    // Nothing runs, so the note goes; the session's ⋮ menu keeps the way in, with no count.
+    await expect(note).toHaveCount(0);
+    await page.locator(`.session-panel[data-session-id="${SESSION_ID}"] .session-panel-header`).getByRole('button', { name: 'More actions' }).click();
+    const menuRow = page.locator('.task-kebab-menu:visible [data-testid="session-kebab-background"]');
+    await expect(menuRow).toHaveText('Background tasks');
+    await expect(menuRow.locator('.session-action-chip-count')).toHaveCount(0);
+    await menuRow.click();
+    await expect(panel.locator('.bg-task-row')).toHaveCount(1);
+    await expect(panel.locator('.bg-tasks-section-title')).toHaveText(['Finished']);
+    await page.keyboard.press('Escape');
+    await expect(panel).toHaveCount(0);
     await expect(chip.locator('.bg-tasks-chip-status')).toHaveText('Done');
     await expect(chip.locator('.task-group-badge')).toHaveText('64 tools');
     await expect(chip.locator('.task-group-streaming-dot')).toHaveCount(0);
@@ -603,7 +609,11 @@ test.describe('Inline-subagent interleave (main text integrity)', () => {
     const history = page.locator('.session-history');
     await expect(history.locator('.bg-tasks-chip')).toHaveCount(1);
     await expect(history.locator('.bg-tasks-chip .bg-tasks-chip-label')).toHaveText('Agent');
-    await page.locator('.wf-card').click();
+    // No Background bar; the working line's note counts both kinds and opens the panel.
+    await expect(page.locator('.wf-card')).toHaveCount(0);
+    const note = page.locator(`.session-panel[data-session-id="${SESSION_ID}"] [data-testid="session-background-note"]`);
+    await expect(note).toHaveText(/^·\s*1 agent, 1 command in background\s*›$/);
+    await note.click();
     const panel = page.locator('.wf-modal--tasks');
     const rows = panel.locator('.bg-task-row');
     // Agents and commands are two tabs; the agent's opens first.

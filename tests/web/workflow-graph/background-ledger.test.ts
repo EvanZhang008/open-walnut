@@ -11,7 +11,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { fmtElapsed, fmtTokens, rowActivity, rowElapsedMs, buildAgentMeta, agentResultText, backgroundAgentsOnly } from '@/components/sessions/background-ledger';
+import { fmtElapsed, fmtTokens, rowActivity, rowElapsedMs, buildAgentMeta, agentResultText, backgroundAgentsOnly, backgroundRunning, backgroundRunningLabel } from '@/components/sessions/background-ledger';
 import type { BackgroundTask } from '@/hooks/useBackgroundTasks';
 
 function task(p: Partial<BackgroundTask>): BackgroundTask {
@@ -207,5 +207,32 @@ describe('agentResultText', () => {
   it('is undefined with no result at all', () => {
     expect(agentResultText(undefined)).toBeUndefined();
     expect(agentResultText('')).toBeUndefined();
+  });
+});
+
+describe('backgroundRunning / backgroundRunningLabel (the working line and the session menu)', () => {
+  const agent = (id: string, status = 'running') => task({ taskId: id, status, taskType: 'local_agent' });
+  const command = (id: string, status = 'running') => task({ taskId: id, status, taskType: 'local_bash' });
+
+  it('counts only what is still going, as the panel lists it', () => {
+    const r = backgroundRunning([
+      command('c1'), command('c2', 'completed'), agent('a1'), agent('a2', 'failed'),
+      task({ taskId: 'nested', status: 'running', taskType: 'local_bash', ownedBySubagent: true }),
+      task({ taskId: 'ended', status: 'running', taskType: 'local_bash', endedPerLevel: true }),
+    ]);
+    expect(r).toEqual({ agents: 1, commands: 1, other: 0, total: 2 });
+    expect(backgroundRunningLabel(r)).toBe('1 agent, 1 command');
+  });
+
+  it('names one kind alone, plural when more, and says nothing when all is done', () => {
+    expect(backgroundRunningLabel(backgroundRunning([command('c1')]))).toBe('1 command');
+    expect(backgroundRunningLabel(backgroundRunning([command('c1'), command('c2'), command('c3', 'pending')]))).toBe('3 commands');
+    expect(backgroundRunningLabel(backgroundRunning([agent('a1'), agent('a2')]))).toBe('2 agents');
+    expect(backgroundRunningLabel(backgroundRunning([command('c1', 'completed'), agent('a1', 'stopped')]))).toBe('');
+    expect(backgroundRunningLabel(backgroundRunning([]))).toBe('');
+  });
+
+  it('falls back to "tasks" when anything is neither a command nor an agent', () => {
+    expect(backgroundRunningLabel(backgroundRunning([command('c1'), task({ taskId: 'w', status: 'running', taskType: 'remote_thing' })]))).toBe('2 tasks');
   });
 });

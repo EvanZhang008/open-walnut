@@ -2491,6 +2491,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
               {!loading && sessionId && !kebabSlot && renderSessionKebab()}
               {!loading && sessionId && kebabSlot && createPortal(renderSessionKebab((close) => (
                 <PhoneSessionHeaderRows
+                  sessionId={sessionId}
                   close={close}
                   activeView={activeView}
                   onToggleView={toggleView}

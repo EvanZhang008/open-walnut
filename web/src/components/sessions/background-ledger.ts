@@ -13,11 +13,32 @@
  */
 
 import type { BackgroundTask } from '@/hooks/useBackgroundTasks';
-import { isAgentTask, TERMINAL } from './workflow-layout';
+import { isAgentTask, isCommandTask, TERMINAL } from './workflow-layout';
 
 export function backgroundAgentsOnly(tasks: readonly BackgroundTask[]): BackgroundTask[] {
   const active = tasks.filter(task => !TERMINAL.has(task.status) && !task.ownedBySubagent && !task.endedPerLevel);
   return active.length > 0 && active.every(task => isAgentTask(task) && task.status === 'running') ? active : [];
+}
+
+/** The background work still going, the way the working line and the session menu name it. */
+export interface BackgroundRunning { agents: number; commands: number; other: number; total: number }
+
+/** What the session itself still runs in the background (a subagent's own children
+ *  are the subagent's, not the session's). */
+export function backgroundRunning(tasks: readonly BackgroundTask[]): BackgroundRunning {
+  const live = tasks.filter(task => !TERMINAL.has(task.status) && !task.ownedBySubagent && !task.endedPerLevel);
+  const agents = live.filter(isAgentTask).length;
+  const commands = live.filter(isCommandTask).length;
+  return { agents, commands, other: live.length - agents - commands, total: live.length };
+}
+
+const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? '' : 's'}`;
+
+/** "1 command", "2 agents, 1 command", "3 tasks": short enough to ride the working line. */
+export function backgroundRunningLabel(r: BackgroundRunning): string {
+  if (r.total === 0) return '';
+  if (r.other > 0) return plural(r.total, 'task');
+  return [r.agents > 0 ? plural(r.agents, 'agent') : '', r.commands > 0 ? plural(r.commands, 'command') : ''].filter(Boolean).join(', ');
 }
 
 /** Compact token count ("1200" → "1k", "8649000" → "8.6M"). Shared with WorkflowGraph's agent meta. */

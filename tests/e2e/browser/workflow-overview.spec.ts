@@ -61,6 +61,11 @@ async function emitBackgroundTasks(page: Page, data: Record<string, unknown>) {
   await page.waitForFunction(() => (window as any).__workflowSocket?.readyState === WebSocket.OPEN)
   await page.evaluate((data) => {
     const ws = (window as any).__workflowSocket as WebSocket
+    // The fixture session is stopped; a session whose backgrounded work still runs is
+    // 'running' on the server (it stays so until the last one drains), and only a live
+    // session claims work still running.
+    const status = { taskId: null, process_status: 'running', activity: 'Background command running', mode: 'bypass', planCompleted: false, archived: false, errorMessage: null, provider: 'cli', engine: 'claude', pendingPermissionTool: null, statusRevision: Date.now(), statusUpdatedAt: new Date().toISOString() }
+    ws.dispatchEvent(new MessageEvent('message', { data: JSON.stringify({ type: 'event', name: 'session:status-changed', data: { sessionId: data.sessionId, ...status }, seq: Date.now() }) }))
     ws.dispatchEvent(new MessageEvent('message', { data: JSON.stringify({ type: 'event', name: 'session:background-tasks', data, seq: Date.now() }) }))
   }, data)
 }
@@ -257,34 +262,6 @@ test.describe('Workflow overview at real fan-out density', () => {
   })
 })
 
-/** The bar's parts sit on one line, centred, left to right, with the action flush right. */
-async function expectOneTidyLine(bar: ReturnType<Page['locator']>) {
-  const geometry = await bar.evaluate((el) => {
-    const box = el.getBoundingClientRect()
-    const parts = [...el.children].filter(c => getComputedStyle(c).display !== 'none').map(c => {
-      const r = c.getBoundingClientRect()
-      return { cls: c.className, left: r.left, right: r.right, mid: r.top + r.height / 2 }
-    })
-    return { height: box.height, width: box.width, right: box.right, mid: box.top + box.height / 2, parts }
-  })
-  expect(geometry.height).toBeLessThanOrEqual(40)
-  for (const part of geometry.parts) expect(Math.abs(part.mid - geometry.mid), part.cls).toBeLessThanOrEqual(2)
-  for (let i = 1; i < geometry.parts.length; i++) {
-    expect(geometry.parts[i].left, `${geometry.parts[i].cls} overlaps ${geometry.parts[i - 1].cls}`)
-      .toBeGreaterThanOrEqual(geometry.parts[i - 1].right - 0.5)
-  }
-  const open = geometry.parts[geometry.parts.length - 1]
-  expect(open.cls).toBe('wf-card-open')
-  expect(geometry.right - open.right).toBeGreaterThanOrEqual(10)
-  expect(geometry.right - open.right).toBeLessThanOrEqual(14)
-  // Whatever is still shown keeps the fixed left-to-right order.
-  const canonical = ['wf-card-state', 'wf-card-title', 'wf-card-count', 'wf-card-meter', 'wf-card-tokens', 'wf-card-open']
-  const order = geometry.parts.map(p => p.cls.split(' ')[0])
-  expect(order.filter(c => canonical.includes(c))).toEqual(canonical.filter(c => order.includes(c)))
-  for (const required of ['wf-card-state', 'wf-card-title', 'wf-card-count', 'wf-card-open']) expect(order).toContain(required)
-  return geometry
-}
-
 /** Nothing the user reads is cut: the title, the running and failed counts, and the tally. */
 async function expectNothingClipped(root: ReturnType<Page['locator']>, label: string) {
   const clipped = await root.evaluate(el => {
@@ -301,20 +278,33 @@ async function expectNothingClipped(root: ReturnType<Page['locator']>, label: st
   expect(clipped, label).toEqual([])
 }
 
-async function shootBar(page: Page, bar: ReturnType<Page['locator']>, name: string) {
+/** The after-turn line that names the session's background work (SessionWorkingIndicator). */
+function backgroundNote(panel: ReturnType<Page['locator']>) {
+  return panel.locator('[data-testid="session-background-note"]')
+}
+
+/** The session's ⋮ menu, opened from the panel header the way a user opens it. */
+async function openSessionMenu(page: Page, panel: ReturnType<Page['locator']>) {
+  await panel.locator('.session-panel-header').getByRole('button', { name: 'More actions' }).click()
+  const row = page.locator('.task-kebab-menu:visible [data-testid="session-kebab-background"]')
+  return row
+}
+
+async function shootNote(page: Page, note: ReturnType<Page['locator']>, name: string) {
   const dir = `/tmp/workflow-overview/${test.info().project.name}`
   await fs.mkdir(dir, { recursive: true })
-  const box = (await bar.boundingBox())!
+  await note.scrollIntoViewIfNeeded()
+  const box = (await note.boundingBox())!
   await page.screenshot({
     path: `${dir}/${name}.png`, scale: 'css',
-    clip: { x: Math.max(0, box.x - 16), y: Math.max(0, box.y - 16), width: box.width + 32, height: box.height + 32 },
+    clip: { x: Math.max(0, box.x - 16), y: Math.max(0, box.y - 16), width: Math.min(box.width + 32, 1280), height: box.height + 32 },
   })
 }
 
-test.describe('Background bar', () => {
+test.describe('Background work', () => {
   test.setTimeout(120_000)
 
-  test('reads as one quiet line from the reported case to failures, completion, dark and narrow', async ({ page }) => {
+  test('has no bar at the top: its running count rides the after-turn line and the ⋮ menu, from the reported case to completion and dark', async ({ page }) => {
     const project = test.info().project.name
     const sessionId = `pw-background-bar-${project}`
     const errors: string[] = []
@@ -323,31 +313,35 @@ test.describe('Background bar', () => {
     const panel = await openTaskSession(page, sessionId, `pw-bgbar-task-${project}`)
     // History has rendered, so the ledger hook is subscribed before the first event.
     await expect(panel).toContainText('Review underway.', { timeout: 30_000 })
-    const bar = panel.locator('.wf-card--bar')
+    const note = backgroundNote(panel)
 
     // The reported shape: six shell commands, five finished, one still running.
     await emitBackgroundTasks(page, {
       sessionId, inFlight: 1, phases: [], agents: [],
       tasks: [0, 1, 2, 3, 4].map(i => shellTask(i, 'completed')).concat(shellTask(5, 'running')),
     })
-    await expect.poll(() => visibleText(bar.locator('.wf-card-count')), { timeout: 30_000 }).toBe('5/6 commands done · 1 running')
-    await expect(bar.locator('.wf-card-state--running .task-group-streaming-dot')).toHaveCount(1)
-    await expect(bar.locator('.wf-card-open')).toHaveText('View all ›')
-    await expect(bar.locator('.wf-card-count')).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)')
-    const inks = await bar.evaluate(el => ({
-      bar: getComputedStyle(el).color,
-      title: getComputedStyle(el.querySelector('.wf-card-title')!).color,
-      open: getComputedStyle(el.querySelector('.wf-card-open')!).color,
-      count: getComputedStyle(el.querySelector('.wf-card-count')!).color,
-    }))
-    expect(inks.title).toBe(inks.bar)
-    expect(inks.open).toBe(inks.count)
-    const wide = await expectOneTidyLine(bar)
-    const meterDone = await bar.locator('.wf-card-meter-done').evaluate(el => el.getBoundingClientRect().width / el.parentElement!.getBoundingClientRect().width)
-    expect(meterDone).toBeCloseTo(5 / 6, 2)
-    await shootBar(page, bar, 'background-bar-reported')
+    await expect(note.locator('.session-working-label')).toHaveText('1 command still running in the background', { timeout: 30_000 })
+    await expect(note).toHaveText(/background\s*›$/)
+    // Nothing is pinned at the top of the session for plain background work.
+    await expect(panel.locator('.wf-card')).toHaveCount(0)
+    await expect(panel.locator('.wf-card--bar')).toHaveCount(0)
+    // The line is the chat's last thing, inside the chat column, and its words are whole.
+    const fit = await note.evaluate(el => {
+      const label = el.querySelector('.session-working-label') as HTMLElement
+      const r = el.getBoundingClientRect(), chat = el.closest('.session-history')!.getBoundingClientRect()
+      return { cut: label.scrollWidth > label.clientWidth + 1, inside: r.left >= chat.left - 0.5 && r.right <= chat.right + 0.5, height: r.height }
+    })
+    expect(fit).toEqual({ cut: false, inside: true, height: expect.any(Number) })
+    expect(fit.height).toBeLessThanOrEqual(44)
+    await shootNote(page, note, 'background-after-turn-reported')
+    // The ⋮ menu counts what is running.
+    let row = await openSessionMenu(page, panel)
+    await expect(row).toBeVisible()
+    await expect(row.locator('.session-action-chip-count')).toHaveText('1')
+    await page.keyboard.press('Escape')
+    await expect(row).toHaveCount(0)
 
-    // A running agent next to commands, one of which failed, with token spend.
+    // A running agent next to commands, one of which failed: only the agent still runs.
     await emitBackgroundTasks(page, {
       sessionId, inFlight: 1, phases: [], agents: [],
       tasks: [
@@ -355,25 +349,9 @@ test.describe('Background bar', () => {
         shellTask(0, 'completed'), shellTask(1, 'completed'), shellTask(2, 'completed'), shellTask(3, 'failed'),
       ],
     })
-    await expect.poll(() => visibleText(bar.locator('.wf-card-count')), { timeout: 30_000 }).toBe('Agents 0/1 · Commands 3/4 · 1 running · 1 failed')
-    await expect(bar.locator('.wf-card-tokens')).toHaveText('61k tok')
-    await expect(bar.locator('.wf-card-failed')).toContainText('1 failed')
-    await expect(bar.locator('.wf-card-failed')).toHaveCSS('color', await bar.locator('.wf-card-meter-failed').evaluate(el => getComputedStyle(el).backgroundColor))
-    await expectOneTidyLine(bar)
-    await expectNothingClipped(bar, 'mixed at column width')
-    // Wide enough to show every part, the meter carries the failed share next to the tokens.
-    await bar.evaluate(el => { (el as HTMLElement).style.width = '760px' })
-    await expect(bar.locator('.wf-card-meter')).toBeVisible()
-    const mixed = await expectOneTidyLine(bar)
-    const meter = mixed.parts.find(p => p.cls === 'wf-card-meter')!, tokens = mixed.parts.find(p => p.cls === 'wf-card-tokens')!
-    expect(tokens.left - meter.right).toBeLessThanOrEqual(12)
-    const failedShare = await bar.locator('.wf-card-meter-failed').evaluate(el => el.getBoundingClientRect().width / el.parentElement!.getBoundingClientRect().width)
-    expect(failedShare).toBeCloseTo(1 / 5, 2)
-    await shootBar(page, bar, 'background-bar-mixed')
-    await bar.evaluate(el => { (el as HTMLElement).style.width = '' })
+    await expect(note.locator('.session-working-label')).toHaveText('1 agent still running in the background', { timeout: 30_000 })
 
-    // The reported density: 2 agents beside 150 commands, one failed. The optional
-    // parts give way before the tally is cut.
+    // The reported density: 2 agents beside 150 commands, one failed, one running.
     await emitBackgroundTasks(page, {
       sessionId, inFlight: 3, phases: [], agents: [],
       tasks: [
@@ -382,29 +360,32 @@ test.describe('Background bar', () => {
         ...Array.from({ length: 150 }, (_, i) => shellTask(i, i === 40 ? 'failed' : i === 149 ? 'running' : 'completed')),
       ],
     })
-    await expect.poll(() => visibleText(bar.locator('.wf-card-running')), { timeout: 30_000 }).toBe('· 3 running')
-    await expect(bar.locator('.wf-card-failed')).toBeVisible()
-    await expectOneTidyLine(bar)
-    await expectNothingClipped(bar, 'dense at column width')
-    await shootBar(page, bar, 'background-bar-dense')
+    await expect(note.locator('.session-working-label')).toHaveText('2 agents, 1 command still running in the background', { timeout: 30_000 })
+    await expect(panel.locator('.wf-card')).toHaveCount(0)
+    row = await openSessionMenu(page, panel)
+    await expect(row.locator('.session-action-chip-count')).toHaveText('3')
+    await expect(row.locator('.session-action-chip-count')).toHaveAttribute('title', '2 agents, 1 command running')
+    await page.keyboard.press('Escape')
+    await shootNote(page, note, 'background-after-turn-dense')
 
-    // Everything settles: a check, no pulse, the full meter.
+    // Everything settles: the line goes, the ⋮ menu keeps the way in (no count), and
+    // the panel lists every finished command.
     await emitBackgroundTasks(page, {
       sessionId, inFlight: 0, phases: [], agents: [],
       tasks: [0, 1, 2, 3, 4, 5].map(i => shellTask(i, 'completed')),
     })
-    await expect.poll(() => visibleText(bar.locator('.wf-card-count')), { timeout: 30_000 }).toBe('6/6 commands done')
-    await expect(bar.locator('.wf-card-state--done')).toHaveText('✓')
-    await expect(bar.locator('.task-group-streaming-dot')).toHaveCount(0)
-    await expectOneTidyLine(bar)
-
-    // The bar is still the one way into the panel.
-    await bar.click()
+    await expect(note).toHaveCount(0)
+    row = await openSessionMenu(page, panel)
+    await expect(row).toHaveText('Background tasks')
+    await expect(row.locator('.session-action-chip-count')).toHaveCount(0)
+    await row.click()
     const tasksPanel = page.locator('.wf-modal--tasks')
     await expect(tasksPanel.locator('.bg-task-row')).toHaveCount(6)
+    await expect(tasksPanel.locator('.bg-tasks-section-title')).toHaveText(['Finished'])
     await page.keyboard.press('Escape')
     await expect(tasksPanel).toHaveCount(0)
 
+    // Dark: the line takes the dark muted ink, never a light native button face.
     await page.evaluate(() => {
       localStorage.setItem('open-walnut-theme', 'dark')
       document.documentElement.setAttribute('data-theme', 'dark')
@@ -413,75 +394,23 @@ test.describe('Background bar', () => {
       sessionId, inFlight: 1, phases: [], agents: [],
       tasks: [0, 1, 2, 3, 4].map(i => shellTask(i, 'completed')).concat(shellTask(5, 'running')),
     })
-    await expect.poll(() => visibleText(bar.locator('.wf-card-count')), { timeout: 30_000 }).toBe('5/6 commands done · 1 running')
-    // Focus is back on the bar after Esc closed the panel, as it is for a real user.
+    await expect(note.locator('.session-working-label')).toHaveText('1 command still running in the background', { timeout: 30_000 })
     await page.mouse.move(0, 0)
-    // Dark surfaces come from the dark tokens, never a light native button face.
     const darkInk = await page.evaluate(() => {
       const probe = document.createElement('div')
-      probe.style.cssText = 'background: var(--bg-secondary); color: var(--fg)'
+      probe.style.cssText = 'color: var(--fg-muted)'
       document.body.append(probe)
-      const { backgroundColor, color } = getComputedStyle(probe)
+      const { color } = getComputedStyle(probe)
       probe.remove()
-      return { backgroundColor, color }
+      return color
     })
-    await expect(bar).toHaveCSS('background-color', darkInk.backgroundColor)
-    await expect(bar.locator('.wf-card-title')).toHaveCSS('color', darkInk.color)
-    await shootBar(page, bar, 'background-bar-dark')
-
-    // Narrowing column: detail goes in one order (meter, tokens, per-kind tally,
-    // words) and never comes back as the bar narrows; the title and the running
-    // and failed counts never truncate, and the line never wraps.
-    let previousLevel = -1
-    for (const width of [760, 640, 440, 380, 300]) {
-      await bar.evaluate((el, width) => { (el as HTMLElement).style.width = `${width}px` }, width)
-      await emitBackgroundTasks(page, {
-        sessionId, inFlight: 1, phases: [], agents: [],
-        tasks: [
-          { taskId: 'agent-1', taskType: 'local_agent', status: 'running', description: 'Find every caller', tokens: 61_234 },
-          shellTask(0, 'completed'), shellTask(1, 'failed'),
-        ],
-      })
-      await expect(bar.locator('.wf-card-failed')).toBeVisible()
-      await expect.poll(() => visibleText(bar.locator('.wf-card-count')), { timeout: 30_000 }).toMatch(/^(Agents 0\/1 · Commands 1\/2|1\/3 done|1\/3) · 1 running · 1 failed$/)
-      const level = Number(await bar.getAttribute('data-shed'))
-      expect(level, `shed level at ${width}px`).toBeGreaterThanOrEqual(previousLevel)
-      previousLevel = level
-      await expect(bar.locator('.wf-card-meter')).toBeVisible({ visible: level < 1 })
-      await expect(bar.locator('.wf-card-tokens')).toBeVisible({ visible: level < 2 })
-      await expect(bar.locator('.wf-card-open-label')).toBeVisible({ visible: level < 4 })
-      await expectNothingClipped(bar, `at ${width}px`)
-      await expectOneTidyLine(bar)
-      await shootBar(page, bar, `background-bar-${width}px`)
-    }
-    expect(Number(await bar.getAttribute('data-shed')), 'the narrowest bar sheds everything optional').toBe(4)
-    await expect.poll(() => visibleText(bar.locator('.wf-card-count'))).toBe('1/3 · 1 running · 1 failed')
-
-    // The reported density at 300px: even '148/152' does not fit beside the running
-    // and failed counts, so the total goes and they keep the line, uncut.
-    await emitBackgroundTasks(page, {
-      sessionId, inFlight: 3, phases: [], agents: [],
-      tasks: [
-        { taskId: 'agent-a', taskType: 'local_agent', status: 'running', description: 'Map every caller', tokens: 96_200 },
-        { taskId: 'agent-b', taskType: 'local_agent', status: 'running', description: 'Draft the notes', tokens: 94_100 },
-        ...Array.from({ length: 150 }, (_, i) => shellTask(i, i === 40 ? 'failed' : i === 149 ? 'running' : 'completed')),
-      ],
-    })
-    await expect.poll(() => visibleText(bar.locator('.wf-card-count')), { timeout: 30_000 }).toBe('3 running · 1 failed')
-    expect(await bar.getAttribute('data-shed')).toBe('5')
-    await expectNothingClipped(bar, 'dense at 300px')
-    await expectOneTidyLine(bar)
-    await shootBar(page, bar, 'background-bar-dense-300px')
-    // With nothing running or failed the total is all the line says, so it stays.
-    await emitBackgroundTasks(page, {
-      sessionId, inFlight: 0, phases: [], agents: [],
-      tasks: Array.from({ length: 150 }, (_, i) => shellTask(i, 'completed')),
-    })
-    await expect.poll(() => visibleText(bar.locator('.wf-card-count')), { timeout: 30_000 }).toMatch(/^150\/150( commands done| done)?$/)
-    await expectNothingClipped(bar, 'all done at 300px')
-    await bar.evaluate(el => { (el as HTMLElement).style.width = '760px' })
-    await expect.poll(() => bar.getAttribute('data-shed'), { message: 'widening brings the detail back' }).toBe('0')
-    expect(wide.width).toBeGreaterThan(420)
+    await expect(note).toHaveCSS('color', darkInk)
+    await expect(note).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)')
+    await shootNote(page, note, 'background-after-turn-dark')
+    // The line opens the same panel, with the running command in it.
+    await note.click()
+    await expect(tasksPanel.locator('.bg-task-row-running')).toHaveCount(1)
+    await page.keyboard.press('Escape')
     expect(errors).toEqual([])
   })
 
@@ -504,9 +433,9 @@ test.describe('Background bar', () => {
         { taskId: 'bgpq669i', status: 'completed' },
       ],
     })
-    const bar = panel.locator('.wf-card--bar')
-    await expect.poll(() => visibleText(bar.locator('.wf-card-running')), { timeout: 30_000 }).toBe('· 2 running')
-    await bar.click()
+    const note = backgroundNote(panel)
+    await expect(note.locator('.session-working-label')).toHaveText('1 agent, 1 command still running in the background', { timeout: 30_000 })
+    await note.click()
     const tasksPanel = page.locator('.wf-modal--tasks')
     await expect(tasksPanel.locator('.wf-modal-meta').first()).toHaveText('2 agents · 150 commands · 1 other task · 2 running')
 

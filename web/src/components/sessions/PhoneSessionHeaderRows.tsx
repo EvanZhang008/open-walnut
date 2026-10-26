@@ -7,8 +7,11 @@
  * and Fork drew a greyed row with no reason. A disabled row says why.
  */
 import type { SessionSplitView } from './sessionSplitView';
+import { useBackgroundRunning } from '@/hooks/useBackgroundRunning';
+import { openBackgroundPanel } from '@/stores/background-panel-store';
 
 export interface PhoneSessionHeaderRowsProps {
+  sessionId: string;
   close: () => void;
   activeView: SessionSplitView | null;
   onToggleView: (view: SessionSplitView) => void;
@@ -40,6 +43,9 @@ function Row({ label, active, disabled, why, onClick, testId }: {
 
 export function PhoneSessionHeaderRows(p: PhoneSessionHeaderRowsProps) {
   const view = (v: SessionSplitView) => () => { p.close(); p.onToggleView(v); };
+  // The desktop ⋮ menu's "Background tasks" row: the phone's menu does not draw that
+  // section, and a background command has no chat chip to reach its list from.
+  const { tasks: background, running: { total: running } } = useBackgroundRunning(p.sessionId);
   return (
     <div className="phone-session-rows" data-testid="phone-session-rows">
       <Row label="Changed" active={p.activeView === 'changed'} onClick={view('changed')} testId="phone-row-changed" />
@@ -51,6 +57,10 @@ export function PhoneSessionHeaderRows(p: PhoneSessionHeaderRowsProps) {
       {p.board !== 'none' && (
         <Row label="Board" active={p.activeView === 'board'} disabled={p.board === 'waiting'} onClick={view('board')} testId="phone-row-board"
           why={p.board === 'waiting' ? 'Not written yet' : undefined} />
+      )}
+      {background.length > 0 && (
+        <Row label={running > 0 ? `Background tasks (${running} running)` : 'Background tasks'}
+          onClick={() => { p.close(); openBackgroundPanel(p.sessionId); }} testId="phone-row-background" />
       )}
       {p.plan && <Row label="Plan" onClick={() => { p.close(); p.onPlan(); }} testId="phone-row-plan" />}
       {p.onCloseSession && <Row label="Close session" onClick={() => { p.close(); p.onCloseSession?.(); }} testId="phone-row-close" />}

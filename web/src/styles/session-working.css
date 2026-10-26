@@ -13,3 +13,29 @@
   outline-offset: 3px;
   border-radius: 4px;
 }
+
+/* The working line with the session's background work beside it (SessionWorkingIndicator). */
+.session-working-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  column-gap: 6px;
+}
+.session-background-note {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 4px;
+  margin: 0 -4px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  font: inherit;
+  font-size: 13px;
+  color: var(--fg-muted);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.session-background-note:hover { color: var(--fg); }
+.session-background-note:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.session-background-note-sep { opacity: 0.6; }

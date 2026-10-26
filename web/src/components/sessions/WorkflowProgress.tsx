@@ -1,17 +1,17 @@
 /**
  * WorkflowProgress shows the live or persisted workflow ledger in a session.
- * A workflow run gets the phase overview (WorkflowGraph); any other background work
- * gets one bar that opens the Background tasks panel, which reads every agent and command.
+ * A workflow run gets the phase overview (WorkflowGraph). Any other background work has
+ * no card here: the working line (SessionWorkingIndicator) and the session's ⋮ menu open
+ * the Background tasks panel, which reads every agent and command.
  * Agent counts are display-only; session completion comes from the backend.
  */
 
 import { memo, useEffect, useState } from 'react';
-import { useBackgroundTasks, type BackgroundTask, type WorkflowAgent } from '@/hooks/useBackgroundTasks';
+import { useBackgroundTasks, type WorkflowAgent } from '@/hooks/useBackgroundTasks';
 import { publishLiveAgents } from '@/stores/background-agents-store';
 import { WorkflowGraph, fmtTokens, agentMeta } from './WorkflowGraph';
-import { phaseCounts, isAgentTask, isCommandTask } from './workflow-layout';
+import { phaseCounts } from './workflow-layout';
 import { WorkflowTranscriptModal, type TranscriptTarget } from './WorkflowTranscriptModal';
-import { openBackgroundPanel } from '@/stores/background-panel-store';
 import { useFullscreen } from '@/hooks/useFullscreen';
 import { ICON_EXPAND, ICON_COLLAPSE } from '../common/Icons';
 import { useShedToFit } from './shed-to-fit';
@@ -30,10 +30,8 @@ export const WorkflowProgress = memo(function WorkflowProgress({ sessionId }: { 
   const [transcriptTarget, setTranscriptTarget] = useState<TranscriptTarget | null>(null);
   // Fullscreen keeps the same panel mounted so selection and scrolling survive.
   const { isFullscreen, enterFullscreen, exitFullscreen, fullscreenClass, FullscreenBackdrop } = useFullscreen();
-  // The bar and the header tallies drop meter, tokens, words, then the total until they fit.
-  const [barEl, setBarEl] = useState<HTMLElement | null>(null);
+  // The header tallies drop meter, tokens, words, then the total until they fit.
   const [metaEl, setMetaEl] = useState<HTMLElement | null>(null);
-  useShedToFit(barEl, 5);
   useShedToFit(metaEl, 5);
 
   const isWorkflow = agents.length > 0;
@@ -53,39 +51,19 @@ export const WorkflowProgress = memo(function WorkflowProgress({ sessionId }: { 
   // the chat mid-turn. The user's click wins; fullscreen always expands.
   const collapsed = !isFullscreen && (collapseOverride ?? true);
 
-  // Nothing to show until at least one background task / agent has appeared.
-  if (!isWorkflow && tasks.length === 0 && inFlight === 0) return null;
+  // Plain background work (commands, subagents) draws nothing up here: it rides the
+  // working line at the end of the chat and the session's ⋮ menu (2026-10-26, the user:
+  // the Background bar at the top "is too ugly"). This component stays mounted for it,
+  // because it is what publishes the session's ledger to every other surface.
+  if (!isWorkflow) return null;
 
-  const wfCounts = phaseCounts(agents);
-  // Background mode: split AGENTS from plain TASKS — two different things the user
-  // thinks about separately (subagents vs shell cmds).
-  const isDone = (t: BackgroundTask) => t.status !== 'running' && t.status !== 'pending' && t.status !== 'paused' && t.status !== 'failed';
-  const agentTasks = isWorkflow ? [] : tasks.filter(isAgentTask);
-  const plainTasks = isWorkflow ? [] : tasks.filter(t => !isAgentTask(t));
-  // Shell commands are named as such; a set that holds anything else stays "tasks".
-  const plainWord = plainTasks.length > 0 && plainTasks.every(isCommandTask) ? 'commands' : 'tasks';
-  const total = isWorkflow ? wfCounts.total : tasks.length;
-  const done = isWorkflow ? wfCounts.done : tasks.filter(isDone).length;
-  const running = isWorkflow ? wfCounts.running : inFlight;
-  const failed = isWorkflow ? wfCounts.failed : tasks.filter(t => t.status === 'failed').length;
-  const totalTokens = isWorkflow
-    ? wfCounts.tokens
-    : tasks.reduce((s, t) => s + (t.tokens ?? 0), 0);
+  const { total, done, running, failed, tokens: totalTokens } = phaseCounts(agents);
 
   const counts = (
     <span className="wf-card-count" data-shed-watch>
       {/* Only the completion tally may be cut short; running and failed always show. */}
       <span className="wf-card-count-done" data-shed-watch>
-        {isWorkflow || agentTasks.length === 0 || plainTasks.length === 0 ? (
-          <>{done}/{total}{isWorkflow || agentTasks.length > 0 ? ' agents' : ` ${plainWord}`} done</>
-        ) : (
-          // Mixed set: count agents and plain tasks separately.
-          <>
-            Agents {agentTasks.filter(isDone).length}/{agentTasks.length}
-            {' · '}
-            {plainWord === 'commands' ? 'Commands' : 'Tasks'} {plainTasks.filter(isDone).length}/{plainTasks.length}
-          </>
-        )}
+        {done}/{total} agents done
       </span>
       {/* Last to go, and only when a running or failed count is left to carry the line. */}
       <span className={`wf-card-count-short${running > 0 || failed > 0 ? ' wf-card-count-short--optional' : ''}`} data-shed-watch>
@@ -108,25 +86,6 @@ export const WorkflowProgress = memo(function WorkflowProgress({ sessionId }: { 
     </span>
   );
 
-  if (!isWorkflow) {
-    // One line, one action: the whole bar opens the Background tasks panel. No
-    // caret, no in-place list — the panel is where agents and commands are read.
-    return (
-      <button
-        ref={setBarEl}
-        className={`wf-card wf-card--bar wf-card--${state}`}
-        onClick={() => openBackgroundPanel(sessionId)}
-        title="Open background tasks"
-      >
-        {stateIcon}
-        <span className="wf-card-title">Background</span>
-        {counts}
-        {meter}
-        {totalTokens > 0 && <span className="wf-card-tokens">{fmtTokens(totalTokens)} tok</span>}
-        <span className="wf-card-open"><span className="wf-card-open-label">View all </span><span aria-hidden="true">›</span></span>
-      </button>
-    );
-  }
 
   const openTranscript = (a: WorkflowAgent) =>
     setTranscriptTarget({ agentId: a.agentId, label: a.label, model: a.model, meta: agentMeta(a) });

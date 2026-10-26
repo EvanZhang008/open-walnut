@@ -50,6 +50,13 @@ async function emitLedger(page: Page, sessionId: string, tasks: Array<Record<str
   await page.evaluate(({ sessionId, tasks }) => {
     const ws = (window as any).__stopSocket as WebSocket
     const inFlight = tasks.filter(t => t.status === 'running').length
+    // The fixture session is stopped; a session whose backgrounded work still runs is
+    // 'running' on the server (it stays so until the last one drains), and only a live
+    // session claims work still running.
+    const status = { taskId: null, process_status: 'running', activity: 'Background command running', mode: 'bypass', planCompleted: false, archived: false, errorMessage: null, provider: 'cli', engine: 'claude', pendingPermissionTool: null, statusRevision: Date.now(), statusUpdatedAt: new Date().toISOString() }
+    ws.dispatchEvent(new MessageEvent('message', {
+      data: JSON.stringify({ type: 'event', name: 'session:status-changed', data: { sessionId, ...status }, seq: Date.now() }),
+    }))
     ws.dispatchEvent(new MessageEvent('message', {
       data: JSON.stringify({ type: 'event', name: 'session:background-tasks', data: { sessionId, inFlight, phases: [], agents: [], tasks }, seq: Date.now() }),
     }))
@@ -88,9 +95,10 @@ test.describe('Stop one background task', () => {
     const panel = await openTaskSession(page, sessionId, `pw-bgbar-task-${project}`)
     await expect(panel).toContainText('Review underway.', { timeout: 30_000 })
     await emitLedger(page, sessionId, ledger())
-    const bar = panel.locator('.wf-card--bar')
-    await expect(bar).toBeVisible({ timeout: 30_000 })
-    await bar.click()
+    // The session's after-turn line names what still runs and opens the reader.
+    const note = panel.locator('[data-testid="session-background-note"]')
+    await expect(note.locator('.session-working-label')).toHaveText('1 agent, 1 command still running in the background', { timeout: 30_000 })
+    await note.click()
     const reader = page.locator('.wf-modal--tasks')
     const head = reader.locator('.bg-tasks-detail-head')
     await expect(head.locator('.bg-tasks-detail-title')).toHaveText(LONG)
@@ -187,6 +195,8 @@ test.describe('Stop one background task', () => {
     expect(stops).toHaveLength(3)
     await emitLedger(page, sessionId, ledger({ 'agent-run': 'stopped', 'bash-run': 'stopped' }))
     await expect(cmdStop).toHaveCount(0)
+    // Nothing runs any more, so the after-turn line is gone with them.
+    await expect(note).toHaveCount(0)
 
     expect(errors).toEqual([])
   })
