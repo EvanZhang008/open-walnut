@@ -1,6 +1,6 @@
 import { appUpdateBridge, hasAppUpdater } from '@/hooks/useAppUpdate';
 import { log } from '@/utils/log';
-import { describeUnsavedWork, listUnsavedWork, revealUnsavedWork } from '@/utils/unsaved-work';
+import { describeUnsavedWork, listUnsavedWork, revealUnsavedWork, type HomeOpener } from '@/utils/unsaved-work';
 import { ConfirmDialog } from './ConfirmDialog';
 
 export interface UnsavedRow { what: string; where: string; reveal: () => void }
@@ -25,10 +25,10 @@ const SHELL_DEADLINE_MS = 4_000;
  * restart helper's count: absent from an older helper, negative when it could
  * not read the window list (counted as one window nobody checked).
  */
-export async function gatherUnsavedWork(scope: 'app' | 'window', openSession: (sessionId: string) => void, windowCount?: number): Promise<UnsavedWork> {
+export async function gatherUnsavedWork(scope: 'app' | 'window', openHome: HomeOpener, windowCount?: number): Promise<UnsavedWork> {
   const own = listUnsavedWork(document, document.activeElement, scope === 'app' ? 'leave' : 'reload');
   const othersUnknown = windowCount == null ? 0 : windowCount < 0 ? 1 : Math.max(0, windowCount - 1);
-  const here: UnsavedGroup = { key: 'this', title: '', rows: own.map((it) => ({ what: it.what, where: it.where, reveal: () => revealUnsavedWork(it, openSession) })) };
+  const here: UnsavedGroup = { key: 'this', title: '', rows: own.map((it) => ({ what: it.what, where: it.where, reveal: () => revealUnsavedWork(it, openHome) })) };
   const groups: UnsavedGroup[] = [];
   let unchecked = 0;
   let otherWindows = 0;

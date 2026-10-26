@@ -70,8 +70,16 @@ describe('unsaved work: what counts', () => {
   });
 
   it('an image pasted into a composer counts once per composer, though it has no text', () => {
-    const items = list('<textarea></textarea><div class="chat-image-previews"><div class="chat-image-preview"><img src="a.png"></div><div class="chat-image-preview"><img src="b.png"></div></div>');
+    const items = list('<div class="chat-input-container"><textarea></textarea><div class="chat-image-previews"><div class="chat-image-preview"><img src="a.png"></div><div class="chat-image-preview"><img src="b.png"></div></div></div>');
     expect(items.map((i) => i.kind)).toEqual(['attachment']);
+  });
+
+  it('an image already sent does not count: its thumbnail in the conversation is not a composer', () => {
+    // 2026-10-25: two images showing "Delivered" under the user's own messages were listed
+    // as "An attached image that is not sent" and held the reload. The conversation draws
+    // its sent thumbnails with the composer's own classes (SessionChatHistory.tsx).
+    const sent = '<div class="chat-image-previews"><div class="chat-image-preview"><img src="a.png"></div></div><div class="chat-image-preview"><img src="b.png"></div>';
+    expect(list(`<div class="session-panel" data-session-id="s-9"><div class="session-chat-history">${sent}${sent}</div><div class="chat-input-container"><textarea></textarea></div></div>`)).toEqual([]);
   });
 
   it('a task title being edited inline counts; a checkbox and an unfocused search box do not', () => {
@@ -125,7 +133,7 @@ describe('unsaved work: a saved composer draft is not lost', () => {
   });
 
   it('a pasted image still counts in a composer whose text was saved', () => {
-    const { window, document, store } = page(`${PANELS}<div class="session-panel" data-session-id="s-3"><textarea id="t3">x</textarea><div class="chat-image-previews"><div class="chat-image-preview"></div></div></div>`);
+    const { window, document, store } = page(`${PANELS}<div class="session-panel" data-session-id="s-3"><div class="chat-input-container"><textarea id="t3">x</textarea><div class="chat-image-previews"><div class="chat-image-preview"></div></div></div></div>`);
     for (const [id, key] of [['#saved', 'a'], ['#unsaved', 'b'], ['#t3', 'c']]) composer(window, store, document.querySelector(id)!, key);
     expect(listUnsavedWork(document, null)).toMatchObject([{ kind: 'attachment', sessionId: 's-3', where: 'a session' }]);
   });

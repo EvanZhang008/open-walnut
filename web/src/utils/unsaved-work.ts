@@ -73,6 +73,8 @@ const TEXT_INPUT_TYPES = new Set(['text', 'search', 'url', 'email', 'tel', 'pass
  */
 const DOCUMENT_EDITOR_SELECTOR = '.cm-editor, .ProseMirror, .tiptap';
 const EDITABLE_ATTR_VALUES = new Set(['', 'true', 'plaintext-only']);
+/** A message composer's root (ChatInput.tsx). */
+const COMPOSER = '.chat-input-container';
 
 /** Ask every mounted composer to write its draft now; returns the ones that did. */
 function flushDrafts(doc: Document, scope: UnsavedScope): Set<Element> {
@@ -130,10 +132,13 @@ export function listUnsavedWork(doc: Document = document, active: Element | null
     if (value.trim() && !saved.has(el)) items.push(item('message', 'Unsent text', el));
   }
   // An image pasted into a composer lives only in React state: one entry per composer.
-  for (const group of Array.from(doc.querySelectorAll('.chat-image-previews'))) {
+  // Only a composer's own previews count. The conversation draws an image it already
+  // sent with the same classes (SessionChatHistory's OptimisticImagePreviews), and
+  // counting those held a reload over images marked "Delivered" (2026-10-25).
+  for (const group of Array.from(doc.querySelectorAll(`${COMPOSER} .chat-image-previews`))) {
     if (group.querySelector('.chat-image-preview')) items.push(item('attachment', 'An attached image that is not sent', group));
   }
-  for (const el of Array.from(doc.querySelectorAll('.chat-image-preview'))) {
+  for (const el of Array.from(doc.querySelectorAll(`${COMPOSER} .chat-image-preview`))) {
     if (!el.closest('.chat-image-previews')) items.push(item('attachment', 'An attached image that is not sent', el));
   }
   for (const el of Array.from(doc.querySelectorAll('.fv-dirty-dot'))) items.push(item('file', 'Unsaved file changes', el));
@@ -160,28 +165,62 @@ export function describeUnsavedWork(items: UnsavedItem[]): Array<{ kind: Unsaved
   return items.map(({ kind, where, sessionId }) => ({ kind, where, ...(sessionId ? { sessionId } : {}) }));
 }
 
+/** Home stays mounted behind every other page, in this wrapper (App.tsx). */
+const HIDDEN_HOME = '.main-page-wrapper-hidden';
+
+/**
+ * On screen for the user. Laid out is not enough: Home behind an app page keeps
+ * its boxes (visibility:hidden, height 0), so a composer there has client rects
+ * and "Go there" used to scroll it inside the hidden page and stay put (2026-10-25).
+ */
 function visible(el: Element | null): el is HTMLElement {
-  return !!el && el.isConnected && typeof (el as HTMLElement).focus === 'function' && el.getClientRects().length > 0;
+  if (!el || !el.isConnected || typeof (el as HTMLElement).focus !== 'function') return false;
+  if (el.getClientRects().length === 0 || el.closest(HIDDEN_HOME)) return false;
+  const view = el.ownerDocument?.defaultView;
+  return !view?.getComputedStyle || view.getComputedStyle(el).visibility !== 'hidden';
 }
 
 function show(el: HTMLElement): void {
   el.scrollIntoView?.({ block: 'center' });
-  el.focus?.({ preventScroll: true });
+  // An attachment is not a field: put the cursor in the composer it belongs to.
+  const field = el.matches('textarea, input, [contenteditable]') ? el : el.closest(COMPOSER)?.querySelector<HTMLElement>('textarea') ?? el;
+  field.focus?.({ preventScroll: true });
+}
+
+/** Opens Home, on a session's column when given one. Every window registers its router's. */
+export type HomeOpener = (sessionId?: string) => void;
+let homeOpener: HomeOpener | undefined;
+export function setUnsavedWorkHomeOpener(open: HomeOpener | undefined): void { homeOpener = open; }
+
+/** The same item after its column re-rendered: the box of that kind in that session. */
+function relocate(target: UnsavedItem): Element | null {
+  if (visible(target.element) || !target.sessionId) return target.element;
+  const panels = Array.from((target.element?.ownerDocument ?? document).querySelectorAll('.session-panel[data-session-id]'))
+    .filter((p) => p.getAttribute('data-session-id') === target.sessionId);
+  const selector = target.kind === 'attachment' ? `${COMPOSER} .chat-image-previews` : target.kind === 'message' ? `${COMPOSER} textarea` : '';
+  for (const panel of panels) {
+    const found = selector ? panel.querySelector(selector) : null;
+    if (visible(found)) return found;
+  }
+  return target.element;
 }
 
 /**
- * Take the user to an item. A composer in a hidden session column is opened on
- * Home first (`openSession`), then revealed once it has rendered.
+ * Take the user to an item, from any page. One on Home (a session column, the
+ * Scratchpad) while another page shows is reached by opening Home first, on its
+ * session's column when it has one, then revealed once it has rendered.
  */
-export function revealUnsavedWork(target: UnsavedItem, openSession?: (sessionId: string) => void): void {
+export function revealUnsavedWork(target: UnsavedItem, openHome: HomeOpener | undefined = homeOpener): void {
   log.info('update', 'revealing unsaved work', describeUnsavedWork([target])[0]);
   if (visible(target.element)) { show(target.element); return; }
-  if (!target.sessionId || !openSession) return;
-  openSession(target.sessionId);
+  const onHome = !!target.element?.closest('.main-page-wrapper');
+  if (!openHome || (!target.sessionId && !onHome)) return;
+  openHome(target.sessionId);
   let tries = 0;
   const retry = () => {
-    if (visible(target.element)) { show(target.element); return; }
-    if (++tries < 20) window.setTimeout(retry, 100);
+    const el = relocate(target);
+    if (visible(el)) { show(el); return; }
+    if (++tries < 30) window.setTimeout(retry, 100);
   };
   window.setTimeout(retry, 50);
 }

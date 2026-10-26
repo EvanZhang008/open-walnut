@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { getStaleBuild, reloadForUpgrade, subscribeStaleBuild, type StaleBuildState } from '@/utils/stale-assets';
 import { openSessionOnHome } from '@/utils/open-session';
-import { draftsSettled } from '@/utils/unsaved-work';
+import { draftsSettled, setUnsavedWorkHomeOpener } from '@/utils/unsaved-work';
 import { useInstalledAppUpdate } from '@/components/layout/InstalledAppUpdate';
 import { useAppUpdateState } from '@/hooks/useAppUpdate';
 import { useAppUpdateActions } from '@/components/layout/useAppUpdateActions';
@@ -26,6 +26,11 @@ export function StaleBuildPill() {
   const [starting, setStarting] = useState(false);
   const checking = useRef(false);
   const navigate = useNavigate();
+  const openHome = useCallback((sessionId?: string) => {
+    if (sessionId) openSessionOnHome(sessionId, navigate); else navigate('/');
+  }, [navigate]);
+  // "Go there" asked by another window (the Mac app's other-window rows) reaches this router too.
+  useEffect(() => { setUnsavedWorkHomeOpener(openHome); return () => setUnsavedWorkHomeOpener(undefined); }, [openHome]);
   const installed = useInstalledAppUpdate();
   const shell = useAppUpdateState();
   const shellActions = useAppUpdateActions(shell);
@@ -70,14 +75,13 @@ export function StaleBuildPill() {
     try {
       // Restart and reload go at once, unless something would be lost: a draft
       // already in storage is not (it comes back), so it never holds them.
-      const work = await gatherUnsavedWork(verb === 'restart' ? 'app' : 'window',
-        (sessionId) => openSessionOnHome(sessionId, navigate), installed.update?.windows);
+      const work = await gatherUnsavedWork(verb === 'restart' ? 'app' : 'window', openHome, installed.update?.windows);
       if (!hasAny(work)) { await go(work.allChecked, work.otherWindows); return; }
       setHeld({ work, verb, go: () => go(true, work.otherWindows) });
     } finally {
       checking.current = false;
     }
-  }, [pending, native, shellVisible, shellAction, shellActions.run, installed.restart, installed.update?.windows, navigate]);
+  }, [pending, native, shellVisible, shellAction, shellActions.run, installed.restart, installed.update?.windows, openHome]);
   const onLater = () => {
     if (!identity || pending) return;
     try { window.sessionStorage.setItem(DISMISS_KEY, identity); } catch { /* quota */ }
