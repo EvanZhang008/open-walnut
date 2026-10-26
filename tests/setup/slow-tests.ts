@@ -72,6 +72,7 @@ export const SLOW_TEST_FILES = [
   'tests/providers/daemon-connection-upload-fake-ssh.test.ts', // ~5s idle, ~20s at load 27: a stand-in ssh process per chunk, ~90 of them
   'tests/utils/file-lock-multiprocess.test.ts', // ~1.5s idle, 3s+ under load: four real locker processes
   'tests/core/self-update/install-lock-multiprocess.test.ts', // updater processes and install.sh runs on one root
+  'tests/core/self-update/startup-update-wait.test.ts', // a real process waits out a 1.5 s detached install
   'tests/integration/cloud-setup-e2e.test.ts', // real cloud-mode HTTP server + git sync
 
   // ── Real git subprocesses (repo creation, history rewrite, packing) ─────────

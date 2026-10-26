@@ -135,6 +135,21 @@ export interface UpdateStop {
   done: () => void
 }
 
+/**
+ * Hold this process open while the startup waits for the install (or the file's
+ * download). Nothing in that wait does by itself: the installer runs detached and
+ * unref'd and its log copy is unref'd (background-install.ts, so that neither keeps
+ * a stopped server alive), the budget timer is unref'd (watchStop), and a signal
+ * handler holds nothing. With only those, the event loop empties and the process
+ * ends with exit 0 in the middle of the wait, printing nothing more (2026-10-25,
+ * the release rehearsal's serve and update scenarios). One ref'd timer for as long
+ * as the wait lasts; the function it returns clears it.
+ */
+export function holdWhileWaiting(): () => void {
+  const timer = setInterval(() => {}, 0x7fffffff)
+  return () => clearInterval(timer)
+}
+
 /** Watch for the budget (none when null) and for SIGINT/SIGTERM/SIGHUP while an update runs. */
 export function watchStop(budgetMs: number | null = STARTUP_UPDATE_BUDGET_MS): UpdateStop {
   const controller = new AbortController()
@@ -277,6 +292,10 @@ export async function updateOnStart(deps: StartupUpdateDeps): Promise<StartupUpd
     }, () => { deps.markUnverified?.(null); return false })
     return { kind: 'continue', decision, later }
   }
+  // The wait holds the process open until it ends (installed, out of time, or a
+  // signal); what goes on after it (goOn's `later`, npm outliving a stopped
+  // server) never does.
+  const release = holdWhileWaiting()
   try {
     if (decision.action === 'install-file') {
       // Only a signal stops the download; out of time it goes on.
@@ -354,6 +373,7 @@ export async function updateOnStart(deps: StartupUpdateDeps): Promise<StartupUpd
     const signal = stop.received()
     if (signal) return { kind: 'stopped', signal }
   } finally {
+    release()
     stop.done()
   }
   deps.err(`Installed Open Walnut ${decision.version}; starting it.`)
