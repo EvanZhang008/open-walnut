@@ -1,5 +1,6 @@
 import fsp from 'node:fs/promises'
 import os from 'node:os'
+import path from 'node:path'
 import { Router, type RequestHandler } from 'express'
 import { CLOUD_MODE, WALNUT_HOME, WALNUT_INSTALL_DIR, WALNUT_PACKAGE_ROOT } from '../../constants.js'
 import { bus } from '../../core/event-bus.js'
@@ -509,6 +510,108 @@ export function createPluginRuntimeRouter(deps: PluginRuntimeRouterDeps): Router
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       res.status(/^No task /.test(message) ? 404 : error instanceof RangeError ? 413 : errorStatus(error)).json({ error: message })
+    }
+  })
+
+  /**
+   * `walnut.ai.run` from a plugin's App in the browser (src/core/ai/ai-run.ts). The answer streams
+   * as NDJSON: `{"type":"text","delta"}` lines while the model writes, then one
+   * `{"type":"result",...}` or `{"type":"error","code","message"}` line. A client that goes away
+   * cancels the run. Primary only: a replica has no plugin server code and no AI of the user's.
+   */
+  router.post('/:pluginId/ai/run', async (req, res) => {
+    let pluginId: string
+    try {
+      pluginId = routePluginId(req.params.pluginId)
+    } catch (error) {
+      res.status(400).json({ code: 'ai_bad_request', error: error instanceof Error ? error.message : String(error) })
+      return
+    }
+    if (cloudMode) {
+      res.status(503).json({ code: 'ai_failed', error: 'AI calls from an App run on your Mac, not on this companion' })
+      return
+    }
+    if (!activePlugin(pluginId)) {
+      res.status(404).json({ code: 'ai_bad_request', error: `Active Plugin "${pluginId}" was not found` })
+      return
+    }
+    const body = (req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body : {}) as Record<string, unknown>
+    const name = deps.list().find((plugin) => plugin.id === pluginId)?.name ?? pluginId
+    const controller = new AbortController()
+    // `close` on the response fires when the client goes away before the answer is done.
+    res.on('close', () => { if (!res.writableEnded) controller.abort() })
+    res.status(200)
+    res.setHeader('Content-Type', 'application/x-ndjson; charset=utf-8')
+    res.setHeader('Cache-Control', 'no-store')
+    res.setHeader('X-Accel-Buffering', 'no')
+    res.flushHeaders?.()
+    const line = (value: Record<string, unknown>) => { if (!res.writableEnded) res.write(`${JSON.stringify(value)}\n`) }
+    try {
+      const { aiRun } = await import('../../core/ai/ai-run.js')
+      const result = await aiRun(
+        { kind: 'plugin', id: pluginId, name, homeDir: path.join(deps.walnutHome ?? WALNUT_HOME, 'plugin-data', pluginId) },
+        {
+          prompt: body.prompt as string,
+          ...(body.context !== undefined ? { context: body.context as string } : {}),
+          ...(typeof body.system === 'string' ? { system: body.system } : {}),
+          ...(body.format !== undefined ? { format: body.format as { schema: Record<string, unknown> } } : {}),
+          ...(body.needs !== undefined ? { needs: body.needs as Record<string, never> } : {}),
+          ...(typeof body.conversation === 'string' ? { conversation: body.conversation } : {}),
+          ...(typeof body.effort === 'string' ? { effort: body.effort as 'quick' } : {}),
+          ...(typeof body.timeoutMs === 'number' ? { timeoutMs: body.timeoutMs } : {}),
+          interactive: true,
+          onText: (delta) => line({ type: 'text', delta }),
+          signal: controller.signal,
+        },
+      )
+      line({ type: 'result', ...result })
+    } catch (error) {
+      const code = error && typeof error === 'object' && typeof (error as { code?: unknown }).code === 'string'
+        ? (error as { code: string }).code : 'ai_failed'
+      line({ type: 'error', code, message: error instanceof Error ? error.message : String(error) })
+    } finally {
+      res.end()
+    }
+  })
+
+  router.post('/:pluginId/ai/end', async (req, res) => {
+    try {
+      const pluginId = routePluginId(req.params.pluginId)
+      const body = (req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body : {}) as Record<string, unknown>
+      const { aiEnd } = await import('../../core/ai/ai-run.js')
+      res.json(await aiEnd({ kind: 'plugin', id: pluginId }, String(body.conversation ?? '')))
+    } catch (error) {
+      const code = error && typeof error === 'object' && typeof (error as { code?: unknown }).code === 'string'
+        ? (error as { code: string }).code : 'ai_failed'
+      res.status(code === 'ai_bad_request' ? 400 : 500).json({ code, error: error instanceof Error ? error.message : String(error) })
+    }
+  })
+
+  /** The AI row of a plugin in Settings: switch, monthly budget, spend this month. */
+  router.get('/:pluginId/ai', async (req, res) => {
+    try {
+      const pluginId = routePluginId(req.params.pluginId)
+      const { callerSettings, callerSpend } = await import('../../core/ai/ai-policy.js')
+      const caller = { kind: 'plugin' as const, id: pluginId }
+      const [settings, spend] = await Promise.all([callerSettings(caller), callerSpend(caller)])
+      res.json({ enabled: settings.enabled, monthlyUsd: settings.monthlyUsd, spentUsd: spend.usd, calls: spend.calls, lastAt: spend.lastAt ?? null })
+    } catch (error) {
+      res.status(400).json({ error: error instanceof Error ? error.message : String(error) })
+    }
+  })
+
+  router.patch('/:pluginId/ai', async (req, res) => {
+    try {
+      const pluginId = routePluginId(req.params.pluginId)
+      const body = (req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body : {}) as Record<string, unknown>
+      const { setCallerSettings } = await import('../../core/ai/ai-policy.js')
+      const settings = await setCallerSettings(pluginId, {
+        ...(typeof body.enabled === 'boolean' ? { enabled: body.enabled } : {}),
+        ...(typeof body.monthlyUsd === 'number' ? { monthlyUsd: body.monthlyUsd } : {}),
+      })
+      res.json(settings)
+    } catch (error) {
+      res.status(400).json({ error: error instanceof Error ? error.message : String(error) })
     }
   })
 

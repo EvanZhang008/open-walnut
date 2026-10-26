@@ -30,6 +30,7 @@ import crypto from 'node:crypto'
 import { bus, EventNames, eventData } from '../core/event-bus.js'
 import { registerSessionServerProbe } from '../core/sessions/session-server-state.js'
 import { CostWatermark } from '../core/usage/cost-watermark.js'
+import { readUserSettingsEnv, slimChildSettingsArg } from './inline-subagent.js'
 import { COMPACTED_MESSAGE, COMPACTING_MESSAGE, compactedDetail, firstSightingOfLine } from '../core/stream/compaction-notice.js'
 import { HOOK_LIFECYCLE_SUBTYPES, hookFailureNotice } from '../core/stream/hook-notice.js'
 import { isProcessAliveAsync } from '../utils/process.js'
@@ -2426,6 +2427,13 @@ export class ClaudeCodeSession {
     if (profile?.tools && profile.tools.length > 0) {
       args.push('--tools', profile.tools.join(','))
     }
+    // A slim profile (an app's ai.run agent lane, src/core/ai/ai-agent.ts) loads none of the
+    // user's or the project's Claude Code settings, so their allow rules, hooks and MCP servers
+    // cannot widen what the profile grants. Their env (the auth, e.g. Bedrock) and model aliases
+    // come back through the settings arg below, the way micro-Claude children get them
+    // (inline-subagent.ts). Local only: those settings are this machine's.
+    const slim = profile?.slim === true && !host
+    if (slim) args.push('--setting-sources', '', '--strict-mcp-config')
     // The in-session `walnut` CLI (and the walnut MCP child) must reach the
     // server that launched this session. They default to :3456, so a session of
     // any other server (ephemeral, fixture, vitest) wrote into the user's real
@@ -2437,8 +2445,11 @@ export class ClaudeCodeSession {
     // (compact-open-items-hook.ts) and the /tmp git guard (git-tmp-guard-hook.ts),
     // local and remote alike.
     const sessionSettings: Record<string, unknown> = {}
-    if (Object.keys(walnutEnv).length > 0) sessionSettings.env = walnutEnv
-    const settingsHooks = sessionSettingsHooks()
+    const slimEnv = slim ? readUserSettingsEnv() : {}
+    if (Object.keys(walnutEnv).length + Object.keys(slimEnv).length > 0) sessionSettings.env = { ...slimEnv, ...walnutEnv }
+    const slimOverrides = slim ? slimChildSettingsArg() : undefined
+    if (slimOverrides) Object.assign(sessionSettings, JSON.parse(slimOverrides) as Record<string, unknown>)
+    const settingsHooks = slim ? undefined : sessionSettingsHooks()
     if (settingsHooks) sessionSettings.hooks = settingsHooks
     if (Object.keys(sessionSettings).length > 0) {
       args.push('--settings', JSON.stringify(sessionSettings))
@@ -10893,8 +10904,9 @@ export class SessionRunner {
       }
 
       // Session context (walnut gateway + walnut skill pointer). Task-independent —
-      // every managed session gets it, taskless ones included.
-      try {
+      // every managed session gets it, taskless ones included, except a slim profile, whose
+      // prompt is the caller's alone (an app's ai.run lane).
+      if (!data.profile?.slim) try {
         const { buildSessionContext } = await import('../core/sessions/session-context.js')
         const ctx = await buildSessionContext(taskId ?? '', cwd, data.host)
         if (ctx.systemPrompt) {

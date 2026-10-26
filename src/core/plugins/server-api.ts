@@ -1103,6 +1103,21 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
       },
     },
 
+    // One call to the user's AI (src/core/ai/ai-run.ts): Walnut picks the route (a direct answer or
+    // an agent session on the daemon) from what the request needs. Lazy for the same reason as model.
+    ai: {
+      async run(request: Parameters<typeof import('../ai/ai-run.js')['aiRun']>[1]) {
+        assertLive('ai.run')
+        const { aiRun } = await import('../ai/ai-run.js')
+        return aiRun({ kind: 'plugin', id: pluginId, name: options.pluginName, homeDir: context.dataDir }, request)
+      },
+      async end(conversation: string) {
+        assertLive('ai.end')
+        const { aiEnd } = await import('../ai/ai-run.js')
+        return aiEnd({ kind: 'plugin', id: pluginId, name: options.pluginName }, conversation)
+      },
+    },
+
     registry: {
       sync(adapter: unknown) {
         assertLive('registry.sync')

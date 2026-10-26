@@ -7,6 +7,7 @@ import { log } from '@/utils/log'
 import { disposable, type WebPluginContext } from './disposable'
 import { APP_PLACEMENTS, appRegistry, assertBadge, type AppBadge, type AppContribution } from '@/apps/registry'
 import { pluginUiRegistry } from './registry'
+import { createWebAi } from './plugin-ai'
 import { createPluginViews } from './views'
 import type {
   PluginEvent,
@@ -258,6 +259,7 @@ export function createWebPluginApi(
       },
     },
     appState,
+    ai: createWebAi(pluginId, context.signal),
     ws: {
       call<T = unknown>(id: string, payload: unknown = {}) {
         validateLocalId(id)

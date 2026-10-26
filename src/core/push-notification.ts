@@ -77,12 +77,14 @@ async function maybePush(title: string, body: string, data?: Record<string, unkn
  */
 async function laneIdsFor(
   sessionId: string | undefined,
-): Promise<{ agentId: string; conversationId: string } | null> {
+): Promise<{ agentId: string; conversationId: string } | 'silent' | null> {
   if (!sessionId) return null
   try {
     const { getSessionByClaudeId } = await import('./session-tracker.js')
     const { parseLaneKey } = await import('./sessions/personal-ai-lane.js')
     const record = await getSessionByClaudeId(sessionId)
+    // An app's ai.run session (src/core/ai/ai-agent.ts) answers the app, never the phone.
+    if (record?.lane?.startsWith('ai:')) return 'silent'
     return parseLaneKey(record?.lane)
   } catch (err) {
     log.web.warn('push: lane lookup failed, using generic copy', {
@@ -116,6 +118,7 @@ export function initPushNotifications(): void {
           if (data.interrupted) break
           const sessionId = data.sessionId
           const lane = await laneIdsFor(sessionId)
+          if (lane === 'silent') break
           if (lane) {
             // A lane-bound session IS the Personal AI answering a chat turn, not an
             // external coding session — "Session 3f2a1b0c finished" would be
@@ -143,6 +146,7 @@ export function initPushNotifications(): void {
           if (data.errorKind === 'delivery_failed') break
           const error = data.error
           const lane = await laneIdsFor(data.sessionId)
+          if (lane === 'silent') break
           if (lane) {
             await maybePush(
               'Walnut',

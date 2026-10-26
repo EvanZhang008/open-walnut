@@ -301,6 +301,8 @@ export interface WalnutWebApiHost {
     ): Promise<{ version: number; kept: boolean }>
     clear(taskId: string): Promise<void>
   }
+  /** The user's AI (plugin-ai.ts): one call, Walnut picks the route, interactive by default. */
+  readonly ai: import('./plugin-ai').WebAiService
   readonly unsafe: {
     readonly react: unknown
     readonly host: unknown

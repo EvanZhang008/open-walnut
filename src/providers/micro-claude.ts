@@ -52,6 +52,8 @@ export interface MicroClaudeOptions {
   warm?: boolean;
   /** Live stream mirror (text / tool_call blocks) for progress UI. */
   onBlock?: (block: StreamingBlock) => void;
+  /** Answer text as it is written. Warm path only (it asks the CLI for partial messages). */
+  onTextDelta?: (text: string) => void;
   /** For event correlation; defaults to a fresh micro-claude-<uuid>. */
   toolUseId?: string;
 }
@@ -86,6 +88,7 @@ export async function runMicroClaude(opts: MicroClaudeOptions): Promise<MicroCla
       timeoutMs: opts.timeoutMs ?? DEFAULT_TIMEOUT_MS,
       toolUseId: opts.toolUseId ?? `micro-claude-${randomUUID()}`,
       ...(opts.onBlock ? { onBlock: opts.onBlock } : {}),
+      ...(opts.onTextDelta ? { partial: true, onTextDelta: opts.onTextDelta } : {}),
     });
     return {
       response: run.response,

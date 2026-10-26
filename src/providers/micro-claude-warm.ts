@@ -7,7 +7,9 @@
  * be pre-spawned (empty stdin makes it exit within ~5s), but a stream-json
  * child waits for input indefinitely — the same long-running shape the
  * session daemon runs on. So we keep ONE pre-booted child per spec (model +
- * system + tools) and hand it the prompt the moment a call arrives.
+ * system + tools) and hand it the prompt the moment a call arrives. Several
+ * specs can be warm at once (AI search, each plugin's `ai.run` prompt), up to
+ * POOL_MAX; the least recently warmed one gives way.
  *
  * Lifecycle: take the pooled child (or cold-spawn the same shape), write
  * one user message, resolve on the CLI's `result` line, then end stdin so
@@ -46,6 +48,8 @@ export interface WarmSpec {
   tools: string[];
   /** --effort level; undefined = the CLI's own default for the model. */
   effort?: string;
+  /** Stream text as it is written (`--include-partial-messages`), for `onTextDelta`. */
+  partial?: boolean;
 }
 
 export interface WarmRunOptions extends WarmSpec {
@@ -53,6 +57,8 @@ export interface WarmRunOptions extends WarmSpec {
   timeoutMs: number;
   toolUseId: string;
   onBlock?: (block: StreamingBlock) => void;
+  /** Each piece of answer text as the model writes it. Needs `partial`. */
+  onTextDelta?: (text: string) => void;
 }
 
 export interface WarmRunResult {
@@ -76,6 +82,8 @@ export interface WarmRunResult {
 }
 
 const POOL_IDLE_TTL_MS = 15 * 60_000;
+/** Warm children kept at once, one per spec. Each is an idle CLI process. */
+const POOL_MAX = 3;
 const EXIT_GRACE_MS = 5_000;
 
 interface PooledChild {
@@ -88,13 +96,18 @@ interface PooledChild {
   cwd?: string;
 }
 
-let pooled: PooledChild | null = null;
-let reapTimer: ReturnType<typeof setTimeout> | null = null;
+/** Warm children by spec key, oldest first (Map keeps insertion order). */
+const pool = new Map<string, PooledChild>();
+const reapTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
 function specKey(spec: WarmSpec): string {
   return createHash('sha256')
-    .update(`${spec.model}|${spec.effort ?? ''}|${spec.tools.join(',')}|${spec.system}`)
+    .update(`${spec.model}|${spec.effort ?? ''}|${spec.tools.join(',')}|${spec.partial ? 'partial' : ''}|${spec.system}`)
     .digest('hex');
+}
+
+function alive(child: PooledChild): boolean {
+  return child.proc.exitCode === null && !child.proc.killed;
 }
 
 function warmDisabled(): boolean {
@@ -126,6 +139,7 @@ function spawnStreamChild(spec: WarmSpec): PooledChild | null {
     '--input-format', 'stream-json',
     '--output-format', 'stream-json',
     '--verbose',
+    ...(spec.partial ? ['--include-partial-messages'] : []),
     '--model', spec.model,
     '--allow-dangerously-skip-permissions',
     '--permission-mode', 'bypassPermissions',
@@ -163,32 +177,46 @@ function spawnStreamChild(spec: WarmSpec): PooledChild | null {
   return child;
 }
 
-function disposePooled(): void {
-  if (!pooled) return;
-  try { pooled.proc.kill('SIGTERM'); } catch { /* already gone */ }
-  pooled = null;
+function disposePooled(key: string): void {
+  const child = pool.get(key);
+  const timer = reapTimers.get(key);
+  if (timer) clearTimeout(timer);
+  reapTimers.delete(key);
+  if (!child) return;
+  pool.delete(key);
+  try { child.proc.kill('SIGTERM'); } catch { /* already gone */ }
+}
+
+function disposeAll(): void {
+  for (const key of [...pool.keys()]) disposePooled(key);
 }
 
 /** Pre-boot one child for the given spec. Idempotent: a live pooled child
- *  with the same spec is kept; a mismatched one is replaced. Fire-and-forget
+ *  with the same spec is kept; children of other specs stay beside it, and
+ *  the oldest gives way past POOL_MAX. Fire-and-forget
  *  (e.g. from a human-typing signal) — never throws. */
 export function prewarmMicroClaude(spec: WarmSpec): void {
   if (warmDisabled()) return;
   try {
     const key = specKey(spec);
-    if (pooled) {
-      if (pooled.key === key && pooled.proc.exitCode === null && !pooled.proc.killed) return;
-      disposePooled();
-    }
+    const existing = pool.get(key);
+    if (existing && alive(existing)) return;
+    disposePooled(key);
+    while (pool.size >= POOL_MAX) disposePooled(pool.keys().next().value as string);
     const child = spawnStreamChild(spec);
     if (!child) return;
     child.proc.on('exit', () => {
-      if (pooled?.proc === child.proc) pooled = null;
+      if (pool.get(key)?.proc === child.proc) {
+        pool.delete(key);
+        const timer = reapTimers.get(key);
+        if (timer) clearTimeout(timer);
+        reapTimers.delete(key);
+      }
     });
-    pooled = child;
-    if (reapTimer) clearTimeout(reapTimer);
-    reapTimer = setTimeout(() => { disposePooled(); }, POOL_IDLE_TTL_MS);
-    reapTimer.unref?.();
+    pool.set(key, child);
+    const timer = setTimeout(() => { disposePooled(key); }, POOL_IDLE_TTL_MS);
+    timer.unref?.();
+    reapTimers.set(key, timer);
   } catch (err) {
     log.agent.warn('micro-claude prewarm failed', {
       error: err instanceof Error ? err.message : String(err),
@@ -198,11 +226,10 @@ export function prewarmMicroClaude(spec: WarmSpec): void {
 
 /** Test hook. */
 export function _resetWarmPoolForTesting(): void {
-  disposePooled();
-  if (reapTimer) { clearTimeout(reapTimer); reapTimer = null; }
+  disposeAll();
 }
 
-process.once('exit', () => { disposePooled(); });
+process.once('exit', () => { disposeAll(); });
 
 /** One micro-Claude turn on a stream-json child — pooled when available,
  *  cold-spawned otherwise. Always pre-warms a replacement for the NEXT call. */
@@ -210,14 +237,18 @@ export async function runWarmMicroClaude(opts: WarmRunOptions): Promise<WarmRunR
   const spec: WarmSpec = {
     system: opts.system, model: opts.model, tools: opts.tools,
     ...(opts.effort ? { effort: opts.effort } : {}),
+    ...(opts.partial ? { partial: true } : {}),
   };
   const key = specKey(spec);
   let taken: PooledChild | null = null;
   let warm = false;
-  if (!warmDisabled() && pooled && pooled.key === key
-      && pooled.proc.exitCode === null && !pooled.proc.killed) {
-    taken = pooled;
-    pooled = null;
+  const pooledChild = pool.get(key);
+  if (!warmDisabled() && pooledChild && alive(pooledChild)) {
+    taken = pooledChild;
+    pool.delete(key);
+    const timer = reapTimers.get(key);
+    if (timer) clearTimeout(timer);
+    reapTimers.delete(key);
     warm = true;
   } else {
     taken = spawnStreamChild(spec);
@@ -249,6 +280,20 @@ export async function runWarmMicroClaude(opts: WarmRunOptions): Promise<WarmRunR
     const timer = setTimeout(() => settle('timeout'), opts.timeoutMs);
 
     rl.on('line', (line) => {
+      // Partial text is read here and kept from onBlock: the parser gives a delta and the
+      // finished message the same block shape, so onBlock keeps seeing finished blocks only.
+      if (spec.partial && line.includes('"stream_event"')) {
+        type PartialLine = { type?: string; event?: { type?: string; delta?: { type?: string; text?: string } } };
+        let event: PartialLine | null = null;
+        try { event = JSON.parse(line) as PartialLine; } catch { /* not JSON: the parser below decides */ }
+        if (event?.type === 'stream_event') {
+          const inner = event.event;
+          if (inner?.type === 'content_block_delta' && inner.delta?.type === 'text_delta' && inner.delta.text) {
+            try { opts.onTextDelta?.(inner.delta.text); } catch { /* listeners never break the stream */ }
+          }
+          return;
+        }
+      }
       const parsed = parseClaudeJsonlLine(line, {
         onResult: (r) => { result = r; settle('result'); },
         // Cold-spawned children (pool miss) init after this listener exists;

@@ -18,7 +18,8 @@ export type UsageSource =
   | 'triage'       // session/subagent triage
   | 'background-review' // every-N-turn Personal AI self-review fork
   | 'task-hook'    // task lifecycle → overview maintainer agent
-  | 'task-search-agent'; // AI task search (claude -p one-shot behind /api/search/agent)
+  | 'task-search-agent' // AI task search (claude -p one-shot behind /api/search/agent)
+  | 'plugin';      // a plugin's or App's direct ai.run call (src/core/ai/); agentId = plugin:<id>
 
 export interface UsageRecord {
   id: string;

@@ -22,6 +22,7 @@ const USAGE_LABELS: Record<string, string> = {
   heartbeat: 'Heartbeat',
   cron: 'Cron',
   'task-search-agent': 'AI task search',
+  plugin: 'Plugin AI calls',
   // agent ids — both summarizer agents are RETIRED (2026-07: the session writes its
   // own summary via side_question; phase/notify is a code lookup). The labels stay so
   // historical usage rows keep reading correctly.
@@ -37,5 +38,7 @@ const USAGE_LABELS: Record<string, string> = {
 };
 
 export function usageDisplayName(name: string): string {
+  // A plugin's own ai.run calls carry agent id `plugin:<id>`.
+  if (name.startsWith('plugin:')) return `Plugin ${name.slice('plugin:'.length)}`;
   return USAGE_LABELS[name] ?? name;
 }

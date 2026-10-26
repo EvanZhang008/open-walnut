@@ -1107,6 +1107,9 @@ export interface Config {
   agent?: AgentConfig;
   /** Plugin configurations. Keys are plugin IDs (e.g. 'ms-todo'). Each plugin defines its own config schema. */
   plugins?: Record<string, Record<string, unknown> & { enabled?: boolean }>;
+  /** Per-plugin AI switch and monthly budget for `walnut.ai.run` (src/core/ai/ai-policy.ts). Kept
+   *  out of `plugins.<id>` on purpose: a plugin may patch its own section, never its own budget. */
+  plugin_ai?: Record<string, { enabled?: boolean; monthly_usd?: number }>;
   /** External calendar display (EventKit — all macOS system-account calendars).
    *
    *  LEGACY as of the calendar becoming a plugin: the live section is `plugins.calendar`
@@ -2457,6 +2460,11 @@ export interface SessionProfile {
    *  CLI's full set. Unlike `allowedTools` (pre-approval), a tool left out of this
    *  list does not exist for the model, so no mode or auto-allow can reach it. */
   tools?: string[];
+  /** Load none of the user's or the project's Claude Code settings (`--setting-sources ''`,
+   *  `--strict-mcp-config`) and no Walnut session prompt: what the profile grants is all the
+   *  session gets. Their env and model aliases still apply. Local sessions only (an app's
+   *  ai.run agent lane, src/core/ai/ai-agent.ts). */
+  slim?: boolean;
 }
 
 /**

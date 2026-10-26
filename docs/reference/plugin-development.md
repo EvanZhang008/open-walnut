@@ -175,6 +175,7 @@ That route answers at `/api/plugins/my-plugin/status`. That WebSocket method is 
 | `walnut.notifications` | Raise notices (including `kind: 'reminder'` with up to three op buttons), `dismiss` your own, report plugin errors and recover from them, and hold Walnut's quiet mode with `quiet.get/set/clear`. |
 | `walnut.ui` | Show a live status item in the console's left rail: a ring the host ticks from a timer, a label, and a popover with up to three op buttons. |
 | `walnut.letters` | Send a letter to the human, hear the answer, reply in its thread, withdraw a stale one. |
+| `walnut.ai` | Ask the user's AI with one call: a direct answer, or an agent run on the daemon when the request needs tools. No key, a per-plugin budget. |
 | `walnut.ops` | Call stable host operations that no typed service covers yet. |
 | `walnut.services` | Publish a capability for other plugins, and use the ones you declared as dependencies. |
 | `walnut.events` | Subscribe to host events and emit namespaced plugin events. |
@@ -447,6 +448,65 @@ Each publish replaces the whole object, so a server and a browser publishing for
 - Everything you publish is readable by that session. Leave out what it must not see (an answer key, a credential).
 - The state lives in memory on the primary Walnut. A restart forgets it, so publish again when your App opens; on a replica `publish` answers `kept: false`. Everything a plugin published goes away when it is disabled or reloaded.
 - Prefer passive. Each proactive turn costs a model call and interrupts the conversation the person is having.
+
+### AI: one call to the user's AI
+
+`walnut.ai.run` asks the user's AI, on the server and in the App's browser code alike. Your plugin names no provider, no key and no engine: Walnut runs the request on what the user already set up (a Claude Code login, or a provider in Settings, AI Provider), and decides how to run it from what the request says it needs.
+
+- Everything the model needs is in the request: one **direct** answer, no session. On a Claude Code login this is a slim, pre-started `claude -p` (no tools, no settings, your system prompt as its whole prompt), about two seconds once warm.
+- The request names `needs` (ops to call, files to read or edit, command prefixes to run, a folder): an **agent** run, a hidden session on the daemon. Only the tools `needs` names exist in it, and anything else is denied, never asked. It stops when it answers.
+- A `conversation` key continues the conversation on every call with the same key, on either route. `walnut.ai.end(key)` forgets it and stops its session.
+
+```ts compile=ai-run-server
+import type { WalnutServerApi } from '@open-walnut/plugin-api/server'
+
+export async function summarize(walnut: WalnutServerApi, ticket: { id: string; title: string; body: string }) {
+  // The ticket is in hand: a direct answer, with a shape the plugin can rely on.
+  const quick = await walnut.ai.run({
+    prompt: 'Summarize this ticket in three bullets and rate its urgency.',
+    context: ticket,
+    format: { schema: { type: 'object', required: ['bullets', 'urgency'], properties: {
+      bullets: { type: 'array', items: { type: 'string' } },
+      urgency: { type: 'string', enum: ['low', 'medium', 'high'] },
+    } } },
+  })
+  // Only the id is known and the comments must be read: an agent run that may call this plugin's own op.
+  const deep = await walnut.ai.run({
+    prompt: `Summarize ticket ${ticket.id} with its comments and linked tickets.`,
+    needs: { ops: ['tickets_get'] },
+    conversation: `ticket:${ticket.id}`,
+  })
+  return { quick: quick.json, deep: deep.text }
+}
+```
+
+In the browser the call is the same, it counts as one a person waits for, and `onText` streams:
+
+```tsx compile=ai-run-web
+import type { WalnutWebApi } from '@open-walnut/plugin-api/web'
+
+export async function hint(walnut: WalnutWebApi, code: string, signal: AbortSignal, show: (text: string) => void) {
+  let text = ''
+  const result = await walnut.ai.run({
+    prompt: 'One short hint, no code.',
+    context: { code },
+    conversation: 'hints',
+    effort: 'quick',
+    signal,
+    onText: (delta) => show((text += delta)),
+  })
+  return result.text
+}
+```
+
+Rules worth knowing:
+
+- A failure rejects with an Error whose `code` says why (`ai_unconfigured`, `ai_disabled`, `ai_budget`, `ai_timeout`, `ai_format`, ...) and whose message can be shown to the person as it is.
+- `context` is read as data, never as instructions. `format` asks for one JSON value; the answer is parsed into `json` and checked for its types and required fields, with one retry on a direct call.
+- The user sees what your plugin spent this month in Settings, Plugins, sets its monthly budget there (10 dollars by default) and can turn its AI off. A plugin runs at most 2 agent runs at once; more wait their turn.
+- Deadlines: 60 seconds for a direct answer, 10 minutes for an agent run. `timeoutMs` can only lower them.
+- Agent runs use Claude Code today; on a machine whose default engine is another one they still run on Claude Code when it is installed.
+- `model.fastText` stays for older plugins; new code uses `ai.run`.
 
 ### Services: plugins on top of plugins
 

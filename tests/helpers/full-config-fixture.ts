@@ -50,6 +50,7 @@ export function fullConfigFixture(): Record<string, unknown> {
     plugins: { mailbox: { enabled: true, password: pluginPass, client_secret: pluginSecret } },
     calendar: { accounts: [{ user: 'marina', password: calPass }] },
     plugin_sources: [{ url: `https://marina:${syncPass}@plugins.example.com/index.json` }],
+    plugin_ai: { mailbox: { enabled: false, monthly_usd: 5 } },
     favorites: { projects: ['Acme'], notes: ['Notes/acme.md'] },
     ordering: { projects: ['Acme', 'Marina'] },
     session_server: { port: 4123 },

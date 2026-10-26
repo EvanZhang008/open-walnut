@@ -60,6 +60,7 @@ import {
 } from './PluginDependencyRows';
 import { PluginAppControls } from '../PluginAppControls';
 import { PluginMcpControls } from '../PluginMcpControls';
+import { PluginAiControls } from '../PluginAiControls';
 import { BUNDLED_AVAILABLE_TITLE, runBundledAction } from './plugin-bundled-actions';
 import { PluginConnectionPanel, CONNECTION_BADGE, connectedHelp, type ConnectionReport } from '../PluginConnectionPanel';
 import { BuildPluginCard } from '../BuildPluginCard';
@@ -1033,6 +1034,8 @@ export function PluginStoreSection({ config, onSave }: Props) {
         <PluginAppControls pluginId={row.id} />
         {/* The MCP servers it runs: state, the reason it failed, Start / Restart. */}
         {isOn && <PluginMcpControls pluginId={row.id} />}
+        {/* What it spent on AI this month, its budget and the switch (walnut.ai). */}
+        {isOn && <PluginAiControls pluginId={row.id} />}
         {/* The account link, always visible while the plugin is on: whether the credential
             is alive is the first thing to check when sync looks off. A base plugin (mail)
             has no report of its own; its providers each get an account row. */}

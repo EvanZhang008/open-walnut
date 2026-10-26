@@ -4,6 +4,7 @@ import type { InboxLetterItem } from './inbox-items.js'
 export { WalnutPluginError } from './shared.js'
 
 import type {
+  AiService,
   Disposable,
   PluginLogger,
   TaskPhase,
@@ -1644,6 +1645,8 @@ export interface WalnutServerApi {
   readonly timers: TimerService
   readonly registry: RegistryService
   readonly model: ModelService
+  /** The user's AI: one call, Walnut picks how to run it (added in 0.6). */
+  readonly ai: AiService
   readonly unsafe: UnsafeServerHost
 }
 

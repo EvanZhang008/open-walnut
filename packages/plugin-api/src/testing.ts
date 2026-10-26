@@ -897,6 +897,11 @@ export function createFakeWalnut(options: FakeWalnutOptions = {}): FakeWalnutRes
     model: {
       fastText: async () => { throw new Error('model.fastText is not available in the fake plugin api') },
     },
+    // Same rule: pass `overrides.ai` with a canned `run` to answer.
+    ai: {
+      run: async () => { throw Object.assign(new Error('ai.run is not available in the fake plugin api'), { code: 'ai_unconfigured' }) },
+      end: async () => ({ ended: false }),
+    },
     unsafe: { database: undefined, bus: undefined, walnutHome: '/tmp/fake-walnut', host: undefined },
     ...options.overrides,
   }

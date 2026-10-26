@@ -79,6 +79,7 @@ export const CONFIG_COPY_DROPPED: Readonly<Record<string, string>> = Object.free
   usage: 'proxy log paths on the Mac',
   plugins: 'plugin settings and credentials never leave the Mac',
   plugin_sources: 'plugin install sources',
+  plugin_ai: 'plugin AI switches and budgets apply where the plugin runs, on the Mac',
   calendar: 'calendar accounts and credentials',
   favorites: 'copied by the prefs kind',
   session_server: 'the Mac server process settings',

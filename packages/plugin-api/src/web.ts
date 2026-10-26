@@ -1,7 +1,7 @@
 export type * from './shared.js'
 
 import type { ComponentType } from 'react'
-import type { Disposable, PluginLogger, TaskPhase, TaskPriority } from './shared.js'
+import type { AiService, Disposable, PluginLogger, TaskPhase, TaskPriority } from './shared.js'
 import type { AppStatePublishOptions, EventApi, OpsService, PluginFetchInit, PluginFetchResponse } from './server.js'
 
 export type PluginComponent<Props = Record<string, never>> = ComponentType<Props>
@@ -278,6 +278,12 @@ export interface WalnutWebApi {
     publish(taskId: string, state: Record<string, unknown>, options?: AppStatePublishOptions): Promise<{ version: number; kept: boolean }>
     clear(taskId: string): Promise<void>
   }
+  /**
+   * The user's AI from the browser, the same call as the server's `walnut.ai` (no key, Walnut
+   * picks the route). Calls count as interactive, `onText` streams, and aborting `signal` (pass
+   * your App's unmount signal) cancels the run. Spend counts against your plugin's budget.
+   */
+  readonly ai: AiService
   readonly unsafe: {
     readonly react: unknown
     readonly host: unknown
