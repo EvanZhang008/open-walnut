@@ -112,6 +112,7 @@ import { resolveAgentCommand } from './agent-command-map.js'
 import { computeGitDiff, GitDiffError, type GitDiffBase } from './git-diff-core.js'
 import { createGitAttribution } from './git-attribution-core.js'
 import { createGitCommitCore, type PlanChanges } from './git-commit-core.js'
+import { createOneShotCore, type OneShotChild } from './oneshot-core.js'
 import { createTransferCore, type TransferCoreDeps } from './transfer-core.js'
 import { createTransferPack, type TransferPackDeps } from './transfer-pack-core.js'
 import { createHostFacts, type HostFactsDeps } from './host-facts-core.js'
@@ -2135,6 +2136,12 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     case 'host.facts': return replyTransfer(ws, id as number, 'host.facts', () => hostFacts.facts(cmd), false)
     case 'desktop.updateStatus': return replyTransfer(ws, id as number, 'desktop.updateStatus', () => desktopUpdate.status(), false)
     case 'desktop.restart': return replyTransfer(ws, id as number, 'desktop.restart', () => desktopUpdate.restart(cmd.token, cmd.force), true)
+    // 'oneshot-v1' (oneshot-core.ts): the hidden one-shot claude runs. NOT in
+    // BRIDGE_ALLOWED_COMMANDS or FOLLOWER_ALLOWED_COMMANDS: they start processes.
+    // Keep in sync with daemon-source.ts.
+    case 'oneshot.run': return replyOneShot(ws, id as number, 'oneshot.run', () => oneShot.run(ws, cmd))
+    case 'oneshot.prewarm': return replyOneShot(ws, id as number, 'oneshot.prewarm', () => oneShot.prewarm(cmd))
+    case 'oneshot.cancel': return replyOneShot(ws, id as number, 'oneshot.cancel', () => oneShot.cancel(cmd))
     case 'usage.scan': return cmdUsageScan(ws, id as number, cmd)
     case 'usage.costState': return cmdUsageCostState(ws, id as number, cmd)
     case 'usage.sessionCost': return cmdUsageSessionCost(ws, id as number, cmd)
@@ -9582,6 +9589,26 @@ async function cmdChangesFile(ws: ServerWebSocket<WsData>, id: number, cmd: Reco
   }
 }
 
+// ── One-shot claude runs (host-local, capability 'oneshot-v1') ──
+// PARITY: keep in sync with daemon-source.ts. The logic is oneshot-core.ts
+// (shared with the source twin and the server's in-process fallback). Not on
+// the command drain: a handover or shutdown kills these runs (their caller
+// sees the link drop) instead of waiting minutes for a model turn.
+const oneShot = createOneShotCore<ServerWebSocket<WsData>>({
+  spawn: spawn as unknown as (cmd: string, args: string[], opts: Record<string, unknown>) => OneShotChild,
+  send: (ws, ev, data) => sendEvent(ws, ev, data),
+  env: process.env,
+  log: (level, msg, data) => logMsg(level, msg, data),
+})
+
+function replyOneShot(ws: ServerWebSocket<WsData>, id: number, name: string, fn: () => Record<string, unknown>) {
+  try {
+    sendOk(ws, id, fn())
+  } catch (err) {
+    sendError(ws, id, name + ' failed: ' + (err as Error).message)
+  }
+}
+
 // ── Session commit (host-local, capability 'git-commit-v1') ──
 // PARITY: keep in sync with daemon-source.ts. The logic is git-commit-core.ts +
 // git-attribution-core.ts (shared with the source twin); this twin only hands
@@ -10410,6 +10437,8 @@ function cleanupOrphanedProcessGroups() {
 
 // ── Cleanup ──
 function cleanup() {
+  // One-shot claude runs and the warm pool never outlive the daemon (oneshot-core.ts).
+  try { oneShot.disposeAll() } catch {}
   usageBudget.close()
   budgetControl.close()
   void cronRuntime?.close().catch((error) => logMsg('error', 'cron supervision shutdown failed', { error: String(error) }))
@@ -10509,6 +10538,9 @@ function handleDisconnect(ws: ServerWebSocket<WsData>) {
   wsClients.delete(ws)
   acp.removeSubscriber(ws)
   streamRelay.dropLink(ws)
+  // Nobody reads a one-shot whose socket closed: end it.
+  const droppedOneShots = oneShot.dropClient(ws)
+  if (droppedOneShots > 0) logMsg('info', 'oneshot runs ended with their socket', { wsId: wsId(ws), runs: droppedOneShots })
   if (ws.data?.origin === 'lane' && ws.data.laneHome) laneClosedAt.set(ws.data.laneHome, Date.now())
   const followed = ws.data?.followerHome
   if (followed && followerSockets.get(followed) === ws) followerSockets.delete(followed)

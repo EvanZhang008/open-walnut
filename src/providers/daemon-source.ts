@@ -71,6 +71,7 @@ import { createHostFix } from './host-fix-core.js'
 import { createFsLs } from './fs-ls-core.js'
 import { createGitAttribution } from './git-attribution-core.js'
 import { createGitCommitCore } from './git-commit-core.js'
+import { createOneShotCore } from './oneshot-core.js'
 import { createTransferCore } from './transfer-core.js'
 import { createTransferPack } from './transfer-pack-core.js'
 import { createHostFacts } from './host-facts-core.js'
@@ -280,6 +281,7 @@ export function getDaemonSource(): string {
     ['__CREATE_FS_LS__', createFsLs.toString()],
     ['__CREATE_GIT_ATTRIBUTION__', createGitAttribution.toString()],
     ['__CREATE_GIT_COMMIT__', createGitCommitCore.toString()],
+    ['__CREATE_ONESHOT__', createOneShotCore.toString()],
     ['__CREATE_TRANSFER_CORE__', createTransferCore.toString()],
     ['__CREATE_TRANSFER_PACK__', createTransferPack.toString()],
     ['__CREATE_HOST_FACTS__', createHostFacts.toString()],
@@ -668,6 +670,15 @@ export function validateFoldInjection(injections: Array<[string, string]>): void
         const gc = createCommit({ spawn: () => { throw new Error('unused') }, fs: fs as never, path, tmpdir: () => '/tmp', env: {}, attribution: at })
         if (gc.job('none') !== null || gc.cleanMessage('  x  \n\n\n\ny\n') !== '  x\n\ny\n') throw new Error('git commit core did not build')
       }
+    }
+    // One-shot smoke: the factory must build from its text and refuse a run
+    // without a command. Behaviour is pinned by tests/providers/oneshot-twins-e2e.test.ts.
+    const createOneShot = reconstructed['__CREATE_ONESHOT__'] as typeof createOneShotCore | undefined
+    if (createOneShot) {
+      const os1 = createOneShot({ spawn: () => { throw new Error('unused') }, send: () => {} })
+      let refused = false
+      try { os1.run(null, { runId: 'r' }) } catch { refused = true }
+      if (!refused || os1.stats().runs !== 0 || os1.cancel({ runId: 'r' }).found !== false) throw new Error('one-shot core did not build')
     }
     // Workspace transfer smoke: the three factories must build from their text.
     // Their behaviour is pinned by tests/providers/transfer-twin-parity.test.ts,
@@ -3401,6 +3412,12 @@ function dispatchCommand(ws, id, cmd) {
     case 'host.facts': return replyTransfer(ws, id, 'host.facts', function () { return hostFacts.facts(cmd); }, false);
     case 'desktop.updateStatus': return replyTransfer(ws, id, 'desktop.updateStatus', function () { return desktopUpdate.status(); }, false);
     case 'desktop.restart': return replyTransfer(ws, id, 'desktop.restart', function () { return desktopUpdate.restart(cmd.token, cmd.force); }, true);
+    // 'oneshot-v1' (oneshot-core.ts): the hidden one-shot claude runs. NOT in
+    // BRIDGE_ALLOWED_COMMANDS or FOLLOWER_ALLOWED_COMMANDS: they start processes.
+    // Keep in sync with daemon-standalone.ts.
+    case 'oneshot.run': return replyOneShot(ws, id, 'oneshot.run', function () { return oneShot.run(ws, cmd); });
+    case 'oneshot.prewarm': return replyOneShot(ws, id, 'oneshot.prewarm', function () { return oneShot.prewarm(cmd); });
+    case 'oneshot.cancel': return replyOneShot(ws, id, 'oneshot.cancel', function () { return oneShot.cancel(cmd); });
     case 'usage.scan': return cmdUsageScan(ws, id, cmd);
     case 'usage.costState': return cmdUsageCostState(ws, id, cmd);
     case 'usage.sessionCost': return cmdUsageSessionCost(ws, id, cmd);
@@ -11849,6 +11866,25 @@ async function cmdTurns(ws, id, cmd) {
   }
 }
 
+// ── One-shot claude runs (host-local, capability 'oneshot-v1') ──
+// PARITY: keep in sync with daemon-standalone.ts. oneshot-core.ts is injected
+// as text. Not on the command drain: a handover or shutdown kills these runs
+// (their caller sees the link drop) instead of waiting minutes for a model turn.
+const oneShot = (__CREATE_ONESHOT__)({
+  spawn: spawn,
+  send: function (ws, ev, data) { sendEvent(ws, ev, data); },
+  env: process.env,
+  log: function (level, msg, data) { logMsg(level, msg, data); },
+});
+
+function replyOneShot(ws, id, name, fn) {
+  try {
+    sendOk(ws, id, fn());
+  } catch (err) {
+    sendError(ws, id, name + ' failed: ' + err.message);
+  }
+}
+
 // ── Session commit (host-local, capability 'git-commit-v1') ──
 // PARITY: keep in sync with daemon-standalone.ts. git-commit-core.ts and
 // git-attribution-core.ts are injected as text. Without the changes sidecar the
@@ -12956,6 +12992,8 @@ function cleanupOrphanedProcessGroups() {
 
 // ── Cleanup ──
 function cleanup() {
+  // One-shot claude runs and the warm pool never outlive the daemon (oneshot-core.ts).
+  try { oneShot.disposeAll(); } catch {}
   if (usageBudget) usageBudget.close();
   if (budgetControl) budgetControl.close();
   if (cronRuntime) {
@@ -13280,6 +13318,9 @@ async function startDaemon() {
       clearInterval(pingTimer);
       if (acp) acp.removeSubscriber(ws);
       streamRelay.dropLink(ws);
+      // Nobody reads a one-shot whose socket closed: end it.
+      const droppedOneShots = oneShot.dropClient(ws);
+      if (droppedOneShots > 0) logMsg('info', 'oneshot runs ended with their socket', { runs: droppedOneShots });
       if (ws.origin === 'lane' && ws.laneHome) laneClosedAt.set(ws.laneHome, Date.now());
       if (ws.followerHome && followerSockets.get(ws.followerHome) === ws) followerSockets.delete(ws.followerHome);
 

@@ -206,6 +206,8 @@ async function claudeCliEngine(
     tools: ['Bash'],
     toolUseId: `task-search-${randomUUID()}`,
     warm: true,
+    // Plugins' ai.run prompts share the pool; search keeps its warm child.
+    keepWarm: true,
     onBlock,
   });
   return {
@@ -565,6 +567,7 @@ export function prewarmAgentSearchChild(): void {
         model: CLI_ENGINE_MODEL,
         effort: CLI_ENGINE_EFFORT,
         tools: ['Bash'],
+        keepWarm: true,
       });
     } catch { /* prewarming is an optimization, never an error */ }
   })();

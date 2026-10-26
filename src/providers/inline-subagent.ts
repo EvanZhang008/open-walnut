@@ -1,8 +1,9 @@
 /**
  * Inline Subagent — lightweight Claude Code subprocess runner.
  *
- * Spawns `claude -p --output-format stream-json` and streams JSONL output
- * as StreamingBlock events via the event bus. Used by the `create_subagent`
+ * Runs `claude -p --output-format stream-json` and streams JSONL output
+ * as StreamingBlock events via the event bus. The child is the local daemon's
+ * (oneshot-client.ts), like every Claude Code process Walnut starts. Used by the `create_subagent`
  * tool to give the main agent quick AI-assisted tasks without creating
  * a full session.
  *
@@ -16,11 +17,9 @@
  * internal tools spawned by the main agent, not user-facing sessions.
  */
 
-import { spawn, type ChildProcess } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import path from 'node:path';
-import { createInterface } from 'node:readline';
 import { bus, EventNames } from '../core/event-bus.js';
 import { log } from '../logging/index.js';
 import { resolveClaudeCliExecutable } from '../core/claude-cli-detect.js';
@@ -32,6 +31,7 @@ import {
   type ClaudeStreamInit,
   type ClaudeStreamResult,
 } from './claude-stream-parser.js';
+import { startOneShot, type OneShotExit, type OneShotHandle } from './oneshot-client.js';
 
 // ── Types ──
 
@@ -182,17 +182,6 @@ export function _resetUserSettingsEnvCacheForTesting(): void {
   userModelOverridesCache = null;
 }
 
-// ── Track active processes for cleanup ──
-
-const activeProcesses = new Set<ChildProcess>();
-
-// Use once() to avoid listener accumulation across hot-reloads / test runs
-process.once('exit', () => {
-  for (const proc of activeProcesses) {
-    try { proc.kill('SIGTERM'); } catch {}
-  }
-});
-
 // ── Core runner ──
 
 export async function runInlineSubagent(opts: InlineSubagentOptions): Promise<InlineSubagentResult> {
@@ -271,27 +260,14 @@ export async function runInlineSubagent(opts: InlineSubagentOptions): Promise<In
 
   // Note: we do NOT set CLAUDE_CODE_DISABLE_BACKGROUND_TASKS — background Bash tasks
   // are a useful capability and there's no reason to disable them for subagents.
-  const proc = spawn(resolveClaudeCliExecutable() ?? claudeFallbackCommand(), args, {
-    stdio: ['pipe', 'pipe', 'pipe'],
-    cwd: cwd ?? process.cwd(),
-    env: cleanEnv,
-  });
-
-  activeProcesses.add(proc);
-
-  // Write prompt to stdin and close
-  proc.stdin?.write(prompt);
-  proc.stdin?.end();
+  // The child runs in the local daemon (oneshot-client.ts), the prompt on its stdin.
 
   // State tracking
   let initData: ClaudeStreamInit | undefined;
   let resultData: ClaudeStreamResult | undefined;
   let blocks: StreamingBlock[] = [];
 
-  // Parse JSONL output line by line
-  const rl = createInterface({ input: proc.stdout!, crlfDelay: Infinity });
-
-  rl.on('line', (line) => {
+  const onLine = (line: string) => {
     const parsed = parseClaudeJsonlLine(line, {
       onInit: (init) => { initData = init; },
       onResult: (result) => { resultData = result; },
@@ -313,22 +289,44 @@ export async function runInlineSubagent(opts: InlineSubagentOptions): Promise<In
         block,
       }, ['web-ui'], { source: 'inline-subagent' });
     }
-  });
+  };
 
   // Collect stderr for error diagnostics (capped to prevent unbounded growth)
   let stderr = '';
   const STDERR_MAX = 10_000;
-  proc.stderr?.on('data', (chunk: Buffer) => {
-    if (stderr.length < STDERR_MAX) stderr += chunk.toString();
-  });
+
+  let exited!: (exit: OneShotExit) => void;
+  const exit = new Promise<OneShotExit>((resolve) => { exited = resolve; });
+  let proc: OneShotHandle;
+  try {
+    proc = await startOneShot({
+      command: resolveClaudeCliExecutable() ?? claudeFallbackCommand(),
+      args,
+      cwd: cwd ?? process.cwd(),
+      env: cleanEnv,
+      input: prompt,
+      endInput: true,
+      maxMs: timeoutMs + 30_000,
+    }, {
+      onLine,
+      onStderr: (text) => { if (stderr.length < STDERR_MAX) stderr += text; },
+      onExit: (e) => {
+        if (e.error && stderr.length < STDERR_MAX) stderr += e.error;
+        exited(e);
+      },
+    });
+  } catch (err) {
+    releaseSemaphore();
+    const message = err instanceof Error ? err.message : String(err);
+    return { success: false, result: message, error: message, durationMs: Date.now() - startTime, blocks: [] };
+  }
 
   // If background mode, return immediately with a handle.
   // Note: semaphore slot is held until the background process completes,
   // so background jobs count against the max 3 concurrent limit.
   if (background) {
-    const bgPromise = waitForExit(proc, rl, timeoutMs, toolUseId);
+    const bgPromise = waitForExit(proc, exit, timeoutMs, toolUseId);
     bgPromise.then((exitCode) => {
-      activeProcesses.delete(proc);
       releaseSemaphore();
       const durationMs = Date.now() - startTime;
       const success = exitCode === 0 && !resultData?.isError;
@@ -351,8 +349,7 @@ export async function runInlineSubagent(opts: InlineSubagentOptions): Promise<In
         } satisfies StreamingBlock,
       }, ['web-ui'], { source: 'inline-subagent' });
     }).catch(() => {
-      activeProcesses.delete(proc);
-      releaseSemaphore();
+      // waitForExit never rejects: only the callback above can land here, and it released already.
     });
 
     return {
@@ -365,8 +362,7 @@ export async function runInlineSubagent(opts: InlineSubagentOptions): Promise<In
   }
 
   // Foreground mode — wait for completion
-  const exitCode = await waitForExit(proc, rl, timeoutMs, toolUseId);
-  activeProcesses.delete(proc);
+  const exitCode = await waitForExit(proc, exit, timeoutMs, toolUseId);
   releaseSemaphore();
 
   const durationMs = Date.now() - startTime;
@@ -396,50 +392,36 @@ export async function runInlineSubagent(opts: InlineSubagentOptions): Promise<In
 
 /** Wait for process exit with timeout and two-phase kill */
 function waitForExit(
-  proc: ChildProcess,
-  rl: ReturnType<typeof createInterface>,
+  proc: OneShotHandle,
+  exit: Promise<OneShotExit>,
   timeoutMs: number,
   toolUseId: string,
 ): Promise<number | null> {
   return new Promise((resolve) => {
     let resolved = false;
-    let timer: ReturnType<typeof setTimeout> | null = null;
     let killTimer: ReturnType<typeof setTimeout> | null = null;
 
-    const cleanup = () => {
-      if (timer) { clearTimeout(timer); timer = null; }
-      if (killTimer) { clearTimeout(killTimer); killTimer = null; }
-      rl.close();
-    };
-
-    proc.on('exit', (code) => {
-      if (resolved) return;
-      resolved = true;
-      cleanup();
-      resolve(code);
-    });
-
-    proc.on('error', (err) => {
-      if (resolved) return;
-      resolved = true;
-      cleanup();
-      log.agent.error('inline subagent process error', { toolUseId, error: err.message });
-      resolve(1);
-    });
-
     // Timeout — two-phase kill
-    timer = setTimeout(() => {
+    const timer = setTimeout(() => {
       if (resolved) return;
       log.agent.warn('inline subagent timeout — sending SIGINT', { toolUseId, timeoutMs });
 
-      try { proc.kill('SIGINT'); } catch {}
+      proc.kill('SIGINT');
 
       // Give 3s for graceful shutdown, then SIGTERM
       killTimer = setTimeout(() => {
         if (resolved) return;
         log.agent.warn('inline subagent force kill — sending SIGTERM', { toolUseId });
-        try { proc.kill('SIGTERM'); } catch {}
+        proc.kill('SIGTERM');
       }, 3000);
     }, timeoutMs);
+
+    void exit.then((e) => {
+      resolved = true;
+      clearTimeout(timer);
+      if (killTimer) clearTimeout(killTimer);
+      if (e.error) log.agent.error('inline subagent process error', { toolUseId, error: e.error });
+      resolve(e.error ? 1 : e.code);
+    });
   });
 }

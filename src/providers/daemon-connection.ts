@@ -78,6 +78,7 @@ import { CLOUD_BOX_HOST_ALIAS, CLOUD_BOX_OTHER_MAC_SENTENCE, TUNNEL_REFUSAL_HEAD
 import { creditCurrentRead } from '../core/hosts/read-progress.js'
 import { markLinkFailure } from './link-failure.js'
 import { selfHostConnection } from '../replica/self-host.js'
+import { dispatchOneShotEvent } from './oneshot-client.js'
 import { isHostReplicaProgram } from '../core/server-role.js'
 import { NeedsLeaderError } from '../core/replication/needs-leader.js'
 // The companion's forward on a stream ('bridge-stream-v1', replica plan WP13): the Mac's door.
@@ -759,6 +760,8 @@ export class DaemonConnection {
   get supportsSnapshots(): boolean { return this.hasCapability('snapshot-v1') }
   get daemonInstanceId(): string | null { return this._daemonInstanceId }
   get taskDirRoot(): string | null { return this._taskDirRoot }
+  /** Bumps on every connect and disconnect edge: a run bound to the old value lost its socket. */
+  get connectionEpoch(): number { return this._connectionEpoch }
   get daemonStartedAt(): number | null { return this._daemonStartedAt }
   /** Last bridge.configure reply's connected flag (null = never pushed / bridge disabled). */
   get lastBridgeConnected(): boolean | null { return this._lastBridgeConnected }
@@ -4423,6 +4426,12 @@ export class DaemonConnection {
         log.session.info('DaemonConnection: the cloud companion leads this host, taking the lead back', { host: this.hostKey })
         this.offlineDrainDue = true
         this.refreshLeader()
+        return
+      }
+      // One-shot claude runs (oneshot-v1): routed by runId to the caller waiting
+      // on that run, never to session handlers (a one-shot is not a session).
+      if (event.ev.startsWith('oneshot.')) {
+        dispatchOneShotEvent(event)
         return
       }
       // walnut-trigger: the daemon's check reports. Routed to the registered

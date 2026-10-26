@@ -15,18 +15,21 @@
  * one user message, resolve on the CLI's `result` line, then end stdin so
  * the child exits — children are SINGLE-USE (a second turn would carry the
  * first query's context). A replacement is pre-spawned immediately after
- * takeout, and an idle pooled child is reaped after POOL_IDLE_TTL_MS.
+ * takeout, and an idle pooled child is reaped after 15 minutes.
+ *
+ * Where: the pool and the children live in the LOCAL DAEMON (oneshot-core.ts,
+ * capability 'oneshot-v1'), like every Claude Code process Walnut starts; this
+ * file builds the spawn and reads the stream. A daemon older than that runs
+ * the same core in this process (oneshot-client.ts).
  *
  * Tool budgets are the PROMPT's job, not this runner's (user decision
  * 2026-08-30: a mid-run watchdog injection was tried and reverted as
  * over-engineering). The caller's timeoutMs stays the only hard backstop.
  */
 
-import { spawn, type ChildProcess } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { createInterface, type Interface } from 'node:readline';
 import { log } from '../logging/index.js';
 import { resolveClaudeCliExecutable } from '../core/claude-cli-detect.js';
 import {
@@ -39,6 +42,7 @@ import {
   type ClaudeStreamResult,
   type StreamingBlock,
 } from './claude-stream-parser.js';
+import { prewarmOneShot, startOneShot, _resetLocalOneShotForTest, type OneShotHandle } from './oneshot-client.js';
 
 export interface WarmSpec {
   /** REPLACES the CLI system prompt (slim child). */
@@ -50,6 +54,9 @@ export interface WarmSpec {
   effort?: string;
   /** Stream text as it is written (`--include-partial-messages`), for `onTextDelta`. */
   partial?: boolean;
+  /** The pool gives this child way last: AI search keeps its slot while
+   *  plugins with ever-changing prompts come and go. Not part of the key. */
+  keepWarm?: boolean;
 }
 
 export interface WarmRunOptions extends WarmSpec {
@@ -81,43 +88,14 @@ export interface WarmRunResult {
   cwd?: string;
 }
 
-const POOL_IDLE_TTL_MS = 15 * 60_000;
-/** Warm children kept at once, one per spec. Each is an idle CLI process. */
-const POOL_MAX = 3;
-const EXIT_GRACE_MS = 5_000;
-
-interface PooledChild {
-  proc: ChildProcess;
-  rl: Interface;
-  key: string;
-  spawnedAt: number;
-  /** Captured from the child's own `system:init` line — see WarmRunResult. */
-  sessionId?: string;
-  cwd?: string;
-}
-
-/** Warm children by spec key, oldest first (Map keeps insertion order). */
-const pool = new Map<string, PooledChild>();
-const reapTimers = new Map<string, ReturnType<typeof setTimeout>>();
-
-function specKey(spec: WarmSpec): string {
-  return createHash('sha256')
-    .update(`${spec.model}|${spec.effort ?? ''}|${spec.tools.join(',')}|${spec.partial ? 'partial' : ''}|${spec.system}`)
-    .digest('hex');
-}
-
-function alive(child: PooledChild): boolean {
-  return child.proc.exitCode === null && !child.proc.killed;
-}
-
-function warmDisabled(): boolean {
-  return process.env.WALNUT_MICRO_CLAUDE_WARM === '0';
-}
-
 /** The spawn cwd as the CLI sees it. Only used when a child never announced its
  *  own cwd — see the note on WarmRunResult.cwd. */
 export function resolvedTmpdir(): string {
   try { return realpathSync(tmpdir()); } catch { return tmpdir(); }
+}
+
+function warmDisabled(): boolean {
+  return process.env.WALNUT_MICRO_CLAUDE_WARM === '0';
 }
 
 function buildChildEnv(): NodeJS.ProcessEnv {
@@ -131,7 +109,11 @@ function buildChildEnv(): NodeJS.ProcessEnv {
   return env;
 }
 
-function spawnStreamChild(spec: WarmSpec): PooledChild | null {
+/** Env names that decide which account a child signs in with. */
+const AUTH_ENV = /^(ANTHROPIC_|AWS_|CLAUDE_CODE_|CLOUD_ML_|GOOGLE_|VERTEX_)/;
+
+/** The whole spawn for a spec, null when there is no CLI. */
+function buildSpawn(spec: WarmSpec): { command: string; args: string[]; cwd: string; env: NodeJS.ProcessEnv; warmKey: string } | null {
   const cli = resolveClaudeCliExecutable();
   if (!cli) return null;
   const args = [
@@ -152,71 +134,31 @@ function spawnStreamChild(spec: WarmSpec): PooledChild | null {
   // The user's modelOverrides, so the alias resolves as their CLI resolves it.
   const settings = slimChildSettingsArg();
   if (settings) args.push('--settings', settings);
-  const proc = spawn(cli, args, {
-    stdio: ['pipe', 'pipe', 'pipe'],
-    cwd: tmpdir(),
-    env: buildChildEnv(),
-  });
-  const rl = createInterface({ input: proc.stdout!, crlfDelay: Infinity });
-  const child: PooledChild = { proc, rl, key: specKey(spec), spawnedAt: Date.now() };
-  // Capture the session id HERE, not in runWarmMicroClaude: a pooled child
-  // prints its `system:init` line while it boots, long before a call takes it
-  // out and attaches its own line listener — readline drops what nobody was
-  // listening for, so a run-time-only capture misses it on exactly the warm
-  // path that is the point of this pool. Parsing stops after the first init.
-  rl.on('line', (line) => {
-    if (child.sessionId) return;
-    if (!line.includes('"init"')) return;
-    parseClaudeJsonlLine(line, {
-      onInit: (init) => {
-        child.sessionId = init.sessionId;
-        if (init.cwd) child.cwd = init.cwd;
-      },
-    });
-  });
-  return child;
+  const cwd = tmpdir();
+  const env = buildChildEnv();
+  // The pool key is the command line plus the login: a child booted on another
+  // argv (another model, prompt, tool set, override) or other credentials never
+  // answers this call. The pool lives in the daemon and outlives a server
+  // restart, so a rotated token must not reach a child booted on the old one.
+  // Not the whole env: the server sets variables of its own at runtime, and a
+  // key that moved with them would never find its child.
+  const auth = Object.entries(env)
+    .filter(([k]) => AUTH_ENV.test(k))
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+  const warmKey = createHash('sha256').update(JSON.stringify([cli, args, cwd, auth])).digest('hex');
+  return { command: cli, args, cwd, env, warmKey };
 }
 
-function disposePooled(key: string): void {
-  const child = pool.get(key);
-  const timer = reapTimers.get(key);
-  if (timer) clearTimeout(timer);
-  reapTimers.delete(key);
-  if (!child) return;
-  pool.delete(key);
-  try { child.proc.kill('SIGTERM'); } catch { /* already gone */ }
-}
-
-function disposeAll(): void {
-  for (const key of [...pool.keys()]) disposePooled(key);
-}
-
-/** Pre-boot one child for the given spec. Idempotent: a live pooled child
- *  with the same spec is kept; children of other specs stay beside it, and
- *  the oldest gives way past POOL_MAX. Fire-and-forget
- *  (e.g. from a human-typing signal) — never throws. */
+/** Pre-boot one child for the given spec, in the local daemon's pool (or this
+ *  process's when the daemon is older). Idempotent: a live pooled child with
+ *  the same spec is kept; children of other specs stay beside it, and the
+ *  oldest gives way past the pool's size (3). Fire-and-forget (e.g. from a
+ *  human-typing signal) — never throws. */
 export function prewarmMicroClaude(spec: WarmSpec): void {
   if (warmDisabled()) return;
   try {
-    const key = specKey(spec);
-    const existing = pool.get(key);
-    if (existing && alive(existing)) return;
-    disposePooled(key);
-    while (pool.size >= POOL_MAX) disposePooled(pool.keys().next().value as string);
-    const child = spawnStreamChild(spec);
-    if (!child) return;
-    child.proc.on('exit', () => {
-      if (pool.get(key)?.proc === child.proc) {
-        pool.delete(key);
-        const timer = reapTimers.get(key);
-        if (timer) clearTimeout(timer);
-        reapTimers.delete(key);
-      }
-    });
-    pool.set(key, child);
-    const timer = setTimeout(() => { disposePooled(key); }, POOL_IDLE_TTL_MS);
-    timer.unref?.();
-    reapTimers.set(key, timer);
+    const built = buildSpawn(spec);
+    if (built) prewarmOneShot({ ...built, ...(spec.keepWarm ? { warmKeep: true } : {}) });
   } catch (err) {
     log.agent.warn('micro-claude prewarm failed', {
       error: err instanceof Error ? err.message : String(err),
@@ -226,110 +168,113 @@ export function prewarmMicroClaude(spec: WarmSpec): void {
 
 /** Test hook. */
 export function _resetWarmPoolForTesting(): void {
-  disposeAll();
+  _resetLocalOneShotForTest();
 }
 
-process.once('exit', () => { disposeAll(); });
+/** A timed-out child: interrupt the turn, close its stdin, SIGTERM a straggler. */
+function stopTimedOut(handle: OneShotHandle): void {
+  handle.kill('SIGINT');
+  handle.kill('end');
+  setTimeout(() => handle.kill('SIGTERM'), EXIT_GRACE_MS).unref?.();
+}
+
+const EXIT_GRACE_MS = 5_000;
 
 /** One micro-Claude turn on a stream-json child — pooled when available,
- *  cold-spawned otherwise. Always pre-warms a replacement for the NEXT call. */
+ *  cold-spawned otherwise. The run pre-warms a replacement for the NEXT call. */
 export async function runWarmMicroClaude(opts: WarmRunOptions): Promise<WarmRunResult> {
   const spec: WarmSpec = {
     system: opts.system, model: opts.model, tools: opts.tools,
     ...(opts.effort ? { effort: opts.effort } : {}),
     ...(opts.partial ? { partial: true } : {}),
   };
-  const key = specKey(spec);
-  let taken: PooledChild | null = null;
-  let warm = false;
-  const pooledChild = pool.get(key);
-  if (!warmDisabled() && pooledChild && alive(pooledChild)) {
-    taken = pooledChild;
-    pool.delete(key);
-    const timer = reapTimers.get(key);
-    if (timer) clearTimeout(timer);
-    reapTimers.delete(key);
-    warm = true;
-  } else {
-    taken = spawnStreamChild(spec);
-  }
-  if (!taken) throw new Error('claude CLI not available');
-  // Replace the pool slot immediately so the NEXT call is warm too.
-  prewarmMicroClaude(spec);
+  const built = buildSpawn(spec);
+  if (!built) throw new Error('claude CLI not available');
 
-  // `const` so the callbacks below keep the narrowing (a `let` loses it inside
-  // a closure) — they record the child's session id for adoptable runs.
-  const child = taken;
-  const { proc, rl } = child;
   const startTime = Date.now();
   let result: ClaudeStreamResult | undefined;
   let toolCalls = 0;
   let stderr = '';
-  proc.stderr?.on('data', (chunk: Buffer) => {
-    if (stderr.length < 10_000) stderr += chunk.toString();
-  });
+  let sessionId: string | undefined;
+  let cwd: string | undefined;
+  let handle: OneShotHandle | undefined;
+  let started: Promise<OneShotHandle | undefined> = Promise.resolve(undefined);
+
+  const onLine = (line: string, settle: (o: 'result' | 'exit') => void): void => {
+    // Partial text is read here and kept from onBlock: the parser gives a delta and the
+    // finished message the same block shape, so onBlock keeps seeing finished blocks only.
+    if (spec.partial && line.includes('"stream_event"')) {
+      type PartialLine = { type?: string; event?: { type?: string; delta?: { type?: string; text?: string } } };
+      let event: PartialLine | null = null;
+      try { event = JSON.parse(line) as PartialLine; } catch { /* not JSON: the parser below decides */ }
+      if (event?.type === 'stream_event') {
+        const inner = event.event;
+        if (inner?.type === 'content_block_delta' && inner.delta?.type === 'text_delta' && inner.delta.text) {
+          try { opts.onTextDelta?.(inner.delta.text); } catch { /* listeners never break the stream */ }
+        }
+        return;
+      }
+    }
+    const parsed = parseClaudeJsonlLine(line, {
+      onResult: (r) => { result = r; settle('result'); },
+      // A pooled child printed its init line while it booted; the pool keeps
+      // that line and replays it first, so the warm path records it too.
+      onInit: (init) => {
+        sessionId ??= init.sessionId;
+        if (init.cwd) cwd ??= init.cwd;
+      },
+    });
+    if (!parsed) return;
+    for (const block of Array.isArray(parsed) ? parsed : [parsed]) {
+      try { opts.onBlock?.(block); } catch { /* listeners never break the stream */ }
+      if (block.type === 'tool_call' && block.status === 'calling') toolCalls += 1;
+    }
+  };
 
   const outcome = await new Promise<'result' | 'exit' | 'timeout'>((resolve) => {
-    let settled = false;
+    let settled: 'result' | 'exit' | 'timeout' | null = null;
     const settle = (o: 'result' | 'exit' | 'timeout') => {
       if (settled) return;
-      settled = true;
+      settled = o;
       clearTimeout(timer);
       resolve(o);
     };
     const timer = setTimeout(() => settle('timeout'), opts.timeoutMs);
-
-    rl.on('line', (line) => {
-      // Partial text is read here and kept from onBlock: the parser gives a delta and the
-      // finished message the same block shape, so onBlock keeps seeing finished blocks only.
-      if (spec.partial && line.includes('"stream_event"')) {
-        type PartialLine = { type?: string; event?: { type?: string; delta?: { type?: string; text?: string } } };
-        let event: PartialLine | null = null;
-        try { event = JSON.parse(line) as PartialLine; } catch { /* not JSON: the parser below decides */ }
-        if (event?.type === 'stream_event') {
-          const inner = event.event;
-          if (inner?.type === 'content_block_delta' && inner.delta?.type === 'text_delta' && inner.delta.text) {
-            try { opts.onTextDelta?.(inner.delta.text); } catch { /* listeners never break the stream */ }
-          }
-          return;
-        }
-      }
-      const parsed = parseClaudeJsonlLine(line, {
-        onResult: (r) => { result = r; settle('result'); },
-        // Cold-spawned children (pool miss) init after this listener exists;
-        // for a pooled child spawnStreamChild already recorded it.
-        onInit: (init) => {
-          child.sessionId ??= init.sessionId;
-          if (init.cwd) child.cwd ??= init.cwd;
-        },
-      });
-      if (!parsed) return;
-      for (const block of Array.isArray(parsed) ? parsed : [parsed]) {
-        try { opts.onBlock?.(block); } catch { /* listeners never break the stream */ }
-        if (block.type === 'tool_call' && block.status === 'calling') toolCalls += 1;
-      }
+    started = startOneShot({
+      command: built.command,
+      args: built.args,
+      cwd: built.cwd,
+      env: built.env,
+      input: JSON.stringify({ type: 'user', message: { role: 'user', content: opts.prompt } }) + '\n',
+      // Single-use child: stdin ends at its result line, a straggler is SIGTERMed.
+      endOnResult: true,
+      ...(warmDisabled() ? {} : { warmKey: built.warmKey, ...(opts.keepWarm ? { warmKeep: true } : {}) }),
+      maxMs: opts.timeoutMs + 30_000,
+    }, {
+      onLine: (line) => onLine(line, settle),
+      onStderr: (text) => { if (stderr.length < 10_000) stderr += text; },
+      onExit: (exit) => {
+        if (exit.error && stderr.length < 10_000) stderr += exit.error;
+        settle('exit');
+      },
+    }).then((h) => {
+      handle = h;
+      // Timed out while the daemon was still starting it.
+      if (settled === 'timeout') stopTimedOut(h);
+      return h;
+    }, (err: unknown) => {
+      if (stderr.length < 10_000) stderr += err instanceof Error ? err.message : String(err);
+      settle('exit');
+      return undefined;
     });
-    proc.on('exit', () => settle('exit'));
-    proc.on('error', () => settle('exit'));
-
-    try {
-      proc.stdin?.write(JSON.stringify({
-        type: 'user',
-        message: { role: 'user', content: opts.prompt },
-      }) + '\n');
-    } catch { settle('exit'); } // pooled child died between checks
   });
-
-  // Single-use child: end stdin so it exits on its own; force-kill stragglers.
-  try { proc.stdin?.end(); } catch { /* already closed */ }
-  const grace = setTimeout(() => {
-    if (proc.exitCode === null) { try { proc.kill('SIGTERM'); } catch { /* gone */ } }
-  }, EXIT_GRACE_MS);
-  grace.unref?.();
+  // A booted child can answer before its start is acknowledged (the daemon's
+  // frames can land in one tick), so read the handle once the run is known.
+  if (outcome === 'result') handle ??= await started;
 
   const durationMs = Date.now() - startTime;
   if (outcome === 'timeout') {
-    try { proc.kill('SIGINT'); } catch { /* gone */ }
+    if (handle) stopTimedOut(handle);
     throw new Error(`micro-claude timed out after ${opts.timeoutMs}ms`);
   }
   if (outcome === 'exit' || !result || result.isError) {
@@ -338,23 +283,24 @@ export async function runWarmMicroClaude(opts: WarmRunOptions): Promise<WarmRunR
   }
   log.agent.info('warm micro-claude completed', {
     toolUseId: opts.toolUseId,
-    warm,
+    warm: handle?.warm ?? false,
+    via: handle?.via,
     durationMs,
     toolCalls,
     costUsd: result.costUsd,
-    sessionId: child.sessionId,
+    sessionId,
   });
   return {
     response: result.result,
     costUsd: result.costUsd,
     durationMs,
-    warm,
-    ...(child.sessionId ? { sessionId: child.sessionId } : {}),
+    warm: handle?.warm ?? false,
+    ...(sessionId ? { sessionId } : {}),
     // The child's OWN reported cwd beats what we asked for, and the fallback must
     // be REALPATH'd: os.tmpdir() is `/var/folders/…` on macOS while the CLI
     // resolves and encodes `/private/var/folders/…`, so the un-resolved string
     // names a project directory that no transcript is ever written to (432 of the
     // resolved dirs on this machine against 1 of the other kind).
-    cwd: child.cwd ?? resolvedTmpdir(),
+    cwd: cwd ?? resolvedTmpdir(),
   };
 }

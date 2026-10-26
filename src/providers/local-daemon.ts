@@ -256,6 +256,8 @@ export class LocalDaemon {
 
   get port(): number | null { return this._port }
   get wsUrl(): string | null { return this._wsUrl }
+  /** The start in flight (boot), or null: a caller that needs the daemon can wait for it. */
+  get starting(): Promise<number> | null { return this._ensureInFlight }
   /** PID of the DAEMON, never of the session host above it: under the host the
    *  process we spawn is the supervisor, and the daemon writes its own pid file.
    *  Null if unknown. */

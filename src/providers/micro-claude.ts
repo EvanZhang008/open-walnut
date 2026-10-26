@@ -50,6 +50,8 @@ export interface MicroClaudeOptions {
    *  ~2-2.5s CLI boot when a pooled child is available (POC: 4.6s → 2.0s
    *  send→result). */
   warm?: boolean;
+  /** Warm path: the pool evicts this child last (AI search keeps its slot). */
+  keepWarm?: boolean;
   /** Live stream mirror (text / tool_call blocks) for progress UI. */
   onBlock?: (block: StreamingBlock) => void;
   /** Answer text as it is written. Warm path only (it asks the CLI for partial messages). */
@@ -84,6 +86,7 @@ export async function runMicroClaude(opts: MicroClaudeOptions): Promise<MicroCla
       model: opts.model ?? DEFAULT_MODEL,
       tools: opts.tools ?? [],
       ...(opts.effort ? { effort: opts.effort } : {}),
+      ...(opts.keepWarm ? { keepWarm: true } : {}),
       prompt: opts.prompt,
       timeoutMs: opts.timeoutMs ?? DEFAULT_TIMEOUT_MS,
       toolUseId: opts.toolUseId ?? `micro-claude-${randomUUID()}`,

@@ -35,13 +35,13 @@
  * serialize Walnut's Anthropic-shaped messages into one text prompt, stream the
  * reply back via onTextDelta, and read the final `result` line for real usage.
  */
-import { spawn } from 'node:child_process';
 import type {
   ApiProtocol, ProtocolAdapter, AdapterCallOptions, ModelResult, ContentBlock,
   MessageParam, TextBlockParam, UsageStats,
 } from './types.js';
 import { parseClaudeJsonlLine, type ClaudeStreamResult } from '../../providers/claude-stream-parser.js';
 import { WALNUT_UTILITY_ENTRYPOINT } from '../../providers/inline-subagent.js';
+import { startOneShot, type OneShotHandle } from '../../providers/oneshot-client.js';
 import { abortedResult } from './retry.js';
 import { log } from '../../logging/index.js';
 import { resolveClaudeCliExecutable } from '../../core/claude-cli-detect.js';
@@ -396,7 +396,7 @@ export class ClaudeCliAdapter implements ProtocolAdapter {
       let accumulatedText = '';
       let finalResult: ClaudeStreamResult | undefined;
       let stderrTail = '';
-      let stdoutBuffer = '';
+      let child: OneShotHandle | undefined;
 
       // A background turn (a title, a summary) is a whole `claude` process
       // nobody waits on: in the utility band when the deploy raised this server
@@ -404,17 +404,13 @@ export class ClaudeCliAdapter implements ProtocolAdapter {
       const [cmd, cmdArgs] = purpose === 'background'
         ? withUtilityQosClamp(command, args, { searchPath: env.PATH ?? '' })
         : [command, args];
-      const child = spawn(cmd, cmdArgs, {
-        stdio: ['pipe', 'pipe', 'pipe'],
-        env,
-      });
 
       const finish = (fn: () => void) => {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
         if (signal && onAbort) signal.removeEventListener('abort', onAbort);
-        try { child.kill('SIGKILL'); } catch { /* already gone */ }
+        child?.kill('SIGKILL');
         fn();
       };
 
@@ -428,39 +424,15 @@ export class ClaudeCliAdapter implements ProtocolAdapter {
       // pile up toward MaxListenersExceededWarning on long tool runs.
       let onAbort: (() => void) | undefined;
       if (signal) {
-        if (signal.aborted) {
-          finish(() => resolve(abortedResult()));
-          return;
-        }
         onAbort = () => finish(() => resolve(abortedResult(accumulatedText)));
         signal.addEventListener('abort', onAbort, { once: true });
       }
 
-      child.stdout.setEncoding('utf-8');
-      child.stdout.on('data', (chunk: string) => {
-        stdoutBuffer += chunk;
-        // Process complete JSONL lines; keep the trailing partial in the buffer.
-        let nl: number;
-        while ((nl = stdoutBuffer.indexOf('\n')) !== -1) {
-          const line = stdoutBuffer.slice(0, nl);
-          stdoutBuffer = stdoutBuffer.slice(nl + 1);
-          consumeLine(line);
+      const onExit = (code: number | null, error?: string) => {
+        if (error) {
+          finish(() => reject(new Error(`claude-cli spawn failed: ${error}`)));
+          return;
         }
-      });
-
-      child.stderr.setEncoding('utf-8');
-      child.stderr.on('data', (chunk: string) => {
-        // Keep only the tail — CLI stderr can be chatty (--debug etc.).
-        stderrTail = (stderrTail + chunk).slice(-2000);
-      });
-
-      child.on('error', (err) => {
-        finish(() => reject(new Error(`claude-cli spawn failed: ${err.message}`)));
-      });
-
-      child.on('close', (code) => {
-        // Drain any final partial line.
-        if (stdoutBuffer.trim()) consumeLine(stdoutBuffer);
         finish(() => {
           if (finalResult?.isError) {
             reject(new Error(`claude-cli reported an error: ${finalResult.result || stderrTail || 'unknown'}`));
@@ -493,10 +465,10 @@ export class ClaudeCliAdapter implements ProtocolAdapter {
             usage: toUsageStats(finalResult),
           });
         });
-      });
+      };
 
       // Consume one parsed JSONL line.
-      function consumeLine(line: string) {
+      const consumeLine = (line: string) => {
         const block = parseClaudeJsonlLine(line, {
           onResult: (r) => { finalResult = r; },
         });
@@ -510,11 +482,24 @@ export class ClaudeCliAdapter implements ProtocolAdapter {
           // tool_call / system blocks are ignored — tools are disabled, and the
           // CLI shouldn't emit them; if it does, we don't surface them.
         }
-      }
+      };
 
-      // Feed the prompt on stdin (text input mode) and close.
-      child.stdin.write(prompt);
-      child.stdin.end();
+      // The child is the local daemon's (oneshot-client.ts); the prompt rides
+      // its stdin (text input mode), which closes after it. The server's cwd,
+      // as when it spawned the child itself: the CLI files its transcript (and
+      // so --resume finds it) under the cwd, and the daemon's own is its dir.
+      startOneShot({ command: cmd, args: cmdArgs, cwd: process.cwd(), env, input: prompt, endInput: true, maxMs: CLI_TURN_TIMEOUT_MS + 30_000 }, {
+        onLine: consumeLine,
+        // Keep only the tail — CLI stderr can be chatty (--debug etc.).
+        onStderr: (chunk) => { stderrTail = (stderrTail + chunk).slice(-2000); },
+        onExit: (exit) => onExit(exit.code, exit.error),
+      }).then((h) => {
+        child = h;
+        // Aborted or timed out while the run was starting.
+        if (settled) h.kill('SIGKILL');
+      }, (err: unknown) => {
+        finish(() => reject(new Error(`claude-cli spawn failed: ${err instanceof Error ? err.message : String(err)}`)));
+      });
     }).catch((err) => {
       log.agent.warn('claude-cli adapter turn failed', { error: (err as Error).message });
       throw err;

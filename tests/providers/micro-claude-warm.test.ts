@@ -181,6 +181,7 @@ describe('warm micro-claude pool', () => {
     await new Promise((r) => setTimeout(r, 10));
     procs[0].exitCode = 1;
     procs[0].emit('exit', 1);
+    procs[0].emit('close', 1);
     await expect(done).rejects.toThrow(/exited before answering/);
   });
 

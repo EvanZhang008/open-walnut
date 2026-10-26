@@ -709,6 +709,18 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // every probe bounded (3 s each, 12 s in all), a failed probe is null. Both twins; like
   // host.preflight, not bridge-reachable and not for followers. Optional.
   'host-facts-v1',
+  // 'oneshot-v1' (oneshot-core.ts): every `claude -p` Walnut starts outside a
+  // session runs here (micro-Claude, inline subagents, the claude-cli model
+  // adapter). `oneshot.run {runId, command, args, cwd, env, input, endInput,
+  // endOnResult, warmKey, maxMs}` spawns it (or takes a pre-booted child of
+  // that warm key) and streams `oneshot.out` {runId, lines}, `oneshot.err`
+  // {runId, text} and one `oneshot.exit` {runId, code, signal, error?} to the
+  // socket that asked; `oneshot.prewarm` boots a child for a warm key (at most
+  // 3, 15 min idle); `oneshot.cancel {runId, signal}`. A run whose socket
+  // closes is killed. No session record: these children are hidden. Starts a
+  // process, so not bridge-reachable and not for followers. Both twins.
+  // Optional: without it the server runs the same core in-process.
+  'oneshot-v1',
 ] as const
 
 export type DaemonCapability = typeof REQUIRED_DAEMON_CAPABILITIES[number]

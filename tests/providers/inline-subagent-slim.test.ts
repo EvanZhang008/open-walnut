@@ -52,6 +52,7 @@ async function run(opts: Partial<Parameters<typeof runInlineSubagent>[0]>): Prom
   // Let the runner attach listeners, then finish the child cleanly.
   await new Promise((r) => setTimeout(r, 10));
   proc.emit('exit', 0);
+  proc.emit('close', 0);
   await done;
   const [, args, spawnOpts] = spawnMock.mock.calls.at(-1)!;
   return { args, spawnOpts };

@@ -184,8 +184,13 @@ summaries, placement: `purpose: 'background'` on the call). Those turns hold at 
 adapter's three `claude` slots, and a turn a person waits on goes ahead of every queued one,
 except that one queued 10 s or longer may take a freed slot while no other background turn runs
 (never with a single slot: `withSlot` in `src/model/providers/adapter-claude-cli.ts`): with one queue for both, a turn
-queued behind three utility-band ones took 5.7 s instead of 2.9 s (load ~375). Still in the server's band:
-model calls a person waits on ("Regenerate summary" included), the warm search-agent CLI, and
+queued behind three utility-band ones took 5.7 s instead of 2.9 s (load ~375). Every `claude -p`
+Walnut starts outside a session is the local daemon's child (capability `oneshot-v1`,
+`src/providers/oneshot-core.ts` + `oneshot-client.ts`; user rule 2026-10-26): micro-Claude and its
+warm pool (AI search, the direct route of `ai.run`), inline subagents, and those adapter turns.
+So with the clamp on they all run in the daemon's band, the turns a person waits on included (a
+clamped daemon cannot start a child above it); the slot gate above still lets those go first, and
+a daemon older than `oneshot-v1` runs them in the server as before. Still in the server's band:
 one-shot setup at boot. The server reads
 the request once at startup and removes it from `process.env`, so the in-app terminal and every
 other child built from that env never carry it. A server started any other way (a terminal, the Mac app, the submit fallback) clamps

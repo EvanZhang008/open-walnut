@@ -223,6 +223,8 @@ const DAEMON_SOURCE_FILES = [
   'src/providers/transfer-pack-core.ts',
   'src/providers/host-facts-core.ts',
   'src/providers/desktop-update-core.ts',
+  // One-shot claude runs (oneshot-v1): same import-or-inline rule.
+  'src/providers/oneshot-core.ts',
 ] as const
 
 /**
