@@ -25,6 +25,7 @@ import {
   ORIGIN_HEADER, UNKNOWN_ORIGIN, ambientCallerOrigin, isLocalOrigin, isRemoteHostOrigin, lowerOrigin, withCallerOrigin,
 } from '../lib/caller-origin.js'
 import { selfCallRefusal } from './origin-policy.js'
+import { unknownKeyHint } from './arg-hints.js'
 
 const DEFAULT_API_ROOT = 'http://127.0.0.1:3456'
 const REQUEST_TIMEOUT_MS = 10_000
@@ -268,16 +269,21 @@ function dropRetiredInput(op: WalnutOp, raw: Record<string, unknown>): Record<st
 
 /**
  * Validate `rawArgs` against `op`'s input exactly as every surface does: a
- * retired field is dropped, any other unknown key is refused.
+ * retired field is dropped, any other unknown key is refused (with a "did you
+ * mean" hint when the intended key is clear, src/ops/arg-hints.ts).
  */
 export function parseOpArgs(
   op: WalnutOp,
   rawArgs: Record<string, unknown> | undefined,
 ): { ok: true; args: Record<string, unknown> } | { ok: false; message: string } {
   const raw = rawArgs ?? {}
-  const parsed = z.object(op.input).strict().safeParse(isPlainObject(raw) ? dropRetiredInput(op, raw) : raw)
+  const input = isPlainObject(raw) ? dropRetiredInput(op, raw) : raw
+  const parsed = z.object(op.input).strict().safeParse(input)
   if (!parsed.success) {
-    const issues = parsed.error.issues.map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`).join('; ')
+    const issues = parsed.error.issues.map((i) => {
+      const hint = i.code === 'unrecognized_keys' ? unknownKeyHint(op.input, input, i.path, i.keys) : ''
+      return `${i.path.join('.') || '(root)'}: ${i.message}${hint}`
+    }).join('; ')
     return { ok: false, message: `Invalid arguments for ${op.name}: ${issues}` }
   }
   return { ok: true, args: parsed.data as Record<string, unknown> }
