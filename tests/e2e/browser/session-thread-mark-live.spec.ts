@@ -125,11 +125,18 @@ test.describe('The scanning line under a passage being answered', () => {
     await expect(lines.first()).toBeVisible()
     expectUnder(await boxes(lines), await passageRects(panel, TAGGED_PASSAGE))
 
-    // The answer lands: the plain mark is back.
-    await expect(history).toContainText('processed your message: And after a restart?', { timeout: 60_000 })
-    await expect(lines).toHaveCount(0, { timeout: 15_000 })
+    // The answer lands: the plain mark is back. The question's turns stay
+    // folded to their line in the main chat (utils/thread-fold.ts), so the
+    // answer is read in its card.
+    await expect(lines).toHaveCount(0, { timeout: 60_000 })
     await expect.poll(() => hasHighlight(page, 'thread-mark-live-neutral')).toBe(false)
     expect(await hasHighlight(page, 'thread-mark-neutral')).toBe(true)
+    await expect(history.locator('[data-thread-fold]').first()).toBeVisible()
+    const landed = await passageRects(panel, TAGGED_PASSAGE)
+    await page.mouse.click(landed[0].left + 8, landed[0].top + landed[0].height / 2)
+    await expect(card.locator('.thread-card-body')).toContainText('processed your message: And after a restart?')
+    await card.locator('.thread-card-input').press('Escape')
+    await expect(card).toHaveCount(0)
 
     // A new question from a draft card: the line appears once it is sent.
     await centreInHistory(page, panel, TAGGED_TEXT.aRoot)
@@ -143,7 +150,8 @@ test.describe('The scanning line under a passage being answered', () => {
     await expect(lines.first()).toBeVisible({ timeout: 10_000 })
     expectUnder(await boxes(lines), await passageRects(panel, TAGGED_TEXT.aRoot))
     await shot(page, 'timeline-new-question', (await passageRects(panel, TAGGED_TEXT.aRoot))[0])
-    await expect(history).toContainText('processed your message: Which copy is that?', { timeout: 60_000 })
+    // The card (open beside the passage) shows the answer as it lands.
+    await expect(card.locator('.thread-card-body')).toContainText('processed your message: Which copy is that?', { timeout: 60_000 })
     await expect(lines).toHaveCount(0, { timeout: 15_000 })
   })
 
@@ -184,8 +192,13 @@ test.describe('The scanning line under a passage being answered', () => {
       expect(rects.some((r) => Math.abs((b.top + b.bottom) / 2 - (r.top + r.height)) <= 2.5), `a line under something else: ${JSON.stringify(b)}`).toBe(true)
     }
     await shot(page, 'reload-mid-answer', rects[0])
-    await expect(panel.locator('.session-history')).toContainText('processed your message: What drains first?', { timeout: 90_000 })
-    await expect(linesOf(panel)).toHaveCount(0, { timeout: 15_000 })
+    await expect(linesOf(panel)).toHaveCount(0, { timeout: 90_000 })
+    // The question folds to its line in the main chat, also while it was
+    // answered; its card shows the answer.
+    const fold = panel.locator('.session-history [data-thread-fold]')
+    await expect(fold).toHaveCount(1)
+    await fold.locator('.thread-turn-label').click()
+    await expect(panel.locator('.thread-card .thread-card-body')).toContainText('processed your message: What drains first?', { timeout: 30_000 })
   })
 
   test('Tree Mode: a question answered while its parent page is on screen scans in its own hue', async ({ page }) => {

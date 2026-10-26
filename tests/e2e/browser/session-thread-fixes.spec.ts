@@ -150,7 +150,7 @@ test.describe('Slice 1 layout fixes', () => {
     expect(bg).not.toMatch(/rgba\(0, 0, 0, 0\)|transparent/)
     expect(bg).not.toMatch(/\/ 0\.|, 0\.\d+\)$/)
     // Leave the preference as the next test expects it.
-    await map.locator('.thread-map-rail').hover()
+    await map.locator('.thread-map-rail').click()
     await map.locator('.thread-map-keep').click()
     await expect(map).toHaveAttribute('data-shape', 'panel')
   })

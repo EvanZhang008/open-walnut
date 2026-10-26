@@ -22,6 +22,10 @@ export interface OpenThreadsOpts {
    *  default; these specs mostly exercise the question pages, so the helper
    *  defaults to `stack` (Tree Mode) unless a spec says otherwise. */
   view?: 'stack' | 'linear'
+  /** The question map's saved shape. `open` (the helper's default) is a user who
+   *  chose "Keep open", so specs about the labelled panel see it; `default` leaves
+   *  the preference unset (the product default: folded to the rail). */
+  map?: 'open' | 'default'
 }
 
 /** Open a fixture session's column through the task board (idempotent: an
@@ -34,12 +38,20 @@ export async function openThreadsSession(
     // A view the session already saved (a spec's own switch, kept across its
     // reload) still wins over this default.
     await page.evaluate(([key, view]) => localStorage.setItem(key, view), [VIEW_MODE_DEFAULT_KEY, opts.view ?? 'stack'] as const)
-    await page.locator('.todo-search-input').fill(sessionId)
+    await page.evaluate((open) => {
+      if (open) localStorage.setItem('walnut:thread-map.v1', 'open')
+      else localStorage.removeItem('walnut:thread-map.v1')
+    }, (opts.map ?? 'open') === 'open')
+    const search = page.locator('.todo-search-input')
     const task = page.locator(`.todo-panel-item[data-task-id="${taskId}"]`)
     // The board search answers in well under a second on an idle machine, but a
     // 5s default missed it repeatedly in WebKit at load 70 (a readiness wait, not
-    // an assertion about speed).
-    await expect(task).toBeVisible({ timeout: 20_000 })
+    // an assertion about speed). A query typed right after mount can also be wiped
+    // by a late state load, so type it again until the row is there.
+    await expect(async () => {
+      if (await search.inputValue() !== sessionId) await search.fill(sessionId)
+      await expect(task).toBeVisible({ timeout: 5_000 })
+    }).toPass({ timeout: 30_000 })
     await task.locator('.todo-item-title').click()
   }
   await expect(panel).toBeVisible({ timeout: 20_000 })
@@ -68,13 +80,10 @@ export async function openQuestionList(page: Page, panel: Locator): Promise<Loca
   // The nav itself is a 0px-tall sticky anchor; its body is what shows.
   await expect(map.locator('.thread-map-body')).toBeVisible()
   if (await map.getAttribute('data-shape') === 'rail') {
-    // Hovering opens the list (and a click would land on the card that then
-    // covers the rail); a pointer that cannot hover falls back to a synthetic tap.
+    // Only a click opens the list. Synthetic, because a card open beside the
+    // passage may cover the rail's spot.
     const overlay = map.locator('.thread-map-overlay')
-    if (await overlay.count() === 0) {
-      await map.locator('.thread-map-rail').hover()
-      if (await overlay.count() === 0) await map.locator('.thread-map-rail').dispatchEvent('click')
-    }
+    if (await overlay.count() === 0) await map.locator('.thread-map-rail').dispatchEvent('click')
     await expect(overlay).toBeVisible()
   }
   await map.locator('.thread-map-icon[aria-label="Open the question list"]').click()
@@ -83,10 +92,12 @@ export async function openQuestionList(page: Page, panel: Locator): Promise<Loca
   return drawer
 }
 
-/** Viewport rects of `phrase` inside the panel's rendered messages. */
-export async function passageRects(panel: Locator, phrase: string) {
-  const rects = await panel.evaluate((root, needle) => {
-    const bodies = Array.from(root.querySelectorAll('.session-history [data-message-id] .session-msg-content'))
+/** Viewport rects of `phrase` inside the panel's rendered messages. `row` narrows
+ *  the rows searched, e.g. `[data-message-id][data-msg-role="assistant"]` when the
+ *  user's own line holds the same words. */
+export async function passageRects(panel: Locator, phrase: string, row = '[data-message-id]') {
+  const rects = await panel.evaluate((root, [needle, rowSel]) => {
+    const bodies = Array.from(root.querySelectorAll(`.session-history ${rowSel} .session-msg-content`))
     for (const body of bodies) {
       const walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT)
       for (let n = walker.nextNode(); n; n = walker.nextNode()) {
@@ -100,7 +111,7 @@ export async function passageRects(panel: Locator, phrase: string) {
       }
     }
     return null
-  }, phrase)
+  }, [phrase, row] as const)
   expect(rects, `passage "${phrase}" is not rendered`).not.toBeNull()
   expect(rects!.length).toBeGreaterThan(0)
   return rects!
@@ -176,8 +187,8 @@ export async function centreInHistory(page: Page, panel: Locator, target: Locato
 
 /** Drag-select `phrase` with the real mouse (the selection bar reads these
  *  events, so the gesture IS the test). Scroll it into view first. */
-export async function selectPassage(page: Page, panel: Locator, phrase: string): Promise<string> {
-  const rects = await passageRects(panel, phrase)
+export async function selectPassage(page: Page, panel: Locator, phrase: string, row?: string): Promise<string> {
+  const rects = await passageRects(panel, phrase, row)
   const first = rects[0]
   const last = rects[rects.length - 1]
   const startX = first.left + 1
@@ -312,4 +323,16 @@ export async function unfoldQuestions(panel: Locator): Promise<void> {
     await folded.first().click()
   }
   await expect(folded).toHaveCount(0)
+}
+
+/** Press the pill's Ask here on a column in Tree Mode and return to that mode.
+ *  Ask here always asks in Conversation Mode (2026-10-23): the column switches,
+ *  the card opens beside the passage. Specs about the question PAGE then take
+ *  the pill back to Tree Mode, where the new question is the page on screen. */
+export async function askHereThenTree(page: Page, panel: Locator, pill: Locator = page.locator('[data-testid="quote-pin-pill"]')): Promise<void> {
+  await pill.locator('[data-testid="quote-ask-btn"]').click()
+  await expect(panel.locator('.session-history[data-view-mode="linear"]')).toHaveCount(1)
+  await expect(panel.locator('.thread-card')).toBeVisible()
+  await switchView(panel, 'stack')
+  await expect(panel.locator('.thread-stack')).toHaveAttribute('data-thread-depth', '1', { timeout: 15_000 })
 }

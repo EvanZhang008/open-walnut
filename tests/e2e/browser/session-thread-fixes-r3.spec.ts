@@ -10,7 +10,7 @@
  */
 import { expect, test, type Locator, type Page } from '@playwright/test'
 import {
-  centreInHistory, DENSE_SESSION, openThreadsSession, passageRects, readRecord, resetThreadsFixture, selectPassage, sessionPanel, modePill, openQuestionList,
+  centreInHistory, DENSE_SESSION, openThreadsSession, passageRects, readRecord, resetThreadsFixture, selectPassage, sessionPanel, modePill, openQuestionList, switchView,
 } from './threads-helpers'
 import { RELOAD_PASSAGE, RELOAD_SESSION, densePassage } from './threads-fixture'
 
@@ -130,12 +130,18 @@ test.describe('Slice 1 fixes, round 3', () => {
     // Wheel the passage to the middle of the box (a real scroll, like a reader).
     await centreInHistory(page, panel, phrase)
     await selectPassage(page, panel, phrase)
+    // Ask here asks in Conversation Mode: the first question is sent from its
+    // card (the mode pill comes only once a question exists).
     await page.locator('[data-testid="quote-pin-pill"] [data-testid="quote-ask-btn"]').click()
-    await expect(panel.locator('.thread-stack')).toHaveAttribute('data-thread-depth', '1')
-    const box = panel.locator('.chat-input-textarea').first()
-    await box.click()
+    await expect(panel.locator('.session-history[data-view-mode="linear"]')).toHaveCount(1)
+    const box = panel.locator('.thread-card .thread-card-input')
+    await expect(box).toBeFocused()
     await box.fill('what drains first')
     await box.press('Enter')
+    await expect(panel.locator('.thread-card .thread-card-body')).toContainText('processed your message', { timeout: 60_000 })
+    // Its page, in Tree Mode.
+    await switchView(panel, 'stack')
+    await expect(panel.locator('.thread-stack')).toHaveAttribute('data-thread-depth', '1', { timeout: 15_000 })
     await expect(panel.locator('.session-history')).toContainText('processed your message', { timeout: 60_000 })
     let head = ''
     await expect.poll(async () => {
@@ -197,7 +203,12 @@ test.describe('Slice 1 fixes, round 3', () => {
       await page.waitForTimeout(300)
       asked.push(await topOf(phrase))
       await selectPassage(page, panel, phrase)
+      // Ask here opens the question's card in Conversation Mode; the pill takes
+      // the column back to Tree Mode, where the question is the page.
       await page.locator('[data-testid="quote-pin-pill"] [data-testid="quote-ask-btn"]').click()
+      await expect(history).toHaveAttribute('data-view-mode', 'linear')
+      await expect(panel.locator('.thread-card')).toBeVisible()
+      await switchView(panel, 'stack')
       await expect(panel.locator('.thread-stack')).toHaveAttribute('data-thread-depth', String(i + 1))
       await expect(note).toHaveCount(1)
       await page.mouse.move(10, 10)
@@ -404,9 +415,10 @@ test.describe('Slice 1 fixes, round 3', () => {
       await page.waitForTimeout(160)
     }
     await selectPassage(page, panel, phrase)
+    // Ask here asks in Conversation Mode: the card's own box sends it.
     await page.locator('[data-testid="quote-pin-pill"] [data-testid="quote-ask-btn"]').click()
-    const box = panel.locator('.chat-input-textarea').first()
-    await box.click()
+    const box = panel.locator('.thread-card .thread-card-input')
+    await expect(box).toBeFocused()
     await box.fill('how long is a rotation')
     await box.press('Enter')
     await expect(modePill(panel)).toBeVisible({ timeout: 30_000 })

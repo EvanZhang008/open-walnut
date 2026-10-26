@@ -295,11 +295,11 @@ test.describe('Question stack landing', () => {
     // C64 (slice 1b): in a session with questions the map replaces the outline
     // rail and lists the pins under their own pages (this page's and the
     // others'), so no "<n> more" row is needed. A narrow column shows the
-    // map's rail: its list opens on hover.
+    // map's rail: its list opens on a click.
     await expect(panel.locator('.session-toc')).toHaveCount(0)
     const map = panel.locator('.thread-map')
     await expect(map.locator('.thread-map-body')).toBeVisible()
-    if (await map.getAttribute('data-shape') === 'rail') await map.locator('.thread-map-rail').hover()
+    if (await map.getAttribute('data-shape') === 'rail') await map.locator('.thread-map-rail').click()
     const pinRows = map.locator('.thread-map-row[data-kind="pin"]')
     await expect(pinRows.filter({ hasText: densePassage('Q21').slice(0, 20) })).toHaveCount(1)
     expect(await pinRows.count()).toBeGreaterThan(1)

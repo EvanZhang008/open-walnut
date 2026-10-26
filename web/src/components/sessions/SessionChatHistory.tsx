@@ -435,6 +435,8 @@ const TRIPWIRE_SETTLE_MS = (typeof window !== 'undefined'
  *  padding beside it (`.session-msg--threaded` in globals.css, whose `::before`
  *  paints the pointer cursor over exactly this run). */
 const THREAD_BAR_HIT_PX = 11;
+/** How long an Ask from Tree Mode holds its passage still while Conversation Mode settles. */
+const ASK_HOLD_MS = 700;
 
 /** Stable empty mark list for a page (or view) without question marks. */
 const NO_MARKS: MarkSpec[] = [];
@@ -1364,7 +1366,17 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   const [cardOpen, setCardOpen] = useState(false);
   const cardKey = threadsApi.viewMode === 'linear' && cardOpen && threadsApi.currentThreadKey !== ROOT_THREAD_KEY
     ? threadsApi.currentThreadKey : null;
-  useEffect(() => { setCardOpen(false); }, [sessionId, threadsApi.viewMode]);
+  /** An Ask from Tree Mode switches the view and opens its card in the same
+   *  gesture: the mode change must not close that card. The note names the
+   *  session and the mode it expects, so a switch that never lands cannot keep
+   *  a later card open. */
+  const keepCardOnSwitch = useRef<{ sessionId: string; mode: string } | null>(null);
+  useEffect(() => {
+    const keep = keepCardOnSwitch.current;
+    keepCardOnSwitch.current = null;
+    if (keep && keep.sessionId === sessionId && keep.mode === threadsApi.viewMode) return;
+    setCardOpen(false);
+  }, [sessionId, threadsApi.viewMode]);
   /** What the open card's own box holds (the stack's composer probe sees only
    *  the panel composer). */
   const cardTextRef = useRef('');
@@ -1398,16 +1410,33 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
 
   /** Ask on a passage (the pill): the stack pushes a pending page in this frame,
    *  or the question already about this passage. Nothing is written yet. */
+  // Ask here always asks in Conversation Mode (2026-10-23, the user): the card
+  // opens beside the passage with its own composer focused and the timeline
+  // stays where it is. From Tree Mode the panel switches to Conversation Mode
+  // first, so the question never becomes a page the reader is moved onto.
   const askAboutQuote = useCallback((target: QuotePinTarget) => {
-    if (threadsApi.viewMode === 'linear') {
-      // Conversation Mode: the card opens beside the passage with its own
-      // composer focused; the timeline stays where it is.
-      stack.ask({ msgId: target.msgId, quote: target.quote }, { focusComposer: false });
-      setCardOpen(true);
-      return;
+    if (threadsApi.viewMode !== 'linear') {
+      // The switch folds questions and adds turn labels above the passage: hold
+      // the passage's row where the reader selected it while the new view settles.
+      const row = containerRef.current?.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(target.msgId)}"]`);
+      if (row) askHold.current = { msgId: target.msgId, top: row.getBoundingClientRect().top, until: performance.now() + ASK_HOLD_MS };
+      keepCardOnSwitch.current = { sessionId, mode: 'linear' };
+      threadsApi.setViewMode('linear');
     }
-    stack.ask({ msgId: target.msgId, quote: target.quote });
-  }, [stack, threadsApi.viewMode]);
+    stack.ask({ msgId: target.msgId, quote: target.quote }, { focusComposer: false });
+    setCardOpen(true);
+  }, [stack, sessionId, threadsApi.viewMode, threadsApi.setViewMode]);
+  const askHold = useRef<{ msgId: string; top: number; until: number } | null>(null);
+  useLayoutEffect(() => {
+    const hold = askHold.current;
+    if (!hold) return;
+    if (performance.now() > hold.until) { askHold.current = null; return; }
+    const box = containerRef.current;
+    const el = box?.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(hold.msgId)}"]`);
+    if (!box || !el) return;
+    const delta = el.getBoundingClientRect().top - hold.top;
+    if (Math.abs(delta) >= 1) box.scrollTop += delta;
+  });
 
   /** Titles as every question surface shows them (AI title, else the fallback). */
   const titleOfKey = useCallback((key: string): string => {
@@ -3328,12 +3357,20 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   const selectTarget = useCallback((key: string) => { openCard(key, 'label'); }, [openCard]);
   // Conversation Mode's fold: a question's turns down to their label line, by
   // the rule in utils/thread-fold.ts or the user's chevron.
+  // A pending or draft page is not in the tree yet: the question its passage is
+  // in stays open (an Ask on a question's answer keeps that passage on screen).
+  const pageParent = useCallback((key: string | null | undefined): string | undefined => {
+    if (!key) return undefined;
+    if (stack.pending?.pageKey === key) return stack.pending.parentKey;
+    return stack.draftPages.find((d) => d.pageKey === key)?.parentKey;
+  }, [stack.pending, stack.draftPages]);
   const foldOpen = useMemo(
     () => (convMode ? foldOpenKeys(threadTree, {
       target: targetKey, card: cardKey, live: [...threadDerived.live.keys(), ...askedAfterMainSig.split('\n').filter(Boolean)],
+      holders: [pageParent(targetKey), pageParent(cardKey)].filter((k): k is string => !!k),
     }) : null),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- askedAfterMain is read through its signature
-    [convMode, threadTree, targetKey, cardKey, threadDerived.live, askedAfterMainSig],
+    [convMode, threadTree, targetKey, cardKey, threadDerived.live, askedAfterMainSig, pageParent],
   );
   // A removed (hidden) question is no question any more: its rows are plain transcript.
   const groupFolded = (group: string): boolean => !!foldOpen && !threadsApi.hiddenKeys.has(group)

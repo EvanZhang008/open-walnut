@@ -22,9 +22,9 @@
  * Reported 2026-09-16 with a screenshot: the reader had dragged over one word while
  * reading, dictated a question about something else, and got a chip nobody asked for;
  * sent as-is, the turn would have been filed under that reply with the word quoted
- * above the question. Opening a question is the pill's Ask button's job (since the
- * stack view, Ask opens a question page; there is no composer chip any more), and the
- * stray-word test below is that report, pinned.
+ * above the question. Opening a question is the pill's Ask button's job (since
+ * 2026-10-23 Ask opens the question's card in Conversation Mode), and the stray-word
+ * test below is that report, pinned.
  *
  * Which test runs where, and why:
  *  · the PRESS test runs in both engines, because a selection's fate around focus
@@ -58,6 +58,24 @@ import {
   selectPassage, selectedText, shot, stubSttStatus, threadAnchorsOf, wheel,
 } from './voice-selection-helpers'
 import { dragPhrase, selectionAnchorNodeType } from './selection-helpers'
+
+/** Ask here asks in Conversation Mode (2026-10-23): the column switches, the
+ *  question's card opens beside the passage with its own box focused, and the
+ *  composer names the passage it is about. */
+async function expectAskCard(panel: Locator, passage: string): Promise<Locator> {
+  await expect(panel.locator('.session-history[data-view-mode="linear"]')).toHaveCount(1)
+  const card = panel.locator('.thread-card')
+  await expect(card).toBeVisible()
+  await expect(card.locator('.thread-card-input')).toBeFocused()
+  await expect(composerTarget(panel)).toHaveAttribute('data-pending', 'true')
+  await expect(composerTarget(panel)).toContainText(passage)
+  return card
+}
+
+/** Where the composer's next send goes, in Conversation Mode (absent: the main conversation). */
+function composerTarget(panel: Locator): Locator {
+  return panel.locator('[data-testid="composer-thread-target"]')
+}
 
 /** What the mocked engine "hears" — the final text, and the live preview of it. */
 const DICTATED = 'why does phase two matter'
@@ -120,7 +138,7 @@ async function stubDictation(page: Page): Promise<{ transcribe: string[]; draft:
 
 /** Record for a beat and stop, the way a short question is dictated. */
 async function dictate(page: Page, panel: Locator): Promise<Locator> {
-  const mic = panel.locator('.mic-btn-wrapper .mic-btn').first()
+  const mic = panel.locator('.chat-input-controls .mic-btn-wrapper .mic-btn')
   await mic.click()
   await expect(mic).toHaveClass(/mic-recording/, { timeout: 15_000 })
   await page.waitForTimeout(1200)
@@ -144,7 +162,7 @@ test.describe('Voice input keeps the selected passage', () => {
     // mousedown, so a `.click()` with no frame in between would still have caught
     // it — but the hold is what proves the selection is alive DURING the press,
     // which is when the guard used to have already wiped it.
-    const mic = panel.locator('.mic-btn-wrapper .mic-btn').first()
+    const mic = panel.locator('.chat-input-controls .mic-btn-wrapper .mic-btn')
     const box = (await mic.boundingBox())!
     await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
     await page.mouse.down()
@@ -194,7 +212,7 @@ test.describe('Voice input keeps the selected passage', () => {
       const panel = await openSession(page)
       const pill = await selectPassage(page, panel)
 
-      const mic = panel.locator('.mic-btn-wrapper .mic-btn').first()
+      const mic = panel.locator('.chat-input-controls .mic-btn-wrapper .mic-btn')
       const textarea = panel.locator('.chat-input-textarea').first()
       await mic.click()
       await expect(mic).toHaveClass(/mic-recording/, { timeout: 15_000 })
@@ -248,6 +266,7 @@ test.describe('Voice input keeps the selected passage', () => {
       await expect(pill.locator('[data-testid="quote-ask-btn"]')).toBeVisible()
       expect(await heldPainted(page), 'the held passage is painted').toBe(true)
       await expect(questionPage(panel), 'a selection is not a request: no page until Ask').toHaveCount(0)
+      await expect(panel.locator('.thread-card'), 'a selection is not a request: no card until Ask').toHaveCount(0)
       await shot(page, '04-dictation-landed-pill-holds-the-passage')
 
       // Typing into the composer is writing the question, not moving on: the pill
@@ -257,21 +276,21 @@ test.describe('Voice input keeps the selected passage', () => {
       await expect(pill).toBeVisible()
       expect(await heldPainted(page)).toBe(true)
 
-      // Ask is the request. It opens a question page headed by the words that were
-      // selected, and the pill and its paint go. The page has its own draft, so the
-      // new composer is empty and the dictated words wait in the top level's draft.
+      // Ask is the request. It opens the question's card beside the words that were
+      // selected (the composer names them), and the pill and its paint go. The card
+      // has its own box, empty; the dictated words wait in the top level's draft.
       await pill.locator('[data-testid="quote-ask-btn"]').click()
-      await expect(questionPage(panel)).toHaveAttribute('data-thread-depth', '1')
-      await expect(questionQuote(panel)).toContainText('rewrites the index')
+      const card = await expectAskCard(panel, 'rewrites the index')
       await expect(pill).toHaveCount(0)
       expect(await heldPainted(page)).toBe(false)
-      await expect(textarea).toHaveValue('')
+      await expect(card.locator('.thread-card-input')).toHaveValue('')
       await shot(page, '04b-ask-opened-the-question')
 
-      // Not a one-way door: Esc on the unsent, empty page goes back to the top level,
+      // Not a one-way door: Esc on the unsent, empty card lets the question go,
       // with the dictated text untouched.
       await page.keyboard.press('Escape')
-      await expect(questionPage(panel)).toHaveCount(0)
+      await expect(card).toHaveCount(0)
+      await expect(composerTarget(panel)).toHaveCount(0)
       await expect(textarea).toHaveValue(/why does phase.* exactly/)
     })
 
@@ -297,8 +316,10 @@ test.describe('Voice input keeps the selected passage', () => {
         .toContain('chat-input-textarea')
       // The pill holds the word (harmless, and Ask is one click away if it WAS meant)…
       await expect(pill).toBeVisible()
-      // …and nothing was decided for the user: no question page opened.
+      // …and nothing was decided for the user: no question opened.
       await expect(asked).toHaveCount(0)
+      await expect(panel.locator('.thread-card')).toHaveCount(0)
+      await expect(composerTarget(panel)).toHaveCount(0)
       await shot(page, '11-stray-word-no-question')
 
       // Enter, the way a dictated question is sent. It goes where the user was
@@ -317,7 +338,7 @@ test.describe('Voice input keeps the selected passage', () => {
       await shot(page, '12-stray-word-sent-at-the-top-level')
     })
 
-    test('dictation keeps the question page the user opened; Ask on a held pill opens the next one', async ({ page }) => {
+    test('dictation keeps the question the user opened; Ask on a held pill opens the next one', async ({ page }) => {
       test.setTimeout(150_000)
       await page.context().grantPermissions(['microphone'])
       await stubSttStatus(page)
@@ -329,33 +350,94 @@ test.describe('Voice input keeps the selected passage', () => {
 
       // Ask about the FIRST passage explicitly: the user's own aim.
       await pill.locator('[data-testid="quote-ask-btn"]').click()
-      await expect(questionPage(panel)).toHaveAttribute('data-thread-depth', '1')
-      await expect(questionQuote(panel)).toContainText('rewrites the index')
+      await expectAskCard(panel, 'rewrites the index')
 
-      // Dictate on that page. The words land in its composer and the page stays put:
-      // dictation decides nothing about where a question goes.
+      // Dictate. The press into the composer folds the card into it, the words land
+      // there and the unsent question stays the composer's aim: dictation decides
+      // nothing about where a question goes.
       const textarea = panel.locator('.chat-input-textarea').first()
       await dictate(page, panel)
       await expect(textarea).toHaveValue(ANY_WORDS, { timeout: 30_000 })
-      await expect(questionPage(panel)).toHaveAttribute('data-thread-depth', '1')
-      await expect(questionQuote(panel)).toContainText('rewrites the index')
+      await expect(composerTarget(panel)).toHaveAttribute('data-pending', 'true')
+      await expect(composerTarget(panel)).toContainText('rewrites the index')
       await shot(page, '05-existing-question-untouched')
 
-      // Back to the top level (the page keeps its draft), then a second passage,
-      // dictated. A highlight is not a request: no page opens, and the held pill
-      // offers the move. Without this half, the test above would pass just as well
-      // if the pill had simply died with the selection.
-      await panel.locator('.thread-stack-back').click()
-      await expect(questionPage(panel)).toHaveCount(0)
+      // Back to the top level (the chip's x), then a second passage, dictated. A
+      // highlight is not a request: no question opens, and the held pill offers the
+      // move. Without this half, the test above would pass just as well if the pill
+      // had simply died with the selection.
+      await panel.locator('[data-testid="composer-thread-target-clear"]').click()
+      await expect(composerTarget(panel)).toHaveCount(0)
       const held = await selectPassage(page, panel, PHRASE2)
       await dictate(page, panel)
       await expect(textarea).toHaveValue(ANY_WORDS, { timeout: 30_000 })
-      await expect(questionPage(panel)).toHaveCount(0)
+      // A draft shows the words without moving focus; the final text focuses the
+      // composer. Wait for that, or it lands after the Ask below and takes focus
+      // back from the card's box.
+      await expect(textarea).toBeFocused({ timeout: 10_000 })
+      await expect(composerTarget(panel)).toHaveCount(0)
+      await expect(panel.locator('.thread-card')).toHaveCount(0)
       await expect(held).toBeVisible()
       await held.locator('[data-testid="quote-ask-btn"]').click()
-      await expect(questionQuote(panel)).toContainText('only verifies checksums')
+      await expectAskCard(panel, 'only verifies checksums')
       await expect(held).toHaveCount(0)
       await shot(page, '05b-ask-on-the-held-pill-opened-the-next')
+    })
+
+    test('the question card has its own mic: the words land in the card, the composer stays empty', async ({ page }) => {
+      test.setTimeout(150_000)
+      await page.context().grantPermissions(['microphone'])
+      await stubSttStatus(page)
+      const seen = await stubDictation(page)
+
+      await page.goto('/')
+      const panel = await openSession(page)
+      const pill = await selectPassage(page, panel)
+      await pill.locator('[data-testid="quote-ask-btn"]').click()
+      const card = await expectAskCard(panel, 'rewrites the index')
+      const box = card.locator('.thread-card-input')
+      const mic = card.locator('.mic-btn-wrapper .mic-btn')
+      await expect(mic).toBeVisible()
+      await shot(page, '09-card-mic')
+
+      // Pressed the way a hand presses it; the card stays open and keeps its box.
+      await mic.click()
+      await expect(mic).toHaveClass(/mic-recording/, { timeout: 15_000 })
+      await expect(card).toBeVisible()
+      await page.waitForTimeout(1200)
+      await mic.click()
+      await expect(box).toHaveValue(ANY_WORDS, { timeout: 30_000 })
+      // The final text takes the caret in the card's own box.
+      await expect(box).toBeFocused({ timeout: 10_000 })
+      await expect(panel.locator('.chat-input-textarea').first()).toHaveValue('')
+      await expect(composerTarget(panel)).toContainText('rewrites the index')
+      await shot(page, '09b-card-dictated')
+
+      // Typed words around the dictated ones stay; the send takes the whole box.
+      await box.press('End')
+      await box.pressSequentially('?')
+      await box.press('Enter')
+      await expect(box).toHaveValue('')
+      await expect(panel.locator('.chat-input-textarea').first()).toHaveValue('')
+
+      // A card closed mid-recording takes the recording with it: no mic stays on,
+      // and no more audio goes out once it is gone.
+      await page.keyboard.press('Escape')
+      await expect(card).toHaveCount(0)
+      await selectPassage(page, panel, PHRASE2)
+      await page.locator('[data-testid="quote-pin-pill"] [data-testid="quote-ask-btn"]').click()
+      const card2 = await expectAskCard(panel, 'only verifies checksums')
+      const mic2 = card2.locator('.mic-btn-wrapper .mic-btn')
+      await mic2.click()
+      await expect(mic2).toHaveClass(/mic-recording/, { timeout: 15_000 })
+      await page.waitForTimeout(500)
+      await page.keyboard.press('Escape')
+      await expect(card2).toHaveCount(0)
+      await expect(panel.locator('.mic-recording')).toHaveCount(0)
+      const posts = seen.transcribe.length + seen.draft.length
+      await page.waitForTimeout(5000)
+      expect(seen.transcribe.length + seen.draft.length, 'no audio posted after the card closed').toBe(posts)
+      await expect(panel.locator('.chat-input-textarea').first()).toHaveValue('')
     })
 
     test('a passage the reader scrolled away from is not adopted', async ({ page }) => {
@@ -380,7 +462,7 @@ test.describe('Voice input keeps the selected passage', () => {
       // right over the mic, so the stop click hit the pill instead (seen in a run
       // that timed out after 120s of recording).
       const textarea = panel.locator('.chat-input-textarea').first()
-      const mic = panel.locator('.mic-btn-wrapper .mic-btn').first()
+      const mic = panel.locator('.chat-input-controls .mic-btn-wrapper .mic-btn')
       await mic.click()
       await expect(mic).toHaveClass(/mic-recording/, { timeout: 15_000 })
       await page.waitForTimeout(1200)
@@ -390,6 +472,7 @@ test.describe('Voice input keeps the selected passage', () => {
       // Words landed, no question page, and nothing held either: there was no pill to
       // hold, so dictating after scrolling away is a plain message.
       await expect(questionPage(panel)).toHaveCount(0)
+      await expect(panel.locator('.thread-card')).toHaveCount(0)
       await expect(pill).toHaveCount(0)
       expect(await heldPainted(page)).toBe(false)
       await shot(page, '08-scrolled-away-passage-not-adopted')
@@ -421,6 +504,7 @@ test.describe('Voice input keeps the selected passage', () => {
       await expect(pill).toHaveCount(0)
       // Nothing was inferred from a recording that produced nothing.
       await expect(questionPage(panel)).toHaveCount(0)
+      await expect(panel.locator('.thread-card')).toHaveCount(0)
       await expect(panel.locator('.chat-input-textarea').first()).toHaveValue('')
       await shot(page, '09-empty-recording-released-the-selection')
     })
@@ -436,13 +520,19 @@ test.describe('Voice input keeps the selected passage', () => {
       await page.goto('/')
       const panel = await openSession(page, TREE_SESSION_ID, TREE_TASK_ID)
       const textarea = panel.locator('.chat-input-textarea').first()
+      // Ask here asks in Conversation Mode: the first question goes from its card,
+      // and the mode pill that comes with it takes the column to its page.
       const pill = await selectPassage(page, panel, PHRASE, TREE_SESSION_ID)
       await pill.locator('[data-testid="quote-ask-btn"]').click()
+      const card = await expectAskCard(panel, 'rewrites the index')
+      await card.locator('.thread-card-input').fill('and what does that cost')
+      await card.locator('.thread-card-input').press('Enter')
+      await expect(card.locator('.thread-card-input')).toHaveValue('')
+      const modePill = panel.locator('.thread-mode-pill')
+      await expect(modePill).toBeVisible({ timeout: 15_000 })
+      await modePill.click()
+      await expect(modePill).toHaveAttribute('data-view-mode', 'stack')
       await expect(questionPage(panel)).toHaveAttribute('data-thread-depth', '1')
-      await textarea.click()
-      await textarea.fill('and what does that cost')
-      await textarea.press('Enter')
-      await expect(textarea).toHaveValue('')
 
       // The answer renders on the question's own page, and that page is the aim the
       // user picked. A highlight must not quietly re-aim it (dictation never re-aims
@@ -467,7 +557,7 @@ test.describe('Voice input keeps the selected passage', () => {
       await shot(page, '10-question-page-stands-down')
     })
 
-    test('a send files the question on its page; dictation opens none; Ask on the held pill opens the next one', async ({ page }) => {
+    test('a send files the question under its passage; dictation opens none; Ask on the held pill opens the next one', async ({ page }) => {
       test.setTimeout(150_000)
       await page.context().grantPermissions(['microphone'])
       await stubSttStatus(page)
@@ -479,32 +569,35 @@ test.describe('Voice input keeps the selected passage', () => {
       const panel = await openSession(page, SEND_SESSION_ID, SEND_TASK_ID)
       const textarea = panel.locator('.chat-input-textarea').first()
 
-      // Ask about passage one, send it. The message is filed under its passage and
-      // the answer lands on the question's own page (the composer chip a send used
-      // to consume is gone: the page is the aim). The anchor was recorded.
+      // Ask about passage one, send it from the question's card (Ask here asks in
+      // Conversation Mode). The message is filed under its passage and the answer
+      // lands in the card. The anchor was recorded.
       const pill = await selectPassage(page, panel, PHRASE, SEND_SESSION_ID)
       await pill.locator('[data-testid="quote-ask-btn"]').click()
-      await expect(questionPage(panel)).toHaveAttribute('data-thread-depth', '1')
-      await textarea.click()
-      await textarea.fill('and what does that cost')
-      await textarea.press('Enter')
-      await expect(textarea).toHaveValue('')
+      const card = await expectAskCard(panel, 'rewrites the index')
+      await card.locator('.thread-card-input').fill('and what does that cost')
+      await card.locator('.thread-card-input').press('Enter')
+      await expect(card.locator('.thread-card-input')).toHaveValue('')
       await expect.poll(async () => (await threadAnchorsOf(page, SEND_SESSION_ID)).length).toBe(1)
       // Let the reply land first: rows arriving under a drag move the words out from
       // under the mouse (a run selected from the row above down to mid-paragraph).
-      await expect(panel.locator('.session-history')).toContainText(REPLY_PHRASE, { timeout: 30_000 })
+      await expect(card.locator('.thread-card-body')).toContainText(REPLY_PHRASE, { timeout: 30_000 })
 
-      // Back to the top level, then a second passage, dictated. A highlight is not a
-      // request: no page opens, the held pill offers the move, and Ask is the move.
-      await panel.locator('.thread-stack-back').click()
-      await expect(questionPage(panel)).toHaveCount(0)
+      // Back to the top level (Esc closes the card, the chip's x lets go of the
+      // question), then a second passage, dictated. A highlight is not a request: no
+      // question opens, the held pill offers the move, and Ask is the move.
+      await card.locator('.thread-card-input').press('Escape')
+      await expect(card).toHaveCount(0)
+      await panel.locator('[data-testid="composer-thread-target-clear"]').click()
+      await expect(composerTarget(panel)).toHaveCount(0)
       const held = await selectPassage(page, panel, PHRASE2, SEND_SESSION_ID)
       await dictate(page, panel)
       await expect(textarea).toHaveValue(ANY_WORDS, { timeout: 30_000 })
-      await expect(questionPage(panel), 'dictation opened no page').toHaveCount(0)
+      await expect(panel.locator('.thread-card'), 'dictation opened no question').toHaveCount(0)
+      await expect(composerTarget(panel), 'dictation opened no question').toHaveCount(0)
       await expect(held).toBeVisible()
       await held.locator('[data-testid="quote-ask-btn"]').click()
-      await expect(questionQuote(panel)).toContainText('only verifies checksums')
+      await expectAskCard(panel, 'only verifies checksums')
       expect((await threadAnchorsOf(page, SEND_SESSION_ID)).length, 'an unsent page writes nothing').toBe(1)
       await shot(page, '07-send-filed-the-question-ask-opens-the-next')
     })
@@ -537,7 +630,7 @@ test.describe('Voice input keeps the selected passage', () => {
       const pill = page.locator('[data-testid="quote-pin-pill"]')
       await expect(pill).toBeVisible()
 
-      const mic = panel.locator('.mic-btn-wrapper .mic-btn').first()
+      const mic = panel.locator('.chat-input-controls .mic-btn-wrapper .mic-btn')
       await mic.click()
       await expect(mic).toHaveClass(/mic-recording/, { timeout: 15_000 })
       await page.waitForTimeout(1200)
@@ -551,6 +644,7 @@ test.describe('Voice input keeps the selected passage', () => {
       // the held-back deltas land and the turn's later sentences appear — exactly once
       // each (a frozen copy left beside its persisted twin would show two).
       await expect(questionPage(panel)).toHaveCount(0)
+      await expect(panel.locator('.thread-card')).toHaveCount(0)
       await expect(history).toContainText('flips the read path over', { timeout: 30_000 })
       await expect.poll(async () => page.evaluate(({ needle, sid }) => {
         const text = document.querySelector(`.session-panel[data-session-id="${sid}"] .session-history`)?.textContent ?? ''
@@ -574,8 +668,7 @@ test.describe('Voice input keeps the selected passage', () => {
       expect(passageBox).not.toBeNull()
       expect(Math.abs(pillBox.y + pillBox.height - passageBox!.top), 'pill hangs just above its passage').toBeLessThan(60)
       await pill.locator('[data-testid="quote-ask-btn"]').click()
-      await expect(questionPage(panel)).toHaveAttribute('data-thread-depth', '1')
-      await expect(questionQuote(panel)).toContainText('never blocks')
+      await expectAskCard(panel, 'never blocks')
       await shot(page, '06-live-reply-caught-up-after-dictation')
     })
   })

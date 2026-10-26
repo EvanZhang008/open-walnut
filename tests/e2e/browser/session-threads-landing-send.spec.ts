@@ -5,7 +5,7 @@
  */
 import { expect, test, type Locator, type Page } from '@playwright/test'
 import fs from 'node:fs/promises'
-import { centreInHistory, DENSE_SESSION, openThreadsSession, passageRects, readRecord, resetThreadsFixture, selectPassage } from './threads-helpers'
+import { centreInHistory, DENSE_SESSION, openThreadsSession, passageRects, readRecord, resetThreadsFixture, selectPassage, switchView } from './threads-helpers'
 import { densePassage } from './threads-fixture'
 
 const DENSE_TASK = 'pw-task-threads-dense'
@@ -76,7 +76,12 @@ test.describe('Question stack landing after a send', () => {
       await selectPassage(page, panel, phrase)
       // Measured where the page records its landing: at the Ask click.
       const asked = await passagePlace(panel, phrase)
+      // Ask here asks in Conversation Mode (the card beside the passage); the
+      // pill takes the column back to Tree Mode, where the new question is the page.
       await page.locator('[data-testid="quote-pin-pill"] [data-testid="quote-ask-btn"]').click()
+      await expect(panel.locator('.session-history[data-view-mode="linear"]')).toHaveCount(1)
+      await expect(panel.locator('.thread-card')).toBeVisible()
+      await switchView(panel, 'stack')
       await expectDepth(panel, 3)
       const box = panel.locator('.chat-input-textarea').first()
       await box.fill('what does the partial point say')

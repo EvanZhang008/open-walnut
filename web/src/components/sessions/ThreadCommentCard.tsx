@@ -22,6 +22,8 @@ import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type K
 import type { CardGrown } from '@/utils/thread-card';
 import type { ThreadViewStatus } from '@/utils/thread-meta';
 import { ICON_COLLAPSE, ICON_EXPAND } from '@/components/common/Icons';
+import { MicButton } from '@/components/common/MicButton';
+import { useBoxDictation } from '@/hooks/useBoxDictation';
 import { ThreadStatusWord } from './ThreadStatusWord';
 import { ThreadCloseIcon } from './ThreadIcons';
 import '@/styles/thread-card.css';
@@ -81,10 +83,35 @@ export interface ThreadCommentCardProps {
   style: { top: number; left: number; width: number; maxHeight: number; grown?: CardGrown };
 }
 
+/** The scroll boxes around `el`, nearest first: the ones a scrollIntoView can move. */
+function scrollBoxesOf(el: Element): Element[] {
+  const out: Element[] = [];
+  for (let n = el.parentElement; n; n = n.parentElement) {
+    const oy = getComputedStyle(n).overflowY;
+    if ((oy === 'auto' || oy === 'scroll') && n.scrollHeight > n.clientHeight) out.push(n);
+  }
+  const root = document.scrollingElement;
+  if (root && !out.includes(root)) out.push(root);
+  return out;
+}
+
+/** Undo a grow's scroll on every box still where the grow left it; empties the list. */
+function restoreGrowScroll(list: Array<{ el: Element; before: number; after: number }>): void {
+  for (const b of list.splice(0)) if (Math.abs(b.el.scrollTop - b.after) < 1) b.el.scrollTop = b.before;
+}
+
 export const ThreadCommentCard = memo(function ThreadCommentCard(p: ThreadCommentCardProps) {
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
   const boxRef = useRef<HTMLTextAreaElement | null>(null);
+  // The question is dictated the way the composer's message is: into this box.
+  const dictation = useBoxDictation(boxRef, text, setText);
+  const micControl = useRef<{ discard: () => void } | null>(null);
+  // Only the mic itself starts a recording: its chevron and menu sit in the same wrapper.
+  const onMicPress = (target: EventTarget) => {
+    const mic = target instanceof Element ? target.closest('.mic-btn') : null;
+    if (mic && !mic.classList.contains('mic-recording')) dictation.started();
+  };
   const bodyRef = useRef<HTMLDivElement | null>(null);
   const cardRef = useRef<HTMLDivElement | null>(null);
   const initialRef = useRef(p.initialText);
@@ -101,6 +128,11 @@ export const ThreadCommentCard = memo(function ThreadCommentCard(p: ThreadCommen
   // Before the first paint, so a card whose answer holds a table opens expanded
   // instead of gliding there from small (autoGrow below).
   useLayoutEffect(() => {
+    // A recording still running belongs to the question left: it must not land here.
+    micControl.current?.discard();
+    dictation.reset();
+    // A grow's scroll record belongs to the question left.
+    grewScroll.current = [];
     setText(p.draft ? initialRef.current ?? '' : '');
     setExpanded(false);
     userSized.current = false;
@@ -116,17 +148,29 @@ export const ThreadCommentCard = memo(function ThreadCommentCard(p: ThreadCommen
   const [sizing, setSizing] = useState(false);
   const toggleExpanded = useCallback(() => { userSized.current = true; setSizing(true); setExpanded((v) => !v); }, []);
   // The box keeps the keyboard across a size change; once the glide is over, a
-  // card grown below the fold is scrolled whole into view.
+  // card grown below the fold is scrolled whole into view. Shrinking it, or closing
+  // it grown, gives the reader back the place that scroll moved them from, unless
+  // they scrolled since (2026-10-25: a grown card closed with the passage 43px off).
   const firstRender = useRef(true);
+  const grewScroll = useRef<Array<{ el: Element; before: number; after: number }>>([]);
   useEffect(() => {
     if (firstRender.current) { firstRender.current = false; return; }
     if (p.canAsk) boxRef.current?.focus({ preventScroll: true });
+    if (!expanded) restoreGrowScroll(grewScroll.current);
     const t = window.setTimeout(() => {
       setSizing(false);
-      if (expanded) cardRef.current?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+      const card = cardRef.current;
+      if (!expanded || !card) return;
+      const boxes = scrollBoxesOf(card);
+      const before = boxes.map((el) => el.scrollTop);
+      card.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+      grewScroll.current = boxes.map((el, i) => ({ el, before: before[i], after: el.scrollTop })).filter((b) => b.before !== b.after);
     }, GROW_MS + 40);
     return () => window.clearTimeout(t);
   }, [expanded, p.canAsk]);
+  useEffect(() => () => restoreGrowScroll(grewScroll.current), []);
+  // A card closed mid-recording takes its recording with it: nothing else could stop it.
+  useEffect(() => () => micControl.current?.discard(), []);
 
   // Placed below a passage near the bottom of the box, the card would hang
   // under the fold: the smallest scroll that shows it whole (none when it is).
@@ -161,7 +205,13 @@ export const ThreadCommentCard = memo(function ThreadCommentCard(p: ThreadCommen
     setSending(true);
     try {
       const ok = await p.onSend(t);
-      if (ok) { setText(''); pinned.current = true; }
+      if (ok) {
+        // A transcription landing after the send would repeat what was just sent.
+        micControl.current?.discard();
+        dictation.reset();
+        setText('');
+        pinned.current = true;
+      }
     } finally {
       setSending(false);
       boxRef.current?.focus({ preventScroll: true });
@@ -281,6 +331,20 @@ export const ThreadCommentCard = memo(function ThreadCommentCard(p: ThreadCommen
           onChange={(e) => setText(e.target.value)}
           onKeyDown={onKeyDown}
         />
+        <span
+          className="thread-card-mic"
+          onPointerDownCapture={(e) => onMicPress(e.target)}
+          onKeyDownCapture={(e) => { if (e.key === 'Enter' || e.key === ' ') onMicPress(e.target); }}
+        >
+        <MicButton
+          size="sm"
+          onTranscribe={dictation.onTranscribe}
+          onDraft={dictation.onDraft}
+          onRefine={dictation.onRefine}
+          controlRef={micControl}
+          disabled={!p.canAsk || sending}
+        />
+        </span>
         <button
           type="button"
           className="thread-card-send"

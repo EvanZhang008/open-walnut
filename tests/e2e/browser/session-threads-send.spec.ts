@@ -9,7 +9,8 @@
  * (per-page drafts, the `New question (draft)` row, reload), and C68 (a failed
  * turn reads `No answer · Retry`; Retry resends on the same question), C55 (the
  * first send is one PATCH with the anchor and its meta), and C49 (three Asks during
- * one answer: three rows, own uuids, each answer on its page, `Waits for`).
+ * one answer: all three reach the CLI while it is still answering, under their own
+ * uuids, and are answered in order, each on its page).
  *
  * The mock CLI answers "Hello! I processed your message: <text>", and a message
  * that STARTS with `slow:<ms>` is answered after that delay (a follow-up on the
@@ -20,11 +21,13 @@
 import { expect, test, type APIRequestContext, type Locator, type Page } from '@playwright/test'
 import fs from 'node:fs/promises'
 import {
-  centreInHistory, DENSE_SESSION, FAILED_SESSION, openThreadsSession, passageRects, readRecord, resetThreadsFixture, selectPassage, modePill, openQuestionList,
+  centreInHistory, DENSE_SESSION, FAILED_SESSION, openThreadsSession, passageRects, readRecord, resetThreadsFixture, selectPassage, modePill, openQuestionList, switchView,
 } from './threads-helpers'
 import { FAILED_ERROR_TEXT, FAILED_PASSAGES, PARKED_FOLLOW_UP, densePassage } from './threads-fixture'
+import { discoverBrowserFixture } from './codex-test-audit'
 
 const SEND_SESSION = 'pw-threads-send-session'
+const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 const SEND_TASK = 'pw-task-threads-send'
 const FAILED_TASK = 'pw-task-threads-failed'
 const PHRASE = 'rewrites the index in place'
@@ -65,13 +68,43 @@ async function centreText(page: Page, panel: Locator, phrase: string): Promise<v
   await centreInHistory(page, panel, phrase)
 }
 
-/** Select `phrase` in the paragraph and press Ask. */
-async function askAbout(page: Page, panel: Locator, phrase: string): Promise<void> {
+/** Press Ask on the selected passage. Ask here asks in Conversation Mode
+ *  (2026-10-23): the column switches and the card opens beside the passage with
+ *  its own box focused. */
+async function pressAsk(page: Page, panel: Locator): Promise<Locator> {
+  await page.locator('[data-testid="quote-pin-pill"] [data-testid="quote-ask-btn"]').click()
+  await expect(panel.locator('.session-history[data-view-mode="linear"]')).toHaveCount(1)
+  const card = panel.locator('.thread-card')
+  await expect(card).toBeVisible()
+  await expect(card.locator('.thread-card-input')).toBeFocused()
+  return card
+}
+
+/** Back to Tree Mode through the pill: the question is the page on screen. The
+ *  switch leaves focus on the pill, so the reader clicks into the composer. */
+async function backToPage(panel: Locator): Promise<void> {
+  await switchView(panel, 'stack')
+  await expectDepth(panel, 1)
+  await composer(panel).click()
+}
+
+/** Select `phrase` in the paragraph, press Ask and land on its page in Tree
+ *  Mode. A session without a question has no mode pill yet: there the question
+ *  is sent from its card first (`first`), and the pill that comes with it takes
+ *  the column back to the page. */
+async function askAbout(page: Page, panel: Locator, phrase: string, first?: string): Promise<void> {
   await centreParagraph(page, panel)
   await passageRects(panel, phrase)
   await selectPassage(page, panel, phrase)
-  await page.locator('[data-testid="quote-pin-pill"] [data-testid="quote-ask-btn"]').click()
-  await expectDepth(panel, 1)
+  const card = await pressAsk(page, panel)
+  if (first !== undefined) {
+    const input = card.locator('.thread-card-input')
+    await input.fill(first)
+    await input.press('Enter')
+    await expect(input).toHaveValue('')
+    await expect(modePill(panel)).toBeVisible({ timeout: 15_000 })
+  }
+  await backToPage(panel)
 }
 
 function composer(panel: Locator): Locator {
@@ -84,6 +117,15 @@ async function send(panel: Locator, text: string): Promise<void> {
   await box.fill(text)
   await box.press('Enter')
   await expect(box).toHaveValue('')
+}
+
+/** The session's queue rows (server truth): a row leaves once the CLI starts (takes)
+ *  its line, not when that line's turn is done. */
+type QueueRow = { message: string; status: string; userUuid?: string; lineUuid?: string; heldReason?: string }
+async function queueRows(request: APIRequestContext): Promise<QueueRow[]> {
+  const res = await request.get(`/api/v1/sessions/${SEND_SESSION}/queue`)
+  expect(res.ok(), `GET queue: ${res.status()}`).toBe(true)
+  return ((await res.json()) as { messages: QueueRow[] }).messages
 }
 
 /** Asked-from rows that are real questions (not a draft row). */
@@ -120,7 +162,12 @@ test.describe('Question stack: asking and sending', () => {
     await boot(page)
     const panel = await openThreadsSession(page, SEND_SESSION, SEND_TASK, READY)
     const history = panel.locator('.session-history')
-    await askAbout(page, panel, PHRASE)
+    await centreParagraph(page, panel)
+    await passageRects(panel, PHRASE)
+    await selectPassage(page, panel, PHRASE)
+    // Ask here asks in Conversation Mode; the first question is sent from its
+    // card (the mode pill comes with the first question).
+    const card = await pressAsk(page, panel)
     expect((await readRecord(request, SEND_SESSION)).threadAnchors ?? []).toHaveLength(0)
     // C55: the first send is ONE PATCH carrying the anchor and its meta together.
     const patches: Array<Record<string, unknown>> = []
@@ -128,10 +175,15 @@ test.describe('Question stack: asking and sending', () => {
       if (r.method() !== 'PATCH' || !r.url().includes(`/api/sessions/${SEND_SESSION}`)) return
       try { patches.push(JSON.parse(r.postData() ?? '{}') as Record<string, unknown>) } catch { patches.push({}) }
     })
-    // C3: the bubble shows on this page at once, and the answer follows here.
-    await send(panel, 'what does phase two cost')
+    // C3: the bubble shows in the card at once, and on the question's page.
+    const input = card.locator('.thread-card-input')
+    await input.fill('what does phase two cost')
+    await input.press('Enter')
+    await expect(input).toHaveValue('')
+    await expect(card.locator('.thread-card-q')).toHaveText(['what does phase two cost'])
+    await expect(modePill(panel)).toBeVisible({ timeout: 15_000 })
+    await backToPage(panel)
     await expect(history).toContainText('what does phase two cost')
-    await expectDepth(panel, 1)
     // Map C9: the sent page is a question in the map now, still the current one.
     const map = panel.locator('.thread-map')
     await expect(map.locator('.thread-map-row[data-kind="pending"], .thread-map-mark[data-kind="pending"]')).toHaveCount(0, { timeout: 15_000 })
@@ -190,8 +242,7 @@ test.describe('Question stack: asking and sending', () => {
   test('the same passage again goes to its page; a partial overlap opens a new one', async ({ page, request }) => {
     await boot(page)
     const panel = await openThreadsSession(page, SEND_SESSION, SEND_TASK, READY)
-    await askAbout(page, panel, PHRASE)
-    await send(panel, 'is the rewrite atomic')
+    await askAbout(page, panel, PHRASE, 'is the rewrite atomic')
     await expect(panel.locator('.session-history')).toContainText('processed your message', { timeout: 60_000 })
     await page.keyboard.press('Escape')
     await expectDepth(panel, 0)
@@ -205,7 +256,6 @@ test.describe('Question stack: asking and sending', () => {
     await expect(composer(panel)).toHaveAttribute('placeholder', /^Reply in “.+”…$/)
     const pageTitle = (await panel.locator('.thread-stack-header .thread-stack-title').textContent()) ?? ''
     expect(await composer(panel).getAttribute('placeholder')).toContain(pageTitle.slice(0, 20))
-    await expect(composer(panel)).toBeFocused()
     await expect(panel.locator('.session-history')).toContainText('is the rewrite atomic')
     await send(panel, 'and if it fails halfway')
     await expect.poll(async () => ((await readRecord(request, SEND_SESSION)).threadAnchors ?? []).length).toBe(2)
@@ -228,8 +278,7 @@ test.describe('Question stack: asking and sending', () => {
     await boot(page)
     const panel = await openThreadsSession(page, SEND_SESSION, SEND_TASK, READY)
     const history = panel.locator('.session-history')
-    await askAbout(page, panel, PHRASE)
-    await send(panel, 'orientation question one')
+    await askAbout(page, panel, PHRASE, 'orientation question one')
     await expect(history).toContainText('processed your message', { timeout: 60_000 })
     await page.keyboard.press('Escape')
     await expectDepth(panel, 0)
@@ -262,7 +311,8 @@ test.describe('Question stack: asking and sending', () => {
     const phrase = densePassage('Q9').slice(0, 26)
     await centreText(page, panel, phrase)
     await selectPassage(page, panel, phrase)
-    await page.locator('[data-testid="quote-pin-pill"] [data-testid="quote-ask-btn"]').click()
+    await pressAsk(page, panel)
+    await switchView(panel, 'stack')
     await expectDepth(panel, 1)
     // C60: the pending page starts empty; the root draft is untouched.
     await expect(composer(panel)).toHaveValue('')
@@ -367,51 +417,105 @@ test.describe('Question stack: asking and sending', () => {
     await shot(page, 'c68-retried')
   })
 
-  test('three Asks during one answer: three questions, each answered on its own page; the waiting ones say so', async ({ page, request }) => {
+  /** C49: three questions asked while a 35s root answer is still coming; back on
+   *  root once they are all out. */
+  async function askThreeDuringRoot(page: Page, request: APIRequestContext, tag: string): Promise<{ panel: Locator; history: Locator }> {
     await boot(page)
     const panel = await openThreadsSession(page, SEND_SESSION, SEND_TASK, READY)
     const history = panel.locator('.session-history')
     // C49: a root turn the mock answers after 35s; three questions go out meanwhile.
     // (15s was not enough under machine load: the three Asks took 17s, so the root
-    // answer ended first and the third question never had to wait.)
-    await send(panel, 'slow:35000 root turn')
+    // answer ended first and the questions never met a running turn.) The long-turn
+    // mode keeps the process alive after it, as the real CLI does; the plain mock
+    // exits after each turn, and the lines it held go back to the queue for the next.
+    await send(panel, 'snapshot-long-turn:35000:root turn')
     await expect(history).toContainText('root turn')
     const phrases = ['The migration runs in three phases', PHRASE, 'only verifies checksums']
+    // Each question's own turn takes 3s, so the order the CLI runs them in can be read
+    // off the queue. The mock strips the prefix: the answer is "processed your message:
+    // queued question N".
+    // Tagged per test: a test before this one may leave its own questions queued
+    // on the same session, and a row is found by its words.
+    const asks = [1, 2, 3].map((n) => `slow:3000 queued question ${n} ${tag}`)
     const t0 = Date.now()
     for (let i = 0; i < 3; i++) {
-      await askAbout(page, panel, phrases[i])
-      await send(panel, `queued question ${i + 1}`)
+      // The first is sent from its card (no question yet, so no mode pill).
+      if (i === 0) await askAbout(page, panel, phrases[i], asks[i])
+      else {
+        await askAbout(page, panel, phrases[i])
+        await send(panel, asks[i])
+      }
       if (i < 2) { await page.keyboard.press('Escape'); await expectDepth(panel, 0) }
     }
     test.info().annotations.push({ type: 'three asks took', description: `${Date.now() - t0}ms` })
-    await expect(history, 'all three went out while the root answer was still coming').not.toContainText('processed your message: root turn')
-    // The third page: its row waits for the running answer, and its queue controls live here.
-    await expect(panel.locator('.thread-queue-note')).toHaveText(/^Waits for “.+” to finish\.$/)
-    await expect(panel.locator('.session-msg-queued-actions button', { hasText: 'Edit' })).toBeVisible()
-    await expect(panel.locator('.session-msg-queued-actions button', { hasText: 'Delete' })).toBeVisible()
-    await shot(page, 'c49-waits-for')
+    // A question row is never held back from a running turn (2026-10-23): each line
+    // goes to the CLI at once and the CLI queues it. So all three are out (written
+    // under their line's uuid, none held) while the root answer is still coming,
+    // and each row stays until the CLI takes its line (the first one too: Claude
+    // Code's init declares that it reports its queue).
+    const rowOf = (rows: QueueRow[], n: number) => rows.find((r) => r.message.includes(`queued question ${n} ${tag}`))
+    const stateOf = (rows: QueueRow[], n: number) => { const r = rowOf(rows, n); return r ? `${r.status}:${!!r.lineUuid && !r.heldReason}` : 'missing' }
+    await expect.poll(async () => {
+      const rows = await queueRows(request)
+      return [1, 2, 3].map((n) => stateOf(rows, n)).join(' ')
+    }, { timeout: 15_000 }).toBe('processing:true processing:true processing:true')
+    await expect(history, 'all three went out while the root answer was still coming').not.toContainText('ran to completion')
+    await shot(page, 'c49-all-sent')
+    // Three questions, three user lines under their own uuids: the uuid each row
+    // went out with is the head of its question.
+    const sent = await queueRows(request)
+    const uuids = [1, 2, 3].map((n) => rowOf(sent, n)?.userUuid ?? '')
+    expect(new Set(uuids).size, `uuids ${uuids.join(',')}`).toBe(3)
+    expect(uuids.every((u) => u.length > 0)).toBe(true)
+    await expect.poll(async () => ((await readRecord(request, SEND_SESSION)).threadAnchors ?? []).length).toBe(3)
+    const heads = ((await readRecord(request, SEND_SESSION)).threadAnchors ?? []).map((a) => a.msgId)
+    expect([...heads].sort()).toEqual([...uuids].sort())
+    // Back on root: the root answer lands here.
     await page.keyboard.press('Escape')
     await expectDepth(panel, 0)
     await expect(askedRows(panel)).toHaveCount(3)
-    await expect(askedRows(panel).nth(2).locator('.thread-asked-state')).toHaveText('Waiting…')
-    // Three questions, three user rows under their own uuids.
-    await expect.poll(async () => ((await readRecord(request, SEND_SESSION)).threadAnchors ?? []).length).toBe(3)
-    const heads = ((await readRecord(request, SEND_SESSION)).threadAnchors ?? []).map((a) => a.msgId)
-    expect(new Set(heads).size).toBe(3)
-    // Every answer lands on its own page: the root answer on root first, then
-    // each question's. (The mock CLI never persists these turns, so this reads
-    // them live; the transcript half, one user line per uuid, is the queue unit
-    // test's.)
-    await expect(history).toContainText('processed your message: root turn', { timeout: 60_000 })
-    await expect(history).not.toContainText('queued question')
-    for (let i = 0; i < 3; i++) {
-      await askedRows(panel).nth(i).click()
-      await expectDepth(panel, 1)
-      await expect(history).toContainText(`processed your message: queued question ${i + 1}`, { timeout: 60_000 })
-      await expect(history).not.toContainText('processed your message: root turn')
-      for (let j = 0; j < 3; j++) if (j !== i) await expect(history).not.toContainText(`queued question ${j + 1}`)
-      await page.keyboard.press('Escape')
-      await expectDepth(panel, 0)
-    }
+    return { panel, history }
+  }
+
+  test('three Asks during one answer: all three reach the CLI at once, under their own uuids', async ({ page, request }) => {
+    await askThreeDuringRoot(page, request, 'at-once')
+  })
+
+  test('three Asks during one answer are answered in order, after the answer they waited behind', async ({ page, request }) => {
+    const { panel } = await askThreeDuringRoot(page, request, 'in-order')
+    // Every row leaves the queue and every question is answered. Two can leave in
+    // one poll: the mock runs a queued line without its slow: delay and exits after
+    // it, and the next process takes the rest at once.
+    const keys = [1, 2, 3].map((n) => `queued question ${n} in-order`)
+    const rowStatus = (i: number) => askedRows(panel).nth(i).getAttribute('data-status')
+    await expect.poll(async () => {
+      const rows = await queueRows(request)
+      const queued = keys.filter((k) => rows.some((r) => r.message.includes(k)))
+      const open: number[] = []
+      for (let i = 0; i < 3; i++) {
+        const st = await rowStatus(i)
+        if (st === 'queued' || st === 'answering') open.push(i + 1)
+      }
+      return `queued: ${queued.join(', ') || 'none'} | unanswered: ${open.join(', ') || 'none'}`
+    }, { timeout: 120_000, intervals: [250] }).toBe('queued: none | unanswered: none')
+    // The order is the CLI's own: its output, in the session's stream capture, has
+    // the root answer, then questions 1, 2 and 3, across every process it took.
+    const { fixtureRoot } = await discoverBrowserFixture(TEST_PORT)
+    const tmpBase = fixtureRoot.replace(/\/ps-fixture$/, '')
+    const streams = [`${tmpBase}/daemon/streams/${SEND_SESSION}.jsonl`, `${tmpBase}/daemon-streams/${SEND_SESSION}.jsonl`]
+    const stream = (await Promise.all(streams.map((f) => fs.readFile(f, 'utf8').catch(() => '')))).join('\n')
+    // The capture holds every turn on this session, the test before this one's
+    // too (its lines are tagged at-once). The CLI writes no user line there, so
+    // this test's root answer is the last one before question 1's answer, after
+    // anything of the test before.
+    const before = Math.max(-1, ...[1, 2, 3].map((n) => stream.lastIndexOf(`queued question ${n} at-once`)))
+    const answers = keys.map((k) => stream.indexOf(`processed your message: ${k}`))
+    const at = [stream.lastIndexOf('ran to completion', answers[0]), ...answers]
+    expect(at.every((i) => i > before), `found in the stream at ${at.join(', ')}, after ${before}`).toBe(true)
+    expect([...at].sort((a, b) => a - b), 'root, then questions 1, 2 and 3').toEqual(at)
+    // Which page each answer lands on is not checked here: this session's history
+    // is its seeded transcript, and the mock files no turn in it, so a finished
+    // answer is in no history row. Placement by the line's uuid, the whole turn
+    // with it, is tests/web/thread-tree.test.ts.
   })
 })

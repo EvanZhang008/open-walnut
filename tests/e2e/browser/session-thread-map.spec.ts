@@ -1,9 +1,10 @@
 /**
  * The question map (spec slice 1b): a session with questions always shows its
  * question tree in the timeline's top-left corner. A wide column reserves a
- * gutter for the labelled tree; a narrow one shows a rail of marks whose list
- * opens on hover, focus or a tap. Nobody has to know about the header pill or
- * the drawer's edge to find the questions.
+ * gutter for the labelled tree once the user chose "Keep open" (folded to the
+ * rail is the default); a narrow one shows a rail of marks whose list opens on a
+ * click only, never on a hover or a focus. Nobody has to know about the header
+ * pill or the drawer's edge to find the questions.
  *
  * Covers C1 to C30 of demo/thread-designs/spec-slice1b-question-map.md on the
  * map fixture (8 questions over 3 levels, one hidden, CJK titles, 2 pins, a
@@ -46,10 +47,12 @@ async function pinWidth(page: Page, sessionId: string, width: number): Promise<v
     flex: 0 0 ${width}px !important; width: ${width}px !important; min-width: ${width}px !important; max-width: ${width}px !important; }` })
 }
 
-/** Open a fixture session in a column of `width` px, or fullscreen. */
+/** Open a fixture session in a column of `width` px, or fullscreen. `map`
+ *  is the saved map shape (`open` = a user who chose "Keep open", the specs'
+ *  default; `default` = no preference, the product default: the rail). */
 async function openAt(
   page: Page, width: number | 'full', sessionId = MAP_SESSION, taskId = MAP_TASK, ready: string | undefined = MAP_READY,
-  height = 900,
+  height = 900, map: 'open' | 'default' = 'open',
 ): Promise<Locator> {
   await page.setViewportSize({ width: 1600, height })
   await page.goto('/')
@@ -58,7 +61,7 @@ async function openAt(
   // panel header; it is not what these tests look at, and it takes clicks.
   await page.addStyleTag({ content: '.notification-toaster { display: none !important; }' })
   if (width !== 'full') await pinWidth(page, sessionId, width)
-  const panel = await openThreadsSession(page, sessionId, taskId, ready)
+  const panel = await openThreadsSession(page, sessionId, taskId, ready, { map })
   if (width === 'full') {
     await panel.locator('button[title="Expand to full screen"]').click()
     await expect(panel).toHaveClass(/open-walnut-fullscreen/)
@@ -338,7 +341,10 @@ test.describe('Question map', () => {
     await expect(modePill(panel)).toHaveAttribute('data-view-mode', 'linear')
     await expect(panel.locator('.thread-stack-header')).toHaveCount(0)
     await expect(rowNamed(map, MAP_TITLES.Q4)).toHaveAttribute('aria-current', 'page')
-    await expect(panel.locator(`.session-msg--threaded[data-message-id="${MAP_IDS.Q4.u}"]`)).toHaveAttribute('data-thread-current', 'true')
+    // The target folds to its line in the main chat (utils/thread-fold.ts): the
+    // line is the current one, its turns are in the card the row opened.
+    await expect(panel.locator(`.session-msg--threaded[data-message-id="${MAP_IDS.Q4.u}"]`)).toHaveCount(0)
+    await expect(panel.locator('.session-history [data-thread-fold] .thread-turn-label[data-current="true"]')).toContainText(MAP_TITLES.Q4)
     await expect(panel.locator('.thread-turn-label[data-current="true"]')).toContainText(MAP_TITLES.Q4)
   })
 
@@ -378,7 +384,7 @@ test.describe('Question map', () => {
     await expect(panel.locator('.thread-card .thread-card-title')).toHaveText(MAP_TITLES.Q2)
   })
 
-  test('a narrow column: the rail is always there, clear of the text; hover, focus or a tap opens the list (C3, C18, C19)', async ({ page }) => {
+  test('a narrow column: the rail is always there, clear of the text; only a click opens the list, never a hover or a focus (C3, C18, C19)', async ({ page }) => {
     const panel = await openAt(page, NARROW)
     const map = mapOf(panel)
     await expect(map).toHaveAttribute('data-shape', 'rail')
@@ -390,9 +396,13 @@ test.describe('Question map', () => {
     const railBox = await rectOf(rail)
     for (const left of await contentLefts(panel)) expect(left).toBeGreaterThanOrEqual(railBox.right + 6)
     await shot(page, 'narrow-rail')
-    // Hover: the labelled list over the text; leaving closes it.
-    await rail.hover()
+    // A hover opens nothing (2026-10-23: nothing pops up unless clicked).
     const overlay = map.locator('.thread-map-overlay')
+    await rail.hover()
+    await page.waitForTimeout(400)
+    await expect(overlay).toHaveCount(0)
+    // A click: the labelled list over the text; leaving closes it.
+    await rail.click()
     await expect(overlay).toBeVisible()
     await expect(rowNamed(overlay, MAP_TITLES.Q2)).toBeVisible()
     await expectSettledOverlay(overlay)
@@ -407,7 +417,8 @@ test.describe('Question map', () => {
     await expect(overlay).toHaveCount(0)
     await page.mouse.move(hb.x + hb.width * 0.7, hb.y + hb.height * 0.6)
     // A row in the list goes there and closes the list.
-    await rail.hover()
+    await rail.click()
+    await expect(overlay).toBeVisible()
     await rowNamed(overlay, MAP_TITLES.Q4).click()
     await expectDepth(panel, 1)
     await expect(overlay).toHaveCount(0)
@@ -419,16 +430,24 @@ test.describe('Question map', () => {
     await expect(bar).toBeVisible()
     expect((await rectOf(bar)).left).toBeGreaterThanOrEqual((await rectOf(rail)).right + 4)
     // C18 keyboard, with real Tabs: the rail is the map's one tab stop and focus
-    // opens its list; ArrowDown enters it on the current row, arrows move, Enter
-    // opens and hands focus back to the rail (list closed), Esc closes only.
+    // alone opens nothing; ArrowDown opens the list and enters it on the current
+    // row, arrows move, Enter opens and hands focus back to the rail (list
+    // closed), Esc closes only.
     await page.mouse.move(hb.x + hb.width * 0.7, hb.y + hb.height * 0.6)
     await focusBefore(page, rail)
     await page.keyboard.press('Tab')
     await expect(rail).toBeFocused()
-    await expect(overlay).toBeVisible()
+    await page.waitForTimeout(400)
+    await expect(overlay).toHaveCount(0)
     await page.keyboard.press('ArrowDown')
+    await expect(overlay).toBeVisible()
     await expect.poll(async () => (await focusedStop(page)).current).toBe('page')
     await page.keyboard.press('ArrowDown')
+    expect((await focusedStop(page)).text).toContain(MAP_TITLES.Q4a)
+    // A reader who pauses on a row keeps the list: moving focus inside the map
+    // is not leaving it (focusout bubbles; the close-out is 140ms).
+    await page.waitForTimeout(400)
+    await expect(overlay).toBeVisible()
     expect((await focusedStop(page)).text).toContain(MAP_TITLES.Q4a)
     const ring = await page.evaluate(() => getComputedStyle(document.activeElement as Element).outlineStyle)
     expect(ring).not.toBe('none')
@@ -444,9 +463,11 @@ test.describe('Question map', () => {
     await focusBefore(page, rail)
     await page.keyboard.press('Tab')
     await expect(rail).toBeFocused()
-    await expect(overlay).toBeVisible()
+    await page.waitForTimeout(400)
+    await expect(overlay).toHaveCount(0)
     // Esc from inside the list: closed, focus on the rail, same page.
     await page.keyboard.press('ArrowDown')
+    await expect(overlay).toBeVisible()
     await expect.poll(() => inMap(page)).toBe(true)
     await page.keyboard.press('Escape')
     await expect(overlay).toHaveCount(0)
@@ -522,16 +543,21 @@ test.describe('Question map', () => {
     expect(await page.evaluate(() => localStorage.getItem('walnut:thread-map.v1'))).toBe('collapsed')
     // C26 mid-transcript: the passage you were reading stays where it was while
     // the text column widens and narrows under it.
-    await rail.hover()
+    await rail.click()
     await map.locator('.thread-map-keep').click()
     await expect(map).toHaveAttribute('data-shape', 'panel')
+    expect(await page.evaluate(() => localStorage.getItem('walnut:thread-map.v1'))).toBe('open')
     await centreInHistory(page, panel, panel.locator('.session-history table').first(), { at: 0.5, tolerance: 80, capRow: true })
     const reading = await readingRow(panel)
     expect(reading.id).not.toBe('')
     await mouseClick(page, map.locator('.thread-map-hide'))
     await expect(map).toHaveAttribute('data-shape', 'rail')
     expect(Math.abs((await rowTop(panel, reading.id)) - reading.top), 'hide moved the reading position').toBeLessThanOrEqual(2)
+    // A hover alone opens nothing; the click does.
     await mouseTo(page, rail)
+    await page.waitForTimeout(400)
+    await expect(map.locator('.thread-map-overlay')).toHaveCount(0)
+    await mouseClick(page, rail)
     await expect(map.locator('.thread-map-overlay')).toBeVisible()
     await mouseClick(page, map.locator('.thread-map-keep'))
     await expect(map).toHaveAttribute('data-shape', 'panel')
@@ -546,7 +572,7 @@ test.describe('Question map', () => {
     await expect(again).toBeVisible({ timeout: 20_000 })
     await expect(mapOf(again)).toHaveAttribute('data-shape', 'rail', { timeout: 20_000 })
     // Keep it open again from the rail's list.
-    await mapOf(again).locator('.thread-map-rail').hover()
+    await mapOf(again).locator('.thread-map-rail').click()
     await mapOf(again).locator('.thread-map-keep').click()
     await expect(mapOf(again)).toHaveAttribute('data-shape', 'panel')
     // C26: resize across the threshold flips the shape, no gutter left behind.
@@ -558,7 +584,58 @@ test.describe('Question map', () => {
     await expect(mapOf(again)).toHaveAttribute('data-shape', 'panel')
   })
 
-  test('Ask on a passage: New question shows in the map at once, Esc drops it, and the passage lands back (C9, C23)', async ({ page }) => {
+  test('no saved choice: a wide column starts folded to the rail; hover and focus open nothing, a click does, Keep open holds (2026-10-23)', async ({ page }) => {
+    const panel = await openAt(page, WIDE, MAP_SESSION, MAP_TASK, MAP_READY, 900, 'default')
+    const map = mapOf(panel)
+    const rail = map.locator('.thread-map-rail')
+    const overlay = map.locator('.thread-map-overlay')
+    const pref = () => page.evaluate(() => localStorage.getItem('walnut:thread-map.v1'))
+    expect(await pref()).toBeNull()
+    // The box is wide enough for the labelled panel, yet the default is the rail.
+    expect(await panel.locator('.session-history').evaluate((el) => (el as HTMLElement).offsetWidth)).toBeGreaterThanOrEqual(640)
+    await expect(map).toHaveAttribute('data-shape', 'rail')
+    await expect(rail).toBeVisible()
+    // A hover opens nothing.
+    await mouseTo(page, rail)
+    await page.waitForTimeout(400)
+    await expect(overlay).toHaveCount(0)
+    const dir = `/tmp/thread-map-click/e2e/${test.info().project.name}`
+    await fs.mkdir(dir, { recursive: true })
+    await page.screenshot({ path: `${dir}/default-rail.png` })
+    // A Tab onto the rail opens nothing either.
+    const hb = (await panel.locator('.session-history').boundingBox())!
+    await page.mouse.move(hb.x + hb.width * 0.7, hb.y + hb.height * 0.6)
+    await focusBefore(page, rail)
+    await page.keyboard.press('Tab')
+    await expect(rail).toBeFocused()
+    await page.waitForTimeout(400)
+    await expect(overlay).toHaveCount(0)
+    // A click opens the list.
+    await mouseClick(page, rail)
+    await expect(overlay).toBeVisible()
+    await expect(rowNamed(overlay, MAP_TITLES.Q2)).toBeVisible()
+    await expectSettledOverlay(overlay)
+    await page.screenshot({ path: `${dir}/default-rail-open.png` })
+    // Keep open: the labelled panel, saved as `open`.
+    await mouseClick(page, map.locator('.thread-map-keep'))
+    await expect(map).toHaveAttribute('data-shape', 'panel')
+    expect(await pref()).toBe('open')
+    // It holds after a reload.
+    await page.reload()
+    await page.waitForLoadState('networkidle')
+    await pinWidth(page, MAP_SESSION, WIDE)
+    const again = sessionPanel(page, MAP_SESSION)
+    await expect(again).toBeVisible({ timeout: 20_000 })
+    await expect(mapOf(again)).toHaveAttribute('data-shape', 'panel', { timeout: 20_000 })
+    // Hide the map: back to the rail, saved as `collapsed`.
+    await mapOf(again).locator('.thread-map-hide').click()
+    await expect(mapOf(again)).toHaveAttribute('data-shape', 'rail')
+    expect(await pref()).toBe('collapsed')
+    await page.waitForTimeout(400)
+    await expect(mapOf(again).locator('.thread-map-overlay')).toHaveCount(0)
+  })
+
+  test('Ask on a passage: its card opens and New question shows in the map at once, Esc drops it, and the passage stays (C9, C23)', async ({ page }) => {
     // A session without questions: the map (and its gutter) appears with the Ask.
     const panel = await openAt(page, WIDE, AI_SESSION, 'pw-task-threads-ai', 'How should the reader treat stale copies?')
     await expect(mapOf(panel)).toHaveCount(0)
@@ -567,8 +644,10 @@ test.describe('Question map', () => {
     await selectPassage(page, panel, phrase)
     const top = async () => Math.round((await passageRects(panel, phrase))[0].top)
     const asked = await top()
+    // Ask here asks in Conversation Mode: the card opens beside the passage.
     await page.locator('[data-testid="quote-pin-pill"] [data-testid="quote-ask-btn"]').click()
-    await expectDepth(panel, 1)
+    await expect(panel.locator('.session-history[data-view-mode="linear"]')).toHaveCount(1)
+    await expect(panel.locator('.thread-card .thread-card-input')).toBeFocused()
     const map = mapOf(panel)
     await expect(map.locator('.thread-map-body')).toBeVisible()
     await expect(map.locator('.thread-map-row[data-kind="pending"]')).toHaveText('New question')
@@ -577,7 +656,8 @@ test.describe('Question map', () => {
     const hb = (await panel.locator('.session-history').boundingBox())!
     await page.mouse.move(hb.x + hb.width * 0.7, hb.y + hb.height * 0.6)
     await page.keyboard.press('Escape')
-    // Nothing was sent: the session has no question again, so no stack and no map.
+    // Nothing was sent: the session has no question again, so no card, no stack and no map.
+    await expect(panel.locator('.thread-card')).toHaveCount(0)
     await expect(panel.locator('.thread-stack')).toHaveCount(0)
     await expect(mapOf(panel)).toHaveCount(0)
     await page.waitForTimeout(400)
@@ -664,7 +744,7 @@ test.describe('Question map', () => {
     await page.emulateMedia({ reducedMotion: 'reduce' })
     const panel = await openAt(page, NARROW)
     const map = mapOf(panel)
-    await map.locator('.thread-map-rail').hover()
+    await map.locator('.thread-map-rail').click()
     const overlay = map.locator('.thread-map-overlay')
     await expect(overlay).toBeVisible()
     expect(await overlay.evaluate((el) => getComputedStyle(el).animationName)).toBe('none')
@@ -701,7 +781,7 @@ test.describe('Question map', () => {
     await shot(page, 'dark-wide-depth-2')
     await pinWidth(page, MAP_SESSION, NARROW)
     await expect(map).toHaveAttribute('data-shape', 'rail')
-    await map.locator('.thread-map-rail').hover()
+    await map.locator('.thread-map-rail').click()
     const overlay = map.locator('.thread-map-overlay')
     await expect(overlay).toBeVisible()
     expect(luminance(await overlay.evaluate((el) => getComputedStyle(el).backgroundColor))).toBeLessThan(0.1)

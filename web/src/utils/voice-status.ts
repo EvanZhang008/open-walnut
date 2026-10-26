@@ -34,17 +34,22 @@ export function subscribeVoiceStatus(fn: (s: VoiceStatus) => void): () => void {
 // ── Insert target ───────────────────────────────────────────────────────────
 // The chat input that most recently had focus registers itself; the Voice
 // panel's Insert action delivers text there. Falls back to clipboard if no
-// input has registered (e.g. on a page with no composer).
+// input has registered (e.g. on a page with no composer). An input that goes
+// away hands the target back to the one before it: a closed question card
+// used to keep it, and Insert reported success into a box nobody could see.
 
 type InsertFn = (text: string) => void;
-let insertTarget: InsertFn | null = null;
+let insertTargets: InsertFn[] = [];
 
-export function registerVoiceInsertTarget(fn: InsertFn): void {
-  insertTarget = fn;
+/** Returns the unregister, for the input's unmount. */
+export function registerVoiceInsertTarget(fn: InsertFn): () => void {
+  insertTargets.push(fn);
+  return () => { insertTargets = insertTargets.filter((t) => t !== fn); };
 }
 
 /** Insert into the last-focused chat input. Returns false if none registered. */
 export function insertVoiceText(text: string): boolean {
+  const insertTarget = insertTargets[insertTargets.length - 1];
   if (!insertTarget) return false;
   try {
     insertTarget(text);

@@ -32,6 +32,17 @@ import { expect, test, type Page, type Locator } from '@playwright/test'
 import fs from 'node:fs/promises'
 import { dragPhrase, selectionAnchorNodeType } from './selection-helpers'
 
+/** Ask here asks in Conversation Mode (2026-10-23): the column switches, the
+ *  question's card opens beside the passage with its own box focused, and the
+ *  composer names the passage it is about. */
+async function expectAskCard(panel: Locator, passage: string): Promise<void> {
+  await expect(panel.locator('.session-history[data-view-mode="linear"]')).toHaveCount(1)
+  const card = panel.locator('.thread-card')
+  await expect(card).toBeVisible()
+  await expect(card.locator('.thread-card-input')).toBeFocused()
+  await expect(panel.locator('[data-testid="composer-thread-target"][data-pending="true"]')).toContainText(passage)
+}
+
 /** Own fixture records: this spec SENDS turns, which append to a session's stream
  *  file, and a reply the first test left behind is PERSISTED history for the
  *  second — a drag would land on finished text and pass for the wrong reason. So
@@ -166,7 +177,8 @@ test.describe('Selecting inside a reply that is still streaming', () => {
     expect(stillOnScreen.top).toBeLessThan(stillOnScreen.boxBottom)
     await shot(page, '03-pill-survived-turn-end')
 
-    // Ask still works after all that, and opens a question page on the passage.
+    // Ask still works after all that: it asks in Conversation Mode, the card
+    // beside the passage and the composer naming it.
     //
     // Pressed the way a HAND presses it: mouse down, a beat, mouse up. Playwright's
     // .click() sends down+up with no frame in between, which hides the real defect
@@ -180,12 +192,12 @@ test.describe('Selecting inside a reply that is still streaming', () => {
     await page.mouse.down()
     await page.waitForTimeout(180)
     await page.mouse.up()
-    await expect(panel.locator('.thread-stack:not([data-thread-depth="0"])')).toHaveAttribute('data-thread-depth', '1')
-    await expect(panel.locator('.thread-stack .thread-quote-head')).toContainText('never blocks')
-    await shot(page, '04-question-page-from-live-reply')
-    // Esc on the unsent, empty page goes back to the reply (nothing is saved).
+    await expectAskCard(panel, 'never blocks')
+    await shot(page, '04-question-card-from-live-reply')
+    // Esc on the unsent, empty card lets the question go (nothing is saved).
     await page.keyboard.press('Escape')
-    await expect(panel.locator('.thread-stack:not([data-thread-depth="0"])')).toHaveCount(0)
+    await expect(panel.locator('.thread-card')).toHaveCount(0)
+    await expect(panel.locator('[data-testid="composer-thread-target"]')).toHaveCount(0)
 
     // Ask clears the selection, so the freeze releases and the frozen block
     // collapses into its persisted twin. Content alone would prove nothing here
@@ -263,8 +275,9 @@ test.describe('Selecting inside a reply that is still streaming', () => {
     await page.waitForTimeout(220)
     await page.mouse.up()
 
-    await expect(panel.locator('.thread-stack:not([data-thread-depth="0"])')).toHaveAttribute('data-thread-depth', '1')
-    await expect(panel.locator('.thread-stack .thread-quote-head')).toContainText('never blocks')
+    // Ask asks in Conversation Mode: the card opens beside the passage, the
+    // composer naming it.
+    await expectAskCard(panel, 'never blocks')
     await shot(page, '06-ask-pressed-mid-answer')
   })
 })

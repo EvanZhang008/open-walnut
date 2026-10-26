@@ -453,15 +453,12 @@ export const ThreadMap = memo(function ThreadMap(p: ThreadMapProps) {
   const railRef = useRef<HTMLButtonElement>(null);
   const focusInside = () => !!navRef.current?.contains(document.activeElement);
 
-  // Focus handed to the rail by a close must not reopen the list (the nav opens
-  // on focus). Focus events run inside focus(), so the flag spans exactly one.
-  const quietFocus = useRef(false);
+  // Focus handed to the rail by a close, without scrolling the page (a focus
+  // never opens the list: only a click does).
   const focusRailQuietly = useCallback(() => {
     const rail = railRef.current;
     if (!rail || document.activeElement === rail) return;
-    quietFocus.current = true;
     focusInPlace(rail);
-    quietFocus.current = false;
   }, []);
 
   // A shape change (resize, hide / keep open) starts closed; when the button
@@ -525,10 +522,14 @@ export const ThreadMap = memo(function ThreadMap(p: ThreadMapProps) {
       data-shape="rail"
       aria-label="Questions map"
       style={style}
-      onMouseEnter={show}
+      // The list opens on a click only (2026-10-23, the user: nothing here pops
+      // up unless clicked). Leaving it with the pointer or the focus closes it;
+      // coming back before the close-out keeps an open list. Focus moving inside
+      // it (rail to row, row to row) is not leaving: focusout bubbles.
+      onMouseEnter={() => { if (open) clearTimeout(closeTimer.current); }}
       onMouseLeave={hide}
-      onFocus={() => { if (!quietFocus.current) show(); }}
-      onBlur={hide}
+      onFocus={() => { if (open) clearTimeout(closeTimer.current); }}
+      onBlur={(e) => { if (!navRef.current?.contains(e.relatedTarget as Node | null)) hide(); }}
       onKeyDown={(e) => {
         // Esc closes the list first; the page's own Esc (pop) waits for the next one.
         if (e.key !== 'Escape' || !open) return;
@@ -549,8 +550,8 @@ export const ThreadMap = memo(function ThreadMap(p: ThreadMapProps) {
           {...(open ? {} : { 'data-thread-rail': '' })}
           aria-expanded={open}
           aria-label={`Questions map: ${pluralQuestions(p.counts.all)}`}
-          // Opens only: hovering already opened it for a mouse, and the list covers
-          // the rail, so a toggle here would only ever close it under a tap.
+          // Opens only: the list covers the rail, so a toggle here could only
+          // ever close it under the same press.
           onClick={show}
           onKeyDown={enterList}
         >

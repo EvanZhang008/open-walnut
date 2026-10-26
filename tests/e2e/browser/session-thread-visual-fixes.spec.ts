@@ -11,7 +11,7 @@
  */
 import { expect, test, type Locator, type Page } from '@playwright/test'
 import {
-  centreInHistory, DENSE_SESSION, openThreadsSession, resetThreadsFixture, selectPassage, modePill, openQuestionList,
+  askHereThenTree, centreInHistory, DENSE_SESSION, openThreadsSession, resetThreadsFixture, selectPassage, modePill, openQuestionList,
 } from './threads-helpers'
 
 const TASK = 'pw-task-threads-dense'
@@ -77,8 +77,7 @@ test.describe('question stack visual fixes', () => {
     })
     await centre(page, panel, phrase)
     await selectPassage(page, panel, phrase)
-    await page.locator('[data-testid="quote-pin-pill"] [data-testid="quote-ask-btn"]').click()
-    await expect(panel.locator('.thread-stack')).toHaveAttribute('data-thread-depth', '1')
+    await askHereThenTree(page, panel)
     const box = panel.locator('.chat-input-textarea').first()
     await box.fill('where does the subtitle start')
     await box.press('Enter')

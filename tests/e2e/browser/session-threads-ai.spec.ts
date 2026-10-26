@@ -16,7 +16,7 @@
 import { expect, test, type APIRequestContext, type Locator, type Page } from '@playwright/test'
 import fs from 'node:fs/promises'
 import {
-  centreInHistory, AI_SESSION, openThreadsSession, readRecord, resetThreadsFixture, selectPassage,
+  centreInHistory, AI_SESSION, modePill, openThreadsSession, readRecord, resetThreadsFixture, selectPassage, switchView,
 } from './threads-helpers'
 import { AI_PASSAGE } from './threads-fixture'
 
@@ -50,11 +50,38 @@ async function centreText(page: Page, panel: Locator, phrase: string): Promise<v
   await centreInHistory(page, panel, phrase)
 }
 
-async function askAbout(page: Page, panel: Locator): Promise<void> {
+/** Press Ask on the selected passage: Ask here asks in Conversation Mode
+ *  (2026-10-23), the card opens beside the passage with its own box focused. */
+async function pressAsk(page: Page, panel: Locator): Promise<Locator> {
+  await page.locator('[data-testid="quote-pin-pill"] [data-testid="quote-ask-btn"]').click()
+  await expect(panel.locator('.session-history[data-view-mode="linear"]')).toHaveCount(1)
+  const input = panel.locator('.thread-card .thread-card-input')
+  await expect(input).toBeFocused()
+  return input
+}
+
+/** Send from the card's own box. */
+async function sendFromCard(input: Locator, text: string): Promise<void> {
+  await input.fill(text)
+  await input.press('Enter')
+  await expect(input).toHaveValue('')
+}
+
+/** The mode pill comes with the first question: take the column back to Tree
+ *  Mode, where the question is the page on screen. */
+async function backToPage(panel: Locator): Promise<void> {
+  await expect(modePill(panel)).toBeVisible({ timeout: 15_000 })
+  await switchView(panel, 'stack')
+  await expectDepth(panel, 1)
+}
+
+/** Ask about the passage and send the first question from its card (a session
+ *  without a question has no mode pill yet), then land on its page. */
+async function askAbout(page: Page, panel: Locator, text: string): Promise<void> {
   await centreText(page, panel, PASSAGE)
   await selectPassage(page, panel, PASSAGE)
-  await page.locator('[data-testid="quote-pin-pill"] [data-testid="quote-ask-btn"]').click()
-  await expectDepth(panel, 1)
+  await sendFromCard(await pressAsk(page, panel), text)
+  await backToPage(panel)
 }
 
 function composer(panel: Locator): Locator {
@@ -96,19 +123,29 @@ test.describe('Question AI on the fixture server', () => {
     await boot(page)
     const panel = await openThreadsSession(page, AI_SESSION, AI_TASK, READY)
     const history = panel.locator('.session-history')
-    // A root turn the mock answers after 25s: the question waits behind it, so a
-    // title that shows before that answer was named at send, not at the answer.
-    await send(panel, 'slow:25000 root turn for naming')
+    // A root turn the mock answers after 25s: the question's line goes to the CLI at
+    // once and the CLI runs it after that turn (2026-10-23), so a title that shows
+    // before that answer was named at send, not at the answer. The long-turn mode
+    // keeps the process alive the way the real CLI does, so it runs the queued line
+    // after the turn (the plain mock exits after its one turn).
+    await send(panel, 'snapshot-long-turn:25000:root turn for naming')
     await expect(history).toContainText('root turn for naming')
     const t0 = Date.now()
-    await askAbout(page, panel)
-    await send(panel, 'why merge once a minute')
-    const title = panel.locator('.thread-stack-header .thread-stack-title')
-    await expect(title).toHaveText('Why Merge Once', { timeout: 20_000 })
+    await centreText(page, panel, PASSAGE)
+    await selectPassage(page, panel, PASSAGE)
+    // Sent from the question's card (Ask here asks in Conversation Mode): the
+    // card's title is the first place the name shows.
+    await sendFromCard(await pressAsk(page, panel), 'why merge once a minute')
+    await expect(panel.locator('.thread-card .thread-card-title')).toHaveText('Why Merge Once', { timeout: 20_000 })
     const namedMs = Date.now() - t0
+    await expect(panel.locator('.thread-card .thread-naming')).toHaveCount(0)
+    // Its page, in Tree Mode, carries the same name.
+    await backToPage(panel)
+    const title = panel.locator('.thread-stack-header .thread-stack-title')
+    await expect(title).toHaveText('Why Merge Once')
     await expect(panel.locator('.thread-stack-header .thread-naming')).toHaveCount(0)
     // The root answer (25s) has not arrived: naming did not wait for it.
-    await expect(history).not.toContainText('processed your message: slow:25000')
+    await expect(history).not.toContainText('ran to completion')
     expect(namedMs, 'named while the answer was still queued').toBeLessThan(25_000)
     await shot(page, 'n1-named-before-answer')
     const head = await headOf(request)
@@ -119,15 +156,14 @@ test.describe('Question AI on the fixture server', () => {
     expect((await aiCalls(request))[head]).toBe(1)
     // The queued question is answered on its own page once the root turn ends,
     // so the next test starts on an idle session.
-    await expect(history).toContainText('processed your message', { timeout: 90_000 })
+    await expect(history).toContainText('processed your message: why merge once a minute', { timeout: 90_000 })
   })
 
   test('refine says looks answered on the open page; Archive writes the AI takeaway without a reload (C53, C11, C57)', async ({ page, request }) => {
     await boot(page)
     const panel = await openThreadsSession(page, AI_SESSION, AI_TASK, READY)
     const history = panel.locator('.session-history')
-    await askAbout(page, panel)
-    await send(panel, 'stub-answered what does compaction cost')
+    await askAbout(page, panel, 'stub-answered what does compaction cost')
     await expect(history).toContainText('processed your message', { timeout: 60_000 })
     // The refine write after the answer reaches this open page (status-changed).
     const header = panel.locator('.thread-stack-header')
@@ -162,9 +198,9 @@ test.describe('Question AI on the fixture server', () => {
     const phrase = 'rewrites the index in place'
     await centreText(page, panel, phrase)
     await selectPassage(page, panel, phrase)
-    await page.locator('[data-testid="quote-pin-pill"] [data-testid="quote-ask-btn"]').click()
-    await expectDepth(panel, 1)
-    // Count every animation frame that renders a `Naming…` from the send on.
+    const input = await pressAsk(page, panel)
+    // Count every animation frame that renders a `Naming…` from the send on:
+    // the card, the turn label and, once back in Tree Mode, the page header.
     await page.evaluate(() => {
       const w = window as unknown as { __namingFrames: number; __frames: number; __stop: boolean }
       w.__namingFrames = 0; w.__frames = 0; w.__stop = false
@@ -176,11 +212,12 @@ test.describe('Question AI on the fixture server', () => {
       }
       requestAnimationFrame(tick)
     })
-    await send(panel, 'what does in place mean here')
+    await sendFromCard(input, 'what does in place mean here')
     await expect.poll(async () => {
       const meta = (await readRecord(request, sendSession)).threadMeta ?? []
       return meta[0]?.titleState ?? ''
     }).toBe('unavailable')
+    await backToPage(panel)
     await page.waitForTimeout(1500)
     const counts = await page.evaluate(() => {
       const w = window as unknown as { __namingFrames: number; __frames: number; __stop: boolean }

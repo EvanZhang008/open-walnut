@@ -143,7 +143,7 @@ test.describe('Question stack', () => {
     expect(withFrame.equals(unwrapped), 'the panel is pixel-identical without the wrapper').toBe(true)
   })
 
-  test('Ask opens a question page in the same frame; Esc before sending writes nothing', async ({ page, request }) => {
+  test('Ask from Tree Mode opens the card in Conversation Mode in the same frame; Esc before sending writes nothing', async ({ page, request }) => {
     await boot(page)
     const panel = await openThreadsSession(page, AI_SESSION, AI_TASK, 'How should the reader treat stale copies?')
     // Compared with what was there, not with nothing: a question another spec
@@ -155,34 +155,41 @@ test.describe('Question stack', () => {
     await selectPassage(page, panel, passage)
     const ask = page.locator('[data-testid="quote-pin-pill"] [data-testid="quote-ask-btn"]')
     await expect(ask).toBeVisible()
-    // Sample the DOM one animation frame after the click that asks.
-    await page.evaluate(() => {
+    // Sample the DOM one animation frame after the click that asks. Ask here
+    // always asks in Conversation Mode (2026-10-23): the column switches and the
+    // card opens beside the passage, in that same frame.
+    const panelEl = await panel.elementHandle()
+    await page.evaluate((root) => {
       const w = window as unknown as { __askFrame?: string | null }
       w.__askFrame = null
       document.addEventListener('click', (e) => {
         if (!(e.target as Element).closest?.('[data-testid="quote-ask-btn"]')) return
         requestAnimationFrame(() => {
-          const f = document.querySelector('.thread-stack')
-          w.__askFrame = `${f?.getAttribute('data-thread-depth') ?? 'none'}:${f?.querySelectorAll('.thread-quote-head').length ?? 0}`
+          const mode = root?.querySelector('.session-history[data-view-mode]')?.getAttribute('data-view-mode') ?? 'none'
+          w.__askFrame = `${mode}:${root?.querySelectorAll('.thread-card').length ?? 0}`
         })
       }, { capture: true, once: true })
-    })
+    }, panelEl)
     await ask.click()
-    await expect.poll(() => page.evaluate(() => (window as unknown as { __askFrame?: string | null }).__askFrame)).toBe('1:1')
-    // C1: a depth-1 page, the passage in its quote head, the composer focused and
-    // empty, no chip anywhere.
-    await expectDepth(panel, 1)
-    await expect(panel.locator('.thread-quote-head')).toContainText(passage)
-    const textarea = panel.locator('.chat-input-textarea').first()
-    await expect(textarea).toBeFocused()
-    await expect(textarea).toHaveValue('')
-    await expect(textarea).toHaveAttribute('placeholder', 'Ask about this passage…')
+    await expect.poll(() => page.evaluate(() => (window as unknown as { __askFrame?: string | null }).__askFrame)).toBe('linear:1')
+    // C1: a new question's card beside the passage, its own input focused and
+    // empty, the composer naming the passage, no chip anywhere. (This session has
+    // no question yet, so there is no mode pill: the pending question is asked
+    // here, in its card.)
+    const card = panel.locator('.thread-card')
+    await expect(card.locator('.thread-card-title')).toHaveText('New question')
+    const input = card.locator('.thread-card-input')
+    await expect(input).toBeFocused()
+    await expect(input).toHaveValue('')
+    await expect(input).toHaveAttribute('placeholder', 'Ask about this passage…')
+    await expect(panel.locator('[data-testid="composer-thread-target"][data-pending="true"]')).toContainText(passage)
     await expect(page.locator('[data-testid="thread-anchor-chip"], .thread-anchor-chip')).toHaveCount(0)
-    // The stack row names the page without repeating the quote head below it (N17).
-    await expect(panel.locator('.thread-stack-header .thread-stack-title')).toHaveText('New question')
-    await shot(page, 'c1-pending-page')
-    // C2: Esc on the unsent page returns to root and writes nothing.
+    await expect(panel.locator('.thread-stack-header')).toHaveCount(0)
+    await shot(page, 'c1-pending-card')
+    // C2: Esc on the unsent card lets the question go and writes nothing.
     await page.keyboard.press('Escape')
+    await expect(card).toHaveCount(0)
+    await expect(panel.locator('[data-testid="composer-thread-target"]')).toHaveCount(0)
     await expect(frame(panel)).toHaveCount(0)
     await expect(panel.locator('.thread-quote-head')).toHaveCount(0)
     const record = await readRecord(request, AI_SESSION)

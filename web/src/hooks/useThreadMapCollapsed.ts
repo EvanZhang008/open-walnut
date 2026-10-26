@@ -1,7 +1,9 @@
 import { useCallback, useSyncExternalStore } from 'react';
 
 /**
- * "Hide the map" (the question map folded to its rail) as ONE user preference,
+ * The question map folded to its rail, as ONE user preference. Folded is the
+ * default (2026-10-23, the user: the questions panel "shouldn't pop up unless
+ * user click"); the map's "Keep open" stores `open`. ONE preference,
  * shared by every session panel and window. A module store over localStorage:
  * every open panel re-renders on a change in this tab, the `storage` event
  * carries it to other windows. The value is cached (a snapshot is read on every
@@ -14,9 +16,9 @@ let cached: boolean | null = null;
 
 function read(): boolean {
   try {
-    return localStorage.getItem(THREAD_MAP_PREF_KEY) === 'collapsed';
+    return localStorage.getItem(THREAD_MAP_PREF_KEY) !== 'open';
   } catch {
-    return false;
+    return true;
   }
 }
 
@@ -41,8 +43,7 @@ function subscribe(fn: () => void): () => void {
 
 export function setThreadMapCollapsed(collapsed: boolean): void {
   try {
-    if (collapsed) localStorage.setItem(THREAD_MAP_PREF_KEY, 'collapsed');
-    else localStorage.removeItem(THREAD_MAP_PREF_KEY);
+    localStorage.setItem(THREAD_MAP_PREF_KEY, collapsed ? 'collapsed' : 'open');
   } catch {
     // Private mode / quota: the cached value below still holds.
   }
@@ -51,7 +52,7 @@ export function setThreadMapCollapsed(collapsed: boolean): void {
 }
 
 export function useThreadMapCollapsed(): [boolean, (collapsed: boolean) => void] {
-  const collapsed = useSyncExternalStore(subscribe, snapshot, () => false);
+  const collapsed = useSyncExternalStore(subscribe, snapshot, () => true);
   const set = useCallback((next: boolean) => setThreadMapCollapsed(next), []);
   return [collapsed, set];
 }

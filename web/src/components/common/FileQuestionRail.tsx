@@ -107,10 +107,13 @@ export const FileQuestionRail = memo(function FileQuestionRail({ rows, top, room
       aria-label={label}
       style={style}
       data-testid="file-question-rail"
-      onMouseEnter={show}
+      // A click opens the list, as the transcript's map (nothing here pops up on
+      // a hover or a focus); leaving it closes it, coming back keeps it open.
+      // Focus moving inside it is not leaving: focusout bubbles.
+      onMouseEnter={() => { if (open) clearTimeout(closeTimer.current); }}
       onMouseLeave={hide}
-      onFocus={show}
-      onBlur={hide}
+      onFocus={() => { if (open) clearTimeout(closeTimer.current); }}
+      onBlur={(e) => { if (!navRef.current?.contains(e.relatedTarget as Node | null)) hide(); }}
       onKeyDown={(e) => {
         if (e.key !== 'Escape' || !open) return;
         e.preventDefault();

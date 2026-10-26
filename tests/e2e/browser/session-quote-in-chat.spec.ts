@@ -1,8 +1,9 @@
 /**
  * The transcript's selection pill offers both ways to ask (2026-10-15, the user,
  * beside the Files tab's "Ask here / Quote in chat"; named "Quote" on 2026-10-22:
- * "quote goes straight into the input box"). "Ask here" opens a question page on the passage as
- * Ask did; "Quote" puts the passage, quoted, at the head of the MAIN
+ * "quote goes straight into the input box"). "Ask here" asks about the passage in
+ * Conversation Mode (2026-10-23: from Tree Mode the column switches and the card
+ * opens beside the passage); "Quote" puts the passage, quoted, at the head of the MAIN
  * conversation's composer, keeps whatever was typed after it, and leaves a
  * question's own draft where it was.
  */
@@ -86,14 +87,22 @@ test.describe('Selection pill: Ask here and Quote', () => {
     expect(await page.evaluate(() => window.getSelection()?.toString() ?? '')).toBe('')
     await shot(page, 'quoted')
 
-    // Ask here still opens a question page on the passage. (Quote showed
-    // the end of the conversation, where its message will land.)
+    // Ask here still asks about the passage: from Tree Mode the column switches
+    // to Conversation Mode and the question's card opens beside the passage, its
+    // own box focused, the composer naming the passage. (Quote showed the end of
+    // the conversation, where its message will land.)
     await composer.fill('')
     await centreInHistory(page, panel, phrase, { tolerance: 20 })
     await selectPassage(page, panel, phrase)
     await pill(page).getByRole('button', { name: 'Ask here' }).click()
-    await expect(panel.locator('.thread-stack')).toHaveAttribute('data-thread-depth', '1')
-    await expect(panel.locator('.thread-quote-head')).toContainText(phrase)
+    await expect(panel.locator('.session-history[data-view-mode="linear"]')).toHaveCount(1)
+    const card = panel.locator('.thread-card')
+    await expect(card).toBeVisible()
+    await expect(card.locator('.thread-card-input')).toBeFocused()
+    await expect(card.locator('.thread-card-input')).toHaveValue('')
+    await expect(panel.locator('[data-testid="composer-thread-target"][data-pending="true"]')).toContainText(phrase)
+    await expect(panel.locator('.thread-stack-header')).toHaveCount(0)
+    await shot(page, 'ask-here-card')
   })
 
   test('Tree Mode on a question page: Quote goes back to the main conversation, the question keeps its draft', async ({ page }) => {

@@ -8,7 +8,7 @@
  * collapses the selection. What is pinned is the pill's LIFECYCLE around that:
  *
  *  · it survives the collapse, painted, with Ask still working, and Ask, not the
- *    landing, is what opens the question page;
+ *    landing, is what opens the question (its card, in Conversation Mode);
  *  · it lets go on Escape, on a press elsewhere in the timeline, on a press into
  *    ANOTHER panel's composer, and on a new selection (which it follows);
  *  · it does NOT let go on a press into this panel's composer (writing the question)
@@ -21,13 +21,25 @@
  * The dictation itself, and the stray-word report end to end, are in
  * session-voice-selection.spec.ts (Chromium).
  */
-import { expect, test, type Page } from '@playwright/test'
+import { expect, test, type Locator, type Page } from '@playwright/test'
 import {
-  PHRASE, PHRASE2, SESSION_ID, heldPainted, highlightsSupported, openSession, questionPage, questionQuote,
+  PHRASE, PHRASE2, SESSION_ID, heldPainted, highlightsSupported, openSession, questionPage,
   requestHoldFromPage, selectPassage, selectedText, shot, stubSttStatus, wheel,
 } from './voice-selection-helpers'
 
 test.use({ browserName: 'webkit' })
+
+/** Ask here asks in Conversation Mode (2026-10-23): the column switches, the
+ *  question's card opens beside the passage with its own box focused, and the
+ *  composer names the passage it is about. */
+async function expectAskCard(panel: Locator, passage: string): Promise<Locator> {
+  await expect(panel.locator('.session-history[data-view-mode="linear"]')).toHaveCount(1)
+  const card = panel.locator('.thread-card')
+  await expect(card).toBeVisible()
+  await expect(card.locator('.thread-card-input')).toBeFocused()
+  await expect(panel.locator('[data-testid="composer-thread-target"][data-pending="true"]')).toContainText(passage)
+  return card
+}
 
 test('really runs in WebKit', async ({ browserName }) => {
   expect(browserName).toBe('webkit')
@@ -62,6 +74,7 @@ test.describe('the held pill in the Mac app engine', () => {
     await expect(pill.locator('[data-testid="quote-ask-btn"]')).toBeVisible()
     if (painted) expect(await heldPainted(page), 'the passage is painted').toBe(true)
     await expect(questionPage(panel)).toHaveCount(0)
+    await expect(panel.locator('.thread-card')).toHaveCount(0)
     await shot(page, 'wk-01-held-after-focus-move')
 
     // Writing the question keeps the hold; a keystroke also re-runs the pill's
@@ -70,17 +83,20 @@ test.describe('the held pill in the Mac app engine', () => {
     await expect(pill).toBeVisible()
     if (painted) expect(await heldPainted(page)).toBe(true)
 
-    // Ask opens the question page; its composer is its own (empty) draft, and the
-    // words typed at the top level wait there. Esc on the empty page goes back.
+    // Ask opens the question's card beside the passage; its box is its own (empty),
+    // and the words typed at the top level wait in the composer. Esc on the empty
+    // card lets the question go.
     await pill.locator('[data-testid="quote-ask-btn"]').click()
-    await expect(questionPage(panel)).toHaveAttribute('data-thread-depth', '1')
-    await expect(questionQuote(panel)).toContainText('rewrites the index')
+    const card = await expectAskCard(panel, 'rewrites the index')
     await expect(pill).toHaveCount(0)
     if (painted) expect(await heldPainted(page)).toBe(false)
-    await expect(textarea).toHaveValue('')
+    await expect(card.locator('.thread-card-input')).toHaveValue('')
+    // The card has its own mic, as the composer does.
+    await expect(card.locator('.mic-btn-wrapper .mic-btn')).toBeVisible()
     await shot(page, 'wk-02-ask-opened-the-question')
     await page.keyboard.press('Escape')
-    await expect(questionPage(panel)).toHaveCount(0)
+    await expect(card).toHaveCount(0)
+    await expect(panel.locator('[data-testid="composer-thread-target"]')).toHaveCount(0)
     await expect(textarea).toHaveValue('so what does')
   })
 
@@ -116,7 +132,7 @@ test.describe('the held pill in the Mac app engine', () => {
     await expect(pill).toBeVisible()
     // On the mic: acting on the passage. Without a microphone the recording never
     // starts, and whatever the mic does about that must not take the held pill.
-    const mic = panel.locator('.mic-btn-wrapper .mic-btn').first()
+    const mic = panel.locator('.chat-input-controls .mic-btn-wrapper .mic-btn')
     const micBox = (await mic.boundingBox())!
     await page.mouse.move(micBox.x + micBox.width / 2, micBox.y + micBox.height / 2)
     await page.mouse.down()
@@ -150,8 +166,9 @@ test.describe('the held pill in the Mac app engine', () => {
     expect(await heldPainted(page)).toBe(false)
     expect(await selectedText(page)).toBe(PHRASE2)
     await pill.locator('[data-testid="quote-ask-btn"]').click()
-    await expect(questionQuote(panel)).toContainText('only verifies checksums')
+    const card = await expectAskCard(panel, 'only verifies checksums')
     await page.keyboard.press('Escape')
+    await expect(card).toHaveCount(0)
     await expect(questionPage(panel)).toHaveCount(0)
   })
 
@@ -194,24 +211,32 @@ test.describe('the held pill in the Mac app engine', () => {
   test('a press into ANOTHER panel\'s composer lets go: the exemption is this panel\'s only', async ({ page }) => {
     test.setTimeout(120_000)
     await stubSttStatus(page)
-    await page.goto('/')
-    // Two columns side by side. The second's composer is a text control too, but not
-    // the one the held passage's question is being written in — a pill kept alive
-    // across a press there would point at a passage from a conversation the user
-    // has left.
-    const other = await openSession(page, 'pw-voicesel3-session', 'pw-task-voicesel3')
-    const panel = await openSession(page)
-    const pill = await selectPassage(page, panel)
-    expect(await requestHoldFromPage(page, SESSION_ID)).toBe(true)
-    await focusComposer(page)
-    await expect(pill).toBeVisible()
-    // This panel's composer keeps it…
-    await panel.locator('.chat-input-textarea').first().click()
-    await expect(pill).toBeVisible()
-    // …the other panel's does not.
-    await other.locator('.chat-input-textarea').first().click()
-    await expect(pill).toHaveCount(0)
-    expect(await heldPainted(page)).toBe(false)
+    // Two columns, said explicitly: at this width Auto shows one, and the second
+    // session would replace the first (it did after other specs, never alone).
+    const ui = ((await (await page.request.get('/api/config')).json()) as { config?: { ui?: Record<string, unknown> } }).config?.ui ?? {}
+    expect((await page.request.put('/api/config', { data: { ui: { ...ui, session_panels: '2' } } })).ok()).toBe(true)
+    try {
+      await page.goto('/')
+      // Two columns side by side. The second's composer is a text control too, but not
+      // the one the held passage's question is being written in — a pill kept alive
+      // across a press there would point at a passage from a conversation the user
+      // has left.
+      const other = await openSession(page, 'pw-voicesel3-session', 'pw-task-voicesel3')
+      const panel = await openSession(page)
+      const pill = await selectPassage(page, panel)
+      expect(await requestHoldFromPage(page, SESSION_ID)).toBe(true)
+      await focusComposer(page)
+      await expect(pill).toBeVisible()
+      // This panel's composer keeps it…
+      await panel.locator('.chat-input-textarea').first().click()
+      await expect(pill).toBeVisible()
+      // …the other panel's does not.
+      await other.locator('.chat-input-textarea').first().click()
+      await expect(pill).toHaveCount(0)
+      expect(await heldPainted(page)).toBe(false)
+    } finally {
+      await page.request.put('/api/config', { data: { ui } })
+    }
   })
 
   test('with nothing selected on screen there is nothing to hold: the request is declined', async ({ page }) => {

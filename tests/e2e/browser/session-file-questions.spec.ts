@@ -19,7 +19,7 @@
 import { expect, test, type Locator, type Page } from '@playwright/test'
 import fs from 'node:fs/promises'
 import {
-  modePill, nextQuestionNumber, openThreadsSession, readRecord, resetThreadsFixture, switchView,
+  modePill, nextQuestionNumber, openThreadsSession, readRecord, resetThreadsFixture, switchView, unfoldQuestions,
 } from './threads-helpers'
 import { TAGGED_READY, TAGGED_SESSION, TAGGED_TASK } from './threads-fixture'
 
@@ -186,25 +186,44 @@ test.describe('Questions about a file passage (Files tab)', () => {
     await expect(rail.locator('.thread-map-mark')).toHaveCount(1)
     await expect(rail.locator('.thread-map-mark')).toHaveAttribute('data-kind', 'thread')
     await expect(rail.locator('.thread-map-mark')).toHaveAttribute('data-current', 'true')
-    const bubble = panel.locator('.session-history .session-msg--threaded').last()
-    await expect(bubble).toContainText(`About ${MD_FILE}:`)
-    await expect(bubble).not.toContainText('/projects/editor-fixture/')
+    // Conversation Mode folds the question to one line even while it is the
+    // target (2026-10-23).
+    const head = panel.locator('.session-history .thread-turn-head')
+      .filter({ has: page.locator('.thread-map-num', { hasText: new RegExp(`^${next}$`) }) })
+    await expect(head).toHaveCount(1)
+    await expect(head).toHaveAttribute('data-folded', 'true')
+    await expect(head.locator('.thread-map-num')).toHaveText(String(next))
     await shot(page, 'file-q-answered')
 
-    // Esc closes; the passage is marked and a click on it reopens the card.
+    // Esc closes; the folded line's chevron shows the bubble, which names the file
+    // by its path from the session's cwd (a press in the chat would close an open card).
     await input.press('Escape')
     await expect(card).toHaveCount(0)
+    await head.locator('.thread-turn-fold').click()
+    const asked = panel.locator('.session-history .session-msg--threaded').filter({ hasText: `About ${MD_FILE}:` })
+    await expect(asked).toHaveCount(1)
+    await expect(asked).not.toContainText('/projects/editor-fixture/')
+    await head.locator('.thread-turn-fold').click()
+    await expect(head).toHaveAttribute('data-folded', 'true')
+    // The passage is marked and a click on it reopens the card.
     expect(await page.evaluate(() => CSS.highlights?.has('thread-mark-neutral') ?? false), 'the passage wears a mark').toBe(true)
     const r = (await textRects(editor, MD_PASSAGE_FULL))[0]
     await page.mouse.click(r.left + 8, r.top + r.height / 2)
     await expect(card).toBeVisible()
     await expect(card.locator('.thread-card-head .thread-map-num')).toHaveText(String(next))
 
-    // The rail's list: hovering names the question; its row opens the card.
+    // The rail's list: a hover or a focus opens nothing (2026-10-23: nothing
+    // pops up unless clicked); a click names the question; its row opens the card.
     await input.press('Escape')
     await expect(card).toHaveCount(0)
-    await rail.locator('.thread-map-rail').hover()
     const list = rail.locator('.thread-map-overlay')
+    await rail.locator('.thread-map-rail').hover()
+    await page.waitForTimeout(400)
+    await expect(list).toHaveCount(0)
+    await rail.locator('.thread-map-rail').focus()
+    await page.waitForTimeout(400)
+    await expect(list).toHaveCount(0)
+    await rail.locator('.thread-map-rail').click()
     await expect(list).toBeVisible()
     await expect(list.locator('.thread-map-title')).toHaveText('In this file')
     await expect(list.locator('.thread-map-row')).toHaveCount(1)
@@ -237,6 +256,10 @@ test.describe('Questions about a file passage (Files tab)', () => {
     // A send from the main composer goes INTO the question (prefix routing).
     await composer.fill('Follow-up from the main composer')
     await composer.press('Enter')
+    await expect(composer).toHaveValue('')
+    // In Conversation Mode the question is one folded line in the main chat, the
+    // target included (2026-10-23): its turns show once it is unfolded.
+    await unfoldQuestions(panel)
     await expect(panel.locator('.session-history')).toContainText('Follow-up from the main composer', { timeout: 30_000 })
 
     // Main conversation: no target, a plain chat placeholder.
@@ -375,7 +398,7 @@ test.describe('Questions about a file passage (Files tab)', () => {
       const tb = (await view.locator('.fv-html-toolbar').first().boundingBox())!
       return rb.y - (tb.y + tb.height)
     }).toBeGreaterThanOrEqual(0)
-    await rail.locator('.thread-map-rail').hover()
+    await rail.locator('.thread-map-rail').click()
     await rail.locator('.thread-map-overlay .thread-map-row').click()
     await expect(card).toBeVisible()
     // The card fades in (120ms): the shot is of the settled card over the frame.
@@ -453,7 +476,7 @@ test.describe('Questions about a file passage (Files tab)', () => {
     const vb = (await view.boundingBox())!
     expect((await frameTextRects(view, LONG_PASSAGE))[0].top, 'scrolled away').toBeGreaterThan(vb.y + vb.height)
     const rail = fileRail(view)
-    await rail.locator('.thread-map-rail').hover()
+    await rail.locator('.thread-map-rail').click()
     await rail.locator('.thread-map-overlay .thread-map-row').click()
     await expect(card).toBeVisible()
     // The passage is on screen again and the card sits just below it, not
@@ -474,7 +497,7 @@ test.describe('Questions about a file passage (Files tab)', () => {
     await card.locator('.thread-card-input').press('Escape')
     await frame.locator('body').evaluate(() => window.scrollTo(0, 0))
     await page.waitForTimeout(300)
-    await rail.locator('.thread-map-rail').hover()
+    await rail.locator('.thread-map-rail').click()
     await rail.locator('.thread-map-overlay .thread-map-row').click()
     await expect.poll(onScreen, { timeout: 5_000 }).toBe(true)
 

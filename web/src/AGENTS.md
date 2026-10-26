@@ -467,14 +467,17 @@ show inline after the open ones, other completed hits that show the query fold i
   jumped to its first message), and the rail is thin lines (`.thread-map-tick`: root longer,
   pending dashed, current dark), no number badges and no dot ("just a few lines, like Claude").
   Ratchets: `tests/web/thread-card.test.ts`, `tests/e2e/browser/session-thread-card.spec.ts`.
-  **The question tree is always on screen, never behind a hover or a button** (`ThreadMap`, top
-  left of the timeline, in place of the outline rail once a session has a question). Its rows are
-  the drawer's All view (`utils/thread-map.ts` → `flattenTree`), so the two never disagree. A box
-  of 640px or more reserves a gutter for the labelled tree (`data-thread-map="panel"` pads the
-  scroll box, so no text runs under it); a narrower one, or a user who hid it (localStorage
-  `walnut:thread-map.v1`), gets a rail of marks whose list opens on hover, focus or a tap. The
-  user's report that led here: a real session showed only the header's `2 open` pill, and
-  "people don't know" to look for a drawer. Three traps it encodes: pins alone are no question
+  **The question map is a rail of marks by default; nothing in it opens unless clicked**
+  (`ThreadMap`, top left of the timeline, in place of the outline rail once a session has a
+  question). Its rows are the drawer's All view (`utils/thread-map.ts` → `flattenTree`), so the
+  two never disagree. The rail's thin lines are always on screen (the 2026-09-29 report: a session
+  that showed only a `2 open` pill, and "people don't know" to look for a drawer), but its list
+  opens on a click (or Enter / ArrowDown), never on a hover or a focus, and the labelled panel
+  (a box of 640px or more reserves a gutter for it, `data-thread-map="panel"` pads the scroll box)
+  appears only after the user pressed "Keep open" (localStorage `walnut:thread-map.v1` = `open`;
+  absent or `collapsed` = the rail, `useThreadMapCollapsed`). 2026-10-23, the user: the questions
+  panel "shouldn't pop up unless user click". Specs about the panel get `open` seeded by
+  `openThreadsSession` (`map: 'default'` leaves it unset). Three traps it encodes: pins alone are no question
   (a pins-only session keeps its outline, `mapHasContent`); a gutter change reflows every row
   and the box has no native scroll anchoring, so `useThreadMapLayout` puts the old gutter back
   for one measure and holds the first row on screen; and a row key holds a NUL, which
@@ -491,27 +494,34 @@ show inline after the open ones, other completed hits that show the query fold i
   `tests/e2e/browser/session-thread-map.spec.ts`, `tests/e2e/browser/session-thread-map-archive.spec.ts`.
   **Conversation Mode folds a question to its label line in the main chat** (2026-10-15, the
   user: "it should auto collapse in the main chat if it is about a question"). The rule is
-  `utils/thread-fold.ts`: a question is open while it, or one of its follow-ups, is the composer's
-  target, has its card open, is live (queued, answering, failed), or was asked after the main
-  conversation's newest own message (`askedAfterMain`, read off the timeline's order, bubbles not
-  persisted yet included: the reader is in it, and an answer they wait for never folds away as it
-  lands; a sticky "was live" set failed here, because a main reply streaming before history
-  catches up can be filed under the question for a moment); every other one is ONE
+  `utils/thread-fold.ts`. Since 2026-10-23 (the user: "the response thread should be
+  automatically collapsed") a question folds ALSO while it is the composer's target, has its card
+  open, is live (queued, answering, failed) or was asked after the main conversation's newest own
+  message (`askedAfterMain`): its card is where those turns are read, so an answer streaming in
+  never grows or moves the main chat. What stays open is the question HOLDING the passage of one
+  of those (a follow-up's passage sits in its parent's answer, with its card and live marks on
+  it), and for a pending or draft page, which the tree does not know yet, the question its passage
+  is in (`holders`: an Ask on a question's answer keeps that answer on screen). A folded question is ONE
   `ThreadTurnLabel` line per stretch of the timeline (`foldParts`, `data-thread-fold`), its
   follow-ups folded into it (`foldGroupOf`). The label's chevron (`thread-turn-fold`, only on the
   question's own label) overrides the rule until the main conversation's newest own message
   changes (an optimistic bubble counts: history catches up only after the turn), so a reply in
   the main chat folds everything back; a folded question's bubbles and live blocks not persisted
   yet fold into the same line in the tail (`tailFoldGroup` carries the last history line's
-  question so the boundary shows one line); the title still opens the card,
-  which opens the turns. A fold change keeps the first main-conversation row on screen where it
+  question so the boundary shows one line); the title opens the card, the
+  chevron opens the turns. A fold change keeps the first main-conversation row on screen where it
   was (anchored at render time, restored before paint, skipped while following the bottom): the
   box has no native scroll anchoring. `jumpToPlace` shows a folded question first (`revealFolded`), or a pin
   or a passage inside it had no row to land on. Specs reading a non-target question's rows in
   Conversation Mode call `unfoldQuestions` (threads-helpers.ts) first. Ratchets:
   `tests/web/thread-fold.test.ts`, `tests/e2e/browser/session-conversation-fold.spec.ts`.
   **The transcript's selection pill has both ways to ask, like the Files tab's** (2026-10-22):
-  `Ask here` opens a question page on the passage (the old Ask), `Quote` puts the passage as
+  `Ask here` asks on the passage, always in Conversation Mode (2026-10-23, the user: "ask here
+  when click default should be conversation mode not in treemode"): from Tree Mode the column
+  switches first (`keepCardOnSwitch`, so the mode change does not close the new card, and
+  `askHold`, which keeps the passage's row where it was selected for `ASK_HOLD_MS` while the
+  folds and turn labels settle) and the card opens beside the passage; the pending question is
+  still the stack's page, so the pill back to Tree Mode shows it. `Quote` puts the passage as
   a Markdown quote at the head of the MAIN conversation's composer (`buildPassagePrefill`,
   prefill mode `keep-draft`, so typed words follow it). On a question page, or with a question as
   Conversation Mode's composer target, `SessionPanel.quoteInChat` goes back to the main
@@ -547,7 +557,7 @@ show inline after the open ones, other completed hits that show the query fold i
   is the narrow column's rail again (same `.thread-map-mark` lines, `railMarks`, `MapRow`), one
   mark per question about THIS file plus the draft, pinned by the layer at the top-left of the
   file area just under the Preview/Source toolbar (`.fv-file-rail`, measured against
-  `.fv-html-toolbar`), never inside the HTML iframe. Hover or focus opens "In this file"; a row
+  `.fv-html-toolbar`), never inside the HTML iframe. A click on it opens "In this file" (never a hover or a focus, like the map); a row
   calls `requestCard(key, 'file-rail')`. The user asked for it after not knowing what they had
   asked in a document. Every open brings its passage on screen when it is off it: the once-per-key
   guard (`scrolledForRef`) resets when the card closes, because kept per key a reopen after the

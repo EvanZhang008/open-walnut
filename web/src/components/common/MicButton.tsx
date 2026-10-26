@@ -184,9 +184,7 @@ export function MicButton({ onTranscribe, onDraft, onRefine, controlRef, languag
   // to insert at the caret of its own textarea.
   const onTranscribeStable = useRef(onTranscribe);
   onTranscribeStable.current = onTranscribe;
-  useEffect(() => {
-    registerVoiceInsertTarget((text) => onTranscribeStable.current(text));
-  }, []);
+  useEffect(() => registerVoiceInsertTarget((text) => onTranscribeStable.current(text)), []);
 
   // Show chevron after transcription completes. On success it auto-dismisses;
   // on failure/empty (error set) it STAYS — it's the recovery entry point.

@@ -182,7 +182,8 @@ test.describe('Question map: archive from a row', () => {
     const panel = await openAt(page, NARROW)
     const map = mapOf(panel)
     await expect(map).toHaveAttribute('data-shape', 'rail')
-    await map.locator('.thread-map-rail').hover()
+    // The list opens on a click only.
+    await map.locator('.thread-map-rail').click()
     const overlay = map.locator('.thread-map-overlay')
     await expect(overlay).toBeVisible()
     await itemOf(overlay, MAP_TITLES.Q4a).hover()

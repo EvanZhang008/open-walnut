@@ -157,6 +157,8 @@
 }
 .thread-card-send:disabled { background: var(--bg-tertiary); color: var(--fg-muted); cursor: default; }
 .thread-card-send:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+/* The composer's mic, sized to the send button beside it. */
+.thread-card-composer .mic-btn { min-width: 28px; height: 28px; margin-bottom: 1px; }
 
 /* The composer's question chip (ComposerThreadPill): rides the task pill's
    shape at the top of the composer box. */

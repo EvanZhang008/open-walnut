@@ -1,8 +1,9 @@
 /**
  * Conversation Mode's fold (utils/thread-fold.ts): a question's turns fold to
- * their label line unless the question is the target, its card is open, its
- * answer is on the way, or one of its follow-ups is; a follow-up folds with its
- * question; the user's chevron wins over the rule. Over the map fixture the
+ * their label line, also while it is the target, its card is open or its answer
+ * is on the way (2026-10-23: the card is where those turns are read). Only the
+ * question holding a follow-up's passage stays open for it; a follow-up folds
+ * with its question; the user's chevron wins over the rule. Over the map fixture the
  * browser specs load (Q1 with follow-ups Q1a and Q1b, Q4 with Q4a).
  */
 import { describe, it, expect } from 'vitest';
@@ -31,27 +32,45 @@ describe('foldOpenKeys / isFolded', () => {
     expect(isFolded(ROOT_THREAD_KEY, open, NO_OVERRIDES)).toBe(false);
   });
 
-  it('keeps the target open with its ancestors, and nothing else', () => {
+  it('folds the target itself; a follow-up target keeps the question holding its passage open', () => {
     const { tree, k } = map();
-    const open = foldOpenKeys(tree, { target: k('Q1a'), card: null, live: NO_LIVE });
-    expect(isFolded(k('Q1a'), open, NO_OVERRIDES)).toBe(false);
-    expect(isFolded(k('Q1'), open, NO_OVERRIDES)).toBe(false);
-    expect(isFolded(k('Q4'), open, NO_OVERRIDES)).toBe(true);
-    expect(open.has(ROOT_THREAD_KEY)).toBe(false);
+    const top = foldOpenKeys(tree, { target: k('Q1'), card: null, live: NO_LIVE });
+    expect(isFolded(k('Q1'), top, NO_OVERRIDES)).toBe(true);
+    const follow = foldOpenKeys(tree, { target: k('Q1a'), card: null, live: NO_LIVE });
+    expect(isFolded(k('Q1'), follow, NO_OVERRIDES)).toBe(false);
+    expect(isFolded(k('Q1a'), follow, NO_OVERRIDES)).toBe(true);
+    expect(isFolded(k('Q4'), follow, NO_OVERRIDES)).toBe(true);
+    expect(follow.has(ROOT_THREAD_KEY)).toBe(false);
   });
 
-  it('keeps the card and every live question open, follow-ups lifting their question', () => {
+  it('folds the open card and a live question too; a live follow-up lifts only its question', () => {
     const { tree, k } = map();
-    const live = [k('Q4a')];
+    const live = [k('Q4a'), k('Q3')];
     const open = foldOpenKeys(tree, { target: ROOT_THREAD_KEY, card: k('Q2'), live });
-    expect(isFolded(k('Q2'), open, NO_OVERRIDES)).toBe(false);
+    expect(isFolded(k('Q2'), open, NO_OVERRIDES)).toBe(true);
+    expect(isFolded(k('Q3'), open, NO_OVERRIDES)).toBe(true);
     expect(isFolded(k('Q4'), open, NO_OVERRIDES)).toBe(false);
     expect(isFolded(k('Q1'), open, NO_OVERRIDES)).toBe(true);
   });
 
+  it('keeps open the question holding a pending page\'s passage (an Ask on its answer)', () => {
+    const { tree, k } = map();
+    // The pending page is not in the tree: its key alone keeps nothing open.
+    const bare = foldOpenKeys(tree, { target: 'pending-page', card: 'pending-page', live: NO_LIVE });
+    expect(bare.size).toBe(0);
+    const open = foldOpenKeys(tree, { target: 'pending-page', card: 'pending-page', live: NO_LIVE, holders: [k('Q1')] });
+    expect(isFolded(k('Q1'), open, NO_OVERRIDES)).toBe(false);
+    expect(isFolded(k('Q4'), open, NO_OVERRIDES)).toBe(true);
+    // Asked on a follow-up's answer: the follow-up and its question stay open.
+    const deep = foldOpenKeys(tree, { target: ROOT_THREAD_KEY, card: 'pending-page', live: NO_LIVE, holders: [k('Q1a')] });
+    expect(deep.has(k('Q1a'))).toBe(true);
+    expect(isFolded(k('Q1'), deep, NO_OVERRIDES)).toBe(false);
+    expect(deep.has(ROOT_THREAD_KEY)).toBe(false);
+  });
+
   it('lets the chevron win either way', () => {
     const { tree, k } = map();
-    const open = foldOpenKeys(tree, { target: k('Q1'), card: null, live: NO_LIVE });
+    const open = foldOpenKeys(tree, { target: k('Q1a'), card: null, live: NO_LIVE });
     const overrides = new Map([[k('Q1'), false], [k('Q4'), true]]);
     expect(isFolded(k('Q1'), open, overrides)).toBe(true);
     expect(isFolded(k('Q4'), open, overrides)).toBe(false);

@@ -3,8 +3,9 @@
  * user path that showed it:
  *  - R1: a pin jump from the drawer lands ONCE; a later return to that page
  *    (push into a question, Esc back) lands on the passage it left, not the pin.
- *  - R2: the first Ask in a session WITHOUT questions, then Esc with an empty
- *    composer, lands back on the passage (within 8px) and flashes it.
+ *  - R2: the first Ask in a session WITHOUT questions opens its card with the
+ *    passage held in place; closing the card (Esc at its size; Esc twice when
+ *    grown) leaves the passage within 8px and the scroll box within 1px.
  *  - R4: moving the pointer across a question mark never re-renders the
  *    timeline (a dev-only render counter), while the tip still follows.
  *  - R9: fullscreen, root page, a selection bar up: one Esc closes the bar only.
@@ -117,7 +118,7 @@ test.describe('Question stack review fixes', () => {
     expect(Math.abs(landed - askedAt), `landing drift: asked ${askedAt}, landed ${landed}`).toBeLessThanOrEqual(8)
   })
 
-  test('R2: first Ask in a session without questions, Esc with an empty composer: the passage is back and flashed', async ({ page }) => {
+  test('R2: first Ask in a session without questions opens its card with the passage held; closing it, at its size or grown, leaves the passage where it was', async ({ page }) => {
     await boot(page)
     const panel = await openThreadsSession(page, NO_THREAD_SESSION, NO_THREAD_TASK, NO_THREAD_READY)
     await expect(panel.locator('.thread-stack-off')).toHaveCount(1)
@@ -129,21 +130,52 @@ test.describe('Question stack review fixes', () => {
     const boxTopBefore = (await history.boundingBox())!.y
     const askedAt = await passageTop(panel, phrase)
     const scrollBefore = await history.evaluate((el) => el.scrollTop)
-    expect(scrollBefore).toBeGreaterThan(200)
+    // Scrolled away from the top, so a jump would show. The fixture's history now
+    // centres reply 222 at about 150px of scroll in both engines (at the parent too).
+    expect(scrollBefore).toBeGreaterThan(100)
     await selectPassage(page, panel, phrase)
     await page.locator('[data-testid="quote-pin-pill"] [data-testid="quote-ask-btn"]').click()
-    await expectDepth(panel, 1)
-    await page.waitForTimeout(400)
+    // Ask here asks in Conversation Mode: the card opens beside the passage and
+    // the passage stays where the reader selected it.
+    await expect(panel.locator('.session-history[data-view-mode="linear"]')).toHaveCount(1)
+    await expect(panel.locator('.thread-card')).toBeVisible()
+    await page.waitForTimeout(800)
+    const onAsk = await passageTop(panel, phrase)
+    expect(Math.abs(onAsk - askedAt), `passage moved on Ask: ${askedAt} -> ${onAsk}`).toBeLessThanOrEqual(8)
+    expect(Math.abs((await history.boundingBox())!.y - boxTopBefore)).toBeLessThanOrEqual(1)
+    await shot(page, 'r2-first-ask-card')
+    // The passage and the scroll box are where the reader left them.
+    const expectHeld = async (when: string) => {
+      await page.waitForTimeout(600)
+      const landed = await passageTop(panel, phrase)
+      const boxTop = (await history.boundingBox())!.y
+      expect(Math.abs(boxTop - boxTopBefore), `${when}: scroll box moved: ${boxTopBefore} -> ${boxTop}`).toBeLessThanOrEqual(1)
+      expect(Math.abs(landed - askedAt), `${when}: passage moved: asked ${askedAt}, now ${landed}`).toBeLessThanOrEqual(8)
+    }
+    const card = panel.locator('.thread-card')
+    // At its size, the first Esc closes the card.
+    await expect(card).not.toHaveAttribute('data-expanded', 'true')
+    await card.locator('.thread-card-input').focus()
     await page.keyboard.press('Escape')
-    // The pending page is gone and so is the stack: back to the frame that adds nothing.
-    await expect(panel.locator('.thread-stack-off')).toHaveCount(1, { timeout: 15_000 })
-    await expect.poll(() => flashText(page), { timeout: 10_000 }).toContain(phrase)
-    await page.waitForTimeout(600)
-    const landed = await passageTop(panel, phrase)
-    const boxTopAfter = (await history.boundingBox())!.y
-    await shot(page, 'r2-first-ask-esc-back')
-    expect(Math.abs(boxTopAfter - boxTopBefore), `scroll box moved: ${boxTopBefore} -> ${boxTopAfter}`).toBeLessThanOrEqual(1)
-    expect(Math.abs(landed - askedAt), `landing drift: asked ${askedAt}, landed ${landed}`).toBeLessThanOrEqual(8)
+    await expect(card).toHaveCount(0)
+    await shot(page, 'r2-closed-at-size')
+    await expectHeld('closed at its size')
+    // Grown, the first Esc brings it back to its size and the next one closes it.
+    await selectPassage(page, panel, phrase)
+    await page.locator('[data-testid="quote-pin-pill"] [data-testid="quote-ask-btn"]').click()
+    await expect(card).toBeVisible()
+    // Let the card finish sliding in: a click mid-slide misses its target in WebKit,
+    // and Playwright then scrolls the timeline to retry, a move the reader never made.
+    await card.evaluate((el) => Promise.all(el.getAnimations().map((a) => a.finished)))
+    await card.locator('.thread-card-expand').click()
+    await expect(card).toHaveAttribute('data-expanded', 'true')
+    await page.keyboard.press('Escape')
+    await expect(card).toBeVisible()
+    await expect(card).not.toHaveAttribute('data-expanded', 'true')
+    await page.keyboard.press('Escape')
+    await expect(card).toHaveCount(0)
+    await shot(page, 'r2-closed-grown')
+    await expectHeld('closed after growing')
   })
 
   test('R4: moving the pointer across a question mark never re-renders the timeline; the tip follows', async ({ page }) => {

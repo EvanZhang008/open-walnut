@@ -166,6 +166,7 @@ test.describe('Choices around the comment card', () => {
     await expect(composer(panel)).toHaveValue('Why the oldest one')
     // Straight from the open card to the chip's ×: the card's words follow too.
     await composer(panel).fill('')
+    await expect(composer(panel)).toHaveValue('')
     const c2 = await ask(page, panel)
     await c2.locator('.thread-card-input').fill('A second thought')
     await chip(panel).locator('[data-testid="composer-thread-target-clear"]').click()
@@ -177,6 +178,10 @@ test.describe('Choices around the comment card', () => {
 
   test('the expand button grows the card where it is; Esc brings it back to its size; × closes', async ({ page }) => {
     const panel = await open(page)
+    // The timeline this test measures in: the questions shown, as a reader who
+    // opened them has it (folded, the question with its card open folds too,
+    // utils/thread-fold.ts, and the box is barely taller than the text).
+    await unfoldQuestions(panel)
     await panel.locator('.thread-map .thread-map-row[data-kind="thread"]').nth(0).click()
     const c = card(panel)
     await expect(c).toBeVisible()

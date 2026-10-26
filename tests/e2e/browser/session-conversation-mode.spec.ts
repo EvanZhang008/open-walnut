@@ -52,6 +52,8 @@ async function open(page: Page, view: 'stack' | 'linear' = 'linear'): Promise<Lo
 const row = (panel: Locator, id: string) => panel.locator(`.session-history [data-message-id="${id}"]`)
 const labelOf = (panel: Locator, id: string) => row(panel, id).locator('.thread-turn-label')
 const history = (panel: Locator) => panel.locator('.session-history')
+/** A folded question's label, on its one line in the main chat. */
+const foldLabel = (panel: Locator, title: string) => history(panel).locator('[data-thread-fold] .thread-turn-label', { hasText: title })
 
 test.describe('Conversation Mode, the mode pill and the question tag', () => {
   test.describe.configure({ mode: 'serial' })
@@ -73,8 +75,8 @@ test.describe('Conversation Mode, the mode pill and the question tag', () => {
     await expect(header).not.toContainText(/\d+ open/)
     await expect(history(panel)).toHaveAttribute('data-view-mode', 'linear')
 
-    // Both questions were asked after the main conversation's newest message, so
-    // neither folds (utils/thread-fold.ts); shown either way.
+    // Questions fold to their lines on the main conversation (utils/thread-fold.ts);
+    // shown here, so every row is read.
     await unfoldQuestions(panel)
     // Every row is on screen, in order.
     for (const id of [IDS.R1.u, IDS.Q1.u, IDS.LOST.u, IDS.ROOT.u, IDS.Q2.u, IDS.MERGED.u]) await expect(row(panel, id)).toBeAttached()
@@ -142,25 +144,33 @@ test.describe('Conversation Mode, the mode pill and the question tag', () => {
     await expect(map.locator('.thread-map-row[data-kind="root"]')).toHaveAttribute('aria-current', 'page')
     await rows.nth(1).click()
     await expect(rows.nth(1)).toHaveAttribute('aria-current', 'page')
-    // Still Conversation Mode: no page, the question's turns are marked current.
+    // Still Conversation Mode: no page. Every question folds to its line, the
+    // target and its open card too (utils/thread-fold.ts): its line is the
+    // current one, and the card holds its turns.
     await expect(modePill(panel)).toHaveAttribute('data-view-mode', 'linear')
     await expect(panel.locator('.thread-stack-header')).toHaveCount(0)
-    await expect(row(panel, IDS.Q2.u)).toHaveAttribute('data-thread-current', 'true')
-    await expect(labelOf(panel, IDS.Q2.u)).toHaveAttribute('data-current', 'true')
-    // The other question stays open: both were asked after the main
-    // conversation's newest message (utils/thread-fold.ts).
-    await expect(history(panel).locator('[data-thread-fold]')).toHaveCount(0)
-    await expect(row(panel, IDS.Q1.u)).toBeVisible()
+    // Question 1's turns sit on both sides of the main turn and question 2, so
+    // it has two lines; question 2 has one.
+    await expect(foldLabel(panel, TAGGED_TITLES.Q2)).toHaveCount(1)
+    await expect(foldLabel(panel, TAGGED_TITLES.Q1)).toHaveCount(2)
+    await expect(history(panel).locator('[data-thread-fold]')).toHaveCount(3)
+    await expect(foldLabel(panel, TAGGED_TITLES.Q2)).toHaveAttribute('data-current', 'true')
+    await expect(history(panel).locator('[data-thread-fold] .thread-turn-label[data-current="true"]')).toHaveCount(1)
+    await expect(row(panel, IDS.Q2.u)).toHaveCount(0)
+    await expect(row(panel, IDS.Q1.u)).toHaveCount(0)
     // The composer says where the next message goes.
     await expect(panel.locator('.chat-input-textarea').first()).toHaveAttribute('placeholder', new RegExp(TAGGED_TITLES.Q2))
     // The row also opened the question's card (session-thread-card.spec.ts
     // covers it); closed here so the label under it can be clicked.
     await panel.locator('.thread-card .thread-card-close').click()
     await expect(panel.locator('.thread-card')).toHaveCount(0)
-    // A turn label is the same switch.
-    await labelOf(panel, IDS.Q1.u).click()
+    // A turn label is the same switch (a folded line's label too).
+    await foldLabel(panel, TAGGED_TITLES.Q1).first().click()
     await expect(rows.nth(0)).toHaveAttribute('aria-current', 'page')
-    await expect(row(panel, IDS.MERGED.u)).toHaveAttribute('data-thread-current', 'true')
+    await expect(foldLabel(panel, TAGGED_TITLES.Q1).first()).toHaveAttribute('data-current', 'true')
+    await expect(foldLabel(panel, TAGGED_TITLES.Q1).last()).toHaveAttribute('data-current', 'true')
+    await expect(foldLabel(panel, TAGGED_TITLES.Q2)).not.toHaveAttribute('data-current', 'true')
+    await expect(panel.locator('.thread-card .thread-card-title')).toHaveText(TAGGED_TITLES.Q1)
     await shot(page, 'sidebar-target', panel)
     // Full screen: the same sidebar, labels and pill on the whole window.
     await panel.locator('button[title="Expand to full screen"]').click()
@@ -199,8 +209,12 @@ test.describe('Conversation Mode, the mode pill and the question tag', () => {
     await expect(history(panel)).toHaveAttribute('data-view-mode', 'stack')
     await expect(panel.locator('.thread-stack-header .thread-stack-title')).toHaveText(TAGGED_TITLES.Q1, { timeout: 30_000 })
     await switchView(panel, 'linear')
-    await expect(row(panel, IDS.LOST.u)).toBeAttached()
+    // Back in Conversation Mode the page's question is the composer's target, and
+    // folds to its lines like every question (utils/thread-fold.ts); the main
+    // conversation's turn is there.
     await expect(row(panel, IDS.ROOT.u)).toBeAttached()
+    await expect(foldLabel(panel, TAGGED_TITLES.Q1).first()).toHaveAttribute('data-current', 'true')
+    await expect(row(panel, IDS.LOST.u)).toHaveCount(0)
     await shot(page, 'tree-mode-q1', panel)
   })
 
@@ -234,15 +248,21 @@ test.describe('Conversation Mode, the mode pill and the question tag', () => {
     await box.fill('Which page wins a tie?')
     await box.press('Enter')
     await expect(box).toHaveValue('')
-    // The bubble lands in the conversation under a label with the next number
-    // (one past the record's highest), and the reply follows it, tag stripped.
-    const bubble = panel.locator('.session-history .session-msg--threaded', { hasText: 'Which page wins a tie?' }).first()
-    await expect(bubble).toBeVisible({ timeout: 30_000 })
-    await expect(bubble.locator('.thread-turn-label .thread-map-num')).toHaveText(String(n))
-    // The banner rides the send but never the bubble.
-    await expect(bubble).not.toContainText(`Question Q${n}`)
-    await expect(bubble).not.toContainText('Begin your reply')
-    await expect(history(panel)).toContainText('processed your message', { timeout: 60_000 })
+    // The question folds to its line in the main chat, even as the target while
+    // it is answered (utils/thread-fold.ts). The line carries the next number
+    // (one past the record's highest).
+    const line = history(panel).locator('[data-thread-fold]')
+      .filter({ has: page.locator('.thread-map-num', { hasText: new RegExp(`^${n}$`) }) })
+    await expect(line).toHaveCount(1, { timeout: 30_000 })
+    await expect(panel.locator('.session-history .session-msg--threaded', { hasText: 'Which page wins a tie?' })).toHaveCount(0)
+    // Its card holds the bubble and the reply, tag stripped; the banner rides the
+    // send but never the bubble.
+    await line.locator('.thread-turn-label').click()
+    const card = panel.locator('.thread-card')
+    await expect(card.locator('.thread-card-q')).toHaveText(['Which page wins a tie?'])
+    await expect(card).not.toContainText(`Question Q${n}`)
+    await expect(card).not.toContainText('Begin your reply')
+    await expect(card.locator('.thread-card-body')).toContainText('processed your message', { timeout: 60_000 })
     await expect.poll(() => history(panel).innerText()).not.toMatch(/\[Q\s?\d+\]/)
     // The reply is filed under the new question: the map's row says answered, no `by order`.
     const rows = map.locator('.thread-map-row[data-kind="thread"]')

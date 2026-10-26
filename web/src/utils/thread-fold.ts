@@ -1,28 +1,35 @@
 /**
  * Conversation Mode folds a question's turns in the main timeline down to their
  * label line (2026-10-15, the user: "it should auto collapse in the main chat
- * if it is about a question"). A question stays open while it is the composer's
- * target, while its card is open, while its answer is on the way, while it was
- * asked after the main conversation's newest own message (the reader is in it:
- * an answer they wait for never folds away as it lands), and while one of its
- * follow-ups is any of those (a follow-up's passage is in its parent's answer). A question folds
- * with its follow-ups, as one line. A chevron on the label overrides the rule
- * until the main conversation moves on (its next user message clears every
- * override).
+ * if it is about a question"). Since 2026-10-23 a question folds even while it
+ * is being answered, is the composer's target or has its card open (the user:
+ * "the response thread should be automatically collapsed"): the card is where
+ * its turns are read. What stays open is the question that HOLDS the passage of
+ * one of those (a follow-up's passage is in its parent's answer, and its card
+ * and its live marks sit on that passage). A question folds with its follow-ups,
+ * as one line. A chevron on the label overrides the rule until the main
+ * conversation moves on (its next user message clears every override).
  */
 import { pathToRoot, ROOT_THREAD_KEY, type ThreadTree } from '@/utils/thread-tree';
 
-/** Questions the rule keeps open: the target, the card and every live one
- *  (`live`: answering now, or asked after the main conversation's newest own
- *  message), each with its ancestors. */
+/** Questions the rule keeps open: the ones holding the passage of the target,
+ *  the card or a live question (`live`: answering now, or asked after the main
+ *  conversation's newest own message), that is their ancestors, never the
+ *  question itself. A question not in the tree yet (a pending or draft page)
+ *  names the question its passage is in through `holders`: that one stays open
+ *  too, with its ancestors, so an Ask on a question's answer keeps the passage
+ *  on screen. */
 export function foldOpenKeys(
   tree: ThreadTree,
-  a: { target: string; card?: string | null; live: Iterable<string> },
+  a: { target: string; card?: string | null; live: Iterable<string>; holders?: Iterable<string> },
 ): Set<string> {
   const open = new Set<string>();
   for (const key of [a.target, a.card, ...a.live]) {
     if (!key || key === ROOT_THREAD_KEY) continue;
-    open.add(key);
+    for (const node of pathToRoot(tree, key)) if (node.key !== key) open.add(node.key);
+  }
+  for (const key of a.holders ?? []) {
+    if (!key || key === ROOT_THREAD_KEY) continue;
     for (const node of pathToRoot(tree, key)) open.add(node.key);
   }
   open.delete(ROOT_THREAD_KEY);

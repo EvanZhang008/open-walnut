@@ -144,6 +144,10 @@ test.describe('The comment card in Conversation Mode', () => {
 
   test('the asked passage is marked and a click on it opens the card; the card scrolls with its passage', async ({ page }) => {
     const panel = await open(page)
+    // A timeline long enough to scroll 120px both ways: folded (the question
+    // with its card open folds too, utils/thread-fold.ts), it is barely taller
+    // than the box.
+    await unfoldQuestions(panel)
     await centreInHistory(page, panel, TAGGED_PASSAGE.slice(0, 30))
     const rects = await passageRects(panel, TAGGED_PASSAGE.slice(0, 30))
     const r = rects[0]
@@ -204,9 +208,12 @@ test.describe('The comment card in Conversation Mode', () => {
     await expect(c.locator('.thread-card-status')).toHaveText(/Answered|New|To check/)
     await expect(input).toHaveValue('')
     await expect(input).toHaveAttribute('placeholder', /Reply in/)
-    // The timeline has the same turn with the same number, and the sidebar a third row.
-    const bubble = panel.locator('.session-history .session-msg--threaded', { hasText: 'Which page wins a tie?' }).first()
-    await expect(bubble.locator('.thread-turn-label .thread-map-num')).toHaveText(next)
+    // The timeline has the same turn with the same number, folded to its one line
+    // while the card holds it (utils/thread-fold.ts), and the sidebar a third row.
+    const line = history(panel).locator('[data-thread-fold]')
+      .filter({ has: page.locator('.thread-map-num', { hasText: new RegExp(`^${next}$`) }) })
+    await expect(line).toHaveCount(1)
+    await expect(panel.locator('.session-history .session-msg--threaded', { hasText: 'Which page wins a tie?' })).toHaveCount(0)
     await expect(panel.locator('.thread-map .thread-map-row[data-kind="thread"]')).toHaveCount(3)
     await shot(page, 'card-asked', panel)
   })
@@ -226,7 +233,7 @@ test.describe('The comment card in Conversation Mode', () => {
     const panel = await open(page, 480)
     const map = panel.locator('.thread-map')
     await expect(map).toHaveAttribute('data-shape', 'rail')
-    await map.locator('.thread-map-rail').hover()
+    await map.locator('.thread-map-rail').click()
     await expect(map.locator('.thread-map-overlay')).toBeVisible()
     await map.locator('.thread-map-overlay .thread-map-row[data-kind="thread"]').nth(0).click()
     const c = card(panel)

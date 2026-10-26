@@ -2,7 +2,7 @@ import fs from 'node:fs/promises'
 import { expect, test, type Locator, type Page } from '@playwright/test'
 import { discoverBrowserFixture } from './codex-test-audit'
 import { REAL_PANEL, draftComposer, openDraftOnCwd } from './draft-helpers'
-import { VIEW_MODE_DEFAULT_KEY, selectPassage } from './threads-helpers'
+import { VIEW_MODE_DEFAULT_KEY, selectPassage, switchView } from './threads-helpers'
 
 const SCREENSHOT_DIR = process.env.PW_SCREENSHOT_DIR ?? '/tmp/composer-stop-keeps-process'
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
@@ -142,7 +142,9 @@ test('Tree Mode sends UUID messages into the FIFO before the running turn ends',
     if (row.method === 'session:send') sent.push(row.payload)
   }))
   // Tree Mode starts once the session holds a question: answer once, ask about a
-  // passage of that answer, and start the long turn from the question page.
+  // passage of that answer and start the long turn from the question's card (Ask
+  // here asks in Conversation Mode, and a session's first question brings the
+  // mode pill), then take the pill to Tree Mode, onto the question page.
   await page.addInitScript(([key]) => localStorage.setItem(key, 'stack'), [VIEW_MODE_DEFAULT_KEY])
   await openHome(page)
   await openDraftOnCwd(page, `${fixtureRoot}/projects/walnut`)
@@ -150,16 +152,22 @@ test('Tree Mode sends UUID messages into the FIFO before the running turn ends',
   const taskId = await sendQuickStart(page, `snapshot-clean-turn:In short, ${passage}.`)
   const sessionId = await sessionIdForTask(page, taskId)
   const panel = page.locator(`${REAL_PANEL}[data-session-id="${sessionId}"]`)
-  await expect(panel.locator('.session-history [data-message-id] .session-msg-content', { hasText: passage }))
+  // The answer's row: the user's own line carries the same words once the CLI files it.
+  const answerRow = '[data-message-id][data-msg-role="assistant"]'
+  await expect(panel.locator(`.session-history ${answerRow} .session-msg-content`, { hasText: passage }))
     .toBeVisible({ timeout: 30_000 })
   await expect.poll(() => sessionRecord(page, sessionId).then((r) => r.process_status), { timeout: 20_000 }).toBe('idle')
-  await selectPassage(page, panel, passage)
+  await selectPassage(page, panel, passage, answerRow)
   await page.locator('[data-testid="quote-pin-pill"] [data-testid="quote-ask-btn"]').click()
+  const cardInput = panel.locator('.thread-card .thread-card-input')
+  await expect(cardInput).toBeFocused()
   const asked = sent.length
-  await panel.locator('.chat-input-textarea').first().fill(LONG_TURN)
-  await panel.locator('.chat-input-textarea').first().press('Enter')
+  await cardInput.fill(LONG_TURN)
+  await cardInput.press('Enter')
   await expect.poll(() => sent.length).toBe(asked + 1)
   expect(sent.at(-1)!.userUuid).toMatch(/^[0-9a-f-]{36}$/)
+  await switchView(panel, 'stack')
+  await expect(panel.locator('.thread-stack')).toHaveAttribute('data-thread-depth', '1', { timeout: 15_000 })
   await expect(panel.getByText(PARTIAL_TEXT, { exact: false }).first()).toBeVisible({ timeout: 20_000 })
   await expect(stopButton(panel)).toBeVisible()
   const pid = (await sessionRecord(page, sessionId)).pid
@@ -208,7 +216,14 @@ test('Tree Mode sends UUID messages into the FIFO before the running turn ends',
   await expect.poll(() => sessionRecord(page, sessionId).then((r) => r.process_status), { timeout: 15_000 }).toBe('idle')
   await composer.fill('snapshot-clean-turn:after the tree stop')
   await composer.press('Enter')
-  await expect(panel.getByText('after the tree stop', { exact: true }).last()).toBeVisible({ timeout: 30_000 })
+  // Read from the session's history, not the question page: the mock files no
+  // user line, and the page places a reply by the user line it follows, so once
+  // the live block is gone the answer is on no page (2026-10-25, measured).
+  await expect.poll(async () => {
+    const res = await page.request.get(`/api/sessions/${sessionId}/history`)
+    const body = (await res.json()) as { messages?: Array<{ role: string; text?: string }> }
+    return (body.messages ?? []).some((m) => m.role === 'assistant' && m.text === 'after the tree stop')
+  }, { timeout: 30_000 }).toBe(true)
   expect((await sessionRecord(page, sessionId)).pid).toBe(pid)
   await expect(panel.locator('.session-error-banner')).toHaveCount(0)
   await page.screenshot({ path: `${SCREENSHOT_DIR}/11-tree-after-stop.png` })
