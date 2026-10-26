@@ -182,7 +182,10 @@ final class TimelineRowBuilder {
             if message.isUser {
                 return userRows(message, namespace: namespace, width: width, queued: queued)
             }
-            var rows = assistantRows(message, width: width, idPrefix: namespace)
+            // The agent acknowledgement line never prints (TimelineTurnMarker).
+            let shown = TimelineTurnMarker.strip(message.text)
+            var rows = assistantRows(shown == message.text ? message : message.replacingText(shown),
+                                     width: width, idPrefix: namespace)
             // The reply the cloud companion computed while the Mac was out of
             // reach says so, under the reply, live and after a reload alike (both
             // arrive here as `answeredBy`, see ChatStore.finalizeTurn and
@@ -554,10 +557,13 @@ final class TimelineRowBuilder {
         scope: String = TimelineScope.unscoped,
         liveThinking: String = "",
         liveTools: [LiveToolCall] = [],
-        expandedRowIDs: Set<String> = []
+        expandedRowIDs: Set<String> = [],
+        runFoldedElsewhere: Bool = false
     ) -> (rows: [TimelineRow], headCache: (key: String, rows: [TimelineRow])?) {
         var rows: [TimelineRow] = []
         var headCache = cachedHead
+        // The acknowledgement line never prints, not even half-written.
+        let liveText = TimelineTurnMarker.stripLive(liveText)
         // Once the turn has called a tool, its reasoning rides that call's run
         // (`liveToolRows`), the way the transcript folds it: one collapsed line
         // for everything the turn did. Before that it is a collapsed "Thinking"
@@ -649,9 +655,12 @@ final class TimelineRowBuilder {
         }
         // This turn's tool calls under the reply, all of them folded into one run
         // row with the turn's reasoning (see `liveToolRows`).
+        // `runFoldedElsewhere`: the run and its reasoning ride the received
+        // message's fold above (`liveRunMembers`), only the calls kept out of runs stay here.
         rows.append(contentsOf: liveToolRows(liveTools, width: width, scope: scope,
                                              expandedRowIDs: expandedRowIDs,
-                                             liveThinking: thinkingRidesRun ? liveThinking : ""))
+                                             liveThinking: thinkingRidesRun ? liveThinking : "",
+                                             includeRun: !runFoldedElsewhere))
         // The shimmer is the FALLBACK pulse and never a second copy of a row above
         // it. Two ways it used to duplicate one:
         //  - a RUNNING tool chip names the call and breathes, and `activity` is
@@ -871,6 +880,30 @@ final class TimelineRowBuilder {
         )
     }
 
+    /// A turn fold's own row (`TimelineTurnFold`): the run row's capsule, reading
+    /// the fold's words. Opening it lays the members out after it, as a run does.
+    /// `running` breathes the row while a live call inside it runs.
+    func foldRow(id: String, phrase: String, failCount: Int, expanded: Bool,
+                 running: Bool = false) -> TimelineRow {
+        var hasher = Hasher()
+        hasher.combine(phrase)
+        hasher.combine(failCount)
+        hasher.combine(expanded)
+        hasher.combine(running)
+        return TimelineRow(
+            id: id, revision: hasher.finalize(),
+            content: .toolRun(phrase: phrase, failCount: failCount, running: running, expanded: expanded),
+            height: Self.capsuleRowHeight(badged: false)
+        )
+    }
+
+    /// Where an opened hidden turn ended with the acknowledgement line alone.
+    func ackRow(id: String) -> TimelineRow {
+        chipRow(id: id, icon: "checkmark", text: Self.acknowledgedCaption, width: 0)
+    }
+
+    static let acknowledgedCaption = "Acknowledged"
+
     /// Does this chip's detail need its own line? The rule lives in
     /// `TimelineChipLayout`; the CATEGORY comes from the styler the actor has already
     /// adopted for this build, so the height computed here and the shape the cell
@@ -933,14 +966,14 @@ final class TimelineRowBuilder {
     func liveToolRows(_ tools: [LiveToolCall], width: CGFloat,
                       scope: String = TimelineScope.unscoped,
                       expandedRowIDs: Set<String> = [],
-                      liveThinking: String = "") -> [TimelineRow] {
+                      liveThinking: String = "", includeRun: Bool = true) -> [TimelineRow] {
         let chips: [(call: LiveToolCall, row: TimelineRow)] = tools.enumerated().compactMap { index, call in
             guard !call.name.isEmpty else { return nil }
             return (call, liveToolChip(call, index: index, scope: scope))
         }
         let folded = chips.filter { Self.liveCallFolds($0.call) }
         var rows: [TimelineRow] = []
-        if !folded.isEmpty {
+        if includeRun, !folded.isEmpty {
             let runID = TimelineScope.namespace(scope, Self.liveRunID)
             let expanded = expandedRowIDs.contains(runID)
             rows.append(toolRunRow(
@@ -957,6 +990,16 @@ final class TimelineRowBuilder {
         }
         rows.append(contentsOf: chips.filter { !Self.liveCallFolds($0.call) }.map(\.row))
         return rows
+    }
+
+    /// What the live run holds when it rides a received message's fold: the
+    /// turn's reasoning, then every call that folds, as the run would open to.
+    func liveRunMembers(_ tools: [LiveToolCall], liveThinking: String, width: CGFloat,
+                        scope: String) -> [TimelineRow] {
+        liveThinkingRows(liveThinking: liveThinking, width: width, scope: scope)
+            + tools.enumerated().compactMap { index, call in
+                Self.liveCallFolds(call) ? liveToolChip(call, index: index, scope: scope) : nil
+            }
     }
 
     /// Does this live call ride the turn's run? Every named call does, running or
@@ -1132,6 +1175,7 @@ struct NotificationStyling {
         case "compaction": return "arrow.down.right.and.arrow.up.left"
         case "session": return "checkmark.seal"
         case "interrupt": return "stop.circle"
+        case TimelineInboundMessage.inboundSource: return "envelope"
         default: return isError ? "exclamationmark.triangle.fill" : "bell"
         }
     }
@@ -1145,6 +1189,7 @@ struct NotificationStyling {
         case "session": return "Session result"
         case "subagent": return "Subagent"
         case "interrupt": return "Interrupted"
+        case TimelineInboundMessage.inboundSource: return "Received"
         default: return "Notification"
         }
     }

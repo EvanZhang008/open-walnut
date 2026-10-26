@@ -1,0 +1,297 @@
+import XCTest
+import UIKit
+@testable import Walnut
+
+/// The session timeline after turn shaping (`TimelineTurnFold`): the iPhone showed
+/// a peer's `<walnut-message …>` envelope as the user's own right-side bubble, raw
+/// XML and all, and printed `<walnut-turn status="no-action"/>` as text. Pins the
+/// plan (which rows fold, hide or show), the rows the layout actor lays out from it
+/// (ids, phrases, expansion), the received-message reader, and the fallback: a list
+/// from a server that does not say who sent a row is drawn exactly as before.
+@MainActor
+final class TurnFoldTests: XCTestCase {
+    private let pageWidth: CGFloat = 393
+    private let tag = TimelineTurnMarker.tag
+
+    override func setUp() {
+        super.setUp()
+        MarkdownParser.resetCacheForTesting()
+        MainWork.resetForTesting()
+    }
+
+    override func tearDown() {
+        TimelineTextStyler.adopt(.unspecified)
+        super.tearDown()
+    }
+
+    // MARK: - Fixtures
+
+    private var clock = 0
+    private func at() -> String { clock += 1; return String(format: "2026-10-25T00:00:%02dZ", clock) }
+    private func user(_ text: String, _ sentBy: String?) -> ChatMessage {
+        var m = ChatMessage(id: "u\(clock)", role: "user", text: text, createdAt: at(), kind: nil)
+        m.sentBy = sentBy
+        return m
+    }
+    private func person(_ text: String = "Can you check the build?") -> ChatMessage { user(text, "person") }
+    private func peer(_ body: String = "The review is done.") -> ChatMessage {
+        user("<walnut-message kind=\"peer-note\" from=\"Docs lead [1a2b3c4d]\" title=\"Review\">\n\(body)\n</walnut-message>",
+             "agent")
+    }
+    private func said(_ text: String) -> ChatMessage {
+        ChatMessage(id: "a\(clock)", role: "assistant", text: text, createdAt: at(), kind: nil)
+    }
+    private func tool(_ name: String, _ detail: String? = nil, isError: Bool? = nil) -> ChatMessage {
+        ChatMessage(id: "t\(clock)", role: "assistant", text: name, createdAt: at(), kind: .tool,
+                    detail: detail, resultPreview: "ok", isError: isError)
+    }
+    private var line: ChatMessage { said(tag) }
+
+    private func plan(_ rows: [ChatMessage]) -> [TimelineTurnFold.Part] {
+        TimelineTurnFold.plan(rows, turns: TimelineTurnShape.shape(rows, streaming: false))
+    }
+
+    /// A readable outline of a plan: "fold:<kind>:<phrase>[members]", "bubble", "text", …
+    private func outline(_ parts: [TimelineTurnFold.Part]) -> [String] {
+        parts.map { part in
+            switch part {
+            case .message(let m): return m.isUser ? "bubble:\(m.text)" : (m.kind == .tool ? "tool:\(m.text)" : "text")
+            case .run(_, let members): return "run:\(members.count)"
+            case .inbound: return "inbound"
+            case .ack: return "ack"
+            case .fold(let f): return "fold:\(f.kind):\(f.phrase)\(outline(f.members))"
+            }
+        }
+    }
+
+    private func rows(_ messages: [ChatMessage], expanded: Set<String> = [],
+                      streaming: Bool = false, liveText: String = "",
+                      liveTools: [LiveToolCall] = [], actor: TimelineLayoutActor? = nil) async -> [TimelineRow] {
+        await (actor ?? TimelineLayoutActor()).buildSnapshot(TimelineInput(
+            messages: messages, streaming: streaming, liveText: liveText, liveTextTruncated: false,
+            liveTools: liveTools, activity: nil, showLoadEarlier: false, width: pageWidth,
+            expandedRowIDs: expanded, scope: "s")).rows
+    }
+
+    private func runRows(_ rows: [TimelineRow]) -> [(id: String, phrase: String, running: Bool)] {
+        rows.compactMap { row in
+            if case .toolRun(let phrase, _, let running, _) = row.content { return (row.id, phrase, running) }
+            return nil
+        }
+    }
+
+    private func phrases(_ rows: [TimelineRow]) -> [String] {
+        rows.compactMap { row in
+            if case .toolRun(let phrase, _, _, _) = row.content { return phrase }
+            return nil
+        }
+    }
+
+    private func texts(_ rows: [TimelineRow]) -> String {
+        rows.map { row -> String in
+            switch row.content {
+            case .text(let s): return s.string
+            case .userBubble(let s, _, _, _): return s.string
+            case .notification(_, _, _, let body, _, _, _): return body.string
+            case .chip(_, let text): return text
+            default: return ""
+            }
+        }.joined(separator: "\n")
+    }
+
+    // MARK: - The plan
+
+    func testConsecutiveHiddenTurnsAreOneRowThatOpensToThem() {
+        let parts = plan([person(), said("Answer."), peer(), line, peer("Second note."), tool("Read"), line])
+        XCTAssertEqual(outline(parts), [
+            "bubble:Can you check the build?", "text",
+            "fold:hidden:2 hidden turns[\"inbound\", \"ack\", \"inbound\", \"run:1\", \"ack\"]",
+        ])
+        guard case .fold(let fold) = parts[2] else { return XCTFail("no fold") }
+        XCTAssertEqual(TimelineTurnFold.label(fold, expanded: false), "Show 2 hidden turns")
+        XCTAssertEqual(TimelineTurnFold.label(fold, expanded: true), "Hide 2 hidden turns")
+    }
+
+    func testAnAnsweredTurnFoldsEverythingBeforeItsAnswer() {
+        let parts = plan([peer(), tool("Bash", "build"), tool("mcp__walnut__task_send"), said("Narration."),
+                          tool("Read", "a.md"), said("The answer.")])
+        XCTAssertEqual(outline(parts), [
+            "fold:turn:Received a message, ran a command, read a file, sent a message, an update"
+                + "[\"inbound\", \"run:1\", \"tool:mcp__walnut__task_send\", \"text\", \"run:1\"]",
+            "text",
+        ])
+    }
+
+    func testAPersonsMessageAlwaysShowsAndALoneRunIsLeftAsItIs() {
+        XCTAssertEqual(outline(plan([person(), tool("Read", "a"), tool("Bash", "b"), said("Done.")])),
+                       ["bubble:Can you check the build?", "run:2", "text"])
+    }
+
+    func testWalnutsNotesInFrontOfAPersonsWordsAreOneRowAboveTheBubble() {
+        let rider = "<walnut-message kind=\"notification\" from=\"Walnut\" outcome=\"moved\">\nThis task moved.\n</walnut-message>"
+        let parts = plan([person("\(rider)\n\nPlease draft the notes."), said("Drafted.")])
+        XCTAssertEqual(outline(parts), [
+            "fold:rider:Received a message[\"inbound\"]", "bubble:Please draft the notes.", "text",
+        ])
+    }
+
+    func testAReceivedMessageInAnOpenTurnFoldsWithTheStepsAroundIt() {
+        XCTAssertEqual(outline(plan([peer(), tool("Bash", "status"), tool("mcp__walnut__task_send")])),
+                       ["fold:process:Received a message, ran a command, sent a message"
+                        + "[\"inbound\", \"run:1\", \"tool:mcp__walnut__task_send\"]"])
+        // A failed call is never folded away unread: it stays a row of its own.
+        XCTAssertEqual(outline(plan([peer(), tool("Bash", "rebuild", isError: true)])),
+                       ["fold:process:Received a message[\"inbound\"]", "run:1"])
+        // Even alone, a received message is a fold, never a bubble.
+        XCTAssertEqual(outline(plan([said("Earlier."), peer()])),
+                       ["text", "fold:process:Received a message[\"inbound\"]"])
+    }
+
+    func testTheAnswersOwnReasoningStaysWithTheAnswer() {
+        let thinking = ChatMessage(id: "th", role: "assistant", text: "Weighing it", createdAt: "2026-10-25T00:09:00Z",
+                                   kind: .thinking)
+        let answer = ChatMessage(id: "an", role: "assistant", text: "The answer.", createdAt: thinking.createdAt, kind: nil)
+        // (Reasoning right after a run rides that run, as everywhere on the phone.)
+        XCTAssertEqual(outline(plan([peer(), tool("Bash", "b"), said("Narration."), thinking, answer])),
+                       ["fold:turn:Received a message, ran a command, an update[\"inbound\", \"run:1\", \"text\"]",
+                        "text", "text"])
+    }
+
+    func testAnEnvelopeWithAnEmptyBodyOrACutOffTailNeverCrashesOrPrintsTheTag() {
+        XCTAssertEqual(TimelineInboundMessage.parse("<walnut-message kind=\"reply\" from=\"A\">\n</walnut-message>")?
+                        .envelopes.first?.body, "")
+        // An empty rider still splits whole: nothing of the person's words is lost.
+        XCTAssertEqual(TimelineInboundMessage.splitRiders("<walnut-message kind=\"notification\" from=\"Walnut\" outcome=\"moved\">\n</walnut-message>\n\nHi.")?.body, "Hi.")
+        // A clipped row lost its close tag: the head line still never prints.
+        let cut = TimelineInboundMessage.displayText("<walnut-message kind=\"peer-note\" from=\"Docs lead [1a2b3c4d]\">\nA long note that was cl\u{2026}")
+        XCTAssertEqual(cut, "**From Docs lead**\n\nA long note that was cl\u{2026}")
+    }
+
+    func testFoldKeysNameTheRowsPlaceNotItsPayload() {
+        var rows = [person(), tool("Bash", "b"), said("Narration."), tool("Read", "a"), said("Answer.")]
+        guard case .fold(let before) = plan(rows)[1] else { return XCTFail("no fold") }
+        // The rich read replaces the first call's payload (and so its store id): same key.
+        rows[1] = ChatMessage(id: "other-id", role: "assistant", text: "Bash", createdAt: rows[1].createdAt,
+                              kind: .tool, detail: "b", resultPreview: "longer output", inputPreview: "command: b")
+        guard case .fold(let after) = plan(rows)[1] else { return XCTFail("no fold") }
+        XCTAssertEqual(before.kind, .turn)
+        XCTAssertEqual(before.key, after.key)
+    }
+
+    // MARK: - The rows
+
+    func testTheActorDrawsNoTagAndNoReceivedBubbleAndRemembersAnOpenedFold() async throws {
+        let messages = [person(), said("Answer.\n\n\(tag)"), peer(), line, peer("Ping."), said("Noted, nothing to do.")]
+        let closed = await rows(messages)
+        XCTAssertEqual(closed.filter { if case .userBubble = $0.content { return true }; return false }.count, 1)
+        XCTAssertFalse(texts(closed).contains("walnut-"))
+        XCTAssertEqual(phrases(closed), ["Show 1 hidden turn", "Received a message"])
+        // Open both folds by their row ids: the members appear, as received cards.
+        let ids = closed.filter { if case .toolRun = $0.content { return true }; return false }.map(\.id)
+        let open = await rows(messages, expanded: Set(ids))
+        XCTAssertEqual(phrases(open), ["Hide 1 hidden turn", "Received a message"])
+        XCTAssertTrue(texts(open).contains("From Docs lead: Review"))
+        XCTAssertTrue(texts(open).contains(TimelineRowBuilder.acknowledgedCaption))
+        XCTAssertFalse(texts(open).contains("walnut-"))
+        XCTAssertEqual(open.filter { if case .userBubble = $0.content { return true }; return false }.count, 1)
+        // Refetched (new store ids, same places): the folds stay open.
+        let refetched = messages.enumerated().map { i, m -> ChatMessage in
+            var copy = ChatMessage(id: "re-\(i)", role: m.role, text: m.text, createdAt: m.createdAt, kind: m.kind)
+            copy.sentBy = m.sentBy
+            return copy
+        }
+        let again = await rows(refetched, expanded: Set(ids))
+        XCTAssertEqual(phrases(again), ["Hide 1 hidden turn", "Received a message"])
+    }
+
+    func testAListWithoutSendersIsDrawnAsBefore() async {
+        let peerRow = user(peer().text, nil)
+        let messages = [user("Go.", nil), said("Answer."), peerRow, said("Noted.")]
+        let drawn = await rows(messages)
+        // Today's rendering: the delivery is a bubble, nothing folds.
+        XCTAssertEqual(drawn.filter { if case .userBubble = $0.content { return true }; return false }.count, 2)
+        XCTAssertTrue(phrases(drawn).isEmpty)
+        // The ack line never prints on any server.
+        let acked = await rows([user("Go.", nil), said("Done.\n\n\(tag)")])
+        XCTAssertFalse(texts(acked).contains("walnut-turn"))
+    }
+
+    func testTheLiveTurnHoldsBackAHalfWrittenTag() async {
+        let drawn = await rows([person(), said("Answer.")], streaming: true, liveText: "Working on it.\n\n<walnut-tu")
+        XCTAssertFalse(texts(drawn).contains("<walnut"))
+        XCTAssertTrue(texts(drawn).contains("Working on it."))
+    }
+
+    func testTheLiveTurnAReceivedMessageStartedIsOneRowThatBecomesItsAnsweredFold() async {
+        let history = [person(), said("Answer."), peer()]
+        let running = [LiveToolCall(id: "1", name: "Bash", detail: "status", finished: true),
+                       LiveToolCall(id: "2", name: "Read", detail: "a.md", finished: false)]
+        let actor = TimelineLayoutActor()
+        let live = runRows(await rows(history, streaming: true, liveTools: running, actor: actor))
+        // One row for the message and the calls, breathing while a call runs; no second run row.
+        XCTAssertEqual(live.map(\.phrase), ["Received a message, ran a command, read a file"])
+        XCTAssertEqual(live.map(\.running), [true])
+        // Opened, it holds the received card and the live calls.
+        let opened = await rows(history, expanded: [live[0].id], streaming: true, liveTools: running, actor: actor)
+        XCTAssertTrue(texts(opened).contains("From Docs lead: Review"))
+        XCTAssertEqual(opened.filter { if case .toolChip = $0.content { return true }; return false }.count, 2)
+        // The turn ends: history holds the calls and the answer, the row keeps its id (and so its open state).
+        let ended = history + [tool("Bash", "status"), tool("Read", "a.md"), said("All set.")]
+        let after = runRows(await rows(ended, expanded: [live[0].id], actor: actor))
+        XCTAssertEqual(after.first?.id, live[0].id)
+        XCTAssertEqual(after.first?.phrase, "Received a message, ran a command, read a file")
+        // A person's live turn is untouched: its run stays the live run.
+        let own = runRows(await rows([person()], streaming: true, liveTools: running))
+        XCTAssertEqual(own.map(\.phrase), ["Ran a command, read a file"])
+    }
+
+    // MARK: - Received messages
+
+    func testAReceivedMessageReadsAsWhoItIsFromAndWhatItSays() {
+        let text = "<walnut-message kind=\"peer-note\" from=\"Docs &amp; site [1a2b3c4d]\" title=\"Done\">\n"
+            + "Line one.\nLine two.\n</walnut-message>\nReply when done: walnut tools call task_send"
+        XCTAssertEqual(TimelineInboundMessage.displayText(text),
+                       "**From Docs & site**: Done\n\nLine one.\nLine two.\n\nReply when done: walnut tools call task_send")
+        // Two envelopes in one row (a batched delivery).
+        let two = "<walnut-message kind=\"notification\" from=\"Walnut\">\nA.\n</walnut-message>\n"
+            + "<walnut-message kind=\"trigger\">\nB.\n</walnut-message>"
+        XCTAssertEqual(TimelineInboundMessage.parse(two)?.envelopes.count, 2)
+        XCTAssertEqual(TimelineInboundMessage.displayText(two), "**From Walnut**\n\nA.\n\n**From a trigger**\n\nB.")
+        // A shape this reader does not know is shown as it is.
+        XCTAssertEqual(TimelineInboundMessage.displayText("[Walnut notification] legacy"), "[Walnut notification] legacy")
+        // A tag that never closes is not an envelope.
+        XCTAssertNil(TimelineInboundMessage.parse("<walnut-message kind=\"reply\">\ncut off"))
+    }
+
+    func testRidersSplitOnlyWhenNothingCanBeLost() {
+        let moved = "<walnut-message kind=\"notification\" from=\"Walnut\" outcome=\"moved\">\nMoved.\n</walnut-message>"
+        let app = "<walnut-message kind=\"app-state\" from=\"Calendar\">\nOn.\n</walnut-message>"
+        XCTAssertEqual(TimelineInboundMessage.splitRiders("\(moved)\n\n\(app)\n\nHello.")?.riders.count, 2)
+        XCTAssertEqual(TimelineInboundMessage.splitRiders("\(moved)\n\nHello.")?.body, "Hello.")
+        // No body, a single newline, or a rider outside the closed list: no split.
+        XCTAssertNil(TimelineInboundMessage.splitRiders("\(moved)\n\n  "))
+        XCTAssertNil(TimelineInboundMessage.splitRiders("\(moved)\nHello."))
+        let peerNote = "<walnut-message kind=\"peer-note\" from=\"Walnut\">\nHi.\n</walnut-message>"
+        XCTAssertNil(TimelineInboundMessage.splitRiders("\(peerNote)\n\nHello."))
+        // A trigger behind a place note stays the body.
+        let trigger = "<walnut-message kind=\"trigger\">\nFired.\n</walnut-message>"
+        XCTAssertEqual(TimelineInboundMessage.splitRiders("\(moved)\n\n\(trigger)")?.body, trigger)
+    }
+
+    // MARK: - Wire
+
+    func testSentByDecodesWhenPresentAndIsNilOnAnOlderServer() throws {
+        let json = """
+        {"sessionId":"s","exportedAt":"2026-10-25T00:00:00Z","truncated":false,"messages":[
+          {"role":"user","text":"Go.","timestamp":"2026-10-25T00:00:01Z","sentBy":"person"},
+          {"role":"user","text":"Old.","timestamp":"2026-10-25T00:00:02Z"}]}
+        """
+        let transcript = try JSONDecoder().decode(SessionTranscript.self, from: Data(json.utf8))
+        XCTAssertEqual(transcript.messages.map(\.sentBy), ["person", nil])
+        // The disk cache round-trips it on the timeline row.
+        var row = ChatMessage(id: "r", role: "user", text: "Go.", createdAt: "t", kind: nil)
+        row.sentBy = "agent"
+        let back = try JSONDecoder().decode(ChatMessage.self, from: JSONEncoder().encode(row))
+        XCTAssertEqual(back.sentBy, "agent")
+    }
+}

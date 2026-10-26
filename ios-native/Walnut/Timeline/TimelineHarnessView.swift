@@ -30,6 +30,7 @@ struct TimelineHarnessView: View {
                 streaming: store.streaming,
                 liveText: store.liveText,
                 liveTextTruncated: false,
+                liveTools: store.liveTools,
                 activity: store.activity,
                 scope: "harness",
                 scrollToBottomSignal: store.scrollToBottomSignal,
@@ -96,6 +97,9 @@ struct TimelineHarnessView: View {
                 // live server sends today (see `appendWithheldMessages`).
                 Button("Withheld") { store.appendWithheldMessages() }
                     .accessibilityIdentifier("harness.withheld")
+                // Every turn shape (hidden, answered, riders), see TimelineTurnFixtures.
+                Button("Turns") { store.replaceWithTurnMessages() }
+                    .accessibilityIdentifier("harness.turnFolds")
                 Spacer(minLength: 0)
             }
         }
@@ -115,6 +119,7 @@ final class TimelineHarnessStore {
     var messages: [ChatMessage] = []
     var streaming = false
     var liveText = ""
+    var liveTools: [LiveToolCall] = []
     var activity: String?
     var scrollToBottomSignal = 0
     @ObservationIgnored var bottomPinned = true
@@ -128,7 +133,24 @@ final class TimelineHarnessStore {
     private static let code = "```bash\nkubectl get pods -A | sort | uniq -c | head -20\n```"
 
     init() {
-        appendMessages(120)
+        // `--timeline-harness-turns` opens on the turn-shape fixture instead, and
+        // `--timeline-harness-turns-live` on a live turn a received message started.
+        let arguments = ProcessInfo.processInfo.arguments
+        if arguments.contains(where: { $0.contains("timeline-harness-turns-live") }) {
+            let live = TimelineTurnFixtures.liveTurn()
+            messages = live.messages
+            liveTools = live.tools
+            streaming = true
+        } else if arguments.contains(where: { $0.contains("timeline-harness-turns") }) {
+            messages = TimelineTurnFixtures.messages()
+        } else {
+            appendMessages(120)
+        }
+    }
+
+    func replaceWithTurnMessages() {
+        messages = TimelineTurnFixtures.messages()
+        scrollToBottomSignal += 1
     }
 
     func appendMessages(_ n: Int) {

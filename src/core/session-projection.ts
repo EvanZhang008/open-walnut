@@ -85,6 +85,7 @@ import { engineCaps, normalizeEngine } from './agents/engine-registry.js'
 // web/routes/session-stream-v1.ts: an HTML-bearing reply gets a larger budget and
 // the cut is made where it cannot leave half a tag behind.
 import { clipTranscriptText } from './sessions/transcript-clip.js'
+import { transcriptSentBy, type TranscriptSentBy } from './sessions/transcript-sent-by.js'
 import { cutEnd } from './text-cut.js'
 
 /** LEGACY git-synced paths — dual-written while `sync.legacy_projection_files`
@@ -498,6 +499,14 @@ export interface ProjectedTranscriptMessage {
    *  client folding consecutive tool rows into one line can count the failures
    *  the way the web console's "N failed" badge does. Absent = succeeded. */
   isError?: true
+  /** User text rows only (additive, 2026-10): who put the row into the session.
+   *  `person` = a person's own message, `agent` = a delivery from another task or
+   *  from Walnut (a peer note, a reply, a notification, a trigger), `cli` = a line
+   *  the CLI wrote itself (the interrupt marker, a skill dump). Decided here, from
+   *  the row's full stored text, by the same rule the web console splits turns
+   *  with (lib/history-turn-window.ts), so a client never guesses it from a
+   *  clipped preview. Absent on an older server. */
+  sentBy?: TranscriptSentBy
 }
 
 export interface SessionTranscript {
@@ -758,6 +767,8 @@ export async function buildSessionTranscript(
         role: m.role,
         text: opts?.full ? text : clipTranscriptText(text, opts?.live || wantRich ? 'live' : 'tail'),
         timestamp: m.timestamp,
+        // From the whole text, before the clip: an envelope cut short reads as prose.
+        ...(m.role === 'user' ? { sentBy: transcriptSentBy(m) } : {}),
       })
     }
     // Indexed: the tool's position in ITS OWN message is what makes a row

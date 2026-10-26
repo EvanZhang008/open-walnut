@@ -805,14 +805,17 @@ final class SessionConversationStore {
             digest.combine(m.thinkingText)
             digest.combine(m.agent)
             digest.combine(m.isError)
+            digest.combine(m.sentBy)
             let base = "\(m.role)|\(m.createdAt)|\(m.kind?.rawValue ?? "")|\(digest.finalize())"
             let n = counts[base, default: 0]
             counts[base] = n + 1
-            return ChatMessage(id: "\(base)#\(n)", role: m.role, text: m.text,
-                               createdAt: m.createdAt, kind: m.kind,
-                               detail: m.detail, resultPreview: m.resultPreview,
-                               agent: m.agent, thinkingText: m.thinkingText,
-                               inputPreview: m.inputPreview, isError: m.isError)
+            var row = ChatMessage(id: "\(base)#\(n)", role: m.role, text: m.text,
+                                  createdAt: m.createdAt, kind: m.kind,
+                                  detail: m.detail, resultPreview: m.resultPreview,
+                                  agent: m.agent, thinkingText: m.thinkingText,
+                                  inputPreview: m.inputPreview, isError: m.isError)
+            row.sentBy = m.sentBy
+            return row
         }
     }
 
@@ -856,7 +859,7 @@ final class SessionConversationStore {
     /// One transcript row as a timeline message. Ids are assigned after a merge
     /// (`assignStableIDs`), because they must be unique across it.
     private static func row(from m: SessionTranscript.Message, text: String? = nil) -> ChatMessage {
-        ChatMessage(
+        var row = ChatMessage(
             id: "",
             role: m.role,
             text: text ?? m.text,
@@ -869,6 +872,8 @@ final class SessionConversationStore {
             inputPreview: m.inputPreview,
             isError: m.isError
         )
+        row.sentBy = m.sentBy
+        return row
     }
 
     /// Mirror of the server's LIVE transcript budget (core/sessions/transcript-clip.ts

@@ -9,12 +9,15 @@
 import { toolDetail, toolResultPreview, toolResultText } from '../tool-summary.js'
 import { clipTranscriptText } from './transcript-clip.js'
 import { toDisplayedUserText } from './reference-cards.js'
+import { transcriptSentBy, type TranscriptSentBy } from './transcript-sent-by.js'
 
 export const TRANSCRIPT_TAIL_ROWS = 200
 // Tail-only read: ~200 rendered rows fit comfortably in the last 512KB even
 // with tool-result noise. A whale session's full 10MB+ jsonl as one frame is
 // exactly the proxy-killing payload class (inc-…925).
 export const TRANSCRIPT_TAIL_BYTES = 512 * 1024
+
+type TranscriptRow = { role: string; text: string; timestamp: string; kind?: 'tool' | 'thinking'; detail?: string; resultPreview?: string; agent?: string; isError?: true; sentBy?: TranscriptSentBy }
 
 export function transcriptFromJsonl(sessionId: string, main: string): Record<string, unknown> {
   const lines: Array<Record<string, unknown>> = []
@@ -48,7 +51,7 @@ export function transcriptFromJsonl(sessionId: string, main: string): Record<str
     if (parsed.subtype === 'walnut-injected' && typeof parsed.walnutMessageId === 'string') lastMarker.set(parsed.walnutMessageId, i)
   })
 
-  const messages: Array<{ role: string; text: string; timestamp: string; kind?: 'tool' | 'thinking'; detail?: string; resultPreview?: string; agent?: string; isError?: true }> = []
+  const messages: TranscriptRow[] = []
   for (const [i, parsed] of lines.entries()) {
     if (parsed.parent_tool_use_id) continue // subagent lane
     if (typeof parsed.walnutMessageId === 'string' && parsed.subtype === 'walnut-injected'
@@ -74,14 +77,12 @@ export function transcriptFromJsonl(sessionId: string, main: string): Record<str
       // everything the human's turn carries survives.
       if (typeof content === 'string') {
         const text = content.trim()
-        if (text && !isInterruptMarker(text)) messages.push({ role: 'user', text: clipUserText(text), timestamp })
+        if (text && !isInterruptMarker(text)) messages.push(userRow(text, timestamp))
       } else if (Array.isArray(content)) {
         for (const block of content) {
           const b = block as { type?: string; text?: string }
           const text = b.type === 'text' ? b.text?.trim() : undefined
-          if (text && !isInterruptMarker(text)) {
-            messages.push({ role: 'user', text: clipUserText(text), timestamp })
-          }
+          if (text && !isInterruptMarker(text)) messages.push(userRow(text, timestamp))
         }
       }
     } else if (type === 'assistant' && Array.isArray(content)) {
@@ -138,9 +139,11 @@ function clip(text: string): string {
  *  same JSONL, so without the same call the phone shows the machine instruction
  *  as part of what the human typed, on every message, since the reminder rides
  *  every send while rich holds. Strip BEFORE clipping so the budget is spent on
- *  the human's words. */
-function clipUserText(text: string): string {
-  return clipTranscriptText(toDisplayedUserText(text), 'live')
+ *  the human's words, and name the sender from the whole text (an envelope cut
+ *  short reads as prose), by the primary's rule (transcript-sent-by.ts). */
+function userRow(text: string, timestamp: string): TranscriptRow {
+  const shown = toDisplayedUserText(text)
+  return { role: 'user', text: clipTranscriptText(shown, 'live'), timestamp, sentBy: transcriptSentBy({ role: 'user', text: shown }) }
 }
 
 /** The CLI's abort echo ("[Request interrupted by user( for tool use)]"):

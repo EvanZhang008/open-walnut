@@ -169,6 +169,14 @@ struct ChatMessage: Codable, Identifiable, Equatable {
     /// `ChatStore.carryLocalRows`. nil on a message sent without one and on an
     /// older server, where the words are all there is to go by.
     var messageId: String? = nil
+    /// Session transcript user rows only: who put the row into the session
+    /// (additive 2026-10, `sentBy` on `/sessions/:id/transcript`). `"person"` is a
+    /// person's own message, `"agent"` a delivery from another task or from Walnut
+    /// (a peer note, a reply, a notification, a trigger), `"cli"` a line the CLI
+    /// wrote itself. The server decides it from the row's whole stored text, so the
+    /// phone never guesses it from a clipped preview. nil on an older server, and
+    /// a list with no sender at all is drawn exactly as before (`TimelineTurnShape`).
+    var sentBy: String? = nil
 
     // Client-only flags for optimistic user bubbles (not part of the wire format).
     var pending: Bool? = nil
@@ -195,7 +203,7 @@ struct ChatMessage: Codable, Identifiable, Equatable {
     private enum CodingKeys: String, CodingKey {
         case id, role, text, createdAt, kind, source, detail, resultPreview, agent
         case thinkingText, inputPreview, detailRef, inFlight, answeredBy, isError
-        case messageId
+        case messageId, sentBy
     }
 
     init(id: String, role: String, text: String, createdAt: String, kind: Kind?, source: String? = nil,
@@ -664,10 +672,14 @@ struct SessionTranscript: Codable {
         /// kind == "tool" only — the call's result came back as an error
         /// (additive 2026-10; nil on a succeeded call and on an older server).
         let isError: Bool?
+        /// User rows only: who sent the row, "person" | "agent" | "cli"
+        /// (additive 2026-10; nil on an older server). See `ChatMessage.sentBy`.
+        let sentBy: String?
 
         init(role: String, text: String, timestamp: String, kind: String?,
              detail: String? = nil, resultPreview: String? = nil, agent: String? = nil,
-             thinkingText: String? = nil, inputPreview: String? = nil, isError: Bool? = nil) {
+             thinkingText: String? = nil, inputPreview: String? = nil, isError: Bool? = nil,
+             sentBy: String? = nil) {
             self.role = role
             self.text = text
             self.timestamp = timestamp
@@ -678,6 +690,7 @@ struct SessionTranscript: Codable {
             self.thinkingText = thinkingText
             self.inputPreview = inputPreview
             self.isError = isError
+            self.sentBy = sentBy
         }
     }
 

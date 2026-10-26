@@ -1431,7 +1431,7 @@ makes a NEW task beside the source, which completes unless `keep_source`.
 - `GET /api/v1/sessions/:id/transcript?fresh=1&rich=1` →
   `{ "sessionId", "exportedAt", "truncated", "rich"?, "messages": [ { role, text,
   timestamp, kind?, detail?, resultPreview?, agent?, isError?, inputPreview?,
-  thinkingText?, detailRef? } ] }`: a slim transcript tail (last ~100 entries; text
+  thinkingText?, detailRef?, sentBy? } ] }`: a slim transcript tail (last ~100 entries; text
   capped at 4 KB/row, or 12 KB for a row that
   carries HTML, 16 KB / 48 KB on any read built live (`fresh=1`, `rich=1`, a page;
   see `rich=1` below), and the cut is made where it cannot leave half a tag behind so a
@@ -1449,9 +1449,19 @@ makes a NEW task beside the source, which completes unless `keep_source`.
   the delegation row; the subagent's own transcript is not inlined. `isError:
   true` (additive, 2026-10) marks a tool row whose result came back as an error,
   on the slim tail too (a folded `Ran 3 commands · 1 failed` line needs it
-  before any card is expanded). Rows of one message come as thinking, then the
-  text, then the tool calls (see the `/conversations/:id/messages` notes on
-  row order). The primary
+  before any card is expanded). `sentBy` (additive, 2026-10) rides every USER
+  text row and says who put it into the session: `"person"` (a person's own
+  message, also when Walnut's notes ride in front of it in the same row),
+  `"agent"` (a delivery from another task or from Walnut: a peer note, a reply, a
+  notification, a trigger) or `"cli"` (a line the CLI wrote itself, such as the
+  interrupt marker). The server decides it from the row's whole stored text, by
+  the rule the web console splits turns with, so a client never guesses it from
+  the clipped `text`; the iOS app uses it to fold and hide turns and to keep a
+  received message out of the user's bubble. Absent on an older server, where a
+  client draws user rows as it always did. Only this route carries it (`/conversations/:id/messages`
+  rows do not). Rows of one message come as thinking,
+  then the text, then the tool calls (see the `/conversations/:id/messages`
+  notes on row order). The primary
   box exports tails for every session it can reach — local from disk, remote
   over its SSH channel — so this works for sessions on ANY machine without
   the phone talking to that machine. `404 not_found` when no tail was

@@ -57,6 +57,10 @@ actor TimelineLayoutActor {
     /// its business.
     private var richEntryIdentities: [String: Set<String>] = [:]
 
+    /// The shape each turn settled into while the session was quiet, so it holds
+    /// while the next turn streams (`TimelineTurnShape.settle`). Per conversation.
+    private var settledTurnKinds: [String: TimelineTurnShape.Kind] = [:]
+
     /// Submit the newest input. `onSnapshot` is invoked (on the actor) for
     /// every COMPLETED build — the caller hops to the main queue itself.
     func submit(_ input: TimelineInput, onSnapshot: @escaping @Sendable (TimelineSnapshot) -> Void) {
@@ -96,6 +100,7 @@ actor TimelineLayoutActor {
             // it is what makes switching back instant). The head memo cannot:
             // it is keyed on the live text alone.
             headCache = nil
+            settledTurnKinds = [:]
             cacheScope = input.scope
         }
         applyRichHeightChanges()
@@ -144,24 +149,97 @@ actor TimelineLayoutActor {
         // built through the memo, so an unchanged message costs a dictionary hit
         // whether it is folded or open; only the run row itself is minted per
         // build, and it is a one-line capsule with no measurement in it.
-        for part in TimelineToolRunFold.fold(inline) {
-            switch part {
-            case .message(let message):
-                rows.append(contentsOf: memoizedRows(for: message,
-                                                     queued: input.queuedMessageStates[message.id]))
-            case .run(let key, let members):
-                let runID = TimelineToolRunFold.rowID(scope: input.scope, key: key)
-                let expanded = input.expandedRowIDs.contains(runID)
-                rows.append(builder.toolRunRow(
-                    id: runID,
-                    members: TimelineToolRunFold.phraseMembers(members),
-                    failCount: TimelineToolRunFold.failCount(members),
-                    running: false, expanded: expanded
-                ))
-                if expanded {
-                    for member in members {
-                        rows.append(contentsOf: memoizedRows(for: member, queued: nil))
+        func appendRun(key: String, members: [ChatMessage]) {
+            let runID = TimelineToolRunFold.rowID(scope: input.scope, key: key)
+            let expanded = input.expandedRowIDs.contains(runID)
+            rows.append(builder.toolRunRow(
+                id: runID,
+                members: TimelineToolRunFold.phraseMembers(members),
+                failCount: TimelineToolRunFold.failCount(members),
+                running: false, expanded: expanded
+            ))
+            if expanded {
+                for member in members {
+                    rows.append(contentsOf: memoizedRows(for: member, queued: nil))
+                }
+            }
+        }
+        // A session transcript that says who sent each row is shaped by turn
+        // (TimelineTurnShape / TimelineTurnFold): hidden turns, an answered turn's
+        // work folded before its answer, received messages never drawn as the
+        // user's bubble. A list without that fact (an older server, the Personal AI
+        // chat) is drawn exactly as before.
+        func appendPlan(_ parts: [TimelineTurnFold.Part]) {
+            for part in parts {
+                switch part {
+                case .message(let message):
+                    rows.append(contentsOf: memoizedRows(for: message,
+                                                         queued: input.queuedMessageStates[message.id]))
+                case .run(let key, let members):
+                    appendRun(key: key, members: members)
+                case .inbound(let message):
+                    rows.append(contentsOf: memoizedRows(for: TimelineInboundMessage.card(message), queued: nil))
+                case .ack(let message):
+                    rows.append(builder.ackRow(id: "\(TimelineScope.namespace(input.scope, message.id))#ack"))
+                case .fold(let fold):
+                    let id = TimelineTurnFold.rowID(scope: input.scope, key: fold.key)
+                    let expanded = input.expandedRowIDs.contains(id)
+                    rows.append(builder.foldRow(id: id, phrase: TimelineTurnFold.label(fold, expanded: expanded),
+                                                failCount: fold.failCount, expanded: expanded))
+                    if expanded { appendPlan(fold.members) }
+                }
+            }
+        }
+        /// Set when the live run rides a received message's fold (see below).
+        var runFoldedElsewhere = false
+        if TimelineTurnShape.knowsSenders(inline) {
+            let turns = TimelineTurnShape.settle(
+                TimelineTurnShape.shape(inline, streaming: false), in: inline,
+                streaming: input.streaming, settled: &settledTurnKinds)
+            let liveCalls = input.liveTools.filter(TimelineRowBuilder.liveCallFolds)
+            if input.streaming, !liveCalls.isEmpty {
+                // The live turn a received message started: that message and the
+                // calls it is making are ONE row, keyed as its answered fold will be.
+                let planned = TimelineTurnFold.planLive(inline, turns: turns)
+                appendPlan(planned.parts)
+                if let tail = planned.tail {
+                    runFoldedElsewhere = true
+                    let id = TimelineTurnFold.rowID(scope: input.scope, key: tail.key)
+                    let expanded = input.expandedRowIDs.contains(id)
+                    let live = liveCalls.map { ChatMessage(id: "", role: "assistant", text: $0.name,
+                                                           createdAt: "", kind: .tool, detail: $0.detail) }
+                    let historyTools = tail.rows.filter { $0.kind == .tool }
+                    // A mid-turn refetch can already hold some of this turn's calls,
+                    // which the live list still carries: count each call once.
+                    var unmatched = live.map { "\($0.text)|\($0.detail ?? "")" }
+                    let earlier = historyTools.filter { m in
+                        guard let i = unmatched.firstIndex(of: "\(m.text)|\(m.detail ?? "")") else { return true }
+                        unmatched.remove(at: i)
+                        return false
                     }
+                    rows.append(builder.foldRow(
+                        id: id,
+                        phrase: TimelineTurnFold.phrase(tools: earlier + live,
+                                                        received: tail.rows.filter(TimelineTurnShape.isInbound).count),
+                        failCount: historyTools.filter(TimelineTurnShape.isFailure).count,
+                        expanded: expanded, running: liveCalls.contains { !$0.finished }))
+                    if expanded {
+                        appendPlan(tail.members)
+                        rows.append(contentsOf: builder.liveRunMembers(
+                            input.liveTools, liveThinking: input.liveThinking, width: input.width, scope: input.scope))
+                    }
+                }
+            } else {
+                appendPlan(TimelineTurnFold.plan(inline, turns: turns))
+            }
+        } else {
+            for part in TimelineToolRunFold.fold(inline) {
+                switch part {
+                case .message(let message):
+                    rows.append(contentsOf: memoizedRows(for: message,
+                                                         queued: input.queuedMessageStates[message.id]))
+                case .run(let key, let members):
+                    appendRun(key: key, members: members)
                 }
             }
         }
@@ -178,7 +256,7 @@ actor TimelineLayoutActor {
                 activity: input.activity, width: input.width,
                 tailRevision: tailRevision, cachedHead: headCache, scope: input.scope,
                 liveThinking: input.liveThinking, liveTools: input.liveTools,
-                expandedRowIDs: input.expandedRowIDs
+                expandedRowIDs: input.expandedRowIDs, runFoldedElsewhere: runFoldedElsewhere
             )
             headCache = live.headCache
             rows.append(contentsOf: live.rows)
