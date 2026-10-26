@@ -23,7 +23,7 @@ import {
   _resetSessionTrackerForTesting,
 } from '../../../src/core/session-tracker.js';
 import { closeDb, getDb, SESSION_DB_PATH } from '../../../src/core/session-db.js';
-import Database from 'better-sqlite3';
+import Database from '../../../src/lib/sqlite.js';
 import { WALNUT_HOME } from '../../../src/constants.js';
 import {
   dropFileGuardTriggers,

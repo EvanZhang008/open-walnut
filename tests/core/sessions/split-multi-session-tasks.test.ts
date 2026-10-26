@@ -14,7 +14,7 @@ vi.mock('../../../src/providers/daemon-connection.js', () => ({
 
 import { getSessionByClaudeId, getSessionsForTask, createSessionRecord, _resetSessionTrackerForTesting } from '../../../src/core/session-tracker.js';
 import { closeDb, getDb, SESSION_DB_PATH } from '../../../src/core/session-db.js';
-import Database from 'better-sqlite3';
+import Database from '../../../src/lib/sqlite.js';
 import { WALNUT_HOME } from '../../../src/constants.js';
 import { addTask, getTask, linkSession, mergeTaskInto, updateTaskRaw, SessionOwnedByOtherTaskError } from '../../../src/core/task-manager.js';
 import { splitMultiSessionTasks } from '../../../src/core/sessions/split-multi-session-tasks.js';
