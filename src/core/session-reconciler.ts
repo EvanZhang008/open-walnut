@@ -63,7 +63,7 @@ export async function reconcileSessions(): Promise<ReconcileResult> {
   // Triage/hook/cron are cleaned up by SessionReaper; subagent sessions are user-visible and persist.
   // All sessions have type set by readStore() migration (runs inside listSessions above).
   const zombieCandidates = sessions.filter(
-    (s) => !isTerminalSession(s)
+    (s) => (!isTerminalSession(s) || (s.process_status === 'error' && s.pid != null))
       && s.type === 'interactive'
       && s.process_status !== 'stopped',
   )
@@ -156,8 +156,9 @@ export async function reconcileSessions(): Promise<ReconcileResult> {
       const now = new Date().toISOString()
       const updated = await updateSessionRecordConditionally(
         session.claudeSessionId,
-        {
+        session.process_status === 'error' ? { pid: undefined } : {
           process_status: 'stopped',
+          pid: undefined,
           activity: undefined,
           last_status_change: now,
           status_reason: 'server_restart',

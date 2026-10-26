@@ -149,6 +149,13 @@ describe('placeSystemRow: the keep-alive collapses, the boundary lands in place'
       .toEqual({ action: 'replace', index: 0 })
   })
 
+  it('a failed compaction replaces progress with its error, never a success', () => {
+    const error: SystemRow = { variant: 'error', message: 'Compaction failed: input exceeds the limit.', progress: false }
+    expect(placeSystemRow([text('before'), progress], error)).toEqual({ action: 'replace', index: 1 })
+    expect(placeSystemRow([text('before')], error)).toEqual({ action: 'append' })
+    expect(placeSystemRow([error], error)).toEqual({ action: 'append' })
+  })
+
   it('non-compaction notices NEVER collapse — two API errors are two facts', () => {
     const apiError: SystemRow = { variant: 'error', message: 'API error: ECONNRESET' }
     expect(placeSystemRow([apiError], apiError)).toEqual({ action: 'append' })

@@ -363,6 +363,24 @@ describe('foldSessionTail — turn-end evidence semantics', () => {
 // ── reconcileProcessStatus: convergence + refusal ──
 
 describe('reconcileProcessStatus — convergence (incidents B/D shape)', () => {
+  it('ignores a complete failure idle record until its newline is written', async () => {
+    const sid = 'command-partial-idle';
+    const failure = JSON.stringify({ type: 'assistant', local_command_outcome: { kind: 'failed' }, message: { content: [{ type: 'text', text: 'Command failed' }] } });
+    await writeStream(sid, [userEvent(sid), failure]);
+    const stream = path.join(streamsDir, `${sid}.jsonl`);
+    await fsp.appendFile(stream, stateEvent(sid, 'idle'));
+    const pending = await fetchStreamTailFold(sid, undefined);
+    expect(typeof pending).not.toBe('string');
+    if (typeof pending !== 'string') expect(pending.fold.turnEnded).toBe(false);
+    await fsp.appendFile(stream, '\n');
+    const settled = await fetchStreamTailFold(sid, undefined);
+    expect(typeof settled).not.toBe('string');
+    if (typeof settled !== 'string') {
+      expect(settled.fold.workStatus).toBe('error');
+      expect(settled.fold.lastResult?.endOffset).toBe((await fsp.stat(stream)).size);
+    }
+  });
+
   it('running record + stream proves turn ended + dead process → stopped', async () => {
     const sid = 'conv-dead'
     await writeStream(sid, [initEvent(sid), userEvent(sid), resultEvent(sid), stateEvent(sid, 'idle')])
@@ -1064,6 +1082,18 @@ describe('fetchStreamTailFold — whale-turn watermark fallback (incident 57b125
     expect(outcome).toEqual({ converged: true, from: 'running', to: 'idle' })
     expect((await getSessionByClaudeId(sid))?.process_status).toBe('idle')
   })
+
+  it('an unfinished EOF running record blocks the whale no-result fallback', async () => {
+    const sid = 'whale-partial-running';
+    const watermark = await writeWhaleStream(sid, []);
+    await fsp.appendFile(path.join(streamsDir, `${sid}.jsonl`), '{"type":"system","subtype":"session_state_changed","state":"running"');
+    const evidence = await fetchStreamTailFold(sid, undefined, { consumedOffset: watermark });
+    expect(typeof evidence).not.toBe('string');
+    if (typeof evidence !== 'string') {
+      expect(evidence.fold.sawTurnActivity).toBe(true);
+      expect(evidence.fold.turnEnded).toBe(false);
+    }
+  });
 
   it('whale turn + LIVE next turn after the watermark → no convergence', async () => {
     const sid = 'whale-live'

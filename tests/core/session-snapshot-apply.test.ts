@@ -60,6 +60,45 @@ import { bus, EventNames, type BusEvent } from '../../src/core/event-bus.js'
 import { log } from '../../src/logging/index.js'
 import { WALNUT_HOME, SESSION_QUEUE_FILE } from '../../src/constants.js'
 
+it('retains the daemon pid for a failed turn while the CLI is alive', async () => {
+  setSnapshotModeForTests('enforce');
+  await seedSession('live-command-error');
+  await applySnapshot('live-command-error', snap({ cliState: 'idle', turnActive: false, pid: process.pid,
+    lastResult: { isError: true, endOffset: 100 } }), 'test');
+  expect((await getSessionByClaudeId('live-command-error'))?.pid).toBe(process.pid);
+  expect((await getSessionByClaudeId('live-command-error'))?.process_status).toBe('error');
+});
+
+it('clears a live error pid when death arrives at the same stream version', async () => {
+  setSnapshotModeForTests('enforce');
+  await seedSession('same-v-death');
+  const failed = snap({ cliState: 'idle', turnActive: false, pid: process.pid, lastResult: { isError: true, endOffset: 100 } });
+  await applySnapshot('same-v-death', failed, 'test');
+  await applySnapshot('same-v-death', { ...failed, cliState: 'dead', pid: null, exitCode: 0 }, 'test');
+  expect((await getSessionByClaudeId('same-v-death'))?.pid).toBeUndefined();
+});
+
+it('recovers a live error pid from same-version daemon evidence', async () => {
+  setSnapshotModeForTests('enforce');
+  await seedSession('missing-error-pid');
+  await updateSessionRecord('missing-error-pid', { process_status: 'error', consumedOffset: 100 });
+  await applySnapshot('missing-error-pid', snap({ cliState: 'idle', turnActive: false, pid: process.pid,
+    lastResult: { isError: true, endOffset: 100 } }), 'test');
+  expect((await getSessionByClaudeId('missing-error-pid'))?.pid).toBe(process.pid);
+});
+
+it('does not revive a dead error pid with a stale same-version live snapshot', async () => {
+  setSnapshotModeForTests('enforce');
+  await seedSession('stale-live-after-death');
+  const failed = snap({ cliState: 'idle', turnActive: false, pid: process.pid, lastResult: { isError: true, endOffset: 100 } });
+  await applySnapshot('stale-live-after-death', failed, 'test');
+  const guard = await captureSnapshotReadGuard('stale-live-after-death');
+  await applySnapshot('stale-live-after-death', { ...failed, cliState: 'dead', pid: null }, 'test');
+  expect(guard((await getSessionByClaudeId('stale-live-after-death'))!)).toBe(false);
+  await applySnapshot('stale-live-after-death', failed, 'test');
+  expect((await getSessionByClaudeId('stale-live-after-death'))?.pid).toBeUndefined();
+});
+
 // ── snapshot factory ──
 function snap(overrides: Partial<SessionSnapshot> = {}): SessionSnapshot {
   return {

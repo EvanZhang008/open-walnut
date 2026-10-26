@@ -162,6 +162,10 @@ export function placeSystemRow(
   rows: readonly TimelineRow[],
   incoming: SystemRow,
 ): SystemRowPlacement {
+  if (incoming.variant === 'error' && incoming.progress === false) {
+    const placeholder = lastCompactionProgressIndex(rows)
+    return placeholder >= 0 ? { action: 'replace', index: placeholder } : { action: 'append' }
+  }
   if (incoming.variant !== 'compact') return { action: 'append' }
 
   const last = rows[rows.length - 1]

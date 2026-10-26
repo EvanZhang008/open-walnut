@@ -74,6 +74,15 @@ describe('sessionStreamBuffer: one compaction, one snapshot row', () => {
     expect(systemRows().map((r) => r.detail)).toEqual([DETAIL, '612K → 47K tokens · auto'])
   })
 
+  it('a failed compact command replaces progress even when its wording changes', () => {
+    sessionStreamBuffer.markStreaming(SID)
+    compacting()
+    sessionStreamBuffer.appendSystem(SID, 'error', 'Compaction failed: unable to reduce the input.', undefined, false, 'failed-command')
+    expect(systemRows()).toEqual([
+      { type: 'system', variant: 'error', message: 'Compaction failed: unable to reduce the input.', progress: false, uuid: 'failed-command' },
+    ])
+  })
+
   it('two identical API errors both survive — only compaction collapses', () => {
     sessionStreamBuffer.markStreaming(SID)
     sessionStreamBuffer.appendSystem(SID, 'error', 'API error: ECONNRESET')

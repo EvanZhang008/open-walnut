@@ -96,6 +96,9 @@ export interface FoldState {
   followupResult: boolean
   /** session_state_changed{idle} seen after lastResult with no running since. */
   trailingIdle: boolean
+  failedLocalCommand?: boolean
+  commandFailureHeld?: boolean
+  settledCommandFailure?: boolean
   bgTasks: Record<string, { terminal: boolean; isBackgrounded: boolean; endedPerLevel?: boolean; toolUseId?: string }>
   /** Level universe for the #870 reconciliation: ids ever listed by a
    *  background_tasks_changed snapshot. Only these may be absent-marked
@@ -195,6 +198,9 @@ export function foldLine(state: FoldState, rawLine: string, lineEndV: number): F
     sawNormalResult: state.sawNormalResult,
     followupResult: state.followupResult,
     trailingIdle: state.trailingIdle,
+    failedLocalCommand: state.failedLocalCommand,
+    commandFailureHeld: state.commandFailureHeld,
+    settledCommandFailure: state.settledCommandFailure,
     bgTasks: state.bgTasks,
     seenInLevel: state.seenInLevel,
     teamActive: state.teamActive,
@@ -241,7 +247,8 @@ export function foldLine(state: FoldState, rawLine: string, lineEndV: number): F
     && rawLine.indexOf('TeamCreate') === -1
     && rawLine.indexOf('TeamDelete') === -1
     && rawLine.indexOf('CronCreate') === -1
-    && rawLine.indexOf('CronDelete') === -1) return next
+    && rawLine.indexOf('CronDelete') === -1
+    && rawLine.indexOf('local_command_outcome') === -1) return next
   try { parsed = JSON.parse(rawLine) as { [k: string]: unknown } } catch { return next }
   if (!parsed || typeof parsed !== 'object') return next
   const type = parsed.type as string | undefined
@@ -290,6 +297,9 @@ export function foldLine(state: FoldState, rawLine: string, lineEndV: number): F
       // Turn anchor: a new turn began — a prior result can no longer be the
       // current turn's verdict.
       next.sawAnchor = true
+      // Input after a held failure's own result starts the user's next turn: that failure is no longer its verdict.
+      if (!state.turnActive || state.commandFailureHeld) { next.failedLocalCommand = false; next.commandFailureHeld = false }
+      next.settledCommandFailure = false
       next.lastResult = null
       next.sawNormalResult = false
       next.followupResult = false
@@ -316,18 +326,20 @@ export function foldLine(state: FoldState, rawLine: string, lineEndV: number): F
       // Anchor-equivalent: a new turn (or auto-continuation) began after that
       // result — it cannot be the current turn's verdict (inc-1783644415695).
       next.sawAnchor = true
+      if (!state.turnActive) { next.failedLocalCommand = false; next.commandFailureHeld = false }
       next.lastResult = null
       next.followupResult = false
       next.trailingIdle = false
     } else if (subtype === 'session_state_changed') {
       const s = parsed.state as string | undefined
       if (s === 'idle') {
-        if (next.lastResult) next.trailingIdle = true
+        if (next.lastResult || next.failedLocalCommand) next.trailingIdle = true
       } else if (s === 'running') {
         // Same invalidation as init: the CLI went back to work — that result
         // did not end the turn. Mid-turn workflow results (one per subagent)
         // are naturally superseded by the final result.
         next.sawAnchor = true
+        if (!state.turnActive) { next.failedLocalCommand = false; next.commandFailureHeld = false }
         next.lastResult = null
         next.followupResult = false
         next.trailingIdle = false
@@ -423,13 +435,23 @@ export function foldLine(state: FoldState, rawLine: string, lineEndV: number): F
     // A stopped turn (interrupt, or the CLI preempting it for a follow-up) ends in an
     // is_error result, but the CLI's own error test excludes these terminal reasons.
     const aborted = parsed.terminal_reason === 'aborted_streaming' || parsed.terminal_reason === 'aborted_tools'
+    // A stop after the failed command's own result (a notification, or work after a held result) ends only that work: the failure stays the verdict.
+    const keepsFailure = notification || state.commandFailureHeld === true
+    if (aborted && !keepsFailure) { next.failedLocalCommand = false; next.commandFailureHeld = false }
+    if (next.failedLocalCommand && (gatingCount(next.bgTasks) > 0 || next.teamActive)) next.commandFailureHeld = true
+    if (!notification) next.settledCommandFailure = next.failedLocalCommand === true && (!aborted || keepsFailure)
     next.lastResult = {
-      isError: parsed.is_error === true && !aborted,
+      isError: keepsFailure
+        ? (parsed.is_error === true && !aborted) || next.failedLocalCommand === true || (notification && next.settledCommandFailure === true)
+        : (parsed.is_error === true || next.failedLocalCommand === true) && !aborted,
       ...(typeof numTurns === 'number' ? { numTurns } : {}),
       endOffset: lineEndV,
     }
     next.trailingIdle = false
   } else if (type === 'assistant') {
+    if (!parsed.parent_tool_use_id && (parsed.local_command_outcome as { kind?: string } | undefined)?.kind === 'failed') {
+      next.failedLocalCommand = true
+    }
     const msg = parsed.message as { content?: unknown } | undefined
     const blocks = msg ? msg.content : undefined
     if (Array.isArray(blocks)) {
@@ -467,7 +489,14 @@ export function foldLine(state: FoldState, rawLine: string, lineEndV: number): F
   // gating one (task_started after idle) re-opens it. Matches foldSessionTail's
   // end-of-batch verdict for every prefix of the stream. An error result is
   // terminal WITHOUT a companion idle (the CLI can bail before emitting one).
-  const settled = !!(next.lastResult && (next.lastResult.isError
+  if (next.failedLocalCommand && next.trailingIdle && gatingCount(next.bgTasks) === 0 && !next.teamActive
+    && (state.turnActive || next.lastResult?.isError !== true)) {
+    next.lastResult = { isError: true, numTurns: next.lastResult?.numTurns ?? 0, endOffset: lineEndV }
+    next.sawNormalResult = true
+    next.commandFailureHeld = false
+    next.settledCommandFailure = true
+  }
+  const settled = !!(next.lastResult && ((next.lastResult.isError && (!next.failedLocalCommand || (next.sawNormalResult && gatingCount(next.bgTasks) === 0 && !next.teamActive && (!next.commandFailureHeld || next.followupResult))))
     || ((next.trailingIdle || next.followupResult) && gatingCount(next.bgTasks) === 0 && !next.teamActive)))
   next.turnActive = next.sawAnchor && !settled
   return next

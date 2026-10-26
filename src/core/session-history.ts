@@ -692,6 +692,9 @@ interface RawJsonlLine {
   isSynthetic?: boolean;
   isCompactSummary?: boolean;
   isVisibleInTranscriptOnly?: boolean;
+  commandOutcome?: { kind?: string };
+  local_command_outcome?: { kind?: string };
+  local_command_source?: string;
   // queue-operation fields (FIFO-injected user messages)
   operation?: string;
   content?: string;
@@ -1213,6 +1216,25 @@ export function parseSessionMessages(content: string, opts?: ParseSessionMessage
 
   for (let i = 0; i < rawMessages.length; i++) {
     const raw = rawMessages[i];
+
+    const failedLocalCommand = (raw.type === 'system' && raw.subtype === 'local_command'
+      && raw.commandOutcome?.kind === 'failed')
+      || (raw.type === 'assistant' && !raw.parent_tool_use_id
+        && raw.local_command_outcome?.kind === 'failed');
+    if (failedLocalCommand && raw.uuid) {
+      const source = raw.local_command_source ?? raw.content ?? '';
+      const text = raw.type === 'assistant' && Array.isArray(raw.message?.content)
+        ? raw.message.content.filter(b => b.type === 'text').map(b => b.text ?? '').join('\n').trim()
+        : (source.match(/<local-command-(?:stdout|stderr)>([\s\S]*?)<\/local-command-(?:stdout|stderr)>/)?.[1]?.trim() ?? '')
+          .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+      if (text) messageMap.set(raw.uuid, {
+        role: 'system',
+        timestamp: raw.timestamp ?? new Date().toISOString(),
+        systemVariant: 'error',
+        contentBlocks: [{ type: 'text' as const, text }],
+      });
+      continue;
+    }
 
     // ── System lines the user should SEE (corpus-audited 2026-07) ──
     // The CLI logs meaningful conversation events as type='system' lines that

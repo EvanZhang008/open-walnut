@@ -70,6 +70,7 @@ import type { SessionManager } from './session-manager.js'
 import type { DaemonTaskState } from './daemon-connection.js'
 import { checkCwdExists, CwdMissingError } from './cwd-check.js'
 import { isWakeupArmed } from './daemon-fold.js'
+import { noteSuppressedErrorReason } from '../core/session-snapshot-gate.js'
 import { BudgetCheckingError, BudgetPausedError, classifyDeliveryFailure, isDaemonCommandOutcomeUnknown, SendHeldError, SendOutcomeUnknownError } from './delivery-failure.js'
 import { describeClaudeLaunchFailure } from './host-runtime-core.js'
 import { AcpSession, emitAcpIdentityBoundary, sessionMcpServerToAcp, splitAcpModelId } from './acp-session.js'
@@ -261,6 +262,10 @@ interface ContentBlock {
 /** Assistant or user message event */
 interface StreamMessageEvent {
   type: 'assistant' | 'user'
+  /** Local command output uses the canonical system row's uuid, not message.id. */
+  uuid?: string
+  local_command_outcome?: { kind?: string }
+  local_command_run?: { command?: string }
   /** Non-null when this event belongs to a subagent Task */
   parent_tool_use_id?: string | null
   /** Subagent identity on inline-subagent lines (new CLI builds). Threaded to
@@ -294,6 +299,7 @@ interface StreamResultEvent {
   duration_ms?: number
   total_cost_usd?: number
   num_turns?: number
+  terminal_reason?: string
   usage?: {
     input_tokens: number
     output_tokens: number
@@ -761,6 +767,12 @@ export class ClaudeCodeSession {
   /** Per-turn flag: reset on writeMessage()/send(), prevents duplicate JSONL result
    *  events within a single turn (e.g., tailer emits result, then PID-death handler fires). */
   private _turnResultEmitted = false
+  /** CLI local commands can fail yet end with a raw success result (zero model turns). */
+  private _failedLocalCommandThisTurn = false
+  /** The failed command's own result arrived while background work held the turn. */
+  private _commandFailureHeld = false
+  private _localCommandErrorText = ''
+  private _settledCommandFailure = false
   private _interruptRequested = false
   private _interruptSettle: (() => void) | undefined
   private _interruptPromise: Promise<void> | undefined
@@ -1502,6 +1514,9 @@ export class ClaudeCodeSession {
     if (!sid) return
     this.setForegroundActive(false)
     const interrupted = this.consumeInterruptRequest()
+    if (this._failedLocalCommandThisTurn) {
+      this._deferredOutcome = { ...this._deferredOutcome, isError: true, resultText: this._localCommandErrorText }
+    }
     const outcome = this._deferredOutcome
     this._deferredOutcome = undefined
     // Detached (run_in_background) commands may outlive the gating drain — the
@@ -1513,13 +1528,31 @@ export class ClaudeCodeSession {
     const wakeupPending = this._wakeupArmed()
     this._activity = detachedBgActive ? 'Background command running'
       : wakeupPending ? 'Waiting for scheduled wakeup' : undefined
-    this._processStatus = detachedBgActive || wakeupPending ? 'running' : 'idle'
+    // An automatic turn (a notification, a continuation) that ends with no result of its
+    // own after a settled command failure: that failure stays the verdict and its
+    // SESSION_RESULT already fired, so close the status without a second, successful one.
+    if (!outcome && this._settledCommandFailure) {
+      this._processStatus = detachedBgActive || wakeupPending ? 'running' : 'error'
+      this._turnResultEmitted = true
+      this._emittedAssistantText = false
+      this._advanceConsumedOffset()
+      this.finalizeTurnSpeed({})
+      this.emitStatusChanged(detachedBgActive || wakeupPending ? 'IN_PROGRESS' : 'NEED_ACTION', this._localCommandErrorText.slice(0, 500) || undefined)
+      if (!detachedBgActive && !wakeupPending) this._handBackFollowupPhase()
+      void this.refreshAppliedSettings('turn-end')
+      return
+    }
+    // A stop that lands after a failed command's own result ends only the work after it, as in daemon-fold.
+    const isError = outcome?.isError === true && (!interrupted || (this._commandFailureHeld && this._failedLocalCommandThisTurn)) && !outcome.interrupted
+    this._settledCommandFailure = this._failedLocalCommandThisTurn && isError
+    this._processStatus = detachedBgActive || wakeupPending ? 'running' : isError ? 'error' : 'idle'
     this._turnResultEmitted = true
     // Idle is the CLI's authoritative turn-over signal, and this lane completes a
     // turn whose `result` was withheld — nothing here will run the result case's
     // clear. Close the delivery stretch so this turn's streamed text can't
     // suppress the NEXT turn's result-text fallback (#858).
     this._emittedAssistantText = false
+    this._failedLocalCommandThisTurn = false
     // The idle that completes a withheld turn is the turn's LAST lifecycle event —
     // advance the watermark to it so a replay of this whole turn (result + idle)
     // is positionally suppressed after a restart.
@@ -1546,8 +1579,8 @@ export class ClaudeCodeSession {
       // that summary IS the turn's real answer). Error: the stored error text is
       // the signal; fullText would be pre-error prose.
       result: outcome?.isError ? (outcome.resultText ?? this.fullText) : this.fullText,
-      isError: outcome?.isError ?? false,
-      ...(interrupted || outcome?.interrupted ? { interrupted: true } : {}),
+      isError,
+      ...((interrupted || outcome?.interrupted) && !isError ? { interrupted: true } : {}),
       ...(outcome?.totalCost !== undefined ? {
         totalCost: outcome.totalCost,
         costDelta: deferredCostDelta,
@@ -1559,6 +1592,26 @@ export class ClaudeCodeSession {
     // — never blocks completion). Keeps the badge honest across turns: settings can
     // drift if a hook or env changed them mid-turn, and the CLI never pushes that to us.
     void this.refreshAppliedSettings('turn-end')
+  }
+
+  /** Hand the task back once a followup cycle closes an already-settled turn: its own
+   *  NEED_ACTION flip was skipped while detached work ran, and re-emitting SESSION_RESULT
+   *  would double-run triage. No-op when the phase already settled. */
+  private _handBackFollowupPhase(): void {
+    if (!this.taskId) return
+    const followupTaskId = this.taskId
+    const followupSid = this.claudeSessionId ?? undefined
+    const turnGen = this._turnGen
+    import('../core/phase.js').then(({ applySessionPhase }) =>
+      applySessionPhase(followupTaskId, 'session:result', 'session-runner:followup-closure', {
+        sessionId: followupSid, turnGen,
+      }),
+    ).catch((err) => {
+      log.session.warn('followup-closure phase flip failed', {
+        sessionId: followupSid, taskId: followupTaskId,
+        error: err instanceof Error ? err.message : String(err),
+      })
+    })
   }
 
   /** L2: reconcile the local task set against the DAEMON's authoritative state (the source of
@@ -1767,7 +1820,7 @@ export class ClaudeCodeSession {
    *   - If subagent files are still being written → reschedule (teammates alive)
    *   - If no recent writes → clear _teamActive and transition to idle
    */
-  private _scheduleTeamIdleCheck(resultText?: string, totalCost?: number, durationMs?: number): void {
+  private _scheduleTeamIdleCheck(resultText?: string, totalCost?: number, durationMs?: number, isError = false): void {
     if (this._teamIdleTimer) clearTimeout(this._teamIdleTimer)
     this._teamIdleTimer = setTimeout(() => {
       if (!this._teamActive) return
@@ -1783,7 +1836,7 @@ export class ClaudeCodeSession {
           this._activity = 'Team subagents working'
           this.emitStatusChanged('IN_PROGRESS')
         }
-        this._scheduleTeamIdleCheck(resultText, totalCost, durationMs)
+        this._scheduleTeamIdleCheck(resultText, totalCost, durationMs, isError)
         return
       }
 
@@ -1792,9 +1845,13 @@ export class ClaudeCodeSession {
       })
       this._teamActive = false
       this._teamIdleTimer = null
-      this._processStatus = 'idle'
+      // The team's turn is over: a failure it held is now settled, not pending.
+      if (this._commandFailureHeld) this._settledCommandFailure = isError
+      this._failedLocalCommandThisTurn = false
+      this._commandFailureHeld = false
+      this._processStatus = isError ? 'error' : 'idle'
       this._activity = undefined
-      this.emitStatusChanged('NEED_ACTION')
+      this.emitStatusChanged('NEED_ACTION', isError ? resultText : undefined)
       bus.emit(EventNames.SESSION_RESULT, {
         sessionId: this.claudeSessionId,
         taskId: this.taskId,
@@ -1805,7 +1862,7 @@ export class ClaudeCodeSession {
         // returns 0 here (total ≤ watermark), so this re-emit doesn't double-bill.
         costDelta: this.billableCostDelta(totalCost),
         duration: durationMs,
-        isError: false,
+        isError,
       }, ['main-ai', 'session-runner'], { source: 'session-runner' })
     }, ClaudeCodeSession.TEAM_IDLE_TIMEOUT_MS)
   }
@@ -2527,6 +2584,8 @@ export class ClaudeCodeSession {
     this._sawApiTimeoutThisTurn = false
     this.fullText = ''
     this._emittedAssistantText = false  // Fresh process — nothing streamed yet
+    this._failedLocalCommandThisTurn = false
+    this._settledCommandFailure = false
     this._emittedStreamKeys.clear()
     // A fresh CLI process can't finish the previous process's compaction, so its
     // placeholder will never get a boundary. Reopen the gate. (The seen-uuid set
@@ -2670,7 +2729,7 @@ export class ClaudeCodeSession {
         // A quiet exit reports nothing, so the lines it never took are handed back
         // here; only while this process is still the session's (a replaced one's
         // late exit must not take its successor's lines).
-        else if (this._transport === transport) this.reclaimUntakenLines('exit', true)
+        else if (this._transport === transport) this.handleQuietProcessExit()
       },
       })
     }
@@ -3130,6 +3189,21 @@ export class ClaudeCodeSession {
     // canonical recovery can fail entirely — the stream evidence must still apply.
     if (typeof streamEvidence !== 'string') {
       const fold = streamEvidence.fold
+      // Restored on its own: an automatic turn running at restart must keep the reported failure as its verdict.
+      if (fold.settledCommandErrorText) {
+        session._settledCommandFailure = true
+        session._localCommandErrorText = fold.settledCommandErrorText
+      }
+      if (fold.localCommandErrorText && fold.turnEnded) {
+        session._settledCommandFailure = true
+        session._localCommandErrorText = fold.localCommandErrorText
+      }
+      if (fold.localCommandErrorText && !fold.turnEnded) {
+        session._failedLocalCommandThisTurn = true
+        session._commandFailureHeld = fold.commandFailureHeld === true
+        session._localCommandErrorText = fold.localCommandErrorText
+        session._deferredOutcome = { isError: true, resultText: fold.localCommandErrorText }
+      }
       // Merge the fold's bg-task set on top of whatever canonical recovery seeded
       // (usually nothing). Terminal is terminal; isBackgrounded is sticky.
       for (const [taskId, t] of Object.entries(fold.bgTasks)) {
@@ -3331,8 +3405,7 @@ export class ClaudeCodeSession {
             if (code !== 0 && !session.resultEmitted) {
               session.handleRemoteProcessExit(code, stderr)
             } else if (session._transport === attachedTransport) {
-              // A quiet exit: hand back the lines this process never took.
-              session.reclaimUntakenLines('exit', true)
+              session.handleQuietProcessExit()
             }
           },
         })
@@ -3568,13 +3641,37 @@ export class ClaudeCodeSession {
     const onDispatch = () => {
       const isMidTurnInjection = this._processStatus === 'running'
         && (!this._turnResultEmitted || this._teamActive)
-      if (isMidTurnInjection) return
+      if (isMidTurnInjection) {
+        // Input after a held failure's own result starts the user's next turn: that
+        // failure is no longer its verdict (daemon-fold clears it on the same line).
+        // A failure already settled is never the verdict of what the user sends next.
+        const clearsHeld = this._commandFailureHeld && this._failedLocalCommandThisTurn
+        if (clearsHeld || this._settledCommandFailure) {
+          const held = {
+            _deferredOutcome: this._deferredOutcome, _failedLocalCommandThisTurn: this._failedLocalCommandThisTurn,
+            _settledCommandFailure: this._settledCommandFailure, _commandFailureHeld: this._commandFailureHeld,
+          }
+          const gen = this._turnGen
+          if (clearsHeld) {
+            this._deferredOutcome = undefined
+            this._failedLocalCommandThisTurn = false
+            this._commandFailureHeld = false
+          }
+          this._settledCommandFailure = false
+          undoDispatch = () => {
+            if (this._transport === transport && this._turnGen === gen && !this._settledCommandFailure && !this._commandFailureHeld) Object.assign(this, held)
+          }
+        }
+        return
+      }
       const before = {
         _processStatus: this._processStatus, _activity: this._activity,
         _foregroundActive: this._foregroundActive, _foregroundEvidenceV: this._foregroundEvidenceV,
         resultEmitted: this.resultEmitted, _turnResultEmitted: this._turnResultEmitted,
         _expectedTeardown: this._expectedTeardown, _turnGen: this._turnGen, _turnEdgeAt: this._turnEdgeAt,
         _deferredOutcome: this._deferredOutcome, _turnStartOffset: this._turnStartOffset,
+        _failedLocalCommandThisTurn: this._failedLocalCommandThisTurn, _localCommandErrorText: this._localCommandErrorText,
+        _settledCommandFailure: this._settledCommandFailure,
         _interruptRequested: this._interruptRequested,
         _askUserIntercepted: this._askUserIntercepted, _sawApiTimeoutThisTurn: this._sawApiTimeoutThisTurn,
         _toolInputFilePaths: this._toolInputFilePaths, _emittedStreamKeys: this._emittedStreamKeys,
@@ -3604,6 +3701,8 @@ export class ClaudeCodeSession {
       this._activity = undefined
       this.resultEmitted = false
       this._turnResultEmitted = false  // New turn starting — allow result emission
+      this._failedLocalCommandThisTurn = false
+      this._settledCommandFailure = false
       this._foregroundEvidenceV = Math.max(this._foregroundEvidenceV, transport.fileSize + 1)
       this.setForegroundActive(true)
       this._expectedTeardown = false   // Live turn on this process — a stale teardown mark must not mask a real crash
@@ -4597,7 +4696,7 @@ export class ClaudeCodeSession {
     // post-boot handler now survives, but it should never fire from here.
     this.livenessTimer = setInterval(async () => {
       try {
-        if (this.pid === null || this.resultEmitted) {
+        if (this.pid === null || (this.resultEmitted && !this.hasPipe)) {
           this.stopLivenessMonitor()
           return
         }
@@ -4700,6 +4799,7 @@ export class ClaudeCodeSession {
       // delivery stretch so partial streamed text can't suppress the next turn's
       // result-text fallback (#858). Every branch below is terminal for this turn.
       this._emittedAssistantText = false
+      this._failedLocalCommandThisTurn = false
       // The speed readout ends here too, or the row ticks "live" forever: a result
       // the tailer missed is a completed turn measured only in part; anything else
       // cut the turn short.
@@ -4834,6 +4934,29 @@ export class ClaudeCodeSession {
       clearInterval(this.livenessTimer)
       this.livenessTimer = null
     }
+  }
+
+  private handleQuietProcessExit(): void {
+    this.reclaimUntakenLines('exit', true)
+    this._bgTasks.clear()
+    this._teamActive = false
+    this._wakeupAt = 0
+    if (this._expectedTeardown) {
+      this._failedLocalCommandThisTurn = false
+      this._deferredOutcome = undefined
+      this._processStatus = 'stopped'
+    } else if (!this.resultEmitted && !this._turnResultEmitted) this._completeTurnOnIdle()
+    this.resultEmitted = true
+    this.pid = null
+    this._active = false
+    // Only detached work kept a settled failure 'running'; with the process gone the failure is what remains.
+    if (this._processStatus !== 'error' && !this._expectedTeardown) this._processStatus = this._settledCommandFailure ? 'error' : 'idle'
+    this._activity = undefined
+    const sid = this.claudeSessionId
+    if (sid) void import('../core/session-tracker.js').then(({ updateSessionRecord }) =>
+      updateSessionRecord(sid, { pid: undefined }),
+    ).catch(() => {})
+    this.stopLivenessMonitor()
   }
 
   private stopMonitoring(): void {
@@ -5190,6 +5313,8 @@ export class ClaudeCodeSession {
       && this._turnResultEmitted && !this.resultEmitted && !this._teamActive && this._isReplayedByOffset() !== true) {
       // The old turn may have just ended while the delivery was queued; the ordered marker re-establishes the new turn boundary.
       this._turnResultEmitted = false
+      this._failedLocalCommandThisTurn = false
+      this._settledCommandFailure = false
       this._deferredOutcome = undefined
       this._onTurnStartEdge('user-message', true)
     }
@@ -5215,6 +5340,8 @@ export class ClaudeCodeSession {
               sessionId: this.claudeSessionId, taskId: this.taskId,
             })
             this._turnResultEmitted = false
+            // A team still holds this turn: its failed command stays the verdict (daemon-fold keeps it across init too).
+            if (!this._commandFailureHeld) this._failedLocalCommandThisTurn = false
             // ── init-after-result IS a turn-start edge (incident ed347bde, 2026-08-05) ──
             // The CLI can pick up a queued mid-turn send the instant the previous
             // turn's result lands (128ms in that incident) WITHOUT ever going idle,
@@ -5404,7 +5531,10 @@ export class ClaudeCodeSession {
                 const { updateSessionRecord } = await import('../core/session-tracker.js')
                 await updateSessionRecord(newId, { model: initModel })
               }
-              this.emitStatusChanged('IN_PROGRESS')
+              // The persist above is async: a turn that failed at once (a native command
+              // settles within milliseconds of init) has already recorded its error, and
+              // this late write would replace it with a message-less one.
+              if (this._processStatus !== 'error') this.emitStatusChanged('IN_PROGRESS')
               // A transfer waits for this, not for sessionReady: by now the record
               // carries the id the CLI really runs under and its queue moved with it.
               const attemptId = this.transferAttemptId
@@ -6098,6 +6228,31 @@ export class ClaudeCodeSession {
       case 'assistant': {
         const msg = event as StreamMessageEvent
         if (!Array.isArray(msg.message?.content)) break
+        if (!msg.parent_tool_use_id && msg.local_command_outcome?.kind === 'failed') {
+          if (!firstSightingOfLine(this._seenCompactionLineUuids, msg.uuid)) break
+          if (this._isReplayedByOffset() !== true) {
+            this._failedLocalCommandThisTurn = true
+            this._localCommandErrorText = msg.message.content.filter(block => block.type === 'text').map(block => block.text ?? '').join('\n')
+            this._deferredOutcome = { ...this._deferredOutcome, isError: true, resultText: this._localCommandErrorText }
+            this._commandFailureHeld = false
+          }
+          if (this._isReplayedByOffset() !== true) {
+            this._compactionNoticeOpen = false
+            if (this.claudeSessionId) noteSuppressedErrorReason(this.claudeSessionId, {
+              reason: 'api_error', message: this._localCommandErrorText, at: Date.now(),
+            })
+          }
+          const message = msg.message.content.filter(block => block.type === 'text').map(block => block.text ?? '').join('\n')
+          if (message) {
+            bus.emit(EventNames.SESSION_SYSTEM_EVENT, {
+              sessionId: this.claudeSessionId, taskId: this.taskId,
+              variant: 'error' as const, message,
+              ...(msg.local_command_run?.command === 'compact' && this._isReplayedByOffset() !== true ? { progress: false } : {}),
+              ...(msg.uuid ? { uuid: msg.uuid } : {}),
+            }, ['main-ai'], { source: 'session-runner', urgency: 'urgent' })
+          }
+          break
+        }
         const msgId = msg.message?.id ?? ''
         const parentToolUseId = msg.parent_tool_use_id ?? undefined
         const subagentType = parentToolUseId ? (msg.subagent_type ?? undefined) : undefined
@@ -6623,9 +6778,9 @@ export class ClaudeCodeSession {
               log.session.info('followup result after settled turn — closing followup cycle to idle', {
                 sessionId: this.claudeSessionId, taskId: this.taskId,
               })
-              this._processStatus = 'idle'
+              this._processStatus = this._settledCommandFailure ? 'error' : 'idle'
               this._activity = undefined
-              this.emitStatusChanged('NEED_ACTION')
+              this.emitStatusChanged('NEED_ACTION', this._settledCommandFailure ? this._localCommandErrorText : undefined)
               this._idleDebt = Math.min(this._idleDebt + 1, 4)
               // Final hand-back: the turn's own NEED_ACTION flip was skipped
               // while detached work ran (server.ts detachedBgActive guard), and
@@ -6633,21 +6788,7 @@ export class ClaudeCodeSession {
               // the phase directly — deliberately NOT a SESSION_RESULT re-emit,
               // which would double-run triage. No-ops when the phase already
               // settled (ordinary sessions with no detached work).
-              if (this.taskId) {
-                const followupTaskId = this.taskId
-                const followupSid = this.claudeSessionId ?? undefined
-                const turnGen = this._turnGen
-                import('../core/phase.js').then(({ applySessionPhase }) =>
-                  applySessionPhase(followupTaskId, 'session:result', 'session-runner:followup-closure', {
-                    sessionId: followupSid, turnGen,
-                  }),
-                ).catch((err) => {
-                  log.session.warn('followup-closure phase flip failed', {
-                    sessionId: followupSid, taskId: followupTaskId,
-                    error: err instanceof Error ? err.message : String(err),
-                  })
-                })
-              }
+              this._handBackFollowupPhase()
             }
           }
           break
@@ -6732,10 +6873,14 @@ export class ClaudeCodeSession {
           // subagent was live, completed as a success and the failure vanished.
           // A user stop is never an error, whatever the CLI's is_error says.
           const stoppedByUser = this.consumeInterruptRequest()
+          // A stop after the failed command's own result ends only the work after it (daemon-fold keepsFailure).
+          const keepsFailure = this._commandFailureHeld && this._failedLocalCommandThisTurn
+          this._commandFailureHeld = this._failedLocalCommandThisTurn
           this._deferredOutcome = {
-            isError: result.is_error === true && !stoppedByUser,
-            ...(stoppedByUser ? { interrupted: true } : {}),
-            resultText: typeof result.result === 'string' && result.result ? result.result : undefined,
+            isError: keepsFailure || ((result.is_error === true || this._failedLocalCommandThisTurn) && !stoppedByUser
+              && !['aborted_streaming', 'aborted_tools'].includes(String(result.terminal_reason))),
+            ...(!keepsFailure && (stoppedByUser || ['aborted_streaming', 'aborted_tools'].includes(String(result.terminal_reason))) ? { interrupted: true } : {}),
+            resultText: result.result || (this._failedLocalCommandThisTurn ? this._localCommandErrorText : undefined),
             totalCost: result.total_cost_usd,
             duration: result.duration_ms,
           }
@@ -6754,7 +6899,7 @@ export class ClaudeCodeSession {
           && this._lastResultCost !== undefined
           && result.total_cost_usd !== undefined
           && result.total_cost_usd === this._lastResultCost
-          && !result.is_error) {
+          && !result.is_error && result.num_turns !== 0 && !this._failedLocalCommandThisTurn) {
           // Dump the full raw record so we can diagnose *why* the CLI made zero API calls.
           // Fields to look at next time: subtype, stop_reason, num_turns, duration_api_ms,
           // usage, mcp_servers. A `num_turns: 0` with `duration_api_ms: 0` means the CLI
@@ -6796,7 +6941,7 @@ export class ClaudeCodeSession {
         this._emittedAssistantText = false
 
         // Extract error messages from the result (e.g. "No conversation found with session ID: ...")
-        let resultText = result.result ?? this.fullText
+        let resultText = this._failedLocalCommandThisTurn ? (result.result || this._localCommandErrorText) : (result.result ?? this.fullText)
         const resultErrors = Array.isArray((result as { errors?: unknown }).errors)
           ? ((result as { errors?: string[] }).errors)
           : undefined
@@ -6819,10 +6964,17 @@ export class ClaudeCodeSession {
         // whose flag was already spent): the CLI's own error test excludes these reasons.
         const reason = (result as { terminal_reason?: unknown }).terminal_reason
         const abortedTurn = reason === 'aborted_streaming' || reason === 'aborted_tools'
-        const effectiveIsError = result.is_error && !isSoftEdeError && !userInterrupted && !abortedTurn
+        const failedLocalCommand = this._failedLocalCommandThisTurn
+        // A stop after the failed command's own result ends only the work after it (daemon-fold keepsFailure).
+        const keepsFailure = failedLocalCommand && this._commandFailureHeld
+        this._failedLocalCommandThisTurn = false
+        this._commandFailureHeld = false
+        this._deferredOutcome = undefined
+        const effectiveIsError = keepsFailure || ((failedLocalCommand || (result.is_error && !isSoftEdeError)) && !userInterrupted && !abortedTurn)
+        this._settledCommandFailure = failedLocalCommand && effectiveIsError
 
         let conversationLost = false
-        if (effectiveIsError && resultErrors?.length) {
+        if (effectiveIsError && resultErrors?.length && !(failedLocalCommand && isSoftEdeError)) {
           let errorMsg = resultErrors.join('; ')
           // Add cwd hint — Claude CLI uses cwd to resolve session storage path,
           // so a renamed/moved project directory causes "No conversation found"
@@ -6911,7 +7063,7 @@ export class ClaudeCodeSession {
             this._processStatus = 'running'
             this._activity = 'Waiting for scheduled wakeup'
           } else {
-            this._processStatus = 'idle'  // Turn done, process alive, waiting for next writeMessage()
+            this._processStatus = effectiveIsError ? 'error' : 'idle'
             this._activity = undefined
           }
           this.resultEmitted = false  // Ready for next turn
@@ -7094,6 +7246,12 @@ export class ClaudeCodeSession {
             sessionId: this.claudeSessionId, taskId: this.taskId, resultLength: resultText?.length ?? 0,
           })
           this.emitStatusChanged('IN_PROGRESS')
+          // The team holds this turn open: its command failure stays the verdict of later
+          // results until the user's next input, as daemon-fold's commandFailureHeld does.
+          if (failedLocalCommand && effectiveIsError) {
+            this._failedLocalCommandThisTurn = true
+            this._commandFailureHeld = true
+          }
           bus.emit(EventNames.SESSION_RESULT, {
             sessionId: this.claudeSessionId,
             taskId: this.taskId,
@@ -7104,14 +7262,14 @@ export class ClaudeCodeSession {
             duration: result.duration_ms,
             isError: effectiveIsError ?? false,
             teamActive: true,
-            ...(userInterrupted ? { interrupted: true } : {}),
+            ...(userInterrupted && !effectiveIsError ? { interrupted: true } : {}),
             ...resultUsageFields,
           }, ['main-ai', 'session-runner'], { source: 'session-runner' })
 
           // Schedule team-idle check: periodically checks if subagent JSONL files
           // are still being written. Only clears _teamActive when all teammates
           // have been idle for the full timeout period.
-          this._scheduleTeamIdleCheck(resultText, result.total_cost_usd, result.duration_ms)
+          this._scheduleTeamIdleCheck(resultText, result.total_cost_usd, result.duration_ms, effectiveIsError)
         } else {
           // Detached bg still working: the reply is delivered (real turn-over)
           // but the task must not flip NEED_ACTION and the status hint stays
@@ -7121,7 +7279,7 @@ export class ClaudeCodeSession {
           // turn's own final result (no re-arm → wakeup expired) hands back.
           const detachedBgActive = this._detachedBgCount() > 0
           const wakeupPending = this._wakeupArmed()
-          this.emitStatusChanged(detachedBgActive || wakeupPending ? 'IN_PROGRESS' : 'NEED_ACTION')
+          this.emitStatusChanged(detachedBgActive || wakeupPending ? 'IN_PROGRESS' : 'NEED_ACTION', effectiveIsError ? resultText : undefined)
           log.session.info('session result emitted', { sessionId: this.claudeSessionId, taskId: this.taskId, resultLength: resultText?.length ?? 0, detachedBgActive, wakeupPending })
           // retryExhausted: terminal upstream retry-exhaustion signature. Text match
           // (shared with session-auto-continue — keep ONE signature list) covers the
@@ -7144,7 +7302,7 @@ export class ClaudeCodeSession {
             duration: result.duration_ms,
             isError: effectiveIsError ?? false,
             retryExhausted,
-            ...(userInterrupted ? { interrupted: true } : {}),
+            ...(userInterrupted && !effectiveIsError ? { interrupted: true } : {}),
             ...(detachedBgActive ? { detachedBgActive: true } : {}),
             ...(wakeupPending ? { wakeupPending: true } : {}),
             ...resultUsageFields,
@@ -7613,7 +7771,10 @@ export class ClaudeCodeSession {
         emitSessionStatusChanged,
         updateSessionRecord,
       } = await import('../core/session-tracker.js')
-      const record = await updateSessionRecord(sessionId, updates)
+      const record = await updateSessionRecord(sessionId, {
+        ...updates,
+        ...(updates.process_status === 'error' ? { pid: this.hasPipe ? this.pid ?? undefined : undefined } : {}),
+      })
       // When the C2 gate strips our status, `record` still carries the
       // snapshot's previous verdict. Publishing it as 'session-runner' turned a
       // stale 'running' at turn end into a fresh turn-start edge, which wiped
@@ -9388,7 +9549,9 @@ export class SessionRunner {
             const isError = event.name === EventNames.SESSION_ERROR
               || (eventData<'session:result'>(event) as { isError?: boolean }).isError === true
             const errorMessage = isError
-              ? ((eventData<'session:error'>(event) as { error?: string }).error ?? 'Unknown error').slice(0, 1000)
+              ? (event.name === EventNames.SESSION_RESULT
+                ? eventData<'session:result'>(event).result || 'Unknown error'
+                : eventData<'session:error'>(event).error || 'Unknown error').slice(0, 1000)
               : undefined
             const cliSession = this.findSessionByClaudeId(sessionId)
             // ACP sessions: the worker stays alive between turns — a turn-end
@@ -9404,6 +9567,7 @@ export class SessionRunner {
             import('../core/session-tracker.js').then(({ updateSessionRecord }) => {
               updateSessionRecord(sessionId, {
                 process_status: status,
+                ...(status === 'error' && cliSession?.hasPipe && cliSession.processPid ? { pid: cliSession.processPid } : {}),
                 errorMessage: status === 'error' ? errorMessage : undefined,
                 activity: status === 'running' ? cliSession?.activity : undefined,
                 last_status_change: new Date().toISOString(),

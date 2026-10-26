@@ -408,6 +408,44 @@ describe('readSessionHistory', () => {
     expect(messages[messages.length - 1].text).toBe('answer');
   });
 
+  it('keeps failed local commands as error rows in both transcript dialects', async () => {
+    const text = 'Error during compaction: API Error: 400 Input is too long.';
+    const canonical = {
+      type: 'system', subtype: 'local_command', uuid: 'command-uuid',
+      timestamp: '2025-01-01T00:00:01Z', commandOutcome: { kind: 'failed' },
+      content: `<local-command-stderr>${text}</local-command-stderr>`,
+    };
+    const stream = {
+      type: 'assistant', uuid: 'command-uuid', timestamp: canonical.timestamp,
+      local_command_outcome: { kind: 'failed' }, local_command_source: canonical.content,
+      message: { id: 'different-stream-id', role: 'assistant', model: '<synthetic>', content: [{ type: 'text', text }] },
+    };
+    for (const rows of [[canonical], [stream], [canonical, stream]]) {
+      const messages = parseSessionMessages(rows.map(row => JSON.stringify(row)).join('\n'));
+      expect(messages).toHaveLength(1);
+      expect(messages[0]).toMatchObject({ msgId: 'command-uuid', role: 'system', systemVariant: 'error', text });
+    }
+    const escaped = parseSessionMessages(JSON.stringify({ ...canonical, content: '<local-command-stderr>Limit &lt;32&gt; &amp; a&amp;lt;b</local-command-stderr>' }));
+    expect(escaped[0].text).toBe('Limit <32> & a&lt;b');
+    const stdout = parseSessionMessages(JSON.stringify({ ...canonical, content: `<local-command-stdout>${text}</local-command-stdout>` }));
+    expect(stdout[0].text).toBe(text);
+    const success = parseSessionMessages(JSON.stringify({ ...canonical, commandOutcome: { kind: 'completed' } }));
+    expect(success).toEqual([]);
+  });
+
+  it('preserves command errors at the end of dense history and after a retry', () => {
+    const text = 'Error during compaction: API Error: 400 Input is too long.';
+    const rows = Array.from({ length: 400 }, (_, i) => msg(`a${i}`, 'assistant', `Prior reply ${i}`));
+    const failed = (uuid: string) => ({
+      type: 'system', subtype: 'local_command', uuid, commandOutcome: { kind: 'failed' },
+      content: `<local-command-stderr>${text}</local-command-stderr>`,
+    });
+    const messages = parseSessionMessages([...rows, failed('failure-1'), failed('failure-2')].map(row => JSON.stringify(row)).join('\n'));
+    expect(messages).toHaveLength(402);
+    expect(messages.slice(-2).map(row => row.msgId)).toEqual(['failure-1', 'failure-2']);
+    expect(messages.slice(-2).every(row => row.systemVariant === 'error' && row.text === text)).toBe(true);
+  });
+
   it('marks tools whose tool_result carried is_error (failed ≠ ✓ after reload)', async () => {
     await writeJsonl('s-toolerr', '/test', [
       { type: 'assistant', timestamp: '2025-01-01T00:00:00Z', message: { id: 'a1', role: 'assistant', content: [

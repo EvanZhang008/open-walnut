@@ -221,6 +221,22 @@ describe('expireStaleErrorNotifications', () => {
     expect(await resolvedOfKey('logerr:session:abc')).toBe('expired');
   });
 
+  it('a failed command on a live CLI stays unresolved across the error edge and boot sweep', async () => {
+    await seedError('error:live-command', { recoveryKey: 'session:live-command' });
+    await createSessionRecord('live-command', '', 'demo', undefined, { pid: 6161 });
+    await updateSessionRecord('live-command', { process_status: 'error', pid: 6161, errorMessage: 'Command failed' });
+    expect((await expireStaleErrorNotifications()).deadSession).toBe(0);
+    expect(await resolvedOfKey('error:live-command')).toBeUndefined();
+  });
+
+  it('a live error loses its notification when its pid dies without a status change', async () => {
+    await createSessionRecord('live-error-dies', '', 'demo', undefined, { pid: 6162 });
+    await updateSessionRecord('live-error-dies', { process_status: 'error', pid: 6162 });
+    await seedError('error:live-error-dies', { recoveryKey: 'session:live-error-dies' });
+    await updateSessionRecord('live-error-dies', { pid: undefined });
+    await vi.waitFor(async () => expect(await resolvedOfKey('error:live-error-dies')).toBe('expired'));
+  });
+
   it('LIVE PATH: the death TRANSITION itself expires them, before any sweep runs', async () => {
     // The sweep above is only the backlog. The enforcement point is the terminal
     // transition in session-tracker: a session dying MID-FLIGHT must retire its own

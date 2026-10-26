@@ -428,7 +428,7 @@ export function appendSystemBlock(
 ): StreamingBlock[] {
   const row: StreamingSystemBlock = {
     type: 'system', variant: ev.variant, message: ev.message, detail: ev.detail,
-    ...(ev.progress ? { progress: true } : {}),
+    ...(ev.progress !== undefined ? { progress: ev.progress } : {}),
     ...(ev.uuid ? { uuid: ev.uuid } : {}),
     ...(ev.replacesMsgId ? { replacesMsgId: ev.replacesMsgId } : {}),
   };

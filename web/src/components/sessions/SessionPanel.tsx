@@ -2598,7 +2598,10 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
         })()}
         {!historyLoading && (ps === 'stopped' || ps === 'error') && !session?.archived
           && historyMessages.filter(m => m.role === 'assistant').length === 0
-          && historyMessages.some(m => m.role === 'user') && (
+          && historyMessages.some(m => m.role === 'user')
+          // A turn whose only output is an error row (a failed native command) is not
+          // empty: its error is already on screen, and a restart would not fix it.
+          && !historyMessages.some(m => m.role === 'system' && m.systemVariant === 'error') && (
           <div className="session-error-banner" style={{ background: 'color-mix(in srgb, var(--warning) 8%, transparent)', borderColor: 'color-mix(in srgb, var(--warning) 25%, transparent)' }}>
             <span className="session-error-banner-icon"><WarningTriangleIcon size={14} /></span>
             <span className="session-error-banner-text">Session returned empty — Claude may have encountered an issue.</span>

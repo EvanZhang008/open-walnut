@@ -40,6 +40,23 @@ describe('reconcileSessions', () => {
     expect(result.reconnectable).toEqual([])
   })
 
+  it('reattaches a failed command whose live pid was explicitly preserved', async () => {
+    await createSessionRecord('live-command-error', '', 'demo', undefined, { pid: process.pid });
+    await updateSessionRecord('live-command-error', { process_status: 'error', pid: process.pid, errorMessage: 'Command failed' });
+    const result = await reconcileSessions();
+    expect(result.reconnectable.map(s => s.claudeSessionId)).toEqual(['live-command-error']);
+    expect((await listSessions())[0].process_status).toBe('error');
+    expect((await listSessions())[0].pid).toBe(process.pid);
+  });
+
+  it('keeps the command failure diagnosis when its CLI died while the server was away', async () => {
+    await createSessionRecord('dead-command-error', '', 'demo', undefined, { pid: 999999999 });
+    await updateSessionRecord('dead-command-error', { process_status: 'error', pid: 999999999, errorMessage: 'Workspace access denied.' });
+    await reconcileSessions();
+    expect((await listSessions())[0]).toMatchObject({ process_status: 'error', errorMessage: 'Workspace access denied.' });
+    expect((await listSessions())[0].pid).toBeUndefined();
+  });
+
   it('returns 0 when all sessions are already stopped', async () => {
     await createSessionRecord('s1', 'task-1', 'proj')
     await updateSessionRecord('s1', { process_status: 'stopped' })

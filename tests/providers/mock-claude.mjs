@@ -1348,6 +1348,36 @@ if (outputFormat === 'stream-json') {
       return;
     }
 
+    if (effectiveMessage === 'failed-compact-command' || effectiveMessage === 'failed-local-command') {
+      const command = effectiveMessage === 'failed-compact-command' ? 'compact' : 'inspect';
+      const sid = outputSessionId;
+      const uuid = randomUUID();
+      const timestamp = new Date().toISOString();
+      const text = command === 'compact' ? 'Error during compaction: API Error: 400 Input is too long.' : 'Unable to inspect the workspace: access denied.';
+      const content = `<local-command-stderr>${text}</local-command-stderr>`;
+      const emit = line => process.stdout.write(JSON.stringify({ ...line, session_id: sid }) + '\n');
+      const root = process.env.MOCK_CLAUDE_TRANSCRIPT_DIR ?? process.env.MOCK_CLAUDE_TURN_TRANSCRIPT_DIR;
+      if (root) {
+        const dir = path.join(root, process.cwd().replace(/[^a-zA-Z0-9]/g, '-'));
+        fs.mkdirSync(dir, { recursive: true });
+        const userUuid = randomUUID();
+        const shared = { sessionId: sid, cwd: process.cwd(), timestamp, isSidechain: false };
+        fs.appendFileSync(path.join(dir, `${sid}.jsonl`), [
+          { ...shared, type: 'user', uuid: userUuid, parentUuid: transcriptParent, message: { role: 'user', content: `<command-name>/${command}</command-name>` } },
+          { ...shared, type: 'system', subtype: 'local_command', uuid, parentUuid: userUuid, content, commandRun: { command, args: '' }, commandOutcome: { kind: 'failed' } },
+        ].map(row => JSON.stringify(row)).join('\n') + '\n');
+        transcriptParent = uuid;
+      }
+      if (command === 'compact') emit({ type: 'system', subtype: 'status', status: 'compacting', uuid: randomUUID() });
+      emit({ type: 'assistant', uuid, timestamp, local_command_source: content, local_command_run: { command, args: '' }, local_command_outcome: { kind: 'failed' }, message: {
+        id: randomUUID(), role: 'assistant', model: '<synthetic>', content: [{ type: 'text', text }], stop_reason: 'end_turn', usage: { input_tokens: 0, output_tokens: 0 },
+      } });
+      emit({ type: 'result', subtype: 'success', is_error: false, num_turns: 0, result: text, usage: { input_tokens: 0, output_tokens: 0 }, total_cost_usd: snapshotCostUsd });
+      emit({ type: 'system', subtype: 'session_state_changed', state: 'idle' });
+      armSnapshotNextTurn();
+      return;
+    }
+
     // 2a.0c. "replayed-turn" — reproduce upstream ACP issue #453 (fix #858): a
     //        cache-replayed turn answers on the `result` line ALONE. Zero output
     //        tokens, no stream_event deltas, no consolidated `assistant` message.

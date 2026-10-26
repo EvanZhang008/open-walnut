@@ -47,7 +47,7 @@
  * ratchet in tests/providers/fold-checkpoint-core.test.ts pins the logic's text
  * to this number and fails until you decide.
  */
-export const FOLD_CHECKPOINT_FORMAT = 1
+export const FOLD_CHECKPOINT_FORMAT = 4
 
 export interface FoldCheckpointTaskState {
   tasks: Record<string, { t: number }>
@@ -66,7 +66,7 @@ export interface FoldCheckpointDeps {
 
 export function createFoldCheckpoint(deps: FoldCheckpointDeps) {
   const fs = deps.fs
-  const FORMAT = 1
+  const FORMAT = 4
   const TAIL_BYTES = 4096
   const MIN_BYTES = typeof deps.minBytes === 'number' ? deps.minBytes : 8 * 1024 * 1024
   const log = deps.log || function () {}

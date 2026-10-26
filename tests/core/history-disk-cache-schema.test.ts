@@ -83,7 +83,7 @@ describe('history disk cache: schema stamp', () => {
   })
 
   it('drops an entry stamped with any other version', async () => {
-    for (const schema of [1, 2, 4, '3', null]) {
+    for (const schema of [1, 2, 3, 5, '4', null]) {
       await fs.writeFile(entryPath(), JSON.stringify({
         schema, messages: staleMessages(), cachedAt: 'then', mtimeMs: 5,
       }), 'utf-8')
@@ -129,7 +129,7 @@ describe('history disk cache: schema stamp', () => {
     await fs.writeFile(entryPath('corrupt'), '{not json', 'utf-8')
     expect(await readHistoryCache('corrupt')).toBeNull()
     // A stamped file with no messages is not a cache hit either.
-    await fs.writeFile(entryPath('empty'), JSON.stringify({ schema: 3, messages: [], cachedAt: 'x' }), 'utf-8')
+    await fs.writeFile(entryPath('empty'), JSON.stringify({ schema: 4, messages: [], cachedAt: 'x' }), 'utf-8')
     expect(await readHistoryCache('empty')).toBeNull()
   })
 })

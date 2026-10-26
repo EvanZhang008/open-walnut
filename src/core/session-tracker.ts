@@ -828,7 +828,7 @@ export async function getActiveSessionsByHost(): Promise<Record<string, SessionR
 export async function getAllAliveSessionsByHost(): Promise<Record<string, SessionRecord[]>> {
   const candidates = (await readStoreView()).filter((s) => {
     if (s.archived) return false;
-    if (s.process_status === 'stopped' || s.process_status === 'error') return false;
+    if (s.process_status === 'stopped' || (s.process_status === 'error' && s.pid == null)) return false;
     // Embedded/SDK sessions have no OS process: they don't count toward host limits
     if (s.provider === 'embedded' || s.provider === 'sdk') return false;
     return true;
@@ -927,7 +927,7 @@ export async function checkSessionLimit(
   const candidates = (await readStoreView()).filter((s) => {
     if (s.archived) return false;
     if (s.process_status === 'stopped') return false;
-    if (s.process_status === 'error') return false;
+    if (s.process_status === 'error' && s.pid == null) return false;
     // Embedded/SDK sessions have no OS process: they don't count toward host limits
     if (s.provider === 'embedded' || s.provider === 'sdk') return false;
     return true;
@@ -952,7 +952,7 @@ export async function checkSessionLimit(
     if (sKey !== key) continue;
     if (s.process_status === 'running') {
       runningSessions.push(s);
-    } else if (s.process_status === 'idle') {
+    } else if (s.process_status === 'idle' || s.process_status === 'error') {
       idleSessions.push(s);
     }
   }
@@ -2054,6 +2054,7 @@ function applyUpdateToSession(
   if (isNoOpUpdate(session, updates)) return false;
 
   const prevStatus = session.process_status;
+  const prevPid = session.pid;
   const now = new Date().toISOString();
   Object.assign(session, updates);
 
@@ -2072,7 +2073,8 @@ function applyUpdateToSession(
   }
 
   // Terminal-state PID clear. Prevents stale PID orphan kills when OS recycles PIDs.
-  if (isTerminalSession(session) && session.pid != null) {
+  const livePidSupplied = session.process_status === 'error' && updates.pid != null && updates.pid === session.pid;
+  if (updates.process_status !== undefined && isTerminalSession(session) && session.pid != null && !livePidSupplied) {
     log.session.info(logLabel, {
       sessionId: session.claudeSessionId, pid: session.pid,
       process_status: session.process_status,
@@ -2126,9 +2128,9 @@ function applyUpdateToSession(
   // permission clear above: a dropped tunnel is not death, and the remote CLI may
   // still produce the clean result that legitimately recovers these.
   if (
-    updates.process_status
-    && updates.process_status !== prevStatus
+    ((updates.process_status && updates.process_status !== prevStatus) || (prevPid != null && session.pid == null))
     && isTerminalSession(session)
+    && !livePidSupplied
     && session.status_reason !== 'remote_unreachable'
   ) {
     expireErrorNotificationsOnDeath(session.claudeSessionId);
@@ -2801,7 +2803,7 @@ export async function completeTaskSessions(
         const session = rowToSession(row);
         initializeStatusVersion(session);
         const beforeStatus = canonicalStatusProjection(session);
-        if (isTerminalSession(session)) continue;
+        if (isTerminalSession(session) && session.pid == null) continue;
         // Already-converged record: stopped with no PID — rewriting it is pure
         // churn. 'stopped' is not terminal per isTerminalSession (only 'error'
         // is), so without this skip every server boot re-wrote the same ~1000

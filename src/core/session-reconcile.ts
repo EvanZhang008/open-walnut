@@ -57,6 +57,7 @@
  * incident-C shape), and the conditional write re-checks under the write lock.
  */
 
+import { foldLine, initialFoldState } from '../providers/daemon-fold.js'
 import os from 'node:os'
 import path from 'node:path'
 import { log } from '../logging/index.js'
@@ -89,6 +90,11 @@ export interface SessionTailFold {
    *  file (the daemon's `v` coordinate) when the caller supplied a base offset;
    *  undefined otherwise. */
   lastResult: { isError: boolean; numTurns?: number; endOffset?: number } | null
+  localCommandErrorText?: string
+  /** A failed command already reported for the last user turn: automatic turns after it keep it as their verdict. */
+  settledCommandErrorText?: string
+  /** The pending failure's own result arrived while background work held the turn. */
+  commandFailureHeld?: boolean
   /** idle observed after lastResult with no 'running' since (the CLI settled). */
   trailingIdle: boolean
   /** Last observed CLI session state in the window. */
@@ -267,6 +273,10 @@ export function foldSessionTail(
   // A synthetic anchor sits at the end of an already consumed turn: the main turn's result is already outside the window.
   let sawNormalResult = opts?.syntheticAnchor === true
   let followupResult = false
+  let failedLocalCommand = false
+  let localCommandErrorText = ''
+  let commandFold = initialFoldState(0)
+  if (opts?.syntheticAnchor) { commandFold.sawAnchor = true; commandFold.turnActive = true; commandFold.sawNormalResult = true }
   // Pass 1: locate the turn anchor — the LAST real user line in the window.
   // Skipped in syntheticAnchor mode: the window start IS the anchor.
   let anchorIdx = -1
@@ -287,9 +297,13 @@ export function foldSessionTail(
   // Keep detached work that spans turns inside the window first; the turn-end verdict still looks only past the last anchor.
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]
+    if (i === lines.length - 1 && line === '') continue
     if (lineEndOffset !== undefined) lineEndOffset += Buffer.byteLength(line, 'utf8') + 1
     if (!line.trim()) continue
-    if (i <= anchorIdx && !/"type"\s*:\s*"(?:user|system)"/.test(line)) continue
+    commandFold = foldLine(commandFold, line, lineEndOffset ?? i + 1)
+    failedLocalCommand = commandFold.failedLocalCommand === true
+    if (i <= anchorIdx && !/"type"\s*:\s*"(?:user|system|result)"/.test(line)
+      && !line.includes('local_command_outcome')) continue
     let parsed: Record<string, unknown>
     try { parsed = JSON.parse(line) as Record<string, unknown> } catch {
       // Synthetic mode: an unparseable non-empty line is a torn/mid-write line —
@@ -326,6 +340,12 @@ export function foldSessionTail(
       }
       continue
     }
+    if (i <= anchorIdx && type === 'assistant' && !parsed.parent_tool_use_id
+      && (parsed.local_command_outcome as { kind?: string } | undefined)?.kind === 'failed') {
+      failedLocalCommand = true
+      const content = (parsed.message as { content?: Array<{ type?: string; text?: string }> } | undefined)?.content
+      localCommandErrorText = Array.isArray(content) ? content.filter(b => b.type === 'text').map(b => b.text ?? '').join('\n') : ''
+    }
     if (i <= anchorIdx && type !== 'system') continue
     if (i <= anchorIdx && !['task_started', 'task_progress', 'task_updated', 'task_notification', 'background_tasks_changed'].includes(String(parsed.subtype))) continue
 
@@ -351,12 +371,15 @@ export function foldSessionTail(
         // verdict. Without this, a turn started by a plain-text FIFO send
         // (invisible in legacy stream files without delivery markers) gets
         // judged by the PREVIOUS turn's stale result (inc-1783644415695).
-        if (fold.lastResult) { fold.lastResult = null; fold.trailingIdle = false }
+        fold.lastResult = null
+        fold.trailingIdle = false
         followupResult = false
       } else if (subtype === 'session_state_changed') {
         const s = parsed.state as SessionTailFold['cliState']
         fold.cliState = s
-        if (s === 'idle') { if (fold.lastResult) fold.trailingIdle = true }
+        if (s === 'idle') {
+          if (fold.lastResult || failedLocalCommand) fold.trailingIdle = true
+        }
         else if (s === 'running') {
           // Same invalidation as init: the CLI went back to work after that
           // result, so it did not end the turn. Mid-turn workflow results
@@ -430,15 +453,20 @@ export function foldSessionTail(
       const notification = (parsed.origin as { kind?: string } | undefined)?.kind === 'task-notification'
       followupResult = notification && sawNormalResult
       if (!notification) sawNormalResult = true
-      // Same aborted-turn rule as daemon-fold: a stopped turn is not an error.
-      const aborted = parsed.terminal_reason === 'aborted_streaming' || parsed.terminal_reason === 'aborted_tools'
+      // daemon-fold already judged this line (aborted turns, notifications, command failures): one rule, not two copies.
+      failedLocalCommand = commandFold.failedLocalCommand === true
       fold.lastResult = {
-        isError: parsed.is_error === true && !aborted,
+        isError: commandFold.lastResult?.isError === true,
         numTurns: parsed.num_turns as number | undefined,
         ...(lineEndOffset !== undefined ? { endOffset: lineEndOffset } : {}),
       }
       fold.trailingIdle = false
     } else if (type === 'assistant') {
+      if (!parsed.parent_tool_use_id && (parsed.local_command_outcome as { kind?: string } | undefined)?.kind === 'failed') {
+        failedLocalCommand = true
+        const content = (parsed.message as { content?: Array<{ type?: string; text?: string }> } | undefined)?.content
+        localCommandErrorText = Array.isArray(content) ? content.filter(b => b.type === 'text').map(b => b.text ?? '').join('\n') : ''
+      }
       const blocks = (parsed.message as { content?: unknown } | undefined)?.content
       if (Array.isArray(blocks)) {
         for (const b of blocks) {
@@ -458,14 +486,30 @@ export function foldSessionTail(
     }
   }
 
+  // A settled failure's text is reported only once its turn is over: during an automatic turn it would read as a new pending failure.
+  if (localCommandErrorText && (failedLocalCommand
+    || (commandFold.settledCommandFailure && !commandFold.turnActive && commandFold.lastResult?.isError))) fold.localCommandErrorText = localCommandErrorText
+  if (localCommandErrorText && commandFold.settledCommandFailure) fold.settledCommandErrorText = localCommandErrorText
+  if (failedLocalCommand && commandFold.commandFailureHeld) fold.commandFailureHeld = true
   for (const t of Object.values(fold.bgTasks)) {
     if (t.endedPerLevel || BG_TERMINAL.has(t.status)) continue
     if (t.isBackgrounded) fold.detachedBgCount++
     else fold.gatingBgCount++
   }
 
+  if (failedLocalCommand || (commandFold.settledCommandFailure && commandFold.lastResult?.isError)) {
+    fold.lastResult = commandFold.lastResult ? {
+      isError: commandFold.lastResult.isError,
+      numTurns: commandFold.lastResult.numTurns,
+      ...(baseOffset !== undefined ? { endOffset: commandFold.lastResult.endOffset } : {}),
+    } : null
+    fold.trailingIdle = commandFold.trailingIdle
+    fold.turnEnded = !commandFold.turnActive
+    if (fold.turnEnded) fold.workStatus = 'error'
+    return fold
+  }
   if (fold.lastResult) {
-    if (fold.lastResult.isError) {
+    if (fold.lastResult.isError && (!failedLocalCommand || !commandFold.turnActive)) {
       // An error result may not get a companion idle (the CLI can bail) — the
       // error itself is terminal evidence.
       fold.turnEnded = true
@@ -604,6 +648,7 @@ export async function fetchStreamTailFold(
       base = nl >= 0 ? start + Buffer.byteLength(content.slice(0, nl + 1), 'utf8') : size
       content = nl >= 0 ? content.slice(nl + 1) : ''
     }
+    content = content.slice(0, content.lastIndexOf('\n') + 1)
     const fold = foldSessionTail(content, base)
     if (fold.foundTurnAnchor) return { fold, fileSize: size, ...(streamEpoch !== undefined ? { streamEpoch } : {}) }
     if (start === 0) return 'no-turn-anchor'                 // whole file, still no real user line
@@ -650,7 +695,10 @@ export async function fetchStreamTailFold(
     base = nl >= 0 ? watermark + Buffer.byteLength(content.slice(0, nl + 1), 'utf8') : size
     content = nl >= 0 ? content.slice(nl + 1) : ''
   }
+  const partialTail = content.slice(content.lastIndexOf('\n') + 1)
+  content = content.slice(0, content.lastIndexOf('\n') + 1)
   const fold = foldSessionTail(content, base, { syntheticAnchor: true })
+  if (partialTail.trim()) { fold.sawTurnActivity = true; fold.turnEnded = false; delete fold.workStatus }
   log.session.info('reconcile: whale-turn watermark fold', {
     sessionId, host: host ?? '__local__', watermark, fileSize: size,
     turnEnded: fold.turnEnded, workStatus: fold.workStatus,
@@ -931,14 +979,14 @@ export async function reconcileProcessStatus(
         // exactly that pair. Same-epoch restamps are no-ops.
         ...(evidence.streamEpoch ? { streamEpoch: evidence.streamEpoch } : {}),
         ...(to === 'error'
-          ? { errorMessage: 'Turn ended with error — reconciled from daemon stream file' }
+          ? { errorMessage: fold.localCommandErrorText || 'Turn ended with error — reconciled from daemon stream file' }
           : {}),
         // Clear the PID only when the process is confirmed DEAD (recycled-PID
         // orphan-kill defense). While alive — including an error verdict with
         // a live CLI + FIFO — keep it: clearing forced the next send onto the
         // cold --resume path, spawning a SECOND CLI against the same session
         // (split-brain, inc-1783644415695). The live error path keeps pid too.
-        ...(alive ? {} : { pid: undefined }),
+        ...(alive ? { pid: record.pid } : { pid: undefined }),
       },
       (current) => {
         if (!sameTurn() || current.statusRevision !== record.statusRevision) return false

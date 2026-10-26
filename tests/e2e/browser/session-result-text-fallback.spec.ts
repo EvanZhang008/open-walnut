@@ -46,7 +46,7 @@ test.beforeAll(async () => {
  * the home-column assertions below are untouched.
  */
 async function openQuickStart(page: Page): Promise<void> {
-  await page.goto('/')
+  await page.evaluate((url) => { window.location.href = url }, `http://localhost:${TEST_PORT}/`)
   await page.waitForLoadState('networkidle')
   await openDraftOnCwd(page, `${fixtureRoot}/projects/walnut`)
 }
@@ -112,6 +112,58 @@ test('a turn whose answer is only on the result line renders that text exactly o
   // for this port — upstream #858's contract is "deliver the text to the client",
   // which is what the assertion above pins.
 })
+
+for (const commandFailure of [
+  { prompt: 'failed-compact-command', error: 'Error during compaction: API Error: 400 Input is too long.', name: 'compaction' },
+  { prompt: 'failed-local-command', error: 'Unable to inspect the workspace: access denied.', name: 'local command' },
+]) {
+test(`a failed native ${commandFailure.name} stays an error after reload and the next turn recovers`, async ({ page }) => {
+  test.setTimeout(90_000)
+  await page.setViewportSize({ width: 1280, height: 800 })
+  await openQuickStart(page)
+  const taskId = await sendQuickStart(page, commandFailure.prompt)
+  const sessionId = await sessionIdForTask(page, taskId)
+  const panel = page.locator(`[data-session-id="${sessionId}"]`)
+  const error = commandFailure.error
+  await expect(panel.locator('.session-system-text').filter({ hasText: error })).toHaveCount(1)
+  await expect(panel.getByText('Compacting context...', { exact: true })).toHaveCount(0)
+  await expect.poll(async () => {
+    const response = await page.request.get(`/api/sessions/${sessionId}`)
+    return (await response.json()).session.process_status
+  }).toBe('error')
+  await expect.poll(async () => {
+    const response = await page.request.get(`/api/sessions/${sessionId}`)
+    return (await response.json()).session.errorMessage
+  }).toBe(error)
+  await expect(panel.getByText(/no cause was recorded/)).toHaveCount(0)
+  await expect(panel.getByText(/Session returned empty/)).toHaveCount(0)
+  const history = await page.request.get(`/api/sessions/${sessionId}/history`)
+  expect((await history.json()).messages).toEqual(expect.arrayContaining([
+    expect.objectContaining({ role: 'system', systemVariant: 'error', text: error }),
+  ]))
+  await page.screenshot({ path: `${SCREENSHOT_DIR}/${commandFailure.prompt}-${test.info().project.name}-failed.png`, scale: 'css' })
+  await page.reload()
+  // A reload rebuilds the panel from history, which takes several seconds on a loaded machine.
+  await expect(panel.locator('.session-system-text').filter({ hasText: error })).toHaveCount(1, { timeout: 20_000 })
+  await expect(panel.getByText(/Session returned empty/)).toHaveCount(0)
+  const input = panel.locator('textarea').last()
+  await input.fill('snapshot-clean-turn:recovered after command failure')
+  await input.press('Enter')
+  // A send right after a failed turn reaches a session the panel shows in error,
+  // so the reply can take several seconds on a loaded machine.
+  await expect(panel.getByText('recovered after command failure', { exact: true })).toHaveCount(1, { timeout: 20_000 })
+  await expect.poll(async () => {
+    const response = await page.request.get(`/api/sessions/${sessionId}`)
+    return (await response.json()).session.process_status
+  }).toBe('idle')
+  await input.fill(commandFailure.prompt)
+  await input.press('Enter')
+  await expect(panel.locator('.session-system-text').filter({ hasText: error })).toHaveCount(2, { timeout: 20_000 })
+  await page.reload()
+  await expect(panel.locator('.session-system-text').filter({ hasText: error })).toHaveCount(2, { timeout: 20_000 })
+  await page.screenshot({ path: `${SCREENSHOT_DIR}/${commandFailure.prompt}-${test.info().project.name}-repeated.png`, scale: 'css' })
+})
+}
 
 test('a normal streaming turn still renders its reply exactly once (no double-emit)', async ({ page }) => {
   test.setTimeout(60_000)

@@ -351,7 +351,7 @@ class SessionStreamBuffer {
     this.resetIfTurnEnded(entry, sessionId)
     const row: StreamingSystemBlock = {
       type: 'system', variant, message,
-      ...(detail ? { detail } : {}), ...(progress ? { progress: true } : {}),
+      ...(detail ? { detail } : {}), ...(progress !== undefined ? { progress } : {}),
       ...(uuid ? { uuid } : {}),
       ...(replacesMsgId ? { replacesMsgId } : {}),
     }

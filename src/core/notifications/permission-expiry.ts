@@ -227,7 +227,7 @@ export async function expireStaleErrorNotifications(
         const session = await getSessionByClaudeId(sid).catch(() => null);
         dead = !session
           || (session.status_reason !== 'remote_unreachable'
-            && (session.process_status === 'stopped' || session.process_status === 'error'));
+            && (session.process_status === 'stopped' || (session.process_status === 'error' && session.pid == null)));
         checkedSessions.set(sid, dead);
       }
       if (dead) deadKeys.add(record.recoveryKey!);

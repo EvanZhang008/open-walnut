@@ -439,6 +439,15 @@ describe('appendSystemBlock', () => {
     expect(blocks).toHaveLength(1);
   });
 
+  it('a failed compact command replaces its progress without matching error prose', () => {
+    const blocks = appendSystemBlock(appendSystemBlock([], COMPACTING), {
+      variant: 'error', message: 'Compaction failed: unable to reduce input.', progress: false, uuid: 'failed-command',
+    });
+    expect(blocks).toEqual([{
+      type: 'system', variant: 'error', message: 'Compaction failed: unable to reduce input.', detail: undefined, progress: false, uuid: 'failed-command',
+    }]);
+  });
+
   it('a second real compaction gets its own row', () => {
     let blocks = appendSystemBlock([], COMPACTING);
     blocks = appendSystemBlock(blocks, COMPACTED);

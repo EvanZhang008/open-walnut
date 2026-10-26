@@ -201,6 +201,158 @@ describe('foldLine — turn anchors', () => {
 // ── result / idle / running ──
 
 describe('foldLine — result and state transitions', () => {
+  it('uses the native command outcome when a zero-turn result claims success', () => {
+    const failure = JSON.stringify({
+      type: 'assistant', local_command_outcome: { kind: 'failed' },
+      message: { role: 'assistant', model: '<synthetic>', content: [{ type: 'text', text: 'Error during compaction: API Error: 400 Input is too long.' }] },
+    });
+    const lines = [userStringEvent('/compact'), initEvent(), failure, resultEvent(false, 0), stateEvent('idle')];
+    expect(fold(lines).lastResult?.isError).toBe(true);
+    expect(foldSessionTail(lines.join('\n')).lastResult?.isError).toBe(true);
+    expect(fold(lines).turnActive).toBe(false);
+    expect(foldSessionTail([userEvent(), failure].join('\n')).localCommandErrorText).toContain('Input is too long.');
+    const echoed = [userEvent(), failure, walnutInjectedEvent('mid-turn input'), stateEvent('running'), resultEvent(false, 0), stateEvent('idle')];
+    expect(fold(echoed).lastResult?.isError).toBe(true);
+    expect(foldSessionTail(echoed.join('\n')).lastResult?.isError).toBe(true);
+    const notification = [userEvent(), failure, notificationOriginResult(), walnutInjectedEvent('input'), resultEvent(false, 0), stateEvent('idle')];
+    expect(foldSessionTail(notification.join('\n')).lastResult?.isError).toBe(true);
+    expect(fold(notification).lastResult?.isError).toBe(true);
+    const retry = [...lines, userEvent('retry'), initEvent(), resultEvent(), stateEvent('idle')];
+    expect(fold(retry).lastResult?.isError).toBe(false);
+    expect(foldSessionTail(retry.join('\n')).lastResult?.isError).toBe(false);
+  });
+
+  it('settles a command failure on idle without a result and clears it for the next turn', () => {
+    const failure = JSON.stringify({ type: 'assistant', local_command_outcome: { kind: 'failed' },
+      message: { content: [{ type: 'text', text: 'Command failed' }] } });
+    const lines = [userEvent(), failure, stateEvent('idle')];
+    expect(fold(lines).lastResult?.isError).toBe(true);
+    expect(fold(lines).turnActive).toBe(false);
+    expect(foldSessionTail(lines.join('\n')).workStatus).toBe('error');
+    const retry = [...lines, userEvent('retry'), initEvent(), resultEvent(), stateEvent('idle')];
+    expect(fold(retry).lastResult?.isError).toBe(false);
+    expect(foldSessionTail(retry.join('\n')).lastResult?.isError).toBe(false);
+    const notification = [userEvent(), failure, notificationOriginResult(), stateEvent('running'), resultEvent(false, 0), stateEvent('idle')];
+    expect(fold(notification).lastResult?.isError).toBe(true);
+    expect(foldSessionTail(notification.join('\n')).lastResult?.isError).toBe(true);
+  });
+
+  it('keeps a withheld failure through notification work and settles it only after gating drains', () => {
+    const failure = JSON.stringify({ type: 'assistant', local_command_outcome: { kind: 'failed' }, message: { content: [{ type: 'text', text: 'Command failed' }] } });
+    const active = [userEvent(), taskStarted('gate'), failure, resultEvent(false, 0)];
+    expect(fold(active).turnActive).toBe(true);
+    expect(foldSessionTail(active.join('\n')).turnEnded).toBe(false);
+    for (const rows of [
+      [...active, taskDone('gate'), stateEvent('running'), initEvent(), notificationOriginResult(), stateEvent('idle')],
+      [userEvent(), taskStarted('gate'), resultEvent(), failure, taskDone('gate'), stateEvent('idle')],
+      [userEvent(), taskStarted('gate'), failure, stateEvent('idle'), taskDone('gate')],
+    ]) {
+      expect(fold(rows).lastResult?.isError).toBe(true);
+      expect(fold(rows).turnActive).toBe(false);
+      expect(foldSessionTail(rows.join('\n')).workStatus).toBe('error');
+    }
+  });
+
+  it('clears a settled failure on an automatic turn and a new marker after a notification result', () => {
+    const failure = JSON.stringify({ type: 'assistant', local_command_outcome: { kind: 'failed' }, message: { content: [{ type: 'text', text: 'Command failed' }] } });
+    const noIdle = [userEvent(), failure, resultEvent(false, 0), initEvent(), stateEvent('running'), resultEvent(), stateEvent('idle')];
+    expect(fold(noIdle).lastResult?.isError).toBe(false);
+    expect(foldSessionTail(noIdle.join('\n')).lastResult?.isError).toBe(false);
+    const automatic = [userEvent(), failure, resultEvent(false, 0), stateEvent('idle'), initEvent(), stateEvent('running'), resultEvent(), stateEvent('idle')];
+    expect(fold(automatic).lastResult?.isError).toBe(false);
+    expect(foldSessionTail(automatic.join('\n')).lastResult?.isError).toBe(false);
+    const next = [userEvent(), taskStarted('gate'), failure, resultEvent(false, 0), taskDone('gate'), stateEvent('running'), initEvent(), notificationOriginResult(), userEvent('next'), resultEvent(), stateEvent('idle')];
+    expect(fold(next).lastResult?.isError).toBe(false);
+    expect(foldSessionTail(next.join('\n')).lastResult?.isError).toBe(false);
+  });
+
+  it('keeps the failure completion offset stable and does not reuse idle for a new failure', () => {
+    const failure = JSON.stringify({ type: 'assistant', local_command_outcome: { kind: 'failed' }, message: { content: [{ type: 'text', text: 'Command failed' }] } });
+    const settled = [userEvent(), failure, stateEvent('idle')];
+    const first = fold(settled);
+    const bookkeeping = JSON.stringify({ type: 'system', subtype: 'status', status: null });
+    expect(fold([...settled, bookkeeping]).lastResult?.endOffset).toBe(first.lastResult?.endOffset);
+    const bytes = settled.join('\n') + '\n';
+    expect(foldSessionTail(bytes, 0).lastResult?.endOffset).toBe(Buffer.byteLength(bytes));
+    const next = [...settled, initEvent(), failure];
+    expect(fold(next).turnActive).toBe(true);
+    expect(foldSessionTail(next.join('\n')).turnEnded).toBe(false);
+    const synthetic = [taskStarted('gate'), failure, resultEvent(false, 0)];
+    expect(foldSessionTail(synthetic.join('\n'), 0, { syntheticAnchor: true }).turnEnded).toBe(false);
+  });
+
+  it('a detached notification cannot recover the failed user turn', () => {
+    const failure = JSON.stringify({ type: 'assistant', local_command_outcome: { kind: 'failed' }, message: { content: [{ type: 'text', text: 'Workspace access denied.' }] } });
+    const rows = [userEvent(), taskStarted('detached'), taskUpdated('detached', { is_backgrounded: true }), failure, resultEvent(false, 0), stateEvent('idle'), taskDone('detached'), stateEvent('running'), notificationOriginResult()];
+    expect(fold(rows).lastResult?.isError).toBe(true);
+    expect(foldSessionTail(rows.join('\n')).workStatus).toBe('error');
+    expect(foldSessionTail(rows.join('\n')).localCommandErrorText).toBe('Workspace access denied.');
+    const recovered = [...rows, userEvent('retry'), resultEvent(), stateEvent('idle')];
+    expect(fold(recovered).lastResult?.isError).toBe(false);
+  });
+
+  it('does not restore the previous command failure as pending during an automatic turn', () => {
+    const failure = JSON.stringify({ type: 'assistant', local_command_outcome: { kind: 'failed' }, message: { content: [{ type: 'text', text: 'Workspace access denied.' }] } })
+    const rows = [userEvent(), failure, resultEvent(false, 0), stateEvent('idle'), initEvent(), stateEvent('running')]
+    const tail = foldSessionTail(rows.join('\n'))
+    expect(tail.turnEnded).toBe(false)
+    expect(tail.localCommandErrorText).toBeUndefined()
+    expect(fold(rows).failedLocalCommand).toBe(false)
+  })
+
+  it('keeps a settled failure for restore while an automatic turn runs, apart from the pending text', () => {
+    const failure = JSON.stringify({ type: 'assistant', local_command_outcome: { kind: 'failed' }, message: { content: [{ type: 'text', text: 'Workspace access denied.' }] } })
+    const rows = [userEvent(), failure, resultEvent(false, 0), stateEvent('idle'), initEvent(), stateEvent('running')]
+    const tail = foldSessionTail(rows.join('\n'))
+    expect(tail.localCommandErrorText).toBeUndefined()
+    expect(tail.settledCommandErrorText).toBe('Workspace access denied.')
+    const retried = foldSessionTail([...rows, userEvent('retry')].join('\n'))
+    expect(retried.settledCommandErrorText).toBeUndefined()
+  })
+
+  it('input after a held failure result starts a turn the failure does not judge', () => {
+    const failure = JSON.stringify({ type: 'assistant', local_command_outcome: { kind: 'failed' }, message: { content: [{ type: 'text', text: 'Workspace access denied.' }] } })
+    const held = [userEvent(), taskStarted('gate'), failure, resultEvent(false, 0)]
+    expect(fold(held).turnActive).toBe(true)
+    const rows = [...held, userEvent('continue'), initEvent(), resultEvent(), taskDone('gate'), stateEvent('idle')]
+    expect(fold(rows).lastResult?.isError).toBe(false)
+    expect(fold(rows).failedLocalCommand).toBe(false)
+    const tail = foldSessionTail(rows.join('\n'))
+    expect(tail.workStatus).toBe('agent_complete')
+    expect(tail.localCommandErrorText).toBeUndefined()
+    expect(tail.settledCommandErrorText).toBeUndefined()
+  })
+
+  it.each(['aborted_streaming', 'aborted_tools'])('a stop after a held failure result keeps the failure (%s)', reason => {
+    const failure = JSON.stringify({ type: 'assistant', local_command_outcome: { kind: 'failed' }, message: { content: [{ type: 'text', text: 'Workspace access denied.' }] } })
+    const stopped = JSON.stringify({ type: 'result', is_error: true, terminal_reason: reason })
+    const rows = [userEvent(), taskStarted('gate'), failure, resultEvent(false, 0), stopped, taskDone('gate', 'stopped'), stateEvent('idle')]
+    expect(fold(rows).lastResult?.isError).toBe(true)
+    expect(fold(rows).turnActive).toBe(false)
+    expect(foldSessionTail(rows.join('\n')).workStatus).toBe('error')
+    const beforeOwnResult = [userEvent(), taskStarted('gate'), failure, stopped, taskDone('gate', 'stopped'), stateEvent('idle')]
+    expect(fold(beforeOwnResult).lastResult?.isError).toBe(false)
+  })
+
+  it.each(['aborted_streaming', 'aborted_tools'])('an aborted notification keeps the main command failure (%s)', reason => {
+    const failure = JSON.stringify({ type: 'assistant', local_command_outcome: { kind: 'failed' }, message: { content: [{ type: 'text', text: 'Workspace access denied.' }] } })
+    const notification = JSON.stringify({ type: 'result', is_error: true, terminal_reason: reason, origin: { kind: 'task-notification' } })
+    const rows = [userEvent(), failure, resultEvent(false, 0), stateEvent('idle'), stateEvent('running'), notification]
+    expect(fold(rows).lastResult?.isError).toBe(true)
+    expect(foldSessionTail(rows.join('\n')).workStatus).toBe('error')
+  })
+
+  it('does not interpret ordinary error prose or a subagent command as a failed main turn', () => {
+    for (const row of [
+      { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'Error during compaction: API Error: 400 Input is too long.' }] } },
+      { type: 'assistant', parent_tool_use_id: 'child-tool', local_command_outcome: { kind: 'failed' } },
+      { type: 'assistant', local_command_outcome: { kind: 'completed' } },
+    ]) {
+      const lines = [userEvent(), JSON.stringify(row), resultEvent(false, 0), stateEvent('idle')];
+      expect(fold(lines).lastResult?.isError).toBe(false);
+      expect(foldSessionTail(lines.join('\n')).lastResult?.isError).toBe(false);
+    }
+  });
   it('result without trailing idle does not settle (companion idle must arrive)', () => {
     const s = fold([userEvent(), resultEvent()])
     expect(s.lastResult).not.toBe(null)

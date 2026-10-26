@@ -41,7 +41,7 @@ import type { SessionHistoryMessage } from './session-history.js';
  * question sent while a turn ran has no anchor, number or title, and an idle
  * session kept serving its version-2 parse after the deploy that added it.
  */
-const HISTORY_CACHE_SCHEMA = 3;
+const HISTORY_CACHE_SCHEMA = 4;
 
 let dirEnsured = false;
 

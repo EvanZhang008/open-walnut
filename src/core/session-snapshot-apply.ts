@@ -223,11 +223,13 @@ export async function captureSnapshotReadGuard(sessionId: string): Promise<(curr
   const record = await getSessionByClaudeId(sessionId)
   const revision = record?.statusRevision
   const epoch = record?.streamEpoch
+  const pid = record?.pid
   const live = sessionRunner.findSessionByClaudeId(sessionId)
   const turn = live?.turnGen
   return (current) => !!record && !current.archived
     && current.statusRevision === revision
     && current.streamEpoch === epoch
+    && current.pid === pid
     && sessionRunner.findSessionByClaudeId(sessionId) === live
     && live?.turnGen === turn
 }
@@ -381,7 +383,11 @@ export async function applySnapshot(
     return { outcome: 'skipped', reason: 'connection-read-superseded', projected }
   }
   const recoveringConnection = connectionError(record) && canRecoverConnection?.(record) === true
-  const duplicate = snapshot.v === gate && projected === actual && !recoveringConnection
+  if (snapshot.cliState !== 'dead' && snapshot.v === gate && record.pid == null
+    && record.status_reason === 'daemon_reported_exit') return { outcome: 'skipped', reason: 'confirmed-death' }
+  const pidChanged = snapshot.cliState === 'dead' ? record.pid != null
+    : projected === 'error' && snapshot.pid != null && snapshot.pid !== record.pid
+  const duplicate = snapshot.v === gate && projected === actual && !recoveringConnection && !pidChanged
 
   // From here the snapshot is live evidence for this session: it is covered.
   markSnapshotCovered(sessionId, snapshot.v)
@@ -525,8 +531,10 @@ export async function applySnapshot(
   const updates: Record<string, unknown> = {
     process_status: projected,
     last_status_change: now,
-    status_reason: 'snapshot_projection',
+    status_reason: snapshot.cliState === 'dead' && projected === 'error' ? 'daemon_reported_exit' : 'snapshot_projection',
     status_changed_by: 'snapshot',
+    ...(snapshot.cliState === 'dead' ? { pid: undefined }
+      : projected === 'error' && snapshot.pid ? { pid: snapshot.pid } : {}),
   }
   if (recoveringConnection && record.activity === 'Reconnecting to remote host...') updates.activity = undefined
   // Turn-END watermark only (C15) — a mid-turn 'running' projection writes the
@@ -648,6 +656,8 @@ export async function applySnapshot(
       // projection (the old predicate's `||` made a mere status difference
       // sufficient).
       if (currentOffset > snapshot.v) return false
+      if (snapshot.cliState !== 'dead' && currentOffset === snapshot.v && current.pid == null
+        && current.status_reason === 'daemon_reported_exit') return false
 
       // (2) EQUAL-v TIEBREAKER: at an unchanged watermark there are no new
       // stream bytes, so a stream-derived projection carries no evidence the
@@ -672,10 +682,12 @@ export async function applySnapshot(
         && runnerEndedTurnAt(snapshot.v)
       // 连接恢复不产生新流字节，但只有读取前后的身份未变时才能推翻连接错误。
       if (currentOffset === snapshot.v && !outOfBand && !clockDriven && !recoveringConnection
-        && !settlesRunnerTurnEnd) return false
+        && !settlesRunnerTurnEnd && !pidChanged) return false
 
       // (3) Something must actually change (a first-sight epoch stamp counts).
       return recoveringConnection || current.process_status !== projected
+        || (snapshot.cliState === 'dead' ? current.pid != null
+          : projected === 'error' && snapshot.pid != null && snapshot.pid !== current.pid)
         || (adoptWatermark && currentOffset < snapshot.v)
         || (typeof updates.streamEpoch === 'string' && current.streamEpoch !== updates.streamEpoch)
     },

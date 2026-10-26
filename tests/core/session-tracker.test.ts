@@ -17,7 +17,7 @@ vi.mock('../../src/utils/session-liveness.js', () => ({
   //  - local with pid → alive
   //  - local without pid → dead
   isSessionProcessAlive: async (s: { process_status?: string; host?: string; pid?: number | null }) => {
-    if (s.process_status === 'stopped' || s.process_status === 'error') return false;
+    if (s.process_status === 'stopped' || (s.process_status === 'error' && s.pid == null)) return false;
     if (s.host) return true;
     return s.pid != null;
   },
@@ -83,6 +83,33 @@ afterEach(async () => {
       await new Promise(r => setTimeout(r, 50));
     }
   }
+});
+
+describe('live command failure PID', () => {
+  it('counts a live failed CLI as idle capacity', async () => {
+    await createSessionRecord('capacity-error', '', 'demo', undefined, { pid: 4242 });
+    await updateSessionRecord('capacity-error', { process_status: 'error', pid: 4242 });
+    expect((await getAllAliveSessionsByHost()).local.map(s => s.claudeSessionId)).toContain('capacity-error');
+    expect(await checkSessionLimit(undefined, undefined, { max_idle: 2 })).toMatchObject({ totalAlive: 1, idleCount: 1 });
+  });
+  it('task completion stops a live CLI even after its command failed', async () => {
+    const owner = await import('../../src/core/sessions/owner-stop.js');
+    const stop = vi.spyOn(owner, 'stopThroughOwner').mockResolvedValue({ stopped: true } as never);
+    const { completeTaskSessions } = await import('../../src/core/session-tracker.js');
+    await createSessionRecord('complete-live-error', '', 'demo', undefined, { pid: 4242 });
+    await updateSessionRecord('complete-live-error', { process_status: 'error', pid: 4242 });
+    expect(await completeTaskSessions(['complete-live-error'])).toBe(1);
+    expect(stop).toHaveBeenCalledWith(expect.objectContaining({ claudeSessionId: 'complete-live-error' }), 'maintenance', 'task_completed');
+    expect((await getSessionByClaudeId('complete-live-error'))?.pid).toBeUndefined();
+    stop.mockRestore();
+  });
+
+  it('keeps an explicitly supplied live pid across failure and metadata writes, but clears it on death', async () => {
+    await createSessionRecord('command-failure-live', '', 'demo', undefined, { pid: 4242 });
+    expect((await updateSessionRecord('command-failure-live', { process_status: 'error', pid: 4242, errorMessage: 'Command failed' })).pid).toBe(4242);
+    expect((await updateSessionRecord('command-failure-live', { title: 'Failed command' })).pid).toBe(4242);
+    expect((await updateSessionRecord('command-failure-live', { process_status: 'error', pid: undefined })).pid).toBeUndefined();
+  });
 });
 
 describe('pending session stop requests', () => {

@@ -101,7 +101,7 @@ export async function isSessionProcessAlive(session: SessionRecord): Promise<boo
   // reconciler racing a cold --resume — consult the session-manager registry
   // themselves; changing the order here would also change the orphan-kill
   // sweep's target set, which is not safe.)
-  if (session.process_status === 'stopped' || session.process_status === 'error') return false
+  if (session.process_status === 'stopped' || (session.process_status === 'error' && session.pid == null)) return false
 
   // A host replica's rows are copies of the Mac's (replication/kinds/sessions.ts):
   // their process status is a label, never something to probe from here.

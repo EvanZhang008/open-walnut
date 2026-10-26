@@ -129,7 +129,7 @@ describe('fold checkpoint', () => {
       const good = JSON.parse(fs.readFileSync(jsonl + '.fold', 'utf8'))
       fs.writeFileSync(jsonl + '.fold', '{"v":1,"epo')
       expect(ck.load(jsonl)).toBeNull()
-      fs.writeFileSync(jsonl + '.fold', JSON.stringify({ ...good, v: 2 }))
+      fs.writeFileSync(jsonl + '.fold', JSON.stringify({ ...good, v: FOLD_CHECKPOINT_FORMAT - 1 }))
       expect(ck.load(jsonl)).toBeNull()
       fs.writeFileSync(jsonl + '.fold', JSON.stringify({ ...good, fold: { ...good.fold, v: good.boundary - 1 } }))
       expect(ck.load(jsonl)).toBeNull()
@@ -282,7 +282,7 @@ describe('fold checkpoint', () => {
       strip(daemon.match(/const BG_TRANSITION_CAP = .*/)![0]),
     ].join('\n')
     const logicHash = createHash('sha256').update(logic).digest('hex').slice(0, 16)
-    expect({ format: FOLD_CHECKPOINT_FORMAT, logicHash }).toEqual({ format: 1, logicHash: 'a8d549d1a5573961' })
+    expect({ format: FOLD_CHECKPOINT_FORMAT, logicHash }).toEqual({ format: 4, logicHash: '8481fc7d0f836865' })
 
     // The factory's own FORMAT is the one written.
     fs.writeFileSync(jsonl, content(20))
