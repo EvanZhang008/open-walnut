@@ -36,6 +36,7 @@ import { applySessionPhase, handBackTaskOnSessionEnd } from '../../src/core/phas
 import { sweepWaitUntil, trackedWaitUntil } from '../../src/core/task-wait-until.js'
 import { interruptedWaits, noteInterruptedWait } from '../../src/core/task-wait-resume.js'
 import { sendMessageToSession } from '../../src/core/session-message-queue.js'
+import { settleUserStatusSync } from '../../src/core/user-status-sync.js'
 
 const MOCK_CLI = path.resolve(import.meta.dirname, '../providers/mock-claude.mjs')
 const HOUR = 3_600_000
@@ -435,6 +436,8 @@ describe('turn ends that are not a plain result', () => {
     await new Promise((r) => setTimeout(r, 1200))
     expect((await task(a.taskId)).phase).toBe('IN_PROGRESS')
     await park(a, until1h)
+    // The park's own user-status write is not a phase edge of the follow-up turn.
+    await settleUserStatusSync()
     const seen = await phasesDuring(a.taskId, async () => {}, (s) => s.includes('IN_PROGRESS') && s[s.length - 1] !== 'IN_PROGRESS', 40_000)
     expect(seen).toEqual(['IN_PROGRESS', 'WAITING'])
     expect(await task(a.taskId)).toMatchObject({ phase: 'WAITING', wait_until: until1h })
@@ -452,6 +455,7 @@ describe('turn ends that are not a plain result', () => {
       await new Promise((r) => setTimeout(r, 1200))
       expect((await task(a.taskId)).phase).toBe('IN_PROGRESS')
       await park(a, new Date(Date.now() + HOUR).toISOString())
+      await settleUserStatusSync()
       const seen = await phasesDuring(a.taskId, async () => {}, (s) => s.includes('IN_PROGRESS') && s[s.length - 1] !== 'IN_PROGRESS', 40_000)
       expect(seen).toEqual(['IN_PROGRESS', 'NEED_ACTION'])
     } finally {
@@ -511,7 +515,9 @@ describe('what the task waited for, arriving inside an interrupting turn or as t
     } as never)
     expect((await task(a.taskId)).phase).toBe('IN_PROGRESS')
     await applySessionPhase(a.taskId, 'session:result', 'test', { sessionId: a.sid })
-    expect((await task(a.taskId)).phase).toBe('NEED_ACTION')
+    // The watch has fired before, so the clean end of its fire's turn is a standing routine
+    // going back to its wait (phase.ts), not a hand-back to the user.
+    expect((await task(a.taskId)).phase).toBe('WAITING')
   })
 
   it('the reply to its own request: Need Action (it is what it waited for)', async () => {
@@ -561,15 +567,20 @@ describe('a prompt for the human, and the way back to work', () => {
     expect((await task(b.taskId)).phase).toBe('NEED_ACTION')
   }, 60_000)
 
-  it('after a restored wait, the fire brings real work back (In Progress, then Need Action), and the task completes', async () => {
-    await park(a, new Date(Date.now() + HOUR).toISOString())
+  it('after a restored wait, a trigger that keeps firing is a standing routine: its fire turn ends back in Waiting, and the task completes', async () => {
+    const clock = new Date(Date.now() + HOUR).toISOString()
+    await park(a, clock)
     const restored = await phasesDuring(a.taskId, () => peer(a, 'ping').then(() => {}), ended)
     expect(restored).toEqual(['IN_PROGRESS', 'WAITING'])
     const fired = await phasesDuring(a.taskId, () => handleTriggerFired('__local__', {
       type: 'trigger.fired', id: trig, epoch: 'epoch-9', seq: 1, atMs: Date.now(),
       items: [{ id: 'run-18#done', title: 'run 18 finished' }], durationMs: 3, nextRunAtMs: Date.now() + 300_000,
     }), ended)
-    expect(fired).toEqual(['IN_PROGRESS', 'NEED_ACTION'])
+    // Its second fire: the watch keeps firing, so the task waits on the next one, not on the user
+    // (the first fire, above, handed it back: a one-time watch's fire is what it waited for).
+    expect(fired).toEqual(['IN_PROGRESS', 'WAITING'])
+    // Back on the clock it had when the fire came (the fire's move out of WAITING cleared it).
+    expect((await task(a.taskId)).wait_until).toBe(clock)
     const done = await req('POST', `/api/v1/tasks/${a.taskId}/complete`, {})
     expect(done.status, JSON.stringify(done.json)).toBeLessThan(300)
     expect((await task(a.taskId)).phase).toBe('COMPLETE')

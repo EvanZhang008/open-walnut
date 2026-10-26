@@ -72,7 +72,7 @@ describe('user status sync', () => {
     await createSessionRecord('sess-running-1', running.id, 'Acme')
     await updateSessionRecord('sess-running-1', { process_status: 'running' })
     await updateTask(running.id, { phase: 'IN_PROGRESS' })
-    // A turn that ended, the session's report says the work is done: its lead's turn, not the user's.
+    // A turn that ended and handed the task back (NEED_ACTION): it needs the user, with its words.
     await createSessionRecord('sess-ended-1', ended.id, 'Acme')
     await updateSessionRecord('sess-ended-1', { process_status: 'stopped' })
     await updateTask(ended.id, { phase: 'NEED_ACTION' })
@@ -85,11 +85,12 @@ describe('user status sync', () => {
       actions: [{ id: 'a', label: 'A' }, { id: 'b', label: 'B' }],
       sender: { sessionId: 'sess-asks-1', taskId: asks.id },
     } as never)
-    // An unanswered choice on the lead's Board about the task.
+    // An unanswered choice on the lead's Board about the task, handed back.
+    await updateTask(choice.id, { phase: 'NEED_ACTION' })
     await setBoardHtml(lead.id, `<html><body><walnut-choice id="c1" title="Which host?" options="a:Mac,b:Cloud" task="${choice.id}"></walnut-choice></body></html>`, { by: `task:${lead.id}` })
 
     expect((await statusOf(running.id, (t) => t.user_status!.state === 'working')).user_status).toMatchObject({ state: 'working' })
-    expect((await statusOf(ended.id, (t) => t.user_status!.state === 'waiting')).user_status).toMatchObject({ state: 'waiting', kind: 'lead', now: 'Shipped it.' })
+    expect((await statusOf(ended.id, (t) => t.user_status!.state === 'needs')).user_status).toMatchObject({ state: 'needs', source: 'session', now: 'Shipped it.' })
     expect((await statusOf(asks.id, (t) => t.user_status!.state === 'needs')).user_status).toMatchObject({ state: 'needs', source: 'letter', ask: 'Pick a design' })
     expect((await statusOf(choice.id, (t) => t.user_status!.state === 'needs')).user_status).toMatchObject({ state: 'needs', source: 'choice', ask: 'Which host?' })
     expect((await statusOf(todo.id, (t) => t.user_status!.state === 'waiting')).user_status).toMatchObject({ kind: 'not-started' })
@@ -97,19 +98,20 @@ describe('user status sync', () => {
     // The phone's projection carries the same value.
     const { tasks } = await v1<{ tasks: { id: string; user_status?: { state: string } }[] }>('/tasks')
     expect(tasks.find((t) => t.id === asks.id)?.user_status?.state).toBe('needs')
-    expect(tasks.find((t) => t.id === ended.id)?.user_status?.state).toBe('waiting')
+    expect(tasks.find((t) => t.id === ended.id)?.user_status?.state).toBe('needs')
 
-    // The Org page counts by it: two need the user, not every NEED_ACTION task.
+    // The Org page counts by it: exactly the tasks whose phase is NEED_ACTION.
     const reports = await v1<{ rows: { project?: string; needs_you: number; running: number }[] }>('/org/reports')
     const acme = reports.rows.find((r) => (r.project ?? '').toLowerCase() === 'acme')
-    expect(acme?.needs_you).toBe(2)
+    expect(acme?.needs_you).toBe(3)
     expect(acme?.running).toBe(1)
 
     // Facts move, the status follows: the letter answered, the session stopped.
     // As letter-ops.ts answerLetterAndDeliver does: record, then announce (no session to deliver to here).
     await answerLetter(letter.id, { actionId: 'a' })
     bus.emit('human-inbox:answered', { letterId: letter.id, actionId: 'a' }, ['web-ui'], { source: 'human-inbox' })
-    await statusOf(asks.id, (t) => t.user_status!.state !== 'needs')
+    // Answered, the letter is no longer what it asks (its delivery would also start a turn).
+    await statusOf(asks.id, (t) => t.user_status!.source !== 'letter')
     // As the session runtime does when a turn ends: the record, then the event.
     await updateSessionRecord('sess-running-1', { process_status: 'stopped' })
     bus.emit(EventNames.SESSION_STATUS_CHANGED, { sessionId: 'sess-running-1', process_status: 'stopped' }, ['web-ui'], { source: 'session-tracker' })
@@ -131,7 +133,7 @@ describe('user status sync', () => {
     const row = after.tasks.find((t) => t.id === choice.id)
     if (row) expect(row.phase).toBe('COMPLETE')
     const org = await v1<{ rows: { project?: string; needs_you: number }[] }>('/org/reports')
-    expect(org.rows.find((r) => (r.project ?? '').toLowerCase() === 'acme')?.needs_you).toBe(0)
+    expect(org.rows.find((r) => (r.project ?? '').toLowerCase() === 'acme')?.needs_you).toBe(2)
     bus.unsubscribe('test-status-writes')
   }, 90_000)
 })

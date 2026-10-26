@@ -22,6 +22,10 @@ const noAlerts: AlertProbe = () => null
 // every open task carries one on a current server (src/core/user-status.ts).
 const handedBack = (waitingOn: string): Partial<Task> => ({ user_status: { state: 'waiting', kind: 'you', waitingOn } })
 
+// A task with a live prompt: its status reads Needs you (the server derives it from the prompt).
+const prompting = (ids: readonly string[]): Task[] => tasks.map((x) => (ids.includes(x.id)
+  ? { ...x, user_status: { state: 'needs' as const, source: 'prompt' as const, ask: 'Answer its question' } } : x))
+
 const tasks: Task[] = [
   t('main', 'Ask Walnut', 'IN_PROGRESS', { org_role: 'main', walnut_agent: true, updated_at: at(50) }),
   // Walnut: a lead, one running team, one handed back, a worker that asks a question.
@@ -69,13 +73,18 @@ describe('org channels', () => {
 
   it('puts a project whose work waits on a prompt first, with the prompt as its line', () => {
     const probe: AlertProbe = (task) => (task.id === 'w3' ? { kind: 'question' } : task.id === 't1' ? { kind: 'permission', tool: 'Bash' } : null)
-    const { main, rows } = buildChannels(buildOrgTree(tasks), tasks, probe)
+    const live = prompting(['w3', 't1'])
+    const { main, rows } = buildChannels(buildOrgTree(live), live, probe)
     expect(rows.map((r) => r.name).slice(0, 2)).toEqual(['Walnut', 'Tax'])
     expect(rows[0]!.state).toBe('alert')
     expect(rows[0]!.latest).toBe('Asks you: w3 title')
     expect(rows[1]!.latest).toBe('Wants approval (Bash): t1 title')
     expect(main.latest).toBe('4 VPs · 1 working · 2 need you')
     expect([rows[0]!.needs, rows[1]!.needs, main.needs]).toEqual([1, 1, 2])
+    // The count is the task's own status: a prompt its status does not read as Needs you yet
+    // (answered a moment ago, or not derived) counts nothing.
+    const stale = buildChannels(buildOrgTree(tasks), tasks, probe)
+    expect(stale.main.needs).toBe(0)
   })
 
   it('counts a lead\'s own prompt and a failed session as needing the user', () => {
@@ -162,8 +171,9 @@ describe('org channels', () => {
 
   it('lays a project\'s teams out by state, a team holding a prompt under Needs you', () => {
     const probe: AlertProbe = (task) => (task.id === 'w3' ? { kind: 'question' } : null)
-    const walnut = buildChannels(buildOrgTree(tasks), tasks, probe).rows[0]!
-    expect(teamColumns(walnut, tasks).map((c) => [c.label, c.items.map((i) => i.id)])).toEqual([
+    const live = prompting(['w3'])
+    const walnut = buildChannels(buildOrgTree(live), live, probe).rows[0]!
+    expect(teamColumns(walnut, live).map((c) => [c.label, c.items.map((i) => i.id)])).toEqual([
       ['Needs you', ['w2']], ['Working', ['w1']],
     ])
     const plain = buildChannels(buildOrgTree(tasks), tasks, noAlerts).rows[0]!

@@ -4,7 +4,7 @@
  * tests/e2e/task-wait-resume.test.ts.
  */
 import { describe, it, expect } from 'vitest'
-import { triggersHoldWait, waitExitCause } from '../../src/core/task-wait-resume.js'
+import { dropFireTurn, noteTurnSend, takeFireTurn, triggersHoldWait, triggersStanding, waitExitCause } from '../../src/core/task-wait-resume.js'
 import { isPersonSendSource, REOPENING_SEND_SOURCES } from '../../src/core/phase.js'
 
 describe('waitExitCause', () => {
@@ -61,5 +61,37 @@ describe('triggersHoldWait', () => {
     expect(triggersHoldWait([{ id: 't1', state: 'armed', fires: 4 }], at)).toBe(false)
     expect(triggersHoldWait([{ id: 't1', state: 'armed', fires: 3 }, { id: 't2', state: 'armed', fires: 1 }], at)).toBe(true)
     expect(triggersHoldWait([{ id: 't1', state: 'armed', fires: 9 }], undefined)).toBe(true)
+  })
+})
+
+describe('a standing routine\'s fire turn', () => {
+  const HOUR = 3600_000
+  it('remembers the clock the fire found, once, and only a future one', () => {
+    const later = new Date(Date.now() + HOUR).toISOString()
+    noteTurnSend('r1', true, false, later)
+    expect(takeFireTurn('r1')).toEqual({ waitUntil: later })
+    expect(takeFireTurn('r1')).toBeNull()
+    noteTurnSend('r2', true, false, new Date(Date.now() - 1000).toISOString())
+    expect(takeFireTurn('r2')).toEqual({ waitUntil: null })
+  })
+  it('a person\'s message, an error or a prompt makes the turn no routine\'s', () => {
+    noteTurnSend('r3', true, false, null)
+    noteTurnSend('r3', false, false)
+    expect(takeFireTurn('r3')).not.toBeNull()
+    noteTurnSend('r4', true, false, null)
+    noteTurnSend('r4', false, true)
+    expect(takeFireTurn('r4')).toBeNull()
+    noteTurnSend('r5', true, false, null)
+    dropFireTurn('r5')
+    expect(takeFireTurn('r5')).toBeNull()
+  })
+  it('a marker older than a fire turn can last is not trusted', () => {
+    noteTurnSend('r6', true, false, null)
+    expect(takeFireTurn('r6', Date.now() + 7 * HOUR)).toBeNull()
+  })
+  it('only a trigger that fired before stands', () => {
+    expect(triggersStanding([{ state: 'armed', fires: 1 }])).toBe(false)
+    expect(triggersStanding([{ state: 'armed', fires: 2 }])).toBe(true)
+    expect(triggersStanding([{ state: 'armed', fires: 5 }, { state: 'stopped', fires: 1 }])).toBe(false)
   })
 })

@@ -47,9 +47,9 @@ async function api<T = Record<string, unknown>>(method: string, p: string, body?
 }
 
 /**
- * Makes a task need the user the way a session does (an unanswered action_required letter
- * from it), then waits until the server's status sync wrote it: a turn that only ended
- * (NEED_ACTION) is waiting, never "waiting on the user" (src/core/user-status.ts).
+ * Makes a task need the user the way a session does: its turn ends handed back (the caller sets
+ * NEED_ACTION, the task's own status, src/core/user-status.ts) with an unanswered action_required
+ * letter from it, whose subject is the ask; then waits until the server's status sync wrote it.
  */
 async function waitUserState(taskId: string, state: string): Promise<void> {
   const until = Date.now() + 15_000
@@ -339,7 +339,9 @@ describe('/api/v1/org', () => {
       await createSessionRecord(brokenSid, broken.id, 'Walnut', WALNUT_HOME)
       await updateTaskRaw(broken.id, { session_id: brokenSid })
       await updateSessionRecord(brokenSid, { process_status: 'error' })
-      // As the session runtime does when a session fails: the record, then the status event.
+      // As the session runtime does when a session fails: the phase (session:error), the record,
+      // then the status event.
+      await updateTask(broken.id, { phase: 'NEED_ACTION' }, { source: 'api' })
       bus.emit(EventNames.SESSION_STATUS_CHANGED, { sessionId: brokenSid, process_status: 'error' }, ['web-ui'], { source: 'session-tracker' })
       const failed = await pendingOrgDigest(sid, told + 300)
       expect(failed!.text).toContain('- Walnut: "fails" stopped on an error')

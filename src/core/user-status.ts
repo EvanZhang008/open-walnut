@@ -3,22 +3,21 @@
  * needs me, what not, and what exactly it is waiting for"). Four states, the same on the
  * Board, the Org page, the task list and the phone:
  *
- *   needs    Needs you: only something the user alone can give (a decision, an approval,
- *            an answer). Always says what to do.
- *   working  Working: its session is running a turn right now.
- *   waiting  Waiting: not running, and says on whom or what (another task, a time, this
- *            machine, the user with no rush, its lead, not started yet). Nothing to wait
- *            on while it says it would carry on is `stuck`, still a kind of waiting.
- *   done     Done: the task is complete.
+ *   needs    Needs you: the task's phase is NEED_ACTION (or a live prompt blocks on the user).
+ *            Always says what to do: the prompt, the letter, the Board choice, the failure, or
+ *            the session's own ask.
+ *   working  Working: IN_PROGRESS with its session running a turn (or worked by hand).
+ *   waiting  Waiting: WAITING or TODO, or IN_PROGRESS with nothing running, and says on whom or
+ *            what (another task, a time, a watch, this machine, its lead, not started yet);
+ *            `stuck` when it was in progress and nothing will wake it.
+ *   done     Done: COMPLETE.
  *
- * Internal states stay as they are (phase, process status, tiers, board project status);
- * only this is shown. NEED_ACTION is NOT "needs you": every turn end sets it.
- *
- * Inputs are facts first (the phase, a live prompt, an unanswered letter or board choice,
- * the running flag, pending reply requests, armed triggers, `wait_until`), then the
- * session's own plain-words report from its last turn (`task.status_report`, written by
- * the turn-complete self-report). Facts win over the report: a report that says
- * "working" on a session that has stopped and that nothing will wake is `stuck`.
+ * The state is the task's own phase, never a guess that can contradict it (2026-10-26: one
+ * surface counted 5 "need you" while the tasks' phases said 1, from letters, Board choices and
+ * reports read on their own). The task keeps its phase right itself: its turn's own report moves
+ * it (session-hooks/builtins.ts), a standing routine goes back to WAITING at its turn's end
+ * (phase.ts), its leader or the user may set it, and an answer is a message, which starts a turn.
+ * The facts and the session's report (`task.status_report`) only give the words.
  *
  * Pure and browser-safe: the server (org counts, API payloads) and the web app import it.
  */
@@ -113,8 +112,6 @@ export interface UserStatus {
 
 /** Session stops a host outage causes; Walnut resumes those itself. */
 const HOST_LOST_REASONS = new Set(['remote_unreachable', 'spawn_outcome_unknown', 'liveness_check_failed']);
-/** How long a lost host stays Walnut's to recover before it is the user's (the Org digest's rule). */
-const HOST_LOST_GRACE_MS = 20 * 60_000;
 
 /** A report older than this, on a task that is not running, is flagged as old. */
 export const STALE_REPORT_MS = 24 * 60 * 60_000;
@@ -145,6 +142,14 @@ function strip<T extends object>(o: T): T {
 /** Slack for clocks: the phase write and the report stamp come from different processes. */
 const REPORT_CLOCK_SLACK_MS = 5_000;
 
+/** Whether the stored report is of the latest turn: written after the phase last moved. */
+export function reportIsCurrent(input: Pick<UserStatusInput, 'report' | 'phaseChangedAt'>): boolean {
+  const r = input.report;
+  if (!r) return false;
+  const movedAt = input.phaseChangedAt ? Date.parse(input.phaseChangedAt) : NaN;
+  return !Number.isFinite(movedAt) || Date.parse(r.at) >= movedAt - REPORT_CLOCK_SLACK_MS;
+}
+
 export function deriveUserStatus(input: UserStatusInput, nowMs: number = Date.now()): UserStatus {
   const out = derive(input, nowMs);
   // A waiting task names when it checks again by itself, whatever it waits on.
@@ -158,65 +163,60 @@ function derive(input: UserStatusInput, nowMs: number): UserStatus {
 
   const running = input.processStatus === 'running' && !input.pendingPermissionTool;
   const w = words(anyReport, nowMs, running);
-  const movedAt = input.phaseChangedAt ? Date.parse(input.phaseChangedAt) : NaN;
-  const current = !!anyReport && (!Number.isFinite(movedAt) || Date.parse(anyReport.at) >= movedAt - REPORT_CLOCK_SLACK_MS);
-  // Only a report of the latest turn says what state the task is in.
-  const report = current ? anyReport : null;
+  // Only a report of the latest turn says what it is waiting on or asking.
+  const report = reportIsCurrent(input) ? anyReport : null;
 
-  // Facts that mean the user alone can move it.
+  // A live prompt blocks on the user (the session machine moves the phase to NEED_ACTION with it).
   if (input.pendingPermissionTool) {
     return strip({ state: 'needs', source: 'prompt', ask: `Answer the ${input.pendingPermissionTool} prompt in its session.`, ...w, stale: undefined });
   }
-  if (!none(input.openLetter)) return strip({ state: 'needs', source: 'letter', ask: clean(input.openLetter), ...w });
-  if (!none(input.openChoice)) return strip({ state: 'needs', source: 'choice', ask: clean(input.openChoice), ...w });
 
-  if (running) return strip({ state: 'working', ...w });
+  // The state is the task's own phase (2026-10-26, the user: "this status need to be self updated
+  // by task, can also be updated by leader ... task has status, we already have good task system").
+  // The task sets it (its turn's own report moves it, session-hooks/builtins.ts), its leader or the
+  // user may set it, and nothing here overrides it: what follows only says why, in words.
+  if (input.phase === 'NEED_ACTION') {
+    if (!none(input.openLetter)) return strip({ state: 'needs', source: 'letter', ask: clean(input.openLetter), ...w });
+    if (!none(input.openChoice)) return strip({ state: 'needs', source: 'choice', ask: clean(input.openChoice), ...w });
+    if (input.processStatus === 'error') {
+      const why = clean(input.errorMessage);
+      return strip({ state: 'needs', source: 'error', ask: why ? `Its session failed (${why.slice(0, 140)}). Retry it or open it.` : 'Its session failed. Retry it or open it.', ...w });
+    }
+    if (report?.state === 'needs' && !none(report.ask)) return strip({ state: 'needs', source: 'session', ask: clean(report.ask), ...w });
+    if (report?.state === 'waiting' && report.waiting_kind === 'you' && !none(report.waiting_on)) {
+      return strip({ state: 'needs', source: 'session', ask: clean(report.waiting_on), ...w });
+    }
+    return strip({ state: 'needs', source: 'session', ask: 'Its turn ended and handed the task back to you: read it and reply.', ...w });
+  }
 
-  // Something named will move it (computed before an old error: a trigger or a clock outlives one).
+  if (input.phase === 'IN_PROGRESS') {
+    if (running || !input.hasSession) return strip({ state: 'working', ...w });
+    // It said it carries on by itself (a background job it started will wake it) and its process is there.
+    if (report?.state === 'working' && input.processStatus === 'idle') return strip({ state: 'working', ...w });
+    // In progress with nothing running: on whom it waits, so no one reads "working" on an idle session.
+    if (input.isMain) return strip({ state: 'waiting', kind: 'you', waitingOn: 'Your next message, or news from its teams', ...w });
+    if ((input.openWorkers ?? 0) > 0) {
+      const n = input.openWorkers!;
+      return strip({ state: 'waiting', kind: 'task', waitingOn: n === 1 ? 'Its worker (1 open)' : `Its workers (${n} open)`, ...w });
+    }
+    return strip({ state: 'waiting', kind: 'stuck', waitingOn: 'It stopped, and nothing will wake it', ...w });
+  }
+
+  if (input.phase === 'TODO') return strip({ state: 'waiting', kind: 'not-started', waitingOn: 'Not started yet', ...w });
+
+  // WAITING (and any phase an older writer left): on what, from the facts first, then its words.
   const tasks = (input.waitingOnTasks ?? []).map(clean).filter(Boolean);
   const triggers = (input.triggers ?? []).map(clean).filter(Boolean);
   const schedules = (input.schedules ?? []).filter((r) => clean(r.name));
   const until = input.waitUntil && Date.parse(input.waitUntil) > nowMs ? input.waitUntil : null;
-  const wakes = triggers.length > 0 || schedules.length > 0 || !!until;
-
-  if (input.processStatus === 'error' && !wakes) {
-    // A lost host is Walnut's to recover (auto-resume) for a while, then the user's.
-    const since = input.statusSince ? Date.parse(input.statusSince) : NaN;
-    const lostFor = Number.isFinite(since) ? nowMs - since : 0;
-    if (input.errorReason && HOST_LOST_REASONS.has(input.errorReason) && lostFor < HOST_LOST_GRACE_MS) {
-      return strip({ state: 'waiting', kind: 'machine', waitingOn: 'Its host to come back (Walnut reconnects by itself)', ...w });
-    }
-    const why = clean(input.errorMessage);
-    return strip({ state: 'needs', source: 'error', ask: why ? `Its session failed (${why.slice(0, 140)}). Retry it or open it.` : 'Its session failed. Retry it or open it.', ...w });
-  }
-
-  // The session's own words: an ask only the user can answer. Not on a standing routine (a watch
-  // or a schedule keeps it alive): it asks people where it works, and its turn's end is never the
-  // user's to pick up (2026-10-26, the user on a pipeline watch: "put it as working").
-  if (report?.state === 'needs' && !none(report.ask) && !(triggers.length || schedules.length)) {
-    return strip({ state: 'needs', source: 'session', ask: clean(report.ask), ...w });
-  }
-  // It said it carries on by itself (a background job it started will wake it) and its process is still there.
-  if (report?.state === 'working' && input.processStatus === 'idle') return strip({ state: 'working', ...w });
-
-  // No session: a person works it by hand (in progress) or it has not started.
-  if (input.phase === 'IN_PROGRESS' && !input.hasSession) return strip({ state: 'working', ...w });
-  if (input.phase === 'TODO' && !input.hasSession) {
-    return strip({ state: 'waiting', kind: 'not-started', waitingOn: 'Not started yet', ...w });
-  }
-
   const reported = report?.state === 'waiting' && !none(report.waiting_on) ? clean(report.waiting_on) : '';
   const reportedKind = report?.state === 'waiting' ? report.waiting_kind : undefined;
-
-  if (tasks.length) {
-    return strip({ state: 'waiting', kind: 'task', waitingOn: reported || `A reply from ${tasks.join(', ')}`, ...w });
+  if (input.processStatus === 'error' && input.errorReason && HOST_LOST_REASONS.has(input.errorReason)) {
+    return strip({ state: 'waiting', kind: 'machine', waitingOn: 'Its host to come back (Walnut reconnects by itself)', ...w });
   }
-  if (reported && reportedKind && reportedKind !== 'stuck') {
-    // A report naming a wait counts only while something can still end it, or it waits on a person.
-    const person = reportedKind === 'you' || reportedKind === 'lead' || reportedKind === 'task';
-    if (person || wakes) return strip({ state: 'waiting', kind: reportedKind, waitingOn: reported, ...(until ? { until } : {}), ...w });
-  }
-  // A standing routine: between fires it waits on the next one, whatever its last turn said.
+  if (tasks.length) return strip({ state: 'waiting', kind: 'task', waitingOn: reported || `A reply from ${tasks.join(', ')}`, ...w });
+  if (reported && reportedKind && reportedKind !== 'stuck') return strip({ state: 'waiting', kind: reportedKind, waitingOn: reported, ...(until ? { until } : {}), ...w });
+  // A standing routine: between fires it waits on the next one.
   if (triggers.length) return strip({ state: 'waiting', kind: 'other', waitingOn: `A watch: ${triggers.join(', ')}`, ...w });
   if (schedules.length) {
     const next = schedules.map((r) => r.nextAt).filter((t): t is string => !!t && Date.parse(t) > nowMs).sort()[0];
@@ -230,28 +230,8 @@ function derive(input: UserStatusInput, nowMs: number): UserStatus {
     });
   }
   if (until) return strip({ state: 'waiting', kind: 'time', waitingOn: 'Its next check', until, ...w });
-
-  if (input.phase === 'WAITING' && !report) {
-    return strip({ state: 'waiting', kind: 'other', waitingOn: 'A message (parked with no clock or watch)', ...w });
-  }
-
-  // Something outside will wake it: Main hears the user and its teams, a lead hears its workers.
-  if (input.isMain) return strip({ state: 'waiting', kind: 'you', waitingOn: 'Your next message, or news from its teams', ...w });
-  if ((input.openWorkers ?? 0) > 0) {
-    const n = input.openWorkers!;
-    return strip({ state: 'waiting', kind: 'task', waitingOn: n === 1 ? 'Its worker (1 open)' : `Its workers (${n} open)`, ...w });
-  }
-
-  // Nothing will wake it. Stuck when it meant to carry on itself; otherwise its turn simply ended.
-  const meantToContinue = report ? report.state === 'working' || reportedKind === 'stuck' || (report.state === 'waiting' && !!reported) : input.phase === 'IN_PROGRESS';
-  if (meantToContinue && input.hasSession) {
-    return strip({ state: 'waiting', kind: 'stuck', waitingOn: 'It stopped, and nothing will wake it', ...w });
-  }
-  return strip({
-    state: 'waiting', kind: input.hasLeader ? 'lead' : 'you',
-    waitingOn: input.hasLeader ? 'Its lead, to read the latest turn' : 'You, to read the latest turn (no rush)',
-    ...w,
-  });
+  if (input.phase === 'WAITING') return strip({ state: 'waiting', kind: 'other', waitingOn: 'A message (parked with no clock or watch)', ...w });
+  return strip({ state: fallbackUserState(input.phase), ...w });
 }
 
 /** The state of a task the server has not derived yet (an older server, a row before the

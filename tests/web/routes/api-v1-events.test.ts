@@ -17,6 +17,7 @@ import { WALNUT_HOME } from '../../../src/constants.js'
 import { startServer, stopServer } from '../../../src/web/server.js'
 import { bus, EventNames } from '../../../src/core/event-bus.js'
 import { createSessionRecord, getSessionByClaudeId, emitSessionStatusChanged } from '../../../src/core/session-tracker.js'
+import { settleUserStatusSync } from '../../../src/core/user-status-sync.js'
 
 let server: HttpServer
 let port: number
@@ -252,8 +253,10 @@ describe('GET /api/v1/events', () => {
     expect(patch.status).toBe(200)
     const record = await getSessionByClaudeId(SID)
     emitSessionStatusChanged(record!, {}, ['*'], { source: 'test' })
-    // Let the emits (and the coalesced session-upsert) fully land.
+    // Let the emits (and the coalesced session-upsert) fully land, and the user statuses the
+    // setup moved be written (a debounced pass): either landing later is a new event, not a replay.
     await new Promise((r) => setTimeout(r, 600))
+    await settleUserStatusSync()
 
     // Fresh connection, no Last-Event-ID: pre-fix this replayed up to 512
     // historical frames AFTER the snapshot, regressing it (done → todo).

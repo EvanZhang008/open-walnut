@@ -97,6 +97,9 @@ function collectAlerts(ids: readonly string[], byId: ReadonlyMap<string, Task>, 
     const task = byId.get(id);
     if (!task) continue;
     const status = task.user_status;
+    // The task's own status decides what counts (the same one the Board and the counts read); a
+    // live prompt only names how it needs the user.
+    if (userStateOf(task) !== 'needs') continue;
     const hit = probe(task);
     // A failed session its status reads as Waiting (its host gone a moment, a clock or a trigger
     // still armed to bring it back) does not need the user, here as on the Board.

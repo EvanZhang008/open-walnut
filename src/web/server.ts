@@ -6043,6 +6043,18 @@ function startPluginSyncPolling(): void {
         // in-place so subsequent getTasks() calls in the same tick see the
         // just-applied change.
         const localTasks = await listTasks()
+        // Links a plugin carries as id prefixes (the To Do body's `Parent:`) resolve to full ids:
+        // rows an older pull wrote with a prefix are repaired here, every pulled patch below.
+        const { idIndex, keepLocalText, prefixLinkRepairs, resolvePulledLinks } = await import('../core/pulled-patch.js')
+        for (const [id, patch] of prefixLinkRepairs(localTasks)) {
+          const { changed, task: fixed } = await updateTaskRaw(id, patch, { pulledTags: true })
+          if (!changed || !fixed) continue
+          log.web.info(`${plugin.id} sync: repaired a task link stored as an id prefix`, { taskId: id, ...patch })
+          const i = localTasks.findIndex(t => t.id === id)
+          if (i >= 0) localTasks[i] = fixed
+          bus.emit(EventNames.TASK_UPDATED, { task: fixed }, [], { source: `${plugin.id}-sync` })
+        }
+        const linkIndex = idIndex(localTasks)
         // A pull applies its changes one row at a time, and every row write is
         // synchronous SQLite: a chain of `await`s over sync work only ever yields
         // to the microtask queue, so N applied changes ran as ONE uninterrupted
@@ -6069,9 +6081,10 @@ function startPluginSyncPolling(): void {
             }
             // Clear stale sync_error when a remote pull successfully updates the task
             const existingTask = localTasks.find(t => t.id === id)
-            const effectiveUpdates = (existingTask?.sync_error && !('sync_error' in updates))
-              ? { ...updates, sync_error: undefined }
-              : updates
+            const linked = keepLocalText(resolvePulledLinks(updates, existingTask, linkIndex), existingTask)
+            const effectiveUpdates = (existingTask?.sync_error && !('sync_error' in linked))
+              ? { ...linked, sync_error: undefined }
+              : linked
             const { changed, task: savedTask } = await updateTaskRaw(id, effectiveUpdates, { pulledTags: true })
             const updatedTask = savedTask ?? await (await import('../core/task-manager.js')).getTask(id)
             const index = localTasks.findIndex(t => t.id === id)
@@ -6085,7 +6098,7 @@ function startPluginSyncPolling(): void {
           },
           addTask: async (taskData) => {
             await breathe()
-            const task = await addTaskFull(taskData)
+            const task = await addTaskFull(resolvePulledLinks(taskData, undefined, linkIndex))
             bus.emit(EventNames.TASK_CREATED, { task }, [], { source: `${plugin.id}-sync` })
             changeCount++
             tickEvents.push({ name: EventNames.TASK_CREATED, data: { task } })

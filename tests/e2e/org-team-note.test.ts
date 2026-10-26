@@ -84,6 +84,8 @@ describe('a lead\'s team note', () => {
 
     // The task the user's example was about: new words, a worker that needs the user, one done, one new.
     await report(ids['Renew the permit']!, 'The identity check passed; only your signature is left.', t0 + 1_000)
+    // Its turn ends on the user (its own status), with a decision letter that says what.
+    await updateTask(ids['Order seeds']!, { phase: 'NEED_ACTION' }, { source: 'api' })
     await sendLetter({
       subject: 'Which supplier?', type: 'action_required', markdown: 'A or B?',
       actions: [{ id: 'a', label: 'A' }, { id: 'b', label: 'B' }], sender: { taskId: ids['Order seeds'] },
@@ -137,8 +139,9 @@ describe('what reaches the lead without a message from anyone', () => {
     // The watcher's own timer stays long here, so the test's call is the one that tells it.
     _setLeadWaitClocksForTesting(10 * 60_000, 0)
     const hose = (await addTask({ title: 'Check the hose', project: 'Garden', parent_task_id: leadId })).task.id
-    await updateTask(hose, { phase: 'NEED_ACTION' }, { source: 'api' })
-    // Its turn said it is done: it waits on its lead to check the result (src/core/user-status.ts).
+    // Its turn said it is done, which parks it for its lead to check the result
+    // (sessions/report-phase.ts), and the status says on whom it waits (src/core/user-status.ts).
+    await updateTask(hose, { phase: 'WAITING' }, { source: 'api' })
     await updateTaskRaw(hose, { status_report: { state: 'done', now: 'The hose holds; replaced one clamp.', at: new Date(Date.now() + 1_000).toISOString() } },
       { emitEvent: true, source: 'status-report' })
     await until('the worker waits on its lead', async () => (await getTask(hose)).user_status?.kind === 'lead')

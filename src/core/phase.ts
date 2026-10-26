@@ -101,7 +101,7 @@ import type { TaskPhase, TaskStatus, Task } from './types.js';
 import { isMainAgentTask } from './org/main-stays-active.js'
 import {
   consumeInterruptedWait, dropInterruptedWait, hasInterruptedWait, interruptedWaitLeftAt, markInterruptedByMessage,
-  noteInterruptedWait, resumableWait, waitExitCause,
+  dropFireTurn, noteInterruptedWait, noteTurnSend, resumableWait, takeFireTurn, triggersStanding, waitExitCause,
 } from './task-wait-resume.js'
 
 // ── Phase → Status (5 → 3) ──
@@ -522,11 +522,13 @@ export async function applySessionPhase(
   // own edge may land after the turn it started already began. The clean end of
   // that turn brings it back while the task still has an armed trigger.
   if (trigger === 'session:input') {
+    noteTurnSend(taskId, opts?.sendSource === 'routine-trigger' || source === 'trigger-host-delivery', isPersonSendSource(opts?.sendSource), task.wait_until ?? null)
     const cause = waitExitCause(trigger, opts?.sendSource, opts?.sendEndsWait === true)
     if (!cause) dropInterruptedWait(taskId, isPersonSendSource(opts?.sendSource) ? 'person-input' : `send:${opts?.sendSource ?? 'unknown'}`)
     else markInterruptedByMessage(taskId, opts?.sendSource ?? source)
   } else if (trigger === 'session:awaiting-human' || trigger === 'session:error') {
     dropInterruptedWait(taskId, trigger)
+    dropFireTurn(taskId)
   }
   let resume: { waitUntil: string | null } | null = null
   if (newPhase === 'NEED_ACTION' && !opts?.noResume && hasInterruptedWait(taskId)
@@ -534,6 +536,18 @@ export async function applySessionPhase(
     if (await sessionEndedInError(opts?.sessionId)) dropInterruptedWait(taskId, 'session-error')
     else resume = await resumableWait(task, opts?.sessionId)
     if (resume) newPhase = 'WAITING'
+  }
+  // A standing routine between fires: a turn its trigger's fire started ends cleanly, and that
+  // trigger keeps firing (armed, none stopped, fired before), so the task waits on its next fire,
+  // never on the user (2026-10-26, the user on a pipeline watch whose every fire read "needs
+  // you": "put it as working"). It goes back to the clock it had when the fire came (the default
+  // one when that has passed). Its own report can still say it needs the user
+  // (sessions/report-phase.ts), and a person's message in the turn makes it theirs.
+  let routine: { waitUntil: string | null } | null = null
+  const fireTurn = (trigger === 'session:result' || (trigger === 'reconciler' && opts?.turnEnd)) ? takeFireTurn(taskId) : null
+  if (newPhase === 'NEED_ACTION' && fireTurn && !resume && !opts?.noResume && !(await sessionEndedInError(opts?.sessionId))) {
+    const { triggersWatching } = await import('./task-wait-until.js')
+    if (triggersStanding(await triggersWatching(task.id))) { newPhase = 'WAITING'; routine = fireTurn }
   }
 
   const requiresRunning = trigger === 'session:turn-start' || trigger === 'session:human-answered'
@@ -576,6 +590,9 @@ export async function applySessionPhase(
         ...restoreSlot,
         // null keeps a wait that had no clock clock-free (prepareRawUpdate).
         ...(resume ? { wait_until: (resume.waitUntil ?? null) as never } : {}),
+        // undefined = the default clock (prepareRawUpdate), never none: a routine whose trigger
+        // went quiet still comes back to someone.
+        ...(routine?.waitUntil ? { wait_until: routine.waitUntil } : {}),
       }, {
         emitEvent: true, push: true, source,
         // A reopen must also get past updateTaskRaw's own terminal guard (the

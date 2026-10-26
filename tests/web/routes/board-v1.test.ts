@@ -480,7 +480,7 @@ describe('round two', () => {
       const got = await call('GET', boardPath(crew.boss))
       expect(got.json.projects['cause-a']).toMatchObject({ title: 'Cache TTL', tasks: [crew.w1a] })
       // The project's tasks join the refs, so the frame can draw chips for them.
-      expect(got.json.refs).toContainEqual({ ref: crew.w1a, id: crew.w1a, title: 'Cache sub-worker', phase: 'TODO', status: 'todo' })
+      expect(got.json.refs).toContainEqual(expect.objectContaining({ ref: crew.w1a, id: crew.w1a, title: 'Cache sub-worker', phase: 'TODO', status: 'todo' }))
     })
 
     it('the user picks a status: stored as theirs, delivered once, and a session replaces it only by saying so', async () => {

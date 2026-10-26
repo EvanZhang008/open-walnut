@@ -45,6 +45,9 @@ const TRIAGE_COOLDOWN_MS = 5_000; // 5 seconds — normal triage cycle takes 10-
 // reap). Key: sessionId, Value: pending timer. The map self-bounds: every armed
 // timer either fires (and self-deletes) or is cancelled (and deletes).
 const triageDebounceTimers = new Map<string, NodeJS.Timeout>();
+/** When each session's latest turn ended (its last onTurnComplete): the report's phase write
+ *  (sessions/report-phase.ts) never goes over a move made after it. Bounded like the timers. */
+const turnEndedAt = new Map<string, number>();
 const DEFAULT_TRIAGE_DEBOUNCE_MS = 4 * 60_000; // 4 minutes
 // (2026-07-25) A first-note fast path (empty note → 20s window) shipped briefly
 // and was reverted the same day on user direction: the first note should wait
@@ -64,6 +67,7 @@ export function __resetTriageRateLimiter(): void {
   lastNotifiedSignal.clear();
   selfReportInFlight.clear();
   triageRuns.clear();
+  turnEndedAt.clear();
   finalSummaries.clear();
   finalSummaryWaiters.clear();
 }
@@ -1020,6 +1024,10 @@ export async function runTriage(p: OnTurnCompletePayload, opts: { final?: boolea
         const current = await getTask(taskId).catch(() => null);
         if (current && current.phase !== 'COMPLETE' && current.status !== 'done') {
           await updateTaskRaw(taskId, { status_report: statusReport }, { emitEvent: true, source: 'status-report' });
+          // The report is the task's own word on where it stands: it moves the phase, which is
+          // what every surface counts (sessions/report-phase.ts).
+          const { applyReportPhase } = await import('../sessions/report-phase.js');
+          await applyReportPhase(taskId, p.sessionId, statusReport, turnEndedAt.get(p.sessionId) ?? askedAt);
         }
       } catch (err) {
         log.session.debug('turn-complete-summary: status report persist skipped', {
@@ -1150,6 +1158,8 @@ export const turnCompleteTriageHook: SessionHookDefinition = {
 
     // Skip triage for embedded subagent sessions (provider='embedded').
     if (p.session?.provider === 'embedded') return;
+    if (turnEndedAt.size > 500) turnEndedAt.clear();
+    turnEndedAt.set(p.sessionId, Date.now());
 
     // This turn is the session's last: its task completed, and it stops now
     // (sessions/self-complete-stop.ts), so the summary cannot wait.

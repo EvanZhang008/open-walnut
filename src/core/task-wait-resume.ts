@@ -228,3 +228,45 @@ export function resetInterruptedWaitsForTest(): void {
   interrupted.clear();
   restored.clear();
 }
+
+// ── A standing routine's fire turn ──
+
+/** Tasks whose current turn a trigger's fire started (a person's message since clears it), with
+ *  the clock the task had when the fire came (the fire's own move out of WAITING clears it). */
+const fireTurns = new Map<string, { waitUntil: string | null; at: number }>();
+/** A fire turn longer than this is not one the marker still describes (its end went unseen). */
+const FIRE_TURN_TTL_MS = 6 * 60 * 60_000;
+
+/** Every send into a task's session: a fire marks the turn as the routine's, a person's unmarks it. */
+export function noteTurnSend(taskId: string, fire: boolean, person: boolean, waitUntil?: string | null): void {
+  if (fire) {
+    if (fireTurns.size > 1000) fireTurns.clear();
+    fireTurns.set(taskId, { waitUntil: waitUntil ?? null, at: Date.now() });
+  } else if (person) fireTurns.delete(taskId);
+}
+
+/** The fire turn ended another way (an error, a prompt for the user): it is no routine's end. */
+export function dropFireTurn(taskId: string): void {
+  fireTurns.delete(taskId);
+}
+
+/** Whether the turn now ending was a fire's, forgetting it (one answer per turn end), and the
+ *  clock to go back to (null = none, or one already past). */
+export function takeFireTurn(taskId: string, nowMs: number = Date.now()): { waitUntil: string | null } | null {
+  const entry = fireTurns.get(taskId);
+  fireTurns.delete(taskId);
+  if (!entry || nowMs - entry.at > FIRE_TURN_TTL_MS) return null;
+  const until = entry.waitUntil && Date.parse(entry.waitUntil) > nowMs ? entry.waitUntil : null;
+  return { waitUntil: until };
+}
+
+/**
+ * The triggers of a standing routine: armed, none stopped, and one of them has fired before this
+ * turn (a watch that keeps firing, every 15 minutes say), so its fire turn ends back in WAITING.
+ * A trigger that fired once is a one-time watch: the fire is what the task waited for, and the
+ * task is handed back as before.
+ */
+export function triggersStanding(triggers: ReadonlyArray<Pick<WatchingTrigger, 'state'> & Partial<Pick<WatchingTrigger, 'fires'>>>): boolean {
+  return triggersHoldWait(triggers) && triggers.some((t) => t.state === 'armed' && (t.fires ?? 0) >= 2);
+}
+

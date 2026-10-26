@@ -1135,8 +1135,12 @@ export function parseMsTodoBody(body: string): { description: string; summary: s
     return { description: '', summary, note, conversation_log, phase, parent_task_id: parentTaskId, ...(unread !== undefined ? { unread } : {}), ...(dependsOn ? { depends_on: dependsOn } : {}) };
   }
 
-  // Unstructured body — put everything in note
-  return { description: '', summary: '', note: bodyToParse.trim(), phase, parent_task_id: parentTaskId, ...(unread !== undefined ? { unread } : {}), ...(dependsOn ? { depends_on: dependsOn } : {}) };
+  // A body Walnut wrote (it carries our headers) with no separator and no sections is a description
+  // alone: composeMsTodoBody writes a new task's description with nothing after it. Reading it as a
+  // note emptied the description of every new task on its first pull (2026-10-26).
+  const ours = phase !== undefined || parentTaskId !== undefined || unread !== undefined || dependsOn !== undefined;
+  // Unstructured body typed in To Do itself: put everything in note
+  return { description: ours ? bodyToParse.trim() : '', summary: '', note: ours ? '' : bodyToParse.trim(), phase, parent_task_id: parentTaskId, ...(unread !== undefined ? { unread } : {}), ...(dependsOn ? { depends_on: dependsOn } : {}) };
 }
 
 /** Parse ## Summary, ## Notes, and ## Conversation Log sections from text. */

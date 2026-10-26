@@ -554,8 +554,22 @@ describe('parseMsTodoBody', () => {
     const result = parseMsTodoBody(body);
     expect(result.parent_task_id).toBe('deadbeef');
     expect(result.phase).toBeUndefined();
-    expect(result.description).toBe('');
-    expect(result.note).toBe('Some description');
+    // Our header says Walnut wrote it: the text is the description, not a note.
+    expect(result.description).toBe('Some description');
+    expect(result.note).toBe('');
+  });
+
+  // 2026-10-26: a new task (a description, no summary or note yet) came back from its first pull
+  // with its description moved into the note, and the local description was emptied.
+  it('a new task\'s body round-trips its description and parent unchanged', () => {
+    const description = 'Fix the phone video player.\n\nSteps:\n- open an MP4\n- seek'
+    const body = (mapToRemote({ title: 'T', description, summary: '', note: '', phase: 'TODO', priority: 'none', parent_task_id: 'abcd1234-0001' } as Task).body as { content: string }).content
+    const parsed = parseMsTodoBody(body)
+    expect(parsed.description).toBe(description)
+    expect(parsed.note).toBe('')
+    expect(parsed.parent_task_id).toBe('abcd1234')
+    // Text typed in To Do itself, with no header of ours, is still a note.
+    expect(parseMsTodoBody('Buy milk\nand eggs')).toMatchObject({ description: '', note: 'Buy milk\nand eggs' })
   });
 
   // A body sitting on the MS server was written by whatever Walnut version last
@@ -595,8 +609,8 @@ describe('parseMsTodoBody', () => {
     const body = 'Phase: TODO\nDependsOn: abcd1234\n\nTask description';
     const result = parseMsTodoBody(body);
     expect(result.depends_on).toEqual(['abcd1234']);
-    expect(result.description).toBe('');
-    expect(result.note).toBe('Task description');
+    expect(result.description).toBe('Task description');
+    expect(result.note).toBe('');
   });
 
   it('extracts DependsOn: header with multiple dep IDs', () => {
@@ -605,7 +619,8 @@ describe('parseMsTodoBody', () => {
     expect(result.depends_on).toEqual(['abcd1234', 'efgh5678']);
     expect(result.parent_task_id).toBe('deadbeef');
     expect(result.phase).toBe('IN_PROGRESS');
-    expect(result.note).toBe('Child with deps');
+    expect(result.description).toBe('Child with deps');
+    expect(result.note).toBe('');
   });
 
   it('returns no depends_on when DependsOn header absent', () => {

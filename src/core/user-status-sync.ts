@@ -398,9 +398,24 @@ export function startUserStatusSync(): void {
     ],
   });
   markAll();
+  void import('./sessions/report-phase.js').then(({ applyStoredReports }) => applyStoredReports())
+    .catch((err) => log.task.warn('user-status: stored reports not applied', { error: errText(err) }));
   sweep = setInterval(() => { dropSlow(); markAll(); }, SWEEP_MS);
   sweep.unref?.();
   log.task.info('user-status: started');
+}
+
+/**
+ * Run what is pending now and wait until no pass is queued or running, so a test that watches
+ * events from a point on starts after the statuses its setup moved were written, not inside
+ * the debounce window (2026-10-26: an SSE "no replay" check read a late status write as one).
+ */
+export async function settleUserStatusSync(): Promise<void> {
+  for (let i = 0; i < 5; i++) {
+    if (timer) { clearTimeout(timer); timer = null; void runPass(); }
+    if (running) { await running; continue; }
+    if (!timer) return;
+  }
 }
 
 export function stopUserStatusSync(): void {
