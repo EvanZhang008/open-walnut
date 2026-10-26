@@ -1483,8 +1483,9 @@ describe('C1 session-snapshot daemon-standalone vs daemon-source parity', () => 
       expect(src).toMatch(/fold drain carry overflow — dropping oversized partial line/)
       expect(src).toMatch(/task rebuild carry overflow — dropping oversized partial line/)
       expect(src).toMatch(/cold rebuild carry overflow, dropping oversized partial line/)
+      expect(src).toMatch(/prewarm carry overflow, dropping oversized partial line/)
       expect((src.match(/if \(carry\.length > TAILER_CARRY_MAX\)/g) ?? []).length,
-        'fold rebuild + drain + task rebuild + cold getState rebuild must all cap the carry').toBe(4)
+        'fold rebuild + drain + task rebuild + cold getState rebuild + fold prewarm must all cap the carry').toBe(5)
       // After a drop, the rest of the oversized line must be skipped too.
       expect((src.match(/discardThroughNextNewline = true/g) ?? []).length,
         'tailer + rebuilds + drain must all realign after a dropped line').toBeGreaterThanOrEqual(4)

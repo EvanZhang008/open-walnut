@@ -15,11 +15,12 @@
  */
 import { describe, it, expect, beforeAll, afterEach } from 'vitest'
 import { WebSocket } from 'ws'
-import { spawn, type ChildProcess } from 'node:child_process'
+import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
+import { FOLD_CHECKPOINT_FORMAT } from '../../src/providers/fold-checkpoint-core.js'
 
 let scriptPath = ''
 let root = ''
@@ -44,8 +45,8 @@ function makeDirs(): Dirs {
   return { home, streams: path.join(root, 'streams'), daemon: path.join(root, 'daemon') }
 }
 
-async function boot(twin: Twin, dirs: Dirs): Promise<void> {
-  const env: Record<string, string | undefined> = {
+function daemonEnv(dirs: Dirs): Record<string, string | undefined> {
+  return {
     ...process.env,
     SHELL: '/bin/sh',
     PATH: '/usr/bin:/bin',
@@ -55,6 +56,10 @@ async function boot(twin: Twin, dirs: Dirs): Promise<void> {
     WALNUT_LEGACY_STREAMS_DIR: path.join(root, 'no-legacy-streams'),
     WALNUT_SPAWN_JOURNAL: path.join(root, 'spawn-journal.jsonl'),
   }
+}
+
+async function boot(twin: Twin, dirs: Dirs): Promise<void> {
+  const env = daemonEnv(dirs)
   const [cmd, args] = twin.command()
   proc = spawn(cmd, args, { env, stdio: ['ignore', 'pipe', 'pipe'] })
   const port = await new Promise<number>((resolve, reject) => {
@@ -247,5 +252,63 @@ describe.each(TWINS)('fold checkpoints: $name', (twin) => {
     expect(again.ok).toBe(true)
     expect(fs.existsSync(jsonl + '.fold')).toBe(false)
     await rpc({ cmd: 'stop', sid: 'ck-2' })
+  }, 120_000)
+
+  // Incident 2026-10-26: a deploy changed the checkpoint format, so the new
+  // daemon rejected every checkpoint and folded 8.8 GB of live streams before it
+  // listened (7 min). The server now runs the new binary with --prewarm-folds
+  // while the old daemon serves, and the adopt continues from what it prepared.
+  it('--prewarm-folds prepares a live session the old daemon checkpointed in another format, and the adopt continues from it', async () => {
+    const dirs = makeDirs()
+    const source = path.join(root, 'stream-source.jsonl')
+    fs.writeFileSync(source, streamContent())
+    const size = fs.statSync(source).size
+    await boot(twin, dirs)
+    const started = await rpc({
+      cmd: 'start', sid: 'ck-3', cwd: root, message: '', mode: 'default',
+      args: ['/bin/sh', '-c', `cat ${JSON.stringify(source)}; sleep 60`, 'sh'],
+    })
+    expect(started.ok).toBe(true)
+    const jsonl = path.join(dirs.streams, 'ck-3.jsonl')
+    expect(await waitFor(() => fs.existsSync(jsonl) && fs.statSync(jsonl).size >= size)).toBe(true)
+    await waitFor(() => false, 1500)
+
+    // The old daemon stops and leaves its checkpoint in a format the new one rejects.
+    await stop('SIGTERM')
+    const oldCk = JSON.parse(fs.readFileSync(jsonl + '.fold', 'utf8'))
+    const foreign = JSON.stringify({ ...oldCk, v: FOLD_CHECKPOINT_FORMAT + 100 })
+    fs.writeFileSync(jsonl + '.fold', foreign)
+    expect(Object.keys(JSON.parse(fs.readFileSync(path.join(dirs.daemon, 'sessions.json'), 'utf8')).sessions)).toEqual(['ck-3'])
+
+    const [cmd, args] = twin.command()
+    const prewarm = spawnSync(cmd, args.map((a) => (a === '--start' ? '--prewarm-folds' : a)), {
+      env: daemonEnv(dirs), encoding: 'utf8', timeout: 60_000,
+    })
+    expect(prewarm.status, prewarm.stderr).toBe(0)
+    expect(JSON.parse(prewarm.stdout.trim().split('\n').pop()!)).toMatchObject({ sessions: 1, written: 1 })
+    const next = JSON.parse(fs.readFileSync(jsonl + '.fold.next', 'utf8'))
+    expect(next.v).toBe(FOLD_CHECKPOINT_FORMAT)
+    expect(next.boundary).toBe(fs.statSync(jsonl).size)
+    expect(Object.keys(next.task.tasks)).toEqual(['early-task'])
+    // The prewarm touched no session state: the old daemon's checkpoint is as it left it.
+    expect(fs.readFileSync(jsonl + '.fold', 'utf8')).toBe(foreign)
+
+    // Prove the adopt reads the prepared checkpoint: the early task line is
+    // erased in place (the tail the checkpoint hashes is untouched), and a line
+    // appended after the prewarm folds on top.
+    eraseInPlace(jsonl, EARLY_TASK)
+    fs.appendFileSync(jsonl, L({ type: 'system', subtype: 'task_notification', task_id: 'late-task', status: 'completed' }))
+    // A prewarm stopped by its deadline reports the cut and leaves the prepared
+    // checkpoint valid (the server's clock rides WALNUT_FOLD_PREWARM_DEADLINE).
+    const cut = spawnSync(cmd, args.map((a) => (a === '--start' ? '--prewarm-folds' : a)), {
+      env: { ...daemonEnv(dirs), WALNUT_FOLD_PREWARM_DEADLINE: '1' }, encoding: 'utf8', timeout: 60_000,
+    })
+    expect(cut.status, cut.stderr).toBe(0)
+    expect(JSON.parse(cut.stdout.trim().split('\n').pop()!)).toMatchObject({ sessions: 1, written: 0, cut: 1 })
+    expect(JSON.parse(fs.readFileSync(jsonl + '.fold.next', 'utf8')).boundary).toBe(next.boundary)
+    await boot(twin, dirs)
+    const state = await rpc({ cmd: 'getState', sid: 'ck-3' })
+    expect(Object.keys((state.taskState as { tasks: Record<string, unknown> }).tasks).sort()).toEqual(['early-task', 'late-task'])
+    await rpc({ cmd: 'stop', sid: 'ck-3' })
   }, 120_000)
 })

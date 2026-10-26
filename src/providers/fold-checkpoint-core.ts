@@ -25,6 +25,14 @@
  * least MIN_BYTES: at graceful shutdown, when a session dies, and periodically
  * while it grows. Never throws.
  *
+ * A second file, `<stream>.jsonl.fold.next`, is written only by the NEW binary
+ * of a daemon upgrade (`--prewarm-folds`) while the old daemon still serves. A
+ * format change rejects every old checkpoint, and on 2026-10-26 that made the
+ * new daemon fold 8.8 GB of live streams (one of 3.2 GB alone took 354s) before
+ * it listened: 7 minutes with no local sessions. The old daemon's own shutdown
+ * write goes to `.fold`, so it can never overwrite the prepared one. A load
+ * reads both and takes the valid one that reaches further.
+ *
  * How each twin gets it: daemon-standalone.ts imports createFoldCheckpoint;
  * daemon-source.ts inlines `createFoldCheckpoint.toString()` through
  * `__CREATE_FOLD_CHECKPOINT__`. So the factory body references NOTHING at
@@ -64,6 +72,7 @@ export function createFoldCheckpoint(deps: FoldCheckpointDeps) {
   const log = deps.log || function () {}
 
   const pathFor = (jsonlPath: string): string => jsonlPath + '.fold'
+  const nextPathFor = (jsonlPath: string): string => jsonlPath + '.fold.next'
   const epochOf = (st: { dev: number; ino: number; birthtimeMs: number }): string =>
     st.dev + ':' + st.ino + ':' + Math.floor(st.birthtimeMs)
 
@@ -79,14 +88,19 @@ export function createFoldCheckpoint(deps: FoldCheckpointDeps) {
     return deps.createHash('sha1').update(buf.subarray(0, got)).digest('hex') + ':' + got
   }
 
-  /** Persist where this fold stands. Returns true when a checkpoint was written. */
-  function write(jsonlPath: string, fold: { v: number }, task: unknown, expectedEpoch?: string | null): boolean {
+  /**
+   * Persist where this fold stands. Returns true when a checkpoint was written.
+   * `next` writes the upgrade's prepared checkpoint instead of the canonical one.
+   */
+  function write(
+    jsonlPath: string, fold: { v: number }, task: unknown, expectedEpoch?: string | null, opts?: { next?: boolean },
+  ): boolean {
     const boundary = fold && typeof fold.v === 'number' ? fold.v : 0
     if (!(boundary >= MIN_BYTES)) return false
     let fd: number
     // No stream file (retention removed a cold one): nothing to describe.
     try { fd = fs.openSync(jsonlPath, 'r') } catch { return false }
-    const target = pathFor(jsonlPath)
+    const target = opts && opts.next ? nextPathFor(jsonlPath) : pathFor(jsonlPath)
     const tmp = target + '.tmp-' + deps.pid
     try {
       const st = fs.fstatSync(fd)
@@ -107,10 +121,20 @@ export function createFoldCheckpoint(deps: FoldCheckpointDeps) {
     }
   }
 
-  /** The checkpoint for this stream file when it still describes it, else null. */
+  /**
+   * The checkpoint for this stream file when it still describes it, else null.
+   * Of the canonical and the prepared one, the valid one that reaches further.
+   */
   function load<F extends { v: number }, T>(jsonlPath: string): { boundary: number; fold: F; task: T | null } | null {
+    const main = loadFrom<F, T>(jsonlPath, pathFor(jsonlPath))
+    const next = loadFrom<F, T>(jsonlPath, nextPathFor(jsonlPath))
+    if (main && next) return next.boundary > main.boundary ? next : main
+    return main || next
+  }
+
+  function loadFrom<F extends { v: number }, T>(jsonlPath: string, ckPath: string): { boundary: number; fold: F; task: T | null } | null {
     let raw: string
-    try { raw = fs.readFileSync(pathFor(jsonlPath), 'utf-8') } catch { return null }
+    try { raw = fs.readFileSync(ckPath, 'utf-8') } catch { return null }
     let fd: number | null = null
     try {
       const ck = JSON.parse(raw) as {
@@ -124,7 +148,7 @@ export function createFoldCheckpoint(deps: FoldCheckpointDeps) {
       const st = fs.fstatSync(fd)
       if (epochOf(st) !== ck.epoch || st.size < boundary) return null
       if (tailHash(fd, boundary) !== ck.tail) {
-        log('warn', 'fold checkpoint does not match its stream file; folding from the start', { jsonlPath, boundary })
+        log('warn', 'fold checkpoint does not match its stream file; folding from the start', { jsonlPath, ckPath, boundary })
         return null
       }
       return { boundary, fold: ck.fold as F, task: ck.task && typeof ck.task === 'object' ? ck.task as T : null }
@@ -149,7 +173,8 @@ export function createFoldCheckpoint(deps: FoldCheckpointDeps) {
 
   function discard(jsonlPath: string): void {
     try { fs.unlinkSync(pathFor(jsonlPath)) } catch { /* none */ }
+    try { fs.unlinkSync(nextPathFor(jsonlPath)) } catch { /* none */ }
   }
 
-  return { write, load, restampTaskState, discard, pathFor, minBytes: MIN_BYTES }
+  return { write, load, restampTaskState, discard, pathFor, nextPathFor, minBytes: MIN_BYTES }
 }

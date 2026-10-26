@@ -40,6 +40,12 @@ import {
 // node:child_process stays real (constants/logging use it at import time).
 const { updateCommand } = vi.hoisted(() => ({ updateCommand: vi.fn() }))
 vi.mock('../../src/providers/daemon-service-cli.js', () => ({ runDaemonServiceCommand: updateCommand }))
+// No stream needs a fold prewarm here (pinned in local-daemon-fold-prewarm.test.ts),
+// and its real registry read is file I/O that fake timers cannot flush.
+vi.mock('../../src/providers/fold-prewarm.js', () => ({
+  registryNeedsFoldPrewarm: async () => false,
+  runFoldPrewarm: async () => ({ outcome: 'ran', ms: 0 }),
+}))
 
 const { spawnSpy } = vi.hoisted(() => ({ spawnSpy: vi.fn((..._args: unknown[]): never => {
   throw new Error('spawn() must not run while a service manages the daemon')

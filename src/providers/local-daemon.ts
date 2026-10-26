@@ -47,6 +47,7 @@ import { resolveSessionHostLaunch } from './session-host.js'
 import { classifySessionHostStart } from './session-host-core.js'
 import { QOS_CLAMP_ENV, withUtilityQosClamp } from '../lib/background-qos.js'
 import { isHostReplica } from '../core/server-role.js'
+import { registryNeedsFoldPrewarm, runFoldPrewarm } from './fold-prewarm.js'
 
 // Env-aware default so the singleton (exported below) isolates a demo server's
 // daemon when WALNUT_DAEMON_DIR is set. Tests pass `daemonDir` explicitly and are
@@ -316,6 +317,42 @@ export class LocalDaemon {
     return () => { this.readyListeners.delete(cb) }
   }
 
+  /** The fold prewarm for the upgrade to `version`: running until `done`. */
+  private _foldPrewarm: { version: string; done: boolean } | null = null
+
+  /**
+   * True while the upgrade to `version` waits for its fold prewarm. Starts it on
+   * the first call; when it settles (any outcome) the upgrade is tried again.
+   */
+  private async deferUpgradeForFoldPrewarm(binaryPath: string, version: string): Promise<boolean> {
+    if (this._foldPrewarm?.version === version) return !this._foldPrewarm.done
+    if (!(await registryNeedsFoldPrewarm(this.daemonDir))) return false
+    const state = { version, done: false }
+    this._foldPrewarm = state
+    const env = await this.buildSpawnEnv()
+    const stderrFd = this.openStderrLog()
+    const run = runFoldPrewarm({ binaryPath, version, daemonDir: this.daemonDir, env, stderrFd })
+    if (stderrFd !== null) { try { fs.closeSync(stderrFd) } catch { /* already closed */ } }
+    void run.then((result) => {
+      log.session.info('local daemon: fold checkpoints prepared for the upgrade', { version, ...result })
+    }, (err: unknown) => {
+      log.session.warn('local daemon: fold prewarm failed; upgrading without it', {
+        version, error: err instanceof Error ? err.message : String(err),
+      })
+    }).finally(async () => {
+      state.done = true
+      // A quick prewarm settles inside the very start that deferred for it; a
+      // retry joined to that start would return the old daemon and stop there.
+      await this._ensureInFlight?.catch(() => {})
+      this.ensureRunning().catch((err) => {
+        log.session.warn('local daemon: upgrade after fold prewarm failed', {
+          error: err instanceof Error ? err.message : String(err),
+        })
+      })
+    })
+    return true
+  }
+
   /** The re-run of an upgrade deferred while ACP turns were open. */
   private _upgradeRecheck: ReturnType<typeof setTimeout> | null = null
 
@@ -407,6 +444,20 @@ export class LocalDaemon {
             // the same ownership audit as the version-match path below.
             this.auditOwnerOnAdopt(this._instanceId)
             this.scheduleUpgradeRecheck()
+            return existingPort
+          }
+          // Prepare the new daemon's fold checkpoints first, while this one
+          // still serves (fold-prewarm.ts): its adopt otherwise folds every
+          // live stream before listening, minutes on a checkpoint format change.
+          if (await this.deferUpgradeForFoldPrewarm(binaryPath, expectedVersion)) {
+            log.session.info('local daemon version mismatch — upgrade DEFERRED (preparing fold checkpoints)', {
+              running: helloResult.version,
+              expected: expectedVersion,
+            })
+            this._port = existingPort
+            this._wsUrl = `ws://localhost:${existingPort}`
+            this._instanceId = helloResult.instanceId ?? this.readInstanceIdFile()
+            this.auditOwnerOnAdopt(this._instanceId)
             return existingPort
           }
           log.session.info('local daemon version mismatch — restarting', {

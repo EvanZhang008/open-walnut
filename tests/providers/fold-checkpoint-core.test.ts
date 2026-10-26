@@ -150,6 +150,69 @@ describe('fold checkpoint', () => {
     })
   })
 
+  // Incident 2026-10-26: a format change rejected every checkpoint and the new
+  // daemon folded 8.8 GB before listening. The upgrade's new binary now writes
+  // `.fold.next` while the old daemon serves; the old one only ever writes `.fold`.
+  describe('the prepared checkpoint of an upgrade (.fold.next)', () => {
+    const OLD_FORMAT = FOLD_CHECKPOINT_FORMAT - 1
+
+    it('is written beside the canonical one and loads when the canonical one is another format', () => {
+      const text = content(20)
+      fs.writeFileSync(jsonl, text)
+      const ck = make()
+      const fold = foldText(text)
+      expect(ck.write(jsonl, fold, task(2), null, { next: true })).toBe(true)
+      expect(fs.readdirSync(dir).sort()).toEqual(['sid.jsonl', 'sid.jsonl.fold.next'])
+      expect(ck.nextPathFor(jsonl)).toBe(jsonl + '.fold.next')
+      // The old daemon's shutdown write: same name it always used, its own format.
+      fs.writeFileSync(jsonl + '.fold', JSON.stringify({ v: OLD_FORMAT, epoch: 'x', boundary: fold.v, tail: 'y', fold, task: task(9) }))
+      const loaded = ck.load<FoldState, ReturnType<typeof task>>(jsonl)!
+      expect(loaded.boundary).toBe(fold.v)
+      expect(loaded.task).toEqual(task(2))
+    })
+
+    it('of two valid checkpoints, the one that reaches further wins, whichever file holds it', () => {
+      const first = content(20)
+      const more = content(3)
+      fs.writeFileSync(jsonl, first)
+      const ck = make()
+      const early = foldText(first)
+      expect(ck.write(jsonl, early, task(1), null, { next: true })).toBe(true)
+      fs.appendFileSync(jsonl, more)
+      const late = foldText(first + more)
+      expect(ck.write(jsonl, late, task(3))).toBe(true)
+      expect(ck.load(jsonl)!.boundary).toBe(late.v)
+      // And the other way round: the prepared one is the newer.
+      expect(ck.write(jsonl, early, task(1))).toBe(true)
+      expect(ck.write(jsonl, late, task(3), null, { next: true })).toBe(true)
+      expect(ck.load(jsonl)!.boundary).toBe(late.v)
+    })
+
+    it('a prepared checkpoint that stopped matching the file reads as none, and the canonical one still counts', () => {
+      const text = content(20)
+      fs.writeFileSync(jsonl, text)
+      const ck = make()
+      const fold = foldText(text)
+      expect(ck.write(jsonl, fold, task(4))).toBe(true)
+      const next = JSON.parse(fs.readFileSync(jsonl + '.fold', 'utf8'))
+      fs.writeFileSync(jsonl + '.fold.next', JSON.stringify({ ...next, boundary: fold.v + 7, fold: { ...next.fold, v: fold.v + 7 } }))
+      expect(ck.load(jsonl)!.boundary).toBe(fold.v)
+      fs.unlinkSync(jsonl + '.fold')
+      expect(ck.load(jsonl)).toBeNull()
+    })
+
+    it('discard removes both', () => {
+      const text = content(20)
+      fs.writeFileSync(jsonl, text)
+      const ck = make()
+      const fold = foldText(text)
+      expect(ck.write(jsonl, fold, null)).toBe(true)
+      expect(ck.write(jsonl, fold, null, null, { next: true })).toBe(true)
+      ck.discard(jsonl)
+      expect(fs.readdirSync(dir)).toEqual(['sid.jsonl'])
+    })
+  })
+
   it('a checkpoint within the first 4KB still hashes exactly the bytes before it', () => {
     const text = content(2)
     fs.writeFileSync(jsonl, text)

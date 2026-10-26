@@ -551,7 +551,7 @@ function sweepDeadStreams(): void {
       const pid = parseInt(fs.readFileSync(path.join(STREAMS_DIR, sid + '.pgid'), 'utf-8').trim(), 10)
       if (Number.isInteger(pid) && pid > 1 && isProcessGroupAlive(pid)) continue
     } catch {}
-    for (const ext of ['.jsonl', '.jsonl.err', '.jsonl.fold', '.jsonl.lines', '.jsonl.compact', '.pgid', '.pipe', '.log']) {
+    for (const ext of ['.jsonl', '.jsonl.err', '.jsonl.fold', '.jsonl.fold.next', '.jsonl.lines', '.jsonl.compact', '.pgid', '.pipe', '.log']) {
       try { fs.unlinkSync(path.join(STREAMS_DIR, sid + ext)) } catch {}
     }
     reaped.add(sid)
@@ -1645,6 +1645,118 @@ function rebuildFoldStateFromJsonl(jsonlPath: string): FoldRebuild {
   }
   return { state, boundary: v }
 }
+
+// ── Fold prewarm (`--prewarm-folds`, fold-checkpoint-core.ts) ──
+// Run by the server with the NEW binary before it replaces a running daemon of
+// another version, while that daemon still serves. Each registered session's
+// stream is folded once (both states in one pass, from the best checkpoint) and
+// saved as `<stream>.jsonl.fold.next`, so the new daemon's adopt folds only what
+// was written since. 2026-10-26: a checkpoint format change made the new daemon
+// fold 8.8 GB before it listened (7 min with no local sessions). Never touches a
+// session, the instance lock or a port. Keep in sync with daemon-source.ts.
+//
+// Progress is saved every FOLD_PREWARM_PROGRESS_BYTES and at the deadline the
+// server passes (WALNUT_FOLD_PREWARM_DEADLINE, epoch ms), so a run cut short
+// still leaves the next one, or the new daemon's adopt, less to fold.
+const FOLD_PREWARM_PROGRESS_BYTES = parseInt(process.env.WALNUT_FOLD_PREWARM_PROGRESS_BYTES || '', 10) || 256 * 1024 * 1024
+const foldPrewarmDeadline = (): number => parseInt(process.env.WALNUT_FOLD_PREWARM_DEADLINE || '', 10) || Infinity
+/** 'done' at the end of the file, 'cut' at the deadline (progress saved), 'failed' otherwise. */
+function prewarmFoldOne(jsonlPath: string, now: number): 'done' | 'cut' | 'failed' {
+  const ck = foldCheckpoint.load<FoldState, TaskState>(jsonlPath)
+  const resume = ck && ck.task ? ck : null
+  let state = resume ? resume.fold : initialFoldState(0)
+  const ts = resume && resume.task ? foldCheckpoint.restampTaskState(resume.task, now) : emptyTaskState()
+  let fd: number
+  try { fd = fs.openSync(jsonlPath, 'r') } catch { return 'failed' }
+  // The epoch of the file actually folded: a stream recreated meanwhile under
+  // the same path must not be described by this fold.
+  let epoch: string
+  try {
+    const st = fs.fstatSync(fd)
+    epoch = st.dev + ':' + st.ino + ':' + Math.floor(st.birthtimeMs)
+  } catch { try { fs.closeSync(fd) } catch {} return 'failed' }
+  const deadline = foldPrewarmDeadline()
+  let cut = false
+  try {
+    const buf = Buffer.alloc(FOLD_REBUILD_CHUNK)
+    let filePos = resume ? resume.boundary : 0
+    let v = filePos
+    let saved = filePos
+    let carry: Buffer = Buffer.alloc(0)
+    let discardThroughNextNewline = false
+    for (;;) {
+      if (state.v - saved >= FOLD_PREWARM_PROGRESS_BYTES || Date.now() >= deadline) {
+        if (foldCheckpoint.write(jsonlPath, state, ts, epoch, { next: true })) saved = state.v
+        if (Date.now() >= deadline) { cut = true; break }
+      }
+      const n = fs.readSync(fd, buf, 0, FOLD_REBUILD_CHUNK, filePos)
+      if (n <= 0) break
+      filePos += n
+      const chunk = carry.length ? Buffer.concat([carry, buf.subarray(0, n)]) : buf.subarray(0, n)
+      let start = 0
+      for (;;) {
+        const nl = chunk.indexOf(10, start)
+        if (nl === -1) break
+        v += (nl - start) + 1
+        if (discardThroughNextNewline) discardThroughNextNewline = false
+        else {
+          const line = chunk.subarray(start, nl).toString('utf-8')
+          if (line.trim()) {
+            state = foldLine(state, line, v)
+            if (line.includes('"task_')) {
+              try { applyTaskEvent(ts, JSON.parse(line), v, now) } catch {}
+            }
+          }
+        }
+        start = nl + 1
+      }
+      carry = Buffer.from(chunk.subarray(start))
+      if (carry.length > TAILER_CARRY_MAX) {
+        logMsg('error', 'prewarm carry overflow, dropping oversized partial line', {
+          jsonlPath, carryBytes: carry.length, cap: TAILER_CARRY_MAX, filePos,
+        })
+        v = filePos
+        carry = Buffer.alloc(0)
+        discardThroughNextNewline = true
+      }
+    }
+  } catch {
+    // A read that failed mid-pass: keep only the progress already saved.
+    return 'failed'
+  } finally {
+    try { fs.closeSync(fd) } catch {}
+  }
+  if (cut) return 'cut'
+  return foldCheckpoint.write(jsonlPath, state, ts, epoch, { next: true }) ? 'done' : 'failed'
+}
+
+function prewarmFoldCheckpoints(): { sessions: number; written: number; cut: number; ms: number } {
+  const startedAt = Date.now()
+  let sessions = 0
+  let written = 0
+  let cut = 0
+  // Largest first: a deadline then cuts the cheap ones, not the whale.
+  const streams: Array<{ jsonlPath: string; size: number }> = []
+  for (const entry of Object.values(readRegistry())) {
+    const jsonlPath = entry && entry.jsonlPath
+    if (typeof jsonlPath !== 'string' || !jsonlPath) continue
+    sessions++
+    try {
+      const size = fs.statSync(jsonlPath).size
+      if (size >= foldCheckpoint.minBytes) streams.push({ jsonlPath, size })
+    } catch {}
+  }
+  streams.sort((a, b) => b.size - a.size)
+  for (const { jsonlPath } of streams) {
+    const outcome = prewarmFoldOne(jsonlPath, Date.now())
+    if (outcome === 'done') written++
+    else if (outcome === 'cut') { cut++; break }
+  }
+  const result = { sessions, written, cut, ms: Date.now() - startedAt }
+  logMsg('info', 'fold prewarm done', result)
+  return result
+}
+
 
 // ── Stream compaction (stream-compact-core.ts) ──
 // A stopped session's stream file loses the token deltas of its finished turns
@@ -8157,7 +8269,7 @@ function cmdRename(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, 
   }
 
   try {
-    for (const ext of ['.jsonl', '.jsonl.err', '.jsonl.fold', '.jsonl.lines', '.jsonl.compact', '.pipe', '.pgid', '.log']) {
+    for (const ext of ['.jsonl', '.jsonl.err', '.jsonl.fold', '.jsonl.fold.next', '.jsonl.lines', '.jsonl.compact', '.pipe', '.pgid', '.log']) {
       try { fs.renameSync(oldBase + ext, newBase + ext) } catch {}
     }
     session.jsonlPath = newBase + '.jsonl'
@@ -11176,6 +11288,13 @@ if (isDaemonCliKeyword(action)) {
   process.exit(await runWalnutCli(process.argv.slice(3)))
 }
 
+if (action === '--prewarm-folds') {
+  // Background work for a running daemon's replacement: below the daemon it serves.
+  try { os.setPriority(10) } catch {}
+  console.log(JSON.stringify(prewarmFoldCheckpoints()))
+  process.exit(0)
+}
+
 if (action === '--stop') {
   try {
     const pid = parseInt(fs.readFileSync(PID_FILE, 'utf-8').trim(), 10)
@@ -11559,6 +11678,6 @@ if (action === '--start' || SERVICE_MODE) {
     process.stdin.on('end', () => {}) // Don't exit on stdin close
   }
 } else {
-  console.error('Usage: bun daemon-standalone.ts --start | --service | --stop | --status | --version | walnut <args...>')
+  console.error('Usage: bun daemon-standalone.ts --start | --service | --prewarm-folds | --stop | --status | --version | walnut <args...>')
   process.exit(1)
 }

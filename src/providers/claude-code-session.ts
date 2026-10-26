@@ -13111,7 +13111,7 @@ export const sessionRunner = new SessionRunner()
  * restart fold a whale stream from byte 0 (fold-checkpoint-core.ts).
  */
 export function streamFileSessionId(file: string): string {
-  return file.replace(/\.(jsonl\.err|jsonl\.fold|jsonl\.lines|jsonl|pipe|pgid|log)$/, '')
+  return file.replace(/\.(jsonl\.err|jsonl\.fold\.next|jsonl\.fold|jsonl\.lines|jsonl|pipe|pgid|log)$/, '')
 }
 
 export async function cleanupStreamFiles(preserveSessionIds?: Set<string>): Promise<number> {
