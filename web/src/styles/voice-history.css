@@ -1,9 +1,12 @@
 /* Settings > Voice > Recent recordings: the voice history rows (globals.css
    .voice-panel-item and friends) in a box of their own that scrolls, so twenty
-   takes do not push the Dictation settings far down the pane. */
+   takes do not push the Dictation settings far down the pane. Rows take the
+   settings rows' inset, so their text lines up with "Engine" below. */
 .voice-history-list {
   max-height: 420px;
   overflow-y: auto;
-  margin: -4px -12px;
-  border-radius: var(--radius-md, 10px);
+  border-radius: inherit;
+}
+.voice-history-list .voice-panel-item {
+  padding: 10px 15px;
 }
