@@ -1,13 +1,17 @@
 /**
- * The "no action needed" turn-end marker: how a session says a turn needs
- * nothing from the person.
+ * The agent acknowledgement line: how a session answers a message from another
+ * agent (a peer, a notice, a reply, a trigger) that needs nothing the person
+ * should hear about.
  *
- * Many turns end with a report the person does not have to act on, and the
- * panel gives each the same weight as one that waits on them. The session
- * prompt asks the model to end such a turn's LAST message with one fixed line,
- * `<walnut-turn status="no-action"/>`; the panel then folds that message into a
- * "No action needed" row the person can open (the whole text, copy included).
- * Never a guess from wording: no line, no fold.
+ * A coordinating session takes in such messages all day. The session prompt asks
+ * it to answer one that needs nothing with one fixed line ALONE,
+ * `<walnut-turn status="agent-ack"/>`, and the timeline then hides that whole
+ * turn (turn-shape.ts). It is never a label on an answer: a turn a person
+ * started, or a line with words before it, shows as the answer it is, the line
+ * stripped (2026-10-25, the user: an answer to their question was folded as
+ * "No action needed"). Sessions spawned before the rename still write
+ * `<walnut-turn status="no-action"/>` (a resume replays the old prompt), so both
+ * read the same. Never a guess from wording: no line, no hiding.
  *
  * The line counts only as the last non-blank line of the text, outside any code
  * fence, exactly as written. A quote of it, a line in a code block, a line in the
@@ -17,7 +21,10 @@
  * the text. Pure: tests/web/turn-end-marker.test.ts.
  */
 
-export const NO_ACTION_TAG = '<walnut-turn status="no-action"/>';
+export const NO_ACTION_TAG = '<walnut-turn status="agent-ack"/>';
+/** The line's first name, still written by sessions spawned on the old prompt. */
+export const LEGACY_NO_ACTION_TAG = '<walnut-turn status="no-action"/>';
+const TAGS = [NO_ACTION_TAG, LEGACY_NO_ACTION_TAG];
 
 const FENCE = /^\s{0,3}(`{3,}|~{3,})(.*)$/;
 /** Four spaces (or a tab) in: an indented code block, whose lines are code. */
@@ -33,11 +40,11 @@ export interface TurnMarker {
 /** Read the marker off a message's text. */
 export function readTurnMarker(text: string | undefined): TurnMarker {
   const src = text ?? '';
-  if (!src.includes(NO_ACTION_TAG)) return { text: src, noAction: false };
+  if (!TAGS.some((t) => src.includes(t))) return { text: src, noAction: false };
   const lines = src.split('\n');
   let last = lines.length - 1;
   while (last >= 0 && lines[last].trim() === '') last--;
-  if (last < 0 || lines[last].trim() !== NO_ACTION_TAG || INDENTED_CODE.test(lines[last])) {
+  if (last < 0 || !TAGS.includes(lines[last].trim()) || INDENTED_CODE.test(lines[last])) {
     return { text: src, noAction: false };
   }
   // Inside a fence? Track the open fence's own marker: ``` and ~~~ close only themselves.
@@ -65,7 +72,7 @@ export function stripTurnMarker(text: string, streaming = false): string {
   if (!streaming) return text;
   const cut = text.lastIndexOf('\n');
   const tail = text.slice(cut + 1).trim();
-  return tail.length >= 2 && NO_ACTION_TAG.startsWith(tail) ? text.slice(0, Math.max(0, cut)) : text;
+  return tail.length >= 2 && TAGS.some((t) => t.startsWith(tail)) ? text.slice(0, Math.max(0, cut)) : text;
 }
 
 /** The shape the turn rule reads (SessionHistoryMessage). */
@@ -81,9 +88,11 @@ export interface MarkerTurnMessage {
 const PERSON_FACING_TOOLS = new Set(['AskUserQuestion', 'ExitPlanMode']);
 
 /**
- * Which history rows fold to "No action needed": the main assistant's LAST row
- * of a FINISHED turn, ending with the marker, in a turn with no failed tool, no
- * question to the person, no plan and no error line.
+ * Which history rows are a clean acknowledgement: the main assistant's LAST row
+ * of a FINISHED turn that something other than a person started (`isPerson`),
+ * holding the line and nothing else, in a turn with no failed tool, no question
+ * to the person, no plan and no error line. A turn a person started, or a line
+ * with words before it, is never one: the words are an answer.
  *
  * Rows split at every message sent into the session (`isSent`: a person's, a
  * peer's, a Walnut notice; a CLI-injected line is not one), so a notice the
@@ -102,6 +111,7 @@ export function noActionRows(
   stripTag: (text: string) => string = (t) => t,
   isRoutedQuestion: (name: string, result: unknown) => boolean = () => false,
   isSent: (m: MarkerTurnMessage) => boolean = (m) => !m.injected,
+  isPerson: (m: MarkerTurnMessage) => boolean = () => false,
 ): Set<number> {
   const out = new Set<number>();
   const starts: number[] = [];
@@ -128,11 +138,14 @@ export function noActionRows(
     if (last < 0) return;
     const final = messages[last];
     if (final.role !== 'assistant' || (final.tools?.length ?? 0) > 0) return;
-    if (!readTurnMarker(stripTag(final.text)).noAction) return;
+    const read = readTurnMarker(stripTag(final.text));
+    if (!read.noAction || read.text.trim()) return;
     // Back over deliveries that arrived mid-work, to where this turn began.
     let j = k;
     while (j > 0 && !endsInAnswer(starts[j - 1], starts[j])) j--;
     if (j === 0 && starts[0] > 0 && !endsInAnswer(-1, starts[0])) return;
+    // A person's message anywhere in it makes it their turn (turn-shape.ts splits there too).
+    for (let q = j; q <= k; q++) if (isPerson(messages[starts[q]])) return;
     for (let i = starts[j] + 1; i < end; i++) {
       const m = messages[i];
       if (m.role === 'system' && m.systemVariant === 'error') return;

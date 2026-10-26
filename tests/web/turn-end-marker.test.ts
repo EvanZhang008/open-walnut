@@ -1,15 +1,20 @@
 /**
- * The "no action needed" marker reader (web/src/utils/turn-end-marker.ts). The
- * marker folds a whole answer, so the rule is strict: only the exact line, last,
- * outside a code fence. Everything else is ordinary text and stays on screen.
+ * The agent acknowledgement line (web/src/utils/turn-end-marker.ts). It hides a
+ * whole turn, so the rule is strict: only the exact line, last, outside a code
+ * fence, alone, in a turn no person started. Everything else stays on screen.
  */
 import { describe, expect, it } from 'vitest';
-import { NO_ACTION_TAG, noActionRows, readTurnMarker, stripTurnMarker } from '@/utils/turn-end-marker';
+import { LEGACY_NO_ACTION_TAG, NO_ACTION_TAG, noActionRows, readTurnMarker, stripTurnMarker } from '@/utils/turn-end-marker';
 
 describe('readTurnMarker', () => {
   it('reads the marker as the last line and returns the text without it', () => {
     expect(readTurnMarker(`Done, nothing for you.\n\n${NO_ACTION_TAG}`)).toEqual({ text: 'Done, nothing for you.', noAction: true });
     expect(readTurnMarker(`Done.\n${NO_ACTION_TAG}\n\n  \n`)).toEqual({ text: 'Done.', noAction: true });
+  });
+
+  it('reads the line under its first name too: sessions spawned before the rename still write it', () => {
+    expect(readTurnMarker(LEGACY_NO_ACTION_TAG)).toEqual({ text: '', noAction: true });
+    expect(stripTurnMarker(`Done.\n\n${LEGACY_NO_ACTION_TAG}`)).toBe('Done.');
   });
 
   it('keeps several paragraphs, lists and code above the marker intact', () => {
@@ -23,7 +28,7 @@ describe('readTurnMarker', () => {
       `Quote:\n> ${NO_ACTION_TAG}`,
       `In code:\n\`\`\`\n${NO_ACTION_TAG}`,
       `The tag is ${NO_ACTION_TAG} inline.`,
-      `${NO_ACTION_TAG.replace('no-action', 'other')}`,
+      `${NO_ACTION_TAG.replace('agent-ack', 'other')}`,
       `<walnut-turn status="no-action">`,
       '',
     ]) expect(readTurnMarker(text).noAction, text).toBe(false);
@@ -39,17 +44,19 @@ describe('readTurnMarker', () => {
     const go = { role: 'user' as const, text: 'Go.' }
     const notice = { role: 'user' as const, text: 'NOTICE' }
     const failed = { role: 'assistant' as const, text: '', tools: [{ name: 'Bash', isError: true }] }
-    const marked = { role: 'assistant' as const, text: `Done.\n\n${NO_ACTION_TAG}` }
     const lineOnly = { role: 'assistant' as const, text: NO_ACTION_TAG }
-    // Mid-work: the failure before the notice is this turn's.
-    expect([...noActionRows([go, failed, notice, marked], false)]).toEqual([])
+    const isPerson = (m: { text: string }) => m.text === 'Go.'
+    const rows = (r: Parameters<typeof noActionRows>[0], isSent?: (m: { text: string; injected?: boolean }) => boolean) =>
+      [...noActionRows(r, false, undefined, undefined, isSent, isPerson)]
+    // Mid-work: the notice belongs to the person's turn, and that turn is never hidden.
+    expect(rows([go, failed, notice, lineOnly])).toEqual([])
+    expect(rows([go, { role: 'assistant' as const, text: '', tools: [{ name: 'Bash' }] }, notice, lineOnly])).toEqual([])
+    // A person's message that came in mid-work of a notice's turn: theirs now, never hidden.
+    expect(rows([notice, { role: 'assistant' as const, text: '', tools: [{ name: 'Bash' }] }, go, lineOnly])).toEqual([])
     // After an answer: the notice starts a turn of its own, the failure stays in the one before.
-    expect([...noActionRows([go, failed, { role: 'assistant' as const, text: 'It failed.' }, notice, lineOnly], false)]).toEqual([4])
-    // A folded answer stays folded when a notice and a line-only reply follow, or the notice is still unanswered.
-    expect([...noActionRows([go, marked, notice, lineOnly], false)]).toEqual([1, 3])
-    expect([...noActionRows([go, marked, notice], false)]).toEqual([1])
-    // The caller decides what counts as sent in.
-    expect([...noActionRows([go, marked, notice, lineOnly], false, undefined, undefined, (m) => m.text !== 'NOTICE')]).toEqual([3])
+    expect(rows([go, failed, { role: 'assistant' as const, text: 'It failed.' }, notice, lineOnly])).toEqual([4])
+    // The caller decides what counts as sent in: not sent, the notice is part of the person's turn.
+    expect(rows([go, { role: 'assistant' as const, text: 'Answer.' }, notice, lineOnly], (m) => m.text !== 'NOTICE')).toEqual([])
   })
 
   it('an opening fence with an info string never closes a block', () => {
@@ -80,11 +87,21 @@ describe('stripTurnMarker', () => {
   });
 });
 
-describe('noActionRows: only a finished, clean turn folds', () => {
-  const user = (text = 'Go.') => ({ role: 'user' as const, text });
+describe('noActionRows: only a finished, clean agent turn ending in the line alone', () => {
+  // `user()` rows here are notices: no person wrote them.
+  const user = (text = 'NOTICE') => ({ role: 'user' as const, text });
   const said = (text: string, tools?: { name: string; isError?: boolean }[]) => ({ role: 'assistant' as const, text, ...(tools ? { tools } : {}) });
-  const marked = said(`All done, nothing for you.\n\n${NO_ACTION_TAG}`);
+  const marked = said(NO_ACTION_TAG);
   const ok = (rows: Parameters<typeof noActionRows>[0], streaming = false) => [...noActionRows(rows, streaming)];
+
+  it('never a turn a person started, never a line with words before it (2026-10-25)', () => {
+    const person = (m: { text: string }) => m.text === 'Does it have to be a Mac?';
+    // The answer to the person's own question, line and all, is an answer.
+    expect([...noActionRows([user('Does it have to be a Mac?'), said(`Yes. Here is why...\n\n${NO_ACTION_TAG}`)], false, undefined, undefined, undefined, person)]).toEqual([]);
+    expect([...noActionRows([user('Does it have to be a Mac?'), marked], false, undefined, undefined, undefined, person)]).toEqual([]);
+    // Words before the line, in a notice's turn: still words for the reader.
+    expect(ok([user(), said(`All done, nothing for you.\n\n${NO_ACTION_TAG}`)])).toEqual([]);
+  });
 
   it('folds the last row of a clean finished turn', () => {
     expect(ok([user(), said('', [{ name: 'Read' }]), said('Middle result.'), marked])).toEqual([3]);

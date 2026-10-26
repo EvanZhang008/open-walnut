@@ -32,7 +32,7 @@ describe('shapeTurns', () => {
     expect(shapes([notice(), said('', [{ name: 'Bash' }]), said('You need to decide X.')])).toEqual([['answered', 0, 2]])
   })
 
-  it('a person\'s turn that ended with the line keeps the message and its folded answer', () => {
+  it('a person\'s turn that ended with the line shows its answer, the line ignored', () => {
     expect(shapes([person(), said(`Done.\n\n${NO_ACTION_TAG}`)])).toEqual([['answered', 0, 1]])
   })
 

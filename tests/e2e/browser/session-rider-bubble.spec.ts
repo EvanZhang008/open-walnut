@@ -83,6 +83,11 @@ async function previousRowClass(row: Locator): Promise<string> {
   })
 }
 
+/** The rider row right above a bubble: its muted fold line and the cards inside. */
+function riderAbove(b: Locator): Locator {
+  return b.locator('xpath=preceding-sibling::div[contains(concat(" ", @class, " "), " session-msg-riders ")][1]')
+}
+
 /**
  * Bring a row into the history viewport with a REAL wheel gesture. The timeline
  * follows its own bottom and snaps Playwright's scroll-into-view straight back
@@ -132,6 +137,18 @@ test('the words after an org digest are a user bubble; the digest is a card abov
   // The card is its own row right above the bubble, never inside it.
   expect(await previousRowClass(b)).toContain('session-msg-envelope')
   await expect(b.locator('.provenance-chip, .session-provenance-card')).toHaveCount(0)
+  // Above a person's words the digest is one muted line, no card on screen until it is opened.
+  const rider = riderAbove(b)
+  const fold = rider.locator('[data-testid="rider-fold"]')
+  await expect(fold).toHaveAttribute('data-open', 'false')
+  await expect(fold.locator('.tool-run-toggle')).toHaveText(/Received a message/)
+  await expect(rider.locator('.provenance-card')).toHaveCount(0)
+  await reveal(page, panel, b)
+  await shot(page, rider, 'org-digest-folded')
+  await reveal(page, panel, fold)
+  await fold.locator('.tool-run-toggle').click()
+  await expect(rider.locator('.provenance-card')).toHaveCount(1)
+  await expect(rider.locator('.provenance-details[open]')).toHaveCount(0)
   await reveal(page, panel, b)
   await shot(page, b, 'org-digest-words')
 
@@ -163,6 +180,9 @@ test('four stacked notices fold into cards above one bubble', async ({ page }) =
   const shown = await b.innerText()
   for (const m of ['RIDER_ROUTING_MARKER', 'RIDER_ORG_MARKER', 'RIDER_APP_MARKER', 'now stands in']) expect(shown).not.toContain(m)
   expect(await previousRowClass(b)).toContain('session-msg-envelope')
+  // All four behind one muted line.
+  await expect(riderAbove(b).locator('[data-testid="rider-fold"] .tool-run-toggle')).toHaveText(/Received 4 messages/)
+  await expect(riderAbove(b).locator('.provenance-card')).toHaveCount(0)
 })
 
 test('unsafe shapes render as before and lose nothing', async ({ page }) => {

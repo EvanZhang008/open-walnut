@@ -275,7 +275,7 @@ export function createEnvelopeKit(): EnvelopeKit {
   function clipNoticeMessage(text: string): EnvelopeLastMessage | undefined {
     // The no-action line (web/src/utils/turn-end-marker.ts) is the panel's cue,
     // not the session's words: a quote never carries it.
-    const trimmed = text.replace(/(?:^|\n)[ \t]{0,3}<walnut-turn status="no-action"\/>\s*$/, '').trim();
+    const trimmed = text.replace(/(?:^|\n)[ \t]{0,3}<walnut-turn status="(?:agent-ack|no-action)"\/>\s*$/, '').trim();
     if (!trimmed) return undefined;
     if (trimmed.length <= NOTICE_LAST_MESSAGE_MAX) return { text: trimmed };
     const cut = trimmed.slice(0, cutEnd(trimmed, NOTICE_LAST_MESSAGE_MAX));

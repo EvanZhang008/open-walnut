@@ -19,7 +19,7 @@ import { REAL_PANEL } from './draft-helpers'
 
 const SESSION_ID = 'pw-fold-session'
 const TASK_ID = 'pw-task-fold'
-const TAG = '<walnut-turn status="no-action"/>'
+const TAG = '<walnut-turn status="agent-ack"/>'
 const SHOTS = process.env.RIDER_SHOT_DIR ?? '/tmp/turn-folds'
 
 test.describe.configure({ mode: 'serial' })
@@ -133,30 +133,23 @@ test('a failure folded before an answer says so in the header', async ({ page })
   await expect(fold.locator('.tool-run-fail').filter({ hasText: '2 failed' })).toHaveCount(2)
 })
 
-test('a clean turn that needs nothing folds to "No action needed"; opened, it is all there', async ({ page }) => {
+test('an answer to the person shows in full even with the line under it; nothing reads "No action needed"', async ({ page }) => {
+  // 2026-10-25: a long answer to the user's own question was folded under "No action needed".
   test.setTimeout(90_000)
   const panel = await openFoldSession(page)
   const history = panel.locator('.session-history')
-  const folds = history.locator('[data-testid="no-action-fold"]')
-  // B, and G (whose turn a peer's FYI followed: that background turn is its own).
-  await expect(folds).toHaveCount(2)
-  await expect(folds.nth(1).locator('.no-action-fold-preview')).toHaveText('FOLD_NOACTION_G nothing left, all clean.')
-  const fold = folds.first()
-  await expect(fold.locator('.tool-run-label')).toHaveText('No action needed')
-  // Folded, the row still says what the answer was: its first sentence, nothing more.
-  await expect(fold.locator('.no-action-fold-preview')).toHaveText('FOLD_NOACTION_B all handled, nothing for you.')
-  expect(await history.innerText()).not.toContain('Second paragraph of it.')
-  await reveal(page, panel, fold)
-  await shot(page, fold, 'no-action-folded')
-
-  await fold.locator('.tool-run-toggle').first().click()
-  await expect(fold).toContainText('FOLD_NOACTION_B all handled, nothing for you.')
-  await expect(fold).toContainText('Second paragraph of it.')
-  expect(await fold.innerText()).not.toContain('walnut-turn')
-  await shot(page, fold, 'no-action-open')
-
-  const msg = fold.locator('.session-msg-assistant').first()
+  await expect(history.locator('[data-testid="no-action-fold"]')).toHaveCount(0)
+  for (const marker of ['FOLD_NOACTION_B', 'FOLD_NOACTION_G']) {
+    const msg = history.locator('.session-msg-assistant', { hasText: marker })
+    await expect(msg).toHaveCount(1)
+    await expect(msg).toBeVisible()
+    expect(await msg.innerText()).not.toContain('walnut-turn')
+  }
+  await expect(history).toContainText('Second paragraph of it.')
+  expect(await history.innerText()).not.toContain('No action needed')
+  const msg = history.locator('.session-msg-assistant', { hasText: 'FOLD_NOACTION_B' })
   await reveal(page, panel, msg)
+  await shot(page, msg, 'answer-with-line-shown')
   await msg.click({ button: 'right' })
   await page.getByRole('menuitem', { name: 'Copy message', exact: true }).click()
   const copied = await page.evaluate(() => (window as unknown as { __copied: string[] }).__copied)
@@ -167,7 +160,7 @@ test('a turn a peer started that needed nothing is hidden; a quiet toggle opens 
   test.setTimeout(90_000)
   const panel = await openFoldSession(page)
   const history = panel.locator('.session-history')
-  // Both peer FYIs (after turn five's answer, and after G's folded one).
+  // Both peer FYIs (after turn five's answer, and after G's; the second on the line's first name).
   const hidden = history.locator('[data-testid="hidden-turns"]')
   await expect(hidden).toHaveCount(2)
   await expect(hidden.last().locator('button')).toHaveText('Show 1 hidden turn')

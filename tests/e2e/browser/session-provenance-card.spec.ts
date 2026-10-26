@@ -25,6 +25,7 @@
  */
 import fs from 'node:fs/promises'
 import { expect, test, type Locator, type Page } from '@playwright/test'
+import { openAllTurnFolds } from './turn-fold-helpers'
 
 const SESSION_ID = 'pw-provenance-session'
 const TASK_ID = 'pw-task-provenance'
@@ -64,6 +65,8 @@ async function openSession(page: Page): Promise<Locator> {
   }
   await expect(panel).toBeVisible({ timeout: 15_000 })
   await expect(panel.locator('.provenance-card').first()).toBeVisible({ timeout: 20_000 })
+  // Every card and banner row sits inside a fold now (turn-shape.ts): open them to read them.
+  await openAllTurnFolds(panel)
   return panel
 }
 

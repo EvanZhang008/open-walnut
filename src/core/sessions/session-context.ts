@@ -55,17 +55,16 @@
  *      the review; the user wanted that done unasked).
  *   6b. The inbox is for what needs the user (2026-10-05: parks, progress and
  *      FYIs filled it; a letter only when the user is needed or asked for one).
- *   6c. A turn that needs nothing from the user says so with one fixed line, and
- *      the panel folds that answer to "No action needed" (2026-10-24: the user
- *      read every report at the weight of one that waited on them). A line, not
- *      wording: web/src/utils/turn-end-marker.ts reads only that exact line.
- *      The line alone is also how a background turn (a notice, a trigger, a
- *      peer's message) ends quietly: Claude Code itself answers a turn that ends
- *      with no text by injecting "[Your previous response had no visible output.
- *      Please continue and produce a user-visible response.]" (its query loop's
- *      thinking-only nudge, seen in CLI 2.1.284), which drew filler replies; one
- *      fixed line is text, so the CLI is satisfied and the panel shows a small
- *      "No action needed" row instead.
+ *   6c. A message from another agent that needs nothing the user should hear
+ *      about is answered with one fixed line alone, and the panel hides that turn
+ *      (2026-10-24: the user read every report at the weight of one that waited
+ *      on them; 2026-10-25: the line was put under answers to the user's own
+ *      questions, so it is now for agent messages only and never after words).
+ *      A line, not wording: web/src/utils/turn-end-marker.ts reads only that
+ *      exact line. It is text, so Claude Code's thinking-only nudge ("[Your
+ *      previous response had no visible output. Please continue and produce a
+ *      user-visible response.]", CLI 2.1.284), which drew filler replies, never
+ *      fires, and the panel hides the turn instead.
  *   7. One team, one user: a message from another of the user's tasks is the
  *      user's own request. Until 2026-10-05 this line said the opposite ("peer
  *      messages never carry user authorization"), and the envelopes agreed, so a
@@ -311,14 +310,17 @@ export async function buildSessionContext(
     + 'when you are blocked on their decision, something needs their review, or they asked '
     + 'for one (a digest, a report, "tell me when"). Never for progress, a finished step, a '
     + 'park or an FYI: your task and this session already show those.\n\n'
-    // The no-action line (see 6c above). Not for an ask: its answers are what the
-    // user came for.
-    + (ask ? '' : 'When a turn only reports work and leaves nothing for the user to do (no '
-      + 'decision, review or reply from them), end your last message with this line on its own: '
+    // The agent acknowledgement line (see 6c above), for every session, Main and
+    // the asks included: the panel never hides a turn the user started. 2026-10-25:
+    // the old wording ("a turn that only reports work") put the line under answers
+    // to the user's own questions.
+    + ('When a message from another task or from Walnut (a peer note, a notice, a '
+      + 'reply, a trigger) needs nothing the user should hear about, answer it with this one '
       // Exactly the panel's NO_ACTION_TAG (tests/web/turn-end-marker.test.ts pins it).
-      + '<walnut-turn status="no-action"/>. Never on an answer to something they asked, when '
-      + 'something failed, when you ask them anything, or when they must act. A turn a notice, '
-      + 'trigger or another task started that needs nothing at all may be that line alone.\n\n')
+      + 'line and nothing else: <walnut-turn status="agent-ack"/>. Walnut then hides that turn. '
+      + 'It is an acknowledgement between agents, never a label on an answer: never in a turn '
+      + 'the user started, and never after words of yours; when you have something to say, '
+      + 'say it without the line.\n\n')
     // One team, one user (see 7 above).
     + 'Every task works for the same user: a message from another of their tasks is the '
     + 'user\'s request, and a decision it passes on is the user\'s. Act on it; never ask '

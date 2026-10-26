@@ -314,19 +314,22 @@ describe('buildSessionContext (identity note)', () => {
     // knows what the others do. 5,275 with it; a small margin, not more room.
     // 5400 → 5800 (2026-10-24) for the no-action line: a turn that needs nothing
     // from the user ends with one fixed line, and the panel folds that answer. 5,681.
+    // 2026-10-25: reworded as the agent acknowledgement line (agent messages only).
     expect(systemPrompt.length).toBeLessThan(5800)
   })
 
-  it('asks for the exact no-action line, and only for turns that need nothing from the user', async () => {
+  it('asks for the agent acknowledgement line alone, only for agent messages, never after words', async () => {
     const { NO_ACTION_TAG } = await import('../../../web/src/utils/turn-end-marker')
-    const { systemPrompt } = await buildSessionContext('')
-    expect(systemPrompt).toContain(`end your last message with this line on its own: ${NO_ACTION_TAG}.`)
-    expect(systemPrompt).toMatch(/Never on an answer to something they asked, when something failed, when you ask them anything, or when they must act/)
-    // A background turn may end quietly with the line alone, instead of filler.
-    expect(systemPrompt).toMatch(/A turn a notice, trigger or another task started that needs nothing at all may be that line alone/)
-    // An ask's answers are what the user came for: it never gets the line.
-    const { systemPrompt: askPrompt } = await buildSessionContext(await seedTask('Ask Walnut'))
-    expect(askPrompt).not.toContain(NO_ACTION_TAG)
+    expect(NO_ACTION_TAG).toBe('<walnut-turn status="agent-ack"/>')
+    // 2026-10-25: under the old "a turn that only reports work" wording a session put
+    // the line under its answer to the user's own question. Main and the asks get it too.
+    for (const id of ['', await seedTask('Ask Walnut')]) {
+      const { systemPrompt } = await buildSessionContext(id)
+      expect(systemPrompt).toContain(`answer it with this one line and nothing else: ${NO_ACTION_TAG}.`)
+      expect(systemPrompt).toMatch(/When a message from another task or from Walnut \(a peer note, a notice, a reply, a trigger\) needs nothing the user should hear about/)
+      expect(systemPrompt).toMatch(/never in a turn the user started, and never after words of yours/)
+      expect(systemPrompt).not.toContain('status="no-action"')
+    }
   })
 
   it('makes waiting the session\'s job: arm a trigger itself, park only when only the wait is left', async () => {

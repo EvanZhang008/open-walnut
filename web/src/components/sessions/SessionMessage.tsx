@@ -28,6 +28,7 @@ import { SessionOutboundCard } from './SessionOutboundCard';
 import { splitLeadingBanners } from '@open-walnut/history-injected-banner';
 import { splitLeadingRiders } from '@open-walnut/history-walnut-riders';
 import '@/styles/session-riders.css';
+import { ProcessFoldRow } from './TurnFolds';
 import { QUESTION_BANNER_RE, stripQuestionTag } from '@/utils/question-tag';
 import { stripTurnMarker } from '@/utils/turn-end-marker';
 import { shortenFileAboutLine } from '@/utils/thread-tree';
@@ -1352,14 +1353,28 @@ function SessionMessageBubble({ message, assistantLabel = 'Claude Code', session
     </div>
   );
   if (!riderSegments) return row;
+  // Not `.session-msg-content`: that class marks THE message body, which quote
+  // pins and passage selection find as the row's first match.
+  const cards = (
+    <div className="session-msg-rider-content" onClick={handleContentClick}>
+      <SessionEnvelopeSegments segments={riderSegments} sessionCwd={sessionCwd} />
+    </div>
+  );
+  // Above a person's words the notices are not for the reader: one muted
+  // "Received a message ›" line, the cards one click away, never a card row of
+  // their own (2026-10-25, the user: "the user doesn't care"). Ahead of another
+  // envelope the row already sits in a turn's fold, so the cards show as they are.
+  const personWords = !(envelopeSegments || (bannerSplit && !bodyText));
+  const count = riderSegments.length;
   return (
     <>
       <div className="session-msg session-msg-envelope session-msg-riders" data-testid="session-rider-row">
-        {/* Not `.session-msg-content`: that class marks THE message body, which
-            quote pins and passage selection find as the row's first match. */}
-        <div className="session-msg-rider-content" onClick={handleContentClick}>
-          <SessionEnvelopeSegments segments={riderSegments} sessionCwd={sessionCwd} />
-        </div>
+        {personWords ? (
+          <ProcessFoldRow foldId={msgId ?? timestamp ?? 'rider'} foldKey={`rider:${msgId ?? timestamp ?? ''}`} testId="rider-fold"
+            phrase={count === 1 ? 'Received a message' : `Received ${count} messages`}>
+            {cards}
+          </ProcessFoldRow>
+        ) : cards}
       </div>
       {row}
     </>

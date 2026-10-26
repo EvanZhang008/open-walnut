@@ -2811,7 +2811,7 @@ await fs.mkdir(idrefFixtureRoot, { recursive: true })
   // One turn per rule the timeline must keep: narration stays, a failure
   // stays, a quoted or mid-text marker is ordinary text.
   {
-    const { NO_ACTION_TAG } = await import('../../../web/src/utils/turn-end-marker.js')
+    const { NO_ACTION_TAG, LEGACY_NO_ACTION_TAG } = await import('../../../web/src/utils/turn-end-marker.js')
     const sid = 'pw-fold-session'
     let seq = 0
     let parent: string | null = null
@@ -2842,7 +2842,8 @@ await fs.mkdir(idrefFixtureRoot, { recursive: true })
     call('Edit', { file_path: '/tmp/fold/b.ts', old_string: 'a', new_string: 'b' }, 'ok')
     call('mcp__walnut__task_send', { to: 'pw-task-001', title: 'FOLD_SENT_TITLE sample done', text: 'Sample done.' }, '{"outcome":"Delivered."}')
     say('FOLD_FINAL_A here is the answer.')
-    // ② a clean turn that needs nothing: folds to "No action needed"
+    // ② an answer to the person with the line under it (the 2026-10-25 misuse):
+    //    the line is ignored, the answer shows as any answer
     ask('FOLD_ASK_TWO tidy up.')
     call('Bash', { command: 'echo tidy' }, 'tidy')
     say(`FOLD_NOACTION_B all handled, nothing for you.\n\nSecond paragraph of it.\n\n${NO_ACTION_TAG}`)
@@ -2865,12 +2866,12 @@ await fs.mkdir(idrefFixtureRoot, { recursive: true })
     const { createEnvelopeKit: foldKit } = await import('../../../src/core/peers/envelope-kit.js')
     ask(foldKit().buildWalnutMessage({ kind: 'peer-note', attrs: { from: 'Sample lead [abcd1234]', title: 'FOLD_PEER_FYI status only' }, body: 'Status only, nothing to do.' }))
     say(NO_ACTION_TAG)
-    // ⑦ a folded answer, then ⑧ a peer's FYI answered with the line alone: the
-    // background turn is its own, so the answer before it stays folded
+    // ⑦ another answer with the line under it, then ⑧ a peer's FYI answered with
+    // the line alone under its first name (a session on the old prompt): hidden
     ask('FOLD_ASK_SEVEN anything left?')
     say(`FOLD_NOACTION_G nothing left, all clean.\n\n${NO_ACTION_TAG}`)
     ask(foldKit().buildWalnutMessage({ kind: 'peer-note', attrs: { from: 'Sample lead [abcd1234]', title: 'FOLD_PEER_FYI_TWO status only' }, body: 'Second status, nothing to do.' }))
-    say(NO_ACTION_TAG)
+    say(LEGACY_NO_ACTION_TAG)
     // ⑨ the messaging shape a coordinating session writes: every call row also
     // carries the reasoning before it, sends (a card, a reply card) between the
     // org and inbox ops and a task update: one process fold, all of it inside

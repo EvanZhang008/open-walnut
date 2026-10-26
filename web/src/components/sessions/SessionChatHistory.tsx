@@ -52,10 +52,9 @@ import { ThreadStackHeader } from './ThreadStackHeader';
 import { ThreadTurnLabel } from './ThreadTurnLabel';
 import { foldGroupOf, foldOpenKeys, foldParts, isFolded } from '@/utils/thread-fold';
 import { groupProcessParts, processPhrase } from './process-fold';
-import { HiddenTurnsRow, NoActionFold, NoActionMark, ProcessFoldRow, hiddenTurnsKey, noActionFoldKey, openTurnFold, processFoldKey, turnFoldKey } from './TurnFolds';
+import { HiddenTurnsRow, NoActionMark, ProcessFoldRow, hiddenTurnsKey, openTurnFold, processFoldKey, turnFoldKey } from './TurnFolds';
 import { shapeTurns, type TurnShape } from '@/utils/turn-shape';
 import { noActionRows, readTurnMarker, stripTurnMarker } from '@/utils/turn-end-marker';
-import { fallbackTitle } from './message-fold';
 import { detectOutboundSend } from './session-outbound';
 import { isRoutedQuestion } from './tool-run-phrase';
 import { isMergeableHistoryTool } from './SessionMessage';
@@ -2758,21 +2757,21 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     && leadingStreamRunIndices.length > 0;
   const boundaryStreamIndices = mergeBoundary ? new Set(leadingStreamRunIndices) : new Set<number>();
   const renderedHistoryParts = mergeBoundary ? historyParts.slice(0, -1) : historyParts;
-  // A finished, clean turn whose last answer said it needs nothing from the
-  // person folds to one "No action needed" row (turn-end-marker.ts).
+  // A finished, clean turn that something other than a person started and that
+  // ended with the acknowledgement line alone (turn-end-marker.ts): hidden.
   // A row that folded when the session last went quiet stays folded while the
   // next turn streams: that turn's own rows are not in history yet, so without
   // this the previous answer would open up for the whole turn and fold back.
   const settledNoAction = useRef<Set<string>>(new Set());
   const noActionSet = useMemo(() => {
     // Turns split at every message sent in (history-turn-window.ts), notices included.
-    const settled = noActionRows(messages, false, stripQuestionTag, isRoutedQuestion, isHistorySentRow);
+    const settled = noActionRows(messages, false, stripQuestionTag, isRoutedQuestion, isHistorySentRow, isHistoryUserTurn);
     const keyOf = (i: number) => messages[i].msgId ?? `${messages[i].timestamp}:${i}`;
     if (!isStreaming) {
       settledNoAction.current = new Set([...settled].map(keyOf));
       return settled;
     }
-    const live = noActionRows(messages, true, stripQuestionTag, isRoutedQuestion, isHistorySentRow);
+    const live = noActionRows(messages, true, stripQuestionTag, isRoutedQuestion, isHistorySentRow, isHistoryUserTurn);
     for (const i of settled) if (settledNoAction.current.has(keyOf(i))) live.add(i);
     return live;
   }, [messages, isStreaming]);
@@ -3506,24 +3505,14 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
         {gapDivider(globalIndex)}
         {turnLabelFor(rowId, m.role)}
         {isMarkerOnly(m) ? (
-          // The line alone has nothing to show; it reads "No action needed" only
-          // where the turn rule agrees (no failure, question or plan in that turn).
+          // The line alone has nothing to show; it reads "Acknowledged" only where
+          // the turn rule agrees (an agent's turn, no failure, question or plan).
           noActionSet.has(globalIndex) ? <NoActionMark /> : null
-        ) : noActionSet.has(globalIndex) ? (
-          <NoActionFold foldId={noActionFoldIdOf(rowId, m, globalIndex)} preview={fallbackTitle(readTurnMarker(stripQuestionTag(m.text)).text, 90)}>
-            <SessionMessage message={m} assistantLabel={assistantLabel} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} suppressTools={part.suppressTools} showCopyActions={globalIndex === lastAssistantTextIndex} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />
-          </NoActionFold>
         ) : (
           <SessionMessage message={m} assistantLabel={assistantLabel} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} suppressTools={part.suppressTools} showCopyActions={globalIndex === lastAssistantTextIndex} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />
         )}
       </div>
     );
-  };
-
-  const noActionFoldIdOf = (rowId: string | undefined, m: SessionHistoryMessage, globalIndex: number): string => {
-    const id = rowId ?? `${m.timestamp}:${globalIndex}`;
-    if (rowId) markFolded(rowId, noActionFoldKey(id));
-    return id;
   };
 
   /**
