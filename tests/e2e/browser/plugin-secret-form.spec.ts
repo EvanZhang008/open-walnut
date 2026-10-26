@@ -146,6 +146,14 @@ async function selectLine(box: Locator, n: number): Promise<void> {
   }, n)
 }
 
+/** Away to Settings and back to the Apps page through its Apps link, so the list mounts again. */
+async function reopenPlugins(page: Page): Promise<void> {
+  await page.locator('.sidebar-nav a[href^="/settings"]').click()
+  await expect(page.locator('.settings-nav')).toBeVisible({ timeout: 60_000 })
+  await page.getByTestId('settings-nav-plugin-store').click()
+  await expect(page.getByTestId('apps-page')).toBeVisible({ timeout: 60_000 })
+}
+
 /** The app's entry page once; every step after it is a click. */
 async function openSettings(page: Page, pane: string): Promise<void> {
   await page.goto(`http://127.0.0.1:${fixture!.port}/`)
@@ -156,8 +164,10 @@ async function openSettings(page: Page, pane: string): Promise<void> {
   await page.getByTestId(pane).click()
 }
 
+/** The plugin list lives on the Apps page; Settings' Apps entry links there. */
 async function openPluginForm(page: Page): Promise<Locator> {
   await openSettings(page, 'settings-nav-plugin-store')
+  await expect(page.getByTestId('apps-page')).toBeVisible({ timeout: 60_000 })
   await page.getByTestId(`plugin-configure-${fixture!.pluginId}`).click({ timeout: 60_000 })
   const form = page.getByTestId(`plugin-config-${fixture!.pluginId}`)
   await expect(form.locator(`#plugin-${fixture!.pluginId}-api_keys`)).toBeVisible({ timeout: 60_000 })
@@ -191,8 +201,7 @@ test('deleting one of two hidden keys saves the one left, and the form shows it'
   await form.screenshot({ path: `${SCREENSHOT_DIR}/${info.project.name}-1-one-key-left.png` })
 
   // Opened again from the list, the form reads the stored list: one key.
-  await page.getByTestId('settings-nav-devices').click()
-  await page.getByTestId('settings-nav-plugin-store').click()
+  await reopenPlugins(page)
   await page.getByTestId(`plugin-configure-${fixture!.pluginId}`).click({ timeout: 60_000 })
   await expect(page.getByTestId(`plugin-config-${fixture!.pluginId}`).locator(`#plugin-${fixture!.pluginId}-api_keys`)).toHaveValue(tail(second))
 })
@@ -247,8 +256,7 @@ test('list entries no tail tells apart show bullets only; a delete among them is
 
   // Opened again from the list, the form reads the stored list: four lines, each with its own tail
   // (the one left of the two that ended alike now ends like no other).
-  await page.getByTestId('settings-nav-devices').click()
-  await page.getByTestId('settings-nav-plugin-store').click()
+  await reopenPlugins(page)
   await page.getByTestId(`plugin-configure-${id}`).click({ timeout: 60_000 })
   await expect(page.getByTestId(`plugin-config-${id}`).locator(`#plugin-${id}-backup_keys`))
     .toHaveValue([tail(dupB), tail(comma), tail(solo), tail(typed)].join('\n'))
@@ -311,8 +319,7 @@ test('a secret with a comma in it, typed in full as a refusal asks, is saved as 
   await form.screenshot({ path: `${SCREENSHOT_DIR}/${info.project.name}-1c-comma-typed-in-full.png` })
 
   // Opened again from the list, the form reads the stored list: one line.
-  await page.getByTestId('settings-nav-devices').click()
-  await page.getByTestId('settings-nav-plugin-store').click()
+  await reopenPlugins(page)
   await page.getByTestId(`plugin-configure-${id}`).click({ timeout: 60_000 })
   await expect(page.getByTestId(`plugin-config-${id}`).locator(`#plugin-${id}-pair_keys`)).toHaveValue(tail(withComma))
 })
@@ -405,8 +412,7 @@ test('typed next to a hidden line: a stray space is trimmed away, anything else 
   expect(await diskText()).not.toContain(B)
   await expect(form.locator('.settings-row-error')).toHaveCount(0)
   // Opened again from the list: four lines, each with its own tail.
-  await page.getByTestId('settings-nav-devices').click()
-  await page.getByTestId('settings-nav-plugin-store').click()
+  await reopenPlugins(page)
   await page.getByTestId(`plugin-configure-${id}`).click({ timeout: 60_000 })
   await expect(page.getByTestId(`plugin-config-${id}`).locator(`#plugin-${id}-ring_keys`))
     .toHaveValue([...shown, tail('rk-form-golf-7777')].join('\n'))

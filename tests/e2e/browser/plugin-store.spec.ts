@@ -5,15 +5,15 @@ import { expect, test } from './shortcut-test-fixture'
 import { type Page } from '@playwright/test'
 
 /**
- * Settings → Plugins, the registry store.
+ * The plugin store on the Apps page (/apps), reached from the sidebar's Apps entry.
  *
  * What it pins:
  *
  *   1. The store lists what is actually on this machine (walnut-time, linked) AND
  *      catalog entries that are not (the fixture's git overlay entry) — one surface,
  *      two lists.
- *   2. The ON/OFF switch is real: turning walnut-time off takes its Settings → Plugins
- *      row and its App away LIVE, and turning it back on brings them back. Before this
+ *   2. The ON/OFF switch is real: turning walnut-time off takes its Apps page tile,
+ *      its Settings nav row and its App away LIVE, and turning it back on brings them back. Before this
  *      section there was no UI that could do it at all (the old spec next door had to
  *      POST the disable route by hand, and said so).
  *   3. OFF PERSISTS. The switch writes `plugins.walnut-time.enabled: false` to
@@ -116,14 +116,13 @@ async function expandSidebar(page: Page): Promise<void> {
   }
 }
 
-/** Settings, opened the way a user opens it. */
+/** The Apps page, opened the way a user opens it: the sidebar's Apps entry. */
 async function openPlugins(page: Page): Promise<void> {
   await page.goto(`http://127.0.0.1:${fixture!.port}/`)
   await page.waitForLoadState('domcontentloaded')
   await expandSidebar(page)
-  await page.getByTestId('sidebar-core-app-settings').click()
-  await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible({ timeout: 60_000 })
-  await page.getByTestId('settings-nav-plugin-store').click()
+  await page.getByTestId('sidebar-core-app-apps').click()
+  await expect(page.getByTestId('apps-page')).toBeVisible({ timeout: 60_000 })
   await expect(page.locator('#plugin-store')).toBeVisible({ timeout: 30_000 })
 }
 
@@ -271,9 +270,14 @@ test('settings that live in the App: Configure goes there, the save lands, and a
   page.on('pageerror', (error) => pageErrors.push(error.message))
   await openPlugins(page)
 
-  // The App asked for no placement, so its row is in the Settings nav, not the Sidebar.
-  await expect(page.getByTestId('settings-nav-app-sigma:main')).toBeVisible({ timeout: 30_000 })
+  // The App asked for no placement, so its row is in the Settings nav, not the Sidebar,
+  // and its tile on the Apps page says so.
+  await expect(page.getByTestId('apps-app-sigma:main')).toHaveAttribute('data-where', 'settings', { timeout: 30_000 })
   await expect(page.getByTestId('sidebar-app-sigma:main')).toHaveCount(0)
+  await page.getByTestId('sidebar-core-app-settings').click()
+  await expect(page.getByTestId('settings-nav-app-sigma:main')).toBeVisible({ timeout: 30_000 })
+  await page.getByTestId('sidebar-core-app-apps').click()
+  await expect(page.getByTestId('apps-page')).toBeVisible({ timeout: 30_000 })
 
   // One home for the form: Configure navigates instead of expanding a copy here.
   const sigmaRow = page.getByTestId('plugin-row-sigma')
@@ -301,8 +305,7 @@ test('settings that live in the App: Configure goes there, the save lands, and a
 
   // tau asks for the same, but its web entry failed, so there is no App to send it to:
   // the row keeps the inline form rather than leaving the settings unreachable.
-  await page.getByTestId('sidebar-core-app-settings').click()
-  await page.getByTestId('settings-nav-plugin-store').click()
+  await page.getByTestId('sidebar-core-app-apps').click()
   await expect(page.getByTestId('plugin-row-tau')).toBeVisible({ timeout: 30_000 })
   await expect(page.getByTestId('plugin-open-settings-tau')).toHaveCount(0)
   await page.getByTestId('plugin-configure-tau').click()
@@ -378,34 +381,37 @@ test('the switch turns a plugin off and on, and off survives a restart', async (
   page.on('pageerror', (error) => pageErrors.push(error.message))
 
   await openPlugins(page)
-  await expect(page.getByTestId('settings-nav-app-walnut-time:main')).toBeVisible({ timeout: 60_000 })
+  await expect(page.getByTestId('apps-app-walnut-time:main')).toBeVisible({ timeout: 60_000 })
 
   // ── OFF ──
   const toggle = page.locator('#plugin-toggle-walnut-time')
   await expect(toggle).toHaveAttribute('aria-checked', 'true')
   await toggle.click()
 
-  // The row is owner-scoped, so the App's Settings → Plugins entry goes away live.
-  await expect(page.getByTestId('settings-nav-app-walnut-time:main')).toHaveCount(0, { timeout: 60_000 })
+  // The row is owner-scoped, so the App's tile on this page goes away live.
+  await expect(page.getByTestId('apps-app-walnut-time:main')).toHaveCount(0, { timeout: 60_000 })
   await expect(page.getByTestId('sidebar-app-walnut-time:main')).toHaveCount(0)
   await expect(page.getByTestId('plugin-row-walnut-time')).toHaveAttribute('data-plugin-status', 'disabled')
   await expect(page.locator('#plugin-toggle-walnut-time')).toHaveAttribute('aria-checked', 'false')
   await shoot(page, 'store-1680-toggled-off')
 
-  // One registry, so the plugin's app row forgets it in the same beat as the nav row.
-  await expect(page.getByTestId('plugin-app-row-walnut-time:main')).toHaveCount(0)
-
   // The promise the switch makes is durability, and that lives in config.yaml.
   await expect.poll(() => configEnabled('walnut-time'), { timeout: 15_000 }).toBe(false)
 
-  // ── ON ──
+  // One registry, so the Settings nav forgets the App in the same beat as the tile.
+  await page.getByTestId('sidebar-core-app-settings').click()
+  await expect(page.getByTestId('settings-nav-plugin-store')).toBeVisible({ timeout: 30_000 })
+  await expect(page.getByTestId('settings-nav-app-walnut-time:main')).toHaveCount(0)
+
+  // ── ON ── (back through the Settings nav's Apps link)
   await page.getByTestId('settings-nav-plugin-store').click()
+  await expect(page.getByTestId('apps-page')).toBeVisible({ timeout: 30_000 })
   const toggleAgain = page.locator('#plugin-toggle-walnut-time')
   await expect(toggleAgain).toHaveAttribute('aria-checked', 'false')
   await toggleAgain.click()
 
   await expect(page.getByTestId('plugin-row-walnut-time')).toHaveAttribute('data-plugin-status', 'active', { timeout: 60_000 })
-  await expect(page.getByTestId('settings-nav-app-walnut-time:main')).toBeVisible({ timeout: 60_000 })
+  await expect(page.getByTestId('apps-app-walnut-time:main')).toBeVisible({ timeout: 60_000 })
   await expect.poll(() => configEnabled('walnut-time'), { timeout: 15_000 }).toBe(true)
   await shoot(page, 'store-1680-toggled-on')
 

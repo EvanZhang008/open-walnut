@@ -699,3 +699,92 @@ describe('the bundled store folder', () => {
     expect(skipped.find((entry) => entry.dir.endsWith('unbuilt'))!.reason).toContain('not built')
   })
 })
+
+describe('registry row category', () => {
+  it('takes the manifest category over the catalog one', () => {
+    const { rows } = mergePluginRegistry(
+      [{ ...builtinEntry, category: 'developer' }],
+      [installed({ id: 'walnut-time', builtin: true, category: 'time' })],
+    )
+    expect(rows[0]!.category).toBe('time')
+  })
+
+  it('takes the catalog category over the derived one', () => {
+    // A sync plugin would derive to 'tasks'; the catalog says otherwise.
+    const { rows } = mergePluginRegistry(
+      [{ id: 'syncer', name: 'Syncer', category: 'communication', source: { kind: 'builtin' } }],
+      [installed({ id: 'syncer', builtin: true, capabilities: ['sync'] })],
+    )
+    expect(rows[0]!.category).toBe('communication')
+  })
+
+  it('derives a category when neither the manifest nor the catalog names one', () => {
+    const { rows } = mergePluginRegistry(
+      [{ id: 'mail-pop', name: 'POP', source: { kind: 'builtin' } }],
+      [
+        installed({ id: 'syncer', capabilities: ['sync'] }),
+        installed({ id: 'mail-pop', builtin: true }),
+        installed({ id: 'reader', missingDependencies: [{ id: 'mail', range: '^1', reason: 'absent', note: 'mail is not installed' }], state: 'needs-dependency' }),
+        installed({ id: 'plain' }),
+      ],
+    )
+    const byId = Object.fromEntries(rows.map((row) => [row.id, row.category]))
+    expect(byId).toEqual({ syncer: 'tasks', 'mail-pop': 'communication', reader: 'communication', plain: 'other' })
+  })
+
+  it('drops a junk manifest category, so the catalog or the derivation decides', () => {
+    // A junk value never reaches InstalledPluginFacts: the loader parses it away.
+    const parsed = parsePluginCatalog({ plugins: [
+      { id: 'a', category: 'games', adds: ['Task sync'], source: { kind: 'builtin' } },
+      { id: 'b', category: 42, source: { kind: 'builtin' } },
+      { id: 'c', category: 'time', source: { kind: 'builtin' } },
+    ] })
+    expect(parsed.map((entry) => entry.category)).toEqual([undefined, undefined, 'time'])
+    const { rows } = mergePluginRegistry(parsed, [])
+    expect(Object.fromEntries(rows.map((row) => [row.id, row.category]))).toEqual({ a: 'tasks', b: 'other', c: 'time' })
+  })
+
+  it('gives every available row a category', () => {
+    const { rows } = mergePluginRegistry(
+      [
+        builtinEntry,
+        gitEntry,
+        { id: 'needs-mail', name: 'Needs Mail', requires: { mail: '^1' }, source: { kind: 'git', url: 'https://example.invalid/n.git' } },
+        { id: 'tagged', name: 'Tagged', category: 'developer', source: { kind: 'example', path: 'examples/plugins/tagged' } },
+      ],
+      [],
+    )
+    expect(rows.every((row) => !row.installed)).toBe(true)
+    expect(Object.fromEntries(rows.map((row) => [row.id, row.category]))).toEqual({
+      'walnut-time': 'other',
+      'acme-notes': 'other',
+      'needs-mail': 'communication',
+      tagged: 'developer',
+    })
+  })
+
+  it('carries a bundled manifest category, which a curated entry cannot override', async () => {
+    const base = await fsp.mkdtemp(path.join(os.tmpdir(), 'bundled-category-'))
+    try {
+      await fsp.mkdir(path.join(base, 'omega'), { recursive: true })
+      await fsp.mkdir(path.join(base, 'sigma'), { recursive: true })
+      await fsp.writeFile(path.join(base, 'omega', 'manifest.json'), JSON.stringify({ id: 'omega', name: 'Omega', category: 'time' }))
+      await fsp.writeFile(path.join(base, 'sigma', 'manifest.json'), JSON.stringify({ id: 'sigma', name: 'Sigma', category: 'nope' }))
+      const bundled = await scanBundledStore(base)
+      expect(bundled.map((entry) => entry.category)).toEqual(['time', undefined])
+      const merged = overlayBundledCatalog(bundled, [
+        { id: 'omega', name: 'omega', category: 'developer', source: { kind: 'git' } },
+        { id: 'sigma', name: 'sigma', category: 'developer', source: { kind: 'git' } },
+      ])
+      expect(Object.fromEntries(merged.map((entry) => [entry.id, entry.category]))).toEqual({ omega: 'time', sigma: 'developer' })
+    } finally {
+      await fsp.rm(base, { recursive: true, force: true })
+    }
+  })
+
+  it('names a known category for every shipped catalog entry', async () => {
+    const entries = await loadPluginCatalog(undefined, { bundledStoreDir: null })
+    const byId = Object.fromEntries(entries.map((entry) => [entry.id, entry.category]))
+    expect(byId).toMatchObject({ 'walnut-time': 'time', calendar: 'time', jira: 'tasks', 'ms-todo': 'tasks', 'walnut-demo': 'developer', 'hello-walnut': 'developer' })
+  })
+})

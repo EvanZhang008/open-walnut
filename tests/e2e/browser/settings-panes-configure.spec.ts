@@ -780,15 +780,15 @@ test('C64: Integrations holds only the agent tool keys; no MS To-Do, no switches
   expect(await pane.locator('[role="switch"]').count()).toBe(0)
 })
 
-test('C64 + C63: the filter finds Plugins for slack and Tasks for jev', async ({ page }) => {
+test('C64 + C63: the filter finds Apps for slack and Tasks for jev', async ({ page }) => {
   await fakeConfig(page)
   await openSettings(page)
   const filter = page.getByTestId('settings-filter')
   const firstVisibleNav = () => page.locator('[data-testid^="settings-nav-"]:visible').filter({ hasNot: page.locator('[data-testid^="settings-nav-error-"]') }).first()
   await filter.fill('slack')
-  // The Plugins entry's registry id is plugin-store.
+  // The Plugins group's link to the Apps page keeps the old pane's id, plugin-store.
   await expect(firstVisibleNav()).toHaveAttribute('data-testid', 'settings-nav-plugin-store')
-  await expect(firstVisibleNav()).toContainText('Plugins')
+  await expect(firstVisibleNav()).toContainText('Apps')
   await filter.fill('jev')
   await expect(page.getByTestId('settings-nav-tasks')).toBeVisible()
   await filter.fill('')

@@ -1,6 +1,7 @@
 {
   "id": "mail-imap",
   "name": "IMAP Mail",
+  "category": "communication",
   "description": "Reads mail over IMAP with an app password, and attaches to the mail base as a provider",
   "version": "1.0.0",
   "icon": "icon.svg",

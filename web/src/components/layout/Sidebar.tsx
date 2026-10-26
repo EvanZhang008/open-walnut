@@ -5,6 +5,8 @@ import { isPhoneLayout, usePhoneLayout } from '@/hooks/usePhoneLayout';
 import { useSystemHealth } from '@/hooks/useSystemHealth';
 import { useAudioCapture } from '@/hooks/useAudioCapture';
 import { useAppCatalog } from '@/apps/hooks';
+import { appPathMatches } from '@/apps/registry';
+import { useRailItemsShown } from '@/apps/rail-items';
 import { CalendarIcon, PuzzleIcon } from '@/apps/icons';
 import { effectiveAppPlacement, supportsPlacementOverride } from '@/apps/preferences';
 import {
@@ -73,6 +75,8 @@ export function Sidebar({
 }: SidebarProps) {
   const { hasIssues, health, loading: healthLoading } = useSystemHealth();
   const apps = useAppCatalog();
+  // Built-in rail entries the user took off the rail on the Apps page (apps/rail-items.ts).
+  const railShown = useRailItemsShown();
   const navigate = useNavigate();
   const location = useLocation();
   // No banner on the page (task panel, slot and draft column all hidden, or
@@ -194,6 +198,7 @@ export function Sidebar({
   const phone = usePhoneLayout();
   const homePanelToggles = (
     <div className="sidebar-home-panels" role="group" aria-label="Home panels">
+      {railShown['home-todo'] && (
       <button
         className={`sidebar-link sidebar-panel-toggle app-task-panel-toggle${todoVisible ? ' active' : ''}`}
         onClick={handleToggleTodo}
@@ -203,7 +208,8 @@ export function Sidebar({
         <TaskPanelIcon />
         <span className="sidebar-label">Task panel</span>
       </button>
-      {chatToggleShown && (
+      )}
+      {chatToggleShown && railShown['home-chat'] && (
         <button
           className={`sidebar-link sidebar-panel-toggle${chatVisible ? ' active' : ''}`}
           onClick={handleToggleChat}
@@ -214,6 +220,7 @@ export function Sidebar({
         </button>
       )}
       {!phone && (<>
+      {railShown['home-agenda'] && (
       <button
         className={`sidebar-link sidebar-panel-toggle${calendarPanelVisible ? ' active' : ''}`}
         onClick={handleToggleCalendarPanel}
@@ -222,6 +229,8 @@ export function Sidebar({
         <CalendarIcon />
         <span className="sidebar-label">Agenda</span>
       </button>
+      )}
+      {railShown['home-scratchpad'] && (
       <button
         className={`sidebar-link sidebar-panel-toggle${scratchpadVisible ? ' active' : ''}`}
         onClick={handleToggleScratchpad}
@@ -230,6 +239,7 @@ export function Sidebar({
         <ScratchpadIcon />
         <span className="sidebar-label">Scratchpad</span>
       </button>
+      )}
       </>)}
     </div>
   );
@@ -298,7 +308,7 @@ export function Sidebar({
         onSelect: () => updateAppDisposition(app.key, 'hidden'),
       },
       { divider: true },
-      { key: 'manage', label: 'Manage apps…', onSelect: () => navigate('/settings#plugin-store') },
+      { key: 'manage', label: 'Manage apps…', onSelect: () => navigate('/apps') },
     ];
   };
 
@@ -352,8 +362,7 @@ export function Sidebar({
           // view+date, Settings' pane, …), the bare path when there is none. While
           // ON the app the link points at the current URL, so clicking the active
           // icon is a no-op instead of a reset to an older remembered state.
-          const onThisApp = app.path !== '/'
-            && (location.pathname === app.path || location.pathname.startsWith(`${app.path}/`));
+          const onThisApp = app.path !== '/' && appPathMatches(app, location.pathname);
           const hostDot = hostAttention && app.kind === 'core' && app.path === '/settings';
           const target = app.path === '/' ? '/'
             : onThisApp ? `${location.pathname}${location.search}${location.hash}`
@@ -363,7 +372,7 @@ export function Sidebar({
             <NavLink
               key={`${app.key}:${app.generation}`}
               to={target}
-              end={app.path === '/'}
+              end={app.path === '/' || app.exactPath}
               className={navLinkClass}
               data-testid={app.kind === 'core'
                 ? `sidebar-core-app-${app.id}`
@@ -391,7 +400,7 @@ export function Sidebar({
           return app.path === '/' ? (
             <Fragment key={`${app.key}:${app.generation}`}>
               <div className="sidebar-home-group">{link}{homePanelToggles}</div>
-              {orgEntry}
+              {railShown.org && orgEntry}
             </Fragment>
           ) : link;
         })}

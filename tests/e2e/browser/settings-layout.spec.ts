@@ -343,7 +343,8 @@ test('F09: the title and Find a setting stay pinned while the nav list scrolls',
 test('F08: the compact bar pins flush at the pane top with nothing above it', async ({ page }) => {
   await recordWrites(page)
   await openSettings(page)
-  for (const id of ['hooks', 'plugin-store', 'engines']) {
+  // Plugins left Settings for the Apps page, so its pane is no longer one of these.
+  for (const id of ['hooks', 'engines']) {
     await clickNav(page, id)
     await page.waitForTimeout(300)
     // Panes fill in after their own reads; scroll once there is room to scroll.
@@ -466,8 +467,10 @@ test('F15 F19 C8 C10: Hooks and Plugins show sentence case, unique names, no das
   for (const n of hooks.names) expect(n.split(' ').slice(1).some((w) => /^[A-Z][a-z]/.test(w)), n).toBe(false)
   expect(hooks).toMatchObject({ dash: false, eg: false, inline: false, caps: [] })
   expect(hooks.minHeight).toBeGreaterThanOrEqual(44)
-  await clickNav(page, 'plugin-store')
-  const chips = page.locator('.settings-pane .plugin-update-chip')
+  // The plugin list (and its update chips) moved to the Apps page; Settings links there.
+  await page.getByTestId(NAV('plugin-store')).click()
+  await expect(page.getByTestId('apps-page')).toBeVisible({ timeout: 20_000 })
+  const chips = page.locator('[data-testid="apps-page"] .plugin-update-chip')
   for (let i = 0; i < await chips.count(); i++) {
     const t = await chips.nth(i).evaluate((el) => ({ tt: getComputedStyle(el).textTransform, ls: getComputedStyle(el).letterSpacing }))
     expect(t.tt).toBe('none')

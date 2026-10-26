@@ -55,6 +55,12 @@ export interface CoreAppContribution {
    * to show while the plugin that owns its routes is off. See `filterAppsByPlugin`.
    */
   requiresPlugin?: string
+  /**
+   * Match only this exact path, never its subtree. For an app whose path is the
+   * parent of other apps' paths: Apps lives at `/apps` and every plugin App lives
+   * under `/apps/<id>`, which must not count as being on the Apps page.
+   */
+  exactPath?: boolean
 }
 
 export interface RegisteredApp {
@@ -82,6 +88,8 @@ export interface RegisteredApp {
   generation: number
   /** Set only by `registerCore`; see `CoreAppContribution.requiresPlugin`. */
   requiresPlugin?: string
+  /** Set only by `registerCore`; see `CoreAppContribution.exactPath`. */
+  exactPath?: boolean
   pluginId?: string
   pluginName?: string
   webview?: PluginApp
@@ -140,6 +148,12 @@ function resolvePlacement(value: AppPlacement | undefined): AppPlacement {
   return value
 }
 
+/** Is `pathname` this app's page? Its subtree counts unless the app is exact (or Home). */
+export function appPathMatches(app: Pick<RegisteredApp, 'path' | 'exactPath'>, pathname: string): boolean {
+  if (app.path === '/' || app.exactPath) return pathname === app.path
+  return pathname === app.path || pathname.startsWith(`${app.path}/`)
+}
+
 export class AppRegistry {
   private readonly entries = new Map<string, AppEntry>()
   private readonly listeners = new Set<() => void>()
@@ -167,6 +181,7 @@ export class AppRegistry {
       persistent: contribution.persistent ?? false,
       lockVisibility: contribution.lockVisibility ?? false,
       ...(contribution.requiresPlugin ? { requiresPlugin: contribution.requiresPlugin } : {}),
+      ...(contribution.exactPath ? { exactPath: true } : {}),
     })
   }
 
@@ -215,11 +230,7 @@ export class AppRegistry {
   }
 
   findByPath(pathname: string): RegisteredApp | undefined {
-    return this.snapshot.apps.find((app) => (
-      app.path === '/'
-        ? pathname === '/'
-        : pathname === app.path || pathname.startsWith(`${app.path}/`)
-    ))
+    return this.snapshot.apps.find((app) => appPathMatches(app, pathname))
   }
 
   getSnapshot = (): AppSnapshot => this.snapshot

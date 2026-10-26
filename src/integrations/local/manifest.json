@@ -1,6 +1,7 @@
 {
   "id": "local",
   "name": "Local",
+  "category": "tasks",
   "description": "Local-only tasks — no external sync",
   "version": "1.0.0",
   "icon": "icon.svg",

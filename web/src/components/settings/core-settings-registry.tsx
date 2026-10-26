@@ -15,7 +15,6 @@ import { HooksSection } from './sections/HooksSection'
 import { IntegrationsSection } from './sections/IntegrationsSection'
 import { MailRulesSection } from './sections/MailRulesSection'
 import { PermissionsSection } from './sections/PermissionsSection'
-import { PluginStoreSection } from './sections/PluginStoreSection'
 import { ProvidersSection } from './sections/ProvidersSection'
 import { RemoteHostsSection } from './sections/RemoteHostsSection'
 import { SearchSection } from './sections/SearchSection'
@@ -68,9 +67,10 @@ export interface CoreSettingsContribution {
 }
 
 export const CORE_SETTINGS_CONTRIBUTIONS: readonly CoreSettingsContribution[] = [
-  // There is deliberately NO "Apps" section: a plugin's app entries are managed on
-  // the plugin's own row in the Plugins section (PluginAppControls). One panel is
-  // the start point for everything plugin-shaped.
+  // Plugins are not a section here: the Apps page (/apps, pages/AppsPage.tsx) owns
+  // every plugin and every App, built in or not. The nav's Plugins group links to it
+  // (SettingsNav APPS_LINK_ROW) above the settings-placed Apps and plugin panels, and
+  // the old `#plugin-store` deep link forwards there (SettingsPage).
   // Repositories is hidden until the feature is ready: the section component
   // (ReposSection), the /api/repositories routes and the agent tools stay; only
   // the Settings entry is gone. Re-add the row here to bring it back.
@@ -80,21 +80,6 @@ export const CORE_SETTINGS_CONTRIBUTIONS: readonly CoreSettingsContribution[] = 
     description: 'What Walnut runs on its own when sessions, tasks and schedules change.',
     keywords: ['automation', 'builtin', 'lifecycle', 'cron', 'daemon policy', 'rename', 'summary', 'auto title'],
     render: () => <HooksSection />,
-  },
-  // The id stays `plugin-store` (the nav testid, the `#plugin-store` deep link and
-  // several specs address it), while the LABEL is now what the section actually is:
-  // every plugin on this machine, not just a shop. It anchors the nav's own Plugins
-  // group, where every plugin-provided page (a settings-placed App, a plugin
-  // settings panel) also lives: one group for everything plugin-shaped.
-  // Array position matters: the page renders sections in THIS order, and the nav
-  // groups must read in the same top-to-bottom order or a nav click lands somewhere
-  // the eye did not expect. Keep this entry directly after the Manage sections.
-  {
-    owner: 'walnut', id: 'plugin-store', label: 'Plugins', title: 'Plugins', group: 'plugins',
-    icon: 'puzzle-piece', tint: '#34C759',
-    description: 'Every plugin on this Mac, with its setup and updates.',
-    keywords: ['install', 'update', 'mail', 'slack', 'to-do', 'sync', 'app', 'sidebar', 'configure'],
-    render: ({ config, saveSection }) => <PluginStoreSection config={config} onSave={saveSection} />,
   },
   {
     owner: 'walnut', id: 'general', label: 'General', title: 'General', group: 'configure',

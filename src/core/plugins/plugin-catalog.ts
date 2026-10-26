@@ -30,6 +30,7 @@ import { fileURLToPath } from 'node:url'
 import { overlayBundledCatalog, resolveBundledStoreDir, scanBundledStore } from './bundled-store.js'
 import type { LinkedCheckoutInfo } from './linked-checkout.js'
 import type { MissingDependency } from './plugin-manager.js'
+import { derivePluginCategory, parsePluginCategory, type PluginCategory } from './plugin-category.js'
 import { satisfiesDependencyRange } from './semver.js'
 
 /**
@@ -76,6 +77,8 @@ export interface PluginCatalogEntry {
   version?: string
   /** Plain words for what installing this adds ("App", "Agent tools", "Task sync"). */
   adds?: string[]
+  /** The Apps page group, when the catalog names one (below a manifest's own, above the derived). */
+  category?: PluginCategory
   source: PluginCatalogSource
   homepage?: string
   /** Repo-relative docs path. */
@@ -157,6 +160,8 @@ export interface InstalledPluginFacts {
   configurable?: boolean
   /** `'app'` when the plugin's own App draws that form (manifest settingsIn). */
   settingsIn?: 'plugins' | 'app'
+  /** Manifest category, when the plugin names a known one. */
+  category?: PluginCategory
   /** The plugin-source slug that installed it (external sources only). */
   sourceSlug?: string
   /** git / npm, for an externally-sourced plugin; `bundled` for one loaded from the
@@ -173,6 +178,8 @@ export interface PluginRegistryRow {
   name: string
   description?: string
   adds?: string[]
+  /** The Apps page group: the manifest's, else the catalog's, else derived (plugin-category.ts). */
+  category: PluginCategory
   homepage?: string
   docs?: string
   source: PluginCatalogSource
@@ -428,6 +435,15 @@ export function mergePluginRegistry(
       name: plugin.name || entry?.name || plugin.id,
       ...(plugin.description ?? entry?.description ? { description: plugin.description ?? entry?.description } : {}),
       ...(entry?.adds ? { adds: entry.adds } : {}),
+      category: plugin.category ?? entry?.category ?? derivePluginCategory({
+        id: plugin.id,
+        capabilities: plugin.capabilities,
+        adds: entry?.adds,
+        dependencyIds: [
+          ...Object.keys(entry?.requires ?? {}),
+          ...(plugin.missingDependencies ?? []).map((missing) => missing.id),
+        ],
+      }),
       ...(entry?.homepage ? { homepage: entry.homepage } : {}),
       ...(entry?.docs ? { docs: entry.docs } : {}),
       source,
@@ -482,6 +498,11 @@ export function mergePluginRegistry(
       name: entry.name || entry.id,
       ...(entry.description ? { description: entry.description } : {}),
       ...(entry.adds ? { adds: entry.adds } : {}),
+      category: entry.category ?? derivePluginCategory({
+        id: entry.id,
+        adds: entry.adds,
+        dependencyIds: Object.keys(entry.requires ?? {}),
+      }),
       ...(entry.homepage ? { homepage: entry.homepage } : {}),
       ...(entry.docs ? { docs: entry.docs } : {}),
       source: entry.source,
@@ -547,6 +568,7 @@ export function parsePluginCatalog(raw: unknown): PluginCatalogEntry[] {
       ...(Array.isArray(entry.adds)
         ? { adds: entry.adds.filter((value): value is string => typeof value === 'string') }
         : {}),
+      ...(parsePluginCategory(entry.category) ? { category: parsePluginCategory(entry.category) } : {}),
       source,
       ...(typeof entry.homepage === 'string' ? { homepage: entry.homepage } : {}),
       ...(typeof entry.docs === 'string' ? { docs: entry.docs } : {}),

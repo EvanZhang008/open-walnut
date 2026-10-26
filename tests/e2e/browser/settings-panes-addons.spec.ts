@@ -22,6 +22,13 @@ async function openSettings(page: Page) {
   await expect(page.locator('.settings-nav')).toBeVisible({ timeout: 30_000 })
 }
 
+/** Plugins moved to the Apps page: the Settings nav's Plugins row is a link there now. */
+async function openApps(page: Page) {
+  await page.getByTestId(NAV('plugin-store')).click()
+  await expect(page.getByTestId('apps-page')).toBeVisible({ timeout: 30_000 })
+  await expect(page.locator('#plugin-store')).toBeVisible({ timeout: 30_000 })
+}
+
 async function clickNav(page: Page, id: string) {
   const item = page.getByTestId(NAV(id))
   await item.click()
@@ -484,6 +491,9 @@ async function mockPlugins(page: Page) {
     uiHints: { base_url: { label: 'Base URL' }, api_key: { label: 'API key' } }, values: {},
   }]))
   await page.route('**/api/plugin-runtime/*/*', async (route) => {
+    // Only the row actions (POSTs) are faked. A per-plugin read such as `/ai` answers the way a
+    // server without it does, so a fake { ok } is never read as that plugin's data.
+    if (route.request().method() === 'GET') return json(route, { error: 'not found' }, 404)
     const [, , , id, verb] = new URL(route.request().url()).pathname.split('/')
     const body = route.request().postData() ?? ''
     calls.push(`${verb} ${id}${body.includes('cascade') ? ' cascade' : ''}`)
@@ -503,7 +513,7 @@ const accountRow = (page: Page, id: string) => page.getByTestId(`plugin-connecti
 test('C65 C83: every account state has its tag, providers sit under their base, times are absolute', async ({ page }) => {
   await mockPlugins(page)
   await openSettings(page)
-  await clickNav(page, 'plugin-store')
+  await openApps(page)
   await expect(page.getByTestId('plugin-row-north-sync')).toBeVisible({ timeout: 30_000 })
 
   const expected: Array<[string, string, string]> = [
@@ -554,7 +564,7 @@ test('C65 C83: every account state has its tag, providers sit under their base, 
 test('C65 C36: cascade asks before writing, quarantine offers Try again, Configure opens rows in place', async ({ page }) => {
   const { calls } = await mockPlugins(page)
   await openSettings(page)
-  await clickNav(page, 'plugin-store')
+  await openApps(page)
   const coreSwitch = page.locator('#plugin-toggle-core-lib')
   await expect(coreSwitch).toHaveAttribute('aria-checked', 'true', { timeout: 30_000 })
 
@@ -604,8 +614,9 @@ test('C65 C36: cascade asks before writing, quarantine offers Try again, Configu
 // Copy and control audit over every pane this package owns.
 // ---------------------------------------------------------------------------
 
+// Plugins is not a Settings pane any more: the test audits it last, on the Apps page.
 const OWNED_PANES = [
-  'plugin-store', 'calendar', 'permissions', 'backup', 'devices', 'remote-hosts',
+  'calendar', 'permissions', 'backup', 'devices', 'remote-hosts',
   'audio-capture', 'usage', 'suggest-accuracy', 'timeline', 'bug-report',
 ]
 
@@ -655,4 +666,9 @@ test('C8 C10 C14 C19 C20 C80: owned panes are sentence case, glyph free, switche
     const audit = await page.locator('.settings-pane').evaluate(auditPane, provided)
     expect(audit, `pane ${id}`).toEqual({ transformed: [], upper: [], glyphs: [], emoji: [], checkboxes: 0, legacy: 0 })
   }
+  // The plugin list, where Settings' Plugins row now leads.
+  await openApps(page)
+  await page.waitForTimeout(300)
+  const audit = await page.locator('#plugin-store').evaluate(auditPane, provided)
+  expect(audit, 'Apps page plugin list').toEqual({ transformed: [], upper: [], glyphs: [], emoji: [], checkboxes: 0, legacy: 0 })
 })

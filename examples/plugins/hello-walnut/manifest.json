@@ -1,6 +1,7 @@
 {
   "id": "hello-walnut",
   "name": "Hello Walnut",
+  "category": "developer",
   "description": "Example plugin: an app page, an AI tool, and a skill",
   "version": "1.0.0",
   "icon": "icon.svg",

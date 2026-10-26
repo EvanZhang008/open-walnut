@@ -55,10 +55,10 @@ export async function runPluginAdd(source: string, options: { ref?: string }, gl
     if (row.plugins.length === 0) console.log(chalk.yellow('  No plugin found: a source needs a manifest.json at its root or in a folder.'));
     for (const p of row.plugins) console.log(pluginLine(p));
     if (row.plugins.some((p) => p.status === 'needs-config')) {
-      console.log(chalk.dim('  Finish setup in Settings > Plugin Store (Configure on the row).'));
+      console.log(chalk.dim('  Finish setup on the Apps page (Configure on the row).'));
     }
     if (row.pendingDependencies?.length) {
-      console.log(chalk.dim(`  Also needed: ${row.pendingDependencies.map((d) => d.id).join(', ')}. Install them from Settings > Plugin Store.`));
+      console.log(chalk.dim(`  Also needed: ${row.pendingDependencies.map((d) => d.id).join(', ')}. Install them from the Apps page.`));
     }
   } catch (err) {
     reportApiError(err, globals);

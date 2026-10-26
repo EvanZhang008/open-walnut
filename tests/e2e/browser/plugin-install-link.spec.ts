@@ -68,8 +68,7 @@ async function awayAndBack(page: Page): Promise<void> {
   if (await page.locator('.sidebar.collapsed').count()) await page.locator('.sidebar-collapse-btn').click()
   await page.getByTestId('sidebar-core-app-routines').click()
   await expect(page.locator('#plugin-store')).toHaveCount(0)
-  await page.getByTestId('sidebar-core-app-settings').click()
-  await page.getByTestId('settings-nav-plugin-store').click()
+  await page.getByTestId('sidebar-core-app-apps').click()
   await expect(page.locator('#plugin-store')).toBeVisible({ timeout: 30_000 })
 }
 
@@ -115,7 +114,7 @@ test('1. a link opened as an address shows its card, trust off; Cancel installs 
   const before = await configSources()
   await page.goto(`http://localhost:${fixture!.port}/${fragment(linkTo(fixture!.packUrl))}`)
   await expectCard(page, fixture!.packUrl)
-  expect(new URL(page.url()).pathname).toBe('/settings')
+  expect(new URL(page.url()).pathname).toBe('/apps')
   await pause(page, 2000)
   await page.screenshot({ path: `/tmp/plugin-install-link/${test.info().project.name}-1-card.png` })
   // The store mounted again (another page and back) still shows the link: it waits

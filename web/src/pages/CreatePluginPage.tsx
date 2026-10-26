@@ -13,6 +13,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAppCatalog } from '@/apps/hooks'
 import { copyTextRobust } from '@/utils/clipboard'
+import { APPS_PATH } from '@/utils/open-link'
 import { BuildPluginCard, PLUGIN_CREATE_COMMAND } from '@/components/settings/BuildPluginCard'
 
 const CREATE_COMMAND = PLUGIN_CREATE_COMMAND
@@ -83,8 +84,9 @@ export function CreatePluginPage() {
             <h2>Run one command</h2>
           </div>
           <p>
-            In any terminal on this machine. It scaffolds the project, installs dependencies,
-            builds, links it into Walnut, and keeps rebuilding as you save.
+            In a clone of open-walnut (the plugin tools are not on npm yet). It builds the
+            plugin tools, scaffolds the project, links it into this Walnut, and keeps
+            rebuilding as you save.
           </p>
           <div className="create-plugin-command" data-testid="create-plugin-command">
             <code>{CREATE_COMMAND}</code>
@@ -156,15 +158,15 @@ export function CreatePluginPage() {
           </div>
           <p>
             Push the folder to a git repo or publish it to npm. Anyone installs it from
-            Settings → Plugin Store with the URL or package name.
+            the Apps page with the URL or package name.
           </p>
           <button
             type="button"
             className="btn btn-secondary"
             data-testid="create-plugin-open-store"
-            onClick={() => navigate('/settings#plugin-store')}
+            onClick={() => navigate(APPS_PATH)}
           >
-            Open Plugin Store
+            Open Apps
           </button>
         </li>
       </ol>

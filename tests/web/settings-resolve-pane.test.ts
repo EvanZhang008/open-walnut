@@ -18,7 +18,7 @@ describe('resolvePane', () => {
 
   it('opens a lead pane with no scroll target', () => {
     expect(resolvePane('#sessions', [])).toMatchObject({ paneId: 'sessions', targetId: null })
-    expect(resolvePane('#plugin-store', [])).toMatchObject({ paneId: 'plugin-store', targetId: null })
+    expect(resolvePane('#hooks', [])).toMatchObject({ paneId: 'hooks', targetId: null })
     expect(resolvePane('general', [])).toMatchObject({ paneId: 'general', targetId: null })
   })
 

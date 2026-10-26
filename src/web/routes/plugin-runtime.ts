@@ -316,6 +316,7 @@ export function createPluginRuntimeRouter(deps: PluginRuntimeRouterDeps): Router
             )?.properties) ?? {},
           ).length > 0,
           ...(live?.settingsIn === 'app' ? { settingsIn: 'app' as const } : {}),
+          ...(live?.category ? { category: live.category } : {}),
           // A bundled plugin was installed from this build's own folder: no source owns it,
           // and its row's Remove takes it back to available.
           ...(record.bundled

@@ -67,13 +67,12 @@ export async function expandSidebar(page: Page): Promise<void> {
   }
 }
 
-/** Settings, Plugins, through real clicks (never a goto to the section). */
+/** The Apps page, through the sidebar's Apps entry (never a goto to the page). */
 export async function openPlugins(page: Page): Promise<void> {
   await expandSidebar(page)
-  await page.getByTestId('sidebar-core-app-settings').click()
-  await expect(page).toHaveURL(/\/settings$/)
-  await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible({ timeout: 30_000 })
-  await page.getByTestId('settings-nav-plugin-store').click()
+  await page.getByTestId('sidebar-core-app-apps').click()
+  await expect(page).toHaveURL(/\/apps$/)
+  await expect(page.getByTestId('apps-page')).toBeVisible({ timeout: 30_000 })
   await expect(page.getByTestId('plugin-store-installed')).toBeVisible({ timeout: 30_000 })
 }
 
@@ -99,13 +98,13 @@ export async function commitAll(cwd: string, message: string): Promise<void> {
   await git(cwd, 'commit', '-m', message)
 }
 
-/** Same helper as mail-app-design.spec.ts, landing back on the Plugins section. */
+/** Same helper as mail-app-design.spec.ts, landing back on the Apps page. */
 export async function pickTheme(page: Page, label: 'Light' | 'Dark'): Promise<void> {
   await page.getByTestId('sidebar-core-app-settings').click()
   const option = page.locator('.theme-picker-btn', { hasText: label }).first()
   await expect(option).toBeVisible({ timeout: 30_000 })
   await option.click()
   await expect(page.locator('html')).toHaveAttribute('data-theme', label.toLowerCase(), { timeout: 15_000 })
-  await page.getByTestId('settings-nav-plugin-store').click()
+  await page.getByTestId('sidebar-core-app-apps').click()
   await expect(page.getByTestId('plugin-store-installed')).toBeVisible({ timeout: 30_000 })
 }

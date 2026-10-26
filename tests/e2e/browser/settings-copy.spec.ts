@@ -97,12 +97,19 @@ test('N15: every disabled push button looks the same, and one outside a dimmed g
   await recordWrites(page)
   await openSettings(page)
   const looks = new Map<string, string>()
-  for (const pane of ['plugin-store', 'devices', 'search', 'audio-capture', 'tasks', 'backup', 'advanced']) {
-    await clickNav(page, pane)
+  // Plugins is no longer a Settings pane: it is measured last, on the Apps page its nav row opens.
+  for (const pane of ['devices', 'search', 'audio-capture', 'tasks', 'backup', 'advanced', 'plugin-store']) {
+    const scope = pane === 'plugin-store' ? '#plugin-store' : '.settings-pane'
+    if (pane === 'plugin-store') {
+      await page.getByTestId(NAV(pane)).click()
+      await expect(page.locator('#plugin-store')).toBeVisible({ timeout: 20_000 })
+    } else {
+      await clickNav(page, pane)
+    }
     if (pane === 'advanced') await expandAll(page)
     await page.waitForTimeout(400)
-    const found = await page.evaluate(() => Array.from(document.querySelectorAll<HTMLButtonElement>(
-      '.settings-pane .settings-button:disabled:not([aria-busy="true"]):not(.settings-button-text):not(.settings-button-danger)'))
+    const found = await page.evaluate((root) => Array.from(document.querySelectorAll<HTMLButtonElement>(
+      `${root} .settings-button:disabled:not([aria-busy="true"]):not(.settings-button-text):not(.settings-button-danger)`))
       .filter((b) => b.getBoundingClientRect().height > 0)
       .map((b) => {
         const cs = getComputedStyle(b)
@@ -115,7 +122,7 @@ test('N15: every disabled push button looks the same, and one outside a dimmed g
           title: b.title || b.closest('[title]')?.getAttribute('title') || '',
           look: `${cs.backgroundColor} ${cs.borderTopColor} ${cs.color} ${Math.round(op * 100) / 100}`,
         }
-      }))
+      }), scope)
     for (const b of found) {
       looks.set(`${pane}: ${b.text}`, b.look)
       if (!b.dimmed) expect(b.title, `${pane} "${b.text}" is disabled without a reason`).not.toBe('')

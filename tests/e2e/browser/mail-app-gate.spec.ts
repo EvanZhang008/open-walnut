@@ -83,10 +83,10 @@ async function expandSidebar(page: Page): Promise<void> {
   }
 }
 
+/** The plugin list on the Apps page, from the sidebar's Apps entry. */
 async function openPlugins(page: Page): Promise<void> {
-  await page.getByTestId('sidebar-core-app-settings').click()
-  await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible({ timeout: 60_000 })
-  await page.getByTestId('settings-nav-plugin-store').click()
+  await page.getByTestId('sidebar-core-app-apps').click()
+  await expect(page.getByTestId('apps-page')).toBeVisible({ timeout: 60_000 })
   await expect(page.locator('#plugin-store')).toBeVisible({ timeout: 30_000 })
 }
 

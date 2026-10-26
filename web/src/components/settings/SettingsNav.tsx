@@ -128,6 +128,25 @@ const PAGE_ROWS: readonly NavRow[] = MANAGE_PAGES.map((page) => ({
   filter: { key: `link:${page.id}`, kind: 'link' as const, label: page.label, keywords: PAGE_LINK_KEYWORDS[page.id] ?? [] },
 }))
 
+/**
+ * Plugins moved out of Settings to their own page. The Plugins group still holds the
+ * settings-placed Apps and plugin panels, so it leads with the way to the page that
+ * manages them. The testid keeps the old pane's name: it is the same entry point.
+ */
+const APPS_LINK_ROW: NavRow = {
+  key: 'link:apps',
+  kind: 'link',
+  group: 'plugins',
+  testId: 'settings-nav-plugin-store',
+  label: 'Apps',
+  to: '/apps',
+  meta: {
+    id: 'apps', label: 'Apps', title: 'Apps', description: '',
+    icon: <SettingsIcon glyph="puzzle-piece" />, tint: '#34C759', glyph: 'puzzle-piece',
+  },
+  filter: { key: 'link:apps', kind: 'link', label: 'Apps', keywords: PAGE_LINK_KEYWORDS.apps ?? [] },
+}
+
 function Monogram({ letter }: { letter: string }) {
   return <span className="settings-tile-monogram">{letter}</span>
 }
@@ -141,7 +160,7 @@ export function useSettingsNavModel(): SettingsNavModel {
 
   const dynamic = useMemo(() => {
     // Seed with every core and page tile so plugin tiles shift away from them.
-    const taken = new Set<string>([...PAGE_ROWS, ...CORE_ROWS].map((r) => tileKey(r.meta.tint, r.meta.glyph)))
+    const taken = new Set<string>([...PAGE_ROWS, APPS_LINK_ROW, ...CORE_ROWS].map((r) => tileKey(r.meta.tint, r.meta.glyph)))
     const appRows: NavRow[] = apps.settings.map((app) => {
       const AppIcon = app.icon
       const glyph = AppIcon ? `app-${app.key}` : 'app-window'
@@ -204,6 +223,7 @@ export function useSettingsNavModel(): SettingsNavModel {
       ...PAGE_ROWS,
       ...byGroup('manage'),
       ...byGroup('plugins'),
+      APPS_LINK_ROW,
       ...dynamic.appRows,
       ...dynamic.panelRows,
       ...byGroup('configure'),

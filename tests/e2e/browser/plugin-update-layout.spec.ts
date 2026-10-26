@@ -1,5 +1,5 @@
 /**
- * Settings, Plugins update status: the round-two nitpicks (N2-1 .. N2-11) and C30, each
+ * Apps page plugin update status: the round-two nitpicks (N2-1 .. N2-11) and C30, each
  * pinned against the real fixture (linked checkout pair + git source) in both engines.
  * Boots its own fixture server (see plugin-update-fixture.ts); serial, one page at a time.
  */
@@ -24,17 +24,12 @@ test.afterAll(async () => { await fixture?.stop() })
 
 const UPDATABLE = ['acme-tracker', 'acme-notes', 'walnut-demo'] as const
 
-/**
- * Settings, Plugins, through real clicks. The sidebar's Settings link returns to the last
- * pane Settings showed (`/settings#plugin-store` after the first test), so the URL may carry
- * a pane hash; the nav click then opens Plugins either way.
- */
+/** The Apps page, through the sidebar's Apps entry (real clicks, never a goto). */
 async function openPlugins(page: Page): Promise<void> {
   await expandSidebar(page)
-  await page.getByTestId('sidebar-core-app-settings').click()
-  await expect(page).toHaveURL(/\/settings(#[\w-]+)?$/)
-  await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible({ timeout: 30_000 })
-  await page.getByTestId('settings-nav-plugin-store').click()
+  await page.getByTestId('sidebar-core-app-apps').click()
+  await expect(page).toHaveURL(/\/apps$/)
+  await expect(page.getByTestId('apps-page')).toBeVisible({ timeout: 30_000 })
   await expect(page.getByTestId('plugin-store-installed')).toBeVisible({ timeout: 30_000 })
 }
 
@@ -61,8 +56,9 @@ const rect = (target: Locator) => target.evaluate((el) => {
 })
 
 /**
- * Theme through General, back to Plugins. The sidebar's Settings link now returns to the
- * last pane (Plugins here), so General is opened with its own nav click first.
+ * Theme through Settings, General, then back to the Apps page from the sidebar. The
+ * sidebar's Settings link returns to the last pane, so General is opened with its own
+ * nav click first.
  */
 async function pickTheme(page: Page, label: 'Light' | 'Dark'): Promise<void> {
   await page.getByTestId('sidebar-core-app-settings').click()
@@ -71,7 +67,7 @@ async function pickTheme(page: Page, label: 'Light' | 'Dark'): Promise<void> {
   await expect(option).toBeVisible({ timeout: 30_000 })
   await option.click()
   await expect(page.locator('html')).toHaveAttribute('data-theme', label.toLowerCase(), { timeout: 15_000 })
-  await page.getByTestId('settings-nav-plugin-store').click()
+  await page.getByTestId('sidebar-core-app-apps').click()
   await expect(page.getByTestId('plugin-store-installed')).toBeVisible({ timeout: 30_000 })
 }
 
@@ -163,9 +159,14 @@ test('(N2-1)(N2-2)(N2-6)(N2-10) an Update flips in one frame, costs one reload, 
   })
   expect(actionsBox.width, `actions ${fit.parts.join(' ')}`).toBeLessThanOrEqual(fit.sum + 1)
   expect(actionsBox.width).toBeLessThan(280)
-  // Neighbouring rows keep the same height (the chip wrapping used to add 40px).
-  const heights = await page.locator('[data-testid="plugin-store-installed"] .settings-row').evaluateAll((els) => els.map((el) => el.getBoundingClientRect().height))
-  expect(Math.max(...heights) - Math.min(...heights)).toBeLessThan(40)
+  // Neighbouring rows keep the same height (the chip wrapping used to add 40px). Measured over
+  // the rows that carry a chip: on the Apps page the installed list is split by category, and
+  // a row with a longer description (Calendar) is taller for reasons that are not the chip.
+  const measured = await page.locator('[data-testid="plugin-store-installed"] .settings-row[data-testid^="plugin-row-"]:has([data-testid^="update-chip-"])').evaluateAll((els) => els.map((el) => ({
+    id: el.getAttribute('data-testid') ?? String(el.className), h: Math.round(el.getBoundingClientRect().height),
+  })))
+  const heights = measured.map((m) => m.h)
+  expect(Math.max(...heights) - Math.min(...heights), JSON.stringify(measured)).toBeLessThan(40)
 
   // Sources card: the actions cluster is one line, whole (N2-2). While the plugin is loaded
   // the Installed row owns Update AND Remove (N3-17), so the card keeps only its own verb.
@@ -321,7 +322,8 @@ test('(N2-5)(N2-7)(N2-8)(N2-11) disabled Update is dimmed in both themes; hover,
 
 test('(N2-4)(N2-9) the provenance flyout survives the scroll that revealed its trigger, and Copy keeps focus', async ({ page }) => {
   await openWithChips(page)
-  const pane = page.locator('.settings-content')
+  // The Apps page is its own scroll container.
+  const pane = page.locator('.apps-page')
   const trigger = page.getByTestId('provenance-trigger-acme-notes')
   const flyout = page.getByTestId('provenance-flyout-acme-notes')
   // Start from the top of the pane so the click has to scroll the trigger into view first.
@@ -337,7 +339,7 @@ test('(N2-4)(N2-9) the provenance flyout survives the scroll that revealed its t
   const scrolls: number[] = []
   await page.evaluate(() => {
     ;(window as unknown as { __scrolls: number }).__scrolls = 0
-    document.querySelector('.settings-content')!.addEventListener('scroll', () => { (window as unknown as { __scrolls: number }).__scrolls += 1 })
+    document.querySelector('.apps-page')!.addEventListener('scroll', () => { (window as unknown as { __scrolls: number }).__scrolls += 1 })
   })
   await trigger.click()
   scrolls.push(await page.evaluate(() => (window as unknown as { __scrolls: number }).__scrolls))

@@ -40,7 +40,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { Config } from '@open-walnut/core';
 import { useAppCatalog } from '@/apps/hooks';
-import { SettingsSection, SettingsRow, SettingsGroup, SettingsNotice, SettingsTag, SettingsLoadingRow } from '../SettingsSection';
+import { SettingsRow, SettingsGroup, SettingsNotice, SettingsTag, SettingsLoadingRow } from '../SettingsSection';
 import { ToggleSwitch } from '../inputs/ToggleSwitch';
 import { SettingsButton } from '../inputs/SettingsButton';
 import { InlineConfirmButton } from '../inputs/InlineConfirmButton';
@@ -63,7 +63,8 @@ import { PluginMcpControls } from '../PluginMcpControls';
 import { PluginAiControls } from '../PluginAiControls';
 import { BUNDLED_AVAILABLE_TITLE, runBundledAction } from './plugin-bundled-actions';
 import { PluginConnectionPanel, CONNECTION_BADGE, connectedHelp, type ConnectionReport } from '../PluginConnectionPanel';
-import { BuildPluginCard } from '../BuildPluginCard';
+import { PluginAppTiles } from '@/components/apps-page/PluginAppTiles';
+import { PLUGIN_CATEGORY_LABELS, PLUGIN_CATEGORY_ORDER, categoryOf, pluginMatches, type AppsFilter, type PluginCategoryId } from '@/components/apps-page/categories';
 import { PluginIcon, pluginTileTints } from '../PluginIcon';
 // Deliberately NOT '@/plugins/hooks': that module reaches the plugin loader, which
 // reaches every view a plugin may mount (NotesPage, CalendarPage, SessionPanel …).
@@ -89,6 +90,7 @@ import {
 } from '../plugin-update-view';
 import { RESTART_PENDING_STATE, sourceRowKey, type UpdateState, type UpdateStatusRow } from '../plugin-update-types';
 import { buildInstallLink, INSTALL_LINK_SCHEME, type InstallLinkTarget } from '../../../../../src/core/plugin-install-link';
+import type { PluginCategory } from '../../../../../src/core/plugins/plugin-category';
 import { peekPendingInstall, settlePendingInstall, subscribeOpenLinks } from '@/utils/open-link';
 import '@/styles/settings-sections-addons.css';
 
@@ -98,6 +100,8 @@ interface RegistryRow {
   name: string;
   description?: string;
   adds?: string[];
+  /** The Apps page group. Optional here: an older server sends none, which reads as 'other'. */
+  category?: PluginCategory;
   homepage?: string;
   docs?: string;
   source: {
@@ -168,6 +172,19 @@ const isUpdatableRow = (row: RegistryRow): boolean =>
 interface Props {
   config: Config;
   onSave: (partial: Partial<Config>) => Promise<void>;
+  /** Which part of the Apps page shows: everything, one plugin group, or Get more. */
+  filter?: AppsFilter;
+  /** The page's search box: rows whose name, id or description match. */
+  query?: string;
+  /** What the page's chips and empty state need: the groups that have plugins, and how
+   *  many rows (installed and available) the search matches. */
+  onSummary?: (summary: PluginStoreSummary) => void;
+}
+
+export interface PluginStoreSummary {
+  loaded: boolean;
+  categories: PluginCategoryId[];
+  matches: number;
 }
 
 /** A git remote the local git can clone; anything else is treated as an npm spec. */
@@ -239,10 +256,15 @@ function linkFailureText(err: unknown): string {
   return `Couldn't get the plugins from that source. ${e?.message ?? String(err)}`;
 }
 
-export function PluginStoreSection({ config, onSave }: Props) {
+/** The last registry this window read (see the `registry` state). */
+let lastRegistry: RegistryResponse | null = null;
+
+export function PluginStoreSection({ config, onSave, filter = 'all', query = '', onSummary }: Props) {
   const navigate = useNavigate();
   const apps = useAppCatalog();
-  const [registry, setRegistry] = useState<RegistryResponse | null>(null);
+  // Seeded from the last read in this window: coming back to the page shows the list at
+  // once while the registry (a few seconds when it scans linked checkouts) refreshes.
+  const [registry, setRegistry] = useState<RegistryResponse | null>(() => lastRegistry);
   const [sources, setSources] = useState<PluginSource[]>([]);
   const [url, setUrl] = useState('');
   const [trusted, setTrusted] = useState(false);
@@ -297,7 +319,7 @@ export function PluginStoreSection({ config, onSave }: Props) {
       fetch('/api/integrations/connections'),
     ]);
     if (registryRes.status === 'fulfilled' && registryRes.value.ok) {
-      try { setRegistry(await registryRes.value.json()); } catch { /* keep the last list */ }
+      try { lastRegistry = await registryRes.value.json(); setRegistry(lastRegistry); } catch { /* keep the last list */ }
     }
     if (sourcesRes.status === 'fulfilled' && sourcesRes.value.ok) {
       try { setSources(await sourcesRes.value.json()); } catch { /* keep the last list */ }
@@ -1031,7 +1053,7 @@ export function PluginStoreSection({ config, onSave }: Props) {
           />
         )}
         {/* The plugin's app entries live HERE, on the plugin itself. */}
-        <PluginAppControls pluginId={row.id} />
+        <PluginAppControls pluginId={row.id} failureOnly />
         {/* The MCP servers it runs: state, the reason it failed, Start / Restart. */}
         {isOn && <PluginMcpControls pluginId={row.id} />}
         {/* What it spent on AI this month, its budget and the switch (walnut.ai). */}
@@ -1073,7 +1095,7 @@ export function PluginStoreSection({ config, onSave }: Props) {
     && (other.status === 'active' || other.state === RESTART_PENDING_STATE)
     && ((other.dependencyPlan ?? []).some((item) => item.id === baseId) || other.id.startsWith(`${baseId}-`)));
 
-  const availableRows = available.map((row) => (
+  const availableRowFor = (row: RegistryRow) => (
     <SettingsRow
       key={row.id}
       data-testid={`plugin-row-${row.id}`}
@@ -1137,10 +1159,31 @@ export function PluginStoreSection({ config, onSave }: Props) {
         </>
       }
     />
-  ));
+  );
+
+  // ── Apps page layout ──
+  // Installed plugins are grouped by category, each group led by the Apps its plugins
+  // add; Get more holds the catalog, the free-form install and the sources.
+  const showGroups = filter === 'all' || (PLUGIN_CATEGORY_ORDER as readonly string[]).includes(filter);
+  const showGetMore = filter === 'all' || filter === 'get';
+  const matchingInstalled = installed.filter((row) => pluginMatches(row, query));
+  const groups = PLUGIN_CATEGORY_ORDER
+    .filter((category) => filter === 'all' || filter === category)
+    .map((category) => ({ category, rows: matchingInstalled.filter((row) => categoryOf(row) === category) }))
+    .filter((group) => group.rows.length > 0);
+  const matchingAvailable = available.filter((row) => pluginMatches(row, query));
+  const searching = query.trim() !== '';
+  const presentKey = PLUGIN_CATEGORY_ORDER.filter((category) => installed.some((row) => categoryOf(row) === category)).join(',');
+  // What THIS filter shows that the search matched, so the page's empty state is honest.
+  const matchCount = (showGroups ? groups.reduce((n, group) => n + group.rows.length, 0) : 0)
+    + (showGetMore ? matchingAvailable.length : 0);
+  const loaded = registry !== null;
+  useEffect(() => {
+    onSummary?.({ loaded, categories: presentKey ? presentKey.split(',') as PluginCategoryId[] : [], matches: matchCount });
+  }, [onSummary, loaded, presentKey, matchCount]);
 
   return (
-    <SettingsSection id="plugin-store" title="Plugins">
+    <div id="plugin-store" className="apps-plugins" data-testid="apps-plugins">
       {/* Only Remove needs a page-level word: no row survives to carry the tag. An
           update says "restart" on its own row (feedback + Restart to activate), once. */}
       {restartNeeded && (
@@ -1190,120 +1233,134 @@ export function PluginStoreSection({ config, onSave }: Props) {
         </SettingsGroup>
       )}
 
-      <SettingsGroup
-        heading="Installed"
-        headingTrailing={updatable.length > 0 ? <UpdatesHead updates={updates} slowLoad={slowLoad} onCheckAll={checkAll} /> : undefined}
-        className="plugin-store-group plugin-store-installed"
-        data-testid="plugin-store-installed"
-      >
-        {!registry ? (
-          <SettingsLoadingRow>Loading plugins...</SettingsLoadingRow>
-        ) : installed.length === 0 ? (
-          <SettingsRow label="No plugins yet." />
-        ) : (
-          installed.map(renderInstalledRow)
-        )}
-      </SettingsGroup>
-
-      {available.length > 0 && (
-        <SettingsGroup
-          heading="Available"
-          headingTrailing={<span className="settings-addons-muted">{`${available.length} plugin${available.length === 1 ? '' : 's'}`}</span>}
-          className="plugin-store-group"
-          data-testid="plugin-store-available"
-        >
-          {availableRows}
-        </SettingsGroup>
-      )}
-
-      {/* The free-form install path, for anything the catalog does not list. */}
-      <SettingsGroup
-        heading="Install from git or npm"
-        footer={registry?.cloud
-          ? 'Read from your Mac over the bridge; installing and removing sources happens on the Mac.'
-          : registry?.sourcesUnavailable
-            ? "The installed-source list couldn't be read, so Update and Remove are unavailable here."
-            : 'Neither kind ever updates itself: you press Update.'}
-      >
-        <SettingsRow
-          label="Git URL or npm package"
-          htmlFor="plugin-source-url"
-          help="A repo holds one plugin or one per folder; npm installs pin an exact version with scripts off."
-          wide
-          className="settings-row-stacked"
-          control={
-            <span className="settings-addons-inline">
-              <input
-                id="plugin-source-url"
-                ref={urlInputRef}
-                type="text"
-                className="settings-input settings-input--long settings-input--mono"
-                value={url}
-                onChange={e => setUrl(e.target.value)}
-                onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); void handleAdd(); } }}
-                placeholder="https://github.com/example/walnut-plugin"
-                spellCheck={false}
-              />
-              <SettingsButton
-                variant="primary"
-                disabled={!url.trim() || !trusted}
-                title={!url.trim() ? 'Paste a Git URL or an npm package first.' : !trusted ? 'Turn on the trust switch first.' : undefined}
-                busy={busy === 'add'}
-                busyLabel="Installing..."
-                onClick={() => void handleAdd()}
-              >
-                Add
-              </SettingsButton>
+      {showGroups && (
+        <div className="apps-plugin-groups plugin-store-installed" data-testid="plugin-store-installed">
+          <div className="apps-plugins-bar">
+            <span className="apps-plugins-count" data-testid="apps-plugins-count">
+              {!registry ? '' : `${installed.length} plugin${installed.length === 1 ? '' : 's'} installed`}
             </span>
-          }
-        />
-        <SettingsRow
-          label={<span className="plugin-trust-label">I trust this source</span>}
-          htmlFor="plugin-trust-confirm"
-          help="Its code runs inside Walnut with full access to your tasks, notes, credentials and this Mac."
-          control={
-            <ToggleSwitch
-              id="plugin-trust-confirm"
-              data-testid="plugin-trust-confirm"
-              checked={trusted}
-              onChange={setTrusted}
-            />
-          }
-        />
-      </SettingsGroup>
-
-      {/* Phase two of an install from the form: the plugin that just arrived needs
-          another one. These rows name every source it would add and ARE the consent. */}
-      {pending && !pending.rowId && (
-        <SettingsGroup heading="Dependencies">
-          <PluginPendingDependencies
-            plan={pending.plan}
-            busy={busy === `pending:${pending.slug}`}
-            nameFor={nameOf}
-            onInstall={() => void installDependencies(pending.slug, `pending:${pending.slug}`)}
-            onDismiss={() => setPending(null)}
-          />
-        </SettingsGroup>
+            {updatable.length > 0 && <UpdatesHead updates={updates} slowLoad={slowLoad} onCheckAll={checkAll} />}
+          </div>
+          {!registry ? (
+            <SettingsGroup className="plugin-store-group"><SettingsLoadingRow>Loading plugins...</SettingsLoadingRow></SettingsGroup>
+          ) : installed.length === 0 ? (
+            <SettingsGroup className="plugin-store-group"><SettingsRow label="No plugins yet." /></SettingsGroup>
+          ) : groups.length === 0 ? (
+            searching ? null : <SettingsGroup className="plugin-store-group"><SettingsRow label="No plugins in this group yet." /></SettingsGroup>
+          ) : (
+            groups.map((group) => (
+              <section key={group.category} className="apps-section apps-category" data-testid={`apps-category-${group.category}`} aria-labelledby={`apps-category-${group.category}-title`}>
+                <h2 className="apps-section-title" id={`apps-category-${group.category}-title`}>
+                  {PLUGIN_CATEGORY_LABELS[group.category]}
+                  <span className="apps-section-count">{group.rows.length}</span>
+                </h2>
+                <PluginAppTiles pluginIds={group.rows.map((row) => row.id)} tints={tileTints} />
+                <SettingsGroup className="plugin-store-group">
+                  {group.rows.map(renderInstalledRow)}
+                </SettingsGroup>
+              </section>
+            ))
+          )}
+        </div>
       )}
 
-      {/* A source is not a plugin: one repo can carry several, and it is the source that
-          gets updated or removed, so it keeps its own group below the plugins. */}
-      <PluginSourcesGroup
-        sources={sources}
-        ownedSlugs={ownedSlugs}
-        updates={updates}
-        busy={busy}
-        copiedKey={copiedSlug}
-        feedback={feedback}
-        onCopy={copy}
-        onUpdate={(slug, kind, feedbackId) => void handleUpdate(slug, kind, feedbackId)}
-        onRemove={(slug) => void handleRemove(slug)}
-        setRowFeedback={setRowFeedback}
-      />
+      {showGetMore && (
+        <section className="apps-section apps-get-more" data-testid="apps-get-more" aria-labelledby="apps-get-more-title">
+          <h2 className="apps-section-title" id="apps-get-more-title">Get more</h2>
+          <p className="apps-section-sub">Plugins you can add in one click, or from any git or npm link.</p>
+          {matchingAvailable.length > 0 && (
+            <SettingsGroup className="plugin-store-group" data-testid="plugin-store-available">
+              {matchingAvailable.map((row) => availableRowFor(row))}
+            </SettingsGroup>
+          )}
 
-      {/* The simplest way in for someone who wants a plugin nobody has written yet. */}
-      <BuildPluginCard />
-    </SettingsSection>
+          {/* The free-form install path, for anything the catalog does not list. */}
+          <SettingsGroup
+            heading="Install from git or npm"
+            footer={registry?.cloud
+              ? 'Read from your Mac over the bridge; installing and removing sources happens on the Mac.'
+              : registry?.sourcesUnavailable
+                ? "The installed-source list couldn't be read, so Update and Remove are unavailable here."
+                : 'Neither kind ever updates itself: you press Update.'}
+          >
+            <SettingsRow
+              label="Git URL or npm package"
+              htmlFor="plugin-source-url"
+              help="A repo holds one plugin or one per folder; npm installs pin an exact version with scripts off."
+              wide
+              className="settings-row-stacked"
+              control={
+                <span className="settings-addons-inline">
+                  <input
+                    id="plugin-source-url"
+                    ref={urlInputRef}
+                    type="text"
+                    className="settings-input settings-input--long settings-input--mono"
+                    value={url}
+                    onChange={e => setUrl(e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); void handleAdd(); } }}
+                    placeholder="https://github.com/example/walnut-plugin"
+                    spellCheck={false}
+                  />
+                  <SettingsButton
+                    variant="primary"
+                    disabled={!url.trim() || !trusted}
+                    title={!url.trim() ? 'Paste a Git URL or an npm package first.' : !trusted ? 'Turn on the trust switch first.' : undefined}
+                    busy={busy === 'add'}
+                    busyLabel="Installing..."
+                    onClick={() => void handleAdd()}
+                  >
+                    Add
+                  </SettingsButton>
+                </span>
+              }
+            />
+            <SettingsRow
+              label={<span className="plugin-trust-label">I trust this source</span>}
+              htmlFor="plugin-trust-confirm"
+              help="Its code runs inside Walnut with full access to your tasks, notes, credentials and this Mac."
+              control={
+                <ToggleSwitch
+                  id="plugin-trust-confirm"
+                  data-testid="plugin-trust-confirm"
+                  checked={trusted}
+                  onChange={setTrusted}
+                />
+              }
+            />
+          </SettingsGroup>
+
+          {/* Phase two of an install from the form: the plugin that just arrived needs
+              another one. These rows name every source it would add and ARE the consent. */}
+          {pending && !pending.rowId && (
+            <SettingsGroup heading="Dependencies">
+              <PluginPendingDependencies
+                plan={pending.plan}
+                busy={busy === `pending:${pending.slug}`}
+                nameFor={nameOf}
+                onInstall={() => void installDependencies(pending.slug, `pending:${pending.slug}`)}
+                onDismiss={() => setPending(null)}
+              />
+            </SettingsGroup>
+          )}
+
+          {/* A source is not a plugin: one repo can carry several, and it is the source that
+              gets updated or removed, so it keeps its own group below the plugins. */}
+          <PluginSourcesGroup
+            sources={sources}
+            ownedSlugs={ownedSlugs}
+            updates={updates}
+            busy={busy}
+            copiedKey={copiedSlug}
+            feedback={feedback}
+            onCopy={copy}
+            onUpdate={(slug, kind, feedbackId) => void handleUpdate(slug, kind, feedbackId)}
+            onRemove={(slug) => void handleRemove(slug)}
+            setRowFeedback={setRowFeedback}
+          />
+        </section>
+      )}
+    </div>
   );
 }
 

@@ -194,7 +194,7 @@ async function createMsalClient(): Promise<msal.PublicClientApplication> {
   if (!clientId) {
     throw new MsTodoAuthError(
       'not-configured',
-      'Microsoft To-Do has no client_id yet. Add it under Settings → Plugins → Microsoft To-Do.',
+      'Microsoft To-Do has no client_id yet. Add it under Apps → Microsoft To-Do.',
     );
   }
 
@@ -256,7 +256,7 @@ function noteAuthFailure(kind: PluginAuthFailureKind, err: unknown): { kind: Plu
   return { kind, ...(code ? { code } : {}), message };
 }
 
-const SIGN_IN_HINT = 'Open Settings → Plugins → Microsoft To-Do and click Sign in (or run `walnut auth`).';
+const SIGN_IN_HINT = 'Open Apps → Microsoft To-Do and click Sign in (or run `walnut auth`).';
 
 function signInRequiredError(code?: string, reason?: string): MsTodoAuthError {
   const why = reason ? ` (${reason.split('\n')[0].slice(0, 160)})` : '';

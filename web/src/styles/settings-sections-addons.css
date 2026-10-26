@@ -243,7 +243,7 @@ span.plugin-store-why {
 
 /* ── Plugin update chip inside Settings: the standard sentence-case filled tag
    (F15). Tone follows the chip's state; clicking still re-checks the row. ── */
-.settings-pane .plugin-update-chip {
+:is(.settings-pane, .apps-plugins) .plugin-update-chip {
   min-width: 0;
   height: 18px;
   padding: 0 6px;
@@ -258,24 +258,24 @@ span.plugin-store-why {
   text-transform: none;
 }
 
-.settings-pane .plugin-update-chip:hover,
-.settings-pane button.plugin-update-chip--current:hover {
+:is(.settings-pane, .apps-plugins) .plugin-update-chip:hover,
+:is(.settings-pane, .apps-plugins) button.plugin-update-chip--current:hover {
   border: 0;
   background: color-mix(in srgb, var(--fg-secondary) 16%, var(--bg-tertiary));
 }
 
-.settings-pane .plugin-update-chip--current {
+:is(.settings-pane, .apps-plugins) .plugin-update-chip--current {
   background: transparent;
 }
 
-.settings-pane .plugin-update-chip--available {
+:is(.settings-pane, .apps-plugins) .plugin-update-chip--available {
   background: color-mix(in srgb, var(--accent) 14%, transparent);
   color: var(--accent-text, var(--accent));
 }
 
-.settings-pane .plugin-update-chip--dirty,
-.settings-pane .plugin-update-chip--diverged,
-.settings-pane .plugin-update-chip--auth {
+:is(.settings-pane, .apps-plugins) .plugin-update-chip--dirty,
+:is(.settings-pane, .apps-plugins) .plugin-update-chip--diverged,
+:is(.settings-pane, .apps-plugins) .plugin-update-chip--auth {
   background: rgba(255, 149, 0, 0.14);
   color: var(--priority-important-text);
 }
@@ -407,11 +407,11 @@ span.plugin-store-why {
    does (N13). plugin-updates.css pinned Plugins rows to the top. Like those
    rules, this one is for the list's rows: a config form row keeps the generic
    row (a stacked field stretches, see plugin-updates.css). */
-.settings-pane .plugin-store-installed .settings-row:where(:not(.plugin-store-config *)) {
+:is(.settings-pane, .apps-plugins) .plugin-store-installed .settings-row:where(:not(.plugin-store-config *)) {
   align-items: center;
 }
 
-.settings-pane .plugin-store-installed .settings-row-actions:where(:not(.plugin-store-config *)) {
+:is(.settings-pane, .apps-plugins) .plugin-store-installed .settings-row-actions:where(:not(.plugin-store-config *)) {
   align-self: auto;
   margin-top: 0;
 }

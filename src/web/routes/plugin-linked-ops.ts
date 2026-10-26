@@ -57,7 +57,7 @@ export function defaultLinkedCheckoutOps(): LinkedCheckoutOps {
  * relaying through one of those would be a lie about what ran. Byte-identical to the
  * client's copy in web/src/components/settings/plugin-update-view.ts.
  */
-export const CLOUD_LINKED_NOTE = 'Linked plugin checkouts live on your Mac. Open Settings → Plugins there to check or update one.'
+export const CLOUD_LINKED_NOTE = 'Linked plugin checkouts live on your Mac. Open Apps there to check or update one.'
 
 /** An update that outlives this many ms answers 504; git may still finish on its own. */
 export const LINKED_UPDATE_DEADLINE_MS = 60_000

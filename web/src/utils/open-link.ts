@@ -17,8 +17,12 @@
 import { buildInstallLink, parseInstallLink, parseOpenLinkFragment, type InstallLinkTarget } from '../../../src/core/plugin-install-link';
 import { log } from '@/utils/log';
 
+/** The Apps page: every plugin and App, built in or not (pages/AppsPage.tsx). */
+export const APPS_PATH = '/apps';
 /** Where the store lives; App navigates here when a link arrives. */
-export const PLUGIN_STORE_PATH = '/settings#plugin-store';
+export const PLUGIN_STORE_PATH = APPS_PATH;
+/** The Settings hash plugins lived under before the Apps page; Settings forwards it. */
+export const LEGACY_PLUGINS_HASH = 'plugin-store';
 
 let pending: InstallLinkTarget | null = null;
 const listeners = new Set<() => void>();

@@ -1,6 +1,6 @@
 /**
- * Settings → Plugins → Configure: the config form's rows keep the generic settings
- * row layout inside the Installed list.
+ * Apps page → a plugin's Configure: the config form's rows keep the generic settings
+ * row layout inside the installed plugin list.
  *
  * The form's rows are rendered INSIDE `.plugin-store-installed`, whose own row rules
  * (plugin-updates.css, settings-sections-addons.css) once reached them through a
@@ -106,11 +106,13 @@ function expectStackedList(g: RowGeometry) {
 }
 
 async function openConfig(page: Page) {
-  await page.goto('/settings')
-  await expect(page.locator('.settings-nav')).toBeVisible({ timeout: 30_000 })
-  const nav = page.getByTestId('settings-nav-plugin-store')
-  await nav.click()
-  await expect(nav).toHaveAttribute('aria-current', 'page')
+  await page.goto('/')
+  // The plugin list lives on the Apps page, reached from the sidebar's Apps entry.
+  const apps = page.getByTestId('sidebar-core-app-apps')
+  await expect(apps).toBeVisible({ timeout: 30_000 })
+  await apps.click()
+  await expect(page.getByTestId('apps-page')).toBeVisible({ timeout: 30_000 })
+  await expect(apps).toHaveClass(/\bactive\b/)
   await page.getByTestId(`plugin-configure-${PLUGIN}`).click()
   const form = page.getByTestId(`plugin-config-${PLUGIN}`)
   await expect(form.locator(`#${LIST_FIELD}`)).toBeVisible({ timeout: 30_000 })
@@ -146,8 +148,12 @@ test('config form rows keep the generic row layout inside the plugin list, wide 
   expect(await listRow.locator('.settings-row-copy').evaluate((el) => getComputedStyle(el).flexBasis)).toBe('320px')
 
   // Narrow group (under 600px), after a live resize: the text field drops under its
-  // copy, from the copy's left edge, across the row.
-  await page.setViewportSize({ width: 900, height: 900 })
+  // copy, from the copy's left edge, across the row. The Apps page is wider than the old
+  // Settings pane (no settings nav beside it), so the window narrows further, with the
+  // sidebar open, and stays above the phone layout (768px).
+  if (await page.locator('.sidebar.collapsed').count()) await page.locator('.sidebar-collapse-btn').click()
+  await expect(page.locator('.sidebar.collapsed')).toHaveCount(0)
+  await page.setViewportSize({ width: 820, height: 900 })
   await expect.poll(async () => (await measure(page)).groupWidth).toBeLessThan(600)
   const narrow = await measure(page)
   expectStackedList(narrow.list)

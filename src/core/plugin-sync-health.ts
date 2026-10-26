@@ -86,7 +86,7 @@ export interface SyncFailureNotice {
   title: string;
   /** One or two human sentences. */
   body: string;
-  /** Button the card carries; the sign-in and config cases point at Settings. */
+  /** Button the card carries; the sign-in and config cases point at the Apps page (via Settings' forward, which an older window also understands). */
   action?: { label: string; to: string };
   /** The provider's own code, for the log line only. */
   code?: string;

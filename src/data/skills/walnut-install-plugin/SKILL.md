@@ -5,7 +5,7 @@ description: Install, configure, verify, update, and remove trusted Walnut Plugi
 
 # Install a Walnut Plugin
 
-The Plugin Store accepts a Git URL, a Walnut share snippet, or an npm registry spec. New Plugins load without a restart when possible. Settings → Plugin Store is the manual path.
+The Plugin Store accepts a Git URL, a Walnut share snippet, or an npm registry spec. New Plugins load without a restart when possible. The Apps page (`/apps`, Get more) is the manual path.
 
 ## Confirm trust first
 

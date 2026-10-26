@@ -65,6 +65,7 @@ import {
 import { validatePluginId } from './plugins/ids.js';
 import { manifestKnowsHeldPhases, wrapSyncForLegacyPhases } from './plugins/legacy-phase-sync.js';
 import { listInstalledBundledDirs, parseManifestCatalog, resolveBundledStoreDir } from './plugins/bundled-store.js';
+import { parsePluginCategory } from './plugins/plugin-category.js';
 import { validatePluginIconPath } from './plugins/plugin-icon.js';
 import { parseStorageDeclaration } from './plugins/plugin-file-area.js';
 import { listOwnedSkillDirRecords } from './plugins/skill-registry.js';
@@ -1472,6 +1473,8 @@ function validateManifest(raw: unknown, filePath: string): PluginManifest | null
   // Lenient like icon: a bad area costs that area, never the load.
   const storageParsed = parseStorageDeclaration(obj.storage);
   for (const reason of storageParsed.dropped) log.warn('Manifest storage entry dropped', { filePath, reason });
+  // Closed set; an unknown word is dropped so the catalog or the derivation decides.
+  const category = parsePluginCategory(obj.category);
 
   return {
     id: obj.id,
@@ -1495,6 +1498,7 @@ function validateManifest(raw: unknown, filePath: string): PluginManifest | null
       : undefined,
     // Only the one value that changes anything survives; `'plugins'` and junk both read as the default.
     ...(obj.settingsIn === 'app' ? { settingsIn: 'app' as const } : {}),
+    ...(category ? { category } : {}),
     taskFields,
     // Phases the plugin declares it understands (legacy-phase-sync.ts); junk entries are dropped.
     ...(Array.isArray(obj.phases) && obj.phases.some((p) => typeof p === 'string')
@@ -1965,6 +1969,7 @@ async function loadPlugin(
     configSchema: manifest.configSchema,
     uiHints: manifest.uiHints,
     ...(manifest.settingsIn ? { settingsIn: manifest.settingsIn } : {}),
+    ...(manifest.category ? { category: manifest.category } : {}),
     taskFields: manifest.taskFields,
     tools: unified || effectiveCapabilities.includes('tools') ? tools : undefined,
     uiApp,

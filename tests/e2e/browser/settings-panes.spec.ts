@@ -64,7 +64,9 @@ test('C2: each nav entry mounts only its own pane', async ({ page }) => {
   }
   const panes = await page.$$eval('.settings-nav button.settings-nav-item[data-testid^="settings-nav-"]',
     (els) => els.map((e) => e.getAttribute('data-testid')!.slice('settings-nav-'.length)))
-  expect(panes).toEqual(expect.arrayContaining(['hooks', 'plugin-store', 'general', 'tasks', 'devices', 'advanced', 'bug-report']))
+  // Plugins is a link to the Apps page now (an anchor, not a pane button), so it is not listed.
+  expect(panes).toEqual(expect.arrayContaining(['hooks', 'general', 'tasks', 'devices', 'advanced', 'bug-report']))
+  expect(panes).not.toContain('plugin-store')
   for (const id of panes.filter((p) => !p.includes(':'))) {
     await clickNav(page, id)
     await expect.poll(() => mountedSections(page)).toEqual(folded[id] ?? [id])
@@ -362,7 +364,7 @@ test('C37: a plugin panel gets a pane header; a crashing panel stays inside its 
   expect(await mountedSections(page)).toEqual(['general'])
 })
 
-test('C82: a plugin panel that goes away says so, with a way back to Plugins', async ({ page }) => {
+test('C82: a plugin panel that goes away says so, with a way back to Apps', async ({ page }) => {
   await openSettings(page)
   await registerPanel(page, 'fixture-gamma', 'Fixture Gamma', 'Gamma Panel')
   await clickNav(page, 'fixture-gamma:panel')
@@ -370,8 +372,9 @@ test('C82: a plugin panel that goes away says so, with a way back to Plugins', a
   const off = page.getByTestId('settings-plugin-off')
   await expect(off).toContainText('This panel went away because Fixture Gamma is off.')
   await expect(page).toHaveURL(/#fixture-gamma:panel$/)
-  await off.getByRole('button', { name: 'Open Plugins' }).click()
-  await expect(page.getByTestId(NAV('plugin-store'))).toHaveAttribute('aria-current', 'page')
+  await off.getByRole('button', { name: 'Open Apps' }).click()
+  await expect(page).toHaveURL(/\/apps$/)
+  await expect(page.getByTestId('apps-page')).toBeVisible({ timeout: 20_000 })
 })
 
 test('C38: a crashing core section shows its own shell and Try again', async ({ page }) => {
@@ -673,8 +676,14 @@ test('C83 + C64: the second group reads Plugins; slack puts Plugins first', asyn
   expect(await page.locator('.settings-nav-group-label').first().evaluate((el) => getComputedStyle(el).textTransform)).toBe('none')
   await page.getByTestId('settings-filter').fill('slack')
   await expect.poll(async () => (await visibleNavKeys(page))[0]).toBe(NAV('plugin-store'))
+  // That first row is a link to the Apps page; Enter opens the highlighted row, and the
+  // filter highlights the first matching PANE (Integrations holds the Slack token).
+  const highlighted = page.locator('.settings-nav-item.is-highlighted')
+  await expect(highlighted).toHaveCount(1)
+  const target = await highlighted.getAttribute('data-testid')
+  expect(target).not.toBe(NAV('plugin-store'))
   await page.getByTestId('settings-filter').press('Enter')
-  await expect(page.getByTestId(NAV('plugin-store'))).toHaveAttribute('aria-current', 'page')
+  await expect(page.getByTestId(target!)).toHaveAttribute('aria-current', 'page')
 })
 
 test('C82: a deep link to an installed plugin that is off says so after the runtime answers', async ({ page }) => {

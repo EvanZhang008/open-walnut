@@ -109,7 +109,7 @@ test('a plugin\'s MCP servers: state, Start, a live crash, recovery, a server th
   await expect(brokenButton).toBeEnabled()
 
   // A reload shows the same rows from one fetch.
-  // The reload lands back on Settings, Plugins (the section is in the URL).
+  // The reload lands back on the Apps page (/apps is the URL).
   await page.reload()
   await expect(page.getByTestId('plugin-store-installed')).toBeVisible({ timeout: 60_000 })
   await expect(page.getByTestId('plugin-mcp-row-acme-tools')).toHaveAttribute('data-state', 'ready', { timeout: 30_000 })

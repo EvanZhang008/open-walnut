@@ -7,6 +7,10 @@ export interface PluginBuildConfig {
   external?: string[]
 }
 
+/** The host's closed set (src/core/plugins/plugin-category.ts); it drops any other value. */
+export const PLUGIN_CATEGORIES = ['communication', 'tasks', 'time', 'developer', 'other'] as const
+export type PluginCategory = typeof PLUGIN_CATEGORIES[number]
+
 export interface PluginManifest {
   id: string
   name: string
@@ -20,6 +24,8 @@ export interface PluginManifest {
   icon?: string
   build?: PluginBuildConfig
   settingsIn?: 'plugins' | 'app'
+  /** The Apps page group the plugin is listed under; omitted = derived from what it does. */
+  category?: PluginCategory
   /** File areas beyond plugin-data: `files` (synced text, in git) and `tmp` (scratch with a TTL). */
   storage?: { files?: boolean | { maxBytes?: number }; tmp?: boolean | { ttlHours?: number } }
 }
@@ -78,6 +84,9 @@ export async function validatePlugin(root = process.cwd()): Promise<ValidationRe
   }
   if (manifest.settingsIn !== undefined && manifest.settingsIn !== 'plugins' && manifest.settingsIn !== 'app') {
     errors.push("manifest.settingsIn must be 'plugins' or 'app'")
+  }
+  if (manifest.category !== undefined && !(PLUGIN_CATEGORIES as readonly unknown[]).includes(manifest.category)) {
+    errors.push(`manifest.category must be one of ${PLUGIN_CATEGORIES.map((c) => `'${c}'`).join(', ')}`)
   }
 
   // The same rules the host applies when it serves the icon (validatePluginIconPath and

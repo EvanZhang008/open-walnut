@@ -23,7 +23,7 @@ import { openChatOnLoad } from './draft-helpers'
  *      and there IS a Settings → Plugins row, which is what the test clicks. The Command
  *      Palette entry survives the move, and disabling the plugin takes the row away.
  *      The declaration is only a DEFAULT: the user can move the row either way from
- *      the plugin's own row in Settings → Plugins, live and durably.
+ *      the App's tile on the Apps page (/apps), live and durably.
  *   2. Its tabs are real URLs (a reload on /timeline comes back on the timeline, not on
  *      tab one).
  *   3. The Overview answers three questions AT ONCE (your time, agent time, the 7-day
@@ -122,6 +122,14 @@ async function openSettings(page: Page): Promise<void> {
   // The link returns to the last pane Settings showed, so a pane hash may follow.
   await expect(page).toHaveURL(/\/settings(#[\w-]+)?$/)
   await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible({ timeout: 30_000 })
+}
+
+/** The Apps page, from the sidebar's Apps entry: where a plugin App's place is chosen. */
+async function openApps(page: Page): Promise<void> {
+  await expandSidebar(page)
+  await page.getByTestId('sidebar-core-app-apps').click()
+  await expect(page).toHaveURL(/\/apps$/)
+  await expect(page.getByTestId('apps-page')).toBeVisible({ timeout: 30_000 })
 }
 
 /** The app, opened the way a user opens it: Settings → Plugins → Time. */
@@ -723,32 +731,30 @@ test('the user can move the row to the Sidebar and back, live and across a reloa
 
   await page.goto(`http://127.0.0.1:${fixture!.port}/`)
   await page.waitForLoadState('domcontentloaded')
-  await openSettings(page)
-  await page.getByTestId('settings-nav-plugin-store').click()
+  await openApps(page)
 
-  // The app's controls live on the PLUGIN's row in the Plugins section — an app
-  // is not a separate thing to manage on another panel.
-  const appRow = page.getByTestId('plugin-app-row-walnut-time:main')
-  await expect(appRow).toBeVisible({ timeout: 60_000 })
+  // The app's place is chosen on its tile on the Apps page, above its plugin's row.
+  const appTile = page.getByTestId('apps-app-walnut-time:main')
+  await expect(appTile).toBeVisible({ timeout: 60_000 })
   // Where it starts: what the App declared.
-  await expect(appRow).toContainText('In settings')
-  const move = page.getByTestId('plugin-app-placement-walnut-time:main')
-  await expect(move).toHaveText('Move to sidebar')
+  await expect(appTile).toHaveAttribute('data-where', 'settings')
+  await expect(page.getByTestId('apps-app-where-settings-walnut-time:main')).toHaveAttribute('aria-checked', 'true')
   await shoot(page, 'apps-manager-placement-control')
 
-  // A Core App is not the user's to move: it is not a plugin, so it has no row
-  // (and no placement control) here at all.
-  await expect(page.getByTestId('plugin-app-placement-core:home')).toHaveCount(0)
-  await expect(page.getByTestId('plugin-app-row-core:home')).toHaveCount(0)
+  // A Core App is not the user's to move: it is not a plugin, so it has no App tile
+  // (and no placement control) here at all; it is a built-in tile with a switch.
+  await expect(page.getByTestId('apps-app-core:home')).toHaveCount(0)
+  await expect(page.getByTestId('apps-app-where-sidebar-core:home')).toHaveCount(0)
 
-  await move.click()
+  await page.getByTestId('apps-app-where-sidebar-walnut-time:main').click()
 
   // Live, with no reload: the declared placement was only a default.
-  await expect(appRow).toContainText('In sidebar')
-  await expect(page.getByTestId('settings-nav-app-walnut-time:main')).toHaveCount(0)
+  await expect(appTile).toHaveAttribute('data-where', 'sidebar')
   await expect(page.getByTestId('sidebar-app-walnut-time:main')).toBeVisible({ timeout: 30_000 })
-  await expect(move).toHaveText('Move to settings')
   await shoot(page, 'placement-moved-to-sidebar')
+  await openSettings(page)
+  await expect(page.getByTestId('settings-nav-plugin-store')).toBeVisible({ timeout: 30_000 })
+  await expect(page.getByTestId('settings-nav-app-walnut-time:main')).toHaveCount(0)
 
   // It survives a reload, and the App itself is unchanged by the move: same route,
   // same page, reached from its new row.
@@ -761,12 +767,12 @@ test('the user can move the row to the Sidebar and back, live and across a reloa
   await expect(page.getByTestId('time-app')).toBeVisible({ timeout: 60_000 })
   await expect(page.getByTestId('time-app-trend').locator('.wt-trend-day')).toHaveCount(7, { timeout: 30_000 })
 
-  // The same button is the way back to the App's own choice.
-  await openSettings(page)
-  await page.getByTestId('settings-nav-plugin-store').click()
-  await page.getByTestId('plugin-app-placement-walnut-time:main').click()
-  await expect(page.getByTestId('plugin-app-row-walnut-time:main')).toContainText('In settings')
+  // The same control is the way back to the App's own choice.
+  await openApps(page)
+  await page.getByTestId('apps-app-where-settings-walnut-time:main').click()
+  await expect(page.getByTestId('apps-app-walnut-time:main')).toHaveAttribute('data-where', 'settings')
   await expect(page.getByTestId('sidebar-app-walnut-time:main')).toHaveCount(0)
+  await openSettings(page)
   await expect(page.getByTestId('settings-nav-app-walnut-time:main')).toBeVisible({ timeout: 30_000 })
 
   // An override is NOT browser-local. App preferences ride the ui-prefs mirror
@@ -814,7 +820,10 @@ test('disabling the plugin takes the Settings row away without a reload', async 
   await expect(page.getByTestId('sidebar-app-walnut-time:main')).toHaveCount(0)
   await shoot(page, 'views-app-settings-nav-disabled')
 
-  // One registry, so the plugin's app row forgets it in the same beat as the nav row.
+  // One registry, so the App's tile on the Apps page forgets it in the same beat as the
+  // nav row. The Settings nav's Apps link is the way there.
   await page.getByTestId('settings-nav-plugin-store').click()
-  await expect(page.getByTestId('plugin-app-row-walnut-time:main')).toHaveCount(0)
+  await expect(page.getByTestId('apps-page')).toBeVisible({ timeout: 30_000 })
+  await expect(page.getByTestId('plugin-row-walnut-time')).toBeVisible({ timeout: 30_000 })
+  await expect(page.getByTestId('apps-app-walnut-time:main')).toHaveCount(0)
 })

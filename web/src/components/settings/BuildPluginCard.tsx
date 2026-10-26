@@ -17,33 +17,10 @@ import { fetchInstallDir, fetchIsCloudReplica } from '@/api/config'
 import { openSessionOnHome } from '@/utils/open-session'
 import { SettingsGroup, SettingsRow } from './SettingsSection'
 import { SettingsButton } from './inputs/SettingsButton'
+import { BUILD_CWD, buildPrompt, PLUGIN_CREATE_COMMAND } from './build-plugin-prompt'
 import '@/styles/settings-sections-addons.css'
 
-export const PLUGIN_CREATE_COMMAND = 'npx @open-walnut/plugin-cli new my-plugin --dev'
-
-/** Where AI-built plugins live. quick-start expands `~` server-side and
- *  `createCwd` mkdirs it, so this works on a fresh machine. */
-const BUILD_CWD = '~/walnut-plugins'
-
-function buildPrompt(request: string, installDir: string | null): string {
-  const want = request.trim()
-  // The npm package may not be published yet; hand the session the fallback it
-  // cannot discover on its own (a fresh ~/walnut-plugins has nothing to read).
-  const fallback = installDir
-    ? `If that npx package is not on the registry yet (404), use the Walnut checkout at ${installDir}: run \`npm run build:plugins\` there once, then \`node ${installDir}/packages/plugin-cli/dist/cli.js new <name> --dev\` from this directory.`
-    : 'If that npx package is not on the registry yet (404), clone https://github.com/EvanZhang008/open-walnut, run `npm install && npm run build:plugins` in it, then `node <checkout>/packages/plugin-cli/dist/cli.js new <name> --dev` from this directory.'
-  return [
-    'Build a new Walnut plugin for me.',
-    '',
-    'Setup: pick a short kebab-case name from my request (ask me if unclear), then run',
-    '`npx @open-walnut/plugin-cli new <name> --dev` in the current directory. ' + fallback,
-    'Keep that watcher running: it links the plugin into my running Walnut and',
-    'hot-reloads it on every save, so I can watch it appear in my sidebar while you',
-    'work. The scaffold\'s README documents the full plugin API.',
-    '',
-    want ? `What I want: ${want}` : 'Start by asking me what the plugin should do.',
-  ].join('\n')
-}
+export { PLUGIN_CREATE_COMMAND }
 
 export function BuildPluginCard({ showGuideLink = true, showManual = true }: {
   showGuideLink?: boolean
@@ -81,7 +58,7 @@ export function BuildPluginCard({ showGuideLink = true, showManual = true }: {
 
   const manual = showManual ? (
     <span className="build-plugin-manual">
-      To do it yourself, run <code>{PLUGIN_CREATE_COMMAND}</code> in a terminal
+      To do it yourself, run <code>{PLUGIN_CREATE_COMMAND}</code> in a clone of open-walnut
       {showGuideLink && (
         <>
           , or read the{' '}

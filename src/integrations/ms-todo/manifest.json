@@ -1,6 +1,7 @@
 {
   "id": "ms-todo",
   "name": "Microsoft To-Do",
+  "category": "tasks",
   "apiVersion": 1,
   "phases": ["WAITING"],
   "engines": {

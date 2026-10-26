@@ -23,6 +23,13 @@ async function openSettings(page: Page) {
   await expect(page.locator('.settings-pane .settings-section').first()).toBeVisible({ timeout: 30_000 })
 }
 
+/** Plugins moved to the Apps page: the Settings nav's Plugins row is a link there now. */
+async function openApps(page: Page) {
+  await page.getByTestId(NAV('plugin-store')).click()
+  await expect(page.getByTestId('apps-page')).toBeVisible({ timeout: 20_000 })
+  await expect(page.locator('#plugin-store')).toBeVisible({ timeout: 20_000 })
+}
+
 async function clickNav(page: Page, id: string) {
   const item = page.getByTestId(NAV(id))
   await item.scrollIntoViewIfNeeded()
@@ -165,7 +172,7 @@ test('N3-03: the placeholder-shaped name "Test phone" pairs as Test-phone, no ru
 test('N3-04: Calendar plugin Configure links to Calendar Accounts instead of a second id editor', async ({ page }) => {
   await recordWrites(page)
   await openSettings(page)
-  await clickNav(page, 'plugin-store')
+  await openApps(page)
   const configure = page.getByTestId('plugin-configure-calendar')
   await expect(configure).toBeVisible({ timeout: 30_000 })
   await configure.click()
@@ -302,7 +309,7 @@ test('N3-18: a stacked control starts at the label and spans the row', async ({ 
   await recordWrites(page)
   await page.setViewportSize({ width: 1280, height: 800 })
   await openSettings(page)
-  await clickNav(page, 'plugin-store')
+  await openApps(page)
   const row = page.locator('.settings-row', { has: page.locator('#plugin-source-url') })
   await expect(row).toBeVisible({ timeout: 30_000 })
   const label = (await row.locator('.settings-row-label').boundingBox())!
@@ -437,12 +444,15 @@ test('evidence: 660px panes keep controls inside their groups with no horizontal
   await recordWrites(page)
   await openSettings(page)
   await narrowWithSidebar(page)
-  for (const id of ['general', 'tasks', 'engines', 'plugin-store', 'remote-hosts', 'advanced']) {
-    await clickNav(page, id)
+  // Plugins is measured on the Apps page its nav row now opens, with the same rule.
+  for (const id of ['general', 'tasks', 'engines', 'remote-hosts', 'advanced', 'plugin-store']) {
+    const apps = id === 'plugin-store'
+    if (apps) await openApps(page)
+    else await clickNav(page, id)
     await page.waitForTimeout(600)
-    const bad = await page.evaluate(() => {
-      const pane = document.querySelector<HTMLElement>('.settings-pane')!
-      const out = Array.from(document.querySelectorAll<HTMLElement>('.settings-pane .settings-row-actions'))
+    const bad = await page.evaluate(([paneSel, rowSel]) => {
+      const pane = document.querySelector<HTMLElement>(paneSel)!
+      const out = Array.from(document.querySelectorAll<HTMLElement>(`${rowSel} .settings-row-actions`))
         .filter((a) => a.getBoundingClientRect().height > 0)
         .filter((a) => {
           const g = a.closest('.settings-group')!.getBoundingClientRect()
@@ -450,7 +460,7 @@ test('evidence: 660px panes keep controls inside their groups with no horizontal
           return r.right > g.right + 1 || r.left < g.left - 1
         }).map((a) => a.closest('.settings-row')?.textContent?.slice(0, 30))
       return { hscroll: pane.scrollWidth > pane.clientWidth + 1, out }
-    })
+    }, apps ? ['.apps-page', '#plugin-store'] : ['.settings-pane', '.settings-pane'])
     expect(bad, id).toEqual({ hscroll: false, out: [] })
     await page.screenshot({ path: `${SHOTS}/${ENGINE}-660-${id}.png` })
   }

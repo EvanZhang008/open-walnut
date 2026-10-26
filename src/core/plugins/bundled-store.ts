@@ -22,6 +22,7 @@ import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { PluginCatalogEntry } from './plugin-catalog.js'
+import { parsePluginCategory } from './plugin-category.js'
 
 /** Test and ephemeral servers only: point discovery and the catalog at another folder. */
 export const BUNDLED_STORE_DIR_ENV = 'WALNUT_BUNDLED_STORE_DIR'
@@ -180,12 +181,14 @@ export async function scanBundledStore(storeDir: string | null): Promise<PluginC
     const catalog = parseManifestCatalog(manifest.raw.catalog)
     const description = stringField(manifest.raw, 'description')
     const version = stringField(manifest.raw, 'version')
+    const category = parsePluginCategory(manifest.raw.category)
     out.push({
       id: manifest.id,
       name: stringField(manifest.raw, 'name') ?? manifest.id,
       ...(description ? { description } : {}),
       ...(version ? { version } : {}),
       ...(catalog?.adds ? { adds: catalog.adds } : {}),
+      ...(category ? { category } : {}),
       ...(catalog?.homepage ? { homepage: catalog.homepage } : {}),
       ...(catalog?.docs ? { docs: catalog.docs } : {}),
       source: { kind: 'bundled', path: `${BUNDLED_STORE_REL}/${manifest.dirName}` },
@@ -197,7 +200,7 @@ export async function scanBundledStore(storeDir: string | null): Promise<PluginC
 /**
  * The bundled scan under the curated catalog. The folder is the truth about WHAT ships
  * (id, source, version), so a catalog entry with the same id may only reword it: name,
- * description, adds, homepage, docs and requires. A catalog entry that claims `bundled`
+ * description, adds, category, homepage, docs and requires. A catalog entry that claims `bundled`
  * for a folder this build does not carry is dropped, because its Install could only fail.
  */
 export function overlayBundledCatalog(
@@ -219,6 +222,8 @@ export function overlayBundledCatalog(
       name: entry.name && entry.name !== entry.id ? entry.name : shipped.name,
       ...(entry.description !== undefined ? { description: entry.description } : {}),
       ...(entry.adds !== undefined ? { adds: entry.adds } : {}),
+      // The manifest's own category outranks the catalog's, the same order an installed row uses.
+      ...(shipped.category === undefined && entry.category !== undefined ? { category: entry.category } : {}),
       ...(entry.homepage !== undefined ? { homepage: entry.homepage } : {}),
       ...(entry.docs !== undefined ? { docs: entry.docs } : {}),
       ...(entry.requires !== undefined ? { requires: entry.requires } : {}),

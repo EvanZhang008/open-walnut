@@ -1,6 +1,6 @@
 import { Navigate } from 'react-router-dom'
 import { appRegistry, type AppComponentProps, type CoreAppContribution } from './registry'
-import { HomeIcon, TasksIcon, NotesIcon, CalendarIcon, MailIcon, ScheduleIcon, SettingsIcon } from './icons'
+import { HomeIcon, TasksIcon, NotesIcon, CalendarIcon, MailIcon, ScheduleIcon, SettingsIcon, AppsIcon } from './icons'
 import { MailApp } from './mail/MailApp'
 import { attachMailBadge } from './mail/mail-live'
 import { DashboardPage } from '@/pages/DashboardPage'
@@ -8,6 +8,7 @@ import { NotesPage } from '@/pages/NotesPage'
 import { CalendarPage } from '@/pages/CalendarPage'
 import { RoutinesPage } from '@/pages/RoutinesPage'
 import { SettingsPage } from '@/pages/SettingsPage'
+import { AppsPage } from '@/pages/AppsPage'
 import { usePhoneLayout } from '@/hooks/usePhoneLayout'
 
 const EmptyApp = (_props: AppComponentProps) => null
@@ -24,9 +25,10 @@ const NotesApp = (_props: AppComponentProps) => <NotesPage />
 const CalendarApp = (_props: AppComponentProps) => <CalendarPage />
 const RoutinesApp = (_props: AppComponentProps) => <RoutinesPage />
 const SettingsApp = (_props: AppComponentProps) => <SettingsPage />
+const AppsApp = (_props: AppComponentProps) => <AppsPage />
 
 /**
- * Rail order (top → bottom): Home, Notes, Calendar, Tasks, Routines, Settings.
+ * Rail order (top → bottom): Home, Notes, Calendar, Tasks, Routines, Apps, Settings.
  * Home first because it is the landing surface; Notes/Calendar next because they
  * are read all day; Tasks after them (the Home Todo panel already covers the
  * common task reads, so /tasks is the deeper stop); Settings always last.
@@ -52,6 +54,13 @@ export const CORE_APPS: CoreAppContribution[] = [
   },
   { id: 'tasks', title: 'Tasks', path: '/tasks', icon: TasksIcon, component: TasksApp, order: 40 },
   { id: 'routines', title: 'Routines', path: '/routines', icon: ScheduleIcon, component: RoutinesApp, order: 50 },
+  // Apps manages everything else on the rail (built-in apps, plugins and their Apps), so
+  // it can never be hidden: it is the way back to whatever was hidden. `exactPath`:
+  // every plugin App lives under /apps/<id>, which is not the Apps page.
+  {
+    id: 'apps', title: 'Apps', path: '/apps', icon: AppsIcon, component: AppsApp,
+    order: 990, lockVisibility: true, exactPath: true, fullBleed: true,
+  },
   {
     id: 'settings', title: 'Settings', path: '/settings', icon: SettingsIcon, component: SettingsApp,
     order: 1000, lockVisibility: true,

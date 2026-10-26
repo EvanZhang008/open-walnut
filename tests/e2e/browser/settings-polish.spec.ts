@@ -28,6 +28,13 @@ async function clickNav(page: Page, id: string) {
   await expect(page.locator('.settings-pane .settings-section').first()).toBeVisible({ timeout: 20_000 })
 }
 
+/** Plugins moved to the Apps page: the Settings nav's Plugins row is a link there now. */
+async function openApps(page: Page) {
+  await page.getByTestId(NAV('plugin-store')).click()
+  await expect(page.getByTestId('apps-page')).toBeVisible({ timeout: 20_000 })
+  await expect(page.locator('#plugin-store')).toBeVisible({ timeout: 20_000 })
+}
+
 async function recordWrites(page: Page): Promise<string[]> {
   const writes: string[] = []
   await page.route('**/api/**', async (route) => {
@@ -156,13 +163,15 @@ for (const [w, h] of [[1280, 800], [900, 800], [720, 800]] as const) {
   })
 }
 
-test('N05 N06: plugin app and provider sub-rows are plain indented rows that say their state', async ({ page }) => {
+// A plugin's Apps are tiles on the Apps page now; the sub-rows left under a plugin row are its
+// providers (and an App that failed to load).
+test('N05 N06: plugin provider sub-rows are plain indented rows that say their state', async ({ page }) => {
   await recordWrites(page)
   await openSettings(page)
-  await clickNav(page, 'plugin-store')
+  await openApps(page)
   await expect(page.locator('[data-testid^="plugin-row-"]').first()).toBeVisible({ timeout: 20_000 })
   const subRows = await page.evaluate(() => Array.from(document.querySelectorAll<HTMLElement>(
-    '.settings-pane [data-testid^="plugin-app-row-"], .settings-pane [data-testid^="plugin-provider-"]'))
+    '#plugin-store [data-testid^="plugin-app-failed-"], #plugin-store [data-testid^="plugin-provider-"]'))
     .map((row) => {
       const group = row.closest('.settings-group')!
       const boxes: string[] = []
@@ -170,7 +179,7 @@ test('N05 N06: plugin app and provider sub-rows are plain indented rows that say
         const cs = getComputedStyle(n)
         if (cs.backgroundColor !== 'rgba(0, 0, 0, 0)' || parseFloat(cs.borderTopWidth) > 0 || parseFloat(cs.borderRadius) > 0) boxes.push(n.className)
       }
-      const indented = document.querySelector<HTMLElement>('.settings-pane .settings-row.settings-row-indent:not([data-testid^="plugin-app-row-"])')
+      const indented = document.querySelector<HTMLElement>('#plugin-store .settings-row.settings-row-indent:not([data-testid^="plugin-app-failed-"])')
       return {
         id: row.dataset.testid,
         boxes,
@@ -180,7 +189,7 @@ test('N05 N06: plugin app and provider sub-rows are plain indented rows that say
         tag: (row.querySelector('.settings-tag')?.textContent ?? '').trim(),
       }
     }))
-  expect(subRows.length, 'fixture has a provider or an app sub-row').toBeGreaterThan(0)
+  expect(subRows.length, 'fixture has a provider sub-row').toBeGreaterThan(0)
   for (const r of subRows) {
     expect(r.boxes, r.id).toEqual([])
     if (r.refPad) expect(r.pad, r.id).toBe(r.refPad)
@@ -313,17 +322,18 @@ test('N10 N11: an off host keeps its controls at full strength; text buttons end
 test('N13: plugin row controls are centred on the row like every pane', async ({ page }) => {
   await recordWrites(page)
   await openSettings(page)
-  await clickNav(page, 'plugin-store')
+  await openApps(page)
   await expect(page.locator('[data-testid^="plugin-row-"]').first()).toBeVisible({ timeout: 20_000 })
-  const off = await page.locator('.settings-pane [data-testid^="plugin-row-"]').evaluateAll((rows) => rows
+  const off = await page.locator('#plugin-store [data-testid^="plugin-row-"]').evaluateAll((rows) => rows
     .filter((r) => r.getBoundingClientRect().height > 50)
     .map((r) => {
       const a = r.querySelector<HTMLElement>(':scope > .settings-row-actions')
-      if (!a) return 0
+      const id = r.getAttribute('data-testid')
+      if (!a) return { id, d: 0, h: 0 }
       const rr = r.getBoundingClientRect(); const ar = a.getBoundingClientRect()
-      return Math.round(Math.abs((ar.top + ar.bottom) / 2 - (rr.top + rr.bottom) / 2))
+      return { id, d: Math.round(Math.abs((ar.top + ar.bottom) / 2 - (rr.top + rr.bottom) / 2)), h: Math.round(rr.height) }
     }))
-  for (const d of off) expect(d).toBeLessThanOrEqual(2)
+  for (const { id, d, h } of off) expect(d, `${id} (row ${h}px)`).toBeLessThanOrEqual(2)
 })
 
 test('N25 N14 N18: one single-line row height, flat primary buttons, no fade on the nav highlight', async ({ page }) => {
@@ -338,8 +348,8 @@ test('N25 N14 N18: one single-line row height, flat primary buttons, no fade on 
   expect(new Set(heights), JSON.stringify(heights)).toEqual(new Set([44]))
   const nav = await page.getByTestId(NAV('advanced')).evaluate((el) => getComputedStyle(el).transitionDuration)
   expect(nav.split(',').every((d) => parseFloat(d) === 0)).toBe(true)
-  await clickNav(page, 'plugin-store')
-  const primaries = await page.locator('.settings-pane .settings-button-primary').evaluateAll((els) =>
+  await openApps(page)
+  const primaries = await page.locator('#plugin-store .settings-button-primary').evaluateAll((els) =>
     els.map((b) => ({ ap: getComputedStyle(b).appearance, border: getComputedStyle(b).borderTopColor, bg: getComputedStyle(b).backgroundColor })))
   for (const p of primaries) expect(p.ap).toBe('none')
 })

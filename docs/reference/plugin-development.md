@@ -2,28 +2,22 @@
 
 ## One command
 
-```bash
-npx @open-walnut/plugin-cli new my-plugin --dev
-```
-
-That single command is the whole first loop: it scaffolds the project, installs dependencies, validates the manifest, builds the entries, links the directory into `~/.open-walnut/plugins/my-plugin`, asks the running Walnut to discover and load the new plugin, reads the runtime state back, prints the App URL, and then keeps watching so every save rebuilds and reloads. A first link needs no server restart. Walnut may be offline while you work, in which case the link loads on Walnut's next start.
-
-Or skip the terminal entirely: Settings → Plugins has a **Build a plugin** card. Describe what you want and click **Build it**, and an AI session starts in `~/walnut-plugins`, runs the command above itself, and keeps the watcher alive so the plugin appears in your sidebar as it takes shape. The same card links to the guided version of this page at `/plugins/new`: the command with a copy button, plus a live panel that shows your plugin's App the moment the first build links in.
-
-After that first run, the project's own script continues the same loop:
-
-```bash
-cd my-plugin
-npm run dev
-```
-
-Two flags matter: `--no-install` skips `npm install` unconditionally, and `--open` opens the App in a browser once Walnut reports the plugin active (interactive terminals only).
-
-The packages in this repository are not published to the npm registry yet, so the `npx` form above is the post-release author flow rather than something you can install today. Inside this repository, build the packages and skip registry installation while the local CLI owns the watcher:
+The author packages are not on the npm registry yet, so the first loop runs from a clone of this repository. Build the packages once, then scaffold:
 
 ```bash
 npm run build:plugins
 node packages/plugin-cli/dist/cli.js new my-plugin --dev --no-install
+```
+
+That command is the whole first loop: it scaffolds the project, validates the manifest, builds the entries, links the directory into `~/.open-walnut/plugins/my-plugin`, asks the running Walnut to discover and load the new plugin, reads the runtime state back, prints the App URL, and then keeps watching so every save rebuilds and reloads. A first link needs no server restart. Walnut may be offline while you work, in which case the link loads on Walnut's next start. `--no-install` skips `npm install`, because inside the repository the packages resolve from the checkout; `--open` opens the App in a browser once Walnut reports the plugin active (interactive terminals only).
+
+Or skip the terminal entirely: the Apps page (`/apps`, in the sidebar) ends with a **Make your own** card. Describe what you want and click **Build it**, and an AI session starts in `~/walnut-plugins`, runs the command above itself, and keeps the watcher alive so the plugin appears in your sidebar as it takes shape. The card links to the guided version of this page at `/plugins/new`: the command with a copy button, plus a live panel that shows your plugin's App the moment the first build links in.
+
+Once the packages are published, the same loop will be `npx @open-walnut/plugin-cli new my-plugin --dev`, and the generated project's own `npm run dev` continues it:
+
+```bash
+cd my-plugin
+npm run dev
 ```
 
 For another local-checkout loop, run `node packages/plugin-cli/dist/cli.js dev --root my-plugin`. After the packages are published and installed in the generated project, its own `npm run dev` script is the normal loop.
@@ -111,7 +105,7 @@ Walnut loads built files, never your TypeScript sources. A published plugin pack
 
 - **`id`**: stable lowercase identity matching `/^[a-z0-9][a-z0-9._-]{0,63}$/`. It namespaces registrations, config, storage, secrets, routes, RPC methods, Agents, Commands, App routes, and UI state.
 - **`name`**: the human label Walnut shows.
-- **`icon`**: optional path of an `.svg` file inside your plugin folder, such as `"icon.svg"`. Settings → Plugins draws it on your row's colored tile, in Installed and in Available. It is used as a single-color mark: every visible pixel is painted white on the tile, so draw a line or solid glyph on a transparent background (a 24 by 24 viewBox with `stroke="currentColor"` works well). The file must stay inside the plugin folder (no `..`, no absolute path) and be at most 64 KB. Without an icon, the tile shows the first letter of `name`. `walnut-plugin validate` rejects a bad value, and `publish-check` fails when the file is not in the package.
+- **`icon`**: optional path of an `.svg` file inside your plugin folder, such as `"icon.svg"`. The Apps page draws it on your row's colored tile, for installed plugins and in Get more. It is used as a single-color mark: every visible pixel is painted white on the tile, so draw a line or solid glyph on a transparent background (a 24 by 24 viewBox with `stroke="currentColor"` works well). The file must stay inside the plugin folder (no `..`, no absolute path) and be at most 64 KB. Without an icon, the tile shows the first letter of `name`. `walnut-plugin validate` rejects a bad value, and `publish-check` fails when the file is not in the package.
 - **`version`**: the plugin's release version. `publish-check` requires it to equal `package.json`'s version.
 - **`apiVersion`**: `1` for the unified API. Anything else is rejected by validation.
 - **`engines.walnut`**: required. Walnut checks the range before importing any plugin code.
@@ -122,7 +116,8 @@ Walnut loads built files, never your TypeScript sources. A published plugin pack
 - **`storage`**: optional `{ "files": true, "tmp": true }`, the file areas your plugin uses beyond its machine-local data directory (see [Storage and secrets](#storage-and-secrets)). `files` takes `{ "maxBytes": n }` (5 MiB by default, at most 20 MiB) and `tmp` takes `{ "ttlHours": n }` (24 by default, at most 720). An area you leave out throws on use, so the manifest says plainly whether a plugin writes into the person's synced data. A bad shape costs that area with a warning, never the plugin, and a bad number keeps the area with its default; `walnut-plugin validate` reports it as an error.
 - **`build`**: the source entries `walnut-plugin build` compiles, plus an optional `external` list for the server bundle.
 - **`configSchema`** and **`uiHints`**: optional generated Settings form for `plugins.<id>`.
-- **`settingsIn`**: where that form is drawn. `'plugins'` (the default) is the Configure card on your row in Settings → Plugins. `'app'` means your own App renders it through `walnut.ui.views.PluginSettingsView`, and the row's Configure button takes the person to your App instead of opening a second copy of the form, so a plugin whose page is mostly its settings has one home, not two. Draw the view on your page even when it fails to load its own data, or the settings have no way in.
+- **`settingsIn`**: where that form is drawn. `'plugins'` (the default) is the Configure card on your plugin's row on the Apps page. `'app'` means your own App renders it through `walnut.ui.views.PluginSettingsView`, and the row's Configure button takes the person to your App instead of opening a second copy of the form, so a plugin whose page is mostly its settings has one home, not two. Draw the view on your page even when it fails to load its own data, or the settings have no way in.
+- **`category`**: optional group the Apps page lists your plugin under. One of `"communication"` (shown as "Mail & chat"), `"tasks"` ("Tasks & sync"), `"time"` ("Time & focus"), `"developer"` ("Developer") or `"other"` ("More"). Without it, Walnut picks one from what the plugin does: a plugin with the `sync` capability goes under Tasks & sync, a mail plugin (id `mail` or `mail-…`, or one that depends on `mail`) under Mail & chat, anything else under More. A catalog entry may also name a category; the manifest's own value wins. The host drops any other word, and `walnut-plugin validate` reports it as an error.
 - **`taskFields`**: optional task fields for a sync integration.
 - **`phases`**: optional list of task phases added after the plugin API's first release that your sync plugin understands. Today that is `["WAITING"]`: a task parked until something happens, which belongs to the `todo` status bucket. A sync plugin that does not list it receives every WAITING task folded onto `TODO` (in `pushTask`, the `update*` calls, the content hooks and the `getTasks()` snapshot of its poll), so a plugin that maps the phase set exhaustively keeps working unchanged. List the phase once your mapping has a row for it; `legacyPhase()` from the API folds a phase onto the older set when you need a stable 3-state view. Whatever a plugin writes back, a sync pull can move a WAITING task only to COMPLETE; a phase it does not know should be treated as `TODO`.
 - **`catalog`**: optional `{ "adds": ["App"], "homepage": "...", "docs": "..." }`, read by the Settings store to describe a plugin in the bundled store before it is installed (see [Bundled store](#bundled-store)). Values of the wrong type are dropped.
@@ -938,7 +933,7 @@ Nothing else changes: same route at `/apps/<pluginId>~<appId>`, same deep links,
 
 Pick by how often the App is opened. The sidebar is for surfaces someone lives in all day and its length is the whole point: every row added there costs every other row a little attention, which is why an App has to ask for it. A report, an audit, an occasional tool, a plugin whose page is mostly its own settings, all belong in the Settings Plugins group, where people already go looking for the things they configure and inspect. The shipped `walnut-time` example and the bundled `walnut-rhythm` plugin both stay there.
 
-**Your `placement` is the default, not the verdict.** Only the person using the sidebar knows whether your App belongs in it, so your plugin's row in Settings → Plugins lists each of its Apps with a **Move to Settings** / **Move to Sidebar** action. Their choice wins over yours, applies immediately, and survives a reload. Write the declaration as the answer that is right for most people and let the rest move it.
+**Your `placement` is the default, not the verdict.** Only the person using the sidebar knows whether your App belongs in it, so the Apps page shows each of your Apps as a tile with a **Sidebar / Settings / Hidden** choice. Their choice wins over yours, applies immediately, and survives a reload. Write the declaration as the answer that is right for most people and let the rest move it.
 
 Two consequences worth knowing. Because moving the row cannot change what the App can do, code that branches on where its own row currently sits is code that will be wrong: read the route, not the surface. And because Core Apps and legacy webview Apps have no placement of their own to override, they get no Move action at all.
 
@@ -1010,7 +1005,7 @@ Several plugins can fill the same place; `order` (default 500, lower first) sort
 
 ### One App Registry for everything
 
-Core Walnut screens, native plugin Apps, and legacy Webviews are all rows in the same App Registry, so they share one order, one visibility model, one badge shape, and one navigation path. The registry is what the Sidebar, the App host route, the Command Palette, and your plugin's app rows in Settings → Plugins all read.
+Core Walnut screens, native plugin Apps, and legacy Webviews are all rows in the same App Registry, so they share one order, one visibility model, one badge shape, and one navigation path. The registry is what the Sidebar, the App host route, the Command Palette, and the App tiles on the Apps page all read.
 
 The consequences worth knowing as an author: a user can hide your App or move it between surfaces from your plugin's row; your App is reachable by URL, palette, and its entry row without you wiring any of the three, and `placement` decides which surface renders that row from the same registration; and your App renders inside its own error boundary, so a render failure names your plugin instead of blanking the console. Home and Settings are recovery surfaces, so Walnut locks their visibility.
 
@@ -1116,13 +1111,13 @@ For native UI, drive real clicks against an isolated Walnut server, never the us
 
 ## Install and update
 
-The Settings Plugin Store accepts three source forms: a Git URL with an optional branch or tag, a Walnut Git share snippet, and an npm registry spec such as `my-plugin@1.2.3` or `@scope/my-plugin@stable`.
+The Apps page's Get more section accepts three source forms: a Git URL with an optional branch or tag, a Walnut Git share snippet, and an npm registry spec such as `my-plugin@1.2.3` or `@scope/my-plugin@stable`.
 
 Git sources record their commit SHA. npm sources record the exact version and integrity from npm's installed-tree receipt. npm installation rejects URLs, filesystem paths, aliases, option-like values, complex ranges, insecure or changed tarball origins, and dependencies installed outside the plugin root, and it always runs with `--ignore-scripts`. New code is never installed automatically.
 
 The REST API accepts `{ "url": "...", "ref": "..." }`, a `walnut_plugin_source` share snippet, an install link in `url`, or `{ "spec": "@scope/my-plugin@1.2.3" }` at `POST /api/plugin-sources`. List, explicit update, check, and remove operations use `/api/plugin-sources/<slug>`.
 
-To share a source, use its **install link**: `open-walnut://install-plugin?url=<git url>[&ref=<branch>]`, or `?spec=<npm package>` (the source row's "Copy install link"). Clicked on a Mac with the Walnut app, it opens the app on the Plugin Store with the source filled in. Pasted into the store, given to Ask Walnut, or run as `walnut plugin add '<link>'`, it installs the same source. Every path still asks for the trust switch or an explicit command: the link names a source, it never installs one by itself. `walnut plugin add` also takes a plain git URL, npm spec or share snippet, and `walnut plugin list` prints each source with the state of its plugins.
+To share a source, use its **install link**: `open-walnut://install-plugin?url=<git url>[&ref=<branch>]`, or `?spec=<npm package>` (the source row's "Copy install link"). Clicked on a Mac with the Walnut app, it opens the app on the Apps page with the source filled in. Pasted into the store, given to Ask Walnut, or run as `walnut plugin add '<link>'`, it installs the same source. Every path still asks for the trust switch or an explicit command: the link names a source, it never installs one by itself. `walnut plugin add` also takes a plain git URL, npm spec or share snippet, and `walnut plugin list` prints each source with the state of its plugins.
 
 A plugin that arrives needing another plugin comes back as `pendingDependencies` on the 201, and nothing else is installed. `POST /api/plugin-sources/<slug>/dependencies` installs that plan after the user has seen the source list (git and npm catalog entries only, three hops at most; an example entry returns its `walnut-plugin link` command instead). Turning off a plugin that others declare in `dependencies` answers 409 `{ code: "has-dependents", dependents }`; `POST /api/plugin-runtime/<id>/disable` with `{ "cascade": true }` turns it off anyway and the dependents move to `needs-dependency` without being switched off themselves.
 

@@ -19,6 +19,8 @@
  * Pure logic against a Storage-shaped store; tests in tests/web/last-location.test.ts.
  */
 
+import { LEGACY_PLUGINS_HASH } from './open-link';
+
 export const LS_LAST_LOCATION = 'walnut-app-last-location';
 
 export interface KeyStore {
@@ -77,10 +79,18 @@ export function rememberLocation(
   } catch { /* quota / private mode: links fall back to the bare path */ }
 }
 
+/**
+ * Locations that no longer exist where they were remembered. Plugins moved from
+ * Settings to the Apps page: a browser that last stood on the old Plugins pane
+ * remembers that pane's Settings hash, which now forwards to /apps, so every
+ * Settings click would land on Apps and never record anything new.
+ */
+const MOVED_AWAY: ReadonlySet<string> = new Set([`/settings#${LEGACY_PLUGINS_HASH}`]);
+
 /** Where a link to `path` should go: the remembered location, else `path` itself. */
 export function linkTargetFor(path: string, store: KeyStore | null = safeStore()): string {
   const section = sectionFor(path);
   if (!section) return path;
   const remembered = readAll(store)[section];
-  return remembered ?? path;
+  return remembered && !MOVED_AWAY.has(remembered) ? remembered : path;
 }

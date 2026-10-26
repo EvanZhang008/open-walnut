@@ -1,6 +1,7 @@
 {
   "id": "walnut-rhythm",
   "name": "Rhythm",
+  "category": "time",
   "description": "Focus blocks and movement breaks: a stand-up reminder that knows when you are at the keyboard, a pomodoro tied to a task, and quiet mode while you focus.",
   "version": "0.1.0",
   "icon": "icon.svg",

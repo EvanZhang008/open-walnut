@@ -25,7 +25,11 @@ import { SettingsRow, SettingsTag } from './SettingsSection'
 import { SettingsButton } from './inputs/SettingsButton'
 import '@/styles/settings-sections-addons.css'
 
-export function PluginAppControls({ pluginId }: { pluginId: string }) {
+/**
+ * `failureOnly`: the Apps page draws the App tiles itself (apps-page/PluginAppTiles), so
+ * under a plugin row it only needs the "App didn't load" line, which no tile can show.
+ */
+export function PluginAppControls({ pluginId, failureOnly = false }: { pluginId: string; failureOnly?: boolean }) {
   const navigate = useNavigate()
   const apps = useAppCatalog()
   const preferences = useSyncExternalStore(
@@ -61,6 +65,7 @@ export function PluginAppControls({ pluginId }: { pluginId: string }) {
       </div>
     )
   }
+  if (failureOnly) return null
   const hidden = new Set(preferences.hidden)
   const unpinned = new Set(preferences.unpinned)
 

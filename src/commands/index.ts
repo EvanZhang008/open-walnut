@@ -303,7 +303,7 @@ export function registerCommands(program: Command): void {
   // The Plugin Store from a terminal (src/commands/plugins.ts).
   const pluginCmd = program
     .command('plugin')
-    .description('Add and list plugin sources (the Plugin Store)');
+    .description('Add and list plugin sources (the Apps page)');
   pluginCmd
     .command('add <source>')
     .description('Install a plugin source: a git URL, an npm package, a share snippet, or an open-walnut://install-plugin link')

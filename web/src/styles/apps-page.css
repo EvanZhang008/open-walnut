@@ -1,0 +1,352 @@
+/*
+ * The Apps page (/apps): a gallery of tiles for the apps, the settings rows the
+ * Plugins section always had for the plugins, and a hero card to make a new one.
+ * Colours are theme tokens (globals.css + settings-shell.css), so dark mode follows.
+ */
+
+.apps-page {
+  height: 100%;
+  overflow: auto;
+  background: var(--settings-pane-bg);
+  /* Contrast-safe muted grey, as inside Settings (settings-shell.css). */
+  --fg-muted: var(--settings-help-fg);
+}
+
+.apps-page-inner {
+  max-width: 1040px;
+  margin: 0 auto;
+  padding: 28px 32px 64px;
+}
+
+/* ── Header ── */
+.apps-hero {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 16px;
+}
+.apps-hero-icon {
+  width: 48px;
+  height: 48px;
+  flex: none;
+  border-radius: 12px;
+  display: grid;
+  place-items: center;
+  color: #fff;
+  background: linear-gradient(135deg, #ff2d55, #ff9500);
+  box-shadow: 0 4px 14px rgba(255, 45, 85, 0.25);
+}
+.apps-hero-text { min-width: 0; }
+.apps-hero h1 {
+  margin: 0;
+  font-size: 26px;
+  line-height: 32px;
+  letter-spacing: -0.02em;
+  color: var(--fg);
+}
+.apps-hero p {
+  margin: 2px 0 0;
+  color: var(--fg-muted);
+}
+.apps-search {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 260px;
+  flex: none;
+  padding: 6px 10px;
+  border-radius: 9px;
+  border: 1px solid var(--border);
+  background: var(--settings-group-bg);
+  color: var(--fg-muted);
+}
+.apps-search:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent); }
+.apps-search input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+}
+
+/* ── Chips ── */
+.apps-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 0 8px;
+}
+.apps-chip {
+  border: 1px solid var(--border);
+  background: var(--settings-group-bg);
+  color: var(--fg);
+  border-radius: 16px;
+  padding: 4px 12px;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.apps-chip:hover { border-color: var(--fg-muted); }
+.apps-chip.is-on {
+  background: var(--fg);
+  border-color: var(--fg);
+  color: var(--bg-secondary);
+}
+.apps-chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* ── Sections ── */
+.apps-section { margin-top: 26px; }
+.apps-section-title {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0 0 4px;
+  font-size: 17px;
+  line-height: 22px;
+  letter-spacing: -0.01em;
+  color: var(--fg);
+}
+.apps-section-count {
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--fg-muted);
+  font-variant-numeric: tabular-nums;
+}
+.apps-section-sub {
+  margin: 0 0 12px;
+  color: var(--fg-muted);
+}
+.apps-category .apps-section-title { margin-bottom: 10px; }
+.apps-empty {
+  margin-top: 26px;
+  padding: 18px;
+  border-radius: 12px;
+  background: var(--settings-group-bg);
+  color: var(--fg-muted);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.apps-empty button {
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  cursor: pointer;
+  padding: 0;
+}
+
+/* ── Tiles ── */
+.apps-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 12px;
+}
+.apps-grid-plugin-apps { margin-bottom: 12px; }
+.apps-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  padding: 14px;
+  border-radius: 14px;
+  background: var(--settings-group-bg);
+  border: 1px solid var(--settings-group-border);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+  transition: box-shadow 0.2s, transform 0.2s, opacity 0.2s;
+}
+.apps-tile:hover {
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.08);
+  transform: translateY(-1px);
+}
+@media (prefers-reduced-motion: reduce) {
+  .apps-tile, .apps-tile:hover { transition: none; transform: none; }
+}
+.apps-tile-top {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  min-width: 0;
+}
+.apps-tile-icon {
+  width: 36px;
+  height: 36px;
+  flex: none;
+  border: 0;
+  border-radius: 9px;
+  display: grid;
+  place-items: center;
+  color: #fff;
+  cursor: pointer;
+  padding: 0;
+}
+.apps-tile-icon svg { stroke: currentColor; }
+.apps-tile-icon:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.apps-tile-img { width: 20px; height: 20px; }
+.apps-tile-text { min-width: 0; }
+.apps-tile-name {
+  font-weight: 600;
+  font-size: 14px;
+  line-height: 18px;
+  color: var(--fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.apps-tile-line {
+  margin-top: 1px;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--fg-muted);
+}
+.apps-tile-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: auto;
+  padding-top: 9px;
+  border-top: 1px solid var(--settings-hairline);
+  font-size: 12px;
+  color: var(--fg-muted);
+  min-height: 32px;
+}
+.apps-tile-status {
+  flex: 1;
+  min-width: 0;
+}
+.apps-tile-foot .settings-segmented { flex: 1; }
+.apps-tile-off .apps-tile-icon { filter: grayscale(1); opacity: 0.55; }
+.apps-tile-off .apps-tile-name { color: var(--fg-muted); }
+.apps-lock {
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  background: var(--bg-tertiary);
+  color: var(--fg-muted);
+}
+
+/* ── Plugin groups (the old Plugins section's rows) ── */
+.apps-plugins-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 26px;
+  color: var(--fg-muted);
+  font-size: 12.5px;
+}
+.apps-plugins-bar:empty { display: none; }
+.apps-plugins .settings-notice { margin-top: 16px; }
+.apps-plugins .plugin-link-request { margin-top: 16px; }
+.apps-plugins .apps-category { margin-top: 14px; }
+.apps-get-more .settings-group + .settings-group { margin-top: 14px; }
+
+/* ── Make your own ── */
+.apps-make {
+  border-radius: 18px;
+  padding: 22px 24px;
+  color: #fff;
+  background: radial-gradient(120% 140% at 0% 0%, #5e5ce6 0%, #007aff 45%, #30b0c7 100%);
+  box-shadow: 0 10px 30px rgba(0, 122, 255, 0.2);
+}
+.apps-make-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: 19px;
+  line-height: 24px;
+  letter-spacing: -0.01em;
+}
+.apps-make-sub { margin: 4px 0 14px; opacity: 0.92; }
+.apps-make-ask {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 6px 6px 6px 14px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.97);
+}
+.apps-make-ask input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: #1d1d1f;
+  font: inherit;
+  font-size: 14px;
+  line-height: 20px;
+}
+.apps-make-ask input::placeholder { color: #86868b; }
+.apps-make-go {
+  border: 0;
+  border-radius: 9px;
+  padding: 7px 16px;
+  background: #007aff;
+  color: #fff;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.apps-make-go:disabled { opacity: 0.55; cursor: default; }
+.apps-make-go:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+.apps-make-error {
+  margin-top: 8px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.25);
+}
+.apps-make-ideas {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+.apps-make-ideas button,
+.apps-make-manual-row button {
+  border: 1px solid rgba(255, 255, 255, 0.45);
+  background: rgba(255, 255, 255, 0.14);
+  color: #fff;
+  border-radius: 14px;
+  padding: 3px 10px;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.apps-make-ideas button:hover,
+.apps-make-manual-row button:hover { background: rgba(255, 255, 255, 0.24); }
+.apps-make-manual {
+  margin-top: 14px;
+  padding: 10px 14px;
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.18);
+}
+.apps-make-manual summary { cursor: pointer; font-weight: 500; }
+.apps-make-manual p { margin: 8px 0 0; font-size: 12.5px; opacity: 0.92; }
+.apps-make-manual pre {
+  margin: 6px 0 8px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  font: 12px/1.55 ui-monospace, 'SF Mono', Menlo, monospace;
+  user-select: text;
+}
+.apps-make-manual-row { display: flex; gap: 8px; }
+.apps-make-manual-row .apps-make-link { border-color: transparent; background: transparent; text-decoration: underline; }
+
+/* ── Narrow windows and phones ── */
+@media (max-width: 768px) {
+  .apps-page-inner { padding: 18px 14px 48px; }
+  .apps-hero { flex-wrap: wrap; }
+  .apps-search { width: 100%; margin-left: 0; }
+  .apps-grid { grid-template-columns: 1fr; }
+  .apps-make { padding: 18px; }
+  .apps-make-ask { flex-direction: column; align-items: stretch; padding: 8px; }
+}

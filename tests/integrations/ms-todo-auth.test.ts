@@ -165,7 +165,7 @@ describe('getAccessToken (automatic renewal)', () => {
     expect(auth.authKind).toBe('sign-in-required');
     expect(auth.authCode).toBe('invalid_grant');
     // The message names the UI path; the CLI is an alternative, not the only way.
-    expect(auth.message).toMatch(/Settings → Plugins → Microsoft To-Do/);
+    expect(auth.message).toMatch(/Apps → Microsoft To-Do/);
     expect(auth.message).not.toMatch(/^Not authenticated/);
 
     const status = await getAuthStatus();

@@ -21,12 +21,13 @@ import {
   type ErrorInfo,
   type ReactNode,
 } from 'react'
-import { useLocation, useNavigate } from 'react-router-dom'
+import { Navigate, useLocation, useNavigate } from 'react-router-dom'
 import type { Config } from '@open-walnut/core'
 import { PluginBoundary } from '@/components/common/PluginBoundary'
 import { SettingsNav, useSettingsNavModel, type SettingsNavModel } from '@/components/settings/SettingsNav'
 import { SettingsGroup, SettingsRow, SettingsSection } from '@/components/settings/SettingsSection'
 import { SettingsButton } from '@/components/settings/inputs/SettingsButton'
+import { APPS_PATH, LEGACY_PLUGINS_HASH } from '@/utils/open-link'
 import { SettingsBuildLine } from '@/components/settings/SettingsBuildLine'
 import type { SaveSectionOptions } from '@/components/settings/core-settings-registry'
 import {
@@ -221,7 +222,7 @@ function PluginOffPane({ view, onOpenPlugins }: { view: Extract<PaneView, { kind
   return (
     <div className="settings-pane-state" data-testid="settings-plugin-off">
       <SettingsGroup>
-        <SettingsRow label={text} control={<SettingsButton onClick={onOpenPlugins}>Open Plugins</SettingsButton>} />
+        <SettingsRow label={text} control={<SettingsButton onClick={onOpenPlugins}>Open Apps</SettingsButton>} />
       </SettingsGroup>
     </div>
   )
@@ -255,6 +256,9 @@ export function SettingsPage() {
   }, [])
   useEffect(() => setNativeHash(window.location.hash), [location.hash])
   const hash = nativeHash
+  // Plugins moved to the Apps page; an old `#plugin-store` link (a notification, a
+  // bookmark, an install link) lands there instead of on General.
+  const movedToApps = hash === `#${LEGACY_PLUGINS_HASH}`
 
   const resolved = useMemo(
     () => resolvePane(hash, model.pluginKeys, { silent: !model.ready }),
@@ -288,6 +292,9 @@ export function SettingsPage() {
     return { kind: 'core', paneId: DEFAULT_PANE_ID }
   }, [resolved, hash, model.ready, runtime.plugins, runtime.errors, runtime.tombstones])
 
+  // <Navigate>, not navigate() in a layout effect: on a first load that effect runs before
+  // the router subscribes to history, so the URL changed and the screen stayed on Settings.
+  if (movedToApps) return <Navigate to={APPS_PATH} replace />
   const leadSectionId = view.kind === 'core' || view.kind === 'plugin' ? view.paneId : null
   return (
     <SettingsPaneProvider paneId={view.paneId} leadSectionId={leadSectionId} metaFor={model.metaFor}>
@@ -437,7 +444,7 @@ function SettingsPageLayout({ model, view, targetId, rowTarget, hash }: LayoutPr
   let body: ReactNode = null
   let labelled = false
   if (view.kind === 'plugin-off') {
-    body = <PluginOffPane view={view} onOpenPlugins={() => openPane('plugin-store')} />
+    body = <PluginOffPane view={view} onOpenPlugins={() => navigate(APPS_PATH)} />
   } else if (view.kind === 'plugin') {
     const entry = pluginUi.settings.find((e) => e.key === paneId)
     if (entry) {

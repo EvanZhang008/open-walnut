@@ -90,7 +90,7 @@ async function runTodoSync(globals: GlobalOptions): Promise<{ ran: boolean; resu
         console.log(unreachable
           ? chalk.yellow('  To-Do: Microsoft did not answer; your sign-in is fine, try again shortly.')
             + (status.authFailure?.message ? chalk.dim(` (${status.authFailure.message})`) : '')
-          : chalk.yellow('  To-Do: not signed in.') + ' Sign in under Settings → Plugins → Microsoft To-Do, or run: walnut auth');
+          : chalk.yellow('  To-Do: not signed in.') + ' Sign in under Apps → Microsoft To-Do, or run: walnut auth');
       }
       return { ran: false, result: { todo: unreachable ? 'unreachable' : 'not_authenticated' } };
     }

@@ -3,16 +3,12 @@ import { CORE_SETTINGS_CONTRIBUTIONS } from '../../web/src/components/settings/c
 import { isSettingsGlyph, tileKey } from '../../web/src/components/settings/settings-icons.js'
 
 const EXPECTED_IDS = [
-  // No `apps` row either: a plugin's app entries are managed on the plugin's own
-  // row in the Plugins section (PluginAppControls): one panel is the start point
-  // for everything plugin-shaped.
+  // No `plugin-store` (Plugins) and no `apps` row: every plugin and App lives on the
+  // Apps page (/apps). The nav's Plugins group links there (SettingsNav) and the old
+  // `#plugin-store` hash forwards there (SettingsPage).
   // No `repositories` row for now either: the feature is hidden until ready
   // (ReposSection and its API stay; only the Settings entry is gone).
   'hooks',
-  // ARRAY ORDER IS PAGE ORDER: plugin-store sits directly after the Manage
-  // sections because the nav's Plugins group renders between Manage and
-  // Configure: nav order and pane order must agree or a click lands wrong.
-  'plugin-store',
   // No separate chat-engine or provider entry: the one default engine lives in
   // Engines, and the API alternative is folded under Advanced (last below).
   'general',
@@ -47,27 +43,22 @@ describe('core settings registry', () => {
     expect(CORE_SETTINGS_CONTRIBUTIONS.every((entry) => entry.owner === 'walnut')).toBe(true)
   })
 
-  it('keeps the plugin section id stable while its label reads as what it is', () => {
-    // The id is a contract: `#plugin-store` deep links, the `settings-nav-plugin-store`
-    // testid and several specs address it. The LABEL is free to say "Plugins".
-    const plugins = CORE_SETTINGS_CONTRIBUTIONS.find((entry) => entry.id === 'plugin-store')
-    expect(plugins).toBeDefined()
-    expect(plugins!.label).toBe('Plugins')
-    expect(plugins!.title).toBe('Plugins')
+  it('has no Plugins section: plugins moved to the Apps page', () => {
+    expect(CORE_SETTINGS_CONTRIBUTIONS.find((entry) => entry.id === 'plugin-store')).toBeUndefined()
   })
 
   it('keeps the Manage / Plugins / Configure / Diagnostics split', () => {
     expect(CORE_SETTINGS_CONTRIBUTIONS
       .filter((entry) => entry.group === 'manage')
       .map((entry) => entry.id)).toEqual(['hooks'])
-    // The Plugins group holds everything plugin-shaped: this section anchors it,
-    // and the nav adds settings-placed plugin Apps + plugin settings panels to it.
+    // The Plugins group has no core section now: the nav fills it with the Apps link,
+    // settings-placed plugin Apps and plugin settings panels.
     expect(CORE_SETTINGS_CONTRIBUTIONS
       .filter((entry) => entry.group === 'plugins')
-      .map((entry) => entry.id)).toEqual(['plugin-store'])
+      .map((entry) => entry.id)).toEqual([])
     expect(CORE_SETTINGS_CONTRIBUTIONS
       .filter((entry) => entry.group === 'configure')
-      .map((entry) => entry.id)).toEqual(EXPECTED_IDS.slice(2, -DIAGNOSTICS_IDS.length))
+      .map((entry) => entry.id)).toEqual(EXPECTED_IDS.slice(1, -DIAGNOSTICS_IDS.length))
     expect(CORE_SETTINGS_CONTRIBUTIONS
       .filter((entry) => entry.group === 'diagnostics')
       .map((entry) => entry.id)).toEqual(DIAGNOSTICS_IDS)

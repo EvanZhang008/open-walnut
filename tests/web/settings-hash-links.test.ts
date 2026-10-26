@@ -45,7 +45,7 @@ describe('settings deep links in the app', () => {
 
   it('finds the known entry points (the scan itself works)', () => {
     const hashes = new Set(settingsHashRefs().map((r) => r.hash))
-    for (const h of ['providers', 'engines', 'calendar', 'remote-hosts', 'plugin-store']) expect(hashes).toContain(h)
+    for (const h of ['providers', 'engines', 'calendar', 'remote-hosts']) expect(hashes).toContain(h)
   })
 
   it('opens a real pane for every hash, never the unknown fallback', () => {

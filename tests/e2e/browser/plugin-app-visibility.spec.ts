@@ -2,7 +2,8 @@
  * Every plugin App keeps a way to be seen, through a deploy and through any choice the user made.
  *
  * 2026-10-01: after a deploy the Slack App was gone from an open window, from the Sidebar AND from
- * Settings, and its plugin row in Settings → Plugins had no App row to bring it back from. Cause:
+ * Settings, and its plugin row in Settings → Plugins had no App row to bring it back from (the
+ * App now has a tile on the Apps page, /apps, with a Sidebar / Settings / Hidden choice). Cause:
  * the server answers `/api/plugin-runtime` while it is still walking its plugins at boot; the
  * window read that partial list right after reconnecting, unloaded every plugin not reached yet,
  * and nothing told it to read again. Separately, an App unpinned from the Sidebar's menu read
@@ -136,13 +137,16 @@ async function openHome(page: Page): Promise<void> {
   }
 }
 
-async function appRowOnPlugins(page: Page) {
+/** The App's tile on the Apps page, reached from the sidebar. */
+async function appTileOnApps(page: Page) {
   await openPlugins(page)
-  const row = page.getByTestId(`plugin-app-row-${APP_KEY}`)
-  await row.scrollIntoViewIfNeeded()
-  await expect(row).toBeVisible({ timeout: 30_000 })
-  return row
+  const tile = page.getByTestId(`apps-app-${APP_KEY}`)
+  await tile.scrollIntoViewIfNeeded()
+  await expect(tile).toBeVisible({ timeout: 30_000 })
+  return tile
 }
+
+const WHERE = (where: 'sidebar' | 'settings' | 'hidden') => `apps-app-where-${where}-${APP_KEY}`
 
 /**
  * App choices reach the server 800 ms after the click (ui-prefs-sync). A test ends only once they
@@ -206,13 +210,13 @@ test('an open window keeps its plugin Apps through a server restart', async ({ p
   expect(partialAnswers.length).toBeGreaterThan(0)
   await page.screenshot({ path: path.join(SCREENSHOT_DIR, 'after-restart.png'), clip: { x: 0, y: 0, width: 320, height: 720 } })
 
-  // And the Settings row for the App is there too.
-  const row = await appRowOnPlugins(page)
-  await expect(row).toContainText('In sidebar')
+  // And the App's tile on the Apps page is there too.
+  const tile = await appTileOnApps(page)
+  await expect(tile).toHaveAttribute('data-where', 'sidebar')
   expect(pageErrors).toEqual([])
 })
 
-test('an App unpinned from the Sidebar can be pinned back from its plugin row', async ({ page }) => {
+test('an App unpinned from the Sidebar can be pinned back from its Apps page tile', async ({ page }) => {
   test.setTimeout(180_000)
   await openHome(page)
 
@@ -220,17 +224,16 @@ test('an App unpinned from the Sidebar can be pinned back from its plugin row', 
   await page.getByRole('menuitem', { name: 'Unpin from sidebar' }).click()
   await expect(page.getByTestId(SIDEBAR_ROW)).toHaveCount(0)
 
-  // It is in neither surface now, and the row says exactly that, with the way back.
-  const row = await appRowOnPlugins(page)
-  await expect(row).toContainText('Not in sidebar')
+  // It is in neither surface now, and the tile says exactly that, with the way back.
+  const tile = await appTileOnApps(page)
+  await expect(tile).toHaveAttribute('data-where', 'hidden')
+  await expect(page.getByTestId(WHERE('hidden'))).toHaveAttribute('aria-checked', 'true')
   await expect(page.getByTestId(`settings-nav-app-${APP_KEY}`)).toHaveCount(0)
-  const visibility = page.getByTestId(`plugin-app-visibility-${APP_KEY}`)
-  await expect(visibility).toHaveText('Pin to sidebar')
-  await row.screenshot({ path: path.join(SCREENSHOT_DIR, 'unpinned-row.png') })
+  await tile.screenshot({ path: path.join(SCREENSHOT_DIR, 'unpinned-tile.png') })
 
-  await visibility.click()
-  await expect(row).toContainText('In sidebar')
-  await expect(visibility).toHaveText('Hide')
+  await page.getByTestId(WHERE('sidebar')).click()
+  await expect(tile).toHaveAttribute('data-where', 'sidebar')
+  await expect(page.getByTestId(WHERE('sidebar'))).toHaveAttribute('aria-checked', 'true')
   await expect(page.getByTestId(SIDEBAR_ROW)).toBeVisible({ timeout: 15_000 })
   await expectAppShownInSidebarOnServer(page)
 })
@@ -242,29 +245,34 @@ test('Move to sidebar shows an App that was unpinned before it was filed in Sett
   await page.getByRole('menuitem', { name: 'Unpin from sidebar' }).click()
   await expect(page.getByTestId(SIDEBAR_ROW)).toHaveCount(0)
 
-  const row = await appRowOnPlugins(page)
-  const placement = page.getByTestId(`plugin-app-placement-${APP_KEY}`)
-  await expect(placement).toHaveText('Move to settings')
-  await placement.click()
-  await expect(row).toContainText('In settings')
+  const tile = await appTileOnApps(page)
+  await expect(tile).toHaveAttribute('data-where', 'hidden')
+  await page.getByTestId(WHERE('settings')).click()
+  await expect(tile).toHaveAttribute('data-where', 'settings')
+  // The Settings nav is not on the Apps page: the sidebar's Settings entry shows it.
+  await page.getByTestId('sidebar-core-app-settings').click()
   await expect(page.getByTestId(`settings-nav-app-${APP_KEY}`)).toBeVisible({ timeout: 15_000 })
+  await page.getByTestId('sidebar-core-app-apps').click()
+  await expect(tile).toBeVisible({ timeout: 30_000 })
 
   // Before: placement went back to the Sidebar but the old unpin kept it out of it.
-  await expect(placement).toHaveText('Move to sidebar')
-  await placement.click()
-  await expect(row).toContainText('In sidebar')
-  await expect(page.getByTestId(`settings-nav-app-${APP_KEY}`)).toHaveCount(0)
+  await page.getByTestId(WHERE('sidebar')).click()
+  await expect(tile).toHaveAttribute('data-where', 'sidebar')
   await expect(page.getByTestId(SIDEBAR_ROW)).toBeVisible({ timeout: 15_000 })
+  await page.getByTestId('sidebar-core-app-settings').click()
+  await expect(page.getByTestId('settings-nav-plugin-store')).toBeVisible({ timeout: 30_000 })
+  await expect(page.getByTestId(`settings-nav-app-${APP_KEY}`)).toHaveCount(0)
+  await page.getByTestId('sidebar-core-app-apps').click()
+  await expect(tile).toBeVisible({ timeout: 30_000 })
 
   // Hide and Show still round-trip, and the choice survives a reload of the page.
-  const visibility = page.getByTestId(`plugin-app-visibility-${APP_KEY}`)
-  await visibility.click()
-  await expect(row).toContainText('Hidden')
+  await page.getByTestId(WHERE('hidden')).click()
+  await expect(tile).toHaveAttribute('data-where', 'hidden')
   await expect(page.getByTestId(SIDEBAR_ROW)).toHaveCount(0)
   await page.reload()
-  await expect(page.getByTestId(`plugin-app-row-${APP_KEY}`)).toContainText('Hidden', { timeout: 60_000 })
-  await page.getByTestId(`plugin-app-visibility-${APP_KEY}`).click()
-  await expect(page.getByTestId(`plugin-app-row-${APP_KEY}`)).toContainText('In sidebar')
+  await expect(page.getByTestId(`apps-app-${APP_KEY}`)).toHaveAttribute('data-where', 'hidden', { timeout: 60_000 })
+  await page.getByTestId(WHERE('sidebar')).click()
+  await expect(page.getByTestId(`apps-app-${APP_KEY}`)).toHaveAttribute('data-where', 'sidebar')
   await expect(page.getByTestId(SIDEBAR_ROW)).toBeVisible({ timeout: 15_000 })
   await expectAppShownInSidebarOnServer(page)
 })
@@ -283,7 +291,7 @@ test('a plugin whose App failed to load says so on its row, with the cause', asy
   await expect(reason).not.toContainText(' build ')
   expect(await reason.evaluate((el) => el.scrollWidth <= el.clientWidth + 1)).toBe(true)
   await failed.screenshot({ path: path.join(SCREENSHOT_DIR, 'failed-row.png') })
-  // A plugin that loaded has its normal App row and no failure row.
-  await expect(page.getByTestId(`plugin-app-row-${APP_KEY}`)).toBeVisible()
+  // A plugin that loaded has its App tile and no failure row.
+  await expect(page.getByTestId(`apps-app-${APP_KEY}`)).toBeVisible()
   await expect(page.getByTestId('plugin-app-failed-restart-demo')).toHaveCount(0)
 })

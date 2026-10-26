@@ -8,6 +8,7 @@
 import type { Task, TaskPhase, TaskPriority } from './types.js';
 import type { SubsystemLogger } from '../logging/index.js';
 import type { Router } from 'express';
+import type { PluginCategory } from './plugins/plugin-category.js';
 
 // ── RemoteSyncItem: standardized representation of a remote task for reconciliation ──
 
@@ -501,6 +502,8 @@ export interface RegisteredPlugin {
   uiHints?: Record<string, { label?: string; help?: string }>;
   /** Manifest settingsIn: `'app'` when the plugin's own App draws the generated form. */
   settingsIn?: PluginSettingsHome;
+  /** Manifest category: the Apps page group (absent = derived from what it does). */
+  category?: PluginCategory;
   /** Manifest taskFields — plugin-declared per-task fields the console renders generically. */
   taskFields?: TaskFieldSpec[];
   /** Tools contributed via registerTool (capability `tools`), names already
@@ -582,6 +585,9 @@ export interface PluginManifest {
    *  that App instead of expanding the form, so a plugin whose page IS its settings has one
    *  home, not two. */
   settingsIn?: PluginSettingsHome;
+  /** Which Apps page group the plugin is listed under; omitted = derived from what it does.
+   *  One of PLUGIN_CATEGORIES (src/core/plugins/plugin-category.ts); junk is dropped. */
+  category?: PluginCategory;
   /** Per-task fields this plugin exposes to the console (see TaskFieldSpec). */
   taskFields?: TaskFieldSpec[];
   /** Phases added after the plugin API's first release that this plugin understands

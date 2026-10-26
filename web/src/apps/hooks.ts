@@ -8,6 +8,7 @@ import { resolveApps, type ResolvedApps } from './preferences'
 import {
   activePluginKey,
   adaptWebviewApps,
+  appPathMatches,
   appRegistry,
   filterAppsByPlugin,
   findHostedAppByRouteId,
@@ -19,11 +20,6 @@ export interface AppCatalog extends ResolvedApps {
   loadingWebviews: boolean
   findByPath(pathname: string): RegisteredApp | undefined
   findByRouteId(routeId: string): RegisteredApp | undefined
-}
-
-function matchesPath(app: RegisteredApp, pathname: string): boolean {
-  if (app.path === '/') return pathname === '/'
-  return pathname === app.path || pathname.startsWith(`${app.path}/`)
 }
 
 export function useAppCatalog(): AppCatalog {
@@ -51,7 +47,7 @@ export function useAppCatalog(): AppCatalog {
     return {
       ...resolved,
       loadingWebviews: webviews.loading,
-      findByPath: (pathname: string) => resolved.all.find((app) => matchesPath(app, pathname)),
+      findByPath: (pathname: string) => resolved.all.find((app) => appPathMatches(app, pathname)),
       findByRouteId: (routeId: string) => findHostedAppByRouteId(resolved.all, routeId),
     }
   }, [preferences, registrySnapshot, webviews.apps, webviews.loading, activeKey])

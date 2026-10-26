@@ -1,6 +1,7 @@
 {
   "id": "walnut-demo",
   "name": "Walnut Plugin Demo",
+  "category": "developer",
   "description": "Interactive demo of every public Open Walnut Plugin capability, shipped as one native app.",
   "version": "0.1.0",
   "icon": "icon.svg",

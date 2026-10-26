@@ -149,7 +149,9 @@ test('F27 N03 F31 F33 F36: number fields end on the content edge, no-op bulk lin
 test('F17 F18 F28 F35: plugin slots line up, install rows stack, engine menus show a chevron', async ({ page }) => {
   await recordWrites(page)
   await openSettings(page)
-  await clickNav(page, 'plugin-store')
+  // Plugins live on the Apps page; the Settings nav's Plugins row links there.
+  await page.getByTestId(NAV('plugin-store')).click()
+  await expect(page.getByTestId('apps-page')).toBeVisible({ timeout: 20_000 })
   const install = page.locator('.settings-row:has(#plugin-source-url)')
   await expect(install).toBeVisible()
   const lines = await install.evaluate((row) => {
@@ -161,6 +163,9 @@ test('F17 F18 F28 F35: plugin slots line up, install rows stack, engine menus sh
   const configureRights = await page.locator('[data-testid^="plugin-configure-"]').evaluateAll((els) =>
     els.filter((e) => e.getBoundingClientRect().width > 0 && !e.closest('[data-indent]')).map((e) => Math.round(e.getBoundingClientRect().right)))
   if (configureRights.length > 1) expect(new Set(configureRights).size, JSON.stringify(configureRights)).toBe(1)
+  // Back to Settings from the sidebar for the panes after it.
+  await page.getByTestId('sidebar-core-app-settings').click()
+  await expect(page.locator('.settings-nav')).toBeVisible({ timeout: 20_000 })
   await clickNav(page, 'engines')
   const selects = page.locator('.engine-setting-row-pane select.engine-setting-select')
   for (let i = 0; i < await selects.count(); i++) {

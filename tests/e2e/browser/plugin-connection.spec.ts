@@ -6,13 +6,13 @@ import { expect, test, type Page } from '@playwright/test'
 /**
  * A plugin's account link, end to end: the sync loop finds a dead credential,
  * the bell gets ONE card with a Sign in button, the button lands on the plugin's
- * row in Settings → Plugins, Sign in there shows a device code, and when the
+ * row on the Apps page (/apps), Sign in there shows a device code, and when the
  * flow completes the row turns "signed in", sync succeeds, and the card retires.
  *
  * What it pins:
  *   1. The notification is immediate (first failing tick, not the fifth), says
  *      what to do, and carries a labelled Sign in button.
- *   2. Settings shows the link's state on the row (badge) AND in a panel under
+ *   2. The Apps page shows the link's state on the row (badge) AND in a panel under
  *      it, together with what the sync loop saw (N failures, last error).
  *   3. Signing in never needs the terminal: device code + link + copy, and the
  *      panel updates by itself.
@@ -154,9 +154,10 @@ test('dead credential → one Sign in card → Settings row → device code → 
   await expect(signInButton).toHaveText(/Sign in/)
   await panel.screenshot({ path: `${SCREENSHOT_DIR}/1-sign-in-card.png` })
 
-  // ── 2. The button lands on the plugin's row in Settings → Plugins ──
+  // ── 2. The button lands on the plugin's row on the Apps page ──
   await signInButton.click()
-  await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible({ timeout: 60_000 })
+  await expect(page.getByTestId('apps-page')).toBeVisible({ timeout: 60_000 })
+  await expect(page).toHaveURL(/\/apps$/)
   const row = page.getByTestId(`plugin-row-${pluginId}`)
   await expect(row).toBeVisible({ timeout: 30_000 })
   // The switch says the plugin is on (no On tag); the title line carries the link state.

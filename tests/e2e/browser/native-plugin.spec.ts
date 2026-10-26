@@ -93,10 +93,12 @@ async function openDemo(page: Page): Promise<void> {
   await expect(page.getByTestId('plugin-demo-app')).toBeVisible({ timeout: 30_000 })
 }
 
-/** Settings, Plugins, from anywhere in the console (real clicks, never a goto to the section). */
+/** The Apps page, from anywhere in the console: the sidebar's Apps entry (never a goto). */
 async function openPlugins(page: Page): Promise<void> {
-  await openSettings(page)
-  await page.getByTestId('settings-nav-plugin-store').click()
+  await expandSidebar(page)
+  await page.getByTestId('sidebar-core-app-apps').click()
+  await expect(page).toHaveURL(/\/apps$/)
+  await expect(page.getByTestId('apps-page')).toBeVisible({ timeout: 30_000 })
   await expect(page.getByTestId('plugin-store-installed')).toBeVisible({ timeout: 30_000 })
 }
 
@@ -125,17 +127,17 @@ async function commitAll(cwd: string, message: string): Promise<void> {
   await git(cwd, 'commit', '-m', message)
 }
 
-/** Same helper as mail-app-design.spec.ts, landing back on the Plugins section. */
+/** Same helper as mail-app-design.spec.ts, landing back on the Apps page. */
 async function pickTheme(page: Page, label: 'Light' | 'Dark'): Promise<void> {
-  // The theme lives on the General pane: one nav click away, never a scroll.
+  // The theme lives on Settings' General pane: one nav click away, never a scroll.
+  await openSettings(page)
   await page.getByTestId('settings-nav-general').click()
   const option = page.getByTestId(`settings-theme-${label.toLowerCase()}`)
   await expect(option).toBeVisible({ timeout: 30_000 })
   await option.click()
   await expect(page.locator('html')).toHaveAttribute('data-theme', label.toLowerCase(), { timeout: 15_000 })
-  await page.getByTestId('settings-nav-plugin-store').click()
-  await expect(page.getByTestId('plugin-store-installed')).toBeVisible({ timeout: 30_000 })
-  // Only the open pane is mounted, so the rows come back with the pane: wait until
+  await openPlugins(page)
+  // The Apps page mounts again, so the rows come back with it: wait until
   // the chips carry an answer again before measuring them.
   await expect(page.getByTestId('update-chip-walnut-demo')).toHaveAttribute('data-update-kind', /^(current|available|dirty|diverged|unreachable)$/, { timeout: 30_000 })
 }
@@ -226,8 +228,7 @@ test('installs a first-class Plugin App and exercises its real capabilities', as
   // The plugin's command runs from the Ask Walnut composer, which starts hidden until opened.
   await openChatOnLoad(page)
   await page.goto(`http://127.0.0.1:${fixturePort}/`)
-  await openSettings(page)
-  await page.getByTestId('settings-nav-plugin-store').click()
+  await openPlugins(page)
   const pluginStore = page.locator('#plugin-store')
   await pluginStore.locator('#plugin-source-url').fill(
     pathToFileURL(path.join(fixtureHome, 'native-plugin-repo')).href,
@@ -367,19 +368,16 @@ test('installs a first-class Plugin App and exercises its real capabilities', as
   await app.getByTestId('plugin-demo-section-server').scrollIntoViewIfNeeded()
   await page.screenshot({ path: path.join(SCREENSHOT_DIR, 'capabilities.png'), fullPage: true })
 
-  // The app's entry is managed on the PLUGIN's row in the Plugins section —
-  // there is no separate Apps panel.
-  await openSettings(page)
-  await page.getByTestId('settings-nav-plugin-store').click()
-  const appRow = page.getByTestId('plugin-app-row-walnut-demo:main')
-  await expect(appRow).toBeVisible()
-  const visibility = page.getByTestId('plugin-app-visibility-walnut-demo:main')
-  await expect(visibility).toHaveText('Hide')
-  await visibility.click()
+  // The app's entry is managed on its tile on the Apps page, above its plugin's row.
+  await openPlugins(page)
+  const appTile = page.getByTestId('apps-app-walnut-demo:main')
+  await expect(appTile).toBeVisible()
+  await expect(appTile).toHaveAttribute('data-where', 'sidebar')
+  await page.getByTestId('apps-app-where-hidden-walnut-demo:main').click()
   await expect(demoNav).toHaveCount(0)
-  await expect(appRow).toContainText('Hidden')
+  await expect(appTile).toHaveAttribute('data-where', 'hidden')
   // Hidden keeps its deep link: Open still lands on the app.
-  await page.getByTestId('plugin-app-open-walnut-demo:main').click()
+  await page.getByTestId('apps-app-open-walnut-demo:main').click()
   await expect(page).toHaveURL(/\/apps\/walnut-demo~main$/)
   await expect(page.getByTestId('plugin-demo-app')).toBeVisible()
   await expect(demoNav).toHaveCount(0)
@@ -395,15 +393,14 @@ test('installs a first-class Plugin App and exercises its real capabilities', as
   await expect(page.locator('.command-palette-item', { hasText: 'app:walnut-demo:main' })).toHaveCount(0)
   await page.keyboard.press('Escape')
   await hiddenComposer.fill('')
-  await openSettings(page)
-  await page.getByTestId('settings-nav-plugin-store').click()
-  await expect(visibility).toHaveText('Show')
-  await visibility.click()
+  await openPlugins(page)
+  await expect(appTile).toHaveAttribute('data-where', 'hidden')
+  await page.getByTestId('apps-app-where-sidebar-walnut-demo:main').click()
   await expect(demoNav).toBeVisible()
 
-  // Reload keeps the #plugin-store hash, so the section re-anchors on its own.
+  // Reload keeps /apps, so the page comes back with the tile.
   await page.reload()
-  await expect(page.getByTestId('plugin-app-row-walnut-demo:main')).toBeVisible({ timeout: 30_000 })
+  await expect(page.getByTestId('apps-app-walnut-demo:main')).toHaveAttribute('data-where', 'sidebar', { timeout: 30_000 })
   await expect(demoNav).toBeVisible()
   expect(pageErrors).toEqual([])
 })
@@ -922,14 +919,14 @@ test.describe('update status', () => {
       // The 12px header time reads at 4.5:1 too (N20).
       expect.soft(await contrastAgainstCard(page.getByTestId('plugin-updates-checked-at')), `${theme} header contrast`).toBeGreaterThanOrEqual(4.5)
     }
-    // Viewport shots (the section scrolls inside the settings pane, so an element shot
+    // Viewport shots (the section scrolls inside the Apps page, so an element shot
     // would only show the part on screen anyway); the group head is scrolled to the top.
     const shoot = async (name: string) => {
       // Picking a theme scrolls the pane to the theme picker; wait until the group's head
       // is actually on screen (WebKit finishes the scroll a frame late) before shooting.
       // The nav click's own smooth scroll can land AFTER an instant scroll here (WebKit), so
       // scroll, let a few frames pass, and repeat until the head stays put near the top.
-      const head = installed.locator('.settings-group-heading')
+      const head = installed.locator('.apps-plugins-bar')
       for (let attempt = 0; attempt < 10; attempt += 1) {
         await installed.evaluate((el) => el.scrollIntoView({ block: 'start', behavior: 'instant' as ScrollBehavior }))
         await page.waitForTimeout(200)
@@ -978,9 +975,9 @@ test.describe('update status', () => {
       const height = await chip.evaluate((el) => el.clientHeight)
       expect(height).toBeLessThanOrEqual(26)
     }
-    // Nothing scrolls sideways at 960px: neither the Installed group nor the settings pane
+    // Nothing scrolls sideways at 960px: neither the installed groups nor the Apps page
     // (N6). On failure the message names the descendants that stick out.
-    for (const selector of ['[data-testid="plugin-store-installed"]', '.settings-content']) {
+    for (const selector of ['[data-testid="plugin-store-installed"]', '.apps-page']) {
       const measured = await page.locator(selector).evaluate((el) => {
         const box = el.getBoundingClientRect()
         const out: string[] = []
@@ -1243,7 +1240,7 @@ test.describe('update status', () => {
     // Outside click closes too.
     await trigger.click()
     await expect(flyout).toBeVisible()
-    await page.getByTestId('plugin-store-installed').locator('.settings-group-heading').click({ position: { x: 4, y: 4 } })
+    await page.getByTestId('apps-plugins-count').click({ position: { x: 4, y: 4 } })
     await expect(flyout).toHaveCount(0)
     // The source card sits at the bottom of the page: its flyout still lands in the viewport.
     const sourceTrigger = page.getByTestId('provenance-trigger-source-native-plugin-repo')

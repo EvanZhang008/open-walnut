@@ -1,5 +1,5 @@
 /**
- * Settings, Plugins update status: the round-three nitpicks (N3-1 .. N3-18) and the two
+ * Apps page plugin update status: the round-three nitpicks (N3-1 .. N3-18) and the two
  * checklist items that failed with them (C49, C60 is a hook unit test), each pinned against
  * the real fixture (linked checkout pair + git source) in both engines. Boots its own fixture
  * server (plugin-update-fixture.ts); serial, one page at a time.

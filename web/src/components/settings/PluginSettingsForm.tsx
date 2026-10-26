@@ -36,7 +36,7 @@ export function PluginSettingsForm({ pluginId }: { pluginId: string }) {
             ? <SettingsLoadingRow />
             : why === 'failed'
               ? <SettingsNotice kind="error">The settings form did not load. Reload the page to try again.</SettingsNotice>
-              : <SettingsNotice>This plugin has no settings to change right now. Check that it is on in Settings → Plugins.</SettingsNotice>}
+              : <SettingsNotice>This plugin has no settings to change right now. Check that it is on in Apps.</SettingsNotice>}
         />
       </SettingsGroup>
     </div>

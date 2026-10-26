@@ -54,6 +54,7 @@ export const PAGE_LINK_KEYWORDS: Readonly<Record<string, readonly string[]>> = {
   skills: ['skill'],
   commands: ['slash', 'command'],
   memory: ['memory', 'remember'],
+  apps: ['plugin', 'plugins', 'install', 'update', 'store', 'app', 'sidebar', 'hide', 'mail', 'slack', 'to-do', 'sync', 'configure'],
 }
 
 export function tokenize(query: string): string[] {

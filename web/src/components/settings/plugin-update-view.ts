@@ -24,7 +24,7 @@ export type BusyKind = 'checking' | 'updating'
 
 /** Mirror of the server sentence returned by the 501 in replica mode. Keep identical. */
 export const CLOUD_LINKED_NOTE =
-  'Linked plugin checkouts live on your Mac. Open Settings → Plugins there to check or update one.'
+  'Linked plugin checkouts live on your Mac. Open Apps there to check or update one.'
 
 /** Tooltip when /registry ran out of linked-scan budget for a row (spec C30). */
 export const LINKED_SCAN_SKIPPED_NOTE = 'The checkout scan ran out of time. Click to check.'

@@ -9,6 +9,7 @@
  */
 import { useState, useEffect, useCallback, useRef, Fragment, type ReactNode } from 'react';
 import type { Config } from '@open-walnut/core';
+import { Link } from 'react-router-dom';
 import { ToggleSwitch } from '../inputs/ToggleSwitch';
 import { SettingsButton } from '../inputs/SettingsButton';
 import { SettingsGroup, SettingsRow, SettingsTag } from '../SettingsSection';
@@ -253,6 +254,7 @@ export function PluginConfigCards({ config, onSave, excludeIds = [], onlyIds, ba
               const owner = fieldOwnerFor(plugin.id, key);
               if (owner) {
                 if (owner.keys.find((k) => k in props) !== key) return null;
+                // A route link: this form renders on the Apps page, where a bare `#pane` names no Settings pane.
                 return (
                   <SettingsRow
                     key={`owner-${owner.pane}`}
@@ -261,7 +263,7 @@ export function PluginConfigCards({ config, onSave, excludeIds = [], onlyIds, ba
                     data-testid={`plugin-config-owned-${plugin.id}`}
                     label={owner.label}
                     help={owner.help}
-                    control={<a className="settings-button settings-button-text" href={`#${owner.pane}`}>{owner.link}</a>}
+                    control={<Link className="settings-button settings-button-text" to={`/settings#${owner.pane}`}>{owner.link}</Link>}
                   />
                 );
               }

@@ -32,18 +32,14 @@ Write the list down before step 2. A plugin that registers a capability nobody a
 
 ## 2. Scaffold with one command
 
-```bash
-npx @open-walnut/plugin-cli new <plugin-id> --dev --template both
-```
-
-That command scaffolds, installs, validates, builds, links into `~/.open-walnut/plugins/<plugin-id>`, tells the running Walnut to discover and load it, prints the App URL, and then watches. `--no-install` skips installation unconditionally. Use `--template server` or `--template web` when step 1 ruled the other half out.
-
-The packages are not on the npm registry yet, so inside this repository build the local packages and keep the local CLI process as the watcher:
+The author packages are not on the npm registry yet (`npx @open-walnut/plugin-cli` answers 404), so scaffold from a clone of open-walnut: build the local packages once and keep the local CLI process as the watcher:
 
 ```bash
 npm run build:plugins
 node packages/plugin-cli/dist/cli.js new <plugin-id> --dev --no-install --template both
 ```
+
+That command scaffolds, validates, builds, links into `~/.open-walnut/plugins/<plugin-id>`, tells the running Walnut to discover and load it, prints the App URL, and then watches. `--no-install` skips installation (inside the checkout the packages resolve from it). Use `--template server` or `--template web` when step 1 ruled the other half out. Once the packages are published, the same command will be `npx @open-walnut/plugin-cli new <plugin-id> --dev --template both`.
 
 For another local-checkout loop, run `node packages/plugin-cli/dist/cli.js dev --root <plugin-directory>`. After the packages are published and installed in the generated project, later loops are `npm run dev` there.
 

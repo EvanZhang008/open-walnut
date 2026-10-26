@@ -53,6 +53,12 @@ describe('rememberLocation + linkTargetFor', () => {
     expect(linkTargetFor('/tasks', s)).toBe('/tasks');
   });
 
+  it('a remembered old Plugins pane sends the Settings link to Settings, not on to /apps', () => {
+    const s = fakeStore();
+    rememberLocation(at('/settings', '', '#plugin-store'), s);
+    expect(linkTargetFor('/settings', s)).toBe('/settings');
+  });
+
   it('a later visit with NO state overwrites the remembered one (the user cleared it)', () => {
     const s = fakeStore();
     rememberLocation(at('/calendar', '?view=month'), s);
