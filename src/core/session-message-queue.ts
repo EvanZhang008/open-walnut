@@ -243,6 +243,9 @@ export async function sendMessageToSession(
     throw err;
   }
   const source = opts?.source ?? 'unknown';
+  // An ask into a lead's team from outside it (the user, the main agent, another team) is the
+  // lead's to know: its next team note lists it (org/team-asks.ts). Fire and forget.
+  void import('./org/team-asks.js').then((m) => m.noteTeamAsk(sessionId, message, rawBody, opts?.source, msg.id)).catch(() => {});
   // A repeat collapsed onto the row already queued: only the row that holds the note counts.
   if (place && msg.message.startsWith(place.text)) await place.markTold();
   if (digest && msg.message.includes(digest.text)) await digest.markTold();

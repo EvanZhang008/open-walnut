@@ -247,7 +247,7 @@ function buildTakeOverText(lead: Pick<Task, 'id'>, project: string, led: readonl
 }
 
 /** The lead's newest listable session, or null. */
-async function leadSession(taskId: string, onlyRunning = false): Promise<import('../types.js').SessionRecord | null> {
+export async function leadSession(taskId: string, onlyRunning = false): Promise<import('../types.js').SessionRecord | null> {
   const { getSessionsForTask, isListableSession } = await import('../session-tracker.js');
   const rows = (await getSessionsForTask(taskId))
     .filter((r) => !r.archived && isListableSession(r) && (!onlyRunning || r.process_status === 'running'));

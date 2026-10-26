@@ -21,6 +21,11 @@ export interface TeamNewsTask {
   phase: TaskPhase;
   updated_at?: string;
   last_session_update?: string;
+  /** Its leader (a lead's team note tells the lead what waits on it). */
+  parent_task_id?: string;
+  /** When its phase last moved: a wait on its lead that began later is a new one. */
+  phase_changed_at?: string;
+  project?: string;
   user_status?: Pick<UserStatus, 'state' | 'kind' | 'ask' | 'source' | 'now' | 'waitingOn' | 'at' | 'stale'>;
 }
 

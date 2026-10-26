@@ -111,3 +111,64 @@ describe('team note text', () => {
     expect(text).not.toContain('[')
   })
 })
+
+describe('what waits on the lead, what it leads, what others asked', () => {
+  const LEAD = 'lead-1'
+  const ctx = { leadId: LEAD, led: ['Garden'] }
+  const waiting = (id: string, extra: Partial<TeamNewsTask> = {}) => t(id, {
+    phase: 'NEED_ACTION', parent_task_id: LEAD,
+    user_status: { state: 'waiting', kind: 'lead', waitingOn: 'Its lead, to check the result and close it', now: 'Fixed the parser', at: at(50) },
+    ...extra,
+  })
+
+  it('a task that now waits on this lead is told once, under its own section', () => {
+    const prev = planTeamNote(undefined, base, [], at(40), ctx).next
+    const plan = planTeamNote(prev, [...base.slice(0, 2), waiting('c')], [], NOW, ctx)
+    expect(plan.kind).toBe('moved')
+    expect(plan.waits.map((w) => [w.taskId, w.waitingOn])).toEqual([['c', 'Its lead, to check the result and close it']])
+    expect(plan.moved).toEqual([])
+    // Told: the same wait again is no news, and so is its end.
+    expect(planTeamNote(plan.next, [...base.slice(0, 2), waiting('c')], [], NOW, ctx).kind).toBe('none')
+    const ended = [...base.slice(0, 2), t('c', { user_status: { state: 'working', now: 'Fixed the parser', at: at(50) } })]
+    expect(planTeamNote(plan.next, ended, [], NOW, ctx).kind).toBe('none')
+    // The same worker waiting again after another turn is a new wait, told again, with no note
+    // in between (the lead answered it with a plain message, which carries none).
+    const again = [...base.slice(0, 2), waiting('c', { phase_changed_at: at(58), user_status: { state: 'waiting', kind: 'lead', waitingOn: 'Its lead, to check the result and close it', now: 'Fixed the parser', at: at(50) } })]
+    expect(planTeamNote(plan.next, again, [], NOW, ctx).waits.map((w) => w.taskId)).toEqual(['c'])
+    // Waiting on another leader is that leader's: not this lead's to act on.
+    const other = planTeamNote(prev, [...base.slice(0, 2), waiting('c', { parent_task_id: 'someone-else' })], [], NOW, ctx)
+    expect(other.waits).toEqual([])
+  })
+
+  it('the first note names what waits on the lead and the projects it leads', () => {
+    const plan = planTeamNote(undefined, [...base, waiting('w')], [], NOW, { leadId: LEAD, led: ['Seeds', 'Garden'] })
+    expect(plan.waits.map((w) => w.taskId)).toEqual(['w'])
+    expect(plan.moved.map((i) => i.taskId)).not.toContain('w')
+    const text = buildTeamNoteText(lead, plan, undefined, Date.parse(NOW))
+    expect(text).toContain('You lead "Garden", "Seeds".')
+    expect(text).toContain('Waiting on you:\n- "w title" (10 min ago): Its lead, to check the result and close it. It said: Fixed the parser')
+    expect(text).toContain('wait for you: read each (task_get) and answer or close it')
+    expect(text).not.toContain('Background, not a request')
+  })
+
+  it('a project taken over or let go is news, told as one line, its tasks not one by one', () => {
+    const prev = planTeamNote(undefined, base, [], at(40), ctx).next
+    const idea = [t('i1', { project: 'Idea', user_status: { state: 'working', now: 'Sketching', at: at(55) } }), t('i2', { project: 'Idea' })]
+    const plan = planTeamNote(prev, [...base, ...idea], [], NOW, { leadId: LEAD, led: ['Garden', 'Idea'] })
+    expect([plan.kind, plan.ledAdded, plan.added]).toEqual(['moved', ['Idea'], []])
+    expect(buildTeamNoteText(lead, plan, at(40), Date.parse(NOW))).toContain('You lead "Garden", "Idea". New to you: "Idea".')
+    const gone = planTeamNote(plan.next, base, [], NOW, ctx)
+    expect([gone.kind, gone.ledRemoved]).toEqual(['moved', ['Idea']])
+    // A state from before Walnut kept the led projects: recorded, not news.
+    expect(planTeamNote({ at: prev.at, seen: prev.seen }, base, [], NOW, ctx).kind).toBe('none')
+  })
+
+  it('asks from outside the team are news, with who asked and what', () => {
+    const prev = planTeamNote(undefined, base, [], at(40), ctx).next
+    const asks = [{ id: 'k1', taskId: 'a', title: 'a title', from: 'Main', gist: 'Also check the fence', at: at(58) }]
+    const plan = planTeamNote(prev, base, [], NOW, { ...ctx, asks })
+    expect(plan.kind).toBe('moved')
+    expect(buildTeamNoteText(lead, plan, at(40), Date.parse(NOW))).toContain('Asked of your teams by others:\n- "a title", from Main (2 min ago): Also check the fence')
+  })
+})
+

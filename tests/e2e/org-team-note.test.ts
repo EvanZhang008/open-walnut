@@ -6,6 +6,9 @@
  *   - nothing moved: no note; a turn that only ended is no news
  *   - new words, a task that needs the user, a finished task, a new task: one note, told once
  *   - the note rides the queued row of an ordinary send, and only that one
+ *   - a worker that waits on the lead wakes it with the note, once (lead-waits.ts)
+ *   - an ask into a team task from outside the team is listed; the team's own is not (team-asks.ts)
+ *   - after a compaction the lead reads its teams back in full (open-items.ts)
  * Only the Claude CLI is mocked (no session is started here).
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
@@ -22,6 +25,9 @@ import { ensureProjectLead, pendingOrgDigest } from '../../src/core/org/org-stor
 import { _resetTeamNoteClaimsForTesting } from '../../src/core/org/team-note.js'
 import { deleteMessage, getQueue, sendMessageToSession } from '../../src/core/session-message-queue.js'
 import { sendLetter } from '../../src/core/human-inbox/store.js'
+import { _setLeadWaitClocksForTesting, tellLead } from '../../src/core/org/lead-waits.js'
+import { noteTeamAsk, pendingTeamAsks } from '../../src/core/org/team-asks.js'
+import { collectOpenItems } from '../../src/core/sessions/open-items.js'
 
 const LEAD_SID = '33333333-4444-4555-8666-777777777777'
 
@@ -125,3 +131,57 @@ describe('a lead\'s team note', () => {
     expect(await pendingOrgDigest(other)).toBeNull()
   })
 })
+
+describe('what reaches the lead without a message from anyone', () => {
+  it('a worker that waits on the lead wakes it with the note, once', async () => {
+    // The watcher's own timer stays long here, so the test's call is the one that tells it.
+    _setLeadWaitClocksForTesting(10 * 60_000, 0)
+    const hose = (await addTask({ title: 'Check the hose', project: 'Garden', parent_task_id: leadId })).task.id
+    await updateTask(hose, { phase: 'NEED_ACTION' }, { source: 'api' })
+    // Its turn said it is done: it waits on its lead to check the result (src/core/user-status.ts).
+    await updateTaskRaw(hose, { status_report: { state: 'done', now: 'The hose holds; replaced one clamp.', at: new Date(Date.now() + 1_000).toISOString() } },
+      { emitEvent: true, source: 'status-report' })
+    await until('the worker waits on its lead', async () => (await getTask(hose)).user_status?.kind === 'lead')
+    _resetTeamNoteClaimsForTesting()
+    expect(await tellLead(leadId)).toBe(true)
+    const row = (await getQueue(LEAD_SID)).find((m) => m.message.includes('Waiting on you:'))
+    expect(row?.message).toContain('"Check the hose"')
+    expect(row?.message).toContain('It said: The hose holds; replaced one clamp.')
+    expect(row?.message).toContain('You lead "Garden".')
+    // Told: nothing wakes it again for the same wait.
+    expect(await tellLead(leadId)).toBe(false)
+    for (const m of await getQueue(LEAD_SID)) await deleteMessage(LEAD_SID, m.id)
+    _setLeadWaitClocksForTesting()
+  })
+
+  it('an ask into a team task from outside the team is the lead\'s to know; the team\'s own is not', async () => {
+    const sid = '55555555-6666-4777-8888-999999999999'
+    const roses = (await addTask({ title: 'Water the roses', project: 'Garden' })).task.id
+    await createSessionRecord(sid, roses, 'Garden', WALNUT_HOME)
+    await sendMessageToSession(sid, 'Please also renew the parking permit.\nIt runs out in May.', { source: 'ui' })
+    await until('the ask is recorded', async () => (await pendingTeamAsks(leadId)).length === 1)
+    // The lead's own message to its worker is the team working.
+    const own = `<walnut-message kind="peer-note" from="Garden lead [33333333]" from-task="${leadId}" title="Next step">\nGo on\n</walnut-message>`
+    await noteTeamAsk(sid, 'Go on', own, 'peer')
+    // The main agent's is from outside.
+    const main = '<walnut-message kind="peer-note" from="Main [3ea08ceb]" from-task="main-task" title="Check the fence too">\nAlso the fence.\n</walnut-message>'
+    await noteTeamAsk(sid, 'Also the fence.', main, 'peer')
+    expect((await pendingTeamAsks(leadId)).map((a) => [a.from, a.gist])).toEqual([
+      ['the user', 'Please also renew the parking permit.'], ['Main', 'Check the fence too'],
+    ])
+    _resetTeamNoteClaimsForTesting()
+    const note = await pendingOrgDigest(LEAD_SID)
+    expect(note!.text).toContain('Asked of your teams by others:\n- "Water the roses", from the user (just now): Please also renew the parking permit.\n- "Water the roses", from Main (just now): Check the fence too')
+    await note!.markTold()
+    expect(await pendingTeamAsks(leadId)).toEqual([])
+    for (const m of await getQueue(sid)) await deleteMessage(sid, m.id)
+  })
+
+  it('after a compaction the lead reads its teams back in full', async () => {
+    const items = await collectOpenItems(LEAD_SID, Date.now(), { afterCompaction: true })
+    expect(items.text).toContain('Your teams now, from their own status:')
+    expect(items.text).toContain('You lead "Garden".')
+    expect(items.text).toContain('"Check the hose"')
+  })
+})
+

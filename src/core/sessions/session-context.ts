@@ -206,8 +206,10 @@ export function orgRoleLine(task: { org_role?: string; project?: string; org_lea
       + 'continues its exact task. Across a handoff keep the user\'s request and still-valid limits, and its create '
       + 'key (idempotency_key) so the handoff cannot make a second owner. Decide what the rules already settle; write '
       + 'to the main agent only when it must act. A lead stays: never complete your own task. Your teams do not '
-      + 'report progress to you: Walnut puts a note of what moved in them (their own status: what needs the user, '
-      + 'new status words, what finished, what is new) before a message when something moved; it is background.\n\n'
+      + 'report progress to you: Walnut puts a note of what moved in them (the projects you lead, what needs the user, '
+      + 'new status words, what finished, what is new, and what others asked of your teams: the user, the main agent, '
+      + 'another team) before a message when something moved; it is background. A task that waits on you is yours: '
+      + 'Walnut wakes you with it under "Waiting on you"; read it and answer or close it.\n\n'
       + DECISION_CONTEXT_LINE + LEAD_DECISION_LINE
       + TASK_ROUTING_CONTRACT + '\n\n'
   }
