@@ -59,6 +59,7 @@ import { SelectionAskPill, selectionClientRect } from '@/components/common/Selec
 import { FileThreadLayer, type FileThreadLayerHandle, type FileThreadSurface } from '@/components/common/FileThreadLayer';
 import { useSessionThreadsApi } from '@/contexts/SessionThreadsContext';
 import { FileSearchBar } from '@/components/common/FileSearchBar';
+import { pointerOwnedElsewhere } from '@/utils/find-scope';
 import {
   DomSearchController, applyHighlights, collectTextMatches,
   ensureHighlightStyles, wordAtPoint, claimSearchOwner, onSearchOwnerLost, HL_SELMATCH, SYMBOL_RE,
@@ -1682,6 +1683,8 @@ export function FileContentView({
       const inside = t ? el.contains(t) : false;
       if (!inside) {
         if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+        // The reader was last in a chat or another column: the page find owns it.
+        if (!el.closest('.file-viewer-overlay') && !fullscreen && pointerOwnedElsewhere(el)) return;
         if (document.querySelectorAll('.file-content-view').length > 1
           && !el.contains(document.activeElement)
           && !el.closest('.file-viewer-overlay') && !fullscreen) return;

@@ -33,6 +33,7 @@ import {
 } from '@/utils/dom-text-search';
 import { ICON_REFRESH, ICON_WARNING, ICON_PANEL_LEFT, ICON_PANEL_LEFT_FILLED } from '@/components/common/Icons';
 import { log } from '@/utils/log';
+import { pointerOwnedElsewhere } from '@/utils/find-scope';
 import { SessionCommitButton } from '@/components/sessions/SessionCommitDialog';
 
 export type DiffViewType = 'split' | 'unified';
@@ -1974,6 +1975,7 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
       const inside = t ? el.contains(t) : false;
       if (!inside) {
         if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+        if (pointerOwnedElsewhere(el)) return;
         const panel = el.closest('.session-panel');
         for (const v of Array.from(document.querySelectorAll('.file-content-view'))) {
           if (v.closest('.file-viewer-overlay') || panel?.contains(v)) return;

@@ -1,0 +1,24 @@
+/* Page find (components/common/PageFind.tsx): a floating Cmd/Ctrl+F bar. It is
+   fixed and portalled so opening it moves nothing on the page; the row inside
+   is the same FileSearchBar file views use. */
+.page-find {
+  position: fixed;
+  z-index: 2147483000;
+  max-width: calc(100vw - 16px);
+}
+.page-find .fv-search-bar {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-secondary, var(--bg));
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
+}
+.page-find .fv-search-input { flex: 0 1 220px; }
+
+/* Paint (CSS Custom Highlight API). Only color, background-color,
+   text-decoration and text-shadow are honoured inside ::highlight. */
+::highlight(walnut-find) { background-color: rgba(255, 200, 0, 0.38); }
+::highlight(walnut-find-active) { background-color: rgba(255, 145, 0, 0.9); color: #1a1a1a; }
+/* Selected text echoed on the page: a quieter tint than a find match. */
+::highlight(walnut-page-selmatch) { background-color: rgba(80, 160, 255, 0.28); }
+[data-theme="dark"] ::highlight(walnut-find) { background-color: rgba(255, 200, 0, 0.32); }
+[data-theme="dark"] ::highlight(walnut-page-selmatch) { background-color: rgba(100, 170, 255, 0.30); }
