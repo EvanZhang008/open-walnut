@@ -223,7 +223,7 @@ describe('org channels', () => {
     expect(rowOf(channels, projectRowKey('Insights'))?.name).toBe('Marina')
     expect(pickChannel(channels, projectRowKey('Events')).name).toBe('Marina')
     expect(filterChannels(channels.rows, 'events').map((r) => r.name)).toEqual(['Marina'])
-    // Both sit under "Archived / Moved", each saying where it went and what its own lead did.
+    // Both sit under "Archived", each saying where it went and what its own lead did.
     expect(movedProjects(channels, list).map((m) => [m.project, m.vpName, m.vpKey, m.from?.open])).toEqual([
       ['Events', 'Marina', projectRowKey('Marina'), undefined],
       ['Insights', 'Marina', projectRowKey('Marina'), false],

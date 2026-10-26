@@ -273,7 +273,7 @@ export function pickChannel(channels: OrgChannels, key: string | null): ChannelR
   return rowOf(channels, key) || channels.rows[0] || channels.main;
 }
 
-/** A project another VP took over: listed under "Archived / Moved", with where it went. */
+/** A project another VP took over: listed under "Archived", with where it went. */
 export interface MovedRow {
   key: string;
   project: string;

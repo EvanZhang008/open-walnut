@@ -4,11 +4,14 @@
  * is, its state dot, when its work last moved, one line of what is happening and,
  * when something waits on the user, how many. Up and Down move the selection. While the
  * pointer is over the list the rows keep their order, so a click lands on the row aimed at.
- * A project another VP took over has no row of its own: it sits in "Archived / Moved" at
- * the bottom (folded), saying which VP has it now; a click opens that VP.
+ * A project another VP took over has no row of its own: it sits in "Archived" at
+ * the bottom (folded), saying which VP has it now; a click opens that VP. A right-click on any
+ * row opens Walnut's own menu of what that row can do (the page builds it: OrgPage rowMenu).
  */
-import { useRef, useState, type KeyboardEvent } from 'react';
+import { useLayoutEffect, useRef, useState, type KeyboardEvent, type MouseEvent } from 'react';
+import { readOrgPlace, writeOrgPlace } from './org-place';
 import { timeAgo } from '@/utils/time';
+import { ContextMenu, useContextMenu, type ContextMenuItem } from '@/components/common/ContextMenu';
 import { avatarColor, initials, type ChannelRow, type ChannelState, type MovedRow } from './org-channels-model';
 import { holdOrder } from './hold-order';
 
@@ -41,7 +44,11 @@ export function shortAgo(ms: number, now: number): string {
   return `${Math.floor(hours / 24)}d`;
 }
 
-function Row({ row, selected, now, onSelect }: { row: ChannelRow; selected: boolean; now: number; onSelect: (key: string) => void }) {
+/** What a right-click is on: a row of the list, or a project under "Archived". */
+export type ChannelMenuTarget = { row: ChannelRow } | { moved: MovedRow };
+type OnMenu = (e: MouseEvent, target: ChannelMenuTarget) => void;
+
+function Row({ row, selected, now, onSelect, onMenu }: { row: ChannelRow; selected: boolean; now: number; onSelect: (key: string) => void; onMenu?: OnMenu }) {
   // What opening this row lets the user answer: on Main its own asks, not every team's again.
   const own = row.alerts.length;
   const badge = own > 0
@@ -60,6 +67,7 @@ function Row({ row, selected, now, onSelect }: { row: ChannelRow; selected: bool
       data-state={row.state}
       title={`${row.name}: ${STATE_LABEL[row.state]}${row.lastAt ? `, moved ${timeAgo(new Date(row.lastAt).toISOString(), { now })}` : ''}`}
       onClick={() => onSelect(row.key)}
+      onContextMenu={onMenu ? (e) => onMenu(e, { row }) : undefined}
     >
       <OrgAvatar row={row} />
       <span className="org-channel-mid">
@@ -78,7 +86,7 @@ function Row({ row, selected, now, onSelect }: { row: ChannelRow; selected: bool
   );
 }
 
-function MovedSection({ moved, query, onSelect }: { moved: readonly MovedRow[]; query: string; onSelect: (key: string) => void }) {
+function MovedSection({ moved, query, onSelect, onMenu }: { moved: readonly MovedRow[]; query: string; onSelect: (key: string) => void; onMenu?: OnMenu }) {
   const [open, setOpen] = useState(false);
   const words = query.toLowerCase().split(/\s+/).filter(Boolean);
   const shown = words.length
@@ -97,7 +105,7 @@ function MovedSection({ moved, query, onSelect }: { moved: readonly MovedRow[]; 
         onClick={() => setOpen((v) => !v)}
       >
         <span className="org-moved-chevron" aria-hidden="true">{expanded ? '▾' : '▸'}</span>
-        Archived / Moved · {shown.length}
+        Archived · {shown.length}
       </button>
       {expanded && shown.map((m) => (
         <button
@@ -109,6 +117,7 @@ function MovedSection({ moved, query, onSelect }: { moved: readonly MovedRow[]; 
           data-vp={m.vpKey}
           title={`${m.project} is led by the ${m.vpName} VP now${m.from ? ` (before: ${m.from.title})` : ''}`}
           onClick={() => onSelect(m.vpKey)}
+          onContextMenu={onMenu ? (e) => onMenu(e, { moved: m }) : undefined}
         >
           <span className="org-avatar is-moved" style={{ width: 26, height: 26, fontSize: 10, background: avatarColor(m.project) }} aria-hidden="true">{initials(m.project)}</span>
           <span className="org-channel-mid">
@@ -128,6 +137,8 @@ interface Props {
   rows: readonly ChannelRow[];
   /** Projects another VP took over (movedProjects). */
   moved?: readonly MovedRow[];
+  /** What a right-click on a row offers; no menu without it. */
+  rowMenu?: (target: ChannelMenuTarget) => ContextMenuItem[];
   total: number;
   selectedKey: string | null;
   query: string;
@@ -137,8 +148,29 @@ interface Props {
   now: number;
 }
 
-export function OrgChannelList({ main, rows, moved = [], total, selectedKey, query, onQuery, onSelect, onOpenChart, now }: Props) {
+export function OrgChannelList({ main, rows, moved = [], rowMenu, total, selectedKey, query, onQuery, onSelect, onOpenChart, now }: Props) {
   const listRef = useRef<HTMLDivElement>(null);
+  // A right-click selects a word in WebKit before the menu opens: that selection is the
+  // gesture's, not the user's, so it neither keeps the browser's menu nor stays lit.
+  const menu = useContextMenu<ChannelMenuTarget>({ ignorePressSelection: true });
+  const onMenu: OnMenu | undefined = rowMenu ? (e, target) => { menu.open(e, target); } : undefined;
+  // Back on the page, the list is where it was scrolled to (org-place.ts), once its rows are in.
+  const scrollRestored = useRef(false);
+  useLayoutEffect(() => {
+    const el = listRef.current;
+    if (scrollRestored.current || !el || rows.length === 0) return;
+    scrollRestored.current = true;
+    const top = readOrgPlace().listTop;
+    if (top) el.scrollTop = top;
+  }, [rows.length]);
+  const scrollSave = useRef<number | null>(null);
+  const onScroll = () => {
+    if (scrollSave.current !== null) return;
+    scrollSave.current = window.setTimeout(() => {
+      scrollSave.current = null;
+      if (listRef.current) writeOrgPlace({ listTop: Math.round(listRef.current.scrollTop) });
+    }, 200);
+  };
   // Live work re-sorts the rows all the time; one that moved under the pointer would take a
   // click meant for another. The new order shows once the pointer leaves.
   const [held, setHeld] = useState<string[] | null>(null);
@@ -174,16 +206,27 @@ export function OrgChannelList({ main, rows, moved = [], total, selectedKey, que
         role="listbox"
         aria-label="Main and the project leads"
         onKeyDown={onKeyDown}
+        onScroll={onScroll}
         onPointerEnter={() => setHeld(rows.map((r) => r.key))}
         onPointerLeave={() => setHeld(null)}
       >
-        <Row row={main} selected={selectedKey === main.key} now={now} onSelect={onSelect} />
+        <Row row={main} selected={selectedKey === main.key} now={now} onSelect={onSelect} onMenu={onMenu} />
         <div className="org-list-section" role="presentation">Leads · {total}</div>
-        {shown.map((r) => <Row key={r.key} row={r} selected={selectedKey === r.key} now={now} onSelect={onSelect} />)}
-        <MovedSection moved={moved} query={query} onSelect={onSelect} />
+        {shown.map((r) => <Row key={r.key} row={r} selected={selectedKey === r.key} now={now} onSelect={onSelect} onMenu={onMenu} />)}
+        <MovedSection moved={moved} query={query} onSelect={onSelect} onMenu={onMenu} />
       </div>
       {total === 0 && <p className="org-empty-note" data-testid="org-empty">No open work yet. Ask Main to start something.</p>}
       {total > 0 && rows.length === 0 && <p className="org-empty-note" data-testid="org-no-match">No lead matches “{query}”.</p>}
+      {menu.state && rowMenu && (
+        <ContextMenu
+          point={menu.state.point}
+          items={rowMenu(menu.state.payload)}
+          onClose={menu.close}
+          returnFocus={menu.state.origin}
+          ariaLabel="Org row actions"
+          testId="org-channel-menu"
+        />
+      )}
     </aside>
   );
 }

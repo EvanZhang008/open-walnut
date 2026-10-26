@@ -12,6 +12,8 @@
  *   - a project under another VP is part of that VP's channel on the Org page, not one of its own
  *   - a card opens its project on the Org page, on its chat (chat is the first tab)
  *   - a click outside the sheet closes it (the menu and the question close first)
+ *   - a right-click on an Org row opens Walnut's menu: its tabs, a move under another VP and a
+ *     give-back, each asked in the chart first; "Archived" lists what moved
  * The fixture is shared, so this file makes its own projects and removes what it made.
  */
 import { expect, test, type APIRequestContext, type Locator, type Page } from '@playwright/test'
@@ -170,9 +172,9 @@ test('a drag onto another VP says what it does, asks first, and puts the project
   await expect(channel(A)).toBeVisible()
   await expect(channel(B)).toHaveCount(0)
   await expect(channel(A).getByTestId('org-channel-led')).toHaveText('+1')
-  // B is under "Archived / Moved" at the bottom, folded, saying where it went; it came in live.
+  // B is under "Archived" at the bottom, folded, saying where it went; it came in live.
   const moved = page.getByTestId('org-moved-toggle')
-  await expect(moved).toHaveText(/Archived \/ Moved · \d+/)
+  await expect(moved).toHaveText(/^.?Archived · \d+$/)
   await expect(moved).toHaveAttribute('aria-expanded', 'false')
   await expect(page.getByTestId('org-moved-row')).toHaveCount(0)
   await moved.click()
@@ -243,4 +245,54 @@ test('a click outside the sheet closes it; inside, or with the menu or the quest
   // Nothing open: the click outside closes the sheet.
   await page.mouse.click(box.x + box.width / 2, box.y + box.height + 12)
   await expect(sheet).toHaveCount(0)
+})
+
+test('a right-click on an Org row opens Walnut\'s menu: open it, move its project, give it back', async ({ page, request }) => {
+  await isolateUiPrefs(page)
+  await loadHome(page)
+  await page.getByTestId('sidebar-org').click()
+  const channel = (name: string) => page.locator(`[data-testid="org-channel"][data-key="project:${name.toLowerCase()}"]`)
+  const menu = page.getByTestId('org-channel-menu')
+
+  // Main: its tabs and the chart; Escape closes it, and no word is left selected under it.
+  await page.getByTestId('org-channel-main').click({ button: 'right' })
+  await expect(menu).toBeVisible()
+  await expect(menu).toContainText('Open chat')
+  await expect(menu).toContainText('Open the org chart')
+  expect(await page.evaluate(() => window.getSelection()?.toString() ?? '')).toBe('')
+  await page.keyboard.press('Escape')
+  await expect(menu).toHaveCount(0)
+
+  // A VP row: open it on its team.
+  await channel(B).click({ button: 'right' })
+  await expect(menu).toContainText(`Move ${B} under`)
+  await menu.getByText('Open team', { exact: true }).click()
+  await expect(menu).toHaveCount(0)
+  await expect(channel(B)).toHaveAttribute('aria-selected', 'true')
+  await expect(page.getByTestId('org-tab-team')).toHaveAttribute('aria-selected', 'true')
+
+  // Move it: the chart opens on the same question as a drag, and nothing moves before Confirm.
+  await channel(B).click({ button: 'right' })
+  await menu.getByText(`${A}'s VP…`, { exact: true }).click()
+  await expect(page.getByTestId('org-chart-confirm')).toContainText(`Put ${B} under ${A}'s VP?`)
+  expect((await project(request, B))?.vp).toBeUndefined()
+  await page.getByTestId('org-chart-apply').click()
+  await expect(page.getByTestId('org-chart-done')).toHaveText(`${B} is now under ${A}'s VP.`)
+  await page.keyboard.press('Escape')
+  await expect(page.getByTestId('org-chart')).toHaveCount(0)
+  await expect(channel(B)).toHaveCount(0)
+
+  // Under "Archived", the moved project's menu gives it back.
+  await page.getByTestId('org-moved-toggle').click()
+  const movedB = page.locator(`[data-testid="org-moved-row"][data-key="project:${B.toLowerCase()}"]`)
+  await movedB.click({ button: 'right' })
+  await expect(menu).toContainText(`Open the ${A} VP`)
+  await menu.getByText(`Give ${B} its own VP…`, { exact: true }).click()
+  await expect(page.getByTestId('org-chart-confirm')).toContainText(`Give ${B} its own VP?`)
+  await page.getByTestId('org-chart-apply').click()
+  await expect(page.getByTestId('org-chart-done')).toHaveText(`${B} has its own VP again.`)
+  await page.keyboard.press('Escape')
+  await expect(channel(B)).toBeVisible()
+  await expect(movedB).toHaveCount(0)
+  expect((await project(request, B))?.vp).toBeUndefined()
 })

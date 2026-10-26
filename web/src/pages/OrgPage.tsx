@@ -15,7 +15,7 @@
  * narrow window lays it over the detail). On a phone the list, the detail and the
  * opened task take turns. The old org chart (drag to reparent) stays one click away.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import type { Task } from '@open-walnut/core';
 import { buildOrgTree } from '@open-walnut/org-tree';
@@ -28,8 +28,11 @@ import { fetchTask } from '@/api/tasks';
 import { sessionStatusStore } from '@/stores/session-status-store';
 import { resolveTaskSessionId } from '@/utils/session-status';
 import { log } from '@/utils/log';
-import { OrgChartSheet } from '@/components/org/OrgChartSheet';
-import { OrgChannelList } from '@/components/org/OrgChannelList';
+import { OrgChartSheet, type ChartStart } from '@/components/org/OrgChartSheet';
+import { OrgChannelList, type ChannelMenuTarget } from '@/components/org/OrgChannelList';
+import { placeParams, readOrgPlace, writeOrgPlace } from '@/components/org/org-place';
+import type { ContextMenuItem } from '@/components/common/ContextMenu';
+import { dropPlan, vpCards } from '@/components/org/org-chart-model';
 import { OrgNodeDetail, type OrgTab } from '@/components/org/OrgNodeDetail';
 import { OrgSidePanel, parseSideTarget, sideTargetParam, type OrgSideTarget } from '@/components/org/OrgSidePanel';
 import {
@@ -71,6 +74,9 @@ export function OrgPage() {
   const [params, setParams] = useSearchParams();
   const [query, setQuery] = useState('');
   const [chartOpen, setChartOpen] = useState(false);
+  /** The question the chart opens on (a row menu's move), or none. */
+  const [chartStart, setChartStart] = useState<ChartStart | null>(null);
+  const openChart = useCallback((start?: ChartStart) => { setChartStart(start ?? null); setChartOpen(true); }, []);
 
   const tree = useMemo(() => buildOrgTree(tasks), [tasks]);
   // The org's own tasks: Main, the leads, and every task under a project.
@@ -107,8 +113,24 @@ export function OrgPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- the key is the set
   }, [orgSessionKey]);
 
-  const nodeParam = params.get('node');
-  const tabParam = params.get('tab');
+  // A bare /org (the sidebar, a reload) opens where this window was (org-place.ts).
+  const [restore] = useState(() => (params.get('node') || params.get('open') ? null : placeParams(readOrgPlace())));
+  const restoring = useRef(!!restore);
+  useLayoutEffect(() => {
+    if (!restore) return;
+    log.info('org-page', 'place restored', restore);
+    setParams((prev) => {
+      const next = new URLSearchParams(prev);
+      for (const [k, v] of Object.entries(restore)) next.set(k, v);
+      return next;
+    }, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once, on the bare first render
+  }, []);
+
+  // Until the URL has caught up, the page is already at the restored place (no first lead flashing by).
+  const pendingPlace = restoring.current && !params.get('node') && !params.get('open') ? restore : null;
+  const nodeParam = params.get('node') ?? pendingPlace?.node ?? null;
+  const tabParam = params.get('tab') ?? pendingPlace?.tab ?? null;
   const urlTab = TABS.includes(tabParam as OrgTab) ? (tabParam as OrgTab) : null;
   const selected = pickChannel(channels, nodeParam);
   // On a phone the list shows until a row is picked (and again when the picked one is gone).
@@ -116,8 +138,15 @@ export function OrgPage() {
   const showDetail = !phone || picked;
   const visibleRows = useMemo(() => filterChannels(channels.rows, query), [channels.rows, query]);
   const moved = useMemo(() => movedProjects(channels, tasks), [channels, tasks]);
-  const openParam = params.get('open');
+  const openParam = params.get('open') ?? pendingPlace?.open ?? null;
   const side = useMemo(() => parseSideTarget(openParam), [openParam]);
+  // Remember the place as the URL moves (not before the URL has caught up with a restore).
+  const urlPlaced = !!(params.get('node') || params.get('open'));
+  useEffect(() => {
+    if (restoring.current && !urlPlaced) return;
+    restoring.current = false;
+    writeOrgPlace({ node: nodeParam ?? undefined, tab: tabParam ?? undefined, open: openParam ?? undefined });
+  }, [nodeParam, tabParam, openParam, urlPlaced]);
 
   // A phone pushes the pick (Back returns to the list); the desktop replaces it. A new pick
   // closes the side panel: what it showed belonged to the node the user left.
@@ -216,6 +245,46 @@ export function OrgPage() {
     }
   }, [chatOnHome, showOperationError]);
 
+  // A right-click on a row: open it on a tab, and move its project the way the chart does
+  // (the chart opens on the same question, so a move is confirmed in one place).
+  const cards = useMemo(() => vpCards(channels.projects), [channels.projects]);
+  const rowMenu = useCallback((target: ChannelMenuTarget): ContextMenuItem[] => {
+    const projectOf = (key: string) => cards.flatMap((c) => c.projects).find((p) => p.key === key);
+    const giveBack = (key: string, name: string): ContextMenuItem[] => {
+      const p = projectOf(key);
+      return p && dropPlan(cards, p, null)
+        ? [{ key: `own:${key}`, label: `Give ${name} its own VP…`, onSelect: () => openChart({ project: key, to: null }) }]
+        : [];
+    };
+    if ('moved' in target) {
+      const m = target.moved;
+      return [
+        { key: 'head', section: true, label: m.project },
+        { key: 'open', label: `Open the ${m.vpName} VP`, onSelect: () => select(m.vpKey) },
+        { key: 'sep', divider: true },
+        ...giveBack(m.key, m.project),
+      ];
+    }
+    const r = target.row;
+    // The detail's own tabs: chat with whoever answers for it (OrgNodeDetail canTalk), its team.
+    const canTalk = r.kind === 'main' || !!r.contactId || !!r.node?.needsLead;
+    const items: ContextMenuItem[] = [
+      { key: 'head', section: true, label: r.name },
+      ...(canTalk ? [{ key: 'chat', label: 'Open chat', onSelect: () => select(r.key, 'chat') }] : []),
+      { key: 'team', label: r.kind === 'main' ? 'Open leads' : 'Open team', onSelect: () => select(r.key, 'team') },
+    ];
+    if (r.kind === 'main') return [...items, { key: 'sep', divider: true }, { key: 'chart', label: 'Open the org chart', onSelect: () => openChart() }];
+    const own = projectOf(r.key);
+    const under = own ? cards.filter((c) => c.key !== r.key && dropPlan(cards, own, c)) : [];
+    if (under.length) {
+      items.push({ key: 'sep-move', divider: true }, { key: 'move', section: true, label: `Move ${r.name} under` });
+      for (const c of under) items.push({ key: `vp:${c.key}`, label: `${c.name}'s VP…`, onSelect: () => openChart({ project: r.key, to: c.key }) });
+    }
+    const back = (r.led ?? []).flatMap((l) => giveBack(l.key, l.name));
+    if (back.length) items.push({ key: 'sep-back', divider: true }, ...back);
+    return items;
+  }, [cards, select, openChart]);
+
   // A phone shows one of the three at a time; the opened task covers the rest.
   const phoneView = !phone ? null : side ? 'side' : showDetail ? 'detail' : 'list';
 
@@ -226,12 +295,13 @@ export function OrgPage() {
           main={channels.main}
           rows={visibleRows}
           moved={moved}
+          rowMenu={rowMenu}
           total={channels.rows.length}
           selectedKey={phone ? null : selected.key}
           query={query}
           onQuery={setQuery}
           onSelect={select}
-          onOpenChart={() => setChartOpen(true)}
+          onOpenChart={() => openChart()}
           now={now}
         />
       )}
@@ -269,7 +339,8 @@ export function OrgPage() {
           main={channels.main}
           rows={channels.projects}
           tasks={tasks}
-          onClose={() => setChartOpen(false)}
+          {...(chartStart ? { startWith: chartStart } : {})}
+          onClose={() => { setChartOpen(false); setChartStart(null); }}
           onPick={(key) => select(rowOf(channels, key)?.key ?? key)}
           onOpenTask={openTask}
           now={now}

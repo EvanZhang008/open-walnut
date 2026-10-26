@@ -29,6 +29,12 @@ import { cardOf, ceoLine, dropPlan, vpCards, type DropPlan, type VpCard, type Vp
 import type { ChannelRow } from './org-channels-model';
 import '@/styles/org-chart.css';
 
+/** A question the sheet opens on: put `project` (a project row key) under `to`'s VP (a card key; null = its own). */
+export interface ChartStart {
+  project: string;
+  to: string | null;
+}
+
 interface Props {
   main: ChannelRow;
   /** One row per project (OrgChannels.projects). */
@@ -41,6 +47,8 @@ interface Props {
   onOpenTask: (taskId: string) => void;
   /** The page's minute clock, for "23m". */
   now: number;
+  /** Open on this move's question (the Org list's right-click menu). */
+  startWith?: ChartStart;
 }
 
 const DRAG_TYPE = 'application/x-walnut-org-project';
@@ -63,11 +71,17 @@ const OWN = '__own__';
 /** "23m · Renew the permit": when the news was written, and the task it is about. */
 const metaLine = (newsAt: number, task: string | undefined, now: number) => [shortAgo(newsAt, now), task].filter(Boolean).join(' · ');
 
-export function OrgChartSheet({ main, rows, tasks, onClose, onPick, onOpenTask, now }: Props) {
+export function OrgChartSheet({ main, rows, tasks, onClose, onPick, onOpenTask, now, startWith }: Props) {
   const [panel, setPanel] = useState<HTMLDivElement | null>(null);
   const [dragKey, setDragKey] = useState<string | null>(null);
   const [overKey, setOverKey] = useState<string | null>(null);
-  const [pending, setPending] = useState<DropPlan | null>(null);
+  const [pending, setPending] = useState<DropPlan | null>(() => {
+    if (!startWith) return null;
+    const all = vpCards(rows);
+    const p = all.flatMap((c) => c.projects).find((x) => x.key === startWith.project);
+    const target = startWith.to ? all.find((c) => c.key === startWith.to) ?? null : null;
+    return p && (startWith.to === null || target) ? dropPlan(all, p, target) : null;
+  });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [done, setDone] = useState('');

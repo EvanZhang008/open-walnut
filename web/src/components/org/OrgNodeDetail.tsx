@@ -9,7 +9,8 @@
  *   Chat     its own session (SessionPanel), or a way to start one
  *   composer under Board and Team: a line to its session, then Chat shows it
  */
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { readOrgPlace, writeOrgPlace } from './org-place';
 import type { Task } from '@open-walnut/core';
 import { SessionPanel } from '@/components/sessions/SessionPanel';
 import { TaskBoardPane } from '@/components/board/TaskBoardPane';
@@ -140,6 +141,22 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabChange, onSel
   // A node opens on its chat (the user, 2026-10-25: "chat first, not the board"); one no one
   // answers for (the Inbox) on its team.
   const shown: OrgTab | null = tab ?? (canTalk ? 'chat' : 'team');
+  // The Team view comes back scrolled where it was on this node (org-place.ts).
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const teamShown = shown === 'team';
+  useLayoutEffect(() => {
+    const el = bodyRef.current;
+    const saved = readOrgPlace().team;
+    if (teamShown && el && saved?.key === row.key && saved.top) el.scrollTop = saved.top;
+  }, [teamShown, row.key]);
+  const teamSave = useRef<number | null>(null);
+  const onBodyScroll = () => {
+    if (!teamShown || teamSave.current !== null) return;
+    teamSave.current = window.setTimeout(() => {
+      teamSave.current = null;
+      if (bodyRef.current) writeOrgPlace({ team: { key: row.key, top: Math.round(bodyRef.current.scrollTop) } });
+    }, 200);
+  };
   useEffect(() => { if (tab === 'board' && hasBoard === false) setTab('team'); }, [tab, hasBoard]);
   // A pick of this same node that names a tab (a chat that names this node's session) shows it.
   useEffect(() => { if (initialTab) setTab(initialTab); }, [initialTab]);
@@ -222,6 +239,8 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabChange, onSel
       {alertsShown.length > 0 && <AlertList alerts={alertsShown} onOpen={openAlert} compact={shown === 'chat'} />}
 
       <div
+        ref={bodyRef}
+        onScroll={onBodyScroll}
         id="org-detail-panel"
         role="tabpanel"
         {...(shown ? { 'aria-labelledby': tabId(shown) } : {})}

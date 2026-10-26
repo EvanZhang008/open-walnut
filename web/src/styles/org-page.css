@@ -449,3 +449,6 @@
 .org-moved-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .org-moved-row .org-channel-name { color: var(--fg-muted); font-weight: 500; }
 .org-avatar.is-moved { opacity: 0.6; }
+
+/* A right-click opens Walnut's menu: no word selected under it (WebKit selects one). */
+.org-channel, .org-moved-row { -webkit-user-select: none; user-select: none; }

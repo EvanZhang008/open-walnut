@@ -9,6 +9,8 @@
  *   - Answer on a waiting question opens that task's session beside the page
  *   - search, a pick that survives a reload, live state, the keyboard, and the org chart
  *   - the rows hold still while the pointer is over the list, and re-sort once it leaves
+ *   - another page and back (or a reload of /org) shows the same place: the pick, its tab, the
+ *     task beside it, the list's scroll
  * The fixture is shared, so this file makes its own projects and removes what it made.
  */
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test'
@@ -324,4 +326,48 @@ test('a task waiting on a decision letter needs the user: Answer opens the lette
   const side = page.getByTestId('org-side')
   await expect(side.locator('.session-inbox-pane')).toBeVisible({ timeout: 30_000 })
   await expect(side.locator('.session-inbox-pane')).toContainText(`Send the deposit ${STAMP}`)
+})
+
+test('back on the Org page, it is where it was: the pick, its tab, the task beside it, the list scroll; a reload too', async ({ page }) => {
+  await openOrg(page)
+  await row(page, ALPHA).click()
+  await expect(row(page, ALPHA)).toHaveAttribute('aria-selected', 'true')
+  await page.getByTestId('org-tab-team').click()
+  await expect(page.getByTestId('org-tab-team')).toHaveAttribute('aria-selected', 'true')
+  // One of this team's own tasks, by id: the columns re-sort as the shared fixture's work moves.
+  const taskId = ids.build
+  const item = page.locator(`[data-testid="org-team-item"][data-task-id="${taskId}"]`)
+  await item.click()
+  await expect(page.getByTestId('org-side')).toBeVisible()
+  const list = page.locator('.org-list-scroll')
+  const top = await list.evaluate((el) => { el.scrollTop = Math.min(80, el.scrollHeight - el.clientHeight); return el.scrollTop })
+  // The scroll is saved a moment after it stops.
+  await page.waitForTimeout(500)
+
+  const expectSamePlace = async () => {
+    await expect(row(page, ALPHA)).toHaveAttribute('aria-selected', 'true', { timeout: 30_000 })
+    await expect(page.getByTestId('org-tab-team')).toHaveAttribute('aria-selected', 'true')
+    await expect(page.getByTestId('org-side')).toBeVisible()
+    await expect(page).toHaveURL(new RegExp(`open=[^&]*${taskId}`))
+    await expect.poll(() => list.evaluate((el) => el.scrollTop)).toBe(top)
+  }
+  // Another page, then the sidebar's Org: the same place, not the first lead.
+  await page.getByTestId('sidebar-core-app-settings').click()
+  await expect(page.getByTestId('org-page')).toHaveCount(0)
+  await page.getByTestId('sidebar-org').click()
+  await expect(page.getByTestId('org-page')).toBeVisible()
+  await expectSamePlace()
+  // Across a reload too (the Mac app reopened): reload elsewhere, then the sidebar's Org.
+  await page.getByTestId('sidebar-core-app-settings').click()
+  await page.reload()
+  await page.getByTestId('sidebar-org').click()
+  await expectSamePlace()
+
+  // Main picked: Main comes back.
+  await page.getByTestId('org-channel-main').click()
+  await expect(page.getByTestId('org-channel-main')).toHaveAttribute('aria-selected', 'true')
+  await page.getByTestId('sidebar-core-app-settings').click()
+  await page.getByTestId('sidebar-org').click()
+  await expect(page.getByTestId('org-channel-main')).toHaveAttribute('aria-selected', 'true')
+  await expect(page.getByTestId('org-side')).toHaveCount(0)
 })
