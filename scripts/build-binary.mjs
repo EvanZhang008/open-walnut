@@ -33,7 +33,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import zlib from 'node:zlib'
-import { assertNoBuildPaths, moduleRoots, packageCopies, runtimeDirname, treeDirOf } from './binary-build-checks.mjs'
+import { assertNoBuildPaths, copyInfraApp, moduleRoots, packageCopies, runtimeDirname, treeDirOf } from './binary-build-checks.mjs'
 import { writeBuildInfo } from './build-info.mjs'
 
 if (typeof Bun === 'undefined') {
@@ -187,6 +187,8 @@ async function stageTree(root, { version, sidecars, sqliteDylib }) {
   writeBuildInfo(repo, dist)
 
   copyDir(path.join(repo, 'src/data'), path.join(dist, 'data'))
+  // The AWS CDK app the cloud setup deploys from (src/core/cloud-setup/providers/aws.ts).
+  copyInfraApp(repo, root)
   copyDir(path.join(repo, 'dist/web/static'), path.join(dist, 'web/static'))
   copyDir(sidecars, path.join(dist, 'daemon-binaries'))
   for (const f of ['daemon.version']) fs.rmSync(path.join(dist, 'daemon-binaries', f), { force: true })

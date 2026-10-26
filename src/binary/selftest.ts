@@ -25,7 +25,7 @@ export async function runSelftest(): Promise<number> {
   const checks: Check[] = [
     {
       name: 'runtime-tree', required: true, run: async () => {
-        for (const rel of [RUNTIME_MARKER, 'package.json', 'dist/build-info.json', 'dist/web/static/index.html', 'dist/data/skills', 'dist/integrations/local/manifest.json', 'dist/lib/sqlite.js', 'node_modules/diff/package.json']) expectFile(info.root, rel)
+        for (const rel of [RUNTIME_MARKER, 'package.json', 'dist/build-info.json', 'dist/web/static/index.html', 'dist/data/skills', 'dist/integrations/local/manifest.json', 'dist/lib/sqlite.js', 'node_modules/diff/package.json', 'infra/cdk.json', 'infra/bun.lock']) expectFile(info.root, rel)
         return info.root
       },
     },

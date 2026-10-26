@@ -43,6 +43,9 @@ breaking changes).
 - The setup and restore skills install Walnut with `install.sh`, and the README installs Claude
   Code with its own installer (`curl -fsSL https://claude.ai/install.sh | bash`), so no step a user
   takes needs npm.
+- The setup wizard deploys the AWS companion from any install, the compiled file included: the
+  file carries the CDK app and installs its dependencies with its own bun. The CDK itself still
+  runs on Node, so that one step needs Node and npm on the machine.
 - The cloud companion runs the compiled file too. The Mac sends its companion the same file its
   host servers run, built for the box, with a small `dist/cli.js` that starts it, so a box of
   any age takes it with the update path it already has: a box set up before keeps its service and

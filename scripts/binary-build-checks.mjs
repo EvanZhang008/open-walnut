@@ -1,7 +1,7 @@
 /**
- * Checks of the compiled Walnut file's build (scripts/build-binary.mjs) that
- * need no bun, so the test suite runs them on Node too
- * (tests/binary/build-paths.test.ts).
+ * Checks and staging steps of the compiled Walnut file's build
+ * (scripts/build-binary.mjs) that need no bun, so the test suite runs them on
+ * Node too (tests/binary/build-paths.test.ts).
  */
 import fs from 'node:fs'
 import path from 'node:path'
@@ -119,4 +119,23 @@ export function assertNoBuildPaths(outfile, roots) {
     const list = [...hits].map(([p, count]) => `  ${p}${count > 1 ? ` (x${count})` : ''}`).join('\n')
     throw new Error(`${path.basename(outfile)} carries paths of the build machine; give the module that names them its runtime-tree path (DIRNAME_PACKAGES):\n${list}`)
   }
+}
+
+/**
+ * The AWS CDK app into the runtime tree at `root`, as an npm install of the
+ * source package ships it: the package.json `files` entries under infra/,
+ * without built .js or .d.ts. The cloud setup deploys from a copy of it
+ * (src/core/cloud-setup/providers/aws.ts), so a compiled install deploys the AWS
+ * companion too. Returns the entries copied.
+ */
+export function copyInfraApp(repo, root) {
+  const files = JSON.parse(fs.readFileSync(path.join(repo, 'package.json'), 'utf8')).files ?? []
+  const entries = files.filter((f) => f.startsWith('infra/'))
+  if (!entries.length) throw new Error('package.json files lists no infra/ entry')
+  for (const rel of entries) {
+    const from = path.join(repo, rel)
+    if (!fs.existsSync(from)) throw new Error(`${rel} (package.json files) is missing`)
+    fs.cpSync(from, path.join(root, rel), { recursive: true, dereference: true, filter: (src) => !/\.(js|d\.ts)$/.test(src) })
+  }
+  return entries
 }

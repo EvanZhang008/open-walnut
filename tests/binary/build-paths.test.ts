@@ -9,7 +9,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 // @ts-expect-error: a .mjs build script without types
-import { assertNoBuildPaths, moduleRoots, packageCopies, runtimeDirname, treeDirOf } from '../../scripts/binary-build-checks.mjs'
+import { assertNoBuildPaths, copyInfraApp, moduleRoots, packageCopies, runtimeDirname, treeDirOf } from '../../scripts/binary-build-checks.mjs'
 
 const dirs: string[] = []
 afterEach(() => {
@@ -137,5 +137,23 @@ describe('assertNoBuildPaths', () => {
 
   it('ignores a root that is only a prefix of another directory name', () => {
     expect(() => assertNoBuildPaths(tmpFile(`${root}-other/file`), [root])).not.toThrow()
+  })
+})
+
+describe('copyInfraApp', () => {
+  // 2026-10-26: the npm package shipped infra/ so an npm install could deploy the
+  // AWS companion, but the compiled file's runtime tree had none, so every
+  // compiled install answered "This Walnut install has no CDK app".
+  it('puts the CDK app in the runtime tree as package.json files ships it, without built output', () => {
+    const repo = path.resolve(__dirname, '../..')
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'infra-tree-'))
+    dirs.push(root)
+    const entries = copyInfraApp(repo, root)
+    expect(entries).toContain('infra/bun.lock')
+    for (const rel of ['infra/cdk.json', 'infra/bun.lock', 'infra/package.json', 'infra/tsconfig.json', 'infra/bin/walnut-cloud.ts', 'infra/lib/walnut-cloud-stack.ts']) {
+      expect(fs.existsSync(path.join(root, rel)), rel).toBe(true)
+    }
+    const all = fs.readdirSync(path.join(root, 'infra'), { recursive: true }).map(String)
+    expect(all.filter((f) => /\.(js|d\.ts)$/.test(f) || f.startsWith('node_modules') || f.startsWith('cdk.out'))).toEqual([])
   })
 })

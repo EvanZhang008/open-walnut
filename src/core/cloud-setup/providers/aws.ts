@@ -15,6 +15,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { promisify } from 'node:util'
 import { WALNUT_HOME, WALNUT_INSTALL_DIR, WALNUT_PACKAGE_ROOT } from '../../../constants.js'
+import { bunCommand } from '../../../lib/runtime.js'
 import { log } from '../../../logging/index.js'
 import { sslipHostname } from '../user-data.js'
 import { envForProfile, isAwsRegion, resolveAwsTarget, verifyAwsAccount } from './aws-target.js'
@@ -49,20 +50,6 @@ const INFRA_STATE = new Set(['node_modules', 'cdk.out', 'cdk.context.json'])
  * is interrupted can never leave an older, matching stamp behind.
  */
 const LOCK_STAMP = path.join('node_modules', '.walnut-installed-lock')
-
-/**
- * The Bun that installs infra/ (infra/bun.lock pins the CDK). PATH first, then
- * where Bun's installer and Homebrew put it, because a server started from a
- * thin PATH (launchd) still has it there.
- */
-function bunCommand(): string {
-  const dirs = [...(process.env.PATH ?? '').split(path.delimiter).filter(Boolean), path.join(os.homedir(), '.bun', 'bin'), '/opt/homebrew/bin', '/usr/local/bin']
-  for (const dir of dirs) {
-    const candidate = path.join(dir, process.platform === 'win32' ? 'bun.exe' : 'bun')
-    if (fs.existsSync(candidate)) return candidate
-  }
-  return 'bun'
-}
 
 /**
  * Where the CDK app comes from. A source checkout deploys its own infra/ in
@@ -166,7 +153,10 @@ async function prepareInfraNow(onLog: (line: string) => void, signal?: AbortSign
     // them whatever NODE_ENV says (measured on bun 1.4.4: npm ci needed --include=dev).
     // No AWS call here (the install only fetches packages), so the ambient env is right.
     await fsp.rm(stamp, { force: true })
-    const install = await runStreaming(bunCommand(), ['install', '--frozen-lockfile'], cwd, onLog, INSTALL_TIMEOUT_MS, process.env, signal)
+    // The running bun, or the walnut file acting as bun (bunCommand), so a
+    // compiled install with no bun on PATH installs too.
+    const bun = bunCommand()
+    const install = await runStreaming(bun.command, ['install', '--frozen-lockfile'], cwd, onLog, INSTALL_TIMEOUT_MS, bun.env, signal)
     if (install.code !== 0) throw new Error(`bun install failed in ${cwd} (exit ${install.code})`)
     // Written only after a clean exit, into the directory that run created.
     if (lockHash) await fsp.writeFile(stamp, `${lockHash}\n`, 'utf-8')

@@ -28,8 +28,8 @@ let installActive = 0
 let installMaxActive = 0
 /** When each `bun install` exited (its close event), for ordering assertions. */
 const installClosedAt: number[] = []
-/** A spawn of the driver's dependency install (bunCommand() is a path to bun, or `bun`). */
-const isBunInstall = (c: { cmd: string; args: string[] }): boolean => path.basename(c.cmd) === 'bun' && c.args[0] === 'install'
+/** A spawn of the driver's dependency install: the running bun (bunCommand, src/lib/runtime.ts). */
+const isBunInstall = (c: { cmd: string; args: string[] }): boolean => c.cmd === process.execPath && c.args[0] === 'install'
 
 /** Every `aws` invocation detectCreds made, with the env it would have run under. */
 const execFileCalls: Array<{ cmd: string; args: string[]; env?: NodeJS.ProcessEnv }> = []

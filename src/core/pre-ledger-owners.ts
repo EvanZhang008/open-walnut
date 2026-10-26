@@ -20,9 +20,9 @@
  * import.
  */
 import fs from 'node:fs';
-import { createRequire } from 'node:module';
 import { Worker } from 'node:worker_threads';
 import { TASK_DB_PRE_V5_BACKUP_PATH } from './task-db.js';
+import { sqliteModuleFile } from '../lib/sqlite.js';
 import { log } from '../logging/index.js';
 
 /** source → remote id → the local task id that owned it in the snapshot. */
@@ -73,7 +73,8 @@ export function buildOwnerIndex(rows: Iterable<{ id: string; ext: string | null 
 
 const READ_WORKER_SOURCE = String.raw`
 const { parentPort, workerData } = require('node:worker_threads')
-const Database = require(workerData.driver)
+const driver = require(workerData.driver)
+const Database = typeof driver === 'function' ? driver : driver.default
 let db
 try {
   db = new Database(workerData.file, { readonly: true, fileMustExist: true })
@@ -87,10 +88,14 @@ try {
 `;
 
 const READ_TIMEOUT_MS = 30_000;
+// The worker shares no module with this thread, so it loads src/lib/sqlite.ts
+// itself (dist/lib/sqlite.js in a build): the same bun:sqlite as the server.
+const SQLITE_DRIVER_PATH = sqliteModuleFile();
 
 function readRows(file: string): Promise<Array<{ id: string; ext: string | null }>> {
   return new Promise((resolve, reject) => {
-    const driver = createRequire(import.meta.url).resolve('better-sqlite3');
+    const driver = SQLITE_DRIVER_PATH;
+    if (!driver) { reject(new Error('SQLite driver not found (dist/lib/sqlite.js is missing from this build)')); return; }
     const worker = new Worker(READ_WORKER_SOURCE, { eval: true, workerData: { file, driver } });
     const timer = setTimeout(() => {
       void worker.terminate();
