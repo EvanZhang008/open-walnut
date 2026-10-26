@@ -20,6 +20,8 @@ export interface PlusMenuAction {
   disabled?: boolean;
   /** 16px stroke=currentColor SVG; ChatInput draws a default gear when absent. */
   icon?: ReactNode;
+  /** A heading the row sits under, after the rows with none (Main's "Quick actions"). */
+  group?: string;
   onSelect: (ctx: PlusMenuActionContext) => void;
 }
 

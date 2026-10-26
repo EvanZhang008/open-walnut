@@ -10,6 +10,7 @@
  * Renders nothing at all for an empty list: a menu must not carry a stray
  * separator with no rows under it.
  */
+import { Fragment } from 'react';
 import type { PlusMenuAction } from './plus-menu-actions';
 
 interface PlusMenuActionRowsProps {
@@ -30,29 +31,45 @@ function GearIcon() {
 
 export function PlusMenuActionRows({ actions, onSelect }: PlusMenuActionRowsProps) {
   if (actions.length === 0) return null;
+  // The rows with no group first, under one separator; then each group under its own separator
+  // and heading, in the order the groups first appear.
+  const groups: { name?: string; rows: PlusMenuAction[] }[] = [{ rows: [] }];
+  for (const action of actions) {
+    let g = groups.find((x) => x.name === action.group);
+    if (!g) { g = { name: action.group, rows: [] }; groups.push(g); }
+    g.rows.push(action);
+  }
   return (
     <>
-      <div className="chat-plus-menu-divider" role="separator" />
-      {actions.map((action) => {
-        const disabled = !!action.disabled;
-        return (
-          <button
-            key={action.id}
-            className={`chat-plus-menu-item${disabled ? ' is-disabled' : ''}`}
-            // aria-disabled instead of `disabled`: the row stays hoverable so its
-            // title (the reason it is off) can still be read; the click is a no-op.
-            aria-disabled={disabled ? 'true' : undefined}
-            onClick={disabled ? undefined : () => onSelect(action)}
-            type="button"
-            role="menuitem"
-            title={action.title}
-            data-action-id={action.id}
-          >
-            {action.icon ?? <GearIcon />}
-            <span>{action.label}</span>
-          </button>
-        );
-      })}
+      {groups.filter((g) => g.rows.length > 0).map((g) => (
+        <Fragment key={g.name ?? ''}>
+          <div className="chat-plus-menu-divider" role="separator" />
+          {g.name && <div className="chat-plus-menu-label">{g.name}</div>}
+          {g.rows.map((action) => actionRow(action, onSelect))}
+        </Fragment>
+      ))}
     </>
+  );
+}
+
+// A plain function, not a component: the rows stay buttons in the returned tree.
+function actionRow(action: PlusMenuAction, onSelect: (action: PlusMenuAction) => void) {
+  const disabled = !!action.disabled;
+  return (
+    <button
+      key={action.id}
+      className={`chat-plus-menu-item${disabled ? ' is-disabled' : ''}`}
+      // aria-disabled instead of `disabled`: the row stays hoverable so its
+      // title (the reason it is off) can still be read; the click is a no-op.
+      aria-disabled={disabled ? 'true' : undefined}
+      onClick={disabled ? undefined : () => onSelect(action)}
+      type="button"
+      role="menuitem"
+      title={action.title}
+      data-action-id={action.id}
+    >
+      {action.icon ?? <GearIcon />}
+      <span>{action.label}</span>
+    </button>
   );
 }

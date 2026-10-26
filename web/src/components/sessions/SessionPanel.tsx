@@ -128,6 +128,7 @@ import { useTriggerPickerEntry } from './useTriggerPickerEntry';
 import { MacAwayComposer } from '@/components/layout/AwayLine';
 import { useMacSessionAway } from '@/hooks/useLeaderPresence';
 import type { PlusMenuAction } from '@/components/chat/plus-menu-actions';
+import { useMainQuickPlusActions } from '@/components/org/useMainQuickPlusActions';
 import { useTitleMetaFit, useToolRowFit } from './useSessionHeaderFit';
 import { HiddenPillRows, SessionHeaderMoreMenu } from './SessionHeaderMore';
 import '@/styles/session-header-fit.css';
@@ -1644,6 +1645,20 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
     return sendAnchored(message, images, false);
   }, [sendAnchored]);
 
+  // Main's quick actions ride its own composer's "+" (the user, 2026-10-26: not a bar of their own).
+  // Waiting = the badge's rule (deriveDisplayStatus: a live process holds the prompt); a stopped
+  // Main with a stale prompt on its record takes a typed message, so it takes these too.
+  const mainQuickActions = useMainQuickPlusActions(
+    onQuestionPage ? null : sessionTask,
+    (session?.process_status === 'running' || session?.process_status === 'idle') && !!pendingPermission,
+    handleSend,
+    macSessionAway ? 'Your Mac is away: sending waits until it is back.' : undefined,
+  );
+  const plusActions = useMemo(
+    () => (mainQuickActions.length ? [...(composerPlusActions ?? []), ...mainQuickActions] : composerPlusActions),
+    [composerPlusActions, mainQuickActions],
+  );
+
   const handleInterruptSend = useCallback((message: string, images?: ImageAttachment[]) => {
     return sendAnchored(message, images, true);
   }, [sendAnchored]);
@@ -2833,7 +2848,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
             onControlCommand={handleControlCommand}
             mentionCwd={session?.cwd}
             mentionHost={session?.host}
-            plusMenuActions={composerPlusActions}
+            plusMenuActions={plusActions}
             enableEntityMention
             sessionMentionSelfId={sessionId}
             // Per page: the root keeps `draft:session:<id>` (old drafts survive),

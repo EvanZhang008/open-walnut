@@ -8,7 +8,6 @@
  *   Team     its work by the user's status (Needs you / Working / Waiting), each with its line
  *   Chat     its own session (SessionPanel), or a way to start one
  *   composer under Board and Team: a line to its session, then Chat shows it
- *   Main's quick actions (MainQuickActions) under its Latest line
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Task } from '@open-walnut/core';
@@ -18,7 +17,6 @@ import { useSessionSend } from '@/hooks/useSessionSend';
 import { resolveTaskSessionId } from '@/utils/session-status';
 import { timeAgo } from '@/utils/time';
 import { OrgComposerBar } from './OrgComposerBar';
-import { MainQuickActions } from './MainQuickActions';
 import { recentMainStart } from './ask-main';
 import { OrgAvatar } from './OrgChannelList';
 import { useHasBoard } from './useBoardOwner';
@@ -211,9 +209,6 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabChange, onSel
         </div>
       </header>
       <div className="org-detail-latest" data-testid="org-detail-latest"><span className="org-muted">Latest</span> {row.latest}</div>
-      {row.kind === 'main' && (
-        <MainQuickActions variant="row" onSent={() => { setTab('chat'); setFocusChat(false); onTabChange(row.key, 'chat'); }} />
-      )}
       {/* On the chat, the contact's own prompt is in view already; its letter or choice is not, so it stays. */}
       {alertsShown.length > 0 && <AlertList alerts={alertsShown} onOpen={openAlert} compact={shown === 'chat'} />}
 

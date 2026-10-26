@@ -10,7 +10,7 @@ import {
 import { SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { ProjectSourceBadge } from './ProjectSourceBadge';
-import { ProjectKebabMenu } from './ProjectHeaderMenus';
+import { ProjectKebabMenu, type ProjectMenuExtra } from './ProjectHeaderMenus';
 import { ProjectSourcePicker } from './ProjectSourcePicker';
 
 export interface RailProjectItem {
@@ -37,8 +37,10 @@ interface TasksPageRailProps {
   onToggleFavorite: (project: string) => void;
   /** A rail-menu rename/delete landed — refresh the registry and fix selection. */
   onProjectChanged: (kind: 'rename' | 'delete', project: string, newName?: string) => void;
-  /** A control at the right end of the "Projects" heading (Main's Tidy up). */
+  /** Shown at the right end of the "Projects" heading (Main's "Asking Main…" / "Not sent"). */
   titleAction?: ReactNode;
+  /** Extra rows for each project's ⋮ menu (Ask Main about this project). */
+  projectMenuExtras?: (project: string) => ProjectMenuExtra[];
 }
 
 const LS_RAIL_WIDTH = 'walnut-tasks-rail-width';
@@ -56,12 +58,13 @@ function readRailWidth(): number {
 /** One draggable project row. Drag activates after 6px so plain clicks select.
  *  A <div role=button> (from useSortable's attributes), NOT a <button>: the row
  *  hosts the kebab <button>, and buttons cannot nest. */
-function SortableRailItem({ p, active, onSelect, onToggleFavorite, onProjectChanged }: {
+function SortableRailItem({ p, active, onSelect, onToggleFavorite, onProjectChanged, menuExtras }: {
   p: RailProjectItem;
   active: boolean;
   onSelect: () => void;
   onToggleFavorite: (project: string) => void;
   onProjectChanged: (kind: 'rename' | 'delete', project: string, newName?: string) => void;
+  menuExtras?: ProjectMenuExtra[];
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: `railproj:${p.name}`,
@@ -85,7 +88,7 @@ function SortableRailItem({ p, active, onSelect, onToggleFavorite, onProjectChan
       {p.favorite && <span className="tp-ri-fav">★</span>}
       <span className="tp-ri-count">{p.openCount}</span>
       {/* Hover ⋮ + row right-click, one menu definition (ProjectKebabMenu):
-          Favorite / Rename… / Delete…. */}
+          Favorite / Rename… / the page's extra rows / Delete…. */}
       <ProjectKebabMenu
         project={p.name}
         isFavorite={p.favorite}
@@ -94,6 +97,7 @@ function SortableRailItem({ p, active, onSelect, onToggleFavorite, onProjectChan
         rowSelector="[data-rail-project]"
         wrapClassName="tp-rail-kebab-wrap"
         btnClassName="tp-rail-kebab-btn"
+        {...(menuExtras?.length ? { extraItems: menuExtras } : {})}
       />
     </div>
   );
@@ -112,6 +116,7 @@ export function TasksPageRail({
   onToggleFavorite,
   onProjectChanged,
   titleAction,
+  projectMenuExtras,
 }: TasksPageRailProps) {
   const [creating, setCreating] = useState(false);
   const [draft, setDraft] = useState('');
@@ -217,6 +222,7 @@ export function TasksPageRail({
                 onSelect={() => onSelect(p.name)}
                 onToggleFavorite={onToggleFavorite}
                 onProjectChanged={onProjectChanged}
+                {...(projectMenuExtras ? { menuExtras: projectMenuExtras(p.name) } : {})}
               />
             ))}
           </SortableContext>

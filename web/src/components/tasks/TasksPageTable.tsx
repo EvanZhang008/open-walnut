@@ -11,7 +11,7 @@ import { useProjectRegistry } from '@/hooks/useProjectRegistry';
 import { TaskSessionPill } from './SessionPill';
 import { SyncIndicator, type TaskListProjection } from './TaskCard';
 import { TaskKebabMenu } from './TaskKebabMenu';
-import { ProjectKebabMenu, ProjectPlusMenu } from './ProjectHeaderMenus';
+import { ProjectKebabMenu, ProjectPlusMenu, type ProjectMenuExtra } from './ProjectHeaderMenus';
 import { openSessionOnHome, openDraftSessionOnHome } from '@/utils/open-session';
 import { sortTasks, groupTasksByProject, type TpSort, type TpSortKey } from './tasks-page-sort';
 import {
@@ -47,6 +47,8 @@ interface TasksPageTableProps {
   onToggleFavorite: (project: string) => void;
   /** A project menu rename/delete landed — host refreshes registry/selection. */
   onProjectChanged: (kind: 'rename' | 'delete', project: string, newName?: string) => void;
+  /** Extra rows for each project's ⋮ menu, the same as the rail's (Ask Main about this project). */
+  projectMenuExtras?: (project: string) => ProjectMenuExtra[];
   /** Column sort — null = server/manual order. Lifted so the toolbar can show it. */
   sort: TpSort | null;
   /** Optional columns to draw after Title (see tasks-table-columns.ts). Defaults to
@@ -362,6 +364,7 @@ export function TasksPageTable({
   favoriteByName,
   onToggleFavorite,
   onProjectChanged,
+  projectMenuExtras,
   sort,
   onSortChange,
   columns = TP_DEFAULT_COLUMNS,
@@ -648,6 +651,7 @@ export function TasksPageTable({
                 rowSelector="[data-group-project]"
                 wrapClassName="tp-group-kebab-wrap"
                 btnClassName="tp-rail-kebab-btn"
+                {...(projectMenuExtras ? { extraItems: projectMenuExtras(project) } : {})}
               />
             )}
           </div>

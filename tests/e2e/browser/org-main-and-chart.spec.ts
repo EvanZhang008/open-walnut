@@ -9,10 +9,11 @@
  *     the leads too
  *   - a send from Main's composer makes Main, shows its session, and keeps it off the board
  *     and off the Tasks page
- *   - Main's quick actions (web/src/components/org/MainQuickActions.tsx): Tidy projects / Put
- *     tasks in place / Triage under its Latest line; a failed send says so; a click sends Main
- *     the action and shows its chat, where Main answers; a Main waiting on the user's answer is
- *     not sent to; the Tasks page's Tidy up menu asks about the project it shows
+ *   - Main's quick actions (web/src/components/org/main-quick-plus-rows.ts, main-quick-menus.tsx):
+ *     no bar of their own; Tidy projects / Put tasks in place / Triage sit under "Quick actions"
+ *     in the "+" of Main's own composer, where a click sends Main the action (the draft in the
+ *     box stays) and Main answers; a project's ⋮ on the Tasks page asks about that project, and a
+ *     failed send says so; a Main waiting on the user's answer is not sent to
  * The fixture is shared, so this file makes its own projects and removes what it made, Main
  * included. Main is one per install, so every test that needs it lives here, in order (a
  * second file would run beside this one's removal of Main). The mock CLI answers each message
@@ -102,6 +103,26 @@ async function openOrgMain(page: Page): Promise<void> {
 /** Main's chat on the Org page, and the mock CLI's answers in it. */
 const mainChat = (page: Page) => page.locator('[data-testid="org-chat"] .session-panel')
 const replies = (chat: Locator) => chat.locator('.session-msg-assistant')
+
+/** Main's composer "+" in its chat on the Org page, open. */
+async function openMainPlus(page: Page): Promise<Locator> {
+  const chat = mainChat(page)
+  await expect(chat).toBeVisible({ timeout: 60_000 })
+  await chat.locator('.session-panel-input .chat-plus-btn').click()
+  const menu = chat.locator('.chat-plus-menu')
+  await expect(menu).toBeVisible()
+  return menu
+}
+const quickRows = (menu: Locator) => menu.locator('[data-action-id^="main-qa-"]')
+
+/** A project's ⋮ menu in the Tasks page rail, open. */
+async function openRailProjectMenu(page: Page, project: string): Promise<Locator> {
+  // Right-click opens the same menu as the hover ⋮ (rowSelector), and does not hang on a hover.
+  await page.locator(`[data-rail-project="${project}"]`).click({ button: 'right' })
+  const menu = page.locator('.task-kebab-menu')
+  await expect(menu).toBeVisible()
+  return menu
+}
 
 /** Click, then wait until Main's newest answer is a new one that says `expected`, and return
  *  it. Main's chat folds an earlier turn into "An update", so the number of answers on screen
@@ -275,64 +296,71 @@ test('a send from Main\'s composer makes Main, shows its session, and keeps Main
   await expect(page.locator(`.tp-row[data-task-id="${taskId}"]`)).toHaveCount(0)
 })
 
-test('Main\'s quick actions sit under its Latest line, and a failed send says so', async ({ page }) => {
+test('Main\'s quick actions sit in its composer\'s "+", not in a bar of their own', async ({ page }) => {
   await openOrgMain(page)
-  const row = page.getByTestId('main-quick-actions')
-  await expect(row).toContainText('Ask Main to')
-  await expect(row.getByRole('button')).toHaveText(['Tidy projects', 'Put tasks in place', 'Triage'])
-  await expect(row).toContainText('Nothing changes until you pick what to apply.')
-
-  await page.route('**/api/v1/org/main', (route) => route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ error: 'Main is down for a test' }) }))
-  await page.getByTestId('main-qa-projects').click()
-  await expect(page.getByTestId('main-qa-error')).toHaveText('Not sent. Try again.')
-  await expect(page.getByTestId('main-qa-error')).toHaveAttribute('title', /.+/)
-  await expect(page.getByTestId('main-qa-projects')).toBeEnabled()
-  // Nothing went, so the page stays where it was.
-  await expect(page).not.toHaveURL(/tab=chat/)
+  await expect(page.getByTestId('main-quick-actions')).toHaveCount(0)
+  await expect(page.getByTestId('org-detail').getByText('Ask Main to')).toHaveCount(0)
+  await page.getByTestId('org-tab-chat').click()
+  const menu = await openMainPlus(page)
+  await expect(menu.locator('.chat-plus-menu-label').filter({ hasText: 'Quick actions' })).toBeVisible()
+  await expect(quickRows(menu)).toHaveText(['Tidy projects', 'Put tasks in place', 'Triage'])
+  await expect(quickRows(menu).first()).toHaveAttribute('title', /Nothing changes until you pick what to apply\./)
+  await expect(quickRows(menu).first()).not.toHaveAttribute('aria-disabled', 'true')
+  await mainChat(page).locator('.session-panel-input .chat-plus-btn').click()
+  await expect(menu).toHaveCount(0)
 })
 
-test('a click sends Main the action, shows its chat, and Main answers; a second click reaches it again', async ({ page, browserName }) => {
+test('a quick action from Main\'s "+" sends it, keeps the draft, and Main answers; a second one reaches it again', async ({ page, browserName }) => {
   test.skip(browserName !== 'webkit', SENDS)
   await openOrgMain(page)
-  const first = await clickForReply(page, () => page.getByTestId('main-qa-projects').click(), 'Quick action: tidy my projects.')
+  await page.getByTestId('org-tab-chat').click()
+  const box = mainChat(page).locator('.session-panel-input .chat-input-textarea')
+  const draft = `half typed ${STAMP}`
+  await box.fill(draft)
+  const pick = (id: string) => async () => {
+    const menu = await openMainPlus(page)
+    await menu.locator(`[data-action-id="main-qa-${id}"]`).click()
+    await expect(menu).toHaveCount(0)
+  }
+  const first = await clickForReply(page, pick('projects'), 'Quick action: tidy my projects.')
   await expect(first).toContainText('I processed your message: Quick action: tidy my projects.')
   await expect(first).toContainText('read calls only')
-  await expect(page).toHaveURL(/tab=chat/)
-  // The row stays above the chat, so the next action is one click away.
-  await expect(page.getByTestId('main-quick-actions')).toBeVisible()
-  const second = await clickForReply(page, () => page.getByTestId('main-qa-triage').click(), 'Quick action: triage my open tasks.')
+  // The action went as its own message: what the user was typing is still in the box.
+  await expect(box).toHaveValue(draft)
+  const second = await clickForReply(page, pick('triage'), 'Quick action: triage my open tasks.')
   await expect(second).toContainText('I processed your message: Quick action: triage my open tasks.')
+  await expect(box).toHaveValue(draft)
+  await box.fill('')
 })
 
-test('the Tasks page asks Main about the project it shows', async ({ page, browserName }) => {
+test('the Tasks page asks Main about one project from that project\'s ⋮, and a failed send says so', async ({ page, browserName }) => {
   await isolateUiPrefs(page)
   await loadHome(page)
   await page.getByRole('link', { name: 'Tasks', exact: true }).click()
   await expect(page).toHaveURL(/\/tasks/)
-  const trigger = page.getByTestId('main-qa-trigger')
-  await expect(trigger).toHaveText('Tidy up')
-  // In the Projects heading, so the toolbar's title keeps its room.
-  await expect(page.locator('.tp-rail-title').getByTestId('main-qa-trigger')).toBeVisible()
-
-  // All tasks: all three actions.
-  await trigger.click()
-  const menu = page.getByTestId('main-qa-menu')
-  await expect(menu).toBeVisible()
-  await expect(menu.getByTestId('main-qa-projects')).toBeVisible()
-  await expect(menu).toContainText('Nothing changes until you pick what to apply.')
-  await page.keyboard.press('Escape')
-  await expect(menu).toHaveCount(0)
-  await expect(trigger).toBeFocused()
+  // Nothing of its own in the Projects heading.
+  await expect(page.getByTestId('main-qa-trigger')).toHaveCount(0)
+  await expect(page.locator('.tp-rail-title')).toHaveText('Projects')
 
   // One project: no merge.
-  await page.locator(`[data-rail-project="${QA_PROJECT}"]`).click()
-  await expect(page.locator('.tp-title')).toHaveText(QA_PROJECT)
-  await trigger.click()
-  await expect(menu.getByTestId('main-qa-projects')).toHaveCount(0)
-  await expect(menu.getByTestId('main-qa-place')).toBeVisible()
+  let menu = await openRailProjectMenu(page, QA_PROJECT)
+  await expect(menu.locator('[data-menu-item="main-qa-projects"]')).toHaveCount(0)
+  await expect(menu.locator('[data-menu-item^="main-qa-"]')).toHaveText(['Ask Main: Put tasks in place', 'Ask Main: Triage'])
+  await expect(menu.locator('[data-menu-item="main-qa-place"]')).toHaveAttribute('title', /Nothing changes until you pick what to apply\./)
+
+  await page.route('**/api/v1/org/main', (route) => route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ error: 'Main is down for a test' }) }))
+  await menu.locator('[data-menu-item="main-qa-place"]').click()
+  await expect(menu).toHaveCount(0)
+  const error = page.locator('.tp-rail-title').getByTestId('main-qa-error')
+  await expect(error).toHaveText('Not sent. Try again.')
+  await expect(error).toHaveAttribute('title', /.+/)
+  // Nothing went, so the page stays where it was.
+  await expect(page).toHaveURL(/\/tasks/)
+  await page.unroute('**/api/v1/org/main')
   if (browserName !== 'webkit') return // SENDS
 
-  await menu.getByTestId('main-qa-place').click()
+  menu = await openRailProjectMenu(page, QA_PROJECT)
+  await menu.locator('[data-menu-item="main-qa-place"]').click()
   await expect(page).toHaveURL(/\/org\?node=main&tab=chat/)
   await expect(page.getByTestId('org-detail-title')).toHaveText('Main')
   const chat = mainChat(page)
@@ -351,12 +379,27 @@ test('a Main waiting on the user\'s answer is not sent to: its chat opens on the
     { timeout: 90_000 }).toBe('AskUserQuestion')
 
   try {
+    // In Main's chat the question is in view, and the "+" rows are off until it is answered.
     await openOrgMain(page)
-    await page.getByTestId('main-qa-triage').click()
-    await expect(page.getByTestId('main-qa-held')).toContainText('Main is waiting on your answer')
-    await expect(page.getByTestId('org-tab-chat')).toHaveAttribute('aria-selected', 'true')
+    await page.getByTestId('org-tab-chat').click()
     await expect(mainChat(page).getByText('Which validation target?').first()).toBeVisible({ timeout: 30_000 })
-    // The question still waits: the click did not answer or refuse it.
+    const menu = await openMainPlus(page)
+    const triage = menu.locator('[data-action-id="main-qa-triage"]')
+    await expect(triage).toHaveAttribute('aria-disabled', 'true', { timeout: 30_000 })
+    await expect(triage).toHaveAttribute('title', /Main is waiting on your answer/)
+    // An off row takes no click (Playwright waits on aria-disabled, so force it).
+    await triage.click({ force: true })
+    await expect(menu).toBeVisible()
+    await mainChat(page).locator('.session-panel-input .chat-plus-btn').click()
+
+    // From the Tasks page: nothing goes, and Main's chat opens on the question.
+    await page.getByRole('link', { name: 'Tasks', exact: true }).click()
+    await expect(page).toHaveURL(/\/tasks/)
+    const rail = await openRailProjectMenu(page, QA_PROJECT)
+    await rail.locator('[data-menu-item="main-qa-triage"]').click()
+    await expect(page).toHaveURL(/\/org\?node=main&tab=chat/)
+    await expect(mainChat(page).getByText('Which validation target?').first()).toBeVisible({ timeout: 30_000 })
+    // The question still waits: neither click answered or refused it.
     expect(((await (await request.get(`/api/sessions/${sid}`)).json()).session?.pendingPermission?.toolName ?? '')).toBe('AskUserQuestion')
   } finally {
     // Leave Main free for the rest of the fixture: a person's message refuses the question.

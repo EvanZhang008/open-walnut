@@ -2,7 +2,7 @@
  * ProjectHeaderMenus — the two hover actions on a project group header:
  *
  *   ProjectPlusMenu  ("+")  → new task / new task with session / add separator
- *   ProjectKebabMenu ("⋮")  → Details / Favorite / Rename… / Delete…
+ *   ProjectKebabMenu ("⋮")  → Details / Favorite / Rename… / the host's extra rows / Delete…
  *
  * The "+" adapts to how many things its host can actually offer (R9):
  *
@@ -88,6 +88,15 @@ const ICON_MENU_SEPARATOR = (
 );
 // Same glyph the folder ROWS draw, at this menu's 14px size (Icons.tsx owns the path).
 const ICON_MENU_FOLDER = ICONS.folderOutlineIcon(14);
+
+/** A row a host adds to a project's ⋮ menu (the Tasks page: Ask Main about this project). */
+export interface ProjectMenuExtra {
+  key: string;
+  label: string;
+  title?: string;
+  icon?: ReactNode;
+  run: () => void;
+}
 
 export interface PlusAction {
   key: string;
@@ -224,7 +233,7 @@ export function TierPlusButton({ tier, label, onAddSession, onAddTask, onAddSepa
 
 // ── "⋮" — project management ────────────────────────────────────────────────
 
-export function ProjectKebabMenu({ project, isFavorite, onToggleFavorite, onViewDetails, onChanged, rowSelector, wrapClassName, btnClassName }: {
+export function ProjectKebabMenu({ project, isFavorite, onToggleFavorite, onViewDetails, onChanged, rowSelector, wrapClassName, btnClassName, extraItems }: {
   project: string;
   isFavorite?: boolean;
   onToggleFavorite?: (project: string) => void;
@@ -241,6 +250,8 @@ export function ProjectKebabMenu({ project, isFavorite, onToggleFavorite, onView
    *  can restyle the trigger without a second menu definition. */
   wrapClassName?: string;
   btnClassName?: string;
+  /** Rows after Rename…, under their own divider. */
+  extraItems?: ProjectMenuExtra[];
 }) {
   const { open, setOpen, btnRef, menuRef, menuPos, closeMenu, openAtCursor, setCursorAnchor } = useHeaderMenu();
   // Rename/Delete are SHARED with the project right-click menu (see
@@ -319,6 +330,19 @@ export function ProjectKebabMenu({ project, isFavorite, onToggleFavorite, onView
             <span className="task-kebab-icon">✎</span>
             <span>Rename…</span>
           </button>
+          {!!extraItems?.length && <div className="task-kebab-divider" />}
+          {extraItems?.map((x) => (
+            <button
+              key={x.key}
+              className="task-kebab-item"
+              data-menu-item={x.key}
+              title={x.title}
+              onClick={(e) => { e.stopPropagation(); closeMenu(); x.run(); }}
+            >
+              <span className="task-kebab-icon">{x.icon}</span>
+              <span>{x.label}</span>
+            </button>
+          ))}
           <div className="task-kebab-divider" />
           <button
             className="task-kebab-item task-kebab-item-danger"
