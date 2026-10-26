@@ -47,6 +47,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { EXEC_GUARD_VARS, guardedPath } from '../setup/exec-guard-core.js'
 import { daemonLockPort } from '../../src/providers/daemon-instance-lock.js'
+import { accountInfo } from '../../src/lib/account.js'
 
 /**
  * Set for every child unless the test names its own value: the paths that reach out of
@@ -72,7 +73,7 @@ const QUIET: Record<string, string> = {
 /** Runner variables a child keeps (the exec guard's own wiring, the runtime's location). */
 const KEPT = [...Object.values(EXEC_GUARD_VARS), 'BUN_INSTALL', 'LANG', 'LC_ALL'] as const
 
-/** Preloaded into every node child (NODE_OPTIONS) and the bun daemon twin (`bun --preload`). */
+/** Preloaded into every child: node through NODE_OPTIONS, bun through BUN_OPTIONS (and `bun --preload` for the daemon twin). */
 export const LIVE_CONNECT_GUARD = path.resolve(import.meta.dirname, 'live-connect-guard.cjs')
 
 /** The parent of a daemon a test starts itself, inside the same walls (its watchdog asks it). */
@@ -195,11 +196,20 @@ export function liveEnv(dirs: { home: string; tmp: string; bins: readonly string
     BUN_RUNTIME_TRANSPILER_CACHE_PATH: path.join(tmp, 'bun-cache'),
     NODE_ENV: 'production',
     NODE_OPTIONS: `--require ${JSON.stringify(LIVE_CONNECT_GUARD)}`,
+    // Bun reads no NODE_OPTIONS: its preload comes from BUN_OPTIONS, which splits on spaces
+    // and keeps no quotes (a quoted path loads nothing, silently).
+    BUN_OPTIONS: `--preload ${bunOptionPath(LIVE_CONNECT_GUARD)}`,
     WALNUT_TEST_DENY_PORTS: livePorts().join(','),
     WALNUT_TEST_CONNECT_GUARD_LOG: dirs.guardLog,
     ...QUIET,
     ...vars,
   }
+}
+
+/** A path BUN_OPTIONS can carry: one with no white space, or the guard would not load. */
+function bunOptionPath(p: string): string {
+  if (/\s/.test(p)) throw new Error(`BUN_OPTIONS cannot carry a path with a space, so the connect guard would not load: ${p}`)
+  return p
 }
 
 const sb = (s: string): string => JSON.stringify(s)
@@ -264,7 +274,8 @@ function depRoots(repo: string): string[] {
  */
 export function walled(cmd: string, args: readonly string[], input: { base: string; repo: string }): [string, string[]] {
   if (process.platform !== 'darwin') return [cmd, [...args]]
-  const realHome = os.userInfo().homedir
+  // The account's own home, never $HOME: bun's os.userInfo() answers the faked one.
+  const realHome = accountInfo().homedir
   const tmp = os.tmpdir()
   const writable = [
     process.env[EXEC_GUARD_VARS.log],

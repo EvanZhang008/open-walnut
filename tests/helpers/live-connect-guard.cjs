@@ -1,6 +1,6 @@
 /**
- * Preloaded into every node and bun process a live e2e test starts (NODE_OPTIONS=--require, and
- * `bun --preload` for the bun daemon twin; tests/helpers/live-isolation.ts).
+ * Preloaded into every node and bun process a live e2e test starts (NODE_OPTIONS=--require for
+ * node, BUN_OPTIONS=--preload for bun, which reads no NODE_OPTIONS; tests/helpers/live-isolation.ts).
  *
  * Refuses a connect to a loopback port in WALNUT_TEST_DENY_PORTS (the user's real Walnut, its
  * daemon and instance lock, a local model proxy, every service that was listening before the test

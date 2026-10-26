@@ -24,7 +24,7 @@ describe('liveEnv', () => {
     try {
       Object.assign(process.env, {
         OPEN_WALNUT_API_URL: 'http://127.0.0.1:3456', WALNUT_SERVER_URL: 'http://127.0.0.1:3456', SSH_AUTH_SOCK: '/tmp/agent.sock',
-        AWS_PROFILE: 'p', ANTHROPIC_API_KEY: 'k', CLAUDE_CONFIG_DIR: '/x', NODE_OPTIONS: '--require /x.js', WALNUT_SESSION_ID: 's', VITEST: 'true',
+        AWS_PROFILE: 'p', ANTHROPIC_API_KEY: 'k', CLAUDE_CONFIG_DIR: '/x', NODE_OPTIONS: '--require /x.js', BUN_OPTIONS: '--preload /x.js', WALNUT_SESSION_ID: 's', VITEST: 'true',
       })
       const home = path.join(dir, 'home')
       const env = liveEnv({ home, tmp: path.join(dir, 'tmp'), bins: [path.join(home, 'bin')], guardLog: path.join(dir, 'guard.log') }, { OPEN_WALNUT_HOME: path.join(dir, 'data') })
@@ -34,8 +34,9 @@ describe('liveEnv', () => {
       // The paths out stay shut where no walls stand: before listen an op client would fall back to :3456.
       expect(env).toMatchObject({ OPEN_WALNUT_API_URL: 'http://127.0.0.1:9', WALNUT_STT_AUTO_SETUP: '0', WALNUT_HOST_AUTOFIX: '0', WALNUT_NO_UPDATE_CHECK: '1' })
       expect(liveEnv({ home, tmp: path.join(dir, 'tmp'), bins: [], guardLog: path.join(dir, 'guard.log') }, { OPEN_WALNUT_API_URL: 'http://127.0.0.1:1234' }).OPEN_WALNUT_API_URL).toBe('http://127.0.0.1:1234')
-      // The only NODE_OPTIONS is the connect guard, with the real Walnut's ports.
+      // The only NODE_OPTIONS and BUN_OPTIONS are the connect guard, with the real Walnut's ports.
       expect(env.NODE_OPTIONS).toBe(`--require ${JSON.stringify(LIVE_CONNECT_GUARD)}`)
+      expect(env.BUN_OPTIONS).toBe(`--preload ${LIVE_CONNECT_GUARD}`)
       expect(env.WALNUT_TEST_DENY_PORTS!.split(',')).toContain('3456')
       expect(env.WALNUT_TEST_CONNECT_GUARD_LOG).toBe(path.join(dir, 'guard.log'))
       expect(env).toMatchObject({ HOME: home, USERPROFILE: home, TMPDIR: path.join(dir, 'tmp'), OPEN_WALNUT_HOME: path.join(dir, 'data'), GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: path.join(home, '.gitconfig'), NODE_ENV: 'production' })
@@ -48,7 +49,7 @@ describe('liveEnv', () => {
         ...Object.values(EXEC_GUARD_VARS), 'BUN_INSTALL', 'LANG', 'LC_ALL',
         'OPEN_WALNUT_API_URL', 'WALNUT_STT_AUTO_SETUP', 'WALNUT_SEARCH_V2_SEMANTIC', 'WALNUT_PRICE_REFRESH', 'WALNUT_NO_UPDATE_CHECK', 'WALNUT_HOST_WARMUP',
         'WALNUT_HOST_AUTOFIX', 'WALNUT_TEST_SERVER', 'WALNUT_STALL_RECORDER', 'DISABLE_AUTOUPDATER', 'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC',
-        'NODE_OPTIONS', 'WALNUT_TEST_DENY_PORTS', 'WALNUT_TEST_CONNECT_GUARD_LOG'])
+        'NODE_OPTIONS', 'BUN_OPTIONS', 'WALNUT_TEST_DENY_PORTS', 'WALNUT_TEST_CONNECT_GUARD_LOG'])
       expect(Object.keys(env).filter((k) => !allowed.has(k))).toEqual([])
     } finally {
       for (const k of Object.keys(process.env)) if (!(k in saved)) delete process.env[k]

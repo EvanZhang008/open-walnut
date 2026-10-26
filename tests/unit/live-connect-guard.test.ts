@@ -9,7 +9,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { LIVE_CONNECT_GUARD } from '../helpers/live-isolation.js'
+import { LIVE_CONNECT_GUARD, liveEnv } from '../helpers/live-isolation.js'
 
 const made: string[] = []
 afterEach(() => { for (const d of made.splice(0)) fs.rmSync(d, { recursive: true, force: true }) })
@@ -59,6 +59,15 @@ describe('the live connect guard', () => {
     const lines = fs.readFileSync(log, 'utf8').split('\n').filter(Boolean)
     expect(lines.length).toBe(4)
     for (const l of lines) expect(l).toContain(`:${dp}\t`)
+  })
+
+  it('is loaded by a child started with the live environment, bun included (BUN_OPTIONS)', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'live-guard-env-'))
+    made.push(dir)
+    const env = liveEnv({ home: path.join(dir, 'home'), tmp: path.join(dir, 'tmp'), bins: [], guardLog: path.join(dir, 'guard.log') }, {})
+    const r = spawnSync(process.execPath, ['-e', 'console.log(require("node:net").Socket.prototype.connect.name)'], { cwd: dir, env, encoding: 'utf8', timeout: 20_000 })
+    expect(r.status, r.stderr).toBe(0)
+    expect(r.stdout.trim()).toBe('guardedConnect')
   })
 
   it('stops a process that got the guard without its ports', () => {

@@ -3,9 +3,10 @@
  * real Walnut server as a direct child inside the walls, and the cleanup that ends with every
  * exit proven or the base kept.
  *
- * A server runs as `node --import tsx <boot script>`, never under the tsx CLI: that wrapper
- * answers a TERM by relaying it and, 60 ms later, SIGKILLs a child that did not acknowledge it
- * (a stopped or busy server), which is exactly the force-kill a live test may not do.
+ * A server runs as `bun <boot script>`, the test's own bun as the direct child: bun runs
+ * TypeScript as it is, so no wrapper stands between the test and the server (the tsx CLI
+ * answered a TERM by relaying it and, 60 ms later, SIGKILLed a child that did not acknowledge
+ * it, which is exactly the force-kill a live test may not do).
  */
 import { spawn, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
@@ -91,7 +92,7 @@ export async function bootLiveServer(procs: LiveProcs, s: LiveServer, input: {
 }): Promise<void> {
   await fsp.writeFile(input.file, input.script)
   s.server = s.daemon = null
-  const [cmd, args] = walled(process.execPath, ['--import', 'tsx', input.file], { base: input.base, repo: input.repo })
+  const [cmd, args] = walled(process.execPath, [input.file], { base: input.base, repo: input.repo })
   const proc = spawn(cmd, args, { cwd: input.repo, env: input.env, stdio: ['ignore', 'pipe', 'pipe'] })
   s.proc = proc
   const server = procs.child(`${s.name} server`, proc)
