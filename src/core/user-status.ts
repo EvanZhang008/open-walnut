@@ -79,6 +79,10 @@ export interface UserStatusInput {
   waitUntil?: string | null;
   /** The task has a leader (a parent task). */
   hasLeader?: boolean;
+  /** Its open subtasks: their news (a completion, an error) wakes it. */
+  openWorkers?: number;
+  /** Main (org_role 'main'): the user's next message or a team's news wakes it, never a timer. */
+  isMain?: boolean;
   /** When the phase last moved (a turn's end, a park). A report older than this was written
    *  before the latest turn and only lends its words, never the state. */
   phaseChangedAt?: string | null;
@@ -224,6 +228,13 @@ function derive(input: UserStatusInput, nowMs: number): UserStatus {
 
   if (input.phase === 'WAITING' && !report) {
     return strip({ state: 'waiting', kind: 'other', waitingOn: 'A message (parked with no clock or watch)', ...w });
+  }
+
+  // Something outside will wake it: Main hears the user and its teams, a lead hears its workers.
+  if (input.isMain) return strip({ state: 'waiting', kind: 'you', waitingOn: 'Your next message, or news from its teams', ...w });
+  if ((input.openWorkers ?? 0) > 0) {
+    const n = input.openWorkers!;
+    return strip({ state: 'waiting', kind: 'task', waitingOn: n === 1 ? 'Its worker (1 open)' : `Its workers (${n} open)`, ...w });
   }
 
   // Nothing will wake it. Stuck when it meant to carry on itself; otherwise its turn simply ended.

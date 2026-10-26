@@ -61,6 +61,8 @@ export interface StatusFacts {
   titles: Map<string, string>;
   /** Task id -> the ids of the sessions linked to it (its slot, its history, records naming it). */
   sessionsOf: Map<string, string[]>;
+  /** Task id -> how many of its direct subtasks are open (filled by syncUserStatuses). */
+  openWorkers?: Map<string, number>;
 }
 
 const errText = (err: unknown) => (err instanceof Error ? err.message : String(err));
@@ -263,6 +265,8 @@ export function statusInputOf(task: Task, facts: StatusFacts): UserStatusInput {
     schedules: facts.schedules.get(task.id) ?? [],
     waitUntil: task.wait_until ?? null,
     hasLeader: !!task.parent_task_id,
+    openWorkers: facts.openWorkers?.get(task.id) ?? 0,
+    isMain: task.org_role === 'main',
     phaseChangedAt: task.phase_changed_at ?? null,
     report: task.status_report ?? null,
   };
@@ -284,6 +288,11 @@ export async function syncUserStatuses(ids: ReadonlySet<string> | null, nowMs = 
   const facts = await readStatusFacts(targets, everything.map((t) => t.id));
   // Name the task a reply is awaited from even when it is not in this pass.
   for (const t of everything) if (!facts.titles.has(t.id)) facts.titles.set(t.id, t.title);
+  facts.openWorkers = new Map();
+  for (const t of everything) {
+    if (!t.parent_task_id || t.phase === 'COMPLETE' || t.status === 'done') continue;
+    facts.openWorkers.set(t.parent_task_id, (facts.openWorkers.get(t.parent_task_id) ?? 0) + 1);
+  }
   let changed = 0;
   for (const task of targets) {
     const next = deriveUserStatus(statusInputOf(task, facts), nowMs);

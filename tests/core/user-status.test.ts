@@ -138,6 +138,16 @@ describe('review cases (2026-10-26)', () => {
       .toMatchObject({ state: 'waiting', kind: 'time', waitingOn: 'Its next scheduled run (Daily digest)', until: next })
   })
 
+  it('an idle lead waits on its open workers, and Main on the user and its teams, never stuck', () => {
+    const idle = { phase: 'IN_PROGRESS', hasSession: true, processStatus: 'idle' }
+    expect(deriveUserStatus(idle, NOW)).toMatchObject({ state: 'waiting', kind: 'stuck' })
+    expect(deriveUserStatus({ ...idle, openWorkers: 3 }, NOW)).toMatchObject({ state: 'waiting', kind: 'task', waitingOn: 'Its workers (3 open)' })
+    expect(deriveUserStatus({ ...idle, openWorkers: 1 }, NOW).waitingOn).toBe('Its worker (1 open)')
+    expect(deriveUserStatus({ ...idle, isMain: true, openWorkers: 4 }, NOW)).toMatchObject({ state: 'waiting', kind: 'you', waitingOn: 'Your next message, or news from its teams' })
+    // A prompt still needs the user first.
+    expect(deriveUserStatus({ ...idle, isMain: true, pendingPermissionTool: 'Bash' }, NOW).state).toBe('needs')
+  })
+
   it('a task worked by hand (in progress, no session) is working', () => {
     expect(deriveUserStatus({ phase: 'IN_PROGRESS', hasSession: false }, NOW).state).toBe('working')
     expect(deriveUserStatus({ phase: 'TODO', hasSession: false }, NOW)).toMatchObject({ state: 'waiting', kind: 'not-started' })
