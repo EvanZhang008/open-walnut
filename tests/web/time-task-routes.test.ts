@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { formatLane, rawSubpath, timePageFromRoute, timePaths } from '../../examples/plugins/walnut-time/src/web/task-routes';
+import { formatLane, formatLaneCompact, rawSubpath, timePageFromRoute, timePaths } from '../../examples/plugins/walnut-time/src/web/task-routes';
 
 const BASE = '/apps/walnut-time~main';
 
@@ -64,5 +64,21 @@ describe('formatLane', () => {
     expect(formatLane(0)).toBe('0m');
     expect(formatLane(-5)).toBe('0m');
     expect(formatLane(25 * 60_000)).not.toBe('0m');
+  });
+});
+
+describe('formatLaneCompact', () => {
+  const m = 60_000;
+  const h = 60 * m;
+  it('keeps one whole unit, rounded down, the way the header pill reads', () => {
+    expect(formatLaneCompact(0)).toBe('0m');
+    expect(formatLaneCompact(-1)).toBe('0m');
+    expect(formatLaneCompact(20_000)).toBe('<1m');
+    expect(formatLaneCompact(59 * m + 59_000)).toBe('59m');
+    expect(formatLaneCompact(2 * h + 46 * m)).toBe('2h');
+    expect(formatLaneCompact(8 * h + 26 * m)).toBe('8h');
+    expect(formatLaneCompact(99 * h + 59 * m)).toBe('99h');
+    expect(formatLaneCompact(100 * h)).toBe('4d');
+    expect(formatLaneCompact(30 * 24 * h)).toBe('30d');
   });
 });

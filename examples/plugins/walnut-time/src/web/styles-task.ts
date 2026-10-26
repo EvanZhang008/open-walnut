@@ -6,7 +6,7 @@
  * from the page. Every class is `wt-` prefixed, every colour a theme token.
  */
 export const TASK_CSS = `
-.wt-fact, .wt-chip {
+.wt-fact, .wt-chip, .wt-pill {
   --wt-human: var(--accent);
   --wt-agent: #af52de;
 }
@@ -56,8 +56,71 @@ export const TASK_CSS = `
 }
 .wt-chip:hover { background: var(--accent-subtle, color-mix(in srgb, var(--accent) 12%, transparent)); }
 .wt-chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-.wt-chip-clock { flex-shrink: 0; opacity: 0.85; }
 .wt-chip .wt-fact-v { font-weight: 500; }
+
+/* The pill: icon + one whole unit per lane at rest; hover or keyboard focus grows the
+   exact numbers out of it as a layer over the row (the row's other chips never move). */
+.wt-pill { position: relative; display: inline-flex; }
+/* A pill at rest too: the same tint the grown layer wears, so the two read as one thing. */
+.wt-pill .wt-chip { gap: 2px; background: color-mix(in srgb, var(--accent) 7%, transparent); }
+.wt-pill .wt-chip:hover { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.wt-pill-icon { flex-shrink: 0; }
+.wt-pill-icon.is-human { color: var(--wt-human); }
+.wt-pill-icon.is-agent { color: var(--wt-agent); margin-left: 5px; }
+.wt-sr {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+.wt-pill-full {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  z-index: 40;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  min-width: 100%;
+  max-width: 100%;
+  overflow: hidden;
+  padding: 1px 7px;
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 1.6;
+  white-space: nowrap;
+  color: var(--fg-muted);
+  background: color-mix(in srgb, var(--accent) 7%, var(--bg, #fff));
+  border-radius: 999px;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 22%, transparent), 0 4px 14px rgba(0, 0, 0, 0.14);
+  cursor: pointer;
+  font-variant-numeric: tabular-nums;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(-50%) scale(0.96);
+  transform-origin: left center;
+  pointer-events: none;
+  /* Closing: shrink back into the pill, then hide. */
+  transition: max-width 0.2s cubic-bezier(0.4, 0, 0.6, 1), opacity 0.14s ease 0.06s, transform 0.2s ease, visibility 0s linear 0.2s;
+}
+.wt-pill[data-align="end"] .wt-pill-full { left: auto; right: 0; transform-origin: right center; justify-content: flex-end; }
+.wt-pill-full-inner { display: inline-flex; align-items: center; gap: 3px; flex-shrink: 0; }
+.wt-pill-full .wt-pill-icon.is-agent { margin-left: 2px; }
+.wt-pill-full .wt-fact-sep { margin: 0 2px; }
+.wt-pill-name { color: var(--fg-secondary, var(--fg-muted)); }
+.wt-pill:hover .wt-pill-full,
+.wt-pill:has(.wt-chip:focus-visible) .wt-pill-full {
+  max-width: 420px;
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(-50%) scale(1);
+  pointer-events: auto;
+  /* Opening: a short beat first, so a pointer passing over the row does not flash it. */
+  transition: max-width 0.28s cubic-bezier(0.2, 0.9, 0.25, 1) 0.07s, opacity 0.12s ease 0.07s, transform 0.28s cubic-bezier(0.2, 0.9, 0.25, 1) 0.07s, visibility 0s linear 0.07s;
+}
+@media (prefers-reduced-motion: reduce) {
+  .wt-pill-full,
+  .wt-pill:hover .wt-pill-full,
+  .wt-pill:has(.wt-chip:focus-visible) .wt-pill-full { transition: none; transform: translateY(-50%); }
+}
 
 /* ── The task page ── */
 

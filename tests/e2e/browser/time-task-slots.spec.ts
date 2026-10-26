@@ -258,8 +258,10 @@ test('the menu row pins the time to every session header, kept across a reload',
   await expect(menu).toBeVisible()
   const chip = item.getByTestId('time-session-chip')
   await expect(chip).toBeVisible()
-  await expect(chip).toHaveText('50m \u00b7 3h 02m')
-  await expect(chip).toHaveAttribute('title', /Time on this session\nYou: 50m total/)
+  // The pill: an icon and one whole unit per lane ("You" and "Agent" are there for a reader).
+  await expect(chip).toHaveText('You 50m \u00b7 Agent 3h')
+  await expect(chip).toHaveAttribute('aria-label', /Time on this session\. You: 50m total, .*Agent: 3h 02m total/)
+  await expect(chip).not.toHaveAttribute('title', /./)
   expect(await page.evaluate((key) => localStorage.getItem(key), PINS_KEY)).toBe(JSON.stringify([SLOT_KEY]))
   await page.keyboard.press('Escape')
   await expect(page.locator('.task-kebab-menu:visible')).toHaveCount(0)
@@ -282,7 +284,7 @@ test('the menu row pins the time to every session header, kept across a reload',
   // Kept across a reload (the init script only seeds the first load of this tab).
   await page.reload()
   await expect(column(page, SID_A).locator(`[data-header-id="slot:${SLOT_KEY}"]`).getByTestId('time-session-chip'))
-    .toHaveText('50m \u00b7 3h 02m', { timeout: 30_000 })
+    .toHaveText('You 50m \u00b7 Agent 3h', { timeout: 30_000 })
 
   // A narrow column: the pinned chip is the first to move into "...", where its row
   // is named by the slot's title and says what the chip said.
@@ -292,7 +294,8 @@ test('the menu row pins the time to every session header, kept across a reload',
   await narrow.locator('.session-panel-header').getByRole('button', { name: /^More \(/ }).click()
   const more = page.locator('.session-header-more-menu:visible').first()
   const moreRow = more.getByRole('menuitem').filter({ hasText: 'Time' })
-  await expect(moreRow).toContainText('50m \u00b7 3h 02m')
+  // The row gives the exact numbers the pill rounds (its data-header-value).
+  await expect(moreRow).toContainText('You 50m \u00b7 Agent 3h 02m')
   const moreBox = await more.boundingBox()
   await page.screenshot({ path: `${SHOTS}/session-header-more.png`, clip: { x: moreBox!.x - 4, y: moreBox!.y - 4, width: moreBox!.width + 8, height: moreBox!.height + 8 } })
   await moreRow.click()
@@ -336,6 +339,101 @@ test('nothing recorded means no Time fact and no stray label', async ({ page }) 
   await expect(menu.locator('.task-kebab-fact')).toBeHidden()
   expect(await menu.locator('.task-kebab-tier-label').allTextContents()).not.toContain('Time')
   await expect(menu.getByTestId('session-fact-pin')).toHaveCount(0)
+  expect(errors).toEqual([])
+})
+
+test('the header pill grows the exact numbers out of itself on hover and focus, moving nothing', async ({ page, browserName }) => {
+  const errors = watchErrors(page)
+  await loadHome(page, [SLOT_KEY])
+  const col = await openColumnFromDetails(page, SID_A)
+  const header = col.locator('.session-panel-header')
+  const chip = col.getByTestId('time-session-chip')
+  const full = col.getByTestId('time-session-chip-full')
+  await expect(chip).toBeVisible({ timeout: 30_000 })
+  await expect(cell(chip, 'you-compact')).toHaveText('50m')
+  await expect(cell(chip, 'agent-compact')).toHaveText('3h')
+  await expect(chip.locator('.wt-pill-icon.is-human')).toHaveCount(1)
+  await expect(chip.locator('.wt-pill-icon.is-agent')).toHaveCount(1)
+  await expect(full).toBeHidden()
+
+  const items = () => header.locator('[data-header-id]').evaluateAll((els) => els
+    .filter((el) => (el as HTMLElement).dataset.hidden !== 'true' && el.getBoundingClientRect().width > 0)
+    .map((el) => { const r = el.getBoundingClientRect(); return `${(el as HTMLElement).dataset.headerId}:${Math.round(r.x)},${Math.round(r.y)},${Math.round(r.width)}` }))
+  const settled = () => full.evaluate((el) => Promise.all(el.getAnimations().map((a) => a.finished)).then(() => undefined))
+  const grown = async () => {
+    await expect(full).toBeVisible()
+    await settled()
+    // Grown all the way: the layer shows its whole line, inside the panel.
+    const fit = await full.evaluate((el) => {
+      const inner = el.querySelector('.wt-pill-full-inner')!.getBoundingClientRect()
+      const box = el.getBoundingClientRect()
+      const panel = el.closest('.session-panel')!.getBoundingClientRect()
+      return { whole: box.width >= inner.width - 0.5, inside: box.left >= panel.left - 0.5 && box.right <= panel.right + 0.5, opacity: getComputedStyle(el).opacity }
+    })
+    expect(fit).toEqual({ whole: true, inside: true, opacity: '1' })
+  }
+  // The column may still be settling from its open: read the row once it holds still.
+  let last = ''
+  await expect.poll(async () => { const now = JSON.stringify(await items()); const same = now === last; last = now; return same }, { intervals: [250], timeout: 15_000 }).toBe(true)
+  const before = await items()
+
+  // ── Hover: the exact numbers and their names, over the row; nothing on it moves ──
+  await chip.hover()
+  await grown()
+  await expect(full.locator('.wt-pill-name')).toHaveText(['You', 'Agent'])
+  await expect(full.locator('.wt-fact-v.is-human')).toHaveText('50m')
+  await expect(full.locator('.wt-fact-v.is-agent')).toHaveText('3h 02m')
+  expect(await items()).toEqual(before)
+  const fb = await full.boundingBox()
+  await page.screenshot({ path: `${SHOTS}/session-pill-open.png`, clip: { x: fb!.x - 60, y: fb!.y - 14, width: fb!.width + 120, height: fb!.height + 28 } })
+  // Away: back into the pill.
+  await page.mouse.move(640, 840)
+  await expect(full).toBeHidden()
+  const cb = await chip.boundingBox()
+  await page.screenshot({ path: `${SHOTS}/session-pill-rest.png`, clip: { x: cb!.x - 60, y: cb!.y - 14, width: cb!.width + 120, height: cb!.height + 28 } })
+
+  // ── Keyboard: focus from the keyboard opens it too, and Enter still leads to the page ──
+  // WebKit's Tab reaches buttons only with Option held, as Safari's own default.
+  const tab = browserName === 'webkit' ? 'Alt+Tab' : 'Tab'
+  await chip.focus()
+  await page.keyboard.press(`Shift+${tab}`)
+  await page.keyboard.press(tab)
+  await expect(chip).toBeFocused()
+  await grown()
+  await page.keyboard.press('Enter')
+  await expect(page).toHaveURL(new RegExp(`/task/${TASK}\\?session=${SID_A}$`))
+  await page.getByTestId('time-task-back').click()
+  await expect(column(page, SID_A)).toBeVisible({ timeout: 30_000 })
+
+  // ── A click on the grown layer is the pill's click ──
+  // The pill as a pointer meets it: the pointer may still rest where the page left it, over the grown layer.
+  await column(page, SID_A).locator('.wt-pill').hover()
+  await grown()
+  await column(page, SID_A).getByTestId('time-session-chip-full').click()
+  await expect(page).toHaveURL(new RegExp(`/task/${TASK}\\?session=${SID_A}$`))
+  await page.getByTestId('time-task-back').click()
+  await expect(column(page, SID_A)).toBeVisible({ timeout: 30_000 })
+
+  // ── Reduced motion: it opens and closes at once ──
+  await page.emulateMedia({ reducedMotion: 'reduce' })
+  const durations = await column(page, SID_A).getByTestId('time-session-chip-full').evaluate((el) => getComputedStyle(el).transitionDuration)
+  expect(durations.split(',').every((d) => parseFloat(d) === 0)).toBe(true)
+  await page.emulateMedia({ reducedMotion: 'no-preference' })
+
+  // ── Narrower columns, while the pill is still on the row: it grows toward the room it has ──
+  let checked = 0
+  for (const width of [640, 560, 500, 460, 420]) {
+    await clampColumn(page, width)
+    const narrow = column(page, SID_A)
+    await page.waitForTimeout(250)
+    if (await narrow.locator(`[data-header-id="slot:${SLOT_KEY}"]`).getAttribute('data-hidden') === 'true') break
+    await narrow.locator('.wt-pill').hover()
+    await grown()
+    checked++
+    await page.mouse.move(640, 840)
+  }
+  expect(checked).toBeGreaterThan(0)
+  await clampColumn(page, null)
   expect(errors).toEqual([])
 })
 

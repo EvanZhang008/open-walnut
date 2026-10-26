@@ -54,8 +54,10 @@ function stateOf(row: HTMLElement | null, id: string): ItemState {
   const label = button.getAttribute('aria-label') ?? '';
   let value = '';
   if (button.classList.contains('session-action-chip-active')) value = 'Open';
-  // A pinned plugin fact's row shows what the chip says ("25m · 1h 12m"), so hiding it costs nothing.
-  else if (id.startsWith(SLOT_ID_PREFIX)) value = (button.textContent ?? '').replace(/\s+/g, ' ').trim();
+  // A pinned plugin fact's row shows what the chip says, so hiding it costs nothing: its
+  // `data-header-value` when it gives one (the time pill's exact "You 2h 46m · Agent 8h 26m"
+  // behind its "2h" and "8h"), else its text.
+  else if (id.startsWith(SLOT_ID_PREFIX)) value = (button.dataset.headerValue || button.textContent || '').replace(/\s+/g, ' ').trim();
   return { value, label, disabled };
 }
 
