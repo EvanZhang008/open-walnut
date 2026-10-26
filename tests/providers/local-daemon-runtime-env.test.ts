@@ -12,7 +12,7 @@ import { createMockConstants } from '../helpers/mock-constants.js'
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-local-daemon-runtime-env'))
 
 import { LocalDaemon } from '../../src/providers/local-daemon.js'
-import { setSingleFile } from '../../src/lib/single-file.js'
+import { fileIdentity, setSingleFile } from '../../src/lib/single-file.js'
 
 const KEY = '__WALNUT_SINGLE_FILE__'
 const saved = process.env.WALNUT_RUNTIME_DIR
@@ -42,5 +42,19 @@ describe('the local daemon env and the compiled file runtime tree', () => {
     delete process.env.WALNUT_RUNTIME_DIR
     const env = await new LocalDaemon({ daemonDir: '/tmp/walnut-runtime-env-c' }).buildSpawnEnv()
     expect(env.WALNUT_RUNTIME_DIR).toBeUndefined()
+  })
+})
+
+describe('the daemon version a compiled server expects', () => {
+  const expected = (d: LocalDaemon) => (d as unknown as { readBinaryVersion(p: string): string | null }).readBinaryVersion(process.execPath)
+
+  it('is the version compiled into the file while the file on disk is the one it started from', () => {
+    setSingleFile({ root: '/rt', daemonVersion: 'walnut-daemon-x', modules: {}, execId: fileIdentity(process.execPath) })
+    expect(expected(new LocalDaemon({ daemonDir: '/tmp/walnut-runtime-env-d' }))).toBe('walnut-daemon-x')
+  })
+
+  it('is none once an update replaced the file: the daemon that runs is kept, not restarted into the same new file', () => {
+    setSingleFile({ root: '/rt', daemonVersion: 'walnut-daemon-x', modules: {}, execId: '0:0' })
+    expect(expected(new LocalDaemon({ daemonDir: '/tmp/walnut-runtime-env-e' }))).toBeNull()
   })
 })

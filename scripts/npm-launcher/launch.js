@@ -24,14 +24,35 @@ const tty = require('tty')
 const SCOPE = '@open-walnut'
 const INSTALL_SH = 'curl -fsSL https://github.com/EvanZhang008/open-walnut/releases/latest/download/install.sh | sh'
 
-/** Is this Linux on musl (Alpine)? Node's report names glibc's version on a glibc system (Node 12+). */
+/**
+ * What `ldd --version` says the C library is: 'musl', 'glibc', or null when it
+ * says neither (no ldd). The same reading as install.sh's libc_of.
+ */
+function lddLibc(run) {
+  if (run === undefined) run = () => childProcess.spawnSync('ldd', ['--version'], { encoding: 'utf8', timeout: 3000 })
+  try {
+    const r = run()
+    const out = `${(r && r.stdout) || ''}${(r && r.stderr) || ''}`
+    if (/musl/i.test(out)) return 'musl'
+    if (/GNU|GLIBC|glibc/.test(out)) return 'glibc'
+  } catch (err) { /* no ldd */ }
+  return null
+}
+
+/**
+ * Is this Linux on musl (Alpine)? Node's report names glibc's version on a glibc
+ * system (Node 12.17+); before that, ldd says which; only then musl's loader
+ * decides, since a glibc system may carry it too (Debian's musl package).
+ */
 function isMusl() {
   if (process.platform !== 'linux') return false
   try {
     const report = process.report && typeof process.report.getReport === 'function' ? process.report.getReport() : null
     const parsed = typeof report === 'string' ? JSON.parse(report) : report
     if (parsed && parsed.header) return !parsed.header.glibcVersionRuntime
-  } catch (err) { /* fall back to the loader's name */ }
+  } catch (err) { /* fall back to ldd */ }
+  const libc = lddLibc()
+  if (libc) return libc === 'musl'
   try {
     return fs.readdirSync('/lib').some((name) => name.indexOf('ld-musl-') === 0)
   } catch (err) {
@@ -255,4 +276,4 @@ function run(found, packageRoot) {
   start(false)
 }
 
-module.exports = { SCOPE, INSTALL_SH, isMusl, candidateTargets, hasMuslCxxRuntime, findFile, unreadableLine, installWritable, fetchWritable, archivePrefixOf, reinstallCommand, ownVersion, startDir, launch }
+module.exports = { SCOPE, INSTALL_SH, isMusl, lddLibc, candidateTargets, hasMuslCxxRuntime, findFile, unreadableLine, installWritable, fetchWritable, archivePrefixOf, reinstallCommand, ownVersion, startDir, launch }

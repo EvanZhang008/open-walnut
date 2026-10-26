@@ -24,7 +24,7 @@ import { guardedPath } from '../setup/exec-guard.js'
 
 const ROOT = path.resolve(__dirname, '../..')
 // The launcher is CommonJS (it runs on old Node): loaded the way Node loads it.
-const { candidateTargets, hasMuslCxxRuntime } = createRequire(import.meta.url)('../../scripts/npm-launcher/launch.js')
+const { candidateTargets, hasMuslCxxRuntime, lddLibc } = createRequire(import.meta.url)('../../scripts/npm-launcher/launch.js')
 const VERSION = '0.7.0'
 const HEAD = 'a'.repeat(40)
 let tmp = ''
@@ -241,6 +241,23 @@ describe('the launcher', () => {
     expect(candidateTargets('linux', 'arm64', true)).toEqual(['linux-arm64-musl', 'linux-arm64'])
     expect(candidateTargets('win32', 'x64', false)).toEqual([])
     expect(candidateTargets('linux', 'ia32', false)).toEqual([])
+  })
+
+  it('builds every x64 file on bun\'s baseline (no AVX2: old Intel Macs, Rosetta before macOS 15)', () => {
+    const src = fs.readFileSync(path.join(ROOT, 'scripts', 'build-binary.mjs'), 'utf8')
+    const block = /export const TARGETS = \{([^}]*)\}/.exec(src)?.[1] ?? ''
+    const pairs = [...block.matchAll(/'([\w-]+)': '([\w-]+)'/g)].map((m) => [m[1]!, m[2]!])
+    expect(pairs.length).toBe(6)
+    for (const [target, bunTarget] of pairs) if (target.includes('x64')) expect(bunTarget, target).toMatch(/-baseline$/)
+  })
+
+  it('reads the C library from ldd before the loader (a glibc box may carry musl\'s loader)', () => {
+    expect(lddLibc(() => ({ stdout: 'ldd (Ubuntu GLIBC 2.31-0ubuntu9) 2.31\n', stderr: '' }))).toBe('glibc')
+    expect(lddLibc(() => ({ stdout: 'ldd (GNU libc) 2.17\n', stderr: '' }))).toBe('glibc')
+    // musl's ldd prints its banner on stderr and exits 1.
+    expect(lddLibc(() => ({ stdout: '', stderr: 'musl libc (x86_64)\nVersion 1.2.4\n', status: 1 }))).toBe('musl')
+    expect(lddLibc(() => ({ stdout: '', stderr: '', error: new Error('spawnSync ldd ENOENT') }))).toBeNull()
+    expect(lddLibc(() => { throw new Error('no ldd') })).toBeNull()
   })
 
   it('on musl, knows whether the C++ runtime the musl build links is there (to name it when the file cannot start)', () => {

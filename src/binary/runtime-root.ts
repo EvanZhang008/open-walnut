@@ -21,8 +21,9 @@ import { pathToFileURL } from 'node:url'
 import { ASSETS_ARCHIVE, ASSETS_ID, DAEMON_VERSION } from 'walnut-binary:assets'
 import { BUNDLED_MODULES } from './bundled-modules.js'
 import { ensureRuntime } from './runtime-tree.js'
-import { setSingleFile } from '../lib/single-file.js'
+import { fileIdentity, setSingleFile } from '../lib/single-file.js'
 
 export const runtimeRoot = ensureRuntime(ASSETS_ARCHIVE, ASSETS_ID)
 ;(globalThis as Record<string, unknown>).__WALNUT_BUNDLE_URL__ = pathToFileURL(path.join(runtimeRoot, 'dist', 'cli.js')).href
-setSingleFile({ root: runtimeRoot, daemonVersion: DAEMON_VERSION, modules: BUNDLED_MODULES })
+// The file as it is now, before an update can replace it (execFileReplaced).
+setSingleFile({ root: runtimeRoot, daemonVersion: DAEMON_VERSION, modules: BUNDLED_MODULES, execId: fileIdentity(process.execPath) })

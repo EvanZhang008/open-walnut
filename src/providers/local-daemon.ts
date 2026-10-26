@@ -48,7 +48,7 @@ import { classifySessionHostStart } from './session-host-core.js'
 import { QOS_CLAMP_ENV, withUtilityQosClamp } from '../lib/background-qos.js'
 import { isHostReplica } from '../core/server-role.js'
 import { registryNeedsFoldPrewarm, runFoldPrewarm } from './fold-prewarm.js'
-import { singleFile } from '../lib/single-file.js'
+import { execFileReplaced, singleFile } from '../lib/single-file.js'
 
 // Env-aware default so the singleton (exported below) isolates a demo server's
 // daemon when WALNUT_DAEMON_DIR is set. Tests pass `daemonDir` explicitly and are
@@ -1181,7 +1181,14 @@ export class LocalDaemon {
   }
 
   private readBinaryVersion(binaryPath: string): string | null {
-    if (isCompiledSelf(binaryPath)) return singleFile()!.daemonVersion
+    if (isCompiledSelf(binaryPath)) {
+      // An npm update replaced the file this server runs from: a daemon started now runs
+      // the new version, so insisting on this build's would restart the daemon on every
+      // check, each restart spawning the same new file. Keep the daemon that runs; the
+      // next start of the server is the new version too.
+      if (execFileReplaced()) return null
+      return singleFile()!.daemonVersion
+    }
     try {
       return fs.readFileSync(`${binaryPath}.version`, 'utf-8').trim()
     } catch {

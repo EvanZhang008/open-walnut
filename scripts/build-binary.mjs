@@ -45,10 +45,14 @@ const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const { packArchive } = await import(path.join(repo, 'src/binary/asset-archive.ts'))
 const { MODULE_PLACEHOLDER, BUNDLED_MODULES } = await import(path.join(repo, 'src/binary/bundled-modules.ts'))
 
-/** Release target to bun compile target. Linux x64 uses the baseline build (no AVX2). */
+/**
+ * Release target to bun compile target. Every x64 target uses the baseline build
+ * (no AVX2): bun's default x64 build needs AVX2, which a pre-2013 Intel Mac and
+ * Rosetta before macOS 15 (an x64 Node on Apple silicon) do not have.
+ */
 export const TARGETS = {
   'darwin-arm64': 'bun-darwin-arm64',
-  'darwin-x64': 'bun-darwin-x64',
+  'darwin-x64': 'bun-darwin-x64-baseline',
   'linux-x64': 'bun-linux-x64-baseline',
   'linux-arm64': 'bun-linux-arm64',
   'linux-x64-musl': 'bun-linux-x64-musl-baseline',

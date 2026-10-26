@@ -364,10 +364,13 @@ self_target() {
     arch=arm64
   fi
   if [[ "$os" == linux ]]; then
+    # ldd first, as install.sh's libc_of: a glibc box may carry musl's loader too (Debian's musl package).
     out="$(ldd --version 2>&1 || true)"
-    for loader in /lib/ld-musl-*; do
-      if [[ -e "$loader" ]]; then out="musl"; fi
-    done
+    if [[ "$out" != *musl* && "$out" != *GNU* && "$out" != *GLIBC* && "$out" != *glibc* ]]; then
+      for loader in /lib/ld-musl-*; do
+        if [[ -e "$loader" ]]; then out="musl"; fi
+      done
+    fi
     if [[ "$out" == *musl* ]]; then
       printf '%s-%s-musl' "$os" "$arch"
       return 0

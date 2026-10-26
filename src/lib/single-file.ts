@@ -10,6 +10,7 @@
  *
  * Every other build (tsup, running from source) leaves this unset.
  */
+import fs from 'node:fs'
 import path from 'node:path'
 
 export type ModuleLoader = () => Promise<Record<string, unknown>>
@@ -21,6 +22,8 @@ export interface SingleFile {
   daemonVersion: string
   /** Dist files carried as bundled modules, by path relative to `root` (src/binary/bundled-modules.ts). */
   modules: Readonly<Record<string, ModuleLoader>>
+  /** `dev:ino` of the file at process.execPath when this process started (fileIdentity). */
+  execId?: string | null
 }
 
 const GLOBAL_KEY = '__WALNUT_SINGLE_FILE__'
@@ -28,6 +31,26 @@ const GLOBAL_KEY = '__WALNUT_SINGLE_FILE__'
 /** The compiled file's runtime facts, or null when this process is not the compiled file. */
 export function singleFile(): SingleFile | null {
   return ((globalThis as Record<string, unknown>)[GLOBAL_KEY] as SingleFile | undefined) ?? null
+}
+
+/** `dev:ino` of a file, or null when it cannot be read. */
+export function fileIdentity(file: string): string | null {
+  try {
+    const st = fs.statSync(file)
+    return `${st.dev}:${st.ino}`
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Has the file this compiled process started from been replaced on disk? An npm
+ * update writes the new version in place of the platform package's `walnut`, so
+ * a child started from process.execPath after that runs the NEW version.
+ */
+export function execFileReplaced(info: SingleFile | null = singleFile(), file: string = process.execPath): boolean {
+  if (!info?.execId) return false
+  return fileIdentity(file) !== info.execId
 }
 
 /** Called once by the compiled entry, before any other module is evaluated. */
