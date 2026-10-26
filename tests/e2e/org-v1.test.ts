@@ -391,7 +391,8 @@ describe('/api/v1/org', () => {
     type Tree = { tree: { projects: { project: string; vp?: string; contactId?: string; lead?: { id: string } }[] } }
     const node = async (name: string) => (await api<Tree>('GET', '/org')).json.tree.projects.find((p) => p.project === name)
 
-    const leadSid = '44444444-5555-4666-8777-888888888888'
+    // Its own id: a session belongs to one task, and the digest tests above use 4444… for theirs.
+    const leadSid = '66666666-7777-4888-8999-aaaaaaaaaaaa'
     const handoverRows = async () => (await getQueue(leadSid)).filter((m) => m.message.includes('outcome="handover"'))
 
     it('puts a project under another VP: no task moves, the workers follow, the old lead is asked to hand over', async () => {
@@ -460,7 +461,9 @@ describe('/api/v1/org', () => {
         expect(res.json.handover).toEqual([seedsLead.id])
         const [row] = await handoverRows()
         expect(row).toBeDefined()
-        // A turn that ends with the notice still queued (unread) closes nothing.
+        // A turn that ends with the notice still queued (unread) closes nothing. As the session
+        // runtime does at a turn end: the record, then the status event.
+        await updateSessionRecord(leadSid, { process_status: 'idle' })
         bus.emit(EventNames.SESSION_STATUS_CHANGED, { sessionId: leadSid, process_status: 'idle' }, ['*'])
         await new Promise((r) => setTimeout(r, 300))
         expect((await getTask(seedsLead.id)).phase).not.toBe('COMPLETE')
@@ -494,8 +497,8 @@ describe('/api/v1/org', () => {
 
     it('a lead may file work in every project it leads', async () => {
       const seedsLead = (await listTasks()).find((t) => t.org_role === 'lead' && t.project === 'Seeds')!
-      const sid = '55555555-6666-4777-8888-999999999999'
-      await createSessionRecord(sid, seedsLead.id, 'Seeds', WALNUT_HOME)
+      // The Seeds lead talks in its own session (a task has exactly one).
+      const sid = leadSid
       const create = (project: string) => fetch(`http://localhost:${port}/api/v1/tasks`, {
         method: 'POST',
         headers: { 'content-type': 'application/json', 'x-walnut-caller-sid': sid },
