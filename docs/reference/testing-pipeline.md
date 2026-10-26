@@ -68,7 +68,9 @@ bun run test:focus -- -t 'reorder'                   # one test by name
 | `package.json` / lockfile | quick + slow + frontend |
 | `docs/**`, `site/**`, `ios-native/**`, `infra/**`, `.github/**`, assets | none |
 
-`bun run test:changed` narrows the quick tier to the diff's module graph; `bun run test:pre-commit` runs the affected tiers in full. An unrecognised path always falls back to running the quick tier rather than skipping.
+`bun run test:changed` narrows every vitest tier it runs, slow and e2e included, and `bun run test:pre-commit` runs the affected tiers in full. Narrowing runs `vitest related` on the changed files plus every test-side file that names one of them by path (`scripts/test-changed-refs.mjs`), so vitest keeps a tier's tests whose import graph reaches either. The second half matters because many tests reach code without importing it: the twins suites start `src/providers/daemon-standalone.ts` as a child process, a ratchet reads a file as text, a test runs `scripts/dev-prod.sh`. For a change to the daemon alone, the import graph picks none of the 92 slow files, and the path scan adds the 21 that run it. Each tier prints how many files it selected before it runs (`scripts/vitest-selection-reporter.mjs`). A tier that selected none prints that nothing ran, and is never reported as passed. `bun scripts/test-changed.mjs --plan` prints what would run and runs nothing. An unrecognised path always falls back to running the quick tier rather than skipping.
+
+Narrowing alone does not make `test:changed` short for most `src/` changes: nearly every module sits in the import component the server pulls in, so a change to `src/core/types.ts` or `src/web/server.ts` still reaches about 1,360 of the 2,315 quick files, 66 of the 92 slow-list files and 183 of the 192 e2e files (static estimate, 2026-10-24). What it saves is the tiers a change cannot reach at all, such as a test-only change, a script, or the daemon. The quick tier's own size is set by the measured split below.
 
 ## L4 — CI (free)
 
