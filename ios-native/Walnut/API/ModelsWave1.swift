@@ -346,9 +346,12 @@ struct TaskDetail: Codable {
     var createdAt: String? = nil
     var updatedAt: String? = nil
     var completedAt: String? = nil
+    /// The link tags as the console draws them (additive, server-computed: a name each, its
+    /// kind, whether the file is gone). An older server sends none, and the pills read the tags.
+    var links: [LinkTagView]? = nil
 
     private enum CodingKeys: String, CodingKey {
-        case id, title, status, phase, priority, project, unread
+        case id, title, status, phase, priority, project, unread, links
         case createdAt = "created_at"
         case updatedAt = "updated_at"
         case completedAt = "completed_at"
@@ -362,6 +365,21 @@ struct TaskDetail: Codable {
         case dependents, children, parent
         case sessionIds = "session_ids"
     }
+}
+
+/// One link tag as the server names it (`src/core/link-tags.ts` LinkTagView): "Fix plan r5b",
+/// kind "plan", the doc icon, the whole path or URL.
+struct LinkTagView: Codable, Equatable {
+    let tag: String
+    let name: String
+    let kind: String
+    /// doc | review | ticket | thread | link
+    let group: String?
+    let target: String
+    /// The target is a file path, else a URL.
+    let file: Bool?
+    /// The file is no longer there (absent when nobody knows).
+    let gone: Bool?
 }
 
 /// Envelope for the endpoints answering { task: <full row> }.

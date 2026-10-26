@@ -1,6 +1,7 @@
 import React from 'react';
-import { linkPathOfTag, linkTagKey, linkTagLabel, linkTagShowsId, linkUrlOfTag } from '../../../../src/core/link-tags';
+import { linkKindGroup, linkPathOfTag, linkTagKey, linkTagName, linkUrlOfTag } from '../../../../src/core/link-tags';
 import { useLinkHoverCard } from './LinkHoverCard';
+import { LinkKindIcon } from './LinkKindIcon';
 
 interface TagChipProps {
   tag: string;
@@ -21,6 +22,12 @@ interface TagChipProps {
   /** Opens a file-path link tag (`html:/tmp/run/result.html`) in the session's Files view.
    *  Without it a path tag is a plain pill whose tooltip names the path. */
   onOpenPath?: (path: string) => void;
+  /** A link tag's name among its task's links (linkTagNames: distinct on one task); without it
+   *  the pill reads the name the tag makes on its own. */
+  linkName?: string;
+  /** The file this link tag points at no longer exists: the pill is struck through and opens
+   *  nothing; its hover card says so. */
+  gone?: boolean;
 }
 
 function hostOf(href: string): string {
@@ -35,24 +42,27 @@ const keepToLink = (e: React.SyntheticEvent) => { e.stopPropagation(); };
  * Reusable tag pill component.
  * Parses "key:value" format for visual prefix distinction.
  */
-export function TagChip({ tag, inline, onRemove, onClick, active, hiddenOnTasks, whole, valueOnly, href, onOpenPath }: TagChipProps) {
+export function TagChip({ tag, inline, onRemove, onClick, active, hiddenOnTasks, whole, valueOnly, href, onOpenPath, linkName, gone }: TagChipProps) {
   const colonIdx = tag.indexOf(':');
   const hasPrefix = colonIdx > 0 && colonIdx < tag.length - 1;
-  // A link tag reads as its kind (`report`), plus a short id for the kinds told apart by one
-  // (`pr:app#12`), whatever a value-only rule says; the tooltip has the URL or path.
+  // A link tag reads as its name (`Fix plan r5b`, a ticket's id) after an icon for its kind,
+  // whatever a value-only rule says; the hover card has the kind and the URL or path.
   const ownUrl = linkUrlOfTag(tag);
   const ownPath = ownUrl ? undefined : linkPathOfTag(tag);
   const isLink = !!(ownUrl || ownPath);
-  const showsId = isLink && linkTagShowsId(tag);
-  const prefix = showsId ? linkTagKey(tag)! : hasPrefix && !valueOnly && !isLink ? tag.slice(0, colonIdx) : null;
-  const value = isLink ? (showsId ? linkTagLabel(tag)! : linkTagKey(tag)!) : hasPrefix ? tag.slice(colonIdx + 1) : tag;
-  const openPath = ownPath && onOpenPath && !onClick ? () => onOpenPath(ownPath) : undefined;
-  // A link tag names its target in a hover card (its pill shows only the kind); the tag editor,
-  // where the pill has a remove button, keeps the plain tooltip.
+  const kind = isLink ? linkTagKey(tag)! : undefined;
+  const prefix = hasPrefix && !valueOnly && !isLink ? tag.slice(0, colonIdx) : null;
+  const value = isLink ? (linkName ?? linkTagName(tag)!) : hasPrefix ? tag.slice(colonIdx + 1) : tag;
+  const isGone = !!(gone && ownPath);
+  const openPath = ownPath && onOpenPath && !onClick && !isGone ? () => onOpenPath(ownPath) : undefined;
+  // A link tag names its target in a hover card; the tag editor, where the pill has a remove
+  // button, keeps the plain tooltip.
   const hover = useLinkHoverCard(isLink && !onRemove ? {
-    kind: linkTagKey(tag)!,
+    kind: kind!.replace(/-/g, ' '),
+    name: value,
     target: (ownUrl ?? ownPath)!,
-    opens: ownUrl ? `Opens in a new tab \u00b7 ${hostOf(ownUrl)}` : openPath ? 'Opens in Files' : 'A file on this task',
+    opens: ownUrl ? `Opens in a new tab \u00b7 ${hostOf(ownUrl)}` : isGone ? 'This file no longer exists' : openPath ? 'Opens in Files' : 'A file on this task',
+    gone: isGone,
   } : undefined);
   const hoverRef = (el: HTMLElement | null) => { hover.anchorRef.current = el; };
 
@@ -65,10 +75,14 @@ export function TagChip({ tag, inline, onRemove, onClick, active, hiddenOnTasks,
     whole && 'tag-chip-whole',
     valueOnly && hasPrefix && !isLink && 'tag-chip-value-only',
     (href || openPath) && 'tag-chip-linked',
+    isLink && 'tag-chip-link-tag',
+    isGone && 'tag-chip-gone',
   ].filter(Boolean).join(' ');
-  const title = hiddenOnTasks ? `${tag} (not shown on tasks; Settings, Tasks, Tags)` : tag;
+  const title = hiddenOnTasks ? `${tag} (not shown on tasks; Settings, Tasks, Tags)`
+    : isLink ? `${value}, ${kind!.replace(/-/g, ' ')}${isGone ? ', file no longer exists' : ''}: ${ownUrl ?? ownPath}` : tag;
   const text = (
     <>
+      {isLink && <LinkKindIcon group={linkKindGroup(kind!)} />}
       {prefix && <span className="tag-chip-prefix">{prefix}:</span>}
       <span className="tag-chip-value">{value}</span>
     </>

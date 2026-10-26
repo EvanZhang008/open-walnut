@@ -70,7 +70,7 @@ final class TaskDetailController {
             resolvedDependencies: d.resolvedDependencies,
             dependents: d.dependents, children: d.children, parent: d.parent,
             sessionIds: d.sessionIds, dueDate: d.dueDate, startDate: d.startDate, endDate: d.endDate, unread: d.unread,
-            createdAt: d.createdAt, updatedAt: d.updatedAt, completedAt: d.completedAt
+            createdAt: d.createdAt, updatedAt: d.updatedAt, completedAt: d.completedAt, links: d.links
         )
     }
 

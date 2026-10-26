@@ -1,6 +1,6 @@
 /**
- * A task's own tags on the Homepage: pills on the row and on a pinned card (two, then
- * "+N") and in the detail pane (its tag editor). An id tag like `ticket:V1234567890` reads whole when
+ * A task's own tags on the Homepage: pills on the row and on a pinned card (one, its
+ * "+N" inside it) and in the detail pane (its tag editor). An id tag like `ticket:V1234567890` reads whole when
  * the row has room, machine tags ("walnut:…") and hidden namespaces never show as a
  * tag, the pills never starve the title or push the row's controls out, and a tag
  * added elsewhere appears live.
@@ -118,22 +118,23 @@ test('tags show as pills on the row and in the detail pane, and follow live edit
   await expect(row(page, ticket).locator('[data-testid="imported-pill"]')).toBeVisible()
   await expect(row(page, ticket).locator('.tag-chip', { hasText: 'walnut' })).toHaveCount(0)
 
-  // Two chips on a row, then "+N" naming the rest.
-  const manyPills = row(page, many).locator('[data-testid="task-tag-pills"] > .tag-chip')
-  await expect(manyPills).toHaveCount(3)
+  // One chip on a row, its "+N" inside it naming the rest (2026-10-23, the user: "tag max
+  // should be one", "+3 should be just in the tag itself").
+  const manyPills = row(page, many).locator('[data-testid="task-tag-pills"] .tag-pill-group > .tag-chip')
+  await expect(manyPills).toHaveCount(2)
   await expect(manyPills.nth(0)).toHaveText('oncall')
-  await expect(manyPills.nth(1)).toHaveText('ticket:P100000001')
-  await expect(manyPills.nth(2)).toHaveText('+1')
-  await expect(manyPills.nth(2)).toHaveAttribute('title', 'marina')
+  await expect(manyPills.nth(1)).toHaveText('+2')
+  await expect(manyPills.nth(1)).toHaveAttribute('title', 'ticket:P100000001, marina')
   await expect(row(page, plain).locator('[data-testid="task-tag-pills"]')).toHaveCount(0)
 
   // The ticket and its severity both read; the hidden full id never shows, not even in "+N".
-  const sevPills = row(page, sev).locator('[data-testid="task-tag-pills"] > .tag-chip')
-  await expect(sevPills).toHaveText(['ticket:P523407866', 'sev:2'])
+  const sevPills = row(page, sev).locator('[data-testid="task-tag-pills"] .tag-chip')
+  await expect(sevPills).toHaveText(['ticket:P523407866', '+1'])
+  await expect(sevPills.nth(1)).toHaveAttribute('title', 'sev:2')
   // The same on a pinned card in Focus.
   const card = page.locator(`.todo-focus-card[data-task-id="${pinnedSev}"]`)
   await expect(card).toBeVisible({ timeout: 15_000 })
-  await expect(card.locator('[data-testid="task-tag-pills"] > .tag-chip')).toHaveText(['ticket:P523407867', 'sev:2'])
+  await expect(card.locator('[data-testid="task-tag-pills"] .tag-chip')).toHaveText(['ticket:P523407867', '+1'])
   const cardBox = await card.evaluate((el) => {
     const r = el.getBoundingClientRect()
     const title = el.querySelector('.todo-pinned-title')!.getBoundingClientRect()
@@ -173,14 +174,12 @@ test('tags show as pills on the row and in the detail pane, and follow live edit
   })).toBe(true)
   await expectTitleFirst(page, tagged)
   await row(page, longTitle).screenshot({ path: `${SHOT_DIR}/${browserName}-squeezed.png` })
-  // In that column a pinned run still reads its severity whole ("sev:2", never a clipped
-  // "se2"): a short tag keeps its text and the ticket chip gives way instead.
+  // In that column a pinned run still reads its "+1" whole (never a clipped "+"): the count
+  // keeps its text and the ticket chip gives way instead.
   await expect.poll(async () => card.evaluate((el) => {
-    const sevChip = [...el.querySelectorAll<HTMLElement>('[data-testid="task-tag-pills"] > .tag-chip')][1]
-    if (!sevChip) return 'no severity chip'
-    const parts = [...sevChip.children] as HTMLElement[]
-    const clipped = parts.some((part) => part.scrollWidth > part.clientWidth + 1)
-    return clipped ? `clipped: ${parts.map((part) => `${part.textContent} ${part.clientWidth}/${part.scrollWidth}`).join(', ')}` : 'whole'
+    const more = el.querySelector<HTMLElement>('[data-testid="task-tag-pills"] .tag-chip-overflow')
+    if (!more) return 'no count chip'
+    return more.scrollWidth > more.clientWidth + 1 ? `clipped: ${more.clientWidth}/${more.scrollWidth}` : 'whole'
   })).toBe('whole')
   await card.screenshot({ path: `${SHOT_DIR}/${browserName}-pinned-card-300.png` })
 

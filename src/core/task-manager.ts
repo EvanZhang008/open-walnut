@@ -42,7 +42,7 @@ import { folderProjectFor, trimDir } from './sessions/folder-project.js';
 import { isAwaitingTurnEnd } from './sessions/self-complete-stop.js';
 import { getExtIndexSpec } from './ext-index-registry.js';
 import { isDerivedTag, namesDerivedTag, normalizeTags } from './tag-model.js';
-import { linkTargetOfTag, newLinkTags, relabelLinkTags, MAX_AUTO_LINKS } from './link-tags.js';
+import { linkTargetOfTag, newLinkTags, relabelLinkTags, mergeLinkNames, MAX_AUTO_LINKS } from './link-tags.js';
 import { recordRemoteLink, findLiveClaimants } from './task-remote-links.js';
 import { MERGE_EVENT_SOURCE } from './task-deleted-id.js';
 import type { TaskMergedInto } from './event-types.js';
@@ -3879,6 +3879,9 @@ export interface UpdateTaskInput {
   /** Link tags Walnut found (link-tags-apply.ts): each is added unless the task already
    *  holds its URL under any key or Walnut tagged that URL before (Task.auto_links). */
   add_link_tags?: string[];
+  /** Names a session gave its links (target to 1 to 3 words, link-tags.ts): each is kept for a
+   *  link the task holds that has no name yet. */
+  add_link_names?: Record<string, string>;
   add_depends_on?: string[];      // Add dependency IDs (idempotent)
   remove_depends_on?: string[];   // Remove specific dependency IDs
   set_depends_on?: string[];      // Replace all dependencies (overwrite)
@@ -4441,6 +4444,10 @@ export async function updateTask(
       task.auto_links = [...(task.auto_links ?? []), ...added.map((tag) => linkTargetOfTag(tag)!)].slice(-MAX_AUTO_LINKS);
     }
   }
+  if (updates.add_link_names && Object.keys(updates.add_link_names).length) {
+    const names = mergeLinkNames(task, updates.add_link_names);
+    if (names) task.link_names = names;
+  }
 
   // Dependency mutations (same pattern as tags)
   const hasDeps = updates.add_depends_on !== undefined ||
@@ -4543,6 +4550,7 @@ export async function updateTask(
   const touchedFields = Object.keys(updates)
     .filter((k) => (updates as Record<string, unknown>)[k] !== undefined)
     .map((k) => (k === 'set_tags' || k === 'add_tags' || k === 'remove_tags' || k === 'add_link_tags') ? 'tags'
+      : k === 'add_link_names' ? 'link_names'
       : (k === 'set_depends_on' || k === 'add_depends_on' || k === 'remove_depends_on') ? 'depends_on'
       : k);
   const targets = ['web-ui', ...(eventOptions?.extraTargets ?? [])];

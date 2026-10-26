@@ -149,7 +149,7 @@ describe('linkTagsFromField (self-report LINKS)', () => {
     const field = extractField(report, 'LINKS')
     expect(field).toBe('- cr: https://reviews.example.com/r/RV-1')
     expect(extractField(report, 'RECAP')).toBe('Did it.')
-    expect(buildSelfReportPrompt('', 'T')).toMatch(/\nLINKS: .*"- <kind>: <url or \/absolute\/path>"/)
+    expect(buildSelfReportPrompt('', 'T')).toMatch(/\nLINKS: .*"- <kind>: <url or \/absolute\/path> \(<name>\)"/)
   })
 })
 

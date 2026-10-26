@@ -137,7 +137,7 @@ path on the companion".
 | PUT | `/api/v1/notes/content/*path` | Update a note (optimistic locking) |
 | POST | `/api/v1/notes` | Create a note |
 | DELETE | `/api/v1/notes/*path` | Delete a note |
-| GET | `/api/v1/tasks/:id` | Full task detail (description/note readback + deps) |
+| GET | `/api/v1/tasks/:id` | Full task detail (description/note readback + deps). Additive `links`: the task's link tags as the console draws them, `[{tag, name, kind, group, target, file, gone?}]` (`name` is 1 to 3 words, distinct on the task; `group` is `doc`/`review`/`ticket`/`thread`/`link`; `gone: true` when the file is known to be gone) |
 | DELETE | `/api/v1/tasks/:id?force=true` | Delete a task (409 on active sessions unless forced) |
 | POST | `/api/v1/tasks/:id/complete` | Complete a task (auto-unpins + awaits sync push; ≠ `PATCH status:done`) |
 | POST | `/api/v1/tasks/:id/start` | Start a NEW session for an existing task (cwd resolved server-side; 409 when one is already live; 501 on REPLICA) |

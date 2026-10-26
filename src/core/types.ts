@@ -732,6 +732,9 @@ export interface Task {
   /** Links Walnut tagged on its own (link-tags-apply.ts), canonical URLs: a URL here is never
    *  tagged again, so a link tag the user removed or relabelled stays as they left it. */
   auto_links?: string[];
+  /** The names sessions gave the task's links (target to 1 to 3 words, link-tags.ts), which a
+   *  link pill reads instead of one made from its file name. */
+  link_names?: Record<string, string>;
   source: TaskSource;
   external_url?: string;
   created_at: string;

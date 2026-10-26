@@ -406,6 +406,70 @@ filesRouter.get('/resolve-path', async (req: Request, res: Response, next: NextF
 })
 
 /**
+ * POST /api/files/exists { paths: string[], host? } -> { exists: { [path]: boolean } }
+ *
+ * Whether the files a task's link tags point at are still there (a /tmp report is often cleaned
+ * away): the session header marks a gone one. A path this server cannot answer for (a host that
+ * is not answering, a path outside what it may read, a cloud box asked about the Mac's files) is
+ * left out, and a caller reads "left out" as "not known gone": a link is never marked gone on a
+ * guess. A remote host answers with its daemon's fs.stat, at most EXISTS_MAX paths a request.
+ */
+const EXISTS_MAX = 8
+
+/** Whether each path still exists on the host; a path this server cannot answer for is left out
+ *  (the route above). The task detail (task-v1.ts) asks the same for the phone. */
+export async function linkPathsExist(rawPaths: readonly unknown[], rawHost: string | undefined): Promise<Record<string, boolean>> {
+  const host = rawHost === '__local__' || rawHost === 'local' ? undefined : rawHost
+  const paths = [...new Set(rawPaths.filter((p): p is string => typeof p === 'string' && p.length > 0 && p.length <= 1024))].slice(0, EXISTS_MAX)
+  const exists: Record<string, boolean> = {}
+  // The companion's own disk is not where a "local" session's files are (the Mac's are).
+  const { placement } = await import('../../core/server-role.js')
+  if (paths.length === 0 || (!host && placement() === 'cloud')) return exists
+  const { assertPathAllowed } = await import('./file-content.js')
+  const allowed: { raw: string; filePath: string }[] = []
+  for (const raw of paths) {
+    if (isUnsafePathRef(raw)) continue
+    try { allowed.push({ raw, filePath: assertPathAllowed(raw, host, 'read').filePath }) } catch { /* not ours to answer */ }
+  }
+  if (!host) {
+    await Promise.all(allowed.map(async ({ raw, filePath }) => {
+      try { await fsp.stat(filePath); exists[raw] = true } catch (err) {
+        const code = (err as NodeJS.ErrnoException).code
+        if (code === 'ENOENT' || code === 'ENOTDIR') exists[raw] = false
+      }
+    }))
+    return exists
+  }
+  const config = await getConfig()
+  const hostDef = hostEntryOf(config.hosts, host)
+  if (!hostDef?.hostname) return exists
+  // A host replica reads its own host through the follower link, which answers "no such file"
+  // for a path outside its sessions' folders as well (follower-reads-core.ts), so from there only
+  // "it exists" is an answer.
+  const { selfHostConnection } = await import('../../replica/self-host.js')
+  const follower = selfHostConnection(host) !== null
+  try {
+    await onHost(host, hostDef, async (conn) => {
+      await Promise.all(allowed.map(async ({ raw, filePath }) => {
+        const st = await conn.send('fs.stat', { path: filePath }).catch(() => undefined)
+        if (st?.ok && typeof st.exists === 'boolean' && (st.exists || !follower)) exists[raw] = st.exists
+      }))
+    })
+  } catch { /* the host is not answering: nothing is known gone */ }
+  return exists
+}
+
+filesRouter.post('/exists', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const body = (req.body ?? {}) as { paths?: unknown; host?: unknown }
+    const host = typeof body.host === 'string' && body.host ? body.host : undefined
+    res.json({ exists: await linkPathsExist(Array.isArray(body.paths) ? body.paths : [], host) })
+  } catch (err) {
+    next(err)
+  }
+})
+
+/**
  * GET /api/files/references?path=<absFile>&symbol=<ident>&host=&maxMatches=
  *
  * "Find references" for the Files viewer. The search is HOST-LOCAL work (git

@@ -10,7 +10,7 @@
 
 import { bus, eventData, EventNames } from './event-bus.js'
 import { log } from '../logging/index.js'
-import { effectiveLinkPatterns, linkTagsFromField, linkTagsInText, newLinkTags, relabelLinkTags, type LinkPattern } from './link-tags.js'
+import { effectiveLinkPatterns, linkEntriesFromField, linkTagsInText, linkTargetOfTag, mergeLinkNames, newLinkTags, relabelLinkTags, type LinkPattern } from './link-tags.js'
 
 /** Send sources a person typed (phase.ts REOPENING_SEND_SOURCES minus the peer and letter paths). */
 const HUMAN_SEND_SOURCES: ReadonlySet<string> = new Set(['ui', 'mobile', 'cli', 'web-api', 'api-v1', 'chat'])
@@ -28,20 +28,26 @@ async function linkPatterns(): Promise<LinkPattern[]> {
   }
 }
 
-/** Add the candidates the task does not hold yet. Returns the tags added. */
-export async function addLinkTags(taskId: string, candidates: readonly string[], source: string): Promise<string[]> {
+/** Add the candidates the task does not hold yet, and the names a session gave them (target to
+ *  name). Returns the tags added. */
+export async function addLinkTags(taskId: string, candidates: readonly string[], source: string, names?: Record<string, string>): Promise<string[]> {
   if (candidates.length === 0) return []
   try {
     const { getTask, updateTask } = await import('./task-manager.js')
     // Checked before the write so a mention of a known link costs no task write.
     const current = await getTask(taskId)
-    if (newLinkTags(current, candidates).length === 0 && relabelLinkTags(current, candidates).length === 0) return []
+    const added = newLinkTags(current, candidates)
+    const named = names && Object.keys(names).length
+      ? mergeLinkNames({ ...current, tags: [...(current.tags ?? []), ...added] }, names)
+      : undefined
+    if (added.length === 0 && relabelLinkTags(current, candidates).length === 0 && !named) return []
     const before = new Set(current.tags ?? [])
-    const { task } = await updateTask(taskId, { add_link_tags: [...candidates] }, { source: 'link-tags' })
-    const added = (task.tags ?? []).filter((tag) => !before.has(tag))
-    if (added.length === 0) return []
-    log.task.info('link tags added', { taskId, source, added })
-    return added
+    const { task } = await updateTask(taskId, { add_link_tags: [...candidates], ...(named ? { add_link_names: names } : {}) }, { source: 'link-tags' })
+    const tagged = (task.tags ?? []).filter((tag) => !before.has(tag))
+    if (named) log.task.info('link names set', { taskId, source, names: task.link_names })
+    if (tagged.length === 0) return []
+    log.task.info('link tags added', { taskId, source, added: tagged })
+    return tagged
   } catch (err) {
     log.task.debug('link tags skipped', { taskId, source, error: err instanceof Error ? err.message : String(err) })
     return []
@@ -56,7 +62,10 @@ export async function tagLinksInText(taskId: string, text: string, source: strin
 export async function tagLinksFromReportField(taskId: string, field: string): Promise<string[]> {
   const text = field.trim()
   if (!text || /^(?:unchanged|none)\b/i.test(text)) return []
-  return addLinkTags(taskId, linkTagsFromField(text, await linkPatterns()), 'self-report')
+  const entries = linkEntriesFromField(text, await linkPatterns())
+  const names: Record<string, string> = {}
+  for (const { tag, name } of entries) if (name) names[linkTargetOfTag(tag)!] = name
+  return addLinkTags(taskId, entries.map((e) => e.tag), 'self-report', names)
 }
 
 async function taskOfSession(sessionId: string): Promise<string | undefined> {

@@ -616,3 +616,10 @@ export async function fetchDirListMany(
     ...(opts.background ? { priority: 'low' as const } : {}),
   });
 }
+
+/** Which of these files still exist on the host (`POST /api/files/exists`). A path the server
+ *  could not answer for is absent from the map: not known gone. */
+export async function fetchPathsExist(paths: readonly string[], host?: string): Promise<Record<string, boolean>> {
+  const body = await apiPost<{ exists?: Record<string, boolean> }>('/api/files/exists', { paths, ...(host ? { host } : {}) }, { background: true, priority: 'low', timeoutMs: 10_000 });
+  return body?.exists ?? {};
+}

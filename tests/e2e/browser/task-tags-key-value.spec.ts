@@ -104,10 +104,13 @@ test('a value key reads as its id on every row, and the session header shows the
   }
 
   await openHome(page)
+  // A row shows one pill, the rest folded into "+N" inside it (2026-10-23, the user: "tag max
+  // should be one"); the count's tooltip names them.
   for (const [id, text] of [[ids.v, 'V2391099522'], [ids.p, 'P523407866'], [ids.d, 'D12345678']] as const) {
-    const chips = row(page, id).locator('[data-testid="task-tag-pills"] > .tag-chip')
+    const chips = row(page, id).locator('[data-testid="task-tag-pills"] .tag-chip')
     await expect(row(page, id)).toBeVisible({ timeout: 15_000 })
-    expect(await chipTexts(chips)).toEqual([text, id === ids.p ? 'sev:3' : 'sev:2'])
+    expect(await chipTexts(chips)).toEqual([text, '+1'])
+    await expect(chips.nth(1)).toHaveAttribute('title', id === ids.p ? 'sev:3' : 'sev:2')
     // No prefix element at all, whatever the width; the tooltip names the whole tag (and,
     // the key being linked, where it goes).
     await expect(chips.first().locator('.tag-chip-prefix')).toHaveCount(0)
@@ -124,12 +127,12 @@ test('a value key reads as its id on every row, and the session header shows the
   await seeded.locator('.todo-item-title').click()
   const panel = page.locator(`.session-panel[data-session-id="${SEEDED_SESSION}"]`)
   await expect(panel).toBeVisible()
-  const headerPills = panel.locator('.session-panel-title-area > .session-panel-tag-pills > .tag-chip')
-  await expect(headerPills).toHaveCount(3)
-  expect(await chipTexts(headerPills)).toEqual(['V2391099522', 'sev:2', '+1'])
-  await expect(headerPills.nth(2)).toHaveAttribute('title', 'oncall')
+  const headerPills = panel.locator('.session-panel-title-area > .session-panel-tag-pills .tag-chip')
+  await expect(headerPills).toHaveCount(2)
+  expect(await chipTexts(headerPills)).toEqual(['V2391099522', '+2'])
+  await expect(headerPills.nth(1)).toHaveAttribute('title', 'sev:2, oncall')
   // The row agrees with its header.
-  expect(await chipTexts(seeded.locator('[data-testid="task-tag-pills"] > .tag-chip'))).toEqual(['V2391099522', 'sev:2', '+1'])
+  expect(await chipTexts(seeded.locator('[data-testid="task-tag-pills"] .tag-chip'))).toEqual(['V2391099522', '+2'])
   // The title keeps the larger share of the row, and nothing leaves the header.
   const layout = await panel.locator('.session-panel-title-area').evaluate((area) => {
     const box = area.getBoundingClientRect()
@@ -256,8 +259,8 @@ test('a linked tag opens its URL in a new tab, never the row or the detail under
   await expect(chip).toHaveAttribute('target', '_blank')
   await expect(chip).toHaveAttribute('rel', /noopener/)
   expect(await chipTexts(chip)).toEqual(['V2391099522'])
-  // sev has no link rule: an ordinary pill.
-  await expect(row(page, id).locator('span.tag-chip[data-tag="sev:2"]')).toBeVisible()
+  // sev has no link rule and folds into the link pill's "+1".
+  await expect(row(page, id).locator('.tag-chip-overflow')).toHaveAttribute('title', 'sev:2')
 
   const columnsBefore = await page.locator('.main-page-session-column').count()
   const [tab] = await Promise.all([page.waitForEvent('popup'), chip.click()])
@@ -299,6 +302,8 @@ test('Settings, Tags: a key gets a link, one tag turns it off and back on, and t
   const project = `Tag link settings ${stamp}`
   litter.projects.push(project)
   const id = await createTask(`Link settings ${stamp}`, { project, tags: [`${key}:A-1`, `${key}:B 2`] })
+  // A row shows one pill: B 2's own row is where its pill is seen.
+  const idB = await createTask(`Link settings B ${stamp}`, { project, tags: [`${key}:B 2`] })
   // An exact rule gives `B 2` a row of its own (the switch the user would flip first).
   await api('/api/v1/tasks/meta/tag-display', 'PUT', { pattern: `${key}:B 2`, display: 'shown' })
   try {
@@ -352,7 +357,7 @@ test('Settings, Tags: a key gets a link, one tag turns it off and back on, and t
     // Home: A-1 opens the page (its value encoded), B 2 is an ordinary pill.
     await openHome(page)
     await expect(row(page, id).locator(`a.tag-chip[data-tag="${key}:A-1"]`)).toHaveAttribute('href', `${origin}/browse/A-1`, { timeout: 15_000 })
-    await expect(row(page, id).locator(`span.tag-chip[data-tag="${key}:B 2"]`)).toBeVisible()
+    await expect(row(page, idB).locator(`span.tag-chip[data-tag="${key}:B 2"]`)).toBeVisible()
 
     // Back in Settings, "Use your … link" undoes the turn-off: B 2 links again, encoded.
     await page.setContent(`<a href="${test.info().project.use.baseURL}/settings#tags">Open Tags</a>`)
@@ -369,7 +374,7 @@ test('Settings, Tags: a key gets a link, one tag turns it off and back on, and t
     await expect(page.getByTestId(`tag-link-editor-${key}:*`)).toHaveCount(0)
     expect(writes).toBe(before)
     await openHome(page)
-    await expect(row(page, id).locator(`a.tag-chip[data-tag="${key}:B 2"]`)).toHaveAttribute('href', `${origin}/browse/B%202`, { timeout: 15_000 })
+    await expect(row(page, idB).locator(`a.tag-chip[data-tag="${key}:B 2"]`)).toHaveAttribute('href', `${origin}/browse/B%202`, { timeout: 15_000 })
     expect(errors).toEqual([])
   } finally {
     await api('/api/v1/tasks/meta/tag-display', 'PUT', { pattern: `${key}:*`, link: null }).catch(() => undefined)

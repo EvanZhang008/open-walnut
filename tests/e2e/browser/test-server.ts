@@ -160,6 +160,13 @@ await fs.writeFile(
   JSON.stringify({ 'open-walnut-home-chat-visible': { v: 'false', ts: 1 } }, null, 2),
 )
 
+// Link tags in the session header (session-link-tag-names.spec.ts): three plans whose kind
+// alone reads "plan" three times, two files that exist and one that is gone.
+const linkFixtureRoot = path.join(tmpBase, 'link-fixture', 'fix')
+await fs.mkdir(linkFixtureRoot, { recursive: true })
+await fs.writeFile(path.join(linkFixtureRoot, 'MATRIX-r5.md'), '# Test matrix r5\n')
+await fs.writeFile(path.join(linkFixtureRoot, 'FIX-PLAN-r5b.md'), '# Fix plan r5b\n')
+
 // Seed test data
 await fs.writeFile(
   path.join(tasksDir, 'tasks.json'),
@@ -324,6 +331,33 @@ await fs.writeFile(
         session_ids: ['pw-tags-session'],
         active_session_ids: [],
         session_id: 'pw-tags-session',
+        session_status: { process_status: 'stopped', mode: 'bypass' },
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        description: '',
+        summary: '',
+        note: '',
+        subtasks: [],
+      },
+      {
+        id: 'pw-task-links',
+        title: 'Linked plans fixture task',
+        status: 'in_progress',
+        phase: 'IN_PROGRESS',
+        priority: 'none',
+        project: 'Walnut',
+        source: 'local',
+        tags: [
+          `plan:${linkFixtureRoot}/MATRIX-r5.md`,
+          `plan:${linkFixtureRoot}/FIX-PLAN-r5b.md`,
+          `plan:${linkFixtureRoot}/FIX-PLAN-r5c.md`,
+          'pr:https://github.com/acme/app/pull/12',
+        ],
+        auto_links: [`${linkFixtureRoot}/MATRIX-r5.md`, `${linkFixtureRoot}/FIX-PLAN-r5b.md`, `${linkFixtureRoot}/FIX-PLAN-r5c.md`],
+        link_names: { [`${linkFixtureRoot}/MATRIX-r5.md`]: 'Test matrix r5' },
+        session_ids: ['pw-links-session'],
+        active_session_ids: [],
+        session_id: 'pw-links-session',
         session_status: { process_status: 'stopped', mode: 'bypass' },
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
@@ -3050,6 +3084,19 @@ await fs.writeFile(
         messageCount: 1,
         cwd: process.cwd(),
         title: 'Tagged ticket run fixture session',
+      },
+      {
+        claudeSessionId: 'pw-links-session',
+        taskId: 'pw-task-links',
+        project: 'Walnut',
+        process_status: 'stopped',
+        mode: 'bypass',
+        last_status_change: new Date().toISOString(),
+        startedAt: new Date(sessionFixtureNow - 30_000).toISOString(),
+        lastActiveAt: new Date(sessionFixtureNow - 20_000).toISOString(),
+        messageCount: 1,
+        cwd: process.cwd(),
+        title: 'Linked plans fixture session',
       },
       {
         claudeSessionId: 'pw-service-session',

@@ -22,6 +22,8 @@ struct TaskPropertiesList: View {
     /// Present the sheet's due picker.
     let openDuePicker: () -> Void
     var onPinnedChange: (Bool) -> Void = { _ in }
+    /// The task's link tags as the server names them (the detail read; nil until it lands).
+    var links: [LinkTagView]? = nil
 
     @Environment(TasksStore.self) private var tasks
     @Environment(\.dynamicTypeSize) private var typeSize
@@ -249,7 +251,7 @@ struct TaskPropertiesList: View {
             Text("Tags")
                 .font(.body)
                 .foregroundStyle(.primary)
-            TaskTagPills(tags: tags)
+            TaskTagPills(tags: tags, links: links ?? [])
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 16)

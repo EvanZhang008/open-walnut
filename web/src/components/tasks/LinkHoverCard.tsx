@@ -3,9 +3,9 @@ import { createPortal } from 'react-dom';
 import '@/styles/link-hover-card.css';
 
 /**
- * The card a link pill shows on hover or focus: what the link is, its whole URL or path, and
- * where a click takes it. A pill reads as its kind alone (`report`), so this is where the
- * target is named; the native `title` it replaces shows late, and in the Mac app's WebKit
+ * The card a link pill shows on hover or focus: its name and kind, its whole URL or path, and
+ * where a click takes it. A pill reads as a short name (`Fix plan r5b`), so this is where the
+ * target is spelled out; the native `title` it replaces shows late, and in the Mac app's WebKit
  * often not at all (2026-10-23).
  *
  * Informational only: it never takes the pointer (`pointer-events: none`), so moving onto it
@@ -18,6 +18,10 @@ const MARGIN = 8;
 
 export interface LinkHoverInfo {
   kind: string;
+  /** The name the pill reads. */
+  name?: string;
+  /** The file no longer exists. */
+  gone?: boolean;
   /** The URL or the absolute path. */
   target: string;
   /** Where a click takes it ("Opens in a new tab · github.com", "Opens in Files"). */
@@ -68,9 +72,12 @@ function LinkHoverCard({ info, anchor, onGone }: { info: LinkHoverInfo; anchor: 
 
   return createPortal(
     <div ref={ref} className="link-hover-card" role="tooltip" style={style} data-testid="link-hover-card">
-      <div className="link-hover-card-kind">{info.kind}</div>
+      <div className="link-hover-card-head">
+        {info.name && <span className="link-hover-card-name">{info.name}</span>}
+        <span className="link-hover-card-kind">{info.kind}</span>
+      </div>
       <div className="link-hover-card-target">{info.target}</div>
-      <div className="link-hover-card-opens">{info.opens}</div>
+      <div className={info.gone ? 'link-hover-card-opens link-hover-card-gone' : 'link-hover-card-opens'}>{info.opens}</div>
     </div>,
     document.body,
   );

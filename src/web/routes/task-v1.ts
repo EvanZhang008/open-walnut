@@ -96,6 +96,8 @@ async function resolveTaskIdPrefix(res: Response, id: string): Promise<string | 
  * only the extras router, hiding the shadowing).
  */
 const RESERVED_TASK_SUBPATHS = new Set(['groups', 'enriched'])
+/** How long a task detail waits to learn which of its link files are gone. */
+const LINK_EXISTS_DEADLINE_MS = 1500
 
 // GET /api/v1/tasks/:id — FULL task detail (description/note/summary readback
 // — the slim list projection is write-only for those fields). Adds the same
@@ -153,6 +155,24 @@ taskV1Router.get('/tasks/:id', async (req: Request, res: Response, next: NextFun
     if (task.parent_task_id) {
       const parent = allTasks.find((t) => t.id.startsWith(task.parent_task_id!))
       if (parent) detail.parent = { id: parent.id, title: parent.title, phase: parent.phase, status: parent.status }
+    }
+    // The link tags as the phone draws them: a name each, its kind, and whether the file is gone
+    // (asked of the session's host, within a short deadline; unknown when it does not answer).
+    const { linkTagViews } = await import('../../core/link-tags.js')
+    const links = linkTagViews(task.tags, task.link_names)
+    if (links.length > 0) {
+      const files = links.filter((l) => l.file).map((l) => l.target)
+      let exists: Record<string, boolean> = {}
+      if (files.length > 0) {
+        const { linkPathsExist } = await import('./files.js')
+        const { getSessionByClaudeId } = await import('../../core/session-tracker.js')
+        const host = task.session_id ? (await getSessionByClaudeId(task.session_id).catch(() => null))?.host : undefined
+        exists = await Promise.race([
+          linkPathsExist(files, host ?? undefined).catch(() => ({})),
+          new Promise<Record<string, boolean>>((resolve) => { setTimeout(() => resolve({}), LINK_EXISTS_DEADLINE_MS).unref?.() }),
+        ])
+      }
+      detail.links = links.map((l) => (l.file && exists[l.target] === false ? { ...l, gone: true } : l))
     }
     res.json({ task: detail })
   } catch (err) {

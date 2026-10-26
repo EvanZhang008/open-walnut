@@ -169,35 +169,49 @@ export function linkTagKey(tag: string): string | undefined {
   return path && isGenericLinkKey(key) ? pathKind(path) : key
 }
 
-/** The links a self-report's LINKS field names (`- <kind>: <url or absolute path>` per line), as tags. A
- *  pattern's key and URL win over the kind and the exact URL the session wrote, so a link reads
- *  the same however it reached the task. */
-export function linkTagsFromField(field: string, patterns: readonly LinkPattern[]): string[] {
-  const out: string[] = []
+/** The links a self-report's LINKS field names (`- <kind>: <url or absolute path> (<name>)` per
+ *  line), as tags with the name the session gave each (1 to 3 words, optional). A pattern's key
+ *  and URL win over the kind and the exact URL the session wrote, so a link reads the same however
+ *  it reached the task. */
+export function linkEntriesFromField(field: string, patterns: readonly LinkPattern[]): { tag: string; name?: string }[] {
+  const out: { tag: string; name?: string }[] = []
   const seen = new Set<string>()
+  const named = (rest: string) => normalizeLinkName(rest.replace(/^[\s)\]]*(?:[-–—:=,]\s*)?/, ''))
   for (const rawLine of field.split('\n')) {
     const line = rawLine.replace(/^[\s>*+-]*(?:\d+[.)]\s*)?/, '').trim()
     const urlAt = line.search(/https?:\/\//i)
     if (urlAt < 0) {
-      // A file to open (`- html: /tmp/run/result.html`): its kind before the colon, the path after.
-      const m = /^([^:]{1,40}?)\s*[:=]\s*(\S+)/.exec(line.replace(/[*`[\]()<>]/g, ''))
+      // A file to open (`- html: /tmp/run/result.html (Run result)`): its kind before the colon,
+      // the path after, then its name.
+      const clean = line.replace(/[*`[\]<>]/g, '')
+      // The path runs to the first space; a name in parentheses right after it is the name.
+      const m = /^([^:]{1,40}?)\s*[:=]\s*(\/\S+?|~\/\S+?)(?=\s|\((?=[^)]*\)\s*$)|$)/.exec(clean)
       const path = m ? canonicalLinkPath(m[2]!) : undefined
       if (!m || !path || !isReviewablePath(path) || seen.has(path)) continue
       seen.add(path)
-      const kind = linkKind(m[1]!)
-      out.push(`${kind && !isGenericLinkKey(kind) ? kind : pathKind(path)}:${path}`)
+      // `plan (v2)` is a plan: what follows the kind in parentheses is not part of it.
+      const kind = linkKind(m[1]!.replace(/\(.*$/, ''))
+      const name = named(clean.slice(m.index + m[0].length))
+      out.push({ tag: `${kind && !isGenericLinkKey(kind) ? kind : pathKind(path)}:${path}`, ...(name ? { name } : {}) })
       continue
     }
     const candidate = urlCandidates(line.slice(urlAt))[0]
     if (!candidate) continue
+    const bare = candidate.replace(/[)\]]+.*$/, '')
     const hit = patternTag(candidate, patterns)
-    const url = hit?.url ?? canonicalLinkUrl(candidate.replace(/[)\]]+.*$/, ''))
+    const url = hit?.url ?? canonicalLinkUrl(bare)
     if (!url || seen.has(url)) continue
-    const named = line.slice(0, urlAt).replace(/[*`[\]()<>]/g, '').replace(/[:=\-\s]+$/, '')
+    const kindText = line.slice(0, urlAt).replace(/[*`[\]()<>]/g, '').replace(/[:=\-\s]+$/, '')
     seen.add(url)
-    out.push(hit?.tag ?? `${linkKind(named) ?? LINK_FALLBACK_KEY}:${url}`)
+    const name = named(line.slice(urlAt + bare.length).replace(/[*`[\]<>]/g, ''))
+    out.push({ tag: hit?.tag ?? `${linkKind(kindText) ?? LINK_FALLBACK_KEY}:${url}`, ...(name ? { name } : {}) })
   }
   return out
+}
+
+/** The link tags a LINKS field names (linkEntriesFromField without the names). */
+export function linkTagsFromField(field: string, patterns: readonly LinkPattern[]): string[] {
+  return linkEntriesFromField(field, patterns).map((entry) => entry.tag)
 }
 
 /** The URL a tag holds as its value, or undefined when its value is not a link. */
@@ -347,5 +361,216 @@ export function genericLinkTags(task: { tags?: readonly string[]; auto_links?: r
   return (task.tags ?? []).filter((tag) => {
     const target = linkTargetOfTag(tag)
     return !!target && auto.has(target) && isGenericLinkKey(tag.slice(0, tag.indexOf(':')))
+  })
+}
+
+// ── Names: what a link pill reads ─────────────────────────────────────────────
+// A pill that reads only its kind ("plan", "plan", "plan") tells three links apart by nothing
+// (the user, 2026-10-25: "it need 1-3 word to describe, descriptive"). Every link tag reads a
+// name of one to three words that says which one it is: the name the session gave it in its
+// LINKS field (Task.link_names), else one made from the target (`FIX-PLAN-r5b.md` reads
+// "Fix plan r5b"), else the kind; a ticket or a pull request reads its id. The pill's icon says
+// the kind. Names on one task never repeat (linkTagNames). The phone reads the same names
+// from the task detail (`links`, linkTagViews) rather than a second copy of these rules.
+
+/** Agent-given names Walnut keeps per task, newest kept. */
+export const MAX_LINK_NAMES = 20
+const MAX_NAME_WORDS = 3
+const MAX_NAME_CHARS = 28
+
+/** Text cut to `max` characters with an ellipsis, by code point: a cut never splits an emoji
+ *  into half a surrogate pair, which a strict JSON decoder (the phone's) refuses. */
+function clipName(text: string, max = MAX_NAME_CHARS): string {
+  const chars = Array.from(text)
+  return chars.length <= max ? text : `${chars.slice(0, max - 1).join('').trimEnd()}…`
+}
+/** Acronyms that keep their capitals when a file name is turned into words. */
+const KEEP_CAPS: ReadonlySet<string> = new Set(['api', 'ui', 'ux', 'cli', 'ios', 'pr', 'cr', 'mr', 'mcp', 'sdk', 'html', 'css', 'url', 'e2e', 'qa', 'ai', 'acp', 'ci', 'stt', 'llm', 'aws', 'ec2', 'sql', 'json', 'pdf', 'id'])
+/** File names that say what kind of file it is but not which one: the folder says that. */
+const GENERIC_STEMS: ReadonlySet<string> = new Set(['index', 'readme', 'notes', 'note', 'result', 'results', 'report', 'summary', 'plan', 'design', 'explainer', 'review', 'output', 'out', 'main', 'draft', 'doc', 'docs', 'final', 'page', 'view', 'tmp', 'temp'])
+
+const URL_PLACE_SEGMENT_RE = /^(?:archives?|documents?|spreadsheets|presentation|forms|file|wiki|display|pages|browse|blob|tree|main|master|issues|pull|pulls|merge_requests|discussions|projects?)$/i
+
+/** The word a site is known by: `docs.google.com` is google; a workspace on a shared host
+ *  (`acme.slack.com`) is its workspace. */
+function siteWord(url: string): string | undefined {
+  let host: string
+  try { host = new URL(url).host.replace(/^www\./, '').replace(/:\d+$/, '') } catch { return undefined }
+  const labels = host.split('.')
+  if (labels.length < 2) return labels[0]
+  if (labels.length >= 3 && /^(?:slack|atlassian|notion|sharepoint|zendesk|github|gitlab|vercel|netlify)$/.test(labels.at(-2)!)) return labels[0]
+  return labels.at(-2)
+}
+
+/** The kind of thing a link is, for its pill's icon. */
+export type LinkKindGroup = 'doc' | 'review' | 'ticket' | 'thread' | 'link'
+
+export function linkKindGroup(kind: string): LinkKindGroup {
+  if (/^(?:pr|mr|cr|review|code-review|diff|commit)$/.test(kind)) return 'review'
+  if (/^(?:ticket|issue|incident|bug|sim|task)$/.test(kind)) return 'ticket'
+  if (/^(?:thread|chat|slack|message|email|mail)$/.test(kind)) return 'thread'
+  if (/^(?:link|url|site|page|dashboard)$/.test(kind)) return 'link'
+  return 'doc'
+}
+
+/** A name a session gave, in stored form: at most three words and 28 characters, no markup;
+ *  undefined when nothing readable is left. */
+export function normalizeLinkName(raw: string): string | undefined {
+  const text = raw.replace(/[\u0000-\u001f\u007f*`[\]()<>"]/g, ' ').replace(/^[\s:=,;–—-]+|[\s:=,;.–—-]+$/g, '').replace(/\s+/g, ' ')
+  if (!text || /^(?:https?:\/\/|\/|~\/)/i.test(text)) return undefined
+  const words = text.split(' ').slice(0, MAX_NAME_WORDS)
+  const name = clipName(words.join(' '))
+  return /[\p{L}\p{N}]/u.test(name) ? name : undefined
+}
+
+/** The words of a file or path segment name: `FIX-PLAN-r5b` is fix, plan, r5b; `linkTagsDesign`
+ *  is link, tags, design. */
+function nameWords(text: string): string[] {
+  return text
+    .replace(/([a-z])([A-Z][a-z])/g, '$1 $2')
+    .split(/[\s._+-]+/)
+    .filter((w) => w && /[\p{L}\p{N}]/u.test(w))
+}
+
+/** Words as a name: sentence case, acronyms kept, at most `max` words. */
+function wordsAsName(words: readonly string[], max = MAX_NAME_WORDS): string {
+  const out = words.slice(0, max).map((w, i) => {
+    const lower = w.toLowerCase()
+    if (KEEP_CAPS.has(lower)) return lower === 'ios' ? 'iOS' : lower.toUpperCase()
+    // A word already in mixed case (`iPhone`, `macOS`) is kept as written.
+    const cased = /[a-z]/.test(w) && /[A-Z]/.test(w.slice(1)) ? w : lower
+    return i === 0 ? cased.charAt(0).toUpperCase() + cased.slice(1) : cased
+  })
+  return clipName(out.join(' '))
+}
+
+/** The words a link's target names it by, most telling first, and the words that tell it from a
+ *  sibling (the folder above), or undefined when the target says nothing readable. */
+function targetWords(tag: string): { words: string[]; context: string[]; verbatim?: boolean } | undefined {
+  const path = linkPathOfTag(tag)
+  if (path) {
+    const segs = path.split('/').filter(Boolean)
+    const file = segs.at(-1) ?? ''
+    const stem = file.includes('.') ? file.slice(0, file.lastIndexOf('.')) : file
+    let words = nameWords(stem)
+    const dirs = segs.slice(0, -1).filter((s) => s !== '~' && !/^(?:tmp|private|var|users|home|workplace)$/i.test(s))
+    const parent = nameWords(dirs.at(-1) ?? '')
+    // A repo's instructions read with the repo's name: `Walnut CLAUDE.md`.
+    if (/^(?:claude|agents|readme)\.md$/i.test(file)) return { words: [...parent.slice(0, 2), file], context: parent, verbatim: true }
+    // `…/run-42/result.html` is "Run 42 result", not "Result".
+    if (words.length === 1 && GENERIC_STEMS.has(words[0]!.toLowerCase()) && parent.length) words = [...parent.slice(0, 2), ...words]
+    if (!words.length) return undefined
+    return { words, context: parent }
+  }
+  const url = linkUrlOfTag(tag)
+  if (!url) return undefined
+  let parsed: URL
+  try { parsed = new URL(url) } catch { return undefined }
+  // Ids (`C01`, `p1726…`, a document id) and the words for a place in a site (`archives`,
+  // `document`) say nothing about which page it is.
+  const segs = parsed.pathname.split('/').filter(Boolean).map(decode)
+    .filter((s) => s.length >= 3 && !GENERIC_SEGMENT_RE.test(s) && !URL_PLACE_SEGMENT_RE.test(s) && !OPAQUE_ID_RE.test(s) && !/^[A-Za-z]{0,2}\d/.test(s))
+  const last = segs.at(-1)
+  const words = last ? nameWords(last.replace(/\.[a-z0-9]{1,5}$/i, '')) : []
+  if (!words.length) return undefined
+  return { words, context: nameWords(segs.at(-2) ?? '') }
+}
+
+/** The name one link tag reads on its own (linkTagNames makes the names of one task distinct). */
+export function linkTagName(tag: string, names?: Readonly<Record<string, string>>): string | undefined {
+  const target = linkTargetOfTag(tag)
+  if (!target) return undefined
+  if (linkTagShowsId(tag)) return linkTagLabel(tag)
+  const given = names?.[target]
+  if (given) return normalizeLinkName(given) ?? given
+  const words = targetWords(tag)
+  if (words) return words.verbatim ? words.words.join(' ').replace(/^./, (c) => c.toUpperCase()) : wordsAsName(words.words)
+  // Nothing in the target reads (a chat permalink, an opaque document id): the site and the kind.
+  const kind = linkTagKey(tag)!
+  const url = linkUrlOfTag(tag)
+  const site = url ? siteWord(url) : undefined
+  return wordsAsName([...(site ? [site] : []), ...nameWords(kind)])
+}
+
+/** The names a task's link tags read, each distinct, keyed by tag. Two that would read the same
+ *  keep their first two words and add the first word that tells them apart (`Session link v1`,
+ *  `Session link v2`), else the folder that does (`Alpha result`, `Beta result`), else a number. */
+export function linkTagNames(tags: readonly string[], names?: Readonly<Record<string, string>>): Map<string, string> {
+  const out = new Map<string, string>()
+  for (const tag of tags) if (isLinkTag(tag)) out.set(tag, linkTagName(tag, names)!)
+  const groups = new Map<string, string[]>()
+  for (const [tag, name] of out) groups.set(name.toLowerCase(), [...(groups.get(name.toLowerCase()) ?? []), tag])
+  for (const group of groups.values()) {
+    if (group.length < 2) continue
+    for (const tag of group) {
+      const own = targetWords(tag)
+      if (!own || names?.[linkTargetOfTag(tag)!]) continue
+      const others = group.filter((t) => t !== tag).map(targetWords)
+      const lower = (ws: readonly string[]) => ws.map((w) => w.toLowerCase())
+      const words = lower(own.words)
+      const differs = (i: number, pick: (w: { words: string[]; context: string[] }) => string[]) =>
+        others.every((o) => !o || lower(pick(o))[i] !== lower(pick(own))[i])
+      const at = words.findIndex((_, i) => i >= 2 && differs(i, (w) => w.words))
+      const ctx = own.context.length - 1
+      if (at >= 0) out.set(tag, wordsAsName([...own.words.slice(0, 2), own.words[at]!]))
+      else if (ctx >= 0 && others.every((o) => !o || lower(o.context).at(-1) !== own.context[ctx]!.toLowerCase())) {
+        out.set(tag, wordsAsName([own.context[ctx]!, ...own.words.slice(0, 2)]))
+      }
+    }
+  }
+  // Whatever still reads the same as an earlier link on the task (across groups too: a folder or
+  // a number added above can meet another link's name) takes the next free number.
+  const seen = new Set<string>()
+  for (const [tag, name] of out) {
+    let next = name
+    for (let n = 2; seen.has(next.toLowerCase()); n++) next = `${name} ${n}`
+    seen.add(next.toLowerCase())
+    out.set(tag, next)
+  }
+  return out
+}
+
+/** The task's link names with the new ones added: a name for a link the task holds and has not
+ *  named yet (a name, once shown, stays put across turns), names of links it no longer holds
+ *  dropped. Undefined when nothing changes. */
+export function mergeLinkNames(
+  task: { tags?: readonly string[]; link_names?: Readonly<Record<string, string>> },
+  incoming: Readonly<Record<string, string>>,
+): Record<string, string> | undefined {
+  const held = new Set((task.tags ?? []).map((tag) => linkTargetOfTag(tag)).filter((t): t is string => !!t))
+  const out: Record<string, string> = {}
+  for (const [target, name] of Object.entries(task.link_names ?? {})) if (held.has(target)) out[target] = name
+  let changed = Object.keys(out).length !== Object.keys(task.link_names ?? {}).length
+  for (const [target, raw] of Object.entries(incoming)) {
+    const name = typeof raw === 'string' ? normalizeLinkName(raw) : undefined
+    if (!name || !held.has(target) || out[target]) continue
+    out[target] = name
+    changed = true
+  }
+  const keys = Object.keys(out)
+  for (const key of keys.slice(0, Math.max(0, keys.length - MAX_LINK_NAMES))) delete out[key]
+  return changed ? out : undefined
+}
+
+/** One link tag as a client draws it: its name (distinct on the task), its kind and the icon
+ *  group, and the whole target. The task detail serves these (`links`) so the phone reads the
+ *  same names as the console without a second copy of these rules. */
+export interface LinkTagView {
+  tag: string
+  name: string
+  kind: string
+  group: LinkKindGroup
+  target: string
+  /** The target is a file path (else a URL). */
+  file: boolean
+  /** The file is no longer there (set by whoever checked; absent when unknown). */
+  gone?: boolean
+}
+
+export function linkTagViews(tags: readonly string[] | undefined, names?: Readonly<Record<string, string>>): LinkTagView[] {
+  const named = linkTagNames(tags ?? [], names)
+  return [...named].map(([tag, name]) => {
+    const kind = linkTagKey(tag)!
+    return { tag, name, kind, group: linkKindGroup(kind), target: linkTargetOfTag(tag)!, file: !linkUrlOfTag(tag) }
   })
 }

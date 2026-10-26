@@ -14,11 +14,21 @@
   line-height: 1.4;
   pointer-events: none;
 }
+.link-hover-card-head {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+.link-hover-card-name {
+  font-weight: 600;
+  color: var(--fg);
+}
 .link-hover-card-kind {
   font-weight: 600;
   color: #8944AB;
 }
 :root[data-theme="dark"] .link-hover-card-kind { color: #BF5AF2; }
+.link-hover-card-gone { color: var(--error, #d70015); }
 .link-hover-card-target {
   margin-top: 2px;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -39,3 +49,17 @@
 span.tag-chip-linked[role="link"] { cursor: pointer; }
 span.tag-chip-linked[role="link"]:hover .tag-chip-value,
 span.tag-chip-linked[role="link"]:focus-visible .tag-chip-value { text-decoration: underline; }
+
+/* The kind's glyph before a link pill's name (LinkKindIcon.tsx). */
+.tag-chip .tag-chip-icon {
+  flex: none;
+  width: 1em;
+  height: 1em;
+  margin-right: 3px;
+  opacity: 0.85;
+}
+/* Named links read whole: the name is at most three words (link-tags.ts). */
+.tag-chip-link-tag .tag-chip-value { max-width: 180px; overflow: hidden; text-overflow: ellipsis; }
+/* A link to a file that is no longer there: struck through, faded, opens nothing. */
+.tag-chip.tag-chip-gone { opacity: 0.55; cursor: default; }
+.tag-chip.tag-chip-gone .tag-chip-value { text-decoration: line-through; }
