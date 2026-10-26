@@ -12,7 +12,7 @@ import fs, { mkdtempSync as namedMkdtempSync } from 'node:fs'
 import fsp from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
-import { recordedTmpDirs, reapTmpDirs } from './tmp-reaper'
+import { TMP_REAPER_KEEP, recordedTmpDirs, reapTmpDirs } from './tmp-reaper'
 
 const tmp = fs.realpathSync(os.tmpdir())
 const under = (name: string): string => path.join(tmp, name)
@@ -129,5 +129,16 @@ describe('reapTmpDirs', () => {
     expect(removed).not.toContain(gone)
     expect(fs.existsSync(kept)).toBe(false)
     expect(recordedTmpDirs().size).toBe(0)
+  })
+
+  it('leaves a recorded dir that holds the keep marker (a live test kept its evidence)', () => {
+    const evidence = fs.mkdtempSync(under('tmp-reaper-evidence-'))
+    fs.writeFileSync(path.join(evidence, TMP_REAPER_KEEP), '')
+    try {
+      expect(reapTmpDirs()).not.toContain(evidence)
+      expect(fs.existsSync(evidence)).toBe(true)
+    } finally {
+      fs.rmSync(evidence, { recursive: true, force: true })
+    }
   })
 })

@@ -9,7 +9,8 @@
  *     past the deadline fails even when the link is up by then;
  *   - a failed boot goes through the stop entry and exits 4 once, whatever the stop did
  *     (resolved, threw, never resolved), and says the native children are NOT_VERIFIED;
- *   - both live boots use these with the default budgets.
+ *   - both live boots use these with the default budgets, before the shared boot tail arms
+ *     the signal handlers.
  */
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
@@ -145,6 +146,9 @@ describe('failBootLink', () => {
 })
 
 describe('both live boots use them', () => {
+  const runner = read('tests/helpers/live-run.ts')
+  const tailAt = runner.indexOf('export const BOOT_TAIL = `')
+  const BOOT_TAIL_TEXT = runner.slice(tailAt, runner.indexOf('\n`\n', tailAt) + 3)
   for (const f of ['tests/e2e/companion-forward-live-e2e.test.ts', 'tests/e2e/leader-takeover-live-e2e.test.ts']) {
     it(f, () => {
       const text = read(f)
@@ -155,8 +159,18 @@ describe('both live boots use them', () => {
       expect(call).toMatch(/\}\)\.catch\(\(err\) => failBootLink\(err, \{\n  stop: \(\) => stopServer\(\),/)
       expect(call).toMatch(/exit: \(code\) => process\.exit\(code\),/)
       expect(call).not.toMatch(/budgetMs|stopBudgetMs|process\.exit\(0\)|process\.exit\(4\)/)
-      // The failure path runs before the boot arms its signal handlers.
-      expect(text.indexOf('armGracefulSignalExit()', at)).toBeGreaterThan(at)
+      // The failure path runs before the boot arms its signal handlers: the shared boot tail
+      // (tests/helpers/live-run.ts) arms them, and it comes after the wait.
+      expect(text.indexOf('${BOOT_TAIL}', at)).toBeGreaterThan(at)
+      expect(tailAt).toBeGreaterThan(0)
+      expect(BOOT_TAIL_TEXT).toMatch(/\narmGracefulSignalExit\(\)\n/)
+      // Every arm comes from that tail, and the tail after the wait is this boot script's own.
+      expect(text).not.toMatch(/armGracefulSignalExit\(\)/)
+      const head = text.lastIndexOf('${BOOT_HEAD}', at)
+      const next = text.indexOf('${BOOT_HEAD}', at)
+      expect(head).toBeGreaterThan(0)
+      expect(text.slice(head, at)).not.toContain('${BOOT_TAIL}')
+      expect(next === -1 || text.indexOf('${BOOT_TAIL}', at) < next).toBe(true)
       // No hand dial for '__local__' is left, and no wait that skips without a wsUrl.
       expect(text).not.toMatch(/getDirectDaemonConnection\('__local__'/)
       expect(text).not.toMatch(/localDaemon\.wsUrl &&/)

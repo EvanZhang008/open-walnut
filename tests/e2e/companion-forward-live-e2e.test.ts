@@ -24,20 +24,26 @@
  * the Mac while it answers, never first on the companion; away, a local write kept by
  * field in the companion's journal (stage 3a), which the Mac drains when it wakes.
  *
- * Isolation as in leader-takeover-live-e2e.test.ts: own HOME, data dir and
- * daemon dir per server under one temp base, fresh random tokens, a `claude`
- * that refuses to run, every process stopped by the pid it wrote.
+ * Isolation as in leader-takeover-live-e2e.test.ts: own HOME, TMPDIR, data dir
+ * and daemon dir per server under one temp base, an allowlisted environment and,
+ * on macOS, walls that allow only loopback connections and writes under the base
+ * (tests/helpers/live-isolation.ts); fresh random tokens; a `claude` that refuses
+ * to run. Every process is registered with its proof of ownership the moment it
+ * exists, and only those are signalled; cleanup is TERM and a proven exit, never
+ * KILL, and anything left running fails the run and keeps the base
+ * (tests/helpers/live-procs.ts).
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import fsp from 'node:fs/promises'
-import os from 'node:os'
 import path from 'node:path'
-import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
+import { execFileSync } from 'node:child_process'
+import { LiveProcs, realProcTable, type Owned } from '../helpers/live-procs.js'
+import { liveEnv, liveWallsAvailable } from '../helpers/live-isolation.js'
+import { BOOT_HEAD, BOOT_TAIL, blankServer, bootLiveServer, finishLive, guardLogOf, liveBase, prepareServer, resumeOnTerm, type LiveServer } from '../helpers/live-run.js'
 
 const REPO_ROOT = path.resolve(import.meta.dirname, '..', '..')
-const TSX = path.join(REPO_ROOT, 'node_modules', '.bin', 'tsx')
 // The companion counts the Mac silent after min(three of its own 15s beats, T).
 // T is longer than the read budget (8s), so a call that goes out to a sleeping
 // Mac comes back before the Mac counts as silent: the suspect rule is what
@@ -55,10 +61,11 @@ function gitEnv(): NodeJS.ProcessEnv {
 }
 
 let base = ''
+let procs: LiveProcs | null = null
+let unhookTerm: (() => void) | null = null
 const tokens = { phone: '', local: '' }
-interface Server { proc: ChildProcess | null; port: number; log: string; data: string; home: string; daemonDir: string; pid: number }
-const companion: Server = { proc: null, port: 0, log: '', data: '', home: '', daemonDir: '', pid: 0 }
-const primary: Server = { proc: null, port: 0, log: '', data: '', home: '', daemonDir: '', pid: 0 }
+const companion: LiveServer = blankServer('companion')
+const primary: LiveServer = blankServer('primary')
 
 async function waitFor<T>(fn: () => Promise<T | null | undefined | false> | T | null | undefined | false, ms: number, what: string): Promise<T> {
   const end = Date.now() + ms
@@ -70,14 +77,10 @@ async function waitFor<T>(fn: () => Promise<T | null | undefined | false> | T | 
   throw new Error(`timed out waiting for ${what}${last ? `: ${String(last)}` : ''}\n--- companion ---\n${companion.log.slice(-2500)}\n--- primary ---\n${primary.log.slice(-2500)}`)
 }
 
-function serverEnv(s: Server, extra: Record<string, string>): NodeJS.ProcessEnv {
-  return {
-    ...process.env,
-    PATH: `${path.join(s.home, 'bin')}${path.delimiter}${process.env.PATH ?? ''}`,
+function serverEnv(s: LiveServer, extra: Record<string, string>): NodeJS.ProcessEnv {
+  // TMPDIR is the server's own dir, which holds its data dir (see liveEnv).
+  return liveEnv({ home: s.home, tmp: path.dirname(s.home), bins: [path.join(s.home, 'bin')], guardLog: guardLogOf(base) }, {
     OPEN_WALNUT_HOME: s.data,
-    HOME: s.home,
-    USERPROFILE: s.home,
-    SHELL: '/bin/sh',
     WALNUT_DAEMON_DIR: s.daemonDir,
     WALNUT_STREAMS_DIR: path.join(s.daemonDir, 'streams'),
     WALNUT_LEGACY_STREAMS_DIR: path.join(s.daemonDir, 'no-legacy'),
@@ -86,24 +89,19 @@ function serverEnv(s: Server, extra: Record<string, string>): NodeJS.ProcessEnv 
     WALNUT_DISABLE_SEARCH: '1',
     WALNUT_LOCAL_CLAUDE_PROBE: '0',
     WALNUT_LEADER_TAKEOVER_MS: String(T),
-    VITEST: '', VITEST_WORKER_ID: '', VITEST_POOL_ID: '', VITEST_MODE: '', NODE_ENV: 'production',
+    WALNUT_SESSION_HOST: '0',
+    WALNUT_TEST_KEEPER_PID: String(process.pid),
+    WALNUT_TURN_SNAPSHOTS: '0',
     ...extra,
-  }
-}
-
-async function prepare(s: Server, name: string): Promise<void> {
-  s.home = path.join(base, name, 'home')
-  s.data = path.join(base, name, 'data')
-  s.daemonDir = path.join(base, name.slice(0, 2) + 'd')
-  for (const d of [path.join(s.home, 'bin'), s.data, s.daemonDir]) await fsp.mkdir(d, { recursive: true })
-  await fsp.writeFile(path.join(s.home, 'bin', 'claude'), '#!/bin/sh\necho "claude is disabled in this test" >&2\nexit 1\n', { mode: 0o755 })
+  })
 }
 
 const BOOT = (data: string, cloud: boolean) => `
+${BOOT_HEAD}
 const c = await import(${JSON.stringify(path.join(REPO_ROOT, 'src/constants.ts'))})
 if (c.WALNUT_HOME !== ${JSON.stringify(data)} || c.CLOUD_MODE !== ${cloud}) { process.stderr.write('REFUSING: wrong home ' + c.WALNUT_HOME + '\\n'); process.exit(3) }
 const { startServer, stopServer, armGracefulSignalExit } = await import(${JSON.stringify(path.join(REPO_ROOT, 'src/web/server.ts'))})
-const server = await startServer({ port: 0, dev: true })
+const server = await startServer({ port: 0, dev: true, bindAddress: '127.0.0.1' })
 ${cloud ? '' : `const { localDaemon } = await import(${JSON.stringify(path.join(REPO_ROOT, 'src/providers/local-daemon.ts'))})
 const dc = await import(${JSON.stringify(path.join(REPO_ROOT, 'src/providers/daemon-connection.ts'))})
 const { awaitLocalDaemonLink, failBootLink } = await import(${JSON.stringify(path.join(REPO_ROOT, 'tests/helpers/local-daemon-link.ts'))})
@@ -120,43 +118,18 @@ await awaitLocalDaemonLink({
   exit: (code) => process.exit(code),
 }))`}
 const addr = server.address()
-process.stdout.write(JSON.stringify({ pid: process.pid }) + '\\n')
 process.stdout.write('WALNUT_PORT=' + (typeof addr === 'object' && addr ? addr.port : addr) + '\\n')
-let closing = false
-const close = async () => { if (closing) return; closing = true; try { await stopServer() } catch {} process.exit(0) }
-process.on('SIGTERM', close)
-process.on('SIGINT', close)
-armGracefulSignalExit()
-`
+${BOOT_TAIL}`
 
-async function bootServer(s: Server, name: string, cloud: boolean, env: NodeJS.ProcessEnv): Promise<void> {
-  const file = path.join(base, `${name}-boot.mts`)
-  await fsp.writeFile(file, BOOT(s.data, cloud))
-  const proc = spawn(TSX, [file], { cwd: REPO_ROOT, env, stdio: ['ignore', 'pipe', 'pipe'] })
-  s.proc = proc
-  proc.stderr!.on('data', (b: Buffer) => { s.log = (s.log + b.toString()).slice(-300_000) })
-  if (process.env.DEBUG_LIVE) proc.stderr!.on('data', (b: Buffer) => process.stderr.write(b))
-  s.port = await new Promise<number>((resolve, reject) => {
-    let out = ''
-    const t = setTimeout(() => reject(new Error(`server did not report a port in 180s\n${s.log.slice(-3000)}`)), 180_000)
-    proc.stdout!.on('data', (b: Buffer) => {
-      out += b.toString()
-      for (const l of out.split('\n')) {
-        if (!l.startsWith('{')) continue
-        try { const j = JSON.parse(l); if (typeof j.pid === 'number') s.pid = j.pid } catch { /* partial */ }
-      }
-      const m = /WALNUT_PORT=(\d+)/.exec(out)
-      if (m) { clearTimeout(t); resolve(Number(m[1])) }
-    })
-    proc.once('exit', (code) => { clearTimeout(t); reject(new Error(`server exited early (${code})\n${s.log.slice(-3000)}`)) })
-  })
+async function bootServer(s: LiveServer, name: string, cloud: boolean, env: NodeJS.ProcessEnv): Promise<void> {
+  await bootLiveServer(procs!, s, { base, repo: REPO_ROOT, file: path.join(base, `${name}-boot.mts`), script: BOOT(s.data, cloud), env, ownDaemon: !cloud })
 }
 
 const MAC_CHECKLIST = '# Mac checklist\n- the build is green\n'
 const COMPANION_CHECKLIST = '# Companion checklist\n- an old copy\n'
 
 async function startCompanion(): Promise<void> {
-  await prepare(companion, 'companion')
+  await prepareServer(companion, base, 'companion')
   await fsp.mkdir(path.join(base, 'hub'), { recursive: true })
   await fsp.writeFile(path.join(companion.data, 'config.yaml'), 'version: 1\nuser:\n  name: Box\n')
   await fsp.writeFile(path.join(companion.data, 'HEARTBEAT.md'), COMPANION_CHECKLIST)
@@ -171,7 +144,7 @@ async function startCompanion(): Promise<void> {
 }
 
 async function startPrimary(): Promise<void> {
-  await prepare(primary, 'primary')
+  await prepareServer(primary, base, 'primary')
   execFileSync('git', ['init', '-q', primary.data], { env: gitEnv() })
   execFileSync('git', ['-C', primary.data, 'remote', 'add', 'cloud', `http://mac:${tokens.phone}@127.0.0.1:${companion.port}/git/data.git`], { env: gitEnv() })
   await fsp.mkdir(path.join(primary.data, 'sync'), { recursive: true })
@@ -183,11 +156,15 @@ async function startPrimary(): Promise<void> {
 
 interface Reply { status: number; by: string | null; json: Record<string, any>; ms: number }
 
+// A call that hangs fails its test instead of holding the run past its deadline.
+const CALL_MS = 60_000
+
 /** The phone's call to the companion. */
 async function phone(p: string, init: RequestInit = {}): Promise<Reply> {
   const started = Date.now()
   const res = await fetch(`http://127.0.0.1:${companion.port}${p}`, {
     ...init,
+    signal: init.signal ?? AbortSignal.timeout(CALL_MS),
     headers: { Authorization: `Bearer ${tokens.phone}`, ...(init.body ? { 'Content-Type': 'application/json' } : {}), ...(init.headers ?? {}) },
   })
   return { status: res.status, by: res.headers.get('x-walnut-answered-by'), json: await res.json().catch(() => ({})) as Record<string, any>, ms: Date.now() - started }
@@ -196,48 +173,44 @@ async function phone(p: string, init: RequestInit = {}): Promise<Reply> {
 /** A call on the Mac itself (loopback, this machine). */
 async function mac(p: string, init: RequestInit = {}): Promise<{ status: number; json: Record<string, any> }> {
   const res = await fetch(`http://127.0.0.1:${primary.port}${p}`, {
-    ...init, headers: { ...(init.body ? { 'Content-Type': 'application/json' } : {}), ...(init.headers ?? {}) },
+    ...init, signal: init.signal ?? AbortSignal.timeout(CALL_MS), headers: { ...(init.body ? { 'Content-Type': 'application/json' } : {}), ...(init.headers ?? {}) },
   })
   return { status: res.status, json: await res.json().catch(() => ({})) as Record<string, any> }
 }
 
 const leaderView = async () => (await phone('/api/leader')).json
 
-function pidIn(dir: string): number | null {
-  try { const n = Number(fs.readFileSync(path.join(dir, 'daemon.pid'), 'utf8').trim()); return Number.isInteger(n) && n > 1 ? n : null } catch { return null }
+/** The Mac: the primary server and its own local daemon, as registered. */
+function macProcs(): Owned[] {
+  if (!primary.server || !primary.daemon) throw new Error('the Mac\'s server and daemon are not registered')
+  return [primary.server, primary.daemon]
 }
-/** The Mac: the primary server and its own local daemon. */
-const macPids = (): number[] => [primary.pid, pidIn(primary.daemonDir) ?? 0].filter((p) => p > 1)
+/** The Mac sleeps: SIGSTOP of the server, then its daemon (the sockets stay open and go silent). */
+async function sleepMac(): Promise<void> {
+  for (const o of macProcs()) expect(await procs!.pause(o), `SIGSTOP ${o.label}: ${procs!.refused.join('; ')}`).toBe(true)
+}
+/** The Mac wakes: the daemon first, so the server finds it answering. */
+async function wakeMac(): Promise<void> {
+  for (const o of [...macProcs()].reverse()) expect(await procs!.resume(o), `SIGCONT ${o.label}: ${procs!.refused.join('; ')}`).toBe(true)
+}
 
-describe('one request path on the companion (real servers, the Mac\'s real daemon)', () => {
+describe.skipIf(!liveWallsAvailable())('one request path on the companion (real servers, the Mac\'s real daemon)', () => {
   beforeAll(async () => {
-    base = await fsp.mkdtemp(path.join(os.tmpdir(), 'wcf-'))
+    base = await liveBase('wcf-', ['prd', 'cod'])
+    procs = new LiveProcs(realProcTable(), base)
+    unhookTerm = resumeOnTerm(procs)
     tokens.phone = newToken()
     tokens.local = newToken()
     await startCompanion()
     await startPrimary()
-    expect(primary.pid).toBeGreaterThan(1)
+    expect(primary.server).not.toBeNull()
+    expect(primary.daemon).not.toBeNull()
   }, 400_000)
 
   afterAll(async () => {
-    for (const pid of macPids()) { try { process.kill(pid, 'SIGCONT') } catch { /* gone */ } }
-    for (const s of [primary, companion]) {
-      const proc = s.proc
-      if (proc && proc.exitCode === null && proc.signalCode === null) {
-        const exited = new Promise<void>((r) => proc.once('exit', () => r()))
-        proc.kill('SIGTERM')
-        await Promise.race([exited, sleep(30_000)])
-        if (proc.exitCode === null && proc.signalCode === null) proc.kill('SIGKILL')
-      }
-    }
-    for (const dir of [primary.daemonDir, companion.daemonDir]) {
-      const pid = dir ? pidIn(dir) : null
-      if (pid) { try { process.kill(pid, 'SIGTERM') } catch { /* gone */ } }
-    }
-    if (process.env.DEBUG_LIVE) process.stderr.write(`--- companion ---\n${companion.log.slice(-6000)}\n--- primary ---\n${primary.log.slice(-6000)}\n`)
-    await sleep(500)
-    if (base && !process.env.KEEP_LEADER_LIVE) await fsp.rm(base, { recursive: true, force: true }).catch(() => {})
-  }, 120_000)
+    if (!procs) return
+    try { await finishLive(procs, base, [primary, companion]) } finally { unhookTerm?.() }
+  }, 400_000)
 
   it('the companion hears the Mac, and the Mac lets it stand in', async () => {
     const view = await waitFor(async () => {
@@ -381,7 +354,7 @@ describe('one request path on the companion (real servers, the Mac\'s real daemo
     // Stage 3a: the Mac drained the companion's journal when its bridge connected, so the
     // companion knows the Mac takes task-fields records.
     await waitFor(() => drainsKnown().includes('task-fields'), 30_000, 'the Mac to have drained the companion\'s journal once')
-    for (const pid of macPids()) process.kill(pid, 'SIGSTOP')
+    await sleepMac()
     const stoppedAt = Date.now()
     const first = await phone('/api/v1/heartbeat/checklist')
     expect(first).toMatchObject({ status: 200, by: 'companion' })
@@ -416,7 +389,7 @@ describe('one request path on the companion (real servers, the Mac\'s real daemo
     const text = 'Seven-minute voice kept across a disconnect. ' + String.fromCodePoint(0x4f60, 0x597d).repeat(1500)
     const basePath = `/api/v1/stt/recordings/${id}`
     const audioDigest = crypto.createHash('sha256').update(audio).digest('hex')
-    for (const pid of macPids()) process.kill(pid, 'SIGSTOP')
+    await sleepMac()
     try {
       let index = 0
       for (let offset = 0; offset < audio.length; offset += 256 * 1024) {
@@ -432,7 +405,8 @@ describe('one request path on the companion (real servers, the Mac\'s real daemo
       const cached = await phone(basePath + '/transcribe', { method: 'POST', body: '{}' })
       expect(cached.json).toMatchObject({ text, recordingId: id })
     } finally {
-      for (const pid of macPids()) process.kill(pid, 'SIGCONT')
+      // No assertion here: it would hide the failure that brought us here; afterAll resumes anything still paused.
+      for (const o of [...macProcs()].reverse()) await procs!.resume(o)
     }
     const synced = await waitFor(async () => {
       const reply = await phone(basePath)
@@ -448,7 +422,7 @@ describe('one request path on the companion (real servers, the Mac\'s real daemo
   }, 300_000)
 
   it('the Mac wakes: the Mac answers again', async () => {
-    for (const pid of macPids()) process.kill(pid, 'SIGCONT')
+    await wakeMac()
     const r = await waitFor(async () => {
       const x = await phone('/api/v1/heartbeat/checklist')
       return x.by === 'primary' ? x : null
@@ -469,14 +443,9 @@ describe('one request path on the companion (real servers, the Mac\'s real daemo
   // with WALNUT_BRIDGE_HIDE_CAPS): the Mac and its daemon start again, and the companion
   // forwards through server.http as before, its 1 MB frame cap included.
   it('an old daemon (the cap dropped): the companion forwards through server.http, as today', async () => {
-    const proc = primary.proc!
-    const exited = new Promise<void>((r) => proc.once('exit', () => r()))
-    proc.kill('SIGTERM')
-    await Promise.race([exited, sleep(30_000)])
-    const daemonPid = pidIn(primary.daemonDir)
-    if (daemonPid) {
-      try { process.kill(daemonPid, 'SIGTERM') } catch { /* gone */ }
-      await waitFor(() => { try { process.kill(daemonPid, 0); return false } catch { return true } }, 30_000, 'the Mac\'s daemon to stop')
+    // The Mac and its daemon stop, each exit proven, before a new pair starts on the same dirs.
+    for (const o of [primary.server!, primary.daemon!]) {
+      expect(await procs!.stop(o, 30_000), `${o.label} did not exit: ${[...procs!.failures, ...procs!.refused].join('; ')}`).toBe(true)
     }
     await bootServer(primary, 'primary-old-daemon', false, serverEnv(primary, { WALNUT_LEADER_HEARTBEAT_MS: '500', WALNUT_BRIDGE_HIDE_CAPS: 'bridge-stream-v1' }))
     const before = (await leaderView()).forward

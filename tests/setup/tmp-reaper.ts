@@ -35,6 +35,13 @@ import { afterAll } from 'vitest'
 const recorded = new Set<string>()
 
 /**
+ * A recorded dir holding this file is left in place: a live e2e test whose cleanup
+ * could not prove every process it started exited keeps its dir as the evidence (and
+ * as the only proof left of which processes are its own); tests/helpers/live-procs.ts.
+ */
+export const TMP_REAPER_KEEP = '.tmp-reaper-keep'
+
+/**
  * Both spellings of the temp root. macOS os.tmpdir() is `/var/folders/...`, a
  * symlink to `/private/var/folders/...`; tests use either, and a path whose
  * parent does not exist yet (recursive mkdir) cannot be realpath'd, so this is
@@ -97,6 +104,7 @@ export function reapTmpDirs(): string[] {
     // Belt and braces: never act on anything that is not a direct child of tmp.
     if (path.dirname(entry) !== ROOT) continue
     if (!fs.existsSync(entry)) continue
+    if (fs.existsSync(path.join(entry, TMP_REAPER_KEEP))) continue
     try {
       fs.rmSync(entry, { recursive: true, force: true, maxRetries: 2 })
       removed.push(entry)

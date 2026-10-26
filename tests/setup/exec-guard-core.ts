@@ -24,6 +24,12 @@ export function unattributedLogPaths(tmpdir: string = os.tmpdir()): string[] {
   return [...new Set([path.join(tmpdir, 'open-walnut-exec-guard-unattributed.log'), '/tmp/open-walnut-exec-guard-unattributed.log'])]
 }
 
+/**
+ * The guard's own variables (tests/setup/exec-guard.ts). A child env built from scratch keeps
+ * them as they are, so the guard still covers that child and its hits reach this worker's log.
+ */
+export const EXEC_GUARD_VARS = { on: 'WALNUT_TEST_EXEC_GUARD', log: 'WALNUT_TEST_EXEC_GUARD_LOG', tag: 'WALNUT_TEST_EXEC_GUARD_TAG' } as const
+
 /** Variables that point a tool past HOME at the user's own config or agent. */
 export const REAL_CONFIG_VARS = ['ZDOTDIR', 'XDG_CONFIG_HOME', 'GIT_CONFIG_GLOBAL', 'CLAUDE_CONFIG_DIR', 'SSH_AUTH_SOCK'] as const
 

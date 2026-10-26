@@ -106,6 +106,8 @@ const ACCOUNT_HOME_READERS = new Set([
   'tests/core/sessions/ephemeral-guard.test.ts',
   'tests/providers/daemon-ownership-prod-claim.test.ts',
   'tests/setup/exec-guard.test.ts',
+  // Builds the walls that keep the real home out of the live e2e tests; it must name that home.
+  'tests/helpers/live-isolation.ts',
 ])
 
 function walk(dir: string, out: string[] = []): string[] {

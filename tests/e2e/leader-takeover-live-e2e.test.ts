@@ -18,10 +18,16 @@
  * companion. The Mac wakes (SIGCONT): it takes back what the hosts did alone
  * (the request rows, the Board write) and the lead, and the companion lets go.
  *
- * Isolation: every server has its own HOME, data dir and daemon dir under one
- * temp base; auth.json is written fresh with random tokens; both servers' PATH
- * lead with a `claude` that refuses to run; nothing is copied from user data.
- * Every process is stopped by the pid it wrote into its own temp dir.
+ * Isolation: every server and daemon has its own HOME, TMPDIR and data or daemon
+ * dir under one temp base, an allowlisted environment and, on macOS, walls that
+ * allow only loopback connections and writes under the base
+ * (tests/helpers/live-isolation.ts); auth.json is written fresh with random
+ * tokens; both servers' PATH lead with a `claude` that refuses to run; nothing is
+ * copied from user data. Every process is registered with its proof of ownership
+ * the moment it exists (tests/helpers/live-procs.ts), and only those are
+ * signalled. Cleanup: the mock CLIs end through their daemon's own stop, every
+ * other process by TERM and a proven exit, never KILL; anything left running
+ * fails the run and keeps the base.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import crypto from 'node:crypto'
@@ -34,10 +40,12 @@ import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
 import { WebSocket } from 'ws'
 import Database from 'better-sqlite3'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
+import { LiveProcs, realProcTable, type Owned } from '../helpers/live-procs.js'
+import { LIVE_CONNECT_GUARD, LIVE_KEEPER, liveEnv, liveWallsAvailable, walled } from '../helpers/live-isolation.js'
+import { BOOT_HEAD, BOOT_TAIL, blankServer, bootLiveServer, finishLive, guardLogOf, liveBase, prepareServer, resumeOnTerm, type LiveServer } from '../helpers/live-run.js'
 import type { GatewayResponse } from '../../src/providers/gateway-core.js'
 
 const REPO_ROOT = path.resolve(import.meta.dirname, '..', '..')
-const TSX = path.join(REPO_ROOT, 'node_modules', '.bin', 'tsx')
 const BUN = [process.env.BUN_INSTALL && path.join(process.env.BUN_INSTALL, 'bin/bun'), path.join(os.homedir(), '.bun/bin/bun'), '/opt/homebrew/bin/bun', '/usr/local/bin/bun']
   .find((p): p is string => !!p && fs.existsSync(p))
 const A = 'aaaaaaaa-1111-4111-8111-111111111111'
@@ -91,7 +99,15 @@ process.stdin.on('data', (chunk) => {
     }
   }
 })
-setInterval(() => {}, 1 << 30)
+// Every way it ends leaves a line with its pid: the cleanup fails on a mock that ended without
+// one (a KILL). It ends on the daemon's stop (INT, then TERM) and with its daemon, which holds this
+// stdin open while it runs and is its parent.
+const done = (why) => { try { fs.appendFileSync(inbox.replace('.inbox.jsonl', '.exit'), process.pid + ' ' + why + '\\n') } catch {} process.exit(0) }
+process.on('SIGINT', () => done('SIGINT'))
+process.on('SIGTERM', () => done('SIGTERM'))
+process.stdin.on('end', () => done('stdin-end'))
+const parent = process.ppid
+setInterval(() => { if (process.ppid !== parent) done('parent-gone') }, 2_000)
 `
 
 const sha256 = (t: string): string => crypto.createHash('sha256').update(t, 'utf-8').digest('hex')
@@ -123,22 +139,20 @@ function logTail(log: string, chars = 3_500): string {
 }
 
 let base = ''
+let procs: LiveProcs | null = null
+let unhookTerm: (() => void) | null = null
 const tokens = { mac: '', local: '', devbox: '', oldbox: '' }
-interface Server { proc: ChildProcess | null; port: number; log: string; data: string; home: string; daemonDir: string }
-const companion: Server = { proc: null, port: 0, log: '', data: '', home: '', daemonDir: '' }
-const primary: Server & { ids: { lead: string; worker: string; far: string }; serverPid: number; sendPort: number } = { proc: null, port: 0, log: '', data: '', home: '', daemonDir: '', ids: { lead: '', worker: '', far: '' }, serverPid: 0, sendPort: 0 }
-interface Daemon { name: string; twin: 'source' | 'standalone'; proc: ChildProcess; dir: string; port: number; sock: string; pid: number }
+const companion: LiveServer = blankServer('companion')
+const primary: LiveServer & { ids: { lead: string; worker: string; far: string }; sendPort: number } = { ...blankServer('primary'), ids: { lead: '', worker: '', far: '' }, sendPort: 0 }
+interface Daemon { name: string; twin: 'source' | 'standalone'; proc: ChildProcess; keeper: Owned; owned: Owned; dir: string; port: number; sock: string; pid: number }
 const daemons: Daemon[] = []
+/** The mock CLIs the daemons run, by the pid their daemon reported and the mock's path. */
+const clis: Array<{ d: Daemon; sid: string; o: Owned }> = []
 
-function serverEnv(s: Server, extra: Record<string, string>): NodeJS.ProcessEnv {
-  const stubBin = path.join(s.home, 'bin')
-  return {
-    ...process.env,
-    PATH: `${stubBin}${path.delimiter}${process.env.PATH ?? ''}`,
+function serverEnv(s: LiveServer, extra: Record<string, string>): NodeJS.ProcessEnv {
+  // TMPDIR is the server's own dir, which holds its data dir (see liveEnv).
+  return liveEnv({ home: s.home, tmp: path.dirname(s.home), bins: [path.join(s.home, 'bin')], guardLog: guardLogOf(base) }, {
     OPEN_WALNUT_HOME: s.data,
-    HOME: s.home,
-    USERPROFILE: s.home,
-    SHELL: '/bin/sh',
     WALNUT_DAEMON_DIR: s.daemonDir,
     WALNUT_STREAMS_DIR: path.join(s.daemonDir, 'streams'),
     WALNUT_LEGACY_STREAMS_DIR: path.join(s.daemonDir, 'no-legacy'),
@@ -148,42 +162,21 @@ function serverEnv(s: Server, extra: Record<string, string>): NodeJS.ProcessEnv 
     WALNUT_LOCAL_CLAUDE_PROBE: '0',
     WALNUT_LEADER_TAKEOVER_MS: String(T),
     WALNUT_TRUSTED_CLIENT_BEAT_MS: String(BEAT),
-    VITEST: '', VITEST_WORKER_ID: '', VITEST_POOL_ID: '', VITEST_MODE: '', NODE_ENV: 'production',
+    WALNUT_SESSION_HOST: '0',
+    WALNUT_TEST_KEEPER_PID: String(process.pid),
+    WALNUT_TURN_SNAPSHOTS: '0',
     ...extra,
-  }
-}
-
-async function prepare(s: Server, name: string): Promise<void> {
-  s.home = path.join(base, name, 'home')
-  s.data = path.join(base, name, 'data')
-  s.daemonDir = path.join(base, name.slice(0, 2) + 'd')
-  for (const d of [path.join(s.home, 'bin'), s.data, s.daemonDir]) await fsp.mkdir(d, { recursive: true })
-  await fsp.writeFile(path.join(s.home, 'bin', 'claude'), '#!/bin/sh\necho "claude is disabled in this test" >&2\nexit 1\n', { mode: 0o755 })
-}
-
-/** Boot a server child with a boot script; it prints WALNUT_PORT= and then JSON lines. */
-async function bootServer(s: Server, script: string, env: NodeJS.ProcessEnv, onLine?: (line: string) => void): Promise<void> {
-  const file = path.join(base, `${path.basename(path.dirname(s.data))}-boot.mts`)
-  await fsp.writeFile(file, script)
-  const proc = spawn(TSX, [file], { cwd: REPO_ROOT, env, stdio: ['ignore', 'pipe', 'pipe'] })
-  s.proc = proc
-  proc.stderr!.on('data', (b: Buffer) => { s.log = (s.log + b.toString()).slice(-300_000) })
-  if (process.env.DEBUG_LIVE) proc.stderr!.on('data', (b: Buffer) => process.stderr.write(b))
-  s.port = await new Promise<number>((resolve, reject) => {
-    let out = ''
-    const t = setTimeout(() => reject(new Error(`server did not report a port in 180s\n${s.log.slice(-3000)}`)), 180_000)
-    proc.stdout!.on('data', (b: Buffer) => {
-      out += b.toString()
-      const m = /WALNUT_PORT=(\d+)/.exec(out)
-      if (m) { clearTimeout(t); resolve(Number(m[1])) }
-      if (onLine) for (const l of out.split('\n')) if (l.startsWith('{')) onLine(l)
-    })
-    proc.once('exit', (code) => { clearTimeout(t); reject(new Error(`server exited early (${code})\n${s.log.slice(-3000)}`)) })
   })
 }
 
+/** Boot a server child with a boot script (tests/helpers/live-run.ts); `ownDaemon` for the Mac. */
+async function bootServer(s: LiveServer, script: string, env: NodeJS.ProcessEnv, ownDaemon: boolean, onLine?: (line: string) => void): Promise<void> {
+  const file = path.join(base, `${path.basename(path.dirname(s.data))}-boot.mts`)
+  await bootLiveServer(procs!, s, { base, repo: REPO_ROOT, file, script, env, ownDaemon, onLine })
+}
+
 async function startCompanion(): Promise<void> {
-  await prepare(companion, 'companion')
+  await prepareServer(companion, base, 'companion')
   await fsp.mkdir(path.join(base, 'hub'), { recursive: true })
   await fsp.writeFile(path.join(companion.data, 'config.yaml'), 'version: 1\nuser:\n  name: Box\n')
   const now = new Date().toISOString()
@@ -194,58 +187,75 @@ async function startCompanion(): Promise<void> {
     { name: 'bridge-oldbox', tokenHash: sha256(tokens.oldbox), createdAt: now, kind: 'machine' },
   ] }), { mode: 0o600 })
   await bootServer(companion, `
+${BOOT_HEAD}
 const c = await import(${JSON.stringify(path.join(REPO_ROOT, 'src/constants.ts'))})
 if (c.WALNUT_HOME !== ${JSON.stringify(companion.data)} || !c.CLOUD_MODE) { process.stderr.write('REFUSING: wrong home ' + c.WALNUT_HOME + '\\n'); process.exit(3) }
 const { startServer, stopServer, armGracefulSignalExit } = await import(${JSON.stringify(path.join(REPO_ROOT, 'src/web/server.ts'))})
-const server = await startServer({ port: 0, dev: true })
+const server = await startServer({ port: 0, dev: true, bindAddress: '127.0.0.1' })
 const addr = server.address()
 process.stdout.write('WALNUT_PORT=' + (typeof addr === 'object' && addr ? addr.port : addr) + '\\n')
-let closing = false
-const close = async () => { if (closing) return; closing = true; try { await stopServer() } catch {} process.exit(0) }
-process.on('SIGTERM', close)
-process.on('SIGINT', close)
-armGracefulSignalExit()
-`, serverEnv(companion, { WALNUT_CLOUD_MODE: '1', WALNUT_GIT_HUB_DIR: path.join(base, 'hub'), WALNUT_LEADER_TICK_MS: '300' }))
+${BOOT_TAIL}`, serverEnv(companion, { WALNUT_CLOUD_MODE: '1', WALNUT_GIT_HUB_DIR: path.join(base, 'hub'), WALNUT_LEADER_TICK_MS: '300' }), false)
 }
 
 async function spawnDaemon(name: string, twin: 'source' | 'standalone'): Promise<Daemon> {
   const dir = path.join(base, name.slice(0, 2))
   fs.mkdirSync(dir)
-  const env: NodeJS.ProcessEnv = {
-    ...process.env,
+  const env = liveEnv({ home: path.join(base, `${name}-host`, 'home'), tmp: path.join(base, `${name}-host`), bins: [], guardLog: guardLogOf(base) }, {
     WALNUT_DAEMON_DIR: dir,
     WALNUT_STREAMS_DIR: path.join(dir, 'streams'),
+    WALNUT_LEGACY_STREAMS_DIR: path.join(dir, 'no-legacy'),
     WALNUT_SPAWN_JOURNAL: path.join(dir, 'spawn-journal.jsonl'),
     WALNUT_GATEWAY_TIMEOUT_MS: '10000',
     WALNUT_LEADER_TAKEOVER_MS: String(T),
     WALNUT_TRUSTED_CLIENT_BEAT_MS: String(BEAT),
-  }
-  delete env.VITEST; delete env.VITEST_MODE; delete env.VITEST_WORKER_ID; delete env.VITEST_POOL_ID
-  let proc: ChildProcess
+    WALNUT_TURN_SNAPSHOTS: '0',
+  })
+  // stderr goes to a file nobody has to drain (a full pipe would block the daemon). Each runs in its
+  // own dir, as the product's local daemon does: behind the walls Bun starts with an EMPTY environment
+  // when its cwd sits under a dir it may not list (the clone under the real home), and a daemon
+  // without its env would fall back to the production daemon dir with no connect guard ports.
+  const stderr = fs.openSync(path.join(dir, 'daemon-stderr.log'), 'a')
+  let daemonArgv: string[]
   if (twin === 'source') {
     const script = path.join(dir, 'daemon.cjs')
     fs.writeFileSync(script, getDaemonSource(), { mode: 0o755 })
-    proc = spawn(process.execPath, [script, '--start'], { env, stdio: ['ignore', 'ignore', 'pipe'] })
+    daemonArgv = [process.execPath, script, '--start']
   } else {
-    proc = spawn(BUN!, [path.join(REPO_ROOT, 'src/providers/daemon-standalone.ts'), '--start'], { env, stdio: ['ignore', 'ignore', 'pipe'], cwd: REPO_ROOT })
+    // Bun does not read NODE_OPTIONS: the connect guard is preloaded by name.
+    daemonArgv = [BUN!, '--preload', LIVE_CONNECT_GUARD, path.join(REPO_ROOT, 'src/providers/daemon-standalone.ts'), '--start']
   }
+  // The daemon runs under a keeper inside the same walls (tests/helpers/live-keeper.cjs): its parent
+  // watchdog asks the keeper, so the daemon stays behind the signal wall. The keeper ends with this
+  // process (its stdin closes); `--start` runs the daemon in the keeper's child itself.
+  const [cmd, args] = walled(process.execPath, [LIVE_KEEPER, ...daemonArgv], { base, repo: REPO_ROOT })
+  const proc = spawn(cmd, args, { env, stdio: ['pipe', 'pipe', stderr], cwd: dir })
+  fs.closeSync(stderr)
+  const keeper = procs!.child(`${name} keeper`, proc)
+  if (!keeper) throw new Error(`${name}: spawn gave no pid`)
+  const reported = await new Promise<number>((resolve, reject) => {
+    let out = ''
+    const t = setTimeout(() => reject(new Error(`${name}: the keeper reported no daemon in 30 s`)), 30_000)
+    proc.stdout!.on('data', (b: Buffer) => {
+      out += b.toString()
+      const line = out.split('\n').find((l) => l.startsWith('{'))
+      if (!line) return
+      clearTimeout(t)
+      try { resolve(Number(JSON.parse(line).daemon)) } catch (err) { reject(err) }
+    })
+    proc.once('exit', (code) => { clearTimeout(t); reject(new Error(`${name}: the keeper exited early (${code})`)) })
+  })
+  const owned = await procs!.childOf(`${name} daemon`, reported, keeper)
   const portFile = path.join(dir, 'daemon.port')
   const sock = path.join(dir, 'agent-gateway.sock')
   await waitFor(() => fs.existsSync(portFile) && fs.existsSync(sock) && fs.existsSync(path.join(dir, 'daemon.pid')), 60_000, `${name} daemon`)
-  return {
-    name, twin, proc, dir, sock,
-    port: parseInt(fs.readFileSync(portFile, 'utf8').trim(), 10),
-    pid: parseInt(fs.readFileSync(path.join(dir, 'daemon.pid'), 'utf8').trim(), 10),
-  }
+  const pid = parseInt(fs.readFileSync(path.join(dir, 'daemon.pid'), 'utf8').trim(), 10)
+  if (pid !== owned.pid) throw new Error(`${name}: daemon.pid says ${pid}, the spawned daemon is ${owned.pid}`)
+  return { name, twin, proc, keeper, owned, dir, sock, pid, port: parseInt(fs.readFileSync(portFile, 'utf8').trim(), 10) }
 }
 
 async function startSession(d: Daemon, sid: string): Promise<void> {
   const mock = path.join(base, 'mock-cli.cjs')
-  const ws = await new Promise<WebSocket>((resolve, reject) => {
-    const s = new WebSocket(`ws://127.0.0.1:${d.port}`)
-    s.once('open', () => resolve(s))
-    s.once('error', reject)
-  })
+  const ws = await openDaemonSocket(d)
   const reply = await new Promise<Record<string, unknown>>((resolve, reject) => {
     const t = setTimeout(() => reject(new Error('start timed out')), 20_000)
     ws.on('message', (m) => { const r = JSON.parse(String(m)); if (r.id === 1) { clearTimeout(t); resolve(r) } })
@@ -254,10 +264,14 @@ async function startSession(d: Daemon, sid: string): Promise<void> {
   ws.close()
   expect(reply.ok, JSON.stringify(reply)).toBe(true)
   await waitFor(() => { try { return fs.readFileSync(path.join(d.dir, 'streams', `${sid}.jsonl`), 'utf8').includes('"state":"idle"') } catch { return false } }, 30_000, `${sid} idle`)
+  // The CLI the daemon runs, once it wrote (so the daemon's shell has exec'd it): its pid from the
+  // daemon, proven by the mock's path in its command line.
+  const st = await daemonStatus(d, sid)
+  clis.push({ d, sid, o: await procs!.command(`mock cli ${sid.slice(0, 8)} on ${d.name}`, Number(st.pid), mock) })
 }
 
 async function startPrimary(dev: Daemon, old: Daemon): Promise<void> {
-  await prepare(primary, 'primary')
+  await prepareServer(primary, base, 'primary')
   const domain = `127.0.0.1:${companion.port}`
   execFileSync('git', ['init', '-q', primary.data], { env: gitEnv() })
   execFileSync('git', ['-C', primary.data, 'remote', 'add', 'cloud', `http://mac:${tokens.mac}@${domain}/git/data.git`], { env: gitEnv() })
@@ -271,10 +285,11 @@ async function startPrimary(dev: Daemon, old: Daemon): Promise<void> {
   await fsp.writeFile(path.join(primary.data, 'memory', 'MEMORY.md'), '# Memory\n- deploy with the script\n')
   const src = (f: string) => JSON.stringify(path.join(REPO_ROOT, f))
   await bootServer(primary, `
+${BOOT_HEAD}
 const c = await import(${src('src/constants.ts')})
 if (c.WALNUT_HOME !== ${JSON.stringify(primary.data)} || c.CLOUD_MODE) { process.stderr.write('REFUSING: wrong home ' + c.WALNUT_HOME + '\\n'); process.exit(3) }
 const { startServer, stopServer, armGracefulSignalExit } = await import(${src('src/web/server.ts')})
-const server = await startServer({ port: 0, dev: true })
+const server = await startServer({ port: 0, dev: true, bindAddress: '127.0.0.1' })
 const tm = await import(${src('src/core/task-manager.ts')})
 const lead = (await tm.addTask({ title: 'Leader: ship the release', project: 'Acme' })).task
 const worker = (await tm.addTask({ title: 'Worker: fix the build', project: 'Acme', parent_task_id: lead.id, description: 'Fix the flaky build step before Friday.' })).task
@@ -282,9 +297,9 @@ const far = (await tm.addTask({ title: 'Far task: release notes', project: 'Othe
 const st = await import(${src('src/core/session-tracker.ts')})
 await st.createSessionRecord(${JSON.stringify(A)}, lead.id, 'Acme', ${JSON.stringify(dev.dir)}, { host: 'devbox', title: 'Leader', initialProcessStatus: 'idle' })
 await st.createSessionRecord(${JSON.stringify(B)}, worker.id, 'Acme', ${JSON.stringify(old.dir)}, { host: 'oldbox', title: 'Worker', initialProcessStatus: 'idle' })
-// C is newer than B by a clear margin: only the task's current session (B) makes B the address.
-await new Promise((r) => setTimeout(r, 20))
-await st.createSessionRecord(${JSON.stringify(C)}, worker.id, 'Acme', ${JSON.stringify(old.dir)}, { host: 'oldbox', title: 'Worker, second try', initialProcessStatus: 'idle' })
+// C runs on oldbox too, for a task of its own: a task has exactly one session.
+const retry = (await tm.addTask({ title: 'Worker, second try', project: 'Acme' })).task
+await st.createSessionRecord(${JSON.stringify(C)}, retry.id, 'Acme', ${JSON.stringify(old.dir)}, { host: 'oldbox', title: 'Worker, second try', initialProcessStatus: 'idle' })
 // B is the worker's session, as task_start links it: a message to the task goes to B, never to C.
 await tm.linkSession(worker.id, ${JSON.stringify(B)})
 const bs = await import(${src('src/core/boards/board-store.ts')})
@@ -353,19 +368,16 @@ await new Promise((r) => sendProbe.listen(0, '127.0.0.1', r))
 const addr = server.address()
 process.stdout.write(JSON.stringify({ ids: { lead: lead.id, worker: worker.id, far: far.id }, pid: process.pid, sendPort: sendProbe.address().port }) + '\\n')
 process.stdout.write('WALNUT_PORT=' + (typeof addr === 'object' && addr ? addr.port : addr) + '\\n')
-let closing = false
-const close = async () => { if (closing) return; closing = true; try { await stopServer() } catch {} process.exit(0) }
-process.on('SIGTERM', close)
-process.on('SIGINT', close)
-armGracefulSignalExit()
-`, serverEnv(primary, { WALNUT_LEADER_HEARTBEAT_MS: '500' }), (line) => {
-    try { const j = JSON.parse(line); if (j.ids) { primary.ids = j.ids; primary.serverPid = j.pid; primary.sendPort = j.sendPort } } catch { /* partial */ }
+${BOOT_TAIL}`, serverEnv(primary, { WALNUT_LEADER_HEARTBEAT_MS: '500' }), true, (line) => {
+    try { const j = JSON.parse(line); if (j.ids) { primary.ids = j.ids; primary.sendPort = j.sendPort } } catch { /* partial */ }
   })
 }
 
-async function api(s: Server, p: string, init: RequestInit = {}): Promise<{ status: number; json: Record<string, any> }> {
+async function api(s: LiveServer, p: string, init: RequestInit = {}): Promise<{ status: number; json: Record<string, any> }> {
   const res = await fetch(`http://127.0.0.1:${s.port}${p}`, {
     ...init,
+    // A call that hangs fails its test instead of holding the run past its deadline.
+    signal: init.signal ?? AbortSignal.timeout(60_000),
     headers: { Authorization: `Bearer ${tokens.mac}`, ...(init.body ? { 'Content-Type': 'application/json' } : {}), ...(init.headers ?? {}) },
   })
   return { status: res.status, json: await res.json().catch(() => ({})) as Record<string, any> }
@@ -425,61 +437,58 @@ function primarySettings(sid: string): { cliModel: string | null; effort: string
   } finally { db.close() }
 }
 
-function pidIn(dir: string): number | null {
-  try { const n = Number(fs.readFileSync(path.join(dir, 'daemon.pid'), 'utf8').trim()); return Number.isInteger(n) && n > 1 ? n : null } catch { return null }
-}
-
 /**
- * The Mac: the primary server and its own local daemon. The server's own pid,
- * not the tsx wrapper's (tsx runs the script in a child node process).
+ * The Mac: the primary server and its own local daemon, as registered (the server is the
+ * spawned node process itself: tests/helpers/live-run.ts).
  */
-function macPids(): number[] {
-  return [primary.serverPid, pidIn(primary.daemonDir) ?? 0].filter((p) => p > 1)
+function macProcs(): Owned[] {
+  if (!primary.server || !primary.daemon) throw new Error('the Mac\'s server and daemon are not registered')
+  return [primary.server, primary.daemon]
 }
 
 const companionLeads = async () => ((await api(companion, '/api/leader')).json.leading ?? []) as Array<{ host: string; epoch: number }>
 
-/** A session as its host's daemon sees it (status, read-only). */
-async function daemonStatus(d: Daemon, sid: string): Promise<Record<string, any>> {
-  const ws = await new Promise<WebSocket>((resolve, reject) => {
+/** A host daemon's WebSocket, open within 10 s or an error. */
+function openDaemonSocket(d: Daemon): Promise<WebSocket> {
+  return new Promise<WebSocket>((resolve, reject) => {
     const s = new WebSocket(`ws://127.0.0.1:${d.port}`)
-    s.once('open', () => resolve(s))
-    s.once('error', reject)
+    const t = setTimeout(() => { s.terminate(); reject(new Error(`${d.name}: its socket did not open in 10 s`)) }, 10_000)
+    s.once('open', () => { clearTimeout(t); s.on('error', () => { /* a reply wait times out instead */ }); resolve(s) })
+    s.once('error', (err) => { clearTimeout(t); reject(err) })
   })
+}
+
+/** One command to a host's daemon over its WebSocket, and its reply. */
+async function daemonCall(d: Daemon, payload: Record<string, unknown>, ms = 10_000): Promise<Record<string, any>> {
+  const ws = await openDaemonSocket(d)
   try {
     return await new Promise<Record<string, any>>((resolve, reject) => {
-      const t = setTimeout(() => reject(new Error('status timed out')), 10_000)
+      const t = setTimeout(() => reject(new Error(`${String(payload.cmd)} timed out`)), ms)
       ws.on('message', (m) => { const r = JSON.parse(String(m)); if (r.id === 1) { clearTimeout(t); resolve(r) } })
-      ws.send(JSON.stringify({ id: 1, cmd: 'status', sid }))
+      ws.send(JSON.stringify({ id: 1, ...payload }))
     })
   } finally { ws.close() }
 }
+
+/** A session as its host's daemon sees it (status, read-only). */
+const daemonStatus = (d: Daemon, sid: string): Promise<Record<string, any>> => daemonCall(d, { cmd: 'status', sid })
 
 /** What a host's copy of the primary's notes, memory and skills holds (replica.status). */
 async function replicaStatus(d: Daemon): Promise<Record<string, { entries: number; pending: number }>> {
-  const ws = await new Promise<WebSocket>((resolve, reject) => {
-    const s = new WebSocket(`ws://127.0.0.1:${d.port}`)
-    s.once('open', () => resolve(s))
-    s.once('error', reject)
-  })
-  try {
-    const reply = await new Promise<Record<string, any>>((resolve, reject) => {
-      const t = setTimeout(() => reject(new Error('replica.status timed out')), 10_000)
-      ws.on('message', (m) => { const r = JSON.parse(String(m)); if (r.id === 1) { clearTimeout(t); resolve(r) } })
-      ws.send(JSON.stringify({ id: 1, cmd: 'replica.status', home: primary.data }))
-    })
-    return (reply.kinds ?? {}) as Record<string, { entries: number; pending: number }>
-  } finally { ws.close() }
+  const reply = await daemonCall(d, { cmd: 'replica.status', home: primary.data })
+  return (reply.kinds ?? {}) as Record<string, { entries: number; pending: number }>
 }
 
-describe('the Mac is gone and the cloud companion takes over (real servers, real daemons)', () => {
+describe.skipIf(!liveWallsAvailable())('the Mac is gone and the cloud companion takes over (real servers, real daemons)', () => {
   let devbox: Daemon
   let oldbox: Daemon
   let requestId = ''
   let stopIdOfC = ''
 
   beforeAll(async () => {
-    base = await fsp.mkdtemp(path.join(os.tmpdir(), 'wll-'))
+    base = await liveBase('wll-', ['prd', 'cod', 'de', 'ol'])
+    procs = new LiveProcs(realProcTable(), base)
+    unhookTerm = resumeOnTerm(procs)
     for (const k of Object.keys(tokens) as Array<keyof typeof tokens>) tokens[k] = newToken()
     await fsp.writeFile(path.join(base, 'mock-cli.cjs'), MOCK_CLI)
     await startCompanion()
@@ -492,28 +501,42 @@ describe('the Mac is gone and the cloud companion takes over (real servers, real
     await startSession(oldbox, C)
     await startPrimary(devbox, oldbox)
     expect(primary.ids.lead).toMatch(/\S/)
-    expect(primary.serverPid).toBeGreaterThan(1)
+    expect(primary.server).not.toBeNull()
+    expect(primary.daemon).not.toBeNull()
   }, 400_000)
 
   afterAll(async () => {
-    for (const pid of macPids()) { try { process.kill(pid, 'SIGCONT') } catch { /* gone */ } }
-    for (const s of [primary, companion]) {
-      const proc = s.proc
-      if (proc && proc.exitCode === null && proc.signalCode === null) {
-        const exited = new Promise<void>((r) => proc.once('exit', () => r()))
-        proc.kill('SIGTERM')
-        await Promise.race([exited, sleep(30_000)])
-        if (proc.exitCode === null && proc.signalCode === null) proc.kill('SIGKILL')
-      }
-    }
-    for (const dir of [primary.daemonDir, companion.daemonDir, ...daemons.map((d) => d.dir)]) {
-      const pid = dir ? pidIn(dir) : null
-      if (pid) { try { process.kill(pid, 'SIGTERM') } catch { /* gone */ } }
-    }
-    if (process.env.DEBUG_LIVE) process.stderr.write(`--- companion ---\n${companion.log.slice(-6000)}\n--- primary ---\n${primary.log.slice(-6000)}\n`)
-    await sleep(500)
-    if (base && !process.env.KEEP_LEADER_LIVE) await fsp.rm(base, { recursive: true, force: true }).catch(() => {})
-  }, 120_000)
+    if (!procs) return
+    const p = procs
+    try {
+      await finishLive(p, base, [primary, companion], async () => {
+        // The mock CLIs end through their own daemon's stop (SIGINT, then TERM), never a signal from
+        // here; any other session a daemon still runs too, once its pid is proven to run the mock.
+        const mock = path.join(base, 'mock-cli.cjs')
+        for (const d of daemons) {
+          if ((await p.state(d.owned)) !== 'ours') continue
+          const listed = await daemonCall(d, { cmd: 'list' }).catch(() => ({ sessions: [] as Array<{ sid: string; pid: number | null; alive: boolean }> }))
+          for (const row of (listed.sessions ?? []) as Array<{ sid: string; pid: number | null; alive: boolean }>) {
+            if (!row.alive || !row.pid || clis.some((c) => c.d === d && c.sid === row.sid)) continue
+            const o = await p.command(`session ${row.sid.slice(0, 8)} on ${d.name}`, row.pid, mock).catch(() => null)
+            if (o) clis.push({ d, sid: row.sid, o })
+          }
+        }
+        for (const c of clis) {
+          if ((await p.state(c.o)) !== 'ours') continue
+          const r = await daemonCall(c.d, { cmd: 'stop', sid: c.sid, reason: 'user', initiator: 'human', home: primary.data }, 20_000).catch((err) => ({ ok: false, error: String(err) }))
+          if (r.ok !== true || r.stopped !== true) p.fail(`${c.o.label}: the daemon did not stop it: ${JSON.stringify(r).slice(0, 300)}`)
+          await p.waitExit(c.o, 15_000)
+        }
+        // Each mock that ended left its line; one without it was killed.
+        for (const c of clis) {
+          if ((await p.state(c.o)) !== 'gone') continue
+          const marks = (() => { try { return fs.readFileSync(path.join(c.d.dir, `${c.sid}.exit`), 'utf8') } catch { return '' } })()
+          if (!marks.split('\n').some((l) => l.startsWith(`${c.o.pid} `))) p.fail(`${c.o.label} (${c.o.pid}) ended without its exit line: killed?`)
+        }
+      })
+    } finally { unhookTerm?.() }
+  }, 600_000)
 
   it('the Mac is up: it holds the lead of both hosts and the companion hears its heartbeat', async () => {
     await waitFor(async () => {
@@ -587,7 +610,7 @@ describe('the Mac is gone and the cloud companion takes over (real servers, real
       for (let attempt = 0; attempt < 3; attempt++) {
         const res = await fetch(`http://127.0.0.1:${companion.port}/bridge/send`, {
           method: 'POST', headers: { Authorization: `Bearer ${tokens.local}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
+          body: JSON.stringify(payload), signal: AbortSignal.timeout(60_000),
         })
         expect(res.status).toBe(200)
         expect(await res.json()).toMatchObject({ ok: true })
@@ -637,7 +660,7 @@ describe('the Mac is gone and the cloud companion takes over (real servers, real
   }, 180_000)
 
   it('the Mac sleeps (server and local daemon frozen): the companion leads both hosts', async () => {
-    for (const pid of macPids()) process.kill(pid, 'SIGSTOP')
+    for (const o of macProcs()) expect(await procs!.pause(o), `SIGSTOP ${o.label}: ${procs!.refused.join('; ')}`).toBe(true)
     const leads = await waitFor(async () => {
       const l = await companionLeads()
       return l.length === 2 ? l : null
@@ -772,7 +795,8 @@ describe('the Mac is gone and the cloud companion takes over (real servers, real
   }, 60_000)
 
   it('the Mac wakes: it takes back what the hosts did, takes the lead back, and the companion lets go', async () => {
-    for (const pid of macPids()) process.kill(pid, 'SIGCONT')
+    // The daemon first, so the server finds it answering.
+    for (const o of [...macProcs()].reverse()) expect(await procs!.resume(o), `SIGCONT ${o.label}: ${procs!.refused.join('; ')}`).toBe(true)
     const states = await waitFor(async () => {
       const r = await api(primary, '/api/leader')
       const h = r.json.hosts ?? {}
