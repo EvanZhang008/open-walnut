@@ -7,15 +7,8 @@ import { apiGet, apiPatch } from '@/api/client'
 import { SettingsRow } from './SettingsSection'
 import { NumberInput } from './inputs/NumberInput'
 import { ToggleSwitch } from './inputs/ToggleSwitch'
+import { pluginAiHelp, pluginAiRowVisible, readPluginAiState, type PluginAiState } from './plugin-ai-state'
 import '@/styles/settings-sections-addons.css'
-
-interface PluginAiState { enabled: boolean; monthlyUsd: number; spentUsd: number; calls: number; lastAt: string | null }
-
-const DEFAULT_MONTHLY_USD = 10
-
-function money(n: number): string {
-  return n < 0.01 && n > 0 ? '<$0.01' : `$${n.toFixed(2)}`
-}
 
 export function PluginAiControls({ pluginId }: { pluginId: string }) {
   const base = `/api/plugin-runtime/${encodeURIComponent(pluginId)}/ai`
@@ -26,22 +19,24 @@ export function PluginAiControls({ pluginId }: { pluginId: string }) {
 
   useEffect(() => {
     let live = true
-    apiGet<PluginAiState>(base, undefined, { quietStatuses: [400, 404] })
-      .then((answer) => { if (live) { setState(answer); setBudget(answer.monthlyUsd) } })
+    apiGet<unknown>(base, undefined, { quietStatuses: [400, 404] })
+      .then((answer) => {
+        const read = readPluginAiState(answer)
+        if (live && read) { setState(read); setBudget(read.monthlyUsd) }
+      })
       .catch(() => { /* an older server has no AI row */ })
     return () => { live = false }
   }, [base])
 
-  // Shown once the plugin used AI, or once the user changed its defaults.
-  if (!state || (state.calls === 0 && state.enabled && state.monthlyUsd === DEFAULT_MONTHLY_USD)) return null
+  if (!pluginAiRowVisible(state)) return null
 
   const save = async (patch: { enabled?: boolean; monthlyUsd?: number }) => {
     setBusy(true)
     setError(null)
     try {
-      const saved = await apiPatch<{ enabled: boolean; monthlyUsd: number }>(base, patch)
-      setState((prev) => (prev ? { ...prev, ...saved } : prev))
-      setBudget(saved.monthlyUsd)
+      const saved = await apiPatch<unknown>(base, patch)
+      const next = readPluginAiState(saved, state)
+      if (next) { setState(next); setBudget(next.monthlyUsd) }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -63,9 +58,7 @@ export function PluginAiControls({ pluginId }: { pluginId: string }) {
         label={<span className="plugin-app-controls-label">AI</span>}
         help={
           <span data-testid={`plugin-ai-help-${pluginId}`}>
-            {`${money(state.spentUsd)} of ${money(state.monthlyUsd)} this month, ${state.calls} ${state.calls === 1 ? 'call' : 'calls'}`}
-            {over ? '. Out of budget: calls are refused until next month or a higher budget.' : ''}
-            {!state.enabled ? '. Off: calls are refused.' : ''}
+            {pluginAiHelp(state)}
           </span>
         }
         error={error ?? undefined}
