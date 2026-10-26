@@ -27,6 +27,7 @@ import path from 'node:path'
 import os from 'node:os'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { guardedPath } from '../setup/exec-guard.js'
+import { SOURCE_TWIN } from '../helpers/source-twin.js'
 
 let scriptPath = ''
 let cliPath = ''
@@ -35,14 +36,16 @@ const BUN = [process.env.BUN_INSTALL && path.join(process.env.BUN_INSTALL, 'bin/
   .find((p): p is string => !!p && fs.existsSync(p))
 const STANDALONE = path.resolve(__dirname, '../../src/providers/daemon-standalone.ts')
 type Twin = { name: string; command: () => [string, string[]] }
-const SOURCE: Twin = { name: 'source twin (node)', command: () => [process.execPath, [scriptPath, '--start']] }
+// The JS twin on the Node a host runs it on when this machine has one (tests/helpers/source-twin.ts).
+const SOURCE: Twin = { name: `source twin (${SOURCE_TWIN.runtime})`, command: () => [SOURCE_TWIN.file, [scriptPath, '--start']] }
 const STANDALONE_TWIN: Twin | null = BUN ? { name: 'standalone twin (bun)', command: () => [BUN, [STANDALONE, '--start']] } : null
 /** [first daemon, second daemon]: each twin against itself, and the two against each other. */
 const PAIRS: Array<{ name: string; a: Twin; b: Twin }> = [
-  { name: 'source + source', a: SOURCE, b: SOURCE },
+  // Named by their twins, so `-t 'source twin \(node\)'` (test:source-twin-node) picks the pairs with the JS twin.
+  { name: `${SOURCE.name} + ${SOURCE.name}`, a: SOURCE, b: SOURCE },
   ...(STANDALONE_TWIN ? [
-    { name: 'standalone + standalone', a: STANDALONE_TWIN, b: STANDALONE_TWIN },
-    { name: 'standalone + source', a: STANDALONE_TWIN, b: SOURCE },
+    { name: `${STANDALONE_TWIN.name} + ${STANDALONE_TWIN.name}`, a: STANDALONE_TWIN, b: STANDALONE_TWIN },
+    { name: `${STANDALONE_TWIN.name} + ${SOURCE.name}`, a: STANDALONE_TWIN, b: SOURCE },
   ] : []),
 ]
 

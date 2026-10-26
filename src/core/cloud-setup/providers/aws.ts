@@ -15,7 +15,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { promisify } from 'node:util'
 import { WALNUT_HOME, WALNUT_INSTALL_DIR, WALNUT_PACKAGE_ROOT } from '../../../constants.js'
-import { bunCommand } from '../../../lib/runtime.js'
+import { bunCommand, execNeedsBunBeBun } from '../../../lib/runtime.js'
 import { log } from '../../../logging/index.js'
 import { sslipHostname } from '../user-data.js'
 import { envForProfile, isAwsRegion, resolveAwsTarget, verifyAwsAccount } from './aws-target.js'
@@ -451,14 +451,18 @@ async function createVM(params: CreateVMParams, onLog: (line: string) => void): 
   }
 }
 
-/** The manual "get the CDK app ready" step, naming the directory this install has. */
+/**
+ * The manual "get the CDK app ready" step, naming the directory this install has.
+ * A compiled install has no `bun` on PATH: its own file runs as bun (bunCommand).
+ */
 function infraStep(): string {
   const source = infraSource()
   if (!source) return 'Get the CDK app: clone the Walnut repository, then `cd infra && bun install --frozen-lockfile`.'
   const q = (p: string): string => `'${p.replace(/'/g, `'\\''`)}'`
-  if (!source.copy) return `In the CDK app: \`cd ${q(source.dir)} && bun install --frozen-lockfile\`.`
+  const install = `${execNeedsBunBeBun() ? `BUN_BE_BUN=1 ${q(process.execPath)}` : 'bun'} install --frozen-lockfile`
+  if (!source.copy) return `In the CDK app: \`cd ${q(source.dir)} && ${install}\`.`
   const dest = infraWorkDir()
-  return `Copy the CDK app somewhere writable: \`mkdir -p ${q(dest)} && cp -R ${q(source.dir)}/. ${q(dest)} && cd ${q(dest)} && bun install --frozen-lockfile\`.`
+  return `Copy the CDK app somewhere writable: \`mkdir -p ${q(dest)} && cp -R ${q(source.dir)}/. ${q(dest)} && cd ${q(dest)} && ${install}\`.`
 }
 
 function instructions(params: InstructionsParams): DriverInstructions {

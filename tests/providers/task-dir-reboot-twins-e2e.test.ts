@@ -23,6 +23,7 @@ import path from 'node:path'
 import os from 'node:os'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { guardedPath } from '../setup/exec-guard.js'
+import { SOURCE_TWIN } from '../helpers/source-twin.js'
 
 let scriptPath = ''
 let root = ''
@@ -33,7 +34,7 @@ const CORE = path.resolve(__dirname, '../../src/providers/task-dir-core.ts')
 type Twin = { name: string; command: () => [string, string[]] }
 // The source twin needs its sidecar, which only bun builds (as scripts/build-daemon.sh does).
 const TWINS: Twin[] = BUN ? [
-  { name: 'source twin (node)', command: () => [process.execPath, [scriptPath, '--start']] },
+  { name: `source twin (${SOURCE_TWIN.runtime})`, command: () => [SOURCE_TWIN.file, [scriptPath, '--start']] },
   { name: 'standalone twin (bun)', command: (): [string, string[]] => [BUN, [STANDALONE, '--start']] },
 ] : []
 let proc: ChildProcess | null = null

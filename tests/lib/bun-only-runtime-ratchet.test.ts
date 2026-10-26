@@ -36,6 +36,12 @@ const RUNTIME_ONLY = { esbuild: loads('esbuild') }
 const BUN_SQLITE = { 'bun:sqlite': loads('bun:sqlite') }
 /** The one module that opens bun:sqlite. */
 const SQLITE_SHIM = 'src/lib/sqlite.ts'
+/**
+ * The field rehearsal checks a published release's databases with that
+ * release's own file running as bun (scripts/release-rehearsal/field.mjs): code
+ * it hands that file, which has no shim of this checkout to load.
+ */
+const RELEASE_FILE_CHECK = 'scripts/release-rehearsal/field.mjs'
 
 /** A shell line that loads or installs a Node-only module: `require('...')` in `node -e`, or npm acting on it. */
 const SHELL_NODE_ONLY = /\bnpm\s+(?:rebuild|install|i|ci|add)\b[^\n]*\b(?:better-sqlite3|node-pty)/
@@ -97,7 +103,7 @@ describe('Walnut runs only on bun', () => {
   })
 
   it(`only ${SQLITE_SHIM} opens bun:sqlite`, () => {
-    expect(offenders(['src', 'scripts', 'bin', 'packages'], BUN_SQLITE, [SQLITE_SHIM])).toEqual([])
+    expect(offenders(['src', 'scripts', 'bin', 'packages'], BUN_SQLITE, [SQLITE_SHIM, RELEASE_FILE_CHECK])).toEqual([])
     // The shim itself still does: the check is looking at the right thing.
     expect(BUN_SQLITE['bun:sqlite'].test(fs.readFileSync(path.join(ROOT, SQLITE_SHIM), 'utf8'))).toBe(true)
   })

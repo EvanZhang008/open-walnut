@@ -28,6 +28,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { guardedPath } from '../setup/exec-guard.js'
+import { SOURCE_TWIN } from '../helpers/source-twin.js'
 
 let sourceText = ''
 let root = ''
@@ -38,7 +39,7 @@ const STANDALONE = path.resolve(__dirname, '../../src/providers/daemon-standalon
 /** How a twin runs `action` for `daemonDir` (the source twin from its deployed place, `<dir>/daemon.cjs`), with `preload` first when given. */
 type Twin = { name: string; command: (action: string, daemonDir: string, preload?: string) => [string, string[]] }
 const TWINS: Twin[] = [
-  { name: 'source twin (node)', command: (action, daemonDir, preload) => [process.execPath, [...(preload ? ['--require', preload] : []), deployedSource(daemonDir), action]] },
+  { name: `source twin (${SOURCE_TWIN.runtime})`, command: (action, daemonDir, preload) => [SOURCE_TWIN.file, [...(preload ? [SOURCE_TWIN.runtime === 'node' ? '--require' : '--preload', preload] : []), deployedSource(daemonDir), action]] },
   ...(BUN ? [{ name: 'standalone twin (bun)', command: (action: string, _dir: string, preload?: string): [string, string[]] => [BUN, [...(preload ? ['--preload', preload] : []), STANDALONE, action]] }] : []),
 ]
 const children: ChildProcess[] = []

@@ -279,8 +279,8 @@ A plugin App joins the same App Registry as Walnut's own screens, so one `walnut
 The first authoring loop is one command, which scaffolds, links into the running console, and reloads on every save. The author packages are not on npm yet, so run it from a checkout of this repository:
 
 ```bash
-npm run build:plugins
-node packages/plugin-cli/dist/cli.js new my-plugin --dev --no-install
+bun run build:plugins
+bun packages/plugin-cli/dist/cli.js new my-plugin --dev --no-install
 ```
 
 Once the packages are published, the same loop will be `npx @open-walnut/plugin-cli new my-plugin --dev`.
