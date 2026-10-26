@@ -17,6 +17,7 @@
  * No @playwright/test import at runtime: test-server.ts imports this file.
  * Neutral invented names only.
  */
+import type { BrowserContext } from '@playwright/test'
 
 export const KANBAN_LEADER_TITLE = 'Payments resolver group triage'
 export const KANBAN_TICKET_LINK = 'https://tickets.example.test/{value}'
@@ -364,7 +365,25 @@ async function finishTeam(api: KanbanApi, team: KanbanTeam, roles: Map<string, R
     await waitStatus(api, s, 'running')
     await call(api, 'PATCH', `/api/sessions/${s}`, { activity: 'Reading logs' })
   }
+  await waitUserStatuses(api, team)
   return team
+}
+
+type StatusRow = { id: string; phase: string; user_status?: { state: string } }
+
+/**
+ * The server derives each task's user status a moment after its facts move (a debounced pass,
+ * src/core/user-status-sync.ts); until then a surface reads the phase. Wait for the derived
+ * values, so no test reads that first guess: every open card has one, the prompts need the
+ * user, and the hand back waits on its lead.
+ */
+async function waitUserStatuses(api: KanbanApi, team: KanbanTeam): Promise<void> {
+  const want: Record<string, string> = { [team.perm]: 'needs', [team.handedBack]: 'waiting' }
+  for (const id of team.running) want[id] = 'working'
+  await pollUntil('derived user statuses', async () => {
+    const rows = await Promise.all(team.all.map(async (id) => (await call<{ task: StatusRow }>(api, 'GET', `/api/tasks/${id}`)).task))
+    return rows.filter((t) => t.phase !== 'COMPLETE' && (!t.user_status || (want[t.id] && t.user_status.state !== want[t.id]))).map((t) => t.id)
+  }, (missing) => missing.length === 0, 90_000)
 }
 
 /** Running activity every `intervalMs` (default 2s), rotating texts (G9, G36). Returns stop(). */
@@ -446,3 +465,21 @@ export async function assertFixtureDensity(api: KanbanApi, team: KanbanTeam): Pr
   if (off.length) throw new Error(`kanban fixture density is off:\n  ${off.join('\n  ')}`)
   return got
 }
+
+/**
+ * The Board opens on Status (BoardStatusView, the default since 2026-10-25). The kanban
+ * specs test Cards, so their windows open the way a user who picked Cards before does:
+ * the remembered pick (board-view-pref.ts) is set before the page loads, once, so a pick
+ * the test itself makes still wins after a reload.
+ */
+export async function pickCardsView(target: Pick<BrowserContext, 'addInitScript'>, ...ownerIds: string[]): Promise<void> {
+  await target.addInitScript((ids: string[]) => {
+    try {
+      for (const id of ids) {
+        const key = `walnut:board-view.v1:${id}`
+        if (!localStorage.getItem(key)) localStorage.setItem(key, 'cards')
+      }
+    } catch { /* storage blocked: the spec's own Cards click still picks it */ }
+  }, ownerIds)
+}
+

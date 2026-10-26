@@ -473,7 +473,7 @@ function waitingOnUser(nodes: import('./org-tree.js').OrgTaskNode[], limit = 3):
   const walk = (list: import('./org-tree.js').OrgTaskNode[]) => {
     for (const n of list) {
       if (out.length >= limit) return;
-      if (n.phase === 'NEED_ACTION') out.push({ id: n.id, title: n.title });
+      if (n.userState === 'needs') out.push({ id: n.id, title: n.title });
       walk(n.workers);
     }
   };

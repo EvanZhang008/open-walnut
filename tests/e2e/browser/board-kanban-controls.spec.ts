@@ -23,8 +23,7 @@ import { discoverBrowserFixture } from './codex-test-audit'
 import { REAL_PANEL } from './draft-helpers'
 import { isolateUiPrefs, presetPanelView } from './todo-panel-helpers'
 import {
-  call, getSession, kanbanApi, pollUntil, seedKanbanTeam, startSession, ticketOf, type KanbanApi, type KanbanTeam,
-} from './board-kanban-fixture'
+  call, getSession, kanbanApi, pollUntil, seedKanbanTeam, startSession, ticketOf, type KanbanApi, type KanbanTeam, pickCardsView } from './board-kanban-fixture'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 const BASE = `http://localhost:${TEST_PORT}`
@@ -34,7 +33,8 @@ let api: KanbanApi
 let team: KanbanTeam
 const litter: string[] = []
 
-test.describe.configure({ mode: 'serial' })
+// Each test opens Home and the Board; under load that alone can take most of the default 30s.
+test.describe.configure({ mode: 'serial', timeout: 180_000 })
 test.use({ viewport: { width: 1280, height: 800 }, deviceScaleFactor: 1 })
 
 test.beforeAll(async ({ browserName }, info) => {
@@ -46,6 +46,9 @@ test.beforeAll(async ({ browserName }, info) => {
   team = await seedKanbanTeam(api, { engine: info.project.name, litter })
   await handBackOnBoard()
 })
+
+// The Board opens on Status; these specs read Cards, the view a lead picked (board-kanban-fixture.ts).
+test.beforeEach(async ({ context }) => { await pickCardsView(context, team.leader) })
 
 test.afterAll(async () => {
   for (const id of [...litter].reverse()) {
@@ -87,6 +90,8 @@ async function openBoard(page: Page): Promise<Locator> {
   await expect(panel).toBeVisible({ timeout: 30_000 })
   await panel.getByTestId('session-board-chip').click()
   const pane = page.getByTestId('task-board-pane')
+  // The Board opens on Status (the default since 2026-10-25): the kanban is one click away.
+  await pane.getByTestId('board-view-cards').click()
   await expect(pane.getByTestId('board-kanban')).toBeVisible({ timeout: 30_000 })
   await expect(pane.getByTestId('kanban-rollup')).toContainText('open', { timeout: 30_000 })
   return pane
@@ -195,6 +200,7 @@ test('C48: `/` focuses the search from the page, and M on a focused card opens i
 })
 
 test('C80: the Sev 1 chip follows Needs you, shows the open sev:1 cards, and sev orders a lane', async ({ page }) => {
+  test.setTimeout(180_000)
   const pane = await openBoard(page)
   const ids = await pane.locator('.kanban-chips [data-chip]').evaluateAll((els) => els.map((e) => e.getAttribute('data-chip')))
   expect(ids).toEqual(['needs', 'sev1', 'stale', 'changed', 'running'])
@@ -232,6 +238,8 @@ test('C80: the Sev 1 chip follows Needs you, shows the open sev:1 cards, and sev
   await expect(panel).toBeVisible({ timeout: 30_000 })
   await panel.getByTestId('session-board-chip').click()
   const other = panel.getByTestId('task-board-pane')
+  // A board opens on Status; the chips are the Cards view's.
+  await other.getByTestId('board-view-cards').click()
   await expect(other.getByTestId('kanban-chip-needs')).toBeVisible({ timeout: 30_000 })
   await expect(other.getByTestId('kanban-chip-sev')).toHaveCount(0)
 })
@@ -239,39 +247,41 @@ test('C80: the Sev 1 chip follows Needs you, shows the open sev:1 cards, and sev
 /** The run's engine, for titles made inside a test. */
 function info(): { engine: string } { return { engine: team.engine } }
 
-const RED_TEXTS = ['Needs you: approve Bash', 'Needs you: question', 'Needs you: handed back', 'Needs you: worker below']
+// A hand back is not an ask (src/core/user-status.ts): the worker waits on its lead.
+const RED_TEXTS = ['Needs you: approve Bash', 'Needs you: question', 'Needs you: worker below']
 const ERROR_CARD = () => team.all[12]
 
 test('C14 C71: Needs you counts only what the user must do, once, and the Page view says the same number', async ({ page }) => {
   const pane = await openBoard(page)
   const needs = chip(pane, 'needs')
-  // Bash prompt, question, handed back, the nested worker's prompt on its parent; never the 8 turn ends.
-  await expect.poll(() => chipCount(needs), { timeout: 30_000 }).toBe(4)
+  // Bash prompt, question, the nested worker's prompt on its parent; never the 8 turn ends nor the hand back.
+  await expect.poll(() => chipCount(needs), { timeout: 30_000 }).toBe(3)
   await needs.click()
-  await expect(visibleCards(pane)).toHaveCount(4)
+  await expect(visibleCards(pane)).toHaveCount(3)
   const statuses = await visibleCards(pane).getByTestId('kanban-card-status').allTextContents()
   expect(statuses.map((s) => s.trim()).sort()).toEqual([...RED_TEXTS].sort())
   for (const tone of await visibleCards(pane).getByTestId('kanban-card-status').evaluateAll((els) => els.map((e) => e.getAttribute('data-tone')))) {
     expect(tone).toBe('red')
   }
-  for (const id of team.idle.filter((x) => x !== team.handedBack && x !== team.all[9])) await expect(card(pane, id)).toBeHidden()
+  for (const id of team.idle.filter((x) => x !== team.all[9])) await expect(card(pane, id)).toBeHidden()
   await needs.click()
 
-  // A page exists: the Page view's Cards segment carries the same number.
+  // A page exists: on the Page view, the Status segment carries the same number (the Status view's own).
   await call(api, 'PUT', `/api/v1/tasks/${team.leader}/board`, { html: '<h1>Triage notes</h1><p>Read the cards.</p>' })
   const pageSeg = pane.getByTestId('board-view-custom')
   await expect(pageSeg).not.toHaveAttribute('aria-disabled', 'true', { timeout: 15_000 })
   await expect(pageSeg).toHaveText('Page')
   await expect(pane.getByTestId('board-view-cards')).toHaveText('Cards')
   await pageSeg.click()
-  await expect(pane.getByTestId('board-view-attention')).toHaveText('4')
-  await expect(pane.getByTestId('board-view-cards')).toHaveAttribute('title', "The team's cards by lane: 4 need you")
+  await expect(pane.getByTestId('board-view-attention')).toHaveText('3')
+  await expect(pane.getByTestId('board-view-status').getByTestId('board-view-attention')).toHaveText('3')
+  await expect(pane.getByTestId('board-view-status')).toHaveAttribute('title', 'Every task of the team: what needs you, what is working, what waits: 3 need you')
   await pane.getByTestId('board-view-cards').click()
 
   // An error, injected on an idle card, joins the count (the spec's runtime error).
   await startSession(api, ERROR_CARD(), 'error')
   await expect(card(pane, ERROR_CARD()).getByTestId('kanban-card-status')).toContainText('Error:', { timeout: 60_000 })
-  await expect.poll(() => chipCount(needs), { timeout: 15_000 }).toBe(5)
+  await expect.poll(() => chipCount(needs), { timeout: 15_000 }).toBe(4)
   await expect(pane.getByTestId('kanban-workers-error')).toHaveText('1 error')
 })
 
@@ -300,9 +310,10 @@ test('C33 C72: a filter counts lanes, grey chips do nothing, handled cards stay 
   await expect(perm).toHaveAttribute('data-handled', 'true', { timeout: 60_000 })
   await expect(perm.getByTestId('kanban-card-status')).toContainText('Handled')
   expect(Number(await perm.evaluate((e) => getComputedStyle(e).opacity))).toBeLessThan(0.75)
-  await expect.poll(() => chipCount(needs)).toBe(4)
+  // Left: the question, the nested worker and C14's error (a hand back waits on its lead, never counted).
+  await expect.poll(() => chipCount(needs)).toBe(3)
 
-  // The question, the nested worker below its parent, the hand back and the error: all handled.
+  // The question, the nested worker below its parent and the error: all handled; the hand back moves on too.
   const question = card(pane, team.question)
   await question.getByTestId('kanban-card-prompt-toggle').click()
   await question.locator('.nfc-answer-opt', { hasText: 'Staging' }).click()
@@ -315,16 +326,17 @@ test('C33 C72: a filter counts lanes, grey chips do nothing, handled cards stay 
   await startSession(api, ERROR_CARD(), 'snapshot-clean-turn:error card recovered')
   await expect.poll(() => chipCount(needs), { timeout: 90_000 }).toBe(0)
   await expect(pane.getByTestId('kanban-filter-empty')).toContainText('Nothing needs you now')
-  await expect(visibleCards(pane)).toHaveCount(5)
+  await expect(visibleCards(pane)).toHaveCount(4)
   // An active grey chip still clears, and so does Show all cards.
   await expect(needs).toHaveClass(/is-zero/)
   await pane.getByTestId('kanban-show-all-cards').click()
   await expect(needs).toHaveAttribute('aria-pressed', 'false')
   await expect(pane.getByTestId('kanban-filter-empty')).toHaveCount(0)
-  await expect(visibleCards(pane)).not.toHaveCount(5)
+  await expect(visibleCards(pane)).not.toHaveCount(4)
 })
 
 test('C39: the leader needing the user shows in the rollup, the count and its own row', async ({ page }) => {
+  test.setTimeout(180_000)
   const pane = await openBoard(page)
   const before = await chipCount(chip(pane, 'needs'))
   const leadSid = await startSession(api, team.leader, 'status-permission-test:Bash', 'default')

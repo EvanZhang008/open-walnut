@@ -35,7 +35,7 @@ notes and read ticks are readable by you, task chips and section status show liv
 | `board_edit {task?, edits: [{old, new}]}` | Replace exact strings. Each `old` must occur ONCE in the current html, or nothing is written and the error names the edit. This is the normal way to update. |
 | `board_post {task?, thread, text}` | Your answer or note in a section's thread. One message per post. The outcome names the new message id. |
 | `board_post_delete {task?, thread, id}` | Delete one of your own posts (a wrong or outdated answer). The user can delete any post from the Board tab. |
-| `board_project_set {task?, id, title?, status?, tasks?, summary?, latest?, next?, waiting?, meta?, delete?, override_user?}` | A project's status (`decide`, `wip`, `wait`, `done`, or `""` to clear), title, tasks and card text. The page recolors on its own. A status the user picked stays theirs: changing or removing it is refused unless you pass `override_user: true`. The Board tab's Overview shows every project as a card in the page's order: its status, `tasks` as live chips (a named task's own subtasks follow it; a team member no project names falls to "Other tasks" at the end, so name every task of an area), and your text: `summary` (what this area is, a few sentences), `latest` (the newest update; Walnut stamps its time), `next` (the next step and who takes it), `waiting` (a short tag, "3 CRs to deploy") and `meta` (a short count, "6 tickets"). Light markdown; `""` clears one. Set `latest` and `next` on every update, so the card is never staler than the page. The card also shows the choices and threads inside the project's `data-project` section, and the user asks questions there: they arrive like a thread message on the thread with the project's id. |
+| `board_project_set {task?, id, title?, status?, tasks?, summary?, latest?, next?, waiting?, meta?, delete?, override_user?}` | A project's status (`decide`, `wip`, `wait`, `done`, or `""` to clear), title, tasks and card text. The page recolors on its own. A status the user picked stays theirs: changing or removing it is refused unless you pass `override_user: true`. The Board tab's Overview shows every project as a card in the page's order: its status, `tasks` as live chips (a named task's own subtasks follow it; a team member no project names falls to "Other tasks" at the end, so name every task of an area), and your text: `summary` (what this area is, a few sentences), `latest` (the newest update; Walnut stamps its time), `next` (the next step and who takes it), `waiting` (a short tag, "3 CRs to deploy") and `meta` (a short count, "6 tickets"). Light markdown; `""` clears one. Set `latest` and `next` on every update, so the card is never staler than the page; Walnut shows each with its time and marks it old after a day. Plain words only (section 3). The card also shows the choices and threads inside the project's `data-project` section, and the user asks questions there: they arrive like a thread message on the thread with the project's id. |
 | `board_remind {task?, target, at, note?}` | A reminder on a choice or a thread (`at` is an ISO time, `""` clears). |
 | `board_card_set {task?, card, lane?, summary?, waiting_on?, override_user?}` | One worker's card on the Board's kanban. After a worker reports, set its `summary` (plain text, what the ticket is and where it stands); when the ticket moves in the process, set `lane` (an id from `board_get` `lanes_effective`); when it blocks on a CR, a team or a customer, set `waiting_on`. `""` clears a field. A card the user dragged keeps their lane: your lane is refused (409 `status_set_by_user`) and kept on the card as a suggestion the user can accept, unless you pass `override_user: true`. |
 | `board_lanes_set {task?, lanes: [{id?, name, kind}], override_user?}` | The kanban's whole lane list, in column order (kinds `todo`, `active`, `wait`, `review`, `done`; one `done` lane at least). Only when the team's process really differs from the template; the user edits lanes too, and your write over theirs is refused unless `override_user: true`. |
@@ -73,6 +73,31 @@ Walnut project (the `project` field of a task); the two never mix.
 
 ## 3. What the user needs from a board
 
+**Walnut shows every task's status itself; you do not write it.** The Board's Status view
+lists every task of the team under one of four states, the same words and the same counts
+as the Org page, the task list and the phone: **Needs you** (only what the user alone can
+decide, approve or do, with what to do), **Working** (its session is running), **Waiting**
+(on another task, a time, the machine, the user with no rush, its lead, or not started;
+**Stuck** when nothing will wake it), **Done**. Each row's "now" and "next" line is what
+that task's own session wrote at the end of its last turn, with its time, flagged when it
+is a day old. So never copy a task's state into the page, a project card or a kanban card:
+it goes stale the moment the task moves (2026-10-25: a card said "In progress" over a
+stopped task, a section said "1 needs you" under a tile reading "0 needs you", and a
+"Latest" line was a day old). The page is for what a status cannot say: causes,
+decisions, explanations.
+
+**Plain words, always.** The user reads the board without your context. Every line must
+make sense to someone who has not seen your chat:
+- No codenames, abbreviations or labels of your own process: no test-run or round names
+  ("r12", "gate13", "v6", "R1-R8"), no "PASS/FAIL5MEDIUM", no commit hashes, ticket keys
+  or file names in a sentence the user reads, no counts of checks unless they asked.
+  Name the thing ("the fix for phone videos"), link the evidence instead.
+- One short sentence per point: what it is, where it stands, who does what next.
+- A word the user may not know gets a few-words explanation the first time.
+- A rule you follow ("do not reuse the old build") is not news; leave it out.
+- Before you write, read it as the user: if a sentence would need your chat to make
+  sense, rewrite it.
+
 1. **Ask the user as little as possible.** Decide low-impact things yourself and record the decision on the board. Ask only for production or cloud writes and deletions, messages to other teams, money, customer-facing actions, and design choices that change who gets paged.
 2. **Never ask the user to resolve or close something whose work is not finished.** List it as a to-do with its trigger ("after change 123 deploys").
 3. **Every ask and every point explains itself in plain words**: what the thing is (an id alone is unreadable), the options, what happens either way, your recommendation, the link.
@@ -81,11 +106,11 @@ Walnut project (the `project` field of a task); the two never mix.
 6. **Every fact, cause, fix and to-do is its own `<walnut-check>` point.** The user ticks what they read; a point you edit comes back unread on its own.
 7. **Decisions are `<walnut-choice>`** with numbered options and the recommended one marked. Explain the options in the points above it; keep each label short. Every choice already has a free-text answer box, so add no "other" option and no extra question for it; when the user answers in words, read them as the answer, even beside a pick.
 8. **Project status lives in Walnut** (`board_project_set`, or the user's pick on the pill), never in hand-edited html. `data-status` in your html is only the starting value. One status per project, one source: what the user picked is the status.
-9. **The Board view is a kanban of your subtasks.** Keep each card true: after a worker reports, set its summary (plain text, no markdown; where it stands goes in the first 100 characters because a card shows about that much; <= 300 chars in all) and its lane; when it blocks on a CR, a team or a customer, set waiting_on. Do not rewrite the lanes unless the process really differs; the user owns them. A card the user dragged keeps their lane (409 status_set_by_user); leave lane out or ask them. `board_get` says how many open cards have no summary from you and how many of your suggestions the user has not answered.
+9. **The Cards view is a kanban of your subtasks.** Each card's status line is Walnut's (the four states above). Keep the rest true: after a worker reports, set its summary (plain words, no markdown; what the ticket is in the first 100 characters because a card shows about that much; <= 300 chars in all) and its lane; when it blocks on a CR, a team or a customer, set waiting_on. Do not rewrite the lanes unless the process really differs; the user owns them. A card the user dragged keeps their lane (409 status_set_by_user); leave lane out or ask them. `board_get` says how many open cards have no summary from you and how many of your suggestions the user has not answered.
 
 ## 4. The layout
 
-- **An overview first**: one row per project with its status (`<walnut-project>`, which the user can change there), the latest update, the next step, what needs the user, and the user's note (`<walnut-mark>`) in that row, where they look first.
+- **An overview first**: one row per project with its status (`<walnut-project>`, which the user can change there), the latest update, the next step, what needs the user, and the user's note (`<walnut-mark>`) in that row, where they look first. Name the tasks with `<walnut-task>` chips (their live state is Walnut's); never write a task's state as text.
 - **Then the projects stacked top to bottom, like an article.** No side-by-side grids unless the content really is a comparison.
 - **Each project opens with** overview, latest update, needs you (the choice), to do, done; long details folded in `<details>`; the thread at its end.
 - **Put the user's note in the overview row or at the bottom of a section**, never beside the text.
@@ -97,11 +122,11 @@ Walnut project (the `project` field of a task); the two never mix.
 
 ## 5. The discipline
 
-- **Before writing a status, re-pull the live state.** `task_get_bulk {"ids":[…],"fields":["title","phase","summary","progress","last_session_update"]}` for every task the board names, plus whatever external state the project tracks. A task's summary lags; a board that says "waiting for review" while the review is done loses the user's trust at once.
+- **Before writing anything about a task, re-pull the live state.** `task_get_bulk {"ids":[…],"fields":["title","phase","summary","progress","last_session_update"]}` for every task the board names, plus whatever external state the project tracks. A task's summary lags; a board that says "waiting for review" while the review is done loses the user's trust at once.
 - **Edit small.** One `board_edit` pass per change, several edits in one call when they belong together. Rebuild with `board_set` only when the structure changes.
 - **A user's question in a thread is three writes**: your answer with `board_post`, the change it caused in that section's points or status with `board_edit` / `board_project_set`, and one line about it in your chat reply (Walnut writes your task's note and work log from your session; there is no op for it). Walnut delivers the question into your session with the thread and the task it is about; answer in the thread, not only in chat.
 - **A thread is a conversation.** One message per post: never paste a history as one blob, post it message by message. Light markdown. The user answers in the thread's own composer (typed or by voice), never in your chat.
-- **Statuses, notes, read ticks and choices are the user talking to you without typing.** A status the user picks arrives in your session like a choice answer: "Waiting on others" or "Done" means stop asking about it, "Needs you" means they want it raised. It stays theirs; do not move it back on your next `board_project_set` unless the work itself moved, and then say why in the section. Read notes on every `board_get`. A changed point they had read needs nothing from you, they see it unread. A choice answer also arrives in your session: act on it, then update that section.
+- **Statuses, notes, read ticks and choices are the user talking to you without typing.** A status the user picks arrives in your session like a choice answer: "Waiting" or "Done" means stop asking about it, "Needs you" means they want it raised. It stays theirs; do not move it back on your next `board_project_set` unless the work itself moved, and then say why in the section. Read notes on every `board_get`. A changed point they had read needs nothing from you, they see it unread. A choice answer also arrives in your session: act on it, then update that section.
 - **When the user says "later", set a reminder** (`board_remind`, or they use the Remind me control). When it comes due Walnut tells you in your session and the board shows it due; raise that item with the user again.
 - **A worker's area belongs to the worker.** When a thread's question is about a task you lead, hand it over with `task_send` and show that task's live chip and last step in the section; do not investigate it yourself.
 - **Never mirror lanes in the page; the page is for what a card cannot say.** Where each ticket stands is its card (`board_card_set`); the page holds causes, decisions and explanations.

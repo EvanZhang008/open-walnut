@@ -1,7 +1,7 @@
 /**
  * The session panel's Board TAB beside the chat (peer of Changed / Files / Inbox,
- * same `barRightSlot` contract): Projects, the board's projects one card each
- * (BoardOverview.tsx, when the leader defined projects), Cards, the team's kanban
+ * same `barRightSlot` contract): Status, every task of the team by the one user
+ * status (BoardStatusView.tsx, the default), Cards, the team's kanban
  * (kanban/BoardKanban.tsx), or Page, the HTML its leader keeps
  * (src/core/boards/board-store.ts).
  *
@@ -46,8 +46,9 @@ import { boardView, keepBoardView } from './board-view-memory';
 import { BoardKanban } from './kanban/BoardKanban';
 import type { KanbanRenderSession } from './kanban/KanbanCardDetail';
 import { KanbanSkeleton } from './kanban/KanbanSkeleton';
-import { BoardOverview } from './BoardOverview';
-import type { BoardCardActions } from './BoardProjectCard';
+import { BoardStatusView } from './BoardStatusView';
+import { buildStatusBoard } from './board-status-model';
+import { RECENT_COMPLETED_DAYS } from '@/api/tasks';
 import { BoardViewToggle } from './BoardViewToggle';
 import { ASK_FOR_BOARD_TEXT, useAskForBoard } from './useAskForBoard';
 import { useBoardItemSaves } from './useBoardItemSaves';
@@ -128,22 +129,25 @@ export function TaskBoardPane({ taskId, sessionId, barRightSlot, onOpenTask, onL
     setReply(null);
   }, [ownerId]);
 
-  // ── Projects (the board's projects) | Cards (the team's kanban) | Page (the leader's page) ──
+  // ── Status (every task by the one user status) | Cards (the team's kanban) | Page (the leader's page) ──
   // A kanban write creates a board file with no html, so a page is html, not a file.
   const hasPage = !!board?.html.trim();
   const team = useTeamOverview(ownerId, payload, seen);
   const sections = team.overview?.sections ?? null;
-  // Exactly when the Projects view draws a project board (BoardOverview's `cards`).
-  const hasProjects = (team.cards?.length ?? 0) > 0;
-  const { view, pick: pickView } = useBoardView(ownerId, hasPage, hasProjects);
+  const { view, pick: pickView } = useBoardView(ownerId, hasPage);
   // No task store (a pop-out window) has no team to show: the page alone, as before.
   const shownView = store ? view : 'custom';
-  // Each card's project (the first one naming it, as the Projects view places it), for the kanban's project chip.
+  // Each card's project (the first one naming it), for the kanban's project chip.
   const projectOfRef = useRef<ProjectOf>(NO_PROJECTS);
   const projectOf = useMemo(() => (projectOfRef.current = keepIfSame(projectOfRef.current, projectsOfTeam(sections))), [sections]);
-  // The kanban's one attention number (G12); the toggle shows the default view's count while the Page is up.
-  const [attention, setAttention] = useState(0);
-  const toggleAttention = hasProjects ? team.overview?.attention ?? 0 : attention;
+  // The kanban still reports its own count (G12); the toggle shows the Status view's Needs you,
+  // the one number every surface shows (src/core/user-status.ts).
+  const [, setAttention] = useState(0);
+  const statusCounts = useMemo(
+    () => (store ? buildStatusBoard({ ownerId, tasks: store.tasks, now: Date.now(), doneWindowDays: RECENT_COMPLETED_DAYS }).counts : null),
+    [store?.tasks, ownerId], // eslint-disable-line react-hooks/exhaustive-deps -- the array is the store's identity
+  );
+  const toggleAttention = statusCounts?.needs ?? 0;
   // The frame boots on the first Page visit, then stays mounted (hidden) so switching back is instant.
   const [frameOwner, setFrameOwner] = useState<string | null>(null);
   useEffect(() => { if (shownView === 'custom') setFrameOwner(ownerId); }, [shownView, ownerId]);
@@ -192,7 +196,7 @@ export function TaskBoardPane({ taskId, sessionId, barRightSlot, onOpenTask, onL
     frameRef.current?.contentWindow?.postMessage(msg, '*');
   }, []);
   const {
-    saveMark, saveMarkNote, saveProject, setProjectStatus, saveCheck, saveChoice, pickChoice, saveChoiceText, answerChoiceWords, saveReminder,
+    saveMark, saveMarkNote, saveProject, saveCheck, saveChoice, saveChoiceText, saveReminder,
     keepNoteDraft, noteDrafts,
   } = useBoardItemSaves(
     ownerId, ownerRef, toFrame, { mergeMark, mergeProject, mergeCheck, mergeChoice, mergeReminder },
@@ -274,23 +278,6 @@ export function TaskBoardPane({ taskId, sessionId, barRightSlot, onOpenTask, onL
         : { thread, title, aboutTitle: about || undefined };
     setReply((cur) => ({ target, nonce: (cur?.nonce ?? 0) + 1 }));
   }, [refs, storeById]);
-
-  // The Overview cards' writes: the same routes as the page's, answered as promises.
-  const markThreadSeen = useCallback((thread: string, ts: string) => {
-    setSeen((cur) => {
-      const next = advanceSeen(cur, thread, ts);
-      if (!next) return cur;
-      writeSeen(ownerRef.current, next);
-      return next;
-    });
-  }, []);
-  const cardActions = useMemo<BoardCardActions>(() => ({
-    setStatus: setProjectStatus,
-    pickChoice,
-    answerChoiceText: answerChoiceWords,
-    postMessage: sendFromDock,
-    markSeen: markThreadSeen,
-  }), [setProjectStatus, pickChoice, answerChoiceWords, sendFromDock, markThreadSeen]);
 
   const deleteThreadMessage = useCallback((reqId: string, thread: string, messageId: string) => {
     const boardTask = ownerRef.current;
@@ -440,7 +427,7 @@ export function TaskBoardPane({ taskId, sessionId, barRightSlot, onOpenTask, onL
           data-board-task-id={ownerId}
         >{barTitle.text}</span>
         {store && payload && (
-          <BoardViewToggle view={shownView} hasPage={hasPage} hasProjects={hasProjects} attention={toggleAttention} onPick={pickView} />
+          <BoardViewToggle view={shownView} hasPage={hasPage} attention={toggleAttention} onPick={pickView} />
         )}
         {board && shownView === 'custom' && (
           <span className="task-board-bar-sub" title={new Date(board.updated_at).toLocaleString()} data-testid="board-meta">
@@ -479,20 +466,16 @@ export function TaskBoardPane({ taskId, sessionId, barRightSlot, onOpenTask, onL
             style={shownView === 'custom' ? undefined : { display: 'none' }}
           />
         )}
-        {shownView === 'projects' && team.overview && payload && (
-          // Keys differ from the kanban's, its sibling: two children with one key get duplicated by React.
-          <BoardOverview
-            key={`projects:${ownerId}`}
-            overview={team.overview}
-            cards={team.cards}
-            cardActions={cardActions}
+        {shownView === 'status' && store && (
+          <BoardStatusView
+            key={`status:${ownerId}`}
+            ownerId={ownerId}
             ownerTitle={ownerTitle}
-            hasPage={hasPage}
+            tasks={store.tasks}
             loading={team.loading}
-            completedHidden={team.completedHidden}
-            onLoadArchive={team.loadArchive}
             onOpenTask={openTask}
-            onSendToSession={ownerId === taskId ? onSendToSession : undefined}
+            onOpenPage={hasPage ? () => pickView('custom') : undefined}
+            soloExtra={hasPage ? undefined : <AskLeaderRow taskId={ownerId} onSendToSession={ownerId === taskId ? onSendToSession : undefined} />}
           />
         )}
         {store && payload && (

@@ -811,7 +811,7 @@ reconcile, `NOTES_UPDATED` events) with the web UI's `/api/notes-v2`.
   `{ "tasks": [ProjectedTask], "syncedAt": "<ISO>" }`
 - `ProjectedTask`: `{ id, title, status, phase, priority, project,
   parent_task_id?, due_date?, start_date?, wait_until?, created_at, updated_at,
-  completed_at?, pinned?, unread?, tags?, summary? }` — `summary` is truncated to
+  completed_at?, pinned?, unread?, tags?, summary?, user_status? }` — `summary` is truncated to
   ~500 chars.
   `phase` is one of `TODO`, `WAITING`, `IN_PROGRESS`, `NEED_ACTION`, `COMPLETE`.
   `WAITING` was added in 0.5.2 (a task parked until something happens; its
@@ -838,6 +838,18 @@ reconcile, `NOTES_UPDATED` events) with the web UI's `/api/notes-v2`.
   `start_date` of its own takes its nearest ancestor's for the Now view, as the
   web does; a client reading an older server sees no field and treats the task
   as having no parent. Additive and optional, so older clients ignore it.
+  `user_status` (added 2026-10) is the ONE status the user sees, present on open
+  tasks: `{ state, kind?, ask?, source?, waitingOn?, until?, now?, next?, at?, stale? }`.
+  `state` is `needs` (only what the user alone can decide, approve or do; `ask`
+  says what, `source` where it lives: `prompt`, `letter`, `choice`, `error` or
+  `session`), `working` (its session runs a turn), `waiting` (`kind` = `task`,
+  `time`, `machine`, `you`, `lead`, `not-started`, `stuck` or `other`, `waitingOn`
+  in words, `until` its next check) or `done`. `now` / `next` are the session's own
+  plain words from its last turn, written `at`; `stale` marks words a day old on a
+  task that is not running. The server derives it (src/core/user-status.ts) and
+  every surface shows it instead of the phase, so a `NEED_ACTION` phase alone is
+  not "needs you". A client reading an older server sees no field and falls back
+  to the phase. Additive and optional.
 - Scope: all open tasks + tasks completed in the last 14 days (older
   completions are excluded from the projection).
 - Provenance: `syncedAt` is when the primary box exported the snapshot. On the

@@ -1887,6 +1887,12 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     startWaitUntilWatch()
   }
 
+  // ── The one status the user sees per task (src/core/user-status-sync.ts).
+  if (bootPolicy('user-status')) {
+    const { startUserStatusSync } = await import('../core/user-status-sync.js')
+    startUserStatusSync()
+  }
+
   // ── Task workspaces: cleanup on complete/delete + resume interrupted jobs (src/core/workspaces/).
   if (bootPolicy('workspace-watch')) {
     const { startWorkspaceWatch } = await import('../core/workspaces/watch.js')
@@ -6411,6 +6417,8 @@ export async function stopServer(): Promise<void> {
   unsubscribeLocalClaude = null
   bus.unsubscribe('host-status-defs')
   bus.unsubscribe('task-wait-until') // WAIT_UNTIL_SUBSCRIBER, core/task-wait-until.ts
+  bus.unsubscribe('user-status-sync') // core/user-status-sync.ts; its timers stop below
+  void import('../core/user-status-sync.js').then((m) => m.stopUserStatusSync()).catch(() => { /* never started */ })
   bus.unsubscribe('board-store') // BOARD_SUBSCRIBER, core/boards/board-store.ts
   bus.unsubscribe('task-workspaces') // core/workspaces/watch.ts
   try {

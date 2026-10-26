@@ -1,13 +1,12 @@
 /**
- * The Board view pick (board-view-pref.ts): Projects | Cards | Page. With no
- * pick, or one the board cannot show, Projects when the leader defined
- * projects, else Cards; a pick is kept per owner and comes back once the board
- * can show it; the stored 'overview' of before the kanban named the project
- * board, so it reads as Projects.
+ * The Board view pick (board-view-pref.ts): Status | Cards | Page. With no pick,
+ * or one the board cannot show, Status (the default since 2026-10-25, the user's
+ * pick); a pick is kept per owner and comes back once the board can show it; the
+ * retired Projects view and the 'overview' of before it read as Status.
  */
 import { describe, expect, it } from 'vitest';
 import {
-  BOARD_VIEW_PREFIX, defaultBoardView, parseBoardView, readBoardView, shownBoardView, writeBoardView,
+  BOARD_VIEW_PREFIX, DEFAULT_BOARD_VIEW, parseBoardView, readBoardView, shownBoardView, writeBoardView,
 } from '../../web/src/components/board/board-view-pref';
 import { keepIfSame, NO_PROJECTS, projectsOfTeam } from '../../web/src/components/board/board-view-projects';
 import type { OverviewSection, PlacedRow } from '../../web/src/components/board/board-overview-model';
@@ -21,29 +20,27 @@ function memStorage(blocked = false) {
   };
 }
 
-describe('board view pref: Projects | Cards | Page', () => {
-  it('defaults to Projects when the board has projects, else Cards', () => {
-    expect(defaultBoardView(true)).toBe('projects');
-    expect(defaultBoardView(false)).toBe('cards');
-    expect(shownBoardView(null, true, true)).toBe('projects');
-    expect(shownBoardView(null, true, false)).toBe('cards');
+describe('board view pref: Status | Cards | Page', () => {
+  it('defaults to Status, with or without a page', () => {
+    expect(DEFAULT_BOARD_VIEW).toBe('status');
+    expect(shownBoardView(null, true)).toBe('status');
+    expect(shownBoardView(null, false)).toBe('status');
   });
 
   it('shows a pick only while the board can show it, and falls back to the default', () => {
-    expect(shownBoardView('custom', true, false)).toBe('custom');
-    expect(shownBoardView('custom', false, false)).toBe('cards');
-    expect(shownBoardView('custom', false, true)).toBe('projects');
-    expect(shownBoardView('projects', true, true)).toBe('projects');
-    expect(shownBoardView('projects', true, false)).toBe('cards');
-    expect(shownBoardView('cards', true, true)).toBe('cards');
-    expect(shownBoardView('cards', false, false)).toBe('cards');
+    expect(shownBoardView('custom', true)).toBe('custom');
+    expect(shownBoardView('custom', false)).toBe('status');
+    expect(shownBoardView('cards', true)).toBe('cards');
+    expect(shownBoardView('cards', false)).toBe('cards');
+    expect(shownBoardView('status', true)).toBe('status');
   });
 
-  it('reads the stored values, the old Overview as Projects, anything else as no pick', () => {
-    expect(parseBoardView('projects')).toBe('projects');
+  it('reads the stored values, the old Projects and Overview as Status, anything else as no pick', () => {
+    expect(parseBoardView('status')).toBe('status');
     expect(parseBoardView('cards')).toBe('cards');
     expect(parseBoardView('custom')).toBe('custom');
-    expect(parseBoardView('overview')).toBe('projects');
+    expect(parseBoardView('projects')).toBe('status');
+    expect(parseBoardView('overview')).toBe('status');
     expect(parseBoardView('kanban')).toBeNull();
     expect(parseBoardView(null)).toBeNull();
   });
@@ -56,8 +53,8 @@ describe('board view pref: Projects | Cards | Page', () => {
     expect(readBoardView(s, 'lead-a')).toBe('cards');
     expect(readBoardView(s, 'lead-b')).toBe('custom');
     expect(readBoardView(s, 'lead-c')).toBeNull();
-    s.m.set(`${BOARD_VIEW_PREFIX}lead-d`, 'overview');
-    expect(readBoardView(s, 'lead-d')).toBe('projects');
+    s.m.set(`${BOARD_VIEW_PREFIX}lead-d`, 'projects');
+    expect(readBoardView(s, 'lead-d')).toBe('status');
   });
 
   it('a blocked storage never throws', () => {
@@ -69,7 +66,7 @@ describe('board view pref: Projects | Cards | Page', () => {
   });
 });
 
-describe('projectsOfTeam: each card\'s project, as the Projects view places it', () => {
+describe('projectsOfTeam: each card\'s project, by the board\'s project sections', () => {
   const row = (id: string) => ({ id } as unknown as PlacedRow);
   const section = (kind: OverviewSection['kind'], id: string, title: string, rows: string[]): OverviewSection => ({
     kind, id, title, status: kind === 'project' ? 'wip' : null, rows: rows.map(row), attention: 0, done: 0,

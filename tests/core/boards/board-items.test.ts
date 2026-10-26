@@ -271,7 +271,7 @@ describe('projects', () => {
     }
     expect(await rawFile()).toBe(before)
     expect((await boardError(() => setBoardProject(T, 'cause-a', { status: 'done' }, lead))).message)
-      .toMatch(/^The user set project "cause-a" to wait \(Waiting on others\) at .+override_user: true/)
+      .toMatch(/^The user set project "cause-a" to wait \(Waiting\) at .+override_user: true/)
 
     // Title, tasks and the same status go through, and the pick stays the user's.
     const kept = await writeBoardProject(T, 'cause-a', { title: 'Cache TTL (prod)', tasks: ['t1'], status: 'wait' }, lead)

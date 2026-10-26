@@ -1,24 +1,23 @@
 /**
- * The Board bar's view switch: Projects (the board's projects, one card each;
- * only when the leader defined projects) | Cards (the team's kanban) | Page (the
- * page the leader wrote). A segmented control, never a dropdown: every choice
- * stays in sight.
+ * The Board bar's view switch: Status (every task by the one user status) | Cards
+ * (the team's kanban) | Page (the page the leader wrote). A segmented control,
+ * never a dropdown: every choice stays in sight.
  *
  * Page with no page is disabled by `aria-disabled`, not `disabled`, so its
  * tooltip still shows on hover (a disabled button gets no pointer events in
  * Chromium) and it stays in the tab order, saying why. While the user reads the
- * Page, the default view's segment carries a red count of what needs them, so a
- * page the leader stopped updating can never hide a blocked worker.
+ * Page or the Cards, the Status segment carries a red count of what needs them, so
+ * a page the leader stopped updating can never hide a blocked worker. The count is
+ * the Status view's own Needs you number.
  */
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react';
-import { defaultBoardView, type BoardView } from './board-view-pref';
+import { DEFAULT_BOARD_VIEW, type BoardView } from './board-view-pref';
+import '@/styles/board-overview.css';
 
 export interface BoardViewToggleProps {
   view: BoardView;
   hasPage: boolean;
-  /** The board has projects: the Projects segment shows (and leads). */
-  hasProjects: boolean;
-  /** What needs the user in the default view (Projects' or the kanban's count). */
+  /** What needs the user: the Status view's Needs you count. */
   attention: number;
   onPick: (view: BoardView) => void;
 }
@@ -26,13 +25,13 @@ export interface BoardViewToggleProps {
 export const NO_PAGE_TITLE = 'No page yet: the leader has not written one';
 export const PAGE_TITLE = 'The page the leader wrote for this team';
 export const CARDS_TITLE = "The team's cards by lane";
-export const PROJECTS_TITLE = "The board's projects, one card each";
+export const STATUS_TITLE = 'Every task of the team: what needs you, what is working, what waits';
 
-const LABELS: Record<BoardView, string> = { projects: 'Projects', cards: 'Cards', custom: 'Page' };
+const LABELS: Record<BoardView, string> = { status: 'Status', cards: 'Cards', custom: 'Page' };
 
-export function BoardViewToggle({ view, hasPage, hasProjects, attention, onPick }: BoardViewToggleProps) {
-  const views: BoardView[] = hasProjects ? ['projects', 'cards', 'custom'] : ['cards', 'custom'];
-  const countOn = view === 'custom' && attention > 0 ? defaultBoardView(hasProjects) : null;
+export function BoardViewToggle({ view, hasPage, attention, onPick }: BoardViewToggleProps) {
+  const views: BoardView[] = ['status', 'cards', 'custom'];
+  const countOn = view !== DEFAULT_BOARD_VIEW && attention > 0 ? DEFAULT_BOARD_VIEW : null;
   const choose = (next: BoardView) => {
     if (next === 'custom' && !hasPage) return;
     if (next !== view) onPick(next);
@@ -49,7 +48,7 @@ export function BoardViewToggle({ view, hasPage, hasProjects, attention, onPick 
   };
   const titleOf = (v: BoardView) => {
     if (v === 'custom') return hasPage ? PAGE_TITLE : NO_PAGE_TITLE;
-    const base = v === 'projects' ? PROJECTS_TITLE : CARDS_TITLE;
+    const base = v === 'status' ? STATUS_TITLE : CARDS_TITLE;
     return countOn === v ? `${base}: ${attention} ${attention === 1 ? 'needs' : 'need'} you` : base;
   };
   return (

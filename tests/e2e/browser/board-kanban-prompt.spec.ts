@@ -18,8 +18,7 @@ import { discoverBrowserFixture } from './codex-test-audit'
 import { REAL_PANEL } from './draft-helpers'
 import { isolateUiPrefs, presetPanelView } from './todo-panel-helpers'
 import {
-  call, getSession, kanbanApi, pollUntil, seedKanbanTeam, startSession, ticketOf, type KanbanApi, type KanbanTeam,
-} from './board-kanban-fixture'
+  call, getSession, kanbanApi, pollUntil, seedKanbanTeam, startSession, ticketOf, type KanbanApi, type KanbanTeam, pickCardsView } from './board-kanban-fixture'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 const BASE = `http://localhost:${TEST_PORT}`
@@ -41,6 +40,9 @@ test.beforeAll(async ({ browserName }, info) => {
   team = await seedKanbanTeam(api, { engine: info.project.name, litter })
   await handBackOnBoard()
 })
+
+// The Board opens on Status; these specs read Cards, the view a lead picked (board-kanban-fixture.ts).
+test.beforeEach(async ({ context }) => { await pickCardsView(context, team.leader) })
 
 test.afterAll(async () => {
   for (const id of [...litter].reverse()) {
@@ -82,6 +84,8 @@ async function openBoard(page: Page): Promise<Locator> {
   await expect(panel).toBeVisible({ timeout: 30_000 })
   await panel.getByTestId('session-board-chip').click()
   const pane = page.getByTestId('task-board-pane')
+  // The Board opens on Status (the default since 2026-10-25): the kanban is one click away.
+  await pane.getByTestId('board-view-cards').click()
   await expect(pane.getByTestId('board-kanban')).toBeVisible({ timeout: 30_000 })
   await expect(pane.getByTestId('kanban-rollup')).toContainText('open', { timeout: 30_000 })
   return pane
@@ -113,7 +117,7 @@ test('C24: Message from a card reaches its worker; a sessionless card cannot mes
   const id = team.all[10]
   const sid = team.sessions[id]
   const c = card(pane, id)
-  await expect(c.getByTestId('kanban-card-status')).toContainText('Turn ended')
+  await expect(c.getByTestId('kanban-card-status')).toContainText('Waiting on')
   await c.hover()
   await c.getByTestId('kanban-card-message').click()
   const input = c.getByTestId('kanban-card-composer-input')
@@ -260,7 +264,7 @@ test('C75: Start worker runs the card in the leader folder; Tell the leader reac
   const tellId = await add(`${ticketOf(141)} refund backlog tell`)
   const pane = await openBoard(page)
   const s = card(pane, startId)
-  await expect(s.getByTestId('kanban-card-status')).toHaveText('No session')
+  await expect(s.getByTestId('kanban-card-status')).toHaveText('Not started yet')
   await s.getByTestId('kanban-card-start').click()
   const sid = await pollUntil('worker session', async () => ((await call<{ task: { session_id?: string } }>(api, 'GET', `/api/tasks/${startId}`)).task.session_id ?? ''), (v) => !!v)
   await expect.poll(() => historyText(sid), { timeout: 60_000 }).toContain(`Work on this task: ${ticketOf(140)} checkout latency start`)
@@ -268,7 +272,7 @@ test('C75: Start worker runs the card in the leader folder; Tell the leader reac
   const worker = await call<{ session: { cwd?: string; host?: string } }>(api, 'GET', `/api/sessions/${sid}`)
   expect(worker.session.cwd).toBe(lead.session.cwd)
   expect(worker.session.host ?? '').toBe(lead.session.host ?? '')
-  await expect(s.getByTestId('kanban-card-status')).not.toHaveText('No session', { timeout: 30_000 })
+  await expect(s.getByTestId('kanban-card-status')).not.toHaveText('Not started yet', { timeout: 30_000 })
   await expect(s.getByTestId('kanban-card-start')).toHaveCount(0)
 
   const t = card(pane, tellId)
@@ -298,6 +302,8 @@ test('C75: Start worker runs the card in the leader folder; Tell the leader reac
   await expect(panel).toBeVisible({ timeout: 30_000 })
   await panel.getByTestId('session-board-chip').click()
   const other = panel.getByTestId('task-board-pane')
+  // This team's board opens on Status; the cards are one click away.
+  await other.getByTestId('board-view-cards').click()
   const tell = card(other, kids[1]).getByTestId('kanban-card-tell-leader')
   await expect(tell).toHaveAttribute('aria-disabled', 'true', { timeout: 30_000 })
   await expect(tell).toHaveAttribute('title', 'The leader has no session')

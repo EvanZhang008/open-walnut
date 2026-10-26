@@ -9,7 +9,7 @@ import { expect, test, type Locator, type Page } from '@playwright/test'
 import { discoverBrowserFixture } from './codex-test-audit'
 import { REAL_PANEL } from './draft-helpers'
 import { isolateUiPrefs, presetPanelView } from './todo-panel-helpers'
-import { call, kanbanApi, seedKanbanTeam, type KanbanApi, type KanbanTeam } from './board-kanban-fixture'
+import { call, kanbanApi, seedKanbanTeam, type KanbanApi, type KanbanTeam, pickCardsView } from './board-kanban-fixture'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 const API = `http://localhost:${TEST_PORT}`
@@ -30,6 +30,9 @@ test.beforeAll(async ({}, info) => {
     await call(api, 'PUT', `/api/v1/tasks/${team.leader}/board/cards/${id}`, { lane })
   }
 })
+
+// The Board opens on Status; these specs read Cards, the view a lead picked (board-kanban-fixture.ts).
+test.beforeEach(async ({ context }) => { await pickCardsView(context, team.leader) })
 
 test.afterAll(async () => {
   for (const id of [...litter].reverse()) {
@@ -53,6 +56,8 @@ async function openBoard(page: Page, leader = team.leader, sid = team.leaderSid,
   await expect(panel).toBeVisible({ timeout: 30_000 })
   await panel.getByTestId('session-board-chip').click()
   const pane = page.getByTestId('task-board-pane')
+  // The Board opens on Status (the default since 2026-10-25): the kanban is one click away.
+  await pane.getByTestId('board-view-cards').click()
   await expect(pane.getByTestId('board-kanban')).toBeVisible({ timeout: 30_000 })
   // The task summaries arrive in one read after the cards: wait so nothing grows under a measure.
   if (leader === team.leader) await expect(pane.locator('[data-testid="kanban-card-summary"]').first()).toBeVisible({ timeout: 30_000 })

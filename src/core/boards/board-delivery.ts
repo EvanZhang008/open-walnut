@@ -98,14 +98,14 @@ export async function buildChoicePrompt(html: string, choiceId: string, choice: 
     + `board_get shows every answer. ${NOT_AN_ORDER}`;
 }
 
-/** `"wait" (Waiting on others)`, the label in the page's words. */
+/** `"wait" (Waiting)`, the label in the page's words. */
 function statusName(status: BoardProjectStatus | undefined): string {
   return status ? `${status} (${BOARD_PROJECT_STATUS_LABELS[status]})` : 'no status';
 }
 
 /**
- * `On your Board the user set project "Venue" (venue) to wait (Waiting on others);
- * it was wip (In progress), set by you.` and what to do with it.
+ * `On your Board the user set project "Venue" (venue) to wait (Waiting);
+ * it was wip (Working), set by you.` and what to do with it.
  */
 export function buildProjectStatusPrompt(
   projectId: string,

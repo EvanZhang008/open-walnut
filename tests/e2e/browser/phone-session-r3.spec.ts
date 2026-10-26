@@ -265,7 +265,7 @@ test('N2-09: a tapped session draws its bar and composer at once, and a second o
   expect(errors).toEqual([])
 })
 
-test('C19: a Board\'s card chips and its Projects view read 12 px and take a finger (live board density)', async ({ page }) => {
+test('C19: a Board\'s card chips and its Status view read 12 px and take a finger (live board density)', async ({ page }) => {
   const sid = 'pw-question-recovery-session'
   const taskId = 'pw-task-question-recovery'
   const put = await page.request.put(`/api/v1/tasks/${taskId}/board`, { data: { html: '<h1>Shed board</h1><p>Seed order and beds.</p>' } })
@@ -279,7 +279,7 @@ test('C19: a Board\'s card chips and its Projects view read 12 px and take a fin
     const pane = page.getByTestId('task-board-pane')
     await expect(pane).toBeVisible({ timeout: 15_000 })
     // What a team board draws at real density (a ticket, a Sev, a project
-    // filter, the Projects view's kickers and counts), with the real classes.
+    // filter, the Status view's kicker, chips, rows and flags), with the real classes.
     await pane.evaluate((p) => {
       const wrap = document.createElement('div')
       wrap.setAttribute('data-testid', 'r3-board')
@@ -287,9 +287,15 @@ test('C19: a Board\'s card chips and its Projects view read 12 px and take a fin
         + '<div class="kanban-card"><div class="kanban-card-title">Order seeds</div><div class="kanban-card-ids">'
         + '<span class="kanban-card-ticket"><a class="tag-chip tag-chip-inline" href="#t"><span class="tag-chip-value">T-12</span></a></span>'
         + '<span class="kanban-card-sev kanban-sev-2">Sev 2</span><button type="button" class="kanban-card-project">Beds</button></div></div>'
-        + '<div class="board-overview"><div class="bo-kicker">Leader</div><span class="bo-badge">Stopped</span><span class="bo-time">14h</span>'
-        + '<span class="bo-meter-pct">88</span><span class="bpb-label">Needs you</span><span class="bpc-tag">3 resolved</span>'
-        + '<span class="bpc-new">13 new</span><span class="bpc-meta">6 resolved</span><span class="bpc-count-red">1 needs you</span></div>'
+        + '<div class="board-status"><div class="bs-who">Board · Lead</div>'
+        + '<div class="bs-filters"><button type="button" class="bs-chip is-on">All open <b>14</b></button>'
+        + '<button type="button" class="bs-chip bs-chip-needs"><span class="bs-dot"></span><b>2</b> Needs you</button></div>'
+        + '<table class="bs-table"><thead><tr><th class="bs-c-status">Status</th><th>Task</th><th>Where it stands</th><th>Next · who</th><th class="bs-c-when">Updated</th></tr></thead>'
+        + '<tbody><tr class="bs-row bs-row-needs"><td class="bs-c-status"><span class="bs-pill bs-pill-needs"><span class="bs-dot"></span>Needs you</span></td>'
+        + '<td class="bs-c-task"><span class="bs-title">Order seeds</span><span class="bs-sub">Under Beds</span></td>'
+        + '<td class="bs-c-where"><span class="bs-now">Two vendors quoted.</span><span class="bs-stale">No update in 2 days</span></td>'
+        + '<td class="bs-c-next"><span class="bs-you"><b>You:</b> Pick a vendor?</span><button type="button" class="bs-act">Answer on the Page</button></td>'
+        + '<td class="bs-c-when">14h</td></tr></tbody></table></div>'
         + '<span class="task-board-bar-sub">v3, updated 5 days ago</span>'
       p.insertBefore(wrap, p.firstChild)
     })

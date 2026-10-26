@@ -334,6 +334,11 @@ struct WalnutTask: Codable, Identifiable, Equatable {
     /// that predates the field sends nothing, and the subtask then reads as having
     /// no inherited start. Every copy of a row (`applyEdit`, `withPinned`) carries it.
     var parentTaskId: String? = nil
+    /// The one status the user sees (additive, 2026-10; server `src/core/user-status.ts`),
+    /// open rows only: the same four states and counts as the web Board, the Org page and
+    /// the task list. nil from a server that predates it: the phase rule is the fallback.
+    /// Every copy of a row (`applyEdit`, `withPinned`) carries it.
+    var userStatus: WalnutUserStatus? = nil
 
     private enum CodingKeys: String, CodingKey {
         case id, title, status, phase, priority, project
@@ -346,7 +351,25 @@ struct WalnutTask: Codable, Identifiable, Equatable {
         case endDate = "end_date"
         case unread
         case parentTaskId = "parent_task_id"
+        case userStatus = "user_status"
     }
+}
+
+/// `user_status` on a task row: needs | working | waiting | done, with what the user must do
+/// (`ask`), on whom or what a waiting task waits (`kind`, `waitingOn`, `until`), and the
+/// session's own words (`now`, `next`, written `at`; `stale` when a day old and not running).
+struct WalnutUserStatus: Codable, Equatable {
+    let state: String
+    var kind: String? = nil
+    var ask: String? = nil
+    /// needs: prompt | letter | choice | error | session (where the ask lives).
+    var source: String? = nil
+    var waitingOn: String? = nil
+    var now: String? = nil
+    var next: String? = nil
+    var until: String? = nil
+    var at: String? = nil
+    var stale: Bool? = nil
 }
 
 struct TasksResponse: Codable {

@@ -201,6 +201,8 @@ export interface BoardRef {
   title: string
   phase: string
   status: string
+  /** The one user status (src/core/user-status.ts): needs | working | waiting | done. */
+  user?: string
 }
 
 async function resolveRefs(ids: string[]): Promise<BoardRef[]> {
@@ -210,7 +212,9 @@ async function resolveRefs(ids: string[]): Promise<BoardRef[]> {
     // No real task id is this short, and a tiny prefix is a guess, not a ref.
     if (ref.length < 4) continue
     const task = await getTask(ref).catch(() => undefined)
-    if (task) out.push({ ref, id: task.id, title: task.title, phase: task.phase, status: task.status })
+    if (!task) continue
+    const user = task.phase === 'COMPLETE' || task.status === 'done' ? 'done' : task.user_status?.state
+    out.push({ ref, id: task.id, title: task.title, phase: task.phase, status: task.status, ...(user ? { user } : {}) })
   }
   return out
 }

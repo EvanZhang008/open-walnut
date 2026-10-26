@@ -997,6 +997,13 @@ export interface HumanInboxLetterEvent {
  * own question. Carries no body and no free-text beyond the human's note, which is already
  * bounded by the store.
  */
+/** A letter's reader flag moved (setLetterState): read, pinned or archived. */
+export interface HumanInboxStateEvent {
+  letterId: string;
+  field: 'read' | 'pinned' | 'archived';
+  value: boolean;
+}
+
 export interface HumanInboxAnsweredEvent {
   letterId: string;
   actionId: string;
@@ -1377,6 +1384,7 @@ export interface EventPayloadMap {
 
   'human-inbox:letter': HumanInboxLetterEvent;
   'human-inbox:answered': HumanInboxAnsweredEvent;
+  'human-inbox:state': HumanInboxStateEvent;
 
   'board:changed': BoardChangedEvent;
 

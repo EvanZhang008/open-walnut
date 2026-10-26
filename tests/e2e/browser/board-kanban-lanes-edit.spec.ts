@@ -22,8 +22,7 @@ import { discoverBrowserFixture } from './codex-test-audit'
 import { REAL_PANEL } from './draft-helpers'
 import { isolateUiPrefs, presetPanelView } from './todo-panel-helpers'
 import {
-  call, kanbanApi, pollUntil, seedKanbanTeam, type KanbanApi, type KanbanTeam,
-} from './board-kanban-fixture'
+  call, kanbanApi, pollUntil, seedKanbanTeam, type KanbanApi, type KanbanTeam, pickCardsView } from './board-kanban-fixture'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 const BASE = `http://localhost:${TEST_PORT}`
@@ -44,6 +43,9 @@ test.beforeAll(async ({ browserName }, info) => {
   await fs.mkdir(SHOTS, { recursive: true })
   team = await seedKanbanTeam(api, { engine: info.project.name, litter })
 })
+
+// The Board opens on Status; these specs read Cards, the view a lead picked (board-kanban-fixture.ts).
+test.beforeEach(async ({ context }) => { await pickCardsView(context, team.leader) })
 
 test.afterAll(async () => {
   for (const id of [...litter].reverse()) {
@@ -70,6 +72,8 @@ async function openBoard(page: Page): Promise<Locator> {
   await expect(panel).toBeVisible({ timeout: 30_000 })
   await panel.getByTestId('session-board-chip').click()
   const pane = page.getByTestId('task-board-pane')
+  // The Board opens on Status (the default since 2026-10-25): the kanban is one click away.
+  await pane.getByTestId('board-view-cards').click()
   await expect(pane.getByTestId('board-kanban')).toBeVisible({ timeout: 30_000 })
   await expect(pane.getByTestId('kanban-rollup')).toContainText('open', { timeout: 30_000 })
   return pane
@@ -125,7 +129,9 @@ test('C18: a lane renamed from its menu keeps its name across a reload and a sec
   await expect.poll(async () => (await boardKanban()).lanes_effective.find((l) => l.id === 'waiting-others')?.name).toBe('Waiting on partner team')
   await expect(card(pane, team.waiting)).toHaveAttribute('data-lane', 'waiting-others')
   // A second window shows it, and so does a reload of this one.
-  const other = await (await browser.newContext({ viewport: { width: 1280, height: 800 } })).newPage()
+  const otherCtx = await browser.newContext({ viewport: { width: 1280, height: 800 } })
+  await pickCardsView(otherCtx, team.leader)
+  const other = await otherCtx.newPage()
   const pane2 = await openBoard(other)
   await expect(laneHead(pane2, 'waiting-others').getByTestId('kanban-lane-name')).toHaveText('Waiting on partner team')
   await other.context().close()
@@ -216,7 +222,7 @@ test('C65: two moves into Resolved inside 8s keep two toasts, each completing it
   await page.mouse.move(5, 5)
 })
 
-test('C89: a stored Page pick opens on Page, Cards is one click away and is remembered, the old Overview pick reads as Cards', async ({ page }) => {
+test('C89: a stored Page pick opens on Page, Cards is one click away and is remembered, the old Overview pick reads as Status', async ({ page }) => {
   test.setTimeout(180_000)
   await isolateUiPrefs(page)
   await presetPanelView(page, { section: 'all', project: team.project })
@@ -238,11 +244,11 @@ test('C89: a stored Page pick opens on Page, Cards is one click away and is reme
   await pane.getByTestId('board-view-cards').click()
   await expect(pane.getByTestId('board-kanban')).toBeVisible()
   expect(await page.evaluate((o) => localStorage.getItem(`walnut:board-view.v1:${o}`), team.leader)).toBe('cards')
-  // The pick from before the kanban ('overview', the project board) shows Cards on a board with no projects.
+  // The pick from before the kanban ('overview', the project board) reads as Status, the board's overview now.
   await page.evaluate((o) => localStorage.setItem(`walnut:board-view.v1:${o}`, 'overview'), team.leader)
   const again = await openBoard2(page)
-  await expect(again.getByTestId('board-view-cards')).toHaveAttribute('aria-pressed', 'true', { timeout: 15_000 })
-  await expect(again.getByTestId('board-kanban')).toBeVisible()
+  await expect(again.getByTestId('board-view-status')).toHaveAttribute('aria-pressed', 'true', { timeout: 15_000 })
+  await expect(again.getByTestId('board-status')).toBeVisible()
 })
 
 /** openBoard for a stored Page pick: waits for the pane, not for the kanban (Page shows instead). */

@@ -140,7 +140,7 @@ describe('kanban filter: one board project', () => {
   const projectOf = new Map([['a', dns], ['b', dns], ['c', quota]]);
   const b = board([card('a', T(1), { needsYou: true }), card('b', T(2)), card('c', T(3), { needsYou: true }), card('d', T(4))]);
 
-  it('shows only the cards the Projects view places in that project', () => {
+  it('shows only the cards the board places in that project', () => {
     const none = filterMembers(null, null, new Set());
     expect([...filterView(b, none, new Set(), '', 'dns', projectOf).visible].sort()).toEqual(['a', 'b']);
     expect([...filterView(b, none, new Set(), '', 'quota', projectOf).visible]).toEqual(['c']);

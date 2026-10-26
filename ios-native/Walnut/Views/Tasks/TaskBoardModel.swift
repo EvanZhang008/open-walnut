@@ -769,7 +769,7 @@ enum BoardModel {
     // MARK: - "This row wants a human" (the dot)
 
     /// The desktop's rule, verbatim (`web/src/utils/session-status.ts`
-    /// `taskNeedsAction`): phase NEED_ACTION and not done. Both surfaces have to
+    /// `taskNeedsAction`): the user status says needs you, else phase NEED_ACTION, and not done. Both surfaces have to
     /// agree about what the hollow dot means, so this is a port and not a
     /// reinterpretation.
     ///
@@ -781,6 +781,9 @@ enum BoardModel {
     static func needsHuman(_ task: WalnutTask?) -> Bool {
         guard let task else { return false }
         if task.isDone || task.phase == "COMPLETE" { return false }
+        // The one user status when the server derived it (2026-10): a turn that ended with
+        // nothing for the user is not "needs you". The phase is the fallback.
+        if let us = task.userStatus { return us.state == "needs" }
         return task.phase == "NEED_ACTION"
     }
 

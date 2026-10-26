@@ -346,7 +346,7 @@ test('projects, checks, choices, reminders and the updated dot', async ({ page }
   await expect(box('decide')).toHaveText('0')
   await expect(box('wait')).toHaveText('1')
   await expect(probe).toHaveCSS('border-left-color', 'rgb(217, 119, 6)')
-  await expect(probePill).toHaveText('Waiting on others')
+  await expect(probePill).toHaveText('Waiting')
   await expect(probePill).toHaveAttribute('title', /^Set by the leader, .*\. Click to change it\.$/)
   const projChip = frame.locator(`walnut-project[id="probe"] walnut-task[id="${worker}"] .wn-task`)
   await expect(projChip).toHaveAttribute('title', workerTitle)
@@ -365,7 +365,7 @@ test('projects, checks, choices, reminders and the updated dot', async ({ page }
   await probePill.click()
   await expect(probePill).toHaveAttribute('aria-expanded', 'true')
   await expect(probePill).toBeHidden() // the options take its place: the status shows once, pressed
-  await expect(pick.locator('.wn-proj-opt')).toHaveText(['Needs you', 'In progress', 'Waiting on others', 'Done'])
+  await expect(pick.locator('.wn-proj-opt')).toHaveText(['Needs you', 'Working', 'Waiting', 'Done'])
   await expect(pick.locator('.wn-proj-opt[aria-pressed="true"]')).toHaveText('Needs you')
   await expect(pick.locator('.wn-proj-opt[aria-pressed="true"]')).toBeFocused()
   await frame.locator('table.overview tr', { has: frame.locator('walnut-project[id="probe"]') })
@@ -387,10 +387,10 @@ test('projects, checks, choices, reminders and the updated dot', async ({ page }
   await expect(probe).toHaveAttribute('data-status', 'wait')
   await expect(box('decide')).toHaveText('0')
   await expect(box('wait')).toHaveText('1')
-  await expect(probePill).toHaveText('Waiting on others')
+  await expect(probePill).toHaveText('Waiting')
   await expect(probePill).toHaveAttribute('title', /^Set by you, .*\. Click to change it\.$/)
   await expect.poll(async () => (await getBoard(leader)).projects.probe, { timeout: 10_000 }).toMatchObject({ status: 'wait', status_by: 'human' })
-  const statusLine = 'On your Board the user set project "probe" to wait (Waiting on others); it was decide (Needs you), set by you.'
+  const statusLine = 'On your Board the user set project "probe" to wait (Waiting); it was decide (Needs you), set by you.'
   await expect.poll(() => historyText(sid), { timeout: 30_000 }).toContain(statusLine)
   // The leader's next write cannot move it back unless it says so.
   const refused = await fetch(`${API}/api/v1/tasks/${leader}/board/projects/probe`, {
@@ -409,7 +409,7 @@ test('projects, checks, choices, reminders and the updated dot', async ({ page }
   const rolloutPill = frame.locator('walnut-project[id="rollout"] .wn-proj-pill')
   await expect(rolloutPill).toHaveText('Rolling out')
   await rolloutPill.click()
-  await expect(frame.locator('walnut-project[id="rollout"] .wn-proj-opt')).toHaveText(['Needs you', 'Rolling out', 'Waiting on others', 'Done'])
+  await expect(frame.locator('walnut-project[id="rollout"] .wn-proj-opt')).toHaveText(['Needs you', 'Rolling out', 'Waiting', 'Done'])
   await page.keyboard.press('Escape')
   await expect(frame.locator('walnut-project[id="rollout"] .wn-proj-pick')).toHaveCount(0)
   // A project with no status anywhere offers "Set status".
@@ -812,9 +812,9 @@ test('a worker\'s Board tab shows its leader\'s board, and its posts land there'
   if (!(await chevron.evaluate((el) => el.classList.contains('expanded')))) await chevron.click()
   const { pane, frame } = await openBoardTab(page, worker, sid, false)
 
-  // No board anywhere in the tree yet: the team's Cards (kanban), under the owner's name.
+  // No board anywhere in the tree yet: the team's Status, under the owner's name.
   const title = pane.getByTestId('board-title')
-  await expect(pane.getByTestId('board-kanban')).toBeVisible({ timeout: 15_000 })
+  await expect(pane.getByTestId('board-status')).toBeVisible({ timeout: 15_000 })
   await expect(title).toHaveText(`Board · ${leaderTitle}`)
   await expect(title).toHaveAttribute('title', `Shared with your team: ${leaderTitle} keeps this board`)
   // The leader writes one: it arrives live in the worker's tab.

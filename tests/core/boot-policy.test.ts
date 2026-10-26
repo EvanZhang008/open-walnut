@@ -90,6 +90,7 @@ const OLD_TRUTH: Record<BootJob, (cloud: boolean) => boolean> = {
   'board-kanban-watch': leaderOnly,
   'board-reminders': leaderOnly,
   'wait-until': leaderOnly,
+  'user-status': leaderOnly,
   'title-reconciler': leaderOnly,
   'link-tags': leaderOnly, // new: link tags are written on the Mac
   'notes-indexer': leaderOnly, // 4d: the companion searches its copy of the Mac's notes

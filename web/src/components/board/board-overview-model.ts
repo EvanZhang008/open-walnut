@@ -1,5 +1,5 @@
 /**
- * The Board's Overview (BoardOverview.tsx): the team under the board's owner,
+ * The team under a Board's owner (the kanban and the Status view walk it),
  * each task's live state, sorted into the groups a lead reads first. Pure: no
  * React, no DOM. Unit-pinned in tests/web/board-overview-model.test.ts.
  *
@@ -386,7 +386,7 @@ export const REST_DONE_SECTION_ID = '_rest-done';
 
 /** A project status in the page's own default words (board-runtime.frame.js DEFAULT_LABELS). */
 export const PROJECT_STATUS_LABELS: Record<BoardProjectStatus, string> = {
-  decide: 'Needs you', wip: 'In progress', wait: 'Waiting on others', done: 'Done',
+  decide: 'Needs you', wip: 'Working', wait: 'Waiting', done: 'Done',
 };
 /** The page's colors for a status: red, blue, amber, green. */
 export const PROJECT_STATUS_TONES: Record<BoardProjectStatus, BadgeTone> = {

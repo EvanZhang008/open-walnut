@@ -10,6 +10,7 @@
  */
 import type { Task } from '@open-walnut/core';
 import { resolveTaskSessionId } from '@/utils/session-status';
+import { USER_STATE_LABELS, type UserState } from '@open-walnut/user-status';
 
 export type BoardPeekView =
   | { kind: 'own' }
@@ -23,14 +24,19 @@ export function boardPeekView(targetTaskId: string, ownTaskId: string | undefine
   return sessionId ? { kind: 'session', sessionId } : { kind: 'card', known: true };
 }
 
-/** The words the Board's own chips use (board-elements.frame.js PHASES): the
- *  header names the phase as the chip just clicked did. */
-export const BOARD_PHASE_LABELS: Record<string, string> = {
-  TODO: 'To do', IN_PROGRESS: 'In progress', NEED_ACTION: 'Needs you', WAITING: 'Waiting', COMPLETE: 'Done',
+/** The words the Board's own chips use (board-elements.frame.js USER): the one user status
+ *  (src/core/user-status.ts), the phase worded the same way for a task not derived yet. */
+/** The phase as the frame's chips read it for a task not derived yet (board-elements.frame.js PHASE_USER). */
+export const BOARD_PHASE_USER: Record<string, UserState> = {
+  TODO: 'waiting', IN_PROGRESS: 'working', NEED_ACTION: 'needs', WAITING: 'waiting', COMPLETE: 'done',
 };
 
-export function boardPhaseLabel(phase: string | undefined): string {
-  return phase ? (BOARD_PHASE_LABELS[phase] ?? phase) : '';
+export function boardPhaseLabel(task: Pick<Task, 'phase' | 'status' | 'user_status'> | null | undefined): string {
+  if (!task) return '';
+  if (task.phase === 'COMPLETE' || task.status === 'done') return 'Done';
+  if (task.user_status) return USER_STATE_LABELS[task.user_status.state];
+  const fallback = task.phase ? BOARD_PHASE_USER[task.phase] : undefined;
+  return fallback ? USER_STATE_LABELS[fallback] : (task.phase ?? '');
 }
 
 export const PEEK_EXCERPT_CHARS = 280;

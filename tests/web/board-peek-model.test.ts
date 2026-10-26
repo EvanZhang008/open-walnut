@@ -5,10 +5,11 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { USER_STATE_LABELS } from '@open-walnut/user-status';
 import { describe, expect, it } from 'vitest';
 import type { Task } from '@open-walnut/core';
 import {
-  BOARD_PHASE_LABELS, PEEK_EXCERPT_CHARS, boardPeekExcerpt, boardPeekView, boardPhaseLabel,
+  BOARD_PHASE_USER, PEEK_EXCERPT_CHARS, boardPeekExcerpt, boardPeekView, boardPhaseLabel,
 } from '../../web/src/components/board/board-peek-model';
 
 function task(over: Partial<Task>): Task {
@@ -49,15 +50,19 @@ describe('boardPeekView', () => {
 });
 
 describe('boardPhaseLabel', () => {
-  it('uses the words of the frame\'s own chips, so the header matches the chip clicked', () => {
+  it('reads a task as the frame\'s own chips do, so the header matches the chip clicked', () => {
     const frame = fs.readFileSync(path.resolve(import.meta.dirname, '../../web/src/components/board/board-elements.frame.js'), 'utf8');
-    const line = frame.split('\n').find((l) => /var PHASES = \{/.test(l)) ?? '';
-    for (const [phase, label] of Object.entries(BOARD_PHASE_LABELS)) expect(line).toContain(`${phase}: '${label}'`);
+    const line = frame.split('\n').find((l) => /var PHASE_USER = \{/.test(l)) ?? '';
+    for (const [phase, state] of Object.entries(BOARD_PHASE_USER)) expect(line).toContain(`${phase}: '${state}'`);
+    const users = frame.split('\n').find((l) => /var USER = \{/.test(l)) ?? '';
+    for (const [state, label] of Object.entries(USER_STATE_LABELS)) expect(users).toContain(`${state}: '${label}'`);
   });
 
-  it('passes an unknown phase through and is empty for none', () => {
-    expect(boardPhaseLabel('NEED_ACTION')).toBe('Needs you');
-    expect(boardPhaseLabel('SOMETHING_NEW')).toBe('SOMETHING_NEW');
+  it('the stored user status first, the phase for a task not derived yet, an unknown phase passed through', () => {
+    expect(boardPhaseLabel({ phase: 'NEED_ACTION', user_status: { state: 'waiting', kind: 'lead' } })).toBe('Waiting');
+    expect(boardPhaseLabel({ phase: 'COMPLETE', user_status: { state: 'needs' } })).toBe('Done');
+    expect(boardPhaseLabel({ phase: 'NEED_ACTION' })).toBe('Needs you');
+    expect(boardPhaseLabel({ phase: 'SOMETHING_NEW' as never })).toBe('SOMETHING_NEW');
     expect(boardPhaseLabel(undefined)).toBe('');
   });
 });

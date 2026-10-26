@@ -40,8 +40,10 @@ const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 const API = `http://localhost:${TEST_PORT}`
 const SHOT_DIR = '/tmp/board-b'
 // The Board's own chip words (board-elements.frame.js PHASES), which the peek header repeats.
+/** The header reads the one user status (src/core/user-status.ts), the phase for a task not derived yet. */
+const USER_LABELS: Record<string, string> = { needs: 'Needs you', working: 'Working', waiting: 'Waiting', done: 'Done' }
 const PHASE_LABELS: Record<string, string> = {
-  TODO: 'To do', WAITING: 'Waiting', IN_PROGRESS: 'In progress', NEED_ACTION: 'Needs you', COMPLETE: 'Done',
+  TODO: 'Waiting', WAITING: 'Waiting', IN_PROGRESS: 'Working', NEED_ACTION: 'Needs you', COMPLETE: 'Done',
 }
 
 let fixtureRoot = ''
@@ -78,7 +80,10 @@ async function createTask(title: string, opts: Record<string, unknown>): Promise
   return task.id
 }
 
-const phaseOf = async (id: string) => (await api<{ task: { phase: string } }>('GET', `/api/tasks/${id}`)).task.phase
+const labelOf = async (id: string) => {
+  const { task } = await api<{ task: { phase: string; user_status?: { state: string } } }>('GET', `/api/tasks/${id}`)
+  return task.phase === 'COMPLETE' ? 'Done' : task.user_status ? USER_LABELS[task.user_status.state] : PHASE_LABELS[task.phase]
+}
 const historyText = async (sid: string) => {
   const res = await fetch(`${API}/api/v1/sessions/${sid}/history?tail=50`)
   return res.ok ? res.text() : ''
@@ -252,7 +257,7 @@ test('a Board chip opens its task as a tab in place of the chat; the tabs switch
   // Live: the header follows the store's row, whatever phase the worker's turn left it in.
   await expect.poll(async () => {
     const shown = await peek.getByTestId('board-peek-phase').textContent()
-    return shown === PHASE_LABELS[await phaseOf(worker)]
+    return shown === await labelOf(worker)
   }, { timeout: 15_000 }).toBe(true)
   await expect(peek.getByTestId('board-peek-note')).toHaveText('Messages you send here go to this task, not to the chat you came from.')
   const inset = peek.locator(`.session-panel.session-panel-inset[data-session-id="${workerSid}"]`)
@@ -308,7 +313,7 @@ test('a Board chip opens its task as a tab in place of the chat; the tabs switch
   await expect(tabs.button(docs)).toHaveAttribute('aria-selected', 'true')
   await expect(inset).toHaveCount(0)
   await expect(peek.getByTestId('board-peek-title')).toHaveText(docsTitle)
-  await expect(peek.getByTestId('board-peek-phase')).toHaveText('To do')
+  await expect(peek.getByTestId('board-peek-phase')).toHaveText('Waiting') // not started yet
   await expect(peek.getByTestId('board-peek-note')).toHaveCount(0)
   const card = peek.getByTestId('board-peek-card')
   await expect(card).toHaveAttribute('data-known', 'true')

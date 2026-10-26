@@ -38,6 +38,7 @@ export default defineConfig({
       '@open-walnut/ask-list': path.resolve(__dirname, '../src/core/sessions/ask-list.ts'),
       // The org (who reports to whom): the same function GET /api/v1/org builds from.
       '@open-walnut/org-tree': path.resolve(__dirname, '../src/core/org/org-tree.ts'),
+      '@open-walnut/user-status': path.resolve(__dirname, '../src/core/user-status.ts'),
       // Where the cloud companion's keep choice lives: Settings reads it as the server does.
       '@open-walnut/companion-keep': path.resolve(__dirname, '../src/core/replication/companion-keep.ts'),
       '@open-walnut/history-turn-window': path.resolve(__dirname, '../src/lib/history-turn-window.ts'),

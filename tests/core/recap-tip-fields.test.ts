@@ -6,7 +6,7 @@
  * Why it exists: the tip is the ONE part of the self-report the user reads, and
  * it shipped in English for a `language: zh` user because the prompt's section
  * contract says "English" for every label and RECAP had no language rule of its
- * own. The note keeps that contract; only the two tip fields follow the setting.
+ * own. The note keeps that contract; only the fields the user reads (the two tip fields and the FOR_USER_* status lines) follow the setting.
  */
 import { describe, it, expect } from 'vitest';
 import {
@@ -16,7 +16,7 @@ import {
 } from '../../src/core/session-hooks/builtins.js';
 import { nonEnglishUiLanguage, uiLanguageName } from '../../src/core/ui-language.js';
 
-const TIP_DIRECTIVE = 'OVERVIEW and RECAP are shown to the user in the UI: write BOTH in';
+const TIP_DIRECTIVE = 'OVERVIEW, RECAP, FOR_USER_ASK, FOR_USER_WAITING_ON, FOR_USER_NOW and FOR_USER_NEXT are shown to the user in the UI: write them in';
 
 describe('buildSelfReportPrompt: recap tip labels and language', () => {
   it('asks for OVERVIEW (whole session) and RECAP (latest turn), both mandatory', () => {
@@ -36,7 +36,7 @@ describe('buildSelfReportPrompt: recap tip labels and language', () => {
     expect(buildSelfReportPrompt('', '', { uiLanguage: 'en' })).toBe(buildSelfReportPrompt('', ''));
   });
 
-  it('a non-English display language scopes the directive to the two tip fields only', () => {
+  it('a non-English display language scopes the directive to the fields the user reads only', () => {
     const prompt = buildSelfReportPrompt('## Executive Summary\nx', 'T', { uiLanguage: 'zh-CN' });
     expect(prompt).toContain(`${TIP_DIRECTIVE} Simplified Chinese (\u7b80\u4f53\u4e2d\u6587)`);
     expect(prompt).toContain('Every other field stays English.');
@@ -49,7 +49,7 @@ describe('buildSelfReportPrompt: recap tip labels and language', () => {
 
   it('an unknown code still gets a usable directive', () => {
     expect(buildSelfReportPrompt('', '', { uiLanguage: 'tlh' }))
-      .toContain("write BOTH in the language with ISO 639-1 code 'tlh'");
+      .toContain("write them in the language with ISO 639-1 code 'tlh'");
   });
 });
 

@@ -20,6 +20,7 @@
  * only bloat the payload.
  */
 
+import type { UserStatus } from './user-status.js'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { TASKS_DIR } from '../constants.js'
@@ -93,6 +94,10 @@ export interface ProjectedTask {
   tags?: string[]
   /** First 500 chars — enough for a detail preview without the full blob. */
   summary?: string
+  /** The one status the user sees (src/core/user-status.ts), open rows only (additive,
+   *  2026-10): state needs | working | waiting | done, plus ask / kind / waitingOn / now /
+   *  next / at / stale. Older clients ignore it. */
+  user_status?: UserStatus
 }
 
 /**
@@ -176,6 +181,7 @@ export function projectTask(t: Task): ProjectedTask {
     ...(t.unread ? { unread: true } : {}),
     ...(t.tags && t.tags.length > 0 ? { tags: t.tags } : {}),
     ...(summary ? { summary: summary.length > SUMMARY_MAX ? summary.slice(0, SUMMARY_MAX) + '…' : summary } : {}),
+    ...(t.user_status && t.status !== 'done' && t.phase !== 'COMPLETE' ? { user_status: t.user_status } : {}),
   }
 }
 

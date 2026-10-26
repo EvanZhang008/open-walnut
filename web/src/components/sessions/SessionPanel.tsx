@@ -1686,7 +1686,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
       pendingPermissionTool: pendingPermission?.toolName ?? null,
       cardTool: phoneCardTool.tool,
       missing: missing || phoneCardTool.gone,
-      taskNeedsYou: (session ? taskPhase : phoneEarlyTask?.phase) === 'NEED_ACTION',
+      taskNeedsYou: (() => { const t = session ? sessionTask : phoneEarlyTask; return !!t && taskNeedsAction(t); })(),
       loading: loading && !session,
     }),
     onClose: () => closePanel(sessionId),

@@ -24,8 +24,7 @@ import { discoverBrowserFixture } from './codex-test-audit'
 import { REAL_PANEL } from './draft-helpers'
 import { isolateUiPrefs, presetPanelView } from './todo-panel-helpers'
 import {
-  call, getSession, kanbanApi, pollUntil, seedKanbanTeam, type KanbanApi, type KanbanTeam,
-} from './board-kanban-fixture'
+  call, getSession, kanbanApi, pollUntil, seedKanbanTeam, type KanbanApi, type KanbanTeam, pickCardsView } from './board-kanban-fixture'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 const BASE = `http://localhost:${TEST_PORT}`
@@ -47,6 +46,9 @@ test.beforeAll(async ({ browserName }, info) => {
   team = await seedKanbanTeam(api, { engine: info.project.name, litter })
   await handBackOnBoard()
 })
+
+// The Board opens on Status; these specs read Cards, the view a lead picked (board-kanban-fixture.ts).
+test.beforeEach(async ({ context }) => { await pickCardsView(context, team.leader) })
 
 test.afterAll(async () => {
   for (const id of [...litter].reverse()) {
@@ -88,6 +90,8 @@ async function openBoard(page: Page): Promise<Locator> {
   await expect(panel).toBeVisible({ timeout: 30_000 })
   await panel.getByTestId('session-board-chip').click()
   const pane = page.getByTestId('task-board-pane')
+  // The Board opens on Status (the default since 2026-10-25): the kanban is one click away.
+  await pane.getByTestId('board-view-cards').click()
   await expect(pane.getByTestId('board-kanban')).toBeVisible({ timeout: 30_000 })
   await expect(pane.getByTestId('kanban-rollup')).toContainText('open', { timeout: 30_000 })
   return pane
@@ -175,11 +179,13 @@ test('C61: the user message is not New output; the turn output shows once, as th
 })
 
 test('C62: two windows count the same, one window marking all seen reaches the other, a session cannot write it', async ({ page, browser }) => {
+  test.setTimeout(180_000)
   await seenAll()
   await leaderSet(team.all[10], { lane: 'investigating' })
   await leaderSet(team.all[11], { summary: 'Leader note two: refunds drained, closing after one more check.' })
   const a = await openBoard(page)
   const otherCtx = await browser.newContext({ viewport: { width: 1280, height: 800 } })
+  await pickCardsView(otherCtx, team.leader)
   const other = await otherCtx.newPage()
   const b = await openBoard(other)
   await expect.poll(() => chipCount(chip(a, 'changed')), { timeout: 30_000 }).toBeGreaterThan(0)

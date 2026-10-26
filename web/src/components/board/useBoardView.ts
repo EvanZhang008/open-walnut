@@ -1,5 +1,5 @@
 /**
- * The view on screen for an owner's Board (Projects, Cards or Page) and the
+ * The view on screen for an owner's Board (Status, Cards or Page) and the
  * pick that changes and remembers it (board-view-pref.ts).
  */
 import { useCallback, useState } from 'react';
@@ -12,7 +12,7 @@ function viewStorage(): Storage | null {
 }
 
 export function useBoardView(
-  ownerId: string, hasPage: boolean, hasProjects: boolean,
+  ownerId: string, hasPage: boolean,
 ): { view: BoardView; picked: BoardView | null; pick: (v: BoardView) => void } {
   const [state, setState] = useState<{ owner: string; view: BoardView | null }>(() => ({
     owner: ownerId, view: readBoardView(viewStorage(), ownerId),
@@ -24,5 +24,5 @@ export function useBoardView(
     setState({ owner: ownerId, view });
     log.info('board', 'board view picked', { taskId: ownerId, view });
   }, [ownerId]);
-  return { view: shownBoardView(picked, hasPage, hasProjects), picked, pick };
+  return { view: shownBoardView(picked, hasPage), picked, pick };
 }

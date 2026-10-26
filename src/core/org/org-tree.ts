@@ -22,6 +22,7 @@
  */
 
 import type { OrgRole, TaskPhase } from '../types.js';
+import { fallbackUserState, type UserState, type UserStatus } from '../user-status.js';
 
 /** The fields the org reads off a task. */
 export interface OrgTaskLike {
@@ -39,16 +40,19 @@ export interface OrgTaskLike {
   completed_at?: string;
   session_id?: string;
   exec_session_id?: string;
+  /** The one status the user sees (src/core/user-status.ts); the counts read it. */
+  user_status?: Pick<UserStatus, 'state'>;
 }
 
+/** By the user's status (src/core/user-status.ts), the same numbers every surface shows. */
 export interface OrgCounts {
   /** Open tasks, the node itself included. */
   open: number;
-  /** IN_PROGRESS. */
+  /** Working: its session is running a turn. */
   running: number;
-  /** NEED_ACTION: the work handed back to the user. */
+  /** Needs you: waits on a decision or approval only the user can give. */
   needsYou: number;
-  /** WAITING (parked). */
+  /** Waiting: on another task, a time, the machine, a lead, or not started. */
   waiting: number;
 }
 
@@ -58,6 +62,8 @@ export interface OrgTaskNode {
   title: string;
   project: string;
   phase: TaskPhase;
+  /** The user's status of this task alone. */
+  userState: UserState;
   hasSession: boolean;
   workers: OrgTaskNode[];
   /** Over this task and every worker below it. */
@@ -148,12 +154,18 @@ function add(into: OrgCounts, from: OrgCounts): void {
   into.waiting += from.waiting;
 }
 
-function ownCounts(phase: TaskPhase): OrgCounts {
+/** The user's status of a task: the stored one, else what its phase alone says (a task not yet derived). */
+export function userStateOf(t: Pick<OrgTaskLike, 'phase' | 'user_status'>): UserState {
+  if (t.phase === 'COMPLETE') return 'done';
+  return t.user_status?.state ?? fallbackUserState(t.phase);
+}
+
+function ownCounts(state: UserState): OrgCounts {
   return {
     open: 1,
-    running: phase === 'IN_PROGRESS' ? 1 : 0,
-    needsYou: phase === 'NEED_ACTION' ? 1 : 0,
-    waiting: phase === 'WAITING' ? 1 : 0,
+    running: state === 'working' ? 1 : 0,
+    needsYou: state === 'needs' ? 1 : 0,
+    waiting: state === 'waiting' ? 1 : 0,
   };
 }
 
@@ -230,7 +242,8 @@ export function buildOrgTree(tasks: readonly OrgTaskLike[]): OrgTree {
   const placed = new Set<string>();
   const nodeOf = (t: OrgTaskLike): OrgTaskNode => {
     placed.add(t.id);
-    const counts = ownCounts(t.phase);
+    const userState = userStateOf(t);
+    const counts = ownCounts(userState);
     const workers: OrgTaskNode[] = [];
     for (const c of children.get(t.id) ?? []) {
       if (placed.has(c.id)) continue;
@@ -241,7 +254,7 @@ export function buildOrgTree(tasks: readonly OrgTaskLike[]): OrgTree {
     workers.sort((a, b) => compareWork(a, b, at));
     return {
       kind: 'task', id: t.id, title: t.title, project: (t.project ?? '').trim(), phase: t.phase,
-      hasSession: hasSession(t), workers, counts,
+      userState, hasSession: hasSession(t), workers, counts,
     };
   };
 

@@ -84,9 +84,21 @@ describe('status line (C15, C57)', () => {
     expect([open.status.text, open.status.tone, open.lane]).toEqual(['Task still open', 'amber', 'resolved']);
   });
 
+  it('the one user status words a card once the server derived it (src/core/user-status.ts)', () => {
+    const ended = { phase: 'NEED_ACTION' as const };
+    expect(vm(mkTask({ ...ended, user_status: { state: 'needs', ask: 'Approve the real iPhone test?' } })).status)
+      .toMatchObject({ text: 'Needs you: Approve the real iPhone test?', tone: 'red', kind: 'needs' });
+    expect(vm(mkTask({ ...ended, user_status: { state: 'waiting', kind: 'lead', waitingOn: 'Its lead, to read the latest turn' } })).status)
+      .toMatchObject({ text: 'Waiting on its lead, to read the latest turn', tone: 'violet' });
+    expect(vm(mkTask({ ...ended, user_status: { state: 'waiting', kind: 'stuck', waitingOn: 'It stopped, and nothing will wake it' } })).status)
+      .toMatchObject({ text: 'Stuck: it stopped, and nothing will wake it', tone: 'amber', kind: 'stuck' });
+    // A finished task never carries an old ask.
+    expect(vm(mkTask({ phase: 'COMPLETE', completed_at: ago(5_000), user_status: { state: 'needs', ask: 'x' } })).status.tone).toBe('green');
+  });
+
   it('running, waiting, done, idle, stopped, no session', () => {
-    expect(vm(withSession(), { process_status: 'running', activity: 'reading logs' }).status).toMatchObject({ text: 'Running: Reading logs', tone: 'green' });
-    expect(vm(withSession(), { process_status: 'running' }).status.text).toBe('Running');
+    expect(vm(withSession(), { process_status: 'running', activity: 'reading logs' }).status).toMatchObject({ text: 'Working: Reading logs', tone: 'green' });
+    expect(vm(withSession(), { process_status: 'running' }).status.text).toBe('Working');
     expect(vm(mkTask({ phase: 'WAITING', wait_until: new Date(NOW + DAY).toISOString() })).status).toMatchObject({ text: 'Waiting until Fri 9:00', tone: 'violet' });
     expect(vm(mkTask({ phase: 'WAITING' })).status.text).toBe('Waiting');
     expect(vm(mkTask({ phase: 'COMPLETE', completed_at: ago(2 * DAY) })).status).toMatchObject({ text: 'Done 2d ago', tone: 'green' });

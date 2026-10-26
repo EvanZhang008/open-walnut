@@ -484,7 +484,7 @@ export function BoardKanban({
               <KanbanLanes
                 vm={shown} layout={freeze.layout} lanes={lanesList} mode={mode} view={view} api={api} filter={filter}
                 deletePreview={deletePreview} pending={writes.pending} moved={freeze.moved} flash={flash} flashingLane={flashingLane}
-                tabStops={tabStops} keyDrop={keyDropState} keyDragId={keyDrag?.taskId ?? null} autoAddLane={vm.empty && !quietEmpty ? firstTodo : null} reducedMotion={reducedMotion}
+                tabStops={tabStops} keyDrop={keyDropState} keyDragId={keyDrag?.taskId ?? null} autoAddLane={vm.empty && !quietEmpty && visible ? firstTodo : null} reducedMotion={reducedMotion}
                 onDragging={(on) => hold('drag', on)} say={say}
                 addLane={<KanbanAddLane lanes={lanesList} mode={mode} api={api} onAdded={onLaneAdded} />}
                 scrollRef={(el) => { scrollEl.current = el; }}

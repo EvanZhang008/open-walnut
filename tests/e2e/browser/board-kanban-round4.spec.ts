@@ -14,7 +14,7 @@ import { expect, test, type Locator, type Page } from '@playwright/test'
 import { discoverBrowserFixture } from './codex-test-audit'
 import { REAL_PANEL } from './draft-helpers'
 import { isolateUiPrefs, presetPanelView } from './todo-panel-helpers'
-import { call, kanbanApi, seedKanbanTeam, type KanbanApi, type KanbanTeam } from './board-kanban-fixture'
+import { call, kanbanApi, seedKanbanTeam, type KanbanApi, type KanbanTeam, pickCardsView } from './board-kanban-fixture'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 const API = `http://localhost:${TEST_PORT}`
@@ -35,6 +35,9 @@ test.beforeAll(async ({}, info) => {
   api = kanbanApi(TEST_PORT, fixtureRoot)
   team = await seedKanbanTeam(api, { engine, litter })
 })
+
+// The Board opens on Status; these specs read Cards, the view a lead picked (board-kanban-fixture.ts).
+test.beforeEach(async ({ context }) => { await pickCardsView(context, team.leader) })
 
 test.afterAll(async () => {
   for (const id of [...litter].reverse()) {
@@ -62,6 +65,8 @@ async function openBoard(page: Page): Promise<Locator> {
   const panel = await openHome(page)
   await panel.getByTestId('session-board-chip').click()
   const pane = page.getByTestId('task-board-pane')
+  // The Board opens on Status (the default since 2026-10-25): the kanban is one click away.
+  await pane.getByTestId('board-view-cards').click()
   await expect(pane.getByTestId('board-kanban')).toBeVisible({ timeout: 30_000 })
   await expect(pane.locator('[data-testid="kanban-card-summary"]').first()).toBeVisible({ timeout: 30_000 })
   return pane
@@ -177,6 +182,9 @@ test('R3-02: the user\'s own Complete, Undo and Reopen never count as Changed', 
   await c.getByTestId('kanban-card-complete').click()
   const toast = page.locator('[data-testid="kanban-toast"]', { hasText: 'Completed' })
   await expect(toast).toBeVisible({ timeout: 10_000 })
+  // The pointer rests on the toast, as a user reaching for Undo does: its 8s clock pauses,
+  // so the polls below cannot outlast it on a loaded machine.
+  await toast.hover()
   const seenCounts: number[] = []
   for (let i = 0; i < 25; i++) { seenCounts.push(await chipCount(pane, 'changed')); await page.waitForTimeout(100) }
   expect(seenCounts.every((n) => n === 0), seenCounts.join(',')).toBe(true)
@@ -474,7 +482,7 @@ for (const scheme of ['light', 'dark'] as const) {
     await pane.getByTestId('kanban-detail-back').click()
     await expect(detail).toHaveCount(0)
     // A card with no session shows the task's own words (description, subtasks) or says it has none.
-    const noSession = await pane.locator('[data-testid="kanban-card"]').evaluateAll((els) => els.find((e) => /No session/.test(e.querySelector('[data-testid="kanban-card-status"]')?.textContent ?? ''))?.getAttribute('data-task-id') ?? '')
+    const noSession = await pane.locator('[data-testid="kanban-card"]').evaluateAll((els) => els.find((e) => /Not started yet/.test(e.querySelector('[data-testid="kanban-card-status"]')?.textContent ?? ''))?.getAttribute('data-task-id') ?? '')
     if (noSession) {
       await card(pane, noSession).scrollIntoViewIfNeeded()
       await card(pane, noSession).getByTestId('kanban-card-title').click()

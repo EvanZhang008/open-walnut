@@ -10,8 +10,7 @@ import { discoverBrowserFixture } from './codex-test-audit'
 import { REAL_PANEL } from './draft-helpers'
 import { isolateUiPrefs, presetPanelView } from './todo-panel-helpers'
 import {
-  call, getTask, kanbanApi, pollUntil, seedKanbanTeam, startSession, type KanbanApi, type KanbanTeam,
-} from './board-kanban-fixture'
+  call, getTask, kanbanApi, pollUntil, seedKanbanTeam, startSession, type KanbanApi, type KanbanTeam, pickCardsView } from './board-kanban-fixture'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 const API = `http://localhost:${TEST_PORT}`
@@ -28,6 +27,9 @@ test.beforeAll(async ({}, info) => {
   api = kanbanApi(TEST_PORT, fixtureRoot)
   team = await seedKanbanTeam(api, { engine: info.project.name, litter })
 })
+
+// The Board opens on Status; these specs read Cards, the view a lead picked (board-kanban-fixture.ts).
+test.beforeEach(async ({ context }) => { await pickCardsView(context, team.leader) })
 
 test.afterAll(async () => {
   for (const id of [...litter].reverse()) {
@@ -51,6 +53,8 @@ async function openBoard(page: Page, leader = team.leader, sid = team.leaderSid,
   await expect(panel).toBeVisible({ timeout: 30_000 })
   await panel.getByTestId('session-board-chip').click()
   const pane = page.getByTestId('task-board-pane')
+  // The Board opens on Status (the default since 2026-10-25): the kanban is one click away.
+  await pane.getByTestId('board-view-cards').click()
   await expect(pane.getByTestId('board-kanban')).toBeVisible({ timeout: 30_000 })
   // The task summaries arrive in one read after the cards: wait so nothing grows under a measure.
   if (leader === team.leader) await expect(pane.locator('[data-testid="kanban-card-summary"]').first()).toBeVisible({ timeout: 30_000 })
@@ -108,7 +112,7 @@ test('C17 C74: Add task parses tags, lands at the bottom of its lane, a subtask 
   await expect(body.getByTestId('kanban-card-pending')).toHaveCount(0)
   await expect(c.getByTestId('kanban-card-ticket')).toContainText('V1000000140')
   await expect(c.getByTestId('kanban-card-sev')).toHaveText('Sev 2')
-  await expect(c.getByTestId('kanban-card-status')).toHaveText(/No session/)
+  await expect(c.getByTestId('kanban-card-status')).toHaveText(/Not started yet/)
   const last = await body.locator('[data-testid="kanban-card"]').last().getAttribute('data-task-id')
   expect(last).toBe(task.id)
   const t = await getTask(api, task.id)
@@ -205,11 +209,11 @@ test('C56: a turn that ends leaves the card where it was; the sticky auto lane i
   const pane = await openBoard(page)
   const c = card(pane, task.id)
   await expect(c).toHaveAttribute('data-lane', 'investigating')
-  await expect(c.getByTestId('kanban-card-status')).toHaveText(/^Running/)
+  await expect(c.getByTestId('kanban-card-status')).toHaveText(/^Working/)
   await letGo(page)
   const before = await boxOf(c)
   await pollUntil('turn end', async () => (await getTask(api, task.id))?.phase ?? '', (p) => p === 'NEED_ACTION', 90_000)
-  await expect(c.getByTestId('kanban-card-status')).toHaveText(/^Turn ended/, { timeout: 15_000 })
+  await expect(c.getByTestId('kanban-card-status')).toHaveText(/^Waiting on /, { timeout: 15_000 })
   await expect(c).toHaveAttribute('data-lane', 'investigating')
   const after = await boxOf(c)
   expect(Math.abs(after.x - before.x)).toBeLessThan(1)

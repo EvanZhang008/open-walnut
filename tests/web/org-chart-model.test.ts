@@ -38,8 +38,9 @@ describe('org chart cards', () => {
     const vp = { ...gardenLead, org_leads: ['Seeds'] }
     const cards = cardsOf([...garden, ...seeds, ...inbox, vp, { ...seedsLead, phase: 'COMPLETE' as const }])
     const g = cards.find((c) => c.name === 'Garden')!
-    expect(g.projects.map((p) => [p.name, p.line])).toEqual([['Garden', '1 working · 1 waiting'], ['Seeds', '1 working']])
-    expect(g.line).toBe('2 projects · 2 working · 1 waiting')
+    // Seeds' task not started yet is Waiting (src/core/user-status.ts), as on the Board.
+    expect(g.projects.map((p) => [p.name, p.line])).toEqual([['Garden', '1 working · 1 waiting'], ['Seeds', '1 working · 1 waiting']])
+    expect(g.line).toBe('2 projects · 2 working · 2 waiting')
     expect(cards.some((c) => c.name === 'Seeds')).toBe(false)
     expect(ceoLine(cards)).toBe('1 VP · 1 working')
   })

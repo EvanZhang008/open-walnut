@@ -12,6 +12,7 @@
  */
 import type { Task } from '@open-walnut/core';
 import { resolveParentRef } from './task-tree-index';
+import { taskNeedsAction } from '@/utils/session-status';
 
 export interface NeedsYouOptions {
   /** A live "blocked on a prompt" reading (the session-status store). */
@@ -24,7 +25,7 @@ export function isOpenTask(task: Task): boolean {
 
 export function taskNeedsYou(task: Task, opts?: NeedsYouOptions): boolean {
   if (!isOpenTask(task)) return false;
-  return task.phase === 'NEED_ACTION' || !!opts?.isWaiting?.(task);
+  return taskNeedsAction(task) || !!opts?.isWaiting?.(task);
 }
 
 type TaskMap = ReadonlyMap<string, Task>;

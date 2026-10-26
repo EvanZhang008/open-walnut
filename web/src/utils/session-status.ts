@@ -33,6 +33,10 @@ export function resolveTaskSessionId(task: Task): string | null {
  */
 export function taskNeedsAction(task: Task): boolean {
   if (task.status === 'done' || task.phase === 'COMPLETE') return false;
+  // The one user status (src/core/user-status.ts) when the server has derived it: a turn
+  // that ended with nothing for the user is not "needs you" (2026-10-25). The phase is
+  // the fallback for a task not derived yet.
+  if (task.user_status) return task.user_status.state === 'needs';
   return task.phase === 'NEED_ACTION';
 }
 

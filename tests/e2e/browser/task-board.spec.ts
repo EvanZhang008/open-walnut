@@ -158,11 +158,13 @@ test('the Board tab: ask, live components, threads, re-render, marks and locate'
   await chip.click()
   await expect(chip).toHaveClass(/session-action-chip-active/)
   const pane = page.getByTestId('task-board-pane')
-  // No team and no page yet: the Cards view (the default) is the empty kanban, and the ask sits on its empty card.
-  await expect(pane.getByTestId('board-kanban')).toBeVisible({ timeout: 15_000 })
-  await expect(pane.getByTestId('kanban-empty')).toContainText('No tasks on this board yet.')
+  // No team and no page yet: the Status view (the default) shows the task alone, and the ask sits under it.
+  await expect(pane.getByTestId('board-status')).toBeVisible({ timeout: 15_000 })
+  await expect(pane.getByTestId('board-status-solo')).toContainText('No other tasks on this team yet.')
+  await expect(pane.getByTestId('board-status-row')).toHaveCount(1)
   await expect(pane.getByTestId('board-view-custom')).toHaveAttribute('aria-disabled', 'true')
-  const ask = pane.getByTestId('board-ask-button')
+  // The Status view's ask (the hidden kanban keeps its own copy for the Cards view).
+  const ask = pane.getByTestId('board-status').getByTestId('board-ask-button')
   await expect(ask).toHaveText('Ask the leader for a page')
   await page.screenshot({ path: `${SHOT_DIR}/${engine}-1-empty.png` })
   await ask.click()
@@ -171,6 +173,10 @@ test('the Board tab: ask, live components, threads, re-render, marks and locate'
   await expect(ask).toHaveText('Ask the leader for a page', { timeout: 8_000 })
   // A worker joins: its card arrives live, the empty card goes.
   const worker = await createTask(workerTitle, { project: leaderTask.project ?? '', pinned: false, parent_task_id: leader })
+  await expect(pane.locator(`[data-testid="board-status-row"][data-task-id="${worker}"]`)).toBeVisible({ timeout: 15_000 })
+  await expect(pane.getByTestId('board-status-solo')).toHaveCount(0)
+  // The same worker is a card on Cards.
+  await pane.getByTestId('board-view-cards').click()
   await expect(pane.locator(`[data-testid="kanban-card"][data-task-id="${worker}"]`)).toBeVisible({ timeout: 15_000 })
   await expect(pane.getByTestId('kanban-empty')).toHaveCount(0)
 
@@ -180,7 +186,7 @@ test('the Board tab: ask, live components, threads, re-render, marks and locate'
   const frame = page.frameLocator('.task-board-frame')
   const workerChip = frame.locator(`#sec-a walnut-task[id="${worker}"] .wn-task`)
   await expect(workerChip.locator('.wn-title')).toHaveText(workerTitle, { timeout: 15_000 })
-  await expect(workerChip.locator('.wn-phase')).toHaveText('To do')
+  await expect(workerChip.locator('.wn-phase')).toHaveText('Waiting') // not started yet
   await expect(workerChip).toHaveAttribute('data-phase', 'TODO')
   await expect(frame.locator(`#sec-b walnut-task[id="${worker}"] .wn-phase`)).toHaveCount(0) // compact
   const unknown = frame.locator('walnut-task[id="nosuchtask0000"] .wn-task')
@@ -198,7 +204,7 @@ test('the Board tab: ask, live components, threads, re-render, marks and locate'
 
   // The chip follows the store: a phase change lands without re-rendering the frame.
   await api('PATCH', `/api/tasks/${worker}`, { phase: 'IN_PROGRESS' })
-  await expect(workerChip.locator('.wn-phase')).toHaveText('In progress', { timeout: 15_000 })
+  await expect(workerChip.locator('.wn-phase')).toHaveText('Working', { timeout: 15_000 })
   await expect(workerChip).toHaveAttribute('data-phase', 'IN_PROGRESS')
   expect(await frame.locator('body').evaluate(() => (window as unknown as { __sameDoc?: number }).__sameDoc)).toBe(1)
 
@@ -496,6 +502,6 @@ test('a board that cannot load says so with Retry, and Retry recovers', async ({
   mode = 'real'
   await error.getByRole('button', { name: 'Retry' }).click()
   await expect(error).toHaveCount(0)
-  await expect(pane.getByTestId('board-kanban')).toBeVisible()
-  await expect(pane.getByTestId('board-ask-button')).toHaveText('Ask the leader for a page')
+  await expect(pane.getByTestId('board-status')).toBeVisible()
+  await expect(pane.getByTestId('board-status').getByTestId('board-ask-button')).toHaveText('Ask the leader for a page')
 })

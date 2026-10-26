@@ -31,6 +31,8 @@ import { __pendingHandovers, __setHandoverSettleMs } from '../../src/core/org/ha
 import { bus, EventNames } from '../../src/core/event-bus.js'
 import { taskDepth } from '../../src/core/sessions/subtask-limits.js'
 import { buildSessionContext } from '../../src/core/sessions/session-context.js'
+import { sendLetter } from '../../src/core/human-inbox/store.js'
+import { bus, EventNames } from '../../src/core/event-bus.js'
 
 let server: HttpServer
 let port: number
@@ -42,6 +44,28 @@ async function api<T = Record<string, unknown>>(method: string, p: string, body?
     ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
   })
   return { status: res.status, json: await res.json().catch(() => ({})) as T }
+}
+
+/**
+ * Makes a task need the user the way a session does (an unanswered action_required letter
+ * from it), then waits until the server's status sync wrote it: a turn that only ended
+ * (NEED_ACTION) is waiting, never "waiting on the user" (src/core/user-status.ts).
+ */
+async function waitUserState(taskId: string, state: string): Promise<void> {
+  const until = Date.now() + 15_000
+  while ((await getTask(taskId)).user_status?.state !== state) {
+    if (Date.now() > until) throw new Error(`${taskId} never reached ${state}: ${JSON.stringify((await getTask(taskId)).user_status ?? null)}`)
+    await new Promise((r) => setTimeout(r, 100))
+  }
+}
+
+async function askUser(taskId: string, subject: string): Promise<void> {
+  await sendLetter({
+    subject, type: 'action_required', markdown: subject,
+    actions: [{ id: 'yes', label: 'Yes' }, { id: 'no', label: 'No' }],
+    sender: { taskId },
+  } as never)
+  await waitUserState(taskId, 'needs')
 }
 
 beforeAll(async () => {
@@ -258,6 +282,7 @@ describe('/api/v1/org', () => {
       // Two sends at the same moment: exactly one carries the note.
       const asks = (await addTask({ title: 'a walnut task that needs the user', project: 'Walnut' })).task
       await updateTask(asks.id, { phase: 'NEED_ACTION' }, { source: 'api' })
+      await askUser(asks.id, 'Ship it today?')
       const racing = await Promise.all([pendingOrgDigest(sid, Date.now() + 1800), pendingOrgDigest(sid, Date.now() + 1800)])
       expect(racing.filter(Boolean)).toHaveLength(1)
       await racing.find(Boolean)!.markTold()
@@ -280,9 +305,10 @@ describe('/api/v1/org', () => {
     _setDigestFoldMsForTesting(FOLD)
     try {
       const t0 = Date.now()
-      // A task handed back moves a count: inside the window it says nothing, after it the note comes.
+      // A task that asks the user moves a count: inside the window it says nothing, after it the note comes.
       const handed = (await addTask({ title: 'handed back to the user', project: 'Walnut' })).task
       await updateTask(handed.id, { phase: 'NEED_ACTION' }, { source: 'api' })
+      await askUser(handed.id, 'Which host?')
       expect(await pendingOrgDigest(sid, t0 + 1_000)).toBeNull()
       const folded = await pendingOrgDigest(sid, t0 + FOLD + 2_500)
       expect(folded!.text).toMatch(/Org update since \d+ min ago:\n- Walnut: [^\n]*waiting on the user/)
@@ -313,6 +339,8 @@ describe('/api/v1/org', () => {
       await createSessionRecord(brokenSid, broken.id, 'Walnut', WALNUT_HOME)
       await updateTaskRaw(broken.id, { session_id: brokenSid })
       await updateSessionRecord(brokenSid, { process_status: 'error' })
+      // As the session runtime does when a session fails: the record, then the status event.
+      bus.emit(EventNames.SESSION_STATUS_CHANGED, { sessionId: brokenSid, process_status: 'error' }, ['web-ui'], { source: 'session-tracker' })
       const failed = await pendingOrgDigest(sid, told + 300)
       expect(failed!.text).toContain('- Walnut: "fails" stopped on an error')
       expect(failed!.text).not.toContain('asks a question')
@@ -339,7 +367,10 @@ describe('/api/v1/org', () => {
       expect(stuck!.text).toContain('- Walnut: "loses its host" stopped on an error')
       await stuck!.markTold()
 
-      // The window passes: the folded counts come, without the alerts already told.
+      // The window passes: the folded counts come, without the alerts already told. The counts
+      // are the stored user status, so wait for the server's sync to have derived the prompt and the failure.
+      await waitUserState(asking.id, 'needs')
+      await waitUserState(broken.id, 'needs')
       const later = await pendingOrgDigest(sid, told + FOLD + 500)
       expect(later!.text).toMatch(/- Walnut: [^\n]*waiting on the user/)
       expect(later!.text).not.toContain('Needs the user now')

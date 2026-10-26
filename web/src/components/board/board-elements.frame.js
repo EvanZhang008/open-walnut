@@ -18,7 +18,10 @@
   var state = kit.state;
   var esc = kit.esc;
 
-  var PHASES = { TODO: 'To do', IN_PROGRESS: 'In progress', NEED_ACTION: 'Needs you', WAITING: 'Waiting', COMPLETE: 'Done' };
+  // The one user status (src/core/user-status.ts) names a chip; the phase is the fallback for a
+  // task the server has not derived, read as fallbackUserState reads it (board-peek-model.ts twins it).
+  var USER = { needs: 'Needs you', working: 'Working', waiting: 'Waiting', done: 'Done' };
+  var PHASE_USER = { TODO: 'waiting', IN_PROGRESS: 'working', NEED_ACTION: 'needs', WAITING: 'waiting', COMPLETE: 'done' };
   // The first click on a message's × arms it for this long; the second deletes.
   var DELETE_ARM_MS = 4000;
   var DEFAULT_LABELS = kit.DEFAULT_LABELS;
@@ -45,10 +48,11 @@
       var id = this.getAttribute('id') || '';
       var ref = state.refs[id];
       var phase = ref ? ref.phase : '';
+      var user = ref ? (ref.user || PHASE_USER[phase] || '') : '';
       var title = ref ? ref.title : id;
-      var label = this.hasAttribute('compact') || !ref ? '' : '<span class="wn-phase">' + esc(PHASES[phase] || phase) + '</span>';
+      var label = this.hasAttribute('compact') || !ref ? '' : '<span class="wn-phase">' + esc(USER[user] || phase) + '</span>';
       kit.setHtml(this, '<span class="wn-task' + (!ref && kit.flags.hasData ? ' wn-unknown' : '') + '" data-phase="' + esc(phase)
-        + '" role="link" tabindex="0" title="' + esc(title) + '"><span class="wn-dot"></span><span class="wn-title">'
+        + '" data-user="' + esc(user) + '" role="link" tabindex="0" title="' + esc(title) + '"><span class="wn-dot"></span><span class="wn-title">'
         + esc(title) + '</span>' + label + '</span>');
     }
   }

@@ -185,7 +185,8 @@ extension TasksStore {
             completedAt: t.completedAt, starred: t.starred,
             pinned: true, tags: t.tags, summary: t.summary,
             startDate: t.startDate, endDate: t.endDate, unread: t.unread,
-            parentTaskId: t.parentTaskId
+            parentTaskId: t.parentTaskId,
+            userStatus: t.userStatus
         )
     }
 

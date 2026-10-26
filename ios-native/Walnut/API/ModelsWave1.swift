@@ -349,9 +349,14 @@ struct TaskDetail: Codable {
     /// The link tags as the console draws them (additive, server-computed: a name each, its
     /// kind, whether the file is gone). An older server sends none, and the pills read the tags.
     var links: [LinkTagView]? = nil
+    /// The one user status (additive, 2026-10; see `WalnutUserStatus`).
+    var userStatus: WalnutUserStatus? = nil
+    var parentTaskId: String? = nil
 
     private enum CodingKeys: String, CodingKey {
         case id, title, status, phase, priority, project, unread, links
+        case userStatus = "user_status"
+        case parentTaskId = "parent_task_id"
         case createdAt = "created_at"
         case updatedAt = "updated_at"
         case completedAt = "completed_at"

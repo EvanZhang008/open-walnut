@@ -494,7 +494,7 @@ describe('round two', () => {
       expect(performSessionSendMock).toHaveBeenCalledTimes(1)
       const input = performSessionSendMock.mock.calls[0][0] as { to: string; text: string; callerSid?: string; expectReply?: boolean }
       expect(input).toMatchObject({ to: crew.boss, callerSid: undefined, expectReply: false })
-      expect(input.text).toMatch(/^On your Board the user set project "Cache TTL" \(cause-a\) to wait \(Waiting on others\); it was wip \(In progress\), set by you\. /)
+      expect(input.text).toMatch(/^On your Board the user set project "Cache TTL" \(cause-a\) to wait \(Waiting\); it was wip \(Working\), set by you\. /)
       expect(input.text).toContain('override_user: true')
       // The same status again is not news.
       const again = await call('PUT', `${boardPath(crew.boss)}/projects/cause-a`, { body: { status: 'wait' } })

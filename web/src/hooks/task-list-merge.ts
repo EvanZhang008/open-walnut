@@ -35,6 +35,8 @@ export function tasksShallowEqual(a: Task, b: Task): boolean {
   // A host replica's mark on a row with a write still on its way to the Mac (WP10;
   // never on the Mac's own rows, where both sides lack it).
   if ((a as { replica_sync?: unknown }).replica_sync !== (b as { replica_sync?: unknown }).replica_sync) return false;
+  // The one status the user sees (src/core/user-status.ts): small, compared whole.
+  if (JSON.stringify(a.user_status ?? null) !== JSON.stringify(b.user_status ?? null)) return false;
   const arrKeys: (keyof Task)[] = ['tags', 'depends_on'];
   for (const k of arrKeys) {
     const av = (a[k] as string[] | undefined) ?? [];

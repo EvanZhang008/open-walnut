@@ -363,7 +363,7 @@ describe('sections: the board\'s projects', () => {
     expect(projectStatusOf(project({ status: 'later' as 'wip' }))).toBeNull();
     expect(projectStatusOf(project())).toBeNull();
     expect(projectStatusOf(null)).toBeNull();
-    expect(PROJECT_STATUS_LABELS).toEqual({ decide: 'Needs you', wip: 'In progress', wait: 'Waiting on others', done: 'Done' });
+    expect(PROJECT_STATUS_LABELS).toEqual({ decide: 'Needs you', wip: 'Working', wait: 'Waiting', done: 'Done' });
     expect(PROJECT_STATUS_TONES).toEqual({ decide: 'red', wip: 'blue', wait: 'amber', done: 'green' });
   });
 

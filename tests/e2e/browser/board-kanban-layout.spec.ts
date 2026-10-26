@@ -14,7 +14,7 @@ import { expect, test, type Locator, type Page } from '@playwright/test'
 import { discoverBrowserFixture } from './codex-test-audit'
 import { REAL_PANEL } from './draft-helpers'
 import { isolateUiPrefs, presetPanelView } from './todo-panel-helpers'
-import { call, getTask, kanbanApi, seedKanbanTeam, type KanbanApi, type KanbanTeam } from './board-kanban-fixture'
+import { call, getTask, kanbanApi, seedKanbanTeam, type KanbanApi, type KanbanTeam, pickCardsView } from './board-kanban-fixture'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 const API = `http://localhost:${TEST_PORT}`
@@ -33,6 +33,9 @@ test.beforeAll(async ({}, info) => {
   api = kanbanApi(TEST_PORT, fixtureRoot)
   team = await seedKanbanTeam(api, { engine: info.project.name, litter })
 })
+
+// The Board opens on Status; these specs read Cards, the view a lead picked (board-kanban-fixture.ts).
+test.beforeEach(async ({ context }) => { await pickCardsView(context, team.leader) })
 
 test.afterAll(async () => {
   for (const id of [...litter].reverse()) {
@@ -57,6 +60,8 @@ async function openBoard(page: Page, beforeBoard?: () => Promise<void>): Promise
   if (beforeBoard) await beforeBoard()
   await panel.getByTestId('session-board-chip').click()
   const pane = page.getByTestId('task-board-pane')
+  // The Board opens on Status (the default since 2026-10-25): the kanban is one click away.
+  await pane.getByTestId('board-view-cards').click()
   await expect(pane.getByTestId('board-kanban')).toBeVisible({ timeout: 30_000 })
   await expect(pane.locator('[data-testid="kanban-card"]').first()).toBeVisible({ timeout: 30_000 })
   // The task summaries arrive in one read after the cards: wait so nothing grows under a measure.
@@ -143,6 +148,7 @@ test('C37 C51: layout A (Home, chat open) and B (full screen) are wide, C (520px
 
   // C: a 520px window; the Board opens with the chat collapsed.
   const ctx = await browser.newContext({ viewport: { width: 520, height: 800 }, deviceScaleFactor: 1 })
+  await pickCardsView(ctx, team.leader)
   const small = await ctx.newPage()
   const paneC = await openBoard(small)
   await expect(paneC.getByTestId('board-kanban')).toHaveAttribute('data-mode', 'narrow')
@@ -441,7 +447,7 @@ test('C96: 30s of status pushes: no long task over 50ms, the hovered card holds 
   if (sec > 40) await page.waitForTimeout((62 - sec) * 1000)
   const before = await renders(page)
   await call(api, 'PATCH', `/api/sessions/${team.runningSids[1]}`, { activity: 'One last look' })
-  await expect(card(pane, team.running[1]).getByTestId('kanban-card-status')).toHaveText('Running: One last look', { timeout: 10_000 })
+  await expect(card(pane, team.running[1]).getByTestId('kanban-card-status')).toHaveText('Working: One last look', { timeout: 10_000 })
   await page.waitForTimeout(800)
   const after = await renders(page)
   const grew = Object.keys(after).filter((id) => (after[id] ?? 0) > (before[id] ?? 0))

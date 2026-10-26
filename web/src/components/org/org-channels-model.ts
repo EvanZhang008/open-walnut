@@ -85,10 +85,12 @@ function collectAlerts(ids: readonly string[], byId: ReadonlyMap<string, Task>, 
   return out;
 }
 
-export function channelState(counts: OrgCounts, alerts: readonly OrgAlertView[]): ChannelState {
+/** `phases`: the row's open tasks. The counts are by the user's status now (src/core/user-status.ts),
+ *  whose Waiting also holds a turn that ended and work not started, so "parked" reads the phases. */
+export function channelState(counts: OrgCounts, alerts: readonly OrgAlertView[], phases?: readonly string[]): ChannelState {
   if (alerts.length) return 'alert';
   if (counts.running > 0) return 'working';
-  if (counts.open > 0 && counts.waiting === counts.open) return 'parked';
+  if (phases ? phases.length > 0 && phases.every((ph) => ph === 'WAITING') : counts.open > 0 && counts.waiting === counts.open) return 'parked';
   return 'quiet';
 }
 
@@ -132,7 +134,7 @@ function projectRow(p: OrgProjectNode, byId: ReadonlyMap<string, Task>, probe: A
     contactTitle: p.lead?.title ?? contact?.title ?? (p.needsLead ? `${name} lead` : name),
     isLead: !!p.lead,
     counts: p.counts,
-    state: channelState(p.counts, alerts),
+    state: channelState(p.counts, alerts, nodes.map((n) => n.phase)),
     alerts,
     latest: latestLine(nodes, byId, alerts),
     lastAt: Math.max(0, ...ids.map((id) => taskTime(byId.get(id)))),

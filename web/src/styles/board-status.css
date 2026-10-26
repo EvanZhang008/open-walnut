@@ -1,0 +1,177 @@
+/* The Board's Status view (components/board/BoardStatusView.tsx): a brief, four state
+   chips, one table. Four colours carry the four user states and nothing else:
+   needs = orange-red, working = blue, waiting = grey, done = green; stuck is waiting in amber.
+   Every selector carries the bs- prefix (this file loads before globals.css). */
+
+.board-status {
+  --bs-needs: #e0601a;
+  --bs-working: #2f6ff0;
+  --bs-waiting: #8e95a1;
+  --bs-done: #1f9d55;
+  --bs-stuck: #b45309;
+  container-type: inline-size;
+  height: 100%;
+  overflow: auto;
+  padding: 14px 18px 40px;
+  color: var(--fg);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.board-status .bs-who {
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+}
+
+.board-status .bs-h {
+  margin: 2px 0 6px;
+  font-size: 18px;
+  font-weight: 650;
+}
+
+.board-status .bs-brief {
+  margin: 0 0 10px;
+  font-size: 14px;
+  line-height: 1.65;
+}
+
+.board-status .bs-brief-needs { color: var(--bs-needs); }
+.board-status .bs-brief-none { color: var(--bs-done); font-weight: 600; }
+
+.board-status .bs-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--fg) 30%, transparent);
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.board-status .bs-link:hover { text-decoration-color: currentColor; }
+
+.board-status .bs-filters { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+
+.board-status .bs-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0 11px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.board-status .bs-chip.is-on { border-color: var(--fg); box-shadow: inset 0 0 0 1px var(--fg); }
+.board-status .bs-chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+.board-status .bs-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--bs-waiting); }
+.board-status .bs-chip-needs .bs-dot, .board-status .bs-pill-needs .bs-dot { background: var(--bs-needs); }
+.board-status .bs-chip-working .bs-dot, .board-status .bs-pill-working .bs-dot { background: var(--bs-working); }
+.board-status .bs-chip-done .bs-dot, .board-status .bs-pill-done .bs-dot { background: var(--bs-done); }
+
+.board-status .bs-table { width: 100%; border-collapse: collapse; }
+
+.board-status .bs-table th {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  color: var(--fg-muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-align: left;
+  text-transform: uppercase;
+}
+
+.board-status .bs-row td {
+  padding: 8px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  vertical-align: top;
+}
+
+.board-status .bs-row { cursor: pointer; }
+.board-status .bs-row:hover td { background: color-mix(in srgb, var(--fg) 4%, transparent); }
+.board-status .bs-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.board-status .bs-row-needs td { background: color-mix(in srgb, var(--bs-needs) 7%, transparent); }
+
+.board-status .bs-c-status { width: 104px; }
+.board-status .bs-c-when { width: 64px; color: var(--fg-muted); font-size: 12px; white-space: nowrap; }
+
+.board-status .bs-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  background: color-mix(in srgb, var(--bs-waiting) 16%, transparent);
+  color: var(--fg);
+}
+
+.board-status .bs-pill-needs { background: color-mix(in srgb, var(--bs-needs) 16%, transparent); color: var(--bs-needs); }
+.board-status .bs-pill-working { background: color-mix(in srgb, var(--bs-working) 14%, transparent); color: var(--bs-working); }
+.board-status .bs-pill-done { background: color-mix(in srgb, var(--bs-done) 14%, transparent); color: var(--bs-done); }
+.board-status .bs-pill-stuck { background: color-mix(in srgb, var(--bs-stuck) 16%, transparent); color: var(--bs-stuck); }
+
+.board-status .bs-title { display: block; font-weight: 600; }
+.board-status .bs-sub { display: block; color: var(--fg-muted); font-size: 11.5px; }
+.board-status .bs-c-where > span, .board-status .bs-c-next > span { display: block; }
+.board-status .bs-on { font-weight: 550; }
+.board-status .bs-on-stuck { color: var(--bs-stuck); }
+.board-status .bs-muted { color: var(--fg-muted); }
+.board-status .bs-you b { color: var(--bs-needs); }
+
+.board-status .bs-stale {
+  display: inline-block !important;
+  margin-top: 2px;
+  padding: 0 6px;
+  border-radius: 4px;
+  background: color-mix(in srgb, #f5b400 22%, transparent);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.board-status .bs-act {
+  margin-top: 4px;
+  padding: 2px 9px;
+  border: 1px solid var(--bs-needs);
+  border-radius: 6px;
+  background: var(--bs-needs);
+  color: #fff;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.board-status .bs-empty, .board-status .bs-foot { color: var(--fg-muted); margin: 14px 2px; }
+.board-status .bs-solo .kanban-ask-row { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; margin: 0 2px; }
+
+/* A narrow pane: each row stacks (status and time on top, then task, where, next). */
+@container (max-width: 560px) {
+  .board-status .bs-table thead { display: none; }
+  .board-status .bs-table, .board-status .bs-table tbody { display: block; }
+  .board-status .bs-row {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    gap: 2px 8px;
+    padding: 9px 4px;
+    border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  }
+  .board-status .bs-row td { display: block; padding: 0; border: 0; background: none; }
+  .board-status .bs-row-needs { background: color-mix(in srgb, var(--bs-needs) 7%, transparent); }
+  .board-status .bs-c-status { width: auto; grid-column: 1; }
+  .board-status .bs-c-task { grid-column: 2; }
+  .board-status .bs-c-when { width: auto; grid-column: 3; text-align: right; }
+  .board-status .bs-c-where, .board-status .bs-c-next { grid-column: 1 / -1; }
+}

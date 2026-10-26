@@ -30,7 +30,7 @@ export type KanbanTone = 'red' | 'amber' | 'green' | 'violet' | 'grey';
 export type KanbanStatusKind =
   | 'question' | 'plan' | 'permission' | 'error' | 'handed-back' | 'board-signal' | 'worker-below'
   | 'still-open' | 'turn-ended' | 'running' | 'waiting-until' | 'waiting' | 'done' | 'idle' | 'stopped'
-  | 'no-session' | 'loading';
+  | 'no-session' | 'loading' | 'needs' | 'stuck';
 
 export interface KanbanStatus {
   text: string;
@@ -218,8 +218,14 @@ export function redReasonOf(
     const text = msg ? `Error: ${msg}` : 'Error: the session stopped';
     return { text, tone: 'red', kind: 'error', tooltip: live?.errorMessage?.trim() || text };
   }
+  // The one user status (src/core/user-status.ts): the session asked the user something.
+  const us = task.user_status;
+  if (us && !done && us.state === 'needs' && us.ask) {
+    return { text: `Needs you: ${us.ask}`, tone: 'red', kind: 'needs', tooltip: us.ask };
+  }
   const handedBack = card?.handed_back_at;
-  if (task.phase === 'NEED_ACTION' && handedBack && (!task.last_session_update || Date.parse(handedBack) > Date.parse(task.last_session_update))) {
+  // Without a derived status (an older server) a hand back still reads as needing the user.
+  if (!us && task.phase === 'NEED_ACTION' && handedBack && (!task.last_session_update || Date.parse(handedBack) > Date.parse(task.last_session_update))) {
     return { text: 'Needs you: handed back', tone: 'red', kind: 'handed-back', tooltip: 'The worker handed this task back to you' };
   }
   if (signals.length > 0) {
@@ -256,12 +262,27 @@ function quietStatus(
   if (laneKind === 'done' && task.phase !== 'COMPLETE') {
     return { text: 'Task still open', tone: 'amber', kind: 'still-open', tooltip: 'This card is in a done lane, but its task is not complete' };
   }
-  if (task.phase === 'NEED_ACTION' && hasSession && display !== 'running') {
+  // The one user status words when the server derived them; the phase rows below are the fallback.
+  const us = task.user_status;
+  if (us && display !== 'running' && task.phase !== 'COMPLETE') {
+    if (us.state === 'waiting') {
+      const on = us.waitingOn || 'Waiting';
+      if (us.kind === 'stuck') return { text: `Stuck: ${on.charAt(0).toLowerCase()}${on.slice(1)}`, tone: 'amber', kind: 'stuck', tooltip: on };
+      if (us.kind === 'time' && us.until) {
+        // The same kind as the phase row below, so the parked line does not say the time twice.
+        const text = `Waiting until ${fmt(us.until)}`;
+        return { text, tone: 'violet', kind: 'waiting-until', tooltip: text };
+      }
+      const text = us.kind === 'not-started' ? on : `Waiting on ${on.charAt(0).toLowerCase()}${on.slice(1)}`;
+      return { text, tone: 'violet', kind: 'waiting', tooltip: text };
+    }
+  }
+  if (!us && task.phase === 'NEED_ACTION' && hasSession && display !== 'running') {
     return at('Turn ended', task.phase_changed_at || live?.statusUpdatedAt, 'amber', 'turn-ended');
   }
   if (display === 'running') {
     const activity = capitalize(live?.activity ?? '');
-    const text = activity ? `Running: ${activity}` : 'Running';
+    const text = activity ? `Working: ${activity}` : 'Working';
     return { text, tone: 'green', kind: 'running', tooltip: text };
   }
   if (task.phase === 'WAITING') {

@@ -44,6 +44,8 @@ export interface BoardRef {
   title: string;
   phase: string;
   status: string;
+  /** The one user status (src/core/user-status.ts), when the server derived it. */
+  user?: string;
 }
 
 export type BoardProjectStatus = 'decide' | 'wip' | 'wait' | 'done';
@@ -147,6 +149,8 @@ export interface FrameTask {
   title: string;
   phase: string;
   status: string;
+  /** needs | working | waiting | done: the chip's word and dot (src/core/user-status.ts). */
+  user?: string;
 }
 
 /** thread id → the newest message ts this browser has read. */
@@ -159,6 +163,7 @@ export interface StoreTaskLike {
   phase?: string;
   status?: string;
   parent_task_id?: string;
+  user_status?: { state: string };
 }
 
 // ── The frame document ──
@@ -215,7 +220,8 @@ export function wrapBoardHtml(html: string, runtimeSrc: string, runtimeCss: stri
 // ── Live refs ──
 
 function frameTask(t: StoreTaskLike): FrameTask {
-  return { id: t.id, title: t.title, phase: t.phase ?? '', status: t.status ?? '' };
+  const user = t.phase === 'COMPLETE' || t.status === 'done' ? 'done' : t.user_status?.state;
+  return { id: t.id, title: t.title, phase: t.phase ?? '', status: t.status ?? '', ...(user ? { user } : {}) };
 }
 
 /**
@@ -233,7 +239,7 @@ export function buildFrameRefs(
   const out: Record<string, FrameTask> = {};
   const resolved = payloadRefs.map((r) => {
     const live = storeById?.get(r.id);
-    return { r, t: live ? frameTask(live) : { id: r.id, title: r.title, phase: r.phase, status: r.status } };
+    return { r, t: live ? frameTask(live) : { id: r.id, title: r.title, phase: r.phase, status: r.status, ...(r.user ? { user: r.user } : {}) } };
   });
   for (const { r, t } of resolved) out[r.id] = t;
   // The id exactly as the html wrote it wins over a full id it happens to equal.
@@ -252,7 +258,7 @@ export function frameRefsEqual(a: Record<string, FrameTask>, b: Record<string, F
   if (ak.length !== Object.keys(b).length) return false;
   for (const k of ak) {
     const x = a[k], y = b[k];
-    if (!y || x.id !== y.id || x.title !== y.title || x.phase !== y.phase || x.status !== y.status) return false;
+    if (!y || x.id !== y.id || x.title !== y.title || x.phase !== y.phase || x.status !== y.status || x.user !== y.user) return false;
   }
   return true;
 }

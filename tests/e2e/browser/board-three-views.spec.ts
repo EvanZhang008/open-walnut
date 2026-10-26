@@ -1,10 +1,13 @@
 /**
  * The Board's three views on the kanban fixture team (board-kanban-fixture.ts:
- * 37 cards, every live state) once its leader defines board projects, the way
- * a lead uses them: the bar reads Projects | Cards | Page and opens on
- * Projects; Cards names each card's project, a project chip shows that
- * project's cards only (with a chip and the search too), and the pick is
- * remembered; a project the leader renames or removes changes the cards live.
+ * 37 cards, every live state), with board projects defined the way a lead uses
+ * them: the bar reads Status | Cards | Page and opens on Status (BoardStatusView,
+ * the user's pick of 2026-10-25), whose states and counts are the server's one
+ * user status (src/core/user-status.ts), the same numbers the Org page reports;
+ * a chip filters, a row opens its task, and a task that moves moves its row live.
+ * Cards names each card's project, a project chip shows that project's cards
+ * only (with a chip and the search too), and the pick is remembered; a project
+ * the leader renames or removes changes the cards live.
  * Wide (1280) and narrow (520), light and dark, chromium and WebKit; shots in
  * /tmp/kanban/shots/three-views.
  */
@@ -69,13 +72,18 @@ async function openBoard(page: Page): Promise<Locator> {
   await row.locator('.todo-item-title').click()
   const panel = page.locator(`${REAL_PANEL}[data-session-id="${team.leaderSid}"]`)
   await expect(panel).toBeVisible({ timeout: 30_000 })
-  await panel.getByTestId('session-board-chip').click()
+  // A 520px window is the phone layout: the Board is a row of its More actions menu there.
+  if ((page.viewportSize()?.width ?? 1280) <= 600) {
+    await page.locator('.phone-topbar').getByRole('button', { name: 'More actions' }).click()
+    await page.getByTestId('phone-row-board').click()
+  } else {
+    await panel.getByTestId('session-board-chip').click()
+  }
   const pane = page.getByTestId('task-board-pane')
   await expect(pane.getByTestId('board-view-toggle')).toBeVisible({ timeout: 30_000 })
   return pane
 }
 
-const projectCards = (pane: Locator) => pane.locator('[data-testid="board-card"][data-kind="project"]')
 const card = (pane: Locator, id: string) => pane.locator(`[data-testid="kanban-card"][data-task-id="${id}"]`)
 const shownCards = (pane: Locator) => pane.locator('[data-testid="kanban-card"]:visible')
 const shownIds = (pane: Locator) => shownCards(pane).evaluateAll((els) => els.map((e) => e.getAttribute('data-task-id') ?? '').sort())
@@ -93,20 +101,72 @@ async function narrowPage(browser: Browser): Promise<{ page: Page; close: () => 
   return { page, close: () => ctx.close() }
 }
 
-test('Projects is the default once the leader defines projects; the bar reads Projects | Cards | Page', async ({ page }) => {
+interface StoredTask { id: string; phase?: string; parent_task_id?: string; user_status?: { state: string; ask?: string } }
+
+/** The team as the server stores it: the leader and every task below it. */
+async function storedTeam(): Promise<StoredTask[]> {
+  const { tasks } = await call<{ tasks: StoredTask[] }>(api, 'GET', '/api/tasks')
+  const byParent = new Map<string, StoredTask[]>()
+  for (const t of tasks) if (t.parent_task_id) byParent.set(t.parent_task_id, [...(byParent.get(t.parent_task_id) ?? []), t])
+  const out = tasks.filter((t) => t.id === team.leader)
+  for (let i = 0; i < out.length; i++) out.push(...(byParent.get(out[i].id) ?? []))
+  return out
+}
+
+const stateOf = (t: StoredTask) => (t.phase === 'COMPLETE' ? 'done' : t.user_status?.state ?? '')
+const rows = (pane: Locator) => pane.getByTestId('board-status-row')
+const chipCount = async (pane: Locator, s: string) => Number(((await pane.getByTestId(`board-status-filter-${s}`).locator('b').textContent()) ?? '').trim())
+
+test('Status is the default; its states and counts are the stored status, the Org page\'s numbers', async ({ page }) => {
   test.setTimeout(240_000)
   const pane = await openBoard(page)
   const segs = await pane.getByTestId('board-view-toggle').locator('[data-view]').evaluateAll((els) => els.map((e) => e.getAttribute('data-view')))
-  expect(segs).toEqual(['projects', 'cards', 'custom'])
-  await expect(pane.getByTestId('board-view-projects')).toHaveAttribute('aria-pressed', 'true')
+  expect(segs).toEqual(['status', 'cards', 'custom'])
+  await expect(pane.getByTestId('board-view-status')).toHaveAttribute('aria-pressed', 'true')
   await expect(pane.getByTestId('board-view-custom')).toHaveAttribute('aria-disabled', 'true')
-  await expect(projectCards(pane)).toHaveCount(3, { timeout: 30_000 })
-  const titles = await projectCards(pane).evaluateAll((els) => els.map((e) => e.getAttribute('aria-label') ?? ''))
-  expect([...titles].sort()).toEqual(Object.values(areas()).map((a) => a.title).sort())
-  // The kanban stays mounted but hidden under Projects: none of its cards is on screen.
+  await expect(pane.getByTestId('board-status')).toBeVisible({ timeout: 30_000 })
+  // The kanban stays mounted but hidden under Status: none of its cards is on screen.
   await expect(shownCards(pane)).toHaveCount(0)
-  await page.screenshot({ path: `${SHOTS}/${engine}-1-projects-wide-light.png` })
+
+  // Every open member has a stored status once the server's sync ran (prompts are facts: needs you).
+  const stored = await pollStored((ts) => ts.every((t) => stateOf(t)) && [team.perm, team.question, team.nested]
+    .every((id) => stateOf(ts.find((t) => t.id === id)!) === 'needs'))
+  const open = stored.filter((t) => stateOf(t) !== 'done')
+  await expect(rows(pane)).toHaveCount(open.length, { timeout: 15_000 })
+  const shown = await rows(pane).evaluateAll((els) => Object.fromEntries(els.map((e) => [e.getAttribute('data-task-id'), e.getAttribute('data-state')])))
+  for (const t of open) expect(shown[t.id], t.id).toBe(stateOf(t))
+  const want = (s: string) => stored.filter((t) => stateOf(t) === s).length
+  for (const s of ['needs', 'working', 'waiting']) expect(await chipCount(pane, s), s).toBe(want(s))
+  // A turn that ended with nothing asked is waiting, never needs you: the idle cards are not in the count.
+  for (const id of team.idle) expect(shown[id]).not.toBe('needs')
+  expect(await chipCount(pane, 'needs')).toBe(3)
+  await expect(pane.getByTestId('board-status-brief')).toContainText('3 need you:')
+
+  // The Org page counts the same project the same way.
+  const reports = await call<{ rows: Array<{ project?: string; needs_you: number; running: number }> }>(api, 'GET', '/api/v1/org/reports')
+  const row = reports.rows.find((r) => (r.project ?? '').toLowerCase() === team.project.toLowerCase())
+  expect(row?.needs_you).toBe(want('needs'))
+  expect(row?.running).toBe(want('working'))
+  await page.screenshot({ path: `${SHOTS}/${engine}-1-status-wide-light.png` })
+
+  // A chip filters to one state; All open shows them again.
+  await pane.getByTestId('board-status-filter-needs').click()
+  await expect(rows(pane)).toHaveCount(3)
+  expect((await rows(pane).evaluateAll((els) => els.map((e) => e.getAttribute('data-task-id')))).sort()).toEqual([team.perm, team.question, team.nested].sort())
+  await expect(pane.getByTestId('board-status-filter-needs')).toHaveAttribute('aria-pressed', 'true')
+  await pane.getByTestId('board-status-filter-open').click()
+  await expect(rows(pane)).toHaveCount(open.length)
+
+  // A row opens its task beside the board.
+  await rows(pane).filter({ has: page.locator(`text=${team.titles[team.perm]}`) }).first().click()
+  await expect(page.getByTestId('peek-tab-title').filter({ hasText: team.titles[team.perm] })).toBeVisible({ timeout: 15_000 })
 })
+
+async function pollStored(ok: (ts: StoredTask[]) => boolean): Promise<StoredTask[]> {
+  let last: StoredTask[] = []
+  await expect.poll(async () => { last = await storedTeam(); return ok(last) }, { timeout: 60_000 }).toBe(true)
+  return last
+}
 
 test('Cards names each card\'s project; a project chip shows that project only, with the chips and the search too', async ({ page }) => {
   test.setTimeout(300_000)
@@ -130,10 +190,11 @@ test('Cards names each card\'s project; a project chip shows that project only, 
   await expect(pane.getByTestId('kanban-card-detail')).toHaveCount(0)
   await page.screenshot({ path: `${SHOTS}/${engine}-3-project-filter-wide.png` })
 
-  // With Needs you: the intersection (the handed back card is in this project; the prompts are not).
+  // With Needs you: the intersection. The prompts are in another project, and a hand back asks
+  // nothing (it waits on its lead), so nothing of this project needs the user.
   const needs = pane.getByTestId('kanban-chip-needs')
   await needs.click()
-  await expect(card(pane, team.handedBack)).toBeVisible()
+  await expect(card(pane, team.handedBack)).toBeHidden()
   const needsIds = await shownIds(pane)
   for (const id of needsIds) expect(a.refunds.tasks).toContain(id)
   await expect(card(pane, team.perm)).toHaveCount(0)
@@ -193,21 +254,21 @@ test('with projects, one status update re-renders one card', async ({ page }) =>
   if (sec > 40) await page.waitForTimeout((62 - sec) * 1000)
   const before = await renders(page)
   await call(api, 'PATCH', `/api/sessions/${team.runningSids[1]}`, { activity: 'One last look' })
-  await expect(card(pane, team.running[1]).getByTestId('kanban-card-status')).toHaveText('Running: One last look', { timeout: 10_000 })
+  await expect(card(pane, team.running[1]).getByTestId('kanban-card-status')).toHaveText('Working: One last look', { timeout: 10_000 })
   await page.waitForTimeout(800)
   const after = await renders(page)
   expect(Object.keys(after).filter((id) => (after[id] ?? 0) > (before[id] ?? 0))).toEqual([team.running[1]])
 })
 
-test('narrow 520 and dark: the project chip fits the card, nothing runs off the pane', async ({ page, browser }) => {
-  test.setTimeout(300_000)
+test('narrow 520 and dark: the project chip fits the card, the Status rows stack, nothing runs off the pane', async ({ page, browser }) => {
+  test.setTimeout(480_000)
   const pane = await openBoard(page)
   await cardsView(pane)
   await page.evaluate(() => document.documentElement.setAttribute('data-theme', 'dark'))
   await page.screenshot({ path: `${SHOTS}/${engine}-4-cards-wide-dark.png` })
-  await pane.getByTestId('board-view-projects').click()
-  await expect(projectCards(pane)).toHaveCount(3)
-  await page.screenshot({ path: `${SHOTS}/${engine}-5-projects-wide-dark.png` })
+  await pane.getByTestId('board-view-status').click()
+  await expect(pane.getByTestId('board-status')).toBeVisible()
+  await page.screenshot({ path: `${SHOTS}/${engine}-5-status-wide-dark.png` })
 
   const narrow = await narrowPage(browser)
   try {
@@ -227,10 +288,28 @@ test('narrow 520 and dark: the project chip fits the card, nothing runs off the 
     await narrow.page.screenshot({ path: `${SHOTS}/${engine}-7-project-filter-narrow.png` })
     await narrow.page.evaluate(() => document.documentElement.setAttribute('data-theme', 'dark'))
     await narrow.page.screenshot({ path: `${SHOTS}/${engine}-8-project-filter-narrow-dark.png` })
-    await np.getByTestId('board-view-projects').click()
-    await expect(projectCards(np)).toHaveCount(3)
-    await narrow.page.screenshot({ path: `${SHOTS}/${engine}-9-projects-narrow-dark.png` })
+    await np.getByTestId('board-view-status').click()
+    await expect(np.getByTestId('board-status')).toBeVisible()
+    // Narrow: each row stacks, nothing runs off the pane.
+    expect(await np.getByTestId('board-status').evaluate((e) => e.scrollWidth <= e.clientWidth + 1)).toBe(true)
+    await expect(np.locator('.bs-table thead')).toBeHidden()
+    await narrow.page.screenshot({ path: `${SHOTS}/${engine}-9-status-narrow-dark.png` })
   } finally {
     await narrow.close()
   }
+})
+
+test('a task that moves moves its Status row live: completed, it leaves the open rows for Done', async ({ page }) => {
+  test.setTimeout(180_000)
+  const pane = await openBoard(page)
+  await pane.getByTestId('board-view-status').click()
+  const id = team.idle[5]
+  const row = pane.locator(`[data-testid="board-status-row"][data-task-id="${id}"]`)
+  await expect(row).toHaveAttribute('data-state', 'waiting', { timeout: 30_000 })
+  const done = await chipCount(pane, 'done')
+  await call(api, 'PATCH', `/api/tasks/${id}`, { phase: 'COMPLETE' })
+  await expect(row).toHaveCount(0, { timeout: 15_000 })
+  await expect.poll(() => chipCount(pane, 'done')).toBe(done + 1)
+  await pane.getByTestId('board-status-filter-done').click()
+  await expect(row).toHaveAttribute('data-state', 'done')
 })

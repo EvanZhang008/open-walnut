@@ -13,6 +13,7 @@ import { buildTitleQuestion, cleanTitleAnswer } from '../session-title-backend.j
 import { configuredUiLanguage, nonEnglishUiLanguage, uiLanguageName } from '../ui-language.js';
 import { cutEnd } from '../text-cut.js';
 import type { SessionRecord, Task } from '../types.js';
+import type { StatusReport, WaitKind } from '../user-status.js';
 import type { SubtaskNoticeKind } from '../sessions/subtask-notices.js';
 import type {
   SessionHookDefinition,
@@ -303,7 +304,7 @@ export function buildSelfReportPrompt(
   // hand-off document for a fresh AI, and plugin content rules validate it.
   const uiLang = nonEnglishUiLanguage(opts?.uiLanguage);
   const tipLanguage = uiLang
-    ? `\nOVERVIEW and RECAP are shown to the user in the UI: write BOTH in ${uiLanguageName(uiLang)} (the user's display language), keeping identifiers, file names, and technical terms in their original form. Every other field stays English.`
+    ? `\nOVERVIEW, RECAP, FOR_USER_ASK, FOR_USER_WAITING_ON, FOR_USER_NOW and FOR_USER_NEXT are shown to the user in the UI: write them in ${uiLanguageName(uiLang)} (the user's display language), keeping identifiers, file names, and technical terms in their original form. Every other field stays English.`
     : '';
 
   let noteBlock: string;
@@ -338,7 +339,8 @@ WHAT_I_DID: 1-2 sentences, this turn's concrete change (used verbatim in notific
 NEXT_STEPS: What you'd do next, or what you need from the human.
 BLOCKERS: Anything blocking, or "none".
 USER_INTENT: <question-pending | workflow-command | autonomous> — gist of user's last message.
-VERIFIED: <ran-and-saw-pass | assumed | not-applicable>.`;
+VERIFIED: <ran-and-saw-pass | assumed | not-applicable>.
+${FOR_USER_PROMPT}`;
 }
 
 /** The exact labels emitted by buildSelfReportPrompt. Used to anchor extractField's
@@ -350,11 +352,21 @@ VERIFIED: <ran-and-saw-pass | assumed | not-applicable>.`;
  *  NOTE_LABELS, the header regex in parseNoteSections, this list, and the prompt
  *  text — missing the regex silently dumps the new section into `preamble`;
  *  missing this list makes the new label bleed into the previous field. */
+/** The four lines every task's status is shown from (src/core/user-status.ts). The user reads
+ *  them on the Board, the Org page and the phone, so the plain-words rule is the point. */
+export const FOR_USER_PROMPT = `Then four lines on how this task stands FOR THE USER, who reads them on their board without opening the session. Plain words a non-engineer understands: no codenames, abbreviations, ticket or test-run labels, commit hashes, file names or internal ids; one short sentence each.
+FOR_USER_STATE: one of needs-you | working | waiting | done. needs-you ONLY when you are stopped on something only the user can give (a decision, an approval, a login, an action on their device); a question for your lead or another task is waiting, not needs-you. working when you will carry on by yourself right now (a background job you started will wake you). waiting when the next move belongs to someone or something else. done when what the task asked for is finished.
+FOR_USER_ASK: needs-you only: the one thing the user must decide or do, as a question or an instruction ("Approve testing on your real iPhone?"). Otherwise none.
+FOR_USER_WAITING_ON: waiting only: <task | time | machine | you | lead | other>: on whom or what exactly ("task: the Bun migration lead's commit", "machine: 20 GB of free disk", "you: a real-device test whenever you have time"). Otherwise none.
+FOR_USER_NOW: where the work stands now.
+FOR_USER_NEXT: who does what next ("You decide, then I run the tests", "I deploy once the tests pass").`;
+
 const SELF_REPORT_LABELS = [
   'EXEC_SUMMARY', 'USER_REQUEST', 'GOAL', 'CONTEXT', 'PROGRESS', 'REFERENCES', 'WORK_LOG',
   'TITLE', 'OVERVIEW', 'LINKS', 'RECAP',
   'TASK_SUMMARY', 'WHAT_I_DID', 'STATUS', 'CHANGES_TRIED', 'PHASE_SIGNAL', 'NEXT_STEPS',
   'BLOCKERS', 'USER_INTENT', 'VERIFIED', 'ARTIFACTS',
+  'FOR_USER_STATE', 'FOR_USER_ASK', 'FOR_USER_WAITING_ON', 'FOR_USER_NOW', 'FOR_USER_NEXT',
 ] as const;
 const NEXT_LABEL_LOOKAHEAD = `(?:${[
   ...SELF_REPORT_LABELS,
@@ -427,6 +439,39 @@ export function readRecapTipFields(
     ...(recap ? { recap, recapAt: at } : {}),
     ...(overview ? { overview, overviewAt: at } : {}),
   };
+}
+
+/** Longest FOR_USER_* line kept: one sentence, as the Board shows it. */
+const FOR_USER_FIELD_MAX = 240;
+
+/** The FOR_USER_* lines as the task's status report, or null when the session did not
+ *  answer FOR_USER_STATE (an older prompt, a malformed report): no state is ever guessed. */
+export function readStatusReport(report: string, now: Date = new Date()): StatusReport | null {
+  const read = (label: string): string | undefined => {
+    const text = extractField(report, label).replace(/\s+/g, ' ').trim();
+    if (!text || /^(none|n\/a|unchanged)\b\.?$/i.test(text)) return undefined;
+    return text.slice(0, cutEnd(text, FOR_USER_FIELD_MAX));
+  };
+  const stateWord = (read('FOR_USER_STATE') ?? '').toLowerCase();
+  const state = stateWord.startsWith('needs') ? 'needs'
+    : stateWord.startsWith('working') ? 'working'
+    : stateWord.startsWith('waiting') ? 'waiting'
+    : stateWord.startsWith('done') ? 'done' : null;
+  if (!state) return null;
+  const out: StatusReport = { state, at: now.toISOString() };
+  const ask = read('FOR_USER_ASK');
+  if (state === 'needs' && ask) out.ask = ask;
+  const waiting = read('FOR_USER_WAITING_ON');
+  if (state === 'waiting' && waiting) {
+    const m = /^(task|time|machine|you|lead|other)\s*:\s*(.+)$/i.exec(waiting);
+    out.waiting_kind = (m ? m[1].toLowerCase() : 'other') as WaitKind;
+    out.waiting_on = m ? m[2].trim() : waiting;
+  }
+  const nowLine = read('FOR_USER_NOW');
+  if (nowLine) out.now = nowLine;
+  const next = read('FOR_USER_NEXT');
+  if (next) out.next = next;
+  return out;
 }
 
 /** Split an existing NOTE into its canonical sections. Content before the
@@ -962,6 +1007,25 @@ export async function runTriage(p: OnTurnCompletePayload, opts: { final?: boolea
     const linksField = extractField(selfReport, 'LINKS');
     if (linksField) {
       void import('../link-tags-apply.js').then(({ tagLinksFromReportField }) => tagLinksFromReportField(taskId, linksField));
+    }
+
+    // (a1b) The task's status for the user (FOR_USER_*): what the Board, the Org page and the
+    // phone show, derived together with live facts in src/core/user-status.ts.
+    const statusReport = readStatusReport(selfReport);
+    if (statusReport) {
+      try {
+        const { getTask, updateTaskRaw } = await import('../task-manager.js');
+        // A finished task reads Done whatever its session said, and a write to a COMPLETE
+        // row would announce it as completed again (updateTaskRaw names the event by phase).
+        const current = await getTask(taskId).catch(() => null);
+        if (current && current.phase !== 'COMPLETE' && current.status !== 'done') {
+          await updateTaskRaw(taskId, { status_report: statusReport }, { emitEvent: true, source: 'status-report' });
+        }
+      } catch (err) {
+        log.session.debug('turn-complete-summary: status report persist skipped', {
+          sessionId: p.sessionId, taskId, error: err instanceof Error ? err.message : String(err),
+        });
+      }
     }
 
     // (a2) Session recap tip — OVERVIEW (the whole session, where it stands) and

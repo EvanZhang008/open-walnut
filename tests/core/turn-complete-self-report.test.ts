@@ -405,7 +405,7 @@ describe('turn-complete self-report (skip paths)', () => {
       const fakeZh = registerFakeSession(SID_TIP, async () => zhReport);
       await runTriage(makePayload(SID_TIP));
       const promptZh = fakeZh.askSideQuestion.mock.calls[0][0] as string;
-      expect(promptZh).toContain('write BOTH in Simplified Chinese (简体中文)');
+      expect(promptZh).toContain('write them in Simplified Chinese (简体中文)');
       expect(promptZh).toContain('Every other field stays English.');
 
       rec = await getSessionByClaudeId(SID_TIP);

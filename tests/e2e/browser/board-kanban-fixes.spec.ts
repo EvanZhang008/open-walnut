@@ -14,7 +14,7 @@ import { expect, test, type Locator, type Page } from '@playwright/test'
 import { discoverBrowserFixture } from './codex-test-audit'
 import { REAL_PANEL } from './draft-helpers'
 import { isolateUiPrefs, presetPanelView } from './todo-panel-helpers'
-import { call, kanbanApi, presetHumanPlacement, seedKanbanTeam, type KanbanApi, type KanbanTeam } from './board-kanban-fixture'
+import { call, kanbanApi, presetHumanPlacement, seedKanbanTeam, type KanbanApi, type KanbanTeam, pickCardsView } from './board-kanban-fixture'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 const API = `http://localhost:${TEST_PORT}`
@@ -34,6 +34,9 @@ test.beforeAll(async ({}, info) => {
   api = kanbanApi(TEST_PORT, fixtureRoot)
   team = await seedKanbanTeam(api, { engine, litter })
 })
+
+// The Board opens on Status; these specs read Cards, the view a lead picked (board-kanban-fixture.ts).
+test.beforeEach(async ({ context }) => { await pickCardsView(context, team.leader) })
 
 test.afterAll(async () => {
   for (const id of [...litter].reverse()) {
@@ -56,6 +59,8 @@ async function openBoard(page: Page): Promise<Locator> {
   await expect(panel).toBeVisible({ timeout: 30_000 })
   await panel.getByTestId('session-board-chip').click()
   const pane = page.getByTestId('task-board-pane')
+  // The Board opens on Status (the default since 2026-10-25): the kanban is one click away.
+  await pane.getByTestId('board-view-cards').click()
   await expect(pane.getByTestId('board-kanban')).toBeVisible({ timeout: 30_000 })
   await expect(pane.locator('[data-testid="kanban-card-summary"]').first()).toBeVisible({ timeout: 30_000 })
   return pane
@@ -251,13 +256,13 @@ test('N13 N14 N18: the Sev 1 chip has the count badge every chip has; the worker
   await changed.click()
 })
 
-test('N5 N14 N11 N12 C57: Edit waiting on outside a wait lane says why; the lane flyout opens on hover; a parked card says its time once; a hand back is red with no board write first', async ({ page }) => {
+test('N5 N14 N11 N12 C57: Edit waiting on outside a wait lane says why; the lane flyout opens on hover; a parked card says its time once; a hand back waits on its lead, never red', async ({ page }) => {
   test.setTimeout(180_000)
   const pane = await openBoard(page)
-  // C57: seeded by the worker's own PATCH before anything wrote the board.
+  // C57: the worker's own PATCH handed it back; it asked nothing, so it waits on its lead (src/core/user-status.ts).
   const handed = card(pane, team.handedBack).getByTestId('kanban-card-status')
-  await expect(handed).toHaveText(/^Needs you: handed back/)
-  await expect(handed).toHaveAttribute('data-tone', 'red')
+  await expect(handed).toHaveText(/^Waiting on /, { timeout: 15_000 })
+  await expect(handed).not.toHaveAttribute('data-tone', 'red')
   // N24: the question's refuse button says what it does.
   const q = card(pane, team.question)
   await expect(q.getByTestId('kanban-card-status')).toHaveAttribute('title', /question/)

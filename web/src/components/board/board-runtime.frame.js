@@ -50,7 +50,7 @@
   var ESC = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
   var ACK_TIMEOUT_MS = 30000;
   // A section's status words, shared by <walnut-strip> and <walnut-project>.
-  var DEFAULT_LABELS = 'decide:Needs you,wip:In progress,wait:Waiting on others,done:Done';
+  var DEFAULT_LABELS = 'decide:Needs you,wip:Working,wait:Waiting,done:Done';
   // setTimeout's own ceiling is ~24.8 days; a farther reminder is re-armed on the way.
   var MAX_TIMER_MS = 6 * 3600 * 1000;
 

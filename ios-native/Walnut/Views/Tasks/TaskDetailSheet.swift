@@ -57,6 +57,9 @@ struct TaskDetailSheet: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
                     header
+                    // The one user status, then a lead's team (TeamStatusViews.swift).
+                    TaskStatusCard(task: current)
+                    TeamStatusSection(ownerId: task.id)
                     if let editError {
                         Label(editError, systemImage: "exclamationmark.triangle.fill")
                             .font(.caption)

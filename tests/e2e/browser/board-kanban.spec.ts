@@ -11,8 +11,7 @@ import { discoverBrowserFixture } from './codex-test-audit'
 import { REAL_PANEL } from './draft-helpers'
 import { isolateUiPrefs, presetPanelView } from './todo-panel-helpers'
 import {
-  NON_LATIN_WORDS, call, kanbanApi, pollUntil, seedKanbanTeam, type KanbanApi, type KanbanTeam,
-} from './board-kanban-fixture'
+  NON_LATIN_WORDS, call, kanbanApi, pollUntil, seedKanbanTeam, type KanbanApi, type KanbanTeam, pickCardsView } from './board-kanban-fixture'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 const API = `http://localhost:${TEST_PORT}`
@@ -30,6 +29,9 @@ test.beforeAll(async ({}, info) => {
   team = await seedKanbanTeam(api, { engine: info.project.name, litter })
   await recordHandBack()
 })
+
+// The Board opens on Status; these specs read Cards, the view a lead picked (board-kanban-fixture.ts).
+test.beforeEach(async ({ context }) => { await pickCardsView(context, team.leader) })
 
 /**
  * The server's watch records a worker's own hand back only on a board that
@@ -68,6 +70,8 @@ async function openBoard(page: Page, leader = team.leader, sid = team.leaderSid,
   if (beforeBoard) await beforeBoard()
   await panel.getByTestId('session-board-chip').click()
   const pane = page.getByTestId('task-board-pane')
+  // The Board opens on Status (the default since 2026-10-25): the kanban is one click away.
+  await pane.getByTestId('board-view-cards').click()
   await expect(pane.getByTestId('board-kanban')).toBeVisible({ timeout: 30_000 })
   // The task summaries arrive in one read after the cards: wait so nothing grows under a measure.
   if (leader === team.leader) await expect(pane.locator('[data-testid="kanban-card-summary"]').first()).toBeVisible({ timeout: 30_000 })
@@ -131,34 +135,36 @@ test('C2: a team with no ticket tag gets the general lanes', async ({ page }) =>
   const order = await pane.locator('[data-testid="kanban-lane"], [data-testid="kanban-done-rail"]').evaluateAll((els) => els.map((e) => e.getAttribute('data-lane-id')))
   expect(order).toEqual(['todo', 'in-progress', 'waiting', 'review', 'done'])
   await expect(card(pane, kid.id)).toHaveAttribute('data-lane', 'todo')
-  await expect(card(pane, kid.id).getByTestId('kanban-card-status')).toHaveText(/No session/)
+  await expect(card(pane, kid.id).getByTestId('kanban-card-status')).toHaveText(/Not started yet/)
 })
 
-test('C15 C57: the status line says why, in the right tone; only the real asks need you', async ({ page }) => {
+test('C15 C57: the status line says why, in the right tone; only the real asks need you (the one user status)', async ({ page }) => {
   test.setTimeout(180_000)
   const pane = await openBoard(page)
   const status = (id: string) => card(pane, id).getByTestId('kanban-card-status')
   await expect(status(team.perm)).toHaveText(/^Needs you: approve Bash/)
   await expect(status(team.perm)).toHaveAttribute('data-tone', 'red')
   await expect(status(team.question)).toHaveText(/^Needs you: question/)
-  await expect(status(team.handedBack)).toHaveText(/^Needs you: handed back/)
-  await expect(status(team.handedBack)).toHaveAttribute('data-tone', 'red')
-  for (const id of team.running) await expect(status(id)).toHaveText(/^Running(: \S.*)?$/)
+  // A worker that hands its task back asked nothing: it waits on its lead, it does not need the user.
+  await expect(status(team.handedBack)).toHaveText(/^Waiting on /, { timeout: 15_000 })
+  await expect(status(team.handedBack)).not.toHaveAttribute('data-tone', 'red')
+  for (const id of team.running) await expect(status(id)).toHaveText(/^Working(: \S.*)?$/)
   await call(api, 'PATCH', `/api/sessions/${team.runningSids[0]}`, { activity: 'Reading logs' })
-  await expect(status(team.running[0])).toHaveText('Running: Reading logs', { timeout: 10_000 })
+  await expect(status(team.running[0])).toHaveText('Working: Reading logs', { timeout: 10_000 })
   await expect(status(team.waiting)).toHaveText(/^Waiting until /)
   await expect(status(team.waiting)).toHaveAttribute('data-tone', 'violet')
   const plain = team.idle.filter((id) => id !== team.handedBack && id !== team.stale && id !== team.all[9])
   for (const id of plain) {
-    await expect(status(id)).toHaveText(/^Turn ended (\d+(m|h|d)|just now)( ago)?$/)
-    await expect(status(id)).toHaveAttribute('data-tone', 'amber')
+    // A turn that ended with nothing asked: waiting on its lead (src/core/user-status.ts).
+    await expect(status(id)).toHaveText(/^Waiting on /, { timeout: 15_000 })
+    await expect(status(id)).toHaveAttribute('data-tone', 'violet')
   }
   // The nested worker's prompt rolls into its parent's card.
   await expect(status(team.all[9])).toHaveText(/^Needs you: worker below/)
-  // C57: perm + question + handed back + the nested roll up = 4, never the 8 turn ends.
-  await expect(pane.getByTestId('kanban-chip-needs')).toContainText('4')
+  // C57: perm + question + the nested roll up = 3, never the 8 turn ends nor the hand back.
+  await expect(pane.getByTestId('kanban-chip-needs')).toContainText('3')
   const reds = await pane.locator('[data-testid="kanban-card-status"][data-tone="red"]').count()
-  expect(reds).toBe(4)
+  expect(reds).toBe(3)
 })
 
 test('C21 C46 C94: title, ticket link, Sev chip, 3 line summary, plain text, expand in place', async ({ page }) => {
@@ -268,10 +274,11 @@ test('C47 C66: no Empty flash while loading; a task the store lacks is a loading
   })
   const page2 = await page.context().newPage()
   const pane2 = await openBoard(page2, lead.id, sessionId, `${team.project} empty`)
+  // openBoard picked Cards: the empty team's first todo lane opens its Add task once Cards is shown, not while hidden under Status.
   await expect(pane2.getByTestId('kanban-empty')).toContainText('No tasks on this board yet.', { timeout: 20_000 })
   await expect(pane2.getByTestId('kanban-empty')).toContainText('Add a task to a lane, or ask the leader to split the work.')
   await expect(pane2.locator('[data-testid="kanban-lane-body"][data-lane-id="todo"] [data-testid="kanban-add-task-input"]')).toBeFocused()
-  await expect(pane2.getByTestId('board-ask-button')).toHaveText('Ask the leader for a page')
+  await expect(pane2.getByTestId('board-kanban').getByTestId('board-ask-button')).toHaveText('Ask the leader for a page')
   await page2.close()
 })
 
@@ -289,7 +296,7 @@ test('C77: a task that parked itself is Parked (auto) in Waiting on others, even
   await expect(c.getByTestId('kanban-card-parked')).toHaveText(/Parked \(auto\)/)
 })
 
-test('C84: the sev:2 chip is neutral; amber is only idle, stale, turn ended, still open', async ({ page }) => {
+test('C84: the sev:2 chip is neutral; amber is only idle, stale, turn ended, still open, stuck', async ({ page }) => {
   test.setTimeout(180_000)
   const pane = await openBoard(page)
   const sev2 = card(pane, team.idle[1]).getByTestId('kanban-card-sev')
@@ -307,5 +314,5 @@ test('C84: the sev:2 chip is neutral; amber is only idle, stale, turn ended, sti
   expect(style.color).not.toBe(style.amber)
   // Every amber status line is one of the four meanings.
   const ambers = await pane.locator('[data-testid="kanban-card-status"][data-tone="amber"]').allTextContents()
-  for (const t of ambers) expect(t).toMatch(/^(Handled\. )?(Idle|Turn ended|Task still open)/)
+  for (const t of ambers) expect(t).toMatch(/^(Handled\. )?(Idle|Turn ended|Task still open|Stuck)/)
 })

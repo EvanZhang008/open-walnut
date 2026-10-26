@@ -11,7 +11,7 @@ import { expect, test, type Locator, type Page } from '@playwright/test'
 import { discoverBrowserFixture } from './codex-test-audit'
 import { REAL_PANEL } from './draft-helpers'
 import { isolateUiPrefs, presetPanelView } from './todo-panel-helpers'
-import { call, kanbanApi, seedKanbanTeam, type KanbanApi, type KanbanTeam } from './board-kanban-fixture'
+import { call, kanbanApi, seedKanbanTeam, type KanbanApi, type KanbanTeam, pickCardsView } from './board-kanban-fixture'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 const API = `http://localhost:${TEST_PORT}`
@@ -33,6 +33,9 @@ test.beforeAll(async ({}, info) => {
   // in Investigating stays clear of the auto scroll band at the bottom of an 800px window).
   await call(api, 'PUT', `/api/v1/tasks/${team.leader}/board/cards/${team.idle[3]}`, { lane: 'new' })
 })
+
+// The Board opens on Status; these specs read Cards, the view a lead picked (board-kanban-fixture.ts).
+test.beforeEach(async ({ context }) => { await pickCardsView(context, team.leader) })
 
 test.afterAll(async () => {
   for (const id of [...litter].reverse()) {
@@ -56,6 +59,8 @@ async function openBoard(page: Page): Promise<Locator> {
   await expect(panel).toBeVisible({ timeout: 30_000 })
   await panel.getByTestId('session-board-chip').click()
   const pane = page.getByTestId('task-board-pane')
+  // The Board opens on Status (the default since 2026-10-25): the kanban is one click away.
+  await pane.getByTestId('board-view-cards').click()
   await expect(pane.getByTestId('board-kanban')).toBeVisible({ timeout: 30_000 })
   // The task summaries arrive in one read after the cards: wait so nothing grows under a measure.
   await expect(pane.locator('[data-testid="kanban-card-summary"]').first()).toBeVisible({ timeout: 30_000 })
@@ -140,7 +145,9 @@ test('C42: a drag from the New section into Investigating lands before its first
   const ids = await laneCards(pane, 'investigating').evaluateAll((els) => els.map((e) => e.getAttribute('data-task-id')))
   expect(ids.indexOf(src)).toBe(ids.indexOf(firstId) - 1)
   // A fresh window draws the same place.
-  const other = await (await browser.newContext({ viewport: { width: 520, height: 800 } })).newPage()
+  const otherCtx = await browser.newContext({ viewport: { width: 520, height: 800 } })
+  await pickCardsView(otherCtx, team.leader)
+  const other = await otherCtx.newPage()
   const pane2 = await openBoard(other)
   await expect(card(pane2, src)).toHaveAttribute('data-lane', 'investigating')
   const ids2 = await laneCards(pane2, 'investigating').evaluateAll((els) => els.map((e) => e.getAttribute('data-task-id')))
@@ -341,7 +348,9 @@ test.describe('248px lanes (a 1440 window, the chat open)', () => {
       }
     }
     await check(pane)
-    const other = await (await browser.newContext({ viewport: { width: 520, height: 800 } })).newPage()
+    const otherCtx = await browser.newContext({ viewport: { width: 520, height: 800 } })
+  await pickCardsView(otherCtx, team.leader)
+  const other = await otherCtx.newPage()
     const narrow = await openBoard(other)
     await expect(narrow.getByTestId('board-kanban')).toHaveAttribute('data-mode', 'narrow')
     await check(narrow)

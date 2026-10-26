@@ -33,7 +33,7 @@ function PeekTab({ id, selected, onSelect, onClose, onMenu }: {
 }) {
   const task = useStoreTask(id);
   const title = tabTitle(task, id);
-  const phase = boardPhaseLabel(task?.phase);
+  const phase = boardPhaseLabel(task);
   return (
     <div
       className={`peek-tab${selected ? ' is-active' : ''}`}
@@ -127,7 +127,7 @@ export function PeekTabBar({ peek, rightSlot }: PeekTabBarProps) {
     ...tabs.map((id): ContextMenuItem => {
       const task = tasks?.find((t) => t.id === id) ?? null;
       const title = tabTitle(task, id);
-      const phase = boardPhaseLabel(task?.phase);
+      const phase = boardPhaseLabel(task);
       return {
         key: `tab:${id}`,
         label: title,

@@ -1,3 +1,4 @@
+import type { StatusReport, UserStatus } from './user-status.js';
 export type TaskStatus = 'todo' | 'in_progress' | 'done';
 /**
  * The one state field. WAITING (added 0.5.2) is a task set aside until something
@@ -826,6 +827,14 @@ export interface Task {
    *  waits until something else happens. Cleared by every move out of WAITING.
    *  Local-only, payload blob; never pushed to sync backends. */
   wait_until?: string;
+  /** The session's own plain-words report of its last turn for the user (the self-report's
+   *  FOR_USER_* lines): state, ask, what it waits on, now, next, when. Local-only, payload blob. */
+  status_report?: StatusReport;
+  /** The ONE status the user sees (src/core/user-status.ts), derived on the server from the
+   *  phase, the live session, open letters, Board choices, reply requests, triggers and
+   *  `status_report`, and kept current by user-status-sync.ts. Every surface (Board, Org, task
+   *  list, iOS) reads this instead of the phase. Local-only, payload blob. */
+  user_status?: UserStatus;
   /** Task-level working directory override. Takes precedence over project default_cwd in session resolution. */
   cwd?: string;
   /** Set by the cwd rename detector / turn-end check when task.cwd no longer exists on disk.

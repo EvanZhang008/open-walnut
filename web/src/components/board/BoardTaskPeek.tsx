@@ -84,7 +84,7 @@ export function BoardTaskPeek({ ownTaskId, targetTaskId, onEscape, onJump, rende
   };
 
   const title = task?.title || targetTaskId;
-  const phase = boardPhaseLabel(task?.phase);
+  const phase = boardPhaseLabel(task);
 
   return (
     <div

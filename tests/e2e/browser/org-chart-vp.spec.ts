@@ -92,7 +92,8 @@ test('Main is the CEO and each project a VP card with its own name', async ({ pa
     await expect(vp(page, name)).toContainText(name)
     await expect(vp(page, name)).toContainText('VP')
     await expect(vp(page, name)).not.toContainText('lead')
-    await expect(vp(page, name).getByTestId('org-chart-vp-line')).toHaveText('2 open')
+    // Two tasks not started: Waiting, by the one user status (src/core/user-status.ts).
+    await expect(vp(page, name).getByTestId('org-chart-vp-line')).toHaveText('2 waiting')
   }
 })
 
@@ -121,7 +122,7 @@ test('a drag onto another VP says what it does, asks first, and puts the project
   const card = vp(page, A)
   await expect(card.getByTestId('org-chart-project')).toHaveCount(2)
   await expect(card.getByTestId('org-chart-project').nth(1)).toContainText(B)
-  await expect(card.getByTestId('org-chart-vp-line')).toHaveText('2 projects')
+  await expect(card.getByTestId('org-chart-vp-line')).toHaveText(/^2 projects · \d+ waiting$/)
   await expect(vp(page, B)).toHaveCount(0)
 
   // Both stay projects with their own tasks; B is talked to through A's VP, and B's own

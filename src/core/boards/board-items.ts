@@ -92,7 +92,7 @@ const TEXT_FIELDS = Object.keys(BOARD_PROJECT_TEXT_FIELDS) as BoardProjectTextFi
 
 /** The words the page shows for each status (the frame's DEFAULT_LABELS). */
 export const BOARD_PROJECT_STATUS_LABELS: Record<BoardProjectStatus, string> = {
-  decide: 'Needs you', wip: 'In progress', wait: 'Waiting on others', done: 'Done',
+  decide: 'Needs you', wip: 'Working', wait: 'Waiting', done: 'Done',
 };
 
 function isStatus(s: string): s is BoardProjectStatus {

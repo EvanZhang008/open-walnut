@@ -53,17 +53,20 @@
 }
 
 @media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
-  /* C19 on a live Board's Projects view (the default view of a team board)
-     and its bar: kickers, badges, counts, chips and meta lines were drawn at
-     10 to 11.5 px. One floor on a phone: 12 px. */
+  /* C19 on a live Board's Status view (the default view of a team board)
+     and its bar: the kicker, the column heads, the sub lines, the old-update
+     flag and the time were drawn at 11 to 11.5 px, and the state chips and the
+     Answer button were 26 px tall. One floor on a phone: 12 px, 44 px targets. */
   .app-shell-navigation .task-board-pane :is(
-    .bo-kicker, .bo-meter-pct, .bo-group-head, .bo-group-count, .bo-place, .bo-badge, .bo-time,
-    .bpc-tag, .bpc-count-red, .bpc-new, .bpc-meta, .bpc-chip, .bpc-chip-state, .bpc-more, .bpc-label,
-    .bpc-when, .bpc-kicker, .bpc-choice-fold, .bpc-rec, .bpc-earlier, .bpc-msg-meta, .bpc-composer-hint,
-    .bpb-label, .board-view-count, .task-board-bar-sub,
+    .bs-who, .bs-table th, .bs-sub, .bs-stale, .bs-c-when, .bs-pill, .bs-chip, .bs-act,
+    .board-view-count, .task-board-bar-sub,
     .board-task-peek-kicker, .board-task-peek-phase, .board-task-peek-note
   ) {
     font-size: 12px;
+  }
+  .app-shell-navigation .task-board-pane :is(.bs-chip, .bs-act) {
+    min-height: 44px;
+    min-width: 44px;
   }
 }
 

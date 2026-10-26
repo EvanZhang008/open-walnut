@@ -1,6 +1,7 @@
 /**
- * The live data behind the Board's Projects view (board-overview-model.ts,
- * board-cards-model.ts); the pane's remembered view is useBoardView.ts.
+ * The team overview under a Board's owner (board-overview-model.ts): its sections
+ * name each kanban card's project. The Status view reads the task list itself
+ * (BoardStatusView.tsx); the pane's remembered view is useBoardView.ts.
  *
  * Everything here is already live in the browser, so nothing polls: the team
  * and each task's phase come from the task store, each session's state from the
@@ -20,7 +21,6 @@ import type { BoardPayload, BoardSeen } from './board-model';
 import {
   NO_BOARD_ELEMENTS, buildTeamOverview, teamChildren, type BoardElement, type BoardElements, type LiveStatus, type TeamOverview,
 } from './board-overview-model';
-import { buildProjectCards, type ProjectCard } from './board-cards-model';
 
 const MINUTE_MS = 60_000;
 
@@ -90,8 +90,6 @@ export function parseBoardElements(html: string | null | undefined): BoardElemen
 
 export interface TeamOverviewState {
   overview: TeamOverview | null;
-  /** The board's projects as cards (board-cards-model.ts); null when the board defines none. */
-  cards: ProjectCard[] | null;
   /** The task store has not answered yet. */
   loading: boolean;
   /** Finished tasks older than the store's recent window are not loaded (see useTasks). */
@@ -137,24 +135,10 @@ export function useTeamOverview(
     // `epoch` and `minute` are the triggers: the session store and the clock moved.
   }, [tasks, ownerId, elements, payload, seen, epoch, minute]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const cards = useMemo(() => {
-    if (!overview?.sections) return null;
-    return buildProjectCards({
-      sections: overview.sections,
-      projects: payload?.projects ?? null,
-      elements,
-      board: payload ? { choices: payload.choices, threads: payload.threads, reminders: payload.reminders } : null,
-      seen,
-      now: Date.now(),
-    });
-    // `minute` moves a reminder from pending to due.
-  }, [overview, payload, elements, seen, minute]); // eslint-disable-line react-hooks/exhaustive-deps
-
   const ensureAll = store?.ensureAllTasks;
   const loadArchive = useCallback(() => { ensureAll?.(); }, [ensureAll]);
   return {
     overview,
-    cards,
     loading: !!store?.loading,
     completedHidden: store?.completedHidden ?? 0,
     loadArchive,
