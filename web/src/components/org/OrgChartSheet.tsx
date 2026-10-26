@@ -44,6 +44,7 @@ function pressable(onPress: () => void) {
     },
   };
 }
+const needsTitle = (n: number) => `${n} ${n === 1 ? 'needs' : 'need'} you`;
 /** The drop zone that gives a project back its own VP. */
 const OWN = '__own__';
 
@@ -207,7 +208,7 @@ export function OrgChartSheet({ main, rows, onClose, onPick }: Props) {
               <span className="oc-card-name"><span className="oc-card-title">Main</span><span className="oc-role">CEO</span></span>
               <span className="oc-card-line">{ceoLine(cards)}</span>
             </span>
-            {main.alerts.length > 0 && <span className="oc-badge" title={`${main.alerts.length} need you`}>{main.alerts.length}</span>}
+            {main.alerts.length > 0 && <span className="oc-badge" title={needsTitle(main.alerts.length)}>{main.alerts.length}</span>}
           </button>
           <div className="oc-stem" aria-hidden="true" />
           {hasGroups && (
@@ -256,7 +257,7 @@ export function OrgChartSheet({ main, rows, onClose, onPick }: Props) {
                           </span>
                           <span className="oc-card-line" data-testid="org-chart-vp-line">{c.line}</span>
                         </span>
-                        {c.needsYou > 0 && <span className="oc-badge" data-testid="org-chart-vp-needs" title={`${c.needsYou} need you`}>{c.needsYou}</span>}
+                        {c.needsYou > 0 && <span className="oc-badge" data-testid="org-chart-vp-needs" title={needsTitle(c.needsYou)}>{c.needsYou}</span>}
                       </div>
                       {single && projectHandle(home)}
                     </div>
@@ -276,7 +277,7 @@ export function OrgChartSheet({ main, rows, onClose, onPick }: Props) {
                             <div className="oc-project-btn" {...pressable(() => pick(p.key))} title={`Open ${p.name}`}>
                               <span className="oc-project-name">{p.name}</span>
                               <span className="oc-project-line">{p.line}</span>
-                              {p.needsYou > 0 && <span className="oc-badge is-small" title={`${p.needsYou} need you`}>{p.needsYou}</span>}
+                              {p.needsYou > 0 && <span className="oc-badge is-small" title={needsTitle(p.needsYou)}>{p.needsYou}</span>}
                             </div>
                             {projectHandle(p)}
                           </li>

@@ -172,20 +172,26 @@ export function OrgPage() {
     const all = [channels.main, ...channels.rows];
     return all.find((r) => { const t = r.contactId ? tasks.find((x) => x.id === r.contactId) : undefined; return !!t && match(t); });
   }, [channels, tasks]);
-  const openTask = useCallback((taskId: string) => {
+  /** A letter's Answer: the task beside the page opens on its session's Inbox tab. */
+  const [sideInbox, setSideInbox] = useState<{ taskId: string; n: number } | null>(null);
+  const openTask = useCallback((taskId: string, opts?: { inbox?: boolean }) => {
     const node = nodeOf((t) => t.id === taskId);
-    if (node) { select(node.key); return; }
+    // A node lists its own letter on its chat, with Answer there.
+    if (node) { select(node.key, opts?.inbox ? 'chat' : undefined); return; }
+    setSideInbox(opts?.inbox ? { taskId, n: Date.now() } : null);
     openSide({ kind: 'task', id: taskId });
   }, [nodeOf, select, openSide]);
   const openSession = useCallback((sessionId: string) => {
     const node = nodeOf((t) => resolveTaskSessionId(t) === sessionId);
     if (node) { select(node.key, 'chat'); return; }
+    setSideInbox(null);
     openSide({ kind: 'session', id: sessionId });
   }, [nodeOf, select, openSide]);
   const closeSide = useCallback(() => {
     if (closing.current) return;
     closing.current = true;
     sideOpen.current = false;
+    setSideInbox(null);
     if ((window.history.state as { usr?: { orgSide?: boolean } } | null)?.usr?.orgSide) { navigate(-1); return; }
     setParams((prev) => { const next = new URLSearchParams(prev); next.delete('open'); return next; },
       { replace: true, state: (window.history.state as { usr?: unknown } | null)?.usr ?? null });
@@ -253,6 +259,7 @@ export function OrgPage() {
           onOpenTask={openTask}
           onOpenSession={openSession}
           onStartChat={chatOnHome}
+          {...(side.kind === 'task' && sideInbox?.taskId === side.id ? { inboxRequest: sideInbox.n } : {})}
         />
       )}
       {chartOpen && <OrgChartSheet main={channels.main} rows={channels.rows} onClose={() => setChartOpen(false)} onPick={(key) => select(key)} />}

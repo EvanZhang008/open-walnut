@@ -18,19 +18,23 @@ function t(id: string, project: string, phase: Task['phase'], extra: Partial<Tas
 
 const noAlerts: AlertProbe = () => null
 
+// A turn that ended hands the task back (NEED_ACTION), and its status says on whom it waits:
+// every open task carries one on a current server (src/core/user-status.ts).
+const handedBack = (waitingOn: string): Partial<Task> => ({ user_status: { state: 'waiting', kind: 'you', waitingOn } })
+
 const tasks: Task[] = [
   t('main', 'Ask Walnut', 'IN_PROGRESS', { org_role: 'main', walnut_agent: true, updated_at: at(50) }),
   // Walnut: a lead, one running team, one handed back, a worker that asks a question.
-  t('wl', 'Walnut', 'NEED_ACTION', { org_role: 'lead', title: 'Walnut lead', unread: true }),
-  t('w1', 'Walnut', 'IN_PROGRESS', { updated_at: at(10) }),
-  t('w2', 'Walnut', 'NEED_ACTION', { updated_at: at(20) }),
+  t('wl', 'Walnut', 'NEED_ACTION', { org_role: 'lead', title: 'Walnut lead', unread: true, ...handedBack('Your next message') }),
+  t('w1', 'Walnut', 'IN_PROGRESS', { updated_at: at(10), user_status: { state: 'working', now: 'Writing the parser' } }),
+  t('w2', 'Walnut', 'NEED_ACTION', { updated_at: at(20), user_status: { state: 'waiting', kind: 'lead', waitingOn: 'Its lead reads the result' } }),
   t('w3', 'Walnut', 'TODO', { parent_task_id: 'w2', updated_at: at(30) }),
   // Tax: a lead with only parked work.
-  t('tl', 'Tax', 'NEED_ACTION', { org_role: 'lead', title: 'Tax lead' }),
+  t('tl', 'Tax', 'NEED_ACTION', { org_role: 'lead', title: 'Tax lead', ...handedBack('Your next message') }),
   t('t1', 'Tax', 'WAITING', { updated_at: at(5) }),
   t('t2', 'Tax', 'WAITING', { updated_at: at(6) }),
   // Health: one task and no lead (Main talks to it); Personal: two tasks, no lead yet.
-  t('h1', 'Health', 'NEED_ACTION', { updated_at: at(40) }),
+  t('h1', 'Health', 'NEED_ACTION', { updated_at: at(40), ...handedBack('Your reply') }),
   t('p1', 'Personal', 'TODO', { updated_at: at(1) }),
   t('p2', 'Personal', 'TODO', { updated_at: at(2) }),
   // Done work never shows.
@@ -49,9 +53,10 @@ describe('org channels', () => {
     expect(walnut.unread).toBe(true)
     expect(walnut.latest).toBe('Working on: w1 title')
     expect(walnut.lastAt).toBe(Date.parse(at(30)))
-    expect(rows.find((r) => r.name === 'Health')!.latest).toBe('Handed back: h1 title')
+    expect(rows.find((r) => r.name === 'Health')!.latest).toBe('Waiting: h1 title')
     expect(rows.find((r) => r.name === 'Health')!.contactId).toBe('h1')
-    expect(rows.find((r) => r.name === 'Tax')!.latest).toBe('Parked: t2 title')
+    expect(rows.find((r) => r.name === 'Tax')!.latest).toBe('Waiting: t2 title')
+    expect(rows.every((r) => r.needs === 0)).toBe(true)
     // No lead yet: the row names the lead the first chat makes.
     const personal = rows.find((r) => r.name === 'Personal')!
     expect(personal.contactId).toBeUndefined()
@@ -68,14 +73,46 @@ describe('org channels', () => {
     expect(rows[0]!.latest).toBe('Asks you: w3 title')
     expect(rows[1]!.latest).toBe('Wants approval (Bash): t1 title')
     expect(main.latest).toBe('4 leads · 1 working · 2 need you')
+    expect([rows[0]!.needs, rows[1]!.needs, main.needs]).toEqual([1, 1, 2])
   })
 
   it('counts a lead\'s own prompt and a failed session as needing the user', () => {
     const probe: AlertProbe = (task) => (task.id === 'tl' ? { kind: 'error' } : null)
-    const tax = buildChannels(buildOrgTree(tasks), tasks, probe).rows[0]!
+    const failed = tasks.map((x) => (x.id === 'tl' ? { ...x, user_status: { state: 'needs' as const, source: 'error' as const, ask: 'Its session failed' } } : x))
+    const tax = buildChannels(buildOrgTree(failed), failed, probe).rows[0]!
     expect(tax.name).toBe('Tax')
     expect(tax.alerts).toEqual([{ taskId: 'tl', title: 'Tax lead', kind: 'error' }])
     expect(alertText(tax.alerts[0]!)).toBe('Failed: Tax lead')
+    // A failure its status reads as Waiting (a host gone a moment, a trigger armed) is no alert,
+    // as on the Board: the row stays quiet and counts nothing.
+    const waiting = buildChannels(buildOrgTree(tasks), tasks, probe).rows.find((r) => r.name === 'Tax')!
+    expect([waiting.state, waiting.needs, waiting.alerts]).toEqual(['parked', 0, []])
+  })
+
+  it('lists a task whose status needs the user, with no prompt open, and counts it everywhere', () => {
+    // A decision letter waits on the user: its session asks nothing, its status says so.
+    const letter = t('p1', 'Personal', 'WAITING', { updated_at: at(1), user_status: { state: 'needs', source: 'letter', ask: 'Pick the renewal date' } })
+    const list = tasks.map((x) => (x.id === 'p1' ? letter : x))
+    const { main, rows } = buildChannels(buildOrgTree(list), list, noAlerts)
+    const personal = rows[0]!
+    expect(personal.name).toBe('Personal')
+    expect(personal.state).toBe('alert')
+    expect(personal.alerts).toEqual([{ taskId: 'p1', title: 'p1 title', kind: 'needs', ask: 'Pick the renewal date', source: 'letter' }])
+    expect(personal.latest).toBe('Needs you: p1 title')
+    expect(personal.needs).toBe(1)
+    expect(personal.counts.needsYou).toBe(1)
+    expect(main.needs).toBe(1)
+    expect(main.latest).toBe('4 leads · 1 working · 1 needs you')
+    expect(teamColumns(personal, list).map((c) => [c.key, c.items.map((i) => [i.id, i.note])])).toEqual([
+      ['needs', [['p1', 'Pick the renewal date']]], ['waiting', [['p2', undefined]]],
+    ])
+  })
+
+  it('reads a task the server has not derived yet by its phase, as every surface does', () => {
+    // NEED_ACTION with no status yet: Needs you (fallbackUserState), so the Org agrees with the Board.
+    const fresh = tasks.map((x) => (x.id === 'h1' ? t('h1', 'Health', 'NEED_ACTION', { updated_at: at(40) }) : x))
+    const health = buildChannels(buildOrgTree(fresh), fresh, noAlerts).rows[0]!
+    expect([health.name, health.state, health.latest, health.needs]).toEqual(['Health', 'alert', 'Needs you: h1 title', 1])
   })
 
   it('states', () => {
@@ -88,7 +125,7 @@ describe('org channels', () => {
     const { rows } = buildChannels(buildOrgTree(tasks), tasks, noAlerts)
     expect(filterChannels(rows, 'walnut').map((r) => r.name)).toEqual(['Walnut'])
     expect(filterChannels(rows, 'TAX lead').map((r) => r.name)).toEqual(['Tax'])
-    expect(filterChannels(rows, 'handed h1').map((r) => r.name)).toEqual(['Health'])
+    expect(filterChannels(rows, 'waiting h1').map((r) => r.name)).toEqual(['Health'])
     expect(filterChannels(rows, '  ').length).toBe(4)
     expect(filterChannels(rows, 'nothing-like-this')).toEqual([])
   })
@@ -112,17 +149,23 @@ describe('org channels', () => {
     ])
     const plain = buildChannels(buildOrgTree(tasks), tasks, noAlerts).rows[0]!
     const cols = teamColumns(plain, tasks)
-    expect(cols.map((c) => c.label)).toEqual(['Working', 'Handed back'])
-    expect(cols[1]!.items[0]).toMatchObject({ id: 'w2', workers: 1, lastAt: Date.parse(at(30)) })
+    expect(cols.map((c) => [c.key, c.label])).toEqual([['working', 'Working'], ['waiting', 'Waiting']])
+    // Each with its own status's words: what it does, on whom it waits.
+    expect(cols[0]!.items[0]).toMatchObject({ id: 'w1', note: 'Writing the parser' })
+    expect(cols[1]!.items[0]).toMatchObject({ id: 'w2', workers: 1, lastAt: Date.parse(at(30)), note: 'Its lead reads the result' })
+    // A team that sits in a column for one of its workers reads that worker's words, named.
+    const asks = tasks.map((x) => (x.id === 'w3' ? { ...x, user_status: { state: 'needs' as const, source: 'choice' as const, ask: 'Pick a name' } } : x))
+    const team = teamColumns(buildChannels(buildOrgTree(asks), asks, noAlerts).rows[0]!, asks)
+    expect(team[0]).toMatchObject({ key: 'needs', items: [{ id: 'w2', note: 'w3 title: Pick a name' }] })
   })
 
   it('Main\'s Team is its leads by state, each selecting its row', () => {
     const { rows } = buildChannels(buildOrgTree(tasks), tasks, noAlerts)
     const cols = mainTeamColumns(rows)
     expect(cols.map((c) => [c.label, c.items.map((i) => i.title)])).toEqual([
-      ['Working', ['Walnut']], ['Quiet', ['Health', 'Personal']], ['Parked', ['Tax']],
+      ['Working', ['Walnut']], ['Waiting', ['Health', 'Tax', 'Personal']],
     ])
-    expect(cols[0]!.items[0]!.rowKey).toBe(projectRowKey('Walnut'))
+    expect(cols[0]!.items[0]).toMatchObject({ rowKey: projectRowKey('Walnut'), note: 'Working on: w1 title' })
   })
 
   it('initials', () => {

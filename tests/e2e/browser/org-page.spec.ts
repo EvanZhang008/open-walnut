@@ -3,7 +3,8 @@
  * of Main and the project leads, like a chat app's channels.
  *   - Main is pinned; a project whose work waits on the user's answer comes first, red, with
  *     the question as its line and a count
- *   - a lead opens on its own chat (the first tab), then its Team by state and its Board; the
+ *   - a lead opens on its own chat (the first tab), then its Team by the user's status (Needs you /
+ *     Working / Waiting, each task with its status line) and its Board; the
  *     composer under the Board sends to the lead and the chat shows the answer
  *   - Answer on a waiting question opens that task's session beside the page
  *   - search, a pick that survives a reload, live state, the keyboard, and the org chart
@@ -104,6 +105,10 @@ test('the sidebar opens Main and the leads; a lead waiting on the user comes fir
   const detail = page.getByTestId('org-detail')
   await expect(detail.getByTestId('org-detail-title')).toHaveText(`${ALPHA} lead`)
   await expect(detail.getByTestId('org-detail-counts')).toContainText('2 open')
+  // The one user status's words (src/core/user-status.ts), as on the Board: the question needs
+  // the user, the task not started waits.
+  await expect(detail.getByTestId('org-detail-counts')).toContainText('1 needs you')
+  await expect(detail.getByTestId('org-detail-counts')).toContainText('1 waiting')
   await expect(detail.getByTestId('org-alerts')).toContainText(`Asks you: Alpha ask ${STAMP}`)
   // A node opens on its chat, first of the tabs; its Board is one click away.
   await expect(detail.getByTestId('org-tab-chat')).toHaveAttribute('aria-selected', 'true')
@@ -115,8 +120,11 @@ test('the sidebar opens Main and the leads; a lead waiting on the user comes fir
   await expect(detail.frameLocator('iframe').first().getByText(BOARD_TEXT)).toBeVisible({ timeout: 30_000 })
 
   await detail.getByTestId('org-tab-team').click()
-  await expect(detail.locator('[data-testid="org-team-col"][data-column="alert"]')).toContainText(`Alpha ask ${STAMP}`)
-  await expect(detail.getByTestId('org-team')).toContainText(`Alpha build ${STAMP}`)
+  await expect(detail.locator('[data-testid="org-team-col"][data-column="needs"]')).toContainText(`Alpha ask ${STAMP}`)
+  const waiting = detail.locator('[data-testid="org-team-col"][data-column="waiting"]')
+  await expect(waiting.locator('.org-team-head')).toContainText('Waiting')
+  await expect(waiting.locator('[data-testid="org-team-item"]', { hasText: `Alpha build ${STAMP}` }).getByTestId('org-team-note'))
+    .toHaveText('Not started yet', { timeout: 30_000 })
 
   // Main's own page lists the leads by state.
   await page.getByTestId('org-channel-main').click()
@@ -236,4 +244,81 @@ test('the rows hold still under the pointer, and take their new order once it le
     const now = await order()
     return now.indexOf(rowKey(lower)) < now.indexOf(rowKey(upper))
   }, { timeout: 15_000 }).toBe(true)
+})
+
+test('a task whose Board asks the user to choose needs them: its row, its line, the ask, and Answer opens the Board', async ({ page, request }) => {
+  // No prompt in any session: only the task's status says it needs the user (src/core/user-status.ts).
+  const project = `Org page choice ${STAMP}`
+  const id = await createTask(request, `Renewal ${STAMP}`, project)
+  const put = await request.put(`/api/v1/tasks/${id}/board`, {
+    data: { html: `<h1>Renewal</h1><walnut-choice id="renew" title="Pick the renewal date ${STAMP}" options="may:In May,june:In June"></walnut-choice>` },
+  })
+  expect(put.ok(), await put.text()).toBe(true)
+  await expect.poll(async () => ((await (await request.get(`/api/tasks/${id}`)).json()).task?.user_status?.state ?? ''), { timeout: 30_000 })
+    .toBe('needs')
+
+  await openOrg(page)
+  await page.getByTestId('org-search').fill(project)
+  const r = row(page, project)
+  await expect(r).toHaveAttribute('data-state', 'alert', { timeout: 30_000 })
+  await expect(r.getByTestId('org-channel-badge')).toHaveText('1')
+  await expect(r.getByTestId('org-channel-latest')).toHaveText(`Needs you: Renewal ${STAMP}`)
+  await r.click()
+  await expect(page.getByTestId('org-detail-counts')).toContainText('1 needs you')
+  // Listed on its own chat too: the chat does not show a Board's choice.
+  await expect(page.getByTestId('org-tab-chat')).toHaveAttribute('aria-selected', 'true')
+  const alert = page.getByTestId('org-alert').filter({ hasText: `Renewal ${STAMP}` })
+  await expect(alert).toHaveAttribute('data-kind', 'needs')
+  await expect(alert.locator('.org-alert-main')).toHaveText(`Renewal ${STAMP}`)
+  await expect(alert.locator('.org-alert-ask')).toHaveText(`Pick the renewal date ${STAMP}`)
+  await alert.getByRole('button', { name: 'Answer' }).click()
+  await expect(page.getByTestId('org-tab-board')).toHaveAttribute('aria-selected', 'true')
+  await expect(page.getByTestId('board-status-answer')).toBeVisible({ timeout: 30_000 })
+})
+
+async function letterFrom(request: APIRequestContext, taskId: string, subject: string): Promise<void> {
+  const sid = await startSession(request, taskId, `${subject} ready`)
+  const sent = await request.post('/api/v1/human-inbox', {
+    headers: { 'x-walnut-caller-sid': sid },
+    data: { subject, type: 'action_required', markdown: 'Pick one.', actions: [{ id: 'yes', label: 'Yes' }] },
+  })
+  expect(sent.status(), await sent.text()).toBe(201)
+  await expect.poll(async () => ((await (await request.get(`/api/tasks/${taskId}`)).json()).task?.user_status?.source ?? ''), { timeout: 60_000 })
+    .toBe('letter')
+}
+
+test('a task waiting on a decision letter needs the user: Answer opens the letter, in its chat or beside the page', async ({ page, request }) => {
+  // The row's own task: its chat. A task under a row with no lead: beside the page.
+  const project = `Org page letter ${STAMP}`
+  const id = await createTask(request, `Lease ${STAMP}`, project)
+  await letterFrom(request, id, `Sign the lease ${STAMP}`)
+  const other = `Org page letters ${STAMP}`
+  const deposit = await createTask(request, `Deposit ${STAMP}`, other)
+  await createTask(request, `Movers ${STAMP}`, other)
+  await letterFrom(request, deposit, `Send the deposit ${STAMP}`)
+
+  await openOrg(page)
+  await page.getByTestId('org-search').fill(project)
+  const r = row(page, project)
+  await expect(r).toHaveAttribute('data-state', 'alert', { timeout: 30_000 })
+  await expect(r.getByTestId('org-channel-latest')).toHaveText(`Needs you: Lease ${STAMP}`)
+  await r.click()
+  await expect(page.getByTestId('org-tab-chat')).toHaveAttribute('aria-selected', 'true')
+  const alert = page.getByTestId('org-alert').filter({ hasText: `Lease ${STAMP}` })
+  await expect(alert.locator('.org-alert-ask')).toHaveText(`Sign the lease ${STAMP}`)
+  await alert.getByRole('button', { name: 'Answer' }).click()
+  const chat = page.getByTestId('org-chat')
+  await expect(chat.locator('.session-inbox-pane')).toBeVisible({ timeout: 30_000 })
+  await expect(chat.locator('.session-inbox-pane')).toContainText(`Sign the lease ${STAMP}`)
+  await page.keyboard.press('Escape')
+  await expect(chat.locator('.session-inbox-pane')).toHaveCount(0)
+
+  await page.getByTestId('org-search').fill(other)
+  await row(page, other).click()
+  const beside = page.getByTestId('org-alert').filter({ hasText: `Deposit ${STAMP}` })
+  await expect(beside.locator('.org-alert-ask')).toHaveText(`Send the deposit ${STAMP}`)
+  await beside.getByRole('button', { name: 'Answer' }).click()
+  const side = page.getByTestId('org-side')
+  await expect(side.locator('.session-inbox-pane')).toBeVisible({ timeout: 30_000 })
+  await expect(side.locator('.session-inbox-pane')).toContainText(`Send the deposit ${STAMP}`)
 })

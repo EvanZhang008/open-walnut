@@ -288,6 +288,10 @@ interface SessionPanelProps {
   /** Put the caret in the composer once, on mount: a host that opened this panel for someone about
    *  to type (an Ask drawer in Ask mode). */
   focusComposer?: boolean;
+  /** Open the Inbox tab each time this turns to a new non-zero value: a host that sends the user to
+   *  this session's letter (the Org page's Answer). Unlike the window-wide deep link, no other panel
+   *  of the session hears it (a hidden Home column would go fullscreen over the page). */
+  inboxRequest?: number;
   /** Whether this panel is locked — pinned to the rightmost region, not evicted by new sessions. */
   locked?: boolean;
   /** Toggle the lock state. Parent re-orders slots so locked panels sit on the right. */
@@ -321,7 +325,7 @@ interface SessionPanelProps {
   phoneHostSlot?: string;
 }
 
-export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, embedded, inset, headerLeading, focusComposer, locked, onToggleLock, onTaskCompleted, onTaskClick, onLocateTask, onOpenTaskDetail, onSessionClick, onSessionReplaced, onOpenForkDraft, phoneLayer, phoneDeepLinkBaseUrl, phoneHostSlot }: SessionPanelProps) {
+export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, embedded, inset, headerLeading, focusComposer, inboxRequest, locked, onToggleLock, onTaskCompleted, onTaskClick, onLocateTask, onOpenTaskDetail, onSessionClick, onSessionReplaced, onOpenForkDraft, phoneLayer, phoneDeepLinkBaseUrl, phoneHostSlot }: SessionPanelProps) {
   // One place decides what "close this panel" means, so every exit (the header
   // button, the error boundary, the missing-session card) goes through the same
   // owner callback.
@@ -1354,6 +1358,15 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
     window.addEventListener(SESSION_INBOX_LINK_EVENT, onLink);
     return () => window.removeEventListener(SESSION_INBOX_LINK_EVENT, onLink);
   }, [sessionId, openInboxTab, inset]);
+  // The host's own request: applied on each new value, and again on an effect replay (StrictMode,
+  // a remount), which has just run the reset above. openInboxTab is read from a ref because it
+  // changes with the chat's width, and a resize is no request.
+  const openInboxTabRef = useRef(openInboxTab);
+  openInboxTabRef.current = openInboxTab;
+  useEffect(() => {
+    if (!inboxRequest || inset) return;
+    openInboxTabRef.current();
+  }, [inboxRequest, inset]);
 
   // If the user exits fullscreen (ESC / backdrop, or the `fullscreen:yield` that
   // opening another column fires — useFullscreen.tsx) while a split view is open,

@@ -3,9 +3,9 @@
  *
  *   header   who it is, its counts, when its work last moved; tabs
  *   Latest   the row's line: what needs the user, else what moves
- *   Needs you  every prompt or failure waiting in its work, each with Open
+ *   Needs you  every prompt, failure or status ask (a letter, a Board choice) in its work, each with Open
  *   Board    the Board its lead keeps (TaskBoardPane), when it keeps one
- *   Team     its work by state (Needs you / Working / Handed back / To do / Parked)
+ *   Team     its work by the user's status (Needs you / Working / Waiting), each with its line
  *   Chat     its own session (SessionPanel), or a way to start one
  *   composer under Board and Team: a line to its session, then Chat shows it
  *   Main's quick actions (MainQuickActions) under its Latest line
@@ -37,8 +37,8 @@ interface Props {
   /** The tab the user picked for THIS node (`key`), for the URL. */
   onTabChange: (key: string, tab: OrgTab) => void;
   onSelect: (key: string) => void;
-  /** Open a task that is not this node: the page's side panel. */
-  onOpenTask: (taskId: string) => void;
+  /** Open a task that is not this node: the page's side panel (`inbox`: on its session's Inbox tab). */
+  onOpenTask: (taskId: string, opts?: { inbox?: boolean }) => void;
   /** Open a session a chat names: the page's side panel. */
   onOpenSession: (sessionId: string) => void;
   /** Start a chat with this node, which has no session yet. */
@@ -48,17 +48,23 @@ interface Props {
   now: number;
 }
 
+/** An ask its own chat shows: a prompt, a failure, its words. A letter or a Board choice is elsewhere. */
+const shownInChat = (a: OrgAlertView) => a.kind !== 'needs' || (a.source !== 'letter' && a.source !== 'choice');
+const answers = (a: OrgAlertView) => a.kind === 'question' || a.kind === 'permission'
+  || (a.kind === 'needs' && (a.source === 'prompt' || a.source === 'letter' || a.source === 'choice'));
+
 const COLUMN_DOT: Record<TeamColumn['key'], string> = {
-  alert: 'var(--error, #FF3B30)', working: 'var(--success, #34C759)', handed: 'var(--warning, #FF9500)',
-  todo: 'var(--fg-muted, #86868B)', parked: '#AF52DE',
+  needs: 'var(--error, #FF3B30)', working: 'var(--success, #34C759)', waiting: 'var(--fg-muted, #86868B)',
 };
 
-function CountPills({ counts }: { counts: ChannelRow['counts'] }) {
+/** The user's status of the node's work, in the words the Board uses (src/core/user-status.ts). */
+function CountPills({ row }: { row: ChannelRow }) {
+  const { counts, needs } = row;
   return (
     <span className="org-pills" data-testid="org-detail-counts">
+      {needs > 0 && <span className="org-pill"><i style={{ background: COLUMN_DOT.needs }} />{needs} {needs === 1 ? 'needs' : 'need'} you</span>}
       {counts.running > 0 && <span className="org-pill"><i style={{ background: COLUMN_DOT.working }} />{counts.running} working</span>}
-      {counts.needsYou > 0 && <span className="org-pill"><i style={{ background: COLUMN_DOT.handed }} />{counts.needsYou} handed back</span>}
-      {counts.waiting > 0 && <span className="org-pill"><i style={{ background: COLUMN_DOT.parked }} />{counts.waiting} parked</span>}
+      {counts.waiting > 0 && <span className="org-pill"><i style={{ background: COLUMN_DOT.waiting }} />{counts.waiting} waiting</span>}
       <span className="org-pill">{counts.open} open</span>
     </span>
   );
@@ -70,9 +76,12 @@ function AlertList({ alerts, onOpen, compact }: { alerts: readonly OrgAlertView[
       {alerts.map((a) => (
         <div key={a.taskId} className="org-alert" data-testid="org-alert" data-task-id={a.taskId} data-kind={a.kind}>
           <span className="org-alert-label">Needs you</span>
-          <span className="org-alert-text">{alertText(a)}</span>
+          <span className="org-alert-text">
+            <span className="org-alert-main">{a.kind === 'needs' ? a.title : alertText(a)}</span>
+            {a.ask && <span className="org-alert-ask" title={a.ask}>{a.ask}</span>}
+          </span>
           <button type="button" className="btn btn-sm btn-primary" onClick={() => onOpen(a)}>
-            {a.kind === 'error' ? 'Open' : 'Answer'}
+            {answers(a) ? 'Answer' : 'Open'}
           </button>
         </div>
       ))}
@@ -96,7 +105,10 @@ function TeamBoard({ columns, onPick, emptyText }: {
               <li key={it.id}>
                 <button type="button" className="org-team-item" data-testid="org-team-item" data-task-id={it.id} onClick={() => onPick(it)} title={it.title}>
                   <span className="org-team-ring" style={{ borderColor: COLUMN_DOT[c.key] }} aria-hidden="true" />
-                  <span className="org-team-title">{it.title}</span>
+                  <span className="org-team-text">
+                    <span className="org-team-title">{it.title}</span>
+                    {it.note && <span className="org-team-note" data-testid="org-team-note">{it.note}</span>}
+                  </span>
                   {it.workers > 0 && <span className="org-team-meta" title={`${it.workers} more under it`}>{it.workers}</span>}
                 </button>
               </li>
@@ -121,6 +133,9 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabChange, onSel
   const teamCount = row.kind === 'main' ? rows.length : row.node?.teams.length ?? 0;
   const [tab, setTab] = useState<OrgTab | null>(initialTab);
   const [focusChat, setFocusChat] = useState(false);
+  /** The chat's Inbox tab, asked for by Answer on a letter (SessionPanel inboxRequest), for the
+   *  session it was asked of: a replaced session's new panel does not reopen it. */
+  const [chatInbox, setChatInbox] = useState<{ sid: string; n: number } | null>(null);
   const title = row.kind === 'main' ? 'Main' : row.contactTitle;
   // Main is always someone to talk to: its task is made by the first chat.
   const canTalk = row.kind === 'main' || !!row.contactId || !!row.node?.needsLead;
@@ -130,7 +145,7 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabChange, onSel
   useEffect(() => { if (tab === 'board' && hasBoard === false) setTab('team'); }, [tab, hasBoard]);
   // A pick of this same node that names a tab (a chat that names this node's session) shows it.
   useEffect(() => { if (initialTab) setTab(initialTab); }, [initialTab]);
-  const pick = (t: OrgTab) => { setTab(t); setFocusChat(false); onTabChange(row.key, t); };
+  const pick = (t: OrgTab) => { setTab(t); setFocusChat(false); setChatInbox(null); onTabChange(row.key, t); };
   const { send } = useSessionSend(sessionId);
   // A send that answers after the user moved to another node must not pull them back.
   const mounted = useRef(true);
@@ -142,13 +157,34 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabChange, onSel
     onOpenTask(id);
   };
 
+  /** The contact's Board is its team's (resolveTeamBoardTask): the contact's own choices and its
+   *  subtasks' are there, another task's are not. */
+  const onContactBoard = (id: string): boolean => {
+    let t = tasks.find((x) => x.id === id);
+    for (let hops = 0; t && hops < 10; hops++) {
+      if (t.id === row.contactId) return true;
+      const parent = t.parent_task_id;
+      t = parent ? tasks.find((x) => x.id === parent) : undefined;
+    }
+    return false;
+  };
+  /** Where the ask can be answered: a choice on this node's Board, a letter in its session's
+   *  Inbox tab, anything else in its chat (this node's, or the task's beside the page). */
   const openAlert = (a: OrgAlertView) => {
-    if (a.taskId === row.contactId) { pick('chat'); return; }
+    const own = a.taskId === row.contactId;
+    // The Board may still be loading (null): its tab falls back to Team if there is none.
+    if (a.kind === 'needs' && a.source === 'choice' && hasBoard !== false && onContactBoard(a.taskId)) { pick('board'); return; }
+    if (a.kind === 'needs' && a.source === 'letter' && !own) { onOpenTask(a.taskId, { inbox: true }); return; }
+    if (own) {
+      pick('chat');
+      if (a.kind === 'needs' && a.source === 'letter' && sessionId) setChatInbox({ sid: sessionId, n: Date.now() });
+      return;
+    }
     onOpenTask(a.taskId);
   };
   const lastMoved = row.lastAt ? timeAgo(new Date(row.lastAt).toISOString(), { now }) : '';
   const tabId = (t: OrgTab) => `org-tab-${t}-${row.key}`;
-  const alertsShown = shown === 'chat' ? row.alerts.filter((a) => a.taskId !== row.contactId) : row.alerts;
+  const alertsShown = shown === 'chat' ? row.alerts.filter((a) => a.taskId !== row.contactId || !shownInChat(a)) : row.alerts;
 
   return (
     <div className="org-detail" data-testid="org-detail" data-key={row.key}>
@@ -158,7 +194,7 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabChange, onSel
         <div className="org-detail-who">
           <h2 className="org-detail-title" data-testid="org-detail-title">{title}</h2>
           <div className="org-detail-sub">
-            <CountPills counts={row.counts} />
+            <CountPills row={row} />
             {lastMoved && <span className="org-muted">· moved {lastMoved}</span>}
           </div>
         </div>
@@ -178,7 +214,7 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabChange, onSel
       {row.kind === 'main' && (
         <MainQuickActions variant="row" onSent={() => { setTab('chat'); setFocusChat(false); onTabChange(row.key, 'chat'); }} />
       )}
-      {/* On the chat, the contact's own prompt is in view already: only the others are listed. */}
+      {/* On the chat, the contact's own prompt is in view already; its letter or choice is not, so it stays. */}
       {alertsShown.length > 0 && <AlertList alerts={alertsShown} onOpen={openAlert} compact={shown === 'chat'} />}
 
       <div
@@ -209,7 +245,7 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabChange, onSel
         )}
         {shown === 'chat' && (sessionId ? (
           <div className="org-chat-host" data-testid="org-chat">
-            <SessionPanel key={sessionId} sessionId={sessionId} embedded focusComposer={focusChat} onTaskClick={openChip} onSessionClick={onOpenSession} />
+            <SessionPanel key={sessionId} sessionId={sessionId} embedded focusComposer={focusChat} inboxRequest={chatInbox?.sid === sessionId ? chatInbox.n : 0} onTaskClick={openChip} onSessionClick={onOpenSession} />
           </div>
         ) : (
           <div className="org-chat-start" data-testid="org-chat-start">

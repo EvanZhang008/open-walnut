@@ -11,7 +11,7 @@ import { avatarColor, initials, type ChannelRow, type ChannelState } from './org
 import { holdOrder } from './hold-order';
 
 const STATE_LABEL: Record<ChannelState, string> = {
-  alert: 'Needs you', working: 'Working', quiet: 'Quiet', parked: 'Parked',
+  alert: 'Needs you', working: 'Working', quiet: 'Waiting', parked: 'Waiting',
 };
 
 export function OrgAvatar({ row, size = 34 }: { row: ChannelRow; size?: number }) {
@@ -40,8 +40,10 @@ export function shortAgo(ms: number, now: number): string {
 }
 
 function Row({ row, selected, now, onSelect }: { row: ChannelRow; selected: boolean; now: number; onSelect: (key: string) => void }) {
-  const badge = row.alerts.length > 0
-    ? <span className="org-badge is-alert" data-testid="org-channel-badge">{row.alerts.length}</span>
+  // What opening this row lets the user answer: on Main its own asks, not every team's again.
+  const own = row.alerts.length;
+  const badge = own > 0
+    ? <span className="org-badge is-alert" data-testid="org-channel-badge" title={`${own} ${own === 1 ? 'needs' : 'need'} you`}>{own}</span>
     : row.kind === 'project' && row.counts.running > 0
       ? <span className="org-badge is-working" data-testid="org-channel-badge" title={`${row.counts.running} working`}>{row.counts.running}</span>
       : null;

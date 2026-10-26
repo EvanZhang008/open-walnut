@@ -46,7 +46,7 @@ export function vpLine(c: ChannelRow['counts']): string {
 }
 
 function projectOf(row: ChannelRow): VpProject {
-  return { key: row.key, project: row.project, name: row.project || 'Inbox', line: vpLine(row.counts), needsYou: row.alerts.length, row };
+  return { key: row.key, project: row.project, name: row.project || 'Inbox', line: vpLine(row.counts), needsYou: row.needs, row };
 }
 
 /** The VP cards, in the rows' order: a project under another VP joins that VP's card. */

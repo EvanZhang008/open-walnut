@@ -38,6 +38,8 @@ interface Props {
   onOpenSession: (sessionId: string) => void;
   /** Start a chat with a task that has none: a composer bound to it on home. */
   onStartChat: (taskId: string) => void;
+  /** Open the session on its Inbox tab (a letter's Answer), once per new value. */
+  inboxRequest?: number;
 }
 
 const HOME_ICON = (
@@ -46,7 +48,7 @@ const HOME_ICON = (
   </svg>
 );
 
-export function OrgSidePanel({ target, tasks, onClose, onOpenTask, onOpenSession, onStartChat }: Props) {
+export function OrgSidePanel({ target, tasks, onClose, onOpenTask, onOpenSession, onStartChat, inboxRequest }: Props) {
   const navigate = useNavigate();
   const stored = target.kind === 'task' ? tasks.find((t) => t.id === target.id) : undefined;
   // A task the store does not hold (a completed one, say) is read once.
@@ -70,6 +72,7 @@ export function OrgSidePanel({ target, tasks, onClose, onOpenTask, onOpenSession
           key={sessionId}
           sessionId={sessionId}
           embedded
+          {...(inboxRequest ? { inboxRequest } : {})}
           onClose={onClose}
           headerLeading={(
             <button

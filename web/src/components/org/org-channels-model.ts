@@ -3,10 +3,10 @@
  * talks to, like channels in a chat app: Main pinned on top, then one row per
  * project (its lead, else its one task, else the Inbox's tasks).
  *
- *   state   alert   a task in the project waits on the user's answer or approval,
- *                   or its session failed (what really needs the user)
- *           working a task in the project is In Progress
- *           quiet   open work, nothing running (handed back, to do)
+ *   state   alert   a task in the project needs the user: its session waits on an answer
+ *                   or approval or failed, or its status (src/core/user-status.ts) says so
+ *           working a task in the project is Working
+ *           quiet   open work, nothing running (Waiting)
  *           parked  every open task is parked (WAITING)
  *   order   alert, working, quiet, parked; inside one state the newest first
  *
@@ -17,19 +17,26 @@
 
 import type { Task } from '@open-walnut/core';
 import type { OrgCounts, OrgProjectNode, OrgTaskNode, OrgTree } from '@open-walnut/org-tree';
-import { projectKey } from '@open-walnut/org-tree';
+import { projectKey, userStateOf } from '@open-walnut/org-tree';
+import { USER_STATE_LABELS, type UserState, type UserStatus } from '@open-walnut/user-status';
 
 export type ChannelState = 'alert' | 'working' | 'quiet' | 'parked';
 
 export interface OrgAlertView {
   taskId: string;
   title: string;
-  kind: 'question' | 'permission' | 'error';
+  /** `needs`: the task's status says it needs the user (a decision letter, a Board choice,
+   *  its session's own ask) with no prompt open in its session. */
+  kind: 'question' | 'permission' | 'error' | 'needs';
   tool?: string;
+  /** `needs`: what the user must do, in the session's words. */
+  ask?: string;
+  /** `needs`: where the ask is (its prompt, a letter, a Board choice, its failure, its own words). */
+  source?: UserStatus['source'];
 }
 
-/** What waits on the user in one task right now, or null. */
-export type AlertProbe = (task: Task) => { kind: OrgAlertView['kind']; tool?: string } | null;
+/** What waits on the user in one task's session right now, or null. */
+export type AlertProbe = (task: Task) => { kind: Exclude<OrgAlertView['kind'], 'needs'>; tool?: string } | null;
 
 export interface ChannelRow {
   /** 'main' | `project:<key>`: the page's selection and URL value. */
@@ -45,6 +52,8 @@ export interface ChannelRow {
   counts: OrgCounts;
   state: ChannelState;
   alerts: OrgAlertView[];
+  /** How many tasks here need the user: the alerts; on Main, every row's and its own. */
+  needs: number;
   latest: string;
   /** Newest activity among the row's tasks (ms), 0 = unknown. */
   lastAt: number;
@@ -79,8 +88,16 @@ function collectAlerts(ids: readonly string[], byId: ReadonlyMap<string, Task>, 
   for (const id of ids) {
     const task = byId.get(id);
     if (!task) continue;
+    const status = task.user_status;
     const hit = probe(task);
-    if (hit) out.push({ taskId: id, title: task.title, kind: hit.kind, ...(hit.tool ? { tool: hit.tool } : {}) });
+    // A failed session its status reads as Waiting (its host gone a moment, a clock or a trigger
+    // still armed to bring it back) does not need the user, here as on the Board.
+    if (hit && !(hit.kind === 'error' && status && status.state !== 'needs')) {
+      out.push({ taskId: id, title: task.title, kind: hit.kind, ...(hit.tool ? { tool: hit.tool } : {}) });
+    } else if (userStateOf(task) === 'needs') {
+      const ask = status?.ask?.trim();
+      out.push({ taskId: id, title: task.title, kind: 'needs', ...(ask ? { ask } : {}), ...(status?.source ? { source: status.source } : {}) });
+    }
   }
   return out;
 }
@@ -97,23 +114,21 @@ export function channelState(counts: OrgCounts, alerts: readonly OrgAlertView[],
 export function alertText(a: OrgAlertView): string {
   if (a.kind === 'question') return `Asks you: ${a.title}`;
   if (a.kind === 'permission') return `Wants approval${a.tool ? ` (${a.tool})` : ''}: ${a.title}`;
+  if (a.kind === 'needs') return `Needs you: ${a.title}`;
   return `Failed: ${a.title}`;
 }
 
-/** The row's one line: what needs the user, else what moves, else what waits. */
+/** The row's one line: what needs the user, else what moves, else what waits (by the user's
+ *  status, src/core/user-status.ts, the words every surface uses). */
 function latestLine(nodes: readonly OrgTaskNode[], byId: ReadonlyMap<string, Task>, alerts: readonly OrgAlertView[]): string {
   if (alerts.length) return alertText(alerts[0]!);
-  const newest = (phase: Task['phase']) => nodes
-    .filter((n) => n.phase === phase)
+  const newest = (state: UserState) => nodes
+    .filter((n) => n.userState === state)
     .sort((a, b) => taskTime(byId.get(b.id)) - taskTime(byId.get(a.id)))[0];
-  const running = newest('IN_PROGRESS');
+  const running = newest('working');
   if (running) return `Working on: ${running.title}`;
-  const handed = newest('NEED_ACTION');
-  if (handed) return `Handed back: ${handed.title}`;
-  const todo = newest('TODO');
-  if (todo) return `To do: ${todo.title}`;
-  const parked = newest('WAITING');
-  if (parked) return `Parked: ${parked.title}`;
+  const waiting = newest('waiting');
+  if (waiting) return `Waiting: ${waiting.title}`;
   return 'Nothing open';
 }
 
@@ -136,6 +151,7 @@ function projectRow(p: OrgProjectNode, byId: ReadonlyMap<string, Task>, probe: A
     counts: p.counts,
     state: channelState(p.counts, alerts, nodes.map((n) => n.phase)),
     alerts,
+    needs: alerts.length,
     latest: latestLine(nodes, byId, alerts),
     lastAt: Math.max(0, ...ids.map((id) => taskTime(byId.get(id)))),
     unread: !!(lead ?? contact)?.unread,
@@ -161,9 +177,9 @@ export function buildChannels(tree: OrgTree, tasks: readonly Task[], probe: Aler
   const rows = sortChannels(tree.projects.map((p) => projectRow(p, byId, probe)));
   const mainTask = tree.main ? byId.get(tree.main.id) : undefined;
   const mainAlerts = collectAlerts(tree.main ? [tree.main.id] : [], byId, probe);
-  const needYou = rows.filter((r) => r.state === 'alert').length;
-  // Leads with work running, red ones too: "working" and "needs you" are not exclusive here.
-  const working = rows.filter((r) => r.counts.running > 0).length;
+  // Tasks, as Main's pills count them: what works, and what needs the user under every lead.
+  const needYou = rows.reduce((n, r) => n + r.needs, 0);
+  const working = tree.counts.running;
   const summary = [`${rows.length} ${rows.length === 1 ? 'lead' : 'leads'}`];
   if (working) summary.push(`${working} working`);
   if (needYou) summary.push(`${needYou} ${needYou === 1 ? 'needs' : 'need'} you`);
@@ -179,6 +195,7 @@ export function buildChannels(tree: OrgTree, tasks: readonly Task[], probe: Aler
     // Main's own state: a prompt it waits on, else whether any lead works.
     state: mainAlerts.length ? 'alert' : working ? 'working' : 'quiet',
     alerts: mainAlerts,
+    needs: mainAlerts.length + needYou,
     latest: mainAlerts.length ? alertText(mainAlerts[0]!) : summary.join(' · '),
     lastAt: taskTime(mainTask),
     unread: !!mainTask?.unread,
@@ -204,14 +221,15 @@ export function pickChannel(channels: OrgChannels, key: string | null): ChannelR
 
 // ── The Team tab: the row's work, one column per state ──
 
-export type TeamColumnKey = 'alert' | 'working' | 'handed' | 'todo' | 'parked';
+export type TeamColumnKey = Exclude<UserState, 'done'>;
 
 export interface TeamItem {
   id: string;
   title: string;
-  phase: Task['phase'];
   workers: number;
   lastAt: number;
+  /** Where the task stands in its own status's words (what it asks, what it waits on, what it does). */
+  note?: string;
   /** Main's Team: the project row this item selects. */
   rowKey?: string;
 }
@@ -222,49 +240,64 @@ export interface TeamColumn {
   items: TeamItem[];
 }
 
-const COLUMN_LABEL: Record<TeamColumnKey, string> = {
-  alert: 'Needs you', working: 'Working', handed: 'Handed back', todo: 'To do', parked: 'Parked',
-};
-const PHASE_COLUMN: Record<Task['phase'], TeamColumnKey | null> = {
-  IN_PROGRESS: 'working', NEED_ACTION: 'handed', TODO: 'todo', WAITING: 'parked', COMPLETE: null,
-};
+const COLUMN_ORDER: readonly TeamColumnKey[] = ['needs', 'working', 'waiting'];
 
 function columnsOf(items: readonly (TeamItem & { column: TeamColumnKey })[]): TeamColumn[] {
-  const order: TeamColumnKey[] = ['alert', 'working', 'handed', 'todo', 'parked'];
-  return order
+  return COLUMN_ORDER
     .map((key) => ({
       key,
-      label: COLUMN_LABEL[key],
+      label: USER_STATE_LABELS[key],
       items: items.filter((i) => i.column === key).sort((a, b) => b.lastAt - a.lastAt).map(({ column: _c, ...rest }) => rest),
     }))
     .filter((c) => c.items.length > 0);
 }
 
-/** A project's teams by state; a team with a prompt waiting anywhere in it sits under Needs you. */
+/** The task's own status line for its column: its ask, what it does, or what it waits on. */
+function statusNote(task: Task | undefined, column: TeamColumnKey): string | undefined {
+  const s = task?.user_status;
+  if (!s || s.state !== column) return undefined;
+  const text = column === 'needs' ? s.ask : column === 'working' ? s.now : (s.waitingOn ?? s.now);
+  return text?.trim() || undefined;
+}
+
+/** The team's line for its column: the first of its tasks (itself, then its workers) in that
+ *  state with words for it, named when it is a worker. */
+function teamNote(all: readonly OrgTaskNode[], byId: ReadonlyMap<string, Task>, column: TeamColumnKey): string | undefined {
+  for (const [i, x] of all.entries()) {
+    const text = statusNote(byId.get(x.id), column);
+    if (text) return i === 0 ? text : `${x.title}: ${text}`;
+  }
+  return undefined;
+}
+
+/** A project's teams by the user's status: a team with anything in it that needs the user sits
+ *  under Needs you, else one with anything working under Working, else under Waiting. */
 export function teamColumns(row: ChannelRow, tasks: readonly Task[]): TeamColumn[] {
   if (!row.node) return [];
   const byId = new Map(tasks.map((t) => [t.id, t] as const));
   const alerted = new Set(row.alerts.map((a) => a.taskId));
-  const items = row.node.teams.flatMap((n) => {
-    const inAlert = alerted.has(n.id) || flattenNodes(n.workers).some((w) => alerted.has(w.id));
-    const column = inAlert ? 'alert' : PHASE_COLUMN[n.phase];
-    if (!column) return [];
-    return [{
-      id: n.id, title: n.title, phase: n.phase, workers: flattenNodes(n.workers).length,
-      lastAt: Math.max(taskTime(byId.get(n.id)), ...flattenNodes(n.workers).map((w) => taskTime(byId.get(w.id)))),
+  const items = row.node.teams.map((n) => {
+    const all = [n, ...flattenNodes(n.workers)];
+    const column: TeamColumnKey = all.some((x) => alerted.has(x.id) || x.userState === 'needs') ? 'needs'
+      : all.some((x) => x.userState === 'working') ? 'working' : 'waiting';
+    const note = teamNote(all, byId, column);
+    return {
+      id: n.id, title: n.title, workers: all.length - 1,
+      lastAt: Math.max(...all.map((x) => taskTime(byId.get(x.id)))),
+      ...(note ? { note } : {}),
       column,
-    }];
+    };
   });
   return columnsOf(items);
 }
 
-/** Main's Team: its leads, by the same states as the list. */
+/** Main's Team: its leads by the same states, each with its row's line. */
 export function mainTeamColumns(rows: readonly ChannelRow[]): TeamColumn[] {
-  const column: Record<ChannelState, TeamColumnKey> = { alert: 'alert', working: 'working', quiet: 'handed', parked: 'parked' };
+  const column: Record<ChannelState, TeamColumnKey> = { alert: 'needs', working: 'working', quiet: 'waiting', parked: 'waiting' };
   return columnsOf(rows.map((r) => ({
-    id: r.contactId ?? r.key, title: r.name, phase: 'IN_PROGRESS' as const, workers: r.counts.open,
-    lastAt: r.lastAt, rowKey: r.key, column: column[r.state],
-  }))).map((c) => (c.key === 'handed' ? { ...c, label: 'Quiet' } : c));
+    id: r.contactId ?? r.key, title: r.name, workers: r.counts.open,
+    lastAt: r.lastAt, rowKey: r.key, note: r.latest, column: column[r.state],
+  })));
 }
 
 // ── Avatars ──
