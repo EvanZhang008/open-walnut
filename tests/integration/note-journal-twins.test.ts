@@ -24,6 +24,7 @@ import path from 'node:path'
 import { createHash } from 'node:crypto'
 import { buildSync } from 'esbuild'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
+import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import { JOURNAL_V2_DRAINS } from '../../src/providers/offline-journal-core.js'
 import { fetchOfflineBlob } from '../../src/core/offline-merge/blob.js'
 import { applyNoteRecord, type NoteRecordLike } from '../../src/core/offline-merge/notes.js'
@@ -101,7 +102,7 @@ async function spawnDaemon(dir: string, twin: Twin): Promise<Daemon> {
     const script = path.join(dir, 'daemon.cjs')
     fs.writeFileSync(script, getDaemonSource(), { mode: 0o755 })
     buildSync({ entryPoints: [path.join(ROOT, 'src/providers/trigger-check-sidecar.ts')], bundle: true, platform: 'node', format: 'cjs', outfile: path.join(dir, 'trigger-check-core.cjs'), logLevel: 'silent' })
-    proc = spawn(process.execPath, [script, '--start'], { env, stdio: ['ignore', 'ignore', process.env.DEBUG_DAEMON ? 'pipe' : 'ignore'] })
+    proc = spawn(SOURCE_TWIN.file, [script, '--start'], { env, stdio: ['ignore', 'ignore', process.env.DEBUG_DAEMON ? 'pipe' : 'ignore'] })
   }
   if (process.env.DEBUG_DAEMON) proc.stderr?.on('data', (b) => process.stderr.write(`[${twin}] ` + b.toString()))
   const sock = path.join(dir, 'agent-gateway.sock')

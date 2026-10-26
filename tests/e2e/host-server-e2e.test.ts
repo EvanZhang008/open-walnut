@@ -46,6 +46,7 @@ import { createMockConstants } from '../helpers/mock-constants.js'
 vi.mock('../../src/constants.js', () => createMockConstants())
 
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
+import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import { createStreamEndpoint, spliceStream, type StreamEndpoint } from '../../src/lib/link-stream.js'
 import { startHostServer, type HostServer } from '../../src/host-server/main.js'
 import { StreamLane, type LaneForward } from '../../src/providers/stream-lane.js'
@@ -313,7 +314,7 @@ async function setup(program: Program): Promise<void> {
   delete env.VITEST; delete env.VITEST_MODE; delete env.VITEST_WORKER_ID; delete env.VITEST_POOL_ID
   const script = path.join(daemonDir, 'daemon.cjs')
   fs.writeFileSync(script, getDaemonSource(), { mode: 0o755 })
-  daemon = spawn(process.execPath, [script, '--start'], { env, stdio: ['ignore', 'ignore', 'pipe'] })
+  daemon = spawn(SOURCE_TWIN.file, [script, '--start'], { env, stdio: ['ignore', 'ignore', 'pipe'] })
   if (process.env.DEBUG_DAEMON) daemon.stderr?.on('data', (b) => process.stderr.write(b))
   await waitFor(() => fs.existsSync(path.join(daemonDir, 'daemon.port')) && fs.existsSync(path.join(daemonDir, 'daemon.pid')), 60_000, 'daemon')
   daemonPid = Number(fs.readFileSync(path.join(daemonDir, 'daemon.pid'), 'utf8'))

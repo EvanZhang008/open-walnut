@@ -33,6 +33,7 @@ vi.mock('../../src/constants.js', () => {
 
 import { WALNUT_HOME } from '../../src/constants.js'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
+import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import { disconnectAllDaemons, getDirectDaemonConnection, type DaemonConnection } from '../../src/providers/daemon-connection.js'
 import { createSessionRecord } from '../../src/core/session-tracker.js'
 import { cliOneShotTime, nextCliCronMinute } from '../../src/providers/daemon-cron-schedule.js'
@@ -176,7 +177,7 @@ const PHASES: Row[][] = [
 ]
 
 async function boot(managed = true) {
-  const child = spawn(daemonBinary ?? process.execPath, [
+  const child = spawn(daemonBinary ?? SOURCE_TWIN.file, [
     ...(daemonBinary ? [] : [path.join(WALNUT_HOME, 'daemon.cjs')]), managed ? '--service' : '--start',
   ], {
     env: {

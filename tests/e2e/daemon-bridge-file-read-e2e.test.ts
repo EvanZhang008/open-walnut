@@ -22,6 +22,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
+import { SOURCE_TWIN } from '../helpers/source-twin.js'
 
 const HOST_ALIAS = 'bridge-fileread-e2e-host'
 const HTML = '<!doctype html>\n<html><body><h1>loggroup explainer</h1></body></html>\n'
@@ -45,7 +46,7 @@ function writeDaemonScript(): string {
 }
 
 async function spawnDaemon(): Promise<DaemonProc> {
-  const proc = spawn(process.execPath, [scriptPath, '--start'], {
+  const proc = spawn(SOURCE_TWIN.file, [scriptPath, '--start'], {
     // WALNUT_HOME_OVERRIDE pins HOME_DIR so the ~-expansion + HOME-relative
     // denylist tests are deterministic.
     env: { ...process.env, WALNUT_DAEMON_DIR: daemonDir, WALNUT_HOME_OVERRIDE: fakeHome },

@@ -35,6 +35,7 @@ import { WALNUT_HOME } from '../../src/constants.js'
 import { startServer, stopServer } from '../../src/web/server.js'
 import { createDevice, _resetDeviceAuthForTesting } from '../../src/core/device-auth.js'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
+import { SOURCE_TWIN } from '../helpers/source-twin.js'
 
 const HOST_ALIAS = 'relaybox'
 const HTML = '<!doctype html>\n<html><body><h1>works from anywhere</h1></body></html>\n'
@@ -62,7 +63,7 @@ function authedFetch(p: string): Promise<Response> {
 }
 
 async function spawnDaemon(): Promise<void> {
-  const proc = spawn(process.execPath, [scriptPath, '--start'], {
+  const proc = spawn(SOURCE_TWIN.file, [scriptPath, '--start'], {
     env: { ...process.env, WALNUT_DAEMON_DIR: daemonDir, WALNUT_HOME_OVERRIDE: filesDir,
       HOME: filesDir, SHELL: '/bin/sh', PATH: guardedPath([], '/usr/bin:/bin'), WALNUT_DAEMON_PARENT_PID: String(process.pid) },
     stdio: ['ignore', 'pipe', 'pipe'],

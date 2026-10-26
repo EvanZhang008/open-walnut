@@ -25,6 +25,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
+import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import { testBun } from '../helpers/bun-runtime.js'
 
 const ROOT = path.resolve(import.meta.dirname, '../..')
@@ -107,7 +108,7 @@ async function spawnDaemon(dir: string, twin: 'source' | 'standalone', extraEnv:
   delete env.VITEST; delete env.VITEST_MODE; delete env.VITEST_WORKER_ID; delete env.VITEST_POOL_ID
   const args = twin === 'source' ? [path.join(dir, 'daemon.cjs'), '--start'] : [path.join(ROOT, 'src/providers/daemon-standalone.ts'), '--start']
   if (twin === 'source') fs.writeFileSync(args[0]!, getDaemonSource(), { mode: 0o755 })
-  const proc = spawn(twin === 'source' ? process.execPath : BUN!, args, { env, stdio: ['ignore', 'ignore', 'pipe'], cwd: ROOT })
+  const proc = spawn(twin === 'source' ? SOURCE_TWIN.file : BUN!, args, { env, stdio: ['ignore', 'ignore', 'pipe'], cwd: ROOT })
   if (process.env.DEBUG_DAEMON) proc.stderr?.on('data', (b) => process.stderr.write(`[${twin}] ` + b.toString()))
   const portFile = path.join(dir, 'daemon.port')
   await waitFor(() => fs.existsSync(portFile) && fs.existsSync(path.join(dir, 'daemon.pid')), 60_000, `${twin} daemon`)

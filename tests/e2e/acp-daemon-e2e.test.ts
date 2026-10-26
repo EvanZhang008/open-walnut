@@ -22,6 +22,7 @@ import os from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { acpEngineIds } from '../../src/core/agents/engine-registry.js'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
+import { SOURCE_TWIN } from '../helpers/source-twin.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const REPO_ROOT = path.resolve(__dirname, '../..')
@@ -43,7 +44,7 @@ function sourceDaemonScript(): string {
 
 const TWINS: Array<{ name: string; available: boolean; command: () => [string, string[]] }> = [
   { name: 'real binary', available: HAVE_BIN, command: () => [DAEMON_BIN, ['--start']] },
-  { name: 'source daemon + acp sidecar', available: HAVE_SIDECAR, command: () => [process.execPath, [sourceDaemonScript(), '--start']] },
+  { name: 'source daemon + acp sidecar', available: HAVE_SIDECAR, command: () => [SOURCE_TWIN.file, [sourceDaemonScript(), '--start']] },
 ]
 
 let daemonCmd: [string, string[]] = [DAEMON_BIN, ['--start']]
@@ -149,7 +150,7 @@ for (const twin of TWINS) describe.runIf(twin.available)(`ACP daemon E2E (${twin
     await stopDaemon()
     fs.rmSync(daemonDir, { recursive: true, force: true })
     fs.rmSync(streamsDir, { recursive: true, force: true })
-    if (daemonCmd[0] === process.execPath) fs.rmSync(path.dirname(daemonCmd[1][0]), { recursive: true, force: true })
+    if (daemonCmd[0] === SOURCE_TWIN.file) fs.rmSync(path.dirname(daemonCmd[1][0]), { recursive: true, force: true })
   })
 
   let providerSessionId: string

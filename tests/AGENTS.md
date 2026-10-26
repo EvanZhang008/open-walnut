@@ -14,8 +14,9 @@ per-tier configs, known pre-existing failures, live test pattern, Playwright mod
   (`tests/helpers/bun-runtime.ts`), never `node`, `tsx` or `npx`. The Playwright runner stays
   on Node (its fixture servers run on bun), and so does what a user runs on Node: a test that
   runs npm skips without it (`npmOnPath()`, `tests/helpers/npm-on-path.ts`) and is listed in
-  `test:npm-channel` or `test:plugin-packages`; the twin suites run the daemon's JS twin on the
-  real Node when there is one (`tests/helpers/source-twin.ts`). CI runs those in `node-side`.
+  `test:npm-channel` or `test:plugin-packages`; a test that starts the daemon's JS twin starts it
+  with `SOURCE_TWIN.file` (`tests/helpers/source-twin.ts`: the real Node when there is one) and is
+  listed in `test:source-twin-node` or `test:source-twin-node-suites`. CI runs those in `node-side`.
 - **Live cloud journeys** (`tests/e2e/cloud-mobile-journey.live.test.ts`): run via
   `bun run test:live:cloud`: the runner script derives the cloud URL + device token from the
   data repo's git remote and injects them via env (zero secrets in the repo; in-process

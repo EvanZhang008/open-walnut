@@ -42,6 +42,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { WebSocket, WebSocketServer } from '#ws'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
+import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import { createStreamEndpoint, spliceStream, type StreamEndpoint } from '../../src/lib/link-stream.js'
 import { BUN, freePort, waitFor } from '../helpers/host-alone-harness.js'
 
@@ -233,7 +234,7 @@ async function startRig(twin: 'source' | 'standalone'): Promise<Rig> {
   if (twin === 'source') {
     const script = path.join(daemonDir, 'daemon.cjs')
     fs.writeFileSync(script, getDaemonSource(), { mode: 0o755 })
-    daemon = spawn(process.execPath, [script, '--start'], { env, stdio: ['ignore', 'ignore', 'pipe'] })
+    daemon = spawn(SOURCE_TWIN.file, [script, '--start'], { env, stdio: ['ignore', 'ignore', 'pipe'] })
   } else {
     if (!BUN) throw new Error('the standalone twin needs bun (BUN_INSTALL, ~/.bun/bin/bun)')
     daemon = spawn(BUN, [path.join(ROOT, 'src/providers/daemon-standalone.ts'), '--start'], { env, stdio: ['ignore', 'ignore', 'pipe'], cwd: ROOT })

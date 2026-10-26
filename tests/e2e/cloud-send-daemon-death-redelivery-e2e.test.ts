@@ -37,6 +37,7 @@ import { createMockConstants } from '../helpers/mock-constants.js'
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-kill-redeliver'))
 
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
+import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import {
   enqueueMessage,
   getQueue,
@@ -60,7 +61,7 @@ let daemonProc: ChildProcess | null = null
 let ws: WebSocket | null = null
 
 async function spawnDaemon(): Promise<{ proc: ChildProcess; port: number }> {
-  const proc = spawn(process.execPath, [scriptPath, '--start'], {
+  const proc = spawn(SOURCE_TWIN.file, [scriptPath, '--start'], {
     env: { ...process.env, WALNUT_DAEMON_DIR: daemonDir, WALNUT_STREAMS_DIR: streamsDir },
     stdio: ['ignore', 'pipe', 'pipe'],
   })

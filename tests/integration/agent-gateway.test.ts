@@ -27,6 +27,7 @@ import net from 'node:net'
 import path from 'node:path'
 import os from 'node:os'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
+import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import type { GatewayResponse } from '../../src/providers/gateway-core.js'
 import { pullArgsFile } from '../../src/core/peers/gateway-args-file.js'
 import { HUMAN_INBOX_CHUNK_BYTES } from '../../src/core/human-inbox/types.js'
@@ -49,7 +50,7 @@ async function writeDaemonScript(): Promise<string> {
 }
 
 async function spawnDaemon(scriptPath: string, daemonDir: string): Promise<DaemonProc> {
-  const proc = spawn(process.execPath, [scriptPath, '--start'], {
+  const proc = spawn(SOURCE_TWIN.file, [scriptPath, '--start'], {
     env: {
       ...process.env,
       WALNUT_DAEMON_DIR: daemonDir,
@@ -446,7 +447,7 @@ describe('agent gateway — real daemon + unix socket + fake Mac hub client', ()
 
     // The REAL wn CLI shipped inside the twin, pointed at the REAL gateway socket.
     const frameP = waitForEvent(ws, (m) => m.ev === 'gateway-request', 20_000)
-    const cli = spawn(process.execPath, [scriptPath, 'wn', 'tools', 'call', 'human_inbox_send', `@${payloadFile}`], {
+    const cli = spawn(SOURCE_TWIN.file, [scriptPath, 'wn', 'tools', 'call', 'human_inbox_send', `@${payloadFile}`], {
       env: {
         ...process.env,
         WALNUT_DAEMON_DIR: daemonDir,

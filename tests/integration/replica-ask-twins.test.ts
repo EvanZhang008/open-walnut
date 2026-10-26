@@ -29,6 +29,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { buildSync } from 'esbuild'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
+import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import { JOURNAL_V2_DRAINS } from '../../src/providers/offline-journal-core.js'
 import type { HostSlice } from '../../src/providers/offline-host-core.js'
 import { testBun } from '../helpers/bun-runtime.js'
@@ -136,7 +137,7 @@ async function spawnDaemon(name: string, twin: Twin, extraEnv: Record<string, st
     fs.writeFileSync(script, getDaemonSource(), { mode: 0o755 })
     // The trigger sidecar a source-deployed daemon loads from beside its script.
     buildSync({ entryPoints: [path.join(ROOT, 'src/providers/trigger-check-sidecar.ts')], bundle: true, platform: 'node', format: 'cjs', outfile: path.join(dir, 'trigger-check-core.cjs'), logLevel: 'silent' })
-    proc = spawn(process.execPath, [script, '--start'], { env, stdio: ['ignore', 'ignore', stderr] })
+    proc = spawn(SOURCE_TWIN.file, [script, '--start'], { env, stdio: ['ignore', 'ignore', stderr] })
   }
   if (process.env.DEBUG_DAEMON) proc.stderr?.on('data', (b) => process.stderr.write(`[${twin}] ` + b.toString()))
   const sock = path.join(dir, 'agent-gateway.sock')

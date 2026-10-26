@@ -32,6 +32,7 @@ vi.mock('../../src/core/config-manager.js', () => ({ getConfig: async () => conf
 import crypto from 'node:crypto'
 import { NOTES_DIR, MEMORY_DIR, MEMORY_FILE, WALNUT_HOME } from '../../src/constants.js'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
+import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import { syncHostReplica, forgetHostReplica, sha12 } from '../../src/core/host-replica.js'
 import type { GatewayResponse } from '../../src/providers/gateway-core.js'
 import type { HostSlice, OfflineRecord } from '../../src/providers/offline-host-core.js'
@@ -160,7 +161,7 @@ async function spawnDaemon(name: string, twin: 'source' | 'standalone', sid: str
   if (twin === 'source') {
     const script = path.join(dir, 'daemon.cjs')
     fs.writeFileSync(script, getDaemonSource(), { mode: 0o755 })
-    proc = spawn(process.execPath, [script, '--start'], { env, stdio: ['ignore', 'ignore', 'pipe'] })
+    proc = spawn(SOURCE_TWIN.file, [script, '--start'], { env, stdio: ['ignore', 'ignore', 'pipe'] })
   } else {
     proc = spawn(BUN!, [path.join(ROOT, 'src/providers/daemon-standalone.ts'), '--start'], { env, stdio: ['ignore', 'ignore', 'pipe'], cwd: ROOT })
   }

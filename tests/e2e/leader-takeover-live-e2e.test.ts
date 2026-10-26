@@ -40,6 +40,7 @@ import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
 import { WebSocket } from 'ws'
 import Database from '../../src/lib/sqlite.js'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
+import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import { LiveProcs, realProcTable, type Owned } from '../helpers/live-procs.js'
 import { LIVE_CONNECT_GUARD, LIVE_KEEPER, liveEnv, liveWallsAvailable, walled } from '../helpers/live-isolation.js'
 import { BOOT_HEAD, BOOT_TAIL, blankServer, bootLiveServer, finishLive, guardLogOf, liveBase, prepareServer, resumeOnTerm, type LiveServer } from '../helpers/live-run.js'
@@ -219,7 +220,7 @@ async function spawnDaemon(name: string, twin: 'source' | 'standalone'): Promise
   if (twin === 'source') {
     const script = path.join(dir, 'daemon.cjs')
     fs.writeFileSync(script, getDaemonSource(), { mode: 0o755 })
-    daemonArgv = [process.execPath, script, '--start']
+    daemonArgv = [SOURCE_TWIN.file, script, '--start']
   } else {
     // Bun does not read NODE_OPTIONS: the connect guard is preloaded by name.
     daemonArgv = [BUN!, '--preload', LIVE_CONNECT_GUARD, path.join(REPO_ROOT, 'src/providers/daemon-standalone.ts'), '--start']

@@ -29,6 +29,7 @@ import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
+import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import type { GatewayResponse } from '../../src/providers/gateway-core.js'
 import type { HostSlice, OfflineRecord } from '../../src/providers/offline-host-core.js'
 import { createBackupLeader } from '../../src/core/leader/backup-leader.js'
@@ -249,7 +250,7 @@ async function spawnDaemon(name: string, twin: 'source' | 'standalone'): Promise
   if (twin === 'source') {
     const script = path.join(dir, 'daemon.cjs')
     fs.writeFileSync(script, getDaemonSource(), { mode: 0o755 })
-    proc = spawn(process.execPath, [script, '--start'], { env, stdio: ['ignore', 'ignore', 'pipe'] })
+    proc = spawn(SOURCE_TWIN.file, [script, '--start'], { env, stdio: ['ignore', 'ignore', 'pipe'] })
   } else {
     proc = spawn(BUN!, [path.join(ROOT, 'src/providers/daemon-standalone.ts'), '--start'], { env, stdio: ['ignore', 'ignore', 'pipe'], cwd: ROOT })
   }

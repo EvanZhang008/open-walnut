@@ -22,6 +22,7 @@ vi.mock('../../src/constants.js', () => createMockConstants())
 
 import { SESSION_STREAMS_DIR } from '../../src/constants.js'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
+import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import { RemoteSessionManager } from '../../src/providers/remote-session-manager.js'
 import type { SshTarget } from '../../src/providers/session-io.js'
 
@@ -70,7 +71,7 @@ async function spawnDaemon(daemonDir: string): Promise<DaemonProc> {
   }
   for (const k of ['NVM_DIR', 'FNM_DIR', 'VOLTA_HOME', 'ASDF_DATA_DIR', 'XDG_DATA_HOME']) delete env[k]
   // execPath, not 'node': spawn resolves the command on env.PATH, pinned above.
-  const proc = spawn(process.execPath, [scriptPath, '--start'], {
+  const proc = spawn(SOURCE_TWIN.file, [scriptPath, '--start'], {
     env, stdio: ['ignore', 'pipe', 'pipe'], detached: false,
   })
   const port = await new Promise<number>((resolve, reject) => {

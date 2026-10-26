@@ -42,6 +42,7 @@ import path from 'node:path'
 import zlib from 'node:zlib'
 import { WebSocket } from 'ws'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
+import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import { createStreamEndpoint, spliceStream, type StreamEndpoint } from '../../src/lib/link-stream.js'
 import { createHostServerManager, type HostServerHost, type HostServerManager } from '../../src/core/host-server/manager.js'
 import { createHostFileSource, runningOrigin, versionHere, type BuildOrigin } from '../../src/core/host-server/host-file.js'
@@ -193,7 +194,7 @@ describe.skipIf('why' in bunPick)('a host server from nothing: the compiled file
     delete env.VITEST; delete env.VITEST_MODE; delete env.VITEST_WORKER_ID; delete env.VITEST_POOL_ID
     const script = path.join(daemonDir, 'daemon.cjs')
     fs.writeFileSync(script, getDaemonSource(), { mode: 0o755 })
-    daemon = spawn(process.execPath, [script, '--start'], { env, stdio: ['ignore', 'ignore', 'pipe'] })
+    daemon = spawn(SOURCE_TWIN.file, [script, '--start'], { env, stdio: ['ignore', 'ignore', 'pipe'] })
     if (process.env.DEBUG_DAEMON) daemon.stderr?.on('data', (b) => process.stderr.write(b))
     else daemon.stderr?.resume()
     await waitFor(() => fs.existsSync(path.join(daemonDir, 'daemon.port')), 60_000, 'the daemon')

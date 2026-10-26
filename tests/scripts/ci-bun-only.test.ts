@@ -32,7 +32,7 @@ const NODE_FREE: Record<string, string[]> = {
 /** Jobs that keep Node, each for a reason. */
 const KEEPS_NODE: Record<string, Record<string, string>> = {
   'ci.yml': {
-    'node-side': 'the Playwright runner (spec load), a plugin author\'s npm toolchain, the npm channel, the JS daemon on Node',
+    'node-side': 'the Playwright runner (spec load), a plugin author\'s npm toolchain, the npm channel, the JS daemon on Node (every suite that starts it)',
     browser: 'the Playwright runner',
     onboarding: 'the npm channel: a user installs with npm on their own Node',
     rehearsal: 'the npm channel: the release package installed with npm 12',
@@ -288,13 +288,122 @@ describe('the Playwright fixtures start Walnut on bun', () => {
   })
 })
 
+/** The runtimes a test starts bun with: the runner's own, or the bun on PATH. */
+const BUN_RUNTIME = String.raw`(?:process\.execPath|HOST_RUNTIME|bunRuntime\(\))`
+/** The JS twin started on bun, in the forms the twin suites used before tests/helpers/source-twin.ts. */
+const TWIN_ON_BUN = [
+  // spawn(<bun>, [script, '--start']), [<bun>, [sourceDaemonScript(), '--start']], [<bun>, script, '--start'], spawn(<bun>, [twin, 'wn', ...])
+  new RegExp(BUN_RUNTIME + String.raw`\s*,\s*\[?\s*[\w.]+(?:\([^()]*\))?\s*,\s*['"](?:--start|--service|--status|--stop|--version|wn|walnut)['"]`, 'g'),
+  // spawn(binary ?? <bun>, [...(binary ? [] : [path.join(home, 'daemon.cjs')]), '--start'])
+  new RegExp(BUN_RUNTIME + String.raw`\s*,\s*\[(?:\[\]|[^\]])*?\bdaemon[\w-]*\.cjs`, 'g'),
+  // spawn(twin === 'source' ? <bun> : BUN!, args)
+  new RegExp(String.raw`['"]source['"]\s*\?\s*` + BUN_RUNTIME, 'g'),
+  // twin === 'standalone' ? [BUN!, [...]] : [<bun>, [script]]
+  new RegExp(String.raw`\[\s*` + BUN_RUNTIME + String.raw`\s*,\s*\[\s*\w*[sS]cript\w*\s*\]\s*\]`, 'g'),
+]
+function twinOnBun(text: string): string[] {
+  const hits: string[] = []
+  for (const re of TWIN_ON_BUN) {
+    for (const m of text.matchAll(re)) {
+      const end = text.indexOf('\n', m.index)
+      const line = text.slice(text.lastIndexOf('\n', m.index) + 1, end === -1 ? undefined : end)
+      // A deliberate bun leg names itself; the standalone twin is bun's own.
+      if (line.includes('source twin (bun)') || m[0].includes('daemon-standalone')) continue
+      hits.push(m[0])
+    }
+  }
+  return hits
+}
+/** Every script under tests (test files and the helpers they share), but this one. */
+const walkScripts = (dir: string): string[] => fs.readdirSync(path.join(REPO, dir), { withFileTypes: true }).flatMap((e) =>
+  e.isDirectory() ? walkScripts(path.join(dir, e.name)) : /\.[cm]?[jt]s$/.test(e.name) ? [path.join(dir, e.name).split(path.sep).join('/')] : [])
+/** Helpers that start the JS twin with SOURCE_TWIN.file, and the calls of theirs that start it. */
+const TWIN_HELPERS: Record<string, RegExp> = {
+  'tests/helpers/daemon-twin.ts': /\bstartDaemonTwin\(/,
+  'tests/helpers/host-alone-harness.ts': /\bstartHostAloneHarness\(/,
+  'tests/helpers/replica-cluster.ts': /\bstart(?:ReplicaCluster|HostDaemon)\(/,
+}
+const TWIN_SCRIPTS = ['test:source-twin-node', 'test:source-twin-node-suites']
+/** Twin suites node-side leaves out, each for a reason. */
+const TWIN_ELSEWHERE: Record<string, string> = {
+  'tests/e2e/session-budget.test.ts': 'pins the daemon-darwin-arm64 build and a budget-e2e-manifest.json that no build step writes; it runs where those exist',
+  'tests/e2e/session-budget-acp.test.ts': 'pins the daemon-darwin-arm64 build and a budget-e2e-manifest.json that no build step writes; it runs where those exist',
+}
+
 describe('the daemon\'s JS twin is checked on Node where CI has it', () => {
-  it('test:source-twin-node requires Node and runs every suite whose source twin follows tests/helpers/source-twin.ts', () => {
+  it('test:source-twin-node requires Node and runs the node cases of the suites that run both twins', () => {
     const script = SCRIPTS['test:source-twin-node']!
     expect(vitestPartsOf(script).length).toBeGreaterThan(0)
     for (const part of vitestPartsOf(script)) expect(part).toMatch(/^WALNUT_REQUIRE_NODE=1 bun --bun vitest run .* -t 'source twin \\\(node\\\)' /)
-    const suites = [...testSources()].filter(([, text]) => text.includes('SOURCE_TWIN.file')).map(([f]) => f)
-    expect(suites.length).toBeGreaterThan(10)
-    for (const f of suites) expect(script, f).toContain(f)
+  })
+
+  it('test:source-twin-node-suites requires Node, and node-side runs it', () => {
+    const script = SCRIPTS['test:source-twin-node-suites']!
+    expect(vitestPartsOf(script).length).toBeGreaterThan(0)
+    for (const part of vitestPartsOf(script)) expect(part).toMatch(/^WALNUT_REQUIRE_NODE=1 bun --bun vitest run /)
+    const runs = (workflow('ci.yml').jobs['node-side']!.steps ?? []).map((s) => s.run ?? '')
+    expect(runs).toContain('bun run test:source-twin-node-suites')
+  })
+
+  it('every file those scripts name exists (vitest skips a filter that matches nothing)', () => {
+    for (const name of TWIN_SCRIPTS) {
+      const named = SCRIPTS[name]!.split(/\s+/).filter((w) => /^tests\/.+\.test\.ts$/.test(w))
+      expect(named.length, name).toBeGreaterThan(10)
+      for (const f of named) expect(fs.existsSync(path.join(REPO, f)), `${name}: ${f}`).toBe(true)
+    }
+  })
+
+  it('every test file that starts the JS twin runs in one of them: SOURCE_TWIN.file, or a helper that starts it', () => {
+    for (const [helper, starts] of Object.entries(TWIN_HELPERS)) {
+      expect(fs.readFileSync(path.join(REPO, helper), 'utf8'), helper).toContain('SOURCE_TWIN.file')
+      expect([...testSources().values()].some((text) => starts.test(text)), `${helper}: no test file calls it`).toBe(true)
+    }
+    // A new helper that starts the twin is listed above, so the files that call it are found.
+    const helpers = walkScripts('tests/helpers').filter((f) => f !== 'tests/helpers/source-twin.ts' && fs.readFileSync(path.join(REPO, f), 'utf8').includes('SOURCE_TWIN.file'))
+    expect(helpers.sort()).toEqual(Object.keys(TWIN_HELPERS).sort())
+    const viaHelper = (text: string) => Object.entries(TWIN_HELPERS).some(([helper, starts]) =>
+      text.includes(`/helpers/${path.basename(helper, '.ts')}.js'`) && starts.test(text))
+    const suites = [...testSources()].filter(([, text]) => text.includes('SOURCE_TWIN.file') || viaHelper(text)).map(([f]) => f)
+    expect(suites.length).toBeGreaterThan(60)
+    const listed = TWIN_SCRIPTS.map((n) => SCRIPTS[n]!).join(' ')
+    for (const f of suites) {
+      if (TWIN_ELSEWHERE[f]) { expect(listed, `${f} is left out: ${TWIN_ELSEWHERE[f]}`).not.toContain(f); continue }
+      expect(listed, `${f} starts the JS twin: list it in ${TWIN_SCRIPTS.join(' or ')}, which node-side runs`).toContain(f)
+    }
+    for (const f of Object.keys(TWIN_ELSEWHERE)) expect(suites, `${f} no longer starts the JS twin: drop it from TWIN_ELSEWHERE`).toContain(f)
+  })
+
+  it('no test file or helper starts the JS twin on bun (SOURCE_TWIN.file from tests/helpers/source-twin.ts)', () => {
+    const twinFiles = walkScripts('tests').filter((f) => f !== 'tests/scripts/ci-bun-only.test.ts')
+      .map((f) => [f, fs.readFileSync(path.join(REPO, f), 'utf8')] as const)
+      .filter(([, text]) => /getDaemonSource|daemon-source|\bdaemon[\w-]*\.cjs/.test(text))
+    expect(twinFiles.length).toBeGreaterThan(60)
+    const offenders = twinFiles.flatMap(([f, text]) => twinOnBun(text).map((hit) => `${f}: ${hit}`))
+    expect(offenders).toEqual([])
+  })
+
+  it('the check catches the forms a test used', () => {
+    for (const bad of [
+      "spawn(process.execPath, [script, '--start'], { env })",
+      "command: () => [process.execPath, [sourceDaemonScript(dir), '--start']]",
+      "daemonArgv = [process.execPath, script, '--start']",
+      "spawn(process.execPath, [twin, 'wn', 'tools', 'list'])",
+      "spawn(HOST_RUNTIME, [script, '--start'])",
+      ": [process.execPath, [path.join(BIN, 'daemon.cjs'), '--start']]",
+      "spawn(daemonBinary ?? process.execPath, [\n    ...(daemonBinary ? [] : [path.join(HOME, 'daemon.cjs')]), '--start'])",
+      "spawn(twin === 'source' ? process.execPath : BUN!, args)",
+      "twin === 'standalone' ? [BUN!, [standalone]] : [process.execPath, [script]]",
+    ]) expect(twinOnBun(bad), bad).not.toEqual([])
+    for (const good of [
+      "spawn(SOURCE_TWIN.file, [script, '--start'], { env })",
+      "args: [process.execPath, mock, sid]",
+      "workerCmd: [process.execPath, WORKER_BUNDLE]",
+      "spawn(process.execPath, [FAKE, '-p'])",
+      "spawn(process.execPath, ['-e', snippet])",
+      "spawn(process.execPath, [script, cfgFile])",
+      "spawn(BUN!, [path.join(ROOT, 'src/providers/daemon-standalone.ts'), '--start'])",
+      "spawn(process.execPath, [path.join(ROOT, 'src/providers/daemon-standalone.ts'), '--start'])",
+      "{ name: 'source twin (bun)', command: () => [process.execPath, [path.join(dir, 'daemon.cjs'), '--start']] }",
+    ]) expect(twinOnBun(good), good).toEqual([])
   })
 })

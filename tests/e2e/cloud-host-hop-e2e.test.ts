@@ -50,6 +50,7 @@ vi.mock('../../src/constants.js', () => createMockConstants('walnut-cloud-host-h
 import { WALNUT_HOME, TASKS_FILE } from '../../src/constants.js'
 import { startServer, stopServer } from '../../src/web/server.js'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
+import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import { guardedPath } from '../setup/exec-guard.js'
 import { accountInfo } from '../../src/lib/account.js'
 
@@ -197,7 +198,7 @@ async function startHostDaemon(): Promise<{ proc: ChildProcess; dir: string; por
     // does (the mock drops it by default), so quick sends can be held to order.
     MOCK_CLAUDE_QUEUE_MIDTURN: '1',
   }
-  const proc = spawn(process.execPath, [script, '--start'], { env, stdio: ['ignore', 'ignore', 'pipe'] })
+  const proc = spawn(SOURCE_TWIN.file, [script, '--start'], { env, stdio: ['ignore', 'ignore', 'pipe'] })
   let err = ''
   proc.stderr?.on('data', (b: Buffer) => {
     err = (err + b.toString()).slice(-4000)

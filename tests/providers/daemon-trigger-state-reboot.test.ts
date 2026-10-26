@@ -20,6 +20,7 @@ import os from 'node:os'
 import { spawn, execFileSync } from 'node:child_process'
 import { WebSocket } from 'ws'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
+import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import { testBun } from '../helpers/bun-runtime.js'
 
 const ROOT = path.resolve(__dirname, '../..')
@@ -84,7 +85,7 @@ for (const twin of ['standalone', 'source'] as const) {
       delete env.VITEST_POOL_ID; delete env.OPEN_WALNUT_HOME
       const [cmd, args] = twin === 'standalone'
         ? [BUN!, [path.join(ROOT, 'src/providers/daemon-standalone.ts'), '--start']]
-        : [process.execPath, [path.join(BIN, 'daemon.cjs'), '--start']]
+        : [SOURCE_TWIN.file, [path.join(BIN, 'daemon.cjs'), '--start']]
       const proc = spawn(cmd, args, { detached: true, stdio: 'ignore', env })
       proc.unref()
       const portFile = path.join(RUN_DIR, 'daemon.port')

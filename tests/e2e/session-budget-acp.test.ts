@@ -22,6 +22,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { getDaemonSource } from '../../src/providers/daemon-source.js';
+import { SOURCE_TWIN } from '../helpers/source-twin.js';
 import { budgetDaemonEnv, stderrTail } from './fixtures/budget-daemon-env.js';
 import { checkBudgetArtifacts, HOST_DAEMON_BINARY, sameBytes } from './fixtures/budget-artifacts.js';
 
@@ -50,7 +51,7 @@ function sourceDaemonScript(dir: string): string {
 
 // Both twins, always: a missing or stale artifact fails here instead of skipping a twin.
 const TWINS: Array<{ name: string; command: (dir: string) => [string, string[]] }> = [
-  { name: 'source daemon + sidecars', command: dir => [process.execPath, [sourceDaemonScript(dir), '--start']] },
+  { name: 'source daemon + sidecars', command: dir => [SOURCE_TWIN.file, [sourceDaemonScript(dir), '--start']] },
   { name: 'real binary', command: () => [DAEMON_BIN, ['--start']] },
 ];
 

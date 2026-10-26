@@ -32,6 +32,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { createMockConstants } from '../helpers/mock-constants.js'
 import { testBun } from '../helpers/bun-runtime.js'
+import { SOURCE_TWIN } from '../helpers/source-twin.js'
 
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-replica-local'))
 
@@ -187,7 +188,7 @@ async function spawnDaemon(dir: string, twin: 'source' | 'standalone', fakeHome:
   for (const k of ['VITEST', 'VITEST_MODE', 'VITEST_WORKER_ID', 'VITEST_POOL_ID', 'WALNUT_FOLLOWER_TOKEN', 'WALNUT_HOST_DAEMON_DIR', 'WALNUT_ROLE', 'WALNUT_HOST_SERVER']) delete env[k]
   const args = twin === 'source' ? [path.join(dir, 'daemon.cjs'), '--start'] : [path.join(ROOT, 'src/providers/daemon-standalone.ts'), '--start']
   if (twin === 'source') fs.writeFileSync(args[0]!, (await import('../../src/providers/daemon-source.js')).getDaemonSource(), { mode: 0o755 })
-  const proc = spawn(twin === 'source' ? process.execPath : BUN!, args, { env, stdio: ['ignore', 'ignore', 'pipe'], cwd: ROOT })
+  const proc = spawn(twin === 'source' ? SOURCE_TWIN.file : BUN!, args, { env, stdio: ['ignore', 'ignore', 'pipe'], cwd: ROOT })
   if (process.env.DEBUG_DAEMON) proc.stderr?.on('data', (b) => process.stderr.write(`[${twin}] ` + b.toString()))
   await waitFor(() => fs.existsSync(path.join(dir, 'daemon.port')) && fs.existsSync(path.join(dir, 'daemon.pid')), 60_000, `${twin} daemon`)
   const pid = parseInt(fs.readFileSync(path.join(dir, 'daemon.pid'), 'utf8').trim(), 10)

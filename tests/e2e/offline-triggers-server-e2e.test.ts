@@ -32,6 +32,7 @@ vi.mock('../../src/constants.js', () => createMockConstants('walnut-offline-trig
 import { WALNUT_HOME } from '../../src/constants.js'
 import { startServer, stopServer } from '../../src/web/server.js'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
+import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import { getDirectDaemonConnection, pushHostSliceToAllHosts } from '../../src/providers/daemon-connection.js'
 import { createSessionRecord } from '../../src/core/session-tracker.js'
 import type { GatewayResponse } from '../../src/providers/gateway-core.js'
@@ -140,7 +141,7 @@ beforeAll(async () => {
     WALNUT_DAEMON_PARENT_PID: String(process.pid),
   }
   delete env.VITEST; delete env.VITEST_MODE; delete env.VITEST_WORKER_ID; delete env.VITEST_POOL_ID
-  daemon = spawn(process.execPath, [script, '--start'], { env, stdio: ['ignore', 'ignore', 'pipe'] })
+  daemon = spawn(SOURCE_TWIN.file, [script, '--start'], { env, stdio: ['ignore', 'ignore', 'pipe'] })
   if (process.env.DEBUG_DAEMON) daemon.stderr?.on('data', (b) => process.stderr.write(b))
   await waitFor(() => fs.existsSync(path.join(dir, 'daemon.port')) && fs.existsSync(path.join(dir, 'daemon.pid')), 30_000, 'the daemon')
   daemonPort = parseInt(fs.readFileSync(path.join(dir, 'daemon.port'), 'utf8').trim(), 10)

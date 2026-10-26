@@ -23,6 +23,7 @@ import os from 'node:os'
 import path from 'node:path'
 import WebSocket from 'ws'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
+import { SOURCE_TWIN } from '../helpers/source-twin.js'
 
 let rpcId = 1
 const cleanups: Array<() => Promise<void> | void> = []
@@ -40,7 +41,7 @@ async function spawnDaemon(): Promise<{ proc: ChildProcess; port: number; daemon
   const scriptPath = path.join(daemonDir, 'daemon.cjs')
   fs.writeFileSync(scriptPath, getDaemonSource(), { mode: 0o755 })
 
-  const proc = spawn(process.execPath, [scriptPath, '--start'], {
+  const proc = spawn(SOURCE_TWIN.file, [scriptPath, '--start'], {
     env: {
       ...process.env,
       WALNUT_DAEMON_DIR: daemonDir,

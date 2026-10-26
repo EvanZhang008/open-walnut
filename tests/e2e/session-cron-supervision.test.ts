@@ -15,6 +15,7 @@ vi.mock('../../src/constants.js', () => {
 
 import { WALNUT_HOME } from '../../src/constants.js'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
+import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import { disconnectAllDaemons, getDirectDaemonConnection, type DaemonConnection } from '../../src/providers/daemon-connection.js'
 import { createSessionRecord, getSessionByClaudeId } from '../../src/core/session-tracker.js'
 import { enqueueMessage, getQueue } from '../../src/core/session-message-queue.js'
@@ -34,7 +35,7 @@ let serverStarted = false
 let stopId: string | undefined
 
 async function boot(managed = true) {
-  const child = spawn(daemonBinary ?? process.execPath, [
+  const child = spawn(daemonBinary ?? SOURCE_TWIN.file, [
     ...(daemonBinary ? [] : [path.join(WALNUT_HOME, 'daemon.cjs')]), managed ? '--service' : '--start',
   ], {
     env: {

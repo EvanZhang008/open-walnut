@@ -46,6 +46,7 @@ import os from 'node:os'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { WebSocket } from 'ws'
 import { getDaemonSource, validateFoldInjection, undefinedInjectedHelpers, INJECTED_HELPERS_SOURCE } from '../../src/providers/daemon-source.js'
+import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import { createDaemonCore } from '../../src/providers/daemon-core.js'
 import { foldLine, initialFoldState, assembleSnapshot, snapshotDiffers, type SessionSnapshot } from '../../src/providers/daemon-fold.js'
 
@@ -140,7 +141,7 @@ beforeAll(async () => {
   scriptPath = path.join(dir, 'daemon.cjs')
   fs.writeFileSync(scriptPath, getDaemonSource(), { mode: 0o755 })
 
-  daemonProc = spawn(process.execPath, [scriptPath, '--start'], {
+  daemonProc = spawn(SOURCE_TWIN.file, [scriptPath, '--start'], {
     env: { ...process.env, WALNUT_DAEMON_DIR: DAEMON_DIR, WALNUT_STREAMS_DIR: STREAMS_DIR },
     stdio: ['ignore', 'pipe', 'pipe'],
     detached: false,
@@ -672,7 +673,7 @@ describe('C1 snapshot wiring — daemon restart (SIGKILL) rebuilds foldState on 
   const spawned: ChildProcess[] = []
 
   function spawnDaemon(daemonDir: string, streamsDir: string): Promise<{ proc: ChildProcess; port: number }> {
-    const proc = spawn(process.execPath, [scriptPath, '--start'], {
+    const proc = spawn(SOURCE_TWIN.file, [scriptPath, '--start'], {
       env: { ...process.env, WALNUT_DAEMON_DIR: daemonDir, WALNUT_STREAMS_DIR: streamsDir },
       stdio: ['ignore', 'pipe', 'pipe'],
       detached: false,

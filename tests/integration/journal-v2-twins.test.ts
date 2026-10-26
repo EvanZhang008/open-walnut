@@ -22,6 +22,7 @@ import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
+import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import { JOURNAL_V2_DRAINS, createOfflineJournal } from '../../src/providers/offline-journal-core.js'
 import { createHash, randomBytes } from 'node:crypto'
 import { buildSync } from 'esbuild'
@@ -167,7 +168,7 @@ async function spawnDaemon(dir: string, twin: Twin, journalDir: string | null, e
     const script = path.join(dir, twin === 'old' ? 'daemon-old.cjs' : 'daemon.cjs')
     fs.writeFileSync(script, twin === 'old' ? oldDaemonSource() : getDaemonSource(), { mode: 0o755 })
     writeTriggerSidecar(dir, twin)
-    proc = spawn(process.execPath, [script, '--start'], { env, stdio: ['ignore', 'ignore', process.env.DEBUG_DAEMON ? 'pipe' : 'ignore'] })
+    proc = spawn(SOURCE_TWIN.file, [script, '--start'], { env, stdio: ['ignore', 'ignore', process.env.DEBUG_DAEMON ? 'pipe' : 'ignore'] })
   }
   if (process.env.DEBUG_DAEMON) proc.stderr?.on('data', (b) => process.stderr.write(`[${twin}] ` + b.toString()))
   const sock = path.join(dir, 'agent-gateway.sock')
@@ -743,7 +744,7 @@ for (const twin of ['source', 'standalone'] as const) {
       delete env.WALNUT_DAEMON_STATE_DIR
       const script = path.join(root, 'daemon.cjs')
       if (twin === 'source') fs.writeFileSync(script, getDaemonSource(), { mode: 0o755 })
-      const [bin, lead] = twin === 'standalone' ? [BUN!, [path.join(ROOT, 'src/providers/daemon-standalone.ts')]] : [process.execPath, [script]]
+      const [bin, lead] = twin === 'standalone' ? [BUN!, [path.join(ROOT, 'src/providers/daemon-standalone.ts')]] : [SOURCE_TWIN.file, [script]]
       for (const args of [['--status'], ['--stop'], ['walnut', '--help']]) {
         expect(fs.existsSync(path.join(run, 'daemon.pid'))).toBe(false)
         const r = spawnSync(bin, [...lead, ...args], { env, cwd: root, timeout: 60_000, encoding: 'utf8' })

@@ -10,6 +10,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
+import { SOURCE_TWIN } from '../helpers/source-twin.js'
 
 let proc: ChildProcess
 let port: number
@@ -20,7 +21,7 @@ beforeAll(async () => {
   const scriptPath = path.join(tmpDir, 'daemon.cjs')
   fs.writeFileSync(scriptPath, getDaemonSource(), { mode: 0o755 })
 
-  proc = spawn(process.execPath, [scriptPath, '--start'], {
+  proc = spawn(SOURCE_TWIN.file, [scriptPath, '--start'], {
     env: { ...process.env, WALNUT_DAEMON_DIR: path.join(tmpDir, 'daemon') },
     stdio: ['ignore', 'pipe', 'pipe'],
   })

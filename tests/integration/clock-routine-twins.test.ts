@@ -32,6 +32,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { buildSync } from 'esbuild'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
+import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import type { HostSlice } from '../../src/providers/offline-host-core.js'
 import { JOURNAL_V2_DRAINS } from '../../src/providers/offline-journal-core.js'
 import { buildRoutineSpawnTemplate } from '../../src/providers/spawn-template.js'
@@ -112,7 +113,7 @@ async function spawnDaemon(twin: 'source' | 'standalone', reuseDir?: string, ext
       entryPoints: [path.join(ROOT, 'src/providers/trigger-check-sidecar.ts')],
       bundle: true, platform: 'node', format: 'cjs', outfile: path.join(dir, 'trigger-check-core.cjs'), logLevel: 'silent',
     })
-    proc = spawn(process.execPath, [script, '--start'], { env, stdio: ['ignore', 'ignore', 'pipe'] })
+    proc = spawn(SOURCE_TWIN.file, [script, '--start'], { env, stdio: ['ignore', 'ignore', 'pipe'] })
   } else {
     proc = spawn(bunPath!, [path.join(ROOT, 'src/providers/daemon-standalone.ts'), '--start'], { env, stdio: ['ignore', 'ignore', 'pipe'], cwd: ROOT })
   }

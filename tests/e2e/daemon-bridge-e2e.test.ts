@@ -15,6 +15,7 @@ import net from 'node:net'
 import path from 'node:path'
 import os from 'node:os'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
+import { SOURCE_TWIN } from '../helpers/source-twin.js'
 
 const HOST_ALIAS = 'bridge-e2e-host'
 
@@ -33,7 +34,7 @@ function writeDaemonScript(): string {
 }
 
 async function spawnDaemon(extraEnv: Record<string, string> = {}): Promise<DaemonProc> {
-  const proc = spawn(process.execPath, [scriptPath, '--start'], {
+  const proc = spawn(SOURCE_TWIN.file, [scriptPath, '--start'], {
     env: { ...process.env, WALNUT_DAEMON_DIR: daemonDir, ...extraEnv },
     stdio: ['ignore', 'pipe', 'pipe'],
   })

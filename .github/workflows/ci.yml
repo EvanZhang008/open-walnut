@@ -68,6 +68,19 @@ jobs:
       - run: bun run test:plugin-packages
       - run: bun run test:npm-channel
       - run: bun run test:source-twin-node
+      # Every other suite that starts the JS twin, on Node, retried as the heavy tiers are; they spawn the sidecars the build produces, and one serves the built console.
+      - run: bun run build && (cd web && bun x vite build)
+      - name: source twin suites on Node
+        env:
+          # Never let a test process resolve the production daemon default.
+          WALNUT_DAEMON_DIR: ${{ runner.temp }}/open-walnut-node-side
+          # Tests create temporary repositories and commits. GitHub runners do
+          # not provide an author identity by default.
+          GIT_AUTHOR_NAME: Open Walnut CI
+          GIT_AUTHOR_EMAIL: open-walnut@localhost
+          GIT_COMMITTER_NAME: Open Walnut CI
+          GIT_COMMITTER_EMAIL: open-walnut@localhost
+        run: bun run test:source-twin-node-suites
 
   # ── Gate 2: the test tiers that are genuinely green, so they can BLOCK ──────
   #

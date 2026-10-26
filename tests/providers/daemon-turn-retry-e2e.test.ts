@@ -23,6 +23,7 @@ import os from 'node:os'
 import path from 'node:path'
 import WebSocket from 'ws'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
+import { SOURCE_TWIN } from '../helpers/source-twin.js'
 
 let rpcId = 1
 const cleanups: Array<() => Promise<void> | void> = []
@@ -58,7 +59,7 @@ async function spawnDaemon(extraEnv: Record<string, string>): Promise<{
     'WALNUT_TURN_RETRY_BACKOFF_MAX_MS',
   ]) delete env[key]
 
-  const proc = spawn(process.execPath, [scriptPath, '--start'], {
+  const proc = spawn(SOURCE_TWIN.file, [scriptPath, '--start'], {
     env: {
       ...env,
       WALNUT_DAEMON_DIR: daemonDir,

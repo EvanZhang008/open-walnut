@@ -40,6 +40,7 @@ vi.mock('../../src/core/session-tracker.js', async (orig) => ({
 import express from 'express'
 import request from 'supertest'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
+import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import { DaemonConnection } from '../../src/providers/daemon-connection.js'
 import { attachBridge, closeAllBridges, bridgeForHost } from '../../src/web/ws/bridge-registry.js'
 import { asksV1Router, computeAgentAsks } from '../../src/web/routes/asks-v1.js'
@@ -69,7 +70,7 @@ function createApp() {
 async function spawnDaemon(): Promise<void> {
   const script = path.join(tmpRoot, 'daemon.cjs')
   fs.writeFileSync(script, getDaemonSource(), { mode: 0o755 })
-  const proc = spawn(process.execPath, [script, '--start'], {
+  const proc = spawn(SOURCE_TWIN.file, [script, '--start'], {
     env: {
       ...process.env,
       // Every directory the daemon owns is ours: it must never see the real

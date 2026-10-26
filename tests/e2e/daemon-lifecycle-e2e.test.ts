@@ -20,6 +20,7 @@ import fsp from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
+import { SOURCE_TWIN } from '../helpers/source-twin.js'
 
 interface DaemonProc {
   proc: ChildProcess
@@ -44,7 +45,7 @@ async function spawnDaemon(scriptPath: string, daemonDir: string): Promise<Daemo
   }
 
   // Start daemon (prints port to stdout)
-  const proc = spawn(process.execPath, [scriptPath, '--start'], {
+  const proc = spawn(SOURCE_TWIN.file, [scriptPath, '--start'], {
     env,
     stdio: ['ignore', 'pipe', 'pipe'],
     detached: false,

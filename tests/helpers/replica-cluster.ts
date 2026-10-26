@@ -6,7 +6,8 @@
  *     to a remote host) + its own local daemon, each in its own temp dirs
  *     | direct test transport: getDirectDaemonConnection('devbox', ws://127.0.0.1:<port>)
  *     v
- *   host daemon child (the source twin, daemon-source.ts, or the standalone twin, both on bun)
+ *   host daemon child (the source twin, daemon-source.ts, on the Node a host runs it on
+ *     (tests/helpers/source-twin.ts), or the standalone twin on bun)
  *     | server.configure from the Mac's real host-server manager (hosts.devbox
  *     |   server_program: replica), with WALNUT_HOST_SERVER_APP_DIR standing in
  *     |   for an install: <base>/app/dist/cli.js runs this tree's src/cli.ts on bun
@@ -62,6 +63,7 @@ import path from 'node:path'
 import { buildSync } from 'esbuild'
 import Database from '../../src/lib/sqlite.js'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
+import { SOURCE_TWIN } from './source-twin.js'
 import { bunRuntime, testBun } from './bun-runtime.js'
 
 export const ROOT = path.resolve(import.meta.dirname, '..', '..')
@@ -361,7 +363,7 @@ export async function startHostDaemon(twin: Twin, dir: string, home: string, bin
       entryPoints: [path.join(ROOT, 'src/providers/trigger-check-sidecar.ts')],
       bundle: true, platform: 'node', format: 'cjs', outfile: path.join(dir, 'trigger-check-core.cjs'), logLevel: 'silent',
     })
-    proc = spawn(HOST_RUNTIME, [script, '--start'], { env, stdio: ['ignore', 'ignore', 'pipe'] })
+    proc = spawn(SOURCE_TWIN.file, [script, '--start'], { env, stdio: ['ignore', 'ignore', 'pipe'] })
   } else {
     if (!BUN) throw new Error('the standalone twin needs bun (BUN_INSTALL, ~/.bun/bin/bun)')
     proc = spawn(BUN, [path.join(ROOT, 'src/providers/daemon-standalone.ts'), '--start'], { env, stdio: ['ignore', 'ignore', 'pipe'], cwd: ROOT })

@@ -1,6 +1,7 @@
 /**
- * The real session daemon (the JS twin from getDaemonSource) for server e2e tests,
- * with a `claude` that runs the mock CLI.
+ * The real session daemon (the JS twin from getDaemonSource, on the Node a host runs
+ * it on: tests/helpers/source-twin.ts) for server e2e tests, with a `claude` that
+ * runs the mock CLI.
  *
  * Use it when a test asserts what the daemon decides (reap exit codes, snapshots,
  * the stopped/idle projection): the in-process MockDaemon pushes no snapshots, so a
@@ -17,6 +18,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
+import { SOURCE_TWIN } from './source-twin.js'
 
 export interface DaemonTwin {
   port: number
@@ -55,7 +57,7 @@ export async function startDaemonTwin(opts: {
   }
   for (const k of TOOLCHAIN_VARS) delete env[k]
 
-  const proc = spawn(process.execPath, [script, '--start'], { env, stdio: ['ignore', 'pipe', 'ignore'] })
+  const proc = spawn(SOURCE_TWIN.file, [script, '--start'], { env, stdio: ['ignore', 'pipe', 'ignore'] })
   const port = await new Promise<number>((resolve, reject) => {
     let out = ''
     const timer = setTimeout(() => reject(new Error('daemon twin did not print its port within 30s')), 30_000)

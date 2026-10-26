@@ -19,6 +19,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
+import { SOURCE_TWIN } from '../helpers/source-twin.js'
 
 let scriptPath = ''
 let daemonDir = ''
@@ -30,7 +31,7 @@ let ws: WebSocket | null = null
 async function spawnDaemon(): Promise<void> {
   daemonDir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-crash-guard-'))
   streamsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-crash-guard-streams-'))
-  proc = spawn(process.execPath, [scriptPath, '--start'], {
+  proc = spawn(SOURCE_TWIN.file, [scriptPath, '--start'], {
     env: { ...process.env, WALNUT_DAEMON_DIR: daemonDir, WALNUT_STREAMS_DIR: streamsDir },
     stdio: ['ignore', 'pipe', 'pipe'],
   })

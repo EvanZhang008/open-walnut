@@ -38,6 +38,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
+import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import { readSpawnJournal } from '../../src/providers/external-session-scan-core.js'
 
 const ENABLED = process.env.WALNUT_REAL_SIGNAL_TEST === '1' && process.platform !== 'win32'
@@ -122,7 +123,7 @@ async function bootDaemon(scriptPath: string): Promise<void> {
     WALNUT_SPAWN_JOURNAL: journal,
   }
   fs.mkdirSync(env.TMPDIR, { recursive: true })
-  daemon = spawn(process.execPath, [scriptPath, '--start'], { env, stdio: ['ignore', 'pipe', 'pipe'] })
+  daemon = spawn(SOURCE_TWIN.file, [scriptPath, '--start'], { env, stdio: ['ignore', 'pipe', 'pipe'] })
   daemon.stderr?.resume()
   const port = await new Promise<number>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('daemon spawn timeout')), 60_000)

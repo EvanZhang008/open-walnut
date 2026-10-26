@@ -19,6 +19,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { WebSocket } from '#ws'
 import { testBun } from './bun-runtime.js'
+import { SOURCE_TWIN } from './source-twin.js'
 
 export const HOME = '/fixture/mac-home'
 export const WALNUT = 'whostalone01'
@@ -154,7 +155,7 @@ export async function startHostAloneHarness(opts: { twin?: 'source' | 'standalon
   if (twin === 'source') {
     const script = path.join(daemonDir, 'daemon.cjs')
     fs.writeFileSync(script, getDaemonSource(), { mode: 0o755 })
-    daemon = spawn(process.execPath, [script, '--start'], { env, stdio: ['ignore', 'ignore', 'pipe'] })
+    daemon = spawn(SOURCE_TWIN.file, [script, '--start'], { env, stdio: ['ignore', 'ignore', 'pipe'] })
   } else {
     if (!BUN) throw new Error('the standalone twin needs bun')
     daemon = spawn(BUN, [path.join(ROOT, 'src/providers/daemon-standalone.ts'), '--start'], { env, stdio: ['ignore', 'ignore', 'pipe'], cwd: ROOT })

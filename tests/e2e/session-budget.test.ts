@@ -21,6 +21,7 @@ import { priceSessionScan } from '../../src/core/usage/session-cost.js';
 import { sweepSessionBudgets } from '../../src/core/usage/session-budget.js';
 import * as daemonConnections from '../../src/providers/daemon-connection.js';
 import { getDaemonSource } from '../../src/providers/daemon-source.js';
+import { SOURCE_TWIN } from '../helpers/source-twin.js';
 
 const sid = 'session-budget-example';
 const nonce = randomUUID();
@@ -108,7 +109,7 @@ beforeAll(async () => {
   const env = budgetDaemonEnv(root, { walnutHome: WALNUT_HOME, extra: {
     BUDGET_FIXTURE_SID: sid, BUDGET_FIXTURE_TRANSCRIPT: transcript, BUDGET_FIXTURE_UPSTREAM_LOG: proxy,
     BUDGET_FIXTURE_WITNESS: witness, BUDGET_FIXTURE_CLEANUP: cleanupFile, BUDGET_FIXTURE_NONCE: nonce } });
-  daemon = spawn(process.execPath, [script, '--start'], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+  daemon = spawn(SOURCE_TWIN.file, [script, '--start'], { env, stdio: ['ignore', 'pipe', 'pipe'] });
   // Pinned at once: afterAll signals it only while ps still shows this very process.
   try { daemonRecord = ledger.daemonSpawned(daemon.pid!, script); }
   catch (error) { daemonUnpinned = (error as Error).message; throw error; }

@@ -86,6 +86,8 @@ export function createMockConstants(prefix = 'walnut-test', overrides: Record<st
       if (!id || !/^conv-[A-Za-z0-9-]+$/.test(id)) throw new Error(`Invalid conversation id: ${id}`);
       return id;
     },
+    isValidSessionUuid: (id: unknown): id is string =>
+      typeof id === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id),
     validateAgentId,
     agentPathSegment,
     agentIdFromPathSegment: (segment: string) => validateAgentId(decodeURIComponent(segment)),

@@ -10,8 +10,8 @@
  * with no daemon binary got no daemon at all. bun now runs the server from
  * source and every fixture server. Each case loads daemon-source.ts
  * one real way, writes the source, starts it as local-daemon.ts runs
- * daemon-fallback.cjs (process.execPath <file> --start) and sends the hello a
- * DaemonConnection sends first.
+ * daemon-fallback.cjs (<runtime> <file> --start, on the Node a host runs it on:
+ * tests/helpers/source-twin.ts) and sends the hello a DaemonConnection sends first.
  *
  * MACHINE SAFETY: HOME, the daemon dir and the streams dir are temp paths; the
  * daemon is SIGKILLed after each case.
@@ -24,6 +24,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import * as esbuild from 'esbuild'
+import { SOURCE_TWIN } from '../helpers/source-twin.js'
 
 const run = promisify(execFile)
 const REPO = path.resolve(__dirname, '../..')
@@ -81,7 +82,7 @@ async function startAndHello(script: string): Promise<Record<string, unknown>> {
   const streams = path.join(root, 'streams')
   fs.mkdirSync(home, { recursive: true })
   fs.mkdirSync(streams, { recursive: true })
-  proc = spawn(process.execPath, [script, '--start'], {
+  proc = spawn(SOURCE_TWIN.file, [script, '--start'], {
     env: {
       ...process.env,
       SHELL: '/bin/sh',

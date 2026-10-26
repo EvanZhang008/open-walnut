@@ -17,6 +17,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
+import { SOURCE_TWIN } from '../helpers/source-twin.js'
 
 const procs: ChildProcess[] = []
 const tmpDirs: string[] = []
@@ -32,7 +33,7 @@ function writeDaemonScript(): string {
 async function spawnDaemon(scriptPath: string, extraEnv: Record<string, string>): Promise<ChildProcess> {
   const daemonDir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-watchdog-dir-'))
   tmpDirs.push(daemonDir)
-  const proc = spawn(process.execPath, [scriptPath, '--start'], {
+  const proc = spawn(SOURCE_TWIN.file, [scriptPath, '--start'], {
     env: {
       ...process.env,
       WALNUT_DAEMON_DIR: daemonDir,
