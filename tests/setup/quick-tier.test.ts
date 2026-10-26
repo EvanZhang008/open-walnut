@@ -136,11 +136,22 @@ describe('every test file runs in exactly one tier', () => {
   // none of them runs nowhere, as tests/commands and tests/mcp did until
   // 2026-10-24 (excluded from quick, never included by slow); a file in two runs
   // twice. vitest.focus.config.ts collects everything on purpose and is left out.
-  const TIER_CONFIGS = ['quick', 'slow', 'e2e', 'live', 'diff-view', 'markdown', 'workflow-graph', 'notes-roundtrip']
+  // One literal import each: vite resolves an import by its own file name, and a
+  // template (`vitest.${name}.config.js`) globs for .js files that do not exist.
+  const TIER_CONFIGS: Record<string, () => Promise<{ default: any }>> = {
+    quick: () => import('../../vitest.quick.config.js'),
+    slow: () => import('../../vitest.slow.config.js'),
+    e2e: () => import('../../vitest.e2e.config.js'),
+    live: () => import('../../vitest.live.config.js'),
+    'diff-view': () => import('../../vitest.diff-view.config.js'),
+    markdown: () => import('../../vitest.markdown.config.js'),
+    'workflow-graph': () => import('../../vitest.workflow-graph.config.js'),
+    'notes-roundtrip': () => import('../../vitest.notes-roundtrip.config.js'),
+  }
 
   /** The files a config collects, matched the way vitest globs: include, minus exclude, from its root. */
   async function collects(name: string): Promise<(file: string) => boolean> {
-    let cfg: any = (await import(`../../vitest.${name}.config.js`)).default
+    let cfg: any = (await TIER_CONFIGS[name]()).default
     if (typeof cfg === 'function') cfg = await cfg({ mode: 'test', command: 'serve' })
     const t = cfg.test ?? {}
     const root = path.resolve(REPO_ROOT, t.root ?? cfg.root ?? '.')
@@ -153,7 +164,7 @@ describe('every test file runs in exactly one tier', () => {
   }
 
   it('no test file is collected by no tier or by two', async () => {
-    const matchers = await Promise.all(TIER_CONFIGS.map(async (n) => [n, await collects(n)] as const))
+    const matchers = await Promise.all(Object.keys(TIER_CONFIGS).map(async (n) => [n, await collects(n)] as const))
     const files: string[] = []
     const walk = (d: string) => {
       for (const e of fs.readdirSync(path.join(REPO_ROOT, d), { withFileTypes: true })) {
