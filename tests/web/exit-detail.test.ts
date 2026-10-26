@@ -1,11 +1,20 @@
 /**
- * The server's exit record names the error that killed it.
+ * The server's exit record names the error that killed it: message, code,
+ * syscall, errno and stack.
  *
- * 2026-10-24 06:21:55Z: prod died of an uncaught `read ECONNRESET`, and the exit
- * log kept only that message: no stack, no errno, no syscall, so the socket that
- * had no 'error' listener could not be found. Real: a child process whose
- * loopback socket gets a TCP reset with no listener, and the same exitDetail the
- * server's uncaughtException handler records (src/web/server.ts installExitDiagnostics).
+ * History: 2026-10-24 06:21:55Z prod, then on Node, died of an uncaught
+ * `read ECONNRESET` (a socket's 'error' event with no listener), and the exit
+ * log kept only that message: no stack, no errno, no syscall, so the socket
+ * could not be found. Walnut's server now runs on bun, so the child here is bun
+ * too (the runner's own, process.execPath), with the same exitDetail the
+ * server's uncaughtException handler records (src/web/server.ts
+ * installExitDiagnostics). What each case pins:
+ *   - refused: an error that really kills a bun process (a connect to a closed
+ *     loopback port, no 'error' listener) is recorded whole;
+ *   - reset: today's crash class, a TCP reset with no listener, does not kill a
+ *     bun process at all (measured on bun 1.4.4: the socket ends and closes),
+ *     which would change if a later bun made it fatal again as Node does;
+ *   - secret: credentials are redacted in the message and the stack.
  */
 import { describe, it, expect } from 'vitest'
 import { spawn } from 'node:child_process'
@@ -14,12 +23,11 @@ import path from 'node:path'
 import { exitDetail, EXIT_STACK_MAX_CHARS } from '../../src/web/exit-detail.js'
 
 const ROOT = path.resolve(__dirname, '../..')
-const TSX = path.join(ROOT, 'node_modules/.bin/tsx')
 const CHILD = path.join(__dirname, 'fixtures/exit-detail-child.ts')
 
 function runChild(mode: string): Promise<{ code: number | null; out: Record<string, unknown> }> {
   return new Promise((resolve, reject) => {
-    const child = spawn(TSX, [CHILD, mode], { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'] })
+    const child = spawn(process.execPath, [CHILD, mode], { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'] })
     let stdout = ''
     let stderr = ''
     child.stdout.on('data', (d) => { stdout += d })
@@ -32,17 +40,21 @@ function runChild(mode: string): Promise<{ code: number | null; out: Record<stri
 }
 
 describe('exitDetail on a real uncaught socket error', () => {
-  it('a reset with no error listener: message, code, syscall, errno and the stack', async () => {
-    const { code, out } = await runChild('reset')
+  it('a refused connect with no error listener kills bun: message, code, syscall, errno and the stack', async () => {
+    const { code, out } = await runChild('refused')
     expect(code).toBe(1)
-    expect(out.detail).toBe('read ECONNRESET')
-    expect(out.code).toBe('ECONNRESET')
-    expect(out.syscall).toBe('read')
+    expect(out.detail).toMatch(/^connect ECONNREFUSED 127\.0\.0\.1:\d+$/)
+    expect(out.code).toBe('ECONNREFUSED')
+    expect(out.syscall).toBe('connect')
     expect(typeof out.errno).toBe('number')
-    // The frame that raised it (a socket read, the shape the 2026-10-24 crash had)
-    // and, from Node's printed form, the class of the emitter nobody listened on.
-    expect(String(out.stack)).toMatch(/^Error: read ECONNRESET\n\s+at TCP\.onStreamRead/)
-    expect(String(out.stack)).toContain("Emitted 'error' event on Socket instance at:")
+    // The error line, then the frame that raised it as bun prints it (node:net's afterConnect).
+    expect(String(out.stack)).toMatch(/^Error: connect ECONNREFUSED 127\.0\.0\.1:\d+\n\s+at afterConnect\b/)
+  }, 60_000)
+
+  it('a reset socket with no error listener does not kill bun, so there is no record', async () => {
+    const { code, out } = await runChild('reset')
+    expect(code).toBe(0)
+    expect(out).toEqual({ alive: true, clientClosed: true })
   }, 60_000)
 
   it('redacts credentials in the message and the stack', async () => {
