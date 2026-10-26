@@ -10,13 +10,16 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { createRequire } from 'node:module'
+import { realNodeOnPath } from '../../scripts/outside-node.mjs'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { ENTRY } from '../../scripts/npm-packages.mjs'
 
 const { startDir } = createRequire(import.meta.url)('../../scripts/npm-launcher/launch.js')
 
 const ROOT = path.resolve(__dirname, '../..')
-const node = process.env.WALNUT_TEST_NODE || 'node'
+// The launcher runs on the Node npm installs it with. Under `bun --bun` the first `node` on
+// PATH is bun's own shim, so a bare 'node' would test it on bun (scripts/outside-node.mjs).
+const node = process.env.WALNUT_TEST_NODE || realNodeOnPath() || 'node'
 // The target the Node under test looks for (WALNUT_TEST_NODE may be another arch, under Rosetta say).
 const TARGET = spawnSync(node, ['-e', `process.stdout.write(require(${JSON.stringify(path.join(ROOT, 'scripts/npm-launcher/launch.js'))}).candidateTargets()[0])`], { encoding: 'utf8' }).stdout
 let tmp: string
