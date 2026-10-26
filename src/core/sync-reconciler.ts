@@ -27,6 +27,7 @@ import { bus, EventNames } from './event-bus.js';
 import { isLegacyInboxGroup, isRetiredQuickStartGroup } from '../utils/format.js';
 import { isRemoteIdBlocked, isRemoteIdClaimedByLiveTask, liveTaskSource, recordRemoteLink } from './task-remote-links.js';
 import { preLedgerOwnerOf } from './pre-ledger-owners.js';
+import { getExtIndexSpec } from './ext-index-registry.js';
 import type { RegisteredPlugin, RemoteSyncItem, SyncPollContext } from './integration-types.js';
 import type { Task } from './types.js';
 
@@ -90,6 +91,8 @@ interface ReconcileDiffResult {
   /** Remote items matched to a local task via a FORMER id (alias): the task
    *  adopts the remote's current id instead of a duplicate being created. */
   toAdopt: Array<{ local: Task; remote: RemoteSyncItem }>;
+  /** Local tasks whose join key is missing but whose ext id the remote item carries. */
+  toRejoin: Array<{ local: Task; remote: RemoteSyncItem }>;
   toRemove: Task[];
   /** Local tasks completed here whose completion the remote never received:
    *  the remote is still open and was not touched after the local completion.
@@ -193,6 +196,8 @@ type RefusalReason =
 /** What the apply pass ACTUALLY did, as opposed to what the diff intended. */
 interface ApplyOutcome {
   adopted: number;
+  /** Tasks that got back the remote join key they had lost. */
+  rejoined: number;
   created: number;
   updated: number;
   removed: number;
@@ -495,6 +500,7 @@ export class SyncReconciler {
         removed: outcome.removed,
         unchanged: diff.unchanged,
         ...(outcome.adopted > 0 ? { adopted: outcome.adopted } : {}),
+        ...(outcome.rejoined > 0 ? { rejoined: outcome.rejoined } : {}),
         ...(diff.toRepush.length > 0
           ? { repushed: outcome.repushed, repushFailed: outcome.repushFailed, repushPending: diff.toRepush.length - outcome.repushed - outcome.repushFailed }
           : {}),
@@ -629,7 +635,29 @@ export class SyncReconciler {
     const toCreate: RemoteSyncItem[] = [];
     const toUpdate: Array<{ local: Task; remote: RemoteSyncItem }> = [];
     const toAdopt: Array<{ local: Task; remote: RemoteSyncItem }> = [];
+    const toRejoin: Array<{ local: Task; remote: RemoteSyncItem }> = [];
     const toRemove: Task[] = [];
+    // A task of this source that lost the field extractRemoteId reads (a plugin
+    // whose join key is a display id, written later than the ext id) is still
+    // that remote item: the database holds `ext.<source>.id` unique per source,
+    // so a create for it is refused on every cycle. Joined by that id instead:
+    // the plugin's own UNIQUE ext path (its first registered one), never a guess.
+    const identity = getExtIndexSpec(plugin.id)?.paths[0];
+    const identityKeys = identity && identity.unique !== false && /^\$(\.[A-Za-z0-9_-]+)+$/.test(identity.json)
+      ? identity.json.slice(2).split('.')
+      : null;
+    const extIdOf = (fields: Partial<Task> | undefined): string | undefined => {
+      if (!identityKeys) return undefined;
+      let v: unknown = fields?.ext;
+      for (const k of identityKeys) v = v && typeof v === 'object' ? (v as Record<string, unknown>)[k] : undefined;
+      return typeof v === 'string' && v ? v : undefined;
+    };
+    const unkeyedByExtId = new Map<string, Task>();
+    const rejoinedTaskIds = new Set<string>();
+    for (const task of localWithoutRemoteId) {
+      const id = extIdOf(task);
+      if (id && !unkeyedByExtId.has(id)) unkeyedByExtId.set(id, task);
+    }
     const toRepush: Task[] = [];
     let unchanged = 0;
     // A task adopted via alias is accounted for — its current id pointing at
@@ -705,6 +733,27 @@ export class SyncReconciler {
         }
         continue;
       }
+      const extId = extIdOf(remote.fields);
+      const unkeyed = extId ? unkeyedByExtId.get(extId) : undefined;
+      if (unkeyed) {
+        // Joined once: a second remote item with the same ext id is not a second owner.
+        unkeyedByExtId.delete(extId!);
+        rejoinedTaskIds.add(unkeyed.id);
+        if (isPushInflight(unkeyed.id)) { unchanged++; continue; }
+        // The same Last-Write-Wins question a matched task gets: a newer remote
+        // is an update (whose ext merge also brings the key back), else only the key.
+        const remoteTime = new Date(remote.remoteUpdatedAt).getTime();
+        const threshold = Math.max(
+          unkeyed._syncedAt ? new Date(unkeyed._syncedAt).getTime() : 0,
+          unkeyed.updated_at ? new Date(unkeyed.updated_at).getTime() : 0,
+        );
+        if (remoteTime > threshold + ECHO_GRACE_MS || remoteClosedSinceLocalEdit(unkeyed, remote, ECHO_GRACE_MS)) {
+          toUpdate.push({ local: unkeyed, remote });
+        } else {
+          toRejoin.push({ local: unkeyed, remote });
+        }
+        continue;
+      }
       toCreate.push(remote);
     }
 
@@ -720,9 +769,9 @@ export class SyncReconciler {
     }
 
     // Tasks without remote ID are left alone (can't reconcile without a join key)
-    unchanged += localWithoutRemoteId.length;
+    unchanged += localWithoutRemoteId.length - rejoinedTaskIds.size;
 
-    return { toCreate, toUpdate, toAdopt, toRemove, toRepush, unchanged };
+    return { toCreate, toUpdate, toAdopt, toRejoin, toRemove, toRepush, unchanged };
   }
 
   // ── Private: Apply diff ──
@@ -734,7 +783,7 @@ export class SyncReconciler {
   ): Promise<ApplyOutcome> {
     const source = `${pluginId}-reconcile`;
     let changeCount = 0;
-    const outcome: ApplyOutcome = { adopted: 0, created: 0, updated: 0, removed: 0, repushed: 0, repushFailed: 0, refusals: new Map() };
+    const outcome: ApplyOutcome = { adopted: 0, rejoined: 0, created: 0, updated: 0, removed: 0, repushed: 0, repushFailed: 0, refusals: new Map() };
     /** Count this item against the project that refused it (for the caller's log). */
     const noteRefusal = (project: string, reason: RefusalReason, claimedBy?: string): void => {
       const entry = outcome.refusals.get(project);
@@ -860,6 +909,39 @@ export class SyncReconciler {
       } catch (err) {
         log.web.warn('sync-reconciler: bulk adopt failed', {
           pluginId, batchSize: adoptPatches.length,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
+    // ── Rejoins — the task gets back the join key it lost, nothing else ──
+    // The remote is not newer here, so the local ext wins every key it has; the
+    // remote only fills the keys it lacks (the join key). The next cycle then
+    // matches the task by extractRemoteId and compares it as usual.
+    if (diff.toRejoin.length > 0) {
+      const patches = diff.toRejoin.map(({ local, remote }) => ({
+        id: local.id,
+        patch: {
+          ext: {
+            ...local.ext,
+            [pluginId]: {
+              ...(remote.fields.ext?.[pluginId] as Record<string, unknown> | undefined),
+              ...((local.ext?.[pluginId] ?? {}) as Record<string, unknown>),
+            },
+          },
+        } as Partial<Task>,
+      }));
+      try {
+        const { changed } = await updateTasksBulk(patches);
+        for (const task of changed) bus.emit(EventNames.TASK_UPDATED, { task }, [], { source });
+        changeCount += changed.length;
+        outcome.rejoined = changed.length;
+        log.web.info('sync-reconciler: rejoined tasks that lost their remote join key', {
+          pluginId, count: changed.length, taskIds: changed.map(t => t.id).slice(0, 20),
+        });
+      } catch (err) {
+        log.web.warn('sync-reconciler: bulk rejoin failed', {
+          pluginId, batchSize: patches.length,
           error: err instanceof Error ? err.message : String(err),
         });
       }
