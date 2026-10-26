@@ -371,13 +371,15 @@ const STARTING_STATES = new Set<PluginLifecycleState>(['discovered', 'activating
 /**
  * Whether a plugin that has no routes right now is on its way up, and its name when known: the boot
  * load before it settles (a plugin not discovered yet may be one), a reload of it or of a plugin it
- * depends on (its record is forgotten and made again), or a lifecycle step in between. The route
- * dispatcher answers 503 `plugin_starting` for such a plugin instead of a 404.
+ * depends on (its record is forgotten and made again), a lifecycle step in between, or a server
+ * shutting down for the next one (each plugin is disabled in turn while HTTP still answers: a
+ * deploy's mail console read 404 at 23:04:42 on 2026-10-26). The route dispatcher answers 503
+ * `plugin_starting` for such a plugin instead of a 404.
  */
 export function pluginStarting(registry: IntegrationRegistry, pluginId: string): { name?: string } | undefined {
   const record = pluginManagers.get(registry)?.get(pluginId);
   const named = record?.name ? { name: record.name } : {};
-  if (reloadingIds.get(registry)?.has(pluginId)) return named;
+  if (reloadingIds.get(registry)?.has(pluginId) || registry.isClosing()) return named;
   if (record) return STARTING_STATES.has(record.state) ? named : undefined;
   return isPluginCatalogueLoading(registry) ? {} : undefined;
 }

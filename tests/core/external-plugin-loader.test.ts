@@ -604,6 +604,52 @@ export async function activate(walnut) {
     expect(pluginStarting(registry, 'slow-start')).toBeUndefined();
   });
 
+  it('a server shutting down answers 503 plugin_starting for a plugin it already stopped, never 404 (2026-10-26)', async () => {
+    // A deploy disables the plugins one by one while HTTP still answers: the mail console read
+    // "Not found: GET /api/plugins/mail/accounts" from a plugin that was already down.
+    for (const id of ['stop-a', 'stop-b']) {
+      const dir = path.join(tmpDir, 'plugins', id);
+      await writeCountingUnifiedPlugin(dir, id);
+      await fsp.writeFile(path.join(dir, 'dist/server.mjs'), `
+export async function activate(walnut) {
+  walnut.http.route('GET', '/value', () => ({ json: { up: true } }));
+}
+export async function deactivate() {
+  const stopped = (globalThis.__stopped ??= []);
+  stopped.push(${JSON.stringify(id)});
+  if (stopped.length === 2) await globalThis.__stopGate;
+}
+`);
+    }
+    const registry = new IntegrationRegistry();
+    const app = express().use('/api/plugins', createPluginRouteDispatcher(registry, { starting: (id) => pluginStarting(registry, id) }));
+    await load(registry);
+    expect((await request(app).get('/api/plugins/stop-a/value')).body).toEqual({ up: true });
+    expect((await request(app).get('/api/plugins/stop-b/value')).body).toEqual({ up: true });
+
+    const globals = globalThis as Record<string, unknown>;
+    let open!: () => void;
+    globals.__stopGate = new Promise<void>((resolve) => { open = resolve; });
+    try {
+      registry.beginClosing();
+      const disposing = disposeLoadedPlugins(registry);
+      const stopped = () => (globals.__stopped as string[] | undefined) ?? [];
+      for (let tries = 0; stopped().length < 2 && tries < 500; tries += 1) await new Promise((resolve) => setTimeout(resolve, 10));
+      // One plugin is down for good, the other is still stopping: both are the next server's to answer.
+      expect(stopped()).toHaveLength(2);
+      const down = await request(app).get(`/api/plugins/${stopped()[0]}/value`);
+      expect(down.status).toBe(503);
+      expect(down.body.error).toBe('plugin_starting');
+      expect(down.headers['retry-after']).toBe('2');
+      open();
+      await disposing;
+    } finally {
+      delete globals.__stopGate;
+      delete globals.__stopped;
+      open?.();
+    }
+  });
+
   it('a plugin whose activate keeps throwing stays `failed` with its error, and recovers on its own once fixed', async () => {
     // A CAUGHT activation failure cannot hurt the process, so it must not quarantine
     // across reloads: the row shows the real error, and fixing the plugin is enough.
