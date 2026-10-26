@@ -419,9 +419,12 @@ export async function transferTask(req: TransferRequest, transferId = `xf-${rand
   const hosts = config.hosts ?? {};
   const known = new Set(Object.entries(hosts).filter(([, h]) => (h as { enabled?: boolean }).enabled !== false).map(([k]) => k));
   const plan = planTransfer(task, session, req, known);
-  // The SDK session server starts fresh sessions and cannot fork one: the
-  // conversation is replayed instead (a fork there would never confirm).
-  if (plan.history === 'native-copy' && config.session_server?.enabled) plan.history = 'replay';
+  // The SDK session server starts fresh sessions and cannot fork one: while
+  // starts go through it, the conversation is replayed instead. Its live link
+  // decides, not session_server.enabled (a server that never connected leaves
+  // every start on the CLI path, which forks).
+  const { startsThroughSessionServer } = await import('../sessions/session-server-state.js');
+  if (plan.history === 'native-copy' && startsThroughSessionServer()) plan.history = 'replay';
   if (session.process_status === 'running') {
     throw new TransferError('The task\'s session is in the middle of a turn. Wait for it to finish (or stop it), then transfer, so nothing it does is left behind.', 409, 'source_busy');
   }

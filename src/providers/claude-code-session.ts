@@ -28,6 +28,7 @@ import fsp from 'node:fs/promises'
 import path from 'node:path'
 import crypto from 'node:crypto'
 import { bus, EventNames, eventData } from '../core/event-bus.js'
+import { registerSessionServerProbe } from '../core/sessions/session-server-state.js'
 import { CostWatermark } from '../core/usage/cost-watermark.js'
 import { COMPACTED_MESSAGE, COMPACTING_MESSAGE, compactedDetail, firstSightingOfLine } from '../core/stream/compaction-notice.js'
 import { HOOK_LIFECYCLE_SUBTYPES, hookFailureNotice } from '../core/stream/hook-notice.js'
@@ -9114,6 +9115,8 @@ export class SessionRunner {
    */
   setSdkClient(client: SessionServerClient): void {
     this.sdkClient = client
+    // Readers that must know where a start goes (a transfer's fork) ask the live link.
+    registerSessionServerProbe(() => !!this.sdkClient?.connected)
   }
 
   /**

@@ -17,6 +17,7 @@ const edges = vi.hoisted(() => ({
   cwds: [] as Array<{ cwd: string; host?: string }>,
   hosts: {} as Record<string, unknown>,
   sessionServer: false,
+  serverConnected: false,
   failStart: false,
 }));
 
@@ -29,6 +30,10 @@ vi.mock('../../../src/core/config-manager.js', async (orig) => {
   const real = await orig<typeof import('../../../src/core/config-manager.js')>();
   return { ...real, getConfig: async () => ({ ...(await real.getConfig()), hosts: edges.hosts, ...(edges.sessionServer ? { session_server: { enabled: true } } : {}) }) };
 });
+vi.mock('../../../src/core/sessions/session-server-state.js', () => ({
+  startsThroughSessionServer: () => edges.serverConnected,
+  registerSessionServerProbe: () => {},
+}));
 vi.mock('../../../src/core/sessions/ensure-cwd.js', () => ({
   ensureCwd: async (cwd: string, host?: string) => { edges.cwds.push({ cwd, host }); },
 }));
@@ -58,6 +63,7 @@ vi.mock('../../../src/core/transfer/workspace.js', async (orig) => ({
 // The target resolves its own symlinks (macOS: /work is a link to /private/work here).
 vi.mock('../../../src/core/transfer/daemon-transfer-client.js', () => ({
   realpathOn: async (_host: string, p: string) => `/private${p}`,
+  findTranscript: async (_host: string, sid: string) => ({ kind: 'one', path: `/Users/me/.claude/projects/-work-repo/${sid}.jsonl` }),
   probeHostFacts: async () => { throw new Error('no probe in this test'); },
 }));
 vi.mock('../../../src/core/transfer/brief.js', () => ({
@@ -91,7 +97,7 @@ beforeEach(async () => {
   await fsp.rm(WALNUT_HOME, { recursive: true, force: true });
   await fsp.mkdir(WALNUT_HOME, { recursive: true });
   edges.starts.length = 0; edges.forks.length = 0; edges.writes.length = 0; edges.copies.length = 0; edges.cwds.length = 0;
-  edges.hosts = {}; edges.failStart = false; edges.sessionServer = false;
+  edges.hosts = {}; edges.failStart = false; edges.sessionServer = false; edges.serverConnected = false;
 });
 
 afterEach(async () => {
@@ -163,13 +169,27 @@ describe('transferTask', () => {
     expect(edges.writes.some((w) => w.path.endsWith('/transcript.md'))).toBe(true);
   });
 
-  it('with the SDK session server on, a model change replays instead of forking (that path cannot fork)', async () => {
-    edges.sessionServer = true;
+  it('while starts go through the SDK session server, a model change replays instead of forking (that path cannot fork)', async () => {
+    edges.serverConnected = true;
     const src = await taskWithConversation();
     const res = await transferTask({ taskId: src, model: 'sonnet' });
     expect(res.history).toBe('replay');
     expect(edges.forks).toHaveLength(0);
     expect(edges.starts).toHaveLength(1);
+  });
+
+  it('a session server that is configured but not connected leaves the model change a native fork (starts go through the CLI)', async () => {
+    edges.sessionServer = true;
+    const src = await taskWithConversation();
+    const run = transferTask({ taskId: src, model: 'sonnet' }).catch((e) => e);
+    await vi.waitFor(() => expect(edges.forks).toHaveLength(1));
+    expect(edges.starts).toHaveLength(0);
+    // End the wait for the fork's init at once: the runner refuses this start.
+    const { bus, EventNames } = await import('../../../src/core/event-bus.js');
+    bus.emit(EventNames.TRANSFER_FORK_INIT, {
+      attemptId: edges.forks[0].input.transferAttemptId as string, preassignedId: null, actualId: '', renamed: false, refused: 'test',
+    }, ['transfer'], { source: 'test' });
+    expect(await run).toMatchObject({ code: 'fork_refused' });
   });
 
   it('a transfer to another directory names it, and the next transfer replaces that layer', async () => {
