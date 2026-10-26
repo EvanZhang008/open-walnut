@@ -64,14 +64,15 @@ function safeDecode(part: string): string {
 export const formatLane = (ms: number) => (ms <= 0 ? '0m' : formatDuration(ms))
 
 /**
- * One whole unit for the header pill ("2h", not "2h 46m"): the largest unit, rounded
- * down, so a lane never reads as more than it was. Minutes under an hour, hours up to
- * 99, then days. The pill's hover and its aria-label carry the exact numbers.
+ * One whole unit for the header pill ("2h", not "2h 46m"): the largest unit of the
+ * exact line's own minutes (formatLane rounds to the minute), the rest dropped, so the
+ * pill never reads more than its hover does ("6m" never sits on "7m"). Minutes under
+ * an hour, hours up to 99, then days. The hover and the aria-label carry the exact line.
  */
 export function formatLaneCompact(ms: number): string {
   if (ms <= 0) return '0m'
   if (ms < 60_000) return '<1m'
-  const minutes = Math.floor(ms / 60_000)
+  const minutes = Math.round(ms / 60_000)
   if (minutes < 60) return `${minutes}m`
   const hours = Math.floor(minutes / 60)
   if (hours < 100) return `${hours}h`
