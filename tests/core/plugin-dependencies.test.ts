@@ -588,7 +588,9 @@ describe('restore pass over a dependent graph', () => {
       .toEqual(['active', 'active', 'active', 'active', 'active']);
     expect(record(registry, 'orphan')?.state).toBe('needs-dependency');
     // The guard on the guard: discovered before the chain it ends, or the trap is not armed.
-    const dirs = await fsp.readdir(path.join(WALNUT_HOME, 'plugins'));
+    // The loader reads plugin directories by name, not in the file system's order (bun's
+    // readdir does not sort, Node's does), so the order to check is the sorted one.
+    const dirs = (await fsp.readdir(path.join(WALNUT_HOME, 'plugins'))).sort();
     expect(dirs.indexOf('a-delta')).toBeLessThan(dirs.indexOf('b-gamma'));
     return registry;
   }

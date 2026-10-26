@@ -78,7 +78,8 @@ const Database = typeof driver === 'function' ? driver : driver.default
 let db
 try {
   db = new Database(workerData.file, { readonly: true, fileMustExist: true })
-  const rows = db.prepare("SELECT id, ext FROM tasks WHERE ext IS NOT NULL AND ext != '{}'").all()
+  // Single quotes in the worker's JS too: a SQL-shaped text keeps no double quote (sqlite-double-quote-ratchet).
+  const rows = db.prepare('SELECT id, ext FROM tasks WHERE ext IS NOT NULL AND ext != \'{}\'').all()
   parentPort.postMessage({ ok: true, rows })
 } catch (err) {
   parentPort.postMessage({ ok: false, error: String(err && err.message || err) })

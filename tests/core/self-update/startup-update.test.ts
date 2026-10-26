@@ -334,7 +334,7 @@ describe('the start\'s own end', () => {
     stop.fire(new Error('it took longer than 60 s'))
     const out = await pending
     expect(out).toMatchObject({ kind: 'continue', decision: { action: 'install' } })
-    expect(startInstall).toHaveBeenCalledWith('npm', ['install', '-g', 'open-walnut@0.6.0', ALLOW], '0.6.0')
+    expect(startInstall).toHaveBeenCalledWith('npm', ['install', '-g', 'open-walnut@0.6.0', '--allow-scripts=open-walnut'], '0.6.0')
     expect(run).not.toHaveBeenCalled()
     expect(reexec).not.toHaveBeenCalled()
     expect(job.quiet).toHaveBeenCalled()

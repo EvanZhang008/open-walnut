@@ -194,7 +194,9 @@ describe.skipIf(shellNice > 0 || !hasProbe)('dev-prod.sh dry run (whole script, 
   it.skipIf(fixedBunPlaces.some((p) => fs.existsSync(p)))('refuses, before any step, a machine whose bun is older than the pin', async () => {
     const tools = standIns('0.0.1')
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'devprod-home-'))
-    const r = await dryRun({ PATH: guardedPath([tools], '/usr/bin:/bin:/usr/sbin:/sbin'), HOME: home })
+    // Under `bun run` (CI) npm_execpath names the bun running vitest, and find_bun takes it
+    // before PATH, as it takes WALNUT_BUN: clear both, or that bun answers the pin.
+    const r = await dryRun({ PATH: guardedPath([tools], '/usr/bin:/bin:/usr/sbin:/sbin'), HOME: home, npm_execpath: '', WALNUT_BUN: '' })
     expect(r.status).toBe(1)
     expect(r.stderr).toMatch(new RegExp(`needs bun ${BUN_PIN.replace(/\./g, '\\.')} or newer`))
     expect(r.stderr).toMatch(/Found only: 0\.0\.1 at /)

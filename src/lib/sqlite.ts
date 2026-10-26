@@ -471,7 +471,15 @@ class SqliteDatabase {
     const timeout = options.timeout ?? 5000
     this.busyTimeout = Math.max(0, Math.floor(timeout))
     this.db.exec(`PRAGMA busy_timeout = ${Math.max(0, Math.floor(timeout))}`)
-    if (!hasCompiledDefaults(this.db)) this.db.exec('PRAGMA foreign_keys = ON; PRAGMA cache_size = -16000')
+    if (!hasCompiledDefaults(this.db)) {
+      this.db.exec('PRAGMA foreign_keys = ON')
+      // cache_size reads the schema, so a file that is not a database (or a corrupt one) would
+      // refuse it here, at open (Linux, where bun's own SQLite lacks the compiled defaults).
+      // better-sqlite3 opens such a file and refuses its first statement: keep that order.
+      try { this.db.exec('PRAGMA cache_size = -16000') } catch (err) {
+        if (!/^SQLITE_(NOTADB|CORRUPT)/.test(String((err as { code?: unknown }).code ?? ''))) throw err
+      }
+    }
     // On macOS bun uses the system SQLite, which keeps a WAL database's -wal and
     // -shm files after the last connection closes; better-sqlite3's SQLite removes them.
     const persistWal = bun.constants.SQLITE_FCNTL_PERSIST_WAL

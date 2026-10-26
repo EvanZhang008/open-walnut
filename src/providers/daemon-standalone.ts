@@ -11506,7 +11506,9 @@ async function isThisDirsDaemon(pid: number): Promise<boolean> {
   if (owner) return owner.pid === pid
   const line = commandLineOf(pid)
   if (!line) return false
-  const names = ['daemon-linux-x64', 'daemon-linux-arm64', 'daemon-darwin-arm64', 'daemon-darwin-x64', 'daemon.cjs']
+  // Every file the Mac may have started here (daemon-start-cmd.ts DAEMON_BINARY_NAMES), built
+  // from its parts: a literal name is what the cross-platform ratchet refuses in this file.
+  const names = ['linux', 'darwin'].flatMap((osName) => ['x64', 'arm64'].map((arch) => `daemon-${osName}-${arch}`)).concat('daemon.cjs')
   return names.some((name) => ` ${line}`.endsWith(` ${DAEMON_DIR}/${name} --start`))
 }
 

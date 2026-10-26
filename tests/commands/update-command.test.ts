@@ -75,7 +75,7 @@ describe('planUpdate', () => {
     expect(plan.install).toEqual({ file: 'npm', args: ['install', '-g', 'open-walnut@0.6.0', '--allow-scripts=open-walnut'] })
     expect(plan.lines).toEqual([
       'A newer Open Walnut is available: 0.5.1 → 0.6.0.',
-      `Running: npm install -g open-walnut@0.6.0`,
+      'Running: npm install -g open-walnut@0.6.0 --allow-scripts=open-walnut',
     ])
   })
 
@@ -142,7 +142,7 @@ describe('runUpdateWith', () => {
     // Still its own npm update, the line beside it.
     const again = deps(NPM_NEWER, { brewHint: async () => brew })
     expect(await runUpdateWith({}, { json: false }, again.d)).toBe(0)
-    expect(again.run).toHaveBeenCalledWith('npm', ['install', '-g', 'open-walnut@0.6.0', ALLOW], undefined)
+    expect(again.run).toHaveBeenCalledWith('npm', ['install', '-g', 'open-walnut@0.6.0', '--allow-scripts=open-walnut'], undefined)
     expect(again.out).toContain(brew.note)
   })
 

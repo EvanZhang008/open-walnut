@@ -13553,7 +13553,9 @@ async function isThisDirsDaemon(pid) {
   }
   const line = commandLineOf(pid);
   if (!line) return false;
-  const names = ['daemon-linux-x64', 'daemon-linux-arm64', 'daemon-darwin-arm64', 'daemon-darwin-x64', 'daemon.cjs'];
+  // Every file the Mac may have started here (daemon-start-cmd.ts DAEMON_BINARY_NAMES), built
+  // from its parts: a literal name is what the cross-platform ratchet refuses in this file.
+  const names = ['linux', 'darwin'].flatMap(function (osName) { return ['x64', 'arm64'].map(function (arch) { return 'daemon-' + osName + '-' + arch; }); }).concat('daemon.cjs');
   return names.some(function (name) { return (' ' + line).endsWith(' ' + DAEMON_DIR + '/' + name + ' --start'); });
 }
 

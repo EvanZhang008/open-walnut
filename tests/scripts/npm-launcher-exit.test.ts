@@ -81,7 +81,9 @@ describe('the npm launcher exits as its file did', () => {
       process.env.PWD = '/made/again'
       expect(startDir('/pkg', gone, (p: string) => p === '/made/again')).toBe('/made/again')
       expect(startDir('/pkg', gone, (p: string) => p === '/pkg')).toBe('/pkg')
-      expect(startDir('/pkg', gone, () => false)).toBe(os.homedir())
+      // The launcher's own node:os (createRequire skips the test's mocked one): under bun its
+      // homedir() keeps the HOME the process started with, not the fake HOME the setup assigns.
+      expect(startDir('/pkg', gone, () => false)).toBe(createRequire(import.meta.url)('node:os').homedir())
     } finally {
       if (pwd === undefined) delete process.env.PWD
       else process.env.PWD = pwd

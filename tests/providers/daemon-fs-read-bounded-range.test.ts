@@ -48,7 +48,11 @@ for (const twin of ['standalone', 'source'] as const) {
         expect(chunk.length).toBeLessThanOrEqual(1024 * 1024)
         chunks.push(chunk)
       }
-      expect(Buffer.concat(chunks)).toEqual(bytes)
+      // toEqual walks a 3 MB buffer one element at a time (over the quick tier's 15 s under
+      // bun): compare the bytes natively, and say where they differ when they do.
+      const joined = Buffer.concat(chunks)
+      expect(joined.length).toBe(bytes.length)
+      if (!joined.equals(bytes)) expect.fail(`the chunks differ from the file at byte ${joined.findIndex((b, i) => b !== bytes[i])}`)
       const legacy = await call({ path: file })
       expect(legacy.ok).toBe(false)
       expect(legacy.error).toContain('(EFBIG)')

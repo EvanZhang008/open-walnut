@@ -21,8 +21,13 @@ import { spawnSync } from 'node:child_process'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
 
 let tmpDir = ''
-/** A child's last line: its own peak RSS (KB on Node and bun). */
-const PEAK_LINE = 'console.log(JSON.stringify({ maxRSSkb: process.resourceUsage().maxRSS }));'
+/**
+ * A child's last line: its own peak RSS in KB. On Linux that is VmHWM: getrusage's
+ * maxRSS survives execve there, so a child spawned from a 300MB worker reports
+ * 300MB before it does anything (measured: maxRSS 324564, VmHWM 16668). macOS
+ * has no /proc, and its maxRSS starts with the new image.
+ */
+const PEAK_LINE = "console.log(JSON.stringify({ maxRSSkb: (() => { try { return Number(/VmHWM:\\s+(\\d+)/.exec(require('fs').readFileSync('/proc/self/status', 'utf8'))[1]) } catch { return 0 } })() || process.resourceUsage().maxRSS }));"
 let jsonlPath = ''
 
 /** Extract a top-level `function <name>(...) {...}` from the emitted template. */

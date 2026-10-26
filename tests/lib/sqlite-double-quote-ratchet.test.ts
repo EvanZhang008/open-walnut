@@ -25,8 +25,8 @@ const ROOT = path.resolve(import.meta.dirname, '../..')
 /** Text that reads as SQL: a statement's head or a clause. Walnut writes SQL keywords in capitals. */
 const SQL = /\bSELECT\b[\s\S]*\bFROM\b|\bINSERT\s+(?:OR\s+[A-Z]+\s+)?INTO\b|\bUPDATE\s+\w+\s+SET\b|\bDELETE\s+FROM\b|\b(?:CREATE|DROP)\s+(?:UNIQUE\s+|VIRTUAL\s+|TEMP\s+)?(?:TABLE|INDEX|VIEW|TRIGGER)\b|\bALTER\s+TABLE\b|\bPRAGMA\s+\w|\bWHERE\s+[\w.(]|\bFROM\s+\w|\bVALUES\s*\(|\b(?:ORDER|GROUP)\s+BY\s+\w|\bJOIN\s+\w/
 
-/** A double quote Walnut means: an interpolated name after INDEX/TABLE/VIEW/TRIGGER, or an FTS5 option's value. */
-const QUOTED_NAME = /(?:\b(?:INDEX|TABLE|VIEW|TRIGGER)(?:\s+IF(?:\s+NOT)?\s+EXISTS)?\s+|\btokenize\s*=\s*)"\$\{\}"/g
+/** A double quote Walnut means: an interpolated name after INDEX/TABLE/VIEW/TRIGGER (a schema before it too), or an FTS5 option's value. */
+const QUOTED_NAME = /(?:\b(?:INDEX|TABLE|VIEW|TRIGGER)(?:\s+IF(?:\s+NOT)?\s+EXISTS)?\s+(?:\w+\.)?|\btokenize\s*=\s*)"\$\{\}"/g
 
 /** Interpolations read as `${}`; SQL comments and single-quoted strings removed. */
 function strayDoubleQuotes(sql: string): boolean {
@@ -84,6 +84,7 @@ describe('SQL in src/ writes strings in single quotes', () => {
       "SELECT id FROM tasks WHERE state = 'done'",
       "SELECT name FROM sqlite_master WHERE name LIKE 'say \"hi\"'",
       'DROP INDEX IF EXISTS "${}";',
+      'DROP TRIGGER IF EXISTS main."${}"',
       "CREATE UNIQUE INDEX IF NOT EXISTS \"${}\" ON tasks(json_extract(ext, '${}'))",
       'CREATE VIRTUAL TABLE IF NOT EXISTS doc_fts USING fts5(title, tokenize="${}")',
       'CREATE TABLE t (\n  -- asks "is there any"\n  id TEXT\n)',

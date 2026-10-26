@@ -72,6 +72,11 @@ vi.mock('ws', async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>()
   return { ...actual, WebSocket: fake.FakeWebSocket, default: fake.FakeWebSocket }
 })
+// daemon-connection imports `#ws`, which bun resolves to src/lib/ws-npm.ts (the npm package by path), not to `ws`.
+vi.mock('#ws', async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>()
+  return { ...actual, WebSocket: fake.FakeWebSocket, default: fake.FakeWebSocket }
+})
 vi.mock('../../src/constants.js', () => createMockConstants())
 vi.mock('../../src/providers/ssh-credential-evidence.js', async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>()

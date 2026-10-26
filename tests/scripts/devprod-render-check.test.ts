@@ -16,7 +16,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { spawn } from 'node:child_process';
 import { createServer, type Server } from 'node:http';
-import { existsSync } from 'node:fs';
+import { existsSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 
 const REPO_ROOT = path.resolve(__dirname, '..', '..');
@@ -96,6 +96,7 @@ function run(url: string, extra: string[] = []): Promise<{ code: number | null; 
   return new Promise((resolve) => {
     const child = spawn(process.execPath, [SCRIPT, url, '--timeout-ms', '20000', ...extra], {
       cwd: REPO_ROOT,
+      env: BROWSERS ? { ...process.env, PLAYWRIGHT_BROWSERS_PATH: BROWSERS } : process.env,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     let out = '';
@@ -106,15 +107,25 @@ function run(url: string, extra: string[] = []): Promise<{ code: number | null; 
   });
 }
 
-const hasChromium = (() => {
+/**
+ * The browsers directory THIS process sees, handed to the script as well. Under bun
+ * os.homedir() keeps the HOME the process started with, while the test setup fakes
+ * HOME for every child, so the two would look in different places: the gate would
+ * find a browser the script cannot. headless: true launches the headless shell.
+ */
+const BROWSERS = (() => {
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const pw = require('playwright');
-    return existsSync(pw.chromium.executablePath());
+    const exe: string = require('playwright').chromium.executablePath();
+    const parts = exe.split(path.sep);
+    const at = parts.findIndex((p) => /^chromium[-_]/.test(p));
+    return at > 0 && existsSync(exe) ? parts.slice(0, at).join(path.sep) : null;
   } catch {
-    return false;
+    return null;
   }
 })();
+const hasChromium = BROWSERS !== null
+  && readdirSync(BROWSERS).some((name) => name.startsWith('chromium_headless_shell-'));
 
 describe.skipIf(!hasChromium)('devprod-render-check.mjs verdicts', () => {
   it('0: a page whose #root mounted is OK', async () => {
