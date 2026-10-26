@@ -126,8 +126,13 @@ describe('git-compaction', () => {
     repoDir = createTempRepo();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     removeTempRepo(repoDir);
+    // Every test here is synchronous (execSync all the way down), so without a
+    // yield the whole file is one task and the worker reads no reply from
+    // vitest's main process until it ends. Where a spawn costs ~26 ms (bun on
+    // a Linux kernel before 5.11) that took 80 s, past vitest's 60 s RPC timeout.
+    await new Promise<void>((resolve) => setImmediate(resolve));
   });
 
   // -------------------------------------------------------------------------

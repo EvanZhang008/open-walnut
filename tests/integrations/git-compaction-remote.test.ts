@@ -27,10 +27,13 @@ function tmp(prefix: string): string {
   return dir;
 }
 
-afterEach(() => {
+afterEach(async () => {
   for (const dir of tempDirs.splice(0)) {
     try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
   }
+  // Synchronous tests: yield so the worker reads vitest's replies between them
+  // (see git-compaction.test.ts).
+  await new Promise<void>((resolve) => setImmediate(resolve));
 });
 
 function sh(cwd: string, cmd: string): string {
