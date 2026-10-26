@@ -9,7 +9,7 @@ import { isPersonAtThisMachine } from './expose.js'
 import { getConfig } from '../../core/config-manager.js'
 import { CLOUD_MODE } from '../../constants.js'
 import { validateBearerCredential } from '../middleware/auth.js'
-import { createDesktopUpdateCache, EMPTY_DESKTOP_UPDATE } from './desktop-update-cache.js'
+import { createDesktopUpdateCache, EMPTY_DESKTOP_UPDATE, type DesktopUpdateAnswer } from './desktop-update-cache.js'
 import { getBuildInfo } from '../../lib/build-info.js'
 
 export const systemRouter = Router()
@@ -85,10 +85,11 @@ systemRouter.get('/desktop-update', async (req, res) => {
   // The last answer, refreshed behind the request (desktop-update-cache.ts).
   res.json(await desktopUpdateCache.get(daemon, async () => {
     const result = await daemon.send('desktop.updateStatus', {}, 7000)
+    // The daemon's reply is untyped JSON; it is relayed field for field as before.
     return result.ok ? {
       available: result.available, token: result.token, version: result.version, restarting: result.restarting, error: result.error,
       ...(typeof result.windows === 'number' ? { windows: result.windows } : {}),
-    } : EMPTY_DESKTOP_UPDATE
+    } as DesktopUpdateAnswer : EMPTY_DESKTOP_UPDATE
   }))
 })
 
