@@ -39,6 +39,7 @@ import { senderLabelOf } from './LetterEnvelopeRow';
 import { useLetterEvents } from '@/hooks/useHumanInbox';
 import { useLetterEnvelope } from './letter-store';
 import { sessionInboxLetterHref } from './session-inbox-link';
+import { useThreadPane } from './useThreadPane';
 import '@/styles/human-inbox.css';
 
 /** Where a file reference in a letter body should open. */
@@ -220,10 +221,16 @@ export function LetterView({
     }
   }, [busy, letterId, freeText, applyResult]);
 
+  const turns = letter?.thread.length ?? 0;
+  const thread = useThreadPane({ letterId, turns, enabled: turns > 0 });
+  const followThread = thread.follow;
+
   const onReply = useCallback(async () => {
     const text = replyText.trim();
     if (!text || busy) return;
     setBusy(true);
+    // The human's own reply always comes into view, wherever they were reading.
+    followThread();
     try {
       const result = await humanReplyToLetter(letterId, text);
       applyResult(result.letter, deliveryText(result.delivery, result.reason));
@@ -235,7 +242,7 @@ export function LetterView({
     } finally {
       setBusy(false);
     }
-  }, [replyText, busy, letterId, applyResult]);
+  }, [replyText, busy, letterId, applyResult, followThread]);
 
   const answered = shown?.answered;
   const actions = shown?.actions ?? [];
@@ -254,7 +261,10 @@ export function LetterView({
   );
 
   return (
-    <div className={`hib-view${embedded ? ' hib-view-embedded' : ''}`}>
+    <div
+      ref={thread.viewRef}
+      className={`hib-view${embedded ? ' hib-view-embedded' : ''}${turns > 0 ? ' hib-view-split' : ''}`}
+    >
       <div className="hib-reader-head">
         {headLeading}
         <div className="hib-reader-title">
@@ -301,7 +311,7 @@ export function LetterView({
         </div>
       )}
 
-      <div className="hib-reader-body">
+      <div className="hib-reader-body" ref={thread.docRef}>
         {/* The decision lives ABOVE the document: an action_required letter's
             ask must be the most visible thing in it. */}
         {canDecide && (
@@ -373,16 +383,51 @@ export function LetterView({
                 ))}
               </div>
             )}
-            <LetterThread
-              entries={letter.thread}
-              letterId={letterId}
-              onNavigate={onNavigate}
-              subject={letter.subject}
-              onBodyClick={onBodyClick}
-            />
           </>
         )}
       </div>
+
+      {/* The conversation scrolls on its own, opening at the newest turn, so a
+          long document above it never stands between the human and the reply. */}
+      {letter && turns > 0 && (
+        <div className="hib-thread-pane" ref={thread.paneRef}>
+          {/* The bar is also the divider: drag it to resize, double-click to reset. */}
+          <div className="hib-thread-bar" title="Drag to resize. Double-click to reset." {...thread.barProps}>
+            <span className="hib-thread-head">Thread · {turns}</span>
+          </div>
+          <div
+            className="hib-thread-scroll"
+            ref={thread.scrollRef}
+            onScroll={thread.onScroll}
+            tabIndex={-1}
+            aria-label="Thread"
+          >
+            <div ref={thread.innerRef}>
+              <LetterThread
+                entries={letter.thread}
+                letterId={letterId}
+                onNavigate={onNavigate}
+                subject={letter.subject}
+                onBodyClick={onBodyClick}
+              />
+            </div>
+          </div>
+          <div className="hib-new-reply-seat" aria-live="polite">
+            {thread.newBelow && (
+              <button
+                type="button"
+                className="hib-new-reply"
+                onClick={() => {
+                  thread.follow();
+                  thread.scrollRef.current?.focus({ preventScroll: true });
+                }}
+              >
+                New reply ↓
+              </button>
+            )}
+          </div>
+        </div>
+      )}
 
       <div className="hib-composer">
         {delivery && <div className="hib-delivery">{delivery}</div>}

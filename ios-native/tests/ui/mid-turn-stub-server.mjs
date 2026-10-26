@@ -909,7 +909,9 @@ function sortedLetters(list) {
 
 function inboxList(archived) {
   return {
-    letters: sortedLetters(inboxLetters.filter((l) => !!l.archived === archived)),
+    // A seeded long body is the detail's, never the list's.
+    letters: sortedLetters(inboxLetters.filter((l) => !!l.archived === archived))
+      .map(({ longBody: _longBody, ...envelope }) => envelope),
     unreadCount: inboxLetters.filter((l) => !l.archived && !l.read).length,
   }
 }
@@ -942,8 +944,9 @@ function answerInbox(p, req, res, raw, url) {
   if (one && req.method === 'GET') {
     const letter = inboxLetters.find((l) => l.id === decodeURIComponent(one[1]))
     if (!letter) { notFound(res, 'no such letter'); return true }
+    const { longBody, ...envelope } = letter
     json(res, 200, {
-      letter: { ...letter, body: `# ${letter.subject}\n\nThis is the body of ${letter.id}.` },
+      letter: { ...envelope, body: longBody ?? `# ${letter.subject}\n\nThis is the body of ${letter.id}.` },
     })
     return true
   }
@@ -1030,6 +1033,11 @@ function answerInbox(p, req, res, raw, url) {
 //        agent/human exchanges, each human turn recorded with a clientId and a
 //        queued delivery: a letter taller than the screen whose newest reply
 //        already has a status line.
+//   POST /__stub/letter-reply-long?id=I&n=N → letter I (default b) becomes a
+//        daily-digest-sized html document with N exchanges under it (as
+//        letter-reply-thread) and one rich agent turn: the long-thread case.
+//   POST /__stub/letter-reply-agent?id=I&text=T → the agent answers in letter I's
+//        thread now (seen by the reader on its next re-read, e.g. a pull).
 //   GET  /__stub/letter-reply-state → every human-reply POST this generation
 //        (clientId, text, outcome), every decision answer, and each seeded
 //        letter's thread.
@@ -1140,6 +1148,46 @@ function answerLetterReplyControl(p, req, res, url) {
     letterReply.readFailCount = Math.max(0, Number(url.searchParams.get('fail') || 0))
     console.log(`[stub] letter reads → fail x${letterReply.readFailCount}`)
     return json(res, 200, { ok: true, fail: letterReply.readFailCount })
+  }
+  if (p === '/__stub/letter-reply-long' && req.method === 'POST') {
+    const id = url.searchParams.get('id') || 'lt-stub-reply-b'
+    const letter = inboxLetters.find((l) => l.id === id)
+    if (!letter) return json(res, 404, { ok: false, message: `no letter ${id}` })
+    const sections = Array.from({ length: 60 }, (_, i) =>
+      `<h3>Section ${i + 1}</h3><p>${'A long digest paragraph that goes on for a while. '.repeat(12)}</p>`).join('')
+    letter.bodyFormat = 'html'
+    letter.longBody = `<h1>${letter.subject}</h1>${sections}`
+    letter.thread = []
+    const n = Math.max(1, Math.min(20, Number(url.searchParams.get('n') || 12)))
+    const base = Date.now() - (n + 1) * 120_000
+    for (let i = 0; i < n; i++) {
+      letter.thread.push({
+        from: 'agent', at: base + i * 120_000,
+        text: `Agent note ${i + 1}: ${'I looked at the item again and here is what changed. '.repeat(i % 4 + 1)}`,
+      })
+      const at = base + i * 120_000 + 60_000
+      letter.thread.push({
+        from: 'human', at, clientId: `rp-long-${i + 1}`,
+        text: `Reply ${i + 1}: thanks, please keep going. \u8c22\u8c22\u3002`,
+        delivery: { status: 'queued', sessionId: letter.sender?.sessionId, at: at + 1_000 },
+      })
+    }
+    letter.thread.push({
+      from: 'agent', at: Date.now() - 50_000, text: 'Summary of the findings.',
+      bodyFormat: 'markdown', body: `### Summary\n\n${'- one finding with its detail\n'.repeat(10)}`,
+    })
+    letter.thread.push({ from: 'agent', at: Date.now() - 30_000, text: 'Newest agent note: all of it is done.' })
+    console.log(`[stub] letter-reply long: ${letter.thread.length} turns on ${id}`)
+    return json(res, 200, { ok: true, turns: letter.thread.length })
+  }
+  if (p === '/__stub/letter-reply-agent' && req.method === 'POST') {
+    const id = url.searchParams.get('id') || 'lt-stub-reply-b'
+    const letter = inboxLetters.find((l) => l.id === id)
+    if (!letter) return json(res, 404, { ok: false, message: `no letter ${id}` })
+    letter.thread = letter.thread || []
+    letter.thread.push({ from: 'agent', at: Date.now(), text: url.searchParams.get('text') || 'A new agent note.' })
+    console.log(`[stub] letter-reply agent turn on ${id} (${letter.thread.length} turns)`)
+    return json(res, 200, { ok: true, turns: letter.thread.length })
   }
   if (p === '/__stub/letter-reply-thread' && req.method === 'POST') {
     const id = url.searchParams.get('id') || 'lt-stub-reply-b'

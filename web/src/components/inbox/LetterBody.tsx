@@ -46,6 +46,11 @@ export function LetterBody({ body, format, subject, onClick, bodyUrl }: {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- labelsVersion invalidates ref lookups inside
     [body, format, labelsVersion, deferredSrc],
   );
+  // One object per html string: React 19 re-sets innerHTML whenever this prop's
+  // OBJECT changes, so a fresh `{ __html }` on every render rebuilt the body each
+  // time the letter refreshed, and every image in it reloaded from zero height,
+  // pushing the thread the reader was in (2026-10-25).
+  const inner = useMemo(() => ({ __html: html }), [html]);
 
   // A deferred body always renders in the frame, markdown included: the reader's
   // ref-pill rendering needs the text in JS, and a document that big is media,
@@ -77,7 +82,7 @@ export function LetterBody({ body, format, subject, onClick, bodyUrl }: {
     <div
       className="hib-md-body markdown-body"
       onClick={onClick}
-      dangerouslySetInnerHTML={{ __html: html }}
+      dangerouslySetInnerHTML={inner}
     />
   );
 }

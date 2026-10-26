@@ -2,8 +2,9 @@ import Combine
 import SwiftUI
 import UIKit
 
-/// Keeps the newest reply, and the status line under it, in view when the human
-/// has asked for it, and never moves a letter they are reading.
+/// The letter's conversation pane: opens at its newest turn, keeps the newest
+/// reply and the status line under it in view while the human is at the end,
+/// and never moves a thread they scrolled up in.
 ///
 /// Two kinds of change, two rules:
 ///  - The human's own Send (and a Retry of the newest reply) is a request to see
@@ -12,8 +13,17 @@ import UIKit
 ///    Bump `sendTick`.
 ///  - Everything else (the line going from "Sending to ..." to "Sent to ...", a
 ///    reload, the letter growing, the keyboard or the reply box changing height)
-///    follows the reply only while the reader is AT the end: they sent from here,
-///    or a finger put them there. A letter opens at its top and stays there.
+///    follows the reply only while the reader is AT the end. The conversation
+///    opens there (it has its own scroll under the document, so its end is the
+///    newest turn, not the bottom of a long document), and a finger takes the
+///    reader away from it or back to it.
+///  - A turn that arrives while the reader is up the thread moves nothing: a
+///    "New reply" button over the pane says so, and a tap on it goes to the end.
+///    While the reader is at the end, the pane is pinned there through size
+///    changes (`defaultScrollAnchor(.bottom, for: .sizeChanges)`), so a turn
+///    growing as it lays out keeps the end in view in the same layout pass;
+///    while they are up the thread, it is pinned to the top, so a new turn
+///    below does not push what they read.
 ///
 /// ONE scroll per change, after the layout it depends on has settled. While the
 /// keyboard is moving, a change's scroll waits for it to finish, and then the
@@ -44,9 +54,9 @@ import UIKit
 /// first sends from the letter's top.
 ///
 /// Following is decided by a finger: scrolling away from the end stops it,
-/// scrolling back to the end starts it again. A new appearance starts not
-/// following, so the first status changes of an open (the detail and the task
-/// titles arriving) never move the letter.
+/// scrolling back to the end starts it again. The pane opens at the end and
+/// following it; coming back to it (from a session a status line opened) keeps
+/// what the reader had.
 ///
 /// Geometry samples go into a reference box, never into observed state: an
 /// `onScrollGeometryChange` action runs inside the scroll view's layout pass, and
@@ -66,8 +76,18 @@ struct LetterFollowsNewestStatus: ViewModifier {
     /// reply's outcome, at the accessibility sizes) until it asks it to leave:
     /// that Send's scroll waits for the keyboard's move.
     var keyboardLeaving = false
+    /// The thread's length: a longer thread while the reader is up it shows
+    /// the "New reply" button.
+    var turnCount = 0
 
     @State private var intent = FollowIntent()
+    /// Published copies of `intent.following`, written only outside layout (a
+    /// scroll phase change, a tap): what the size-change anchor and the button read.
+    @State private var pinnedToEnd = true
+    @State private var newBelow = false
+    /// The first appearance opened the pane at its end. A later one (back from a
+    /// session a status line opened) keeps where the reader was.
+    @State private var opened = false
 
     final class FollowIntent {
         var following = false
@@ -136,8 +156,15 @@ struct LetterFollowsNewestStatus: ViewModifier {
                         requestScroll(proxy)
                     }
                 }
+                .defaultScrollAnchor(.bottom, for: .initialOffset)
+                .defaultScrollAnchor(pinnedToEnd ? .bottom : .top, for: .sizeChanges)
                 .onScrollPhaseChange { _, phase in
                     intent.userScrolling = phase == .interacting || phase == .decelerating
+                    if phase == .idle {
+                        // Where the finger left the reader is what the pane holds to.
+                        if pinnedToEnd != intent.following { pinnedToEnd = intent.following }
+                        if intent.following, newBelow { newBelow = false }
+                    }
                     if intent.userScrolling {
                         // A finger wins over every scroll still to come.
                         intent.sendScrollEnds = nil
@@ -152,8 +179,15 @@ struct LetterFollowsNewestStatus: ViewModifier {
                     guard intent.following, !intent.userScrolling else { return }
                     requestScroll(proxy)
                 }
+                .onChange(of: turnCount) { old, new in
+                    guard new > old, !intent.following, !newBelow else { return }
+                    newBelow = true
+                    AccessibilityNotification.Announcement("New reply").post()
+                }
                 .onChange(of: sendTick) { _, _ in
                     intent.following = true
+                    pinnedToEnd = true
+                    newBelow = false
                     guard intent.keyboardMoving || keyboardLeaving else {
                         requestScroll(proxy)
                         return
@@ -197,7 +231,37 @@ struct LetterFollowsNewestStatus: ViewModifier {
                     keyboardStopped(proxy)
                 }
                 .onAppear {
-                    intent.following = false
+                    guard !opened else { return }
+                    opened = true
+                    intent.following = true
+                    pinnedToEnd = true
+                    newBelow = false
+                }
+                .overlay(alignment: .bottom) {
+                    if newBelow {
+                        Button {
+                            intent.following = true
+                            pinnedToEnd = true
+                            newBelow = false
+                            withAnimation(.easeOut(duration: 0.3)) {
+                                proxy.scrollTo(contentId, anchor: .bottom)
+                            }
+                        } label: {
+                            Label("New reply", systemImage: "arrow.down")
+                                .font(.footnote.weight(.semibold))
+                                .padding(.horizontal, 14)
+                                .padding(.vertical, 8)
+                                .frame(minHeight: 44)
+                                .contentShape(Capsule())
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(Theme.onTint)
+                        .background(Theme.tint, in: Capsule())
+                        .shadow(color: .black.opacity(0.18), radius: 6, y: 2)
+                        .padding(.bottom, 10)
+                        .transition(.opacity)
+                        .accessibilityIdentifier("inbox.letter.newReply")
+                    }
                 }
         }
     }

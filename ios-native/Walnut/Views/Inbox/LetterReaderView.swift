@@ -52,6 +52,12 @@ struct LetterReaderView: View {
     /// From a Send at the accessibility sizes until its keyboard is asked to
     /// leave (see `handOver`); the letter's scroll for that Send waits for it.
     @State private var keyboardLeavesAfterSend = false
+    /// The two scrolls' measurements (`LetterPaneSplit`): what both panes share,
+    /// the bar between them, and each pane's content.
+    @State private var paneSpace: CGFloat = 0
+    @State private var paneBarHeight: CGFloat = 0
+    @State private var documentContentHeight: CGFloat = 0
+    @State private var conversationContentHeight: CGFloat = 0
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     /// A DEFERRED document (over the server's inline threshold) is streamed to a
     /// local file and rendered from there — never held as a String, so a 100MB
@@ -73,48 +79,7 @@ struct LetterReaderView: View {
     }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
-                if let letter {
-                    header(letter)
-                    if !letter.openActions.isEmpty { decisionCard(letter) }
-                    if let answer = letter.answered { answeredCard(letter, answer) }
-                    bodySection(letter)
-                    EmailItemsView(letterId: letterId, items: letter.items ?? [], onOpenTask: openTask)
-                    taskRefs(letter)
-                    if !letter.threadEntries.isEmpty || !replies.pendingReplies(for: letterId).isEmpty {
-                        thread(letter)
-                    }
-                    if let note = deliveryNote { deliveryLine(note) }
-                } else if loading {
-                    ProgressView("Opening…").controlSize(.large)
-                        .frame(maxWidth: .infinity, minHeight: 200)
-                } else if let loadError {
-                    ContentUnavailableView {
-                        Label("Could not open this letter", systemImage: "envelope.badge.shield.half.filled")
-                    } description: {
-                        Text(loadError)
-                    } actions: {
-                        Button("Try again") { Task { await load() } }
-                    }
-                }
-            }
-            .padding(.horizontal, 16)
-            .padding(.top, 8)
-            .padding(.bottom, 24)
-            .id(Self.contentId)
-        }
-        // Dragging the letter down puts the keyboard away, as in a chat.
-        .scrollDismissesKeyboard(.interactively)
-        .refreshable {
-            await load(markingRead: false)
-            await InboxItemStore.shared.refreshVisible()
-        }
-        // A sent reply and its status line come into view above the reply box.
-        .modifier(LetterFollowsNewestStatus(
-            key: newestStatusKey, target: newestReplyItem?.id, contentId: Self.contentId, sendTick: followTick,
-            keyboardLeaving: keyboardLeavesAfterSend
-        ))
+        panes
         // A reply on record whose delivery is still running: re-read the letter
         // until the outcome is in, so "Sending" turns into what happened.
         .modifier(LetterDeliveryWatch(
@@ -170,6 +135,120 @@ struct LetterReaderView: View {
             // as the saved-recording row.
             if voice.state == .recording { voice.preserveAndStop(reason: "view-dismissed") }
         }
+    }
+
+    // MARK: - The two scrolls
+
+    /// One scroll until the letter has a thread. Then two: the document on top
+    /// and the conversation under it (`LetterPaneSplit`), each scrolling on its
+    /// own, the conversation opening at its newest turn. A long document no
+    /// longer stands between the reader and the newest reply.
+    @ViewBuilder
+    private var panes: some View {
+        let split = letter.map(hasThread) ?? false
+        VStack(spacing: 0) {
+            // One structure either way, so the document is never rebuilt (its
+            // place and its rendered body kept) when the first reply splits it.
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    if let letter {
+                        documentContent(letter)
+                        if !split, let note = deliveryNote { deliveryLine(note) }
+                    } else if loading {
+                        ProgressView("Opening…").controlSize(.large)
+                            .frame(maxWidth: .infinity, minHeight: 200)
+                    } else if let loadError {
+                        ContentUnavailableView {
+                            Label("Could not open this letter", systemImage: "envelope.badge.shield.half.filled")
+                        } description: {
+                            Text(loadError)
+                        } actions: {
+                            Button("Try again") { Task { await load() } }
+                        }
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 8)
+                .padding(.bottom, split ? 14 : 24)
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { documentContentHeight = $0 }
+            }
+            .frame(height: split ? LetterPaneSplit.documentHeight(
+                space: paneSpace, bar: paneBarHeight,
+                document: documentContentHeight, conversation: conversationContentHeight
+            ) : nil)
+            // Dragging the letter down puts the keyboard away, as in a chat.
+            .scrollDismissesKeyboard(.interactively)
+            .refreshable { await refresh() }
+            .accessibilityIdentifier("inbox.letter.document")
+            if let letter, split {
+                conversationBar(letter)
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 14) {
+                        thread(letter)
+                        if let note = deliveryNote { deliveryLine(note) }
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.top, 10)
+                    .padding(.bottom, 24)
+                    .id(Self.contentId)
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { conversationContentHeight = $0 }
+                }
+                .scrollDismissesKeyboard(.interactively)
+                // Opens at the newest turn and follows it while the reader is at
+                // the end; a sent reply and its status line come into view above
+                // the reply box.
+                .modifier(LetterFollowsNewestStatus(
+                    key: newestStatusKey, target: nil, contentId: Self.contentId, sendTick: followTick,
+                    keyboardLeaving: keyboardLeavesAfterSend, turnCount: threadItemCount(letter)
+                ))
+                .accessibilityIdentifier("inbox.letter.conversation")
+            }
+        }
+        .onGeometryChange(for: CGFloat.self) { proxy in
+            proxy.size.height - proxy.safeAreaInsets.top - proxy.safeAreaInsets.bottom
+        } action: { paneSpace = $0 }
+    }
+
+    /// The letter itself: everything above its conversation.
+    @ViewBuilder
+    private func documentContent(_ letter: Letter) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            header(letter)
+            if !letter.openActions.isEmpty { decisionCard(letter) }
+            if let answer = letter.answered { answeredCard(letter, answer) }
+            bodySection(letter)
+            EmailItemsView(letterId: letterId, items: letter.items ?? [], onOpenTask: openTask)
+            taskRefs(letter)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func hasThread(_ letter: Letter) -> Bool {
+        !letter.threadEntries.isEmpty || !replies.pendingReplies(for: letterId).isEmpty
+    }
+
+    private func threadItemCount(_ letter: Letter) -> Int {
+        letter.threadEntries.count + replies.pendingReplies(for: letterId).count
+    }
+
+    /// The bar between the two scrolls, naming the conversation under it.
+    private func conversationBar(_ letter: Letter) -> some View {
+        Text("Thread \u{00B7} \(threadItemCount(letter))")
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 7)
+            .background(Color(.secondarySystemBackground))
+            .overlay(alignment: .top) { Divider() }
+            .overlay(alignment: .bottom) { Divider() }
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { paneBarHeight = $0 }
+            .accessibilityIdentifier("inbox.letter.threadBar")
+    }
+
+    private func refresh() async {
+        await load(markingRead: false)
+        await InboxItemStore.shared.refreshVisible()
     }
 
     // MARK: - Header

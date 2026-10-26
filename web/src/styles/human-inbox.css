@@ -406,6 +406,93 @@
 
 .hib-turn-body { margin-top: 6px; }
 
+/* ── Two scrolls: the document and the conversation ─────────────────────────
+   A letter with a thread splits under its meta row: the document pane on top
+   (its height set by useThreadPane, its frame `--hib-doc-frame`) and the
+   conversation pane below, each scrolling on its own, the conversation opening
+   at its newest turn. Scroll anchoring is done by hand in both (WebKit has no
+   CSS scroll anchoring), so the native one is off to keep the engines alike. */
+
+.hib-view-split .hib-reader-body {
+  flex: 0 0 auto;
+  overflow-anchor: none;
+}
+
+/* The document's own frame fits its pane instead of nesting a 44vh frame in a
+   shorter scroll (two scrolls inside each other, the inner one taking the wheel). */
+.hib-view-split .hib-reader-body .hib-html-frame {
+  height: var(--hib-doc-frame, 44vh);
+  min-height: 0;
+}
+
+.hib-thread-pane {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--border);
+}
+
+.hib-thread-bar {
+  flex: 0 0 auto;
+  position: relative;
+  display: flex;
+  align-items: center;
+  padding: 6px 18px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
+  cursor: row-resize;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: none;
+}
+
+/* The grip that says the bar moves. */
+.hib-thread-bar::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 32px;
+  height: 3px;
+  margin: -1.5px 0 0 -16px;
+  border-radius: 2px;
+  background: var(--border-strong);
+}
+
+.hib-thread-scroll:focus { outline: none; }
+
+.hib-thread-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-anchor: none;
+  padding: 10px 18px 14px;
+}
+
+.hib-view-split .hib-thread { margin-top: 0; }
+
+/* Holds the button so a screen reader hears it arrive. */
+.hib-new-reply-seat {
+  position: absolute;
+  left: 50%;
+  bottom: 12px;
+  transform: translateX(-50%);
+}
+
+.hib-new-reply {
+  padding: 5px 12px;
+  border: none;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
+  cursor: pointer;
+}
+
 /* ── Composer ─────────────────────────────────────────────────────────────── */
 
 .hib-composer {
@@ -522,6 +609,8 @@
 .hib-view-embedded .hib-reader-meta { padding: 8px 14px; }
 .hib-view-embedded .hib-reader-body { padding: 12px 14px; }
 .hib-view-embedded .hib-composer { padding: 10px 14px 12px; }
+.hib-view-embedded .hib-thread-bar { padding: 6px 14px; }
+.hib-view-embedded .hib-thread-scroll { padding: 10px 14px 12px; }
 
 @media (max-width: 720px) {
   .hib-reader { width: 96vw; max-height: 92vh; }

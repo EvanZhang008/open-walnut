@@ -1,5 +1,7 @@
 /**
- * The letter's conversation: agent turns and human turns, oldest first.
+ * The letter's conversation: agent turns and human turns, oldest first. The
+ * reader puts it in its own scrolling pane under the document (LetterView), and
+ * that pane's bar carries the "Thread · N" heading.
  *
  * A turn is normally plain text (what the delivery wrapper carried), so it
  * renders verbatim with URLs linkified — markdown semantics would turn a typed
@@ -23,7 +25,6 @@ export function LetterThread({ entries, subject, onBodyClick, letterId, onNaviga
   if (entries.length === 0) return null;
   return (
     <div className="hib-thread">
-      <div className="hib-thread-head">Thread · {entries.length}</div>
       {entries.map((entry, i) => (
         <div
           key={`${entry.at}-${i}`}

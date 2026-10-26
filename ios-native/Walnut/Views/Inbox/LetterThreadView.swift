@@ -1,8 +1,8 @@
 import SwiftUI
 
 /// The letter's conversation: the human's answers and replies, and whatever the
-/// origin agent wrote back. Rendered under the body, oldest first, because a
-/// letter thread is a short record to read in order, not a chat to scroll.
+/// origin agent wrote back, oldest first. The reader gives it its own scroll
+/// under the document, opening at the newest turn (`LetterPaneSplit`).
 ///
 /// A turn can be plain text or carry a rich body of its own (an agent replying
 /// with `wn tools call human_inbox_reply --markdown`), and the rich body goes
@@ -41,11 +41,8 @@ struct LetterThreadView: View {
 
     var body: some View {
         let items = LetterThreadItem.ordered(entries: letter.threadEntries, pending: pending)
+        // The reader's bar above this pane names the thread (`conversationBar`).
         VStack(alignment: .leading, spacing: Self.rowSpacing) {
-            Divider()
-            Text("Thread")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
             ForEach(items) { item in
                 VStack(alignment: .leading, spacing: 5) {
                     switch item {

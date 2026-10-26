@@ -472,16 +472,16 @@ final class LetterReplyUITests: XCTestCase {
         app.buttons["inbox.letter.send"].tap()
         XCTAssertTrue(statusLine(app, prefix: "Sending to ").waitForExistence(timeout: 10), "\(statusLabels(app))")
 
-        // Read the top of the letter while the answer is on its way.
-        let letter = letterScroll(app)
-        let subject = element(app, "inbox.letter.subject")
+        // Read up the thread (its own scroll) while the answer is on its way.
+        let thread = app.scrollViews["inbox.letter.conversation"]
+        let subject = humanTurn(app, "Filler reply 1, long enough to wrap onto a second line so the letter is taller than the screen.")
         for _ in 0..<5 where !subject.isHittable {
-            letter.swipeDown()
+            thread.swipeDown()
             try await Task.sleep(for: .milliseconds(500))
         }
         try await Task.sleep(for: .seconds(1))
         XCTAssertEqual(fieldText(replyField(app)), "", "the field picked up text while reading: \(fieldText(replyField(app)))")
-        XCTAssertTrue(subject.isHittable, "the swipe did not reach the top of the letter")
+        XCTAssertTrue(subject.isHittable, "the swipe did not reach the first reply")
         let before = subject.frame.minY
         try await stub.screenshot(app, "follow-3-scrolled-up-while-sending")
 
@@ -550,11 +550,12 @@ final class LetterReplyUITests: XCTestCase {
         XCTAssertEqual(turns, 7)
     }
 
-    /// A letter whose newest reply already has a status line opens at its top
-    /// and stays there while the detail and the task titles arrive (it used to
-    /// jump to the end a quarter second after it painted).
+    /// A letter whose newest reply already has a status line opens with that
+    /// reply in view (the conversation scrolls on its own, opening at its end),
+    /// the document still on top, and nothing moves while the detail and the
+    /// task titles arrive (it used to jump a quarter second after it painted).
     @MainActor
-    func testALetterWithAStatusLineOpensAtItsTopAndStaysThere() async throws {
+    func testALetterWithAStatusLineOpensAtItsNewestReplyAndStaysThere() async throws {
         let stub = try await prepared()
         try await stub.call("POST", "__stub/letter-reply-thread?id=\(Self.letterB)&n=6")
         let app = try launchPaired()
@@ -562,19 +563,95 @@ final class LetterReplyUITests: XCTestCase {
             openLetter(app, Self.letterB)
             let subject = element(app, "inbox.letter.subject")
             XCTAssertTrue(subject.waitForExistence(timeout: 10))
-            let first = subject.frame.minY
-            XCTAssertTrue(subject.isHittable, "open \(round) did not start at the top")
-            var lowest = first
+            let newest = turn(app, "inbox.letter.humanTurn", containing: "Reply 6:")
+            XCTAssertTrue(newest.waitForExistence(timeout: 10), "open \(round): no newest reply")
+            let first = (subject.frame.minY, newest.frame.minY)
+            var drift: CGFloat = 0
             for _ in 0..<12 {
                 try await Task.sleep(for: .milliseconds(250))
-                lowest = min(lowest, subject.frame.minY)
+                drift = max(drift, abs(subject.frame.minY - first.0), abs(newest.frame.minY - first.1))
             }
-            try await stub.screenshot(app, "open-at-top-\(round)")
-            XCTAssertEqual(lowest, first, accuracy: 1, "open \(round): the letter moved from \(first) to \(lowest)")
-            XCTAssertTrue(subject.isHittable, "open \(round) left the top")
+            try await stub.screenshot(app, "open-at-newest-\(round)")
+            XCTAssertLessThanOrEqual(drift, 1, "open \(round): the letter moved by \(drift)")
+            XCTAssertTrue(subject.isHittable, "open \(round): the document is not on top")
+            XCTAssertTrue(newest.isHittable, "open \(round): the newest reply is not in view")
+            XCTAssertLessThanOrEqual(newest.frame.maxY, element(app, "inbox.letter.composer").frame.minY + 0.5)
             XCTAssertFalse(statusLabels(app).isEmpty, "the seeded replies carry no status line")
             goBack(app)
         }
+    }
+
+    /// The report (2026-10-25): with a long document and a long thread, the
+    /// newest reply was out of reach. Now the thread has its own scroll under the
+    /// document and opens at its newest turn, which stays put while the letter
+    /// lays out.
+    @MainActor
+    func testALongThreadOpensAtItsNewestTurnUnderALongDocument() async throws {
+        let stub = try await prepared()
+        try await stub.call("POST", "__stub/letter-reply-long?id=\(Self.letterB)&n=14")
+        let app = try launchPaired()
+        openLetter(app, Self.letterB)
+        let newest = turn(app, "inbox.letter.agentTurn", containing: "Newest agent note")
+        XCTAssertTrue(newest.waitForExistence(timeout: 15), "the newest turn never showed")
+        let first = newest.frame.minY
+        var drift: CGFloat = 0
+        for _ in 0..<12 {
+            try await Task.sleep(for: .milliseconds(250))
+            drift = max(drift, abs(newest.frame.minY - first))
+        }
+        try await stub.screenshot(app, "long-thread-open")
+        XCTAssertLessThanOrEqual(drift, 1, "the thread moved by \(drift) after it opened")
+        XCTAssertTrue(newest.isHittable, "the newest turn is not in view")
+        XCTAssertLessThanOrEqual(newest.frame.maxY, element(app, "inbox.letter.composer").frame.minY + 0.5)
+        XCTAssertTrue(element(app, "inbox.letter.subject").isHittable, "the document is not on top")
+        XCTAssertTrue(element(app, "inbox.letter.threadBar").exists, "no bar between the two scrolls")
+        XCTAssertTrue(replyField(app).isHittable)
+    }
+
+    /// Reading up the thread, a new reply moves nothing: a "New reply" button
+    /// says so, and a tap on it goes to the reply.
+    @MainActor
+    func testANewReplyWhileReadingUpTheThreadShowsAButtonAndMovesNothing() async throws {
+        let stub = try await prepared()
+        try await stub.call("POST", "__stub/letter-reply-long?id=\(Self.letterB)&n=14")
+        let app = try launchPaired()
+        openLetter(app, Self.letterB)
+        XCTAssertTrue(turn(app, "inbox.letter.agentTurn", containing: "Newest agent note").waitForExistence(timeout: 15))
+        let conversation = app.scrollViews["inbox.letter.conversation"]
+        XCTAssertTrue(conversation.waitForExistence(timeout: 5))
+        conversation.swipeDown()
+        conversation.swipeDown()
+        try await Task.sleep(for: .seconds(1.5))
+        let marker = (1...14).lazy
+            .map { self.turn(app, "inbox.letter.humanTurn", containing: "Reply \($0):") }
+            .first { $0.exists && $0.isHittable }
+        guard let marker else { return XCTFail("no reply in view after scrolling up the thread") }
+        let before = marker.frame.minY
+
+        try await stub.call("POST", "__stub/letter-reply-agent?id=\(Self.letterB)&text=Fresh%20agent%20note")
+        // Nothing pushes letter changes to the app; a pull on the document re-reads it.
+        app.scrollViews["inbox.letter.document"].swipeDown()
+        let button = element(app, "inbox.letter.newReply")
+        XCTAssertTrue(button.waitForExistence(timeout: 15), "no New reply button")
+        try await Task.sleep(for: .seconds(1))
+        try await stub.screenshot(app, "new-reply-button")
+        XCTAssertEqual(marker.frame.minY, before, accuracy: 1, "the new reply moved the thread")
+
+        button.tap()
+        let fresh = turn(app, "inbox.letter.agentTurn", containing: "Fresh agent note")
+        XCTAssertTrue(fresh.waitForExistence(timeout: 10))
+        try await Task.sleep(for: .seconds(1))
+        try await stub.screenshot(app, "new-reply-after-tap")
+        XCTAssertTrue(fresh.isHittable, "the tap did not bring the new reply into view")
+        XCTAssertLessThanOrEqual(fresh.frame.maxY, element(app, "inbox.letter.composer").frame.minY + 0.5)
+        XCTAssertFalse(button.exists, "the button stayed after the tap")
+    }
+
+    @MainActor
+    func turn(_ app: XCUIApplication, _ identifier: String, containing text: String) -> XCUIElement {
+        app.descendants(matching: .any).matching(
+            NSPredicate(format: "identifier == %@ AND label CONTAINS %@", identifier, text)
+        ).firstMatch
     }
 
     /// The newest reply bubble and the status line under it sit between the
