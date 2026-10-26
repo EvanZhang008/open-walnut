@@ -45,6 +45,12 @@ import { fileURLToPath } from 'node:url'
 import { Worker } from 'node:worker_threads'
 import { checkOneStatement, refusePromise } from './sqlite-guards.js'
 
+// The plugin database contract's binding rules (better-sqlite3's), for the plugin database
+// worker (src/core/plugins/plugin-storage.ts), which can load only this file. Nothing here binds
+// through them: Walnut's own statements keep the binding below.
+// @ts-ignore The plugin API's module is outside the server emit root; every bundle inlines it.
+export { bindByIndex, onlyTrailingNoise } from '../../packages/plugin-api/src/sqlite-binding.js'
+
 const require = createRequire(import.meta.url)
 
 /**

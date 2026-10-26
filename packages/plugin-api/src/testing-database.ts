@@ -1,12 +1,14 @@
 import type { PluginDatabase, SqlRunResult, SqlStatement } from './server.js'
+import { bindArguments, onlyTrailingNoise } from './sqlite-binding.js'
 
 // The fake's `walnut.storage.database`: a real in-memory SQLite (Node's built-in node:sqlite)
-// that answers the way the host's database does. The host runs better-sqlite3 in a worker, so
+// that answers the way the host's database does. The host runs its SQLite in a worker, so
 // every rule here restates one of the host's: values cross a structured clone, parameters bind
 // by better-sqlite3's rules (bare names for :name, @name and $name, arrays as positional values,
-// the same "Missing named parameter" and "Too few/many" refusals), errors arrive as a plain
-// Error carrying only the message, rows are plain objects, and migrate/batch keep the host's
-// table, ordering, transaction and messages.
+// the same "Missing named parameter" and "Too few/many" refusals; sqlite-binding.ts, which the
+// host's worker binds through too), errors arrive as a plain Error carrying only the message,
+// rows are plain objects, and migrate/batch keep the host's table, ordering, transaction and
+// messages.
 
 // The few node:sqlite shapes used here, so the published types never depend on @types/node.
 interface SqliteStatement {
@@ -49,153 +51,6 @@ function openSqlite(): SqliteDatabase {
     throw new Error(`createFakeWalnut's storage.database needs node:sqlite, built into Node.js 22.13 or later (23.4 or later on the 23 line); ${running} does not provide it`)
   }
   return new sqlite.DatabaseSync(':memory:')
-}
-
-// Parameter binding, by better-sqlite3's rules.
-
-interface ParameterSlots {
-  /** sqlite3_bind_parameter_count: the highest parameter index. */
-  count: number
-  /** Index to the name SQLite reports for it (with its prefix). An index with no name is anonymous. */
-  names: Map<number, string>
-}
-
-function isIdChar(code: number): boolean {
-  return (code >= 48 && code <= 57) || (code >= 65 && code <= 90) || (code >= 97 && code <= 122)
-    || code === 95 || code === 36 || code >= 0x80
-}
-
-/** What better-sqlite3 lets follow the one statement it prepares: whitespace, `;` and comments. */
-function onlyTrailingNoise(tail: string): boolean {
-  let i = 0
-  while (i < tail.length) {
-    const char = tail[i]
-    if (char === ' ' || char === ';' || (char >= '\t' && char <= '\r')) {
-      i++
-    } else if (char === '/' && tail[i + 1] === '*') {
-      const end = tail.indexOf('*/', i + 2)
-      i = end < 0 ? tail.length : end + 2
-    } else if (char === '-' && tail[i + 1] === '-') {
-      const end = tail.indexOf('\n', i + 2)
-      i = end < 0 ? tail.length : end + 1
-    } else {
-      return false
-    }
-  }
-  return true
-}
-
-/**
- * SQLite's own numbering of `?`, `?NNN`, `:name`, `@name`, `$name` and `#name`, skipping literals
- * and comments. Without the TCL forms (`$a::b`, `$a(x)`): the host's SQLite build leaves them out.
- */
-function parameterSlots(sql: string): ParameterSlots {
-  const names = new Map<number, string>()
-  const numbers = new Map<string, number>()
-  let count = 0
-  const add = (name: string, index: number) => {
-    if (!numbers.has(name)) numbers.set(name, index)
-    if (!names.has(index)) names.set(index, name)
-  }
-  let i = 0
-  while (i < sql.length) {
-    const char = sql[i]
-    if (char === '-' && sql[i + 1] === '-') {
-      const end = sql.indexOf('\n', i + 2)
-      i = end < 0 ? sql.length : end + 1
-    } else if (char === '/' && sql[i + 1] === '*') {
-      const end = sql.indexOf('*/', i + 2)
-      i = end < 0 ? sql.length : end + 2
-    } else if (char === "'" || char === '"' || char === '`') {
-      i++
-      while (i < sql.length) {
-        if (sql[i] === char) {
-          if (sql[i + 1] !== char) break
-          i++
-        }
-        i++
-      }
-      i++
-    } else if (char === '[') {
-      const end = sql.indexOf(']', i + 1)
-      i = end < 0 ? sql.length : end + 1
-    } else if (char === '?') {
-      let end = i + 1
-      while (end < sql.length && sql.charCodeAt(end) >= 48 && sql.charCodeAt(end) <= 57) end++
-      if (end === i + 1) {
-        count++
-      } else {
-        const index = Number(sql.slice(i + 1, end))
-        if (index > count) count = index
-        add(sql.slice(i, end), index)
-      }
-      i = end
-    } else if (char === ':' || char === '@' || char === '$' || char === '#') {
-      let end = i + 1
-      while (end < sql.length && isIdChar(sql.charCodeAt(end))) end++
-      const name = sql.slice(i, end)
-      if (end > i + 1 && !numbers.has(name)) add(name, ++count)
-      i = end
-    } else if (isIdChar(sql.charCodeAt(i))) {
-      // Identifiers, keywords and numbers: a `$` inside `a$b` is part of the name, not a parameter.
-      while (i < sql.length && isIdChar(sql.charCodeAt(i))) i++
-    } else {
-      i++
-    }
-  }
-  return { count, names }
-}
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  if (!value || typeof value !== 'object') return false
-  const proto = Object.getPrototypeOf(value)
-  return proto === Object.prototype || proto === null
-}
-
-function bindable(value: unknown): unknown {
-  if (value === undefined || value === null) return null
-  if (typeof value === 'number' || typeof value === 'bigint' || typeof value === 'string' || ArrayBuffer.isView(value)) return value
-  throw new TypeError('SQLite3 can only bind numbers, strings, bigints, buffers, and null')
-}
-
-/** The host's `invoke` plus better-sqlite3's Binder, answered as node:sqlite arguments. */
-function bindArguments(sql: string, params: unknown): unknown[] {
-  const args = params === undefined ? [] : Array.isArray(params) ? params : [params]
-  const slots = parameterSlots(sql)
-  const named = [...slots.names]
-    .map(([index, name]) => ({ index, name, key: name.slice(1) }))
-    .sort((a, b) => a.index - b.index)
-  const anonymousCount = slots.count - slots.names.size
-  const positional: unknown[] = []
-  let namedValues: Record<string, unknown> | undefined
-  const bindAnonymous = (value: unknown) => {
-    const bound = bindable(value)
-    if (positional.length >= anonymousCount) throw new RangeError('Too many parameter values were provided')
-    positional.push(bound)
-  }
-  for (const arg of args) {
-    if (Array.isArray(arg)) {
-      for (const value of arg) bindAnonymous(value)
-    } else if (isPlainObject(arg)) {
-      if (namedValues) throw new TypeError('You cannot specify named parameters in two different objects')
-      namedValues = {}
-      for (const { name, key } of named) {
-        if (!Object.prototype.hasOwnProperty.call(arg, key)) throw new RangeError(`Missing named parameter "${key}"`)
-        namedValues[name] = bindable(arg[key])
-      }
-    } else if (arg && typeof arg === 'object' && !ArrayBuffer.isView(arg) && named.length) {
-      throw new TypeError('Named parameters can only be passed within plain objects')
-    } else {
-      bindAnonymous(arg)
-    }
-  }
-  const bound = positional.length + (namedValues ? named.length : 0)
-  if (bound < slots.count) {
-    if (!namedValues && named.length) throw new TypeError('Missing named parameters')
-    throw new RangeError('Too few parameter values were provided')
-  }
-  // Exact names, so neither node:sqlite's bare-name nor its unknown-name option can change what binds where.
-  return namedValues ? [namedValues, ...positional] : positional
 }
 
 // The database.

@@ -15,6 +15,10 @@ const fs = require('node:fs')
 const path = require('node:path')
 const driver = require(workerData.driver)
 const Database = typeof driver === 'function' ? driver : driver.default
+const { bindByIndex, onlyTrailingNoise } = driver
+if (typeof bindByIndex !== 'function' || typeof onlyTrailingNoise !== 'function') {
+  throw new Error('Plugin database driver ' + workerData.driver + ' has no plugin parameter binding (bindByIndex)')
+}
 const directory = path.dirname(workerData.file)
 fs.mkdirSync(directory, { recursive: true, mode: 0o700 })
 fs.chmodSync(directory, 0o700)
@@ -23,10 +27,19 @@ fs.chmodSync(workerData.file, 0o600)
 db.pragma('journal_mode = WAL')
 db.pragma('busy_timeout = 5000')
 
-function invoke(statement, method, params) {
-  if (params === undefined) return statement[method]()
-  if (Array.isArray(params)) return statement[method](...params)
-  return statement[method](params)
+// A plugin's statement answers as better-sqlite3's did (the plugin API contract): its
+// prepare refusals, get/all only on a statement that returns data, and its binding rules
+// (packages/plugin-api/src/sqlite-binding.ts, shared with the fake database), handed to
+// bun:sqlite as one value per parameter index.
+function invoke(sql, method, params) {
+  if (typeof sql === 'string' && onlyTrailingNoise(sql)) {
+    throw new RangeError('The supplied SQL string contains no statements')
+  }
+  const statement = db.prepare(sql)
+  if (method !== 'run' && !statement.reader) {
+    throw new TypeError('This statement does not return data. Use run() instead')
+  }
+  return statement[method](bindByIndex(sql, params))
 }
 
 parentPort.on('message', ({ id, method, args }) => {
@@ -35,7 +48,7 @@ parentPort.on('message', ({ id, method, args }) => {
     if (method === 'exec') {
       db.exec(args.sql)
     } else if (method === 'run' || method === 'get' || method === 'all') {
-      value = invoke(db.prepare(args.sql), method, args.params)
+      value = invoke(args.sql, method, args.params)
     } else if (method === 'migrate') {
       db.exec('CREATE TABLE IF NOT EXISTS _walnut_plugin_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)')
       const current = db.prepare('SELECT COALESCE(MAX(version), 0) AS version FROM _walnut_plugin_migrations').get().version
@@ -55,7 +68,7 @@ parentPort.on('message', ({ id, method, args }) => {
         const results = []
         for (let index = 0; index < statements.length; index++) {
           failedAt = index
-          const result = invoke(db.prepare(statements[index].sql), 'run', statements[index].params)
+          const result = invoke(statements[index].sql, 'run', statements[index].params)
           results.push({ changes: result.changes, lastInsertRowid: result.lastInsertRowid })
         }
         failedAt = -1
