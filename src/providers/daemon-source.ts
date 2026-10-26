@@ -13524,8 +13524,9 @@ function readDaemonPidFile() {
   return Number.isSafeInteger(pid) && pid > 1 ? pid : null;
 }
 
-// Alive in the kill(0) sense; EPERM is another user's process, which a daemon of this user never is.
-function pidAlive(pid) {
+// Alive in the kill(0) sense; EPERM is another user's process, which a daemon of this user never is
+// (unlike the module's pidAlive, where EPERM counts as alive).
+function ownPidAlive(pid) {
   try { process.kill(pid, 0); return true; } catch { return false; }
 }
 
@@ -13560,7 +13561,7 @@ async function stopCommand() {
   // Only a pid that is this dir's daemon is signalled: a pid file may name
   // another process now (a reused pid), or hold -1, which kill() reads as every process.
   const pid = readDaemonPidFile();
-  if (pid === null || pid === process.pid || !pidAlive(pid)) {
+  if (pid === null || pid === process.pid || !ownPidAlive(pid)) {
     console.log('daemon not running');
   } else if (!(await isThisDirsDaemon(pid))) {
     console.log('daemon not running (daemon.pid names pid ' + pid + ', which is not this daemon)');
@@ -13580,7 +13581,7 @@ async function statusCommand() {
   const pid = readDaemonPidFile();
   let port = NaN;
   try { port = parseInt(fs.readFileSync(PORT_FILE, 'utf-8').trim(), 10); } catch {}
-  if (pid !== null && pidAlive(pid) && await loopbackDaemonAnswers(port, 3000)) {
+  if (pid !== null && ownPidAlive(pid) && await loopbackDaemonAnswers(port, 3000)) {
     let instanceId;
     try { instanceId = fs.readFileSync(INSTANCE_ID_FILE, 'utf-8').trim(); } catch {}
     console.log(JSON.stringify({ running: true, pid, port, instanceId }));
