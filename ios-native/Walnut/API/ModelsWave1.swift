@@ -255,6 +255,12 @@ struct SessionDetail: Codable {
         var description: String? = nil
         /// The user's own note about the session (the `+` menu's Note).
         var humanNote: String? = nil
+        /// The session recap the turn-complete self-report writes: `overview` is the
+        /// whole session, `recap` the last turn(s). Shown by the `+` menu's Latest update.
+        var overview: String? = nil
+        var overviewAt: String? = nil
+        var recap: String? = nil
+        var recapAt: String? = nil
 
         private enum CodingKeys: String, CodingKey {
             case claudeSessionId, title, mode, archived
@@ -262,6 +268,15 @@ struct SessionDetail: Codable {
             case taskId, project, host, cwd, startedAt, lastActiveAt, messageCount
             case model, description
             case humanNote = "human_note"
+            case overview, overviewAt, recap, recapAt
+        }
+
+        /// Overall and Latest, trimmed; nil when the session has no recap yet.
+        var latestUpdate: (overall: String?, latest: String?)? {
+            let o = overview?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let r = recap?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if o.isEmpty && r.isEmpty { return nil }
+            return (o.isEmpty ? nil : o, r.isEmpty ? nil : r)
         }
     }
 

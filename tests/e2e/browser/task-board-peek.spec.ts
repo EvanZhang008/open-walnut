@@ -21,8 +21,9 @@
  *      column again;
  *   g. a message typed in a tab goes to the WORKER's session, not the leader's;
  *   and "Open task" still does the old jump to the task on Home.
- *   h. on a WORKER's panel the Board is its leader's: there the leader's chip opens
- *      the leader in a tab, and the worker's own chip goes back to its chat.
+ *   h. a WORKER's panel has no Board tab (a lead's tab only, 2026-10-26); on its
+ *      leader's panel the worker's chip opens the worker in a tab, and the leader's
+ *      own chip goes back to its chat.
  *   i. full screen with no Board: a task clicked in the chat opens as a tab the
  *      same way, and the tabs come back after a reload.
  *
@@ -446,7 +447,7 @@ test('a Board chip opens its task as a tab in place of the chat; the tabs switch
   expect(pageErrors).toEqual([])
 })
 
-test('on a worker\'s panel the Board is the leader\'s: the leader\'s chip opens the leader, the own chip goes back', async ({ page }) => {
+test('a worker\'s panel has no Board; on the leader\'s, the worker\'s chip opens the worker and the own chip goes back', async ({ page }) => {
   test.setTimeout(240_000)
   const engine = test.info().project.name
   const stamp = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`
@@ -474,39 +475,53 @@ test('on a worker\'s panel the Board is the leader\'s: the leader\'s chip opens 
   await api('PATCH', `/api/tasks/${worker}`, { parent_task_id: leader })
   await api('PUT', `/api/v1/tasks/${leader}/board`, {
     html: `<h1>${engine} team board ${stamp}</h1>
-<p id="team">Lead: <walnut-task id="${leader}"></walnut-task> · Me: <walnut-task id="${worker}"></walnut-task></p>`,
+<p id="team">Lead: <walnut-task id="${leader}"></walnut-task> · Probe: <walnut-task id="${worker}"></walnut-task></p>`,
   })
 
-  // ── The worker's Board tab shows the team's board, the leader's ──
-  await panel.getByTestId('session-board-chip').click()
+  // ── The leader's panel, from its row: an open subtask, so the Board tab ──
+  // Searched first, so the row holds still under the click (the live list re-sorts as sessions report).
+  await page.locator('.todo-search-input').fill(leaderTitle)
+  const leaderRow = page.locator(`.todo-panel-item[data-task-id="${leader}"]`)
+  await expect(leaderRow).toBeVisible({ timeout: 90_000 })
+  await leaderRow.locator('.todo-item-title').click()
+  const leaderPanel = page.locator(`${REAL_PANEL}[data-session-id="${leaderSid}"]`)
+  await expect(leaderPanel).toBeVisible({ timeout: 30_000 })
+  const leaderChip = leaderPanel.getByTestId('session-board-chip')
+  await expect(leaderChip).toBeEnabled({ timeout: 30_000 })
+  // The worker's panel, open all along and now a worker under a lead with a Board: no Board tab
+  // (2026-10-26, "for non leader, please don't show board"). It reads the team board with board_get.
+  await expect(panel.locator('[data-header-id="files"]')).toBeVisible()
+  await expect(panel.getByTestId('session-board-chip')).toHaveCount(0)
+  await expect(panel.locator('[data-header-id="board"]')).toHaveCount(0)
+
+  // ── On the leader's Board, the worker's chip is another task: it opens the worker's chat in a tab ──
+  await leaderChip.click()
   await showCustomBoard(page.getByTestId('task-board-pane'))
   const frame = page.frameLocator('.task-board-frame')
   await expect(frame.locator('h1')).toHaveText(`${engine} team board ${stamp}`, { timeout: 15_000 })
   const chip = (id: string) => frame.locator(`#team walnut-task[id="${id}"] .wn-task`)
-  await expect(chip(leader).locator('.wn-title')).toHaveText(leaderTitle)
-
-  // The leader's chip is another task here: it opens the leader's chat in a tab.
-  await chip(leader).click()
-  const peek = panel.getByTestId('board-task-peek')
-  await expect(peek).toHaveAttribute('data-task-id', leader)
-  const ownCol = panel.locator(':scope > .session-panel-split > .session-panel-chat-col')
+  await expect(chip(worker).locator('.wn-title')).toHaveText(workerTitle)
+  await chip(worker).click()
+  const peek = leaderPanel.getByTestId('board-task-peek')
+  await expect(peek).toHaveAttribute('data-task-id', worker)
+  const ownCol = leaderPanel.locator(':scope > .session-panel-split > .session-panel-chat-col')
   const tabs = columnTabs(ownCol)
-  await expect.poll(tabs.ids).toEqual(['', leader])
-  await expect(tabs.button(leader)).toHaveAttribute('aria-selected', 'true')
-  await expect(peek.getByTestId('board-peek-title')).toHaveText(leaderTitle)
+  await expect.poll(tabs.ids).toEqual(['', worker])
+  await expect(tabs.button(worker)).toHaveAttribute('aria-selected', 'true')
+  await expect(peek.getByTestId('board-peek-title')).toHaveText(workerTitle)
   await expect(peek.getByTestId('board-peek-note')).toHaveText('Messages you send here go to this task, not to the chat you came from.')
-  const inset = peek.locator(`.session-panel.session-panel-inset[data-session-id="${leaderSid}"]`)
-  await expect(inset.getByText('Team leader ready', { exact: true }).first()).toBeVisible({ timeout: 30_000 })
-  const ownBody = panel.locator(':scope > .session-panel-split > .session-panel-chat-col > .session-panel-body')
+  const inset = peek.locator(`.session-panel.session-panel-inset[data-session-id="${workerSid}"]`)
+  await expect(inset.getByText('Team worker ready', { exact: true }).first()).toBeVisible({ timeout: 30_000 })
+  const ownBody = ownCol.locator(':scope > .session-panel-body')
   await expect(ownBody).toBeHidden()
 
-  // The worker's own chip: back to the worker's own chat, the leader's tab kept.
-  await chip(worker).click()
+  // The leader's own chip: back to the leader's own chat, the worker's tab kept.
+  await chip(leader).click()
   await expect(peek).toHaveCount(0)
   await expect(ownBody).toBeVisible()
-  await expect(ownBody.getByText('Team worker ready', { exact: true }).first()).toBeVisible()
+  await expect(ownBody.getByText('Team leader ready', { exact: true }).first()).toBeVisible()
   await expect(tabs.chat).toHaveAttribute('aria-selected', 'true')
-  await expect.poll(tabs.ids).toEqual(['', leader])
+  await expect.poll(tabs.ids).toEqual(['', worker])
 
   expect(pageErrors).toEqual([])
 })

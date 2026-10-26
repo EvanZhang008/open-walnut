@@ -5,7 +5,7 @@
  *                                                projects, checks, choices, reminders, section_seen, refs }
  *                                                + kanban: lanes, lanes_effective, lanes_template, cards, team,
  *                                                kanban_seen, board_version (?fields=kanban: only those + ids)
- *   GET    /tasks/:id/board/owner            → { task_id, title, self, has_board } (the team's shared board)
+ *   GET    /tasks/:id/board/owner[?tab=1]    → { task_id, title, self, has_board[, own_board, open_subtasks] }
  *   Kanban lanes, cards, moves, suggestions and the seen baseline: board-kanban-v1.ts
  *   PUT    /tasks/:id/board                  { html, version? }      → { board }
  *   POST   /tasks/:id/board/edits            { edits, version? }     → { board }
@@ -45,6 +45,7 @@ import { log } from '../../logging/index.js'
 import type { Task } from '../../core/types.js'
 import {
   BoardError,
+  boardHasContent,
   deleteBoard,
   deleteBoardMessage,
   editBoardHtml,
@@ -226,6 +227,18 @@ function boardRefIds(board: BoardFile): string[] {
   return [...ids]
 }
 
+/** Direct subtasks not done, by the board's rule (a parent ref may be a short prefix of the id). */
+async function openSubtaskCount(taskId: string): Promise<number> {
+  const { listTasks } = await import('../../core/task-manager.js')
+  let n = 0
+  for (const t of await listTasks()) {
+    const parent = t.parent_task_id
+    if (!parent || t.id === taskId || !taskId.startsWith(parent)) continue
+    if (t.phase !== 'COMPLETE' && t.status !== 'done') n++
+  }
+  return n
+}
+
 function wantsTeam(v: unknown): boolean {
   const s = Array.isArray(v) ? String(v[0]) : String(v ?? '')
   return s === '1' || s === 'true'
@@ -234,7 +247,13 @@ function wantsTeam(v: unknown): boolean {
 boardV1Router.get('/tasks/:id/board/owner', route(async (req, res) => {
   const task = await resolveTask(param(req.params.id))
   const owner = await resolveTeamBoardTask(task.id)
-  res.json({ task_id: owner.taskId, title: owner.title, self: owner.self, has_board: owner.hasBoard })
+  const base = { task_id: owner.taskId, title: owner.title, self: owner.self, has_board: owner.hasBoard }
+  // ?tab=1 (the session header's Board tab) also asks whether the task leads: a
+  // Board of its own with something in it, and its open subtasks. Only on request:
+  // every board_* op resolves its default board through this route.
+  if (!wantsTeam(req.query.tab)) { res.json(base); return }
+  const ownBoard = owner.self && owner.hasBoard && boardHasContent(await getBoard(owner.taskId))
+  res.json({ ...base, own_board: ownBoard, open_subtasks: await openSubtaskCount(task.id) })
 }))
 
 boardV1Router.get('/tasks/:id/board', route(async (req, res) => {

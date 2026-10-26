@@ -23,7 +23,7 @@ vi.mock('../../../src/core/sessions/session-send-core.js', async (importOriginal
 
 import { WALNUT_HOME } from '../../../src/constants.js'
 import { startServer, stopServer } from '../../../src/web/server.js'
-import { addTask } from '../../../src/core/task-manager.js'
+import { addTask, completeTask } from '../../../src/core/task-manager.js'
 import { createSessionRecord } from '../../../src/core/session-tracker.js'
 import { bus, EventNames, type BusEvent } from '../../../src/core/event-bus.js'
 import { SendError } from '../../../src/core/sessions/session-send-core.js'
@@ -858,6 +858,49 @@ describe('round two', () => {
       expect((await call('PUT', `${boardPath(crew.boss)}/seen/cause-a`, { body: {} })).status).toBe(400)
       expect((await call('PUT', `${boardPath(crew.boss)}/seen/cause-a`, { body: { hash: '' } })).json).toEqual({ seen: null })
       expect((await getBoard(crew.boss))!.section_seen).toEqual({})
+    })
+  })
+})
+
+// The Board tab is a lead's (2026-10-26: "for non leader, please don't show board,
+// confused people"): clients show it for open subtasks or a Board of the task's own
+// with something in it, both read here.
+describe('GET /tasks/:id/board/owner?tab=1: own_board and open_subtasks', () => {
+  it('without tab=1 the answer keeps its old shape (the board_* ops resolve through it)', async () => {
+    const t = await task('owner shape')
+    expect(Object.keys((await call('GET', `/tasks/${t}/board/owner`)).json).sort()).toEqual(['has_board', 'self', 'task_id', 'title'])
+  })
+
+  it('a plain task: no own board, no open subtasks; a seen-only board file does not count', async () => {
+    const plain = await task('owner plain')
+    expect((await call('GET', `/tasks/${plain}/board/owner?tab=1`)).json).toMatchObject({
+      task_id: plain, self: true, has_board: false, own_board: false, open_subtasks: 0,
+    })
+    // Only looking at the kanban leaves a board file behind with a seen baseline.
+    expect((await call('PUT', `/tasks/${plain}/board/kanban-seen`, { body: { cards: 'all' } })).status).toBe(200)
+    expect((await call('GET', `/tasks/${plain}/board/owner?tab=1`)).json).toMatchObject({
+      self: true, has_board: true, own_board: false, open_subtasks: 0,
+    })
+  })
+
+  it('a lead: open subtasks counted; all done and no page means no own board; a page makes one', async () => {
+    const lead = await task('owner lead')
+    const a = await task('owner worker a', lead)
+    const b = await task('owner worker b', lead)
+    expect((await call('GET', `/tasks/${lead}/board/owner?tab=1`)).json).toMatchObject({ own_board: false, open_subtasks: 2 })
+    await completeTask(a)
+    await completeTask(b)
+    expect((await call('GET', `/tasks/${lead}/board/owner?tab=1`)).json).toMatchObject({ own_board: false, open_subtasks: 0 })
+    expect((await call('PUT', `/tasks/${lead}/board`, { body: { html: '<h1>Plan</h1>' } })).status).toBe(200)
+    expect((await call('GET', `/tasks/${lead}/board/owner?tab=1`)).json).toMatchObject({ self: true, own_board: true, open_subtasks: 0 })
+  })
+
+  it('a worker under a lead with a Board: the team board is the lead\'s, not its own', async () => {
+    const lead = await task('owner lead 2')
+    const worker = await task('owner worker 2', lead)
+    expect((await call('PUT', `/tasks/${lead}/board`, { body: { html: '<p>team</p>' } })).status).toBe(200)
+    expect((await call('GET', `/tasks/${worker}/board/owner?tab=1`)).json).toMatchObject({
+      task_id: lead, self: false, has_board: true, own_board: false, open_subtasks: 0,
     })
   })
 })

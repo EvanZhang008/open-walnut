@@ -2,10 +2,8 @@
    phone-layout.css; nothing here reaches the desktop layout. */
 
 @media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
-  /* N2-06: keyboard up, the timeline keeps its 300 px. The recap and the
-     strips above the composer fold away while typing; they come back with
-     the keyboard down. */
-  html[data-wn-keyboard='open'] .app-shell-navigation .session-panel.is-phone-layer .session-recap-tip,
+  /* N2-06: keyboard up, the timeline keeps its 300 px. The strips above the
+     composer fold away while typing; they come back with the keyboard down. */
   html[data-wn-keyboard='open'] .app-shell-navigation .session-panel.is-phone-layer .session-notes-toggle,
   html[data-wn-keyboard='open'] .app-shell-navigation .session-panel.is-phone-layer .wf-card--bar {
     display: none !important;
@@ -45,26 +43,12 @@
   }
 
   /* N2-08: session chrome reads at 12 px or more and takes a finger. */
-  .app-shell-navigation .session-recap-tip-label {
-    font-size: 12px;
-  }
-  .app-shell-navigation .session-recap-tip-text,
   .app-shell-navigation .wf-card-open-label,
   .app-shell-navigation .wf-card,
   .app-shell-navigation .wf-card-title,
   .app-shell-navigation .wf-card-count,
   .app-shell-navigation .wf-card-tokens {
     font-size: 13px;
-  }
-  /* The recap is read in place: no 47 px scroller inside the timeline. */
-  .app-shell-navigation .session-recap-tip-body,
-  .app-shell-navigation .session-recap-tip-body.is-scrollable {
-    max-height: none;
-    overflow: visible;
-  }
-  .app-shell-navigation .session-recap-tip-close {
-    min-width: 44px;
-    min-height: 44px;
   }
   .app-shell-navigation .wf-card--bar,
   .app-shell-navigation .session-notes-toggle {

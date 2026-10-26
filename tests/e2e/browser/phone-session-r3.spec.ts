@@ -188,24 +188,6 @@ test('N2-08, C19: the timeline\'s own controls take a finger and read 12 px (tri
     h.insertBefore(wrap, h.firstChild)
     h.scrollTop = 0
   })
-  // A recap at real length: its x is a 44 px target and covers none of the words.
-  await panel.locator('.session-panel-input').evaluate((inp) => {
-    const tip = document.createElement('div')
-    tip.className = 'session-recap-tip'
-    tip.setAttribute('data-testid', 'r3-recap')
-    tip.innerHTML = '<div class="session-recap-tip-body"><p class="session-recap-tip-row"><span class="session-recap-tip-label">Overall</span><span class="session-recap-tip-text">'
-      + 'The seed order for the north and south beds is placed, the shed shelves are counted, and the watering plan waits on the new hose fittings that arrive on Friday.'
-      + '</span></p></div><button type="button" class="session-recap-tip-close" aria-label="Dismiss recap">x</button>'
-    inp.insertBefore(tip, inp.firstChild)
-  })
-  const overlap = await page.getByTestId('r3-recap').evaluate((tip) => {
-    const close = tip.querySelector('.session-recap-tip-close')!.getBoundingClientRect()
-    const range = document.createRange()
-    range.selectNodeContents(tip.querySelector('.session-recap-tip-text')!)
-    return Array.from(range.getClientRects()).filter((r) => r.right > close.left + 1 && r.left < close.right - 1
-      && r.bottom > close.top + 1 && r.top < close.bottom - 1).length
-  })
-  expect(overlap).toBe(0)
   await page.waitForTimeout(300)
   const small = await findSmallTargets(page, '[data-testid="r3-chrome"]')
   expect(small, JSON.stringify(small)).toEqual([])

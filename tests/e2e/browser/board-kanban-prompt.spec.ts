@@ -293,6 +293,12 @@ test('C75: Start worker runs the card in the leader folder; Tell the leader reac
     litter.push(task.id)
     kids.push(task.id)
   }
+  // The Board tab is a lead's (2026-10-26): the worker leads a task of its own, so its panel has
+  // the tab, which shows the team's board (the lone leader's, the root of the tree).
+  const { task: probe } = await call<{ task: { id: string } }>(api, 'POST', '/api/tasks', {
+    title: `${team.engine} lone probe ${team.stamp}`, source: 'local', pinned: false, project: team.project, parent_task_id: kids[0],
+  })
+  litter.push(probe.id)
   const kidSid = await startSession(api, kids[0], 'snapshot-clean-turn:lone worker ready')
   await openHome(page)
   const row = page.locator(`.todo-panel-item[data-task-id="${kids[0]}"]`)

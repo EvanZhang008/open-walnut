@@ -106,7 +106,6 @@ type Geometry = {
   tailBottom: number | null;
   /** > 0 means the newest content is under the composer overlay. */
   tailBelowComposerBy: number | null;
-  recap: boolean;
 };
 
 async function geometry(page: Page, tailNeedle: string): Promise<Geometry> {
@@ -145,7 +144,6 @@ async function geometry(page: Page, tailNeedle: string): Promise<Geometry> {
       paddingBottom: getComputedStyle(h).paddingBottom,
       tailBottom: tail ? Math.round(tail.bottom) : null,
       tailBelowComposerBy: tail ? Math.round(tail.bottom - cr.top) : null,
-      recap: !!p.querySelector('.session-recap-tip'),
     };
   }, tailNeedle);
 }
@@ -257,8 +255,12 @@ test.describe('turn end keeps the tail of the reply on screen', () => {
     // panel picks it up on its next session refetch — drive one via status-changed
     // the way the server does.
     recapReady = true;
+    // Since 2026-10-26 a recap draws nothing above the composer ("+" menu, Latest
+    // update), so its arrival must leave the composer, and the tail, where they were:
+    // wait for the refetch that carries it, then measure.
+    const recapFetched = page.waitForResponse((r) => new URL(r.url()).pathname === `/api/sessions/${SESSION_ID}`, { timeout: 10_000 });
     await injectEvent(page, 'session:result', { sessionId: SESSION_ID, taskId: TASK_ID, result: 'done', isError: false });
-    await expect(page.locator(`.session-panel[data-session-id="${SESSION_ID}"] .session-recap-tip`)).toBeVisible({ timeout: 5000 });
+    await recapFetched;
     await page.waitForTimeout(800);
     const g3 = await geometry(page, TAIL_SENTENCE);
     console.log('[tail] after recap', JSON.stringify(g3));
@@ -390,7 +392,6 @@ test.describe('turn end keeps the tail of the reply on screen', () => {
     await waitForWs(page);
     const panel = page.locator(`.session-panel[data-session-id="${SESSION_ID}"]`);
     await expect(panel.locator('.session-history')).toContainText(TAIL_SENTENCE, { timeout: 15000 });
-    await expect(panel.locator('.session-recap-tip')).toBeVisible({ timeout: 5000 });
     // Well past the load-window pin's quiet period, so this is where the view rests.
     await page.waitForTimeout(2500);
     const g = await geometry(page, TAIL_SENTENCE);

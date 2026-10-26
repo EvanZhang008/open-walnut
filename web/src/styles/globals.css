@@ -20515,7 +20515,7 @@ td.usage-share-col {
   row-gap: 2px;
 }
 
-/* Recap tip (.session-recap-tip) lives in session-recap.css (SessionRecapTip.tsx). */
+/* The recap popover (Latest update) lives in session-recap.css (LatestUpdatePopover.tsx). */
 
 /* Plan popover — based on .session-fork-popover */
 /* Plan chip modal — extra header controls (reuses plan-popup-overlay/container) */

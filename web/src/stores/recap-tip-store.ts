@@ -9,17 +9,12 @@
  * had nowhere to land, and a fetch already in flight when the event arrived
  * replaced the record afterwards with the older copy. So the live text lives
  * here, fed by ONE subscription (initRecapTipStore), and every surface that
- * shows a recap (the session column's tip, the plan popover's composer, the
- * Todo detail row) reads the same merge: per field, the newer of record and
- * event by its `*At` stamp.
- *
- * Dismissals live here too. A dismissal is of a TEXT, not of a moment: the
- * self-report re-stamps `recapAt` on every turn even when it repeats the same
- * wording, and a tip that came back with nothing new to read would make the ×
- * mean "hide until the next turn". The version is a hash of the two texts, kept
- * per session in this browser only.
+ * shows a recap (the "+" menu's Latest update, the Todo detail row) reads the
+ * same merge: per field, the newer of record and event by its `*At` stamp.
+ * (It was a card above the composer with a × until 2026-10-26; the card and its
+ * dismissals are gone, the store keeps its name.)
  */
-import { useCallback, useMemo, useSyncExternalStore } from 'react';
+import { useMemo, useSyncExternalStore } from 'react';
 import { wsClient } from '@/api/ws';
 
 export interface RecapTipFields {
@@ -27,28 +22,6 @@ export interface RecapTipFields {
   recapAt?: string;
   overview?: string;
   overviewAt?: string;
-}
-
-/** Device-local by design: a growing map of session ids has no business in the
- *  synced config/share/ui-prefs.json. tests/web/recap-tip-store.test.ts pins the
- *  key against the ui-prefs-sync `syncable` predicate, so a widened allowlist
- *  fails a test instead of quietly mirroring it. */
-export const RECAP_DISMISSED_KEY = 'walnut.recap-dismissed';
-/** Insertion-ordered; the oldest entries fall off past this. */
-const DISMISSED_MAX = 200;
-
-type DismissedMap = Record<string, string>;
-
-/** The tip's identity for dismissal: the two texts, nothing else. */
-export function recapTipVersion(fields: Pick<RecapTipFields, 'recap' | 'overview'>): string {
-  const text = `${fields.overview ?? ''}\n${fields.recap ?? ''}`;
-  // FNV-1a over UTF-16 code units: short, stable, good enough to tell two tips apart.
-  let hash = 0x811c9dc5;
-  for (let i = 0; i < text.length; i++) {
-    hash ^= text.charCodeAt(i);
-    hash = Math.imul(hash, 0x01000193) >>> 0;
-  }
-  return `${text.length}:${hash.toString(16)}`;
 }
 
 /** Per field, the newer of the record's copy and the live event's copy. A live
@@ -66,7 +39,6 @@ function newer(
 
 class RecapTipStore {
   private live = new Map<string, RecapTipFields>();
-  private dismissedCache: DismissedMap | null = null;
   private listeners = new Set<() => void>();
   /** Bumped on every change; the value useSyncExternalStore compares. */
   private revision = 0;
@@ -111,40 +83,9 @@ class RecapTipStore {
     };
   }
 
-  private readDismissed(): DismissedMap {
-    if (this.dismissedCache) return this.dismissedCache;
-    try {
-      const raw = localStorage.getItem(RECAP_DISMISSED_KEY);
-      const parsed = raw ? JSON.parse(raw) : null;
-      this.dismissedCache = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as DismissedMap : {};
-    } catch {
-      this.dismissedCache = {};
-    }
-    return this.dismissedCache;
-  }
-
-  isDismissed(sessionId: string, version: string): boolean {
-    return this.readDismissed()[sessionId] === version;
-  }
-
-  dismiss(sessionId: string, version: string): void {
-    const current = this.readDismissed();
-    const next: DismissedMap = {};
-    // Rebuild so this session is the newest entry (object key order is insertion
-    // order for string keys, and session ids are never integer-like).
-    for (const [k, v] of Object.entries(current)) if (k !== sessionId) next[k] = v;
-    next[sessionId] = version;
-    const keys = Object.keys(next);
-    for (const stale of keys.slice(0, Math.max(0, keys.length - DISMISSED_MAX))) delete next[stale];
-    this.dismissedCache = next;
-    try { localStorage.setItem(RECAP_DISMISSED_KEY, JSON.stringify(next)); } catch { /* storage unavailable: the choice holds for this page */ }
-    this.bump();
-  }
-
-  /** Test seam: forget everything in memory (the next read consults storage). */
+  /** Test seam: forget everything in memory. */
   reset(): void {
     this.live.clear();
-    this.dismissedCache = null;
     this.bump();
   }
 }
@@ -157,25 +98,17 @@ export function initRecapTipStore(): void {
   if (initialized) return;
   initialized = true;
   wsClient.onEvent('session:recap-updated', (data) => recapTipStore.ingestEvent(data));
+  // The card's dismissals (gone 2026-10-26) left a device-local map behind.
+  try { localStorage.removeItem('walnut.recap-dismissed'); } catch { /* storage unavailable */ }
 }
 
-export interface ResolvedRecapTip extends RecapTipFields {
-  /** True when the user hid exactly this text. */
-  dismissed: boolean;
-  /** Hide this text (until the self-report writes different text). */
-  dismiss: () => void;
-}
-
-/** The tip for a session record, live and with its dismissal state. */
-export function useRecapTip(sessionId: string, record: RecapTipFields | null | undefined): ResolvedRecapTip {
+/** The recap for a session record, live. */
+export function useRecapTip(sessionId: string, record: RecapTipFields | null | undefined): RecapTipFields {
   useSyncExternalStore(recapTipStore.subscribe, recapTipStore.getRevision, recapTipStore.getRevision);
   const fields = recapTipStore.resolve(sessionId, record);
-  const version = recapTipVersion(fields);
-  const dismissed = recapTipStore.isDismissed(sessionId, version);
-  const dismiss = useCallback(() => recapTipStore.dismiss(sessionId, version), [sessionId, version]);
   return useMemo(
-    () => ({ ...fields, dismissed, dismiss }),
+    () => fields,
     // fields is rebuilt per render; its parts are the real inputs.
-    [fields.recap, fields.recapAt, fields.overview, fields.overviewAt, dismissed, dismiss],
+    [fields.recap, fields.recapAt, fields.overview, fields.overviewAt],
   );
 }

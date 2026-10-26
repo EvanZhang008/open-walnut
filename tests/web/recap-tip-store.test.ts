@@ -1,41 +1,23 @@
 /**
  * The recap-tip store: the merge between a session record and the live
- * `session:recap-updated` copy, the text-only dismissal identity, and the
- * storage key staying out of the cross-device ui-prefs mirror.
+ * `session:recap-updated` copy, and its single WS subscription.
  *
- * Node env: localStorage is stubbed; the WS client and the ui-prefs-sync
- * module's API imports are mocked so the real predicate can be imported.
+ * Node env: the WS client is mocked.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-
-class FakeStorage {
-  private store = new Map<string, string>();
-  get length() { return this.store.size; }
-  key(i: number) { return [...this.store.keys()][i] ?? null; }
-  getItem(k: string) { return this.store.get(k) ?? null; }
-  setItem(k: string, v: string) { this.store.set(k, v); }
-  removeItem(k: string) { this.store.delete(k); }
-  clear() { this.store.clear(); }
-}
-const localStorage = new FakeStorage();
-Object.defineProperty(globalThis, 'localStorage', { value: localStorage, writable: true, configurable: true });
 
 const onEvent = vi.fn();
 vi.mock('../../web/src/api/ws', () => ({ wsClient: { onEvent: (...args: unknown[]) => onEvent(...args) } }));
 vi.mock('../../web/src/api/client', () => ({ apiGet: async () => ({ prefs: {} }), apiPut: async () => ({}) }));
 vi.mock('../../web/src/api/device-token', () => ({ getDeviceToken: () => null }));
 
-const {
-  recapTipStore, recapTipVersion, initRecapTipStore, RECAP_DISMISSED_KEY,
-} = await import('../../web/src/stores/recap-tip-store');
-const { syncable } = await import('../../web/src/utils/ui-prefs-sync');
+const { recapTipStore, initRecapTipStore } = await import('../../web/src/stores/recap-tip-store');
 
 const SID = 'sess-a';
 const T0 = '2026-09-18T09:00:00.000Z';
 const T1 = '2026-09-18T09:30:00.000Z';
 
 beforeEach(() => {
-  localStorage.clear();
   recapTipStore.reset();
 });
 
@@ -74,52 +56,6 @@ describe('recapTipStore.resolve: record merged with the live copy', () => {
     recapTipStore.ingestEvent({ sessionId: SID, recap: 'r1', recapAt: T1 });
     recapTipStore.ingestEvent({ sessionId: SID, overview: 'o1', overviewAt: T1 });
     expect(recapTipStore.resolve(SID, null)).toEqual({ recap: 'r1', recapAt: T1, overview: 'o1', overviewAt: T1 });
-  });
-});
-
-describe('dismissal', () => {
-  it('is keyed by the two texts only: a re-stamped identical tip stays hidden, new text shows', () => {
-    const v = recapTipVersion({ overview: 'o', recap: 'r' });
-    expect(recapTipVersion({ overview: 'o', recap: 'r' })).toBe(v);
-    expect(recapTipVersion({ overview: 'o', recap: 'r2' })).not.toBe(v);
-    expect(recapTipVersion({ overview: 'o2', recap: 'r' })).not.toBe(v);
-    expect(recapTipVersion({ recap: 'r' })).not.toBe(v);
-    recapTipStore.dismiss(SID, v);
-    expect(recapTipStore.isDismissed(SID, v)).toBe(true);
-    expect(recapTipStore.isDismissed('sess-b', v)).toBe(false);
-    expect(recapTipStore.isDismissed(SID, recapTipVersion({ overview: 'o', recap: 'r2' }))).toBe(false);
-  });
-
-  it('survives a fresh store (reload) through localStorage and tolerates corrupt storage', () => {
-    const v = recapTipVersion({ recap: 'r' });
-    recapTipStore.dismiss(SID, v);
-    recapTipStore.reset();
-    expect(recapTipStore.isDismissed(SID, v)).toBe(true);
-    localStorage.setItem(RECAP_DISMISSED_KEY, '{not json');
-    recapTipStore.reset();
-    expect(recapTipStore.isDismissed(SID, v)).toBe(false);
-    recapTipStore.dismiss(SID, v); // and can write again over the corrupt value
-    expect(JSON.parse(localStorage.getItem(RECAP_DISMISSED_KEY)!)).toEqual({ [SID]: v });
-  });
-
-  it('keeps the newest 200 sessions and drops the oldest', () => {
-    for (let i = 0; i < 205; i++) recapTipStore.dismiss(`s${i}`, 'v');
-    const stored = JSON.parse(localStorage.getItem(RECAP_DISMISSED_KEY)!) as Record<string, string>;
-    expect(Object.keys(stored)).toHaveLength(200);
-    expect(stored.s0).toBeUndefined();
-    expect(stored.s4).toBeUndefined();
-    expect(stored.s5).toBe('v');
-    expect(stored.s204).toBe('v');
-    // Re-dismissing an old session makes it the newest again.
-    recapTipStore.dismiss('s5', 'v2');
-    for (let i = 205; i < 210; i++) recapTipStore.dismiss(`s${i}`, 'v');
-    const after = JSON.parse(localStorage.getItem(RECAP_DISMISSED_KEY)!) as Record<string, string>;
-    expect(after.s5).toBe('v2');
-    expect(after.s6).toBeUndefined();
-  });
-
-  it('the storage key is device-local: never mirrored into the synced ui-prefs file', () => {
-    expect(syncable(RECAP_DISMISSED_KEY)).toBe(false);
   });
 });
 

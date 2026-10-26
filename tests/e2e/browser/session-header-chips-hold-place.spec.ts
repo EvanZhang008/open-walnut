@@ -31,6 +31,15 @@
  * not in the frames where the column slides (r4 gate, M-3). Plan, which only
  * some sessions have, sits after the chips every session has.
  *
+ * Board is a lead's chip only since 2026-10-26 (useBoardTab: a task with open
+ * subtasks or a Board of its own with content). Whether a task leads may be
+ * known only once the task list or the owner read lands, so Board, like Plan,
+ * sits after Terminal and arrives without moving anything; drawn, it waits for
+ * the record like Fork and Locate, and keeps its place as a spacer if the task
+ * goes. A plain task, or a session whose task nothing has named yet, has no
+ * Board and no place kept for it. The tests about Board make the fixture task a
+ * lead page-locally (its owner read says it keeps a Board of its own).
+ *
  * Every test holds `GET /api/sessions/<id>` the way a slow box would and opens
  * the column through the UI (the task row, the session finder, a chat
  * reference); the only page loads past the first are the routes under test (a
@@ -84,6 +93,36 @@ async function holdRecord(page: Page, sessionId: string, opts: { fail?: boolean 
     release: () => open(),
     dispose: async () => { open(); await page.unroute(url, handler).catch(() => undefined) },
   }
+}
+
+interface Leads {
+  /** Owner reads that arrived (held or not). */
+  reads: () => number
+  release: () => void
+}
+
+/**
+ * Make `taskId` a lead for this page: its owner read (GET /tasks/:id/board/owner?tab=1, which
+ * decides the Board chip) answers as the server does for a task that keeps a Board of its own.
+ * Page-local, so the shared fixture board is never written. `hold` keeps every answer back
+ * until `release()`, what a slow box does to that read.
+ */
+async function leadsForPage(page: Page, taskId: string, opts: { hold?: boolean } = {}): Promise<Leads> {
+  let open!: () => void
+  const gate = opts.hold ? new Promise<void>((resolve) => { open = resolve }) : Promise.resolve()
+  if (!opts.hold) open = () => undefined
+  let reads = 0
+  await page.route((url) => url.pathname === `/api/v1/tasks/${taskId}/board/owner` && url.searchParams.get('tab') === '1', async (route) => {
+    reads++
+    await gate
+    try {
+      const res = await route.fetch()
+      // A task that is gone answers as it does (404); only a real answer is turned into a lead's.
+      if (!res.ok()) await route.fulfill({ response: res })
+      else await route.fulfill({ response: res, json: { ...(await res.json()), has_board: true, own_board: true } })
+    } catch { /* the page is gone */ }
+  })
+  return { reads: () => reads, release: () => open() }
 }
 
 /** Open the fixture session's column from its task row, as a person does. */
@@ -219,8 +258,9 @@ async function expectNoTaskControls(panel: Locator, when: string) {
 /**
  * Fork, Board and Locate are spacers: there, invisible, out of reach (no pointer, no focus, no name,
  * not in the accessibility tree), and the "..." chip counts and lists only the live items it holds.
+ * `kept` are the ones the panel had drawn: Board keeps a place only if it was there (a lead's task).
  */
-async function expectSpacers(page: Page, panel: Locator, when: string) {
+async function expectSpacers(page: Page, panel: Locator, when: string, kept: string[] = ['fork', 'board', 'locate']) {
   const row = panel.locator('.session-meta-row-2')
   await expect(row.locator(TASK_CONTROLS), `${when}: no Fork, Board or Locate to press`).toHaveCount(0)
   const facts = await row.evaluate((r, sel) => {
@@ -245,7 +285,10 @@ async function expectSpacers(page: Page, panel: Locator, when: string) {
     return { spacers, foldedLive, more: more?.getAttribute('aria-label') ?? null }
   }, SPACERS)
   const ids = facts.spacers.map((f) => f.id)
-  for (const id of ['fork', 'board', 'locate']) expect(ids.filter((x) => x === id), `${when}: ${id} keeps one place`).toHaveLength(1)
+  for (const id of ['fork', 'board', 'locate']) {
+    const places = kept.includes(id) ? 1 : 0
+    expect(ids.filter((x) => x === id), `${when}: ${id} keeps ${places ? 'one place' : 'no place (never drawn)'}`).toHaveLength(places)
+  }
   for (const f of facts.spacers) {
     expect(f, `${when}: the ${f.id} spacer is invisible and out of reach`).toEqual({
       id: f.id, visibility: 'hidden', pointer: 'none', ariaHidden: 'true', tabIndex: -1, named: false, focused: false,
@@ -375,9 +418,10 @@ function boxHolds(key: string, p: { x: number; y: number }): boolean {
 }
 
 /**
- * The record of a session nothing on the page had named is held: the panel waits with all three
- * task controls. The person aims at Files; the record lands and says the session has no task. In no
- * frame does Files move, nothing else on the row moves either, the three are spacers, and the click
+ * The record of a session nothing on the page had named is held: the panel waits with Fork and
+ * Locate (Board, a lead's chip, needs a task known to lead, so it is not drawn). The person aims at
+ * Files; the record lands and says the session has no task. In no frame does Files move, nothing
+ * else on the row moves either, Fork and Locate are spacers, and the click
  * opens Files. `remounts`: the column is replaced by a new panel under the full id (a prefix deep
  * link), which enters with the columns' own scale-in (auto-animate): the whole panel scales, its row
  * does not change, and the aimed point stays on Files in every frame.
@@ -388,8 +432,9 @@ async function aimAtFilesAcrossNoTask(page: Page, panel: Locator, panelSel: stri
   const fork = panel.getByRole('button', { name: 'Fork session into a child task' })
   await expect(fork, `${when}: nothing on the page named the session, so it waits with the task controls`).toBeDisabled()
   await expect(fork).toHaveAccessibleDescription(WAITING.fork!)
-  await expect(panel.getByTestId('session-board-chip')).toBeDisabled()
   await expect(panel.getByTestId('session-panel-locate')).toBeDisabled()
+  // Board is a lead's: with no task known, nothing says it leads, so Board is not drawn and keeps no place.
+  await expect(panel.locator('[data-header-id="board"]'), `${when}: no Board for a task nobody named`).toHaveCount(0)
   await page.mouse.move(0, 0)
   const before = await rowBoxes(panel)
   if (shot) await shootHeader(page, panel, `${shot}-held`)
@@ -411,7 +456,7 @@ async function aimAtFilesAcrossNoTask(page: Page, panel: Locator, panelSel: stri
   } else {
     expect(seen, `${when}: Files sits still in every frame`).toEqual([`${b.x},${b.y} w${b.w} h${b.h}`])
   }
-  await expectSpacers(page, panel, when)
+  await expectSpacers(page, panel, when, ['fork', 'locate'])
   if (shot) await shootHeader(page, panel, `${shot}-loaded`)
 
   await page.mouse.click(aim.x, aim.y)
@@ -520,6 +565,8 @@ test('a click aimed at Files while the session record loads opens Files', async 
 })
 
 test('Fork, Board and Locate wait disabled in their places, then work once the record lands', async ({ page }) => {
+  // The task leads (Board is a lead's chip), and the answer that says so is late as well.
+  const leads = await leadsForPage(page, TASK_ID, { hold: true })
   const hold = await holdRecord(page, SESSION_ID)
   try {
     const panel = await openFromTaskRow(page)
@@ -527,6 +574,22 @@ test('Fork, Board and Locate wait disabled in their places, then work once the r
     const fork = panel.getByRole('button', { name: 'Fork session into a child task' })
     const board = panel.getByTestId('session-board-chip')
     const locate = panel.getByTestId('session-panel-locate')
+
+    // Until the owner read says the task leads, there is no Board; when it does, Board joins after
+    // Terminal and nothing already on the row moves.
+    await expect.poll(() => leads.reads(), { message: 'the owner read is on its way' }).toBeGreaterThan(0)
+    await expect(fork).toBeDisabled()
+    await expect(panel.locator('[data-header-id="board"]'), 'not known to lead yet: no Board').toHaveCount(0)
+    await settle(page)
+    await page.mouse.move(0, 0)
+    const beforeBoard = await rowBoxes(panel)
+    leads.release()
+    await expect(board).toBeVisible({ timeout: 15_000 })
+    await settle(page)
+    const withBoard = await rowBoxes(panel)
+    console.log(`BOARD-LATE ${test.info().project.name}: ${shown(beforeBoard)} -> ${shown(withBoard)} moved ${JSON.stringify(moved(beforeBoard, withBoard))}`)
+    expect(moved(beforeBoard, withBoard), 'Board joined the row without moving anything on it').toEqual([])
+    expect(withBoard.board!.x, 'Board sits after Terminal').toBeGreaterThan(withBoard.terminal!.x)
 
     // Held: each is on the row, disabled, named for what it does, and says why it waits.
     await expect(fork).toBeVisible()
@@ -598,6 +661,7 @@ test('Fork, Board and Locate wait disabled in their places, then work once the r
     await expect(board).toHaveClass(/session-action-chip-active/)
     await expect(page.getByTestId('task-board-pane')).toBeVisible({ timeout: 15_000 })
   } finally {
+    leads.release()
     await hold.dispose()
   }
 })
@@ -610,6 +674,8 @@ test('a plan session: Plan arrives after the chips every session has, and Files 
     await expect(files).toBeVisible()
     await expect.poll(() => hold.held()).toBeGreaterThan(0)
     await expect(panel.locator('[data-header-id="plan"]'), 'no plan is known before the record').toHaveCount(0)
+    // The column opened from the finder scales in; measure it at rest (seen: the whole row 4 px off).
+    await settle(page)
     const before = await rowBoxes(panel)
     const box = (await files.boundingBox())!
 
@@ -684,12 +750,16 @@ test('a plan session in a narrow column: the late Plan chip joins the "..." menu
       const before = await rowBoxes(panel)
       hold.release()
       await expect(panel.locator('button[data-header-id="plan"]')).toBeAttached({ timeout: 15_000 })
-      await expect(panel.locator('button[data-header-id="locate"]:enabled')).toBeAttached()
+      // The record has landed. (Not "Locate is enabled": since one session per task, 2026-10-21,
+      // this plan session is a detached one of its task, its record says no task, so it has no Locate.)
+      await expect(panel.locator('.session-panel-badge', { hasText: 'Loading...' })).toHaveCount(0, { timeout: 15_000 })
       await settle(page)
       const after = await rowBoxes(panel)
       const diff = moved(before, after)
-      const appeared = Object.keys(after).filter((id) => !(id in before) && id !== 'time' && id !== 'plan')
       const planShown = 'plan' in after
+      // A folded Plan needs a "..." to sit in: with no task controls on this session, a row that
+      // had folded nothing gains one for it (in the room the row kept free), and nothing moves.
+      const appeared = Object.keys(after).filter((id) => !(id in before) && id !== 'time' && id !== 'plan' && !(id === 'more' && !planShown))
       reading = `${width}px: shown ${Object.keys(after).join(',')} | moved ${JSON.stringify(diff)} | appeared ${JSON.stringify(appeared)}`
       expect(diff, `${width}px: nothing on the row moves when Plan arrives`).toEqual([])
       expect(appeared, `${width}px: nothing but the time and Plan joins the row late`).toEqual([])
@@ -713,11 +783,14 @@ test('a plan session in a narrow column: the late Plan chip joins the "..." menu
 
 test('a record that fails to load leaves the chips in place, saying why they cannot act', async ({ page }) => {
   test.setTimeout(60_000)
+  // A lead's task, so Board is one of the chips (its owner read answers; only the record fails).
+  await leadsForPage(page, TASK_ID)
   const hold = await holdRecord(page, SESSION_ID, { fail: true })
   try {
     const panel = await openFromTaskRow(page)
     const fork = panel.getByRole('button', { name: 'Fork session into a child task' })
     await expect(fork).toBeVisible()
+    await expect(panel.getByTestId('session-board-chip')).toBeVisible()
     const before = await rowBoxes(panel)
     // The panel retries a failed read a few times, then gives up on it.
     await expect(fork).toHaveAccessibleDescription("Fork is unavailable because this session's details did not load", { timeout: 30_000 })
@@ -767,7 +840,8 @@ test('a session known to have no task shows no Fork, Board or Locate, before or 
 
 test('after a reload nothing names the session yet: its column waits with the task controls, and keeps their places if the record says it has no task', async ({ page }) => {
   test.setTimeout(120_000)
-  // With a task: nothing moves, the three just start to act.
+  // With a task, a lead's (so Board is one of the three): nothing moves, the three just start to act.
+  await leadsForPage(page, TASK_ID)
   await clampColumns(page, 340)
   await openViaFinder(page, SESSION_TITLE, SESSION_ID)
   let hold = await holdRecord(page, SESSION_ID)
@@ -843,13 +917,14 @@ test('a deep link to a session with no task keeps the row still, by its full id 
 
 test('the first chat reference to a session with no task keeps the row still', async ({ page }) => {
   test.setTimeout(90_000)
-  // The fixture session's chat gains a reference to the session with no task.
+  // The fixture session's chat gains a reference to the session with no task, in its turn's last
+  // message (the earlier ones of a turn fold into "N updates", where a reference is not on screen).
   await page.route(new RegExp(`/api/sessions/${SESSION_ID}/history`), async (route) => {
     try {
       const resp = await route.fetch()
       const body = JSON.stringify(await resp.json()).replace(
-        'if you want the source.',
-        `if you want the source. Compare <session-ref id=\\"${TASKLESS.id}\\" label=\\"Ref with no task\\"/>.`,
+        'and read down.',
+        `and read down. Compare <session-ref id=\\"${TASKLESS.id}\\" label=\\"Ref with no task\\"/>.`,
       )
       await route.fulfill({ response: resp, json: JSON.parse(body) })
     } catch { /* the page is gone */ }
@@ -874,14 +949,15 @@ test('the first chat reference to a session with no task keeps the row still', a
 
 test('a prefix chat reference to a session already open folds into its column and moves nothing there', async ({ page }) => {
   test.setTimeout(120_000)
-  // The r3 gate's sequence (L-17). The chat names the session by the 8 characters the UI shows.
+  // The r3 gate's sequence (L-17). The chat names the session by the 8 characters the UI shows, in
+  // its turn's last message (the earlier ones fold into "N updates").
   const prefix = TASKLESS.id.slice(0, 8)
   await page.route(new RegExp(`/api/sessions/${SESSION_ID}/history`), async (route) => {
     try {
       const resp = await route.fetch()
       const body = JSON.stringify(await resp.json()).replace(
-        'if you want the source.',
-        `if you want the source. Compare <session-ref id=\\"${prefix}\\" label=\\"Ref by prefix\\"/>.`,
+        'and read down.',
+        `and read down. Compare <session-ref id=\\"${prefix}\\" label=\\"Ref by prefix\\"/>.`,
       )
       await route.fulfill({ response: resp, json: JSON.parse(body) })
     } catch { /* the page is gone */ }
@@ -902,8 +978,8 @@ test('a prefix chat reference to a session already open folds into its column an
   const box = (await open.locator('button[data-header-id="files"]').boundingBox())!
   const trace = await traceRow(page, openSel)
 
-  // The reference opens a column under the prefix, which waits with the three (nothing on the page
-  // named the prefix), then adopts the full id and folds into the open column.
+  // The reference opens a column under the prefix, which waits with Fork and Locate (nothing on the
+  // page named the prefix), then adopts the full id and folds into the open column.
   const prefixPanel = page.locator(`.main-page-session-column .session-panel[data-session-id="${prefix}"]`)
   const hold = await holdRecord(page, prefix)
   let reading = 'no reading'
@@ -959,6 +1035,8 @@ test('a task deleted while its session is open: Fork, Board and Locate stop acti
   // 340 px folds Locate into "..."; 760 px keeps it on the row, where its spacer must sit where it was.
   for (const px of [340, 760]) {
     const seeded = await seedTaskSession(page, `open ${px}`)
+    // A lead's task, so Board is one of the three.
+    await leadsForPage(page, seeded.taskId)
     await clampColumns(page, px)
     const panel = await openSeededFromTaskRow(page, seeded)
     await expect(panel.locator('[data-header-id="fork"] button:enabled')).toBeVisible({ timeout: 20_000 })
@@ -1011,6 +1089,8 @@ test('a task deleted while its session is open: Fork, Board and Locate stop acti
 test('a record that left the server before the task was deleted cannot bring its controls back', async ({ page }) => {
   test.setTimeout(90_000)
   const seeded = await seedTaskSession(page, 'stale')
+  // A lead's task, so Board is one of the three.
+  await leadsForPage(page, seeded.taskId)
   // The record as the server sent it before the delete: an older status revision, naming the task.
   const stale = await (await page.request.get(`/api/sessions/${seeded.sid}`)).json() as { session: { taskId: string; statusRevision: number } }
   expect(stale.session.taskId).toBe(seeded.taskId)
@@ -1029,6 +1109,8 @@ test('a record that left the server before the task was deleted cannot bring its
     await expect.poll(() => held, { message: 'the record is on its way' }).toBeGreaterThan(0)
     // The task list named the task: the three wait, disabled.
     await expect(panel.locator('[data-header-id="fork"] button')).toBeDisabled()
+    await expect(panel.getByTestId('session-board-chip')).toBeDisabled()
+    await expect(panel.getByTestId('session-panel-locate')).toBeDisabled()
     await settle(page)
     await page.mouse.move(0, 0)
     const before = await rowBoxes(panel)
@@ -1056,6 +1138,8 @@ test('a record that left the server before the task was deleted cannot bring its
 test('a task deleted while the socket was down is caught up when it comes back, in place', async ({ page }) => {
   test.setTimeout(90_000)
   const seeded = await seedTaskSession(page, 'outage')
+  // A lead's task, so Board is one of the three.
+  await leadsForPage(page, seeded.taskId)
   // The page's socket goes through the test, which can drop what the server sends and cut the line.
   const sockets: WebSocketRoute[] = []
   let outage = false
@@ -1070,6 +1154,7 @@ test('a task deleted while the socket was down is caught up when it comes back, 
   expect(sockets.length, 'the page socket runs through the test').toBeGreaterThan(0)
   const panel = await openSeededFromTaskRow(page, seeded)
   await expect(panel.locator('[data-header-id="fork"] button:enabled')).toBeVisible({ timeout: 20_000 })
+  await expect(panel.getByTestId('session-board-chip')).toBeEnabled()
   await expect(panel.locator('button[data-header-id="locate"]:enabled')).toBeAttached()
   await settle(page)
   await page.mouse.move(0, 0)

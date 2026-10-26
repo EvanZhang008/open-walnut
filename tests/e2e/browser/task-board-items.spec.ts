@@ -34,8 +34,10 @@
  *   B3. A note's "Dictate…" docks the same composer (mic included) over the note:
  *      it starts from the note's text (unsaved typing is saved first), Send saves
  *      it, Escape and a closing Board keep what was written, an empty Send clears it.
- *   C. A worker's Board tab shows its leader's board, and a post from there lands
- *      on the leader's board.
+ *   C. A worker has no Board tab (the tab is a lead's, 2026-10-26); its board post
+ *      (board_post's path: its owner's board, with its caller id) lands on the
+ *      leader's board, which the leader's own tab shows, and a post from there
+ *      lands there too.
  *
  * The chromium and webkit projects share ONE fixture board, so every task is
  * named `${engine}-items-…` with a stamp and nothing counts across the board.
@@ -793,14 +795,20 @@ test('a note docks Walnut\'s composer (voice included) through Dictate…', asyn
   expect(pageErrors).toEqual([])
 })
 
-test('a worker\'s Board tab shows its leader\'s board, and its posts land there', async ({ page }) => {
+test('a worker has no Board tab; its board posts land on its leader\'s board, which the leader\'s tab shows', async ({ page }) => {
   test.setTimeout(240_000)
   const engine = test.info().project.name
   const stamp = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`
   const project = `${engine}-items-team ${stamp}`
   const leaderTitle = `${engine}-items-team-lead ${stamp}`
-  const leader = await createTask(leaderTitle, { project, pinned: false })
+  const { id: leader, sid: leaderSid } = await taskWithSession(leaderTitle, { project }, 'Team lead ready')
   const { id: worker, sid } = await taskWithSession(`${engine}-items-team-worker ${stamp}`, { project, parent_task_id: leader }, 'Team worker ready')
+  await api('PUT', `/api/v1/tasks/${leader}/board`, {
+    html: `<!doctype html><html><head><meta charset="utf-8">${STYLE}</head><body><main>
+<h1 class="team-h1" style="font-size:17px">${engine} team board ${stamp}</h1>
+<walnut-thread id="team-talk" title="Team talk"></walnut-thread>
+</main></body></html>`,
+  })
 
   await isolateUiPrefs(page)
   await presetPanelView(page, { section: 'all', project: '' })
@@ -810,33 +818,54 @@ test('a worker\'s Board tab shows its leader\'s board, and its posts land there'
   await expect(leaderRow).toBeVisible({ timeout: 90_000 })
   const chevron = leaderRow.locator('.collapse-chevron')
   if (!(await chevron.evaluate((el) => el.classList.contains('expanded')))) await chevron.click()
-  const { pane, frame } = await openBoardTab(page, worker, sid, false)
 
-  // No board anywhere in the tree yet: the team's Status, under the owner's name.
-  const title = pane.getByTestId('board-title')
-  await expect(pane.getByTestId('board-status')).toBeVisible({ timeout: 15_000 })
-  await expect(title).toHaveText(`Board · ${leaderTitle}`)
-  await expect(title).toHaveAttribute('title', `Shared with your team: ${leaderTitle} keeps this board`)
-  // The leader writes one: it arrives live in the worker's tab.
-  await api('PUT', `/api/v1/tasks/${leader}/board`, {
-    html: `<!doctype html><html><head><meta charset="utf-8">${STYLE}</head><body><main>
-<h1 class="team-h1" style="font-size:17px">${engine} team board ${stamp}</h1>
-<walnut-thread id="team-talk" title="Team talk"></walnut-thread>
-</main></body></html>`,
-  })
-  await showCustomBoard(pane)
-  await expect(frame.locator('h1.team-h1')).toHaveText(`${engine} team board ${stamp}`, { timeout: 15_000 })
-  await expect(title).toHaveText(`Board · ${leaderTitle}`)
-  // A post from the worker's tab lands on the LEADER's board.
-  await frame.locator('walnut-thread[id="team-talk"] .wn-reply').click()
-  const input = pane.getByTestId('board-reply-dock').locator('.chat-input-textarea')
-  await input.fill(`From the worker tab ${stamp}`)
-  await input.press('Enter')
-  const rows = frame.locator('walnut-thread[id="team-talk"] .wn-msg')
-  await expect(rows.last().locator('.wn-text')).toHaveText(`From the worker tab ${stamp}`, { timeout: 15_000 })
+  // ── The worker's panel: no Board tab (2026-10-26, "for non leader, please don't show board") ──
+  // Whether it leads is the panel's owner read: wait for that answer, so "no chip" is the decision, not a chip on its way.
+  const ownerRead = page.waitForResponse((r) => r.url().includes(`/api/v1/tasks/${worker}/board/owner?tab=1`), { timeout: 60_000 })
+  const workerRow = page.locator(`.todo-panel-item[data-task-id="${worker}"]`)
+  await expect(workerRow).toBeVisible({ timeout: 30_000 })
+  await workerRow.locator('.todo-item-title').click()
+  const workerPanel = page.locator(`${REAL_PANEL}[data-session-id="${sid}"]`)
+  await expect(workerPanel).toBeVisible({ timeout: 30_000 })
+  await expect(workerPanel.locator('[data-header-id="files"]')).toBeVisible({ timeout: 30_000 })
+  expect(await (await ownerRead).json()).toMatchObject({ task_id: leader, self: false, own_board: false, open_subtasks: 0 })
+  await expect(workerPanel.getByTestId('session-board-chip')).toHaveCount(0)
+  await expect(workerPanel.locator('[data-header-id="board"]')).toHaveCount(0)
+
+  // ── The worker still writes the team's board, the way its board_post op does (src/ops/boards.ts):
+  // the default board is its owner's, and the post carries the worker session's caller id ──
+  const owner = await api<{ task_id: string; self: boolean }>('GET', `/api/v1/tasks/${worker}/board/owner`)
+  expect(owner).toMatchObject({ task_id: leader, self: false })
+  const workerText = `From the worker session ${stamp}`
+  await api('POST', `/api/v1/tasks/${owner.task_id}/board/threads/team-talk`, { text: workerText }, { 'x-walnut-caller-sid': sid })
   await expect.poll(async () => (await getBoard(leader)).threads['team-talk']?.map((m) => [m.author, m.text]), { timeout: 10_000 })
-    .toContainEqual(['user', `From the worker tab ${stamp}`])
+    .toContainEqual([`task:${worker}`, workerText])
   expect((await getBoard(worker)).board).toBeNull()
   expect((await getBoard(worker, true)).board_task_id).toBe(leader)
+
+  // ── The leader's panel has the tab (an open subtask); the worker's still has none ──
+  await leaderRow.locator('.todo-item-title').click()
+  const leaderPanel = page.locator(`${REAL_PANEL}[data-session-id="${leaderSid}"]`)
+  await expect(leaderPanel).toBeVisible({ timeout: 30_000 })
+  const leaderChip = leaderPanel.getByTestId('session-board-chip')
+  await expect(leaderChip).toBeEnabled({ timeout: 30_000 })
+  await expect(workerPanel.getByTestId('session-board-chip')).toHaveCount(0)
+
+  // ── The team board there: the leader's page, with the worker's post in its thread ──
+  await leaderChip.click()
+  const pane = page.getByTestId('task-board-pane')
+  await showCustomBoard(pane)
+  const frame = page.frameLocator('.task-board-frame')
+  await expect(frame.locator('h1.team-h1')).toHaveText(`${engine} team board ${stamp}`, { timeout: 15_000 })
+  const rows = frame.locator('walnut-thread[id="team-talk"] .wn-msg')
+  await expect(rows.last().locator('.wn-text')).toHaveText(workerText, { timeout: 15_000 })
+  // And the user's post from the leader's tab lands there too.
+  await frame.locator('walnut-thread[id="team-talk"] .wn-reply').click()
+  const input = pane.getByTestId('board-reply-dock').locator('.chat-input-textarea')
+  await input.fill(`From the leader tab ${stamp}`)
+  await input.press('Enter')
+  await expect(rows.last().locator('.wn-text')).toHaveText(`From the leader tab ${stamp}`, { timeout: 15_000 })
+  await expect.poll(async () => (await getBoard(leader)).threads['team-talk']?.map((m) => [m.author, m.text]), { timeout: 10_000 })
+    .toContainEqual(['user', `From the leader tab ${stamp}`])
   await page.screenshot({ path: `${SHOT_DIR}/${engine}-C-team-board.png` })
 })

@@ -3,8 +3,10 @@
  * runtime board-runtime.frame.js / board-elements.frame.js), the Worker pill and
  * the Adopt picker, as a user meets them on Home.
  *
- *   1. A leader's session header has a Board chip; with no board, the tab offers
- *      "Ask the leader for a page", which goes to the session through the composer's send.
+ *   1. A task that does not lead has no Board chip; one that keeps a Board of its
+ *      own (here: lanes, no page yet) gets it live; with no page and no team, the
+ *      tab offers "Ask the leader for a page", which goes to the session through
+ *      the composer's send.
  *   2. A board written through the API renders in the sandboxed frame: a live
  *      task chip (the store's phase, updated without a reload), the status strip
  *      (counts, filtering), the unread total, an unknown id, external and `#`
@@ -153,8 +155,17 @@ test('the Board tab: ask, live components, threads, re-render, marks and locate'
   const workerTitle = `${engine}-board-worker ${stamp}`
 
   // ── 1. The chip, the empty kanban, "Ask the leader for a page" ──
+  // The Board tab is a lead's (2026-10-26): a task with no subtask and no Board of its own has none.
   const chip = panel.getByTestId('session-board-chip')
-  await expect(chip).toBeVisible()
+  await expect(panel.locator('[data-header-id="files"]')).toBeVisible()
+  await expect.poll(() => api<{ own_board: boolean; open_subtasks: number }>('GET', `/api/v1/tasks/${leader}/board/owner?tab=1`))
+    .toMatchObject({ own_board: false, open_subtasks: 0 })
+  await expect(chip).toHaveCount(0)
+  // The leader sets up its Board's lanes (its session's write), before any page or worker: a Board
+  // of its own, so the tab arrives live, and its kanban is still empty with no page to show.
+  const { lanes_effective: lanes } = await api<{ lanes_effective: unknown[] }>('GET', `/api/v1/tasks/${leader}/board?team=1`)
+  await api('PUT', `/api/v1/tasks/${leader}/board/lanes`, { lanes }, { 'x-walnut-caller-sid': sessionId })
+  await expect(chip).toBeVisible({ timeout: 15_000 })
   await chip.click()
   await expect(chip).toHaveClass(/session-action-chip-active/)
   const pane = page.getByTestId('task-board-pane')
@@ -480,6 +491,15 @@ test('a board that cannot load says so with Retry, and Retry recovers', async ({
     } else {
       await route.continue()
     }
+  })
+  // The Board tab is a lead's: the seeded task keeps a Board of its own as far as this page
+  // knows (its owner read, page-locally), so the chip is there while the board read itself fails.
+  await page.route((url) => url.pathname === '/api/v1/tasks/pw-task-model-switch/board/owner' && url.searchParams.get('tab') === '1', async (route) => {
+    try {
+      const res = await route.fetch()
+      if (!res.ok()) await route.fulfill({ response: res })
+      else await route.fulfill({ response: res, json: { ...(await res.json()), has_board: true, own_board: true } })
+    } catch { /* the page is gone */ }
   })
   await openHome(page)
   const parentRow = page.locator('.todo-panel-item[data-task-id="pw-task-model-switch"]')

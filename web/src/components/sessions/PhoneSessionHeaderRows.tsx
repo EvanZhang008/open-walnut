@@ -44,12 +44,13 @@ export function PhoneSessionHeaderRows(p: PhoneSessionHeaderRowsProps) {
     <div className="phone-session-rows" data-testid="phone-session-rows">
       <Row label="Changed" active={p.activeView === 'changed'} onClick={view('changed')} testId="phone-row-changed" />
       <Row label="Files" active={p.activeView === 'files'} onClick={view('files')} testId="phone-row-files" />
+      {p.terminal && (
+        <Row label="Terminal" active={p.activeView === 'terminal'} onClick={view('terminal')} testId="phone-row-terminal" />
+      )}
+      {/* A lead's row only (useBoardTab), after the rows every session has, as on the header. */}
       {p.board !== 'none' && (
         <Row label="Board" active={p.activeView === 'board'} disabled={p.board === 'waiting'} onClick={view('board')} testId="phone-row-board"
           why={p.board === 'waiting' ? 'Not written yet' : undefined} />
-      )}
-      {p.terminal && (
-        <Row label="Terminal" active={p.activeView === 'terminal'} onClick={view('terminal')} testId="phone-row-terminal" />
       )}
       {p.plan && <Row label="Plan" onClick={() => { p.close(); p.onPlan(); }} testId="phone-row-plan" />}
       {p.onCloseSession && <Row label="Close session" onClick={() => { p.close(); p.onCloseSession?.(); }} testId="phone-row-close" />}

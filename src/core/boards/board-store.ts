@@ -269,6 +269,25 @@ export async function hasBoard(taskId: string): Promise<boolean> {
   return fsp.stat(file).then((s) => s.isFile(), () => false);
 }
 
+/**
+ * Whether a board holds anything a person or an agent wrote: a page, a thread,
+ * a mark, a project, a check, a choice, a reminder, lanes someone edited, or a
+ * card someone placed, summarized or set waiting. The server's own kanban
+ * bookkeeping does not count (a materialized lane template, a card's
+ * `lane_auto` / `handed_back_at` / `output_at` stamps), and neither does only
+ * looking (`kanban_seen`, `section_seen`): 2026-10-26, a plain task whose Board
+ * tab was once opened owned an otherwise empty board file, and a lead's board
+ * file fills with automatic card stamps as its workers report.
+ */
+export function boardHasContent(board: BoardFile | null): boolean {
+  if (!board) return false;
+  if (board.html.trim()) return true;
+  if (board.lanes && board.lanes_by) return true;
+  if ([board.threads, board.marks, board.projects, board.checks, board.choices, board.reminders]
+    .some((m) => Object.keys(m ?? {}).length > 0)) return true;
+  return Object.values(board.cards ?? {}).some((c) => !!(c.lane_by || c.rank != null || c.summary_by || c.waiting_on_by || c.lane_suggested));
+}
+
 export type BoardItemKind = 'thread' | 'mark' | 'project' | 'check' | 'choice' | 'target' | 'section';
 
 /** For the writers in this directory: an item id must follow BOARD_ITEM_ID_RE. */

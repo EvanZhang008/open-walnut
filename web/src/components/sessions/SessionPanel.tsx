@@ -18,7 +18,7 @@ import { SessionPinsContext } from '@/contexts/SessionPinsContext';
 import { usePanelThreads } from '@/hooks/useSessionThreads';
 import { SessionThreadsContext } from '@/contexts/SessionThreadsContext';
 import { releaseSelectionHold, requestSelectionHold } from '@/utils/selection-hold';
-import { SessionRecapTip } from './SessionRecapTip';
+import { useLatestUpdateEntry } from './useLatestUpdateEntry';
 import { ThreadToastProvider } from './ThreadPanelToast';
 import { ThreadToastBridge } from './ThreadStackFrame';
 import { ThreadModePill } from './ThreadModePill';
@@ -78,6 +78,7 @@ import { ProcessStatusBadge } from './WorkStatusPicker';
 import { SessionForkButton } from './SessionForkButton';
 import { headerTaskPresence, recordGateReason, TASK_SLOT_IDS, TASK_SLOT_SPACER } from './header-record-gate';
 import { useTaskControlSlot } from './useTaskControlSlot';
+import { useBoardTab } from './useBoardTab';
 import { panelTaskCopy } from './panel-task-copy';
 import { PanelCountRow, SessionKebabSection } from './SessionKebabSection';
 import { PinnedSessionFacts, SessionMetaFacts } from './SessionMetaFacts';
@@ -454,6 +455,16 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
   // adopting the full id) starts from what this one drew (handOverTaskSlots).
   const { slot: taskSlot, handOver: handOverTaskSlots } = useTaskControlSlot(sessionId, taskPresence);
   const boardWaitReason = recordGateReason('The Board', session, loading);
+  // Board is a lead's tab: only a task with open subtasks or a Board of its own
+  // gets it (board-tab-model.ts). The status store names the task before the record.
+  // An inset column draws no split views, so it never asks.
+  const boardTab = useBoardTab(inset ? undefined : (session?.taskId ?? liveStatus?.taskId));
+  // Whether this panel drew the live chip for this session: only then does a later
+  // "no task" leave its place as a spacer (taskControlSlot).
+  const boardDrawn = useRef<{ sessionId: string; drawn: boolean }>({ sessionId, drawn: false });
+  if (boardDrawn.current.sessionId !== sessionId) boardDrawn.current = { sessionId, drawn: false };
+  const boardChipLive = taskSlot === 'live' && boardTab === 'shown';
+  if (boardChipLive) boardDrawn.current.drawn = true;
   const locateWaitReason = recordGateReason('Locate', session, loading);
 
   const handleControlCommand = useCallback((command: string) => {
@@ -1132,6 +1143,14 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
     // full-screen promotion over that bar.
     if (next) { if (!isPhoneLayout()) enterFullscreen(); applyOpenCollapse(next); } else { exitFullscreen(); collapseChat(false); }
   }, [enterFullscreen, exitFullscreen, fileViewTarget, activeView, applyOpenCollapse, collapseChat, inset, session?.taskId, sessionId, onLocateTask, onTaskClick, navigate]);
+  // An open Board whose task stops leading (its last open subtask finished and it
+  // keeps no Board of its own, or the Board was deleted) closes back to the chat
+  // instead of leaving an empty pane behind a tab that is gone.
+  useEffect(() => {
+    if (activeView !== 'board' || boardTab !== 'hidden' || !session?.taskId) return;
+    log.info('session-panel', 'board view closed: the task no longer leads', { sessionId, taskId: session?.taskId ?? '' });
+    toggleView('board');
+  }, [activeView, boardTab, toggleView, sessionId, session?.taskId]);
   // Keep-alive for the Code view: once opened, it stays MOUNTED (css-hidden)
   // for the panel's lifetime. Unmounting destroys the iframe, and remounting
   // reboots the whole VS Code workbench (seconds, worse over a tunnel) — the
@@ -1228,8 +1247,12 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
   const triggerPicker = useTriggerPickerEntry({
     sessionId, taskId: session?.taskId, acp: engineIsAcp, enabled: !onQuestionPage, onPrefill: prefillLead,
   });
+  // "Latest update": the session's recap (Overall / Latest), on demand instead of
+  // a card above the composer. It leads the list: it is about this session, not an action.
+  const latestUpdate = useLatestUpdateEntry({ sessionId, session });
   const transferAvailable = useCanOpenTransfer();
   const composerPlusActions = useMemo<PlusMenuAction[] | undefined>(() => {
+    const lead = latestUpdate.action ? [latestUpdate.action] : [];
     // "Transfer harness/host…" sits under "Engine settings": both are about where this work runs.
     const transfer = transferAvailable ? transferPlusAction(session?.taskId) : null;
     const rest = [
@@ -1237,7 +1260,10 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
       ...(engineSettingsEntry.plusMenuActions ?? []),
       ...(transfer ? [transfer] : []),
     ];
-    if (!session?.taskId || onQuestionPage) return engineSettingsEntry.plusMenuActions;
+    if (!session?.taskId || onQuestionPage) {
+      const own = engineSettingsEntry.plusMenuActions;
+      return lead.length || own ? [...lead, ...(own ?? [])] : undefined;
+    }
     const waitUntil: PlusMenuAction = {
       id: 'wait-until',
       label: WAIT_UNTIL_LABEL,
@@ -1253,8 +1279,8 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
         setPrefillNonce((n) => n + 1);
       },
     };
-    return [waitUntil, ...rest];
-  }, [engineSettingsEntry.plusMenuActions, triggerPicker.action, session?.taskId, onQuestionPage, engineIsAcp, transferAvailable]);
+    return [...lead, waitUntil, ...rest];
+  }, [engineSettingsEntry.plusMenuActions, triggerPicker.action, latestUpdate.action, session?.taskId, onQuestionPage, engineIsAcp, transferAvailable]);
 
   // Open the Inbox tab (optionally on one letter) — the arrival half of the
   // `/sessions?id=…&tab=inbox&letter=…` deep link.
@@ -2101,15 +2127,30 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
                 >
                   Files
                 </button>
-                {/* Board needs the task, like Fork: absent for a session known to
-                    have none, otherwise drawn from the first frame (it sits in front of
-                    Terminal) and disabled until the record lands; a spacer once drawn. */}
-                {taskSlot === 'spacer' && (
+                {terminalOffered && (
+                  <button
+                    className={`session-action-chip${activeView === 'terminal' ? ' session-action-chip-active' : ''}`}
+                    onClick={() => toggleView('terminal')}
+                    title="Open a terminal in the session working directory, full-screen alongside the chat"
+                    data-header-id="terminal"
+                    data-hidden={hid('terminal')}
+                  >
+                    Terminal
+                  </button>
+                )}
+                {/* Board needs the task, like Fork, and only a lead's task has one
+                    worth opening (useBoardTab): absent otherwise. It comes AFTER the
+                    chips every session has, like Plan below: whether a task leads may
+                    be known only once the task list or the owner read lands, and a chip
+                    that appears late in front of Terminal pushes it under a click.
+                    Drawn, it is disabled until the record lands; a spacer once drawn
+                    if the task goes. */}
+                {taskSlot === 'spacer' && boardDrawn.current.drawn && (
                   <button type="button" className="session-action-chip" data-header-id="board" data-hidden={hid('board')} {...TASK_SLOT_SPACER}>
                     Board
                   </button>
                 )}
-                {taskSlot === 'live' && (
+                {boardChipLive && (
                   <button
                     className={`session-action-chip${activeView === 'board' ? ' session-action-chip-active' : ''}`}
                     onClick={() => { if (!boardWaitReason) toggleView('board'); }}
@@ -2120,17 +2161,6 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
                     data-hidden={hid('board')}
                   >
                     Board
-                  </button>
-                )}
-                {terminalOffered && (
-                  <button
-                    className={`session-action-chip${activeView === 'terminal' ? ' session-action-chip-active' : ''}`}
-                    onClick={() => toggleView('terminal')}
-                    title="Open a terminal in the session working directory, full-screen alongside the chat"
-                    data-header-id="terminal"
-                    data-hidden={hid('terminal')}
-                  >
-                    Terminal
                   </button>
                 )}
               </>
@@ -2206,11 +2236,6 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
                         )}
                       </div>
                       <div className="plan-popup-input">
-                        {/* Recap tip (Overall / Latest, self-report) right above the
-              composer, so the user re-orients on a long session without
-              re-reading the transcript. Hidden while streaming (live output
-              makes it redundant). */}
-          <SessionRecapTip sessionId={sessionId} session={session} hidden={isStreaming} />
           <ChatInput
             // Same rule in the plan popup's composer: dictation keeps the passage.
             onDictationInsert={holdDictationSelection}
@@ -2465,7 +2490,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
                   close={close}
                   activeView={activeView}
                   onToggleView={toggleView}
-                  board={taskSlot === 'live' ? (boardWaitReason ? 'waiting' : 'live') : 'none'}
+                  board={boardChipLive ? (boardWaitReason ? 'waiting' : 'live') : 'none'}
                   terminal={terminalOffered && !inset}
                   plan={!!(hasPlanContent || showExecuteButtons)}
                   onPlan={() => setPlanPopoverOpen(true)}
@@ -2806,10 +2831,8 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
               {sendError}
             </div>
           )}
-          {/* Recap tip (Overall / Latest, self-report) right above the composer,
-              so the user re-orients on a long session without re-reading the
-              transcript. Hidden while streaming (live output makes it redundant). */}
-          <SessionRecapTip sessionId={sessionId} session={session} hidden={isStreaming} />
+          {/* The recap (Overall / Latest) is no longer drawn here: it opens from
+              the "+" menu's "Latest update" (useLatestUpdateEntry), 2026-10-26. */}
           {/* A Waiting task leaves Waiting on a message: say so where one is written. */}
           <WaitingComposerLine task={sessionTask} />
           <SessionBudgetStatus data={budgetUsage.data} onOpen={openUsageDialog} />
@@ -2902,6 +2925,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
         </div>{/* .session-panel-split */}
         {engineSettingsEntry.popover}
         {triggerPicker.popover}
+        {latestUpdate.popover}
         {/* The questions drawer: an overlay inside this panel (never widens or
             pads the transcript), for a session with questions. */}
         {threads.hasQuestions && threadsApi.actions && (

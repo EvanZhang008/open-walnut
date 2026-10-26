@@ -1,137 +1,70 @@
-/* Recap tip — the "Overall / Latest" card above the composer.
-   Owned by components/sessions/SessionRecapTip.tsx. The class name
-   .session-recap-tip is load-bearing: the composer layout specs locate the
-   row by it.
+/* The session recap (Overall / Latest), written by the turn-complete
+   self-report. Since 2026-10-26 it is no longer a card above the composer: it
+   opens from the composer's "+" menu as "Latest update"
+   (components/sessions/LatestUpdatePopover.tsx). The line height is an integer
+   number of pixels on purpose: WebKit floors a ratio line height (measured
+   2026-09-19), Chromium does not. */
 
-   Shape (2026-09-19): no icon, and each label is an inline run at the start of
-   its paragraph rather than a column. The first version had a leading emoji
-   plus a label column; in a narrow session column that pair took a third of the
-   width and the two texts stacked ten lines high. Text still shows in FULL,
-   never ellipsized (explicit user decision, 2026-07-19), but the body is capped
-   at --recap-tip-max-lines and scrolls past that, so a narrow column keeps its
-   composer. The dense LIST rows (SessionRow, TodoPanel) keep single-line
-   truncate on purpose — don't "unify" either direction.
-
-   The line height is an INTEGER number of pixels on purpose: a ratio (1.35 on
-   11px = 14.85px) is honoured as 14.85px by Chromium but FLOORED to 14px by
-   WebKit, so a cap computed from the ratio cut the last line in half in the Mac
-   app while looking exact in Chromium. With an integer both engines agree and
-   the cap lands on a line boundary. Measured 2026-09-19: WebKit reported 8 rows
-   of CJK text as 112px (14px/line) against a computed line-height of 14.85px. */
-
-.session-recap-tip {
-  /* Wide card: both paragraphs (a real pair runs 4-5 lines) show whole. The
-     narrow cap below is what the 2026-09-19 report asked for. */
-  --recap-tip-max-lines: 6;
-  --recap-tip-line: 15px;
-  position: relative;
-  /* Size container so the body can pick its cap from the CARD's width, not the
-     window's: a narrow column on a wide monitor is the reported case. */
-  container-type: inline-size;
-  margin: 4px 12px 0;
-  border-radius: 6px;
-  background: var(--bg-tertiary);
-  color: var(--fg-muted);
-  font-size: 11px;
-  line-height: var(--recap-tip-line);
-  min-width: 0;
+/* "Latest update" popover (components/sessions/LatestUpdatePopover.tsx): the
+   same two paragraphs, opened from the composer's "+" menu since 2026-10-26
+   instead of drawn above every composer. Placed like the trigger picker. */
+.latest-update-popover {
+  position: fixed;
+  z-index: 10020;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  width: min(420px, 100vw - 24px);
+  max-height: min(480px, var(--menu-max-height, 480px));
+  border: 1px solid var(--border-strong, var(--border));
+  border-radius: var(--radius-lg, 10px);
+  background: var(--bg-elevated, var(--bg));
+  color: var(--fg);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.22), 0 2px 6px rgba(0, 0, 0, 0.12);
+  font-size: 13px;
+  line-height: 19px;
 }
-
-/* The body is the scroll box, and it draws NO scrollbar: a visible bar landed in
-   the same top-right corner as the × and read as two controls fighting over one
-   spot in a narrow column (2026-09-19). Scrolling still works by wheel, trackpad
-   and (thanks to tabIndex) arrow keys; the cue that there is more is the last
-   line fading out, which costs no corner and no pixels of width. Only the ×
-   needs reserving, and just for the FIRST line. `overflow: hidden` until the
-   component measures an overflow: with macOS "always show scroll bars", WebKit
-   treats `auto` as `scroll` even when nothing overflows, and a stray track on a
-   two-line card is the clutter this card is trying to lose. The cap is N whole
-   lines plus this box's own vertical padding — nothing else, so the Nth line is
-   never a sliver of the N+1th. */
-.session-recap-tip-body {
-  max-height: calc(var(--recap-tip-max-lines) * var(--recap-tip-line) + 8px);
-  overflow: hidden;
-  padding: 4px 8px;
-  min-width: 0;
+.latest-update-popover:focus-visible { outline: none; }
+.latest-update-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 10px 4px 14px;
 }
-
-/* Reserve the ×'s corner on the FIRST line only: a float in the text flow, so the
-   opening line stops short of the button while every later line runs the card's
-   full width. The float scrolls away with the content, which is why the button
-   carries the card's own background (below) — scrolled text passes behind it
-   instead of colliding with it. */
-.session-recap-tip-body::before {
-  content: "";
-  float: right;
-  width: 18px;
-  height: var(--recap-tip-line);
-}
-
-.session-recap-tip-body::-webkit-scrollbar {
-  width: 0;
-  height: 0;
-}
-
-@container (width < 380px) {
-  .session-recap-tip-body {
-    --recap-tip-max-lines: 4;
-  }
-}
-
-.session-recap-tip-body.is-scrollable {
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  scrollbar-width: none; /* Firefox / spec; ::-webkit-scrollbar covers the rest. */
-}
-
-/* More below: fade the last line out. `mask` is on the scroll CONTAINER, so the
-   fade stays pinned to the bottom edge while the content moves under it, and it
-   is removed at the end of the scroll so the final line reads at full strength. */
-.session-recap-tip-body.has-more {
-  mask-image: linear-gradient(to bottom, #000 calc(100% - 14px), transparent);
-  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 14px), transparent);
-}
-
-.session-recap-tip-body:focus-visible {
-  outline: 1px solid var(--accent);
-  outline-offset: -1px;
-  border-radius: 6px;
-}
-
-/* No margin between the two paragraphs: their labels already separate them, and
-   any gap would eat into the capped budget and clip the last line by its height. */
-.session-recap-tip-row {
+.latest-update-title {
   margin: 0;
-  white-space: normal;
-  overflow-wrap: anywhere;
-}
-
-.session-recap-tip-label {
-  font-size: 9.5px;
+  font-size: 13px;
   font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  opacity: 0.72;
-  margin-right: 5px;
 }
-
-.session-recap-tip-close {
-  position: absolute;
-  top: 3px;
-  right: 2px;
-  width: 18px;
-  height: 18px;
+.latest-update-ago {
+  flex: 1;
+  color: var(--fg-muted);
+  font-size: 12px;
+}
+.latest-update-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  margin-left: auto;
   border: none;
-  /* The card's own colour, not `none`: the body scrolls UNDER this button. */
-  background: var(--bg-tertiary);
-  border-radius: 4px;
+  border-radius: 6px;
+  background: transparent;
   color: var(--fg-muted);
   cursor: pointer;
-  font-size: 13px;
-  line-height: 1;
 }
-
-.session-recap-tip-close:hover {
-  background: var(--bg-hover);
-  color: var(--fg);
+.latest-update-close:hover { background: var(--bg-hover, rgba(0, 0, 0, 0.06)); color: var(--fg); }
+.latest-update-body {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 2px 14px 12px;
+}
+.latest-update-row { margin: 6px 0 0; overflow-wrap: anywhere; }
+.latest-update-label {
+  margin-right: 6px;
+  color: var(--fg-muted);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
 }

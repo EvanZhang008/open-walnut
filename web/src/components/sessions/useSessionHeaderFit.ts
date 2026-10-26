@@ -49,8 +49,11 @@ export const TOOL_ITEMS: Record<string, { kind: ToolItemKind; priority: number; 
   fork: { kind: 'chip', priority: 2, name: 'Fork' },
   changed: { kind: 'chip', priority: 3, name: 'Changed' },
   files: { kind: 'chip', priority: 4, name: 'Files' },
-  board: { kind: 'chip', priority: 5, name: 'Board' },
   terminal: { kind: 'chip', priority: 6, name: 'Terminal' },
+  // Board is a lead's chip only, and like Plan it may join after first paint (when the
+  // task list or the owner read lands): it leaves just before Terminal, so arriving it
+  // never pushes Terminal into "..." (2026-10-26).
+  board: { kind: 'chip', priority: 6.1, name: 'Board' },
   time: { kind: 'info', priority: 7, name: 'Last activity' },
   // Locate, the way back to the task from the Ask and Mail drawers, is the last
   // of the two movable window buttons to leave.

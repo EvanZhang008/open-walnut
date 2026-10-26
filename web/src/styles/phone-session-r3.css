@@ -94,17 +94,6 @@
 }
 
 @media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
-  /* N2-08: the recap reads whole. Its x is a 44 px target on a phone, so the
-     first lines stop short of all of it (the desktop float reserves 18 px), and
-     its 13 px text gets a line height to match. */
-  .app-shell-navigation .session-recap-tip {
-    --recap-tip-line: 18px;
-  }
-  .app-shell-navigation .session-recap-tip-body::before {
-    width: 40px;
-    height: 44px;
-  }
-
   /* N2-06: the controls the + menu holds stay out of the composer's row. The
      phone's 44 px hit-area rule (position: relative, min-width 44 px) put the
      hidden Output pill back in the flow, an invisible 44 px gap that clipped

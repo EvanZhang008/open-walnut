@@ -46,6 +46,7 @@ struct SessionConversationView: View {
     // The composer's `+` menu: the session note and fork.
     @State private var showNote = false
     @State private var showFork = false
+    @State private var showLatestUpdate = false
     @State private var showRename = false
     @State private var renameDraft = ""
     /// Non-nil = terminate hit 409 cron_owner; confirm to force.
@@ -201,6 +202,12 @@ struct SessionConversationView: View {
         }
         .sheet(isPresented: $showNote) {
             SessionNoteSheet(sessionId: session.id)
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+        }
+        .sheet(isPresented: $showLatestUpdate) {
+            let update = lifecycle.detail?.session.latestUpdate
+            SessionLatestUpdateSheet(overall: update?.overall, latest: update?.latest)
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
         }
@@ -381,11 +388,17 @@ struct SessionConversationView: View {
         AppLog.info("voice-mode", "voice mode off", ["sessionId": session.id])
     }
 
-    /// The composer's `+` rows for this session, in the web's order: the side
-    /// thread, the note, then fork. They used to hide in the session menu and the
-    /// Controls sheet (user, 2026-10-04: "in the plus, keep it simple").
+    /// The composer's `+` rows for this session, in the web's order: the latest
+    /// update (only while the session has a recap), the side thread, the note,
+    /// then fork. They used to hide in the session menu and the Controls sheet
+    /// (user, 2026-10-04: "in the plus, keep it simple").
     private var plusActions: [ComposerPlusAction] {
-        [
+        let latest: [ComposerPlusAction] = lifecycle.detail?.session.latestUpdate == nil ? [] : [
+            ComposerPlusAction(
+                id: "session.latestUpdate", title: "Latest update", systemImage: "text.alignleft"
+            ) { showLatestUpdate = true },
+        ]
+        return latest + [
             ComposerPlusAction(
                 id: "session.sideQuestions", title: "Side question", systemImage: "questionmark.bubble"
             ) { showSideQuestions = true },

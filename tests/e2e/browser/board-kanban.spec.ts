@@ -272,6 +272,10 @@ test('C47 C66: no Empty flash while loading; a task the store lacks is a loading
   const { sessionId } = await call<{ sessionId: string }>(api, 'POST', '/api/sessions/quick-start', {
     cwd: `${api.fixtureRoot}/projects/walnut`, message: 'snapshot-clean-turn:Empty leader ready', taskId: lead.id,
   })
+  // The Board tab is a lead's (2026-10-26): this leader has set up its Board's lanes (its session's
+  // write) before any worker, so it keeps a Board of its own and gets the tab with an empty team.
+  const empty = await call<{ lanes_effective: unknown[] }>(api, 'GET', `/api/v1/tasks/${lead.id}/board?team=1`)
+  await call(api, 'PUT', `/api/v1/tasks/${lead.id}/board/lanes`, { lanes: empty.lanes_effective }, { 'x-walnut-caller-sid': sessionId })
   const page2 = await page.context().newPage()
   const pane2 = await openBoard(page2, lead.id, sessionId, `${team.project} empty`)
   // openBoard picked Cards: the empty team's first todo lane opens its Add task once Cards is shown, not while hidden under Status.

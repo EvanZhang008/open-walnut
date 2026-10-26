@@ -28,7 +28,7 @@ const SHOT_DIR = process.env.PW_SCREENSHOT_DIR ?? '/tmp/session-header-room'
 test.use({ viewport: { width: 1280, height: 800 } })
 
 /** The order chips come back as the row widens; the movable window buttons fill whatever room the chips leave. */
-const CHIP_ORDER = ['plan', 'fork', 'changed', 'files', 'board', 'terminal']
+const CHIP_ORDER = ['plan', 'fork', 'changed', 'files', 'terminal', 'board']
 const WINDOW_BUTTONS = ['locate', 'popout']
 const ALWAYS_ON_THE_ROW = ['lock', 'expand', 'close']
 

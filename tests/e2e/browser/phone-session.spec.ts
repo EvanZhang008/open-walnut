@@ -131,8 +131,24 @@ const historyInfo = (page: Page) => page.evaluate(() => ({
   path: location.pathname,
 }))
 
+/**
+ * The Board row is a lead's only (useBoardTab): make the fixture task one for this page, page-locally,
+ * by its owner read saying it keeps a Board of its own. The shared fixture board is not written.
+ */
+async function stubLeads(page: Page): Promise<void> {
+  await page.route((url) => url.pathname === `/api/v1/tasks/${TASK_ID}/board/owner` && url.searchParams.get('tab') === '1', async (route: Route) => {
+    try {
+      const res = await route.fetch()
+      if (!res.ok()) await route.fulfill({ response: res })
+      else await route.fulfill({ response: res, json: { ...(await res.json()), has_board: true, own_board: true } })
+    } catch { /* the page is gone */ }
+  })
+}
+
 test('one bar: the session title, its status and its kebab are the top bar (C64)', async ({ page }) => {
   await stubSession(page, { history: longTurnHistory(3) })
+  // A lead's kebab, so the list below is the longest one a session shows (Board included).
+  await stubLeads(page)
   const errors = await openByDeepLink(page)
   await expect(topbar(page).locator('.phone-topbar-title-text')).toHaveText(TASK_TITLE)
   await expect(topbar(page).locator('.phone-topbar-subtitle')).toHaveText(/^(Running|Idle|Stopped|Not available|Needs you|Needs your answer|Needs you: .+)$/)
@@ -620,53 +636,70 @@ const BOARD_HTML = `<h1>Garden board</h1>
 <walnut-choice id="water-when" title="When to water" options="dawn:At dawn,dusk:At dusk"></walnut-choice>
 <walnut-thread id="garden-talk" title="Garden talk"></walnut-thread>`
 
-test('Board in a session: full width, a Chat toggle, phone text in the frame, the reply dock on the keyboard (C77)', async ({ page }) => {
-  const put = await page.request.put(`/api/v1/tasks/${TASK_ID}/board`, { data: { html: BOARD_HTML } })
-  expect(put.ok(), await put.text()).toBe(true)
-  try {
-    await stubSession(page, { history: longTurnHistory(2) })
-    await openByDeepLink(page)
-    await topbar(page).getByRole('button', { name: 'More actions' }).click()
-    await page.getByTestId('phone-row-board').click()
-    const pane = page.getByTestId('task-board-pane')
-    await expect(pane).toBeVisible({ timeout: 15_000 })
-    await expect(topbar(page).locator('.phone-topbar-title-text')).toHaveText('Board')
-    // The leader's own page (the `Page` view), not the Cards view of the team.
-    const custom = pane.getByTestId('board-view-custom')
-    await expect(custom).toBeVisible({ timeout: 15_000 })
-    if ((await custom.getAttribute('aria-pressed')) !== 'true') await custom.click()
-    await expect(custom).toHaveAttribute('aria-pressed', 'true')
-    const frame = page.frameLocator('.task-board-frame')
-    await expect(frame.locator('walnut-choice[id="water-when"]')).toBeVisible({ timeout: 15_000 })
-    const pb = (await pane.boundingBox())!
-    expect(pb.width).toBeGreaterThanOrEqual(PHONE.viewport.width - 2)
-    await expectNoHorizontalOverflow(page)
-    expect(await frame.locator('body').evaluate((b) => getComputedStyle(b).fontSize)).toBe('16px')
-    for (const b of await frame.locator('walnut-choice button, walnut-thread button').all()) {
-      if (!(await b.isVisible())) continue
-      expect((await b.boundingBox())!.height).toBeGreaterThanOrEqual(44)
+/**
+ * Both write the fixture task's Board and delete it when done, and the phone's Board row is there
+ * only while the task keeps one (the row is a lead's, 2026-10-26): run in parallel, one's delete
+ * took the other's row away. One after the other.
+ */
+test.describe('the fixture task\'s Board', () => {
+  test.describe.configure({ mode: 'serial' })
+
+  test('Board in a session: full width, a Chat toggle, phone text in the frame, the reply dock on the keyboard (C77)', async ({ page }) => {
+    const put = await page.request.put(`/api/v1/tasks/${TASK_ID}/board`, { data: { html: BOARD_HTML } })
+    expect(put.ok(), await put.text()).toBe(true)
+    try {
+      await stubSession(page, { history: longTurnHistory(2) })
+      await openByDeepLink(page)
+      await topbar(page).getByRole('button', { name: 'More actions' }).click()
+      await page.getByTestId('phone-row-board').click()
+      const pane = page.getByTestId('task-board-pane')
+      await expect(pane).toBeVisible({ timeout: 15_000 })
+      await expect(topbar(page).locator('.phone-topbar-title-text')).toHaveText('Board')
+      // The leader's own page (the `Page` view), not the Cards view of the team.
+      const custom = pane.getByTestId('board-view-custom')
+      await expect(custom).toBeVisible({ timeout: 15_000 })
+      if ((await custom.getAttribute('aria-pressed')) !== 'true') await custom.click()
+      await expect(custom).toHaveAttribute('aria-pressed', 'true')
+      const frame = page.frameLocator('.task-board-frame')
+      await expect(frame.locator('walnut-choice[id="water-when"]')).toBeVisible({ timeout: 15_000 })
+      const pb = (await pane.boundingBox())!
+      expect(pb.width).toBeGreaterThanOrEqual(PHONE.viewport.width - 2)
+      await expectNoHorizontalOverflow(page)
+      expect(await frame.locator('body').evaluate((b) => getComputedStyle(b).fontSize)).toBe('16px')
+      for (const b of await frame.locator('walnut-choice button, walnut-thread button').all()) {
+        if (!(await b.isVisible())) continue
+        expect((await b.boundingBox())!.height).toBeGreaterThanOrEqual(44)
+      }
+      const chat = pane.getByTestId('kanban-show-chat').or(page.getByTestId('kanban-show-chat'))
+      await expect(chat.first()).toHaveText('Chat')
+      expect((await chat.first().boundingBox())!.height).toBeGreaterThanOrEqual(44)
+      await page.screenshot({ path: `${SHOTS}/c77-board-${test.info().project.name}.png` })
+      // The thread's reply opens the dock; with the keyboard up it sits on it.
+      await frame.locator('walnut-thread[id="garden-talk"] .wn-reply').click()
+      const dock = page.getByTestId('board-reply-dock')
+      await expect(dock).toBeVisible({ timeout: 10_000 })
+      await tallPhone(page)
+      await setKeyboardInset(page, 336)
+      await expect.poll(async () => { const d = await dock.boundingBox(); return d ? Math.round(d.y + d.height) : 0 }).toBeGreaterThanOrEqual(844 - 336 - 2)
+      const d = (await dock.boundingBox())!
+      expect(d.y + d.height).toBeLessThanOrEqual(844 - 336 + 2)
+      await setKeyboardInset(page, 0)
+      // Back closes the Board, the session stays.
+      await page.goBack()
+      await expect(pane).toHaveCount(0)
+      await expect(overlay(page)).toBeVisible()
+    } finally {
+      await page.request.delete(`/api/v1/tasks/${TASK_ID}/board`).catch(() => undefined)
     }
-    const chat = pane.getByTestId('kanban-show-chat').or(page.getByTestId('kanban-show-chat'))
-    await expect(chat.first()).toHaveText('Chat')
-    expect((await chat.first().boundingBox())!.height).toBeGreaterThanOrEqual(44)
-    await page.screenshot({ path: `${SHOTS}/c77-board-${test.info().project.name}.png` })
-    // The thread's reply opens the dock; with the keyboard up it sits on it.
-    await frame.locator('walnut-thread[id="garden-talk"] .wn-reply').click()
-    const dock = page.getByTestId('board-reply-dock')
-    await expect(dock).toBeVisible({ timeout: 10_000 })
-    await tallPhone(page)
-    await setKeyboardInset(page, 336)
-    await expect.poll(async () => { const d = await dock.boundingBox(); return d ? Math.round(d.y + d.height) : 0 }).toBeGreaterThanOrEqual(844 - 336 - 2)
-    const d = (await dock.boundingBox())!
-    expect(d.y + d.height).toBeLessThanOrEqual(844 - 336 + 2)
-    await setKeyboardInset(page, 0)
-    // Back closes the Board, the session stays.
-    await page.goBack()
-    await expect(pane).toHaveCount(0)
-    await expect(overlay(page)).toBeVisible()
-  } finally {
-    await page.request.delete(`/api/v1/tasks/${TASK_ID}/board`).catch(() => undefined)
-  }
+  })
+
+  test('C19: the Board\'s Cards view in a session takes a finger, reads 12 px, and raises no keyboard', async ({ page }) => {
+    const put = await page.request.put(`/api/v1/tasks/${TASK_ID}/board`, { data: { html: BOARD_HTML } })
+    expect(put.ok(), await put.text()).toBe(true)
+    try { await boardCardsCheck(page) } finally {
+      await page.request.delete(`/api/v1/tasks/${TASK_ID}/board`).catch(() => undefined)
+    }
+  })
 })
 
 test('Files is the tree or one file (back returns to the tree); Changed is one column (C78)', async ({ page }) => {
@@ -834,14 +867,6 @@ for (const vp of [{ width: 390, height: 844 }, { width: 375, height: 667 }, { wi
     expect(report).toEqual(clean)
   })
 }
-
-test('C19: the Board\'s Cards view in a session takes a finger, reads 12 px, and raises no keyboard', async ({ page }) => {
-  const put = await page.request.put(`/api/v1/tasks/${TASK_ID}/board`, { data: { html: BOARD_HTML } })
-  expect(put.ok(), await put.text()).toBe(true)
-  try { await boardCardsCheck(page) } finally {
-    await page.request.delete(`/api/v1/tasks/${TASK_ID}/board`).catch(() => undefined)
-  }
-})
 
 async function boardCardsCheck(page: Page): Promise<void> {
   await stubSession(page, { history: longTurnHistory(2) })

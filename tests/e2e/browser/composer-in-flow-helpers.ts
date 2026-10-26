@@ -15,7 +15,7 @@
  * Scenario matrix (each engine, the Mac app is WebKit, runs every row):
  *  1. at rest, scrolled to the end: scroller bottom == composer top, no bottom
  *     padding worth the name, the newest row fully on screen, and EVERY row of
- *     composer chrome (notes bar, recap tip, input card) below the scroller's
+ *     composer chrome (notes bar, input card) below the scroller's
  *     end, so the scrollbar stops above all of it;
  *  2. the composer GROWS under a following reader (a multi-line draft): the
  *     scroller shrinks by the same height and the newest row stays on screen,
@@ -71,9 +71,9 @@ export async function mockFlowSession(page: Page, id = FLOW_SESSION): Promise<vo
           // A cwd is what lets the "@" mention palette open (scenario 5 needs
           // the tallest popover the composer owns).
           cwd: '/tmp',
-          // A sticky note docks its bar above the input card, and a recap adds the
-          // one-line tip under it: the layout both reports were taken from (note +
-          // recap + composer under the newest row).
+          // A sticky note docks its bar above the input card: the layout both
+          // reports were taken from. The recap no longer draws a card (it opens
+          // from the "+" menu since 2026-10-26); the record still carries one.
           human_note: 'sticky note above the composer',
           recap: 'One line of what just happened, shown above the composer.',
           recapAt: new Date().toISOString(),
@@ -131,7 +131,6 @@ export async function geometry(panel: Locator): Promise<Geometry> {
       chrome: ([
         ['notes bar', '.session-notes'],
         ['send error', '.session-panel-input > .text-xs'],
-        ['recap tip', '.session-recap-tip'],
         ['image strip', '.session-panel-input .chat-image-previews'],
         ['queue bar', '.session-panel-input .chat-queue-indicator'],
         ['input card', '.session-panel-input .chat-input-box'],

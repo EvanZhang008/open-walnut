@@ -196,22 +196,18 @@ test('N2-06, N2-08: keyboard up, the strips fold, the controls keep one row, the
   const errors = await openStubSession(page)
   await page.setViewportSize({ width: 390, height: 844 })
   const panel = sessionOverlay(page)
-  // Chrome the real data shows and the fixture does not: a recap, the notes row, the Background strip.
+  // Chrome the real data shows and the fixture does not: the notes row, the Background strip.
   await panel.evaluate((p) => {
     const host = p.querySelector('.session-history')!.parentElement!
     const wrap = document.createElement('div')
-    wrap.innerHTML = '<div class="session-recap-tip" data-testid="r2-recap"><div class="session-recap-tip-body is-scrollable"><p class="session-recap-tip-row"><span class="session-recap-tip-label">Overall</span><span class="session-recap-tip-text">Sorting the shed inventory.</span></p></div><button type="button" class="session-recap-tip-close" aria-label="Dismiss recap">x</button></div>'
-      + '<div class="session-notes-toggle" role="button" tabindex="0" data-testid="r2-notes">Notes</div>'
+    wrap.innerHTML = '<div class="session-notes-toggle" role="button" tabindex="0" data-testid="r2-notes">Notes</div>'
       + '<button type="button" class="wf-card wf-card--bar" data-testid="r2-bg"><span class="wf-card-title">Background</span><span class="wf-card-open"><span class="wf-card-open-label">View all </span></span></button>'
     host.insertBefore(wrap, host.firstChild)
   })
-  const sizes = await panel.evaluate((p) => ['.session-recap-tip-label', '.session-recap-tip-text', '.wf-card-open-label']
+  const sizes = await panel.evaluate((p) => ['.wf-card-open-label']
     .map((sel) => parseFloat(getComputedStyle(p.querySelector(sel)!).fontSize)))
   for (const px of sizes) expect(px).toBeGreaterThanOrEqual(12)
   for (const id of ['r2-bg', 'r2-notes']) expect((await page.getByTestId(id).boundingBox())!.height).toBeGreaterThanOrEqual(43.5)
-  const close = (await panel.locator('.session-recap-tip-close').boundingBox())!
-  expect(Math.min(close.width, close.height)).toBeGreaterThanOrEqual(43.5)
-  expect(await panel.locator('.session-recap-tip-body').evaluate((el) => getComputedStyle(el).overflowY)).toBe('visible')
 
   await page.evaluate(() => {
     const r = document.documentElement.style
@@ -219,7 +215,7 @@ test('N2-06, N2-08: keyboard up, the strips fold, the controls keep one row, the
     r.setProperty('--wn-keyboard-inset', '336px')
     document.documentElement.dataset.wnKeyboard = 'open'
   })
-  for (const id of ['r2-recap', 'r2-notes', 'r2-bg']) await expect(page.getByTestId(id)).toBeHidden()
+  for (const id of ['r2-notes', 'r2-bg']) await expect(page.getByTestId(id)).toBeHidden()
   await expect.poll(async () => (await panel.locator('.session-history').boundingBox())?.height ?? 0).toBeGreaterThanOrEqual(300)
   // One row: every visible control in the composer's toolbar shares a line.
   const tops = await panel.locator('.session-panel-input .chat-input-controls').first().evaluate((row) => Array.from(row.children)

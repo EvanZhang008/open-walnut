@@ -180,7 +180,7 @@ async function shootHeader(panel: Locator, name: string, below = 0): Promise<voi
 }
 
 /** The order the chips leave the tool row, first to go first. Lock, Expand and Close never leave. */
-const CHIP_LEAVE_ORDER = ['terminal', 'board', 'files', 'changed', 'fork']
+const CHIP_LEAVE_ORDER = ['board', 'terminal', 'files', 'changed', 'fork']
 const WINDOW_BUTTONS = ['locate', 'popout']
 /** The chips a "..." row stands in for. */
 const VIEW_CHIPS = ['changed', 'files', 'board', 'terminal']
@@ -191,7 +191,7 @@ const LISTED = [...VIEW_CHIPS, ...WINDOW_BUTTONS]
 function expectRules(state: HeaderState, label: string) {
   expectInsidePanel(state, label)
   const hidden = new Set(state.toolRow.hidden)
-  // The chips leave in order (Terminal first, Fork last). A window button fills whatever room they
+  // The chips leave in order (Board first, a lead's chip that may arrive late; Fork last). A window button fills whatever room they
   // leave, so it may sit on the row beside a hidden chip (2026-10-04).
   const chips = CHIP_LEAVE_ORDER.filter((id) => hidden.has(id) || state.toolRow.visible.includes(id))
   const firstVisibleChip = chips.findIndex((id) => !hidden.has(id))
@@ -255,8 +255,8 @@ test('a narrow column keeps both header rows on one line, from 400px down to 180
   // buttons too); Lock, Expand and Close stay at every width.
   expect(states[400].toolRow.hidden).toContain('popout')
   expect(['changed', 'files', 'board', 'terminal'].every((id) => states[400].toolRow.visible.includes(id)), `400px: ${states[400].toolRow.visible}`).toBe(true)
-  // 240px cannot hold five chips; 180px holds Fork and little else.
-  expect(states[240].toolRow.hidden).toEqual(expect.arrayContaining(['terminal']))
+  // 240px cannot hold five chips (Board, the first to leave, is gone); 180px holds Fork and little else.
+  expect(states[240].toolRow.hidden).toEqual(expect.arrayContaining(['board']))
   expect(states[180].toolRow.hidden).toEqual(expect.arrayContaining(['files', 'board', 'terminal']))
   expect(states[180].toolRow.visible[0]).toBe('fork')
   // The pills read as letters by 240px, and the words are still there for readers and tests.
