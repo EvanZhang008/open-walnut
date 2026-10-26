@@ -19,17 +19,18 @@ import path from 'node:path'
 import os from 'node:os'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { guardedPath } from '../setup/exec-guard.js'
+import { testBun } from '../helpers/bun-runtime.js'
+import { SOURCE_TWIN } from '../helpers/source-twin.js'
 
 const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-oneshot-twins-')))
 afterAll(() => { if (root.includes('walnut-oneshot-twins-')) fs.rmSync(root, { recursive: true, force: true }) })
 const scriptPath = path.join(root, 'daemon.cjs')
 fs.writeFileSync(scriptPath, getDaemonSource(), { mode: 0o755 })
 const FAKE = path.resolve(__dirname, '../helpers/oneshot-fake-claude.cjs')
-const BUN = [process.env.BUN_INSTALL && path.join(process.env.BUN_INSTALL, 'bin/bun'), path.join(os.homedir(), '.bun/bin/bun'), '/opt/homebrew/bin/bun', '/usr/local/bin/bun']
-  .find((p): p is string => !!p && fs.existsSync(p))
+const BUN: string | undefined = testBun()
 const STANDALONE = path.resolve(__dirname, '../../src/providers/daemon-standalone.ts')
 const TWINS: Array<{ name: string; command: () => [string, string[]] }> = [
-  { name: 'source twin (node)', command: () => [process.execPath, [scriptPath, '--start']] },
+  { name: `source twin (${SOURCE_TWIN.runtime})`, command: () => [SOURCE_TWIN.file, [scriptPath, '--start']] },
   ...(BUN ? [{ name: 'standalone twin (bun)', command: (): [string, string[]] => [BUN, [STANDALONE, '--start']] }] : []),
 ]
 
