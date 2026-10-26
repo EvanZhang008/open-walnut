@@ -9,7 +9,7 @@
  * process, socket, upload or tunnel is created.
  */
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { DaemonConnection, remoteServiceProbePaths } from '../../src/providers/daemon-connection.js'
+import { DaemonConnection, remoteServiceProbePaths, SshLoginRefusedError } from '../../src/providers/daemon-connection.js'
 import { RemoteCommandError } from '../../src/providers/remote-sh.js'
 import { classifyHostConnectError } from '../../src/core/sessions/host-connect-hint.js'
 
@@ -117,6 +117,52 @@ describe('runtime fallback chain', () => {
     }, { binary: true })
     expect(await priv(conn).deployAndStart()).toBe(32100)
     expect(starts.map((s) => s.split(':')[0])).toEqual(['bun', 'binary'])
+  })
+})
+
+describe('a failed source deploy is retried before the binary', () => {
+  // Every 103 MB binary upload of 2026-10-22 to 25 followed one ssh failure
+  // (exit 255) of the 1.3 MB source deploy on the shared master.
+  it('one failure: the retry goes over a fresh connection and bun starts; the binary is never uploaded', async () => {
+    const { conn, starts, deploys } = setup({ start: { bun: STARTED } }, { binary: true })
+    ;(conn as unknown as { sourceDeployRetryMs: number }).sourceDeployRetryMs = 0
+    const asked: Array<{ fresh?: boolean } | undefined> = []
+    vi.spyOn(priv(conn), 'deploySource').mockImplementation(async (...args: unknown[]) => {
+      asked.push(args[0] as { fresh?: boolean } | undefined)
+      if (asked.length === 1) throw new Error('daemon source deploy failed with code 255')
+    })
+    expect(await priv(conn).deployAndStart()).toBe(32100)
+    expect(asked.map((o) => o?.fresh === true)).toEqual([false, true])
+    expect(starts.map((s) => s.split(':')[0])).toEqual(['bun'])
+    expect(deploys).not.toContain('binary')
+    expect(conn.remoteRuntime).toBe('bun')
+  })
+
+  it('three failures: the binary, as before', async () => {
+    const { conn, starts, deploys } = setup({ start: { binary: STARTED } }, { binary: true })
+    ;(conn as unknown as { sourceDeployRetryMs: number }).sourceDeployRetryMs = 0
+    const asked: unknown[] = []
+    vi.spyOn(priv(conn), 'deploySource').mockImplementation(async (...args: unknown[]) => {
+      asked.push(args[0])
+      throw new Error('daemon source deploy failed with code 255')
+    })
+    expect(await priv(conn).deployAndStart()).toBe(32100)
+    expect(asked).toHaveLength(3)
+    expect(deploys).toEqual(['binary'])
+    expect(starts.map((s) => s.split(':')[0])).toEqual(['binary'])
+  })
+
+  it('a refused login is not tried again: every new connection would be refused the same way', async () => {
+    const { conn, deploys } = setup({ start: { binary: STARTED } }, { binary: true })
+    ;(conn as unknown as { sourceDeployRetryMs: number }).sourceDeployRetryMs = 0
+    const asked: unknown[] = []
+    vi.spyOn(priv(conn), 'deploySource').mockImplementation(async (...args: unknown[]) => {
+      asked.push(args[0])
+      throw new SshLoginRefusedError('devbox', 'cert_expired')
+    })
+    await priv(conn).deployAndStart()
+    expect(asked).toHaveLength(1)
+    expect(deploys).toEqual(['binary'])
   })
 })
 

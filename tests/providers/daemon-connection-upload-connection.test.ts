@@ -142,3 +142,44 @@ describe('uploadFile connections', () => {
     expect(sshCalls()).toHaveLength(3)
   })
 })
+
+describe('source deploy connections', () => {
+  type Deploy = (opts?: { fresh?: boolean }) => Promise<void>
+  const deploySource = (conn: InstanceType<typeof DaemonConnection>, opts?: { fresh?: boolean }) => {
+    ;(conn as unknown as Priv)._bunPath = '/home/me/.bun/bin/bun'
+    return ((conn as unknown as Priv).deploySource as Deploy).call(conn, opts)
+  }
+
+  it('the first attempt rides the master; a retry opens its own connection for every step', async () => {
+    const { conn } = setup()
+    replies.push({ code: 0, stdout: marked('') })
+    await deploySource(conn)
+    expect(sshCalls().length).toBeGreaterThanOrEqual(2)
+    for (const args of sshCalls()) expect(args.join(' ')).toContain(MASTER)
+
+    calls.length = 0
+    replies.push({ code: 0, stdout: marked('') })
+    await deploySource(conn, { fresh: true })
+    expect(sshCalls().length).toBeGreaterThanOrEqual(2)
+    for (const args of sshCalls()) expect(freshOnly(args), args.join(' ')).toBe(true)
+  })
+
+  it('a refused login reads as one, with what ssh said', async () => {
+    const { conn } = setup()
+    replies.push({ code: 0, stdout: marked('') })
+    replies.push({ code: 255, stderr: 'me@devbox.example.test: Permission denied (publickey).\n' })
+    const err = await deploySource(conn, { fresh: true }).catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(SshLoginRefusedError)
+    expect((err as Error).message).toContain('Permission denied (publickey)')
+  })
+
+  it('any other failure keeps what ssh said in the error', async () => {
+    const { conn } = setup()
+    replies.push({ code: 0, stdout: marked('') })
+    replies.push({ code: 255, stderr: 'mux_client_request_session: session request failed: Session open refused by peer\n' })
+    const err = await deploySource(conn).catch((e: unknown) => e)
+    expect(err).not.toBeInstanceOf(SshLoginRefusedError)
+    expect((err as Error).message).toContain('code 255')
+    expect((err as Error).message).toContain('Session open refused')
+  })
+})

@@ -39,7 +39,7 @@ import { buildRemotePreamble } from './session-io.js'
 import { buildDaemonStartCmd, buildDaemonStopCmd } from './daemon-start-cmd.js'
 import { diagnoseDaemonStartLog } from './daemon-start-diagnose.js'
 import { updateRemoteDaemonService } from './daemon-service-update.js'
-import { daemonGzCachePath } from './daemon-gz-cache.js'
+import { ensureDaemonGz } from './daemon-gz-cache.js'
 import { buildTurnRetryEnv } from './daemon-core.js'
 import type { SshTarget } from './session-io.js'
 import {
@@ -85,6 +85,10 @@ import { companionStreamAcceptor } from '../web/v1-forward/stream-door.js'
 
 /** The source-deploy uploads (daemon.cjs + sidecars, tens of KB each). */
 const SOURCE_UPLOAD_TIMEOUT_MS = 60_000
+/** Source deploys before the binary fallback: the first over the shared master,
+ *  the rest over fresh connections (deployDaemon). */
+const SOURCE_DEPLOY_ATTEMPTS = 3
+const SOURCE_DEPLOY_RETRY_MS = 2_000
 
 // ── Types ──
 
@@ -3370,6 +3374,9 @@ export class DaemonConnection {
     }
   }
 
+  /** Pause between source deploy attempts (a test seam). */
+  private sourceDeployRetryMs = SOURCE_DEPLOY_RETRY_MS
+
   /**
    * Deploy daemon to the remote host and say which runtime it will start on.
    *
@@ -3391,16 +3398,36 @@ export class DaemonConnection {
     if (bunPath) {
       // Set BEFORE deploySource: it skips the npm `ws` install under bun.
       this._bunPath = bunPath
-      try {
-        await this.deploySource()
-        this._deployedViaSource = true
-        return 'bun'
-      } catch (err) {
-        log.session.warn('DaemonConnection: bun source deploy failed, falling back to binary', {
-          host: this.hostKey, error: err instanceof Error ? err.message : String(err),
-        })
-        this._bunPath = null
+      // The source is 1.3 MB; the binary fallback is 103 MB in 256 KB chunks
+      // over one fresh login each (6 to 7 minutes, with the remote daemon down
+      // the whole time). Every binary upload of 2026-10-22 to 25 followed a
+      // source deploy whose ssh failed (exit 255) on the shared master right
+      // after a server restart, so a failed source deploy is tried again over
+      // fresh connections before the binary is.
+      let lastError: unknown = null
+      for (let attempt = 0; attempt < SOURCE_DEPLOY_ATTEMPTS; attempt++) {
+        if (attempt > 0) {
+          await new Promise((r) => setTimeout(r, this.sourceDeployRetryMs))
+          if (this._destroyed) throw new Error(`daemon connection to ${this.hostKey} was closed during the deploy`)
+        }
+        try {
+          await this.deploySource({ fresh: attempt > 0 })
+          this._deployedViaSource = true
+          return 'bun'
+        } catch (err) {
+          lastError = err
+          log.session.warn('DaemonConnection: bun source deploy failed', {
+            host: this.hostKey, attempt: attempt + 1, of: SOURCE_DEPLOY_ATTEMPTS,
+            error: err instanceof Error ? err.message : String(err),
+          })
+          // A refused login fails the same way on every new connection.
+          if (err instanceof SshLoginRefusedError) break
+        }
       }
+      log.session.warn('DaemonConnection: bun source deploy failed, falling back to binary', {
+        host: this.hostKey, error: lastError instanceof Error ? lastError.message : String(lastError),
+      })
+      this._bunPath = null
     }
 
     const skipBinary = this._failedRuntimes.has('binary')
@@ -3602,20 +3629,8 @@ export class DaemonConnection {
         // chunked path (256KB × N over individual SSH connections) which
         // survives proxy interference at the cost of being ~10x slower.
         const remotePath = await this.getRemoteDaemonPath()
-        const gzPath = await daemonGzCachePath(localBinaryPath)
-
-        // Compress if needed (cached alongside the binary, or in the data dir
-        // when the package is read-only: daemon-gz-cache.ts)
-        if (!fs.existsSync(gzPath)) {
-          await new Promise<void>((resolve, reject) => {
-            const out = fs.createWriteStream(gzPath)
-            const gzip = spawn('gzip', ['-c', localBinaryPath], { stdio: ['pipe', 'pipe', 'pipe'] })
-            gzip.stdout!.pipe(out)
-            out.on('finish', resolve)
-            gzip.on('error', reject)
-            out.on('error', reject)
-          })
-        }
+        // Built once per build of the binary (daemon-gz-cache.ts).
+        const gzPath = await ensureDaemonGz(localBinaryPath)
 
         const gzData = fs.readFileSync(gzPath)
         const gzSize = gzData.length
@@ -3774,22 +3789,30 @@ export class DaemonConnection {
    * Source-based deploy: pipe daemon.cjs (~44KB) + npm install ws.
    * Primary fallback when binary deploy fails (e.g. SSH proxy kills large transfers).
    */
-  private async deploySource(): Promise<void> {
+  private async deploySource(opts: { fresh?: boolean } = {}): Promise<void> {
     const source = getDaemonSource()
     const t0 = Date.now()
     const preamble = buildRemotePreamble(this.ssh.shell_setup)
+    // A retry leaves the shared master alone: it is what just failed.
+    const sshArgs = opts.fresh ? this.freshSshArgs : this.baseSshArgs
+    const exec = (cmd: string, timeoutMs = 10_000) => runRemoteSh([...sshArgs, this.sshHostString], cmd, timeoutMs)
 
     try {
       // Create directory and clean up legacy daemon.js (which breaks under "type":"module")
       const dir = this._remoteDir
-      await this.sshExec(`mkdir -p ${shq(dir)} && rm -f ${shq(dir + '/daemon.js')}`)
+      await exec(`mkdir -p ${shq(dir)} && rm -f ${shq(dir + '/daemon.js')}`)
 
-      const args = [...this.baseSshArgs, this.sshHostString, markedUploadCommand(`${dir}/daemon.cjs`)]
+      const args = [...sshArgs, this.sshHostString, markedUploadCommand(`${dir}/daemon.cjs`)]
       // Bounded: these uploads had no deadline at all (remote-sh.ts runSshBounded).
       const upload = await runSshBounded(args, { input: source, timeoutMs: SOURCE_UPLOAD_TIMEOUT_MS })
       if (upload.spawnError) throw upload.spawnError
       if (upload.timedOut) throw new Error(`daemon source deploy timed out after ${SOURCE_UPLOAD_TIMEOUT_MS}ms`)
-      if (upload.code !== 0) throw new Error(`daemon source deploy failed with code ${upload.code}`)
+      if (upload.code !== 0) {
+        const refused = loginRefusedKind(upload.stderr)
+        if (refused) throw new SshLoginRefusedError(this.hostKey, refused, upload.stderr)
+        const said = upload.stderr.trim() ? `: ${summarizeConnectFailure(upload.stderr)}` : ''
+        throw new Error(`daemon source deploy failed with code ${upload.code}${said}`)
+      }
 
       // Sidecar bundles: the source template can't import modules, so each of
       // these is require()d next to daemon.cjs and gates its own capability.
@@ -3799,7 +3822,7 @@ export class DaemonConnection {
       for (const sidecarFile of ['changes-core.cjs', 'usage-core.cjs', 'external-scan-core.cjs', 'path-resolve-core.cjs', 'task-dir-core.cjs', 'vscode-server-core.cjs', 'transcript-rewind-core.cjs', 'daemon-cron-runtime.cjs', 'daemon-instance-lock.cjs', 'daemon-service-cli.cjs', 'trigger-check-core.cjs']) {
         try {
           const sidecar = fs.readFileSync(path.join(DAEMON_BINARIES_DIR, sidecarFile), 'utf-8')
-          const scArgs = [...this.baseSshArgs, this.sshHostString, markedUploadCommand(`${dir}/${sidecarFile}`)]
+          const scArgs = [...sshArgs, this.sshHostString, markedUploadCommand(`${dir}/${sidecarFile}`)]
           const sc = await runSshBounded(scArgs, { input: sidecar, timeoutMs: SOURCE_UPLOAD_TIMEOUT_MS })
           if (sc.spawnError) throw sc.spawnError
           if (sc.timedOut) throw new Error(`${sidecarFile} sidecar deploy timed out after ${SOURCE_UPLOAD_TIMEOUT_MS}ms`)
@@ -3819,16 +3842,17 @@ export class DaemonConnection {
       // saves 5-30s and avoids EBADPLATFORM on hosts without npm.
       if (!this._bunPath) {
         try {
-          await this.sshExec(`${userShellPathScript(preamble)}\ncd ${shq(dir)} && node -e "require('ws')" 2>/dev/null || (rm -f package.json && npm install --prefix ${shq(dir)} ws 2>/dev/null)`, 30_000)
+          await exec(`${userShellPathScript(preamble)}\ncd ${shq(dir)} && node -e "require('ws')" 2>/dev/null || (rm -f package.json && npm install --prefix ${shq(dir)} ws 2>/dev/null)`, 30_000)
         } catch {
           log.session.debug('DaemonConnection: ws install skipped', { host: this.hostKey })
         }
       }
 
       log.session.info('DaemonConnection: daemon source deployed', {
-        host: this.hostKey, deployMs: Date.now() - t0, bytes: source.length,
+        host: this.hostKey, deployMs: Date.now() - t0, bytes: source.length, fresh: opts.fresh === true,
       })
     } catch (err) {
+      if (err instanceof SshLoginRefusedError) throw err
       throw new Error(`Failed to deploy daemon source to ${this.hostKey}: ${err instanceof Error ? err.message : String(err)}`)
     }
   }
