@@ -107,6 +107,7 @@ import {
   type SessionSnapshot,
 } from './daemon-fold.js'
 import { createFoldCheckpoint } from './fold-checkpoint-core.js'
+import { createStreamCompact } from './stream-compact-core.js'
 import { createAcpDaemon, type AcpStartParams } from './acp-daemon.js'
 import { resolveAgentCommand } from './agent-command-map.js'
 import { computeGitDiff, GitDiffError, type GitDiffBase } from './git-diff-core.js'
@@ -550,7 +551,7 @@ function sweepDeadStreams(): void {
       const pid = parseInt(fs.readFileSync(path.join(STREAMS_DIR, sid + '.pgid'), 'utf-8').trim(), 10)
       if (Number.isInteger(pid) && pid > 1 && isProcessGroupAlive(pid)) continue
     } catch {}
-    for (const ext of ['.jsonl', '.jsonl.err', '.jsonl.fold', '.jsonl.lines', '.pgid', '.pipe', '.log']) {
+    for (const ext of ['.jsonl', '.jsonl.err', '.jsonl.fold', '.jsonl.lines', '.jsonl.compact', '.pgid', '.pipe', '.log']) {
       try { fs.unlinkSync(path.join(STREAMS_DIR, sid + ext)) } catch {}
     }
     reaped.add(sid)
@@ -697,6 +698,8 @@ interface SessionData {
   streamEpoch?: string | null
   // foldState.v of the last fold checkpoint written for this session.
   foldCheckpointV?: number
+  /** The epoch of the file a stream compaction replaced with this one (stream-compact-core.ts). */
+  rewrittenFrom?: string | null
   // Turn-error auto-retry (see daemon-core decideTurnRetry). Streak bookkeeping
   // persists in the registry so a daemon restart can't reset a 12h budget to 0.
   turnRetry?: TurnRetryState
@@ -1643,6 +1646,121 @@ function rebuildFoldStateFromJsonl(jsonlPath: string): FoldRebuild {
   return { state, boundary: v }
 }
 
+// ── Stream compaction (stream-compact-core.ts) ──
+// A stopped session's stream file loses the token deltas of its finished turns
+// (about 60% of its bytes), once nothing has written it for IDLE_MS. The copy is
+// folded as it is written, so the swap re-seats the fold, the task state and a
+// fresh checkpoint for the new file at once, and a later resume reads from the
+// checkpoint instead of folding the file again. One file at a time, smallest
+// first. Env overrides are TEST-ONLY. Keep in sync with daemon-source.ts.
+const STREAM_COMPACT_IDLE_MS = parseInt(process.env.WALNUT_STREAM_COMPACT_IDLE_MS || '', 10) || 30 * 60_000
+const STREAM_COMPACT_SWEEP_MS = parseInt(process.env.WALNUT_STREAM_COMPACT_SWEEP_MS || '', 10) || 10 * 60_000
+const streamCompact = createStreamCompact({
+  fs, now: Date.now, pid: process.pid, maxLineBytes: TAILER_CARRY_MAX,
+  minBytes: parseInt(process.env.WALNUT_STREAM_COMPACT_MIN_BYTES || '', 10) || undefined,
+  chunkBytes: parseInt(process.env.WALNUT_STREAM_COMPACT_CHUNK || '', 10) || undefined,
+  log: (level, msg, meta) => logMsg(level, msg, meta),
+})
+let streamCompactRunning = false
+const pidAlive = (pid: number): boolean => { try { process.kill(pid, 0); return true } catch (e) { return (e as NodeJS.ErrnoException).code === 'EPERM' } }
+
+/** No process can write this stream file: the session is dead here and its group is gone. */
+function streamWriterGone(sid: string): boolean {
+  const s = sessions.get(sid)
+  if (s && (s.state !== 'dead' || (s.pid && isProcessGroupAlive(s.pid)))) return false
+  try {
+    const pid = parseInt(fs.readFileSync(path.join(STREAMS_DIR, sid + '.pgid'), 'utf-8').trim(), 10)
+    if (Number.isInteger(pid) && pid > 1 && isProcessGroupAlive(pid)) return false
+  } catch {}
+  return true
+}
+
+async function compactIdleStreams(): Promise<void> {
+  if (streamCompactRunning) return
+  streamCompactRunning = true
+  try {
+    let names: string[] = []
+    try { names = fs.readdirSync(STREAMS_DIR) } catch { return }
+    const now = Date.now()
+    // Temp files a dead daemon left, and marks whose stream file is gone.
+    streamCompact.sweepStale(STREAMS_DIR, pidAlive)
+    const due: Array<{ sid: string; jsonlPath: string; size: number }> = []
+    for (const f of names) {
+      if (!streamCompact.isStreamFile(f)) continue
+      const sid = f.slice(0, -'.jsonl'.length)
+      const jsonlPath = path.join(STREAMS_DIR, f)
+      let st: fs.Stats
+      try { st = fs.statSync(jsonlPath) } catch { continue }
+      if (now - st.mtimeMs < STREAM_COMPACT_IDLE_MS) continue
+      if (!streamCompact.due(jsonlPath, st) || !streamWriterGone(sid)) continue
+      due.push({ sid, jsonlPath, size: st.size })
+    }
+    due.sort((a, b) => a.size - b.size)
+    for (const c of due) await compactOneStream(c.sid, c.jsonlPath)
+  } catch (err) {
+    logMsg('warn', 'stream compaction sweep failed', { error: (err as Error).message })
+  } finally {
+    streamCompactRunning = false
+  }
+}
+
+async function compactOneStream(sid: string, jsonlPath: string): Promise<void> {
+  // A CLI this daemon does not know (no registry entry, no .pgid) may still
+  // hold the file: the owner record and the process table say so.
+  if (await cliOwner.holderOf(sid)) {
+    logMsg('info', 'stream compaction skipped', { sid, reason: 'live-elsewhere' })
+    return
+  }
+  const t0 = Date.now()
+  let fold = initialFoldState(0)
+  const task = emptyTaskState()
+  const prepared = await streamCompact.compact(jsonlPath, {
+    aborted: () => !streamWriterGone(sid),
+    minDropBytes: streamCompact.minBytes / 4,
+    // The same steps as rebuildFoldStateFromJsonl and rebuildTaskStateFromJsonl.
+    onKeptLine: (buf, v) => {
+      const line = buf.toString('utf-8')
+      if (line.trim()) fold = foldLine(fold, line, v)
+      if (buf.includes(TASK_LINE_MARKER) && line.includes('"task_')) {
+        try { applyTaskEvent(task, JSON.parse(line), v, t0) } catch {}
+      }
+    },
+  })
+  if ('skipped' in prepared) {
+    if (prepared.skipped === 'aborted' || prepared.skipped === 'line-too-long') logMsg('info', 'stream compaction skipped', { sid, reason: prepared.skipped })
+    return
+  }
+  // The swap runs in the start gate: a spawn of this sid waits for it, and a
+  // spawn that won the race leaves a changed file or a live session behind.
+  await sessionStartGate.run(sid, async () => {
+    if (!streamWriterGone(sid) || !streamCompact.commit(jsonlPath, prepared)) {
+      streamCompact.discard(jsonlPath)
+      logMsg('info', 'stream compaction skipped', { sid, reason: 'changed' })
+      return
+    }
+    // A new inode: every offset restarted, so re-seat what the daemon holds.
+    foldCheckpoint.discard(jsonlPath)
+    const s = sessions.get(sid)
+    if (s && s.jsonlPath === jsonlPath) {
+      s.foldState = fold
+      s.taskState = task
+      s.rewrittenFrom = streamCompact.rewrittenFrom(jsonlPath, fs.statSync(jsonlPath))
+      s.streamEpoch = null
+      s.offset = fold.v
+      if (s.watcher) s.watcher.offset = fold.v
+      s.lastPushedSnapshot = null
+      s.foldCheckpointV = foldCheckpoint.write(jsonlPath, fold, task, streamEpochOf(s)) ? fold.v : 0
+      pushSnapshot(sid, true)
+    } else {
+      foldCheckpoint.write(jsonlPath, fold, task, null)
+    }
+    logMsg('info', 'stream compacted', {
+      sid, before: prepared.size, after: prepared.after, droppedBytes: prepared.droppedBytes,
+      droppedLines: prepared.droppedLines, ms: Date.now() - t0,
+    })
+  })
+}
+
 // ── C18: synchronous pre-death fold drain ──
 // The CLI writes its final `result` + companion `idle` lines microseconds before
 // exiting, and the tailer's 100ms poll does nothing once `state !== 'running'`
@@ -1752,6 +1870,7 @@ function streamEpochOf(session: SessionData): string | null {
 function assembleSessionSnapshot(session: SessionData): SessionSnapshot {
   const ctrl = session.pendingCtrl
   const snap = assembleSnapshot({
+    rewrittenFrom: session.rewrittenFrom,
     foldState: session.foldState,
     pendingCtrl: ctrl
       ? { requestId: ctrl.reqId, toolName: ctrl.toolName, sinceTs: ctrl.receivedAt }
@@ -7977,6 +8096,7 @@ async function getStateFromDisk(ws: ServerWebSocket<WsData>, id: number, cmd: Re
     pid: null,
     exitCode: null,
     streamEpoch: st.dev + ':' + st.ino + ':' + Math.floor(st.birthtimeMs),
+    rewrittenFrom: streamCompact.rewrittenFrom(jsonlPath, st),
   })
   return sendOk(ws, id, { exists: true, alive: false, state: 'dead', taskState, snapshot, cronSupervision })
 }
@@ -8037,7 +8157,7 @@ function cmdRename(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, 
   }
 
   try {
-    for (const ext of ['.jsonl', '.jsonl.err', '.jsonl.fold', '.jsonl.lines', '.pipe', '.pgid', '.log']) {
+    for (const ext of ['.jsonl', '.jsonl.err', '.jsonl.fold', '.jsonl.lines', '.jsonl.compact', '.pipe', '.pgid', '.log']) {
       try { fs.renameSync(oldBase + ext, newBase + ext) } catch {}
     }
     session.jsonlPath = newBase + '.jsonl'
@@ -11352,6 +11472,9 @@ if (action === '--start' || SERVICE_MODE) {
   // let reconcile finish adopting before judging liveness by the map).
   setTimeout(sweepDeadStreams, 60_000)
   setInterval(sweepDeadStreams, STREAM_RETENTION_SWEEP_MS)
+  // Stream compaction (its first pass also removes what a dead daemon left).
+  setTimeout(() => { void compactIdleStreams() }, Math.min(STREAM_COMPACT_SWEEP_MS, 120_000))
+  setInterval(() => { void compactIdleStreams() }, STREAM_COMPACT_SWEEP_MS)
   setInterval(() => releaseIdleChangesState(), Math.min(10 * 60_000, Math.max(500, CHANGES_RELEASE_AFTER_MS / 2)))
 
   // Cloud bridge self-heal: a persisted bridge.json re-dials without waiting

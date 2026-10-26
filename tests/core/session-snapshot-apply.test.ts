@@ -1877,6 +1877,34 @@ describe('applySnapshot repeated terminal handback', () => {
     expect((await getTask(taskId)).phase).toBe('IN_PROGRESS')
   })
 
+  it('a stream compaction (new epoch naming the old one) is not a new turn after a human choice either; a plain new epoch still is', async () => {
+    const { taskId, sid, snapshot } = await seed()
+    await updateTaskRaw(taskId, { phase_changed_at: '2026-01-01T12:00:00Z' })
+    await updateSessionRecord(sid, { status_history: [
+      { timestamp: '2026-01-02T00:00:00Z', process_status: 'stopped', reason: 'snapshot_projection' },
+      { timestamp: '2026-01-01T00:00:00Z', process_status: 'idle', reason: 'snapshot_projection' },
+    ] })
+    await updateSessionRecord(sid, { errorMessage: 'Auto-stopped after 120 min idle', errorKind: 'idle_timeout' })
+    const compacted = { ...snapshot, v: 240, lastResult: { isError: false, endOffset: 230 }, streamEpoch: 'compacted-epoch', rewrittenFrom: 'terminal-epoch' }
+    await applySnapshot(sid, compacted, 'pull-30s')
+    expect((await getTask(taskId)).phase).toBe('IN_PROGRESS')
+    // The record now describes the new file, and nothing else moved: no status
+    // write, so the stopped session does not look newly active.
+    expect(await getSessionByClaudeId(sid)).toMatchObject({
+      streamEpoch: 'compacted-epoch', consumedOffset: 240, process_status: 'stopped', last_status_change: '2026-01-02T00:00:00Z',
+      errorMessage: 'Auto-stopped after 120 min idle', errorKind: 'idle_timeout',
+    })
+
+    const other = await seed()
+    await updateTaskRaw(other.taskId, { phase_changed_at: '2026-01-01T12:00:00Z' })
+    await updateSessionRecord(other.sid, { status_history: [
+      { timestamp: '2026-01-02T00:00:00Z', process_status: 'stopped', reason: 'snapshot_projection' },
+      { timestamp: '2026-01-01T00:00:00Z', process_status: 'idle', reason: 'snapshot_projection' },
+    ] })
+    await applySnapshot(other.sid, { ...compacted, rewrittenFrom: undefined, streamEpoch: 'recreated-epoch' }, 'pull-30s')
+    expect((await getTask(other.taskId)).phase).toBe('NEED_ACTION')
+  })
+
   it('preserves ambiguous legacy phase history', async () => {
     const { taskId, sid, snapshot } = await seed()
     await updateTaskRaw(taskId, { phase_changed_at: null as never })

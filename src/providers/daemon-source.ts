@@ -60,6 +60,7 @@ import { createHostServerSupervisor } from './host-server-core.js'
 import { createStreamRelay } from './stream-relay-core.js'
 import { createHostResume } from './host-resume-core.js'
 import { createCliOwner } from './cli-owner-core.js'
+import { createStreamCompact } from './stream-compact-core.js'
 import { createHostStart } from './host-start-core.js'
 import { createClockHostStart } from './clock-host-start-core.js'
 import { createClockSchedule } from './clock-schedule-core.js'
@@ -265,6 +266,7 @@ export function getDaemonSource(): string {
     ['__CREATE_STREAM_RELAY__', createStreamRelay.toString()],
     ['__CREATE_HOST_RESUME__', createHostResume.toString()],
     ['__CREATE_CLI_OWNER__', createCliOwner.toString()],
+    ['__CREATE_STREAM_COMPACT__', createStreamCompact.toString()],
     ['__CREATE_HOST_START__', createHostStart.toString()],
     ['__CREATE_CLOCK_HOST_START__', createClockHostStart.toString()],
     ['__CREATE_CLOCK_SCHEDULE__', createClockSchedule.toString()],
@@ -504,6 +506,15 @@ export function validateFoldInjection(injections: Array<[string, string]>): void
       const hr = createResume({ fs, path, dir: '/nonexistent', now: () => 0, log: () => {}, modeCli: { plan: 'plan' } })
       const a = hr.resumeArgs(['claude', '--session-id', 's1', '--dangerously-skip-permissions', '--permission-mode', 'default'], 's1', 'plan')
       if (a.join(' ') !== 'claude --allow-dangerously-skip-permissions --permission-mode plan --resume s1') throw new Error('host resume built a wrong command')
+    }
+    // Stream compaction smoke (stream-compact-core.ts): a reconstructed copy
+    // must build and name its side files, without touching disk.
+    const createCompact = reconstructed['__CREATE_STREAM_COMPACT__'] as typeof createStreamCompact | undefined
+    if (createCompact) {
+      const sc = createCompact({ fs, now: () => 0, pid: 7, maxLineBytes: 1024 })
+      if (sc.tmpPathFor('/x/s.jsonl') !== '/x/s.jsonl.compact-tmp-7' || sc.due('/nonexistent/s.jsonl', { size: 0, ino: 1 }) || sc.isStreamFile('a.acp.jsonl')) {
+        throw new Error('stream compaction did not build')
+      }
     }
     // CLI owner smoke (cli-owner-core.ts): a reconstructed copy must name the
     // transcript a resume writes into, and none for a fork, without touching disk.
@@ -1531,7 +1542,7 @@ function sweepDeadStreams() {
       const pid = parseInt(fs.readFileSync(path.join(STREAMS_DIR, sid + '.pgid'), 'utf-8').trim(), 10);
       if (Number.isInteger(pid) && pid > 1 && isProcessGroupAlive(pid)) continue;
     } catch {}
-    for (const ext of ['.jsonl', '.jsonl.err', '.jsonl.fold', '.jsonl.lines', '.pgid', '.pipe', '.log']) {
+    for (const ext of ['.jsonl', '.jsonl.err', '.jsonl.fold', '.jsonl.lines', '.jsonl.compact', '.pgid', '.pipe', '.log']) {
       try { fs.unlinkSync(path.join(STREAMS_DIR, sid + ext)); } catch {}
     }
     reaped.add(sid);
@@ -2313,6 +2324,111 @@ function rebuildFoldStateFromJsonl(jsonlPath) {
   return { state: state, boundary: v };
 }
 
+// ── Stream compaction (stream-compact-core.ts, inlined) ──
+// Mirror of daemon-standalone.ts: a stopped session's stream file loses the
+// token deltas of its finished turns once nothing wrote it for IDLE_MS; the swap
+// re-seats the fold, the task state and a fresh checkpoint. Env overrides are
+// TEST-ONLY. Keep in sync with daemon-standalone.ts.
+const STREAM_COMPACT_IDLE_MS = parseInt(process.env.WALNUT_STREAM_COMPACT_IDLE_MS || '', 10) || 30 * 60000;
+const STREAM_COMPACT_SWEEP_MS = parseInt(process.env.WALNUT_STREAM_COMPACT_SWEEP_MS || '', 10) || 10 * 60000;
+const streamCompact = (__CREATE_STREAM_COMPACT__)({
+  fs: fs, now: Date.now, pid: process.pid, maxLineBytes: TAILER_CARRY_MAX,
+  minBytes: parseInt(process.env.WALNUT_STREAM_COMPACT_MIN_BYTES || '', 10) || undefined,
+  chunkBytes: parseInt(process.env.WALNUT_STREAM_COMPACT_CHUNK || '', 10) || undefined,
+  log: function (level, msg, meta) { logMsg(level, msg, meta); },
+});
+let streamCompactRunning = false;
+function pidAlive(pid) { try { process.kill(pid, 0); return true; } catch (e) { return !!e && e.code === 'EPERM'; } }
+
+function streamWriterGone(sid) {
+  const s = sessions.get(sid);
+  if (s && (s.state !== 'dead' || (s.pid && isProcessGroupAlive(s.pid)))) return false;
+  try {
+    const pid = parseInt(fs.readFileSync(path.join(STREAMS_DIR, sid + '.pgid'), 'utf-8').trim(), 10);
+    if (Number.isInteger(pid) && pid > 1 && isProcessGroupAlive(pid)) return false;
+  } catch {}
+  return true;
+}
+
+async function compactIdleStreams() {
+  if (streamCompactRunning) return;
+  streamCompactRunning = true;
+  try {
+    let names = [];
+    try { names = fs.readdirSync(STREAMS_DIR); } catch { return; }
+    const now = Date.now();
+    streamCompact.sweepStale(STREAMS_DIR, pidAlive);
+    const due = [];
+    for (const f of names) {
+      if (!streamCompact.isStreamFile(f)) continue;
+      const sid = f.slice(0, -6);
+      const jsonlPath = path.join(STREAMS_DIR, f);
+      let st;
+      try { st = fs.statSync(jsonlPath); } catch { continue; }
+      if (now - st.mtimeMs < STREAM_COMPACT_IDLE_MS) continue;
+      if (!streamCompact.due(jsonlPath, st) || !streamWriterGone(sid)) continue;
+      due.push({ sid: sid, jsonlPath: jsonlPath, size: st.size });
+    }
+    due.sort(function (a, b) { return a.size - b.size; });
+    for (const c of due) await compactOneStream(c.sid, c.jsonlPath);
+  } catch (err) {
+    logMsg('warn', 'stream compaction sweep failed', { error: err && err.message });
+  } finally {
+    streamCompactRunning = false;
+  }
+}
+
+async function compactOneStream(sid, jsonlPath) {
+  if (await cliOwner.holderOf(sid)) {
+    logMsg('info', 'stream compaction skipped', { sid: sid, reason: 'live-elsewhere' });
+    return;
+  }
+  const t0 = Date.now();
+  let fold = initialFoldState(0);
+  const task = emptyTaskState();
+  const prepared = await streamCompact.compact(jsonlPath, {
+    aborted: function () { return !streamWriterGone(sid); },
+    minDropBytes: streamCompact.minBytes / 4,
+    onKeptLine: function (buf, v) {
+      const line = buf.toString('utf-8');
+      if (line.trim()) fold = foldLine(fold, line, v);
+      if (buf.includes(TASK_LINE_MARKER) && line.includes('"task_')) {
+        try { applyTaskEvent(task, JSON.parse(line), v, t0); } catch {}
+      }
+    },
+  });
+  if (prepared.skipped) {
+    if (prepared.skipped === 'aborted' || prepared.skipped === 'line-too-long') logMsg('info', 'stream compaction skipped', { sid: sid, reason: prepared.skipped });
+    return;
+  }
+  await sessionStartGate.run(sid, async function () {
+    if (!streamWriterGone(sid) || !streamCompact.commit(jsonlPath, prepared)) {
+      streamCompact.discard(jsonlPath);
+      logMsg('info', 'stream compaction skipped', { sid: sid, reason: 'changed' });
+      return;
+    }
+    foldCheckpoint.discard(jsonlPath);
+    const s = sessions.get(sid);
+    if (s && s.jsonlPath === jsonlPath) {
+      s.foldState = fold;
+      s.taskState = task;
+      s.rewrittenFrom = streamCompact.rewrittenFrom(jsonlPath, fs.statSync(jsonlPath));
+      s.streamEpoch = null;
+      s.offset = fold.v;
+      if (s.watcher) s.watcher.offset = fold.v;
+      s.lastPushedSnapshot = null;
+      s.foldCheckpointV = foldCheckpoint.write(jsonlPath, fold, task, streamEpochOf(s)) ? fold.v : 0;
+      pushSnapshot(sid, true);
+    } else {
+      foldCheckpoint.write(jsonlPath, fold, task, null);
+    }
+    logMsg('info', 'stream compacted', {
+      sid: sid, before: prepared.size, after: prepared.after, droppedBytes: prepared.droppedBytes,
+      droppedLines: prepared.droppedLines, ms: Date.now() - t0,
+    });
+  });
+}
+
 // ── C18: synchronous pre-death fold drain ──
 // The CLI writes its final result + companion idle lines microseconds before
 // exiting, and the tailer's 100ms poll does nothing once state !== 'running'
@@ -2409,6 +2525,7 @@ function drainFoldRange(session, from, to, onLine) {
 function assembleSessionSnapshot(session) {
   const ctrl = session.pendingCtrl;
   const snap = assembleSnapshot({
+    rewrittenFrom: session.rewrittenFrom,
     foldState: session.foldState,
     pendingCtrl: ctrl
       ? { requestId: ctrl.reqId, toolName: ctrl.toolName, sinceTs: ctrl.receivedAt }
@@ -9502,6 +9619,7 @@ async function getStateFromDisk(ws, id, cmd, sid, cronSupervision) {
     pid: null,
     exitCode: null,
     streamEpoch: st.dev + ':' + st.ino + ':' + Math.floor(st.birthtimeMs),
+    rewrittenFrom: streamCompact.rewrittenFrom(jsonlPath, st),
   });
   return sendOk(ws, id, { exists: true, alive: false, state: 'dead', taskState, snapshot, cronSupervision });
 }
@@ -9558,7 +9676,7 @@ function cmdRename(ws, id, cmd) {
   }
 
   try {
-    for (const ext of ['.jsonl', '.jsonl.err', '.jsonl.fold', '.jsonl.lines', '.pipe', '.pgid', '.log']) {
+    for (const ext of ['.jsonl', '.jsonl.err', '.jsonl.fold', '.jsonl.lines', '.jsonl.compact', '.pipe', '.pgid', '.log']) {
       try { fs.renameSync(oldBase + ext, newBase + ext); } catch {}
     }
     session.jsonlPath = newBase + '.jsonl';
@@ -13414,6 +13532,9 @@ async function startDaemon() {
     // Dead-stream retention: hourly; first pass after reconcile settles.
     setTimeout(sweepDeadStreams, 60000);
     setInterval(sweepDeadStreams, STREAM_RETENTION_SWEEP_MS);
+    // Stream compaction (its first pass also removes what a dead daemon left).
+    setTimeout(function () { void compactIdleStreams(); }, Math.min(STREAM_COMPACT_SWEEP_MS, 120000));
+    setInterval(function () { void compactIdleStreams(); }, STREAM_COMPACT_SWEEP_MS);
     setInterval(function () { releaseIdleChangesState(); }, Math.min(600000, Math.max(500, CHANGES_RELEASE_AFTER_MS / 2)));
 
     // Cloud bridge self-heal: a persisted bridge.json re-dials without the Mac.

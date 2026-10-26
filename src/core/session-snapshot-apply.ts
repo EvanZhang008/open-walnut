@@ -463,7 +463,11 @@ export async function applySnapshot(
     : null
   let handbackCutoff = new Date().toISOString()
   // 空闲后的进程回收不是新回合，不能覆盖空闲后的人为阶段选择。
-  if (!epochChanged && (actual === 'idle' || TERMINAL.has(actual))) {
+  // A stream compaction's copy names the file it replaced (rewrittenFrom): the
+  // same turns at new offsets, so like a reap it is not a new turn either.
+  const sameTurnsRewrite = epochChanged && typeof snapshot.rewrittenFrom === 'string'
+    && snapshot.rewrittenFrom === record.streamEpoch
+  if ((!epochChanged || sameTurnsRewrite) && (actual === 'idle' || TERMINAL.has(actual))) {
     handbackCutoff = settledPhaseCutoff(record)
   }
   const reconcileSettledPhase = async (settled: SessionRecord): Promise<void> => {
@@ -536,6 +540,10 @@ export async function applySnapshot(
     updates.streamEpoch = snapshot.streamEpoch
     if (epochChanged && !adoptWatermark) updates.consumedOffset = 0
   }
+  // A stream compaction's copy changes no state: write only the new file's
+  // coordinates, so a stopped session does not look newly active and keeps
+  // its error text (an idle reap's "Auto-stopped" and its TERMINAL kind).
+  const rewriteOnly = sameTurnsRewrite && projected === actual
   // Clear stale error text on any non-error convergence; on 'error' adopt the
   // diagnosis from the legacy writer the gate just dropped (the snapshot itself
   // has no text to offer, and it is not allowed to invent one).
@@ -544,7 +552,9 @@ export async function applySnapshot(
   // renders as a bare red "Error" and which BOTH recovery paths read as
   // "unexplained user-visible error → leave it alone" — the session then never
   // comes back, even after the host does (inc-1787439819342, 51 sessions).
-  if (projected !== 'error') {
+  if (rewriteOnly) {
+    // Same episode, new file: the text on the record still describes it.
+  } else if (projected !== 'error') {
     // Stale text always goes: whatever was there described an older episode.
     updates.errorMessage = undefined
     updates.errorKind = undefined
@@ -602,6 +612,10 @@ export async function applySnapshot(
         filledMessage: updates.errorMessage !== undefined,
       })
     }
+  }
+
+  if (rewriteOnly) {
+    for (const k of ['process_status', 'last_status_change', 'status_reason', 'status_changed_by', 'pid']) delete updates[k]
   }
 
   let statusChanged = false
@@ -663,13 +677,14 @@ export async function applySnapshot(
         || (adoptWatermark && currentOffset < snapshot.v)
         || (typeof updates.streamEpoch === 'string' && current.streamEpoch !== updates.streamEpoch)
     },
+    rewriteOnly ? { preserveLastActiveAt: true } : undefined,
   )
   await reconcileRunningPhase()
   if (!updated) return reconnectActivityCleared
     ? { outcome: 'applied', projected }
     : { outcome: 'skipped', reason: 'predicate-false', projected }
 
-  emitSessionStatusChanged(updated, {}, ['*'], { source: `snapshot:${source}`, urgency: 'urgent' })
+  if (!rewriteOnly) emitSessionStatusChanged(updated, {}, ['*'], { source: `snapshot:${source}`, urgency: 'urgent' })
   log.session.info('snapshot projection applied', {
     sessionId, projected, previous: actual, v: snapshot.v,
     watermarkAdopted: adoptWatermark, source,

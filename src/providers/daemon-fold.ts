@@ -74,6 +74,11 @@ export interface SessionSnapshot {
    *  every snapshot of its 16 MB successor). null/absent = epoch unknown
    *  (stat failed, or the snapshot came from a pre-epoch daemon). */
   streamEpoch?: string | null
+  /** Set when this file is a stream compaction's copy of the file with this
+   *  epoch (stream-compact-core.ts): the same turns at new offsets, so the
+   *  consumer resets its offsets but must not read the epoch change as a new
+   *  incarnation that ran a turn. Absent otherwise. */
+  rewrittenFrom?: string
 }
 
 export interface FoldState {
@@ -481,6 +486,7 @@ export function assembleSnapshot(input: {
   exitCode: number | null
   /** Optional so pre-epoch call sites (and replayed cached inputs) stay valid. */
   streamEpoch?: string | null
+  rewrittenFrom?: string | null
 }): SessionSnapshot {
   const s = input.foldState
   let gating = 0
@@ -512,6 +518,7 @@ export function assembleSnapshot(input: {
     pid: input.pid,
     exitCode: input.exitCode,
     streamEpoch: input.streamEpoch ?? null,
+    ...(typeof input.rewrittenFrom === 'string' ? { rewrittenFrom: input.rewrittenFrom } : {}),
   }
 }
 
