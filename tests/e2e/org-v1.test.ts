@@ -523,4 +523,26 @@ describe('/api/v1/org', () => {
       expect((await api('POST', '/org/vp', { project: 'Seeds', vp: 7 })).status).toBe(400)
     })
   })
+
+  describe('the org\'s own names', () => {
+    it('reads the defaults, saves a name and a role to config.yaml, and a blank goes back to the default', async () => {
+      expect((await api('GET', '/org/settings')).json).toEqual({ name: 'Org', founderTitle: 'Founder' })
+      const saved = await api('PUT', '/org/settings', { name: '  Walnut  Labs ', founderTitle: 'Chair' })
+      expect(saved).toEqual({ status: 200, json: { name: 'Walnut Labs', founderTitle: 'Chair' } })
+      const { getConfig } = await import('../../src/core/config-manager.js')
+      expect((await getConfig()).org).toEqual({ name: 'Walnut Labs', founder_title: 'Chair' })
+      // One field at a time keeps the other.
+      expect((await api('PUT', '/org/settings', { founderTitle: '' })).json).toEqual({ name: 'Walnut Labs', founderTitle: 'Founder' })
+      expect((await getConfig()).org).toEqual({ name: 'Walnut Labs' })
+      expect((await api('GET', '/org/settings')).json).toEqual({ name: 'Walnut Labs', founderTitle: 'Founder' })
+      expect((await api('PUT', '/org/settings', { name: 7 })).status).toBe(400)
+      await api('PUT', '/org/settings', { name: '' })
+      expect((await api('GET', '/org/settings')).json).toEqual({ name: 'Org', founderTitle: 'Founder' })
+      // Two windows renaming at once: each change lands, neither undoes the other.
+      await Promise.all([api('PUT', '/org/settings', { name: 'Seaside Labs' }), api('PUT', '/org/settings', { founderTitle: 'Chair' })])
+      expect((await api('GET', '/org/settings')).json).toEqual({ name: 'Seaside Labs', founderTitle: 'Chair' })
+      await api('PUT', '/org/settings', { name: '', founderTitle: '' })
+      expect((await getConfig()).org).toBeUndefined()
+    })
+  })
 })

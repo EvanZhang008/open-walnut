@@ -300,8 +300,8 @@ test('with no Ask Walnut tasks the slot is Main\'s composer, and the drawer list
   // A fresh window opens on Main, the main agent: its own composer, named Main,
   // with the line that says what it is. Not the ordinary Ask Walnut composer.
   await expect(slotMainDraft(page)).toBeVisible({ timeout: 30_000 })
-  await expect(slotMainDraft(page).locator('.chat-input-textarea')).toHaveAttribute('placeholder', /Ask Main anything/)
-  await expect(slotMainDraft(page).locator('.session-panel-title')).toHaveText('Main')
+  await expect(slotMainDraft(page).locator('.chat-input-textarea')).toHaveAttribute('placeholder', /Ask CEO anything/)
+  await expect(slotMainDraft(page).locator('.session-panel-title')).toHaveText('CEO')
   await expect(page.locator('[data-testid="ask-walnut-main-intro"]')).toBeVisible()
   // The composer is the REGULAR draft panel with the ≡ leading its title row —
   // the one thing the slot adds. No session view yet.

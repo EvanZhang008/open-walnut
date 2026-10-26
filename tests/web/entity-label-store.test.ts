@@ -6,9 +6,11 @@ import {
   peekTaskLabel,
   registerSessionTitle,
   resetEntityLabelsForTesting,
+  shownTaskTitle,
   subscribeEntityLabels,
   syncTasks,
 } from '@/stores/entity-label-store';
+import { orgDisplayTitle } from '../../src/core/org/org-tree';
 
 /**
  * Contract tests for the entity-label store — the id→title source of truth
@@ -124,5 +126,21 @@ describe('entity-label-store', () => {
     expect(getEntityLabelsVersion()).toBe(v + 1);
     expect(peekTaskLabel('t-1')).toBeUndefined();
     expect(lookupSessionTitle('s-1')).toBeUndefined();
+  });
+});
+
+describe('org names in labels', () => {
+  it('shows Main as the CEO and a project lead as its VP, the same rule as the org tree', () => {
+    resetEntityLabelsForTesting();
+    syncTasks([
+      { id: 'm', title: 'Main', org_role: 'main' },
+      { id: 'l', title: 'Walnut lead', org_role: 'lead' },
+      { id: 'r', title: 'My own lead name', org_role: 'lead' },
+      { id: 't', title: 'Fix the lead pipe' },
+    ]);
+    expect(['m', 'l', 'r', 't'].map((id) => peekTaskLabel(id)?.title)).toEqual(['CEO', 'Walnut VP', 'My own lead name', 'Fix the lead pipe']);
+    for (const t of [{ title: 'Main', org_role: 'main' }, { title: 'Marina lead', org_role: 'lead' }, { title: 'Garden lead' }, { title: 'x' }]) {
+      expect(shownTaskTitle(t)).toBe(orgDisplayTitle(t));
+    }
   });
 });

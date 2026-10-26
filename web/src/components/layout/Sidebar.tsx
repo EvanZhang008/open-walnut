@@ -247,7 +247,7 @@ export function Sidebar({
       onClick={handleOpenOrg}
       aria-label="Org"
       aria-current={orgActive ? 'page' : undefined}
-      title="Main and your project leads: what each is doing and what needs you"
+      title="The CEO and your VPs: what each is doing and what needs you"
       data-testid="sidebar-org"
     >
       <OrgChartIcon />

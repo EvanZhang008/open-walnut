@@ -21,7 +21,7 @@ export const MAIN_QUICK_ACTIONS: readonly MainQuickAction[] = [
 ];
 
 /** What the user is told under the actions: nothing changes on the click itself. */
-export const MAIN_QUICK_ACTIONS_NOTE = 'Main replies with a list first. Nothing changes until you pick what to apply.';
+export const MAIN_QUICK_ACTIONS_NOTE = 'The CEO replies with a list first. Nothing changes until you pick what to apply.';
 
 /** Where the action looks: everything, or one project ('' is the Inbox). */
 export type MainQuickActionScope = { project: string } | undefined;

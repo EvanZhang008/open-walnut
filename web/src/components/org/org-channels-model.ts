@@ -17,7 +17,7 @@
 
 import type { Task } from '@open-walnut/core';
 import type { OrgCounts, OrgProjectNode, OrgTaskNode, OrgTree } from '@open-walnut/org-tree';
-import { newsItem, newsLine, newsSubject, projectKey, teamNews, userStateOf, type TeamNewsTask } from '@open-walnut/org-tree';
+import { CEO_LABEL, VP_LABEL, newsItem, newsLine, newsSubject, orgDisplayTitle, projectKey, teamNews, userStateOf, type TeamNewsTask } from '@open-walnut/org-tree';
 import { USER_STATE_LABELS, type UserState, type UserStatus } from '@open-walnut/user-status';
 
 export type ChannelState = 'alert' | 'working' | 'quiet' | 'parked';
@@ -101,10 +101,10 @@ function collectAlerts(ids: readonly string[], byId: ReadonlyMap<string, Task>, 
     // A failed session its status reads as Waiting (its host gone a moment, a clock or a trigger
     // still armed to bring it back) does not need the user, here as on the Board.
     if (hit && !(hit.kind === 'error' && status && status.state !== 'needs')) {
-      out.push({ taskId: id, title: task.title, kind: hit.kind, ...(hit.tool ? { tool: hit.tool } : {}) });
+      out.push({ taskId: id, title: orgDisplayTitle(task), kind: hit.kind, ...(hit.tool ? { tool: hit.tool } : {}) });
     } else if (userStateOf(task) === 'needs') {
       const ask = status?.ask?.trim();
-      out.push({ taskId: id, title: task.title, kind: 'needs', ...(ask ? { ask } : {}), ...(status?.source ? { source: status.source } : {}) });
+      out.push({ taskId: id, title: orgDisplayTitle(task), kind: 'needs', ...(ask ? { ask } : {}), ...(status?.source ? { source: status.source } : {}) });
     }
   }
   return out;
@@ -157,7 +157,7 @@ function projectRow(p: OrgProjectNode, byId: ReadonlyMap<string, Task>, probe: A
     project: p.project,
     name,
     ...(p.contactId ? { contactId: p.contactId } : {}),
-    contactTitle: p.lead?.title ?? contact?.title ?? (p.needsLead ? `${name} lead` : name),
+    contactTitle: lead ? orgDisplayTitle(lead) : p.lead ? orgDisplayTitle({ title: p.lead.title, org_role: 'lead' }) : contact?.title ?? (p.needsLead ? `${name} ${VP_LABEL}` : name),
     isLead: !!p.lead,
     counts: p.counts,
     state: channelState(p.counts, alerts, nodes.map((n) => n.phase)),
@@ -226,16 +226,17 @@ export function buildChannels(tree: OrgTree, tasks: readonly Task[], probe: Aler
   // Tasks, as Main's pills count them: what works, and what needs the user under every lead.
   const needYou = rows.reduce((n, r) => n + r.needs, 0);
   const working = tree.counts.running;
-  const summary = [`${rows.length} ${rows.length === 1 ? 'lead' : 'leads'}`];
+  const summary = [`${rows.length} ${rows.length === 1 ? VP_LABEL : `${VP_LABEL}s`}`];
   if (working) summary.push(`${working} working`);
   if (needYou) summary.push(`${needYou} ${needYou === 1 ? 'needs' : 'need'} you`);
   const main: ChannelRow = {
     key: MAIN_KEY,
     kind: 'main',
     project: '',
-    name: 'Main',
+    // Shown as the CEO (display only: the task stays "Main").
+    name: CEO_LABEL,
     ...(tree.main ? { contactId: tree.main.id } : {}),
-    contactTitle: 'Main',
+    contactTitle: CEO_LABEL,
     isLead: false,
     counts: tree.counts,
     // Main's own state: a prompt it waits on, else whether any lead works.
@@ -305,7 +306,7 @@ export function movedProjects(channels: OrgChannels, tasks: readonly Task[]): Mo
         project: name,
         vpKey: vp?.key ?? projectRowKey(lead.project ?? ''),
         vpName: vp?.name ?? (lead.project || 'Inbox'),
-        ...(old ? { from: { id: old.id, title: old.title, open: old.phase !== 'COMPLETE' } } : {}),
+        ...(old ? { from: { id: old.id, title: orgDisplayTitle(old), open: old.phase !== 'COMPLETE' } } : {}),
       });
     }
   }

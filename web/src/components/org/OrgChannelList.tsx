@@ -14,6 +14,8 @@ import { timeAgo } from '@/utils/time';
 import { ContextMenu, useContextMenu, type ContextMenuItem } from '@/components/common/ContextMenu';
 import { avatarColor, initials, type ChannelRow, type ChannelState, type MovedRow } from './org-channels-model';
 import { holdOrder } from './hold-order';
+import { OrgEditableName } from './OrgEditableName';
+import { useOrgSettings } from './useOrgSettings';
 
 const STATE_LABEL: Record<ChannelState, string> = {
   alert: 'Needs you', working: 'Working', quiet: 'Waiting', parked: 'Waiting',
@@ -27,7 +29,7 @@ export function OrgAvatar({ row, size = 34 }: { row: ChannelRow; size?: number }
       style={{ width: size, height: size, fontSize: Math.round(size * 0.37), ...(main ? {} : { background: avatarColor(row.name) }) }}
       aria-hidden="true"
     >
-      {main ? 'M' : initials(row.name)}
+      {main ? 'C' : initials(row.name)}
       <span className={`org-state-dot org-state-${row.state}`} />
     </span>
   );
@@ -150,6 +152,7 @@ interface Props {
 
 export function OrgChannelList({ main, rows, moved = [], rowMenu, total, selectedKey, query, onQuery, onSelect, onOpenChart, now }: Props) {
   const listRef = useRef<HTMLDivElement>(null);
+  const orgName = useOrgSettings();
   // A right-click selects a word in WebKit before the menu opens: that selection is the
   // gesture's, not the user's, so it neither keeps the browser's menu nor stays lit.
   const menu = useContextMenu<ChannelMenuTarget>({ ignorePressSelection: true });
@@ -186,17 +189,19 @@ export function OrgChannelList({ main, rows, moved = [], rowMenu, total, selecte
     listRef.current?.querySelector<HTMLElement>(`[data-key="${CSS.escape(next)}"]`)?.focus();
   };
   return (
-    <aside className="org-list" aria-label="Org">
+    <aside className="org-list" aria-label={orgName.settings.name}>
       <header className="org-list-head">
-        <h1 className="org-list-title">Org</h1>
-        <button type="button" className="btn btn-sm" data-testid="org-open-chart" onClick={onOpenChart} title="Main and every project's VP on one sheet; drag a project onto another VP to put it under that VP">Org chart</button>
+        <h1 className="org-list-title">
+          <OrgEditableName value={orgName.settings.name} label="the org" onSave={(v) => orgName.save({ name: v })} testId="org-name" />
+        </h1>
+        <button type="button" className="btn btn-sm" data-testid="org-open-chart" onClick={onOpenChart} title="The CEO and every project's VP on one sheet; drag a project onto another VP to put it under that VP">Org chart</button>
       </header>
       <input
         className="org-search"
         type="search"
         value={query}
-        placeholder="Search leads…"
-        aria-label="Search leads"
+        placeholder="Search VPs…"
+        aria-label="Search VPs"
         data-testid="org-search"
         onChange={(e) => onQuery(e.target.value)}
       />
@@ -204,19 +209,19 @@ export function OrgChannelList({ main, rows, moved = [], rowMenu, total, selecte
         ref={listRef}
         className="org-list-scroll"
         role="listbox"
-        aria-label="Main and the project leads"
+        aria-label="The CEO and the VPs"
         onKeyDown={onKeyDown}
         onScroll={onScroll}
         onPointerEnter={() => setHeld(rows.map((r) => r.key))}
         onPointerLeave={() => setHeld(null)}
       >
         <Row row={main} selected={selectedKey === main.key} now={now} onSelect={onSelect} onMenu={onMenu} />
-        <div className="org-list-section" role="presentation">Leads · {total}</div>
+        <div className="org-list-section" role="presentation">VPs · {total}</div>
         {shown.map((r) => <Row key={r.key} row={r} selected={selectedKey === r.key} now={now} onSelect={onSelect} onMenu={onMenu} />)}
         <MovedSection moved={moved} query={query} onSelect={onSelect} onMenu={onMenu} />
       </div>
-      {total === 0 && <p className="org-empty-note" data-testid="org-empty">No open work yet. Ask Main to start something.</p>}
-      {total > 0 && rows.length === 0 && <p className="org-empty-note" data-testid="org-no-match">No lead matches “{query}”.</p>}
+      {total === 0 && <p className="org-empty-note" data-testid="org-empty">No open work yet. Ask the CEO to start something.</p>}
+      {total > 0 && rows.length === 0 && <p className="org-empty-note" data-testid="org-no-match">No VP matches “{query}”.</p>}
       {menu.state && rowMenu && (
         <ContextMenu
           point={menu.state.point}

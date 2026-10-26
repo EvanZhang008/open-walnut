@@ -12,6 +12,7 @@
 import { memo, useMemo, useState, type ReactNode } from 'react';
 import type { Task } from '@open-walnut/core';
 import { USER_STATE_LABELS, USER_STATES, type UserState } from '@open-walnut/user-status';
+import { CEO_LABEL, VP_LABEL, orgDisplayTitle } from '@open-walnut/org-tree';
 import { RECENT_COMPLETED_DAYS } from '@/api/tasks';
 import { formatWaitUntil } from '@/components/tasks/TaskStatusControl';
 import { timeAgo } from '@/utils/time';
@@ -93,8 +94,12 @@ function NextCell({ row, onOpenPage }: { row: StatusRow; onOpenPage?: () => void
   );
 }
 
+/** The board owner's word: the org's own names on Main and a project's lead, else "Lead". */
+const ownerWord = (t: Pick<Task, 'org_role'> | undefined) => (t?.org_role === 'main' ? CEO_LABEL : t?.org_role === 'lead' ? VP_LABEL : 'Lead');
+
 const Row = memo(function Row({ row, onOpenTask, onOpenPage }: { row: StatusRow; onOpenTask: (id: string) => void; onOpenPage?: () => void }) {
   const t = row.task;
+  const title = orgDisplayTitle(t);
   const when = ago(rowTime(row));
   return (
     <tr
@@ -104,14 +109,14 @@ const Row = memo(function Row({ row, onOpenTask, onOpenPage }: { row: StatusRow;
       data-state={row.status.state}
       tabIndex={0}
       role="button"
-      aria-label={`${t.title}: ${USER_STATE_LABELS[row.status.state]}. Open the task`}
+      aria-label={`${title}: ${USER_STATE_LABELS[row.status.state]}. Open the task`}
       onClick={() => onOpenTask(t.id)}
       onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpenTask(t.id); } }}
     >
       <td className="bs-c-status"><StatusPill row={row} /></td>
       <td className="bs-c-task">
-        <span className="bs-title">{t.title}</span>
-        {row.depth === 0 && <span className="bs-sub">Lead</span>}
+        <span className="bs-title">{title}</span>
+        {row.depth === 0 && <span className="bs-sub">{ownerWord(t)}</span>}
         {row.under && <span className="bs-sub">Under {row.under}</span>}
       </td>
       <td className="bs-c-where"><WhereCell row={row} /></td>
@@ -127,6 +132,7 @@ export function BoardStatusView({ ownerId, ownerTitle, tasks, loading, onOpenTas
   // "updated" column is read again on every render the task list causes.
   const board = useMemo(() => buildStatusBoard({ ownerId, tasks, now: Date.now(), doneWindowDays: RECENT_COMPLETED_DAYS }), [ownerId, tasks]);
   const brief = statusBrief(board);
+  const owner = useMemo(() => tasks.find((t) => t.id === ownerId), [tasks, ownerId]);
   const rows = filteredRows(board, filter);
   const open = board.counts.needs + board.counts.working + board.counts.waiting;
   // The owner alone, nothing below it open or recently done.
@@ -141,8 +147,8 @@ export function BoardStatusView({ ownerId, ownerTitle, tasks, loading, onOpenTas
   return (
     <div className="board-status" data-testid="board-status">
       <div className="bs-head">
-        <div className="bs-who">Board · Lead</div>
-        <h2 className="bs-h">{ownerTitle}</h2>
+        <div className="bs-who">Board · {ownerWord(owner)}</div>
+        <h2 className="bs-h">{owner ? orgDisplayTitle(owner) : ownerTitle}</h2>
         <p className="bs-brief" data-testid="board-status-brief">
           {brief.needs.length === 0 ? (
             <b className="bs-brief-none">Nothing needs you.</b>

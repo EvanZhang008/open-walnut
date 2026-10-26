@@ -77,17 +77,21 @@ import { useStoreTask, useTasksContextSafe } from '@/contexts/TasksContext';
 import '@/styles/walnut-agent.css';
 import { COMPOSER_INSERT_EVENT, type ComposerInsertDetail } from '@/utils/composer-insert';
 import { repairHint, type WalnutRepairTarget } from '@/pages/repair-target';
+import { orgDisplayTitle } from '@open-walnut/org-tree';
 
 const PLACEHOLDER = 'What should this session do?';
 const HINT = 'Nothing runs yet: send to start, or save it as a todo.';
 const BOUND_HINT = 'Start a session on this task: type the first instruction, or send with nothing typed to use its title.';
 /** A project lead's column: what the lead is, so the first message is a chat, not a task brief. */
 function orgLeadHint(title: string | undefined, project: string | undefined): string {
-  const who = title || 'This lead';
+  const who = title ? leadShown(title) : 'This VP';
   return project
-    ? `${who} leads ${project}: it reads the project's tasks and reports to Main. Ask how it is going, or hand it work.`
-    : `${who} reads its project's tasks and reports to Main. Ask how it is going, or hand it work.`;
+    ? `${who} leads ${project}: it reads the project's tasks and reports to the CEO. Ask how it is going, or hand it work.`
+    : `${who} reads its project's tasks and reports to the CEO. Ask how it is going, or hand it work.`;
 }
+/** A lead's title as shown ("Walnut lead" reads "Walnut VP"); the draft keeps the real one, which
+ *  may become the first message. */
+const leadShown = (title: string) => orgDisplayTitle({ title, org_role: 'lead' });
 const BOUND_WALNUT_HINT = 'Ask Walnut about this task: type what you need, or send with nothing typed to use its title.';
 const FORK_HINT = 'Forks the source conversation into a sibling session: type where it should go next, or send with nothing typed to just branch.';
 const FORK_PLACEHOLDER = 'Message for the forked session (optional)';
@@ -667,7 +671,7 @@ export function DraftSessionPanel({
             <span className="session-panel-badge" style={{ color: 'var(--fg-muted)' }}>Draft</span>
             {isBound && (
               <span className="draft-bound-task" title={`This session will attach to the existing task "${draft.boundTaskTitle}" — no second task is created`}>
-                for: {draft.boundTaskTitle}
+                for: {draft.orgLead && draft.boundTaskTitle ? leadShown(draft.boundTaskTitle) : draft.boundTaskTitle}
               </span>
             )}
             {isFork && draft.forkOf?.title && (
@@ -850,7 +854,7 @@ export function DraftSessionPanel({
             : isBound && isWalnut
               ? 'Ask Walnut about this task (an empty message sends the task title)'
               : draft.orgLead
-                ? `Send to ${draft.boundTaskTitle || 'the lead'}`
+                ? `Send to ${draft.boundTaskTitle ? leadShown(draft.boundTaskTitle) : 'the VP'}`
                 : isBound
                 ? 'Start the session on this task (an empty message sends the task title)'
                 : isWalnut
@@ -880,7 +884,7 @@ export function DraftSessionPanel({
           placeholder={isFork ? FORK_PLACEHOLDER
             : isRepair ? REPAIR_PLACEHOLDER
               : askAgent ? `${askLabel} anything…` : isWalnut ? (walnutLabel ? `Ask ${walnutLabel} anything…` : WALNUT_PLACEHOLDER)
-                : draft.orgLead ? `Message ${draft.boundTaskTitle || 'the lead'}…` : PLACEHOLDER}
+                : draft.orgLead ? `Message ${draft.boundTaskTitle ? leadShown(draft.boundTaskTitle) : 'the VP'}…` : PLACEHOLDER}
           prefillText={prefill.text}
           prefillNonce={prefill.nonce}
           showCommands={false}

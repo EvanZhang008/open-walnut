@@ -8,6 +8,7 @@ import { ReleaseWorkerFlyout } from './ReleaseWorkerFlyout';
 import { resolveParent } from './adopt-candidates';
 import { subtasksOf } from './subtask-index';
 import { teamRowSummary } from './team-menu-model';
+import { orgDisplayTitle } from '@open-walnut/org-tree';
 import '@/styles/subtask-pill.css';
 
 const NO_INDEX: ReadonlyMap<string, Task> = new Map();
@@ -39,7 +40,7 @@ const ICON_TEAM = (
  * `.adopt-worker-flyout`, which the Release picker carries too.
  */
 export function TeamMenuItems({ task, afterAction }: {
-  task: Pick<Task, 'id' | 'title' | 'parent_task_id' | 'project'>;
+  task: Pick<Task, 'id' | 'title' | 'parent_task_id' | 'project' | 'org_role'>;
   /** Close the host menu. */
   afterAction: () => void;
 }) {
@@ -56,7 +57,7 @@ export function TeamMenuItems({ task, afterAction }: {
   }, [hasWorkers]);
   if (!store) return null;
   const leader = task.parent_task_id ? resolveParent(store.tasks, NO_INDEX, task.parent_task_id) : null;
-  const summary = teamRowSummary(store.tasks, task, leader?.title ?? null);
+  const summary = teamRowSummary(store.tasks, task, leader ? orgDisplayTitle(leader) : null);
   const toggle = (which: 'adopt' | 'release') => setPicker((p) => (p === which ? null : which));
   return (
     <>

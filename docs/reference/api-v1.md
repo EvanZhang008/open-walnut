@@ -1218,7 +1218,7 @@ itself). The `board_*` ops default to the caller's team board.
   choice?, reminder?, section?, version }` with `taskId` at the top level
   (`task` = the card's task; `kanban: true` on a kanban seen write).
 
-### Org (additive, 2026-10): `/org`, `/org/reports`, `/org/main`, `/org/contact`, `/org/vp`
+### Org (additive, 2026-10): `/org`, `/org/reports`, `/org/main`, `/org/contact`, `/org/vp`, `/org/settings`
 
 The org is derived from tasks: Main (the user's main agent) → projects → teams (a
 project's top-level open tasks) → workers (`parent_task_id`). The stored facts
@@ -1248,7 +1248,12 @@ team is talked to through that task; the Inbox never gets a lead.
   session (`handover`), and on a take-over Walnut closes it once the turn that
   read the notice ends, or at once when it has no session (`closed`).
   `400 no_vp_for_inbox | bad_vp`, `404 unknown_project`.
-- Every POST answers `501` on a replica.
+- `GET /api/v1/org/settings` → `200 { name, founderTitle }`: the org's name (the
+  Org page's title, default `"Org"`) and the user's role at the top of the org
+  chart (default `"Founder"`), kept in config.yaml under `org`.
+  `PUT /api/v1/org/settings { name?, founderTitle? }` → the same after the change;
+  a blank value goes back to the default; `400 bad_name` for a non-string.
+- Every POST and PUT answers `501` on a replica.
 
 ### Task actions (additive, Wave 1 2026-08) — detail / delete / field setters / batch / focus
 

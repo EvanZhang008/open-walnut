@@ -77,6 +77,26 @@
   border-radius: 12px;
   background: color-mix(in srgb, var(--walnut-accent, var(--accent)) 7%, var(--bg));
 }
+/* The user, above the CEO. */
+.oc-founder {
+  width: min(240px, 100%);
+  padding: 8px 14px;
+  border: 1px dashed var(--border);
+  border-radius: 12px;
+  background: var(--bg);
+  cursor: default;
+}
+.oc-person {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: var(--bg-secondary);
+  color: var(--fg);
+}
 .oc-card-btn { flex: 1; }
 .oc-card-text { display: flex; flex-direction: column; flex: 1; min-width: 0; }
 .oc-card-name { display: flex; align-items: center; gap: 6px; min-width: 0; font-weight: 650; font-size: 13.5px; }

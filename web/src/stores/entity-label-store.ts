@@ -31,7 +31,16 @@ interface TaskLabelEntry {
   src: unknown;
 }
 
-type TaskLike = { id: string; title?: string; project?: string };
+type TaskLike = { id: string; title?: string; project?: string; org_role?: string };
+
+/** Main reads as the CEO, a project's lead ("Walnut lead") as its VP: display only. The same rule
+ *  as orgDisplayTitle (src/core/org/org-tree.ts), written here because this module imports
+ *  nothing; tests/web/entity-label-store.test.ts pins the two equal. */
+export function shownTaskTitle(task: { title: string; org_role?: string }): string {
+  if (task.org_role === 'main') return 'CEO';
+  if (task.org_role === 'lead') return task.title.replace(/ lead$/i, ' VP');
+  return task.title;
+}
 
 const taskLabels = new Map<string, TaskLabelEntry>();
 const sessionTitles = new Map<string, string>();
@@ -74,20 +83,21 @@ export function syncTasks(tasks: readonly TaskLike[]): void {
   for (const task of tasks) {
     if (!task?.id || typeof task.title !== 'string' || !task.title) continue;
     validCount++;
+    const title = shownTaskTitle({ title: task.title, org_role: task.org_role });
     const existing = taskLabels.get(task.id);
     if (existing) {
       if (existing.src === task) continue; // identity early-out (steady state)
-      if (existing.label.title === task.title && existing.label.project === (task.project || undefined)) {
+      if (existing.label.title === title && existing.label.project === (task.project || undefined)) {
         existing.src = task;
         continue;
       }
       // Mutate in place? No — reuse discipline is for UNCHANGED labels only.
       // A changed label gets a fresh object so useSyncExternalStore snapshots
       // see a new identity exactly when the content changed.
-      taskLabels.set(task.id, { label: { title: task.title, project: task.project || undefined }, src: task });
+      taskLabels.set(task.id, { label: { title, project: task.project || undefined }, src: task });
       if (observed.has(task.id)) dirty = true;
     } else {
-      taskLabels.set(task.id, { label: { title: task.title, project: task.project || undefined }, src: task });
+      taskLabels.set(task.id, { label: { title, project: task.project || undefined }, src: task });
       if (observed.has(task.id)) dirty = true;
     }
   }

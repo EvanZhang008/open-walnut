@@ -11,6 +11,8 @@
  *   - the rows hold still while the pointer is over the list, and re-sort once it leaves
  *   - another page and back (or a reload of /org) shows the same place: the pick, its tab, the
  *     task beside it, the list's scroll
+ *   - the org's name (the title) and the user's role on the chart are renamed in place and kept;
+ *     the main agent reads as the CEO and the leads as VPs
  * The fixture is shared, so this file makes its own projects and removes what it made.
  */
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test'
@@ -105,7 +107,7 @@ test('the sidebar opens Main and the leads; a lead waiting on the user comes fir
   await alpha.click()
   await expect(alpha).toHaveAttribute('aria-selected', 'true')
   const detail = page.getByTestId('org-detail')
-  await expect(detail.getByTestId('org-detail-title')).toHaveText(`${ALPHA} lead`)
+  await expect(detail.getByTestId('org-detail-title')).toHaveText(`${ALPHA} VP`)
   await expect(detail.getByTestId('org-detail-counts')).toContainText('2 open')
   // The one user status's words (src/core/user-status.ts), as on the Board: the question needs
   // the user, the task not started waits.
@@ -130,7 +132,7 @@ test('the sidebar opens Main and the leads; a lead waiting on the user comes fir
 
   // Main's own page lists the leads by state.
   await page.getByTestId('org-channel-main').click()
-  await expect(detail.getByTestId('org-detail-title')).toHaveText('Main')
+  await expect(detail.getByTestId('org-detail-title')).toHaveText('CEO')
   await detail.getByTestId('org-tab-team').click()
   await detail.locator(`[data-testid="org-team-item"]`, { hasText: ALPHA }).click()
   await expect(alpha).toHaveAttribute('aria-selected', 'true')
@@ -214,7 +216,7 @@ test('search, a pick that survives a reload, live state, the keyboard, and the o
   await card.locator('.oc-card-btn').click()
   await expect(page.getByTestId('org-chart')).toHaveCount(0)
   await expect(row(page, ALPHA)).toHaveAttribute('aria-selected', 'true')
-  await expect(page.getByTestId('org-detail-title')).toHaveText(`${ALPHA} lead`)
+  await expect(page.getByTestId('org-detail-title')).toHaveText(`${ALPHA} VP`)
 })
 
 test('the rows hold still under the pointer, and take their new order once it leaves', async ({ page, request }) => {
@@ -370,4 +372,61 @@ test('back on the Org page, it is where it was: the pick, its tab, the task besi
   await page.getByTestId('sidebar-org').click()
   await expect(page.getByTestId('org-channel-main')).toHaveAttribute('aria-selected', 'true')
   await expect(page.getByTestId('org-side')).toHaveCount(0)
+})
+
+test('the org\'s name and the user\'s role are renamed in place, kept, and the CEO and VPs are named so', async ({ page, request }, testInfo) => {
+  // The names are the whole fixture's: with both browsers running, only WebKit (the Mac app) renames.
+  test.skip(testInfo.project.name === 'chromium' && !!process.env.PW_WEBKIT, 'the org names are global: one browser at a time')
+  await openOrg(page)
+  // The org's own names: Main reads as the CEO, the leads as VPs.
+  await expect(page.getByTestId('org-channel-main').locator('.org-channel-name')).toHaveText('CEO')
+  await expect(page.locator('.org-list-section').first()).toHaveText(/^VPs · \d+$/)
+  await expect(page.getByTestId('org-search')).toHaveAttribute('placeholder', 'Search VPs…')
+
+  // The title is the org's name: a click renames it, Enter keeps it, a reload still shows it.
+  const name = page.getByTestId('org-name')
+  await expect(name).toHaveText('Org')
+  await name.click()
+  const input = page.getByTestId('org-name-input')
+  await input.fill(`Walnut Labs ${STAMP}`)
+  await input.press('Enter')
+  await expect(name).toHaveText(`Walnut Labs ${STAMP}`)
+  await expect.poll(async () => (await (await request.get('/api/v1/org/settings')).json()).name).toBe(`Walnut Labs ${STAMP}`)
+  // Escape keeps the old name.
+  await name.click()
+  await page.getByTestId('org-name-input').fill('Not this')
+  await page.getByTestId('org-name-input').press('Escape')
+  await expect(name).toHaveText(`Walnut Labs ${STAMP}`)
+  await page.reload()
+  await expect(page.getByTestId('org-name')).toHaveText(`Walnut Labs ${STAMP}`, { timeout: 30_000 })
+
+  // The chart: the user on top, a person, with the role they give themselves; then the CEO.
+  await page.getByTestId('org-open-chart').click()
+  const founder = page.getByTestId('org-chart-founder')
+  await expect(founder).toBeVisible()
+  await expect(founder.locator('.oc-person svg')).toHaveCount(1)
+  const role = page.getByTestId('org-chart-founder-title')
+  await expect(role).toHaveText('Founder')
+  const box = (await founder.boundingBox())!
+  const ceo = (await page.getByTestId('org-chart-ceo').boundingBox())!
+  expect(box.y + box.height).toBeLessThanOrEqual(ceo.y)
+  await expect(page.getByTestId('org-chart-ceo')).toContainText('CEO')
+  await role.click()
+  await page.getByTestId('org-chart-founder-title-input').fill('Chair')
+  // Escape in the field keeps the sheet open and the old role.
+  await page.getByTestId('org-chart-founder-title-input').press('Escape')
+  await expect(page.getByTestId('org-chart')).toBeVisible()
+  await expect(role).toHaveText('Founder')
+  await role.click()
+  await page.getByTestId('org-chart-founder-title-input').fill('Chair')
+  await page.getByTestId('org-chart-founder-title-input').press('Enter')
+  await expect(role).toHaveText('Chair')
+  await expect.poll(async () => (await (await request.get('/api/v1/org/settings')).json()).founderTitle).toBe('Chair')
+
+  // Blank goes back to the defaults (and leaves the shared fixture as it was).
+  const reset = await request.put('/api/v1/org/settings', { data: { name: '', founderTitle: '' } })
+  expect(reset.ok()).toBe(true)
+  await expect(role).toHaveText('Founder')
+  await page.keyboard.press('Escape')
+  await expect(page.getByTestId('org-name')).toHaveText('Org')
 })

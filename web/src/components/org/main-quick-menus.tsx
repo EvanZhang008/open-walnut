@@ -59,7 +59,7 @@ export function useAskMainAbout(onSent: (result: AskMainResult) => void): {
     if (replica) return [];
     return quickActionsFor({ project }).map((a) => ({
       key: `main-qa-${a.id}`,
-      label: `Ask Main: ${a.label}`,
+      label: `Ask the CEO: ${a.label}`,
       title: `${a.hint} (only ${project}). ${MAIN_QUICK_ACTIONS_NOTE}`,
       icon: <SparklesIcon size={14} />,
       run: () => { void run(a.id, project); },
@@ -67,7 +67,7 @@ export function useAskMainAbout(onSent: (result: AskMainResult) => void): {
   }, [replica, run]);
 
   const status = state.kind === 'sending'
-    ? <span className="main-qa-note" role="status" data-testid="main-qa-sending">Asking Main…</span>
+    ? <span className="main-qa-note" role="status" data-testid="main-qa-sending">Asking the CEO…</span>
     : state.kind === 'error'
       ? <span className="main-qa-error" role="alert" title={state.message} data-testid="main-qa-error">Not sent. Try again.</span>
       : null;

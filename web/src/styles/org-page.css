@@ -32,7 +32,7 @@
   justify-content: space-between;
   padding: 14px 14px 8px;
 }
-.org-list-title { margin: 0; font-size: 17px; font-weight: 600; }
+.org-list-title { display: flex; min-width: 0; margin: 0 8px 0 0; font-size: 17px; font-weight: 600; }
 .org-search {
   appearance: none;
   -webkit-appearance: none;
@@ -452,3 +452,34 @@
 
 /* A right-click opens Walnut's menu: no word selected under it (WebKit selects one). */
 .org-channel, .org-moved-row { -webkit-user-select: none; user-select: none; }
+
+/* A name the user renames in place (OrgEditableName). */
+.org-name-edit {
+  min-width: 0;
+  padding: 0 3px;
+  margin: 0 -3px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: text;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.org-name-edit:hover { border-color: var(--border); }
+.org-name-edit:focus-visible { outline: 2px solid var(--accent); outline-offset: 0; }
+.org-name-edit.is-failed { border-color: var(--danger, #ff3b30); }
+.org-name-input {
+  min-width: 0;
+  width: 100%;
+  padding: 0 3px;
+  margin: 0 -3px;
+  border: 1px solid var(--accent);
+  border-radius: 5px;
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+}

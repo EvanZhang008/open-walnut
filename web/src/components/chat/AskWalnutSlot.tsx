@@ -155,7 +155,7 @@ export interface AskWalnutSlotProps {
 /** What Main's composer says before its first message. */
 const MAIN_INTRO = (
   <p className="draft-agent-desc" data-testid="ask-walnut-main-intro">
-    Main sees all your work. Ask how things are going, or hand it something to do.
+    The CEO sees all your work. Ask how things are going, or hand it something to do.
   </p>
 );
 
@@ -539,7 +539,7 @@ export function AskWalnutSlot({
       setLaunched({
         taskId: result.taskId,
         ...(result.sessionId ? { sessionId: result.sessionId } : {}),
-        title: asMain ? 'Main' : launch.message.split('\n')[0]?.trim() || launch.payload.project || 'Ask Walnut',
+        title: asMain ? 'CEO' : launch.message.split('\n')[0]?.trim() || launch.payload.project || 'Ask Walnut',
         ...(asMain ? { main: true } : {}),
       });
       setSelectedTaskId(asMain ? MAIN_PICK : result.taskId);
@@ -720,7 +720,7 @@ export function AskWalnutSlot({
             <DraftSessionPanel
               draft={mainDraft}
               headerLeading={inlineMenuButton}
-              walnutLabel="Main"
+              walnutLabel="CEO"
               intro={MAIN_INTRO}
               autoFocus={false}
               onStart={handleStartMain}
@@ -738,7 +738,7 @@ export function AskWalnutSlot({
             {inlineMenuButton && <div className="ask-walnut-bare-header">{inlineMenuButton}</div>}
             {pending.error ? (
               <>
-                <p className="ask-walnut-pending-error">{pending.main ? 'Main' : agent.project} couldn&apos;t start: {pending.error}</p>
+                <p className="ask-walnut-pending-error">{pending.main ? 'The CEO' : agent.project} couldn&apos;t start: {pending.error}</p>
                 <div className="ask-walnut-pending-actions">
                   <button
                     className="btn btn-sm btn-primary"
@@ -754,7 +754,7 @@ export function AskWalnutSlot({
             ) : (
               <p className="ask-walnut-pending-status">
                 <span className="spinner ask-walnut-pending-spinner" />
-                Starting {pending.main ? 'Main' : agent.project}…
+                Starting {pending.main ? 'the CEO' : agent.project}…
               </p>
             )}
             {pending.message && <p className="ask-walnut-pending-echo">{pending.message}</p>}

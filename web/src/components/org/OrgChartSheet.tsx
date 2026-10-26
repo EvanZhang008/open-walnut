@@ -25,6 +25,8 @@ import { log } from '@/utils/log';
 import { ContextMenu, type ContextMenuItem } from '@/components/common/ContextMenu';
 import { OrgAvatar, shortAgo } from './OrgChannelList';
 import { OrgChartProject } from './OrgChartProject';
+import { OrgEditableName } from './OrgEditableName';
+import { useOrgSettings } from './useOrgSettings';
 import { cardOf, ceoLine, dropPlan, vpCards, type DropPlan, type VpCard, type VpProject } from './org-chart-model';
 import type { ChannelRow } from './org-channels-model';
 import '@/styles/org-chart.css';
@@ -95,6 +97,7 @@ export function OrgChartSheet({ main, rows, tasks, onClose, onPick, onOpenTask, 
   });
   useDialogFocus(panel, 'Org chart');
   const cards = vpCards(rows);
+  const { settings, save } = useOrgSettings();
   const byId = useMemo(() => new Map(tasks.map((t) => [t.id, t] as const)), [tasks]);
   const pick = (key: string) => { onClose(); onPick(key); };
   const openTask = (taskId: string) => { onClose(); onOpenTask(taskId); };
@@ -248,10 +251,26 @@ export function OrgChartSheet({ main, rows, tasks, onClose, onPick, onOpenTask, 
         {done && <p className="oc-done" role="status" data-testid="org-chart-done">{done}</p>}
 
         <div className="oc-tree">
-          <button type="button" className="oc-card oc-ceo" data-testid="org-chart-ceo" onClick={() => pick(main.key)} title="Open Main">
+          {/* The user, above the CEO: a person, and the role the user gives themselves. */}
+          <div className="oc-card oc-founder" data-testid="org-chart-founder">
+            <span className="oc-person" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="8" r="4" />
+                <path d="M4 21c0-4.4 3.6-7 8-7s8 2.6 8 7" />
+              </svg>
+            </span>
+            <span className="oc-card-text">
+              <span className="oc-card-name">
+                <OrgEditableName value={settings.founderTitle} label="your role" onSave={(v) => save({ founderTitle: v })} className="oc-card-title" testId="org-chart-founder-title" maxLength={40} />
+              </span>
+              <span className="oc-card-line">You</span>
+            </span>
+          </div>
+          <div className="oc-stem" aria-hidden="true" />
+          <button type="button" className="oc-card oc-ceo" data-testid="org-chart-ceo" onClick={() => pick(main.key)} title="Open the CEO">
             <OrgAvatar row={main} size={34} />
             <span className="oc-card-text">
-              <span className="oc-card-name"><span className="oc-card-title">Main</span><span className="oc-role">CEO</span></span>
+              <span className="oc-card-name"><span className="oc-card-title">CEO</span></span>
               <span className="oc-card-line">{ceoLine(cards)}</span>
             </span>
             {main.alerts.length > 0 && <span className="oc-badge" title={needsTitle(main.alerts.length)}>{main.alerts.length}</span>}
@@ -269,7 +288,7 @@ export function OrgChartSheet({ main, rows, tasks, onClose, onPick, onOpenTask, 
             </div>
           )}
           {cards.length === 0 ? (
-            <p className="org-empty" data-testid="org-chart-empty">No open work yet. Ask Main to start something.</p>
+            <p className="org-empty" data-testid="org-chart-empty">No open work yet. Ask the CEO to start something.</p>
           ) : (
             <ul className="oc-vps" data-testid="org-chart-vps">
               {cards.map((c) => {

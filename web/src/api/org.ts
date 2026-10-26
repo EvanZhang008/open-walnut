@@ -1,5 +1,5 @@
 import type { Task } from '@open-walnut/core';
-import { apiPost } from './client';
+import { apiGet, apiPost, apiPut } from './client';
 
 /**
  * The main agent's task, made by the server on first use (POST /api/v1/org/main).
@@ -44,4 +44,19 @@ export interface ProjectVpAnswer {
 /** Put a project under another project's VP (its lead), or back under its own (`vp` ''). No task moves. */
 export async function setProjectVp(project: string, vp: string): Promise<ProjectVpAnswer> {
   return apiPost<ProjectVpAnswer>('/api/v1/org/vp', { project, vp });
+}
+
+/** The org's own names (config.yaml `org`): its name on the Org page, the user's role on the chart. */
+export interface OrgSettings {
+  name: string;
+  founderTitle: string;
+}
+
+export async function fetchOrgSettings(): Promise<OrgSettings> {
+  return apiGet<OrgSettings>('/api/v1/org/settings');
+}
+
+/** A blank name goes back to the default. */
+export async function saveOrgSettings(patch: Partial<OrgSettings>): Promise<OrgSettings> {
+  return apiPut<OrgSettings>('/api/v1/org/settings', patch);
 }

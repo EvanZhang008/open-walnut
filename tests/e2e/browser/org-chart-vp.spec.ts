@@ -92,7 +92,7 @@ test.afterAll(async ({ request }) => {
 
 test('Main is the CEO and each project a VP card with its own name', async ({ page }) => {
   await openChart(page)
-  await expect(page.getByTestId('org-chart-ceo')).toContainText('Main')
+  await expect(page.getByTestId('org-chart-ceo')).toContainText('CEO')
   await expect(page.getByTestId('org-chart-ceo')).toContainText('CEO')
   for (const name of [A, B]) {
     await expect(vp(page, name)).toContainText(name)

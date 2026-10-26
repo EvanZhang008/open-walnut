@@ -62,9 +62,9 @@ describe('org channels', () => {
     // No lead yet: the row names the lead the first chat makes.
     const personal = rows.find((r) => r.name === 'Personal')!
     expect(personal.contactId).toBeUndefined()
-    expect(personal.contactTitle).toBe('Personal lead')
+    expect(personal.contactTitle).toBe('Personal VP')
     expect(main.key).toBe(MAIN_KEY)
-    expect(main.latest).toBe('4 leads · 1 working')
+    expect(main.latest).toBe('4 VPs · 1 working')
   })
 
   it('puts a project whose work waits on a prompt first, with the prompt as its line', () => {
@@ -74,7 +74,7 @@ describe('org channels', () => {
     expect(rows[0]!.state).toBe('alert')
     expect(rows[0]!.latest).toBe('Asks you: w3 title')
     expect(rows[1]!.latest).toBe('Wants approval (Bash): t1 title')
-    expect(main.latest).toBe('4 leads · 1 working · 2 need you')
+    expect(main.latest).toBe('4 VPs · 1 working · 2 need you')
     expect([rows[0]!.needs, rows[1]!.needs, main.needs]).toEqual([1, 1, 2])
   })
 
@@ -83,8 +83,8 @@ describe('org channels', () => {
     const failed = tasks.map((x) => (x.id === 'tl' ? { ...x, user_status: { state: 'needs' as const, source: 'error' as const, ask: 'Its session failed' } } : x))
     const tax = buildChannels(buildOrgTree(failed), failed, probe).rows[0]!
     expect(tax.name).toBe('Tax')
-    expect(tax.alerts).toEqual([{ taskId: 'tl', title: 'Tax lead', kind: 'error' }])
-    expect(alertText(tax.alerts[0]!)).toBe('Failed: Tax lead')
+    expect(tax.alerts).toEqual([{ taskId: 'tl', title: 'Tax VP', kind: 'error' }])
+    expect(alertText(tax.alerts[0]!)).toBe('Failed: Tax VP')
     // A failure its status reads as Waiting (a host gone a moment, a trigger armed) is no alert,
     // as on the Board: the row stays quiet and counts nothing.
     const waiting = buildChannels(buildOrgTree(tasks), tasks, probe).rows.find((r) => r.name === 'Tax')!
@@ -104,7 +104,7 @@ describe('org channels', () => {
     expect(personal.needs).toBe(1)
     expect(personal.counts.needsYou).toBe(1)
     expect(main.needs).toBe(1)
-    expect(main.latest).toBe('4 leads · 1 working · 1 needs you')
+    expect(main.latest).toBe('4 VPs · 1 working · 1 needs you')
     expect(teamColumns(personal, list).map((c) => [c.key, c.items.map((i) => [i.id, i.note])])).toEqual([
       ['needs', [['p1', 'Pick the renewal date']]], ['waiting', [['p2', undefined]]],
     ])
@@ -143,7 +143,7 @@ describe('org channels', () => {
   it('searches every word over the name, the contact and the line', () => {
     const { rows } = buildChannels(buildOrgTree(tasks), tasks, noAlerts)
     expect(filterChannels(rows, 'walnut').map((r) => r.name)).toEqual(['Walnut'])
-    expect(filterChannels(rows, 'TAX lead').map((r) => r.name)).toEqual(['Tax'])
+    expect(filterChannels(rows, 'TAX vp').map((r) => r.name)).toEqual(['Tax'])
     expect(filterChannels(rows, 'waiting h1').map((r) => r.name)).toEqual(['Health'])
     expect(filterChannels(rows, '  ').length).toBe(4)
     expect(filterChannels(rows, 'nothing-like-this')).toEqual([])
@@ -229,7 +229,7 @@ describe('org channels', () => {
       ['Insights', 'Marina', projectRowKey('Marina'), false],
     ])
     // Main counts its VPs, not the projects under them.
-    expect(channels.main.latest).toMatch(/^2 leads/)
+    expect(channels.main.latest).toMatch(/^2 VPs/)
     expect(mainTeamColumns(channels.rows).flatMap((c) => c.items.map((i) => i.title)).sort()).toEqual(['Marina', 'Other'])
   })
 })

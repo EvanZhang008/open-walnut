@@ -34,6 +34,8 @@ export type AllowSpec = true | { readonly [key: string]: AllowSpec }
 const ALLOW: Record<string, AllowSpec> = {
   version: true,
   user: { name: true },
+  // The org's name and the user's role on the chart: a replica's Org page shows the same names.
+  org: { name: true, founder_title: true },
   defaults: { priority: true, platform: true, project: true, engine: true },
   provider: { type: true, model: true, bedrock_region: true },
   agent: {

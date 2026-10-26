@@ -43,7 +43,7 @@ function waitsOnUser(sessionId: string): boolean {
 export async function askMain(message: string): Promise<AskMainResult> {
   const main = await ensureMainTask();
   // A replica cannot make Main: it lives with the primary (the buttons are hidden there).
-  if (!main) throw new Error('Main runs on your Mac. Open Walnut there to use it.');
+  if (!main) throw new Error('The CEO runs on your Mac. Open Walnut there to use it.');
   const sessionId = resolveTaskSessionId(main);
   if (sessionId) {
     // The store only knows sessions someone asked about: ask for Main's now.

@@ -97,7 +97,7 @@ async function openOrgMain(page: Page): Promise<void> {
   await loadHome(page)
   await page.getByTestId('sidebar-org').click()
   await page.getByTestId('org-channel-main').click()
-  await expect(page.getByTestId('org-detail-title')).toHaveText('Main')
+  await expect(page.getByTestId('org-detail-title')).toHaveText('CEO')
 }
 
 /** Main's chat on the Org page, and the mock CLI's answers in it. */
@@ -159,8 +159,8 @@ test('a new install opens the chat on Main, and the drawer pins Main and links t
   await loadHome(page)
   const mainDraft = page.getByTestId('ask-walnut-main-draft')
   await expect(mainDraft).toBeVisible({ timeout: 30_000 })
-  await expect(page.getByTestId('ask-walnut-main-intro')).toContainText('Main sees all your work')
-  await expect(mainDraft.locator('.chat-input-textarea')).toHaveAttribute('placeholder', /Ask Main anything/)
+  await expect(page.getByTestId('ask-walnut-main-intro')).toContainText('The CEO sees all your work')
+  await expect(mainDraft.locator('.chat-input-textarea')).toHaveAttribute('placeholder', /Ask CEO anything/)
   await expect(page.locator('.sidebar-panel-toggle', { hasText: 'Ask Walnut' })).toBeVisible()
   await expect(sidebarOrg(page)).toBeVisible()
 
@@ -191,13 +191,13 @@ test('Chat with a project with two tasks makes its hidden lead and opens a plain
   await expect.poll(async () => (await orgTree(request)).projects.find((p) => p.project === PROJECT)?.lead?.title, { timeout: 15_000 })
     .toBe(`${PROJECT} lead`)
   const lead = (await orgTree(request)).projects.find((p) => p.project === PROJECT)!.lead!
-  const draft = page.locator('.main-page-session-column .draft-session-panel').filter({ hasText: `${PROJECT} lead` })
+  const draft = page.locator('.main-page-session-column .draft-session-panel').filter({ hasText: `${PROJECT} VP` })
   await expect(draft).toBeVisible({ timeout: 15_000 })
   // A chat with the lead: no Start Task / Ask Walnut fork, a line on who it is, and its name in the composer.
   await expect(draft.locator('.draft-intent-cards')).toHaveCount(0)
   await expect(draft.getByTestId('draft-org-lead-hint')).toContainText(`leads ${PROJECT}`)
   const composer = draft.locator('.chat-input-textarea')
-  await expect(composer).toHaveAttribute('placeholder', `Message ${PROJECT} lead…`)
+  await expect(composer).toHaveAttribute('placeholder', `Message ${PROJECT} VP…`)
   await expect(page.locator(`.todo-panel [data-task-id="${lead.id}"]`)).toHaveCount(0)
   // The project's own tasks stay on the board.
   await expect(page.locator(`.todo-panel [data-task-id="${made[0]}"]`).first()).toBeVisible({ timeout: 15_000 })
@@ -299,7 +299,7 @@ test('a send from Main\'s composer makes Main, shows its session, and keeps Main
 test('Main\'s quick actions sit in its composer\'s "+", not in a bar of their own', async ({ page }) => {
   await openOrgMain(page)
   await expect(page.getByTestId('main-quick-actions')).toHaveCount(0)
-  await expect(page.getByTestId('org-detail').getByText('Ask Main to')).toHaveCount(0)
+  await expect(page.getByTestId('org-detail').getByText('Ask the CEO to')).toHaveCount(0)
   await page.getByTestId('org-tab-chat').click()
   const menu = await openMainPlus(page)
   await expect(menu.locator('.chat-plus-menu-label').filter({ hasText: 'Quick actions' })).toBeVisible()
@@ -345,7 +345,7 @@ test('the Tasks page asks Main about one project from that project\'s ⋮, and a
   // One project: no merge.
   let menu = await openRailProjectMenu(page, QA_PROJECT)
   await expect(menu.locator('[data-menu-item="main-qa-projects"]')).toHaveCount(0)
-  await expect(menu.locator('[data-menu-item^="main-qa-"]')).toHaveText(['Ask Main: Put tasks in place', 'Ask Main: Triage'])
+  await expect(menu.locator('[data-menu-item^="main-qa-"]')).toHaveText(['Ask the CEO: Put tasks in place', 'Ask the CEO: Triage'])
   await expect(menu.locator('[data-menu-item="main-qa-place"]')).toHaveAttribute('title', /Nothing changes until you pick what to apply\./)
 
   await page.route('**/api/v1/org/main', (route) => route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ error: 'Main is down for a test' }) }))
@@ -362,7 +362,7 @@ test('the Tasks page asks Main about one project from that project\'s ⋮, and a
   menu = await openRailProjectMenu(page, QA_PROJECT)
   await menu.locator('[data-menu-item="main-qa-place"]').click()
   await expect(page).toHaveURL(/\/org\?node=main&tab=chat/)
-  await expect(page.getByTestId('org-detail-title')).toHaveText('Main')
+  await expect(page.getByTestId('org-detail-title')).toHaveText('CEO')
   const chat = mainChat(page)
   await expect(chat).toBeVisible({ timeout: 60_000 })
   await expect(replies(chat).filter({ hasText: `Only look at the project "${QA_PROJECT}".` })).toHaveCount(1, { timeout: 90_000 })
@@ -386,7 +386,7 @@ test('a Main waiting on the user\'s answer is not sent to: its chat opens on the
     const menu = await openMainPlus(page)
     const triage = menu.locator('[data-action-id="main-qa-triage"]')
     await expect(triage).toHaveAttribute('aria-disabled', 'true', { timeout: 30_000 })
-    await expect(triage).toHaveAttribute('title', /Main is waiting on your answer/)
+    await expect(triage).toHaveAttribute('title', /The CEO is waiting on your answer/)
     // An off row takes no click (Playwright waits on aria-disabled, so force it).
     await triage.click({ force: true })
     await expect(menu).toBeVisible()

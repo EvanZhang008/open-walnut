@@ -135,7 +135,7 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabChange, onSel
   /** The chat's Inbox tab, asked for by Answer on a letter (SessionPanel inboxRequest), for the
    *  session it was asked of: a replaced session's new panel does not reopen it. */
   const [chatInbox, setChatInbox] = useState<{ sid: string; n: number } | null>(null);
-  const title = row.kind === 'main' ? 'Main' : row.contactTitle;
+  const title = row.kind === 'main' ? 'CEO' : row.contactTitle;
   // Main is always someone to talk to: its task is made by the first chat.
   const canTalk = row.kind === 'main' || !!row.contactId || !!row.node?.needsLead;
   // A node opens on its chat (the user, 2026-10-25: "chat first, not the board"); one no one
@@ -223,7 +223,7 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabChange, onSel
             <button type="button" role="tab" id={tabId('chat')} aria-controls="org-detail-panel" aria-selected={shown === 'chat'} className={`org-tab${shown === 'chat' ? ' is-on' : ''}`} data-testid="org-tab-chat" onClick={() => pick('chat')}>Chat</button>
           )}
           <button type="button" role="tab" id={tabId('team')} aria-controls="org-detail-panel" aria-selected={shown === 'team'} className={`org-tab${shown === 'team' ? ' is-on' : ''}`} data-testid="org-tab-team" onClick={() => pick('team')}>
-            {row.kind === 'main' ? 'Leads' : 'Team'} <span className="org-tab-count">{teamCount}</span>
+            {row.kind === 'main' ? 'VPs' : 'Team'} <span className="org-tab-count">{teamCount}</span>
           </button>
           {hasBoard && (
             <button type="button" role="tab" id={tabId('board')} aria-controls="org-detail-panel" aria-selected={shown === 'board'} className={`org-tab${shown === 'board' ? ' is-on' : ''}`} data-testid="org-tab-board" onClick={() => pick('board')}>Board</button>
@@ -272,10 +272,10 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabChange, onSel
           </div>
         ) : (
           <div className="org-chat-start" data-testid="org-chat-start">
-            {launch ? <p>Main is starting…</p> : <>
-            <p>{row.contactId || row.kind === 'main' ? `${title} has not started yet.` : `${row.name} has no lead yet.`}</p>
+            {launch ? <p>The CEO is starting…</p> : <>
+            <p>{row.contactId || row.kind === 'main' ? `${title} has not started yet.` : `${row.name} has no VP yet.`}</p>
             <button type="button" className="btn btn-sm btn-primary" data-testid="org-start-chat" onClick={() => onStartChat(row)}>
-              {row.contactId || row.kind === 'main' ? `Start a chat with ${title}` : 'Make a lead and chat'}
+              {row.contactId || row.kind === 'main' ? `Start a chat with ${title}` : 'Make a VP and chat'}
             </button>
             </>}
           </div>
@@ -294,11 +294,11 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabChange, onSel
         ) : canTalk ? (
           <div className="org-composer org-composer-start">
             <button type="button" className="btn btn-sm" data-testid="org-start-chat-bar" onClick={() => onStartChat(row)}>
-              {row.contactId || row.kind === 'main' ? `Start a chat with ${title}` : 'Make a lead and chat'}
+              {row.contactId || row.kind === 'main' ? `Start a chat with ${title}` : 'Make a VP and chat'}
             </button>
           </div>
         ) : (
-          <p className="org-composer org-composer-note" data-testid="org-no-contact">The Inbox has no lead: open a task to talk to it.</p>
+          <p className="org-composer org-composer-note" data-testid="org-no-contact">The Inbox has no VP: open a task to talk to it.</p>
         )
       )}
     </div>

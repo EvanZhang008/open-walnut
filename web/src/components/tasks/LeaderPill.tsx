@@ -11,6 +11,8 @@ import { log } from '@/utils/log';
 import { AdoptWorkerFlyout } from './AdoptWorkerFlyout';
 import { doneSubtaskCount, leaderPillTitle, openSubtasksOf, subtaskPlaceLabel } from './subtask-index';
 import '@/styles/subtask-pill.css';
+import { orgDisplayTitle } from '@open-walnut/org-tree';
+import { leaderWord } from './team-menu-model';
 
 /** A broken chain link: the row's "release from this team" control. */
 const ICON_UNLINK = (
@@ -127,7 +129,7 @@ export function LeaderPill({ task, className }: { task: Task; className?: string
         // A narrow session header or task column shows this letter instead of the
         // words (CSS only; the text stays for readers and tests); the count rides in
         // the hover text.
-        data-short="L"
+        data-short={leaderWord(task).charAt(0)}
         onPointerDown={(e) => e.stopPropagation()}
         // WebKit never focuses a button on click, so the mousedown would focus the
         // row around the pill, which scrolls itself into view before mouseup and
@@ -142,7 +144,7 @@ export function LeaderPill({ task, className }: { task: Task; className?: string
           setOpen((v) => !v);
         }}
       >
-        <span className="task-pill-long">Leader · {subtasks.length}</span>
+        <span className="task-pill-long">{leaderWord(task)} · {subtasks.length}</span>
       </button>
       {open && typeof document !== 'undefined'
         ? createPortal(
@@ -157,7 +159,7 @@ export function LeaderPill({ task, className }: { task: Task; className?: string
               onClick={(e) => e.stopPropagation()}
             >
               <div className="leader-subtasks-title">
-                {subtasks.length === 1 ? 'Open subtask' : `${subtasks.length} open subtasks`} of &ldquo;{task.title}&rdquo;
+                {subtasks.length === 1 ? 'Open subtask' : `${subtasks.length} open subtasks`} of &ldquo;{orgDisplayTitle(task)}&rdquo;
               </div>
               <ul className="leader-subtasks-list">
                 {subtasks.map((sub) => {

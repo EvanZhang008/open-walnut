@@ -7,7 +7,7 @@ import type { PlusMenuAction } from '@/components/chat/plus-menu-actions';
 import { MAIN_QUICK_ACTIONS, MAIN_QUICK_ACTIONS_NOTE, quickActionMessage } from './main-quick-actions';
 
 export const QUICK_ACTIONS_GROUP = 'Quick actions';
-export const QUICK_ACTION_HELD_TITLE = 'Main is waiting on your answer. Answer it first: a new message would refuse it.';
+export const QUICK_ACTION_HELD_TITLE = 'The CEO is waiting on your answer. Answer it first: a new message would refuse it.';
 
 export interface MainQuickPlusInput {
   /** The composer's task when it is Main, else null: no rows. */

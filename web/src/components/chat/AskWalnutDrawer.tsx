@@ -319,17 +319,17 @@ export function AskWalnutDrawer({
         </div>
 
         <div className="ask-walnut-drawer-list" role="group" aria-label="Your asks" data-testid="ask-walnut-drawer-list">
-          {main && (!query.trim() || matchesAskQuery('Main', query)) && (
+          {main && (!query.trim() || (matchesAskQuery('CEO', query) || matchesAskQuery('Main', query))) && (
             <button
               type="button"
               className={`ask-walnut-drawer-item ask-walnut-drawer-main${main.selected ? ' is-selected' : ''}`}
               data-testid="ask-walnut-drawer-main"
               aria-current={main.selected ? 'true' : undefined}
               onClick={() => { onClose(); main.onPick(); }}
-              title="Main: your main agent, who sees all your work"
+              title="The CEO: your main agent, who sees all your work"
             >
               {main.task ? <TaskDot task={main.task} /> : <span className="ask-walnut-drawer-dot task-circle-todo" aria-hidden="true" />}
-              <span className="ask-walnut-drawer-item-title">Main</span>
+              <span className="ask-walnut-drawer-item-title">CEO</span>
               <span className="ask-walnut-drawer-item-time">all your work</span>
             </button>
           )}
@@ -380,7 +380,7 @@ export function AskWalnutDrawer({
                 className="ask-walnut-drawer-link"
                 data-testid="ask-walnut-org"
                 onClick={act(onOpenOrg)}
-                title="Main and your project leads: what each is doing and what needs you"
+                title="The CEO and your VPs: what each is doing and what needs you"
               >
                 <span aria-hidden="true">{'⌗'}</span> Org
               </button>

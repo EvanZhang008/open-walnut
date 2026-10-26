@@ -1088,6 +1088,9 @@ export interface ReplicaCopiesConfig {
 export interface Config {
   version: 1;
   user: { name?: string };
+  /** The org's own names, set on the Org page (src/core/org/org-settings.ts): the org's name
+   *  (default "Org") and the user's role at the top of the org chart (default "Founder"). */
+  org?: { name?: string; founder_title?: string };
   defaults: {
     priority: TaskPriority;
     /** Default platform/source for new tasks created via quick-add. Unset = 'local'

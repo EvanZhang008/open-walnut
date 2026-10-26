@@ -85,6 +85,7 @@ import { PinnedSessionFacts, SessionMetaFacts } from './SessionMetaFacts';
 import { ComposerModelPill } from './ComposerModelPill';
 import { ComposerControlsBar, type ComposerControl, type ComposerControlsBarHandle } from '@/components/chat/ComposerControlsBar';
 import { SESSION_MODE_LABELS } from '@open-walnut/core';
+import { orgDisplayTitle } from '@open-walnut/org-tree';
 import { TaskQuickActions } from './TaskQuickActions';
 import { TransferLinks } from '../transfer/TransferLinks';
 import { transferPlusAction } from '../transfer/transfer-plus-action';
@@ -573,7 +574,8 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
     () => panelTaskCopy(storeTask, fetchedTask, linkedTaskId),
     [storeTask, fetchedTask, linkedTaskId],
   );
-  const taskTitle = sessionTask?.title ?? null;
+  // Main reads as the CEO and a project's lead as its VP (display only).
+  const taskTitle = sessionTask ? orgDisplayTitle(sessionTask) : null;
 
   // Pin state — read from the shared Focus Bar store (single source of truth,
   // same data every other surface renders). Mutations go through the shared

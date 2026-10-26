@@ -57,7 +57,7 @@ async function openLead(page: Page): Promise<void> {
   await loadHome(page)
   await page.getByTestId('sidebar-org').click()
   await page.locator(`[data-testid="org-channel"][data-key="${rowKey}"]`).click()
-  await expect(page.getByTestId('org-detail-title')).toHaveText(`${PROJECT} lead`)
+  await expect(page.getByTestId('org-detail-title')).toHaveText(`${PROJECT} VP`)
 }
 
 const side = (page: Page) => page.getByTestId('org-side')
@@ -104,7 +104,7 @@ test('a Team task opens beside the page; the list and the detail stay; × closes
   expect(listAfter.x).toBeCloseTo(listBox.x, 0)
   expect(listAfter.width).toBeCloseTo(listBox.width, 0)
   expect((await detail.boundingBox())!.x).toBeCloseTo(detailX, 0)
-  await expect(page.getByTestId('org-detail-title')).toHaveText(`${PROJECT} lead`)
+  await expect(page.getByTestId('org-detail-title')).toHaveText(`${PROJECT} VP`)
 
   // Another task replaces it; one with no session says so.
   await teamItem(page, ids.beta).click()
@@ -180,5 +180,5 @@ test('a phone shows the opened task alone, and Back returns to the lead', async 
   await expect(page.locator('.org-list')).toHaveCount(0)
   await page.goBack()
   await expect(side(page)).toHaveCount(0)
-  await expect(page.getByTestId('org-detail-title')).toHaveText(`${PROJECT} lead`)
+  await expect(page.getByTestId('org-detail-title')).toHaveText(`${PROJECT} VP`)
 })

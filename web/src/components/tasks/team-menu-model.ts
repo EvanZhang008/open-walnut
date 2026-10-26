@@ -1,4 +1,5 @@
 import type { Task } from '@open-walnut/core';
+import { CEO_LABEL, VP_LABEL } from '@open-walnut/org-tree';
 import { isDoneTask } from './adopt-candidates';
 import { subtasksOf } from './subtask-index';
 
@@ -14,14 +15,20 @@ import { subtasksOf } from './subtask-index';
  * names its leader (`Worker` alone when the leader is not in this browser's
  * list, e.g. a finished one not loaded); '' for a task in no team.
  */
-export function teamRowSummary(tasks: readonly Task[], task: Pick<Task, 'id' | 'parent_task_id'>, leaderTitle: string | null): string {
+export function teamRowSummary(tasks: readonly Task[], task: Pick<Task, 'id' | 'parent_task_id' | 'org_role'>, leaderTitle: string | null): string {
   const workers = subtasksOf(tasks, task.id);
   const open = workers.filter((t) => !isDoneTask(t)).length;
   const parts: string[] = [];
-  if (open > 0) parts.push(`Leader · ${open}`);
-  else if (workers.length > 0) parts.push(`Leader · ${workers.length} done`);
+  if (open > 0) parts.push(`${leaderWord(task)} · ${open}`);
+  else if (workers.length > 0) parts.push(`${leaderWord(task)} · ${workers.length} done`);
   if (task.parent_task_id) parts.push(leaderTitle !== null ? `Worker of “${leaderTitle}”` : 'Worker');
   return parts.join(', ');
+}
+
+/** What the Leader pill calls a task with workers: the org's own names on Main and a project's
+ *  lead (2026-10-26, the user: "change name of Lead to VP"), "Leader" on any other task. */
+export function leaderWord(task: Pick<Task, 'org_role'>): string {
+  return task.org_role === 'main' ? CEO_LABEL : task.org_role === 'lead' ? VP_LABEL : 'Leader';
 }
 
 /**

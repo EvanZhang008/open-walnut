@@ -108,6 +108,20 @@ export function isOrgNode(task: { org_role?: string }): boolean {
   return task.org_role === 'main' || task.org_role === 'lead';
 }
 
+/** What the UI calls the main agent and a project's lead (2026-10-26, the user: "change main agent
+ *  as CEO, and change name of Lead to VP"). Display only: the tasks, their ids, the prompts and
+ *  the code keep "Main" and "lead". */
+export const CEO_LABEL = 'CEO';
+export const VP_LABEL = 'VP';
+
+/** A task's title as the UI shows it: Main is the CEO, a lead's Walnut-made "<project> lead" its
+ *  "<project> VP" (a title the user wrote stays as written). */
+export function orgDisplayTitle(task: { title: string; org_role?: string }): string {
+  if (task.org_role === 'main') return CEO_LABEL;
+  if (task.org_role === 'lead') return task.title.replace(/ lead$/i, ` ${VP_LABEL}`);
+  return task.title;
+}
+
 /** Hidden from the task lists (the board, the dashboard): the chat slot and the org chart show them. */
 export function isHiddenOrgNode(task: { org_role?: string }): boolean {
   return isOrgNode(task);

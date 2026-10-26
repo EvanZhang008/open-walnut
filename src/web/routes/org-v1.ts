@@ -14,6 +14,8 @@
  *                                                     put a project under another project's VP
  *                                                     (its lead), or back under its own (vp '');
  *                                                     no task changes project
+ *   GET  /org/settings        → { name, founderTitle }  the org's name and the user's role
+ *   PUT  /org/settings { name?, founderTitle? } → the same, after the change (blank = default)
  *
  * Reads work anywhere; the writes make or change org tasks, so they run on the primary
  * only (501 on a replica, like every other task create).
@@ -22,6 +24,8 @@
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { role } from '../../core/server-role.js'
 import type { Task } from '../../core/types.js'
+import { bus, EventNames } from '../../core/event-bus.js'
+import { getOrgSettings, setOrgSettings } from '../../core/org/org-settings.js'
 import {
   OrgError, contactLaunch, ensureMainTask, getOrgTree, orgReportsOf, resolveOrgContact, setProjectVp,
 } from '../../core/org/org-store.js'
@@ -117,6 +121,30 @@ orgV1Router.post('/org/vp', async (req: Request, res: Response, next: NextFuncti
     const vp = req.body?.vp
     if (vp !== undefined && typeof vp !== 'string') throw new OrgError('bad_vp', 400, '`vp` is a project name, or "" for the project\'s own.')
     res.json(await setProjectVp(project, vp ?? ''))
+  } catch (err) {
+    sendError(res, next, err)
+  }
+})
+
+orgV1Router.get('/org/settings', async (_req: Request, res: Response, next: NextFunction) => {
+  try {
+    res.json(await getOrgSettings())
+  } catch (err) {
+    sendError(res, next, err)
+  }
+})
+
+orgV1Router.put('/org/settings', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    primaryOnly('The org\'s names are changed')
+    const body = (req.body ?? {}) as { name?: unknown; founderTitle?: unknown }
+    for (const k of ['name', 'founderTitle'] as const) {
+      if (body[k] !== undefined && typeof body[k] !== 'string') throw new OrgError('bad_name', 400, `\`${k}\` is a string.`)
+    }
+    const settings = await setOrgSettings(body)
+    // Every other window (and the Mac app) reads the new names at once.
+    bus.emit(EventNames.CONFIG_CHANGED, { key: 'org' }, ['web-ui'], { source: 'api' })
+    res.json(settings)
   } catch (err) {
     sendError(res, next, err)
   }
