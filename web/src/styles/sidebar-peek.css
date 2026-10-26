@@ -1,0 +1,100 @@
+/* The collapsed rail peeks open (useRailPeek.ts): hovered or tabbed into, it widens to the
+   docked sidebar's width OVER the page and every icon shows its name; leaving puts it back.
+   - The page never moves: the negative right margin keeps the rail's share of the row at
+     56px for every frame of the animation (width and margin share one curve).
+   - Every icon stays exactly where it sits in the narrow rail; only the names slide in
+     beside them. Moving icons under a resting pointer is what makes a peek feel janky.
+   - `.rail-peek-out` is the way back: names still laid out (the shrinking rail clips them),
+     fading as it closes. Its transition lasts RAIL_PEEK_OUT_MS.
+   - `.rail-peek-snap` is a click's close: no animation, the narrow rail at once. */
+
+/* Width and margin always move together, on one curve, so their sum (the rail's share of
+   the row) stays 56px even when a transition is cut short and another takes over. The
+   base `.sidebar` rule animates width alone, which pushed the page by up to 184px. */
+.sidebar.collapsed {
+  transition: width 0.25s ease, margin-right 0.25s ease;
+}
+.sidebar.collapsed.rail-peek-snap {
+  transition: none;
+}
+
+.sidebar.collapsed.rail-peek,
+.sidebar.collapsed.rail-peek-out {
+  --rail-peek-collapsed: 56px;
+  position: relative;
+  z-index: 200;
+  overflow-x: hidden;
+  /* Opaque over the page: the rail's frosted glass let the text under the names show through. */
+  background: var(--bg);
+}
+
+.sidebar.collapsed.rail-peek {
+  width: var(--sidebar-width);
+  margin-right: calc(var(--rail-peek-collapsed) - var(--sidebar-width));
+  box-shadow: 6px 0 24px rgba(0, 0, 0, 0.14), 1px 0 0 var(--border);
+  transition:
+    width 180ms cubic-bezier(0.2, 0, 0, 1),
+    margin-right 180ms cubic-bezier(0.2, 0, 0, 1),
+    box-shadow 180ms ease-out;
+}
+
+.sidebar.collapsed.rail-peek-out {
+  transition:
+    width 140ms cubic-bezier(0.4, 0, 1, 1),
+    margin-right 140ms cubic-bezier(0.4, 0, 1, 1),
+    box-shadow 140ms ease-in;
+}
+
+/* Names: laid out beside the icon, sliding in a beat after the rail starts to widen. */
+.sidebar.collapsed:is(.rail-peek, .rail-peek-out) .sidebar-label {
+  width: auto;
+  flex: 0 1 auto;
+  min-width: 0;
+  text-overflow: ellipsis;
+}
+.sidebar.collapsed.rail-peek .sidebar-label {
+  opacity: 1;
+  animation: rail-peek-label-in 200ms cubic-bezier(0.2, 0, 0, 1) 30ms both;
+}
+.sidebar.collapsed.rail-peek-out .sidebar-label {
+  opacity: 0;
+  transition: opacity 110ms ease-in;
+}
+@keyframes rail-peek-label-in {
+  from { opacity: 0; transform: translateX(-6px); }
+  to { opacity: 1; transform: none; }
+}
+
+/* Rows go left-aligned with the padding that keeps each icon on its narrow-rail spot:
+   the 39px row centres an 18px icon 10.5px in. */
+.sidebar.collapsed:is(.rail-peek, .rail-peek-out) .sidebar-link {
+  justify-content: flex-start;
+  gap: 10px;
+  padding-left: 10.5px;
+  padding-right: 10px;
+}
+/* Home's toggles sit inside the group's frame (1px border + 2px padding - 3px margin)
+   with 16px icons; a status item's ring is 22px. */
+.sidebar.collapsed:is(.rail-peek, .rail-peek-out) .sidebar-home-panels .sidebar-link {
+  padding-left: 11.5px;
+}
+.sidebar.collapsed:is(.rail-peek, .rail-peek-out) .sidebar-link.sidebar-status-item {
+  padding-left: 8.5px;
+}
+
+/* The header: the hamburger keeps its spot, the name sits beside it as in the docked sidebar. */
+/* `.app-shell` outranks home-navigation.css's collapsed header (padding 0), whatever the load order. */
+.app-shell .sidebar.collapsed:is(.rail-peek, .rail-peek-out) .sidebar-header {
+  justify-content: flex-start;
+  gap: 8px;
+  padding-left: 11.5px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sidebar.collapsed.rail-peek,
+  .sidebar.collapsed.rail-peek-out,
+  .sidebar.collapsed:is(.rail-peek, .rail-peek-out) .sidebar-label {
+    transition: none;
+    animation: none;
+  }
+}

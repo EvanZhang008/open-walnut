@@ -66,7 +66,8 @@ export function StatusRing({ item, now, className = 'status-ring' }: { item: Sta
 
 interface Pending { op: string; label: string; seq: number }
 
-export function SidebarStatusItems({ collapsed }: { collapsed: boolean }) {
+/** `onOpenChange`: a popover is up beside its item, so the rail must not peek over it. */
+export function SidebarStatusItems({ onOpenChange }: { onOpenChange?: (open: boolean) => void }) {
   const items = useStatusItems();
   useTicker(items.some((item) => item.timer), TICK_MS);
   const now = Date.now();
@@ -115,6 +116,9 @@ export function SidebarStatusItems({ collapsed }: { collapsed: boolean }) {
     });
   }, [notify]);
 
+  const popoverUp = openKey !== null && items.some((item) => item.key === openKey);
+  useEffect(() => { onOpenChange?.(popoverUp); }, [popoverUp, onOpenChange]);
+
   if (items.length === 0) return null;
   const open = openKey ? items.find((item) => item.key === openKey) ?? null : null;
 
@@ -136,7 +140,6 @@ export function SidebarStatusItems({ collapsed }: { collapsed: boolean }) {
               setFailure(null);
               setOpenKey(isOpen ? null : item.key);
             }}
-            title={collapsed ? title : undefined}
             aria-label={title}
             aria-haspopup="dialog"
             aria-expanded={isOpen}

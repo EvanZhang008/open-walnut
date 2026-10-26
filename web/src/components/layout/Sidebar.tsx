@@ -1,4 +1,4 @@
-import { useState, useEffect, type RefObject } from 'react';
+import { Fragment, useState, useEffect, type RefObject } from 'react';
 import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { linkTargetFor } from '@/utils/last-location';
 import { isPhoneLayout, usePhoneLayout } from '@/hooks/usePhoneLayout';
@@ -22,6 +22,8 @@ import { VoicePanel } from '@/components/common/VoicePanel';
 import { PluginBoundary } from '@/components/common/PluginBoundary';
 import { SidebarStatusItems } from './SidebarStatusItems';
 import { useLendAppUpdateToasts } from './useAppUpdateActions';
+import { useRailPeek } from './useRailPeek';
+import '@/styles/sidebar-peek.css';
 import { ContextMenu, useContextMenu, type ContextMenuItem } from '@/components/common/ContextMenu';
 import { subscribeVoiceStatus, getVoiceStatus, type VoiceStatus } from '@/utils/voice-status';
 import { bellPresentation } from '@/utils/host-banner-placement';
@@ -69,7 +71,6 @@ export function Sidebar({
   onNavigate,
   onToggleCollapse,
 }: SidebarProps) {
-  const cls = `sidebar${open ? ' open' : ''}${collapsed ? ' collapsed' : ''}`;
   const { hasIssues, health, loading: healthLoading } = useSystemHealth();
   const apps = useAppCatalog();
   const navigate = useNavigate();
@@ -92,6 +93,16 @@ export function Sidebar({
   const [notifOpen, setNotifOpen] = useState(false);
   const bell = bellPresentation({ reason: bellReason, attentionCount, hasIssues, quiet: quietNow, quietLabel: quietNow ? quietLabel(quiet) : '', collapsed });
   const [voiceOpen, setVoiceOpen] = useState(false);
+  const [statusOpen, setStatusOpen] = useState(false);
+  // Collapsed, the rail widens over the page while hovered or tabbed into, so each icon
+  // shows its name (useRailPeek). The panels it opens slide out beside the narrow rail.
+  const peek = useRailPeek({
+    enabled: collapsed && !isMobile,
+    blocked: notifOpen || voiceOpen || statusOpen,
+    hold: appMenu.state !== null,
+  });
+  const peekClass = peek.phase === 'open' ? ' rail-peek' : peek.phase === 'closing' ? ' rail-peek-out' : peek.snap ? ' rail-peek-snap' : '';
+  const cls = `sidebar${open ? ' open' : ''}${collapsed ? ' collapsed' : ''}${peekClass}`;
   // Live voice status (transcribing spinner / failure dot) from any MicButton.
   const [voiceStatus, setVoiceStatusState] = useState<VoiceStatus>(getVoiceStatus());
   useEffect(() => subscribeVoiceStatus(setVoiceStatusState), []);
@@ -188,7 +199,6 @@ export function Sidebar({
         onClick={handleToggleTodo}
         aria-label={todoVisible ? 'Hide task panel' : 'Show task panel'}
         aria-expanded={todoVisible} aria-controls="home-task-navigation"
-        title={collapsed ? (todoVisible ? 'Hide task panel' : 'Show task panel') : undefined}
       >
         <TaskPanelIcon />
         <span className="sidebar-label">Task panel</span>
@@ -198,28 +208,15 @@ export function Sidebar({
           className={`sidebar-link sidebar-panel-toggle${chatVisible ? ' active' : ''}`}
           onClick={handleToggleChat}
           aria-label="Ask Walnut"
-          title={collapsed ? 'Ask Walnut' : undefined}
         >
           <ChatBubbleIcon />
           <span className="sidebar-label">Ask Walnut</span>
         </button>
       )}
-      <button
-        className={`sidebar-link sidebar-panel-toggle${orgActive ? ' active' : ''}`}
-        onClick={handleOpenOrg}
-        aria-label="Org"
-        aria-current={orgActive ? 'page' : undefined}
-        title={collapsed ? 'Org' : 'Main and your project leads: what each is doing and what needs you'}
-        data-testid="sidebar-org"
-      >
-        <OrgChartIcon />
-        <span className="sidebar-label">Org</span>
-      </button>
       {!phone && (<>
       <button
         className={`sidebar-link sidebar-panel-toggle${calendarPanelVisible ? ' active' : ''}`}
         onClick={handleToggleCalendarPanel}
-        title={collapsed ? 'Day agenda' : undefined}
         data-testid="sidebar-toggle-calendar"
       >
         <CalendarIcon />
@@ -228,7 +225,6 @@ export function Sidebar({
       <button
         className={`sidebar-link sidebar-panel-toggle${scratchpadVisible ? ' active' : ''}`}
         onClick={handleToggleScratchpad}
-        title={collapsed ? 'Scratchpad' : undefined}
         data-testid="sidebar-toggle-scratchpad"
       >
         <ScratchpadIcon />
@@ -236,6 +232,21 @@ export function Sidebar({
       </button>
       </>)}
     </div>
+  );
+  // Org is a page, not a Home panel: its own top-level entry right under the Home group.
+  // `sidebar-panel-toggle` only for the button reset and the phone drawer's close-on-tap.
+  const orgEntry = (
+    <button
+      className={`sidebar-link sidebar-panel-toggle sidebar-org-link${orgActive ? ' active' : ''}`}
+      onClick={handleOpenOrg}
+      aria-label="Org"
+      aria-current={orgActive ? 'page' : undefined}
+      title="Main and your project leads: what each is doing and what needs you"
+      data-testid="sidebar-org"
+    >
+      <OrgChartIcon />
+      <span className="sidebar-label">Org</span>
+    </button>
   );
   // A home panel toggle counts as navigation too: on a phone the panel it opens
   // (Ask Walnut, the agenda, the scratchpad) is the next screen, and the drawer
@@ -301,13 +312,14 @@ export function Sidebar({
       aria-modal={isMobile ? open : undefined}
       aria-hidden={isMobile && !open ? true : undefined}
       inert={isMobile && !open}
+      {...peek.handlers}
     >
       <div className="sidebar-header">
         <button
           className="sidebar-collapse-btn"
           onClick={onToggleCollapse}
           aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-          title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          title={!collapsed ? 'Collapse sidebar' : peek.phase === 'closed' ? 'Expand sidebar' : 'Keep sidebar open'}
         >
           <HamburgerIcon />
         </button>
@@ -353,7 +365,6 @@ export function Sidebar({
               to={target}
               end={app.path === '/'}
               className={navLinkClass}
-              title={collapsed ? app.title : undefined}
               data-testid={app.kind === 'core'
                 ? `sidebar-core-app-${app.id}`
                 : `sidebar-app-${app.kind === 'webview' ? app.id : app.key}`}
@@ -377,7 +388,12 @@ export function Sidebar({
               ) : null}
             </NavLink>
           );
-          return app.path === '/' ? <div key={`${app.key}:${app.generation}`} className="sidebar-home-group">{link}{homePanelToggles}</div> : link;
+          return app.path === '/' ? (
+            <Fragment key={`${app.key}:${app.generation}`}>
+              <div className="sidebar-home-group">{link}{homePanelToggles}</div>
+              {orgEntry}
+            </Fragment>
+          ) : link;
         })}
       </nav>
 
@@ -389,7 +405,6 @@ export function Sidebar({
           <button
             className="sidebar-link sidebar-recording-btn recording-active"
             onClick={audio.toggleRecording}
-            title={collapsed ? `Recording ${formatDuration(audio.totalDuration)}` : undefined}
             aria-label="Stop recording"
           >
             <RecordingIcon recording loading={false} />
@@ -397,11 +412,10 @@ export function Sidebar({
           </button>
         )}
         {/* Plugin status items (a live ring each), above Voice; nothing when none is live. */}
-        <SidebarStatusItems collapsed={collapsed} />
+        <SidebarStatusItems onOpenChange={setStatusOpen} />
         <button
           className={`sidebar-link sidebar-voice-btn${voiceStatus.transcribing ? ' voice-transcribing' : ''}`}
           onClick={() => setVoiceOpen(!voiceOpen)}
-          title={collapsed ? 'Voice history' : undefined}
           aria-label="Voice history"
         >
           <VoiceHistoryIcon transcribing={voiceStatus.transcribing} />
