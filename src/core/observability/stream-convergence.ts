@@ -136,7 +136,12 @@ async function runCheck(sessionId: string, streamedTextMsgIds: string[], confirm
   const { readSessionHistory, isWindowedHistory } = await import('../session-history.js')
   let messages
   try {
-    messages = await readSessionHistory(sessionId, record.cwd, record.host)
+    // skipSubagents: only main-thread text ids are checked (the server drops
+    // subagent-lane ids before arming), and it is the shape the UI reads, so
+    // this read shares the UI's cache, its in-flight read and its append-only
+    // read. Without it every finished turn read the whole transcript again 15 s
+    // later: 45 of 92 full reads (541 of 737 MB) in 2.7 h on 2026-10-26.
+    messages = await readSessionHistory(sessionId, record.cwd, record.host, undefined, { skipSubagents: true })
   } catch {
     return // history unreadable (SSH down / daemon timeout) — skip, don't false-alarm
   }

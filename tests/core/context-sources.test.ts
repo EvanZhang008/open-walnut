@@ -284,7 +284,7 @@ describe('loadContextSources', () => {
       { role: 'user' as const, text: 'why is ingestion still slow? previous rate was 60 docs per hour', timestamp: '2026-03-31T09:41:00Z' },
       { role: 'assistant' as const, text: 'Good question. Let me break down what actually happened with the indexing rates...', timestamp: '2026-03-31T09:42:00Z' },
     ];
-    vi.spyOn(await import('../../src/core/session-history.js'), 'readSessionHistory')
+    const spy = vi.spyOn(await import('../../src/core/session-history.js'), 'readSessionHistory')
       .mockResolvedValue(mockMessages);
 
     const agent = makeAgentDef({
@@ -294,6 +294,9 @@ describe('loadContextSources', () => {
     });
 
     const result = await loadContextSources(agent, { taskId: task.id, sessionId: 'test-session-123' });
+
+    // Text only: the UI's cached, append-only shape, never the subagent transcripts.
+    expect(spy).toHaveBeenCalledWith('test-session-123', undefined, undefined, undefined, { skipSubagents: true });
 
     // User messages must be visible (this is the bug fix — previously filtered out)
     expect(result).toContain('[0] User: implement the Haiku model switch');

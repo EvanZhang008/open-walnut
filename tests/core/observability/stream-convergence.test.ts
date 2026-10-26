@@ -187,6 +187,16 @@ describe('runCheck honours a windowed history parse', () => {
     for (let i = 0; i < 10; i++) await vi.advanceTimersByTimeAsync(0)
   }
 
+  it('reads the UI\'s shape (skipSubagents), so it shares the cached, append-only read instead of reading the whole transcript', async () => {
+    const messages = [{ role: 'assistant', text: 'x', timestamp: 't', msgId: 'm1' }]
+    mocks.readSessionHistory.mockResolvedValue(messages)
+
+    await runArmed('sid-shape', ['m1'])
+
+    expect(mocks.readSessionHistory).toHaveBeenCalledTimes(1)
+    expect(mocks.readSessionHistory).toHaveBeenCalledWith('sid-shape', '/tmp/proj', 'remote-a', undefined, { skipSubagents: true })
+  })
+
   it('a windowed parse that starts mid-turn raises NO violation (the 2026-09-30 false alarm)', async () => {
     const messages = ['m4', 'm5', 'm6'].map((msgId) => ({ role: 'assistant', text: 'x', timestamp: 't', msgId }))
     mocks.windowedArrays.add(messages)

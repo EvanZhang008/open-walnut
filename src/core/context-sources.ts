@@ -118,7 +118,8 @@ async function loadDailyLog(budget: number, agentId?: string): Promise<string> {
 
 async function loadSessionHistory(sessionId: string, budget: number, cwd?: string, host?: string): Promise<string> {
   const { readSessionHistory } = await import('./session-history.js');
-  const messages = await readSessionHistory(sessionId, cwd, host);
+  // Text only: no subagent transcripts, and the cached/append-only read path.
+  const messages = await readSessionHistory(sessionId, cwd, host, undefined, { skipSubagents: true });
   if (messages.length === 0) return '(no session history)';
 
   // User + Assistant messages with [index] prefix + per-message truncation + tail truncation
