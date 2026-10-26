@@ -1,5 +1,5 @@
 # Rich output golden set: questions whose right SHAPE is known.
-# Run with: ./node_modules/.bin/tsx scripts/rich-output-eval.mjs
+# Run with: bun scripts/rich-output-eval.mjs
 #
 # expect:
 #   svg: required | forbidden | any   (default any)

@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 /**
  * Rich output eval: asks the real model each question in tests/rich-output-golden.yaml
  * with Walnut's rich-mode text appended exactly as a send appends it, then scores
@@ -9,8 +9,8 @@
  * reminder, with no instruction earlier in context (the worst case a long session
  * drifts into).
  *
- * Usage (tsx, because it imports the instruction from the TypeScript source):
- *   ./node_modules/.bin/tsx scripts/rich-output-eval.mjs                     all cases, both variants
+ * Usage (bun, which imports the instruction from the TypeScript source as it is):
+ *   bun scripts/rich-output-eval.mjs                                         all cases, both variants
  *   ... --variant reminder --runs 2 --case sequence-oauth --family diagram
  *   ... --dump-strings > /tmp/x/before.json                                  save the current wording
  *   ... --strings /tmp/x/before.json --json /tmp/x/before-report.json        judge another wording
