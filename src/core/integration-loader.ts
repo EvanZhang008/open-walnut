@@ -44,6 +44,7 @@ import {
   describeMissingDependency,
   type PluginDefinition,
   type PluginLifecycleRecord,
+  type PluginLifecycleState,
 } from './plugins/plugin-manager.js';
 import { isValidRange, satisfiesSemVer } from './plugins/semver.js';
 import { removePluginOps } from '../ops/registry.js';
@@ -347,12 +348,46 @@ export function forgetBundledPlugin(registry: IntegrationRegistry, pluginId: str
   });
 }
 
+/** Plugin ids a reload holds right now, counted (a plugin can be a dependent of two reloads). */
+const reloadingIds = new WeakMap<IntegrationRegistry, Map<string, number>>();
+
+async function whileReloading<T>(registry: IntegrationRegistry, ids: readonly string[], work: () => Promise<T>): Promise<T> {
+  const held = reloadingIds.get(registry) ?? new Map<string, number>();
+  reloadingIds.set(registry, held);
+  const own = [...new Set(ids)];
+  for (const id of own) held.set(id, (held.get(id) ?? 0) + 1);
+  try {
+    return await work();
+  } finally {
+    for (const id of own) {
+      const left = (held.get(id) ?? 1) - 1;
+      if (left > 0) held.set(id, left); else held.delete(id);
+    }
+  }
+}
+
+const STARTING_STATES = new Set<PluginLifecycleState>(['discovered', 'activating', 'disposing']);
+
+/**
+ * Whether a plugin that has no routes right now is on its way up, and its name when known: the boot
+ * load before it settles (a plugin not discovered yet may be one), a reload of it or of a plugin it
+ * depends on (its record is forgotten and made again), or a lifecycle step in between. The route
+ * dispatcher answers 503 `plugin_starting` for such a plugin instead of a 404.
+ */
+export function pluginStarting(registry: IntegrationRegistry, pluginId: string): { name?: string } | undefined {
+  const record = pluginManagers.get(registry)?.get(pluginId);
+  const named = record?.name ? { name: record.name } : {};
+  if (reloadingIds.get(registry)?.has(pluginId)) return named;
+  if (record) return STARTING_STATES.has(record.state) ? named : undefined;
+  return isPluginCatalogueLoading(registry) ? {} : undefined;
+}
+
 export function reloadLoadedPlugins(
   registry: IntegrationRegistry,
   pluginIds: readonly string[],
   beforeTeardown: (ids: string[]) => Promise<void>,
 ): Promise<{ reloaded: string[]; skipped: string[] }> {
-  return runPluginOperation(registry, async () => {
+  return runPluginOperation(registry, () => whileReloading(registry, pluginIds.flatMap(id => getPluginReloadIds(registry, id)), async () => {
     const manager = pluginManagers.get(registry);
     if (!manager) throw new Error('Plugin manager is unavailable');
     const config = await getConfig();
@@ -439,14 +474,14 @@ export function reloadLoadedPlugins(
       await refreshPluginDerivedState(registry);
       bus.emit('plugin:runtime-changed', { action: 'reloaded' }, ['web-ui'], { source: 'plugin-loader' });
     }
-  });
+  }));
 }
 
 export function reloadLoadedPlugin(
   registry: IntegrationRegistry,
   pluginId: string,
 ): Promise<PluginLifecycleRecord> {
-  return runPluginOperation(registry, async () => {
+  return runPluginOperation(registry, () => whileReloading(registry, getPluginReloadIds(registry, pluginId), async () => {
     if (pluginId === 'local') throw new Error('The local fallback plugin cannot be reloaded.');
     const manager = pluginManagers.get(registry);
     const source = pluginSources.get(registry)?.get(pluginId);
@@ -538,7 +573,7 @@ export function reloadLoadedPlugin(
     const record = manager.get(pluginId);
     if (!record) throw new Error(`Plugin "${pluginId}" was not found after reload`);
     return record;
-  });
+  }));
 }
 
 /**

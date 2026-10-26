@@ -61,7 +61,7 @@ vi.mock('../../src/core/config-manager.js', () => ({
 
 import { WALNUT_HOME, TASKS_FILE } from '../../src/constants.js';
 import { IntegrationRegistry } from '../../src/core/integration-registry.js';
-import { clearPluginQuarantine, disableLoadedPlugin, disposeLoadedPlugins, loadNewPlugins, loadPlugins, reloadLoadedPlugin, getPluginLifecycleRecords, getRunningPackageRoot, getUnconfiguredPlugins, getUnsupportedPlugins, resolvePluginBundleDir, setPluginCodeTimeoutForTesting, setPluginPackageWritableForTesting } from '../../src/core/integration-loader.js';
+import { clearPluginQuarantine, disableLoadedPlugin, disposeLoadedPlugins, loadNewPlugins, loadPlugins, reloadLoadedPlugin, getPluginLifecycleRecords, getRunningPackageRoot, getUnconfiguredPlugins, getUnsupportedPlugins, pluginStarting, resolvePluginBundleDir, setPluginCodeTimeoutForTesting, setPluginPackageWritableForTesting } from '../../src/core/integration-loader.js';
 import { getConfig, updatePluginConfig } from '../../src/core/config-manager.js';
 import { createPluginRouteDispatcher } from '../../src/web/plugin-route-dispatcher.js';
 import { readPluginWebModule } from '../../src/core/plugins/plugin-web-module.js';
@@ -560,6 +560,48 @@ export function activate(walnut) { walnut.http.route('GET', '/value', () => ({ j
     await fsp.writeFile(path.join(dir, 'dist/value.mjs'), 'export const value = "two"');
     await reloadLoadedPlugin(registry, 'relative-code');
     expect((await request(app).get('/api/plugins/relative-code/value')).body).toEqual({ value: 'two' });
+  });
+
+  it('a plugin being reloaded answers 503 plugin_starting until its new routes are in, never 404 (2026-10-26)', async () => {
+    // A reaction sent while the Slack plugin restarted got "Not found: POST /api/plugins/slack/reaction"
+    // twice: between the old generation's teardown and the new one's routes there were none.
+    const dir = path.join(tmpDir, 'plugins', 'slow-start');
+    await writeCountingUnifiedPlugin(dir, 'slow-start');
+    await fsp.writeFile(path.join(dir, 'dist/server.mjs'), `
+export async function activate(walnut) {
+  const gate = globalThis.__slowStartGate;
+  if (gate) await gate;
+  walnut.http.route('GET', '/value', () => ({ json: { up: true } }));
+}
+`);
+    const registry = new IntegrationRegistry();
+    const app = express().use('/api/plugins', createPluginRouteDispatcher(registry, { starting: (id) => pluginStarting(registry, id) }));
+    // Before the boot load settles, a plugin not discovered yet may be one: it is starting.
+    expect((await request(app).get('/api/plugins/slow-start/value')).status).toBe(503);
+    await load(registry);
+    expect((await request(app).get('/api/plugins/slow-start/value')).body).toEqual({ up: true });
+    expect((await request(app).get('/api/plugins/no-such-plugin/value')).status).toBe(404);
+
+    let open!: () => void;
+    (globalThis as Record<string, unknown>).__slowStartGate = new Promise<void>((resolve) => { open = resolve; });
+    try {
+      const reload = reloadLoadedPlugin(registry, 'slow-start');
+      let answer = await request(app).get('/api/plugins/slow-start/value');
+      for (let tries = 0; answer.status === 200 && tries < 200; tries += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        answer = await request(app).get('/api/plugins/slow-start/value');
+      }
+      expect(answer.status).toBe(503);
+      expect(answer.body).toEqual({ error: 'plugin_starting', message: 'slow-start is starting. Try again in a moment.' });
+      expect(answer.headers['retry-after']).toBe('2');
+      open();
+      expect((await reload).state).toBe('active');
+    } finally {
+      delete (globalThis as Record<string, unknown>).__slowStartGate;
+      open?.();
+    }
+    expect((await request(app).get('/api/plugins/slow-start/value')).body).toEqual({ up: true });
+    expect(pluginStarting(registry, 'slow-start')).toBeUndefined();
   });
 
   it('a plugin whose activate keeps throwing stays `failed` with its error, and recovers on its own once fixed', async () => {

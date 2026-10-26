@@ -27,6 +27,23 @@ describe('createPluginRouteDispatcher', () => {
     await request(app).get('/api/plugins/sample/status').expect(200, { value: 'second' })
   })
 
+  it('answers 503 plugin_starting with Retry-After for a plugin on its way up, and 404 for one that is not', async () => {
+    const registry = new IntegrationRegistry()
+    const app = express()
+    app.use('/api/plugins', createPluginRouteDispatcher(registry, {
+      starting: (id) => (id === 'sample' ? { name: 'Sample' } : undefined),
+    }))
+
+    const starting = await request(app).post('/api/plugins/sample/reaction').send({ emoji: 'eyes' }).expect(503)
+    expect(starting.body).toEqual({ error: 'plugin_starting', message: 'Sample is starting. Try again in a moment.' })
+    expect(starting.headers['retry-after']).toBe('2')
+    await request(app).get('/api/plugins/other/status').expect(404)
+
+    // Once its routes are in, they answer: `starting` is asked only when there are none.
+    registry.register('sample', createMockPlugin({ id: 'sample', httpRoutes: [route('up')] }))
+    await request(app).get('/api/plugins/sample/status').expect(200, { value: 'up' })
+  })
+
   it('isolates routes by plugin id', async () => {
     const registry = new IntegrationRegistry()
     registry.register('one', createMockPlugin({ id: 'one', httpRoutes: [route('one')] }))

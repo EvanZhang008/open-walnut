@@ -10,7 +10,18 @@ import {
 
 export interface PluginRouteDispatcherOptions {
   relay?(request: PluginHttpRelayRequest): Promise<PluginHttpRelayResponse>
+  /**
+   * Whether a plugin with no routes right now is on its way up (the boot load, a reload): its name
+   * when it is, so the answer can say who. Such a request is answered 503 `plugin_starting` with a
+   * `Retry-After`, never the generic 404: a 404 told the Slack console "Not found: POST /reaction"
+   * for the 10 s a server restart takes to load its plugins (2026-10-26), and the client could not
+   * tell a plugin coming back from a route that does not exist.
+   */
+  starting?(pluginId: string): { name?: string } | undefined
 }
+
+/** Seconds a client should wait before asking a starting plugin again. */
+export const PLUGIN_STARTING_RETRY_AFTER_S = 2
 
 function pluginBodyParser(
   registry: IntegrationRegistry,
@@ -99,6 +110,14 @@ export function createPluginRouteDispatcher(
       return
     }
     if (!options.relay) {
+      const starting = options.starting?.(pluginId)
+      if (starting) {
+        res.status(503).set('Retry-After', String(PLUGIN_STARTING_RETRY_AFTER_S)).json({
+          error: 'plugin_starting',
+          message: `${starting.name || pluginId} is starting. Try again in a moment.`,
+        })
+        return
+      }
       next()
       return
     }

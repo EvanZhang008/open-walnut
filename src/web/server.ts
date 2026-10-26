@@ -89,7 +89,7 @@ import { usageTracker } from '../core/usage/index.js'
 import * as chatHistory from '../core/chat-history.js'
 import { gitPullWalnut, ensureRepo, commitIfDirty, autoSync, isGitAvailable, isLockContention, checkRepoSize, getSyncGuardState, REPO_SIZE_RECOVERY_KEY } from '../integrations/git-sync.js'
 import { registry } from '../core/integration-registry.js'
-import { clearPluginQuarantine, disableLoadedPlugin, disposeLoadedPlugins, forgetBundledPlugin, getPluginLifecycleRecords, getPluginReloadIds, isPluginCatalogueLoading, loadNewPlugins, loadPlugins, migrateConfigToPlugins, reloadLoadedPlugin, reloadLoadedPlugins, runPluginMigrations, getUnconfiguredPlugins } from '../core/integration-loader.js'
+import { clearPluginQuarantine, disableLoadedPlugin, disposeLoadedPlugins, forgetBundledPlugin, getPluginLifecycleRecords, getPluginReloadIds, isPluginCatalogueLoading, loadNewPlugins, loadPlugins, migrateConfigToPlugins, reloadLoadedPlugin, reloadLoadedPlugins, runPluginMigrations, getUnconfiguredPlugins, pluginStarting } from '../core/integration-loader.js'
 import { disposeCoreServices, publishCalendarSource } from '../core/platform-services.js'
 import type { SyncPollContext } from '../core/integration-types.js'
 import { recordSyncSuccess, recordSyncFailure, decideSyncFailureNotice, decideConnectionNotice, getSyncHealth, reconcileCardWanted, type ConnectionWatch } from '../core/plugin-sync-health.js'
@@ -2172,6 +2172,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // disable/reload removes old handlers without mutating Express's private stack.
   const pluginRouteDispatcher = createPluginRouteDispatcher(registry, {
     ...(isCompanion() ? { relay: relayPrimaryPluginHttpRequest } : {}),
+    starting: (pluginId) => pluginStarting(registry, pluginId),
   })
   // Legacy path for the calendar, which is a plugin now. Shares the dispatcher instance
   // above so relay behaviour cannot drift between the two spellings; delete both the mount
