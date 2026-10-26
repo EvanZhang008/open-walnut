@@ -119,7 +119,7 @@ export interface OpenResult {
   vectorsWiped: boolean;
 }
 
-function getMeta(db: SearchDb, key: string): string | undefined {
+export function getMeta(db: SearchDb, key: string): string | undefined {
   const row = db.prepare(`SELECT value FROM meta WHERE key = ?`).get(key) as
     | { value: string }
     | undefined;
@@ -129,6 +129,10 @@ function getMeta(db: SearchDb, key: string): string | undefined {
 export function setMeta(db: SearchDb, key: string, value: string): void {
   db.prepare(`INSERT INTO meta(key, value) VALUES (?, ?)
     ON CONFLICT(key) DO UPDATE SET value = excluded.value`).run(key, value);
+}
+
+export function deleteMeta(db: SearchDb, key: string): void {
+  db.prepare(`DELETE FROM meta WHERE key = ?`).run(key);
 }
 
 /** Drop every content table (NOT meta) so a version bump re-feeds cleanly.
@@ -237,7 +241,7 @@ export interface IndexStats {
   embedModel?: string;
 }
 
-export function collectStats(db: SearchDb): IndexStats {
+export function countDocs(db: SearchDb): { docs: number; byKind: Record<string, number> } {
   const byKind: Record<string, number> = {};
   let docs = 0;
   for (const row of db.prepare(`SELECT kind, COUNT(*) AS n FROM doc GROUP BY kind`).all() as
@@ -245,6 +249,18 @@ export function collectStats(db: SearchDb): IndexStats {
     byKind[row.kind] = row.n;
     docs += row.n;
   }
+  return { docs, byKind };
+}
+
+/** One row read, where COUNT(*) walks the table. Plain prepare().get() with a
+ *  falsy check: the same on every SQLite driver (a missing row is undefined in
+ *  one and null in another). */
+export function hasAnyDoc(db: SearchDb): boolean {
+  return Boolean(db.prepare(`SELECT 1 AS one FROM doc LIMIT 1`).get());
+}
+
+export function collectStats(db: SearchDb): IndexStats {
+  const { docs, byKind } = countDocs(db);
   const vectors = (db.prepare(`SELECT COUNT(*) AS n FROM doc_vec`).get() as { n: number }).n;
   const pageCount = db.pragma('page_count', { simple: true }) as number;
   const pageSize = db.pragma('page_size', { simple: true }) as number;

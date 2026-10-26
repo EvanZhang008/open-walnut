@@ -273,6 +273,8 @@ export function createEmbedder(config: EmbedderRuntimeConfig, log: LogFn, option
         cacheDir: config.cacheDir,
         pooling: config.pooling,
         dbPath: config.dbPath,
+        // The worker sizes onnxruntime per lane (embed-worker.ts ORT_LANE_OPTIONS).
+        lane: role,
       };
       let w: ChildProcess;
       try {

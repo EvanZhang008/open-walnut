@@ -2505,7 +2505,7 @@ async function lwwMerge(branch: string, remoteBefore: string | null = null): Pro
   // makes every future fetch fail. Previously only commitIfDirty() did this and
   // only for index.lock, so a stale refs/remotes/origin/<branch>.lock wedged sync
   // permanently — it never self-healed and the warning below repeated forever.
-  clearStaleLock();
+  await clearStaleLock();
 
   // A failure streak upgrades the timeout: a fetch that repeatedly dies at
   // NETWORK_TIMEOUT is usually a transfer BIGGER than the window (post-
@@ -2531,7 +2531,7 @@ async function lwwMerge(branch: string, remoteBefore: string | null = null): Pro
     // to swallow the error entirely, so a self-healable lock looked identical to
     // an unreachable remote. On lock contention, force-clear and retry once.
     if (isLockContention(fetchError)) {
-      clearStaleLock(0);
+      await clearStaleLock(0);
       try {
         await gitAsync(`fetch origin ${branch}`, { timeout: fetchTimeout });
         fetchError = null;
@@ -2800,7 +2800,7 @@ export async function gitPullWalnut(): Promise<void> {
         });
         return;
       }
-      clearStaleLock();
+      await clearStaleLock();
       // gitSafeAsync applies the credential-helper guard itself (pull is a
       // network subcommand) and swallows errors — same best-effort semantics
       // as the old execSync version, minus the event-loop block. PULL_TIMEOUT:
@@ -2843,15 +2843,20 @@ export async function gitPullWalnut(): Promise<void> {
  * one sat in refs/remotes/origin/main.lock for 2.5 days and failed every 30s sync
  * tick (246 failures), each retry re-running the blocking git chain.
  */
-export function clearStaleLock(maxAgeMs = 60_000): boolean {
+export async function clearStaleLock(maxAgeMs = 60_000): Promise<boolean> {
   const gitDir = path.join(WALNUT_HOME, '.git');
   let removed = false;
 
-  const removeIfStale = (lockPath: string): void => {
+  // Async on purpose: this runs on every 30s tick on the server's event loop,
+  // and the refs walk below was a synchronous readdir per directory. With one
+  // directory per turn ref (refs/walnut/turns/<id>, 450 on a real repo) it held
+  // the loop 3.3 to 7.1 s at a time on a loaded machine (stall profiles,
+  // 2026-10-23 to 25).
+  const removeIfStale = async (lockPath: string): Promise<void> => {
     try {
-      const stat = fs.statSync(lockPath);
+      const stat = await fs.promises.stat(lockPath);
       if (Date.now() - stat.mtimeMs <= maxAgeMs) return;
-      fs.unlinkSync(lockPath);
+      await fs.promises.unlink(lockPath);
       removed = true;
       log.git.warn('git-sync removed stale lock', { lock: path.relative(gitDir, lockPath) });
     } catch {
@@ -2859,7 +2864,7 @@ export function clearStaleLock(maxAgeMs = 60_000): boolean {
     }
   };
 
-  removeIfStale(path.join(gitDir, 'index.lock'));
+  await removeIfStale(path.join(gitDir, 'index.lock'));
 
   // Top-level .git/*.lock beyond index.lock: a merge killed mid-run (e.g. by
   // execGitGroup's timeout during the 2026-08 hub CPU-starvation) leaves
@@ -2868,34 +2873,58 @@ export function clearStaleLock(maxAgeMs = 60_000): boolean {
   // to `pull -X theirs` on every 30s tick for two days. Sweep them all; the
   // same mtime staleness guard keeps a live git's locks safe.
   try {
-    for (const entry of fs.readdirSync(gitDir)) {
+    for (const entry of await fs.promises.readdir(gitDir)) {
       if (entry !== 'index.lock' && entry.endsWith('.lock')) {
-        removeIfStale(path.join(gitDir, entry));
+        await removeIfStale(path.join(gitDir, entry));
       }
     }
   } catch {
     // .git unreadable — nothing to do
   }
 
-  // Walk .git/refs for *.lock. Depth-bounded and tiny in practice (a handful of
-  // refs), so this stays cheap enough for the 30s tick.
-  const walkRefs = (dir: string, depth: number): void => {
+  // Walk .git/refs for *.lock, depth-bounded. The walk is the expensive part
+  // (one readdir per directory), so the routine sweep does it at most every
+  // REFS_LOCK_SWEEP_MS; a caller that just hit lock contention (maxAgeMs under
+  // the default) always walks. In between, the two directories whose locks
+  // stop sync (a branch ref: commit, merge, fetch) are still checked every time.
+  const now = Date.now();
+  if (maxAgeMs >= 60_000 && now - lastRefsLockSweepAt < REFS_LOCK_SWEEP_MS) {
+    for (const dir of [path.join(gitDir, 'refs', 'heads'), path.join(gitDir, 'refs', 'remotes', 'origin')]) {
+      try {
+        for (const entry of await fs.promises.readdir(dir)) {
+          if (entry.endsWith('.lock')) await removeIfStale(path.join(dir, entry));
+        }
+      } catch { /* no such dir */ }
+    }
+    return removed;
+  }
+  lastRefsLockSweepAt = now;
+  const walkRefs = async (dir: string, depth: number): Promise<void> => {
     if (depth > 6) return;
     let entries: fs.Dirent[];
     try {
-      entries = fs.readdirSync(dir, { withFileTypes: true });
+      entries = await fs.promises.readdir(dir, { withFileTypes: true });
     } catch {
       return;
     }
     for (const entry of entries) {
       const full = path.join(dir, entry.name);
-      if (entry.isDirectory()) walkRefs(full, depth + 1);
-      else if (entry.name.endsWith('.lock')) removeIfStale(full);
+      if (entry.isDirectory()) await walkRefs(full, depth + 1);
+      else if (entry.name.endsWith('.lock')) await removeIfStale(full);
     }
   };
-  walkRefs(path.join(gitDir, 'refs'), 0);
+  await walkRefs(path.join(gitDir, 'refs'), 0);
 
   return removed;
+}
+
+/** How often the routine stale-lock sweep walks .git/refs (see clearStaleLock). */
+const REFS_LOCK_SWEEP_MS = 10 * 60_000;
+let lastRefsLockSweepAt = 0;
+
+/** Test hook: the next clearStaleLock() walks .git/refs again. */
+export function resetRefsLockSweepForTest(): void {
+  lastRefsLockSweepAt = 0;
 }
 
 /**
@@ -3054,7 +3083,7 @@ export async function commitIfDirty(): Promise<boolean> {
     logSurgerySkip('commitIfDirty');
     return false;
   }
-  clearStaleLock();
+  await clearStaleLock();
   // -uall: see syncInner — collapsed `?? dir/` lines would hide a mass
   // resurrection from the circuit breaker.
   const status = await gitSafeAsync('status --porcelain -uall');
@@ -3083,7 +3112,7 @@ export async function commitIfDirty(): Promise<boolean> {
     if (!isLockContention(err)) throw err;
     // Lock held by another process — wait briefly (async, loop keeps running) and retry once
     await new Promise((r) => setTimeout(r, 300));
-    clearStaleLock(5_000);
+    await clearStaleLock(5_000);
     await stageAllForCommit();
   }
 

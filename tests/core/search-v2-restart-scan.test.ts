@@ -1,8 +1,9 @@
 /**
  * What a server restart costs the vector backfill.
  *
- * Every start forces a full pass (a fresh planner trusts no floor), and a day
- * of deploys meant 25 starts on 2026-10-06. A full pass WALKS every doc, but it
+ * A start with no floor forces a full pass (a fresh planner trusts none), and a
+ * day of deploys meant 25 starts on 2026-10-06; a clean stop now leaves its
+ * floor in the index for the next start (the last block). A full pass WALKS every doc, but it
  * embeds only docs with no seq-0 vector, and a doc loses its vectors only when
  * its content hash changes (writer.ts): the boot re-feed (file sweep, session
  * events) of unchanged content keeps every vector. That is pinned here, beside
@@ -15,7 +16,9 @@
  */
 import { afterEach, describe, expect, it } from 'vitest';
 import fs from 'node:fs';
-import { createVectorPassPlanner, LIGHT_PHASE_MAX_NOTE_CHARS } from '../../src/core/search/wiring.js';
+import {
+  createVectorPassPlanner, LIGHT_PHASE_MAX_NOTE_CHARS, saveVectorPassSnapshot, takeVectorPassSnapshot,
+} from '../../src/core/search/wiring.js';
 import type { Doc, MissingVecCursor, SearchIndex } from '../../src/lib/hybrid-search/index.js';
 import {
   expectedRows, keysOf, makeTempDir, openTextIndex, paragraphs, passagesOfDoc, vecRows, type TextIndexHandle,
@@ -106,5 +109,60 @@ describe('a restart re-embeds only what changed', () => {
       const id = (restarted.db.prepare('SELECT id FROM doc WHERE kind = ? AND ref = ?').get(d.kind, d.ref) as { id: number }).id;
       expect(vecRows(restarted, id)).toEqual(expectedRows(passagesOfDoc(d)));
     }
+  });
+});
+
+describe('a clean stop hands its floor to the next start', () => {
+  it('the next start walks from the floor, and still embeds an old-timestamp doc written before the stop', async () => {
+    const dir = makeTempDir('wn-restart-floor-');
+    dirs.push(dir);
+    const h = openTextIndex(dir);
+    handles.push(h);
+    const base = Date.now() - 3_600_000;
+    const docs = corpus(base);
+    for (const d of docs) h.index.upsert(d);
+    const planner = createVectorPassPlanner();
+    expect((await runPass(h.index, planner)).full).toBe(true);
+
+    // After the drain, the process writes a doc whose timestamp is far below
+    // the floor (a note restored with its old mtime) and then stops cleanly.
+    const restored = { ...docs[3]!, note: 'restored text that needs a vector', updatedAt: base - 86_400_000 };
+    expect(h.index.upsert(restored).changed).toBe(true);
+    planner.observeUpsert(restored.updatedAt);
+    planner.passAborted();
+    saveVectorPassSnapshot(h.index, planner);
+
+    const restarted = h.reopen();
+    const snap = takeVectorPassSnapshot(restarted);
+    expect(snap).not.toBeNull();
+    expect(snap!.low).toBe(restored.updatedAt);
+    // Taken, not copied: a crash after this start leaves nothing to trust.
+    expect(takeVectorPassSnapshot(restarted)).toBeNull();
+
+    const next = createVectorPassPlanner();
+    next.restore(snap!);
+    const before = h.embedded().length;
+    const boot = await runPass(restarted, next);
+    expect(boot.full).toBe(false);
+    expect(boot.embedded).toBe(1);
+    expect(h.embedded().slice(before)).toEqual(keysOf(passagesOfDoc(restored)));
+  });
+
+  it('a start with no record, or a broken one, walks everything', async () => {
+    const dir = makeTempDir('wn-restart-floor-');
+    dirs.push(dir);
+    const h = openTextIndex(dir);
+    handles.push(h);
+    expect(takeVectorPassSnapshot(h.index)).toBeNull();
+    h.index.writeHostMeta('walnut.vec-pass.v1', '{not json');
+    expect(takeVectorPassSnapshot(h.index)).toBeNull();
+    // Written under a clock that ran ahead: the floor would hold the walk off.
+    const ahead = Date.now() + 3_600_000;
+    h.index.writeHostMeta('walnut.vec-pass.v1', JSON.stringify({ floor: ahead, fullAt: ahead, low: null }));
+    expect(takeVectorPassSnapshot(h.index)).toBeNull();
+    // A planner that never drained has no floor to hand over.
+    saveVectorPassSnapshot(h.index, createVectorPassPlanner());
+    expect(h.index.readHostMeta('walnut.vec-pass.v1')).toBeNull();
+    expect(createVectorPassPlanner().beginPass()).toBeNull();
   });
 });

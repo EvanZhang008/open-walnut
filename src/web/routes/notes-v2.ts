@@ -1877,8 +1877,8 @@ notesV2Router.get('/index/status', async (_req: Request, res: Response, next: Ne
       // Read the wiring's in-memory backfill flag; never open SQLite from a
       // status request (that can synchronously wait on the writer lock and
       // freeze every HTTP request).
-      const { getSearchIndexStatus } = await import('../../core/search/wiring.js')
-      embedState = getSearchIndexStatus().backfillRunning ? 'embedding' : 'idle'
+      const { searchIndexBackfillRunning } = await import('../../core/search/wiring.js')
+      embedState = searchIndexBackfillRunning() ? 'embedding' : 'idle'
     }
     res.json({
       docCount: docCount(),

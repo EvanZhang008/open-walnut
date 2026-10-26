@@ -493,7 +493,7 @@ export async function runScheduledCompaction(repoDir = WALNUT_HOME): Promise<Com
 
   setCompactionInProgress(true);
   try {
-    clearStaleLock();
+    await clearStaleLock();
     const result = await compactGitHistory(repoDir);
     if (!result.skipped && !result.error) {
       markCompactionDone(repoDir);

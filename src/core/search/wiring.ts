@@ -210,6 +210,9 @@ export function currentEmbedModelId(): string | null {
 }
 
 let handle: SearchIndex | null = null;
+/** The handle was opened with an embedder. Without one a pass "drains" at once
+ *  (nothing can be embedded), so its floor proves nothing and is never saved. */
+let handleEmbeds = false;
 
 /** Writes that moved a doc's text or vectors, for the index copy's manifest
  *  (core/replication/search-replica*.ts). Called inside the write: take note only. */
@@ -235,10 +238,12 @@ export function searchV2IndexOpen(): boolean {
 
 export function getSearchV2Index(): SearchIndex {
   if (!handle) {
+    const embedder = buildEmbedderConfig();
+    handleEmbeds = embedder !== undefined;
     handle = createSearchIndex({
       dbPath: searchV2IndexPath(),
       kinds: SEARCH_V2_KIND_WEIGHTS,
-      embedder: buildEmbedderConfig(),
+      embedder,
       logger: (level, msg, data) => log.memory[level](msg, data),
       onDocChange: (docId) => { for (const listener of docChangeListeners) listener(docId); },
     });
@@ -264,6 +269,8 @@ export async function closeSearchV2Index(): Promise<void> {
 export function resetSearchV2IndexForTests(): void {
   try { handle?.close(); } catch { /* already closed */ }
   handle = null;
+  handleEmbeds = false;
+  vecPassSaved = false;
   vectorPass = createVectorPassPlanner();
 }
 
@@ -320,7 +327,6 @@ export interface SearchIndexStatus {
   model: string | null;
   docs: number;
   byKind: Record<string, number>;
-  vectors: number;
   backfillRunning: boolean;
   error: string | null;
 }
@@ -328,20 +334,27 @@ export interface SearchIndexStatus {
 /** Status snapshot for /api/search-index (and the frozen /api/qmd/status forward). */
 export function getSearchIndexStatus(): SearchIndexStatus {
   if (!isSearchV2Enabled()) {
-    return { enabled: false, model: null, docs: 0, byKind: {}, vectors: 0, backfillRunning: false, error: null };
+    return { enabled: false, model: null, docs: 0, byKind: {}, backfillRunning: false, error: null };
   }
   const index = getSearchV2Index();
-  const stats = index.stats();
+  // Doc counts only: the vector count walked every vector page of the index on
+  // the event loop (3.3 s and 6.0 s stalls in production, 2026-10-23/24), and
+  // nothing that reads this status shows it.
+  const counts = index.docCounts();
   const embedder = buildEmbedderConfig();
   return {
     enabled: true,
     model: embedder?.modelId ?? null,
-    docs: stats.docs,
-    byKind: stats.byKind,
-    vectors: stats.vectors,
+    docs: counts.docs,
+    byKind: counts.byKind,
     backfillRunning: backfillState.running,
     error: backfillState.error,
   };
+}
+
+/** A backfill or rebuild is running (the in-memory flag; opens nothing). */
+export function searchIndexBackfillRunning(): boolean {
+  return backfillState.running;
 }
 
 /** Module-level backfill visibility for getSearchIndexStatus(). */
@@ -385,6 +398,19 @@ export interface VectorPassPlanner {
   requireFullPass(): void;
   /** Test/telemetry view. */
   state(): { floor: number | null; full: boolean; lastFullPassAt: number };
+  /** What the next process needs to skip the full walk: the floor the last
+   *  drained pass earned, when the last full pass ran, and the lowest doc
+   *  timestamp written since (which the floor may be above). Null while no floor
+   *  is trusted. Take it after passAborted() so an in-flight pass is counted. */
+  snapshot(): VectorPassSnapshot | null;
+  /** Start from a snapshot the previous process left (instead of a full pass). */
+  restore(snap: VectorPassSnapshot): void;
+}
+
+export interface VectorPassSnapshot {
+  floor: number;
+  fullAt: number;
+  low: number | null;
 }
 
 const lowerOf = (a: number | null, b: number | null): number | null =>
@@ -440,7 +466,60 @@ export function createVectorPassPlanner(
       carriedLow = null;
     },
     state() { return { floor, full, lastFullPassAt }; },
+    snapshot() {
+      if (forceFull || floorBase === null) return null;
+      return { floor: floorBase, fullAt: lastFullPassAt, low: lowerOf(pendingLow, carriedLow) };
+    },
+    restore(snap) {
+      floorBase = snap.floor;
+      lastFullPassAt = snap.fullAt;
+      pendingLow = lowerOf(pendingLow, snap.low);
+      forceFull = false;
+    },
   };
+}
+
+/**
+ * The planner across a restart. A server that started with no floor walked the
+ * whole table first: 194 bounded calls, 0.9 to 4.1 s of event-loop time on the
+ * real index, single calls up to 270 ms, and at 17 deploys a day that was 17
+ * extra full walks besides the hourly one.
+ *
+ * The record is written by a clean stop and consumed by the next start, so a
+ * crash (no stop, or a stop after the record was consumed) leaves none and the
+ * next start walks everything, as before. An older build ignores the record;
+ * if one ran in between, its writes with old timestamps are missed until the
+ * next hourly full pass (the stored fullAt keeps that clock).
+ */
+const VEC_PASS_META_KEY = 'walnut.vec-pass.v1';
+/** This process saved its record (stop()); a later write must drop it. */
+let vecPassSaved = false;
+
+/** Leave the planner's floor for the next process (a clean stop). */
+export function saveVectorPassSnapshot(index: SearchIndex, planner: VectorPassPlanner): void {
+  const snap = planner.snapshot();
+  if (!snap) return;
+  index.writeHostMeta(VEC_PASS_META_KEY, JSON.stringify(snap));
+  vecPassSaved = true;
+}
+
+/** Take (and remove) the record a clean stop left; null when there is none. */
+export function takeVectorPassSnapshot(index: SearchIndex): VectorPassSnapshot | null {
+  const raw = index.readHostMeta(VEC_PASS_META_KEY);
+  if (raw === null) return null;
+  index.writeHostMeta(VEC_PASS_META_KEY, null);
+  try {
+    const snap = JSON.parse(raw) as Partial<VectorPassSnapshot>;
+    if (typeof snap.floor !== 'number' || typeof snap.fullAt !== 'number') return null;
+    if (snap.low !== null && typeof snap.low !== 'number') return null;
+    // Written under a clock that ran ahead: a floor or full-pass time in the
+    // future would hold the walk off until the real clock caught up.
+    const latest = Date.now() + 60_000;
+    if (snap.floor > latest || snap.fullAt > latest) return null;
+    return { floor: snap.floor, fullAt: snap.fullAt, low: snap.low ?? null };
+  } catch {
+    return null;
+  }
 }
 
 /** One planner per process, beside the one index handle. Module scope so the
@@ -453,6 +532,12 @@ let vectorPass: VectorPassPlanner = createVectorPassPlanner();
 function upsertDoc(index: SearchIndex, doc: Doc): void {
   index.upsert(doc);
   vectorPass.observeUpsert(doc.updatedAt);
+  // A write after the stop saved its floor (a sweep or watcher still running
+  // on the way out) is not in the record: drop it, so the next start walks all.
+  if (vecPassSaved) {
+    vecPassSaved = false;
+    try { index.writeHostMeta(VEC_PASS_META_KEY, null); } catch { /* index closed */ }
+  }
 }
 
 // ── incremental sync ──
@@ -604,6 +689,12 @@ export interface SearchV2Wiring {
  */
 export function startSearchV2Wiring(bus: EventBus): SearchV2Wiring {
   const index = getSearchV2Index();
+  // Only the process that runs the backfill takes the record: a one-shot
+  // process opening the index must not consume the next server's floor.
+  const snap = takeVectorPassSnapshot(index);
+  // A gate that dropped the vectors (vectorsWiped) or emptied the index needs
+  // the full walk; a floor from the old content means nothing then.
+  if (snap && !index.vectorsWiped && index.hasDocs()) vectorPass.restore(snap);
 
   const taskQueue: IncrementalQueue = createIncrementalQueue({
     debounceMs: DEBOUNCE_MS,
@@ -844,7 +935,7 @@ export function startSearchV2Wiring(bus: EventBus): SearchV2Wiring {
       try {
         backfillState.running = true;
         backfillState.error = null;
-        if (index.stats().docs === 0) {
+        if (!index.hasDocs()) {
           log.memory.info('search-v2 backfill starting (empty index)');
           const t0 = Date.now();
           const { inserted } = await index.rebuildAll(iterateAllDocs({}));
@@ -890,6 +981,11 @@ export function startSearchV2Wiring(bus: EventBus): SearchV2Wiring {
       bus.unsubscribe('search-v2-task-sync');
       bus.unsubscribe('search-v2-session-sync');
       await Promise.all([taskQueue.stop(), sessionQueue.stop()]);
+      // Hand the floor to the next process, so a deploy does not cost a full
+      // walk. After the queues: their last syncs are in the record too.
+      if (handle === index && handleEmbeds) {
+        try { saveVectorPassSnapshot(index, vectorPass); } catch { /* index closed */ }
+      }
       // The server exits right after this: an embed run still in flight would
       // abort it (libc++abi, exit 134), so wait for the workers to finish and go.
       await handle?.stopEmbedder();

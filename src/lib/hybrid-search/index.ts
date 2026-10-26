@@ -16,6 +16,11 @@
 import {
   openSearchDb,
   collectStats,
+  countDocs,
+  deleteMeta,
+  getMeta,
+  hasAnyDoc,
+  setMeta,
   optimizeIndex,
   type SearchDb,
   type IndexStats,
@@ -317,7 +322,20 @@ export interface SearchIndex {
   /** Stored raw text of a doc (snippet extraction, rescoring). */
   getDoc(kind: string, ref: string): StoredDoc | null;
   rebuildAll(docs: Iterable<Doc> | AsyncIterable<Doc>): Promise<{ inserted: number }>;
+  /** Every number below, `vectors` included: a COUNT over doc_vec reads every
+   *  vector page (115 MB on a real index, 2.8 s cold), so callers on a live
+   *  event loop use docCounts(). */
   stats(): IndexStats;
+  /** Doc counts per kind, from the kind index alone (no vector pages). */
+  docCounts(): { docs: number; byKind: Record<string, number> };
+  /** The index holds at least one doc: one row read. */
+  hasDocs(): boolean;
+  /** A host-owned entry in the index's meta table (null = absent). It lives in
+   *  the index file, so it goes wherever the file goes; a version gate that
+   *  empties the index keeps it, so a reader checks it against hasDocs(). */
+  readHostMeta(key: string): string | null;
+  /** Store (or with null, delete) a host-owned meta entry. */
+  writeHostMeta(key: string, value: string | null): void;
   optimize(): void;
   close(): void;
   /** Stop the embedding workers and wait until they are gone: a run in flight
@@ -364,6 +382,9 @@ const noopLog: LogFn = () => {};
 /** A tiny passage any healthy worker embeds: the control in the backfill's
  *  blame rule (see backfillVectors). */
 export const EMBED_HEALTH_PROBE_TEXT = 'search index health check';
+
+/** Host entries are namespaced so they can never shadow a version gate. */
+const hostMetaKey = (key: string): string => `host:${key}`;
 
 export function createSearchIndex(options: SearchIndexOptions): SearchIndex {
   const log = options.logger ?? noopLog;
@@ -934,6 +955,13 @@ export function createSearchIndex(options: SearchIndexOptions): SearchIndex {
       return result;
     },
     stats: () => collectStats(db),
+    docCounts: () => countDocs(db),
+    hasDocs: () => hasAnyDoc(db),
+    readHostMeta: (key) => getMeta(db, hostMetaKey(key)) ?? null,
+    writeHostMeta: (key, value) => {
+      if (value === null) deleteMeta(db, hostMetaKey(key));
+      else setMeta(db, hostMetaKey(key), value);
+    },
     optimize: () => optimizeIndex(db),
     stopEmbedder: async () => { embedderStopped = true; await embedder?.dispose(); },
     suspendEmbedder: async () => { await embedder?.suspend(); },

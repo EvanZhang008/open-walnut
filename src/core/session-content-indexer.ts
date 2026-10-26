@@ -11,7 +11,7 @@
  *
  * Output shape (one doc per session; the indexer chunks on `## ` headings):
  *
- *   ## Turn 1 (2026-05-05 10:00)
+ *   ## Turn (2026-05-05 10:00)
  *   User: ...
  *   Assistant: ...
  *   Tools: Bash, Read
@@ -213,7 +213,13 @@ export function buildIndexedContent(
 
     turnIndex++;
     const ts = shortTimestamp(msg.timestamp);
-    const lines: string[] = [`## Turn ${turnIndex}${ts ? ` (${ts})` : ''}`];
+    // No turn number in the heading: it counts from the first message READ, and
+    // a transcript over the 4 MB tail read starts somewhere new on every sync,
+    // so a number renamed every turn and every passage holding one had to be
+    // embedded again. Replayed on 30 real transcripts at 10-minute steps
+    // (2026-10-25), a sync of one over 4 MB re-embedded 24 of its ~31 passages
+    // with numbers and 7 without.
+    const lines: string[] = [`## Turn${ts ? ` (${ts})` : ''}`];
     if (cleaned) lines.push(`${role}: ${truncateTurn(cleaned, maxCharsPerTurn)}`);
     if (footer) lines.push(footer);
     blocks.push(lines.join('\n'));

@@ -20,6 +20,7 @@ import {
   credentialGuardArgs,
   credentialGuardArgsAsync,
   clearStaleLock,
+  resetRefsLockSweepForTest,
   isLockContention,
   hardenGitConfigPerms,
   commitIfDirty,
@@ -623,6 +624,8 @@ describe('credentialGuardArgs', () => {
 // self-heal retry never fired and the UI stalled on every retry.
 describe('stale git lock recovery', () => {
   const REF_LOCK = ['refs', 'remotes', 'origin', 'main.lock'];
+  // Each case starts with the refs walk due (the routine sweep throttles it).
+  beforeEach(() => resetRefsLockSweepForTest());
 
   const writeLock = async (parts: string[], ageMs: number): Promise<string> => {
     const full = path.join(tmpDir, '.git', ...parts);
@@ -637,7 +640,7 @@ describe('stale git lock recovery', () => {
     initSync();
     const refLock = await writeLock(REF_LOCK, 10 * 60_000);
 
-    expect(clearStaleLock()).toBe(true);
+    expect(await clearStaleLock()).toBe(true);
     await expect(fsp.stat(refLock)).rejects.toThrow();
   });
 
@@ -645,7 +648,7 @@ describe('stale git lock recovery', () => {
     initSync();
     const indexLock = await writeLock(['index.lock'], 10 * 60_000);
 
-    expect(clearStaleLock()).toBe(true);
+    expect(await clearStaleLock()).toBe(true);
     await expect(fsp.stat(indexLock)).rejects.toThrow();
   });
 
@@ -654,7 +657,7 @@ describe('stale git lock recovery', () => {
     const refLock = await writeLock(REF_LOCK, 2_000);
     const indexLock = await writeLock(['index.lock'], 2_000);
 
-    expect(clearStaleLock()).toBe(false);
+    expect(await clearStaleLock()).toBe(false);
     await expect(fsp.stat(refLock)).resolves.toBeDefined();
     await expect(fsp.stat(indexLock)).resolves.toBeDefined();
   });
@@ -663,7 +666,7 @@ describe('stale git lock recovery', () => {
     initSync();
     const nested = await writeLock(['refs', 'remotes', 'origin', 'feature', 'a', 'b.lock'], 10 * 60_000);
 
-    expect(clearStaleLock()).toBe(true);
+    expect(await clearStaleLock()).toBe(true);
     await expect(fsp.stat(nested)).rejects.toThrow();
   });
 
@@ -675,7 +678,7 @@ describe('stale git lock recovery', () => {
     const autoMerge = await writeLock(['AUTO_MERGE.lock'], 10 * 60_000);
     const mergeHead = await writeLock(['MERGE_HEAD.lock'], 10 * 60_000);
 
-    expect(clearStaleLock()).toBe(true);
+    expect(await clearStaleLock()).toBe(true);
     await expect(fsp.stat(autoMerge)).rejects.toThrow();
     await expect(fsp.stat(mergeHead)).rejects.toThrow();
   });
@@ -684,13 +687,31 @@ describe('stale git lock recovery', () => {
     initSync();
     const autoMerge = await writeLock(['AUTO_MERGE.lock'], 2_000);
 
-    expect(clearStaleLock()).toBe(false);
+    expect(await clearStaleLock()).toBe(false);
     await expect(fsp.stat(autoMerge)).resolves.toBeDefined();
   });
 
-  it('is a no-op when there are no locks', () => {
+  it('is a no-op when there are no locks', async () => {
     initSync();
-    expect(clearStaleLock()).toBe(false);
+    expect(await clearStaleLock()).toBe(false);
+  });
+
+  it('the routine sweep walks .git/refs at most every 10 minutes; a contention clear always walks', async () => {
+    // The refs walk is one readdir per directory (one per turn ref on a real
+    // repo), so the 30s tick does it rarely; index.lock is checked every time.
+    initSync();
+    expect(await clearStaleLock()).toBe(false); // this walk arms the throttle
+    const deepLock = await writeLock(['refs', 'remotes', 'origin', 'feature', 'a.lock'], 10 * 60_000);
+    const branchLock = await writeLock(REF_LOCK, 10 * 60_000);
+    const indexLock = await writeLock(['index.lock'], 10 * 60_000);
+    expect(await clearStaleLock()).toBe(true);
+    // index.lock and the branch ref directories are checked on every tick...
+    await expect(fsp.stat(indexLock)).rejects.toThrow();
+    await expect(fsp.stat(branchLock)).rejects.toThrow();
+    // ...the deeper walk waits for its interval, unless the caller hit contention.
+    await expect(fsp.stat(deepLock)).resolves.toBeDefined();
+    expect(await clearStaleLock(0)).toBe(true);
+    await expect(fsp.stat(deepLock)).rejects.toThrow();
   });
 
   it('isLockContention matches ref-lock errors, not just index.lock', () => {

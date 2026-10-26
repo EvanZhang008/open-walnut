@@ -25,10 +25,24 @@ describe('buildIndexedContent', () => {
       msg({ role: 'assistant', text: 'hi there', timestamp: '2026-05-05T10:02:00.000Z' }),
     ]);
     expect(out.turnCount).toBe(2);
-    expect(out.body).toContain('## Turn 1 (2026-05-05 10:00)');
-    expect(out.body).toContain('## Turn 2 (2026-05-05 10:02)');
+    expect(out.body).toContain('## Turn (2026-05-05 10:00)');
+    expect(out.body).toContain('## Turn (2026-05-05 10:02)');
     expect(out.body).toContain('User: hello');
     expect(out.body).toContain('Assistant: hi there');
+  });
+
+  it('writes a turn the same way whichever message the read started at', () => {
+    // A transcript over the tail read starts at a new message on every sync: a
+    // heading that numbered turns from the first message read renamed every
+    // turn, and the search index re-embedded every passage that held one.
+    const turns = Array.from({ length: 6 }, (_, i) => msg({
+      role: i % 2 ? 'assistant' : 'user',
+      text: `turn text ${i}`,
+      timestamp: `2026-05-05T10:0${i}:00.000Z`,
+    }));
+    const fromStart = buildIndexedContent(turns).body;
+    const fromLater = buildIndexedContent(turns.slice(2)).body;
+    expect(fromStart.endsWith(fromLater)).toBe(true);
   });
 
   it('collapses code blocks longer than the threshold', () => {
@@ -119,8 +133,7 @@ describe('buildIndexedContent', () => {
       msg({ role: 'assistant', text: 'real reply' }),
     ]);
     expect(out.turnCount).toBe(1);
-    expect(out.body).toContain('## Turn 1');
-    expect(out.body).not.toContain('## Turn 2');
+    expect(out.body.match(/^## Turn/gm)).toHaveLength(1);
   });
 
   it('truncates a single oversized turn mid-text', () => {

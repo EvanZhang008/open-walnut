@@ -13,9 +13,10 @@ vi.mock('../../../src/core/search/wiring.js', () => ({
   upsertSearchV2File: vi.fn(async () => {}),
   sweepSearchV2Files: vi.fn(async () => ({ changed: 0, removed: 0 })),
   getSearchIndexStatus: vi.fn(() => ({
-    enabled: false, model: null, docs: 0, byKind: {}, vectors: 0,
+    enabled: false, model: null, docs: 0, byKind: {},
     backfillRunning: false, error: null,
   })),
+  searchIndexBackfillRunning: vi.fn(() => false),
 }));
 
 import express from 'express';

@@ -41,6 +41,8 @@ interface WorkerConfig {
   pooling?: 'mean' | 'last';
   /** Index db file for the recall lane; absent = recall disabled. */
   dbPath?: string;
+  /** Which embedder lane started this worker (embedder.ts makeLane). */
+  lane?: 'query' | 'passage';
 }
 
 interface Job {
@@ -66,7 +68,42 @@ function reply(msg: object): void {
  * Embedding is a background lane; two threads keep it far off the interactive
  * path while only ~2x-ing per-batch latency.
  */
-const ORT_SESSION_OPTIONS = { intraOpNumThreads: 2, interOpNumThreads: 1 };
+const ORT_THREADS = { intraOpNumThreads: 2, interOpNumThreads: 1 };
+
+/**
+ * Per-lane session options. The passage lane turns weight prepacking off:
+ * onnxruntime keeps a packed copy of every quantized weight beside the
+ * original, about 390 MB on the default model, measured 2026-10-25 on
+ * qwen3-0.6b q8 (footprint after load 1.55 GB with it, 1.17 GB without). It
+ * costs the background backfill about 5% more CPU per passage, and the vectors
+ * are byte-identical. The query lane keeps it: a short query embeds in 143 ms
+ * with packed weights and 253 ms without (p50), and the search path gives the
+ * semantic rescore 150 ms.
+ */
+const ORT_LANE_OPTIONS = {
+  query: ORT_THREADS,
+  passage: { ...ORT_THREADS, extra: { session: { disable_prepacking: '1' } } },
+};
+const ORT_SESSION_OPTIONS = ORT_LANE_OPTIONS[config.lane ?? 'query'];
+
+/**
+ * The model outputs to fetch. A decoder export (Qwen3-Embedding) also returns
+ * its key/value cache, two tensors per layer (56 on qwen3-0.6b, up to 117 MB
+ * for one 512-token passage), which transformers.js copies into JS on every
+ * run and this worker never reads; that churn held the passage worker about
+ * 600 MB above its loaded size. Asking onnxruntime for the hidden state alone
+ * leaves the vectors byte-identical.
+ */
+const FETCH_ONLY = ['last_hidden_state'];
+
+/** Make every run of `session` fetch only `outputs` (the session belongs to
+ *  transformers.js, which calls run(feeds) and reads the outputs it gets). */
+function fetchOnly(session: unknown, outputs: string[]): void {
+  const s = session as { outputNames?: string[]; run?: (feeds: unknown, ...rest: unknown[]) => Promise<unknown> } | undefined;
+  if (!s?.run || !outputs.every((name) => s.outputNames?.includes(name))) return;
+  const run = s.run.bind(s);
+  s.run = (feeds: unknown) => run(feeds, outputs);
+}
 
 type Extractor = (
   texts: string[],
@@ -88,6 +125,7 @@ function loadExtractor(): Promise<Extractor> {
         device: 'cpu',
         session_options: ORT_SESSION_OPTIONS,
       });
+      fetchOnly((pipe as unknown as { model?: { sessions?: Record<string, unknown> } }).model?.sessions?.model, FETCH_ONLY);
       return pipe as unknown as Extractor;
     })();
     // A transient first-load failure (network blip during the model fetch)
@@ -143,6 +181,7 @@ async function loadLastTokenExtractor(
     device: 'cpu',
     session_options: ORT_SESSION_OPTIONS,
   });
+  fetchOnly((model as unknown as { sessions?: Record<string, unknown> }).sessions?.model, FETCH_ONLY);
   return (async (texts: string[]) => {
     const inputs = await tokenizer(texts, { padding: true, truncation: true, max_length: TOKENIZER_MAX_LENGTH });
     reportIfTruncated(inputs);
