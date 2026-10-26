@@ -2781,10 +2781,30 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // message has not persisted yet, so its index is one past history's tail.
   const boundaryHasForkDivider = forkBoundaryIndex != null
     && forkBoundaryIndex === messages.length;
-  const mergeBoundary = boundaryHistoryRun != null
+  // The live turn a received message started: that message (and any tool rows
+  // history already holds after it) and the stream's leading run are ONE fold,
+  // "Received a message, used 2 tools ›", the shape the turn has once it is
+  // answered (2026-10-26, the user: "this 2 can be collapsed"). Index into
+  // historyParts of the fold's first part, or -1.
+  const liveTailStart = (() => {
+    if (!isStreaming || stackMode || convMode || boundaryHasForkDivider || leadingStreamRunIndices.length === 0) return -1;
+    let s = historyParts.length;
+    let inbound = false;
+    while (s > 0) {
+      const part = historyParts[s - 1];
+      const isInbound = part.kind === 'msg' && part.m.role === 'user' && part.globalIndex !== forkBoundaryIndex
+        && !gapAt.has(part.globalIndex) && isHistorySentRow(part.m) && !isHistoryUserTurn(part.m);
+      if (!isInbound && part.kind !== 'run') break;
+      inbound ||= isInbound;
+      s--;
+    }
+    return inbound ? s : -1;
+  })();
+  const mergeBoundary = liveTailStart < 0
+    && boundaryHistoryRun != null
     && !boundaryHasForkDivider
     && leadingStreamRunIndices.length > 0;
-  const boundaryStreamIndices = mergeBoundary ? new Set(leadingStreamRunIndices) : new Set<number>();
+  const boundaryStreamIndices = mergeBoundary || liveTailStart >= 0 ? new Set(leadingStreamRunIndices) : new Set<number>();
   const renderedHistoryParts = mergeBoundary ? historyParts.slice(0, -1) : historyParts;
   // A finished, clean turn that something other than a person started and that
   // ended with the acknowledgement line alone (turn-end-marker.ts): hidden.
@@ -3748,7 +3768,8 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       hidden = [];
       hiddenTurns = 0;
     };
-    const items: Item[] = visibleHistoryParts.map((part, i) => ({ part, i }));
+    const tailFrom = liveTailStart >= 0 ? liveTailStart : visibleHistoryParts.length;
+    const items: Item[] = visibleHistoryParts.slice(0, tailFrom).map((part, i) => ({ part, i }));
     let at = 0;
     for (const t of turnShapes) {
       const mine: Item[] = [];
@@ -3769,6 +3790,32 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     }
     flushHidden();
     if (at < items.length) renderDefault(items.slice(at), pageRows);
+    if (liveTailStart >= 0) {
+      const tail = visibleHistoryParts.slice(tailFrom);
+      const id = idOf(tail[0]);
+      const members = runMembersOf(leadingStreamRunIndices);
+      markAll(tail.map((part, k) => ({ part, i: tailFrom + k })), turnFoldKey(id));
+      const tools = [
+        ...tail.flatMap((part) => processToolsOf(part) ?? []),
+        ...members.flatMap((b) => (b.type === 'tool_call' ? [{ name: b.name ?? 'unknown', input: b.input, isError: b.status === 'error' }] : [])),
+      ] as SessionHistoryTool[];
+      const failed = members.filter((b) => b.type === 'tool_call' && b.status === 'error' && !isRoutedQuestion(b.name, b.result)).length;
+      const head = headOf(tail[0]);
+      // Keyed like the answered turn's fold (pushTurnFold), so the row and its
+      // open state carry over when the turn ends and history takes the tools.
+      pageRows.push(
+        <div key={`turn-${id}`} data-turn-fold-index={head.globalIndex} {...threadWrapperProps(head.m.msgId ?? head.m.walnutMessageId, 'session-msg-bare')}>
+          <ProcessFoldRow foldId={id} foldKey={turnFoldKey(id)} testId="turn-fold" failed={failed}
+            running={isThinkingTail(leadingStreamRunIndices[leadingStreamRunIndices.length - 1]) || streamRunHasCallingTool(members)}
+            phrase={processPhrase(tools, isOutboundTool, tail.filter(isInboundPart).length)}>
+            {tail.map(renderHistoryPart)}
+            <StreamRunMembers members={members} live={isThinkingTail(leadingStreamRunIndices[leadingStreamRunIndices.length - 1])}
+              sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost}
+              onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />
+          </ProcessFoldRow>
+        </div>,
+      );
+    }
   }
 
   // ── The comment card: the target question beside its passage (Conversation Mode).

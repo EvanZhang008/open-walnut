@@ -52,8 +52,10 @@ function useTurnFold(key: string): [boolean, () => void] {
  * answer use the same row under turnFoldKey. `failed` puts the count of failed
  * steps in the header, so a folded failure is never silent.
  */
-export function ProcessFoldRow({ foldId, phrase, children, foldKey, failed = 0, testId = 'process-fold' }: {
+export function ProcessFoldRow({ foldId, phrase, children, foldKey, failed = 0, testId = 'process-fold', running = false }: {
   foldId: string; phrase: string; children: ReactNode; foldKey?: string; failed?: number; testId?: string;
+  /** A step inside is still running (the live turn): the row breathes like a running tool run. */
+  running?: boolean;
 }) {
   const [open, toggle] = useTurnFold(foldKey ?? processFoldKey(foldId));
   return (
@@ -61,6 +63,7 @@ export function ProcessFoldRow({ foldId, phrase, children, foldKey, failed = 0, 
       <button type="button" className="tool-run-toggle" aria-expanded={open} onClick={toggle}>
         <span className="tool-run-label">{phrase}</span>
         {failed > 0 && <span className="tool-run-fail">{failed} failed</span>}
+        {running && <span className="tool-run-live-dot" />}
         <span className={`tool-run-chevron${open ? ' tool-run-chevron--open' : ''}`}>{'›'}</span>
       </button>
       {open && <div className="process-fold-body">{children}</div>}
