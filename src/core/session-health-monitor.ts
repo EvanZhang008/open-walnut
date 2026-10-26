@@ -1529,7 +1529,9 @@ export class SessionHealthMonitor {
       const { getTask } = await import('./task-manager.js')
       const task = await getTask(s.taskId)
       if (!task) return true
-      return task.phase === 'IN_PROGRESS' && !isMainAgentTask(task)
+      // WAITING too: a wait that rode on the dead process (its own background
+      // command, a wakeup) is gone with it; restart recovery decides which.
+      return (task.phase === 'IN_PROGRESS' || task.phase === 'WAITING') && !isMainAgentTask(task)
     } catch {
       return true
     }
@@ -1864,6 +1866,12 @@ export class SessionHealthMonitor {
           const mgr = getRegisteredSessionManager(session.claudeSessionId)
           if (mgr && await mgr.isAlive()) processAlive = true
         } catch { /* registry unavailable — keep the probe's verdict */ }
+      }
+      // A session restart recovery holds (killed by a restart, its resume
+      // queued or still being decided) is work in flight, not a dead end.
+      if (!processAlive) {
+        const { getSessionAutoRecover } = await import('./session-auto-recover.js')
+        if (getSessionAutoRecover()?.holdsHandBack(session)) processAlive = true
       }
       ;(processAlive ? bucket.alive : bucket.dead).push(session)
     }

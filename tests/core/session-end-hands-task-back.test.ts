@@ -10,12 +10,14 @@ import { handBackTaskOnSessionEnd, sessionResultPhase } from '../../src/core/pha
 import {
   createSessionRecord,
   updateSessionRecord,
+  getSessionByClaudeId,
   _resetSessionTrackerForTesting,
 } from '../../src/core/session-tracker.js'
 import { addTask, getTask, updateTask } from '../../src/core/task-manager.js'
 import * as taskManager from '../../src/core/task-manager.js'
 import { sessionRunner } from '../../src/providers/claude-code-session.js'
-import { startSessionAutoRecover } from '../../src/core/session-auto-recover.js'
+import { startSessionAutoRecover, recoverAfterBoot, resolveAutoRecoverConfig } from '../../src/core/session-auto-recover.js'
+import { RESUME_MESSAGE } from '../../src/core/sessions/restart-loss.js'
 import { closeDb } from '../../src/core/session-db.js'
 import { WALNUT_HOME, TASKS_FILE } from '../../src/constants.js'
 
@@ -147,11 +149,11 @@ describe('handBackTaskOnSessionEnd', () => {
       ...(mode === 'exhausted' ? { autoRecover: { attempts: 3, lastAt: new Date().toISOString(), cause: 'server_restart' } } : {}),
     })
     const recovery = startSessionAutoRecover({
-      enabled: mode !== 'disabled', delayMs: 20000, staggerMs: 0,
-      maxAttempts: 3, maxPerHost: 10, windowMs: 3600000,
-    }, { setTimer: () => 1 as never, clearTimer: () => {}, send: vi.fn() })
+      ...resolveAutoRecoverConfig(), enabled: mode !== 'disabled', delayMs: 20000, staggerMs: 0, maxAttempts: 3,
+    }, { setTimer: () => 1 as never, clearTimer: () => {}, send: vi.fn(), fetchSnapshot: async () => null })
     try {
-      if (mode === 'pending') expect(recovery.instance.schedule(rec, 'server_restart')).toBe(true)
+      // Its process was mid-turn when the restart killed it.
+      if (mode === 'pending') expect(recovery.instance.noteLoss(rec, 'server_restart', { ...rec, process_status: 'running' })).toBe(true)
       const shouldHandBack = mode === 'disabled' || mode === 'exhausted'
       expect(await handBackTaskOnSessionEnd(taskId, 'sid-recovery', 'test')).toBe(shouldHandBack)
       expect((await getTask(taskId)).phase).toBe(shouldHandBack ? HANDBACK_PHASE : 'IN_PROGRESS')
@@ -338,22 +340,40 @@ describe('startup reconciler hands the task back', () => {
     await updateTask(taskId, { phase: 'IN_PROGRESS' })
     await createSessionRecord('zombie-recover', taskId, 'proj')
     await updateSessionRecord('zombie-recover', { process_status: 'running', type: 'interactive' })
-    let fire!: () => void
     const send = vi.fn(async () => ({}))
     const recovery = startSessionAutoRecover({
-      enabled: true, delayMs: 20000, staggerMs: 0,
-      maxAttempts: 3, maxPerHost: 10, windowMs: 3600000,
-    }, { setTimer: (fn) => { fire = fn; return 1 as never }, clearTimer: () => {}, send, recoveryOwner: async () => 'server' })
+      ...resolveAutoRecoverConfig(), enabled: true, delayMs: 0, staggerMs: 0, settleTimeoutMs: 2_000, maxLoadPerCpu: 1000,
+    }, { send, recoveryOwner: async () => 'server', fetchSnapshot: async () => null })
     try {
+      const before = await getSessionByClaudeId('zombie-recover')
       const result = await reconcileSessions()
+      // The reconciler's own hand-back waits for restart recovery to decide.
       expect((await getTask(taskId)).phase).toBe('IN_PROGRESS')
-      const rec = result.dead.find((s) => s.claudeSessionId === 'zombie-recover')!
-      expect(recovery.instance.schedule(rec, 'server_restart')).toBe(true)
-      fire()
-      await vi.waitFor(() => expect(send).toHaveBeenCalledOnce())
-      expect(send).toHaveBeenCalledWith('zombie-recover', expect.stringContaining('[Walnut auto-recover]'), {
-        source: 'auto-recover', taskId,
-      })
+      const { taken } = await recoverAfterBoot(result.dead, new Map([['zombie-recover', before!]]))
+      expect(taken).toBe(1)
+      await vi.waitFor(() => expect(send).toHaveBeenCalledOnce(), { timeout: 5_000 })
+      expect(send).toHaveBeenCalledWith('zombie-recover', RESUME_MESSAGE, { source: 'auto-recover', taskId })
+      expect((await getTask(taskId)).phase).toBe('IN_PROGRESS')
+      expect((await getSessionByClaudeId('zombie-recover'))?.restartLoss).toMatchObject({ verdict: 'resume', lost: ['turn'] })
+    } finally {
+      recovery.stop()
+    }
+  })
+
+  it('an idle session the restart killed is handed back once recovery has decided', async () => {
+    const taskId = await seedTask('finished its turn before the restart')
+    await updateTask(taskId, { phase: 'IN_PROGRESS' })
+    await createSessionRecord('zombie-idle', taskId, 'proj')
+    await updateSessionRecord('zombie-idle', { process_status: 'idle', type: 'interactive', pid: 999_999_999 })
+    const send = vi.fn(async () => ({}))
+    const recovery = startSessionAutoRecover({ ...resolveAutoRecoverConfig(), enabled: true, delayMs: 0, maxLoadPerCpu: 1000 },
+      { send, recoveryOwner: async () => 'server', fetchSnapshot: async () => null })
+    try {
+      const before = await getSessionByClaudeId('zombie-idle')
+      const result = await reconcileSessions()
+      await recoverAfterBoot(result.dead, new Map([['zombie-idle', before!]]))
+      await vi.waitFor(async () => expect((await getTask(taskId)).phase).toBe(HANDBACK_PHASE), { timeout: 5_000 })
+      expect(send).not.toHaveBeenCalled()
     } finally {
       recovery.stop()
     }

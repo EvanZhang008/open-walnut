@@ -2928,16 +2928,31 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // Cloud mode: no daemon to reconcile against — sessions.json is read-only
   // synced state from the Mac; touching it here would mark live Mac sessions dead.
   let reconnectable: import('../core/types.js').SessionRecord[] = []
-  // Sessions whose process did NOT survive — handed to auto-recover once its
-  // watcher is up (it starts later in boot, so the list has to wait here).
+  // Sessions whose process did NOT survive: handed to restart recovery right
+  // after the reconciler (its watcher started above).
   let reconciledDead: import('../core/types.js').SessionRecord[] = []
+  // Each dead session's record as it stood BEFORE the reconciler marked it:
+  // its last projected status is restart recovery's fallback fact.
+  const beforeReconcile = new Map<string, import('../core/types.js').SessionRecord>()
   if (!bootPolicy('session-reconcile')) {
     log.session.info(`${offByPolicy()}: skipping session reconciliation`)
   } else try {
     const { reconcileSessions } = await import('../core/session-reconciler.js')
+    const { listSessions } = await import('../core/session-tracker.js')
+    for (const rec of await listSessions().catch(() => [])) beforeReconcile.set(rec.claudeSessionId, rec)
     const result = await reconcileSessions()
     reconnectable = result.reconnectable
     reconciledDead = result.dead
+    // Restart recovery takes the dead on at once: from here their tasks'
+    // phases are held, before any snapshot or drift rule can hand them back.
+    // Each is classified from recorded facts; only work that was in flight is
+    // resumed, in order, within the queue's caps (session-auto-recover.ts).
+    const { recoverAfterBoot } = await import('../core/session-auto-recover.js')
+    const { taken, picked } = await recoverAfterBoot(reconciledDead, beforeReconcile)
+    beforeReconcile.clear()
+    if (reconciledDead.length > 0 || picked > 0) {
+      log.web.info('auto-recover startup catch-up', { candidates: reconciledDead.length, taken, picked })
+    }
     startupPhase(`session reconcile done (${reconnectable.length} reconnectable)`)
   } catch (err) {
     log.session.warn('session reconciliation failed on startup', {
@@ -3210,29 +3225,12 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         autoContinueHandle = startSessionAutoContinue()
       }
 
-      // Auto-recover: bring back sessions whose EXECUTION HOST or daemon died
-      // under them (weekly patch reboot, tunnel death, daemon upgrade). The
-      // daemon's own turn-retry cannot cover this — it dies with the host — so
-      // the Mac owns it. Primary box only, same reason as auto-continue.
+      // Auto-recover (restart recovery) starts before the startup reconciler and
+      // takes its dead on right after it (above); this only reports the opt-out.
       // hooks.overrides['session-auto-recover'].enabled=false wins over the env.
       const autoRecoverOverride = (await getAcConfig()).hooks?.overrides?.['session-auto-recover']?.enabled
       if (autoRecoverOverride === false) {
         log.web.info('session auto-recover disabled via hooks.overrides')
-      } else {
-        const { scheduleSessionAutoRecover } = await import('../core/session-auto-recover.js')
-        // Catch-up pass: sessions the startup reconciler found dead. Their cause
-        // is 'server_restart' (infra), so a Walnut restart that outlived a CLI no
-        // longer needs a human to retype the last request. Each candidate still
-        // has to clear every guard (task IN_PROGRESS, budget, per-host stagger).
-        let armed = 0
-        for (const rec of reconciledDead) {
-          if (scheduleSessionAutoRecover(rec, 'server_restart')) armed++
-        }
-        if (reconciledDead.length > 0) {
-          log.web.info('auto-recover startup catch-up', {
-            candidates: reconciledDead.length, armed,
-          })
-        }
       }
     } else if (bootPolicy('companion-queues')) {
       // Cloud box: two-way task sync. Writer half (Phase 4) — every local task

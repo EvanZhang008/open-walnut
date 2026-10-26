@@ -204,6 +204,10 @@ export async function sendMessageToSession(
   // message, in the same row, so it never costs a turn (sessions/place-notice.ts).
   const { pendingPlaceNotice } = await import('./sessions/place-notice.js');
   const place = await pendingPlaceNotice(sessionId);
+  // A restart that killed the session's process rides the same way, on
+  // whichever message reaches it first (sessions/restart-notice.ts).
+  const { pendingRestartNotice } = await import('./sessions/restart-notice.js');
+  const restart = await pendingRestartNotice(sessionId);
   // The main agent's org update rides the same way: one folded note, never a turn (org/org-store.ts).
   const { pendingOrgDigest } = await import('./org/org-store.js');
   const digest = await pendingOrgDigest(sessionId);
@@ -217,7 +221,7 @@ export async function sendMessageToSession(
   const appState = await pendingAppState(sessionId, rawBody);
   const outputMode = await prepareAutomatedOutputModeSend(sessionId, opts?.source, rawBody);
   const body = outputMode?.enqueueText ?? rawBody;
-  const notes = [place?.text, digest?.text, appState?.text].filter(Boolean).join('\n\n');
+  const notes = [place?.text, restart?.text, digest?.text, appState?.text].filter(Boolean).join('\n\n');
   const enqueueText = notes ? `${notes}\n\n${body}` : body;
   let msg: QueuedMessage;
   try {
@@ -237,6 +241,7 @@ export async function sendMessageToSession(
   // A repeat collapsed onto the row already queued: only the row that holds the note counts.
   if (place && msg.message.startsWith(place.text)) await place.markTold();
   if (digest && msg.message.includes(digest.text)) await digest.markTold();
+  if (restart && msg.message.includes(restart.text)) await restart.markTold();
   if (outputMode && msg.message.includes(outputMode.enqueueText)) await outputMode.commit();
   if (appState) {
     if (msg.message.includes(appState.text)) appState.markTold();

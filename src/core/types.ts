@@ -2024,6 +2024,73 @@ export interface SessionAutoRecoverState {
   cause?: StatusReason;
 }
 
+/** What killed a session process that restart recovery is looking at. */
+export type RestartLossCause = 'machine_reboot' | 'server_restart' | 'host_restart';
+
+/** Work the dead process was carrying, read from the stream fold at its death. */
+export type RestartLostWork = 'turn' | 'background' | 'wakeup' | 'cron' | 'team';
+
+/**
+ * Restart recovery's verdict on one lost session (src/core/sessions/restart-loss.ts).
+ *   resume       — work was in flight (a turn, a background command, an armed
+ *                  wakeup/cron) and the task still expects it: resume.
+ *   waiting_user — a permission prompt was open: the human answers first.
+ *   settled      — the last turn had finished and nothing was pending.
+ *   wait_held    — the task is WAITING on something that outlives the process
+ *                  (its clock, a trigger, a peer).
+ *   handed_back  — the task was already NEED_ACTION / TODO / COMPLETE.
+ *   cwd_missing  — the working directory is gone (a reboot cleared /tmp).
+ */
+export type RestartLossVerdict = 'resume' | 'waiting_user' | 'settled' | 'wait_held' | 'handed_back' | 'cwd_missing';
+
+/**
+ * The durable record of a process lost to a restart. Lives in its own field so
+ * a later status write (the daemon's snapshot projection rewrites status_reason)
+ * can never erase the fact that a restart, not the work, ended it: on
+ * 2026-10-26 that rewrite made every queued recovery read as "not infra" and
+ * abort, and every interrupted task was handed back as if it waited on the user.
+ */
+export interface SessionRestartLoss {
+  /** ISO time the loss was observed (server boot, host reconnect). */
+  at: string;
+  cause: RestartLossCause;
+  /** ISO boot time of the host, when known (machine_reboot). */
+  bootAt?: string;
+  /** Work in flight at death; empty when the last turn had settled. */
+  lost: RestartLostWork[];
+  /** Background commands still running at death. */
+  backgroundCount?: number;
+  /** Task phase when the loss was classified. */
+  phaseAtLoss?: TaskPhase | null;
+  /** Absent until classified. */
+  verdict?: RestartLossVerdict;
+  /**
+   * pending  — observed, not yet classified;
+   * queued   — waiting for its turn in the resume queue;
+   * sent     — the resume message is in the session's queue (delivery owns it now);
+   * resumed  — the session came back;
+   * skipped  — not resumed (see verdict / reason);
+   * gave_up  — resume failed after the attempt budget, or the host never returned.
+   */
+  state: 'pending' | 'queued' | 'sent' | 'resumed' | 'skipped' | 'gave_up';
+  reason?: string;
+  /** The session has been told about the restart (rides the next message once). */
+  told?: boolean;
+  cwd?: string;
+  cwdMissing?: boolean;
+  /** The task's durable directory on the session's host (src/core/sessions/task-dir-place.ts), when known. */
+  taskDir?: string;
+  /** The record's statusRevision when decided: a later status change means a
+   *  later life (and maybe a new loss), the same one means the same death. */
+  revision?: number;
+  /** The record as it stood before the loss was written (every later write
+   *  moves lastActiveAt and the status), kept so a restart in the middle of
+   *  classification still decides on the facts of the death. */
+  before?: { status?: string; lastActiveAt?: string; permission?: boolean };
+  /** ISO time the resume message went out (state 'sent'). */
+  sentAt?: string;
+}
+
 export type StatusReason =
   /** Record seeded by a start route before the CLI process exists (its id was
    *  pre-assigned so the UI can open the real panel immediately). Marks the row
@@ -2696,6 +2763,8 @@ export interface SessionRecord {
   /** Auto-recover budget, persisted so a host in a reboot loop can't respawn a
    *  session forever (an in-memory counter resets with the server). */
   autoRecover?: SessionAutoRecoverState;
+  /** Set when a restart (machine, server, host) killed this session's process. */
+  restartLoss?: SessionRestartLoss;
   stopRequest?: { id: string; requestedAt: string; state: 'pending' | 'confirmed'; error?: string };
   /** Why the last process_status change happened (K8s condition style). */
   status_reason?: StatusReason;

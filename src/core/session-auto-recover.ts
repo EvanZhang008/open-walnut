@@ -6,483 +6,515 @@
  *     transient upstream error. It runs INSIDE the daemon, so it cannot help
  *     when the daemon is the thing that died.
  *   - session-auto-continue nudges a turn that ended with a retry-exhaustion
- *     result. It needs a `session:result` event — a host that reboots mid-turn
+ *     result. It needs a `session:result` event; a process killed by a reboot
  *     never emits one.
- *   - this module handles "the process is simply GONE": host rebooted, daemon
- *     restarted, tunnel died. Only the Mac survives that, so only the Mac can
- *     own the recovery.
+ *   - this module handles "the process is simply GONE": the computer rebooted,
+ *     the Walnut server or a daemon restarted, a remote host rebooted. The
+ *     decision needs the task's phase and the user's pending prompts, which
+ *     only the leader holds, so the leader owns it; the facts it decides on
+ *     (the fold of the session's stream file) come from the host's daemon.
  *
- * 2026-08-22 (inc-1787439819342): a remote dev host took its weekly patch reboot
- * at 19:29 UTC, five minutes before the reboot itself, killing the CLI, the
- * daemon and a 30-minute build. The daemon was back and healthy by 22:11. The
- * session sat in 'error' until the user manually forked it at 23:04 — 3.5 hours
- * of nothing, on work that was fully resumable the whole time (the CLI transcript
- * survives in ~/.claude/projects, which is why `--resume` works).
+ * 2026-08-22 (inc-1787439819342): a remote host's patch reboot left a session in
+ * 'error' for 3.5 hours on fully resumable work. 2026-10-26: the Mac rebooted
+ * with 42 sessions on it and not one came back. Twelve tasks had work in flight
+ * (an open turn, background commands, an armed wakeup) and all twelve were
+ * handed back as NEED_ACTION, as if they waited on the user: the per-host
+ * budget of 10 was spent in reconciler order on tasks already handed back, and
+ * 30 s later the daemon's snapshot rewrote each record's status_reason, so the
+ * few recoveries armed read as "not infra" and aborted.
+ *
+ * WHAT IS RESUMED is decided from recorded facts (sessions/restart-loss.ts) and
+ * stored on the record as `restartLoss`, a field no status write touches. While
+ * a loss is pending or queued, every hand-back path leaves the task's phase
+ * alone (holdsHandBack), so an interrupted task never reads as waiting on the
+ * user.
  *
  * HOW THE RESUME HAPPENS. This module does not spawn anything. It sends ONE
  * message through the normal queue (`sendMessageToSession`), and the existing
  * send path does the rest: a dead session's write fails and falls back to a
- * `--resume` spawn. So auto-recover inherits every delivery invariant, is
- * chat-visible, and adds no new process-management code.
+ * `--resume` spawn, which the daemon's one-CLI-per-session guard covers. The
+ * restart note rides in front of whichever message reaches the session first
+ * (pendingRestartNotice), so a human or a peer who gets there before the queue
+ * does still hands the agent the facts.
  *
- * GUARDS (each one is a real failure mode, not defensive padding):
- *   - infra ONLY (session-error-kind). An unknown cause does not qualify: this
- *     spends tokens and runs an agent with no human watching.
- *   - task must still be IN_PROGRESS. NEED_ACTION means the work was already
- *     handed back to the human; resuming would talk over them.
- *   - persisted attempt budget on the session record. An in-memory counter
- *     resets with the server, so a host in a reboot loop would respawn forever.
- *   - per-host stagger + per-host cap. One reboot can strand a dozen sessions;
- *     resuming them simultaneously would hammer a host that just finished
- *     booting (and blow through its ssh MaxStartups).
- *   - any non-auto send cancels a pending recovery — the human took over.
- *   - re-validated after every await (epoch check), because the delay is long
- *     enough for all of the above to change underneath us.
+ * THE QUEUE: open turns first, then the most recent work; per host at most
+ * `concurrency` resumes in flight (a resume holds its slot until the session
+ * is back or `settleTimeoutMs`), `staggerMs` between starts, and on this
+ * machine a load gate (a computer that just booted is busy). The attempt
+ * budget is persisted on the record, so a reboot loop cannot respawn forever,
+ * and the loss itself is persisted, so a restart in the middle of recovery
+ * picks up where it stopped. A host that is not connected keeps its sessions
+ * queued until it returns, for at most `ownerWaitMs`.
  */
 
 import { bus, EventNames } from './event-bus.js'
 import type { BusEvent } from './event-bus.js'
-import type { SessionRecord, StatusReason, TaskPhase } from './types.js'
+import type { RestartLossCause, SessionRecord, SessionRestartLoss, StatusReason } from './types.js'
 import { isInfraSessionError } from './session-error-kind.js'
+import {
+  AUTO_RECOVER_SOURCE,
+  defaultDeps,
+  isLocalHost,
+  LOCAL_HOST,
+  resolveAutoRecoverConfig,
+  type AutoRecoverConfig,
+  type AutoRecoverDeps,
+} from './sessions/auto-recover-env.js'
+import {
+  RESUME_MESSAGE,
+  classifyRestartLoss,
+  factsFromRecord,
+  factsFromSnapshot,
+  lostWork,
+  resumePriority,
+} from './sessions/restart-loss.js'
 import { log } from '../logging/index.js'
 
-/** Message source tag — also how we recognise our own sends so they don't look
- *  like a human taking over. */
-export const AUTO_RECOVER_SOURCE = 'auto-recover'
+export { AUTO_RECOVER_SOURCE, resolveAutoRecoverConfig }
+export type { AutoRecoverConfig, AutoRecoverDeps, AutoRecoverTask } from './sessions/auto-recover-env.js'
 
-/** What we tell the resumed agent. Honest about the cause (so it doesn't waste a
- *  turn diagnosing its own "failure") and explicit that it must re-check state:
- *  the killed turn may have half-finished a write, a build or a git operation. */
-export function buildRecoveryPrompt(host: string | undefined, cause: StatusReason | undefined): string {
-  const where = host && host !== '__local__' ? `on ${host}` : 'on this machine'
-  const why = cause === 'remote_unreachable'
-    ? 'the host became unreachable'
-    : cause === 'server_restart'
-      ? 'the Walnut server restarted'
-      : 'the host or its session daemon restarted'
-  return [
-    `[Walnut auto-recover] Your process ${where} was killed mid-turn because ${why}.`,
-    'Nothing you did caused it, and no output from that turn was saved.',
-    'Before continuing: re-check the real state on disk (files you were editing, whether a build/command actually finished, git status) instead of assuming your last action completed.',
-    'Then carry on with the task.',
-  ].join(' ')
-}
+/** Why schedule() did not take a session on. */
+export type SkipReason = 'disabled' | 'already-tracked' | 'already-decided' | 'archived' | 'not-infra' | 'no-task' | 'not-interactive' | 'session-budget'
 
-// ── Config ───────────────────────────────────────────────────────────────────
+/** An unstamped record the startup reconciler just marked holds its phase this
+ *  long, so its own hand-back cannot beat the classification that follows. */
+const UNSTAMPED_HOLD_MS = 10 * 60_000
+/** How often a waiting queue re-checks the load gate and offline hosts. */
+const RECHECK_MS = 15_000
+/** Poll interval while a resume waits for its session to come back. */
+const SETTLE_POLL_MS = 2_000
 
-export interface AutoRecoverConfig {
-  enabled: boolean
-  /** Wait after the loss is observed before resuming. Long enough for a host
-   *  that is still finishing its boot to settle. */
-  delayMs: number
-  /** Extra spacing between resumes on the SAME host. */
-  staggerMs: number
-  /** Max resumes per session inside `windowMs`. */
-  maxAttempts: number
-  /** Max resumes per host inside `windowMs`. */
-  maxPerHost: number
-  /** Rolling window for both budgets. */
-  windowMs: number
-}
+type LossBefore = NonNullable<SessionRestartLoss['before']>
 
-function clampInt(raw: string | undefined, def: number, min: number, max: number): number {
-  const n = raw != null && raw !== '' ? Number(raw) : def
-  if (!Number.isFinite(n)) return def
-  return Math.max(min, Math.min(max, Math.trunc(n)))
-}
+interface QueueItem { sid: string; hostKey: string; priority: number; notBefore: number; gatedSince?: number }
 
-export function resolveAutoRecoverConfig(): AutoRecoverConfig {
-  return {
-    // ON by default, unlike turn-retry: turn-retry re-asks a question that may be
-    // failing for a reason, while this only restores a process the infrastructure
-    // took away. Opt out with WALNUT_AUTO_RECOVER_ENABLED=0.
-    enabled: process.env.WALNUT_AUTO_RECOVER_ENABLED !== '0',
-    delayMs: clampInt(process.env.WALNUT_AUTO_RECOVER_DELAY_MS, 20_000, 0, 3_600_000),
-    staggerMs: clampInt(process.env.WALNUT_AUTO_RECOVER_STAGGER_MS, 15_000, 0, 600_000),
-    maxAttempts: clampInt(process.env.WALNUT_AUTO_RECOVER_MAX_ATTEMPTS, 3, 0, 50),
-    maxPerHost: clampInt(process.env.WALNUT_AUTO_RECOVER_MAX_PER_HOST, 10, 0, 500),
-    windowMs: clampInt(process.env.WALNUT_AUTO_RECOVER_WINDOW_MS, 6 * 3_600_000, 60_000, 7 * 86_400_000),
-  }
-}
+const isLive = (r: SessionRecord | null): boolean => r?.process_status === 'running' || r?.process_status === 'idle'
 
-// ── Injectable deps (real by default; overridden in unit tests) ───────────────
-
-export interface AutoRecoverDeps {
-  now: () => number
-  setTimer: (fn: () => void, ms: number) => ReturnType<typeof setTimeout>
-  clearTimer: (handle: ReturnType<typeof setTimeout>) => void
-  send: (sessionId: string, message: string, opts: { source: string; taskId?: string }) => Promise<unknown>
-  getSession: (sessionId: string) => Promise<SessionRecord | null>
-  getTaskPhase: (taskId: string) => Promise<TaskPhase | null>
-  recoveryOwner: (record: SessionRecord) => Promise<'server' | 'daemon' | 'unknown'>
-  /** Persist the attempt budget on the record (survives a server restart). */
-  noteAttempt: (sessionId: string, attempts: number, cause: StatusReason | undefined) => Promise<void>
-  emitNote: (sessionId: string, taskId: string | undefined, message: string) => void
-}
-
-function defaultDeps(): AutoRecoverDeps {
-  return {
-    now: () => Date.now(),
-    setTimer: (fn, ms) => setTimeout(fn, ms),
-    clearTimer: (handle) => clearTimeout(handle),
-    send: async (sessionId, message, opts) => {
-      const { sendMessageToSession } = await import('./session-message-queue.js')
-      return sendMessageToSession(sessionId, message, opts)
-    },
-    getSession: async (sessionId) => {
-      const { getSessionByClaudeId } = await import('./session-tracker.js')
-      return getSessionByClaudeId(sessionId)
-    },
-    getTaskPhase: async (taskId) => {
-      // getTask THROWS on an unknown id — a deleted task must read as "no phase"
-      // (fire() then aborts), never as an exception that skips the budget write.
-      try {
-        const { getTask } = await import('./task-manager.js')
-        const task = await getTask(taskId)
-        // The main agent sits In Progress between turns too (org/main-stays-active.ts),
-        // so its phase says nothing about a turn in flight: never resumed unattended.
-        const { isMainAgentTask } = await import('./org/main-stays-active.js')
-        if (isMainAgentTask(task)) return null
-        return task?.phase ?? null
-      } catch {
-        return null
-      }
-    },
-    recoveryOwner: async (record) => {
-      if (record.stopRequest?.state === 'pending') return 'daemon'
-      const { getConnectedDaemonConnection } = await import('../providers/daemon-connection.js')
-      const conn = getConnectedDaemonConnection(record.host ?? '__local__')
-      if (!conn || !conn.capabilitiesKnown) return 'unknown'
-      if (!conn.hasCapability('cron-supervision-v1')) return 'server'
-      const state = await conn.send('cron.supervision', { sid: record.claudeSessionId }, 5000)
-      if (!state.ok) return 'unknown'
-      return state.cronSupervision ? 'daemon' : 'server'
-    },
-    noteAttempt: async (sessionId, attempts, cause) => {
-      const { updateSessionRecord } = await import('./session-tracker.js')
-      // Deliberately NOT a status write — no process_status/status_reason here, so
-      // this never trips the snapshot gate's category-① drop.
-      await updateSessionRecord(sessionId, {
-        autoRecover: { attempts, lastAt: new Date().toISOString(), cause },
-      } as Partial<SessionRecord>)
-    },
-    emitNote: (sessionId, taskId, message) => {
-      bus.emit(EventNames.SESSION_SYSTEM_EVENT, {
-        sessionId, taskId, variant: 'info' as const, message,
-      }, ['main-ai'], { source: AUTO_RECOVER_SOURCE, urgency: 'urgent' })
-    },
-  }
-}
-
-/** Why a schedule() call did not arm a recovery — surfaced so callers can decide
- *  whether to fall back to advancing the task phase instead. */
-export type SkipReason =
-  | 'disabled'
-  | 'already-pending'
-  | 'archived'
-  | 'not-infra'
-  | 'no-task'
-  | 'not-interactive'
-  | 'session-budget'
-  | 'host-budget'
 
 // ── Scheduler ────────────────────────────────────────────────────────────────
 
 export class SessionAutoRecover {
   private readonly cfg: AutoRecoverConfig
   private readonly deps: AutoRecoverDeps
-  /** One entry per armed recovery. The entry lives until fire() COMPLETES (not
-   *  until the timer pops) so wouldAttempt's already-pending check covers the
-   *  whole fire window — a slow cold --resume used to leave a gap where the
-   *  health monitor could arm a second recovery for the same session.
-   *  hostKey/reservedAt let cancel() and fire()'s abort paths refund the host
-   *  budget slot that schedule() reserved. */
-  private readonly pending = new Map<string, {
-    handle: ReturnType<typeof setTimeout>
-    hostKey: string
-    reservedAt: number
-    epoch: number
-    fired: boolean
-  }>()
-  /** hostKey → fired timestamps (ms), pruned to the rolling window. */
-  private readonly hostFires = new Map<string, number[]>()
-  /** hostKey → ms epoch the next resume on that host may fire at (stagger). */
-  private readonly hostNextSlot = new Map<string, number>()
-  /** sessionId → supersession epoch, bumped by any non-auto send. fire() captures
-   *  it and re-checks after every await (clearing a timer cannot stop a callback
-   *  that already started). */
-  private readonly epochs = new Map<string, number>()
+  /** Sessions being classified (stamp written, verdict not yet). */
+  private readonly classifying = new Set<string>()
+  private readonly queue = new Map<string, QueueItem>()
+  private readonly inFlight = new Map<string, Set<string>>()
+  private readonly hostNextStart = new Map<string, number>()
+  private timer: ReturnType<typeof setTimeout> | null = null
+  private timerAt = 0
+  private stopped = false
 
   constructor(cfg: AutoRecoverConfig, deps: Partial<AutoRecoverDeps> = {}) {
     this.cfg = cfg
     this.deps = { ...defaultDeps(), ...deps }
   }
 
+  get enabled(): boolean { return this.cfg.enabled && !this.stopped }
+
   handleEvent = (event: BusEvent): void => {
-    switch (event.name) {
-      case EventNames.SESSION_SEND:
-      case EventNames.SESSION_MESSAGE_QUEUED: {
-        if (event.source === AUTO_RECOVER_SOURCE) return
-        const d = event.data as { sessionId?: string }
-        if (d.sessionId) this.cancel(d.sessionId, 'superseded-by-send')
-        break
-      }
-      case EventNames.SESSION_DELETED: {
-        const d = event.data as { sessionId?: string; sessionIds?: string[] }
-        const ids = d.sessionIds ?? (d.sessionId ? [d.sessionId] : [])
-        for (const id of ids) {
-          this.cancel(id, 'session-deleted')
-          this.epochs.delete(id)
-        }
-        break
-      }
-      default:
-        break
-    }
+    if (event.name !== EventNames.SESSION_DELETED) return
+    const d = event.data as { sessionId?: string; sessionIds?: string[] }
+    for (const id of d.sessionIds ?? (d.sessionId ? [d.sessionId] : [])) this.queue.delete(id)
   }
 
-  private hostKeyOf(record: Pick<SessionRecord, 'host'>): string {
-    return record.host ?? '__local__'
+  private tracked(sid: string): boolean {
+    if (this.classifying.has(sid) || this.queue.has(sid)) return true
+    for (const set of this.inFlight.values()) if (set.has(sid)) return true
+    return false
   }
 
-  private firesInWindow(hostKey: string): number {
-    const arr = this.hostFires.get(hostKey)
-    if (!arr) return 0
-    const cutoff = this.deps.now() - this.cfg.windowMs
-    const live = arr.filter((t) => t >= cutoff)
-    if (live.length !== arr.length) this.hostFires.set(hostKey, live)
-    return live.length
-  }
-
-  /** Attempts already spent by this session inside the window, read from the
-   *  PERSISTED budget so a server restart doesn't hand out a fresh allowance. */
   private attemptsSpent(record: Pick<SessionRecord, 'autoRecover'>): number {
     const st = record.autoRecover
     if (!st) return 0
     const last = Date.parse(st.lastAt)
-    if (Number.isNaN(last)) return 0
-    if (this.deps.now() - last > this.cfg.windowMs) return 0  // window rolled over
+    if (Number.isNaN(last) || this.deps.now() - last > this.cfg.windowMs) return 0
     return st.attempts
   }
 
   /**
-   * Cheap SYNC verdict: would this record be resumed if we scheduled it?
-   *
-   * Callers use this to decide whether to advance the task phase instead
-   * (advancing to NEED_ACTION and then resuming would contradict each other,
-   * and fire() checks the phase, so the order has to be settled up front).
-   * The task-phase check itself is async and happens in fire().
+   * Must a hand-back leave this session's task alone? True while its restart
+   * loss is being classified or waits for its resume. Every path that would
+   * hand the task back (the startup reconciler, the snapshot projection, the
+   * health monitor's drift rule) asks this first.
    */
-  wouldAttempt(record: SessionRecord): { ok: true } | { ok: false; reason: SkipReason } {
-    if (!this.cfg.enabled) return { ok: false, reason: 'disabled' }
-    if (this.pending.has(record.claudeSessionId)) return { ok: false, reason: 'already-pending' }
+  holdsHandBack(record: SessionRecord): boolean {
+    if (!this.enabled || record.archived) return false
+    if (this.tracked(record.claudeSessionId)) return true
+    const loss = record.restartLoss
+    const now = this.deps.now()
+    // A loss nobody resolved within the host-wait window stops holding, so a
+    // stuck record can never pin a task's phase forever.
+    if (loss && now - Date.parse(loss.at) <= this.cfg.ownerWaitMs) {
+      if (loss.state === 'pending' || loss.state === 'queued') return true
+      if (loss.state === 'sent') {
+        // On its way back; past the settle window the session's own state speaks.
+        if (now - Date.parse(loss.sentAt ?? loss.at) < this.cfg.settleTimeoutMs + 60_000) return true
+      } else if (loss.revision === record.statusRevision) {
+        return false  // this death, already decided
+      }
+      // Otherwise the loss belongs to an earlier life: judge this death afresh.
+    }
+    // The startup reconciler hands back right after marking a session dead,
+    // before classification has stamped it. One recovery would not take on
+    // (its budget is spent) is handed back at once.
+    return record.status_reason === 'server_restart' && !isLive(record)
+      && this.deps.now() - Date.parse(record.last_status_change ?? '') < UNSTAMPED_HOLD_MS
+      && this.wouldAttempt(record, { requireInfra: false }).ok
+  }
+
+  /** Cheap sync verdict: would schedule() take this record on? */
+  wouldAttempt(record: SessionRecord, opts: { requireInfra?: boolean } = {}): { ok: true } | { ok: false; reason: SkipReason } {
+    if (!this.enabled) return { ok: false, reason: 'disabled' }
+    if (this.tracked(record.claudeSessionId)) return { ok: false, reason: 'already-tracked' }
     if (record.archived) return { ok: false, reason: 'archived' }
-    // Embedded/derived sessions (triage, hook, cron, subagent) have no standalone
-    // work to continue and no human waiting on them.
+    // This death was decided already (a runtime site re-reports it every tick).
+    const prior = record.restartLoss
+    if (prior && prior.state !== 'pending' && prior.state !== 'resumed' && !isLive(record)
+      && prior.revision !== undefined && prior.revision === record.statusRevision) {
+      return { ok: false, reason: 'already-decided' }
+    }
+    // Embedded/derived sessions (triage, hook, cron, subagent) have no
+    // standalone work to continue and no human waiting on them.
     if (record.type && record.type !== 'interactive') return { ok: false, reason: 'not-interactive' }
     if (!record.taskId) return { ok: false, reason: 'no-task' }
-    if (!isInfraSessionError(record)) return { ok: false, reason: 'not-infra' }
+    if (opts.requireInfra !== false && !isInfraSessionError(record)) return { ok: false, reason: 'not-infra' }
     if (record.status_reason === 'spawn_outcome_unknown' && !record.pid && !record.outputFile) return { ok: false, reason: 'not-infra' }
     if (this.attemptsSpent(record) >= this.cfg.maxAttempts) return { ok: false, reason: 'session-budget' }
-    if (this.firesInWindow(this.hostKeyOf(record)) >= this.cfg.maxPerHost) {
-      return { ok: false, reason: 'host-budget' }
-    }
     return { ok: true }
   }
 
   /**
-   * Arm a recovery for a session whose process is gone. Returns true when armed.
-   * Idempotent per session (at most one pending recovery).
+   * A process was lost: classify it and, when its work was in flight, queue a
+   * resume. `before` is the record as it stood before the loss was written
+   * (its last projected status). Returns true when the session is taken on:
+   * the caller then leaves the task's phase alone, and this module hands it
+   * back itself if the verdict is not to resume.
    */
-  schedule(record: SessionRecord, cause?: StatusReason): boolean {
-    const verdict = this.wouldAttempt(record)
+  noteLoss(record: SessionRecord, cause: RestartLossCause, before?: SessionRecord, opts: { requireInfra?: boolean; fallbackInFlight?: boolean } = {}): boolean {
+    const verdict = this.wouldAttempt(record, opts)
     if (!verdict.ok) {
-      log.session.debug('auto-recover not scheduled', {
-        sessionId: record.claudeSessionId, reason: verdict.reason,
-      })
+      log.session.debug('restart recovery: not taken on', { sessionId: record.claudeSessionId, reason: verdict.reason })
       return false
     }
-
-    const sessionId = record.claudeSessionId
-    const hostKey = this.hostKeyOf(record)
-    const now = this.deps.now()
-    // Stagger per host: a reboot strands many sessions at once, and resuming them
-    // together means N simultaneous ssh spawns at a host that just booted.
-    const earliest = Math.max(now + this.cfg.delayMs, this.hostNextSlot.get(hostKey) ?? 0)
-    this.hostNextSlot.set(hostKey, earliest + this.cfg.staggerMs)
-    const waitMs = Math.max(0, earliest - now)
-
-    // Reserve the host slot NOW (not at fire time) so a burst of schedule() calls
-    // in the same tick can't all pass the per-host cap. cancel() and fire()'s
-    // abort paths refund it — an aborted recovery must not eat the host budget
-    // for the whole windowMs.
-    const fires = this.hostFires.get(hostKey) ?? []
-    fires.push(now)
-    this.hostFires.set(hostKey, fires)
-
-    const epoch = this.epochs.get(sessionId) ?? 0
-    const handle = this.deps.setTimer(() => {
-      const entry = this.pending.get(sessionId)
-      if (entry) entry.fired = true  // entry is removed by fire()'s finally
-      void this.fire(sessionId, record.taskId, cause, epoch, hostKey, now)
-    }, waitMs)
-    this.pending.set(sessionId, { handle, hostKey, reservedAt: now, epoch, fired: false })
-
-    log.session.info('auto-recover scheduled', {
-      sessionId, taskId: record.taskId, host: hostKey, cause: cause ?? null,
-      waitMs, attemptsSpent: this.attemptsSpent(record), maxAttempts: this.cfg.maxAttempts,
-    })
+    const b = before ?? record
+    this.startClassify(record, cause, {
+      status: b.process_status, lastActiveAt: b.lastActiveAt, permission: !!b.pendingPermission,
+    }, !!opts.fallbackInFlight)
     return true
   }
 
-  /** Remove ONE reservation stamped `reservedAt` from a host's fire window.
-   *  Refunds the slot schedule() took when the recovery never actually resumed
-   *  anything (canceled, or any fire() abort path). */
-  private releaseHostSlot(hostKey: string, reservedAt: number): void {
-    const arr = this.hostFires.get(hostKey)
-    if (!arr) return
-    const i = arr.indexOf(reservedAt)
-    if (i === -1) return
-    arr.splice(i, 1)
-    if (arr.length === 0) this.hostFires.delete(hostKey)
+  private startClassify(record: SessionRecord, cause: RestartLossCause, before: LossBefore, fallbackInFlight: boolean): void {
+    const sid = record.claudeSessionId
+    this.classifying.add(sid)
+    void this.classify(record, cause, before, fallbackInFlight)
+      .catch(async (err) => {
+        log.session.warn('restart recovery: classification failed', {
+          sessionId: sid, error: err instanceof Error ? err.message : String(err),
+        })
+        // Never leave it 'pending' (that holds the phase): hand it back.
+        this.classifying.delete(sid)
+        const rec = await this.deps.getSession(sid).catch(() => null)
+        if (rec) await this.giveUp(rec, 'its restart could not be assessed').catch(() => undefined)
+      })
+      .finally(() => this.classifying.delete(sid))
   }
 
-  private async fire(
-    sessionId: string,
-    taskId: string | undefined,
-    cause: StatusReason | undefined,
-    epoch: number,
-    hostKey: string,
-    reservedAt: number,
-  ): Promise<void> {
-    const superseded = () => (this.epochs.get(sessionId) ?? 0) !== epoch
-    // Flipped only after the resume send actually went out — every other exit
-    // refunds the host budget slot reserved at schedule() time.
-    let sent = false
+  /** Compatibility entry for the runtime discovery sites (health monitor, daemon reconnect). */
+  schedule(record: SessionRecord, cause?: StatusReason): boolean {
+    const lossCause: RestartLossCause = cause === 'server_restart'
+      ? 'server_restart'
+      : isLocalHost(record.host) ? 'server_restart' : 'host_restart'
+    // The record here was already relabelled (stopped / error) and its
+    // activity time moved; without the host's fold, the cause these sites
+    // proved (a lost host or daemon) is taken to have cut work short, as before.
+    return this.noteLoss(record, lossCause, record, { fallbackInFlight: true })
+  }
+
+  private async classify(record: SessionRecord, cause: RestartLossCause, before: LossBefore, fallbackInFlight: boolean): Promise<void> {
+    const sid = record.claudeSessionId
+    const taskId = record.taskId!
+    const nowIso = new Date(this.deps.now()).toISOString()
+    // Stamp first: from here the loss survives a restart even if the facts
+    // below take a while (a cold fold of a large stream file).
+    // A re-report of a death already told about keeps that: one notice per death.
+    const prior = record.restartLoss
+    const toldBefore = !!prior?.told && prior.state !== 'resumed' && prior.revision === record.statusRevision
+    await this.deps.patchLoss(sid, () => ({ at: nowIso, cause, lost: [], state: 'pending', before }))
+    const beforeActive = Date.parse(before.lastActiveAt ?? '')
+
+    const snap = await this.deps.fetchSnapshot(record)
+    if (snap && snap.cliState !== 'dead') {
+      // The host says the process lives: nothing was lost.
+      await this.deps.patchLoss(sid, (cur) => cur && { ...cur, state: 'skipped', reason: 'process is alive', told: true })
+      log.session.info('restart recovery: process is alive, nothing to recover', { sessionId: sid, cliState: snap.cliState })
+      return
+    }
+    const facts = snap
+      ? factsFromSnapshot(snap, beforeActive)
+      : factsFromRecord({
+        process_status: (fallbackInFlight ? 'running' : before.status) as SessionRecord['process_status'],
+        pendingPermission: before.permission ? { requestId: 'before-loss', receivedAt: '' } : undefined,
+      })
+    const task = await this.deps.getTask(taskId)
+    const cwdOk = await this.deps.cwdExists(record)
+    const taskDir = await this.deps.taskDir(taskId, record.host)
+    let finalCause = cause
+    let bootAt: string | undefined
+    if (isLocalHost(record.host) && cause !== 'host_restart') {
+      const boot = this.deps.bootTimeMs()
+      // The machine booted after this session last did anything: the reboot,
+      // not a server restart, is what killed it.
+      if (Number.isFinite(boot) && boot > beforeActive) {
+        finalCause = 'machine_reboot'
+        bootAt = new Date(boot).toISOString()
+      }
+    }
+    const { verdict, reason } = classifyRestartLoss({ facts, phase: task?.phase ?? null, cwdMissing: cwdOk === false })
+    const lost = lostWork(facts)
+    const loss: SessionRestartLoss = {
+      at: nowIso,
+      cause: finalCause,
+      ...(bootAt ? { bootAt } : {}),
+      lost,
+      ...(facts.backgroundCount ? { backgroundCount: facts.backgroundCount } : {}),
+      phaseAtLoss: task?.phase ?? null,
+      verdict,
+      reason,
+      state: verdict === 'resume' ? 'queued' : 'skipped',
+      // Nothing to say to an idle session a server restart merely recycled.
+      told: toldBefore || (lost.length === 0 && finalCause !== 'machine_reboot'),
+      ...(record.cwd ? { cwd: record.cwd } : {}),
+      ...(cwdOk === false ? { cwdMissing: true } : {}),
+      ...(taskDir ? { taskDir } : {}),
+      before,
+    }
+    const latest = await this.deps.getSession(sid)
+    if (latest?.statusRevision !== undefined) loss.revision = latest.statusRevision
+    const stored = await this.deps.patchLoss(sid, (cur) => (cur && cur.state === 'pending' ? loss : cur))
+    log.session.info('restart recovery: classified', {
+      sessionId: sid, taskId, verdict, reason, cause: finalCause, facts: facts.source,
+      phase: task?.phase ?? null, lost,
+    })
+    if (!stored || stored.state !== loss.state || stored.at !== loss.at) return
+    // Decided: the stored verdict speaks for this session from here (the
+    // hand-back below must not be held off by our own bookkeeping).
+    this.classifying.delete(sid)
+
+    if (verdict === 'resume') {
+      this.enqueue(sid, record.host, resumePriority(loss, beforeActive), this.deps.now() + this.cfg.delayMs)
+      this.deps.emitNote(sid, taskId, `Restart recovery: ${finalCause === 'machine_reboot' ? 'the computer rebooted' : 'a restart'} killed this session while its work was in flight (${lost.join(', ')}). It will resume automatically.`)
+      return
+    }
+    if (verdict === 'cwd_missing') {
+      this.deps.emitNote(sid, taskId, `Restart recovery: not resumed, because the working directory ${record.cwd ?? ''} no longer exists (the reboot cleared it).`)
+    }
+    // Not resumed: the task gets the hand-back the guard held off, unless it
+    // sits where a hand-back does not apply (WAITING, Main between turns).
+    if ((task?.phase === 'IN_PROGRESS' || task?.phase === 'TODO') && !(task.isMain && verdict === 'settled')) {
+      await this.deps.handBack(taskId, sid)
+    }
+  }
+
+  /** After boot: pick up losses a previous run left unresolved. */
+  async resumeUnfinished(): Promise<number> {
+    if (!this.enabled) return 0
+    let picked = 0
+    for (const rec of await this.deps.listSessions()) {
+      const loss = rec.restartLoss
+      const sid = rec.claudeSessionId
+      if (!loss || this.tracked(sid) || rec.archived) continue
+      if (loss.state !== 'pending' && loss.state !== 'queued') continue
+      if (this.deps.now() - Date.parse(loss.at) > this.cfg.ownerWaitMs) continue
+      if (isLive(rec)) {
+        await this.deps.patchLoss(sid, (cur) => cur && { ...cur, state: 'resumed', reason: 'came back' })
+        continue
+      }
+      picked++
+      // The facts of the death were stored with the stamp (the record itself
+      // has been rewritten since).
+      const before = loss.before ?? { status: rec.process_status, lastActiveAt: rec.lastActiveAt, permission: !!rec.pendingPermission }
+      if (loss.state === 'pending') {
+        this.startClassify(rec, loss.cause, before, false)
+      } else {
+        this.enqueue(sid, rec.host, resumePriority(loss, Date.parse(before.lastActiveAt ?? '')), this.deps.now() + this.cfg.delayMs)
+      }
+    }
+    if (picked) log.session.info('restart recovery: picked up unfinished recoveries', { count: picked })
+    return picked
+  }
+
+  private enqueue(sid: string, host: string | null | undefined, priority: number, notBefore: number): void {
+    if (this.stopped) return
+    this.queue.set(sid, { sid, hostKey: host ?? LOCAL_HOST, priority, notBefore })
+    log.session.info('restart recovery: queued', { sessionId: sid, host: host ?? LOCAL_HOST, queueDepth: this.queue.size })
+    this.pump()
+  }
+
+  private inFlightOn(hostKey: string): Set<string> {
+    let set = this.inFlight.get(hostKey)
+    if (!set) { set = new Set(); this.inFlight.set(hostKey, set) }
+    return set
+  }
+
+  private arm(at: number): void {
+    if (this.stopped) return
+    if (this.timer && this.timerAt <= at) return
+    if (this.timer) this.deps.clearTimer(this.timer)
+    this.timerAt = at
+    this.timer = this.deps.setTimer(() => { this.timer = null; this.pump() }, Math.max(0, at - this.deps.now()))
+  }
+
+  /** Start every resume the caps allow now; arm a timer for the next one. */
+  pump(): void {
+    if (this.stopped) return
+    const now = this.deps.now()
+    let next = Infinity
+    const items = [...this.queue.values()].sort((a, b) => a.priority - b.priority)
+    for (const item of items) {
+      if (item.notBefore > now) { next = Math.min(next, item.notBefore); continue }
+      const flying = this.inFlightOn(item.hostKey)
+      if (flying.size >= this.cfg.concurrency) continue
+      const slot = this.hostNextStart.get(item.hostKey) ?? 0
+      if (slot > now) { next = Math.min(next, slot); continue }
+      if (isLocalHost(item.hostKey)) {
+        const load = this.deps.loadPerCpu()
+        if (load > this.cfg.maxLoadPerCpu) {
+          item.gatedSince ??= now
+          // Past the wait the queue goes on, but one at a time.
+          if (now - item.gatedSince < this.cfg.loadWaitMs || flying.size > 0) {
+            if (item.gatedSince === now) log.session.info('restart recovery: waiting for the machine to settle', { load: Number(load.toFixed(2)), max: this.cfg.maxLoadPerCpu })
+            next = Math.min(next, now + RECHECK_MS)
+            continue
+          }
+        }
+      }
+      this.queue.delete(item.sid)
+      flying.add(item.sid)
+      this.hostNextStart.set(item.hostKey, now + this.cfg.staggerMs)
+      void this.fire(item).finally(() => {
+        flying.delete(item.sid)
+        this.pump()
+      })
+    }
+    if (next < Infinity) this.arm(next)
+  }
+
+  private async giveUp(rec: SessionRecord, reason: string): Promise<void> {
+    await this.deps.patchLoss(rec.claudeSessionId, (cur) => cur && { ...cur, state: 'gave_up', reason, revision: rec.statusRevision })
+    log.session.warn('restart recovery: gave up', { sessionId: rec.claudeSessionId, taskId: rec.taskId, reason })
+    this.deps.emitNote(rec.claudeSessionId, rec.taskId, `Restart recovery gave up: ${reason}. The task is handed back to you.`)
+    if (rec.taskId) {
+      const task = await this.deps.getTask(rec.taskId)
+      if (task?.phase === 'IN_PROGRESS') await this.deps.handBack(rec.taskId, rec.claudeSessionId)
+    }
+  }
+
+  private requeue(item: QueueItem, delayMs: number): void {
+    this.queue.set(item.sid, { ...item, notBefore: this.deps.now() + delayMs })
+  }
+
+  private async fire(item: QueueItem): Promise<void> {
+    const sid = item.sid
     try {
-      if (superseded()) {
-        log.session.info('auto-recover aborted — superseded before fire', { sessionId, taskId })
+      const rec = await this.deps.getSession(sid)
+      const loss = rec?.restartLoss
+      if (!rec || rec.archived || !loss || loss.state !== 'queued' || !rec.taskId) {
+        log.session.info('restart recovery: dropped, record changed', { sessionId: sid, state: loss?.state ?? null })
         return
       }
-
-      const rec = await this.deps.getSession(sessionId)
-      if (superseded()) {
-        log.session.info('auto-recover aborted — superseded during lookup', { sessionId, taskId })
+      if (isLive(rec)) {
+        // A human, a peer or a trigger got there first; the note rode on it.
+        await this.deps.patchLoss(sid, (cur) => cur && { ...cur, state: 'resumed', reason: 'resumed by another message' })
         return
       }
-      if (!rec) {
-        log.session.info('auto-recover aborted — session gone', { sessionId, taskId })
+      const task = await this.deps.getTask(rec.taskId)
+      if (!task || task.phase !== loss.phaseAtLoss) {
+        await this.deps.patchLoss(sid, (cur) => cur && { ...cur, state: 'skipped', reason: `task moved to ${task?.phase ?? 'nothing'}`, revision: rec.statusRevision })
+        log.session.info('restart recovery: skipped, task phase changed', { sessionId: sid, was: loss.phaseAtLoss, now: task?.phase ?? null })
         return
       }
-      // Re-run the full verdict: the delay is long enough for the session to have
-      // been archived, revived by the daemon, or resumed by a human.
-      if (rec.archived) {
-        log.session.info('auto-recover aborted — session archived', { sessionId, taskId })
+      const owner = await this.deps.recoveryOwner(rec)
+      if (owner === 'daemon') {
+        await this.deps.patchLoss(sid, (cur) => cur && { ...cur, state: 'skipped', reason: 'the host daemon supervises it', revision: rec.statusRevision })
         return
       }
-      if (rec.process_status === 'running' || rec.process_status === 'idle') {
-        log.session.info('auto-recover aborted — session already back', {
-          sessionId, taskId, processStatus: rec.process_status,
-        })
+      if (owner === 'unknown') {
+        if (this.deps.now() - Date.parse(loss.at) > this.cfg.ownerWaitMs) {
+          await this.giveUp(rec, `its host ${rec.host ?? ''} did not come back`.replace('  ', ' '))
+          return
+        }
+        log.session.info('restart recovery: host not connected, will retry', { sessionId: sid, host: item.hostKey })
+        this.requeue(item, 60_000)
         return
       }
-      if (!isInfraSessionError(rec)) {
-        log.session.info('auto-recover aborted — cause is no longer infra', {
-          sessionId, taskId, statusReason: rec.status_reason ?? null, errorKind: rec.errorKind ?? null,
-        })
-        return
-      }
-
-      const effectiveTaskId = taskId ?? rec.taskId
-      if (!effectiveTaskId) {
-        log.session.info('auto-recover aborted — no task', { sessionId })
-        return
-      }
-      // The work must still be in flight. NEED_ACTION / COMPLETE / TODO all mean
-      // nobody is waiting on this session to keep going.
-      const phase = await this.deps.getTaskPhase(effectiveTaskId)
-      if (superseded()) {
-        log.session.info('auto-recover aborted — superseded during phase check', { sessionId, taskId })
-        return
-      }
-      if (phase !== 'IN_PROGRESS') {
-        log.session.info('auto-recover aborted — task no longer in progress', {
-          sessionId, taskId: effectiveTaskId, phase,
-        })
-        return
-      }
-
-      const recoveryOwner = await this.deps.recoveryOwner(rec)
-      if (superseded() || recoveryOwner !== 'server') {
-        log.session.info('auto-recover deferred to host supervision', { sessionId, recoveryOwner })
-        return
-      }
-
       const attempts = this.attemptsSpent(rec) + 1
       if (attempts > this.cfg.maxAttempts) {
-        log.session.warn('auto-recover give-up — session budget exhausted', {
-          sessionId, taskId: effectiveTaskId, attempts, maxAttempts: this.cfg.maxAttempts,
-        })
+        await this.giveUp(rec, `${this.cfg.maxAttempts} resume attempts failed`)
         return
       }
       // Persist BEFORE sending: if the send wedges or the server dies mid-resume,
       // the attempt must still count, or a crash loop gets unlimited retries.
-      await this.deps.noteAttempt(sessionId, attempts, cause ?? rec.status_reason)
-      if (superseded()) {
-        log.session.info('auto-recover aborted — superseded during budget write', { sessionId, taskId })
-        return
-      }
-
-      log.session.info('auto-recover firing — resuming session after infrastructure loss', {
-        sessionId, taskId: effectiveTaskId, host: rec.host ?? '__local__',
-        cause: (cause ?? rec.status_reason) ?? null, attempt: attempts,
+      await this.deps.noteAttempt(sid, attempts, rec.status_reason)
+      log.session.info('restart recovery: resuming', {
+        sessionId: sid, taskId: rec.taskId, host: item.hostKey, attempt: attempts, lost: loss.lost,
       })
-      this.deps.emitNote(sessionId, effectiveTaskId,
-        `Auto-recovering: the host or daemon restarted and killed this session's process. Resuming (attempt ${attempts}/${this.cfg.maxAttempts}).`)
-      await this.deps.send(sessionId, buildRecoveryPrompt(rec.host, cause ?? rec.status_reason), {
-        source: AUTO_RECOVER_SOURCE,
-        taskId: effectiveTaskId,
-      })
-      sent = true
+      if (this.stopped) return
+      const revBefore = rec.statusRevision
+      await this.deps.send(sid, RESUME_MESSAGE, { source: AUTO_RECOVER_SOURCE, taskId: rec.taskId })
+      const sentAt = new Date(this.deps.now()).toISOString()
+      await this.deps.patchLoss(sid, (cur) => cur && cur.state === 'queued' ? { ...cur, state: 'sent', sentAt } : cur)
+      await this.settle(item, attempts, revBefore)
     } catch (err) {
-      log.session.warn('auto-recover fire failed', {
-        sessionId, taskId, error: err instanceof Error ? err.message : String(err),
+      log.session.warn('restart recovery: resume failed', {
+        sessionId: sid, error: err instanceof Error ? err.message : String(err),
       })
-    } finally {
-      if (!sent) this.releaseHostSlot(hostKey, reservedAt)
-      // Remove only OUR entry: cancel() may already have removed it and a new
-      // schedule() (later epoch) may have replaced it in the meantime.
-      const entry = this.pending.get(sessionId)
-      if (entry && entry.epoch === epoch && entry.fired) this.pending.delete(sessionId)
+      // Back into the queue: the budget check above bounds the retries.
+      const rec = await this.deps.getSession(sid).catch(() => null)
+      if (rec?.restartLoss && (rec.restartLoss.state === 'queued' || rec.restartLoss.state === 'sent')) {
+        await this.deps.patchLoss(sid, (cur) => cur && { ...cur, state: 'queued' }).catch(() => null)
+        this.requeue(item, this.cfg.retryDelayMs)
+      }
     }
   }
 
-  cancel(sessionId: string, reason: string): void {
-    // Bump the epoch unconditionally: an in-flight fire() past its timer must
-    // also observe the supersession.
-    this.epochs.set(sessionId, (this.epochs.get(sessionId) ?? 0) + 1)
-    const entry = this.pending.get(sessionId)
-    if (!entry) return
-    this.deps.clearTimer(entry.handle)
-    this.pending.delete(sessionId)
-    // Timer never popped → fire() will never run for this entry, so the refund
-    // is ours. A fired entry's refund belongs to fire()'s finally instead (it
-    // aborts on the epoch bump and refunds there).
-    if (!entry.fired) this.releaseHostSlot(entry.hostKey, entry.reservedAt)
-    log.session.info('auto-recover canceled', { sessionId, reason })
+  /** Hold the slot until the session is back, its spawn failed, or the timeout. */
+  private async settle(item: QueueItem, attempt: number, revBefore: number | undefined): Promise<void> {
+    const deadline = this.deps.now() + this.cfg.settleTimeoutMs
+    while (!this.stopped && this.deps.now() < deadline) {
+      await new Promise<void>((resolve) => { this.deps.setTimer(resolve, SETTLE_POLL_MS) })
+      const rec = await this.deps.getSession(item.sid)
+      if (!rec) return
+      if (isLive(rec)) {
+        await this.deps.patchLoss(item.sid, (cur) => cur && { ...cur, state: 'resumed', reason: `resumed (attempt ${attempt})` })
+        log.session.info('restart recovery: session is back', { sessionId: item.sid, attempt })
+        return
+      }
+      // Only an error written after the send is this spawn's failure.
+      if (rec.process_status === 'error' && rec.statusRevision !== revBefore) {
+        log.session.warn('restart recovery: resume spawn failed, will retry', { sessionId: item.sid, attempt, error: rec.errorMessage ?? null })
+        await this.deps.patchLoss(item.sid, (cur) => cur && { ...cur, state: 'queued' })
+        this.requeue(item, this.cfg.retryDelayMs)
+        return
+      }
+    }
+    // Still not back: the message waits in the session's queue, which owns its
+    // delivery from here. The loss stays 'sent' and stops holding the phase
+    // once the host-wait window passes.
   }
 
   stop(): void {
-    for (const entry of this.pending.values()) this.deps.clearTimer(entry.handle)
-    this.pending.clear()
-    this.hostFires.clear()
-    this.hostNextSlot.clear()
-    this.epochs.clear()
+    this.stopped = true
+    if (this.timer) this.deps.clearTimer(this.timer)
+    this.timer = null
+    this.queue.clear()
+    this.hostNextStart.clear()
   }
 
   // ── Test-only introspection ──
-  hasPending(sessionId: string): boolean { return this.pending.has(sessionId) }
-  hostFiredCount(hostKey: string): number { return this.firesInWindow(hostKey) }
+  hasPending(sessionId: string): boolean { return this.tracked(sessionId) }
+  queuedIds(): string[] { return [...this.queue.values()].sort((a, b) => a.priority - b.priority).map((i) => i.sid) }
+  inFlightIds(hostKey = LOCAL_HOST): string[] { return [...(this.inFlight.get(hostKey) ?? [])] }
 }
 
 // ── Module wiring ────────────────────────────────────────────────────────────
@@ -497,11 +529,11 @@ export function startSessionAutoRecover(
   instance = sar
   bus.subscribe('session-auto-recover', sar.handleEvent, {
     global: true,
-    interest: ['session:send', 'session:message-queued', 'session:deleted'],
+    interest: ['session:deleted'],
   })
   log.session.info('auto-recover watcher started', {
-    enabled: cfg.enabled, delayMs: cfg.delayMs, staggerMs: cfg.staggerMs,
-    maxAttempts: cfg.maxAttempts, maxPerHost: cfg.maxPerHost,
+    enabled: cfg.enabled, delayMs: cfg.delayMs, staggerMs: cfg.staggerMs, concurrency: cfg.concurrency,
+    maxAttempts: cfg.maxAttempts, maxLoadPerCpu: cfg.maxLoadPerCpu,
   })
   return {
     stop: () => {
@@ -518,10 +550,29 @@ export function getSessionAutoRecover(): SessionAutoRecover | null {
 }
 
 /**
- * Convenience for the discovery sites (daemon reconnect, health monitor): arm a
- * recovery if the watcher is running. Returns true when armed, so the caller
- * knows not to advance the task phase to NEED_ACTION behind it.
+ * Convenience for the runtime discovery sites (daemon reconnect, health
+ * monitor): take a lost session on if the watcher is running. Returns true when
+ * taken, so the caller knows not to advance the task phase behind it.
  */
 export function scheduleSessionAutoRecover(record: SessionRecord, cause?: StatusReason): boolean {
   return instance?.schedule(record, cause) ?? false
+}
+
+/**
+ * Startup catch-up: every session the reconciler found dead after this boot,
+ * with its record as it stood before (its last projected status).
+ */
+export async function recoverAfterBoot(dead: SessionRecord[], before: Map<string, SessionRecord>): Promise<{ taken: number; picked: number }> {
+  const sar = instance
+  if (!sar) return { taken: 0, picked: 0 }
+  let taken = 0
+  for (const rec of dead) {
+    // The reconciler's own stamp ('server_restart') is the infra fact here. A
+    // record it only tidied (an 'error' that had died before this boot) was not
+    // killed by the restart.
+    if (rec.process_status !== 'stopped' || rec.status_reason !== 'server_restart') continue
+    if (sar.noteLoss(rec, 'server_restart', before.get(rec.claudeSessionId), { requireInfra: false })) taken++
+  }
+  const picked = await sar.resumeUnfinished()
+  return { taken, picked }
 }

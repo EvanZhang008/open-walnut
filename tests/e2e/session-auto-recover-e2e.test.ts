@@ -102,6 +102,8 @@ beforeAll(async () => {
   // per-host stagger so both candidates are decided in this test's lifetime.
   setEnv('WALNUT_AUTO_RECOVER_DELAY_MS', '0')
   setEnv('WALNUT_AUTO_RECOVER_STAGGER_MS', '0')
+  // The machine running the test may be busy: the boot load gate is not under test here.
+  setEnv('WALNUT_AUTO_RECOVER_MAX_LOAD', '1000')
 
   bus.subscribe('auto-recover-e2e-probe', (event: BusEvent) => {
     const d = event.data as { sessionId?: string }

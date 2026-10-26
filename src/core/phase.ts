@@ -637,12 +637,12 @@ export async function handBackTaskOnSessionEnd(
         if (!ending || ending.archived) return false
         if (sessions.some((s) => !s.archived && (s.process_status === 'running'
           || sessionRunner.findSessionByClaudeId(s.claudeSessionId)?.processStatus === 'running'))) return false
+        // A restart killed this session's process and recovery has not decided
+        // yet, or will resume it: the task is not waiting on the user. Its
+        // verdict hands it back itself when it does not resume.
         const recovery = getSessionAutoRecover()
-        if (current.phase === 'IN_PROGRESS' && recovery
-          && (ending.process_status === 'stopped' || ending.process_status === 'error')) {
-          const verdict = recovery.wouldAttempt(ending)
-          if (verdict.ok || verdict.reason === 'already-pending') return false
-        }
+        if (recovery && (ending.process_status === 'stopped' || ending.process_status === 'error')
+          && recovery.holdsHandBack(ending)) return false
         return true
       },
     })
