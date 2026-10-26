@@ -1,4 +1,5 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { MicField, type BoxMicHandle } from '@/components/common/BoxMic';
 import { fetchRepository } from '@/api/repositories';
 
 interface RepoFormProps {
@@ -221,6 +222,10 @@ export function RepoForm({ editSlug, onSave, onCancel }: RepoFormProps) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(!!editSlug);
+  const descRef = useRef<HTMLInputElement | null>(null);
+  const descMic = useRef<BoxMicHandle | null>(null);
+  const archRef = useRef<HTMLTextAreaElement | null>(null);
+  const archMic = useRef<BoxMicHandle | null>(null);
 
   useEffect(() => {
     if (!editSlug) return;
@@ -298,6 +303,9 @@ export function RepoForm({ editSlug, onSave, onCancel }: RepoFormProps) {
       setSaving(true);
       setError(null);
       const yaml = formToYaml({ ...form, hosts: validHosts });
+      // A transcription still on its way lands after the save, unsaved: drop it now.
+      descMic.current?.clear();
+      archMic.current?.clear();
       await onSave(trimmedSlug, yaml);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -348,14 +356,17 @@ export function RepoForm({ editSlug, onSave, onCancel }: RepoFormProps) {
       {/* Description */}
       <div className="repo-form-field">
         <label htmlFor="repo-desc">Description</label>
-        <input
-          id="repo-desc"
-          type="text"
-          value={form.description}
-          onChange={(e) => updateField('description', e.target.value)}
-          placeholder="Brief one-line description of the project"
-          className="repo-form-input"
-        />
+        <MicField inline boxRef={descRef} text={form.description} setText={(t) => updateField('description', t)} handleRef={descMic}>
+          <input
+            ref={descRef}
+            id="repo-desc"
+            type="text"
+            value={form.description}
+            onChange={(e) => updateField('description', e.target.value)}
+            placeholder="Brief one-line description of the project"
+            className="repo-form-input"
+          />
+        </MicField>
       </div>
 
       {/* Tech Stack */}
@@ -416,15 +427,18 @@ export function RepoForm({ editSlug, onSave, onCancel }: RepoFormProps) {
       {/* Architecture Notes */}
       <div className="repo-form-field">
         <label htmlFor="repo-arch">Architecture Notes</label>
-        <textarea
-          id="repo-arch"
-          value={form.architecture_notes}
-          onChange={(e) => updateField('architecture_notes', e.target.value)}
-          placeholder={"Frontend: React SPA (web/src/)\nBackend: Node.js + Express (src/)\nDatabase: SQLite for local data"}
-          className="repo-form-textarea"
-          rows={5}
-          spellCheck={false}
-        />
+        <MicField boxRef={archRef} text={form.architecture_notes} setText={(t) => updateField('architecture_notes', t)} handleRef={archMic}>
+          <textarea
+            ref={archRef}
+            id="repo-arch"
+            value={form.architecture_notes}
+            onChange={(e) => updateField('architecture_notes', e.target.value)}
+            placeholder={"Frontend: React SPA (web/src/)\nBackend: Node.js + Express (src/)\nDatabase: SQLite for local data"}
+            className="repo-form-textarea"
+            rows={5}
+            spellCheck={false}
+          />
+        </MicField>
       </div>
 
       {/* Common Commands */}

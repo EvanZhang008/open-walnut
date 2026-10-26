@@ -118,7 +118,7 @@ export function TaskBoardPane({ taskId, sessionId, barRightSlot, onOpenTask, onL
   const [reply, setReply] = useState<{ target: BoardReplyTarget; nonce: number } | null>(null);
   // Where the frame keeps the box's slot (`wn-board:slot`), for the box it was reported for.
   const [slot, setSlot] = useState<{ key: string; rect: BoardDockAnchor | null } | null>(null);
-  const replyKey = reply ? `${reply.target.thread}|${reply.target.choice ?? ''}` : '';
+  const replyKey = reply ? `${reply.target.thread}|${reply.target.choice ?? ''}|${reply.target.mark ?? ''}` : '';
   const dockAnchor = slot && slot.key === replyKey ? slot.rect : undefined;
   // The box's height, for a new document's slot (each leader write is one).
   const dockHeight = useRef(0);
@@ -192,7 +192,7 @@ export function TaskBoardPane({ taskId, sessionId, barRightSlot, onOpenTask, onL
     frameRef.current?.contentWindow?.postMessage(msg, '*');
   }, []);
   const {
-    saveMark, saveProject, setProjectStatus, saveCheck, saveChoice, pickChoice, saveChoiceText, answerChoiceWords, saveReminder,
+    saveMark, saveMarkNote, saveProject, setProjectStatus, saveCheck, saveChoice, pickChoice, saveChoiceText, answerChoiceWords, saveReminder,
     keepNoteDraft, noteDrafts,
   } = useBoardItemSaves(
     ownerId, ownerRef, toFrame, { mergeMark, mergeProject, mergeCheck, mergeChoice, mergeReminder },
@@ -204,6 +204,7 @@ export function TaskBoardPane({ taskId, sessionId, barRightSlot, onOpenTask, onL
     section_seen: { ...(payload?.section_seen ?? {}), ...pendingSeen.current },
     composing: reply?.target.thread ?? '',
     composing_choice: reply?.target.choice ?? '',
+    composing_mark: reply?.target.mark ?? '',
   });
   const latest = useRef(frameData());
   latest.current = frameData();
@@ -213,7 +214,7 @@ export function TaskBoardPane({ taskId, sessionId, barRightSlot, onOpenTask, onL
   }, [toFrame, noteDrafts]);
   useEffect(() => { postData(); }, [
     refs, payload?.threads, payload?.marks, payload?.projects, payload?.checks, payload?.choices, payload?.reminders,
-    payload?.section_seen, seen, ownerId, reply?.target.thread, reply?.target.choice, postData,
+    payload?.section_seen, seen, ownerId, reply?.target.thread, reply?.target.choice, reply?.target.mark, postData,
   ]);
 
   const openTask = useCallback((rawId: string) => {
@@ -259,15 +260,18 @@ export function TaskBoardPane({ taskId, sessionId, barRightSlot, onOpenTask, onL
   }, [toFrame, mergeMessage]);
 
   /**
-   * A thread's "Reply…" in the frame, or a choice's "Answer in your own words…":
-   * dock the composer for it (again: focus it). A choice's box starts from the words it has.
+   * A thread's "Reply…" in the frame, a choice's "Answer in your own words…", or a
+   * note's "Dictate…": dock the composer for it (again: focus it). A choice's box
+   * starts from the words it has, a note's from the text its field holds.
    */
-  const openReply = useCallback((thread: string, title: string, task: string, choice = '') => {
+  const openReply = useCallback((thread: string, title: string, task: string, choice = '', mark?: { id: string; text: string }) => {
     const about = task ? refs[task]?.title || storeById?.get(task)?.title || '' : '';
-    log.info('board', 'reply box opened', { taskId: ownerRef.current, thread, choiceId: choice });
-    const target: BoardReplyTarget = choice
-      ? { thread: '', choice, text: latest.current.choices[choice]?.text, title, aboutTitle: about || undefined }
-      : { thread, title, aboutTitle: about || undefined };
+    log.info('board', 'reply box opened', { taskId: ownerRef.current, thread, choiceId: choice, markId: mark?.id ?? '' });
+    const target: BoardReplyTarget = mark
+      ? { thread: '', mark: mark.id, text: mark.text, title, aboutTitle: about || undefined }
+      : choice
+        ? { thread: '', choice, text: latest.current.choices[choice]?.text, title, aboutTitle: about || undefined }
+        : { thread, title, aboutTitle: about || undefined };
     setReply((cur) => ({ target, nonce: (cur?.nonce ?? 0) + 1 }));
   }, [refs, storeById]);
 
@@ -393,12 +397,13 @@ export function TaskBoardPane({ taskId, sessionId, barRightSlot, onOpenTask, onL
         const rect = r && typeof r === 'object' && n(r.top) && n(r.left) && n(r.width) && (r.width as number) > 0
           ? { top: r.top as number, left: r.left as number, width: r.width as number }
           : null;
-        setSlot({ key: `${str('thread')}|${str('choice')}`, rect });
+        setSlot({ key: `${str('thread')}|${str('choice')}|${str('mark')}`, rect });
         return;
       }
       case 'wn-board:compose':
         if (str('thread')) openReply(str('thread'), str('title'), str('task'));
         else if (str('choice')) openReply('', str('title'), str('task'), str('choice'));
+        else if (str('mark')) openReply('', str('title'), str('task'), '', { id: str('mark'), text: str('text') });
         return;
       default:
     }
@@ -523,6 +528,8 @@ export function TaskBoardPane({ taskId, sessionId, barRightSlot, onOpenTask, onL
             focusNonce={reply.nonce}
             onSend={sendFromDock}
             onAnswer={saveChoiceText}
+            onSaveNote={saveMarkNote}
+            onNoteDraft={keepNoteDraft}
             onClose={() => setReply(null)}
             anchor={dockAnchor}
             onHeight={(h) => { dockHeight.current = h; toFrame({ t: 'wn-board:dock-height', h }); }}

@@ -1,4 +1,5 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { MicField, type BoxMicHandle } from '@/components/common/BoxMic';
 import type { SkillInfo, RefFile } from '@/api/skills';
 import { fetchReferences } from '@/api/skills';
 import { formatSize } from '@/utils/format';
@@ -20,6 +21,8 @@ export function SkillDetail({ skill, onSave, onDelete, onToggle }: SkillDetailPr
   const [refs, setRefs] = useState<RefFile[]>([]);
   const [refsOpen, setRefsOpen] = useState(false);
   const [refsLoaded, setRefsLoaded] = useState(false);
+  const contentRef = useRef<HTMLTextAreaElement | null>(null);
+  const mic = useRef<BoxMicHandle | null>(null);
   // A plugin owns its skill directory and replaces the file on its next update, so the
   // server refuses the write too — offering an editor here would promise a lasting edit.
   const isReadonly = skill.source === 'workspace' || skill.source === 'plugin';
@@ -28,6 +31,7 @@ export function SkillDetail({ skill, onSave, onDelete, onToggle }: SkillDetailPr
   // Do NOT depend on skill.content — refetches after toggle/update would
   // overwrite unsaved user edits.
   useEffect(() => {
+    mic.current?.clear();
     setContent(skill.content);
     setDirty(false);
     setConfirmDelete(false);
@@ -56,6 +60,8 @@ export function SkillDetail({ skill, onSave, onDelete, onToggle }: SkillDetailPr
   const handleSave = async () => {
     setSaving(true);
     try {
+      // A transcription still on its way lands after the save, unsaved: drop it now.
+      mic.current?.clear();
       await onSave(skill.dirName, content);
       setDirty(false);
     } catch (err) {
@@ -66,6 +72,7 @@ export function SkillDetail({ skill, onSave, onDelete, onToggle }: SkillDetailPr
   };
 
   const handleReset = () => {
+    mic.current?.clear();
     setContent(skill.content);
     setDirty(false);
   };
@@ -112,13 +119,22 @@ export function SkillDetail({ skill, onSave, onDelete, onToggle }: SkillDetailPr
       </div>
 
       <div className="skill-detail-editor">
-        <textarea
-          className="skill-detail-textarea"
-          value={content}
-          onChange={(e) => { setContent(e.target.value); setDirty(true); }}
-          readOnly={isReadonly}
-          spellCheck={false}
-        />
+        <MicField
+          boxRef={contentRef}
+          text={content}
+          setText={(t) => { setContent(t); setDirty(true); }}
+          handleRef={mic}
+          disabled={isReadonly}
+        >
+          <textarea
+            ref={contentRef}
+            className="skill-detail-textarea"
+            value={content}
+            onChange={(e) => { setContent(e.target.value); setDirty(true); }}
+            readOnly={isReadonly}
+            spellCheck={false}
+          />
+        </MicField>
       </div>
 
       {!isReadonly && (

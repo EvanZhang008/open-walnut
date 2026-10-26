@@ -1,4 +1,5 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef } from 'react';
+import { MicField, type BoxMicHandle } from '@/components/common/BoxMic';
 import type { CommandDef } from '@/api/commands';
 
 interface CommandFormProps {
@@ -14,6 +15,8 @@ export function CommandForm({ command, onSave, onCancel }: CommandFormProps) {
   const [content, setContent] = useState(command?.content ?? '');
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const contentRef = useRef<HTMLTextAreaElement | null>(null);
+  const mic = useRef<BoxMicHandle | null>(null);
 
   const handleSubmit = useCallback(async (e: React.FormEvent) => {
     e.preventDefault();
@@ -34,6 +37,8 @@ export function CommandForm({ command, onSave, onCancel }: CommandFormProps) {
 
     setSaving(true);
     try {
+      // A transcription still on its way lands after the save, unsaved: drop it now.
+      mic.current?.clear();
       await onSave({
         name: name.trim(),
         content: content.trim(),
@@ -82,14 +87,17 @@ export function CommandForm({ command, onSave, onCancel }: CommandFormProps) {
       <div className="cmd-form-section">
         <div className="form-group">
           <label htmlFor="cmd-content">Content</label>
-          <textarea
-            id="cmd-content"
-            className="font-mono cmd-form-textarea"
-            value={content}
-            onChange={(e) => setContent(e.target.value)}
-            placeholder="The instruction/prompt text..."
-            rows={8}
-          />
+          <MicField boxRef={contentRef} text={content} setText={setContent} handleRef={mic}>
+            <textarea
+              ref={contentRef}
+              id="cmd-content"
+              className="font-mono cmd-form-textarea"
+              value={content}
+              onChange={(e) => setContent(e.target.value)}
+              placeholder="The instruction/prompt text..."
+              rows={8}
+            />
+          </MicField>
         </div>
       </div>
 

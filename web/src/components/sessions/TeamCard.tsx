@@ -5,9 +5,10 @@
  * conversation (from polled JSONL events) or a placeholder for unloaded tabs.
  */
 
-import { useState, useCallback, memo, useMemo } from 'react';
+import { useState, useCallback, useEffect, useRef, memo, useMemo } from 'react';
 import { useTeamStream, type TeamMember, type TeamAgentEvent } from '@/hooks/useTeamStream';
 import { wsClient } from '@/api/ws';
+import { BoxMic, type BoxMicHandle } from '@/components/common/BoxMic';
 
 interface TeamCardProps {
   sessionId: string;
@@ -87,6 +88,10 @@ function TeamChatInput({ teamName, agentName, agentStatus, onSent }: {
 }) {
   const [message, setMessage] = useState('');
   const [sending, setSending] = useState(false);
+  const box = useRef<HTMLInputElement | null>(null);
+  const mic = useRef<BoxMicHandle | null>(null);
+  // Another teammate's tab: a late transcription must not land in its box.
+  useEffect(() => () => mic.current?.clear(), [agentName]);
 
   const handleSend = useCallback(async () => {
     if (!message.trim()) return;
@@ -95,6 +100,7 @@ function TeamChatInput({ teamName, agentName, agentStatus, onSent }: {
     try {
       await wsClient.sendRpc('session:team-send', { teamName, agentName, message: text });
       setMessage('');
+      mic.current?.clear();
       // Show the sent message in the UI immediately
       onSent?.(text);
     } catch (err) {
@@ -120,6 +126,7 @@ function TeamChatInput({ teamName, agentName, agentStatus, onSent }: {
         <div className="team-chat-hint">Delivered after current turn ends</div>
       )}
       <input
+        ref={box}
         type="text"
         value={message}
         onChange={e => setMessage(e.target.value)}
@@ -128,6 +135,7 @@ function TeamChatInput({ teamName, agentName, agentStatus, onSent }: {
         disabled={sending}
         className="team-chat-input-field"
       />
+      <BoxMic boxRef={box} text={message} setText={setMessage} handleRef={mic} disabled={sending} />
       <button onClick={handleSend} disabled={!message.trim() || sending} className="team-chat-send-btn">
         Send
       </button>

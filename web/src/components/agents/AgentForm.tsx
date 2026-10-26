@@ -1,4 +1,5 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
+import { MicField, type BoxMicHandle } from '@/components/common/BoxMic';
 import type { AgentDefinition, AgentStatefulConfig, CreateAgentInput, UpdateAgentInput, ContextSourceId, ContextSourceConfig, SkillMeta } from '@/api/agents';
 
 interface AgentFormProps {
@@ -153,6 +154,10 @@ export function AgentForm({ agent, cloneFrom, availableModels = [], skillsMeta =
   const [useCustom, setUseCustom] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const descRef = useRef<HTMLInputElement | null>(null);
+  const descMic = useRef<BoxMicHandle | null>(null);
+  const promptRef = useRef<HTMLTextAreaElement | null>(null);
+  const promptMic = useRef<BoxMicHandle | null>(null);
 
   // Determine the select value: explicit custom mode, known model, or default
   const selectValue = useCustom
@@ -161,6 +166,8 @@ export function AgentForm({ agent, cloneFrom, availableModels = [], skillsMeta =
 
   useEffect(() => {
     if (!source) return;
+    descMic.current?.clear();
+    promptMic.current?.clear();
     setId(cloneFrom ? `${source.id}-copy` : source.id);
     setName(cloneFrom ? `${source.name} (Copy)` : source.name);
     setDescription(source.description ?? '');
@@ -261,6 +268,9 @@ export function AgentForm({ agent, cloneFrom, availableModels = [], skillsMeta =
     };
 
     try {
+      // A transcription still on its way lands after the save, unsaved: drop it now.
+      descMic.current?.clear();
+      promptMic.current?.clear();
       await onSave(input);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Failed to save');
@@ -312,13 +322,16 @@ export function AgentForm({ agent, cloneFrom, availableModels = [], skillsMeta =
           </div>
           <div className="form-group">
             <label htmlFor="agent-desc">Description (optional)</label>
-            <input
-              id="agent-desc"
-              type="text"
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              placeholder="What does this agent do?"
-            />
+            <MicField inline boxRef={descRef} text={description} setText={setDescription} handleRef={descMic}>
+              <input
+                ref={descRef}
+                id="agent-desc"
+                type="text"
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                placeholder="What does this agent do?"
+              />
+            </MicField>
           </div>
         </div>
 
@@ -437,14 +450,17 @@ export function AgentForm({ agent, cloneFrom, availableModels = [], skillsMeta =
         <div className="agent-form-section">
           <div className="form-group">
             <label htmlFor="agent-prompt">System Prompt (optional)</label>
-            <textarea
-              id="agent-prompt"
-              value={systemPrompt}
-              onChange={(e) => setSystemPrompt(e.target.value)}
-              placeholder="Custom instructions for this agent..."
-              rows={6}
-              style={{ resize: 'vertical', fontFamily: 'var(--font-mono)' }}
-            />
+            <MicField boxRef={promptRef} text={systemPrompt} setText={setSystemPrompt} handleRef={promptMic}>
+              <textarea
+                ref={promptRef}
+                id="agent-prompt"
+                value={systemPrompt}
+                onChange={(e) => setSystemPrompt(e.target.value)}
+                placeholder="Custom instructions for this agent..."
+                rows={6}
+                style={{ resize: 'vertical', fontFamily: 'var(--font-mono)' }}
+              />
+            </MicField>
           </div>
         </div>
 

@@ -1,0 +1,34 @@
+/* The composer's mic in a rich editor (EditorMic inside NotesEditor).
+   A zero-height row after the document that sticks to the bottom of whatever
+   scrolls the editor: on a short note the mic sits at its bottom-right corner,
+   on a long one it stays in reach at the bottom of the visible part, and it
+   never takes a line of the document's own layout. */
+.editor-mic-dock {
+  position: sticky;
+  bottom: 6px;
+  height: 0;
+  flex-shrink: 0;
+  pointer-events: none;
+  z-index: 3;
+}
+.editor-mic-dock .editor-mic {
+  position: absolute;
+  right: 4px;
+  bottom: 0;
+  display: inline-flex;
+  align-items: center;
+  pointer-events: auto;
+  border-radius: 999px;
+  background: var(--bg);
+  box-shadow: 0 0 0 1px var(--border);
+  opacity: 0.75;
+  transition: opacity 0.15s ease;
+}
+.editor-mic-dock .editor-mic:hover,
+.editor-mic-dock .editor-mic:focus-within,
+.editor-mic-dock .editor-mic:has(.mic-recording) {
+  opacity: 1;
+}
+.editor-mic-dock .editor-mic .mic-btn { min-width: 28px; height: 28px; }
+/* Room under the last line, so text that ends at the right edge never sits under the mic. */
+:has(> .editor-mic-dock) .ProseMirror { padding-bottom: 36px; }

@@ -22,8 +22,7 @@ import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type K
 import type { CardGrown } from '@/utils/thread-card';
 import type { ThreadViewStatus } from '@/utils/thread-meta';
 import { ICON_COLLAPSE, ICON_EXPAND } from '@/components/common/Icons';
-import { MicButton } from '@/components/common/MicButton';
-import { useBoxDictation } from '@/hooks/useBoxDictation';
+import { BoxMic, type BoxMicHandle } from '@/components/common/BoxMic';
 import { ThreadStatusWord } from './ThreadStatusWord';
 import { ThreadCloseIcon } from './ThreadIcons';
 import '@/styles/thread-card.css';
@@ -105,13 +104,7 @@ export const ThreadCommentCard = memo(function ThreadCommentCard(p: ThreadCommen
   const [sending, setSending] = useState(false);
   const boxRef = useRef<HTMLTextAreaElement | null>(null);
   // The question is dictated the way the composer's message is: into this box.
-  const dictation = useBoxDictation(boxRef, text, setText);
-  const micControl = useRef<{ discard: () => void } | null>(null);
-  // Only the mic itself starts a recording: its chevron and menu sit in the same wrapper.
-  const onMicPress = (target: EventTarget) => {
-    const mic = target instanceof Element ? target.closest('.mic-btn') : null;
-    if (mic && !mic.classList.contains('mic-recording')) dictation.started();
-  };
+  const mic = useRef<BoxMicHandle | null>(null);
   const bodyRef = useRef<HTMLDivElement | null>(null);
   const cardRef = useRef<HTMLDivElement | null>(null);
   const initialRef = useRef(p.initialText);
@@ -129,8 +122,7 @@ export const ThreadCommentCard = memo(function ThreadCommentCard(p: ThreadCommen
   // instead of gliding there from small (autoGrow below).
   useLayoutEffect(() => {
     // A recording still running belongs to the question left: it must not land here.
-    micControl.current?.discard();
-    dictation.reset();
+    mic.current?.clear();
     // A grow's scroll record belongs to the question left.
     grewScroll.current = [];
     setText(p.draft ? initialRef.current ?? '' : '');
@@ -169,8 +161,6 @@ export const ThreadCommentCard = memo(function ThreadCommentCard(p: ThreadCommen
     return () => window.clearTimeout(t);
   }, [expanded, p.canAsk]);
   useEffect(() => () => restoreGrowScroll(grewScroll.current), []);
-  // A card closed mid-recording takes its recording with it: nothing else could stop it.
-  useEffect(() => () => micControl.current?.discard(), []);
 
   // Placed below a passage near the bottom of the box, the card would hang
   // under the fold: the smallest scroll that shows it whole (none when it is).
@@ -207,8 +197,7 @@ export const ThreadCommentCard = memo(function ThreadCommentCard(p: ThreadCommen
       const ok = await p.onSend(t);
       if (ok) {
         // A transcription landing after the send would repeat what was just sent.
-        micControl.current?.discard();
-        dictation.reset();
+        mic.current?.clear();
         setText('');
         pinned.current = true;
       }
@@ -331,20 +320,7 @@ export const ThreadCommentCard = memo(function ThreadCommentCard(p: ThreadCommen
           onChange={(e) => setText(e.target.value)}
           onKeyDown={onKeyDown}
         />
-        <span
-          className="thread-card-mic"
-          onPointerDownCapture={(e) => onMicPress(e.target)}
-          onKeyDownCapture={(e) => { if (e.key === 'Enter' || e.key === ' ') onMicPress(e.target); }}
-        >
-        <MicButton
-          size="sm"
-          onTranscribe={dictation.onTranscribe}
-          onDraft={dictation.onDraft}
-          onRefine={dictation.onRefine}
-          controlRef={micControl}
-          disabled={!p.canAsk || sending}
-        />
-        </span>
+        <BoxMic className="thread-card-mic" boxRef={boxRef} text={text} setText={setText} handleRef={mic} disabled={!p.canAsk || sending} />
         <button
           type="button"
           className="thread-card-send"

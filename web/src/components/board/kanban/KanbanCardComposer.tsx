@@ -12,6 +12,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { wsClient } from '@/api/ws';
 import { log } from '@/utils/log';
+import { BoxMic, type BoxMicHandle } from '@/components/common/BoxMic';
 import type { KanbanCardComposerProps } from './kanban-contract';
 import { cutTitle } from './kanban-changes-model';
 
@@ -43,6 +44,7 @@ export function KanbanCardComposer({ card, onSent, onClose }: KanbanCardComposer
   const [sending, setSending] = useState(false);
   const [error, setError] = useState('');
   const ref = useRef<HTMLTextAreaElement>(null);
+  const mic = useRef<BoxMicHandle | null>(null);
   useEffect(() => { ref.current?.focus(); }, []);
 
   const send = async () => {
@@ -58,6 +60,7 @@ export function KanbanCardComposer({ card, onSent, onClose }: KanbanCardComposer
       log.info('board', 'kanban card message sent', { cardTaskId: card.taskId, sessionId, ms: Date.now() - started });
       setSending(false);
       setText('');
+      mic.current?.clear();
       onSent();
     } catch (err) {
       log.warn('board', 'kanban card message failed', { cardTaskId: card.taskId, sessionId, error: String(err) });
@@ -86,6 +89,7 @@ export function KanbanCardComposer({ card, onSent, onClose }: KanbanCardComposer
             if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send(); }
           }}
         />
+        <BoxMic boxRef={ref} text={text} setText={(v) => { setText(v); if (error) setError(''); }} handleRef={mic} disabled={sending} />
         {sending ? <span className="kanban-spinner" data-testid="kanban-card-composer-sending" aria-label="Sending" /> : (
           <button
             type="button" className="kanban-text-btn kanban-composer-send" data-testid="kanban-card-composer-send"

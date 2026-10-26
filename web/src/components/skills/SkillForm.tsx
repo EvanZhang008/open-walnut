@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
+import { MicField, type BoxMicHandle } from '@/components/common/BoxMic';
 
 interface SkillFormProps {
   onSave: (input: { dirName: string; content: string; target: 'claude' | 'walnut' }) => Promise<void>;
@@ -21,6 +22,8 @@ export function SkillForm({ onSave, onCancel }: SkillFormProps) {
   const [target, setTarget] = useState<'claude' | 'walnut'>('claude');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const contentRef = useRef<HTMLTextAreaElement | null>(null);
+  const mic = useRef<BoxMicHandle | null>(null);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -35,6 +38,8 @@ export function SkillForm({ onSave, onCancel }: SkillFormProps) {
     setSaving(true);
     setError('');
     try {
+      // A transcription still on its way lands after the save, unsaved: drop it now.
+      mic.current?.clear();
       await onSave({ dirName: dirName.trim(), content, target });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to create skill');
@@ -70,13 +75,16 @@ export function SkillForm({ onSave, onCancel }: SkillFormProps) {
       </div>
       <div className="skill-form-section">
         <label className="skill-form-label">SKILL.md Content</label>
-        <textarea
-          className="skill-form-textarea"
-          value={content}
-          onChange={(e) => setContent(e.target.value)}
-          rows={12}
-          spellCheck={false}
-        />
+        <MicField boxRef={contentRef} text={content} setText={setContent} handleRef={mic}>
+          <textarea
+            ref={contentRef}
+            className="skill-form-textarea"
+            value={content}
+            onChange={(e) => setContent(e.target.value)}
+            rows={12}
+            spellCheck={false}
+          />
+        </MicField>
       </div>
       <div className="skill-form-actions">
         <button type="button" className="btn" onClick={onCancel}>Cancel</button>

@@ -1,6 +1,6 @@
-import { useState, type FormEvent } from 'react';
+import { useRef, useState, type FormEvent } from 'react';
 import type { Task, TaskPriority } from '@open-walnut/core';
-import { MicButton } from '../common/MicButton';
+import { BoxMic, type BoxMicHandle } from '../common/BoxMic';
 import { useShowPriority } from '@/hooks/useShowPriority';
 
 export interface TaskFormData {
@@ -26,10 +26,16 @@ export function TaskForm({ initial, projects, onSubmit, onCancel }: TaskFormProp
   const [project, setProject] = useState(initial?.project ?? '');
   const [dueDate, setDueDate] = useState(initial?.due_date ?? '');
   const [note, setNote] = useState('');
+  const titleBox = useRef<HTMLInputElement | null>(null);
+  const titleMic = useRef<BoxMicHandle | null>(null);
+  const noteBox = useRef<HTMLTextAreaElement | null>(null);
+  const noteMic = useRef<BoxMicHandle | null>(null);
 
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault();
     if (!title.trim()) return;
+    titleMic.current?.clear();
+    noteMic.current?.clear();
     onSubmit({
       title: title.trim(),
       priority,
@@ -48,6 +54,7 @@ export function TaskForm({ initial, projects, onSubmit, onCancel }: TaskFormProp
           <label htmlFor="task-title">Title</label>
           <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
             <input
+              ref={titleBox}
               id="task-title"
               type="text"
               value={title}
@@ -57,7 +64,7 @@ export function TaskForm({ initial, projects, onSubmit, onCancel }: TaskFormProp
               autoFocus
               style={{ flex: 1 }}
             />
-            <MicButton size="sm" onTranscribe={(text) => setTitle(title ? title + ' ' + text : text)} />
+            <BoxMic boxRef={titleBox} text={title} setText={setTitle} handleRef={titleMic} />
           </div>
         </div>
 
@@ -105,6 +112,7 @@ export function TaskForm({ initial, projects, onSubmit, onCancel }: TaskFormProp
             <label htmlFor="task-note">Note</label>
             <div style={{ display: 'flex', gap: 6, alignItems: 'flex-start' }}>
               <textarea
+                ref={noteBox}
                 id="task-note"
                 value={note}
                 onChange={(e) => setNote(e.target.value)}
@@ -112,7 +120,7 @@ export function TaskForm({ initial, projects, onSubmit, onCancel }: TaskFormProp
                 rows={3}
                 style={{ flex: 1 }}
               />
-              <MicButton size="sm" onTranscribe={(text) => setNote(note ? note + ' ' + text : text)} />
+              <BoxMic boxRef={noteBox} text={note} setText={setNote} handleRef={noteMic} />
             </div>
           </div>
         )}

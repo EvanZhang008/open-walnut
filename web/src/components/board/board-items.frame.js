@@ -187,9 +187,15 @@
       // Compact: one "Add note" button until the note has text.
       this.innerHTML = '<button type="button" class="wn-mark-note-toggle" aria-expanded="false">Add note</button>'
         + '<textarea class="wn-mark-note" rows="1" placeholder="Note for the leader" aria-label="Note for the leader" hidden></textarea>'
+        + '<button type="button" class="wn-mark-voice" aria-pressed="false"'
+        + ' title="Write the note in Walnut\'s composer, voice included">Dictate…</button>'
         + '<span class="wn-saved" aria-live="polite"></span>';
       this.wnNote = this.querySelector('.wn-mark-note');
       this.wnNoteToggle = this.querySelector('.wn-mark-note-toggle');
+      this.wnVoice = this.querySelector('.wn-mark-voice');
+      // The frame has no microphone: a trusted click asks the host to dock its
+      // composer (voice included) over a slot here, as a thread's "Reply…" does.
+      this.wnVoice.addEventListener('click', function (e) { e.preventDefault(); if (trusted(e)) self.wnCompose(); });
       this.wnStatus = this.querySelector('.wn-saved');
       this.wnSaveSeq = 0;
       this.wnNoteOpen = false;
@@ -212,8 +218,34 @@
         self.wnTimer = setTimeout(function () { self.wnSave(); }, 500);
       });
     }
-    /** The note shows while it has text or the user opened it. */
+    /**
+     * "Dictate…": the host docks its composer for this note, starting from the
+     * text here, and owns the text from then on: it saves the composer's words,
+     * or hands them back as the note's draft when the box closes. What is typed
+     * here and not saved yet goes first, so the host's save is the last one.
+     */
+    wnCompose() {
+      if (!this.wnId || !kit.flags.hasData) return;
+      if (this.wnDirty) this.wnSave();
+      this.wnDirty = false;
+      // Back from the box, the field shows only if the note has text (a cleared one is "Add note" again).
+      this.wnNoteOpen = false;
+      kit.send({ t: 'wn-board:compose', mark: this.wnId, text: this.wnNote.value, title: 'Note for the leader' });
+    }
+    /** The note shows while it has text or the user opened it; while the host's composer is docked here, the slot shows instead. */
     wnPaintNote() {
+      var composing = !!this.wnId && kit.flags.composingMark === this.wnId;
+      var slot = this.querySelector('.wn-dock-slot');
+      if (composing && !slot) { this.wnStatus.insertAdjacentHTML('beforebegin', kit.slotHtml()); kit.trackSlot(); }
+      if (!composing && slot) slot.remove();
+      if (this.wnVoice.hidden !== composing) this.wnVoice.hidden = composing;
+      this.wnVoice.setAttribute('aria-pressed', composing ? 'true' : 'false');
+      this.wnVoice.disabled = !kit.flags.hasData;
+      if (composing) {
+        if (!this.wnNote.hidden) this.wnNote.hidden = true;
+        if (!this.wnNoteToggle.hidden) this.wnNoteToggle.hidden = true;
+        return;
+      }
       var shown = this.wnNoteOpen || !!this.wnNote.value || document.activeElement === this.wnNote;
       if (this.wnNote.hidden !== !shown) this.wnNote.hidden = !shown;
       if (this.wnNoteToggle.hidden !== shown) this.wnNoteToggle.hidden = shown;
@@ -247,8 +279,11 @@
       });
     }
     wnRender() {
+      // The host's composer owns the note while it is docked here: its words come
+      // back (saved, or as a kept draft this saves) when it closes.
+      if (kit.flags.composingMark === this.wnId) { this.wnPaintNote(); return; }
       // What the user is typing (or has not saved yet) wins over what arrives.
-      if (this.wnDirty || this.wnSaving || document.activeElement === this.wnNote) return;
+      if (this.wnDirty || this.wnSaving || document.activeElement === this.wnNote) { this.wnPaintNote(); return; }
       var mark = state.marks[this.wnId];
       var note = mark && mark.note ? mark.note : '';
       // Typed in the document before this one and not saved yet: shown again, and saved now.

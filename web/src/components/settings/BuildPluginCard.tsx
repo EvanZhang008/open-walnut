@@ -10,7 +10,7 @@
  * a replica has no CLI and no daemon, so "Build it" there would mint a task
  * plus a session that can never run.
  */
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { quickStartSession } from '@/api/sessions'
 import { fetchInstallDir, fetchIsCloudReplica } from '@/api/config'
@@ -18,7 +18,9 @@ import { openSessionOnHome } from '@/utils/open-session'
 import { SettingsGroup, SettingsRow } from './SettingsSection'
 import { SettingsButton } from './inputs/SettingsButton'
 import { BUILD_CWD, buildPrompt, PLUGIN_CREATE_COMMAND } from './build-plugin-prompt'
+import { MicField, type BoxMicHandle } from '@/components/common/BoxMic'
 import '@/styles/settings-sections-addons.css'
+import '@/styles/settings-mic.css'
 
 export { PLUGIN_CREATE_COMMAND }
 
@@ -31,6 +33,8 @@ export function BuildPluginCard({ showGuideLink = true, showManual = true }: {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [cloud, setCloud] = useState(false)
+  const requestRef = useRef<HTMLInputElement | null>(null)
+  const mic = useRef<BoxMicHandle | null>(null)
   useEffect(() => { void fetchIsCloudReplica().then(setCloud) }, [])
 
   const start = async () => {
@@ -46,6 +50,7 @@ export function BuildPluginCard({ showGuideLink = true, showManual = true }: {
         message: buildPrompt(request, installDir),
       })
       setRequest('')
+      mic.current?.clear()
       // Land on the session column so the user watches it build.
       if (result.sessionId) openSessionOnHome(result.sessionId, navigate)
       else navigate('/')
@@ -83,16 +88,27 @@ export function BuildPluginCard({ showGuideLink = true, showManual = true }: {
         error={error ?? undefined}
         control={cloud ? undefined : (
           <span className="settings-addons-inline build-plugin-form">
-            <input
-              id="build-plugin-request"
-              type="text"
-              className="settings-input settings-input--long"
-              value={request}
-              onChange={(e) => setRequest(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); void start() } }}
-              placeholder="What should it do? For example a Pomodoro timer"
-              data-testid="build-plugin-request"
-            />
+            <MicField
+              inline
+              fieldClassName="settings-mic-field"
+              boxRef={requestRef}
+              text={request}
+              setText={setRequest}
+              handleRef={mic}
+              disabled={busy}
+            >
+              <input
+                ref={requestRef}
+                id="build-plugin-request"
+                type="text"
+                className="settings-input settings-input--long"
+                value={request}
+                onChange={(e) => setRequest(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); void start() } }}
+                placeholder="What should it do? For example a Pomodoro timer"
+                data-testid="build-plugin-request"
+              />
+            </MicField>
             <SettingsButton
               variant="primary"
               busy={busy}

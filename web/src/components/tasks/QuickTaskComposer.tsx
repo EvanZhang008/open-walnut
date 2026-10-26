@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { quickParseTask, type QuickTaskParse } from '@/api/tasks';
 import { useQuickParseEnabled, ensureQuickParseLoaded } from '@/hooks/useQuickParse';
 import { QuickTaskConfirm, type ConfirmDraft, type ConfirmField } from './QuickTaskConfirm';
+import { MicField, type BoxMicHandle } from '@/components/common/BoxMic';
+import '@/styles/task-mic.css';
 
 /** Built-in tier name or a custom tier id (`ct_*`). */
 type PinTier = string;
@@ -59,6 +61,7 @@ export function QuickTaskComposer({ open, onClose, onCreate, projectOptions, ini
 
   const popoverRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const mic = useRef<BoxMicHandle | null>(null);
   const textRef = useRef(text);
   const draftRef = useRef(draft);
   const submittingRef = useRef(false);
@@ -72,6 +75,7 @@ export function QuickTaskComposer({ open, onClose, onCreate, projectOptions, ini
   submittingRef.current = submitting;
 
   const reset = useCallback(() => {
+    mic.current?.clear();
     requestNonceRef.current += 1;
     userEditedRef.current = new Set();
     textRef.current = '';
@@ -270,6 +274,8 @@ export function QuickTaskComposer({ open, onClose, onCreate, projectOptions, ini
     }
     if (event.key === 'Enter') {
       if ((event.target as HTMLElement).tagName === 'BUTTON') return;
+      // The mic's own menu (its chevron, its vocabulary box) takes its own Enter.
+      if ((event.target as HTMLElement).closest('.box-mic')) return;
       event.preventDefault();
       create(draftRef.current);
       return;
@@ -294,16 +300,19 @@ export function QuickTaskComposer({ open, onClose, onCreate, projectOptions, ini
       <div className="qtc-header">
         <span className="qtc-header-title">Add a task</span>
       </div>
-      <input
-        ref={inputRef}
-        className="qtc-input"
-        value={text}
-        maxLength={500}
-        autoFocus={open}
-        disabled={submitting}
-        placeholder="✦ One sentence — AI fills the form below…"
-        onChange={(event) => handleTextChange(event.target.value)}
-      />
+      <MicField inline fieldClassName="qtc-mic-field" boxRef={inputRef} text={text} handleRef={mic} disabled={submitting}
+        setText={(value) => handleTextChange(value.slice(0, 500))}>
+        <input
+          ref={inputRef}
+          className="qtc-input"
+          value={text}
+          maxLength={500}
+          autoFocus={open}
+          disabled={submitting}
+          placeholder="✦ One sentence — AI fills the form below…"
+          onChange={(event) => handleTextChange(event.target.value)}
+        />
+      </MicField>
       <div className="qtc-input-status" aria-live="polite">
         {text.trim() && parseInFlight && <span className="qtc-parsing">✦ Analyzing…</span>}
         {text.trim() && !parseInFlight && draft.aiFields.size > 0 && (

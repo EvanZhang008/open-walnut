@@ -2,6 +2,7 @@ import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, use
 import { staleBannerText } from './stale-banner-text';
 import { scrollDebugEnabled } from '@/utils/scroll-debug';
 import { NO_AUTOFILL_PROPS } from '@/utils/no-autofill';
+import { BoxMic, type BoxMicHandle } from '@/components/common/BoxMic';
 import { useSessionHistory } from '@/hooks/useSessionHistory';
 import { useSessionStream, type StreamingBlock } from '@/hooks/useSessionStream';
 import { useEvent } from '@/hooks/useWebSocket';
@@ -291,6 +292,8 @@ function EditableQueuedMessage({ message, onSave, onCancel }: {
 }) {
   const [value, setValue] = useState(message);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const mic = useRef<BoxMicHandle | null>(null);
+  const save = () => { mic.current?.clear(); onSave(value.trim() || message); };
 
   useEffect(() => { textareaRef.current?.focus(); }, []);
 
@@ -302,7 +305,7 @@ function EditableQueuedMessage({ message, onSave, onCancel }: {
         onChange={(e) => setValue(e.target.value)}
         onKeyDown={(e) => {
           if (e.nativeEvent.isComposing || e.keyCode === 229) return;
-          if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); onSave(value.trim() || message); }
+          if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); save(); }
           if (e.key === 'Escape') onCancel();
         }}
         className="session-msg-edit-textarea"
@@ -310,7 +313,8 @@ function EditableQueuedMessage({ message, onSave, onCancel }: {
         {...NO_AUTOFILL_PROPS}
       />
       <div className="session-msg-edit-actions">
-        <button onClick={() => onSave(value.trim() || message)} className="btn btn-sm btn-primary">Save</button>
+        <BoxMic boxRef={textareaRef} text={value} setText={setValue} handleRef={mic} />
+        <button onClick={save} className="btn btn-sm btn-primary">Save</button>
         <button onClick={onCancel} className="btn btn-sm">Cancel</button>
       </div>
     </div>

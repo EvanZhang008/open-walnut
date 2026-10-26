@@ -1,0 +1,4 @@
+/* The routine form's mic: the instructions box's footer row holds it, beside the model picker. */
+.routine-instructions-footer { align-items: center; gap: 6px; }
+/* The mic's bubbles and menu rise above it, over the box's top edge when they are tall. */
+.form-group .routine-instructions-box { overflow: visible; }

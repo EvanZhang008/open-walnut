@@ -1,0 +1,15 @@
+/* The composer's mic beside a plain text box (BoxMic / MicField). */
+.box-mic { display: inline-flex; align-items: center; flex-shrink: 0; }
+
+/* MicField: the mic inside the box's right edge. */
+.mic-field { position: relative; display: block; min-width: 0; }
+.mic-field > textarea,
+.mic-field > input { width: 100%; box-sizing: border-box; padding-right: 36px; }
+/* Block, so the wrapper is exactly the box: an inline-block textarea leaves a
+   baseline gap under it and the mic, placed from the wrapper's bottom, sits on the border. */
+.mic-field > textarea { display: block; padding-right: 48px; }
+.mic-field-mic { position: absolute; right: 4px; }
+/* Left of the textarea's resize grip, which owns the corner. */
+.mic-field-area .mic-field-mic { bottom: 6px; right: 14px; }
+.mic-field-inline .mic-field-mic { top: 50%; transform: translateY(-50%); }
+.mic-field-mic .mic-btn { min-width: 28px; height: 28px; }

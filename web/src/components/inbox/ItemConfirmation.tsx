@@ -7,6 +7,8 @@ import { itemError } from '@/api/human-inbox-items';
 import { ItemOperationDetails } from './ItemOperationDetails';
 import { PHASE_TEXT, mailDateText } from './item-receipt-model';
 import { useItemDraft } from './item-drafts';
+import { MicField, type BoxMicHandle } from '@/components/common/BoxMic';
+import '@/styles/inbox-mic.css';
 
 export function ItemConfirmation({ draftKey, item, actionId, target, retry, again, submitting, prepare, execute, onClose, onFind, onNavigate }: {
   draftKey: string; item: InboxLetterItem; actionId: string; target?: InboxTaskCandidate; retry?: InboxItemReceipt; again?: boolean; submitting: boolean;
@@ -17,6 +19,8 @@ export function ItemConfirmation({ draftKey, item, actionId, target, retry, agai
   const presence = useSyncExternalStore(subscribeLeaderPresence, getLeaderPresence, getLeaderPresence);
   const root = useRef<HTMLDivElement>(null);
   const goalId = useId();
+  const goalBox = useRef<HTMLTextAreaElement | null>(null);
+  const goalMic = useRef<BoxMicHandle | null>(null);
   const generation = useRef(0);
   const acknowledgedExisting = useRef(false);
   const field = `confirm:${JSON.stringify([actionId, !!retry, !!again])}:`;
@@ -51,6 +55,7 @@ export function ItemConfirmation({ draftKey, item, actionId, target, retry, agai
         setResponse(next); setPlan(next.plan); setChecked(true);
         if (next.existingWork?.status === 'confirmed' && !acknowledgedExisting.current && !retry) {
           acknowledgedExisting.current = true;
+          goalMic.current?.clear();
           setGoal(next.existingWork.goal ?? '');
         }
       }).catch(err => { if (!abort.signal.aborted && gen === generation.current) setError(itemError(err).message); })
@@ -64,6 +69,8 @@ export function ItemConfirmation({ draftKey, item, actionId, target, retry, agai
   async function confirm() {
     if (!plan || submitting || submitted) return;
     setSubmitted(true); setError('');
+    // The plan is frozen now: a transcription still on its way must not edit the goal.
+    goalMic.current?.clear();
     try { await execute(plan, again ? 'read' : 'task'); }
     catch (err) { setError(itemError(err).message); setPlan(undefined); setSubmitted(false); }
   }
@@ -92,8 +99,10 @@ export function ItemConfirmation({ draftKey, item, actionId, target, retry, agai
           className="hib-row-btn" disabled={submitting || submitted} onClick={() => change(setProject, p.name)}>{p.name || 'Inbox'}</button>)}
       </div>
     </>}
-    {!again && <label htmlFor={goalId}>Work goal<textarea id={goalId} aria-label="Work goal" rows={3} value={goal} readOnly={submitting || submitted || !!retry || workLocked}
-      onChange={e => change(setGoal, e.target.value)} /></label>}
+    {!again && <label htmlFor={goalId}>Work goal<MicField boxRef={goalBox} text={goal} setText={v => change(setGoal, v)} handleRef={goalMic}
+      disabled={submitting || submitted || !!retry || workLocked}>
+      <textarea ref={goalBox} id={goalId} aria-label="Work goal" rows={3} value={goal} readOnly={submitting || submitted || !!retry || workLocked}
+        onChange={e => change(setGoal, e.target.value)} /></MicField></label>}
     {!again && !goal.trim() && <p>Add a work goal before continuing.</p>}
     <p>{again ? 'Set this email to read again. The previous receipt is kept.'
       : retryCreate ? 'Retry the original task identity and work goal. A second task will not be created.'

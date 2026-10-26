@@ -45,10 +45,12 @@ import { ResolvedImage } from './extensions/resolved-image';
 import type { ResolvedImageStorage } from './extensions/resolved-image';
 import { NotesBubbleMenu } from './NotesBubbleMenu';
 import { TagAutocomplete } from './TagAutocomplete';
+import { EditorMic } from '@/components/common/EditorMic';
 import type { TagSuggestion } from './TagAutocomplete';
 import type { NoteListItem } from '@/api/notes-v2';
 import type { Task } from '@open-walnut/core';
 import './notes-editor.css';
+import './editor-mic.css';
 
 interface NotesEditorProps {
   content: string;
@@ -118,6 +120,12 @@ interface NotesEditorProps {
    * can drive it. The editor is built once per mount, so this fires once.
    */
   onEditorReady?: (editor: Editor | null) => void;
+  /**
+   * The composer's mic at the editor's bottom-right corner (on by default for an
+   * editable editor; never shown read only). Dictated words go through editor
+   * transactions, so every host's save path takes them like typed text.
+   */
+  dictation?: boolean;
 }
 
 /**
@@ -180,7 +188,7 @@ function isUrl(text: string): boolean {
   }
 }
 
-export function NotesEditor({ content, readOnly = false, onDirty, placeholder, className, autoFocus, tasks, focusedTaskId, onTaskClick, enableWikiLinks, wikiLinkNotes, onWikiLinkClick, enableBlockTools, onAskSelection, onAskHere, tagSuggestions, attachmentNotePath, imageBaseDir, imageHost, imageVersion, onEditorReady }: NotesEditorProps) {
+export function NotesEditor({ content, readOnly = false, onDirty, placeholder, className, autoFocus, tasks, focusedTaskId, onTaskClick, enableWikiLinks, wikiLinkNotes, onWikiLinkClick, enableBlockTools, onAskSelection, onAskHere, tagSuggestions, attachmentNotePath, imageBaseDir, imageHost, imageVersion, onEditorReady, dictation = true }: NotesEditorProps) {
   const isExternalUpdate = useRef(false);
   const editorRef = useRef<Editor | null>(null);
   /**
@@ -668,6 +676,11 @@ export function NotesEditor({ content, readOnly = false, onDirty, placeholder, c
         // note-body: the note's own text (its inline links are prose, not controls).
         className={`notes-editor note-body ${className ?? ''}`}
       />
+      {editor && dictation && !readOnly && (
+        <div className="editor-mic-dock">
+          <EditorMic editor={editor} />
+        </div>
+      )}
       {/* Selection format toolbar (opt-in per surface). */}
       {editor && enableBlockTools && !readOnly && <NotesBubbleMenu editor={editor} onAsk={onAskSelection} onAskHere={onAskHere} />}
       {editor && slashState.phase !== 'closed' && (

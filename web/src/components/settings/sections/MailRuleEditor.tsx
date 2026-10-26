@@ -19,6 +19,8 @@ import {
 import type { MailAccountDto } from '@/api/mail';
 import { menuPlacementStyle, useMenuPlacement } from '@/hooks/useMenuPlacement';
 import { SettingsButton } from '../inputs/SettingsButton';
+import { MicField, type BoxMicHandle } from '@/components/common/BoxMic';
+import '@/styles/settings-mic.css';
 import {
   FIELD_LABELS,
   FIELD_ORDER,
@@ -132,6 +134,8 @@ export function MailRuleEditor(props: MailRuleEditorProps) {
   const [skipInbox, setSkipInbox] = useState(props.initial?.skipInbox === true);
   const [preview, setPreview] = useState<{ text: string; error?: string } | null>(null);
   const noteId = useId();
+  const noteRef = useRef<HTMLInputElement | null>(null);
+  const noteMic = useRef<BoxMicHandle | null>(null);
   const dirtyRef = useRef(false);
   const markDirty = () => { if (!dirtyRef.current) { dirtyRef.current = true; props.onDirty(true); } };
 
@@ -217,6 +221,7 @@ export function MailRuleEditor(props: MailRuleEditorProps) {
     setAttempted(true);
     if (!canSave) return;
     const trimmed = note.trim();
+    noteMic.current?.clear();
     props.onSave({
       when,
       then: target,
@@ -269,8 +274,11 @@ export function MailRuleEditor(props: MailRuleEditorProps) {
         <span>Keep out of the Inbox: Walnut moves this mail to Archive as it arrives</span>
       </label>
       <label className="mail-rule-editor-head" htmlFor={noteId}>Note</label>
-      <input id={noteId} type="text" className="settings-input" maxLength={300} value={note} data-testid="mail-rule-note"
-        placeholder="Optional: why this rule exists" onChange={(event) => { markDirty(); setNote(event.target.value); }} />
+      <MicField inline fieldClassName="settings-mic-field" boxRef={noteRef} text={note} handleRef={noteMic} disabled={props.saving}
+        setText={(t) => { markDirty(); setNote(t.slice(0, 300)); }}>
+        <input ref={noteRef} id={noteId} type="text" className="settings-input" maxLength={300} value={note} data-testid="mail-rule-note"
+          placeholder="Optional: why this rule exists" onChange={(event) => { markDirty(); setNote(event.target.value); }} />
+      </MicField>
       {otherErrors.map((one, index) => <p key={index} className="mail-rule-field-error" role="alert">{one.message}</p>)}
       <p className="mail-rule-preview" data-testid="mail-rule-preview" aria-live="polite">
         {preview?.error ? <span className="mail-rule-field-error">{preview.error}</span> : preview?.text ?? ''}

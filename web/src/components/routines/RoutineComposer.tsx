@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
+import { MicField, type BoxMicHandle } from '@/components/common/BoxMic';
 import { draftRoutine } from '@/api/routines';
 import type { CreateRoutineInput } from '@/api/routines';
 
@@ -33,6 +34,8 @@ export function RoutineComposer({ onDraft, onDraftFailed, onManual }: RoutineCom
   const [text, setText] = useState('');
   const [drafting, setDrafting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const boxRef = useRef<HTMLTextAreaElement | null>(null);
+  const mic = useRef<BoxMicHandle | null>(null);
 
   async function handleDraft() {
     if (!text.trim() || drafting) return;
@@ -40,6 +43,7 @@ export function RoutineComposer({ onDraft, onDraftFailed, onManual }: RoutineCom
     setError(null);
     try {
       const draft = await draftRoutine(text);
+      mic.current?.clear();
       onDraft(draft);
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Draft failed';
@@ -52,24 +56,27 @@ export function RoutineComposer({ onDraft, onDraftFailed, onManual }: RoutineCom
 
   return (
     <div className="routine-composer">
-      <textarea
-        className="routine-composer-input"
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) handleDraft();
-        }}
-        placeholder="What do you want automated?"
-        rows={2}
-        disabled={drafting}
-      />
+      <MicField boxRef={boxRef} text={text} setText={setText} handleRef={mic} disabled={drafting}>
+        <textarea
+          ref={boxRef}
+          className="routine-composer-input"
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) handleDraft();
+          }}
+          placeholder="What do you want automated?"
+          rows={2}
+          disabled={drafting}
+        />
+      </MicField>
       <div className="routine-composer-templates">
         {TEMPLATES.map((t) => (
           <button
             key={t.label}
             type="button"
             className="routine-template-chip"
-            onClick={() => setText(t.text)}
+            onClick={() => { mic.current?.clear(); setText(t.text); }}
             disabled={drafting}
           >
             {t.label}

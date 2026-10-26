@@ -8,6 +8,7 @@
 import { useEffect, useRef, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { useModalOverlay } from '@/hooks/useModalOverlay';
+import { MicField, type BoxMicHandle } from '@/components/common/BoxMic';
 import type { TransferOptions } from '@/api/transfer';
 import {
   blockedReason, effectiveDir, hostKindLabel, hostLabel, sourceLine, submitBlocker, withEngine,
@@ -64,6 +65,8 @@ function Group({ label, children, wide }: { label: string; children: ReactNode; 
 export function TransferDialog({ options, loadError, form, busy, error, onChange, onSubmit, onClose, onRetryLoad }: Props) {
   useModalOverlay(onClose);
   const customRef = useRef<HTMLInputElement>(null);
+  const messageBox = useRef<HTMLTextAreaElement | null>(null);
+  const messageMic = useRef<BoxMicHandle | null>(null);
   const source = options?.source ?? null;
   const dir: DirChoice | null = form && source ? effectiveDir(form, source) : null;
   useEffect(() => { if (form?.dir === 'custom') customRef.current?.focus(); }, [form?.dir]);
@@ -160,15 +163,18 @@ export function TransferDialog({ options, loadError, form, busy, error, onChange
           <span>Keep the original task open</span>
         </label>
         <label className="xfer-label xfer-label-field" htmlFor="xfer-message">First instruction (optional)</label>
-        <textarea
-          id="xfer-message"
-          className="app-modal-input xfer-message"
-          rows={2}
-          value={form.message}
-          placeholder="What should the new task do first?"
-          onChange={(e) => onChange({ message: e.target.value })}
-          data-testid="xfer-message"
-        />
+        <MicField boxRef={messageBox} text={form.message} setText={(message) => onChange({ message })} handleRef={messageMic} disabled={busy}>
+          <textarea
+            ref={messageBox}
+            id="xfer-message"
+            className="app-modal-input xfer-message"
+            rows={2}
+            value={form.message}
+            placeholder="What should the new task do first?"
+            onChange={(e) => onChange({ message: e.target.value })}
+            data-testid="xfer-message"
+          />
+        </MicField>
       </fieldset>
     );
   }
@@ -208,7 +214,7 @@ export function TransferDialog({ options, loadError, form, busy, error, onChange
             className="app-modal-btn primary"
             disabled={busy || !!blocker || !form}
             title={blocker ?? undefined}
-            onClick={onSubmit}
+            onClick={() => { messageMic.current?.clear(); onSubmit(); }}
             data-testid="xfer-submit"
           >
             {busy ? 'Transferring…' : 'Transfer'}

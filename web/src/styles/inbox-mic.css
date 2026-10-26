@@ -1,0 +1,4 @@
+/* The composer's mic in inbox boxes whose own padding shorthand would cover the mic's room. */
+.hii-confirm .mic-field > textarea { padding-right: 48px; }
+/* The confirm panel styles every input as a full-width block: not the mic's own vocabulary box. */
+.hii-confirm .mic-vocab-input { display: inline-block; width: auto; flex: 1; min-width: 0; padding: 4px 8px; }

@@ -35,6 +35,7 @@ import { ICON_REFRESH, ICON_WARNING, ICON_PANEL_LEFT, ICON_PANEL_LEFT_FILLED } f
 import { log } from '@/utils/log';
 import { pointerOwnedElsewhere } from '@/utils/find-scope';
 import { SessionCommitButton } from '@/components/sessions/SessionCommitDialog';
+import { BoxMic, type BoxMicHandle } from '@/components/common/BoxMic';
 
 export type DiffViewType = 'split' | 'unified';
 /** The toolbar layout mode: 'auto' picks per file — split only when some line
@@ -311,12 +312,13 @@ function CommentBox({ loc, onAdd, onSendNow, onCancel, onDirtyChange }: {
 }) {
   const [text, setText] = useState('');
   const ref = useRef<HTMLTextAreaElement>(null);
+  const mic = useRef<BoxMicHandle | null>(null);
   useEffect(() => { ref.current?.focus(); }, []);
   // Clear the dirty lock when this box goes away (Add / Send / Cancel / file switch).
   useEffect(() => () => onDirtyChange?.(false), [onDirtyChange]);
   const update = (v: string) => { setText(v); onDirtyChange?.(v.trim().length > 0); };
-  const add = () => { const t = text.trim(); if (t) onAdd(t); };
-  const sendNow = () => { const t = text.trim(); if (t) onSendNow(t); };
+  const add = () => { const t = text.trim(); if (t) { mic.current?.clear(); onAdd(t); } };
+  const sendNow = () => { const t = text.trim(); if (t) { mic.current?.clear(); onSendNow(t); } };
   return (
     <div className="session-diff-comment-box">
       <div className="session-diff-comment-loc">{loc}</div>
@@ -336,6 +338,7 @@ function CommentBox({ loc, onAdd, onSendNow, onCancel, onDirtyChange }: {
         rows={3}
       />
       <div className="session-diff-comment-actions">
+        <BoxMic boxRef={ref} text={text} setText={update} handleRef={mic} />
         <button className="session-diff-comment-cancel" onMouseDown={(e) => e.preventDefault()} onClick={onCancel}>Cancel</button>
         <button className="session-diff-comment-sendnow" onMouseDown={(e) => e.preventDefault()} onClick={sendNow} disabled={!text.trim()} title="Send this one comment to the agent right now">Send now</button>
         <button className="session-diff-comment-add" onMouseDown={(e) => e.preventDefault()} onClick={add} disabled={!text.trim()} title="Record this comment; submit the whole review at the end">Add comment</button>

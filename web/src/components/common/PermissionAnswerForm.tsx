@@ -16,11 +16,33 @@
  * `answers` construction, the completeness gate, pill toggling) — this component
  * owns only the selection state and the markup.
  */
-import { useState } from 'react';
+import { useRef, useState } from 'react';
+import { MicField } from '@/components/common/BoxMic';
+import '@/styles/prompt-mic.css';
 import {
   buildAskUserAnswers, allAskUserQuestionsAnswered, toggleAskUserSelection,
   type AskQuestion,
 } from '@/components/sessions/ask-user-question';
+
+/** One question's own-words answer, with the composer's mic inside its right edge.
+ *  A submit settles the ask and unmounts the form, which discards a late recording. */
+function OtherAnswerInput({ placeholder, value, disabled, onChange }: {
+  placeholder: string; value: string; disabled: boolean; onChange: (v: string) => void;
+}) {
+  const box = useRef<HTMLInputElement | null>(null);
+  return (
+    <MicField inline fieldClassName="nfc-answer-field" boxRef={box} text={value} setText={onChange} disabled={disabled}>
+      <input
+        ref={box}
+        className="nfc-answer-input"
+        placeholder={placeholder}
+        value={value}
+        disabled={disabled}
+        onChange={(e) => onChange(e.target.value)}
+      />
+    </MicField>
+  );
+}
 
 interface PermissionAnswerFormProps {
   questions: AskQuestion[];
@@ -83,12 +105,11 @@ export function PermissionAnswerForm({
             )}
             {/* Free text per question. buildAskUserAnswers lets it BEAT the pills —
                 an "Other" answer is a deliberate override, not an addition. */}
-            <input
-              className="nfc-answer-input"
+            <OtherAnswerInput
               placeholder={q.options.length > 0 ? 'Other…' : 'Type your answer…'}
               value={otherText[q.question] ?? ''}
               disabled={disabled}
-              onChange={(e) => setOtherText(prev => ({ ...prev, [q.question]: e.target.value }))}
+              onChange={(v) => setOtherText(prev => ({ ...prev, [q.question]: v }))}
             />
           </div>
         );

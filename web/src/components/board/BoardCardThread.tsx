@@ -17,6 +17,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import { useEntityLabelsVersion } from '@/hooks/useEntityLabels';
 import { renderMarkdownWithRefs } from '@/utils/markdown';
 import { log } from '@/utils/log';
+import { BoxMic, type BoxMicHandle } from '@/components/common/BoxMic';
 import { timeAgo } from '@/utils/time';
 import { authorLabel, peekText, type CardThread } from './board-cards-model';
 
@@ -70,6 +71,7 @@ export function CardComposer({ draftKey, placeholder, sendLabel, initial = '', a
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const ref = useRef<HTMLTextAreaElement>(null);
+  const mic = useRef<BoxMicHandle | null>(null);
   useEffect(() => { if (autoFocus) ref.current?.focus(); }, [autoFocus]);
   // Grow with the text up to a few lines (the CSS caps the height).
   useLayoutEffect(() => {
@@ -93,6 +95,7 @@ export function CardComposer({ draftKey, placeholder, sendLabel, initial = '', a
     if (failed) { setError(failed); return; }
     drafts.delete(draftKey);
     setText('');
+    mic.current?.clear();
   };
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing && e.keyCode !== 229) {
@@ -119,6 +122,7 @@ export function CardComposer({ draftKey, placeholder, sendLabel, initial = '', a
       <div className="bpc-composer-row">
         {error && <span className="bpc-error" role="alert" data-testid="board-card-composer-error">Not sent: {error}</span>}
         <span className="bpc-composer-hint">Enter to send, Shift+Enter for a new line</span>
+        <BoxMic boxRef={ref} text={text} setText={change} handleRef={mic} disabled={busy} />
         {onClose && (
           <button type="button" className="bpc-btn" onClick={onClose} disabled={busy}>Cancel</button>
         )}

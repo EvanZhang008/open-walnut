@@ -37,6 +37,7 @@ import { askAILabel } from './item-receipt-model';
 import { refreshWatchedItems } from './item-store';
 import { senderLabelOf } from './LetterEnvelopeRow';
 import { useLetterEvents } from '@/hooks/useHumanInbox';
+import { BoxMic, MicField, type BoxMicHandle } from '@/components/common/BoxMic';
 import { useLetterEnvelope } from './letter-store';
 import { sessionInboxLetterHref } from './session-inbox-link';
 import { useThreadPane } from './useThreadPane';
@@ -104,6 +105,12 @@ export function LetterView({
   const [delivery, setDelivery] = useState<string | null>(null);
   const [replyText, setReplyText] = useState('');
   const [freeText, setFreeText] = useState('');
+  const replyBox = useRef<HTMLTextAreaElement | null>(null);
+  const replyMic = useRef<BoxMicHandle | null>(null);
+  const noteBox = useRef<HTMLTextAreaElement | null>(null);
+  const noteMic = useRef<BoxMicHandle | null>(null);
+  // Another letter in the same view: a late transcription must not land in it.
+  useEffect(() => () => { replyMic.current?.clear(); noteMic.current?.clear(); }, [letterId]);
 
   // Envelope state (read / pinned / archived / answered) comes from the ONE shared
   // store, layered OVER this reader's own GET: the rail and a session tab can pin
@@ -204,6 +211,7 @@ export function LetterView({
       const result = await answerLetter(letterId, actionId, freeText.trim() || undefined);
       applyResult(result.letter, deliveryText(result.delivery, result.reason));
       setFreeText('');
+      noteMic.current?.clear();
       log.info('inbox', 'letter answered', { letterId, actionId, delivery: result.delivery });
     } catch (err) {
       const status = (err as { status?: number }).status;
@@ -235,6 +243,7 @@ export function LetterView({
       const result = await humanReplyToLetter(letterId, text);
       applyResult(result.letter, deliveryText(result.delivery, result.reason));
       setReplyText('');
+      replyMic.current?.clear();
       log.info('inbox', 'letter human reply sent', { letterId, delivery: result.delivery });
     } catch (err) {
       setDelivery('Could not send that reply — try again');
@@ -331,13 +340,16 @@ export function LetterView({
                 )}
               </button>
             ))}
-            <textarea
-              className="hib-freetext"
-              placeholder="Optional note to send with your choice"
-              value={freeText}
-              onChange={(e) => setFreeText(e.target.value)}
-              rows={2}
-            />
+            <MicField boxRef={noteBox} text={freeText} setText={setFreeText} handleRef={noteMic} disabled={busy}>
+              <textarea
+                ref={noteBox}
+                className="hib-freetext"
+                placeholder="Optional note to send with your choice"
+                value={freeText}
+                onChange={(e) => setFreeText(e.target.value)}
+                rows={2}
+              />
+            </MicField>
           </div>
         )}
         {decisionWithoutOptions && (
@@ -432,6 +444,7 @@ export function LetterView({
       <div className="hib-composer">
         {delivery && <div className="hib-delivery">{delivery}</div>}
         <textarea
+          ref={replyBox}
           className="hib-composer-input"
           placeholder="Reply to this letter…"
           value={replyText}
@@ -441,6 +454,7 @@ export function LetterView({
           }}
           rows={2}
         />
+        <BoxMic boxRef={replyBox} text={replyText} setText={setReplyText} handleRef={replyMic} disabled={busy} />
         <button
           className="hib-send-btn"
           disabled={busy || !replyText.trim()}

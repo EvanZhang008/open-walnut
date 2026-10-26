@@ -9,7 +9,7 @@
  * The frame has an opaque origin (sandbox="allow-scripts", no allow-same-origin),
  * so everything goes through postMessage: the host posts `wn-board:data` (refs,
  * threads, marks, seen, projects, checks, choices, reminders,
- * section_seen, composing, composing_choice, note_drafts) and acks; the frame posts requests up. This part owns the state,
+ * section_seen, composing, composing_choice, composing_mark, note_drafts) and acks; the frame posts requests up. This part owns the state,
  * the bridge, links, the reader's view (kept by the host across a new document: the
  * scroll position, open <details>, a thread read mid-history, the filter, what the
  * reader unfolded), the project statuses and the shared helpers, and
@@ -37,8 +37,9 @@
   };
   // composing: the thread the host's composer replies in ('' = none);
   // composingChoice: the choice it answers in the user's own words;
+  // composingMark: the <walnut-mark> whose note it writes ("Dictate…");
   // dockHeight: how tall that composer is, so its slot here makes room for it.
-  var flags = { hasData: false, filter: '', composing: '', composingChoice: '', dockHeight: 0 };
+  var flags = { hasData: false, filter: '', composing: '', composingChoice: '', composingMark: '', dockHeight: 0 };
   // Other host messages (the docked composer's sending / sent / send-failed), by type.
   var onHost = {};
   var live = new Set();
@@ -496,19 +497,19 @@
     var tick = function () {
       var el = document.querySelector('.wn-dock-slot');
       // Which box the slot is for, so the host never lays one thread's box over another's slot.
-      var target = { thread: flags.composing, choice: flags.composingChoice };
+      var target = { thread: flags.composing, choice: flags.composingChoice, mark: flags.composingMark };
       if (!el) {
         slotLoop = 0;
-        if (slotLast !== 'none') { slotLast = 'none'; send({ t: 'wn-board:slot', rect: null, thread: target.thread, choice: target.choice }); }
+        if (slotLast !== 'none') { slotLast = 'none'; send({ t: 'wn-board:slot', rect: null, thread: target.thread, choice: target.choice, mark: target.mark }); }
         return;
       }
       var r = el.getBoundingClientRect();
       var shown = r.width > 0 && el.getClientRects().length > 0;
-      var key = target.thread + '|' + target.choice + '|' + (shown ? [Math.round(r.top), Math.round(r.left), Math.round(r.width)].join(',') : 'hidden');
+      var key = target.thread + '|' + target.choice + '|' + target.mark + '|' + (shown ? [Math.round(r.top), Math.round(r.left), Math.round(r.width)].join(',') : 'hidden');
       if (key !== slotLast) {
         slotLast = key;
         send({
-          t: 'wn-board:slot', thread: target.thread, choice: target.choice,
+          t: 'wn-board:slot', thread: target.thread, choice: target.choice, mark: target.mark,
           rect: shown ? { top: Math.round(r.top), left: Math.round(r.left), width: Math.round(r.width) } : null,
         });
       }
@@ -553,6 +554,7 @@
       state.note_drafts = obj(d.note_drafts);
       flags.composing = typeof d.composing === 'string' ? d.composing : '';
       flags.composingChoice = typeof d.composing_choice === 'string' ? d.composing_choice : '';
+      flags.composingMark = typeof d.composing_mark === 'string' ? d.composing_mark : '';
       flags.hasData = true;
       applyProjects();
       scheduleDue();

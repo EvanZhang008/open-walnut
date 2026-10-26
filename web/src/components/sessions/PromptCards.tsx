@@ -10,7 +10,7 @@
  * card and gives the buttons back. The command reads in full: over 6 lines it
  * shows the first 3, an ellipsis and the last 3, with `Show all (N lines)`.
  */
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { usePhoneLayerWithBar } from './phone-session-layer';
 import { usePhoneLayout } from '@/hooks/usePhoneLayout';
@@ -18,11 +18,34 @@ import { useArmAfterAppear, useHoldSettled } from '@/hooks/useArmAfterAppear';
 import { foldLongCommand } from './tool-call-grouping';
 import { ChevronRightIcon, QuestionCircleIcon } from '@/components/common/PhoneIcons';
 import { NO_AUTOFILL_PROPS } from '@/utils/no-autofill';
+import { BoxMic } from '@/components/common/BoxMic';
 import {
   isSettledPermission, respondToPermissionRequest, usePermissionRequest,
   type PermissionRequestStatus,
 } from '@/stores/permission-request-store';
 import { parseAskUserQuestionInput, buildAskUserAnswers, allAskUserQuestionsAnswered, toggleAskUserSelection, type AskQuestion } from './ask-user-question';
+
+/** One question's own-words answer, with the composer's mic. A submit settles the
+ *  card and unmounts this, which discards a recording still on its way. */
+function AskOtherInput({ placeholder, value, disabled, onChange }: {
+  placeholder: string; value: string; disabled: boolean; onChange: (v: string) => void;
+}) {
+  const box = useRef<HTMLInputElement | null>(null);
+  return (
+    <div className="qp-input-row">
+      <input
+        ref={box}
+        className="qp-input"
+        placeholder={placeholder}
+        value={value}
+        disabled={disabled}
+        onChange={(e) => onChange(e.target.value)}
+        {...NO_AUTOFILL_PROPS}
+      />
+      <BoxMic boxRef={box} text={value} setText={onChange} disabled={disabled} />
+    </div>
+  );
+}
 
 /** Inline AskUserQuestion card: the CLI's multiple-choice tool, answered for real.
  *
@@ -117,16 +140,12 @@ function AskUserQuestionCard({ questions, onSubmit, onDismiss, status, busy, ans
                 ))}
               </div>
             )}
-            <div className="qp-input-row">
-              <input
-                className="qp-input"
-                placeholder={q.options.length > 0 ? 'Other (type your own answer)...' : 'Type your answer...'}
-                value={otherText[q.question] ?? ''}
-                disabled={locked}
-                onChange={(e) => setOtherText(prev => ({ ...prev, [q.question]: e.target.value }))}
-                {...NO_AUTOFILL_PROPS}
-              />
-            </div>
+            <AskOtherInput
+              placeholder={q.options.length > 0 ? 'Other (type your own answer)...' : 'Type your answer...'}
+              value={otherText[q.question] ?? ''}
+              disabled={locked}
+              onChange={(v) => setOtherText(prev => ({ ...prev, [q.question]: v }))}
+            />
           </div>
         );
       })}

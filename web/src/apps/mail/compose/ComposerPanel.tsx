@@ -27,7 +27,9 @@ import {
   useState,
   useSyncExternalStore,
   type KeyboardEvent,
+  type RefObject,
 } from 'react';
+import { BoxMic, type BoxMicHandle } from '@/components/common/BoxMic';
 import { ConfirmDialog } from '@/components/common/ConfirmDialog';
 import { ContextMenu } from '@/components/common/ContextMenu';
 import { providerIdOf, type MailDraftDto, type MailboxDto } from '@/api/mail';
@@ -304,6 +306,14 @@ function ComposerForm({ composer, canSend, cannotSendTitle, senderAddressedBy }:
   senderAddressedBy: string | null;
 }) {
   const { fields } = composer;
+  const bodyRef = useRef<HTMLTextAreaElement | null>(null);
+  const mic = useRef<BoxMicHandle | null>(null);
+  // Another draft in the same form: a dictation still on its way belonged to the old one.
+  const shownDraft = useRef(composer.draftId);
+  useEffect(() => {
+    if (shownDraft.current && shownDraft.current !== composer.draftId) mic.current?.clear();
+    shownDraft.current = composer.draftId;
+  }, [composer.draftId]);
   const invalid = hasInvalidAddress([...fields.to, ...fields.cc, ...fields.bcc]);
   const sender = composer.replyTo ? composer.replySender : undefined;
   // A reply whose sender has no address and no provider to address them cannot go out with an empty
@@ -385,6 +395,7 @@ function ComposerForm({ composer, canSend, cannotSendTitle, senderAddressedBy }:
         </div>
 
         <BodyArea
+          boxRef={bodyRef}
           value={fields.body}
           autoFocus={!!composer.replyTo}
           onChange={(body) => setMailComposerFields({ body })}
@@ -413,6 +424,12 @@ function ComposerForm({ composer, canSend, cannotSendTitle, senderAddressedBy }:
         </span>
         {!NO_SEND_PHASES.includes(composer.status.phase) && (
           <>
+            <BoxMic
+              boxRef={bodyRef}
+              text={fields.body}
+              setText={(body) => setMailComposerFields({ body })}
+              handleRef={mic}
+            />
             {/* Drawn and disabled: the send contract carries no attachment part yet, and a control
                 that cannot do what it appears to offer is worse than a control that says so. */}
             <button
@@ -460,12 +477,12 @@ function ComposerForm({ composer, canSend, cannotSendTitle, senderAddressedBy }:
  * every keystroke. There is no max height any more: the card's own scroll area holds it, so a long
  * mail scrolls the form rather than growing a second scrollbar inside the field.
  */
-function BodyArea({ value, autoFocus, onChange }: {
+function BodyArea({ boxRef: ref, value, autoFocus, onChange }: {
+  boxRef: RefObject<HTMLTextAreaElement | null>;
   value: string;
   autoFocus: boolean;
   onChange: (next: string) => void;
 }) {
-  const ref = useRef<HTMLTextAreaElement | null>(null);
   useLayoutEffect(() => {
     const node = ref.current;
     if (!node) return;

@@ -5,6 +5,7 @@
  */
 import { useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
 import { log } from '@/utils/log';
+import { BoxMic, type BoxMicHandle } from '@/components/common/BoxMic';
 
 interface Props {
   sessionId: string;
@@ -19,6 +20,7 @@ export function OrgComposerBar({ sessionId, to, send, onSent }: Props) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const box = useRef<HTMLTextAreaElement>(null);
+  const mic = useRef<BoxMicHandle | null>(null);
   // Grow with the text (WebKit before field-sizing): up to the CSS max-height, then scroll.
   useLayoutEffect(() => {
     const el = box.current;
@@ -37,6 +39,7 @@ export function OrgComposerBar({ sessionId, to, send, onSent }: Props) {
     log.info('org-page', 'composer send', { sessionId, ok });
     if (!ok) { setError('Not sent. Try again.'); return; }
     setText('');
+    mic.current?.clear();
     onSent();
   };
 
@@ -57,6 +60,7 @@ export function OrgComposerBar({ sessionId, to, send, onSent }: Props) {
         onKeyDown={onKeyDown}
       />
       {error && <span className="org-composer-error" role="alert">{error}</span>}
+      <BoxMic boxRef={box} text={text} setText={(v) => { setText(v); if (error) setError(null); }} handleRef={mic} disabled={busy} />
       <button type="submit" className="btn btn-sm btn-primary org-composer-send" disabled={busy || !text.trim()} data-testid="org-composer-send">
         {busy ? 'Sending…' : 'Send'}
       </button>

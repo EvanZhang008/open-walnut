@@ -4,6 +4,7 @@ import type { Task } from '@open-walnut/core';
 import { renderNoteMarkdown } from '@/utils/markdown';
 import { fetchTask, toggleCompleteTask, addNote, updateNote, updateDescription, deleteTask, addTag, removeTag, addDependency, removeDependency, updateTask, type TaskDetail } from '@/api/tasks';
 import { TaskFieldEditor } from '@/components/tasks/TaskFieldEditor';
+import { BoxMic, type BoxMicHandle } from '@/components/common/BoxMic';
 import { PluginFieldPills } from '@/components/tasks/PluginFieldPicker';
 import { PluginSlotFact, PluginSlots } from '@/plugins/PluginSlots';
 import { DatePicker } from '@/components/common/DatePicker';
@@ -94,6 +95,10 @@ function TaskDetailView({ id, isPopout = false, showOperationError }: TaskDetail
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [newNote, setNewNote] = useState('');
+  const newNoteBox = useRef<HTMLInputElement | null>(null);
+  const newNoteMic = useRef<BoxMicHandle | null>(null);
+  // Another task on the same page: a late transcription must not land in its note.
+  useEffect(() => () => newNoteMic.current?.clear(), [id]);
   const [sessionRecords, setSessionRecords] = useState<Map<string, SessionRecord>>(new Map());
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [showDepPicker, setShowDepPicker] = useState(false);
@@ -356,6 +361,7 @@ function TaskDetailView({ id, isPopout = false, showOperationError }: TaskDetail
     if (!id || !newNote.trim()) return;
     mergeDetail(await addNote(id, newNote.trim()));
     setNewNote('');
+    newNoteMic.current?.clear();
   };
 
   // One session per task: its own session (inline chat), and the ones it held
@@ -683,6 +689,7 @@ function TaskDetailView({ id, isPopout = false, showOperationError }: TaskDetail
         />
         <div className="flex gap-2 mt-2">
           <input
+            ref={newNoteBox}
             type="text"
             value={newNote}
             onChange={(e) => setNewNote(e.target.value)}
@@ -690,6 +697,7 @@ function TaskDetailView({ id, isPopout = false, showOperationError }: TaskDetail
             placeholder="Add to note..."
             style={{ flex: 1 }}
           />
+          <BoxMic boxRef={newNoteBox} text={newNote} setText={setNewNote} handleRef={newNoteMic} />
           <button className="btn btn-sm" onClick={handleAddNote}>Add</button>
         </div>
       </div>

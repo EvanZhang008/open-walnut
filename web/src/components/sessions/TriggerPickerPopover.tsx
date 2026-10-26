@@ -21,6 +21,7 @@ import {
   EVERY_CHOICES, TRIGGER_IDEAS, describeText, ideaText, missingRequired, templateHandoffText, type TriggerIdea,
 } from './trigger-picker-model';
 import '@/styles/trigger-picker.css';
+import { MicField, type BoxMicHandle } from '@/components/common/BoxMic';
 
 export type TriggerPickerCloseReason = 'escape' | 'close' | 'outside' | 'prefill' | 'anchor-lost';
 
@@ -223,6 +224,8 @@ function TemplateForm({ template, taskId, sessionId, onHandoff, onDone }: {
   const [created, setCreated] = useState<CreatedTemplateTrigger | null>(null);
   const missing = missingRequired(template, values);
   const firstRef = useRef<HTMLInputElement>(null);
+  const promptBox = useRef<HTMLTextAreaElement | null>(null);
+  const promptMic = useRef<BoxMicHandle | null>(null);
   useEffect(() => { firstRef.current?.focus({ preventScroll: true }); }, []);
 
   const set = (key: string, value: string, label = value) => {
@@ -236,6 +239,8 @@ function TemplateForm({ template, taskId, sessionId, onHandoff, onDone }: {
     setSaving(true);
     setError(null);
     try {
+      // A transcription still on its way lands after the save, unsaved: drop it now.
+      promptMic.current?.clear();
       const result = await createTemplateTrigger({ template: template.id, params: values, taskId, every, prompt });
       log.info('trigger', 'template trigger created from composer', { sessionId, taskId, template: template.id, jobId: result.id });
       onRoutinesChanged();
@@ -277,13 +282,16 @@ function TemplateForm({ template, taskId, sessionId, onHandoff, onDone }: {
       ))}
       <label className="trigger-picker-field">
         <span className="trigger-picker-label">When it fires <span className="trigger-picker-optional">(optional)</span></span>
-        <textarea
-          className="trigger-picker-input"
-          rows={2}
-          value={prompt}
-          placeholder="What the AI should do with each new item, e.g. summarize it and tell me if it needs me"
-          onChange={(e) => setPrompt(e.target.value)}
-        />
+        <MicField boxRef={promptBox} text={prompt} setText={setPrompt} handleRef={promptMic} disabled={saving}>
+          <textarea
+            ref={promptBox}
+            className="trigger-picker-input"
+            rows={2}
+            value={prompt}
+            placeholder="What the AI should do with each new item, e.g. summarize it and tell me if it needs me"
+            onChange={(e) => setPrompt(e.target.value)}
+          />
+        </MicField>
       </label>
       <div className="trigger-picker-field">
         <span className="trigger-picker-label" id={`every-${template.id}`}>Check every</span>

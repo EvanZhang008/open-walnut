@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import type {
   Routine, CreateRoutineInput, RoutineSchedule, RoutineExecutorRef, RoutineCheck,
   RoutineCheckTestResult, ExecutorInfo, ExecutorOptions, ExecutorFieldSpec,
@@ -6,6 +6,8 @@ import type {
 import { testRoutineCheck } from '@/api/routines';
 import { describeSchedule, describeWake } from '@/utils/routine-format';
 import '@/styles/routine-description.css';
+import '@/styles/routine-mic.css';
+import { BoxMic, MicField, type BoxMicHandle } from '@/components/common/BoxMic';
 
 interface RoutineFormProps {
   /** Prefill from an AI draft or an existing routine (edit mode). */
@@ -170,6 +172,32 @@ function tzAbbrev(tz: string): string {
   }
 }
 
+/** A multi-line executor field with the composer's mic. `resetKey` changes when the form is refilled. */
+function FieldMicTextarea({ id, value, onChange, placeholder, resetKey }: {
+  id: string;
+  value: string;
+  onChange: (next: string) => void;
+  placeholder?: string;
+  resetKey: unknown;
+}) {
+  const boxRef = useRef<HTMLTextAreaElement | null>(null);
+  const mic = useRef<BoxMicHandle | null>(null);
+  useEffect(() => { mic.current?.clear(); }, [resetKey]);
+  return (
+    <MicField boxRef={boxRef} text={value} setText={onChange} handleRef={mic}>
+      <textarea
+        ref={boxRef}
+        id={id}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        rows={6}
+        style={{ resize: 'vertical' }}
+      />
+    </MicField>
+  );
+}
+
 // ── Form ─────────────────────────────────────────────────────────────────────
 
 export function RoutineForm({ draft, routine, executors, options, onSave, onCancel }: RoutineFormProps) {
@@ -190,10 +218,16 @@ export function RoutineForm({ draft, routine, executors, options, onSave, onCanc
   const [checkTest, setCheckTest] = useState<{ busy: boolean; result?: RoutineCheckTestResult; error?: string }>({ busy: false });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const descRef = useRef<HTMLTextAreaElement | null>(null);
+  const descMic = useRef<BoxMicHandle | null>(null);
+  const instrRef = useRef<HTMLTextAreaElement | null>(null);
+  const instrMic = useRef<BoxMicHandle | null>(null);
 
   // Re-prefill when a new draft arrives (user drafted again)
   useEffect(() => {
     if (!draft) return;
+    descMic.current?.clear();
+    instrMic.current?.clear();
     setName(draft.name ?? '');
     setDescription(draft.description ?? '');
     setTrigger(scheduleToTrigger(draft.schedule));
@@ -312,6 +346,9 @@ export function RoutineForm({ draft, routine, executors, options, onSave, onCanc
     setError(null);
     try {
       // Sent even when empty: on an edit that is how a cleared description is removed.
+      // A transcription still on its way lands after the save, unsaved: drop it now.
+      descMic.current?.clear();
+      instrMic.current?.clear();
       await onSave({ name: name.trim(), description: description.trim(), schedule, executor, ...checkField });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to save');
@@ -324,13 +361,12 @@ export function RoutineForm({ draft, routine, executors, options, onSave, onCanc
     const value = config[f.name];
     if (f.kind === 'textarea') {
       return (
-        <textarea
+        <FieldMicTextarea
           id={`routine-f-${f.name}`}
           value={typeof value === 'string' ? value : ''}
-          onChange={(e) => setField(f.name, e.target.value)}
+          onChange={(next) => setField(f.name, next)}
           placeholder={f.placeholder}
-          rows={6}
-          style={{ resize: 'vertical' }}
+          resetKey={draft}
         />
       );
     }
@@ -395,15 +431,18 @@ export function RoutineForm({ draft, routine, executors, options, onSave, onCanc
           {/* 600: the limit trigger_create holds an agent to (TRIGGER_DESCRIPTION_MAX). */}
           <div className="form-group">
             <label htmlFor="routine-description">Description</label>
-            <textarea
-              id="routine-description"
-              className="routine-description-input"
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              placeholder="What it does, in a sentence or two. Shown on the card."
-              rows={3}
-              maxLength={600}
-            />
+            <MicField boxRef={descRef} text={description} setText={(t) => setDescription(t.slice(0, 600))} handleRef={descMic}>
+              <textarea
+                ref={descRef}
+                id="routine-description"
+                className="routine-description-input"
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                placeholder="What it does, in a sentence or two. Shown on the card."
+                rows={3}
+                maxLength={600}
+              />
+            </MicField>
           </div>
 
           {instructionsField && (
@@ -411,14 +450,15 @@ export function RoutineForm({ draft, routine, executors, options, onSave, onCanc
               <label htmlFor="routine-f-instructions">Instructions</label>
               <div className="routine-instructions-box">
                 <textarea
+                  ref={instrRef}
                   id="routine-f-instructions"
                   value={typeof config.instructions === 'string' ? config.instructions : ''}
                   onChange={(e) => setField('instructions', e.target.value)}
                   placeholder={instructionsField.placeholder ?? 'What should this routine do each run?'}
                   rows={8}
                 />
-                {modelField && (
-                  <div className="routine-instructions-footer">
+                <div className="routine-instructions-footer">
+                  {modelField && (
                     <select
                       className="routine-model-select"
                       value={typeof config.model === 'string' ? config.model : ''}
@@ -428,8 +468,14 @@ export function RoutineForm({ draft, routine, executors, options, onSave, onCanc
                       <option value="">Default model</option>
                       {options.models.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
                     </select>
-                  </div>
-                )}
+                  )}
+                  <BoxMic
+                    boxRef={instrRef}
+                    text={typeof config.instructions === 'string' ? config.instructions : ''}
+                    setText={(t) => setField('instructions', t)}
+                    handleRef={instrMic}
+                  />
+                </div>
               </div>
             </div>
           )}

@@ -45,6 +45,11 @@ interface MicButtonProps {
   disabled?: boolean;
   /** Button size */
   size?: 'sm' | 'md';
+  /** The box this mic writes into: the Voice panel's Insert follows it only
+   *  once the user focuses it (voice-status.ts). Omitted: the target on mount. */
+  insertBox?: () => Element | null;
+  /** Recording and transcribing are both over (with words or without: a failure too). */
+  onSettled?: () => void;
 }
 
 // How long the chevron stays after a SUCCESSFUL transcription. After a failure
@@ -71,7 +76,7 @@ function MicWaveform({ level }: { level: number }) {
   );
 }
 
-export function MicButton({ onTranscribe, onDraft, onRefine, controlRef, language, disabled, size = 'md' }: MicButtonProps) {
+export function MicButton({ onTranscribe, onDraft, onRefine, controlRef, language, disabled, size = 'md', insertBox, onSettled }: MicButtonProps) {
   /**
    * Did this recording deliver a FINAL text? Tracked because the mic now KEEPS the
    * user's selection (see the mousedown note below), and something has to release it
@@ -101,6 +106,16 @@ export function MicButton({ onTranscribe, onDraft, onRefine, controlRef, languag
     ...(language ? { language } : {}),
   };
   const { isSupported, isRecording, isTranscribing, error, toggleRecording, retryWithModel, retryLast, lastDebugPath, hasLastRecording, level, silenceWarning, discardRecording } = useSpeechToText(sttOptions);
+  // The final words (if any) are delivered before transcribing turns false, so a
+  // box that listens here knows no more text is coming for this recording.
+  const busyNow = isRecording || isTranscribing;
+  const wasBusy = useRef(false);
+  const onSettledRef = useRef(onSettled);
+  onSettledRef.current = onSettled;
+  useEffect(() => {
+    if (busyNow) { wasBusy.current = true; return; }
+    if (wasBusy.current) { wasBusy.current = false; onSettledRef.current?.(); }
+  }, [busyNow]);
 
   /**
    * A recording that ends without text must give the selection back.
@@ -184,7 +199,12 @@ export function MicButton({ onTranscribe, onDraft, onRefine, controlRef, languag
   // to insert at the caret of its own textarea.
   const onTranscribeStable = useRef(onTranscribe);
   onTranscribeStable.current = onTranscribe;
-  useEffect(() => registerVoiceInsertTarget((text) => onTranscribeStable.current(text)), []);
+  const insertBoxRef = useRef(insertBox);
+  insertBoxRef.current = insertBox;
+  useEffect(() => registerVoiceInsertTarget(
+    (text) => onTranscribeStable.current(text),
+    insertBoxRef.current ? () => insertBoxRef.current?.() ?? null : undefined,
+  ), []);
 
   // Show chevron after transcription completes. On success it auto-dismisses;
   // on failure/empty (error set) it STAYS — it's the recovery entry point.
@@ -584,7 +604,8 @@ export function MicButton({ onTranscribe, onDraft, onRefine, controlRef, languag
               onChange={e => setVocabInput(e.target.value)}
               onKeyDown={e => {
                 if (e.key === 'Enter') { e.preventDefault(); handleAddVocab(); }
-                if (e.key === 'Escape') { setDropdownOpen(false); }
+                // Its own Escape: the dialog or popover the mic sits in must not close too.
+                if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); setDropdownOpen(false); }
               }}
             />
             <button

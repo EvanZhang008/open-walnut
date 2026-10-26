@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState, type ChangeEvent } from 'react';
 import type { Config } from '@open-walnut/core';
 import { SettingsGroup, SettingsLoadingRow, SettingsNotice, SettingsRow, SettingsSection } from '../SettingsSection';
 import { ToggleSwitch } from '../inputs/ToggleSwitch';
@@ -6,6 +6,7 @@ import { useOptimisticSetting } from '../inputs/useOptimisticSetting';
 import { useCommitField } from '../inputs/useCommitField';
 import { apiGet, apiPut } from '@/api/client';
 import { useSerialSave, type OnSave } from './GeneralSection';
+import { MicField, type BoxMicHandle } from '@/components/common/BoxMic';
 
 interface Props {
   config: Config;
@@ -19,6 +20,8 @@ function ChecklistRows() {
   const [content, setContent] = useState('');
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const boxRef = useRef<HTMLTextAreaElement | null>(null);
+  const mic = useRef<BoxMicHandle | null>(null);
   useEffect(() => {
     apiGet<{ content: string }>('/api/heartbeat/checklist')
       .then((r) => setContent(r.content))
@@ -31,19 +34,26 @@ function ChecklistRows() {
     (v) => apiPut('/api/heartbeat/checklist', { content: v }).then(() => setContent(v)),
     { rowKey: 'heartbeat.checklist', kind: 'text', multiline: true },
   );
+  // Dictated words go through the field's own edit path, so they save on blur like typed ones.
+  const setText = (value: string) => field.inputProps.onChange({ target: { value } } as ChangeEvent<HTMLTextAreaElement>);
   if (loading) return <SettingsLoadingRow />;
   if (loadError) return <SettingsNotice kind="error" role="alert">Couldn&apos;t load the checklist: {loadError}</SettingsNotice>;
   return (
     <div className="settings-row settings-row-stacked settings-editor-row" data-wide="true">
       <label className="settings-row-label" htmlFor="heartbeat-editor">Items Walnut works through</label>
-      <textarea
-        id="heartbeat-editor"
-        className="settings-textarea settings-editor"
-        rows={10}
-        spellCheck={false}
-        placeholder={'# Heartbeat checklist\n- [ ] Check pipeline status\n- [ ] Review open PRs'}
-        {...field.inputProps}
-      />
+      <MicField boxRef={boxRef} text={field.inputProps.value} setText={setText} handleRef={mic}>
+        <textarea
+          ref={boxRef}
+          id="heartbeat-editor"
+          className="settings-textarea settings-editor"
+          rows={10}
+          spellCheck={false}
+          placeholder={'# Heartbeat checklist\n- [ ] Check pipeline status\n- [ ] Review open PRs'}
+          {...field.inputProps}
+          // Esc puts the saved text back: a dictation still on its way must not land on it.
+          onKeyDown={(e) => { if (e.key === 'Escape') mic.current?.clear(); field.inputProps.onKeyDown(e); }}
+        />
+      </MicField>
       {field.error && <p className="settings-row-error settings-row-error-inline" role="alert">{field.error}</p>}
     </div>
   );

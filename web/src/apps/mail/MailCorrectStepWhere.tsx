@@ -5,7 +5,8 @@
  * (Important plus the groups), so it stays inline. `Next` is disabled until a destination is chosen,
  * and a new group's name must not collide with one that exists.
  */
-import { useId, type RefObject } from 'react';
+import { useId, useRef, type RefObject } from 'react';
+import { MicField, type BoxMicHandle } from '@/components/common/BoxMic';
 import {
   COPY,
   MAX_GROUP_NAME,
@@ -45,6 +46,10 @@ export function MailCorrectStepWhere(props: StepWhereProps) {
   const whyId = useId();
   const name = useId();
   const next = canGoNext(value, newNameProblem);
+  const whyRef = useRef<HTMLTextAreaElement | null>(null);
+  const mic = useRef<BoxMicHandle | null>(null);
+  // Next moves the card to the rule step: a dictation still on its way stays out of it.
+  const goNext = () => { mic.current?.clear(); props.onNext(); };
   return (
     <div className="mail-correct-step" data-step="where">
       <p className="mail-correct-title" id={titleId}>{whereSentence(props.currentLabel)}</p>
@@ -88,7 +93,7 @@ export function MailCorrectStepWhere(props: StepWhereProps) {
               value={newName}
               autoFocus
               onChange={(event) => props.onNewName(event.target.value)}
-              onKeyDown={(event) => { if (event.key === 'Enter' && next) { event.preventDefault(); props.onNext(); } }}
+              onKeyDown={(event) => { if (event.key === 'Enter' && next) { event.preventDefault(); goNext(); } }}
             />
             {newNameProblem ? (
               <p className="mail-correct-field-error" role="alert" data-testid="mail-correct-new-group-error">{newNameProblem}</p>
@@ -97,16 +102,19 @@ export function MailCorrectStepWhere(props: StepWhereProps) {
         )}
       </div>
       <label className="mail-correct-why-label" htmlFor={whyId}>{COPY.whyLabel}</label>
-      <textarea
-        id={whyId}
-        className="mail-correct-why"
-        data-testid="mail-correct-why"
-        rows={2}
-        maxLength={MAX_NOTE}
-        placeholder={COPY.whyPlaceholder}
-        value={note}
-        onChange={(event) => props.onNote(event.target.value.slice(0, MAX_NOTE))}
-      />
+      <MicField boxRef={whyRef} text={note} setText={(t) => props.onNote(t.slice(0, MAX_NOTE))} handleRef={mic}>
+        <textarea
+          ref={whyRef}
+          id={whyId}
+          className="mail-correct-why"
+          data-testid="mail-correct-why"
+          rows={2}
+          maxLength={MAX_NOTE}
+          placeholder={COPY.whyPlaceholder}
+          value={note}
+          onChange={(event) => props.onNote(event.target.value.slice(0, MAX_NOTE))}
+        />
+      </MicField>
       {note.length > NOTE_COUNTER_FROM && (
         <span className="mail-correct-counter" data-testid="mail-correct-counter" aria-live="polite">
           {note.length} / {MAX_NOTE}
@@ -114,7 +122,7 @@ export function MailCorrectStepWhere(props: StepWhereProps) {
       )}
       <div className="mail-correct-actions">
         <button type="button" className="btn btn-sm" onClick={props.onCancel} data-testid="mail-correct-cancel">Cancel</button>
-        <button type="button" className="btn btn-sm btn-primary" disabled={!next} onClick={props.onNext} data-testid="mail-correct-next">
+        <button type="button" className="btn btn-sm btn-primary" disabled={!next} onClick={goNext} data-testid="mail-correct-next">
           Next
         </button>
       </div>

@@ -1,5 +1,5 @@
 /**
- * Dictation into a plain text box (the question card's), with the composer's
+ * Dictation into a plain text box (a textarea or a one-line input), with the composer's
  * rules (ChatInput's writeDictation): each live draft replaces the span the last
  * one wrote, the final text replaces it too and only then takes focus and the
  * caret, and a refined final swaps in only while the words are still untouched.
@@ -20,12 +20,13 @@ export function spliceDictation(value: string, caret: number, span: DictationSpa
   return { next: before + pre + words + post + after, start: pos + pre.length };
 }
 
-export function useBoxDictation(boxRef: RefObject<HTMLTextAreaElement | null>, text: string, setText: (t: string) => void) {
+export function useBoxDictation(boxRef: RefObject<HTMLTextAreaElement | HTMLInputElement | null>, text: string, setText: (t: string) => void) {
   // The recorder's callbacks outlive renders: read the box's text through a ref.
   const textRef = useRef(text);
   textRef.current = text;
   const spanRef = useRef<DictationSpan | null>(null);
   const lastRef = useRef<{ start: number; text: string } | null>(null);
+  const draftText = useRef('');
   // A recording started here and not yet answered with its final text; and one
   // the box was reset under (a send, another question), whose late words go nowhere.
   const inFlight = useRef(false);
@@ -39,10 +40,14 @@ export function useBoxDictation(boxRef: RefObject<HTMLTextAreaElement | null>, t
     if (!isDraft) inFlight.current = false;
     const el = boxRef.current;
     const value = textRef.current;
+    // An edit that moved or touched the draft's words since: its span is gone, the
+    // words land at the caret instead of over whatever now sits at those offsets.
+    const held = spanRef.current;
+    if (held && value.slice(held.start, held.start + held.length) !== draftText.current) spanRef.current = null;
     const { next, start } = spliceDictation(value, el?.selectionStart ?? value.length, spanRef.current, words);
     textRef.current = next;
     setText(next);
-    if (isDraft) { spanRef.current = { start, length: words.length }; return; }
+    if (isDraft) { spanRef.current = { start, length: words.length }; draftText.current = words; return; }
     spanRef.current = null;
     lastRef.current = { start, text: words };
     const caret = start + words.length;
@@ -78,11 +83,19 @@ export function useBoxDictation(boxRef: RefObject<HTMLTextAreaElement | null>, t
     inFlight.current = false;
   }, []);
 
+  /** The mic is idle again: a recording that ended without words (a failure)
+   *  leaves nothing in flight, and nothing late is still owed to be dropped. */
+  const settled = useCallback(() => {
+    inFlight.current = false;
+    dropLate.current = false;
+  }, []);
+
   return {
     onDraft: useCallback((t: string) => write(t, true), [write]),
     onTranscribe: useCallback((t: string) => write(t, false), [write]),
     onRefine,
     started,
     reset,
+    settled,
   };
 }

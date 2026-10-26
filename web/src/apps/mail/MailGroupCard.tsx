@@ -19,6 +19,7 @@ import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { getMailRules, putMailRules, renameMailGroup } from '@/api/mail-groups';
 import { menuPlacementStyle, useMenuPlacement } from '@/hooks/useMenuPlacement';
+import { MicField, type BoxMicHandle } from '@/components/common/BoxMic';
 import { log } from '@/utils/log';
 import {
   closeMailLearnRequest, pushMailListStatus, requestGroupsRefresh, type MailGroupCardRequest,
@@ -69,6 +70,7 @@ export function MailGroupCard({ request }: { request: MailGroupCardRequest }) {
   const anchorRef = useRef<HTMLElement | null>(request.anchor);
   anchorRef.current = request.anchor;
   const fieldRef = useRef<HTMLTextAreaElement | HTMLInputElement | null>(null);
+  const mic = useRef<BoxMicHandle | null>(null);
   const titleId = useId();
   const fieldId = useId();
   const important = request.kind === 'group-important';
@@ -132,6 +134,7 @@ export function MailGroupCard({ request }: { request: MailGroupCardRequest }) {
         pushMailListStatus({ id: `rename:${request.groupId}`, viewKey: request.viewKey, text: renamedText(done.label), tone: 'success', ttlMs: 6_000 });
       }
       requestGroupsRefresh();
+      mic.current?.clear();
       close(true);
     } catch (failure) {
       const refusal = saveRefusalOf(failure);
@@ -181,17 +184,25 @@ export function MailGroupCard({ request }: { request: MailGroupCardRequest }) {
           <>
             <p className="mail-group-card-body">{importantCardBody(request.label)}</p>
             <label className="mail-correct-why-label" htmlFor={fieldId}>{WHY_LABEL}</label>
-            <textarea
-              id={fieldId}
-              ref={(el) => { fieldRef.current = el; }}
-              className="mail-correct-why"
-              data-testid="mail-group-card-why"
-              rows={2}
-              maxLength={MAX_NOTE}
-              placeholder="For example: tickets that name me need me"
-              value={text}
-              onChange={(event) => setText(event.target.value.slice(0, MAX_NOTE))}
-            />
+            <MicField
+              boxRef={fieldRef}
+              text={text}
+              setText={(next) => setText(next.slice(0, MAX_NOTE))}
+              handleRef={mic}
+              disabled={saving}
+            >
+              <textarea
+                id={fieldId}
+                ref={(el) => { fieldRef.current = el; }}
+                className="mail-correct-why"
+                data-testid="mail-group-card-why"
+                rows={2}
+                maxLength={MAX_NOTE}
+                placeholder="For example: tickets that name me need me"
+                value={text}
+                onChange={(event) => setText(event.target.value.slice(0, MAX_NOTE))}
+              />
+            </MicField>
           </>
         ) : (
           <input

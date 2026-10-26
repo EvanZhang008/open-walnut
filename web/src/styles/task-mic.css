@@ -1,0 +1,3 @@
+/* The composer's mic in task boxes: the field takes the box's outer spacing so the mic lines up with it. */
+.qtc-mic-field { margin: 8px 10px 4px; }
+.qtc-mic-field > .qtc-input { margin: 0; }

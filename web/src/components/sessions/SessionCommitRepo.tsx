@@ -13,6 +13,7 @@ import {
   type RepoSelection,
 } from '@/components/sessions/sessionCommitModel';
 import { log } from '@/utils/log';
+import { BoxMic, MicField, type BoxMicHandle } from '@/components/common/BoxMic';
 
 const HUNK_PREVIEW_LINES = 40;
 const POLL_MS = 2_000;
@@ -150,6 +151,11 @@ export function SessionCommitRepo(props: {
   const [requestError, setRequestError] = useState<string | null>(null);
   const [prTitle, setPrTitle] = useState('');
   const [prBody, setPrBody] = useState('');
+  const messageBox = useRef<HTMLTextAreaElement | null>(null);
+  const messageMic = useRef<BoxMicHandle | null>(null);
+  const prBodyBox = useRef<HTMLTextAreaElement | null>(null);
+  const prBodyMic = useRef<BoxMicHandle | null>(null);
+  const writeMessage = (text: string) => { setMessage(text); props.onDraft(text); };
   const { job, begin } = useCommitJob(sessionId, props.initialJob);
   const [lastCommit, setLastCommit] = useState<{ sha: string; shortSha: string; subject: string; indexError?: string } | null>(null);
   const [lastPush, setLastPush] = useState<{ remote: string; ref: string; upToDate: boolean } | null>(null);
@@ -174,6 +180,7 @@ export function SessionCommitRepo(props: {
         ...(typeof r.indexError === 'string' ? { indexError: r.indexError } : {}),
       });
       setMessage('');
+      messageMic.current?.clear();
       props.onCommitted();
       props.onReload();
     } else if (job.action === 'push') {
@@ -209,8 +216,8 @@ export function SessionCommitRepo(props: {
     setRequestError(null);
     try {
       const text = await props.suggest(diff, files);
-      setMessage(text);
-      props.onDraft(text);
+      messageMic.current?.clear();
+      writeMessage(text);
     } catch (err) {
       setRequestError(errorText(err));
     } finally {
@@ -250,14 +257,16 @@ export function SessionCommitRepo(props: {
 
       <div className="scd-message-row">
         <textarea
+          ref={messageBox}
           className="scd-message"
           data-testid="scd-message"
           placeholder="Commit message"
           value={message}
           rows={3}
-          onChange={(e) => { setMessage(e.target.value); props.onDraft(e.target.value); }}
+          onChange={(e) => writeMessage(e.target.value)}
           disabled={running}
         />
+        <BoxMic boxRef={messageBox} text={message} setText={writeMessage} handleRef={messageMic} disabled={running} />
         <button type="button" className="app-modal-btn scd-suggest" data-testid="scd-suggest" onClick={() => void suggest()} disabled={suggesting || running || counts.files === 0} title="Draft a message from the selected changes">
           {suggesting ? 'Drafting…' : '✦ Suggest'}
         </button>
@@ -307,10 +316,12 @@ export function SessionCommitRepo(props: {
         <div className="scd-confirm" data-testid="scd-confirm" role="group" aria-label="Confirm pull request">
           <div>Open a pull request from <b>{repo.branch}</b> on <b>{repo.upstream.remote}</b>?</div>
           <input className="app-modal-input" value={prTitle} onChange={(e) => setPrTitle(e.target.value)} placeholder="Title" aria-label="Pull request title" />
-          <textarea className="scd-message" value={prBody} onChange={(e) => setPrBody(e.target.value)} placeholder="Description (optional)" rows={2} aria-label="Pull request description" />
+          <MicField boxRef={prBodyBox} text={prBody} setText={setPrBody} handleRef={prBodyMic}>
+            <textarea ref={prBodyBox} className="scd-message" value={prBody} onChange={(e) => setPrBody(e.target.value)} placeholder="Description (optional)" rows={2} aria-label="Pull request description" />
+          </MicField>
           <div className="scd-confirm-actions">
             <button type="button" className="app-modal-btn" onClick={() => onConfirm(null)}>Cancel</button>
-            <button type="button" className="app-modal-btn primary" data-testid="scd-confirm-ok" disabled={!prTitle.trim()} onClick={() => { onConfirm(null); void start({ action: 'pr', branch: repo.branch, title: prTitle, body: prBody }); }}>Open PR</button>
+            <button type="button" className="app-modal-btn primary" data-testid="scd-confirm-ok" disabled={!prTitle.trim()} onClick={() => { prBodyMic.current?.clear(); onConfirm(null); void start({ action: 'pr', branch: repo.branch, title: prTitle, body: prBody }); }}>Open PR</button>
           </div>
         </div>
       )}

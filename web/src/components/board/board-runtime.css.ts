@@ -129,6 +129,17 @@ td .wn-mark { margin: 0; }
 }
 .wn-mark-note-toggle:hover { border-color: currentColor; opacity: 1; }
 .wn-mark-note-toggle[hidden], .wn-mark-note[hidden] { display: none; }
+/* "Dictate…": asks the host for its composer (the frame has no microphone). */
+.wn-mark-voice {
+  padding: 0 9px; border: 1px dashed rgba(128,128,128,.4); border-color: color-mix(in srgb, currentColor 30%, transparent);
+  border-radius: 999px; background: transparent; color: inherit; font: inherit; font-size: .95em; line-height: 1.6; cursor: pointer;
+  white-space: nowrap; opacity: .65;
+}
+.wn-mark-voice:hover, .wn-mark-voice:focus-visible { border-color: currentColor; opacity: 1; outline: none; }
+.wn-mark-voice[hidden] { display: none; }
+.wn-mark-voice[disabled] { cursor: default; opacity: .4; }
+/* The docked composer needs room even in a narrow table cell: the slot widens the column while it is open. */
+.wn-mark .wn-dock-slot { flex: 1 1 100%; min-width: 300px; }
 .wn-mark-note {
   flex: 1 1 100%; min-width: 0; min-height: 2em; max-height: 12em; overflow-y: auto; resize: vertical; box-sizing: border-box;
   padding: 4px 8px; border: 1px solid rgba(128,128,128,.4); border-color: color-mix(in srgb, currentColor 30%, transparent);

@@ -31,6 +31,9 @@
  *      they answer it (the overview row and the strip follow), the leader hears them
  *      quoted with "no option"; "Change your words…" starts from them; a pick later
  *      keeps them, and the leader hears both in one message.
+ *   B3. A note's "Dictate…" docks the same composer (mic included) over the note:
+ *      it starts from the note's text (unsaved typing is saved first), Send saves
+ *      it, Escape and a closing Board keep what was written, an empty Send clears it.
  *   C. A worker's Board tab shows its leader's board, and a post from there lands
  *      on the leader's board.
  *
@@ -666,6 +669,127 @@ test('a choice takes the user\'s own words, alone or beside a pick', async ({ pa
   expect(occurrences(await historyText(sid), wordsLine)).toBe(1)
   await choice.screenshot({ path: `${SHOT_DIR}/${engine}-B2-words-and-pick.png` })
 
+  expect(pageErrors).toEqual([])
+})
+
+test('a note docks Walnut\'s composer (voice included) through Dictate…', async ({ page }) => {
+  test.setTimeout(300_000)
+  const engine = test.info().project.name
+  const stamp = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`
+  // Each page error names the step it happened in.
+  const pageErrors: string[] = []
+  let step = 'setup'
+  page.on('pageerror', (e) => pageErrors.push(`${step}: ${e.message}`))
+  const project = `${engine}-items ${stamp}`
+  const { id: leader, sid } = await taskWithSession(`${engine}-items-note-leader ${stamp}`, { project }, 'Note leader ready')
+  const worker = await createTask(`${engine}-items-note-worker ${stamp}`, { project, pinned: false, parent_task_id: leader })
+  await api('PUT', `/api/v1/tasks/${leader}/board`, { html: itemsBoard(engine, stamp, worker) })
+
+  await isolateUiPrefs(page)
+  await presetPanelView(page, { section: 'all', project: '' })
+  await openHome(page)
+  const { panel, pane, frame } = await openBoardTab(page, leader, sid)
+  const note = frame.locator('walnut-mark[id="probe"]')
+  const field = note.locator('.wn-mark-note')
+  const voice = note.locator('.wn-mark-voice')
+  const dock = pane.getByTestId('board-reply-dock')
+  const input = dock.locator('.chat-input-textarea')
+  const savedNote = async () => (await getBoard(leader)).marks.probe?.note
+  await expect(voice).toHaveText('Dictate…', { timeout: 15_000 })
+  await expect(note.locator('.wn-mark-note-toggle')).toHaveText('Add note')
+
+  step = 'typed-then-dictate'
+  // ── Typed and not saved yet, then Dictate…: the box starts from those words, and they are saved first ──
+  await note.locator('.wn-mark-note-toggle').click()
+  await field.fill('Typed first')
+  await voice.click()
+  await expect(dock).toHaveAttribute('data-mark', 'probe')
+  await expect(dock.getByTestId('board-reply-title')).toHaveText(/^Your note for the leader/)
+  await expect(dock.locator('.mic-btn-wrapper button')).toBeVisible()
+  await expect(dock).toHaveAttribute('data-placement', 'inline')
+  await expect(note.locator('.wn-dock-slot')).toHaveCount(1)
+  await expect(field).toBeHidden()
+  await expect(voice).toBeHidden()
+  await expect(input).toHaveValue('Typed first')
+  await expect(input).toBeFocused()
+  await expect.poll(savedNote, { timeout: 10_000 }).toBe('Typed first')
+  // The box lies over the note's slot, in the overview row's cell, at a usable width.
+  const slotBox = await note.locator('.wn-dock-slot').boundingBox()
+  const dockBox = await dock.boundingBox()
+  expect(slotBox && dockBox && slotBox.width >= 300 && dockBox.width >= 300).toBe(true)
+  await page.screenshot({ path: `/tmp/voice-mic-everywhere/board-mark-${engine}-docked.png` })
+
+  step = 'send'
+  // ── Send saves the note and closes the box; the field shows the saved words ──
+  const dictated = `Ship after the window ${stamp}, written in the composer.`
+  await input.fill(dictated)
+  await dock.screenshot({ path: `/tmp/voice-mic-everywhere/board-mark-${engine}-dock-typed.png` })
+  await input.press('Enter')
+  await expect(dock).toHaveCount(0)
+  await expect.poll(savedNote, { timeout: 10_000 }).toBe(dictated)
+  await expect(field).toBeVisible()
+  await expect(field).toHaveValue(dictated)
+  await expect(voice).toBeVisible()
+  await expect(note.locator('.wn-dock-slot')).toHaveCount(0)
+
+  step = 'escape'
+  // ── Dictate… again starts from the saved note; Escape still keeps what was written ──
+  await voice.click()
+  await expect(input).toHaveValue(dictated)
+  const escaped = `Closed with Escape ${stamp}, still kept.`
+  await input.fill(escaped)
+  await input.press('Escape')
+  await expect(dock).toHaveCount(0)
+  await expect(field).toHaveValue(escaped, { timeout: 10_000 })
+  await expect.poll(savedNote, { timeout: 10_000 }).toBe(escaped)
+  await expect(note.locator('.wn-saved')).toHaveText(/^Saved \d\d:\d\d$/, { timeout: 10_000 })
+
+  step = 'typed-after'
+  // ── The field and the box share one note: typing here after the box closed autosaves as before ──
+  const typedAfter = `${escaped} Plus a typed line.`
+  await field.fill(typedAfter)
+  await expect.poll(savedNote, { timeout: 10_000 }).toBe(typedAfter)
+
+  step = 'empty-send'
+  // ── An empty Send clears the note: "Add note" again ──
+  await voice.click()
+  await expect(input).toHaveValue(typedAfter)
+  await input.fill('')
+  await input.press('Enter')
+  await expect(dock).toHaveCount(0)
+  await expect.poll(savedNote, { timeout: 10_000 }).toBeUndefined()
+  await expect(note.locator('.wn-mark-note-toggle')).toHaveText('Add note')
+  await expect(field).toBeHidden()
+
+  step = 'board-closes'
+  // ── The Board closing under an open box still saves its words ──
+  await voice.click()
+  const lastWords = `Written in the box as the Board closes ${stamp}.`
+  await input.fill(lastWords)
+  await panel.getByRole('button', { name: 'Files', exact: true }).click()
+  await expect(pane).toHaveCount(0)
+  await expect.poll(savedNote, { timeout: 10_000 }).toBe(lastWords)
+  await panel.getByTestId('session-board-chip').click()
+  const frame2 = page.frameLocator('.task-board-frame')
+  await expect(frame2.locator('walnut-mark[id="probe"] .wn-mark-note')).toHaveValue(lastWords, { timeout: 15_000 })
+  await frame2.locator('walnut-mark[id="probe"]').screenshot({ path: `/tmp/voice-mic-everywhere/board-mark-${engine}-saved.png` })
+
+  step = 'open-close-unchanged'
+  // ── Opened and closed with nothing written: no draft is left behind to write the
+  //    old words back over an edit made elsewhere (another tab, the phone) ──
+  const note2 = frame2.locator('walnut-mark[id="probe"]')
+  await note2.locator('.wn-mark-voice').click()
+  await expect(input).toHaveValue(lastWords)
+  await input.press('Escape')
+  await expect(dock).toHaveCount(0)
+  const elsewhere = `Changed on another device ${stamp}.`
+  await api('PUT', `/api/v1/tasks/${leader}/board/marks/probe`, { note: elsewhere })
+  await expect(note2.locator('.wn-mark-note')).toHaveValue(elsewhere, { timeout: 15_000 })
+  await page.waitForTimeout(1500)
+  expect(await savedNote()).toBe(elsewhere)
+
+  // The leader's session heard nothing: a note is read on the board, never delivered.
+  expect(await historyText(sid)).not.toContain(lastWords)
   expect(pageErrors).toEqual([])
 })
 

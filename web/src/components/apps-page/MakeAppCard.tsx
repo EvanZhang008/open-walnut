@@ -16,6 +16,8 @@ import { fetchInstallDir, fetchIsCloudReplica } from '@/api/config'
 import { openSessionOnHome } from '@/utils/open-session'
 import { copyTextRobust } from '@/utils/clipboard'
 import { BUILD_CWD, buildPrompt } from '@/components/settings/build-plugin-prompt'
+import { BoxMic, type BoxMicHandle } from '@/components/common/BoxMic'
+import '@/styles/apps-make-mic.css'
 
 /** The by-hand loop, one command per line, as README.md shows it. */
 export const MANUAL_PLUGIN_COMMANDS = [
@@ -28,6 +30,8 @@ const IDEAS = ['A Pomodoro timer tied to my current task', 'A reading list from 
 export function MakeAppCard() {
   const navigate = useNavigate()
   const [request, setRequest] = useState('')
+  const requestRef = useRef<HTMLInputElement | null>(null)
+  const mic = useRef<BoxMicHandle | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   // Unknown until the server answers: no Build form flashes up on a replica.
@@ -52,6 +56,7 @@ export function MakeAppCard() {
         message: buildPrompt(request, installDir),
       })
       setRequest('')
+      mic.current?.clear()
       // Land on the session column so the user watches it build.
       if (result.sessionId) openSessionOnHome(result.sessionId, navigate)
       else navigate('/')
@@ -88,6 +93,7 @@ export function MakeAppCard() {
             onSubmit={(e) => { e.preventDefault(); void start() }}
           >
             <input
+              ref={requestRef}
               type="text"
               value={request}
               onChange={(e) => setRequest(e.target.value)}
@@ -96,6 +102,7 @@ export function MakeAppCard() {
               disabled={busy}
               data-testid="build-plugin-request"
             />
+            <BoxMic boxRef={requestRef} text={request} setText={setRequest} handleRef={mic} disabled={busy} />
             <button
               type="submit"
               className="apps-make-go"
@@ -109,7 +116,7 @@ export function MakeAppCard() {
           {error && <div className="apps-make-error" role="alert">{error}</div>}
           <div className="apps-make-ideas" role="group" aria-label="Ideas">
             {IDEAS.map((idea) => (
-              <button key={idea} type="button" onClick={() => setRequest(idea)} disabled={busy}>{idea}</button>
+              <button key={idea} type="button" onClick={() => { mic.current?.clear(); setRequest(idea) }} disabled={busy}>{idea}</button>
             ))}
           </div>
         </>

@@ -11,7 +11,9 @@
  * time the board's html changes (a leader's board_edit), so the frame hands
  * every keystroke's text up (`keepNoteDraft`) and the pane keeps it until it is
  * saved: a new document gets it back (`noteDrafts`, in the data message) and
- * saves it, and leaving the board saves what is still unsaved.
+ * saves it, and leaving the board saves what is still unsaved. The host's docked
+ * composer ("Dictate…") keeps its words there too, so a box closed without Send
+ * hands them to the frame, which saves them as typed text.
  */
 import { useCallback, useEffect, useRef, type MutableRefObject } from 'react';
 import { ApiError, apiPut } from '@/api/client';
@@ -44,7 +46,9 @@ export function useBoardItemSaves(
 
   // Unsaved note text per mark id, for the board the pane shows.
   const drafts = useRef(new Map<string, string>());
-  const keepNoteDraft = useCallback((markId: string, note: string) => { drafts.current.set(markId, note); }, []);
+  const keepNoteDraft = useCallback((markId: string, note: string | null) => {
+    if (note === null) drafts.current.delete(markId); else drafts.current.set(markId, note);
+  }, []);
   const noteDrafts = useCallback(() => Object.fromEntries(drafts.current), []);
   // Leaving a board (another one, or the pane closes) saves what the frame had not saved yet.
   useEffect(() => () => {
@@ -65,19 +69,44 @@ export function useBoardItemSaves(
     if (ownerRef.current === boardTask) toFrame({ t: 'wn-board:ack', reqId, ok: false, error: message });
   }, [ownerRef, toFrame]);
 
-  /** The user's note on a mark. */
+  /** The user's note on a mark: saved, merged, and its kept draft dropped when it is this text. */
+  const putMark = useCallback(async (markId: string, note: string, from: string, reqId = '') => {
+    const boardTask = ownerRef.current;
+    log.info('board', 'note saving', { taskId: boardTask, markId, reqId, chars: note.length, from });
+    const res = await apiPut<{ mark: BoardMark | null }>(`${boardPath(boardTask)}/marks/${encodeURIComponent(markId)}`, { note });
+    log.info('board', 'note saved', { taskId: boardTask, markId, reqId, empty: !res.mark, from });
+    const current = ownerRef.current === boardTask;
+    if (current) {
+      if (drafts.current.get(markId) === note) drafts.current.delete(markId);
+      mergeMark(markId, res.mark ?? null);
+    }
+    return { res, current };
+  }, [ownerRef, mergeMark]);
+
+  /** The frame's note field: the frame hears how it went. */
   const saveMark = useCallback((reqId: string, markId: string, note: string) => {
     const boardTask = ownerRef.current;
-    log.info('board', 'note saving', { taskId: boardTask, markId, reqId, chars: note.length });
-    apiPut<{ mark: BoardMark | null }>(`${boardPath(boardTask)}/marks/${encodeURIComponent(markId)}`, { note })
-      .then((res) => {
-        log.info('board', 'note saved', { taskId: boardTask, markId, reqId, empty: !res.mark });
-        if (ownerRef.current !== boardTask) return;
-        if (drafts.current.get(markId) === note) drafts.current.delete(markId);
-        toFrame({ t: 'wn-board:ack', reqId, ok: true, mark: res.mark ?? null });
-        mergeMark(markId, res.mark ?? null);
-      }).catch((err: unknown) => fail(boardTask, reqId, 'note save', { markId }, err));
-  }, [ownerRef, toFrame, mergeMark, fail]);
+    putMark(markId, note, 'page', reqId).then(({ res, current }) => {
+      if (current) toFrame({ t: 'wn-board:ack', reqId, ok: true, mark: res.mark ?? null });
+    }).catch((err: unknown) => fail(boardTask, reqId, 'note save', { markId }, err));
+  }, [ownerRef, putMark, toFrame, fail]);
+
+  /**
+   * The docked composer's Send on a note ("Dictate…"): null when saved, else the
+   * reason (the composer keeps the text, and so does the kept draft).
+   */
+  const saveMarkNote = useCallback(async (markId: string, note: string): Promise<string | null> => {
+    try {
+      const { current } = await putMark(markId, note, 'dock');
+      // The composer's kept words are this save now (it trims them), so nothing is left to hand back.
+      if (current) drafts.current.delete(markId);
+      return null;
+    } catch (err) {
+      const message = boardErrorMessage(err);
+      log.error('board', 'note save failed', { taskId: ownerRef.current, markId, from: 'dock', error: message });
+      return message;
+    }
+  }, [ownerRef, putMark]);
 
   /** The user's status for a project: stored as theirs, and delivered to the board's session. */
   const putProject = useCallback(async (projectId: string, status: string, from: string) => {
@@ -233,7 +262,7 @@ export function useBoardItemSaves(
   }, [ownerRef, toFrame, mergeReminder, fail]);
 
   return {
-    saveMark, saveProject, setProjectStatus, saveCheck, saveChoice, pickChoice, saveChoiceText, answerChoiceWords, saveReminder,
+    saveMark, saveMarkNote, saveProject, setProjectStatus, saveCheck, saveChoice, pickChoice, saveChoiceText, answerChoiceWords, saveReminder,
     keepNoteDraft, noteDrafts,
   };
 }

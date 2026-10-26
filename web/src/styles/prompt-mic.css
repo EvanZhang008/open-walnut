@@ -1,0 +1,2 @@
+/* The composer's mic inside a question's "Other" box: sized to the box's compact height. */
+.nfc-answer-field .mic-field-mic .mic-btn { min-width: 24px; height: 24px; }

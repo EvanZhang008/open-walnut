@@ -18,6 +18,8 @@ import { log } from '@/utils/log';
 import { SettingsButton } from '../inputs/SettingsButton';
 import { SettingsRow } from '../SettingsSection';
 import { ChevronGlyph } from '../settings-glyphs';
+import { MicField, type BoxMicHandle } from '@/components/common/BoxMic';
+import '@/styles/settings-mic.css';
 
 const AUTO = 'auto';
 const KIND_PICKS = [{ value: AUTO, label: 'Automatic' }, ...HOST_KIND_OPTIONS];
@@ -46,6 +48,8 @@ export function HostProfileDisclosure({ alias, name }: { alias: string; name: st
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<'probe' | 'kind' | 'note' | null>(null);
   const [note, setNote] = useState('');
+  const noteRef = useRef<HTMLInputElement | null>(null);
+  const noteMic = useRef<BoxMicHandle | null>(null);
   const [picker, setPicker] = useState<CursorPoint | null>(null);
   const kindBtn = useRef<HTMLSpanElement>(null);
 
@@ -185,17 +189,28 @@ export function HostProfileDisclosure({ alias, name }: { alias: string; name: st
                 htmlFor={`host-note-${alias}`}
                 help="Walnut uses it to describe this host."
                 control={
-                  <input
-                    id={`host-note-${alias}`}
-                    className="settings-input settings-input--long"
-                    value={note}
-                    maxLength={600}
-                    placeholder="e.g. Use the build cache in /data"
+                  <MicField
+                    inline
+                    fieldClassName="settings-mic-field settings-mic-field-long"
+                    boxRef={noteRef}
+                    text={note}
+                    setText={(t) => setNote(t.slice(0, 600))}
+                    handleRef={noteMic}
                     disabled={busy === 'note'}
-                    onChange={(e) => setNote(e.target.value)}
-                    onBlur={commitNote}
-                    onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); commitNote(); } }}
-                  />
+                  >
+                    <input
+                      ref={noteRef}
+                      id={`host-note-${alias}`}
+                      className="settings-input settings-input--long"
+                      value={note}
+                      maxLength={600}
+                      placeholder="e.g. Use the build cache in /data"
+                      disabled={busy === 'note'}
+                      onChange={(e) => setNote(e.target.value)}
+                      onBlur={commitNote}
+                      onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); noteMic.current?.clear(); commitNote(); } }}
+                    />
+                  </MicField>
                 }
               />
             </>

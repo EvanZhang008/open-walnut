@@ -10,9 +10,10 @@
  * with Keep mine (write again without the check) or Use theirs (drop the draft).
  * An empty summary clears the card's own, so the task's summary shows again.
  */
-import { useEffect, useRef, useState, type KeyboardEvent, type MouseEvent, type PointerEvent } from 'react';
+import { useEffect, useRef, useState, type FocusEvent, type KeyboardEvent, type MouseEvent, type PointerEvent } from 'react';
 import { useTasksContextSafe } from '@/contexts/TasksContext';
 import { log } from '@/utils/log';
+import { BoxMic, type BoxMicHandle } from '@/components/common/BoxMic';
 import { MAX_SUMMARY, MAX_WAITING_ON } from '../../../../../src/core/boards/board-lanes';
 import type { KanbanCardEditorProps, SetCardResult } from './kanban-contract';
 import { cutTitle } from './kanban-changes-model';
@@ -35,6 +36,8 @@ export function KanbanCardEditor({ field, card, openedAt, api, onClose }: Kanban
   const [conflict, setConflict] = useState<{ current: string; by: string } | null>(null);
   const ref = useRef<HTMLTextAreaElement & HTMLInputElement>(null);
   const done = useRef(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const mic = useRef<BoxMicHandle | null>(null);
   const store = useTasksContextSafe();
 
   useEffect(() => {
@@ -63,6 +66,7 @@ export function KanbanCardEditor({ field, card, openedAt, api, onClose }: Kanban
     }
     log.warn('board', 'kanban card field save failed', { cardTaskId: card.taskId, field, error: res.error });
     setDraft(original);
+    mic.current?.clear();
     setError(res.error || 'the server did not answer');
   };
 
@@ -84,20 +88,36 @@ export function KanbanCardEditor({ field, card, openedAt, api, onClose }: Kanban
       if (e.key === 'Escape') { e.preventDefault(); cancel(); return; }
       if (e.key === 'Enter' && !(isSummary && e.shiftKey)) { e.preventDefault(); save(); }
     },
-    onBlur: () => { if (!conflict) save(); },
     onClick: (e: MouseEvent) => e.stopPropagation(),
     onPointerDown: (e: PointerEvent) => e.stopPropagation(),
   };
   return (
-    <div className="kanban-editor" data-testid={`kanban-card-${isSummary ? 'summary' : 'waiting'}-editor`} data-saving={saving || undefined}>
+    // Leaving the editor saves; a move to its own mic menu is not leaving it.
+    <div ref={rootRef} className="kanban-editor" onBlur={(e: FocusEvent) => {
+      if (!rootRef.current?.contains(e.relatedTarget as Node | null) && !conflict) save();
+    }} data-testid={`kanban-card-${isSummary ? 'summary' : 'waiting'}-editor`} data-saving={saving || undefined}>
       {isSummary ? (
         <textarea ref={ref} className="kanban-editor-input is-summary" data-testid="kanban-card-summary-input" rows={4} {...common} />
       ) : (
         <input ref={ref} className="kanban-editor-input" data-testid="kanban-card-waiting-input" placeholder="A CR, a team, a person" {...common} />
       )}
-      <div className="kanban-editor-foot">
+      <div
+        className="kanban-editor-foot"
+        onClick={(e) => e.stopPropagation()}
+        onPointerDown={(e) => e.stopPropagation()}
+        // WebKit focuses no button on a click, so a press on the mic's retry or menu
+        // would blur the box with nowhere to go and save-and-close the editor.
+        onMouseDown={(e) => {
+          const t = e.target as HTMLElement;
+          if (t.closest('.box-mic') && !t.closest('input, textarea')) e.preventDefault();
+        }}
+      >
         {saving && <span className="kanban-spinner" data-testid="kanban-editor-saving" aria-label="Saving" />}
         {isSummary && <span className="kanban-editor-count" data-testid="kanban-card-summary-count">{draft.length}/{max}</span>}
+        {isSummary && (
+          <BoxMic boxRef={ref} text={draft} handleRef={mic} disabled={saving}
+            setText={(v) => { setDraft(v.slice(0, max)); if (error) setError(''); }} />
+        )}
       </div>
       {error && <div className="kanban-editor-error" data-testid="kanban-editor-error" role="alert">Couldn't save: {error}</div>}
       {conflict && (
