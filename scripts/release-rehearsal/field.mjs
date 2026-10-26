@@ -24,6 +24,18 @@
  *               daemon and its CLI are gone, and the SQLite files the old
  *               release wrote pass an integrity check and take a write under
  *               bun:sqlite.
+ *   field-back  going back: the same install in use, updated to the release
+ *               (as field-work), then the start point reinstalled with
+ *               `npm install -g open-walnut@<start>` (the updater's
+ *               --allow-scripts list, as it was installed) while the dist-tags
+ *               name the start point again, so it does not update itself
+ *               forward. It passes when the old release serves the task and
+ *               the session's history on the data the release wrote, or
+ *               refuses to start with its own newer-data message (REFUSAL);
+ *               either way every SQLite file passes an integrity check. Then
+ *               forward again: the dist-tags name the release, the old
+ *               install's startup update takes it, and the work and the
+ *               SQLite files are still whole.
  *   field-cli   an install in use runs its own `walnut update` while its server
  *               serves; the old server keeps answering; its restart is the
  *               release, with the task, the history and the session.
@@ -70,7 +82,7 @@ const reports = (printed, version) => printed.split(/\s/)[0] === version
 const PERSISTENT_DAEMON_HEARTBEAT_MS = String(30 * 60_000)
 
 /** Every field scenario, in the order they run (--field-only picks some). */
-export const FIELD_SCENARIOS = ['field', 'field-work', 'field-cli', 'field-hand', 'field-lag', 'field-unscripted', 'field-archive']
+export const FIELD_SCENARIOS = ['field', 'field-work', 'field-back', 'field-cli', 'field-hand', 'field-lag', 'field-unscripted', 'field-archive']
 
 /** Where a release's GitHub assets are (`<base>/v<version>/<file>`). */
 export const RELEASE_DOWNLOADS = 'https://github.com/EvanZhang008/open-walnut/releases/download'
@@ -337,24 +349,34 @@ function expectDaemonReplaced(w, work) {
   return `daemon ${work.daemon.version} (pid ${work.daemon.pid}) -> ${now.version} (pid ${now.pid}), ${same ? 'the same CLI process' : 'a new CLI process'}`
 }
 
+/**
+ * The start point in use (a task, a session, its history) restarts into the
+ * update with its daemon still running, and the release writes a task of its
+ * own. Shared by field-work and field-back; leaves the release's server running.
+ */
+async function updateInUse(w, from, field, registry, upstream) {
+  await installStart(w, from, upstream)
+  const done = await putToWork(w, from)
+  // A person's restart: the server goes; the daemon and its CLI stay.
+  await w.stop()
+  if (!alive(done.daemon.pid)) throw new Error(`${from.version}'s daemon (pid ${done.daemon.pid}) ended with its server: the rehearsal does not keep it as a person's is kept`)
+  registry.setDistTags(tags(field.release.version))
+  await w.start({ timeoutMs: 900_000 })
+  expectStartupUpdate(w, from.version, field.release.version)
+  const { file } = await expectServing(w, field.release.version)
+  await expectWorkKept(w, done, field.release.version, 3)
+  const daemon = expectDaemonReplaced(w, done)
+  const title = `rehearsal task ${nonce()} (written by ${field.release.version})`
+  const made = await w.api('POST', '/api/v1/tasks', { title })
+  if (made.status !== 201 || !made.json?.task?.id) throw new Error(`POST /api/v1/tasks under ${field.release.version} answered ${made.status} ${made.text.slice(0, 300)}`)
+  done.tasks.push([made.json.task.id, title])
+  return { done, file, daemon }
+}
+
 async function inUse({ from, field, work, walnuts, opts }) {
   return withRegistry(field, from, opts, async (registry) => {
     const w = walnutFor(work, `field-work-${from.version}`, registry, walnuts, { WALNUT_DAEMON_HEARTBEAT_MS: PERSISTENT_DAEMON_HEARTBEAT_MS })
-    await installStart(w, from, opts.upstream)
-    const done = await putToWork(w, from)
-    // A person's restart: the server goes; the daemon and its CLI stay.
-    await w.stop()
-    if (!alive(done.daemon.pid)) throw new Error(`${from.version}'s daemon (pid ${done.daemon.pid}) ended with its server: the rehearsal does not keep it as a person's is kept`)
-    registry.setDistTags(tags(field.release.version))
-    await w.start({ timeoutMs: 900_000 })
-    expectStartupUpdate(w, from.version, field.release.version)
-    const { file } = await expectServing(w, field.release.version)
-    await expectWorkKept(w, done, field.release.version, 3)
-    const daemon = expectDaemonReplaced(w, done)
-    const title = `rehearsal task ${nonce()} (written by ${field.release.version})`
-    const made = await w.api('POST', '/api/v1/tasks', { title })
-    if (made.status !== 201 || !made.json?.task?.id) throw new Error(`POST /api/v1/tasks under ${field.release.version} answered ${made.status} ${made.text.slice(0, 300)}`)
-    done.tasks.push([made.json.task.id, title])
+    const { done, file, daemon } = await updateInUse(w, from, field, registry, opts.upstream)
     await w.stop()
     const sqlite = checkSqlite(file, done.dbs.map((d) => path.join(w.walnutHome, d)), w.env)
     const bad = Object.entries(sqlite).filter(([, r]) => r.check !== 'ok' || r.wrote !== 1)
@@ -374,6 +396,83 @@ async function inUse({ from, field, work, walnuts, opts }) {
     }
     await w.shutdown()
     return `${from.version} -> ${field.release.version}: task, history, session kept (third message); ${daemon}; ${done.dbs.length} SQLite files of ${from.version} check ok and take a write under bun:sqlite (${done.dbs.join(', ') || 'none'})${after}`
+  })
+}
+
+/**
+ * The one newer-data guard in the start points' published code (0.6.18 and its
+ * nightly, dist/web/server.js): the task database refuses a schema above its own.
+ * Matched exactly; any other exit before serving is a failure, not a refusal.
+ */
+export const REFUSAL = /Task database schema \d+ is newer than supported schema \d+; use a newer Walnut build\./
+
+/**
+ * Going back: the release has run on the install's data; the start point is
+ * reinstalled and started on it. It must serve the work (the task the start
+ * point made and the session's history), or refuse to start with its own
+ * newer-data message (REFUSAL); and never corrupt the data (an integrity check
+ * on every SQLite file, with the bun running this rehearsal, as the release's
+ * file is gone with the reinstall). Then forward again, as a person who rolled
+ * back later upgrades: the dist-tags name the release, the old install's own
+ * startup update takes it, and the work and the SQLite files are still whole.
+ */
+async function goneBack({ from, field, work, walnuts, opts }) {
+  return withRegistry(field, from, opts, async (registry) => {
+    const w = walnutFor(work, `field-back-${from.version}`, registry, walnuts, { WALNUT_DAEMON_HEARTBEAT_MS: PERSISTENT_DAEMON_HEARTBEAT_MS })
+    const { done } = await updateInUse(w, from, field, registry, opts.upstream)
+    await w.stop()
+    // The way back: the dist-tags name the start point again (the release is
+    // pulled), so its startup update does not take the release forward again.
+    registry.setDistTags(tags(from.version))
+    await installStart(w, from, opts.upstream)
+    let outcome
+    try {
+      await w.start({ timeoutMs: 600_000 })
+      const status = await w.api('GET', '/api/v1/status')
+      if (status.json?.version !== from.version) throw new Error(`gone back to ${from.version}, serving ${status.json?.version ?? status.text.slice(0, 200)} (log: ${w.logFile})`)
+      const listed = await w.api('GET', '/api/v1/tasks')
+      const [taskId, title] = done.tasks[0]
+      if (!(listed.json?.tasks ?? []).some((t) => t.id === taskId && t.title === title)) throw new Error(`task "${title}" is not in ${from.version}'s list after going back (${listed.status} ${listed.text.slice(0, 200)})`)
+      const releaseTask = (listed.json?.tasks ?? []).some((t) => t.id === done.tasks[1][0])
+      const history = await w.waitForAnswer(done.sessionId, ask('three', done.marks[2]).answer, 120_000)
+      for (const [label, mark] of [['one', done.marks[0]], ['two', done.marks[1]]]) {
+        if (!history.some((m) => m.role === 'assistant' && m.text?.includes(ask(label, mark).answer))) throw new Error(`"${ask(label, mark).answer}" is gone from the history after going back to ${from.version}`)
+      }
+      outcome = `${from.version} serves the task and the history (three answers) on the release's data; the release's own task ${releaseTask ? 'is listed too' : 'is not listed'}`
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      const tail = logOf(w).split('\n').slice(-60).join('\n')
+      // Only the start point's own newer-data guard, as it exits before serving, is a refusal.
+      if (!/exited \d+ before serving/.test(message) || !REFUSAL.test(tail)) throw new Error(`${message}\n${tail.slice(-3000)}`)
+      outcome = `${from.version} refuses to start on the release's data: ${tail.match(REFUSAL)[0]}`
+    }
+    await w.stop()
+    const back = checkSqlite(process.execPath, sqliteFiles(w.walnutHome).map((d) => path.join(w.walnutHome, d)), w.env)
+    const badBack = Object.entries(back).filter(([, r]) => r.check !== 'ok')
+    if (badBack.length) throw new Error(`after going back to ${from.version}, SQLite files fail the integrity check: ${JSON.stringify(badBack)}`)
+    // Forward again: the old install's own startup update takes the release once more.
+    registry.setDistTags(tags(field.release.version))
+    const mark = logOf(w).length
+    await w.start({ timeoutMs: 900_000 })
+    const since = logOf(w).slice(mark)
+    for (const line of [`Open Walnut ${field.release.version} is published (this is ${from.version}); installing it before starting.`, `Installed Open Walnut ${field.release.version}; starting it.`]) {
+      if (!since.includes(line)) throw new Error(`going forward again, the server log never says "${line}" (log: ${w.logFile})`)
+    }
+    const { file } = await expectServing(w, field.release.version)
+    const listedAgain = await w.api('GET', '/api/v1/tasks')
+    for (const [id, title] of done.tasks) {
+      if (!(listedAgain.json?.tasks ?? []).some((t) => t.id === id && t.title === title)) throw new Error(`task "${title}" is not in ${field.release.version}'s list after going back and forward (${listedAgain.status} ${listedAgain.text.slice(0, 200)})`)
+    }
+    const historyAgain = await w.waitForAnswer(done.sessionId, ask('three', done.marks[2]).answer, 120_000)
+    for (const [label, mark2] of [['one', done.marks[0]], ['two', done.marks[1]]]) {
+      if (!historyAgain.some((m) => m.role === 'assistant' && m.text?.includes(ask(label, mark2).answer))) throw new Error(`"${ask(label, mark2).answer}" is gone from the history after going back and forward`)
+    }
+    await w.stop()
+    const again = checkSqlite(file, sqliteFiles(w.walnutHome).map((d) => path.join(w.walnutHome, d)), w.env)
+    const badAgain = Object.entries(again).filter(([, r]) => r.check !== 'ok' || r.wrote !== 1)
+    if (badAgain.length) throw new Error(`after going forward again, bun:sqlite on the SQLite files: ${JSON.stringify(badAgain)}`)
+    await w.shutdown()
+    return `${from.version} -> ${field.release.version} -> ${from.version} -> ${field.release.version}: ${outcome}; ${Object.keys(back).length} SQLite files check ok after going back; forward again by its startup update, both tasks and the history kept, ${Object.keys(again).length} SQLite files check ok and take a write`
   })
 }
 
@@ -576,6 +675,7 @@ export async function rehearseField({ work, fieldJson, scenario, walnuts, opts =
   const kinds = {
     field: fresh,
     'field-work': inUse,
+    'field-back': goneBack,
     'field-cli': (a) => updatedWhileServing({ ...a, how: 'cli' }),
     'field-hand': (a) => updatedWhileServing({ ...a, how: 'hand' }),
     'field-lag': lagging,
