@@ -42,9 +42,9 @@ What it caught that the cluster could not (2026-10-23): the ControlMaster socket
 
 ## L1 — the fast tier
 
-`vitest.quick.config.ts` runs everything EXCEPT the 26 files measured over 2 s (`tests/setup/slow-tests.ts`), the two end-to-end-heavy directories (`tests/e2e`, `tests/commands`), and the four frontend-rooted ones under `tests/web/` whose deps live in `web/node_modules`. Those 26 are slow because they start something real — a `claude` CLI, a local daemon, a git subprocess, an HTTP server — so they are exactly the wrong thing to run on every save.
+`vitest.quick.config.ts` runs everything EXCEPT the files measured over 2 s (`tests/setup/slow-tests.ts`), the three heavy directories (`tests/e2e`, `tests/commands`, `tests/mcp`), and the four frontend-rooted ones under `tests/web/` whose deps live in `web/node_modules`. The slow files are slow because they start something real (a `claude` CLI, a local daemon, a git subprocess, an HTTP server), so they are exactly the wrong thing to run on every save.
 
-The split is by **measured time**, not by a hand-drawn "unit vs integration" line. A new fast test is therefore included automatically; only a test that actually becomes slow needs a list entry. `bun run test:slow` runs exactly the complement, and `tests/setup/quick-tier.test.ts` asserts the two sets partition the suite with no overlap and no orphans (311 + 26 = 337).
+The split is by **measured time**, not by a hand-drawn "unit vs integration" line. A new fast test is therefore included automatically; only a test that actually becomes slow needs a list entry. `bun run test:slow` runs exactly the complement: the slow list plus `tests/commands` and `tests/mcp` (`tests/e2e` has its own tier). `tests/setup/quick-tier.test.ts` asserts that every test file lands in exactly one tier, by the real configs' globs: quick, slow, e2e, live, or one of the four frontend configs. Until 2026-10-24 the slow config named only the file list, so the 18 files of `tests/commands` and `tests/mcp` ran in no CI job.
 
 ## L2 — focus one path
 

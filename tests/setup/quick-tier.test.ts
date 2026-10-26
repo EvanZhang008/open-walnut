@@ -67,7 +67,6 @@ describe('quick + slow partition the whole runnable suite', () => {
    */
   const FOREIGN_TIER_DIRS = [
     'tests/e2e/', // own tier (vitest.e2e.config.ts)
-    'tests/commands/', // integration tier
     'tests/web/notes-roundtrip/', // frontend-rooted (web/node_modules + DOM shim)
     'tests/web/diff-view/',
     'tests/web/markdown/',
@@ -115,9 +114,10 @@ describe('quick + slow partition the whole runnable suite', () => {
     expect(missing, `slow files NOT excluded from the quick tier (they would run in both):\n${missing.join('\n')}`).toEqual([])
   })
 
-  it('the slow config includes exactly the slow list', async () => {
+  it('the slow config includes exactly the slow list and the heavy directories but tests/e2e', async () => {
     const slowConfig: any = (await import('../../vitest.slow.config.js')).default
-    expect([...slowConfig.test.include].sort()).toEqual([...SLOW_TEST_FILES].sort())
+    const dirs = SLOW_TEST_DIRS.filter((d) => d !== 'tests/e2e/**').map((d) => `${d}/*.test.ts`)
+    expect([...slowConfig.test.include].sort()).toEqual([...SLOW_TEST_FILES, ...dirs].sort())
   })
 
   it('the fast tier holds the bulk of the suite', () => {
@@ -127,6 +127,49 @@ describe('quick + slow partition the whole runnable suite', () => {
     // no longer the cheap layer it exists to be.
     expect(quick.length).toBeGreaterThan(slow.size * 5)
     expect(quick.length).toBeGreaterThan(200)
+  })
+})
+
+describe('every test file runs in exactly one tier', () => {
+  // The configs the tiers run, each through its own include/exclude. CI runs
+  // quick, slow, e2e and the four frontend configs; live is opt-in. A file in
+  // none of them runs nowhere, as tests/commands and tests/mcp did until
+  // 2026-10-24 (excluded from quick, never included by slow); a file in two runs
+  // twice. vitest.focus.config.ts collects everything on purpose and is left out.
+  const TIER_CONFIGS = ['quick', 'slow', 'e2e', 'live', 'diff-view', 'markdown', 'workflow-graph', 'notes-roundtrip']
+
+  /** The files a config collects, matched the way vitest globs: include, minus exclude, from its root. */
+  async function collects(name: string): Promise<(file: string) => boolean> {
+    let cfg: any = (await import(`../../vitest.${name}.config.js`)).default
+    if (typeof cfg === 'function') cfg = await cfg({ mode: 'test', command: 'serve' })
+    const t = cfg.test ?? {}
+    const root = path.resolve(REPO_ROOT, t.root ?? cfg.root ?? '.')
+    const include = (t.include ?? []).map((p: string) => new Bun.Glob(p))
+    const exclude = (t.exclude ?? []).map((p: string) => new Bun.Glob(p))
+    return (file) => {
+      const rel = path.relative(root, path.join(REPO_ROOT, file))
+      return include.some((g: any) => g.match(rel)) && !exclude.some((g: any) => g.match(rel))
+    }
+  }
+
+  it('no test file is collected by no tier or by two', async () => {
+    const matchers = await Promise.all(TIER_CONFIGS.map(async (n) => [n, await collects(n)] as const))
+    const files: string[] = []
+    const walk = (d: string) => {
+      for (const e of fs.readdirSync(path.join(REPO_ROOT, d), { withFileTypes: true })) {
+        if (e.name === 'node_modules') continue
+        const rel = `${d}/${e.name}`
+        if (e.isDirectory()) walk(rel)
+        else if (/\.test\.tsx?$/.test(e.name)) files.push(rel)
+      }
+    }
+    walk('tests')
+    const wrong = files
+      .map((f) => [f, matchers.filter(([, m]) => m(f)).map(([n]) => n)] as const)
+      .filter(([, owners]) => owners.length !== 1)
+      .map(([f, owners]) => `${f}: ${owners.length ? owners.join(' + ') : 'no tier'}`)
+    expect(files.length).toBeGreaterThan(2000)
+    expect(wrong, `test files not in exactly one tier:\n${wrong.join('\n')}`).toEqual([])
   })
 })
 
