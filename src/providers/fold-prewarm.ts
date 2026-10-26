@@ -25,6 +25,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
+import { singleFile } from '../lib/single-file.js'
 
 /** A stream smaller than this folds fast enough at boot (fold-checkpoint-core MIN_BYTES). */
 export const FOLD_PREWARM_MIN_BYTES = 8 * 1024 * 1024
@@ -85,6 +86,22 @@ function readLock(file: string): PrewarmLock | null {
 }
 
 /**
+ * The command that runs `binaryPath`'s prewarm, by the rule that starts the
+ * daemon (LocalDaemon.spawnDaemonWithEnv): the compiled Walnut file is its own
+ * daemon (`walnut __daemon`, src/binary/main.ts), whose bare first word would
+ * go to the CLI; a source daemon runs on this runtime; a daemon binary as itself.
+ */
+export function prewarmCommand(
+  binaryPath: string,
+  execPath: string = process.execPath,
+  compiled: boolean = singleFile() !== null,
+): [string, string[]] {
+  if (compiled && binaryPath === execPath) return [execPath, ['__daemon', '--prewarm-folds']]
+  if (binaryPath.endsWith('.cjs') || binaryPath.endsWith('.js')) return [execPath, [binaryPath, '--prewarm-folds']]
+  return [binaryPath, ['--prewarm-folds']]
+}
+
+/**
  * Run (or wait for) the prewarm of `binaryPath` against the daemon dir. Resolves
  * when it is over; rejects when it failed. Never stops or touches a daemon.
  */
@@ -107,10 +124,7 @@ export async function runFoldPrewarm(opts: {
     return { outcome: 'waited', ms: Date.now() - startedAt }
   }
 
-  const isSourceScript = opts.binaryPath.endsWith('.cjs') || opts.binaryPath.endsWith('.js')
-  const [cmd, args] = isSourceScript
-    ? [process.execPath, [opts.binaryPath, '--prewarm-folds']]
-    : [opts.binaryPath, ['--prewarm-folds']]
+  const [cmd, args] = prewarmCommand(opts.binaryPath)
   const child = spawn(cmd, args, {
     detached: true,
     cwd: opts.daemonDir,

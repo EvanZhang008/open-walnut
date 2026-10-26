@@ -11,7 +11,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { FOLD_PREWARM_MIN_BYTES, registryNeedsFoldPrewarm, runFoldPrewarm } from '../../src/providers/fold-prewarm.js'
+import { FOLD_PREWARM_MIN_BYTES, prewarmCommand, registryNeedsFoldPrewarm, runFoldPrewarm } from '../../src/providers/fold-prewarm.js'
 import { guardedPath } from '../setup/exec-guard-core.js'
 
 let dir = ''
@@ -50,6 +50,16 @@ describe('registryNeedsFoldPrewarm', () => {
     expect(await registryNeedsFoldPrewarm(dir)).toBe(false)
     fs.writeFileSync(path.join(dir, 'sessions.json'), JSON.stringify({ sessions: [] }))
     expect(await registryNeedsFoldPrewarm(dir)).toBe(false)
+  })
+})
+
+describe('prewarmCommand', () => {
+  it('starts the compiled Walnut file as its daemon, a source daemon on this runtime, a daemon binary as itself', () => {
+    expect(prewarmCommand('/opt/walnut', '/opt/walnut', true)).toEqual(['/opt/walnut', ['__daemon', '--prewarm-folds']])
+    expect(prewarmCommand('/d/daemon-source.cjs', '/usr/bin/bun', false)).toEqual(['/usr/bin/bun', ['/d/daemon-source.cjs', '--prewarm-folds']])
+    expect(prewarmCommand('/d/daemon-darwin-arm64', '/usr/bin/bun', false)).toEqual(['/d/daemon-darwin-arm64', ['--prewarm-folds']])
+    // A compiled file pointed at another daemon binary runs that binary.
+    expect(prewarmCommand('/d/daemon-darwin-arm64', '/opt/walnut', true)).toEqual(['/d/daemon-darwin-arm64', ['--prewarm-folds']])
   })
 })
 
