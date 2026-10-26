@@ -1,8 +1,8 @@
 /**
- * File-based action discovery and execution.
+ * Action discovery and execution.
  *
- * Scans two locations for action modules:
- *   1. Built-in: dist/actions/*.js  (compiled from src/actions/*.ts)
+ * Two sources of action modules:
+ *   1. Built-in: src/actions/*.ts, imported through the host bundle (builtin-modules.ts)
  *   2. User:     ~/.open-walnut/actions/*.mjs
  *
  * Each module must export { describe, run } conforming to action types.
@@ -10,11 +10,10 @@
  */
 
 import { readdir } from 'node:fs/promises';
-import { statSync } from 'node:fs';
 import { join, basename } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { log } from '../logging/index.js';
 import { WALNUT_HOME } from '../constants.js';
+import { BUILTIN_ACTION_MODULES } from './builtin-modules.js';
 import type { ActionDefinition, ActionDescriptor, ActionContext, ActionResult } from './types.js';
 
 const USER_ACTIONS_DIR = join(WALNUT_HOME, 'actions');
@@ -22,32 +21,32 @@ const USER_ACTIONS_DIR = join(WALNUT_HOME, 'actions');
 /** Cache of discovered actions — invalidated by calling discoverActions(). */
 let cache: ActionDefinition[] | null = null;
 
-/**
- * Resolve the built-in actions directory.
- * tsup compiles src/actions/*.ts → dist/actions/*.js as separate entry points.
- * This file (registry.ts) is bundled into dist/web/server.js, so we walk up
- * from import.meta.url to find dist/actions/.
- */
-function resolveBuiltinDir(): string | null {
-  const thisDir = fileURLToPath(new URL('.', import.meta.url)).replace(/\/$/, '');
-  let dir = thisDir;
-  // When running from dist/web/server.js or dist/cli.js, walk up to find dist/actions/
-  for (let i = 0; i < 5; i++) {
-    const candidate = join(dir, 'actions');
+/** The `filePath` a built-in action is listed under: it names the table row, not a file. */
+const BUILTIN_PREFIX = 'builtin:';
+
+/** A module's descriptor as an action definition, or null when it is not a usable action. */
+function toDefinition(mod: Record<string, unknown>, source: 'builtin' | 'user', filePath: string): ActionDefinition | null {
+  if (typeof mod.describe !== 'function') return null;
+  const descriptor = (mod.describe as () => ActionDescriptor)();
+  if (!descriptor?.id || !descriptor?.name) return null;
+  if (descriptor.platform && descriptor.platform !== process.platform) return null;
+  return { ...descriptor, source, filePath };
+}
+
+async function loadBuiltins(): Promise<ActionDefinition[]> {
+  const results: ActionDefinition[] = [];
+  for (const [name, load] of Object.entries(BUILTIN_ACTION_MODULES)) {
     try {
-      if (statSync(candidate).isDirectory() && candidate !== thisDir) {
-        return candidate;
-      }
-    } catch { /* continue searching */ }
-    dir = join(dir, '..');
+      const def = toDefinition(await load(), 'builtin', BUILTIN_PREFIX + name);
+      if (def) results.push(def);
+    } catch (err) {
+      log.cron.warn(`failed to load action module: ${name}`, {
+        source: 'builtin',
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
-  // No actions/ dir found → skip the builtin scan entirely. The old fallback
-  // returned thisDir, which for a bundled build is dist/ itself — scanDir then
-  // dynamic-imported every .js in dist (all bundles + stale code-split chunks)
-  // and one of them wedged startServer before listen() (2026-08-22 outage:
-  // server alive, lock held, port never bound). A missing dir must cost the
-  // builtin actions, never the boot.
-  return null;
+  return results;
 }
 
 /**
@@ -56,7 +55,7 @@ function resolveBuiltinDir(): string | null {
 async function scanDir(
   dir: string,
   ext: string,
-  source: 'builtin' | 'user',
+  source: 'user',
 ): Promise<ActionDefinition[]> {
   const results: ActionDefinition[] = [];
   let entries: string[];
@@ -74,20 +73,8 @@ async function scanDir(
 
     const filePath = join(dir, file);
     try {
-      const mod = await import(filePath);
-      if (typeof mod.describe !== 'function') continue;
-
-      const descriptor: ActionDescriptor = mod.describe();
-      if (!descriptor?.id || !descriptor?.name) continue;
-
-      // Platform filter
-      if (descriptor.platform && descriptor.platform !== process.platform) continue;
-
-      results.push({
-        ...descriptor,
-        source,
-        filePath,
-      });
+      const def = toDefinition(await import(filePath), source, filePath);
+      if (def) results.push(def);
     } catch (err) {
       log.cron.warn(`failed to load action module: ${file}`, {
         source,
@@ -103,12 +90,8 @@ async function scanDir(
  * User actions with the same ID override built-in ones.
  */
 export async function discoverActions(): Promise<ActionDefinition[]> {
-  const builtinDir = resolveBuiltinDir();
-  if (!builtinDir) {
-    log.cron.warn('builtin actions dir not found next to the bundle — builtin actions unavailable this run');
-  }
   const [builtins, userActions] = await Promise.all([
-    builtinDir ? scanDir(builtinDir, '.js', 'builtin') : Promise.resolve([]),
+    loadBuiltins(),
     scanDir(USER_ACTIONS_DIR, '.mjs', 'user'),
   ]);
 
@@ -153,10 +136,10 @@ export async function runAction(
   try {
     // For user actions (.mjs), bust the module cache with a query param
     // so edits are picked up without restarting the server.
-    const importPath = action.source === 'user'
-      ? `${action.filePath}?t=${Date.now()}`
-      : action.filePath;
-    const mod = await import(importPath);
+    const builtin = action.source === 'builtin' ? BUILTIN_ACTION_MODULES[action.filePath.slice(BUILTIN_PREFIX.length)] : undefined;
+    const mod = builtin
+      ? await builtin()
+      : await import(action.source === 'user' ? `${action.filePath}?t=${Date.now()}` : action.filePath);
 
     if (typeof mod.run !== 'function') {
       return { invoke: false, content: `Action "${id}" has no run() export` };

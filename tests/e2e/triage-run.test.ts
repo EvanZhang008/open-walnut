@@ -13,17 +13,10 @@
  *  - `session:result` closes a run out: COMPLETE, exactly one journal line, and
  *    the State.md check that warns the NEXT envelope.
  *
- * TWO THINGS THIS FILE HAS TO ARRANGE, both consequences of running the server
- * from source rather than from dist:
- *
- *  1. Builtin actions live in `dist/actions/` and the registry finds them by
- *     walking up from its own file, so a src-run server discovers NONE (its
- *     registry sits in src/actions/). The action is therefore installed as a USER
- *     action — a one-line .mjs re-export, written BEFORE the server boots because
- *     discovery is cached at boot. What runs is the real module.
- *  2. The CLI is tests/providers/mock-claude.mjs, so what is asserted is the
- *     LAUNCH REQUEST (a task, a session record, the message it carried) and never
- *     a model's answer.
+ * The built-in action loads through the host's own module table
+ * (src/actions/builtin-modules.ts), exactly as in the built server. The CLI is
+ * tests/providers/mock-claude.mjs, so what is asserted is the LAUNCH REQUEST (a
+ * task, a session record, the message it carried) and never a model's answer.
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import fs from 'node:fs/promises';
@@ -46,7 +39,6 @@ import { getTask } from '../../src/core/task-manager.js';
 import { getSessionsForTask } from '../../src/core/session-tracker.js';
 
 const MOCK_CLI = path.resolve(import.meta.dirname, '../providers/mock-claude.mjs');
-const ACTION_SRC = path.resolve(import.meta.dirname, '../../src/actions/inbox-triage-batch.ts');
 const TRIAGE_PROJECT = 'Ask Inbox Triage';
 
 let server: HttpServer;
@@ -141,13 +133,6 @@ async function waitForNewRunTask(knownIds: Set<string>): Promise<any> {
 
 beforeAll(async () => {
   await fs.rm(WALNUT_HOME, { recursive: true, force: true });
-  // Written BEFORE the server boots: the registry caches its discovery at boot.
-  await fs.mkdir(path.join(WALNUT_HOME, 'actions'), { recursive: true });
-  await fs.writeFile(
-    path.join(WALNUT_HOME, 'actions', 'inbox-triage-batch.mjs'),
-    `export { describe, run } from ${JSON.stringify(ACTION_SRC)}\n`,
-    'utf-8',
-  );
 
   daemon = await createMockDaemon();
   sessionRunner.setCliCommand(MOCK_CLI);

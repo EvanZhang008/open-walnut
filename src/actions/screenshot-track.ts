@@ -5,8 +5,8 @@
  * Uses macOS native `screencapture` + `sips` (zero external dependencies).
  * Implements file-size-based change detection to skip unchanged screens.
  *
- * This is a built-in action: compiled to dist/actions/screenshot-track.js
- * and discovered automatically by the action registry.
+ * This is a built-in action: listed in src/actions/builtin-modules.ts and
+ * loaded by the action registry through the host bundle.
  */
 
 import { execFile } from 'node:child_process';

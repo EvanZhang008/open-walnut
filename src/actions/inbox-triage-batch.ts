@@ -2,12 +2,12 @@
  * `inbox-triage-batch` — the init processor that builds one Inbox Triage batch.
  *
  * WHICH REGISTRY. This is the FILE-BASED action registry (src/actions/registry.ts):
- * a module exporting `describe()` + `run(ctx)`, emitted by tsup as its own
- * dist/actions/*.js entry and dynamic-imported by id. `src/core/cron/actions.ts`
- * is a SECOND, parallel registry whose only caller was retired; nothing reads it.
+ * a module exporting `describe()` + `run(ctx)`, imported through the host bundle
+ * (src/actions/builtin-modules.ts) and run by id. `src/core/cron/actions.ts`
+ * is a SECOND, parallel registry; the routine form's action list reads that one
+ * (listRoutineActions), not this.
  * This slice uses the file-based one because that is the one the cron engine's
- * `runAction` dep is wired to (src/web/server.ts) and the one the routine form's
- * action dropdown lists.
+ * `runAction` dep is wired to (src/web/server.ts).
  *
  * ZERO MODEL CALLS, and a test pins it. Everything here is config, one JSON file
  * and one note read. The reason is cost and honesty: this runs on the server's
