@@ -11,9 +11,9 @@
  * History and the WS are mocked (session-live-turn-fold.spec.ts harness), so the
  * live case injects stream events one by one while the turn really runs.
  */
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect } from '@playwright/test';
+import { MOCK_SESSION_ID as SESSION_ID, injectEvent, mockSession, open, streamTools, waitForWs } from './mock-session-harness';
 
-const SESSION_ID = 'pw-neighbor-fold';
 const SHOTS = '/tmp/neighbor-fold';
 
 if (process.env.NEIGHBOR_FOLD_VIDEO) test.use({ video: { mode: 'on', size: { width: 1280, height: 900 } } });
@@ -45,90 +45,6 @@ const history = [
   { role: 'assistant', text: 'NB_ANSWER3 then ship it.', timestamp: at(15) },
   { role: 'user', injected: true, text: note('sample-lone'), timestamp: at(16) },
 ];
-
-async function injectEvent(page: Page, name: string, data: unknown) {
-  await page.evaluate(
-    ({ name, data }) => {
-      const ws = (window as any).__capturedWs as WebSocket | undefined;
-      if (!ws) throw new Error('No captured WebSocket');
-      ws.dispatchEvent(new MessageEvent('message', { data: JSON.stringify({ type: 'event', name, data, seq: Date.now() }) }));
-    },
-    { name, data },
-  );
-}
-
-async function waitForWs(page: Page) {
-  await page.waitForFunction(() => {
-    const ws = (window as any).__capturedWs as WebSocket | undefined;
-    return ws && ws.readyState === WebSocket.OPEN;
-  }, null, { timeout: 10000 });
-}
-
-async function streamTools(page: Page, calls: (readonly [string, string, string?])[]) {
-  for (const [id, command, result = 'ok'] of calls) {
-    await injectEvent(page, 'session:tool-use', { sessionId: SESSION_ID, toolName: 'Bash', toolUseId: id, input: { command } });
-    await injectEvent(page, 'session:tool-result', { sessionId: SESSION_ID, toolUseId: id, result });
-  }
-}
-
-async function mockSession(page: Page, messages: unknown[], status: 'running' | 'idle') {
-  await page.addInitScript(() => {
-    const OrigWebSocket = window.WebSocket;
-    window.WebSocket = class PatchedWebSocket extends OrigWebSocket {
-      constructor(url: string | URL, protocols?: string | string[]) {
-        super(url, protocols);
-        const socketUrl = new URL(String(url), window.location.href);
-        if (socketUrl.pathname === '/ws' && !(window as any).__capturedWs) {
-          (window as any).__capturedWs = this;
-          const origSend = this.send.bind(this);
-          this.send = (data: string | ArrayBufferLike | Blob | ArrayBufferView) => {
-            try {
-              const parsed = JSON.parse(data as string);
-              if (parsed.type === 'req' && parsed.method === 'session:stream-subscribe') {
-                setTimeout(() => {
-                  this.dispatchEvent(new MessageEvent('message', {
-                    data: JSON.stringify({ type: 'res', id: parsed.id, ok: true, payload: { blocks: [], isStreaming: false } }),
-                  }));
-                }, 10);
-                return;
-              }
-            } catch { /* non-JSON */ }
-            origSend(data);
-          };
-        }
-      }
-    } as any;
-    for (const key of Object.getOwnPropertyNames(OrigWebSocket)) {
-      if (key !== 'prototype' && key !== 'length' && key !== 'name') {
-        try { (window.WebSocket as any)[key] = (OrigWebSocket as any)[key]; } catch { /* read-only */ }
-      }
-    }
-  });
-  await page.route(`**/api/sessions/${SESSION_ID}/history**`, async (route) => {
-    const since = new URL(route.request().url()).searchParams.get('since');
-    if (since !== null) return route.fulfill({ json: { messages: messages.slice(Number(since)), cursor: messages.length, delta: true } });
-    return route.fulfill({ json: { messages, cursor: messages.length, delta: false } });
-  });
-  await page.route(`**/api/sessions/${SESSION_ID}`, async (route, request) => {
-    if (request.url().includes('/history')) return route.fallback();
-    await route.fulfill({
-      json: {
-        session: {
-          claudeSessionId: SESSION_ID, taskId: 'pw-task-neighbor-fold', project: 'Walnut', process_status: status,
-          mode: 'bypass', startedAt: at(0), lastActiveAt: new Date().toISOString(),
-          messageCount: messages.length, title: 'Neighbor fold session',
-        },
-      },
-    });
-  });
-}
-
-async function open(page: Page) {
-  await page.setViewportSize({ width: 1280, height: 900 });
-  await page.goto(`/sessions?id=${SESSION_ID}`);
-  const panel = page.locator(`.session-panel[data-session-id="${SESSION_ID}"]`);
-  return panel.locator('.session-history');
-}
 
 test('a tool run and the injected context after it are one fold row', async ({ page }) => {
   await mockSession(page, history, 'idle');
@@ -244,4 +160,51 @@ test('a skill loaded after words mid-turn stays its own row while the turn runs'
   await expect(hist.locator('.session-msg', { hasText: 'NB_WORDS first' })).toBeVisible();
   await expect(hist.locator('.tool-run-label', { hasText: 'Loaded skill sample-plan' })).toBeVisible();
   await expect(hist.locator('[data-testid="turn-fold"]')).toHaveCount(0);
+});
+
+// The reported Main shape: a notice the session only acknowledged (a hidden
+// turn), another notice, then the answer with its own reasoning. That was three
+// rows above the answer, "Show 1 hidden turn", "Received a message ›",
+// "Thinking ›" (2026-10-26, the user: "why it is 2 3, just collapse into one
+// message no?"). Now it is one; a person's message still keeps its hidden turns apart.
+test('hidden turns, a notice and the answer\'s reasoning before an answer are one row', async ({ page }) => {
+  const { createEnvelopeKit } = await import('../../../src/core/peers/envelope-kit');
+  const kit = createEnvelopeKit();
+  const notice = (n: number) => kit.buildWalnutMessage({ kind: 'notification', attrs: { from: 'Walnut', 'about-task': 'abcd1234', outcome: 'stopped' }, body: `NB_NOTICE_${n} Its turn ended.` });
+  const rows = [
+    { role: 'user', text: 'NB_H_ASK how is it going', timestamp: at(0) },
+    { role: 'assistant', text: 'NB_H_ANSWER1 going well.', timestamp: at(1) },
+    { role: 'user', text: notice(1), timestamp: at(2) },
+    { role: 'assistant', text: '<walnut-turn status="agent-ack"/>', timestamp: at(3) },
+    { role: 'user', text: notice(2), timestamp: at(4) },
+    { role: 'assistant', thinking: 'NB_H_REASONING the second notice means the page shipped.', text: 'NB_H_ANSWER2 the page is live.', timestamp: at(5) },
+    { role: 'user', text: notice(3), timestamp: at(6) },
+    { role: 'assistant', text: '<walnut-turn status="agent-ack"/>', timestamp: at(7) },
+    { role: 'user', text: 'NB_H_ASK2 thanks, what next?', timestamp: at(8) },
+    { role: 'assistant', text: 'NB_H_ANSWER3 the footer.', timestamp: at(9) },
+  ];
+  await mockSession(page, rows, 'idle');
+  const hist = await open(page);
+  await expect(hist).toContainText('NB_H_ANSWER3', { timeout: 15000 });
+  const answer2 = hist.locator('.session-msg', { hasText: 'NB_H_ANSWER2' });
+  await answer2.scrollIntoViewIfNeeded();
+  // Between the first answer and the second: one row, nothing else.
+  const between = await hist.evaluate((el) => {
+    const all = [...el.querySelectorAll('.tool-run-label, .hidden-turns-toggle, .chat-thinking-toggle, .provenance-card')];
+    const a1 = [...el.querySelectorAll('.session-msg')].find((n) => n.textContent?.includes('NB_H_ANSWER1'))!;
+    const a2 = [...el.querySelectorAll('.session-msg')].find((n) => n.textContent?.includes('NB_H_ANSWER2'))!;
+    return all.filter((n) => (a1.compareDocumentPosition(n) & Node.DOCUMENT_POSITION_FOLLOWING) && (a2.compareDocumentPosition(n) & Node.DOCUMENT_POSITION_PRECEDING) && !a2.contains(n))
+      .map((n) => n.textContent?.trim());
+  });
+  expect(between).toEqual([expect.stringMatching(/^Received 2 messages/)]);
+  // The answer shows its words alone; its reasoning is in the row.
+  await expect(answer2).not.toContainText('Thinking');
+  const fold = hist.locator('[data-testid="turn-fold"]', { hasText: 'Received 2 messages' });
+  await page.screenshot({ path: `${SHOTS}/${test.info().project.name}-hidden-merged.png`, clip: (await hist.boundingBox())! }).catch(() => {});
+  await fold.locator(':scope > .tool-run-toggle').click();
+  await expect(fold).toContainText('Acknowledged');
+  await expect(fold).toContainText('Thinking');
+  // The hidden turn before the person's next message keeps its own row.
+  await expect(hist.locator('.hidden-turns-toggle')).toHaveText(['Show 1 hidden turn']);
+  await page.waitForTimeout(600);
 });

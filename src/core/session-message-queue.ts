@@ -42,6 +42,7 @@ import {
 import { noteSettledLine, settledLineUuid } from './session-queue-lines.js';
 import { staleTriggerText } from './routines/trigger-stale.js';
 import type { PendingTaskRouting } from './sessions/task-routing-notice.js';
+import { PERSON_SEND_SOURCES, queueSentBy } from './sessions/send-sent-by.js';
 
 // ── Types and store (session-queue-store.ts) ──
 
@@ -100,7 +101,7 @@ export async function loadQueue(): Promise<void> {
 export async function enqueueMessage(
   sessionId: string,
   message: string,
-  opts?: { id?: string; userUuid?: string; stopFence?: string | null; relayTaken?: boolean; lineUuid?: string; closesPrompt?: boolean },
+  opts?: { id?: string; userUuid?: string; stopFence?: string | null; relayTaken?: boolean; lineUuid?: string; closesPrompt?: boolean; sentBy?: 'person' | 'agent' },
 ): Promise<QueuedMessage> {
   if (opts?.id?.startsWith('qm-inbox-') && !opts.id.startsWith('qm-inbox-ai-')) {
     const { validateInboxMessageBoundary } = await import('./human-inbox/item-execution.js');
@@ -127,6 +128,7 @@ export async function enqueueMessage(
     ...(opts?.userUuid ? { userUuid: opts.userUuid } : {}),
     ...(inherited ? { lineUuid: inherited, lineTries: 1 } : {}),
     ...(opts?.closesPrompt ? { closesPrompt: true as const } : {}),
+    ...(opts?.sentBy ? { sentBy: opts.sentBy } : {}),
   };
   // A relayed row is written strictly: on a disk failure the companion is told
   // (QueueNotStoredError) instead of the row living in this process alone.
@@ -155,12 +157,8 @@ export async function enqueueMessage(
   return msg;
 }
 
-/**
- * Send sources a person typed into the session (phase.ts REOPENING_SEND_SOURCES
- * minus the peer and letter paths). Their rows answer a pending permission
- * prompt (QueuedMessage.closesPrompt); every other row waits behind it.
- */
-export const PERSON_SEND_SOURCES: ReadonlySet<string> = new Set(['ui', 'mobile', 'cli', 'web-api', 'api-v1', 'chat']);
+// Who sent a row (QueuedMessage.sentBy), and the sources a person types into.
+export { PERSON_SEND_SOURCES, queueSentBy } from './sessions/send-sent-by.js';
 
 /**
  * Enqueue a message AND notify session-runner + UI in one call.
@@ -237,6 +235,7 @@ export async function sendMessageToSession(
       ...(opts?.relayTaken ? { relayTaken: true } : {}),
       ...(opts?.lineUuid ? { lineUuid: opts.lineUuid } : {}),
       ...(opts?.closesPrompt || PERSON_SEND_SOURCES.has(opts?.source ?? '') ? { closesPrompt: true } : {}),
+      ...(queueSentBy(opts?.source) ? { sentBy: queueSentBy(opts?.source) } : {}),
     });
   } catch (err) {
     appState?.release();
@@ -284,6 +283,10 @@ export async function sendMessageToSession(
     messageId: msg.id,
     message,
     source,
+    ...(msg.sentBy ? { sentBy: msg.sentBy } : {}),
+    // An agent's row as stored: a peer's note is enveloped only here (`message`
+    // is its bare text), and the panel shows and folds the card it will become.
+    ...(msg.sentBy === 'agent' && msg.message !== message ? { queuedText: msg.message } : {}),
     enqueuedAt: msg.enqueuedAt,
   }, ['main-ai'], { source });
 

@@ -15,7 +15,7 @@ import { DeliveryMetaLine } from './DeliveryMetaLine';
 import { latestTurnStartTop, READER_SCROLL_EVENT } from './phone-session-layer';
 import { isPhoneLayout } from '@/hooks/usePhoneLayout';
 import { JumpPillLabel, PromptWaitingPill } from './PhoneTimelinePills';
-import { SessionMessage, StableMarkdownBody, ToolRunShell, StreamRunMembers, streamRunSummary, streamRunHasCallingTool, isToolOnlyMessage, isThinkingOnlyMessage, isTextPlusMergeableTools, mergeThinkingOnly, trailingThinkingOnlyStart, MergedHistoryToolRun, SystemGroupRun, systemGroupMemberFromHistory, type SystemGroupMember, type StreamRunMember } from './SessionMessage';
+import { SessionMessage, SessionThinking, StableMarkdownBody, ToolRunShell, StreamRunMembers, streamRunSummary, streamRunHasCallingTool, isToolOnlyMessage, isThinkingOnlyMessage, isTextPlusMergeableTools, mergeThinkingOnly, trailingThinkingOnlyStart, MergedHistoryToolRun, SystemGroupRun, systemGroupMemberFromHistory, type SystemGroupMember, type StreamRunMember } from './SessionMessage';
 import { useEntityClickHandler } from '@/hooks/useEntityClickHandler';
 import { StreamingBlockView, WorkingIndicator, countStreamChars } from './StreamingBlockView';
 import { SessionWorkingIndicator } from './SessionWorkingIndicator';
@@ -53,6 +53,7 @@ import { ThreadStackHeader } from './ThreadStackHeader';
 import { ThreadTurnLabel } from './ThreadTurnLabel';
 import { foldGroupOf, foldOpenKeys, foldParts, isFolded } from '@/utils/thread-fold';
 import { groupProcessParts, processPhrase, type ContextCounts } from './process-fold';
+import { isEnvelopeOnly, parseSessionEnvelopes } from '@open-walnut/history-session-envelope';
 import { HiddenTurnsRow, NoActionMark, ProcessFoldRow, hiddenTurnsKey, openTurnFold, processFoldKey, turnFoldKey } from './TurnFolds';
 import { shapeTurns, type TurnShape } from '@/utils/turn-shape';
 import { noActionRows, readTurnMarker, stripTurnMarker } from '@/utils/turn-end-marker';
@@ -189,6 +190,9 @@ export interface OptimisticMessage extends SessionHistoryMessage {
   /** The server holds this row behind a line it is still confirming (read back
    *  from session:get-queue on load, so a reload keeps the waiting note). */
   heldReason?: string;
+  /** Who sent a row this tab did not (the queue's `sentBy`, from the send's
+   *  source): an agent's card folds on arrival (queuedFoldRuns). */
+  sentBy?: 'person' | 'agent';
 }
 
 /** Walnut's messaging ops besides task_send (which renders its own card): a process fold counts them as sent messages. */
@@ -229,7 +233,7 @@ interface SessionChatHistoryProps {
   onBatchFailed?: (messageIds: string[], error: string) => void;
   onEditQueued?: (queueId: string, newText: string) => void;
   onDeleteQueued?: (queueId: string) => void;
-  onAgentQueued?: (msg: { queueId: string; text: string; enqueuedAt?: string }) => void;
+  onAgentQueued?: (msg: { queueId: string; text: string; enqueuedAt?: string; sentBy?: 'person' | 'agent'; queuedText?: string }) => void;
   onRetryFailed?: (queueId: string) => void;
   onDismissFailed?: (queueId: string) => void;
   onTaskClick?: (taskId: string) => void;
@@ -960,10 +964,15 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // request): history hides those lines on purpose, so minting a "You" bubble for one
   // would paint a raw machine prompt into the timeline that nothing later removes.
   useEvent('session:message-queued', (data) => {
-    const d = data as { sessionId?: string; messageId?: string; message?: string; source?: string; enqueuedAt?: string };
+    const d = data as { sessionId?: string; messageId?: string; message?: string; source?: string; enqueuedAt?: string; sentBy?: 'person' | 'agent'; queuedText?: string };
     const plumbing = d.source === 'ui' || (d.source ?? '').startsWith('side-thread-');
     if (d.sessionId === sessionId && !plumbing && d.messageId && d.message) {
-      onAgentQueued?.({ queueId: d.messageId, text: d.message, ...(d.enqueuedAt ? { enqueuedAt: d.enqueuedAt } : {}) });
+      onAgentQueued?.({
+        queueId: d.messageId, text: d.message,
+        ...(d.enqueuedAt ? { enqueuedAt: d.enqueuedAt } : {}),
+        ...(d.sentBy === 'person' || d.sentBy === 'agent' ? { sentBy: d.sentBy } : {}),
+        ...(typeof d.queuedText === 'string' ? { queuedText: d.queuedText } : {}),
+      });
     }
   });
 
@@ -3528,6 +3537,8 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
    * exactly that reason — a second copy would be a second set of thread bars,
    * fork dividers and copy-action rules to keep in sync.
    */
+  // Answers whose reasoning the turn's fold holds (pushTurnFold): they show the words alone.
+  const thinkingFolded = new Set<number>();
   const renderHistoryPart = (part: HistoryPart) => {
     if (part.kind === 'run') {
       const first = part.members[0];
@@ -3596,7 +3607,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
           // the turn rule agrees (an agent's turn, no failure, question or plan).
           noActionSet.has(globalIndex) ? <NoActionMark /> : null
         ) : (
-          <SessionMessage message={m} assistantLabel={assistantLabel} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} suppressTools={part.suppressTools} showCopyActions={globalIndex === lastAssistantTextIndex} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />
+          <SessionMessage message={m} assistantLabel={assistantLabel} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} suppressTools={part.suppressTools} {...(thinkingFolded.has(globalIndex) ? { answerOnly: true } : {})} showCopyActions={globalIndex === lastAssistantTextIndex} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />
         )}
       </div>
     );
@@ -3754,9 +3765,11 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     };
     // Everything before a turn's answer, as one row (turn-shape.ts). Opened, the
     // rows show as they are, not folded a second time.
-    const pushTurnFold = (items: Item[]) => {
+    const pushTurnFold = (items: Item[], answerThinking?: string) => {
       const id = idOf(items[0].part);
       const body = items.map((x) => renderHistoryPart(x.part));
+      // The answer's own reasoning is the last step before it, not a row of its own.
+      if (answerThinking) body.push(<SessionThinking key={`fold-thinking-${id}`} text={answerThinking} />);
       markAll(items, turnFoldKey(id));
       const tools: SessionHistoryTool[] = [];
       let notes = 0;
@@ -3808,16 +3821,28 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       if (mine.length === 0) continue;
       const kind = mine.some((x) => askedAfter.has(x.i)) ? 'open' : t.kind;
       if (kind === 'hidden') { hidden.push(...mine); hiddenTurns++; continue; }
-      flushHidden();
       const ans = kind === 'answered' ? mine.findIndex((x) => x.part.kind === 'msg' && x.part.globalIndex === t.answer) : -1;
-      if (ans < 0) { renderDefault(mine, pageRows); continue; }
+      if (ans < 0) { flushHidden(); renderDefault(mine, pageRows); continue; }
       // The person's own message always shows.
       const lead = t.byPerson && headOf(mine[0].part).globalIndex === t.start ? 1 : 0;
+      const answerPart = mine[ans].part;
+      const answerThinking = answerPart.kind === 'msg' && answerPart.m.role === 'assistant' && (answerPart.m.thinking ?? '').trim()
+        ? answerPart.m.thinking : undefined;
+      // Turns hidden just before one nobody typed fold into its row: "Show 1
+      // hidden turn" above "Received a message" was two rows for one reading
+      // (2026-10-26, the user: "why it is 2 3, just collapse into one message").
+      const own = mine.slice(lead, ans);
+      const merge = !lead && hidden.length > 0 && (own.length > 0 || !!answerThinking);
+      const steps = merge ? [...hidden, ...own] : own;
+      if (merge) { hidden = []; hiddenTurns = 0; } else flushHidden();
       if (lead) renderDefault(mine.slice(0, 1), pageRows);
-      const before = mine.slice(lead, ans);
-      // One row is already a folded row: no fold around it.
-      if (before.length === 1 && (before[0].part.kind === 'run' || isContextPart(before[0].part))) renderDefault(before, pageRows);
-      else if (before.length > 0) pushTurnFold(before);
+      // One row is already a folded row: no fold around it, unless the answer's
+      // reasoning joins it.
+      if (steps.length === 1 && !answerThinking && (steps[0].part.kind === 'run' || isContextPart(steps[0].part))) renderDefault(steps, pageRows);
+      else if (steps.length > 0) {
+        if (answerThinking && answerPart.kind === 'msg') thinkingFolded.add(answerPart.globalIndex);
+        pushTurnFold(steps, answerThinking);
+      }
       renderDefault(mine.slice(ans), pageRows);
     }
     flushHidden();
@@ -3986,6 +4011,107 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // Always mount the scroll container so containerRef is available for scroll effects.
   // Remote sessions have a gap between Phase 1 (empty, local streams) and Phase 2 (SSH fetch)
   // where containerRef was previously null, breaking auto-scroll.
+  // A card an agent sent (another task's note, Walnut's notice, a trigger) folds
+  // the moment it arrives, as history folds it once the turn is over; shown in
+  // full until then, it sat open for seconds (2026-10-26, the user: "why it still
+  // show for few second, I think directly collapse"). Who sent it comes from the
+  // send's source (OptimisticMessage.sentBy); a person's row never folds, and nor
+  // does anything with words besides the cards. Neighbours share one row (not in
+  // stack or Conversation Mode, which file each row under its own question).
+  const isAgentCard = (m: OptimisticMessage) => m.sentBy === 'agent' && m.status !== 'failed' && editingId !== m.queueId
+    && isEnvelopeOnly(parseSessionEnvelopes(m.text ?? ''));
+  const queuedFolds = (() => {
+    const starts = new Map<number, number[]>();
+    const members = new Set<number>();
+    const folds = (k: number) => { const it = timeline[k]; return it.kind === 'user' && isAgentCard(it.msg); };
+    for (let k = 0; k < timeline.length;) {
+      if (!folds(k)) { k++; continue; }
+      const run = [k];
+      let n = k + 1;
+      while (!stackMode && !convMode && n < timeline.length && (folds(n) || isTransparentStreamItem(timeline[n]))) {
+        if (folds(n)) { run.push(n); members.add(n); }
+        n++;
+      }
+      starts.set(k, run);
+      k = n;
+    }
+    return { starts, members };
+  })();
+
+  // A queued or delivered row, as this tab shows it until history takes it in.
+  const renderQueuedRow = (m: OptimisticMessage): React.ReactNode => {
+    if (m.status === 'received' && editingId === m.queueId) {
+      return (
+        <div key={`r-${m.queueId}`} className="session-msg-received">
+          <EditableQueuedMessage
+            message={m.text}
+            onSave={(newText) => {
+              setEditingId(null);
+              if (newText !== m.text) onEditQueued?.(m.queueId, newText);
+            }}
+            onCancel={() => setEditingId(null)}
+          />
+        </div>
+      );
+    }
+
+    const wrapperClass = m.status === 'pending' ? 'session-msg-queued'
+      : m.status === 'received' ? 'session-msg-received'
+      : m.status === 'delivered' ? 'session-msg-delivered'
+      : m.status === 'failed' ? 'session-msg-failed' : '';
+    // An anchored send carries the uuid its anchor was recorded under, so
+    // the bubble files under its question IMMEDIATELY (the same page the
+    // persisted row will be on, no visible flip when history absorbs it).
+    const optimisticRowId = m.msgId ?? m.userUuid ?? m.walnutMessageId;
+    const queuedBehind = stackMode && isStreaming && (m.status === 'pending' || m.status === 'received')
+      && optimisticThreadKey(m) !== liveStreamKey;
+
+    return (
+      <div key={`u-${m.queueId}`} {...threadWrapperProps(optimisticRowId, wrapperClass)}>
+        {turnLabelFor(optimisticRowId, 'user')}
+        <SessionMessage message={m} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />
+        {queuedBehind && (
+          <div className="thread-queue-note" role="status">Waits for “{answeringTitle}” to finish.</div>
+        )}
+        {(heldIds.has(m.queueId) || !!m.heldReason) && (m.status === 'pending' || m.status === 'received') && (
+          <div className="thread-queue-note session-msg-held-note" role="status">{heldIds.get(m.queueId) ?? m.heldReason ?? HELD_DEFAULT_REASON}</div>
+        )}
+        <OptimisticImagePreviews images={m.images} />
+        <DeliveryMetaLine status={m.status} timestamp={m.timestamp} turnRunning={isStreaming} onRetry={() => onRetryFailed?.(m.queueId)} />
+        {m.status === 'received' && (
+          <>
+            <div className="session-msg-received-badge">Queued</div>
+            <div className="session-msg-queued-actions">
+              <button onClick={() => setEditingId(m.queueId)}>Edit</button>
+              <button onClick={() => onDeleteQueued?.(m.queueId)}>Delete</button>
+            </div>
+          </>
+        )}
+        {m.status === 'delivered' && (
+          <div className="session-msg-delivered-badge">Delivered ✓</div>
+        )}
+        {m.status === 'failed' && (
+          <>
+            <div className="session-msg-failed-badge">
+              {m.parked
+                ? `Not delivered. Auto-retry stopped${m.failedError ? ` (${m.failedError})` : ''}`
+                : `Send failed${m.failedError ? `: ${m.failedError}` : ''}`}
+            </div>
+            <div className="session-msg-queued-actions">
+              <button className="session-msg-retry-btn" onClick={() => onRetryFailed?.(m.queueId)}>Retry</button>
+              {/* A parked row still exists on disk, so Discard must delete it
+                  server-side; Dismiss is local-only (the pending row it hides
+                  still drains on its own). */}
+              {m.parked
+                ? <button onClick={() => onDeleteQueued?.(m.queueId)}>Discard</button>
+                : <button onClick={() => onDismissFailed?.(m.queueId)}>Dismiss</button>}
+            </div>
+          </>
+        )}
+      </div>
+    );
+  };
+
   return (
     <>
       {/* Team tab bar — shown when session has team(s) */}
@@ -4552,76 +4678,21 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
 
               // kind === 'user'
               const m = item.msg;
-              if (m.status === 'received' && editingId === m.queueId) {
+              // An agent's card folds the moment it arrives (queuedFolds).
+              if (queuedFolds.members.has(i)) return null;
+              const run = queuedFolds.starts.get(i);
+              if (run) {
+                const rows = run.map((k) => (timeline[k] as Extract<TimelineItem, { kind: 'user' }>).msg);
                 return (
-                  <div key={`r-${m.queueId}`} className="session-msg-received">
-                    <EditableQueuedMessage
-                      message={m.text}
-                      onSave={(newText) => {
-                        setEditingId(null);
-                        if (newText !== m.text) onEditQueued?.(m.queueId, newText);
-                      }}
-                      onCancel={() => setEditingId(null)}
-                    />
+                  <div key={`qf-${m.queueId}`} className="session-msg-bare" data-testid="session-received-fold-row">
+                    <ProcessFoldRow foldId={m.queueId} foldKey={`queued:${m.queueId}`} testId="received-fold"
+                      phrase={rows.length === 1 ? 'Received a message' : `Received ${rows.length} messages`}>
+                      {rows.map(renderQueuedRow)}
+                    </ProcessFoldRow>
                   </div>
                 );
               }
-
-              const wrapperClass = m.status === 'pending' ? 'session-msg-queued'
-                : m.status === 'received' ? 'session-msg-received'
-                : m.status === 'delivered' ? 'session-msg-delivered'
-                : m.status === 'failed' ? 'session-msg-failed' : '';
-              // An anchored send carries the uuid its anchor was recorded under, so
-              // the bubble files under its question IMMEDIATELY (the same page the
-              // persisted row will be on, no visible flip when history absorbs it).
-              const optimisticRowId = m.msgId ?? m.userUuid ?? m.walnutMessageId;
-              const queuedBehind = stackMode && isStreaming && (m.status === 'pending' || m.status === 'received')
-                && optimisticThreadKey(m) !== liveStreamKey;
-
-              return (
-                <div key={`u-${m.queueId}`} {...threadWrapperProps(optimisticRowId, wrapperClass)}>
-                  {turnLabelFor(optimisticRowId, 'user')}
-                  <SessionMessage message={m} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />
-                  {queuedBehind && (
-                    <div className="thread-queue-note" role="status">Waits for “{answeringTitle}” to finish.</div>
-                  )}
-                  {(heldIds.has(m.queueId) || !!m.heldReason) && (m.status === 'pending' || m.status === 'received') && (
-                    <div className="thread-queue-note session-msg-held-note" role="status">{heldIds.get(m.queueId) ?? m.heldReason ?? HELD_DEFAULT_REASON}</div>
-                  )}
-                  <OptimisticImagePreviews images={m.images} />
-                  <DeliveryMetaLine status={m.status} timestamp={m.timestamp} turnRunning={isStreaming} onRetry={() => onRetryFailed?.(m.queueId)} />
-                  {m.status === 'received' && (
-                    <>
-                      <div className="session-msg-received-badge">Queued</div>
-                      <div className="session-msg-queued-actions">
-                        <button onClick={() => setEditingId(m.queueId)}>Edit</button>
-                        <button onClick={() => onDeleteQueued?.(m.queueId)}>Delete</button>
-                      </div>
-                    </>
-                  )}
-                  {m.status === 'delivered' && (
-                    <div className="session-msg-delivered-badge">Delivered ✓</div>
-                  )}
-                  {m.status === 'failed' && (
-                    <>
-                      <div className="session-msg-failed-badge">
-                        {m.parked
-                          ? `Not delivered. Auto-retry stopped${m.failedError ? ` (${m.failedError})` : ''}`
-                          : `Send failed${m.failedError ? `: ${m.failedError}` : ''}`}
-                      </div>
-                      <div className="session-msg-queued-actions">
-                        <button className="session-msg-retry-btn" onClick={() => onRetryFailed?.(m.queueId)}>Retry</button>
-                        {/* A parked row still exists on disk, so Discard must delete it
-                            server-side; Dismiss is local-only (the pending row it hides
-                            still drains on its own). */}
-                        {m.parked
-                          ? <button onClick={() => onDeleteQueued?.(m.queueId)}>Discard</button>
-                          : <button onClick={() => onDismissFailed?.(m.queueId)}>Dismiss</button>}
-                      </div>
-                    </>
-                  )}
-                </div>
-              );
+              return renderQueuedRow(m);
             })}
           </div>
         )}

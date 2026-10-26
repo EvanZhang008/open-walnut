@@ -69,6 +69,14 @@ export interface QueuedMessage {
    */
   lineInDoubt?: true;
   /**
+   * Who sent it, read from the send's source (queueSentBy): `person` for words
+   * someone typed (the console, the phone, the CLI, a letter), `agent` for
+   * everything Walnut or another task sent. The session panel folds an agent's
+   * card on arrival instead of showing it until history takes it in. Absent on
+   * rows written without a source and by older versions: nothing is folded then.
+   */
+  sentBy?: 'person' | 'agent';
+  /**
    * A person sent it (the composer, the phone, the `walnut` CLI, a plan button),
    * or a leader answering its worker's question: delivering it answers a pending
    * permission prompt with a deny, since the person moved on. A row without it (a

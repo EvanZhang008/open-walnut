@@ -486,6 +486,11 @@ export interface SessionMessageQueuedEvent {
   messageId: string;
   message?: string;
   source?: string;
+  /** Who sent it (QueuedMessage.sentBy): an agent's card folds on arrival. */
+  sentBy?: 'person' | 'agent';
+  /** An agent's row as stored, when it differs from `message` (a peer's note,
+   *  enveloped only in the queue). The panel renders this, as on a reload. */
+  queuedText?: string;
   /** Queue row's enqueue time (server clock): the bubble's time floor for
    *  history matching, see web optimistic-dedup.ts. */
   enqueuedAt?: string;

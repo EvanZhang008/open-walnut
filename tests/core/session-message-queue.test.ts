@@ -28,7 +28,10 @@ import {
   unparkMessage,
   MAX_PENDING_AGE_MS,
   resetCache,
+  queueSentBy,
+  sendMessageToSession,
 } from '../../src/core/session-message-queue.js';
+import { bus } from '../../src/core/event-bus.js';
 import { WALNUT_HOME, SESSION_QUEUE_FILE } from '../../src/constants.js';
 
 beforeEach(async () => {
@@ -89,6 +92,62 @@ describe('enqueueMessage', () => {
 
     resetCache();
     expect('userUuid' in (await getQueue('sess-plain'))[0]).toBe(false);
+  });
+});
+
+// Who sent a row, from its send source: the panel folds an agent's card on
+// arrival and never a person's words (QueuedMessage.sentBy).
+describe('sentBy', () => {
+  it('reads a person from the sources a person types into, and an agent from the rest', () => {
+    for (const s of ['ui', 'mobile', 'cli', 'web-api', 'api-v1', 'chat', 'human-inbox', 'side-thread', 'cloud-fallback']) expect(queueSentBy(s)).toBe('person');
+    for (const s of ['peer', 'walnut-notify', 'wait-until', 'routine-trigger', 'routine-watcher', 'trigger-check-failed']) expect(queueSentBy(s)).toBe('agent');
+    expect(queueSentBy(undefined)).toBeUndefined();
+    expect(queueSentBy('')).toBeUndefined();
+  });
+
+  it('persists on the row, and stays off a row with none', async () => {
+    const msg = await enqueueMessage('sess-by', '<walnut-message kind="notification">x</walnut-message>', { sentBy: 'agent' });
+    expect(msg.sentBy).toBe('agent');
+    const plain = await enqueueMessage('sess-by', 'typed');
+    resetCache();
+    const queue = await getQueue('sess-by');
+    expect(queue[0].sentBy).toBe('agent');
+    expect('sentBy' in queue[1]).toBe(false);
+    expect(plain.id).toBe(queue[1].id);
+  });
+});
+
+// The live path: the panel's queued row is minted from this event, so it must
+// say who sent the row and, for a peer's note (bare text on the bus, enveloped
+// only in the queue), carry the row as stored.
+describe('sendMessageToSession sentBy', () => {
+  const captured: Array<Record<string, unknown>> = [];
+  beforeEach(() => {
+    captured.length = 0;
+    bus.subscribe('test-queued-sent-by', (event) => {
+      if (event.name === 'session:message-queued') captured.push(event.data as Record<string, unknown>);
+    }, { global: true });
+  });
+  afterEach(() => bus.unsubscribe('test-queued-sent-by'));
+
+  it('a peer\'s note: agent, with the enveloped row as queuedText', async () => {
+    const envelope = '<walnut-message kind="peer-note" from="Sample lead [abcd1234]">Please check.</walnut-message>';
+    const row = await sendMessageToSession('sess-peer', 'Please check.', { source: 'peer', enqueueMessage: envelope });
+    expect(row.sentBy).toBe('agent');
+    expect(captured).toHaveLength(1);
+    expect(captured[0]).toMatchObject({ sentBy: 'agent', message: 'Please check.' });
+    expect(captured[0].queuedText).toBe(row.message);
+    expect(String(captured[0].queuedText)).toContain(envelope);
+  });
+
+  it('a phone message: person, no queuedText; no source: neither', async () => {
+    const phone = await sendMessageToSession('sess-phone', 'typed words', { source: 'mobile' });
+    expect(phone.sentBy).toBe('person');
+    expect(captured[0].sentBy).toBe('person');
+    expect('queuedText' in captured[0]).toBe(false);
+    const bare = await sendMessageToSession('sess-bare', 'no source');
+    expect('sentBy' in bare).toBe(false);
+    expect('sentBy' in captured[1]).toBe(false);
   });
 });
 

@@ -37,8 +37,20 @@ interface UseSessionSendReturn {
   handleBatchFailed: (messageIds: string[], error: string) => void;
   handleEditQueued: (sessionId: string, queueId: string, newText: string) => void;
   handleDeleteQueued: (sessionId: string, queueId: string) => void;
-  addExternalQueued: (msg: { queueId: string; text: string }) => void;
+  addExternalQueued: (msg: { queueId: string; text: string; enqueuedAt?: string; sentBy?: 'person' | 'agent'; queuedText?: string }) => void;
   clearOptimistic: () => void;
+}
+
+/**
+ * A queue row's text as the panel shows it (`text`), and what history will show
+ * for it once delivered (`dedupText`, when different): the stored row carries
+ * the server's image-ref prefix and the notices Walnut put ahead of the words,
+ * which history shows as their own card. One rule for a reload and a live row.
+ */
+function queuedRowText(raw: string): { text: string; dedupText?: string } {
+  const historyBasis = toDisplayedUserText(raw);
+  const text = stripImageRefPrefix(withoutLeadingRiders(historyBasis));
+  return text !== historyBasis ? { text, dedupText: historyBasis } : { text };
 }
 
 /**
@@ -223,7 +235,7 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
 
     if (activeSessionId) {
       wsClient.sendRpc<{
-        messages: Array<{ id: string; message: string; status: string; enqueuedAt?: string; parkedReason?: string; userUuid?: string; heldReason?: string }>;
+        messages: Array<{ id: string; message: string; status: string; enqueuedAt?: string; parkedReason?: string; userUuid?: string; heldReason?: string; sentBy?: 'person' | 'agent' }>;
         launchPrompt?: { id: string; text: string; at: string };
       }>(
         'session:get-queue',
@@ -250,8 +262,7 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
                 // A queued row also holds any notice Walnut put in front of the
                 // words (history-walnut-riders.ts): history shows those as their
                 // own card, so the bubble shows only what follows them.
-                const historyBasis = toDisplayedUserText(m.message);
-                const display = stripImageRefPrefix(withoutLeadingRiders(historyBasis));
+                const { text: display, dedupText } = queuedRowText(m.message);
                 // 'parked' = the server stopped auto-retrying this row (permanent
                 // failure, e.g. the session's working folder was deleted). Reuse the
                 // 'failed' presentation so it keeps Retry + Discard instead of looking
@@ -269,11 +280,12 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
                   status: (held ? 'received' : m.status === 'processing' ? 'delivered' : parked ? 'failed' : 'received') as 'received' | 'delivered' | 'failed',
                   ...(parked ? { parked: true, failedError: m.parkedReason } : {}),
                   ...(held ? { heldReason: m.heldReason } : {}),
-                  ...(display !== historyBasis ? { dedupText: historyBasis } : {}),
+                  ...(dedupText !== undefined ? { dedupText } : {}),
                   // The pre-assigned CLI uuid: a question's follow-up keeps its
                   // place in the question tree across a reload (its own page,
                   // and a parked one marks the question failed).
                   ...(m.userUuid ? { userUuid: m.userUuid } : {}),
+                  ...(m.sentBy === 'person' || m.sentBy === 'agent' ? { sentBy: m.sentBy } : {}),
                 };
               });
             // The launch prompt opens the first turn, so it goes before anything
@@ -532,16 +544,21 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
   // Handle messages queued externally (e.g. by the agent via send_to_session)
   // These arrive via bus event after the server has already enqueued the message,
   // so we go straight to 'received' (shows "Queued" badge immediately).
-  const addExternalQueued = useCallback((msg: { queueId: string; text: string; enqueuedAt?: string }) => {
+  const addExternalQueued = useCallback((msg: { queueId: string; text: string; enqueuedAt?: string; sentBy?: 'person' | 'agent'; queuedText?: string }) => {
+    // An agent's row as the queue stores it (a peer's note in its envelope):
+    // shown as a reload shows it (queuedRowText), so it folds as the card it is.
+    const shown = msg.queuedText !== undefined ? queuedRowText(msg.queuedText) : { text: msg.text };
     setOptimisticMsgs(prev => {
       // Dedup: skip if this queueId already exists (guard against double-delivery)
       if (prev.some(m => m.queueId === msg.queueId)) return prev;
       return [...prev, {
         queueId: msg.queueId,
-        text: msg.text,
+        text: shown.text,
+        ...(shown.dedupText !== undefined ? { dedupText: shown.dedupText } : {}),
         role: 'user' as const,
         timestamp: msg.enqueuedAt ?? new Date().toISOString(),
         status: 'received' as const,
+        ...(msg.sentBy ? { sentBy: msg.sentBy } : {}),
       }];
     });
   }, []);

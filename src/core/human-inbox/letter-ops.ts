@@ -279,7 +279,7 @@ export async function deliverLetterToOrigin(
     const text = buildLetterDeliveryText(letter, human);
     if (record.pendingPermission) {
       const { enqueueMessage } = await import('../session-message-queue.js');
-      const parked = await withTimeout(enqueueMessage(sid, text, options.messageId ? { id: options.messageId } : undefined), DELIVERY_TIMEOUT_MS, () => null);
+      const parked = await withTimeout(enqueueMessage(sid, text, { ...(options.messageId ? { id: options.messageId } : {}), sentBy: 'person' }), DELIVERY_TIMEOUT_MS, () => null);
       if (!parked) {
         log.notif.warn('human-inbox: deferred enqueue timed out', { letterId: letter.id, sessionId: sid });
         return { status: 'failed', reason: 'timeout', sessionId: sid };

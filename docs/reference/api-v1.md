@@ -228,7 +228,7 @@ path on the companion".
 | GET | `/api/v1/sessions/:id/subagent/:agentId/history` | One subagent lane's history (cloud relays) |
 | POST | `/api/v1/sessions/:id/execute-compact` | Execute a plan after a compact boundary (cloud relays) |
 | GET | `/api/v1/sessions/:id/messages/:messageId` | What became of a message the companion held (`queued`); cloud only |
-| GET | `/api/v1/sessions/:id/queue` | Queued messages (cloud relays) |
+| GET | `/api/v1/sessions/:id/queue` | Queued messages (cloud relays). A row may carry `sentBy` (`person` \| `agent`, read from the send's source; additive, absent on older rows) |
 | PATCH | `/api/v1/sessions/:id/queue/:messageId` | Edit a queued message (cloud relays) |
 | DELETE | `/api/v1/sessions/:id/queue/:messageId` | Delete a queued message (cloud relays) |
 | GET | `/api/v1/files/list?path=&host=` | One directory level of a session file tree (cloud relays) |

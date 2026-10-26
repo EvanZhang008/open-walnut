@@ -36,6 +36,7 @@ import {
   withdrawRequest,
   type SessionRequest,
 } from '../session-requests.js';
+import { queueSentBy } from './send-sent-by.js';
 
 const kit = createEnvelopeKit();
 
@@ -270,8 +271,9 @@ export async function deliverToSession(
   const leaderAnswersQuestion = opts.fromLeader === true && target.pendingPermission?.toolName === 'AskUserQuestion';
   if (target.pendingPermission && !leaderAnswersQuestion) {
     const { enqueueMessage } = await import('../session-message-queue.js');
+    const sentBy = queueSentBy(opts.source);
     const parked = await withTimeout(
-      enqueueMessage(sid, opts.enqueueText, opts.messageId ? { id: opts.messageId } : undefined),
+      enqueueMessage(sid, opts.enqueueText, { ...(opts.messageId ? { id: opts.messageId } : {}), ...(sentBy ? { sentBy } : {}) }),
       DELIVERY_TIMEOUT_MS,
     );
     if (!parked) throw new SendError('delivery_failed', 'enqueue timed out — retry', 503);
