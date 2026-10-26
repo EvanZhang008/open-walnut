@@ -155,7 +155,7 @@ test.beforeEach(async ({ page }) => {
 
 test('UC-1: a browser tab has no app shell: no update notice, no Settings row', async ({ page }) => {
   await loadApp(page)
-  await expect(page.locator('.sidebar-voice-btn')).toBeVisible()
+  await expect(page.locator('.sidebar-notification-btn')).toBeVisible()
   await expect(pill(page)).toHaveCount(0)
   await expectNoSidebarUpdates(page)
   await page.getByTestId('sidebar-core-app-settings').click()
@@ -166,7 +166,7 @@ test('UC-1: a browser tab has no app shell: no update notice, no Settings row', 
 test('UC-2: up to date: no update notice; Settings shows the version and checks for updates', async ({ page, browserName }) => {
   await installShell(page, IDLE)
   await loadApp(page)
-  await expect(page.locator('.sidebar-voice-btn')).toBeVisible()
+  await expect(page.locator('.sidebar-notification-btn')).toBeVisible()
   await expect(pill(page)).toHaveCount(0)
   await expectNoSidebarUpdates(page)
   await page.getByTestId('sidebar-core-app-settings').click()
@@ -418,7 +418,7 @@ test('UC-6: one bottom-centered pill stays put when the sidebar expands; Setting
 test('UC-7: an app that cannot update itself explains why in Settings and offers no update notice', async ({ page }) => {
   await installShell(page, { ...IDLE, enabled: false, status: 'disabled', disabledReason: 'Move Walnut to the Applications folder to get updates.' })
   await loadApp(page)
-  await expect(page.locator('.sidebar-voice-btn')).toBeVisible()
+  await expect(page.locator('.sidebar-notification-btn')).toBeVisible()
   await expect(pill(page)).toHaveCount(0)
   await expectNoSidebarUpdates(page)
   await page.getByTestId('sidebar-core-app-settings').click()

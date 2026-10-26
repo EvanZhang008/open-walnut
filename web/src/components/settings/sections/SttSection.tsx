@@ -5,6 +5,7 @@ import { SettingsGroup, SettingsRow } from '../SettingsSection';
 import { SttDetectionPanel, sttDraftOf, type SttDraft } from './SttDetectionPanel';
 import { useSerialSave, type OnSave } from './GeneralSection';
 import { invalidateSttStatusCache } from '@/hooks/useSttStatus';
+import { VoiceHistoryList } from '@/components/common/VoiceHistoryList';
 
 interface Props {
   config: Config;
@@ -19,8 +20,8 @@ function draftOf(config: Config): VoiceDraft {
 }
 
 /**
- * Voice, both directions: Dictation (the STT engine, its models, the language)
- * and Read aloud (TTS). The only settings form with an explicit Save: the
+ * Voice, both directions: the recent recordings (every take, to copy or redo),
+ * Dictation (the STT engine, its models, the language) and Read aloud (TTS). The only settings form with an explicit Save: the
  * drafts below are committed together by Save (or Cmd+S); an engine pick, a
  * model activation or a model path save at once. A draft still unsaved when
  * the pane closes or the page hides is saved then, never dropped. The section
@@ -84,6 +85,10 @@ export function SttSection({ config, onSave, onReload }: Props) {
 
   return (
     <SectionCard id="stt" title="Voice" onSave={handleSave}>
+      {/* Every take is kept on the server, so a lost reply is never lost words. */}
+      <SettingsGroup heading="Recent recordings" id="voice-history" data-testid="stt-recordings">
+        <VoiceHistoryList />
+      </SettingsGroup>
       <SettingsGroup heading="Dictation" data-testid="stt-dictation">
         <SttDetectionPanel config={config} onSave={onSave} onConfigured={handleConfigured} draft={draft} onDraft={onDraft} />
       </SettingsGroup>

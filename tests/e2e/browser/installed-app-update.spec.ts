@@ -130,7 +130,7 @@ test('an unchanged installed app shows no restart notice, and a page without not
   const asked: string[] = []
   await page.route(STATUS, r => { asked.push(new URL(r.request().url()).search); return r.fulfill({ json: { available: false, token: null, version: null } }) })
   await loadApp(page)
-  await expect(page.locator('.sidebar-voice-btn')).toBeVisible()
+  await expect(page.locator('.sidebar-notification-btn')).toBeVisible()
   await expect(button(page)).toHaveCount(0)
   await expect.poll(() => asked[0]).toBe('?notice=1')
 })

@@ -17,14 +17,12 @@ import type { RegisteredApp } from '@/apps/registry';
 import { useNotifications, effectiveQuiet, quietLabel } from '@/contexts/notifications';
 import '@/styles/notification-quiet.css';
 import { NotificationPanel } from '@/components/common/NotificationPanel';
-import { VoicePanel } from '@/components/common/VoicePanel';
 import { PluginBoundary } from '@/components/common/PluginBoundary';
 import { SidebarStatusItems } from './SidebarStatusItems';
 import { useLendAppUpdateToasts } from './useAppUpdateActions';
 import { useRailPeek } from './useRailPeek';
 import { RailItemPill } from './RailItemPill';
 import { ContextMenu, useContextMenu, type ContextMenuItem } from '@/components/common/ContextMenu';
-import { subscribeVoiceStatus, getVoiceStatus, type VoiceStatus } from '@/utils/voice-status';
 import { bellPresentation } from '@/utils/host-banner-placement';
 import { useAttentionDots } from '@/hooks/useAttentionDots';
 import { useLocalClaudeRecheck } from '@/utils/local-claude-recheck';
@@ -93,20 +91,15 @@ export function Sidebar({
   const quietNow = effectiveQuiet(quiet).active;
   const [notifOpen, setNotifOpen] = useState(false);
   const bell = bellPresentation({ reason: bellReason, attentionCount, hasIssues, quiet: quietNow, quietLabel: quietNow ? quietLabel(quiet) : '', collapsed });
-  const [voiceOpen, setVoiceOpen] = useState(false);
   const [statusOpen, setStatusOpen] = useState(false);
   // Collapsed, the icon under the pointer (or keyboard focus) grows out over the page with
   // its name, that one only (useRailPeek, RailItemPill). Panels the rail opens block it.
   const peek = useRailPeek({
     enabled: collapsed && !isMobile,
-    blocked: notifOpen || voiceOpen || statusOpen,
+    blocked: notifOpen || statusOpen,
     hold: appMenu.state !== null,
   });
   const cls = `sidebar${open ? ' open' : ''}${collapsed ? ' collapsed' : ''}`;
-  // Live voice status (transcribing spinner / failure dot) from any MicButton.
-  const [voiceStatus, setVoiceStatusState] = useState<VoiceStatus>(getVoiceStatus());
-  useEffect(() => subscribeVoiceStatus(setVoiceStatusState), []);
-
   // Bridge audio capture errors into the unified toaster. useAudioCapture still
   // owns lastError (it resets recording state + handles the no-WS local failure);
   // here we just mirror it into a toast and immediately clear so the provider
@@ -410,17 +403,9 @@ export function Sidebar({
             <span className="sidebar-label">{formatDuration(audio.totalDuration)}</span>
           </button>
         )}
-        {/* Plugin status items (a live ring each), above Voice; nothing when none is live. */}
+        {/* Plugin status items (a live ring each), above the bell; nothing when none is live.
+            Voice lives in Settings > Voice (its recordings included) since 2026-10-26. */}
         <SidebarStatusItems onOpenChange={setStatusOpen} />
-        <button
-          className={`sidebar-link sidebar-voice-btn${voiceStatus.transcribing ? ' voice-transcribing' : ''}`}
-          onClick={() => setVoiceOpen(!voiceOpen)}
-          aria-label="Voice history"
-        >
-          <VoiceHistoryIcon transcribing={voiceStatus.transcribing} />
-          <span className="sidebar-label">Voice</span>
-          {voiceStatus.lastFailed && <span className="notification-badge-dot voice-failed-dot" />}
-        </button>
         <button
           className="sidebar-link sidebar-notification-btn"
           onClick={() => setNotifOpen(!notifOpen)}
@@ -462,11 +447,6 @@ export function Sidebar({
       <NotificationPanel
         open={notifOpen}
         onClose={() => setNotifOpen(false)}
-        sidebarCollapsed={collapsed}
-      />
-      <VoicePanel
-        open={voiceOpen}
-        onClose={() => setVoiceOpen(false)}
         sidebarCollapsed={collapsed}
       />
       {peek.item && <RailItemPill item={peek.item} grow={peek.grow} handlers={peek.pillHandlers} onGone={peek.pillGone} />}
@@ -540,22 +520,6 @@ function TaskPanelIcon() {
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true">
       <rect x="3" y="4" width="18" height="16" rx="3" />
       <path d="M9 4v16" />
-    </svg>
-  );
-}
-
-function VoiceHistoryIcon({ transcribing }: { transcribing: boolean }) {
-  // Mic glyph; spins subtly via CSS while a transcription is in flight.
-  return (
-    <svg
-      viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
-      strokeLinecap="round" strokeLinejoin="round"
-      className={transcribing ? 'voice-icon-transcribing' : undefined}
-    >
-      <rect x="9" y="1" width="6" height="12" rx="3" />
-      <path d="M19 10v2a7 7 0 01-14 0v-2" />
-      <line x1="12" y1="19" x2="12" y2="23" />
-      <line x1="8" y1="23" x2="16" y2="23" />
     </svg>
   );
 }

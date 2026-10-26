@@ -133,7 +133,7 @@ test.afterAll(async () => {
   if (child.exitCode === null) child.kill('SIGKILL')
 })
 
-test('an item shows up above Voice, ticks from its timer, and leaves no gap when cleared', async ({ page }) => {
+test('an item shows up above the bell, ticks from its timer, and leaves no gap when cleared', async ({ page }) => {
   const errors: string[] = []
   page.on('pageerror', (error) => errors.push(String(error)))
   await page.goto(`${base()}/`)
@@ -142,12 +142,12 @@ test('an item shows up above Voice, ticks from its timer, and leaves no gap when
 
   await expect(item(page)).toBeVisible({ timeout: 30_000 })
   await expect(item(page)).toHaveAttribute('aria-label', 'Probe ready')
-  // Above Voice, inside the notification area.
+  // Above the bell, inside the notification area.
   const order = await page.locator('.sidebar-notification-area > .sidebar-link').evaluateAll((els) => els.map((el) => el.className))
   const at = order.findIndex((name) => name.includes('sidebar-status-item'))
   expect(at).toBeGreaterThanOrEqual(0)
-  expect(order[at + 1]).toContain('sidebar-voice-btn')
-  const railBox = await page.locator('.sidebar-voice-btn').boundingBox()
+  expect(order[at + 1]).toContain('sidebar-notification-btn')
+  const railBox = await page.locator('.sidebar-notification-btn').boundingBox()
   const itemBox = await item(page).boundingBox()
   expect(Math.round(itemBox!.height)).toBe(Math.round(railBox!.height))
 
@@ -181,7 +181,7 @@ test('an item shows up above Voice, ticks from its timer, and leaves no gap when
   await expect(page.locator('.sidebar-status-item')).toHaveCount(0)
   // No leftover wrapper or spacer where it was.
   const first = await page.locator('.sidebar-notification-area > *').first().getAttribute('class')
-  expect(first).toContain('sidebar-voice-btn')
+  expect(first).toContain('sidebar-notification-btn')
   expect(errors).toEqual([])
 })
 
