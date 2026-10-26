@@ -197,6 +197,7 @@ const DAEMON_SOURCE_FILES = [
   'src/providers/stream-relay-core.ts',
   // A stopped session resumed on its host for a trigger fire (trigger-host-resume-v1): same rule.
   'src/providers/host-resume-core.ts',
+  'src/providers/cli-owner-core.ts',
   // A new ask while the Mac is away (replica-start-v1): same import-or-inline rule.
   'src/providers/host-start-core.ts',
   // A routine run started on its host while the Mac is away (clock-host-start-v1): same rule.

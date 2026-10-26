@@ -140,6 +140,7 @@ SOURCES=(
   src/providers/host-server-core.ts
   src/providers/stream-relay-core.ts
   src/providers/host-resume-core.ts
+  src/providers/cli-owner-core.ts
   src/providers/host-start-core.ts
   src/providers/clock-host-start-core.ts
   src/core/sessions/open-items-text.ts

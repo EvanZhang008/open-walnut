@@ -325,10 +325,12 @@ describe('L1.6 daemon-core vs daemon-source template parity', () => {
     const source = twin === 'standalone'
       ? readFile(path.join(ROOT, 'src/providers/daemon-standalone.ts')) : templateSrc
     const start = source.indexOf('async function cmdStart(')
-    const cutoff = source.indexOf("    logMsg('warn', 'cmdStart: replacing existing session'", start)
+    // The replace path starts at the one-CLI claim (cli-owner-v1), right after the spawn gate.
+    const cutoff = source.indexOf('  // One CLI per session id on this host, whichever daemon asks', start)
     expect(start).toBeGreaterThan(-1)
     expect(cutoff).toBeGreaterThan(start)
-    const prefix = source.slice(start, cutoff) + '\n} throw new Error("replace path reached");\n}'
+    expect(cutoff).toBeLessThan(source.indexOf("    logMsg('warn', 'cmdStart: replacing existing session'", start))
+    const prefix = source.slice(start, cutoff) + '\nthrow new Error("replace path reached");\n}'
     const js = ts.transpileModule(prefix, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText
     const existing = { state: 'running', pid: 4242, watcher: { offset: 100 }, jsonlPath: '/fixture/stream.jsonl', mode: 'default' }
     const sessions = new Map([['sid', existing]])
@@ -3470,6 +3472,60 @@ describe('bounded daemon reads parity', () => {
       expect(read).toContain("-byte ceiling for one read (EFBIG)")
       // The size check runs before anything is read.
       expect(read.indexOf('st.size > FS_READ_MAX_BYTES')).toBeLessThan(read.indexOf('fs.promises.readFile('))
+    }
+  })
+})
+
+describe('one CLI per session id parity (cli-owner-v1)', () => {
+  const standaloneSrc = readFile(path.join(ROOT, 'src/providers/daemon-standalone.ts'))
+  const templateSrc = readFile(sourcePath)
+  const spawnBody = (src: string) => {
+    const at = src.indexOf('async function startSessionProcess(')
+    return src.slice(at, src.indexOf('\n}\n', at))
+  }
+
+  it('both inject the one owner core and keep its records beside the spawn journal', () => {
+    expect(templateSrc).toContain("['__CREATE_CLI_OWNER__', createCliOwner.toString()]")
+    expect(standaloneSrc).toContain("import { createCliOwner } from './cli-owner-core.js'")
+    for (const src of [standaloneSrc, templateSrc]) {
+      expect(src).toContain("dir: path.join(path.dirname(SPAWN_JOURNAL), 'cli-owners')")
+      expect(src).toMatch(/configDir: process\.env\.CLAUDE_CONFIG_DIR \|\| path\.join\(process\.env\.HOME \|\| HOME_DIR, '\.claude'\)/)
+    }
+  })
+
+  it('both claim before the teardown and the spawn, commit after it, and give a failed claim back', () => {
+    for (const src of [standaloneSrc, templateSrc]) {
+      const body = spawnBody(src)
+      const claim = body.indexOf('cliOwner.claim(ownedSid')
+      expect(claim).toBeGreaterThan(0)
+      expect(claim).toBeLessThan(body.indexOf("logMsg('warn', 'cmdStart: replacing existing session'"))
+      expect(claim).toBeLessThan(body.indexOf('appendSpawnJournal('))
+      expect(body.indexOf('commit(pid, sessionData.startTime)')).toBeGreaterThan(body.indexOf('const sessionData'))
+      expect(body).toMatch(/if \(!ownerCommitted( && ownerClaim\) ownerClaim\.release\(\)|\) ownerClaim\?\.release\(\))/)
+      // The replaced process is waited out before the new one starts.
+      expect(body.indexOf('waitForStoppedProcess(stoppedPid)')).toBeLessThan(body.indexOf('mkfifo'))
+    }
+  })
+
+  it('both wait out the whole stopped group and refuse a strict start of another Walnut', () => {
+    for (const src of [standaloneSrc, templateSrc]) {
+      const wait = src.slice(src.indexOf('async function waitForStoppedProcess('), src.indexOf('async function waitForStoppedProcess(') + 900)
+      expect(wait).toMatch(/pid > 1 && \(signalable\(-pid\) \|\| signalable\(pid\)\)/)
+      expect(wait).toMatch(/killProcessGroup\(pid, 'SIGKILL'\)/)
+      expect(src).toMatch(/if \(cmd\.strict !== true\) return null/)
+      expect(src).toMatch(/if \(owner \? owner === home : !journaled && !resume\) return null/)
+      expect(src).toContain("errorKind === 'session_other_walnut' ? { reason: 'session_other_walnut', code: 'SESSION_NOT_OURS' }")
+    }
+    expect(readFile(path.join(ROOT, 'src/providers/remote-session-manager.ts'))).toContain('...(IS_EPHEMERAL ? { strict: true } : {}),')
+  })
+
+  it('both pass the refusal through as session_live and record what they adopt', () => {
+    for (const src of [standaloneSrc, templateSrc]) {
+      expect(src).toMatch(/code === 'SESSION_LIVE' \|\| error(\?)?\.code === 'SESSION_NOT_OURS'\)+ return/)
+      expect(src).toContain("errorKind === 'session_live' ? { reason: 'session_live', code: 'SESSION_LIVE' }")
+      expect(src).toContain('void recordAdoptedOwners()')
+      expect(src).toMatch(/void cliOwner\.adopt\(sid, pid, session\.startTime/)
+      expect(src).toMatch(/void cliOwner\.adopt\(init\.session_id, s\.pid/)
     }
   })
 })

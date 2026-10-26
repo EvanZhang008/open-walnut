@@ -59,6 +59,7 @@ import { createFollowerReads } from './follower-reads-core.js'
 import { createHostServerSupervisor } from './host-server-core.js'
 import { createStreamRelay } from './stream-relay-core.js'
 import { createHostResume } from './host-resume-core.js'
+import { createCliOwner } from './cli-owner-core.js'
 import { createHostStart } from './host-start-core.js'
 import { createClockHostStart } from './clock-host-start-core.js'
 import { createClockSchedule } from './clock-schedule-core.js'
@@ -262,6 +263,7 @@ export function getDaemonSource(): string {
     ['__CREATE_HOST_SERVER__', createHostServerSupervisor.toString()],
     ['__CREATE_STREAM_RELAY__', createStreamRelay.toString()],
     ['__CREATE_HOST_RESUME__', createHostResume.toString()],
+    ['__CREATE_CLI_OWNER__', createCliOwner.toString()],
     ['__CREATE_HOST_START__', createHostStart.toString()],
     ['__CREATE_CLOCK_HOST_START__', createClockHostStart.toString()],
     ['__CREATE_CLOCK_SCHEDULE__', createClockSchedule.toString()],
@@ -500,6 +502,19 @@ export function validateFoldInjection(injections: Array<[string, string]>): void
       const hr = createResume({ fs, path, dir: '/nonexistent', now: () => 0, log: () => {}, modeCli: { plan: 'plan' } })
       const a = hr.resumeArgs(['claude', '--session-id', 's1', '--dangerously-skip-permissions', '--permission-mode', 'default'], 's1', 'plan')
       if (a.join(' ') !== 'claude --allow-dangerously-skip-permissions --permission-mode plan --resume s1') throw new Error('host resume built a wrong command')
+    }
+    // CLI owner smoke (cli-owner-core.ts): a reconstructed copy must name the
+    // transcript a resume writes into, and none for a fork, without touching disk.
+    const createOwner = reconstructed['__CREATE_CLI_OWNER__'] as typeof createCliOwner | undefined
+    if (createOwner) {
+      const owner = createOwner({
+        fs, path, dir: '/nonexistent', configDir: '/nonexistent/.claude', platform: 'linux',
+        self: { pid: 2, startTime: null, instance: 'd' }, now: () => 0, log: () => {},
+        isAlive: () => false, startTimeOf: async () => null, exec: async () => null, nonce: () => 'n',
+      })
+      if (owner.transcriptIdOf(['claude', '--resume', 's1']) !== 's1' || owner.transcriptIdOf(['claude', '--resume', 's1', '--fork-session']) !== null) {
+        throw new Error('cli owner did not build')
+      }
     }
     // Host start smoke (replica-start-v1): a reconstructed copy with no template must
     // answer needs_leader no_spawn_template, without touching disk.
@@ -5781,10 +5796,12 @@ async function cmdStart(ws, id, cmd) {
       if (error && error.code === 'BUDGET_PAUSED') return { runtimeError: Object.assign(error, { errorKind: 'budget_paused' }) };
       if (error && error.code === 'BUDGET_CHECKING') return { runtimeError: Object.assign(error, { errorKind: 'budget_checking' }) };
       if (error && error.code === 'CLAUDE_RUNTIME') return { runtimeError: error };
+      // Another CLI of this session runs on this host (cli-owner-core.ts).
+      if (error && (error.code === 'SESSION_LIVE' || error.code === 'SESSION_NOT_OURS')) return { runtimeError: error };
       throw error;
     });
   if (!result) return sendOk(ws, id, { ok: false, reason: 'session_stopped', error: 'start: a stop request superseded this start' });
-  if (result.runtimeError) return sendError(ws, id, result.runtimeError.message, { errorKind: result.runtimeError.errorKind, ...(result.runtimeError.errorKind === 'budget_paused' ? { reason: 'budget_paused', code: 'BUDGET_PAUSED' } : result.runtimeError.errorKind === 'budget_checking' ? { reason: 'budget_checking', code: 'BUDGET_CHECKING' } : {}) });
+  if (result.runtimeError) return sendError(ws, id, result.runtimeError.message, { errorKind: result.runtimeError.errorKind, ...(result.runtimeError.errorKind === 'budget_paused' ? { reason: 'budget_paused', code: 'BUDGET_PAUSED' } : result.runtimeError.errorKind === 'budget_checking' ? { reason: 'budget_checking', code: 'BUDGET_CHECKING' } : result.runtimeError.errorKind === 'session_live' ? { reason: 'session_live', code: 'SESSION_LIVE' } : result.runtimeError.errorKind === 'session_other_walnut' ? { reason: 'session_other_walnut', code: 'SESSION_NOT_OURS' } : {}) });
   addSubscriber(ws, sid, result.offset);
   return sendOk(ws, id, result);
 }
@@ -5904,6 +5921,21 @@ async function startSessionProcess(cmd, isCurrent, canStart) {
   await requireBudgetAllowance(sid);
   if (canStart && !canStart()) throw Object.assign(new Error('start: stop request superseded this start'), { code: 'SESSION_STOP_SUPERSEDED' });
 
+  // One CLI per session id on this host, whichever daemon asks (cli-owner-core.ts):
+  // a live CLI of this transcript that is not the one replaced below, or another
+  // daemon's spawn in flight, refuses the start. Before the teardown, so a refusal
+  // leaves everything as it was. Keep in sync with daemon-standalone.ts.
+  const ownedSid = cliOwner.transcriptIdOf(args);
+  const replacedPid = existing && existing.state === 'running' && existing.pid ? existing.pid : undefined;
+  const ownerHome = cmd.origin && typeof cmd.origin === 'object' && typeof cmd.origin.home === 'string' && cmd.origin.home ? cmd.origin.home : undefined;
+  // A resume by its args too, whatever the flag says (a fork is a new transcript).
+  const resumesTranscript = !!resume || (args.includes('--resume') && !args.includes('--fork-session'));
+  const notOurs = ownedSid ? strictStartRefusal(ownedSid, cmd, ownerHome, resumesTranscript) : null;
+  if (notOurs) throw notOurs;
+  const ownerClaim = ownedSid ? await cliOwner.claim(ownedSid, { exceptPid: replacedPid, home: ownerHome }) : null;
+  let ownerCommitted = false;
+  try {
+
   if (existing) {
     logMsg('warn', 'cmdStart: replacing existing session', {
       sid,
@@ -5931,9 +5963,14 @@ async function startSessionProcess(cmd, isCurrent, canStart) {
         killProcessGroup(existing.pid, 'SIGTERM');
       }
     }
+    const stoppedPid = existing.state === 'running' ? existing.pid : null;
     existing.state = 'dead';
     existing.exitReason = 'replaced-by-cmdstart';
     existing.exitedAt = Date.now();
+    // The new CLI must not start on the transcript while the old one still writes it.
+    if (stoppedPid && !(await waitForStoppedProcess(stoppedPid))) {
+      throw new Error('start: the previous CLI of this session (pid ' + stoppedPid + ') has not exited; not starting a second one');
+    }
   }
 
   fs.mkdirSync(STREAMS_DIR, { recursive: true });
@@ -6129,6 +6166,8 @@ async function startSessionProcess(cmd, isCurrent, canStart) {
     sawInit: false,
     spawnInfo,               // what the spawn journal records once init names the id
   };
+  ownerClaim && ownerClaim.commit(pid, sessionData.startTime);
+  ownerCommitted = true;
 
   proc.on('exit', (code) => {
     // Generation guard: if cmdStart replaced this sid (killing this process),
@@ -6166,6 +6205,10 @@ async function startSessionProcess(cmd, isCurrent, canStart) {
     barrier && barrier.abort();
     throw error;
   }
+  } catch (error) {
+    if (!ownerCommitted && ownerClaim) ownerClaim.release();
+    throw error;
+  }
 }
 
 // ── Permission policy helpers ──
@@ -6197,6 +6240,88 @@ var hostResume = (__CREATE_HOST_RESUME__)({
   log: function (level, msg, data) { logMsg(level, msg, data); },
   modeCli: MODE_CLI,
 });
+
+// ── One CLI per session id on this host (cli-owner-core.ts) ──
+// Beside the spawn journal, so every daemon that spawns into the same ~/.claude
+// (this one, an ephemeral test server's, a restarted one) reads one set of
+// records, and a test harness that moves the journal moves these with it.
+// Mirror daemon-standalone.ts.
+var cliOwner = (__CREATE_CLI_OWNER__)({
+  fs: fs, path: path,
+  dir: path.join(path.dirname(SPAWN_JOURNAL), 'cli-owners'),
+  configDir: process.env.CLAUDE_CONFIG_DIR || path.join(process.env.HOME || HOME_DIR, '.claude'),
+  platform: process.platform,
+  self: { pid: process.pid, startTime: readStartTime(process.pid), instance: DAEMON_INSTANCE_ID },
+  now: function () { return Date.now(); },
+  log: function (level, msg, data) { logMsg(level, msg, data); },
+  isAlive: function (pid) {
+    try { process.kill(pid, 0); return true; } catch (error) { return !!error && error.code === 'EPERM'; }
+  },
+  startTimeOf: function (pid) { return readStartTimeAsync(pid); },
+  exec: function (file, args, timeoutMs) {
+    return new Promise(function (resolve) {
+      execFile(file, args, { encoding: 'utf-8', timeout: timeoutMs, maxBuffer: 64 * 1024 * 1024, env: Object.assign({}, process.env, { LANG: 'C' }) },
+        // Exit 1 is ps naming a pid that is gone; a timeout or a kill is a cut-short table: null.
+        function (error, stdout) { resolve(!error || (error.code === 1 && !error.killed && !error.signal) ? String(stdout || '') : null); });
+    });
+  },
+  nonce: function () { return crypto.randomBytes(8).toString('hex'); },
+});
+
+/**
+ * A strict start (an ephemeral test server's, which runs on a COPY of the real
+ * data) may only touch a transcript it started itself: the spawn journal's first
+ * line for the sid names the asking Walnut, or the sid was never journaled and
+ * this is a new session. Keep in sync with daemon-standalone.ts.
+ */
+function strictStartRefusal(sid, cmd, home, resume) {
+  if (cmd.strict !== true) return null;
+  // Another daemon may have journaled it since this one read the journal.
+  if (!journaledIds().has(sid)) journaledSids = null;
+  const owner = journaledHome(sid);
+  const journaled = journaledIds().has(sid);
+  if (owner ? owner === home : !journaled && !resume) return null;
+  const whose = owner ? 'the Walnut at ' + owner : journaled ? 'a Walnut that did not record itself' : 'outside Walnut';
+  return Object.assign(new Error('start: this session was started by ' + whose + ', not by this test server; a test server does not run a session of another Walnut'), { code: 'SESSION_NOT_OURS', errorKind: 'session_other_walnut' });
+}
+
+/**
+ * Wait for a CLI this daemon stopped to be gone, its whole group (a launcher
+ * shim can exit before the binary it started): SIGKILL the group at 3 s, give
+ * up at 8 s. Keep in sync with daemon-standalone.ts.
+ */
+async function waitForStoppedProcess(pid) {
+  const signalable = function (target) { try { process.kill(target, 0); return true; } catch (error) { return !!error && error.code === 'EPERM'; } };
+  const alive = function () { return Number.isSafeInteger(pid) && pid > 1 && (signalable(-pid) || signalable(pid)); };
+  const startedAt = Date.now();
+  let killed = false;
+  while (alive()) {
+    const waited = Date.now() - startedAt;
+    if (waited >= 8000) return false;
+    if (!killed && waited >= 3000) { killed = true; killProcessGroup(pid, 'SIGKILL'); }
+    await new Promise(function (resolve) { setTimeout(resolve, 100); });
+  }
+  return true;
+}
+
+/**
+ * After the startup adoption: every CLI this daemon now runs gets its owner
+ * record (a CLI an older daemon spawned has none), then records of CLIs that are
+ * gone are removed (cli-owner-core.ts). Keep in sync with daemon-standalone.ts.
+ */
+async function recordAdoptedOwners() {
+  try {
+    for (const [sid, session] of [...sessions]) {
+      if (session.state !== 'running' || !session.pid) continue;
+      const owned = namedSessionId(session.args || []) || sid;
+      await cliOwner.adopt(owned, session.pid, session.startTime || null, session.spawnInfo && session.spawnInfo.home);
+    }
+    const removed = cliOwner.prune();
+    if (removed > 0) logMsg('info', 'cli owner: removed records of ended CLIs', { removed: removed });
+  } catch (err) {
+    logMsg('warn', 'cli owner: startup records failed', { error: err && err.message });
+  }
+}
 
 function shouldAutoRespond(mode, toolName) {
   // AskUserQuestion is a requiresUserInteraction tool: the CLI emits its
@@ -8208,6 +8333,10 @@ function ensureWatcher(sid) {
           try {
             const init = JSON.parse(line);
             if (init.type === 'system' && init.subtype === 'init') appendSpawnJournal(init.session_id, s.spawnInfo || { kind: 'new' });
+            // A fork or an unnamed new session: its own id is known only now (cli-owner-core.ts).
+            if (init.type === 'system' && init.subtype === 'init' && typeof init.session_id === 'string' && s.pid && !namedSessionId(s.args || [])) {
+              void cliOwner.adopt(init.session_id, s.pid, s.startTime || null, s.spawnInfo && s.spawnInfo.home);
+            }
             if (init.type === 'system' && init.subtype === 'init' && typeof init.claude_code_version === 'string') {
               s.cliVersion = init.claude_code_version;
               if (SERVICE_MODE) persistRegistry();
@@ -8584,7 +8713,10 @@ function cmdAttach(ws, id, cmd) {
       pendingCtrl: null,
     };
     sessions.set(sid, session);
-    if (alive && pid) startOrphanPoll(sid);
+    if (alive && pid) {
+      startOrphanPoll(sid);
+      void cliOwner.adopt(sid, pid, session.startTime || null);
+    }
   }
 
   // Update mode if provided (walnut re-sends mode on reconnect)
@@ -12990,6 +13122,7 @@ async function startDaemon() {
   // Legacy fallback: pgid-file-based adoption for pre-registry sessions
   cleanupOrphanedProcessGroups();
   for (const [sid] of sessions) ensureWatcher(sid);
+  void recordAdoptedOwners();
   try { backfillSpawnJournal(); } catch (err) {
     logMsg('warn', 'spawn journal backfill failed', { error: err.message });
   }

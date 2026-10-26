@@ -334,6 +334,9 @@ export class RemoteSessionManager implements SessionManager {
       // Which Walnut asked, for which task: recorded in the host's spawn journal
       // (daemon-standalone.ts). Older daemons ignore the key.
       origin: { home: WALNUT_HOME, ...(opts.taskId ? { task: opts.taskId } : {}) },
+      // A test server runs on a copy of the real data: it may only resume a
+      // session it started itself (strictStartRefusal in both daemon twins).
+      ...(IS_EPHEMERAL ? { strict: true } : {}),
     }
 
     let result: Record<string, unknown>

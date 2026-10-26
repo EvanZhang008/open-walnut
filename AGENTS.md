@@ -404,6 +404,21 @@ inherited pid at boot, refuse to boot on the production data dir, send `strict` 
 journal names them for), and send no stop at all to a daemon without `owner-home-v1`. Ratchet:
 `tests/core/signal-call-ratchet.test.ts`.
 
+**One CLI per session id on a host, whichever daemon asks** (`src/providers/cli-owner-core.ts`, both
+twins). A daemon only knows its own registry, so a second daemon on the same host (an ephemeral test
+server's, a restarted one that could not adopt) used to `--resume` a live session as a second process
+on the same transcript: 2026-10-25, an ephemeral server's copied `wait_until` clock did, and two CLIs of
+one session edited one tree. Every spawn that names its transcript (`--resume`/`--session-id`, not a
+fork) first claims `<spawn-journal dir>/cli-owners/<config dir key>/<sid>.json` with O_EXCL; a record
+there is judged against the process table (CLI pid alive with its start time, or a live daemon's claim
+under 120 s), never trusted, and a stale one is broken. After the claim a `ps` scan refuses a live
+process of the same sid in the same `~/.claude` that no record names (an older daemon's CLI). A refusal
+is `errorKind: 'session_live'`, spawns nothing and touches no one's FIFO or process; the message stays
+queued with the reason. A daemon replacing its own CLI waits for its whole process group to exit
+first. An ephemeral server's starts carry `strict`, and the daemon refuses one for a transcript the
+spawn journal records for another Walnut (`session_other_walnut`), live or not. Ratchets:
+`tests/providers/cli-owner-core.test.ts`, `tests/providers/daemon-cli-owner-twins-e2e.test.ts`.
+
 **Daemon restart:** old `cleanup()` leaves CLI alive. New daemon reconciles sessions.json then scans `.pgid` files — scan MUST skip sids already adopted (`if (sessions.has(sid)) continue`). All death paths funnel into `reapSession()` in `daemon-core.ts`; it calls `isTurnCompleteExit()` to normalize code to 0 when JSONL tail shows clean turn completion (otherwise every turn-end shows "exit -1" in UI).
 
 **A session's stdin FIFO is write-only (mode 0200), and nothing but its CLI may read it.** A FIFO
