@@ -20,7 +20,7 @@ import os from 'node:os'
 import path from 'node:path'
 import zlib from 'node:zlib'
 import { createRequire } from 'node:module'
-import { realNodeOnPath } from '../../scripts/outside-node.mjs'
+import { npmEnv as npmChildEnv, npmOnPath, realNodeOnPath } from '../helpers/npm-on-path.js'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { ENTRY, LAUNCHER_LIB } from '../../scripts/npm-packages.mjs'
 
@@ -394,10 +394,12 @@ describe('postinstall.js', () => {
 // A real npm, as npm runs the postinstall: npm 7 and later hand an install script
 // only the settings on its command line or in its environment, so a registry set
 // in ~/.npmrc reaches the fetch only through npm itself.
-const realNpm = spawnSync('npm', ['--version'], { encoding: 'utf8' }).status === 0
+// Skipped where there is no npm; node-side runs it (`bun run test:npm-channel`).
+const realNpm = npmOnPath()
 describe.skipIf(!realNpm)('postinstall.js with a real npm', () => {
   const npmEnv = (dir: string): NodeJS.ProcessEnv => {
-    const e: NodeJS.ProcessEnv = { ...process.env }
+    // npm on the real Node, as on a user's machine, not on the shim `bun --bun` puts first.
+    const e: NodeJS.ProcessEnv = { ...npmChildEnv(process.env) }
     for (const k of Object.keys(e)) if (/^npm_/i.test(k)) delete e[k]
     fs.mkdirSync(dir, { recursive: true })
     fs.writeFileSync(path.join(dir, 'npmrc'), `@open-walnut:registry=${base}/real/\n`)

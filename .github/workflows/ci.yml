@@ -530,7 +530,8 @@ jobs:
       - name: The launcher's fetch and exit tests, the launcher on Node ${{ matrix.node }}
         env:
           WALNUT_TEST_NODE: ${{ runner.temp }}/node-v${{ matrix.node }}-linux-x64/bin/node
-        run: npx vitest run --config vitest.focus.config.ts tests/scripts/npm-launcher-fetch.test.ts tests/scripts/npm-launcher-exit.test.ts
+        # The tests on bun, as everywhere; the launcher on the old Node, npm (setup-node) for the real-npm test.
+        run: WALNUT_REQUIRE_NPM=1 bun --bun vitest run --config vitest.focus.config.ts tests/scripts/npm-launcher-fetch.test.ts tests/scripts/npm-launcher-exit.test.ts
 
   # ── The archives the rehearsal does not build ───────────────────────────────
   # A release ships four self-contained archives (release-archives.yml); the

@@ -172,7 +172,8 @@ describe('field-packs: the release as a release publishes it', () => {
     }
   }, 180_000)
 
-  it('an index that does not name the release yet: npm leaves the file out, and the launcher\'s postinstall fetches it by its version\'s document', async () => {
+  // npm packs the tarballs and installs them: skipped where there is none, as the test above.
+  it.skipIf(!npmOnPath())('an index that does not name the release yet: npm leaves the file out, and the launcher\'s postinstall fetches it by its version\'s document', async () => {
     const out = path.join(tmp, 'packs-index')
     const version = '9.9.9-rehearsal.3'
     const tarballs = packVersion({ files: stub(version), version, out })
