@@ -11,15 +11,23 @@ import {
   saveConfig,
   updateConfig,
   _resetWriteLockForTest,
+  _setConfigTimingsForTest,
+  _configRepairIdleForTest,
 } from '../../src/core/config-manager.js';
 
 beforeEach(async () => {
   _resetWriteLockForTest();
+  // Short waits for a missing/empty file to count as real (config-save-race.test.ts
+  // pins the waits themselves).
+  _setConfigTimingsForTest({ quietMs: 100, settleMs: 50, readRetryMs: 20, lateWriteWatchMs: 100 });
   await fs.rm(WALNUT_HOME, { recursive: true, force: true });
   await fs.mkdir(WALNUT_HOME, { recursive: true });
 });
 
 afterEach(async () => {
+  // A restore a read started must not run on into the next test's files.
+  await _configRepairIdleForTest();
+  _setConfigTimingsForTest(null);
   await fs.rm(WALNUT_HOME, { recursive: true, force: true });
 });
 
@@ -180,6 +188,9 @@ describe('config loss recovery via sidecar backup', () => {
     await fs.rm(CONFIG_FILE, { force: true });
 
     await getConfig();
+    // The read answers from the backup at once; the file itself is put back only
+    // after it stayed missing for the quiet period.
+    await _configRepairIdleForTest();
 
     const restored = yaml.load(await fs.readFile(CONFIG_FILE, 'utf-8')) as any;
     expect(restored.stt.engine).toBe('whisper-cpp');

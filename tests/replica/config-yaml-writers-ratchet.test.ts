@@ -2,7 +2,7 @@
  * No code path writes a config.yaml on a host replica (docs/plan/walnut-replica-servers-impl.md,
  * WP5): its config is the Mac's copy (core/replication/kinds/config.ts), and every
  * writer there answers needs_leader or does nothing. Most writers go through
- * core/config-manager.ts (writeConfigWithBackup, which refuses on a replica); a
+ * core/config-store.ts (writeConfigWithBackup, which refuses on a replica); a
  * writer that touches the file directly bypassed that refusal once (the boot's
  * migrateConfigToPlugins). Reads src/ as text: every direct write of CONFIG_FILE,
  * its backup or a `config.yaml` path must sit in a function that checks for the
@@ -14,7 +14,7 @@ import { readdirSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 
 const ROOT = path.resolve(import.meta.dirname, '../..')
-const WRITE = /\b(writeFile|writeFileSync|writeFileAtomic|appendFile|appendFileSync|copyFile|copyFileSync|rename|renameSync)\([^)]*(CONFIG_FILE|CONFIG_BACKUP_FILE|config\.yaml)/
+const WRITE = /\b(writeFile|writeFileSync|writeFileAtomic|commitConfigFile|appendFile|appendFileSync|copyFile|copyFileSync|rename|renameSync)\([^)]*(CONFIG_FILE|CONFIG_BACKUP_FILE|config\.yaml)/
 const GUARD = /isHostReplicaProgram\(\)|refuseConfigWriteOnReplica\(\)/
 const FUNCTION_START = /^(export\s+)?(async\s+)?function\s+\w+/
 
@@ -49,8 +49,9 @@ describe('config.yaml writers on a host replica', () => {
 
   it('the scan finds the writers it is known to (a scan that went blind would pass anything)', () => {
     const files = new Set(sites.map((s) => s.where.replace(/:\d+$/, '')))
-    expect([...files].sort()).toEqual(['src/core/config-manager.ts', 'src/core/integration-loader.ts'])
-    expect(sites.length).toBeGreaterThanOrEqual(4)
+    // Every writer goes through config-store.ts (integration-loader's boot migration too, via migrateStoredConfig).
+    expect([...files].sort()).toEqual(['src/core/config-store.ts'])
+    expect(sites.length).toBeGreaterThanOrEqual(3)
   })
 
   it('every direct write of the file sits behind a replica check', () => {

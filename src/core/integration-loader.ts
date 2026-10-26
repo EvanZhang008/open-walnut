@@ -26,12 +26,11 @@ import { createHash, randomUUID } from 'node:crypto';
 import { preparePluginModule, type PluginModuleFunctions } from './plugins/plugin-module.js';
 import { BUILTIN_HOST_MODULES } from '../integrations/host-modules.js';
 import { readPluginWebModule, retainPluginWebModule, type PluginWebModule } from './plugins/plugin-web-module.js';
-import yaml from 'js-yaml';
-import { WALNUT_HOME, CONFIG_FILE, IS_EPHEMERAL } from '../constants.js';
+import { WALNUT_HOME, IS_EPHEMERAL } from '../constants.js';
 import { remoteSyncIsolationReason } from './remote-sync-isolation.js';
 import { getVersion, isVersionKnown } from './version.js';
 import { createSubsystemLogger } from '../logging/index.js';
-import { getConfig, updatePluginConfig } from './config-manager.js';
+import { getConfig, migrateStoredConfig, updatePluginConfig } from './config-manager.js';
 import { isHostReplicaProgram } from './server-role.js';
 import { bulkMigrateTasks } from './task-manager.js';
 import { ensureExtIndexes } from './task-db.js';
@@ -2340,17 +2339,22 @@ export async function migrateConfigToPlugins(): Promise<boolean> {
   // there; core/config-manager.ts refuses every config write on one). This runs
   // at every boot, before the plugins, and wrote the file directly.
   if (isHostReplicaProgram()) return false;
-  let raw: Record<string, unknown>;
+  const installedPluginIds = await getInstalledPluginIds();
+  // Through config-manager's read-modify-write: it waits out an editor's save in
+  // flight, refuses a file that does not parse, and never replaces an edit that
+  // landed while this ran (config-file-io.ts).
   try {
-    const content = await fsp.readFile(CONFIG_FILE, 'utf-8');
-    raw = (yaml.load(content) as Record<string, unknown>) ?? {};
+    return await migrateStoredConfig((raw) => migrateConfigDocToPlugins(raw, installedPluginIds));
   } catch (err) {
     log.debug('config file not readable for migration', {
       error: err instanceof Error ? err.message : String(err),
     });
-    return false; // No config file — nothing to migrate
+    return false;
   }
+}
 
+/** The move itself, on the stored mapping in place. Returns whether anything changed. */
+function migrateConfigDocToPlugins(raw: Record<string, unknown>, installedPluginIds: Set<string>): boolean {
   let changed = false;
   const plugins = (raw.plugins ?? {}) as Record<string, Record<string, unknown>>;
 
@@ -2372,8 +2376,6 @@ export async function migrateConfigToPlugins(): Promise<boolean> {
     log.info(`config migration: restored plugins.${key} → top-level ${key}`);
     changed = true;
   }
-
-  const installedPluginIds = await getInstalledPluginIds();
 
   for (const [key, val] of Object.entries(raw)) {
     // `plugins` is the destination, not a candidate: a plugin dir literally named
@@ -2420,13 +2422,6 @@ export async function migrateConfigToPlugins(): Promise<boolean> {
 
   if (changed) {
     raw.plugins = plugins;
-    let content = yaml.dump(raw, { indent: 2, lineWidth: 120 });
-    // Preserve the available_models comment (same as config-manager.ts)
-    content = content.replace(
-      /^(\s+)available_models:/m,
-      '$1# Predefined Bedrock model IDs for the agent form dropdown.\n$1# Edit this list to add or remove models.\n$1available_models:',
-    );
-    await fsp.writeFile(CONFIG_FILE, content, 'utf-8');
     log.info('config migration complete: legacy integration keys moved to plugins section');
   }
 

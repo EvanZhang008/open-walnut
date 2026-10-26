@@ -17,7 +17,9 @@ let tmpDir: string;
 
 vi.mock('../../src/constants.js', () => createMockConstants('loader-test'));
 
-vi.mock('../../src/core/config-manager.js', () => ({
+vi.mock('../../src/core/config-manager.js', async (importOriginal) => ({
+  // The real writers (migrateConfigToPlugins writes through migrateStoredConfig).
+  ...(await importOriginal<typeof import('../../src/core/config-manager.js')>()),
   getConfig: vi.fn(async () => ({
     version: 1,
     user: { name: 'test' },

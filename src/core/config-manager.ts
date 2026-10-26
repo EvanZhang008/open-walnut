@@ -1,6 +1,3 @@
-import crypto from 'node:crypto';
-import fs from 'node:fs/promises';
-import yaml from 'js-yaml';
 import { log } from '../logging/index.js';
 import { CLOUD_MODE, CONFIG_FILE } from '../constants.js';
 import {
@@ -14,8 +11,29 @@ import { scanSshConfig } from './ssh-config-scanner.js';
 import { realSshReachAllowed } from '../lib/real-ssh-guard.js';
 import { injectCloudBoxHost, withoutCloudBoxHost } from './hosts/cloud-box-host.js';
 import { isHostReplicaProgram } from './server-role.js';
-import { NeedsLeaderError } from './replication/needs-leader.js';
 import { COMPANION_ALIAS, migrateLegacyCompanionKeep } from './replication/companion-keep.js';
+import {
+  dumpConfig,
+  modifyConfigDoc,
+  readConfigDoc,
+  refreshConfigBackup,
+  withWriteLock,
+  writeConfigWithBackup,
+} from './config-store.js';
+export {
+  ConfigBusyError,
+  ConfigUnreadableError,
+  _configRepairIdleForTest,
+  _resetWriteLockForTest,
+  _setBeforeConfigCommitForTest,
+  _setConfigTimingsForTest,
+  announceConfigWritten,
+  configContentHash,
+  isOwnConfigWrite,
+  onConfigWritten,
+  refreshConfigBackup,
+  writeFileAtomic,
+} from './config-store.js';
 
 const DEFAULT_CONFIG: Config = {
   version: 1,
@@ -133,128 +151,6 @@ export function migrateConfigToProjectOnly(config: Record<string, unknown>): boo
 }
 
 /**
- * Sidecar copy of the last successfully written config.
- *
- * config.yaml holds settings that exist NOWHERE else — the STT engine + model
- * paths, SSH hosts, provider credentials. When the file vanished (a git-sync
- * merge carried a remote deletion of a still-tracked path, 2026-07-25) every
- * reader silently fell back to DEFAULT_CONFIG and the next writer persisted
- * that skeleton, so voice input died with "No STT engine configured" and no
- * error anywhere. The sidecar makes that loss recoverable instead of terminal.
- *
- * Gitignored + untracked by git-sync's CRITICAL_IGNORES — it must never sync.
- */
-const CONFIG_BACKUP_FILE = `${CONFIG_FILE}.bak`;
-
-/**
- * Read the raw config file, falling back to the sidecar backup when the primary
- * is missing or unreadable.
- *
- * Returns null only when BOTH are absent — a genuine first run, where defaults
- * are the correct answer. Distinguishing those two cases is the whole point: a
- * first run and a wiped config used to be indistinguishable.
- */
-async function readRawConfigContent(): Promise<string | null> {
-  try {
-    const primary = await fs.readFile(CONFIG_FILE, 'utf-8');
-    // A readable-but-EMPTY primary is the same loss as a missing one, and it
-    // used to return straight through: `yaml.load('')` is `undefined`, the
-    // spread over DEFAULT_CONFIG threw away every machine-local setting, and
-    // nothing threw so nothing was logged. Treat it like an unreadable file and
-    // let the sidecar answer.
-    if (primary.trim()) return primary;
-    throw new Error('config.yaml is empty');
-  } catch (primaryErr) {
-    let backup: string;
-    try {
-      backup = await fs.readFile(CONFIG_BACKUP_FILE, 'utf-8');
-    } catch {
-      return null; // No config and no backup — first run.
-    }
-    if (!backup.trim()) return null;
-    // Loud: losing the primary config is never normal operation.
-    log.session.error('config-manager: config.yaml missing/unreadable — recovering from config.yaml.bak', {
-      error: primaryErr instanceof Error ? primaryErr.message : String(primaryErr),
-      backup: CONFIG_BACKUP_FILE,
-    });
-    // Put the primary back so the rest of the system (and the user's editor)
-    // sees a real file again. Best-effort: recovery must not throw. Never on a
-    // host replica, which writes no config.yaml (its config is the Mac's copy).
-    if (!isHostReplicaProgram()) {
-      try {
-        ownWriteHash = configContentHash(backup);
-        await fs.writeFile(CONFIG_FILE, backup, 'utf-8');
-      } catch { /* read-only FS or a racing writer: the in-memory value still holds */ }
-    }
-    return backup;
-  }
-}
-
-/**
- * Replace a file's whole content atomically: write a sibling temp, then rename.
- *
- * `fs.writeFile` truncates first and writes after, so a concurrent reader can
- * observe a HALF file — and half a config.yaml is worse than none, because it
- * still parses. The `agent:` section sits near the top of a ~280-line file, so a
- * reader landing in that window got valid YAML with the whole section missing and
- * silently ran on defaults, with no unreadable-config error logged because nothing
- * ever threw (observed 2026-08-28 06:03, where the missing section sent one turn
- * to a provider whose credentials this box does not keep).
- *
- * Temp lives in the SAME directory so the rename is a same-filesystem atomic
- * swap (an EXDEV across /tmp would fall back to copy, reopening the window).
- */
-export async function writeFileAtomic(filePath: string, content: string): Promise<void> {
-  const tmp = `${filePath}.tmp-${process.pid}-${Date.now().toString(36)}`;
-  try {
-    await fs.writeFile(tmp, content, 'utf-8');
-    await fs.rename(tmp, filePath);
-  } catch (err) {
-    await fs.rm(tmp, { force: true }).catch(() => {});
-    throw err;
-  }
-}
-
-/** Called after every write of config.yaml (the config and prefs copy kinds start a round). */
-const configWriteListeners = new Set<() => void>();
-
-export function onConfigWritten(cb: () => void): () => void {
-  configWriteListeners.add(cb);
-  return () => { configWriteListeners.delete(cb); };
-}
-
-/** Tell the listeners config.yaml changed: after this server's writes, and after an edit made outside it (config-file-watch.ts). */
-export function announceConfigWritten(): void {
-  for (const cb of configWriteListeners) { try { cb(); } catch { /* a listener never fails a write */ } }
-}
-
-/** The hash of the config.yaml content this server wrote last, so the file watch skips its own writes. */
-let ownWriteHash: string | null = null;
-
-export function configContentHash(content: string): string {
-  return crypto.createHash('sha256').update(content).digest('hex');
-}
-
-export function isOwnConfigWrite(hash: string): boolean {
-  return hash === ownWriteHash;
-}
-
-/** Mirror freshly written config to the sidecar. Never throws. */
-async function writeConfigWithBackup(content: string): Promise<void> {
-  refuseConfigWriteOnReplica();
-  ownWriteHash = configContentHash(content);
-  await writeFileAtomic(CONFIG_FILE, content);
-  announceConfigWritten();
-  try {
-    await writeFileAtomic(CONFIG_BACKUP_FILE, content);
-  } catch (err) {
-    log.session.warn('config-manager: failed to update config backup', {
-      error: err instanceof Error ? err.message : String(err),
-    });
-  }
-}
-
-/**
  * config.yaml as stored (after the sidecar fallback), or null when it cannot be
  * read and parsed: missing with no backup, empty, or not a YAML mapping. For a
  * caller that must decide NOTHING on a broken file: getConfig never throws and
@@ -264,10 +160,12 @@ async function writeConfigWithBackup(content: string): Promise<void> {
 export async function readStoredConfig(): Promise<Partial<Config> | null> {
   if (isHostReplicaProgram()) return (await import('./replication/kinds/config.js')).readConfigCopy() as Promise<Partial<Config> | null>;
   try {
-    const content = await readRawConfigContent();
-    if (content === null) return null;
-    const parsed = yaml.load(content);
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Partial<Config> : null;
+    const read = await readConfigDoc();
+    if (read.source === 'primary') return read.doc as Partial<Config>;
+    // The backup stands in for a file that is gone or empty. A file that does not
+    // parse holds the user's newest text, which the backup may not: decide nothing.
+    if (read.source === 'backup' && (read.state === 'missing' || read.state === 'empty')) return read.doc as Partial<Config>;
+    return null;
   } catch {
     return null;
   }
@@ -327,8 +225,9 @@ const fallbackConfigs = new WeakSet<object>();
 
 /**
  * True for the defaults getConfig answers with when config.yaml could not be
- * read: its empty `hosts` says nothing about which hosts exist, so a caller that
- * acts on a host being gone must not act on it.
+ * read (or the backup it answers with while config.yaml does not parse): its
+ * `hosts` says nothing sure about which hosts exist, so a caller that acts on a
+ * host being gone must not act on it.
  */
 export function isFallbackConfig(config: object): boolean {
   return fallbackConfigs.has(config);
@@ -341,15 +240,20 @@ export function isFallbackConfig(config: object): boolean {
 export async function getConfig(): Promise<Config> {
   if (isHostReplicaProgram()) return replicaConfig();
   try {
-    const content = await readRawConfigContent();
-    if (content === null) throw new Error('no config file and no backup');
-    const parsed = yaml.load(content) as Config;
+    const read = await readConfigDoc();
+    if (read.source === 'none') throw new Error('no config file and no backup');
+    if (read.source === 'broken') throw new Error(`config.yaml is ${read.state}${read.error ? `: ${read.error}` : ''}`);
+    const parsed = read.doc as unknown as Config;
     const config = normalizeReadConfig({ ...DEFAULT_CONFIG, ...parsed });
     // Merge auto-discovered SSH hosts
     await mergeSshDiscoveredHosts(config);
     // The paired cloud box, reached over the daemon tunnel (in memory only:
     // saveConfig / updateConfig strip it again, see withoutCloudBoxHost).
     injectCloudBoxHost(config, CLOUD_MODE);
+    // A backup answering for a file that does not parse runs the system on the
+    // last good settings, but says nothing about what the user's newest text
+    // holds: a caller that acts on something being absent must not act on it.
+    if (read.source === 'backup' && read.state !== 'missing' && read.state !== 'empty') fallbackConfigs.add(config);
     return config;
   } catch (err) {
     // Was log.debug — invisible in prod, which is precisely why a wiped
@@ -422,30 +326,6 @@ async function mergeSshDiscoveredHosts(config: Config): Promise<void> {
   }
 }
 
-// ── Write lock: serializes config read-modify-write operations ──
-let writeLock: Promise<void> = Promise.resolve();
-
-/** Reset write lock for testing. Prevents cross-test lock chain stalls. */
-export function _resetWriteLockForTest(): void {
-  writeLock = Promise.resolve();
-}
-
-/**
- * A host replica holds a COPY of the Mac's config (core/replication/kinds/config.ts):
- * every config write there waits for the Mac (503 needs_leader), and nothing writes
- * the replica's own config.yaml either.
- */
-function refuseConfigWriteOnReplica(): void {
-  if (isHostReplicaProgram()) throw new NeedsLeaderError('config_writes_need_mac');
-}
-
-function withWriteLock<T>(fn: () => Promise<T>): Promise<T> {
-  refuseConfigWriteOnReplica();
-  const prev = writeLock;
-  let resolve: () => void;
-  writeLock = new Promise<void>((r) => { resolve = r; });
-  return prev.then(fn).finally(() => resolve!());
-}
 
 /**
  * Write config object to config.yaml (full replacement).
@@ -461,13 +341,7 @@ export async function saveConfig(config: Config): Promise<void> {
     const hosts = withoutCloudBoxHost(config.hosts);
     const toWrite = (hosts === config.hosts ? { ...config } : { ...config, hosts }) as Config;
     migrateLegacyCompanionKeep(toWrite as unknown as Record<string, unknown>);
-    let content = yaml.dump(toWrite, { indent: 2, lineWidth: 120 });
-    // Add comment above available_models (js-yaml strips comments, so we inject after dump)
-    content = content.replace(
-      /^(\s+)available_models:/m,
-      '$1# Available models for the agent form dropdown.\n$1# Edit this list to add or remove models.\n$1available_models:',
-    );
-    await writeConfigWithBackup(content);
+    await writeConfigWithBackup(dumpConfig(toWrite as unknown as Record<string, unknown>));
   });
 }
 
@@ -476,47 +350,30 @@ export async function saveConfig(config: Config): Promise<void> {
  * Each top-level key in `partial` replaces the corresponding key in the existing config,
  * but UNMENTIONED keys are preserved. This prevents accidental data loss when callers
  * send incomplete config objects (e.g., PUT /api/config from SettingsPage).
+ *
+ * The base is config.yaml as it stands after any save in flight lands (modifyConfigDoc):
+ * merging into `{}` or into an older backup used to persist a config with every
+ * unmentioned section (stt, hosts, plugins, tools) dropped, or roll back an edit the
+ * user had just saved. A file that does not parse is refused, never replaced.
  */
 export async function updateConfig(partial: Partial<Config>): Promise<void> {
-  return withWriteLock(async () => {
-    // Read raw config from disk (not getConfig() which fills in defaults).
-    // Uses the backup-aware reader: if the primary file was deleted underneath
-    // us, merging into `{}` would persist a config with EVERY unmentioned
-    // section (stt, hosts, plugins, tools) silently dropped. That is how a
-    // deleted config.yaml turned into a permanently broken mic.
-    let existing: Record<string, unknown> = {};
-    try {
-      const content = await readRawConfigContent();
-      existing = content === null ? {} : ((yaml.load(content) as Record<string, unknown>) ?? {});
-    } catch (err) {
-      log.session.warn('config-manager: existing config unreadable, starting from empty', {
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
-
+  return modifyConfigDoc((existing) => {
     // The companion's keep choice where an older build kept it moves to cloud_bridge
     // first, so a partial that replaces `hosts` or `cloud_bridge` never drops it.
     migrateLegacyCompanionKeep(existing);
     // Merge: each top-level key in partial replaces the existing key
-    const merged = { ...existing };
     for (const [key, value] of Object.entries(partial)) {
       if (value !== undefined) {
-        merged[key] = value;
+        existing[key] = value;
       }
     }
-    migrateLegacyCompanionKeep(merged);
+    migrateLegacyCompanionKeep(existing);
     // A whole `hosts` map sent back from a getConfig() read carries the
     // injected cloud box row; it must never reach config.yaml.
-    if (merged.hosts && typeof merged.hosts === 'object') {
-      merged.hosts = withoutCloudBoxHost(merged.hosts as Record<string, unknown>);
+    if (existing.hosts && typeof existing.hosts === 'object') {
+      existing.hosts = withoutCloudBoxHost(existing.hosts as Record<string, unknown>);
     }
-
-    let content = yaml.dump(merged, { indent: 2, lineWidth: 120 });
-    content = content.replace(
-      /^(\s+)available_models:/m,
-      '$1# Available models for the agent form dropdown.\n$1# Edit this list to add or remove models.\n$1available_models:',
-    );
-    await writeConfigWithBackup(content);
+    return { write: true, result: undefined };
   });
 }
 
@@ -526,17 +383,7 @@ export async function updatePluginConfig(
   patch: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
   if (!/^[a-z0-9][a-z0-9._-]{0,63}$/.test(pluginId)) throw new Error(`Invalid plugin id: ${pluginId}`);
-  return withWriteLock(async () => {
-    let existing: Record<string, unknown> = {};
-    try {
-      const raw = await readRawConfigContent();
-      existing = raw === null ? {} : ((yaml.load(raw) as Record<string, unknown>) ?? {});
-    } catch (err) {
-      log.session.warn('config-manager: Plugin config patch could not read existing config', {
-        pluginId,
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
+  return modifyConfigDoc((existing) => {
     const plugins = existing.plugins && typeof existing.plugins === 'object' && !Array.isArray(existing.plugins)
       ? { ...(existing.plugins as Record<string, Record<string, unknown>>) }
       : {};
@@ -546,14 +393,7 @@ export async function updatePluginConfig(
     const next = { ...current, ...patch };
     plugins[pluginId] = next;
     existing.plugins = plugins;
-
-    let content = yaml.dump(existing, { indent: 2, lineWidth: 120 });
-    content = content.replace(
-      /^(\s+)available_models:/m,
-      '$1# Available models for the agent form dropdown.\n$1# Edit this list to add or remove models.\n$1available_models:',
-    );
-    await writeConfigWithBackup(content);
-    return next;
+    return { write: true, result: next };
   });
 }
 
@@ -567,9 +407,7 @@ export async function updateHostServerConfig(
   hostKey: string,
   patch: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
-  return withWriteLock(async () => {
-    const raw = await readRawConfigContent();
-    const existing = raw === null ? {} : ((yaml.load(raw) as Record<string, unknown>) ?? {});
+  return modifyConfigDoc((existing) => {
     const hosts = existing.hosts && typeof existing.hosts === 'object' && !Array.isArray(existing.hosts)
       ? { ...(existing.hosts as Record<string, Record<string, unknown>>) }
       : {};
@@ -584,13 +422,7 @@ export async function updateHostServerConfig(
     }
     hosts[hostKey] = { ...host, server: next };
     existing.hosts = hosts;
-    let content = yaml.dump(existing, { indent: 2, lineWidth: 120 });
-    content = content.replace(
-      /^(\s+)available_models:/m,
-      '$1# Available models for the agent form dropdown.\n$1# Edit this list to add or remove models.\n$1available_models:',
-    );
-    await writeConfigWithBackup(content);
-    return next;
+    return { write: true, result: next };
   });
 }
 
@@ -603,23 +435,14 @@ export async function updateHostServerConfig(
  */
 export async function removePluginConfig(pluginId: string): Promise<boolean> {
   if (!/^[a-z0-9][a-z0-9._-]{0,63}$/.test(pluginId)) throw new Error(`Invalid plugin id: ${pluginId}`);
-  return withWriteLock(async () => {
-    const raw = await readRawConfigContent();
-    if (raw === null) return false;
-    const existing = (yaml.load(raw) as Record<string, unknown>) ?? {};
+  return modifyConfigDoc((existing) => {
     const plugins = existing.plugins && typeof existing.plugins === 'object' && !Array.isArray(existing.plugins)
       ? { ...(existing.plugins as Record<string, unknown>) }
       : null;
-    if (!plugins || !(pluginId in plugins)) return false;
+    if (!plugins || !(pluginId in plugins)) return { write: false, result: false };
     delete plugins[pluginId];
     existing.plugins = plugins;
-    let content = yaml.dump(existing, { indent: 2, lineWidth: 120 });
-    content = content.replace(
-      /^(\s+)available_models:/m,
-      '$1# Available models for the agent form dropdown.\n$1# Edit this list to add or remove models.\n$1available_models:',
-    );
-    await writeConfigWithBackup(content);
-    return true;
+    return { write: true, result: true };
   });
 }
 
@@ -634,35 +457,33 @@ export async function removePluginConfig(pluginId: string): Promise<boolean> {
  * read has to happen inside the same lock as the write.
  *
  * `mutate` receives the current rows and returns the next ones, or null to make
- * the whole thing a no-op (no write, no backup churn).
+ * the whole thing a no-op (no write, no backup churn). It runs again when
+ * config.yaml changed between the read and the write (modifyConfigDoc), so a
+ * count it keeps starts from zero inside it.
  */
 export async function updatePushTokens(
   mutate: (tokens: PushTokenEntry[]) => PushTokenEntry[] | null,
 ): Promise<PushTokenEntry[]> {
-  return withWriteLock(async () => {
-    let existing: Record<string, unknown> = {};
-    try {
-      const raw = await readRawConfigContent();
-      existing = raw === null ? {} : ((yaml.load(raw) as Record<string, unknown>) ?? {});
-    } catch (err) {
-      log.session.warn('config-manager: push token patch could not read existing config', {
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
+  return modifyConfigDoc((existing) => {
     const current = Array.isArray(existing.push_tokens)
       ? (existing.push_tokens as PushTokenEntry[])
       : [];
     const next = mutate(current);
-    if (next === null) return current;
+    if (next === null) return { write: false, result: current };
     existing.push_tokens = next;
+    return { write: true, result: next };
+  });
+}
 
-    let content = yaml.dump(existing, { indent: 2, lineWidth: 120 });
-    content = content.replace(
-      /^(\s+)available_models:/m,
-      '$1# Available models for the agent form dropdown.\n$1# Edit this list to add or remove models.\n$1available_models:',
-    );
-    await writeConfigWithBackup(content);
-    return next;
+/**
+ * Read-modify-write the whole stored mapping, for a migration that must delete or
+ * move keys (updateConfig only replaces top-level keys). `mutate` edits the mapping
+ * in place and returns whether it changed anything; nothing is written otherwise.
+ */
+export async function migrateStoredConfig(mutate: (doc: Record<string, unknown>) => Promise<boolean> | boolean): Promise<boolean> {
+  return modifyConfigDoc(async (doc) => {
+    const changed = await mutate(doc);
+    return { write: changed, result: changed };
   });
 }
 
@@ -676,32 +497,19 @@ export async function updatePushTokens(
 export async function migrateConfigFileToProjectOnly(): Promise<boolean> {
   // A replica migrates nothing: its config is the Mac's copy, already migrated there.
   if (isHostReplicaProgram()) return false;
-  return withWriteLock(async () => {
-    let parsed: Record<string, unknown>;
-    try {
-      const content = await readRawConfigContent();
-      if (content === null) return false; // first run — DEFAULT_CONFIG is already clean
-      parsed = (yaml.load(content) as Record<string, unknown>) ?? {};
-    } catch (err) {
-      log.session.warn('config-manager: skipping project-only migration, config unreadable', {
-        error: err instanceof Error ? err.message : String(err),
-      });
-      return false;
-    }
-
-    const projectOnly = migrateConfigToProjectOnly(parsed);
-    const companionKeep = migrateLegacyCompanionKeep(parsed);
-    if (!projectOnly && !companionKeep) return false;
-
-    let content = yaml.dump(parsed, { indent: 2, lineWidth: 120 });
-    content = content.replace(
-      /^(\s+)available_models:/m,
-      '$1# Available models for the agent form dropdown.\n$1# Edit this list to add or remove models.\n$1available_models:',
-    );
-    await writeConfigWithBackup(content);
-    log.session.info('config-manager: migrated config.yaml', { projectOnly, companionKeep });
-    return true;
-  });
+  try {
+    return await migrateStoredConfig((parsed) => {
+      const projectOnly = migrateConfigToProjectOnly(parsed);
+      const companionKeep = migrateLegacyCompanionKeep(parsed);
+      if (projectOnly || companionKeep) log.session.info('config-manager: migrated config.yaml', { projectOnly, companionKeep });
+      return projectOnly || companionKeep;
+    });
+  } catch (err) {
+    log.session.warn('config-manager: skipping project-only migration, config unreadable', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return false;
+  }
 }
 
 /**
@@ -711,30 +519,25 @@ export async function migrateConfigFileToProjectOnly(): Promise<boolean> {
 export async function seedConfigDefaults(): Promise<void> {
   if (isHostReplicaProgram()) return;
   await migrateConfigFileToProjectOnly();
-  const config = await getConfig();
-  let needsWrite = false;
-
-  // Read raw file to check if available_models is actually on disk (vs filled in by getConfig)
   try {
-    const raw = await fs.readFile(CONFIG_FILE, 'utf-8');
-    if (!raw.includes('available_models')) {
-      needsWrite = true;
-    }
+    await modifyConfigDoc((existing) => {
+      // available_models must be ON DISK (getConfig fills it in memory either way).
+      const agent = existing.agent as { available_models?: unknown } | undefined;
+      if (agent && typeof agent === 'object' && agent.available_models !== undefined) return { write: false, result: undefined };
+      // Seeded from the stored file itself, inside the lock, so a save that landed
+      // after boot began is what gets the defaults, not an older read of it.
+      const config = normalizeReadConfig({ ...DEFAULT_CONFIG, ...structuredClone(existing) } as Config);
+      const seeded = { agent: config.agent, version: config.version, user: config.user, defaults: config.defaults, provider: config.provider };
+      for (const [key, value] of Object.entries(seeded)) if (value !== undefined) existing[key] = value;
+      return { write: true, result: undefined };
+    });
   } catch (err) {
-    log.session.debug('config-manager: no config file found, will write defaults', {
+    // A config.yaml that does not parse stays as the user left it; boot goes on
+    // with what getConfig answers (the backup, else the defaults).
+    log.session.error('config-manager: could not seed config defaults', {
       error: err instanceof Error ? err.message : String(err),
     });
-    needsWrite = true;
   }
-
-  if (needsWrite) {
-    // Use updateConfig to preserve existing keys (like stt) that may already be on disk
-    await updateConfig({
-      agent: config.agent,
-      version: config.version,
-      user: config.user,
-      defaults: config.defaults,
-      provider: config.provider,
-    });
-  }
+  // An edit made while Walnut was not running reaches the sidecar too.
+  await refreshConfigBackup().catch(() => false);
 }

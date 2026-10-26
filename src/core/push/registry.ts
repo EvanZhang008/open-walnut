@@ -169,6 +169,7 @@ export async function registerPushToken(input: RegisterPushInput): Promise<Regis
   let entry!: PushTokenEntry
   let swept = 0
   await updatePushTokens((tokens) => {
+    swept = 0 // the callback runs again when config.yaml changed under the write
     const previous = tokens.find((t) => t.token === token)
     // Upsert by token, and drop any OTHER token previously registered by this
     // same device: APNs mints a fresh token on reinstall, and leaving the old one
@@ -263,6 +264,7 @@ export async function takeBackPushToken(
   let kept = 0
   let dropped = 0
   await updatePushTokens((tokens) => {
+    removed = 0; kept = 0; dropped = 0 // the callback runs again when config.yaml changed under the write
     const i = tokens.findIndex((t) => ownedBy(t, device, 'relay') && pushTokenSha(t.token) === tokenSha)
     if (i < 0) return null
     const row = tokens[i]
@@ -325,6 +327,7 @@ export async function setDevicePushPreferences(
 
   let found = 0
   await updatePushTokens((tokens) => {
+    found = 0 // the callback runs again when config.yaml changed under the write
     const next = tokens.map((t) => {
       if (!ownedBy(t, device, origin)) return t
       found++
@@ -369,6 +372,7 @@ export async function reportDeviceActive(
   let mine = 0
   let applied = 0
   await updatePushTokens((tokens) => {
+    mine = 0; applied = 0 // the callback runs again when config.yaml changed under the write
     const next = tokens.map((t) => {
       if (!ownedBy(t, device, origin)) return t
       mine++

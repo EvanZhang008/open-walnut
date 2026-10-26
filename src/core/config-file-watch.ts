@@ -15,13 +15,14 @@
  * waits for the writes to settle, then reads and parses the file. Skipped:
  * Walnut's own write (the same hash), a file that does not parse as a mapping
  * (an editor mid-save; the next stat change tries again), content seen before.
+ * An edit that is applied also becomes the sidecar backup (refreshConfigBackup).
  */
 import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import yaml from 'js-yaml'
 import { CONFIG_FILE } from '../constants.js'
 import { log } from '../logging/index.js'
-import { announceConfigWritten, configContentHash, isOwnConfigWrite } from './config-manager.js'
+import { announceConfigWritten, configContentHash, isOwnConfigWrite, refreshConfigBackup } from './config-manager.js'
 import { bus, EventNames } from './event-bus.js'
 
 const POLL_MS = 2_000
@@ -56,6 +57,13 @@ export function startConfigFileWatch(opts: ConfigFileWatchOptions = {}): { stop:
     }
     seen = hash
     log.session.info('config.yaml changed outside Walnut: applying it like a save', { bytes: content.length })
+    // The sidecar follows the edit, so a later restore gives it back rather than
+    // the older content Walnut wrote last. Only while this is still the file.
+    if (file === CONFIG_FILE) {
+      void refreshConfigBackup(hash).catch((err) => {
+        log.session.warn('config.yaml changed outside Walnut: backup not updated', { error: err instanceof Error ? err.message : String(err) })
+      })
+    }
     announceConfigWritten()
     bus.emit(EventNames.CONFIG_CHANGED, { key: 'config.yaml' }, ['web-ui'], { source: 'config-file' })
   }
