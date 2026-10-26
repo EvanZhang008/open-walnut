@@ -20,6 +20,8 @@ export interface PluginManifest {
   icon?: string
   build?: PluginBuildConfig
   settingsIn?: 'plugins' | 'app'
+  /** File areas beyond plugin-data: `files` (synced text, in git) and `tmp` (scratch with a TTL). */
+  storage?: { files?: boolean | { maxBytes?: number }; tmp?: boolean | { ttlHours?: number } }
 }
 
 export interface ValidationResult {
@@ -31,6 +33,9 @@ export interface ValidationResult {
 const ID_PATTERN = /^[a-z0-9][a-z0-9._-]{0,63}$/
 /** The host refuses a larger icon (413) and draws the monogram instead. */
 const ICON_MAX_BYTES = 64 * 1024
+/** The host clamps to these (src/core/plugins/plugin-file-area.ts). */
+const SYNCED_AREA_MAX_BYTES = 20 * 1024 * 1024
+const TMP_MAX_TTL_HOURS = 30 * 24
 
 export async function readManifest(root = process.cwd()): Promise<PluginManifest> {
   const file = path.join(root, 'manifest.json')
@@ -94,6 +99,32 @@ export async function validatePlugin(root = process.cwd()): Promise<ValidationRe
       } catch {
         errors.push(`manifest.icon file does not exist: ${manifest.icon}`)
       }
+    }
+  }
+
+  // The host drops a bad area with a warning; here it is an error, so the author fixes it before shipping.
+  if (manifest.storage !== undefined) {
+    const storage = manifest.storage as Record<string, unknown> | null
+    if (!storage || typeof storage !== 'object' || Array.isArray(storage)) {
+      errors.push('manifest.storage must be an object like { "files": true, "tmp": true }')
+    } else {
+      for (const key of Object.keys(storage)) {
+        if (key !== 'files' && key !== 'tmp') errors.push(`manifest.storage.${key} is not an area; use "files" or "tmp"`)
+      }
+      const area = (key: 'files' | 'tmp', field: 'maxBytes' | 'ttlHours', max: number) => {
+        const value = storage[key]
+        if (value === undefined || typeof value === 'boolean') return
+        if (!value || typeof value !== 'object' || Array.isArray(value)) {
+          errors.push(`manifest.storage.${key} must be true or an object`)
+          return
+        }
+        const n = (value as Record<string, unknown>)[field]
+        if (n === undefined) return
+        if (typeof n !== 'number' || !Number.isFinite(n) || n <= 0) errors.push(`manifest.storage.${key}.${field} must be a positive number`)
+        else if (n > max) warnings.push(`manifest.storage.${key}.${field} is above ${max}; Walnut uses ${max}`)
+      }
+      area('files', 'maxBytes', SYNCED_AREA_MAX_BYTES)
+      area('tmp', 'ttlHours', TMP_MAX_TTL_HOURS)
     }
   }
 

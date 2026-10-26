@@ -787,7 +787,39 @@ export interface PluginDatabase {
   batch(statements: SqlStatement[]): Promise<SqlRunResult[]>
 }
 
+/**
+ * A file area beside the machine-local storage: `walnut.storage.files` (synced) or
+ * `walnut.storage.tmp` (scratch). Each is declared in manifest.json under `storage`;
+ * an undeclared area throws on use. Names are relative paths inside the area; `..`
+ * and absolute paths are refused, and in the synced area hidden names and
+ * node_modules/ folders too.
+ */
+export interface PluginFileArea {
+  /** The area's absolute folder, to hand a path to a session or a tool. Write through the methods: they keep the rules. */
+  readonly dir: string
+  readText(name: string): Promise<string | null>
+  writeText(name: string, value: string): Promise<void>
+  readJson<T>(name: string, fallback: T): Promise<T>
+  writeJson(name: string, value: unknown): Promise<void>
+  delete(name: string): Promise<void>
+  list(prefix?: string): Promise<string[]>
+}
+
+/**
+ * `WALNUT_HOME/plugin-files/<id>/`: small text files that ride the data folder's git to
+ * every box and the backup. Text only, with a lower-case extension (.md .markdown .txt
+ * .json .yaml .yml .csv .toml), at most 1 MiB a file, 1,000 files, and 5 MiB in all
+ * unless `storage.files.maxBytes` asks for up to 20 MiB. A write is kept at once and
+ * read back at once, but reaches the folder (and git) at most once every five minutes,
+ * and when the plugin stops. Read-only on a replica.
+ */
+export interface SyncedFileArea extends PluginFileArea {
+  /** Publish pending writes now instead of within five minutes; at most once a minute (a sooner call waits for the minute). */
+  flush(): Promise<void>
+}
+
 export interface StorageService {
+  /** Machine-local: `WALNUT_HOME/plugin-data/<id>/`, never in git, any size and format. */
   readonly dataDir: string
   readJson<T>(name: string, fallback: T): Promise<T>
   writeJson(name: string, value: unknown): Promise<void>
@@ -797,6 +829,10 @@ export interface StorageService {
   delete(name: string): Promise<void>
   list(prefix?: string): Promise<string[]>
   readonly database: PluginDatabase
+  /** Synced text files (manifest `"storage": { "files": true }`). */
+  readonly files: SyncedFileArea
+  /** Scratch, never in git, removed after `storage.tmp.ttlHours` (24 by default) (manifest `"storage": { "tmp": true }`). */
+  readonly tmp: PluginFileArea
 }
 
 export interface SecretService {

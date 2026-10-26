@@ -9,6 +9,7 @@ import type {
   PluginNotifyInput,
   PluginOpDefinition,
   PluginDatabase,
+  PluginFileArea,
   QuietHold,
   QuietState,
   ServiceApi,
@@ -165,6 +166,50 @@ export interface FakeWalnutResult {
   tagLinkDefaults: Map<string, string>
   /** The board's pin groups, seeded ones and those the plugin ensured, in order. */
   pinGroups: Array<{ id: string; label: string }>
+}
+
+const SYNCED_TEXT_EXTENSIONS = ['.md', '.markdown', '.txt', '.json', '.yaml', '.yml', '.csv', '.toml']
+
+function fakeFileArea(dir: string, synced: boolean): PluginFileArea {
+  const entries = new Map<string, string>()
+  const clean = (name: string, kind: 'file' | 'folder' = 'file'): string => {
+    const normalized = String(name ?? '').trim().replace(/\\/g, '/')
+    const segments = normalized.split('/').filter((segment) => segment && segment !== '.')
+    if (!normalized || normalized.startsWith('/') || /^[a-zA-Z]:/.test(normalized) || normalized.includes('\0')
+      || segments.length === 0 || segments.some((segment) => segment === '..' || (synced && segment.startsWith('.')))) {
+      throw new Error(`Invalid plugin file path: ${JSON.stringify(name)} (no ".."${synced ? ', and no hidden names' : ''})`)
+    }
+    const relative = segments.join('/')
+    if (synced && segments.slice(0, kind === 'file' ? -1 : undefined).some((segment) => segment.toLowerCase() === 'node_modules')) {
+      throw new Error(`Invalid plugin file path: ${JSON.stringify(name)} (git never syncs a node_modules folder)`)
+    }
+    if (synced && kind === 'file' && !SYNCED_TEXT_EXTENSIONS.some((extension) => relative.endsWith(extension))) {
+      throw new TypeError(`${relative}: a synced plugin file is text with a lower-case extension, one of ${SYNCED_TEXT_EXTENSIONS.join(' ')}`)
+    }
+    return relative
+  }
+  const write = (name: string, value: string) => {
+    const relative = clean(name)
+    if (synced && value.includes('\0')) throw new TypeError('A synced plugin file holds text, not binary data')
+    if (synced && new TextEncoder().encode(value).length > 1024 * 1024) throw new RangeError(`${relative} is over 1 MiB, the most a synced plugin file holds`)
+    if (synced && !entries.has(relative) && entries.size >= 1000) throw new RangeError('The synced files of this plugin hold 1000 files, the most one plugin may keep there')
+    entries.set(relative, value)
+  }
+  return {
+    dir,
+    async readText(name) { return entries.get(clean(name)) ?? null },
+    async writeText(name, value) { write(name, value) },
+    async readJson(name, fallback) {
+      const text = entries.get(clean(name))
+      return text === undefined ? structuredClone(fallback) : JSON.parse(text)
+    },
+    async writeJson(name, value) { write(name, `${JSON.stringify(value, null, 2)}\n`) },
+    async delete(name) { entries.delete(clean(name)) },
+    async list(prefix = '') {
+      const base = prefix ? clean(prefix, 'folder') : ''
+      return [...entries.keys()].filter((name) => !base || name === base || name.startsWith(`${base}/`)).sort()
+    },
+  }
 }
 
 export function createFakeWalnut(options: FakeWalnutOptions = {}): FakeWalnutResult {
@@ -804,6 +849,10 @@ export function createFakeWalnut(options: FakeWalnutOptions = {}): FakeWalnutRes
         database ??= createFakeDatabase()
         return database
       },
+      // In memory, with the host's name and text rules, so a plugin test meets the same refusals.
+      // Both areas are open here; the host also needs them declared in manifest.json.
+      files: Object.assign(fakeFileArea('/tmp/fake-walnut-plugin-files', true), { async flush() { return undefined } }),
+      tmp: fakeFileArea('/tmp/fake-walnut-plugin-tmp', false),
     },
     secrets: {
       async get(name) { return secrets.get(name) },

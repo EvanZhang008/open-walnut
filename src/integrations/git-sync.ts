@@ -10,6 +10,7 @@ import { bus, EventNames } from '../core/event-bus.js';
 import { markCriticalSection } from '../core/event-loop-monitor.js';
 import { safeKillProcessGroup } from '../core/process-group-kill.js';
 import { log } from '../logging/index.js';
+import { SYNCED_FILE_EXTENSIONS, SYNCED_FILE_MAX_BYTES, SYNCED_FILES_DIR } from '../core/plugins/plugin-file-rules.js';
 import {
   healJsonFileFromHistory,
   jsonCandidatesFromPorcelain,
@@ -346,7 +347,7 @@ export async function execGitGroup(
 
 export async function execGitArgsGroup(
   args: string[],
-  opts: { cwd: string; timeout: number; env?: NodeJS.ProcessEnv },
+  opts: { cwd: string; timeout: number; env?: NodeJS.ProcessEnv; /** Written to git's stdin, which is closed otherwise. */ input?: string },
 ): Promise<string> {
   return new Promise<string>((resolve, reject) => {
     const childEnv = gitChildEnv(opts.env);
@@ -355,8 +356,13 @@ export async function execGitArgsGroup(
       cwd: opts.cwd,
       env: childEnv,
       detached: true,
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: [opts.input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
     });
+    if (opts.input !== undefined) {
+      // A git that exits before reading it all reports through 'close'; the pipe error is noise.
+      child.stdin?.on('error', () => undefined);
+      child.stdin?.end(opts.input);
+    }
     let stdout = '';
     let stderr = '';
     let timedOut = false;
@@ -592,7 +598,64 @@ export function resetSyncProbeCacheForTest(): void {
   gitAvailableProbe.inflight = null;
 }
 
-const GITIGNORE_CONTENT = `# Binary / large / ephemeral
+/**
+ * plugin-files/<id>/ (walnut.storage.files, src/core/plugins/plugin-file-area.ts) is
+ * the one place a plugin writes into the synced history, and only small text belongs
+ * there: everything under it is ignored, then folders and the text extensions come
+ * back in, and hidden names and node_modules/ go out again (a nested repo's .git, an
+ * editor's state, installed packages). The block must be LAST in the .gitignore. Git
+ * takes the last rule that matches, so the unanchored rules above it (images/, media/,
+ * tmp/, node_modules/ ...) would otherwise hide a plugin's own `images/` folder, and a
+ * broad line appended after it could hide the text again. ensureCriticalIgnores moves
+ * it back to the end.
+ */
+const PLUGIN_FILES_BLOCK_START = `# >>> ${SYNCED_FILES_DIR}: synced plugin text (walnut.storage.files). Keep this block last.`;
+const PLUGIN_FILES_BLOCK_END = `# <<< ${SYNCED_FILES_DIR}`;
+const PLUGIN_FILES_RULES = [
+  `/${SYNCED_FILES_DIR}/**`,
+  `!/${SYNCED_FILES_DIR}/**/`,
+  ...SYNCED_FILE_EXTENSIONS.map((extension) => `!/${SYNCED_FILES_DIR}/**/*${extension}`),
+  `/${SYNCED_FILES_DIR}/**/.*`,
+  `/${SYNCED_FILES_DIR}/**/node_modules/`,
+];
+export const PLUGIN_FILES_IGNORE_BLOCK = [PLUGIN_FILES_BLOCK_START, ...PLUGIN_FILES_RULES, PLUGIN_FILES_BLOCK_END];
+
+/**
+ * `content` with the plugin-files block at its very end, wherever it was before. The
+ * block is found by its markers; its own rules found outside it are dropped. Its rules
+ * are only ever added to, never taken away or reordered: rules in it this build does not
+ * know (a newer build's, on another box sharing the repo) stay where they are, and rules
+ * it lacks go at its end, so two builds never rewrite the file back and forth.
+ */
+export function withPluginFilesBlockLast(content: string): string {
+  const lines = content.split('\n');
+  const kept: string[] = [];
+  const found: string[] = [];
+  const dropSeparator = () => { if (kept.length > 0 && kept[kept.length - 1].trim() === '') kept.pop(); };
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (line === PLUGIN_FILES_BLOCK_START) {
+      dropSeparator();
+      const end = lines.findIndex((other, j) => j > i && other.trim() === PLUGIN_FILES_BLOCK_END);
+      if (end === -1) continue; // a start without its end: only the marker goes
+      for (const rule of lines.slice(i + 1, end)) if (rule.trim()) found.push(rule.trim());
+      i = end;
+      continue;
+    }
+    // A stray end marker, or one of this block's own rules left outside it by a hand edit.
+    if (line === PLUGIN_FILES_BLOCK_END || PLUGIN_FILES_RULES.includes(line)) continue;
+    kept.push(lines[i]);
+  }
+  // A block that holds every rule of this build keeps its own order (a newer build's, with a
+  // rule this one does not know in the middle); one that lacks some gets them at its end.
+  const existing = found.filter((rule, index) => found.indexOf(rule) === index);
+  const rules = existing.length === 0 ? PLUGIN_FILES_RULES : [...existing, ...PLUGIN_FILES_RULES.filter((rule) => !existing.includes(rule))];
+  const body = kept.join('\n').replace(/\s+$/, '');
+  const block = [PLUGIN_FILES_BLOCK_START, ...rules, PLUGIN_FILES_BLOCK_END];
+  return `${body ? `${body}\n\n` : ''}${block.join('\n')}\n`;
+}
+
+const GITIGNORE_BODY = `# Binary / large / ephemeral
 browser/
 images/
 media/
@@ -816,6 +879,7 @@ sessions.json.*
 /*.backup
 /*.backup-*
 `;
+const GITIGNORE_CONTENT = withPluginFilesBlockLast(GITIGNORE_BODY);
 
 /**
  * Ignore entries that MUST be present even in pre-existing repos whose
@@ -948,6 +1012,9 @@ const EXTRA_IGNORE_PATTERNS = [
  * older index.json over the primary's, flipping a letter the human had read back
  * to unread and taking a thread turn with it.
  *
+ * plugin-files/ (walnut.storage.files) is written by the primary's plugins only: the
+ * SDK refuses a write on a replica, so a difference there is a stale mirror as well.
+ *
  * notifications.json joined in stage 4d (docs/plan/walnut-companion-unified-replica.md),
  * as a FILE of its own (CLOUD_NEVER_STAGE_FILES below): the Mac owns the feed. The
  * companion's console reads it from the Mac and sends mark-read and dismiss there
@@ -956,7 +1023,7 @@ const EXTRA_IGNORE_PATTERNS = [
  * (core/notifications/companion-cards.ts). The data dir's file on the box is the
  * Mac's, brought by git, which the box only reads while the Mac is away.
  */
-export const CLOUD_NEVER_STAGE_DIRS = ['human-inbox'];
+export const CLOUD_NEVER_STAGE_DIRS = ['human-inbox', SYNCED_FILES_DIR];
 
 /**
  * Files the replica never stages either, restored from HEAD when they diverge.
@@ -1009,12 +1076,175 @@ export async function stageAllForCommit(
   const cloudMode = opts.cloudMode ?? CLOUD_MODE;
   const gitOpts = opts.cwd ? { cwd: opts.cwd } : undefined;
   if (cloudMode) await restoreNeverStagePaths(gitOpts);
+  else await prepareSyncedPluginFiles(gitOpts?.cwd ?? WALNUT_HOME);
   await gitAsync(stageAllArgs(cloudMode), gitOpts);
-  if (!cloudMode) return;
+  if (!cloudMode) {
+    await keepUnfitPluginFilesOut(gitOpts);
+    return;
+  }
   for (const p of NEVER_STAGE_PATHS) {
     // Best-effort: a repo with no HEAD yet (initSync's first commit) has nothing
     // to reset to, and there is nothing staged there to drop either.
     await gitSafeAsync(`reset -q -- "${p}"`, gitOpts);
+  }
+}
+
+const unfitPluginFilesReported = new Set<string>();
+/**
+ * plugin-files/.gitignore: the files keepUnfitPluginFilesOut kept out, so the next
+ * `add -A` does not hash them again (a big file rewritten often would fill .git with
+ * loose objects) and the tree reads clean. Written by Walnut only; it is a hidden name,
+ * so the block above keeps it out of git, and the SDK never lets a plugin write it.
+ */
+const PLUGIN_FILES_LOCAL_IGNORE = '.gitignore';
+const PLUGIN_FILES_LOCAL_IGNORE_HEADER = '# Written by Walnut git-sync: plugin files kept out of the synced history (over 1 MiB, binary, a link, or a nested repository). A line goes once its file is gone or fits.';
+
+/** The gitignore line that matches exactly `relative` (a path inside plugin-files/); null when no line can (a line break in the name). */
+function pluginFilesIgnoreLine(relative: string): string | null {
+  if (/[\r\n]/.test(relative)) return null;
+  return `/${relative.replace(/[\\*?[]/g, (c) => `\\${c}`).replace(/ +$/, (spaces) => spaces.replace(/ /g, '\\ '))}`;
+}
+
+function pluginFilesIgnoredPath(line: string): string | null {
+  return line.startsWith('/') ? line.slice(1).replace(/\\(.)/g, '$1') : null;
+}
+
+/** Whether a file on disk would pass now: a regular file, small enough, no NUL. */
+async function pluginFileFitsNow(file: string): Promise<boolean> {
+  try {
+    const stat = await fs.promises.lstat(file);
+    if (!stat.isFile() || stat.size > SYNCED_FILE_MAX_BYTES) return false;
+    return !(await fs.promises.readFile(file)).includes(0);
+  } catch {
+    return false;
+  }
+}
+
+async function readPluginFilesLocalIgnore(dir: string): Promise<string[]> {
+  const text = await fs.promises.readFile(path.join(dir, PLUGIN_FILES_LOCAL_IGNORE), 'utf-8').catch(() => '');
+  return text.split('\n').filter((line) => line.startsWith('/'));
+}
+
+async function writePluginFilesLocalIgnore(dir: string, lines: string[]): Promise<void> {
+  const file = path.join(dir, PLUGIN_FILES_LOCAL_IGNORE);
+  if (lines.length === 0) { await fs.promises.rm(file, { force: true }); return; }
+  await fs.promises.writeFile(file, `${PLUGIN_FILES_LOCAL_IGNORE_HEADER}\n${lines.join('\n')}\n`, 'utf-8');
+}
+
+let pluginFilesPrepareWarned = false;
+
+/**
+ * Before the add: lines of the local ignore whose file is gone or fits again come out, so
+ * such a file syncs at once, and every nested repository under plugin-files/ goes in. A
+ * nested repo has to be out BEFORE the add: one without a commit makes `add -A` fail for
+ * the whole data folder ("does not have a commit checked out"), every tick, which would
+ * stop the sync of everything else. `ls-files -o` lists such a folder as `dir/` (git does
+ * not descend into it). Never throws: the add and the check after it still run.
+ */
+async function prepareSyncedPluginFiles(root: string): Promise<void> {
+  const dir = path.join(root, SYNCED_FILES_DIR);
+  if (!fs.existsSync(dir)) return;
+  try {
+    const lines = await readPluginFilesLocalIgnore(dir);
+    const keep: string[] = [];
+    for (const line of lines) {
+      const relative = pluginFilesIgnoredPath(line);
+      if (!relative) continue;
+      const absolute = path.join(dir, relative);
+      if (line.endsWith('/')) {
+        // A nested repository stays out while it is one.
+        if (fs.existsSync(path.join(absolute, '.git'))) keep.push(line);
+        continue;
+      }
+      if (!(await fs.promises.lstat(absolute).then(() => true, () => false))) continue;
+      if (await pluginFileFitsNow(absolute)) continue;
+      keep.push(line);
+    }
+    const untracked = await execGitArgsGroup(['ls-files', '-o', '--exclude-standard', '-z', '--', SYNCED_FILES_DIR], { cwd: root, timeout: LOCAL_TIMEOUT });
+    const nested = untracked.split('\0').filter((entry) => entry.endsWith('/'));
+    for (const entry of nested) {
+      const line = pluginFilesIgnoreLine(entry.slice(SYNCED_FILES_DIR.length + 1, -1));
+      if (line && !keep.includes(`${line}/`)) keep.push(`${line}/`);
+    }
+    if (keep.length !== lines.length || keep.some((line, i) => line !== lines[i])) await writePluginFilesLocalIgnore(dir, keep);
+    if (nested.length > 0) log.git.warn('git-sync: kept a nested repository under plugin-files/ out of the synced history', { folders: nested.slice(0, 20) });
+  } catch (error) {
+    if (!pluginFilesPrepareWarned) {
+      pluginFilesPrepareWarned = true;
+      log.git.warn('git-sync: could not check plugin-files/ before the add', { error: error instanceof Error ? error.message : String(error) });
+    }
+  }
+}
+
+/**
+ * An entry under plugin-files/ staged new, changed or changed in type that is over the
+ * size limit, holds binary data, or is a link (a symlink, a nested repo) stays out of
+ * the commit: `rm --cached` after the add, the file on disk untouched, and a line in
+ * plugin-files/.gitignore so later adds skip it. A tracked file that grew past the limit
+ * so leaves the synced history (the commit records it deleted; the file stays on this
+ * machine). `rm --cached` leaves nothing dirty: the commit right after takes the removal,
+ * and the ignore line keeps the file untracked, so `pull --rebase` is never blocked.
+ * The SDK already refuses such a write; this catches a plugin that wrote into its folder
+ * directly. It judges what was STAGED (the blob's size, git's own binary test), not the
+ * file on disk, which may have changed since. When the unstage fails this throws, so the
+ * tick commits nothing rather than the file. No shell: names go to git on stdin.
+ */
+async function keepUnfitPluginFilesOut(gitOpts: { cwd?: string } | undefined): Promise<void> {
+  const root = gitOpts?.cwd ?? WALNUT_HOME;
+  const dir = path.join(root, SYNCED_FILES_DIR);
+  if (!fs.existsSync(dir)) return;
+  const git = (args: string[], input?: string) => execGitArgsGroup(args, { cwd: root, timeout: LOCAL_TIMEOUT, ...(input === undefined ? {} : { input }) });
+  const pathspec = ['--', SYNCED_FILES_DIR];
+  // --no-renames: a new file that looks like a moved one is still new.
+  const raw = await git(['diff', '--cached', '--no-renames', '--diff-filter=AMT', '--raw', '-z', '--no-abbrev', ...pathspec]);
+  if (!raw) return;
+  const added: Array<{ file: string; mode: string; blob: string }> = [];
+  const fields = raw.split('\0');
+  for (let i = 0; i + 1 < fields.length; i += 2) {
+    const [, mode, , blob] = fields[i].split(' ');
+    if (fields[i + 1]) added.push({ file: fields[i + 1], mode, blob });
+  }
+  if (added.length === 0) return;
+  const unfit = new Map<string, string>();
+  for (const entry of added) if (entry.mode !== '100644' && entry.mode !== '100755') unfit.set(entry.file, entry.mode === '160000' ? 'a nested repository' : 'a link');
+  const blobs = added.filter((entry) => !unfit.has(entry.file));
+  if (blobs.length > 0) {
+    const sizes = (await git(['cat-file', '--batch-check=%(objectsize)'], blobs.map((entry) => entry.blob).join('\n') + '\n')).split('\n');
+    blobs.forEach((entry, index) => {
+      const size = Number(sizes[index]);
+      if (Number.isFinite(size) && size > SYNCED_FILE_MAX_BYTES) unfit.set(entry.file, `${size} bytes, over ${SYNCED_FILE_MAX_BYTES}`);
+    });
+    // Git's own binary test on the staged blob: numstat shows "-" for binary.
+    const numstat = await git(['diff', '--cached', '--no-renames', '--diff-filter=AMT', '--numstat', '-z', ...pathspec]);
+    for (const row of numstat.split('\0')) {
+      const match = /^-\t-\t(.+)$/s.exec(row);
+      if (match && !unfit.has(match[1])) unfit.set(match[1], 'binary data');
+    }
+  }
+  if (unfit.size === 0) return;
+  const files = [...unfit.keys()];
+  try {
+    // -f: the staged blob may differ from the file and from HEAD already; --cached never touches the file.
+    await git(['--literal-pathspecs', 'rm', '--cached', '-r', '-f', '-q', '--pathspec-from-file=-', '--pathspec-file-nul'], files.join('\0'));
+  } catch (error) {
+    // At least out of this commit: the index back to HEAD for them, then no commit this tick.
+    await git(['--literal-pathspecs', 'reset', '-q', '--pathspec-from-file=-', '--pathspec-file-nul'], files.join('\0')).catch(() => undefined);
+    throw new Error(`git-sync: could not keep ${files.length} unfit plugin file(s) out of the commit: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  const lines = await readPluginFilesLocalIgnore(dir);
+  for (const file of files) {
+    const line = pluginFilesIgnoreLine(file.slice(SYNCED_FILES_DIR.length + 1));
+    if (line && !lines.includes(line)) lines.push(line);
+  }
+  await writePluginFilesLocalIgnore(dir, lines).catch((error) => {
+    log.git.warn('git-sync: could not record a kept-out plugin file', { error: error instanceof Error ? error.message : String(error) });
+  });
+  const fresh = files.filter((file) => !unfitPluginFilesReported.has(file));
+  for (const file of fresh) unfitPluginFilesReported.add(file);
+  if (fresh.length > 0) {
+    log.git.warn('git-sync: kept a plugin file out of the commit; plugin-files/ holds small text only', {
+      files: fresh.slice(0, 20).map((file) => ({ file, reason: unfit.get(file) })),
+    });
   }
 }
 
@@ -1070,8 +1300,9 @@ const REANCHORED_LINES = new Map<string, string>([['cache/', '/cache/']]);
 
 /**
  * Append missing CRITICAL_IGNORES / EXTRA_IGNORE_PATTERNS to an existing
- * .gitignore (idempotent), after re-anchoring REANCHORED_LINES. Called from
- * ensureRepo() so every boot self-heals older installations.
+ * .gitignore (idempotent), after re-anchoring REANCHORED_LINES, and keep the
+ * plugin-files block last. Called from ensureRepo() and every sync tick, so every
+ * boot self-heals older installations.
  */
 export function ensureCriticalIgnores(): void {
   const gitignorePath = path.join(WALNUT_HOME, '.gitignore');
@@ -1084,13 +1315,15 @@ export function ensureCriticalIgnores(): void {
   const rewritten = content.split('\n').map((line) => REANCHORED_LINES.get(line) ?? line).join('\n');
   const lines = new Set(rewritten.split('\n').map((l) => l.trim()));
   const missing = [...CRITICAL_IGNORES, ...EXTRA_IGNORE_PATTERNS].filter((entry) => !lines.has(entry));
-  if (missing.length === 0 && rewritten === content) return;
   const suffix = missing.length === 0 ? '' : (
     (rewritten.endsWith('\n') ? '' : '\n')
     + '\n# Machine-local / sensitive: never synced\n'
     + missing.join('\n') + '\n'
   );
-  fs.writeFileSync(gitignorePath, rewritten + suffix, 'utf-8');
+  // Appended lines land above the plugin-files block, which stays last.
+  const next = withPluginFilesBlockLast(rewritten + suffix);
+  if (next === content) return;
+  fs.writeFileSync(gitignorePath, next, 'utf-8');
 }
 
 /**
@@ -1224,7 +1457,10 @@ export function initSync(remoteUrl?: string): void {
     // Same never-author rule as the tick's commits (see stageAllForCommit): a
     // replica must not publish primary-authoritative data even in its very first
     // commit. Nothing to reset or restore here — there is no HEAD yet.
-    git(stageAllArgs(CLOUD_MODE));
+    // plugin-files/ waits for the first tick, whose guarded stage (stageAllForCommit) keeps a
+    // nested repo, a link or a big or binary file out; a bare add here would fail on the one
+    // and commit the others.
+    git(CLOUD_MODE ? stageAllArgs(true) : `add -A -- . ':(exclude)${SYNCED_FILES_DIR}'`);
     gitSafe('commit -m "open-walnut init"');
   }
 }
@@ -1620,7 +1856,11 @@ export async function recoverOrphanedGitSurgery(
     //    unpublished. A replica reverting a letter here is recoverable — the
     //    stores' `lastUpdated` content clock makes the primary's newer copy win
     //    the merge — while data this step drops is not.
+    // plugin-files/ gets the tick's guard around the add: a nested repo without a commit
+    // would make this add fail (and step 2 then overwrite what it did not snapshot).
+    await prepareSyncedPluginFiles(repoDir);
     await gitSafeAsync('add -A', opts);
+    if (!CLOUD_MODE) await keepUnfitPluginFilesOut({ cwd: repoDir }).catch(() => undefined);
     await gitSafeAsync('commit -q -m "rescue: live worktree at orphaned-rebase recovery"', opts);
     const rescueTip = await gitSafeAsync('rev-parse HEAD', opts);
     if (rescueTip) await gitSafeAsync(`branch -f ${rescueBranch} ${rescueTip}`, opts);

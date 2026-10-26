@@ -29,6 +29,7 @@ import fs from 'node:fs';
 import { ensureMemoryFile } from './memory-file.js';
 import { seedConfigDefaults } from './config-manager.js';
 import { sweepOrphanAtomicTmpFiles } from './tmp-sweep.js';
+import { sweepPluginTmpOrphans } from './plugins/plugin-file-area.js';
 import { log } from '../logging/index.js';
 
 /**
@@ -93,4 +94,7 @@ export async function initDirectories(): Promise<void> {
   // Never awaited (a slow disk must not delay boot) and never throws — see
   // tmp-sweep.ts for why these repeatedly broke the auto-commit loop.
   void sweepOrphanAtomicTmpFiles();
+  // Same: plugin scratch (tmp/plugins/<id>/) past the longest TTL a manifest may ask for,
+  // including that of a plugin no longer installed. A running plugin sweeps its own sooner.
+  void sweepPluginTmpOrphans();
 }

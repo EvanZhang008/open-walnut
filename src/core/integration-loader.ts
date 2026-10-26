@@ -66,6 +66,7 @@ import { validatePluginId } from './plugins/ids.js';
 import { manifestKnowsHeldPhases, wrapSyncForLegacyPhases } from './plugins/legacy-phase-sync.js';
 import { listInstalledBundledDirs, parseManifestCatalog, resolveBundledStoreDir } from './plugins/bundled-store.js';
 import { validatePluginIconPath } from './plugins/plugin-icon.js';
+import { parseStorageDeclaration } from './plugins/plugin-file-area.js';
 import { listOwnedSkillDirRecords } from './plugins/skill-registry.js';
 import { CORE_SERVICE_OWNER, removeServicesOf } from './plugins/service-registry.js';
 // Only for the lifecycle announcement inside createPluginManager's onStateChange hook.
@@ -1468,6 +1469,10 @@ function validateManifest(raw: unknown, filePath: string): PluginManifest | null
     else log.warn('Manifest icon dropped', { filePath, reason: checked.error });
   }
 
+  // Lenient like icon: a bad area costs that area, never the load.
+  const storageParsed = parseStorageDeclaration(obj.storage);
+  for (const reason of storageParsed.dropped) log.warn('Manifest storage entry dropped', { filePath, reason });
+
   return {
     id: obj.id,
     name: obj.name,
@@ -1497,6 +1502,7 @@ function validateManifest(raw: unknown, filePath: string): PluginManifest | null
       : {}),
     ...(catalog ? { catalog } : {}),
     ...(icon ? { icon } : {}),
+    ...(storageParsed.storage ? { storage: storageParsed.storage } : {}),
   };
 }
 
@@ -1839,6 +1845,7 @@ async function loadPlugin(
             // services it may ask for, and the manager answers why one is unavailable.
             dependencies: manifest.dependencies,
             lookupPluginState: (id) => manager.get(id)?.state,
+            storage: manifest.storage,
           })
         : builder.api;
       if (deactivateFn) context.onDispose(deactivateFn);

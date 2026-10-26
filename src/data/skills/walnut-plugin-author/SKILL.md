@@ -17,6 +17,8 @@ Decide what the plugin contributes before scaffolding, because the answer picks 
 |---|---|---|
 | Any AI session (the Personal AI, a coding session) to call something | `registry.op` (read-only ops reach every session through `walnut tools call <plugin>_<name>`) | `server` |
 | The AI beside your App to see what the App shows (an editor, a test run, a timer) | `appState.publish`, see step 4a | either |
+| An AI that watches the person's work and draws conclusions | an event log plus an observer session, see step 4b | `both` |
+| Files a person wants on every machine and in the backup (a review, a rules file) | `storage.files`, declared in the manifest, see step 5 | `server` |
 | A recurring or scheduled action | `registry.cronAction` | `server` |
 | To react to sessions or tasks | `registry.hook` | `server` |
 | Two-way task sync with an external system | `registry.sync` plus `sourceClaim` and `display` | `server` |
@@ -91,7 +93,23 @@ When the App embeds a session (`SessionView` beside an editor, a board, a form),
 
 Tell the session these exist: name the ops and what the app state holds in its opening message, and ship the how-to as an `agent-skills/` skill you `registry.skill` while the plugin has something to say, so other sessions do not pay for it in every prompt.
 
+When the session edits a file the person has open in your App, merge the change into the editor: a three-way merge against the copy both sides last saw, so the person's unsaved typing and the AI's edit both survive. Ask only when both changed the same lines. A "changed on disk while you typed" prompt for every AI edit trains the person to stop letting the AI help.
+
 Check it end to end on an isolated server: type in the App, send a message from the embedded session, and read the session's history to see the `kind="app-state"` note and the answer that used it.
+
+## 4b. Make the App AI-native
+
+An App with an AI beside it is not a form with a chat box. Seven rules, each with the mistake it prevents:
+
+1. **The AI sees every operation, not only the latest state.** Keep an append-only event log: each run with its time, a code snapshot and the result; each chat question and answer; edits, saves, hints, settings changes, pauses. App state says where the person is; the log says how they got there, and that is where the mistakes are (two runs that failed for the same reason, a fix that made the pass count drop). Give every failure its own entry, with the cause summarized and deduplicated ("6 x IndexError", "load error: line 41 SyntaxError"), the diff from the previous attempt, and what the person did next (fixed it alone, asked the AI).
+2. **Record quietly, analyze on meaningful events.** Recording costs nothing and never interrupts. Analysis runs on events that mean something (a run, the end of a chat turn, a finished attempt), not on every keystroke. When the person asked not to be disturbed (an interview round, a timed attempt), the AI records and stays silent until it is over.
+3. **Rules give facts, the AI gives judgment, and the judgment is shown.** Counting failures, grouping causes and diffing runs are rules: cheap, exact, and the evidence. Deciding what the core problem was is judgment, and that is the AI's job. Show its conclusion by default with the facts under it. Do not hide it behind an "Ask the AI" button, and do not let a rule guess the conclusion: a rule that counted "edge case failed in 9 runs" and preselected "missed an edge case" missed that 5 of the 9 runs failed on syntax.
+4. **Conclusions carry over.** Store each conclusion with a type (a knowledge gap, a logic error, a habit such as another language's syntax), aggregate by type across items, and feed it into what the App offers next: a review card for a gap, a similar item for a logic error.
+5. **Separate the roles.** The assistant the person talks to and a background observer are different sessions with different instructions and permissions. The observer never talks to the person or to the assistant; it writes its findings through a plugin op that only it may call (`remote: 'allow'` on a write op is what lets a session call it, so scope what it accepts). The assistant answers what it is asked.
+6. **Control the cost.** Batch events into one observer turn, put a minimum gap between turns (30 to 60 seconds), give the person a setting to turn the observer off, and leave the model to the person's default unless a setting says otherwise.
+7. **Put each file in the right place.** `walnut.storage` (plugin-data, this machine only) for the log, the database and anything large; `walnut.storage.files` (synced text, in the backup) for what the person would want on a new machine, such as a written review; `walnut.storage.tmp` (removed after a TTL) for scratch. Where a person-facing review goes (their notes vault or `storage.files`) is their setting, not your choice.
+
+Check the App against all seven before calling it done, and write down which rule each part serves.
 
 ## 5. Write safe handlers
 
@@ -99,7 +117,7 @@ Check it end to end on an isolated server: type in the App, send a message from 
 - Put a deadline on every network call (`walnut.http.fetch` takes `timeoutMs`).
 - Keep request and response bodies bounded.
 - Never block the event loop. No synchronous filesystem, process, database, or multi-megabyte parse work in the server entry. Trusted code shares one process with every route, so one blocking call freezes the whole console.
-- Store state through `walnut.storage`. Store credentials only through `walnut.secrets`.
+- Store state through `walnut.storage` (machine-local, any size). Small text the person wants on every machine goes in `walnut.storage.files`, scratch in `walnut.storage.tmp`; declare each in `manifest.json` (`"storage": { "files": true, "tmp": true }`), or it throws on use. `storage.files` takes text only (lower-case extensions), at most 1 MiB a file, 1,000 files and 5 MiB in all, and reaches git at most every five minutes, so never use it as a database. Store credentials only through `walnut.secrets`.
 - Writes that must land together go in one `walnut.storage.database.batch([{ sql, params }, ...])`: one transaction, rolled back whole when any statement fails, and none of the plugin's other calls lands in between. Never send `BEGIN` and `COMMIT` as separate calls.
 - Never put a credential in source, `manifest.json`, synced config, logs, notifications, examples, task fields, or a receipt returned to the browser. Report secret key names and existence, never values.
 

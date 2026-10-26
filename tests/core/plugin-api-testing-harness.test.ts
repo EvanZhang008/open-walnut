@@ -295,6 +295,30 @@ describe('createFakeWalnut storage.database', () => {
   })
 })
 
+describe('createFakeWalnut storage areas', () => {
+  it('files and tmp keep what was written, and files refuses what Walnut refuses', async () => {
+    const fake = createFakeWalnut({ pluginId: 'sample' })
+    const { files, tmp } = fake.api.storage
+    await files.writeText('reviews/a.md', '# a')
+    await files.writeJson('state.json', { n: 1 })
+    expect(await files.readText('reviews/a.md')).toBe('# a')
+    expect(await files.readJson('state.json', { n: 0 })).toEqual({ n: 1 })
+    expect(await files.list('reviews')).toEqual(['reviews/a.md'])
+    await files.flush()
+    await expect(files.writeText('../x.md', 'x')).rejects.toThrow('Invalid plugin file path')
+    await expect(files.writeText('.hidden.md', 'x')).rejects.toThrow('Invalid plugin file path')
+    await expect(files.writeText('photo.png', 'x')).rejects.toThrow('is text')
+    await expect(files.writeText('a.txt', 'a\0b')).rejects.toThrow('not binary data')
+    await expect(files.writeText('big.txt', 'x'.repeat(1024 * 1024 + 1))).rejects.toThrow(RangeError)
+    // tmp takes any name inside it, binary included; the two areas are separate.
+    await tmp.writeText('scratch.bin', 'a\0b')
+    expect(await tmp.list()).toEqual(['scratch.bin'])
+    await files.delete('reviews/a.md')
+    expect(await files.list()).toEqual(['state.json'])
+    expect(typeof files.dir).toBe('string')
+  })
+})
+
 describe('createFakeWalnut appState', () => {
   it('keeps the latest state per task with its options, and refuses what the host refuses', async () => {
     const fake = createFakeWalnut({ pluginId: 'sample' })

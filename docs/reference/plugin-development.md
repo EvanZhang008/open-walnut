@@ -119,6 +119,7 @@ Walnut loads built files, never your TypeScript sources. A published plugin pack
 - **`web`**: optional single-file ESM native web entry.
 - **`webview`**: optional iframe entry (`{ "title": "...", "entry": "app/index.html" }`). This is a compatibility path, not the default UI.
 - **`dependencies`**: optional `{ "<pluginId>": "<semver range>" }` matched against the other plugin's manifest `version`. Walnut activates a declared dependency first, and holds this plugin back while one is missing, wrong-version or not running. It is also what permits `walnut.services.get` on that plugin's services.
+- **`storage`**: optional `{ "files": true, "tmp": true }`, the file areas your plugin uses beyond its machine-local data directory (see [Storage and secrets](#storage-and-secrets)). `files` takes `{ "maxBytes": n }` (5 MiB by default, at most 20 MiB) and `tmp` takes `{ "ttlHours": n }` (24 by default, at most 720). An area you leave out throws on use, so the manifest says plainly whether a plugin writes into the person's synced data. A bad shape costs that area with a warning, never the plugin, and a bad number keeps the area with its default; `walnut-plugin validate` reports it as an error.
 - **`build`**: the source entries `walnut-plugin build` compiles, plus an optional `external` list for the server bundle.
 - **`configSchema`** and **`uiHints`**: optional generated Settings form for `plugins.<id>`.
 - **`settingsIn`**: where that form is drawn. `'plugins'` (the default) is the Configure card on your row in Settings → Plugins. `'app'` means your own App renders it through `walnut.ui.views.PluginSettingsView`, and the row's Configure button takes the person to your App instead of opening a second copy of the form, so a plugin whose page is mostly its settings has one home, not two. Draw the view on your page even when it fails to load its own data, or the settings have no way in.
@@ -178,7 +179,7 @@ That route answers at `/api/plugins/my-plugin/status`. That WebSocket method is 
 | `walnut.services` | Publish a capability for other plugins, and use the ones you declared as dependencies. |
 | `walnut.events` | Subscribe to host events and emit namespaced plugin events. |
 | `walnut.http` | Register plugin routes and make outbound requests with a deadline. |
-| `walnut.storage` | Files in the plugin data directory, plus a private SQLite database. |
+| `walnut.storage` | Files in the plugin data directory, plus a private SQLite database. `storage.files` (synced text) and `storage.tmp` (scratch) when the manifest declares them. |
 | `walnut.secrets` | Credentials, stored outside synced config. |
 | `walnut.timers` | Timeouts and intervals that stop on disposal. |
 | `walnut.registry` | Tools, Ops, Hooks, Cron actions, Agents, Providers, Commands, Skills, task sync, and their metadata. |
@@ -696,6 +697,39 @@ export async function activate(walnut: WalnutServerApi) {
 
 Plugin files live under `~/.open-walnut/plugin-data/<id>/`. That directory is machine-local and excluded from git sync. File methods reject traversal and write atomically. The private database runs in a worker, so a synchronous native SQLite call cannot block Walnut's event loop. Each `run` is its own request, so writes that must land together go through `batch`: it runs every statement with `run`, in order, inside one transaction, and answers one `{ changes, lastInsertRowid }` per statement. Any failure rolls the whole batch back and rejects with an error naming the zero-based index of the failing statement (`Plugin database batch failed at statement 1, nothing was written: ...`). Your other database calls queue behind a pending batch, never inside it. A later statement reads an earlier insert's id with SQLite's `last_insert_rowid()`, and an empty array answers `[]`. Do not send `BEGIN` and `COMMIT` as separate calls: another of your calls can land between them. Like every database call, a batch is answered within 30 seconds; one that runs longer rejects, though the worker may still finish and commit it. An older Walnut has no `batch`: when your `engines.walnut` range admits one, check `typeof walnut.storage.database.batch === 'function'` first. When the file does not exist yet, `readJson` and `updateJson` hand back a copy of the fallback you passed, so mutating what you read is safe even if that fallback is a shared constant.
 
+### Three places for files
+
+| Area | Folder | In git sync | For |
+|---|---|---|---|
+| `walnut.storage` | `~/.open-walnut/plugin-data/<id>/` | No | Your working data on this machine: caches, the database, anything large or binary. |
+| `walnut.storage.files` | `~/.open-walnut/plugin-files/<id>/` | Yes | Small text a person wants on every machine and in the backup: a review your plugin wrote, a rules file, an export. Declare `"files"`. |
+| `walnut.storage.tmp` | `~/.open-walnut/tmp/plugins/<id>/` | No | Scratch and intermediate results. Every file older than the TTL is removed. Declare `"tmp"`. |
+
+```ts compile=storage-areas
+import type { WalnutServerApi } from '@open-walnut/plugin-api/server'
+
+export async function activate(walnut: WalnutServerApi) {
+  // Synced: read back at once, reaches the folder and git within five minutes.
+  await walnut.storage.files.writeText('reviews/two-sum.md', '# Two Sum\n\nMissed the empty input.\n')
+  const reviews = await walnut.storage.files.list('reviews')
+
+  // Scratch: gone after the TTL, never synced.
+  await walnut.storage.tmp.writeJson('last-run.json', { at: new Date().toISOString() })
+  walnut.log.info('reviews kept', { count: reviews.length, folder: walnut.storage.files.dir })
+}
+```
+
+Both areas have the same methods: `readText`, `writeText`, `readJson`, `writeJson`, `delete`, `list(prefix?)`, and `dir`, the absolute folder, for handing a path to a session or a tool. Names are relative paths inside the area; `..` and absolute paths are refused, and in `files` hidden names and `node_modules/` folders too. Write through the methods, not into `dir` directly: the methods keep the rules.
+
+The synced area exists to keep the data folder's history small, so its rules are strict:
+
+- **Text only.** `.md .markdown .txt .json .yaml .yml .csv .toml`, in lower case, and no NUL byte. Git tracks only these extensions under `plugin-files/`, and keeps a file that is (or grows) over the size limit, binary data, a link or a nested repository out of the synced history (until it fits again) even when it was written there some other way; it stays on this machine.
+- **Capped.** At most 1 MiB a file, 1,000 files, and 5 MiB in all unless `storage.files.maxBytes` asks for more (up to 20 MiB). A write past a limit rejects with a `RangeError` saying which.
+- **Coalesced.** A write is kept at once and `readText` returns it at once, but it reaches `plugin-files/` at most once every five minutes, when your plugin stops, and at the next start after a crash. A plugin that rewrites a file every second costs one commit per five minutes. `files.flush()` publishes now, at most once a minute (a sooner call resolves once the minute is up). A `delete` is immediate.
+- **Primary only.** On the cloud replica the area is read-only (writes reject) and git sync never stages it, so two machines never fight over one file.
+
+The tmp area is swept when your plugin starts and then hourly, and at boot Walnut removes any plugin scratch older than 30 days, including that of a plugin no longer installed.
+
 Credentials belong in `walnut.secrets`, never in `walnut.storage`, `manifest.json`, source code, synced config, logs, notifications, or task fields. Report key names when you need to show state, never values.
 
 A plugin that still keeps one in `plugins.<id>` is masked by the shape of its key wherever a client reads the config: a key whose words name a secret (`client_secret`, `access_token`, `refreshToken`, `api_tokens`, `api_key`, `password`, `private_key`, `GITHUB_PAT`, a vendor's `STRIPE_KEY` or `openai_key`, and their kin, at any depth) reaches `GET /api/config`, every `config:changed`, and the generated settings form as bullets and, outside the form or as an entry of a list, its last 4 characters (src/core/config-secret-shape.ts). An entry of a list shows bullets only when its last 4 characters would not tell it apart or a mask could not carry them: 4 characters or fewer, a line break or a bullet (U+2022) in them, whitespace at their end, or the same last 4 as another entry. `GET /api/v1/integrations/settings` shows no tails at all. The password of a URL in any value (`postgres://user:password@host`) is replaced by eight bullets, and only the password. A save that carries the mask back keeps the stored value, so a settings round trip never loses it. A mask is paired with what is stored by its place (the same key, the same URL address, the same `id` or `name` in a list), never by its position in a list; the bullets-only entries of a list pair with the stored entries shown that way, in order, when all of them come back. A mask the server cannot pair is refused with `400 masked_value_unmatched` naming the `field` and a `reason`, and the message says what to do: `unmatched` (values are stored there but none ends like it now, because it changed after it was read: reload and try again), `missing` (nothing is stored under that key, URL address, `id` or `name`, such as a URL whose host changed while its password stayed hidden), `ambiguous` (it matches more than one stored value), `renamed` (a `{ name, value }` entry named like a secret, or a list entry paired by its name whatever key holds its value, such as `{ name, token }`, was renamed, lost its name, or took the name of another entry, while its value stayed hidden; the message names the key that holds the value) or `edited_mask` (a string that still holds a run of 4 or more bullets and is not what is stored at its place: other text typed next to a mask, such as `<mask>, sk-new`, a trailing comma or a space; keep the hidden value exactly as it was shown, or replace it with the full value). A mask therefore never reaches disk on any write path. A refusal names the first entry it cannot pair, so a delete among several bullets-only entries can take one round per entry. Typing the full value of the named field works for any secret without a line break: the settings form edits a list field whose key reads like a secret one value per line, each line trimmed at both ends, so a comma or a space inside a value is part of it (other list fields also split on commas), and it refuses a line with a mask and other text in it before it sends anything. Your server code reads `walnut.config` unmasked. Name a setting that is not a secret so it does not read as one: `token_url`, `token_type`, `max_tokens` and a key that names a lookup (`project_key`, `space_key`, `public_key`) are known, but a text setting called `token_label` or `widget_key` would be shown masked (numbers and booleans never are).
@@ -1007,6 +1041,8 @@ npx walnut-plugin publish-check
 ```
 
 `@open-walnut/plugin-api/testing` exports `createFakeWalnut()`, which builds a server API backed by in-memory tasks, config, storage, and secrets, and records the notices, errors, and events your plugin produced. Use it to test `activate` and your handlers without a running Walnut.
+
+Its `storage.files` and `storage.tmp` are in memory and open without a manifest declaration (remember to declare them for Walnut). `storage.files` refuses the same names, extensions, NUL bytes, over-1 MiB files and 1,001st file Walnut does, so a test meets the refusal a real write would; there is no five-minute delay and no byte cap for the area.
 
 Its `storage.database` is a real in-memory SQLite, one per fake, so database code runs for real in a unit test: `exec`, `run`, `get`, `all`, `migrate` and `batch` answer as Walnut's do, with the same parameter binding (bare keys for `:name`, `@name` and `$name`, arrays for `?`), the same refusals, the same migrations table and the same batch rollback. It uses Node's built-in `node:sqlite`, which needs Node.js 22.13 or later (23.4 or later on the 23 line) with no flag; on an older Node every database call rejects with a message saying so, and the rest of the fake still works.
 

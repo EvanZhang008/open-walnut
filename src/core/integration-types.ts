@@ -536,6 +536,14 @@ export interface UnconfiguredPlugin {
 /** See PluginManifest.settingsIn. */
 export type PluginSettingsHome = 'plugins' | 'app';
 
+/** See PluginManifest.storage. `true` takes the defaults. */
+export interface PluginStorageDeclaration {
+  /** `walnut.storage.files`: small text files in the data folder's git (plugin-files/<id>/). */
+  files?: boolean | { maxBytes?: number };
+  /** `walnut.storage.tmp`: scratch never in git, removed after `ttlHours` (tmp/plugins/<id>/). */
+  tmp?: boolean | { ttlHours?: number };
+}
+
 export interface PluginManifest {
   id: string;
   name: string;
@@ -585,6 +593,9 @@ export interface PluginManifest {
    *  folder: what installing it adds, and where to read about it. Descriptive only;
    *  junk values are dropped (src/core/plugins/bundled-store.ts parseManifestCatalog). */
   catalog?: { adds?: string[]; homepage?: string; docs?: string };
+  /** File areas beyond the machine-local `walnut.storage` (plugin-data/<id>/), which every
+   *  plugin has. An area left out here throws on use (src/core/plugins/plugin-file-area.ts). */
+  storage?: PluginStorageDeclaration;
   /** Relative path of an `.svg` inside the plugin folder, drawn as the plugin's tile in
    *  Settings → Plugins (src/core/plugins/plugin-icon.ts). An unusable value is dropped
    *  with a warning; the row then shows a monogram. */

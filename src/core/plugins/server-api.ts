@@ -6,6 +6,7 @@ import type {
   MigrateFn,
   PluginApi,
   PluginConnection,
+  PluginStorageDeclaration,
   PluginToolSpec,
   ProjectClaimFn,
 } from '../integration-types.js'
@@ -14,6 +15,7 @@ import path from 'node:path'
 import type { IntegrationRegistry } from '../integration-registry.js'
 import type { PluginContext, PluginLogger } from './plugin-context.js'
 import { PluginStorage, PluginSecretStore } from './plugin-storage.js'
+import { SyncedFileArea, TmpFileArea, syncedAreaCap, tmpTtlMs } from './plugin-file-area.js'
 import { createPluginHttpRoute, type PluginRouteHandler } from './plugin-route-adapter.js'
 import { namespacePluginId, pluginOpName } from './ids.js'
 import { registerOwnedCommand, type PluginCommandDefinition } from './command-registry.js'
@@ -106,6 +108,8 @@ export interface CreateServerPluginApiOptions {
   dependencies?: Record<string, string>
   /** Another plugin's current lifecycle state, so an unavailable service says why. */
   lookupPluginState?: (pluginId: string) => string | undefined
+  /** The manifest's `storage` block: which file areas beside plugin-data this plugin opened. */
+  storage?: PluginStorageDeclaration
 }
 
 interface PluginAgentSpec extends Omit<AgentDefinition, 'id' | 'source' | 'overrides_builtin'> {
@@ -490,7 +494,11 @@ async function warnOnSkillDirLayout(
 export function createServerPluginApi(options: CreateServerPluginApiOptions) {
   const { context, legacyApi, contributions, integrationRegistry } = options
   const pluginId = context.id
-  const storage = context.own(new PluginStorage(context.dataDir))
+  const files = context.own(new SyncedFileArea({ pluginId, cap: syncedAreaCap(options.storage) }))
+  const tmp = context.own(new TmpFileArea({ pluginId, ttlMs: tmpTtlMs(options.storage) }))
+  const storage = Object.assign(context.own(new PluginStorage(context.dataDir)), { files, tmp })
+  // Writes a crash left pending go out soon, not on the plugin's next write.
+  void files.resume()
   const secrets = new PluginSecretStore(pluginId)
   const contextSnippets: string[] = contributions.agentContext ? [contributions.agentContext] : []
   let unsafeWarned = false
