@@ -1,0 +1,79 @@
+diff --git a/node_modules/@formkit/auto-animate/index.mjs b/node_modules/@formkit/auto-animate/index.mjs
+index 7ad811c..fecacdc 100644
+--- a/node_modules/@formkit/auto-animate/index.mjs
++++ b/node_modules/@formkit/auto-animate/index.mjs
+@@ -102,6 +102,13 @@ function isOffscreen(el) {
+ function observePosition(el) {
+     const oldObserver = intersections.get(el);
+     oldObserver === null || oldObserver === void 0 ? void 0 : oldObserver.disconnect();
++    // An observer holds its target: never observe an element that left the
++    // document (a debounced updatePos can land after cleanUp), or it is kept
++    // alive with its whole subtree for the life of the page.
++    if (!el.isConnected) {
++        intersections.delete(el);
++        return;
++    }
+     let rect = coords.get(el);
+     let invocations = 0;
+     const buffer = 5;
+@@ -120,6 +127,12 @@ function observePosition(el) {
+         .map((px) => `${ -1 * Math.floor(px)}px`)
+         .join(" ");
+     const observer = new IntersectionObserver(() => {
++        // Detached since the last check (removed without an exit animation):
++        // let it go instead of re-observing it from updatePos.
++        if (!el.isConnected) {
++            release(el);
++            return;
++        }
+         ++invocations > 1 && updatePos(el);
+     }, {
+         root,
+@@ -173,9 +186,38 @@ function updateAllPos() {
+  */
+ function poll(el) {
+     setTimeout(() => {
+-        intervals.set(el, setInterval(() => lowPriority(updatePos.bind(null, el)), 2000));
++        if (!el.isConnected)
++            return;
++        // A second poll of the same element replaced the map entry and left the
++        // first interval running with nothing able to clear it.
++        clearInterval(intervals.get(el));
++        const interval = setInterval(() => {
++            // A child that has left the document: a live interval (and the
++            // resize observation made beside it) would keep it alive forever.
++            if (!el.isConnected) {
++                clearInterval(interval);
++                release(el);
++                return;
++            }
++            lowPriority(updatePos.bind(null, el));
++        }, 2000);
++        intervals.set(el, interval);
+     }, Math.round(2000 * Math.random()));
+ }
++/**
++ * Drop everything that keeps a removed element reachable.
++ * @param el - An element no longer in the document
++ */
++function release(el) {
++    var _a;
++    clearInterval(intervals.get(el));
++    intervals.delete(el);
++    clearTimeout(debounces.get(el));
++    debounces.delete(el);
++    (_a = intersections.get(el)) === null || _a === void 0 ? void 0 : _a.disconnect();
++    intersections.delete(el);
++    resize === null || resize === void 0 ? void 0 : resize.unobserve(el);
++}
+ /**
+  * Perform some operation that is non critical at some point.
+  * @param callback
+@@ -541,6 +583,7 @@ function cleanUp(el, styles) {
+     siblings.delete(el);
+     animations.delete(el);
+     (_a = intersections.get(el)) === null || _a === void 0 ? void 0 : _a.disconnect();
++    release(el);
+     setTimeout(() => {
+         if (DEL in el)
+             delete el[DEL];
