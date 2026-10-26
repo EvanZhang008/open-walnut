@@ -35,10 +35,9 @@ export function useShownTags(tags: readonly string[] | undefined, task?: TaggedT
 /** Tags this short keep their whole text when the pills are squeezed; longer ones give way. */
 const WHOLE_TAG_MAX = 8;
 
-/** What the pills of one task know about its links: each one's name (distinct on the task) and
- *  the files that are gone. */
-interface LinkInfo { names: Map<string, string>; gone: Set<string> }
-const NO_LINKS: LinkInfo = { names: new Map(), gone: new Set() };
+/** What the pills of one task know about its links: each one's name (distinct on the task). */
+interface LinkInfo { names: Map<string, string> }
+const NO_LINKS: LinkInfo = { names: new Map() };
 
 /** The text a tag's pill reads under the rules. A link reads its name. */
 export function pillText(tag: string, compiled: CompiledTagDisplay, links: LinkInfo = NO_LINKS): string {
@@ -49,10 +48,9 @@ export function pillText(tag: string, compiled: CompiledTagDisplay, links: LinkI
 
 function Pill({ tag, compiled, onOpenPath, full, links }: { tag: string; compiled: CompiledTagDisplay; onOpenPath?: (path: string) => void; full?: boolean; links: LinkInfo }) {
   const text = pillText(tag, compiled, links);
-  const path = linkPathOfTag(tag);
   return (
     <TagChip tag={tag} inline={!full} valueOnly={compiled.valueOnly(tag)} whole={isLinkTag(tag) || text.length <= WHOLE_TAG_MAX}
-      href={compiled.linkFor(tag)} onOpenPath={onOpenPath} linkName={links.names.get(tag)} gone={!!path && links.gone.has(path)} />
+      href={compiled.linkFor(tag)} onOpenPath={onOpenPath} linkName={links.names.get(tag)} />
   );
 }
 
@@ -123,22 +121,25 @@ export function TaskTagPills({ tags, task, max = 1, className, linksFirst, menu,
   menu?: boolean;
   /** Opens a file-path link tag (the session header passes its Files view). */
   onOpenPath?: (path: string) => void;
-  /** The host the task's session runs on: a link to a file that is no longer there is marked
-   *  gone and listed last. Only the session header asks (`linksFirst`). */
+  /** The host the task's session runs on: a link to a file that is no longer there draws no
+   *  pill and counts in no "+N" (it comes back with the file). Only the session header asks
+   *  (`linksFirst`). */
   pathHost?: string;
 }) {
   const { compiled } = useTagDisplay();
   const ordered = shownTags(task ? effectiveTags(task) : tags, compiled);
   const linkTags = linksFirst ? ordered.filter((tag) => isLinkTag(tag)) : [];
   const paths = linkTags.map((tag) => linkPathOfTag(tag)).filter((p): p is string => !!p);
-  const gone = useGoneLinkPaths(paths, pathHost, !!linksFirst);
-  const links: LinkInfo = { names: linkTagNames(linkTags, task?.link_names), gone };
-  const isGone = (tag: string) => { const p = linkPathOfTag(tag); return !!p && gone.has(p); };
+  const { hidden, checked } = useGoneLinkPaths(paths, pathHost, !!linksFirst);
+  // Names come from every link, so a link whose file returns keeps the name it had.
+  const links: LinkInfo = { names: linkTagNames(linkTags, task?.link_names) };
+  const isShownLink = (tag: string) => { const p = linkPathOfTag(tag); return !p || !hidden.has(p); };
   const shown = linksFirst
-    // A link to a file that is gone sorts after the live ones (the header's one pill is a live one).
-    ? [...linkTags.filter((tag) => !isGone(tag)), ...linkTags.filter(isGone), ...ordered.filter((tag) => !isLinkTag(tag))]
+    ? [...linkTags.filter(isShownLink), ...ordered.filter((tag) => !isLinkTag(tag))]
     : ordered.filter((tag) => !isLinkTag(tag));
-  if (shown.length === 0) return null;
+  // The header draws its pills once it knows which files are there: drawing the rest first would
+  // put another pill at the head and then swap it.
+  if (shown.length === 0 || !checked) return null;
   const head = shown.slice(0, max);
   const rest = shown.slice(max);
   const more = rest.length > 0 && (menu

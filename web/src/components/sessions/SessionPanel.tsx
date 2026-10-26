@@ -2425,10 +2425,6 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
                   />
                 : <span className="session-panel-title text-muted">Untitled session</span>
               }
-              {/* The task's tags, as on its board row (the same rules: a ticket reads as its
-                  id, a hidden key stays off). Beside the title, so the title and the tags
-                  share the row and the tags give way first. */}
-              {!loading && sessionTask && <TaskTagPills task={sessionTask} className="session-panel-tag-pills" linksFirst menu max={1} onOpenPath={handleFileOpen} pathHost={session?.host ?? undefined} />}
             </div>
             {/* The one question control up here: the mode pill (Tree Mode /
                 Conversation Mode). Counts and the list live in the sidebar. */}
@@ -2447,6 +2443,11 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
               data-fit={metaFit.level}
               data-hidden-pills={metaFit.hidden.size ? [...metaFit.hidden].join(' ') : undefined}
             >
+              {/* The task's tags, its links first (the same rules as its board row: a ticket
+                  reads as its id, a hidden key stays off). On the right with the status pills
+                  (2026-10-26, the user: "should be on the right"), folding with them, so the
+                  title keeps its room. */}
+              {!loading && sessionTask && <TaskTagPills task={sessionTask} className="session-panel-tag-pills" linksFirst menu max={1} onOpenPath={handleFileOpen} pathHost={session?.host ?? undefined} />}
               {!loading && session?.provider === 'embedded' && (
                 <span
                   className="session-panel-badge"

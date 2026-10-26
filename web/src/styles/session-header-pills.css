@@ -23,31 +23,24 @@
 /* The header shows one tag pill plus "+N", whole: the tag row elsewhere is a one-line box of
    10px text (globals.css .task-tag-pills: 16px tall, overflow hidden), which cut the bottom off
    the header's 20px pill (2026-10-25, "it somehow get cropped out"). Here the box is as tall as
-   its pill, never wraps and hides nothing. In a narrow column it shares the row with the title:
-   both shrink, the link's name ending in an ellipsis, so the pill never runs under the status
-   pills on the right (the icon and "+N" always show; the hover card has the whole name). */
-.session-panel-header .session-panel-title-area > .session-panel-tag-pills {
-  flex: 0 1 auto;
-  min-width: 0;
+   its pill, never wraps and hides nothing. It sits on the right with the status pills
+   (2026-10-26, "should be on the right") and folds with them (session-header-fit.ts): its whole
+   width while there is room, then the icon and "+N" alone (the hover card has the name), then
+   into the title's menu, so the title is never squeezed out. */
+.session-panel-header .session-panel-title-meta > .session-panel-tag-pills {
+  flex: none;
   max-width: none;
   height: auto;
   min-height: 20px;
   flex-wrap: nowrap;
   overflow: visible;
 }
-.session-panel-header .session-panel-title-area > .session-panel-tag-pills .tag-chip-inline:not(.tag-chip-whole) {
+.session-panel-header .session-panel-title-meta > .session-panel-tag-pills .tag-chip-inline:not(.tag-chip-whole) {
   height: 20px;
 }
-.session-panel-header .session-panel-title-area > .session-panel-tag-pills :is(.tag-pill-group, .tag-chip-link-tag) {
-  flex: 0 1 auto;
-  min-width: 0;
-}
-.session-panel-header .session-panel-title-area > .session-panel-tag-pills .tag-chip-link-tag .tag-chip-value {
-  min-width: 0;
+.session-panel-header .session-panel-title-meta > .session-panel-tag-pills .tag-chip-link-tag .tag-chip-value {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.session-panel-header .session-panel-title-area > .session-panel-tag-pills :is(.tag-chip-overflow, .tag-chip-icon) {
-  flex: none;
-}
+.session-panel-title-meta[data-fit="letters"] > .session-panel-tag-pills .tag-chip-link-tag .tag-chip-value { display: none; }

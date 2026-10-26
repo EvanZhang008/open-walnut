@@ -28,7 +28,6 @@
   color: #8944AB;
 }
 :root[data-theme="dark"] .link-hover-card-kind { color: #BF5AF2; }
-.link-hover-card-gone { color: var(--error, #d70015); }
 .link-hover-card-target {
   margin-top: 2px;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -60,6 +59,3 @@ span.tag-chip-linked[role="link"]:focus-visible .tag-chip-value { text-decoratio
 }
 /* Named links read whole: the name is at most three words (link-tags.ts). */
 .tag-chip-link-tag .tag-chip-value { max-width: 180px; overflow: hidden; text-overflow: ellipsis; }
-/* A link to a file that is no longer there: struck through, faded, opens nothing. */
-.tag-chip.tag-chip-gone { opacity: 0.55; cursor: default; }
-.tag-chip.tag-chip-gone .tag-chip-value { text-decoration: line-through; }

@@ -20,8 +20,6 @@ export interface LinkHoverInfo {
   kind: string;
   /** The name the pill reads. */
   name?: string;
-  /** The file no longer exists. */
-  gone?: boolean;
   /** The URL or the absolute path. */
   target: string;
   /** Where a click takes it ("Opens in a new tab · github.com", "Opens in Files"). */
@@ -77,7 +75,7 @@ function LinkHoverCard({ info, anchor, onGone }: { info: LinkHoverInfo; anchor: 
         <span className="link-hover-card-kind">{info.kind}</span>
       </div>
       <div className="link-hover-card-target">{info.target}</div>
-      <div className={info.gone ? 'link-hover-card-opens link-hover-card-gone' : 'link-hover-card-opens'}>{info.opens}</div>
+      <div className="link-hover-card-opens">{info.opens}</div>
     </div>,
     document.body,
   );

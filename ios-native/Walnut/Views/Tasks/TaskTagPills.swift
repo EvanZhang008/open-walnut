@@ -21,14 +21,12 @@ struct TaskTagPills: View {
     @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
-        let pills = TagDisplayStore.shared.compiled.pills(for: tags)
-        let byTag = Dictionary(links.map { (TagModel.normalize($0.tag, derived: true) ?? $0.tag, $0) }, uniquingKeysWith: { first, _ in first })
-        // A link to a file that is gone sorts after the rest.
-        let shown = pills.shown.filter { byTag[$0.tag]?.gone != true } + pills.shown.filter { byTag[$0.tag]?.gone == true }
+        let pills = TagDisplayStore.shared.compiled.pills(for: Self.withoutGoneLinks(tags, links: links))
+        let byTag = Dictionary(links.map { (Self.key($0.tag), $0) }, uniquingKeysWith: { first, _ in first })
         // The toggle sits right after the shown pills and the hidden ones follow it,
         // so revealing them never moves the button out from under the finger.
         WrappingRow(spacing: 6, lineSpacing: 6) {
-            ForEach(shown) { pill in
+            ForEach(pills.shown) { pill in
                 if let link = byTag[pill.tag] {
                     linkPillView(link)
                 } else {
@@ -53,7 +51,12 @@ struct TaskTagPills: View {
             }
             if showHidden {
                 ForEach(pills.hidden) { pill in
-                    pillView(pill, muted: true)
+                    // A link a rule hides still reads its name when revealed, never its raw path.
+                    if let link = byTag[pill.tag] {
+                        linkPillView(link)
+                    } else {
+                        pillView(pill, muted: true)
+                    }
                 }
             }
         }
@@ -62,32 +65,31 @@ struct TaskTagPills: View {
             Button("Copy Path") { UIPasteboard.general.string = link.target }
             Button("OK", role: .cancel) {}
         } message: { link in
-            Text(verbatim: "\(link.kind.replacingOccurrences(of: "-", with: " ")): \(link.target)" + (link.gone == true ? "\n\nThis file no longer exists." : ""))
+            Text(verbatim: "\(link.kind.replacingOccurrences(of: "-", with: " ")): \(link.target)")
         }
     }
 
     /// A link pill: the kind's icon and the name. A URL opens; a file shows its whole path (the
-    /// phone cannot open a file on the host from here); one that is gone is struck through.
+    /// phone cannot open a file on the host from here).
     @ViewBuilder
     private func linkPillView(_ link: LinkTagView) -> some View {
         let url = link.file == true ? nil : URL(string: link.target)
-        let gone = link.gone == true
         let label = HStack(spacing: 4) {
             Image(systemName: Self.icon(link.group))
                 .font(.caption.weight(.semibold))
             Text(verbatim: link.name)
-                .strikethrough(gone)
             if url != nil {
                 Image(systemName: "arrow.up.right").font(.caption2.weight(.semibold))
             }
         }
-        .lineLimit(1)
+        // Two lines at the accessibility sizes, like every other pill here.
+        .lineLimit(typeSize.isAccessibilitySize ? 2 : 1)
         .font(.subheadline)
-        .foregroundStyle(gone ? AnyShapeStyle(.secondary) : AnyShapeStyle(Theme.tint))
+        .foregroundStyle(Theme.tint)
         .padding(.horizontal, 10)
         .padding(.vertical, typeSize.isAccessibilitySize ? 4 : 0)
         .frame(minHeight: 30)
-        .background(gone ? Color(.quaternarySystemFill) : Theme.tintSoft, in: RoundedRectangle(cornerRadius: 15))
+        .background(Theme.tintSoft, in: RoundedRectangle(cornerRadius: 15))
         .contentShape(RoundedRectangle(cornerRadius: 15))
         .dynamicTypeSize(...DynamicTypeSize.accessibility3)
         .contextMenu {
@@ -108,11 +110,21 @@ struct TaskTagPills: View {
             if let url { openURL(url) } else { shownFile = link }
         } label: { label }
             .buttonStyle(.plain)
-            .accessibilityLabel("\(link.name), \(link.kind.replacingOccurrences(of: "-", with: " "))\(gone ? ", file no longer exists" : "")")
+            .accessibilityLabel("\(link.name), \(link.kind.replacingOccurrences(of: "-", with: " "))")
             .accessibilityHint(url != nil ? "Opens \(url?.host() ?? "the link")" : "Shows the file's path")
             .accessibilityAddTraits(url != nil ? .isLink : .isButton)
             .accessibilityIdentifier("task.tag.\(link.tag)")
     }
+
+    /// The tags without the links to files that are gone: such a link draws no pill, shown or
+    /// hidden, and a task left with none draws no Tags row (2026-10-26, the user: "if a file is
+    /// removed please don't show the tag"). It comes back with the file, on the next detail read.
+    static func withoutGoneLinks(_ tags: [String], links: [LinkTagView]) -> [String] {
+        let gone = Set(links.filter { $0.gone == true }.map { key($0.tag) })
+        return gone.isEmpty ? tags : tags.filter { !gone.contains(key($0)) }
+    }
+
+    private static func key(_ tag: String) -> String { TagModel.normalize(tag, derived: true) ?? tag }
 
     /// The SF Symbol for a link's kind group (the console draws the same five glyphs).
     static func icon(_ group: String?) -> String {

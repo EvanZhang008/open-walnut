@@ -239,4 +239,44 @@ final class TagDisplayTests: XCTestCase {
         _ = await (first, second)
         XCTAssertEqual(reads, 1)
     }
+
+    // MARK: - Link tags named by the server (task detail `links`)
+
+    func testTheTaskDetailDecodesItsLinksAndAnOlderServerSendsNone() throws {
+        let withLinks = Data(#"""
+        {"task":{"id":"t1","title":"Main","tags":["plan:/tmp/fix/FIX-PLAN-r5b.md","pr:https://github.com/acme/app/pull/12"],
+        "links":[{"tag":"plan:/tmp/fix/FIX-PLAN-r5b.md","name":"Fix plan r5b","kind":"plan","group":"doc","target":"/tmp/fix/FIX-PLAN-r5b.md","file":true,"gone":true},
+        {"tag":"pr:https://github.com/acme/app/pull/12","name":"app#12","kind":"pr","group":"review","target":"https://github.com/acme/app/pull/12","file":false}]}}
+        """#.utf8)
+        let detail = try JSONDecoder().decode(TaskDetailEnvelope.self, from: withLinks).task
+        XCTAssertEqual(detail.links?.map(\.name), ["Fix plan r5b", "app#12"])
+        XCTAssertEqual(detail.links?.first?.gone, true)
+        XCTAssertNil(detail.links?.last?.gone)
+        // The optimistic copy keeps them.
+        XCTAssertEqual(TaskDetailController.withField(detail, starred: true).links, detail.links)
+
+        let older = Data(#"{"task":{"id":"t1","title":"Main","tags":["plan:/tmp/fix/FIX-PLAN-r5b.md"]}}"#.utf8)
+        XCTAssertNil(try JSONDecoder().decode(TaskDetailEnvelope.self, from: older).task.links)
+    }
+
+    func testALinkToAFileThatIsGoneDrawsNoPillAndComesBackWithTheFile() {
+        let tags = ["plan:/tmp/fix/MATRIX-r5.md", "plan:/tmp/fix/FIX-PLAN-r5c.md", "sev:2"]
+        func link(_ path: String, gone: Bool?) -> LinkTagView {
+            LinkTagView(tag: "plan:\(path)", name: "n", kind: "plan", group: "doc", target: path, file: true, gone: gone)
+        }
+        let one = [link("/tmp/fix/MATRIX-r5.md", gone: nil), link("/tmp/fix/FIX-PLAN-r5c.md", gone: true)]
+        XCTAssertEqual(TaskTagPills.withoutGoneLinks(tags, links: one), ["plan:/tmp/fix/MATRIX-r5.md", "sev:2"])
+        // Every link gone and nothing else: no tags, so no Tags row.
+        let all = [link("/tmp/fix/MATRIX-r5.md", gone: true), link("/tmp/fix/FIX-PLAN-r5c.md", gone: true)]
+        XCTAssertEqual(TaskTagPills.withoutGoneLinks(Array(tags.prefix(2)), links: all), [])
+        // The file is back (the next detail read says so): the pill is back.
+        XCTAssertEqual(TaskTagPills.withoutGoneLinks(tags, links: [link("/tmp/fix/FIX-PLAN-r5c.md", gone: nil)]), tags)
+        // An older server sends no links: every tag stays.
+        XCTAssertEqual(TaskTagPills.withoutGoneLinks(tags, links: []), tags)
+    }
+
+    func testEachLinkGroupHasItsOwnIcon() {
+        XCTAssertEqual(["doc", "review", "ticket", "thread", "link", nil].map { TaskTagPills.icon($0) },
+                       ["doc.text", "arrow.triangle.pull", "smallcircle.filled.circle", "bubble.left", "link", "doc.text"])
+    }
 }

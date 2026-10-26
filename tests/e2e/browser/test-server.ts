@@ -161,7 +161,9 @@ await fs.writeFile(
 )
 
 // Link tags in the session header (session-link-tag-names.spec.ts): three plans whose kind
-// alone reads "plan" three times, two files that exist and one that is gone.
+// alone reads "plan" three times, two files that exist and one that is gone; and, one per
+// browser, a task whose only links are gone (`pw-task-links-gone-<browser>`), which draws no tag
+// until its spec writes one of the files.
 const linkFixtureRoot = path.join(tmpBase, 'link-fixture', 'fix')
 await fs.mkdir(linkFixtureRoot, { recursive: true })
 await fs.writeFile(path.join(linkFixtureRoot, 'MATRIX-r5.md'), '# Test matrix r5\n')
@@ -366,6 +368,30 @@ await fs.writeFile(
         note: '',
         subtasks: [],
       },
+      ...['chromium', 'webkit'].map((browser) => ({
+        id: `pw-task-links-gone-${browser}`,
+        title: `Gone links fixture task ${browser}`,
+        status: 'in_progress',
+        phase: 'IN_PROGRESS',
+        priority: 'none',
+        project: 'Walnut',
+        source: 'local',
+        tags: [
+          `plan:${linkFixtureRoot}/GONE-a-${browser}.md`,
+          `report:${linkFixtureRoot}/GONE-b-${browser}.html`,
+        ],
+        auto_links: [`${linkFixtureRoot}/GONE-a-${browser}.md`, `${linkFixtureRoot}/GONE-b-${browser}.html`],
+        session_ids: [`pw-links-gone-session-${browser}`],
+        active_session_ids: [],
+        session_id: `pw-links-gone-session-${browser}`,
+        session_status: { process_status: 'stopped', mode: 'bypass' },
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        description: '',
+        summary: '',
+        note: '',
+        subtasks: [],
+      })),
       {
         // Bare task ids in session output (bare-task-id-pills.spec.ts): this
         // task's session names the two tasks below by id only, the way a model
@@ -3098,6 +3124,19 @@ await fs.writeFile(
         cwd: process.cwd(),
         title: 'Linked plans fixture session',
       },
+      ...['chromium', 'webkit'].map((browser) => ({
+        claudeSessionId: `pw-links-gone-session-${browser}`,
+        taskId: `pw-task-links-gone-${browser}`,
+        project: 'Walnut',
+        process_status: 'stopped',
+        mode: 'bypass',
+        last_status_change: new Date().toISOString(),
+        startedAt: new Date(sessionFixtureNow - 30_000).toISOString(),
+        lastActiveAt: new Date(sessionFixtureNow - 20_000).toISOString(),
+        messageCount: 1,
+        cwd: process.cwd(),
+        title: `Gone links fixture session ${browser}`,
+      })),
       {
         claudeSessionId: 'pw-service-session',
         taskId: 'pw-task-service',

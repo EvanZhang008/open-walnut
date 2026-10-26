@@ -409,12 +409,14 @@ filesRouter.get('/resolve-path', async (req: Request, res: Response, next: NextF
  * POST /api/files/exists { paths: string[], host? } -> { exists: { [path]: boolean } }
  *
  * Whether the files a task's link tags point at are still there (a /tmp report is often cleaned
- * away): the session header marks a gone one. A path this server cannot answer for (a host that
+ * away): the session header leaves a gone one out. A path this server cannot answer for (a host that
  * is not answering, a path outside what it may read, a cloud box asked about the Mac's files) is
  * left out, and a caller reads "left out" as "not known gone": a link is never marked gone on a
  * guess. A remote host answers with its daemon's fs.stat, at most EXISTS_MAX paths a request.
  */
 const EXISTS_MAX = 8
+/** How long a remote host gets to answer (the header waits on this to draw its link pills). */
+const EXISTS_DEADLINE_MS = 3_000
 
 /** Whether each path still exists on the host; a path this server cannot answer for is left out
  *  (the route above). The task detail (task-v1.ts) asks the same for the phone. */
@@ -448,15 +450,20 @@ export async function linkPathsExist(rawPaths: readonly unknown[], rawHost: stri
   // "it exists" is an answer.
   const { selfHostConnection } = await import('../../replica/self-host.js')
   const follower = selfHostConnection(host) !== null
+  // A slow host answers what it answered by the deadline; the rest stays unknown (shown).
+  let timer: ReturnType<typeof setTimeout> | undefined
   try {
-    await onHost(host, hostDef, async (conn) => {
-      await Promise.all(allowed.map(async ({ raw, filePath }) => {
-        const st = await conn.send('fs.stat', { path: filePath }).catch(() => undefined)
-        if (st?.ok && typeof st.exists === 'boolean' && (st.exists || !follower)) exists[raw] = st.exists
-      }))
-    })
-  } catch { /* the host is not answering: nothing is known gone */ }
-  return exists
+    await Promise.race([
+      onHost(host, hostDef, async (conn) => {
+        await Promise.all(allowed.map(async ({ raw, filePath }) => {
+          const st = await conn.send('fs.stat', { path: filePath }).catch(() => undefined)
+          if (st?.ok && typeof st.exists === 'boolean' && (st.exists || !follower)) exists[raw] = st.exists
+        }))
+      }),
+      new Promise<void>((resolve) => { timer = setTimeout(resolve, EXISTS_DEADLINE_MS); timer.unref?.() }),
+    ])
+  } catch { /* the host is not answering: nothing is known gone */ } finally { clearTimeout(timer) }
+  return { ...exists }
 }
 
 filesRouter.post('/exists', async (req: Request, res: Response, next: NextFunction) => {

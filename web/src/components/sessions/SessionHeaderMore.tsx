@@ -246,7 +246,9 @@ export function HiddenPillRows({ metaRef, kinds, pin, onAfterAction }: HiddenPil
   );
 }
 
-const PILL_ROW_NAMES: Record<string, string> = { embedded: 'Embedded', cron: 'Cron', trigger: 'Trigger', worker: 'Worker', leader: 'Leader' };
+const PILL_ROW_NAMES: Record<string, string> = { embedded: 'Embedded', cron: 'Cron', trigger: 'Trigger', tag: 'Links', worker: 'Worker', leader: 'Leader' };
+/** What a row clicks when it is not the pill itself: the tags' "+N" list, else their one pill. */
+const PILL_ROW_CLICK: Record<string, string[]> = { tag: ['.session-panel-tag-pills .tag-chip-overflow-btn', '.session-panel-tag-pills .tag-chip-linked'] };
 
 function PillRow({ kind, metaRef, pin, onAfterAction }: { kind: string; metaRef: RefObject<HTMLElement | null>; pin: (kind: string) => void; onAfterAction?: () => void }) {
   const [text, setText] = useState('');
@@ -276,8 +278,13 @@ function PillRow({ kind, metaRef, pin, onAfterAction }: { kind: string; metaRef:
         // The pill comes back onto the row first (its flyout anchors to it), then
         // takes the click on the next frame, once it has a box.
         pin(kind);
-        const sel = TITLE_PILL_SELECTOR[kind] ?? `[data-header-pill="${kind}"]`;
-        requestAnimationFrame(() => requestAnimationFrame(() => metaRef.current?.querySelector<HTMLElement>(sel)?.click()));
+        const sels = PILL_ROW_CLICK[kind] ?? [TITLE_PILL_SELECTOR[kind] ?? `[data-header-pill="${kind}"]`];
+        requestAnimationFrame(() => requestAnimationFrame(() => {
+          for (const sel of sels) {
+            const el = metaRef.current?.querySelector<HTMLElement>(sel);
+            if (el) { el.click(); return; }
+          }
+        }));
       }}
       data-testid={`session-header-kebab-pill-${kind}`}
     >

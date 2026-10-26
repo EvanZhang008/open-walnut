@@ -22,8 +22,6 @@ const GROUP_GAP = 6;
 const TITLE_ROW_GAP = 8;
 const TITLE_AREA_GAP = 6;
 const META_GAP = 3;
-/** The most a link tag beside the title keeps for itself: an icon, about ten characters, "+N". */
-const TAG_RESERVE = 120;
 /** The "..." chip before it has rendered once. */
 const ASSUMED_MORE_WIDTH = 22;
 /** Kept free of every decision: a row that fits to the last fraction of a pixel
@@ -207,14 +205,6 @@ export function useTitleMetaFit(metaRef: RefObject<HTMLElement | null>): TitleMe
       if (natural > 0) titleReserve = Math.min(TITLE_MIN_WIDTH, natural);
     }
     fixed += titleReserve + TITLE_ROW_GAP;
-    // The link tag beside the title reads a name (Fix plan r5b): it keeps room for its natural
-    // width, up to TAG_RESERVE, so the status pills fold before the name is cut to "F…".
-    const tags = titleArea?.querySelector<HTMLElement>(':scope > .session-panel-tag-pills');
-    if (tags) {
-      let natural = tags.scrollWidth;
-      for (const value of Array.from(tags.querySelectorAll<HTMLElement>('.tag-chip-value'))) natural += Math.max(0, value.scrollWidth - value.clientWidth);
-      fixed += Math.min(TAG_RESERVE, natural) + TITLE_AREA_GAP;
-    }
     for (const sibling of Array.from(row.children) as HTMLElement[]) {
       if (sibling === meta || sibling === titleArea) continue;
       if (sibling.compareDocumentPosition(titleArea ?? meta) & Node.DOCUMENT_POSITION_FOLLOWING) continue; // before the title: in its left edge already

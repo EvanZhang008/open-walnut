@@ -41,7 +41,7 @@ struct TaskPropertiesList: View {
             projectRow
             TaskPropertyDivider()
             dueRow
-            if let tags = task.tags, !tags.isEmpty {
+            if let tags = task.tags.map({ TaskTagPills.withoutGoneLinks($0, links: links ?? []) }), !tags.isEmpty {
                 TaskPropertyDivider()
                 tagsRow(tags)
             }

@@ -127,17 +127,18 @@ test('a value key reads as its id on every row, and the session header shows the
   await seeded.locator('.todo-item-title').click()
   const panel = page.locator(`.session-panel[data-session-id="${SEEDED_SESSION}"]`)
   await expect(panel).toBeVisible()
-  const headerPills = panel.locator('.session-panel-title-area > .session-panel-tag-pills .tag-chip')
+  const headerPills = panel.locator('.session-panel-title-meta > .session-panel-tag-pills .tag-chip')
   await expect(headerPills).toHaveCount(2)
   expect(await chipTexts(headerPills)).toEqual(['V2391099522', '+2'])
   await expect(headerPills.nth(1)).toHaveAttribute('title', 'sev:2, oncall')
   // The row agrees with its header.
   expect(await chipTexts(seeded.locator('[data-testid="task-tag-pills"] .tag-chip'))).toEqual(['V2391099522', '+2'])
-  // The title keeps the larger share of the row, and nothing leaves the header.
-  const layout = await panel.locator('.session-panel-title-area').evaluate((area) => {
-    const box = area.getBoundingClientRect()
-    const title = area.querySelector('.session-panel-title')!.getBoundingClientRect()
-    const pills = area.querySelector('.session-panel-tag-pills')!.getBoundingClientRect()
+  // The tags sit on the right with the status pills (2026-10-26), the title keeps the larger
+  // share of the row, and nothing leaves the header.
+  const layout = await panel.locator('.session-panel-header-top').evaluate((row) => {
+    const box = row.getBoundingClientRect()
+    const title = row.querySelector('.session-panel-title')!.getBoundingClientRect()
+    const pills = row.querySelector('.session-panel-title-meta > .session-panel-tag-pills')!.getBoundingClientRect()
     return { title: title.width, pills: pills.width, pillsAfterTitle: pills.left >= title.right - 1, inside: pills.right <= box.right + 1 }
   })
   expect(layout.pillsAfterTitle).toBe(true)

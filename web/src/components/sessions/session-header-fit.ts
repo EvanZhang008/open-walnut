@@ -28,7 +28,7 @@
  * Title row: the title keeps TITLE_MIN_WIDTH for its text. The pills beside it
  * step down together: full words → the status badge shrinks to its dot → every
  * pill shows one letter (TRIGGER → T, WORKER → W, LEADER → L, CRON → C; the
- * counts go, the hover text keeps them). Only when even the letters do not fit
+ * counts go, the hover text keeps them; the link tag keeps its icon and "+N"). Only when even the letters do not fit
  * are pills hidden, lowest priority first.
  */
 
@@ -142,7 +142,7 @@ export function fitToolRow(items: ToolRowItem[], availableWidth: number, opts: T
 /** How the title row's right cluster reads. */
 export type TitleMetaLevel = 'full' | 'dot' | 'letters';
 
-export type TitleMetaKind = 'embedded' | 'cron' | 'trigger' | 'worker' | 'leader' | 'status' | 'kebab' | 'other';
+export type TitleMetaKind = 'embedded' | 'cron' | 'trigger' | 'tag' | 'worker' | 'leader' | 'status' | 'kebab' | 'other';
 
 export interface TitleMetaItem {
   id: string;
@@ -174,7 +174,7 @@ export const ASSUMED_LETTER_WIDTH = 18;
 export const ASSUMED_DOT_WIDTH = 16;
 
 /** Which pills give way, and in what order, when even their letters overflow. */
-const PILL_DROP_ORDER: TitleMetaKind[] = ['embedded', 'cron', 'trigger', 'worker', 'leader'];
+const PILL_DROP_ORDER: TitleMetaKind[] = ['embedded', 'cron', 'trigger', 'tag', 'worker', 'leader'];
 
 const isPill = (item: TitleMetaItem) => PILL_DROP_ORDER.includes(item.kind);
 const fullOf = (item: TitleMetaItem) => (item.fullWidth == null || item.fullWidth <= 0 ? ASSUMED_TOOL_WIDTH : item.fullWidth);
@@ -238,6 +238,7 @@ export const TITLE_PILL_SELECTOR: Record<string, string> = {
   embedded: '.session-panel-badge[data-header-pill="embedded"]',
   cron: '.session-cron-pill',
   trigger: '.task-trigger-pill',
+  tag: '.session-panel-tag-pills',
   worker: '.todo-item-subtask-pill',
   leader: '.todo-item-leader-pill',
 };
@@ -247,6 +248,7 @@ export function classifyTitleMetaChild(classList: { contains: (name: string) => 
   if (dataset.headerPill === 'embedded') return 'embedded';
   if (classList.contains('session-cron-pill')) return 'cron';
   if (classList.contains('task-trigger-pill')) return 'trigger';
+  if (classList.contains('session-panel-tag-pills')) return 'tag';
   if (classList.contains('todo-item-subtask-pill')) return 'worker';
   if (classList.contains('todo-item-leader-pill')) return 'leader';
   if (classList.contains('session-panel-badge')) return 'status';

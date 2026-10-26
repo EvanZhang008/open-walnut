@@ -68,6 +68,7 @@
 .session-panel-title-meta[data-hidden-pills~="cron"] > .session-cron-pill,
 .session-panel-title-meta[data-hidden-pills~="trigger"] > .task-trigger-pill,
 .session-panel-title-meta[data-hidden-pills~="worker"] > .todo-item-subtask-pill,
-.session-panel-title-meta[data-hidden-pills~="leader"] > .todo-item-leader-pill {
+.session-panel-title-meta[data-hidden-pills~="leader"] > .todo-item-leader-pill,
+.session-panel-title-meta[data-hidden-pills~="tag"] > .session-panel-tag-pills {
   display: none;
 }

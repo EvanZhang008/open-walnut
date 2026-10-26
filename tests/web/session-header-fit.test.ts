@@ -317,6 +317,22 @@ describe('fitTitleMeta', () => {
     expect(fitTitleMeta(META, 276, GAP, { pinned: 'leader' })).toEqual({ level: 'full', hidden: [] });
   });
 
+  it('folds the link tag with the pills: icon and "+N" in letters, hidden after the trigger, before the team pills', () => {
+    const items: TitleMetaItem[] = [
+      { id: 'tag', kind: 'tag', fullWidth: 120, shortWidth: 44 },
+      { id: 'trigger', kind: 'trigger', fullWidth: 60, shortWidth: 16 },
+      { id: 'leader', kind: 'leader', fullWidth: 70, shortWidth: 16 },
+      { id: 'status', kind: 'status', fullWidth: 40, shortWidth: 12 },
+    ];
+    // Full: 120 + 60 + 70 + 40 + 3 gaps of 3 = 299.
+    expect(fitTitleMeta(items, 299, 3)).toEqual({ level: 'full', hidden: [] });
+    // Letters: 44 + 16 + 16 + 12 + 9 = 97.
+    expect(fitTitleMeta(items, 97, 3)).toEqual({ level: 'letters', hidden: [] });
+    // Trigger goes first (97 - 19 = 78), then the tag (78 - 47 = 31); Leader stays.
+    expect(fitTitleMeta(items, 78, 3)).toEqual({ level: 'letters', hidden: ['trigger'] });
+    expect(fitTitleMeta(items, 40, 3)).toEqual({ level: 'letters', hidden: ['tag', 'trigger'] });
+  });
+
   it('lets the letters squeeze the title to its floor before removing a pill', () => {
     // 99 is one short of the letter row; with 24px of slack the letters stay and the title gives.
     expect(fitTitleMeta(META, 99, GAP, { dropSlack: 24 })).toEqual({ level: 'letters', hidden: [] });
@@ -355,6 +371,7 @@ describe('classifyTitleMetaChild', () => {
     expect(classifyTitleMetaChild(cl('session-panel-badge'), {})).toBe('status');
     expect(classifyTitleMetaChild(cl('session-cron-pill'), {})).toBe('cron');
     expect(classifyTitleMetaChild(cl('task-trigger-pill'), {})).toBe('trigger');
+    expect(classifyTitleMetaChild(cl('task-tag-pills', 'session-panel-tag-pills'), {})).toBe('tag');
     expect(classifyTitleMetaChild(cl('task-team-pill', 'todo-item-subtask-pill'), {})).toBe('worker');
     expect(classifyTitleMetaChild(cl('task-team-pill', 'todo-item-leader-pill'), {})).toBe('leader');
     expect(classifyTitleMetaChild(cl('task-quick-actions'), {})).toBe('kebab');
