@@ -342,7 +342,7 @@
 .apps-make-manual-row .apps-make-link { border-color: transparent; background: transparent; text-decoration: underline; }
 
 /* ── Narrow windows and phones ── */
-@media (max-width: 768px) {
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
   .apps-page-inner { padding: 18px 14px 48px; }
   .apps-hero { flex-wrap: wrap; }
   .apps-search { width: 100%; margin-left: 0; }
