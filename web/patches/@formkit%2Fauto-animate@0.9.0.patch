@@ -1,7 +1,7 @@
-diff --git a/node_modules/@formkit/auto-animate/index.mjs b/node_modules/@formkit/auto-animate/index.mjs
+diff --git a/index.mjs b/index.mjs
 index 7ad811c..fecacdc 100644
---- a/node_modules/@formkit/auto-animate/index.mjs
-+++ b/node_modules/@formkit/auto-animate/index.mjs
+--- a/index.mjs
++++ b/index.mjs
 @@ -102,6 +102,13 @@ function isOffscreen(el) {
  function observePosition(el) {
      const oldObserver = intersections.get(el);

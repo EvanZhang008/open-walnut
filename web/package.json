@@ -6,8 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "preview": "vite preview",
-    "postinstall": "node ../node_modules/patch-package/index.js"
+    "preview": "vite preview"
   },
   "dependencies": {
     "@codemirror/commands": "^6.10.3",
@@ -60,5 +59,8 @@
     "@vitejs/plugin-react": "^4.3.0",
     "typescript": "^5.8.0",
     "vite": "^6.0.0"
+  },
+  "patchedDependencies": {
+    "@formkit/auto-animate@0.9.0": "patches/@formkit%2Fauto-animate@0.9.0.patch"
   }
 }
