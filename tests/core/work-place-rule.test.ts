@@ -39,10 +39,10 @@ describe('the rule itself', () => {
     for (const re of [
       /Temp directories \(\/tmp and the OS temp dir\) are emptied at every reboot and swept by cleaners/,
       /Only what you can lose goes there: screenshots, one-off scratch output, builds you can rebuild/,
-      /your task directory, `\$WALNUT_TASK_DIR`: temporary clones and worktrees, unmerged commits, candidate builds, evidence and reports/,
+      /your task directory, `\$WALNUT_TASK_DIR`: drafts, plans and notes, temporary clones and worktrees, unmerged commits, candidate builds, evidence and reports/,
       /remove what you no longer need when you finish/,
       /keeps it across reboots, and removes it \d+ days after the task completes, never while a repo in it holds changes or commits that exist nowhere else/,
-      /Walnut refuses a git clone, git worktree add or git commit in a temp directory/,
+      /Walnut refuses a git clone, git worktree add or git commit in a temp directory, and flags a draft, plan or note saved there with Write/,
       /`walnut tools call task_dir` makes it and prints its path/,
     ]) expect(WORK_PLACE_RULE).toMatch(re)
   })
@@ -108,6 +108,8 @@ describe('shipped skills', () => {
     expect(skill).toContain('## Where your work lives')
     expect(skill).toContain('`$WALNUT_TASK_DIR`')
     expect(skill).toMatch(/`git clone`, `git worktree add` or `git commit` in a temp directory is refused/)
+    expect(skill).toMatch(/drafts, plans and notes you write/)
+    expect(skill).toMatch(/A draft, plan, note or evidence\s+file you write into a temp directory with the Write tool is kept, with a note/)
     for (const name of fs.readdirSync(path.join(REPO, 'src/data/skills'))) {
       const file = path.join(REPO, 'src/data/skills', name, 'SKILL.md')
       if (!fs.existsSync(file)) continue
@@ -119,9 +121,10 @@ describe('shipped skills', () => {
 })
 
 describe('the program side', () => {
-  it('every Claude Code spawn path gets the /tmp git guard next to the compact hook', () => {
+  it('every Claude Code spawn path gets the /tmp git guard and the /tmp write note next to the compact hook', () => {
     const hooks = sessionSettingsHooks({}) as Record<string, Array<{ matcher: string }>>
     expect(hooks.PreToolUse[0].matcher).toBe('Bash')
+    expect(hooks.PostToolUse[0].matcher).toBe('Write')
     expect(hooks.SessionStart[0].matcher).toBe('compact')
     for (const file of ['src/providers/claude-code-session.ts', 'src/providers/spawn-template.ts']) {
       expect(read(file), file).toMatch(/sessionSettingsHooks\(/)

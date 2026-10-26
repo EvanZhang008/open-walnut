@@ -31,25 +31,9 @@
  * in the session's env (an older daemon), it allows everything.
  */
 
-const GUARD_AWK = String.raw`
-function jstr(s, key,   i, c, out, n) {
-  if (!match(s, "\"" key "\"[ \t]*:[ \t]*\"")) return ""
-  s = substr(s, RSTART + RLENGTH); out = ""; n = length(s)
-  for (i = 1; i <= n; i++) {
-    c = substr(s, i, 1)
-    if (c == "\\") {
-      i++; c = substr(s, i, 1)
-      if (c == "n") c = "\n"
-      else if (c == "t" || c == "r") c = " "
-      else if (c == "u") { i += 4; c = " " }
-      out = out c; continue
-    }
-    if (c == "\"") break
-    out = out c
-  }
-  return out
-}
-function strip(p) { while (length(p) > 1 && substr(p, length(p)) == "/") p = substr(p, 1, length(p) - 1); return p }
+import { TMP_PATH_AWK, shQuoteAwk } from './tmp-path-awk.js'
+
+const GUARD_AWK = TMP_PATH_AWK + String.raw`
 function expand(t,   vn) {
   if (t == "~") t = HOME
   else if (substr(t, 1, 2) == "~/") t = HOME substr(t, 2)
@@ -94,17 +78,6 @@ function is_mktemp(t,   c) {
   if (substr(t, 1, 8) == "$(mktemp") c = substr(t, 9, 1); else if (substr(t, 1, 7) == BT "mktemp") c = substr(t, 8, 1); else return 0
   return c == "" || c == " " || c == "\t" || c == ")" || c == BT
 }
-function norm(p,   parts, n, i, out, k, stack) {
-  n = split(p, parts, "/"); k = 0
-  for (i = 1; i <= n; i++) {
-    if (parts[i] == "" || parts[i] == ".") continue
-    if (parts[i] == "..") { if (k > 0) k--; continue }
-    stack[++k] = parts[i]
-  }
-  out = ""
-  for (i = 1; i <= k; i++) out = out "/" stack[i]
-  return out == "" ? "/" : out
-}
 # "" when the path cannot be known (command substitution, another variable).
 function resolve(base, t) {
   if (is_mktemp(t)) return mktemp_path(t)
@@ -112,24 +85,6 @@ function resolve(base, t) {
   if (t == "" || index(t, "$") || index(t, "\140")) return ""
   if (substr(t, 1, 1) != "/") { if (base == "") return ""; t = base "/" t }
   return norm(t)
-}
-# macOS /var and /tmp are /private/var and /private/tmp: compare without the prefix.
-function canon(p) { if (p ~ /^\/private\/(var|tmp)(\/|$)/) p = substr(p, 9); return p }
-function under(p, root) { p = canon(p); root = canon(strip(root)); return root != "" && (p == root || substr(p, 1, length(root) + 1) == root "/") }
-function volatile(p) {
-  if (p == "" || (TD != "" && under(p, TD))) return 0
-  return under(p, "/tmp") || under(p, "/var/folders") || (TMPD != "" && under(p, norm(TMPD)))
-}
-# JSON string escape by hand: awks disagree on backslashes in a gsub replacement.
-function jesc(s,   i, c, out) {
-  out = ""
-  for (i = 1; i <= length(s); i++) {
-    c = substr(s, i, 1)
-    if (c == "\\" || c == "\"") out = out "\\" c
-    else if (c == "\n" || c == "\t" || c == "\r") out = out " "
-    else out = out c
-  }
-  return out
 }
 function deny(what, p) {
   printf "%s", jesc("Walnut refused this command: it puts " what " " p ". Temp directories are emptied at every reboot and swept by cleaners, so a clone, worktree or commit there can be lost. " \
@@ -248,7 +203,7 @@ export const GIT_TMP_GUARD_COMMAND = [
   // A huge command (a file written through a heredoc) is never parsed: the awk
   // is quadratic on some awks, and an allowed command must not wait on it.
   '[ ${#in} -le 100000 ] || exit 0',
-  `msg=$(printf '%s' "$in" | awk '${GUARD_AWK.replace(/'/g, `'\\''`)}' 2>/dev/null)`,
+  `msg=$(printf '%s' "$in" | awk ${shQuoteAwk(GUARD_AWK)} 2>/dev/null)`,
   // Only the refusal text refuses: an awk that fails prints nothing, and allows.
   'case $msg in "Walnut refused"*) ;; *) exit 0 ;; esac',
   // A deny decision on stdout: the engine hands the model the reason alone

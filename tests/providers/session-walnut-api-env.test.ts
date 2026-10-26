@@ -26,6 +26,7 @@ import { WALNUT_HOME, SESSION_STREAMS_DIR } from '../../src/constants.js'
 import { createMockDaemon, type MockDaemon } from '../helpers/mock-daemon.js'
 import { setSelfApiRoot } from '../../src/lib/self-api-root.js'
 import { GIT_TMP_GUARD_COMMAND } from '../../src/providers/git-tmp-guard-hook.js'
+import { TMP_WRITE_NOTE_COMMAND } from '../../src/providers/tmp-write-note-hook.js'
 
 const MOCK_CLI = path.resolve(import.meta.dirname, 'mock-claude.mjs')
 const tmpBase = WALNUT_HOME
@@ -78,7 +79,15 @@ const GIT_GUARD_HOOK = {
   }],
 }
 
-const SESSION_HOOKS = { ...COMPACT_HOOK, ...GIT_GUARD_HOOK }
+// And the note after a Write of a draft or plan into /tmp (tmp-write-note-hook.ts).
+const WRITE_NOTE_HOOK = {
+  PostToolUse: [{
+    matcher: 'Write',
+    hooks: [{ type: 'command', command: TMP_WRITE_NOTE_COMMAND, timeout: 10 }],
+  }],
+}
+
+const SESSION_HOOKS = { ...COMPACT_HOOK, ...GIT_GUARD_HOOK, ...WRITE_NOTE_HOOK }
 
 beforeAll(async () => { daemon = await createMockDaemon() })
 afterAll(async () => { await daemon.stop() })
@@ -122,21 +131,23 @@ describe('local session spawn → launching server URL', () => {
     process.env.WALNUT_COMPACT_OPEN_ITEMS = '0'
     try {
       const args = await spawnArgs('t-hook-off')
-      expect(settingsOf(args)).toEqual({ hooks: GIT_GUARD_HOOK })
+      expect(settingsOf(args)).toEqual({ hooks: { ...GIT_GUARD_HOOK, ...WRITE_NOTE_HOOK } })
     } finally {
       delete process.env.WALNUT_COMPACT_OPEN_ITEMS
     }
   })
 
-  it('both hooks off and no server: argv unchanged from before them (no --settings)', async () => {
+  it('every hook off and no server: argv unchanged from before them (no --settings)', async () => {
     process.env.WALNUT_COMPACT_OPEN_ITEMS = '0'
     process.env.WALNUT_TMP_GIT_GUARD = '0'
+    process.env.WALNUT_TMP_WRITE_NOTE = '0'
     try {
       const args = await spawnArgs('t-hooks-off')
       expect(args).not.toContain('--settings')
     } finally {
       delete process.env.WALNUT_COMPACT_OPEN_ITEMS
       delete process.env.WALNUT_TMP_GIT_GUARD
+      delete process.env.WALNUT_TMP_WRITE_NOTE
     }
   })
 })

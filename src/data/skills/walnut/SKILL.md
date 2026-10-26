@@ -573,17 +573,20 @@ Your task has its own directory on the host your session runs on, in
 it and prints it when the variable is empty). It survives reboots. `/tmp` and the
 OS temp dir do not: they are emptied at every boot and swept between boots.
 
-- **In the task directory:** temporary clones and worktrees, unmerged commits,
-  candidate builds, evidence and reports. Name things by purpose
-  (`$WALNUT_TASK_DIR/<repo>`, `$WALNUT_TASK_DIR/evidence/`) and remove what you no
-  longer need when you finish.
+- **In the task directory:** drafts, plans and notes you write (a message draft,
+  a plan, a commit message), temporary clones and worktrees, unmerged commits,
+  candidate builds, evidence and reports. Write them there from the start. Name
+  things by purpose (`$WALNUT_TASK_DIR/<repo>`, `$WALNUT_TASK_DIR/drafts/`,
+  `$WALNUT_TASK_DIR/evidence/`) and remove what you no longer need when you finish.
 - **In /tmp:** only what you can lose: screenshots, one-off scratch output,
   builds you can rebuild.
 - Walnut removes the directory some days after the task completes, never while a
   repo in it holds changes or commits that exist nowhere else. A result someone
   needs later belongs in a merged commit, the task's note or summary, or a note.
 - A `git clone`, `git worktree add` or `git commit` in a temp directory is refused,
-  with the task directory named in the refusal.
+  with the task directory named in the refusal. A draft, plan, note or evidence
+  file you write into a temp directory with the Write tool is kept, with a note
+  after the write that tells you to move it.
 
 ## Safety
 
