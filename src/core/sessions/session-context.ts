@@ -144,6 +144,27 @@ export const MAIN_TRACKING_LINE =
   + 'to memory (memory_read, then memory_write doc "user") so they outlive this session and a compaction.\n\n'
 
 /**
+ * 2h. A decision for the user carries its context (2026-10-26, the user, after Main passed on a
+ * lead's nine-item list almost word for word: no item said which task it came from, what that
+ * task does, or what was being decided). The same for Main and for every lead that reports to
+ * Main, in their default prompt rather than in a memory. Ratchet:
+ * tests/core/sessions/decision-context-rule.test.ts.
+ */
+export const DECISION_CONTEXT_LINE =
+  'A decision for the user goes to them with its context, never as a bare list. Each item says: which task '
+  + '(its <task-ref/>) and what that task is for, in one sentence; what happened and why it came to this; the '
+  + 'decision itself, in one sentence; the options and what each one leads to; which one you recommend and why; '
+  + 'and the direct links (the code review, the ticket, the chat thread, the pipeline). No account ids, and no '
+  + 'internal tracker codes unless you explain them.'
+
+export const MAIN_DECISION_LINE =
+  ' When a lead\'s report lacks any of these, ask that lead to fill it in before the user sees it. Your most '
+  + 'important duty is to know where every project stands, through its lead, and to make it clear to the user.\n\n'
+
+export const LEAD_DECISION_LINE =
+  ' A report to the main agent that needs a decision from the user carries every one of these parts.\n\n'
+
+/**
  * 2d. The org above the work (src/core/org/): the main agent talks to one
  * contact per project (its lead, or its one team), never to every task, so its
  * chat stays short. Roles follow the team charter (team-charter.ts): Main sets
@@ -164,6 +185,7 @@ export function orgRoleLine(task: { org_role?: string; project?: string; org_lea
       + 'details. Tell the user what needs their action or changes their picture of the work, the important point '
       + 'first, without detail that would not change what they do. Walnut puts a folded org update before a message '
       + 'when work moved: background, mention it only when it matters to what the user says.\n\n'
+      + DECISION_CONTEXT_LINE + MAIN_DECISION_LINE
       + MAIN_DELEGATES_LINE
       + MAIN_TRACKING_LINE
       + MAIN_STAYS_ACTIVE_LINE
@@ -186,6 +208,7 @@ export function orgRoleLine(task: { org_role?: string; project?: string; org_lea
       + 'to the main agent only when it must act. A lead stays: never complete your own task. Your teams do not '
       + 'report progress to you: Walnut puts a note of what moved in them (their own status: what needs the user, '
       + 'new status words, what finished, what is new) before a message when something moved; it is background.\n\n'
+      + DECISION_CONTEXT_LINE + LEAD_DECISION_LINE
       + TASK_ROUTING_CONTRACT + '\n\n'
   }
   return ''
