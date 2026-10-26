@@ -14,7 +14,7 @@
  * Logs carry counts only, never a point.
  */
 
-import type { Database as DatabaseType } from 'better-sqlite3'
+import type { Database as DatabaseType } from '../../lib/sqlite.js'
 import { getHealthDb } from './db.js'
 import { localDate, localIso } from './day-key.js'
 import { HealthQueryError, MAX_RANGE_DAYS, healthTz, toInstant } from './query-common.js'
