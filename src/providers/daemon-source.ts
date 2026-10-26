@@ -2230,6 +2230,11 @@ const SNAPSHOT_COALESCE_MS = 50;
 // A single stream line larger than this cannot be assembled, so we log and
 // realign rather than growing the buffer without limit.
 const TAILER_CARRY_MAX = 32 * 1024 * 1024;
+// At most this much is read in one tailer tick. A large gap (a stalled loop, a
+// session that wrote while no tailer ran) is then read over several ticks instead
+// of in one allocation: stream files reach 3 GB, and the whole gap was one Buffer.
+// Keep in sync with daemon-standalone.ts.
+const TAILER_TICK_READ_MAX = 8 * 1024 * 1024;
 
 // Stream the whole jsonl through foldLine, from byte 0. Used by every rebuild
 // site (daemon start / adopt / attach-discover / resume / unknown-sid getState).
@@ -8239,14 +8244,14 @@ function ensureWatcher(sid) {
       if (stat.size <= offset) { consecutiveErrors = 0; return; }
 
       const fd = fs.openSync(s.jsonlPath, 'r');
-      const bytesToRead = stat.size - offset;
+      const bytesToRead = Math.min(stat.size - offset, TAILER_TICK_READ_MAX);
       const buf = Buffer.alloc(bytesToRead);
       fs.readSync(fd, buf, 0, bytesToRead, offset);
       fs.closeSync(fd);
       consecutiveErrors = 0;
       // The read cursor advances past ALL read bytes, including the torn tail we
       // are about to park in the carry (the carry is memory-only, see above).
-      offset = stat.size;
+      offset += bytesToRead;
 
       // Assemble COMPLETE lines only. L1 versioned events: v = end-of-line byte
       // offset in the append-only jsonl (monotonic per session, identical live
@@ -11464,6 +11469,24 @@ const CHANGES_CACHE_MAX_SESSIONS = 12;
 const changesMemos = new Map();
 const CHANGES_MEMO_MAX_SESSIONS = 64;
 
+// A stopped session's transcript cannot grow until it is resumed, so once it has
+// been stopped and unused for a while its heavy parse state goes; the light
+// answer stays. Not at exit (a review and commit right after it ends is common).
+// Mirror of the standalone.
+const CHANGES_RELEASE_AFTER_MS = Number(process.env.WALNUT_CHANGES_RELEASE_AFTER_MS) || 30 * 60000;
+function releaseIdleChangesState(now) {
+  now = now || Date.now();
+  for (const [sid, memo] of changesMemos) {
+    const s = sessions.get(sid);
+    if ((s && s.state === 'running') || changesInflightBySid.has(sid)) continue;
+    const entry = changesCache.get(sid);
+    const lastUsed = Math.max(memo.lastUsed, entry ? entry.lastUsed : 0);
+    if (now - lastUsed < CHANGES_RELEASE_AFTER_MS) continue;
+    changesCache.delete(sid);
+    if ((memo.mainParse && memo.mainParse.state) || memo.subCache.size) { memo.subCache = new Map(); memo.mainParse = {}; }
+  }
+}
+
 function evictLeastRecent(cache, max, keep) {
   if (cache.size <= max) return;
   let oldest = null;
@@ -13297,6 +13320,7 @@ async function startDaemon() {
     // Dead-stream retention: hourly; first pass after reconcile settles.
     setTimeout(sweepDeadStreams, 60000);
     setInterval(sweepDeadStreams, STREAM_RETENTION_SWEEP_MS);
+    setInterval(function () { releaseIdleChangesState(); }, Math.min(600000, Math.max(500, CHANGES_RELEASE_AFTER_MS / 2)));
 
     // Cloud bridge self-heal: a persisted bridge.json re-dials without the Mac.
     loadBridgeConfig();

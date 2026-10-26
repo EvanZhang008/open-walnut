@@ -202,5 +202,51 @@ describe.skipIf(TWINS.length === 0)('changes parse memos outlive the output LRU 
       await rpc({ cmd: 'changes.compute', sid: 's-1', cwd: repo, refresh: true })
       expect(computeLog(daemonDir, 's-1')).toHaveLength(2)
     }, 90_000)
+
+    // A stopped session's transcript cannot grow until a resume, so once it has
+    // been stopped and unused for a while its heavy parse state (every edit's
+    // text) goes: 20 recent sessions held 150 MB of it, about half the daemon's
+    // heap (2026-10-26). Not at exit: a file click right after must stay cheap.
+    it(`${twin.name}: a stopped, unused session keeps only its light answer`, async () => {
+      root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-changes-ended-')))
+      const home = path.join(root, 'home')
+      const daemonDir = path.join(root, 'daemon')
+      const repo = path.join(root, 'repo')
+      fs.mkdirSync(repo, { recursive: true })
+      const projectDir = path.join(home, '.claude', 'projects', encodeProjectPathCore(repo))
+      fs.mkdirSync(projectDir, { recursive: true })
+      const sid = 'ended-sid'
+      const transcript = path.join(projectDir, `${sid}.jsonl`)
+      fs.writeFileSync(transcript, writeLine(repo, 'a.ts', 'a1\n'))
+      fs.writeFileSync(path.join(repo, 'a.ts'), 'a1\n')
+
+      process.env.WALNUT_CHANGES_RELEASE_AFTER_MS = '1500'
+      try { await boot(twin, home, daemonDir) } finally { delete process.env.WALNUT_CHANGES_RELEASE_AFTER_MS }
+      const started = await rpc({ cmd: 'start', sid, cwd: repo, message: '', mode: 'default', args: ['/bin/sh', '-c', 'sleep 2', 'sh'] })
+      expect(started.ok, JSON.stringify(started)).toBe(true)
+      const first = await rpc({ cmd: 'changes.compute', sid, cwd: repo })
+      expect(first.ok, JSON.stringify(first)).toBe(true)
+      const until = Date.now() + 30_000
+      while ((await rpc({ cmd: 'status', sid })).alive !== false && Date.now() < until) await new Promise((r) => setTimeout(r, 200))
+      expect((await rpc({ cmd: 'status', sid })).alive).toBe(false)
+
+      // Right after the exit: the list and a file click answer without a compute.
+      expect((await rpc({ cmd: 'changes.compute', sid, cwd: repo })).result).toEqual(first.result)
+      expect(await rpc({ cmd: 'changes.file', sid, cwd: repo, path: path.join(repo, 'a.ts') })).toMatchObject({ found: true })
+      expect(computeLog(daemonDir, sid)).toHaveLength(1)
+
+      // Unused past the window: the list still answers from the light copy...
+      await new Promise((r) => setTimeout(r, 3000))
+      expect((await rpc({ cmd: 'changes.compute', sid, cwd: repo })).result).toEqual(first.result)
+      expect(computeLog(daemonDir, sid)).toHaveLength(1)
+      // ...and after a resume appends, the transcript is read from the start once.
+      fs.appendFileSync(transcript, writeLine(repo, 'b.ts', 'b1\n'))
+      fs.writeFileSync(path.join(repo, 'b.ts'), 'b1\n')
+      const moved = await rpc({ cmd: 'changes.compute', sid, cwd: repo })
+      expect((moved.result as { fileCount: number }).fileCount).toBe(2)
+      const log = computeLog(daemonDir, sid)
+      expect(log).toHaveLength(2)
+      expect(log[1]).toMatchObject({ resumed: false, readBytes: fs.statSync(transcript).size })
+    }, 90_000)
   }
 })

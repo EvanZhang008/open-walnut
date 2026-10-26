@@ -1557,6 +1557,11 @@ const SNAPSHOT_COALESCE_MS = 50
 // A single stream line larger than this cannot be assembled, so we log and
 // realign rather than growing the buffer without limit.
 const TAILER_CARRY_MAX = 32 * 1024 * 1024
+// At most this much is read in one tailer tick. A large gap (a stalled loop, a
+// session that wrote while no tailer ran) is then read over several ticks instead
+// of in one allocation: stream files reach 3 GB, and the whole gap was one Buffer.
+// Keep in sync with daemon-source.ts.
+const TAILER_TICK_READ_MAX = 8 * 1024 * 1024
 
 // Result of a fold rebuild: the folded state PLUS the byte offset of the last
 // COMPLETE-line boundary it stopped at. Every adopt/attach/resume site must seed
@@ -6866,14 +6871,14 @@ function ensureWatcher(sid: string) {
       if (stat.size <= offset) { consecutiveErrors = 0; return }
 
       const fd = fs.openSync(s.jsonlPath, 'r')
-      const bytesToRead = stat.size - offset
+      const bytesToRead = Math.min(stat.size - offset, TAILER_TICK_READ_MAX)
       const buf = Buffer.alloc(bytesToRead)
       fs.readSync(fd, buf, 0, bytesToRead, offset)
       fs.closeSync(fd)
       consecutiveErrors = 0
       // The read cursor advances past ALL read bytes, including the torn tail we
       // are about to park in the carry (the carry is memory-only, see above).
-      offset = stat.size
+      offset += bytesToRead
 
       // Assemble COMPLETE lines only. `v` is the byte offset at the END of the
       // line in the append-only jsonl — monotonic per session, and identical
@@ -9327,6 +9332,25 @@ interface ChangesMemo {
 const changesMemos = new Map<string, ChangesMemo>()
 const CHANGES_MEMO_MAX_SESSIONS = 64
 
+// A stopped session's transcript cannot grow until it is resumed, so once it has
+// been stopped and unused for a while its heavy parse state goes: every edit's
+// text, 2 to 50 MB a session, about half of this daemon's heap on 2026-10-26 (20
+// recent sessions held 150 MB). The light answer stays and serves changes.compute
+// while the transcript keeps its stat; a file click, or a compute after a resume,
+// reads the transcript from the start once. Not at exit: looking at a session's
+// changes and committing them right after it ends is the common case.
+// Keep in sync with daemon-source.ts.
+const CHANGES_RELEASE_AFTER_MS = Number(process.env.WALNUT_CHANGES_RELEASE_AFTER_MS) || 30 * 60_000
+function releaseIdleChangesState(now = Date.now()): void {
+  for (const [sid, memo] of changesMemos) {
+    if (sessions.get(sid)?.state === 'running' || changesInflightBySid.has(sid)) continue
+    const lastUsed = Math.max(memo.lastUsed, changesCache.get(sid)?.lastUsed ?? 0)
+    if (now - lastUsed < CHANGES_RELEASE_AFTER_MS) continue
+    changesCache.delete(sid)
+    if (memo.mainParse.state || memo.subCache.size) { memo.subCache = new Map(); memo.mainParse = {} }
+  }
+}
+
 function evictLeastRecent<T extends { lastUsed: number }>(cache: Map<string, T>, max: number, keep: string): void {
   if (cache.size <= max) return
   let oldest: string | null = null
@@ -11243,6 +11267,7 @@ if (action === '--start' || SERVICE_MODE) {
   // let reconcile finish adopting before judging liveness by the map).
   setTimeout(sweepDeadStreams, 60_000)
   setInterval(sweepDeadStreams, STREAM_RETENTION_SWEEP_MS)
+  setInterval(() => releaseIdleChangesState(), Math.min(10 * 60_000, Math.max(500, CHANGES_RELEASE_AFTER_MS / 2)))
 
   // Cloud bridge self-heal: a persisted bridge.json re-dials without waiting
   // for the Mac to push bridge.configure again.

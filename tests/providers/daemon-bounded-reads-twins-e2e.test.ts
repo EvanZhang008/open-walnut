@@ -13,6 +13,8 @@
  *   - read-history without tailBytes read the whole file and every subagent
  *     file; it now serves at most 32 MB and says `truncated`;
  *   - fs.read had no size cap; it now answers EFBIG over 32 MB.
+ * And the live tailer read the whole gap since its last tick in one Buffer
+ * (2026-10-26: stream files of 1 to 3 GB); it now reads at most 8 MB a tick.
  *
  * MACHINE SAFETY: HOME, the daemon dir and the streams dir are temp paths, the
  * "CLI" is /bin/sh cat-ing a prepared file, big files are sparse, and the
@@ -242,6 +244,34 @@ describe.each(TWINS)('bounded reads: $name', (twin) => {
     expect(daemonLog(dirs, 'addSubscriber: catch-up capped')).toHaveLength(1)
 
     await rpc(starter.ws, { cmd: 'stop', sid: 'br-replay' })
+  }, 120_000)
+
+  it('a live tailer reads a 20 MB burst in slices and still delivers every line, in order, with its v', async () => {
+    const dirs = makeDirs()
+    const source = path.join(root, 'burst-source.jsonl')
+    fs.writeFileSync(source, streamOf(20 * MB))
+    const size = fs.statSync(source).size
+    await boot(twin, dirs)
+    const starter = await connect()
+    // The burst lands after the subscriber is in, so one tick sees the whole gap.
+    const started = await rpc(starter.ws, {
+      cmd: 'start', sid: 'br-burst', cwd: root, message: '', mode: 'default',
+      args: ['/bin/sh', '-c', `sleep 2; cat ${JSON.stringify(source)}; sleep 45`, 'sh'],
+    })
+    expect(started.ok).toBe(true)
+    const live = await connect()
+    await rpc(live.ws, { cmd: 'attach', sid: 'br-burst', fromOffset: 0 })
+    const events = () => live.frames.filter((f) => f.ev === 'jsonl' && f.sid === 'br-burst') as Array<{ line: string; v: number }>
+    expect(await waitFor(() => events().at(-1)?.v === size, 60_000)).toBe(true)
+    const expected = fs.readFileSync(source, 'utf8').split('\n').filter(Boolean)
+    const got = events()
+    expect(got.length).toBe(expected.length)
+    let v = 0
+    for (let i = 0; i < expected.length; i++) {
+      v += Buffer.byteLength(expected[i]) + 1
+      if (got[i].line !== expected[i] || got[i].v !== v) throw new Error(`line ${i}: got v ${got[i].v}, want ${v}`)
+    }
+    await rpc(starter.ws, { cmd: 'stop', sid: 'br-burst' })
   }, 120_000)
 
   it('a cold getState scans in slices, at most the newest 32 MB, once per file version', async () => {
