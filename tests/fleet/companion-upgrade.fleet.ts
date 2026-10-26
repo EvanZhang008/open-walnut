@@ -75,6 +75,19 @@ describe.skipIf(!!missing)('the fleet: the companion stays old while its Mac mov
   const leader = async () => (await phone('/api/leader')).json
   const heard = () => waitFor(async () => { const v = await leader(); return v.primaryHeard === true ? v : null }, 240_000, 'the companion to hear the Mac', 1_000)
   const answeredByMac = () => waitFor(async () => { const r = await phone('/api/v1/usage/overview'); return r.by === 'primary' && r.status === 200 ? r : null }, 120_000, 'a phone call answered by the Mac', 1_000)
+    .catch(async (e: Error) => { throw new Error(`${e.message}\n${await whyNotTheMac()}`) })
+  /** What a failed wait for the Mac leaves to read: the companion's view, its reasons, both daemons. */
+  async function whyNotTheMac(): Promise<string> {
+    const lines: string[] = []
+    try { lines.push(`companion's leader view: ${JSON.stringify(await leader())}`) } catch (e) { lines.push(`leader view: ${String(e)}`) }
+    lines.push(...companion.logLines(/answers itself|bridge|primary|suspect/i).slice(-25).map((l) => `box: ${l.slice(0, 400)}`))
+    lines.push(...mac.logLines(/daemon|bridge|mismatch|prewarm/i).slice(-40).map((l) => `mac: ${l.slice(0, 400)}`))
+    try {
+      const ps = execFileSync('ps', ['-eo', 'pid,ppid,command'], { encoding: 'utf8' }).split('\n')
+      lines.push(...ps.filter((l) => l.includes(base) || l.includes(NEW) || l.includes(OLD)).map((l) => `ps: ${l.slice(0, 300)}`))
+    } catch { /* evidence only */ }
+    return lines.join('\n')
+  }
   /** The Mac's companion-build view once the flow settled (Retry, as the person presses it, then a look). */
   async function companionBuild(): Promise<Record<string, any>> {
     const retry = await mac.call('POST', '/api/cloud/companion-build/retry')
