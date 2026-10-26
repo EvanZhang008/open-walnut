@@ -23,7 +23,8 @@
  *              message is answered.
  *   update     (--older) an install of A, started, updates itself to B before it
  *              serves (the startup auto-update every npm install runs), from a
- *              local registry whose `latest` is B.
+ *              local registry whose `latest` is B; an install slower than the
+ *              start's 60 s budget lets A serve, and the next start serves B.
  *   field*     (--field latest --field-packs) the update every existing npm
  *              and archive install takes: the releases people run today (npm's
  *              latest and nightly, the newest Node package), installed as they
@@ -120,6 +121,20 @@ function tailOf(file, lines = 80) {
   try { return fs.readFileSync(file, 'utf8').split('\n').slice(-lines).join('\n') } catch { return '(no log)' }
 }
 
+/** The binary's version, or what running it said (mid-install it may not run). */
+function safeVersion(w) {
+  try { return w.version() } catch (err) { return `nothing (${err instanceof Error ? err.message.split('\n')[0] : String(err)})` }
+}
+
+async function installedWithin(w, version, ms) {
+  const deadline = Date.now() + ms
+  while (Date.now() < deadline) {
+    if (reports(safeVersion(w), version)) return true
+    await new Promise((r) => setTimeout(r, 5_000))
+  }
+  return false
+}
+
 /** An install of `from` (a tarball served by a local registry) must come up as `to`. */
 async function rehearseUpdate(work, label, fromTgz, toTgz) {
   const from = readPackedManifest(fromTgz)
@@ -134,13 +149,26 @@ async function rehearseUpdate(work, label, fromTgz, toTgz) {
     walnuts.push(w)
     await w.install(`open-walnut@${from.version}`, allowedScripts(from))
     if (!reports(w.version(), from.version)) throw new Error(`installed ${from.version} reports ${w.version()}`)
+    const logFrom = fs.statSync(w.logFile).size
     await w.start({ timeoutMs: 600_000 })
-    const status = await w.api('GET', '/api/v1/status')
+    let status = await w.api('GET', '/api/v1/status')
+    let how = 'updated before it served'
+    // The start waits for the install at most STARTUP_UPDATE_BUDGET_MS (60 s); a slower
+    // install (a loaded machine) lets the old version serve, goes on, and the next start
+    // runs the new one. That is the promise the start prints: hold it to that.
+    const said = fs.readFileSync(w.logFile).subarray(logFrom).toString()
+    if (status.json?.version === from.version && said.includes(`${to.version} is still installing; starting ${from.version} now`)) {
+      if (!(await installedWithin(w, to.version, 10 * 60_000))) throw new Error(`the install the start left running never finished: the binary reports ${safeVersion(w)}`)
+      await w.stop()
+      await w.start({ timeoutMs: 600_000 })
+      status = await w.api('GET', '/api/v1/status')
+      how = 'the install outlasted the start budget: the old version served, the next start served the new one'
+    }
     if (status.json?.version !== to.version) throw new Error(`started ${from.version}, serving ${status.json?.version ?? status.text.slice(0, 200)}, expected ${to.version}`)
     if (!reports(w.version(), to.version)) throw new Error(`after the update the binary reports ${w.version()}`)
     if (!registry.hits.some((h) => h.endsWith('/dist-tags'))) throw new Error('the update check never asked the registry')
     await w.shutdown()
-    return `${from.version} -> ${to.version}`
+    return `${from.version} -> ${to.version} (${how})`
   } finally {
     await registry.close()
   }
