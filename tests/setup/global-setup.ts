@@ -95,6 +95,7 @@ export async function setup(): Promise<void> {
   // below so a caller-supplied OPEN_WALNUT_HOME still gets runtime isolation.
   isolateRuntimeDir();
   isolateSpawnJournal();
+  isolateTaskDirRoot();
   sweepRuntimeDirs();
 
   // If WALNUT_HOME is already set to a safe (non-production) path, keep it
@@ -146,6 +147,19 @@ function isolateRuntimeDir(): void {
 function isolateSpawnJournal(): void {
   if (process.env.WALNUT_SPAWN_JOURNAL) return;
   process.env.WALNUT_SPAWN_JOURNAL = path.join(os.tmpdir(), `${RUNTIME_DIR_PREFIX}${process.pid}`, 'spawn-journal.jsonl');
+}
+
+/**
+ * Session daemons make each task's working directory under
+ * ~/.local/state/open-walnut/tasks (src/lib/task-dir.ts), and test daemons run
+ * under the real HOME. Point the root into the runner's runtime dir, and drop a
+ * WALNUT_TASK_DIR inherited from the session that runs the tests, so no test
+ * reads that session's directory as its own. Workers do the same per pid.
+ */
+function isolateTaskDirRoot(): void {
+  delete process.env.WALNUT_TASK_DIR;
+  if (process.env.WALNUT_TASK_DIR_ROOT) return;
+  process.env.WALNUT_TASK_DIR_ROOT = path.join(os.tmpdir(), `${RUNTIME_DIR_PREFIX}${process.pid}`, 'task-dirs');
 }
 
 const MOCK_HOME_NAME = /^[a-z][a-z0-9-]*-\d{13}-[a-z0-9]{6,}$/;

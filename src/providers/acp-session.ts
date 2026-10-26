@@ -27,6 +27,7 @@ import path from 'node:path'
 import fsModule from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { log } from '../logging/index.js'
+import { WALNUT_HOME } from '../constants.js'
 import { bus, EventNames } from '../core/event-bus.js'
 import { renderSelfKnowledgeContract } from '../core/self-knowledge-contract.js'
 import type { SessionEngine, SessionMode } from '../core/types.js'
@@ -1295,6 +1296,9 @@ export class AcpSession {
       providerSessionId: preemptFreshSession ? undefined : (this._providerSessionId ?? undefined),
       fromOffset: this._seenV,
       mcpServers,
+      // The daemon makes the task's durable working directory and sets
+      // WALNUT_TASK_DIR from it (task-dir-core.ts); an older daemon ignores it.
+      ...(this.taskId ? { taskId: this.taskId, home: WALNUT_HOME } : {}),
     }, ACP_COLD_RESUME_TIMEOUT_MS)
     try {
       if (!startResp.ok) {

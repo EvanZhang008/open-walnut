@@ -7,7 +7,7 @@
  *   2. brain picks an action -> run it -> journal
  *   3. screenshot every 5 steps and on every anomaly
  *
- * Everything lands in /tmp/walnut-robot/<epoch>-seed<seed>/:
+ * Everything lands in <evidence>/walnut-robot/<epoch>-seed<seed>/ (scripts/lib/evidence-dir.mjs):
  *   journal.jsonl, screenshots/, summary.json, replay.yaml (the free repro flow).
  *
  * Exit code: 0 = clean, 2 = anomalies found, 1 = harness error.
@@ -21,12 +21,14 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 
+import { evidenceDir } from '../lib/evidence-dir.mjs';
 import { ACTIONS, mulberry32 } from './actions.mjs';
 import { createDriver, APP_ID, parseHierarchyCsv } from './maestro-driver.mjs';
 import { createOracles } from './oracles.mjs';
 import { judge, pickAction, pickActionAI } from './brain.mjs';
 
-const JOURNAL_ROOT = '/tmp/walnut-robot';
+// Journals and replays are read after the episode (robot.sh, a replay), so not in /tmp.
+const JOURNAL_ROOT = evidenceDir('walnut-robot');
 const SCREENSHOT_EVERY = 5;
 const JUDGE_EVERY = 10;
 

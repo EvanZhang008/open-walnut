@@ -49,7 +49,7 @@ Full help is the file header: `run.sh <target> --help` (a target has to come fir
 
 ## What comes back
 
-Everything for one run lands in `/tmp/walnut-onboarding-test/<run-id>/`:
+Everything for one run lands in `~/.local/state/open-walnut/evidence/walnut-onboarding-test/<run-id>/` (`$WALNUT_TASK_DIR/evidence/...` inside a Walnut task session; `WALNUT_ONB_OUT_ROOT` overrides; not `/tmp`, which a reboot empties):
 
 - `summary.txt` and `report.md`: a table of every step with its status (`ok`, `fail`, `skip`) and wall-clock seconds, then the findings list. A **finding** is the point of the whole exercise: one sentence per place the documented path made a new user guess, wait without explanation, or stop. Example: a brand-new Mac has no git, so `git clone` pops the Command Line Tools installer, and the README does not mention it.
 - `steps.jsonl`: the same steps as one JSON object per line (`name`, `status`, `seconds`, `note`, `finding`, `log`), which is what the summary is rendered from.

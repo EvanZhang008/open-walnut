@@ -96,6 +96,14 @@ if (!process.env.WALNUT_SPAWN_JOURNAL || !process.env.WALNUT_SPAWN_JOURNAL.inclu
   process.env.WALNUT_SPAWN_JOURNAL = path.join(os.tmpdir(), ours, 'spawn-journal.jsonl')
 }
 
+// Same for task directories (src/lib/task-dir.ts): test daemons make them under
+// the real HOME unless the root points here. The session running the tests may
+// have its own WALNUT_TASK_DIR; no test may read it as its own.
+delete process.env.WALNUT_TASK_DIR
+if (!process.env.WALNUT_TASK_DIR_ROOT || !process.env.WALNUT_TASK_DIR_ROOT.includes(ours)) {
+  process.env.WALNUT_TASK_DIR_ROOT = path.join(os.tmpdir(), ours, 'task-dirs')
+}
+
 // Search v2 is default-ON (2026-08-26 cutover), and its semantic lane spawns an
 // embed worker whose first query tries to LOAD (and, on a fresh temp
 // WALNUT_HOME, download — ~600MB) the embedding model. No test needs that:

@@ -6,6 +6,7 @@ import { defineOp, getOp } from './registry.js';
 import { startTask, TASK_START_INPUT } from './task-execution.js';
 import { REPLY_ARRIVES_HINT, withOutcome } from './outcome.js';
 import { MESSAGE_TEXT_HINT } from '../core/team-charter.js';
+import { WORK_PLACE_RULE } from '../core/work-place.js';
 
 defineOp({
   name: 'task_start',
@@ -193,6 +194,27 @@ defineOp({
       ['subtasks', 'waitingOn', 'askedOfYou'].some((k) => Array.isArray(open[k]) && (open[k] as unknown[]).length > 0) || open.board
         ? 'These are still open for your task.' : 'Nothing is open for your task.',
       'Read one with task_get; answer a request with task_send in_reply_to.',
+    );
+  },
+  tags: { readonly: true, remote: 'allow' },
+});
+
+defineOp({
+  name: 'task_dir',
+  title: 'Your task directory',
+  // The whole rule rides this help, so a session spawned before it can still read it.
+  description:
+    'Make (when missing) and name your task\'s durable working directory on the host your session runs on, ' +
+    'the same directory as `$WALNUT_TASK_DIR`. ' + WORK_PLACE_RULE.replace(/^## Where work lives\n\n/, ''),
+  input: {},
+  bind: { method: 'GET', path: '/me/task-dir' },
+  mapResult: ({ body }) => {
+    const dir = (body ?? {}) as { path?: string; host?: string; error?: string };
+    if (!dir.path) return withOutcome({ ...dir }, `No task directory: ${dir.error ?? 'unknown reason'}.`, 'Put work you must keep in a durable directory, not /tmp.');
+    return withOutcome(
+      { ...dir },
+      `Your task directory is ${dir.path}.`,
+      'Keep clones, worktrees, unmerged commits, candidate builds and evidence there; only disposable files go in /tmp.',
     );
   },
   tags: { readonly: true, remote: 'allow' },

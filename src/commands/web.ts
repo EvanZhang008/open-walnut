@@ -59,6 +59,9 @@ const DEFAULT_EPHEMERAL_LIMIT = 3
 export function forgetInheritedSessionIdentity(env: NodeJS.ProcessEnv = process.env): void {
   delete env.WALNUT_SESSION_ID
   delete env.WALNUT_AGENT_SOCKET
+  // That session's task directory too: the local daemon, the in-app terminal and
+  // every script a child runs would otherwise write into another task's.
+  delete env.WALNUT_TASK_DIR
 }
 
 export async function runWeb(options: {

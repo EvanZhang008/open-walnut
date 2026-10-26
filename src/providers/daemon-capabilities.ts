@@ -441,6 +441,16 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // Optional.
   'external-human-v1',
   'path-resolve-v1',
+  // 'task-dir-v1' — each task's durable working directory on this host
+  // (src/lib/task-dir.ts): the daemon makes it at spawn from the start's
+  // origin.task (acpStart's taskId) and sets WALNUT_TASK_DIR in the session's
+  // env; hello carries `taskDirRoot`; `taskdir.ensure {taskId}` makes one for a
+  // session that predates it; `taskdir.list` and `taskdir.remove {taskIds}` are
+  // the server's cleanup, the host checking each repo inside for unmerged work
+  // before it deletes anything (task-dir-core.ts). Sidecar-gated in the source
+  // twin (task-dir-core.cjs). Optional: without it a session gets no task
+  // directory and the /tmp git guard stays inert.
+  'task-dir-v1',
   // 'vscode-v1' — host-local embedded VS Code (vscode.ensure / vscode.status):
   // the daemon installs/starts code-server bound to 127.0.0.1 and returns
   // {port, token}; the server tunnels the port and the web UI iframes it.

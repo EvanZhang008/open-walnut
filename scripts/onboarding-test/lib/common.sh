@@ -4,7 +4,9 @@
 
 ONB_TAG_KEY="walnut-onboarding-test"
 ONB_TTL_TAG_KEY="walnut-onboarding-test-ttl"
-ONB_OUT_ROOT="${WALNUT_ONB_OUT_ROOT:-/tmp/walnut-onboarding-test}"
+# Reports, logs and recordings are read after the run, so not in /tmp (a reboot empties it).
+. "$(dirname "${BASH_SOURCE[0]}")/../../lib/evidence-dir.sh"
+ONB_OUT_ROOT="${WALNUT_ONB_OUT_ROOT:-$(walnut_evidence_dir walnut-onboarding-test)}"
 
 c_dim=$'\033[2m'; c_bold=$'\033[1m'; c_red=$'\033[31m'; c_grn=$'\033[32m'; c_yel=$'\033[33m'; c_cyan=$'\033[36m'; c_off=$'\033[0m'
 

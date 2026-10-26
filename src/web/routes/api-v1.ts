@@ -3422,6 +3422,28 @@ apiV1Router.get('/me/open', async (req: Request, res: Response, next: NextFuncti
   }
 })
 
+// GET /api/v1/me/task-dir: the calling session's task directory on the host it
+// runs on (core/sessions/task-dir-place.ts), made when missing. A session spawned
+// before its daemon knew task directories has no $WALNUT_TASK_DIR; this is its way
+// to one. 404 for a caller with no task, 409 for a host whose daemon is too old.
+apiV1Router.get('/me/task-dir', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { resolveCallerPlacement } = await import('../../core/sessions/caller-placement.js')
+    const { ensureTaskDirOnHost } = await import('../../core/sessions/task-dir-place.js')
+    const rawSid = req.headers['x-walnut-caller-sid']
+    const me = await resolveCallerPlacement(Array.isArray(rawSid) ? rawSid[0] : rawSid)
+    if (me.kind !== 'worker' && me.kind !== 'ask') {
+      res.status(404).json({ error: 'no task: only a task session has a task directory' })
+      return
+    }
+    const out = await ensureTaskDirOnHost(me.task.id, me.session.host)
+    if ('error' in out) { res.status(out.status).json({ error: out.error }); return }
+    res.json({ ...out, taskId: me.task.id })
+  } catch (err) {
+    next(err)
+  }
+})
+
 // GET /api/v1/me/app-state: what plugin Apps share about the calling session's
 // task (core/sessions/app-state.ts), whole. Messages into the session already
 // carry what changed; this is the full read, and it counts as told.

@@ -2,9 +2,12 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
+import { evidenceDir } from './lib/evidence-dir.mjs'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-const evidence = fs.mkdtempSync('/tmp/walnut-warm-verify-')
+// Kept after the run (it is the proof), so not in /tmp: scripts/lib/evidence-dir.mjs.
+fs.mkdirSync(evidenceDir(''), { recursive: true })
+const evidence = fs.mkdtempSync(evidenceDir('walnut-warm-verify-'))
 const run = (command, args, env = {}) => {
   const result = spawnSync(command, args, { cwd: root, stdio: 'inherit', env: { ...process.env, ...env } })
   if (result.error) throw result.error

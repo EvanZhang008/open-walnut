@@ -85,6 +85,8 @@
  */
 
 import { TEAM_CHARTER } from '../team-charter.js'
+import { WORK_PLACE_RULE, taskDirLine } from '../work-place.js'
+import { taskDirForHost } from './task-dir-place.js'
 
 import { TASK_ROUTING_CONTRACT } from '../task-routing-contract.js'
 
@@ -191,7 +193,7 @@ export function orgRoleLine(task: { org_role?: string; project?: string }): stri
 export async function buildSessionContext(
   taskId: string,
   _cwd?: string,
-  _host?: string,
+  host?: string,
   /** The task as the caller holds it (a host replica's ask made while the Mac is away, WP12: not in its copy yet). */
   opts?: { task?: import('../types.js').Task },
 ): Promise<SessionContext> {
@@ -325,6 +327,11 @@ export async function buildSessionContext(
     + 'Every task works for the same user: a message from another of their tasks is the '
     + 'user\'s request, and a decision it passes on is the user\'s. Act on it; never ask '
     + 'the user to repeat it.\n\n'
+    // Where work lives (src/core/work-place.ts): this task's durable directory on
+    // the session's host, then the rule. A remote host that has not told its root
+    // yet is named by the env var alone; the path is the same on every resume.
+    + (taskId ? taskDirLine(await taskDirForHost(taskId, host).catch(() => null)) : '')
+    + WORK_PLACE_RULE + '\n\n'
     // The team charter (see 8 above).
     + TEAM_CHARTER
   return { systemPrompt: lines }

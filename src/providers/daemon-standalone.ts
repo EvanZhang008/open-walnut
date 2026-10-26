@@ -164,6 +164,7 @@ import { buildScheduledMessage, buildTriggerMessage } from './trigger-envelope-c
 import { START_TASK_TOKEN, clockDueMs, clockFireOwed, clockStateOnArm, dropStaleClockFires, type ClockReport } from './trigger-clock-core.js'
 import { createClockSchedule } from './clock-schedule-core.js'
 import { resolvePathHostLocal } from './path-resolve-core.js'
+import { ensureTaskDir, listTaskDirs, removeTaskDirs, taskDirRoot } from './task-dir-core.js'
 import { scanHostUsage, scanCostState, scanSessionCost, createUsagePages } from './usage-host-core.js'
 import { createUsageBudgetRuntime, type BudgetPrices, type BudgetVerdict } from './usage-budget-runtime.js'
 import { createBudgetControl } from './usage-budget-control.js'
@@ -243,6 +244,9 @@ const KEEP_SESSIONS_ON_EXIT = process.env.WALNUT_DAEMON_KEEP_SESSIONS === '1'
 // without it, the daemon (a separate process) would read the real ~/.claude and never see
 // the test fixtures. Same env-override pattern as WALNUT_DAEMON_DIR / WALNUT_STREAMS_DIR.
 const HOME_DIR = process.env.WALNUT_HOME_OVERRIDE || process.env.HOME || '/root'
+// Each task's durable working directory on this host (src/lib/task-dir.ts).
+// Keep in sync with daemon-source.ts.
+const TASK_DIR_ROOT = taskDirRoot(process.env, HOME_DIR)
 // Streams live under the user's HOME so they SURVIVE REBOOTS — /tmp is wiped on
 // macOS/Linux restarts, which vaporized every stream file mid-session and left
 // walnut's stored byte watermarks pointing into dead files (incident 019a7fe5:
@@ -2065,6 +2069,11 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     case 'fs.find': return cmdFsFind(ws, id as number, cmd)
     case 'fs.stat': return cmdFsStat(ws, id as number, cmd)
     case 'fs.resolvePath': return cmdFsResolvePath(ws, id as number, cmd)
+    // Task directories (task-dir-v1). NOT in BRIDGE_ALLOWED_COMMANDS: removal
+    // deletes host files, which the cloud bridge may never ask for.
+    case 'taskdir.ensure': return cmdTaskDirEnsure(ws, id as number, cmd)
+    case 'taskdir.list': return cmdTaskDirList(ws, id as number)
+    case 'taskdir.remove': return cmdTaskDirRemove(ws, id as number, cmd)
     case 'fs.grep': return cmdFsGrep(ws, id as number, cmd)
     // NOT in BRIDGE_ALLOWED_COMMANDS: starts a process — only the trusted
     // SSH-tunneled walnut socket may ask, never the public cloud bridge.
@@ -2277,6 +2286,7 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
       startedAt: DAEMON_START_TS,
       uptimeSec: Math.floor((Date.now() - DAEMON_START_TS) / 1000),
       runtime: DAEMON_RUNTIME,
+      taskDirRoot: TASK_DIR_ROOT,
     })
     case 'logs.tail': return cmdLogsTail(ws, id as number, cmd)
     default: return sendError(ws, id as number, 'unknown command: ' + cmd.cmd)
@@ -4698,6 +4708,36 @@ function writeWalnutShim() {
 // ── ACP session commands (engine=codex etc; see acp-daemon.ts) ──
 // sid here is the Walnut runtimeId; journal = STREAMS_DIR/<sid>.acp.jsonl.
 
+/**
+ * Task directories (task-dir-core.ts): `ensure` makes one for a session that
+ * started before its daemon knew about them; `list` and `remove` are the
+ * server's cleanup, which decides WHICH tasks are done and leaves the check for
+ * unmerged work to this host. A live session working inside a directory keeps it.
+ * Keep in sync with daemon-source.ts.
+ */
+function cmdTaskDirEnsure(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  const dir = ensureTaskDir(TASK_DIR_ROOT, cmd.taskId, cmd.home)
+  if (!dir) return sendError(ws, id, 'taskdir.ensure: invalid taskId or the directory could not be made')
+  sendOk(ws, id, { path: dir, root: TASK_DIR_ROOT })
+}
+
+async function cmdTaskDirList(ws: ServerWebSocket<WsData>, id: number) {
+  sendOk(ws, id, { root: TASK_DIR_ROOT, dirs: await listTaskDirs(TASK_DIR_ROOT) })
+}
+
+async function cmdTaskDirRemove(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  const ids = Array.isArray(cmd.taskIds) ? cmd.taskIds : []
+  const busy = (dir: string, taskId: string) => [...sessions.values()].some((s) =>
+    !s.exitedAt && (s.spawnInfo?.task === taskId || (typeof s.cwd === 'string' && (s.cwd === dir || s.cwd.startsWith(dir + path.sep)))))
+  try {
+    const result = await removeTaskDirs(TASK_DIR_ROOT, ids, { busy })
+    if (result.removed.length > 0 || result.kept.length > 0) logMsg('info', 'task dirs swept', { removed: result.removed, kept: result.kept })
+    sendOk(ws, id, result)
+  } catch (err) {
+    sendError(ws, id, 'taskdir.remove failed: ' + (err as Error).message)
+  }
+}
+
 async function cmdAcpStart(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
   const params = cmd as unknown as AcpStartParams
   if (!params.sid || !params.cwd) return sendError(ws, id, 'acpStart: missing sid/cwd')
@@ -4712,10 +4752,14 @@ async function cmdAcpStart(ws: ServerWebSocket<WsData>, id: number, cmd: Record<
   // shim dir, so those are injected here, not hub-side. PATH is overridden (not
   // appended in-shell like the native spawn) because ACP workers don't run
   // through the RC-sourcing shell wrapper.
+  const taskDir = ensureTaskDir(TASK_DIR_ROOT, (cmd as { taskId?: unknown }).taskId, (cmd as { home?: unknown }).home)
   params.env = {
     ...params.env,
     WALNUT_AGENT_SOCKET: GATEWAY_SOCK_PATH,
     PATH: (process.env.PATH || '') + path.delimiter + GATEWAY_SHIM_DIR,
+    // The task's durable working directory, as for the native spawn (task-dir-core.ts);
+    // '' unsets one this daemon inherited (mergeAcpSpawnEnv drops empty values).
+    WALNUT_TASK_DIR: taskDir ?? '',
   }
   return sessionStartGate.run(params.sid, async () => {
     if (!params.providerSessionId && fs.existsSync(cancelledStartPath(params.sid))) throw new Error('Initial start was cancelled; retry task_start on the same task')
@@ -4986,6 +5030,12 @@ async function startSessionProcess(cmd: Record<string, unknown>, isCurrent?: () 
   // journaled from its init line (the tailer below).
   const spawnInfo = spawnInfoFor(args, cwd, !!resume, (cmd as Record<string, unknown>).origin)
   appendSpawnJournal(namedSessionId(args), spawnInfo)
+  // The task's durable working directory: made here, on the host the session
+  // runs on, and handed to the CLI as WALNUT_TASK_DIR. A supervision respawn
+  // carries no origin, so the task comes from the resume record.
+  // Keep in sync with daemon-source.ts.
+  const resumeRec = spawnInfo.task ? null : hostResume.recall(sid)
+  const taskDir = ensureTaskDir(TASK_DIR_ROOT, spawnInfo.task ?? resumeRec?.task, spawnInfo.home ?? resumeRec?.home)
 
   const pipePath = path.join(STREAMS_DIR, sid + '.pipe')
   const jsonlPath = path.join(STREAMS_DIR, sid + '.jsonl')
@@ -5110,6 +5160,9 @@ async function startSessionProcess(cmd: Record<string, unknown>, isCurrent?: () 
       // current sid on every request. Keep in sync with daemon-source.ts.
       WALNUT_AGENT_SOCKET: GATEWAY_SOCK_PATH,
       WALNUT_SESSION_ID: sid,
+      // Unset when the task has none, so a value this daemon inherited (it was
+      // started from inside a session) never names another task's directory.
+      WALNUT_TASK_DIR: taskDir ?? undefined,
       // Never let OUR watchdog pid leak into the CLI's env. A CLI session that
       // runs `npm run dev:prod` would otherwise hand this stale pid to the
       // PRODUCTION daemon, whose watchdog would trip on the long-dead pid and

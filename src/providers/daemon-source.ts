@@ -210,7 +210,7 @@ export function getDaemonSource(): string {
   // external-scan-core.cjs, path-resolve-core.cjs) and daemonCapabilities() in
   // the template adds the capability back at runtime only when that sidecar
   // actually loads.
-  const SIDECAR_GATED_CAPABILITIES = new Set(['changes-v1', 'external-scan-v1', 'external-scan-filter-v1', 'external-describe-v1', 'external-human-v1', 'path-resolve-v1', 'vscode-v1', 'rewind-probe-v1', 'triggers-v1', 'trigger-claim-v1', 'trigger-host-resume-v1', 'offline-triggers-v1', 'clock-routine-v1', 'clock-host-start-v1', 'acp-model-catalog-v1', 'usage-scan-v1', 'session-cost-v1', 'budget-v2'])
+  const SIDECAR_GATED_CAPABILITIES = new Set(['changes-v1', 'external-scan-v1', 'external-scan-filter-v1', 'external-describe-v1', 'external-human-v1', 'path-resolve-v1', 'task-dir-v1', 'vscode-v1', 'rewind-probe-v1', 'triggers-v1', 'trigger-claim-v1', 'trigger-host-resume-v1', 'offline-triggers-v1', 'clock-routine-v1', 'clock-host-start-v1', 'acp-model-catalog-v1', 'usage-scan-v1', 'session-cost-v1', 'budget-v2'])
   const capsLiteral = JSON.stringify(
     [...ADVERTISED_DAEMON_CAPABILITIES].filter((c) => !SIDECAR_GATED_CAPABILITIES.has(c)),
   )
@@ -3320,6 +3320,10 @@ function dispatchCommand(ws, id, cmd) {
     case 'fs.find': return cmdFsFind(ws, id, cmd);
     case 'fs.stat': return cmdFsStat(ws, id, cmd);
     case 'fs.resolvePath': return cmdFsResolvePath(ws, id, cmd);
+    // Task directories (task-dir-v1); not bridge-reachable. Mirrors daemon-standalone.ts.
+    case 'taskdir.ensure': return cmdTaskDirEnsure(ws, id, cmd);
+    case 'taskdir.list': return cmdTaskDirList(ws, id);
+    case 'taskdir.remove': return cmdTaskDirRemove(ws, id, cmd);
     case 'fs.grep': return cmdFsGrep(ws, id, cmd);
     // NOT in BRIDGE_ALLOWED_COMMANDS: starts a process — only the trusted
     // SSH-tunneled walnut socket may ask, never the public cloud bridge.
@@ -3547,6 +3551,7 @@ function dispatchCommand(ws, id, cmd) {
       startedAt: DAEMON_START_TS,
       uptimeSec: Math.floor((Date.now() - DAEMON_START_TS) / 1000),
       runtime: DAEMON_RUNTIME,
+      ...(TASK_DIR_ROOT ? { taskDirRoot: TASK_DIR_ROOT } : {}),
     });
     case 'logs.tail': return cmdLogsTail(ws, id, cmd);
     default: return sendError(ws, id, 'unknown command: ' + cmd.cmd);
@@ -5665,10 +5670,11 @@ async function cmdAcpStart(ws, id, cmd) {
   }
   // Agent gateway: the same wiring a native claude spawn gets (the socket, and
   // the walnut shim on PATH), because ACP workers never go through cmdStart.
+  const acpTaskDir = ensureTaskDirFor(cmd.taskId, cmd.home);
   params.env = Object.assign({}, params.env, {
     WALNUT_AGENT_SOCKET: GATEWAY_SOCK_PATH,
     PATH: (process.env.PATH || '') + path.delimiter + GATEWAY_SHIM_DIR,
-  });
+  }, { WALNUT_TASK_DIR: acpTaskDir || '' });
   return sessionStartGate.run(params.sid, async function () {
     if (!params.providerSessionId && fs.existsSync(cancelledStartPath(params.sid))) throw new Error('Initial start was cancelled; retry task_start on the same task');
     const resp = await acp.acpStart(ws, params);
@@ -5935,6 +5941,11 @@ async function startSessionProcess(cmd, isCurrent, canStart) {
   // journaled from its init line (the tailer below).
   const spawnInfo = spawnInfoFor(args, cwd, !!resume, cmd.origin);
   appendSpawnJournal(namedSessionId(args), spawnInfo);
+  // The task's durable working directory (WALNUT_TASK_DIR). A supervision
+  // respawn carries no origin, so the task comes from the resume record.
+  // Mirrors daemon-standalone.ts.
+  const resumeRec = spawnInfo.task ? null : hostResume.recall(sid);
+  const taskDir = ensureTaskDirFor(spawnInfo.task || (resumeRec && resumeRec.task), spawnInfo.home || (resumeRec && resumeRec.home));
 
   const pipePath = path.join(STREAMS_DIR, sid + '.pipe');
   const jsonlPath = path.join(STREAMS_DIR, sid + '.jsonl');
@@ -6037,6 +6048,9 @@ async function startSessionProcess(cmd, isCurrent, canStart) {
       // Keep in sync with daemon-standalone.ts.
       WALNUT_AGENT_SOCKET: GATEWAY_SOCK_PATH,
       WALNUT_SESSION_ID: sid,
+      // Unset when the task has none, so an inherited value never names another
+      // task's directory. Keep in sync with daemon-standalone.ts.
+      WALNUT_TASK_DIR: taskDir || undefined,
       PATH: (launch.nodeDir ? launch.nodeDir + ':' : '') + (process.env.PATH || '') + ':' + GATEWAY_SHIM_DIR,
       // Never let OUR watchdog pid leak into the CLI's env — a CLI session that
       // runs a dev:prod deploy would hand this stale pid to the PRODUCTION
@@ -11051,6 +11065,18 @@ try { externalScanCore = require(path.join(__dirname, 'external-scan-core.cjs'))
 let pathResolveCore = null;
 try { pathResolveCore = require(path.join(__dirname, 'path-resolve-core.cjs')); } catch (err) { pathResolveCore = null; }
 
+// Task directories sidecar (task-dir-core.cjs): each task's durable working
+// directory on this host. 'task-dir-v1' is advertised only when the load
+// succeeds; without it sessions start with no WALNUT_TASK_DIR, as before.
+// Mirrors daemon-standalone.ts.
+let taskDirCore = null;
+try { taskDirCore = require(path.join(__dirname, 'task-dir-core.cjs')); } catch (err) { taskDirCore = null; }
+const TASK_DIR_ROOT = taskDirCore ? taskDirCore.taskDirRoot(process.env, HOME_DIR) : null;
+function ensureTaskDirFor(taskId, home) {
+  if (!taskDirCore || !TASK_DIR_ROOT) return null;
+  try { return taskDirCore.ensureTaskDir(TASK_DIR_ROOT, taskId, home); } catch (err) { return null; }
+}
+
 // Embedded VS Code sidecar (vscode-server-core.cjs) — same sidecar rationale:
 // the install/spawn/health pipeline can't live in this template. 'vscode-v1'
 // is advertised only when the load succeeds; without it the web UI degrades
@@ -11131,6 +11157,7 @@ function daemonCapabilities() {
   if (externalScanCore && externalScanCore.describeExternalSessions) caps.push('external-describe-v1');
   if (externalScanCore && externalScanCore.isHumanStartedClaude) caps.push('external-human-v1');
   if (pathResolveCore) caps.push('path-resolve-v1');
+  if (taskDirCore) caps.push('task-dir-v1');
   if (vscodeServerCore) caps.push('vscode-v1');
   if (transcriptRewindCore) caps.push('rewind-probe-v1');
   if (triggerCheckCore) caps.push('triggers-v1');
@@ -11147,6 +11174,39 @@ function daemonCapabilities() {
   // stops carrying it.
   if (caps.indexOf('grep-v1') === -1) caps.push('grep-v1');
   return caps;
+}
+
+// Task directories: see cmdTaskDirEnsure in daemon-standalone.ts.
+function cmdTaskDirEnsure(ws, id, cmd) {
+  if (!taskDirCore) return sendError(ws, id, 'taskdir.ensure unsupported: task-dir-core sidecar not loaded');
+  const dir = ensureTaskDirFor(cmd.taskId, cmd.home);
+  if (!dir) return sendError(ws, id, 'taskdir.ensure: invalid taskId or the directory could not be made');
+  sendOk(ws, id, { path: dir, root: TASK_DIR_ROOT });
+}
+
+async function cmdTaskDirList(ws, id) {
+  if (!taskDirCore) return sendError(ws, id, 'taskdir.list unsupported: task-dir-core sidecar not loaded');
+  sendOk(ws, id, { root: TASK_DIR_ROOT, dirs: await taskDirCore.listTaskDirs(TASK_DIR_ROOT) });
+}
+
+async function cmdTaskDirRemove(ws, id, cmd) {
+  if (!taskDirCore) return sendError(ws, id, 'taskdir.remove unsupported: task-dir-core sidecar not loaded');
+  const ids = Array.isArray(cmd.taskIds) ? cmd.taskIds : [];
+  const busy = function (dir, taskId) {
+    for (const s of sessions.values()) {
+      if (s.exitedAt) continue;
+      if (s.spawnInfo && s.spawnInfo.task === taskId) return true;
+      if (typeof s.cwd === 'string' && (s.cwd === dir || s.cwd.startsWith(dir + path.sep))) return true;
+    }
+    return false;
+  };
+  try {
+    const result = await taskDirCore.removeTaskDirs(TASK_DIR_ROOT, ids, { busy: busy });
+    if (result.removed.length > 0 || result.kept.length > 0) logMsg('info', 'task dirs swept', { removed: result.removed, kept: result.kept });
+    sendOk(ws, id, result);
+  } catch (err) {
+    sendError(ws, id, 'taskdir.remove failed: ' + err.message);
+  }
 }
 
 // Resolve "whatever the model wrote" to a real path on THIS host. See

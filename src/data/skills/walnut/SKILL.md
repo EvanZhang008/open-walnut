@@ -187,6 +187,7 @@ Prefer the named operations below. Their schemas are the current source of truth
 | `request_get` | Read a reply-request status (read) | id (string): Request id returned by task_create, task_start, or task_send |
 | `app_state` | What the App beside you shows (read) | (none) |
 | `open_items` | What is still open for your task (read) | hook? (compact): Set by Walnut's post-compaction hook: answer in the JSON shape a Claude Code SessionStart hook prints |
+| `task_dir` | Your task directory (read) | (none) |
 | `skill_read` | Read a Walnut skill (read) | dirName (string): Skill directory name |
 | `project_metadata_get` | Get project settings (read) | name (string): Project name; Inbox has no metadata row |
 | `project_metadata_update` | Update project settings (write, primary-only) | name (string): Project name; Inbox has no metadata row; default_cwd? (string\|null): Absolute default working directory; null clears it; default_host? (string\|null): Default execution host alias; null clears it |
@@ -563,6 +564,25 @@ answer into the same thread:
 ```bash
 walnut tools call human_inbox_reply '{"letter":"<letter-id>","text":"..."}'
 ```
+
+## Where your work lives
+
+Your task has its own directory on the host your session runs on, in
+`$WALNUT_TASK_DIR` (your prompt names the path; `walnut tools call task_dir` makes
+it and prints it when the variable is empty). It survives reboots. `/tmp` and the
+OS temp dir do not: they are emptied at every boot and swept between boots.
+
+- **In the task directory:** temporary clones and worktrees, unmerged commits,
+  candidate builds, evidence and reports. Name things by purpose
+  (`$WALNUT_TASK_DIR/<repo>`, `$WALNUT_TASK_DIR/evidence/`) and remove what you no
+  longer need when you finish.
+- **In /tmp:** only what you can lose: screenshots, one-off scratch output,
+  builds you can rebuild.
+- Walnut removes the directory some days after the task completes, never while a
+  repo in it holds changes or commits that exist nowhere else. A result someone
+  needs later belongs in a merged commit, the task's note or summary, or a note.
+- A `git clone`, `git worktree add` or `git commit` in a temp directory is refused,
+  with the task directory named in the refusal.
 
 ## Safety
 

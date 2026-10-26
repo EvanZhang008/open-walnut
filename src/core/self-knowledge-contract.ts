@@ -1,6 +1,7 @@
 import { PHASE_ORDER } from './phase.js';
 import type { TaskPhase } from './types.js';
 import { TEAM_CHARTER } from './team-charter.js';
+import { WORK_PLACE_RULE } from './work-place.js';
 import { TASK_ROUTING_CONTRACT } from './task-routing-contract.js';
 
 // Budget for the whole bootstrap prompt. Raised from 1,800 when the task board
@@ -30,7 +31,12 @@ import { TASK_ROUTING_CONTRACT } from './task-routing-contract.js';
 // Raised to 6,850 the same day for the task routing rules (task-routing-contract.ts):
 // the dispatcher decides new task vs continue on its first call, and the same text
 // rides the Main and lead prompts. It renders 6,687 characters with both.
-export const SELF_KNOWLEDGE_PROMPT_MAX_CHARS = 6_850;
+//
+// Raised to 7,900 on 2026-10-25 for where work lives (work-place.ts): a restart
+// emptied /tmp and took clones, an unmerged commit and evidence with it, so where
+// a clone or a report goes is decided before the first command that makes one.
+// It renders 7,726 characters with it.
+export const SELF_KNOWLEDGE_PROMPT_MAX_CHARS = 7_900;
 
 // The phase LIST comes from PHASE_ORDER, so adding or removing a phase updates
 // this prompt with no second edit. The phases the prompt names are typed
@@ -59,6 +65,8 @@ const SELF_KNOWLEDGE_PROMPT = `## Walnut operating contract
 - Parked (tier \`wait\`): set aside for now, someday work or work waiting on something.
 - Unpinned: not due within a month; search brings it back.
 - Create tasks in Satellite and groom the tier later; do not leave new work off the board.
+
+${WORK_PLACE_RULE}
 
 ${TEAM_CHARTER}`;
 

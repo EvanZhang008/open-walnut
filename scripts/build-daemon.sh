@@ -84,6 +84,8 @@ SOURCES=(
   src/core/usage/session-cost-pricing.ts
   src/providers/external-session-scan-core.ts
   src/providers/path-resolve-core.ts
+  src/providers/task-dir-core.ts
+  src/lib/task-dir.ts
   src/providers/search-grep-core.ts
   src/providers/vscode-server-core.ts
   src/providers/transcript-rewind-core.ts
@@ -251,6 +253,12 @@ echo "$VERSION" > "$OUTDIR/acp-worker.js.version"
 "$BUN" build --minify --target=node --format=cjs \
   --outfile "$OUTDIR/path-resolve-core.cjs" \
   src/providers/path-resolve-core.ts
+
+# Task directories sidecar: the repo checks before a removal run git, which the
+# source template does not carry; 'task-dir-v1' is advertised only when it loads.
+"$BUN" build --minify --target=node --format=cjs \
+  --outfile "$OUTDIR/task-dir-core.cjs" \
+  src/providers/task-dir-core.ts
 
 # Embedded VS Code sidecar — same rationale: install/spawn/health pipeline
 # can't live in the source template; 'vscode-v1' is advertised only when the

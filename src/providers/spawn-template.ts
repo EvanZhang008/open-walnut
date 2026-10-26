@@ -16,7 +16,7 @@
  */
 
 import type { AgentTools, EffortRules, SpawnTemplate } from './host-start-core.js'
-import { compactOpenItemsHooks } from './compact-open-items-hook.js'
+import { sessionSettingsHooks } from './session-settings-hooks.js'
 import { walnutApiEnvForSession } from '../lib/self-api-root.js'
 import {
   DEFAULT_SESSION_MODE, MODEL_EFFORT_FAMILY_DEFAULTS, MODEL_EFFORT_OVERRIDES, SESSION_EFFORT_IDS, SESSION_MODELS,
@@ -113,7 +113,7 @@ export function buildHostSpawnTemplate(i: SpawnTemplateInputs): SpawnTemplate {
   const sessionSettings: Record<string, unknown> = {}
   const walnutEnv = walnutApiEnvForSession(i.hostKey)
   if (Object.keys(walnutEnv).length > 0) sessionSettings.env = walnutEnv
-  const hooks = compactOpenItemsHooks(env)
+  const hooks = sessionSettingsHooks(env)
   if (hooks) sessionSettings.hooks = hooks
   if (Object.keys(sessionSettings).length > 0) argv.push('--settings', JSON.stringify(sessionSettings))
   argv.push('--input-format', 'stream-json')

@@ -52,7 +52,7 @@ One simulator uploads under **several names** (its simctl display name *and* the
 
 ## Journal
 
-`/tmp/walnut-robot/<epoch>-seed<seed>/`
+`<evidence>/walnut-robot/<epoch>-seed<seed>/`, where `<evidence>` is `$WALNUT_TASK_DIR/evidence` inside a Walnut task session and `~/.local/state/open-walnut/evidence` otherwise (`scripts/lib/evidence-dir.mjs`; not `/tmp`, which a reboot empties)
 
 | File | What |
 |---|---|
@@ -71,7 +71,7 @@ Two levels, cheapest first:
 ```bash
 CLI=~/.claude/skills/maestro-as-cli/scripts/maestro
 echo '{}' > ~/.maestro/device_locks.json          # always, before every CLI call
-"$CLI" tools call run-flow-files "$(jq -n --arg d "<udid>" --arg f "/tmp/walnut-robot/<dir>/replay.yaml" \
+"$CLI" tools call run-flow-files "$(jq -n --arg d "<udid>" --arg f "<evidence>/walnut-robot/<dir>/replay.yaml" \
   '{device_id:$d, flow_files:[$f]}')"
 ```
 

@@ -315,7 +315,10 @@ describe('buildSessionContext (identity note)', () => {
     // 5400 → 5800 (2026-10-24) for the no-action line: a turn that needs nothing
     // from the user ends with one fixed line, and the panel folds that answer. 5,681.
     // 2026-10-25: reworded as the agent acknowledgement line (agent messages only).
-    expect(systemPrompt.length).toBeLessThan(5800)
+    // 5800 → 6850 (2026-10-25) for where work lives (work-place.ts): a restart
+    // emptied /tmp and took clones, an unmerged commit and evidence with it; where
+    // a clone goes is decided before the first command that makes one. 6,705.
+    expect(systemPrompt.length).toBeLessThan(6850)
   })
 
   it('asks for the agent acknowledgement line alone, only for agent messages, never after words', async () => {

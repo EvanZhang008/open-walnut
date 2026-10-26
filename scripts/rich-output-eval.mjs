@@ -15,7 +15,7 @@
  *   ... --dump-strings > /tmp/x/before.json                                  save the current wording
  *   ... --strings /tmp/x/before.json --json /tmp/x/before-report.json        judge another wording
  *   ... --compare /tmp/x/before-report.json                                  paired diff against a report
- *   ... --rescore /tmp/rich-output-eval/<run>                                rescore saved replies, no model calls
+ *   ... --rescore <evidence>/rich-output-eval/<run>                              rescore saved replies, no model calls
  *
  * Every call is a real `claude -p` turn (tools off, run in an empty directory),
  * so a full run costs a few dollars; use --case/--family while iterating.
@@ -28,6 +28,7 @@ import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { scoreReply } from './lib/rich-output-score.mjs';
+import { evidenceDir } from './lib/evidence-dir.mjs';
 
 const require = createRequire(import.meta.url);
 const yaml = require('js-yaml');
@@ -164,7 +165,8 @@ async function main() {
   let dir = opts.rescore;
   if (!dir) {
     const strings = opts.strings ? JSON.parse(fs.readFileSync(opts.strings, 'utf8')) : await currentStrings();
-    dir = opts.out ?? path.join(os.tmpdir(), 'rich-output-eval', new Date().toISOString().replace(/[:.]/g, '-'));
+    // Kept for --rescore / --compare later, so not in /tmp (scripts/lib/evidence-dir.mjs).
+    dir = opts.out ?? evidenceDir(path.join('rich-output-eval', new Date().toISOString().replace(/[:.]/g, '-')));
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(path.join(dir, 'strings.json'), JSON.stringify(strings, null, 2));
     // An empty working directory keeps the repo's own instructions out of the turn.

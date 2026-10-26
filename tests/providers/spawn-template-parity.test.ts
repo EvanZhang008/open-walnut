@@ -71,7 +71,8 @@ const CASES: Case[] = [
   { name: 'defaults: Auto model, the host default mode, debug and the compact hook on', sid: '11111111-2222-4333-8444-555555555551', env: {} },
   { name: 'plan, opus, low effort', sid: '11111111-2222-4333-8444-555555555552', mode: 'plan', model: 'opus', effort: 'low', env: {} },
   { name: 'haiku with an effort', sid: '11111111-2222-4333-8444-555555555553', model: 'haiku', effort: 'high', env: {} },
-  { name: 'debug off, compact hook off (no --settings at all)', sid: '11111111-2222-4333-8444-555555555554', model: 'sonnet-1m', env: { WALNUT_CLAUDE_DEBUG: '0', WALNUT_COMPACT_OPEN_ITEMS: '0' } },
+  { name: 'debug off, compact hook and /tmp git guard off (no --settings at all)', sid: '11111111-2222-4333-8444-555555555554', model: 'sonnet-1m', env: { WALNUT_CLAUDE_DEBUG: '0', WALNUT_COMPACT_OPEN_ITEMS: '0', WALNUT_TMP_GIT_GUARD: '0' } },
+  { name: 'the /tmp git guard alone (compact hook off)', sid: '11111111-2222-4333-8444-55555555555a', env: { WALNUT_COMPACT_OPEN_ITEMS: '0' } },
   { name: 'no partial messages, no permission prompt tool', sid: '11111111-2222-4333-8444-555555555555', env: {}, streamPartial: false, permissionPrompt: false },
   { name: 'bypass allowed for this Walnut', sid: '11111111-2222-4333-8444-555555555556', mode: 'bypass', model: 'fable-1m', effort: 'max', env: {}, bypassAllowed: true },
   { name: 'a host catalog model value outside the picker, with an effort', sid: '11111111-2222-4333-8444-555555555557', model: 'global.anthropic.claude-fable-5[1m]', effort: 'high', env: {} },
@@ -95,6 +96,7 @@ describe('a filled template equals what claude-code-session.ts builds', () => {
       for (const [k, v] of Object.entries(c.env)) process.env[k] = v
       if (!('WALNUT_CLAUDE_DEBUG' in c.env)) delete process.env.WALNUT_CLAUDE_DEBUG
       if (!('WALNUT_COMPACT_OPEN_ITEMS' in c.env)) delete process.env.WALNUT_COMPACT_OPEN_ITEMS
+      if (!('WALNUT_TMP_GIT_GUARD' in c.env)) delete process.env.WALNUT_TMP_GIT_GUARD
       const hs = createHostStart({ fs, path, dir, keyOf: () => 'k', now: () => 1, log: () => {}, busy: () => 0 })
       hs.setTemplate(HOME, buildHostSpawnTemplate({
         home: HOME, hostKey: 'marina', cwd: dir, env: { ...process.env },
@@ -126,11 +128,12 @@ describe('a filled template equals what claude-code-session.ts builds', () => {
       expect(payload.mode).toBe(filled.plan.mode)
 
       const settingsAt = built.indexOf('--settings')
-      if (c.env.WALNUT_COMPACT_OPEN_ITEMS === '0') {
+      if (c.env.WALNUT_COMPACT_OPEN_ITEMS === '0' && c.env.WALNUT_TMP_GIT_GUARD === '0') {
         expect(settingsAt).toBe(-1)
       } else {
-        const settings = JSON.parse(built[settingsAt + 1]) as { env?: unknown; hooks?: { SessionStart?: Array<{ matcher: string }> } }
-        expect(settings.hooks?.SessionStart?.[0]?.matcher).toBe('compact')
+        const settings = JSON.parse(built[settingsAt + 1]) as { env?: unknown; hooks?: { SessionStart?: Array<{ matcher: string }>; PreToolUse?: Array<{ matcher: string }> } }
+        expect(settings.hooks?.SessionStart?.[0]?.matcher).toBe(c.env.WALNUT_COMPACT_OPEN_ITEMS === '0' ? undefined : 'compact')
+        expect(settings.hooks?.PreToolUse?.[0]?.matcher).toBe(c.env.WALNUT_TMP_GIT_GUARD === '0' ? undefined : 'Bash')
         // A remote host's session never carries the Mac's API root.
         expect(settings.env).toBeUndefined()
       }

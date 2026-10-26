@@ -616,6 +616,8 @@ export class DaemonConnection {
   private _remoteHome: string | null = null
   /** The runtime the connected daemon runs on (null until a probe or start tells). */
   private _runtime: RemoteRuntime | 'unknown' | null = null
+  /** Where this host keeps task directories (hello `taskDirRoot`, task-dir-v1); null before. */
+  private _taskDirRoot: string | null = null
   /** Why a bun install failed on this connect, carried into the final error. */
   private _bunInstallNote: string | null = null
   /**
@@ -750,6 +752,7 @@ export class DaemonConnection {
   /** 'snapshot-v1' shorthand — the C2 intake gate (contract §5). */
   get supportsSnapshots(): boolean { return this.hasCapability('snapshot-v1') }
   get daemonInstanceId(): string | null { return this._daemonInstanceId }
+  get taskDirRoot(): string | null { return this._taskDirRoot }
   get daemonStartedAt(): number | null { return this._daemonStartedAt }
   /** Last bridge.configure reply's connected flag (null = never pushed / bridge disabled). */
   get lastBridgeConnected(): boolean | null { return this._lastBridgeConnected }
@@ -3217,6 +3220,7 @@ export class DaemonConnection {
       // What actually runs the daemon (bun, the prebuilt binary, node): the pid
       // files cannot tell a bun-run daemon from the binary, the daemon can.
       if (res.runtime === 'bun' || res.runtime === 'binary' || res.runtime === 'node') this._runtime = res.runtime
+      this._taskDirRoot = typeof res.taskDirRoot === 'string' && res.taskDirRoot.startsWith('/') ? res.taskDirRoot : null
       const startup = (res.cronSupervision as { startup?: unknown } | undefined)?.startup
       this._daemonStartup = typeof startup === 'string' && ['boot', 'login', 'on-demand', 'service'].includes(startup) ? startup : 'on-demand'
       const missing = REQUIRED_DAEMON_CAPABILITIES.filter(c => !caps.includes(c))
@@ -3792,7 +3796,7 @@ export class DaemonConnection {
       // Best-effort per file — a missing sidecar (npm-package install without
       // dist/daemon-binaries) just means that host keeps the server-side
       // fallback (changes) or reports no external sessions (external-scan).
-      for (const sidecarFile of ['changes-core.cjs', 'usage-core.cjs', 'external-scan-core.cjs', 'path-resolve-core.cjs', 'vscode-server-core.cjs', 'transcript-rewind-core.cjs', 'daemon-cron-runtime.cjs', 'daemon-instance-lock.cjs', 'daemon-service-cli.cjs', 'trigger-check-core.cjs']) {
+      for (const sidecarFile of ['changes-core.cjs', 'usage-core.cjs', 'external-scan-core.cjs', 'path-resolve-core.cjs', 'task-dir-core.cjs', 'vscode-server-core.cjs', 'transcript-rewind-core.cjs', 'daemon-cron-runtime.cjs', 'daemon-instance-lock.cjs', 'daemon-service-cli.cjs', 'trigger-check-core.cjs']) {
         try {
           const sidecar = fs.readFileSync(path.join(DAEMON_BINARIES_DIR, sidecarFile), 'utf-8')
           const scArgs = [...this.baseSshArgs, this.sshHostString, markedUploadCommand(`${dir}/${sidecarFile}`)]

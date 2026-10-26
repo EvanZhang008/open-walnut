@@ -69,6 +69,10 @@ process.env.WALNUT_TEST_HOST_FIXTURE_DIR ??= path.resolve(path.dirname(new URL(i
 // SSH aliases and can even project unrelated ~/.claude journals.
 process.env.HOME = tmpBase
 process.env.USERPROFILE = tmpBase
+// Task directories follow XDG_STATE_HOME before HOME (src/lib/task-dir.ts), so
+// point the root into the fixture explicitly, and drop the developer session's own.
+process.env.WALNUT_TASK_DIR_ROOT = path.join(tmpBase, 'task-dirs')
+delete process.env.WALNUT_TASK_DIR
 // Register the fixture-only cloud-setup provisioning driver so the Cloud
 // Companion wizard spec can start a REAL job (real state machine, real SSE) that
 // parks at `provision` instead of deploying anything. See providers/fake.ts.

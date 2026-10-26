@@ -26,7 +26,7 @@
 #   linux    EC2 (Amazon Linux 2023 / Ubuntu 24.04), reached only through SSM.
 #   mac-ec2  EC2 mac2.metal; needs Mac-host eligibility on the account and bills 24h min.
 #
-# Artifacts: /tmp/walnut-onboarding-test/<run-id>/{report.md,steps.jsonl,logs/,first-run-*.png,onboarding-*.mp4}
+# Artifacts: <evidence>/walnut-onboarding-test/<run-id>/{report.md,steps.jsonl,logs/,first-run-*.png,onboarding-*.mp4} (scripts/lib/evidence-dir.sh)
 
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

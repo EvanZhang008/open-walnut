@@ -148,6 +148,7 @@ launch() {
     WALNUT_DISABLE_SEARCH=1 \
     OPEN_WALNUT_HOME="$ROOT/.open-walnut" \
     WALNUT_DAEMON_DIR="$ROOT/daemon" \
+    WALNUT_TASK_DIR_ROOT="$ROOT/task-dirs" \
     "$@" \
     node "$HERE/dist/cli.js" web --port "$PORT" > "$LOG" 2>&1 &
   echo $! > "$PID_FILE"; disown

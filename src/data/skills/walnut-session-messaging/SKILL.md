@@ -94,7 +94,7 @@ The import fix is done and on prod. Two of the 312 tests fail. Both pass when ru
 alone, so I think they are timing flakes, but I have not proven it.
 You decide: ship as is (my recommendation) or wait one day while I make them stable.
 Next: once you answer, I either close the task or fix the two tests.
-Logs: /tmp/import-fix/test-run.log
+Logs: ~/.local/state/open-walnut/tasks/<task id>/evidence/test-run.log
 ```
 
 ## How a message arrives

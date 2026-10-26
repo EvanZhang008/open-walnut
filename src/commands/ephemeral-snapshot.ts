@@ -281,8 +281,14 @@ export function ephemeralChildEnv(
   snapshotDir: string,
   runtimeDir: string,
 ): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { ...parentEnv, OPEN_WALNUT_HOME: snapshotDir, WALNUT_DAEMON_DIR: runtimeDir }
+  const env: NodeJS.ProcessEnv = {
+    ...parentEnv, OPEN_WALNUT_HOME: snapshotDir, WALNUT_DAEMON_DIR: runtimeDir,
+    // Its sessions' task directories stay inside its own runtime dir, removed with it,
+    // so a test never writes into the real ones (src/lib/task-dir.ts).
+    WALNUT_TASK_DIR_ROOT: path.join(runtimeDir, 'task-dirs'),
+  }
   for (const key of [
+    'WALNUT_TASK_DIR',
     'WALNUT_STREAMS_DIR',
     'WALNUT_LEGACY_STREAMS_DIR',
     'WALNUT_FORCE_STREAMS_MIGRATION',

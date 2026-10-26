@@ -795,7 +795,13 @@ for old_stage in "$STAGE_ROOT"/open-walnut-stage.*; do
 done
 
 # Rollback source: a dist snapshot taken only AFTER a deploy passes readiness.
-LKG_DIR="${WALNUT_DEVPROD_LKG_DIR:-${TMPDIR:-/tmp}/open-walnut-lkg}"
+# It is kept off the temp dir (2026-10-25: a restart emptied /tmp, and the first
+# deploy after a reboot had nothing to roll back to); rollback_to_lkg stages a
+# copy on the temp volume before it boots one, for the scanner reason above.
+# The old temp location is still read until the first snapshot lands here.
+LKG_DIR="${WALNUT_DEVPROD_LKG_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/open-walnut/open-walnut-lkg}"
+LKG_LEGACY_DIR="${TMPDIR:-/tmp}"
+LKG_LEGACY_DIR="${LKG_LEGACY_DIR%/}/open-walnut-lkg"
 
 # One launchd job for the given cli.js. launchd gives jobs a minimal PATH
 # (/usr/bin:/bin:...) — pass the caller's full PATH through so child tools
@@ -1050,16 +1056,35 @@ stop_new_server() {
 # that passed readiness. If the rollback server is slow, it is left running
 # (launchd KeepAlive / nohup) rather than killed — availability wins.
 rollback_to_lkg() {
-  if [[ -f "$LKG_DIR/dist/cli.js" ]]; then
-    echo "Rolling back to last-known-good dist: $LKG_DIR/dist" >&2
-    launch_server "$LKG_DIR/dist/cli.js"
+  local lkg="$LKG_DIR"
+  if [[ ! -f "$lkg/dist/cli.js" && -z "${WALNUT_DEVPROD_LKG_DIR:-}" && -f "$LKG_LEGACY_DIR/dist/cli.js" ]]; then
+    lkg="$LKG_LEGACY_DIR"
+  fi
+  if [[ -f "$lkg/dist/cli.js" ]]; then
+    echo "Rolling back to last-known-good dist: $lkg/dist" >&2
+    # Boot from a staged copy on the temp volume (see STAGE_ROOT); the snapshot
+    # itself stays put. A failed copy boots the snapshot where it is.
+    local from="$lkg"
+    local rb="$STAGE_ROOT/open-walnut-stage.$(date +%s).$$.lkg"
+    if mkdir -p "$rb" 2>/dev/null; then
+      local staged=0
+      if [[ "$(uname -s)" == "Darwin" ]] && cp -Rc "$lkg/dist" "$rb/dist" 2>/dev/null; then staged=1; fi
+      if [[ "$staged" == 0 ]]; then
+        rm -rf "$rb/dist" 2>/dev/null || true
+        if cp -R "$lkg/dist" "$rb/dist" 2>/dev/null; then staged=1; fi
+      fi
+      if [[ "$staged" == 1 ]] && ln -sfn "$SERVE_ROOT/node_modules" "$rb/node_modules" && cp "$lkg/package.json" "$rb/package.json"; then
+        from="$rb"
+      fi
+    fi
+    launch_server "$from/dist/cli.js"
     if wait_for_config_ready 90; then
       echo "Rollback server is serving on :$PORT (this deploy itself still failed)." >&2
     else
       echo "Rollback server not ready after 90s; left running in case it settles late." >&2
     fi
   else
-    echo "No last-known-good dist at $LKG_DIR; :$PORT is left unserved." >&2
+    echo "No last-known-good dist at $lkg; :$PORT is left unserved." >&2
   fi
 }
 

@@ -36,8 +36,13 @@ if [ "$PORT" = "3456" ]; then
   exit 1
 fi
 
+# WORK is kept after the run (the ingested file is the evidence), so not in /tmp.
+. "$(dirname "$0")/lib/evidence-dir.sh"
 RUN_ID="$(date +%s)"
-WORK="/tmp/ios-client-log-e2e-$RUN_ID"
+WORK="$(walnut_evidence_dir "ios-client-log-e2e-$RUN_ID")"
+# The app build is rebuildable scratch (GBs), so it stays in the temp dir and goes with the run.
+DD="${TMPDIR:-/tmp}"
+DD="${DD%/}/ios-client-log-e2e-dd-$RUN_ID"
 HOME_DIR="$WORK/home"
 LOG_DIR="$WORK/logs"
 PROBE_DEVICE="e2e-probe-$RUN_ID"
@@ -57,7 +62,8 @@ cleanup() {
   local listener
   listener="$(lsof -ti:"$PORT" -sTCP:LISTEN 2>/dev/null)"
   [ -n "$listener" ] && kill -15 $listener 2>/dev/null
-  # WORK is kept on purpose: the ingested file is the evidence.
+  # WORK is kept on purpose: the ingested file is the evidence. The build is not.
+  rm -rf "$DD"
   echo "artifacts: $WORK"
 }
 trap cleanup EXIT
@@ -113,11 +119,11 @@ step "building the app (Debug — the probe hook is DEBUG-only)"
 (cd "$REPO/ios-native" && xcodegen generate >/dev/null 2>&1)
 (cd "$REPO/ios-native" && xcodebuild -scheme Walnut -configuration Debug \
   -destination "platform=iOS Simulator,name=$DEVICE_NAME" \
-  -derivedDataPath "$WORK/dd" build >"$WORK/xcodebuild.log" 2>&1) \
+  -derivedDataPath "$DD" build >"$WORK/xcodebuild.log" 2>&1) \
   || fail "app build failed (see $WORK/xcodebuild.log)"
 
-APP="$(find "$WORK/dd/Build/Products" -maxdepth 2 -name 'Walnut.app' -type d | head -1)"
-[ -n "$APP" ] || fail "no Walnut.app in $WORK/dd"
+APP="$(find "$DD/Build/Products" -maxdepth 2 -name 'Walnut.app' -type d | head -1)"
+[ -n "$APP" ] || fail "no Walnut.app in $DD"
 
 UDID="$(xcrun simctl list devices -j | python3 -c "
 import json,sys

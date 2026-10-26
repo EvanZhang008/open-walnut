@@ -125,7 +125,8 @@ wait "$NODE_PID"
 STATUS=$?
 trap - INT TERM
 
-LATEST="$(ls -dt /tmp/walnut-robot/*-seed"$SEED" 2>/dev/null | head -1)"
+. "$(dirname "$0")/../lib/evidence-dir.sh"
+LATEST="$(ls -dt "$(walnut_evidence_dir walnut-robot)"/*-seed"$SEED" 2>/dev/null | head -1)"
 if [ -n "$LATEST" ] && [ -f "$LATEST/summary.json" ]; then
   COUNT="$(jq '.anomalies | length' "$LATEST/summary.json" 2>/dev/null || echo "?")"
   STEPS="$(jq '.steps' "$LATEST/summary.json" 2>/dev/null || echo "?")"

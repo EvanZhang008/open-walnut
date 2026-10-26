@@ -110,7 +110,7 @@ describe('dev-prod.sh last-known-good rollback', () => {
     // The readiness timeout was the only path that rolled back; the other two
     // post-kill exits left :3456 dark with no rollback at all.
     const fn = indexOfOrFail('rollback_to_lkg() {')
-    expect(script.slice(fn)).toMatch(/launch_server "\$LKG_DIR\/dist\/cli\.js"/)
+    expect(script.slice(fn)).toMatch(/launch_server "\$from\/dist\/cli\.js"/)
     for (const marker of [
       'Server process exited before becoming ready.',
       'deployment aborted.',
@@ -167,5 +167,18 @@ describe('dev-prod.sh last-known-good rollback', () => {
     const check = indexOfOrFail('elif ! launchd_job_exists; then')
     const fallback = script.indexOf('use_launchd=0', check)
     expect(fallback).toBeGreaterThan(check)
+  })
+})
+
+describe('the rollback snapshot survives a reboot', () => {
+  const script = fs.readFileSync(path.resolve(__dirname, '../../scripts/dev-prod.sh'), 'utf-8')
+  it('lives off the temp dir by default, is booted from a staged temp copy, and the old temp one is still read', () => {
+    expect(script).toMatch(/^LKG_DIR="\$\{WALNUT_DEVPROD_LKG_DIR:-\$\{XDG_STATE_HOME:-\$HOME\/\.local\/state\}\/open-walnut\/open-walnut-lkg\}"$/m)
+    const fn = script.slice(script.indexOf('rollback_to_lkg() {'))
+    expect(fn).toMatch(/local rb="\$STAGE_ROOT\/open-walnut-stage\.\$\(date \+%s\)\.\$\$\.lkg"/)
+    expect(fn).toMatch(/lkg="\$LKG_LEGACY_DIR"/)
+    // The stray-server sweep still recognises both launch shapes.
+    expect(script).toContain('*"open-walnut-stage."*"/dist/cli.js"*')
+    expect(script).toContain('*"open-walnut-lkg/dist/cli.js"*')
   })
 })
