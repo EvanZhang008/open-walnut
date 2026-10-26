@@ -2,8 +2,9 @@
  * The org chart's cards, pure. Two levels, as an org chart reads:
  *
  *   Main (CEO)
- *   └ one VP per project by default: the project's own name, one line of status, how many
- *     things need the user. The user may put a project under another VP (drag it there):
+ *   └ one VP per project by default: the project's own name, its news in its tasks' own words
+ *     with its time (team-news.ts: what needs the user, else the newest status), its counts, and
+ *     how many things need the user. The user may put a project under another VP (drag it there):
  *     that VP's card then lists both projects, each still its own project.
  *
  * The cards are the Org page's channel rows (org-channels-model.ts), so the chart and the page
@@ -18,7 +19,12 @@ export interface VpProject {
   /** The project ('' is the Inbox). */
   project: string;
   name: string;
+  /** Its counts ("1 working · 3 waiting"). */
   line: string;
+  /** Its news (the row's latest line), when it was written (ms, 0 = unknown), and the task it is about. */
+  news: string;
+  newsAt: number;
+  newsTask?: string;
   needsYou: number;
   row: ChannelRow;
 }
@@ -31,6 +37,10 @@ export interface VpCard {
   /** 'VP' for a project; the Inbox is no one's team. */
   role: 'VP' | 'Inbox';
   line: string;
+  /** The card's news: its most urgent project's, else its newest. */
+  news: string;
+  newsAt: number;
+  newsTask?: string;
   needsYou: number;
   projects: VpProject[];
   row: ChannelRow;
@@ -46,7 +56,10 @@ export function vpLine(c: ChannelRow['counts']): string {
 }
 
 function projectOf(row: ChannelRow): VpProject {
-  return { key: row.key, project: row.project, name: row.project || 'Inbox', line: vpLine(row.counts), needsYou: row.needs, row };
+  return {
+    key: row.key, project: row.project, name: row.project || 'Inbox', line: vpLine(row.counts),
+    news: row.latest, newsAt: row.latestAt, ...(row.latestTask ? { newsTask: row.latestTask } : {}), needsYou: row.needs, row,
+  };
 }
 
 /** The VP cards, in the rows' order: a project under another VP joins that VP's card. */
@@ -60,7 +73,7 @@ export function vpCards(rows: readonly ChannelRow[]): VpCard[] {
     if (vpOf(row)) continue;
     const card: VpCard = {
       key: row.key, project: row.project, name: row.project || 'Inbox', role: row.project ? 'VP' : 'Inbox',
-      line: '', needsYou: 0, projects: [projectOf(row)], row,
+      line: '', news: '', newsAt: 0, needsYou: 0, projects: [projectOf(row)], row,
     };
     cards.push(card);
     if (row.project) byKey.set(projectKey(row.project), card);
@@ -72,6 +85,10 @@ export function vpCards(rows: readonly ChannelRow[]): VpCard[] {
   for (const card of cards) {
     card.needsYou = card.projects.reduce((n, p) => n + p.needsYou, 0);
     card.line = card.projects.length === 1 ? card.projects[0]!.line : groupLine(card.projects);
+    const top = [...card.projects].sort((a, b) => Number(b.needsYou > 0) - Number(a.needsYou > 0) || b.newsAt - a.newsAt)[0]!;
+    card.news = card.projects.length === 1 ? top.news : `${top.name} · ${top.news}`;
+    card.newsAt = top.newsAt;
+    if (top.newsTask) card.newsTask = top.newsTask;
   }
   return cards;
 }

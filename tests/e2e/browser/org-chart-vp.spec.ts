@@ -92,8 +92,10 @@ test('Main is the CEO and each project a VP card with its own name', async ({ pa
     await expect(vp(page, name)).toContainText(name)
     await expect(vp(page, name)).toContainText('VP')
     await expect(vp(page, name)).not.toContainText('lead')
-    // Two tasks not started: Waiting, by the one user status (src/core/user-status.ts).
+    // Two tasks not started: Waiting, by the one user status (src/core/user-status.ts); with no
+    // words of their own, the card's news says so too.
     await expect(vp(page, name).getByTestId('org-chart-vp-line')).toHaveText('2 waiting')
+    await expect(vp(page, name).getByTestId('org-chart-vp-news')).toContainText('Waiting: ')
   }
 })
 

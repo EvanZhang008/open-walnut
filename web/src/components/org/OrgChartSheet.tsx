@@ -2,7 +2,8 @@
  * The org chart: Main and its VPs, one screen.
  *
  *   Main · CEO
- *   └ one card per VP: its name, one line of status, how many things need the user;
+ *   └ one card per VP: its name, its news in its tasks' own words, when that was and its
+ *     counts, how many things need the user;
  *     a VP leading several projects lists them, each still its own project
  *
  * Drag a project onto another VP's card to put it under that VP (or use its ⋯ menu); drag it
@@ -18,7 +19,7 @@ import { useModalOverlay } from '@/hooks/useModalOverlay';
 import { useDialogFocus } from '@/hooks/useDialogFocus';
 import { log } from '@/utils/log';
 import { ContextMenu, type ContextMenuItem } from '@/components/common/ContextMenu';
-import { OrgAvatar } from './OrgChannelList';
+import { OrgAvatar, shortAgo } from './OrgChannelList';
 import { cardOf, ceoLine, dropPlan, vpCards, type DropPlan, type VpCard, type VpProject } from './org-chart-model';
 import type { ChannelRow } from './org-channels-model';
 import '@/styles/org-chart.css';
@@ -29,6 +30,8 @@ interface Props {
   onClose: () => void;
   /** Open a card on the Org page (a channel row's key). */
   onPick: (key: string) => void;
+  /** The page's minute clock, for "23m". */
+  now: number;
 }
 
 const DRAG_TYPE = 'application/x-walnut-org-project';
@@ -48,7 +51,10 @@ const needsTitle = (n: number) => `${n} ${n === 1 ? 'needs' : 'need'} you`;
 /** The drop zone that gives a project back its own VP. */
 const OWN = '__own__';
 
-export function OrgChartSheet({ main, rows, onClose, onPick }: Props) {
+/** "23m · Renew the permit": when the news was written, and the task it is about. */
+const metaLine = (newsAt: number, task: string | undefined, now: number) => [shortAgo(newsAt, now), task].filter(Boolean).join(' · ');
+
+export function OrgChartSheet({ main, rows, onClose, onPick, now }: Props) {
   const [panel, setPanel] = useState<HTMLDivElement | null>(null);
   const [dragKey, setDragKey] = useState<string | null>(null);
   const [overKey, setOverKey] = useState<string | null>(null);
@@ -255,6 +261,8 @@ export function OrgChartSheet({ main, rows, onClose, onPick }: Props) {
                             <span className="oc-card-title">{c.name}</span>
                             <span className="oc-role">{c.role}</span>
                           </span>
+                          <span className={`oc-card-news${c.needsYou > 0 ? ' is-alert' : ''}`} data-testid="org-chart-vp-news" title={c.newsTask ? `${c.newsTask}: ${c.news}` : c.news}>{c.news}</span>
+                          <span className="oc-card-line" data-testid="org-chart-vp-meta">{metaLine(c.newsAt, c.newsTask, now)}</span>
                           <span className="oc-card-line" data-testid="org-chart-vp-line">{c.line}</span>
                         </span>
                         {c.needsYou > 0 && <span className="oc-badge" data-testid="org-chart-vp-needs" title={needsTitle(c.needsYou)}>{c.needsYou}</span>}
@@ -276,7 +284,7 @@ export function OrgChartSheet({ main, rows, onClose, onPick }: Props) {
                           >
                             <div className="oc-project-btn" {...pressable(() => pick(p.key))} title={`Open ${p.name}`}>
                               <span className="oc-project-name">{p.name}</span>
-                              <span className="oc-project-line">{p.line}</span>
+                              <span className="oc-project-line" title={[p.news, [metaLine(p.newsAt, p.newsTask, now), p.line].filter(Boolean).join(' · ')].join('\n')}>{p.news}</span>
                               {p.needsYou > 0 && <span className="oc-badge is-small" title={needsTitle(p.needsYou)}>{p.needsYou}</span>}
                             </div>
                             {projectHandle(p)}

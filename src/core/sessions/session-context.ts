@@ -183,7 +183,9 @@ export function orgRoleLine(task: { org_role?: string; project?: string; org_lea
       + 'independent work gets a fresh task even when a team already works in that area; only the same deliverable '
       + 'continues its exact task. Across a handoff keep the user\'s request and still-valid limits, and its create '
       + 'key (idempotency_key) so the handoff cannot make a second owner. Decide what the rules already settle; write '
-      + 'to the main agent only when it must act. A lead stays: never complete your own task.\n\n'
+      + 'to the main agent only when it must act. A lead stays: never complete your own task. Your teams do not '
+      + 'report progress to you: Walnut puts a note of what moved in them (their own status: what needs the user, '
+      + 'new status words, what finished, what is new) before a message when something moved; it is background.\n\n'
       + TASK_ROUTING_CONTRACT + '\n\n'
   }
   return ''

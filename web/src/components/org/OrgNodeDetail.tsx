@@ -208,7 +208,11 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabChange, onSel
           )}
         </div>
       </header>
-      <div className="org-detail-latest" data-testid="org-detail-latest"><span className="org-muted">Latest</span> {row.latest}</div>
+      {/* The time first: a long line is cut at its end. */}
+      <div className="org-detail-latest" data-testid="org-detail-latest" title={row.latestTask ? `${row.latestTask}: ${row.latest}` : row.latest}>
+        <span className="org-muted">Latest{row.kind === 'project' && row.latestAt > 0 ? ` · ${timeAgo(new Date(row.latestAt).toISOString(), { now })}` : ''}</span> {row.latest}
+        {row.latestTask && <span className="org-muted"> · {row.latestTask}</span>}
+      </div>
       {/* On the chat, the contact's own prompt is in view already; its letter or choice is not, so it stays. */}
       {alertsShown.length > 0 && <AlertList alerts={alertsShown} onOpen={openAlert} compact={shown === 'chat'} />}
 

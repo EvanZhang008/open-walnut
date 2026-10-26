@@ -45,6 +45,22 @@ describe('org chart cards', () => {
     expect(ceoLine(cards)).toBe('1 VP · 1 working')
   })
 
+  it('a card says its team\'s news in the tasks\' own words with its time, the counts under it', () => {
+    const at = (min: number) => `2026-10-26T12:${String(min).padStart(2, '0')}:00.000Z`
+    const signed = t('Garden', { phase: 'NEED_ACTION', title: 'Renew the permit', user_status: { state: 'waiting', kind: 'you', now: 'The check passed; only your signature is left.', at: at(30) } as never })
+    const busy = t('Garden', { phase: 'IN_PROGRESS', user_status: { state: 'working', now: 'Reading the update', at: at(10) } as never })
+    const one = cardsOf([signed, busy, gardenLead]).find((c) => c.name === 'Garden')!
+    expect([one.news, one.newsTask]).toEqual(['The check passed; only your signature is left.', 'Renew the permit'])
+    expect(one.newsAt).toBe(Date.parse(at(30)))
+    expect(one.line).toBe('1 working · 1 waiting')
+    // Several projects on one card: the one that needs the user leads, named.
+    const ask = t('Seeds', { phase: 'NEED_ACTION', title: 'Pick a supplier', user_status: { state: 'needs', ask: 'Choose one of two quotes', at: at(5) } as never })
+    const vp = { ...gardenLead, org_leads: ['Seeds'] }
+    const both = cardsOf([signed, busy, ask, vp]).find((c) => c.name === 'Garden')!
+    expect([both.news, both.newsTask]).toEqual(['Seeds · Needs you: Choose one of two quotes', 'Pick a supplier'])
+    expect(both.projects.map((p) => p.news)).toEqual(['The check passed; only your signature is left.', 'Needs you: Choose one of two quotes'])
+  })
+
   it('vpLine says what moves, else what is open, else nothing', () => {
     expect(vpLine({ open: 3, running: 0, needsYou: 0, waiting: 0 })).toBe('3 open')
     expect(vpLine({ open: 0, running: 0, needsYou: 0, waiting: 0 })).toBe('Nothing open')

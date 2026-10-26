@@ -51,8 +51,10 @@ describe('org channels', () => {
     expect(walnut.contactId).toBe('wl')
     expect(walnut.isLead).toBe(true)
     expect(walnut.unread).toBe(true)
-    expect(walnut.latest).toBe('Working on: w1 title')
+    // The newest of the sessions' own words; a status with only Walnut's "waits on" comes after it.
+    expect([walnut.latest, walnut.latestTask]).toEqual(['Writing the parser', 'w1 title'])
     expect(walnut.lastAt).toBe(Date.parse(at(30)))
+    // A plain wait on the user ("Your reply") adds nothing to the title.
     expect(rows.find((r) => r.name === 'Health')!.latest).toBe('Waiting: h1 title')
     expect(rows.find((r) => r.name === 'Health')!.contactId).toBe('h1')
     expect(rows.find((r) => r.name === 'Tax')!.latest).toBe('Waiting: t2 title')
@@ -98,7 +100,7 @@ describe('org channels', () => {
     expect(personal.name).toBe('Personal')
     expect(personal.state).toBe('alert')
     expect(personal.alerts).toEqual([{ taskId: 'p1', title: 'p1 title', kind: 'needs', ask: 'Pick the renewal date', source: 'letter' }])
-    expect(personal.latest).toBe('Needs you: p1 title')
+    expect([personal.latest, personal.latestTask]).toEqual(['Needs you: Pick the renewal date', 'p1 title'])
     expect(personal.needs).toBe(1)
     expect(personal.counts.needsYou).toBe(1)
     expect(main.needs).toBe(1)
@@ -106,6 +108,23 @@ describe('org channels', () => {
     expect(teamColumns(personal, list).map((c) => [c.key, c.items.map((i) => [i.id, i.note])])).toEqual([
       ['needs', [['p1', 'Pick the renewal date']]], ['waiting', [['p2', undefined]]],
     ])
+  })
+
+  it('says the team\'s newest news in its own words with its time, not only a title', () => {
+    // 2026-10-26: a task passed a check and asked the user to sign; its row read "Waiting: <title>".
+    const news = t('i9', 'Immigration', 'NEED_ACTION', {
+      title: 'Follow up on the visa case', updated_at: at(48), last_session_update: at(53),
+      user_status: { state: 'waiting', kind: 'you', waitingOn: 'You, to read the latest turn (no rush)', now: 'The identity check passed; only your signature is left.', at: at(30) },
+    })
+    const older = t('i2', 'Immigration', 'IN_PROGRESS', { updated_at: at(55), user_status: { state: 'working', now: 'Reading the update', at: at(12) } })
+    const list = [...tasks, news, older]
+    const row = buildChannels(buildOrgTree(list), list, noAlerts).rows.find((r) => r.name === 'Immigration')!
+    expect(row.latest).toBe('The identity check passed; only your signature is left.')
+    expect(row.latestTask).toBe('Follow up on the visa case')
+    // Search finds the row by the task the line is about.
+    expect(filterChannels(buildChannels(buildOrgTree(list), list, noAlerts).rows, 'visa case').map((r) => r.name)).toEqual(['Immigration'])
+    expect(row.latestAt).toBe(Date.parse(at(30)))
+    expect(row.lastAt).toBe(Date.parse(at(55)))
   })
 
   it('reads a task the server has not derived yet by its phase, as every surface does', () => {
@@ -165,7 +184,7 @@ describe('org channels', () => {
     expect(cols.map((c) => [c.label, c.items.map((i) => i.title)])).toEqual([
       ['Working', ['Walnut']], ['Waiting', ['Health', 'Tax', 'Personal']],
     ])
-    expect(cols[0]!.items[0]).toMatchObject({ rowKey: projectRowKey('Walnut'), note: 'Working on: w1 title' })
+    expect(cols[0]!.items[0]).toMatchObject({ rowKey: projectRowKey('Walnut'), note: 'Writing the parser' })
   })
 
   it('initials', () => {

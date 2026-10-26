@@ -63,9 +63,10 @@ function Row({ row, selected, now, onSelect }: { row: ChannelRow; selected: bool
       <span className="org-channel-mid">
         <span className="org-channel-top">
           <span className="org-channel-name">{row.name}</span>
-          <span className="org-channel-time">{shortAgo(row.lastAt, now)}</span>
+          {/* The time of the line under it (when that news was written), else of the last move. */}
+          <span className="org-channel-time">{shortAgo(row.latestAt || row.lastAt, now)}</span>
         </span>
-        <span className={`org-channel-latest${row.state === 'alert' ? ' is-alert' : ''}`} data-testid="org-channel-latest">{row.latest}</span>
+        <span className={`org-channel-latest${row.state === 'alert' ? ' is-alert' : ''}`} data-testid="org-channel-latest" title={row.latestTask ? `${row.latestTask}: ${row.latest}` : row.latest}>{row.latest}</span>
       </span>
       {badge}
     </button>

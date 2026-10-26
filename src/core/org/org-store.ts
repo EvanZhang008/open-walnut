@@ -6,7 +6,8 @@
  * The main agent must stay readable (user, 2026-10-21: "never crowded"), so it
  * is never woken by the work below it. What changed reaches it as ONE folded
  * note on the next message that goes in anyway, one line per project that
- * moved, at most six; the detail stays with the project's lead.
+ * moved, at most six; the detail stays with the project's lead, which hears its
+ * own teams' news the same way (team-note.ts).
  */
 
 import path from 'node:path';
@@ -645,7 +646,7 @@ export interface PendingOrgDigest {
 }
 
 /**
- * The note the next message into the main agent's session should carry, or
+ * The note the next message into the main agent's (or a lead's, team-note.ts) session should carry, or
  * null: not the main agent, nothing moved, or the first message (which only
  * records where things stand). Never throws.
  */
@@ -659,6 +660,11 @@ export async function pendingOrgDigest(sessionId: string, nowMs = Date.now()): P
     // Every send into every session passes here: one indexed read decides, the board is read only for the main agent.
     const { listTasksByIds } = await import('../task-manager.js');
     const own = (await listTasksByIds([record.taskId]))[0];
+    // A lead hears its own teams' news the same way (team-note.ts).
+    if (own?.org_role === 'lead' && own.phase !== 'COMPLETE') {
+      const { pendingTeamNote } = await import('./team-note.js');
+      return pendingTeamNote(own, sessionId, nowMs);
+    }
     if (own?.org_role !== 'main') return null;
     // Claimed before the next await, so two sends racing here never both carry the note.
     const mainId = own.id;

@@ -17,7 +17,7 @@
 
 import type { Task } from '@open-walnut/core';
 import type { OrgCounts, OrgProjectNode, OrgTaskNode, OrgTree } from '@open-walnut/org-tree';
-import { projectKey, userStateOf } from '@open-walnut/org-tree';
+import { newsItem, newsLine, newsSubject, projectKey, teamNews, userStateOf, type TeamNewsTask } from '@open-walnut/org-tree';
 import { USER_STATE_LABELS, type UserState, type UserStatus } from '@open-walnut/user-status';
 
 export type ChannelState = 'alert' | 'working' | 'quiet' | 'parked';
@@ -54,7 +54,12 @@ export interface ChannelRow {
   alerts: OrgAlertView[];
   /** How many tasks here need the user: the alerts; on Main, every row's and its own. */
   needs: number;
+  /** The row's news in its tasks' own words: what needs the user, else the newest status (team-news.ts). */
   latest: string;
+  /** When `latest` was written (ms), 0 = unknown. */
+  latestAt: number;
+  /** The task `latest` is about, when the line does not name it. */
+  latestTask?: string;
   /** Newest activity among the row's tasks (ms), 0 = unknown. */
   lastAt: number;
   unread: boolean;
@@ -118,18 +123,20 @@ export function alertText(a: OrgAlertView): string {
   return `Failed: ${a.title}`;
 }
 
-/** The row's one line: what needs the user, else what moves, else what waits (by the user's
- *  status, src/core/user-status.ts, the words every surface uses). */
-function latestLine(nodes: readonly OrgTaskNode[], byId: ReadonlyMap<string, Task>, alerts: readonly OrgAlertView[]): string {
-  if (alerts.length) return alertText(alerts[0]!);
-  const newest = (state: UserState) => nodes
-    .filter((n) => n.userState === state)
-    .sort((a, b) => taskTime(byId.get(b.id)) - taskTime(byId.get(a.id)))[0];
-  const running = newest('working');
-  if (running) return `Working on: ${running.title}`;
-  const waiting = newest('waiting');
-  if (waiting) return `Waiting: ${waiting.title}`;
-  return 'Nothing open';
+/** The row's one line: what needs the user (with its ask), else the newest news of its tasks in
+ *  their own status words (team-news.ts, the rule a lead's note uses too), with its time. */
+function latestOf(nodes: readonly OrgTaskNode[], byId: ReadonlyMap<string, Task>, alerts: readonly OrgAlertView[]): { text: string; at: number; task?: string } {
+  if (alerts.length) {
+    const a = alerts[0]!;
+    const task = byId.get(a.taskId);
+    // A live prompt or a failure is as new as the task's last move; a status ask has its own time.
+    const at = a.kind === 'needs' && task ? newsItem(task as TeamNewsTask).at : taskTime(task);
+    return a.kind === 'needs' && a.ask ? { text: `Needs you: ${a.ask}`, at, task: a.title } : { text: alertText(a), at };
+  }
+  const top = teamNews(nodes.map((n) => byId.get(n.id)).filter((t): t is Task => !!t) as TeamNewsTask[])[0];
+  if (!top) return { text: 'Nothing open', at: 0 };
+  const task = newsSubject(top);
+  return { text: newsLine(top), at: top.at, ...(task ? { task } : {}) };
 }
 
 function projectRow(p: OrgProjectNode, byId: ReadonlyMap<string, Task>, probe: AlertProbe): ChannelRow {
@@ -140,6 +147,7 @@ function projectRow(p: OrgProjectNode, byId: ReadonlyMap<string, Task>, probe: A
   const lead = p.lead ? byId.get(p.lead.id) : undefined;
   const contact = p.contactId ? byId.get(p.contactId) : undefined;
   const name = p.project || 'Inbox';
+  const latest = latestOf(nodes, byId, alerts);
   return {
     key: projectRowKey(p.project),
     kind: 'project',
@@ -152,7 +160,9 @@ function projectRow(p: OrgProjectNode, byId: ReadonlyMap<string, Task>, probe: A
     state: channelState(p.counts, alerts, nodes.map((n) => n.phase)),
     alerts,
     needs: alerts.length,
-    latest: latestLine(nodes, byId, alerts),
+    latest: latest.text,
+    latestAt: latest.at,
+    ...(latest.task ? { latestTask: latest.task } : {}),
     lastAt: Math.max(0, ...ids.map((id) => taskTime(byId.get(id)))),
     unread: !!(lead ?? contact)?.unread,
     ...(p.vp ? { vp: p.vp } : {}),
@@ -160,10 +170,11 @@ function projectRow(p: OrgProjectNode, byId: ReadonlyMap<string, Task>, probe: A
   };
 }
 
+/** By state, then by the time each row shows (its line's, else its last move), newest first. */
 export function sortChannels(rows: readonly ChannelRow[]): ChannelRow[] {
   return [...rows].sort((a, b) =>
     STATE_ORDER[a.state] - STATE_ORDER[b.state]
-    || b.lastAt - a.lastAt
+    || (b.latestAt || b.lastAt) - (a.latestAt || a.lastAt)
     || a.name.localeCompare(b.name));
 }
 
@@ -197,6 +208,7 @@ export function buildChannels(tree: OrgTree, tasks: readonly Task[], probe: Aler
     alerts: mainAlerts,
     needs: mainAlerts.length + needYou,
     latest: mainAlerts.length ? alertText(mainAlerts[0]!) : summary.join(' · '),
+    latestAt: taskTime(mainTask),
     lastAt: taskTime(mainTask),
     unread: !!mainTask?.unread,
   };
@@ -208,7 +220,7 @@ export function filterChannels(rows: readonly ChannelRow[], q: string): ChannelR
   const words = q.toLowerCase().split(/\s+/).filter(Boolean);
   if (!words.length) return [...rows];
   return rows.filter((r) => {
-    const hay = `${r.name}\n${r.contactTitle}\n${r.latest}`.toLowerCase();
+    const hay = `${r.name}\n${r.contactTitle}\n${r.latest}\n${r.latestTask ?? ''}`.toLowerCase();
     return words.every((w) => hay.includes(w));
   });
 }

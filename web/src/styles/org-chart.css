@@ -91,6 +91,19 @@
   font-weight: 500;
 }
 .oc-card-line { margin-top: 1px; font-size: 12px; color: var(--fg-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* The VP's news in its tasks' own words: two lines at most, the time and counts under it. */
+.oc-card-news {
+  margin-top: 2px;
+  font-size: 12px;
+  line-height: 1.35;
+  color: var(--fg);
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+.oc-card-news.is-alert { color: var(--error, #d70015); }
 .oc-badge {
   flex-shrink: 0;
   min-width: 18px;

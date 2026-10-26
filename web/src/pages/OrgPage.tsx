@@ -262,7 +262,7 @@ export function OrgPage() {
           {...(side.kind === 'task' && sideInbox?.taskId === side.id ? { inboxRequest: sideInbox.n } : {})}
         />
       )}
-      {chartOpen && <OrgChartSheet main={channels.main} rows={channels.rows} onClose={() => setChartOpen(false)} onPick={(key) => select(key)} />}
+      {chartOpen && <OrgChartSheet main={channels.main} rows={channels.rows} onClose={() => setChartOpen(false)} onPick={(key) => select(key)} now={now} />}
     </div>
   );
 }
