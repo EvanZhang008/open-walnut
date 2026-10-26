@@ -1,4 +1,5 @@
 import { useState, useMemo, useCallback, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useTasksContext } from '@/contexts/TasksContext';
 import { isHiddenOrgNode } from '@open-walnut/org-tree';
 import { useOrdering } from '@/hooks/useOrdering';
@@ -26,6 +27,7 @@ import {
   type TaskQueryFilterState,
 } from '@/components/tasks/ViewDropdown';
 import { TaskFilterChips } from '@/components/tasks/TaskFilterChips';
+import { MainQuickActions } from '@/components/org/MainQuickActions';
 import { foldQueryStatus } from '@/components/tasks/filter-bar-model';
 import { ICON_COLLAPSE, ICON_EXPAND, ICON_PHASE_COMPLETE, ICON_PHASE_TODO } from '@/components/common/Icons';
 import {
@@ -66,6 +68,7 @@ function readColumns(): TpColumnId[] {
 
 /** /tasks: dense two-pane workspace: project rail (left) + task table (right). */
 export function DashboardPage() {
+  const navigate = useNavigate();
   const { tasks: storeTasks, loading, error, toggleComplete, create, deleteTask, update, completedHidden, ensureAllTasks } = useTasksContext();
   // Main and project leads are the org's own nodes: hidden here as on the home board (the org chart shows them).
   const tasks = useMemo(() => storeTasks.filter((t) => !isHiddenOrgNode(t)), [storeTasks]);
@@ -397,6 +400,14 @@ export function DashboardPage() {
         onReorderProjects={handleReorderProjects}
         onToggleFavorite={handleToggleFavorite}
         onProjectChanged={handleProjectChanged}
+        titleAction={
+          // Main tidies what this page shows: one project when one is picked.
+          <MainQuickActions
+            variant="menu"
+            {...(isAll ? {} : { scope: { project: activeProject ?? '' } })}
+            onSent={() => navigate('/org?node=main&tab=chat')}
+          />
+        }
       />
 
       <main className="tp-board">

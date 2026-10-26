@@ -55,6 +55,10 @@
 .tp-rail-item.dragging { opacity: 0.4; }
 
 .tp-rail-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.06em;

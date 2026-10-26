@@ -1,137 +1,187 @@
 /**
- * The org chart: who works on what, one screen.
+ * The org chart: Main and its VPs, one screen.
  *
- *   Main (the main agent)
- *   ├ one column per project: who Main talks to there (its lead, or its one task)
- *   │   └ the project's tasks, their workers indented below
+ *   Main · CEO
+ *   └ one card per VP: its name, one line of status, how many things need the user;
+ *     a VP leading several projects lists them, each still its own project
  *
- * Built from the task store with the server's own function (@open-walnut/org-tree),
- * so it always agrees with what the main agent reads. Click a card to talk to that
- * task; drag a card onto another to make it that task's worker, or onto a column
- * to make it one of that project's tasks. A drop writes the ordinary board fields.
+ * Drag a project onto another VP's card to put it under that VP (or use its ⋯ menu); drag it
+ * onto "Own VP" to give it back. The card says what a drop would do before it happens, and
+ * every change is confirmed first. No task changes project: the server only changes who
+ * leads it (POST /api/v1/org/vp), and the VP that lets go sums up its work for the new one.
+ * The cards are the Org page's own rows (org-chart-model.ts), so both say the same thing.
  */
-
-import { useCallback, useMemo, useState, type DragEvent } from 'react';
+import { useRef, useState, type DragEvent, type KeyboardEvent, type MouseEvent } from 'react';
 import { createPortal } from 'react-dom';
-import type { TaskPhase } from '@open-walnut/core';
-import { buildOrgTree, type OrgProjectNode, type OrgTaskNode } from '@open-walnut/org-tree';
-import { useTasksContext } from '@/contexts/TasksContext';
-import { resolveOrgContact } from '@/api/org';
+import { setProjectVp } from '@/api/org';
 import { useModalOverlay } from '@/hooks/useModalOverlay';
 import { useDialogFocus } from '@/hooks/useDialogFocus';
 import { log } from '@/utils/log';
-import { contactLine, countsLine, dropAction, indexOrg, type OrgDropTarget } from './org-chart-model';
+import { ContextMenu, type ContextMenuItem } from '@/components/common/ContextMenu';
+import { OrgAvatar } from './OrgChannelList';
+import { cardOf, ceoLine, dropPlan, vpCards, type DropPlan, type VpCard, type VpProject } from './org-chart-model';
+import type { ChannelRow } from './org-channels-model';
 import '@/styles/org-chart.css';
 
 interface Props {
+  main: ChannelRow;
+  rows: readonly ChannelRow[];
   onClose: () => void;
-  /** Talk to a task: its session, or a composer bound to it. 'main' = the main agent. */
-  onChat: (taskId: string | 'main') => void;
+  /** Open a card on the Org page (a channel row's key). */
+  onPick: (key: string) => void;
 }
 
-const DRAG_TYPE = 'application/x-walnut-org-task';
-const PHASE_LABEL: Record<TaskPhase, string> = {
-  NEED_ACTION: 'Waiting on you', IN_PROGRESS: 'Running', WAITING: 'Parked', TODO: 'To do', COMPLETE: 'Done',
-};
+const DRAG_TYPE = 'application/x-walnut-org-project';
 
-export function OrgChartSheet({ onClose, onChat }: Props) {
-  const { tasks, reparentTask, moveTask, showOperationError } = useTasksContext();
-  const tree = useMemo(() => buildOrgTree(tasks), [tasks]);
-  const index = useMemo(() => indexOrg(tree), [tree]);
-  const [dragId, setDragId] = useState<string | null>(null);
-  const [overKey, setOverKey] = useState<string | null>(null);
-  const [busyProject, setBusyProject] = useState<string | null>(null);
+/** A clickable div: Enter and Space press it too. */
+function pressable(onPress: () => void) {
+  return {
+    role: 'button' as const,
+    tabIndex: 0,
+    onClick: onPress,
+    onKeyDown: (e: KeyboardEvent) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onPress(); }
+    },
+  };
+}
+/** The drop zone that gives a project back its own VP. */
+const OWN = '__own__';
+
+export function OrgChartSheet({ main, rows, onClose, onPick }: Props) {
   const [panel, setPanel] = useState<HTMLDivElement | null>(null);
-  useModalOverlay(onClose);
+  const [dragKey, setDragKey] = useState<string | null>(null);
+  const [overKey, setOverKey] = useState<string | null>(null);
+  const [pending, setPending] = useState<DropPlan | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [done, setDone] = useState('');
+  const [menu, setMenu] = useState<{ project: VpProject; x: number; y: number; from: HTMLElement } | null>(null);
+  // Escape closes the innermost thing first: the menu, then the question, then the sheet.
+  // (This listener runs before the menu's own and stops the key, so it closes the menu too.)
+  useModalOverlay(() => {
+    if (menu) { setMenu(null); menu.from.focus(); return; }
+    if (pending) { if (!busy) setPending(null); return; }
+    onClose();
+  });
   useDialogFocus(panel, 'Org chart');
+  const cards = vpCards(rows);
+  const pick = (key: string) => { onClose(); onPick(key); };
+  const projectOf = (key: string | null) => (key ? cards.flatMap((c) => c.projects).find((p) => p.key === key) ?? null : null);
+  const dragged = projectOf(dragKey);
+  // The drag's project, known from dragstart on: the state above is set a tick later, and a
+  // quick drop lands before it.
+  const dragRef = useRef<string | null>(null);
+  const planFor = (target: VpCard | null) => {
+    const p = projectOf(dragRef.current ?? dragKey);
+    return p ? dropPlan(cards, p, target) : null;
+  };
 
-  const open = useCallback((taskId: string | 'main') => { onClose(); onChat(taskId); }, [onChat, onClose]);
+  const ask = (plan: DropPlan | null) => {
+    if (!plan) return;
+    setError('');
+    setPending(plan);
+  };
 
-  const chatProject = useCallback(async (p: OrgProjectNode) => {
-    if (p.contactId) { open(p.contactId); return; }
-    setBusyProject(p.project);
+  const apply = async () => {
+    if (!pending || busy) return;
+    setBusy(true);
+    setError('');
     try {
-      const answer = await resolveOrgContact(p.project || 'Inbox');
-      log.info('org-chart', 'project contact resolved', { project: p.project, taskId: answer.task.id, kind: answer.kind });
-      open(answer.task.id);
+      const res = await setProjectVp(pending.project, pending.vp);
+      log.info('org-chart', 'project vp changed', { project: res.project, vp: res.vp, leadTaskId: res.lead?.id, moved: res.moved.length, handover: res.handover.length });
+      setDone(res.vp ? `${res.project} is now under ${res.vp}'s VP.` : `${res.project} has its own VP again.`);
+      setPending(null);
     } catch (err) {
-      showOperationError(`Could not reach ${p.project || 'the Inbox'}: ${err instanceof Error ? err.message : String(err)}`);
+      // The server's own words when it answered; a dropped connection is just "try again".
+      const answered = typeof (err as { status?: unknown }).status === 'number';
+      const detail = err instanceof Error ? err.message : String(err);
+      log.warn('org-chart', 'project vp change failed', { project: pending.project, vp: pending.vp, error: detail });
+      setError(answered ? detail : 'Try again.');
     } finally {
-      setBusyProject(null);
+      setBusy(false);
     }
-  }, [open, showOperationError]);
+  };
 
-  const drop = useCallback((target: OrgDropTarget, id: string | null) => {
-    setOverKey(null);
-    setDragId(null);
-    if (!id) return;
-    const action = dropAction(index, id, target);
-    if (!action) return;
-    log.info('org-chart', 'drop', { taskId: id, action: action.kind, ...(action.kind === 'reparent' ? { parentId: action.parentId } : { project: action.project }) });
-    if (action.kind === 'reparent') { reparentTask(action.taskId, action.parentId); return; }
-    if (action.moveProject) moveTask(action.taskId, action.project);
-    if (action.clearParent) reparentTask(action.taskId, null);
-  }, [index, moveTask, reparentTask]);
-
-  const dropProps = (target: OrgDropTarget, key: string) => ({
-    onDragOver: (e: DragEvent) => {
-      // Over a card, the card decides: a refused card (itself, its own worker, its
-      // parent) must not let the column under it light up for a drop that won't happen.
-      if (target.kind === 'task') e.stopPropagation();
-      if (!dragId || !dropAction(index, dragId, target)) {
-        if (target.kind === 'task' && overKey) setOverKey(null);
-        return;
-      }
+  const onDragStart = (e: DragEvent, p: VpProject) => {
+    e.stopPropagation();
+    e.dataTransfer.setData(DRAG_TYPE, p.key);
+    // WebKit starts a drag only with some data set.
+    e.dataTransfer.setData('text/plain', p.name);
+    e.dataTransfer.effectAllowed = 'move';
+    dragRef.current = p.key;
+    // After the event: a render inside dragstart that moves the page under the pointer makes
+    // Chromium drop the drag.
+    window.setTimeout(() => {
+      if (dragRef.current !== p.key) return;
+      setDone('');
+      setDragKey(p.key);
+    }, 0);
+  };
+  // Enter/leave fire for every child the pointer crosses, and Safari gives dragleave no
+  // relatedTarget: a count per zone says when the pointer really left it.
+  const depth = useRef(new Map<string, number>());
+  const endDrag = () => { dragRef.current = null; depth.current.clear(); setDragKey(null); setOverKey(null); };
+  const dropZone = (key: string, target: VpCard | null) => ({
+    onDragEnter: (e: DragEvent) => {
+      if (!planFor(target)) return;
       e.preventDefault();
-      e.stopPropagation();
+      depth.current.set(key, (depth.current.get(key) ?? 0) + 1);
+      if (overKey !== key) setOverKey(key);
+    },
+    onDragOver: (e: DragEvent) => {
+      if (!planFor(target)) return;
+      e.preventDefault();
       e.dataTransfer.dropEffect = 'move';
       if (overKey !== key) setOverKey(key);
     },
-    onDragLeave: (e: DragEvent) => {
-      if (overKey === key && !(e.currentTarget as Node).contains(e.relatedTarget as Node | null)) setOverKey(null);
+    onDragLeave: () => {
+      const left = (depth.current.get(key) ?? 1) - 1;
+      depth.current.set(key, left);
+      if (left <= 0) setOverKey((k) => (k === key ? null : k));
     },
     onDrop: (e: DragEvent) => {
       e.preventDefault();
-      e.stopPropagation();
-      drop(target, e.dataTransfer.getData(DRAG_TYPE) || dragId);
+      const plan = planFor(target);
+      endDrag();
+      ask(plan);
     },
   });
 
-  const card = (n: OrgTaskNode, depth: number) => {
-    const key = `task:${n.id}`;
-    return (
-      <li key={n.id} className="org-card-item">
-        <div
-          className={`org-card${overKey === key ? ' is-drop' : ''}${dragId === n.id ? ' is-dragging' : ''}`}
-          data-testid="org-card"
-          data-task-id={n.id}
-          data-phase={n.phase}
-          draggable
-          role="button"
-          tabIndex={0}
-          title={`${n.title}\n${PHASE_LABEL[n.phase]}. Click to talk to it; drag onto another task to make it that task's worker.`}
-          onClick={() => open(n.id)}
-          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(n.id); } }}
-          onDragStart={(e) => {
-            e.stopPropagation();
-            e.dataTransfer.setData(DRAG_TYPE, n.id);
-            e.dataTransfer.setData('text/plain', n.title);
-            e.dataTransfer.effectAllowed = 'move';
-            setDragId(n.id);
-          }}
-          onDragEnd={() => { setDragId(null); setOverKey(null); }}
-          {...dropProps({ kind: 'task', id: n.id }, key)}
-        >
-          <span className={`org-dot org-dot-${n.phase.toLowerCase()}`} aria-label={PHASE_LABEL[n.phase]} />
-          <span className="org-card-title">{n.title}</span>
-          {n.workers.length > 0 && <span className="org-card-meta">{n.workers.length}</span>}
-        </div>
-        {n.workers.length > 0 && depth < 3 && (
-          <ul className="org-workers" data-testid="org-workers">{n.workers.map((w) => card(w, depth + 1))}</ul>
-        )}
-      </li>
-    );
+  const openMenu = (e: MouseEvent<HTMLButtonElement>, project: VpProject) => {
+    e.stopPropagation();
+    const r = e.currentTarget.getBoundingClientRect();
+    setMenu({ project, x: r.left, y: r.bottom + 4, from: e.currentTarget });
   };
+  const menuItems = (project: VpProject): ContextMenuItem[] => {
+    const own = dropPlan(cards, project, null);
+    const others = cards.filter((c) => dropPlan(cards, project, c));
+    const items: ContextMenuItem[] = [{ key: 'head', section: true, label: `Move ${project.name} under` }];
+    for (const c of others) items.push({ key: `vp:${c.key}`, label: `${c.name}'s VP`, onSelect: () => ask(dropPlan(cards, project, c)) });
+    if (own) {
+      if (others.length) items.push({ key: 'sep', divider: true });
+      items.push({ key: 'own', label: 'Its own VP', onSelect: () => ask(own) });
+    }
+    if (!others.length && !own) items.push({ key: 'none', info: true, label: 'No other VP to move to' });
+    return items;
+  };
+
+  const projectHandle = (p: VpProject) => (
+    p.project ? (
+      <button
+        type="button"
+        className="oc-more"
+        data-testid="org-chart-project-menu"
+        aria-label={`Move ${p.name} to another VP`}
+        title="Move to another VP"
+        onClick={(e) => openMenu(e, p)}
+      >⋯</button>
+    ) : null
+  );
+
+  const draggingUnder = dragged ? cardOf(cards, dragged.key) : undefined;
+  // Shown while some VP leads more than its own project, so a drag never moves the cards.
+  const hasGroups = cards.some((c) => c.projects.length > 1);
+  const ownActive = !!(dragged && draggingUnder && draggingUnder.key !== dragged.key);
 
   const sheet = (
     <div
@@ -144,60 +194,130 @@ export function OrgChartSheet({ onClose, onChat }: Props) {
         <header className="org-sheet-head">
           <div>
             <h2 className="org-sheet-title">Org chart</h2>
-            <p className="org-sheet-hint">Click a task to talk to it. Drag a task onto another to make it its worker, or onto a project to move it there.</p>
+            <p className="org-sheet-hint">Drag a project onto another VP to put it under that VP. Nothing changes until you confirm.</p>
           </div>
           <button type="button" className="task-action-btn org-sheet-close" onClick={onClose} aria-label="Close the org chart" title="Close">&times;</button>
         </header>
+        {done && <p className="oc-done" role="status" data-testid="org-chart-done">{done}</p>}
 
-        <div className="org-main" data-testid="org-main">
-          <div className="org-main-card">
-            <span className="org-main-name">Main</span>
-            <span className="org-main-sub">Your main agent · {countsLine(tree.counts)}</span>
-          </div>
-          <button type="button" className="btn btn-sm btn-primary" data-testid="org-main-chat" onClick={() => open('main')}>Chat</button>
+        <div className="oc-tree">
+          <button type="button" className="oc-card oc-ceo" data-testid="org-chart-ceo" onClick={() => pick(main.key)} title="Open Main">
+            <OrgAvatar row={main} size={34} />
+            <span className="oc-card-text">
+              <span className="oc-card-name"><span className="oc-card-title">Main</span><span className="oc-role">CEO</span></span>
+              <span className="oc-card-line">{ceoLine(cards)}</span>
+            </span>
+            {main.alerts.length > 0 && <span className="oc-badge" title={`${main.alerts.length} need you`}>{main.alerts.length}</span>}
+          </button>
+          <div className="oc-stem" aria-hidden="true" />
+          {hasGroups && (
+            <div
+              className={`oc-own${ownActive ? ' is-active' : ''}${overKey === OWN ? ' is-over' : ''}`}
+              data-testid="org-chart-own"
+              {...dropZone(OWN, null)}
+            >
+              {overKey === OWN ? planFor(null)?.hint
+                : ownActive ? `Drop here to give ${dragged!.name} its own VP`
+                  : 'Drag a project here to give it its own VP'}
+            </div>
+          )}
+          {cards.length === 0 ? (
+            <p className="org-empty" data-testid="org-chart-empty">No open work yet. Ask Main to start something.</p>
+          ) : (
+            <ul className="oc-vps" data-testid="org-chart-vps">
+              {cards.map((c) => {
+                const plan = dragged ? planFor(c) : null;
+                const over = overKey === c.key && !!plan;
+                const single = c.projects.length === 1;
+                const home = c.projects[0]!;
+                return (
+                  <li
+                    key={c.key}
+                    className={`oc-vp${over ? ' is-over' : ''}${dragged && plan ? ' can-drop' : ''}${dragKey === c.key && single ? ' is-dragging' : ''}`}
+                    data-testid="org-chart-vp"
+                    data-key={c.key}
+                    data-project={c.project}
+                    {...(c.role === 'VP' ? dropZone(c.key, c) : {})}
+                  >
+                    <div
+                      className="oc-vp-head"
+                      draggable={!!c.project}
+                      onDragStart={(e) => onDragStart(e, home)}
+                      onDragEnd={endDrag}
+                      data-testid="org-chart-vp-handle"
+                    >
+                      {/* A div, not a button: WebKit and Firefox start no drag from inside a button. */}
+                      <div className="oc-card-btn" {...pressable(() => pick(c.key))} title={`Open ${c.name}`}>
+                        <OrgAvatar row={c.row} size={30} />
+                        <span className="oc-card-text">
+                          <span className="oc-card-name">
+                            <span className="oc-card-title">{c.name}</span>
+                            <span className="oc-role">{c.role}</span>
+                          </span>
+                          <span className="oc-card-line" data-testid="org-chart-vp-line">{c.line}</span>
+                        </span>
+                        {c.needsYou > 0 && <span className="oc-badge" data-testid="org-chart-vp-needs" title={`${c.needsYou} need you`}>{c.needsYou}</span>}
+                      </div>
+                      {single && projectHandle(home)}
+                    </div>
+                    {!single && (
+                      <ul className="oc-projects" data-testid="org-chart-projects">
+                        {c.projects.map((p) => (
+                          <li
+                            key={p.key}
+                            className={`oc-project${dragKey === p.key ? ' is-dragging' : ''}`}
+                            data-testid="org-chart-project"
+                            data-key={p.key}
+                            data-project={p.project}
+                            draggable
+                            onDragStart={(e) => onDragStart(e, p)}
+                            onDragEnd={endDrag}
+                          >
+                            <div className="oc-project-btn" {...pressable(() => pick(p.key))} title={`Open ${p.name}`}>
+                              <span className="oc-project-name">{p.name}</span>
+                              <span className="oc-project-line">{p.line}</span>
+                              {p.needsYou > 0 && <span className="oc-badge is-small" title={`${p.needsYou} need you`}>{p.needsYou}</span>}
+                            </div>
+                            {projectHandle(p)}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                    {over && <div className="oc-hint" data-testid="org-chart-hint" title={plan!.hint}>{plan!.hint}</div>}
+                  </li>
+                );
+              })}
+            </ul>
+          )}
         </div>
 
-        {tree.projects.length === 0 ? (
-          <p className="org-empty" data-testid="org-empty">No open work yet. Ask Main to start something.</p>
-        ) : (
-          <div className="org-columns" data-testid="org-columns">
-            {tree.projects.map((p) => {
-              const key = `project:${p.project}`;
-              const canChat = !!p.contactId || p.needsLead;
-              return (
-                <section
-                  key={key}
-                  className={`org-column${overKey === key ? ' is-drop' : ''}`}
-                  data-testid="org-column"
-                  data-project={p.project}
-                  {...dropProps({ kind: 'project', project: p.project }, key)}
-                >
-                  <div className="org-column-head">
-                    <div className="org-column-name">{p.project || 'Inbox'}</div>
-                    <div className="org-column-counts">{countsLine(p.counts)}</div>
-                    <div className="org-column-contact" data-testid="org-contact">
-                      <span>{contactLine(p)}</span>
-                      {canChat && (
-                        <button
-                          type="button"
-                          className="btn btn-sm org-column-chat"
-                          data-testid="org-project-chat"
-                          disabled={busyProject === p.project}
-                          onClick={() => { void chatProject(p); }}
-                          title={p.lead || p.needsLead ? `Talk to the lead of ${p.project}` : 'Talk to this task'}
-                        >
-                          {busyProject === p.project ? '…' : 'Chat'}
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                  <ul className="org-teams">{p.teams.map((t) => card(t, 0))}</ul>
-                </section>
-              );
-            })}
+        {pending && (
+          <div className="oc-confirm-layer">
+            <div className="oc-confirm" role="alertdialog" aria-modal="true" aria-label={pending.title} data-testid="org-chart-confirm">
+              <h3 className="oc-confirm-title">{pending.title}</h3>
+              <ul className="oc-confirm-lines">
+                {pending.lines.map((l) => <li key={l}>{l}</li>)}
+              </ul>
+              {error && <p className="oc-confirm-error" role="alert" data-testid="org-chart-error">Not changed. {error}</p>}
+              <div className="oc-confirm-actions">
+                <button type="button" className="btn btn-sm" onClick={() => setPending(null)} disabled={busy}>Cancel</button>
+                <button type="button" className="btn btn-sm btn-primary" data-testid="org-chart-apply" onClick={() => { void apply(); }} disabled={busy} autoFocus>
+                  {busy ? 'Working…' : pending.confirm}
+                </button>
+              </div>
+            </div>
           </div>
         )}
       </div>
+      {menu && (
+        <ContextMenu
+          point={{ x: menu.x, y: menu.y }}
+          items={menuItems(menu.project)}
+          onClose={() => setMenu(null)}
+          returnFocus={menu.from}
+          testId="org-chart-move-menu"
+        />
+      )}
     </div>
   );
   return createPortal(sheet, document.body);

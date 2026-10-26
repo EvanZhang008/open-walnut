@@ -6,6 +6,10 @@
  *   - GET /org/reports answers per node (main → projects, lead → teams, task → workers)
  *   - the main agent's update note: what moved since Main was made, one line per
  *     moved project, silent again once told
+ *   - one VP for two projects (POST /org/vp): no task changes project, the workers
+ *     report to the new lead, the lead that lets go is asked to hand over and Walnut
+ *     closes it when that turn ends (at once when it has no session); giving the
+ *     project back first withdraws an unread handover and keeps the lead
  * Only the Claude CLI is mocked (no session is started here).
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
@@ -21,7 +25,10 @@ import { startServer, stopServer } from '../../src/web/server.js'
 import { addTask, completeTask, deleteTask, getTask, listTasks, setProjectMetadata, updateTask, updateTaskRaw } from '../../src/core/task-manager.js'
 import { updateConfig } from '../../src/core/config-manager.js'
 import { createSessionRecord, updateSessionRecord } from '../../src/core/session-tracker.js'
-import { _setDigestFoldMsForTesting, pendingOrgDigest } from '../../src/core/org/org-store.js'
+import { _setDigestFoldMsForTesting, buildHandoverText, pendingOrgDigest } from '../../src/core/org/org-store.js'
+import { deleteMessage, getQueue } from '../../src/core/session-message-queue.js'
+import { __pendingHandovers, __setHandoverSettleMs } from '../../src/core/org/handover-close.js'
+import { bus, EventNames } from '../../src/core/event-bus.js'
 import { taskDepth } from '../../src/core/sessions/subtask-limits.js'
 import { buildSessionContext } from '../../src/core/sessions/session-context.js'
 
@@ -346,5 +353,140 @@ describe('/api/v1/org', () => {
     } finally {
       _setDigestFoldMsForTesting(null)
     }
+  })
+
+  describe('one VP for several projects', () => {
+    type VpAnswer = { project: string; vp: string; lead?: { id: string; title: string }; closed: string[]; handover: string[]; moved: string[]; unchanged?: boolean }
+    type Tree = { tree: { projects: { project: string; vp?: string; contactId?: string; lead?: { id: string } }[] } }
+    const node = async (name: string) => (await api<Tree>('GET', '/org')).json.tree.projects.find((p) => p.project === name)
+
+    const leadSid = '44444444-5555-4666-8777-888888888888'
+    const handoverRows = async () => (await getQueue(leadSid)).filter((m) => m.message.includes('outcome="handover"'))
+
+    it('puts a project under another VP: no task moves, the workers follow, the old lead is asked to hand over', async () => {
+      const g1 = (await addTask({ title: 'Plant the beds', project: 'Garden' })).task
+      const g2 = (await addTask({ title: 'Fix the fence', project: 'Garden' })).task
+      const s1 = (await addTask({ title: 'Collect seeds', project: 'Seeds' })).task
+      const s2 = (await addTask({ title: 'Label the jars', project: 'Seeds' })).task
+      const seedsLead = (await api<{ task: { id: string } }>('POST', '/org/contact', { to: 'Seeds' })).json.task.id
+      // A worker the Seeds lead filed, and a session the lead talks in (it waits on a prompt,
+      // so the handover is queued behind it and nothing is spawned).
+      const worker = (await addTask({ title: 'Sort the packets', project: 'Seeds', parent_task_id: seedsLead })).task
+      await createSessionRecord(leadSid, seedsLead, 'Seeds', WALNUT_HOME)
+      await updateTaskRaw(seedsLead, { session_id: leadSid })
+      await updateSessionRecord(leadSid, { pendingPermission: { requestId: 'rq-vp1', toolName: 'Bash', receivedAt: new Date().toISOString() } })
+
+      const res = await api<VpAnswer>('POST', '/org/vp', { project: 'seeds', vp: 'Garden' })
+      expect(res.status).toBe(200)
+      const gardenLead = await getTask(res.json.lead!.id)
+      expect(gardenLead).toMatchObject({ title: 'Garden lead', project: 'Garden', org_role: 'lead', org_leads: ['Seeds'] })
+      expect(gardenLead.description).toBe('Leads the work in projects "Garden" and "Seeds" and reports it to the main agent. Made by Walnut.')
+      expect(res.json).toMatchObject({ project: 'Seeds', vp: 'Garden', moved: [worker.id], handover: [seedsLead], closed: [] })
+      // Nothing changed project; the worker reports to the Garden lead now.
+      for (const t of [g1, g2, s1, s2]) expect((await getTask(t.id)).project).toBe(t.project)
+      expect((await getTask(worker.id)).parent_task_id).toBe(gardenLead.id)
+      // Both projects still stand; Seeds is talked to through the Garden lead.
+      expect(await node('Seeds')).toMatchObject({ vp: 'Garden', contactId: gardenLead.id, lead: { id: gardenLead.id } })
+      expect((await node('Garden'))?.vp).toBeUndefined()
+      const contact = await api<{ task: { id: string } }>('POST', '/org/contact', { to: 'Seeds' })
+      expect(contact.json.task.id).toBe(gardenLead.id)
+      // The Seeds lead is asked to sum up its work for the Garden lead; Walnut closes it later.
+      const queued = (await handoverRows()).map((m) => m.message).join('\n')
+      expect(queued).toContain(`under "Garden lead" (${gardenLead.id})`)
+      expect(queued).toContain(`walnut tools call org_send '{"to":"${gardenLead.id}","title":"Handover: Seeds"`)
+      expect(queued).not.toContain('task_complete')
+      expect((await getTask(seedsLead)).phase).not.toBe('COMPLETE')
+      expect(__pendingHandovers().map((p) => p.taskId)).toEqual([seedsLead])
+      // The lead's reports list both projects' teams; its prompt names both.
+      const reports = await api<{ rows: { id: string }[] }>('GET', `/org/reports?of=${gardenLead.id}`)
+      expect(reports.json.rows.map((r) => r.id)).toEqual(expect.arrayContaining([g1.id, g2.id, s1.id, s2.id]))
+      expect((await buildSessionContext(gardenLead.id)).systemPrompt).toContain('lead of projects "Garden" and "Seeds" (each stays its own project)')
+      // The same drop again changes nothing.
+      expect((await api<VpAnswer>('POST', '/org/vp', { project: 'Seeds', vp: 'Garden' })).json.unchanged).toBe(true)
+    })
+
+    it('giving it back before the handover was read withdraws it and keeps the lead', async () => {
+      const seedsLead = (await listTasks()).find((t) => t.org_role === 'lead' && t.project === 'Seeds')!
+      const gardenLead = (await listTasks()).find((t) => t.org_role === 'lead' && t.project === 'Garden')!
+      const worker = (await listTasks()).find((t) => t.title === 'Sort the packets')!
+      const back = await api<VpAnswer>('POST', '/org/vp', { project: 'Seeds', vp: '' })
+      expect(back.json).toMatchObject({ project: 'Seeds', vp: '', lead: { id: seedsLead.id }, moved: [worker.id] })
+      expect(await handoverRows()).toHaveLength(0)
+      expect(__pendingHandovers()).toHaveLength(0)
+      expect((await getTask(seedsLead.id)).phase).not.toBe('COMPLETE')
+      expect((await getTask(worker.id)).parent_task_id).toBe(seedsLead.id)
+      expect((await getTask(gardenLead.id)).org_leads).toBeUndefined()
+      expect((await getTask(gardenLead.id)).description).toBe('Leads the work in project "Garden" and reports it to the main agent. Made by Walnut.')
+      expect(await node('Seeds')).toMatchObject({ contactId: seedsLead.id })
+      expect((await node('Seeds'))?.vp).toBeUndefined()
+    })
+
+    it('a lead that read its handover is closed by Walnut when that turn ends', async () => {
+      const seedsLead = (await listTasks()).find((t) => t.org_role === 'lead' && t.project === 'Seeds')!
+      __setHandoverSettleMs(0)
+      try {
+        const res = await api<VpAnswer>('POST', '/org/vp', { project: 'Seeds', vp: 'Garden' })
+        expect(res.json.handover).toEqual([seedsLead.id])
+        const [row] = await handoverRows()
+        expect(row).toBeDefined()
+        // A turn that ends with the notice still queued (unread) closes nothing.
+        bus.emit(EventNames.SESSION_STATUS_CHANGED, { sessionId: leadSid, process_status: 'idle' }, ['*'])
+        await new Promise((r) => setTimeout(r, 300))
+        expect((await getTask(seedsLead.id)).phase).not.toBe('COMPLETE')
+        // Read (the row leaves the queue), then the turn ends: Walnut closes the lead.
+        await deleteMessage(leadSid, row!.id)
+        bus.emit(EventNames.SESSION_STATUS_CHANGED, { sessionId: leadSid, process_status: 'idle' }, ['*'])
+        await expect.poll(async () => (await getTask(seedsLead.id)).phase, { timeout: 5_000 }).toBe('COMPLETE')
+        expect(__pendingHandovers()).toHaveLength(0)
+      } finally {
+        __setHandoverSettleMs()
+      }
+    })
+
+    it('gives a closed lead back its project, and a lead with no session is closed rather than asked', async () => {
+      const gardenLead = (await listTasks()).find((t) => t.org_role === 'lead' && t.project === 'Garden')!
+      const seedsLead = (await listTasks()).find((t) => t.org_role === 'lead' && t.project === 'Seeds')!
+      const worker = (await listTasks()).find((t) => t.title === 'Sort the packets')!
+      const back = await api<VpAnswer>('POST', '/org/vp', { project: 'Seeds', vp: '' })
+      expect(back.status).toBe(200)
+      expect(back.json).toMatchObject({ project: 'Seeds', vp: '', lead: { id: seedsLead.id }, moved: [worker.id] })
+      expect((await getTask(seedsLead.id)).phase).toBe('TODO')
+      expect((await getTask(worker.id)).parent_task_id).toBe(seedsLead.id)
+      expect((await node('Seeds'))?.contactId).toBe(seedsLead.id)
+
+      // A take-over whose own lead never talked: nothing to hand over, so it is closed at once.
+      const res = await api<VpAnswer>('POST', '/org/vp', { project: 'Garden', vp: 'Seeds' })
+      expect(res.json).toMatchObject({ vp: 'Seeds', lead: { id: seedsLead.id }, closed: [gardenLead.id], handover: [] })
+      expect((await getTask(gardenLead.id)).phase).toBe('COMPLETE')
+      expect((await getTask(seedsLead.id)).org_leads).toEqual(['Garden'])
+    })
+
+    it('a lead may file work in every project it leads', async () => {
+      const seedsLead = (await listTasks()).find((t) => t.org_role === 'lead' && t.project === 'Seeds')!
+      const sid = '55555555-6666-4777-8888-999999999999'
+      await createSessionRecord(sid, seedsLead.id, 'Seeds', WALNUT_HOME)
+      const create = (project: string) => fetch(`http://localhost:${port}/api/v1/tasks`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-walnut-caller-sid': sid },
+        body: JSON.stringify({ title: `Filed in ${project}`, project }),
+      })
+      expect((await create('Garden')).status).toBe(201)
+      expect((await create('Health')).status).toBe(409)
+    })
+
+    it('a project name with a quote still makes a command the shell can run', () => {
+      const text = buildHandoverText({ project: "Bob's garden", led: ["Bob's garden"], ends: true, from: { id: 'a' }, to: { id: 'b', title: 'Garden lead' } })
+      const arg = /walnut tools call org_send '(.*)'$/m.exec(text)![1]!
+      // The shell joins 'a'\''b' into a'b.
+      expect(arg.split("'\\''").join("'")).toBe(JSON.stringify({ to: 'b', title: "Handover: Bob's garden", text: '<your summary>', expect_reply: false }))
+    })
+
+    it('refuses the Inbox, an unknown project and a bad body', async () => {
+      expect((await api('POST', '/org/vp', { project: '', vp: 'Seeds' })).status).toBe(400)
+      expect((await api('POST', '/org/vp', { project: 'Seeds', vp: 'Inbox' })).status).toBe(400)
+      expect((await api('POST', '/org/vp', { project: 'No such project', vp: 'Seeds' })).status).toBe(404)
+      expect((await api('POST', '/org/vp', { project: 'Seeds', vp: 'No such project' })).status).toBe(404)
+      expect((await api('POST', '/org/vp', { project: 'Seeds', vp: 7 })).status).toBe(400)
+    })
   })
 })

@@ -1,42 +1,109 @@
-/** The org chart's drop rules (web/src/components/org/org-chart-model.ts). */
+/**
+ * The org chart's cards and drops (web/src/components/org/org-chart-model.ts): Main, then one
+ * VP card per project; a project the user put under another VP sits on that VP's card, and a
+ * drop says what it would do before it happens.
+ */
 import { describe, it, expect } from 'vitest'
+import type { Task } from '../../src/core/types.js'
 import { buildOrgTree, type OrgTaskLike } from '../../src/core/org/org-tree.js'
-import { contactLine, countsLine, dropAction, indexOrg } from '../../web/src/components/org/org-chart-model.js'
+import { buildChannels } from '../../web/src/components/org/org-channels-model.js'
+import { ceoLine, dropPlan, vpCards, vpLine } from '../../web/src/components/org/org-chart-model.js'
 
-const t = (id: string, project: string, parent?: string): OrgTaskLike => ({
-  id, title: id, project, phase: 'TODO', created_at: '2026-10-01T00:00:00Z', updated_at: '2026-10-01T00:00:00Z',
-  ...(parent ? { parent_task_id: parent } : {}),
+let n = 0
+const t = (project: string, over: Partial<OrgTaskLike> = {}): OrgTaskLike => {
+  n++
+  return { id: `t${n}`, title: `task ${n}`, project, phase: 'TODO', created_at: `2026-10-01T00:00:${String(n).padStart(2, '0')}Z`, ...over }
+}
+
+function cardsOf(tasks: OrgTaskLike[]) {
+  const { rows } = buildChannels(buildOrgTree(tasks), tasks as unknown as Task[], () => null)
+  return vpCards(rows)
+}
+
+const garden = [t('Garden', { phase: 'IN_PROGRESS' }), t('Garden', { phase: 'WAITING' })]
+const seeds = [t('Seeds'), t('Seeds', { phase: 'IN_PROGRESS' })]
+const inbox = [t('')]
+const gardenLead = t('Garden', { org_role: 'lead', title: 'Garden lead' })
+const seedsLead = t('Seeds', { org_role: 'lead', title: 'Seeds lead', session_id: 'sid-seeds-lead' })
+
+describe('org chart cards', () => {
+  it('one card per project, named after it, the Inbox last and no one\'s VP', () => {
+    const cards = cardsOf([...garden, ...seeds, ...inbox, gardenLead, seedsLead])
+    expect(cards.map((c) => [c.name, c.role, c.projects.length])).toEqual([['Garden', 'VP', 1], ['Seeds', 'VP', 1], ['Inbox', 'Inbox', 1]])
+    expect(cards.find((c) => c.name === 'Garden')!.line).toBe('1 working · 1 waiting')
+    expect(ceoLine(cards)).toBe('2 VPs · 2 working')
+  })
+
+  it('a project under another VP joins that VP\'s card and keeps its own line', () => {
+    const vp = { ...gardenLead, org_leads: ['Seeds'] }
+    const cards = cardsOf([...garden, ...seeds, ...inbox, vp, { ...seedsLead, phase: 'COMPLETE' as const }])
+    const g = cards.find((c) => c.name === 'Garden')!
+    expect(g.projects.map((p) => [p.name, p.line])).toEqual([['Garden', '1 working · 1 waiting'], ['Seeds', '1 working']])
+    expect(g.line).toBe('2 projects · 2 working · 1 waiting')
+    expect(cards.some((c) => c.name === 'Seeds')).toBe(false)
+    expect(ceoLine(cards)).toBe('1 VP · 1 working')
+  })
+
+  it('vpLine says what moves, else what is open, else nothing', () => {
+    expect(vpLine({ open: 3, running: 0, needsYou: 0, waiting: 0 })).toBe('3 open')
+    expect(vpLine({ open: 0, running: 0, needsYou: 0, waiting: 0 })).toBe('Nothing open')
+  })
 })
 
-const tree = buildOrgTree([t('a', 'Walnut'), t('b', 'Walnut', 'a'), t('c', 'Walnut', 'b'), t('d', 'Walnut'), t('e', 'Health')])
-const index = indexOrg(tree)
-
 describe('org chart drops', () => {
-  it('onto a task makes the dragged task its worker', () => {
-    expect(dropAction(index, 'd', { kind: 'task', id: 'a' })).toEqual({ kind: 'reparent', taskId: 'd', parentId: 'a' })
-    expect(dropAction(index, 'e', { kind: 'task', id: 'c' })).toEqual({ kind: 'reparent', taskId: 'e', parentId: 'c' })
+  const plain = () => cardsOf([...garden, ...seeds, ...inbox, gardenLead, seedsLead])
+  const grouped = () => cardsOf([...garden, ...seeds, ...inbox, { ...gardenLead, org_leads: ['Seeds'] }])
+
+  it('a project onto another VP: that VP takes over, both stay projects, its VP hands over and steps down', () => {
+    const cards = plain()
+    const seedsCard = cards.find((c) => c.name === 'Seeds')!
+    const gardenCard = cards.find((c) => c.name === 'Garden')!
+    const plan = dropPlan(cards, seedsCard.projects[0]!, gardenCard)!
+    expect(plan).toMatchObject({ project: 'Seeds', vp: 'Garden', hint: 'Drop: Garden\'s VP takes over Seeds', confirm: 'Put under Garden' })
+    expect(plan.lines.join(' ')).toContain('Seeds stays its own project; no task changes project.')
+    expect(plan.lines.join(' ')).toContain('Seeds\'s VP sums up its work for Garden\'s VP, then steps down.')
+    // A lead that never talked has nothing to hand over; a project with no lead says nothing of one.
+    const quiet = cardsOf([...garden, ...seeds, gardenLead, { ...seedsLead, session_id: undefined }])
+    expect(dropPlan(quiet, quiet.find((c) => c.name === 'Seeds')!.projects[0]!, quiet.find((c) => c.name === 'Garden')!)!.lines)
+      .toContain('Seeds\'s VP steps down; it never started, so there is nothing to hand over.')
+    const noLead = cardsOf([...garden, ...seeds])
+    expect(dropPlan(noLead, noLead.find((c) => c.name === 'Seeds')!.projects[0]!, noLead.find((c) => c.name === 'Garden')!)!.lines)
+      .toHaveLength(2)
   })
 
-  it('refuses itself, its own worker at any depth, and its current parent', () => {
-    expect(dropAction(index, 'a', { kind: 'task', id: 'a' })).toBeNull()
-    expect(dropAction(index, 'a', { kind: 'task', id: 'c' })).toBeNull()
-    expect(dropAction(index, 'b', { kind: 'task', id: 'a' })).toBeNull()
-    expect(dropAction(index, 'zzz', { kind: 'task', id: 'a' })).toBeNull()
+  it('nothing happens onto its own card, onto the Inbox, or for the Inbox itself', () => {
+    const cards = plain()
+    const g = cards.find((c) => c.name === 'Garden')!
+    const i = cards.find((c) => c.role === 'Inbox')!
+    expect(dropPlan(cards, g.projects[0]!, g)).toBeNull()
+    expect(dropPlan(cards, g.projects[0]!, i)).toBeNull()
+    expect(dropPlan(cards, i.projects[0]!, g)).toBeNull()
+    // Its own VP already.
+    expect(dropPlan(cards, g.projects[0]!, null)).toBeNull()
   })
 
-  it('onto a project column makes it a team there', () => {
-    expect(dropAction(index, 'b', { kind: 'project', project: 'Walnut' }))
-      .toEqual({ kind: 'team', taskId: 'b', project: 'Walnut', moveProject: false, clearParent: true })
-    expect(dropAction(index, 'e', { kind: 'project', project: 'walnut' }))
-      .toEqual({ kind: 'team', taskId: 'e', project: 'walnut', moveProject: true, clearParent: false })
-    expect(dropAction(index, 'd', { kind: 'project', project: 'Walnut' })).toBeNull()
+  it('a project under a VP can go back to its own, or on to a third VP', () => {
+    const third = t('Kitchen')
+    const cards = cardsOf([...garden, ...seeds, third, { ...gardenLead, org_leads: ['Seeds'] }])
+    const g = cards.find((c) => c.name === 'Garden')!
+    const seedsOnG = g.projects.find((p) => p.name === 'Seeds')!
+    const own = dropPlan(cards, seedsOnG, null)!
+    expect(own).toMatchObject({ project: 'Seeds', vp: '', title: 'Give Seeds its own VP?' })
+    expect(own.lines).toContain('Garden\'s VP sums up its work on Seeds for it.')
+    const k = cards.find((c) => c.name === 'Kitchen')!
+    const on = dropPlan(cards, seedsOnG, k)!
+    expect(on.vp).toBe('Kitchen')
+    // The VP it leaves keeps its own project, so it does not step down.
+    expect(on.lines.join(' ')).toContain('Garden\'s VP sums up its work on Seeds for Kitchen\'s VP.')
   })
 
-  it('says who Main talks to and counts only what is there', () => {
-    const walnut = tree.projects.find((p) => p.project === 'Walnut')!
-    const health = tree.projects.find((p) => p.project === 'Health')!
-    expect(contactLine(walnut)).toBe('No lead yet: Chat makes one')
-    expect(contactLine(health)).toBe('Main talks to this task directly')
-    expect(countsLine({ open: 3, needsYou: 0, running: 1, waiting: 0 })).toBe('3 open · 1 running')
+  it('a VP\'s own project moved onto another VP takes the projects it led along', () => {
+    const third = t('Kitchen')
+    const cards = cardsOf([...garden, ...seeds, third, { ...gardenLead, org_leads: ['Seeds'] }])
+    const g = cards.find((c) => c.name === 'Garden')!
+    const k = cards.find((c) => c.name === 'Kitchen')!
+    const plan = dropPlan(cards, g.projects[0]!, k)!
+    expect(plan.lines[0]).toBe('Kitchen\'s VP leads Garden and Seeds from now on. Each stays its own project; no task changes project.')
+    expect(grouped().find((c) => c.name === 'Garden')!.projects).toHaveLength(2)
   })
 })

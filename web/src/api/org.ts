@@ -29,3 +29,19 @@ export interface OrgContactAnswer {
 export async function resolveOrgContact(to: string): Promise<OrgContactAnswer> {
   return apiPost<OrgContactAnswer>('/api/v1/org/contact', { to });
 }
+
+export interface ProjectVpAnswer {
+  project: string;
+  /** The project whose lead leads it now; '' = its own. */
+  vp: string;
+  lead?: { id: string; title: string };
+  closed: string[];
+  handover: string[];
+  moved: string[];
+  unchanged?: boolean;
+}
+
+/** Put a project under another project's VP (its lead), or back under its own (`vp` ''). No task moves. */
+export async function setProjectVp(project: string, vp: string): Promise<ProjectVpAnswer> {
+  return apiPost<ProjectVpAnswer>('/api/v1/org/vp', { project, vp });
+}

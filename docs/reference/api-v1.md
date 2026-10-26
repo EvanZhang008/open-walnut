@@ -1195,17 +1195,19 @@ itself). The `board_*` ops default to the caller's team board.
   choice?, reminder?, section?, version }` with `taskId` at the top level
   (`task` = the card's task; `kanban: true` on a kanban seen write).
 
-### Org (additive, 2026-10): `/org`, `/org/reports`, `/org/main`, `/org/contact`
+### Org (additive, 2026-10): `/org`, `/org/reports`, `/org/main`, `/org/contact`, `/org/vp`
 
 The org is derived from tasks: Main (the user's main agent) → projects → teams (a
-project's top-level open tasks) → workers (`parent_task_id`). The one stored fact
-is `org_role: "main" | "lead"` on a task; both kinds are hidden from the board.
+project's top-level open tasks) → workers (`parent_task_id`). The stored facts
+are `org_role: "main" | "lead"` on a task (both kinds are hidden from the board)
+and, on a lead, `org_leads`: the other projects the user put under it.
 A project with two or more teams gets a lead on first contact; a project with one
 team is talked to through that task; the Inbox never gets a lead.
 
 - `GET /api/v1/org` → `200 { tree: { main?, projects: [{ project, lead?,
-  needsLead, contactId?, teams, counts }], counts } }`, `counts` = `{ open,
-  running, needsYou, waiting }`.
+  needsLead, contactId?, vp?, teams, counts }], counts } }`, `counts` = `{ open,
+  running, needsYou, waiting }`; `vp` = the project whose lead leads this one,
+  when it is not its own.
 - `GET /api/v1/org/reports?of=<taskId>` → who reports to `of` (default: the
   caller's task from `x-walnut-caller-sid`): Main or none → one row per project;
   a lead → its teams; any other task → its workers.
@@ -1215,7 +1217,15 @@ team is talked to through that task; the Inbox never gets a lead.
   kind: "lead" | "team" | "task", project, started, launch? }`; `launch`
   (`{ cwd, host }`, host `null` = the primary) is where a lead with no session
   would start, read only and absent when it has no place yet; `400 no_lead_for_inbox`,
-  `404 unknown_contact`. Both POSTs answer `501` on a replica.
+  `404 unknown_contact`.
+- `POST /api/v1/org/vp { "project", "vp" }` → `200 { project, vp, lead?, closed,
+  handover, moved, unchanged? }`: puts `project` under the lead of `vp` (`""` =
+  back to its own lead). No task changes project; open workers move to the lead
+  that takes over (`moved`); the lead that lets go gets a handover notice in its
+  session (`handover`), and on a take-over Walnut closes it once the turn that
+  read the notice ends, or at once when it has no session (`closed`).
+  `400 no_vp_for_inbox | bad_vp`, `404 unknown_project`.
+- Every POST answers `501` on a replica.
 
 ### Task actions (additive, Wave 1 2026-08) — detail / delete / field setters / batch / focus
 

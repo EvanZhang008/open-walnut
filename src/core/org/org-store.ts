@@ -17,8 +17,8 @@ import type { Task } from '../types.js';
 import { ASK_WALNUT_PROJECT } from '../sessions/ask-list.js';
 import { createEnvelopeKit } from '../peers/envelope-kit.js';
 import {
-  DIGEST_FOLD_MS, DIGEST_MAX_LINES, buildOrgTree, findProjectNode, formatAlertLine, formatDigestLine, isOrgMember, orgDigest, pickLead,
-  pickMain, planOrgNote, projectKey, type OrgAlert, type OrgDigestState, type OrgTaskLike, type OrgTree,
+  DIGEST_FOLD_MS, DIGEST_MAX_LINES, buildOrgTree, findProjectNode, formatAlertLine, formatDigestLine, isOrgMember, leadsAlso, orgDigest, pickLead,
+  pickMain, pickOwnLead, planOrgNote, projectKey, type OrgAlert, type OrgDigestState, type OrgTaskLike, type OrgTree,
 } from './org-tree.js';
 
 export const MAIN_TASK_TITLE = 'Main';
@@ -83,30 +83,312 @@ export function ensureMainTask(): Promise<Task> {
 export function ensureProjectLead(project: string): Promise<Task> {
   const name = project.trim();
   if (!name) return Promise.reject(new OrgError('no_lead_for_inbox', 400, 'The Inbox has no lead: talk to its tasks directly.'));
-  return serial(async () => {
-    const { addTask, getTask, updateTask } = await import('../task-manager.js');
-    const tasks = await orgTasks();
-    const existing = pickLead(tasks, name);
-    if (existing?.phase === 'COMPLETE') {
-      // A lead someone closed is brought back rather than replaced: its history is the project's.
-      log.task.info('org: project lead reopened', { taskId: existing.id, project: name });
-      // A contact is a deliberate ask, so it may move the lead out of COMPLETE.
-      return (await updateTask(existing.id, { phase: 'TODO' }, { source: 'api' })).task;
-    }
-    if (existing) return getTask(existing.id);
-    const canonical = tasks.find((t) => isOrgMember(t) && projectKey(t.project) === projectKey(name))?.project?.trim() || name;
-    // No folder of its own: a lead runs where its project's tasks start (contactLaunch), and
-    // a folder recorded here would freeze the project's default as it is today.
-    const { task } = await addTask({
-      title: `${canonical} lead`,
-      project: canonical,
-      source: 'local',
-      org_role: 'lead',
-      description: `Leads the work in project "${canonical}" and reports it to the main agent. Made by Walnut.`,
-    });
-    log.task.info('org: project lead created', { taskId: task.id, project: canonical });
-    return task;
+  return serial(() => ensureLeadNow(name));
+}
+
+/** ensureProjectLead's body, for a caller already inside `serial`. */
+async function ensureLeadNow(name: string): Promise<Task> {
+  const { addTask, getTask, updateTask } = await import('../task-manager.js');
+  const tasks = await orgTasks();
+  const existing = pickLead(tasks, name);
+  if (existing?.phase === 'COMPLETE') {
+    // A lead someone closed is brought back rather than replaced: its history is the project's.
+    log.task.info('org: project lead reopened', { taskId: existing.id, project: name });
+    // A contact is a deliberate ask, so it may move the lead out of COMPLETE.
+    return (await updateTask(existing.id, { phase: 'TODO' }, { source: 'api' })).task;
+  }
+  if (existing) return getTask(existing.id);
+  const canonical = canonicalProject(tasks, name);
+  // No folder of its own: a lead runs where its project's tasks start (contactLaunch), and
+  // a folder recorded here would freeze the project's default as it is today.
+  const { task } = await addTask({
+    title: `${canonical} lead`,
+    project: canonical,
+    source: 'local',
+    org_role: 'lead',
+    description: leadDescription([canonical]),
   });
+  log.task.info('org: project lead created', { taskId: task.id, project: canonical });
+  return task;
+}
+
+function canonicalProject(tasks: readonly OrgTaskLike[], name: string): string {
+  return tasks.find((t) => isOrgMember(t) && projectKey(t.project) === projectKey(name))?.project?.trim()
+    || pickOwnLead(tasks, name)?.project?.trim()
+    || name.trim();
+}
+
+const LEAD_DESCRIPTION_HEAD = 'Leads the work in project';
+
+/** A lead's description, while Walnut wrote it: the projects it leads. */
+function leadDescription(projects: readonly string[]): string {
+  const names = projects.map((p) => `"${p}"`);
+  const list = names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}` : names[0];
+  return `${LEAD_DESCRIPTION_HEAD}${names.length > 1 ? 's' : ''} ${list} and reports it to the main agent. Made by Walnut.`;
+}
+
+// ── One VP for several projects (the org chart's drag) ──
+
+/** What one VP change did, for the response and the chart's toast. */
+export interface ProjectVpResult {
+  project: string;
+  /** The project whose lead leads it now; '' = its own. */
+  vp: string;
+  /** The lead that leads it now, when there is one. */
+  lead?: { id: string; title: string };
+  /** Leads that had no session to hand over from, closed at once. */
+  closed: string[];
+  /** Leads asked to sum up their work for the lead that takes over; a replaced one is closed after that turn. */
+  handover: string[];
+  /** Tasks whose leader moved to the new lead (their parent link). */
+  moved: string[];
+  /** Nothing to do: it was already so. */
+  unchanged?: boolean;
+}
+
+/** A lead that hands its work on one project over to another lead. */
+interface Handover {
+  from: Task;
+  to: Task;
+  project: string;
+  /** The projects the new lead takes from it. */
+  led: string[];
+  /** A take-over: `from` no longer leads anything and is closed after it hands over. */
+  ends: boolean;
+}
+
+function patchLeads(list: readonly string[]): Partial<Task> {
+  // null clears a payload field (normalizeNullClears).
+  return { org_leads: list.length ? [...list] : (null as unknown as string[]) };
+}
+
+async function writeLeads(lead: Task, list: readonly string[]): Promise<void> {
+  const { updateTaskRaw, updateDescription } = await import('../task-manager.js');
+  const own = (lead.project ?? '').trim();
+  const others = list.filter((p) => projectKey(p) !== projectKey(own));
+  await updateTaskRaw(lead.id, patchLeads(others), { emitEvent: true, source: 'api' });
+  // Only a description Walnut wrote is kept up to date; the user's own stays theirs.
+  if (!lead.description || lead.description.startsWith(LEAD_DESCRIPTION_HEAD)) {
+    await updateDescription(lead.id, leadDescription([own, ...others]));
+  }
+}
+
+function uniqueProjects(list: readonly string[]): string[] {
+  const seen = new Set<string>();
+  return list.filter((p) => { const k = projectKey(p); if (!k || seen.has(k)) return false; seen.add(k); return true; });
+}
+
+/** Move the open direct subtasks of `from` (in `project`, or any) to `to`. */
+async function moveWorkers(tasks: readonly Task[], from: string, to: string, project?: string): Promise<string[]> {
+  const { updateTask } = await import('../task-manager.js');
+  const moved: string[] = [];
+  for (const t of tasks) {
+    if (t.parent_task_id !== from || t.phase === 'COMPLETE' || t.id === to) continue;
+    if (project !== undefined && projectKey(t.project) !== projectKey(project)) continue;
+    try {
+      await updateTask(t.id, { parent_task_id: to }, { source: 'api' });
+      moved.push(t.id);
+    } catch (err) {
+      log.task.warn('org: worker not moved to its new lead', { taskId: t.id, from, to, error: err instanceof Error ? err.message : String(err) });
+    }
+  }
+  return moved;
+}
+
+/** Is `name` a project the org knows: open work, or a lead of its own? */
+function knownProject(tasks: readonly OrgTaskLike[], name: string): boolean {
+  return !!findProjectNode(buildOrgTree(tasks), name) || !!pickOwnLead(tasks, name)
+    || tasks.some((t) => leadsAlso(t, name));
+}
+
+function hasLeadSession(task: Task): boolean {
+  return !!(task.session_id || task.exec_session_id);
+}
+
+/** A JSON argument inside a shell command quoted with single quotes. */
+function shellJson(value: unknown): string {
+  return JSON.stringify(value).replace(/'/g, "'\\''");
+}
+
+/** The words a lead reads when its project moves: sum up and send it on. Walnut closes a replaced lead itself. */
+export function buildHandoverText(h: Pick<Handover, 'project' | 'led' | 'ends'> & { from: Pick<Task, 'id'>; to: Pick<Task, 'id' | 'title'> }): string {
+  const to = `"${h.to.title}" (${h.to.id})`;
+  const projects = h.ends ? h.led : [h.project];
+  const names = projects.map((p) => `"${p}"`).join(', ');
+  const what = h.ends
+    ? `The user put project "${h.project}" under ${to} in the org chart: that lead leads ${names} from now on, and your open workers already report to it. No task changed project. Walnut closes your task once you have handed over.`
+    : `The user gave project "${h.project}" back to its own lead ${to} in the org chart: you no longer lead it, and your open workers in it already report to that lead. No task changed project.`;
+  const send = shellJson({ to: h.to.id, title: `Handover: ${h.project}`, text: '<your summary>', expect_reply: false });
+  return kit.buildWalnutMessage({
+    kind: 'notification',
+    attrs: {
+      from: 'Walnut',
+      about: h.project,
+      'about-task': h.to.id,
+      title: `Hand over "${h.project}" to ${h.to.title}`,
+      outcome: 'handover',
+      note: 'the user moved this project in the org chart: act on it',
+    },
+    body: `${what}\n\nHand over now:\n`
+      + `1. Sum up your work on ${names} in a few short lines: what is open and who has it, what is decided, what waits on whom, and anything the new lead must not miss.\n`
+      + `2. Send it to the new lead (this starts that lead when it has not started yet):\n   walnut tools call org_send '${send}'`,
+  });
+}
+
+/** The words a lead that takes a project over reads, mid-turn only (adopt-notice.ts's rule: never woken for this). */
+function buildTakeOverText(lead: Pick<Task, 'id'>, project: string, led: readonly string[]): string {
+  return kit.buildWalnutMessage({
+    kind: 'notification',
+    attrs: { from: 'Walnut', about: project, 'about-task': lead.id, outcome: 'vp', note: 'automated Walnut status notice' },
+    body: `The user put project "${project}" under you in the org chart: you lead ${led.map((p) => `"${p}"`).join(', ')} from now on, `
+      + 'each its own project (org_get lists their teams). A status notice, not a request: nothing waits on an answer.',
+  });
+}
+
+/** The lead's newest listable session, or null. */
+async function leadSession(taskId: string, onlyRunning = false): Promise<import('../types.js').SessionRecord | null> {
+  const { getSessionsForTask, isListableSession } = await import('../session-tracker.js');
+  const rows = (await getSessionsForTask(taskId))
+    .filter((r) => !r.archived && isListableSession(r) && (!onlyRunning || r.process_status === 'running'));
+  rows.sort((a, b) => (b.lastActiveAt ?? '').localeCompare(a.lastActiveAt ?? ''));
+  return rows[0] ?? null;
+}
+
+/** Ask a lead to hand over (its newest session; a stopped one is resumed). Null when it could not be told. */
+async function askHandover(h: Handover): Promise<{ sessionId: string; messageId?: string } | null> {
+  const fields = { from: h.from.id, to: h.to.id, project: h.project };
+  try {
+    const target = await leadSession(h.from.id);
+    if (!target) return null;
+    const text = buildHandoverText(h);
+    const { deliverToSession } = await import('../sessions/session-send-core.js');
+    const { delivery, messageId } = await deliverToSession(target, {
+      busText: text, enqueueText: text, source: 'walnut-notify', taskId: h.from.id,
+    });
+    log.task.info('org: handover asked', { ...fields, sessionId: target.claudeSessionId, delivery, messageId });
+    return { sessionId: target.claudeSessionId, ...(messageId ? { messageId } : {}) };
+  } catch (err) {
+    log.task.warn('org: handover not asked', { ...fields, error: err instanceof Error ? err.message : String(err) });
+    return null;
+  }
+}
+
+/** Tell the lead that took a project over, when it is mid-turn (the notice rides along); never wake it. */
+async function tellTakeOver(lead: Task, project: string): Promise<void> {
+  try {
+    const target = await leadSession(lead.id, true);
+    if (!target) return;
+    const { getTask } = await import('../task-manager.js');
+    const now = await getTask(lead.id);
+    const text = buildTakeOverText(now, project, [(now.project ?? '').trim(), ...(now.org_leads ?? [])]);
+    const { deliverToSession } = await import('../sessions/session-send-core.js');
+    await deliverToSession(target, { busText: text, enqueueText: text, source: 'walnut-notify', taskId: lead.id });
+  } catch (err) {
+    log.task.info('org: take-over notice not sent', { taskId: lead.id, project, error: err instanceof Error ? err.message : String(err) });
+  }
+}
+
+/**
+ * Put `project` under `vp`'s VP (its lead), or give it back its own (`vp` = '').
+ * Both projects stay what they are: no task changes project. The VP's lead gets
+ * the project in `org_leads`, and the project's open workers report to it. The
+ * lead that stops leading the project sums up its work for the one that takes
+ * over (a Walnut notice into its session); a replaced lead is then closed by
+ * Walnut once that turn is over (handover-close.ts), and one with no session to
+ * hand over from is closed at once. Giving it back reopens the project's own lead
+ * (made, when workers need one) and withdraws a handover nobody has read. A VP is
+ * one level: putting a VP's project under another moves the projects it led along.
+ */
+export async function setProjectVp(project: string, vp: string): Promise<ProjectVpResult> {
+  const name = project.trim();
+  const target = vp.trim();
+  if (!name) throw new OrgError('no_vp_for_inbox', 400, 'The Inbox has no VP: its tasks are talked to one by one.');
+  if (/^inbox$/i.test(target)) throw new OrgError('no_vp_for_inbox', 400, 'The Inbox is not a VP.');
+  const { result, handovers, newLead } = await serial(() => moveProjectNow(name, target));
+  const { closeAfterHandover } = await import('./handover-close.js');
+  for (const h of handovers) {
+    const asked = await askHandover(h);
+    if (!asked) continue;
+    result.handover.push(h.from.id);
+    if (h.ends) closeAfterHandover({ taskId: h.from.id, project: h.project, ...asked });
+  }
+  if (newLead && !result.unchanged) await tellTakeOver(newLead, result.project);
+  return result;
+}
+
+async function moveProjectNow(name: string, target: string): Promise<{ result: ProjectVpResult; handovers: Handover[]; newLead?: Task }> {
+  const { completeTask, getTask, listTasks, updateTask } = await import('../task-manager.js');
+  const { cancelHandovers } = await import('./handover-close.js');
+  const tasks = await listTasks();
+  if (!knownProject(tasks, name)) throw new OrgError('unknown_project', 404, `No project "${name}" in the org.`);
+  const canonical = canonicalProject(tasks, name);
+  const key = projectKey(name);
+  const none = (extra: Partial<ProjectVpResult> = {}) => ({
+    result: { project: canonical, vp: '', closed: [], handover: [], moved: [], unchanged: true, ...extra }, handovers: [],
+  });
+
+  // Back to its own VP.
+  if (!target || projectKey(target) === key) {
+    const vps = tasks.filter((t) => leadsAlso(t, name));
+    if (!vps.length) return none();
+    // A replaced lead that has not handed over yet stays: it leads its project again.
+    await cancelHandovers(canonical);
+    let own = pickOwnLead(tasks, name);
+    if (own?.phase === 'COMPLETE') own = (await updateTask(own.id, { phase: 'TODO' }, { source: 'api' })).task;
+    const workers = tasks.filter((t) => vps.some((l) => t.parent_task_id === l.id) && t.phase !== 'COMPLETE' && projectKey(t.project) === key);
+    const talked = vps.filter((l) => l.phase !== 'COMPLETE' && hasLeadSession(l));
+    // Workers need someone to report to, and so does a handover; else the lead is made on first contact.
+    if (!own && (workers.length || talked.length)) own = await ensureLeadNow(canonical);
+    const moved: string[] = [];
+    if (own) for (const l of vps) moved.push(...await moveWorkers(tasks, l.id, own.id, name));
+    for (const l of vps) await writeLeads(l, (l.org_leads ?? []).filter((p) => projectKey(p) !== key));
+    log.task.info('org: project has its own VP again', { project: canonical, from: vps.map((l) => l.id), lead: own?.id, moved: moved.length });
+    const to = own;
+    return {
+      result: { project: canonical, vp: '', ...(own ? { lead: { id: own.id, title: own.title } } : {}), closed: [], handover: [], moved },
+      handovers: to ? talked.map((l) => ({ from: l, to, project: canonical, led: [canonical], ends: false })) : [],
+    };
+  }
+
+  if (!knownProject(tasks, target)) throw new OrgError('unknown_project', 404, `No project "${target}" in the org.`);
+  // The target's VP: its own lead, or the VP it is under (one level).
+  let lead = pickLead(tasks, target) ?? await ensureLeadNow(canonicalProject(tasks, target));
+  if (lead.phase === 'COMPLETE') lead = (await updateTask(lead.id, { phase: 'TODO' }, { source: 'api' })).task;
+  if (projectKey(lead.project) === key || leadsAlso(lead, name)) {
+    return none({ vp: (lead.project ?? '').trim(), lead: { id: lead.id, title: lead.title } });
+  }
+  // An earlier handover of this project now goes to the new VP instead.
+  await cancelHandovers(canonical);
+  const fresh = await getTask(lead.id);
+  const now = await listTasks();
+  const owns = now.filter((l) => l.org_role === 'lead' && l.id !== fresh.id && projectKey(l.project) === key);
+  const before = now.filter((l) => l.org_role === 'lead' && l.id !== fresh.id && leadsAlso(l, name));
+  const led = uniqueProjects([canonical, ...owns.flatMap((l) => l.org_leads ?? [])]);
+  // The VP first: a failure after this leaves the project led twice, never by no one.
+  await writeLeads(fresh, uniqueProjects([...(fresh.org_leads ?? []), ...led]));
+  const moved: string[] = [];
+  const closed: string[] = [];
+  const handovers: Handover[] = [];
+  for (const l of owns) {
+    // The project's own lead: what it led moved with it, its workers report to the VP, and it hands over.
+    if (l.org_leads?.length) await writeLeads(l, []);
+    moved.push(...await moveWorkers(now, l.id, fresh.id));
+    if (l.phase === 'COMPLETE') continue;
+    if (hasLeadSession(l)) handovers.push({ from: l, to: fresh, project: canonical, led, ends: true });
+    else { await completeTask(l.id); closed.push(l.id); } // never talked: nothing to hand over
+  }
+  for (const l of before) {
+    // The VP it was under before: it keeps its own project and hands this one over.
+    await writeLeads(l, (l.org_leads ?? []).filter((p) => projectKey(p) !== key));
+    moved.push(...await moveWorkers(now, l.id, fresh.id, name));
+    if (l.phase !== 'COMPLETE' && hasLeadSession(l)) handovers.push({ from: l, to: fresh, project: canonical, led: [canonical], ends: false });
+  }
+  log.task.info('org: project put under another VP', { project: canonical, vp: fresh.project, lead: fresh.id, closed, moved: moved.length });
+  return {
+    result: { project: canonical, vp: (fresh.project ?? '').trim(), lead: { id: fresh.id, title: fresh.title }, closed, handover: [], moved },
+    handovers,
+    newLead: fresh,
+  };
 }
 
 /** Where a chat with an org contact would start: a folder and its host (null = this Mac). */
@@ -231,8 +513,9 @@ export async function orgReportsOf(of: Task | undefined): Promise<{ of: string; 
     open: n.counts.open, running: n.counts.running, needs_you: n.counts.needsYou, waiting: n.counts.waiting,
   });
   if (of.org_role === 'lead') {
-    const node = tree.projects.find((p) => projectKey(p.project) === projectKey(of.project));
-    return { of: of.id, rows: (node?.teams ?? []).map((n) => row(n, 'team')) };
+    // Its own project's teams, and those of every project put under it.
+    const nodes = tree.projects.filter((p) => p.lead?.id === of.id || projectKey(p.project) === projectKey(of.project));
+    return { of: of.id, rows: nodes.flatMap((p) => p.teams).map((n) => row(n, 'team')) };
   }
   const find = (list: import('./org-tree.js').OrgTaskNode[]): import('./org-tree.js').OrgTaskNode | undefined => {
     for (const n of list) {

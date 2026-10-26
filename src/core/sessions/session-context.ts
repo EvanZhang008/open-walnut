@@ -152,7 +152,7 @@ export const MAIN_TRACKING_LINE =
  * independent goal gets a new task, the same deliverable continues its own.
  * Said at spawn because the role is the task's for good.
  */
-export function orgRoleLine(task: { org_role?: string; project?: string }): string {
+export function orgRoleLine(task: { org_role?: string; project?: string; org_leads?: readonly string[] }): string {
   if (task.org_role === 'main') {
     return  'You are the user\'s main agent: with the user you run their org as co-CEOs, and you set its direction '
       + 'with them. Every project reports to you through one contact, its lead (Walnut makes one once a project has '
@@ -171,7 +171,12 @@ export function orgRoleLine(task: { org_role?: string; project?: string }): stri
   }
   if (task.org_role === 'lead') {
     const project = (task.project ?? '').trim()
-    return `Your task is the lead of project "${project}": its open top-level tasks (its teams) report to you, and `
+    const also = (task.org_leads ?? []).map((p) => p.trim()).filter(Boolean)
+    // The user may put other projects under this lead (the org chart): each stays its own project.
+    const what = also.length
+      ? `projects "${project}" and ${also.map((p) => `"${p}"`).join(', ')} (each stays its own project)`
+      : `project "${project}"`
+    return `Your task is the lead of ${what}: ${also.length ? 'their' : 'its'} open top-level tasks (its teams) report to you, and `
       + 'you report to the user\'s main agent, whose messages are the user\'s direction. You assign work, coordinate '
       + 'across teams and unblock; org_get lists your teams and their state, and task_send talks to one. Read a '
       + 'team\'s work (task_get, task_history) only when an outcome looks wrong. Route work by deliverable, not area: '

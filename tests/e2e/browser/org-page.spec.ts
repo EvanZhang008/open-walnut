@@ -3,10 +3,11 @@
  * of Main and the project leads, like a chat app's channels.
  *   - Main is pinned; a project whose work waits on the user's answer comes first, red, with
  *     the question as its line and a count
- *   - a lead opens on its Board (when it keeps one), its Team by state, and its own chat; the
+ *   - a lead opens on its own chat (the first tab), then its Team by state and its Board; the
  *     composer under the Board sends to the lead and the chat shows the answer
- *   - Answer on a waiting question opens that task's session on home
- *   - search, a pick that survives a reload, live state, the keyboard, and the old org chart
+ *   - Answer on a waiting question opens that task's session beside the page
+ *   - search, a pick that survives a reload, live state, the keyboard, and the org chart
+ *   - the rows hold still while the pointer is over the list, and re-sort once it leaves
  * The fixture is shared, so this file makes its own projects and removes what it made.
  */
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test'
@@ -104,8 +105,12 @@ test('the sidebar opens Main and the leads; a lead waiting on the user comes fir
   await expect(detail.getByTestId('org-detail-title')).toHaveText(`${ALPHA} lead`)
   await expect(detail.getByTestId('org-detail-counts')).toContainText('2 open')
   await expect(detail.getByTestId('org-alerts')).toContainText(`Asks you: Alpha ask ${STAMP}`)
-  // It keeps a Board, so it opens there: the lead's own Board, its page one click away.
-  await expect(detail.getByTestId('org-tab-board')).toHaveAttribute('aria-selected', 'true')
+  // A node opens on its chat, first of the tabs; its Board is one click away.
+  await expect(detail.getByTestId('org-tab-chat')).toHaveAttribute('aria-selected', 'true')
+  // The Board tab joins once the lead's board is known.
+  await expect.poll(() => detail.getByRole('tab').evaluateAll((els) => els.map((e) => e.getAttribute('data-testid'))), { timeout: 30_000 })
+    .toEqual(['org-tab-chat', 'org-tab-team', 'org-tab-board'])
+  await detail.getByTestId('org-tab-board').click()
   await detail.getByTestId('board-view-custom').click()
   await expect(detail.frameLocator('iframe').first().getByText(BOARD_TEXT)).toBeVisible({ timeout: 30_000 })
 
@@ -139,14 +144,15 @@ test('a lead\'s chat is in the page, and the composer under its Board sends to i
   await expect(page).toHaveURL(/tab=chat/)
 })
 
-test('Answer on a waiting question opens that task\'s session on home', async ({ page }) => {
+test('Answer on a waiting question opens that task\'s session beside the page', async ({ page }) => {
   await openOrg(page)
   await row(page, ALPHA).click()
   const alert = page.locator(`[data-testid="org-alert"][data-task-id="${ids.ask}"]`)
   await expect(alert).toHaveAttribute('data-kind', 'question')
   await alert.getByRole('button', { name: 'Answer' }).click()
-  await expect(page).toHaveURL(/\/$/)
-  await expect(page.locator(`.main-page-session-column .session-panel[data-session-id="${ids.askSid}"]`)).toBeVisible({ timeout: 30_000 })
+  // The user stays on the Org page (org-side-panel.spec.ts covers the panel itself).
+  await expect(page).toHaveURL(/\/org\?/)
+  await expect(page.getByTestId('org-side')).toHaveAttribute('data-session-id', ids.askSid, { timeout: 30_000 })
 })
 
 test('search, a pick that survives a reload, live state, the keyboard, and the org chart', async ({ page, request }) => {
@@ -178,17 +184,56 @@ test('search, a pick that survives a reload, live state, the keyboard, and the o
   // Up and Down move the pick. The list re-sorts live (the other browser project shares the
   // fixture), so the row under Main is read before the key, and the focused row must be the pick.
   await page.getByTestId('org-channel-main').click()
-  const below = await page.getByTestId('org-channel').first().getAttribute('data-key')
+  // Main opens on its chat, whose session statuses arrive after the click and may re-sort the
+  // rows: read the row under Main once the order has held for a second.
+  let below: string | null = null
+  await expect.poll(async () => {
+    const now = await page.getByTestId('org-channel').first().getAttribute('data-key')
+    const steady = now === below
+    below = now
+    return steady
+  }, { timeout: 30_000, intervals: [1_000] }).toBe(true)
   await page.getByTestId('org-channel-main').press('ArrowDown')
   await expect(page.locator(`[data-testid="org-channel"][data-key="${below}"]`)).toHaveAttribute('aria-selected', 'true')
   await expect(page.locator('[data-testid="org-channel"]:focus')).toHaveAttribute('aria-selected', 'true')
 
-  // The old org chart is one click away, and its Chat on a lead selects that lead here.
+  // The org chart is one click away, and a VP card selects its project here.
   await page.getByTestId('org-open-chart').click()
-  const column = page.locator(`[data-testid="org-column"][data-project="${ALPHA}"]`)
-  await column.scrollIntoViewIfNeeded()
-  await column.getByTestId('org-project-chat').click()
+  const card = page.locator(`[data-testid="org-chart-vp"][data-project="${ALPHA}"]`)
+  await card.scrollIntoViewIfNeeded()
+  await card.locator('.oc-card-btn').click()
   await expect(page.getByTestId('org-chart')).toHaveCount(0)
   await expect(row(page, ALPHA)).toHaveAttribute('aria-selected', 'true')
   await expect(page.getByTestId('org-detail-title')).toHaveText(`${ALPHA} lead`)
+})
+
+test('the rows hold still under the pointer, and take their new order once it leaves', async ({ page, request }) => {
+  // Two quiet projects: inside one state the newest work sorts first, so touching the lower
+  // one's task would move it up while the user aims at a row.
+  const one = `Org page gamma ${STAMP}`
+  const two = `Org page delta ${STAMP}`
+  const oneId = await createTask(request, `Gamma solo ${STAMP}`, one)
+  const twoId = await createTask(request, `Delta solo ${STAMP}`, two)
+  await openOrg(page)
+  await expect(row(page, one)).toBeVisible({ timeout: 30_000 })
+  await expect(row(page, two)).toBeVisible()
+  const order = () => page.getByTestId('org-channel').evaluateAll((els) => els.map((e) => e.getAttribute('data-key')))
+  const keys = await order()
+  const [upper, lower, lowerId] = keys.indexOf(rowKey(one)) < keys.indexOf(rowKey(two)) ? [one, two, twoId] : [two, one, oneId]
+
+  await row(page, upper).hover()
+  const touched = await request.patch(`/api/tasks/${lowerId}`, { data: { title: `Touched ${STAMP}` } })
+  expect(touched.ok(), await touched.text()).toBe(true)
+  // The page has the change (the row's line names the new title) and still keeps its order.
+  await expect(row(page, lower).getByTestId('org-channel-latest')).toContainText(`Touched ${STAMP}`, { timeout: 30_000 })
+  const during = await order()
+  expect(during.indexOf(rowKey(lower))).toBeGreaterThan(during.indexOf(rowKey(upper)))
+
+  // Off the list, the new order shows.
+  const view = page.viewportSize()!
+  await page.mouse.move(view.width - 40, view.height / 2)
+  await expect.poll(async () => {
+    const now = await order()
+    return now.indexOf(rowKey(lower)) < now.indexOf(rowKey(upper))
+  }, { timeout: 15_000 }).toBe(true)
 })

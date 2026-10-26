@@ -10,8 +10,12 @@
  *                                                     project with 2+ teams gets its lead here;
  *                                                     `launch` = where a lead with no session
  *                                                     would start ({ cwd, host }), read only
+ *   POST /org/vp { project, vp } → { project, vp, lead?, closed, moved, unchanged? }
+ *                                                     put a project under another project's VP
+ *                                                     (its lead), or back under its own (vp '');
+ *                                                     no task changes project
  *
- * Reads work anywhere; the two writes make tasks, so they run on the primary
+ * Reads work anywhere; the writes make or change org tasks, so they run on the primary
  * only (501 on a replica, like every other task create).
  */
 
@@ -19,7 +23,7 @@ import { Router, type Request, type Response, type NextFunction } from 'express'
 import { role } from '../../core/server-role.js'
 import type { Task } from '../../core/types.js'
 import {
-  OrgError, contactLaunch, ensureMainTask, getOrgTree, orgReportsOf, resolveOrgContact,
+  OrgError, contactLaunch, ensureMainTask, getOrgTree, orgReportsOf, resolveOrgContact, setProjectVp,
 } from '../../core/org/org-store.js'
 
 export const orgV1Router = Router()
@@ -101,6 +105,18 @@ orgV1Router.post('/org/contact', async (req: Request, res: Response, next: NextF
     const started = hasSession(contact.task)
     const launch = contact.kind === 'lead' && !started ? await contactLaunch(contact.task) : undefined
     res.json({ task: brief(contact.task), kind: contact.kind, project: contact.project, started, ...(launch ? { launch } : {}) })
+  } catch (err) {
+    sendError(res, next, err)
+  }
+})
+
+orgV1Router.post('/org/vp', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    primaryOnly('A project\'s VP is changed')
+    const project = typeof req.body?.project === 'string' ? req.body.project : ''
+    const vp = req.body?.vp
+    if (vp !== undefined && typeof vp !== 'string') throw new OrgError('bad_vp', 400, '`vp` is a project name, or "" for the project\'s own.')
+    res.json(await setProjectVp(project, vp ?? ''))
   } catch (err) {
     sendError(res, next, err)
   }

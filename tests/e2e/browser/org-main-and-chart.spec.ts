@@ -1,20 +1,25 @@
 /**
- * Main and the org chart, as a user meets them (web/src/components/chat/AskWalnutSlot.tsx,
- * web/src/pages/OrgPage.tsx, web/src/components/org/OrgChartSheet.tsx, src/web/routes/org-v1.ts):
+ * Main and the org, as a user meets them (web/src/components/chat/AskWalnutSlot.tsx,
+ * web/src/pages/OrgPage.tsx, src/web/routes/org-v1.ts; the chart itself: org-chart-vp.spec.ts):
  *   - a new install opens the chat on Main's composer; the sidebar has the Ask Walnut
  *     toggle and the Org page
  *   - the drawer pins Main above the other chats and links the Org page
- *   - the org chart (one click from the Org page) has one column per project; a drag makes a
- *     task another's worker, a drag onto the column makes it a top-level task again
  *   - on the Org page, chatting with a project with two tasks makes its hidden lead and opens a
  *     plain chat with it (no Start Task / Ask Walnut fork, a folder ready); the Tasks page hides
  *     the leads too
  *   - a send from Main's composer makes Main, shows its session, and keeps it off the board
  *     and off the Tasks page
- * The fixture is shared, so this file makes its own project and removes what it made,
- * Main included.
+ *   - Main's quick actions (web/src/components/org/MainQuickActions.tsx): Tidy projects / Put
+ *     tasks in place / Triage under its Latest line; a failed send says so; a click sends Main
+ *     the action and shows its chat, where Main answers; a Main waiting on the user's answer is
+ *     not sent to; the Tasks page's Tidy up menu asks about the project it shows
+ * The fixture is shared, so this file makes its own projects and removes what it made, Main
+ * included. Main is one per install, so every test that needs it lives here, in order (a
+ * second file would run beside this one's removal of Main). The mock CLI answers each message
+ * with "I processed your message: <text>"; one Main serves both browser projects, so only
+ * WebKit (the Mac app's engine) sends quick actions to it.
  */
-import { expect, test, type APIRequestContext, type Page } from '@playwright/test'
+import { expect, test, type APIRequestContext, type Locator, type Page } from '@playwright/test'
 import { loadHome, openAskWalnutDrawer } from './draft-helpers'
 import { isolateUiPrefs, presetPanelView } from './todo-panel-helpers'
 import { openSessionFromPlus, pinToTier } from './draft-surface-helpers'
@@ -24,6 +29,8 @@ import { openSessionFromPlus, pinToTier } from './draft-surface-helpers'
 const STAMP = `${Date.now().toString(36)}${process.pid.toString(36)}`
 const PROJECT = `Org spec ${STAMP}`
 const MAIN_PROMPT = `org spec hello ${STAMP}`
+const QA_PROJECT = `Tidy scope ${STAMP}`
+const SENDS = 'one Main serves both browser projects: only WebKit sends to it'
 const made: string[] = []
 /** Tasks a test made only to draw a board header; removed with the rest. */
 const anchors: string[] = []
@@ -54,20 +61,17 @@ async function removeMain(request: APIRequestContext): Promise<void> {
 }
 
 const sidebarOrg = (page: Page) => page.getByTestId('sidebar-org')
-/** The org chart: the Org page's Org chart button. */
-async function openOrgChart(page: Page): Promise<void> {
-  await sidebarOrg(page).click()
-  await page.getByTestId('org-open-chart').click()
-}
 /** On the Org page: the project's Chat tab and its start button (no session yet). */
 async function startProjectChat(page: Page): Promise<void> {
   await sidebarOrg(page).click()
-  await page.locator(`[data-testid="org-channel"][data-key="project:${PROJECT.toLowerCase()}"]`).click()
+  // Search first: other work in the shared fixture keeps re-sorting the rows.
+  await page.getByTestId('org-search').fill(PROJECT)
+  const channel = page.locator(`[data-testid="org-channel"][data-key="project:${PROJECT.toLowerCase()}"]`)
+  await channel.click()
+  await expect(channel).toHaveAttribute('aria-selected', 'true')
   await page.getByTestId('org-tab-chat').click()
   await page.getByTestId('org-start-chat').click()
 }
-const column = (page: Page) => page.locator(`[data-testid="org-column"][data-project="${PROJECT}"]`)
-const card = (page: Page, id: string) => column(page).locator(`[data-testid="org-card"][data-task-id="${id}"]`).first()
 
 test.beforeAll(async ({ request }) => {
   await removeMain(request)
@@ -76,6 +80,9 @@ test.beforeAll(async ({ request }) => {
     expect(res.ok(), await res.text()).toBe(true)
     made.push(((await res.json()) as { task: { id: string } }).task.id)
   }
+  const target = await request.post('/api/tasks', { data: { title: `Tidy target ${STAMP}`, project: QA_PROJECT, source: 'local' } })
+  expect(target.ok(), await target.text()).toBe(true)
+  made.push(((await target.json()) as { task: { id: string } }).task.id)
 })
 
 test.afterAll(async ({ request }) => {
@@ -83,6 +90,48 @@ test.afterAll(async ({ request }) => {
   for (const id of [...made, ...anchors, ...(lead ? [lead.id] : [])]) await removeTask(request, id)
   await removeMain(request)
 })
+
+async function openOrgMain(page: Page): Promise<void> {
+  await isolateUiPrefs(page)
+  await loadHome(page)
+  await page.getByTestId('sidebar-org').click()
+  await page.getByTestId('org-channel-main').click()
+  await expect(page.getByTestId('org-detail-title')).toHaveText('Main')
+}
+
+/** Main's chat on the Org page, and the mock CLI's answers in it. */
+const mainChat = (page: Page) => page.locator('[data-testid="org-chat"] .session-panel')
+const replies = (chat: Locator) => chat.locator('.session-msg-assistant')
+
+/** Click, then wait until Main's newest answer is a new one that says `expected`, and return
+ *  it. Main's chat folds an earlier turn into "An update", so the number of answers on screen
+ *  does not grow; the newest answer's text is read once the history has loaded instead, so an
+ *  older answer never passes. */
+async function clickForReply(page: Page, click: () => Promise<void>, expected: string): Promise<Locator> {
+  const chat = mainChat(page)
+  await page.getByTestId('org-tab-chat').click()
+  await chat.or(page.getByTestId('org-chat-start')).first().waitFor({ timeout: 30_000 })
+  const newest = async () => ((await replies(chat).count()) ? (await replies(chat).last().textContent()) ?? '' : '')
+  let before = ''
+  if (await chat.count()) {
+    let last: string | null = null
+    await expect.poll(async () => {
+      const now = await newest()
+      const steady = now === last
+      last = now
+      return steady
+    }, { timeout: 30_000, intervals: [1_000] }).toBe(true)
+    before = last ?? ''
+  }
+  await click()
+  await expect(page.getByTestId('org-tab-chat')).toHaveAttribute('aria-selected', 'true')
+  await expect(chat).toBeVisible({ timeout: 60_000 })
+  await expect.poll(async () => {
+    const now = await newest()
+    return now !== before && now.includes(expected)
+  }, { timeout: 90_000 }).toBe(true)
+  return replies(chat).last()
+}
 
 test('a new install opens the chat on Main, and the drawer pins Main and links the org chart', async ({ page }) => {
   await isolateUiPrefs(page, { newInstall: true })
@@ -102,30 +151,6 @@ test('a new install opens the chat on Main, and the drawer pins Main and links t
   // Search narrows Main away like any other row.
   await drawer.getByTestId('ask-walnut-search').fill(`zz-no-such-${STAMP}`)
   await expect(mainRow).toHaveCount(0)
-})
-
-test('the org chart: a drag makes a worker, a drag onto the column undoes it', async ({ page, request }) => {
-  await isolateUiPrefs(page)
-  await loadHome(page)
-  await openOrgChart(page)
-  const sheet = page.getByTestId('org-chart')
-  await expect(sheet).toBeVisible()
-  await expect(page.getByTestId('org-main')).toBeVisible()
-  // The dialog takes the keyboard.
-  await expect.poll(() => page.evaluate(() => !!document.activeElement?.closest('[data-testid="org-chart"]'))).toBe(true)
-  await column(page).scrollIntoViewIfNeeded()
-  await expect(column(page).getByTestId('org-contact')).toContainText('No lead yet: Chat makes one')
-
-  const [a, b] = made
-  await card(page, b!).dragTo(card(page, a!))
-  await expect.poll(async () => (await taskOf(request, b!))?.parent_task_id, { timeout: 15_000 }).toBe(a)
-  await expect(card(page, a!).locator('..').getByTestId('org-workers').locator(`[data-task-id="${b}"]`)).toBeVisible()
-
-  await card(page, b!).dragTo(column(page).locator('.org-column-head'))
-  await expect.poll(async () => (await taskOf(request, b!))?.parent_task_id ?? null, { timeout: 15_000 }).toBeNull()
-
-  await page.keyboard.press('Escape')
-  await expect(sheet).toHaveCount(0)
 })
 
 test('Chat with a project with two tasks makes its hidden lead and opens a plain chat with it', async ({ page, request }) => {
@@ -207,7 +232,7 @@ test('Chat with a project with two tasks makes its hidden lead and opens a plain
 })
 
 test('the Tasks page hides the leads, like the board', async ({ page, request }) => {
-  // Main is a singleton both browser projects share, so it is checked where the last test
+  // Main is a singleton both browser projects share, so it is checked where the next test
   // makes it; this one only needs the lead the previous test made.
   await isolateUiPrefs(page)
   await loadHome(page)
@@ -248,4 +273,95 @@ test('a send from Main\'s composer makes Main, shows its session, and keeps Main
   await page.locator('.sidebar a[href="/tasks"]').first().click()
   await expect(page.locator(`.tp-row[data-task-id="${made[0]}"]`).first()).toBeVisible({ timeout: 30_000 })
   await expect(page.locator(`.tp-row[data-task-id="${taskId}"]`)).toHaveCount(0)
+})
+
+test('Main\'s quick actions sit under its Latest line, and a failed send says so', async ({ page }) => {
+  await openOrgMain(page)
+  const row = page.getByTestId('main-quick-actions')
+  await expect(row).toContainText('Ask Main to')
+  await expect(row.getByRole('button')).toHaveText(['Tidy projects', 'Put tasks in place', 'Triage'])
+  await expect(row).toContainText('Nothing changes until you pick what to apply.')
+
+  await page.route('**/api/v1/org/main', (route) => route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ error: 'Main is down for a test' }) }))
+  await page.getByTestId('main-qa-projects').click()
+  await expect(page.getByTestId('main-qa-error')).toHaveText('Not sent. Try again.')
+  await expect(page.getByTestId('main-qa-error')).toHaveAttribute('title', /.+/)
+  await expect(page.getByTestId('main-qa-projects')).toBeEnabled()
+  // Nothing went, so the page stays where it was.
+  await expect(page).not.toHaveURL(/tab=chat/)
+})
+
+test('a click sends Main the action, shows its chat, and Main answers; a second click reaches it again', async ({ page, browserName }) => {
+  test.skip(browserName !== 'webkit', SENDS)
+  await openOrgMain(page)
+  const first = await clickForReply(page, () => page.getByTestId('main-qa-projects').click(), 'Quick action: tidy my projects.')
+  await expect(first).toContainText('I processed your message: Quick action: tidy my projects.')
+  await expect(first).toContainText('read calls only')
+  await expect(page).toHaveURL(/tab=chat/)
+  // The row stays above the chat, so the next action is one click away.
+  await expect(page.getByTestId('main-quick-actions')).toBeVisible()
+  const second = await clickForReply(page, () => page.getByTestId('main-qa-triage').click(), 'Quick action: triage my open tasks.')
+  await expect(second).toContainText('I processed your message: Quick action: triage my open tasks.')
+})
+
+test('the Tasks page asks Main about the project it shows', async ({ page, browserName }) => {
+  await isolateUiPrefs(page)
+  await loadHome(page)
+  await page.getByRole('link', { name: 'Tasks', exact: true }).click()
+  await expect(page).toHaveURL(/\/tasks/)
+  const trigger = page.getByTestId('main-qa-trigger')
+  await expect(trigger).toHaveText('Tidy up')
+  // In the Projects heading, so the toolbar's title keeps its room.
+  await expect(page.locator('.tp-rail-title').getByTestId('main-qa-trigger')).toBeVisible()
+
+  // All tasks: all three actions.
+  await trigger.click()
+  const menu = page.getByTestId('main-qa-menu')
+  await expect(menu).toBeVisible()
+  await expect(menu.getByTestId('main-qa-projects')).toBeVisible()
+  await expect(menu).toContainText('Nothing changes until you pick what to apply.')
+  await page.keyboard.press('Escape')
+  await expect(menu).toHaveCount(0)
+  await expect(trigger).toBeFocused()
+
+  // One project: no merge.
+  await page.locator(`[data-rail-project="${QA_PROJECT}"]`).click()
+  await expect(page.locator('.tp-title')).toHaveText(QA_PROJECT)
+  await trigger.click()
+  await expect(menu.getByTestId('main-qa-projects')).toHaveCount(0)
+  await expect(menu.getByTestId('main-qa-place')).toBeVisible()
+  if (browserName !== 'webkit') return // SENDS
+
+  await menu.getByTestId('main-qa-place').click()
+  await expect(page).toHaveURL(/\/org\?node=main&tab=chat/)
+  await expect(page.getByTestId('org-detail-title')).toHaveText('Main')
+  const chat = mainChat(page)
+  await expect(chat).toBeVisible({ timeout: 60_000 })
+  await expect(replies(chat).filter({ hasText: `Only look at the project "${QA_PROJECT}".` })).toHaveCount(1, { timeout: 90_000 })
+})
+
+test('a Main waiting on the user\'s answer is not sent to: its chat opens on the question', async ({ page, request, browserName }) => {
+  test.skip(browserName !== 'webkit', SENDS)
+  const main = ((await (await request.post('/api/v1/org/main')).json()) as { task: { id: string; session_id?: string } }).task
+  const sid = main.session_id
+  expect(sid, 'an earlier test started Main').toBeTruthy()
+  const ask = await request.post(`/api/v1/sessions/${sid}/messages`, { data: { text: 'status-permission-test:AskUserQuestion' } })
+  expect(ask.ok(), await ask.text()).toBe(true)
+  await expect.poll(async () => ((await (await request.get(`/api/sessions/${sid}`)).json()).session?.pendingPermission?.toolName ?? ''),
+    { timeout: 90_000 }).toBe('AskUserQuestion')
+
+  try {
+    await openOrgMain(page)
+    await page.getByTestId('main-qa-triage').click()
+    await expect(page.getByTestId('main-qa-held')).toContainText('Main is waiting on your answer')
+    await expect(page.getByTestId('org-tab-chat')).toHaveAttribute('aria-selected', 'true')
+    await expect(mainChat(page).getByText('Which validation target?').first()).toBeVisible({ timeout: 30_000 })
+    // The question still waits: the click did not answer or refuse it.
+    expect(((await (await request.get(`/api/sessions/${sid}`)).json()).session?.pendingPermission?.toolName ?? '')).toBe('AskUserQuestion')
+  } finally {
+    // Leave Main free for the rest of the fixture: a person's message refuses the question.
+    await request.post(`/api/v1/sessions/${sid}/messages`, { data: { text: `never mind ${STAMP}` } })
+    await expect.poll(async () => ((await (await request.get(`/api/sessions/${sid}`)).json()).session?.pendingPermission?.toolName ?? ''),
+      { timeout: 60_000 }).toBe('')
+  }
 })

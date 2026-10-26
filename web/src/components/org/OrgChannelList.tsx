@@ -2,11 +2,13 @@
  * The Org page's left column, like a chat app's channel list: Main pinned on top,
  * then one row per project (org-channels-model.ts orders them). A row says who it
  * is, its state dot, when its work last moved, one line of what is happening and,
- * when something waits on the user, how many. Up and Down move the selection.
+ * when something waits on the user, how many. Up and Down move the selection. While the
+ * pointer is over the list the rows keep their order, so a click lands on the row aimed at.
  */
-import { useRef, type KeyboardEvent } from 'react';
+import { useRef, useState, type KeyboardEvent } from 'react';
 import { timeAgo } from '@/utils/time';
 import { avatarColor, initials, type ChannelRow, type ChannelState } from './org-channels-model';
+import { holdOrder } from './hold-order';
 
 const STATE_LABEL: Record<ChannelState, string> = {
   alert: 'Needs you', working: 'Working', quiet: 'Quiet', parked: 'Parked',
@@ -82,7 +84,11 @@ interface Props {
 
 export function OrgChannelList({ main, rows, total, selectedKey, query, onQuery, onSelect, onOpenChart, now }: Props) {
   const listRef = useRef<HTMLDivElement>(null);
-  const keys = [main.key, ...rows.map((r) => r.key)];
+  // Live work re-sorts the rows all the time; one that moved under the pointer would take a
+  // click meant for another. The new order shows once the pointer leaves.
+  const [held, setHeld] = useState<string[] | null>(null);
+  const shown = holdOrder(rows, held);
+  const keys = [main.key, ...shown.map((r) => r.key)];
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
     e.preventDefault();
@@ -96,7 +102,7 @@ export function OrgChannelList({ main, rows, total, selectedKey, query, onQuery,
     <aside className="org-list" aria-label="Org">
       <header className="org-list-head">
         <h1 className="org-list-title">Org</h1>
-        <button type="button" className="btn btn-sm" data-testid="org-open-chart" onClick={onOpenChart} title="Every project and its tasks on one sheet; drag a task to move it">Org chart</button>
+        <button type="button" className="btn btn-sm" data-testid="org-open-chart" onClick={onOpenChart} title="Main and every project's VP on one sheet; drag a project onto another VP to put it under that VP">Org chart</button>
       </header>
       <input
         className="org-search"
@@ -107,10 +113,18 @@ export function OrgChannelList({ main, rows, total, selectedKey, query, onQuery,
         data-testid="org-search"
         onChange={(e) => onQuery(e.target.value)}
       />
-      <div ref={listRef} className="org-list-scroll" role="listbox" aria-label="Main and the project leads" onKeyDown={onKeyDown}>
+      <div
+        ref={listRef}
+        className="org-list-scroll"
+        role="listbox"
+        aria-label="Main and the project leads"
+        onKeyDown={onKeyDown}
+        onPointerEnter={() => setHeld(rows.map((r) => r.key))}
+        onPointerLeave={() => setHeld(null)}
+      >
         <Row row={main} selected={selectedKey === main.key} now={now} onSelect={onSelect} />
         <div className="org-list-section" role="presentation">Leads · {total}</div>
-        {rows.map((r) => <Row key={r.key} row={r} selected={selectedKey === r.key} now={now} onSelect={onSelect} />)}
+        {shown.map((r) => <Row key={r.key} row={r} selected={selectedKey === r.key} now={now} onSelect={onSelect} />)}
       </div>
       {total === 0 && <p className="org-empty-note" data-testid="org-empty">No open work yet. Ask Main to start something.</p>}
       {total > 0 && rows.length === 0 && <p className="org-empty-note" data-testid="org-no-match">No lead matches “{query}”.</p>}

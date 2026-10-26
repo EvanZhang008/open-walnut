@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react';
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import {
   DndContext,
   PointerSensor,
@@ -37,6 +37,8 @@ interface TasksPageRailProps {
   onToggleFavorite: (project: string) => void;
   /** A rail-menu rename/delete landed — refresh the registry and fix selection. */
   onProjectChanged: (kind: 'rename' | 'delete', project: string, newName?: string) => void;
+  /** A control at the right end of the "Projects" heading (Main's Tidy up). */
+  titleAction?: ReactNode;
 }
 
 const LS_RAIL_WIDTH = 'walnut-tasks-rail-width';
@@ -109,6 +111,7 @@ export function TasksPageRail({
   onReorderProjects,
   onToggleFavorite,
   onProjectChanged,
+  titleAction,
 }: TasksPageRailProps) {
   const [creating, setCreating] = useState(false);
   const [draft, setDraft] = useState('');
@@ -194,7 +197,7 @@ export function TasksPageRail({
 
   return (
     <aside className="tp-rail" data-testid="tasks-rail" style={{ width }}>
-      <div className="tp-rail-title">Projects</div>
+      <div className="tp-rail-title"><span>Projects</span>{titleAction}</div>
       <div className="tp-rail-scroll">
         <button type="button" className={itemClass(null)} onClick={() => onSelect(null)}>
           <span className="tp-ri-icon">☰</span>

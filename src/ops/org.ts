@@ -74,3 +74,32 @@ defineOp({
   timeoutMs: 40_000,
   tags: { readonly: false, remote: 'allow', primaryOnly: true },
 });
+
+defineOp({
+  name: 'org_vp_set',
+  title: 'Put a project under another VP',
+  description:
+    'One VP (a project lead) may lead several projects: the user does this by dragging a project onto another '
+    + 'in the org chart. `vp` names the project whose lead takes this project over; "" gives the project back its '
+    + 'own lead. No task changes project. On a take-over, the project\'s own lead is closed and its open workers '
+    + 'report to the new lead; giving it back reopens that lead and returns the workers in its project. It changes '
+    + 'who answers for the project, so do it only when the user asked for it or agreed to it.',
+  input: {
+    project: z.string().min(1).describe('The project to move'),
+    vp: z.string().describe('The project whose lead leads it from now on; "" = its own lead again'),
+  },
+  handler: async ({ project, vp }, call) => {
+    const body = await call('POST', '/org/vp', { project, vp }) as {
+      project?: string; vp?: string; lead?: { title?: string }; moved?: string[]; unchanged?: boolean;
+    };
+    const name = body?.project ?? String(project);
+    const outcome = body?.unchanged
+      ? `Nothing changed: ${name} was already so.`
+      : body?.vp
+        ? `${name} is now led by ${body.lead?.title ?? `${body.vp}'s lead`}; ${body.moved?.length ?? 0} worker(s) moved to it.`
+        : `${name} has its own lead again; ${body?.moved?.length ?? 0} worker(s) went back to it.`;
+    return withOutcome(body ?? {}, outcome, 'org_get shows the projects and who leads them.');
+  },
+  routes: [{ method: 'POST', path: '/org/vp' }],
+  tags: { readonly: false, remote: 'allow', primaryOnly: true },
+});

@@ -8,17 +8,18 @@
  *   Team     its work by state (Needs you / Working / Handed back / To do / Parked)
  *   Chat     its own session (SessionPanel), or a way to start one
  *   composer under Board and Team: a line to its session, then Chat shows it
+ *   Main's quick actions (MainQuickActions) under its Latest line
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
 import type { Task } from '@open-walnut/core';
 import { SessionPanel } from '@/components/sessions/SessionPanel';
 import { TaskBoardPane } from '@/components/board/TaskBoardPane';
 import { useSessionSend } from '@/hooks/useSessionSend';
-import { locateTaskOnHome, openSessionOnHome } from '@/utils/open-session';
 import { resolveTaskSessionId } from '@/utils/session-status';
 import { timeAgo } from '@/utils/time';
 import { OrgComposerBar } from './OrgComposerBar';
+import { MainQuickActions } from './MainQuickActions';
+import { recentMainStart } from './ask-main';
 import { OrgAvatar } from './OrgChannelList';
 import { useHasBoard } from './useBoardOwner';
 import {
@@ -36,8 +37,10 @@ interface Props {
   /** The tab the user picked for THIS node (`key`), for the URL. */
   onTabChange: (key: string, tab: OrgTab) => void;
   onSelect: (key: string) => void;
-  /** Talk to a task that is not this node: its session on home, or a composer bound to it. */
+  /** Open a task that is not this node: the page's side panel. */
   onOpenTask: (taskId: string) => void;
+  /** Open a session a chat names: the page's side panel. */
+  onOpenSession: (sessionId: string) => void;
   /** Start a chat with this node, which has no session yet. */
   onStartChat: (row: ChannelRow) => void;
   /** Phone: back to the list. */
@@ -61,9 +64,9 @@ function CountPills({ counts }: { counts: ChannelRow['counts'] }) {
   );
 }
 
-function AlertList({ alerts, onOpen }: { alerts: readonly OrgAlertView[]; onOpen: (a: OrgAlertView) => void }) {
+function AlertList({ alerts, onOpen, compact }: { alerts: readonly OrgAlertView[]; onOpen: (a: OrgAlertView) => void; compact?: boolean }) {
   return (
-    <div className="org-alerts" data-testid="org-alerts" role="region" aria-label="Needs you">
+    <div className={`org-alerts${compact ? ' is-compact' : ''}`} data-testid="org-alerts" role="region" aria-label="Needs you">
       {alerts.map((a) => (
         <div key={a.taskId} className="org-alert" data-testid="org-alert" data-task-id={a.taskId} data-kind={a.kind}>
           <span className="org-alert-label">Needs you</span>
@@ -105,9 +108,11 @@ function TeamBoard({ columns, onPick, emptyText }: {
   );
 }
 
-export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabChange, onSelect, onOpenTask, onStartChat, onBack, now }: Props) {
+export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabChange, onSelect, onOpenTask, onOpenSession, onStartChat, onBack, now }: Props) {
   const contact = useMemo(() => (row.contactId ? tasks.find((t) => t.id === row.contactId) : undefined), [tasks, row.contactId]);
-  const sessionId = contact ? resolveTaskSessionId(contact) : null;
+  // A Main started a moment ago by a quick action: its session before the store has it.
+  const launch = row.kind === 'main' ? recentMainStart(row.contactId) : null;
+  const sessionId = (contact ? resolveTaskSessionId(contact) : null) ?? launch?.sessionId ?? null;
   const hasBoard = useHasBoard(row.contactId);
   const columns = useMemo(
     () => (row.kind === 'main' ? mainTeamColumns(rows) : teamColumns(row, tasks)),
@@ -116,22 +121,25 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabChange, onSel
   const teamCount = row.kind === 'main' ? rows.length : row.node?.teams.length ?? 0;
   const [tab, setTab] = useState<OrgTab | null>(initialTab);
   const [focusChat, setFocusChat] = useState(false);
-  // The node's own default once its Board answer is in: its Board when it keeps one.
-  const shown: OrgTab | null = tab ?? (hasBoard === null ? null : hasBoard ? 'board' : 'team');
+  const title = row.kind === 'main' ? 'Main' : row.contactTitle;
+  // Main is always someone to talk to: its task is made by the first chat.
+  const canTalk = row.kind === 'main' || !!row.contactId || !!row.node?.needsLead;
+  // A node opens on its chat (the user, 2026-10-25: "chat first, not the board"); one no one
+  // answers for (the Inbox) on its team.
+  const shown: OrgTab | null = tab ?? (canTalk ? 'chat' : 'team');
   useEffect(() => { if (tab === 'board' && hasBoard === false) setTab('team'); }, [tab, hasBoard]);
+  // A pick of this same node that names a tab (a chat that names this node's session) shows it.
+  useEffect(() => { if (initialTab) setTab(initialTab); }, [initialTab]);
   const pick = (t: OrgTab) => { setTab(t); setFocusChat(false); onTabChange(row.key, t); };
   const { send } = useSessionSend(sessionId);
   // A send that answers after the user moved to another node must not pull them back.
   const mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
-  const navigate = useNavigate();
-  /** A task chip on the Board: a node of this page is selected; any other task is found on home. */
+  /** A task chip on the Board: a node of this page is selected; any other task opens beside it. */
   const openChip = (id: string) => {
     const hit = rows.find((r) => r.contactId === id);
     if (hit) { onSelect(hit.key); return; }
-    const task = tasks.find((t) => t.id === id);
-    const sid = task ? resolveTaskSessionId(task) : null;
-    if (sid) openSessionOnHome(sid, navigate); else locateTaskOnHome(id, navigate);
+    onOpenTask(id);
   };
 
   const openAlert = (a: OrgAlertView) => {
@@ -139,10 +147,8 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabChange, onSel
     onOpenTask(a.taskId);
   };
   const lastMoved = row.lastAt ? timeAgo(new Date(row.lastAt).toISOString(), { now }) : '';
-  const title = row.kind === 'main' ? 'Main' : row.contactTitle;
-  // Main is always someone to talk to: its task is made by the first chat.
-  const canTalk = row.kind === 'main' || !!row.contactId || !!row.node?.needsLead;
   const tabId = (t: OrgTab) => `org-tab-${t}-${row.key}`;
+  const alertsShown = shown === 'chat' ? row.alerts.filter((a) => a.taskId !== row.contactId) : row.alerts;
 
   return (
     <div className="org-detail" data-testid="org-detail" data-key={row.key}>
@@ -157,19 +163,23 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabChange, onSel
           </div>
         </div>
         <div className="org-tabs" role="tablist" aria-label={`${title} views`}>
-          {hasBoard && (
-            <button type="button" role="tab" id={tabId('board')} aria-controls="org-detail-panel" aria-selected={shown === 'board'} className={`org-tab${shown === 'board' ? ' is-on' : ''}`} data-testid="org-tab-board" onClick={() => pick('board')}>Board</button>
+          {canTalk && (
+            <button type="button" role="tab" id={tabId('chat')} aria-controls="org-detail-panel" aria-selected={shown === 'chat'} className={`org-tab${shown === 'chat' ? ' is-on' : ''}`} data-testid="org-tab-chat" onClick={() => pick('chat')}>Chat</button>
           )}
           <button type="button" role="tab" id={tabId('team')} aria-controls="org-detail-panel" aria-selected={shown === 'team'} className={`org-tab${shown === 'team' ? ' is-on' : ''}`} data-testid="org-tab-team" onClick={() => pick('team')}>
             {row.kind === 'main' ? 'Leads' : 'Team'} <span className="org-tab-count">{teamCount}</span>
           </button>
-          {canTalk && (
-            <button type="button" role="tab" id={tabId('chat')} aria-controls="org-detail-panel" aria-selected={shown === 'chat'} className={`org-tab${shown === 'chat' ? ' is-on' : ''}`} data-testid="org-tab-chat" onClick={() => pick('chat')}>Chat</button>
+          {hasBoard && (
+            <button type="button" role="tab" id={tabId('board')} aria-controls="org-detail-panel" aria-selected={shown === 'board'} className={`org-tab${shown === 'board' ? ' is-on' : ''}`} data-testid="org-tab-board" onClick={() => pick('board')}>Board</button>
           )}
         </div>
       </header>
       <div className="org-detail-latest" data-testid="org-detail-latest"><span className="org-muted">Latest</span> {row.latest}</div>
-      {row.alerts.length > 0 && shown !== 'chat' && <AlertList alerts={row.alerts} onOpen={openAlert} />}
+      {row.kind === 'main' && (
+        <MainQuickActions variant="row" onSent={() => { setTab('chat'); setFocusChat(false); onTabChange(row.key, 'chat'); }} />
+      )}
+      {/* On the chat, the contact's own prompt is in view already: only the others are listed. */}
+      {alertsShown.length > 0 && <AlertList alerts={alertsShown} onOpen={openAlert} compact={shown === 'chat'} />}
 
       <div
         id="org-detail-panel"
@@ -186,7 +196,7 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabChange, onSel
             onOpenTask={openChip}
             quietEmpty
             renderSession={(cardSessionId, opts) => (
-              <SessionPanel key={cardSessionId} sessionId={cardSessionId} embedded inset onClose={opts.onClose} />
+              <SessionPanel key={cardSessionId} sessionId={cardSessionId} embedded inset onClose={opts.onClose} onTaskClick={openChip} onSessionClick={onOpenSession} />
             )}
           />
         )}
@@ -199,14 +209,16 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabChange, onSel
         )}
         {shown === 'chat' && (sessionId ? (
           <div className="org-chat-host" data-testid="org-chat">
-            <SessionPanel key={sessionId} sessionId={sessionId} embedded focusComposer={focusChat} />
+            <SessionPanel key={sessionId} sessionId={sessionId} embedded focusComposer={focusChat} onTaskClick={openChip} onSessionClick={onOpenSession} />
           </div>
         ) : (
           <div className="org-chat-start" data-testid="org-chat-start">
+            {launch ? <p>Main is starting…</p> : <>
             <p>{row.contactId || row.kind === 'main' ? `${title} has not started yet.` : `${row.name} has no lead yet.`}</p>
             <button type="button" className="btn btn-sm btn-primary" data-testid="org-start-chat" onClick={() => onStartChat(row)}>
               {row.contactId || row.kind === 'main' ? `Start a chat with ${title}` : 'Make a lead and chat'}
             </button>
+            </>}
           </div>
         ))}
       </div>

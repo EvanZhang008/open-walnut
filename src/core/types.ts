@@ -814,6 +814,11 @@ export interface Task {
    *  from the task lists; the org chart and the chat slot show them. Payload blob,
    *  local-only, never pushed to sync backends. */
   org_role?: OrgRole;
+  /** A lead only: the other projects it leads, put under it by the user in the
+   *  org chart (setProjectVp in src/core/org/org-store.ts). Each stays its own
+   *  project with its own tasks; this lead is its contact. Payload blob,
+   *  local-only, never pushed to sync backends. */
+  org_leads?: string[];
   /** WAITING only: when the wait ends by itself (ISO datetime). At that time the
    *  task's session is woken like a trigger fire (src/core/task-wait-until.ts);
    *  with no session the task comes back as NEED_ACTION. A task entering WAITING

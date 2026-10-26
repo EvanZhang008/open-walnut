@@ -9,10 +9,11 @@
  *
  * Nothing new is stored for the shape: it is DERIVED from what the board already
  * has (projects, parent links, phases), so a task moved on the board is moved in
- * the org too, and a new task falls under its project's lead by itself. The only
- * stored fact is `org_role` on the two kinds of org node, the main agent and a
- * project lead. Dragging in the org chart writes the ordinary fields (a parent
- * link, a project), never an org edge.
+ * the org too, and a new task falls under its project's lead by itself. The
+ * stored facts are `org_role` on the two kinds of org node, the main agent and a
+ * project lead, and `org_leads` on a lead: the other projects the user put under
+ * it in the org chart (one VP leading several projects, each still its own
+ * project with its own tasks). Such a project's contact is that lead.
  *
  * Pure and shared: the server builds `GET /api/v1/org` and the main agent's
  * update notes from it, the browser draws the org chart from the same function
@@ -30,6 +31,8 @@ export interface OrgTaskLike {
   phase: TaskPhase;
   parent_task_id?: string;
   org_role?: OrgRole;
+  /** A lead only: the other projects it leads (Task.org_leads). */
+  org_leads?: readonly string[];
   walnut_agent?: boolean;
   created_at?: string;
   updated_at?: string;
@@ -78,6 +81,8 @@ export interface OrgProjectNode {
   needsLead: boolean;
   /** Who the main agent talks to now: the lead, else the one team. Absent = a lead is still to be made. */
   contactId?: string;
+  /** Led by another project's lead (its `org_leads`): that lead's own project. */
+  vp?: string;
   teams: OrgTaskNode[];
   counts: OrgCounts;
 }
@@ -162,12 +167,10 @@ export function pickMain<T extends OrgTaskLike>(tasks: readonly T[]): T | undefi
   return best;
 }
 
-/** A project's lead: an open one first, then the oldest (stable across reads). */
-export function pickLead<T extends OrgTaskLike>(tasks: readonly T[], project: string): T | undefined {
-  const key = projectKey(project);
+/** The best of some leads: an open one first, then the oldest (stable across reads). */
+function bestLead<T extends OrgTaskLike>(leads: readonly T[]): T | undefined {
   let best: T | undefined;
-  for (const t of tasks) {
-    if (t.org_role !== 'lead' || projectKey(t.project) !== key) continue;
+  for (const t of leads) {
     if (!best) { best = t; continue; }
     const open = (x: T) => (x.phase === 'COMPLETE' ? 1 : 0);
     if (open(t) !== open(best)) { if (open(t) < open(best)) best = t; continue; }
@@ -176,10 +179,34 @@ export function pickLead<T extends OrgTaskLike>(tasks: readonly T[], project: st
   return best;
 }
 
+/** Does this lead lead `project` for another project (its `org_leads`)? */
+export function leadsAlso(task: OrgTaskLike, project: string): boolean {
+  const key = projectKey(project);
+  return task.org_role === 'lead' && projectKey(task.project) !== key
+    && (task.org_leads ?? []).some((p) => projectKey(p) === key);
+}
+
+/** A project's OWN lead (its project is this one), whoever leads it now. */
+export function pickOwnLead<T extends OrgTaskLike>(tasks: readonly T[], project: string): T | undefined {
+  const key = projectKey(project);
+  return bestLead(tasks.filter((t) => t.org_role === 'lead' && projectKey(t.project) === key));
+}
+
+/** A project's lead: the lead the user put it under (org_leads), else its own. */
+export function pickLead<T extends OrgTaskLike>(tasks: readonly T[], project: string): T | undefined {
+  return bestLead(tasks.filter((t) => leadsAlso(t, project))) ?? pickOwnLead(tasks, project);
+}
+
 function better(a: OrgTaskLike, b: OrgTaskLike): boolean {
   const done = (x: OrgTaskLike) => (x.phase === 'COMPLETE' ? 1 : 0);
   if (done(a) !== done(b)) return done(a) < done(b);
   return (a.created_at ?? '') > (b.created_at ?? '');
+}
+
+/** The project whose lead leads `project`, when that is another project's lead. */
+function vpOf(lead: OrgTaskLike, project: string): string | undefined {
+  const own = (lead.project ?? '').trim();
+  return own && projectKey(own) !== projectKey(project) ? own : undefined;
 }
 
 /** Build the whole org from the task list. */
@@ -243,20 +270,30 @@ export function buildOrgTree(tasks: readonly OrgTaskLike[]): OrgTree {
     // The Inbox is not a project: no lead, its tasks are talked to one by one.
     const needsLead = !!project && teams.length > 1;
     const contactId = lead ? lead.id : teams.length === 1 ? teams[0]?.id : undefined;
+    const vp = lead ? vpOf(lead, project) : undefined;
     projects.push({
       kind: 'project', project, needsLead, teams, counts,
       ...(lead ? { lead: refOf(lead) } : {}),
       ...(contactId ? { contactId } : {}),
+      ...(vp ? { vp } : {}),
     });
   }
-  // A lead whose project has no open work right now still leads it.
+  // A lead whose project has no open work right now still leads it, and so does
+  // every project put under it.
   for (const t of tasks) {
     if (t.org_role !== 'lead' || t.phase === 'COMPLETE' || !(t.project ?? '').trim()) continue;
-    const key = projectKey(t.project);
-    if (teamsByProject.has(key) || projects.some((p) => projectKey(p.project) === key)) continue;
-    const lead = pickLead(tasks, t.project!);
-    if (!lead || lead.phase === 'COMPLETE') continue;
-    projects.push({ kind: 'project', project: (lead.project ?? '').trim(), needsLead: false, teams: [], counts: { ...ZERO }, lead: refOf(lead), contactId: lead.id });
+    for (const name of [t.project!, ...(t.org_leads ?? [])]) {
+      const key = projectKey(name);
+      if (!key || teamsByProject.has(key) || projects.some((p) => projectKey(p.project) === key)) continue;
+      const lead = pickLead(tasks, name);
+      if (!lead || lead.phase === 'COMPLETE') continue;
+      const project = projectKey(lead.project) === key ? (lead.project ?? '').trim() : name.trim();
+      const vp = vpOf(lead, project);
+      projects.push({
+        kind: 'project', project, needsLead: false, teams: [], counts: { ...ZERO }, lead: refOf(lead), contactId: lead.id,
+        ...(vp ? { vp } : {}),
+      });
+    }
   }
   projects.sort((a, b) => {
     if (!a.project !== !b.project) return a.project ? -1 : 1; // the Inbox last

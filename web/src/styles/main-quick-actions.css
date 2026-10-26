@@ -1,0 +1,64 @@
+/* Main's quick actions (web/src/components/org/MainQuickActions.tsx). */
+
+.main-qa {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px 18px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+}
+.main-qa-lead { color: var(--fg-muted); margin-right: 2px; }
+.main-qa-btn,
+.main-qa-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font: inherit;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.main-qa-btn {
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 13px;
+  background: var(--bg);
+  color: var(--fg);
+}
+.main-qa-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); background: var(--accent-subtle); }
+.main-qa-btn:disabled,
+.main-qa-trigger:disabled { opacity: 0.6; cursor: default; }
+.main-qa-btn svg,
+.main-qa-trigger svg { color: var(--accent); flex: none; }
+.main-qa-note { color: var(--fg-muted); margin-left: 4px; }
+.main-qa-note.is-held { color: var(--warning, #ff9500); }
+.main-qa-error { color: var(--error, #ff3b30); font-size: 11px; margin-left: 4px; white-space: nowrap; }
+
+.main-qa-host { display: inline-flex; align-items: center; gap: 4px; min-width: 0; }
+
+/* The Tasks page's "Projects" heading: a quiet text button at its right end. */
+.tp-rail-title .main-qa-trigger {
+  height: 20px;
+  padding: 0 6px;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: var(--fg-muted);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: normal;
+  text-transform: none;
+}
+.tp-rail-title .main-qa-trigger:hover:not(:disabled) { background: var(--bg-hover); color: var(--fg); }
+.tp-rail-title .main-qa-error { font-weight: 500; letter-spacing: normal; text-transform: none; }
+
+/* The menu's rows: the action, and one line of what it does, beside the menu's ✦. */
+.main-qa-menu { min-width: 260px; max-width: 320px; }
+.main-qa-item { display: inline-flex; flex-direction: column; gap: 1px; min-width: 0; vertical-align: top; }
+.main-qa-item-label { color: inherit; }
+.main-qa-item-hint { color: var(--fg-muted); font-size: 11px; white-space: normal; line-height: 1.35; }
+
+.org-page.is-phone .main-qa { padding: 8px 12px; }
+.org-page.is-phone .main-qa-note { flex-basis: 100%; margin-left: 0; }

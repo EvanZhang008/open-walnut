@@ -72,6 +72,8 @@ export interface CallerTask {
   focus_tier?: string;
   /** A project lead (org/org-tree.ts): its work lands in its project as top-level work, never in a folder. */
   orgLead?: boolean;
+  /** A lead's other projects (Task.org_leads): its own as much as its task's project. */
+  orgLeads?: string[];
 }
 
 /** The caller's session, as launch inheritance needs it. '' host = this box. */
@@ -133,6 +135,7 @@ export async function resolveCallerPlacement(callerSid: string | undefined): Pro
     pinned: Boolean(task.pinned),
     ...(task.pinned && task.focus_tier ? { focus_tier: task.focus_tier } : {}),
     ...(task.org_role === 'lead' ? { orgLead: true } : {}),
+    ...(task.org_role === 'lead' && task.org_leads?.length ? { orgLeads: [...task.org_leads] } : {}),
   };
   return { kind: isAskTask(task) ? 'ask' : 'worker', task: callerTask, session };
 }
@@ -223,6 +226,8 @@ export function projectElsewhereRefusal(
 ): string | null {
   if (caller.kind !== 'worker' || req.project === undefined) return null;
   if (sameProject(req.project, caller.task.project)) return null;
+  // A lead files work in every project it leads (the org chart put them under it).
+  if (caller.task.orgLeads?.some((p) => sameProject(req.project!, p))) return null;
   const reason = typeof req.project_reason === 'string' ? req.project_reason.replace(/\s+/g, ' ').trim() : '';
   if (reason.length >= PROJECT_REASON_MIN) return null;
   const name = (p: string) => (p.trim() ? `project "${p.trim()}"` : 'the Inbox');

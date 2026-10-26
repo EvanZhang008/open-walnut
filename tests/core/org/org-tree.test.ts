@@ -8,8 +8,8 @@
  */
 import { describe, it, expect } from 'vitest'
 import {
-  DIGEST_FOLD_MS, buildOrgTree, findProjectNode, formatAlertLine, formatDigestLine, isOrgMember, orgDigest, pickLead, pickMain,
-  planOrgNote, type OrgAlert, type OrgTaskLike,
+  DIGEST_FOLD_MS, buildOrgTree, findProjectNode, formatAlertLine, formatDigestLine, isOrgMember, leadsAlso, orgDigest, pickLead, pickMain,
+  pickOwnLead, planOrgNote, type OrgAlert, type OrgTaskLike,
 } from '../../../src/core/org/org-tree.js'
 import * as viaAlias from '@open-walnut/org-tree'
 import { isAskTask } from '../../../src/core/sessions/caller-placement.js'
@@ -278,5 +278,45 @@ describe('when the main agent\'s note goes (planOrgNote)', () => {
     expect(formatAlertLine(ask)).toBe('W: "Fix it" asks the user a question')
     expect(formatAlertLine({ ...ask, kind: 'permission', tool: 'Bash' })).toBe('W: "Fix it" waits for the user to approve Bash')
     expect(formatAlertLine({ ...fail, project: '' })).toBe('Inbox: "Ship it" stopped on an error')
+  })
+
+  describe('one VP for several projects (org_leads)', () => {
+    it('a project put under another lead is talked to through that lead, and still stands as its own project', () => {
+      const a1 = t({ project: 'Garden' })
+      const a2 = t({ project: 'Garden' })
+      const b1 = t({ project: 'Seeds', phase: 'IN_PROGRESS' })
+      const vp = t({ project: 'Garden', org_role: 'lead', title: 'Garden lead', org_leads: ['seeds'] })
+      const own = t({ project: 'Seeds', org_role: 'lead', title: 'Seeds lead', phase: 'COMPLETE' })
+      const tree = buildOrgTree([a1, a2, b1, vp, own])
+      const garden = tree.projects.find((p) => p.project === 'Garden')!
+      const seeds = tree.projects.find((p) => p.project === 'Seeds')!
+      expect(garden).toMatchObject({ contactId: vp.id, lead: { id: vp.id } })
+      expect(garden.vp).toBeUndefined()
+      expect(seeds).toMatchObject({ contactId: vp.id, lead: { id: vp.id }, vp: 'Garden' })
+      expect(seeds.teams.map((x) => x.id)).toEqual([b1.id])
+      // The project's own lead is still found, for giving it back.
+      expect(pickLead([vp, own], 'Seeds')?.id).toBe(vp.id)
+      expect(pickOwnLead([vp, own], 'Seeds')?.id).toBe(own.id)
+      expect(leadsAlso(vp, 'SEEDS')).toBe(true)
+      // A lead never "also" leads its own project.
+      expect(leadsAlso(t({ project: 'Seeds', org_role: 'lead', org_leads: ['Seeds'] }), 'Seeds')).toBe(false)
+    })
+
+    it('a project with no open work under a VP still shows, under that VP', () => {
+      const a = t({ project: 'Garden' })
+      const vp = t({ project: 'Garden', org_role: 'lead', org_leads: ['Seeds'] })
+      const seeds = buildOrgTree([a, vp]).projects.find((p) => p.project === 'Seeds')
+      expect(seeds).toMatchObject({ vp: 'Garden', contactId: vp.id, teams: [] })
+    })
+
+    it('a lead someone closed keeps the projects under it: the next contact reopens it', () => {
+      const b1 = t({ project: 'Seeds' })
+      const b2 = t({ project: 'Seeds' })
+      const vp = t({ project: 'Garden', org_role: 'lead', org_leads: ['Seeds'], phase: 'COMPLETE' })
+      const seeds = buildOrgTree([b1, b2, vp]).projects.find((p) => p.project === 'Seeds')!
+      expect(seeds.lead).toBeUndefined()
+      expect(seeds.needsLead).toBe(true)
+      expect(pickLead([b1, b2, vp], 'Seeds')?.id).toBe(vp.id)
+    })
   })
 })

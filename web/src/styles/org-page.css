@@ -236,6 +236,8 @@
 }
 
 .org-alerts { display: flex; flex-direction: column; gap: 6px; padding: 10px 18px 0; }
+/* Above the chat: about three rows, the rest a scroll away, so the chat keeps its room. */
+.org-alerts.is-compact { flex-shrink: 0; max-height: 128px; overflow-y: auto; }
 .org-alert {
   display: flex;
   align-items: center;
@@ -330,3 +332,68 @@
 .org-page.is-phone .org-composer { padding-left: 12px; padding-right: 12px; }
 .org-page.is-phone .org-alerts { padding: 8px 12px 0; }
 .org-page.is-phone .org-detail-body-team { padding: 12px; }
+
+/* The side panel: a task opened from the page (OrgSidePanel). A wide window gives it a column;
+   a narrow one lays it over the detail, so the list and the detail never move. */
+.org-page { position: relative; }
+.org-side {
+  width: clamp(380px, 34vw, 560px);
+  flex: none;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--border);
+  background: var(--bg);
+}
+.org-side > * { flex: 1; min-width: 0; min-height: 0; }
+@media (max-width: 1180px) {
+  .org-page:not(.is-phone) .org-side {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 6;
+    width: min(480px, 92%);
+    box-shadow: -10px 0 28px rgba(0, 0, 0, 0.14);
+  }
+}
+.org-page.is-phone .org-side { width: 100%; border-left: none; }
+.org-side-home {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  margin-right: 4px;
+  flex: none;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+.org-side-home:hover { background: var(--bg-hover); color: var(--fg); }
+.org-side.org-side-card > * { flex: none; }
+.org-side-card-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 14px 16px 10px;
+  border-bottom: 1px solid var(--border);
+}
+.org-side-card-title { flex: 1; min-width: 0; margin: 0; font-size: 15px; font-weight: 600; overflow-wrap: anywhere; }
+.org-side-close {
+  border: none;
+  background: transparent;
+  color: var(--fg-muted);
+  font-size: 20px;
+  line-height: 1;
+  padding: 0 2px;
+  cursor: pointer;
+}
+.org-side-close:hover { color: var(--fg); }
+.org-side-card-body { display: flex; flex-direction: column; gap: 8px; padding: 12px 16px; font-size: 13px; }
+.org-side-card-body p { margin: 0; }
+.org-side-card-desc { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 40vh; overflow: auto; }
+.org-side-card-actions { display: flex; gap: 8px; margin-top: 4px; }

@@ -1,18 +1,19 @@
 /**
  * /org: Main and the project leads, one page (the sidebar's Org).
  *
- *   ┌ list ──────────┬ detail ─────────────────────────────────┐
- *   │ Main (pinned)   │ the selected node: counts, Latest,       │
- *   │ Leads · N       │ Needs you, Board | Team | Chat, composer │
- *   │  one row each   │                                          │
- *   └─────────────────┴──────────────────────────────────────────┘
+ *   ┌ list ──────────┬ detail ─────────────────────────────────┬ side ─────────┐
+ *   │ Main (pinned)   │ the selected node: counts, Latest,       │ a task opened │
+ *   │ Leads · N       │ Needs you, Board | Team | Chat, composer │ from the page │
+ *   │  one row each   │                                          │ (its session) │
+ *   └─────────────────┴──────────────────────────────────────────┴───────────────┘
  *
  * Everything is live from the browser's stores: the org tree is built from the
  * task store with the server's own function (@open-walnut/org-tree), and what
- * waits on a prompt comes from the session status store. The selection and tab
- * ride the URL (?node=…&tab=…), so a reload or Back keeps them. On a phone the
- * list and the detail take turns. The old org chart (drag to reparent) stays one
- * click away.
+ * waits on a prompt comes from the session status store. The selection, tab and
+ * opened task ride the URL (?node=…&tab=…&open=…), so a reload or Back keeps them.
+ * A task clicked on the page opens in the side panel, so the user stays here (a
+ * narrow window lays it over the detail). On a phone the list, the detail and the
+ * opened task take turns. The old org chart (drag to reparent) stays one click away.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
@@ -30,6 +31,7 @@ import { log } from '@/utils/log';
 import { OrgChartSheet } from '@/components/org/OrgChartSheet';
 import { OrgChannelList } from '@/components/org/OrgChannelList';
 import { OrgNodeDetail, type OrgTab } from '@/components/org/OrgNodeDetail';
+import { OrgSidePanel, parseSideTarget, sideTargetParam, type OrgSideTarget } from '@/components/org/OrgSidePanel';
 import {
   MAIN_KEY, buildChannels, filterChannels, flattenNodes, pickChannel, projectRowKey, type AlertProbe, type ChannelRow,
 } from '@/components/org/org-channels-model';
@@ -113,13 +115,17 @@ export function OrgPage() {
   const picked = nodeParam === MAIN_KEY || channels.rows.some((r) => r.key === nodeParam);
   const showDetail = !phone || picked;
   const visibleRows = useMemo(() => filterChannels(channels.rows, query), [channels.rows, query]);
+  const openParam = params.get('open');
+  const side = useMemo(() => parseSideTarget(openParam), [openParam]);
 
-  // A phone pushes the pick (Back returns to the list); the desktop replaces it.
-  const select = useCallback((key: string) => {
+  // A phone pushes the pick (Back returns to the list); the desktop replaces it. A new pick
+  // closes the side panel: what it showed belonged to the node the user left.
+  const select = useCallback((key: string, tab?: OrgTab) => {
     setParams((prev) => {
       const next = new URLSearchParams(prev);
       next.set('node', key);
-      next.delete('tab');
+      if (tab) next.set('tab', tab); else next.delete('tab');
+      next.delete('open');
       return next;
     }, phone ? { state: { orgPick: true } } : { replace: true });
   }, [setParams, phone]);
@@ -142,6 +148,49 @@ export function OrgPage() {
     }, { replace: true, state: (window.history.state as { usr?: unknown } | null)?.usr ?? null });
   }, [setParams]);
 
+  // The side panel. A phone pushes its first opening (Back closes it); switching what it shows,
+  // and the desktop, replace, keeping the entry's state.
+  // Both refs move at the click, not at the next render, so two fast clicks push once and go back once.
+  const sideOpen = useRef(!!side);
+  sideOpen.current = !!side;
+  const closing = useRef(false);
+  useEffect(() => { closing.current = false; }, [openParam]);
+  const openSide = useCallback((t: OrgSideTarget) => {
+    log.info('org-page', 'open beside', { kind: t.kind, id: t.id });
+    const push = phone && !sideOpen.current;
+    sideOpen.current = true;
+    setParams((prev) => {
+      const next = new URLSearchParams(prev);
+      next.set('open', sideTargetParam(t));
+      return next;
+    }, push
+      ? { state: { orgSide: true } }
+      : { replace: true, state: (window.history.state as { usr?: unknown } | null)?.usr ?? null });
+  }, [setParams, phone]);
+  // Main or a lead named anywhere on the page is a node of the page: it is selected, not opened beside.
+  const nodeOf = useCallback((match: (t: Task) => boolean): ChannelRow | undefined => {
+    const all = [channels.main, ...channels.rows];
+    return all.find((r) => { const t = r.contactId ? tasks.find((x) => x.id === r.contactId) : undefined; return !!t && match(t); });
+  }, [channels, tasks]);
+  const openTask = useCallback((taskId: string) => {
+    const node = nodeOf((t) => t.id === taskId);
+    if (node) { select(node.key); return; }
+    openSide({ kind: 'task', id: taskId });
+  }, [nodeOf, select, openSide]);
+  const openSession = useCallback((sessionId: string) => {
+    const node = nodeOf((t) => resolveTaskSessionId(t) === sessionId);
+    if (node) { select(node.key, 'chat'); return; }
+    openSide({ kind: 'session', id: sessionId });
+  }, [nodeOf, select, openSide]);
+  const closeSide = useCallback(() => {
+    if (closing.current) return;
+    closing.current = true;
+    sideOpen.current = false;
+    if ((window.history.state as { usr?: { orgSide?: boolean } } | null)?.usr?.orgSide) { navigate(-1); return; }
+    setParams((prev) => { const next = new URLSearchParams(prev); next.delete('open'); return next; },
+      { replace: true, state: (window.history.state as { usr?: unknown } | null)?.usr ?? null });
+  }, [navigate, setParams]);
+
   /** Talk to a task off this page: its session on home, or a composer bound to it (MainPage). */
   const chatOnHome = useCallback((taskId: string) => {
     log.info('org-page', 'open on home', { taskId });
@@ -160,21 +209,12 @@ export function OrgPage() {
     }
   }, [chatOnHome, showOperationError]);
 
-  // The chart's Chat: a node on this page is selected here (a lead it just made too,
-  // by its project, before the store has it); any other task opens on home.
-  const chartChat = useCallback(async (taskId: string | 'main') => {
-    setChartOpen(false);
-    if (taskId === 'main') { select(MAIN_KEY); return; }
-    const row = channels.rows.find((r) => r.contactId === taskId);
-    if (row) { select(row.key); return; }
-    const task = tasks.find((t) => t.id === taskId) ?? await fetchTask(taskId).catch(() => undefined);
-    if (task?.org_role === 'lead') { select(projectRowKey(task.project ?? '')); return; }
-    chatOnHome(taskId);
-  }, [channels.rows, tasks, select, chatOnHome]);
+  // A phone shows one of the three at a time; the opened task covers the rest.
+  const phoneView = !phone ? null : side ? 'side' : showDetail ? 'detail' : 'list';
 
   return (
-    <div className={`org-page${phone ? ' is-phone' : ''}${showDetail ? ' shows-detail' : ''}`} data-testid="org-page">
-      {(!phone || !showDetail) && (
+    <div className={`org-page${phone ? ' is-phone' : ''}${showDetail ? ' shows-detail' : ''}${side ? ' shows-side' : ''}`} data-testid="org-page">
+      {(!phone || phoneView === 'list') && (
         <OrgChannelList
           main={channels.main}
           rows={visibleRows}
@@ -187,7 +227,7 @@ export function OrgPage() {
           now={now}
         />
       )}
-      {showDetail && (
+      {showDetail && (!phone || phoneView === 'detail') && (
         <section className="org-detail-pane" aria-label={selected.name}>
           <OrgNodeDetail
             key={selected.key}
@@ -197,14 +237,25 @@ export function OrgPage() {
             initialTab={nodeParam === selected.key ? urlTab : null}
             onTabChange={setTab}
             onSelect={select}
-            onOpenTask={chatOnHome}
+            onOpenTask={openTask}
+            onOpenSession={openSession}
             onStartChat={(row) => { void startChat(row); }}
             {...(phone ? { onBack: back } : {})}
             now={now}
           />
         </section>
       )}
-      {chartOpen && <OrgChartSheet onClose={() => setChartOpen(false)} onChat={(id) => { void chartChat(id); }} />}
+      {side && (
+        <OrgSidePanel
+          target={side}
+          tasks={tasks}
+          onClose={closeSide}
+          onOpenTask={openTask}
+          onOpenSession={openSession}
+          onStartChat={chatOnHome}
+        />
+      )}
+      {chartOpen && <OrgChartSheet main={channels.main} rows={channels.rows} onClose={() => setChartOpen(false)} onPick={(key) => select(key)} />}
     </div>
   );
 }

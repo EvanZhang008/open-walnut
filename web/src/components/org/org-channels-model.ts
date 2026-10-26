@@ -49,6 +49,8 @@ export interface ChannelRow {
   /** Newest activity among the row's tasks (ms), 0 = unknown. */
   lastAt: number;
   unread: boolean;
+  /** Led by another project's VP (the org chart): that VP's own project. */
+  vp?: string;
   node?: OrgProjectNode;
 }
 
@@ -115,7 +117,8 @@ function latestLine(nodes: readonly OrgTaskNode[], byId: ReadonlyMap<string, Tas
 
 function projectRow(p: OrgProjectNode, byId: ReadonlyMap<string, Task>, probe: AlertProbe): ChannelRow {
   const nodes = flattenNodes(p.teams);
-  const ids = [...(p.lead ? [p.lead.id] : []), ...nodes.map((n) => n.id)];
+  // A VP leading several projects waits on the user once, on its own project's row.
+  const ids = [...(p.lead && !p.vp ? [p.lead.id] : []), ...nodes.map((n) => n.id)];
   const alerts = collectAlerts(ids, byId, probe);
   const lead = p.lead ? byId.get(p.lead.id) : undefined;
   const contact = p.contactId ? byId.get(p.contactId) : undefined;
@@ -134,6 +137,7 @@ function projectRow(p: OrgProjectNode, byId: ReadonlyMap<string, Task>, probe: A
     latest: latestLine(nodes, byId, alerts),
     lastAt: Math.max(0, ...ids.map((id) => taskTime(byId.get(id)))),
     unread: !!(lead ?? contact)?.unread,
+    ...(p.vp ? { vp: p.vp } : {}),
     node: p,
   };
 }
