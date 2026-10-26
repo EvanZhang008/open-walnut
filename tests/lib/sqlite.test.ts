@@ -47,6 +47,27 @@ describe('sqlite on bun', () => {
     expect(db.prepare('SELECT count(*) FROM t WHERE name IN (?, ?)').pluck().get('x', 'w')).toBe(2)
   })
 
+  it('a connection entering WAL mode syncs at checkpoints, as on better-sqlite3, unless it chose its own level', () => {
+    // better-sqlite3 (and the built dylib) compile DEFAULT_WAL_SYNCHRONOUS=1; bun's own SQLite on Linux does not.
+    expect(db.pragma('journal_mode = WAL', { simple: true })).toBe('wal')
+    expect(db.pragma('synchronous', { simple: true })).toBe(1)
+    const own = new Database(path.join(dir, 'own.db'))
+    try {
+      own.pragma('synchronous = FULL')
+      expect(own.pragma('journal_mode = WAL')).toEqual([{ journal_mode: 'wal' }])
+      expect(own.pragma('synchronous', { simple: true })).toBe(2)
+    } finally {
+      own.close()
+    }
+    // Rollback-journal mode keeps the library's own default (FULL on both).
+    const plain = new Database(path.join(dir, 'plain.db'))
+    try {
+      expect(plain.pragma('synchronous', { simple: true })).toBe(2)
+    } finally {
+      plain.close()
+    }
+  })
+
   it('pluck, raw, iterate and the statement facts', () => {
     db.prepare('INSERT INTO t (name) VALUES (?)').run('a')
     db.prepare('INSERT INTO t (name) VALUES (?)').run('b')

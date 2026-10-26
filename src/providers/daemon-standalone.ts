@@ -4864,7 +4864,11 @@ const LEGACY_WN_SHIM_MARKERS = ['walnut-wn-shim v1']
 // the hub the REAL npm-installed walnut CLI must always win, whatever the
 // PATH order — so this shim first scans PATH (minus its own dir) for another
 // walnut and execs it, and only then falls back to the daemon's gateway shim.
-const USER_WALNUT_SHIM_MARKER = 'walnut-user-shim v1'
+// Built from parts, so the literal is not in the compiled file: a 0.6.x daemon finds the
+// marker in ~/.local/bin/walnut, reads it as its own shim and writes over it (through
+// install.sh's symlink, into the real install). The shim text it writes still carries it.
+const USER_WALNUT_SHIM_TAG = ['walnut', 'user', 'shim'].join('-')
+const USER_WALNUT_SHIM_MARKER = USER_WALNUT_SHIM_TAG + ' v1'
 const USER_WALNUT_SHIM_MAX_BYTES = 16 * 1024
 
 function userWalnutShimText(): string {
@@ -4878,7 +4882,7 @@ function userWalnutShimText(): string {
     + '  [ "$d" = "$self_dir" ] && continue\n'
     + '  [ -x "$d/walnut" ] || continue\n'
     + '  # skip sibling copies of this shim (two installs must not exec each other)\n'
-    + '  grep -q "walnut-user-shim" "$d/walnut" 2>/dev/null && continue\n'
+    + '  grep -q "' + USER_WALNUT_SHIM_TAG + '" "$d/walnut" 2>/dev/null && continue\n'
     + '  IFS=$old_ifs && exec "$d/walnut" "$@"\n'
     + 'done\n'
     + 'IFS=$old_ifs\n'

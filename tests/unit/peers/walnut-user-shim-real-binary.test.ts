@@ -36,13 +36,27 @@ afterEach(() => { fs.rmSync(home, { recursive: true, force: true }) })
 function installNodeTwin(): void {
   // eslint-disable-next-line @typescript-eslint/no-implied-eval
   const run = new Function(
-    'fs', 'path', 'HOME_DIR', 'IS_PROD_DAEMON_DIR', 'PROD_DAEMON_DIR', 'USER_WALNUT_SHIM_MARKER', 'USER_WALNUT_SHIM_MAX_BYTES', 'LEGACY_WN_SHIM_MARKERS', 'logMsg',
+    'fs', 'path', 'HOME_DIR', 'IS_PROD_DAEMON_DIR', 'PROD_DAEMON_DIR', 'USER_WALNUT_SHIM_MARKER', 'USER_WALNUT_SHIM_TAG', 'USER_WALNUT_SHIM_MAX_BYTES', 'LEGACY_WN_SHIM_MARKERS', 'logMsg',
     nodeTwinFunctions() + '\ninstallUserWalnutShim();',
   )
-  run(fs, path, home, true, '/tmp/open-walnut', 'walnut-user-shim v1', 16 * 1024, ['walnut-wn-shim v1'], () => undefined)
+  run(fs, path, home, true, '/tmp/open-walnut', 'walnut-user-shim v1', 'walnut-user-shim', 16 * 1024, ['walnut-wn-shim v1'], () => undefined)
 }
 
 describe('user-PATH walnut shim installer and a real walnut file', () => {
+  it('no source the compiled file is built from holds the marker: an older daemon (0.6.x) would read the file as its shim and overwrite it', () => {
+    const hits: string[] = []
+    const walk = (dir: string): void => {
+      for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+        const p = path.join(dir, e.name)
+        if (e.isDirectory()) walk(p)
+        else if (/\.(ts|tsx|js|mjs|cjs)$/.test(e.name) && fs.readFileSync(p, 'utf-8').includes('walnut-user-shim')) hits.push(path.relative(ROOT, p))
+      }
+    }
+    walk(path.join(ROOT, 'src'))
+    expect(hits).toEqual([])
+  })
+
+
   it('leaves a big walnut that happens to contain the marker untouched', () => {
     const bin = path.join(home, '.local', 'bin')
     fs.mkdirSync(bin, { recursive: true })

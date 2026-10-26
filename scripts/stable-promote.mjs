@@ -28,6 +28,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { commitVerdict } from './ci-gate.mjs'
+import { launcherManifest } from './npm-packages.mjs'
 import { nextVersion, setManifestVersion } from './release.mjs'
 import { releaseNotes } from './release-notes.mjs'
 
@@ -160,7 +161,12 @@ export function rollReleased(text, notes, version, date) {
   return `${head}\n## [Unreleased]\n\n${remaining ? `${remaining}\n\n` : ''}## [${version}] - ${date}\n\n${notes.trim()}\n${rest ? `\n${rest}` : ''}`
 }
 
-/** The packages whose install scripts a global install must allow: the updater's list (install-kind.ts). */
+/**
+ * The packages whose install scripts a global install of `pkg` must allow: the
+ * package and the ones its manifest allows (a 0.6.x release's manifest named them,
+ * and its updater passed that list; the launcher's names none, so the updater
+ * passes the launcher alone, install-kind.ts).
+ */
 export function allowedScripts(pkg) {
   return [pkg.name, ...Object.entries(pkg.allowScripts ?? {}).filter(([, v]) => v === true).map(([k]) => k)]
 }
@@ -220,7 +226,9 @@ async function main() {
     return
   }
   if (mode === 'allow-scripts') {
-    process.stdout.write(`${allowedScripts(JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'))).join(',')}\n`)
+    // What npm installs is the launcher (npm-packages.mjs), not this repo's package.json.
+    const repo = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'))
+    process.stdout.write(`${allowedScripts(launcherManifest(repo.version, repo)).join(',')}\n`)
     return
   }
   process.stderr.write('usage: stable-promote.mjs plan [--notes <file>] [--now <iso>] | roll --version x.y.z --notes <file> | allow-scripts\n')

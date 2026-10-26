@@ -294,6 +294,25 @@ function hasCompiledDefaults(db: BunDatabase): boolean {
   return compiledDefaults
 }
 
+/**
+ * better-sqlite3's SQLite (and the built dylib) is compiled with
+ * DEFAULT_WAL_SYNCHRONOUS=1: a connection that enters WAL mode syncs at
+ * checkpoints, not at every commit. bun's own on Linux syncs every commit, which
+ * waits on the disk on the server's event loop. Read once per process.
+ */
+let walSyncDefault: boolean | null = null
+function hasWalSyncDefault(db: BunDatabase): boolean {
+  if (walSyncDefault === null) {
+    const stmt = db.prepare('PRAGMA compile_options')
+    try {
+      walSyncDefault = stmt.values().some((r) => String(r[0]) === 'DEFAULT_WAL_SYNCHRONOUS=1')
+    } finally {
+      stmt.finalize()
+    }
+  }
+  return walSyncDefault
+}
+
 /** A BLOB comes back as a Buffer over the same bytes, as better-sqlite3 gives it. */
 function asBuffer(value: unknown): unknown {
   return value instanceof Uint8Array && !Buffer.isBuffer(value)
@@ -470,6 +489,8 @@ class SqliteDatabase {
   readonly readonly: boolean
   readonly memory: boolean
   private readonly busyTimeout: number
+  /** This connection set its own `synchronous` (the WAL default then stays out of it). */
+  private syncSet = false
 
   constructor(filename = ':memory:', options: Options = {}) {
     const bun = bunSqlite()
@@ -543,15 +564,25 @@ class SqliteDatabase {
     const handle = this.handle()
     checkOneStatement(`PRAGMA ${source}`)
     const stmt = handle.prepare(`PRAGMA ${source}`)
+    let result: unknown
     try {
       if (options.simple) {
         const first = stmt.values()[0]
-        return first ? asBuffer(first[0]) : undefined
+        result = first ? asBuffer(first[0]) : undefined
+      } else {
+        result = stmt.all().map(fixRow)
       }
-      return stmt.all().map(fixRow)
     } finally {
       stmt.finalize()
     }
+    if (/^\s*synchronous\s*=/i.test(source)) this.syncSet = true
+    // Entering WAL mode: the sync level better-sqlite3's SQLite picks then (hasWalSyncDefault),
+    // unless this connection chose one itself.
+    else if (!this.syncSet && /^\s*journal_mode\s*=\s*wal\s*$/i.test(source) && !hasWalSyncDefault(handle)) {
+      const mode = options.simple ? result : (result as Array<{ journal_mode?: unknown }>)[0]?.journal_mode
+      if (String(mode).toLowerCase() === 'wal') handle.exec('PRAGMA synchronous = NORMAL')
+    }
+    return result
   }
 
   transaction<F extends (...args: never[]) => unknown>(fn: F): Transaction<F> {

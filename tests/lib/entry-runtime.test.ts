@@ -10,10 +10,13 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
+import { realNodeOnPath } from '../../scripts/outside-node.mjs'
 import { dropBunBeBun, runtimeRefusal } from '../../src/lib/entry-runtime.js'
 
 const ROOT = path.resolve(import.meta.dirname, '../..')
-const NODE = spawnSync('node', ['--version'], { encoding: 'utf8' }).status === 0 ? 'node' : null
+// The real Node, not the `node` shim `bun --bun` puts first on PATH (it is bun).
+// CI's node-side job runs this file with WALNUT_REQUIRE_NODE=1, where a missing Node fails.
+const NODE = realNodeOnPath()
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-entry-runtime-'))
 afterAll(() => fs.rmSync(tmp, { recursive: true, force: true }))
 
@@ -46,6 +49,10 @@ describe('the CLI entries run only on bun', () => {
     // It must not depend on a Walnut module, which would load first.
     const imports = fs.readFileSync(path.join(ROOT, 'src/lib/entry-runtime.ts'), 'utf8').match(/^import .*$/gm) ?? []
     expect(imports).toEqual(["import fs from 'node:fs'"])
+  })
+
+  it('has a real Node to run on where one is required', () => {
+    if (process.env.WALNUT_REQUIRE_NODE === '1') expect(NODE, 'WALNUT_REQUIRE_NODE=1, and there is no Node on PATH').not.toBeNull()
   })
 
   it.skipIf(!NODE)('on a real Node: exits 1 with the line on stderr and nothing on stdout', () => {

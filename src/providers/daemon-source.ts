@@ -5759,7 +5759,9 @@ var LEGACY_WN_SHIM_MARKERS = ['walnut-wn-shim v1'];
 // A 'walnut' on the user's PATH (one name everywhere). A real walnut CLI
 // anywhere else on PATH always wins; otherwise the daemon gateway shim
 // answers. Keep in sync with daemon-standalone.ts userWalnutShimText.
-var USER_WALNUT_SHIM_MARKER = 'walnut-user-shim v1';
+// Built from parts, so the literal is not in the compiled file (daemon-standalone.ts).
+var USER_WALNUT_SHIM_TAG = ['walnut', 'user', 'shim'].join('-');
+var USER_WALNUT_SHIM_MARKER = USER_WALNUT_SHIM_TAG + ' v1';
 var USER_WALNUT_SHIM_MAX_BYTES = 16 * 1024;
 
 function userWalnutShimText() {
@@ -5773,7 +5775,7 @@ function userWalnutShimText() {
     + '  [ "$d" = "$self_dir" ] && continue\\n'
     + '  [ -x "$d/walnut" ] || continue\\n'
     + '  # skip sibling copies of this shim (two installs must not exec each other)\\n'
-    + '  grep -q "walnut-user-shim" "$d/walnut" 2>/dev/null && continue\\n'
+    + '  grep -q "' + USER_WALNUT_SHIM_TAG + '" "$d/walnut" 2>/dev/null && continue\\n'
     + '  IFS=$old_ifs && exec "$d/walnut" "$@"\\n'
     + 'done\\n'
     + 'IFS=$old_ifs\\n'

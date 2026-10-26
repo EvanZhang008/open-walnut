@@ -32,13 +32,13 @@ function walnutShimText(prodDir = '/tmp/open-walnut'): string {
   expect(fnStart).toBeGreaterThan(-1)
   const fnEnd = twin.indexOf('\n}', fnStart)
   const fnSrc = twin.slice(fnStart, fnEnd + 2)
-  // The function references PROD_DAEMON_DIR and USER_WALNUT_SHIM_MARKER.
+  // The function references PROD_DAEMON_DIR, USER_WALNUT_SHIM_MARKER and USER_WALNUT_SHIM_TAG.
   // eslint-disable-next-line @typescript-eslint/no-implied-eval
   const make = new Function(
-    'PROD_DAEMON_DIR', 'USER_WALNUT_SHIM_MARKER',
+    'PROD_DAEMON_DIR', 'USER_WALNUT_SHIM_MARKER', 'USER_WALNUT_SHIM_TAG',
     fnSrc + '\nreturn userWalnutShimText();',
-  ) as (prodDir: string, marker: string) => string
-  return make(prodDir, 'walnut-user-shim v1')
+  ) as (prodDir: string, marker: string, tag: string) => string
+  return make(prodDir, 'walnut-user-shim v1', 'walnut-user-shim')
 }
 
 let tmp: string
@@ -75,7 +75,7 @@ function run(entryDir: string, pathDirs: string[], daemonDir: string): { out: st
 describe('user-PATH walnut shim: sibling copies never exec each other', () => {
   it('the bun twin (daemon-standalone.ts) carries the same sibling-skip line', () => {
     const standalone = fs.readFileSync(path.join(ROOT, 'src/providers/daemon-standalone.ts'), 'utf-8')
-    expect(standalone).toContain('grep -q "walnut-user-shim" "$d/walnut" 2>/dev/null && continue')
+    expect(standalone).toContain(`'  grep -q "' + USER_WALNUT_SHIM_TAG + '" "$d/walnut" 2>/dev/null && continue\\n'`)
   })
 
   it('two sibling shims pass through to the real CLI later in PATH', () => {

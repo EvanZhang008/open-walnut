@@ -52,6 +52,7 @@ import { AcpJournalProjector } from './acp-journal-projector.js'
 import { AcpStreamNormalizer } from './acp-stream-normalizer.js'
 import { AcpTurnSpeedMeter } from '../core/sessions/acp-turn-speed.js'
 import { walnutApiEnvForSession } from '../lib/self-api-root.js'
+import { singleFile, type SingleFile } from '../lib/single-file.js'
 import type {
   AcpCapabilitySnapshot,
   AcpConfigOption,
@@ -103,6 +104,18 @@ export interface ResolveAcpArtifactsOptions {
  *   cli     → the provider's own CLI speaks ACP (`gemini --experimental-acp`)
  *   config  → argv the user supplied in walnut config (custom)
  */
+/**
+ * The env acpStart hands the worker and its adapter. On the compiled file their
+ * commands are scripts in THIS server's runtime tree, and the file runs a script
+ * only inside its own tree; the daemon may have been started by an earlier
+ * deploy (dev-prod.sh gives each its own WALNUT_RUNTIME_DIR) and its children
+ * inherit that one, so the tree is named here.
+ */
+export function acpStartEnv(env: Record<string, string> | undefined, info: SingleFile | null = singleFile()): Record<string, string> | undefined {
+  if (!info) return env
+  return { ...(env ?? {}), WALNUT_RUNTIME_DIR: path.dirname(info.root) }
+}
+
 export function resolveAcpArtifacts(
   engine: SessionEngine = 'codex',
   options: ResolveAcpArtifactsOptions = {},
@@ -1292,7 +1305,7 @@ export class AcpSession {
       cwd: this.cfg.cwd,
       workerCmd,
       adapterCmd,
-      env: adapterEnv,
+      env: acpStartEnv(adapterEnv),
       providerSessionId: preemptFreshSession ? undefined : (this._providerSessionId ?? undefined),
       fromOffset: this._seenV,
       mcpServers,

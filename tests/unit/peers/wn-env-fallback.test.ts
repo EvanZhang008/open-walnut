@@ -45,6 +45,7 @@ import {
 } from '../../../src/core/peers/capability-router.js';
 import { PeerThrottle, GATEWAY_WRITE_MAX_PER_WINDOW } from '../../../src/core/peers/peer-throttle.js';
 import { getDaemonSource } from '../../../src/providers/daemon-source.js';
+import { SOURCE_TWIN } from '../../helpers/source-twin.js';
 
 const UID = 501;
 const TRUSTED: WalnutSocketInfo = { isSocket: true, uid: UID, mode: 0o600 };
@@ -269,7 +270,9 @@ describe('daemon twin parity for the external caller', () => {
       expect(src).toMatch(/const IS_PROD_DAEMON_DIR = path\.resolve\(DAEMON_DIR\) === path\.resolve\(PROD_DAEMON_DIR\)\s*\|\|\s*path\.resolve\(DAEMON_DIR\) === path\.resolve\(FALLBACK_DAEMON_DIR\)/);
       // Never clobber a foreign binary: the guard reads the shim's marker.
       expect(src).toMatch(/existing\.(includes|indexOf)\((USER_WALNUT_SHIM_MARKER|marker)\)/);
-      expect(src).toMatch(/USER_WALNUT_SHIM_MARKER = 'walnut-user-shim v1'/);
+      // Built from parts, so the compiled file never carries the literal (an old daemon would overwrite it).
+      expect(src).toMatch(/USER_WALNUT_SHIM_TAG = \['walnut', 'user', 'shim'\]\.join\('-'\)/);
+      expect(src).toMatch(/USER_WALNUT_SHIM_MARKER = USER_WALNUT_SHIM_TAG \+ ' v1'/);
       expect(src).toMatch(/'\.local', 'bin'\)/);
       // The retired `wn` name is actively cleaned up, marker-guarded: our old
       // shims are deleted, a foreign wn binary is left alone.
@@ -301,7 +304,7 @@ describe('node daemon twin: wn output through a pipe', () => {
     fs.chmodSync(sock, 0o600);
 
     const result = await new Promise<{ code: number | null; out: string; err: string }>((resolve) => {
-      const child = spawn(process.execPath, [twin, 'wn', 'tools', 'list', '--json'], {
+      const child = spawn(SOURCE_TWIN.file, [twin, 'wn', 'tools', 'list', '--json'], {
         env: {
           ...process.env,
           WALNUT_DAEMON_DIR: dir,
@@ -358,7 +361,7 @@ describe('node daemon twin: wn output through a pipe', () => {
     fs.chmodSync(sock, 0o600);
 
     const result = await new Promise<{ code: number | null; out: string; err: string }>((resolve) => {
-      const child = spawn(process.execPath, [twin, 'wn', ...args], {
+      const child = spawn(SOURCE_TWIN.file, [twin, 'wn', ...args], {
         env: {
           ...process.env,
           WALNUT_DAEMON_DIR: dir,

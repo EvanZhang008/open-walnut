@@ -18,7 +18,7 @@ import {
   updateSessionRecord,
 } from '../../src/core/session-tracker.js';
 import { _resetForTesting } from '../../src/core/task-manager.js';
-import { AcpSession, splitAcpModelId, engineEnvOverlayFromConfig } from '../../src/providers/acp-session.js';
+import { AcpSession, acpStartEnv, splitAcpModelId, engineEnvOverlayFromConfig } from '../../src/providers/acp-session.js';
 import { mergeAcpSpawnEnv } from '../../src/providers/acp-worker/protocol.js';
 import type { AcpCapabilitySnapshot } from '../../src/providers/acp-worker/protocol.js';
 import { guardedPath } from '../setup/exec-guard.js';
@@ -490,5 +490,22 @@ describe('engines.<id>.env overlay (credentials wiring)', () => {
     expect(base.AWS_BEARER_TOKEN_BEDROCK).toBe('stale-token');
     // No overlay → plain copy of base.
     expect(mergeAcpSpawnEnv(base, undefined)).toEqual(base);
+  });
+});
+
+describe('acpStartEnv: the worker and adapter run inside this server\'s runtime tree', () => {
+  const info = { root: '/stage-2/runtime/0.6.20-abcdefabcdef', daemonVersion: 'walnut-daemon-x', modules: {} };
+
+  it('names the tree of the server that sends the commands, over what the daemon inherited from an earlier deploy', () => {
+    expect(acpStartEnv({ CODEX_HOME: '/h/.codex' }, info)).toEqual({ CODEX_HOME: '/h/.codex', WALNUT_RUNTIME_DIR: '/stage-2/runtime' });
+    expect(acpStartEnv(undefined, info)).toEqual({ WALNUT_RUNTIME_DIR: '/stage-2/runtime' });
+    // The daemon merges it over its own env (the stage-1 value it was started with).
+    expect(mergeAcpSpawnEnv({ WALNUT_RUNTIME_DIR: '/stage-1/runtime', PATH: '/bin' }, acpStartEnv(undefined, info)).WALNUT_RUNTIME_DIR).toBe('/stage-2/runtime');
+  });
+
+  it('adds nothing for a server that is not the compiled file', () => {
+    const env = { CODEX_HOME: '/h/.codex' };
+    expect(acpStartEnv(env, null)).toBe(env);
+    expect(acpStartEnv(undefined, null)).toBeUndefined();
   });
 });
