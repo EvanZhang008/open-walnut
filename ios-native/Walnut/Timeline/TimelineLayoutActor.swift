@@ -131,6 +131,7 @@ actor TimelineLayoutActor {
         // scrolled off. Held back and appended last, it lands where the user is
         // looking and reads as what it is: next in line.
         var queuedRows: [TimelineRow] = []
+        var afterLiveRows: [TimelineRow] = []
         var inline: [ChatMessage] = []
         inline.reserveCapacity(input.messages.count)
         for message in input.messages {
@@ -140,6 +141,8 @@ actor TimelineLayoutActor {
             // user has to act on away from where they left it.
             if let queued, queued != .undecided {
                 queuedRows.append(contentsOf: memoizedRows(for: message, queued: queued))
+            } else if input.afterLiveMessageIDs.contains(message.id) {
+                afterLiveRows.append(contentsOf: memoizedRows(for: message, queued: nil))
             } else {
                 inline.append(message)
             }
@@ -272,6 +275,7 @@ actor TimelineLayoutActor {
             rows.append(contentsOf: builder.liveThinkingRows(
                 liveThinking: input.liveThinking, width: input.width, scope: input.scope))
         }
+        rows.append(contentsOf: afterLiveRows)
         rows.append(contentsOf: queuedRows)
         return TimelineSnapshot(rows: rows, width: input.width, generation: generation)
     }

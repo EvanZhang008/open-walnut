@@ -464,6 +464,10 @@ struct TimelineInput {
     /// answer. Defaulted empty, so every surface that has no queue (the session
     /// transcript, the DEBUG harness) is unaffected.
     var queuedMessageStates: [String: QueuedSend.Status] = [:]
+    /// Messages drawn below the live region rather than where they are in
+    /// `messages`: a session's message sent mid-turn whose place in the turn the
+    /// page can no longer tell (`SessionSentRuns.reseeded`). Defaulted empty.
+    var afterLiveMessageIDs: Set<String> = []
     /// Which conversation these messages belong to (see `TimelineScope`). Every
     /// UI surface passes one; the default is the unscoped id space, for direct
     /// builder/actor use in tests and the DEBUG harness.

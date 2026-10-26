@@ -195,6 +195,31 @@
 //   GET  /__stub/session-lifecycle   → hold flag, pending ids and accepted requests
 //                               (action, success body, clientClosed, released,
 //                               responseWritten). Reset destroys pending responses.
+//   POST /__stub/midturn?step=start|consume|end|drop[&completedLen=real|consumed]
+//                               → a staged turn of the work session, moved one step
+//                               at a time (SessionMidTurnOrderUITests). Needs
+//                               /__stub/work-session?on=1. While on, it answers the
+//                               work session's transcript, messages POST (recorded,
+//                               202 {messageId}) and stream (an id-less `snapshot`
+//                               attach frame, as the primary writes it, then the
+//                               live frames), ahead of the replica and plain modes.
+//                                 start    transcript = the ask; process running;
+//                                          turn-start, status, text-delta (C1),
+//                                          tool Read + tool-result, text-delta (C2)
+//                                 consume  the CLI takes the posted messages: C1,
+//                                          the Read row, C2, then one user row per
+//                                          POST join the transcript; text-delta
+//                                          (the answer after them)
+//                                 end      the answer joins the transcript;
+//                                          turn-end, status idle
+//                                 drop     end every open work-session stream, so
+//                                          the app reconnects and gets a snapshot
+//                               The snapshot's completedLen follows the real buffer
+//                               (0 while the turn runs, every block once it ended);
+//                               `completedLen=consumed` counts the 3 blocks written
+//                               by `consume` as completed instead. Reset turns it off.
+//   GET  /__stub/midturn        → {on, step, posts, transcript, attaches,
+//                               openStreams, completedRule, snapshot}.
 
 import http from 'node:http'
 import fs from 'node:fs'
@@ -549,6 +574,7 @@ function resetAll() {
   resetSessionReplica()
   resetSessionLifecycle()
   resetLetterReply()
+  resetMidTurn()
   generation += 1
   try {
     fs.mkdirSync(path.dirname(RECORD_PATH), { recursive: true })
@@ -872,6 +898,198 @@ function answerSessionLifecycle(p, req, res) {
   console.log(`[stub] session lifecycle accepted ${entry.id} ${action} held=${holdSessionLifecycle}`)
   if (!holdSessionLifecycle) releaseSessionLifecycle(entry.id)
   return true
+}
+
+// ── A staged session turn (SessionMidTurnOrderUITests) ─────────────────────
+// The work session's turn moved by the test, step by step, so the page can be
+// asserted on with a message sent WHILE commentary is on screen. Frames and rows
+// use the field names the phone decodes (SessionConversationStore.process,
+// LiveAgentActivity.apply, SessionTranscript.Message), and an attach writes the
+// primary's id-less `snapshot` frame first (src/web/routes/session-stream-v1.ts).
+
+const MT_ASK = 'Read the notes and tell me what they say'
+const MT_C1 = 'Commentary one: opening the notes file now.'
+const MT_C2 = ' Commentary two: the notes list three things.'
+const MT_AFTER = 'Answer after your note: here is the summary you asked for.'
+const MT_TOOL_ID = 'mt-read-1'
+const MT_TOOL_INPUT = 'file_path: notes.md'
+const MT_TOOL_RESULT = 'three notes'
+
+let midTurn = null
+
+function resetMidTurn() {
+  if (midTurn?.ping) clearInterval(midTurn.ping)
+  midTurn = null
+}
+
+function midTurnOn() {
+  return midTurn !== null && midTurn.generation === generation
+}
+
+function midTurnConns() {
+  return streams.get(`session:${LANE_SESSION_ID}`) || []
+}
+
+function midTurnEmit(event, data) {
+  const frame = `id: ${++eventId}\nevent: ${event}\ndata: ${JSON.stringify(data)}\n\n`
+  for (const res of midTurnConns()) {
+    try { res.write(frame) } catch { /* a closed stream is cleaned up by its close handler */ }
+  }
+}
+
+/** A transcript row with the next timestamp of this turn's clock. */
+function midTurnRow(row) {
+  const m = midTurn
+  const timestamp = new Date(m.clockStart + m.clockTick * 1000).toISOString()
+  m.clockTick += 1
+  // Today's server says who sent every user text row (`sentBy`), which turns the
+  // phone's turn folding on; the person's own words are "person".
+  const sentBy = row.role === 'user' && !row.kind ? { sentBy: 'person' } : {}
+  return { timestamp, ...sentBy, ...row }
+}
+
+/** The snapshot an attach writes first. The real buffer's rule
+ *  (session-stream-buffer.ts getSnapshot): every block of a running turn is
+ *  live (completedLen 0) and all of them are completed once it ended. With
+ *  `completedLen=consumed` (set on any step) the blocks the CLI has already
+ *  written to the transcript count as completed instead, 3 after `consume`. */
+function midTurnSnapshot() {
+  const m = midTurn
+  const running = m.step === 'start' || m.step === 'consume'
+  const liveCompleted = m.completedRule === 'consumed' && m.consumed ? 3 : 0
+  const completedLen = running ? liveCompleted : m.blocks.length
+  return {
+    blocks: m.blocks.map((b) => ({ ...b })),
+    isStreaming: running,
+    completedLen,
+    processStatus: workProcessStatus,
+  }
+}
+
+function midTurnAttach(req, res) {
+  const m = midTurn
+  m.attaches.push({ at: nowISO(), lastEventId: req.headers['last-event-id'] ?? null })
+  res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' })
+  const snapshot = midTurnSnapshot()
+  // Id-less, like the primary's attach frame (`write('snapshot', …)` in onAttach).
+  res.write(`event: snapshot\ndata: ${JSON.stringify(snapshot)}\n\n`)
+  console.log(`[stub] midturn stream attach #${m.attaches.length} step=${m.step} `
+    + `blocks=${snapshot.blocks.length} completedLen=${snapshot.completedLen} isStreaming=${snapshot.isStreaming}`)
+  const key = `session:${LANE_SESSION_ID}`
+  streams.set(key, [...(streams.get(key) || []), res])
+  res.on('close', () => streams.set(key, (streams.get(key) || []).filter((x) => x !== res)))
+}
+
+/** The staged-turn routes of the work session, or false when the mode is off. */
+function answerMidTurn(p, req, res, raw) {
+  if (!midTurnOn()) return false
+  const m = midTurn
+  const base = `/api/v1/sessions/${LANE_SESSION_ID}`
+  if (p === `${base}/stream` && req.method === 'GET') return midTurnAttach(req, res), true
+  if (p === `${base}/transcript` && req.method === 'GET') {
+    return json(res, 200, {
+      sessionId: LANE_SESSION_ID, exportedAt: nowISO(), truncated: false, messages: m.transcript,
+    }), true
+  }
+  if (p === `${base}/messages` && req.method === 'POST') {
+    let body = {}
+    try { body = JSON.parse(raw || '{}') } catch { /* answered with a minted id */ }
+    const messageId = typeof body.messageId === 'string' && body.messageId
+      ? body.messageId : `qm-stub-mt-${m.posts.length + 1}`
+    const text = String(body.text ?? '')
+    m.posts.push({ at: nowISO(), messageId, text })
+    console.log(`[stub] midturn message POST ${messageId} ${JSON.stringify(text)}`)
+    return json(res, 202, { messageId }), true
+  }
+  return false
+}
+
+function midTurnState() {
+  if (!midTurnOn()) return { on: false, step: null, posts: [], transcript: [], attaches: [] }
+  const m = midTurn
+  return {
+    on: true, step: m.step, posts: m.posts, transcript: m.transcript, attaches: m.attaches,
+    openStreams: midTurnConns().length, completedRule: m.completedRule, snapshot: midTurnSnapshot(),
+  }
+}
+
+function answerMidTurnControl(req, res, url) {
+  if (req.method === 'GET') return json(res, 200, midTurnState())
+  if (req.method !== 'POST') return notFound(res, 'midturn control requires GET or POST')
+  const step = url.searchParams.get('step')
+  const rule = url.searchParams.get('completedLen')
+  if (rule !== null && !['real', 'consumed'].includes(rule)) {
+    return json(res, 400, { ok: false, message: 'completedLen must be real or consumed' })
+  }
+  if (step === 'start') {
+    resetMidTurn()
+    midTurn = {
+      generation, step: 'start', posts: [], attaches: [], consumed: false,
+      completedRule: rule || 'real',
+      // A fixed clock for this turn's rows: one second apart, in the recent past.
+      clockStart: Date.now() - 120_000, clockTick: 0,
+      transcript: [],
+      blocks: [],
+      ping: null,
+    }
+    const m = midTurn
+    m.transcript.push(midTurnRow({ role: 'user', text: MT_ASK }))
+    // The real server pings an open stream every 25 s; the client's stall
+    // watchdog counts on it while a staged step waits for the test.
+    m.ping = setInterval(() => {
+      for (const r of midTurnConns()) { try { r.write(': ping\n\n') } catch { /* closed */ } }
+    }, 20_000)
+    m.ping.unref?.()
+    workProcessStatus = 'running'
+    midTurnEmit('turn-start', {})
+    midTurnEmit('status', { processStatus: 'running' })
+    midTurnEmit('text-delta', { delta: MT_C1 })
+    m.blocks.push({ type: 'text', content: MT_C1 })
+    midTurnEmit('tool', { name: 'Read', detail: 'notes.md', toolUseId: MT_TOOL_ID, inputPreview: MT_TOOL_INPUT })
+    m.blocks.push({ type: 'tool_call', name: 'Read', status: 'calling' })
+    midTurnEmit('tool-result', { toolUseId: MT_TOOL_ID, resultPreview: MT_TOOL_RESULT })
+    m.blocks[m.blocks.length - 1].status = 'done'
+    midTurnEmit('text-delta', { delta: MT_C2 })
+    m.blocks.push({ type: 'text', content: MT_C2 })
+    console.log(`[stub] midturn start: ${midTurnConns().length} open stream(s)`)
+    return json(res, 200, { ok: true, ...midTurnState() })
+  }
+  if (!midTurnOn()) return json(res, 409, { ok: false, message: 'midturn mode is off (step=start first)' })
+  const m = midTurn
+  if (rule !== null) m.completedRule = rule
+  if (step === 'consume') {
+    // The CLI takes the queued messages: what it said so far is written first,
+    // then the user rows, in the order they were posted.
+    m.transcript.push(midTurnRow({ role: 'assistant', text: MT_C1 }))
+    m.transcript.push(midTurnRow({
+      role: 'assistant', kind: 'tool', text: 'Read', detail: 'notes.md',
+      inputPreview: MT_TOOL_INPUT, resultPreview: MT_TOOL_RESULT,
+    }))
+    m.transcript.push(midTurnRow({ role: 'assistant', text: MT_C2.trim() }))
+    for (const post of m.posts) m.transcript.push(midTurnRow({ role: 'user', text: post.text }))
+    m.consumed = true
+    m.step = 'consume'
+    midTurnEmit('text-delta', { delta: MT_AFTER })
+    m.blocks.push({ type: 'text', content: MT_AFTER })
+    console.log(`[stub] midturn consume: ${m.posts.length} message(s) taken`)
+    return json(res, 200, { ok: true, ...midTurnState() })
+  }
+  if (step === 'end') {
+    m.transcript.push(midTurnRow({ role: 'assistant', text: MT_AFTER }))
+    m.step = 'end'
+    workProcessStatus = 'idle'
+    midTurnEmit('turn-end', {})
+    midTurnEmit('status', { processStatus: 'idle' })
+    console.log('[stub] midturn end')
+    return json(res, 200, { ok: true, ...midTurnState() })
+  }
+  if (step === 'drop') {
+    let dropped = 0
+    for (const r of midTurnConns()) { r.end(); dropped += 1 }
+    console.log(`[stub] midturn dropped ${dropped} work-session stream(s)`)
+    return json(res, 200, { ok: true, dropped })
+  }
+  return json(res, 400, { ok: false, message: 'step must be start, consume, end or drop' })
 }
 
 // ── Human inbox (seeded from the parity fixture) ────────────────────────────
@@ -1643,6 +1861,7 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { ok: true, on: workSession })
     }
     if (p === '/__stub/board' || p === '/__stub/board-expected') return answerPinnedBoardControl(p, req, res, url)
+    if (p === '/__stub/midturn') return answerMidTurnControl(req, res, url)
     if (p === '/__stub/session-lifecycle') return answerSessionLifecycleControl(req, res, url)
     if (p.startsWith('/__stub/session-')) return answerSessionReplicaControl(p, req, res, url)
     if (p === '/__stub/drop-streams' && req.method === 'POST') {
@@ -1826,6 +2045,7 @@ const server = http.createServer(async (req, res) => {
   // Answered with the smallest valid body rather than 404 only where a 404
   // costs something (a retry loop, a visible banner). The probe run is what
   // decided this list; see the header.
+  if (answerMidTurn(p, req, res, raw)) return
   if (answerSessionLifecycle(p, req, res)) return
   if (answerSessionReplica(p, req, res, raw)) return
   if (answerWorkSession(p, req, res, raw)) return

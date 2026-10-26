@@ -100,6 +100,21 @@ final class SessionConversationStore {
     /// leave the bubble to the newer one (`deliver`).
     @ObservationIgnored private var deliveryOwners: [String: Int] = [:]
     @ObservationIgnored private var lastDeliveryToken = 0
+    /// Where each bubble is drawn relative to the turn that was running when it
+    /// was sent (see `SessionSentRuns`).
+    private var sentRuns = SessionSentRuns()
+    /// Mints run and tail ids: unique on the page, so no two timeline rows share one.
+    @ObservationIgnored private var tailSeq = 0
+    /// Set by a send that emptied the live region (`closeRun`).
+    @ObservationIgnored private var trimLiveLead = false
+    /// Where the running turn begins in the history: the message just before its
+    /// first row (nil: the history's start), and how many of its text rows the
+    /// page already draws from the history. nil while no turn runs, and while
+    /// the page has not seen where it began (the next snapshot finds it).
+    private struct TurnMark: Equatable { var floorID: String?; var accounted: Int }
+    @ObservationIgnored private var turnMark: TurnMark?
+    /// A snapshot is setting `streaming`: it says nothing about where the turn began.
+    @ObservationIgnored private var seeding = false
 
     /// Live turn accumulation (mirrors ChatStore.streamText / .activity).
     var streaming = false
@@ -150,8 +165,26 @@ final class SessionConversationStore {
     /// layout storm — the 0x8BADF00D compute-loop fingerprint. Deltas were
     /// already coalesced (8Hz flush); these two flags were the leak.
     private func setStreaming(_ value: Bool) {
+        if value, !streaming, !seeding { markTurnStart() }
+        if !value { turnMark = nil }
         if streaming != value { streaming = value }
     }
+
+    /// A turn starts on this page: nothing of it is in the history yet.
+    private func markTurnStart() {
+        turnMark = TurnMark(floorID: historyMessages.last?.id, accounted: 0)
+    }
+
+    /// The running turn's rows in `history`; nil when the page does not know
+    /// where it began, or its floor is no longer in the history.
+    private func turnRows(_ history: [ChatMessage]) -> ArraySlice<ChatMessage>? {
+        guard let mark = turnMark else { return nil }
+        guard let floor = mark.floorID else { return history[...] }
+        guard let i = history.lastIndex(where: { $0.id == floor }) else { return nil }
+        return history[(i + 1)...]
+    }
+
+    private static func isReplyText(_ m: ChatMessage) -> Bool { m.role == "assistant" && m.kind == nil }
 
     private func setActivity(_ value: String?) {
         if activity != value { activity = value }
@@ -298,6 +331,7 @@ final class SessionConversationStore {
             id: "launch-\(sessionId)", role: "user", text: launch,
             createdAt: ISO8601DateFormatter().string(from: AppClock.now()), kind: nil
         ))
+        sentRuns.send("launch-\(sessionId)", runID: "sent-run-launch", rows: ([], [:]), streaming: false)
         awaitingFirstTurn = true
         streaming = true
         activity = Self.startingActivity
@@ -305,8 +339,12 @@ final class SessionConversationStore {
 
     // MARK: - Derived
 
-    /// History + still-pending optimistic bubbles.
-    var messages: [ChatMessage] { historyMessages + pendingUser }
+    /// History + still-pending optimistic bubbles, each after the part of the
+    /// running turn that was on screen when it was sent (`SessionSentRuns`).
+    var messages: [ChatMessage] { sentRuns.ordered(history: historyMessages, pending: pendingUser) }
+
+    /// Bubbles the timeline draws below the live region (`SessionSentRuns.reseeded`).
+    var afterLiveMessageIDs: Set<String> { sentRuns.afterLiveIDs }
 
     var statusKind: SessionStatus { SessionStatus(processStatus) }
 
@@ -530,7 +568,10 @@ final class SessionConversationStore {
         // Whether the head of what is held is still the head after the merge:
         // then `olderExists` keeps describing it. Otherwise the window decides.
         var keptHead = false
-        if incoming.isEmpty && !historyMessages.isEmpty {
+        // A zero-row read carries nothing of the turn that just ended, so its runs
+        // stay on screen too (as the provisional reply always did).
+        let keptEmptyRead = incoming.isEmpty
+        if keptEmptyRead && !historyMessages.isEmpty {
             merged = historyMessages // a zero-row tail never beats shown content
             keptHead = true
         } else if let firstIncoming = transcript.messages.first?.timestamp,
@@ -582,6 +623,13 @@ final class SessionConversationStore {
         if next != historyMessages {
             historyMessages = next
         }
+        // A read DURING the turn holds the messages the session has finished so
+        // far: what of them the runs or the live region still draw goes, so
+        // nothing is drawn twice and every bubble stays where it is.
+        if streaming { takeSavedTurnRows(next) }
+        // The runs of a turn that has ended retire with this read, in the same
+        // block that installs its rows, as the provisional reply always has.
+        if sentRuns.hasSettled && !keptEmptyRead { sentRuns.dropSettled() }
         // HANDOFF: the live reasoning region retires HERE, in the same
         // synchronous block that installs the fetched `kind:"thinking"` rows —
         // so the same reasoning is never rendered twice, and a transcript load
@@ -617,6 +665,7 @@ final class SessionConversationStore {
         let gone = Self.bubblesAbsorbed(pendingUser, baselines: sendBaselines, rows: historyMessages)
         guard !gone.isEmpty else { return }
         pendingUser.removeAll { gone.contains($0.id) }
+        sentRuns.absorbed(gone)
         for id in gone {
             sendBaselines[id] = nil
             deliveryOwners[id] = nil
@@ -962,6 +1011,7 @@ final class SessionConversationStore {
         // retains them for retry (the user's attachments never vanish).
         if !jpegDatas.isEmpty { optimistic.localImages = jpegDatas }
         sendBaselines[optimistic.id] = Set(historyMessages.lazy.filter(\.isUser).map(\.id))
+        closeRun(before: optimistic.id)
         pendingUser.append(optimistic)
         // Sending explicitly accepts a re-pin: the user wants to see their own
         // message land even if they were reading history.
@@ -971,6 +1021,35 @@ final class SessionConversationStore {
             bubbleID: optimistic.id, messageId: optimistic.clientMessageId,
             text: text, jpegDatas: jpegDatas, attempt: 0, firstFailureAt: nil
         )
+    }
+
+    /// A message is going out: what the live region shows of the running turn now
+    /// stays above it, and only what streams in afterwards is drawn below it. The
+    /// live region starts empty again; a call still running finishes in its run.
+    private func closeRun(before bubbleID: String) {
+        tailSeq += 1
+        let runID = "sent-run-\(tailSeq)"
+        guard streaming else {
+            sentRuns.send(bubbleID, runID: runID, rows: ([], [:]), streaming: false)
+            return
+        }
+        flushPendingDelta()
+        flushLiveThinking()
+        let rows = SessionSentRuns.rows(
+            runID: runID,
+            createdAt: ISO8601DateFormatter().string(from: AppClock.now()),
+            thinking: live.thinkingText, text: Self.clipProvisional(liveText), tools: live.tools)
+        sentRuns.send(bubbleID, runID: runID, rows: rows, text: liveText, streaming: true)
+        liveText = ""
+        trimLiveLead = true
+        liveTextTruncated = false
+        liveTextBound = LiveMarkdownWindow.TailBound()
+        live.reset()
+        if !liveThinking.isEmpty { liveThinking = "" }
+        setLiveTools([])
+        // The activity row keeps naming a call that is still running: it finishes
+        // in its run, and its result clears the label (`process`).
+        FreezeContext.shared.setLiveText(chars: 0, truncated: false)
     }
 
     /// One delivery attempt for an existing bubble. `attempt` counts AUTOMATIC
@@ -1220,6 +1299,8 @@ final class SessionConversationStore {
     /// hopeless enough to refuse.
     func retry(_ message: ChatMessage) async {
         guard message.failed == true, !dead else { return }
+        // Sent again now: it goes below whatever the turn has shown since.
+        closeRun(before: message.id)
         // A manual tap supersedes any scheduled automatic attempt for this
         // bubble (and resets the budget: the user asked for it now).
         retryTasks[message.id]?.cancel()
@@ -1253,6 +1334,7 @@ final class SessionConversationStore {
         retryTasks[message.id] = nil
         voiceBubbleIDs.remove(message.id)
         pendingUser.removeAll { $0.id == message.id }
+        sentRuns.discarded(message.id)
         sendBaselines[message.id] = nil
         deliveryOwners[message.id] = nil
     }
@@ -1410,6 +1492,19 @@ final class SessionConversationStore {
             return
         }
         let data = Data(event.data.utf8)
+        // A call that was running when a message went out lives in that message's
+        // run now; its later frames go there, not to the live region.
+        if event.event == "tool" || event.event == "tool-result", !sentRuns.isEmpty,
+           let call = try? JSONDecoder().decode(RunToolPayload.self, from: data),
+           let id = call.toolUseId, sentRuns.holdsTool(id) {
+            if event.event == "tool-result" {
+                sentRuns.finishTool(id, resultPreview: call.resultPreview)
+                setActivity(live.activityLabel)
+            } else {
+                setStreaming(true)
+            }
+            return
+        }
         // The three arms both live streams share. This store DOES honour
         // `impliesStreaming` (a CLI tool call is proof its own turn is running,
         // which is why the page has always flipped `streaming` here); the chat
@@ -1430,6 +1525,7 @@ final class SessionConversationStore {
         case "turn-start":
             awaitingFirstTurn = false // the real turn takes over the indicator
             setStreaming(true)
+            markTurnStart()
             liveText = ""
             liveTextTruncated = false
             pendingDelta = ""
@@ -1450,6 +1546,7 @@ final class SessionConversationStore {
         case "error":
             let p = try? JSONDecoder().decode(ErrorPayload.self, from: data)
             awaitingFirstTurn = false
+            if sentRuns.hasUnsettled { sentRuns.settle() }
             streaming = false
             activity = nil
             errorMessage = p?.message ?? "The session turn failed."
@@ -1472,6 +1569,11 @@ final class SessionConversationStore {
         default:
             break
         }
+    }
+
+    private struct RunToolPayload: Decodable {
+        let toolUseId: String?
+        let resultPreview: String?
     }
 
     /// Pure result of digesting a snapshot payload — everything applySeed
@@ -1531,6 +1633,57 @@ final class SessionConversationStore {
         }
     }
 
+    /// A read during the turn: hand its newly saved rows from the runs and the
+    /// live region over to the history (`SessionSentRuns.takeSaved`).
+    private func takeSavedTurnRows(_ history: [ChatMessage]) {
+        guard var mark = turnMark, let rows = turnRows(history) else { return }
+        let text = rows.filter(Self.isReplyText).map(\.text)
+        guard text.count > mark.accounted else { return }
+        var runs = sentRuns
+        let rest = runs.takeSaved(Array(text[mark.accounted...]), tools: rows.filter { $0.kind == .tool },
+                                  live: liveText, clip: Self.clipProvisional)
+        if runs != sentRuns { sentRuns = runs }
+        if rest != liveText {
+            liveText = rest
+            // The live region starts over, as after a send.
+            if rest.isEmpty { trimLiveLead = true }
+        }
+        mark.accounted = text.count
+        turnMark = mark
+    }
+
+    /// The live text a snapshot leaves. Its text is the running turn's from the
+    /// start, so it holds what the history, the runs and the live region already
+    /// show of the turn: a seed that continues them (the usual case: the app came
+    /// back from the background) gives only its new text to the live region. One
+    /// that does not makes the runs give way, their bubbles below it.
+    private func seededLiveText(_ seed: SnapshotSeed) -> String {
+        guard !seed.liveTextTruncated else {
+            if sentRuns.reseedMoves { sentRuns.reseeded() }
+            return seed.liveText
+        }
+        let known = streaming ? turnRows(historyMessages) : nil
+        let rows = (known ?? historyMessages[...]).filter(Self.isReplyText).suffix(known == nil ? 40 : Int.max)
+        let texts = rows.map(\.text)
+        var hit = sentRuns.seedRest(seed.liveText, saved: texts, anyStart: known == nil)
+        if hit == nil, sentRuns.reseedMoves {
+            sentRuns.reseeded()
+            hit = sentRuns.seedRest(seed.liveText, saved: texts, anyStart: known == nil)
+        }
+        if streaming {
+            if known == nil {
+                // Where the turn began: just before the first saved row it holds.
+                let first = hit.flatMap { $0.start < rows.count ? rows[rows.startIndex + $0.start].id : nil }
+                let floor = first.flatMap { id in historyMessages.firstIndex { $0.id == id } }
+                    .map { $0 > 0 ? historyMessages[$0 - 1].id : nil } ?? historyMessages.last?.id
+                turnMark = TurnMark(floorID: floor, accounted: hit.map { rows.count - $0.start } ?? 0)
+            } else if hit != nil {
+                turnMark?.accounted = texts.count
+            }
+        }
+        return hit?.rest ?? seed.liveText
+    }
+
     private func applySeedTracked(_ seed: SnapshotSeed) {
         // A snapshot only rides the PRIMARY box's stream attach (the cloud
         // path emits bridge-online/offline instead) — receiving one is proof
@@ -1564,14 +1717,16 @@ final class SessionConversationStore {
         // forever. Trusting it painted an eternal "Thinking…" row on a session
         // whose nav bar already said "Ended" (applyStatus above cleared
         // streaming; the unguarded assignment put it right back).
+        seeding = true
         setStreaming(seed.isStreaming && SessionStatus(seed.processStatus).isAlive)
+        seeding = false
         pendingDelta = "" // snapshot resets the live region wholesale
         // Reasoning is part of that live region, and the snapshot carries none
         // (the buffer keeps text and tool_call blocks only) — so a stale
         // accumulation must go rather than be stitched under a fresh seed. A
         // mid-turn re-attach refills it from the CLI's next thinking delta.
         clearLiveThinking()
-        liveText = seed.liveText
+        liveText = seededLiveText(seed)
         liveTextTruncated = seed.liveTextTruncated
         setActivity(seed.activityName)
         FreezeContext.shared.setLiveText(chars: liveText.utf8.count, truncated: liveTextTruncated)
@@ -1637,6 +1792,7 @@ final class SessionConversationStore {
                 errorMessage = "The session ended before it could start. Open it on your desktop to see why."
             }
             awaitingFirstTurn = false
+            if sentRuns.hasUnsettled { sentRuns.settle() }
             setStreaming(false)
             setActivity(nil)
         }
@@ -1732,6 +1888,13 @@ final class SessionConversationStore {
             liveText = bounded
             liveTextTruncated = true
         }
+        if trimLiveLead, liveText.isEmpty {
+            // The first text after a send starts a new block on screen: the space
+            // the model put between two sentences would indent it.
+            let lead = pendingDelta.drop { $0.isWhitespace || $0.isNewline }
+            if !lead.isEmpty { trimLiveLead = false }
+            pendingDelta = String(lead)
+        }
         liveText += pendingDelta
         pendingDelta = ""
         // Freeze-report context (counts only, O(1) utf8 length): the live turn's
@@ -1800,7 +1963,16 @@ final class SessionConversationStore {
         liveTextTruncated = false
         FreezeContext.shared.setLiveText(chars: 0, truncated: false)
         FreezeContext.shared.note("turn-end")
-        if !finished.isEmpty {
+        if !sentRuns.isEmpty {
+            // A message sent during this turn split it: its last stretch is a run
+            // of its own, below that message, until the refetch below replaces it.
+            tailSeq += 1
+            let shown = historyMessages.last.map { $0.role == "assistant" && $0.text == finished } ?? false
+            let tail = finished.isEmpty || shown ? [] : [ChatMessage(
+                id: "provisional-tail-\(tailSeq)", role: "assistant", text: finished,
+                createdAt: ISO8601DateFormatter().string(from: AppClock.now()), kind: nil)]
+            sentRuns.endTurn(rows: (tail, [:]), tailID: "sent-run-tail-\(tailSeq)")
+        } else if !finished.isEmpty {
             let dup = historyMessages.last.map { $0.role == "assistant" && $0.text == finished } ?? false
             if !dup {
                 let provisional = ChatMessage(

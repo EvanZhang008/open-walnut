@@ -58,6 +58,7 @@ struct SessionTimelineBody: View {
                 // folds into one line, and the conversation above it is one tap away.
                 showLoadEarlier: store.showsLoadEarlier,
                 loadEarlierState: store.loadEarlierState,
+                afterLiveMessageIDs: store.afterLiveMessageIDs,
                 scrollToBottomSignal: store.scrollToBottomSignal + repinSignal,
                 isPinned: { store.bottomPinned },
                 setPinned: { store.bottomPinned = $0 },
