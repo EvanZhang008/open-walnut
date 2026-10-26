@@ -177,9 +177,19 @@ function checkBinding(sql: string, params: unknown, bind: (value: unknown) => un
   return { slots, positional, namedValues }
 }
 
+/**
+ * bindable() for node:sqlite, which binds every JS number as a REAL: a whole one goes as a
+ * bigint, so it binds as the INTEGER Walnut's host (bun:sqlite) binds it as ('3', not '3.0',
+ * in a TEXT column; `? / 2` divides as integers).
+ */
+function bindableLikeHost(value: unknown): unknown {
+  const bound = bindable(value)
+  return typeof bound === 'number' && Number.isSafeInteger(bound) && !Object.is(bound, -0) ? BigInt(bound) : bound
+}
+
 /** The binding as node:sqlite arguments: the named values (when any) as one object, then the positional ones. */
 export function bindArguments(sql: string, params: unknown): unknown[] {
-  const { positional, namedValues } = checkBinding(sql, params, bindable)
+  const { positional, namedValues } = checkBinding(sql, params, bindableLikeHost)
   // Exact names, so neither node:sqlite's bare-name nor its unknown-name option can change what binds where.
   return namedValues ? [namedValues, ...positional] : positional
 }

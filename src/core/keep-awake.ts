@@ -30,6 +30,7 @@
 
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
+import os from 'node:os';
 import { accountInfo } from '../lib/account.js';
 import { log } from '../logging/index.js';
 
@@ -191,8 +192,13 @@ export function resetKeepAwakeForTest(): void {
 
 /** The one-time root rule this feature needs, scoped to exactly two commands. */
 export function getSudoSetupCommand(): string {
-  const user = accountInfo().username;
+  const user = accountName();
   return `echo '${user} ALL=(ALL) NOPASSWD: /usr/bin/pmset disablesleep 1, /usr/bin/pmset disablesleep 0' | sudo tee /etc/sudoers.d/walnut-keep-awake >/dev/null && sudo chmod 440 /etc/sudoers.d/walnut-keep-awake`;
+}
+
+/** The account's name for the sudoers line; $USER's word only if the passwd lookup could not run. */
+function accountName(): string {
+  try { return accountInfo().username; } catch { return os.userInfo().username; }
 }
 
 /**

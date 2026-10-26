@@ -204,6 +204,19 @@ describe('sqlite on bun', () => {
     expect(fs.readdirSync(path.dirname(out))).toEqual([])
   })
 
+  it('a file that is not a database opens and refuses its first statement, also as the first open of a process', () => {
+    // A fresh process: the compiled-defaults check runs at this very open, on this file.
+    const bad = path.join(dir, 'first-open-not-a-db.db')
+    fs.writeFileSync(bad, Buffer.alloc(8192, 7))
+    const script = `import Database from ${JSON.stringify(path.resolve(import.meta.dirname, '../../src/lib/sqlite.ts'))}
+const db = new Database(process.env.BAD)
+console.log('opened')
+try { db.prepare('SELECT 1 FROM sqlite_master').get() } catch (e) { console.log('refused ' + e.code) }`
+    const r = spawnSync(process.execPath, ['-e', script], { env: { ...process.env, BAD: bad }, encoding: 'utf8', timeout: 30_000 })
+    expect(r.status, r.stderr).toBe(0)
+    expect(r.stdout.trim().split('\n')).toEqual(['opened', 'refused SQLITE_NOTADB'])
+  })
+
   it('serialize gives the database bytes as a Buffer', () => {
     db.prepare('INSERT INTO t (name) VALUES (?)').run('a')
     const bytes = db.serialize()

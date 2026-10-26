@@ -26,6 +26,12 @@ describe('parsePasswdLine', () => {
     })
   })
 
+  it('reads the home and shell from the end when the full name holds a colon (Directory Services allows it)', () => {
+    expect(parsePasswdLine('quentin:********:501:20::0:0:Quentin: the second:/Users/quentin:/bin/zsh')).toEqual({
+      username: 'quentin', homedir: '/Users/quentin', shell: '/bin/zsh', uid: 501, gid: 20,
+    })
+  })
+
   it('keeps an empty shell', () => {
     expect(parsePasswdLine('svc:x:999:999::/var/lib/svc:')?.shell).toBe('')
   })

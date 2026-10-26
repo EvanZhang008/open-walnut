@@ -48,8 +48,11 @@ import { checkOneStatement, refusePromise } from './sqlite-guards.js'
 // The plugin database contract's binding rules (better-sqlite3's), for the plugin database
 // worker (src/core/plugins/plugin-storage.ts), which can load only this file. Nothing here binds
 // through them: Walnut's own statements keep the binding below.
-// @ts-ignore The plugin API's module is outside the server emit root; every bundle inlines it.
-export { bindByIndex, onlyTrailingNoise } from '../../packages/plugin-api/src/sqlite-binding.js'
+// The ignore is for TS6059 only (the plugin API's module is outside the server emit root, and
+// every bundle inlines it); the names are checked: an export the module lacks fails the type check.
+// @ts-ignore
+import * as pluginBinding from '../../packages/plugin-api/src/sqlite-binding.js'
+export const { bindByIndex, onlyTrailingNoise } = pluginBinding
 
 const require = createRequire(import.meta.url)
 
@@ -147,6 +150,7 @@ interface BunStatement {
   iterate(...params: unknown[]): IterableIterator<unknown>
   finalize(): void
   columnNames: string[]
+  paramsCount: number
   toString(): string
 }
 
@@ -277,7 +281,9 @@ export function sqliteLibraryProblem(): string | null {
 let compiledDefaults: boolean | null = null
 function hasCompiledDefaults(db: BunDatabase): boolean {
   if (compiledDefaults === null) {
-    const stmt = db.prepare('SELECT compile_options FROM pragma_compile_options')
+    // The pragma itself, not the pragma_compile_options table: a SELECT reads the schema,
+    // which a file that is not a database refuses, and this runs at the first open.
+    const stmt = db.prepare('PRAGMA compile_options')
     try {
       const opts = new Set(stmt.values().map((r) => String(r[0])))
       compiledDefaults = opts.has('DEFAULT_FOREIGN_KEYS') && opts.has('DEFAULT_CACHE_SIZE=-16000')
@@ -351,6 +357,11 @@ class SqliteStatement implements Statement {
 
   get reader(): boolean {
     return this.stmt.columnNames.length > 0
+  }
+
+  /** sqlite3_bind_parameter_count: the highest parameter index SQLite compiled. */
+  get paramsCount(): number {
+    return this.stmt.paramsCount
   }
 
   private live(): BunStatement {
@@ -476,15 +487,21 @@ class SqliteDatabase {
     this.db = new bun.Database(filename, flags)
     const timeout = options.timeout ?? 5000
     this.busyTimeout = Math.max(0, Math.floor(timeout))
-    this.db.exec(`PRAGMA busy_timeout = ${Math.max(0, Math.floor(timeout))}`)
-    if (!hasCompiledDefaults(this.db)) {
-      this.db.exec('PRAGMA foreign_keys = ON')
-      // cache_size reads the schema, so a file that is not a database (or a corrupt one) would
-      // refuse it here, at open (Linux, where bun's own SQLite lacks the compiled defaults).
-      // better-sqlite3 opens such a file and refuses its first statement: keep that order.
-      try { this.db.exec('PRAGMA cache_size = -16000') } catch (err) {
-        if (!/^SQLITE_(NOTADB|CORRUPT)/.test(String((err as { code?: unknown }).code ?? ''))) throw err
+    try {
+      this.db.exec(`PRAGMA busy_timeout = ${Math.max(0, Math.floor(timeout))}`)
+      if (!hasCompiledDefaults(this.db)) {
+        this.db.exec('PRAGMA foreign_keys = ON')
+        // cache_size reads the schema, so a file that is not a database (or a corrupt one) would
+        // refuse it here, at open (Linux, where bun's own SQLite lacks the compiled defaults).
+        // better-sqlite3 opens such a file and refuses its first statement: keep that order.
+        try { this.db.exec('PRAGMA cache_size = -16000') } catch (err) {
+          if (!/^SQLITE_(NOTADB|CORRUPT)/.test(String((err as { code?: unknown }).code ?? ''))) throw err
+        }
       }
+    } catch (err) {
+      // A connection that never became this object is closed here, not left to the collector.
+      try { this.db.close() } catch { /* already unusable */ }
+      throw err
     }
     // On macOS bun uses the system SQLite, which keeps a WAL database's -wal and
     // -shm files after the last connection closes; better-sqlite3's SQLite removes them.

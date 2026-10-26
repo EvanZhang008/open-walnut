@@ -39,7 +39,13 @@ function invoke(sql, method, params) {
   if (method !== 'run' && !statement.reader) {
     throw new TypeError('This statement does not return data. Use run() instead')
   }
-  return statement[method](bindByIndex(sql, params))
+  const values = bindByIndex(sql, params)
+  // The rules count parameters as better-sqlite3's SQLite does; a build that reads one more
+  // form (Tcl's $a::b and $a(x), which the system SQLite keeps) would bind them elsewhere.
+  if (statement.paramsCount !== values.length) {
+    throw new RangeError('This SQL has ' + statement.paramsCount + ' parameters for SQLite here but ' + values.length + ' by the plugin API rules; name parameters with ?, ?NNN, :name, @name or $name')
+  }
+  return statement[method](values)
 }
 
 parentPort.on('message', ({ id, method, args }) => {

@@ -25,6 +25,11 @@ breaking changes).
   nothing is compiled on install, and no Node is needed.
   Repo commands are `bun run <script>` (`bun run dev:ephemeral`, `bun run test:quick`,
   `bun run build:binary` for this machine's compiled file).
+- A plugin's database binds a whole JS number as an `INTEGER` now (it was a `REAL`), and so
+  does the test fake in `@open-walnut/plugin-api/testing`. Values compare and store the same in
+  `INTEGER`, `REAL` and untyped columns; a `TEXT` column keeps `'3'` where an older Walnut wrote
+  `'3.0'`, and `? / 2` divides as integers. Plugins that keep ids as text should bind strings
+  ([Plugin development](docs/reference/plugin-development.md)).
 - Big optional parts are components, downloaded the first time a feature needs them: search by
   meaning (`embedding`), image resizing (`images`) and, on macOS, audio capture. Tasks, sessions,
   the board, notes, keyword search and the tunnel all work from the file alone.

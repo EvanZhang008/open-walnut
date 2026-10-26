@@ -101,6 +101,11 @@ const CALLS: Call[] = [
   ['get', 'SELECT :a AS x', [new Date(0)]],
   ['get', 'SELECT ? AS v, ? AS w', [[1], 2]],
   ['get', 'SELECT ? AS x', [10n]],
+  // A whole number binds as an INTEGER on the host (bun:sqlite), a fraction, -0 and an unsafe
+  // integer as a REAL; the fake (node:sqlite, all REAL) binds a whole one as a bigint to match.
+  ['get', 'SELECT typeof(?) AS t, ? / 2 AS h, CAST(? AS TEXT) AS s', [3, 3, 3]],
+  ['get', 'SELECT typeof(?) AS a, typeof(?) AS b, typeof(?) AS c', [1.5, -0, 2 ** 53]],
+  ['get', 'SELECT typeof(:n) AS t, :n / 2 AS h', { n: -7 }],
   ['get', "SELECT x'0102' AS v, 1e5 AS w, 0x1F AS z"],
   ['get', 'SELECT last_insert_rowid() AS id'],
 ]
