@@ -29,11 +29,10 @@ describe('bundled module table', () => {
     }
   })
 
-  it('has a row for every built-in action the registry scans', () => {
-    const actions = fs.readdirSync(path.join(ROOT, 'src/actions'))
-      .filter((f) => f.endsWith('.ts') && !['types.ts', 'registry.ts', 'index.ts'].includes(f))
-    expect(actions.length).toBeGreaterThan(0)
-    for (const f of actions) expect(BUNDLED_MODULES[`dist/actions/${f.replace(/\.ts$/, '.js')}`], f).toBeTypeOf('function')
+  it('has no row for the built-in actions: the host bundle imports them, there is no dist/actions', () => {
+    expect(Object.keys(BUNDLED_MODULES).filter((k) => k.startsWith('dist/actions/'))).toEqual([])
+    expect(read('src/actions/registry.ts')).toContain('BUILTIN_ACTION_MODULES')
+    expect(read('tsup.config.ts')).not.toContain('actionEntries')
   })
 
   it('has a row for every tsup entry that is a separate program', () => {
