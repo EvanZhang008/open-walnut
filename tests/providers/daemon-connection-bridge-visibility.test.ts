@@ -18,6 +18,8 @@ import { log } from '../../src/logging/index.js'
 const bridgeConfigMock = vi.hoisted(() => ({
   payload: { enabled: false } as Record<string, unknown>,
   failure: false,
+  /** While set, a read of the config waits here after taking the payload (a push in flight). */
+  gate: null as Promise<void> | null,
   /** What revalidateBridgeToken answers, call by call (then false). */
   reminted: [] as boolean[],
   revalidated: [] as string[],
@@ -25,7 +27,9 @@ const bridgeConfigMock = vi.hoisted(() => ({
 vi.mock('../../src/integrations/cloud-bridge-config.js', () => ({
   getBridgeConfigForHost: vi.fn(async () => {
     if (bridgeConfigMock.failure) throw new Error('Cloud pairing read failed')
-    return bridgeConfigMock.payload
+    const payload = bridgeConfigMock.payload
+    if (bridgeConfigMock.gate) await bridgeConfigMock.gate
+    return payload
   }),
   revalidateBridgeToken: vi.fn(async (host: string) => {
     bridgeConfigMock.revalidated.push(host)
@@ -49,6 +53,7 @@ describe('DaemonConnection bridge visibility', () => {
 
   beforeEach(async () => {
     bridgeConfigMock.failure = false
+    bridgeConfigMock.gate = null
     daemon = new MockDaemon()
     await daemon.start()
   })
@@ -84,6 +89,29 @@ describe('DaemonConnection bridge visibility', () => {
     repush()
     await waitFor(() => conn!.lastBridgeConnected === null)
     expect(commands()).toHaveLength(2)
+  })
+
+  it('a push asked for while one is out runs after it, with the config as it is then', async () => {
+    bridgeConfigMock.payload = { enabled: true, url: 'wss://cloud.example.invalid/bridge', token: 'old', hostAlias: 'h-again' }
+    daemon.setBridgeConnected(true)
+    conn = new DaemonConnection('bridge-vis-again', TARGET)
+    await conn.connectDirect(`ws://127.0.0.1:${daemon.port}`)
+    const commands = () => daemon.getCommandHistory().filter((c) => c.cmd === 'bridge.configure')
+    await waitFor(() => commands().length === 1)
+    const repush = () => (conn as unknown as { pushBridgeConfig(): void }).pushBridgeConfig()
+    let release!: () => void
+    bridgeConfigMock.gate = new Promise<void>((r) => { release = r })
+    repush() // reads the old token, then waits
+    await new Promise((r) => setTimeout(r, 50))
+    bridgeConfigMock.payload = { ...bridgeConfigMock.payload, token: 'new' } // a new machine token
+    repush()
+    repush() // coalesced with the one before
+    bridgeConfigMock.gate = null
+    release()
+    await waitFor(() => commands().length === 3)
+    await new Promise((r) => setTimeout(r, 100))
+    expect(commands()).toHaveLength(3)
+    expect(commands().map((c) => c.payload.token)).toEqual(['old', 'old', 'new'])
   })
 
   it('records lastBridgeConnected=false and WARNs when bridge is enabled but daemon reports not connected', async () => {

@@ -47,7 +47,7 @@ import { updateConfig } from '../../../src/core/config-manager.js'
 import {
   enqueueMessage, getQueue, loadQueue, markProcessing, removeTaken, revertToPending, parkMessages, resetCache,
 } from '../../../src/core/session-message-queue.js'
-import { noteHeld, resetLineConsumption } from '../../../src/providers/line-consumption.js'
+import { noteHeld, PROMPT_HOLD_REASON, resetLineConsumption } from '../../../src/providers/line-consumption.js'
 
 const SID = 'ffffffff-1111-2222-3333-444444444444'
 const TEXT = 'please summarize the whole investigation and write it down'
@@ -255,6 +255,17 @@ describe('session:get-queue held rows', () => {
     await revertToPending([b])
     const again = await handler({ sessionId: SID }, fakeClient) as { messages: Array<{ id: string; heldReason?: string }> }
     expect(again.messages.find((m) => m.id === b.id)?.heldReason).toBeUndefined()
+    resetLineConsumption()
+  })
+
+  it('reports a pending row held behind an unanswered permission prompt', async () => {
+    resetLineConsumption()
+    await enqueueMessage(SID, 'behind the prompt')
+    const [row] = (await getQueue(SID)).filter((m) => m.status === 'pending').slice(-1)
+    noteHeld(SID, [row.id], PROMPT_HOLD_REASON)
+    const handler = methods.get('session:get-queue')!
+    const res = await handler({ sessionId: SID }, fakeClient) as { messages: Array<{ id: string; heldReason?: string }> }
+    expect(res.messages.find((m) => m.id === row.id)?.heldReason).toBe(PROMPT_HOLD_REASON)
     resetLineConsumption()
   })
 })

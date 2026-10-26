@@ -270,6 +270,17 @@ if (inputFormat === 'stream-json') {
   // Replay what the first read swallowed, once the mode dispatcher below has had
   // a tick to register its hooks (same ordering a late FIFO write would get).
   if (leftoverLines.length > 0) setTimeout(() => { for (const line of leftoverLines) handleStdinLine(line); }, 0);
+  // A line read while no turn runs enters the CLI's command queue and drains into a
+  // turn at once. A CLI that declares msg_lifecycle_v1 (the init below) names it by
+  // its uuid, `queued` then `started` (command_lifecycle, CLI 2.1.284), as a line
+  // queued behind a turn is named here, and Walnut keeps the line's queue row until
+  // the `started`.
+  function announceStarted(parsed) {
+    if (!parsed.uuid || process.env.MOCK_CLAUDE_NO_LIFECYCLE_CAPS === '1') return;
+    for (const state of ['queued', 'started']) {
+      process.stdout.write(JSON.stringify({ type: 'command_lifecycle', command_uuid: parsed.uuid, state, session_id: outputSessionId }) + '\n');
+    }
+  }
   function handleStdinLine(line) {
     {
       try {
@@ -346,6 +357,7 @@ if (inputFormat === 'stream-json') {
           onControlResponse(parsed.response);
         } else if (parsed.type === 'user' && parsed.message?.content !== undefined && pendingUserResolve) {
           lastInputUserUuid = parsed.uuid ?? null;
+          announceStarted(parsed);
           const c = parsed.message.content;
           const resolve = pendingUserResolve;
           pendingUserResolve = null;
@@ -354,6 +366,7 @@ if (inputFormat === 'stream-json') {
           queuedUserLines.push(parsed);
           if (parsed.uuid) process.stdout.write(JSON.stringify({ type: 'command_lifecycle', command_uuid: parsed.uuid, state: 'queued', session_id: outputSessionId }) + '\n');
         } else if (parsed.type === 'user' && parsed.message?.content !== undefined && onUserLine) {
+          announceStarted(parsed);
           const c = parsed.message.content;
           onUserLine(typeof c === 'string' ? c : JSON.stringify(c));
         }

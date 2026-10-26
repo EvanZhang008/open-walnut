@@ -25,6 +25,7 @@ import { bus } from '../../src/core/event-bus.js'
 import { WALNUT_HOME, SESSION_STREAMS_DIR } from '../../src/constants.js'
 import { createMockDaemon, type MockDaemon } from '../helpers/mock-daemon.js'
 import { setSelfApiRoot } from '../../src/lib/self-api-root.js'
+import { GIT_TMP_GUARD_COMMAND } from '../../src/providers/git-tmp-guard-hook.js'
 
 const MOCK_CLI = path.resolve(import.meta.dirname, 'mock-claude.mjs')
 const tmpBase = WALNUT_HOME
@@ -69,6 +70,16 @@ const COMPACT_HOOK = {
   }],
 }
 
+// The /tmp git guard rides the same settings arg (0b1a6017e, git-tmp-guard-hook.ts).
+const GIT_GUARD_HOOK = {
+  PreToolUse: [{
+    matcher: 'Bash',
+    hooks: [{ type: 'command', command: GIT_TMP_GUARD_COMMAND, timeout: 10 }],
+  }],
+}
+
+const SESSION_HOOKS = { ...COMPACT_HOOK, ...GIT_GUARD_HOOK }
+
 beforeAll(async () => { daemon = await createMockDaemon() })
 afterAll(async () => { await daemon.stop() })
 
@@ -97,23 +108,35 @@ describe('local session spawn → launching server URL', () => {
     setSelfApiRoot('http://127.0.0.1:45678')
     const args = await spawnArgs('t-self-url')
     expect(settingsEnv(args)).toEqual({ OPEN_WALNUT_API_URL: 'http://127.0.0.1:45678' })
-    // One settings arg carries both: the env and the post-compaction hook.
+    // One settings arg carries all of it: the env, the post-compaction hook and the git guard.
     expect(args.filter((a) => a === '--settings')).toHaveLength(1)
-    expect(settingsOf(args)?.hooks).toEqual(COMPACT_HOOK)
+    expect(settingsOf(args)?.hooks).toEqual(SESSION_HOOKS)
   })
 
   it('no server listening here: no env, the post-compaction hook still rides', async () => {
     const args = await spawnArgs('t-no-server')
-    expect(settingsOf(args)).toEqual({ hooks: COMPACT_HOOK })
+    expect(settingsOf(args)).toEqual({ hooks: SESSION_HOOKS })
   })
 
-  it('WALNUT_COMPACT_OPEN_ITEMS=0 turns the hook off (argv unchanged from before it)', async () => {
+  it('WALNUT_COMPACT_OPEN_ITEMS=0 turns the hook off, the git guard still rides', async () => {
     process.env.WALNUT_COMPACT_OPEN_ITEMS = '0'
     try {
       const args = await spawnArgs('t-hook-off')
+      expect(settingsOf(args)).toEqual({ hooks: GIT_GUARD_HOOK })
+    } finally {
+      delete process.env.WALNUT_COMPACT_OPEN_ITEMS
+    }
+  })
+
+  it('both hooks off and no server: argv unchanged from before them (no --settings)', async () => {
+    process.env.WALNUT_COMPACT_OPEN_ITEMS = '0'
+    process.env.WALNUT_TMP_GIT_GUARD = '0'
+    try {
+      const args = await spawnArgs('t-hooks-off')
       expect(args).not.toContain('--settings')
     } finally {
       delete process.env.WALNUT_COMPACT_OPEN_ITEMS
+      delete process.env.WALNUT_TMP_GIT_GUARD
     }
   })
 })

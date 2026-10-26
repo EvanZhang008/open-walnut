@@ -182,6 +182,9 @@ export function takeUntold(sessionId: string, rowIds: string[]): string[] {
 
 const held = new Map<string, Map<string, string>>()
 
+/** Why a queued message waits while the session's permission prompt is unanswered (holdBehindPrompt). */
+export const PROMPT_HOLD_REASON = 'Waiting for the permission prompt to be answered'
+
 export function noteHeld(sessionId: string, rowIds: string[], reason: string): void {
   if (!sessionId || rowIds.length === 0) return
   let ids = held.get(sessionId)

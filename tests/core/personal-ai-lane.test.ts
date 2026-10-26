@@ -25,7 +25,7 @@ vi.mock('../../src/constants.js', () => createMockConstants())
 
 import { bus, EventNames, type BusEvent } from '../../src/core/event-bus.js'
 import { WALNUT_HOME, conversationFile } from '../../src/constants.js'
-import { personalAiLaneKey, parseLaneKey, getOrCreateLaneSession } from '../../src/core/sessions/personal-ai-lane.js'
+import { personalAiLaneKey, parseLaneKey, getOrCreateLaneSession, splitLanePrompt } from '../../src/core/sessions/personal-ai-lane.js'
 import { personalAiProfile, walnutMcpProfile } from '../../src/core/sessions/profiles.js'
 import type { SessionStartEvent } from '../../src/core/event-types.js'
 
@@ -660,13 +660,20 @@ describe('profile drift repair vs. the frozen seed', () => {
     await setMemory(20_000)
     await seedWhale('conv-crowded')
     await getOrCreateLaneSession('general', 'conv-crowded', { firstMessage: 'go' })
+    const { getSessionByLane } = await import('../../src/core/session-tracker.js')
     // Standing memory balloons until the persona still fits but leaves less room
     // than a recap can say anything in. (A persona that ALONE exceeds the ceiling
     // is a pre-existing condition of its own — the mint cannot spawn that lane
-    // either — and no amount of seed clamping fixes it.)
-    await setMemory(56_000)
+    // either, and no amount of seed clamping fixes it.) Sized from the persona
+    // measured at mint, not a constant: the persona grows with every prompt rule
+    // (the team charter in 275da24a0, the task-directory rule in 0b1a6017e), and
+    // a fixed 56 KB of memory then pushed the persona alone past the ceiling.
+    const minted = (await getSessionByLane('chat:general:conv-crowded'))!.profile!.systemPrompt!
+    const mintedPersona = Buffer.byteLength(splitLanePrompt(minted).persona, 'utf-8')
+    // Persona at 65536 - 4096 (reserve) - 1024: under the ceiling, under the 2 KB recap minimum.
+    const crowdedPersona = 65536 - 4096 - 1024
+    await setMemory(20_000 + (crowdedPersona - mintedPersona))
     await getOrCreateLaneSession('general', 'conv-crowded')
-    const { getSessionByLane } = await import('../../src/core/session-tracker.js')
     const repaired = (await getSessionByLane('chat:general:conv-crowded'))!.profile!.systemPrompt!
     expect(Buffer.byteLength(repaired, 'utf-8')).toBeLessThanOrEqual(65536)
     expect(repaired).not.toContain('## Conversation so far')

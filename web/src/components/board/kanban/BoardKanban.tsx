@@ -15,9 +15,8 @@ import { log } from '@/utils/log';
 import { locateTaskOnHome } from '@/utils/open-session';
 import { deletePreview as previewDelete, type BoardCard, type BoardKanbanSeenCard } from '../../../../../src/core/boards/board-lanes';
 import type { BoardPayload, BoardSeen } from '../board-model';
-import type { KanbanBoardVM } from './kanban-model';
+import { buildBoardVM, type KanbanBoardVM } from './kanban-model';
 import type { KanbanWriteApi } from './kanban-contract';
-import { buildBoardVM } from './kanban-model';
 import { announce, keyDropResult, keyPosition, startKeyDrag, stepKeyDrag, type KeyDrag, type KeyLane } from './kanban-dnd';
 import { useKanbanFreeze, type KanbanLayout } from './kanban-freeze';
 import { withDrawnLanes } from './kanban-drawn';
@@ -59,8 +58,7 @@ export interface BoardKanbanProps {
   renderSession?: KanbanRenderSession;
   /** Each card's board project (the Projects view's placement): the card's project chip and the project filter. */
   projectOf?: ProjectOf;
-  /** An empty board keeps its Add task form closed (the host keeps the focus). */
-  quietEmpty?: boolean;
+  quietEmpty?: boolean; // An empty board keeps its Add task form closed (the host keeps the focus).
 }
 
 const FLASH_MS = 1200;

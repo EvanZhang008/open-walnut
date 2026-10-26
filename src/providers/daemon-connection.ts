@@ -484,6 +484,8 @@ export class DaemonConnection {
   /** True while a bridge.configure push is in flight — periodic re-pushes
    *  must never overlap (a slow RPC + a 5-min tick would stack them). */
   private bridgePushInFlight = false
+  /** A push asked for while one was out: run once more after it, from fresh config (a new machine token). */
+  private bridgePushAgain = false
   /** hooks.configure serialization (see pushDaemonHooks): in-flight guard +
    *  coalesced rerun flag + last-acked hash for RPC dedup. The hash resets on
    *  disconnect so a reconnect always re-pushes (the daemon may be a fresh
@@ -930,11 +932,12 @@ export class DaemonConnection {
    * daemon would otherwise dial the cloud with the user's real bridge secret and
    * take phone traffic meant for the real Walnut.
    */
-  private pushBridgeConfig(): void {
+  pushBridgeConfig(): void {
     if (IS_EPHEMERAL) return
     // In-flight guard: a slow configure RPC + the 5-min re-push tick must not
-    // stack overlapping pushes against the same daemon.
-    if (this.bridgePushInFlight) return
+    // stack overlapping pushes against the same daemon. One asked for meanwhile
+    // runs after it, since the one out may have read the config before it changed.
+    if (this.bridgePushInFlight) { this.bridgePushAgain = true; return }
     this.bridgePushInFlight = true
     void (async () => {
       try {
@@ -980,6 +983,7 @@ export class DaemonConnection {
         })
       } finally {
         this.bridgePushInFlight = false
+        if (this.bridgePushAgain) { this.bridgePushAgain = false; if (this.connected) this.pushBridgeConfig() }
       }
     })()
   }
@@ -5926,6 +5930,13 @@ export function pushDaemonHooksToAllHosts(): void {
  */
 export function pushTriggersToHost(hostKey: string): void {
   getConnectedDaemonConnection(hostKey)?.pushTriggers()
+}
+
+/** Push one host's bridge config now ('__local__' for this machine): its machine credential was minted anew. */
+export function pushBridgeConfigToHost(hostKey: string): void {
+  for (const conn of connectionPool.values()) {
+    if (conn.connected && conn.host === hostKey) conn.pushBridgeConfig()
+  }
 }
 
 /** Re-push every connected host's read copy (host-slice.ts debounces the callers). */

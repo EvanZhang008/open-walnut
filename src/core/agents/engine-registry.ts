@@ -101,6 +101,12 @@ export interface EngineCapabilities {
    * capabilities (ACP engines). Gates the per-session model catalog route.
    */
   readonly modelCatalog: 'static' | 'provider-advertised';
+  /**
+   * The cache lifetime the engine's own CLI asks for, used to price cache writes
+   * a session reported without one (session-cost-compare.ts): Claude Code asks
+   * for the 1-hour cache; an ACP engine's reports say nothing, so 5 minutes.
+   */
+  readonly cacheWriteLifetime: '1h' | '5m';
   /** How the ACP adapter process is obtained. Absent for native engines. */
   readonly acpAdapter?: EngineAcpAdapter;
   /**
@@ -128,6 +134,7 @@ const CLAUDE: EngineCapabilities = {
   skillSync: true,
   externalImport: true,
   modelCatalog: 'static',
+  cacheWriteLifetime: '1h',
   settings: CLAUDE_SETTINGS,
 };
 
@@ -148,6 +155,7 @@ const ACP_BASE: Omit<EngineCapabilities, 'id' | 'displayName'> = {
   skillSync: true,
   externalImport: true,
   modelCatalog: 'provider-advertised',
+  cacheWriteLifetime: '5m',
   acpAdapter: { source: 'bundled', binary: 'codex', args: null, versionArgs: ['--version'] },
 };
 

@@ -322,10 +322,11 @@ describe('the cloud box as a host of the Mac', () => {
   }, 300_000)
 
   it('the phone sees Cloud once, not a second row for the same box', async () => {
-    // Relayed to the Mac over its local daemon's /bridge socket. A real Mac has
-    // that connection up from its own sessions; a vitest server has no host
-    // warmup, so connect it the way the product's lazy callers do
-    // (core/routines/trigger-daemon.ts). Its first push dials /bridge.
+    // Relayed to the Mac over its local daemon's /bridge socket. The boot's
+    // local daemon lane linked that daemon long before the case above revoked
+    // bridge-local (src/web/local-daemon-lane.ts), so the re-mint must reach it
+    // (recoverMachineToken pushes it the new credential). This call joins that
+    // link, or dials it the way the product's lazy callers do.
     const { getDaemonConnection } = await import('../../src/providers/daemon-connection.js')
     await getDaemonConnection('__local__', { hostname: '__local__' })
     const body = await waitFor(async () => {

@@ -23,6 +23,7 @@ import { WALNUT_HOME } from '../../src/constants.js'
 import { startServer, stopServer } from '../../src/web/server.js'
 import { getConfig, updateConfig } from '../../src/core/config-manager.js'
 import { registerExposeProvider } from '../../src/core/expose/registry.js'
+import { getHostServerManager } from '../../src/core/host-server/index.js'
 
 let server: HttpServer
 let port: number
@@ -81,6 +82,11 @@ beforeAll(async () => {
   })
   server = await startServer({ port: 0, dev: true })
   port = (server.address() as net.AddressInfo).port
+  // The host servers' manager exists from boot on a real Mac: the primary links its own
+  // daemon with no session needed (284df511e), and that connect sets the manager up. The
+  // boot does not wait for that link, so set it up here, before the provider arrives, in
+  // the same order every run.
+  getHostServerManager()
   registration = registerExposeProvider('acme-plugin', {
     id: 'acme-tunnel',
     title: 'Acme Tunnel',
@@ -102,8 +108,11 @@ afterAll(async () => {
 
 describe('the tunnel on an always-on host by default', () => {
   it('lists where it can run, and says it would run on the always-on host', async () => {
-    // The host servers' manager exists from the first host connect on a real Mac; here, from this read.
-    expect((await hostEntry('devbox'))?.view.phase).toBe('off')
+    // Its server is on and the host never connects: the provider's arrival made the manager look, and it waits for it.
+    const devbox = await waitFor(async () => { const h = await hostEntry('devbox'); return h?.view?.phase === 'waiting-for-host' ? h : null })
+    expect(devbox.settings).toMatchObject({ enabled: true })
+    expect(devbox.settings.carriesTunnel).toBeUndefined()
+    expect((await hostEntry('spare'))?.view.phase).toBe('off')
     const body = await expose()
     expect(body.places).toEqual([
       { id: 'devbox', label: 'Dev box', alwaysOn: true },

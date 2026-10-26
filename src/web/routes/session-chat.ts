@@ -14,7 +14,7 @@ import { normalizeEngine } from '../../core/agents/engine-registry.js'
 import { getSessionByClaudeId, updateSessionRecord } from '../../core/session-tracker.js'
 import { getSessionPendingPermissions } from '../../core/sessions/session-lifecycle.js'
 import { sendMessageToSession, editMessage, deleteMessage, getQueue, isMessageQueued, unparkMessage, settledLineUuid } from '../../core/session-message-queue.js'
-import { heldRows } from '../../providers/line-consumption.js'
+import { heldRows, PROMPT_HOLD_REASON } from '../../providers/line-consumption.js'
 import { sessionStreamBuffer } from '../session-stream-buffer.js'
 import { prepareOutputModeSend } from '../../core/sessions/output-mode-send.js'
 import { parseSideLaneKey } from '../../core/sessions/side-thread-fork.js'
@@ -452,11 +452,16 @@ export function registerSessionChatRpc(): void {
     // queued, can't be edited or deleted, and must not look like a row to any
     // other reader of the queue. See core/sessions/launch-prompts.ts.
     const launchPrompt = launchPromptFor(data.sessionId)
-    // A held row (behind a line whose delivery is being confirmed, or behind an
-    // unanswered permission prompt) says so, so a reloaded panel shows why it waits.
+    // A held row says why it waits, so a reloaded panel shows it: a processing row
+    // behind a line whose delivery is being confirmed, or a pending row behind an
+    // unanswered permission prompt. A confirm hold on a row back in pending (its
+    // write failed) is stale until the next attempt releases it, so it says nothing.
     const held = heldRows(data.sessionId)
-    const messages = (await getQueue(data.sessionId)).map((m) =>
-      (m.status === 'processing' || m.status === 'pending') && held?.has(m.id) ? { ...m, heldReason: held.get(m.id) } : m)
+    const messages = (await getQueue(data.sessionId)).map((m) => {
+      const why = held?.get(m.id)
+      const holds = why !== undefined && (m.status === 'processing' || (m.status === 'pending' && why === PROMPT_HOLD_REASON))
+      return holds ? { ...m, heldReason: why } : m
+    })
     return { messages, ...(launchPrompt ? { launchPrompt } : {}) }
   })
 

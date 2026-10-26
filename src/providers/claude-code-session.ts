@@ -55,7 +55,7 @@ import {
 import type { QueuedMessage } from '../core/session-message-queue.js'
 import { lineUuidFor, noteTurnUserUuid, pickBatchUuid, turnUserUuid } from './batch-uuid.js'
 import {
-  announceReclaimed, awaitLine, awaitedLines, dropLine, heldRows, isLineAwaited, markUnconfirmed, noteHeld, noteLineState, onLinesReclaimed, releaseHeld,
+  announceReclaimed, awaitLine, awaitedLines, dropLine, heldRows, isLineAwaited, markUnconfirmed, noteHeld, noteLineState, onLinesReclaimed, releaseHeld, PROMPT_HOLD_REASON,
   takeLine, takeUntold, untakenLines, type LineState, type ReclaimReason, type UntakenLine,
 } from './line-consumption.js'
 import { registerEchoClaims, revokeEchoClaims } from '../core/echo-claims.js'
@@ -106,8 +106,6 @@ import {
   getOpenTurnPromise,
 } from './turn-ledger.js'
 
-/** Why a queued message waits while the session's permission prompt is unanswered (holdBehindPrompt). */
-const PROMPT_HOLD_REASON = 'Waiting for the permission prompt to be answered'
 
 /**
  * The walnut MCP mount for an ACP session, resolved to THIS install's CLI entry.

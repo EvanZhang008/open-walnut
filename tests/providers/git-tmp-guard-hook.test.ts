@@ -11,6 +11,7 @@
 import { describe, it, expect } from 'vitest'
 import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
+import { guardedPath } from '../setup/exec-guard.js'
 import { GIT_TMP_GUARD_COMMAND, gitTmpGuardHooks } from '../../src/providers/git-tmp-guard-hook.js'
 
 const TASK_DIR = '/home/u/.local/state/open-walnut/tasks/T1'
@@ -24,7 +25,7 @@ function run(shell: string, command: string, cwd: string, env: Record<string, st
   const r = spawnSync(shell, ['-c', GIT_TMP_GUARD_COMMAND], {
     input,
     encoding: 'utf8',
-    env: { PATH: '/usr/bin:/bin', HOME: '/home/u', TMPDIR: '/var/folders/ab/T/', WALNUT_TASK_DIR: TASK_DIR, ...env },
+    env: { PATH: guardedPath([], '/usr/bin:/bin'), HOME: '/home/u', TMPDIR: '/var/folders/ab/T/', WALNUT_TASK_DIR: TASK_DIR, ...env },
   })
   let reason = ''
   if (r.stdout) {
@@ -128,7 +129,7 @@ describe.each(SHELLS)('git /tmp guard under %s', (shell) => {
   })
 
   it('a missing awk (or one that fails) allows the command', () => {
-    const r = run(shell, 'git clone https://x/y.git /tmp/y', '/home/u', { PATH: '/nonexistent' })
+    const r = run(shell, 'git clone https://x/y.git /tmp/y', '/home/u', { PATH: guardedPath([], '/nonexistent') })
     expect(r.stdout).toBe('')
     expect(r.status).toBe(0)
   })

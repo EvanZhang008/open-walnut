@@ -47,11 +47,19 @@ async function hostModelCatalogs(): Promise<SessionProjection['host_model_catalo
   return (await (await import('./session-projection.js')).readPushedSessionProjection())?.host_model_catalogs
 }
 
-/** When the box holds the whole sessions copy (ms, the Mac's clock), or null (not held, filling in, or not the companion). */
+/**
+ * When the box holds the whole sessions copy (ms, the Mac's clock), or null (not
+ * held, filling in, not the companion, or no config copy yet). The view names each
+ * host by the label in the config copy, and its kind can land after the sessions
+ * copy: until it does the pushed projection answers, labels included, and keeps
+ * coming (2026-10-26: a send in that window was held "for devbox" instead of the
+ * host's label).
+ */
 async function sessionsCopyAsOf(): Promise<number | null> {
   const { followerKind } = await import('./server-role.js')
   if (followerKind() !== 'companion') return null
-  const { copyKindAsOf } = await import('./replication/kinds/gate.js')
+  const { copyKindAsOf, copyKindHeld } = await import('./replication/kinds/gate.js')
+  if (!(await copyKindHeld('config'))) return null
   // 0: a first round still filling in (a partial list would hide sessions).
   return (await copyKindAsOf('sessions')) || null
 }

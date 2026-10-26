@@ -274,7 +274,7 @@ describe('Notification feed API', () => {
     expect(JSON.stringify(history.messages)).not.toContain(error);
   });
 
-  it('folds repeated session errors into ONE record with a growing count', async () => {
+  it('folds repeated session errors into ONE record; the count grows only when the cause comes back', async () => {
     const sessionId = 'sess-runtime-error-e2e';
     // A runtime session error has no in-memory suppression window (unlike
     // delivery_failed), so both events reach the store — which is exactly the
@@ -290,11 +290,14 @@ describe('Notification feed API', () => {
       sessionId, error: 'CLI exited with code 2',
     }, ['main-ai', 'session-runner'], { source: 'session-runner' });
 
-    const body = await pollFeed((f) => f.feed.some((n) => n.sessionId === sessionId && n.count === 2));
     const scope = `error:session:${sessionId}:runtime`;
+    const body = await pollFeed((f) =>
+      f.feed.some((n) => n.dedupKey === scope && (n.body ?? '').includes('CLI exited with code 2')));
     const matches = body.feed.filter((n) => n.dedupKey === scope);
     expect(matches).toHaveLength(1);
-    expect(matches[0].count).toBe(2);
+    // One cause while its card stands is one occurrence (4e71ead1c): a repeat
+    // refreshes the text and time, never the count.
+    expect(matches[0].count).toBeUndefined();
     expect(matches[0].title).toBe('A session hit an error');
     // The card shows the LATEST failure, keyed on first-seen identity.
     expect(matches[0].body).toContain('CLI exited with code 2');
@@ -302,9 +305,28 @@ describe('Notification feed API', () => {
     expect(matches[0].lastTimestamp).toBeGreaterThanOrEqual(matches[0].timestamp);
 
     // First occurrence toasts; the fold patches the same card in place.
-    const frames = notifFrames.filter((f) => f.data?.dedupKey === `error:session:${sessionId}:runtime`);
+    const frames = notifFrames.filter((f) => f.data?.dedupKey === scope);
     expect(frames.map((f) => f.name)).toEqual(['notification:new', 'notification:updated']);
-    expect(frames[1].data.count).toBe(2);
+
+    // The session recovers, then the same cause comes back: that is a new
+    // occurrence on the same card, so the count grows and the card reopens.
+    bus.emit(EventNames.SESSION_RESULT, {
+      sessionId, result: 'done', isError: false,
+    }, ['main-ai', 'session-runner'], { source: 'session-runner' });
+    await pollFeed((f) => f.feed.some((n) => n.dedupKey === scope && n.resolved === 'recovered'));
+    bus.emit(EventNames.SESSION_ERROR, {
+      sessionId, error: 'CLI exited with code 3',
+    }, ['main-ai', 'session-runner'], { source: 'session-runner' });
+
+    const back = await pollFeed((f) => f.feed.some((n) => n.dedupKey === scope && n.count === 2));
+    const again = back.feed.filter((n) => n.dedupKey === scope);
+    expect(again).toHaveLength(1);
+    expect(again[0].count).toBe(2);
+    expect(again[0].resolved).toBeUndefined();
+    expect(again[0].body).toContain('CLI exited with code 3');
+    const last = notifFrames.filter((f) => f.data?.dedupKey === scope).at(-1)!;
+    expect(last.name).toBe('notification:updated');
+    expect(last.data.count).toBe(2);
   });
 
   it('absorbs a repeat inside the TTL window without touching the store or the socket', async () => {

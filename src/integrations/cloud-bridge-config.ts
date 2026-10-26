@@ -269,7 +269,15 @@ export async function recoverMachineToken(
   }
   log.session.warn('bridge: the companion no longer accepts this machine token, minting a new one', { hostAlias, deviceName })
   const token = await ensureMachineToken(hostAlias, cloud, { remint: true })
-  if (token) return 'reminted'
+  if (token) {
+    // The daemon that dials /bridge with this credential still holds the dead one
+    // (the tunnel and the Mac's own daemon share bridge-local): hand it the new one
+    // now, not at its next periodic re-push, up to 5 minutes away.
+    void import('../providers/daemon-connection.js')
+      .then((m) => m.pushBridgeConfigToHost(hostAlias))
+      .catch(() => { /* the periodic re-push still carries it */ })
+    return 'reminted'
+  }
   return machineTokenConflict(hostAlias) ? 'conflict' : 'failed'
 }
 

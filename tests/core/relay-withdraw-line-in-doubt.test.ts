@@ -71,7 +71,11 @@ describe('withdrawing a relayed message whose line may be in a CLI', () => {
     await parkIfQueued(batch, 'dropped', { freshLine: true })
     expect(await withdrawRelayedMessage(SID, ID)).toBe('parked')
     const [row] = await getQueue(SID)
-    expect(row.lineUuid).toBeUndefined()
+    // A plain row's Retry goes out under a new uuid (dc0002a05): the dropped line's one is gone.
+    expect(batch[0].lineUuid).toBeTruthy()
+    expect(row.lineUuid).toBeTruthy()
+    expect(row.lineUuid).not.toBe(batch[0].lineUuid)
+    expect(row.lineTries).toBe(0)
     expect(row.lineInDoubt).toBeUndefined()
   })
 })

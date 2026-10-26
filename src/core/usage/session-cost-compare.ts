@@ -7,6 +7,7 @@
  * Two groups: the models the picker offers (the client sends their ids) and a
  * short list of popular models Walnut does not run.
  */
+import { engineCaps } from '../agents/engine-registry.js';
 import type { PricingEntry } from './pricing.js';
 import { resolvePrice, type PriceSourceKind, type UserPriceRates } from './price-book.js';
 import { priceKey } from './price-data.js';
@@ -72,7 +73,7 @@ export function unsplitWriteShare(buckets: SessionCostBucket[], engine: string):
     const share1h = w1 / (w5 + w1);
     return { share1h, note: `cache writes of unknown lifetime split like this session's own (${Math.round(share1h * 100)}% 1-hour)` };
   }
-  return engine === 'claude'
+  return engineCaps(engine).cacheWriteLifetime === '1h'
     ? { share1h: 1, note: 'cache writes of unknown lifetime at the 1-hour price, as Claude Code writes them' }
     : { share1h: 0, note: 'cache writes of unknown lifetime at the 5-minute price' };
 }

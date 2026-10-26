@@ -628,6 +628,8 @@ describe('standalone ACP command lifetime', () => {
       fs: { existsSync: () => false },
       // acpStart binds a resumed session's budget first; this frame names no provider session.
       isJournalSid: () => false, usageBudget: { bindRuntime: async () => {} },
+      // acpStart names the task's durable directory first (task-dir-core.ts); this frame names no task.
+      TASK_DIR_ROOT: '/fixture/tasks', ensureTaskDir: () => null,
     })
     const result = handle({}, 1, { sid: 'fixture', cwd: '/fixture' }, 'getState')
     expect(typeof result?.then).toBe('function')

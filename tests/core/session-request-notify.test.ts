@@ -558,7 +558,8 @@ describe('sessionRequestWatchHook — the parent hears about its subtask by stat
     expect(n.body).toContain('Footer added; the tests still fail on CI.');
     const [, , opts] = sendMessageToSession.mock.calls[0] as [string, string, { source: string; messageId?: string }];
     expect(opts.source).toBe('walnut-notify');
-    expect(opts.messageId).toBe('sn-task-77-stopped');
+    // The coalescing key plus a fresh uuid per edge, so the CLI never dedupes a new notice (dc0002a05).
+    expect(opts.messageId).toMatch(/^sn-task-77-stopped-[0-9a-f-]{36}$/);
   });
 
   it('the parent is among the askers: the fallback notice speaks, no second voice', async () => {

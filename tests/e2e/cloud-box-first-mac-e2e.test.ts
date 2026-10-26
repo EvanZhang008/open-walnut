@@ -89,9 +89,18 @@ beforeAll(async () => {
   await seedPrimaryPairing(WALNUT_HOME, companion, replica.tokens, { cachedMachineToken: false })
 
   isolation = isolateFromRealSsh(base)
+}, 420_000)
+
+/**
+ * This Mac boots in the second test, not here: a primary links its own daemon at
+ * boot with no session needed (284df511e, local-daemon-lane.ts), and that link
+ * mints its machine credential at once, so a boot here would make this Mac the
+ * owner before the phone could try to be the first.
+ */
+async function bootThisMac(): Promise<void> {
   const server = await startServer({ port: 0, dev: true })
   primaryPort = (server.address() as net.AddressInfo).port
-}, 420_000)
+}
 
 afterAll(async () => {
   try { await stopServer() } catch { /* already down */ }
@@ -110,6 +119,7 @@ describe('a companion paired by `walnut device add`, with no owner recorded', ()
   }, 60_000)
 
   it('this Mac connects first: its mint lands, it is recorded the owner by that mint, on a daemon of its own', async () => {
+    await bootThisMac()
     await refreshCloudBoxHost()
     await api(`/api/hosts/${CLOUD_BOX_HOST_ALIAS}/connect`, { method: 'POST' })
     const st = await waitFor(async () => {

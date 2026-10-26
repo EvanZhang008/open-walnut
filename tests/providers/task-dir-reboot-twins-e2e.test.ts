@@ -22,6 +22,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
+import { guardedPath } from '../setup/exec-guard.js'
 
 let scriptPath = ''
 let root = ''
@@ -58,7 +59,7 @@ async function boot(twin: Twin, extraEnv: Record<string, string> = {}): Promise<
     ...process.env,
     HOME: p.home,
     SHELL: '/bin/sh',
-    PATH: '/usr/bin:/bin',
+    PATH: guardedPath([], '/usr/bin:/bin'),
     WALNUT_DAEMON_DIR: p.daemonDir,
     WALNUT_LEGACY_STREAMS_DIR: path.join(root, 'no-legacy-streams'),
     // The test's "remote" lives in the OS temp dir; trust it like a real one.
@@ -140,7 +141,7 @@ async function reboot(): Promise<void> {
 
 const gitHome = () => path.join(root, 'git-home')
 const git = (cwd: string, ...args: string[]) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.com', '-c', 'init.defaultBranch=main', '-c', 'core.hooksPath=/dev/null', ...args], {
-  cwd, encoding: 'utf8', env: { PATH: '/usr/bin:/bin:/opt/homebrew/bin', HOME: gitHome(), GIT_CONFIG_NOSYSTEM: '1' },
+  cwd, encoding: 'utf8', env: { PATH: guardedPath([], '/usr/bin:/bin:/opt/homebrew/bin'), HOME: gitHome(), GIT_CONFIG_NOSYSTEM: '1' },
 })
 
 beforeAll(() => {
