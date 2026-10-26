@@ -52,13 +52,14 @@ import { ThreadAskedFromList } from './ThreadAskedFromList';
 import { ThreadStackHeader } from './ThreadStackHeader';
 import { ThreadTurnLabel } from './ThreadTurnLabel';
 import { foldGroupOf, foldOpenKeys, foldParts, isFolded } from '@/utils/thread-fold';
-import { groupProcessParts, processPhrase } from './process-fold';
+import { groupProcessParts, processPhrase, type ContextCounts } from './process-fold';
 import { HiddenTurnsRow, NoActionMark, ProcessFoldRow, hiddenTurnsKey, openTurnFold, processFoldKey, turnFoldKey } from './TurnFolds';
 import { shapeTurns, type TurnShape } from '@/utils/turn-shape';
 import { noActionRows, readTurnMarker, stripTurnMarker } from '@/utils/turn-end-marker';
 import { detectOutboundSend } from './session-outbound';
 import { isRoutedQuestion } from './tool-run-phrase';
 import { isMergeableHistoryTool } from './SessionMessage';
+import { injectedContextKind } from './injected-context';
 import { stripQuestionTag } from '@/utils/question-tag';
 import { ThreadCommentCard } from './ThreadCommentCard';
 import { ThreadStackMenu } from './ThreadStackMenu';
@@ -2788,21 +2789,46 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // The live turn a received message started: that message (and any tool rows
   // history already holds after it) and the stream's leading run are ONE fold,
   // "Received a message, used 2 tools ›", the shape the turn has once it is
-  // answered (2026-10-26, the user: "this 2 can be collapsed"). Index into
-  // historyParts of the fold's first part, or -1.
+  // answered (2026-10-26, the user: "this 2 can be collapsed"). Context the CLI
+  // injected (a loaded skill) starts one the same way. Index into historyParts
+  // of the fold's first part, or -1.
+  // Context the CLI injected (a loaded skill, a re-invocation note): a folded
+  // row of its own, so it folds with the steps beside it (process-fold.ts).
+  const contextKindOf = (part: HistoryPart): 'skill' | 'context' | null => {
+    if (part.kind !== 'msg' || part.globalIndex === forkBoundaryIndex || gapAt.has(part.globalIndex)) return null;
+    return injectedContextKind(part.m);
+  };
+  const isContextPart = (part: HistoryPart) => contextKindOf(part) !== null;
+  const contextCounts = (parts: readonly HistoryPart[]): ContextCounts => {
+    const n = { skills: 0, other: 0 };
+    for (const part of parts) {
+      const kind = contextKindOf(part);
+      if (kind === 'skill') n.skills++;
+      else if (kind) n.other++;
+    }
+    return n;
+  };
   const liveTailStart = (() => {
     if (!isStreaming || stackMode || convMode || boundaryHasForkDivider || leadingStreamRunIndices.length === 0) return -1;
     let s = historyParts.length;
     let inbound = false;
+    let context = false;
     while (s > 0) {
       const part = historyParts[s - 1];
       const isInbound = part.kind === 'msg' && part.m.role === 'user' && part.globalIndex !== forkBoundaryIndex
         && !gapAt.has(part.globalIndex) && isHistorySentRow(part.m) && !isHistoryUserTurn(part.m);
-      if (!isInbound && part.kind !== 'run') break;
+      const isContext = !isInbound && isContextPart(part);
+      if (!isInbound && !isContext && part.kind !== 'run') break;
       inbound ||= isInbound;
+      context ||= isContext;
       s--;
     }
-    return inbound ? s : -1;
+    if (inbound) return s;
+    // Context alone opens it only right after the person's message: that is
+    // where the answered turn's fold starts too (pushTurnFold), so the row keeps
+    // its key and open state when the turn ends. After words mid-turn it would not.
+    const stop = historyParts[s - 1];
+    return context && stop?.kind === 'msg' && isHistoryUserTurn(stop.m) ? s : -1;
   })();
   const mergeBoundary = liveTailStart < 0
     && boundaryHistoryRun != null
@@ -3634,7 +3660,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     }
     return (
       <div key={`proc-${id}`} data-process-fold-index={head.globalIndex} {...threadWrapperProps(head.m.msgId ?? head.m.walnutMessageId, 'session-msg-bare')}>
-        <ProcessFoldRow foldId={id} phrase={processPhrase(tools, isOutboundTool, parts.filter(isInboundPart).length)}>
+        <ProcessFoldRow foldId={id} phrase={processPhrase(tools, isOutboundTool, parts.filter(isInboundPart).length, contextCounts(parts))}>
           {parts.map(renderHistoryPart)}
         </ProcessFoldRow>
       </div>
@@ -3672,7 +3698,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   if (convMode) {
     let pending: HistoryPart[] = [];
     const flushPending = () => {
-      for (const it of groupProcessParts(pending, processToolsOf, isOutboundTool, isInboundPart)) {
+      for (const it of groupProcessParts(pending, processToolsOf, isOutboundTool, isInboundPart, isContextPart)) {
         pageRows.push(it.kind === 'one' ? renderHistoryPart(it.part) : renderProcessParts(it.parts));
       }
       pending = [];
@@ -3695,6 +3721,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       ({ part, i }) => (askedAfter.has(i) ? null : processToolsOf(part)),
       isOutboundTool,
       ({ part, i }) => !askedAfter.has(i) && isInboundPart(part),
+      ({ part, i }) => !askedAfter.has(i) && isContextPart(part),
     ).forEach((item) => {
       if (item.kind === 'process') { into.push(renderProcessParts(item.parts.map((p) => p.part))); return; }
       const { part, i } = item.part;
@@ -3743,7 +3770,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
         }
       }
       const failed = errors + tools.filter((t) => t.isError && !isRoutedQuestion(t.name, t.result)).length;
-      const pieces = [processPhrase(tools, isOutboundTool, items.filter((x) => isInboundPart(x.part)).length)];
+      const pieces = [processPhrase(tools, isOutboundTool, items.filter((x) => isInboundPart(x.part)).length, contextCounts(items.map((x) => x.part)))];
       if (notes > 0) pieces.push(notes === 1 ? 'an update' : `${notes} updates`);
       const phrase = pieces.filter(Boolean).join(', ');
       const head = headOf(items[0].part);
@@ -3788,7 +3815,8 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       const lead = t.byPerson && headOf(mine[0].part).globalIndex === t.start ? 1 : 0;
       if (lead) renderDefault(mine.slice(0, 1), pageRows);
       const before = mine.slice(lead, ans);
-      if (before.length === 1 && before[0].part.kind === 'run') renderDefault(before, pageRows);
+      // One row is already a folded row: no fold around it.
+      if (before.length === 1 && (before[0].part.kind === 'run' || isContextPart(before[0].part))) renderDefault(before, pageRows);
       else if (before.length > 0) pushTurnFold(before);
       renderDefault(mine.slice(ans), pageRows);
     }
@@ -3799,11 +3827,15 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       const id = idOf(tail[0]);
       const members = runMembersOf(leadingStreamRunIndices);
       markAll(tail.map((part, k) => ({ part, i: tailFrom + k })), turnFoldKey(id));
+      // Every call in it, a failed one in history too (it is folded with the rest
+      // while the turn runs, so the header has to say so).
+      const tailTools = tail.flatMap((part) => (part.kind === 'run' ? part.memberMsgs : [])).flatMap((m) => m.tools ?? []);
       const tools = [
-        ...tail.flatMap((part) => processToolsOf(part) ?? []),
+        ...tailTools,
         ...members.flatMap((b) => (b.type === 'tool_call' ? [{ name: b.name ?? 'unknown', input: b.input, isError: b.status === 'error' }] : [])),
       ] as SessionHistoryTool[];
-      const failed = members.filter((b) => b.type === 'tool_call' && b.status === 'error' && !isRoutedQuestion(b.name, b.result)).length;
+      const failed = tailTools.filter((t) => t.isError && !isRoutedQuestion(t.name, t.result)).length
+        + members.filter((b) => b.type === 'tool_call' && b.status === 'error' && !isRoutedQuestion(b.name, b.result)).length;
       const head = headOf(tail[0]);
       // Keyed like the answered turn's fold (pushTurnFold), so the row and its
       // open state carry over when the turn ends and history takes the tools.
@@ -3811,7 +3843,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
         <div key={`turn-${id}`} data-turn-fold-index={head.globalIndex} {...threadWrapperProps(head.m.msgId ?? head.m.walnutMessageId, 'session-msg-bare')}>
           <ProcessFoldRow foldId={id} foldKey={turnFoldKey(id)} testId="turn-fold" failed={failed}
             running={isThinkingTail(leadingStreamRunIndices[leadingStreamRunIndices.length - 1]) || streamRunHasCallingTool(members)}
-            phrase={processPhrase(tools, isOutboundTool, tail.filter(isInboundPart).length)}>
+            phrase={processPhrase(tools, isOutboundTool, tail.filter(isInboundPart).length, contextCounts(tail))}>
             {tail.map(renderHistoryPart)}
             <StreamRunMembers members={members} live={isThinkingTail(leadingStreamRunIndices[leadingStreamRunIndices.length - 1])}
               sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost}

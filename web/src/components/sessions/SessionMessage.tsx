@@ -21,7 +21,8 @@ import { markdownToRichHtml } from '@/utils/markdown';
 import { SuggestSegments, useSuggestSegments } from '@/components/chat/SuggestSegments';
 import { RichMarkdown } from '@/components/chat/RichBlocks';
 import { BashToolCall } from './BashToolCall';
-import { isEnvelopeOnly, parseSessionEnvelopes } from '@open-walnut/history-session-envelope';
+import { parseSessionEnvelopes } from '@open-walnut/history-session-envelope';
+import { injectedContextKind } from './injected-context';
 import { detectOutboundSend } from './session-outbound';
 import { SessionEnvelopeSegments } from './SessionProvenanceCard';
 import { SessionOutboundCard } from './SessionOutboundCard';
@@ -1053,18 +1054,8 @@ function specialSessionRow({ message }: SessionMessageProps): ReactNode | undefi
 
   // CLI-injected context (skill content dump, compaction summary, image
   // metadata) — the human never typed this. Collapsed row, click to expand.
-  // Belt-and-suspenders prefix check catches histories parsed before the
-  // server learned the injected flag (stale cache / old transcript exports).
-  if (isUser && text
-    && (message.injected || text.startsWith('Base directory for this skill:'))
-    // Claude Code delivers another session's message as an INJECTED line. A line
-    // that is nothing but envelopes is no special row (undefined below), so the
-    // bubble renders it and the card gets the same wrapper, click delegation
-    // (task/session/file links) and context menu every other envelope has.
-    // Nothing-but is the test: a skill dump that quotes an envelope still has its
-    // own prose and stays collapsed.
-    // Parsing is pure (no hook, this is a conditional branch).
-    && !isEnvelopeOnly(parseSessionEnvelopes(text))) {
+  // Which lines count lives in injected-context.ts (the timeline folds them too).
+  if (isUser && text && injectedContextKind(message)) {
     return <InjectedContextRow text={text} />;
   }
 

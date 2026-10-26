@@ -51,6 +51,23 @@ describe('groupProcessParts', () => {
     expect(flat).toEqual(rows.map((r) => r.id));
   });
 
+  it('injected context (a loaded skill, a note) folds with the steps beside it', () => {
+    // The reported shape: a tool run, then two skill loads each after a note.
+    type C = Row & { ctx?: boolean };
+    const rows: C[] = [row('ask', null), row('run', [read('a'), read('b')]), { ...row('note1', null), ctx: true }, { ...row('skill1', null), ctx: true },
+      { ...row('note2', null), ctx: true }, { ...row('skill2', null), ctx: true }, row('next', null)];
+    const got = groupProcessParts(rows, (r) => r.tools, isOutbound, () => false, (r) => !!r.ctx)
+      .map((g) => (g.kind === 'one' ? g.part.id : `[${g.parts.map((p) => p.id).join(',')}]`));
+    expect(got).toEqual(['ask', '[run,note1,skill1,note2,skill2]', 'next']);
+    // Context rows alone fold together too; a lone one stays its own row.
+    expect(groupProcessParts(rows.slice(2, 4), (r) => r.tools, isOutbound, () => false, (r) => !!r.ctx).map((g) => g.kind)).toEqual(['process']);
+    expect(groupProcessParts([rows[0], rows[2], rows[6]], (r) => r.tools, isOutbound, () => false, (r) => !!r.ctx).map((g) => g.kind)).toEqual(['one', 'one', 'one']);
+    // Words between them split the run: each side folds on its own.
+    const split = [rows[1], rows[2], row('words', null), rows[3], rows[4]];
+    expect(groupProcessParts(split, (r) => r.tools, isOutbound, () => false, (r) => !!r.ctx)
+      .map((g) => (g.kind === 'one' ? g.part.id : `[${g.parts.map((p) => p.id).join(',')}]`))).toEqual(['[run,note1]', 'words', '[skill1,note2]']);
+  });
+
   it('nothing in, nothing out', () => {
     expect(groupProcessParts([], (r: Row) => r.tools, isOutbound)).toEqual([]);
   });
@@ -61,5 +78,14 @@ describe('processPhrase', () => {
     expect(processPhrase([read('a'), read('b'), edit('a'), edit('b'), send], isOutbound)).toBe('Read 2 files, edited 2 files, sent a message');
     expect(processPhrase([send, send], isOutbound)).toBe('Sent 2 messages');
     expect(processPhrase([read('a')], isOutbound)).toBe('Read a file');
+  });
+
+  it('names loaded skills and injected context after the tools', () => {
+    const bash = (c: string): SessionHistoryTool => ({ name: 'Bash', input: { command: c } });
+    const skill = (n: string): SessionHistoryTool => ({ name: 'Skill', input: { skill: n } });
+    const tools = [bash('a'), bash('b'), bash('c'), bash('d'), bash('e'), skill('x'), skill('y')];
+    expect(processPhrase(tools, isOutbound, 0, { skills: 2, other: 2 })).toBe(`${processPhrase(tools, isOutbound)}, loaded 2 skills, injected context 2\u00d7`);
+    expect(processPhrase([], isOutbound, 0, { skills: 1, other: 1 })).toBe('Loaded a skill, injected context');
+    expect(processPhrase([send], isOutbound, 1, { skills: 0, other: 3 })).toBe('Received a message, injected context 3\u00d7, sent a message');
   });
 });
