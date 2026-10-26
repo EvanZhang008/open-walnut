@@ -25,9 +25,10 @@ export interface AppProps {
  * Palette entry are identical either way; only the row a human clicks moves.
  *
  * `'settings'` is for an App that is a place you visit occasionally rather than a
- * daily surface: it gets a row in the Settings Plugins group, beside the Plugins
- * section itself, and no Sidebar entry at all. The Sidebar is a small, expensive space, and an App
- * that does not need to be one click away should not spend it.
+ * daily surface: it gets no Sidebar entry and is opened from the Apps page (and the
+ * Command Palette). The name is historic: such Apps once had a row in Settings. The
+ * Sidebar is a small, expensive space, and an App that does not need to be one click
+ * away should not spend it.
  */
 export type AppPlacement = 'sidebar' | 'settings'
 
@@ -39,7 +40,7 @@ export interface AppContribution {
   badge?: AppBadge
   order?: number
   fullBleed?: boolean
-  /** Default `'settings'`. Ask for `'sidebar'` only for a surface someone lives in all day. */
+  /** Default `'settings'` (off the Sidebar, on the Apps page). Ask for `'sidebar'` only for a surface someone lives in all day. */
   placement?: AppPlacement
 }
 

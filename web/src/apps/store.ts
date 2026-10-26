@@ -4,11 +4,11 @@ import {
   moveApp,
   parseAppPreferences,
   setAppDisposition,
-  setAppPlacement,
+  setAppOnSidebar,
   type AppDisposition,
   type AppPreferences,
 } from './preferences'
-import type { AppPlacement, RegisteredApp } from './registry'
+import type { RegisteredApp } from './registry'
 
 const listeners = new Set<() => void>()
 let snapshot: AppPreferences | null = null
@@ -58,8 +58,9 @@ export function updateAppDisposition(key: string, disposition: AppDisposition): 
   publish(setAppDisposition(getCurrent(), key, disposition))
 }
 
-export function updateAppPlacement(key: string, placement: AppPlacement): void {
-  publish(setAppPlacement(getCurrent(), key, placement))
+/** The Apps page's switch, as one write (see `setAppOnSidebar`). */
+export function updateAppOnSidebar(app: Pick<RegisteredApp, 'key' | 'kind'>, on: boolean): void {
+  publish(setAppOnSidebar(getCurrent(), app, on))
 }
 
 export function moveAppPreference(apps: RegisteredApp[], key: string, direction: 'up' | 'down'): void {

@@ -2,12 +2,14 @@ import { describe, expect, it } from 'vitest'
 import type { AppPlacement, RegisteredApp } from '../../web/src/apps/registry.js'
 import {
   APP_PREFERENCES_KEY,
+  appOnSidebar,
   createAppPreferences,
   effectiveAppPlacement,
   moveApp,
   parseAppPreferences,
   resolveApps,
   setAppDisposition,
+  setAppOnSidebar,
   setAppPlacement,
   supportsPlacementOverride,
 } from '../../web/src/apps/preferences.js'
@@ -79,9 +81,9 @@ describe('App preferences', () => {
     expect(resolved.hidden.map((item) => item.key)).toEqual(['core:tasks'])
   })
 
-  it('routes a settings-placed App to the Settings surface and never to the Sidebar', () => {
-    const withSettingsApp = [...apps, app('plugin-time:main', 500, false, 'settings')]
-    const resolved = resolveApps(withSettingsApp, createAppPreferences())
+  it('keeps an App declared off the Sidebar out of it, and on the Apps page and the palette', () => {
+    const withOffApp = [...apps, app('plugin-time:main', 500, false, 'settings')]
+    const resolved = resolveApps(withOffApp, createAppPreferences())
 
     expect(resolved.sidebar.map((item) => item.key)).toEqual([
       'core:home',
@@ -89,100 +91,94 @@ describe('App preferences', () => {
       'plugin-a:main',
       'core:settings',
     ])
-    expect(resolved.settings.map((item) => item.key)).toEqual(['plugin-time:main'])
-    // The Command Palette reads `discoverable`, so placement must not cost the app
-    // its keyboard entry, and the App manager reads `all`.
+    expect(appOnSidebar(app('plugin-time:main', 500, false, 'settings'), createAppPreferences())).toBe(false)
+    // The Command Palette reads `discoverable` and the Apps page reads `all`.
     expect(resolved.discoverable.map((item) => item.key)).toContain('plugin-time:main')
     expect(resolved.all.map((item) => item.key)).toContain('plugin-time:main')
+    // No surface lists Apps for Settings any more.
+    expect(Object.keys(resolved)).not.toContain('settings')
   })
 
-  it('lets hidden remove a settings-placed App while unpinned leaves it alone', () => {
-    const withSettingsApp = [...apps, app('plugin-time:main', 500, false, 'settings')]
+  it('reads a stored placement=settings from an older build as off the Sidebar', () => {
+    const stored = JSON.stringify({
+      version: 2, order: [], unpinned: [], hidden: [], placement: { 'plugin-a:main': 'settings' },
+    })
+    const preferences = parseAppPreferences(stored)
+    expect(preferences.placement).toEqual({ 'plugin-a:main': 'settings' })
+    expect(appOnSidebar(app('plugin-a:main', 30), preferences)).toBe(false)
+    expect(resolveApps(apps, preferences).sidebar.map((item) => item.key)).not.toContain('plugin-a:main')
+    expect(resolveApps(apps, preferences).discoverable.map((item) => item.key)).toContain('plugin-a:main')
+  })
 
-    // Unpinning is a Sidebar-only idea: a settings row is not a pin, so it stays.
-    const unpinned = resolveApps(
-      withSettingsApp,
+  it('agrees with resolveApps on every way an App can be off the Sidebar', () => {
+    const declaredOff = app('plugin-time:main', 500, false, 'settings')
+    const catalog = [...apps, declaredOff]
+    const cases = [
+      createAppPreferences(),
+      setAppDisposition(createAppPreferences(), 'plugin-a:main', 'unpinned'),
+      setAppDisposition(createAppPreferences(), 'plugin-a:main', 'hidden'),
+      setAppPlacement(createAppPreferences(), 'plugin-a:main', 'settings'),
+      setAppPlacement(createAppPreferences(), 'plugin-time:main', 'sidebar'),
+    ]
+    for (const preferences of cases) {
+      const onRail = new Set(resolveApps(catalog, preferences).sidebar.map((item) => item.key))
+      for (const item of catalog) expect(appOnSidebar(item, preferences)).toBe(onRail.has(item.key))
+    }
+  })
+
+  it('switches an App on and off the Sidebar in one write, whatever put it off', () => {
+    const declaredOff = app('plugin-time:main', 500, false, 'settings')
+    const catalog = [...apps, declaredOff]
+    const offWays = [
+      createAppPreferences(),
       setAppDisposition(createAppPreferences(), 'plugin-time:main', 'unpinned'),
-    )
-    expect(unpinned.settings.map((item) => item.key)).toEqual(['plugin-time:main'])
-    expect(unpinned.sidebar.map((item) => item.key)).not.toContain('plugin-time:main')
-
-    // Hidden means gone from every launcher, whichever surface the row was on.
-    const hidden = resolveApps(
-      withSettingsApp,
       setAppDisposition(createAppPreferences(), 'plugin-time:main', 'hidden'),
-    )
-    expect(hidden.settings).toEqual([])
-    expect(hidden.sidebar.map((item) => item.key)).not.toContain('plugin-time:main')
-    expect(hidden.hidden.map((item) => item.key)).toEqual(['plugin-time:main'])
+      setAppPlacement(createAppPreferences(), 'plugin-time:main', 'settings'),
+    ]
+    for (const off of offWays) {
+      expect(appOnSidebar(declaredOff, off)).toBe(false)
+      const on = setAppOnSidebar(off, declaredOff, true)
+      expect(appOnSidebar(declaredOff, on)).toBe(true)
+      expect(resolveApps(catalog, on).sidebar.map((item) => item.key)).toContain('plugin-time:main')
+      // Off again: unpinned, so it stays in the palette (hidden would drop it from there).
+      const offAgain = setAppOnSidebar(on, declaredOff, false)
+      expect(appOnSidebar(declaredOff, offAgain)).toBe(false)
+      expect(offAgain.hidden).not.toContain('plugin-time:main')
+      expect(resolveApps(catalog, offAgain).discoverable.map((item) => item.key)).toContain('plugin-time:main')
+      // And on once more: the round trip repeats.
+      expect(appOnSidebar(declaredOff, setAppOnSidebar(offAgain, declaredOff, true))).toBe(true)
+    }
   })
 
-  it('lets a user override the declared placement in both directions', () => {
-    const withSettingsApp = [...apps, app('plugin-time:main', 500, false, 'settings')]
-
-    // Declared 'settings', user drags it out to the sidebar.
-    const toSidebar = setAppPlacement(createAppPreferences(), 'plugin-time:main', 'sidebar')
-    const pulledOut = resolveApps(withSettingsApp, toSidebar)
-    expect(pulledOut.sidebar.map((item) => item.key)).toContain('plugin-time:main')
-    expect(pulledOut.settings).toEqual([])
-
-    // Declared 'sidebar', user files it away in Settings.
-    const toSettings = setAppPlacement(createAppPreferences(), 'plugin-a:main', 'settings')
-    const filedAway = resolveApps(withSettingsApp, toSettings)
-    expect(filedAway.settings.map((item) => item.key)).toEqual(['plugin-a:main', 'plugin-time:main'])
-    expect(filedAway.sidebar.map((item) => item.key)).not.toContain('plugin-a:main')
-    // Placement is not visibility: the palette and the App manager still list it.
-    expect(filedAway.discoverable.map((item) => item.key)).toContain('plugin-a:main')
+  it('switches an App that cannot be moved by pin alone, and never writes it a placement', () => {
+    const webview = { ...app('webview:legacy', 600), kind: 'webview' as const }
+    const off = setAppOnSidebar(createAppPreferences(), webview, false)
+    expect(appOnSidebar(webview, off)).toBe(false)
+    const on = setAppOnSidebar(off, webview, true)
+    expect(appOnSidebar(webview, on)).toBe(true)
+    expect(on.placement).toEqual({})
   })
 
-  it('makes Move to sidebar show an unpinned App there, and leaves a hidden one hidden', () => {
-    const withSettingsApp = [...apps, app('plugin-time:main', 500, false, 'settings')]
-    // Unpinned in the Sidebar's menu, then filed in Settings: it lives in Settings only.
+  it('makes a placement of sidebar show an unpinned App there, and leaves a hidden one hidden', () => {
+    const withOffApp = [...apps, app('plugin-time:main', 500, false, 'settings')]
     let preferences = setAppDisposition(createAppPreferences(), 'plugin-time:main', 'unpinned')
     preferences = setAppPlacement(preferences, 'plugin-time:main', 'settings')
-    expect(resolveApps(withSettingsApp, preferences).settings.map((item) => item.key)).toContain('plugin-time:main')
 
-    // "Move to sidebar" has to put it IN the Sidebar, not in neither surface.
     const back = setAppPlacement(preferences, 'plugin-time:main', 'sidebar')
     expect(back.unpinned).not.toContain('plugin-time:main')
-    expect(resolveApps(withSettingsApp, back).sidebar.map((item) => item.key)).toContain('plugin-time:main')
+    expect(resolveApps(withOffApp, back).sidebar.map((item) => item.key)).toContain('plugin-time:main')
 
-    // Hidden stays hidden: the placement only says where Show will put it.
     const hidden = setAppDisposition(createAppPreferences(), 'plugin-a:main', 'hidden')
     const placed = setAppPlacement(hidden, 'plugin-a:main', 'sidebar')
     expect(placed.hidden).toEqual(['plugin-a:main'])
-    expect(resolveApps(withSettingsApp, placed).sidebar.map((item) => item.key)).not.toContain('plugin-a:main')
-  })
-
-  it('returns an overridden App to the Sidebar pin rules, and Restore defaults undoes the move', () => {
-    const moved = setAppPlacement(createAppPreferences(), 'plugin-a:main', 'settings')
-    // Unpinned only concerns the Sidebar, so the settings row survives it...
-    const unpinnedInSettings = setAppDisposition(moved, 'plugin-a:main', 'unpinned')
-    expect(resolveApps(apps, unpinnedInSettings).settings.map((item) => item.key)).toEqual(['plugin-a:main'])
-
-    // ...and moving it back to the Sidebar SHOWS it there. The flag used to survive the move,
-    // which put the App in neither surface while its row read "In sidebar" (2026-10-01).
-    const backToSidebar = setAppPlacement(unpinnedInSettings, 'plugin-a:main', 'sidebar')
-    const resolved = resolveApps(apps, backToSidebar)
-    expect(resolved.settings).toEqual([])
-    expect(resolved.sidebar.map((item) => item.key)).toContain('plugin-a:main')
-    // Unpinning it on the Sidebar afterwards still works as before.
-    const unpinnedAgain = resolveApps(apps, setAppDisposition(backToSidebar, 'plugin-a:main', 'unpinned'))
-    expect(unpinnedAgain.sidebar.map((item) => item.key)).not.toContain('plugin-a:main')
-    expect(unpinnedAgain.discoverable.map((item) => item.key)).toContain('plugin-a:main')
-
-    // Restore defaults drops overrides along with everything else.
-    expect(createAppPreferences().placement).toEqual({})
-    expect(resolveApps(apps, createAppPreferences()).sidebar.map((item) => item.key))
-      .toContain('plugin-a:main')
+    expect(resolveApps(withOffApp, placed).sidebar.map((item) => item.key)).not.toContain('plugin-a:main')
   })
 
   it('keeps hidden winning over any placement override', () => {
-    let preferences = setAppPlacement(createAppPreferences(), 'plugin-a:main', 'settings')
+    let preferences = setAppPlacement(createAppPreferences(), 'plugin-a:main', 'sidebar')
     preferences = setAppDisposition(preferences, 'plugin-a:main', 'hidden')
 
     const resolved = resolveApps(apps, preferences)
-    expect(resolved.settings).toEqual([])
     expect(resolved.sidebar.map((item) => item.key)).not.toContain('plugin-a:main')
     expect(resolved.hidden.map((item) => item.key)).toEqual(['plugin-a:main'])
   })
@@ -197,9 +193,7 @@ describe('App preferences', () => {
     expect(supportsPlacementOverride(app('core:tasks', 20))).toBe(false)
     expect(supportsPlacementOverride(app('plugin-a:main', 30))).toBe(true)
 
-    const resolved = resolveApps(catalog, preferences)
-    expect(resolved.settings).toEqual([])
-    expect(resolved.sidebar.map((item) => item.key)).toEqual([
+    expect(resolveApps(catalog, preferences).sidebar.map((item) => item.key)).toEqual([
       'core:home',
       'core:tasks',
       'plugin-a:main',
@@ -244,8 +238,9 @@ describe('App preferences', () => {
 
     expect(parsed.placement).toEqual({})
     const withSettingsApp = [...apps, app('plugin-time:main', 500, false, 'settings')]
-    expect(resolveApps(withSettingsApp, parsed).settings.map((item) => item.key))
-      .toEqual(['plugin-time:main'])
+    const resolved = resolveApps(withSettingsApp, parsed)
+    expect(resolved.sidebar.map((item) => item.key)).not.toContain('plugin-time:main')
+    expect(resolved.discoverable.map((item) => item.key)).toContain('plugin-time:main')
   })
 
   it('never hides or unpins recovery Apps', () => {

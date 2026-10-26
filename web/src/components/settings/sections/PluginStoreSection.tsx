@@ -58,7 +58,7 @@ import {
   type DependencyPlanItem,
   type MissingDependencyView,
 } from './PluginDependencyRows';
-import { PluginAppControls } from '../PluginAppControls';
+import { PluginAppFailure } from '../PluginAppFailure';
 import { PluginMcpControls } from '../PluginMcpControls';
 import { PluginAiControls } from '../PluginAiControls';
 import { BUNDLED_AVAILABLE_TITLE, runBundledAction } from './plugin-bundled-actions';
@@ -1053,7 +1053,7 @@ export function PluginStoreSection({ config, onSave, filter = 'all', query = '',
           />
         )}
         {/* The plugin's app entries live HERE, on the plugin itself. */}
-        <PluginAppControls pluginId={row.id} failureOnly />
+        <PluginAppFailure pluginId={row.id} />
         {/* The MCP servers it runs: state, the reason it failed, Start / Restart. */}
         {isOn && <PluginMcpControls pluginId={row.id} />}
         {/* What it spent on AI this month, its budget and the switch (walnut.ai). */}

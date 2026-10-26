@@ -587,7 +587,7 @@ test('C74: deep links hold their target while slow content above it grows', asyn
   expect(Math.abs((await pane.evaluate((el) => el.scrollTop)) - afterWheel)).toBeLessThanOrEqual(2)
 })
 
-test('C75: nav tiles stay distinct with plugin apps and panels', async ({ page }) => {
+test('C75: nav tiles stay distinct with plugin panels, and plugin Apps get no Settings row', async ({ page }) => {
   await openSettings(page)
   await page.waitForFunction(() => !!(window as HookWindow).__walnutSettingsTestHooks)
   await page.evaluate(() => {
@@ -600,8 +600,9 @@ test('C75: nav tiles stay distinct with plugin apps and panels', async ({ page }
       hooks.pluginUiRegistry.registerSettings(id, name, { id: 'panel', label: name, component: () => null })
     }
   })
-  await expect(page.locator('[data-testid^="settings-nav-app-fixture-app-"]')).toHaveCount(3)
   await expect(page.locator('[data-testid^="settings-nav-fixture-panel-"]')).toHaveCount(2)
+  // Apps declared off the Sidebar open from the Apps page, never from this nav.
+  await expect(page.locator('.settings-nav a[href^="/apps/"]')).toHaveCount(0)
   const tileKeys = () => page.$$eval('.settings-nav-list .settings-nav-item[data-testid] .settings-pane-tile', (els) =>
     els.map((el) => `${getComputedStyle(el).backgroundColor}|${el.getAttribute('data-glyph') ?? el.textContent}`))
   const keys = await tileKeys()

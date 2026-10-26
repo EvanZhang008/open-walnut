@@ -5,8 +5,7 @@
  * a time; a nav click only changes the hash (replace), SettingsPage mounts that
  * pane.
  *
- * Off-page links (Agents, Skills, Commands, Memory, settings-placed plugin
- * apps) route away and carry an arrow-up-right mark. Plugin rows arrive
+ * Off-page links (Agents, Skills, Commands, Memory, Apps) route away and carry an arrow-up-right mark. Plugin rows arrive
  * asynchronously, so until the plugin runtime is ready the Plugins group
  * renders as many quiet placeholders as last time (localStorage) and the
  * Configure group does not jump when the real rows land.
@@ -14,7 +13,6 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
 import { useAppCatalog } from '@/apps/hooks'
-import type { AppBadge } from '@/apps/registry'
 import { usePluginUi, useWebPluginRuntime } from '@/plugins/hooks'
 import { isPhoneLayout } from '@/hooks/usePhoneLayout'
 import { CORE_SETTINGS_CONTRIBUTIONS, type CoreSettingsContribution } from './core-settings-registry'
@@ -41,9 +39,6 @@ export const NAV_GROUP_LABELS: Readonly<Record<NavGroup, string>> = {
 
 export const PLUGIN_COUNT_KEY = 'walnut.settings.nav.pluginCount'
 
-/** Tint for a settings-placed plugin app tile (its own icon on top). */
-const APP_TINT = '#30B0C7'
-
 const MANAGE_PAGES: ReadonlyArray<{ id: string; to: string; label: string; glyph: SettingsGlyphName; tint: string }> = [
   { id: 'agents', to: '/agents', label: 'Agents', glyph: 'two-person', tint: '#5856D6' },
   { id: 'skills', to: '/skills', label: 'Skills', glyph: 'sparkles', tint: '#AF52DE' },
@@ -59,8 +54,6 @@ export interface NavRow {
   testId: string
   label: string
   to?: string
-  appKind?: string
-  badge?: AppBadge
   /** True for rows a plugin contributed (counted for the placeholder cache). */
   fromPlugin?: boolean
   meta: SettingsPaneMeta
@@ -129,9 +122,9 @@ const PAGE_ROWS: readonly NavRow[] = MANAGE_PAGES.map((page) => ({
 }))
 
 /**
- * Plugins moved out of Settings to their own page. The Plugins group still holds the
- * settings-placed Apps and plugin panels, so it leads with the way to the page that
- * manages them. The testid keeps the old pane's name: it is the same entry point.
+ * Plugins and their Apps moved out of Settings to the Apps page; an App is on the
+ * Sidebar or only there, never in this nav. The Plugins group still holds the plugins'
+ * own settings panels, so it leads with the way to the page that manages them. The testid keeps the old pane's name: it is the same entry point.
  */
 const APPS_LINK_ROW: NavRow = {
   key: 'link:apps',
@@ -161,32 +154,6 @@ export function useSettingsNavModel(): SettingsNavModel {
   const dynamic = useMemo(() => {
     // Seed with every core and page tile so plugin tiles shift away from them.
     const taken = new Set<string>([...PAGE_ROWS, APPS_LINK_ROW, ...CORE_ROWS].map((r) => tileKey(r.meta.tint, r.meta.glyph)))
-    const appRows: NavRow[] = apps.settings.map((app) => {
-      const AppIcon = app.icon
-      const glyph = AppIcon ? `app-${app.key}` : 'app-window'
-      let tint = APP_TINT
-      if (taken.has(tileKey(tint, glyph))) tint = assignPluginTint(app.key, glyph, taken)
-      else taken.add(tileKey(tint, glyph))
-      return {
-        key: `link:app:${app.key}`,
-        kind: 'link' as const,
-        group: 'plugins' as const,
-        testId: `settings-nav-app-${app.key}`,
-        label: app.title,
-        to: app.path,
-        appKind: app.kind,
-        badge: app.badge,
-        fromPlugin: true,
-        meta: {
-          id: app.key, label: app.title, title: app.title, description: '',
-          icon: AppIcon ? <AppIcon size={13} /> : <SettingsIcon glyph="app-window" />, tint, glyph,
-        },
-        filter: {
-          key: `link:app:${app.key}`, kind: 'link' as const, label: app.title,
-          keywords: [app.pluginName, app.pluginId].filter((k): k is string => !!k).map((k) => k.toLowerCase()),
-        },
-      }
-    })
     const pluginPanes = new Map<string, PluginPaneInfo>()
     const panelRows: NavRow[] = pluginUi.settings.map((entry) => {
       pluginPanes.set(entry.key, { pluginId: entry.pluginId, pluginName: entry.pluginName })
@@ -214,8 +181,8 @@ export function useSettingsNavModel(): SettingsNavModel {
         },
       }
     })
-    return { appRows, panelRows, pluginPanes }
-  }, [apps.settings, apps.all, pluginUi.settings])
+    return { panelRows, pluginPanes }
+  }, [apps.all, pluginUi.settings])
 
   return useMemo(() => {
     const byGroup = (g: NavGroup) => CORE_ROWS.filter((r) => r.group === g)
@@ -224,7 +191,6 @@ export function useSettingsNavModel(): SettingsNavModel {
       ...byGroup('manage'),
       ...byGroup('plugins'),
       APPS_LINK_ROW,
-      ...dynamic.appRows,
       ...dynamic.panelRows,
       ...byGroup('configure'),
       ...byGroup('diagnostics'),
@@ -427,13 +393,6 @@ export function SettingsNav({ model, activePane, onOpenPane }: SettingsNavProps)
           {hit?.hint && <span className="settings-nav-hint">Matches &quot;{hit.hint}&quot;</span>}
         </span>
         <span className="settings-nav-trailing">
-          {row.badge === 'dot' ? (
-            <span className="notification-badge-dot" />
-          ) : typeof row.badge === 'number' && row.badge > 0 ? (
-            <span className="notification-badge-count">{row.badge > 99 ? '99+' : row.badge}</span>
-          ) : row.badge && typeof row.badge === 'object' ? (
-            <span className="notification-badge-count notification-badge-muted">{row.badge.text}</span>
-          ) : null}
           {failedPanes.has(row.key) && (
             <span
               className="settings-nav-error-dot"
@@ -455,7 +414,6 @@ export function SettingsNav({ model, activePane, onOpenPane }: SettingsNavProps)
           to={row.to}
           className={className}
           data-testid={row.testId}
-          data-app-kind={row.appKind}
           title={`Opens the ${row.label} page`}
           onClick={() => setOverlay(false)}
         >

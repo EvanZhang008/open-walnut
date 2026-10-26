@@ -69,7 +69,7 @@ export interface CoreSettingsContribution {
 export const CORE_SETTINGS_CONTRIBUTIONS: readonly CoreSettingsContribution[] = [
   // Plugins are not a section here: the Apps page (/apps, pages/AppsPage.tsx) owns
   // every plugin and every App, built in or not. The nav's Plugins group links to it
-  // (SettingsNav APPS_LINK_ROW) above the settings-placed Apps and plugin panels, and
+  // (SettingsNav APPS_LINK_ROW) above the plugins' own settings panels, and
   // the old `#plugin-store` deep link forwards there (SettingsPage).
   // Repositories is hidden until the feature is ready: the section component
   // (ReposSection), the /api/repositories routes and the agent tools stay; only

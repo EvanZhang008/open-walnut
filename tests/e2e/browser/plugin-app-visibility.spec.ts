@@ -146,7 +146,7 @@ async function appTileOnApps(page: Page) {
   return tile
 }
 
-const WHERE = (where: 'sidebar' | 'settings' | 'hidden') => `apps-app-where-${where}-${APP_KEY}`
+const TOGGLE = `apps-app-toggle-${APP_KEY}`
 
 /**
  * App choices reach the server 800 ms after the click (ui-prefs-sync). A test ends only once they
@@ -212,7 +212,7 @@ test('an open window keeps its plugin Apps through a server restart', async ({ p
 
   // And the App's tile on the Apps page is there too.
   const tile = await appTileOnApps(page)
-  await expect(tile).toHaveAttribute('data-where', 'sidebar')
+  await expect(tile).toHaveAttribute('data-shown', 'true')
   expect(pageErrors).toEqual([])
 })
 
@@ -224,55 +224,74 @@ test('an App unpinned from the Sidebar can be pinned back from its Apps page til
   await page.getByRole('menuitem', { name: 'Unpin from sidebar' }).click()
   await expect(page.getByTestId(SIDEBAR_ROW)).toHaveCount(0)
 
-  // It is in neither surface now, and the tile says exactly that, with the way back.
+  // Off the Sidebar, the App lives only on the Apps page: its switch reads off.
   const tile = await appTileOnApps(page)
-  await expect(tile).toHaveAttribute('data-where', 'hidden')
-  await expect(page.getByTestId(WHERE('hidden'))).toHaveAttribute('aria-checked', 'true')
-  await expect(page.getByTestId(`settings-nav-app-${APP_KEY}`)).toHaveCount(0)
+  await expect(tile).toHaveAttribute('data-shown', 'false')
+  await expect(page.getByTestId(TOGGLE)).toHaveAttribute('aria-checked', 'false')
+  await expect(tile).toContainText('Only in Apps')
   await tile.screenshot({ path: path.join(SCREENSHOT_DIR, 'unpinned-tile.png') })
 
-  await page.getByTestId(WHERE('sidebar')).click()
-  await expect(tile).toHaveAttribute('data-where', 'sidebar')
-  await expect(page.getByTestId(WHERE('sidebar'))).toHaveAttribute('aria-checked', 'true')
+  await page.getByTestId(TOGGLE).click()
+  await expect(tile).toHaveAttribute('data-shown', 'true')
+  await expect(page.getByTestId(TOGGLE)).toHaveAttribute('aria-checked', 'true')
+  await expect(tile).toContainText('On the sidebar')
   await expect(page.getByTestId(SIDEBAR_ROW)).toBeVisible({ timeout: 15_000 })
   await expectAppShownInSidebarOnServer(page)
 })
 
-test('Move to sidebar shows an App that was unpinned before it was filed in Settings', async ({ page }) => {
+test('an App an older build filed in Settings opens from Apps only, and Settings lists no Apps', async ({ page }) => {
   test.setTimeout(180_000)
   await openHome(page)
+  // What an older build stored for "Move to settings": it reads as off the Sidebar now,
+  // and nothing errors.
+  const stored = { version: 2, order: [], unpinned: [], hidden: [], placement: { [APP_KEY]: 'settings' } }
+  const put = await page.request.put(`http://127.0.0.1:${apiPort}/api/ui-prefs`, {
+    data: { prefs: { 'open-walnut-app-preferences-v1': { v: JSON.stringify(stored), ts: Date.now() + 1_000 } } },
+  })
+  expect(put.ok()).toBe(true)
+  await page.reload()
+  await expect(page.getByTestId('sidebar-core-app-apps')).toBeVisible({ timeout: 60_000 })
+  await expect(page.getByTestId(SIDEBAR_ROW)).toHaveCount(0, { timeout: 15_000 })
+
+  // Settings has no App rows any more: only the way to the Apps page.
+  await page.getByTestId('sidebar-core-app-settings').click()
+  await expect(page.getByTestId('settings-nav-plugin-store')).toBeVisible({ timeout: 30_000 })
+  await expect(page.locator('.settings-nav a[href^="/apps/"]')).toHaveCount(0)
+
+  const tile = await appTileOnApps(page)
+  await expect(tile).toHaveAttribute('data-shown', 'false')
+
+  // On: on the Sidebar. Off: back to Apps only.
+  await page.getByTestId(TOGGLE).click()
+  await expect(page.getByTestId(SIDEBAR_ROW)).toBeVisible({ timeout: 15_000 })
+  await page.getByTestId(TOGGLE).click()
+  await expect(tile).toHaveAttribute('data-shown', 'false')
+  await expect(page.getByTestId(SIDEBAR_ROW)).toHaveCount(0)
+
+  // The choice survives a reload; on again restores the row.
+  await page.reload()
+  await expect(page.getByTestId(`apps-app-${APP_KEY}`)).toHaveAttribute('data-shown', 'false', { timeout: 60_000 })
+  await page.getByTestId(TOGGLE).click()
+  await expect(page.getByTestId(`apps-app-${APP_KEY}`)).toHaveAttribute('data-shown', 'true')
+  await expect(page.getByTestId(SIDEBAR_ROW)).toBeVisible({ timeout: 15_000 })
+  await expectAppShownInSidebarOnServer(page)
+})
+
+test('an App hidden from the Sidebar menu reads off on its tile, and its switch brings it back', async ({ page }) => {
+  test.setTimeout(180_000)
+  await openHome(page)
+  await expect(page.getByTestId(SIDEBAR_ROW)).toBeVisible({ timeout: 30_000 })
   await page.getByTestId(SIDEBAR_ROW).click({ button: 'right' })
-  await page.getByRole('menuitem', { name: 'Unpin from sidebar' }).click()
+  // The Sidebar's menu no longer offers a way into Settings.
+  await expect(page.getByRole('menuitem', { name: 'Hide app' })).toBeVisible()
+  await expect(page.getByRole('menuitem', { name: /Move to Settings/i })).toHaveCount(0)
+  await page.getByRole('menuitem', { name: 'Hide app' }).click()
   await expect(page.getByTestId(SIDEBAR_ROW)).toHaveCount(0)
 
   const tile = await appTileOnApps(page)
-  await expect(tile).toHaveAttribute('data-where', 'hidden')
-  await page.getByTestId(WHERE('settings')).click()
-  await expect(tile).toHaveAttribute('data-where', 'settings')
-  // The Settings nav is not on the Apps page: the sidebar's Settings entry shows it.
-  await page.getByTestId('sidebar-core-app-settings').click()
-  await expect(page.getByTestId(`settings-nav-app-${APP_KEY}`)).toBeVisible({ timeout: 15_000 })
-  await page.getByTestId('sidebar-core-app-apps').click()
-  await expect(tile).toBeVisible({ timeout: 30_000 })
-
-  // Before: placement went back to the Sidebar but the old unpin kept it out of it.
-  await page.getByTestId(WHERE('sidebar')).click()
-  await expect(tile).toHaveAttribute('data-where', 'sidebar')
-  await expect(page.getByTestId(SIDEBAR_ROW)).toBeVisible({ timeout: 15_000 })
-  await page.getByTestId('sidebar-core-app-settings').click()
-  await expect(page.getByTestId('settings-nav-plugin-store')).toBeVisible({ timeout: 30_000 })
-  await expect(page.getByTestId(`settings-nav-app-${APP_KEY}`)).toHaveCount(0)
-  await page.getByTestId('sidebar-core-app-apps').click()
-  await expect(tile).toBeVisible({ timeout: 30_000 })
-
-  // Hide and Show still round-trip, and the choice survives a reload of the page.
-  await page.getByTestId(WHERE('hidden')).click()
-  await expect(tile).toHaveAttribute('data-where', 'hidden')
-  await expect(page.getByTestId(SIDEBAR_ROW)).toHaveCount(0)
-  await page.reload()
-  await expect(page.getByTestId(`apps-app-${APP_KEY}`)).toHaveAttribute('data-where', 'hidden', { timeout: 60_000 })
-  await page.getByTestId(WHERE('sidebar')).click()
-  await expect(page.getByTestId(`apps-app-${APP_KEY}`)).toHaveAttribute('data-where', 'sidebar')
+  await expect(tile).toHaveAttribute('data-shown', 'false')
+  await page.getByTestId(TOGGLE).click()
+  await expect(tile).toHaveAttribute('data-shown', 'true')
   await expect(page.getByTestId(SIDEBAR_ROW)).toBeVisible({ timeout: 15_000 })
   await expectAppShownInSidebarOnServer(page)
 })

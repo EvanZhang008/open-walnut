@@ -8,13 +8,10 @@ import { useAppCatalog } from '@/apps/hooks';
 import { appPathMatches } from '@/apps/registry';
 import { useRailItemsShown } from '@/apps/rail-items';
 import { CalendarIcon, PuzzleIcon } from '@/apps/icons';
-import { effectiveAppPlacement, supportsPlacementOverride } from '@/apps/preferences';
 import {
-  getAppPreferences,
   moveAppPreference,
   resetAppOrder,
   updateAppDisposition,
-  updateAppPlacement,
 } from '@/apps/store';
 import type { RegisteredApp } from '@/apps/registry';
 import { useNotifications, effectiveQuiet, quietLabel } from '@/contexts/notifications';
@@ -266,8 +263,8 @@ export function Sidebar({
 
   /**
    * Right-click on an app icon. The rail is the one surface where "this is in the
-   * wrong place" is the obvious thought, and until now the only answer lived in
-   * Settings → Plugins (and reordering had no UI at all). Ordering acts on the
+   * wrong place" is the obvious thought; the Apps page has the same on/off switch
+   * (and reordering lives only here). Ordering acts on the
    * SIDEBAR list, so "up"/"down" mean what the user sees, and the item is dropped
    * at the ends rather than offered as a no-op.
    *
@@ -279,7 +276,6 @@ export function Sidebar({
   const buildAppMenu = (app: RegisteredApp): ContextMenuItem[] => {
     const list = apps.sidebar;
     const index = list.findIndex((item) => item.key === app.key);
-    const placement = effectiveAppPlacement(app, getAppPreferences());
     return [
       { key: 'title', section: true, label: app.title },
       {
@@ -293,13 +289,8 @@ export function Sidebar({
       { key: 'reset-order', label: 'Reset sidebar order', onSelect: resetAppOrder },
       { divider: true },
       {
-        key: 'placement', label: placement === 'settings' ? 'Move to Sidebar' : 'Move to Settings',
-        when: supportsPlacementOverride(app),
-        onSelect: () => updateAppPlacement(app.key, placement === 'settings' ? 'sidebar' : 'settings'),
-      },
-      {
         key: 'unpin', label: 'Unpin from sidebar', when: !app.lockVisibility,
-        title: 'Keeps the app reachable by deep link and in Settings',
+        title: 'Keeps the app on the Apps page and in the Command Palette',
         onSelect: () => updateAppDisposition(app.key, 'unpinned'),
       },
       {
@@ -338,8 +329,8 @@ export function Sidebar({
       </div>
       <nav className="sidebar-nav" onClick={handleNavClick}>
         {/* `sidebar`, not `pinned`: an App whose effective placement is 'settings'
-            (declared by the App, or moved by the user from its plugin's row in
-            Settings → Plugins) has its row in Settings → Manage and never here. */}
+            (declared by its plugin, or chosen in an older build) has no row here;
+            it opens from the Apps page until the user switches it on there. */}
         {apps.sidebar.filter((app) => !(phone && isDesktopOnlyApp(app))).map((app) => {
           const Icon = app.icon;
           const icon = Icon ? (

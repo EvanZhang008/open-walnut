@@ -845,12 +845,12 @@ Contribution fields:
 - **`badge`**: initial badge, either a non-negative integer, `'dot'`, or `null`.
 - **`order`**: sort weight in the Sidebar. Core Apps occupy 10 to 1000, and plugin Apps default to 500.
 - **`fullBleed`**: whether the App paints its own full surface. Plugin Apps default to `true`.
-- **`placement`**: which surface carries the App's entry row, `'settings'` (the default) or `'sidebar'`. See [Where the App's row lives](#where-the-apps-row-lives).
+- **`placement`**: whether the App starts with a Sidebar row, `'settings'` (the default: no Sidebar row, opened from the Apps page) or `'sidebar'`. See [Where the App's row lives](#where-the-apps-row-lives).
 
 What the host derives for you, with no second registration:
 
 - **The route**: `/apps/<pluginId>~<appId>`, plus every subpath under it. You never declare a path, and you cannot collide with a Walnut route or another plugin.
-- **The entry row**: icon, title, and badge, in the Settings Plugins group, or in the Sidebar beside the Core Apps when the App asks for `placement: 'sidebar'`.
+- **The entry row**: icon, title, and badge, on a tile on the Apps page, and in the Sidebar beside the Core Apps when the App asks for `placement: 'sidebar'` or the user switches it on.
 - **Deep links**: `/apps/my-plugin~main/history?tab=recent` opens your App with the rest of the URL handed to your component.
 - **A Command Palette entry**: `Open <title>`, refreshed whenever the App list changes.
 - **The badge channel**: `handle.setBadge(...)` updates the row live, on whichever surface it sits.
@@ -910,7 +910,7 @@ A badge is a number, `'dot'`, `{ text }`, or `null`. A number is a count and dra
 
 ### Where the App's row lives
 
-An App declares which surface carries its entry row. The default, `'settings'`, puts it in Settings under the Plugins group, right below the Plugins section that manages every installed plugin, and gives it no sidebar row at all. `'sidebar'` puts it in the app sidebar next to Home and Tasks instead, and an App only gets that by asking.
+Every App has a tile on the Apps page. An App declares whether it also starts with a Sidebar row: the default, `'settings'`, gives it none, so it opens from its tile and the Command Palette. `'sidebar'` puts it in the app sidebar next to Home and Tasks, and an App only gets that by asking. The value `'settings'` keeps its old name because such Apps once had a row in Settings; Settings no longer lists Apps.
 
 ```tsx compile=web-placement
 import type { AppProps, WalnutWebApi } from '@open-walnut/plugin-api/web'
@@ -929,15 +929,15 @@ export function activate(walnut: WalnutWebApi) {
 }
 ```
 
-Nothing else changes: same route at `/apps/<pluginId>~<appId>`, same deep links, same Command Palette entry, same badge, same owner lifecycle. The Settings row is a real link that navigates to the App's own full-page route, so the App is never squeezed into a settings panel.
+Nothing else changes: same route at `/apps/<pluginId>~<appId>`, same deep links, same Command Palette entry, same badge, same owner lifecycle. The tile opens the App's own full-page route, so the App is never squeezed into a panel.
 
-Pick by how often the App is opened. The sidebar is for surfaces someone lives in all day and its length is the whole point: every row added there costs every other row a little attention, which is why an App has to ask for it. A report, an audit, an occasional tool, a plugin whose page is mostly its own settings, all belong in the Settings Plugins group, where people already go looking for the things they configure and inspect. The shipped `walnut-time` example and the bundled `walnut-rhythm` plugin both stay there.
+Pick by how often the App is opened. The sidebar is for surfaces someone lives in all day and its length is the whole point: every row added there costs every other row a little attention, which is why an App has to ask for it. A report, an audit, an occasional tool, a plugin whose page is mostly its own settings, all belong off the Sidebar, on the Apps page, where people already go looking for what their plugins add. The shipped `walnut-time` example and the bundled `walnut-rhythm` plugin both stay there.
 
-**Your `placement` is the default, not the verdict.** Only the person using the sidebar knows whether your App belongs in it, so the Apps page shows each of your Apps as a tile with a **Sidebar / Settings / Hidden** choice. Their choice wins over yours, applies immediately, and survives a reload. Write the declaration as the answer that is right for most people and let the rest move it.
+**Your `placement` is the default, not the verdict.** Only the person using the sidebar knows whether your App belongs in it, so each of your Apps' tiles on the Apps page has an **On the sidebar** switch; off means **Only in Apps**. Their choice wins over yours, applies immediately, and survives a reload. Write the declaration as the answer that is right for most people and let the rest move it.
 
-Two consequences worth knowing. Because moving the row cannot change what the App can do, code that branches on where its own row currently sits is code that will be wrong: read the route, not the surface. And because Core Apps and legacy webview Apps have no placement of their own to override, they get no Move action at all.
+Two consequences worth knowing. Because moving the row cannot change what the App can do, code that branches on where its own row currently sits is code that will be wrong: read the route, not the surface. And a legacy webview App has no placement of its own to override, so its switch only pins or unpins its Sidebar row.
 
-A user can also **Hide** your App there, which removes its entry from either surface while keeping the deep link working. An unknown placement value is refused at the call rather than accepted, because an App that matches no surface would register successfully and then appear nowhere.
+A user can also **Hide** your App from the Sidebar's own menu, which also drops its Command Palette entry while keeping the deep link and its tile on the Apps page. An unknown placement value is refused at the call rather than accepted, because an App that matches no surface would register successfully and then appear nowhere.
 
 ### Settings, CSS, and pages
 
@@ -1007,7 +1007,7 @@ Several plugins can fill the same place; `order` (default 500, lower first) sort
 
 Core Walnut screens, native plugin Apps, and legacy Webviews are all rows in the same App Registry, so they share one order, one visibility model, one badge shape, and one navigation path. The registry is what the Sidebar, the App host route, the Command Palette, and the App tiles on the Apps page all read.
 
-The consequences worth knowing as an author: a user can hide your App or move it between surfaces from your plugin's row; your App is reachable by URL, palette, and its entry row without you wiring any of the three, and `placement` decides which surface renders that row from the same registration; and your App renders inside its own error boundary, so a render failure names your plugin instead of blanking the console. Home and Settings are recovery surfaces, so Walnut locks their visibility.
+The consequences worth knowing as an author: a user can put your App on the Sidebar or keep it only in Apps from its tile; your App is reachable by URL, palette, and its entry row without you wiring any of the three, and `placement` decides which surface renders that row from the same registration; and your App renders inside its own error boundary, so a render failure names your plugin instead of blanking the console. Home and Settings are recovery surfaces, so Walnut locks their visibility.
 
 Home, Tasks, Notes, Calendar, Routines, and Settings are the Core Apps. Home's Chat, Todo, and Agenda are Dock controls inside Home rather than separate Apps, which is why you will not find them in the App list.
 

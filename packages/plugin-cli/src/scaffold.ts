@@ -161,8 +161,8 @@ export function activate(walnut: WalnutWebApi) {
   }
 
   // One App is the whole web surface; Walnut owns the route, and \`app.path\` is where it mounted.
-  // An App lands in the Settings Plugins group unless it asks for the sidebar, which is the
-  // small, expensive surface: keep this line only if people will open the App all day.
+  // An App opens from the Apps page and gets no Sidebar row unless it asks for one: the sidebar
+  // is the small, expensive surface, so keep this line only if people will open the App all day.
   const app = walnut.ui.app({ id: '${DEFAULT_APP_ID}', title: '${name}', component: App, placement: 'sidebar' })
 
   walnut.ui.injectCss(\`

@@ -19,8 +19,8 @@ import { createTaskTimeStore } from './web/task-time-store'
  * takes the route, the entry row, the Command Palette entry and the injected CSS
  * away together.
  *
- * The App declares `placement: 'settings'`, so its row is in the Settings Plugins
- * group rather than in the Sidebar. A day report is something you open now and then; the
+ * The App declares `placement: 'settings'`, so it has no Sidebar row and opens from
+ * its tile on the Apps page. A day report is something you open now and then; the
  * Sidebar is for the surfaces you live in.
  *
  * The slots (`walnut.ui.slot`) are where a task's own time shows: one "Time" fact with
@@ -82,8 +82,8 @@ export async function activate(walnut: WalnutWebApi) {
     // A day plot wants the whole canvas: the tape is 144px per hour and the
     // swimlanes want every pixel of width they can get.
     fullBleed: true,
-    // A report you read now and then, not a daily surface: its row belongs in
-    // the Settings Plugins group, and the Sidebar stays short.
+    // A report you read now and then, not a daily surface: no Sidebar row (it opens
+    // from the Apps page), and the Sidebar stays short.
     // The route, the deep links and the Command Palette entry are unaffected.
     placement: 'settings',
   })

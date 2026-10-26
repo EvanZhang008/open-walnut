@@ -372,35 +372,34 @@ test('installs a first-class Plugin App and exercises its real capabilities', as
   await openPlugins(page)
   const appTile = page.getByTestId('apps-app-walnut-demo:main')
   await expect(appTile).toBeVisible()
-  await expect(appTile).toHaveAttribute('data-where', 'sidebar')
-  await page.getByTestId('apps-app-where-hidden-walnut-demo:main').click()
+  await expect(appTile).toHaveAttribute('data-shown', 'true')
+  await page.getByTestId('apps-app-toggle-walnut-demo:main').click()
   await expect(demoNav).toHaveCount(0)
-  await expect(appTile).toHaveAttribute('data-where', 'hidden')
-  // Hidden keeps its deep link: Open still lands on the app.
+  await expect(appTile).toHaveAttribute('data-shown', 'false')
+  // Off the Sidebar it lives on the Apps page: Open still lands on the app.
   await page.getByTestId('apps-app-open-walnut-demo:main').click()
   await expect(page).toHaveURL(/\/apps\/walnut-demo~main$/)
   await expect(page.getByTestId('plugin-demo-app')).toBeVisible()
   await expect(demoNav).toHaveCount(0)
   await page.getByTestId('sidebar-core-app-home').click()
-  const hiddenComposer = page.locator('.main-page-chat .chat-input-textarea')
-  await hiddenComposer.click()
-  // Typed, not filled: the palette opens off the CARET, and it renders nothing at
-  // all when no command matches — so "the hidden App has no entry" only means
-  // something once the palette is demonstrably open and listing other Apps.
-  await hiddenComposer.pressSequentially('/app:', { delay: 15 })
+  const offComposer = page.locator('.main-page-chat .chat-input-textarea')
+  await offComposer.click()
+  // Typed, not filled: the palette opens off the CARET. An App off the Sidebar keeps its
+  // palette entry; only the Sidebar's own Hide takes it out of there.
+  await offComposer.pressSequentially('/app:', { delay: 15 })
   await expect(page.locator('.command-palette-item', { hasText: 'app:core:tasks' }))
     .toBeVisible({ timeout: 15_000 })
-  await expect(page.locator('.command-palette-item', { hasText: 'app:walnut-demo:main' })).toHaveCount(0)
+  await expect(page.locator('.command-palette-item', { hasText: 'app:walnut-demo:main' })).toBeVisible()
   await page.keyboard.press('Escape')
-  await hiddenComposer.fill('')
+  await offComposer.fill('')
   await openPlugins(page)
-  await expect(appTile).toHaveAttribute('data-where', 'hidden')
-  await page.getByTestId('apps-app-where-sidebar-walnut-demo:main').click()
+  await expect(appTile).toHaveAttribute('data-shown', 'false')
+  await page.getByTestId('apps-app-toggle-walnut-demo:main').click()
   await expect(demoNav).toBeVisible()
 
   // Reload keeps /apps, so the page comes back with the tile.
   await page.reload()
-  await expect(page.getByTestId('apps-app-walnut-demo:main')).toHaveAttribute('data-where', 'sidebar', { timeout: 30_000 })
+  await expect(page.getByTestId('apps-app-walnut-demo:main')).toHaveAttribute('data-shown', 'true', { timeout: 30_000 })
   await expect(demoNav).toBeVisible()
   expect(pageErrors).toEqual([])
 })

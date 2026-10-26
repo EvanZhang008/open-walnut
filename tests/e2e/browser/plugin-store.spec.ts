@@ -270,12 +270,13 @@ test('settings that live in the App: Configure goes there, the save lands, and a
   page.on('pageerror', (error) => pageErrors.push(error.message))
   await openPlugins(page)
 
-  // The App asked for no placement, so its row is in the Settings nav, not the Sidebar,
-  // and its tile on the Apps page says so.
-  await expect(page.getByTestId('apps-app-sigma:main')).toHaveAttribute('data-where', 'settings', { timeout: 30_000 })
+  // The App asked for no placement, so it is off the Sidebar and lives on the Apps page,
+  // and Settings lists no Apps at all.
+  await expect(page.getByTestId('apps-app-sigma:main')).toHaveAttribute('data-shown', 'false', { timeout: 30_000 })
   await expect(page.getByTestId('sidebar-app-sigma:main')).toHaveCount(0)
   await page.getByTestId('sidebar-core-app-settings').click()
-  await expect(page.getByTestId('settings-nav-app-sigma:main')).toBeVisible({ timeout: 30_000 })
+  await expect(page.getByTestId('settings-nav-plugin-store')).toBeVisible({ timeout: 30_000 })
+  await expect(page.locator('.settings-nav a[href^="/apps/"]')).toHaveCount(0)
   await page.getByTestId('sidebar-core-app-apps').click()
   await expect(page.getByTestId('apps-page')).toBeVisible({ timeout: 30_000 })
 
@@ -398,10 +399,8 @@ test('the switch turns a plugin off and on, and off survives a restart', async (
   // The promise the switch makes is durability, and that lives in config.yaml.
   await expect.poll(() => configEnabled('walnut-time'), { timeout: 15_000 }).toBe(false)
 
-  // One registry, so the Settings nav forgets the App in the same beat as the tile.
   await page.getByTestId('sidebar-core-app-settings').click()
   await expect(page.getByTestId('settings-nav-plugin-store')).toBeVisible({ timeout: 30_000 })
-  await expect(page.getByTestId('settings-nav-app-walnut-time:main')).toHaveCount(0)
 
   // ── ON ── (back through the Settings nav's Apps link)
   await page.getByTestId('settings-nav-plugin-store').click()

@@ -197,6 +197,13 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.apps-tile-name .apps-tile-badge {
+  position: static;
+  display: inline-flex;
+  margin-left: 6px;
+  vertical-align: 1px;
+  border: none;
+}
 .apps-tile-line {
   margin-top: 1px;
   font-size: 12px;
@@ -218,7 +225,6 @@
   flex: 1;
   min-width: 0;
 }
-.apps-tile-foot .settings-segmented { flex: 1; }
 .apps-tile-off .apps-tile-icon { filter: grayscale(1); opacity: 0.55; }
 .apps-tile-off .apps-tile-name { color: var(--fg-muted); }
 .apps-lock {

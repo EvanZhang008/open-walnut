@@ -132,14 +132,15 @@ async function openApps(page: Page): Promise<void> {
   await expect(page.getByTestId('apps-page')).toBeVisible({ timeout: 30_000 })
 }
 
-/** The app, opened the way a user opens it: Settings → Plugins → Time. */
+/** The app, opened the way a user opens it: Apps → the Time tile. */
 async function openTimeApp(page: Page): Promise<void> {
   await page.goto(`http://127.0.0.1:${fixture!.port}/`)
   await page.waitForLoadState('domcontentloaded')
-  await openSettings(page)
-  const row = page.getByTestId('settings-nav-app-walnut-time:main')
-  await expect(row).toBeVisible({ timeout: 60_000 })
-  await row.click()
+  await openApps(page)
+  const open = page.getByTestId('apps-app-open-walnut-time:main')
+  await open.scrollIntoViewIfNeeded()
+  await expect(open).toBeVisible({ timeout: 60_000 })
+  await open.click()
   await expect(page).toHaveURL(/\/apps\/walnut-time~main/)
   await expect(page.getByTestId('time-app')).toBeVisible({ timeout: 60_000 })
 }
@@ -252,7 +253,7 @@ test.afterAll(async () => {
   if (!graceful) child.kill('SIGKILL')
 })
 
-test('the App declares its own surface: a Settings → Plugins row, no Sidebar row', async ({ page }) => {
+test('the App declares its own surface: no Sidebar row, no Settings row, a tile on the Apps page', async ({ page }) => {
   const pageErrors: string[] = []
   page.on('pageerror', (error) => pageErrors.push(error.message))
 
@@ -279,20 +280,10 @@ test('the App declares its own surface: a Settings → Plugins row, no Sidebar r
   await page.keyboard.press('Escape')
   await composer.fill('')
 
-  // And it IS in the Plugins group, below Agents and Memory, as a real link.
+  // Settings lists no Apps: an App off the Sidebar opens from its tile on the Apps page.
   await openSettings(page)
-  const row = page.getByTestId('settings-nav-app-walnut-time:main')
-  await expect(row).toBeVisible({ timeout: 60_000 })
-  await expect(row).toHaveText('Time')
-  await expect(row).toHaveAttribute('href', '/apps/walnut-time~main')
-  await expect(row).toHaveAttribute('data-app-kind', 'native')
-  const [rowBox, agentsBox, memoryBox] = await Promise.all([
-    row.boundingBox(),
-    page.getByTestId('settings-nav-agents').boundingBox(),
-    page.getByTestId('settings-nav-memory').boundingBox(),
-  ])
-  expect(rowBox!.y).toBeGreaterThan(agentsBox!.y)
-  expect(rowBox!.y).toBeGreaterThan(memoryBox!.y)
+  await expect(page.getByTestId('settings-nav-agents')).toBeVisible({ timeout: 60_000 })
+  await expect(page.locator('.settings-nav a[href^="/apps/"]')).toHaveCount(0)
   await shoot(page, 'views-app-settings-nav')
 
   // This App is the ONLY Time UI now: the console's duplicate `time` section is gone,
@@ -303,7 +294,12 @@ test('the App declares its own surface: a Settings → Plugins row, no Sidebar r
   await expect(page.getByTestId('settings-nav-timeline')).toHaveText('Screen Tracking')
   await shoot(page, 'configure-group-no-time')
 
-  await row.click()
+  await openApps(page)
+  const tile = page.getByTestId('apps-app-walnut-time:main')
+  await tile.scrollIntoViewIfNeeded()
+  await expect(tile).toHaveAttribute('data-shown', 'false', { timeout: 60_000 })
+  await expect(tile).toContainText('Only in Apps')
+  await page.getByTestId('apps-app-open-walnut-time:main').click()
   await expect(page).toHaveURL(/\/apps\/walnut-time~main$/)
   await expect(page.getByTestId('time-app')).toBeVisible({ timeout: 60_000 })
   await expect(page.getByTestId('app-host-native')).toBeVisible()
@@ -736,25 +732,24 @@ test('the user can move the row to the Sidebar and back, live and across a reloa
   // The app's place is chosen on its tile on the Apps page, above its plugin's row.
   const appTile = page.getByTestId('apps-app-walnut-time:main')
   await expect(appTile).toBeVisible({ timeout: 60_000 })
-  // Where it starts: what the App declared.
-  await expect(appTile).toHaveAttribute('data-where', 'settings')
-  await expect(page.getByTestId('apps-app-where-settings-walnut-time:main')).toHaveAttribute('aria-checked', 'true')
+  // Where it starts: what the App declared, off the Sidebar and only in Apps.
+  const toggle = page.getByTestId('apps-app-toggle-walnut-time:main')
+  await expect(appTile).toHaveAttribute('data-shown', 'false')
+  await expect(toggle).toHaveAttribute('aria-checked', 'false')
   await shoot(page, 'apps-manager-placement-control')
 
-  // A Core App is not the user's to move: it is not a plugin, so it has no App tile
-  // (and no placement control) here at all; it is a built-in tile with a switch.
+  // A Core App is not a plugin, so it has no App tile here; it is a built-in tile.
   await expect(page.getByTestId('apps-app-core:home')).toHaveCount(0)
-  await expect(page.getByTestId('apps-app-where-sidebar-core:home')).toHaveCount(0)
 
-  await page.getByTestId('apps-app-where-sidebar-walnut-time:main').click()
+  await toggle.click()
 
   // Live, with no reload: the declared placement was only a default.
-  await expect(appTile).toHaveAttribute('data-where', 'sidebar')
+  await expect(appTile).toHaveAttribute('data-shown', 'true')
   await expect(page.getByTestId('sidebar-app-walnut-time:main')).toBeVisible({ timeout: 30_000 })
   await shoot(page, 'placement-moved-to-sidebar')
   await openSettings(page)
   await expect(page.getByTestId('settings-nav-plugin-store')).toBeVisible({ timeout: 30_000 })
-  await expect(page.getByTestId('settings-nav-app-walnut-time:main')).toHaveCount(0)
+  await expect(page.locator('.settings-nav a[href^="/apps/"]')).toHaveCount(0)
 
   // It survives a reload, and the App itself is unchanged by the move: same route,
   // same page, reached from its new row.
@@ -767,18 +762,18 @@ test('the user can move the row to the Sidebar and back, live and across a reloa
   await expect(page.getByTestId('time-app')).toBeVisible({ timeout: 60_000 })
   await expect(page.getByTestId('time-app-trend').locator('.wt-trend-day')).toHaveCount(7, { timeout: 30_000 })
 
-  // The same control is the way back to the App's own choice.
+  // The same switch takes it back off: only in Apps, and still no Settings row.
   await openApps(page)
-  await page.getByTestId('apps-app-where-settings-walnut-time:main').click()
-  await expect(page.getByTestId('apps-app-walnut-time:main')).toHaveAttribute('data-where', 'settings')
+  await page.getByTestId('apps-app-toggle-walnut-time:main').click()
+  await expect(page.getByTestId('apps-app-walnut-time:main')).toHaveAttribute('data-shown', 'false')
   await expect(page.getByTestId('sidebar-app-walnut-time:main')).toHaveCount(0)
   await openSettings(page)
-  await expect(page.getByTestId('settings-nav-app-walnut-time:main')).toBeVisible({ timeout: 30_000 })
+  await expect(page.getByTestId('settings-nav-plugin-store')).toBeVisible({ timeout: 30_000 })
+  await expect(page.locator('.settings-nav a[href^="/apps/"]')).toHaveCount(0)
 
-  // An override is NOT browser-local. App preferences ride the ui-prefs mirror
-  // (config/share/ui-prefs.json) so a move follows you to your phone. Assert the
-  // mirror, not just the DOM: the reload flushes the pending write on pagehide,
-  // and the move back has to have reached the server for real.
+  // The choice is NOT browser-local. App preferences ride the ui-prefs mirror
+  // (config/share/ui-prefs.json) so it follows you to another window. Assert the
+  // mirror, not just the DOM: the reload flushes the pending write on pagehide.
   await page.reload()
   await expect.poll(async () => {
     const res = await page.request.get(`http://127.0.0.1:${fixture!.port}/api/ui-prefs`)
@@ -787,12 +782,12 @@ test('the user can move the row to the Sidebar and back, live and across a reloa
     const stored = body.prefs?.['open-walnut-app-preferences-v1']?.v
     if (!stored) return 'missing'
     try {
-      const parsed = JSON.parse(stored) as { placement?: Record<string, string> }
-      return parsed.placement?.['walnut-time:main'] ?? 'missing'
+      const parsed = JSON.parse(stored) as { unpinned?: string[] }
+      return (parsed.unpinned ?? []).includes('walnut-time:main') ? 'off' : 'on'
     } catch {
       return 'unparsable'
     }
-  }, { timeout: 30_000, intervals: [500, 1_000] }).toBe('settings')
+  }, { timeout: 30_000, intervals: [500, 1_000] }).toBe('off')
 
   expect(pageErrors, 'moving a row must not throw in the browser').toEqual([])
 })
@@ -801,29 +796,23 @@ test('the user can move the row to the Sidebar and back, live and across a reloa
  * LAST on purpose: it disables the plugin, and the fixture server is shared by the
  * whole file, so nothing may run after it.
  */
-test('disabling the plugin takes the Settings row away without a reload', async ({ page }) => {
+test('disabling the plugin takes its App tile away without a reload', async ({ page }) => {
   await page.goto(`http://127.0.0.1:${fixture!.port}/`)
   await page.waitForLoadState('domcontentloaded')
-  await openSettings(page)
-  await expect(page.getByTestId('settings-nav-app-walnut-time:main')).toBeVisible({ timeout: 60_000 })
+  await openApps(page)
+  await expect(page.getByTestId('apps-app-walnut-time:main')).toBeVisible({ timeout: 60_000 })
 
-  // No UI affordance disables a linked plugin today, so this is the same call the
-  // author CLI and the Plugin Store make. The point is the BROWSER's reaction: the
-  // row is owner-scoped, so the plugin:runtime-changed event alone removes it.
+  // The same call the author CLI and the plugin switch make. The point is the BROWSER's
+  // reaction: the App is owner-scoped, so the plugin:runtime-changed event alone removes it.
   const disabled = await page.request.post(
     `http://127.0.0.1:${fixture!.port}/api/plugin-runtime/walnut-time/disable`,
   )
   expect(disabled.ok(), await disabled.text()).toBe(true)
 
-  await expect(page.getByTestId('settings-nav-app-walnut-time:main')).toHaveCount(0, { timeout: 60_000 })
-  await expect(page.getByTestId('settings-nav-agents')).toBeVisible()
+  // One registry: the tile goes in the same beat as the plugin, with no reload.
+  await expect(page.getByTestId('apps-app-walnut-time:main')).toHaveCount(0, { timeout: 60_000 })
   await expect(page.getByTestId('sidebar-app-walnut-time:main')).toHaveCount(0)
-  await shoot(page, 'views-app-settings-nav-disabled')
-
-  // One registry, so the App's tile on the Apps page forgets it in the same beat as the
-  // nav row. The Settings nav's Apps link is the way there.
-  await page.getByTestId('settings-nav-plugin-store').click()
-  await expect(page.getByTestId('apps-page')).toBeVisible({ timeout: 30_000 })
+  await shoot(page, 'views-app-tile-disabled')
   await expect(page.getByTestId('plugin-row-walnut-time')).toBeVisible({ timeout: 30_000 })
   await expect(page.getByTestId('apps-app-walnut-time:main')).toHaveCount(0)
 })

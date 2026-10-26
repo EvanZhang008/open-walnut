@@ -51,8 +51,8 @@ describe('core settings registry', () => {
     expect(CORE_SETTINGS_CONTRIBUTIONS
       .filter((entry) => entry.group === 'manage')
       .map((entry) => entry.id)).toEqual(['hooks'])
-    // The Plugins group has no core section now: the nav fills it with the Apps link,
-    // settings-placed plugin Apps and plugin settings panels.
+    // The Plugins group has no core section now: the nav fills it with the Apps link
+    // and the plugins' own settings panels (Apps live on the Sidebar or the Apps page).
     expect(CORE_SETTINGS_CONTRIBUTIONS
       .filter((entry) => entry.group === 'plugins')
       .map((entry) => entry.id)).toEqual([])

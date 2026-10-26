@@ -67,11 +67,11 @@ test('with no plugins installed the sidebar carries no app entries', async ({ pa
     'Home', 'Task panel', 'Ask Walnut', 'Agenda', 'Scratchpad', 'Notes', 'Calendar', 'Mail', 'Tasks', 'Routines', 'Settings',
   ])
 
-  // The other entry surface stays empty too: an App only reaches Settings → Manage by
-  // asking for `placement: 'settings'`, so zero plugins must mean zero extra rows.
+  // Settings lists no Apps at all (they live on the Sidebar or the Apps page), so zero
+  // plugins also means zero extra rows there.
   await page.getByTestId('sidebar-core-app-settings').click()
   await expect(page.getByTestId('settings-nav-agents')).toBeVisible({ timeout: 30_000 })
-  await expect(page.locator('.settings-nav [data-testid^="settings-nav-app-"]')).toHaveCount(0)
+  await expect(page.locator('.settings-nav a[href^="/apps/"]')).toHaveCount(0)
 })
 
 test('an unknown app id shows the not-found card, not a crash or a redirect home', async ({ page }) => {

@@ -8,11 +8,12 @@ export const APP_BADGE_TEXT_MAX = 6
 export type AppKind = 'core' | 'native' | 'webview'
 
 /**
- * WHERE an app's entry row lives. One registry, two consumers: the Sidebar renders
- * `'sidebar'` apps, the Settings "Manage" group renders `'settings'` apps. Everything
- * else about an app is placement-blind — same route, same deep links, same Command
- * Palette entry, same owner lifecycle — so moving an app between surfaces can never
- * change what it can do.
+ * Whether an app's entry row is on the Sidebar (`'sidebar'`) or not (`'settings'`, the
+ * historic name: such Apps once had a row in the Settings nav; now the Apps page is
+ * where they open from, and the stored value kept its name for older data and windows).
+ * Everything else about an app is placement-blind — same route, same deep links, same
+ * Command Palette entry, same owner lifecycle — so moving its row can never change what
+ * it can do.
  */
 export type AppPlacement = 'sidebar' | 'settings'
 
@@ -33,7 +34,7 @@ export interface AppContribution {
   badge?: AppBadge
   order?: number
   fullBleed?: boolean
-  /** Default 'settings': an App asks for a Sidebar row with 'sidebar'. The person can move it either way. */
+  /** Default 'settings' (off the Sidebar, opened from the Apps page): ask for a Sidebar row with 'sidebar'. The person can switch it either way. */
   placement?: AppPlacement
 }
 
@@ -139,7 +140,7 @@ export function assertBadge(value: AppBadge): void {
  * the only way the author finds out.
  */
 function resolvePlacement(value: AppPlacement | undefined): AppPlacement {
-  // Settings unless the plugin asks for the sidebar: the sidebar is the small, expensive
+  // Off the sidebar unless the plugin asks for it: the sidebar is the small, expensive
   // surface, so a row there is an explicit claim, never something an App gets by default.
   if (value === undefined) return 'settings'
   if (!APP_PLACEMENTS.includes(value)) {
