@@ -21,6 +21,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
+import { guardedPath } from '../setup/exec-guard.js'
 
 let scriptPath = ''
 let root = ''
@@ -49,7 +50,7 @@ async function boot(twin: Twin, dirs: Dirs, extra: Record<string, string>): Prom
   const env: Record<string, string | undefined> = {
     ...process.env,
     SHELL: '/bin/sh',
-    PATH: '/usr/bin:/bin',
+    PATH: guardedPath([], '/usr/bin:/bin'),
     HOME: dirs.home,
     WALNUT_DAEMON_DIR: dirs.daemon,
     WALNUT_STREAMS_DIR: dirs.streams,

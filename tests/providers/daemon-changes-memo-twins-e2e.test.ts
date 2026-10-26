@@ -220,9 +220,11 @@ describe.skipIf(TWINS.length === 0)('changes parse memos outlive the output LRU 
       fs.writeFileSync(transcript, writeLine(repo, 'a.ts', 'a1\n'))
       fs.writeFileSync(path.join(repo, 'a.ts'), 'a1\n')
 
-      process.env.WALNUT_CHANGES_RELEASE_AFTER_MS = '1500'
+      // A 3 s window (swept every 1.5 s) and a CLI that runs 4 s: by its exit the
+      // first compute is already older than the window.
+      process.env.WALNUT_CHANGES_RELEASE_AFTER_MS = '3000'
       try { await boot(twin, home, daemonDir) } finally { delete process.env.WALNUT_CHANGES_RELEASE_AFTER_MS }
-      const started = await rpc({ cmd: 'start', sid, cwd: repo, message: '', mode: 'default', args: ['/bin/sh', '-c', 'sleep 2', 'sh'] })
+      const started = await rpc({ cmd: 'start', sid, cwd: repo, message: '', mode: 'default', args: ['/bin/sh', '-c', 'sleep 4', 'sh'] })
       expect(started.ok, JSON.stringify(started)).toBe(true)
       const first = await rpc({ cmd: 'changes.compute', sid, cwd: repo })
       expect(first.ok, JSON.stringify(first)).toBe(true)
@@ -230,13 +232,16 @@ describe.skipIf(TWINS.length === 0)('changes parse memos outlive the output LRU 
       while ((await rpc({ cmd: 'status', sid })).alive !== false && Date.now() < until) await new Promise((r) => setTimeout(r, 200))
       expect((await rpc({ cmd: 'status', sid })).alive).toBe(false)
 
-      // Right after the exit: the list and a file click answer without a compute.
+      // After the exit, past one sweep: the window counts from the exit, not from
+      // the last use, so the list and a file click still answer without a compute.
+      await new Promise((r) => setTimeout(r, 1600))
       expect((await rpc({ cmd: 'changes.compute', sid, cwd: repo })).result).toEqual(first.result)
       expect(await rpc({ cmd: 'changes.file', sid, cwd: repo, path: path.join(repo, 'a.ts') })).toMatchObject({ found: true })
       expect(computeLog(daemonDir, sid)).toHaveLength(1)
 
-      // Unused past the window: the list still answers from the light copy...
-      await new Promise((r) => setTimeout(r, 3000))
+      // Unused past the window plus a sweep (the checks above were a use): the
+      // list still answers from the light copy...
+      await new Promise((r) => setTimeout(r, 5000))
       expect((await rpc({ cmd: 'changes.compute', sid, cwd: repo })).result).toEqual(first.result)
       expect(computeLog(daemonDir, sid)).toHaveLength(1)
       // ...and after a resume appends, the transcript is read from the start once.

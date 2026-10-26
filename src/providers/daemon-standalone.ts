@@ -9524,7 +9524,9 @@ const CHANGES_RELEASE_AFTER_MS = Number(process.env.WALNUT_CHANGES_RELEASE_AFTER
 function releaseIdleChangesState(now = Date.now()): void {
   for (const [sid, memo] of changesMemos) {
     if (sessions.get(sid)?.state === 'running' || changesInflightBySid.has(sid)) continue
-    const lastUsed = Math.max(memo.lastUsed, changesCache.get(sid)?.lastUsed ?? 0)
+    // From the later of the last use and the exit: a long turn nobody watched is
+    // still looked at right after it ends.
+    const lastUsed = Math.max(memo.lastUsed, changesCache.get(sid)?.lastUsed ?? 0, sessions.get(sid)?.exitedAt ?? 0)
     if (now - lastUsed < CHANGES_RELEASE_AFTER_MS) continue
     changesCache.delete(sid)
     if (memo.mainParse.state || memo.subCache.size) { memo.subCache = new Map(); memo.mainParse = {} }
