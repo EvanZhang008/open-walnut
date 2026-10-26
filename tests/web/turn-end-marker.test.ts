@@ -81,6 +81,7 @@ describe('stripTurnMarker', () => {
 
   it('holds back a half-written marker while streaming, and only then', () => {
     expect(stripTurnMarker('Done.\n\n<walnut-tu', true)).toBe('Done.\n');
+    expect(stripTurnMarker('Done.\n\n<', true)).toBe('Done.\n');
     expect(stripTurnMarker('Done.\n\n<walnut-tu', false)).toBe('Done.\n\n<walnut-tu');
     expect(stripTurnMarker('Use a < b', true)).toBe('Use a < b');
     expect(stripTurnMarker('Done.\n<b>bold</b>', true)).toBe('Done.\n<b>bold</b>');

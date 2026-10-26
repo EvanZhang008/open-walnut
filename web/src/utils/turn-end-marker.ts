@@ -72,7 +72,8 @@ export function stripTurnMarker(text: string, streaming = false): string {
   if (!streaming) return text;
   const cut = text.lastIndexOf('\n');
   const tail = text.slice(cut + 1).trim();
-  return tail.length >= 2 && TAGS.some((t) => t.startsWith(tail)) ? text.slice(0, Math.max(0, cut)) : text;
+  // Even a lone `<`: the tag's first chunk flashed on its own until the next one arrived.
+  return tail.length >= 1 && TAGS.some((t) => t.startsWith(tail)) ? text.slice(0, Math.max(0, cut)) : text;
 }
 
 /** The shape the turn rule reads (SessionHistoryMessage). */
