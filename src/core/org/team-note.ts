@@ -65,10 +65,14 @@ export function teamFingerprint(t: TeamNewsTask): string {
 /** What the lead's next message carries, given what it was told and its teams now. */
 export function planTeamNote(
   prev: TeamNoteState | undefined,
-  open: readonly TeamNewsTask[],
+  given: readonly TeamNewsTask[],
   completed: readonly Pick<Task, 'id' | 'title'>[],
   now: string,
 ): TeamNotePlan {
+  // A task the status sync has not read yet (it does within 1.5 s of a move) says nothing: its
+  // phase alone would read NEED_ACTION as "needs the user", which a turn that only ended is not.
+  const open = given.map((t) => (t.user_status ? t
+    : { ...t, user_status: { state: t.phase === 'IN_PROGRESS' ? 'working' as const : 'waiting' as const } }));
   const seen: Record<string, string> = {};
   for (const t of open) seen[t.id] = teamFingerprint(t);
   const next: TeamNoteState = { at: now, seen };

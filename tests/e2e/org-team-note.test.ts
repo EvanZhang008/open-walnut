@@ -110,7 +110,8 @@ describe('a lead\'s team note', () => {
     const row = rows.find((m) => m.id === sent.id)!
     expect(row.message).toContain('outcome="org-update"')
     expect(row.message).toContain('Signed copy received; filing it now.')
-    expect(row.message.trimEnd().endsWith('How is Garden going?')).toBe(true)
+    // The note goes in front of the message, in the same row.
+    expect(row.message.indexOf('outcome="org-update"')).toBeLessThan(row.message.indexOf('How is Garden going?'))
     const again = await sendMessageToSession(LEAD_SID, 'And the fence?', { source: 'peer' })
     const second = (await getQueue(LEAD_SID)).find((m) => m.id === again.id)
     // A repeat may collapse onto the queued row; a row of its own carries no second note.

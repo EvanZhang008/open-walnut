@@ -27,6 +27,17 @@ describe('team note plan', () => {
     expect(Object.keys(plan.next.seen).sort()).toEqual(['a', 'b', 'c', 'd'])
   })
 
+  it('a task the status sync has not read yet is never news, whatever its phase', () => {
+    const unread = [t('u', { phase: 'NEED_ACTION' }), t('v')]
+    const first = planTeamNote(undefined, unread, [], NOW)
+    expect(first.kind).toBe('none')
+    // Read later as a plain wait: still nothing; read as a real ask: told.
+    const plain = [t('u', { phase: 'NEED_ACTION', user_status: { state: 'waiting', kind: 'you', waitingOn: 'You' } }), t('v', { user_status: { state: 'working' } })]
+    expect(planTeamNote(first.next, plain, [], NOW).kind).toBe('none')
+    const asks = [t('u', { phase: 'NEED_ACTION', user_status: { state: 'needs', ask: 'Sign it' } }), t('v')]
+    expect(planTeamNote(first.next, asks, [], NOW).needs.map((i) => i.taskId)).toEqual(['u'])
+  })
+
   it('a first look with nothing to say records itself and says nothing', () => {
     const plan = planTeamNote(undefined, [t('c', { phase: 'TODO' })], [], NOW)
     expect(plan.kind).toBe('none')
