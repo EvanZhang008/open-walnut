@@ -262,7 +262,12 @@ session's own task **parks the task as Waiting** in the same call:
   waits on; the user reads it in this session, and the task's trigger card
   says what is watched.
 - The next message into this session (the fire, the user, a peer task) moves it
-  to In Progress on its own; that turn ends as Need Action like any other.
+  to In Progress on its own. The fire's turn and the user's end as Need Action
+  like any other, and so do a reply you asked for and a subtask's result; a
+  turn another task's message, a Walnut status notice or your own background
+  work started ends back in Waiting, with the same clock, while this trigger is
+  still armed (that message carries a note saying so). If such a turn finds the
+  user is needed after all, set `task_update` NEED_ACTION yourself.
 - Nothing else in THIS turn moves it: not your further output, a background
   agent coming back, or the turn's end. So if you find, later in the same turn,
   that the user is needed after all, take it back yourself:

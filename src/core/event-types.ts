@@ -219,6 +219,10 @@ export interface SessionSendEvent {
   message: string;
   mode?: string;
   interrupt?: boolean;
+  /** The message is what a waiting task waited for (a reply to its request, a
+   *  subtask's completion or error): its turn ends the wait for good instead of
+   *  giving it back (core/task-wait-resume.ts). */
+  endsWait?: boolean;
 }
 
 /** Bare turn-stop (composer stop button): interrupt the running turn WITHOUT

@@ -92,8 +92,9 @@ export async function sweepWaitUntil(nowMs = Date.now()): Promise<string[]> {
   return woke;
 }
 
-/** The triggers that deliver into this task, as the wake note names them. Never throws. */
-async function triggersWatching(taskId: string): Promise<WatchingTrigger[]> {
+/** The triggers that deliver into this task, as the wake note names them (also what
+ *  task-wait-resume.ts reads). Never throws: [] when they cannot be listed. */
+export async function triggersWatching(taskId: string): Promise<WatchingTrigger[]> {
   try {
     const { listRoutines } = await import('./routines/routines-core.js');
     const { triggerRunState } = await import('./cron/trigger-run-state.js');

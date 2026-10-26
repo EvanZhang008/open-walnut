@@ -367,6 +367,8 @@ async function flush(parentSid: string): Promise<void> {
     const { delivery, messageId } = await deliverToSession(target, {
       busText: text, enqueueText: text, source: NOTICE_SOURCE, taskId: target.taskId,
       ...(deliveryId ? { messageId: deliveryId } : {}),
+      // A subtask that finished or failed is what a waiting parent waits for.
+      ...(notices.some((n) => n.kind === 'completed' || n.kind === 'error') ? { endsWait: true } : {}),
     });
     log.session.info('subtask notice delivered', {
       parentSid, parentTaskId: target.taskId, delivery, messageId,

@@ -984,7 +984,12 @@ reconcile, `NOTES_UPDATED` events) with the web UI's `/api/notes-v2`.
   - Waiting (additive, 2026-09): `phase: "WAITING"` parks the task until
     something happens; it stays in its board tier. A message into its session
     (a trigger fire, a human, a peer) moves it to `IN_PROGRESS`, and that turn
-    ends as `NEED_ACTION` as usual; a session turn that merely ends, a session
+    ends as `NEED_ACTION` as usual, except that a turn a peer's message, a
+    Walnut status notice or the session's own background work started ends back
+    in `WAITING` with the same `wait_until` while the task still has an armed
+    trigger that has not fired since (additive, 2026-10-26; a reply to the
+    task's own request and a subtask's completion end the wait as before); a
+    session turn that merely ends, a session
     error and a sync pull do not move it (a sync pull may only complete it).
     `wait_until` (ISO datetime, a duration from now like `"6h"` / `"3d"`
     (additive, 2026-10), or `""` / `null` for no clock) rides with

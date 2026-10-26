@@ -200,7 +200,10 @@ async function recordHostDelivery(host: string, group: TriggerFiredEvent[]): Pro
       : head.clock
         ? scheduledText(job, fresh, h.atMs)
         : buildTriggerMessage(job, fresh, promptOf(job), { deliveredAtMs: h.atMs });
-    if (!h.started) await wakeParkedTarget(job, h);
+    if (!h.started) {
+      await endInterruptedWait(job);
+      await wakeParkedTarget(job, h);
+    }
     const where = host === '__local__' ? 'the local host' : host;
     return {
       status: 'ok' as const,
@@ -253,22 +256,40 @@ async function sessionLabel(sessionId: string): Promise<string> {
   }
 }
 
+function targetTaskOf(job: CronJob): string | undefined {
+  const taskId = (job.executor?.config as { target?: unknown } | undefined)?.target;
+  return typeof taskId === 'string' && taskId ? taskId : undefined;
+}
+
+/** A fire is what its task waited for: a wait some other turn interrupted does
+ *  not come back at that turn's end (core/task-wait-resume.ts), whatever the
+ *  fire's own phase edge does or does not do. */
+async function endInterruptedWait(job: CronJob): Promise<void> {
+  const taskId = targetTaskOf(job);
+  if (!taskId) return;
+  const { dropInterruptedWait } = await import('../task-wait-resume.js');
+  dropInterruptedWait(taskId, 'trigger-fired');
+}
+
 /**
  * A fire wakes a WAITING task: it is a new turn. Delivered on the host, it did
  * so while this server was away, so the move is made now, unless the task was
- * parked again after that delivery (its own turn may have done that).
+ * parked again after that delivery (its own turn may have done that). A wait
+ * that came back at the end of a turn that only interrupted it counts from when
+ * it was left, so a fire delivered during that turn still wakes it.
  */
 async function wakeParkedTarget(job: CronJob, h: HostDelivery): Promise<void> {
-  const taskId = (job.executor?.config as { target?: unknown } | undefined)?.target;
-  if (typeof taskId !== 'string' || !taskId) return;
+  const taskId = targetTaskOf(job);
+  if (!taskId) return;
   try {
-    const [{ getTask }, { HELD_PHASES, applySessionPhase }] = await Promise.all([
+    const [{ getTask }, { HELD_PHASES, applySessionPhase }, { heldSinceOf }] = await Promise.all([
       import('../task-manager.js'),
       import('../phase.js'),
+      import('../task-wait-resume.js'),
     ]);
     const task = await getTask(taskId).catch(() => null);
     if (!task || !HELD_PHASES.has(task.phase)) return;
-    const parkedAt = Date.parse(task.phase_changed_at ?? '');
+    const parkedAt = Date.parse(heldSinceOf(task) ?? '');
     if (Number.isFinite(parkedAt) && parkedAt >= h.atMs) return;
     await applySessionPhase(taskId, 'session:input', 'trigger-host-delivery', { sessionId: h.sessionId });
   } catch (err) {
@@ -292,6 +313,7 @@ async function deliverFires(host: string, batch: TriggerFiredEvent[]): Promise<v
 
   const applied = await service.applyTriggerFired(batch, async (job, fresh, at) => {
     if (!job.executor) return { status: 'error' as const, error: 'routine has no executor to deliver to' };
+    await endInterruptedWait(job);
     // A clock routine's run is the routine's own run: the session executor gets
     // its scheduled envelope, any other executor its instructions, as from the timer.
     const message = head.clock

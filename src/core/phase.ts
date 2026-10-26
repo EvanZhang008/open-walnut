@@ -72,6 +72,11 @@
  * a prompt that blocks on the human (session:awaiting-human → NEED_ACTION): a
  * hidden task could never show it. Its optional `wait_until` is a server
  * clock (task-wait-until.ts) that wakes the session the way a trigger would.
+ * A turn that only interrupted the wait (a peer's message, a Walnut status
+ * notice, the CLI's own follow-up for background work) ends back in WAITING with
+ * the same clock while the task still has an armed trigger (task-wait-resume.ts);
+ * the fire, the clock, a reply, a subtask's result and a person's message end it
+ * for good.
  * Background writes (a sync pull echoing the TODO it was shown) may move it
  * only to COMPLETE; see the held-phase guard in task-manager.ts.
  *
@@ -94,6 +99,10 @@
 import { log } from '../logging/index.js'
 import type { TaskPhase, TaskStatus, Task } from './types.js';
 import { isMainAgentTask } from './org/main-stays-active.js'
+import {
+  consumeInterruptedWait, dropInterruptedWait, hasInterruptedWait, interruptedWaitLeftAt, markInterruptedByMessage,
+  noteInterruptedWait, resumableWait, waitExitCause,
+} from './task-wait-resume.js'
 
 // ── Phase → Status (5 → 3) ──
 
@@ -338,6 +347,11 @@ export function sendSourceReopensTerminal(source: string | undefined): boolean {
   return source !== undefined && REOPENING_SEND_SOURCES.has(source)
 }
 
+/** A send a person made (the reopening sources but a peer's): it ends a wait for good. */
+export function isPersonSendSource(source: string | undefined): boolean {
+  return source !== 'peer' && sendSourceReopensTerminal(source)
+}
+
 /**
  * CLI actually started executing a turn → IN_PROGRESS. Unconditional.
  *
@@ -431,6 +445,19 @@ interface ApplySessionPhaseOpts {
    *  (sendSourceReopensTerminal), so it may pull a COMPLETE task back to
    *  IN_PROGRESS. Every other trigger ignores it. */
   reopenTerminal?: boolean
+  /** For 'session:input': the send's provenance (the SESSION_SEND bus source).
+   *  A peer's or a notice's turn only interrupts a WAITING task, a person's ends
+   *  the wait for good (task-wait-resume.ts). */
+  sendSource?: string
+  /** For 'session:input': the send is what a waiting task waited for (a reply,
+   *  a finished subtask), so it ends the wait whatever its source. */
+  sendEndsWait?: boolean
+  /** For 'reconciler': this hand-back is a clean turn end (a settled snapshot,
+   *  an ACP turn that ended), so an interrupted wait may come back instead, as
+   *  on 'session:result'. Never for a process that died mid-turn. */
+  turnEnd?: boolean
+  /** Internal: the second pass after the task moved under a planned return. */
+  noResume?: boolean
 }
 
 /**
@@ -489,6 +516,26 @@ export async function applySessionPhase(
   // turn — was deleted with the trigger's retirement above: triage-sync now
   // never produces a phase, so the gate had nothing left to guard.)
 
+  // A wait a turn only interrupted (task-wait-resume.ts). Any send that is not
+  // an interruption (a person's, a fire, the clock, a reply), a prompt for the
+  // human or an error ends it for good, whatever the phase is by then: the send's
+  // own edge may land after the turn it started already began. The clean end of
+  // that turn brings it back while the task still has an armed trigger.
+  if (trigger === 'session:input') {
+    const cause = waitExitCause(trigger, opts?.sendSource, opts?.sendEndsWait === true)
+    if (!cause) dropInterruptedWait(taskId, isPersonSendSource(opts?.sendSource) ? 'person-input' : `send:${opts?.sendSource ?? 'unknown'}`)
+    else markInterruptedByMessage(taskId, opts?.sendSource ?? source)
+  } else if (trigger === 'session:awaiting-human' || trigger === 'session:error') {
+    dropInterruptedWait(taskId, trigger)
+  }
+  let resume: { waitUntil: string | null } | null = null
+  if (newPhase === 'NEED_ACTION' && !opts?.noResume && hasInterruptedWait(taskId)
+    && (trigger === 'session:result' || (trigger === 'reconciler' && opts?.turnEnd))) {
+    if (await sessionEndedInError(opts?.sessionId)) dropInterruptedWait(taskId, 'session-error')
+    else resume = await resumableWait(task, opts?.sessionId)
+    if (resume) newPhase = 'WAITING'
+  }
+
   const requiresRunning = trigger === 'session:turn-start' || trigger === 'session:human-answered'
   let phaseRunner: typeof import('../providers/claude-code-session.js')['sessionRunner'] | undefined
   if (newPhase && opts?.sessionId
@@ -504,6 +551,7 @@ export async function applySessionPhase(
   }
 
   let oldPhase = task.phase
+  let leftWait: { waitUntil: string | null } | undefined
   const reopensTerminal = trigger === 'session:input' && opts?.reopenTerminal === true
   // applyPhase(COMPLETE) cleared the task's session slot; a reopen re-points it
   // at the session that just received the message, so slot-driven paths (hook
@@ -526,6 +574,8 @@ export async function applySessionPhase(
         phase: newPhase,
         ...readMarkerForPhase(newPhase),
         ...restoreSlot,
+        // null keeps a wait that had no clock clock-free (prepareRawUpdate).
+        ...(resume ? { wait_until: (resume.waitUntil ?? null) as never } : {}),
       }, {
         emitEvent: true, push: true, source,
         // A reopen must also get past updateTaskRaw's own terminal guard (the
@@ -537,8 +587,16 @@ export async function applySessionPhase(
         leaveHeld: true,
         shouldUpdate: (current) => {
           oldPhase = current.phase
+          leftWait = HELD_PHASES.has(current.phase) ? { waitUntil: current.wait_until ?? null } : undefined
           if (current.phase === newPhase) return false
           if (TERMINAL_PHASES.has(current.phase) && !reopensTerminal) return false
+          // The return was planned on the row read above; anything that moved the
+          // phase since (the session parking again, a person's pick) wins.
+          if (resume && (current.phase !== 'IN_PROGRESS' || current.phase_changed_at !== task.phase_changed_at
+            || interruptedWaitLeftAt(taskId) !== current.phase_changed_at)) {
+            skipReason = 'wait-moved'
+            return false
+          }
           if (opts?.shouldApply && !opts.shouldApply(current)) {
             skipReason = 'superseded-snapshot'
             return false
@@ -573,12 +631,27 @@ export async function applySessionPhase(
         if (skipReason) log.session.info('phase transition skipped', {
           taskId, trigger, source, sessionId: opts?.sessionId, reason: skipReason, turnGen: opts?.turnGen,
         })
+        if (skipReason === 'wait-moved') {
+          dropInterruptedWait(taskId, 'phase-moved', task.phase_changed_at)
+          return applySessionPhase(taskId, trigger, source, { ...opts, noResume: true })
+        }
         return { changed: false, oldPhase }
       }
 
+      if (resume) consumeInterruptedWait(taskId, updated.task?.phase_changed_at)
+      else if (leftWait && newPhase === 'IN_PROGRESS') {
+        const cause = waitExitCause(trigger, opts?.sendSource, opts?.sendEndsWait === true)
+        const leftAt = updated.task?.phase_changed_at
+        if (cause && leftAt) {
+          noteInterruptedWait(taskId, {
+            waitUntil: leftWait.waitUntil, leftAt, sessionId: opts?.sessionId, cause, source: opts?.sendSource ?? source,
+          })
+        }
+      }
       log.session.info('phase transition', {
         taskId, oldPhase, newPhase, trigger, source,
         sessionId: opts?.sessionId,
+        ...(resume ? { waitResumed: true, waitUntil: resume.waitUntil } : {}),
         ...(attempt > 0 ? { retryAttempt: attempt } : {}),
       })
       return { changed: true, oldPhase, newPhase }
@@ -613,7 +686,8 @@ export async function handBackTaskOnSessionEnd(
   taskId: string | null | undefined,
   sessionId: string,
   source: string,
-  opts?: { shouldApply?: (current: Readonly<Task>) => boolean },
+  /** `turnEnd`: the session's turn ended cleanly (not a process that died in it). */
+  opts?: { shouldApply?: (current: Readonly<Task>) => boolean; turnEnd?: boolean },
 ): Promise<boolean> {
   if (!taskId) return false
   try {
@@ -630,6 +704,7 @@ export async function handBackTaskOnSessionEnd(
     const res = await applySessionPhase(taskId, 'reconciler', source, {
       sessionId,
       newPhase: handback,
+      turnEnd: opts?.turnEnd === true,
       shouldApply: (current) => {
         if (opts?.shouldApply && !opts.shouldApply(current)) return false
         const sessions = getSessionsForTaskSync(taskId)
@@ -647,7 +722,9 @@ export async function handBackTaskOnSessionEnd(
       },
     })
     if (res.changed) {
-      log.session.warn('task handed back after out-of-band session end', {
+      log.session.warn(res.newPhase === 'WAITING'
+        ? 'interrupted wait restored after out-of-band session end'
+        : 'task handed back after out-of-band session end', {
         taskId, sessionId, source, oldPhase: res.oldPhase,
       })
     }

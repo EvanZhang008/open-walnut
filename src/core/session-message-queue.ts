@@ -197,6 +197,8 @@ export async function sendMessageToSession(
     lineUuid?: string;
     /** Answers a pending permission prompt although no person typed it (a leader answering its worker's question). */
     closesPrompt?: boolean;
+    /** What a waiting task waited for (SessionSendEvent.endsWait). */
+    endsWait?: boolean;
   },
 ): Promise<QueuedMessage> {
   const { bus, EventNames } = await import('./event-bus.js');
@@ -219,9 +221,12 @@ export async function sendMessageToSession(
   // changed since this session last read it, never a turn (sessions/app-state.ts).
   const { pendingAppState } = await import('./sessions/app-state.js');
   const appState = await pendingAppState(sessionId, rawBody);
+  // A peer's message into a waiting task says the wait comes back (task-wait-resume.ts).
+  const { waitNoteFor } = await import('./task-wait-resume.js');
+  const waitNote = await waitNoteFor(sessionId, opts?.source, opts?.endsWait === true);
   const outputMode = await prepareAutomatedOutputModeSend(sessionId, opts?.source, rawBody);
   const body = outputMode?.enqueueText ?? rawBody;
-  const notes = [place?.text, restart?.text, digest?.text, appState?.text].filter(Boolean).join('\n\n');
+  const notes = [place?.text, restart?.text, digest?.text, appState?.text, waitNote].filter(Boolean).join('\n\n');
   const enqueueText = notes ? `${notes}\n\n${body}` : body;
   let msg: QueuedMessage;
   try {
@@ -267,6 +272,7 @@ export async function sendMessageToSession(
     message,
     mode: opts?.mode,
     interrupt: opts?.interrupt || undefined,
+    ...(opts?.endsWait ? { endsWait: true } : {}),
   }, ['session-runner'], { source });
 
   // Tell UI so the message appears immediately in the session panel

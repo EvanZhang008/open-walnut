@@ -487,6 +487,8 @@ export async function applySnapshot(
     try {
       await withUndeliveredMessageGuard(async (hasUndelivered) => {
         await handBackTaskOnSessionEnd(handbackTask.id, sessionId, `snapshot-apply:${source}`, {
+          // A settled turn whose last result is clean: the turn ended, nothing died in it.
+          turnEnd: !snapshot.lastResult?.isError,
           shouldApply: (current) => {
             const latest = getSessionsForTaskSync(handbackTask.id).find(member => member.claudeSessionId === sessionId)
             return !!latest && sameTurn() && getAppliedV(sessionId) === snapshot.v

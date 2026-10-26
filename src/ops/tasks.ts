@@ -732,7 +732,8 @@ defineOp({
       ? 'Marked ready for the human to look at. Nothing else is required of you.'
       : body.phase === 'WAITING'
         ? 'The task is waiting. End your turn now: the next message into it (a trigger fire, the user, a peer'
-          + `${waitClockNote(task, body.wait_until)}) brings it back to In Progress.`
+          + `${waitClockNote(task, body.wait_until)}) brings it back to In Progress. A turn a peer's message or a status notice `
+          + 'starts ends back in Waiting while one of its triggers is armed.'
       : attachment === 'attached'
         ? `Talk to its session: walnut tools call task_send '{"to":"${taskId(task) || String(id)}","text":"..."}'`
         : dispatchHint(taskId(task) || String(id), attachment === 'none')

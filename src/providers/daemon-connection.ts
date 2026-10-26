@@ -5212,6 +5212,7 @@ export class DaemonConnection {
               if (recoveredStatus === 'idle' && (s.process_status !== 'idle' || !!s.activity || !!s.pendingPermission)) {
                 const { handBackTaskOnSessionEnd } = await import('../core/phase.js')
                 await handBackTaskOnSessionEnd(updated.taskId, s.claudeSessionId, 'daemon-reconnect:acp-turn-ended', {
+                  turnEnd: true,
                   shouldApply: () => {
                     const current = getSessionsForTaskSync(updated.taskId).find((record) => record.claudeSessionId === s.claudeSessionId)
                     return current?.statusRevision === updated.statusRevision

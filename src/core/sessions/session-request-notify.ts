@@ -245,7 +245,7 @@ export async function notifyRequesterFallback(
 
     const { deliverToSession } = await import('./session-send-core.js');
     const { delivery } = await deliverToSession(origin, {
-      busText: text, enqueueText: text, source: 'walnut-notify', taskId: origin.taskId,
+      busText: text, enqueueText: text, source: 'walnut-notify', taskId: origin.taskId, endsWait: true,
     });
     log.session.info('request fallback notification delivered', {
       requestId: request.id, fromSessionId: request.fromSessionId,

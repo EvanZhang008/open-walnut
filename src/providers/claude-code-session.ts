@@ -828,6 +828,8 @@ export class ClaudeCodeSession {
   private _turnGen = 0
   /** When the current turn began (see turnStartedAt). */
   private _turnEdgeAt: number | undefined
+  /** `origin.kind` of the last result the CLI emitted (see lastResultOrigin). */
+  private _lastResultOrigin: string | undefined
   /** Did any MAIN-lane assistant text reach the UI stream during this turn?
    *
    *  Set as a side effect of emitting SESSION_TEXT_DELTA (both the `assistant`
@@ -2028,6 +2030,13 @@ export class ClaudeCodeSession {
    *  same turn may pull it back. */
   get turnStartedAt(): number | undefined {
     return this._turnEdgeAt
+  }
+
+  /** `origin.kind` of the last result: 'task-notification' when the CLI ran that
+   *  turn itself for background work that came back. Read by core/task-wait-resume.ts:
+   *  only such a turn, of all the turns nobody sent, gives a wait back. */
+  get lastResultOrigin(): string | undefined {
+    return this._lastResultOrigin
   }
 
   /** Allow the health-monitor reconcile loop to sync the in-memory status after
@@ -6533,6 +6542,7 @@ export class ClaudeCodeSession {
         // runs first: a JSONL-replayed followup is suppressed by position.
         this.setForegroundActive(false)
         const resultOrigin = (event as { origin?: { kind?: string } }).origin
+        this._lastResultOrigin = resultOrigin?.kind
         const isTaskNotificationResult = resultOrigin?.kind === 'task-notification'
         if (isTaskNotificationResult) {
           log.session.info('result is task-notification origin — bookkeeping only, no turn-over', {
@@ -9244,6 +9254,8 @@ export class SessionRunner {
           // Provenance rides the bus envelope, not the payload: it decides whether
           // this send may reopen a COMPLETE task (phase.ts sendSourceReopensTerminal).
           const sendSource = event.source
+          // The send is what a waiting task waited for (a reply, a finished subtask): task-wait-resume.ts.
+          const endsWait = sendData.endsWait === true
           // `?? ''`: a kick that carries no text (the queue holds it) once crashed this whole handler right here.
           log.session.info('session send requested', { sessionId: sendData.sessionId, messageLength: (sendData.message ?? '').length, source: sendSource })
           let acpSession = this.findAcpSession(sendData.sessionId)
@@ -9270,10 +9282,10 @@ export class SessionRunner {
             }
             const providerSessionId = acpSession.sessionId ?? sendData.sessionId
             await this.drainAcpQueue(acpSession, providerSessionId)
-            void this.syncPhaseAfterSend(providerSessionId, sendSource)
+            void this.syncPhaseAfterSend(providerSessionId, sendSource, endsWait)
           } else if (this.sdkSessionMap.has(sendData.sessionId)) {
             // Route to SDK if this session is tracked as an SDK session
-            await this.handleSendSdk(sendData.sessionId, sendData.message, sendData.mode as SessionMode | undefined, sendData.interrupt, sendSource)
+            await this.handleSendSdk(sendData.sessionId, sendData.message, sendData.mode as SessionMode | undefined, sendData.interrupt, sendSource, endsWait)
           } else {
             await this.handleSend({ ...sendData, source: sendSource })
           }
@@ -11358,7 +11370,7 @@ export class SessionRunner {
   /**
    * Send a follow-up message to an SDK session.
    */
-  private async handleSendSdk(sessionId: string, message: string, mode?: SessionMode, interrupt?: boolean, source?: string): Promise<void> {
+  private async handleSendSdk(sessionId: string, message: string, mode?: SessionMode, interrupt?: boolean, source?: string, endsWait?: boolean): Promise<void> {
     if (!this.sdkClient) throw new Error('SDK client not configured')
 
     // Unconditional phase transition: session input → IN_PROGRESS
@@ -11376,6 +11388,7 @@ export class SessionRunner {
         const { applySessionPhase, sendSourceReopensTerminal } = await import('../core/phase.js')
         await applySessionPhase(record.taskId, 'session:input', 'session.ts:handleSendSdk', {
           sessionId, reopenTerminal: sendSourceReopensTerminal(source),
+          sendSource: source, sendEndsWait: endsWait,
         })
         // A message into an imported session adopts its task: the import tag
         // comes off, so it leaves the imported type (no pill, never auto-completed).
@@ -11448,6 +11461,8 @@ export class SessionRunner {
     interrupt?: boolean
     /** SESSION_SEND bus source (who sent it) — see syncPhaseAfterSend. */
     source?: string
+    /** SessionSendEvent.endsWait — see syncPhaseAfterSend. */
+    endsWait?: boolean
   }): Promise<void> {
     const { sessionId, mode, interrupt, source } = data
 
@@ -11499,7 +11514,7 @@ export class SessionRunner {
     // so the global task write-lock never blocks message delivery above.
     // applySessionPhase is an idempotent state machine (reads current phase, no-ops if
     // no transition needed), so running it after delivery is safe.
-    void this.syncPhaseAfterSend(sessionId, source)
+    void this.syncPhaseAfterSend(sessionId, source, data.endsWait === true)
   }
 
   /** Fire-and-forget phase/status bookkeeping after a send. Never blocks delivery.
@@ -11510,7 +11525,7 @@ export class SessionRunner {
    *  transition this runs at SEND time, before delivery is confirmed — a send that
    *  is later parked or fails leaves the task IN_PROGRESS, and the error path or
    *  the reconciler hands it back (red row) the same way it does for any task. */
-  private async syncPhaseAfterSend(sessionId: string, source?: string): Promise<void> {
+  private async syncPhaseAfterSend(sessionId: string, source?: string, endsWait?: boolean): Promise<void> {
     try {
       const {
         emitSessionStatusChanged,
@@ -11532,6 +11547,7 @@ export class SessionRunner {
         const { applySessionPhase, sendSourceReopensTerminal } = await import('../core/phase.js')
         await applySessionPhase(record.taskId, 'session:input', 'session.ts:handleSend', {
           sessionId, reopenTerminal: sendSourceReopensTerminal(source),
+          sendSource: source, sendEndsWait: endsWait,
         })
         // A message into an imported session adopts its task: the import tag
         // comes off, so it leaves the imported type (no pill, never auto-completed).

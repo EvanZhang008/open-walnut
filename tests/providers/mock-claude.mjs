@@ -488,6 +488,13 @@ function stripBanners(text) {
     if (q) questionSeq = Number(q[1]);
     body = body.slice(m[0].length);
   }
+  // A status note Walnut puts in front of the words (a place or wait note): the
+  // words after it are the message, so `slow:` and the other commands still lead.
+  for (;;) {
+    const n = body.match(/^\s*<walnut-message kind="notification"[^>]*>[\s\S]*?<\/walnut-message>\s*/);
+    if (!n || !body.slice(n[0].length).trim()) break;
+    body = body.slice(n[0].length);
+  }
   return body;
 }
 // The rest of what Walnut wraps around the user's words, which a real model reads
@@ -2104,6 +2111,38 @@ if (outputFormat === 'stream-json') {
       }, 450);
       // Do NOT exit (stream-json FIFO mode stays alive between turns) and do NOT
       // drain 'bg-detached' — that non-terminal task is the whole point.
+      return;
+    }
+
+    // 2a.9b. "detached-followup-test[:<ms>]" — a turn backgrounds a command and
+    //         ends (result + idle) while it runs; <ms> later (default 3000) the
+    //         command completes and the CLI opens a follow-up turn ON ITS OWN
+    //         (running, no user line), which streams for 1.5 s before its result
+    //         (origin task-notification) and idle. The follow-up is what moved a
+    //         parked task out of WAITING (task-wait-resume e2e).
+    if (effectiveMessage === 'detached-followup-test' || effectiveMessage.startsWith('detached-followup-test:')) {
+      function emitFu(line) { process.stdout.write(JSON.stringify({ ...line, session_id: outputSessionId }) + '\n'); }
+      const followAt = Number(effectiveMessage.split(':')[1]) || 3000;
+      const say = (id, text) => emitFu({ type: 'assistant', message: { id, type: 'message', role: 'assistant', model: 'mock-model', content: [{ type: 'text', text }], stop_reason: 'end_turn', usage: { input_tokens: 20, output_tokens: 10 } } });
+      say('msg_fu_main', 'Started the test run in the background.');
+      emitFu({ type: 'system', subtype: 'task_started', task_id: 'bg-fu', task_type: 'local_bash', description: 'test run (backgrounded)' });
+      setTimeout(() => emitFu({ type: 'system', subtype: 'task_updated', task_id: 'bg-fu', patch: { is_backgrounded: true } }), 100);
+      setTimeout(() => emitFu({ type: 'result', subtype: 'success', is_error: false, duration_ms: 200, num_turns: 1, result: 'Run started; waiting on it.', total_cost_usd: 0.001, usage: { input_tokens: 20, output_tokens: 10 } }), 250);
+      setTimeout(() => emitFu({ type: 'system', subtype: 'session_state_changed', state: 'idle' }), 350);
+      setTimeout(() => {
+        emitFu({ type: 'system', subtype: 'task_updated', task_id: 'bg-fu', patch: { status: 'completed' } });
+        emitFu({ type: 'system', subtype: 'task_notification', task_id: 'bg-fu', status: 'completed' });
+        emitFu({ type: 'system', subtype: 'background_tasks_changed', tasks: [] });
+        emitFu({ type: 'system', subtype: 'session_state_changed', state: 'running' });
+      }, followAt);
+      setTimeout(() => {
+        say('msg_fu_followup', 'The local run finished; the remote run is still queued.');
+        emitFu({ type: 'result', subtype: 'success', is_error: false, duration_ms: 1500, num_turns: 1, result: 'The local run finished; the remote run is still queued.', origin: { kind: 'task-notification' }, total_cost_usd: 0.001, usage: { input_tokens: 20, output_tokens: 10 } });
+        emitFu({ type: 'system', subtype: 'session_state_changed', state: 'idle' });
+        // Exit like a plain turn does, so the next send starts a fresh process
+        // (this one never reads stdin again).
+        setTimeout(() => process.exit(0), 300);
+      }, followAt + 1500);
       return;
     }
 

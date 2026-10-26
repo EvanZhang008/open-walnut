@@ -264,7 +264,7 @@ export async function resolveCaller(callerSid: string | undefined): Promise<Call
  */
 export async function deliverToSession(
   target: SessionRecord,
-  opts: { busText: string; enqueueText: string; source: string; taskId?: string; messageId?: string; fromLeader?: boolean },
+  opts: { busText: string; enqueueText: string; source: string; taskId?: string; messageId?: string; fromLeader?: boolean; endsWait?: boolean },
 ): Promise<{ delivery: 'queued' | 'deferred'; messageId?: string }> {
   const sid = target.claudeSessionId;
   const leaderAnswersQuestion = opts.fromLeader === true && target.pendingPermission?.toolName === 'AskUserQuestion';
@@ -285,6 +285,7 @@ export async function deliverToSession(
       ...(opts.taskId ? { taskId: opts.taskId } : {}),
       ...(opts.messageId ? { messageId: opts.messageId } : {}),
       ...(leaderAnswersQuestion ? { closesPrompt: true } : {}),
+      ...(opts.endsWait ? { endsWait: true } : {}),
     }),
     DELIVERY_TIMEOUT_MS,
   );
@@ -594,7 +595,7 @@ async function performReply(
   }, replyBody, { title: input.title });
 
   const { delivery, messageId } = await deliverToSession(origin, {
-    busText: replyBody, enqueueText: wrapped, source: 'peer',
+    busText: replyBody, enqueueText: wrapped, source: 'peer', endsWait: true,
     taskId: origin.taskId, messageId: input.messageId,
     fromLeader: await callerLeads(caller, origin.taskId),
   });
