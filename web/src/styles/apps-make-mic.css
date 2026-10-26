@@ -2,6 +2,6 @@
    white (the card is a coloured banner in both themes). */
 .apps-make-ask .box-mic .mic-btn { color: #86868b; }
 .apps-make-ask .box-mic .mic-btn:hover:not(:disabled) { color: #0071e3; background: rgba(0, 113, 227, 0.08); }
-@media (max-width: 768px) {
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
   .apps-make-ask .box-mic { align-self: flex-end; }
 }
