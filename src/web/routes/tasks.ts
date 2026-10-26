@@ -861,8 +861,8 @@ tasksRouter.get('/:id', async (req: Request, res: Response, next: NextFunction) 
 tasksRouter.post('/', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { title, priority, status, pinned, focus_tier: focusTier } = req.body
-    // Everything else goes to addTask by name; the correlation id never does.
-    const { client_request_id: clientRequestId, ...body } = req.body
+    // Everything else goes to addTask by name; the correlation id and the confirm fields never do.
+    const { client_request_id: clientRequestId, confirm_new: confirmNew, new_reason: newReason, ...body } = req.body
 
     if (typeof title !== 'string' || title.trim() === '') {
       res.status(400).json({ error: 'title must be a non-empty string' })
@@ -906,6 +906,28 @@ tasksRouter.post('/', async (req: Request, res: Response, next: NextFunction) =>
     if (req.body.project !== undefined && typeof req.body.project !== 'string') {
       res.status(400).json({ error: 'project must be a string ("" = Inbox)' })
       return
+    }
+    // This is the web console's create, which sends no caller. A session that reaches
+    // it anyway (the `api` op, a raw request) meets the same related-open-tasks check
+    // as POST /api/v1/tasks (related-open-tasks.ts); nothing else of the session rules.
+    const rawSid = req.headers['x-walnut-caller-sid']
+    const sid = Array.isArray(rawSid) ? rawSid[0] : rawSid
+    if (sid?.trim()) {
+      const { resolveCallerPlacement, decidePlacement } = await import('../../core/sessions/caller-placement.js')
+      const caller = await resolveCallerPlacement(sid).catch(() => ({ kind: 'unknown' as const }))
+      const { relatedOpenTasksGate } = await import('../../core/sessions/related-open-tasks.js')
+      const gate = await relatedOpenTasksGate({
+        caller,
+        decision: decidePlacement(typeof req.body.project === 'string' ? { project: req.body.project } : {}, caller),
+        title, description: typeof body.description === 'string' ? body.description : undefined,
+        body: { confirm_new: confirmNew, new_reason: newReason },
+      })
+      if (gate.kind === 'bad_request') { res.status(400).json({ error: gate.message }); return }
+      if (gate.kind === 'refuse') {
+        res.status(409).json({ error: { code: 'related_open_tasks', message: gate.message }, candidates: gate.candidates, hint: gate.hint })
+        return
+      }
+      if (gate.footer) body.description = typeof body.description === 'string' && body.description.trim() ? `${body.description}\n\n${gate.footer}` : gate.footer
     }
     // source is passed through to addTask; validation happens in task-manager against
     // the project registry (a claimed project's source wins; Inbox is local-only).

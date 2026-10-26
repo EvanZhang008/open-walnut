@@ -77,6 +77,7 @@ All v1 errors use one shape (plus optional endpoint-specific extras):
 | `cron_owner` | 409 | `POST /sessions/:id/terminate` refused: the session owns armed recurring crons — delete them first or pass `force: true` |
 | `session_exists` | 409 | `POST /tasks/:id/start` refused: the task already has a live session (`existing_session_id`); message it with `POST /messages` |
 | `project_elsewhere` | 409 | `POST /tasks` from a session: `project` names a project other than the caller task's own and `project_reason` is missing or under 10 characters. Nothing is created; the body also carries `callerProject` and `requestedProject` |
+| `related_open_tasks` | 409 | `POST /tasks` (and the legacy `POST /api/tasks` with a caller header) from a session: open tasks look like the same work and the body has no `confirm_new: true`. Nothing is created. Extras: `candidates` (at most 5, best first: `id`, `title`, `project`, `folder?`, `phase`, `user_status?`, `session_running`, `updated_at?`, `reason`, `your_subtask?`) and `hint` (the two ways out). `confirm_new: true` without a `new_reason` of 10+ characters is `400 bad_request` |
 | `subtask_too_deep` | 409 | `POST /tasks` from a session: the new task would be its subtask more than 3 levels below a top-level task. Nothing is created |
 | `too_many_running_subtasks` | 409 | `POST /tasks/:id/start` from a worker session that already has 8 subtasks running (IN_PROGRESS or starting). Nothing is started |
 | `host_not_ready` | 409 | `POST /sessions` refused before anything was written: the host is connected but its Claude Code cannot run the session (`kind`: `claude_missing`, `claude_needs_node`, `claude_error`, `claude_outdated`, `claude_not_logged_in`). Extras `kind`, `host`, `headline`, `hint`, and `allowOverride: true` for the two kinds `overrideReadiness` may skip |
@@ -910,6 +911,18 @@ reconcile, `NOTES_UPDATED` events) with the web UI's `/api/notes-v2`.
   must pass `project_reason` (a string of 10+ characters saying why the work
   belongs there), else `409 project_elsewhere` and nothing is created. Humans,
   asks and callers with no session are never asked.
+  Related open tasks (additive, 2026-10-26): before a session caller (a worker,
+  an ask, a session with no task) creates, the server ranks the open tasks against
+  the new title and description and answers `409 related_open_tasks` with the
+  ones that look like the same work; nothing is created. Two body fields
+  (optional, booleans/strings): `confirm_new: true` creates anyway, and needs
+  `new_reason` (10+ characters saying why this is a separate deliverable), which
+  is kept as the last line of the task's description. Neither field is part of the
+  idempotency fingerprint, so a replay of the original payload with the same
+  `idempotency_key` after a confirmed create reuses that task. A create with no
+  caller (the board, the phone, the CLI), a replica and plugins are never
+  checked; a lookup that fails or runs past its deadline lets the create through.
+  Implementation: `src/core/sessions/related-open-tasks.ts`.
   Depth limit (additive, 2026-09-28): a session's subtask sits at most 3 levels
   below a top-level task; a create that would go deeper answers
   `409 subtask_too_deep` and files nothing (`src/core/sessions/subtask-limits.ts`).

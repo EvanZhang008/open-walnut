@@ -513,6 +513,9 @@ defineOp({
     'the exact id and scope; an independent goal needs a new task and fresh session even in the same area. ' +
     'Explicit new-task/clean-context requests take priority. Check plausible unfinished work before creating; ' +
     'use the same idempotency_key and payload for retries or handoffs of one ask, a new key for a new ask. ' +
+    'From a session the server checks too: when open tasks look like the same work, the create answers ' +
+    '409 related_open_tasks listing them and makes nothing; then task_send the one that owns it, or, for a separate ' +
+    'deliverable, retry with confirm_new=true and new_reason saying why it is none of them. ' +
     'The first message carries the current request, valid constraints, done condition and necessary evidence only, ' +
     'never Main\'s or an old task\'s transcript. The result lists the other open subtasks you lead. Words: a "subagent" is Claude Code\'s Agent tool inside your session, never a ' +
     'Walnut task; a "subtask" or "task" is a Walnut task, which this creates. In Walnut\'s own chat, where ' +
@@ -534,6 +537,8 @@ defineOp({
     title: z.string().min(1).describe('Task title: a few words naming the specific subject, like a commit subject (under 60 characters; the server cuts a longer one from a session). The brief goes in message or description'),
     project: z.string().optional().describe('Project name; "" for the Inbox. Omit to use your own task\'s project (from inside a task) or the Inbox (elsewhere)'),
     project_reason: z.string().optional().describe('From inside a task: why the work belongs in `project` when that is not your own task\'s project (10 characters or more). Not needed when project is omitted'),
+    confirm_new: z.boolean().optional().describe('After a 409 related_open_tasks only: true creates the task anyway, as a separate deliverable. Needs new_reason'),
+    new_reason: z.string().optional().describe('With confirm_new: why this is new work and not one of the listed open tasks (10 characters or more). Kept in the task description'),
     group_id: z.string().optional().describe('Folder id (g_...) inside the target project; "" for no folder. Omit to join your own task\'s folder (a new one when it has none) when the task lands in your project'),
     priority: PRIORITY.optional().describe('immediate | important | backlog | none'),
     due_date: z.string().optional().describe('YYYY-MM-DD or a full ISO-8601 datetime'),

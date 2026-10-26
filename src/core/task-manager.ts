@@ -3483,6 +3483,26 @@ export async function queryTasksSlim(
   return (await runTaskQuery(query, opts.minimal ? 'minimal' : 'slim') as TaskQueryPage<SlimTask>).tasks;
 }
 
+/**
+ * The open tasks (every phase but COMPLETE), most recently updated first, at most
+ * `max`, for a READ-ONLY in-memory pass over open work alone (the related-open-tasks
+ * check, sessions/related-open-tasks.ts). A warm cache is filtered before anything is
+ * copied, so the cost follows the open rows, not the whole board (queryTasksSlim
+ * projects every row first: 5k rows on a real board); a cold cache reads only the
+ * open rows through the phase index. The rows are the cache's own: never mutate them.
+ */
+export async function listOpenTaskViews(max: number): Promise<ReadonlyArray<Readonly<Task>>> {
+  await ensureInit();
+  const view = peekStoreView();
+  const open = view
+    ? view.tasks.filter((t) => t.phase !== 'COMPLETE' && !isRetiredSentinelTitle(t.title))
+    : await queryTasks({ phases: ['TODO', 'WAITING', 'IN_PROGRESS', 'NEED_ACTION'] });
+  return open
+    .slice()
+    .sort((a, b) => (b.updated_at ?? '').localeCompare(a.updated_at ?? ''))
+    .slice(0, max);
+}
+
 /** queryTasksSlim plus the pre-limit `total` / `truncated` pair. */
 export async function queryTasksSlimPage(
   query: TaskQuery,

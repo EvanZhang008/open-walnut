@@ -2675,10 +2675,13 @@ apiV1Router.post('/tasks', async (req: Request, res: Response, next: NextFunctio
   try {
     const { title, project, priority, due_date: dueDate, start_date: startDate,
       end_date: endDate, description, pinned, focus_tier: focusTier, group_id: groupId,
-      launch_cwd: launchCwd, launch_host: launchHost, project_reason: projectReason, idempotency_key: idempotencyKey, tags } = (req.body ?? {}) as {
+      launch_cwd: launchCwd, launch_host: launchHost, project_reason: projectReason, idempotency_key: idempotencyKey, tags,
+      confirm_new: confirmNew, new_reason: newReason } = (req.body ?? {}) as {
       title?: unknown
       project?: unknown
       project_reason?: unknown
+      confirm_new?: unknown
+      new_reason?: unknown
       priority?: unknown
       due_date?: unknown
       start_date?: unknown
@@ -2828,11 +2831,31 @@ apiV1Router.post('/tasks', async (req: Request, res: Response, next: NextFunctio
       sendError(res, err.statusCode, err.code, err.message)
       return
     }
+    // A session's create first meets the related open tasks (related-open-tasks.ts):
+    // 409 with the candidates and nothing made, until it confirms a new deliverable
+    // (confirm_new + new_reason). Humans and replicas pass straight through; a lookup
+    // that fails or runs out of time lets the create go ahead.
+    const { relatedOpenTasksGate, RELATED_OPEN_TASKS_CODE } = await import('../../core/sessions/related-open-tasks.js')
+    const gate = await relatedOpenTasksGate({
+      caller, decision, title, description: rules.description,
+      body: { confirm_new: confirmNew, new_reason: newReason },
+      ...(typeof idempotencyKey === 'string' ? { idempotentId: (await import('../../core/task-create-idempotency.js')).taskIdForKey(idempotencyKey) } : {}),
+    })
+    if (gate.kind === 'bad_request') { sendError(res, 400, 'bad_request', gate.message); return }
+    if (gate.kind === 'refuse') {
+      sendError(res, 409, RELATED_OPEN_TASKS_CODE, gate.message, { candidates: gate.candidates, hint: gate.hint })
+      return
+    }
+    // The idempotency fingerprint is the ask, not how it got past the check: a replay of
+    // the original payload after a confirmed create reuses that task, never conflicts.
+    const { confirm_new: _confirm, new_reason: _reason, ...fingerprintBody } = (req.body ?? {}) as Record<string, unknown>
     const stampedCwd = await createTimeCwd(placementReq, caller, decision).catch(() => undefined)
     const { refineShortTitle } = await import('../../core/sessions/task-title-brake.js')
     const finalTitle = rules.title
     const titleShortenedFrom = rules.titleShortenedFrom
-    const finalDescription = rules.description
+    const finalDescription = gate.footer
+      ? (rules.description?.trim() ? `${rules.description}\n\n${gate.footer}` : gate.footer)
+      : rules.description
     try {
       // asyncPush like the web create path: the client renders the task
       // immediately, so don't block the response on an external sync push.
@@ -2862,7 +2885,7 @@ apiV1Router.post('/tasks', async (req: Request, res: Response, next: NextFunctio
       let reused = false
       const add = async (folder: { group_id?: string }): Promise<Awaited<ReturnType<typeof addTask>>['task']> => {
         try {
-          const result = await addTaskIdempotently({ ...createInput, ...tierInput, ...parentInput, ...folder }, idempotencyKey as string | undefined, req.body)
+          const result = await addTaskIdempotently({ ...createInput, ...tierInput, ...parentInput, ...folder }, idempotencyKey as string | undefined, fingerprintBody)
           reused = result.reused
           return result.task
         } catch (err) {

@@ -43,6 +43,10 @@ process.env.WALNUT_MAX_FILE_READ_BYTES = String(WHALE_CEILING_BYTES)
 // fixture — the host's real ~/.aws would make quick-start POSTs hit live
 // Bedrock and move tasks mid-assertion. See backgroundAiDisabled().
 process.env.WALNUT_DISABLE_BACKGROUND_AI = '1'
+// The related-open-tasks check (src/core/sessions/related-open-tasks.ts) refuses a
+// session's look-alike create; specs here seed tasks from session callers to test other
+// surfaces, so it is off. Its own coverage is the vitest api-v1-task-create-related files.
+process.env.WALNUT_RELATED_CHECK = '0'
 process.env.MOCK_ACP_LOAD_DELAY_MS = '10000'
 process.env.MOCK_ACP_LOAD_DELAY_SESSION_ID = 'pw-codex-cold-detail-session'
 // Every engine reports installed in GET /api/engines, so the engine toggle is the

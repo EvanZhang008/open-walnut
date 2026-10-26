@@ -6,6 +6,13 @@ export default defineConfig({
     globals: true,
     environment: 'node',
     globalSetup: ['tests/setup/global-setup.ts'],
+    // The related-open-tasks check (src/core/sessions/related-open-tasks.ts) refuses a
+    // session's create that looks like an open task, and other features' fixtures make
+    // look-alike tasks from sessions on purpose (for one, api-v1-task-title-brake posts
+    // the same long title from several sessions into one server). Off here. Its own tests
+    // (related-open-rank, api-v1-task-create-related*) turn it on, including a normal
+    // lead-and-workers flow that must never be refused (api-v1-task-create-related).
+    env: { WALNUT_RELATED_CHECK: '0' },
     // Same harness as vitest.config.ts: the exec guard, then runtime-dir-isolation
     // (it loads prod-server-guard). Without it every e2e server ran the real semantic
     // search lane: a fresh WALNUT_HOME downloads the ~600MB embedding model
