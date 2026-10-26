@@ -4,7 +4,8 @@
  * make it work, on this machine, without publishing anything.
  *
  *   bun scripts/release-rehearsal/run.mjs --current <B.tgz> [--older <A.tgz>] [--work <dir>] [--keep]
- *   bun scripts/release-rehearsal/run.mjs --packs <dir>/packs.json --runtime   (pack.mjs --rehearsal wrote it)
+ *   bun scripts/release-rehearsal/run.mjs --packs <dir>/packs.json [--runtime --runtime-packs <dir>/field.json]   (pack.mjs --rehearsal, field-packs.mjs build)
+ *   bun scripts/release-rehearsal/run.mjs --runtime --runtime-packs <dir>/field.json   (the archive scenarios alone)
  *   bun scripts/release-rehearsal/run.mjs --field latest --field-packs <dir>/field.json   (field-packs.mjs wrote it)
  *   bun scripts/release-rehearsal/run.mjs --archive <open-walnut-x-<platform>-<arch>.tar.gz>
  *   BUN_BE_BUN=1 <walnut file> scripts/release-rehearsal/run.mjs --binary <walnut file>   (binary.mjs)
@@ -31,9 +32,12 @@
  *              publishes it (the launcher and its platform packages), at a
  *              version above them, fresh and in use (field.mjs). --field-from
  *              and --field-only narrow it.
- *   archive*   (--runtime: built from --older, updated to --current; --archive:
- *              a built one, alone) the self-contained archive install.sh puts
- *              in place, run with no Node on PATH (runtime.mjs).
+ *   archive*   (--runtime: built as release-archives.yml builds it, from
+ *              `open-walnut@<release>` (the launcher and this machine's file
+ *              that --runtime-packs names, served by a local registry), then
+ *              updated to the one after it; --archive: a built one, alone) the
+ *              self-contained archive install.sh puts in place, run with no Node
+ *              on PATH (runtime.mjs).
  *
  * CI runs it on Linux and macOS for every push (ci.yml, job `rehearsal`), so the
  * release only ever publishes code whose package has done all of this.
@@ -45,13 +49,14 @@ import path from 'node:path'
 import { readPackedManifest, startRegistry } from './registry.mjs'
 import { rehearseBinary } from './binary.mjs'
 import { FIELD_SCENARIOS, rehearseField } from './field.mjs'
+import { readFieldJson } from './field-packs.mjs'
 import { rehearseRuntime } from './runtime.mjs'
 import { IsolatedWalnut } from './walnut.mjs'
 import { compareVersions } from './version-order.mjs'
 import { allowedScripts } from '../stable-promote.mjs'
 
 function parseArgs(argv) {
-  const out = { current: null, older: null, field: null, fieldPacks: null, fieldFrom: null, fieldOnly: null, work: null, keep: false, runtime: false, archive: null, binary: null }
+  const out = { current: null, older: null, field: null, fieldPacks: null, fieldFrom: null, fieldOnly: null, work: null, keep: false, runtime: false, runtimePacks: null, archive: null, binary: null }
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
     if (a === '--packs') {
@@ -67,12 +72,15 @@ function parseArgs(argv) {
     else if (a === '--work') out.work = path.resolve(argv[++i])
     else if (a === '--keep') out.keep = true
     else if (a === '--runtime') out.runtime = true
+    else if (a === '--runtime-packs') out.runtimePacks = path.resolve(argv[++i])
     else if (a === '--archive') out.archive = path.resolve(argv[++i])
     else if (a === '--binary') out.binary = path.resolve(argv[++i])
     else throw new Error(`unknown argument ${a}`)
   }
-  if (!out.current && !out.archive && !out.binary && !out.fieldPacks) throw new Error('usage: run.mjs --current <tarball> [--older <tarball>] [--runtime] [--work <dir>] [--keep] | --field latest --field-packs <field.json> | --archive <archive> | --binary <walnut file>')
-  if (out.runtime && !out.older) throw new Error('--runtime builds the archive from --older and updates it to --current')
+  if (!out.current && !out.archive && !out.binary && !out.fieldPacks && !out.runtime && !out.runtimePacks) throw new Error('usage: run.mjs --current <tarball> [--older <tarball>] [--runtime --runtime-packs <field.json>] [--work <dir>] [--keep] | --runtime --runtime-packs <field.json> | --field latest --field-packs <field.json> | --archive <archive> | --binary <walnut file>')
+  // A release's archive holds the launcher and its file (release-archives.yml), never a Node package of this commit.
+  if (out.runtime && !out.runtimePacks) throw new Error('--runtime builds the archive from the launcher and platform packages field-packs.mjs builds: pass --runtime-packs <field.json>')
+  if (out.runtimePacks && !out.runtime) throw new Error('--runtime-packs needs --runtime')
   // The field update goes to the release as it is published now; a Node package of this commit is not that.
   if (out.field && !out.fieldPacks) throw new Error('--field latest updates to the launcher and platform packages field-packs.mjs builds: pass --field-packs <field.json>')
   if (out.fieldPacks && out.field !== 'latest') throw new Error('--field-packs needs --field latest')
@@ -172,6 +180,13 @@ async function main() {
     const ran = await rehearseRuntime({ work, archive: opts.archive, scenario, walnuts })
     return finish(opts, work, path.basename(opts.archive), Math.max(ran, 2))
   }
+  const launcher = opts.runtimePacks ? readFieldJson(opts.runtimePacks) : null
+  const runtimeExpected = launcher ? 2 + (launcher.next ? 1 : 0) + (process.env.WALNUT_REHEARSAL_BREW ? 1 : 0) + (process.env.WALNUT_REHEARSAL_APP ? 1 : 0) : 0
+  if (!opts.current && launcher) {
+    process.stdout.write(`rehearsing the archive of open-walnut@${launcher.release.version} in ${work}\n`)
+    await rehearseRuntime({ work, launcher, scenario, walnuts })
+    return finish(opts, work, `archive of open-walnut@${launcher.release.version}`, runtimeExpected)
+  }
   const fieldOpts = {
     ...(opts.fieldFrom ? { points: opts.fieldFrom } : {}),
     ...(opts.fieldOnly ? { only: opts.fieldOnly } : {}),
@@ -238,9 +253,9 @@ async function main() {
   let fieldExpected = 0
   if (opts.fieldPacks) fieldExpected = await rehearseField({ work, fieldJson: opts.fieldPacks, scenario, walnuts, opts: fieldOpts })
 
-  if (opts.runtime) await rehearseRuntime({ work, fromTgz: opts.older, toTgz: opts.current, scenario, walnuts })
+  if (launcher) await rehearseRuntime({ work, launcher, scenario, walnuts })
 
-  const expected = 4 + (opts.older ? 1 : 0) + fieldExpected + (opts.runtime ? 3 + (process.env.WALNUT_REHEARSAL_BREW ? 1 : 0) + (process.env.WALNUT_REHEARSAL_APP ? 1 : 0) : 0)
+  const expected = 4 + (opts.older ? 1 : 0) + fieldExpected + runtimeExpected
   return finish(opts, work, `open-walnut@${current.version}`, expected)
 }
 

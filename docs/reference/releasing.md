@@ -155,23 +155,29 @@ own npm prefix, HOME, data dir and daemon dir, with a mock `claude`
 | session | a session started through `POST /api/v1/sessions` answers, then answers a second message sent to the live CLI |
 | restart | after a server restart the history is intact and a third message is answered |
 | update | "older", started, updates itself to "current" before it serves |
-| archive | `scripts/runtime-bundle/build.mjs` builds the self-contained archive of "older" for this machine; `scripts/install.sh` finds it on a local server laid out like GitHub Releases, checks it and installs it |
+| archive | the archive is built as `release-archives.yml` builds it: `scripts/runtime-bundle/build.mjs`, on Node, from `open-walnut@<release>` as a local registry serves it (the launcher and this machine's file, which `field-packs.mjs build` made at two versions above npm's), after `build.mjs --check` called it supported; `scripts/install.sh` finds it on a local server laid out like GitHub Releases, checks it and installs it |
 | archive-serve | that install serves, finds `claude` and answers a session with no Node on PATH, and its updater says `walnut update` |
 | archive-brew | the Homebrew formula written for it installs from a scratch tap and passes `brew test` (Homebrew comes with both runner images) |
 | archive-app | (macOS) `Walnut.app`, built from this commit by `desktop/build.sh`, installs that archive on its first launch with the `install.sh` inside it, serves the console with no Node on PATH, takes its server with it when it dies, and starts again without downloading (`scripts/desktop-smoke.mjs`) |
-| archive-update | that install, started, updates itself to "current" through its own Node's npm |
+| archive-update | that install, started, updates itself to the launcher after it (field.json's `next`) through its own Node's npm |
 
 The update scenarios use `registry.mjs`, a local registry that serves the chosen
 tarballs under chosen dist-tags and passes every other package through to npm, with
 `WALNUT_UPDATE_REGISTRY_URL` and `npm_config_registry` pointing at it. Locally, run
 `pack.mjs` only in a copy of the tree (it rebuilds `dist/` and refuses to touch a git clone
-outside CI), then `bun scripts/release-rehearsal/run.mjs --packs <out>/packs.json`.
+outside CI), then `bun scripts/release-rehearsal/run.mjs --packs <out>/packs.json`. The
+archive scenarios (`--runtime`) also need the launcher packages:
+`field-packs.mjs build --out <dir>` (the same rule about copies), then
+`--runtime --runtime-packs <dir>/field.json`. They never build from "current" or "older":
+this checkout's own package runs only on bun, so an archive of it (Node 22 and that package)
+could not start (2026-10-25), while a release's archive holds the launcher.
 
 The rehearsal runs on `macos-26` and `ubuntu-24.04`, so it builds the darwin-arm64 and
 linux-x64 archives. CI job `archive-targets` builds the other two a release ships
-(darwin-x64 on `macos-26-intel`, linux-arm64 on `ubuntu-24.04-arm`) from the same packed
-commit and runs each the way `release-archives.yml` does (`run.mjs --archive`: install.sh,
-serve and a session with no Node on PATH). CI OK needs it, so no target is first built at
+(darwin-x64 on `macos-26-intel`, linux-arm64 on `ubuntu-24.04-arm`) the same way, from the
+launcher and that machine's file, and runs the archive scenarios on each
+(`run.mjs --runtime --runtime-packs`: install.sh, serve and a session with no Node on PATH,
+then the update). CI OK needs it, so no target is first built at
 release time: 0.6.4's darwin-x64 archive was (2026-10-06), and failed.
 
 ### The field rehearsal

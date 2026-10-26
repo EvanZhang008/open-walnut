@@ -96,6 +96,12 @@ describe('build.mjs', () => {
     }
     expect(check(true)).toBe('supported=true\n')
     expect(check(false)).toBe('supported=false\n')
+    // The launcher package a release publishes (npm-packages.mjs): its compiled file is the updater.
+    const launcher = path.join(tmp, 'check-launcher')
+    touch(path.join(launcher, 'package.json'), JSON.stringify({ name: 'open-walnut', version: '0.7.1', optionalDependencies: { '@open-walnut/linux-x64': '0.7.1' } }))
+    touch(path.join(launcher, 'dist/cli.js'), "require('../lib/launch.js').launch(__filename)")
+    const tgz = execFileSync('npm', ['pack', '--silent', '--pack-destination', tmp], { cwd: launcher, env, encoding: 'utf8' }).trim().split('\n').pop()!
+    expect(execFileSync(process.execPath, [path.join(ROOT, 'scripts/runtime-bundle/build.mjs'), '--check', '--spec', path.join(tmp, tgz)], { env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })).toBe('supported=true\n')
   })
 
   it('drops the native binaries a dependency carries for other platforms, and keeps this one\'s', () => {
@@ -360,8 +366,14 @@ describe('the archive workflows', () => {
 
   it('CI rehearses the archive and its formula on every push', () => {
     const ci = load('ci.yml')
-    const step = ci.jobs.rehearsal.steps.find((s) => s.run?.includes('release-rehearsal/run.mjs'))!
-    expect(step.run).toContain('--runtime')
+    const steps = ci.jobs.rehearsal.steps
+    const at = steps.findIndex((s) => s.run?.includes('release-rehearsal/run.mjs'))
+    const step = steps[at]!
+    // Built as release-archives.yml builds it: from the launcher and this machine's file.
+    expect(step.run).toContain('--runtime --runtime-packs "$RUNNER_TEMP/launcher/field.json"')
+    const launcher = steps.findIndex((s) => s.run?.includes('release-rehearsal/field-packs.mjs build --out "$RUNNER_TEMP/launcher"'))
+    expect(launcher).toBeGreaterThan(-1)
+    expect(launcher).toBeLessThan(at)
     expect(step.env!.WALNUT_REHEARSAL_BREW).toContain('/home/linuxbrew/.linuxbrew/bin/brew')
   })
 
@@ -377,7 +389,10 @@ describe('the archive workflows', () => {
     expect(covered.sort()).toEqual(shipped.map((x) => x.target).sort())
     for (const { target, os } of targets) expect(os, target).toBe(osOf[target])
     const runs = ci.jobs['archive-targets'].steps.map((s) => s.run ?? '').join('\n')
-    expect(runs).toMatch(/release-rehearsal\/pack\.mjs[\s\S]*runtime-bundle\/build\.mjs --spec[\s\S]*release-rehearsal\/run\.mjs --archive/)
+    // From the launcher on a local registry, as release-archives.yml builds it from npm (2026-10-25:
+    // the archive of this checkout's own package, which runs only on bun, refused its Node).
+    expect(runs).toMatch(/release-rehearsal\/field-packs\.mjs build --out "\$RUNNER_TEMP\/launcher"[\s\S]*release-rehearsal\/run\.mjs --runtime --runtime-packs "\$RUNNER_TEMP\/launcher\/field\.json"/)
+    expect(runs).not.toContain('release-rehearsal/pack.mjs')
     // It gates: CI OK needs it and fails without it.
     const gate = ci.jobs['ci-ok']
     expect(gate.needs).toContain('archive-targets')

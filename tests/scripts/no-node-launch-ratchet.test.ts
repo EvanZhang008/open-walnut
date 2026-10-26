@@ -39,7 +39,7 @@ const GENUINE: Entry[] = [
   { file: 'scripts/runtime-bundle/build.mjs', match: '#!/usr/bin/env node', why: 'the Node archive\'s builder' },
   { file: '.github/workflows/release-archives.yml', match: 'node scripts/runtime-bundle/build.mjs --check', why: 'the Node archive\'s builder' },
   { file: '.github/workflows/release-archives.yml', match: 'node scripts/runtime-bundle/build.mjs --spec', why: 'the Node archive\'s builder' },
-  { file: '.github/workflows/ci.yml', match: 'node scripts/runtime-bundle/build.mjs --spec "$current"', why: 'archive-targets rehearses the Node archive\'s builder' },
+  { file: 'scripts/release-rehearsal/runtime.mjs', match: "spawn('node', [BUILD, ...args], opts)", why: 'the rehearsal (CI jobs rehearsal and archive-targets) runs the Node archive\'s builder on Node, as release-archives.yml does' },
 ]
 
 /** A start of node, tsx or ts-node at a shell command position (not a version probe). */

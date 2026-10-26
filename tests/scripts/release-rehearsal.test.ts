@@ -179,6 +179,18 @@ describe('the scripts refuse what would be unsafe or meaningless', () => {
     expect(res.stderr).toContain('usage: run.mjs --current')
   })
 
+  it('run.mjs builds the archive only from the launcher packages a release publishes (2026-10-25)', () => {
+    // A Node package of this checkout runs only on bun, so an archive made of it (Node 22 and
+    // that package) could never start: the release rehearsal's archive scenario failed on it.
+    const run = (...args: string[]) => spawnSync(process.execPath, [path.join(ROOT, 'scripts/release-rehearsal/run.mjs'), ...args], { encoding: 'utf8' })
+    const bare = run('--current', path.join(tmp, 'x.tgz'), '--runtime')
+    expect(bare.status).toBe(1)
+    expect(bare.stderr).toContain('--runtime builds the archive from the launcher and platform packages field-packs.mjs builds: pass --runtime-packs <field.json>')
+    const alone = run('--runtime-packs', path.join(tmp, 'field.json'))
+    expect(alone.status).toBe(1)
+    expect(alone.stderr).toContain('--runtime-packs needs --runtime')
+  })
+
   it('run.mjs creates the --work dir CI names before it exists', () => {
     const work = path.join(tmp, 'not-yet', 'work')
     const res = spawnSync(process.execPath, [path.join(ROOT, 'scripts/release-rehearsal/run.mjs'), '--current', path.join(tmp, 'missing.tgz'), '--work', work], { encoding: 'utf8' })

@@ -1,18 +1,23 @@
 /**
- * The self-contained archive, rehearsed the way a user meets it: built from the
- * package about to ship (scripts/runtime-bundle/build.mjs), served with its
- * SHA256SUMS like a GitHub Release, installed by scripts/install.sh into a fresh
- * HOME, and started on a PATH with NO Node on it.
+ * The self-contained archive, rehearsed the way a user meets it: built as
+ * release-archives.yml builds it (scripts/runtime-bundle/build.mjs, on Node, from
+ * `open-walnut@<version>` as the registry serves it: the launcher and this
+ * machine's @open-walnut/<target> file), served with its SHA256SUMS like a GitHub
+ * Release, installed by scripts/install.sh into a fresh HOME, and started on a
+ * PATH with NO Node on it. The launcher packages come from field-packs.mjs build
+ * (field.json: the release and the one after it), served by a local registry;
+ * nothing is published.
  *
- *   archive         build the archive for this machine (or take a built one); a
+ *   archive         `build.mjs --check` calls the release supported, then the
+ *                   archive is built for this machine (or a built one is taken); a
  *                   release server holding it and an older release; install.sh
  *                   finds the newest, installs it, and `walnut --version` names it.
  *   archive-serve   `walnut web` answers health with `claude` found and the SPA,
  *                   and a session answers its first message, with no node or npm
  *                   on PATH; the updater says `walnut update`.
- *   archive-update  (given the package to update to) the archive, started, updates
- *                   itself to a newer build of the same code through its own
- *                   Node's npm, from a local registry whose `latest` is that build.
+ *   archive-update  (field.json names the one after) the archive, started, updates
+ *                   itself to that launcher through its own Node's npm, from a
+ *                   local registry whose `latest` is it.
  *   archive-brew    (WALNUT_REHEARSAL_BREW names a brew; CI's own machines only,
  *                   never a person's Homebrew) the formula scripts/homebrew/formula.mjs
  *                   writes for it installs from a scratch tap, `brew test` passes,
@@ -22,7 +27,7 @@
  *                   serves the console with no Node on PATH, takes its server down
  *                   with it, and starts again without downloading.
  */
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import http from 'node:http'
@@ -30,7 +35,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { smokeDesktopApp } from '../desktop-smoke.mjs'
 import { formula } from '../homebrew/formula.mjs'
-import { readPackedManifest, startRegistry } from './registry.mjs'
+import { startRegistry } from './registry.mjs'
 import { IsolatedWalnut, runLogged } from './walnut.mjs'
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
@@ -121,11 +126,47 @@ export class ArchiveWalnut extends IsolatedWalnut {
   }
 }
 
-/** Build this machine's archive of a package spec (a tarball or `open-walnut@x`); returns build.mjs's result. */
-export function buildArchive(spec, outDir, logFile) {
-  const out = execFileSync(process.execPath, [BUILD, '--spec', spec, '--out', outDir], { encoding: 'utf8', timeout: 30 * 60_000, maxBuffer: 64 << 20, stdio: ['ignore', 'pipe', 'inherit'] })
+/** Does PATH hold an executable `node`? */
+export function nodeOnPath(pathVar = process.env.PATH ?? '') {
+  return pathVar.split(path.delimiter).some((dir) => {
+    try { fs.accessSync(path.join(dir, 'node'), fs.constants.X_OK); return Boolean(dir) } catch { return false }
+  })
+}
+
+/**
+ * build.mjs, on Node as release-archives.yml runs it (the Node archive's builder;
+ * it goes with the archives), else on this process's runtime when PATH has none.
+ * Resolves to its stdout. A child this process does not wait on synchronously:
+ * the registry the spec comes from is served by this process, and a sync call
+ * stops it from answering, so npm inside the build would wait for it until the
+ * timeout.
+ */
+function runBuilder(args, { env, timeoutMs, stderr }) {
+  return new Promise((resolve, reject) => {
+    const opts = { env, stdio: ['ignore', 'pipe', stderr] }
+    const child = nodeOnPath(env.PATH) ? spawn('node', [BUILD, ...args], opts) : spawn(process.execPath, [BUILD, ...args], opts)
+    let out = ''
+    child.stdout.on('data', (d) => { out += d })
+    const timer = setTimeout(() => child.kill('SIGTERM'), timeoutMs)
+    child.on('error', (e) => { clearTimeout(timer); reject(e) })
+    child.on('close', (code, signal) => {
+      clearTimeout(timer)
+      if (code === 0) resolve(out)
+      else reject(new Error(`build.mjs ${args.join(' ')} ended with ${code ?? signal}${out ? `: ${out.trim().split('\n').slice(-3).join(' | ')}` : ''}`))
+    })
+  })
+}
+
+/** Build this machine's archive of a package spec (`open-walnut@x`, or a tarball); resolves to build.mjs's result. */
+export async function buildArchive(spec, outDir, logFile, env = process.env) {
+  const out = await runBuilder(['--spec', spec, '--out', outDir], { env, timeoutMs: 30 * 60_000, stderr: 'inherit' })
   fs.appendFileSync(logFile, out)
   return JSON.parse(out.trim().split('\n').pop())
+}
+
+/** `build.mjs --check` for a spec: what release-archives.yml asks before it builds one. */
+export async function archiveSupported(spec, env = process.env) {
+  return (await runBuilder(['--check', '--spec', spec], { env, timeoutMs: 10 * 60_000, stderr: 'ignore' })).trim()
 }
 
 /** Install the archive's formula from a scratch tap with `brew`, test it, and take it away again. */
@@ -162,26 +203,39 @@ const ask = (mark) => ({ text: `snapshot-clean-turn:archive answered ${mark}`, a
 const reports = (printed, version) => printed.split(/\s/)[0] === version
 
 /**
- * The three archive scenarios. `archive` is a built archive; without one it is
- * built from the tarball `fromTgz`. `toTgz` (a later build of the same code)
- * runs archive-update. Returns the number of scenarios it ran.
+ * The archive scenarios. `archive` is a built archive; without one it is built
+ * from `launcher` (field-packs.mjs's field.json, read by readFieldJson): its
+ * release, as the local registry serves it. Its `next` runs archive-update.
+ * Returns the number of scenarios it ran.
  */
-export async function rehearseRuntime({ work, archive = null, fromTgz = null, toTgz = null, scenario, walnuts }) {
+export async function rehearseRuntime({ work, archive = null, launcher = null, scenario, walnuts }) {
+  if (!archive && !launcher) throw new Error('rehearseRuntime needs a built archive or the launcher packages (field.json)')
   const releases = path.join(work, 'releases')
   let server = null
   let installed = null
   let ran = 0
+  // The launcher and its platform packages, both versions, served under `latest` = the release.
+  const registry = launcher
+    ? await startRegistry({
+        tarballs: [...launcher.release.tarballs, ...(launcher.next?.tarballs ?? [])].map((file) => ({ file })),
+        distTags: { latest: launcher.release.version },
+      })
+    : null
   try {
     ran++
     const ok = await scenario('archive', async () => {
       let file = archive
       let detail = ''
       if (!file) {
-        const want = readPackedManifest(fromTgz).version
-        const result = buildArchive(fromTgz, path.join(work, 'archives'), path.join(work, 'archive-build.log'))
+        const want = launcher.release.version
+        const spec = `open-walnut@${want}`
+        const env = { ...process.env, npm_config_registry: `${registry.url}/` }
+        const supported = await archiveSupported(spec, env)
+        if (supported !== 'supported=true') throw new Error(`build.mjs --check --spec ${spec} answered "${supported}", expected supported=true`)
+        const result = await buildArchive(spec, path.join(work, 'archives'), path.join(work, 'archive-build.log'), env)
         if (result.version !== want) throw new Error(`built ${result.version}, expected ${want}`)
         file = result.archive
-        detail = `, Node ${result.node}`
+        detail = `, ${spec} on Node ${result.node}`
       }
       const version = archiveVersion(file)
       // An older release beside it, whose archive install.sh must not pick.
@@ -238,33 +292,30 @@ export async function rehearseRuntime({ work, archive = null, fromTgz = null, to
       ran++
       await scenario('archive-brew', () => rehearseBrew(brew, { releases, version: installed.version, releaseUrl: server.url, logFile: path.join(work, 'brew.log') }))
     }
-    if (!toTgz) return ran
+    if (!launcher?.next) return ran
     ran++
     await scenario('archive-update', async () => {
-      const to = readPackedManifest(toTgz).version
-      const registry = await startRegistry({ tarballs: [{ file: toTgz }], distTags: { latest: to } })
-      try {
-        const w = new ArchiveWalnut({
-          work, name: 'archive-update',
-          extraEnv: { npm_config_registry: `${registry.url}/`, WALNUT_UPDATE_REGISTRY_URL: registry.distTagsUrl },
-        })
-        walnuts.push(w)
-        await w.installFrom(INSTALL_SH, server.url)
-        await w.start({ timeoutMs: 900_000 })
-        const status = await w.api('GET', '/api/v1/status')
-        if (status.json?.version !== to) throw new Error(`started ${installed.version}, serving ${status.json?.version ?? status.text.slice(0, 200)}, expected ${to}`)
-        if (!reports(w.version(), to)) throw new Error(`after the update walnut says ${w.version()}`)
-        // Updated in place: the archive's own prefix, still on its own Node.
-        const pkg = path.join(w.home, '.local/share/open-walnut/app/runtime/lib/node_modules/open-walnut/package.json')
-        if (JSON.parse(fs.readFileSync(pkg, 'utf8')).version !== to) throw new Error(`${pkg} is not ${to}`)
-        await w.shutdown()
-        return `${installed.version} -> ${to} through its own npm`
-      } finally {
-        await registry.close()
-      }
+      const to = launcher.next.version
+      registry.setDistTags({ latest: to })
+      const w = new ArchiveWalnut({
+        work, name: 'archive-update',
+        extraEnv: { npm_config_registry: `${registry.url}/`, WALNUT_UPDATE_REGISTRY_URL: registry.distTagsUrl },
+      })
+      walnuts.push(w)
+      await w.installFrom(INSTALL_SH, server.url)
+      await w.start({ timeoutMs: 900_000 })
+      const status = await w.api('GET', '/api/v1/status')
+      if (status.json?.version !== to) throw new Error(`started ${installed.version}, serving ${status.json?.version ?? status.text.slice(0, 200)}, expected ${to}`)
+      if (!reports(w.version(), to)) throw new Error(`after the update walnut says ${w.version()}`)
+      // Updated in place: the archive's own prefix, still on its own Node.
+      const pkg = path.join(w.home, '.local/share/open-walnut/app/runtime/lib/node_modules/open-walnut/package.json')
+      if (JSON.parse(fs.readFileSync(pkg, 'utf8')).version !== to) throw new Error(`${pkg} is not ${to}`)
+      await w.shutdown()
+      return `${installed.version} -> ${to} through its own npm`
     })
     return ran
   } finally {
     if (server) await server.close()
+    if (registry) await registry.close()
   }
 }
