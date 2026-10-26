@@ -150,12 +150,16 @@ export function macDirs(base: string) {
   }
 }
 
-/** Waits until `port` answers GET /api/config with 200, while `proc` runs. */
-async function untilServes(port: number, proc: ChildProcess, timeoutMs: number, stderr: () => string): Promise<void> {
+/**
+ * Waits until `port` answers `probe` (GET) with 200, while `proc` runs. A server
+ * in cloud mode answers only paired devices, and unpaired requests count toward
+ * its rate limit: it is asked for /api/system/health, which needs no token.
+ */
+async function untilServes(port: number, proc: ChildProcess, timeoutMs: number, stderr: () => string, probe = '/api/config'): Promise<void> {
   const until = Date.now() + timeoutMs
   for (;;) {
     if (proc.exitCode !== null || proc.signalCode !== null) throw new Error(`fleet: the Mac exited early (${proc.exitCode ?? proc.signalCode})\n${stderr().slice(-3000)}`)
-    const ok = await request(port, 'GET', '/api/config').then((r) => r.status === 200, () => false)
+    const ok = await request(port, 'GET', probe).then((r) => r.status === 200, () => false)
     if (ok) return
     if (Date.now() > until) { signalChild(proc, 'SIGTERM'); throw new Error(`fleet: the Mac did not serve :${port} in ${timeoutMs / 1000} s\n${stderr().slice(-3000)}`) }
     await sleepMs(500)
@@ -228,7 +232,7 @@ export async function startMac(base: string, ssh: SshIdentity, windows: Record<s
     looksRight = (c) => c.startsWith(`${MAC_RUNTIME} `) && c.includes(bootFile)
   } else {
     const port = Number(proc.spawnargs[proc.spawnargs.length - 1])
-    await untilServes(port, proc, 240_000, () => stderr)
+    await untilServes(port, proc, 240_000, () => stderr, env.WALNUT_CLOUD_MODE === '1' ? '/api/system/health' : '/api/config')
     // A Node archive's bin/walnut is a sh script that execs its node: the same pid, now running the package.
     booted = { port, pid: proc.pid! }
     looksRight = (c) => c.includes(` web --port ${port}`)

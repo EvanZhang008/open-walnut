@@ -27,7 +27,7 @@ import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import crypto from 'node:crypto'
-import { createRequire } from 'node:module'
+import Database from '../../src/lib/sqlite.js'
 import { startSilentLinkProxy, type SilentLinkProxy, type SlowLink } from '../helpers/silent-link-proxy.js'
 import { waitFor } from '../helpers/replica-cluster.js'
 import * as dk from './docker.js'
@@ -263,7 +263,6 @@ export async function startFleet(opts: FleetOptions): Promise<Fleet> {
     },
     async hostAttempts(name, sid) { return jsonLines(await hostFile(name, `${HOST_PATHS.mockAttempts}/${sid}.walnut.jsonl`)) },
     macTask(id) {
-      const Database = createRequire(import.meta.url)('better-sqlite3') as new (file: string, o: { readonly: boolean; fileMustExist: boolean }) => { prepare(q: string): { get(...a: unknown[]): unknown }; close(): void }
       const db = new Database(path.join(theMac.data, 'tasks', 'tasks.sqlite'), { readonly: true, fileMustExist: true })
       try { return (db.prepare('SELECT id, title, phase, project, updated_at FROM tasks WHERE id = ?').get(id) as Record<string, any> | undefined) ?? null } finally { db.close() }
     },
