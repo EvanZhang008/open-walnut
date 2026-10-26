@@ -37,6 +37,8 @@ const h = vi.hoisted(() => ({
   endpoint: null as { url: string; token: string } | null,
   mine: '' as string,
   dist: null as { distDir: string; root: string } | null,
+  /** Uploads the Mac's driver began: its PUTs of a package's first chunk. */
+  uploadsBegun: 0,
 }))
 
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-companion-build-e2e'))
@@ -50,6 +52,18 @@ vi.mock('../../src/core/host-server/package.js', async (importOriginal) => {
     ...real,
     runningBuildId: async () => h.mine,
     buildCompanionAppPackage: (target: { platform: string; arch: string }, dist?: { distDir: string; root: string }) => real.buildCompanionAppPackage(target, dist ?? h.dist),
+  }
+})
+// Counted in this process, at the call: the box's own log line is buffered for up to
+// 2 s (src/logging/logger.ts), so a build that fails fast can be done before it lands.
+vi.mock('../../src/core/companion-build/mac-door.js', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../../src/core/companion-build/mac-door.js')>()
+  return {
+    ...real,
+    call: (...args: Parameters<typeof real.call>) => {
+      if (args[1] === 'PUT' && /^\/package\?.*&offset=0&/.test(args[2])) h.uploadsBegun++
+      return real.call(...args)
+    },
   }
 })
 vi.mock('../../src/core/config-manager.js', async (importOriginal) => ({
@@ -277,9 +291,13 @@ describe('the Mac keeps its companion on its build (real launcher, real build)',
     expect(s.running.id).toBe(idB)
     expect(s.current).toBe(idB)
     expect(s.failed.map((f) => f.id)).toContain(idC)
-    // An automatic tick (a probe) does not upload it again.
-    const uploadsBefore = uploadsStarted()
+    // An automatic tick (a probe) does not upload it again. The Mac began two
+    // uploads (B, C) and the box logged both; its log lands up to 2 s later.
+    const uploadsBefore = h.uploadsBegun
     expect(uploadsBefore).toBeGreaterThanOrEqual(2)
+    const logDeadline = Date.now() + 15_000
+    while (uploadsStarted() < 2 && Date.now() < logDeadline) await sleep(250)
+    expect(uploadsStarted()).toBeGreaterThanOrEqual(2)
     process.env.WALNUT_COMPANION_AUTO_TICKS = '1'
     process.env.WALNUT_COMPANION_BUILD_BOOT_DELAY_MS = '0'
     try {
@@ -289,6 +307,6 @@ describe('the Mac keeps its companion on its build (real launcher, real build)',
       delete process.env.WALNUT_COMPANION_BUILD_BOOT_DELAY_MS
     }
     expect(companionBuildView().state).toBe('failed')
-    expect(uploadsStarted()).toBe(uploadsBefore)
+    expect(h.uploadsBegun).toBe(uploadsBefore)
   }, 600_000)
 })
