@@ -1497,8 +1497,13 @@ makes a NEW task beside the source, which completes unless `keep_source`.
   notes on row order). The primary
   box exports tails for every session it can reach — local from disk, remote
   over its SSH channel — so this works for sessions on ANY machine without
-  the phone talking to that machine. `404 not_found` when no tail was
-  exported yet. A just-created session still in its pre-spawn window
+  the phone talking to that machine. When no tail was exported yet (or, for a
+  stopped session in the day after it ended, the exported tail predates its end),
+  the primary builds this session's tail inline (2026-10: a session that had just
+  stopped used to answer 404 until the next sweep). `404 not_found` for an unknown
+  id or a stopped session with nothing to read; `503 transcript_unavailable` (2026-10)
+  for a known session that could not be read in time (a slow or unreachable host):
+  retry. A just-created session still in its pre-spawn window
   (`awaiting_spawn`, no pid) answers `200` with `messages: []` on the primary
   box — fast and unambiguous, instead of a 404 the client would have to
   interpret as "poll again".

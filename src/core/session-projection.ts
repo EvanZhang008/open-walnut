@@ -851,10 +851,51 @@ export async function buildSessionTranscript(
 }
 
 /**
+ * True when a STOPPED session's exported tail was written before the session's
+ * last activity, so it may lack the final turn. The sweep exports alive
+ * sessions at most once a minute and freezes a stopped one's tail as its
+ * archive, so a session that ended inside that minute kept a tail without its
+ * last reply for good (found 2026-10-26 beside the just-completed 404: a
+ * leader reads a subtask's result right when it ends). Same clock on both
+ * sides: the record and the export are both written by the primary.
+ *
+ * Only inside REFREEZE_WINDOW_MS of that activity. The stop write itself bumps
+ * lastActiveAt, so almost every archive exported while its session was alive
+ * looks older than the end; without the window the first sweep after an upgrade
+ * re-read every stopped session of the last 14 days, and every open of an old
+ * one read its JSONL. Past the window an archive is served as it is, as before.
+ */
+export function archivePredatesEnd(
+  transcript: Pick<SessionTranscript, 'exportedAt'>,
+  lastActiveAt: string | undefined,
+  now = Date.now(),
+): boolean {
+  const exported = Date.parse(transcript.exportedAt)
+  const active = Date.parse(lastActiveAt ?? '')
+  return Number.isFinite(exported) && Number.isFinite(active) && exported < active
+    && now - active < REFREEZE_WINDOW_MS
+}
+
+const REFREEZE_WINDOW_MS = 24 * 60 * 60 * 1000
+/** Re-freezes per sweep, newest end first, so a burst of stops (or a backlog)
+ *  is spread over sweeps instead of holding one sweep for minutes. */
+const REFREEZE_PER_SWEEP = 10
+
+/** sid → the last_active_at a stale archive was rebuilt for. One rebuild per end,
+ *  so a session whose JSONL is gone is not re-read by every sweep. */
+const refrozenFor = new Map<string, string>()
+const REFROZEN_MAX = 5_000
+
+/** Tests: lift the sweep's throttle (past re-freezes are remembered). */
+export function _resetTranscriptSweepForTesting(): void {
+  lastTranscriptSweep = 0
+}
+
+/**
  * Export transcript tails for alive sessions (+ recently-stopped ones whose
- * CACHE copy is missing — the cache is the archive now). Each written tail is
- * also pushed to the cloud (`transcript-upsert`); legacy git files ride along
- * while the `sync.legacy_projection_files` knob is on. Throttled: remote
+ * CACHE copy is missing or predates their end — the cache is the archive
+ * now). Each written tail is also pushed to the cloud (`transcript-upsert`);
+ * legacy git files ride along while the `sync.legacy_projection_files` knob is on. Throttled: remote
  * session reads ride SSH, so sweeps are at most one per
  * TRANSCRIPT_THROTTLE_MS and never concurrent.
  */
@@ -871,6 +912,20 @@ export async function exportSessionTranscripts(): Promise<number> {
     if (legacy) await fsp.mkdir(SESSION_TRANSCRIPTS_DIR, { recursive: true })
 
     let exported = 0
+    // Stale stopped archives this sweep may rebuild: the newest ends only.
+    const refreezeAllowed = new Set<string>()
+    const staleStopped: Array<{ id: string; at: string }> = []
+    /** The archives read here, so the loop below reads each file once. */
+    const archives = new Map<string, SessionTranscript | null>()
+    for (const s of projection.sessions) {
+      if (s.process_status === 'running' || s.process_status === 'idle') continue
+      const archived = parseTranscript(await readTranscriptCache(s.id))
+      archives.set(s.id, archived)
+      if (refrozenFor.get(s.id) === s.last_active_at) continue
+      if (archived && archivePredatesEnd(archived, s.last_active_at)) staleStopped.push({ id: s.id, at: s.last_active_at })
+    }
+    staleStopped.sort((a, b) => b.at.localeCompare(a.at))
+    for (const s of staleStopped.slice(0, REFREEZE_PER_SWEEP)) refreezeAllowed.add(s.id)
     for (const s of projection.sessions) {
       const alive = s.process_status === 'running' || s.process_status === 'idle'
       if (!alive) {
@@ -879,7 +934,26 @@ export async function exportSessionTranscripts(): Promise<number> {
         // seed the cache from the legacy git-synced file instead of re-reading
         // history (old sessions' JSONLs may be purged/unreachable) — and push
         // the seeded tail so the cloud archive matches.
-        if (parseTranscript(await readTranscriptCache(s.id))) continue
+        const archived = archives.get(s.id) ?? null
+        if (archived) {
+          if (!refreezeAllowed.has(s.id)) continue
+          if (refrozenFor.size >= REFROZEN_MAX) refrozenFor.clear()
+          refrozenFor.set(s.id, s.last_active_at)
+          try {
+            const transcript = await buildSessionTranscript(s.id)
+            // Never trade an archive for an empty read: the JSONL may be gone.
+            if (transcript.messages.length === 0) continue
+            await writeTranscriptCache(s.id, transcript)
+            if (legacy) await writeJsonFile(path.join(SESSION_TRANSCRIPTS_DIR, `${s.id}.json`), transcript)
+            pushProjectionToCloud('transcript-upsert', { sid: s.id, data: transcript })
+            exported++
+          } catch (err) {
+            // Unreachable (host away): try again next sweep. An EMPTY read stays remembered.
+            refrozenFor.delete(s.id)
+            log.session.debug('transcript re-freeze skipped', { sessionId: s.id, error: String(err) })
+          }
+          continue
+        }
         const fromLegacy = await readLegacyTranscriptFile(s.id)
         if (fromLegacy) {
           try {

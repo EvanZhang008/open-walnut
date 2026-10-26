@@ -742,6 +742,37 @@ function deadline(ms: number): { promise: Promise<'timeout'>; cancel: () => void
 }
 
 /**
+ * Budget for the transcript route's inline build of one session, which reads its
+ * JSONL through the host's daemon (a remote host rides the tunnel). Past it the
+ * read answers 503 instead of pinning the connection; the build keeps running and
+ * warms the history cache for the retry. `WALNUT_TRANSCRIPT_READ_DEADLINE_MS`
+ * overrides it (tests).
+ */
+const TRANSCRIPT_READ_DEADLINE_MS = 10_000
+/** A stale archive is still an answer, so refreshing it may cost the reader less. */
+const STALE_REFRESH_DEADLINE_MS = 3_000
+
+/**
+ * sid → the lastActiveAt a stale archive's refresh came back empty, failed or
+ * timed out for (a slow host counts too: the sweep re-freezes it in the background).
+ * The archive is served as it is until the session moves again, so a session
+ * whose JSONL is gone (or whose host is away) is not re-read on every open.
+ */
+const staleRefreshMissed = new Map<string, string>()
+const STALE_REFRESH_MISSED_MAX = 5_000
+
+async function buildTranscriptWithin<T>(build: () => Promise<T>, budgetMs: number): Promise<T | 'timeout' | 'failed'> {
+  const ms = Number(process.env.WALNUT_TRANSCRIPT_READ_DEADLINE_MS) || budgetMs
+  const clock = deadline(ms)
+  const work = build().catch(() => 'failed' as const)
+  try {
+    return await Promise.race([work, clock.promise])
+  } finally {
+    clock.cancel()
+  }
+}
+
+/**
  * Degradation warns on this route are per-POLL, and the phone re-reads the open
  * conversation every 15s (its turn watchdog) — so an unthrottled warn turns one
  * unreachable lane into ~5,700 identical log lines a day. Throttled per
@@ -3776,7 +3807,10 @@ apiV1Router.get('/sessions/:id/transcript', async (req: Request, res: Response, 
     // `fresh=1` ASKS for a live read; `rich=1` NEEDS one, because the exported file
     // is written in the slim shape and can never carry the fields. Answering a rich
     // request from it is what made the response depend on cache warmth.
+    /** Set when the fresh/rich build below ran, so the fallback never builds twice. */
+    let builtOnce = false
     if ((wantFresh || wantRich) && !CLOUD_MODE && safeId) {
+      builtOnce = true
       try {
         const built = await buildSessionTranscript(sessionId, buildOpts)
         // A rich request must never cost the caller the ARCHIVE. The builder answers
@@ -3810,24 +3844,47 @@ apiV1Router.get('/sessions/:id/transcript', async (req: Request, res: Response, 
     let transcript = await readSessionTranscript(sessionId)
     /** The sweep file is slim by definition; only an inline build can be rich. */
     let builtRich = false
-    if (!transcript && !CLOUD_MODE) {
-      // Primary box: the sweep may simply not have run yet. Build just THIS
-      // session inline (one read) and kick the full sweep in the background —
-      // awaiting the sweep here meant one iOS poll waited out N serial daemon
-      // reads (one per alive session, tens of seconds with several remotes).
-      // Gated on an ALIVE tracker record (the sweep's own predicate):
-      // buildSessionTranscript returns an EMPTY transcript (not an error) for
-      // ids it can't read, but the v1 contract keeps unknown ids AND dead
-      // sessions without an exported file at 404.
+    if (!CLOUD_MODE && safeId) {
+      // Primary box: the sweep may simply not have run yet, for a live session or
+      // for one that just ended (a leader reads its subtask's result the moment it
+      // completes, and this read 404'd). Build just THIS session inline (one read)
+      // and kick the full sweep in the background — awaiting the sweep here meant
+      // one iOS poll waited out N serial daemon reads.
+      //
+      // A stopped session's exported tail is its archive, but one written before
+      // the session ended lacks its last turn (archivePredatesEnd), so that one is
+      // rebuilt too. A stopped session's build counts only with rows in it:
+      // buildSessionTranscript answers EMPTY (not an error) for a session whose
+      // JSONL is gone, so an empty build keeps the archive, and with no archive the
+      // v1 contract keeps unknown ids AND dead sessions with nothing to read at 404.
       const { getSessionByClaudeId } = await import('../../core/session-tracker.js')
+      const { archivePredatesEnd } = await import('../../core/session-projection.js')
       const record = await getSessionByClaudeId(sessionId)
-      if (record && (record.process_status === 'running' || record.process_status === 'idle')) {
-        try {
-          transcript = await buildSessionTranscript(sessionId, buildOpts)
+      const alive = record?.process_status === 'running' || record?.process_status === 'idle'
+      const stale = !!transcript && !!record && !alive && archivePredatesEnd(transcript, record.lastActiveAt)
+        && staleRefreshMissed.get(sessionId) !== record.lastActiveAt
+      if (record && (!transcript || stale) && !builtOnce) {
+        const built = await buildTranscriptWithin(
+          () => buildSessionTranscript(sessionId, buildOpts),
+          stale ? STALE_REFRESH_DEADLINE_MS : TRANSCRIPT_READ_DEADLINE_MS,
+        )
+        if (stale && (typeof built === 'string' || built.messages.length === 0)) {
+          if (staleRefreshMissed.size >= STALE_REFRESH_MISSED_MAX) staleRefreshMissed.clear()
+          staleRefreshMissed.set(sessionId, record.lastActiveAt)
+        }
+        if ((built === 'timeout' || built === 'failed') && !transcript) {
+          // A known session that could not be read now is not "no transcript".
+          sendError(res, 503, 'transcript_unavailable', built === 'timeout'
+            ? 'The session could not be read in time; retry shortly'
+            : 'The session could not be read right now; retry shortly')
+          return
+        }
+        if (built !== 'timeout' && built !== 'failed' && (alive || built.messages.length > 0)) {
+          transcript = built
           builtRich = wantRich
-        } catch { /* unreachable session — serve 404 below */ }
+        }
       }
-      exportSessionTranscripts().catch(() => { /* background; throttled internally */ })
+      if (!transcript || stale) exportSessionTranscripts().catch(() => { /* background; throttled internally */ })
     }
     if (!transcript && CLOUD_MODE && safeId) {
       // Replica just launched this session itself (launch-seed hit): the
