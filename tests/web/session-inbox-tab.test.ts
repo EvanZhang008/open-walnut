@@ -304,9 +304,21 @@ describe('navigateToTarget', () => {
     expect(consumeSessionInboxLink('sess-a')).toEqual({ letterId: 'lt-1' });
   });
 
-  it('leaves a non-session target alone', () => {
+  it('opens a task link on Home with its session, never the separate task page', () => {
+    // 2026-10-26: a task opened from the Inbox landed on /tasks/<id>; the user wants Home.
     navigateToTarget('/tasks/mt-1', (to) => navigated.push(to));
-    expect(navigated).toEqual(['/tasks/mt-1']);
+    navigateToTarget('/tasks/mt%3A2?from=inbox', (to) => navigated.push(to));
+    expect(navigated).toEqual(['/', '/']);
+    expect(dispatched).toEqual([
+      { type: 'main:locate-task', detail: { taskId: 'mt-1', openSession: true } },
+      { type: 'main:locate-task', detail: { taskId: 'mt:2', openSession: true } },
+    ]);
+  });
+
+  it('leaves other targets alone, the task list included', () => {
+    navigateToTarget('/tasks', (to) => navigated.push(to));
+    navigateToTarget('/mail?account=a&message=m', (to) => navigated.push(to));
+    expect(navigated).toEqual(['/tasks', '/mail?account=a&message=m']);
     expect(dispatched).toEqual([]);
   });
 });

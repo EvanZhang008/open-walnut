@@ -587,15 +587,46 @@ test('leaving the session from inside a deep-linked letter leaves no fullscreen 
     () => page.locator('.open-walnut-fullscreen-backdrop').count(),
     { timeout: 8_000, intervals: [250, 500, 1000] },
   ).toBe(0)
-  // …and the page the user asked for is the one they can actually click: the home
-  // columns are hidden (we really left), and nothing covers the task page.
-  await expect(page).toHaveURL(new RegExp(`/tasks/${task.id}$`))
-  await expect(page.locator('.main-page-wrapper-hidden')).toHaveCount(1)
+  // …and the task opens where the user works: on Home, its row selected, never the
+  // separate task page (2026-10-26), with nothing covering it.
+  await expect(page).toHaveURL(/\/(\?.*)?$/)
+  await expect(page.locator('.main-page-wrapper-hidden')).toHaveCount(0)
+  await expect(page.locator(`[data-task-id="${task.id}"].task-focused, [data-task-id="${task.id}"].todo-pinned-card-active`).first()).toBeVisible({ timeout: 15_000 })
   const covered = await page.evaluate(() => {
     const hit = document.elementFromPoint(window.innerWidth / 2, window.innerHeight / 2)
     return !!hit?.closest('.open-walnut-fullscreen-backdrop')
   })
-  expect(covered, 'the page navigated to must not sit under a fullscreen backdrop').toBe(false)
+  expect(covered, 'Home must not sit under a fullscreen backdrop').toBe(false)
   await shot(page, 'tab-12-left-session-no-backdrop')
   expect(pageErrors, `uncaught page errors: ${pageErrors.join(' | ')}`).toEqual([])
+})
+
+/**
+ * A task link in a letter opens that task on Home with its session, from any page
+ * (2026-10-26, the user: opening a task from the Inbox landed on the separate task
+ * page; "Inbox directly jumping to the home page is better").
+ */
+test('a task link in a letter opens the task and its session on Home, from another page', async ({ page, request }) => {
+  test.setTimeout(120_000)
+  const subject = `PW TAB task home ${NONCE}`
+  const sid = await startSession(request)
+  const detail = await (await request.get(`/api/sessions/${sid}`)).json() as { taskId?: string; session?: { taskId?: string } }
+  const taskId = detail.taskId ?? detail.session?.taskId
+  expect(taskId, 'the quick-started session has a task').toBeTruthy()
+  await sendLetter(request, { subject, type: 'info', markdown: `## Home\n\nHOME-BODY-${NONCE}`, text: `Home (${NONCE}).`, task_refs: [taskId] })
+
+  await loadHome(page)
+  await page.locator('.sidebar-nav a[href="/tasks"]').first().click()
+  await expect(page).toHaveURL(/\/tasks$/)
+  const center = await openCenterInbox(page)
+  await center.locator('.hib-row').filter({ hasText: subject }).click()
+  const reader = page.locator('.hib-reader')
+  await expect(reader).toBeVisible({ timeout: 20_000 })
+  await reader.locator(`.hib-taskrefs .task-link[data-task-id="${taskId}"]`).click()
+
+  await expect(page).toHaveURL(/\/(\?.*)?$/, { timeout: 15_000 })
+  await expect(page).not.toHaveURL(/\/tasks\//)
+  await expect(page.locator(`.main-page-session-column .session-panel[data-session-id="${sid}"]`)).toBeVisible({ timeout: 20_000 })
+  await expect(page.locator(`[data-task-id="${taskId}"].task-focused, [data-task-id="${taskId}"].todo-pinned-card-active`).first()).toBeVisible({ timeout: 15_000 })
+  await shot(page, 'tab-13-task-link-opens-home')
 })

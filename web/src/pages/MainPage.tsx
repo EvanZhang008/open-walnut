@@ -2263,7 +2263,11 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   // held until the task arrives, for a bounded while, rather than dropped on the first miss. The panel
   // the person was reading is not on Home, so its session opens here too: an ask in the chat slot,
   // where every ask lives, anything else in a session column.
-  const pendingLocateRef = useRef<{ taskId: string; sessionId?: string; until: number } | null>(null);
+  // `openSession` (a task link from the Inbox, `openTaskOnHome`): open the task's own session too, as a
+  // click on its row does.
+  const pendingLocateRef = useRef<{ taskId: string; sessionId?: string; openSession?: boolean; until: number } | null>(null);
+  const sessionToOpen = (task: Task, sessionId?: string, openSession?: boolean) =>
+    sessionId ?? (openSession ? resolveTaskSessionId(task) ?? undefined : undefined);
   const revealOnHome = useCallback((task: Task, sessionId?: string) => {
     if (sessionId) {
       // The slot's own rule (`agentOfTask` over the agents it lists): a task it would not show goes to a
@@ -2279,14 +2283,14 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   }, [handleLocateTaskById, openSessionOrToast]);
   useEffect(() => {
     const handleLocate = (e: Event) => {
-      const { taskId, sessionId } = (e as CustomEvent).detail as { taskId?: string; sessionId?: string };
+      const { taskId, sessionId, openSession } = (e as CustomEvent).detail as { taskId?: string; sessionId?: string; openSession?: boolean };
       if (!taskId) return;
       const task = taskMapRef.current.get(taskId);
       if (task) {
         pendingLocateRef.current = null;
-        revealOnHome(task, sessionId);
+        revealOnHome(task, sessionToOpen(task, sessionId, openSession));
       } else {
-        pendingLocateRef.current = { taskId, ...(sessionId ? { sessionId } : {}), until: Date.now() + 15_000 };
+        pendingLocateRef.current = { taskId, ...(sessionId ? { sessionId } : {}), ...(openSession ? { openSession } : {}), until: Date.now() + 15_000 };
       }
     };
     window.addEventListener('main:locate-task', handleLocate);
@@ -2299,7 +2303,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     const task = taskMap.get(pending.taskId);
     if (!task) return;
     pendingLocateRef.current = null;
-    revealOnHome(task, pending.sessionId);
+    revealOnHome(task, sessionToOpen(task, pending.sessionId, pending.openSession));
   }, [taskMap, revealOnHome]);
 
   const handleClearFocus = useCallback(() => {

@@ -25,7 +25,9 @@ test('task navigation and keyboard preview preserve exact selection, scroll and 
   await dialog.getByRole('button', { name: 'Back to tasks', exact: true }).press('Enter');
   await expect(preview).toBeFocused();
   await preview.click(); await dialog.getByRole('button', { name: 'Open task', exact: true }).click();
-  await expect(page).toHaveURL(new RegExp(`/tasks/${task.id}`));
+  // A task opens on Home with its row selected, never the separate task page (2026-10-26).
+  await expect(page.locator(`[data-task-id="${task.id}"].task-focused, [data-task-id="${task.id}"].todo-pinned-card-active`).first()).toBeVisible({ timeout: 15_000 });
+  await expect(page).not.toHaveURL(/\/tasks\//);
   await page.goBack();
   await fs.writeFile(`${EVIDENCE}/${info.project.name}-return-debug.json`, JSON.stringify(await page.evaluate(() => ({ history: window.history.state, url: location.href, dialogs: document.querySelectorAll('.hii-selector').length, readers: document.querySelectorAll('.hib-reader').length, panel: !!document.querySelector('.notification-panel') })), null, 2));
   await expect(dialog).toBeVisible();

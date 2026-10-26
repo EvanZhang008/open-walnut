@@ -70,6 +70,19 @@ export function locateTaskOnHome(
 }
 
 /**
+ * Open a task on the HOME page from anywhere: select it in the task panel and open its session,
+ * the way a click on its row does, then go home.
+ *
+ * What a task link in the Inbox (a letter's task pill, "Open task") does, instead of the separate
+ * task page (2026-10-26, the user: "Inbox directly jumping to the home page is better"). Same
+ * window-event bridge as `locateTaskOnHome`, which it extends with the task's own session.
+ */
+export function openTaskOnHome(taskId: string, navigate: (to: string) => void): void {
+  window.dispatchEvent(new CustomEvent('main:locate-task', { detail: { taskId, openSession: true } }));
+  navigate('/');
+}
+
+/**
  * Open a NEW draft session column on the home page, optionally seeded with a
  * project — the cross-page twin of the home panel's project-header "+".
  *
@@ -89,13 +102,21 @@ export function openDraftSessionOnHome(project: string | undefined, navigate: (t
 
 /**
  * Navigate to a deep-link target, rerouting session links (`/sessions?id=…`)
- * to the home-page session columns. Non-session targets navigate as-is.
+ * to the home-page session columns and task links (`/tasks/<id>`) to that task
+ * on Home with its session open. Other targets navigate as-is.
  *
  * A session link may carry `&tab=inbox[&letter=…]` (a letter's "Open session"),
  * which opens the column AND its Inbox tab on that letter. Anything else in the
  * query is ignored, so a plain `/sessions?id=…` behaves exactly as before.
  */
 export function navigateToTarget(to: string, navigate: (to: string) => void): void {
+  const task = /^\/tasks\/([^/?#]+)\/?(?:[?#].*)?$/.exec(to);
+  if (task) {
+    let id = task[1];
+    try { id = decodeURIComponent(id); } catch { /* keep the raw segment */ }
+    openTaskOnHome(id, navigate);
+    return;
+  }
   const m = /^\/sessions\?(.+)$/.exec(to);
   const params = m ? new URLSearchParams(m[1]) : null;
   const id = params?.get('id');
