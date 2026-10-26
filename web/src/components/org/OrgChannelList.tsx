@@ -4,10 +4,12 @@
  * is, its state dot, when its work last moved, one line of what is happening and,
  * when something waits on the user, how many. Up and Down move the selection. While the
  * pointer is over the list the rows keep their order, so a click lands on the row aimed at.
+ * A project another VP took over has no row of its own: it sits in "Archived / Moved" at
+ * the bottom (folded), saying which VP has it now; a click opens that VP.
  */
 import { useRef, useState, type KeyboardEvent } from 'react';
 import { timeAgo } from '@/utils/time';
-import { avatarColor, initials, type ChannelRow, type ChannelState } from './org-channels-model';
+import { avatarColor, initials, type ChannelRow, type ChannelState, type MovedRow } from './org-channels-model';
 import { holdOrder } from './hold-order';
 
 const STATE_LABEL: Record<ChannelState, string> = {
@@ -63,6 +65,9 @@ function Row({ row, selected, now, onSelect }: { row: ChannelRow; selected: bool
       <span className="org-channel-mid">
         <span className="org-channel-top">
           <span className="org-channel-name">{row.name}</span>
+          {!!row.led?.length && (
+            <span className="org-channel-led" data-testid="org-channel-led" title={`Also leads ${row.led.map((l) => l.name).join(', ')}`}>+{row.led.length}</span>
+          )}
           {/* The time of the line under it (when that news was written), else of the last move. */}
           <span className="org-channel-time">{shortAgo(row.latestAt || row.lastAt, now)}</span>
         </span>
@@ -73,9 +78,56 @@ function Row({ row, selected, now, onSelect }: { row: ChannelRow; selected: bool
   );
 }
 
+function MovedSection({ moved, query, onSelect }: { moved: readonly MovedRow[]; query: string; onSelect: (key: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+  const shown = words.length
+    ? moved.filter((m) => words.every((w) => `${m.project}\n${m.vpName}`.toLowerCase().includes(w)))
+    : moved;
+  if (!shown.length) return null;
+  // A search that finds one shows it.
+  const expanded = open || words.length > 0;
+  return (
+    <div className="org-moved" data-testid="org-moved">
+      <button
+        type="button"
+        className="org-list-section org-moved-toggle"
+        aria-expanded={expanded}
+        data-testid="org-moved-toggle"
+        onClick={() => setOpen((v) => !v)}
+      >
+        <span className="org-moved-chevron" aria-hidden="true">{expanded ? '▾' : '▸'}</span>
+        Archived / Moved · {shown.length}
+      </button>
+      {expanded && shown.map((m) => (
+        <button
+          key={m.key}
+          type="button"
+          className="org-moved-row"
+          data-testid="org-moved-row"
+          data-key={m.key}
+          data-vp={m.vpKey}
+          title={`${m.project} is led by the ${m.vpName} VP now${m.from ? ` (before: ${m.from.title})` : ''}`}
+          onClick={() => onSelect(m.vpKey)}
+        >
+          <span className="org-avatar is-moved" style={{ width: 26, height: 26, fontSize: 10, background: avatarColor(m.project) }} aria-hidden="true">{initials(m.project)}</span>
+          <span className="org-channel-mid">
+            <span className="org-channel-name">{m.project}</span>
+            <span className="org-channel-latest" data-testid="org-moved-line">
+              Moved to the {m.vpName} VP{m.from ? (m.from.open ? ' · handing over' : ' · closed') : ''}
+            </span>
+          </span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
 interface Props {
   main: ChannelRow;
   rows: readonly ChannelRow[];
+  /** Projects another VP took over (movedProjects). */
+  moved?: readonly MovedRow[];
   total: number;
   selectedKey: string | null;
   query: string;
@@ -85,7 +137,7 @@ interface Props {
   now: number;
 }
 
-export function OrgChannelList({ main, rows, total, selectedKey, query, onQuery, onSelect, onOpenChart, now }: Props) {
+export function OrgChannelList({ main, rows, moved = [], total, selectedKey, query, onQuery, onSelect, onOpenChart, now }: Props) {
   const listRef = useRef<HTMLDivElement>(null);
   // Live work re-sorts the rows all the time; one that moved under the pointer would take a
   // click meant for another. The new order shows once the pointer leaves.
@@ -128,6 +180,7 @@ export function OrgChannelList({ main, rows, total, selectedKey, query, onQuery,
         <Row row={main} selected={selectedKey === main.key} now={now} onSelect={onSelect} />
         <div className="org-list-section" role="presentation">Leads · {total}</div>
         {shown.map((r) => <Row key={r.key} row={r} selected={selectedKey === r.key} now={now} onSelect={onSelect} />)}
+        <MovedSection moved={moved} query={query} onSelect={onSelect} />
       </div>
       {total === 0 && <p className="org-empty-note" data-testid="org-empty">No open work yet. Ask Main to start something.</p>}
       {total > 0 && rows.length === 0 && <p className="org-empty-note" data-testid="org-no-match">No lead matches “{query}”.</p>}

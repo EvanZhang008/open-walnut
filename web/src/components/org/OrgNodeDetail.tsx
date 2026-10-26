@@ -195,6 +195,11 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabChange, onSel
             <CountPills row={row} />
             {lastMoved && <span className="org-muted">· moved {lastMoved}</span>}
           </div>
+          {!!row.led?.length && (
+            <div className="org-detail-led org-muted" data-testid="org-detail-led">
+              Leads {[row.name, ...row.led.map((l) => l.name)].join(', ')}
+            </div>
+          )}
         </div>
         <div className="org-tabs" role="tablist" aria-label={`${title} views`}>
           {canTalk && (

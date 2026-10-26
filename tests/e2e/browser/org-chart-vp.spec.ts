@@ -1,13 +1,17 @@
 /**
  * The org chart as a user meets it (web/src/components/org/OrgChartSheet.tsx, POST /api/v1/org/vp):
- *   - Main is the CEO; every project is a VP card with its own name, one line and a needs-you
- *     count, never a made-up "lead" name
+ *   - Main is the CEO; every project is a VP card with its own name, its news and a needs-you
+ *     count, never a made-up "lead" name, and every card lists the projects its VP leads, its
+ *     own included
  *   - dragging one project onto another VP says what the drop does before it happens, asks
  *     first, and Cancel changes nothing; after Confirm that VP's card lists both projects,
  *     each still its own project (no task moved), and the VP that let go has stepped down
  *   - dragging it onto "own VP" gives it back; the ⋯ menu does the same without a drag, and
  *     Escape closes the question before the sheet
+ *   - a project opens to its tasks and where each stands; a task opens beside the Org page
+ *   - a project under another VP is part of that VP's channel on the Org page, not one of its own
  *   - a card opens its project on the Org page, on its chat (chat is the first tab)
+ *   - a click outside the sheet closes it (the menu and the question close first)
  * The fixture is shared, so this file makes its own projects and removes what it made.
  */
 import { expect, test, type APIRequestContext, type Locator, type Page } from '@playwright/test'
@@ -93,9 +97,14 @@ test('Main is the CEO and each project a VP card with its own name', async ({ pa
     await expect(vp(page, name)).toContainText('VP')
     await expect(vp(page, name)).not.toContainText('lead')
     // Two tasks not started: Waiting, by the one user status (src/core/user-status.ts); with no
-    // words of their own, the card's news says so too.
-    await expect(vp(page, name).getByTestId('org-chart-vp-line')).toHaveText('2 waiting')
+    // words of their own, the card's news says so too. The card lists its one project with
+    // its counts; the card itself has no counts line then.
     await expect(vp(page, name).getByTestId('org-chart-vp-news')).toContainText('Waiting: ')
+    const own = vp(page, name).getByTestId('org-chart-project')
+    await expect(own).toHaveCount(1)
+    await expect(own).toContainText(name)
+    await expect(own.getByTestId('org-chart-project-line')).toHaveText('2 waiting')
+    await expect(vp(page, name).getByTestId('org-chart-vp-line')).toHaveCount(0)
   }
 })
 
@@ -136,12 +145,43 @@ test('a drag onto another VP says what it does, asks first, and puts the project
   expect((await taskOf(request, bLead))?.phase).toBe('COMPLETE')
   expect((await taskOf(request, aLead.id))?.org_leads).toEqual([B])
 
-  // A project on the card opens on the Org page, on its chat.
-  await card.getByTestId('org-chart-project').nth(1).locator('.oc-project-btn').click()
+  // A project on the card opens to its tasks, each with where it stands.
+  const seeds = card.locator(`[data-testid="org-chart-project"][data-project="${B}"]`)
+  await expect(seeds.getByTestId('org-chart-tasks')).toHaveCount(0)
+  await seeds.getByTestId('org-chart-project-toggle').click()
+  await expect(seeds.getByTestId('org-chart-project-toggle')).toHaveAttribute('aria-expanded', 'true')
+  const tasks = seeds.getByTestId('org-chart-task')
+  await expect(tasks).toHaveCount(2)
+  await expect(seeds.getByTestId('org-chart-tasks')).toContainText(`Collect seeds ${STAMP}`)
+  await expect(seeds.getByTestId('org-chart-tasks')).toContainText(`Label jars ${STAMP}`)
+  await expect(tasks.first()).toContainText('Waiting')
+  await expect(card.locator(`[data-testid="org-chart-project"][data-project="${A}"]`).getByTestId('org-chart-tasks')).toHaveCount(0)
+
+  // A task opens beside the Org page, and the sheet closes.
+  const label = seeds.locator('[data-testid="org-chart-task"]', { hasText: `Label jars ${STAMP}` })
+  const labelId = await label.getAttribute('data-task-id')
+  await label.click()
   await expect(page.getByTestId('org-chart')).toHaveCount(0)
-  const detail = page.getByTestId('org-detail')
-  await expect(detail).toHaveAttribute('data-key', `project:${B.toLowerCase()}`)
-  await expect(detail.getByTestId('org-tab-chat')).toHaveAttribute('aria-selected', 'true')
+  await expect(page.getByTestId('org-side')).toBeVisible()
+  await expect(page).toHaveURL(new RegExp(`open=[^&]*${labelId}`))
+
+  // On the Org page, B is part of A's channel now: no channel of its own, and A's says it leads one more.
+  const channel = (name: string) => page.locator(`[data-testid="org-channel"][data-key="project:${name.toLowerCase()}"]`)
+  await expect(channel(A)).toBeVisible()
+  await expect(channel(B)).toHaveCount(0)
+  await expect(channel(A).getByTestId('org-channel-led')).toHaveText('+1')
+  // B is under "Archived / Moved" at the bottom, folded, saying where it went; it came in live.
+  const moved = page.getByTestId('org-moved-toggle')
+  await expect(moved).toHaveText(/Archived \/ Moved · \d+/)
+  await expect(moved).toHaveAttribute('aria-expanded', 'false')
+  await expect(page.getByTestId('org-moved-row')).toHaveCount(0)
+  await moved.click()
+  const movedB = page.locator(`[data-testid="org-moved-row"][data-key="project:${B.toLowerCase()}"]`)
+  await expect(movedB.getByTestId('org-moved-line')).toHaveText(new RegExp(`^Moved to the ${A} VP`))
+  // A click opens the VP that has it now.
+  await movedB.click()
+  await expect(channel(A)).toHaveAttribute('aria-selected', 'true')
+  await expect(page.getByTestId('org-detail-led')).toHaveText(`Leads ${A}, ${B}`)
 })
 
 test('a drag onto "own VP" gives it back; the menu asks the same without a drag', async ({ page, request }) => {
@@ -154,7 +194,7 @@ test('a drag onto "own VP" gives it back; the menu asks the same without a drag'
   await page.getByTestId('org-chart-apply').click()
   await expect(page.getByTestId('org-chart-done')).toHaveText(`${B} has its own VP again.`)
   await expect(vp(page, B)).toBeVisible()
-  await expect(vp(page, A).getByTestId('org-chart-project')).toHaveCount(0)
+  await expect(vp(page, A).getByTestId('org-chart-project')).toHaveCount(1)
   const b = (await project(request, B))!
   expect(b.vp).toBeUndefined()
   expect((await taskOf(request, b.lead!.id))?.phase).not.toBe('COMPLETE')
@@ -171,4 +211,36 @@ test('a drag onto "own VP" gives it back; the menu asks the same without a drag'
   expect((await project(request, B))?.vp).toBeUndefined()
   await page.keyboard.press('Escape')
   await expect(page.getByTestId('org-chart')).toHaveCount(0)
+})
+
+test('a click outside the sheet closes it; inside, or with the menu or the question open, it does not', async ({ page }) => {
+  const sheet = await openChart(page)
+  const panel = sheet.locator('.org-sheet')
+  const box = (await panel.boundingBox())!
+  // Inside the sheet, on its title: nothing closes.
+  await sheet.locator('.org-sheet-title').click()
+  await expect(sheet).toBeVisible()
+  // The ⋯ menu open: the click outside closes only the menu.
+  await vp(page, B).getByTestId('org-chart-project-menu').click()
+  await expect(page.getByTestId('org-chart-move-menu')).toBeVisible()
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height + 12)
+  await expect(page.getByTestId('org-chart-move-menu')).toHaveCount(0)
+  await expect(sheet).toBeVisible()
+  // The question open: the click outside closes only the question.
+  await vp(page, B).getByTestId('org-chart-project-menu').click()
+  await page.getByTestId('org-chart-move-menu').getByText(`${A}'s VP`).click()
+  await expect(page.getByTestId('org-chart-confirm')).toBeVisible()
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height + 12)
+  await expect(page.getByTestId('org-chart-confirm')).toHaveCount(0)
+  await expect(sheet).toBeVisible()
+  // A press inside that ends outside is not a click outside.
+  const title = (await sheet.locator('.org-sheet-title').boundingBox())!
+  await page.mouse.move(title.x + 4, title.y + 4)
+  await page.mouse.down()
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height + 12, { steps: 4 })
+  await page.mouse.up()
+  await expect(sheet).toBeVisible()
+  // Nothing open: the click outside closes the sheet.
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height + 12)
+  await expect(sheet).toHaveCount(0)
 })

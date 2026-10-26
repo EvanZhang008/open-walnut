@@ -16,8 +16,9 @@ const t = (project: string, over: Partial<OrgTaskLike> = {}): OrgTaskLike => {
 }
 
 function cardsOf(tasks: OrgTaskLike[]) {
-  const { rows } = buildChannels(buildOrgTree(tasks), tasks as unknown as Task[], () => null)
-  return vpCards(rows)
+  // The chart's cards come from one row per project (the page's own rows fold a VP's projects).
+  const { projects } = buildChannels(buildOrgTree(tasks), tasks as unknown as Task[], () => null)
+  return vpCards(projects)
 }
 
 const garden = [t('Garden', { phase: 'IN_PROGRESS' }), t('Garden', { phase: 'WAITING' })]

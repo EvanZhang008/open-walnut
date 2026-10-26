@@ -33,7 +33,7 @@ import { OrgChannelList } from '@/components/org/OrgChannelList';
 import { OrgNodeDetail, type OrgTab } from '@/components/org/OrgNodeDetail';
 import { OrgSidePanel, parseSideTarget, sideTargetParam, type OrgSideTarget } from '@/components/org/OrgSidePanel';
 import {
-  MAIN_KEY, buildChannels, filterChannels, flattenNodes, pickChannel, projectRowKey, type AlertProbe, type ChannelRow,
+  MAIN_KEY, buildChannels, filterChannels, flattenNodes, movedProjects, pickChannel, projectRowKey, rowOf, type AlertProbe, type ChannelRow,
 } from '@/components/org/org-channels-model';
 import '@/styles/org-page.css';
 
@@ -112,9 +112,10 @@ export function OrgPage() {
   const urlTab = TABS.includes(tabParam as OrgTab) ? (tabParam as OrgTab) : null;
   const selected = pickChannel(channels, nodeParam);
   // On a phone the list shows until a row is picked (and again when the picked one is gone).
-  const picked = nodeParam === MAIN_KEY || channels.rows.some((r) => r.key === nodeParam);
+  const picked = !!rowOf(channels, nodeParam);
   const showDetail = !phone || picked;
   const visibleRows = useMemo(() => filterChannels(channels.rows, query), [channels.rows, query]);
+  const moved = useMemo(() => movedProjects(channels, tasks), [channels, tasks]);
   const openParam = params.get('open');
   const side = useMemo(() => parseSideTarget(openParam), [openParam]);
 
@@ -224,6 +225,7 @@ export function OrgPage() {
         <OrgChannelList
           main={channels.main}
           rows={visibleRows}
+          moved={moved}
           total={channels.rows.length}
           selectedKey={phone ? null : selected.key}
           query={query}
@@ -262,7 +264,17 @@ export function OrgPage() {
           {...(side.kind === 'task' && sideInbox?.taskId === side.id ? { inboxRequest: sideInbox.n } : {})}
         />
       )}
-      {chartOpen && <OrgChartSheet main={channels.main} rows={channels.rows} onClose={() => setChartOpen(false)} onPick={(key) => select(key)} now={now} />}
+      {chartOpen && (
+        <OrgChartSheet
+          main={channels.main}
+          rows={channels.projects}
+          tasks={tasks}
+          onClose={() => setChartOpen(false)}
+          onPick={(key) => select(rowOf(channels, key)?.key ?? key)}
+          onOpenTask={openTask}
+          now={now}
+        />
+      )}
     </div>
   );
 }

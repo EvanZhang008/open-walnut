@@ -159,14 +159,17 @@
 }
 .oc-more:hover, .oc-more:focus-visible { background: var(--bg-secondary); color: var(--fg); }
 
-/* The projects a VP leads, when it leads more than its own. */
+/* The projects a VP leads, its own included; each opens to its tasks (OrgChartProject.tsx). */
 .oc-projects { margin: 0; padding: 0; list-style: none; border-top: 1px solid var(--border); }
-.oc-project { display: flex; align-items: center; gap: 4px; padding: 3px 0 0; cursor: grab; }
+.oc-project { padding: 3px 0 0; }
+.oc-project[draggable="true"] { cursor: grab; }
 .oc-project.is-dragging { opacity: 0.45; }
+.oc-project-row { display: flex; align-items: center; gap: 4px; min-width: 0; }
+.oc-chevron { flex-shrink: 0; width: 10px; color: var(--fg-muted); font-size: 10px; }
 .oc-project-btn {
   display: flex;
   align-items: baseline;
-  gap: 8px;
+  gap: 6px;
   flex: 1;
   min-width: 0;
   padding: 3px 4px;
@@ -180,8 +183,45 @@
   cursor: pointer;
 }
 .oc-project-btn:hover { background: var(--bg-secondary); }
-.oc-project-name { flex-shrink: 0; max-width: 55%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 550; }
-.oc-project-line { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg-muted); font-size: 11.5px; }
+/* The name keeps most of the row; the counts give way first (their tooltip has them). */
+.oc-project-name { flex: 0 1 auto; min-width: 0; max-width: 72%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 550; }
+.oc-project-line { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg-muted); font-size: 11.5px; }
+
+/* A project's tasks, opened: where each stands, in its own words. */
+.oc-tasks { margin: 2px 0 4px 14px; padding: 0 0 0 6px; list-style: none; border-left: 1px solid var(--border); }
+.oc-task {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  width: 100%;
+  padding: 3px 4px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.oc-task:hover { background: var(--bg-secondary); }
+.oc-task:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.oc-task.is-worker { padding-left: 16px; }
+.oc-task-dot { flex-shrink: 0; width: 7px; height: 7px; margin-top: 5px; border-radius: 50%; background: var(--fg-muted, #86868b); }
+.oc-task-dot.is-needs { background: var(--error, #ff3b30); }
+.oc-task-dot.is-working { background: var(--success, #34c759); }
+.oc-task-text { display: flex; flex-direction: column; min-width: 0; }
+.oc-task-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.oc-task-state { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg-muted); font-size: 11px; }
+.oc-task-empty { padding: 3px 4px; color: var(--fg-muted); font-size: 11.5px; }
+.oc-task-more {
+  padding: 3px 4px;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+}
 
 /* What a drop would do, over the bottom of the card it is over (never over the next card). */
 .oc-hint {

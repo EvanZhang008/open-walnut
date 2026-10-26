@@ -65,6 +65,9 @@ export interface ChannelRow {
   unread: boolean;
   /** Led by another project's VP (the org chart): that VP's own project. */
   vp?: string;
+  /** A VP's row: the projects it leads besides its own, each its own row (the chart lists them).
+   *  The row itself already counts their work: their teams, alerts and news are its own. */
+  led?: ChannelRow[];
   node?: OrgProjectNode;
 }
 
@@ -180,12 +183,44 @@ export function sortChannels(rows: readonly ChannelRow[]): ChannelRow[] {
 
 export interface OrgChannels {
   main: ChannelRow;
+  /** One row per VP: a project under another VP is part of that VP's row, not a row of its own. */
   rows: ChannelRow[];
+  /** One row per project, each with its own work (the org chart's cards and their project lines). */
+  projects: ChannelRow[];
+}
+
+function addCounts(a: OrgCounts, b: OrgCounts): OrgCounts {
+  return { open: a.open + b.open, running: a.running + b.running, needsYou: a.needsYou + b.needsYou, waiting: a.waiting + b.waiting };
+}
+
+/** The projects a VP leads, folded into its own: the VP's row covers all their teams. A project
+ *  whose VP's own project is not in the tree (nothing open there) keeps a row of its own. */
+function vpNodes(projects: readonly OrgProjectNode[]): { node: OrgProjectNode; led: OrgProjectNode[] }[] {
+  const own = new Map(projects.filter((p) => p.project && !p.vp).map((p) => [projectKey(p.project), p] as const));
+  const led = new Map<string, OrgProjectNode[]>();
+  for (const p of projects) {
+    const vp = p.vp ? projectKey(p.vp) : '';
+    if (vp && own.has(vp)) led.set(vp, [...(led.get(vp) ?? []), p]);
+  }
+  return projects
+    .filter((p) => !(p.vp && own.has(projectKey(p.vp))))
+    .map((p) => {
+      const under = p.project && !p.vp ? led.get(projectKey(p.project)) ?? [] : [];
+      if (!under.length) return { node: p, led: [] };
+      return {
+        node: { ...p, teams: [...p.teams, ...under.flatMap((u) => u.teams)], counts: under.reduce((c, u) => addCounts(c, u.counts), p.counts) },
+        led: under,
+      };
+    });
 }
 
 export function buildChannels(tree: OrgTree, tasks: readonly Task[], probe: AlertProbe): OrgChannels {
   const byId = new Map(tasks.map((t) => [t.id, t] as const));
-  const rows = sortChannels(tree.projects.map((p) => projectRow(p, byId, probe)));
+  const projects = sortChannels(tree.projects.map((p) => projectRow(p, byId, probe)));
+  const rows = sortChannels(vpNodes(tree.projects).map(({ node, led }) => {
+    const row = projectRow(node, byId, probe);
+    return led.length ? { ...row, led: sortChannels(led.map((p) => projectRow(p, byId, probe))) } : row;
+  }));
   const mainTask = tree.main ? byId.get(tree.main.id) : undefined;
   const mainAlerts = collectAlerts(tree.main ? [tree.main.id] : [], byId, probe);
   // Tasks, as Main's pills count them: what works, and what needs the user under every lead.
@@ -212,7 +247,7 @@ export function buildChannels(tree: OrgTree, tasks: readonly Task[], probe: Aler
     lastAt: taskTime(mainTask),
     unread: !!mainTask?.unread,
   };
-  return { main, rows };
+  return { main, rows, projects };
 }
 
 /** Rows whose project, contact or latest line holds every word of `q` (case-insensitive). */
@@ -220,15 +255,61 @@ export function filterChannels(rows: readonly ChannelRow[], q: string): ChannelR
   const words = q.toLowerCase().split(/\s+/).filter(Boolean);
   if (!words.length) return [...rows];
   return rows.filter((r) => {
-    const hay = `${r.name}\n${r.contactTitle}\n${r.latest}\n${r.latestTask ?? ''}`.toLowerCase();
+    const hay = `${r.name}\n${r.contactTitle}\n${r.latest}\n${r.latestTask ?? ''}\n${(r.led ?? []).map((l) => l.name).join('\n')}`.toLowerCase();
     return words.every((w) => hay.includes(w));
   });
 }
 
-/** The selected row: the URL's, else the first lead (the most urgent), else Main. */
-export function pickChannel(channels: OrgChannels, key: string | null): ChannelRow {
+/** The row that shows `key`: its own, or its VP's when the project is under another VP. */
+export function rowOf(channels: OrgChannels, key: string | null): ChannelRow | undefined {
+  if (!key) return undefined;
   if (key === MAIN_KEY) return channels.main;
-  return (key && channels.rows.find((r) => r.key === key)) || channels.rows[0] || channels.main;
+  return channels.rows.find((r) => r.key === key || !!r.led?.some((l) => l.key === key));
+}
+
+/** The selected row: the URL's (a project under another VP selects that VP), else the first lead
+ *  (the most urgent), else Main. */
+export function pickChannel(channels: OrgChannels, key: string | null): ChannelRow {
+  return rowOf(channels, key) || channels.rows[0] || channels.main;
+}
+
+/** A project another VP took over: listed under "Archived / Moved", with where it went. */
+export interface MovedRow {
+  key: string;
+  project: string;
+  /** The VP's row, and its name (the VP's own project). */
+  vpKey: string;
+  vpName: string;
+  /** The project's own lead before: still open while it hands over, else closed. */
+  from?: { id: string; title: string; open: boolean };
+}
+
+/** Every project a VP took over (its lead's `org_leads`), whether or not it has open work now. */
+export function movedProjects(channels: OrgChannels, tasks: readonly Task[]): MovedRow[] {
+  const out: MovedRow[] = [];
+  const seen = new Set<string>();
+  for (const lead of tasks) {
+    if (lead.org_role !== 'lead' || lead.phase === 'COMPLETE' || !lead.org_leads?.length) continue;
+    const home = projectKey(lead.project ?? '');
+    const vp = rowOf(channels, projectRowKey(lead.project ?? ''));
+    for (const name of lead.org_leads) {
+      const key = projectKey(name);
+      if (!name || key === home || seen.has(key)) continue;
+      seen.add(key);
+      const olds = tasks
+        .filter((t) => t.org_role === 'lead' && t.id !== lead.id && projectKey(t.project ?? '') === key)
+        .sort((a, b) => Number(a.phase === 'COMPLETE') - Number(b.phase === 'COMPLETE') || taskTime(b) - taskTime(a));
+      const old = olds[0];
+      out.push({
+        key: projectRowKey(name),
+        project: name,
+        vpKey: vp?.key ?? projectRowKey(lead.project ?? ''),
+        vpName: vp?.name ?? (lead.project || 'Inbox'),
+        ...(old ? { from: { id: old.id, title: old.title, open: old.phase !== 'COMPLETE' } } : {}),
+      });
+    }
+  }
+  return out.sort((a, b) => a.project.localeCompare(b.project));
 }
 
 // ── The Team tab: the row's work, one column per state ──

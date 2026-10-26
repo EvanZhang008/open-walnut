@@ -3,8 +3,8 @@ import { describe, it, expect } from 'vitest'
 import type { Task } from '../../src/core/types.js'
 import { buildOrgTree } from '../../src/core/org/org-tree.js'
 import {
-  MAIN_KEY, alertText, buildChannels, channelState, filterChannels, initials, mainTeamColumns, pickChannel,
-  projectRowKey, teamColumns, type AlertProbe,
+  MAIN_KEY, alertText, buildChannels, channelState, filterChannels, initials, mainTeamColumns, movedProjects, pickChannel,
+  projectRowKey, rowOf, teamColumns, type AlertProbe,
 } from '../../web/src/components/org/org-channels-model.js'
 
 const at = (min: number) => new Date(Date.UTC(2026, 9, 25, 12, min)).toISOString()
@@ -194,5 +194,42 @@ describe('org channels', () => {
     // Two CJK words: one character each (test data, escaped).
     expect(initials('\u4e2a\u4eba \u4e8b\u52a1')).toBe('\u4e2a\u4e8b')
     expect(initials('')).toBe('?')
+  })
+
+  it('a project put under another VP is part of that VP\'s row, not a row of its own', () => {
+    // 2026-10-26: six projects moved under one VP still showed as channels of their own.
+    const list: Task[] = [
+      t('hl', 'Marina', 'NEED_ACTION', { org_role: 'lead', title: 'Marina lead', org_leads: ['Insights', 'Events'], ...handedBack('Your next message') }),
+      t('h1', 'Marina', 'NEED_ACTION', { updated_at: at(1), ...handedBack('Your reply') }),
+      t('i1', 'Insights', 'IN_PROGRESS', { updated_at: at(20), user_status: { state: 'working', now: 'Reading the audit' } }),
+      t('i2', 'Insights', 'NEED_ACTION', { updated_at: at(30), user_status: { state: 'needs', source: 'session', ask: 'Approve the cleanup', at: at(30) } }),
+      t('e1', 'Events', 'WAITING', { updated_at: at(5) }),
+      t('il', 'Insights', 'COMPLETE', { org_role: 'lead', title: 'Insights lead' }),
+      t('o1', 'Other', 'TODO', { updated_at: at(2) }),
+    ]
+    const channels = buildChannels(buildOrgTree(list), list, noAlerts)
+    expect(channels.rows.map((r) => r.name)).toEqual(['Marina', 'Other'])
+    const marina = channels.rows[0]!
+    expect(marina.led?.map((l) => l.name).sort()).toEqual(['Events', 'Insights'])
+    // Its work is the VP's: all three projects' teams, counts, asks and news.
+    expect(marina.counts).toMatchObject({ open: 4, running: 1 })
+    expect(marina.alerts.map((a) => a.taskId)).toEqual(['i2'])
+    expect(marina.latest).toBe('Needs you: Approve the cleanup')
+    expect(marina.node?.teams.map((n) => n.id).sort()).toEqual(['e1', 'h1', 'i1', 'i2'])
+    // The chart still has one row per project, each with its own work.
+    expect(channels.projects.map((r) => r.name).sort()).toEqual(['Events', 'Insights', 'Marina', 'Other'])
+    expect(channels.projects.find((r) => r.name === 'Insights')!.counts.open).toBe(2)
+    // A link to the moved project opens its VP; a search by its name finds the VP.
+    expect(rowOf(channels, projectRowKey('Insights'))?.name).toBe('Marina')
+    expect(pickChannel(channels, projectRowKey('Events')).name).toBe('Marina')
+    expect(filterChannels(channels.rows, 'events').map((r) => r.name)).toEqual(['Marina'])
+    // Both sit under "Archived / Moved", each saying where it went and what its own lead did.
+    expect(movedProjects(channels, list).map((m) => [m.project, m.vpName, m.vpKey, m.from?.open])).toEqual([
+      ['Events', 'Marina', projectRowKey('Marina'), undefined],
+      ['Insights', 'Marina', projectRowKey('Marina'), false],
+    ])
+    // Main counts its VPs, not the projects under them.
+    expect(channels.main.latest).toMatch(/^2 leads/)
+    expect(mainTeamColumns(channels.rows).flatMap((c) => c.items.map((i) => i.title)).sort()).toEqual(['Marina', 'Other'])
   })
 })
