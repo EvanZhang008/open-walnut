@@ -15,7 +15,15 @@
  *
  * A server clock, not a daemon's: the host that would have fired a trigger is
  * exactly what may have stopped working.
+ *
+ * An ephemeral test server runs on a COPY of the real tasks: a clock it
+ * inherited belongs to the real Walnut and never fires there (like its paused
+ * cron jobs and its copied Board reminders); a wait set during its own life
+ * does. 2026-10-21: an inherited clock woke a copied task, which resumed the
+ * real task's session id on the test server, so two copies of one session
+ * edited the same working tree.
  */
+import { IS_EPHEMERAL } from '../constants.js';
 import { bootPolicy } from './boot-policy.js';
 import { log } from '../logging/index.js';
 import { bus, EventNames, type BusEvent } from './event-bus.js';
@@ -24,6 +32,10 @@ import type { CronJob } from './cron/types.js';
 import type { WatchingTrigger } from './task-wait-wake.js';
 
 const deadlines = new Map<string, number>();
+/** On an ephemeral server: taskId -> the wait_until it was copied with. */
+let inherited: Map<string, string> | null = null;
+/** The boot scan finished: until then an ephemeral server never arms, so a copied clock cannot slip in first. */
+let scanned = false;
 let timer: ReturnType<typeof setTimeout> | null = null;
 let live = false;
 const RECHECK_MS = 3_600_000;
@@ -39,8 +51,13 @@ export function waitUntilAt(task: Pick<Task, 'phase' | 'wait_until'>): number | 
   return Number.isFinite(at) ? at : null;
 }
 
+/** A clock copied from the real Walnut (ephemeral only), never one set here. */
+function isInherited(task: Pick<Task, 'id' | 'wait_until'>): boolean {
+  return !!inherited && !!task.wait_until && inherited.get(task.id) === task.wait_until;
+}
+
 function track(task: Task): void {
-  const at = waitUntilAt(task);
+  const at = isInherited(task) ? null : waitUntilAt(task);
   if (at === null) deadlines.delete(task.id);
   else deadlines.set(task.id, at);
   arm();
@@ -49,7 +66,7 @@ function track(task: Task): void {
 function arm(): void {
   if (timer) clearTimeout(timer);
   timer = null;
-  if (!live || deadlines.size === 0) return;
+  if (!live || (inherited && !scanned) || deadlines.size === 0) return;
   const next = Math.min(...deadlines.values());
   const delay = Math.max(1_000, Math.min(next - Date.now(), RECHECK_MS));
   timer = setTimeout(() => {
@@ -212,14 +229,20 @@ export async function loadWaitUntilDeadlines(): Promise<void> {
   const tasks = await listTasks();
   for (const task of tasks) {
     const at = waitUntilAt(task);
-    if (at !== null) deadlines.set(task.id, at);
+    if (at === null) continue;
+    // A copied clock: one a task event registered before this scan (a boot-time update) is dropped too.
+    if (inherited) { inherited.set(task.id, task.wait_until!); deadlines.delete(task.id); continue; }
+    deadlines.set(task.id, at);
   }
+  scanned = true;
   arm();
 }
 
 function onTaskEvent(event: BusEvent): void {
   const task = (event.data as { task?: Task } | undefined)?.task;
   if (!task) return;
+  // Once its clock changes (cleared, or set again), the task's wait is this server's own.
+  if (inherited?.has(task.id) && inherited.get(task.id) !== task.wait_until) inherited.delete(task.id);
   if (event.name === EventNames.TASK_DELETED) {
     if (deadlines.delete(task.id)) arm();
     return;
@@ -228,11 +251,16 @@ function onTaskEvent(event: BusEvent): void {
 }
 
 /** Start the timer and its one subscriber (server boot, primary only). Idempotent: the name is overwritten. */
-export function startWaitUntilWatch(): void {
+export function startWaitUntilWatch(opts: { ephemeral?: boolean } = {}): void {
   if (!bootPolicy('wait-until')) return;
-  log.task.info('wait_until: started');
+  inherited = (opts.ephemeral ?? IS_EPHEMERAL) ? new Map() : null;
+  log.task.info('wait_until: started', inherited ? { inheritedClocksPaused: true } : {});
   live = true;
-  void loadWaitUntilDeadlines().catch((err) => log.task.warn('wait_until boot scan failed', { error: errText(err) }));
+  scanned = false;
+  // On an ephemeral server a failed scan leaves the timer off: it cannot tell a copied clock from its own.
+  void loadWaitUntilDeadlines().catch((err) => log.task.warn('wait_until boot scan failed', {
+    error: errText(err), ...(inherited ? { clocksOff: true } : {}),
+  }));
   bus.subscribe(WAIT_UNTIL_SUBSCRIBER, onTaskEvent, {
     global: true,
     interest: [EventNames.TASK_UPDATED, EventNames.TASK_COMPLETED, EventNames.TASK_DELETED],
@@ -243,7 +271,14 @@ export function stopWaitUntilWatch(): void {
   bus.unsubscribe(WAIT_UNTIL_SUBSCRIBER);
   live = false;
   deadlines.clear();
+  inherited = null;
+  scanned = false;
   arm();
+}
+
+/** Test seam: whether the timer is set. */
+export function waitUntilArmed(): boolean {
+  return timer !== null;
 }
 
 /** Test seam: the deadlines the timer currently knows. */

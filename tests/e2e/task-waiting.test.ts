@@ -32,8 +32,9 @@ import { listNotifications } from '../../src/core/notifications/store.js'
 import { MAX_CONSECUTIVE_CHECK_ERRORS } from '../../src/providers/trigger-check-core.js'
 import { getOp } from '../../src/ops/index.js'
 import { applySessionPhase } from '../../src/core/phase.js'
-import { loadWaitUntilDeadlines, sweepWaitUntil, trackedWaitUntil } from '../../src/core/task-wait-until.js'
+import { loadWaitUntilDeadlines, startWaitUntilWatch, stopWaitUntilWatch, sweepWaitUntil, trackedWaitUntil, waitUntilArmed } from '../../src/core/task-wait-until.js'
 import { updateTaskRaw } from '../../src/core/task-manager.js'
+import { bus, EventNames } from '../../src/core/event-bus.js'
 
 const MOCK_CLI = path.resolve(import.meta.dirname, '../providers/mock-claude.mjs')
 
@@ -373,5 +374,38 @@ describe('wait_until: the clock', () => {
     expect(await sweepWaitUntil(Date.now())).toContain(id)
     expect((await task(id)).phase).toBe('NEED_ACTION')
     expect((await task(junkId)).phase).toBe('WAITING')
+  })
+
+  it('on an ephemeral server a copied clock never fires; one set there does', async () => {
+    const created = await req('POST', '/api/tasks', { title: 'Copied clock', project: 'p' })
+    const id = created.json.task?.id ?? created.json.id
+    // A future clock: the timer, if it armed, would wait an hour, so only the sweeps below decide.
+    const copied = new Date(Date.now() + 3_600_000).toISOString()
+    const later = Date.now() + 2 * 3_600_000
+    await updateTaskRaw(id, { phase: 'WAITING', wait_until: copied } as never, { source: 'api' })
+    const copiedTask = await task(id)
+    stopWaitUntilWatch()
+    try {
+      startWaitUntilWatch({ ephemeral: true })
+      // A copied task updated at boot, in the same tick: its clock reaches the watch before the scan, which must not arm the timer.
+      bus.emit(EventNames.TASK_UPDATED, { task: copiedTask }, ['web-ui'], { source: 'api' })
+      expect(trackedWaitUntil().has(id)).toBe(true)
+      expect(waitUntilArmed()).toBe(false)
+      await loadWaitUntilDeadlines()
+      expect(trackedWaitUntil().has(id)).toBe(false)
+      bus.emit(EventNames.TASK_UPDATED, { task: copiedTask }, ['web-ui'], { source: 'api' })
+      expect(trackedWaitUntil().has(id)).toBe(false)
+      expect(await sweepWaitUntil(later)).not.toContain(id)
+      expect((await task(id)).phase).toBe('WAITING')
+      // A wait set during the test server's own life is its own and fires, even at the copied time.
+      expect((await req('PATCH', `/api/tasks/${id}`, { phase: 'TODO' })).status).toBe(200)
+      await updateTaskRaw(id, { phase: 'WAITING', wait_until: copied } as never, { source: 'api', emitEvent: true })
+      await vi.waitFor(() => expect(trackedWaitUntil().has(id)).toBe(true))
+      expect(waitUntilArmed()).toBe(true)
+      expect(await sweepWaitUntil(later)).toContain(id)
+    } finally {
+      stopWaitUntilWatch()
+      startWaitUntilWatch({ ephemeral: false })
+    }
   })
 })
