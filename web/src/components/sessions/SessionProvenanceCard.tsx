@@ -42,7 +42,7 @@ import {
   type SessionEnvelopePeer,
   type SessionEnvelopeSource,
 } from '@open-walnut/history-session-envelope';
-import { resolveRefInIndex } from '@/components/chat/session-mention';
+import { candidateTaskId, resolveRefInIndex } from '@/components/chat/session-mention';
 import {
   ensureSessionMentionIndex,
   getSessionMentionIndex,
@@ -102,7 +102,7 @@ function useResolvedPeer(peer: SessionEnvelopePeer, source?: SessionEnvelopeSour
         fullId: peer.sessionId,
         title: exact?.title || peer.title,
         host: hostLabel(exact?.host) ?? peer.host,
-        ...(exact?.taskId ? { taskId: exact.taskId } : {}),
+        ...(candidateTaskId(exact) ? { taskId: candidateTaskId(exact) } : {}),
         ambiguous: false,
       };
     }
@@ -113,7 +113,7 @@ function useResolvedPeer(peer: SessionEnvelopePeer, source?: SessionEnvelopeSour
         fullId: hit.id,
         title: hit.title || peer.title,
         host: hostLabel(hit.host) ?? peer.host,
-        ...(hit.taskId ? { taskId: hit.taskId } : {}),
+        ...(candidateTaskId(hit) ? { taskId: candidateTaskId(hit) } : {}),
         ambiguous: false,
       };
     }

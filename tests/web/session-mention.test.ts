@@ -10,6 +10,7 @@ import {
   routeMention,
   fuzzyMatch,
   resolveRefInIndex,
+  candidateTaskId,
   type SessionMentionCandidate,
 } from '../../web/src/components/chat/session-mention';
 
@@ -76,5 +77,17 @@ describe('resolveRefInIndex', () => {
     expect(resolveRefInIndex('efgh', pool)?.id).toBe('efgh3333');
     expect(resolveRefInIndex('abcd', pool)).toBeNull(); // ambiguous
     expect(resolveRefInIndex('zzzz', pool)).toBeNull(); // unknown
+  });
+});
+
+describe('candidateTaskId', () => {
+  it('names the task a session works for, else the one it was detached from', () => {
+    expect(candidateTaskId(s({ taskId: 'task-a' }))).toBe('task-a');
+    // The one-session-per-task pass detaches a task's extra sessions (taskId '').
+    expect(candidateTaskId(s({ taskId: '', legacyTaskId: 'task-old' }))).toBe('task-old');
+    expect(candidateTaskId(s({ taskId: 'task-a', legacyTaskId: 'task-old' }))).toBe('task-a');
+    expect(candidateTaskId(s({ taskId: '' }))).toBeUndefined();
+    expect(candidateTaskId(s({}))).toBeUndefined();
+    expect(candidateTaskId(undefined)).toBeUndefined();
   });
 });

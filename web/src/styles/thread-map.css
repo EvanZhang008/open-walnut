@@ -344,6 +344,10 @@
 .thread-map-back:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .thread-map-icon:focus:not(:focus-visible),
 .thread-map-archive:focus:not(:focus-visible) { outline: none; }
+/* WebKit: a keyboard close of the drawer returns focus programmatically, which
+   never matches :focus-visible there; markKeyboardFocus marks the opener instead. */
+.thread-map-icon[data-kb-focus="true"]:focus { outline: 2px solid var(--accent); outline-offset: -2px; }
+.thread-map-rail[data-kb-focus="true"]:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
 
 @media (prefers-reduced-motion: reduce) {
   .thread-map-fold .thread-icon { transition: none; }

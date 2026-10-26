@@ -961,6 +961,9 @@ sessionsRouter.get('/mention-index', async (req: Request, res: Response, next: N
         // id here and shows its task pill, so the receiving human sees WHICH task
         // messaged them. ~20 extra bytes/row.
         taskId: s.taskId ?? '',
+        // A session the one-session-per-task pass detached keeps the task it
+        // worked for: a message it sent back then still came from that task.
+        ...(s.legacyTaskId ? { legacyTaskId: s.legacyTaskId } : {}),
       }))
     res.json({ sessions })
   } catch (err) {

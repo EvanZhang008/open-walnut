@@ -22,6 +22,13 @@ export interface SessionMentionCandidate {
   /** Owning task id, '' when the session has none. Additive — absent on servers
    *  older than the session-envelope card, so every reader must tolerate that. */
   taskId?: string;
+  /** The task a detached session worked for (it no longer owns one). */
+  legacyTaskId?: string;
+}
+
+/** The task a candidate speaks for: its own, else the one it was detached from. */
+export function candidateTaskId(c: SessionMentionCandidate | undefined): string | undefined {
+  return c?.taskId || c?.legacyTaskId || undefined;
 }
 
 /**

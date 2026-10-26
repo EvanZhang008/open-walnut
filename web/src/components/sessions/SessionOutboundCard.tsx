@@ -39,7 +39,7 @@ import {
   type OutboundSend,
 } from './session-outbound';
 import { fetchRequestAsker } from '@/api/sessions';
-import { resolveRefInIndex } from '@/components/chat/session-mention';
+import { candidateTaskId, resolveRefInIndex } from '@/components/chat/session-mention';
 import {
   ensureSessionMentionIndex,
   getSessionMentionIndex,
@@ -114,7 +114,7 @@ function useResolvedTarget(send: OutboundSend): ResolvedTarget {
         shortId: target.sessionId.slice(0, 8),
         title: exact?.title || printedTitle,
         host: hostLabel(exact?.host),
-        ...(target.taskId || exact?.taskId ? { taskId: target.taskId || exact?.taskId } : {}),
+        ...(target.taskId || candidateTaskId(exact) ? { taskId: target.taskId || candidateTaskId(exact) } : {}),
         ambiguous: false,
       };
     }
@@ -127,7 +127,7 @@ function useResolvedTarget(send: OutboundSend): ResolvedTarget {
         shortId: ref,
         title: hit.title || printedTitle,
         host: hostLabel(hit.host),
-        ...(target.taskId || hit.taskId ? { taskId: target.taskId || hit.taskId } : {}),
+        ...(target.taskId || candidateTaskId(hit) ? { taskId: target.taskId || candidateTaskId(hit) } : {}),
         ambiguous: false,
       };
     }
