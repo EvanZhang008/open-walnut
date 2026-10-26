@@ -966,6 +966,7 @@ export function parseSessionMessages(content: string, opts?: ParseSessionMessage
     parentToolUseId?: string;
     walnutMessageId?: string;
     sourceUuid?: string;
+    unsettled?: boolean;
     injected?: boolean;
     systemVariant?: 'compact' | 'error' | 'info';
     systemDetail?: string;
@@ -1105,6 +1106,41 @@ export function parseSessionMessages(content: string, opts?: ParseSessionMessage
       twin.claimed = true;
       skipEnqueueIndices.add(i);
     }
+  }
+
+  // ── Still-queued enqueues ──
+  // An enqueue the CLI has not yet taken from its queue (no dequeue/remove after it,
+  // FIFO) has no place yet: the CLI writes its user line where it RUNS it, after
+  // whatever turn it waited behind (a permission deny's reply, say). A read in that
+  // window emits it as a Pattern B row at the enqueue; once the user line lands, the
+  // pass above skips it as Pattern A and the row moves. Such a row is unsettled, so
+  // the client re-asks for it and a vanished id rebuilds instead of keeping both
+  // (2026-10-25: a message sent over a Write card showed twice, above and below the
+  // deny reply). Only the unsettled flag depends on this count: an orphan enqueue a
+  // dead process left behind just stays unsettled, which costs one id per delta.
+  // A dequeue is logged BEFORE its user line (the CLI runs the prompt's hooks in
+  // between), so an enqueue taken with nothing written after its dequeue is still
+  // unplaced too; anything the CLI writes after it means its line is in.
+  const stillQueued = new Set<number>();
+  {
+    const queue: number[] = [];
+    const taken: Array<{ at: number; by: number }> = [];
+    let lastLine = -1;
+    for (let i = 0; i < rawMessages.length; i++) {
+      const raw = rawMessages[i];
+      if (raw.type === 'user' || raw.type === 'assistant') lastLine = i;
+      if (raw.type !== 'queue-operation') continue;
+      if (raw.operation === 'enqueue') queue.push(i);
+      else if (raw.operation === 'dequeue') {
+        const at = queue.shift();
+        if (at !== undefined) taken.push({ at, by: i });
+      } else if (raw.operation === 'remove') {
+        const at = raw.content ? queue.findIndex(j => rawMessages[j].content === raw.content) : -1;
+        queue.splice(at >= 0 ? at : 0, 1);
+      }
+    }
+    for (const i of queue) stillQueued.add(i);
+    for (const t of taken) if (t.by > lastLine) stillQueued.add(t.at);
   }
 
   // ── Batched-twin pass (inc-1784349380504) ──
@@ -1276,6 +1312,7 @@ export function parseSessionMessages(content: string, opts?: ParseSessionMessage
           role: 'user',
           timestamp: raw.timestamp ?? new Date().toISOString(),
           ...(sourceUuid ? { sourceUuid } : {}),
+          ...(stillQueued.has(i) ? { unsettled: true } : {}),
           contentBlocks: [{ type: 'text' as const, text: raw.content }],
         });
       }
@@ -1577,6 +1614,7 @@ export function parseSessionMessages(content: string, opts?: ParseSessionMessage
       ...(msg.usage ? { usage: msg.usage } : {}),
       ...(msg.walnutMessageId ? { walnutMessageId: msg.walnutMessageId } : {}),
       ...(msg.sourceUuid ? { sourceUuid: msg.sourceUuid } : {}),
+      ...(msg.unsettled ? { unsettled: true } : {}),
       ...(msg.injected && msg.role === 'user' ? { injected: true } : {}),
       ...(msg.systemVariant ? { systemVariant: msg.systemVariant } : {}),
       ...(msg.systemDetail ? { systemDetail: msg.systemDetail } : {}),
