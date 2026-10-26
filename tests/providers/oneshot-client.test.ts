@@ -12,6 +12,7 @@ import {
   type OneShotConn, type OneShotExit,
 } from '../../src/providers/oneshot-client.js'
 import { markLinkFailure } from '../../src/providers/link-failure.js'
+import { guardedPath } from '../setup/exec-guard.js'
 
 const FAKE = path.resolve(__dirname, '../helpers/oneshot-fake-claude.cjs')
 
@@ -80,7 +81,7 @@ describe('one-shot client', () => {
       _setOneShotDaemonForTest(() => conn)
       let exit: OneShotExit | null = null
       const handle = await startOneShot(
-        { command: process.execPath, args: [FAKE, '-p'], cwd: os.tmpdir(), env: { PATH: '/usr/bin:/bin' }, input: 'x', endInput: true },
+        { command: process.execPath, args: [FAKE, '-p'], cwd: os.tmpdir(), env: { PATH: guardedPath([], '/usr/bin:/bin') }, input: 'x', endInput: true },
         { onExit: (e) => { exit = e } },
       )
       await until(() => exit !== null, 20_000)
@@ -104,7 +105,7 @@ describe('one-shot client', () => {
     _setOneShotDaemonForTest(() => conn)
     let exit: OneShotExit | null = null
     const handle = await startOneShot(
-      { command: process.execPath, args: [FAKE, '-p'], cwd: os.tmpdir(), env: { PATH: '/usr/bin:/bin' }, input: 'y'.repeat(9 * 1024 * 1024), endInput: true },
+      { command: process.execPath, args: [FAKE, '-p'], cwd: os.tmpdir(), env: { PATH: guardedPath([], '/usr/bin:/bin') }, input: 'y'.repeat(9 * 1024 * 1024), endInput: true },
       { onExit: (e) => { exit = e } },
     )
     expect(handle.via).toBe('local')
@@ -129,7 +130,7 @@ describe('one-shot client', () => {
     const lines: string[] = []
     let exit: OneShotExit | null = null
     const handle = await startOneShot(
-      { command: process.execPath, args: [FAKE, '-p'], cwd: os.tmpdir(), env: { PATH: '/usr/bin:/bin', ONESHOT_PROBE: 'local' }, input: 'here', endInput: true },
+      { command: process.execPath, args: [FAKE, '-p'], cwd: os.tmpdir(), env: { PATH: guardedPath([], '/usr/bin:/bin'), ONESHOT_PROBE: 'local' }, input: 'here', endInput: true },
       { onLine: (l) => lines.push(l), onExit: (e) => { exit = e } },
     )
     expect(handle.via).toBe('local')
@@ -147,7 +148,7 @@ describe('one-shot client', () => {
     expect(conn.sent[0]).toMatchObject({ cmd: 'oneshot.prewarm', params: { command: '/x', warmKey: 'k1' } })
 
     _setOneShotDaemonForTest(() => null)
-    const spec = { command: process.execPath, args: [FAKE, '-p', '--input-format', 'stream-json'], cwd: os.tmpdir(), env: { PATH: '/usr/bin:/bin' }, warmKey: 'local-k' }
+    const spec = { command: process.execPath, args: [FAKE, '-p', '--input-format', 'stream-json'], cwd: os.tmpdir(), env: { PATH: guardedPath([], '/usr/bin:/bin') }, warmKey: 'local-k' }
     prewarmOneShot(spec)
     await new Promise((r) => setTimeout(r, 800))
     let exit: OneShotExit | null = null

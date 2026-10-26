@@ -15,6 +15,7 @@ import * as vm from 'node:vm'
 import { createOneShotCore, type OneShotChild } from '../../src/providers/oneshot-core.js'
 import { ADVERTISED_DAEMON_CAPABILITIES, REQUIRED_DAEMON_CAPABILITIES } from '../../src/providers/daemon-capabilities.js'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
+import { guardedPath } from '../setup/exec-guard.js'
 
 const ROOT = path.resolve(__dirname, '../..')
 const read = (rel: string) => fs.readFileSync(path.join(ROOT, rel), 'utf8')
@@ -78,7 +79,7 @@ describe('the inlined factory runs like the imported one', () => {
         if (ev === 'oneshot.exit') exit = data
       },
     })
-    core.run('sock', { runId: 'r1', command: process.execPath, args: [FAKE, '-p'], cwd: os.tmpdir(), env: { PATH: '/usr/bin:/bin' }, input: 'twin', endInput: true })
+    core.run('sock', { runId: 'r1', command: process.execPath, args: [FAKE, '-p'], cwd: os.tmpdir(), env: { PATH: guardedPath([], '/usr/bin:/bin') }, input: 'twin', endInput: true })
     const until = Date.now() + 20_000
     while (!exit && Date.now() < until) await new Promise((r) => setTimeout(r, 25))
     expect(core.stats()).toEqual({ runs: 0, pool: 0 })

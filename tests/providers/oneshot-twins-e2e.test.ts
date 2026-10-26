@@ -147,7 +147,7 @@ describe.each(TWINS)('$name', (twin) => {
     const c = await client()
     const daemonPid = proc!.pid!
     const cwd = fs.realpathSync(os.tmpdir())
-    const env = { PATH: '/usr/bin:/bin', HOME: os.homedir(), ONESHOT_PROBE: 'probe-é中' }
+    const env = { PATH: guardedPath([], '/usr/bin:/bin'), HOME: os.homedir(), ONESHOT_PROBE: 'probe-é中' }
 
     // Text mode: the prompt on stdin, closed after it; env and cwd are the caller's.
     const text = await c.rpc({ cmd: 'oneshot.run', runId: 't1', command: process.execPath, args: [FAKE, '-p'], cwd, env, input: 'hello 世界', endInput: true })
