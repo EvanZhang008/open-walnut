@@ -72,9 +72,9 @@ describe('describeSchedule for a cron in another zone', () => {
   // routine read "Every day at 9:00 AM" beside "next run tomorrow at 2:00 am".
   const here = Intl.DateTimeFormat().resolvedOptions().timeZone
   const away = here === 'UTC' ? 'Asia/Shanghai' : 'UTC'
-  const short = away === 'UTC' ? 'UTC' : 'GMT+8'
+  const short = away === 'UTC' ? 'UTC' : 'GMT+8' // a UTC viewer (CI) gets the GMT+8 case, so escape its + below
   it('names the zone when it is not the viewer\'s', () => {
-    expect(describeSchedule({ kind: 'cron', expr: '0 9 * * *', tz: away })).toMatch(new RegExp(`^Every day at 9:00\\sAM ${short}$`))
+    expect(describeSchedule({ kind: 'cron', expr: '0 9 * * *', tz: away })).toMatch(new RegExp(`^Every day at 9:00\\sAM ${short.replace('+', '\\+')}$`))
     expect(describeSchedule({ kind: 'cron', expr: '5 4 1 * *', tz: away })).toBe(`Cron: 5 4 1 * * ${short}`)
   })
   it('says nothing more in the viewer\'s own zone, or with no zone', () => {
