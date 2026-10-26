@@ -6,7 +6,7 @@
  *   - a lead opens on its own chat (the first tab), then its Team by the user's status (Needs you /
  *     Working / Waiting, each task with its status line) and its Board; the
  *     composer under the Board sends to the lead and the chat shows the answer
- *   - Answer on a waiting question opens that task's session beside the page
+ *   - a waiting question's task name opens that task's session beside the page
  *   - search, a pick that survives a reload, live state, the keyboard, and the org chart
  *   - the rows hold still while the pointer is over the list, and re-sort once it leaves
  *   - another page and back (or a reload of /org) shows the same place: the pick, its tab, the
@@ -113,7 +113,9 @@ test('the sidebar opens Main and the leads; a lead waiting on the user comes fir
   // the user, the task not started waits.
   await expect(detail.getByTestId('org-detail-counts')).toContainText('1 needs you')
   await expect(detail.getByTestId('org-detail-counts')).toContainText('1 waiting')
-  await expect(detail.getByTestId('org-alerts')).toContainText(`Asks you: Alpha ask ${STAMP}`)
+  const askRow = detail.locator(`[data-testid="org-alert"][data-task-id="${ids.ask}"]`)
+  await expect(askRow.getByTestId('org-alert-link')).toHaveText(`Alpha ask ${STAMP}`)
+  await expect(askRow.locator('.org-alert-ask')).toHaveText('Asks you a question')
   // A node opens on its chat, first of the tabs; its Board is one click away.
   await expect(detail.getByTestId('org-tab-chat')).toHaveAttribute('aria-selected', 'true')
   // The Board tab joins once the lead's board is known.
@@ -144,7 +146,8 @@ test('a lead\'s chat is in the page, and the composer under its Board sends to i
   const detail = page.getByTestId('org-detail')
   await detail.getByTestId('org-tab-chat').click()
   const chat = detail.locator(`[data-testid="org-chat"] .session-panel[data-session-id="${ids.leadSid}"]`)
-  await expect(chat).toBeVisible()
+  // The panel's code and its session load on first open: slower on a loaded machine.
+  await expect(chat).toBeVisible({ timeout: 30_000 })
   await expect(chat.getByText(`I processed your message: Alpha lead ready ${STAMP}`).first()).toBeVisible({ timeout: 60_000 })
 
   await detail.getByTestId('org-tab-board').click()
@@ -156,12 +159,12 @@ test('a lead\'s chat is in the page, and the composer under its Board sends to i
   await expect(page).toHaveURL(/tab=chat/)
 })
 
-test('Answer on a waiting question opens that task\'s session beside the page', async ({ page }) => {
+test('the name of a task waiting on a question opens its session beside the page', async ({ page }) => {
   await openOrg(page)
   await row(page, ALPHA).click()
   const alert = page.locator(`[data-testid="org-alert"][data-task-id="${ids.ask}"]`)
   await expect(alert).toHaveAttribute('data-kind', 'question')
-  await alert.getByRole('button', { name: 'Answer' }).click()
+  await alert.getByTestId('org-alert-link').click()
   // The user stays on the Org page (org-side-panel.spec.ts covers the panel itself).
   await expect(page).toHaveURL(/\/org\?/)
   await expect(page.getByTestId('org-side')).toHaveAttribute('data-session-id', ids.askSid, { timeout: 30_000 })
@@ -250,7 +253,7 @@ test('the rows hold still under the pointer, and take their new order once it le
   }, { timeout: 15_000 }).toBe(true)
 })
 
-test('a task whose Board asks the user to choose needs them: its row, its line, the ask, and Answer opens the Board', async ({ page, request }) => {
+test('a task whose Board asks the user to choose needs them: its row, its line, the ask, and its name opens the Board', async ({ page, request }) => {
   // No prompt in any session: only the task's status says it needs the user (src/core/user-status.ts).
   const project = `Org page choice ${STAMP}`
   const id = await createTask(request, `Renewal ${STAMP}`, project)
@@ -277,7 +280,8 @@ test('a task whose Board asks the user to choose needs them: its row, its line, 
   await expect(alert).toHaveAttribute('data-kind', 'needs')
   await expect(alert.locator('.org-alert-main')).toHaveText(`Renewal ${STAMP}`)
   await expect(alert.locator('.org-alert-ask')).toHaveText(`Pick the renewal date ${STAMP}`)
-  await alert.getByRole('button', { name: 'Answer' }).click()
+  // The task's name leads to where the ask lives: the Board.
+  await alert.getByTestId('org-alert-link').click()
   await expect(page.getByTestId('org-tab-board')).toHaveAttribute('aria-selected', 'true')
   await expect(page.getByTestId('board-status-answer')).toBeVisible({ timeout: 30_000 })
 })
@@ -293,7 +297,7 @@ async function letterFrom(request: APIRequestContext, taskId: string, subject: s
     .toBe('letter')
 }
 
-test('a task waiting on a decision letter needs the user: Answer opens the letter, in its chat or beside the page', async ({ page, request }) => {
+test('a task waiting on a decision letter needs the user: its name opens the letter, in its chat or beside the page', async ({ page, request }) => {
   // The row's own task: its chat. A task under a row with no lead: beside the page.
   const project = `Org page letter ${STAMP}`
   const id = await createTask(request, `Lease ${STAMP}`, project)
@@ -313,7 +317,7 @@ test('a task waiting on a decision letter needs the user: Answer opens the lette
   await expect(page.getByTestId('org-tab-chat')).toHaveAttribute('aria-selected', 'true')
   const alert = page.getByTestId('org-alert').filter({ hasText: `Lease ${STAMP}` })
   await expect(alert.locator('.org-alert-ask')).toHaveText(`Sign the lease ${STAMP}`)
-  await alert.getByRole('button', { name: 'Answer' }).click()
+  await alert.getByTestId('org-alert-link').click()
   const chat = page.getByTestId('org-chat')
   await expect(chat.locator('.session-inbox-pane')).toBeVisible({ timeout: 30_000 })
   await expect(chat.locator('.session-inbox-pane')).toContainText(`Sign the lease ${STAMP}`)
@@ -324,7 +328,7 @@ test('a task waiting on a decision letter needs the user: Answer opens the lette
   await row(page, other).click()
   const beside = page.getByTestId('org-alert').filter({ hasText: `Deposit ${STAMP}` })
   await expect(beside.locator('.org-alert-ask')).toHaveText(`Send the deposit ${STAMP}`)
-  await beside.getByRole('button', { name: 'Answer' }).click()
+  await beside.getByTestId('org-alert-link').click()
   const side = page.getByTestId('org-side')
   await expect(side.locator('.session-inbox-pane')).toBeVisible({ timeout: 30_000 })
   await expect(side.locator('.session-inbox-pane')).toContainText(`Send the deposit ${STAMP}`)
@@ -426,7 +430,8 @@ test('the org\'s name and the user\'s role are renamed in place, kept, and the C
   // Blank goes back to the defaults (and leaves the shared fixture as it was).
   const reset = await request.put('/api/v1/org/settings', { data: { name: '', founderTitle: '' } })
   expect(reset.ok()).toBe(true)
-  await expect(role).toHaveText('Founder')
+  // The page hears it live (config:changed): slower on a loaded machine.
+  await expect(role).toHaveText('Founder', { timeout: 20_000 })
   await page.keyboard.press('Escape')
-  await expect(page.getByTestId('org-name')).toHaveText('Org')
+  await expect(page.getByTestId('org-name')).toHaveText('Org', { timeout: 20_000 })
 })

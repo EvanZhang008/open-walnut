@@ -38,6 +38,9 @@ import { OrgSidePanel, parseSideTarget, sideTargetParam, type OrgSideTarget } fr
 import {
   MAIN_KEY, buildChannels, filterChannels, flattenNodes, movedProjects, pickChannel, projectRowKey, rowOf, type AlertProbe, type ChannelRow,
 } from '@/components/org/org-channels-model';
+import {
+  ANSWERED_HOLD_MS, promptAnswered, promptKey, settleHolds, statusSig, withAnswered, type AnsweredHolds,
+} from '@/components/org/org-answered';
 import '@/styles/org-page.css';
 
 const TABS: readonly OrgTab[] = ['board', 'team', 'chat'];
@@ -78,7 +81,33 @@ export function OrgPage() {
   const [chartStart, setChartStart] = useState<ChartStart | null>(null);
   const openChart = useCallback((start?: ChartStart) => { setChartStart(start ?? null); setChartOpen(true); }, []);
 
-  const tree = useMemo(() => buildOrgTree(tasks), [tasks]);
+  /** Asks answered from their row, by task: what the task showed then (org-answered.ts). */
+  const [answered, setAnswered] = useState<AnsweredHolds>(() => new Map());
+  const allTasks = tasks;
+  const onAnswered = useCallback((taskId: string) => {
+    const task = allTasks.find((t) => t.id === taskId);
+    const hold = { sig: statusSig(task), probe: task ? promptKey(probe(task)) : '', until: Date.now() + ANSWERED_HOLD_MS };
+    setAnswered((prev) => new Map(prev).set(taskId, hold));
+  }, [allTasks]);
+  // A hold ends when the task's status or its session's prompt moves (a new ask shows at once).
+  useEffect(() => {
+    setAnswered((prev) => settleHolds(prev, allTasks, (t) => promptKey(probe(t)), Date.now()));
+  }, [allTasks, epoch]);
+  // A held answer lapses on its own: the minute clock is too coarse for a one-minute hold.
+  useEffect(() => {
+    if (!answered.size) return;
+    const next = Math.min(...[...answered.values()].map((a) => a.until));
+    const id = window.setTimeout(() => setAnswered((prev) => new Map([...prev].filter(([, a]) => a.until > Date.now()))), Math.max(0, next - Date.now()) + 50);
+    return () => window.clearTimeout(id);
+  }, [answered]);
+  const shownTasks = useMemo(() => withAnswered(allTasks, answered, Date.now()), [allTasks, answered]);
+  // The prompt it answered is gone at once too, until the session's status catches up.
+  const answeredProbe = useMemo<AlertProbe>(() => (task) => {
+    const p = probe(task);
+    return promptAnswered(answered, task.id, promptKey(p), Date.now()) ? null : p;
+  }, [answered]);
+
+  const tree = useMemo(() => buildOrgTree(shownTasks), [shownTasks]);
   // The org's own tasks: Main, the leads, and every task under a project.
   const orgTasks = useMemo(() => {
     const ids = new Set<string>(tree.main ? [tree.main.id] : []);
@@ -86,19 +115,19 @@ export function OrgPage() {
       if (p.lead) ids.add(p.lead.id);
       for (const n of flattenNodes(p.teams)) ids.add(n.id);
     }
-    return tasks.filter((t) => ids.has(t.id));
-  }, [tree, tasks]);
+    return shownTasks.filter((t) => ids.has(t.id));
+  }, [tree, shownTasks]);
   // The status epoch moves on every session's every change: only what the org waits on matters
   // here, so the rows are rebuilt when that changes, not on each streamed line.
   const alertSig = useMemo(
-    () => orgTasks.map((t) => { const a = probe(t); return a ? `${t.id}:${a.kind}:${a.tool ?? ''}` : ''; }).filter(Boolean).join('|'),
+    () => orgTasks.map((t) => { const a = answeredProbe(t); return a ? `${t.id}:${a.kind}:${a.tool ?? ''}` : ''; }).filter(Boolean).join('|'),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [orgTasks, epoch],
+    [orgTasks, epoch, answeredProbe],
   );
   const channels = useMemo(
-    () => buildChannels(tree, tasks, probe),
+    () => buildChannels(tree, shownTasks, answeredProbe),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- alertSig stands for the status store
-    [tree, tasks, alertSig],
+    [tree, shownTasks, alertSig],
   );
 
   // The status store only knows sessions someone asked about: ask for the org's.
@@ -311,12 +340,13 @@ export function OrgPage() {
             key={selected.key}
             row={selected}
             rows={channels.rows}
-            tasks={tasks}
+            tasks={shownTasks}
             initialTab={nodeParam === selected.key ? urlTab : null}
             onTabChange={setTab}
             onSelect={select}
             onOpenTask={openTask}
             onOpenSession={openSession}
+            onAnswered={onAnswered}
             onStartChat={(row) => { void startChat(row); }}
             {...(phone ? { onBack: back } : {})}
             now={now}

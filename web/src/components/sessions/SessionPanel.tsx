@@ -980,6 +980,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
     const onInsert = (e: Event) => {
       const detail = (e as CustomEvent<ComposerInsertDetail>).detail;
       if (!detail || detail.sessionId !== sessionId || detail.handled) return;
+      if (detail.within && !(panelRef.current && detail.within.contains(panelRef.current))) return;
       detail.handled = true;
       const rootKey = sessionDraftKey(sessionId);
       // "Snooze until something happens" names its skill as a Claude Code

@@ -3,7 +3,8 @@
  *
  *   header   who it is, its counts, when its work last moved; tabs
  *   Latest   the row's line: what needs the user, else what moves
- *   Needs you  every prompt, failure or status ask (a letter, a Board choice) in its work, each with Open
+ *   Needs you  every prompt, failure or status ask (a letter, a Board choice) in its work: its task's
+ *            name opens it, Quote puts it in this node's chat, Answer answers it in place (OrgAlertAnswer)
  *   Board    the Board its lead keeps (TaskBoardPane), when it keeps one
  *   Team     its work by the user's status (Needs you / Working / Waiting), each with its line
  *   Chat     its own session (SessionPanel), or a way to start one
@@ -18,11 +19,14 @@ import { useSessionSend } from '@/hooks/useSessionSend';
 import { resolveTaskSessionId } from '@/utils/session-status';
 import { timeAgo } from '@/utils/time';
 import { OrgComposerBar } from './OrgComposerBar';
+import { OrgAlertAnswer } from './OrgAlertAnswer';
+import { holdOrder } from './hold-order';
+import { COMPOSER_INSERT_EVENT, type ComposerInsertDetail } from '@/utils/composer-insert';
 import { recentMainStart } from './ask-main';
 import { OrgAvatar } from './OrgChannelList';
 import { useHasBoard } from './useBoardOwner';
 import {
-  alertText, mainTeamColumns, teamColumns, type ChannelRow, type OrgAlertView, type TeamColumn,
+  mainTeamColumns, teamColumns, type ChannelRow, type OrgAlertView, type TeamColumn,
 } from './org-channels-model';
 
 export type OrgTab = 'board' | 'team' | 'chat';
@@ -40,6 +44,8 @@ interface Props {
   onOpenTask: (taskId: string, opts?: { inbox?: boolean }) => void;
   /** Open a session a chat names: the page's side panel. */
   onOpenSession: (sessionId: string) => void;
+  /** An ask answered from its row: the page counts it answered until the server's status moves. */
+  onAnswered: (taskId: string) => void;
   /** Start a chat with this node, which has no session yet. */
   onStartChat: (row: ChannelRow) => void;
   /** Phone: back to the list. */
@@ -49,8 +55,11 @@ interface Props {
 
 /** An ask its own chat shows: a prompt, a failure, its words. A letter or a Board choice is elsewhere. */
 const shownInChat = (a: OrgAlertView) => a.kind !== 'needs' || (a.source !== 'letter' && a.source !== 'choice');
-const answers = (a: OrgAlertView) => a.kind === 'question' || a.kind === 'permission'
-  || (a.kind === 'needs' && (a.source === 'prompt' || a.source === 'letter' || a.source === 'choice'));
+/** What the row says under the task's name: the ask in its own words, else what kind of ask it is. */
+const askLine = (a: OrgAlertView): string => a.ask || (a.kind === 'question' ? 'Asks you a question'
+  : a.kind === 'permission' ? `Wants approval${a.tool ? ` (${a.tool})` : ''}` : a.kind === 'error' ? 'Its session failed' : 'Needs you');
+/** The quote Quote puts in the chat: which task, and what it asks. */
+export const alertQuote = (a: OrgAlertView): string => `> ${a.title}: ${askLine(a)}\n\n`;
 
 const COLUMN_DOT: Record<TeamColumn['key'], string> = {
   needs: 'var(--error, #FF3B30)', working: 'var(--success, #34C759)', waiting: 'var(--fg-muted, #86868B)',
@@ -69,19 +78,58 @@ function CountPills({ row }: { row: ChannelRow }) {
   );
 }
 
-function AlertList({ alerts, onOpen, compact }: { alerts: readonly OrgAlertView[]; onOpen: (a: OrgAlertView) => void; compact?: boolean }) {
+/** One row per ask (2026-10-26, the user: "it need to show the task link clickable, just 2 button,
+ *  quote just quote ... and answer"): the task's name is a link to it, Quote and Answer. */
+function AlertList({ alerts, tasks, onOpen, onQuote, canQuote, onAnswered, compact }: {
+  alerts: readonly OrgAlertView[];
+  tasks: readonly Task[];
+  onOpen: (a: OrgAlertView) => void;
+  onQuote: (a: OrgAlertView) => void;
+  canQuote: boolean;
+  onAnswered: (taskId: string) => void;
+  compact?: boolean;
+}) {
+  const byId = useMemo(() => new Map(tasks.map((t) => [t.id, t])), [tasks]);
+  // Under the pointer the rows keep their order and a new ask joins at the end, so a click lands
+  // on the row aimed at (as the VP list does).
+  const [held, setHeld] = useState<string[] | null>(null);
+  const shown = useMemo(
+    () => holdOrder(alerts.map((a) => ({ key: a.taskId, a })), held).map((x) => x.a),
+    [alerts, held],
+  );
   return (
-    <div className={`org-alerts${compact ? ' is-compact' : ''}`} data-testid="org-alerts" role="region" aria-label="Needs you">
-      {alerts.map((a) => (
-        <div key={a.taskId} className="org-alert" data-testid="org-alert" data-task-id={a.taskId} data-kind={a.kind}>
+    <div
+      className={`org-alerts${compact ? ' is-compact' : ''}`}
+      data-testid="org-alerts"
+      role="region"
+      aria-label="Needs you"
+      onPointerEnter={() => setHeld(alerts.map((a) => a.taskId))}
+      onPointerLeave={() => setHeld(null)}
+    >
+      {shown.map((a) => (
+        <div key={a.taskId} className="org-alert" data-testid="org-alert" data-task-id={a.taskId} data-kind={a.kind} {...(a.source ? { 'data-source': a.source } : {})}>
           <span className="org-alert-label">Needs you</span>
           <span className="org-alert-text">
-            <span className="org-alert-main">{a.kind === 'needs' ? a.title : alertText(a)}</span>
-            {a.ask && <span className="org-alert-ask" title={a.ask}>{a.ask}</span>}
+            <a
+              className="org-alert-main org-alert-link"
+              data-testid="org-alert-link"
+              href={`/tasks/${encodeURIComponent(a.taskId)}`}
+              title={`Open ${a.title}`}
+              onClick={(e) => { e.preventDefault(); onOpen(a); }}
+            >{a.title}</a>
+            <span className="org-alert-ask" title={askLine(a)}>{askLine(a)}</span>
           </span>
-          <button type="button" className="btn btn-sm btn-primary" onClick={() => onOpen(a)}>
-            {answers(a) ? 'Answer' : 'Open'}
-          </button>
+          <span className="org-alert-actions">
+            <button
+              type="button"
+              className="btn btn-sm"
+              data-testid="org-alert-quote"
+              disabled={!canQuote}
+              title={canQuote ? 'Quote it in this chat, to talk it over here' : 'Start a chat here first'}
+              onClick={() => onQuote(a)}
+            >Quote</button>
+            <OrgAlertAnswer alert={a} task={byId.get(a.taskId)} onAnswered={onAnswered} />
+          </span>
         </div>
       ))}
     </div>
@@ -119,7 +167,7 @@ function TeamBoard({ columns, onPick, emptyText }: {
   );
 }
 
-export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabChange, onSelect, onOpenTask, onOpenSession, onStartChat, onBack, now }: Props) {
+export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabChange, onSelect, onOpenTask, onOpenSession, onAnswered, onStartChat, onBack, now }: Props) {
   const contact = useMemo(() => (row.contactId ? tasks.find((t) => t.id === row.contactId) : undefined), [tasks, row.contactId]);
   // A Main started a moment ago by a quick action: its session before the store has it.
   const launch = row.kind === 'main' ? recentMainStart(row.contactId) : null;
@@ -183,8 +231,8 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabChange, onSel
     }
     return false;
   };
-  /** Where the ask can be answered: a choice on this node's Board, a letter in its session's
-   *  Inbox tab, anything else in its chat (this node's, or the task's beside the page). */
+  /** The task's name: where the ask lives. A choice on this node's Board, a letter in its
+   *  session's Inbox tab, anything else in its chat (this node's, or the task's beside the page). */
   const openAlert = (a: OrgAlertView) => {
     const own = a.taskId === row.contactId;
     // The Board may still be loading (null): its tab falls back to Team if there is none.
@@ -197,6 +245,32 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabChange, onSel
     }
     onOpenTask(a.taskId);
   };
+  /** Quote: the ask into this node's chat composer, to answer it in the chat. The chat may need
+   *  to open first, so the quote waits for its panel (which takes COMPOSER_INSERT_EVENT). */
+  const [quote, setQuote] = useState<{ sid: string; text: string } | null>(null);
+  const chatHostRef = useRef<HTMLDivElement>(null);
+  const quoteAlert = (a: OrgAlertView) => {
+    if (!sessionId) return;
+    if (shown !== 'chat') pick('chat');
+    setQuote({ sid: sessionId, text: alertQuote(a) });
+  };
+  useEffect(() => {
+    if (!quote || shown !== 'chat' || quote.sid !== sessionId) return;
+    // The panel registers on mount; a frame later covers a panel still mounting. 'lead': the
+    // quote starts the message and what was typed stays after it, as the panel's own Quote does.
+    let tries = 0;
+    let timer: number | undefined;
+    const put = () => {
+      // Only this chat's panel takes it: a Home column of the same session stays mounted behind the page.
+      const host = chatHostRef.current;
+      const detail: ComposerInsertDetail = { sessionId: quote.sid, text: quote.text, mode: 'lead', handled: false, ...(host ? { within: host } : {}) };
+      if (host) window.dispatchEvent(new CustomEvent<ComposerInsertDetail>(COMPOSER_INSERT_EVENT, { detail }));
+      if (detail.handled || ++tries >= 20) { setQuote(null); return; }
+      timer = window.setTimeout(put, 100);
+    };
+    put();
+    return () => { if (timer !== undefined) window.clearTimeout(timer); };
+  }, [quote, shown, sessionId]);
   const lastMoved = row.lastAt ? timeAgo(new Date(row.lastAt).toISOString(), { now }) : '';
   const tabId = (t: OrgTab) => `org-tab-${t}-${row.key}`;
   const alertsShown = shown === 'chat' ? row.alerts.filter((a) => a.taskId !== row.contactId || !shownInChat(a)) : row.alerts;
@@ -236,7 +310,9 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabChange, onSel
         {row.latestTask && <span className="org-muted"> · {row.latestTask}</span>}
       </div>
       {/* On the chat, the contact's own prompt is in view already; its letter or choice is not, so it stays. */}
-      {alertsShown.length > 0 && <AlertList alerts={alertsShown} onOpen={openAlert} compact={shown === 'chat'} />}
+      {alertsShown.length > 0 && (
+        <AlertList alerts={alertsShown} tasks={tasks} onOpen={openAlert} onQuote={quoteAlert} canQuote={!!sessionId} onAnswered={onAnswered} compact={shown === 'chat'} />
+      )}
 
       <div
         ref={bodyRef}
@@ -267,7 +343,7 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabChange, onSel
           />
         )}
         {shown === 'chat' && (sessionId ? (
-          <div className="org-chat-host" data-testid="org-chat">
+          <div ref={chatHostRef} className="org-chat-host" data-testid="org-chat">
             <SessionPanel key={sessionId} sessionId={sessionId} embedded focusComposer={focusChat} inboxRequest={chatInbox?.sid === sessionId ? chatInbox.n : 0} onTaskClick={openChip} onSessionClick={onOpenSession} />
           </div>
         ) : (

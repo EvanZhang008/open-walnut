@@ -1,7 +1,7 @@
 /**
  * The Org page keeps the user on it (web/src/components/org/OrgSidePanel.tsx): a task clicked
  * on the page opens in a side panel, and the lead list and the detail stay where they are.
- *   - a Team row, a Board chip, and Answer on a waiting question open beside the page
+ *   - a Team row, a Board chip, and a waiting question's task name open beside the page
  *   - a task with no session shows what it is and how to start one; × closes the panel
  *   - a reload keeps the opened task; Home opens it on home instead
  *   - a narrow window lays the panel over the detail; a phone shows it alone and Back returns
@@ -127,11 +127,11 @@ test('a Board chip opens its task beside the page', async ({ page }) => {
   await expect(page).toHaveURL(/\/org\?/)
 })
 
-test('Answer on a waiting question opens it beside the page, question and all', async ({ page }) => {
+test('the name of a task waiting on a question opens it beside the page, question and all', async ({ page }) => {
   await openLead(page)
   const alert = page.locator(`[data-testid="org-alert"][data-task-id="${ids.ask}"]`)
   await expect(alert).toHaveAttribute('data-kind', 'question', { timeout: 30_000 })
-  await alert.getByRole('button', { name: 'Answer' }).click()
+  await alert.getByTestId('org-alert-link').click()
   await expect(side(page)).toHaveAttribute('data-session-id', ids.askSid)
   await expect(side(page).getByText('Which validation target?').first()).toBeVisible({ timeout: 30_000 })
   await expect(page).toHaveURL(/\/org\?/)

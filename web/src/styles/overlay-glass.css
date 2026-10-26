@@ -67,6 +67,7 @@ html:root {
   html .cmd-menu,
   html .cmd-confirm-popover,
   html .cron-confirm-popover,
+  html .org-answer-menu,
   /* Its "more below" fade is a mask, which would clear the glass at the foot. */
   html .wn-context-menu:not([data-more='true']) {
     background: var(--overlay-glass-bg);

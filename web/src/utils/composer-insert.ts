@@ -21,6 +21,8 @@ export interface ComposerInsertDetail {
   text: string;
   /** 'lead' = the text starts the message and what was typed follows it ("Snooze this task until: "). */
   mode?: 'append' | 'lead';
+  /** Only a panel inside this element takes it (the Org page's chat, not a Home column of the same session behind it). */
+  within?: Element;
   /** Set by the panel that consumed the event. */
   handled: boolean;
 }

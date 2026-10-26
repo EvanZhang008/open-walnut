@@ -123,6 +123,7 @@ async function readChoices(allIds: readonly string[]): Promise<StatusFacts['choi
   await safely('boards', async () => {
     const { listBoardTaskIds, getBoard } = await import('./boards/board-store.js');
     const { choiceSpecs } = await import('./boards/board-html.js');
+    const { resolveChoiceRef } = await import('./boards/open-choice.js');
     for (const owner of await listBoardTaskIds()) {
       let open = boardChoices.get(owner);
       if (!open) {
@@ -136,20 +137,14 @@ async function readChoices(allIds: readonly string[]): Promise<StatusFacts['choi
       }
       for (const c of open) {
         // A choice names its task by id or an unambiguous id prefix (4+ characters, as
-        // board-v1 resolves refs); one that names none is the owner's.
-        const tid = c.ref ? resolveRef(c.ref, allIds) : owner;
+        // board-v1 resolves refs); one that names none is the owner's. The Org page's Answer
+        // finds it by the same rule (boards/open-choice.ts).
+        const tid = c.ref ? resolveChoiceRef(c.ref, allIds) : owner;
         if (tid && !out.has(tid)) out.set(tid, c.title);
       }
     }
   }, undefined);
   return out;
-}
-
-function resolveRef(ref: string, allIds: readonly string[]): string | undefined {
-  if (allIds.includes(ref)) return ref;
-  if (ref.length < 4) return undefined;
-  const hits = allIds.filter((t) => t.startsWith(ref));
-  return hits.length === 1 ? hits[0] : undefined;
 }
 
 /** The routines that run in a task's session: armed triggers (a check), or plain scheduled runs. */

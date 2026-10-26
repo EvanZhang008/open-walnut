@@ -6,6 +6,8 @@
  *                                                + kanban: lanes, lanes_effective, lanes_template, cards, team,
  *                                                kanban_seen, board_version (?fields=kanban: only those + ids)
  *   GET    /tasks/:id/board/owner[?tab=1]    → { task_id, title, self, has_board[, own_board, open_subtasks] }
+ *   GET    /tasks/:id/board/open-choice      → { choice: { owner, id, title, options, recommended? } | null }
+ *                                               the unanswered choice on any Board that names this task
  *   Kanban lanes, cards, moves, suggestions and the seen baseline: board-kanban-v1.ts
  *   PUT    /tasks/:id/board                  { html, version? }      → { board }
  *   POST   /tasks/:id/board/edits            { edits, version? }     → { board }
@@ -254,6 +256,16 @@ boardV1Router.get('/tasks/:id/board/owner', route(async (req, res) => {
   if (!wantsTeam(req.query.tab)) { res.json(base); return }
   const ownBoard = owner.self && owner.hasBoard && boardHasContent(await getBoard(owner.taskId))
   res.json({ ...base, own_board: ownBoard, open_subtasks: await openSubtaskCount(task.id) })
+}))
+
+// The choice the task's status counts as waiting on the user (src/core/boards/open-choice.ts),
+// so the Org page answers it where the task is listed.
+boardV1Router.get('/tasks/:id/board/open-choice', route(async (req, res) => {
+  const task = await resolveTask(param(req.params.id))
+  const { listTasks } = await import('../../core/task-manager.js')
+  const { openChoiceFor } = await import('../../core/boards/open-choice.js')
+  const ids = (await listTasks()).map((t) => t.id)
+  res.json({ choice: await openChoiceFor(task.id, ids) })
 }))
 
 boardV1Router.get('/tasks/:id/board', route(async (req, res) => {
