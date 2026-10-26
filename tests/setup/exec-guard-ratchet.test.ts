@@ -13,7 +13,7 @@
  *     guard for that child, so /usr/bin/ssh is what it runs. The ones that exist
  *     are counted per file (most are fake envs for pure functions); a new one
  *     fails here. Build the PATH with guardedPath([yourFakes], rest) instead.
- *  4. The account's real home (`os.userInfo().homedir`) is what HOME is faked to
+ *  4. The account's real home (`accountInfo().homedir`, `os.userInfo().homedir`) is what HOME is faked to
  *     hide; only the tests of the production-data guards may read it.
  *
  * The numbers only go down. Raising one needs the reason in the comment beside it.
@@ -111,6 +111,8 @@ const ACCOUNT_HOME_READERS = new Set([
   'tests/setup/exec-guard.test.ts',
   // Builds the walls that keep the real home out of the live e2e tests; it must name that home.
   'tests/helpers/live-isolation.ts',
+  // docker reads its login from the account's ~/.docker, which a faked HOME hides.
+  'tests/e2e/companion-old-box-e2e.test.ts',
 ])
 
 function walk(dir: string, out: string[] = []): string[] {
@@ -201,7 +203,7 @@ describe('no test opts out', () => {
   })
 
   it('only the production-data guard tests read the account\'s real home', () => {
-    const offenders = testFiles.filter((rel) => !ACCOUNT_HOME_READERS.has(rel) && !GUARD_FILES.has(rel) && /userInfo\(\)\.homedir/.test(read(rel)))
+    const offenders = testFiles.filter((rel) => !ACCOUNT_HOME_READERS.has(rel) && !GUARD_FILES.has(rel) && /(?:userInfo|accountInfo)\(\)\.homedir/.test(read(rel)))
     expect(offenders, 'HOME is faked to keep tests away from the real one; use os.homedir()').toEqual([])
   })
 })

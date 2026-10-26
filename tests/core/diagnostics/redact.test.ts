@@ -19,6 +19,7 @@ import { renderDiagnosticsText } from '../../../src/core/diagnostics/render.js'
 import { localIdentity, maskHostIdentitiesInText, redactDiagnostics } from '../../../src/core/diagnostics/redact.js'
 import type { HostDiagnostics } from '../../../src/core/diagnostics/types.js'
 import { ENV, HOST, fakeProbes } from './fakes.js'
+import { accountInfo } from '../../../src/lib/account.js'
 
 const LOCAL = { home: '/Users/alice', users: ['alice'] }
 
@@ -73,12 +74,12 @@ describe('2. home and user names', () => {
   it('knows every name this machine\'s user goes by', () => {
     const id = localIdentity({ USER: 'quentin', LOGNAME: 'qlogin' })
     expect(id.home).toBe(os.homedir())
-    expect(id.users).toEqual(expect.arrayContaining([path.basename(os.homedir()), os.userInfo().username, 'quentin', 'qlogin']))
+    expect(id.users).toEqual(expect.arrayContaining([path.basename(os.homedir()), accountInfo().username, 'quentin', 'qlogin']))
   })
 
   it('turns this machine\'s home into ~ and masks the user name outside a home path too', async () => {
     const home = os.homedir()
-    const user = os.userInfo().username
+    const user = accountInfo().username
     const env = { ...ENV, USER: 'quentin', HOME: home, PATH: `${home}/.local/bin:/opt/quentin/tools/bin:/usr/bin` }
     const r = await collectDiagnostics({
       probes: fakeProbes({

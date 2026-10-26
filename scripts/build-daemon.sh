@@ -114,6 +114,7 @@ SOURCES=(
   src/providers/daemon-service-manager.ts
   src/providers/daemon-service-artifact.ts
   src/providers/daemon-service-cli.ts
+  src/lib/account.ts
   src/providers/daemon-service-files.ts
   src/utils/file-lock.ts
   src/providers/daemon-service-system.ts

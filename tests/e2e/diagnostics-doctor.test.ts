@@ -6,7 +6,6 @@
  */
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import fs from 'node:fs/promises'
-import os from 'node:os'
 import type { Server as HttpServer } from 'node:http'
 import { createMockConstants } from '../helpers/mock-constants.js'
 
@@ -15,6 +14,7 @@ vi.mock('../../src/constants.js', () => createMockConstants('walnut-doctor-e2e')
 import { WALNUT_HOME } from '../../src/constants.js'
 import { startServer, stopServer } from '../../src/web/server.js'
 import { runDoctor } from '../../src/commands/doctor.js'
+import { accountInfo } from '../../src/lib/account.js'
 
 let server: HttpServer
 let port: number
@@ -67,7 +67,7 @@ describe('GET /api/diagnostics on a real server', () => {
     expect(text).toContain(`port ${port}`)
     expect(text).toContain('sqlite     ok')
     expect(text).toContain(`runtime    bun ${process.versions.bun}  `)
-    const user = os.userInfo().username
+    const user = accountInfo().username
     if (user.length > 2) expect(text).not.toContain(`/Users/${user}/`)
 
     const out: string[] = []

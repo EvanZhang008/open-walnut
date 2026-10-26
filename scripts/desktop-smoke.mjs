@@ -32,6 +32,7 @@ import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { accountInfo } from '../src/lib/account.ts'
 import { carryRelease } from './desktop-carry-release.mjs'
 import { stopOwnDaemon } from './release-rehearsal/own-daemon.mjs'
 import { serveReleases } from './release-rehearsal/runtime.mjs'
@@ -199,7 +200,7 @@ export async function smokeDesktopApp({ app: given, work: made, version, release
     HOME: home,
     // NSHomeDirectory() and Application Support follow this, not HOME.
     CFFIXED_USER_HOME: home,
-    USER: os.userInfo().username,
+    USER: accountInfo().username,
     TMPDIR: process.env.TMPDIR ?? '/tmp',
     LANG: 'en_US.UTF-8',
     // The system's tools and nothing else: no Node, no npm, no git.

@@ -13,6 +13,7 @@
  */
 import os from 'node:os'
 import { test, expect, type Page } from '@playwright/test'
+import { accountInfo } from '../../../src/lib/account.js'
 
 if (process.env.PW_WEBKIT) test.use({ browserName: 'webkit' })
 test.setTimeout(120_000)
@@ -58,7 +59,7 @@ async function openSettings(page: Page) {
 }
 
 function expectNoIdentity(text: string) {
-  const user = os.userInfo().username
+  const user = accountInfo().username
   expect(text).not.toContain(os.homedir())
   if (user.length >= 2) expect(text).not.toMatch(new RegExp(`(^|[^A-Za-z0-9_.-])${user}([^A-Za-z0-9_-]|$)`))
 }

@@ -26,9 +26,10 @@ import {
   type DaemonOwnerIdentity,
 } from '../../src/providers/daemon-ownership.js'
 import { LocalDaemon } from '../../src/providers/local-daemon.js'
+import { accountInfo } from '../../src/lib/account.js'
 
 const REAL_HOME = (() => {
-  try { return os.userInfo().homedir } catch { return os.homedir() }
+  try { return accountInfo().homedir } catch { return os.homedir() }
 })()
 
 /** A posture that IS allowed to own the production daemon. */

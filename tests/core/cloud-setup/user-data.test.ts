@@ -23,6 +23,7 @@ import {
   SSLIP_AUTO,
 } from '../../../src/core/cloud-setup/user-data.js'
 import { SESSION_ENGINE_IDS, type SessionEngine } from '../../../src/core/types.js'
+import { accountInfo } from '../../../src/lib/account.js'
 
 const CODE = 'a1b2c3d4e5f60718293a4b5c6d7e8f90'
 const execFileAsync = promisify(execFile)
@@ -345,7 +346,7 @@ describe('the first-boot script and /etc/walnut', () => {
       const script = buildUserData({ domain: 'wn.example.com', pairingCode: CODE, flavor: 'al2023' })
       const pairing = script.slice(script.indexOf('# ── pairing code ──'), script.indexOf('# ── install + start ──'))
       // Not root here: point the block at the temp dir and let it chown to ourselves.
-      const body = pairing.split('/etc/walnut').join(etc).replace('chown -h root ', `chown -h ${os.userInfo().username} `)
+      const body = pairing.split('/etc/walnut').join(etc).replace('chown -h root ', `chown -h ${accountInfo().username} `)
       const bin = path.join(dir, 'bin')
       await fsp.mkdir(bin)
       if (process.platform !== 'linux') {

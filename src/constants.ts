@@ -2,6 +2,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
+import { accountInfo } from './lib/account.js';
 
 export const WALNUT_HOME = resolveOpenWalnutHome();
 
@@ -109,7 +110,7 @@ export function assertNotProductionPath(inputPath: string): void {
  */
 function isUnderProductionHome(p: string): boolean {
   const homes = [os.homedir()]
-  try { homes.push(os.userInfo().homedir) } catch { /* no passwd entry: $HOME is all there is */ }
+  try { homes.push(accountInfo().homedir) } catch { /* no passwd entry: $HOME is all there is */ }
   const resolved = path.resolve(p)
   return homes.some((h) => {
     const prodHome = path.join(h, '.open-walnut')

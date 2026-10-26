@@ -5,6 +5,7 @@ import { execFile } from 'node:child_process'
 import { WebSocket } from '#ws'
 import { setTimeout as delay } from 'node:timers/promises'
 import { daemonInstallRoot } from './daemon-service-config.js'
+import { accountInfo } from '../lib/account.js'
 import { createDaemonServiceManager, DaemonServiceHandoverPendingError, DaemonServiceUpdateRefusedError, type DaemonServiceCommandResult, type DaemonServiceScope } from './daemon-service-manager.js'
 import { stageDaemonServiceArtifact } from './daemon-service-artifact.js'
 import { openDaemonServiceFiles, withDaemonServiceFiles, type DaemonServiceFiles } from './daemon-service-files.js'
@@ -223,7 +224,7 @@ export async function runDaemonServiceCli(action: string, options: DaemonService
   if (options.sudo && !systemScope) throw new Error('--sudo requires --scope system on Linux')
   if (systemScope && action !== 'status' && !options.sudo) throw new Error('System service changes require --sudo --yes; the daemon still runs as your current account')
   const home = os.homedir()
-  const user = os.userInfo()
+  const user = accountInfo()
   if (action !== 'status' && user.uid === 0) throw new Error('Run as the original non-root account with --scope system --sudo --yes, not as root')
   if (action !== 'status' && (process.env.VITEST || process.env.NODE_ENV === 'test'
     || await fs.realpath(home) !== await fs.realpath(user.homedir))) {

@@ -83,13 +83,14 @@ vi.mock('../../src/core/config-manager.js', async (importOriginal) => ({
 
 import { buildIdOf, type BoxBuildStatus } from '../../src/core/companion-build/wire.js'
 import { _resetCompanionBuildForTesting, companionBuildView, tickCompanionBuild } from '../../src/core/companion-build/mac.js'
+import { accountInfo } from '../../src/lib/account.js'
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
 const sha = (t: string) => crypto.createHash('sha256').update(t, 'utf-8').digest('hex')
 
 /** docker with the real user's docker config: the test home is a fake one. */
 function docker(args: string[], timeoutMs = 120_000): Promise<{ code: number; out: string; err: string }> {
-  const env = { ...process.env, DOCKER_CONFIG: process.env.DOCKER_CONFIG || path.join(os.userInfo().homedir, '.docker') }
+  const env = { ...process.env, DOCKER_CONFIG: process.env.DOCKER_CONFIG || path.join(accountInfo().homedir, '.docker') }
   return new Promise((resolve) => {
     execFile('docker', args, { env, timeout: timeoutMs, maxBuffer: 64 * 1024 * 1024 }, (err, out, stderr) => {
       const code = err ? (typeof (err as { code?: unknown }).code === 'number' ? (err as { code: number }).code : 1) : 0

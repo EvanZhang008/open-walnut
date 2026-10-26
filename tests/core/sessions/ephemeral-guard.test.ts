@@ -10,6 +10,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { accountInfo } from '../../../src/lib/account.js'
 import {
   assertEphemeralHomeIsNotProduction,
   isProductionWalnutHome,
@@ -48,7 +49,7 @@ describe('isProductionWalnutHome', () => {
 
   it('the default production homes are ~/.open-walnut under the account home', () => {
     expect(productionWalnutHomes()).toContain(path.join(os.homedir(), '.open-walnut')) // safe: production-path
-    expect(productionWalnutHomes()).toContain(path.join(os.userInfo().homedir, '.open-walnut'))
+    expect(productionWalnutHomes()).toContain(path.join(accountInfo().homedir, '.open-walnut'))
   })
 })
 

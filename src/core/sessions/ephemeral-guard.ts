@@ -14,6 +14,7 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { accountInfo } from '../../lib/account.js'
 
 /**
  * The data dirs a production Walnut uses for this OS account: ~/.open-walnut
@@ -24,7 +25,7 @@ export function productionWalnutHomes(): string[] {
   const homes = new Set<string>()
   const add = (home: string | undefined) => { if (home) homes.add(path.join(home, '.open-walnut')) }
   add(os.homedir())
-  try { add(os.userInfo().homedir) } catch { /* no passwd entry: $HOME is all there is */ }
+  try { add(accountInfo().homedir) } catch { /* no passwd entry: $HOME is all there is */ }
   return [...homes]
 }
 

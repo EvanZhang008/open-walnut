@@ -29,13 +29,14 @@ import path from 'node:path'
 import { spawn, spawnSync } from 'node:child_process'
 import yaml from 'js-yaml'
 import { SESSION_ENGINE_IDS } from '../../src/core/types.js'
+import { accountInfo } from '../../src/lib/account.js'
 
 const REPO_ROOT = path.join(import.meta.dirname, '..', '..')
 const SCRIPT = path.join(REPO_ROOT, 'scripts', 'cloud', 'ensure-harness.sh')
 const SETUP_SH = path.join(REPO_ROOT, 'scripts', 'cloud', 'setup.sh')
 const SEED = path.join(REPO_ROOT, 'scripts', 'cloud', 'seed-harness-config.mjs')
 const BASH = fs.existsSync('/bin/bash') ? '/bin/bash' : 'bash'
-const USER = os.userInfo().username
+const USER = accountInfo().username
 /** The dirs every sandbox PATH ends with; a test that needs "no bun" checks they hold none. */
 const SYSTEM_PATH = '/usr/bin:/bin:/usr/sbin:/sbin'
 const onPath = (name: string, PATH: string): string =>

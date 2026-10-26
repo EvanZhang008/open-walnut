@@ -27,6 +27,7 @@
 
 import os from 'node:os'
 import path from 'node:path'
+import { accountInfo } from '../../lib/account.js'
 import { redactSensitiveText } from '../../logging/index.js'
 import type { DiagnosticsReport } from './types.js'
 
@@ -71,7 +72,7 @@ export function localIdentity(env: Record<string, string | undefined> = process.
   let home: string | null = null
   try { home = os.homedir() || null } catch { /* no home */ }
   if (home) users.add(path.basename(home))
-  try { users.add(os.userInfo().username) } catch { /* no passwd entry */ }
+  try { users.add(accountInfo().username) } catch { /* no passwd entry */ }
   for (const key of ['USER', 'LOGNAME']) if (env[key]) users.add(env[key] as string)
   return { home, users: [...users].filter((u) => u && !NOT_A_USER.has(u)) }
 }

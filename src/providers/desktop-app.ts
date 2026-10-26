@@ -17,14 +17,14 @@
  */
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
-import os from 'node:os';
 import path from 'node:path';
 import { desktopAppCandidates, desktopAppExecutable } from './session-host-core.js';
+import { accountInfo } from '../lib/account.js';
 
 /** The REAL user's home, from the passwd entry rather than `$HOME`. */
 export function realHome(): string | null {
   try {
-    const home = os.userInfo().homedir;
+    const home = accountInfo().homedir;
     return home && path.isAbsolute(home) ? home : null;
   } catch {
     return null;

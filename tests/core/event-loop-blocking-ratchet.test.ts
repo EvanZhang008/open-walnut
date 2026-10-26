@@ -52,6 +52,10 @@ const BASELINE: Record<string, number> = {
   // binds a port, so there is no request path and no route to freeze, and it
   // is advisory (it logs and continues, never exits).
   'src/providers/daemon-version-check.ts': 1,
+  // The account's passwd entry under bun (whose os.userInfo() reads $USER/$HOME):
+  // ONE cached child per process (`id -P` on macOS, `getent` only when /etc/passwd
+  // lacks the uid on Linux), first asked by a boot guard or a rare user action.
+  'src/lib/account.ts': 1,
 };
 
 function countSyncCalls(): Map<string, number> {

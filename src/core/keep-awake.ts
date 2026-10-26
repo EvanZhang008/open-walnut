@@ -29,8 +29,8 @@
  */
 
 import { execFile as execFileCb } from 'node:child_process';
-import os from 'node:os';
 import { promisify } from 'node:util';
+import { accountInfo } from '../lib/account.js';
 import { log } from '../logging/index.js';
 
 const execFileAsync = promisify(execFileCb);
@@ -191,7 +191,7 @@ export function resetKeepAwakeForTest(): void {
 
 /** The one-time root rule this feature needs, scoped to exactly two commands. */
 export function getSudoSetupCommand(): string {
-  const user = os.userInfo().username;
+  const user = accountInfo().username;
   return `echo '${user} ALL=(ALL) NOPASSWD: /usr/bin/pmset disablesleep 1, /usr/bin/pmset disablesleep 0' | sudo tee /etc/sudoers.d/walnut-keep-awake >/dev/null && sudo chmod 440 /etc/sudoers.d/walnut-keep-awake`;
 }
 
@@ -216,7 +216,7 @@ export async function checkSudoSetup(): Promise<boolean> {
  * caller should re-poll so a pending hold engages immediately.
  */
 export async function runSudoSetup(): Promise<{ ok: boolean; detail: string }> {
-  const user = os.userInfo().username;
+  const user = accountInfo().username;
   const line = `${user} ALL=(ALL) NOPASSWD: /usr/bin/pmset disablesleep 1, /usr/bin/pmset disablesleep 0`;
   // printf (not echo) so the shell inside osascript needs no quoting gymnastics.
   const shellCmd = `printf '%s\\n' '${line}' > /etc/sudoers.d/walnut-keep-awake && chmod 440 /etc/sudoers.d/walnut-keep-awake`;

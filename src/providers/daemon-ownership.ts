@@ -26,9 +26,9 @@
  * claude binary, shell rc files, ~/.claude) is the wrong one.
  */
 import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
 import { WALNUT_HOME } from '../constants.js'
+import { accountInfo } from '../lib/account.js'
 
 /** The machine-global daemon dir. Remote daemons hardcode the same path. */
 export const PROD_DAEMON_DIR = '/tmp/open-walnut'
@@ -41,7 +41,7 @@ export interface DaemonOwnerIdentity {
    *  resolves `~/.local/bin`, `~/.zshrc` and `~/.claude` against exactly this. */
   envHome: string
   /** The OS-level home from the passwd entry. NOT env-derived, so a faked HOME
-   *  cannot hide behind it (os.homedir() returns $HOME when set, userInfo() does not). */
+   *  cannot hide behind it (os.homedir() returns $HOME when set, accountInfo() does not). */
   realHome: string
 }
 
@@ -97,11 +97,11 @@ export function isTestEnv(env: NodeJS.ProcessEnv = process.env): boolean {
 /** Snapshot of THIS process's posture. */
 export function currentProdClaimPosture(): ProdClaimPosture {
   let realHome = ''
-  // userInfo() reads the passwd entry and throws when there is none (some
+  // accountInfo() reads the passwd entry and throws when there is none (some
   // containers/CI images). No passwd entry means no trustworthy signal, so the
   // fake-HOME rule simply does not fire. Never substitute os.homedir() here: it
   // IS $HOME, so the comparison would be a value against itself.
-  try { realHome = os.userInfo().homedir || '' } catch { realHome = '' }
+  try { realHome = accountInfo().homedir || '' } catch { realHome = '' }
   return {
     walnutHome: WALNUT_HOME,
     envHome: process.env.HOME || '',

@@ -23,6 +23,7 @@ import http from 'node:http'
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
+import { accountInfo } from '../src/lib/account.ts'
 import { machineArch } from './desktop-smoke.mjs'
 
 function parseArgs(argv) {
@@ -138,7 +139,7 @@ export async function runUpdateE2E({ old, next, source, work: made, keep = false
   const env = {
     HOME: home,
     CFFIXED_USER_HOME: home,
-    USER: os.userInfo().username,
+    USER: accountInfo().username,
     TMPDIR: process.env.TMPDIR ?? '/tmp',
     LANG: 'en_US.UTF-8',
     PATH: '/usr/bin:/bin:/usr/sbin:/sbin',

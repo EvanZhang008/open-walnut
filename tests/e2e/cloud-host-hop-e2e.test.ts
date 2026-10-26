@@ -51,6 +51,7 @@ import { WALNUT_HOME, TASKS_FILE } from '../../src/constants.js'
 import { startServer, stopServer } from '../../src/web/server.js'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { guardedPath } from '../setup/exec-guard.js'
+import { accountInfo } from '../../src/lib/account.js'
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const MOCK_CLI = path.join(REPO_ROOT, 'tests/providers/mock-claude.mjs')
@@ -181,7 +182,7 @@ async function startHostDaemon(): Promise<{ proc: ChildProcess; dir: string; por
   fs.writeFileSync(script, getDaemonSource(), { mode: 0o755 })
   const env: NodeJS.ProcessEnv = {
     HOME: hostDirs.home,
-    USER: os.userInfo().username,
+    USER: accountInfo().username,
     SHELL: '/bin/sh',
     // The host's own tools only: the user's PATH (and its real claude) never
     // reaches it, and ssh/scp refuse (nothing here may reach a real host), with

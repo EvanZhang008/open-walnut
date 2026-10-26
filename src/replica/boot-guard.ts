@@ -15,6 +15,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { isProductionWalnutHome, productionWalnutHomes } from '../core/sessions/ephemeral-guard.js'
+import { accountInfo } from '../lib/account.js'
 
 export const PROD_RUN_DIR = '/tmp/open-walnut'
 /** The streams dir of the Walnut that owns this machine (daemon stream files, FIFOs). */
@@ -65,7 +66,7 @@ function accountHomes(env: NodeJS.ProcessEnv): string[] {
   const add = (h: string | undefined) => { if (h && h.trim()) homes.add(path.resolve(h.trim())) }
   add(env.HOME)
   add(os.homedir())
-  try { add(os.userInfo().homedir) } catch { /* no passwd entry */ }
+  try { add(accountInfo().homedir) } catch { /* no passwd entry */ }
   return [...homes]
 }
 
