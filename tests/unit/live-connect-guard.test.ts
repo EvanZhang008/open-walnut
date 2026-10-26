@@ -29,7 +29,8 @@ const dial = (fn) => new Promise((r) => { const s = fn(); s.once('connect', () =
   out.options = await dial(() => net.connect({ port: dp, host: 'localhost' }))
   out.allowed = await dial(() => net.connect({ port: ap, host: '127.0.0.1' }))
   out.http = await new Promise((r) => http.get('http://127.0.0.1:' + dp + '/x', () => r('answered')).on('error', (e) => r(e.code)))
-  out.fetch = await fetch('http://127.0.0.1:' + dp + '/x').then(() => 'answered', (e) => String(e.cause && e.cause.code))
+  // undici wraps the socket error in a TypeError's cause; bun's guarded fetch rejects with it directly.
+  out.fetch = await fetch('http://127.0.0.1:' + dp + '/x').then(() => 'answered', (e) => String((e.cause && e.cause.code) || e.code))
   out.fetchAllowed = await fetch('http://127.0.0.1:' + ap + '/x').then((res) => res.status, (e) => String(e))
   out.unix = await dial(() => net.connect(require('node:path').join(process.env.DIR, 'none.sock')))
   denied.close(); allowed.close()
