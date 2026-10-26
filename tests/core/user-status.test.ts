@@ -138,6 +138,23 @@ describe('review cases (2026-10-26)', () => {
       .toMatchObject({ state: 'waiting', kind: 'time', waitingOn: 'Its next scheduled run (Daily digest)', until: next })
   })
 
+  it('a standing routine waits on its next fire after any turn; only a real ask needs the user', () => {
+    const at = new Date(NOW - 1000).toISOString()
+    const watch = { phase: 'NEED_ACTION', hasSession: true, processStatus: 'idle', triggers: ['Pipeline watch'], phaseChangedAt: new Date(NOW - 5000).toISOString() }
+    expect(deriveUserStatus(watch, NOW)).toMatchObject({ state: 'waiting', kind: 'other', waitingOn: 'A watch: Pipeline watch' })
+    // Its turn said done, or asked the user in its own words: still waiting on the next fire.
+    expect(deriveUserStatus({ ...watch, report: { state: 'done', now: 'Checked.', at } }, NOW)).toMatchObject({ state: 'waiting', kind: 'other' })
+    expect(deriveUserStatus({ ...watch, report: { state: 'needs', ask: 'Tell the owner?', at } }, NOW)).toMatchObject({ state: 'waiting', kind: 'other' })
+    // A schedule is a routine too.
+    expect(deriveUserStatus({ ...watch, triggers: [], schedules: [{ name: 'Daily digest' }], report: { state: 'done', at } }, NOW)).toMatchObject({ state: 'waiting', kind: 'time' })
+    // A real ask still needs the user: a prompt, a decision letter, a Board choice, an error.
+    expect(deriveUserStatus({ ...watch, pendingPermissionTool: 'Bash' }, NOW).state).toBe('needs')
+    expect(deriveUserStatus({ ...watch, openLetter: 'Approve the quota raise' }, NOW).state).toBe('needs')
+    expect(deriveUserStatus({ ...watch, openChoice: 'Raise the quota?' }, NOW).state).toBe('needs')
+    // Without a routine, the session's own ask still needs the user.
+    expect(deriveUserStatus({ ...watch, triggers: [], report: { state: 'needs', ask: 'Tell the owner?', at } }, NOW)).toMatchObject({ state: 'needs', source: 'session' })
+  })
+
   it('an idle lead waits on its open workers, and Main on the user and its teams, never stuck', () => {
     const idle = { phase: 'IN_PROGRESS', hasSession: true, processStatus: 'idle' }
     expect(deriveUserStatus(idle, NOW)).toMatchObject({ state: 'waiting', kind: 'stuck' })

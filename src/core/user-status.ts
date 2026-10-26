@@ -190,8 +190,12 @@ function derive(input: UserStatusInput, nowMs: number): UserStatus {
     return strip({ state: 'needs', source: 'error', ask: why ? `Its session failed (${why.slice(0, 140)}). Retry it or open it.` : 'Its session failed. Retry it or open it.', ...w });
   }
 
-  // The session's own words: an ask only the user can answer.
-  if (report?.state === 'needs' && !none(report.ask)) return strip({ state: 'needs', source: 'session', ask: clean(report.ask), ...w });
+  // The session's own words: an ask only the user can answer. Not on a standing routine (a watch
+  // or a schedule keeps it alive): it asks people where it works, and its turn's end is never the
+  // user's to pick up (2026-10-26, the user on a pipeline watch: "put it as working").
+  if (report?.state === 'needs' && !none(report.ask) && !(triggers.length || schedules.length)) {
+    return strip({ state: 'needs', source: 'session', ask: clean(report.ask), ...w });
+  }
   // It said it carries on by itself (a background job it started will wake it) and its process is still there.
   if (report?.state === 'working' && input.processStatus === 'idle') return strip({ state: 'working', ...w });
 
@@ -204,13 +208,6 @@ function derive(input: UserStatusInput, nowMs: number): UserStatus {
   const reported = report?.state === 'waiting' && !none(report.waiting_on) ? clean(report.waiting_on) : '';
   const reportedKind = report?.state === 'waiting' ? report.waiting_kind : undefined;
 
-  if (report?.state === 'done') {
-    return strip({
-      state: 'waiting', kind: input.hasLeader ? 'lead' : 'you',
-      waitingOn: input.hasLeader ? 'Its lead, to check the result and close it' : 'You, to read the result and close it (no rush)',
-      ...w,
-    });
-  }
   if (tasks.length) {
     return strip({ state: 'waiting', kind: 'task', waitingOn: reported || `A reply from ${tasks.join(', ')}`, ...w });
   }
@@ -219,10 +216,18 @@ function derive(input: UserStatusInput, nowMs: number): UserStatus {
     const person = reportedKind === 'you' || reportedKind === 'lead' || reportedKind === 'task';
     if (person || wakes) return strip({ state: 'waiting', kind: reportedKind, waitingOn: reported, ...(until ? { until } : {}), ...w });
   }
+  // A standing routine: between fires it waits on the next one, whatever its last turn said.
   if (triggers.length) return strip({ state: 'waiting', kind: 'other', waitingOn: `A watch: ${triggers.join(', ')}`, ...w });
   if (schedules.length) {
     const next = schedules.map((r) => r.nextAt).filter((t): t is string => !!t && Date.parse(t) > nowMs).sort()[0];
     return strip({ state: 'waiting', kind: 'time', waitingOn: `Its next scheduled run (${schedules.map((r) => clean(r.name)).join(', ')})`, ...(next ? { until: next } : {}), ...w });
+  }
+  if (report?.state === 'done') {
+    return strip({
+      state: 'waiting', kind: input.hasLeader ? 'lead' : 'you',
+      waitingOn: input.hasLeader ? 'Its lead, to check the result and close it' : 'You, to read the result and close it (no rush)',
+      ...w,
+    });
   }
   if (until) return strip({ state: 'waiting', kind: 'time', waitingOn: 'Its next check', until, ...w });
 
