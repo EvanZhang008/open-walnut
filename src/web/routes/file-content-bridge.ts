@@ -9,8 +9,9 @@
  * New model (the daemon-principle shape, CLAUDE.md): the daemon does the
  * host-local work — path sandbox (traversal/absolute checks, realpath
  * secret-path denylist) and the 2MB size cap are enforced HOST-SIDE by the
- * narrow `fs.readBounded` bridge command; only the bounded result crosses the
- * tunnel. This module is the replica-side half: resolve the target host
+ * narrow `fs.readBounded` bridge command. Raw audio/video uses its guarded
+ * 1 MB range branch without a total file-size cap; other formats retain the
+ * whole-file cap. This module is the replica-side half: resolve the target host
  * ('' / absent → '__local__', the primary), bridgeRequest the read with a
  * deadline, and map the outcome onto the frozen v1 vocabulary:
  *
@@ -40,6 +41,7 @@ import { sendV1Error } from './v1-control-relay.js'
 // note next to its use below — a copied table drifted and corrupted bytes).
 import { RAW_INLINE_MIME, rawTextMime, attachmentDisposition } from './file-content.js'
 import { resolveReplicaCopy } from './file-content-replica-copy.js'
+import { BRIDGE_MEDIA_EXTENSIONS, serveBridgeMedia } from './file-content-bridge-media.js'
 
 /** Primary box's daemon always registers under this bridge alias. */
 const PRIMARY_BRIDGE_ALIAS = '__local__'
@@ -97,8 +99,7 @@ const FRIENDLY_NEEDS_UPGRADE =
 // office types were added there. Drift is not cosmetic — an extension missing
 // from the table falls to the text lane below, which utf-8-decodes the bytes
 // and hands the client a mangled zip that looks like a corrupt document.
-// (The bounded relay serves whole small files, so media Range support is not
-// needed here — a 2MB-capped read is a document/image, not a seekable video.)
+// Raw media uses the guarded range lane. Other formats keep the whole-file cap.
 
 /** Detect binary content by scanning for NUL bytes in the first 8KB. */
 function isBinaryBuffer(buffer: Buffer): boolean {
@@ -110,7 +111,7 @@ function isBinaryBuffer(buffer: Buffer): boolean {
 }
 
 /** Result of one bounded bridge read. */
-type BridgeReadResult =
+export type BridgeReadResult =
   | { status: 'ok'; buf: Buffer }
   | { status: 'failed'; failure: BridgeReadFailure }
   | { status: 'offline'; message: string }
@@ -285,7 +286,11 @@ export async function serveCloudFileContent(req: Request, res: Response): Promis
     return
   }
 
-  const result = await bridgeReadFile(hostAlias, filePath)
+  const media = raw && BRIDGE_MEDIA_EXTENSIONS.has(ext)
+  const result = media
+    ? await serveBridgeMedia(req, res, hostAlias, filePath, RAW_INLINE_MIME[ext]!, download)
+    : await bridgeReadFile(hostAlias, filePath)
+  if (result === null) return // Media stream (including disconnect) handled its response.
   if (result.status !== 'ok') {
     if (hostAlias === PRIMARY_BRIDGE_ALIAS && copyMayAnswer(result)) {
       const copy = await resolveReplicaCopy(filePath)

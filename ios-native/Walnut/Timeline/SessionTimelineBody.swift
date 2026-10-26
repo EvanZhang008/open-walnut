@@ -112,7 +112,7 @@ struct SessionTimelineBody: View {
         .sheet(item: $previewTarget) { target in
             HTMLFilePreviewSheet(target: target)
         }
-        .sheet(item: $textTarget) { target in
+        .sessionFileSheet(item: $textTarget) { target in
             SessionFileViewer(name: target.ref.displayName, path: target.ref.path,
                               host: target.host ?? "", ref: target.ref,
                               cwd: target.cwd, sessionID: target.sessionID)

@@ -2758,6 +2758,15 @@ rejected, 4096-char cap.
   preview iframe). Identical sandbox to the JSON path (one shared
   implementation); errors come back as plain-text bodies with the same
   status codes (404 missing, 502 remote transport).
+  **Raw media through a replica:** MP4, M4V, MOV, WebM, MP3, WAV, M4A and Ogg
+  stream in guarded 1 MB daemon reads, with no whole-file size cap. Each read
+  and response backpressure wait has a 15 s deadline. Supports `HEAD`, single
+  byte ranges (206/416), and a strong `ETag`; a mismatched `If-Range` returns
+  the full current file (200). A file changing during transfer closes the
+  response rather than mixing versions. An older daemon without range replies
+  answers `501 not_supported_cloud`. JSON and non-media bridge reads keep the
+  2 MB cap. The iOS file viewer downloads supported media with Bearer auth to
+  an owned cache file, then uses the native player for playback and seeking.
 - `GET /api/v1/file-raw/<host>/<path...>[?download=1]` (additive, 2026-09): the
   PATH-shaped twin of `file-content?raw=1`, same bytes and same sandbox. Use this
   shape for HTML previews: a document's relative URLs resolve against its URL's

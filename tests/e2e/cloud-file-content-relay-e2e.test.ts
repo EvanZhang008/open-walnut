@@ -27,6 +27,7 @@ import os from 'node:os'
 import type { Server as HttpServer } from 'node:http'
 import { WebSocket } from 'ws'
 import { createMockConstants } from '../helpers/mock-constants.js'
+import { guardedPath } from '../setup/exec-guard.js'
 
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-cloud-fileread-relay', { CLOUD_MODE: true }))
 
@@ -37,6 +38,9 @@ import { getDaemonSource } from '../../src/providers/daemon-source.js'
 
 const HOST_ALIAS = 'relaybox'
 const HTML = '<!doctype html>\n<html><body><h1>works from anywhere</h1></body></html>\n'
+// Byte-contract data only, not a playable encoded video.
+const MEDIA_BYTES = Buffer.alloc(3 * 1024 * 1024 + 73)
+for (let i = 0; i < MEDIA_BYTES.length; i++) MEDIA_BYTES[i] = i % 251
 
 let server: HttpServer
 let port: number
@@ -59,9 +63,11 @@ function authedFetch(p: string): Promise<Response> {
 
 async function spawnDaemon(): Promise<void> {
   const proc = spawn(process.execPath, [scriptPath, '--start'], {
-    env: { ...process.env, WALNUT_DAEMON_DIR: daemonDir },
+    env: { ...process.env, WALNUT_DAEMON_DIR: daemonDir, WALNUT_HOME_OVERRIDE: filesDir,
+      HOME: filesDir, SHELL: '/bin/sh', PATH: guardedPath([], '/usr/bin:/bin'), WALNUT_DAEMON_PARENT_PID: String(process.pid) },
     stdio: ['ignore', 'pipe', 'pipe'],
   })
+  daemonProc = proc
   daemonPort = await new Promise<number>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('daemon spawn timeout')), 20_000)
     proc.stdout?.on('data', (chunk) => {
@@ -71,7 +77,6 @@ async function spawnDaemon(): Promise<void> {
     proc.on('error', (err) => { clearTimeout(timer); reject(err) })
     proc.on('exit', (code) => { clearTimeout(timer); reject(new Error('daemon exited early: ' + code)) })
   })
-  daemonProc = proc
 }
 
 function rpc(ws: WebSocket, id: number, cmd: string, params: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
@@ -121,6 +126,10 @@ beforeAll(async () => {
   fs.writeFileSync(path.join(filesDir, 'index.html'), HTML)
   fs.writeFileSync(path.join(filesDir, 'whale.html'), Buffer.alloc(2 * 1024 * 1024 + 16, 0x61))
   fs.writeFileSync(path.join(filesDir, 'server.pem'), 'FAKE PEM\n')
+  fs.writeFileSync(path.join(filesDir, 'bytes.mp4'), MEDIA_BYTES)
+  fs.mkdirSync(path.join(filesDir, '.ssh'))
+  fs.writeFileSync(path.join(filesDir, '.ssh', 'private.mp4'), 'private fixture')
+  fs.symlinkSync(path.join(filesDir, '.ssh', 'private.mp4'), path.join(filesDir, 'linked.mp4'))
 
   // Real daemon process dialing the REAL /bridge endpoint.
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-relay-daemon-'))
@@ -145,11 +154,13 @@ beforeAll(async () => {
 
 afterAll(async () => {
   try { ctl?.close() } catch { /* already closed */ }
-  if (daemonProc && daemonProc.exitCode === null) {
-    daemonProc.kill('SIGTERM')
-    await new Promise<void>((resolve) => {
-      const t = setTimeout(() => { try { daemonProc?.kill('SIGKILL') } catch {} resolve() }, 3000)
-      daemonProc!.once('exit', () => { clearTimeout(t); resolve() })
+  if (daemonProc && daemonProc.exitCode === null && daemonProc.signalCode === null) {
+    const child = daemonProc
+    child.kill('SIGTERM')
+    await new Promise<void>((resolve, reject) => {
+      const t = setTimeout(() => reject(new Error('Owned relay daemon did not exit')), 10_000)
+      child.once('exit', () => { clearTimeout(t); resolve() })
+      if (child.exitCode !== null || child.signalCode !== null) { clearTimeout(t); resolve() }
     })
   }
   await stopServer()
@@ -160,6 +171,38 @@ afterAll(async () => {
 })
 
 describe('phone → cloud server → /bridge → real daemon → file bytes', () => {
+  it('streams media bytes larger than 2 MB across the real bridge, seeks, and probes HEAD', async () => {
+    const p = encodeURIComponent(path.join(filesDir, 'bytes.mp4'))
+    const url = apiUrl(`/api/v1/file-content?path=${p}&host=${HOST_ALIAS}&raw=1`)
+    const headers = { Authorization: `Bearer ${deviceToken}` }
+    const full = await fetch(url, { headers })
+    expect(full.status).toBe(200)
+    expect(full.headers.get('content-type')).toBe('video/mp4')
+    expect(full.headers.get('content-length')).toBe(String(MEDIA_BYTES.length))
+    expect(Buffer.from(await full.arrayBuffer()).equals(MEDIA_BYTES)).toBe(true)
+    for (const [range, start, end] of [
+      ['bytes=1048573-2097193', 1048573, 2097193],
+      ['bytes=-71', MEDIA_BYTES.length - 71, MEDIA_BYTES.length - 1],
+    ] as const) {
+      const part = await fetch(url, { headers: { ...headers, Range: range } })
+      expect(part.status).toBe(206)
+      expect(part.headers.get('content-range')).toBe(`bytes ${start}-${end}/${MEDIA_BYTES.length}`)
+      expect(Buffer.from(await part.arrayBuffer()).equals(MEDIA_BYTES.subarray(start, end + 1))).toBe(true)
+    }
+    const head = await fetch(url, { method: 'HEAD', headers })
+    expect(head.status).toBe(200)
+    expect(head.headers.get('content-length')).toBe(String(MEDIA_BYTES.length))
+    expect((await head.arrayBuffer()).byteLength).toBe(0)
+    const unsatisfiable = await fetch(url, { headers: { ...headers, Range: `bytes=${MEDIA_BYTES.length}-` } })
+    expect(unsatisfiable.status).toBe(416)
+    expect(unsatisfiable.headers.get('content-range')).toBe(`bytes */${MEDIA_BYTES.length}`)
+    await unsatisfiable.arrayBuffer()
+    const linked = encodeURIComponent(path.join(filesDir, 'linked.mp4'))
+    const secret = await authedFetch(`/api/v1/file-content?path=${linked}&host=${HOST_ALIAS}&raw=1`)
+    expect(secret.status).toBe(403)
+    await secret.text()
+  })
+
   it('raw=1 serves the HTML bytes with text/html (the WKWebView preview URL)', async () => {
     const p = encodeURIComponent(path.join(filesDir, 'index.html'))
     const res = await authedFetch(`/api/v1/file-content?path=${p}&host=${HOST_ALIAS}&raw=1`)
@@ -216,8 +259,13 @@ describe('phone → cloud server → /bridge → real daemon → file bytes', ()
   })
 
   it('daemon gone → 503 bridge_offline for the real host too', async () => {
-    // Kill the daemon and wait for the registry to drop the socket.
-    daemonProc!.kill('SIGKILL')
+    const child = daemonProc!
+    child.kill('SIGTERM')
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('Owned relay daemon did not exit')), 10_000)
+      child.once('exit', () => { clearTimeout(timer); resolve() })
+      if (child.exitCode !== null || child.signalCode !== null) { clearTimeout(timer); resolve() }
+    })
     await waitFor(async () => {
       const p = encodeURIComponent(path.join(filesDir, 'index.html'))
       const res = await authedFetch(`/api/v1/file-content?path=${p}&host=${HOST_ALIAS}`)

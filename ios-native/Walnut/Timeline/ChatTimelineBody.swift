@@ -106,7 +106,7 @@ struct ChatTimelineBody: View {
         // No cwd/sessionID here: the Personal AI chat has no working directory of
         // its own, so a stale path can't be re-resolved from this surface. It
         // still opens honestly, and reports honestly when it can't.
-        .sheet(item: $textTarget) { target in
+        .sessionFileSheet(item: $textTarget) { target in
             SessionFileViewer(name: target.ref.displayName, path: target.ref.path,
                               host: target.host ?? "", ref: target.ref)
         }

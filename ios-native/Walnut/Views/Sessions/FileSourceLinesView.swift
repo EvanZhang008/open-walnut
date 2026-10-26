@@ -60,7 +60,7 @@ struct FilePathLinkHandling: ViewModifier {
                 return .handled
             })
             .sheet(item: $htmlTarget) { HTMLFilePreviewSheet(target: $0) }
-            .sheet(item: $textTarget) { target in
+            .sessionFileSheet(item: $textTarget) { target in
                 SessionFileViewer(name: target.ref.displayName, path: target.ref.path,
                                   host: target.host ?? "", ref: target.ref,
                                   cwd: target.cwd, sessionID: target.sessionID)

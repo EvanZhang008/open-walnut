@@ -208,7 +208,7 @@ struct SessionDirectoryList: View {
         .accessibilityIdentifier("session.files.list")
         .task { await load() }
         .refreshable { await load() }
-        .sheet(item: $selectedFile) { file in
+        .sessionFileSheet(item: $selectedFile) { file in
             SessionFileViewer(name: file.name, path: file.absolutePath(in: root), host: host)
         }
     }
@@ -325,7 +325,10 @@ struct SessionFileViewer: View {
     var body: some View {
         NavigationStack {
             Group {
-                if isHTMLPreviewable && !showSource {
+                if SessionMediaKind.forPath(shownPath) != nil {
+                    SessionMediaView(path: shownPath, host: hostParam,
+                                     reference: ref?.decorated ?? path, cwd: cwd, sessionID: sessionID)
+                } else if isHTMLPreviewable && !showSource {
                     HTMLFilePreview(path: shownPath, host: hostParam)
                 } else {
                     sourceBody

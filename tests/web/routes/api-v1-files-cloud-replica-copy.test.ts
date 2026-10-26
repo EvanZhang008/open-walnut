@@ -155,6 +155,24 @@ describe('the synced copy answers when the primary cannot', () => {
     expect(res.body.contentHash).toBeUndefined()
   })
 
+  it('primary offline or too old for media ranges: a large media copy remains seekable', async () => {
+    const bytes = Buffer.alloc(3 * 1024 * 1024 + 9, 31) // Byte contract, not encoded media.
+    const rel = 'notes/_attachment/bytes.mp4'
+    await putCopy(rel, bytes)
+    // An old daemon ignores range:true and reads the whole 3 MB file, so it refuses
+    // with its 2 MB cap; a small file it answers whole is served from the primary.
+    for (const failure of ['offline', 'unknown', 'legacy-too-large']) {
+      if (failure === 'offline') offline()
+      else if (failure === 'unknown') daemonError('unknown command: fs.readBounded')
+      else daemonError('fs.readBounded: too large (EFBIG)')
+      const res = await getRaw(`${MAC}/${rel}`).set('Range', 'bytes=-73')
+      expect(res.status).toBe(206)
+      expect(res.headers['x-walnut-served-from']).toBe('replica-copy')
+      expect(res.body).toEqual(bytes.subarray(-73))
+      expect(bridgeRequestMock.mock.calls.at(-1)![2]).toMatchObject({ range: true, offset: 0, length: 0 })
+    }
+  })
+
   it('over the 2 MB relay cap: the copy streams the whole file even with the primary online', async () => {
     const big = Buffer.alloc(3 * 1024 * 1024 + 11, 1)
     await putCopy('notes/_attachment/797.pdf', big)

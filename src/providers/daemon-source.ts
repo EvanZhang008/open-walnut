@@ -9937,7 +9937,14 @@ async function cmdFsReadImage(ws, id, cmd) {
 // public cloud bridge, so THIS handler is the security authority — the
 // replica's own checks are a convenience, not the guarantee. Keep in sync
 // with daemon-standalone.ts cmdFsReadBounded.
-var FS_READ_BOUNDED_MAX_BYTES = 2 * 1024 * 1024; // 2MB — bridge frames stay small
+var FS_READ_BOUNDED_MAX_BYTES = 2 * 1024 * 1024; // Whole-file reads only
+var FS_READ_BOUNDED_RANGE_BYTES = 1024 * 1024; // One media chunk per bridge frame
+
+function fsReadBoundedVersion(resolved, st) {
+  return crypto.createHash('sha256').update(JSON.stringify([
+    resolved, st.dev, st.ino, st.size, st.mtimeMs, st.ctimeMs,
+  ])).digest('hex');
+}
 // Secret files/dirs never served over the bridge. Checked against the
 // REALPATH-resolved target so a symlink can't launder a denied path.
 var FS_READ_BOUNDED_DENIED_DIRS = ['.ssh', '.aws', '.gnupg', path.join('.config', 'walnut-secrets')];
@@ -9947,11 +9954,14 @@ var FS_READ_BOUNDED_DENIED_BASENAMES = new Set([
 var FS_READ_BOUNDED_DENIED_EXTENSIONS = new Set(['pem', 'key', 'p12', 'pfx', 'ppk', 'jks', 'keystore']);
 
 function fsReadBoundedDenied(resolved) {
+  const segments = resolved.split(path.sep);
   for (const dir of FS_READ_BOUNDED_DENIED_DIRS) {
     const abs = path.join(HOME_DIR, dir);
     if (resolved === abs || resolved.startsWith(abs + path.sep)) return true;
-    // Any path SEGMENT named .ssh/.aws/… — covers non-HOME checkouts of keys.
-    if (resolved.split(path.sep).includes(dir)) return true;
+    // Match consecutive segments, including multi-segment secret directories
+    // in backups outside HOME. Similar prefixes and separated segments are safe.
+    const denied = dir.split(path.sep);
+    if (segments.some((_, index) => denied.every((part, offset) => segments[index + offset] === part))) return true;
   }
   const base = path.basename(resolved);
   if (FS_READ_BOUNDED_DENIED_BASENAMES.has(base)) return true;
@@ -9982,6 +9992,49 @@ async function cmdFsReadBounded(ws, id, cmd) {
     // wedges an fs-pool thread forever (same guard as fs.read).
     const st = await fs.promises.stat(resolved);
     if (!st.isFile()) return sendError(ws, id, 'fs.readBounded: not a regular file (ENOTFILE)');
+    if (cmd.range === true) {
+      const { offset, length, expectedVersion } = cmd;
+      if (!Number.isSafeInteger(offset) || offset < 0
+        || !Number.isSafeInteger(length) || length < 0
+        || length > FS_READ_BOUNDED_RANGE_BYTES
+        || (expectedVersion !== undefined && typeof expectedVersion !== 'string')) {
+        return sendError(ws, id, 'fs.readBounded: invalid range (EINVAL)');
+      }
+      const version = fsReadBoundedVersion(resolved, st);
+      if (expectedVersion !== undefined && expectedVersion !== version) {
+        return sendError(ws, id, 'fs.readBounded: file changed (ESTALE)');
+      }
+      // Open only the guarded realpath, then verify the opened file and the
+      // path again before releasing bytes. A replacement is never a new chunk.
+      const fh = await fs.promises.open(resolved, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK | fs.constants.O_NOFOLLOW);
+      try {
+        const opened = await fh.stat();
+        if (!opened.isFile()) return sendError(ws, id, 'fs.readBounded: not a regular file (ENOTFILE)');
+        if (fsReadBoundedVersion(resolved, opened) !== version) {
+          return sendError(ws, id, 'fs.readBounded: file changed (ESTALE)');
+        }
+        const data = Buffer.alloc(Math.min(length, Math.max(0, st.size - offset)));
+        let read = 0;
+        while (read < data.length) {
+          const { bytesRead } = await fh.read(data, read, data.length - read, offset + read);
+          if (bytesRead === 0) break;
+          read += bytesRead;
+        }
+        const after = await fh.stat();
+        const current = await fs.promises.realpath(filePath);
+        if (fsReadBoundedDenied(current)) return sendError(ws, id, 'fs.readBounded: path not permitted (EDENIED)');
+        const currentStat = await fs.promises.stat(current);
+        if (read !== data.length || fsReadBoundedVersion(resolved, after) !== version
+          || fsReadBoundedVersion(current, currentStat) !== version) {
+          return sendError(ws, id, 'fs.readBounded: file changed (ESTALE)');
+        }
+        sendOk(ws, id, { data: data.toString('base64'), encoding: 'base64', size: st.size,
+          offset, mtimeMs: st.mtimeMs, version });
+      } finally {
+        await fh.close();
+      }
+      return;
+    }
     if (st.size > FS_READ_BOUNDED_MAX_BYTES) {
       return sendError(ws, id, 'fs.readBounded: too large (EFBIG)');
     }

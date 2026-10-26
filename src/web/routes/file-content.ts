@@ -197,11 +197,12 @@ const REMOTE_STREAM_CHUNK = 1024 * 1024
  * spec (serve 416), or the inclusive byte window. Only single ranges are supported —
  * that's all <video>/<audio> ever send.
  */
-function parseRangeHeader(
+export function parseRangeHeader(
   header: string | undefined,
   size: number,
 ): { start: number; end: number } | 'unsatisfiable' | null {
   if (!header) return null
+  if (size === 0) return 'unsatisfiable'
   const m = /^bytes=(\d*)-(\d*)$/.exec(header.trim())
   if (!m) return 'unsatisfiable'
   const [, startStr, endStr] = m
@@ -209,11 +210,13 @@ function parseRangeHeader(
   if (startStr === '') {
     // Suffix range: last N bytes
     const suffix = Number(endStr)
-    if (suffix === 0) return 'unsatisfiable'
+    if (!Number.isSafeInteger(suffix) || suffix === 0) return 'unsatisfiable'
     return { start: Math.max(0, size - suffix), end: size - 1 }
   }
   const start = Number(startStr)
-  const end = endStr === '' ? size - 1 : Math.min(Number(endStr), size - 1)
+  const requestedEnd = endStr === '' ? size - 1 : Number(endStr)
+  if (!Number.isSafeInteger(start) || !Number.isSafeInteger(requestedEnd)) return 'unsatisfiable'
+  const end = Math.min(requestedEnd, size - 1)
   if (start >= size || start > end) return 'unsatisfiable'
   return { start, end }
 }
