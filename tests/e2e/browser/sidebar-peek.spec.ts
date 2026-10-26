@@ -3,21 +3,23 @@ import { isolateUiPrefs } from './todo-panel-helpers'
 import { openHome } from './home-navigation-helpers'
 
 /**
- * The collapsed rail peeks open on hover (useRailPeek.ts + sidebar-peek.css): it widens
- * over the page, every icon shows its name, and it folds back when the pointer leaves.
- * Pinned here: it opens fast, never moves the page or an icon, ignores a pointer passing
- * through, closes at once on a click (the panels it opens sit beside the NARROW rail),
- * works from the keyboard, never opens for touch, and the hamburger pins it.
+ * The collapsed rail's item peek (useRailPeek.ts, RailItemPill.tsx): hovering ONE icon
+ * grows that one item out over the page with its name (a pill laid over its row, same
+ * icon on the same spot); the other icons stay plain, the rail stays 56px and the page
+ * never moves. Moving to the next icon moves the pill there at once. Pinned here too:
+ * a pointer passing through or resting shows nothing, a click on the pill does what the
+ * icon does and closes it, panels the rail opens are never under it, the keyboard
+ * works the same way, touch never shows it, the hamburger still docks the full sidebar,
+ * and Org is its own entry.
  */
 
-const SHOTS = '/tmp/sidebar-peek'
+const SHOTS = '/tmp/sidebar-pill'
 test.use({ viewport: { width: 1280, height: 800 }, deviceScaleFactor: 1 })
 test.describe.configure({ mode: 'default' })
 test.setTimeout(120_000)
 
 const rail = (page: Page) => page.locator('#primary-sidebar')
-// The open peek's own class, exactly: not `rail-peek-out` (closing) or `rail-peek-snap` (closed by a click).
-const PEEK = /(?:^|\s)rail-peek(?:\s|$)/
+const pill = (page: Page) => page.getByTestId('rail-item-pill')
 const notes = (page: Page) => page.getByTestId('sidebar-core-app-notes')
 
 async function boot(page: Page, baseURL: string) {
@@ -28,11 +30,6 @@ async function boot(page: Page, baseURL: string) {
   await page.mouse.move(700, 400)
 }
 
-/** Every rail icon's position: they must not move when the rail peeks. */
-async function iconSpots(page: Page) {
-  return rail(page).locator('.sidebar-link > svg, .sidebar-link > img, .sidebar-collapse-btn > svg').evaluateAll((els) =>
-    els.map((el) => { const r = el.getBoundingClientRect(); return [Math.round(r.left * 2) / 2, Math.round(r.top * 2) / 2] }))
-}
 const railWidth = (page: Page) => rail(page).evaluate((el) => el.getBoundingClientRect().width)
 const mainLeft = (page: Page) => page.locator('.main-content').evaluate((el) => el.getBoundingClientRect().left)
 async function centerOf(page: Page, testId: string) {
@@ -40,74 +37,92 @@ async function centerOf(page: Page, testId: string) {
   if (!box) throw new Error(`no box for ${testId}`)
   return { x: box.x + box.width / 2, y: box.y + box.height / 2 }
 }
+/** The pill's grow clips its hit area too: aim at the name only once it is out. */
+const grown = (page: Page) => pill(page).evaluate((el) => Promise.all(el.getAnimations({ subtree: true }).map((a) => a.finished)).then(() => true))
+/** The row's icon box and the pill's copy of it: the copy must sit exactly on the original. */
+async function iconsOf(page: Page, testId: string) {
+  const row = await page.getByTestId(testId).evaluate((el) => {
+    const icon = [...el.children].find((c) => !c.matches('.sidebar-label, .notification-badge-dot, .notification-badge-count, .sidebar-host-dot, .quiet-moon'))!
+    const r = icon.getBoundingClientRect(); return [r.left, r.top, r.width, r.height]
+  })
+  const copy = await pill(page).evaluate((el) => {
+    const r = el.querySelector('.rail-item-pill-icon')!.getBoundingClientRect(); return [r.left, r.top, r.width, r.height]
+  })
+  return { row: row.map((n) => Math.round(n * 2) / 2), copy: copy.map((n) => Math.round(n * 2) / 2) }
+}
 
-test('hover opens the rail over the page at once, names every icon, and leaving folds it back', async ({ page, baseURL }) => {
+test('hovering one icon grows only that item out with its name; the next icon takes it at once', async ({ page, baseURL }) => {
   const errors: string[] = []
   page.on('pageerror', (e) => errors.push(e.message))
   await boot(page, baseURL!)
-  // The rail's app list settles after boot (plugin apps arrive later): wait for two equal reads.
-  let before = await iconSpots(page)
-  await expect.poll(async () => { const now = await iconSpots(page); const same = JSON.stringify(now) === JSON.stringify(before); before = now; return same }, { intervals: [300] }).toBe(true)
   const left = await mainLeft(page)
-  expect(await railWidth(page)).toBeLessThan(60)
 
-  const at = await centerOf(page, 'sidebar-core-app-notes')
-  const t0 = Date.now()
+  // The grow lasts ~0.2s: watch for it instead of racing it.
+  await page.evaluate(() => {
+    const w = window as unknown as { __grew: string[] }
+    w.__grew = []
+    new MutationObserver(() => {
+      const p = document.querySelector('[data-testid="rail-item-pill"]')
+      if (p?.hasAttribute('data-grow')) w.__grew.push(p.textContent ?? '')
+    }).observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['data-grow'] })
+  })
+  const grew = () => page.evaluate(() => [...new Set((window as unknown as { __grew: string[] }).__grew)])
+  const at = await centerOf(page, 'sidebar-core-app-settings')
   await page.mouse.move(at.x, at.y)
-  await expect(rail(page)).toHaveClass(PEEK, { timeout: 1000 })
-  const openedMs = Date.now() - t0
-  // Intent delay 80ms + one frame; generous for a loaded machine.
-  expect(openedMs).toBeLessThan(600)
-  await expect.poll(() => railWidth(page)).toBeGreaterThan(235)
-  await expect(notes(page).locator('.sidebar-label')).toBeVisible()
-  expect(await notes(page).locator('.sidebar-label').evaluate((el) => el.getBoundingClientRect().width)).toBeGreaterThan(20)
-  // The page did not move, and no icon did.
+  await expect(pill(page)).toHaveCount(1)
+  await expect(pill(page)).toHaveText('Settings')
+  await expect.poll(grew).toEqual(['Settings'])
+  // It grows once, then stays as it is.
+  await expect(pill(page)).not.toHaveAttribute('data-grow')
+  // Laid exactly over its row, growing out past the rail.
+  const icons = await iconsOf(page, 'sidebar-core-app-settings')
+  expect(icons.copy).toEqual(icons.row)
+  const box = (await pill(page).boundingBox())!
+  expect(box.x + box.width).toBeGreaterThan(70)
+  // The rail did not widen, no other name shows, and the page did not move.
+  expect(await railWidth(page)).toBeLessThan(60)
+  await expect(rail(page).locator('.sidebar-label').filter({ visible: true })).toHaveCount(0)
   expect(await mainLeft(page)).toBe(left)
-  expect(await iconSpots(page)).toEqual(before)
-  await page.screenshot({ path: `${SHOTS}/${test.info().project.name}-open.png`, clip: { x: 0, y: 0, width: 420, height: 800 } })
+  await page.screenshot({ path: `${SHOTS}/${test.info().project.name}-settings.png`, clip: { x: 0, y: 0, width: 360, height: 800 } })
 
-  // Moving within the wide rail (over a name) keeps it open.
-  await page.mouse.move(180, at.y)
-  await page.waitForTimeout(400)
-  await expect(rail(page)).toHaveClass(PEEK)
+  // The next icon: the one pill moves there, whole, with no grow.
+  const n = await centerOf(page, 'sidebar-core-app-notes')
+  await page.mouse.move(n.x, n.y)
+  await expect(pill(page)).toHaveText('Notes')
+  await expect(pill(page)).toHaveCount(1)
+  await expect(pill(page)).not.toHaveAttribute('data-grow')
+  expect(await grew()).toEqual(['Settings'])
+  const again = await iconsOf(page, 'sidebar-core-app-notes')
+  expect(again.copy).toEqual(again.row)
 
-  // Every frame of the way back, the page stays put.
-  const sample = () => page.evaluate(() => new Promise<number[]>((resolve) => {
-    const main = document.querySelector('.main-content')!
-    const lefts: number[] = []
-    const t0 = performance.now()
-    const tick = () => { lefts.push(main.getBoundingClientRect().left); if (performance.now() - t0 < 700) requestAnimationFrame(tick); else resolve(lefts) }
-    requestAnimationFrame(tick)
-  }))
-  const leaving = sample()
+  // A Home toggle (a smaller row, a 16px icon) and Org, its own entry.
+  const ag = await centerOf(page, 'sidebar-toggle-calendar')
+  await page.mouse.move(ag.x, ag.y, { steps: 3 })
+  await expect(pill(page)).toHaveText('Agenda')
+  const agIcons = await iconsOf(page, 'sidebar-toggle-calendar')
+  expect(agIcons.copy).toEqual(agIcons.row)
+  const org = await centerOf(page, 'sidebar-org')
+  await page.mouse.move(org.x, org.y, { steps: 3 })
+  await expect(pill(page)).toHaveText('Org')
+
+  // Leaving the rail takes it away.
   await page.mouse.move(700, 400)
-  expect(new Set(await leaving)).toEqual(new Set([left]))
-  await expect(rail(page)).not.toHaveClass(PEEK, { timeout: 1500 })
-  await expect.poll(() => railWidth(page)).toBeLessThan(60)
-  expect(await iconSpots(page)).toEqual(before)
-  // And when a click closes it.
-  const cal = await centerOf(page, 'sidebar-core-app-calendar')
-  await page.mouse.move(cal.x, cal.y)
-  await expect(rail(page)).toHaveClass(PEEK)
-  const clicking = sample()
-  await page.mouse.down()
-  await page.mouse.up()
-  expect(new Set(await clicking)).toEqual(new Set([left]))
+  await expect(pill(page)).toHaveCount(0)
+  expect(await mainLeft(page)).toBe(left)
   expect(errors).toEqual([])
 })
 
-test('a pointer passing through the rail does not open it, nor does a drag, nor a page changing under a resting pointer', async ({ page, baseURL }) => {
+test('a pointer passing through, a drag, or a page changing under a resting pointer shows nothing', async ({ page, baseURL }) => {
   await boot(page, baseURL!)
   // Synthetic pointer events in ONE task: a real sweep's timing is at the mercy of a loaded machine.
   const seen = await page.evaluate(async () => {
-    const railEl = document.getElementById('primary-sidebar')!
-    const item = railEl.querySelector('[data-testid="sidebar-core-app-notes"]')!
+    const item = document.querySelector('[data-testid="sidebar-core-app-notes"]')!
     const main = document.querySelector('.main-content')!
     const box = item.getBoundingClientRect()
     const at = { x: box.left + 10, y: box.top + box.height / 2 }
-    let opened = false
-    new MutationObserver(() => { if (railEl.classList.contains('rail-peek')) opened = true })
-      .observe(railEl, { attributes: true, attributeFilter: ['class'] })
+    let shown = false
+    new MutationObserver(() => { if (document.querySelector('[data-testid="rail-item-pill"]')) shown = true })
+      .observe(document.body, { childList: true, subtree: true })
     const fire = (type: string, target: Element, related: Element | null, x: number, y: number, buttons = 0) =>
       target.dispatchEvent(new PointerEvent(type, { bubbles: true, pointerType: 'mouse', relatedTarget: related, buttons, clientX: x, clientY: y }))
     const into = (x: number, buttons = 0) => {
@@ -120,66 +135,107 @@ test('a pointer passing through the rail does not open it, nor does a drag, nor 
     }
     const wait = (ms: number) => new Promise((r) => setTimeout(r, ms))
     fire('pointermove', main, null, 700, at.y)
-    // 1. In and out in one go.
-    into(at.x); out(); await wait(400)
-    const passThrough = opened
-    // 2. Button held: a drag or a text selection sweeping onto the rail and resting there.
-    into(at.x, 1); fire('pointermove', item, null, at.x + 2, at.y, 1); await wait(400); out(1); await wait(300)
-    const drag = opened
-    // 3. Over the rail with no movement (the page reflowed under a resting pointer).
-    into(700); fire('pointermove', item, null, 700, at.y); await wait(400); out(); await wait(300)
-    const resting = opened
-    // 4. Control: the same events with a real move, held there, do open it.
-    fire('pointermove', main, null, 700, at.y); into(at.x); await wait(400)
-    const control = opened
+    into(at.x); out(); await wait(300)
+    const passThrough = shown
+    into(at.x, 1); fire('pointermove', item, null, at.x + 2, at.y, 1); await wait(300); out(1); await wait(300)
+    const drag = shown
+    // Over a row with no movement (the page reflowed under a resting pointer).
+    into(700); fire('pointermove', item, null, 700, at.y); await wait(300); out(); await wait(300)
+    const resting = shown
+    // Control: the same events with a real move, held there, do show it.
+    fire('pointermove', main, null, 700, at.y); into(at.x); await wait(300)
+    const control = shown
     out()
     return { passThrough, drag, resting, control }
   })
   expect(seen).toEqual({ passThrough: false, drag: false, resting: false, control: true })
 })
 
-test('a click closes it at once; another item reopens it; panels sit beside the narrow rail', async ({ page, baseURL }) => {
+test('clicking the pill does what the icon does and closes it; panels open beside the narrow rail', async ({ page, baseURL }) => {
   await boot(page, baseURL!)
-  const at = await centerOf(page, 'sidebar-core-app-notes')
+  const at = await centerOf(page, 'sidebar-core-app-calendar')
   await page.mouse.move(at.x, at.y)
-  await expect(rail(page)).toHaveClass(PEEK)
-  await page.mouse.down()
-  await page.mouse.up()
-  // Snap: no animation out, the narrow rail is back in the click's own frame.
-  await expect(rail(page)).not.toHaveClass(PEEK)
-  expect(await railWidth(page)).toBeLessThan(60)
-  await expect(page).toHaveURL(/\/notes/)
-  // Resting on the clicked item keeps it closed.
+  await expect(pill(page)).toHaveText('Calendar')
+  // Click on the NAME, past the rail's edge: it is the item, not the page under it.
+  await grown(page)
+  const box = (await pill(page).boundingBox())!
+  await page.mouse.click(box.x + box.width - 12, at.y)
+  await expect(page).toHaveURL(/\/calendar/)
+  await expect(pill(page)).toHaveCount(0)
+  // Resting on the clicked item keeps it quiet; another item shows its own.
   await page.mouse.move(at.x + 2, at.y + 1)
-  await page.waitForTimeout(400)
-  await expect(rail(page)).not.toHaveClass(PEEK)
-  // Moving to another item is a new look.
-  const cal = await centerOf(page, 'sidebar-core-app-calendar')
-  await page.mouse.move(cal.x, cal.y, { steps: 3 })
-  await expect(rail(page)).toHaveClass(PEEK)
+  await page.waitForTimeout(300)
+  await expect(pill(page)).toHaveCount(0)
+  const n = await centerOf(page, 'sidebar-core-app-notes')
+  await page.mouse.move(n.x, n.y, { steps: 3 })
+  await expect(pill(page)).toHaveText('Notes')
 
-  // The bell's panel slides out beside the narrow rail, and the rail stays narrow under it.
+  // The bell's panel slides out beside the rail with no pill over it.
   const bell = rail(page).locator('.sidebar-notification-btn')
-  await bell.hover()
-  await bell.click()
+  const bb = (await bell.boundingBox())!
+  await page.mouse.move(bb.x + bb.width / 2, bb.y + bb.height / 2, { steps: 3 })
+  await expect(pill(page)).toContainText('Notifications')
+  await page.mouse.click(bb.x + bb.width / 2, bb.y + bb.height / 2)
   const panel = page.locator('.notification-panel')
   await expect(panel).toBeVisible()
-  await expect(rail(page)).not.toHaveClass(PEEK)
-  // After its slide-in (a translate) settles.
+  await expect(pill(page)).toHaveCount(0)
   await expect.poll(async () => Math.round((await panel.boundingBox())!.x)).toBe(56)
-  await page.mouse.move(cal.x, cal.y, { steps: 3 })
-  await page.waitForTimeout(400)
-  await expect(rail(page)).not.toHaveClass(PEEK)
-  // Escape closes the panel and puts focus back on the bell: that is not a keyboard visit,
-  // so the rail stays narrow (it once opened here and stuck).
+  await page.mouse.move(n.x, n.y, { steps: 3 })
+  await page.waitForTimeout(300)
+  await expect(pill(page)).toHaveCount(0)
+  // Escape closes the panel and hands focus back to the bell: no pill for that.
   await page.mouse.move(700, 400)
   await page.keyboard.press('Escape')
   await expect(panel).toHaveCount(0)
-  await page.waitForTimeout(400)
-  await expect(rail(page)).not.toHaveClass(PEEK)
+  await page.waitForTimeout(300)
+  await expect(pill(page)).toHaveCount(0)
 })
 
-test('keyboard: focus in the rail opens it, Escape closes it, focus leaving folds it', async ({ page, baseURL }) => {
+test('the row under the pill keeps its own events, and the pill follows the row\'s content', async ({ page, baseURL }) => {
+  await boot(page, baseURL!)
+  const at = await centerOf(page, 'sidebar-core-app-notes')
+  await page.mouse.move(at.x, at.y)
+  await expect(pill(page)).toHaveText('Notes')
+  // The pill lets the pointer through over its row: the row itself is what is under it.
+  const under = await page.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.closest('[data-testid]')?.getAttribute('data-testid'), at)
+  expect(under).toBe('sidebar-core-app-notes')
+  // A change inside the row (a badge, a ticking ring) shows on the pill.
+  await notes(page).evaluate((el) => { el.querySelector('.sidebar-label')!.textContent = 'Notes 2' })
+  await expect(pill(page)).toHaveText('Notes 2')
+  await notes(page).evaluate((el) => { el.querySelector('.sidebar-label')!.textContent = 'Notes' })
+  // A press that lands as the pill appears is still the row's click.
+  await page.mouse.move(700, 400)
+  await expect(pill(page)).toHaveCount(0)
+  const mail = await centerOf(page, 'sidebar-core-app-mail')
+  await page.mouse.move(mail.x, mail.y)
+  await page.mouse.down()
+  await expect(pill(page)).toHaveText('Mail')
+  await page.mouse.up()
+  await expect(page).toHaveURL(/\/mail/)
+})
+
+test('right-clicking the pill opens that item\'s menu, and the pill stays while the menu is up', async ({ page, baseURL }) => {
+  await boot(page, baseURL!)
+  const at = await centerOf(page, 'sidebar-core-app-notes')
+  await page.mouse.move(at.x, at.y)
+  await expect(pill(page)).toHaveText('Notes')
+  await grown(page)
+  const box = (await pill(page).boundingBox())!
+  await page.mouse.click(box.x + box.width - 12, at.y, { button: 'right' })
+  const menu = page.getByTestId('sidebar-app-ctx-menu')
+  await expect(menu).toBeVisible()
+  await expect(menu).toContainText('Notes')
+  const mb = (await menu.boundingBox())!
+  await page.mouse.move(mb.x + mb.width / 2, mb.y + mb.height - 6, { steps: 3 })
+  await page.waitForTimeout(400)
+  await expect(pill(page)).toHaveText('Notes')
+  await page.keyboard.press('Escape')
+  await expect(menu).toHaveCount(0)
+  await page.mouse.move(700, 400)
+  await expect(pill(page)).toHaveCount(0)
+})
+
+test('keyboard: the focused item shows its pill, it follows focus, Escape and focus leaving hide it', async ({ page, baseURL }) => {
   await boot(page, baseURL!)
   // WebKit leaves links out of the Tab order (Safari's default), so focus moves by script
   // right after a key press, which makes it :focus-visible in both engines.
@@ -189,71 +245,34 @@ test('keyboard: focus in the rail opens it, Escape closes it, focus leaving fold
   }
   await keyFocus('[data-testid="sidebar-core-app-notes"]')
   await expect(notes(page)).toBeFocused()
-  await expect(rail(page)).toHaveClass(PEEK)
-  await page.keyboard.press('Escape')
-  await expect(rail(page)).not.toHaveClass(PEEK)
+  await expect(pill(page)).toHaveText('Notes')
   await keyFocus('[data-testid="sidebar-core-app-calendar"]')
-  await expect(rail(page)).toHaveClass(PEEK)
-  // Out of the rail into the page.
-  await keyFocus('#home-task-navigation .todo-search-input')
-  await expect(rail(page)).not.toHaveClass(PEEK, { timeout: 1500 })
-})
-
-test('a right-click menu keeps it open while the pointer is in the menu', async ({ page, baseURL }) => {
-  await boot(page, baseURL!)
-  const at = await centerOf(page, 'sidebar-core-app-notes')
-  await page.mouse.move(at.x, at.y)
-  await expect(rail(page)).toHaveClass(PEEK)
-  await page.mouse.click(at.x, at.y, { button: 'right' })
-  const menu = page.getByTestId('sidebar-app-ctx-menu')
-  await expect(menu).toBeVisible()
-  const box = (await menu.boundingBox())!
-  await page.mouse.move(box.x + box.width / 2, box.y + box.height - 6, { steps: 3 })
-  await page.waitForTimeout(500)
-  await expect(rail(page)).toHaveClass(PEEK)
+  await expect(pill(page)).toHaveText('Calendar')
   await page.keyboard.press('Escape')
-  await expect(menu).toHaveCount(0)
-  await page.mouse.move(700, 400)
-  await expect(rail(page)).not.toHaveClass(PEEK, { timeout: 1500 })
+  await expect(pill(page)).toHaveCount(0)
+  await keyFocus('[data-testid="sidebar-core-app-mail"]')
+  await expect(pill(page)).toHaveText('Mail')
+  await keyFocus('#home-task-navigation .todo-search-input')
+  await expect(pill(page)).toHaveCount(0)
 })
 
-test('the hamburger pins it open; the docked sidebar does not peek', async ({ page, baseURL }) => {
+test('the hamburger still docks the full sidebar, and the docked sidebar shows no pill', async ({ page, baseURL }) => {
   await boot(page, baseURL!)
   const left = await mainLeft(page)
-  const at = await centerOf(page, 'sidebar-core-app-notes')
-  await page.mouse.move(at.x, at.y)
-  await expect(rail(page)).toHaveClass(PEEK)
-  const pin = rail(page).locator('.sidebar-collapse-btn')
-  await expect(pin).toHaveAttribute('title', 'Keep sidebar open')
-  await pin.hover()
-  await pin.click()
+  const ham = rail(page).locator('.sidebar-collapse-btn')
+  await expect(ham).toHaveAttribute('title', 'Expand sidebar')
+  await ham.click()
   await expect(rail(page)).not.toHaveClass(/\bcollapsed\b/)
-  await expect(rail(page)).not.toHaveClass(PEEK)
   await expect.poll(() => mainLeft(page)).toBeGreaterThan(left + 150)
-  await page.mouse.move(700, 400)
-  await page.mouse.move(at.x, at.y)
+  const at = await centerOf(page, 'sidebar-core-app-notes')
+  await page.mouse.move(at.x, at.y, { steps: 3 })
   await page.waitForTimeout(300)
-  await expect(rail(page)).not.toHaveClass(PEEK)
-  await pin.click()
+  await expect(pill(page)).toHaveCount(0)
+  await ham.click()
   await expect(rail(page)).toHaveClass(/\bcollapsed\b/)
-  // The pointer still rests on the rail after un-pinning: the click itself does not reopen it.
-  await page.waitForTimeout(300)
-  await expect(rail(page)).not.toHaveClass(PEEK)
 })
 
-test.describe('touch', () => {
-  test.use({ hasTouch: true })
-  test('a tap never opens the peek; it just does what the icon does', async ({ page, baseURL }) => {
-    await boot(page, baseURL!)
-    const at = await centerOf(page, 'sidebar-core-app-notes')
-    await page.touchscreen.tap(at.x, at.y)
-    await expect(page).toHaveURL(/\/notes/)
-    await page.waitForTimeout(400)
-    await expect(rail(page)).not.toHaveClass(PEEK)
-  })
-})
-
-test('Org is its own top-level entry, right under the Home group, and the peek names it', async ({ page, baseURL }) => {
+test('Org is its own top-level entry, right under the Home group', async ({ page, baseURL }) => {
   await boot(page, baseURL!)
   const org = page.getByTestId('sidebar-org')
   await expect(page.locator('.sidebar-home-group [data-testid="sidebar-org"]')).toHaveCount(0)
@@ -264,11 +283,20 @@ test('Org is its own top-level entry, right under the Home group, and the peek n
   expect(orgBox!.x).toBe(notesBox!.x)
   const at = await centerOf(page, 'sidebar-org')
   await page.mouse.move(at.x, at.y)
-  await expect(rail(page)).toHaveClass(PEEK)
-  await expect(org.locator('.sidebar-label')).toBeVisible()
-  await expect(org.locator('.sidebar-label')).toHaveText('Org')
-  await page.mouse.down()
-  await page.mouse.up()
+  await expect(pill(page)).toHaveText('Org')
+  await page.mouse.click(at.x, at.y)
   await expect(page).toHaveURL(/\/org$/)
   await expect(org).toHaveAttribute('aria-current', 'page')
+})
+
+test.describe('touch', () => {
+  test.use({ hasTouch: true })
+  test('a tap never shows a pill; it just does what the icon does', async ({ page, baseURL }) => {
+    await boot(page, baseURL!)
+    const at = await centerOf(page, 'sidebar-core-app-notes')
+    await page.touchscreen.tap(at.x, at.y)
+    await expect(page).toHaveURL(/\/notes/)
+    await page.waitForTimeout(300)
+    await expect(pill(page)).toHaveCount(0)
+  })
 })

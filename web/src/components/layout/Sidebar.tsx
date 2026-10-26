@@ -25,7 +25,7 @@ import { PluginBoundary } from '@/components/common/PluginBoundary';
 import { SidebarStatusItems } from './SidebarStatusItems';
 import { useLendAppUpdateToasts } from './useAppUpdateActions';
 import { useRailPeek } from './useRailPeek';
-import '@/styles/sidebar-peek.css';
+import { RailItemPill } from './RailItemPill';
 import { ContextMenu, useContextMenu, type ContextMenuItem } from '@/components/common/ContextMenu';
 import { subscribeVoiceStatus, getVoiceStatus, type VoiceStatus } from '@/utils/voice-status';
 import { bellPresentation } from '@/utils/host-banner-placement';
@@ -98,15 +98,14 @@ export function Sidebar({
   const bell = bellPresentation({ reason: bellReason, attentionCount, hasIssues, quiet: quietNow, quietLabel: quietNow ? quietLabel(quiet) : '', collapsed });
   const [voiceOpen, setVoiceOpen] = useState(false);
   const [statusOpen, setStatusOpen] = useState(false);
-  // Collapsed, the rail widens over the page while hovered or tabbed into, so each icon
-  // shows its name (useRailPeek). The panels it opens slide out beside the narrow rail.
+  // Collapsed, the icon under the pointer (or keyboard focus) grows out over the page with
+  // its name, that one only (useRailPeek, RailItemPill). Panels the rail opens block it.
   const peek = useRailPeek({
     enabled: collapsed && !isMobile,
     blocked: notifOpen || voiceOpen || statusOpen,
     hold: appMenu.state !== null,
   });
-  const peekClass = peek.phase === 'open' ? ' rail-peek' : peek.phase === 'closing' ? ' rail-peek-out' : peek.snap ? ' rail-peek-snap' : '';
-  const cls = `sidebar${open ? ' open' : ''}${collapsed ? ' collapsed' : ''}${peekClass}`;
+  const cls = `sidebar${open ? ' open' : ''}${collapsed ? ' collapsed' : ''}`;
   // Live voice status (transcribing spinner / failure dot) from any MicButton.
   const [voiceStatus, setVoiceStatusState] = useState<VoiceStatus>(getVoiceStatus());
   useEffect(() => subscribeVoiceStatus(setVoiceStatusState), []);
@@ -329,7 +328,7 @@ export function Sidebar({
           className="sidebar-collapse-btn"
           onClick={onToggleCollapse}
           aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-          title={!collapsed ? 'Collapse sidebar' : peek.phase === 'closed' ? 'Expand sidebar' : 'Keep sidebar open'}
+          title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
         >
           <HamburgerIcon />
         </button>
@@ -479,6 +478,7 @@ export function Sidebar({
         onClose={() => setVoiceOpen(false)}
         sidebarCollapsed={collapsed}
       />
+      {peek.item && <RailItemPill item={peek.item} grow={peek.grow} handlers={peek.pillHandlers} onGone={peek.pillGone} />}
     </aside>
   );
 }

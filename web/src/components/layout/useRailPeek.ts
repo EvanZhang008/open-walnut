@@ -1,25 +1,23 @@
 /**
- * The collapsed rail peeks open: hovering it (or tabbing into it) widens it over the
- * page so every icon shows its name, and leaving puts it back. The page never moves;
- * the wide rail floats over it (sidebar-peek.css). The timing and the rules live in
- * RailPeekController; this hook feeds it the rail's DOM events.
+ * The collapsed rail's item peek: hovering (or tabbing to) one icon grows that one item
+ * out over the page with its name; the other icons stay plain. RailPeekController owns
+ * the rules and timing; this hook feeds it the rail's DOM events and says which row is
+ * up. RailItemPill draws it.
  */
 import { useEffect, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
-import { RailPeekController, type RailPeekOptions, type RailPeekPhase } from './rail-peek-controller';
+import { RailPeekController, type RailPeekOptions } from './rail-peek-controller';
 
-export type { RailPeekPhase } from './rail-peek-controller';
-
-const ITEM_SELECTOR = 'a[href], button';
-const PIN_SELECTOR = '.sidebar-collapse-btn';
+/** The rows that peek: every rail entry (apps, Home's toggles, Org, status items, Voice, the bell). */
+export const RAIL_ITEM_SELECTOR = '.sidebar-link';
 // Focus a closing panel puts back on its rail button (Escape on the bell's panel) is not a
-// keyboard visit: it would open the rail and pin it there. Keyboard focus right after
-// Escape is that hand-back; any other focus-visible arrival is the keyboard's.
+// keyboard visit. Keyboard focus right after Escape is that hand-back.
 const ESCAPE_HANDBACK_MS = 1000;
 
 /**
  * React bubbles events through portals by the COMPONENT tree, so the rail's handlers also
- * hear its context menu and its slide-out panels. Only events from the rail's own DOM count.
+ * hear its pill, its context menu and its slide-out panels. Only events from the rail's
+ * own DOM count as rail events.
  */
 function fromRail(e: React.SyntheticEvent): boolean {
   return e.currentTarget instanceof Node && e.target instanceof Node && e.currentTarget.contains(e.target);
@@ -29,9 +27,16 @@ function isFocusVisible(el: Element): boolean {
   try { return el.matches(':focus-visible'); } catch { return false; }
 }
 
+function rowOf(target: EventTarget | null): HTMLElement | null {
+  return target instanceof Element ? target.closest<HTMLElement>(RAIL_ITEM_SELECTOR) : null;
+}
+
+export interface RailPeekState { item: HTMLElement | null; grow: boolean }
+
 export function useRailPeek(options: RailPeekOptions) {
-  const [state, setState] = useState<{ phase: RailPeekPhase; snap: boolean }>({ phase: 'closed', snap: false });
+  const [state, setState] = useState<RailPeekState>({ item: null, grow: false });
   const rail = useRef<HTMLElement | null>(null);
+  const pill = useRef<HTMLElement | null>(null);
   const lastEscape = useRef(0);
   // Where the pointer last was, and whether the latest pointermove actually went somewhere:
   // browsers send moves (and overs) at the same spot when the page changes under a resting pointer.
@@ -39,11 +44,12 @@ export function useRailPeek(options: RailPeekOptions) {
   const moved = useRef(false);
   const ctl = useRef<RailPeekController | null>(null);
   if (ctl.current === null) {
-    ctl.current = new RailPeekController((phase, snap, sync) => {
-      // A click's snap commits before the click's own handlers run, so what they measure and
-      // open (a popover beside its button, a panel at the rail's edge) sees the narrow rail.
-      if (sync) flushSync(() => setState({ phase, snap }));
-      else setState({ phase, snap });
+    ctl.current = new RailPeekController((item, grow, sync) => {
+      const next = { item: item as HTMLElement | null, grow };
+      // A click's close commits before the click's own handlers run, so what they open
+      // (a panel at the rail's edge, a popover beside its button) is never under the pill.
+      if (sync) flushSync(() => setState(next));
+      else setState(next);
     });
   }
   const peek = ctl.current;
@@ -51,12 +57,9 @@ export function useRailPeek(options: RailPeekOptions) {
   const { enabled, blocked, hold } = options;
   useEffect(() => {
     // A menu that closed under the pointer sends the rail no leave; ask the DOM where the pointer is.
-    if (!hold && rail.current) peek.syncHover(rail.current.matches(':hover'));
+    if (!hold) peek.syncHover(!!(rail.current?.matches(':hover') || pill.current?.matches(':hover')));
     peek.setOptions({ enabled, blocked, hold });
   }, [peek, enabled, blocked, hold]);
-
-  // Docking or undocking is the hamburger's own width animation, never a snap.
-  useEffect(() => { setState((s) => (s.snap ? { ...s, snap: false } : s)); }, [enabled]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { lastEscape.current = e.key === 'Escape' ? Date.now() : 0; };
@@ -66,22 +69,22 @@ export function useRailPeek(options: RailPeekOptions) {
       moved.current = last !== null && (last.x !== e.clientX || last.y !== e.clientY);
       lastPoint.current = { x: e.clientX, y: e.clientY };
     };
+    // A resize moves the rows under a resting pointer: that pointer's pill goes.
+    const onResize = () => peek.reset();
     window.addEventListener('keydown', onKey, true);
     window.addEventListener('pointermove', onMove, true);
+    window.addEventListener('resize', onResize);
     return () => {
       window.removeEventListener('keydown', onKey, true);
       window.removeEventListener('pointermove', onMove, true);
+      window.removeEventListener('resize', onResize);
       peek.dispose();
     };
   }, [peek]);
 
   const handlers = {
-    onPointerEnter(e: React.PointerEvent<HTMLElement>) {
-      rail.current = e.currentTarget;
-      if (e.pointerType === 'touch' || !fromRail(e)) return;
-      peek.pointerEnter();
-    },
-    // Not filtered: a leave that reaches the rail means the pointer is outside it and its portals.
+    // Entering opens nothing by itself (see pointerMove); a leave that reaches the rail
+    // means the pointer is outside the rail and its pill, so it is not filtered.
     onPointerLeave(e: React.PointerEvent<HTMLElement>) {
       if (e.pointerType === 'touch') return;
       peek.pointerLeave();
@@ -89,12 +92,14 @@ export function useRailPeek(options: RailPeekOptions) {
     onPointerMove(e: React.PointerEvent<HTMLElement>) {
       rail.current = e.currentTarget;
       if (e.pointerType === 'touch' || !moved.current || !fromRail(e)) return;
-      peek.pointerMove((e.target as Element).closest(ITEM_SELECTOR), e.buttons);
+      peek.pointerMove(rowOf(e.target), e.buttons);
     },
     onFocus(e: React.FocusEvent<HTMLElement>) {
       if (!fromRail(e) || !isFocusVisible(e.target as Element)) return;
       if (Date.now() - lastEscape.current < ESCAPE_HANDBACK_MS) return;
-      peek.keyboardFocus();
+      const row = rowOf(e.target);
+      if (row) peek.keyboardFocus(row);
+      else peek.focusLeft();
     },
     onBlur(e: React.FocusEvent<HTMLElement>) {
       if (!fromRail(e)) return;
@@ -107,10 +112,20 @@ export function useRailPeek(options: RailPeekOptions) {
     },
     onClickCapture(e: React.MouseEvent<HTMLElement>) {
       if (!fromRail(e)) return;
-      const target = e.target as Element;
-      peek.click(target.closest(ITEM_SELECTOR), target.closest(PIN_SELECTOR) !== null);
+      peek.click(rowOf(e.target));
+    },
+    onScroll() { peek.reset(); },
+  };
+
+  const pillHandlers = {
+    ref: pill,
+    onPointerMove(e: React.PointerEvent<HTMLElement>) {
+      if (e.pointerType !== 'touch') peek.pillHover();
     },
   };
 
-  return { phase: state.phase, snap: state.snap, handlers };
+  // The pill's row went away, or the wheel turned on the pill: the rows are leaving the pointer.
+  const pillGone = (why: 'gone' | 'wheel') => { if (why === 'gone') peek.drop(); else peek.reset(); };
+
+  return { item: state.item, grow: state.grow, handlers, pillHandlers, pillGone };
 }
