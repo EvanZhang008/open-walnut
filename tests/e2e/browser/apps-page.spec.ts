@@ -1,6 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import net from 'node:net'
 import { expect, test, type Page } from '@playwright/test'
+import { bunRuntime } from '../../helpers/bun-runtime.js'
 
 /**
  * The Apps page (/apps): every built-in app, every plugin and its Apps, and where to
@@ -54,7 +55,7 @@ test.beforeAll(async ({ browser }) => {
   // A hook does not inherit the file's timeout, and a server plus Vite boots slowly on a busy machine.
   test.setTimeout(420_000)
   const port = await reservePort()
-  child = spawn('./node_modules/.bin/tsx', ['tests/e2e/browser/plugin-store-server.ts'], {
+  child = spawn(bunRuntime(), ['tests/e2e/browser/plugin-store-server.ts'], {
     cwd: process.cwd(),
     env: { ...process.env, PW_PLUGIN_STORE_PORT: String(port) },
     stdio: ['ignore', 'pipe', 'pipe'],

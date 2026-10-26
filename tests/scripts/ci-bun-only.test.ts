@@ -269,6 +269,25 @@ describe('scripts/ci-remove-node.sh', () => {
   })
 })
 
+describe('the Playwright fixtures start Walnut on bun', () => {
+  // The runner itself stays on Node, so a spec that starts its server through tsx or node
+  // runs Walnut on that Node, which has no SQLite Walnut uses: the server refuses to start.
+  const SPAWNS_NODE = /\b(spawn|spawnSync|execFile|execFileSync|fork)\(\s*['"`][^'"`]*\b(node|npx|tsx)['"`]/
+  const dir = path.join(REPO, 'tests', 'e2e', 'browser')
+  const files = fs.readdirSync(dir).filter((f) => /\.(spec\.)?ts$/.test(f))
+
+  it('no spec or fixture spawns node, npx or tsx (bunRuntime() from tests/helpers/bun-runtime.ts)', () => {
+    expect(files.length).toBeGreaterThan(50)
+    const offenders = files.filter((f) => SPAWNS_NODE.test(fs.readFileSync(path.join(dir, f), 'utf8')))
+    expect(offenders).toEqual([])
+  })
+
+  it('the check catches the forms a spec used', () => {
+    for (const bad of ["spawn('./node_modules/.bin/tsx', [", "execFileSync('node', [", 'spawn(`npx`, [']) expect(bad).toMatch(SPAWNS_NODE)
+    for (const good of ["spawn(bunRuntime(), [", "execFileSync('git', [", "spawn('nodemon-free', ["]) expect(good).not.toMatch(SPAWNS_NODE)
+  })
+})
+
 describe('the daemon\'s JS twin is checked on Node where CI has it', () => {
   it('test:source-twin-node requires Node and runs every suite whose source twin follows tests/helpers/source-twin.ts', () => {
     const script = SCRIPTS['test:source-twin-node']!
