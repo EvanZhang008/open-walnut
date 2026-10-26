@@ -1,0 +1,96 @@
+/* One glass for everything that floats over the page: menus, popovers,
+   flyouts, context menus and the sidebar's slide-out panels. iOS material:
+   what lies behind turns into soft colour, never readable words, and the
+   overlay's own text stays crisp. The older recipe (72-80% tint, 16px blur, and
+   the voice panel's 72% tint with no blur at all) let task titles read straight
+   through and mix with the panel's own rows (2026-10-26, Mac app).
+
+   WebKit blurs only up to the nearest backdrop root (an ancestor with a filter,
+   backdrop-filter, opacity, mask or clip-path): a glass overlay inside one shows
+   the page behind it UNBLURRED. So the glass goes only on overlays portalled to
+   <body> or mounted where no ancestor is a backdrop root, and an overlay that
+   can open inside one stays opaque there (the second block). The folder picker,
+   the model picker and the board's card menu stay opaque by their own rules.
+   Phones keep their opaque menus and panels (phone-layout.css, phone-fixes-r2.css,
+   whose `html body` selectors outweigh these). */
+
+html:root {
+  --overlay-glass-bg: color-mix(in srgb, var(--card-bg) 82%, transparent);
+  --overlay-glass-blur: blur(50px) saturate(1.8);
+  /* The Materials Pass menus (globals.css) take the same glass. */
+  --glass-bg-menu: var(--overlay-glass-bg);
+  --glass-blur-menu: var(--overlay-glass-blur);
+}
+
+@supports ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) and (background: color-mix(in srgb, red 50%, transparent)) {
+  html .notification-panel,
+  html .notification-panel.voice-panel,
+  html .adopt-worker-flyout,
+  html .leader-subtasks-flyout,
+  html .task-kebab-project-flyout,
+  html .workspace-flyout,
+  html .plugin-field-flyout,
+  html .plugin-provenance-flyout,
+  html .trigger-jobs-flyout,
+  html .cal-cals-popover,
+  html .cal-create-popover,
+  html .cal-ctx-menu,
+  html .cal-item-popover,
+  html .cal-overflow-popover,
+  html .composer-overflow-menu,
+  html .engine-settings-popover,
+  html .fb-chip-menu,
+  html .fb-menu,
+  html .fb-overflow-menu,
+  html .notes-context-menu,
+  html .notes-format-block-menu,
+  html .notes-chat-switcher-menu,
+  html .notes-wikilink-panel,
+  html .notes-tag-panel,
+  html .notes-slash-panel,
+  html .latest-update-popover,
+  html .quote-pin-popover,
+  html .session-control-menu,
+  html .session-diff-base-popover,
+  html .side-question-popover,
+  html .sps-meta-more-popover,
+  html .status-item-popover,
+  html .tag-pills-menu,
+  html .thread-menu,
+  html .thread-path-menu,
+  html .tp-cols-popover,
+  html .tp-pri-popover,
+  html .tp-proj-popover,
+  html .link-hover-card,
+  html .trigger-picker,
+  html .agent-confirm-popover,
+  html .cmd-menu,
+  html .cmd-confirm-popover,
+  html .cron-confirm-popover,
+  /* Its "more below" fade is a mask, which would clear the glass at the foot. */
+  html .wn-context-menu:not([data-more='true']) {
+    background: var(--overlay-glass-bg);
+    -webkit-backdrop-filter: var(--overlay-glass-blur);
+    backdrop-filter: var(--overlay-glass-blur);
+  }
+
+  /* Inside a backdrop root (the focus dock's glass, a glass popover holding
+     its own composer) the blur cannot reach the page: opaque there. */
+  html .focus-dock .chat-plus-menu,
+  html .focus-dock .chat-send-menu,
+  html .focus-dock .command-palette-wrap,
+  html .side-question-popover .chat-plus-menu,
+  html .side-question-popover .chat-send-menu,
+  html .side-question-popover .command-palette-wrap {
+    background: var(--card-bg);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+
+  /* A composer inside a glass popover is part of that glass, not a second layer. */
+  html .cal-create-popover .quick-task-composer {
+    background: transparent;
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}

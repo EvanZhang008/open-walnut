@@ -35,6 +35,7 @@ import { installOpIdFetch } from './api/op-id';
 import { installLeaderPresence } from './hooks/useLeaderPresence';
 import './styles/globals.css';
 import './styles/home-navigation.css';
+import './styles/overlay-glass.css';
 
 // Every same-origin fetch write carries an op id (api/op-id.ts), the raw ones too,
 // before anything below sends one.
