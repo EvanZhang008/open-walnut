@@ -3,7 +3,7 @@
  * `POST /api/plugin-runtime/<id>/ai/run`, which streams NDJSON (text deltas, then one result or
  * error line). The run is cancelled when the caller's signal or the plugin's own signal aborts.
  */
-import { getDeviceToken } from '@/api/device-token'
+import { getDeviceToken } from '../api/device-token'
 
 export interface WebAiRequest {
   prompt: string
