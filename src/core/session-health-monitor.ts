@@ -28,6 +28,8 @@ import {
 } from './session-error-kind.js'
 import { engineCaps } from './agents/engine-registry.js'
 import { isMainAgentTask } from './org/main-stays-active.js'
+import { memoryPressureShedding } from './memory-pressure.js'
+import { transcriptLastActivityMs } from './transcript-last-activity.js'
 
 /** Best effort: an unreadable task is not the main agent's. */
 async function isMainAgentTaskId(taskId: string): Promise<boolean> {
@@ -81,6 +83,15 @@ const DEFAULT_LOCAL_IDLE_TIMEOUT_MS = 60 * 60 * 1000
 const DEFAULT_REMOTE_IDLE_TIMEOUT_MS = 2 * 60 * 60 * 1000
 /** Cron-armed (/loop) sessions: matches the CLI's 7-day recurring-cron auto-expiry. */
 const CRON_ARMED_IDLE_TIMEOUT_MS = 7 * 24 * 60 * 60 * 1000
+/** Local idle timeout while the machine is under memory pressure (memory-pressure.ts). */
+export const PRESSURE_IDLE_TIMEOUT_MS = 15 * 60 * 1000
+const TRANSCRIPT_ACTIVITY_TTL_MS = 5 * 60 * 1000
+/** A transcript that could not be found is looked for again after this long. */
+const TRANSCRIPT_MISS_TTL_MS = 30 * 60 * 1000
+/** After an attach, how long a silent session waits before its clock is read from
+ *  the transcript: a long tool still beats its 30 s progress heartbeat into the
+ *  stream (never the transcript), so four missed beats mean nothing is running. */
+export const TRANSCRIPT_SEED_GRACE_MS = 2 * 60 * 1000
 /**
  * How far ahead of an idle reap `session:will-reap` fires.
  *
@@ -173,6 +184,11 @@ export class SessionHealthMonitor {
    * forward) re-arms the warning, while a session sitting still stays silent.
    */
   private willReapWarnedBase = new Map<string, number>()
+  /** Transcript activity of local sessions the server has heard nothing from
+   *  since it started: { at: read time, ms: newest entry or null }. */
+  private transcriptActivity = new Map<string, { at: number; ms: number | null }>()
+  /** Where each of those transcripts lives (null: not found, at: when looked for). */
+  private transcriptFiles = new Map<string, { at: number; file: string | null }>()
 
   start(): void {
     if (this.handle) return
@@ -807,6 +823,30 @@ export class SessionHealthMonitor {
    *
    * (The old skip for WAIT-phase tasks went away with the WAIT phase, 2026-08-18.)
    */
+  /** Newest transcript entry of a local session, re-read at most every
+   *  TRANSCRIPT_ACTIVITY_TTL_MS (an idle session's transcript does not move). */
+  private async transcriptActivityMs(session: SessionRecord, now: number): Promise<number | null> {
+    const sid = session.claudeSessionId
+    const hit = this.transcriptActivity.get(sid)
+    if (hit && now - hit.at < TRANSCRIPT_ACTIVITY_TTL_MS) return hit.ms
+    // Finding it can mean a stat in every project folder, so the answer is kept.
+    let found = this.transcriptFiles.get(sid)
+    if (!found || (found.file == null && now - found.at >= TRANSCRIPT_MISS_TTL_MS)) {
+      const { findLocalJsonlPath } = await import('./session-file-reader.js')
+      found = { at: now, file: await findLocalJsonlPath(sid, session.cwd) }
+      this.transcriptFiles.set(sid, found)
+    }
+    const ms = found.file ? await transcriptLastActivityMs(found.file) : null
+    this.transcriptActivity.set(sid, { at: now, ms })
+    if (this.transcriptActivity.size > 500) {
+      for (const [k, v] of this.transcriptActivity) if (now - v.at >= TRANSCRIPT_ACTIVITY_TTL_MS) this.transcriptActivity.delete(k)
+    }
+    if (this.transcriptFiles.size > 500) {
+      for (const [k, v] of this.transcriptFiles) if (now - v.at >= TRANSCRIPT_MISS_TTL_MS) this.transcriptFiles.delete(k)
+    }
+    return ms
+  }
+
   private async checkIdleTimeout(
     sessions: SessionRecord[],
     updateSessionRecord: (id: string, update: Record<string, unknown>) => Promise<SessionRecord>,
@@ -868,8 +908,21 @@ export class SessionHealthMonitor {
       // case to protect against here. Extended, not
       // disabled: the CLI auto-expires recurring crons after 7 days, so a
       // session idle beyond that has a dead scheduler and is safe to reclaim.
-      if (runner?.isCronArmed?.(session.claudeSessionId)) {
+      const cronArmed = runner?.isCronArmed?.(session.claudeSessionId) ?? false
+      if (cronArmed) {
         idleTimeoutMs = Math.max(idleTimeoutMs, CRON_ARMED_IDLE_TIMEOUT_MS)
+      }
+      const mgr = getRegisteredSessionManager(session.claudeSessionId)
+      // Under memory pressure a local CLI whose turn is over gives its memory
+      // back sooner; the next message resumes it. 2026-10-25: 35 live CLIs held
+      // 9.9 GB while swap stood at 19 of 20 GB, most of them waiting for a message.
+      // "Over" is the CLI's own word (session_state_changed idle); before it has
+      // said anything since an attach, the record's projected status stands in.
+      const turnOver = mgr?.cliState != null
+        ? mgr.cliState === 'idle'
+        : session.process_status !== 'running'
+      if (!isRemote && !cronArmed && turnOver && memoryPressureShedding()) {
+        idleTimeoutMs = Math.min(idleTimeoutMs, PRESSURE_IDLE_TIMEOUT_MS)
       }
 
       // (The old WAIT-task exemption was deleted with the WAIT phase,
@@ -902,11 +955,17 @@ export class SessionHealthMonitor {
       // Determine last activity time:
       // 1. Prefer SessionManager.lastEventAt (works for both local and remote)
       // 2. Fallback to file mtime for local sessions without an active manager
-      const mgr = getRegisteredSessionManager(session.claudeSessionId)
       let lastActiveMs: number
       if (mgr) {
         lastActiveMs = mgr.lastEventAt
-        if (lastActiveMs === 0) continue  // No events received yet — skip
+        if (lastActiveMs === 0) {
+          // Nothing said since this server attached (it restarted): the CLI's
+          // own transcript says when the session last did anything.
+          if (isRemote || now - (mgr.attachedAt ?? 0) < TRANSCRIPT_SEED_GRACE_MS) continue
+          const seeded = await this.transcriptActivityMs(session, now)
+          if (seeded == null) continue
+          lastActiveMs = seeded
+        }
       } else if (session.outputFile && !session.outputFile.startsWith('remote://')) {
         try {
           const stat = await fsp.stat(session.outputFile)
@@ -935,7 +994,7 @@ export class SessionHealthMonitor {
       //
       // Emitting BEFORE the reap below is the point: consumers get the warning
       // while the CLI is still alive. Nothing here alters the reap decision.
-      const warnStatusChangeMs = session.last_status_change
+      const warnStatusChangeMs = session.last_status_change && session.process_status === 'running'
         ? Date.parse(session.last_status_change) : Number.NaN
       const episodeBaseMs = Number.isNaN(warnStatusChangeMs)
         ? lastActiveMs : Math.max(lastActiveMs, warnStatusChangeMs)
@@ -998,7 +1057,10 @@ export class SessionHealthMonitor {
       // killed mid-turn. The primary fix bumps lastEventAt on writeMessage
       // (remote-session-manager.ts); this guard catches any other code path
       // that moves the session record forward without touching the manager.
-      if (session.last_status_change) {
+      // Only a change INTO running is a turn starting. A change to idle is the
+      // opposite, and a server start re-projects every session's status, which
+      // stamped a fresh change on all of them at each deploy.
+      if (session.last_status_change && session.process_status === 'running') {
         const statusChangeMs = Date.parse(session.last_status_change)
         if (!Number.isNaN(statusChangeMs) && now - statusChangeMs < idleTimeoutMs) {
           log.session.debug('health monitor: skipping idle check — recent status change', {
@@ -1024,6 +1086,7 @@ export class SessionHealthMonitor {
       // The stop itself waits for the daemon (up to ~15s per session: SIGINT,
       // 5s, SIGTERM, 2s), so it runs after the scan, a few at a time, instead of
       // one after another inside this loop.
+      this.transcriptActivity.delete(session.claudeSessionId)
       reaps.push((tools) => this.reapIdleSession(session, mgr, idleMinutes, updateSessionRecord, tools))
     }
 

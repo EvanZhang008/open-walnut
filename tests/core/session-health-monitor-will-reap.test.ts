@@ -126,7 +126,7 @@ let seeded: string[] = [];
  * last_status_change of the same age so the freshness guard doesn't veto.
  */
 async function seedIdleSession(sid: string, idleMs: number, opts: {
-  taskId?: string; host?: string; statusChangeAgeMs?: number;
+  taskId?: string; host?: string; statusChangeAgeMs?: number; status?: 'idle' | 'running';
 } = {}): Promise<FakeManager> {
   const kill = vi.fn();
   const mgr: FakeManager = {
@@ -141,7 +141,7 @@ async function seedIdleSession(sid: string, idleMs: number, opts: {
     ...(opts.host ? { host: opts.host } : {}),
   });
   await updateSessionRecord(sid, {
-    process_status: 'idle',
+    process_status: opts.status ?? 'idle',
     last_status_change: new Date(Date.now() - (opts.statusChangeAgeMs ?? idleMs)).toISOString(),
   });
   return mgr;
@@ -349,7 +349,7 @@ describe('session:will-reap — never fires for a session the reaper spares', ()
     // The reap needs BOTH clocks past the threshold. A session whose record just
     // moved (e.g. a new user message landed, first response not in yet) is not
     // about to die — announcing it would be a confident wrong answer.
-    const mgr = await seedIdleSession('fresh-record', 61 * MIN, { statusChangeAgeMs: 1 * MIN });
+    const mgr = await seedIdleSession('fresh-record', 61 * MIN, { statusChangeAgeMs: 1 * MIN, status: 'running' });
 
     await new SessionHealthMonitor().check();
 
@@ -357,10 +357,21 @@ describe('session:will-reap — never fires for a session the reaper spares', ()
     expect(mgr.kill).not.toHaveBeenCalled();
   });
 
+  it('a fresh change INTO idle is no activity: a server start re-projects every status', async () => {
+    // 2026-10-25: each deploy stamped a fresh last_status_change on every idle
+    // session, so none of them ever reached the idle timeout.
+    await seedIdleSession('fresh-idle', 61 * MIN, { statusChangeAgeMs: 1 * MIN })
+
+    await new SessionHealthMonitor().check();
+
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0].sessionId).toBe('fresh-idle');
+  });
+
   it('warns once the freshness protection itself is about to expire', async () => {
     // Same session as above, but the record write is now 57 min old: both clocks
     // land inside the window, so the deadline is real and the warning is honest.
-    await seedIdleSession('fresh-then-stale', 61 * MIN, { statusChangeAgeMs: 57 * MIN });
+    await seedIdleSession('fresh-then-stale', 61 * MIN, { statusChangeAgeMs: 57 * MIN, status: 'running' });
 
     await new SessionHealthMonitor().check();
 

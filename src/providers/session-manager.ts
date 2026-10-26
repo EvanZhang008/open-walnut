@@ -405,6 +405,10 @@ export interface SessionManager {
    * Returns 0 if no events have been received yet.
    */
   readonly lastEventAt: number
+  /** What the CLI last reported about its turn; null when not heard since attach. */
+  readonly cliState?: 'running' | 'idle' | 'requires_action' | null
+  /** When this manager started or attached the process (ms), 0 when never. */
+  readonly attachedAt?: number
 }
 
 // ── Registry ──

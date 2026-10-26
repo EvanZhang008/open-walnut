@@ -18,6 +18,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { IS_EPHEMERAL, REMOTE_IMAGES_DIR, WALNUT_HOME } from '../constants.js'
+import { cliStateOf, isConversationActivityLine, type CliTurnState } from './stream-activity.js'
 import {
   writeMirrorSidecar, backfillMirrorSidecar, resolveSessionMirrorPath, looksAlreadyMirrored,
   fetchRecentlyMissing, noteFetchMissing, noteFetchFound, isNotFoundReply, startMirrorDownload,
@@ -110,6 +111,10 @@ export class RemoteSessionManager implements SessionManager {
    */
   private _prevSid: string | null = null
   private _lastEventAt = 0
+  // What the CLI last said about its turn (session_state_changed), and when this
+  // manager took the process on: the idle reaper reads both (session-health-monitor.ts).
+  private _cliState: CliTurnState | null = null
+  private _attachedAt = 0
   // UUIDs of JSONL events already delivered to downstream. Used to dedup
   // events arriving via two paths — the daemon's realtime push, or any
   // future catch-up / resync mechanism (daemon's attach replay, full
@@ -237,6 +242,8 @@ export class RemoteSessionManager implements SessionManager {
   get host(): string | null { return this.isRemote ? this.hostKey : null }
   get imageCache(): Map<string, string> { return this._imageCache }
   get lastEventAt(): number { return this._lastEventAt }
+  get cliState(): CliTurnState | null { return this._cliState }
+  get attachedAt(): number { return this._attachedAt }
 
   // ── Connection ──
 
@@ -298,6 +305,11 @@ export class RemoteSessionManager implements SessionManager {
 
   async start(opts: TransportStartOptions): Promise<TransportStartResult> {
     await this.ensureConnected()
+    // A process starting (a cold resume included) is activity: its first line
+    // can take a while under load, and an empty clock would be read from the
+    // transcript of the turn before.
+    this._cliState = null
+    this._attachedAt = this._lastEventAt = Date.now()
 
     // Subscribe to daemon events (rebind cleans up any prior listener).
     this._onOutput = opts.onOutput
@@ -484,6 +496,8 @@ export class RemoteSessionManager implements SessionManager {
     this._onOutput = opts.onOutput
     this._onExit = opts.onExit
     this._sid = opts.sessionId
+    this._cliState = null
+    this._attachedAt = Date.now()
     this.rebindEventListener()
 
     const attachPayload = {
@@ -1445,7 +1459,8 @@ export class RemoteSessionManager implements SessionManager {
     switch (event.ev) {
       case 'jsonl':
         if ((event.sid === this._sid || event.sid === this._prevSid) && event.line) {
-          this._lastEventAt = Date.now()
+          // The idle clock: Walnut's own control exchanges do not count (stream-activity.ts).
+          if (isConversationActivityLine(event.line)) this._lastEventAt = Date.now()
 
           // L1 version-skip (preferred path when the daemon stamps `v`). `v` is the byte
           // offset at the END of this line — monotonic per session, identical live vs replay.
@@ -1518,6 +1533,10 @@ export class RemoteSessionManager implements SessionManager {
             // Non-JSON or malformed line — pass through. Downstream parser
             // will log and skip; we don't second-guess it.
           }
+
+          // Past both duplicate checks: a replayed old state must not overwrite a newer one.
+          const cliState = cliStateOf(event.line)
+          if (cliState) this._cliState = cliState
 
           // Forward to handler, carrying the L1 byte-offset version when the
           // daemon stamped one (consumers use it as the consumed watermark).
