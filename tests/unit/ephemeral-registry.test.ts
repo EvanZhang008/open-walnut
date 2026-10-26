@@ -40,6 +40,7 @@ import {
   ephemeralRuntimeDir,
   ephemeralRuntimeDirs,
   removeEphemeralRuntimeDirs,
+  EPHEMERAL_SERVER_PID_FILE,
 } from '../../src/commands/ephemeral-registry.js'
 
 let home: string
@@ -412,6 +413,28 @@ describe('ephemeral runtime dirs', () => {
     expect(fs.existsSync(orphan)).toBe(false)
     expect(fs.existsSync(running)).toBe(true)
     expect(fs.existsSync(fresh)).toBe(true)
+  })
+
+  // 2026-10-26: a test server started with its own empty home registers its snapshot in
+  // that home, so the production reaper never sees the snapshot; while its daemon was
+  // between lives, only the grace period kept its daemon dir (sessions, streams, terminal
+  // sockets) from being deleted under it.
+  it('a dir whose server is alive stays, even when no snapshot it can see names it and its daemon is down', () => {
+    const owned = path.join(scanBase, 'open-walnut-eph-31-ownEdd')
+    const abandoned = path.join(scanBase, 'open-walnut-eph-32-abaNdn')
+    for (const d of [owned, abandoned]) {
+      fs.mkdirSync(d, { recursive: true })
+      fs.writeFileSync(path.join(d, 'daemon.pid'), String(DEAD_PID))
+    }
+    fs.writeFileSync(path.join(owned, EPHEMERAL_SERVER_PID_FILE), `${process.pid}\n`)
+    fs.writeFileSync(path.join(abandoned, EPHEMERAL_SERVER_PID_FILE), `${DEAD_PID}\n`)
+    backdate(owned, NO_CONTROL_FILE_GRACE_MS + 60_000)
+    backdate(abandoned, NO_CONTROL_FILE_GRACE_MS + 60_000)
+
+    reapStaleEphemeralDirs(home, { tmpBase: scanBase })
+
+    expect(fs.existsSync(owned)).toBe(true)
+    expect(fs.existsSync(abandoned)).toBe(false)
   })
 })
 

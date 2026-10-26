@@ -103,6 +103,9 @@ export const EPHEMERAL_RUNTIME_ROOT = ephemeralRuntimeRoot()
 /** The runtime dir shape, `open-walnut-eph-<ppid>-<six>` (the snapshot's own suffix). */
 export const EPHEMERAL_RUNTIME_DIR_RE = /^open-walnut-eph-\d+-[A-Za-z0-9]{6}$/
 
+/** The ephemeral server's pid, written by its launcher into the runtime dir right after spawn. */
+export const EPHEMERAL_SERVER_PID_FILE = 'ephemeral-server.pid'
+
 /** The daemon's runtime dir for a snapshot dir, or null when the name is not ours. */
 export function ephemeralRuntimeDir(snapshotDir: string, root: string = EPHEMERAL_RUNTIME_ROOT): string | null {
   const base = path.basename(snapshotDir)
@@ -175,6 +178,11 @@ function reapOrphanRuntimeDirs(runtimeRoot: string, liveSnapshotSuffixes: Set<st
     const dir = path.join(runtimeRoot, entry)
     const daemonPid = readPid(path.join(dir, 'daemon.pid'))
     if (daemonPid !== null && isProcessAlive(daemonPid)) continue
+    // A live server whose snapshot this reaper cannot see (its own home's registry, another
+    // TMPDIR) and whose daemon is between lives still owns the dir. A reused pid only keeps
+    // a dead dir a while longer.
+    const serverPid = readPid(path.join(dir, EPHEMERAL_SERVER_PID_FILE))
+    if (serverPid !== null && isProcessAlive(serverPid)) continue
     try {
       if (Date.now() - fs.statSync(dir).mtimeMs < NO_CONTROL_FILE_GRACE_MS) continue
     } catch {

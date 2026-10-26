@@ -14,6 +14,7 @@ import os from 'node:os'
 import path from 'node:path'
 import http from 'node:http'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { spawn, type ChildProcess } from 'node:child_process'
 
 let tempHome: string
 
@@ -62,6 +63,8 @@ function httpGet(port: number, p: string): Promise<number> {
 beforeEach(async () => {
   tempHome = await fs.mkdtemp(path.join(os.tmpdir(), 'walnut-vscode-core-'))
   process.env.WALNUT_HOME_OVERRIDE = tempHome
+  // As an isolated test daemon: its exit stops the instances spawned under this dir.
+  process.env.WALNUT_DAEMON_DIR = path.join(tempHome, 'daemon')
 })
 
 afterEach(async () => {
@@ -73,6 +76,7 @@ afterEach(async () => {
     try { process.kill(-rec.pid, 'SIGKILL') } catch { try { process.kill(rec.pid, 'SIGKILL') } catch { /* gone */ } }
   } catch { /* none */ }
   delete process.env.WALNUT_HOME_OVERRIDE
+  delete process.env.WALNUT_DAEMON_DIR
   await fs.rm(tempHome, { recursive: true, force: true })
 })
 
@@ -212,6 +216,116 @@ describe('stopCodeServer', () => {
     await new Promise((r) => setTimeout(r, 300))
     await expect(httpGet(res.port!, '/healthz')).rejects.toThrow()
     expect((await core.codeServerStatus()).running).toBe(false)
+  })
+})
+
+// 2026-10-26: instance.json outlives its process (a reboot), and the reapers signalled the
+// GROUP of whatever pid it named after checking only that the pid was alive.
+describe('a record that no longer names its code-server', () => {
+  const instancePath = () => path.join(tempHome, '.open-walnut', 'code-server', 'instance.json')
+  const dataArg = () => path.join(tempHome, '.open-walnut', 'code-server', 'data')
+  let stranger: ChildProcess | null = null
+
+  /** A live process of our own standing in for whoever got the recorded pid. */
+  async function plantStrangerRecord(argv: string[], extra: Record<string, unknown> = {}): Promise<number> {
+    stranger = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)', '--', ...argv], { detached: true, stdio: 'ignore' })
+    const pid = stranger.pid!
+    await new Promise((r) => setTimeout(r, 200))
+    await fs.mkdir(path.dirname(instancePath()), { recursive: true })
+    await fs.writeFile(instancePath(), JSON.stringify({
+      port: 1, token: 't', pid, version: '4.98.2', startedAt: Date.now() - 10 * 3_600_000, runtime: 'node', ...extra,
+    }))
+    return pid
+  }
+  const strangerAlive = () => stranger !== null && stranger.exitCode === null && stranger.signalCode === null
+  const lookAlike = () => ['/h/.local/lib/code-server-4.98.2/out/node/entry.js', '--user-data-dir', dataArg()]
+  const pastIdle = (core: { VSCODE_IDLE_KILL_MS: number }) => Date.now() + core.VSCODE_IDLE_KILL_MS + 60_000
+
+  afterEach(() => {
+    if (strangerAlive()) stranger!.kill('SIGKILL')
+    stranger = null
+  })
+
+  it('an old record (no start time) naming a VS Code Remote server is not ours: alive, record dropped', async () => {
+    const core = await loadCore()
+    await plantStrangerRecord(['/h/.vscode-server/bin/abc/server-main.js', '--start-server'])
+    expect(core.reapIdleCodeServer(pastIdle(core))).toBe(false)
+    await new Promise((r) => setTimeout(r, 300))
+    expect(strangerAlive()).toBe(true)
+    expect(fss.existsSync(instancePath())).toBe(false)
+  })
+
+  it('a recorded start time that differs means another process, even one that looks exactly like ours', async () => {
+    const core = await loadCore()
+    await plantStrangerRecord(lookAlike(), { startTime: 'Thu Jan  1 00:00:00 2026' })
+    expect(core.reapIdleCodeServer(pastIdle(core))).toBe(false)
+    await new Promise((r) => setTimeout(r, 300))
+    expect(strangerAlive()).toBe(true)
+  })
+
+  it('when ps cannot answer, nothing is signalled and the record is kept for the next scan', async () => {
+    const savedPath = process.env.PATH
+    const noPs = await fs.mkdtemp(path.join(os.tmpdir(), 'walnut-no-ps-'))
+    let core: Awaited<ReturnType<typeof loadCore>>
+    try {
+      process.env.PATH = noPs  // the module reads its ps env at load
+      core = await loadCore()
+    } finally {
+      process.env.PATH = savedPath
+    }
+    // spawnedIn here, so stopCodeServer gets as far as asking ps.
+    await plantStrangerRecord(lookAlike(), { spawnedIn: process.env.WALNUT_DAEMON_DIR })
+    expect(core!.reapIdleCodeServer(pastIdle(core!))).toBe(false)
+    core!.stopCodeServer()
+    await new Promise((r) => setTimeout(r, 300))
+    expect(strangerAlive()).toBe(true)
+    expect(fss.existsSync(instancePath())).toBe(true)
+    await fs.rm(noPs, { recursive: true, force: true })
+  })
+
+  it("an isolated daemon's exit leaves an instance another daemon dir spawned, record and all", async () => {
+    const core = await loadCore()
+    await plantStrangerRecord(lookAlike(), { spawnedIn: '/tmp/open-walnut' })
+    core.stopCodeServer()
+    await new Promise((r) => setTimeout(r, 300))
+    expect(strangerAlive()).toBe(true)
+    expect(fss.existsSync(instancePath())).toBe(true)
+  })
+
+  it('a dead pid drops its record, so it never names whoever gets that pid next', async () => {
+    const core = await loadCore()
+    await plantStrangerRecord(lookAlike())
+    stranger!.kill('SIGKILL')
+    await new Promise((r) => stranger!.once('exit', r))
+    expect(core.reapIdleCodeServer(Date.now())).toBe(false)
+    expect(fss.existsSync(instancePath())).toBe(false)
+  })
+
+  it('a spawned instance records its start time and daemon dir', async () => {
+    await plantFakeCodeServer('4.98.2')
+    const core = await loadCore()
+    await core.ensureCodeServer()
+    const rec = JSON.parse(fss.readFileSync(instancePath(), 'utf-8')) as { startTime?: string; spawnedIn?: string }
+    expect(rec.startTime).toMatch(/^\w{3} \w{3} [ \d]\d \d\d:\d\d:\d\d \d{4}$/)
+    expect(rec.spawnedIn).toBe(process.env.WALNUT_DAEMON_DIR)
+  })
+
+  it('identity rules', async () => {
+    const core = await loadCore()
+    const ours = `/usr/bin/node /h/.local/lib/code-server-4.98.2/out/node/entry.js --auth none --user-data-dir ${dataArg()} --extensions-dir x`
+    const id = core.parseProcIdentity(`Mon Oct 26 10:15:01 2026 ${ours}\n`)
+    expect(id).toEqual({ startTime: 'Mon Oct 26 10:15:01 2026', command: ours })
+    expect(core.parseProcIdentity('Mon Oct  6 09:05:01 2026 x')?.startTime).toBe('Mon Oct  6 09:05:01 2026')
+    expect(core.parseProcIdentity('')).toBeNull()
+    expect(core.isRecordedInstance({ pid: 5, startTime: id!.startTime }, id)).toBe(true)
+    expect(core.isRecordedInstance({ pid: 5, startTime: 'Tue Oct 27 10:15:01 2026' }, id)).toBe(false)
+    expect(core.isRecordedInstance({ pid: 5 }, id)).toBe(true)
+    // Same start time, another program: a start-time tie alone is not enough.
+    expect(core.isRecordedInstance({ pid: 5, startTime: id!.startTime }, { startTime: id!.startTime, command: '/bin/zsh -l' })).toBe(false)
+    expect(core.isRecordedInstance({ pid: 5 }, { startTime: id!.startTime, command: 'node /h/.vscode-server/bin/a/server-main.js code-server' })).toBe(false)
+    // Another Walnut home's code-server is not this one.
+    expect(core.isRecordedInstance({ pid: 5 }, { startTime: id!.startTime, command: ours.replace(dataArg(), '/other/.open-walnut/code-server/data') })).toBe(false)
+    expect(core.isRecordedInstance({ pid: 5 }, null)).toBe(false)
   })
 })
 

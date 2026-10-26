@@ -36,7 +36,7 @@ import os from 'node:os'
 import http from 'node:http'
 import crypto from 'node:crypto'
 import net from 'node:net'
-import { spawn, execFile } from 'node:child_process'
+import { spawn, execFile, execFileSync } from 'node:child_process'
 import { gitChildEnv } from '../lib/git-env.js'
 
 /** Pinned release — bump deliberately. */
@@ -71,6 +71,14 @@ interface InstanceRecord {
   /** Runtime binary that spawned this instance. Absent = pre-runtime-fix
    *  record, treated as suspect (may be bun) and respawned. */
   runtime?: string
+  /** `ps -o lstart=` of `pid` at spawn. A reused pid has another start time, so
+   *  a record that outlived its process (a reboot) never names a stranger.
+   *  Absent = older record: the command line alone decides. */
+  startTime?: string
+  /** WALNUT_DAEMON_DIR of the process that spawned it ('' = none). An isolated
+   *  daemon's exit stops only an instance spawned under its own dir: the record
+   *  lives under the real HOME, so a test daemon reads the user's own editor. */
+  spawnedIn?: string
 }
 
 // In-flight spawn guard (within this process) + last attempt for the cooldown.
@@ -232,6 +240,57 @@ function pidAlive(pid: number): boolean {
   try { process.kill(pid, 0); return true } catch { return false }
 }
 
+// UTC: the server writes the record and the daemon checks it, and their TZ may differ.
+const PS_ENV = { ...process.env, LANG: 'C', LC_ALL: 'C', TZ: 'UTC' }
+const PS_TIMEOUT_MS = 2_000
+
+/** `ps -o lstart=` (fixed 24 chars, "Mon Oct 26 10:15:01 2026") then the command. */
+export function parseProcIdentity(out: string): { startTime: string; command: string } | null {
+  const m = /^\s*(\w{3} \w{3} [ \d]\d \d\d:\d\d:\d\d \d{4})\s+(.*)$/.exec(out.trim())
+  return m ? { startTime: m[1], command: m[2] } : null
+}
+
+const psArgs = (pid: number) => ['-ww', '-o', 'lstart=,command=', '-p', String(pid)]
+
+/** Daemon-side reapers only (idle scan, isolated-dir exit): never on the web server's loop. */
+function procIdentitySync(pid: number): { startTime: string; command: string } | null {
+  try {
+    return parseProcIdentity(execFileSync('ps', psArgs(pid), { encoding: 'utf-8', timeout: PS_TIMEOUT_MS, env: PS_ENV }))
+  } catch {
+    return null
+  }
+}
+
+function procIdentity(pid: number): Promise<{ startTime: string; command: string } | null> {
+  return new Promise((resolve) => {
+    execFile('ps', psArgs(pid), { encoding: 'utf-8', timeout: PS_TIMEOUT_MS, env: PS_ENV },
+      (err, out) => resolve(err ? null : parseProcIdentity(String(out))))
+  })
+}
+
+/**
+ * Is the recorded pid still the code-server this record was written for?
+ * instance.json outlives its process (it sits in the data dir across a reboot),
+ * and macOS hands its pid to whatever starts next; killInstance signals the
+ * whole group of that pid. Unknown (ps failed) = not ours: never signal.
+ */
+export function isRecordedInstance(rec: { pid: number; startTime?: string }, id: { startTime: string; command: string } | null): boolean {
+  if (!id) return false
+  if (rec.startTime && id.startTime !== rec.startTime) return false
+  // Only our own spawn runs entry.js with this data dir ("vscode-server" contains "code-server").
+  return id.command.includes('/out/node/entry.js') && id.command.includes(`--user-data-dir ${path.join(dataDir(), 'data')}`)
+}
+
+/** Drop the record only while it is still the one we judged (a new spawn may have replaced it). */
+function removeRecordIf(token: string): void {
+  try {
+    const rec = JSON.parse(fs.readFileSync(instanceFile(), 'utf-8')) as InstanceRecord
+    if (rec.token === token) fs.rmSync(instanceFile())
+  } catch { /* already gone */ }
+}
+
+const ownDaemonDir = (): string => process.env.WALNUT_DAEMON_DIR ? path.resolve(process.env.WALNUT_DAEMON_DIR) : ''
+
 /** Does this binary run AND report itself as node? (bun answers `bun-x.y`; a
  *  glibc-mismatched bundled node dies before printing anything). */
 function worksAsNode(bin: string): Promise<boolean> {
@@ -278,9 +337,10 @@ async function resolveNodeRuntime(entry: string): Promise<string | null> {
   return null
 }
 
-function killInstance(pid: number): void {
+function killInstance(pid: number, groupOnly = false): void {
   // code-server handles SIGTERM with hot-exit (unsaved-buffer backups).
-  try { process.kill(-pid, 'SIGTERM') } catch { try { process.kill(pid, 'SIGTERM') } catch { /* gone */ } }
+  // groupOnly: the leader may be gone, and its bare pid could be anyone's by now.
+  try { process.kill(-pid, 'SIGTERM') } catch { if (!groupOnly) try { process.kill(pid, 'SIGTERM') } catch { /* gone */ } }
 }
 
 async function waitForHealthy(port: number, timeoutMs: number): Promise<boolean> {
@@ -334,14 +394,21 @@ async function startCodeServer(entry: string, version: string): Promise<VscodeEn
 
   const healthy = await waitForHealthy(port, SPAWN_WAIT_MS)
   if (!healthy) {
-    killInstance(pid)
+    // Its own group (detached spawn): a group with members keeps its id, so this never hits a stranger.
+    killInstance(pid, true)
     return {
       ok: false, running: false, installed: true,
       error: `code-server did not become healthy on :${port} within ${SPAWN_WAIT_MS / 1000}s (log: ${logPath})`,
     }
   }
 
-  await writeInstance({ port, token, pid, version, startedAt: Date.now(), runtime })
+  const childAlive = () => child.exitCode === null && child.signalCode === null
+  const startTime = childAlive() ? (await procIdentity(pid))?.startTime : undefined
+  if (!childAlive()) {
+    killInstance(pid, true)  // any member it left behind
+    return { ok: false, running: false, installed: true, error: `code-server exited right after becoming healthy (log: ${logPath})` }
+  }
+  await writeInstance({ port, token, pid, version, startedAt: Date.now(), runtime, spawnedIn: ownDaemonDir(), ...(startTime ? { startTime } : {}) })
   return { ok: true, running: true, installed: true, port, token, version }
 }
 
@@ -360,8 +427,8 @@ export async function ensureCodeServer(opts: { noInstall?: boolean } = {}): Prom
     if (existing.runtime) {
       return { ok: true, running: true, installed: true, port: existing.port, token: existing.token, version: existing.version }
     }
-    killInstance(existing.pid)
-    try { fs.rmSync(instanceFile()) } catch { /* already gone */ }
+    if (isRecordedInstance(existing, await procIdentity(existing.pid))) killInstance(existing.pid)
+    removeRecordIf(existing.token)
   }
 
   // A concurrent ensure in this process is already starting one — join it.
@@ -420,18 +487,25 @@ export function reapIdleCodeServer(now: number = Date.now()): boolean {
   } catch {
     return false
   }
-  if (!rec || !pidAlive(rec.pid)) return false
+  if (!rec) return false
+  // A dead pid's record is dropped now: kept, it would name whoever gets that pid next.
+  if (!pidAlive(rec.pid)) { removeRecordIf(rec.token); return false }
   let lastAlive = rec.startedAt
   try {
     lastAlive = Math.max(lastAlive, fs.statSync(heartbeatFile()).mtimeMs)
   } catch { /* no heartbeat yet — judge from start time */ }
   if (now - lastAlive < VSCODE_IDLE_KILL_MS) return false
-  killInstance(rec.pid)
-  try { fs.rmSync(instanceFile()) } catch { /* already gone */ }
-  return true
+  const id = procIdentitySync(rec.pid)
+  if (!id) return false  // ps could not answer: ask again next scan, never guess
+  const ours = isRecordedInstance(rec, id)
+  if (ours) killInstance(rec.pid)
+  // Not ours: the record outlived its server, drop it so the next scan stops asking.
+  removeRecordIf(rec.token)
+  return ours
 }
 
-/** Stop unconditionally (isolated/test daemon exit — production owners let successors adopt). */
+/** Stop the instance spawned under this daemon dir (isolated/test daemon exit —
+ *  production owners let successors adopt). Anyone else's is left alone, record included. */
 export function stopCodeServer(): void {
   let rec: InstanceRecord | null = null
   try {
@@ -439,8 +513,13 @@ export function stopCodeServer(): void {
   } catch {
     return
   }
-  if (rec && pidAlive(rec.pid)) killInstance(rec.pid)
-  try { fs.rmSync(instanceFile()) } catch { /* already gone */ }
+  if (!rec || !rec.spawnedIn || path.resolve(rec.spawnedIn) !== ownDaemonDir()) return
+  if (pidAlive(rec.pid)) {
+    const id = procIdentitySync(rec.pid)
+    if (!id) return  // unverifiable: keep the record for a successor to adopt or reap
+    if (isRecordedInstance(rec, id)) killInstance(rec.pid)
+  }
+  removeRecordIf(rec.token)
 }
 
 function expandHome(p: string): string {

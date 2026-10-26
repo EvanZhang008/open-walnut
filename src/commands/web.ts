@@ -23,6 +23,7 @@ import {
   countLiveEphemeralServers,
   ephemeralRuntimeDir,
   removeEphemeralRuntimeDirs,
+  EPHEMERAL_SERVER_PID_FILE,
 } from './ephemeral-registry.js'
 import { copyDataSnapshot, dropSnapshotQueuedMessages, ephemeralChildEnv, pauseSnapshotCronJobs, stopSnapshotTunnels, stripSnapshotPushTokens } from './ephemeral-snapshot.js'
 
@@ -402,6 +403,9 @@ async function runEphemeralLauncher(): Promise<void> {
     process.exit(1)
     return
   }
+  // The server's pid beside its daemon: a reaper that does not know this snapshot (another
+  // Walnut home, another TMPDIR) must still see that the daemon dir has a live owner.
+  try { fs.writeFileSync(path.join(runtimeDir, EPHEMERAL_SERVER_PID_FILE), `${childPid}\n`) } catch { /* best-effort */ }
 
   // 6. Poll for ephemeral.json, racing against early child death
   const controlFile = path.join(tmpDir, 'ephemeral.json')
