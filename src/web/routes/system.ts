@@ -9,6 +9,7 @@ import { isPersonAtThisMachine } from './expose.js'
 import { getConfig } from '../../core/config-manager.js'
 import { CLOUD_MODE } from '../../constants.js'
 import { validateBearerCredential } from '../middleware/auth.js'
+import { createDesktopUpdateCache, EMPTY_DESKTOP_UPDATE } from './desktop-update-cache.js'
 import { getBuildInfo } from '../../lib/build-info.js'
 
 export const systemRouter = Router()
@@ -71,6 +72,8 @@ systemRouter.get('/health', async (req, res) => {
   res.json(response)
 })
 
+const desktopUpdateCache = createDesktopUpdateCache()
+
 systemRouter.get('/desktop-update', async (req, res) => {
   const empty = { available: false, token: null, version: null }
   // Only a page that shows the update in its bottom notice asks with `notice=1`.
@@ -79,13 +82,14 @@ systemRouter.get('/desktop-update', async (req, res) => {
   if (req.query.notice !== '1' || !isPersonAtThisMachine(req) || process.platform !== 'darwin') { res.json(empty); return }
   const daemon = getConnectedDaemonConnection('__local__')
   if (!daemon?.hasCapability('desktop-update-v1')) { res.json(empty); return }
-  try {
+  // The last answer, refreshed behind the request (desktop-update-cache.ts).
+  res.json(await desktopUpdateCache.get(daemon, async () => {
     const result = await daemon.send('desktop.updateStatus', {}, 7000)
-    res.json(result.ok ? {
+    return result.ok ? {
       available: result.available, token: result.token, version: result.version, restarting: result.restarting, error: result.error,
       ...(typeof result.windows === 'number' ? { windows: result.windows } : {}),
-    } : empty)
-  } catch { res.json(empty) }
+    } : EMPTY_DESKTOP_UPDATE
+  }))
 })
 
 systemRouter.post('/desktop-update/restart', async (req, res) => {
@@ -97,6 +101,7 @@ systemRouter.post('/desktop-update/restart', async (req, res) => {
   try {
     // force: the page checked every app window (or the user chose to restart anyway).
     const result = await daemon.send('desktop.restart', { token, force: req.body?.force === true }, 7000)
+    if (result.ok && result.accepted) desktopUpdateCache.noteRestart()
     if (!result.ok || !result.accepted) { res.status(409).json({ error: 'The installed update changed. Check again before restarting.' }); return }
     res.status(202).json({ accepted: true })
   } catch { res.status(503).json({ error: 'Could not request the app restart. Try again.' }) }
