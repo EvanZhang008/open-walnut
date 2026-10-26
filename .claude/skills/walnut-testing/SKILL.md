@@ -94,8 +94,11 @@ of everything except e2e/commands/live/frontend-rooted. Membership is decided by
 *measured* time — the >2s list lives in `tests/setup/slow-tests.ts`. Re-measure
 rather than hand-editing it.
 
-`scripts/test-parallel.mjs` runs the tiers **sequentially** (it used to be
+`scripts/test-parallel.mjs` (`bun run test`) runs the set CI runs, quick, slow,
+e2e, then the four frontend configs, **sequentially** (it used to be
 `Promise.all`, which multiplied the worker cap by 6 and crashed the machine).
+Until 2026-10-24 it ran unit + integration instead of quick + slow and missed
+201 files; `test:unit` and `test:integration` still exist for those two configs.
 `*.live.test.ts` is excluded from all non-live configs — never runs accidentally.
 
 ## Judging whether YOUR change caused a failure (read before you panic)

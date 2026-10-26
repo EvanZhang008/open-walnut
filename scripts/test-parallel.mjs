@@ -1,41 +1,26 @@
 import { spawn } from 'node:child_process';
-import { vitestCommand, vitestCommandLine } from './bun-vitest.mjs';
+import { bunExecutable, vitestCommand, vitestCommandLine } from './bun-vitest.mjs';
 
+// `bun run test`: the same set CI runs, one tier after another. quick + slow are
+// the whole non-e2e suite (tests/setup/quick-tier.test.ts asserts every test file
+// lands in exactly one tier); the frontend entry is the script that runs all four
+// web-rooted configs, so this list cannot drift from CI's.
+// Until 2026-10-24 this ran unit + integration + e2e + three of the four frontend
+// configs, which missed 201 files CI runs (tests/scripts, lib, replica, setup,
+// integration and more) and vitest.notes-roundtrip.config.ts.
 const runs = [
-  {
-    name: 'unit',
-    args: ['run', '--config', 'vitest.unit.config.ts'],
-  },
-  {
-    name: 'integration',
-    args: ['run', '--config', 'vitest.integration.config.ts'],
-  },
-  {
-    name: 'e2e',
-    args: ['run', '--config', 'vitest.e2e.config.ts'],
-  },
-  {
-    // FRONTEND diff pipeline (react-diff-view/diff) — deps live in web/node_modules,
-    // so it runs under a web-rooted config. Guards the session "Changed" view's
-    // createPatch→parseDiff→tokenize path (a parse throw here blanks the page).
-    name: 'diff-view',
-    args: ['run', '--config', 'vitest.diff-view.config.ts'],
-  },
-  {
-    // FRONTEND WorkflowGraph layout logic (buildLayout/phaseCounts) — pure data
-    // transforms behind the dynamic-workflow flow-graph panel. Runs under a
-    // repo-root-rooted config that aliases @ → web/src (no DOM needed).
-    name: 'workflow-graph',
-    args: ['run', '--config', 'vitest.workflow-graph.config.ts'],
-  },
-  {
-    // FRONTEND markdown utils (marked/dompurify in web/node_modules) — backs the
-    // per-message copy-as-markdown / copy-as-rich-text buttons and message render.
-    // linkedom-backed window so DOMPurify initializes.
-    name: 'markdown',
-    args: ['run', '--config', 'vitest.markdown.config.ts'],
-  },
+  { name: 'quick', args: ['run', '--config', 'vitest.quick.config.ts'] },
+  { name: 'slow', args: ['run', '--config', 'vitest.slow.config.ts'] },
+  { name: 'e2e', args: ['run', '--config', 'vitest.e2e.config.ts'] },
+  // diff-view, markdown, workflow-graph and notes-roundtrip, run to completion.
+  { name: 'frontend', script: 'scripts/test-frontend.mjs' },
 ];
+
+// --list prints the tiers as JSON and runs nothing (tests/scripts/test-parallel.test.ts).
+if (process.argv[2] === '--list') {
+  console.log(JSON.stringify(runs));
+  process.exit(0);
+}
 
 const children = new Set();
 const isCI = process.env.CI === 'true' || process.env.GITHUB_ACTIONS === 'true';
@@ -50,16 +35,16 @@ const maxWorkers = null;
 
 const runOnce = (entry, extraArgs = []) =>
   new Promise((resolve) => {
-    const args = maxWorkers
+    const args = entry.script ? [entry.script] : maxWorkers
       ? [...entry.args, '--maxWorkers', String(maxWorkers), ...extraArgs]
       : [...entry.args, ...extraArgs];
 
-    console.log(`\n▶ [${entry.name}] ${vitestCommandLine(args)}\n`);
+    console.log(`\n▶ [${entry.name}] ${entry.script ? `bun ${entry.script}` : vitestCommandLine(args)}\n`);
 
-    const vitest = vitestCommand(args);
+    const vitest = entry.script ? { cmd: bunExecutable(), args } : vitestCommand(args);
     const child = spawn(vitest.cmd, vitest.args, {
       stdio: 'inherit',
-      // WALNUT_TEST_RUN_ID: all 6 tiers of this invocation share ONE slot in
+      // WALNUT_TEST_RUN_ID: all tiers of this invocation share ONE slot in
       // the machine-wide vitest gate (tests/setup/test-gate.ts) — without it,
       // each tier would count as a separate concurrent run and self-deadlock.
       env: { ...process.env, VITEST_GROUP: entry.name, WALNUT_TEST_RUN_ID: testRunId },

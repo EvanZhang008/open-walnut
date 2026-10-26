@@ -586,7 +586,7 @@ bun run build                 # Build server → dist/
 cd web && bun x vite build    # Build React SPA
 cd web && bun x vite          # Frontend hot reload (:5173, proxies to :3456)
 bun run test:quick            # ⭐ DEFAULT: 306 pure-logic files, ~51s
-bun run test                  # Everything, sequential tiers (~10 min)
+bun run test                  # Everything CI runs: quick, slow, e2e, frontend, one after another
 ```
 
 ### Test pipeline: run the cheap layer, not the whole suite

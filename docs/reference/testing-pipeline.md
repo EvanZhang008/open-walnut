@@ -127,7 +127,7 @@ scripts/ci-status.sh brief      # paste-ready digest: commit, failed jobs, error
 
 ## Machine safety
 
-The suite is capped at **2 worker processes locally** (`tests/setup/worker-budget.ts`), tiers run sequentially (`scripts/test-parallel.mjs`), and a machine-wide gate admits one run group at a time (`tests/setup/test-gate.ts`). These caps exist because uncapped fan-out hard-crashed this Mac twice in July 2026. CI configs default to 4 workers, but quick, slow, and e2e explicitly override that to one; only the lightweight frontend tier keeps the parallel default.
+The suite is capped at **1 worker process locally** (`tests/setup/worker-budget.ts`), tiers run sequentially (`scripts/test-parallel.mjs`), and a machine-wide gate admits one run group at a time (`tests/setup/test-gate.ts`). These caps exist because uncapped fan-out hard-crashed this Mac twice in July 2026. CI configs default to 4 workers, but quick, slow, and e2e explicitly override that to one; only the lightweight frontend tier keeps the parallel default.
 
 Do not raise the local budget to "speed things up" — run L1, or L2 on the file you're editing.
 
@@ -142,5 +142,7 @@ Do not raise the local budget to "speed things up" — run L1, or L2 on the file
 | integration | 112 | — | `tests/{web,integrations,commands,session-server}` |
 | frontend | 11 | 10 s | 158 tests, baseline **zero** → blocks CI |
 | e2e | 103 | ~120 s | own tier, own config |
+
+`bun run test` (`scripts/test-parallel.mjs`) runs exactly the set CI runs, one tier after another: quick, slow, e2e, then the four frontend configs through `scripts/test-frontend.mjs`. Until 2026-10-24 it ran unit + integration + e2e + three frontend configs instead, which missed 201 files that CI runs (`tests/scripts`, `tests/lib`, `tests/replica`, `tests/setup`, `tests/integration` and others) and the notes-roundtrip config. Every unit and integration file is in quick or slow, so nothing dropped out. `bun run test:unit` and `test:integration` still run those two configs on their own.
 
 Before 2026-07-25 the unit and integration tiers each collected ~336 files — the whole suite — because `mergeConfig` **concatenates** `include` arrays instead of replacing them, so each tier's narrowing list was appended to the base's `tests/**`. `npm test` therefore ran nearly every test twice (349 s + 397 s). Both configs now assign `include`/`exclude` after the merge; `tests/setup/quick-tier.test.ts` guards against the regression.
