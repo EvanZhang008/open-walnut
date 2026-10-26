@@ -15,6 +15,7 @@ import { discoverBrowserFixture } from './codex-test-audit'
 import { REAL_PANEL } from './draft-helpers'
 import { isolateUiPrefs, presetPanelView } from './todo-panel-helpers'
 import { call, kanbanApi, seedKanbanTeam, type KanbanApi, type KanbanTeam, pickCardsView } from './board-kanban-fixture'
+import { startSampler, stopSampler } from './board-kanban-sampler'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 const API = `http://localhost:${TEST_PORT}`
@@ -98,42 +99,6 @@ async function settleBaseline(page: Page, pane: Locator): Promise<void> {
   }
   await expect.poll(() => chipCount(pane, 'changed'), { timeout: 15_000 }).toBe(0)
   await letGo(page)
-}
-
-/** Every animation frame from now: the cards drawn, their summaries, one card's height, the skeletons, the pane text. */
-async function startSampler(page: Page, watchId: string): Promise<void> {
-  await page.evaluate((id) => {
-    const w = window as unknown as { __kb: Array<Record<string, unknown>>; __kbStop?: boolean }
-    w.__kb = []
-    w.__kbStop = false
-    const t0 = performance.now()
-    const tick = () => {
-      if (w.__kbStop) return
-      const pane = document.querySelector('[data-testid="task-board-pane"]')
-      if (pane) {
-        const cards = pane.querySelectorAll('[data-testid="kanban-card"]:not(.kanban-skeleton)').length
-        const sums = pane.querySelectorAll('[data-testid="kanban-card-summary"]').length
-        const one = pane.querySelector<HTMLElement>(`[data-testid="kanban-card"][data-task-id="${id}"]`)
-        const chip = pane.querySelector('[data-testid="kanban-chip-changed"]')
-        w.__kb.push({
-          ms: Math.round(performance.now() - t0), cards, sums, h: one ? Math.round(one.getBoundingClientRect().height) : -1,
-          sk: pane.querySelectorAll('[data-testid="kanban-skeleton"]').length, text: /Loading the board/.test(pane.textContent ?? ''),
-          changed: chip ? Number(chip.getAttribute('data-count')) : -1,
-          session: /a session/.test(Array.from(pane.querySelectorAll('[data-testid="kanban-card-changed"]')).map((e) => e.getAttribute('title') ?? '').join(' ')),
-        })
-      }
-      requestAnimationFrame(tick)
-    }
-    requestAnimationFrame(tick)
-  }, watchId)
-}
-
-async function stopSampler(page: Page): Promise<Array<{ ms: number; cards: number; sums: number; h: number; sk: number; text: boolean; changed: number; session: boolean }>> {
-  return page.evaluate(() => {
-    const w = window as unknown as { __kb: Array<Record<string, unknown>>; __kbStop?: boolean }
-    w.__kbStop = true
-    return w.__kb as never
-  })
 }
 
 test('R3-01 R3-06: the Board opens as skeleton lanes, then every card once at its final height', async ({ page }) => {
