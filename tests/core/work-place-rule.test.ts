@@ -44,6 +44,9 @@ describe('the rule itself', () => {
       /keeps it across reboots, and removes it \d+ days after the task completes, never while a repo in it holds changes or commits that exist nowhere else/,
       /Walnut refuses a git clone, git worktree add or git commit in a temp directory, and flags a draft, plan or note saved there with Write/,
       /`walnut tools call task_dir` makes it and prints its path/,
+      /Clone from a local checkout with `git clone --shared` \(or add a worktree\) instead of a full copy/,
+      /keep one build output per repo \(one `-derivedDataPath`, one `dist`\) and reuse it/,
+      /delete DerivedData, `dist`, `node_modules`, `\.xcresult` bundles and downloaded installers as soon as their result is recorded/,
     ]) expect(WORK_PLACE_RULE).toMatch(re)
   })
 
