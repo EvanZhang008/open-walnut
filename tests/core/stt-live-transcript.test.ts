@@ -14,11 +14,11 @@ vi.mock('../../src/constants.js', () => createMockConstants('stt-live'))
 const engine = vi.hoisted(() => vi.fn())
 vi.mock('../../src/core/stt/index.js', () => ({ transcribeAudio: engine }))
 
-import { appendLive, finishLive, dropLive, hasLiveTake, _resetLiveTakesForTest, LIVE_CUT_AT_SEC, LIVE_CUT_MIN_SEC, LIVE_CUT_MAX_SEC, LIVE_MAX_HELD_SEC } from '../../src/core/stt/live-transcript.js'
+import { appendLive, finishLive, finishLiveFromSamples, dropLive, hasLiveTake, _resetLiveTakesForTest, LIVE_CUT_AT_SEC, LIVE_CUT_MIN_SEC, LIVE_CUT_MAX_SEC, LIVE_MAX_HELD_SEC } from '../../src/core/stt/live-transcript.js'
 import { cafToWav, cafDataLayout } from '../../src/core/stt/caf-to-wav.js'
 import { wavPcm, SAMPLE_RATE } from '../../src/core/stt/wav-segment.js'
 import { voiceArchive } from '../../src/core/stt/voice-archive.js'
-import { voiceArchiveV1Router } from '../../src/web/routes/voice-archive-v1.js'
+import { voiceArchiveV1Router, runVoiceArchiveAction } from '../../src/web/routes/voice-archive-v1.js'
 import { updateConfig } from '../../src/core/config-manager.js'
 
 /** Tone with a silent second at each of `silentAt` (seconds). */
@@ -30,6 +30,19 @@ function speech(seconds: number, silentAt: number[] = [], seed = 1): Int16Array 
   }
   return pcm
 }
+
+/** Speech with a pause of a second every `every` seconds, the way people talk. */
+function talk(seconds: number, every = 4, seed = 1): Int16Array {
+  const pauses: number[] = []
+  for (let t = every; t < seconds - 1; t += every + 1) pauses.push(t)
+  return speech(seconds, pauses, seed)
+}
+
+/** Let queued pieces finish. */
+const settle = () => new Promise((r) => setTimeout(r, 20))
+
+/** SHA-256 of the samples, as the companion sends it to the Mac. */
+const pcmSha = (pcm: Int16Array) => createHash('sha256').update(Buffer.from(pcm.buffer, pcm.byteOffset, pcm.byteLength)).digest('hex')
 
 /**
  * The phone's CAF: while recording the data chunk's size is unknown (-1); the
@@ -88,13 +101,15 @@ describe('cafDataLayout', () => {
 
 describe('live transcript', () => {
   it('cuts at quiet moments while the take runs, then does only the end', async () => {
-    // 65 s: three cuts at the silences, the last 16 s left for the end.
-    const pcm = speech(65, [14, 31, 49])
+    const pcm = talk(65)
     const live = caf(pcm, false)
     const { fn, calls } = fakeEngine()
     const id = randomUUID()
-    sendAll(id, live, fn)
-    await vi.waitFor(() => expect(calls.length).toBe(3))
+    // The phone's pieces: about 4 s of audio each.
+    sendAll(id, live, fn, 128 * 1024)
+    await settle()
+    const during = calls.length
+    expect(during).toBeGreaterThanOrEqual(4)
     // Every live piece ends in a silence, past the minimum and within the longest.
     for (const s of calls) {
       expect(s).toBeGreaterThanOrEqual(LIVE_CUT_MIN_SEC)
@@ -102,22 +117,24 @@ describe('live transcript', () => {
     }
     const final = wavPcm(cafToWav(caf(pcm, true))!)
     const text = await finishLive(id, final, fn)
-    expect(calls.length).toBe(4)
     expect(calls.reduce((a, b) => a + b, 0)).toBeCloseTo(65, 1)
-    // The end left to do is under the longest piece.
-    expect(calls[3]).toBeLessThan(LIVE_CUT_MAX_SEC)
+    // The stop leaves only the samples since the last cut.
+    expect(calls.slice(during).reduce((a, b) => a + b, 0)).toBeLessThan(LIVE_CUT_MAX_SEC)
     expect(text).toBe(calls.map((s) => `[${s.toFixed(1)}s]`).join(' '))
     expect(hasLiveTake(id)).toBe(false)
   })
+
 
   it('never cuts speech without a pause before the longest piece', async () => {
     const { fn, calls } = fakeEngine()
     const id = randomUUID()
     sendAll(id, caf(speech(50), false), fn)
-    await vi.waitFor(() => expect(calls.length).toBe(2))
-    // No pause anywhere: each cut is made only once the longest piece had gathered.
+    await settle()
+    expect(calls.length).toBeGreaterThanOrEqual(2)
+    // No pause anywhere: each cut is made only once the longest piece had
+    // gathered, and never past it, even from 8 s pieces.
     for (const s of calls) {
-      expect(s).toBeGreaterThan(LIVE_CUT_AT_SEC)
+      expect(s).toBeGreaterThanOrEqual(LIVE_CUT_MAX_SEC - LIVE_CUT_AT_SEC)
       expect(s).toBeLessThanOrEqual(LIVE_CUT_MAX_SEC)
     }
   })
@@ -127,7 +144,7 @@ describe('live transcript', () => {
     const gate = new Promise<void>((r) => { release = r })
     const fn = vi.fn(async () => { await gate; return 'x' })
     const id = randomUUID()
-    const live = caf(speech(65, [14, 31, 49]), false)
+    const live = caf(talk(65), false)
     sendAll(id, live, fn)
     await vi.waitFor(() => expect(fn).toHaveBeenCalledTimes(1))
     dropLive(id)
@@ -142,22 +159,23 @@ describe('live transcript', () => {
     let failures = 1
     const fn = vi.fn(async () => { if (failures-- > 0) throw new Error('busy'); return 'ok' })
     const id = randomUUID()
-    const pcm = speech(30, [14])
+    const pcm = talk(30)
     sendAll(id, caf(pcm, false), fn)
     const text = await finishLive(id, wavPcm(cafToWav(caf(pcm, true))!), fn)
-    expect(text).toBe('ok ok')
+    // One call failed and was retried: every other call is one piece of the text.
+    expect(text).toBe(Array(fn.mock.calls.length - 1).fill('ok').join(' '))
   })
 
   it('is not used when the end is asked for in another language', async () => {
     const { fn } = fakeEngine()
     const id = randomUUID()
-    const pcm = speech(30, [14])
+    const pcm = talk(30)
     sendAll(id, caf(pcm, false), fn)
     expect(await finishLive(id, wavPcm(cafToWav(caf(pcm, true))!), fn, 'zh')).toBeNull()
   })
 
   it('holds the pieces while another machine is expected, and starts on them the moment it is gone', async () => {
-    const pcm = speech(65, [14, 31, 49])
+    const pcm = talk(65)
     const live = caf(pcm, false)
     const { fn, calls } = fakeEngine()
     const wake = vi.fn()
@@ -171,9 +189,11 @@ describe('live transcript', () => {
     for (let from = half; from < live.length; from += PIECE) appendLive(id, from, live.subarray(from, from + PIECE), fn, { eager: true, wake })
     // The Mac left mid-take: the engine woke once and caught up on what was held.
     expect(wake).toHaveBeenCalledTimes(1)
-    await vi.waitFor(() => expect(calls.length).toBe(3))
+    await settle()
+    const during = calls.length
+    expect(during).toBeGreaterThanOrEqual(4)
     const text = await finishLive(id, wavPcm(cafToWav(caf(pcm, true))!), fn)
-    expect(calls.length).toBe(4)
+    expect(calls.slice(during).reduce((a, b) => a + b, 0)).toBeLessThan(LIVE_CUT_MAX_SEC)
     expect(calls.reduce((a, b) => a + b, 0)).toBeCloseTo(65, 1)
     expect(text).toBe(calls.map((s) => `[${s.toFixed(1)}s]`).join(' '))
   })
@@ -232,6 +252,43 @@ describe('live transcript', () => {
     expect(await finishLive(id, wavPcm(cafToWav(caf(speech(50, [15, 33], 2), true))!), fn)).toBeNull()
   })
 
+  it('a server that never gets the file finishes from the samples it holds', async () => {
+    const pcm = talk(30)
+    const { fn, calls } = fakeEngine()
+    const id = randomUUID()
+    sendAll(id, caf(pcm, false), fn, 128 * 1024)
+    await settle()
+    const during = calls.length
+    const final = wavPcm(cafToWav(caf(pcm, true))!)
+    const text = await finishLiveFromSamples(id, final.byteLength, pcmSha(final), fn)
+    expect(text).toBe(calls.map((s) => `[${s.toFixed(1)}s]`).join(' '))
+    expect(calls.reduce((a, b) => a + b, 0)).toBeCloseTo(30, 1)
+    expect(calls.slice(during).reduce((a, b) => a + b, 0)).toBeLessThan(LIVE_CUT_MAX_SEC)
+    expect(hasLiveTake(id)).toBe(false)
+  })
+
+  it('finishing from the samples needs every sample and the same ones', async () => {
+    const pcm = talk(30)
+    const final = wavPcm(cafToWav(caf(pcm, true))!)
+    const { fn } = fakeEngine()
+    // The last piece never arrived.
+    const short = randomUUID()
+    const live = caf(pcm, false)
+    sendAll(short, live.subarray(0, live.length - 64 * 1024), fn)
+    expect(await finishLiveFromSamples(short, final.byteLength, pcmSha(final), fn)).toBeNull()
+    expect(hasLiveTake(short)).toBe(false)
+    // Every sample arrived, but the finished file holds others.
+    const other = randomUUID()
+    sendAll(other, caf(talk(30, 4, 2), false), fn)
+    expect(await finishLiveFromSamples(other, final.byteLength, pcmSha(final), fn)).toBeNull()
+    // The end asked for in another language.
+    const lang = randomUUID()
+    sendAll(lang, live, fn)
+    expect(await finishLiveFromSamples(lang, final.byteLength, pcmSha(final), fn, 'zh')).toBeNull()
+    // Nothing held at all.
+    expect(await finishLiveFromSamples(randomUUID(), final.byteLength, pcmSha(final), fn)).toBeNull()
+  })
+
   it('stops for a format that is not the phone PCM, and after an engine error', async () => {
     const odd = caf(speech(5), false)
     odd.writeDoubleBE(44100, 20) // desc sample rate
@@ -263,7 +320,7 @@ describe('POST /api/v1/stt/recordings/:id/live, then the archive', () => {
       seen.push(seconds)
       return { text: `piece${seen.length}`, durationMs: 1 }
     })
-    const pcm = speech(50, [15, 35])
+    const pcm = talk(50)
     const live = caf(pcm, false)
     const id = randomUUID()
     const base = `/api/v1/stt/recordings/${id}`
@@ -272,7 +329,10 @@ describe('POST /api/v1/stt/recordings/:id/live, then the archive', () => {
       expect(res.status).toBe(200)
       expect(res.body.accepted).toBe(true)
     }
-    await vi.waitFor(() => expect(seen.length).toBe(2))
+    // The engine is reached through the config: wait until it has caught up with the pieces.
+    await vi.waitFor(() => expect(seen.length).toBeGreaterThanOrEqual(3))
+    let during = -1
+    while (during !== seen.length) { during = seen.length; await new Promise((r) => setTimeout(r, 200)) }
 
     // The phone then stores the finished file as always: chunks, commit, transcribe.
     const final = caf(pcm, true)
@@ -284,10 +344,54 @@ describe('POST /api/v1/stt/recordings/:id/live, then the archive', () => {
     expect((await request(app).post(base + '/commit').send({ chunkCount: count, audioSizeBytes: final.length, audioSha256: sha(final) })).status).toBe(200)
     const res = await request(app).post(base + '/transcribe').send({})
     expect(res.status).toBe(200)
-    expect(res.body.text).toBe('piece1 piece2 piece3')
-    expect(seen.length).toBe(3)
-    expect(seen[2]).toBeLessThan(LIVE_CUT_MAX_SEC)
-    expect((await voiceArchive.get(id)).text).toBe('piece1 piece2 piece3')
+    const all = seen.map((_, i) => `piece${i + 1}`).join(' ')
+    expect(res.body.text).toBe(all)
+    expect(seen.slice(during).reduce((a, b) => a + b, 0)).toBeLessThan(LIVE_CUT_MAX_SEC)
+    expect((await voiceArchive.get(id)).text).toBe(all)
+  })
+
+  it('the Mac takes the pieces the companion hands it and answers the take from them, with no file', async () => {
+    // The relay ops the companion calls (core/stt/live-forward.ts), run on this server as the Mac.
+    const seen: number[] = []
+    engine.mockImplementation(async (_cfg: unknown, req: { audio: string }) => {
+      seen.push(wavPcm(Buffer.from(req.audio, 'base64')).length / SAMPLE_RATE)
+      return { text: `mac${seen.length}`, durationMs: 1 }
+    })
+    const pcm = talk(30)
+    const live = caf(pcm, false)
+    const id = randomUUID()
+    for (let from = 0; from < live.length; from += PIECE) {
+      const result = await runVoiceArchiveAction({ operation: 'live', id, body: { from, audio: live.subarray(from, from + PIECE).toString('base64') } })
+      expect(result).toMatchObject({ status: 200, body: { accepted: true } })
+    }
+    await vi.waitFor(() => expect(seen.length).toBeGreaterThanOrEqual(1))
+    const final = wavPcm(cafToWav(caf(pcm, true))!)
+    const done = await runVoiceArchiveAction({ operation: 'live-finish', id, body: { pcmBytes: final.byteLength, pcmSha256: pcmSha(final) } })
+    expect(done).toEqual({ status: 200, body: { text: seen.map((_, i) => `mac${i + 1}`).join(' ') } })
+    // Asked again, or for samples that do not match: refused, never a guess.
+    expect(await runVoiceArchiveAction({ operation: 'live-finish', id, body: { pcmBytes: final.byteLength, pcmSha256: pcmSha(final) } })).toMatchObject({ status: 409 })
+    expect(await runVoiceArchiveAction({ operation: 'live-finish', id, body: { pcmBytes: 1 } })).toMatchObject({ status: 400 })
+    // Nothing was stored here: the companion keeps the recording and copies it later.
+    await expect(voiceArchive.get(id)).rejects.toMatchObject({ status: 404 })
+  })
+
+  it('the Mac forgets handed-over pieces when the take is cancelled or its text arrives', async () => {
+    const { fn } = fakeEngine()
+    engine.mockResolvedValue({ text: 'x', durationMs: 1 })
+    const live = caf(talk(10), false)
+    const cancelled = randomUUID()
+    await runVoiceArchiveAction({ operation: 'live', id: cancelled, body: { from: 0, audio: live.subarray(0, PIECE).toString('base64') } })
+    expect(hasLiveTake(cancelled)).toBe(true)
+    expect(await runVoiceArchiveAction({ operation: 'live-drop', id: cancelled })).toEqual({ status: 200, body: { ok: true } })
+    expect(hasLiveTake(cancelled)).toBe(false)
+    // The companion finished the take itself and copies the recording with its text.
+    const finished = randomUUID()
+    const final = caf(talk(10), true)
+    appendLive(finished, 0, live.subarray(0, PIECE), fn)
+    expect(hasLiveTake(finished)).toBe(true)
+    await voiceArchive.ingestAudio({ id: finished, audio: final, format: 'caf' })
+    expect(await runVoiceArchiveAction({ operation: 'text', id: finished, body: { text: 'from the companion', via: 'local' } })).toMatchObject({ status: 200 })
+    expect(hasLiveTake(finished)).toBe(false)
   })
 
   it('a resend past the received bytes is told where to start', async () => {

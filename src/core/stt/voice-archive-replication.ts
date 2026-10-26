@@ -122,8 +122,11 @@ const settled = (record: { state: string; primarySaved?: boolean; text?: string 
   record.state === 'uploading' || (record.primarySaved === true && record.text !== undefined)
 function retryVoiceArchives(): Promise<void> {
   retrying ??= (async () => {
+    // A take being transcribed copies itself when its answer is in: a copy
+    // beside a live hand-over's last hops can make the Mac look asleep.
+    const { isTranscribing } = await import('./voice-archive-transcribe.js')
     for (const record of await voiceArchive.all()) {
-      if (settled(record)) continue
+      if (settled(record) || isTranscribing(record.id)) continue
       const { bridgeForHost } = await import('../../web/ws/bridge-registry.js')
       if (!bridgeForHost('__local__').connected) break
       await replicateVoiceRecording(record.id)

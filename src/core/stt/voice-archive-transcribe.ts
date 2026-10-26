@@ -2,7 +2,8 @@ import { isCompanion } from '../server-role.js'
 import { voiceArchive, VoiceArchiveError, type VoiceRecord } from './voice-archive.js'
 import { deferVoiceReplication, replicateUnlessSilent, replicateVoiceRecording, voicePrimaryAction, VOICE_TRANSCRIBE_TIMEOUT_MS } from './voice-archive-replication.js'
 import { dropLive, finishLive, hasLiveTake, type LiveTranscribe } from './live-transcript.js'
-import { cafToWav } from './caf-to-wav.js'
+import { dropLiveForward, finishOnMac, hasLiveForward } from './live-forward.js'
+import { cafToWav, cafDataLayout } from './caf-to-wav.js'
 import { isConformingWav } from './audio-convert.js'
 import { wavPcm } from './wav-segment.js'
 
@@ -201,9 +202,41 @@ async function finishLiveTake(id: string, language?: string): Promise<string | n
   }
 }
 
+/**
+ * The take's text from the pieces the Mac transcribed while it was recorded
+ * (live-forward.ts), or null. Asked before the recording is copied, which then
+ * follows in the background: the copy alone cost 4 s of a 60 s take.
+ */
+async function finishLiveOnMac(id: string, language?: string): Promise<string | null> {
+  const watch = whenMacAway(id)
+  try {
+    const { audio, record } = await voiceArchive.readAudio(id)
+    const layout = record.format === 'caf' ? cafDataLayout(audio) : null
+    const wav = layout ? cafToWav(audio) : null
+    if (!layout || !wav) { dropLiveForward(id); return null }
+    // A Mac that leaves meanwhile hands the take back to this box at once.
+    const text = await Promise.race([finishOnMac(id, audio, layout.dataStart, wavPcm(wav), language), watch.away])
+    return text === 'away' ? null : text
+  } catch {
+    dropLiveForward(id)
+    return null
+  } finally {
+    watch.stop()
+  }
+}
+
 async function transcribe(id: string, language?: string): Promise<VoiceTranscript> {
   const record = await voiceArchive.get(id)
   if (record.text !== undefined) return reply(record)
+  if (FOLLOWER && hasLiveForward(id) && await macAnswers()) {
+    const text = await finishLiveOnMac(id, language)
+    if (text !== null && text.trim()) {
+      dropLive(id)
+      const saved = await voiceArchive.saveText(id, text, 'primary')
+      deferVoiceReplication(id)
+      return reply(saved)
+    }
+  }
   // A Mac that is away, or connected but not answering the copy (asleep behind a
   // live bridge), leaves this box's own engines: it holds the whole recording.
   // Waiting for the Mac turned every recording made while it slept into a failure,
@@ -286,6 +319,9 @@ async function transcribe(id: string, language?: string): Promise<VoiceTranscrip
   deferVoiceReplication(id)
   return reply(saved)
 }
+
+/** A transcribe of `id` is running here (its copy is started by it, not by a retry pass). */
+export function isTranscribing(id: string): boolean { return pending.has(id) }
 
 /** Time out the caller, not the durable result write if an engine finishes later. */
 export async function transcribeVoiceRecording(raw: string, body?: unknown): Promise<VoiceTranscript> {

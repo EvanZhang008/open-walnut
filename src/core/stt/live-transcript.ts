@@ -13,7 +13,10 @@
  * leaves only the end to do, and a Mac that answers costs this box no CPU.
  * When the finished recording is transcribed (voice-archive-transcribe.ts), the
  * pieces already done are reused if the finished file holds exactly the samples
- * they were made from (checked by hash), and only the rest is transcribed. Anything that does not line up (a gap, a
+ * they were made from (checked by hash), and only the rest is transcribed. A
+ * server that never gets the file (the Mac, fed by the companion) finishes from
+ * the samples it holds once they hash the same as the finished file's
+ * (finishLiveFromSamples). Anything that does not line up (a gap, a
  * different format, an engine error, a restart that lost this memory) just falls
  * back to transcribing the whole file: live is a head start, never the record.
  *
@@ -30,7 +33,12 @@ import { log } from '../../logging/index.js'
 import { cafDataLayout } from './caf-to-wav.js'
 import { SAMPLE_RATE, pcmToWav, segmentBoundaries, joinSegmentTexts } from './wav-segment.js'
 
-/** A cut is made once this much is waiting... */
+/**
+ * A cut is made once this much is waiting... Not shorter: on speech mixing
+ * Chinese and English, pieces of 5 to 10 s came back translated into English
+ * when they began with English words, even with the text before as context
+ * (2026-10-26, real takes).
+ */
 export const LIVE_CUT_AT_SEC = 12
 /** ...at the quietest moment at least this far in. */
 export const LIVE_CUT_MIN_SEC = 6
@@ -122,7 +130,7 @@ function concat(parts: Int16Array[], total: number): Int16Array {
 }
 
 /** Quietest 100 ms from `fromSec` to the end of `pcm`, and whether it is a pause. */
-function quietCut(pcm: Int16Array, fromSec = LIVE_CUT_MIN_SEC): { at: number; pause: boolean } {
+function quietCut(pcm: Int16Array, fromSec: number): { at: number; pause: boolean } {
   let best = pcm.length
   let bestEnergy = Number.POSITIVE_INFINITY
   let total = 0
@@ -192,14 +200,16 @@ function addSamples(id: string, take: Take, bytes: Buffer, transcribe: LiveTrans
   take.pendingSamples += samples.length
   while (!take.failed && take.pendingSamples >= LIVE_CUT_AT_SEC * SAMPLE_RATE) {
     const all = concat(take.pending, take.pendingSamples)
-    let { at: cut, pause } = quietCut(all)
+    // A piece is never past the longest, even when a phone piece brings several seconds at once.
+    const head = all.subarray(0, Math.min(all.length, LIVE_CUT_MAX_SEC * SAMPLE_RATE))
+    let { at: cut, pause } = quietCut(head, LIVE_CUT_MIN_SEC)
     if (!pause) {
-      // No pause yet: wait for one; a piece already long is cut in its later half.
+      // No pause yet: wait for one; a piece already long is cut at its quietest moment.
       if (all.length < LIVE_CUT_MAX_SEC * SAMPLE_RATE) {
         take.pending = [all]
         break
       }
-      cut = quietCut(all, all.length / SAMPLE_RATE - LIVE_CUT_AT_SEC).at
+      cut = quietCut(head, LIVE_CUT_MAX_SEC - LIVE_CUT_AT_SEC).at
     }
     hold(id, take, take.cutAt, all.slice(0, cut), transcribe)
     const rest = all.slice(cut)
@@ -318,7 +328,34 @@ export async function finishLive(
     log.stt.info(`live transcript ${id} unused: the finished file differs from what arrived live`)
     return null
   }
-  const rest = finalPcm.subarray(take.cutAt)
+  return finishRest(id, take, finalPcm.subarray(take.cutAt), transcribe, language)
+}
+
+/**
+ * The whole take's text from the samples this server received, for a server
+ * that never gets the finished file (the Mac, while the companion holds it):
+ * used only when they are exactly the finished file's samples, `pcmBytes` long
+ * with SHA-256 `pcmSha256`; null otherwise, and the take is gone either way.
+ */
+export async function finishLiveFromSamples(
+  id: string, pcmBytes: number, pcmSha256: string, transcribe: LiveTranscribe, language?: string,
+): Promise<string | null> {
+  const take = takes.get(id)
+  if (!take) return null
+  takes.delete(id)
+  markDone(id)
+  release(id, take, transcribe)
+  await take.queue
+  if (take.failed || (take.language ?? '') !== (language ?? '')) return null
+  if (take.pcmBytes !== pcmBytes || take.carry || take.hash.digest('hex') !== pcmSha256) {
+    log.stt.info(`live transcript ${id} unused: the samples received differ from the finished file`)
+    return null
+  }
+  return finishRest(id, take, concat(take.pending, take.pendingSamples), transcribe, language)
+}
+
+/** The pieces done live, then `rest` (the samples after the last cut). */
+async function finishRest(id: string, take: Take, rest: Int16Array, transcribe: LiveTranscribe, language?: string): Promise<string> {
   const texts = take.segments.map((s) => s.text)
   let from = 0
   for (const to of segmentBoundaries(rest)) {

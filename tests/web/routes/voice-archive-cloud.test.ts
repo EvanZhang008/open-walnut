@@ -35,7 +35,12 @@ vi.mock('../../../src/core/stt/index.js', () => ({
 import { voiceArchive, VoiceArchiveStore, VOICE_CHUNK_BYTES } from '../../../src/core/stt/voice-archive.js'
 import { replicateVoiceRecording, startVoiceArchiveReplication, stopVoiceArchiveReplication, _setFollowupClockForTest, _followupStateForTest } from '../../../src/core/stt/voice-archive-replication.js'
 import { transcribeVoiceRecording, liveRole, probeMacForTake, _resetMacQuietForTest, MAC_SILENCE_MS } from '../../../src/core/stt/voice-archive-transcribe.js'
-import { appendLive, hasLiveTake } from '../../../src/core/stt/live-transcript.js'
+import { appendLive, hasLiveTake, _resetLiveTakesForTest } from '../../../src/core/stt/live-transcript.js'
+import { hasLiveForward, _resetLiveForwardsForTest } from '../../../src/core/stt/live-forward.js'
+import { runVoiceArchiveAction, voiceArchiveV1Router } from '../../../src/web/routes/voice-archive-v1.js'
+import { createHash, randomUUID } from 'node:crypto'
+import express from 'express'
+import request from 'supertest'
 import { updateConfig } from '../../../src/core/config-manager.js'
 /** One probe of a held take that the Mac leaves unanswered. */
 async function unansweredProbe(id: string): Promise<void> {
@@ -59,9 +64,11 @@ beforeEach(async () => {
   primaryHome = await mkdtemp(tmpdir() + '/voice-primary-')
   primary = new VoiceArchiveStore(primaryHome, false)
   bridge.mockReset(); engine.mockReset()
+  _resetLiveTakesForTest(); _resetLiveForwardsForTest(); (await macModule())._resetLiveTakesForTest(); macHeard.length = 0
   bridge.mockImplementation(async (_host, _command, params) => {
     const { operation, id, body } = params.params
     let answer
+    if (operation === 'live' || operation === 'live-finish' || operation === 'live-drop') return fakeMacLive(operation, id, body)
     if (operation === 'get') answer = await primary.get(id)
     else if (operation === 'chunk') answer = await primary.saveChunk(id, body)
     else if (operation === 'commit') answer = await primary.commit(id, body)
@@ -74,6 +81,59 @@ beforeEach(async () => {
   })
 })
 afterAll(async () => { if (primaryHome) await rm(primaryHome, { recursive: true, force: true }) })
+
+/**
+ * The Mac's side of a live hand-over: its own instance of the live module (the
+ * query makes it a second copy, as on another machine) and an engine that names
+ * the seconds it was given. Mirrors runVoiceArchiveAction's live ops on the Mac.
+ */
+type LiveModule = typeof import('../../../src/core/stt/live-transcript.js')
+const macModule = () => import('../../../src/core/stt/live-transcript.js?mac' as string) as Promise<LiveModule>
+const macHeard: number[] = []
+const macEngine = async (wav: Buffer) => {
+  const seconds = (wav.length - 44) / 32000
+  macHeard.push(seconds)
+  return `mac[${seconds.toFixed(1)}]`
+}
+async function fakeMacLive(operation: string, id: string, body: { from?: number; audio?: string; pcmBytes?: number; pcmSha256?: string; language?: string } | undefined) {
+  const mac = await macModule()
+  if (operation === 'live-drop') { mac.dropLive(id); return { ok: true, result: { status: 200, body: { ok: true } } } }
+  if (operation === 'live') {
+    const ack = mac.appendLive(id, body!.from!, Buffer.from(body!.audio!, 'base64'), macEngine, { language: body!.language })
+    return { ok: true, result: { status: 200, body: 'gap' in ack ? { accepted: true, gap: true, receivedBytes: ack.receivedBytes, segments: 0 } : ack } }
+  }
+  const text = await mac.finishLiveFromSamples(id, body!.pcmBytes!, body!.pcmSha256!, macEngine, body!.language)
+  return { ok: true, result: text === null ? { status: 409, body: { error: { code: 'live_unusable' } } } : { status: 200, body: { text } } }
+}
+const macHas = async (id: string) => (await macModule()).hasLiveTake(id)
+
+/** A phone CAF: 4096 header bytes, then 16 kHz mono PCM; `finished` states the data size. */
+const HEADER = 4096
+function phoneCaf(seconds: number, finished: boolean, seed = 1, trailer = Buffer.alloc(0)): Buffer {
+  const pcm = new Int16Array(seconds * 16000)
+  for (let i = 0; i < pcm.length; i++) pcm[i] = (i / 16000) % 5 >= 4 ? 0 : Math.round(6000 * Math.sin(2 * Math.PI * (200 + seed) * i / 16000))
+  const desc = Buffer.alloc(32)
+  desc.writeDoubleBE(16000, 0); desc.write('lpcm', 8, 'ascii')
+  desc.writeUInt32BE(2, 12); desc.writeUInt32BE(2, 16); desc.writeUInt32BE(1, 20); desc.writeUInt32BE(1, 24); desc.writeUInt32BE(16, 28)
+  const chunk = (type: string, b: Buffer, size = BigInt(b.length)) => {
+    const h = Buffer.alloc(12); h.write(type, 0, 'ascii'); h.writeBigInt64BE(size, 4)
+    return Buffer.concat([h, b])
+  }
+  const data = Buffer.concat([Buffer.alloc(4), Buffer.from(pcm.buffer)])
+  return Buffer.concat([Buffer.from([0x63, 0x61, 0x66, 0x66, 0, 1, 0, 0]), chunk('desc', desc), chunk('free', Buffer.alloc(4016)), chunk('data', data, finished ? BigInt(data.length) : -1n), trailer])
+}
+
+/** The phone sends the take live while recording, the last `unsent` bytes not yet, then stores the finished file. */
+async function recordLive(id: string, seconds: number, opts: { unsent?: number; trailer?: Buffer } = {}): Promise<void> {
+  const unsent = opts.unsent ?? 50_000
+  const live = phoneCaf(seconds, false)
+  for (let from = 0; from < live.length - unsent; from += 128 * 1024) {
+    const piece = live.subarray(from, Math.min(from + 128 * 1024, live.length - unsent))
+    expect(await runVoiceArchiveAction({ operation: 'live', id, body: { from, audio: piece.toString('base64') } })).toMatchObject({ status: 200, body: { accepted: true } })
+  }
+  await voiceArchive.ingestAudio({ id, audio: phoneCaf(seconds, true, 1, opts.trailer), format: 'caf' })
+}
+const ops = () => bridge.mock.calls.map((call) => call[2].params.operation as string)
 describe('durable voice cloud copies', () => {
   it('keeps an offline copy and resumes from the acknowledged chunk after interruption', async () => {
     const record = await voiceArchive.ingestAudio({ audio: Buffer.alloc(VOICE_CHUNK_BYTES * 3, 1), format: 'caf' })
@@ -645,5 +705,193 @@ describe('follow-up passes after the Mac bridge connects', () => {
     expect(await a).toBe(true)
     expect(ops()).toEqual(['chunk', 'commit'])
     expect(sets).toHaveLength(0)
+  })
+})
+
+describe('live pieces handed to the Mac while it answers', () => {
+  it('the Mac transcribes while the take is recorded and answers the stop from its pieces, before the copy', async () => {
+    const id = randomUUID()
+    await recordLive(id, 40)
+    // Every piece went on to the Mac, which transcribed while the take ran; this box held its own and ran nothing.
+    await vi.waitFor(() => expect(macHeard.length).toBeGreaterThan(0))
+    const during = macHeard.length
+    expect(engine).not.toHaveBeenCalled()
+    expect(hasLiveTake(id)).toBe(true)
+    const answer = await transcribeVoiceRecording(id)
+    expect(answer).toMatchObject({ via: 'primary', storage: 'companion' })
+    expect(answer.text).toBe(macHeard.map((s) => `mac[${s.toFixed(1)}]`).join(' '))
+    // Every second was heard once; before the stop the Mac had already done at least a piece.
+    expect(macHeard.reduce((a, b) => a + b, 0)).toBeCloseTo(40, 1)
+    expect(macHeard.slice(0, during).reduce((a, b) => a + b, 0)).toBeGreaterThanOrEqual(6)
+    expect(engine).not.toHaveBeenCalled()
+    // The rest of the file went first, then the finish; the Mac never transcribed a file.
+    const seq = ops()
+    expect(seq.lastIndexOf('live')).toBeLessThan(seq.indexOf('live-finish'))
+    expect(seq).not.toContain('transcribe')
+    expect(hasLiveTake(id)).toBe(false)
+    expect(hasLiveForward(id)).toBe(false)
+    expect(await macHas(id)).toBe(false)
+    // The copy follows in the background and carries the text to the Mac.
+    await vi.waitFor(async () => { expect((await primary.get(id)).text).toBe(answer.text) })
+  })
+
+  it('a finished file with a chunk after its samples still lines up with what the Mac heard', async () => {
+    const id = randomUUID()
+    const info = Buffer.concat([Buffer.from('info'), Buffer.alloc(8), Buffer.alloc(40, 7)])
+    info.writeBigInt64BE(40n, 4)
+    await recordLive(id, 20, { trailer: info })
+    expect((await transcribeVoiceRecording(id)).text).toMatch(/^mac\[/)
+    expect(ops()).not.toContain('transcribe')
+  })
+
+  it('a Mac with no engine of its own for live pieces (accepted: false) gets the ordinary path', async () => {
+    const real = bridge.getMockImplementation()!
+    bridge.mockImplementation(async (...args) => {
+      if (args[2].params.operation === 'live') return { ok: true, result: { status: 200, body: { accepted: false, receivedBytes: 0, segments: 0, reason: 'not-transcribed-here' } } }
+      return real(...args)
+    })
+    const id = randomUUID()
+    await recordLive(id, 20)
+    await vi.waitFor(() => expect(hasLiveForward(id)).toBe(false))
+    expect(await transcribeVoiceRecording(id)).toMatchObject({ text: 'primary full text' })
+  })
+
+  it('a take past the 5 min this box holds keeps going to the Mac, and the phone keeps sending', async () => {
+    const id = randomUUID()
+    // recordLive asserts every live answer says accepted, also past the companion's own bound.
+    await recordLive(id, 320)
+    expect(hasLiveTake(id)).toBe(false)
+    expect(hasLiveForward(id)).toBe(true)
+    expect((await transcribeVoiceRecording(id)).text).toMatch(/^mac\[/)
+    expect(macHeard.reduce((a, b) => a + b, 0)).toBeCloseTo(320, 0)
+  }, 60_000)
+
+  it('the commit does not start the copy while the Mac has the take live; the transcribe does, after the answer', async () => {
+    const id = randomUUID()
+    const live = phoneCaf(20, false)
+    for (let from = 0; from < live.length; from += 128 * 1024) {
+      await runVoiceArchiveAction({ operation: 'live', id, body: { from, audio: live.subarray(from, from + 128 * 1024).toString('base64') } })
+    }
+    const final = phoneCaf(20, true)
+    const createdAt = new Date().toISOString()
+    let index = 0
+    for (let at = 0; at < final.length; at += VOICE_CHUNK_BYTES) {
+      expect(await runVoiceArchiveAction({ operation: 'chunk', id, body: { index: index++, audio: final.subarray(at, at + VOICE_CHUNK_BYTES).toString('base64'), format: 'caf', createdAt } })).toMatchObject({ status: 200 })
+    }
+    expect(await runVoiceArchiveAction({ operation: 'commit', id, body: { chunkCount: index, audioSizeBytes: final.length, audioSha256: createHash('sha256').update(final).digest('hex') } })).toMatchObject({ status: 200 })
+    await new Promise((r) => setTimeout(r, 50))
+    expect(ops()).not.toContain('chunk')
+    expect((await transcribeVoiceRecording(id)).text).toMatch(/^mac\[/)
+    const seq = ops()
+    expect(seq.indexOf('live-finish')).toBeLessThan(seq.indexOf('chunk') === -1 ? Infinity : seq.indexOf('chunk'))
+    await vi.waitFor(async () => { expect((await voiceArchive.get(id)).primarySaved).toBe(true) })
+  })
+
+  it('a cancel skips the hops still queued for the Mac and drops what it has', async () => {
+    let release!: () => void
+    const gate = new Promise<void>((r) => { release = r })
+    const real = bridge.getMockImplementation()!
+    bridge.mockImplementation(async (...args) => {
+      if (args[2].params.operation === 'live') await gate
+      return real(...args)
+    })
+    const id = randomUUID()
+    const live = phoneCaf(20, false)
+    for (let from = 0; from < 3 * 128 * 1024; from += 128 * 1024) {
+      await runVoiceArchiveAction({ operation: 'live', id, body: { from, audio: live.subarray(from, from + 128 * 1024).toString('base64') } })
+    }
+    const res = await request(express().use(express.json()).use('/api/v1', voiceArchiveV1Router)).delete(`/api/v1/stt/recordings/${id}/live`)
+    expect(res.status).toBe(200)
+    release()
+    await vi.waitFor(() => expect(ops()).toContain('live-drop'))
+    await new Promise((r) => setTimeout(r, 50))
+    // Only the hop already on its way went out.
+    expect(ops().filter((op) => op === 'live')).toHaveLength(1)
+    expect(await macHas(id)).toBe(false)
+  })
+
+  it('a Mac that does not take live pieces (an older Walnut) gets the ordinary path', async () => {
+    const real = bridge.getMockImplementation()!
+    bridge.mockImplementation(async (...args) => {
+      if (args[2].params.operation === 'live') return { ok: true, result: { status: 400, body: { error: { code: 'bad_request', message: 'Unknown voice archive operation' } } } }
+      return real(...args)
+    })
+    const id = randomUUID()
+    await recordLive(id, 20)
+    // One refusal ends the hand-over for the take: no hop per piece after it.
+    await vi.waitFor(() => expect(hasLiveForward(id)).toBe(false))
+    expect(ops().filter((op) => op === 'live')).toHaveLength(1)
+    expect(await transcribeVoiceRecording(id)).toMatchObject({ text: 'primary full text' })
+    expect(ops()).not.toContain('live-finish')
+  })
+
+  it('a finish the Mac refuses (its samples differ) goes the ordinary way', async () => {
+    const id = randomUUID()
+    await recordLive(id, 20)
+    const real = bridge.getMockImplementation()!
+    bridge.mockImplementation(async (...args) => {
+      if (args[2].params.operation === 'live-finish') return { ok: true, result: { status: 409, body: { error: { code: 'live_unusable' } } } }
+      return real(...args)
+    })
+    expect(await transcribeVoiceRecording(id)).toMatchObject({ text: 'primary full text' })
+    expect(ops()).toContain('live-finish')
+    expect(ops()).toContain('transcribe')
+  })
+
+  it('a Mac that goes quiet at the stop hands the take back to this box, which does it from what it held', async () => {
+    engine.mockResolvedValue({ text: 'companion piece', durationMs: 1 })
+    const id = randomUUID()
+    await recordLive(id, 20)
+    await vi.waitFor(async () => expect(await macHas(id)).toBe(true))
+    // Asleep behind a live bridge: nothing answers from here on.
+    bridge.mockImplementation(() => new Promise(() => {}))
+    const started = Date.now()
+    const answer = await transcribeVoiceRecording(id)
+    expect(answer.via).toBe('local')
+    expect(answer.text).toContain('companion piece')
+    // Two unanswered checks, not a 30 s finish timeout.
+    expect(Date.now() - started).toBeLessThan(15_000)
+  }, 30_000)
+
+
+  it('a hand-over that gives up at the stop leaves the Mac its pieces for the file it is sent next', async () => {
+    const id = randomUUID()
+    await recordLive(id, 20)
+    await vi.waitFor(async () => expect(await macHas(id)).toBe(true))
+    // The last piece the phone sent is still on its way past the drain wait.
+    const real = bridge.getMockImplementation()!
+    bridge.mockImplementation(async (...args) => {
+      if (args[2].params.operation === 'live') await new Promise((r) => setTimeout(r, 6_000))
+      return real(...args)
+    })
+    const live = phoneCaf(20, false)
+    const last = Math.floor((live.length - 50_000) / (128 * 1024)) * 128 * 1024
+    await runVoiceArchiveAction({ operation: 'live', id, body: { from: last, audio: live.subarray(last, live.length - 50_000).toString('base64') } })
+    expect(await transcribeVoiceRecording(id)).toMatchObject({ text: 'primary full text' })
+    expect(ops()).not.toContain('live-drop')
+    expect(ops()).not.toContain('live-finish')
+    expect(await macHas(id)).toBe(true)
+  }, 30_000)
+
+  it('a retry pass does not copy a take while its transcribe hands it over', async () => {
+    let release!: () => void
+    const gate = new Promise<void>((r) => { release = r })
+    const real = bridge.getMockImplementation()!
+    bridge.mockImplementation(async (...args) => {
+      if (args[2].params.operation === 'live-finish') await gate
+      return real(...args)
+    })
+    await startVoiceArchiveReplication()
+    const id = randomUUID()
+    await recordLive(id, 20)
+    const answer = transcribeVoiceRecording(id)
+    await vi.waitFor(() => expect(ops()).toContain('live-finish'))
+    for (const handler of activity) handler()
+    await new Promise((r) => setTimeout(r, 100))
+    expect(ops()).not.toContain('chunk')
+    release()
+    expect((await answer).text).toMatch(/^mac\[/)
+    await vi.waitFor(async () => { expect((await voiceArchive.get(id)).primarySaved).toBe(true) })
+    stopVoiceArchiveReplication()
   })
 })
