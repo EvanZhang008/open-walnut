@@ -249,6 +249,9 @@ test('the budget sits under the cost: set from the picker, then shown as spent o
   const dialog = page.getByRole('dialog', { name: 'Usage & Budget' })
   await expect(dialog).toBeVisible()
   await expect(dialog).toContainText('Checked at the end of each turn and every 5 s.')
+  // Opened from the picker's popout, it sits above it (on prod a long model list covered its Close button).
+  const zOf = (l: Locator) => l.evaluate(n => Number(getComputedStyle(n).zIndex) || 0)
+  expect(await zOf(page.locator('.session-usage-overlay'))).toBeGreaterThan(await zOf(picker))
   await dialog.getByRole('textbox', { name: 'Budget for this session (USD)' }).fill('200')
   await dialog.getByRole('button', { name: 'Save limit' }).click()
   await expect(dialog.getByText('Saved limit: $200.00')).toBeVisible()

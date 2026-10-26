@@ -1,5 +1,7 @@
 /* Session-local usage and lifetime allowance, sharing the app dialog skin. */
-.session-usage-overlay { z-index: 9500; padding: 12px; box-sizing: border-box; }
+/* Above every placed menu (useMenuPlacement sets 9999 inline): it opens from the model picker's popout.
+   Two classes, so it outranks .app-modal-overlay's 9300 in globals.css, which loads later. */
+.app-modal-overlay.session-usage-overlay { z-index: 10000; padding: 12px; box-sizing: border-box; }
 .session-usage-dialog.app-modal {
   width: min(540px, calc(100vw - 24px));
   max-height: calc(100dvh - 24px);
