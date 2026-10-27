@@ -405,21 +405,10 @@ struct TaskDetailSheet: View {
 
     // MARK: - Labels
 
-    /// Phase enum → readable Title Case (e.g. NEED_ACTION → Need Action).
-    /// nil when the phase is just the status restated (TODO+todo showed
-    /// "To Do"+"Todo" side by side — dogfood R15): only a phase that says
-    /// something the status chip doesn't (NEED_ACTION, or a mismatch like
-    /// COMPLETE while status is still open) earns a second chip.
-    private var phaseChipText: String? {
-        let redundant: [String: TaskStatus] = [
-            "TODO": .todo, "IN_PROGRESS": .inProgress, "COMPLETE": .done,
-        ]
-        if redundant[current.phase] == current.statusKind { return nil }
-        return current.phase
-            .split(separator: "_")
-            .map { $0.prefix(1).uppercased() + $0.dropFirst().lowercased() }
-            .joined(separator: " ")
-    }
+    /// No raw phase caption: the status card at the top always says where the task stands, in the
+    /// user's words, from its stored status or, with none, from its phase (TaskStatusCard), so a
+    /// phase beside it ("Need Action" next to "Needs you") reads as a second status.
+    private var phaseChipText: String? { nil }
 
     static func fullDate(_ date: Date) -> String {
         date.formatted(date: .abbreviated, time: .shortened)

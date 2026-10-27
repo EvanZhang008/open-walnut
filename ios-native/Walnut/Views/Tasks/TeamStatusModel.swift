@@ -88,7 +88,8 @@ enum TeamStatusModel {
     static func rowTime(_ row: TeamStatusRow) -> Date {
         let t = row.task
         if row.state == .done { return WalnutTask.parseISO(t.completedAt ?? t.updatedAt) ?? .distantPast }
-        return [WalnutTask.parseISO(row.status?.at), WalnutTask.parseISO(t.updatedAt)].compactMap { $0 }.max() ?? .distantPast
+        // The status's own time: any other edit (a pin, a rename) is not news about the work.
+        return WalnutTask.parseISO(row.status?.at) ?? WalnutTask.parseISO(t.updatedAt) ?? .distantPast
     }
 
     static func build(ownerId: String, tasks: [WalnutTask], now: Date = AppClock.now()) -> TeamStatusBoard {
@@ -140,6 +141,20 @@ enum TeamStatusModel {
         return "\(b.counts.working) working, \(waiting), \(b.counts.done) done in the last \(doneWindowDays) days."
     }
 
+    /// An agent's sentence (or a title) as a clause inside other words: no closing period,
+    /// semicolon or colon, so "Title (Pick a date.); Other" reads "Title (Pick a date); Other".
+    /// A question or an ellipsis keeps its mark.
+    static func clause(_ text: String) -> String {
+        var t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        while let last = t.last, ".;:!\u{3002}\u{FF1B}\u{FF1A}\u{FF01}".contains(last), !t.hasSuffix("...") { t.removeLast() }
+        return t
+    }
+
+    /// Stuck is a kind of waiting: a done task keeps the report it had, and never reads Stuck.
+    static func isStuck(_ task: WalnutTask) -> Bool {
+        state(of: task) == .waiting && task.userStatus?.kind == "stuck"
+    }
+
     /// A waiting row's line: "Waiting on another task: …", "Stuck. …", "Not started yet".
     static func waitingLine(_ s: WalnutUserStatus?) -> String {
         let on = (s?.waitingOn ?? "").trimmingCharacters(in: .whitespaces)
@@ -150,7 +165,8 @@ enum TeamStatusModel {
             if let until = WalnutTask.parseISO(s?.until) {
                 return "Waiting until " + until.formatted(date: .abbreviated, time: .shortened)
             }
-            return "Waiting"
+            guard let first = on.first else { return "Waiting for a set time" }
+            return "Waiting on " + first.lowercased() + on.dropFirst()
         default:
             guard let first = on.first else { return "Waiting" }
             return "Waiting on " + first.lowercased() + on.dropFirst()

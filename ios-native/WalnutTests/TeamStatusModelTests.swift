@@ -53,6 +53,30 @@ final class TeamStatusModelTests: XCTestCase {
         XCTAssertEqual(TeamStatusModel.waitingLine(.init(state: "waiting", kind: "task", waitingOn: "A reply from Bun lead")), "Waiting on a reply from Bun lead")
         XCTAssertEqual(TeamStatusModel.waitingLine(.init(state: "waiting", kind: "stuck", waitingOn: "")), "Stuck. Nothing will wake it.")
         XCTAssertEqual(TeamStatusModel.waitingLine(.init(state: "waiting", kind: "not-started", waitingOn: "Not started yet")), "Not started yet")
+        // A time wait with no end keeps its words instead of a bare "Waiting".
+        XCTAssertEqual(TeamStatusModel.waitingLine(.init(state: "waiting", kind: "time", waitingOn: "Its next scheduled run")), "Waiting on its next scheduled run")
+        XCTAssertEqual(TeamStatusModel.waitingLine(.init(state: "waiting", kind: "time", waitingOn: "")), "Waiting for a set time")
+    }
+
+    func testADoneTaskNeverReadsStuck() {
+        // The server keeps a COMPLETE task's last report, so its kind can still say stuck.
+        let stuck = WalnutUserStatus(state: "waiting", kind: "stuck")
+        XCTAssertTrue(TeamStatusModel.isStuck(task("s", phase: "IN_PROGRESS", user: stuck)))
+        XCTAssertFalse(TeamStatusModel.isStuck(task("d", phase: "COMPLETE", status: "done", user: stuck)))
+    }
+
+    func testARowsTimeIsItsStatusTimeNotItsLastEdit() {
+        let t = task("r", phase: "WAITING", user: .init(state: "waiting", at: "2026-10-26T01:00:00Z"), updated: "2026-10-26T09:00:00Z")
+        let row = TeamStatusModel.build(ownerId: "lead", tasks: [task("lead", parent: nil, phase: "IN_PROGRESS"), t]).open.first { $0.task.id == "r" }!
+        XCTAssertEqual(TeamStatusModel.rowTime(row), WalnutTask.parseISO("2026-10-26T01:00:00Z"))
+    }
+
+    func testAnAskReadsAsAClauseInTheBrief() {
+        XCTAssertEqual(TeamStatusModel.clause("Pick a residency."), "Pick a residency")
+        XCTAssertEqual(TeamStatusModel.clause("  Send it by Friday;  "), "Send it by Friday")
+        XCTAssertEqual(TeamStatusModel.clause("Approve the plan?"), "Approve the plan?")
+        XCTAssertEqual(TeamStatusModel.clause("Pick one\u{3002}"), "Pick one")
+        XCTAssertEqual(TeamStatusModel.clause("Then more..."), "Then more...")
     }
 
     func testDecodesTheProjectionField() throws {

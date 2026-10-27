@@ -18,6 +18,12 @@ enum Theme {
     static let success = Color(dynamic: UIColor(light: 0x34C759, dark: 0x30D158))
     static let warning = Color(dynamic: UIColor(light: 0xFF9F0A, dark: 0xFFD60A))
     static let danger = Color(dynamic: UIColor(light: 0xFF3B30, dark: 0xFF453A))
+    /// The user states as words (UserStatePill.textColor): 4.5:1 on the light background and
+    /// on the dark one, where the bright tints above only work as dots and washes.
+    static let needsText = Color(dynamic: UIColor(light: 0xB23A06, dark: 0xFF9A5C))
+    static let workingText = Color(dynamic: UIColor(light: 0x1D4FC4, dark: 0x7FA8FF))
+    static let doneText = Color(dynamic: UIColor(light: 0x186A2C, dark: 0x4CD964))
+    static let stuckText = Color(dynamic: UIColor(light: 0x854E00, dark: 0xFFD60A))
     /// Whole-row wash for "this needs a human" (a task at NEED_ACTION).
     ///
     /// Deliberately the same recipe the desktop uses — `rgba(255,59,48,0.08)` in

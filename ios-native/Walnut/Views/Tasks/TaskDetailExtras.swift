@@ -16,6 +16,7 @@ struct TaskDetailExtras: View {
     var onDeleted: () -> Void
 
     @Environment(TasksStore.self) private var tasks
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     @State private var editingDescription = false
     @State private var descriptionDraft = ""
@@ -186,20 +187,38 @@ struct TaskDetailExtras: View {
     }
 
     private func relativeRow(_ relative: TaskDetail.Relative) -> some View {
-        HStack(spacing: 8) {
-            Image(systemName: relative.phase == "COMPLETE" || relative.status == "done"
-                ? "checkmark.circle.fill" : "circle")
-                .font(.caption)
-                .foregroundStyle(relative.phase == "COMPLETE" || relative.status == "done"
-                    ? Theme.success : .secondary)
-            Text(relative.title)
-                .font(.subheadline)
-                .lineLimit(1)
-            Spacer()
-            if let phase = relative.phase {
+        // The one status the user reads (TeamStatusModel), as the Team section shows it, from
+        // the live store; the detail snapshot's phase only for a task this phone has not loaded.
+        let full = tasks.tasks.first(where: { $0.id == relative.id })
+        let done = full.map { TeamStatusModel.state(of: $0) == .done }
+            ?? (relative.phase == "COMPLETE" || relative.status == "done")
+        let icon = Image(systemName: done ? "checkmark.circle.fill" : "circle")
+            .font(.caption)
+            .foregroundStyle(done ? Theme.success : .secondary)
+        let title = Text(relative.title).font(.subheadline)
+        @ViewBuilder var state: some View {
+            if let full {
+                UserStatePill(state: TeamStatusModel.state(of: full), stuck: TeamStatusModel.isStuck(full))
+            } else if let phase = relative.phase {
                 Text(Self.phaseLabel(phase))
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
+            }
+        }
+        return Group {
+            if typeSize.isAccessibilitySize {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 8) { icon; state }
+                    title.lineLimit(3)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                HStack(spacing: 8) {
+                    icon
+                    title.lineLimit(1)
+                    Spacer()
+                    state
+                }
             }
         }
     }

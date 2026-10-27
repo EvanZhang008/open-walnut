@@ -26,13 +26,13 @@ struct TaskStatusCard: View {
                 }
             }
             if state == .needs, let ask = s?.ask, !ask.isEmpty {
-                (Text("You decide: ").bold().foregroundColor(UserStatePill.color(.needs)) + Text(ask))
+                (Text("You decide: ").bold().foregroundColor(UserStatePill.textColor(.needs)) + Text(ask))
                     .font(.subheadline)
             }
             if state == .waiting {
                 Text(TeamStatusModel.waitingLine(s))
                     .font(.subheadline.weight(.medium))
-                    .foregroundStyle(s?.kind == "stuck" ? Theme.warning : .primary)
+                    .foregroundStyle(s?.kind == "stuck" ? UserStatePill.stuckText : .primary)
             }
             if let now = s?.now, !now.isEmpty {
                 Text(now).font(.subheadline)
@@ -61,17 +61,34 @@ struct UserStatePill: View {
         }
     }
 
+    /// The same states as words, readable on both backgrounds (the tints above are for dots).
+    static func textColor(_ s: UserState) -> Color {
+        switch s {
+        case .needs: return Theme.needsText
+        case .working: return Theme.workingText
+        case .waiting: return .primary
+        case .done: return Theme.doneText
+        }
+    }
+
+    static let stuckText = Theme.stuckText
+
+    @ScaledMetric(relativeTo: .caption) private var dot: CGFloat = 7
+
     var body: some View {
         let tint = stuck ? Theme.warning : Self.color(state)
         HStack(spacing: 4) {
-            if !stuck { Circle().fill(tint).frame(width: 7, height: 7) }
+            if !stuck { Circle().fill(tint).frame(width: dot, height: dot) }
             Text(stuck ? "Stuck" : state.label)
+                .lineLimit(1)
         }
         .font(.caption.weight(.semibold))
-        .foregroundStyle(state == .waiting && !stuck ? Color.primary : tint)
+        .foregroundStyle(stuck ? Self.stuckText : Self.textColor(state))
         .padding(.horizontal, 8)
         .padding(.vertical, 2)
         .background(tint.opacity(0.15), in: Capsule())
+        // Never squeezed into a broken word ("Need/s you"): the title beside it gives way instead.
+        .fixedSize()
     }
 }
 
@@ -93,6 +110,8 @@ struct TeamStatusSection: View {
                     .foregroundStyle(.secondary)
                 brief(board)
                 chips(board)
+                    // A thumb that lands just below a chip filters, it does not open the first row.
+                    .padding(.bottom, 6)
                 let rows = filter.map { board.rows($0) } ?? board.open
                 if rows.isEmpty {
                     Text(Self.emptyText(filter))
@@ -131,14 +150,15 @@ struct TeamStatusSection: View {
             if b.needs.isEmpty {
                 Text("Nothing needs you.")
                     .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(Theme.success)
+                    .foregroundStyle(UserStatePill.textColor(.done))
             } else {
                 let lines = b.needs.map { r -> String in
-                    let ask = r.status?.ask ?? ""
-                    return ask.isEmpty ? r.task.title : "\(r.task.title) (\(ask))"
+                    let ask = TeamStatusModel.clause(r.status?.ask ?? "")
+                    let title = TeamStatusModel.clause(r.task.title)
+                    return ask.isEmpty ? title : "\(title) (\(ask))"
                 }
                 (Text("\(b.needs.count) \(b.needs.count == 1 ? "needs" : "need") you: ").bold()
-                    .foregroundColor(UserStatePill.color(.needs))
+                    .foregroundColor(UserStatePill.textColor(.needs))
                     + Text(lines.joined(separator: "; ") + "."))
                     .font(.subheadline)
             }
@@ -150,12 +170,13 @@ struct TeamStatusSection: View {
 
     private func chips(_ b: TeamStatusBoard) -> some View {
         ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 6) {
+            HStack(spacing: 2) {
                 chip("All open \(b.open.count)", on: filter == nil) { filter = nil }
                 ForEach(UserState.allCases, id: \.self) { s in
                     chip("\(b.counts[s]) \(s.label)", on: filter == s, dot: UserStatePill.color(s)) { filter = s }
                 }
             }
+            .padding(.horizontal, 2)
         }
     }
 
@@ -166,40 +187,67 @@ struct TeamStatusSection: View {
                 Text(text)
             }
             .font(.caption.weight(.medium))
+            .lineLimit(1)
+            .fixedSize()
             .padding(.horizontal, 10)
             .padding(.vertical, 5)
             .overlay(Capsule().stroke(on ? Color.primary : Color.secondary.opacity(0.35), lineWidth: on ? 1.5 : 1))
+            // The capsule stays small; the whole 48pt band around it takes the tap.
+            .padding(.horizontal, 2)
+            .frame(minHeight: 48)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .accessibilityAddTraits(on ? .isSelected : [])
     }
 }
 
 struct TeamStatusRowView: View {
     let row: TeamStatusRow
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
         let s = row.status
+        let time = Text(RelativeTime.short(date: TeamStatusModel.rowTime(row)))
+            .font(.caption2)
+            .foregroundStyle(.secondary)
         VStack(alignment: .leading, spacing: 3) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                UserStatePill(state: row.state, stuck: row.isStuck)
+            if typeSize.isAccessibilitySize {
+                // No room for three things on one line at these sizes: the title gets its own.
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 8) {
+                        UserStatePill(state: row.state, stuck: row.isStuck)
+                        Spacer(minLength: 4)
+                        time
+                    }
+                    VStack(alignment: .leading, spacing: 2) {
+                        UserStatePill(state: row.state, stuck: row.isStuck)
+                        time
+                    }
+                }
                 Text(row.task.title)
                     .font(.subheadline.weight(.semibold))
-                    .lineLimit(2)
-                Spacer(minLength: 4)
-                Text(RelativeTime.short(date: TeamStatusModel.rowTime(row)))
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+                    .lineLimit(3)
+            } else {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    UserStatePill(state: row.state, stuck: row.isStuck)
+                    Text(row.task.title)
+                        .font(.subheadline.weight(.semibold))
+                        .lineLimit(2)
+                    Spacer(minLength: 4)
+                    time
+                }
             }
             if row.depth == 0 {
                 Text("Lead").font(.caption2).foregroundStyle(.secondary)
             }
             if row.state == .needs, let ask = s?.ask, !ask.isEmpty {
-                (Text("You: ").bold().foregroundColor(UserStatePill.color(.needs)) + Text(ask))
+                (Text("You: ").bold().foregroundColor(UserStatePill.textColor(.needs)) + Text(ask))
                     .font(.footnote)
             } else if row.state == .waiting {
                 Text(TeamStatusModel.waitingLine(s))
                     .font(.footnote.weight(.medium))
-                    .foregroundStyle(row.isStuck ? Theme.warning : .primary)
+                    .foregroundStyle(row.isStuck ? UserStatePill.stuckText : .primary)
             }
             if let now = s?.now, !now.isEmpty {
                 Text(now).font(.footnote).foregroundStyle(.secondary)
