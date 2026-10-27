@@ -91,7 +91,8 @@ async function loadProjectTaskList(task: Task, budget: number): Promise<string> 
   const { listTasks } = await import('./task-manager.js');
   const tasks = await listTasks({ project: task.project ?? '' });
   const projectTasks = tasks.filter(
-    (t) => t.status !== 'done' && t.id !== task.id,
+    // A plugin's own task (Task.plugin_only) is not the project's work.
+    (t) => t.status !== 'done' && t.id !== task.id && !t.plugin_only,
   );
 
   if (projectTasks.length === 0) return '(no other active tasks in this project)';

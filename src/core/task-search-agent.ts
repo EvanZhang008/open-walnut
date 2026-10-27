@@ -525,7 +525,8 @@ async function inner(
     throw new AgentSearchError('AI search returned an unreadable answer', 502, { code: 'unparseable' });
   }
 
-  const { summary, results, droppedIds } = validateAndEnrich(raw, await listTasks());
+  // A plugin's own task (Task.plugin_only) is in no general search, the AI's answer included.
+  const { summary, results, droppedIds } = validateAndEnrich(raw, (await listTasks()).filter((t) => !t.plugin_only));
   const tookMs = Date.now() - t0;
   const out: AgentSearchResponse = {
     ...(summary ? { summary } : {}),

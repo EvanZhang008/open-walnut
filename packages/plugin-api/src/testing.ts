@@ -487,6 +487,17 @@ export function createFakeWalnut(options: FakeWalnutOptions = {}): FakeWalnutRes
         task.note = `${task.note ?? ''}${task.note ? '\n\n' : ''}${markdown}`
       },
       async appendLog() { return undefined },
+      async keepInPlugin(ids, keep = true) {
+        const result: { changed: string[]; skipped: Array<{ id: string; reason: 'missing' | 'other-plugin' }> } = { changed: [], skipped: [] }
+        for (const id of ids) {
+          const task = taskMap.get(id)
+          if (!task) { result.skipped.push({ id, reason: 'missing' }); continue }
+          if (!!task.pluginOnly === keep) continue
+          task.pluginOnly = keep ? true : undefined
+          result.changed.push(id)
+        }
+        return result
+      },
       async complete(id) {
         const task = taskMap.get(id)
         if (!task) throw new Error(`Task "${id}" not found`)

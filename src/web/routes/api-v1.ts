@@ -2589,7 +2589,8 @@ apiV1Router.get('/tasks', async (req: Request, res: Response, next: NextFunction
       sendError(res, 503, 'unavailable', 'Task projection not synced yet')
       return
     }
-    let tasks = projection.tasks
+    // A plugin's own tasks (Task.plugin_only) are in no list the phone shows.
+    let tasks = projection.tasks.filter((t) => !t.plugin_only)
     const status = typeof req.query.status === 'string' ? req.query.status : undefined
     if (status) tasks = tasks.filter((t) => t.status === status)
     // Additive filters (Wave 1): project ('' = Inbox, case-insensitive like the
@@ -2810,6 +2811,10 @@ apiV1Router.post('/tasks', async (req: Request, res: Response, next: NextFunctio
       ...(typeof launchHost === 'string' ? { launch_host: launchHost } : {}),
     }
     const decision = decidePlacement(placementReq, caller)
+    // A plugin whose manifest keeps its tasks to its own view (taskVisibility "plugin")
+    // creates through walnut.ops.call, which names the caller `plugin:<id>`.
+    const { pluginOnlyForCaller } = await import('../../core/plugins/plugin-task-visibility.js')
+    const pluginOnly = pluginOnlyForCaller(Array.isArray(rawSid) ? rawSid[0] : rawSid)
     // The create rules by caller, shared with the offline drain (create-rules.ts): a
     // worker naming a project other than its own says why, a session's depth cap, an ask's project, the board tier (a worker's own, else pinned
     // by default), and a session's long title cut to its head (the long form becomes the
@@ -2871,6 +2876,7 @@ apiV1Router.post('/tasks', async (req: Request, res: Response, next: NextFunctio
         ...(startDate !== undefined ? { start_date: normalizeDateField(startDate) } : {}),
         ...(endDate !== undefined ? { end_date: normalizeDateField(endDate) } : {}),
         ...(finalDescription !== undefined ? { description: finalDescription } : {}),
+        ...(pluginOnly ? { plugin_only: pluginOnly } : {}),
         asyncPush: true,
       }
       // Human/AI create surface (phone Quick Add, `walnut add`, the task_create
@@ -3620,7 +3626,12 @@ apiV1Router.get('/sessions', async (req: Request, res: Response, next: NextFunct
     const callerSid = (Array.isArray(rawSid) ? rawSid[0] : rawSid ?? '').trim()
     const you = callerSid ? await resolveCallerSessionRow(callerSid, all) : null
 
-    let sessions = all
+    // The sessions of a plugin's own tasks (Task.plugin_only) live in that plugin's view:
+    // not the phone's list, not an agent's session_list.
+    const hiddenTasks = await (await import('../../core/task-manager.js')).pluginOnlyTaskIds()
+    let sessions = hiddenTasks.size > 0
+      ? all.filter((s) => { const taskId = (s as { task_id?: unknown }).task_id; return !(typeof taskId === 'string' && hiddenTasks.has(taskId)) })
+      : all
     const status = typeof req.query.status === 'string' ? req.query.status : undefined
     if (status) sessions = sessions.filter((s) => (s as { process_status?: string }).process_status === status)
     if (asked !== 'all' && !you) {

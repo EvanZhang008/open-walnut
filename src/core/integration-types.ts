@@ -602,6 +602,10 @@ export interface PluginManifest {
   /** File areas beyond the machine-local `walnut.storage` (plugin-data/<id>/), which every
    *  plugin has. An area left out here throws on use (src/core/plugins/plugin-file-area.ts). */
   storage?: PluginStorageDeclaration;
+  /** Where the tasks this plugin's agents run in show. Absent (`"everywhere"`): ordinary tasks
+   *  on the board. `"plugin"`: only in the plugin's own view; every task the plugin creates is
+   *  stamped `plugin_only` (src/core/plugins/plugin-task-visibility.ts). */
+  taskVisibility?: 'plugin';
   /** Relative path of an `.svg` inside the plugin folder, drawn as the plugin's tile in
    *  Settings → Plugins (src/core/plugins/plugin-icon.ts). An unusable value is dropped
    *  with a warning; the row then shows a monogram. */

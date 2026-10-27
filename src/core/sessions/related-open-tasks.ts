@@ -211,7 +211,8 @@ export async function findRelatedOpenTasks(input: LookupInput, stop: { stopped: 
   for (const t of rows) {
     if (skip.has(t.id)) continue;
     // A conversation (an ask, Main) or a lead coordinates; it does not own a deliverable.
-    if (isAskTask(t) || t.org_role) continue;
+    // A plugin's own task (Task.plugin_only) is the plugin's, never a teammate to route to.
+    if (isAskTask(t) || t.org_role || t.plugin_only) continue;
     open.push({
       id: t.id, title: t.title, description: t.description, project: t.project ?? '', phase: t.phase,
       ...(t.group_id ? { group_id: t.group_id } : {}),

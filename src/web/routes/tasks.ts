@@ -514,9 +514,13 @@ tasksRouter.get('/', async (req: Request, res: Response, next: NextFunction) => 
     let total: number
     let truncated: boolean
     try {
+      // A plugin's own tasks (Task.plugin_only) are in no general list: not the web
+      // board's store, not an agent's task_list. A query naming ids still gets them, so a
+      // plugin's own view can read the ones it knows.
+      const hidePluginOnly = !query.ids?.length
       const page = isSlim
-        ? await queryTasksSlimPage(query, { minimal: isMinimal })
-        : await queryTasksPage(query)
+        ? await queryTasksSlimPage(query, { minimal: isMinimal, hidePluginOnly })
+        : await queryTasksPage(query, { hidePluginOnly })
       queried = page.tasks
       total = page.total
       truncated = page.truncated
@@ -600,7 +604,7 @@ tasksRouter.get('/meta/sprints', async (_req: Request, res: Response, next: Next
 // GET /api/tasks/enriched — tasks with computed fields
 tasksRouter.get('/enriched', async (_req: Request, res: Response, next: NextFunction) => {
   try {
-    const tasks = (await listTasks({})).filter((t) => !t.title.startsWith('.metadata'))
+    const tasks = (await listTasks({})).filter((t) => !t.title.startsWith('.metadata') && !t.plugin_only)
     const now = Date.now()
 
     const enriched = tasks.map((t) => {

@@ -36,6 +36,8 @@ export interface OrgTaskLike {
   org_role?: OrgRole;
   /** A lead only: the other projects it leads (Task.org_leads). */
   org_leads?: readonly string[];
+  /** A plugin's own task (Task.plugin_only): never org work. */
+  plugin_only?: string;
   walnut_agent?: boolean;
   created_at?: string;
   updated_at?: string;
@@ -127,15 +129,28 @@ export function isHiddenOrgNode(task: { org_role?: string }): boolean {
   return isOrgNode(task);
 }
 
+/** A task a plugin keeps to its own view (Task.plugin_only): no general surface shows or counts it. */
+export function isPluginOnlyTask(task: { plugin_only?: string }): boolean {
+  return typeof task.plugin_only === 'string' && task.plugin_only.length > 0;
+}
+
+/** Hidden from the task lists: an org node (shown by the org chart and the chat slot) or a
+ *  plugin's own task (shown only by that plugin). */
+export function isHiddenFromTaskLists(task: { org_role?: string; plugin_only?: string }): boolean {
+  return isOrgNode(task) || isPluginOnlyTask(task);
+}
+
 /** Same rule as caller-placement's isAskTask (pinned equal by a test): a conversation, not work. */
 function isAskLike(task: { walnut_agent?: boolean; project?: string }): boolean {
   return task.walnut_agent === true || /^ask /i.test((task.project ?? '').trim());
 }
 
-/** A task the org counts: open work, not a conversation, not an org node, not a legacy sentinel. */
+/** A task the org counts: open work, not a conversation, not an org node, not a plugin's own
+ *  task, not a legacy sentinel. */
 export function isOrgMember(task: OrgTaskLike): boolean {
   return task.phase !== 'COMPLETE'
     && !isOrgNode(task)
+    && !isPluginOnlyTask(task)
     && !isAskLike(task)
     && !task.title.startsWith('.metadata');
 }
@@ -382,7 +397,7 @@ export function orgDigest(
   const done = new Map<string, number>();
   const added = new Map<string, number>();
   for (const t of tasks) {
-    if (isOrgNode(t) || isAskLike(t) || t.title.startsWith('.metadata')) continue;
+    if (isOrgNode(t) || isPluginOnlyTask(t) || isAskLike(t) || t.title.startsWith('.metadata')) continue;
     const key = projectKey(t.project);
     if (!names.has(key)) names.set(key, (t.project ?? '').trim());
     if (t.phase === 'COMPLETE' && t.completed_at && t.completed_at > prev.at) done.set(key, (done.get(key) ?? 0) + 1);

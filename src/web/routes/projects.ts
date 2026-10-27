@@ -65,7 +65,8 @@ async function collectCounts(): Promise<{ byProject: Map<string, Counts>; inbox:
   const byProject = new Map<string, Counts>()
   const inbox = emptyCounts()
   for (const t of tasks) {
-    if (t.title.startsWith('.metadata')) continue
+    // A plugin's own task (Task.plugin_only) is in no project count.
+    if (t.title.startsWith('.metadata') || t.plugin_only) continue
     const project = (t.project || '').trim()
     if (!project) { tally(inbox, t.phase); continue }
     const key = project.toLowerCase()

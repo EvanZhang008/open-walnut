@@ -53,7 +53,7 @@ export async function itemTaskPreview(id: string): Promise<InboxTaskPreview> {
 }
 export async function itemTaskPage(query: string, offset: number, limit: number): Promise<InboxTaskPage> {
   const needle = query.trim().toLocaleLowerCase();
-  const tasks = (await listTasksSlim({ minimal: true })).filter(t => !t.org_role && (t.title !== '.metadata'))
+  const tasks = (await listTasksSlim({ minimal: true })).filter(t => !t.org_role && !t.plugin_only && (t.title !== '.metadata'))
     .filter(t => !needle || t.id.toLocaleLowerCase() === needle || t.title.toLocaleLowerCase().includes(needle) || (t.project ?? '').toLocaleLowerCase().includes(needle))
     .sort((a, b) => b.updated_at.localeCompare(a.updated_at) || a.id.localeCompare(b.id));
   return { tasks: tasks.slice(offset, offset + limit).map(t => ({ id: t.id, title: t.title, project: t.project ?? '', phase: t.phase })),

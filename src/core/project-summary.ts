@@ -112,6 +112,7 @@ export interface SummaryTaskLike {
   title: string;
   project?: string;
   parent_task_id?: string;
+  plugin_only?: string;
   phase?: string;
   created_at?: string;
   summary?: string;
@@ -124,6 +125,7 @@ function projectSummaryTasks<T extends SummaryTaskLike>(all: readonly T[], proje
   return all.filter((t) =>
     (t.project ?? '').toLowerCase() === key
     && !t.title.startsWith('.metadata')
+    && !t.plugin_only
     && !t.parent_task_id);
 }
 
@@ -370,7 +372,7 @@ async function gateAndRefresh(project: string, context: string): Promise<boolean
 export async function maybeRefreshForTask(task: Task | undefined, source: string): Promise<boolean> {
   if (!task?.id) return false;
   if (task.parent_task_id) return false;
-  if (task.title.startsWith('.metadata')) return false;
+  if (task.title.startsWith('.metadata') || task.plugin_only) return false;
   // Inbox is the unfiled pile, not a stream of work — a summary of "whatever is
   // passing through" would be noise and a wasted model call per capture.
   const project = (task.project ?? '').trim();

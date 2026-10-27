@@ -52,6 +52,8 @@ export function taskToDoc(task: Task): Doc | null {
   // it is titled with the query, so it wins the 10x title field for that exact
   // query and evicts the real answer.
   if (isSearchArtifact(task)) return null;
+  // A plugin's own task lives in its plugin's view, never in a general search.
+  if (task.plugin_only) return null;
   const identifiers = [
     task.id,
     task.session_id,
@@ -97,7 +99,7 @@ export function sessionToDoc(input: SessionDocInput): Doc | null {
   if (isLedgerJunk({ project: session.project, title: session.title ?? '' })) return null;
   // The session adopted for an AI search wears the query as its title too, so it
   // is the same self-pollution one layer down. The owning task carries the tag.
-  if (task && isSearchArtifact(task)) return null;
+  if (task && (isSearchArtifact(task) || task.plugin_only)) return null;
   const identifiers = [
     session.claudeSessionId,
     ...(input.commitShas ?? session.commitShas ?? []),

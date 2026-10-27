@@ -672,6 +672,15 @@ async function readStoreView(): Promise<TaskStore> {
   return loadStore();
 }
 
+/** Ids of the tasks a plugin keeps to its own view (Task.plugin_only), read off the cached
+ *  snapshot without copying it: the general surfaces drop these rows. */
+export async function pluginOnlyTaskIds(): Promise<Set<string>> {
+  const store = await readStoreView();
+  const ids = new Set<string>();
+  for (const t of store.tasks) if (t.plugin_only) ids.add(t.id);
+  return ids;
+}
+
 /** One isolated task copy, the same shape readStore's clone hands out. */
 function cloneTask(task: Task): Task {
   return { ...task };
@@ -1082,6 +1091,9 @@ export interface AddTaskInput {
   agent_id?: string;
   /** An org node (see Task.org_role): the main agent or a project lead. */
   org_role?: import('./types.js').OrgRole;
+  /** The plugin whose own view is the only place the task shows (see Task.plugin_only). Such a
+   *  task never syncs (born local) and is never pinned. */
+  plugin_only?: string;
   /** Don't block the return on the external sync push. The task is written locally and
    *  returned immediately; the push to the external target runs in the background and
    *  backfills ext/external_url/sync_error via a TASK_UPDATED event. Set by the web
@@ -2711,6 +2723,10 @@ export async function addTask(input: AddTaskInput): Promise<{ task: Task; syncRe
     // registry decides, exactly as for a task with no parent.
     const parentHere = parentTask && (parentTask.project ?? '').trim().toLowerCase() === project.trim().toLowerCase()
       ? parentTask : undefined;
+    // A plugin's own task (Task.plugin_only) stays out of every general surface: a sync
+    // service's list or the board's pins would show it again. Only the plugin's own create
+    // makes one; a subtask a kept task's session files is work the user asked for, on the board.
+    const pluginOnly = input.plugin_only?.trim() || undefined;
 
     // Source chain: parent (same project) → registry row → caller override → plugin claim.
     // Inbox is structurally local-only: no registry row exists for '' and no
@@ -2726,7 +2742,7 @@ export async function addTask(input: AddTaskInput): Promise<{ task: Task; syncRe
         );
       }
       source = 'local';
-    } else if (input.source === 'local' && !parentHere) {
+    } else if ((input.source === 'local' && !parentHere) || pluginOnly) {
       // An EXPLICIT 'local' outranks the registry claim: the caller (quick-start,
       // external-session import) is saying "this task must never sync". The
       // project is then just a folder — a local task parked in a provider-claimed
@@ -2765,7 +2781,9 @@ export async function addTask(input: AddTaskInput): Promise<{ task: Task; syncRe
     // tier. The registry we validate against is the one already in `store` —
     // the same snapshot the write commits, so a tier can't be deleted between
     // check and write.
-    const bornPin = resolveNewTaskTier(input, (store.custom_tiers ?? []).map((t) => t.id));
+    const bornPin = pluginOnly
+      ? { pinned: false as const, focus_tier: undefined }
+      : resolveNewTaskTier(input, (store.custom_tiers ?? []).map((t) => t.id));
 
     // A folder is a project's private sub-structure: born-in-folder obeys the
     // same rule addToGroup enforces (folder exists, same project).
@@ -2808,6 +2826,7 @@ export async function addTask(input: AddTaskInput): Promise<{ task: Task; syncRe
       ...(input.walnut_agent ? { walnut_agent: true } : {}),
       ...(input.walnut_agent && input.agent_id ? { agent_id: input.agent_id } : {}),
       ...(input.org_role ? { org_role: input.org_role } : {}),
+      ...(pluginOnly ? { plugin_only: pluginOnly } : {}),
       // Born pinned (interactive/AI creates — newTaskPinDefault), in the tier
       // the caller named, in ONE store write. An absent focus_tier IS Satellite
       // (see resolveNewTaskTier, which normalizes an explicit 'satellite' away
@@ -3384,6 +3403,9 @@ export function taskQueryCandidateSql(
 async function runTaskQuery(
   query: TaskQuery,
   projection: 'full' | 'slim' | 'minimal',
+  /** Leave out the tasks a plugin keeps to its own view (Task.plugin_only), before the sort
+   *  and the limit, so a capped page still fills and `total` counts only what it may show. */
+  opts: { hidePluginOnly?: boolean } = {},
 ): Promise<TaskQueryPage<Task> | TaskQueryPage<SlimTask>> {
   await ensureInit();
   // ONE captured clock for the whole evaluation — a relative window must not
@@ -3440,7 +3462,7 @@ async function runTaskQuery(
   // The sentinel exclusion is already in SQL; re-check in JS so a shape SQLite's
   // trim() misses (e.g. a Unicode-space-prefixed title) still can't leak out.
   const matched = candidates.filter((t) =>
-    !isRetiredSentinelTitle(t.title) && matchesTaskQuery(t, normalized, ctx));
+    !isRetiredSentinelTitle(t.title) && !(opts.hidePluginOnly && t.plugin_only) && matchesTaskQuery(t, normalized, ctx));
   matched.sort((a, b) => compareTasksForQuery(a, b, sort));
   // The ONE truncation point: after the derived filter + stable sort. `total` is
   // captured BEFORE the slice so every caller can tell a complete answer from a
@@ -3467,8 +3489,8 @@ export async function queryTasks(query: TaskQuery): Promise<Task[]> {
  * tell the caller their answer was capped (the REST list route and the
  * `task_list` op both report `total` / `truncated` from this).
  */
-export async function queryTasksPage(query: TaskQuery): Promise<TaskQueryPage<Task>> {
-  return await runTaskQuery(query, 'full') as TaskQueryPage<Task>;
+export async function queryTasksPage(query: TaskQuery, opts: { hidePluginOnly?: boolean } = {}): Promise<TaskQueryPage<Task>> {
+  return await runTaskQuery(query, 'full', opts) as TaskQueryPage<Task>;
 }
 
 /**
@@ -3506,9 +3528,9 @@ export async function listOpenTaskViews(max: number): Promise<ReadonlyArray<Read
 /** queryTasksSlim plus the pre-limit `total` / `truncated` pair. */
 export async function queryTasksSlimPage(
   query: TaskQuery,
-  opts: { minimal?: boolean } = {},
+  opts: { minimal?: boolean; hidePluginOnly?: boolean } = {},
 ): Promise<TaskQueryPage<SlimTask>> {
-  return await runTaskQuery(query, opts.minimal ? 'minimal' : 'slim') as TaskQueryPage<SlimTask>;
+  return await runTaskQuery(query, opts.minimal ? 'minimal' : 'slim', { hidePluginOnly: opts.hidePluginOnly }) as TaskQueryPage<SlimTask>;
 }
 
 // ── Dependency helpers (used inside withWriteLock) ──
@@ -6924,7 +6946,8 @@ export async function getChildTasks(taskIdPrefix: string): Promise<Task[]> {
  */
 export async function getDashboardData(): Promise<DashboardData> {
   const store = await readStoreView();
-  const tasks = store.tasks;
+  // A plugin's own task (Task.plugin_only) is in no general count.
+  const tasks = store.tasks.filter((t) => !t.plugin_only);
 
   const active = tasks.filter((t) => t.status === 'todo' || t.status === 'in_progress');
   const urgent = active.filter((t) => t.priority === 'immediate');
@@ -8223,6 +8246,43 @@ export async function updateTaskRaw(
   }
 
   return { changed: true, task: updated };
+}
+
+/**
+ * Keep tasks to a plugin's own view, or give them back to the board (Task.plugin_only):
+ * `walnut.tasks.keepInPlugin`. Only the tasks named: a subtask is its own work (addTask). A task another plugin keeps is skipped, never taken over,
+ * and so is one this plugin does not keep when it gives tasks back. The source is left
+ * alone: a task that already syncs keeps its remote twin; a pinned one is unpinned. No
+ * event is emitted here; the caller sends them.
+ */
+export async function setTasksPluginOnly(
+  ids: readonly string[],
+  pluginId: string,
+  keep: boolean,
+): Promise<{ changed: Task[]; skipped: Array<{ id: string; reason: 'missing' | 'other-plugin' }> }> {
+  const changed: Task[] = [];
+  const skipped: Array<{ id: string; reason: 'missing' | 'other-plugin' }> = [];
+  for (const id of ids) {
+    let seen = false;
+    let otherPlugin = false;
+    const result = await updateTaskRaw(id, (current) => {
+      seen = true;
+      const owner = current.plugin_only || undefined;
+      if (owner && owner !== pluginId) { otherPlugin = true; return null; }
+      // A kept task leaves the pinned board too: every tier count and Focus list reads pins.
+      if (keep) {
+        return owner === pluginId ? null : {
+          plugin_only: pluginId,
+          ...(current.pinned ? { pinned: false, pin_order: null as unknown as undefined, focus_tier: null as unknown as undefined } : {}),
+        };
+      }
+      return owner === pluginId ? { plugin_only: null as unknown as undefined } : null;
+    });
+    if (!seen) skipped.push({ id, reason: 'missing' });
+    else if (otherPlugin) skipped.push({ id, reason: 'other-plugin' });
+    else if (result.changed && result.task) changed.push(result.task);
+  }
+  return { changed, skipped };
 }
 
 // ── Plugin-declared task fields (manifest taskFields) ──────────────────────

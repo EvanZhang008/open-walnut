@@ -27,7 +27,7 @@ import { readSessionHistory, extractPlanContent, rewriteHistoryRemoteImages, isW
 import { resolveDeltaStart, deltaCursor, collectRequestedRevisions, isUnsettledRow } from '../../core/history-delta.js'
 import { computeSessionChanges, peekSessionChanges } from '../../core/session-changes.js'
 import { computeSessionGitDiff, type GitDiffBase } from '../../core/session-git-diff.js'
-import { listTasksByIds, getTask, getCustomTiers } from '../../core/task-manager.js'
+import { listTasksByIds, getTask, getCustomTiers, pluginOnlyTaskIds } from '../../core/task-manager.js'
 import { getConfig } from '../../core/config-manager.js'
 import { bus, EventNames, eventData } from '../../core/event-bus.js'
 import fsp from 'node:fs/promises'
@@ -906,8 +906,10 @@ sessionsRouter.get('/', async (req: Request, res: Response, next: NextFunction) 
     // With q: bounded most-recent-first candidate window (see cap above).
     const all = query ? await listRecentSessionRecords(SEARCH_CANDIDATE_LIMIT) : await listSessions()
     // isListableSession = not an environment session AND not lane-bound (a lane
-    // session backs a UI conversation surface, not a listed session).
-    let sessions = all.filter(s => isListableSession(s) && !s.archived)
+    // session backs a UI conversation surface, not a listed session). Nor the
+    // session of a plugin's own task (Task.plugin_only): its plugin's view shows it.
+    const hidden = await pluginOnlyTaskIds()
+    let sessions = all.filter(s => isListableSession(s) && !s.archived && !(s.taskId && hidden.has(s.taskId)))
     sessions = await applySessionSearch(sessions, query)
     res.json({ sessions: stripHeavyRecordFields(await enrichWithHostnames(await enrichWithLiveStatus(sessions))) })
   } catch (err) {
@@ -925,7 +927,9 @@ sessionsRouter.get('/recent', async (req: Request, res: Response, next: NextFunc
     // keystroke can never trigger a whole-table read.
     const query = typeof req.query.q === 'string' ? req.query.q.trim() : ''
     const all = query ? await listRecentSessionRecords(SEARCH_CANDIDATE_LIMIT) : await getRecentSessions(limit)
-    let sessions = all.filter(s => isListableSession(s) && !s.archived)
+    // The sessions of a plugin's own tasks (Task.plugin_only) live in that plugin's view.
+    const hidden = await pluginOnlyTaskIds()
+    let sessions = all.filter(s => isListableSession(s) && !s.archived && !(s.taskId && hidden.has(s.taskId)))
     if (query) {
       sessions = (await applySessionSearch(sessions, query))
         .sort((a, b) => (b.lastActiveAt ?? '').localeCompare(a.lastActiveAt ?? ''))

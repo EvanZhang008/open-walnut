@@ -673,6 +673,16 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
     return () => { cancelled = true; if (retryTimer) clearTimeout(retryTimer); };
   }, [sessionId]);
 
+  // A task the store does not hold (a plugin's own task, Task.plugin_only, opened in its
+  // plugin's view): the REST copy follows the task's own events instead.
+  const followTaskEvent = useCallback((data: unknown) => {
+    const t = (data as { task?: import('@open-walnut/core').Task | null } | undefined)?.task;
+    if (!t || storeTask || t.id !== linkedTaskId) return;
+    setFetchedTask((prev) => (prev && prev.id === t.id ? { ...prev, ...t } : t));
+  }, [storeTask, linkedTaskId]);
+  useEvent('task:updated', followTaskEvent);
+  useEvent('task:completed', followTaskEvent);
+
   useEvent('session:status-changed', (data) => {
     const d = data as { sessionId?: string; threadMeta?: SessionThreadMeta[] };
     if (d.sessionId === sessionId) {

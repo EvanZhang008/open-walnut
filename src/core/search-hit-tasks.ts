@@ -57,7 +57,7 @@ export async function searchHitTasks(results: readonly SearchResult[]): Promise<
     const out: ProjectedTask[] = []
     for (const id of ids) {
       const task = byId.get(id)
-      if (task) out.push(projectTask(task))
+      if (task && !task.plugin_only) out.push(projectTask(task))
     }
     return out
   } catch (err) {

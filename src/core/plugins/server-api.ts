@@ -33,6 +33,7 @@ import {
 } from './service-registry.js'
 import { clearSkillsCache } from '../skill-loader.js'
 import { toDisposable, type Disposable } from './disposable.js'
+import { registerPluginKeepsTasks } from './plugin-task-visibility.js'
 import { clearAppState, disposeAppStateOwner, publishAppState } from '../sessions/app-state.js'
 import { registeredSyncOf } from './legacy-phase-sync.js'
 import { createPluginNotifications } from './plugin-notifications.js'
@@ -110,6 +111,8 @@ export interface CreateServerPluginApiOptions {
   lookupPluginState?: (pluginId: string) => string | undefined
   /** The manifest's `storage` block: which file areas beside plugin-data this plugin opened. */
   storage?: PluginStorageDeclaration
+  /** The manifest's `taskVisibility`: `'plugin'` keeps this plugin's tasks to its own view. */
+  taskVisibility?: 'plugin'
 }
 
 interface PluginAgentSpec extends Omit<AgentDefinition, 'id' | 'source' | 'overrides_builtin'> {
@@ -330,6 +333,7 @@ function publicTask(task: Task) {
     createdAt: task.created_at,
     updatedAt: task.updated_at,
     completedAt: task.completed_at,
+    pluginOnly: task.plugin_only ? true : undefined,
   }
 }
 
@@ -402,6 +406,7 @@ function publicTaskSummary(task: Task | SlimTask) {
     createdAt: task.created_at,
     updatedAt: task.updated_at,
     completedAt: task.completed_at,
+    pluginOnly: task.plugin_only ? true : undefined,
     hasDescription: 'has_description' in task ? !!task.has_description : !!task.description,
     hasSummary: 'has_summary' in task ? !!task.has_summary : !!task.summary,
     hasNote: 'has_note' in task ? !!task.has_note : !!task.note,
@@ -500,6 +505,10 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
   // Writes a crash left pending go out soon, not on the plugin's next write.
   void files.resume()
   const secrets = new PluginSecretStore(pluginId)
+  // Its tasks stay in its own view while this generation lives (plugin-task-visibility.ts).
+  const keepsTasks = options.taskVisibility === 'plugin'
+  const visibleToThisPlugin = (task: { plugin_only?: string }) => !task.plugin_only || task.plugin_only === pluginId
+  if (keepsTasks) context.own(toDisposable(registerPluginKeepsTasks(pluginId)))
   const contextSnippets: string[] = contributions.agentContext ? [contributions.agentContext] : []
   let unsafeWarned = false
 
@@ -581,16 +590,18 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
           tasks = tasks.filter((task) => phases.has(task.phase))
         }
         if (filter.parentTaskId !== undefined) tasks = tasks.filter((task) => task.parent_task_id === filter.parentTaskId)
+        // Another plugin's own tasks (Task.plugin_only) are its business; this plugin's are listed.
+        tasks = tasks.filter(visibleToThisPlugin)
         if (filter.limit !== undefined) tasks = tasks.slice(0, Math.max(0, filter.limit))
         return tasks.map(publicTaskSummary)
       },
       async query(query: Record<string, unknown>) {
         const { queryTasksSlim } = await import('../task-manager.js')
-        return (await queryTasksSlim(query as unknown as TaskQuery, { minimal: true })).map(publicTaskSummary)
+        return (await queryTasksSlim(query as unknown as TaskQuery, { minimal: true })).filter(visibleToThisPlugin).map(publicTaskSummary)
       },
       async children(id: string) {
         const { getChildTasks } = await import('../task-manager.js')
-        return (await getChildTasks(id)).map(publicTaskSummary)
+        return (await getChildTasks(id)).filter(visibleToThisPlugin).map(publicTaskSummary)
       },
       async create(input: {
         title: string; description?: string; priority?: TaskPriority; phase?: TaskPhase; project?: string;
@@ -609,6 +620,7 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
           due_date: input.dueDate,
           start_date: input.startDate,
           end_date: input.endDate,
+          ...(keepsTasks ? { plugin_only: pluginId } : {}),
         }, input.idempotency_key, input)
         if (reused) return publicTask(task)
         const created = input.phase && input.phase !== task.phase
@@ -642,6 +654,21 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
         }
         const task = Object.keys(structural).length > 0 ? (await updateTask(id, structural)).task : await getTask(id)
         return publicTask(task)
+      },
+      async keepInPlugin(ids: string[], keep = true) {
+        if (keep && !keepsTasks) {
+          throw new Error(`Plugin "${pluginId}" keeps no tasks of its own: declare "taskVisibility": "plugin" in its manifest first`)
+        }
+        assertPrimaryWrite('tasks.keepInPlugin')
+        const { setTasksPluginOnly } = await import('../task-manager.js')
+        const list = Array.isArray(ids) ? ids.filter((id): id is string => typeof id === 'string' && id.length > 0) : []
+        const done = await setTasksPluginOnly([...new Set(list)], pluginId, keep)
+        // One event per task (this is rare and small): a window drops or regains the row, and
+        // the phone's feed sends its delete, from the task itself (a bulk signal carries none).
+        for (const task of done.changed) {
+          bus.emit(EventNames.TASK_UPDATED, { task }, ['web-ui'], { source: `plugin/${pluginId}` })
+        }
+        return { changed: done.changed.map((task) => task.id), skipped: done.skipped }
       },
       async appendNote(id: string, markdown: string) {
         const { addNote } = await import('../task-manager.js')

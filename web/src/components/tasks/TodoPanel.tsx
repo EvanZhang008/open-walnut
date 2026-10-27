@@ -18,7 +18,7 @@ import type { UseFavoritesReturn } from '@/hooks/useFavorites';
 import type { UseOrderingReturn } from '@/hooks/useOrdering';
 import * as ICONS from '../common/Icons';
 import type { TaskPriority } from '@open-walnut/core';
-import { isHiddenOrgNode } from '@open-walnut/org-tree';
+import { isHiddenFromTaskLists } from '@open-walnut/org-tree';
 import { TodoSearchBar } from './TodoSearchBar';
 import { NavigationHeading, NavigationSection, NavigationSections } from './NavigationSections';
 import { recentActivityTime, recentActivityTitle, type RecentSortMode } from './recent-activity-time';
@@ -2346,7 +2346,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   const bannerInList = usePhoneLayout();
   // Hide .metadata* tasks (legacy project-configuration sentinels, not user-visible) and the org's
   // own nodes (Main, project leads: the chat slot and the org chart show them; their work stays here).
-  const tasks = useMemo(() => rawTasks.filter((t) => !t.title.startsWith('.metadata') && !isHiddenOrgNode(t)), [rawTasks]);
+  const tasks = useMemo(() => rawTasks.filter((t) => !t.title.startsWith('.metadata') && !isHiddenFromTaskLists(t)), [rawTasks]);
   // Always-current task list for drag closures (drag handlers freeze their deps).
   const tasksRef = useRef<Task[]>(tasks);
   tasksRef.current = tasks;

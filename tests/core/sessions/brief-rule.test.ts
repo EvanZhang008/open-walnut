@@ -85,6 +85,9 @@ describe('the team and what moved', () => {
     task({ id: 'm1', title: 'Main asked for this', project: 'Tax', parent_task_id: 'main' }),
     task({ id: 'm2', title: 'Below that', project: 'Tax', parent_task_id: 'm1' }),
     task({ id: 'in', title: 'An Inbox task', project: '' }),
+    // A plugin's own task is no one's team (Task.plugin_only), also below Main.
+    task({ id: 'p1', title: 'Practice partner', project: 'Garden', plugin_only: 'practice', phase_changed_at: at(9) }),
+    task({ id: 'p2', title: 'Practice below Main', project: 'Tax', parent_task_id: 'main', plugin_only: 'practice' }),
   ]
   it('a lead\'s team is its projects and every task below it; Main\'s is the leads and every task below Main', () => {
     expect(briefTeam(lead, all).map((t) => t.id).sort()).toEqual(['g1', 'g2', 'old', 's1', 'x1'])

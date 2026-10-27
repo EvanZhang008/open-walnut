@@ -213,7 +213,8 @@ function readme(id: string, name: string, template: ScaffoldTemplate): string {
 An Open Walnut plugin (\`${template}\` template).
 
 - ${entries.join('\n- ')}
-- \`manifest.json\` declares the id, the entry files, and the Walnut version floor.
+- \`manifest.json\` declares the id, the entry files, and the Walnut version floor.${wantsServer ? `
+- The tasks your plugin's agents run in are ordinary tasks on the board. When an agent lives only inside this plugin, add \`"taskVisibility": "plugin"\` to \`manifest.json\` and they show only in your own view.` : ''}
 - \`skills/${id}/SKILL.md\` is what the Personal AI reads about this plugin.
 
 ## Develop

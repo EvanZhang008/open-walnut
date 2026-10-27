@@ -59,6 +59,9 @@ export interface WalnutTask {
   createdAt: string
   updatedAt: string
   completedAt?: string
+  /** Kept to its plugin's own view (manifest `taskVisibility: "plugin"`): the board, task
+   *  lists, default search, the Org page and needs-you counts never show it. */
+  pluginOnly?: boolean
 }
 
 export interface WalnutTaskSummary extends Omit<WalnutTask, 'description' | 'summary' | 'note'> {

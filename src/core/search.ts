@@ -1315,6 +1315,18 @@ async function searchInner(
   // limit 20 with 3 lanes — enough to surface the lane without distorting the
   // overall order. References are exempt (they outrank everything by design).
   const perTypeFloor = Math.max(1, Math.floor(limit / (3 * types.length)));
+  // A plugin's own task (Task.plugin_only), and its sessions, are in no general search:
+  // its plugin's view is where it lives. Dropped before the page is cut so it still fills.
+  // Read only when a row names a task (the title lane has usually loaded them already).
+  const hiddenTaskIds = results.some((r) => r.taskId)
+    ? new Set((await getTasks()).filter((t) => t.plugin_only).map((t) => t.id))
+    : new Set<string>();
+  if (hiddenTaskIds.size > 0) {
+    for (let i = results.length - 1; i >= 0; i--) {
+      const id = results[i].taskId;
+      if (id && hiddenTaskIds.has(id)) results.splice(i, 1);
+    }
+  }
   const sliced = results.slice(0, limit);
   if (types.length > 1) {
     for (const type of types) {

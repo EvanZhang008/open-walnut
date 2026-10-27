@@ -160,7 +160,7 @@ taskExtrasV1Router.get('/tasks/meta/sprints', async (_req: Request, res: Respons
 taskExtrasV1Router.get('/tasks/enriched', async (_req: Request, res: Response, next: NextFunction) => {
   try {
     const { listTasks } = await import('../../core/task-manager.js')
-    const tasks = (await listTasks({})).filter((t) => !t.title.startsWith('.metadata'))
+    const tasks = (await listTasks({})).filter((t) => !t.title.startsWith('.metadata') && !t.plugin_only)
     const now = Date.now()
     const enriched = tasks.map((t) => ({
       ...t,

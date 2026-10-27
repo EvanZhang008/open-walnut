@@ -42,14 +42,31 @@ describe('org-tree', () => {
       [t({ project: 'Walnut', org_role: 'lead' }), false],
       [t({ project: 'Ask Walnut', org_role: 'main', walnut_agent: true }), false],
       [t({ project: 'Walnut', title: '.metadata walnut' }), false],
+      [t({ project: 'Walnut', plugin_only: 'practice' }), false],
     ]
     for (const [task, member] of cases) {
       expect(isOrgMember(task), JSON.stringify(task)).toBe(member)
       // The conversation rule is caller-placement's own.
-      if (!task.org_role && task.phase !== 'COMPLETE' && !task.title.startsWith('.')) {
+      if (!task.org_role && !task.plugin_only && task.phase !== 'COMPLETE' && !task.title.startsWith('.')) {
         expect(isOrgMember(task)).toBe(!isAskTask(task))
       }
     }
+  })
+
+  it('a plugin\'s own tasks make no team: no counts, no lead, no digest line', () => {
+    const work = t({ project: 'Practice', phase: 'IN_PROGRESS' })
+    const kept = [1, 2, 3].map(() => t({ project: 'Practice', phase: 'NEED_ACTION', plugin_only: 'practice', user_status: { state: 'needs' } }))
+    const tree = buildOrgTree([work, ...kept])
+    expect(tree.projects).toHaveLength(1)
+    expect(tree.projects[0]).toMatchObject({ project: 'Practice', needsLead: false, contactId: work.id })
+    expect(tree.counts.needsYou).toBe(0)
+    expect(buildOrgTree(kept).projects).toEqual([])
+    expect(viaAlias.isHiddenFromTaskLists(kept[0]!)).toBe(true)
+    expect(viaAlias.isHiddenFromTaskLists(work)).toBe(false)
+    expect(viaAlias.isHiddenFromTaskLists(t({ project: 'Practice', org_role: 'lead' }))).toBe(true)
+    const prev = { at: '2026-09-01T00:00:00Z', needsYou: {} }
+    const fresh = t({ project: 'Practice', plugin_only: 'practice', created_at: '2026-10-02T00:00:00Z' })
+    expect(orgDigest([fresh], prev, '2026-10-03T00:00:00Z').lines).toEqual([])
   })
 
   it('a project with one team: Main talks to that team, no lead needed', () => {

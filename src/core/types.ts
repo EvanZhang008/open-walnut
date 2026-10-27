@@ -820,6 +820,13 @@ export interface Task {
    *  project with its own tasks; this lead is its contact. Payload blob,
    *  local-only, never pushed to sync backends. */
   org_leads?: string[];
+  /** The plugin (its id) whose own view is the only place this task shows: a plugin whose
+   *  manifest says `taskVisibility: "plugin"` stamps the tasks its agents run in. Hidden from
+   *  the board, the task lists, default search, the Org page and every needs-you count, and
+   *  never reported to a lead or Main (isPluginOnlyTask in src/core/org/org-tree.ts). Payload
+   *  blob, local-only, never pushed to sync backends; an older Walnut ignores it and shows
+   *  the task as before. */
+  plugin_only?: string;
   /** WAITING only: when the wait ends by itself (ISO datetime). At that time the
    *  task's session is woken like a trigger fire (src/core/task-wait-until.ts);
    *  with no session the task comes back as NEED_ACTION. A task entering WAITING

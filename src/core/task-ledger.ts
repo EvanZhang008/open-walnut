@@ -76,7 +76,7 @@ export async function buildTaskLedger(): Promise<string> {
     const doneCutoff = Date.now() - DONE_MAX_AGE_DAYS * 86_400_000;
 
     const entries = tasks
-      .filter((t) => !t.title.startsWith('.metadata'))
+      .filter((t) => !t.title.startsWith('.metadata') && !t.plugin_only)
       .filter((t) => !t.parent_task_id) // children ride their parent's line of work
       .filter((t) => !isLedgerJunk(t))
       .filter((t) => {

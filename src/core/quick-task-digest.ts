@@ -112,7 +112,7 @@ export async function buildProjectDigest(): Promise<ProjectDigest> {
   const inbox: ProjectDetails = { name: INBOX_LABEL, openCount: 0, titles: [] };
 
   for (const task of tasks) {
-    if (task.title.startsWith('.metadata')) continue;
+    if (task.title.startsWith('.metadata') || task.plugin_only) continue;
     const name = task.project?.trim();
     const details = name ? ensureProjectEntry(name) : inbox;
     if (task.phase !== 'COMPLETE') details.openCount += 1;

@@ -164,6 +164,12 @@ async function hasFeedConsumers(): Promise<boolean> {
 const SESSION_UPSERT_COALESCE_MS = 250
 const pendingSessionUpserts = new Map<string, NodeJS.Timeout>()
 
+/** A projected session row whose task a plugin keeps to its own view. */
+function hiddenSessionRow(row: unknown, hidden: ReadonlySet<string>): boolean {
+  const taskId = (row as { task_id?: unknown } | null)?.task_id
+  return typeof taskId === 'string' && hidden.has(taskId)
+}
+
 function scheduleSessionUpsert(sessionId: string): void {
   if (pendingSessionUpserts.has(sessionId)) return
   const timer = setTimeout(() => {
@@ -172,7 +178,8 @@ function scheduleSessionUpsert(sessionId: string): void {
       // No local subscribers and no bridge relay → skip the read entirely.
       if (!(await hasFeedConsumers())) return
       const row = await projectSessionRow(sessionId)
-      if (row) emitFeedEvent('session-upsert', row)
+      // A plugin's own task's session (Task.plugin_only) never reaches the phone's list.
+      if (row && !hiddenSessionRow(row, await (await import('../../core/task-manager.js')).pluginOnlyTaskIds())) emitFeedEvent('session-upsert', row)
     })().catch(() => {})
   }, SESSION_UPSERT_COALESCE_MS)
   timer.unref?.()
@@ -196,6 +203,8 @@ async function handleBusEvent(name: string, data: unknown): Promise<void> {
     }
     // TASK_UPDATED bulk signals carry { task: null } — nothing to project.
     if (!d.task || !d.task.id) return
+    // A plugin's own task leaves the phone, also when it became one after the phone saw it.
+    if (d.task.plugin_only) { emitFeedEvent('task-delete', { id: d.task.id }); return }
     const { projectTask } = await import('../../core/task-projection.js')
     emitFeedEvent('task-upsert', projectTask(d.task))
     return
@@ -378,6 +387,9 @@ async function buildSnapshot(): Promise<{ sessions: unknown[]; tasks: unknown[] 
       const { buildSessionProjection } = await import('../../core/session-projection.js')
       sessions = (await buildSessionProjection()).sessions
     }
+    // The sessions of a plugin's own tasks (Task.plugin_only) live in that plugin's view.
+    const hidden = await (await import('../../core/task-manager.js')).pluginOnlyTaskIds()
+    if (hidden.size > 0) sessions = sessions.filter((s) => !hiddenSessionRow(s, hidden))
   } catch (err) {
     log.web.warn('mobile-events: session snapshot failed', {
       error: err instanceof Error ? err.message : String(err),
@@ -386,7 +398,7 @@ async function buildSnapshot(): Promise<{ sessions: unknown[]; tasks: unknown[] 
   try {
     // Tasks: both boxes have a real local task store.
     const { buildTaskProjection } = await import('../../core/task-projection.js')
-    tasks = (await buildTaskProjection()).tasks
+    tasks = (await buildTaskProjection()).tasks.filter((t) => !t.plugin_only)
   } catch (err) {
     log.web.warn('mobile-events: task snapshot failed', {
       error: err instanceof Error ? err.message : String(err),

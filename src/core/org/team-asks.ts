@@ -127,7 +127,8 @@ export async function noteTeamAsk(
     const { listTasks } = await import('../task-manager.js');
     const tasks = await listTasks();
     const task = tasks.find((t) => t.id === taskId);
-    if (!task || task.org_role === 'lead' || task.org_role === 'main' || task.phase === 'COMPLETE') return;
+    // A plugin's own task (Task.plugin_only) is no team's work: what the user says there stays there.
+    if (!task || task.org_role === 'lead' || task.org_role === 'main' || task.plugin_only || task.phase === 'COMPLETE') return;
     // Every person's and peer's send passes here: no open lead, no team.
     if (!tasks.some((t) => t.org_role === 'lead' && t.phase !== 'COMPLETE')) return;
     const owner = teamOf(tasks, task);

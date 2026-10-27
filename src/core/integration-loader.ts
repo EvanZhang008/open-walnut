@@ -73,6 +73,7 @@ import { CORE_SERVICE_OWNER, removeServicesOf } from './plugins/service-registry
 // Only for the lifecycle announcement inside createPluginManager's onStateChange hook.
 import { bus } from './event-bus.js';
 import { createServerPluginApi } from './plugins/server-api.js';
+import { parseTaskVisibility } from './plugins/plugin-task-visibility.js';
 import type {
   PluginManifest,
   PluginApi,
@@ -928,6 +929,13 @@ export function getDuplicatePluginIds(): string[] {
 }
 
 /** The folder a discovered plugin was loaded from, whatever its state (Settings reads its icon there). */
+/** Every discovered plugin (enabled or not) whose manifest keeps its tasks to its own view. */
+export function pluginsKeepingTasks(registry: IntegrationRegistry): Set<string> {
+  const ids = new Set<string>();
+  for (const [id, manifest] of manifestMap(registry)) if (manifest.taskVisibility === 'plugin') ids.add(id);
+  return ids;
+}
+
 export function getPluginSourceDir(registry: IntegrationRegistry, pluginId: string): string | undefined {
   return pluginSources.get(registry)?.get(pluginId)?.dir;
 }
@@ -1543,6 +1551,8 @@ function validateManifest(raw: unknown, filePath: string): PluginManifest | null
     ...(catalog ? { catalog } : {}),
     ...(icon ? { icon } : {}),
     ...(storageParsed.storage ? { storage: storageParsed.storage } : {}),
+    // Closed set: only `"plugin"` changes anything; junk reads as the default.
+    ...(parseTaskVisibility(obj.taskVisibility) ? { taskVisibility: 'plugin' as const } : {}),
   };
 }
 
@@ -1886,6 +1896,7 @@ async function loadPlugin(
             dependencies: manifest.dependencies,
             lookupPluginState: (id) => manager.get(id)?.state,
             storage: manifest.storage,
+            taskVisibility: manifest.taskVisibility,
           })
         : builder.api;
       if (deactivateFn) context.onDispose(deactivateFn);

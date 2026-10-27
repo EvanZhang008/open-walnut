@@ -18,6 +18,7 @@ Decide what the plugin contributes before scaffolding, because the answer picks 
 | Any AI session (the Personal AI, a coding session) to call something | `registry.op` (read-only ops reach every session through `walnut tools call <plugin>_<name>`) | `server` |
 | The AI beside your App to see what the App shows (an editor, a test run, a timer) | `appState.publish`, see step 4a | either |
 | An AI that watches the person's work and draws conclusions | an event log plus an observer session, see step 4b | `both` |
+| AI sessions that exist only inside the App (a practice partner, an observer), not work the person follows on the board | `"taskVisibility": "plugin"` in the manifest: their tasks show only in the plugin's own view; leave it out when the work is useful elsewhere (tickets, notes, lookups) | `both` |
 | Files a person wants on every machine and in the backup (a review, a rules file) | `storage.files`, declared in the manifest, see step 5 | `server` |
 | A recurring or scheduled action | `registry.cronAction` | `server` |
 | To react to sessions or tasks | `registry.hook` | `server` |

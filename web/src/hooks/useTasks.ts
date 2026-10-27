@@ -13,6 +13,7 @@ import { tasksShallowEqual, mergeFetchedTasks, overlayLaterEdits, changedFields,
 import { normalizeTags } from '../../../src/core/tag-model';
 import { deletedTaskId } from '../../../src/core/task-deleted-id';
 import { markFirstScreen } from '@/utils/after-first-screen';
+import { isPluginOnlyTask } from '@open-walnut/org-tree';
 
 /**
  * Optimistic default status for a newly-linked session (before the first
@@ -644,7 +645,7 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
           if (gen < generation) retainedAtGen.current.delete(id);
         }
         const sentAt = listDispatch.current?.generation === generation ? (listDispatch.current.at ?? t0) : t0;
-        const answer = overlayLaterEdits(tasks, localEdits.current, sentAt);
+        const answer = overlayLaterEdits(tasks.filter((t) => !isPluginOnlyTask(t)), localEdits.current, sentAt);
         startTransition(() => {
           // Events may arrive after this transition is queued but before React applies it.
           setTasks((prev) => {
@@ -790,12 +791,20 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
     hooks?.onReconcile?.(tmpId, task.id);
   }, [guardEcho]);
 
+  const dropPluginOnly = useCallback((id: string) => {
+    retainedAtGen.current.delete(id);
+    setTasks((prev) => (prev.some((t) => t.id === id) ? prev.filter((t) => t.id !== id) : prev));
+  }, []);
+
   // Real-time event handlers — single source of truth for state changes
   // Server emits { task: <Task> } wrapper objects
   useEvent('task:created', (data) => {
     const { task, clientRequestId } = data as { task: Task; clientRequestId?: string };
     // Skip tasks with missing or empty titles (e.g. from sync race conditions)
     if (!task.title || task.title.trim() === '') return;
+    // A plugin's own task belongs to that plugin's view, never this store (the list
+    // answer leaves it out too): no board, count or picker can show it.
+    if (isPluginOnlyTask(task)) { dropPluginOnly(task.id); return; }
     // Our own create, arriving BEFORE its HTTP response (the route emits first):
     // reconcile now — swap the optimistic row for the real one and fire the
     // caller's reconcile hook — and let the response find it already done.
@@ -854,6 +863,8 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
     wsEventCounts.current.updated++;
     const { task } = data as { task?: Task };
     if (!task) { log.info('tasks', 'ws task:updated bulk → refetch (debounced)'); scrollLog('drag-trace-ws-updated-bulk-refetch'); scheduleBulkRefetch(); return; }
+    // Kept to a plugin's own view (now or since this write): out of the store.
+    if (isPluginOnlyTask(task)) { dropPluginOnly(task.id); return; }
     if (consumeEcho(`move:${task.id}`)) { scrollLog('drag-trace-ws-updated-echo-move', { id: task.id.slice(0,12) }); takeAwayMark(task); return; }
     if (consumeEcho(`update:${task.id}`)) { scrollLog('drag-trace-ws-updated-echo-update', { id: task.id.slice(0,12) }); takeAwayMark(task); return; }
     if (consumeEcho(`phase:${task.id}`)) { scrollLog('drag-trace-ws-updated-echo-phase', { id: task.id.slice(0,12) }); takeAwayMark(task); return; }
@@ -947,7 +958,9 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
     const wanted = [...new Set(ids)].filter((id) => !id.startsWith('tmp-'));
     if (wanted.length === 0) return;
     tasksApi.fetchTasksByIds(wanted)
-      .then((rows) => {
+      .then((answer) => {
+        // A read by ids answers a plugin's own task too; this store never holds one.
+        const rows = answer.filter((t) => !isPluginOnlyTask(t));
         const byId = new Map(rows.map((t) => [t.id, t]));
         const asked = new Set(wanted);
         // The server's rows now: an optimistic edit the server refused must not come back.

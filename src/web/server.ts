@@ -89,7 +89,7 @@ import { usageTracker } from '../core/usage/index.js'
 import * as chatHistory from '../core/chat-history.js'
 import { gitPullWalnut, ensureRepo, commitIfDirty, autoSync, isGitAvailable, isLockContention, checkRepoSize, getSyncGuardState, REPO_SIZE_RECOVERY_KEY } from '../integrations/git-sync.js'
 import { registry } from '../core/integration-registry.js'
-import { clearPluginQuarantine, disableLoadedPlugin, disposeLoadedPlugins, forgetBundledPlugin, getPluginLifecycleRecords, getPluginReloadIds, isPluginCatalogueLoading, loadNewPlugins, loadPlugins, migrateConfigToPlugins, reloadLoadedPlugin, reloadLoadedPlugins, runPluginMigrations, getUnconfiguredPlugins, pluginStarting } from '../core/integration-loader.js'
+import { clearPluginQuarantine, disableLoadedPlugin, disposeLoadedPlugins, forgetBundledPlugin, getPluginLifecycleRecords, getPluginReloadIds, isPluginCatalogueLoading, loadNewPlugins, loadPlugins, migrateConfigToPlugins, pluginsKeepingTasks, reloadLoadedPlugin, reloadLoadedPlugins, runPluginMigrations, getUnconfiguredPlugins, pluginStarting } from '../core/integration-loader.js'
 import { disposeCoreServices, publishCalendarSource } from '../core/platform-services.js'
 import type { SyncPollContext } from '../core/integration-types.js'
 import { recordSyncSuccess, recordSyncFailure, decideSyncFailureNotice, decideConnectionNotice, getSyncHealth, reconcileCardWanted, type ConnectionWatch } from '../core/plugin-sync-health.js'
@@ -5288,6 +5288,18 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     if (bootPolicy('plugins')) {
       await loadPlugins(registry)
       log.web.info('integration plugins loaded', { plugins: registry.getAll().map(p => p.id) })
+      // Tasks a removed plugin kept to its own view come back to the board (Task.plugin_only):
+      // after the complete walk, and when a plugin is removed while the server runs.
+      if (bootPolicy('primary-store-jobs')) {
+        const { releaseTasksOfPluginsNotKeeping } = await import('../core/plugins/plugin-task-visibility.js')
+        const release = (why: string) => void releaseTasksOfPluginsNotKeeping(pluginsKeepingTasks(registry))
+          .then((ids) => { if (ids.length > 0) log.web.info('plugin-kept tasks given back to the board', { why, count: ids.length }) })
+          .catch((err) => log.web.warn('giving plugin-kept tasks back failed', { why, error: err instanceof Error ? err.message : String(err) }))
+        release('boot')
+        bus.subscribe('plugin-task-visibility:release', (event) => {
+          if ((event.data as { action?: string } | undefined)?.action === 'removed') release('removed')
+        }, { global: true, interest: ['plugin:runtime-changed'] })
+      }
     }
   } catch (err) {
     log.web.error('failed to load integration plugins', { error: err instanceof Error ? err.message : String(err) })

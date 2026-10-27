@@ -110,6 +110,15 @@ export interface TaskService {
   /** Moving a task to another project drops its folder: a folder never follows a task
    *  across projects. File it again with `fileIntoFolder`. */
   update(id: string, patch: TaskPatch): Promise<WalnutTask>
+  /** Keep these tasks to this plugin's own view (`keep` true, the default), or give back to
+   *  the board the ones it keeps (`false`). For a plugin whose manifest says
+   *  `"taskVisibility": "plugin"`, whose new tasks are kept already: this is how it brings
+   *  in tasks made before it switched, and how it releases them when it switches back. A
+   *  task another plugin keeps is skipped; a kept task is unpinned, and its sync is left as it
+   *  is. Throws for
+   *  `keep` on a plugin without the manifest option. Not available on a replica; an older
+   *  Walnut has no `keepInPlugin`, so feature-check it. */
+  keepInPlugin?(ids: string[], keep?: boolean): Promise<TaskKeepResult>
   appendNote(id: string, markdown: string): Promise<void>
   appendLog(id: string, entry: string): Promise<void>
   complete(id: string): Promise<WalnutTask>
@@ -151,6 +160,12 @@ export interface TaskService {
    *  either. A name a built-in tier uses, or a reserved one, refuses. Not available on a
    *  replica. */
   ensurePinGroup(label: string): Promise<PinGroup>
+}
+
+/** What `keepInPlugin` changed. A task already as asked is in neither list. */
+export interface TaskKeepResult {
+  changed: string[]
+  skipped: Array<{ id: string; reason: 'missing' | 'other-plugin' }>
 }
 
 /** A custom tier on the pinned board. */

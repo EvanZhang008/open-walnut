@@ -277,6 +277,8 @@ export interface BriefTask {
   parent_task_id?: string;
   org_role?: string;
   org_leads?: readonly string[];
+  /** Kept to a plugin's own view (Task.plugin_only): never part of a team. */
+  plugin_only?: string;
   phase_changed_at?: string;
 }
 
@@ -298,7 +300,8 @@ export function briefTeam<T extends BriefTask>(owner: BriefTask, tasks: readonly
   const key = (p: string | undefined) => (p ?? '').trim().toLowerCase();
   const projects = owner.org_role === 'lead'
     ? new Set([owner.project, ...(owner.org_leads ?? [])].map(key).filter(Boolean)) : null;
-  return tasks.filter((t) => t.id !== owner.id && (
+  // A plugin's own task (Task.plugin_only) is no one's team: the Brief never names it.
+  return tasks.filter((t) => t.id !== owner.id && !t.plugin_only && (
     below(t)
     || (owner.org_role === 'main' ? t.org_role === 'lead' : !!projects && projects.has(key(t.project)) && t.org_role !== 'main')
   ));

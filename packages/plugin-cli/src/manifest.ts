@@ -28,6 +28,8 @@ export interface PluginManifest {
   category?: PluginCategory
   /** File areas beyond plugin-data: `files` (synced text, in git) and `tmp` (scratch with a TTL). */
   storage?: { files?: boolean | { maxBytes?: number }; tmp?: boolean | { ttlHours?: number } }
+  /** Where the tasks the plugin's agents run in show: `everywhere` (default) or only in its own view. */
+  taskVisibility?: 'everywhere' | 'plugin'
 }
 
 export interface ValidationResult {
@@ -84,6 +86,9 @@ export async function validatePlugin(root = process.cwd()): Promise<ValidationRe
   }
   if (manifest.settingsIn !== undefined && manifest.settingsIn !== 'plugins' && manifest.settingsIn !== 'app') {
     errors.push("manifest.settingsIn must be 'plugins' or 'app'")
+  }
+  if (manifest.taskVisibility !== undefined && manifest.taskVisibility !== 'everywhere' && manifest.taskVisibility !== 'plugin') {
+    errors.push("manifest.taskVisibility must be 'everywhere' or 'plugin'")
   }
   if (manifest.category !== undefined && !(PLUGIN_CATEGORIES as readonly unknown[]).includes(manifest.category)) {
     errors.push(`manifest.category must be one of ${PLUGIN_CATEGORIES.map((c) => `'${c}'`).join(', ')}`)

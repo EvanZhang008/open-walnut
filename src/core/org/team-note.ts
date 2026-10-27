@@ -323,7 +323,7 @@ export async function pendingTeamNote(lead: Task, sessionId: string, nowMs = Dat
     for (const p of led) for (const n of walk(p.teams)) projectById.set(n.id, p.project);
     // Its own workers too, wherever they live: what waits on it is its to hear.
     for (const t of tasks) {
-      if (t.parent_task_id === lead.id && t.phase !== 'COMPLETE' && !projectById.has(t.id)) projectById.set(t.id, t.project ?? '');
+      if (t.parent_task_id === lead.id && t.phase !== 'COMPLETE' && !t.plugin_only && !projectById.has(t.id)) projectById.set(t.id, t.project ?? '');
     }
     const open = tasks.filter((t) => projectById.has(t.id));
     const prev = validState((await readAll())[lead.id]);
@@ -332,7 +332,7 @@ export async function pendingTeamNote(lead: Task, sessionId: string, nowMs = Dat
     // Done here: told about before, and finished in a project this lead still leads.
     const ledKeys = new Set(led.map((p) => projectKey(p.project)));
     const completed = prev
-      ? tasks.filter((t) => t.phase === 'COMPLETE' && prev.seen[t.id] !== undefined && ledKeys.has(projectKey(t.project)))
+      ? tasks.filter((t) => t.phase === 'COMPLETE' && !t.plugin_only && prev.seen[t.id] !== undefined && ledKeys.has(projectKey(t.project)))
       : [];
     const now = new Date(nowMs).toISOString();
     const plan = planTeamNote(prev, open, completed, now, { leadId: lead.id, led: led.map((p) => p.project || 'Inbox'), asks });
@@ -388,7 +388,7 @@ export async function teamSnapshotText(lead: Task, nowMs = Date.now()): Promise<
     const projectById = new Map<string, string>();
     for (const p of led) for (const n of walk(p.teams)) projectById.set(n.id, p.project);
     for (const t of tasks) {
-      if (t.parent_task_id === lead.id && t.phase !== 'COMPLETE' && !projectById.has(t.id)) projectById.set(t.id, t.project ?? '');
+      if (t.parent_task_id === lead.id && t.phase !== 'COMPLETE' && !t.plugin_only && !projectById.has(t.id)) projectById.set(t.id, t.project ?? '');
     }
     const open = tasks.filter((t) => projectById.has(t.id));
     const { pendingTeamAsks } = await import('./team-asks.js');
