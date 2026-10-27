@@ -368,8 +368,10 @@ describe('the daemon\'s JS twin is checked on Node where CI has it', () => {
       expect(fs.readFileSync(path.join(REPO, helper), 'utf8'), helper).toContain('SOURCE_TWIN.file')
       expect([...testSources().values()].some((text) => starts.test(text)), `${helper}: no test file calls it`).toBe(true)
     }
-    // A new helper that starts the twin is listed above, so the files that call it are found.
-    const helpers = walkScripts('tests/helpers').filter((f) => f !== 'tests/helpers/source-twin.ts' && fs.readFileSync(path.join(REPO, f), 'utf8').includes('SOURCE_TWIN.file'))
+    // A new helper that starts the twin (writes it and runs it with SOURCE_TWIN.file) is listed above,
+    // so the files that call it are found. A helper that only names the runtime (the live walls) is not.
+    const startsTwin = (text: string) => text.includes('SOURCE_TWIN.file') && /getDaemonSource|daemon-source|\bdaemon[\w-]*\.cjs/.test(text)
+    const helpers = walkScripts('tests/helpers').filter((f) => f !== 'tests/helpers/source-twin.ts' && startsTwin(fs.readFileSync(path.join(REPO, f), 'utf8')))
     expect(helpers.sort()).toEqual(Object.keys(TWIN_HELPERS).sort())
     const viaHelper = (text: string) => Object.entries(TWIN_HELPERS).some(([helper, starts]) =>
       text.includes(`/helpers/${path.basename(helper, '.ts')}.js'`) && starts.test(text))
