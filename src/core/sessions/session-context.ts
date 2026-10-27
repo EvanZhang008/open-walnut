@@ -164,6 +164,15 @@ export const MAIN_DECISION_LINE =
 export const LEAD_DECISION_LINE =
   ' A report to the main agent that needs a decision from the user carries every one of these parts.\n\n'
 
+/** Main's and every lead's Brief (sessions/brief.ts): the user reads it instead of the chat. */
+export const BRIEF_LINE =
+  'Your Brief is the short letter the user reads at the top of your chat (the Brief view on the Org page) '
+  + 'instead of scrolling it; they answer in your chat. At the end of every turn Walnut asks you for it '
+  + '(FOR_USER_BRIEF) and lists what moved in your teams since the last one: rewrite it whole each time, '
+  + 'what needs the user first, then one line per piece of work with its <task-ref/>, what is done and what it '
+  + 'waits on now, on whom. Walnut shows each task it names with its live status and marks what moved after '
+  + 'you wrote it, so keep it to the work that matters now.\n\n'
+
 /**
  * 2d. The org above the work (src/core/org/): the main agent talks to one
  * contact per project (its lead, or its one team), never to every task, so its
@@ -186,6 +195,7 @@ export function orgRoleLine(task: { org_role?: string; project?: string; org_lea
       + 'first, without detail that would not change what they do. Walnut puts a folded org update before a message '
       + 'when work moved: background, mention it only when it matters to what the user says.\n\n'
       + DECISION_CONTEXT_LINE + MAIN_DECISION_LINE
+      + BRIEF_LINE
       + MAIN_DELEGATES_LINE
       + MAIN_TRACKING_LINE
       + MAIN_STAYS_ACTIVE_LINE
@@ -211,6 +221,7 @@ export function orgRoleLine(task: { org_role?: string; project?: string; org_lea
       + 'another team) before a message when something moved; it is background. A task that waits on you is yours: '
       + 'Walnut wakes you with it under "Waiting on you"; read it and answer or close it.\n\n'
       + DECISION_CONTEXT_LINE + LEAD_DECISION_LINE
+      + BRIEF_LINE
       + TASK_ROUTING_CONTRACT + '\n\n'
   }
   return ''

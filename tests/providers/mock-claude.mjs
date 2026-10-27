@@ -50,6 +50,14 @@ function persistMockTurn(sessionId, prompt, answer, root = process.env.MOCK_CLAU
  * files it. Lets a browser spec reload and find what it sent (N37).
  */
 let lastInputUserUuid = null;
+/** The letter a Main or lead fixture session writes as its Brief (FOR_USER_BRIEF): what followed
+ *  "brief: " in its latest user message. */
+let mockBriefText = '';
+function noteMockBrief(c) {
+  const text = typeof c === 'string' ? c : Array.isArray(c) ? c.map((b) => (b && typeof b.text === 'string' ? b.text : '')).join('\n') : '';
+  const at = text.lastIndexOf('brief: ');
+  if (at >= 0) mockBriefText = text.slice(at + 'brief: '.length).trim();
+}
 function persistFileOf(sid) {
   const root = process.env.MOCK_CLAUDE_PERSIST_DIR;
   const allow = (process.env.MOCK_CLAUDE_PERSIST_SESSIONS ?? '').split(',').filter(Boolean);
@@ -237,6 +245,7 @@ if (inputFormat === 'stream-json') {
         if (!adoptedFirstMessage && parsed.message?.content) {
           adoptedFirstMessage = true;
           lastInputUserUuid = parsed.uuid ?? null;
+          noteMockBrief(parsed.message.content);
           message = typeof parsed.message.content === 'string'
             ? parsed.message.content
             : JSON.stringify(parsed.message.content);
@@ -287,6 +296,8 @@ if (inputFormat === 'stream-json') {
         const parsed = JSON.parse(line);
         // The user line a snapshot-write-turn turn files under (its rewind point).
         if (parsed.type === 'user' && typeof parsed.uuid === 'string') writeTurnUuidNext = parsed.uuid;
+        // "brief: <letter>" in a user message: the Brief the next self-report writes (FOR_USER_BRIEF).
+        if (parsed.type === 'user' && parsed.message?.content !== undefined) noteMockBrief(parsed.message.content);
         if (parsed.type === 'control_request' && parsed.request?.subtype === 'rewind_files') {
           process.stdout.write(JSON.stringify({
             type: 'control_response',
@@ -334,9 +345,12 @@ if (inputFormat === 'stream-json') {
           const response = q.includes('PHASE_SIGNAL:') && q.includes('EXEC_SUMMARY:')
             ? 'EXEC_SUMMARY: The fixture turn finished.\nUSER_REQUEST: Validate the session flow.\nCONTEXT: An isolated test session.\nPROGRESS: The turn finished.\nREFERENCES: unchanged\nWORK_LOG: append: Finished the fixture turn.\nTITLE: unchanged\nRECAP: The fixture turn finished.\nPHASE_SIGNAL: conversational(user-asked-question)\nSTATUS: succeeded\nWHAT_I_DID: Answered the fixture prompt.\nNEXT_STEPS: Continue the conversation.\nBLOCKERS: none\nUSER_INTENT: question-pending\nVERIFIED: not-applicable'
             : `Side title: ${five}`;
+          const withBrief = q.includes('FOR_USER_BRIEF:')
+            ? `${response}\nFOR_USER_BRIEF:\n${mockBriefText || 'Nothing needs you right now.'}`
+            : response;
           process.stdout.write(JSON.stringify({
             type: 'control_response',
-            response: { subtype: 'success', request_id: parsed.request_id, response: { response } },
+            response: { subtype: 'success', request_id: parsed.request_id, response: { response: withBrief } },
           }) + '\n');
         } else if (parsed.type === 'control_request' && parsed.request?.subtype === 'generate_session_title') {
           // The auto-title caller wraps the message in a context envelope
@@ -537,6 +551,7 @@ let tagSwitch = null;
 function computeMessageParts() {
   slowDelayMs = 0;
   const bare = stripInputDecorations(stripBanners(message), questionSeq !== null);
+  noteMockBrief(bare);
   rawEcho = /(^|\s)echo-input(\s|$)/.test(bare);
   const sw = /\s*MOCK_TAG_SWITCH:(\d+):(\d+)\s*/.exec(bare);
   tagSwitch = sw ? { seq: Number(sw[1]), ms: Number(sw[2]) } : null;

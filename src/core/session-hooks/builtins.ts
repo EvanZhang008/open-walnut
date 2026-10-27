@@ -26,6 +26,7 @@ import type {
 import { engineCaps, isAcpEngine } from '../agents/engine-registry.js';
 import { toDisplayedUserText } from '../sessions/reference-cards.js';
 import { isAwaitingTurnEnd } from '../sessions/self-complete-stop.js';
+import { briefMoveLines, briefPrompt, keepsBrief, readBrief } from '../sessions/brief.js';
 import { withoutLeadingRiders } from '../../lib/history-walnut-riders.js';
 
 // ── Triage dedup state ──
@@ -297,7 +298,7 @@ This is the MAIN AGENT's task: its NOTE is the user's tracking note for everythi
 export function buildSelfReportPrompt(
   existingNote?: string,
   currentTitle?: string,
-  opts?: { uiLanguage?: string; mainAgent?: boolean },
+  opts?: { uiLanguage?: string; mainAgent?: boolean; brief?: { hadBrief: boolean; moves: readonly string[] } },
 ): string {
   const existing = existingNote?.trim() ?? '';
   const reorg = existing.length > NOTE_REORG_CAP;
@@ -308,7 +309,7 @@ export function buildSelfReportPrompt(
   // hand-off document for a fresh AI, and plugin content rules validate it.
   const uiLang = nonEnglishUiLanguage(opts?.uiLanguage);
   const tipLanguage = uiLang
-    ? `\nOVERVIEW, RECAP, FOR_USER_ASK, FOR_USER_WAITING_ON, FOR_USER_NOW and FOR_USER_NEXT are shown to the user in the UI: write them in ${uiLanguageName(uiLang)} (the user's display language), keeping identifiers, file names, and technical terms in their original form. Every other field stays English.`
+    ? `\nOVERVIEW, RECAP, FOR_USER_ASK, FOR_USER_WAITING_ON, FOR_USER_NOW, FOR_USER_NEXT and FOR_USER_BRIEF are shown to the user in the UI: write them in ${uiLanguageName(uiLang)} (the user's display language), keeping identifiers, file names, and technical terms in their original form. Every other field stays English.`
     : '';
 
   let noteBlock: string;
@@ -344,7 +345,7 @@ NEXT_STEPS: What you'd do next, or what you need from the human.
 BLOCKERS: Anything blocking, or "none".
 USER_INTENT: <question-pending | workflow-command | autonomous> — gist of user's last message.
 VERIFIED: <ran-and-saw-pass | assumed | not-applicable>.
-${FOR_USER_PROMPT}`;
+${FOR_USER_PROMPT}${opts?.brief ? briefPrompt({ ...opts.brief, ...(uiLang ? { language: uiLanguageName(uiLang) } : {}) }) : ''}`;
 }
 
 /** The exact labels emitted by buildSelfReportPrompt. Used to anchor extractField's
@@ -370,7 +371,7 @@ const SELF_REPORT_LABELS = [
   'TITLE', 'OVERVIEW', 'LINKS', 'RECAP',
   'TASK_SUMMARY', 'WHAT_I_DID', 'STATUS', 'CHANGES_TRIED', 'PHASE_SIGNAL', 'NEXT_STEPS',
   'BLOCKERS', 'USER_INTENT', 'VERIFIED', 'ARTIFACTS',
-  'FOR_USER_STATE', 'FOR_USER_ASK', 'FOR_USER_WAITING_ON', 'FOR_USER_NOW', 'FOR_USER_NEXT',
+  'FOR_USER_STATE', 'FOR_USER_ASK', 'FOR_USER_WAITING_ON', 'FOR_USER_NOW', 'FOR_USER_NEXT', 'FOR_USER_BRIEF',
 ] as const;
 const NEXT_LABEL_LOOKAHEAD = `(?:${[
   ...SELF_REPORT_LABELS,
@@ -823,6 +824,10 @@ export async function runTriage(p: OnTurnCompletePayload, opts: { final?: boolea
     let selfReport = '';
     let uiLanguage: string | undefined;
     let mainAgent = false;
+    let brief: { hadBrief: boolean; moves: string[] } | undefined;
+    // When the moves were read: a move after this was not in the prompt, so it must show as
+    // "Since then" under the new Brief and be listed in the next prompt.
+    let briefAskedAt = '';
     const askedAt = Date.now();
     try {
       try {
@@ -835,6 +840,13 @@ export async function runTriage(p: OnTurnCompletePayload, opts: { final?: boolea
         promptedTitle = (taskRow.title ?? '').trim();
         taskPhase = taskRow.phase;
         mainAgent = taskRow.org_role === 'main';
+        // Main and every lead rewrite their Brief at each turn end, told what moved since the last.
+        if (keepsBrief(taskRow)) {
+          briefAskedAt = new Date().toISOString();
+          const { listTasks } = await import('../task-manager.js');
+          const all = await listTasks().catch(() => [] as Task[]);
+          brief = { hadBrief: !!taskRow.brief?.text, moves: briefMoveLines(taskRow, all) };
+        }
       } catch (err) {
         // Do NOT degrade to an empty note: the prompt would say "NOTE is EMPTY,
         // write ALL sections", the model rewrites from scratch, the shrink
@@ -852,7 +864,7 @@ export async function runTriage(p: OnTurnCompletePayload, opts: { final?: boolea
       uiLanguage = await configuredUiLanguage();
       selfReport = (await sessionRunner.requestTurnCompleteSelfReport(
         p.sessionId,
-        buildSelfReportPrompt(existingNote, promptedTitle, { uiLanguage, mainAgent }), SELF_REPORT_TIMEOUT_MS,
+        buildSelfReportPrompt(existingNote, promptedTitle, { uiLanguage, mainAgent, ...(brief ? { brief } : {}) }), SELF_REPORT_TIMEOUT_MS,
       )).trim();
     } catch (err) {
       log.session.warn('turn-complete-summary: provider self-report failed — skipped (next turn will merge)', {
@@ -1016,6 +1028,21 @@ export async function runTriage(p: OnTurnCompletePayload, opts: { final?: boolea
     // (a1b) The task's status for the user (FOR_USER_*): what the Board, the Org page and the
     // phone show, derived together with live facts in src/core/user-status.ts.
     const statusReport = readStatusReport(selfReport);
+    // (a1c) Main's or a lead's Brief, the letter above its chat (sessions/brief.ts).
+    const briefNow = brief ? readBrief(extractField(selfReport, 'FOR_USER_BRIEF'), briefAskedAt || undefined) : null;
+    if (briefNow) {
+      try {
+        const { updateTaskRaw } = await import('../task-manager.js');
+        // A write to a COMPLETE row would announce the completion again (as the report below).
+        await updateTaskRaw(taskId, { brief: briefNow }, {
+          emitEvent: true, source: 'status-report', shouldUpdate: (current) => current.phase !== 'COMPLETE',
+        });
+      } catch (err) {
+        log.session.debug('turn-complete-summary: brief persist skipped', {
+          sessionId: p.sessionId, taskId, error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
     if (statusReport) {
       try {
         const { getTask, updateTaskRaw } = await import('../task-manager.js');

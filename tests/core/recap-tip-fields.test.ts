@@ -16,7 +16,7 @@ import {
 } from '../../src/core/session-hooks/builtins.js';
 import { nonEnglishUiLanguage, uiLanguageName } from '../../src/core/ui-language.js';
 
-const TIP_DIRECTIVE = 'OVERVIEW, RECAP, FOR_USER_ASK, FOR_USER_WAITING_ON, FOR_USER_NOW and FOR_USER_NEXT are shown to the user in the UI: write them in';
+const TIP_DIRECTIVE = 'OVERVIEW, RECAP, FOR_USER_ASK, FOR_USER_WAITING_ON, FOR_USER_NOW, FOR_USER_NEXT and FOR_USER_BRIEF are shown to the user in the UI: write them in';
 
 describe('buildSelfReportPrompt: recap tip labels and language', () => {
   it('asks for OVERVIEW (whole session) and RECAP (latest turn), both mandatory', () => {

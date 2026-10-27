@@ -1,4 +1,4 @@
-import type { StatusReport, UserStatus } from './user-status.js';
+import type { StatusReport, TaskBrief, UserStatus } from './user-status.js';
 export type TaskStatus = 'todo' | 'in_progress' | 'done';
 /**
  * The one state field. WAITING (added 0.5.2) is a task set aside until something
@@ -835,6 +835,9 @@ export interface Task {
    *  `status_report`, and kept current by user-status-sync.ts. Every surface (Board, Org, task
    *  list, iOS) reads this instead of the phase. Local-only, payload blob. */
   user_status?: UserStatus;
+  /** Main's or a lead's Brief: the short letter to the user it rewrites at every turn end
+   *  (FOR_USER_BRIEF), shown above its chat on the Org page. Local-only, payload blob. */
+  brief?: TaskBrief;
   /** Task-level working directory override. Takes precedence over project default_cwd in session resolution. */
   cwd?: string;
   /** Set by the cwd rename detector / turn-end check when task.cwd no longer exists on disk.

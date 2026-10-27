@@ -91,6 +91,15 @@ describe('mergeFetchedTasks', () => {
     expect(next[0].workspace?.state).toBe('ready');
   });
 
+  it('detects a rewritten Brief, whose write leaves updated_at alone', () => {
+    const brief = { text: 'Nothing needs you.', at: '2026-10-26T10:00:00Z' };
+    const a = task({ id: 'a', brief });
+    expect(listRowEqual(a, { ...a, brief: { ...brief } } as Task)).toBe(true);
+    expect(listRowEqual(a, { ...a, brief: { text: 'Pick a supplier.', at: '2026-10-26T10:05:00Z' } } as Task)).toBe(false);
+    const b = task({ id: 'b' });
+    expect(listRowEqual(b, { ...b, brief } as Task)).toBe(false);
+  });
+
   it('detects is_blocked flips (blocked badge must heal on refetch)', () => {
     const a = task({ id: 'a' });
     const blocked = { ...a, is_blocked: true } as unknown as Task;

@@ -43,6 +43,24 @@ interface DaemonSession {
   exited?: Promise<void>
 }
 
+/** A non-blocking FIFO write takes at most the pipe's free space (8192 bytes on macOS), so a
+ *  longer line (a turn-end self-report prompt is ~9 KB) must be written in pieces, as
+ *  daemon-core's writeFifoFullyAsync does; one writeSync dropped the tail and the CLI never saw it.
+ *  Synchronous, unlike the daemon's: a CLI that stops reading holds the fixture's loop up to 5 s,
+ *  then the write throws with the line half written, as a dead reader would leave it. */
+function writeFifoFully(fd: number, buf: Buffer): void {
+  const deadline = Date.now() + 5_000
+  let off = 0
+  while (off < buf.length) {
+    try {
+      off += fs.writeSync(fd, buf, off)
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'EAGAIN' || Date.now() > deadline) throw err
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5)
+    }
+  }
+}
+
 /** Types of send fault that can be injected per-session. */
 export type SendFault = 'ENXIO' | 'EAGAIN' | 'session_dead' | 'not_found' | null
 
@@ -598,7 +616,7 @@ export class MockDaemon {
         ...(uuid ? { uuid } : {}),
       })
       const fd = fs.openSync(session.pipePath, fs.constants.O_WRONLY | fs.constants.O_NONBLOCK)
-      fs.writeSync(fd, Buffer.from(payload + '\n'))
+      writeFifoFully(fd, Buffer.from(payload + '\n'))
       fs.closeSync(fd)
       this._fifoWrites.push({ sid, message, timestamp: Date.now() })
       this._turnActive.add(sid)
@@ -624,8 +642,8 @@ export class MockDaemon {
   /** SIMPLIFIED mirror of daemon-core.handleSendRawCommand — writes a
    *  pre-serialized JSON envelope (control_request / control_response) verbatim
    *  to the FIFO, with the same strict-ack error shape (ok:false + reason).
-   *  Not mirrored: pid kill-0 precheck, pendingCtrl clearing, writeFifoFully
-   *  partial-write handling — fine for the small control envelopes tests send. */
+   *  Not mirrored: pid kill-0 precheck, pendingCtrl clearing, the async write
+   *  chain (a long line is written in pieces, synchronously: writeFifoFully). */
   private cmdSendRaw(ws: WebSocket, id: number, cmd: Record<string, unknown>): void {
     const sid = cmd.sid as string
     const raw = cmd.raw as string
@@ -656,7 +674,7 @@ export class MockDaemon {
     if (!session) return this.sendOk(ws, id, { ok: false, reason: 'not_found' })
     try {
       const fd = fs.openSync(session.pipePath, fs.constants.O_WRONLY | fs.constants.O_NONBLOCK)
-      fs.writeSync(fd, Buffer.from(raw.endsWith('\n') ? raw : raw + '\n'))
+      writeFifoFully(fd, Buffer.from(raw.endsWith('\n') ? raw : raw + '\n'))
       fs.closeSync(fd)
       this.sendOk(ws, id, { ok: true })
     } catch (err) {

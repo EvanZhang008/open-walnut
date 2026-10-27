@@ -1,0 +1,117 @@
+/* The Status | Brief switch above an Org node's chat, and the Brief (OrgBrief.tsx). */
+.org-top.has-switch {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 0 0 18px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg-secondary) 55%, var(--bg));
+}
+.org-top.has-switch .org-detail-latest { flex: 1; min-width: 0; padding-left: 0; border-bottom: 0; background: transparent; }
+.org-top-switch {
+  flex: none;
+  display: inline-flex;
+  padding: 2px;
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--fg) 6%, transparent);
+}
+.org-top-switch button {
+  position: relative;
+  border: 0;
+  border-radius: 5px;
+  padding: 2px 9px;
+  background: transparent;
+  color: var(--fg-secondary, var(--fg));
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.org-top-switch button.is-on { background: var(--bg); color: var(--fg); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08); }
+.org-top-new {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent, #0a84ff);
+}
+.org-top-brief-head {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 18px 8px 0;
+  font-size: 12.5px;
+}
+.org-top-fold {
+  border: 0;
+  background: transparent;
+  color: var(--accent, #0a84ff);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.org-brief {
+  flex-shrink: 0;
+  padding: 10px 18px 8px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+}
+.org-brief.is-empty { padding: 10px 18px; font-size: 12.5px; }
+.org-brief.is-empty p { margin: 0; }
+/* A letter, not a document: about ten lines, the rest a scroll away, so the chat keeps its room. */
+.org-brief-body {
+  max-height: min(240px, 34vh);
+  overflow-y: auto;
+  font-size: 13px;
+  line-height: 1.45;
+}
+.org-brief.is-folded .org-brief-body { max-height: 4.4em; overflow: hidden; }
+.org-brief-body > :first-child { margin-top: 0; }
+.org-brief-body > :last-child { margin-bottom: 0; }
+.org-brief-body p, .org-brief-body ul, .org-brief-body ol { margin: 0 0 4px; }
+.org-brief-body ul, .org-brief-body ol { padding-left: 18px; }
+/* Each task the letter names wears its live status. */
+.org-brief-body a.task-link[data-user-state]::before,
+.org-brief-move[data-user-state]::before {
+  content: '';
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 4px;
+  border-radius: 50%;
+  vertical-align: 1px;
+  background: var(--fg-muted, #86868b);
+}
+.org-brief-body a.task-link[data-user-state='needs']::before,
+.org-brief-move[data-user-state='needs']::before { background: var(--error, #ff3b30); }
+.org-brief-body a.task-link[data-user-state='working']::before,
+.org-brief-move[data-user-state='working']::before { background: var(--success, #34c759); }
+.org-brief-body a.task-link[data-user-state='done']::before,
+.org-brief-move[data-user-state='done']::before { background: var(--accent, #0a84ff); }
+.org-brief-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+  margin-top: 6px;
+  font-size: 12px;
+}
+.org-brief-moves { display: contents; }
+.org-brief-move {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 1px 8px;
+  background: var(--bg-secondary);
+  color: var(--fg);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.org-page.is-phone .org-top.has-switch { padding-left: 12px; }
+.org-page.is-phone .org-brief { padding: 8px 12px; }
+.org-sr-only { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }

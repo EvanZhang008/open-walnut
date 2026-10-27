@@ -25,6 +25,8 @@ import { COMPOSER_INSERT_EVENT, type ComposerInsertDetail } from '@/utils/compos
 import { recentMainStart } from './ask-main';
 import { OrgAvatar } from './OrgChannelList';
 import { useHasBoard } from './useBoardOwner';
+import { OrgBrief } from './OrgBrief';
+import { briefUnread, markBriefSeen, readBriefFolded, readTopView, writeBriefFolded, writeTopView, type OrgTopView } from './org-brief-model';
 import {
   mainTeamColumns, teamColumns, type ChannelRow, type OrgAlertView, type TeamColumn,
 } from './org-channels-model';
@@ -183,6 +185,16 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabChange, onSel
   /** The chat's Inbox tab, asked for by Answer on a letter (SessionPanel inboxRequest), for the
    *  session it was asked of: a replaced session's new panel does not reopen it. */
   const [chatInbox, setChatInbox] = useState<{ sid: string; n: number } | null>(null);
+  /** Above the chat: Status (Latest and Needs you) or the Brief its lead or Main keeps (OrgBrief). */
+  const [topPick, setTopPick] = useState<OrgTopView>(readTopView);
+  const [briefFolded, setBriefFolded] = useState(readBriefFolded);
+  const keepsBrief = contact?.org_role === 'main' || contact?.org_role === 'lead';
+  const topView: OrgTopView = keepsBrief ? topPick : 'status';
+  const brief = keepsBrief ? contact?.brief : undefined;
+  const pickTop = (v: OrgTopView) => { setTopPick(v); writeTopView(v); };
+  // Read while shown: the dot on the Brief tab is for a rewrite the user has not seen.
+  useEffect(() => { if (topView === 'brief' && contact && brief?.at) markBriefSeen(contact.id, brief.at); }, [topView, contact, brief?.at]);
+  const briefNew = topView === 'status' && !!contact && briefUnread(contact.id, brief?.at);
   const title = row.kind === 'main' ? 'CEO' : row.contactTitle;
   // Main is always someone to talk to: its task is made by the first chat.
   const canTalk = row.kind === 'main' || !!row.contactId || !!row.node?.needsLead;
@@ -304,12 +316,37 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabChange, onSel
           )}
         </div>
       </header>
-      {/* The time first: a long line is cut at its end. */}
-      <div className="org-detail-latest" data-testid="org-detail-latest" title={row.latestTask ? `${row.latestTask}: ${row.latest}` : row.latest}>
-        <span className="org-muted">Latest{row.kind === 'project' && row.latestAt > 0 ? ` · ${timeAgo(new Date(row.latestAt).toISOString(), { now })}` : ''}</span> {row.latest}
-        {row.latestTask && <span className="org-muted"> · {row.latestTask}</span>}
+      <div className={`org-top${keepsBrief ? ' has-switch' : ''}`} data-testid="org-top" data-view={topView}>
+        {keepsBrief && (
+          <div className="org-top-switch" role="group" aria-label="Above the chat">
+            <button type="button" aria-pressed={topView === 'status'} className={topView === 'status' ? 'is-on' : ''} data-testid="org-top-status" onClick={() => pickTop('status')}>Status</button>
+            <button type="button" aria-pressed={topView === 'brief'} className={topView === 'brief' ? 'is-on' : ''} data-testid="org-top-brief" onClick={() => pickTop('brief')}>
+              Brief{briefNew && <i className="org-top-new" data-testid="org-top-brief-new"><span className="org-sr-only">, rewritten since you read it</span></i>}
+            </button>
+          </div>
+        )}
+        {topView === 'status' ? (
+          /* The time first: a long line is cut at its end. */
+          <div className="org-detail-latest" data-testid="org-detail-latest" title={row.latestTask ? `${row.latestTask}: ${row.latest}` : row.latest}>
+            <span className="org-muted">Latest{row.kind === 'project' && row.latestAt > 0 ? ` · ${timeAgo(new Date(row.latestAt).toISOString(), { now })}` : ''}</span> {row.latest}
+            {row.latestTask && <span className="org-muted"> · {row.latestTask}</span>}
+          </div>
+        ) : (
+          <div className="org-top-brief-head">
+            <span className="org-muted">{`${title}'s Brief`}</span>
+            {brief?.text && (
+              <button type="button" className="org-top-fold" data-testid="org-brief-fold" aria-expanded={!briefFolded} onClick={() => { setBriefFolded(!briefFolded); writeBriefFolded(!briefFolded); }}>
+                {briefFolded ? 'Show all' : 'Fold'}
+              </button>
+            )}
+          </div>
+        )}
       </div>
-      {/* On the chat, the contact's own prompt is in view already; its letter or choice is not, so it stays. */}
+      {topView === 'brief' && (
+        <OrgBrief owner={contact} tasks={tasks} name={title} onOpenTask={openChip} now={now} folded={briefFolded} />
+      )}
+      {/* On the chat, the contact's own prompt is in view already; its letter or choice is not, so it stays.
+          Both views keep it: what needs the user never hides behind the Brief. */}
       {alertsShown.length > 0 && (
         <AlertList alerts={alertsShown} tasks={tasks} onOpen={openAlert} onQuote={quoteAlert} canQuote={!!sessionId} onAnswered={onAnswered} compact={shown === 'chat'} />
       )}

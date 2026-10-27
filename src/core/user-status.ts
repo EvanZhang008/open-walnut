@@ -259,3 +259,57 @@ export function userStatusLine(c: UserStatusCounts, opts: { withDone?: boolean }
   if (opts.withDone !== false) parts.push(`${c.done} done`);
   return parts.join(' · ');
 }
+
+// ── The Brief (FOR_USER_BRIEF): Main's or a lead's short letter to the user ──
+
+/** What the session wrote, and when (Task.brief). */
+export interface TaskBrief { text: string; at: string }
+
+/** The longest Brief kept: a dozen short lines, not a document. */
+export const BRIEF_MAX_CHARS = 2400;
+
+/** The fields the Brief's team and its moves are read from. */
+export interface BriefTask {
+  id: string;
+  title: string;
+  phase: string;
+  project?: string;
+  parent_task_id?: string;
+  org_role?: string;
+  org_leads?: readonly string[];
+  phase_changed_at?: string;
+}
+
+/**
+ * The work a Brief is about. A lead's: every task in the projects it leads and every task below
+ * it. Main's: the leads and every task below Main. Never the owner itself.
+ */
+export function briefTeam<T extends BriefTask>(owner: BriefTask, tasks: readonly T[]): T[] {
+  const byId = new Map(tasks.map((t) => [t.id, t] as const));
+  const below = (t: T): boolean => {
+    let cur: T | undefined = t;
+    for (let hops = 0; cur?.parent_task_id && hops < 12; hops++) {
+      if (cur.parent_task_id === owner.id) return true;
+      cur = byId.get(cur.parent_task_id);
+    }
+    return false;
+  };
+  // Keyed as the Org tree keys projects (org-tree.ts projectKey); the Inbox ('') is no one's team.
+  const key = (p: string | undefined) => (p ?? '').trim().toLowerCase();
+  const projects = owner.org_role === 'lead'
+    ? new Set([owner.project, ...(owner.org_leads ?? [])].map(key).filter(Boolean)) : null;
+  return tasks.filter((t) => t.id !== owner.id && (
+    below(t)
+    || (owner.org_role === 'main' ? t.org_role === 'lead' : !!projects && projects.has(key(t.project)) && t.org_role !== 'main')
+  ));
+}
+
+/** The team's tasks whose phase moved after `sinceMs` (the Brief's time), newest first. */
+export function briefMoves<T extends BriefTask>(owner: BriefTask, tasks: readonly T[], sinceMs: number, limit = 8): Array<{ task: T; at: number }> {
+  if (!Number.isFinite(sinceMs)) return [];
+  return briefTeam(owner, tasks)
+    .map((task) => ({ task, at: task.phase_changed_at ? Date.parse(task.phase_changed_at) : NaN }))
+    .filter((m) => Number.isFinite(m.at) && m.at > sinceMs)
+    .sort((a, b) => b.at - a.at)
+    .slice(0, limit);
+}

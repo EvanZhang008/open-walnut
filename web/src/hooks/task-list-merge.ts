@@ -37,6 +37,8 @@ export function tasksShallowEqual(a: Task, b: Task): boolean {
   if ((a as { replica_sync?: unknown }).replica_sync !== (b as { replica_sync?: unknown }).replica_sync) return false;
   // The one status the user sees (src/core/user-status.ts): small, compared whole.
   if (JSON.stringify(a.user_status ?? null) !== JSON.stringify(b.user_status ?? null)) return false;
+  // Main's or a lead's Brief (Org page): its rewrite leaves updated_at alone.
+  if (a.brief?.at !== b.brief?.at || a.brief?.text !== b.brief?.text) return false;
   const arrKeys: (keyof Task)[] = ['tags', 'depends_on'];
   for (const k of arrKeys) {
     const av = (a[k] as string[] | undefined) ?? [];
