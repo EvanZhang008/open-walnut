@@ -13,7 +13,7 @@
  *
  * Two real dictation round trips run in Chromium only (a fake capture device, canned
  * engine answers, the same recipe as session-voice-selection.spec.ts): the inbox
- * letter reply box and the Board card composer. The words must land in that box and
+ * letter reply box and the Board's kanban card composer. The words must land in that box and
  * nowhere else, a send must clear them, and a recording cut off by a send must stop
  * and post no more audio.
  *
@@ -338,12 +338,11 @@ test.describe('Inbox letter', () => {
   })
 })
 
-// ── Board: project card, kanban composer, kanban summary ────────────────────
+// ── Board: kanban composer, kanban summary ───────────────────────────────────
 
 test.describe('Board', () => {
   const made: string[] = []
   const seed = { project: '', leader: '', leaderSid: '', worker: '', workerSid: '' }
-  const AREA = 'voice-area'
 
   test.beforeAll(async ({ request }) => {
     test.setTimeout(240_000)
@@ -355,9 +354,8 @@ test.describe('Board', () => {
     seed.worker = await createTask(request, made, { title: `Voice mic worker ${STAMP}`, project: seed.project, parent_task_id: seed.leader })
     seed.workerSid = await startSession(request, cwd, seed.worker, 'snapshot-clean-turn:Worker ready')
     const lead = { 'x-walnut-caller-sid': seed.leaderSid }
-    // The leader's first card write makes the board file; a project needs one.
+    // The leader's first card write makes the board file.
     await put(request, `/api/v1/tasks/${seed.leader}/board/cards/${seed.worker}`, { summary: 'Checking the export window.' }, lead)
-    await put(request, `/api/v1/tasks/${seed.leader}/board/projects/${AREA}`, { title: 'Export lag', status: 'wip', tasks: [seed.worker] }, lead)
   })
 
   test.afterAll(async ({ request }) => {
@@ -379,16 +377,6 @@ test.describe('Board', () => {
     return { pane, panel }
   }
 
-  async function openAsk(pane: Locator): Promise<Locator> {
-    await expect(pane.getByTestId('board-view-projects')).toHaveAttribute('aria-pressed', 'true', { timeout: 30_000 })
-    const card = pane.locator(`[data-testid="board-card"][data-card-id="${AREA}"]`)
-    await expect(card).toBeVisible({ timeout: 30_000 })
-    await card.getByTestId('board-card-ask').click()
-    const composer = card.getByTestId('board-card-composer')
-    await expect(composer.locator('textarea')).toBeFocused()
-    return composer
-  }
-
   async function cardsView(pane: Locator): Promise<Locator> {
     await pane.getByTestId('board-view-cards').click()
     await expect(pane.getByTestId('board-kanban')).toBeVisible({ timeout: 30_000 })
@@ -396,13 +384,6 @@ test.describe('Board', () => {
     await expect(card).toBeVisible({ timeout: 30_000 })
     return card
   }
-
-  test('the project card "Ask a question" composer has the mic in its row', async ({ page }) => {
-    test.setTimeout(180_000)
-    const { pane } = await openBoard(page)
-    const composer = await openAsk(pane)
-    await expectBoxMic(page, 'board-card-ask', composer.locator('textarea'), composer)
-  })
 
   test('the kanban card composer (key m) has the mic in its row', async ({ page }) => {
     test.setTimeout(180_000)
@@ -433,29 +414,45 @@ test.describe('Board', () => {
     await expect(editor).toHaveCount(0)
   })
 
-  test('dictation into the card composer lands there, a send clears it, a send mid-recording stops it', async ({ page, browserName }) => {
+  test('dictation into the kanban card composer lands there, a send clears it, a send mid-recording stops it', async ({ page, browserName }) => {
     test.skip(browserName !== 'chromium', 'needs a fake audio capture device')
     test.setTimeout(240_000)
     await page.context().grantPermissions(['microphone'])
     const seen = await stubDictation(page)
     const { pane, panel } = await openBoard(page)
-    const composer = await openAsk(pane)
-    const box = composer.locator('textarea')
-    const mic = composer.locator('.box-mic .mic-btn')
-    await dictateInto(page, box, mic, 'bpc-composer-input', seen)
+    const card = await cardsView(pane)
+    const openComposer = async () => {
+      await card.focus()
+      await page.keyboard.press('m')
+      const composer = card.getByTestId('kanban-card-composer')
+      await expect(composer.getByTestId('kanban-card-composer-input')).toBeVisible({ timeout: 15_000 })
+      return composer
+    }
+    const composer = await openComposer()
+    const box = composer.getByTestId('kanban-card-composer-input')
+    await dictateInto(page, box, composer.locator('.box-mic .mic-btn'), 'kanban-composer-input', seen)
     await expect(panel.locator('.chat-input-textarea').first(), 'the session composer stays empty').toHaveValue('')
     await crop(page, 'dictation-board-landed', await rectOf(composer, 'card composer'))
-    const card = pane.locator(`[data-testid="board-card"][data-card-id="${AREA}"]`)
-    await composer.getByTestId('board-card-send').click()
-    await expect(box).toHaveValue('', { timeout: 20_000 })
-    await expect(card.getByTestId('board-card-message').first()).toBeVisible({ timeout: 20_000 })
-    // The thread now has a message, so the composer stays open as its reply box.
-    const reply = card.getByTestId('board-card-composer')
-    await expect(reply).toBeVisible()
-    await sendCutsRecording(page, reply.locator('textarea'), reply.locator('.box-mic .mic-btn'),
-      () => reply.getByTestId('board-card-send').click(), seen)
+    await composer.getByTestId('kanban-card-composer-send').click()
+    await expect(composer).toHaveCount(0, { timeout: 20_000 })
+    // A second message, sent while the mic still records: the send takes the typed text, closes
+    // the composer, stops the recording, and no more audio is posted.
+    const again = await openComposer()
+    const input = again.getByTestId('kanban-card-composer-input')
+    const mic = again.locator('.box-mic .mic-btn')
+    await input.fill(`sent while recording ${STAMP}`)
+    await mic.click()
+    await expect(mic).toHaveClass(/mic-recording/, { timeout: 15_000 })
+    await page.waitForTimeout(500)
+    await again.getByTestId('kanban-card-composer-send').click()
+    await expect(again).toHaveCount(0, { timeout: 20_000 })
+    await expect(page.locator('.mic-recording')).toHaveCount(0, { timeout: 10_000 })
+    const posts = seen.transcribe.length + seen.draft.length
+    await page.waitForTimeout(5000)
+    expect(seen.transcribe.length + seen.draft.length, 'no audio posted after the send cut the recording').toBe(posts)
+    expect(await boxesHoldingWords(page), 'no late words landed anywhere').toEqual([])
     await expect(panel.locator('.chat-input-textarea').first()).toHaveValue('')
-    await crop(page, 'dictation-board-after-send', await rectOf(card, 'project card'))
+    await crop(page, 'dictation-board-after-send', await rectOf(card, 'kanban card'))
   })
 })
 
