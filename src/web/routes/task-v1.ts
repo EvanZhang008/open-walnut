@@ -321,7 +321,10 @@ taskV1Router.post('/tasks/:id/start', async (req: Request, res: Response, next: 
         return
       }
       if (err instanceof QuickStartError) {
-        sendError(res, err.statusCode, launchErrorCode(err.statusCode), err.message)
+        // A lead that handed its project over: its own code and where to send instead (org/retired-lead.ts).
+        const { code, ...detail } = err.body ?? {}
+        if (code === 'lead_handed_over') sendError(res, err.statusCode, code, err.message, detail)
+        else sendError(res, err.statusCode, launchErrorCode(err.statusCode), err.message)
         return
       }
       if (err instanceof SubtaskLimitError) {

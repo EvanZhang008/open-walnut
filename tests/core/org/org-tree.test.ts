@@ -9,7 +9,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   DIGEST_FOLD_MS, buildOrgTree, findProjectNode, formatAlertLine, formatDigestLine, isOrgMember, leadsAlso, orgDigest, pickLead, pickMain,
-  pickOwnLead, planOrgNote, type OrgAlert, type OrgTaskLike,
+  pickOwnLead, planOrgNote, successorOf, type OrgAlert, type OrgTaskLike,
 } from '../../../src/core/org/org-tree.js'
 import * as viaAlias from '@open-walnut/org-tree'
 import { isAskTask } from '../../../src/core/sessions/caller-placement.js'
@@ -336,5 +336,32 @@ describe('when the main agent\'s note goes (planOrgNote)', () => {
       expect(seeds.needsLead).toBe(true)
       expect(pickLead([b1, b2, vp], 'Seeds')?.id).toBe(vp.id)
     })
+  })
+})
+
+describe('successorOf: the lead that took a handed-over project', () => {
+  const lead = (project: string, over: Partial<OrgTaskLike> = {}) => t({ title: `${project} lead`, project, org_role: 'lead', ...over })
+
+  it('names the VP the project was put under, whether the old lead is closed or opened again', () => {
+    const old = lead('Seeds', { phase: 'COMPLETE' })
+    const vp = lead('Garden', { org_leads: ['Seeds'], phase: 'IN_PROGRESS' })
+    expect(successorOf([old, vp], old)?.id).toBe(vp.id)
+    const reopened = { ...old, phase: 'NEED_ACTION' }
+    expect(successorOf([reopened, vp], reopened)?.id).toBe(vp.id)
+  })
+
+  it('is nothing while the lead leads its project, or leads another one, and for a non-lead', () => {
+    const own = lead('Seeds')
+    expect(successorOf([own], own)).toBeUndefined()
+    // The VP others are under still leads its own project.
+    const vp = lead('Garden', { org_leads: ['Seeds'] })
+    expect(successorOf([own, vp], vp)).toBeUndefined()
+    // It still leads a project of its own list: not on its way out.
+    const busy = lead('Seeds', { org_leads: ['Pond'] })
+    expect(successorOf([busy, vp], busy)).toBeUndefined()
+    const worker = t({ project: 'Seeds' })
+    expect(successorOf([worker, vp], worker)).toBeUndefined()
+    const inbox = lead('')
+    expect(successorOf([inbox, vp], inbox)).toBeUndefined()
   })
 })

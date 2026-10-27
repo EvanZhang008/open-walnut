@@ -41,6 +41,7 @@ vi.mock('../../src/core/session-tracker.js', () => ({
 const getTask = vi.fn();
 vi.mock('../../src/core/task-manager.js', () => ({
   getTask: (...args: unknown[]) => getTask(...args),
+  listTasks: async () => tasks,
 }));
 
 const sendMessageToSession = vi.fn();
@@ -83,7 +84,10 @@ function rec(claudeSessionId: string, overrides: Partial<SessionRecord> = {}): S
 /** The in-memory session registry every mocked tracker call reads. */
 let sessions: SessionRecord[] = [];
 /** Tasks the stand-in getTask can resolve (same contract as the real one). */
-let tasks: Array<{ id: string; title: string; session_id?: string; parent_task_id?: string; phase?: string }> = [];
+let tasks: Array<{
+  id: string; title: string; session_id?: string; parent_task_id?: string; phase?: string;
+  org_role?: 'main' | 'lead'; project?: string; org_leads?: string[];
+}> = [];
 
 /** Grabs the (sid, busText, opts) of the Nth sendMessageToSession call. */
 function dispatched(n = 0): { sid: string; busText: string; opts: Record<string, unknown> } {
@@ -757,6 +761,79 @@ describe('performSessionSend — in_reply_to routes to the requester’s CURRENT
       'origin_session_gone', 410,
     );
     expect(sendMessageToSession).not.toHaveBeenCalled();
+  });
+});
+
+describe('performSessionSend — a lead that handed its project over', () => {
+  // 2026-10-26: Main sent the user's go for six stack deletions to the old lead 85 minutes after
+  // it handed its project over, and both leads followed the deletions.
+  const OLD = 'sess-old-lead';
+  const VP = 'sess-vp-lead';
+  const MAIN = 'sess-main';
+
+  beforeEach(() => {
+    sessions = [
+      rec(OLD, { title: 'Seeds lead', taskId: 'task-old-lead' }),
+      rec(VP, { title: 'Garden lead', taskId: 'task-vp-lead' }),
+      rec(MAIN, { title: 'Main', taskId: 'task-main' }),
+    ];
+    tasks = [
+      { id: 'task-old-lead', title: 'Seeds lead', phase: 'COMPLETE', org_role: 'lead', project: 'Seeds' },
+      { id: 'task-vp-lead', title: 'Garden lead', phase: 'IN_PROGRESS', org_role: 'lead', project: 'Garden', org_leads: ['Seeds'] },
+      { id: 'task-main', title: 'Main', phase: 'IN_PROGRESS', org_role: 'main' },
+    ];
+  });
+
+  it('refuses a session\'s send with a pointer to the lead that took the project over', async () => {
+    for (const to of [OLD, 'task-old-lead']) {
+      const err = await expectSendError(performSessionSend({ to, text: 'delete the six stacks', callerSid: MAIN }), 'lead_handed_over', 409);
+      expect(err.message).toContain('"Seeds lead" (task-old-lead) no longer leads Seeds');
+      expect(err.message).toContain('"Garden lead" (task-vp-lead)');
+      expect(err.message).toContain('task_send to:"task-vp-lead"');
+      expect(err.detail).toEqual({ taskId: 'task-old-lead', currentLeadTaskId: 'task-vp-lead', project: 'Seeds' });
+    }
+    // Reopened (the user wrote to it), it still points on.
+    tasks[0]!.phase = 'NEED_ACTION';
+    await expectSendError(performSessionSend({ to: OLD, text: 'status?', callerSid: MAIN }), 'lead_handed_over', 409);
+    expect(sendMessageToSession).not.toHaveBeenCalled();
+    expect(enqueueMessage).not.toHaveBeenCalled();
+  });
+
+  it('lets the human, the lead that took over, and a forced send with a reason through', async () => {
+    await performSessionSend({ to: OLD, text: 'from the human' });
+    // The new lead hears the complete-task rule, not a pointer to itself.
+    await expectSendError(performSessionSend({ to: OLD, text: 'one question', callerSid: VP, expectReply: false }), 'target_complete', 409);
+    await performSessionSend({
+      to: OLD, text: 'one question', callerSid: VP, expectReply: false, force: true, reason: 'its handover left out the stack list',
+    });
+    await performSessionSend({
+      to: OLD, text: 'undo your half', callerSid: MAIN, expectReply: false, force: true, reason: 'it started a deletion the new lead must not repeat',
+    });
+    expect(sendMessageToSession).toHaveBeenCalledTimes(3);
+  });
+
+  it('an open old lead: force needs a reason, which leads the text', async () => {
+    tasks[0]!.phase = 'IN_PROGRESS';
+    await expectSendError(performSessionSend({ to: OLD, text: 'undo it', callerSid: MAIN, expectReply: false, force: true }), 'bad_request', 400);
+    await performSessionSend({
+      to: OLD, text: 'stop the deletion you began', callerSid: MAIN, expectReply: false, force: true, reason: 'it started a deletion the new lead must not repeat',
+    });
+    expect(deliveredText()).toContain('This comes to you although you no longer lead Seeds. Why: it started a deletion the new lead must not repeat');
+    expect(deliveredText()).toContain('stop the deletion you began');
+  });
+
+  it('a lead that took over and is complete itself: the pointer says how to reach it', async () => {
+    tasks[1]!.phase = 'COMPLETE';
+    const err = await expectSendError(performSessionSend({ to: OLD, text: 'status?', callerSid: MAIN }), 'lead_handed_over', 409);
+    expect(err.message).toContain('That lead\'s task is complete: if Seeds needs it to act, send to task-vp-lead with force:true');
+    expect(err.message).not.toContain('task_send to:"task-vp-lead"');
+  });
+
+  it('a lead given its project back takes messages again', async () => {
+    tasks[1]!.org_leads = [];
+    tasks[0]!.phase = 'IN_PROGRESS';
+    const result = await performSessionSend({ to: OLD, text: 'welcome back', callerSid: MAIN, expectReply: false });
+    expect(result.delivery).toBe('queued');
   });
 });
 

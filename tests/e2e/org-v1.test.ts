@@ -27,7 +27,8 @@ import { updateConfig } from '../../src/core/config-manager.js'
 import { createSessionRecord, updateSessionRecord } from '../../src/core/session-tracker.js'
 import { _setDigestFoldMsForTesting, buildHandoverText, pendingOrgDigest } from '../../src/core/org/org-store.js'
 import { deleteMessage, getQueue } from '../../src/core/session-message-queue.js'
-import { __pendingHandovers, __setHandoverSettleMs } from '../../src/core/org/handover-close.js'
+import { __pendingHandovers, __setHandoverSettleMs, cancelHandovers, closeAfterHandover } from '../../src/core/org/handover-close.js'
+import { pendingRetiredLeadNote } from '../../src/core/org/retired-lead.js'
 import { bus, EventNames } from '../../src/core/event-bus.js'
 import { taskDepth } from '../../src/core/sessions/subtask-limits.js'
 import { buildSessionContext } from '../../src/core/sessions/session-context.js'
@@ -476,6 +477,63 @@ describe('/api/v1/org', () => {
         expect(__pendingHandovers()).toHaveLength(0)
       } finally {
         __setHandoverSettleMs()
+      }
+    })
+
+    it('a lead that handed over: an agent\'s org_send by its id reaches the VP, a send or start points on, and what still reaches it says so', async () => {
+      // 2026-10-26: Main sent the user's go for six deletions to the old lead after its handover, and
+      // a message its host delivered while the Mac was away had reopened it: both leads followed it.
+      const seedsLead = (await listTasks()).find((t) => t.org_role === 'lead' && t.project === 'Seeds')!
+      const gardenLead = (await listTasks()).find((t) => t.org_role === 'lead' && t.project === 'Garden')!
+      expect(seedsLead.phase).toBe('COMPLETE')
+      const peerSid = '77777777-8888-4999-8aaa-bbbbbbbbbbbb'
+      const vpSid = '88888888-9999-4aaa-8bbb-cccccccccccc'
+      const peer = (await addTask({ title: 'Count the seed packets', project: 'Garden' })).task
+      await createSessionRecord(peerSid, peer.id, 'Garden', WALNUT_HOME)
+      await createSessionRecord(vpSid, gardenLead.id, 'Garden', WALNUT_HOME)
+      const as = async (sid: string | undefined, method: string, p: string, body: unknown) => {
+        const res = await fetch(`http://localhost:${port}/api/v1${p}`, {
+          method, headers: { 'content-type': 'application/json', ...(sid ? { 'x-walnut-caller-sid': sid } : {}) }, body: JSON.stringify(body),
+        })
+        return { status: res.status, body: JSON.stringify(await res.json().catch(() => ({}))) }
+      }
+      try {
+        // An agent's org_send by the old id reaches the lead that took over.
+        const contact = await as(peerSid, 'POST', '/org/contact', { to: seedsLead.id })
+        expect(contact.body).toContain(`"task":{"id":"${gardenLead.id}"`)
+        expect(contact.body).toContain(`"handedOverBy":{"id":"${seedsLead.id}"`)
+        // The human, and the lead that took over, reach the old lead as it is.
+        expect((await as(undefined, 'POST', '/org/contact', { to: seedsLead.id })).body).toContain(`"task":{"id":"${seedsLead.id}"`)
+        expect((await as(vpSid, 'POST', '/org/contact', { to: seedsLead.id })).body).toContain(`"task":{"id":"${seedsLead.id}"`)
+
+        // A peer's send, and its start, point on; nothing reaches the old lead.
+        const sent = await as(peerSid, 'POST', '/messages', { to: seedsLead.id, text: 'Delete the six stacks', expect_reply: false })
+        expect(sent.status).toBe(409)
+        expect(sent.body).toContain('lead_handed_over')
+        expect(sent.body).toContain(gardenLead.id)
+        const started = await as(peerSid, 'POST', `/tasks/${seedsLead.id}/start`, { message: 'Delete the six stacks' })
+        expect(started.status).toBe(409)
+        expect(started.body).toContain('"code":"lead_handed_over"')
+        expect(started.body).toContain(`"currentLeadTaskId":"${gardenLead.id}"`)
+        expect((await getTask(seedsLead.id)).phase).toBe('COMPLETE')
+        expect((await getQueue(leadSid)).some((m) => m.message.includes('six stacks'))).toBe(false)
+
+        // Whatever still reaches it (the user's own message, a forced send) carries the note, once.
+        const note = await pendingRetiredLeadNote(leadSid, 'Delete the six stacks')
+        expect(note).toContain('outcome="handed-over"')
+        expect(note).toContain(`You no longer lead Seeds: the user put it under "${gardenLead.title}" (${gardenLead.id})`)
+        expect(note).toContain('task_complete')
+        expect(await pendingRetiredLeadNote(leadSid, note!)).toBeNull()
+        // Never on the handover notice, nor while Walnut closes it after that turn (a give-back keeps it open).
+        expect(await pendingRetiredLeadNote(leadSid, '<walnut-message kind="notification" outcome="handover">\nhand over\n</walnut-message>')).toBeNull()
+        closeAfterHandover({ taskId: seedsLead.id, project: 'Seeds', sessionId: leadSid })
+        expect(await pendingRetiredLeadNote(leadSid, 'hello')).toBeNull()
+        await cancelHandovers('Seeds')
+        expect(__pendingHandovers()).toHaveLength(0)
+        // The lead that leads now hears nothing of the kind.
+        expect(await pendingRetiredLeadNote(peerSid, 'hello')).toBeNull()
+      } finally {
+        await deleteTask(peer.id).catch(() => undefined)
       }
     })
 

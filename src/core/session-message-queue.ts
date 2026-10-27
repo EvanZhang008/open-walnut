@@ -222,9 +222,12 @@ export async function sendMessageToSession(
   // A peer's message into a waiting task says the wait comes back (task-wait-resume.ts).
   const { waitNoteFor } = await import('./task-wait-resume.js');
   const waitNote = await waitNoteFor(sessionId, opts?.source, opts?.endsWait === true);
+  // A lead that handed its project over hears so on every message that still reaches it (org/retired-lead.ts).
+  const { pendingRetiredLeadNote } = await import('./org/retired-lead.js');
+  const retiredNote = await pendingRetiredLeadNote(sessionId, rawBody);
   const outputMode = await prepareAutomatedOutputModeSend(sessionId, opts?.source, rawBody);
   const body = outputMode?.enqueueText ?? rawBody;
-  const notes = [place?.text, restart?.text, digest?.text, appState?.text, waitNote].filter(Boolean).join('\n\n');
+  const notes = [place?.text, restart?.text, digest?.text, appState?.text, waitNote, retiredNote].filter(Boolean).join('\n\n');
   const enqueueText = notes ? `${notes}\n\n${body}` : body;
   let msg: QueuedMessage;
   try {

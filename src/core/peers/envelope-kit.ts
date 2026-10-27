@@ -107,7 +107,12 @@ export interface EnvelopeKit {
     args: { force?: unknown; reason?: unknown },
     mode: 'send' | 'reply',
   ): CompleteTargetCheck;
+  handedOverPointer(lead: HandedOverLead, successor: HandedOverSuccessor): string;
 }
+
+/** A lead whose project the user put under another VP, and the lead that took it (org/retired-lead.ts). */
+export interface HandedOverLead { id: string; title: string; project: string }
+export interface HandedOverSuccessor { id: string; title: string; phase?: string }
 
 /** A session's send to a COMPLETE task: refused, or let through with the reason it gave. */
 export type CompleteTargetCheck =
@@ -461,6 +466,22 @@ export function createEnvelopeKit(): EnvelopeKit {
     };
   }
 
+  /**
+   * What a session sending to a lead that handed its project over is told instead: where to send.
+   * One text for the server (session-send-core.ts) and a host answering while it is away
+   * (offline-host-core.ts).
+   */
+  function handedOverPointer(lead: HandedOverLead, successor: HandedOverSuccessor): string {
+    const flat = (t: string) => t.replace(/\s+/g, ' ').trim().slice(0, TITLE_MAX);
+    const head = `"${flat(lead.title)}" (${lead.id}) no longer leads ${lead.project}: the user put it under `
+      + `"${flat(successor.title)}" (${successor.id}), which leads it now.`;
+    return successor.phase === 'COMPLETE'
+      ? `${head} That lead's task is complete: if ${lead.project} needs it to act, send to ${successor.id} with force:true `
+        + 'and reason:"<why it must act>".'
+      : `${head} Send it to ${successor.id} (task_send to:"${successor.id}"), or org_send to:"${lead.project}", `
+        + 'which always reaches the current lead.';
+  }
+
   return {
     ATTR_ORDER,
     NOTICE_LAST_MESSAGE_MAX,
@@ -478,5 +499,6 @@ export function createEnvelopeKit(): EnvelopeKit {
     buildRequestNotification,
     buildSubtaskNotification,
     checkCompleteTarget,
+    handedOverPointer,
   };
 }

@@ -52,7 +52,7 @@ export class SendError extends Error {
       | 'bad_request' | 'unknown_target' | 'ambiguous_target' | 'task_has_no_session'
       | 'target_archived' | 'task_starting' | 'self_send' | 'queue_full' | 'throttled' | 'delivery_failed'
       | 'unknown_request' | 'request_already_settled' | 'not_request_target' | 'origin_session_gone'
-      | 'parent_complete' | 'target_complete',
+      | 'parent_complete' | 'target_complete' | 'lead_handed_over',
     message: string,
     public statusCode = 400,
     public detail?: Record<string, unknown>,
@@ -327,6 +327,36 @@ async function refuseSendToCompleteParent(caller: CallerIdentity, targetTaskId: 
 }
 
 /**
+ * A session's message to a lead that handed its project over goes to the lead that took it over
+ * (org/retired-lead.ts; 2026-10-26, Main's go for six stack deletions reached the old lead 85
+ * minutes after its handover, and both leads followed it). Refused with that pointer, unless the
+ * old lead itself must act (`force` with a reason, which then leads the text; a COMPLETE one's
+ * reason is admitCompleteTarget's to lead) or the caller is the lead that took over. The human
+ * always reaches it. Returns the text to deliver.
+ */
+async function admitRetiredLead(caller: CallerIdentity, targetTaskId: string | undefined, input: SessionSendInput, text: string): Promise<string> {
+  if (caller.kind !== 'session' || !targetTaskId) return text;
+  const { retiredLeadRefusal } = await import('../org/retired-lead.js');
+  const refusal = await retiredLeadRefusal(caller.record.taskId, targetTaskId);
+  if (!refusal) return text;
+  if (input.force !== true) {
+    throw new SendError('lead_handed_over',
+      `${refusal.message} If the old lead itself must act, pass force:true with reason:"<why it, not the lead that took over>".`,
+      409, refusal.detail);
+  }
+  const reason = (input.reason ?? '').replace(/\s+/g, ' ').trim();
+  if (reason.length < RETIRED_LEAD_REASON_MIN) {
+    throw new SendError('bad_request',
+      `force:true needs a reason (at least ${RETIRED_LEAD_REASON_MIN} characters) saying why "${refusal.retired.lead.title}" `
+      + `(${refusal.retired.lead.id}), which no longer leads ${refusal.detail.project}, must act rather than the lead that took over.`, 400);
+  }
+  if (refusal.retired.lead.phase === 'COMPLETE') return text;
+  return `This comes to you although you no longer lead ${refusal.detail.project}. Why: ${reason.slice(0, 300)}\n\n${text}`;
+}
+
+const RETIRED_LEAD_REASON_MIN = 10;
+
+/**
  * A session's message to a COMPLETE task (envelope-kit.ts checkCompleteTarget):
  * refused unless it passes `force` with a reason, which then leads the text.
  * Returns the text to deliver. The human, an anonymous process, and a send to a
@@ -379,6 +409,7 @@ export async function performSessionSend(input: SessionSendInput): Promise<Sessi
     if (err instanceof SendError && err.code === 'task_has_no_session') {
       const noSessionTask = typeof err.detail?.taskId === 'string' ? err.detail.taskId : undefined;
       await refuseSendToCompleteParent(caller, noSessionTask);
+      await admitRetiredLead(caller, noSessionTask, input, text);
       // A complete task says so, not "not started"; forced, task_start is the way on.
       await admitCompleteTarget(caller, noSessionTask, input, text, 'send');
     }
@@ -393,7 +424,8 @@ export async function performSessionSend(input: SessionSendInput): Promise<Sessi
     throw new SendError('self_send', 'target resolves to the calling session itself');
   }
   await refuseSendToCompleteParent(caller, target.taskId ?? target.session.taskId);
-  const body = await admitCompleteTarget(caller, target.taskId ?? target.session.taskId, input, text, 'send');
+  const admitted = await admitRetiredLead(caller, target.taskId ?? target.session.taskId, input, text);
+  const body = await admitCompleteTarget(caller, target.taskId ?? target.session.taskId, input, admitted, 'send');
 
   // Envelope + throttle apply exactly when the SPEAKER is not the human:
   // another session (named peer-note) or an unidentified process (anonymous).

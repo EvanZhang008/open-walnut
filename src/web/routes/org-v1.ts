@@ -105,10 +105,18 @@ orgV1Router.post('/org/contact', async (req: Request, res: Response, next: NextF
   try {
     primaryOnly('Org contacts are resolved')
     const to = typeof req.body?.to === 'string' ? req.body.to : ''
-    const contact = await resolveOrgContact(to)
+    // Who asks decides whether a lead that handed over is passed by (org/retired-lead.ts).
+    const rawSid = req.headers['x-walnut-caller-sid']
+    const { resolveCaller } = await import('../../core/sessions/session-send-core.js')
+    const caller = await resolveCaller(Array.isArray(rawSid) ? rawSid[0] : rawSid)
+    const askerTaskId = caller.kind === 'human' ? undefined : caller.kind === 'session' ? caller.record.taskId ?? '' : ''
+    const contact = await resolveOrgContact(to, { askerTaskId })
     const started = hasSession(contact.task)
     const launch = contact.kind === 'lead' && !started ? await contactLaunch(contact.task) : undefined
-    res.json({ task: brief(contact.task), kind: contact.kind, project: contact.project, started, ...(launch ? { launch } : {}) })
+    res.json({
+      task: brief(contact.task), kind: contact.kind, project: contact.project, started,
+      ...(launch ? { launch } : {}), ...(contact.handedOverBy ? { handedOverBy: contact.handedOverBy } : {}),
+    })
   } catch (err) {
     sendError(res, next, err)
   }

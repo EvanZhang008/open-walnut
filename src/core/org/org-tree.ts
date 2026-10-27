@@ -240,6 +240,18 @@ export function pickLead<T extends OrgTaskLike>(tasks: readonly T[], project: st
   return bestLead(tasks.filter((t) => leadsAlso(t, project))) ?? pickOwnLead(tasks, project);
 }
 
+/**
+ * The lead that took `lead`'s own project over, when the user put that project under another VP:
+ * `lead` then leads nothing (what it led moved with it, org-store.ts moveProjectNow) and is on its
+ * way out. Undefined while it still leads its project or another one.
+ */
+export function successorOf<T extends OrgTaskLike>(tasks: readonly T[], lead: OrgTaskLike): T | undefined {
+  const project = (lead.project ?? '').trim();
+  if (lead.org_role !== 'lead' || !project || lead.org_leads?.length) return undefined;
+  const now = pickLead(tasks, project);
+  return now && now.id !== lead.id && leadsAlso(now, project) ? now : undefined;
+}
+
 function better(a: OrgTaskLike, b: OrgTaskLike): boolean {
   const done = (x: OrgTaskLike) => (x.phase === 'COMPLETE' ? 1 : 0);
   if (done(a) !== done(b)) return done(a) < done(b);

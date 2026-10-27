@@ -49,11 +49,14 @@ defineOp({
   },
   handler: async ({ to, title, text, expect_reply }, call) => {
     const contact = await call('POST', '/org/contact', { to }) as {
-      task?: { id?: string; title?: string }; kind?: string; started?: boolean;
+      task?: { id?: string; title?: string }; kind?: string; started?: boolean; project?: string;
+      handedOverBy?: { id: string; title: string };
     };
     const id = contact?.task?.id;
     if (!id) throw new Error(`No contact for "${String(to)}". Read org_get for the projects.`);
-    const who = `${contact.task?.title ?? id} (${id}, ${contact.kind ?? 'task'})`;
+    // A lead that handed its project over: the message goes to the lead that took it, and the caller is told.
+    const who = `${contact.task?.title ?? id} (${id}, ${contact.kind ?? 'task'})`
+      + (contact.handedOverBy ? `, which took ${contact.project ?? 'the project'} over from "${contact.handedOverBy.title}" (${contact.handedOverBy.id})` : '');
     if (!contact.started) {
       const started = await startTask(id, {
         message: title ? `${String(title)}\n\n${String(text)}` : String(text),

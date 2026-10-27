@@ -19,6 +19,7 @@
  * daemon delivered is never followed by our own "no reply" notice.
  */
 
+import type { RetiredLead } from './org/retired-lead.js';
 import { WALNUT_HOME } from '../constants.js';
 import { log } from '../logging/index.js';
 import type { OfflineRecord } from '../providers/offline-host-core.js';
@@ -782,6 +783,48 @@ async function applyTaken(
 }
 
 /**
+ * A message its host delivered, while this server was away, into a lead that has since handed its
+ * project over (2026-10-26: two minutes after a handover, such a message reopened the old lead, and
+ * it went on working for the project). Its task stays as it was (a complete one stays complete,
+ * off the user's list), and its session hears the note the server puts on every message into such
+ * a lead: it leads nothing now, so it passes the ask on and closes itself if still open.
+ */
+async function tellRetiredLead(retired: RetiredLead, sessionId: string, fromSessionId: string | undefined): Promise<void> {
+  // Several deliveries in one drain: one note says it.
+  const now = Date.now();
+  for (const [sid, at] of retiredLeadToldAt) if (now - at >= RETIRED_LEAD_TELL_GAP_MS) retiredLeadToldAt.delete(sid);
+  if (retiredLeadToldAt.has(sessionId)) return;
+  const taskId = retired.lead.id;
+  try {
+    const [{ retiredLeadNotice }, { getSessionByClaudeId }, { deliverToSession }, { hasPendingHandover }] = await Promise.all([
+      import('./org/retired-lead.js'),
+      import('./session-tracker.js'),
+      import('./sessions/session-send-core.js'),
+      import('./org/handover-close.js'),
+    ]);
+    // Its handover turn: Walnut closes it after that turn, and a give-back meanwhile must leave it open.
+    if (hasPendingHandover(sessionId)) return;
+    // The lead that took over wrote to it: that message is not an ask to pass back to its sender.
+    const from = fromSessionId ? await getSessionByClaudeId(fromSessionId) : undefined;
+    if (from?.taskId && from.taskId === retired.successor.id) return;
+    const session = await getSessionByClaudeId(sessionId);
+    if (!session) return;
+    // The note itself, so a message parked behind a prompt carries it too (the server's rider skips it then).
+    const text = retiredLeadNotice(retired, 'While the Walnut server was away, your host delivered you a message (it is above in this conversation).');
+    await deliverToSession(session, { busText: text, enqueueText: text, source: 'walnut-notify', taskId });
+    retiredLeadToldAt.set(sessionId, now);
+    log.session.info('offline handover: a lead that handed over is told after a delivery', { taskId, sessionId, successorTaskId: retired.successor.id });
+  } catch (err) {
+    log.session.warn('offline handover: could not tell a lead that handed over', {
+      taskId, sessionId, error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+const retiredLeadToldAt = new Map<string, number>();
+const RETIRED_LEAD_TELL_GAP_MS = 10 * 60_000;
+
+/**
  * The host answered "saved, applied when the server reconnects"; when that turns
  * out false, the session that made the write is told, once per session, which
  * changes did not land and why. Best effort: a caller that is gone keeps only
@@ -862,7 +905,16 @@ async function applyRecord(
       if (!taskId) return;
       const { getTask } = await import('./task-manager.js');
       const task = await getTask(taskId).catch(() => null);
-      if (task?.phase !== 'COMPLETE') return;
+      if (!task) return;
+      // A lead that had handed its project over read that message without the note the server
+      // puts on it (org/retired-lead.ts): it is not reopened, and hears the note now.
+      const { retiredLead } = await import('./org/retired-lead.js');
+      const retired = await retiredLead(taskId);
+      if (retired) {
+        await tellRetiredLead(retired, record.toSessionId, record.fromSessionId);
+        return;
+      }
+      if (task.phase !== 'COMPLETE') return;
       const { applySessionPhase } = await import('./phase.js');
       await applySessionPhase(taskId, 'session:input', 'offline-handover', { sessionId: record.toSessionId, reopenTerminal: true });
       return;

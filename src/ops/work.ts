@@ -42,6 +42,7 @@ defineOp({
     'Address the task id. A task not started yet returns 409: use task_start. ' +
     'A COMPLETE task returns 409 target_complete: its work is done and a message would reopen it. ' +
     'Send to it only when it must act again, with force=true and a reason saying why; the reason leads the message. ' +
+    'A lead whose project the user put under another VP returns 409 lead_handed_over naming the lead that leads it now: send there. ' +
     'Legacy session ids and handles are also accepted.',
   input: {
     to: z.string().min(1).optional().describe(

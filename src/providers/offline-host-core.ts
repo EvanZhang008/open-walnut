@@ -59,6 +59,8 @@ export interface OfflineSliceTask {
   description?: string
   updated_at?: string
   session_id?: string
+  /** A lead that handed its project over: the lead that took it (org/retired-lead.ts). */
+  handed_over_to?: { id: string; title: string; phase?: string }
   /**
    * Journal v2 (docs/plan/walnut-replica-servers-impl.md section 7): the other queueable
    * fields when the server ships them, and the server's per-field write time. A field
@@ -1118,6 +1120,37 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     { detail: { parentTaskId: parent.id } })
   }
 
+  /**
+   * The server's rule (session-send-core.ts admitRetiredLead): a session's new message to a lead
+   * that handed its project over is refused with the lead that took it, unless the caller is that
+   * lead or it forces with a reason (then the server's note follows when it is back).
+   */
+  function retiredLeadRefusal(home: string, callerSid: string, targetTaskId: string | undefined, args: Record<string, unknown>): GatewayResult | undefined {
+    if (!targetTaskId) return undefined
+    const lead = tasksWithOverlay(home).find((t) => t.id === targetTaskId)
+    const now = lead?.handed_over_to
+    if (!lead || !now || callerIdentity(home, callerSid).taskId === now.id) return undefined
+    const project = (lead.project ?? '').trim()
+    if (args.force === true) {
+      const reason = typeof args.reason === 'string' ? args.reason.replace(/\s+/g, ' ').trim() : ''
+      if (reason.length >= 10) return undefined
+      return fail('bad_request', `force:true needs a reason (at least 10 characters) saying why "${lead.title}" (${lead.id}), `
+        + `which no longer leads ${project}, must act rather than the lead that took over.`)
+    }
+    return fail('lead_handed_over', `${kit.handedOverPointer({ id: lead.id, title: lead.title, project }, now)} `
+      + 'If the old lead itself must act, pass force:true with reason:"<why it, not the lead that took over>".',
+    { detail: { taskId: lead.id, currentLeadTaskId: now.id, project } })
+  }
+
+  /** A forced message to an open lead that handed over: its reason leads the text, as on the server. */
+  function retiredLeadText(home: string, callerSid: string, targetTaskId: string | undefined, args: Record<string, unknown>, text: string): string {
+    const lead = targetTaskId ? tasksWithOverlay(home).find((t) => t.id === targetTaskId) : undefined
+    if (!lead?.handed_over_to || lead.phase === 'COMPLETE' || args.force !== true) return text
+    if (callerIdentity(home, callerSid).taskId === lead.handed_over_to.id) return text
+    const reason = typeof args.reason === 'string' ? args.reason.replace(/\s+/g, ' ').trim() : ''
+    return `This comes to you although you no longer lead ${(lead.project ?? '').trim()}. Why: ${reason.slice(0, 300)}\n\n${text}`
+  }
+
   /** This copy's view of a task (queued completions included): is it COMPLETE? */
   function completeTask(home: string, taskId: string | undefined): OfflineSliceTask | undefined {
     if (!taskId) return undefined
@@ -1224,15 +1257,18 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     }
     if (typeof args.to !== 'string' || !args.to.trim()) return fail('bad_request', '`to` is required (or pass in_reply_to)')
     // Before the session lookup: a completed parent usually has nothing running.
-    const closed = parentCompleteRefusal(home, callerSid, resolveTask(home, args.to).task?.id)
+    const named = resolveTask(home, args.to).task?.id
+    const closed = parentCompleteRefusal(home, callerSid, named) ?? retiredLeadRefusal(home, callerSid, named, args)
     if (closed) return closed
     const target = resolveSendTarget(home, args.to)
     if (target.error) return target.error
     const closedTarget = parentCompleteRefusal(home, callerSid, target.taskId)
     if (closedTarget) return closedTarget
+    const handedOver = retiredLeadRefusal(home, callerSid, target.taskId, args)
+    if (handedOver) return handedOver
     const targetSid = target.sid!
     if (targetSid === callerSid) return fail('self_send', 'target resolves to the calling session itself')
-    const admitted = admitCompleteTarget(home, target.taskId, args, text, 'send')
+    const admitted = admitCompleteTarget(home, target.taskId, args, retiredLeadText(home, callerSid, target.taskId, args, text), 'send')
     if ('error' in admitted) return admitted.error
     const denied = admitWrite(callerSid) ?? roomFor(home)
     if (denied) return denied
@@ -1385,8 +1421,9 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     if (!target || target.sid === callerSid) return null
     if (deps.pendingPrompt!(target.sid)) return null
     if (parentCompleteRefusal(home, callerSid, target.taskId)) return null
-    // A complete target (and a forced reopen of one) is the server's to decide.
+    // A complete target (and a forced reopen of one) is the server's to decide, as is a lead that handed over.
     if (completeTask(home, target.taskId)) return null
+    if (target.taskId && tasksWithOverlay(home).some((t) => t.id === target.taskId && t.handed_over_to)) return null
     const denied = admitPeerSend(callerSid, target.sid, text) ?? roomFor(home)
     if (denied) return denied
     const slice = slices.get(home)!

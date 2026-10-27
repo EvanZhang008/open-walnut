@@ -167,8 +167,10 @@ export async function buildHostSlice(hostKey: string, now = Date.now()): Promise
     .slice(0, MAX_SESSIONS);
 
   const picked = new Map<string, OfflineSliceTask>();
+  const leads: Task[] = [];
   const add = (t: Task | undefined): void => {
     if (!t || picked.has(t.id) || picked.size >= MAX_TASKS) return;
+    if (t.org_role === 'lead') leads.push(t);
     picked.set(t.id, {
       id: t.id,
       title: t.title,
@@ -208,6 +210,17 @@ export async function buildHostSlice(hostKey: string, now = Date.now()): Promise
     level = next;
   }
   for (const t of await childTasks(parentIds)) add(t);
+  // A lead that handed its project over: the host refuses a session's message to it with the
+  // lead that took over, as the server does (org/retired-lead.ts).
+  if (leads.length > 0) {
+    const [{ listTasks }, { successorOf }] = await Promise.all([import('./task-manager.js'), import('./org/org-tree.js')]);
+    const all = await listTasks();
+    for (const t of leads) {
+      const now = successorOf(all, t);
+      const row = picked.get(t.id);
+      if (now && row) row.handed_over_to = { id: now.id, title: now.title, ...(now.phase ? { phase: now.phase } : {}) };
+    }
+  }
 
   // Pending requests with a party here. One whose other party runs elsewhere
   // names that host, so an answer can travel through the leader while this

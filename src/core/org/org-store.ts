@@ -19,7 +19,7 @@ import { ASK_WALNUT_PROJECT } from '../sessions/ask-list.js';
 import { createEnvelopeKit } from '../peers/envelope-kit.js';
 import {
   DIGEST_FOLD_MS, DIGEST_MAX_LINES, buildOrgTree, findProjectNode, formatAlertLine, formatDigestLine, isOrgMember, leadsAlso, orgDigest, pickLead,
-  pickMain, pickOwnLead, planOrgNote, projectKey, type OrgAlert, type OrgDigestState, type OrgTaskLike, type OrgTree,
+  pickMain, pickOwnLead, planOrgNote, projectKey, successorOf, type OrgAlert, type OrgDigestState, type OrgTaskLike, type OrgTree,
 } from './org-tree.js';
 
 export const MAIN_TASK_TITLE = 'Main';
@@ -418,13 +418,17 @@ export interface OrgContact {
   /** 'lead' = the project's lead, 'team' = a project's only team, 'task' = a task named by id. */
   kind: 'lead' | 'team' | 'task';
   project: string;
+  /** The lead `to` named handed its project over: this is the lead that took it (org/retired-lead.ts). */
+  handedOverBy?: { id: string; title: string };
 }
 
 /**
  * Who `to` means: a task id (or unique prefix), or a project name (its lead,
  * else its one team). A project with two or more teams gets its lead now.
+ * `askerTaskId`: the task of the session asking ('' for another program); the
+ * human passes none, and reaches a lead that handed over as it is.
  */
-export async function resolveOrgContact(to: string): Promise<OrgContact> {
+export async function resolveOrgContact(to: string, opts: { askerTaskId?: string } = {}): Promise<OrgContact> {
   const want = to.trim();
   if (!want) throw new OrgError('missing_to', 400, '`to` is required: a project name or a task id.');
   const { getTask } = await import('../task-manager.js');
@@ -447,7 +451,16 @@ export async function resolveOrgContact(to: string): Promise<OrgContact> {
     throw new OrgError('unknown_contact', 404,
       `No project with open work or task named "${want}". To start new work there, create a task in that project (task_create).`);
   }
-  return { task, kind: task.org_role === 'lead' ? 'lead' : 'task', project: (task.project ?? '').trim() };
+  // A lead that handed its project over: for an agent, the one who answers for that project is the
+  // lead that took it (the human, and that lead itself, reach the old one). Through
+  // ensureProjectLead, so a successor someone closed is brought back as a project name would.
+  const project = (task.project ?? '').trim();
+  const successor = task.org_role === 'lead' && opts.askerTaskId !== undefined ? successorOf(await orgTasks(), task) : undefined;
+  if (successor && successor.id !== opts.askerTaskId) {
+    const lead = await ensureProjectLead(project);
+    if (lead.id !== task.id) return { task: lead, kind: 'lead', project, handedOverBy: { id: task.id, title: task.title } };
+  }
+  return { task, kind: task.org_role === 'lead' ? 'lead' : 'task', project };
 }
 
 /** What one org node reports to the agent asking: its direct reports, compactly. */

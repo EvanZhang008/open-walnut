@@ -49,6 +49,7 @@ import { buildHostSlice } from '../../src/core/host-slice.js'
 import { runOfflineHandover, waitForOfflineHandovers } from '../../src/core/offline-handover.js'
 import { createSessionRecord, updateSessionRecord } from '../../src/core/session-tracker.js'
 import { createSessionRequest, getSessionRequest } from '../../src/core/session-requests.js'
+import { updateTaskRaw } from '../../src/core/task-manager.js'
 import type { OfflineRecord } from '../../src/providers/offline-host-core.js'
 import { WALNUT_HOME } from '../../src/constants.js'
 
@@ -225,6 +226,71 @@ describe('runOfflineHandover', () => {
     expect(bySid.get(B)).toContain(`task_update ${blocked}: `)
     expect(bySid.get(B)).toContain('Walnut API error (self_parent)')
     expect(bySid.get(B)).toMatch(/^<walnut-message kind="notification" from="Walnut"/)
+  })
+
+  it('a delivery into a lead that handed its project over leaves it complete, and its session hears who leads now', async () => {
+    // 2026-10-26: the host delivered a peer's message to a lead two minutes after it handed its
+    // project over (this Mac was away), and the drain reopened it with no word of the handover:
+    // two leads then followed one ask, and both waited on the user.
+    const oldLead = await newTask('Seeds lead', { project: 'Seeds' })
+    const vpLead = await newTask('Garden lead', { project: 'Garden' })
+    await updateTaskRaw(oldLead, { org_role: 'lead' })
+    await updateTaskRaw(vpLead, { org_role: 'lead', org_leads: ['Seeds'] })
+    const S = '5eed1ead-0001-4001-8001-000000000001'
+    await createSessionRecord(S, oldLead, 'Seeds', '/work', { host: 'devbox', title: 'Seeds lead' })
+    await api('POST', `/api/v1/tasks/${oldLead}/complete`)
+    const drainOnce = (messageId: string, to = S, toTaskId = oldLead, from = A) => {
+      let drained = false
+      return async (cmd: string) => {
+        if (cmd !== 'offline.drain') return { ok: true, remaining: 0 }
+        if (drained) return { ok: true, records: [] }
+        drained = true
+        return { ok: true, records: [
+          { seq: 1, at: Date.now(), kind: 'delivery', fromSessionId: from, toSessionId: to, toTaskId, messageId },
+          { seq: 2, at: Date.now(), kind: 'delivery', fromSessionId: from, toSessionId: to, toTaskId, messageId: `${messageId}-b` },
+        ], more: false }
+      }
+    }
+    // The host's copy names the lead that took over, so a send to the old one is refused there too.
+    const slice = await buildHostSlice('devbox')
+    expect(slice.tasks.find((t) => t.id === oldLead)?.handed_over_to).toMatchObject({ id: vpLead, title: 'Garden lead' })
+    expect(slice.tasks.find((t) => t.id === vpLead)?.handed_over_to).toBeUndefined()
+    const before = delivered.length
+    await runOfflineHandover({ hostKey: 'devbox', send: drainOnce('qm-offline-old-lead') as never })
+    expect((await task(oldLead)).phase).toBe('COMPLETE')
+    const told = delivered.slice(before).filter((d) => d.sid === S)
+    // Two deliveries, one note.
+    expect(told).toHaveLength(1)
+    expect(told[0]!.text).toContain('While the Walnut server was away, your host delivered you a message')
+    expect(told[0]!.text).toContain(`You no longer lead Seeds: the user put it under "Garden lead" (${vpLead})`)
+    expect(told[0]!.text).toContain('outcome="handed-over"')
+    expect(delivered.slice(before).some((d) => d.sid === A)).toBe(false)
+
+    // A message from the lead that took over is not an ask to pass back to it: no note. Another
+    // project it took (one session per task, so another lead), so the once-a-while rule is not what holds it.
+    const shedLead = await newTask('Shed lead', { project: 'Shed' })
+    await updateTaskRaw(shedLead, { org_role: 'lead' })
+    await updateTaskRaw(vpLead, { org_leads: ['Seeds', 'Shed'] })
+    const V = '5eed1ead-0003-4003-8003-000000000003'
+    const S3 = '5eed1ead-0004-4004-8004-000000000004'
+    await createSessionRecord(V, vpLead, 'Garden', '/work', { host: 'devbox', title: 'Garden lead' })
+    await createSessionRecord(S3, shedLead, 'Shed', '/work', { host: 'devbox', title: 'Shed lead' })
+    await api('POST', `/api/v1/tasks/${shedLead}/complete`)
+    const fromSuccessor = delivered.length
+    await runOfflineHandover({ hostKey: 'devbox', send: drainOnce('qm-offline-from-vp', S3, shedLead, V) as never })
+    expect((await task(shedLead)).phase).toBe('COMPLETE')
+    expect(delivered.slice(fromSuccessor)).toHaveLength(0)
+
+    // A lead that leads its project reopens on a peer's message as any task, and hears nothing of the kind.
+    const pondLead = await newTask('Pond lead', { project: 'Pond' })
+    await updateTaskRaw(pondLead, { org_role: 'lead' })
+    const S2 = '5eed1ead-0002-4002-8002-000000000002'
+    await createSessionRecord(S2, pondLead, 'Pond', '/work', { host: 'devbox', title: 'Pond lead' })
+    await api('POST', `/api/v1/tasks/${pondLead}/complete`)
+    const again = delivered.length
+    await runOfflineHandover({ hostKey: 'devbox', send: drainOnce('qm-offline-own-lead', S2, pondLead) as never })
+    expect((await task(pondLead)).phase).toBe('IN_PROGRESS')
+    expect(delivered.slice(again)).toHaveLength(0)
   })
 
   it('a queued park carrying the retired wait_report lands; a refusal is the caller\'s, a Walnut failure carries its session', async () => {

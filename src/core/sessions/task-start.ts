@@ -80,6 +80,21 @@ export async function admitStartWithinLimits(task: Task, callerSid: string | und
   return admitSubtaskStart(caller.task.id, task.id, caller.task.title);
 }
 
+/**
+ * A session's start of a lead that handed its project over is refused with the pointer, as a
+ * message to it is (session-send-core.ts): a start would continue its one conversation, or begin
+ * one, outside the send's check. The human, and the lead that took over, may start it.
+ */
+async function refuseStartOfRetiredLead(task: Task, callerSid: string | undefined): Promise<void> {
+  if (task.org_role !== 'lead' || !callerSid?.trim()) return;
+  const { resolveCaller } = await import('./session-send-core.js');
+  const caller = await resolveCaller(callerSid);
+  if (caller.kind !== 'session') return;
+  const { retiredLeadRefusal } = await import('../org/retired-lead.js');
+  const refusal = await retiredLeadRefusal(caller.record.taskId, task.id);
+  if (refusal) throw new QuickStartError(refusal.message, 409, { code: 'lead_handed_over', ...refusal.detail });
+}
+
 export async function startSessionForTask(params: SessionStartParams): Promise<SessionStartResult> {
   let task: Task;
   try {
@@ -90,6 +105,7 @@ export async function startSessionForTask(params: SessionStartParams): Promise<S
     if (message.includes('Ambiguous ID prefix')) throw new QuickStartError(message, 400);
     throw err;
   }
+  await refuseStartOfRetiredLead(task, params.callerSid);
   let recovery: { previousStartId: string } | undefined;
   if (params.startAttemptId) {
     if (task.phase === 'COMPLETE') throw new QuickStartError('This task changed. Review the action again.', 409);

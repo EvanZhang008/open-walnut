@@ -356,6 +356,34 @@ describe('offline host: messages between sessions on this host', () => {
     })).ok).toBe(true)
   })
 
+  it('a lead that handed its project over points a send on to the lead that took it, worded as on the server', async () => {
+    // 2026-10-26: a peer's message reached the old lead two minutes after its handover, while the
+    // server was away, and it went on working for the project beside the lead that took it.
+    const kit = createEnvelopeKit()
+    const h = harness()
+    const tasks = slice().tasks.map((t) => t.id === 'mtaskbbb-0002'
+      ? { ...t, title: 'Seeds lead', project: 'Seeds', parent_task_id: '', handed_over_to: { id: 'mtaskccc-0003', title: 'Garden lead', phase: 'IN_PROGRESS' } }
+      : t)
+    h.host.configure(slice({ tasks }))
+    for (const to of [B, 'mtaskbbb-0002']) {
+      const r = await call(h, A, 'task_send', { to, text: 'Delete the six stacks' })
+      expect(!r.ok && r.error.code).toBe('lead_handed_over')
+      expect(!r.ok && r.error.message).toContain(kit.handedOverPointer(
+        { id: 'mtaskbbb-0002', title: 'Seeds lead', project: 'Seeds' }, { id: 'mtaskccc-0003', title: 'Garden lead', phase: 'IN_PROGRESS' },
+      ))
+      expect(!r.ok && r.error.detail).toEqual({ taskId: 'mtaskbbb-0002', currentLeadTaskId: 'mtaskccc-0003', project: 'Seeds' })
+    }
+    const unreasoned = await call(h, A, 'task_send', { to: B, text: 'undo it', force: true })
+    expect(!unreasoned.ok && unreasoned.error.code).toBe('bad_request')
+    expect(h.delivered).toHaveLength(0)
+    // Forced with a reason, and from the lead that took over, it goes.
+    expect((await call(h, A, 'task_send', { to: B, text: 'undo it', force: true, reason: 'it began a deletion', expect_reply: false })).ok).toBe(true)
+    expect(h.delivered[0]!.text).toContain('This comes to you although you no longer lead Seeds. Why: it began a deletion')
+    h.live.add(C)
+    expect((await call(h, C, 'task_send', { to: B, text: 'send me the list', expect_reply: false })).ok).toBe(true)
+    expect(h.delivered.map((d) => d.sid)).toEqual([B, B])
+  })
+
   it('a COMPLETE task takes a message or an answer only forced with a reason, worded as on the server', async () => {
     const kit = createEnvelopeKit()
     const h = harness()

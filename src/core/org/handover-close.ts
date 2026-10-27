@@ -41,6 +41,11 @@ export function __pendingHandovers(): PendingHandover[] {
   return [...pending.values()];
 }
 
+/** `sessionId` reads a handover now, and Walnut closes its task after that turn. */
+export function hasPendingHandover(sessionId: string): boolean {
+  return pending.has(sessionId);
+}
+
 /** Close `p.taskId` once its session has read the handover and its turn is over. */
 export function closeAfterHandover(p: PendingHandover): void {
   pending.set(p.sessionId, p);
