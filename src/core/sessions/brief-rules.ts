@@ -59,6 +59,24 @@ export function briefVpOf(task: BriefTask, tasks: readonly BriefTask[]): BriefTa
   return vp && vp.id !== task.id && vp.phase !== 'COMPLETE' ? vp : undefined;
 }
 
+/**
+ * Each <task-ref/> whose id is only the head of a task's id, written out in full (2026-10-27:
+ * Main wrote `id="65c5766d"`, and the page drew that pill with no live status: pills, clicks and
+ * the VP check all match whole ids). A head two tasks share, or none, is left as written.
+ */
+export function completeBriefRefs<T extends { text: string }>(brief: T, tasks: readonly { id: string }[]): T {
+  const ids = new Set(tasks.map((t) => t.id));
+  let changed = false;
+  const text = brief.text.replace(REF_RE, (whole, id: string) => {
+    if (ids.has(id) || id.length < 6) return whole;
+    const hits = tasks.filter((t) => t.id.startsWith(id));
+    if (hits.length !== 1) return whole;
+    changed = true;
+    return whole.replace(`id="${id}"`, `id="${hits[0]!.id}"`);
+  });
+  return changed ? { ...brief, text } : brief;
+}
+
 /** What breaks the rules in this Brief, line by line. `tasks` resolves Main's VPs. */
 export function briefIssues(text: string, owner: BriefTask, tasks: readonly BriefTask[]): BriefIssue[] {
   const byId = new Map(tasks.map((t) => [t.id, t] as const));

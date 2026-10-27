@@ -5,7 +5,7 @@
  */
 import { describe, it, expect } from 'vitest'
 import type { Task } from '../../../src/core/types.js'
-import { briefFixPrompt, briefIssues, briefNeedsRewrite, briefVpLines, formatBriefIssues } from '../../../src/core/sessions/brief-rules.js'
+import { briefFixPrompt, briefIssues, briefNeedsRewrite, briefVpLines, formatBriefIssues, completeBriefRefs } from '../../../src/core/sessions/brief-rules.js'
 import { briefMoveLines, briefPrompt } from '../../../src/core/sessions/brief.js'
 
 const t = (over: Partial<Task>): Task => ({ title: 'x', phase: 'IN_PROGRESS', ...over } as Task)
@@ -105,5 +105,23 @@ describe("Main's Brief", () => {
     const doneVp = { ...vp, phase: 'COMPLETE' } as Task
     expect(briefIssues(`- ${ref(docSync)}: approve the docs sync push.`, main, [main, doneVp, docSync])).toEqual([])
     expect(briefVpLines(main, [main, doneVp])).toEqual([])
+  })
+})
+
+describe('completeBriefRefs', () => {
+  const tasks = [{ id: '65c5766d-1d2d-5bc5-ad1c-6ca835bab8b0' }, { id: 'mvm0n3bu-6910' }, { id: 'abc123-1111' }, { id: 'abc123-2222' }]
+  // 2026-10-27: Main named a task by the head of its id, and its pill showed no live status.
+  it('writes out a ref named by the head of one task id, and leaves the rest as written', () => {
+    const brief = { text: '- <task-ref id="65c5766d" label="Phones & Cloud"/> <task-ref id="mvm0n3bu-6910" label="Walnut lead"/>: pick a layout.\n- <task-ref id="abc123" label="Two share this head"/>: x\n- <task-ref id="nope99" label="None"/>: y\n- <task-ref id="65c5" label="Too short"/>: z', at: '2026-10-27T16:00:00Z' }
+    const out = completeBriefRefs(brief, tasks)
+    expect(out.text).toContain('id="65c5766d-1d2d-5bc5-ad1c-6ca835bab8b0" label="Phones & Cloud"')
+    expect(out.text).toContain('id="mvm0n3bu-6910"')
+    expect(out.text).toContain('id="abc123" label="Two share this head"')
+    expect(out.text).toContain('id="nope99"')
+    expect(out.text).toContain('id="65c5" label="Too short"')
+    expect(out.at).toBe(brief.at)
+    // Nothing to complete: the same object.
+    const whole = { text: '- <task-ref id="mvm0n3bu-6910" label="Walnut lead"/>: ok', at: 'x' }
+    expect(completeBriefRefs(whole, tasks)).toBe(whole)
   })
 })

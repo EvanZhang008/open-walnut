@@ -27,7 +27,7 @@ import { engineCaps, isAcpEngine } from '../agents/engine-registry.js';
 import { toDisplayedUserText } from '../sessions/reference-cards.js';
 import { isAwaitingTurnEnd } from '../sessions/self-complete-stop.js';
 import { briefMoveLines, briefPrompt, keepsBrief, readBrief } from '../sessions/brief.js';
-import { briefFixPrompt, briefIssues, briefNeedsRewrite, briefVpLines, formatBriefIssues, type BriefIssue } from '../sessions/brief-rules.js';
+import { briefFixPrompt, briefIssues, briefNeedsRewrite, briefVpLines, completeBriefRefs, formatBriefIssues, type BriefIssue } from '../sessions/brief-rules.js';
 import { agentMemoryPrompt, applyAgentMemoryAnswer, keepsAgentMemory, readAgentMemoryField, splitAgentMemory } from '../sessions/agent-memory.js';
 import { withoutLeadingRiders } from '../../lib/history-walnut-riders.js';
 import { setReportPending, __resetReportPending } from '../sessions/report-pending.js';
@@ -804,8 +804,9 @@ async function rewriteBrokenBrief(
   } finally {
     briefFixInFlight.delete(sessionId);
   }
-  const fixed = readBrief(extractField(answer, 'FOR_USER_BRIEF'), askedAt || undefined);
-  if (!fixed) return;
+  const read = readBrief(extractField(answer, 'FOR_USER_BRIEF'), askedAt || undefined);
+  if (!read) return;
+  const fixed = completeBriefRefs(read, tasks);
   const still = briefIssues(fixed.text, owner, tasks);
   log.session.info('turn-complete-summary: Brief rewritten after the rule check', { sessionId, taskId, before: issues.length, after: still.length });
   if (still.length < issues.length) await storeBrief(sessionId, taskId, fixed, still, askedAt);
@@ -1116,7 +1117,9 @@ export async function runTriage(p: OnTurnCompletePayload, opts: { final?: boolea
     // phone show, derived together with live facts in src/core/user-status.ts.
     const statusReport = readStatusReport(selfReport);
     // (a1c) Main's or a lead's Brief, the letter above its chat (sessions/brief.ts).
-    const briefNow = brief ? readBrief(extractField(selfReport, 'FOR_USER_BRIEF'), briefAskedAt || undefined) : null;
+    const briefRead = brief ? readBrief(extractField(selfReport, 'FOR_USER_BRIEF'), briefAskedAt || undefined) : null;
+    // A task named by the head of its id gets its whole id, so its pill shows its live status.
+    const briefNow = briefRead ? completeBriefRefs(briefRead, briefTasks) : null;
     // Checked against the Brief's rules (sessions/brief-rules.ts): stored with what breaks them,
     // and the writer is asked once more, at the end of this hook, to rewrite it.
     const briefBroke: BriefIssue[] = briefNow && briefOwner ? briefIssues(briefNow.text, briefOwner, briefTasks) : [];
