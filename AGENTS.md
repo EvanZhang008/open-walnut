@@ -100,7 +100,8 @@ server is isolated by construction, so nothing it does reaches the real Walnut:
 - its own data copy and its own local daemon in `daemonDir` (its logs are there too);
 - its own op executor and every local session it launches talk to it, never the :3456 default
   (`OPEN_WALNUT_API_URL`, see `src/lib/self-api-root.ts`);
-- the copied cron jobs are paused (jobs created there still run), the copied Board reminders
+- the copied cron jobs are paused (jobs created there still run) and Inbox Triage is off in the
+  copied config (its bootstrap would re-enable its paused routine), the copied Board reminders
   never fire (ones set there do), the copied phone push tokens
   are removed, no plugin syncs tasks (installed ones included), and there is no cloud bridge
   push and no heartbeat;

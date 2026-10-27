@@ -19,7 +19,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import yaml from 'js-yaml'
-import { dropSnapshotQueuedMessages, ephemeralChildEnv, pauseSnapshotCronJobs, stopSnapshotTunnels, stripSnapshotPushTokens } from '../../src/commands/ephemeral-snapshot.js'
+import { dropSnapshotQueuedMessages, ephemeralChildEnv, pauseSnapshotCronJobs, stopSnapshotTriage, stopSnapshotTunnels, stripSnapshotPushTokens } from '../../src/commands/ephemeral-snapshot.js'
 
 let dir: string
 const cronFile = () => path.join(dir, 'cron-jobs.json')
@@ -151,6 +151,37 @@ describe('stripSnapshotPushTokens', () => {
 
   it('never throws when there is no config at all', () => {
     expect(stripSnapshotPushTokens(dir)).toBe(0)
+  })
+})
+
+describe('stopSnapshotTriage', () => {
+  const cfg = (name = 'config.yaml') => path.join(dir, name)
+
+  it('turns triage off in both config copies, keeping its other settings and the rest', () => {
+    const doc = { version: 1, triage: { enabled: true, every: '1h', active_hours: '08-20' }, expose: { enabled: false } }
+    fs.writeFileSync(cfg(), yaml.dump(doc))
+    fs.writeFileSync(cfg('config.yaml.bak'), yaml.dump(doc))
+    expect(stopSnapshotTriage(dir)).toBe(1)
+    for (const name of ['config.yaml', 'config.yaml.bak']) {
+      const back = yaml.load(fs.readFileSync(cfg(name), 'utf-8')) as typeof doc
+      expect(back.triage).toEqual({ enabled: false, every: '1h', active_hours: '08-20' })
+      expect(back.version).toBe(1)
+      expect(back.expose).toEqual({ enabled: false })
+    }
+  })
+
+  it('leaves a config without triage on byte for byte', () => {
+    const raw = 'version: 1\ntriage:\n  enabled: false\n'
+    fs.writeFileSync(cfg(), raw)
+    expect(stopSnapshotTriage(dir)).toBe(0)
+    expect(fs.readFileSync(cfg(), 'utf-8')).toBe(raw)
+    expect(stopSnapshotTriage(fs.mkdtempSync(path.join(dir, 'empty-')))).toBe(0)
+  })
+
+  it('removes a copy it cannot parse that mentions triage (fail closed)', () => {
+    fs.writeFileSync(cfg(), 'triage: [unclosed\n')
+    expect(stopSnapshotTriage(dir)).toBe(0)
+    expect(fs.existsSync(cfg())).toBe(false)
   })
 })
 

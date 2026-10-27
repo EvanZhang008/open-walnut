@@ -320,6 +320,42 @@ export function stopSnapshotTunnels(snapshotDir: string): number {
 }
 
 /**
+ * Turn off Inbox Triage in the snapshot's config files (`triage.enabled`).
+ * Returns 1 when it was on. Pausing the copied routines is not enough: at boot
+ * the triage bootstrap brings its routine back in line with the config, and a
+ * paused routine reads as out of line, so it was enabled again and ran an AI
+ * session every hour against the user's live mail (2026-10-27: two runs in one
+ * test server). A tester who turns triage on inside the snapshot gets it.
+ * A file that has it on but cannot be rewritten is removed (fail closed).
+ */
+export function stopSnapshotTriage(snapshotDir: string): number {
+  let stopped = 0
+  for (const name of CONFIG_FILES) {
+    const file = path.join(snapshotDir, name)
+    let raw: string
+    try {
+      raw = fs.readFileSync(file, 'utf-8')
+    } catch {
+      continue
+    }
+    if (!raw.includes('triage')) continue
+    try {
+      const doc = yaml.load(raw) as Record<string, unknown> | null
+      const triage = doc && typeof doc === 'object' ? doc.triage as { enabled?: unknown } | null : null
+      if (!triage || typeof triage !== 'object' || triage.enabled !== true) continue
+      triage.enabled = false
+      const tmp = `${file}.${process.pid}.tmp`
+      fs.writeFileSync(tmp, yaml.dump(doc, { indent: 2, lineWidth: 120 }))
+      fs.renameSync(tmp, file)
+      stopped = 1
+    } catch {
+      try { fs.rmSync(file, { force: true }) } catch { /* best-effort */ }
+    }
+  }
+  return stopped
+}
+
+/**
  * Environment for the ephemeral child. It gets its own data dir and its own
  * runtime (daemon) dir; every variable that could point it, its daemon, or its
  * sessions back at the launching Walnut is dropped. The launcher usually runs
