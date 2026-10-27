@@ -1759,8 +1759,8 @@ describe('C1 session-snapshot daemon-standalone vs daemon-source parity', () => 
       const withoutCronOrigin = src.replace(/cronMetadataOrigin = \{[\s\S]*?\n\s*\}/g, '')
       const boundarySeeds = (withoutCronOrigin.match(/offset:\s*\w+(?:Fold|ered)\.boundary/g) ?? []).length
       expect(boundarySeeds, `${name}: all 3 adopt/attach sites must seed offset from the fold boundary`).toBe(3)
-      // cmdStart's resume branch takes it from the resume rebuild.
-      expect(src).toMatch(/resumeFold = rebuildFoldStateFromJsonl\(jsonlPath\)/)
+      // cmdStart's resume branch takes it from the resume fold (async, stream-fold-core.ts).
+      expect(src).toMatch(/resumeFold = await streamFold\.foldFile\(jsonlPath, /)
       expect(src).toMatch(/offset = resumeFold\.boundary/)
       // No adopt/attach site may reach for the file size directly any more.
       expect(src, `${name}: an adopt/attach site still seeds offset from stat().size`)
@@ -1794,15 +1794,16 @@ describe('C1 session-snapshot daemon-standalone vs daemon-source parity', () => 
       for (const site of sites) {
         // The fresh-start site is the resume ternary: the resume rebuild's state
         // when resuming, an empty fold otherwise.
-        if (/resumeFold \? resumeFold\.state : initialFoldState\(0\)/.test(site)) {
+        if (/resumeFold \? resumeFold\.fold : initialFoldState\(0\)/.test(site)) {
           freshStartSites++
           continue
         }
         // Adopt/attach sites take the state from a rebuild — either inline
         // (`rebuildFoldStateFromJsonl(...).state`) or via the local that also
-        // supplies the watcher boundary (`<name>Fold.state` / `discovered.state`).
+        // supplies the watcher boundary (`<name>Fold.state`, or the async
+        // fold's `discovered.fold`).
         expect(site, `${name}: adopt/attach site must REBUILD foldState from the jsonl, not start empty`)
-          .toMatch(/rebuildFoldStateFromJsonl\(|(?:Fold|discovered)\.state/)
+          .toMatch(/rebuildFoldStateFromJsonl\(|Fold\.state|discovered\.fold/)
       }
       expect(freshStartSites, `${name}: exactly one fresh-start (cmdStart) foldState site`).toBe(1)
     }

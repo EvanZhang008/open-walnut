@@ -225,6 +225,8 @@ const DAEMON_SOURCE_FILES = [
   'src/providers/desktop-update-core.ts',
   // Stream compaction (stream-compact-core.ts): same import-or-inline rule.
   'src/providers/stream-compact-core.ts',
+  // Async stream fold and rotation on resume (stream-fold-core.ts): same rule.
+  'src/providers/stream-fold-core.ts',
   // One-shot claude runs (oneshot-v1): same import-or-inline rule.
   'src/providers/oneshot-core.ts',
 ] as const

@@ -156,6 +156,7 @@ SOURCES=(
   src/providers/host-facts-core.ts
   src/providers/desktop-update-core.ts
   src/providers/stream-compact-core.ts
+  src/providers/stream-fold-core.ts
   src/providers/oneshot-core.ts
 )
 

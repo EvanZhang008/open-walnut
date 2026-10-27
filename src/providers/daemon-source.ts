@@ -61,6 +61,7 @@ import { createStreamRelay } from './stream-relay-core.js'
 import { createHostResume } from './host-resume-core.js'
 import { createCliOwner } from './cli-owner-core.js'
 import { createStreamCompact } from './stream-compact-core.js'
+import { createStreamFold } from './stream-fold-core.js'
 import { createHostStart } from './host-start-core.js'
 import { createClockHostStart } from './clock-host-start-core.js'
 import { createClockSchedule } from './clock-schedule-core.js'
@@ -267,6 +268,7 @@ export function getDaemonSource(): string {
     ['__CREATE_HOST_RESUME__', createHostResume.toString()],
     ['__CREATE_CLI_OWNER__', createCliOwner.toString()],
     ['__CREATE_STREAM_COMPACT__', createStreamCompact.toString()],
+    ['__CREATE_STREAM_FOLD__', createStreamFold.toString()],
     ['__CREATE_HOST_START__', createHostStart.toString()],
     ['__CREATE_CLOCK_HOST_START__', createClockHostStart.toString()],
     ['__CREATE_CLOCK_SCHEDULE__', createClockSchedule.toString()],
@@ -515,6 +517,17 @@ export function validateFoldInjection(injections: Array<[string, string]>): void
       if (sc.tmpPathFor('/x/s.jsonl') !== '/x/s.jsonl.compact-tmp-7' || sc.due('/nonexistent/s.jsonl', { size: 0, ino: 1 }) || sc.isStreamFile('a.acp.jsonl')) {
         throw new Error('stream compaction did not build')
       }
+    }
+    // Stream fold smoke (stream-fold-core.ts): a reconstructed copy must build
+    // and keep its rotation cap, without touching disk.
+    const createFold = reconstructed['__CREATE_STREAM_FOLD__'] as typeof createStreamFold | undefined
+    if (createFold) {
+      const sf = createFold({
+        fs, path, foldLine: (st: { v: number }) => st, initialFoldState: (v: number) => ({ v }), emptyTaskState: () => ({}),
+        applyTaskEvent: () => false, checkpoint: { load: () => null, write: () => false, restampTaskState: (t: object) => t },
+        maxLineBytes: 1024, now: () => 0, rotateBytes: 5,
+      })
+      if (sf.rotateBytes !== 5 || typeof sf.foldFile !== 'function') throw new Error('stream fold did not build')
     }
     // CLI owner smoke (cli-owner-core.ts): a reconstructed copy must name the
     // transcript a resume writes into, and none for a fork, without touching disk.
@@ -2149,7 +2162,10 @@ function applyTaskEvent(ts, parsed, v, now) {
   ts.tasks[taskId] = { status: nextStatus, v, t: now, description: parsed.description || (prev && prev.description), isBackgrounded: isBackgrounded || undefined, toolUseId: toolUseId || (prev && prev.toolUseId) };
   if (v > ts.resourceVersion) ts.resourceVersion = v;
   ts.updatedAt = now;
-  ts.derivedRunning = runningTaskCount(ts);
+  // Moves by this entry's own change, never a recount (quadratic in a long
+  // session's tasks). Mirrors daemon-standalone.ts.
+  const gates = (t) => (t && !t.isBackgrounded && !BG_TERMINAL_STATUSES.has(t.status) ? 1 : 0);
+  ts.derivedRunning = (ts.derivedRunning || 0) + gates(ts.tasks[taskId]) - gates(existing);
   if (!wasTerminal && isTerminal) {
     ts.recentTransitions.push({ taskId, status: nextStatus, v, t: now });
     if (ts.recentTransitions.length > BG_TRANSITION_CAP) ts.recentTransitions.shift();
@@ -2769,6 +2785,22 @@ const streamCompact = (__CREATE_STREAM_COMPACT__)({
   log: function (level, msg, meta) { logMsg(level, msg, meta); },
 });
 let streamCompactRunning = false;
+
+// Mirror of daemon-standalone.ts (stream-fold-core.ts, inlined): a resume or a
+// discovering attach folds the stream file without holding the thread, and a
+// resume of a file of STREAM_ROTATE_BYTES or more whose Claude transcript
+// exists starts a fresh file. The env override is TEST-ONLY.
+const streamRotateEnv = parseInt(process.env.WALNUT_STREAM_ROTATE_BYTES || '', 10);
+const streamFold = (__CREATE_STREAM_FOLD__)({
+  fs: fs, path: path, foldLine: foldLine, initialFoldState: initialFoldState, emptyTaskState: emptyTaskState,
+  applyTaskEvent: applyTaskEvent, checkpoint: foldCheckpoint, maxLineBytes: TAILER_CARRY_MAX, now: Date.now,
+  log: function (level, msg, meta) { logMsg(level, msg, meta); },
+  rotateBytes: Number.isFinite(streamRotateEnv) ? streamRotateEnv : undefined,
+});
+const CLAUDE_PROJECTS_DIRS = Array.from(new Set([
+  path.join(process.env.CLAUDE_CONFIG_DIR || path.join(HOME_DIR, '.claude'), 'projects'),
+  path.join(HOME_DIR, '.claude', 'projects'),
+]));
 function pidAlive(pid) { try { process.kill(pid, 0); return true; } catch (e) { return !!e && e.code === 'EPERM'; } }
 
 function streamWriterGone(sid) {
@@ -3546,7 +3578,7 @@ function resolveAgentCommand(engine, op) {
 function dispatchCommand(ws, id, cmd) {
   switch (cmd.cmd) {
     case 'start': return daemonCommands.run(function () { return cmdStart(ws, id, cmd); });
-    case 'attach': return cmdAttach(ws, id, cmd);
+    case 'attach': return daemonCommands.run(function () { return cmdAttach(ws, id, cmd); });
     case 'send': return daemonCommands.run(function () { return cmdSend(ws, id, cmd); });
     case 'sendRaw': return daemonCommands.run(function () { return cmdSendRaw(ws, id, cmd); });
     case 'appendUserMarker': return cmdAppendUserMarker(ws, id, cmd);
@@ -6184,6 +6216,21 @@ async function startSessionProcess(cmd, isCurrent, canStart) {
   const resumesTranscript = !!resume || (args.includes('--resume') && !args.includes('--fork-session'));
   const notOurs = ownedSid ? strictStartRefusal(ownedSid, cmd, ownerHome, resumesTranscript) : null;
   if (notOurs) throw notOurs;
+  // A start that a stop or a newer supervision request overtook ends here.
+  const superseded = () => (!!canStart && !canStart()) || (!!isCurrent && !isCurrent());
+  const stopIfSuperseded = () => {
+    if (canStart && !canStart()) throw Object.assign(new Error('start: stop request superseded this start'), { code: 'SESSION_STOP_SUPERSEDED' });
+    if (isCurrent && !isCurrent()) throw new Error('start: supervision request was superseded');
+  };
+  // A resumed stream is folded once before the transcript is claimed: a big
+  // file without a checkpoint folds for longer than a claim may sit
+  // unconfirmed (cli-owner-core.ts CLAIM_TTL_MS), and the fold below then
+  // reads only what this one's checkpoint left (stream-fold-core.ts).
+  if (resume) {
+    await streamFold.foldFile(path.join(STREAMS_DIR, sid + '.jsonl'), Date.now(), { aborted: superseded });
+    stopIfSuperseded();
+  }
+
   const ownerClaim = ownedSid ? await cliOwner.claim(ownedSid, { exceptPid: replacedPid, home: ownerHome }) : null;
   let ownerCommitted = false;
   try {
@@ -6249,8 +6296,20 @@ async function startSessionProcess(cmd, isCurrent, canStart) {
   let offset = 0;
   let resumeFold = null;
   if (resume) {
-    resumeFold = rebuildFoldStateFromJsonl(jsonlPath);
+    // Async, so every other session keeps its daemon while a big file folds
+    // (from the checkpoint the fold before the claim left). A file over the
+    // cap is then left for a fresh one (stream-fold-core.ts).
+    resumeFold = await streamFold.foldFile(jsonlPath, Date.now(), { aborted: superseded });
     offset = resumeFold.boundary;
+    stopIfSuperseded();
+    const rotation = streamWriterGone(sid) ? await streamFold.rotateReason(jsonlPath, ownedSid, CLAUDE_PROJECTS_DIRS, resumeFold.fold) : null;
+    stopIfSuperseded();
+    if (rotation && streamFold.rotate(jsonlPath, [foldCheckpoint.pathFor(jsonlPath), foldCheckpoint.nextPathFor(jsonlPath), streamCompact.markPathFor(jsonlPath)])) {
+      logMsg('info', 'stream rotated', { sid, bytes: rotation.size });
+      // The dead process's turn and background tasks went with it.
+      resumeFold = null;
+      offset = 0;
+    }
   }
 
   // Create FIFO
@@ -6396,9 +6455,10 @@ async function startSessionProcess(cmd, isCurrent, canStart) {
     pgidPath,
     pid,
     offset,
-    taskState: resume ? rebuildTaskStateFromJsonl(jsonlPath, Date.now()) : emptyTaskState(),
-    // C1: fresh spawn starts an empty fold; resume streams the surviving jsonl.
-    foldState: resumeFold ? resumeFold.state : initialFoldState(0),
+    taskState: resumeFold ? resumeFold.task : emptyTaskState(),
+    // C1: fresh spawn (or a rotated file) starts an empty fold; resume folds the surviving jsonl.
+    foldState: resumeFold ? resumeFold.fold : initialFoldState(0),
+    foldCheckpointV: resumeFold ? resumeFold.checkpointV : undefined,
     watcher: null,           // session-bound file tailer (see ensureWatcher)
     subscribers: new Set(),  // ws clients receiving push events
     exitCode: null,
@@ -8906,7 +8966,64 @@ function removeSubscriber(ws, sid) {
 }
 
 // ── Attach to existing session ──
-function cmdAttach(ws, id, cmd) {
+// An attach for a sid this daemon does not hold: build its session from the
+// stream file another daemon left. Keep in sync with daemon-standalone.ts.
+async function discoverSessionFromFiles(sid, mode) {
+  const jsonlPath = path.join(STREAMS_DIR, sid + '.jsonl');
+  const pgidPath = path.join(STREAMS_DIR, sid + '.pgid');
+  const pipePath = path.join(STREAMS_DIR, sid + '.pipe');
+
+  // Watcher starts at the fold rebuild's COMPLETE-line boundary — same rule as
+  // adopt. Catch-up for [fromOffset, end) is addSubscriber's job. Using the
+  // client's fromOffset is wrong both ways: 0 re-fans the whole file;
+  // MAX_SAFE_INTEGER (future-only sentinel) freezes the watcher forever. And a
+  // raw stat().size would sit mid-line whenever the CLI is writing during
+  // attach (contract §4 boundary rule).
+  const discovered = await streamFold.foldFile(jsonlPath, Date.now()); // C1
+  let pid = null;
+  let alive = false;
+  try {
+    pid = parseInt(fs.readFileSync(pgidPath, 'utf-8').trim(), 10);
+    process.kill(pid, 0); // check alive
+    alive = true;
+  } catch { pid = null; alive = false; }
+
+  // A FIFO an earlier daemon made may still be readable (LIVE_FIFO_MODE).
+  if (alive) lockLiveFifo(pipePath);
+
+  const session = {
+    proc: null,
+    pipePath,
+    jsonlPath,
+    pgidPath,
+    pid,
+    offset: discovered.boundary,
+    taskState: discovered.task,
+    foldState: discovered.fold,
+    foldCheckpointV: discovered.checkpointV,
+    watcher: null,
+    subscribers: new Set(),
+    exitCode: alive ? null : 0,
+    state: alive ? 'running' : 'dead',
+    exitReason: alive ? null : 'attach-discovered-dead',
+    exitedAt: alive ? null : Date.now(),
+    parented: false,
+    startTime: pid && alive ? readStartTime(pid) : null,
+    cwd: '',
+    args: [],
+    orphanPollTimer: null,
+    mode: mode || 'default',
+    pendingCtrl: null,
+  };
+  sessions.set(sid, session);
+  if (alive && pid) {
+    startOrphanPoll(sid);
+    void cliOwner.adopt(sid, pid, session.startTime || null);
+  }
+  return session;
+}
+
+async function cmdAttach(ws, id, cmd) {
   const { sid, fromOffset, mode } = cmd;
   if (!sid) return sendError(ws, id, 'attach: missing sid');
 
@@ -8914,61 +9031,13 @@ function cmdAttach(ws, id, cmd) {
 
   if (!session) {
     // Try to discover from files
-    const jsonlPath = path.join(STREAMS_DIR, sid + '.jsonl');
-    const pgidPath = path.join(STREAMS_DIR, sid + '.pgid');
-    const pipePath = path.join(STREAMS_DIR, sid + '.pipe');
-
-    if (!fs.existsSync(jsonlPath)) {
+    if (!fs.existsSync(path.join(STREAMS_DIR, sid + '.jsonl'))) {
       return sendError(ws, id, 'attach: session not found: ' + sid);
     }
-
-    let pid = null;
-    let alive = false;
-    try {
-      pid = parseInt(fs.readFileSync(pgidPath, 'utf-8').trim(), 10);
-      process.kill(pid, 0); // check alive
-      alive = true;
-    } catch { pid = null; alive = false; }
-
-    // Watcher starts at the fold rebuild's COMPLETE-line boundary — same rule as
-    // adopt. Catch-up for [fromOffset, end) is addSubscriber's job. Using the
-    // client's fromOffset is wrong both ways: 0 re-fans the whole file;
-    // MAX_SAFE_INTEGER (future-only sentinel) freezes the watcher forever. And a
-    // raw stat().size would sit mid-line whenever the CLI is writing during
-    // attach (contract §4 boundary rule).
-    // Keep in sync with daemon-standalone.ts (CLAUDE.md).
-    const discovered = rebuildFoldStateFromJsonl(jsonlPath); // C1
-    // A FIFO an earlier daemon made may still be readable (LIVE_FIFO_MODE).
-    if (alive) lockLiveFifo(pipePath);
-
-    session = {
-      proc: null,
-      pipePath,
-      jsonlPath,
-      pgidPath,
-      pid,
-      offset: discovered.boundary,
-      taskState: rebuildTaskStateFromJsonl(jsonlPath, Date.now()),
-      foldState: discovered.state,
-      watcher: null,
-      subscribers: new Set(),
-      exitCode: alive ? null : 0,
-      state: alive ? 'running' : 'dead',
-      exitReason: alive ? null : 'attach-discovered-dead',
-      exitedAt: alive ? null : Date.now(),
-      parented: false,
-      startTime: pid && alive ? readStartTime(pid) : null,
-      cwd: '',
-      args: [],
-      orphanPollTimer: null,
-      mode: mode || 'default',
-      pendingCtrl: null,
-    };
-    sessions.set(sid, session);
-    if (alive && pid) {
-      startOrphanPoll(sid);
-      void cliOwner.adopt(sid, pid, session.startTime || null);
-    }
+    // The fold is async (a big file must not hold the thread), so it runs in
+    // the start gate: a start or send of this sid waits for it, and a second
+    // attach finds the session the first one made.
+    session = await sessionStartGate.run(sid, () => sessions.get(sid) || discoverSessionFromFiles(sid, mode));
   }
 
   // Update mode if provided (walnut re-sends mode on reconnect)

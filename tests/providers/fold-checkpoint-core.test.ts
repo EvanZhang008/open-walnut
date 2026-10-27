@@ -282,7 +282,10 @@ describe('fold checkpoint', () => {
       strip(daemon.match(/const BG_TRANSITION_CAP = .*/)![0]),
     ].join('\n')
     const logicHash = createHash('sha256').update(logic).digest('hex').slice(0, 16)
-    expect({ format: FOLD_CHECKPOINT_FORMAT, logicHash }).toEqual({ format: 4, logicHash: '8481fc7d0f836865' })
+    // 2026-10-27: applyTaskEvent moves derivedRunning by the entry's own change
+    // instead of a recount. Same state for every stream (pinned by
+    // daemon-task-count-incremental.test.ts), so the format stays.
+    expect({ format: FOLD_CHECKPOINT_FORMAT, logicHash }).toEqual({ format: 4, logicHash: '15643ab087a1af7f' })
 
     // The factory's own FORMAT is the one written.
     fs.writeFileSync(jsonl, content(20))
