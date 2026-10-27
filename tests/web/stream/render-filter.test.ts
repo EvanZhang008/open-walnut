@@ -6,7 +6,8 @@
  * pin the matching rules; these pin the FILTER policy on top):
  *  · absorbed = hidden, never deleted — late history means brief double-render
  *  · live tail (last main-lane block while streaming) is never hidden — except
- *    an Agent/Task call, whose exact-id twin is the card we want
+ *    an Agent/Task call, whose exact-id twin is the card we want, and words
+ *    history already holds in full under the same msgId
  *  · watermark bounds content matching; ids match at any scope
  *  · reset only when EVERYTHING is absorbed and no turn is live
  */
@@ -91,13 +92,13 @@ describe('computeHiddenBlocks — absorption proof', () => {
     expect(hidden.size).toBe(0);
   });
 
-  it('LIVE TAIL: the accumulating main-lane block is never hidden while streaming', () => {
-    // Partial content transiently equals a persisted message + msgId known
-    // from message_start — both must not hide the block mid-accumulation.
-    const blocks = [text('finished turn', 'msg-1'), text('partial acc', 'msg-2')];
+  it('LIVE TAIL: the accumulating main-lane block is not hidden on its early msgId alone', () => {
+    // msgId known from message_start, history holds an earlier, shorter form:
+    // the block is still growing past it, so it must stay on screen.
+    const blocks = [text('finished turn', 'msg-1'), text('partial acc and more', 'msg-2')];
     const messages = [
       msg({ text: 'finished turn', msgId: 'msg-1' }),
-      msg({ text: 'partial acc', msgId: 'msg-2' }), // e.g. duplicate emit path
+      msg({ text: 'partial acc', msgId: 'msg-2' }),
     ];
     const hidden = computeHiddenBlocks({ blocks, messages, watermark: 0, isStreaming: true });
     expect(hidden.has(0)).toBe(true);   // finished block absorbs normally
@@ -107,10 +108,44 @@ describe('computeHiddenBlocks — absorption proof', () => {
     expect(after.has(1)).toBe(true);
   });
 
+  it('LIVE TAIL: words history already holds in full show once while the turn runs on', () => {
+    // 2026-10-26, a lead's live turn: it wrote its words, then a long command
+    // ran in the background; the mid-turn refetch put the words in history and
+    // the streamed copy sat under them, twice on screen, for 20 s and more.
+    const words = 'Two things this round:\n\n- **Deploy:** prod is live.\n- **Inbox:** moved back to waiting.';
+    const blocks = [toolCall('tu-1'), text(words, 'msg-w')];
+    const messages = [
+      msg({ msgId: 'msg-t', tools: [{ name: 'Bash', toolUseId: 'tu-1', input: {} }] } as Partial<SessionHistoryMessage>),
+      msg({ text: words, thinking: 'reasoning', msgId: 'msg-w' }),
+    ];
+    expect(computeHiddenBlocks({ blocks, messages, watermark: 0, isStreaming: true }).has(1)).toBe(true);
+    // Whitespace the parser normalised still counts as the same words.
+    const reflowed = [messages[0], msg({ text: words.replace(/\n\n/g, '\n') + '\n', msgId: 'msg-w' })];
+    expect(computeHiddenBlocks({ blocks, messages: reflowed, watermark: 0, isStreaming: true }).has(1)).toBe(true);
+    // More words arrive under the same msgId: the block shows again (a brief
+    // double, never a loss) until history catches up.
+    const grown = [toolCall('tu-1'), text(words + ' And one more line.', 'msg-w')];
+    expect(computeHiddenBlocks({ blocks: grown, messages, watermark: 0, isStreaming: true }).has(1)).toBe(false);
+    // Reasoning follows the same rule; a redacted persisted thinking never matches.
+    const think: StreamingBlock = { type: 'thinking', content: 'weighing the deploy', msgId: 'msg-th' };
+    expect(computeHiddenBlocks({ blocks: [think], messages: [msg({ thinking: 'weighing the deploy', msgId: 'msg-th' })], watermark: 0, isStreaming: true }).has(0)).toBe(true);
+    expect(computeHiddenBlocks({ blocks: [think], messages: [msg({ thinking: '', msgId: 'msg-th' })], watermark: 0, isStreaming: true }).has(0)).toBe(false);
+    // A later part of a message: history joins its parts with '\n'.
+    const parts = [msg({ text: 'Checked the build.\nDeploying now.', msgId: 'msg-p' })];
+    expect(computeHiddenBlocks({ blocks: [toolCall('tu-1'), text('Deploying now.', 'msg-p')], messages: parts, watermark: 0, isStreaming: true }).has(1)).toBe(true);
+    // A later part still arriving, or the end of a word, is not the persisted text.
+    expect(computeHiddenBlocks({ blocks: [toolCall('tu-1'), text('Deploy', 'msg-p')], messages: parts, watermark: 0, isStreaming: true }).has(1)).toBe(false);
+    expect(computeHiddenBlocks({ blocks: [toolCall('tu-1'), text('now.', 'msg-p')], messages: parts, watermark: 0, isStreaming: true }).has(1)).toBe(true);
+    expect(computeHiddenBlocks({ blocks: [toolCall('tu-1'), text('ow.', 'msg-p')], messages: parts, watermark: 0, isStreaming: true }).has(1)).toBe(false);
+    // Another message's words never count, nor do words with no msgId.
+    expect(computeHiddenBlocks({ blocks: [text(words, 'msg-x')], messages, watermark: 0, isStreaming: true }).has(0)).toBe(false);
+    expect(computeHiddenBlocks({ blocks: [toolCall('tu-1'), text(words)], messages, watermark: 0, isStreaming: true }).has(1)).toBe(false);
+  });
+
   it('live-tail protection anchors to the last MAIN-lane block, not blocks[len-1]', () => {
     // Trailing lane block (background subagent) after the live main text:
     // main text is still the live tail; lane block follows its own lane rule.
-    const blocks = [text('main acc', 'msg-1'), text('sub line', 'msg-s', 'parent-1')];
+    const blocks = [text('main acc and growing', 'msg-1'), text('sub line', 'msg-s', 'parent-1')];
     const messages = [msg({ text: 'main acc', msgId: 'msg-1' })];
     const hidden = computeHiddenBlocks({ blocks, messages, watermark: 0, isStreaming: true });
     expect(hidden.has(0)).toBe(false); // live main tail protected

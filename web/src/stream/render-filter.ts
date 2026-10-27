@@ -87,8 +87,9 @@ export interface RenderFilterResult {
  * the one still accumulating — its partial content could transiently equal an
  * already-persisted message (and with partial-message streaming its msgId is
  * known before the content finishes). Matching never reaches it; it becomes
- * eligible the moment the turn ends or a newer main-lane block lands. An
- * Agent/Task tail is not guarded (exact-id twin, see below). Trailing
+ * eligible the moment the turn ends, a newer main-lane block lands, or history
+ * holds its whole text under the same msgId. An Agent/Task tail is not guarded
+ * (exact-id twin, see below). Trailing
  * subagent-lane blocks after it belong to live background agents — their lane
  * rule (running parent → keep) makes exclusion harmless.
  *
@@ -123,6 +124,15 @@ export function computeRenderFilter(input: RenderFilterInput): RenderFilterResul
   const { absorbed, unmatched } = computeAbsorbedIndices(
     blocks, contentDelta as SessionHistoryMessage[], boundary, fullEv, input.finishedAgentIds,
   );
+  // The guarded tail is absorbed after all once history holds its whole text
+  // under the same msgId, ending on a word boundary: the persisted copy then
+  // shows at least what the streamed one does. Without this a turn that wrote
+  // its words and then ran a long command showed those words twice until its
+  // next block (2026-10-26, a lead's live turn, 20 s and more). A block still
+  // growing past its persisted twin no longer matches and shows again (a
+  // persisted copy can be partial: the ACP journal appends per chunk), so the
+  // failure stays a brief double, never a vanish.
+  if (liveTail >= 0 && tailHasPersistedTwin(blocks[liveTail], messages, fullEv)) absorbed.add(liveTail);
   // An explicit retry notice keeps the failed response in its collapsed detail.
   // Hide only its exact main-lane text/thinking twins; never delete or similarity-match.
   const interruptedIds = new Set<string>();
@@ -139,6 +149,25 @@ export function computeRenderFilter(input: RenderFilterInput): RenderFilterResul
       && block.msgId && interruptedIds.has(block.msgId)) absorbed.add(i);
   }
   return { hidden: absorbed, unmatched: unmatched.filter(row => !absorbed.has(row.index)) };
+}
+
+const squash = (t: string) => t.replace(/\s+/g, ' ').trim();
+
+function tailHasPersistedTwin(block: StreamingBlock, messages: readonly SessionHistoryMessage[], ev: DeltaEvidence): boolean {
+  if ((block.type !== 'text' && block.type !== 'thinking') || block.parentToolUseId || !block.msgId) return false;
+  // Cheap exit on every streaming flush: the usual tail has no persisted row yet.
+  if (!(block.type === 'text' ? ev.textMsgIds : ev.thinkingMsgIds).has(block.msgId)) return false;
+  const mine = squash(block.content ?? '');
+  if (!mine) return false;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (m.msgId !== block.msgId || m.role !== 'assistant') continue;
+    // History joins a message's text parts with '\n' (a space once squashed),
+    // so a later part is the whole string or follows a space.
+    const theirs = squash((block.type === 'text' ? m.text : m.thinking) ?? '');
+    return theirs === mine || theirs.endsWith(` ${mine}`);
+  }
+  return false;
 }
 
 /** Convenience: just the hidden set (production code uses computeRenderFilter
