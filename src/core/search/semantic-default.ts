@@ -11,15 +11,23 @@
  * production server's freezes were short of.
  *
  * So the lane is on by default only for a real install. An isolated server
- * (the test runner, an `--_ephemeral-child`, or any server whose data home sits
- * in a temp directory) keeps keyword search and skips the model unless asked:
- * WALNUT_SEARCH_V2_SEMANTIC=1 opts in, =0 opts out anywhere.
+ * (the test runner, an `--_ephemeral-child`, any server whose data home sits in
+ * a temp directory or a Walnut task directory, or one started with a HOME that
+ * is not the account's own) keeps keyword search and skips the model unless
+ * asked: WALNUT_SEARCH_V2_SEMANTIC=1 opts in, =0 opts out anywhere. The STT
+ * auto-setup reads the same decision (src/core/stt/auto-setup.ts).
+ *
+ * Task dirs and a fake HOME since 2026-10-26: git work moved out of /tmp into
+ * task directories, so throwaway servers stopped looking like temp homes, and
+ * one started with HOME inside a slice clone downloaded a 2.3 GB speech model
+ * into that fake HOME.
  */
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { taskDirRoot } from '../../lib/task-dir.js';
 
-export type SemanticLaneReason = 'opt-in' | 'opt-out' | 'test-runner' | 'ephemeral' | 'temp-home' | 'default';
+export type SemanticLaneReason = 'opt-in' | 'opt-out' | 'test-runner' | 'ephemeral' | 'temp-home' | 'task-dir' | 'fake-home' | 'default';
 
 export interface SemanticLaneDecision {
   on: boolean;
@@ -34,6 +42,10 @@ export interface SemanticLaneInputs {
   walnutHome: string;
   /** Temp roots; a data home inside one is a throwaway server. */
   tmpRoots?: string[];
+  /** Walnut task-dir roots; a data home inside one is a throwaway server. Default: from env and the account home. */
+  taskDirRoots?: string[];
+  /** The account's own home (os.userInfo), against which env.HOME is compared. */
+  accountHome?: string;
 }
 
 // realpath answers are memoized: the decision is read on status requests, and
@@ -58,6 +70,18 @@ export function defaultTmpRoots(): string[] {
   return [...roots];
 }
 
+function accountHomeDir(): string | null {
+  try { return os.userInfo().homedir || null; } catch { return null; }
+}
+
+/** The task-dir root for this env and for the account home, plus this session's own task dir. */
+export function defaultTaskDirRoots(env: NodeJS.ProcessEnv, accountHome: string | null): string[] {
+  const roots = new Set<string>();
+  if (accountHome) roots.add(taskDirRoot(env, accountHome));
+  if (env.WALNUT_TASK_DIR && path.isAbsolute(env.WALNUT_TASK_DIR)) roots.add(path.resolve(env.WALNUT_TASK_DIR));
+  return [...roots];
+}
+
 function inside(child: string, root: string): boolean {
   const rel = path.relative(root, child);
   return rel !== '' && rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel);
@@ -75,6 +99,15 @@ export function semanticLaneDecision(inputs: SemanticLaneInputs): SemanticLaneDe
   const real = realpathOnce(home);
   for (const root of inputs.tmpRoots ?? defaultTmpRoots()) {
     if (inside(home, root) || inside(real, root)) return { on: false, reason: 'temp-home' };
+  }
+  const accountHome = inputs.accountHome ?? accountHomeDir();
+  for (const root of inputs.taskDirRoots ?? defaultTaskDirRoots(inputs.env, accountHome)) {
+    const r = path.resolve(root);
+    if (inside(home, r) || inside(real, r) || inside(real, realpathOnce(r))) return { on: false, reason: 'task-dir' };
+  }
+  const envHome = inputs.env.HOME;
+  if (envHome && accountHome && realpathOnce(path.resolve(envHome)) !== realpathOnce(path.resolve(accountHome))) {
+    return { on: false, reason: 'fake-home' };
   }
   return { on: true, reason: 'default' };
 }

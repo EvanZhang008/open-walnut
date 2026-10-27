@@ -10,7 +10,8 @@
  *   Linux             → llama-server and the GGUF model (llama-runtime.ts)
  *
  * Never on an isolated server (tests, ephemeral children, a data home in a temp
- * dir): each would download gigabytes into a throwaway place. A person who picked
+ * dir or a task dir, a HOME that is not the account's own): each would download
+ * gigabytes into a throwaway place. WALNUT_STT_AUTO_SETUP=1 opts one in. A person who picked
  * an engine keeps it. A failure retries with backoff, and the state is shown by
  * GET /api/stt/status so the settings page and the phone can say "installing".
  */
@@ -49,7 +50,7 @@ export function getQwenSetupStatus(): QwenSetupStatus {
   return { ...status };
 }
 
-/** Tests, an ephemeral child, or a data home in a temp dir: the same rule search uses for its model. */
+/** Tests, an ephemeral child, a temp or task-dir data home, a fake HOME: the same rule search uses for its model. */
 export async function isIsolatedServer(): Promise<boolean> {
   const { semanticLaneDecision } = await import('../search/semantic-default.js');
   const { IS_EPHEMERAL, WALNUT_HOME } = await import('../../constants.js');

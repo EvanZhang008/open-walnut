@@ -22,7 +22,10 @@ const REPO = path.join(import.meta.dirname, '..', '..')
 const TMP = ['/tmp', '/private/tmp', '/var/folders/xy/T']
 
 describe('who loads the model', () => {
-  const base: SemanticLaneInputs = { env: {}, isEphemeral: false, walnutHome: '/Users/someone/.open-walnut', tmpRoots: TMP }
+  const base: SemanticLaneInputs = {
+    env: {}, isEphemeral: false, walnutHome: '/Users/someone/.open-walnut', tmpRoots: TMP,
+    taskDirRoots: ['/Users/someone/.local/state/open-walnut/tasks'], accountHome: '/Users/someone',
+  }
   it.each([
     ['a real install', {}, 'default', true],
     ['the test runner', { env: { VITEST: 'true' } }, 'test-runner', false],
@@ -35,6 +38,12 @@ describe('who loads the model', () => {
     ['opt-out wins on a real install', { env: { WALNUT_SEARCH_V2_SEMANTIC: '0' } }, 'opt-out', false],
     ['a home merely named like tmp is not a temp home', { walnutHome: '/Users/someone/tmp-notes/.open-walnut' }, 'default', true],
     ['the temp root itself is not inside it', { walnutHome: '/tmp' }, 'default', true],
+    ['a data home in a task dir (a scripted server after git work left /tmp)', { walnutHome: '/Users/someone/.local/state/open-walnut/tasks/mvx-1/mh/data' }, 'task-dir', false],
+    ['a fake HOME (a harness that isolates HOME, 2026-10-26: 2.3 GB model in it)', { env: { HOME: '/Users/someone/.cache/walnut-slices/rrd/mh' }, walnutHome: '/Users/someone/.cache/walnut-slices/rrd/mh/data' }, 'fake-home', false],
+    ['the real HOME is a real install', { env: { HOME: '/Users/someone' } }, 'default', true],
+    ['the real HOME with a trailing slash is still real', { env: { HOME: '/Users/someone/' } }, 'default', true],
+    ['opt-in wins over a fake HOME', { env: { HOME: '/x/fake', WALNUT_SEARCH_V2_SEMANTIC: '1' } }, 'opt-in', true],
+    ['the task-dir root itself is not inside it', { walnutHome: '/Users/someone/.local/state/open-walnut/tasks' }, 'default', true],
   ] as const)('%s', (_name, over, reason, on) => {
     const d = semanticLaneDecision({ ...base, ...over, env: { ...(over as { env?: NodeJS.ProcessEnv }).env } })
     expect(d).toEqual({ on, reason })

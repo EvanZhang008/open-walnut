@@ -106,10 +106,12 @@ server is isolated by construction, so nothing it does reaches the real Walnut:
   push and no heartbeat;
 - shared remote hosts stay off unless it is started with `WALNUT_EPHEMERAL_REMOTE_HOSTS=1`,
   because a remote daemon hands relayed work to whichever server it sees first;
-- search is keyword only: no isolated server (an ephemeral child, the test runner, any data
-  home in a temp dir) loads the embedding model, about 2.2 GB per worker lane plus a full
-  re-embed of the copied data (`src/core/search/semantic-default.ts`). Test semantic search
-  with `WALNUT_SEARCH_V2_SEMANTIC=1`.
+- search is keyword only and voice is not set up: no isolated server (an ephemeral child, the
+  test runner, a data home in a temp dir or a task dir, a HOME that is not the account's own)
+  loads the embedding model, about 2.2 GB per worker lane plus a full re-embed of the copied
+  data, or downloads the Qwen3-ASR voice model (2.3 to 3.2 GB) into its HOME
+  (`src/core/search/semantic-default.ts`). Opt in with `WALNUT_SEARCH_V2_SEMANTIC=1` and
+  `WALNUT_STT_AUTO_SETUP=1`.
 
 Plugins still load with the copied settings, so a test that sends mail or a chat message
 through one sends it for real.
