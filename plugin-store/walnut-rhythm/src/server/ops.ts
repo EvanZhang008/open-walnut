@@ -59,6 +59,14 @@ export const OP_SPECS: OpSpec[] = [
     description: 'Skip the waiting break, or end the running one early (the sitting count starts now). The block cycle continues, so the long break still comes.',
   },
   {
+    name: 'music_tracks', title: 'List the focus music', readonly: true, remote: 'allow',
+    description: 'List the audio files (m4a, mp3, wav) in the focus music folder on this Mac, in play order, with their absolute paths. Read-only. The App and the phone play them; nothing here plays sound.',
+  },
+  {
+    name: 'music_folder_open', title: 'Open the focus music folder', readonly: false, remote: 'deny',
+    description: 'Show the focus music folder in Finder, so the person can add or remove tracks. Mac only.',
+  },
+  {
     name: 'macos_shortcuts_install', title: 'Install the Rhythm shortcuts', readonly: false, remote: 'deny',
     description: 'Prepare the "Walnut Focus On" and "Walnut Focus Off" shortcuts and open each in Shortcuts, which asks the person to add it with one click. Mac only.',
   },
@@ -77,6 +85,8 @@ function handlers(runtime: RhythmRuntime): Record<string, Handler> {
     break_snooze: (args) => actions.breakSnooze(runtime, args),
     break_start: () => actions.breakStart(runtime),
     break_skip: () => actions.breakSkip(runtime),
+    music_tracks: () => actions.musicTracks(runtime),
+    music_folder_open: () => actions.musicFolderOpen(runtime),
     macos_shortcuts_install: () => actions.shortcutsInstall(runtime),
     macos_privacy_open: () => actions.privacyOpen(runtime),
   }

@@ -17,7 +17,7 @@ function op(fake: ReturnType<typeof createFakeWalnut>, name: string) {
 }
 
 describe('activate', () => {
-  it('declares the nine ops with the intended reach', async () => {
+  it('declares the eleven ops with the intended reach', async () => {
     const fake = createFakeWalnut({ pluginId: 'walnut-rhythm', config: SAFE_CONFIG })
     await activate(fake.api)
     try {
@@ -30,6 +30,8 @@ describe('activate', () => {
         break_snooze: 'write:allow',
         break_start: 'write:allow',
         break_skip: 'write:allow',
+        music_tracks: 'read:allow',
+        music_folder_open: 'write:deny',
         macos_shortcuts_install: 'write:deny',
         macos_privacy_open: 'write:deny',
       })

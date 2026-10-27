@@ -5,6 +5,8 @@
 import { useEffect, useState } from 'react'
 import type { WalnutWebApi } from '@open-walnut/plugin-api/web'
 import { countdownText, focusPhaseText } from './format'
+import { MusicToggle } from './music-card'
+import type { MusicPlayer } from './music'
 import type { RhythmPublicState, RhythmStore } from './store'
 
 interface TaskOption {
@@ -56,11 +58,12 @@ export interface FocusCardProps {
   walnut: WalnutWebApi
   store: RhythmStore
   state: RhythmPublicState
-  run(localOp: string, args?: Record<string, unknown>): void
+  run(localOp: string, args?: Record<string, unknown>): Promise<boolean>
   busy: boolean
+  music: MusicPlayer
 }
 
-export function FocusCard({ walnut, store, state, run, busy }: FocusCardProps) {
+export function FocusCard({ walnut, store, state, run, busy, music }: FocusCardProps) {
   const { focus, config } = state
   const running = focus.phase === 'focus' || focus.phase === 'break'
   const now = useServerNow(store, running)
@@ -69,7 +72,13 @@ export function FocusCard({ walnut, store, state, run, busy }: FocusCardProps) {
   const remaining = focus.endsAt ? Math.max(0, focus.endsAt - now) : 0
   const short = config.focusMinutes
   const long = Math.min(180, config.focusMinutes * 2)
-  const start = (minutes: number) => run('focus_start', { minutes, ...(taskId ? { taskId } : {}) })
+  // The music starts inside the click (a browser allows sound only then); a refused start stops it again.
+  const startBlock = (args: Record<string, unknown>) => {
+    const withMusic = config.musicWithFocus && (music.get().listing?.tracks.length ?? 0) > 0
+    const played = withMusic ? music.play({ withFocus: true }) : undefined
+    void run('focus_start', args).then((ok) => { if (!ok && played !== undefined) music.stop(played) })
+  }
+  const start = (minutes: number) => startBlock({ minutes, ...(taskId ? { taskId } : {}) })
   const blockNumber = focus.phase === 'focus' ? focus.completedInCycle + 1 : focus.completedInCycle
 
   return (
@@ -142,9 +151,10 @@ export function FocusCard({ walnut, store, state, run, busy }: FocusCardProps) {
           )}
           <div className="rhythm-actions">
             {focus.phase === 'break' && (
-              <button type="button" className="rhythm-button" disabled={busy} data-testid="rhythm-break-skip" onClick={() => run('break_skip')}>End break</button>
+              <button type="button" className="rhythm-button" disabled={busy} data-testid="rhythm-break-skip" onClick={() => { void run('break_skip') }}>End break</button>
             )}
-            <button type="button" className="rhythm-button" disabled={busy} data-testid="rhythm-focus-stop" onClick={() => run('focus_stop')}>Stop</button>
+            <button type="button" className="rhythm-button" disabled={busy} data-testid="rhythm-focus-stop" onClick={() => { void run('focus_stop') }}>Stop</button>
+            {focus.phase === 'focus' && <MusicToggle player={music} />}
           </div>
         </div>
       )}
@@ -153,16 +163,16 @@ export function FocusCard({ walnut, store, state, run, busy }: FocusCardProps) {
         <div className="rhythm-running">
           <p className="rhythm-focus-title">{focus.title ? `Done: ${focus.title}` : 'Block done.'} Time to stand up.</p>
           <div className="rhythm-actions">
-            <button type="button" className="rhythm-button rhythm-primary" disabled={busy} data-testid="rhythm-break-start" onClick={() => run('break_start')}>
+            <button type="button" className="rhythm-button rhythm-primary" disabled={busy} data-testid="rhythm-break-start" onClick={() => { void run('break_start') }}>
               Start {focus.breakKind === 'long' ? `long break (${config.longBreakMinutes})` : `break (${config.breakMinutes})`}
             </button>
-            <button type="button" className="rhythm-button" disabled={busy} data-testid="rhythm-break-skip" onClick={() => run('break_skip')}>Skip break</button>
+            <button type="button" className="rhythm-button" disabled={busy} data-testid="rhythm-break-skip" onClick={() => { void run('break_skip') }}>Skip break</button>
             <button
               type="button"
               className="rhythm-button"
               disabled={busy}
               data-testid="rhythm-focus-again"
-              onClick={() => run('focus_start', { ...(focus.taskId ? { taskId: focus.taskId } : {}), ...(focus.minutes ? { minutes: focus.minutes } : {}) })}
+              onClick={() => startBlock({ ...(focus.taskId ? { taskId: focus.taskId } : {}), ...(focus.minutes ? { minutes: focus.minutes } : {}) })}
             >
               Another block
             </button>

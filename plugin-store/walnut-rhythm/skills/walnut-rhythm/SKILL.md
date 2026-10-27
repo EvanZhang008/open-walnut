@@ -20,6 +20,7 @@ Every op below is called with `walnut tools call <op> '<json args>'`. Read `waln
 | "snooze the stand-up reminder", "remind me later" | `walnut_rhythm_break_snooze` with optional `minutes` |
 | "I stood up", "I took a walk", "done" to the reminder | `walnut_rhythm_break_done` |
 | "how long have I been sitting", "how much did I focus today", "is a block running" | `walnut_rhythm_status` |
+| "what focus music do I have", "is my brown noise there" | `walnut_rhythm_music_tracks` |
 
 ## Ops
 
@@ -30,6 +31,7 @@ Every op below is called with `walnut tools call <op> '<json args>'`. Read `waln
 - `walnut_rhythm_break_skip` `{}`: skips the waiting or running break.
 - `walnut_rhythm_break_snooze` `{ minutes?: integer }`: the reminder returns after that many minutes at the keyboard.
 - `walnut_rhythm_break_done` `{}`: records a break and starts the sitting count over.
+- `walnut_rhythm_music_tracks` `{}`: read-only. The audio files in the focus music folder (`folder`, `tracks[].title`, `tracks[].file`), in play order.
 
 Each mutating op answers `{ message, state }`; relay `message` in one sentence.
 
@@ -38,5 +40,6 @@ Each mutating op answers `{ message, state }`; relay `message` in one sentence.
 - Tie a block to a task only with a real task id (the task you are in, or one the person named). Never invent one.
 - Do not start a block, snooze, or log a break unless the person asked. These are their timers.
 - The stand-up reminder already waits during focus blocks, quiet hours, Walnut quiet mode and a macOS Focus. Do not add your own reminders on top of it.
+- Focus music plays in the person's browser or phone, never from an op: you cannot start or stop the sound. Tell them to press Play in the Rhythm app (or on the phone, Settings, Focus music). To add music, they put m4a, mp3 or wav files in the folder `music_tracks` names.
 - `macos_shortcuts_install` is not for you: it opens dialogs on the Mac's screen, so it only runs from the Install shortcuts button in the Rhythm app.
 - Settings (reminder interval, block and break lengths, quiet hours) live under `plugins.walnut-rhythm` and are edited in Settings, Plugins, Rhythm. Point the person there rather than changing config yourself.

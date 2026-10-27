@@ -62,6 +62,7 @@ describe('normalizeConfig', () => {
       reminderEveryMinutes: 60, awayResetMinutes: 5, snoozeMinutes: 10, standBreakMinutes: 10, quietHours: '22:00-08:00',
       deferForNaturalPauseMinutes: 5, focusMinutes: 25, breakMinutes: 5, longBreakMinutes: 15, longBreakEvery: 4,
       focusQuietsWalnut: true, mirrorMacosFocus: true, macosFocusShortcuts: false,
+      musicFolder: '', musicWithFocus: true,
     })
   })
 

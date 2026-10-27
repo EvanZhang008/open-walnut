@@ -1,12 +1,13 @@
 # Rhythm (walnut-rhythm)
 
-Focus blocks and movement breaks for Walnut. Rhythm does three things:
+Focus blocks and movement breaks for Walnut. Rhythm does four things:
 
 - **A stand-up reminder that knows when you are at the keyboard.** After an hour of continuous keyboard time it asks you to stand up, with Start break and Snooze buttons. Start break counts a short break down in the sidebar, and the sitting count starts when it ends. Time you spent away already counts as moving, so it never nags someone who just came back from a walk.
 - **A focus block (a pomodoro) tied to a task.** Pick a task, start 25 minutes, and the block's minutes are logged on that task when it ends. Then a short break, and a long break every fourth block.
 - **Quiet while you focus.** Walnut quiet mode stays on for the length of a block, and it can follow the Mac's own Focus as well.
+- **Focus music from your own folder.** One click plays the tracks in a folder on your Mac (brown noise, rain, whatever you put there), looping, in the console, the Mac app and the phone. Music started with a block stops when the block ends.
 
-It adds one App (Rhythm), eight ops, two tools for routine watchers, and one skill that tells Ask Walnut when to use them.
+It adds one App (Rhythm), eleven ops, two tools for routine watchers, and one skill that tells Ask Walnut when to use them.
 
 ## The three signals it uses
 
@@ -30,6 +31,25 @@ The sitting streak works like the chapters in Time: a gap of `away_reset_minutes
 
 The stand-up reminder waits during a focus block (the block's own break handles it), inside quiet hours, and while Walnut quiet mode is on. It fires once they end if you are still sitting.
 
+## Focus music
+
+Rhythm ships no audio. It plays the files in one folder on the Mac: by default `focus-music` in the plugin's data directory (`~/.open-walnut/plugin-data/walnut-rhythm/focus-music`, made on first use; `plugin-data/` is machine-local and never synced), or the folder named in `music_folder`. Only the folder's own `.m4a`, `.mp3` and `.wav` files count, sorted by name with numbers in order, so `01 Brown Noise.m4a` plays first. Those three formats play on every surface (Chromium, Safari, the Mac app's WebKit, the phone); other audio files, and names with `..` (the file route refuses those), are named as skipped. A file added later shows up on the next Refresh.
+
+| Where | What it does |
+|---|---|
+| Rhythm App, Focus music | **Play** / **Stop** (one click each), the volume, Repeat one, In order or Shuffle, the track list, the folder with **Open folder** (Finder) and **Refresh**. |
+| Rhythm App, a running block | **Play <track>** / **Stop <track>** beside the countdown. |
+| A Start button | With `music_with_focus` on (the default), starts the music on the device you clicked. |
+| iPhone, Settings, Focus music | The same Play / Stop, volume, order and tracks, plus starting and stopping a block. Keeps playing with the screen locked and in other apps; Lock Screen controls stop it. |
+
+How it plays:
+
+- The sound belongs to the device that clicked. A block started by an agent or on another device never starts sound here, so two windows never play over each other.
+- Music started with a block, or while one runs, is tied to it and stops when the block ends or is stopped. Music started while idle plays until you stop it.
+- The tracks stream through Walnut's raw file route, which answers byte ranges, so an 8 hour file starts at once and is never copied. On a cloud companion the phone reads them from the Mac through the bridge.
+- One track on repeat loops on its own (the phone uses a gapless looper). The console's player is one audio element for the whole page, so moving to another screen never stops it. Track, order and volume are kept per device.
+- On the phone, a call or an alarm pauses the music and it comes back when iOS allows.
+
 ## Settings
 
 All keys live under `plugins.walnut-rhythm` and show up in Settings, Plugins, Rhythm.
@@ -49,6 +69,8 @@ All keys live under `plugins.walnut-rhythm` and show up in Settings, Plugins, Rh
 | `focus_quiets_walnut` | true | Walnut quiet mode for the length of each block. |
 | `mirror_macos_focus` | true | Walnut goes quiet while a macOS Focus is on. |
 | `macos_focus_shortcuts` | false | Each block turns macOS Do Not Disturb on and off through two Shortcuts. |
+| `music_folder` | empty | Folder on this Mac whose m4a, mp3 and wav files are the focus music. `~/` works. Empty uses the plugin's own `focus-music` folder. |
+| `music_with_focus` | true | A Start button also starts the focus music on that device; it stops when the block ends. |
 
 ## Ops
 
@@ -63,6 +85,8 @@ Ops are named `walnut_rhythm_<name>`. The everyday ones can be called from any W
 | `break_snooze` | `minutes?` | Snooze the stand-up reminder. |
 | `break_start` | | Start a timed break: the one a finished block earned, or else the stand-up break. The sitting count starts when it ends. |
 | `break_skip` | | Skip the waiting break, or end the running one early. |
+| `music_tracks` | | Read-only. The tracks in the focus music folder, in play order, with their paths on the Mac. |
+| `music_folder_open` | | Show the focus music folder in Finder (Mac only, in-process only). |
 | `macos_shortcuts_install` | | Prepare and open the two shortcuts (Mac only, in-process only). |
 
 `status` and `focus_start` are also registered as tools, for routine watchers. The App updates live from the plugin event `plugin:walnut-rhythm:state`.
@@ -82,6 +106,7 @@ Rhythm owns one quiet hold. When a focus block and a macOS Focus overlap, the ho
 - It does not add shortcuts behind your back. Nothing is added to Shortcuts without your click, and nothing under Shortcuts runs unless `macos_focus_shortcuts` is on.
 - It does not turn Do Not Disturb back off when the plugin is disabled in the middle of a block.
 - It does not send letters or phone pushes of its own. Reminders are Walnut notices, which Walnut keeps quiet during quiet mode.
+- It ships, downloads and uploads no audio. It plays only the files you put in the folder, from where they are.
 - It keeps no history beyond one small file per day (`days/<date>.json` in the plugin's data directory).
 
 ## Development
@@ -93,4 +118,4 @@ node packages/plugin-cli/dist/cli.js validate --root plugin-store/walnut-rhythm
 npm run test:focus tests/plugins/walnut-rhythm
 ```
 
-The decisions live in pure modules with their own tests: `presence.ts` (the streak), `scheduler.ts` (the reminder), `focus.ts` (the block cycle and the quiet hold), `clock.ts`, `macos-focus.ts` and `macos-shortcuts.ts`. `runtime.ts` applies them and is tested on a fake clock and a fake host.
+The decisions live in pure modules with their own tests: `presence.ts` (the streak), `scheduler.ts` (the reminder), `focus.ts` (the block cycle and the quiet hold), `clock.ts`, `macos-focus.ts`, `macos-shortcuts.ts` and `music.ts` (which files are tracks). The console's player is `web/music.ts`; the phone's is `ios-native/Walnut/Stores/FocusMusicPlayer.swift`. `runtime.ts` applies them and is tested on a fake clock and a fake host.

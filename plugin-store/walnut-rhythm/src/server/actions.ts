@@ -6,8 +6,12 @@
  * Refusals are thrown as plain sentences; the host turns a throw into
  * `{ ok: false, message }` for every caller (a session, the App, a notice button).
  */
+import fsp from 'node:fs/promises'
+import os from 'node:os'
 import { clampMinutes } from './config'
+import { runProcess } from './exec'
 import { startBreak, startFocus, stopFocus, skipBreak, advanceFocus } from './focus'
+import { listMusic, resolveMusicFolder, type MusicFs, type MusicListing } from './music'
 import { KEY_BREAK_OVER, KEY_FOCUS_DONE, KEY_STAND_UP } from './notices'
 import { restartStreak } from './presence'
 import { buildPublicState, type RhythmPublicState } from './public-state'
@@ -175,4 +179,36 @@ export async function shortcutsInstall(runtime: RhythmRuntime): Promise<{ messag
       : `${failed.map((step) => `${step.name}: ${step.step} failed (${step.error ?? 'unknown error'})`).join('; ')}`
   if (!result.alreadyInstalled && opened === 0) throw new Error(message)
   return { message, steps: result.steps, state: await status(runtime, {}) }
+}
+
+const nodeMusicFs: MusicFs = {
+  readdir: (dir) => fsp.readdir(dir, { withFileTypes: true }),
+  stat: async (file) => {
+    const info = await fsp.stat(file)
+    return { size: info.size, isFile: info.isFile() }
+  },
+}
+
+function musicFolder(runtime: RhythmRuntime) {
+  return resolveMusicFolder(runtime.config.musicFolder, runtime.walnut.storage.dataDir, os.homedir())
+}
+
+/** The tracks in the focus music folder. The default folder is made on first look, so there is a place to put files. */
+export async function musicTracks(runtime: RhythmRuntime, fs: MusicFs = nodeMusicFs): Promise<MusicListing & { withFocus: boolean }> {
+  const target = musicFolder(runtime)
+  const withFocus = runtime.config.musicWithFocus
+  if (target.error) return { folder: target.folder, isDefault: false, exists: false, tracks: [], skipped: [], error: target.error, withFocus }
+  if (target.isDefault) await fsp.mkdir(target.folder, { recursive: true }).catch(() => undefined)
+  return { ...(await listMusic(target.folder, target.isDefault, fs)), withFocus }
+}
+
+/** Show the focus music folder in Finder (Mac only, from the App). */
+export async function musicFolderOpen(runtime: RhythmRuntime): Promise<{ message: string }> {
+  if (process.platform !== 'darwin') throw new Error('Opening the folder works on a Mac only.')
+  const target = musicFolder(runtime)
+  if (target.error) throw new Error(target.error)
+  if (target.isDefault) await fsp.mkdir(target.folder, { recursive: true })
+  const result = await runProcess('open', [target.folder], { timeoutMs: 10_000 })
+  if (!result.ok) throw new Error(`Finder could not open ${target.folder}: ${result.error ?? 'unknown error'}`)
+  return { message: `Opened ${target.folder} in Finder. Music you add there shows up here.` }
 }

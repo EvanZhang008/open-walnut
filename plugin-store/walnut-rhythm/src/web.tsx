@@ -3,10 +3,12 @@
  *
  * The live countdown is NOT drawn here: the server publishes a status item and the host
  * draws it as a ring in the rail on every screen. The App entry carries no badge, since
- * a pinned App would repeat the ring's minutes right next to it.
+ * a pinned App would repeat the ring's minutes right next to it. The focus music player
+ * is made here rather than in the App, so leaving the App never stops the music.
  */
 import type { AppProps, WalnutWebApi } from '@open-walnut/plugin-api/web'
 import { RhythmApp } from './web/app'
+import { createMusicPlayer } from './web/music'
 import { createRhythmStore } from './web/store'
 import { RHYTHM_CSS } from './web/styles'
 
@@ -15,6 +17,8 @@ const APP_ORDER = 500
 
 export async function activate(walnut: WalnutWebApi) {
   const store = createRhythmStore(walnut)
+  // Console-wide, so the music keeps playing on every screen; the plugin's signal ends it.
+  const music = createMusicPlayer(walnut, store)
 
   function RhythmIcon({ size = 18 }: { size?: number }) {
     return (
@@ -27,7 +31,7 @@ export async function activate(walnut: WalnutWebApi) {
   }
 
   function RhythmAppRoot(props: AppProps) {
-    return <RhythmApp {...props} walnut={walnut} store={store} />
+    return <RhythmApp {...props} walnut={walnut} store={store} music={music} />
   }
 
   const app = walnut.ui.app({

@@ -24,6 +24,10 @@ export interface RhythmConfig {
   focusQuietsWalnut: boolean
   mirrorMacosFocus: boolean
   macosFocusShortcuts: boolean
+  /** Raw folder path for focus music; '' means the plugin's own `focus-music` folder. */
+  musicFolder: string
+  /** Starting a focus block from a Start button also starts the music on that device. */
+  musicWithFocus: boolean
 }
 
 interface IntField { key: string; field: keyof RhythmConfig; def: number; min: number; max: number }
@@ -44,6 +48,7 @@ const BOOL_FIELDS: Array<{ key: string; field: keyof RhythmConfig; def: boolean 
   { key: 'focus_quiets_walnut', field: 'focusQuietsWalnut', def: true },
   { key: 'mirror_macos_focus', field: 'mirrorMacosFocus', def: true },
   { key: 'macos_focus_shortcuts', field: 'macosFocusShortcuts', def: false },
+  { key: 'music_with_focus', field: 'musicWithFocus', def: true },
 ]
 
 export const DEFAULT_QUIET_HOURS = '22:00-08:00'
@@ -56,6 +61,7 @@ export function normalizeConfig(raw: unknown): RhythmConfig {
   const quiet = source.quiet_hours
   // Present-but-empty is meaningful (the user turned quiet hours off); absent means the default.
   out.quietHours = typeof quiet === 'string' ? quiet.trim() : DEFAULT_QUIET_HOURS
+  out.musicFolder = typeof source.music_folder === 'string' ? source.music_folder.trim() : ''
   return out as unknown as RhythmConfig
 }
 

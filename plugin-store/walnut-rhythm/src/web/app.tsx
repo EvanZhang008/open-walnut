@@ -1,6 +1,6 @@
 /**
  * The Rhythm page: an instrument strip (sitting time, next reminder, quiet), the focus
- * block, today's scorecard, the macOS rows, and the plugin's own settings, all on one
+ * block, today's scorecard, the focus music, the macOS rows, and the plugin's own settings, all on one
  * page in Settings. This page IS the plugin, so its settings live here rather than in a
  * second card under Settings → Plugins (manifest `settingsIn: 'app'`).
  *
@@ -13,6 +13,8 @@ import type { AppProps, WalnutWebApi } from '@open-walnut/plugin-api/web'
 import { FocusCard } from './focus-card'
 import { clockText, minutesText, nextReminderText } from './format'
 import { MacCard } from './mac-card'
+import { MusicCard } from './music-card'
+import type { MusicPlayer } from './music'
 import type { RhythmPublicState, RhythmStore } from './store'
 
 const TIME_TIMELINE_PATH = '/apps/walnut-time~main/timeline'
@@ -22,6 +24,7 @@ const MINUTE_MS = 60_000
 export interface RhythmAppProps extends AppProps {
   walnut: WalnutWebApi
   store: RhythmStore
+  music: MusicPlayer
 }
 
 function useRhythm(store: RhythmStore): RhythmPublicState | null {
@@ -39,7 +42,8 @@ function quietText(state: RhythmPublicState): string {
     .join(' · ')
 }
 
-type RhythmAppRun = (localOp: string, args?: Record<string, unknown>) => void
+/** Runs one op and shows its answer; resolves whether it succeeded. */
+type RhythmAppRun = (localOp: string, args?: Record<string, unknown>) => Promise<boolean>
 
 /** Sitting time, next reminder and quiet as three dials over one meter of time at the keyboard. */
 function NowBlock({ state, run, busy }: { state: RhythmPublicState; run: RhythmAppRun; busy: boolean }) {
@@ -85,10 +89,10 @@ function NowBlock({ state, run, busy }: { state: RhythmPublicState; run: RhythmA
           )}
           <div className="rhythm-actions">
             {/* Starts the stand-up break timer (the ring counts it down); a running block or break owns the next break. */}
-            <button type="button" className="rhythm-button" disabled={busy || state.focus.phase !== 'idle'} data-testid="rhythm-stand-now" onClick={() => run('break_start')}>
+            <button type="button" className="rhythm-button" disabled={busy || state.focus.phase !== 'idle'} data-testid="rhythm-stand-now" onClick={() => { void run('break_start') }}>
               Stand up now ({config.standBreakMinutes} min)
             </button>
-            <button type="button" className="rhythm-button" disabled={busy || !sitting.present} data-testid="rhythm-break-snooze" onClick={() => run('break_snooze')}>
+            <button type="button" className="rhythm-button" disabled={busy || !sitting.present} data-testid="rhythm-break-snooze" onClick={() => { void run('break_snooze') }}>
               Snooze {config.snoozeMinutes} min
             </button>
           </div>
@@ -154,7 +158,7 @@ function SettingsBlock({ walnut, navigate }: { walnut: WalnutWebApi; navigate: A
   )
 }
 
-export function RhythmApp({ walnut, store, navigate }: RhythmAppProps) {
+export function RhythmApp({ walnut, store, music, navigate }: RhythmAppProps) {
   const state = useRhythm(store)
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null)
@@ -164,10 +168,11 @@ export function RhythmApp({ walnut, store, navigate }: RhythmAppProps) {
   useEffect(() => { void store.refresh({ refreshShortcuts: true }) }, [store])
   const run = useCallback<RhythmAppRun>((localOp, args = {}) => {
     setBusy(true)
-    void store.call<{ message?: string }>(localOp, args).then((outcome) => {
+    return store.call<{ message?: string }>(localOp, args).then((outcome) => {
       setBusy(false)
       if (outcome.ok) setMessage({ ok: true, text: outcome.result?.message ?? 'Done.' })
       else setMessage({ ok: false, text: outcome.message })
+      return outcome.ok
     })
   }, [store])
   const refresh = useCallback(() => {
@@ -223,10 +228,11 @@ export function RhythmApp({ walnut, store, navigate }: RhythmAppProps) {
       </header>
       <NowBlock state={state} run={run} busy={busy} />
       <div className="rhythm-two">
-        <FocusCard walnut={walnut} store={store} state={state} run={run} busy={busy} />
+        <FocusCard walnut={walnut} store={store} state={state} run={run} busy={busy} music={music} />
         <ScoreCard state={state} />
       </div>
-      <MacCard state={state} onInstall={install} onOpenPrivacy={() => run('macos_privacy_open')} refresh={refresh} busy={busy} />
+      <MusicCard player={music} state={state} busy={busy} onOpenFolder={() => { void run('music_folder_open') }} />
+      <MacCard state={state} onInstall={install} onOpenPrivacy={() => { void run('macos_privacy_open') }} refresh={refresh} busy={busy} />
       <SettingsBlock walnut={walnut} navigate={navigate} />
       <footer className="rhythm-links">
         <a href={TIME_TIMELINE_PATH} data-testid="rhythm-link-timeline" onClick={(event) => { event.preventDefault(); navigate(TIME_TIMELINE_PATH) }}>
