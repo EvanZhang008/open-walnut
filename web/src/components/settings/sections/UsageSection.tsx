@@ -5,7 +5,7 @@ import { SettingsButton } from '../inputs/SettingsButton';
 import { SegmentedControl } from '../inputs/SegmentedControl';
 import { useUsageCosts } from '@/hooks/useUsageCosts';
 import type { TimeSelection } from '@/hooks/useUsageOverview';
-import { formatTokens } from '@/utils/format';
+import { formatTokens as formatTokenCount } from '@/utils/format';
 import { UsageDailyChart } from '@/components/usage/UsageDailyChart';
 import { UsageDateRange } from '@/components/usage/UsageDateRange';
 import { collectUsage, type CostLine, type CostReport, type CostTaskLine, type CostView, type DailyCost, type Period } from '@/api/usage';
@@ -40,6 +40,11 @@ export function money(usd: number): string {
 
 function count(n: number, one: string, many = `${one}s`): string {
   return `${n.toLocaleString('en-US')} ${n === 1 ? one : many}`;
+}
+
+/** Token counts with a B step: a busy machine's all-time total runs into the hundreds of billions. */
+function formatTokens(n: number): string {
+  return n >= 1_000_000_000 ? `${(n / 1_000_000_000).toFixed(1)}B` : formatTokenCount(n);
 }
 
 function totalTokens(line: CostLine): number {
