@@ -275,6 +275,19 @@ final class TagDisplayTests: XCTestCase {
         XCTAssertEqual(TaskTagPills.withoutGoneLinks(tags, links: []), tags)
     }
 
+    func testBeforeTheDetailLandsNoLinkLookingTagIsDrawn() {
+        let tags = ["plan:/tmp/fix/MATRIX-r5.md", "doc:~/notes/a.md", "pr:https://github.com/acme/app/pull/12", "sev:2", "ticket:ENG-12", "label:http"]
+        // Not ready (still loading, or the read failed): only the tags that are no link.
+        XCTAssertEqual(TaskTagPills.visibleTags(tags, links: nil, ready: false), ["sev:2", "ticket:ENG-12", "label:http"])
+        // Ready on an older server (no links): every tag, as before.
+        XCTAssertEqual(TaskTagPills.visibleTags(tags, links: nil, ready: true), tags)
+        // Ready with links: the gone one is left out.
+        let gone = LinkTagView(tag: "plan:/tmp/fix/MATRIX-r5.md", name: "n", kind: "plan", group: "doc", target: "/tmp/fix/MATRIX-r5.md", file: true, gone: true)
+        XCTAssertEqual(TaskTagPills.visibleTags(tags, links: [gone], ready: true), Array(tags.dropFirst()))
+        // A task whose tags are all links shows no Tags row while it loads.
+        XCTAssertEqual(TaskTagPills.visibleTags(["plan:/tmp/a.md"], links: nil, ready: false), [])
+    }
+
     func testEachLinkGroupHasItsOwnIcon() {
         XCTAssertEqual(["doc", "review", "ticket", "thread", "link", nil].map { TaskTagPills.icon($0) },
                        ["doc.text", "arrow.triangle.pull", "smallcircle.filled.circle", "bubble.left", "link", "doc.text"])

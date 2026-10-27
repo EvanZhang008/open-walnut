@@ -24,6 +24,10 @@ struct TaskPropertiesList: View {
     var onPinnedChange: (Bool) -> Void = { _ in }
     /// The task's link tags as the server names them (the detail read; nil until it lands).
     var links: [LinkTagView]? = nil
+    /// The detail read has landed. Before it (or when it failed) nothing says which link files are
+    /// gone, so no link-looking tag is drawn: a removed file's raw path never shows and no Tags
+    /// row appears only to fold away. After it, `links == nil` means an older server.
+    var linksReady = true
 
     @Environment(TasksStore.self) private var tasks
     @Environment(\.dynamicTypeSize) private var typeSize
@@ -41,7 +45,7 @@ struct TaskPropertiesList: View {
             projectRow
             TaskPropertyDivider()
             dueRow
-            if let tags = task.tags.map({ TaskTagPills.withoutGoneLinks($0, links: links ?? []) }), !tags.isEmpty {
+            if let tags = task.tags.map({ TaskTagPills.visibleTags($0, links: links, ready: linksReady) }), !tags.isEmpty {
                 TaskPropertyDivider()
                 tagsRow(tags)
             }

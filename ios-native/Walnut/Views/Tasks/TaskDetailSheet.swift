@@ -145,7 +145,8 @@ struct TaskDetailSheet: View {
                 fallback = TasksStore.withPinned(fallback, pinned)
                 confirmed = TasksStore.withPinned(confirmed, pinned)
             },
-            links: detailController.detail?.links
+            links: detailController.detail?.links,
+            linksReady: detailController.detail != nil
         )
     }
 

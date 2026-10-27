@@ -53,7 +53,7 @@ struct TaskTagPills: View {
                 ForEach(pills.hidden) { pill in
                     // A link a rule hides still reads its name when revealed, never its raw path.
                     if let link = byTag[pill.tag] {
-                        linkPillView(link)
+                        linkPillView(link, muted: true)
                     } else {
                         pillView(pill, muted: true)
                     }
@@ -69,27 +69,26 @@ struct TaskTagPills: View {
         }
     }
 
-    /// A link pill: the kind's icon and the name. A URL opens; a file shows its whole path (the
-    /// phone cannot open a file on the host from here).
+    /// A link pill: the kind's icon and the name, like the console's (no trailing arrow: the icon
+    /// already says it is a link). A URL opens; a file shows its whole path (the phone cannot open
+    /// a file on the host from here). One a display rule hides reads muted when revealed.
     @ViewBuilder
-    private func linkPillView(_ link: LinkTagView) -> some View {
+    private func linkPillView(_ link: LinkTagView, muted: Bool = false) -> some View {
         let url = link.file == true ? nil : URL(string: link.target)
         let label = HStack(spacing: 4) {
+            // Bold: at semibold the review glyph (a thin arrow) read as a stray stroke.
             Image(systemName: Self.icon(link.group))
-                .font(.caption.weight(.semibold))
+                .font(.caption.weight(.bold))
             Text(verbatim: link.name)
-            if url != nil {
-                Image(systemName: "arrow.up.right").font(.caption2.weight(.semibold))
-            }
         }
-        // Two lines at the accessibility sizes, like every other pill here.
-        .lineLimit(typeSize.isAccessibilitySize ? 2 : 1)
+        // A name is at most three words: room for all three at the accessibility sizes.
+        .lineLimit(typeSize.isAccessibilitySize ? 3 : 1)
         .font(.subheadline)
-        .foregroundStyle(Theme.tint)
+        .foregroundStyle(muted ? AnyShapeStyle(.secondary) : AnyShapeStyle(Theme.tint))
         .padding(.horizontal, 10)
         .padding(.vertical, typeSize.isAccessibilitySize ? 4 : 0)
         .frame(minHeight: 30)
-        .background(Theme.tintSoft, in: RoundedRectangle(cornerRadius: 15))
+        .background(muted ? Color(.quaternarySystemFill) : Theme.tintSoft, in: RoundedRectangle(cornerRadius: 15))
         .contentShape(RoundedRectangle(cornerRadius: 15))
         .dynamicTypeSize(...DynamicTypeSize.accessibility3)
         .contextMenu {
@@ -122,6 +121,22 @@ struct TaskTagPills: View {
     static func withoutGoneLinks(_ tags: [String], links: [LinkTagView]) -> [String] {
         let gone = Set(links.filter { $0.gone == true }.map { key($0.tag) })
         return gone.isEmpty ? tags : tags.filter { !gone.contains(key($0)) }
+    }
+
+    /// The tags the Tags row draws. Until the detail read lands (`ready` false, or it failed) no
+    /// tag that looks like a link is drawn, since nothing yet says whether its file is gone; once
+    /// it lands, the gone links are left out (an older server sends no `links`: every tag stays).
+    static func visibleTags(_ tags: [String], links: [LinkTagView]?, ready: Bool) -> [String] {
+        guard ready else { return tags.filter { !looksLikeLink($0) } }
+        return withoutGoneLinks(tags, links: links ?? [])
+    }
+
+    /// `kind:/abs/path`, `kind:~/path` or `kind:https://…`: the shapes the server reads as a link
+    /// tag (src/core/link-tags.ts), told apart here only to hold them until the server names them.
+    static func looksLikeLink(_ tag: String) -> Bool {
+        guard let colon = tag.firstIndex(of: ":"), colon != tag.startIndex else { return false }
+        let value = tag[tag.index(after: colon)...].lowercased()
+        return value.hasPrefix("/") || value.hasPrefix("~/") || value.hasPrefix("http://") || value.hasPrefix("https://")
     }
 
     private static func key(_ tag: String) -> String { TagModel.normalize(tag, derived: true) ?? tag }
