@@ -61,6 +61,12 @@ actor TimelineLayoutActor {
     /// while the next turn streams (`TimelineTurnShape.settle`). Per conversation.
     private var settledTurnKinds: [String: TimelineTurnShape.Kind] = [:]
 
+    /// The fold key of the received message the live turn's calls rode while it
+    /// streamed. After the turn ends only THAT row keeps the calls: a turn whose
+    /// own delivery never reached history (it lands with the refetch) must not
+    /// lend its calls to the turn before it.
+    private var liveTailKey: String?
+
     /// Submit the newest input. `onSnapshot` is invoked (on the actor) for
     /// every COMPLETED build — the caller hops to the main queue itself.
     func submit(_ input: TimelineInput, onSnapshot: @escaping @Sendable (TimelineSnapshot) -> Void) {
@@ -101,6 +107,7 @@ actor TimelineLayoutActor {
             // it is keyed on the live text alone.
             headCache = nil
             settledTurnKinds = [:]
+            liveTailKey = nil
             cacheScope = input.scope
         }
         applyRichHeightChanges()
@@ -193,6 +200,39 @@ actor TimelineLayoutActor {
                 }
             }
         }
+        /// The merged row of a received message's live turn: history's part of it
+        /// and the live calls, each call counted once.
+        func appendLiveTail(_ tail: TimelineTurnFold.LiveTail, liveCalls: [LiveToolCall]) {
+            let id = TimelineTurnFold.rowID(scope: input.scope, key: tail.key)
+            let expanded = input.expandedRowIDs.contains(id)
+            let live = liveCalls.map { ChatMessage(id: "", role: "assistant", text: $0.name,
+                                                   createdAt: "", kind: .tool, detail: $0.detail) }
+            let historyTools = tail.rows.filter { $0.kind == .tool }
+            // A mid-turn refetch can already hold some of this turn's calls,
+            // which the live list still carries: count each call once, and draw a
+            // matched one from its history row (indexes into `input.liveTools`).
+            var unmatched = input.liveTools.indices.filter { TimelineRowBuilder.liveCallFolds(input.liveTools[$0]) }
+            var drawnFromHistory: Set<Int> = []
+            let earlier = historyTools.filter { m in
+                guard let at = unmatched.firstIndex(where: {
+                    input.liveTools[$0].name == m.text && (input.liveTools[$0].detail ?? "") == (m.detail ?? "")
+                }) else { return true }
+                drawnFromHistory.insert(unmatched.remove(at: at))
+                return false
+            }
+            rows.append(builder.foldRow(
+                id: id,
+                phrase: TimelineTurnFold.phrase(tools: earlier + live,
+                                                received: tail.rows.filter(TimelineTurnShape.isInbound).count),
+                failCount: historyTools.filter(TimelineTurnShape.isFailure).count,
+                expanded: expanded, running: input.streaming && liveCalls.contains { !$0.finished }))
+            if expanded {
+                appendPlan(tail.members)
+                rows.append(contentsOf: builder.liveRunMembers(
+                    input.liveTools, liveThinking: input.liveThinking, width: input.width, scope: input.scope,
+                    skipping: drawnFromHistory))
+            }
+        }
         /// Set when the live run rides a received message's fold (see below).
         var runFoldedElsewhere = false
         if TimelineTurnShape.knowsSenders(inline) {
@@ -200,37 +240,38 @@ actor TimelineLayoutActor {
                 TimelineTurnShape.shape(inline, streaming: false), in: inline,
                 streaming: input.streaming, settled: &settledTurnKinds)
             let liveCalls = input.liveTools.filter(TimelineRowBuilder.liveCallFolds)
-            if input.streaming, !liveCalls.isEmpty {
+            // The turn just ended and the refetch that brings its calls has not
+            // landed: the store keeps the calls until it does (it clears them in
+            // the block that installs the fetched rows), and so does this row, the
+            // way the web keeps stream blocks until history absorbs them. Without
+            // it the row read "Received a message" and lost its calls for the
+            // length of the refetch, then grew back.
+            let turnEnded = !input.streaming && !liveCalls.isEmpty
+            // The reply the store painted at turn end sits after the calls it came
+            // from, so it waits outside the tail, as the live text did.
+            var head = inline
+            var reply: [ChatMessage] = []
+            if turnEnded {
+                while let last = head.last, last.role == "assistant", last.kind == nil || last.kind == .thinking {
+                    reply.insert(head.removeLast(), at: 0)
+                }
+            }
+            let planned: (parts: [TimelineTurnFold.Part], tail: TimelineTurnFold.LiveTail?)? =
+                liveCalls.isEmpty ? nil
+                : TimelineTurnFold.planLive(head, turns: input.streaming ? turns : TimelineTurnShape.settle(
+                    TimelineTurnShape.shape(head, streaming: false), in: head, streaming: true,
+                    settled: &settledTurnKinds))
+            if input.streaming || liveCalls.isEmpty { liveTailKey = input.streaming ? planned?.tail?.key : nil }
+            if let planned, input.streaming || (planned.tail != nil && planned.tail?.key == liveTailKey) {
                 // The live turn a received message started: that message and the
                 // calls it is making are ONE row, keyed as its answered fold will be.
-                let planned = TimelineTurnFold.planLive(inline, turns: turns)
                 appendPlan(planned.parts)
                 if let tail = planned.tail {
                     runFoldedElsewhere = true
-                    let id = TimelineTurnFold.rowID(scope: input.scope, key: tail.key)
-                    let expanded = input.expandedRowIDs.contains(id)
-                    let live = liveCalls.map { ChatMessage(id: "", role: "assistant", text: $0.name,
-                                                           createdAt: "", kind: .tool, detail: $0.detail) }
-                    let historyTools = tail.rows.filter { $0.kind == .tool }
-                    // A mid-turn refetch can already hold some of this turn's calls,
-                    // which the live list still carries: count each call once.
-                    var unmatched = live.map { "\($0.text)|\($0.detail ?? "")" }
-                    let earlier = historyTools.filter { m in
-                        guard let i = unmatched.firstIndex(of: "\(m.text)|\(m.detail ?? "")") else { return true }
-                        unmatched.remove(at: i)
-                        return false
-                    }
-                    rows.append(builder.foldRow(
-                        id: id,
-                        phrase: TimelineTurnFold.phrase(tools: earlier + live,
-                                                        received: tail.rows.filter(TimelineTurnShape.isInbound).count),
-                        failCount: historyTools.filter(TimelineTurnShape.isFailure).count,
-                        expanded: expanded, running: liveCalls.contains { !$0.finished }))
-                    if expanded {
-                        appendPlan(tail.members)
-                        rows.append(contentsOf: builder.liveRunMembers(
-                            input.liveTools, liveThinking: input.liveThinking, width: input.width, scope: input.scope))
-                    }
+                    appendLiveTail(tail, liveCalls: liveCalls)
+                }
+                for message in reply where !TimelineTurnFold.isAckOnly(message) {
+                    rows.append(contentsOf: memoizedRows(for: message, queued: input.queuedMessageStates[message.id]))
                 }
             } else {
                 appendPlan(TimelineTurnFold.plan(inline, turns: turns))
@@ -272,8 +313,12 @@ actor TimelineLayoutActor {
             // from staying blank when that refetch fails). Only the reasoning —
             // the shimmering activity row and the live reply text belong to a
             // turn that is over.
-            rows.append(contentsOf: builder.liveThinkingRows(
-                liveThinking: input.liveThinking, width: input.width, scope: input.scope))
+            // A turn whose calls still ride a received message's row keeps its
+            // reasoning in that row too, as it did while streaming.
+            if !runFoldedElsewhere {
+                rows.append(contentsOf: builder.liveThinkingRows(
+                    liveThinking: input.liveThinking, width: input.width, scope: input.scope))
+            }
         }
         rows.append(contentsOf: afterLiveRows)
         rows.append(contentsOf: queuedRows)

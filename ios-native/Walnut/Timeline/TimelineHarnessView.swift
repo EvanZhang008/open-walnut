@@ -140,7 +140,28 @@ final class TimelineHarnessStore {
             let live = TimelineTurnFixtures.liveTurn()
             messages = live.messages
             liveTools = live.tools
+            liveText = TimelineTurnFixtures.liveText
             streaming = true
+        } else if arguments.contains(where: { $0.contains("timeline-harness-turns-arrived") }) {
+            // `--timeline-harness-turns-arrived`: a delivery just landed and its turn
+            // runs, with nothing called yet.
+            messages = TimelineTurnFixtures.liveTurn().messages
+            streaming = true
+            activity = "Thinking"
+        } else if arguments.contains(where: { $0.contains("timeline-harness-turns-ended") }) {
+            // `--timeline-harness-turns-ended`: the live turn, which ends two seconds
+            // in while the refetch has not landed (the row must keep its calls).
+            let live = TimelineTurnFixtures.liveTurn()
+            messages = live.messages
+            liveTools = live.tools
+            streaming = true
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .seconds(2))
+                let ended = TimelineTurnFixtures.endedTurn()
+                self?.streaming = false
+                self?.liveTools = ended.tools
+                self?.messages = ended.messages
+            }
         } else if arguments.contains(where: { $0.contains("timeline-harness-turns") }) {
             messages = TimelineTurnFixtures.messages()
         } else {

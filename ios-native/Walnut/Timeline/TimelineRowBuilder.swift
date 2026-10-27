@@ -994,11 +994,14 @@ final class TimelineRowBuilder {
 
     /// What the live run holds when it rides a received message's fold: the
     /// turn's reasoning, then every call that folds, as the run would open to.
+    /// `skipping`: indexes of calls already drawn from history rows (a mid-turn
+    /// refetch); the others keep their ordinal ids.
     func liveRunMembers(_ tools: [LiveToolCall], liveThinking: String, width: CGFloat,
-                        scope: String) -> [TimelineRow] {
+                        scope: String, skipping: Set<Int> = []) -> [TimelineRow] {
         liveThinkingRows(liveThinking: liveThinking, width: width, scope: scope)
             + tools.enumerated().compactMap { index, call in
-                Self.liveCallFolds(call) ? liveToolChip(call, index: index, scope: scope) : nil
+                Self.liveCallFolds(call) && !skipping.contains(index)
+                    ? liveToolChip(call, index: index, scope: scope) : nil
             }
     }
 
@@ -1089,7 +1092,16 @@ final class TimelineRowBuilder {
                                                  font: TimelineTextStyler.subheadlineFont)
         let bodyHeight: CGFloat
         if expanded {
-            bodyHeight = measurer.height(body, width: max(40, bodyWidth))
+            // The card renders the body as a SwiftUI `Text`, which ignores the
+            // paragraph style's 3pt line spacing that a TextKit height pays on every
+            // line: a 2,300-character card came out ~185pt taller than its text.
+            // So count the lines TextKit wraps it into (fonts kept, spacing dropped)
+            // and pay SwiftUI's line height per line, as hosted text does elsewhere.
+            let unspaced = NSMutableAttributedString(attributedString: body)
+            unspaced.removeAttribute(.paragraphStyle, range: NSRange(location: 0, length: unspaced.length))
+            let lines = measurer.lineCount(unspaced, width: max(40, bodyWidth))
+            bodyHeight = TimelineMetrics.hostedTextHeight(lines: max(1, lines),
+                                                          font: TimelineTextStyler.subheadlineFont)
         } else {
             // Two-line collapsed preview, at the height SwiftUI gives a line
             // (this branch is a `Text(...).lineLimit(2)`, not a TextKit measurement,
@@ -1160,7 +1172,12 @@ struct NotificationStyling {
     let message: ChatMessage
     private static let collapseThreshold = 280
 
-    var isCollapsible: Bool { message.text.count > Self.collapseThreshold }
+    /// A received card always opens folded to its heading (who it is from and its
+    /// title), however short, as the web's provenance card does; other notices
+    /// fold only when long.
+    var isCollapsible: Bool {
+        message.source == TimelineInboundMessage.inboundSource || message.text.count > Self.collapseThreshold
+    }
 
     var isError: Bool {
         message.source == "session-error" || message.source == "agent-error"

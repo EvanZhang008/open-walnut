@@ -103,6 +103,11 @@ final class TurnShapeTests: XCTestCase {
         XCTAssertEqual(TimelineTurnMarker.stripLive("Done.\n\n<walnut-tu"), "Done.\n")
         XCTAssertEqual(TimelineTurnMarker.strip("Done.\n\n<walnut-tu"), "Done.\n\n<walnut-tu")
         XCTAssertEqual(TimelineTurnMarker.stripLive("Use a < b"), "Use a < b")
+        // The tag's first chunk alone on its line is held too; a `<` in prose is not.
+        XCTAssertEqual(TimelineTurnMarker.stripLive("Done.\n\n<"), "Done.\n")
+        XCTAssertEqual(TimelineTurnMarker.stripLive("Done.\n<"), "Done.")
+        XCTAssertEqual(TimelineTurnMarker.stripLive("a <"), "a <")
+        XCTAssertEqual(TimelineTurnMarker.strip("Done.\n<"), "Done.\n<")
         XCTAssertEqual(TimelineTurnMarker.stripLive("Done.\n<b>bold</b>"), "Done.\n<b>bold</b>")
         // A finished line mid-stream, and a reply that is nothing yet but the line's start.
         XCTAssertEqual(TimelineTurnMarker.stripLive("Done.\n\n\(tag)"), "Done.")

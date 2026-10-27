@@ -70,7 +70,8 @@ enum TimelineTurnMarker {
         if reading.ack { return reading.text }
         let cut = text.lastIndex(of: "\n")
         let tail = trimmed(String(text[(cut.map { text.index(after: $0) } ?? text.startIndex)...]))
-        guard tail.count >= 2, tags.contains(where: { $0.hasPrefix(tail) }) else { return text }
+        // Even a lone `<`: the tag's first chunk would otherwise print until the next one.
+        guard !tail.isEmpty, tags.contains(where: { $0.hasPrefix(tail) }) else { return text }
         return cut.map { String(text[..<$0]) } ?? ""
     }
 

@@ -20,13 +20,16 @@ enum TimelineInboundMessage {
     struct Envelope: Equatable {
         let attributes: [String: String]
         let body: String
+        /// The sender asked for a reply, and the `Reply when done: …` line that says
+        /// how (written for the model) followed the tag and was taken off with it.
+        var replyRequested = false
     }
 
     private static let head = "<walnut-message "
     private static let close = "\n</walnut-message>"
 
-    /// The envelopes a stored row holds, top-down, and whatever text follows them
-    /// (a "Reply when done: …" line). nil when the row does not open with one.
+    /// The envelopes a stored row holds, top-down, and whatever text follows them.
+    /// nil when the row does not open with one.
     static func parse(_ text: String) -> (envelopes: [Envelope], rest: String)? {
         var envelopes: [Envelope] = []
         var pos = text.startIndex
@@ -51,8 +54,20 @@ enum TimelineInboundMessage {
         let body = bodyStart <= closeRange.lowerBound ? text[bodyStart..<closeRange.lowerBound] : ""[...]
         // A tag inside means this one never closed and the close belongs to a later one.
         guard !body.contains("\n<walnut-message") else { return nil }
-        return (Envelope(attributes: attributes(String(headLine)), body: String(body)), closeRange.upperBound)
+        var envelope = Envelope(attributes: attributes(String(headLine)), body: String(body))
+        var end = closeRange.upperBound
+        // The one trailer line, and ONLY when the sender asked for a reply (as
+        // `parseWalnutTag` on the web): without a request, such a line is the
+        // sender's own text and stays.
+        if envelope.attributes["kind"] == "peer-note", envelope.attributes["request"] != nil,
+           text[end...].hasPrefix("\n" + trailer) {
+            envelope.replyRequested = true
+            end = text[text.index(after: end)...].firstIndex(of: "\n") ?? text.endIndex
+        }
+        return (envelope, end)
     }
+
+    private static let trailer = "Reply when done: "
 
     /// `name="value"`, first occurrence wins, values unescaped.
     static func attributes(_ head: String) -> [String: String] {
@@ -83,32 +98,6 @@ enum TimelineInboundMessage {
             return from[..<open].trimmingCharacters(in: .whitespaces)
         }
         return from
-    }
-
-    /// The card's text for one received row: who it is from, its one-line title
-    /// when the sender gave one, then its body. A row this reader cannot take
-    /// apart is shown as it is.
-    static func displayText(_ text: String) -> String {
-        guard let parsed = parse(text) else {
-            // A row clipped before its close tag (the slim tail cuts long ones): the
-            // head line still reads as who it is from, never as markup.
-            guard text.hasPrefix(head), let headEnd = text.firstIndex(of: "\n"),
-                  text[..<headEnd].hasSuffix(">") else { return text }
-            let attributes = attributes(String(text[..<headEnd]))
-            return block(Envelope(attributes: attributes, body: String(text[text.index(after: headEnd)...])))
-        }
-        var blocks = parsed.envelopes.map(block)
-        let rest = parsed.rest.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !rest.isEmpty { blocks.append(rest) }
-        return blocks.joined(separator: "\n\n")
-    }
-
-    private static func block(_ envelope: Envelope) -> String {
-        var heading = "**From \(sender(envelope))**"
-        if let title = envelope.attributes["title"], !title.isEmpty { heading += ": \(title)" }
-        else if let note = envelope.attributes["note"], !note.isEmpty { heading += ": \(note)" }
-        let body = envelope.body.trimmingCharacters(in: .whitespacesAndNewlines)
-        return body.isEmpty ? heading : "\(heading)\n\n\(body)"
     }
 
     /// The card a received row draws as, inside a fold: a notification card under

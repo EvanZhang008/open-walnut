@@ -103,9 +103,9 @@ final class TimelineHostedHeightParityTests: XCTestCase {
     ///
     /// The two kinds left out are known, measured gaps rather than oversights:
     /// `failedNotice` is a fixed 24pt constant for 13.3pt of content (unchanged in
-    /// this pass, deliberately), and an EXPANDED notification measures its body with
-    /// TextKit while SwiftUI renders it, which over-measures by 15 to 24pt on long
-    /// bodies. Both only cost empty space; neither can shave ink.
+    /// this pass, deliberately), and a COLLAPSED notification reserves two cushioned
+    /// lines for a preview that may be one. Both only cost empty space; neither can
+    /// shave ink. An expanded long card is held tight in its own test below.
     private static let tightKinds: Set<String> = [
         "chip", "toolChip", "thinking", "toolRun", "table", "queuedNotice",
     ]
@@ -239,6 +239,31 @@ final class TimelineHostedHeightParityTests: XCTestCase {
             checked += assertFits(await rows([msg], expanded: ["n-\(i)#0"]), "notification \(i) expanded")
         }
         XCTAssertGreaterThanOrEqual(checked, 10, "gate checked nothing (n=\(checked))")
+    }
+
+    /// An expanded long received card is held to a TIGHT bound as well: its body
+    /// used to be a TextKit height with the paragraph style's 3pt line spacing on
+    /// every line, which SwiftUI's `Text` never draws, so a 2,300-character card
+    /// left about 185pt of blank card under its last line.
+    func testExpandedLongReceivedCardReservesNoBlankBand() async {
+        let paragraph = "The review found two places where the cache key ignores the locale, "
+            + "so a reader switching languages keeps the old page until it expires. "
+        let body = "**From Docs lead**: Review of the cache change\n\n"
+            + (0..<8).map { _ in String(repeating: paragraph, count: 2) }.joined(separator: "\n\n")
+            + "\n\nSee https://example.com/a/very/long/path/that/cannot/break/nicely/index.html too."
+        XCTAssertGreaterThan(body.count, 2000)
+        let msg = message("in-1", text: body, kind: .notification, source: TimelineInboundMessage.inboundSource)
+        for category in [UIContentSizeCategory.unspecified, .extraSmall, .accessibilityExtraExtraExtraLarge] {
+            let built = await rows([msg], expanded: ["in-1#0"], category: category)
+            guard let row = built.first(where: { $0.content.reuseKind == "notification" }) else {
+                return XCTFail("no card row")
+            }
+            let rendered = renderedHeight(row, category: category)
+            XCTAssertLessThanOrEqual(ceil(rendered), ceil(row.height) + 1,
+                                     "\(category.rawValue): card clips \(rendered - row.height)pt of ink")
+            XCTAssertLessThanOrEqual(row.height, rendered + max(6, rendered * 0.02),
+                                     "\(category.rawValue): card reserves \(row.height)pt for \(rendered)pt")
+        }
     }
 
     func testToolChipsFitCollapsedAndExpanded() async {
