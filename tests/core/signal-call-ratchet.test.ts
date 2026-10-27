@@ -75,7 +75,7 @@ const RAW_SIGNAL_BUDGET: Record<string, number> = {
   'src/core/time-tracking/outside-collector.ts': 1,// its own collector child's group
   'src/integrations/git-bundle-client.ts': 1,      // its own git child's group
   'src/integrations/git-sync.ts': 2,               // its own git children's groups
-  'src/providers/acp-daemon.ts': 7,                // ACP workers the daemon spawned
+  'src/providers/acp-daemon.ts': 8,                // ACP workers the daemon spawned (a straggler only while ps proves it is one)
   'src/providers/codex-model-probe.ts': 1,          // its own detached model-probe child group
   'src/providers/claude-check-core.ts': 3,         // its own probe child (a process.kill wrapper + its two calls)
   'src/providers/host-fix-core.ts': 3,             // its own fix-script child (a process.kill wrapper + its two calls)

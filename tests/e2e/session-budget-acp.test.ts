@@ -23,13 +23,15 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { getDaemonSource } from '../../src/providers/daemon-source.js';
 import { budgetDaemonEnv, stderrTail } from './fixtures/budget-daemon-env.js';
-import { checkBudgetArtifacts, sameBytes } from './fixtures/budget-artifacts.js';
+import { checkBudgetArtifacts, HOST_DAEMON_BINARY, sameBytes } from './fixtures/budget-artifacts.js';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const BIN_DIR = path.join(REPO_ROOT, 'dist/daemon-binaries');
-const DAEMON_BIN = path.join(BIN_DIR, 'daemon-darwin-arm64');
+const DAEMON_BIN = path.join(BIN_DIR, HOST_DAEMON_BINARY);
 const WORKER_BUNDLE = path.join(BIN_DIR, 'acp-worker.js');
 const MOCK_AGENT = path.join(REPO_ROOT, 'tests/providers/mock-acp-agent.mjs');
+/** A worker that outlives its daemon, with a stand-in adapter in its process group. */
+const STUCK_WORKER = path.join(REPO_ROOT, 'tests/e2e/fixtures/stuck-acp-worker.mjs');
 
 const PRICES = { hash: 'acp-e2e', snapshot: { source: 'litellm', url: '', fetchedAt: '2026-10-23T00:00:00.000Z', models: {
   'gpt-6.1-sol': { provider: 'openai', input: 2, output: 10, cacheRead: 0.1, cacheWrite: 2.5 } } } };
@@ -72,13 +74,13 @@ for (const twin of TWINS) describe(`ACP session budget (${twin.name})`, () => {
     return fs.existsSync(file) ? fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).map(l => JSON.parse(l)) : [];
   };
   /** A start that spawned a worker must show its adapter (and through it the worker) within the bound; else it stays unproven. */
-  async function recordProcesses(sid: string): Promise<void> {
+  async function recordProcesses(sid: string, expected = { adapter: MOCK_AGENT, worker: WORKER_BUNDLE }): Promise<void> {
     try { await until(() => witnessLines().length > witnessRead, `the adapter of ${sid} to report`, 15_000); }
-    catch (error) { ledger.spawned(sid, [], { adapter: MOCK_AGENT, worker: WORKER_BUNDLE }); throw error; }
+    catch (error) { ledger.spawned(sid, [], expected); throw error; }
     const lines = witnessLines();
     const fresh = lines.slice(witnessRead);
     witnessRead = lines.length;
-    ledger.spawned(sid, fresh, { adapter: MOCK_AGENT, worker: WORKER_BUNDLE });
+    ledger.spawned(sid, fresh, expected);
   }
   async function startDaemon(): Promise<void> {
     const env = budgetDaemonEnv(root, { extra: { MOCK_ACP_FAIL_LOAD_FILE: path.join(root, 'fail-next-load'), MOCK_ACP_WITNESS: path.join(root, 'acp-witness.jsonl') } });
@@ -122,6 +124,17 @@ for (const twin of TWINS) describe(`ACP session budget (${twin.name})`, () => {
     await until(() => !!daemonRecord && processGone(daemonRecord), `daemon ${p.pid} gone`, 5_000);
     proc = null;
   }
+  /** SIGKILL the daemon this test spawned (an unclean death: no cleanup of its own runs) and wait until it is gone. */
+  async function killDaemon(): Promise<void> {
+    ws?.close(); ws = null;
+    const p = proc!;
+    const exit = new Promise<void>(resolve => p.once('exit', () => resolve()));
+    if (!daemonRecord || !ledger.stillOurs(daemonRecord)) throw new Error(`daemon ${p.pid} is no longer the process this test spawned; not signalled`);
+    p.kill('SIGKILL');
+    await exit;
+    await until(() => !!daemonRecord && processGone(daemonRecord), `daemon ${p.pid} gone`, 5_000);
+    proc = null;
+  }
   /** Stop one ACP worker this test started: the daemon says so, and its worker and adapter processes are gone. */
   async function stopWorker(sid: string): Promise<void> {
     const stopped = await rpc('acpStop', { sid }, 5_000);
@@ -148,7 +161,7 @@ for (const twin of TWINS) describe(`ACP session budget (${twin.name})`, () => {
     while (Date.now() < deadline) { if (await check()) return; await new Promise(r => setTimeout(r, 50)); }
     throw new Error(`Timed out waiting for ${what}`);
   }
-  async function start(sid: string, extra: Record<string, unknown> = {}) {
+  async function start(sid: string, extra: Record<string, unknown> = {}, expected?: { adapter: string; worker: string }) {
     ledger.created(sid);
     let resp: Record<string, any>;
     try {
@@ -160,7 +173,7 @@ for (const twin of TWINS) describe(`ACP session budget (${twin.name})`, () => {
       ledger.unknown(sid, `acpStart failed in a way that may have spawned: ${JSON.stringify(resp)}`);
     }
     // Started, or started and then failed to load its thread: either way a worker and an adapter run.
-    if (resp.ok || resp.errorKind === 'load_failed') await recordProcesses(sid);
+    if (resp.ok || resp.errorKind === 'load_failed') await recordProcesses(sid, expected);
     return resp;
   }
   const turnEnded = (sid: string, after: number) => pushed.slice(after).some(f => f.ev === 'jsonl' && f.sid === sid
@@ -284,5 +297,21 @@ for (const twin of TWINS) describe(`ACP session budget (${twin.name})`, () => {
     expect(fs.existsSync(path.join(budgets, `${legacy}.jsonl`))).toBe(true);
     expect(listed.result.budgets.map((b: { sid: string }) => b.sid).sort()).toEqual([legacy, providerId].sort());
     expect(listed.result.pricesHash).toBe('acp-e2e');
+  }, 60_000);
+
+  it('kills the worker a daemon that died uncleanly left running, when the next daemon starts', async () => {
+    const started = await start('rt-stuck', { workerCmd: [process.execPath, STUCK_WORKER] }, { adapter: STUCK_WORKER, worker: STUCK_WORKER });
+    expect(started.ok).toBe(true);
+    const pidFile = path.join(root, 'daemon', 'acp-workers.json');
+    const row = () => JSON.parse(fs.readFileSync(pidFile, 'utf8'))['rt-stuck'];
+    // The worker's start time is in the pid file: the next daemon tells it from a process that reused its pid.
+    await until(() => !!row()?.start, 'the worker start time in the pid file', 10_000);
+    expect(row()).toMatchObject({ cmd: 'stuck-acp-worker.mjs' });
+    await killDaemon();
+    await new Promise(r => setTimeout(r, 500));
+    expect(ledger.allGone('rt-stuck')).toBe(false);
+    await startDaemon();
+    await until(() => ledger.allGone('rt-stuck'), 'the left-behind worker and its adapter to be killed', 15_000);
+    expect(row()).toBeUndefined();
   }, 60_000);
 });

@@ -21,8 +21,9 @@
  */
 
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
-import { spawn, type ChildProcess } from 'node:child_process'
+import { execFile, spawn, type ChildProcess } from 'node:child_process'
 import readline from 'node:readline'
 import { StringDecoder } from 'node:string_decoder'
 import { mergeAcpSpawnEnv, type AcpMcpServer } from './acp-worker/protocol.js'
@@ -57,7 +58,20 @@ interface AcpWorkerEntry<W> {
   terminalVersion: number
   activeCommandId: string | null
   activeControlCommandId: string | null
+  /** The worker's own name (its script's basename), its adapter's command and its start time, kept in the pid file. */
+  cmd: string
+  adapter: string
+  start?: string
 }
+
+/** What `ps` says about one pid now; 'unknown' when it could not be asked. */
+export type AcpProcessInfo = { state: 'gone' } | { state: 'alive'; start: string; command: string } | { state: 'unknown' }
+
+/** A pid file row: a pid alone (older daemons), or the pid with what identifies its worker. */
+type PidRow = number | { pid: number; cmd?: string; adapter?: string; start?: string; boot?: number }
+
+/** When this host booted, in minutes (uptime moves a little; two minutes apart is the same boot). */
+function bootMinute(): number { return Math.round((Date.now() / 1000 - os.uptime()) / 60) }
 
 interface WorkerRpcResponse { id: number; ok: boolean; result?: unknown; error?: { kind: string; message: string } }
 
@@ -74,6 +88,47 @@ export interface AcpDaemonDeps<W> {
   setIntervalFn?: typeof setInterval
   /** A worker's turn ended (the session budget prices it at once). */
   onTurnEnd?: (sid: string) => void
+  /** Who a pid is now (tests stub it); default asks `ps`. */
+  processInfo?: (pid: number) => Promise<AcpProcessInfo>
+  /** The commands of the processes in one process group, null when ps gives no answer (tests stub it). */
+  groupCommands?: (pgid: number) => Promise<string[] | null>
+  /** This host's boot (tests stub it). */
+  bootMinute?: () => number
+}
+
+function psField(pid: number, field: string): Promise<string | null | undefined> {
+  return new Promise((resolve) => {
+    execFile('ps', ['-ww', '-o', `${field}=`, '-p', String(pid)], { timeout: 5_000 }, (error, stdout, stderr) => {
+      const out = String(stdout ?? '').trim()
+      // ps answers 1 with nothing at all for a pid that is not there; anything else
+      // (a usage message from a ps without these options, a timeout) is no answer.
+      if (error) resolve((error as { code?: unknown }).code === 1 && !out && !String(stderr ?? '').trim() ? null : undefined)
+      else resolve(out || null)
+    })
+  })
+}
+
+function psGroupCommands(pgid: number): Promise<string[] | null> {
+  return new Promise((resolve) => {
+    execFile('ps', ['-A', '-ww', '-o', 'pgid=', '-o', 'command='], { timeout: 5_000, maxBuffer: 16 << 20 }, (error, stdout) => {
+      if (error) return resolve(null)
+      const out: string[] = []
+      for (const line of String(stdout).split('\n')) {
+        const m = /^\s*(\d+)\s+(.*)$/.exec(line)
+        if (m && Number(m[1]) === pgid) out.push(m[2])
+      }
+      resolve(out)
+    })
+  })
+}
+
+async function psProcessInfo(pid: number): Promise<AcpProcessInfo> {
+  const start = await psField(pid, 'lstart')
+  if (start === undefined) return { state: 'unknown' }
+  if (start === null) return { state: 'gone' }
+  const command = await psField(pid, 'command')
+  if (command === undefined) return { state: 'unknown' }
+  return command === null ? { state: 'gone' } : { state: 'alive', start, command }
 }
 
 export interface AcpStartParams {
@@ -105,6 +160,9 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
   const setIntervalFn = deps.setIntervalFn ?? setInterval
   const workers = new Map<string, AcpWorkerEntry<W>>()
   const pidFile = path.join(daemonDir, 'acp-workers.json')
+  const processInfo = deps.processInfo ?? psProcessInfo
+  const groupCommands = deps.groupCommands ?? psGroupCommands
+  const boot = deps.bootMinute ?? bootMinute
   ensureOwnerOnlyAcpStorage()
 
   function journalPathFor(sid: string): string {
@@ -128,9 +186,9 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
   // ── pid file (kill-sweep only; journal drives repair) ──
 
   function persistPids(): void {
-    const out: Record<string, number> = {}
+    const out: Record<string, PidRow> = {}
     for (const [sid, w] of workers) {
-      if (w.state === 'running' && w.proc.pid) out[sid] = w.proc.pid
+      if (w.state === 'running' && w.proc.pid) out[sid] = { pid: w.proc.pid, cmd: w.cmd, adapter: w.adapter, boot: boot(), ...(w.start ? { start: w.start } : {}) }
     }
     try {
       fs.writeFileSync(pidFile, JSON.stringify(out), { mode: 0o600 })
@@ -343,9 +401,16 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
       terminalVersion: 0,
       activeCommandId: null,
       activeControlCommandId: null,
+      cmd: path.basename(workerCmd[workerCmd.length > 1 ? 1 : 0]),
+      adapter: adapterCmd.slice(0, 2).join(' '),
     }
     workers.set(sid, entry)
     persistPids()
+    // Its start time lets the next daemon tell this worker from a process that got its pid later.
+    const pid = proc.pid
+    if (pid) void processInfo(pid).then((info) => {
+      if (info.state === 'alive' && workers.get(sid) === entry && entry.state === 'running') { entry.start = info.start; persistPids() }
+    }).catch(() => {})
 
     const rl = readline.createInterface({ input: proc.stdout!, terminal: false })
     rl.on('line', (line) => {
@@ -660,20 +725,14 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
 
   /**
    * Daemon startup: workers from a previous daemon life are dead by definition
-   * (in-process model). Sweep any straggler pids (belt-and-suspenders), then
-   * repair every ACP journal's tail.
+   * (in-process model). Repair every ACP journal's tail, and sweep any straggler
+   * left in the pid file (belt-and-suspenders). The returned promise is the
+   * sweep; it never rejects.
    */
-  function startupRepair(): void {
+  function startupRepair(): Promise<void> {
     ensureOwnerOnlyAcpStorage()
-    // Straggler sweep from the pid file.
-    try {
-      const pids = JSON.parse(fs.readFileSync(pidFile, 'utf-8')) as Record<string, number>
-      for (const [sid, pid] of Object.entries(pids)) {
-        if (signalProcessGroup(pid, 'SIGKILL')) {
-          log('info', 'acp: straggler process group killed', { sid, pid })
-        }
-      }
-    } catch {}
+    let rows: Array<[string, PidRow]> = []
+    try { rows = Object.entries(JSON.parse(fs.readFileSync(pidFile, 'utf-8')) as Record<string, PidRow>) } catch {}
     try {
       fs.writeFileSync(pidFile, '{}', { mode: 0o600 })
       fs.chmodSync(pidFile, 0o600)
@@ -683,6 +742,65 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
     let files: string[] = []
     try { files = fs.readdirSync(streamsDir).filter((f) => f.endsWith('.acp.jsonl')) } catch {}
     for (const f of files) repairJournalTail(path.join(streamsDir, f), 'daemon-restart')
+
+    return (async () => {
+      for (const [sid, row] of rows) {
+        try { await sweepStraggler(sid, row) } catch {}
+      }
+    })()
+  }
+
+  /**
+   * A pid from the last daemon life is signalled only while it is provably that
+   * worker's: the process holding it started when the worker did (or, for a row
+   * with no start time, runs the worker's script), or nothing holds it but a
+   * process group of that id still runs the worker's adapter (the worker died and
+   * left its adapter and tools behind). A row from before this host's last boot,
+   * a pid now held by some other process, a group that runs anything else, and
+   * a pid ps could not be asked about are left alone: after a reboot or a long
+   * stop the file names pids that belong to anything.
+   */
+  async function sweepStraggler(sid: string, row: PidRow): Promise<void> {
+    const pid = typeof row === 'number' ? row : row?.pid
+    if (!Number.isInteger(pid) || pid <= 1) return
+    const cmd = typeof row === 'number' ? 'acp-worker' : (row.cmd || 'acp-worker')
+    const start = typeof row === 'number' ? undefined : row.start
+    const recordedBoot = typeof row === 'number' ? undefined : row.boot
+    if (typeof recordedBoot === 'number' && Math.abs(boot() - recordedBoot) > 2) {
+      log('info', 'acp: straggler row is from before this host booted; left alone', { sid, pid })
+      return
+    }
+    const info = await processInfo(pid)
+    if (info.state === 'unknown') {
+      log('warn', 'acp: straggler left alone, ps gave no answer', { sid, pid })
+      return
+    }
+    if (info.state === 'alive') {
+      const ours = start ? info.start === start : info.command.includes(cmd)
+      if (!ours) {
+        log('info', 'acp: straggler pid now belongs to another process; left alone', { sid, pid })
+        return
+      }
+      if (signalProcessGroup(pid, 'SIGKILL')) log('info', 'acp: straggler process group killed', { sid, pid })
+      return
+    }
+    // The worker is gone; its group may live on (the adapter and its tools). A
+    // group of that id that runs anything but the worker's adapter is someone else's.
+    const adapter = typeof row === 'number' ? undefined : row.adapter
+    if (!adapter || typeof recordedBoot !== 'number' || !groupAlive(pid)) return
+    const members = await groupCommands(pid)
+    if (!members?.some((command) => command.includes(adapter))) {
+      log('info', 'acp: straggler group runs no adapter of this worker; left alone', { sid, pid })
+      return
+    }
+    try {
+      process.kill(-pid, 'SIGKILL')
+      log('info', 'acp: straggler process group killed', { sid, pid, leaderGone: true })
+    } catch {}
+  }
+
+  function groupAlive(pid: number): boolean {
+    try { process.kill(-pid, 0); return true } catch { return false }
   }
 
   function signalProcessGroup(pid: number, signal: NodeJS.Signals): boolean {

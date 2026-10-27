@@ -11,7 +11,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { computeExpectedDaemonVersion } from '../../../src/providers/daemon-version-check.js';
 
-export const BUDGET_ARTIFACTS = ['usage-core.cjs', 'acp-daemon-core.cjs', 'acp-worker.js', 'daemon-darwin-arm64'] as const;
+/** The daemon binary build-daemon.sh makes for this machine (the budget E2E runs on a Mac and on Linux hosts). */
+export const HOST_DAEMON_BINARY = `daemon-${process.platform === 'darwin' ? 'darwin' : 'linux'}-${process.arch === 'arm64' ? 'arm64' : 'x64'}`;
+export const BUDGET_ARTIFACTS = ['usage-core.cjs', 'acp-daemon-core.cjs', 'acp-worker.js', HOST_DAEMON_BINARY] as const;
 const MANIFEST = 'budget-e2e-manifest.json';
 
 const sha = (file: string) => createHash('sha256').update(fs.readFileSync(file)).digest('hex');
@@ -21,7 +23,7 @@ export function writeBudgetManifest(binDir: string): Record<string, unknown> {
   if (!version) throw new Error('daemon sources not found');
   const files: Record<string, string> = {};
   for (const name of BUDGET_ARTIFACTS) files[name] = sha(path.join(binDir, name));
-  const built = fs.readFileSync(path.join(binDir, 'daemon-darwin-arm64.version'), 'utf8').trim();
+  const built = fs.readFileSync(path.join(binDir, `${HOST_DAEMON_BINARY}.version`), 'utf8').trim();
   if (built !== version) throw new Error(`the build carries ${built}, the sources are ${version}`);
   const manifest = { version, files, writtenAt: new Date().toISOString() };
   fs.writeFileSync(path.join(binDir, MANIFEST), JSON.stringify(manifest, null, 2));
