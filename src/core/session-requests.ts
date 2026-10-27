@@ -21,7 +21,7 @@ import path from 'node:path';
 import { WALNUT_HOME } from '../constants.js';
 import { readJsonFile, updateJsonFile } from '../utils/fs.js';
 import { buildWalnutMessage, sessionHandle } from './peers/walnut-message-tag.js';
-import { createEnvelopeKit } from './peers/envelope-kit.js';
+import { createEnvelopeKit, type EnvelopeHandedOn } from './peers/envelope-kit.js';
 import { log } from '../logging/index.js';
 
 const REQUESTS_FILE = path.join(WALNUT_HOME, 'session-requests.json');
@@ -82,6 +82,164 @@ export interface SessionRequest {
   settledAt?: string;
   /** For status 'notified' | 'expired'. */
   outcome?: SessionRequestOutcome;
+  /**
+   * The work went on: its target handed it to another task (`hands_on` on its own ask,
+   * pending request `id`, to `taskId`, at `at` ms), so this one waits for that answer
+   * instead of reading as "ended without a reply" (linkHandoffs). Additive, 2026-10.
+   */
+  carriedBy?: { id: string; taskId?: string; at?: number }[];
+  /** The other side: the requests its sender handed on with it. */
+  carries?: string[];
+  /** The deadline the asker set, before a hand-off moved it (unlinkHandoff puts it back). */
+  ownDeadlineAt?: number;
+}
+
+/** After the work a request was handed on to comes back, the asker's wait lasts this much longer. */
+export const HANDOFF_GRACE_MS = 10 * 60 * 1000;
+/** At most this many tasks carry one request. */
+export const MAX_CARRIERS = 8;
+
+export interface HandoffSender {
+  sessionId: string;
+  taskId?: string;
+  /** The task of an asker's session, for the requests handed on (a question back to it is no hand-off). */
+  askerTaskOf?: (sessionId: string) => string | undefined;
+}
+
+/** Why a named request was not handed on. */
+export interface HandOnRefusal {
+  id: string;
+  reason: 'unknown' | 'settled' | 'not_yours' | 'back_to_asker' | 'too_many';
+}
+
+/** A hand-off never moves a deadline past the longest wait an asker may name, counted from its ask. */
+function extendDeadline(r: SessionRequest, until: number): SessionRequest {
+  const created = Date.parse(r.createdAt);
+  const cap = Number.isFinite(created) ? created + MAX_REPLY_TIMEOUT_SECS * 1000 : Infinity;
+  const next = Math.max(r.deadlineAt, Math.min(until, cap));
+  return next === r.deadlineAt ? r : { ...r, ownDeadlineAt: r.ownDeadlineAt ?? r.deadlineAt, deadlineAt: next };
+}
+
+/**
+ * Link `asked` to the requests its sender handed on with it (`hands_on` on task_send or
+ * task_start): each waits for this answer instead of hearing its target ended without a
+ * reply (2026-10-27, Main's reflection: a lead passed Main's request to a worker, ended
+ * its turn, and Main heard "WAITING without an explicit reply" every time). The sender
+ * names the request: guessing it from timing linked unrelated work and silenced an asker
+ * that was blocked (two reviews, 2026-10-27). A named request is handed on only when it
+ * is still pending, the sender owes it (addressed to its session or task), the ask does
+ * not go back to its asker, and fewer than MAX_CARRIERS tasks carry it. A moved deadline
+ * moves the requests that wait on it too (a worker handing it on again). Links always run
+ * from an older request to this new one, so they never loop. Mutates `rows`; returns the
+ * refusals.
+ */
+export function linkHandoffs(rows: SessionRequest[], asked: SessionRequest, from: HandoffSender, ids: readonly string[]): HandOnRefusal[] {
+  const refused: HandOnRefusal[] = [];
+  if (asked.status !== 'pending' || !ids.length) return refused;
+  const now = Date.parse(asked.createdAt) || Date.now();
+  const index = (id: string) => rows.findIndex((r) => r.id === id);
+  const carrier = { id: asked.id, ...(asked.toTaskId ? { taskId: asked.toTaskId } : {}), at: now };
+  const held: string[] = [];
+  for (const id of new Set(ids)) {
+    const i = index(id);
+    const r = i === -1 || id === asked.id ? undefined : rows[i]!;
+    if (!r) { refused.push({ id, reason: 'unknown' }); continue; }
+    if (r.status !== 'pending') { refused.push({ id, reason: 'settled' }); continue; }
+    if (!(r.toSessionId === from.sessionId || (!!from.taskId && r.toTaskId === from.taskId))) { refused.push({ id, reason: 'not_yours' }); continue; }
+    if ((asked.toSessionId && r.fromSessionId === asked.toSessionId) || (asked.toTaskId && from.askerTaskOf?.(r.fromSessionId) === asked.toTaskId)) {
+      refused.push({ id, reason: 'back_to_asker' });
+      continue;
+    }
+    if ((r.carriedBy?.length ?? 0) >= MAX_CARRIERS) { refused.push({ id, reason: 'too_many' }); continue; }
+    rows[i] = extendDeadline({ ...r, carriedBy: [...(r.carriedBy ?? []).filter((c) => c.id !== asked.id), carrier] }, asked.deadlineAt + HANDOFF_GRACE_MS);
+    held.push(r.id);
+  }
+  if (!held.length) return refused;
+  const at = index(asked.id);
+  const self = { ...(at !== -1 ? rows[at]! : asked), carries: [...new Set([...(asked.carries ?? []), ...held])] };
+  if (at !== -1) rows[at] = self;
+  else Object.assign(asked, self);
+  // A request waiting on one whose deadline moved waits as long (a chain of hand-offs).
+  const bump = (id: string, depth: number): void => {
+    const until = (rows[index(id)]?.deadlineAt ?? 0) + HANDOFF_GRACE_MS;
+    for (let i = 0; i < rows.length; i++) {
+      const x = rows[i]!;
+      if (x.status !== 'pending' || !x.carriedBy?.some((c) => c.id === id)) continue;
+      const next = extendDeadline(x, until);
+      if (next === x) continue;
+      rows[i] = next;
+      if (depth < 4) bump(x.id, depth + 1);
+    }
+  };
+  for (const id of held) bump(id, 0);
+  return refused;
+}
+
+/**
+ * The work `id` carried is back (it was answered or stopped): a request that now waits on
+ * nothing else waits only HANDOFF_GRACE_MS more for its target's own answer, or until its
+ * own deadline when that is later, instead of as long as the hand-off moved it. Mutates `rows`.
+ */
+export function pullInBack(rows: SessionRequest[], id: string, nowMs = Date.now()): void {
+  const byId = new Map(rows.map((r) => [r.id, r] as const));
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i]!;
+    if (r.status !== 'pending' || !r.carriedBy?.some((c) => c.id === id)) continue;
+    if (r.carriedBy.some((c) => byId.get(c.id)?.status === 'pending')) continue;
+    const until = Math.min(r.deadlineAt, Math.max(r.ownDeadlineAt ?? r.deadlineAt, nowMs + HANDOFF_GRACE_MS));
+    if (until !== r.deadlineAt) rows[i] = { ...r, deadlineAt: until };
+  }
+}
+
+/**
+ * Undo a hand-off whose ask never left (deletePendingRequest after a failed send): the
+ * requests it carried stop waiting for it, and one carried by nothing else gets back its
+ * own deadline. Mutates `rows`.
+ */
+export function unlinkHandoff(rows: SessionRequest[], id: string): void {
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i]!;
+    if (!r.carriedBy?.some((c) => c.id === id)) continue;
+    const carriedBy = r.carriedBy.filter((c) => c.id !== id);
+    if (carriedBy.length) { rows[i] = { ...r, carriedBy }; continue; }
+    const { carriedBy: _c, ownDeadlineAt, ...rest } = r;
+    rows[i] = { ...rest, ...(ownDeadlineAt !== undefined && r.status === 'pending' ? { deadlineAt: ownDeadlineAt } : {}) };
+  }
+}
+
+/**
+ * The tasks of the askers of the requests named as handed on, for linkHandoffs' "a question
+ * back to the asker" rule. Never throws: without it a hand-off back to another session of
+ * the asker's task links, which only holds its notice until that answer.
+ */
+async function askerTasksOf(ids: readonly string[]): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  if (!ids.length) return out;
+  try {
+    const named = (await readJsonFile<RequestStore>(REQUESTS_FILE, EMPTY)).requests?.filter((r) => ids.includes(r.id)) ?? [];
+    const { getSessionByClaudeId } = await import('./session-tracker.js');
+    for (const sid of new Set(named.map((r) => r.fromSessionId))) {
+      const taskId = (await getSessionByClaudeId(sid).catch(() => undefined))?.taskId;
+      if (taskId) out.set(sid, taskId);
+    }
+  } catch { /* the rule degrades, see above */ }
+  return out;
+}
+
+/**
+ * Where the work `r` was handed on to stands: 'none' (it was not), 'out' (an answer is
+ * still owed to its target) or 'back' (every task it went to answered or stopped).
+ */
+export function carriedState(r: SessionRequest, rows: readonly SessionRequest[]): 'none' | 'out' | 'back' {
+  if (!r.carriedBy?.length) return 'none';
+  const byId = new Map(rows.map((x) => [x.id, x] as const));
+  return r.carriedBy.some((c) => byId.get(c.id)?.status === 'pending') ? 'out' : 'back';
+}
+
+/** The tasks `r` was handed on to, and whether each answered (a reply) or only stopped. */
+export function handedOnOf(r: SessionRequest, rows: readonly SessionRequest[]): { id: string; taskId?: string; status: SessionRequestStatus | 'gone' }[] {
+  const byId = new Map(rows.map((x) => [x.id, x] as const));
+  return (r.carriedBy ?? []).map((c) => ({ ...c, status: byId.get(c.id)?.status ?? 'gone' }));
 }
 
 interface RequestStore { requests: SessionRequest[] }
@@ -150,7 +308,11 @@ export async function createSessionRequest(input: {
    *  clampReplyTimeoutSecs. Purely a deadline hint; the row is otherwise
    *  identical, so a reply settles it the same way. */
   implicit?: boolean;
-}): Promise<SessionRequest> {
+  /** The asker's task: a request named in `handsOn` may be owed by any session of it. */
+  fromTaskId?: string;
+  /** Requests the asker owes and hands on with this one (`hands_on`, linkHandoffs). */
+  handsOn?: readonly string[];
+}): Promise<SessionRequest & { handOnRefused?: HandOnRefusal[] }> {
   const request: SessionRequest = {
     id: `rq-${randomUUID().replace(/-/g, '').slice(0, 12)}`,
     fromSessionId: input.fromSessionId,
@@ -161,10 +323,25 @@ export async function createSessionRequest(input: {
     createdAt: new Date().toISOString(),
     deadlineAt: Date.now() + clampReplyTimeoutSecs(input.replyTimeoutSecs, input.implicit) * 1000,
   };
-  await updateRequests((store) => ({
-    requests: [...prune(store.requests ?? []), request],
-  }));
-  return request;
+  let stored = request;
+  let refused: HandOnRefusal[] = [];
+  const handsOn = input.handsOn ?? [];
+  const askers = await askerTasksOf(handsOn);
+  await updateRequests((store) => {
+    const requests = [...prune(store.requests ?? []), request];
+    refused = linkHandoffs(requests, request, {
+      sessionId: input.fromSessionId, taskId: input.fromTaskId, askerTaskOf: (sid) => askers.get(sid),
+    }, handsOn);
+    stored = requests.find((r) => r.id === request.id) ?? request;
+    return { requests };
+  });
+  if (handsOn.length) {
+    log.session.info('request hands on', {
+      requestId: request.id, fromSessionId: input.fromSessionId, toTaskId: input.toTaskId,
+      handed: stored.carries ?? [], refused,
+    });
+  }
+  return refused.length ? { ...stored, handOnRefused: refused } : stored;
 }
 
 export async function getSessionRequest(id: string): Promise<SessionRequest | undefined> {
@@ -183,7 +360,10 @@ export async function deletePendingRequest(id: string): Promise<void> {
     const requests = store.requests ?? [];
     const idx = requests.findIndex((r) => r.id === id && r.status === 'pending');
     if (idx === -1) return undefined;
-    return { requests: requests.filter((_, i) => i !== idx) };
+    const rest = requests.filter((_, i) => i !== idx);
+    // What it carried was never handed on: those stop waiting for it.
+    unlinkHandoff(rest, id);
+    return { requests: rest };
   });
 }
 
@@ -209,6 +389,8 @@ async function settle(
       ...(outcome ? { outcome } : {}),
     };
     requests[idx] = settled;
+    // A request this one carried has its work back: its wait shrinks to its target's own answer.
+    if (settled.carries?.length) pullInBack(requests, id);
     return { requests };
   });
   return settled;
@@ -334,11 +516,21 @@ export async function importOfflineRequest(row: SessionRequest): Promise<boolean
     const requests = [...(store.requests ?? [])];
     const idx = requests.findIndex((r) => r.id === row.id);
     if (idx === -1) {
+      // A host never hands a request on (a send naming hands_on goes to the server).
       requests.push(row);
-    } else if (requests[idx].status === 'pending' && JSON.stringify(requests[idx]) !== JSON.stringify(row)) {
-      requests[idx] = row;
     } else {
-      return undefined;
+      // The links are this server's: a host's copy of the row never carries them.
+      const here = requests[idx];
+      const next: SessionRequest = {
+        ...row,
+        ...(here.carriedBy ? { carriedBy: here.carriedBy, deadlineAt: Math.max(row.deadlineAt, here.deadlineAt) } : {}),
+        ...(here.ownDeadlineAt !== undefined ? { ownDeadlineAt: here.ownDeadlineAt } : {}),
+        ...(here.carries ? { carries: here.carries } : {}),
+      };
+      if (requests[idx].status !== 'pending' || JSON.stringify(requests[idx]) === JSON.stringify(next)) return undefined;
+      requests[idx] = next;
+      // The host settled it: what it carried has its work back.
+      if (next.status !== 'pending' && next.carries?.length) pullInBack(requests, next.id);
     }
     changed = true;
     return { requests: prune(requests) };
@@ -418,7 +610,7 @@ export function clipNoticeMessage(text: string): NoticeLastMessage | undefined {
 export function buildRequestNotification(
   request: SessionRequest,
   outcome: SessionRequestOutcome,
-  target: { title?: string; sessionId?: string; taskId?: string; phase?: string; lastMessage?: NoticeLastMessage },
+  target: { title?: string; sessionId?: string; taskId?: string; phase?: string; lastMessage?: NoticeLastMessage; handedOn?: EnvelopeHandedOn[] },
 ): string {
   return kit.buildRequestNotification(request, outcome, target);
 }

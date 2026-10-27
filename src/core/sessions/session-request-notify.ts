@@ -23,6 +23,7 @@
 import { log } from '../../logging/index.js';
 import { cutEnd } from '../text-cut.js';
 import { parseWalnutMessage } from '../peers/walnut-message-tag.js';
+import type { EnvelopeHandedOn } from '../peers/envelope-kit.js';
 import {
   buildRequestNotification,
   clipNoticeMessage,
@@ -132,6 +133,8 @@ export interface FallbackContext {
   lastMessage?: string;
   /** The target's last words, already read by the caller (one transcript read serves every notice of an edge). */
   lastWords?: NoticeLastMessage;
+  /** The tasks the target handed this request on to, and where each answer stands. */
+  handedOn?: EnvelopeHandedOn[];
 }
 
 /**
@@ -235,12 +238,15 @@ export async function notifyRequesterFallback(
       ?? context.lastWords
       ?? await readLastWords(targetSessionId);
 
+    // Where the work went, when the target handed it on (request-handoff.ts).
+    const handedOn = context.handedOn ?? await (await import('./request-handoff.js')).handedOnFor(settled);
     const text = buildRequestNotification(settled, outcome, {
       title: targetTitle,
       sessionId: request.toSessionId,
       taskId: request.toTaskId,
       phase: targetPhase,
       lastMessage,
+      ...(handedOn?.length ? { handedOn } : {}),
     });
 
     const { deliverToSession } = await import('./session-send-core.js');
@@ -251,6 +257,7 @@ export async function notifyRequesterFallback(
       requestId: request.id, fromSessionId: request.fromSessionId,
       toSessionId: origin.claudeSessionId, outcome, delivery,
       phase: targetPhase, quoted: lastMessage ? lastMessage.text.length : 0, clipped: lastMessage?.clipped ?? false,
+      handedOn: handedOn?.map((h) => `${h.taskId ?? '?'}:${h.state}`),
       actions: lastMessage?.actions?.length ?? 0,
     });
     return true;

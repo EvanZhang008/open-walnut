@@ -2352,10 +2352,18 @@ export const sessionRequestWatchHook: SessionHookDefinition = {
     }
     if (pending.length === 0 && !subtask) return;
 
+    // A request the target handed on (it asked another task while owing this one) waits
+    // for that answer: a turn that only parked, waiting for it, is not "no reply". It
+    // speaks when the work is back, when the target is blocked, errs or closes its task,
+    // and at its deadline (session-requests.ts linkHandoffs).
+    const { holdHandedOn } = await import('../sessions/request-handoff.js');
+    const speak = await holdHandedOn(pending, { outcome, phase });
+    if (speak.length === 0 && !subtask) return;
+
     // One transcript read serves every notice of this edge.
     const notify = await import('../sessions/session-request-notify.js');
     const lastTurn = lastMessage ? undefined : await notify.readLastTurn(sessionId ?? record?.claudeSessionId);
-    for (const request of pending) {
+    for (const request of speak) {
       await notify.notifyRequesterFallback(request, outcome, { phase, lastMessage, lastWords: lastTurn?.words });
     }
     if (!subtask || !parentTaskId || !task) return;

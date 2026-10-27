@@ -76,6 +76,9 @@ export interface SessionSendInput {
   replyTimeoutSecs?: number;
   /** rq-… id — this send IS the reply; `to` may be omitted (routes to the asker). */
   inReplyTo?: string;
+  /** rq-… id of a request the caller owes and hands to the target with this ask: its asker
+   *  waits for the target's answer (session-requests.ts linkHandoffs). Needs the reply request. */
+  handsOn?: string;
   /** The sender's one-line TL;DR of `text`: the envelope's `title`, the line the
    *  reader's card shows until opened. Only a fenced (non-human) send carries one. */
   title?: string;
@@ -105,6 +108,9 @@ export interface SessionSendResult {
   queueDepth?: number;
   /** Present when expect_reply registered a request. */
   requestId?: string;
+  /** The requests this ask handed on (`hands_on`), and the ones it could not, with why. */
+  handedOn?: string[];
+  handOnRefused?: { id: string; reason: string }[];
   /** Present on an in_reply_to send. */
   repliedTo?: string;
   messageId?: string;
@@ -401,6 +407,10 @@ export async function performSessionSend(input: SessionSendInput): Promise<Sessi
   if (input.inReplyTo) return performReply(input, caller, text);
 
   if (!input.to) throw new SendError('bad_request', '`to` is required (or pass in_reply_to)');
+  if (input.handsOn !== undefined && !/^rq-[a-f0-9]{6,}$/.test(input.handsOn)) throw new SendError('bad_request', 'hands_on must be an rq-… id');
+  if (input.handsOn && input.expectReply === false) {
+    throw new SendError('bad_request', 'hands_on needs a reply request: its asker waits for this answer (leave expect_reply on)');
+  }
   let target: Awaited<ReturnType<typeof resolveSendTarget>>;
   try {
     target = await resolveSendTarget(input.to);
@@ -459,9 +469,10 @@ export async function performSessionSend(input: SessionSendInput): Promise<Sessi
   // the DEFAULT degrades to "no request" there — only an explicit `true` still
   // errors, because then the caller asked for something impossible.
   // (An inReplyTo send never reaches here — performReply returns at :259.)
-  let request: SessionRequest | undefined;
+  let request: (SessionRequest & { handOnRefused?: { id: string; reason: string }[] }) | undefined;
   if (input.expectReply !== false) {
     if (caller.kind !== 'session') {
+      if (input.handsOn) throw new SendError('bad_request', 'hands_on needs a session caller: only a session owes a request');
       if (input.expectReply === true) {
         throw new SendError('bad_request',
           'expect_reply needs a session caller — a reply can only be routed back to a tracked session');
@@ -469,6 +480,7 @@ export async function performSessionSend(input: SessionSendInput): Promise<Sessi
     } else {
       request = await createSessionRequest({
         fromSessionId: caller.record.claudeSessionId,
+        ...(caller.record.taskId ? { fromTaskId: caller.record.taskId } : {}),
         toSessionId: targetSid,
         toTaskId: target.taskId ?? target.session.taskId,
         text,
@@ -476,6 +488,7 @@ export async function performSessionSend(input: SessionSendInput): Promise<Sessi
         // Nobody asked for this one — the default did. Longer fallback fuse, so
         // routine session→session notes don't each become a "no reply" notice.
         implicit: input.expectReply === undefined,
+        ...(input.handsOn ? { handsOn: [input.handsOn] } : {}),
       });
     }
   }
@@ -548,6 +561,8 @@ export async function performSessionSend(input: SessionSendInput): Promise<Sessi
       ...(taskId ? { taskId } : {}),
     },
     ...(request ? { requestId: request.id } : {}),
+    ...(request?.carries?.length ? { handedOn: request.carries } : {}),
+    ...(request?.handOnRefused?.length ? { handOnRefused: request.handOnRefused } : {}),
     ...(messageId ? { messageId } : {}),
   };
 }

@@ -296,3 +296,71 @@ describe('same-host messages with the server up (real server, real daemon)', () 
     await waitFor(() => inboxOf(worker).some((m) => m.includes('By a prefix')), 20_000, 'the server delivery')
   }, 60_000)
 })
+
+describe('a request the lead hands on waits for that answer (real server, real daemon)', () => {
+  // 2026-10-27, Main's reflection: a lead handed Main's request to a worker and ended its
+  // turn, and Main heard "WAITING without an explicit reply" every time. The request now
+  // waits for the worker, and the one notice names it (session-requests.ts linkHandoffs).
+  let askerTask = ''
+  let leadTask = ''
+  let workerTask = ''
+  let asker = ''
+  let lead = ''
+  let worker = ''
+
+  it('the asker, a lead and its worker run on one host', async () => {
+    askerTask = String(((await api('POST', '/api/tasks', { title: 'Asker: plan the week', project: 'Acme' })).task as { id: string }).id)
+    leadTask = String(((await api('POST', '/api/tasks', { title: 'Lead: login project', project: 'Acme' })).task as { id: string }).id)
+    workerTask = String(((await api('POST', '/api/tasks', { title: 'Worker: fix login timeout', project: 'Acme', parent_task_id: leadTask })).task as { id: string }).id)
+    const ws = await connectWs()
+    try {
+      for (const taskId of [askerTask, leadTask, workerTask]) {
+        const started = await rpc(ws, 'session:start', { taskId, message: 'Getting ready', cwd: '/tmp' })
+        expect(started.error, JSON.stringify(started)).toBeUndefined()
+      }
+    } finally { ws.close() }
+    const sessionOf = async (taskId: string) => waitFor(async () => {
+      const t = (await api('GET', `/api/tasks/${taskId}`)).task as { session_ids?: string[]; session_id?: string }
+      return t.session_ids?.[0] ?? t.session_id ?? null
+    }, 30_000, `a session for ${taskId}`)
+    asker = await sessionOf(askerTask)
+    lead = await sessionOf(leadTask)
+    worker = await sessionOf(workerTask)
+    await waitFor(() => [asker, lead, worker].every((s) => inboxOf(s).length > 0), 30_000, 'three first turns')
+    await waitFor(() => hostCopyHas([asker, lead, worker]), 30_000, 'the host copy of all three sessions')
+  }, 120_000)
+
+  it('the lead hands the request to its worker mid-turn: the asker hears once, after the worker, and is told where it went', async () => {
+    const before = inboxOf(lead).length
+    const r = await gateway(asker, 'task_send', { to: leadTask, text: 'Ship the login fix.', title: 'Login fix' })
+    expect(r.ok, JSON.stringify(r)).toBe(true)
+    const owed = String(r.ok && r.result.requestId)
+    // Inside the lead's turn (it takes a moment, as a model call does), it asks its worker.
+    await waitFor(() => inboxOf(lead).slice(before).some((m) => m.includes(owed)), 15_000, 'the lead reads the request')
+    const onward = await gateway(lead, 'task_send', { to: workerTask, text: 'Fix the login timeout.', title: 'Login timeout', hands_on: owed })
+    expect(onward.ok, JSON.stringify(onward)).toBe(true)
+    // A hand-off links rows in the server's ledger, so the host leaves it to the server.
+    expect(onward.ok && onward.result.via).toBeUndefined()
+    expect(onward.ok && onward.result.handedOn).toEqual([owed])
+    const handed = String(onward.ok && onward.result.requestId)
+
+    // The lead's turn ends while the worker still owes its answer: that edge says nothing.
+    await waitFor(async () => {
+      const t = (await api('GET', `/api/tasks/${leadTask}`)).task as { phase?: string }
+      return t.phase !== 'IN_PROGRESS' && requestRow(handed)?.status === 'pending'
+    }, 15_000, 'the lead\'s turn to end with the worker still on it')
+    await new Promise((r) => setTimeout(r, 300))
+    expect(notices(asker, owed)).toEqual([])
+    expect(requestRow(owed)?.status).toBe('pending')
+
+    // The worker finishes without an answer; the lead is told, and its turn ends saying nothing to the asker.
+    await waitFor(() => requestRow(handed)?.status === 'notified', 45_000, 'the worker\'s request to settle')
+    await waitFor(() => notices(asker, owed).length > 0, 45_000, 'the asker\'s notice')
+    await new Promise((r) => setTimeout(r, 5_000))
+    const said = notices(asker, owed)
+    expect(said, said.join('\n----\n')).toHaveLength(1)
+    expect(said[0]).toContain(`It handed your request on to "Worker: fix login timeout" (${workerTask}), which finished without an explicit answer.`)
+    expect(said[0]).toContain(`about-task="${leadTask}"`)
+    expect(requestRow(owed)).toMatchObject({ status: 'notified', carriedBy: [{ id: handed, taskId: workerTask }] })
+  }, 120_000)
+})

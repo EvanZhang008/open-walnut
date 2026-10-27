@@ -36,7 +36,10 @@ defineOp({
     'text is delivered as a <walnut-message kind="peer-note"> envelope, and the receiver treats it as the user\'s ' +
     'request: every task works for the same user. ' +
     'The receiver is asked to reply BY DEFAULT, with a Walnut fallback notification if it ' +
-    'finishes without replying; pass expect_reply=false when you do not want an answer. To ANSWER such a request, call this op with ' +
+    'finishes without replying; pass expect_reply=false when you do not want an answer. To hand a request you owe to this task ' +
+    'instead of answering it now, pass hands_on=rq-… (its id): its asker waits for this task\'s answer instead of hearing you ended ' +
+    'without a reply, and is told where the work went; answer it yourself once the work is back. ' +
+    'To ANSWER such a request, call this op with ' +
     'in_reply_to=rq-… (omit `to` — the answer routes to the asker automatically). ' +
     'Give every message a `title`: the one-line TL;DR the reader sees first. ' +
     'Address the task id. A task not started yet returns 409: use task_start. ' +
@@ -53,6 +56,7 @@ defineOp({
     expect_reply: z.boolean().optional().describe('Ask the receiver to reply; Walnut notifies you if it finishes without replying. DEFAULT true when the caller is a session — pass false for fire-and-forget'),
     reply_timeout: z.number().int().min(60).max(86_400).optional().describe('Seconds before the no-reply notification (default 3600)'),
     in_reply_to: z.string().regex(/^rq-[a-f0-9]{6,}$/).optional().describe('Request id you are answering — routes to the asker'),
+    hands_on: z.string().regex(/^rq-[a-f0-9]{6,}$/).optional().describe('A request you owe (rq-…) that you hand to this task instead of answering it now: its asker waits for this task\'s answer and is told where the work went'),
     force: z.boolean().optional().describe('Send to (or answer) a task that is COMPLETE, which reopens it. Needs `reason`'),
     reason: z.string().min(1).max(500).optional().describe('With force: what changed and why the complete task must act again. Shown to that task and the user'),
     messageId: z.string().regex(/^qm-[A-Za-z0-9-]{1,64}$/).optional().describe('Stable id for retry deduplication'),
@@ -71,9 +75,13 @@ defineOp({
       delivery === 'deferred'
         ? `Message queued for ${target}: it is parked on a human permission prompt, so the text lands after the human answers. Do NOT resend.`
         : `Message queued for ${b.targetTaskId || b.taskId || target}${args.force === true ? ' (forced: if it was complete, this reopens it)' : ''}. Accepted for delivery, not a completed reply. Do NOT resend.`,
-      typeof b.requestId === 'string' && b.requestId
+      (typeof b.requestId === 'string' && b.requestId
         ? `You asked for a reply (${b.requestId}). ${REPLY_ARRIVES_HINT}`
-        : REPLY_ARRIVES_HINT,
+        : REPLY_ARRIVES_HINT)
+        + (Array.isArray(b.handedOn) && b.handedOn.length ? ` Handed on: ${b.handedOn.join(', ')} now wait for this answer; answer them once it is back.` : '')
+        + (Array.isArray(b.handOnRefused) && b.handOnRefused.length
+          ? ` Not handed on: ${(b.handOnRefused as { id: string; reason: string }[]).map((r) => `${r.id} (${r.reason})`).join(', ')}.`
+          : ''),
     );
   },
   tags: { readonly: false, remote: 'allow', primaryOnly: true },

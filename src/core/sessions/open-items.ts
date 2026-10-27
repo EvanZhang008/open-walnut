@@ -89,7 +89,8 @@ export async function collectOpenItems(
     }));
     const askedOfYou: OpenAsk[] = [];
     for (const r of received) {
-      askedOfYou.push({ id: r.id, from: await partyOf(r.fromSessionId), preview: r.preview, createdAt: r.createdAt });
+      const handedTo = [...new Set((r.carriedBy ?? []).map((c) => c.taskId).filter((id): id is string => !!id))];
+      askedOfYou.push({ id: r.id, from: await partyOf(r.fromSessionId), preview: r.preview, createdAt: r.createdAt, ...(handedTo.length ? { handedTo } : {}) });
     }
 
     const items: OpenItems = {

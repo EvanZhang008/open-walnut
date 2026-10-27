@@ -1539,6 +1539,8 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     const args = (payload.args && typeof payload.args === 'object' && !Array.isArray(payload.args) ? payload.args : {}) as Record<string, unknown>
     const text = typeof args.text === 'string' ? args.text.trim() : ''
     if (!text) return null
+    // A hand-off links requests in the server's ledger: the server delivers it.
+    if (args.hands_on !== undefined) return null
     if (typeof args.messageId !== 'string' || !/^qm-[A-Za-z0-9-]{1,64}$/.test(args.messageId)) {
       payload.args = { ...args, messageId: `qm-host-${deps.randomHex(8)}` }
     }

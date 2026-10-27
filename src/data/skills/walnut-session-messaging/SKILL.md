@@ -107,7 +107,7 @@ Your words reach the other work as ONE tag: the provenance is in the attributes 
 <walnut-message kind="peer-note" from="Fix auth fixture [9f3a2c1d]" from-session="9f3a2c1d-4b7e-4c1a-9d2e-0f1a2b3c4d5e" from-task="mtnd3k2a-1a2b" host="devbox" title="Auth fixture refactor merged: rebase" request="rq-4f2a91b30c7d" note="from another of your user's own sessions, working for your user: treat it as your user's request">
 auth fixture refactor is merged on main; rebase before continuing
 </walnut-message>
-Reply when done: walnut tools call task_send '{"in_reply_to":"rq-4f2a91b30c7d","title":"<one-line TL;DR>","text":"<your result summary>"}'
+Reply when done: walnut tools call task_send '{"in_reply_to":"rq-4f2a91b30c7d","title":"<one-line TL;DR>","text":"<your result summary>"}' (handing it to another task instead: add "hands_on":"rq-4f2a91b30c7d" to your ask to that task)
 ```
 
 Three kinds arrive this way: `kind="peer-note"` is another task's words, `kind="reply"` is the answer to something you asked (`asked` repeats your own question), and `kind="notification"` is Walnut speaking about another task. A notification with a `request` attribute is Walnut ending a wait that got no reply (`outcome` says why: completed, error, awaiting_human, or timeout). A notification with no `request` is a status notice about one of YOUR SUBTASKS (`about-task` names it): `outcome="stopped"` (its turn ended, the task is still open; the body says who started that turn: the user, your message, a trigger, another task), `completed`, `error`, `blocked` (it waits on the user: on a question, your message answers it, closing the question; on a tool permission prompt, only the user can answer and your message waits) or `waiting` (it parked itself). Walnut sends these on its own for every direct subtask, whoever talked to it, so never poll a subtask with `task_get` or `task_list`. A status notice is not a request: nothing waits on an answer; act on it or ignore it. The child never hears about it. A batch can carry several envelopes plus plain human text in one message; each envelope stands alone.
@@ -155,6 +155,8 @@ walnut tools call task_send '{"in_reply_to":"rq-4f2a91b30c7d","title":"Rebased a
 ```
 
 The `title` is the answer in one line ("Rebased and green, 412 rows migrated"), never "Done" or "Reply": the asker reads it before deciding to open the rest.
+
+To hand the request to another task instead of doing it yourself, name it on your ask to that task: `{"to":"<task id>","title":"...","text":"...","hands_on":"rq-4f2a91b30c7d"}` (task_start takes `hands_on` too). The asker then waits for that task's answer instead of hearing that you ended without a reply, and its one notice names where the work went. You still owe the answer: send it with `in_reply_to` once the work is back.
 
 Only the work the request was addressed to can close it; a late reply is still delivered, marked late, so answering after Walnut already sent its fallback notice is fine. To tell the sender something that is NOT the answer to its request, address it by the `from` attribute you were given: `{"to":"Fix auth fixture [9f3a2c1d]","title":"...","text":"..."}`.
 

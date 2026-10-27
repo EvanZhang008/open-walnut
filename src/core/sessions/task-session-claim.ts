@@ -71,8 +71,8 @@ export async function claimTaskForNewSession(taskId: string, attemptedSessionId 
  */
 export async function continueTaskConversation(
   record: SessionRecord,
-  opts: { text: string; callerSid?: string; expectReply?: boolean; replyTimeoutSecs?: number },
-): Promise<{ sessionId: string; requestId?: string; delivery: 'queued' | 'deferred' }> {
+  opts: { text: string; callerSid?: string; expectReply?: boolean; replyTimeoutSecs?: number; handsOn?: string },
+): Promise<{ sessionId: string; requestId?: string; delivery: 'queued' | 'deferred'; handedOn?: string[]; handOnRefused?: { id: string; reason: string }[] }> {
   const { updateSessionRecord } = await import('../session-tracker.js');
   if (record.archived) {
     await updateSessionRecord(record.claudeSessionId, { archived: false, archive_reason: undefined });
@@ -84,10 +84,14 @@ export async function continueTaskConversation(
     callerSid: opts.callerSid,
     expectReply: opts.expectReply,
     replyTimeoutSecs: opts.replyTimeoutSecs,
+    ...(opts.handsOn ? { handsOn: opts.handsOn } : {}),
     force: true,
     reason: 'The task was started again; its one conversation continues here.',
   });
-  return { sessionId: record.claudeSessionId, requestId: sent.requestId, delivery: sent.delivery };
+  return {
+    sessionId: record.claudeSessionId, requestId: sent.requestId, delivery: sent.delivery,
+    ...(sent.handedOn ? { handedOn: sent.handedOn } : {}), ...(sent.handOnRefused ? { handOnRefused: sent.handOnRefused } : {}),
+  };
 }
 
 /** Another session that already belongs to `taskId` (null = none). */

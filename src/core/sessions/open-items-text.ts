@@ -8,7 +8,8 @@
 
 export interface OpenSubtask { id: string; title: string; phase: string }
 export interface OpenWait { id: string; to: string; preview: string; createdAt: string }
-export interface OpenAsk { id: string; from: string; preview: string; createdAt: string }
+/** `handedTo`: the tasks this ask was handed on to, whose answer it waits for (request-handoff.ts). */
+export interface OpenAsk { id: string; from: string; preview: string; createdAt: string; handedTo?: string[] }
 export interface OpenBoard { version: number; updatedAt: string; threads: number; userMessages: number; marks: number }
 
 export interface OpenItemsInput {
@@ -99,7 +100,8 @@ export function createOpenItemsText() {
       lines.push(`Asked of you and not answered yet (${items.askedOfYou.length}); answer with task_send in_reply_to:`);
       for (const r of items.askedOfYou) {
         const when = ago(r.createdAt, now);
-        lines.push(`- ${r.id} from ${r.from}${when ? `, ${when}` : ''}: "${oneLine(r.preview, PREVIEW_MAX)}"`);
+        const handed = r.handedTo?.length ? ` (handed on to ${r.handedTo.join(', ')}: answer once that is back)` : '';
+        lines.push(`- ${r.id} from ${r.from}${when ? `, ${when}` : ''}: "${oneLine(r.preview, PREVIEW_MAX)}"${handed}`);
       }
     }
     if (items.board) {

@@ -1015,3 +1015,94 @@ describe('sessionRequestWatchHook — a child that closes its own task', () => {
     expect(notifySpy).not.toHaveBeenCalled();
   });
 });
+
+describe('sessionRequestWatchHook — a request handed on waits for that answer', () => {
+  // ASKER asks TARGET (task-77); TARGET hands it on by asking WORKER (task-88).
+  const WORKER = 'sess-worker-1';
+  async function handOff(): Promise<{ owed: SessionRequest; onward: SessionRequest }> {
+    const owed = await arm({ text: 'ship the fix' });
+    const onward = await createSessionRequest({
+      fromSessionId: TARGET, fromTaskId: 'task-77', toSessionId: WORKER, toTaskId: 'task-88', text: 'fix the login timeout', handsOn: [owed.id],
+    });
+    return { owed, onward };
+  }
+  const fire = (payload = phasePayload({ newPhase: 'WAITING' })) => sessionRequestWatchHook.handler!(payload);
+
+  beforeEach(() => {
+    sessions.push(rec(WORKER, { title: 'Worker', taskId: 'task-88' }));
+    const titles = [{ id: 'task-77', title: 'Run the migration' }, { id: 'task-88', title: 'Fix login timeout' }];
+    listTasksByIds.mockImplementation(async (ids: string[]) => titles.filter((t) => ids.includes(t.id)));
+  });
+
+  it('a worker task that closed (or is gone) without answering never will: the asker hears now', async () => {
+    const { owed } = await handOff();
+    listTasksByIds.mockImplementation(async (ids: string[]) => [{ id: 'task-88', title: 'Fix login timeout', phase: 'COMPLETE' }].filter((t) => ids.includes(t.id)));
+    await fire();
+    expect(notifySpy).toHaveBeenCalledTimes(1);
+    expect(deliveredText()).toContain('"Fix login timeout" (task-88), which finished without an explicit answer.');
+    expect((await getSessionRequest(owed.id))?.status).toBe('notified');
+    // Gone altogether: the same.
+    sendMessageToSession.mockClear(); notifySpy.mockClear();
+    listTasksByIds.mockResolvedValue([]);
+    await handOff();
+    await fire();
+    expect(notifySpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('a turn that parks while the worker owes its answer says nothing; once it answered, the notice names it', async () => {
+    const { owed, onward } = await handOff();
+    await fire();
+    expect(notifySpy).not.toHaveBeenCalled();
+    expect(sendMessageToSession).not.toHaveBeenCalled();
+    expect((await getSessionRequest(owed.id))?.status).toBe('pending');
+
+    // The worker answered; the target's next turn ended with no reply of its own.
+    await settleReplied(onward.id);
+    await fire();
+    expect(notifySpy).toHaveBeenCalledTimes(1);
+    const text = deliveredText();
+    expect(text).toContain('It handed your request on to "Fix login timeout" (task-88), which answered it.');
+    expect(text).toContain('WITHOUT an explicit reply to your request');
+    expect(text).toContain(`task_get '{"id":"task-88"}'`);
+    expect((await getSessionRequest(owed.id))?.status).toBe('notified');
+  });
+
+  it('a target that answers itself is the one voice', async () => {
+    const { owed, onward } = await handOff();
+    await settleReplied(onward.id);
+    await settleReplied(owed.id);
+    await fire();
+    expect(notifySpy).not.toHaveBeenCalled();
+  });
+
+  it('a worker that stopped without answering is named so', async () => {
+    const { onward } = await handOff();
+    await settleNotified(onward.id, 'completed');
+    await fire(phasePayload({ newPhase: 'NEED_ACTION' }));
+    expect(deliveredText()).toContain('"Fix login timeout" (task-88), which finished without an explicit answer.');
+  });
+
+  it('blocked, failed or closed: the asker hears now, with who still has the work', async () => {
+    await handOff();
+    sessions = sessions.map((s) => s.claudeSessionId === TARGET ? rec(TARGET, { title: 'Target', process_status: 'error' }) : s);
+    await fire();
+    expect(notifySpy.mock.calls[0][1]).toBe('error');
+    expect(deliveredText()).toContain('"Fix login timeout" (task-88), which is still working on it.');
+    expect(deliveredText()).toContain('It hit an ERROR before replying');
+
+    // A target that closed its task with the work still out speaks too.
+    sendMessageToSession.mockClear();
+    sessions = sessions.map((s) => s.claudeSessionId === TARGET ? rec(TARGET, { title: 'Target' }) : s);
+    await handOff();
+    await fire(phasePayload({ newPhase: 'COMPLETE' }));
+    expect(deliveredText()).toContain('It marked its task COMPLETE WITHOUT an explicit reply');
+    expect(deliveredText()).toContain('which is still working on it.');
+  });
+
+  it('its deadline is the backstop, and that notice names the task too', async () => {
+    const { owed } = await handOff();
+    backdateDeadline(owed.id);
+    expect(await sweepSessionRequests()).toBe(1);
+    expect(deliveredText()).toContain('It handed your request on to "Fix login timeout" (task-88), which is still working on it.');
+  });
+});

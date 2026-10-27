@@ -33,6 +33,8 @@ export interface SessionStartParams {
   engine?: SessionEngine;
   expectReply?: boolean;
   replyTimeoutSecs?: number;
+  /** rq-… id of a request the caller owes and hands to this task (session-requests.ts linkHandoffs). */
+  handsOn?: string;
   callerSid?: string;
   startAttemptId?: string;
   source: string;
@@ -43,6 +45,9 @@ export interface SessionStartResult {
   title: string;
   sessionId?: string;
   requestId?: string;
+  /** The requests this start handed on (`hands_on`), and the ones it could not, with why. */
+  handedOn?: string[];
+  handOnRefused?: { id: string; reason: string }[];
   started: boolean;
   /** The task's isolated workspace is being made; the session starts in it once it is ready. */
   preparing?: boolean;
@@ -194,19 +199,28 @@ export async function startSessionForTask(params: SessionStartParams): Promise<S
       const sent = await continueTaskConversation(conversation, {
         text: params.message?.trim() || task.description || `Working on task: ${task.title}`,
         callerSid: params.callerSid, expectReply: params.expectReply, replyTimeoutSecs: params.replyTimeoutSecs,
+        ...(params.handsOn ? { handsOn: params.handsOn } : {}),
       });
-      return { taskId: task.id, title: task.title, sessionId: sent.sessionId, requestId: sent.requestId, started: true, continued: true, applied: [] };
+      return {
+        taskId: task.id, title: task.title, sessionId: sent.sessionId, requestId: sent.requestId, started: true, continued: true, applied: [],
+        ...(sent.handedOn ? { handedOn: sent.handedOn } : {}), ...(sent.handOnRefused ? { handOnRefused: sent.handOnRefused } : {}),
+      };
     }
     const launch = await prepareLaunch(task, { ...params, engine });
     let callerSessionId: string | undefined;
+    // Its task: what that task still owes is handed on with this start's request.
+    let callerTaskId: string | undefined;
     let requestId: string | undefined;
+    if (params.handsOn !== undefined && !/^rq-[a-f0-9]{6,}$/.test(params.handsOn)) throw new QuickStartError('hands_on must be an rq-… id', 400);
+    if (params.handsOn && params.expectReply === false) throw new QuickStartError('hands_on needs a reply request: leave expect_reply on', 400);
     if (params.expectReply !== false) {
       const { resolveCaller } = await import('./session-send-core.js');
       const caller = await resolveCaller(params.callerSid);
       if (caller.kind !== 'session') {
-        if (params.expectReply === true) throw new QuickStartError('expect_reply needs a session caller', 400);
+        if (params.expectReply === true || params.handsOn) throw new QuickStartError('expect_reply needs a session caller', 400);
       } else {
         callerSessionId = caller.record.claudeSessionId;
+        callerTaskId = caller.record.taskId || undefined;
       }
     }
     const attempt: NonNullable<Task['last_start']> = {
@@ -243,10 +257,13 @@ export async function startSessionForTask(params: SessionStartParams): Promise<S
         if (callerSessionId) {
           const { createSessionRequest, buildReplyTrailer } = await import('../session-requests.js');
           const request = await createSessionRequest({
-            fromSessionId: callerSessionId, ...(sid ? { toSessionId: sid } : {}),
+            fromSessionId: callerSessionId, ...(callerTaskId ? { fromTaskId: callerTaskId } : {}), ...(sid ? { toSessionId: sid } : {}),
             toTaskId: task.id, text: launch.message, replyTimeoutSecs: params.replyTimeoutSecs,
             implicit: params.expectReply === undefined,
+            ...(params.handsOn ? { handsOn: [params.handsOn] } : {}),
           });
+          if (request.carries?.length) result.handedOn = request.carries;
+          if (request.handOnRefused?.length) result.handOnRefused = request.handOnRefused;
           requestId = request.id;
           result.requestId = request.id;
           launch.message += `\n${buildReplyTrailer(request)}`;

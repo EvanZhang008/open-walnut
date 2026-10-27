@@ -55,6 +55,15 @@ export interface EnvelopeTarget {
   taskId?: string;
   phase?: string;
   lastMessage?: EnvelopeLastMessage;
+  /** The tasks the target handed this request on to (session-requests.ts linkHandoffs). */
+  handedOn?: EnvelopeHandedOn[];
+}
+
+/** A task a request was handed on to, and where its answer stands. */
+export interface EnvelopeHandedOn {
+  title?: string;
+  taskId?: string;
+  state: 'answered' | 'stopped' | 'working' | 'unknown';
 }
 
 /** What a subtask's turn end tells its parent (subtask-notices.ts); rides the `outcome` attribute. */
@@ -251,7 +260,8 @@ export function createEnvelopeKit(): EnvelopeKit {
   /** The ONE line Walnut appends to a message delivered with expect_reply. */
   function buildReplyTrailer(request: { id: string }): string {
     return `Reply when done: walnut tools call task_send `
-      + `'{"in_reply_to":"${request.id}","title":"<one-line TL;DR>","text":"<your result summary>"}'`;
+      + `'{"in_reply_to":"${request.id}","title":"<one-line TL;DR>","text":"<your result summary>"}'`
+      + ` (handing it to another task instead: add "hands_on":"${request.id}" to your ask to that task)`;
   }
 
   function buildReplyDeliveryText(
@@ -312,6 +322,19 @@ export function createEnvelopeKit(): EnvelopeKit {
     return blocks.join('\n\n');
   }
 
+  /** "It handed your request on to …": who has the work, and whether each answered. */
+  function handedOnLine(handed: readonly EnvelopeHandedOn[] | undefined): string | undefined {
+    if (!handed?.length) return undefined;
+    const name = (h: EnvelopeHandedOn) => `"${sessionHandle(h.title, undefined) || 'untitled'}"${h.taskId ? ` (${h.taskId})` : ''}`;
+    const how = (h: EnvelopeHandedOn) => h.state === 'answered' ? 'which answered it'
+      : h.state === 'stopped' ? 'which finished without an explicit answer'
+        : h.state === 'working' ? 'which is still working on it'
+          : '';
+    const parts = handed.map((h) => [name(h), how(h)].filter(Boolean).join(', '));
+    const list = parts.length > 1 ? `${parts.slice(0, -1).join('; ')}; and ${parts[parts.length - 1]}` : parts[0];
+    return `It handed your request on to ${list}.`;
+  }
+
   /** What the ASKER reads when Walnut (not the target) ends the wait (see session-requests.ts). */
   function buildRequestNotification(request: EnvelopeRequest, outcome: EnvelopeOutcome, target: EnvelopeTarget): string {
     const said = Boolean(target.lastMessage?.text.trim());
@@ -332,7 +355,10 @@ export function createEnvelopeKit(): EnvelopeKit {
       ...(outcome !== 'awaiting_human' && (target.taskId || target.sessionId)
         ? [`  walnut tools call task_send '{"to":"${target.taskId || target.sessionId}","text":"..."}'  # follow up`]
         : []),
+      ...(target.handedOn ?? []).filter((h) => h.taskId).slice(0, 3)
+        .map((h) => `  walnut tools call task_get '{"id":"${h.taskId}"}'          # the task it handed your request on to`),
     ];
+    const handed = handedOnLine(target.handedOn);
     return buildWalnutMessage({
       kind: 'notification',
       attrs: {
@@ -346,6 +372,7 @@ export function createEnvelopeKit(): EnvelopeKit {
         note: NOTE_NOTIFICATION,
       },
       body: [
+        ...(handed ? [handed] : []),
         outcome === 'completed' && target.phase === 'COMPLETE'
           ? `${COMPLETE_LINE}${pointer || ' Check its output.'}`
           : outcome === 'completed' && target.phase === 'WAITING'

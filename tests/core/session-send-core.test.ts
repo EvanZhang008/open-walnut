@@ -545,7 +545,8 @@ describe('performSessionSend — expect_reply', () => {
     // newline after the closing tag, then exactly one line and nothing more.
     expect(text).toBe(`${parsed.raw}\n`
       + `Reply when done: walnut tools call task_send `
-      + `'{"in_reply_to":"${result.requestId}","title":"<one-line TL;DR>","text":"<your result summary>"}'`);
+      + `'{"in_reply_to":"${result.requestId}","title":"<one-line TL;DR>","text":"<your result summary>"}'`
+      + ` (handing it to another task instead: add "hands_on":"${result.requestId}" to your ask to that task)`);
   });
 });
 
