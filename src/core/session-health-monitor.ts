@@ -85,6 +85,12 @@ const DEFAULT_REMOTE_IDLE_TIMEOUT_MS = 2 * 60 * 60 * 1000
 const CRON_ARMED_IDLE_TIMEOUT_MS = 7 * 24 * 60 * 60 * 1000
 /** Local idle timeout while the machine is under memory pressure (memory-pressure.ts). */
 export const PRESSURE_IDLE_TIMEOUT_MS = 15 * 60 * 1000
+/**
+ * Quiet time a session with work that runs on after its turn (a detached background command, an
+ * armed wakeup) may have before the idle reap ends it anyway: extended, not disabled, so a command
+ * that never ends (a dev server) or a terminal event no one recorded cannot keep a CLI forever.
+ */
+export const OUTLIVING_WORK_IDLE_TIMEOUT_MS = 24 * 60 * 60 * 1000
 const TRANSCRIPT_ACTIVITY_TTL_MS = 5 * 60 * 1000
 /** A transcript that could not be found is looked for again after this long. */
 const TRANSCRIPT_MISS_TTL_MS = 30 * 60 * 1000
@@ -878,7 +884,7 @@ export class SessionHealthMonitor {
     const { getRegisteredSessionManager } = await import('../providers/session-manager.js')
 
     // Import sessionRunner for team-active + cron-armed + background-work + permission checks (lazy, cached by Node module system)
-    let runner: { isTeamActive(id: string): boolean; isCronArmed?(id: string): boolean; isBackgroundWorkActive?(id: string): boolean | Promise<boolean>; hasPendingPermission?(id: string): boolean } | undefined
+    let runner: { isTeamActive(id: string): boolean; isCronArmed?(id: string): boolean; isBackgroundWorkActive?(id: string): boolean | Promise<boolean>; hasWorkOutlivingTurn?(id: string): boolean; hasPendingPermission?(id: string): boolean } | undefined
     try {
       const { sessionRunner } = await import('../providers/claude-code-session.js')
       runner = sessionRunner
@@ -912,6 +918,20 @@ export class SessionHealthMonitor {
       if (cronArmed) {
         idleTimeoutMs = Math.max(idleTimeoutMs, CRON_ARMED_IDLE_TIMEOUT_MS)
       }
+      // Work the session started that runs on after its turn: a detached background
+      // command (a Bash run_in_background, a backgrounded agent) or an armed wakeup.
+      // The background probe below leaves detached tasks out on purpose (turn-over
+      // gating does not wait for them), but the process is busy running them and a
+      // reap kills them with it. 2026-10-27: a session whose queued test runs were
+      // detached commands was reaped after 20 quiet minutes under memory pressure,
+      // killing both runs and leaving its task on the user. Extended like a cron, and
+      // never shortened by pressure. In memory: the task set was refreshed from the
+      // daemon's fold earlier in this tick (reconcilePendingBackgroundTasks), so a
+      // command that ended while Walnut was not listening no longer counts.
+      const outlivingWork = runner?.hasWorkOutlivingTurn?.(session.claudeSessionId) ?? false
+      if (outlivingWork) {
+        idleTimeoutMs = Math.max(idleTimeoutMs, OUTLIVING_WORK_IDLE_TIMEOUT_MS)
+      }
       const mgr = getRegisteredSessionManager(session.claudeSessionId)
       // Under memory pressure a local CLI whose turn is over gives its memory
       // back sooner; the next message resumes it. 2026-10-25: 35 live CLIs held
@@ -921,7 +941,7 @@ export class SessionHealthMonitor {
       const turnOver = mgr?.cliState != null
         ? mgr.cliState === 'idle'
         : session.process_status !== 'running'
-      if (!isRemote && !cronArmed && turnOver && memoryPressureShedding()) {
+      if (!isRemote && !cronArmed && !outlivingWork && turnOver && memoryPressureShedding()) {
         idleTimeoutMs = Math.min(idleTimeoutMs, PRESSURE_IDLE_TIMEOUT_MS)
       }
 

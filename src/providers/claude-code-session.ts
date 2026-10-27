@@ -1354,6 +1354,14 @@ export class ClaudeCodeSession {
     return this._runningBgCount() > 0
   }
 
+  /** Work this session started that runs on after its turn: a detached background command or
+   *  agent still in flight, or an armed ScheduleWakeup. Turn-over gating ignores it on purpose,
+   *  but the process is busy, so Walnut's idle reap must not end it (2026-10-27: a session whose
+   *  queued test runs were detached commands was reaped after 20 quiet minutes, which killed them). */
+  get workOutlivesTurn(): boolean {
+    return this._detachedBgCount() > 0 || this._wakeupArmed()
+  }
+
   /** True when the task set holds ANY non-terminal entry, INCLUDING backgrounded ones.
    *  Distinct from hasActiveBackgroundWork(), which excludes backgrounded tasks
    *  (turn-over gating only) — that exclusion is exactly why a backgrounded task's lost
@@ -10048,6 +10056,12 @@ export class SessionRunner {
   isCronArmed(claudeSessionId: string): boolean {
     const session = this.findSessionByClaudeId(claudeSessionId)
     return session?.cronArmed ?? false
+  }
+
+  /** Detached background work or an armed wakeup still pending (see ClaudeCodeSession.workOutlivesTurn).
+   *  In memory: the health monitor's tick has pulled the daemon's task state just before. */
+  hasWorkOutlivingTurn(claudeSessionId: string): boolean {
+    return this.findSessionByClaudeId(claudeSessionId)?.workOutlivesTurn ?? false
   }
 
   /** Check if a session has background workflow/subagent tasks still running.

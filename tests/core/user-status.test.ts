@@ -87,6 +87,24 @@ describe('the words say why', () => {
     expect(deriveUserStatus({ ...base, report: report({ state: 'needs', ask: 'Pick A or B?' }), reportPending: true }, NOW)).toMatchObject({ state: 'needs', ask: 'Pick A or B?' })
   })
 
+  // 2026-10-27: a worker whose session Walnut reaped while its tests ran read Needs you everywhere.
+  it('a worker whose session stopped waits on its lead, unless its own report asks the user', () => {
+    const base = { phase: 'NEED_ACTION', hasSession: true, processStatus: 'stopped', hasLeader: true, phaseChangedAt: ago(60_000) }
+    expect(deriveUserStatus(base, NOW)).toMatchObject({ state: 'waiting', kind: 'lead', waitingOn: expect.stringContaining('session stopped') })
+    expect(deriveUserStatus({ ...base, reportPending: true }, NOW)).toMatchObject({ state: 'waiting', kind: 'lead' })
+    // An older turn's ask lends nothing: the stop came after it.
+    expect(deriveUserStatus({ ...base, report: report({ state: 'needs', ask: 'Pick A or B?', at: ago(30 * 60_000) }) }, NOW)).toMatchObject({ kind: 'lead' })
+    // Its own current report, a letter, a failed session: still the user's.
+    expect(deriveUserStatus({ ...base, report: report({ state: 'needs', ask: 'Pick A or B?' }) }, NOW)).toMatchObject({ state: 'needs', ask: 'Pick A or B?' })
+    expect(deriveUserStatus({ ...base, openLetter: 'Approve the quota raise' }, NOW)).toMatchObject({ state: 'needs', source: 'letter' })
+    expect(deriveUserStatus({ ...base, processStatus: 'error' }, NOW)).toMatchObject({ state: 'needs', source: 'error' })
+    // No lead, or the lead itself: the user, as before.
+    expect(deriveUserStatus({ ...base, hasLeader: false }, NOW)).toMatchObject({ state: 'needs' })
+    expect(deriveUserStatus({ ...base, isLead: true }, NOW)).toMatchObject({ state: 'needs' })
+    // A turn that only ended (its process alive between turns) is not this.
+    expect(deriveUserStatus({ ...base, processStatus: 'idle' }, NOW)).toMatchObject({ state: 'needs' })
+  })
+
   it('a report from before the latest phase move lends its words, never its ask', () => {
     const before = report({ state: 'needs', ask: 'Pick A or B?', now: 'Designs sent.', at: ago(30 * 60_000) })
     const s = deriveUserStatus({ phase: 'NEED_ACTION', hasSession: true, processStatus: 'idle', phaseChangedAt: ago(60_000), report: before }, NOW)

@@ -28,6 +28,7 @@ const exemptions = {
   backgroundActive: new Set<string>(),
   pendingPermission: new Set<string>(),
   cronArmed: new Set<string>(),
+  outlivingWork: new Set<string>(),
 };
 
 let shedding = false;
@@ -91,6 +92,7 @@ vi.mock('../../src/providers/claude-code-session.js', () => ({
     isTeamActive: (sid: string) => exemptions.teamActive.has(sid),
     isCronArmed: (sid: string) => exemptions.cronArmed.has(sid),
     isBackgroundWorkActive: (sid: string) => exemptions.backgroundActive.has(sid),
+    hasWorkOutlivingTurn: (sid: string) => exemptions.outlivingWork.has(sid),
     hasPendingPermission: (sid: string) => exemptions.pendingPermission.has(sid),
     getSessionTimestamps: () => undefined,
     markExpectedTeardown: vi.fn(),
@@ -104,7 +106,7 @@ import {
   listSessions,
   updateSessionRecord,
 } from '../../src/core/session-tracker.js';
-import { SessionHealthMonitor, PRESSURE_IDLE_TIMEOUT_MS, TRANSCRIPT_SEED_GRACE_MS } from '../../src/core/session-health-monitor.js';
+import { SessionHealthMonitor, PRESSURE_IDLE_TIMEOUT_MS, TRANSCRIPT_SEED_GRACE_MS, OUTLIVING_WORK_IDLE_TIMEOUT_MS } from '../../src/core/session-health-monitor.js';
 import { bus, EventNames } from '../../src/core/event-bus.js';
 import { WALNUT_HOME } from '../../src/constants.js';
 import { canonicalJsonlPath } from '../../src/core/session-file-reader.js';
@@ -156,6 +158,7 @@ beforeEach(async () => {
   exemptions.backgroundActive.clear();
   exemptions.pendingPermission.clear();
   exemptions.cronArmed.clear();
+  exemptions.outlivingWork.clear();
   processAlive = true;
   idleTimeoutMinutes = 60;
   shedding = false;
@@ -312,5 +315,37 @@ describe('idle timeout under memory pressure', () => {
     expect(warnings.map((w) => w.sessionId).sort()).toEqual(['pressure-young']);
     expect(warnings[0].remainingMs).toBeGreaterThan(2 * MIN);
     expect(killed(quiet)).toBe(false);
+  });
+});
+
+describe('work that runs on after the turn', () => {
+  // 2026-10-27: a session whose two queued test runs were detached background commands. Its
+  // turn was over (the CLI said idle, the record still said running for the detached work), the
+  // Mac was under memory pressure, and 20 quiet minutes later the reap killed it and both runs.
+  it('spares a session with a detached command in flight, under pressure too', async () => {
+    shedding = true;
+    const busy = await seedIdleSession('detached-tests', 20 * MIN, { status: 'running', statusChangeAgeMs: 4 * 60 * MIN });
+    busy.cliState = 'idle';
+    exemptions.outlivingWork.add('detached-tests');
+    const done = await seedIdleSession('detached-none', 20 * MIN, { status: 'running', statusChangeAgeMs: 4 * 60 * MIN });
+    done.cliState = 'idle';
+
+    await new SessionHealthMonitor().check();
+
+    expect(warnings.map((w) => w.sessionId)).toEqual(['detached-none']);
+    expect(busy.kill).not.toHaveBeenCalled();
+  });
+
+  it('is extended, not disabled: a day without a word ends it anyway', async () => {
+    const forever = await seedIdleSession('detached-dev-server', OUTLIVING_WORK_IDLE_TIMEOUT_MS + 5 * MIN);
+    exemptions.outlivingWork.add('detached-dev-server');
+    const young = await seedIdleSession('detached-young', 3 * 60 * MIN);
+    exemptions.outlivingWork.add('detached-young');
+
+    await new SessionHealthMonitor().check();
+
+    expect(warnings.map((w) => w.sessionId)).toEqual(['detached-dev-server']);
+    expect(killed(forever)).toBe(true);
+    expect(young.kill).not.toHaveBeenCalled();
   });
 });

@@ -207,6 +207,12 @@ function derive(input: UserStatusInput, nowMs: number): UserStatus {
         ...w,
       });
     }
+    // A worker whose session stopped (Walnut's idle reap, a stop) with no report of its own saying it
+    // needs the user: its lead is the one to look (2026-10-27: a worker reaped while its tests ran read
+    // Needs you everywhere). The reap still hands it back, so a reply its lead waits for is settled.
+    if (input.hasLeader && !input.isLead && !input.isMain && input.processStatus === 'stopped') {
+      return strip({ state: 'waiting', kind: 'lead', waitingOn: 'Its lead, to look at it: its session stopped before it said it needs anything', ...w });
+    }
     // Its turn just ended and its report is on the way: only that report can say it asks anything.
     if (input.reportPending) {
       return strip({ state: 'waiting', kind: 'other', waitingOn: 'Its report on the turn that just ended', ...w });
