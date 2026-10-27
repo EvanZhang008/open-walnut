@@ -24,6 +24,7 @@ import {
 import { cancelFixtureAutofix } from '../../core/hosts/host-fixture-autofix.js'
 import { clearHostReadiness, recomputeHostReadinessFloors } from '../../core/hosts/host-readiness.js'
 import { pushHostFrame, pushHostRemoved } from '../../core/hosts/host-connect-action.js'
+import { runningHostAuthAlert } from '../../core/hosts/host-auth-alert.js'
 import type { HostDef } from '../../core/hosts/host-status.js'
 
 export const testHostFixtureRouter = Router()
@@ -193,6 +194,17 @@ async function runAction(action: string, body: Body): Promise<Record<string, unk
       injectFixtureFailure(host, kind, body.afterWake === true)
       push(host)
       return { host }
+    }
+    case 'sign-in-letter': {
+      // The sign-in letter is off on the fixture server (its hosts fail on purpose); a spec turns it on.
+      const alert = runningHostAuthAlert()
+      if (!alert) throw new FixtureError(409, 'the host sign-in alert is not running')
+      alert.configure({
+        ...(typeof body.enabled === 'boolean' ? { enabled: body.enabled } : {}),
+        ...(typeof body.graceMs === 'number' ? { graceMs: body.graceMs } : {}),
+      })
+      if (body.check === true) await alert.check()
+      return { letterIds: await alert.openLetterIds() }
     }
     case 'set-shell-setup': {
       const { host, h } = hostOf(body)

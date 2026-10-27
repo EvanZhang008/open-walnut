@@ -57,6 +57,7 @@ export function fullConfigFixture(): Record<string, unknown> {
     },
     hosts_warmup: { enabled: true },
     ssh_login_files: ['/Users/marina/.ssh/id_planted'],
+    ssh_login_hint: 'run the planted login command on this Mac',
     session_limits: { devbox: 4 },
     external_session_import: { auto_complete_after_days: 7, excluded_cwds: { devbox: ['/Users/marina/scratch'] } },
     session: { cron_policy: 'session-only', idle_timeout_minutes: 120, turn_retry: { enabled: true, max_attempts: 3 } },

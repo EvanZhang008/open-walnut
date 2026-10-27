@@ -1284,6 +1284,12 @@ export interface Config {
    *  change to one of them redials it at once. ~/.ssh is always watched
    *  (core/hosts/host-credential-signal.ts). */
   ssh_login_files?: string[];
+  /** What to tell the user when SSH refuses this machine's sign-in to a host
+   *  (an expired certificate or login): a short clause such as "run <your
+   *  login command> on this Mac". It finishes the sentence of the one inbox
+   *  letter Walnut sends (core/hosts/host-auth-alert.ts); unset reads
+   *  "refresh your login credentials". */
+  ssh_login_hint?: string;
   /** Per-host maximum concurrent CLI session limits.
    *  'local' key = sessions without a host.
    *  Other keys = host aliases from config.hosts (e.g. 'devbox', 'nas-server').

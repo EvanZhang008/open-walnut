@@ -89,6 +89,7 @@ export const CONFIG_COPY_DROPPED: Readonly<Record<string, string>> = Object.free
   session_server: 'the Mac server process settings',
   hosts_warmup: 'ssh warmup on the Mac',
   ssh_login_files: 'ssh files on the Mac',
+  ssh_login_hint: 'the ssh sign-in letter is sent on the Mac',
   triage: 'inbox triage runs on the Mac',
   backup: 'backup targets of the Mac',
   search: 'embedding endpoints and keys; the search copy carries its own',

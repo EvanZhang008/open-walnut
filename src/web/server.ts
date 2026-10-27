@@ -4010,7 +4010,11 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       isKnownHost: (host) => Object.hasOwn(hostDefs, host),
       emit: emitHostStatus,
     })
-    unsubscribeHostPhase = () => { offPhase(); offReadiness(); offCloudBox() }
+    // A host whose SSH sign-in keeps failing sends the user ONE letter (closed once it connects).
+    const { startHostAuthAlert } = await import('../core/hosts/host-auth-alert.js')
+    const { hostFixtureMode } = await import('../core/hosts/host-fixture.js')
+    const offAuthAlert = await startHostAuthAlert({ knownHosts: () => shown(hostDefs), enabled: !hostFixtureMode() })
+    unsubscribeHostPhase = () => { offPhase(); offReadiness(); offCloudBox(); offAuthAlert() }
 
     const warmupGate = hostWarmupGateReason({
       cloudMode: isCompanion(), ephemeral: isEphemeral, env: process.env, config: await getConfig(),
