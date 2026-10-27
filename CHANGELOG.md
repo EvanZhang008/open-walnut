@@ -6,6 +6,141 @@ breaking changes).
 
 ## [Unreleased]
 
+## [0.6.19] - 2026-10-27
+
+### Added
+
+- The live turn's received message and its tools are one fold row
+- Every task gets a durable working directory; git work in temp dirs is refused
+- Ask here opens Conversation Mode, questions fold to one line, the card has a mic
+- Received messages always fold; the ack line only for agent messages
+- Synced and scratch file areas beside plugin-data
+- Session budgets on the per-request cost line
+- Now on the Tasks board inherits a parent's start date, like the web
+- An Org page of Main and the project leads, like a chat app's channels
+- Dictation keeps working when the Mac is asleep or off
+- A turn shows its answer; a turn that needed nothing is hidden
+- The primary keeps a standing link to its own daemon, with no session needed
+- Main and leads decide new task vs continue by deliverable
+- Tasks board hides waiting tasks by default, like the web
+- Chat on a lead is a plain chat with it, and the Tasks page hides the org
+- One update notice for app restarts and web reloads
+- One team charter in every role's default prompt
+- Audiograms, heartbeat series and workout routes reach the Mac
+- App state, so the AI beside an App sees what it shows
+- Task rows keep to two lines, one size of pill, "+N" inside the tag
+- Link tags live in the session header, and its pills share one size
+- Database batch, a real fake database, and fixes from building an App
+- A host starts a claude-code routine's run while the Mac is away
+- A routine runs where its work runs
+- A host's daemon keeps a routine's clock (clock-routine-v1)
+- Eval-tuned instruction, and every turn and compaction carries it
+- One pill style, and a link pill names its target on hover
+- Pick the new session's model, effort and permissions
+- A config.yaml edited outside Walnut takes effect like a save
+- Archive from the question map; Conversation Mode folds questions
+- A question card opens expanded when its answer has a table or diagram
+- The companion keeps the same switches as a host
+- What a replica does not keep goes to the Mac
+- Quote a passage into the composer, keep painted boxes readable
+- Show what a session's usage would cost on other models
+- Confirm and execute each email action independently
+- The tunnel runs on an always-on host by default
+- The same copy defaults for every replica
+- Every host keeps the companion's copy, pictures included
+- A session's letter is saved on its host while the Mac is away
+- A link pill shows its kind alone unless an id tells it apart
+- Git sync stops writing the companion's data dir
+- Show each model's cost as a table of tokens, unit price and cost
+- Only the links a person comes back to become link tags
+- Name the row "Transfer harness/host…"
+- Chats on the companion stop depending on git sync
+- Notes, memory and skills on the companion read the Mac's copies, never its git-written disk
+- The Mac owns the cards, routines and prefs the box wrote
+- The box's away reads take the Mac's copy or need the Mac
+- Pictures pasted on the companion go to the Mac through its journal
+- Note moves on the companion go into its journal; tag renames are note saves
+- The companion's memory and skill reads take the Mac's copy; memory saves go into its journal
+- "Transfer…" in the composer "+" menu, under Engine settings
+- Walnut learns each host itself; a transfer message stays simple
+- A file link says what the file is, in one or two words
+- The companion's session readers read its sessions copy, and the Mac stops pushing it the session list
+- A chat turn the companion answers while the Mac is away is a journal record
+- The companion keeps the Mac's conversations and reads its chat from them
+- Link pills lead with their kind, fold into a list, and open files
+- Grouped inbox as two sections, every group open with all its mail
+- The box operator can correct what a paired device is recorded as
+- The companion keeps the Mac's sessions copy and lists sessions from it
+- The companion's notes read the Mac's copy; its note saves go into its journal
+- The companion keeps the Mac's notes, memory and skills copy
+- A task created on the companion while the Mac is away goes into its journal
+- The companion's inbox reads the Mac's copy; away flag changes go into its journal
+- Away session changes go into the companion's journal too
+- Away task writes go into the companion's journal, drained by the Mac
+- Boards and the settings view from the Mac's copy; copies go again after an update
+- Move a task to another engine or host; one session per task
+- Plugins offer ready-made triggers, armed from the composer
+- A main agent above the work, project leads, and an org chart
+- Tag a session's task with the links it is about
+
+### Fixed
+
+- 26 tests the last bulk push left red, and four gaps they found
+- A detached session still signs its messages with its task; the map button shows its ring after an Esc in WebKit
+- Retry the source deploy over a fresh ssh before the 103 MB binary
+- A task that lost its join key is joined by its ext id, not re-created
+- A message still in the CLI's queue is unsettled, so it never shows twice
+- Type the relayed daemon reply
+- Answer the update poll from the last daemon reply
+- Only a live session-server link turns a fork into a replay
+- Embed only what changed, smaller embed worker, no blocking scans on the server loop
+- The main agent stays active, delegates, and keeps a tracking note
+- An error card is one cause, shown once, cleared by its own recovery
+- A fork confirms its own start, and a copied conversation goes through a private stage
+- A line handed back by a process end reaches the next process
+- Job writes land in call order, restart tests start from disk, secret temps never sync
+- The restart helper no longer counts transparent windows
+- Restart in the update notice restarts unless something would really be lost
+- A routing notice line the CLI reports taking counts as told
+- The routing notice reaches an older Main or lead once, whichever path delivers
+- Rank folder search by usage, not by the chat's cwd
+- An npm install can deploy the AWS companion
+- A person's words keep their bubble behind Walnut's notices; finished steps and no-action answers fold
+- Automated messages wait behind a pending permission card, and the first mid-turn line is tracked
+- Main hears count moves at most every half hour, and what newly needs the user at once
+- A refused-create card retires after a restart once the task reaches the tracker
+- Recordings do not outlive a delete made by an older build
+- A read refused at once is never unhandled, and the exit record never throws
+- Give each new child notice its own delivery identity
+- A relayed read of a host that cannot be reached is not a relay fault, and a crash records what killed it
+- The one-session-per-task triggers live on the connection, not the file
+- The Mac never runs a slot its host started, and the card says the host starts it
+- A cron in another zone says which zone its hours are in
+- A task's badge lists its clock routines wherever the clock is
+- Every run a host made reaches the server once
+- A session on the CLI's default model starts the new one on Auto
+- A session start reaches its host's copy at once
+- Leave room for the suffix ssh adds while it binds a control socket
+- Close the gaps a review found in what a replica keeps
+- Deliver Tree Mode messages while a turn runs
+- Diagrams are SVG, and compaction re-sends the full instruction
+- Wrap crowded row metadata instead of squeezing titles
+- A host's needs-the-server answer names the letter it can save
+- Support Command-W and close after discard confirmation
+- Keep sessions fully interactive in separate windows
+- The companion's new needs-the-Mac reasons have their words
+- Activate installed app updates with a confirmed restart
+- The v1 attachment and folder deletes reach their routes
+- Keep daemon launches stable and make system errors repairable
+- Keep pop-out views in native app windows
+- A direct host-to-host copy that worked counts as one
+- Preserve plugin-local tags through remote pulls
+- A named directory is where the workspace goes
+- Keep transfer files where the daemon may copy them
+- Make PDF previews fill the pane and support trackpad zoom
+- A copy or journal step whose connection broke goes again
+- Name internal hosts by their label; keep a note being typed
+
 ## [0.6.18] - 2026-10-24
 
 ### Fixed
