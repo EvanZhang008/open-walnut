@@ -116,12 +116,12 @@ describe('ClaudeCodeSession: hook lifecycle lines', () => {
     ])
   })
 
-  it('an unknown subtype still reaches the catch-all (control case)', () => {
+  it('an unknown subtype with words for a reader still shows them (control case)', () => {
     const session = new ClaudeCodeSession('task-hook-3', 'proj')
     init(session)
     const notices = captureNotices()
-    feed(session, { type: 'system', subtype: 'some_new_2027_subtype', session_id: SID, uuid: 'n-1', note: 'x' })
-    expect(notices.map((n) => n.message)).toEqual(['some_new_2027_subtype'])
+    feed(session, { type: 'system', subtype: 'some_new_2027_subtype', session_id: SID, uuid: 'n-1', content: 'Switched to a backup model.' })
+    expect(notices.map((n) => n.message)).toEqual(['Switched to a backup model.'])
   })
 })
 

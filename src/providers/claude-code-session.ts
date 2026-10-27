@@ -33,6 +33,7 @@ import { CostWatermark } from '../core/usage/cost-watermark.js'
 import { readUserSettingsEnv, slimChildSettingsArg } from './inline-subagent.js'
 import { COMPACTED_MESSAGE, COMPACTING_MESSAGE, compactedDetail, firstSightingOfLine } from '../core/stream/compaction-notice.js'
 import { HOOK_LIFECYCLE_SUBTYPES, hookFailureNotice } from '../core/stream/hook-notice.js'
+import { SILENT_SYSTEM_SUBTYPES, systemEventView } from '../core/stream/system-event-view.js'
 import { isProcessAliveAsync } from '../utils/process.js'
 import { SESSION_STREAMS_DIR, CLAUDE_HOME, CLOUD_MODE } from '../constants.js'
 import { log } from '../logging/index.js'
@@ -665,25 +666,9 @@ const INTERRUPT_SETTLE_TIMEOUT_MS = 3_000
 /** Sessions a host reconnect redelivers to at once (redeliverPendingForHost). */
 export const REDELIVERY_PARALLEL = 4
 
-/**
- * `system` subtypes that are BOOKKEEPING, not content: nothing a reader could act
- * on. They are logged at debug and never become a UI block.
- *
- * The cost of showing one is not a wasted row. A card interrupts the model's text
- * where it lands, so a `commands_changed` line arriving mid-tag split one sentence
- * into an empty coloured pill plus a leaked attribute (inc-1788209680147). The
- * carry in session-stream-buffer / stream-reducer makes that survivable; not
- * emitting a card nobody wants is the actual fix.
- *
- * Kept deliberately SHORT: a subtype nobody recognises still gets a card, because
- * that catch-all is how a new CLI event type gets noticed at all. Every entry here
- * must also read as bookkeeping to the reconciler (isPostTurnBookkeeping in
- * core/session-reconcile.ts) — pinned by tests/providers/silent-system-subtypes.test.ts.
- */
-export const SILENT_SYSTEM_SUBTYPES: ReadonlySet<string> = new Set([
-  'commands_changed',          // slash-command list reloaded (fires on any .claude/commands edit)
-  'control_request_progress',  // progress ticks for control reads Walnut itself issued
-])
+// Which stream-json `system` lines with no handler show, and as what words
+// (core/stream/system-event-view.ts). Re-exported for the reconciler-agreement test.
+export { SILENT_SYSTEM_SUBTYPES }
 
 /**
  * Efforts the user picked for a session that no live CLI could take: its spawn
@@ -6169,9 +6154,8 @@ export class ClaudeCodeSession {
             // currently never arrive. Verified absent via live probe on binary 2.1.170 in
             // Walnut's exact multi-turn stream-json mode. We log explicitly here so that
             // IF a future CLI version emits them on the plain print stream, we can confirm
-            // it directly in Walnut logs (grep "stream-json summary subtype"). The
-            // catch-all below already forwards the full payload to the UI as a system
-            // block — no extra wiring needed the day they start arriving.
+            // it directly in Walnut logs (grep "stream-json summary subtype"). They
+            // are logged here and stay out of the chat (system-event-view.ts).
             if (sys.subtype === 'post_turn_summary' || sys.subtype === 'task_summary' || sys.subtype === 'session_state_changed') {
               log.session.info('stream-json summary subtype received', {
                 sessionId: sid, taskId: this.taskId, subtype: sys.subtype,
@@ -6179,22 +6163,8 @@ export class ClaudeCodeSession {
                 title: sys.title,
               })
             }
-            // Bookkeeping the CLI reports to every client but which means nothing
-            // to a reader: the slash-command list was reloaded (fires whenever the
-            // model edits .claude/commands/** or a skill), and progress ticks for
-            // control reads WALNUT itself initiated. Showing them costs more than
-            // a wasted row: a card interrupts the model's text, so one landing
-            // mid-tag split a sentence into an empty pill plus a leaked attribute
-            // (inc-1788209680147). Logged, never rendered. The same subtypes are
-            // already classified as between-turns chatter by the reconciler
-            // (core/session-reconcile.ts isPostTurnBookkeeping) — keep the two
-            // lists agreeing. The catch-all below still surfaces genuinely
-            // unknown subtypes, which is where its diagnostic value is.
-            if (SILENT_SYSTEM_SUBTYPES.has(String(sys.subtype))) {
-              log.session.debug('stream-json bookkeeping subtype (not rendered)', {
-                sessionId: sid, taskId: this.taskId, subtype: String(sys.subtype),
-              })
-            } else if (sys.subtype === 'replay_truncated' && typeof sys.content === 'string') {
+            const view = systemEventView(sys as Record<string, unknown>)
+            if (sys.subtype === 'replay_truncated' && typeof sys.content === 'string') {
               // The daemon capped a catch-up replay (addSubscriber): the reader
               // gets the sentence, not the subtype name and a JSON dump.
               log.session.warn('catch-up replay was capped by the daemon', {
@@ -6204,20 +6174,27 @@ export class ClaudeCodeSession {
                 sessionId: sid, taskId: this.taskId,
                 variant: 'info' as const, message: sys.content,
               }, ['main-ai'], { source: 'session-runner' })
-            } else {
-              // Catch-all: unknown future subtypes — forward full payload so we
-              // don't lose diagnostic info to a bare subtype name.
-              const payloadForDisplay = Object.fromEntries(
-                Object.entries(sys).filter(([k]) => k !== 'session_id' && k !== 'uuid' && k !== 'type' && k !== 'subtype')
-              )
-              const detail = Object.keys(payloadForDisplay).length > 0
-                ? JSON.stringify(payloadForDisplay).slice(0, 500)
-                : undefined
+            } else if (view.show) {
+              // A subtype with no handler shows only as the words the CLI wrote
+              // for a person, never as its name and a JSON payload: that leaked
+              // `vcs_state_changed {"kind":"push",...}` rows between step rows
+              // and split them (2026-10-26).
               bus.emit(EventNames.SESSION_SYSTEM_EVENT, {
                 sessionId: sid, taskId: this.taskId,
-                variant: 'info' as const, message: String(sys.subtype),
-                detail,
+                variant: view.variant, message: view.message,
+                ...(view.detail ? { detail: view.detail } : {}),
               }, ['main-ai'], { source: 'session-runner' })
+            } else if (view.why === 'no-words') {
+              // Nothing written for a reader: the log keeps what it was, which is
+              // how a new CLI event type still gets noticed (grep the subtype).
+              log.session.info('stream-json system subtype not shown (no words for a reader)', {
+                sessionId: sid, taskId: this.taskId, subtype: String(sys.subtype),
+                keys: Object.keys(sys).filter((k) => k !== 'session_id' && k !== 'uuid' && k !== 'type' && k !== 'subtype'),
+              })
+            } else {
+              log.session.debug('stream-json system subtype not shown', {
+                sessionId: sid, taskId: this.taskId, subtype: String(sys.subtype), why: view.why,
+              })
             }
           }
         }

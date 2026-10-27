@@ -177,8 +177,10 @@ export function isPostTurnBookkeeping(parsed: Record<string, unknown>, type: str
       case 'background_tasks_changed':
       // Between-turns chatter observed in real post-turn windows (57b125ab):
       // skill/command reloads, status pings, and progress lines for
-      // walnut-initiated control reads (recap/settings polling).
+      // walnut-initiated control reads (recap/settings polling). A vcs change
+      // reports a git step that already ran, so it proves no new turn.
       case 'commands_changed': case 'status': case 'control_request_progress':
+      case 'vcs_state_changed':
         return true
       // Everything else — init (new turn), thinking_tokens / api_retry
       // (mid-turn), and any UNKNOWN subtype — is activity. Conservative on

@@ -851,6 +851,59 @@ if (outputFormat === 'stream-json') {
       return;
     }
 
+    // 2a.-1.3. "system-lines-turn:<json>": a turn that runs two Bash steps with
+    //          CLI `system` lines between and after them, and holds mid-turn
+    //          for holdMs before answering, so a spec can look at the LIVE rows.
+    //          <json> (first line only) is { words?, between: [line], after: [line],
+    //          holdMs?, text? }; `words` is assistant text before the steps (words
+    //          end the live turn's fold, so the steps after them are rows of their
+    //          own, as in a real long turn); each line is a system line's own fields
+    //          ({ subtype, ... }). Stays alive for the next FIFO turn.
+    if (effectiveMessage.startsWith('system-lines-turn:')) {
+      const sid = outputSessionId;
+      const emit = (line) => process.stdout.write(JSON.stringify(line) + '\n');
+      let spec = {};
+      try { spec = JSON.parse(effectiveMessage.split('\n')[0].slice('system-lines-turn:'.length)); } catch { /* defaults */ }
+      const turn = ++snapshotTurnSeq;
+      const sys = (fields, i) => emit({ type: 'system', ...fields, uuid: `mock-sys-${process.pid}-${turn}-${i}`, session_id: sid });
+      const bash = (i, command) => {
+        const id = `toolu_sl_${process.pid}_${turn}_${i}`;
+        emit({ type: 'assistant', session_id: sid, parent_tool_use_id: null, message: {
+          id: `msg_sl_${process.pid}_${turn}_${i}`, type: 'message', role: 'assistant', model: 'mock-model',
+          content: [{ type: 'tool_use', id, name: 'Bash', input: { command } }],
+          stop_reason: 'tool_use', usage: { input_tokens: 20, output_tokens: 8 },
+        } });
+        emit({ type: 'user', session_id: sid, parent_tool_use_id: null, message: { role: 'user', content: [
+          { type: 'tool_result', tool_use_id: id, content: 'ok' },
+        ] } });
+      };
+      const finish = () => {
+        const text = spec.text || 'System lines turn done.';
+        emit({ type: 'assistant', session_id: sid, message: { id: `msg_sl_${process.pid}_${turn}_done`, type: 'message', role: 'assistant', model: 'mock-model', content: [{ type: 'text', text }], stop_reason: 'end_turn', usage: { input_tokens: 20, output_tokens: 8 } } });
+        emit({ type: 'result', subtype: 'success', is_error: false, duration_ms: 40, num_turns: 1, result: text, session_id: sid, total_cost_usd: nextSnapshotCost(0.001), usage: { input_tokens: 20, output_tokens: 8 } });
+        emit({ type: 'system', subtype: 'session_state_changed', session_id: sid, state: 'idle' });
+        armSnapshotNextTurn();
+      };
+      const body = () => {
+        emit({ type: 'system', subtype: 'session_state_changed', session_id: sid, state: 'running' });
+        if (spec.words) {
+          emit({ type: 'assistant', session_id: sid, parent_tool_use_id: null, message: {
+            id: `msg_sl_${process.pid}_${turn}_words`, type: 'message', role: 'assistant', model: 'mock-model',
+            content: [{ type: 'text', text: spec.words }], stop_reason: 'tool_use', usage: { input_tokens: 20, output_tokens: 8 },
+          } });
+        }
+        bash(0, 'git commit -m "sample"');
+        (spec.between || []).forEach((l, i) => sys(l, i));
+        bash(1, 'git push');
+        (spec.after || []).forEach((l, i) => sys(l, 100 + i));
+        setTimeout(finish, Number(spec.holdMs ?? 0));
+      };
+      const THINK_MS = Number(process.env.MOCK_SNAPSHOT_TURN_DELAY_MS ?? 300);
+      if (THINK_MS > 0) setTimeout(body, THINK_MS);
+      else body();
+      return;
+    }
+
     // 2a.-1.4. "file-edit-turn:<json>" — a turn that REALLY edits files the way
     //          the CLI's Edit/Write tools do, then STAYS ALIVE like
     //          snapshot-clean-turn (multi-turn included). <json> (first line only)

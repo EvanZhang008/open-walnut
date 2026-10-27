@@ -9,8 +9,8 @@
  * plus `px">…` as prose (inc-1788209680147, reported with a screenshot).
  *
  * Two things are pinned here, both cheap and both real:
- *   · the reported subtype is silenced, and the list stays SHORT (an unknown
- *     subtype must still surface, or the catch-all loses its whole purpose);
+ *   · the reported subtypes are silenced, and the list stays SHORT (any other
+ *     subtype still shows its words, see system-event-view.test.ts);
  *   · every silenced subtype also reads as bookkeeping to the RECONCILER, which
  *     classifies the same lines for a different decision (does this prove a live
  *     turn). Two lists, one judgement — if they drift, one of the two is wrong.
@@ -20,8 +20,10 @@ import { SILENT_SYSTEM_SUBTYPES } from '../../src/providers/claude-code-session.
 import { isPostTurnBookkeeping } from '../../src/core/session-reconcile.js';
 
 describe('SILENT_SYSTEM_SUBTYPES', () => {
-  it('silences the reported subtype', () => {
+  it('silences the reported subtypes', () => {
     expect(SILENT_SYSTEM_SUBTYPES.has('commands_changed')).toBe(true);
+    // A git step's echo: the step itself is already a row (2026-10-26).
+    expect(SILENT_SYSTEM_SUBTYPES.has('vcs_state_changed')).toBe(true);
   });
 
   it('does NOT silence subtypes that carry meaning for a reader', () => {
