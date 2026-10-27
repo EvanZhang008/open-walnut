@@ -6,7 +6,7 @@ import { PopoutGlobalNotes } from './PopoutGlobalNotes';
 import { PopoutNote } from './PopoutNote';
 import { PopoutSession } from './PopoutSession';
 import { PopoutTask } from './PopoutTask';
-import { setUpdateNoticeDock } from '@/components/common/update-notice-dock';
+import { setUpdateNoticeDock, useUpdateNoticeOccupied } from '@/components/common/update-notice-dock';
 
 /**
  * Theme persistence — must stay in sync with web/src/hooks/useTheme.ts.
@@ -41,6 +41,7 @@ function applyStoredTheme() {
 export function PopoutRoot() {
   const [params] = useSearchParams();
   const view = params.get('view');
+  const noticeShown = useUpdateNoticeOccupied();
 
   // useLayoutEffect so the theme is applied before first paint (no flash).
   useLayoutEffect(() => {
@@ -74,5 +75,9 @@ export function PopoutRoot() {
   }
 
   // The update notice docks at the bottom, in the flow, so it covers neither the transcript nor the composer.
-  return <div className="popout-root">{content}<div className="popout-update-dock" ref={setUpdateNoticeDock} /></div>;
+  return (
+    <div className={`popout-root${noticeShown ? ' has-update-notice' : ''}`}>
+      {content}<div className="popout-update-dock" ref={setUpdateNoticeDock} />
+    </div>
+  );
 }

@@ -33494,17 +33494,17 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
 
 /* A popout has no rail: a thin bar along the window's bottom edge, in the flow,
    under the composer. The leaf view gives up the bar's height. */
-.popout-root:has(> .popout-update-dock:not(:empty)) {
+.popout-root.has-update-notice {
   display: flex;
   flex-direction: column;
 }
-.popout-root:has(> .popout-update-dock:not(:empty)) > :first-child {
+.popout-root.has-update-notice > :first-child {
   flex: 1 1 auto;
   min-height: 0;
   /* A view without its own scroller (the task view) scrolls here, above the bar. */
   overflow: auto;
 }
-.popout-root:has(> .popout-update-dock:not(:empty)) { padding-bottom: 0; }
+.popout-root.has-update-notice { padding-bottom: 0; }
 .popout-update-dock:empty { display: none; }
 /* Edge to edge: out over the root's 16px side padding, where a view keeps it. */
 .popout-update-dock { flex-shrink: 0; margin: 0 -16px; }

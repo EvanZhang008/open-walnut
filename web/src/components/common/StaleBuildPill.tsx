@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { getStaleBuild, reloadForUpgrade, subscribeStaleBuild, type StaleBuildState } from '@/utils/stale-assets';
@@ -9,7 +9,7 @@ import { useAppUpdateState } from '@/hooks/useAppUpdate';
 import { useAppUpdateActions } from '@/components/layout/useAppUpdateActions';
 import { getAppUpdateButtonTooltip, resolveAppUpdateButtonAction, shouldShowAppUpdateItem } from '@/components/layout/app-update-logic';
 import { ConfirmDialog } from './ConfirmDialog';
-import { useUpdateNoticeDock } from './update-notice-dock';
+import { setUpdateNoticeOccupied, useUpdateNoticeDock } from './update-notice-dock';
 import { isSnoozed, readSnooze, SNOOZE_KEY, writeSnooze, type UpdateSnooze } from './update-notice-snooze';
 import { gatherUnsavedWork, hasAny, UnsavedWorkDialog, type UnsavedWork } from './UnsavedWorkDialog';
 
@@ -113,6 +113,11 @@ export function StaleBuildPill() {
   };
   const visible = !!identity && (pending || !isSnoozed(snooze, identity, Date.now()));
   const docked = !!dock;
+  // Before paint, so the popout never shows a frame with the bar pushed off the window.
+  useLayoutEffect(() => {
+    setUpdateNoticeOccupied(visible && docked);
+    return () => setUpdateNoticeOccupied(false);
+  }, [visible, docked]);
   const heading = shellVisible && !native && shellAction !== 'install' ? 'Walnut update available' : 'Walnut updated';
   const error = installed.error ?? shellActions.error;
   const clearError = () => { installed.clearError(); shellActions.clearError(); };

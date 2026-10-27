@@ -163,6 +163,8 @@ test('a popout has no rail: the notice is a bar under the composer, covering not
   await expect(child.locator('.session-panel-input textarea')).toBeVisible({ timeout: 30_000 })
   await expect(child.locator('.popout-update-dock > .stale-build-pill.is-docked')).toHaveCount(1)
   await expect(child.locator('.stale-build-pill-action')).toHaveText('Restart')
+  // The layout follows a class React sets, not a :has() that WebKit failed to re-match.
+  await expect(child.locator('.popout-root')).toHaveClass(/has-update-notice/)
   const box = (await child.locator('.stale-build-pill').boundingBox())!
   const composer = (await child.locator('.session-panel-input').boundingBox())!
   expect(Math.abs(700 - box.y - box.height)).toBeLessThanOrEqual(1)
@@ -191,6 +193,7 @@ test('a task popout scrolls its view above the bar; the bar stays on the window 
   await child.setViewportSize({ width: 700, height: 360 })
   await child.goto(new URL('/popout?view=task&id=pw-task-001', page.url()).toString())
   await expect(child.locator('.popout-update-dock > .stale-build-pill.is-docked')).toHaveCount(1, { timeout: 30_000 })
+  await expect(child.locator('.popout-root')).toHaveClass(/has-update-notice/)
   const view = child.locator('.popout-root > :first-child')
   await view.evaluate((el) => { el.scrollTop = el.scrollHeight })
   await child.locator('.popout-root').evaluate((el) => { el.scrollTop = el.scrollHeight })
