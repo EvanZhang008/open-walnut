@@ -54,6 +54,7 @@ jobs:
   node-side:
     name: Node side (browser specs load, plugin packages, npm channel, JS daemon on Node)
     runs-on: ubuntu-24.04
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5

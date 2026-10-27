@@ -140,7 +140,8 @@ describe('daemon crash guards (real source daemon)', () => {
       ${extractGuardSnippet()}
       setTimeout(() => { throw new Error('probe-boom') }, 10);
     `
-    const probe = spawn(process.execPath, ['-e', guardProbe], { stdio: 'ignore' })
+    // On the runtime the JS twin runs on, which is the one that guard code meets on a host.
+    const probe = spawn(SOURCE_TWIN.file, ['-e', guardProbe], { stdio: 'ignore' })
     const code = await new Promise<number | null>((resolve) => probe.on('exit', resolve))
     expect(code).toBe(1)
     const crumbs = fs.readdirSync(daemonDir).filter((f) => f.startsWith('daemon-exit-probe'))

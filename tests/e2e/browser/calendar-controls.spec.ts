@@ -6,6 +6,7 @@ import net from 'node:net';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { bunRuntime } from '../../helpers/bun-runtime.js';
 
 async function cli(name: string, args: Record<string, unknown>): Promise<string> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'calendar-cli-'));
@@ -26,7 +27,7 @@ async function cli(name: string, args: Record<string, unknown>): Promise<string>
   });
   await new Promise<void>((resolve) => server.listen(socket, resolve));
   try {
-    const { stdout } = await promisify(execFile)(process.execPath, ['dist/cli.js', 'tools', 'call', name, JSON.stringify(args)], {
+    const { stdout } = await promisify(execFile)(bunRuntime(), ['dist/cli.js', 'tools', 'call', name, JSON.stringify(args)], {
       env: { ...process.env, OPEN_WALNUT_API_URL: API, WALNUT_SESSION_ID: 'external', WALNUT_AGENT_SOCKET: socket }, timeout: 15000,
     });
     return JSON.parse(stdout);

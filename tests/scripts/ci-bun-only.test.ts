@@ -272,19 +272,28 @@ describe('scripts/ci-remove-node.sh', () => {
 describe('the Playwright fixtures start Walnut on bun', () => {
   // The runner itself stays on Node, so a spec that starts its server through tsx or node
   // runs Walnut on that Node, which has no SQLite Walnut uses: the server refuses to start.
-  const SPAWNS_NODE = /\b(spawn|spawnSync|execFile|execFileSync|fork)\(\s*['"`][^'"`]*\b(node|npx|tsx)['"`]/
-  const dir = path.join(REPO, 'tests', 'e2e', 'browser')
-  const files = fs.readdirSync(dir).filter((f) => /\.(spec\.)?ts$/.test(f))
+  const CALL = String.raw`(?:\b(?:spawn|spawnSync|execFile|execFileSync|fork)|\bpromisify\(\s*(?:execFile|exec)\s*\))\(\s*`
+  const SPAWNS_NODE = new RegExp(CALL + String.raw`['"\x60][^'"\x60]*\b(node|npx|tsx)['"\x60]`)
+  // In a spec, process.execPath is the runner's Node: a Walnut entry started with it runs on Node.
+  const WALNUT_ON_RUNNER = new RegExp(CALL + String.raw`process\.execPath\s*,\s*\[\s*['"\x60](?:\./)?(?:dist/cli\.js|src/)`)
+  const walk = (d: string): string[] => fs.readdirSync(d, { withFileTypes: true }).flatMap((e) =>
+    e.isDirectory() ? walk(path.join(d, e.name)) : /\.([cm]?[jt]s)$/.test(e.name) ? [path.join(d, e.name)] : [])
+  const files = walk(path.join(REPO, 'tests', 'e2e', 'browser'))
 
-  it('no spec or fixture spawns node, npx or tsx (bunRuntime() from tests/helpers/bun-runtime.ts)', () => {
+  it('no spec or fixture spawns node, npx or tsx, or starts Walnut on the runner (bunRuntime() from tests/helpers/bun-runtime.ts)', () => {
     expect(files.length).toBeGreaterThan(50)
-    const offenders = files.filter((f) => SPAWNS_NODE.test(fs.readFileSync(path.join(dir, f), 'utf8')))
+    const offenders = files.filter((f) => {
+      const text = fs.readFileSync(f, 'utf8')
+      return SPAWNS_NODE.test(text) || (/\.spec\.ts$/.test(f) && WALNUT_ON_RUNNER.test(text))
+    }).map((f) => path.relative(REPO, f))
     expect(offenders).toEqual([])
   })
 
   it('the check catches the forms a spec used', () => {
-    for (const bad of ["spawn('./node_modules/.bin/tsx', [", "execFileSync('node', [", 'spawn(`npx`, [']) expect(bad).toMatch(SPAWNS_NODE)
+    for (const bad of ["spawn('./node_modules/.bin/tsx', [", "execFileSync('node', [", 'spawn(`npx`, [', "promisify(execFile)('node', ["]) expect(bad).toMatch(SPAWNS_NODE)
     for (const good of ["spawn(bunRuntime(), [", "execFileSync('git', [", "spawn('nodemon-free', ["]) expect(good).not.toMatch(SPAWNS_NODE)
+    for (const bad of ["promisify(execFile)(process.execPath, ['dist/cli.js', 'tools'", "spawn(process.execPath, ['src/cli.ts'", "execFileSync(process.execPath, ['./dist/cli.js'"]) expect(bad).toMatch(WALNUT_ON_RUNNER)
+    for (const good of ["promisify(execFile)(bunRuntime(), ['dist/cli.js'", "args: [process.execPath, path.resolve(dir, 'mock-claude.mjs')]", "spawn(process.execPath, [MOCK_CLI"]) expect(good).not.toMatch(WALNUT_ON_RUNNER)
   })
 })
 
@@ -340,7 +349,8 @@ describe('the daemon\'s JS twin is checked on Node where CI has it', () => {
   it('test:source-twin-node-suites requires Node, and node-side runs it', () => {
     const script = SCRIPTS['test:source-twin-node-suites']!
     expect(vitestPartsOf(script).length).toBeGreaterThan(0)
-    for (const part of vitestPartsOf(script)) expect(part).toMatch(/^WALNUT_REQUIRE_NODE=1 bun --bun vitest run /)
+    // One worker, as the other heavy tiers: these suites start servers, daemons and timed windows.
+    for (const part of vitestPartsOf(script)) expect(part).toMatch(/^WALNUT_REQUIRE_NODE=1 bun --bun vitest run .*--maxWorkers=1 /)
     const runs = (workflow('ci.yml').jobs['node-side']!.steps ?? []).map((s) => s.run ?? '')
     expect(runs).toContain('bun run test:source-twin-node-suites')
   })
