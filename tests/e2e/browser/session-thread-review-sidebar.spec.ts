@@ -4,16 +4,19 @@
  * comments there"): one card per asked passage of the visible conversation, each
  * level with its passage (pushed down, never overlapping), scrolling with the
  * text. A card click scrolls to its passage and flashes it; a click on a passage
- * selects (outlines) its card instead of opening the popover; Open opens the
- * popover; Quote in chat quotes the question into the composer. Outside
- * fullscreen nothing changes.
+ * selects (outlines) its card instead of opening the popover; the picked card
+ * takes a follow-up in its own box, and Enlarge opens the question's full card
+ * right over it, the timeline staying put (2026-10-27, the user: "where is the
+ * ask question and enlarge instead of open which jump to another place"); Quote
+ * in chat quotes the question into the composer. Outside fullscreen nothing
+ * changes.
  *
  * Chromium and WebKit. The review fixture: one long reply with 22 asked passages.
  */
 import { expect, test, type Locator, type Page } from '@playwright/test'
 import fs from 'node:fs/promises'
-import { centreInHistory, openThreadsSession, passageRects, resetThreadsFixture } from './threads-helpers'
-import { REVIEW_COUNT, REVIEW_READY, REVIEW_SESSION, REVIEW_TASK, REVIEW_TITLES, reviewPassage } from './threads-review-fixture'
+import { centreInHistory, openThreadsSession, passageRects, readRecord, resetThreadsFixture } from './threads-helpers'
+import { REVIEW_COUNT, REVIEW_READY, REVIEW_ROUNDS, REVIEW_ROUND_CODE, REVIEW_SESSION, REVIEW_TASK, REVIEW_TITLES, reviewPassage } from './threads-review-fixture'
 
 const SHOTS = () => `/tmp/ask-review/e2e/${test.info().project.name}`
 async function shot(page: Page, name: string): Promise<void> {
@@ -168,7 +171,7 @@ test.describe('the fullscreen review sidebar', () => {
     await expect(panel.locator('.session-history[data-review-sidebar]')).toHaveCount(0)
   })
 
-  test('a card click scrolls to its passage and flashes it; a passage click selects its card; Open and Quote in chat', async ({ page }) => {
+  test('a card click scrolls to its passage and flashes it; a passage click selects its card; Enlarge and Quote in chat', async ({ page }) => {
     const panel = await openFullscreen(page)
     await goFullscreen(panel)
     await expect(sidebarCards(panel)).toHaveCount(REVIEW_COUNT, { timeout: 15_000 })
@@ -207,7 +210,6 @@ test.describe('the fullscreen review sidebar', () => {
     expect(Math.abs(sel.y - pr.top)).toBeLessThan(4)
     await shot(page, '4-mark-click-selects')
 
-    // Open: the popover card of that question.
     // The card's own control is a button that says it is the picked one.
     await expect(fourth.locator('button.thread-review-head')).toHaveAttribute('aria-pressed', 'true')
     await expect(target.locator('button.thread-review-head')).toHaveAttribute('aria-pressed', 'false')
@@ -222,7 +224,8 @@ test.describe('the fullscreen review sidebar', () => {
     const r4 = (await passageRects(panel, reviewPassage(3).slice(0, 30), '[data-message-id][data-msg-role="assistant"]'))[0]
     await page.mouse.click(r4.left + 20, r4.top + r4.height / 2)
     await expect(fourth).toHaveAttribute('data-selected', 'true')
-    await fourth.getByRole('button', { name: 'Open', exact: true }).click()
+    await expect(fourth.getByRole('button', { name: 'Open', exact: true })).toHaveCount(0)
+    await fourth.getByRole('button', { name: 'Enlarge question 4' }).click()
     await expect(panel.locator('.thread-card .thread-card-title')).toHaveText(REVIEW_TITLES[3])
     await panel.locator('.thread-card .thread-card-input').press('Escape')
     await expect(panel.locator('.thread-card')).toHaveCount(0)
@@ -230,6 +233,128 @@ test.describe('the fullscreen review sidebar', () => {
     await fourth.getByRole('button', { name: 'Quote in chat' }).click()
     await expect(panel.locator('[data-testid="composer-thread-target"]')).toContainText(REVIEW_TITLES[3])
     await shot(page, '5-quoted-from-review')
+  })
+
+  test('the picked card asks a follow-up right there, and Enlarge opens the whole question over it', async ({ page, request }) => {
+    const panel = await openFullscreen(page)
+    await goFullscreen(panel)
+    await expect(sidebarCards(panel)).toHaveCount(REVIEW_COUNT, { timeout: 15_000 })
+    const history = panel.locator('.session-history')
+    const mainBox = panel.locator('.session-panel-input .chat-input-textarea')
+    const seeded = new Set(((await readRecord(request, REVIEW_SESSION)).threadAnchors ?? []).map((x) => x.msgId))
+
+    // Pick card 5: its own box shows (no other card has one).
+    const fifth = sidebarCards(panel).filter({ hasText: REVIEW_TITLES[4] })
+    await wheelIntoView(page, history, fifth)
+    await fifth.locator('.thread-review-a').click()
+    await expect(fifth).toHaveAttribute('data-selected', 'true')
+    const box = fifth.locator('.thread-review-composer textarea')
+    await expect(box).toBeVisible()
+    await expect(panel.locator('.thread-review-composer')).toHaveCount(1)
+    await expect(box).toHaveAttribute('placeholder', /Point 5 order/)
+    await page.waitForTimeout(400)
+    const topBefore = await history.evaluate((el) => el.scrollTop)
+    // A click into the box is not a trip to the passage.
+    await box.click()
+    await page.waitForTimeout(300)
+    expect(Math.abs((await history.evaluate((el) => el.scrollTop)) - topBefore)).toBeLessThan(2)
+
+    // Every state the card takes from here on (a poll would miss a short red).
+    await fifth.evaluate((el) => {
+      const rec = el as HTMLElement & { _states?: string[] }
+      rec._states = []
+      new MutationObserver(() => { rec._states!.push(el.getAttribute('data-state') ?? '') }).observe(el, { attributes: true, attributeFilter: ['data-state'] })
+    })
+    // Sent from the card: into question 5, the main composer untouched, the timeline in place.
+    await box.fill('slow:9000 MOCK_SPEAK_AT:1500 What breaks if it is skipped?')
+    await box.press('Enter')
+    await expect(box).toHaveValue('')
+    // The card says what was asked at once, then where its answer stands.
+    // (the mock CLI's timing words are part of what was typed)
+    await expect(fifth.locator('.thread-review-q')).toHaveText('slow:9000 MOCK_SPEAK_AT:1500 What breaks if it is skipped?')
+    await expect(fifth).toHaveAttribute('data-state', /waiting|answering/, { timeout: 10_000 })
+    await expect(fifth.locator('.thread-review-a')).toContainText('processed your message: What breaks if it is skipped?', { timeout: 30_000 })
+    // Picked while its answer lands: read (green), never the red "New answer".
+    await expect(fifth).toHaveAttribute('data-state', /answering|read/)
+    await expect.poll(() => fifth.getAttribute('data-state'), { timeout: 30_000 }).toBe('read')
+    expect(await fifth.evaluate((el) => (el as HTMLElement & { _states?: string[] })._states ?? []), 'never red while it is being read').not.toContain('unread')
+    await expect(panel.locator('[data-testid="composer-thread-target"]')).toHaveCount(0)
+    await expect(mainBox).toHaveValue('')
+    const after = await history.evaluate((el) => ({ top: el.scrollTop, bottom: el.scrollHeight - el.clientHeight }))
+    expect(after.bottom - after.top, 'the timeline did not jump to the bottom').toBeGreaterThan(200)
+    expect(Math.abs(after.top - topBefore), 'the timeline stayed where the reader was').toBeLessThan(40)
+    await expect.poll(async () => {
+      // A new anchor on passage 5 (by id: the other engine's run shares the fixture session).
+      const anchors = ((await readRecord(request, REVIEW_SESSION)).threadAnchors ?? []) as Array<{ msgId: string; quote?: { exact?: string } }>
+      return anchors.some((x) => !seeded.has(x.msgId) && x.quote?.exact === reviewPassage(4))
+    }, { timeout: 10_000 }).toBe(true)
+    await shot(page, '6-follow-up-from-card')
+
+    // Unsent words stay with the question: away to card 4 and back.
+    await box.fill('half a thought')
+    const fourth = sidebarCards(panel).filter({ hasText: REVIEW_TITLES[3] })
+    await fourth.locator('.thread-review-a').click()
+    await expect(fourth).toHaveAttribute('data-selected', 'true')
+    await expect(fifth.locator('.thread-review-composer')).toHaveCount(0)
+    await wheelIntoView(page, history, fifth)
+    await fifth.locator('.thread-review-a').click()
+    await expect(box).toHaveValue('half a thought')
+    // Typed and enlarged at once (inside the draft store's write delay): the full card has the words.
+    await box.fill('half a thought, and more')
+
+    // Enlarge: the full card lies over the review card (its top and right edge),
+    // wider, with the same unsent words, and the timeline does not move.
+    await page.waitForTimeout(400)
+    const rc = (await fifth.boundingBox())!
+    const scrollAt = await history.evaluate((el) => el.scrollTop)
+    await fifth.getByRole('button', { name: 'Enlarge question 5' }).click()
+    const card = panel.locator('.thread-card')
+    await expect(card).toBeVisible()
+    await expect(card.locator('.thread-card-title')).toHaveText(REVIEW_TITLES[4])
+    await page.waitForTimeout(300)
+    const cb = (await card.boundingBox())!
+    expect(Math.abs(cb.y - rc.y), 'same top').toBeLessThan(3)
+    expect(Math.abs(cb.x + cb.width - (rc.x + rc.width)), 'same right edge').toBeLessThan(3)
+    expect(cb.width).toBeGreaterThan(rc.width + 200)
+    expect(Math.abs((await history.evaluate((el) => el.scrollTop)) - scrollAt), 'the timeline stays put').toBeLessThan(2)
+    await expect(fifth).toHaveAttribute('data-enlarged', 'true')
+    expect(await fifth.evaluate((el) => getComputedStyle(el).visibility)).toBe('hidden')
+    await expect(card.locator('.thread-card-input')).toHaveValue('half a thought, and more')
+    // The whole conversation: each question as the blue bubble (the follow-up
+    // just asked from the review card is the second), the answers in full.
+    await expect(card.locator('.thread-card-q .session-msg-user')).toHaveCount(2)
+    await expect(card.locator('.thread-card-q').nth(1)).toContainText('What breaks if it is skipped?')
+    const excerpt = (await fifth.locator('.thread-review-a').textContent()) ?? ''
+    const full = (await card.locator('.thread-card-body .session-msg-assistant').first().textContent()) ?? ''
+    expect(full.length).toBeGreaterThan(excerpt.replace(/…$/, '').length)
+    await shot(page, '7-enlarged-over-card')
+    // Typed in the full card and closed at once with Esc: back to the review
+    // card, still picked, its box focused with those words.
+    await card.locator('.thread-card-input').fill('typed in the big one')
+    await card.locator('.thread-card-input').press('Escape')
+    await expect(card).toHaveCount(0)
+    await expect(fifth).not.toHaveAttribute('data-enlarged', 'true')
+    await expect(fifth).toHaveAttribute('data-selected', 'true')
+    await expect(box).toHaveValue('typed in the big one')
+    await expect(box).toBeFocused()
+    // Esc in the review box leaves the box, not the fullscreen.
+    await box.press('Escape')
+    await expect(box).not.toBeFocused()
+    await expect(panel).toHaveClass(/open-walnut-fullscreen/)
+
+    // The question of three rounds, enlarged from its mark's right-click menu.
+    await centreInHistory(page, panel, reviewPassage(0).slice(0, 30), { at: 0.3 })
+    const r0 = (await passageRects(panel, reviewPassage(0).slice(0, 30), '[data-message-id][data-msg-role="assistant"]'))[0]
+    await page.mouse.click(r0.left + 20, r0.top + r0.height / 2, { button: 'right' })
+    await page.getByTestId('thread-mark-menu').getByText('Enlarge question').click()
+    await expect(card.locator('.thread-card-title')).toHaveText(REVIEW_TITLES[0])
+    await expect(card.locator('.thread-card-q')).toHaveCount(REVIEW_ROUNDS.length)
+    await expect(card.locator('.thread-card-body pre')).toContainText(REVIEW_ROUND_CODE)
+    const first = sidebarCards(panel).filter({ hasText: REVIEW_TITLES[0] })
+    await expect(first).toHaveAttribute('data-enlarged', 'true')
+    await shot(page, '8-enlarged-three-rounds')
+    await card.locator('.thread-card-input').press('Escape')
+    await expect(card).toHaveCount(0)
   })
 
   test('scrolling a long reply with 22 cards stays smooth', async ({ page, browserName }) => {

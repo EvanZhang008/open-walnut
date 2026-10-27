@@ -255,7 +255,8 @@ export const ThreadCommentCard = memo(function ThreadCommentCard(p: ThreadCommen
   const onEscape = () => { if (grown) { userSized.current = true; setExpanded(false); } else p.onClose(); };
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); onEscape(); return; }
-    if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+    // keyCode 229: WebKit's Enter that picks an IME candidate reports isComposing false.
+    if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing && e.keyCode !== 229) {
       e.preventDefault();
       void send();
     }

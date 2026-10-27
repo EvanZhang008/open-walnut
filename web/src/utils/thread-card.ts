@@ -132,6 +132,35 @@ export interface CardGrown {
   maxHeight: number;
 }
 
+/** An enlarged card's width over a review card; ⤢ reaches CARD_GROWN_WIDTH. */
+export const CARD_ENLARGED_WIDTH = 680;
+
+/** The least an enlarged card is given before it moves up to have it. */
+export const ENLARGED_MIN_HEIGHT = 360;
+/**
+ * A card enlarged over `anchor` (a fullscreen review card, in the card layer's
+ * coordinates): its top, its right edge, wider to the left down to 8px from the
+ * layer's left. The review card sits past the layer's own width (in the
+ * history's right gutter), so nothing clamps to the layer's width. Its height
+ * is what is on screen below that top (`visible`, the part of the box the panel
+ * header leaves), at most `maxRoom`; when less than ENLARGED_MIN_HEIGHT is left
+ * there, the card moves up just enough to have it.
+ */
+export function placeCardOver(
+  anchor: CardAnchorRect, visible: { top: number; bottom: number }, maxRoom: number,
+): CardPlacement & { maxHeight: number; grown: CardGrown } {
+  const right = Math.round(anchor.right);
+  const span = Math.max(CARD_MIN_WIDTH, right - 8);
+  const width = Math.min(CARD_ENLARGED_WIDTH, span);
+  const wide = Math.min(CARD_GROWN_WIDTH, span);
+  const want = Math.min(maxRoom, ENLARGED_MIN_HEIGHT);
+  let top = anchor.top;
+  if (visible.bottom - 12 - top < want) top = Math.max(visible.top + 8, visible.bottom - 12 - want);
+  const maxHeight = Math.round(Math.max(want, Math.min(maxRoom, visible.bottom - 12 - top)));
+  top = Math.max(0, Math.round(top));
+  return { top, left: Math.max(0, right - width), width, maxHeight, grown: { left: Math.max(0, right - wide), width: wide, maxHeight } };
+}
+
 /**
  * Below the passage, its right edge on the passage's right edge (a comment
  * popover), pulled back so it never leaves the layer: a layer narrower than the

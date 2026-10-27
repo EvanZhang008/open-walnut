@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { buildThreadTree, quoteBlockOf, type ThreadTreeMessage } from '@/utils/thread-tree';
-import { allPassageMarks, cardTurnsOf, hasWords, placeCard, questionBodyOf, CARD_GAP, CARD_GROWN_WIDTH, CARD_MIN_WIDTH, CARD_WIDTH } from '@/utils/thread-card';
+import { allPassageMarks, cardTurnsOf, hasWords, placeCard, placeCardOver, questionBodyOf, CARD_ENLARGED_WIDTH, CARD_GAP, CARD_GROWN_WIDTH, CARD_MIN_WIDTH, CARD_WIDTH, ENLARGED_MIN_HEIGHT } from '@/utils/thread-card';
 import type { SessionThreadAnchor } from '@/types/session';
 
 const quote = { exact: 'the flush order', prefix: '', suffix: '' };
@@ -94,6 +94,32 @@ describe('questionBodyOf', () => {
     expect(questionBodyOf('Why that order?')).toBe('Why that order?');
     expect(questionBodyOf('> only a quote')).toBe('> only a quote');
     expect(questionBodyOf('a multi\nline question')).toBe('a multi\nline question');
+  });
+});
+
+describe('placeCardOver (a review card enlarged in place)', () => {
+  // A review card in the history's right gutter: past the layer's own width.
+  const review = { top: 300, bottom: 420, left: 1020, right: 1320 };
+  const visible = { top: 80, bottom: 980 };
+  it('takes the review card\'s top and right edge, wider to the left, as tall as the screen below allows', () => {
+    const p = placeCardOver(review, visible, 760);
+    expect(p).toMatchObject({ top: 300, left: 1320 - CARD_ENLARGED_WIDTH, width: CARD_ENLARGED_WIDTH });
+    expect(p.maxHeight).toBe(980 - 12 - 300);
+    expect(p.grown).toEqual({ left: 1320 - CARD_GROWN_WIDTH, width: CARD_GROWN_WIDTH, maxHeight: p.maxHeight });
+  });
+  it('never taller than the room the box has', () => {
+    expect(placeCardOver({ ...review, top: 100 }, visible, 500).maxHeight).toBe(500);
+  });
+  it('moves up just enough when little of the screen is left below the review card', () => {
+    const p = placeCardOver({ ...review, top: 900 }, visible, 760);
+    expect(p.top).toBe(980 - 12 - ENLARGED_MIN_HEIGHT);
+    expect(p.maxHeight).toBe(ENLARGED_MIN_HEIGHT);
+  });
+  it('stays below the header on a short box, and narrows to what is left of the right edge', () => {
+    const p = placeCardOver({ top: 200, bottom: 260, left: 300, right: 420 }, { top: 80, bottom: 400 }, 300);
+    expect(p.top).toBe(88);
+    expect(p.width).toBe(Math.max(CARD_MIN_WIDTH, 420 - 8));
+    expect(p.left).toBe(420 - p.width);
   });
 });
 

@@ -648,6 +648,9 @@ export function usePanelThreads(args: UsePanelThreadsArgs): PanelThreads {
   /** The comment card's box: into the card's question (the stack's key). */
   const sendToTarget = useCallback(
     (text: string) => sendAnchored(text, undefined, false, refs.current.stack.api.currentKey), [sendAnchored]);
+  /** A review card's box: into that card's question, whichever page is current. */
+  const sendToQuestion = useCallback(
+    (key: string, text: string) => sendAnchored(text, undefined, false, key), [sendAnchored]);
 
   const markViewedNow = useCallback((key: string) => {
     const r = refs.current;
@@ -769,6 +772,7 @@ export function usePanelThreads(args: UsePanelThreadsArgs): PanelThreads {
     headJump,
     requestHeadJump,
     sendToTarget,
+    sendToQuestion,
     quotedKey,
     quoteInChat,
     clearQuote,
@@ -782,7 +786,7 @@ export function usePanelThreads(args: UsePanelThreadsArgs): PanelThreads {
     canAsk: args.canAsk,
   }), [store.anchors, store.add, store.remove, tree, viewMode, setViewMode, stack.enabled, stack.api, meta.index,
     hiddenKeys, actions, derived, unreadKeys, markStates, stack.drawer.open, stack.drawer.reveal, retry, pinJump, requestPinJump,
-    headJump, requestHeadJump, sendToTarget, quotedKey, quoteInChat, clearQuote, markViewedNow, openCardKey, cardRequest, requestCard, fileCardHost, setFileCardHost, args.canAsk]);
+    headJump, requestHeadJump, sendToTarget, sendToQuestion, quotedKey, quoteInChat, clearQuote, markViewedNow, openCardKey, cardRequest, requestCard, fileCardHost, setFileCardHost, args.canAsk]);
 
   // The drawer and its toggle need a real question; a draft-only session keeps
   // its draft row on the page it was asked from (SessionChatHistory).

@@ -1411,6 +1411,10 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   const [cardOpen, setCardOpen] = useState(false);
   const cardKey = threadsApi.viewMode === 'linear' && cardOpen && threadsApi.currentThreadKey !== ROOT_THREAD_KEY
     ? threadsApi.currentThreadKey : null;
+  /** The question whose card was enlarged from its fullscreen review card: the
+   *  card lies over that review card (useThreadCardPlace `over`), not below
+   *  its passage. Any other open of a card places it the usual way. */
+  const [cardOverKey, setCardOverKey] = useState<string | null>(null);
   /** An Ask from Tree Mode switches the view and opens its card in the same
    *  gesture: the mode change must not close that card. The note names the
    *  session and the mode it expects, so a switch that never lands cannot keep
@@ -1438,6 +1442,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
    *  sent question, or one with words typed for it, is kept). */
   const closeCard = useCallback((via: string = 'card-close') => {
     setCardOpen(false);
+    setCardOverKey(null);
     const leave = cardLeave();
     cardTextRef.current = '';
     leavePending(leave?.leftText, via);
@@ -1472,6 +1477,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     }
     stack.ask({ msgId: target.msgId, quote: target.quote }, { focusComposer: false });
     setCardOpen(true);
+    setCardOverKey(null);
   }, [stack, sessionId, threadsApi.viewMode, threadsApi.setViewMode]);
   const askHold = useRef<{ msgId: string; top: number; until: number } | null>(null);
   useLayoutEffect(() => {
@@ -3417,6 +3423,11 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     if (threadsApi.viewMode !== 'linear') { stack.pushTo(key, via); return; }
     if (key !== stack.currentKey) stack.pushTo(key, via, cardLeave());
     setCardOpen(true);
+    // Enlarged from its review card: it opens where that card is, and the
+    // timeline stays put (the review card is level with its passage anyway).
+    const enlarge = via === 'review-enlarge';
+    setCardOverKey(enlarge ? key : null);
+    if (enlarge && !filePlaceOf(key)) { log.info('threads', 'review card enlarged', { sessionId, key }); return; }
     // A FILE question's card lives in the Files tab beside its passage: open
     // that file there when it is not the one on show; the timeline stays put.
     const place = filePlaceOf(key);
@@ -3531,10 +3542,32 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on the signature
   const reviewLiveText = useMemo(() => new Map(reviewLive), [reviewLiveSig]);
   const quoteInChatApi = threadsApi.quoteInChat;
+  // A review card's own box: the follow-up goes into its question, and the
+  // timeline stays where the reader is (like a send from the comment card).
+  const sendToQuestionApi = threadsApi.sendToQuestion;
+  const sendFromReview = useCallback(async (key: string, text: string) => {
+    cardSendHold.current = true;
+    try { return await sendToQuestionApi(key, text); } finally { cardSendHold.current = false; }
+  }, [sendToQuestionApi]);
+  const reviewDraftKey = useCallback((key: string) => composerDraftKey(sessionId, key, threadTree), [sessionId, threadTree]);
+  const enlargedKey = cardKey && cardKey === cardOverKey ? cardKey : null;
+  // A follow-up just sent shows on its review card before history has its row.
+  const reviewSent: Array<[string, string]> = [];
+  if (convMode && reviewShownRef.current) {
+    for (const m of deduped) {
+      if (m.role !== 'user' || m.status === 'failed') continue;
+      const k = optimisticThreadKey(m);
+      if (k !== ROOT_THREAD_KEY) reviewSent.push([k, m.text ?? '']);
+    }
+  }
+  const reviewSentSig = reviewSent.map(([k, t]) => `${k}\u0001${t.length}\u0001${t.slice(0, 40)}`).join('\u0002');
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on the signature
+  const reviewSentText = useMemo(() => new Map(reviewSent), [reviewSentSig]);
   const review = useThreadReviewPane({
     sessionId, containerRef, conversationMode: convMode, hasQuestions, tree: threadTree, metaIndex: threadsApi.metaIndex,
     numbers: questionNumber, messages, liveText: reviewLiveText, markStates, passageOf, jumpToPlace, openCard,
     quoteInChat: quoteInChatApi, markViewed: threadsApi.markViewed,
+    canAsk: threadsApi.canAsk, sendToQuestion: sendFromReview, draftKeyOf: reviewDraftKey, enlargedKey, sentText: reviewSentText,
   });
   reviewShownRef.current = review.on;
   const markTips = useThreadMarks({
@@ -4032,10 +4065,15 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   const cardPending = cardKey && stack.pending?.pageKey === cardKey ? stack.pending : undefined;
   const cardFile = cardKey ? filePlaceOf(cardKey) : null;
   const cardFileHost = cardFile && threadsApi.fileCardHost?.path === cardFile.path ? threadsApi.fileCardHost : null;
+  const reviewOn = review.on;
+  const reviewCardElement = review.cardElement;
   const cardPlace = useThreadCardPlace({
     key: cardFile ? null : cardKey,
     containerRef,
     layerRef: cardLayerRef,
+    ...(enlargedKey && reviewOn ? {
+      over: () => reviewCardElement(enlargedKey),
+    } : {}),
     locate: () => {
       const el = containerRef.current;
       if (!el || !cardKey) return null;

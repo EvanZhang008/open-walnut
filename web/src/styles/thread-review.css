@@ -109,6 +109,21 @@
   cursor: pointer;
 }
 .thread-review-btn:hover { background: var(--bg-tertiary); color: var(--fg); }
+.thread-review-enlarge { display: inline-flex; align-items: center; gap: 4px; }
+.thread-review-enlarge svg { width: 11px; height: 11px; }
+/* The picked card's follow-up box: the comment card's composer, inset in the card. */
+.thread-review-card .thread-review-composer {
+  margin: 2px -4px 0 -6px;
+  padding: 4px 4px 4px 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--bg);
+  cursor: text;
+}
+.thread-review-card .thread-review-composer:focus-within { border-color: var(--accent); }
+.thread-review-composer .thread-card-input { font-size: 12.5px; min-height: 24px; padding: 3px 0; }
+/* Enlarged: its question's full card lies over it (same top, same right edge). */
+.thread-review-card[data-enlarged="true"] { visibility: hidden; }
 .thread-review-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
 /* State colors follow the passage marks (thread-stack-page.css). */

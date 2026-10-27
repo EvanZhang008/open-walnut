@@ -3,13 +3,16 @@
  * conversation, beside its line like a comment in a document's review pane
  * (utils/review-sidebar.ts has the rules). Each card shows the newest question
  * as the chat's blue bubble, the answer's start or where it stands (colored by
- * the passage's mark state); the picked card opens up with Open / Quote in chat.
+ * the passage's mark state); the picked card opens up: a box to ask the next
+ * follow-up right there, Enlarge (the question's full card, over this one) and
+ * Quote in chat (2026-10-27, the user: "where is the ask question and enlarge
+ * instead of open which jump to another place").
  *
  * Cards sit in a zero-height layer at the top of the scroll content, so they
  * scroll with the text. Their tops are written straight to the DOM after each
  * render and on a card's resize: one read of the heights, one write each.
  */
-import { memo, useCallback, useLayoutEffect, useRef, type MouseEvent, type RefObject } from 'react';
+import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type MouseEvent, type RefObject } from 'react';
 import { typedUserText } from '@open-walnut/history-injected-banner';
 import type { SessionHistoryMessage } from '@/types/session';
 import type { ThreadMarkState } from '@/utils/thread-mark-state';
@@ -18,6 +21,10 @@ import { displayTitleOf, type ThreadMetaIndex } from '@/utils/thread-meta';
 import type { ThreadTree } from '@/utils/thread-tree';
 import { plainExcerpt, REVIEW_GAP, stackReviewCards } from '@/utils/review-sidebar';
 import { stripQuestionTag } from '@/utils/question-tag';
+import { ICON_EXPAND } from '@/components/common/Icons';
+import { BoxMic, type BoxMicHandle } from '@/components/common/BoxMic';
+import { useDraft } from '@/hooks/useDraft';
+import { cardFollowUpPlaceholder } from './ThreadCommentCard';
 import '@/styles/thread-review.css';
 
 export interface ReviewEntry {
@@ -113,6 +120,18 @@ export function withLiveAnswers(entries: ReviewEntry[], live: ReadonlyMap<string
   });
 }
 
+/** A question just sent (not in history yet) is its card's newest question;
+ *  its answer is still to come. */
+export function withSentQuestions(entries: ReviewEntry[], sent: ReadonlyMap<string, string>): ReviewEntry[] {
+  if (sent.size === 0) return entries;
+  return entries.map((e) => {
+    const text = sent.get(e.key);
+    if (text === undefined) return e;
+    const question = plainExcerpt(questionBodyOf(typedUserText(text)), 240);
+    return question && question !== e.question ? { ...e, question, answer: '' } : e;
+  });
+}
+
 export interface ThreadReviewSidebarProps {
   layerRef: RefObject<HTMLDivElement | null>;
   entries: readonly ReviewEntry[];
@@ -120,9 +139,87 @@ export interface ThreadReviewSidebarProps {
   selected: string | null;
   /** The card itself: go to its passage (scroll + flash) and select it. */
   onActivate: (key: string) => void;
-  onOpen: (key: string) => void;
+  /** The question's full card, opened over this one. */
+  onEnlarge: (key: string) => void;
   onQuote: (key: string) => void;
+  /** The question whose full card is open over its review card (this one hides). */
+  enlarged: string | null;
+  canAsk: boolean;
+  sendToQuestion: (key: string, text: string) => Promise<boolean>;
+  draftKeyOf: (key: string) => string;
+  /** Each shown card's element by its key (the pane reads it: an enlarged card lies over it). */
+  cardsRef: RefObject<Map<string, HTMLDivElement>>;
+  /** The card whose box takes focus as it shows (back from its enlarged card). */
+  focusKey: string | null;
 }
+
+/** The picked card's follow-up box: the same draft as the question's full card
+ *  (one question, one set of unsent words), Enter sends, Shift+Enter a new line. */
+const ReviewCardComposer = memo(function ReviewCardComposer(p: {
+  threadKey: string; title: string; draftKey: string; canAsk: boolean; focusOnShow: boolean;
+  send: (key: string, text: string) => Promise<boolean>;
+}) {
+  const draft = useDraft(p.draftKey);
+  const { text, setText } = draft;
+  const [sending, setSending] = useState(false);
+  const boxRef = useRef<HTMLTextAreaElement | null>(null);
+  const mic = useRef<BoxMicHandle | null>(null);
+  // Back from the enlarged card: the reader carries on typing here.
+  useEffect(() => { if (p.focusOnShow) boxRef.current?.focus({ preventScroll: true }); }, [p.focusOnShow]);
+  // Grows with its text, up to four lines (20px each, 6px of padding).
+  useLayoutEffect(() => {
+    const el = boxRef.current;
+    if (!el) return;
+    el.style.height = '0px';
+    el.style.height = `${Math.min(el.scrollHeight, 4 * 20 + 6)}px`;
+  }, [text]);
+  const send = async () => {
+    const t = text.trim();
+    if (!t || sending || !p.canAsk) return;
+    setSending(true);
+    const sentKey = draft.key;
+    try {
+      if (await p.send(p.threadKey, t)) { mic.current?.clear(); draft.clear(sentKey, t); }
+    } finally {
+      setSending(false);
+      boxRef.current?.focus({ preventScroll: true });
+    }
+  };
+  const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    // Esc leaves the box, one layer at a time: never the fullscreen under it.
+    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); boxRef.current?.blur(); return; }
+    // keyCode 229: WebKit's Enter that picks an IME candidate reports isComposing false.
+    if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing && e.keyCode !== 229) { e.preventDefault(); void send(); }
+  };
+  const placeholder = p.canAsk ? cardFollowUpPlaceholder(p.title) : 'This engine cannot take questions';
+  return (
+    <div className="thread-card-composer thread-review-composer">
+      <textarea
+        ref={boxRef}
+        className="thread-card-input"
+        data-draft-key={draft.key ?? undefined}
+        rows={1}
+        value={text}
+        placeholder={placeholder}
+        disabled={!p.canAsk || sending}
+        aria-label={placeholder}
+        onChange={(e) => setText(e.target.value)}
+        onKeyDown={onKeyDown}
+      />
+      <BoxMic className="thread-card-mic" boxRef={boxRef} text={text} setText={setText} handleRef={mic} disabled={!p.canAsk || sending} />
+      <button
+        type="button"
+        className="thread-card-send"
+        aria-label="Send"
+        title="Send (Enter)"
+        disabled={!text.trim() || sending || !p.canAsk}
+        onClick={() => { void send(); }}
+      >
+        <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M8 13V3M3.5 7.5 8 3l4.5 4.5" /></svg>
+      </button>
+    </div>
+  );
+});
 
 function answerLine(e: ReviewEntry): string {
   if (e.state === 'waiting') return 'Waiting for an answer…';
@@ -131,10 +228,11 @@ function answerLine(e: ReviewEntry): string {
 }
 
 export const ThreadReviewSidebar = memo(function ThreadReviewSidebar(p: ThreadReviewSidebarProps) {
-  const cards = useRef(new Map<string, HTMLDivElement>());
+  const cards = p.cardsRef;
   const pRef = useRef(p);
   pRef.current = p;
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- the map is the pane's, stable
   const place = useCallback(() => {
     const cur = pRef.current;
     const items = [];
@@ -163,7 +261,8 @@ export const ThreadReviewSidebar = memo(function ThreadReviewSidebar(p: ThreadRe
     if (el) cards.current.set(key, el); else cards.current.delete(key);
   }, []);
   const onCardClick = (key: string) => (e: MouseEvent) => {
-    if ((e.target as Element).closest('button')) return;
+    // A control or the box: not a trip to the passage.
+    if ((e.target as Element).closest('button, textarea, .thread-review-composer')) return;
     p.onActivate(key);
   };
 
@@ -177,6 +276,7 @@ export const ThreadReviewSidebar = memo(function ThreadReviewSidebar(p: ThreadRe
           data-thread-key={e.key}
           data-state={e.state}
           data-selected={p.selected === e.key ? 'true' : undefined}
+          data-enlarged={p.enlarged === e.key ? 'true' : undefined}
           role="group"
           aria-label={`Question ${e.number ?? ''}: ${e.title}`.replace(/\s+/g, ' ')}
           onClick={onCardClick(e.key)}
@@ -198,9 +298,20 @@ export const ThreadReviewSidebar = memo(function ThreadReviewSidebar(p: ThreadRe
           <div className="thread-review-a">{answerLine(e)}</div>
           <div className="thread-review-actions">
             {e.rounds > 1 && <span className="thread-review-rounds">{e.rounds} rounds</span>}
-            <button type="button" className="thread-review-btn" onClick={() => p.onOpen(e.key)}>Open</button>
+            <button
+              type="button" className="thread-review-btn thread-review-enlarge" onClick={() => p.onEnlarge(e.key)}
+              title="The whole conversation, here" aria-label={`Enlarge question ${e.number ?? ''}`.trim()}
+            >
+              {ICON_EXPAND}<span>Enlarge</span>
+            </button>
             <button type="button" className="thread-review-btn" onClick={() => p.onQuote(e.key)} title="Write your next chat message to this question">Quote in chat</button>
           </div>
+          {p.selected === e.key && p.enlarged !== e.key && (
+            <ReviewCardComposer
+              threadKey={e.key} title={e.title} draftKey={p.draftKeyOf(e.key)} canAsk={p.canAsk}
+              focusOnShow={p.focusKey === e.key} send={p.sendToQuestion}
+            />
+          )}
         </div>
       ))}
     </div>

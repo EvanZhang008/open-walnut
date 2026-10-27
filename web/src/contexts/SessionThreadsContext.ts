@@ -175,6 +175,8 @@ export interface SessionThreadsApi {
   /** Send into the open card's question (the card's own box): the same anchored
    *  path the panel's composer takes. False when nothing was sent. */
   sendToTarget: (text: string) => Promise<boolean>;
+  /** Send into one question by its key (a fullscreen review card's box). */
+  sendToQuestion: (key: string, text: string) => Promise<boolean>;
   /** Conversation Mode: the question the chat's composer writes to, set only by
    *  an explicit Quote in chat (utils/composer-quote.ts); null = main. */
   quotedKey: string | null;
@@ -253,6 +255,7 @@ const EMPTY: SessionThreadsApi = {
   headJump: null,
   requestHeadJump: NOOP,
   sendToTarget: async () => false,
+  sendToQuestion: async () => false,
   quotedKey: null,
   quoteInChat: NOOP,
   clearQuote: NOOP,

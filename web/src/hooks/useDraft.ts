@@ -131,6 +131,17 @@ export function useDraft(key: string | null | undefined, opts: { baseline?: stri
   // Typed in another window or on another device: shown while this box is not in use.
   useEffect(() => {
     if (!k) return;
+    // Another box of this key that unmounted in the same commit (a card closing
+    // as its compact twin comes back) wrote its words after this one's first
+    // render read the store, and before this subscription: read it once more.
+    const stored = load(k);  // eslint-disable-line react-hooks/exhaustive-deps -- reads the store now
+    if (!pending.current && stored !== textRef.current) {
+      const active = document.activeElement;
+      if (!(active && active.getAttribute('data-draft-key') === k)) {
+        textRef.current = stored;
+        setTextState(stored);
+      }
+    }
     return subscribeDraft(k, (remote) => {
       if (pending.current) return;
       const active = document.activeElement;
