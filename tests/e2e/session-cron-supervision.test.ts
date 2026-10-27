@@ -85,7 +85,8 @@ beforeAll(async () => {
   await fs.writeFile(program, `#!${process.execPath}
 const fs = require('node:fs'), path = require('node:path');
 if (process.argv.includes('--version')) { console.log('2.1.258 (Claude Code)'); process.exit(0); }
-const sid = process.argv[process.argv.indexOf('--session-id') + 1];
+const at = process.argv.findIndex((a) => a === '--session-id' || a === '--resume');
+const sid = process.argv[at + 1];
 const now = Date.now();
 const rows = [
  {type:'assistant',uuid:'a',parentUuid:null,timestamp:new Date(now).toISOString(),message:{id:'api-1',content:[{type:'tool_use',name:'CronCreate',id:'call-1',input:{cron:'* * * * *',prompt:'Example'}}]}},
@@ -205,7 +206,8 @@ it('real server and daemon persist toggle and stop across daemon restart', async
   expect((await connection!.send('status', { sid: SID })).alive).not.toBe(true)
   await shutdownDaemon()
   await boot(false)
-  const unmanaged = await connection!.send('start', { sid: SID, cwd: home, args: [program, '-p', '--session-id', SID], mode: 'default' })
+  // A resume: this server minted SID above, and a test server never mints an id twice (ephemeral-session-gate.ts).
+  const unmanaged = await connection!.send('start', { sid: SID, cwd: home, args: [program, '-p', '--resume', SID], mode: 'default' })
   expect(unmanaged.ok).toBe(true)
   await expect.poll(async () => (await readMetadata())?.presence, { timeout: 10_000 }).toBe('active')
   expect((await read()).supervision).toBeNull()
