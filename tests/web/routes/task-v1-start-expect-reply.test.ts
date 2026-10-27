@@ -104,3 +104,39 @@ describe('POST /api/v1/tasks/:id/start — expect_reply tri-state mapping', () =
     expect(res.body.requestId).toBe('rq-0123456789ab')
   })
 })
+
+// 2026-10-27: the draft column's launch choices, from an agent (src/ops/launch-parity.ts).
+describe('POST /api/v1/tasks/:id/start — the draft\'s launch choices reach the core', () => {
+  it('hands effort, user_request, create_cwd and workspace through', async () => {
+    const res = await postStart({
+      message: 'go', effort: 'max', user_request: 'start this now please', create_cwd: true,
+      workspace: { provider: 'git-worktree', inputs: { branch: 'b' } },
+    }, 'sess-caller-1')
+    expect(res.status).toBe(202)
+    expect(coreParams()).toMatchObject({
+      effort: 'max', userRequest: 'start this now please', createCwd: true,
+      workspace: { provider: 'git-worktree', inputs: { branch: 'b' } },
+    })
+  })
+
+  it('omitted choices stay absent (an older body is byte-for-byte what it was)', async () => {
+    await postStart({ message: 'go' })
+    const p = coreParams()
+    expect(p.effort).toBeUndefined()
+    expect(p.userRequest).toBeUndefined()
+    expect('createCwd' in p).toBe(false)
+    expect('workspace' in p).toBe(false)
+  })
+
+  it('refuses a workspace without a provider before the core', async () => {
+    const res = await postStart({ message: 'go', workspace: { inputs: {} } })
+    expect(res.status).toBe(400)
+    expect(startSessionForTaskMock).not.toHaveBeenCalled()
+  })
+
+  it('passes the core\'s applied list back to the op', async () => {
+    startSessionForTaskMock.mockResolvedValue({ taskId: 'task-1', title: 'x', sessionId: 's', started: true, applied: ['effort'] })
+    const res = await postStart({ message: 'go', effort: 'low' })
+    expect(res.body.applied).toEqual(['effort'])
+  })
+})

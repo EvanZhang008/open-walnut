@@ -63,6 +63,20 @@ async function sendLocalError(res: Response, next: NextFunction, err: unknown): 
   next(err)
 }
 
+/**
+ * A session stopping or restarting a session it may not touch (itself, its own
+ * lead, Main): 409 with the reason (core/sessions/session-control-guard.ts).
+ * Humans send no caller id, so the panel's Stop and Restart are never refused.
+ */
+async function refuseSessionControl(req: Request, res: Response, sessionId: string, action: 'stop' | 'restart'): Promise<boolean> {
+  const raw = req.headers['x-walnut-caller-sid']
+  const { sessionControlRefusal } = await import('../../core/sessions/session-control-guard.js')
+  const refusal = await sessionControlRefusal(Array.isArray(raw) ? raw[0] : raw, sessionId, action)
+  if (!refusal) return false
+  sendError(res, 409, refusal.code, refusal.message)
+  return true
+}
+
 /** The frozen { session } row for a mode the companion applied on the session's host. */
 function modeOnlyRow(row: { id: string; process_status: string; title?: string }, mode: string): Record<string, unknown> {
   return { claudeSessionId: row.id, process_status: row.process_status, ...(row.title !== undefined ? { title: row.title } : {}), mode }
@@ -346,6 +360,7 @@ sessionLifecycleV1Router.post('/sessions/:id/terminate', async (req: Request, re
     const sessionId = validSid(req, res)
     if (!sessionId) return
     const force = (req.body ?? {}).force === true
+    if (await refuseSessionControl(req, res, sessionId, 'stop')) return
     if (CLOUD_MODE) {
       const { cloudTerminate } = await import('./session-stop-v1.js')
       await cloudTerminate(res, sessionId, force)
@@ -374,6 +389,7 @@ sessionLifecycleV1Router.post('/sessions/:id/restart', async (req: Request, res:
   try {
     const sessionId = validSid(req, res)
     if (!sessionId) return
+    if (await refuseSessionControl(req, res, sessionId, 'restart')) return
     if (CLOUD_MODE) {
       await relayControlAction(res, 'restart', sessionId, undefined, 200)
       return

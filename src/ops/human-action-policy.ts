@@ -3,7 +3,7 @@ import type { WalnutOp } from './registry.js';
 import { HEALTH_LOCAL_ONLY_MESSAGE, LOCAL_ORIGIN } from '../lib/caller-origin.js';
 import { getSelfApiRoot } from '../lib/self-api-root.js';
 
-const POWERFUL = new Set(['task_create', 'task_start', 'task_send', 'session_start', 'session_send', 'memory_write', 'note_write', 'note_edit', 'note_attach']);
+const POWERFUL = new Set(['task_create', 'task_start', 'task_stop', 'task_restart', 'task_session_set', 'task_send', 'session_start', 'session_send', 'memory_write', 'note_write', 'note_edit', 'note_attach']);
 const DESTRUCTIVE = new Set(['task_delete', 'task_merge']);
 export interface HumanActionRefusal { status: number; code: string; message: string }
 export function humanActionRefusal(op: WalnutOp, origin: string, confirmed: boolean): HumanActionRefusal | undefined {

@@ -12,6 +12,8 @@
  * The human's own creates and starts, from the board, the phone or the CLI, are
  * never limited, and a Personal AI ask is exempt from the running limit because
  * the user asking it IS the request (see caller-placement.ts for the same split).
+ * Main is an ask (born walnut_agent), so it is not limited either. A worker's
+ * start the user asked for runs under the higher MAX_RUNNING_SUBTASKS_USER_ASKED.
  */
 
 import type { Task } from '../types.js';
@@ -20,6 +22,16 @@ import type { Task } from '../types.js';
 export const MAX_SUBTASK_DEPTH = 3;
 /** Subtasks of one task that may run (IN_PROGRESS or starting) at once. */
 export const MAX_RUNNING_SUBTASKS = 8;
+/**
+ * The ceiling for a start the user asked for (a session quoting the user's words
+ * in `user_request`): such a start goes ahead of the brake above, and this one
+ * still holds, so an agent that loops on the claim stops here instead of at
+ * nothing (2026-10-27: a start the user asked for "now" could only wait behind
+ * eight running workers of its lead).
+ */
+export const MAX_RUNNING_SUBTASKS_USER_ASKED = 16;
+/** A user_request shorter than this is not the user's words, it is a token. */
+export const MIN_USER_REQUEST_CHARS = 10;
 
 export type SubtaskLimitCode = 'subtask_too_deep' | 'too_many_running_subtasks';
 
@@ -157,7 +169,9 @@ const admissionLocks = new Map<string, Promise<void>>();
  * Releasing when the start settles leaves no gap: the runner writes the child's
  * IN_PROGRESS before it confirms the spawn.
  */
-export async function admitSubtaskStart(parentId: string, startingTaskId: string, parentTitle?: string): Promise<() => void> {
+export async function admitSubtaskStart(
+  parentId: string, startingTaskId: string, parentTitle?: string, opts: { userAsked?: boolean } = {},
+): Promise<() => void> {
   let unlock!: () => void;
   const mine = new Promise<void>((resolve) => { unlock = resolve; });
   const previous = admissionLocks.get(parentId) ?? Promise.resolve();
@@ -169,15 +183,22 @@ export async function admitSubtaskStart(parentId: string, startingTaskId: string
     const children = await import('../task-manager.js')
       .then((m) => m.getChildTasks(parentId)).catch(() => [] as Task[]);
     const starting = admitted.get(parentId) ?? new Set<string>();
+    // A start waiting for its isolated workspace is a start on the way (core/workspaces).
+    const preparing = (c: Task) => c.workspace?.state === 'creating' && !!c.workspace.pending_start;
     const running = children.filter((c) => c.id !== startingTaskId
-      && (c.phase === 'IN_PROGRESS' || starting.has(c.id)));
-    if (running.length >= MAX_RUNNING_SUBTASKS) {
+      && (c.phase === 'IN_PROGRESS' || starting.has(c.id) || preparing(c)));
+    const cap = opts.userAsked ? MAX_RUNNING_SUBTASKS_USER_ASKED : MAX_RUNNING_SUBTASKS;
+    if (running.length >= cap) {
       const name = parentTitle ? `"${parentTitle}"` : parentId;
-      const ids = running.slice(0, MAX_RUNNING_SUBTASKS).map((c) => c.id);
+      const ids = running.slice(0, cap).map((c) => c.id);
+      const ask = opts.userAsked
+        ? ` Even a start the user asked for stops at ${cap}; tell the user which running one to stop (task_stop) first.`
+        : ' When the user asked for this start now, retry with user_request quoting their words'
+          + ` (up to ${MAX_RUNNING_SUBTASKS_USER_ASKED} run then).`;
       throw new SubtaskLimitError('too_many_running_subtasks',
-        `Refused: ${running.length} subtasks of ${name} are already running, and at most ${MAX_RUNNING_SUBTASKS} run at `
+        `Refused: ${running.length} subtasks of ${name} are already running, and at most ${cap} run at `
         + `once. Wait for one to finish (walnut wait ${ids.slice(0, 3).join(' ')} --any), or do this part with your `
-        + `own tools. Running: ${ids.join(', ')}.`);
+        + `own tools.${ask} Running: ${ids.join(', ')}.`);
     }
     starting.add(startingTaskId);
     admitted.set(parentId, starting);

@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { requireFrozenWorkspaceReady, resolveTaskLaunchReadOnly } from './task-launch-plan.js';
+import { requireFrozenWorkspaceReady, resolveTaskLaunchReadOnly, validateLaunchChoices } from './task-launch-plan.js';
 import path from 'node:path';
 import { mkdir } from 'node:fs/promises';
 import { getTask, linkSession, updateTaskRaw } from '../task-manager.js';
@@ -12,7 +12,8 @@ import { engineCaps, normalizeEngine, resolveEngine } from '../agents/engine-reg
 import { isDaemonCommandOutcomeUnknown } from '../../providers/delivery-failure.js';
 import { log } from '../../logging/index.js';
 import { withInboxStartAuthorization } from '../human-inbox/item-ledger.js';
-import { deferTaskStart, workspaceCwdOf } from '../workspaces/launch.js';
+import { deferTaskStart, requestTaskStartWorkspace, willDeferStart, workspaceCwdOf } from '../workspaces/launch.js';
+import { isLaunchReady } from '../workspaces/decisions.js';
 
 export interface SessionStartParams {
   taskIdPrefix: string;
@@ -23,6 +24,12 @@ export interface SessionStartParams {
   mode?: string;
   /** Reasoning effort for the spawn (Claude Code's --effort). */
   effort?: SessionEffort;
+  /** The user's own words asking for this start: lifts the running-subtask brake to its higher ceiling (subtask-limits.ts). */
+  userRequest?: string;
+  /** "Create folder & start": make `cwd` on its host first (ensureCwd, as quick-start's createCwd). */
+  createCwd?: boolean;
+  /** An isolated workspace for the start (core/workspaces), as the draft's workspace row. */
+  workspace?: { provider: string; inputs?: unknown };
   engine?: SessionEngine;
   expectReply?: boolean;
   replyTimeoutSecs?: number;
@@ -41,6 +48,12 @@ export interface SessionStartResult {
   preparing?: boolean;
   /** The task already had its one session: the message continued it (one-session-per-task.ts). */
   continued?: boolean;
+  /**
+   * The launch settings this start honoured, by request field name (effort,
+   * create_cwd, workspace, ...). Absent on a server older than the field, which
+   * is how a newer op tells the caller what an older Walnut ignored.
+   */
+  applied?: string[];
 }
 
 export class SessionExistsError extends QuickStartError {
@@ -66,18 +79,27 @@ function alreadyStarted(task: Task, sid: string): SessionExistsError {
 /**
  * A worker session may run only so many subtasks at once (subtask-limits.ts).
  * Returns the admission's release, or throws SubtaskLimitError; the human's
- * starts and a Personal AI ask's are never limited, and a caller that cannot be
+ * starts and a Personal AI ask's (Main's included: it is born walnut_agent) are
+ * never limited, a start quoting the user's words runs under the higher ceiling,
+ * and a caller that cannot be
  * resolved is not either (fail open: the limit is a brake on runaway fan-out,
  * not an access check).
  */
-export async function admitStartWithinLimits(task: Task, callerSid: string | undefined): Promise<() => void> {
+export async function admitStartWithinLimits(task: Task, callerSid: string | undefined, userRequest?: string): Promise<() => void> {
   const open = () => {};
   if (!callerSid) return open;
   const { resolveCallerPlacement } = await import('./caller-placement.js');
   const caller = await resolveCallerPlacement(callerSid).catch(() => ({ kind: 'unknown' as const }));
   if (caller.kind !== 'worker') return open;
-  const { admitSubtaskStart } = await import('./subtask-limits.js');
-  return admitSubtaskStart(caller.task.id, task.id, caller.task.title);
+  const { admitSubtaskStart, MIN_USER_REQUEST_CHARS } = await import('./subtask-limits.js');
+  const quoted = (userRequest ?? '').trim();
+  if (quoted && quoted.length < MIN_USER_REQUEST_CHARS) {
+    throw new QuickStartError(`user_request must quote the user's own words asking for this start (${MIN_USER_REQUEST_CHARS} characters or more)`, 400);
+  }
+  if (quoted) {
+    log.session.info('subtask start as the user asked', { taskId: task.id, parentId: caller.task.id, callerSid, userRequest: quoted.slice(0, 300) });
+  }
+  return admitSubtaskStart(caller.task.id, task.id, caller.task.title, { userAsked: !!quoted });
 }
 
 /**
@@ -119,8 +141,18 @@ export async function startSessionForTask(params: SessionStartParams): Promise<S
   if (pending !== undefined) throw alreadyStarted(task, pending);
   // A frozen human plan cannot authorize a later workspace launch with different settings.
   if (params.startAttemptId) requireFrozenWorkspaceReady(task, params);
-  const deferred = await deferTaskStart(task, params);
-  if (deferred) return deferred;
+  // A start that waits for a workspace replays these later; a bad one fails now.
+  validateLaunchChoices(params);
+  if (params.workspace) {
+    const made = await startInNewWorkspace(task, params, params.workspace);
+    if (made) return made;
+  }
+  if (willDeferStart(task, params)) {
+    // The brake holds for a start that waits too (a preparing subtask counts as running).
+    (await admitStartWithinLimits(task, params.callerSid, params.userRequest))();
+    const deferred = await deferTaskStart(task, params);
+    if (deferred) return { ...deferred, applied: pendingApplied(params) };
+  }
   const engine = normalizeEngine(params.engine);
   const sid = engineCaps(engine).idProvisioning === 'provider-issued' ? undefined : randomUUID();
   const runtimeId = sid ?? `acp-${randomUUID()}`;
@@ -129,7 +161,7 @@ export async function startSessionForTask(params: SessionStartParams): Promise<S
   let releaseOnReturn = true;
   let releaseAdmission = () => {};
   try {
-    releaseAdmission = await admitStartWithinLimits(task, params.callerSid);
+    releaseAdmission = await admitStartWithinLimits(task, params.callerSid, params.userRequest);
     const records = await getSessionsForTask(task.id);
     const live = records.find((s) => !s.archived && LIVE_STATUSES.has(s.process_status));
     const previous = records.find((s) => s.claudeSessionId === task.last_start?.session_id);
@@ -163,7 +195,7 @@ export async function startSessionForTask(params: SessionStartParams): Promise<S
         text: params.message?.trim() || task.description || `Working on task: ${task.title}`,
         callerSid: params.callerSid, expectReply: params.expectReply, replyTimeoutSecs: params.replyTimeoutSecs,
       });
-      return { taskId: task.id, title: task.title, sessionId: sent.sessionId, requestId: sent.requestId, started: true, continued: true };
+      return { taskId: task.id, title: task.title, sessionId: sent.sessionId, requestId: sent.requestId, started: true, continued: true, applied: [] };
     }
     const launch = await prepareLaunch(task, { ...params, engine });
     let callerSessionId: string | undefined;
@@ -200,7 +232,8 @@ export async function startSessionForTask(params: SessionStartParams): Promise<S
       }
     };
     let seeded = false;
-    const result: SessionStartResult = { taskId: task.id, title: task.title, sessionId: sid, requestId, started: false };
+    const result: SessionStartResult = { taskId: task.id, title: task.title, sessionId: sid, requestId, started: false,
+      applied: appliedLaunchFields(task, params, launch) };
     const work = (async (): Promise<SessionStartResult> => {
       try {
         if (recovery && previous) {
@@ -368,8 +401,65 @@ export async function recordedCwd(task: Pick<Task, 'id' | 'project' | 'cwd' | 'p
   return undefined;
 }
 
+/** The new-in-this-contract launch fields a fresh start honoured (SessionStartResult.applied). */
+function appliedLaunchFields(task: Task, params: SessionStartParams, launch: { cwd: string; effort?: SessionEffort }): string[] {
+  return [
+    ...(launch.effort ? ['effort'] : []),
+    ...(params.createCwd ? ['create_cwd'] : []),
+    // Only when the session really runs in the task's workspace (a cwd outside it starts elsewhere).
+    ...(params.workspace && workspaceCwdOf(task) && insideWorkspaceRoot(task.workspace!.root, launch.cwd) ? ['workspace'] : []),
+  ];
+}
+
+function insideWorkspaceRoot(root: string | undefined, cwd: string): boolean {
+  const r = (root ?? '').replace(/\/+$/, '');
+  return !!r && (cwd === r || cwd.startsWith(`${r}/`));
+}
+
+/** What a start waiting for its workspace carries into the replay. */
+function pendingApplied(params: SessionStartParams): string[] {
+  return [...(params.workspace ? ['workspace'] : []), ...(params.effort ? ['effort'] : [])];
+}
+
+/**
+ * task_start asking for an isolated workspace the task does not have yet: check
+ * now everything the fresh start would check (the subtask brake, the task's one
+ * session, a place a workspace can copy), then ask the host for it and leave the
+ * start waiting in it. Null = the task already has a ready workspace or one on
+ * the way, and the ordinary paths take the start.
+ */
+async function startInNewWorkspace(
+  task: Task, params: SessionStartParams, workspace: NonNullable<SessionStartParams['workspace']>,
+): Promise<SessionStartResult | null> {
+  if (!workspace.provider) throw new QuickStartError('workspace needs a provider (workspace_providers lists them)', 400);
+  if (task.workspace && (isLaunchReady(task.workspace) || task.workspace.state === 'creating')) return null;
+  if (task.phase === 'COMPLETE') throw new QuickStartError(`Task ${task.id} is complete; a workspace start needs open work.`, 409);
+  const records = await getSessionsForTask(task.id);
+  const live = records.find((s) => !s.archived && LIVE_STATUSES.has(s.process_status));
+  if (live) throw alreadyStarted(task, live.claudeSessionId);
+  // One session per task: its conversation stays where it ran.
+  const conversation = await taskConversation(task.id);
+  if (conversation) {
+    throw new QuickStartError(`Task ${task.id} already has its one session in ${conversation.cwd || 'its folder'}. `
+      + `A workspace is for new work: task_create with workspace, or task_transfer {"id":"${task.id}"} to move this work.`, 409);
+  }
+  const place = await resolveTaskLaunchReadOnly(task, { ...params, workspace: undefined });
+  if (place.createLocalDirectory) {
+    throw new QuickStartError(`Task ${task.id} has no folder for a workspace to copy: pass cwd (an existing folder, usually a repository).`, 400);
+  }
+  (await admitStartWithinLimits(task, params.callerSid, params.userRequest))();
+  const made = await requestTaskStartWorkspace(task, params, workspace, place);
+  return made ? { ...made, applied: pendingApplied(params) } : null;
+}
+
 async function prepareLaunch(task: Task, params: SessionStartParams) {
   const launch = await resolveTaskLaunchReadOnly(task, params);
+  if (params.createCwd && !launch.createLocalDirectory) {
+    // Same sanitize rule as the quick-start route: this path may ride a daemon RPC.
+    if (/[;&|`$(){}!<>]/.test(launch.cwd)) throw new QuickStartError('invalid characters in cwd', 400);
+    const { ensureCwd } = await import('./ensure-cwd.js');
+    await ensureCwd(launch.cwd, launch.host || undefined);
+  }
   if (launch.createLocalDirectory) await mkdir(launch.cwd, { recursive: true });
   const { createLocalDirectory, ...resolved } = launch;
   return resolved;

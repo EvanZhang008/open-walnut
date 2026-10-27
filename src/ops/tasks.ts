@@ -542,6 +542,8 @@ defineOp({
     group_id: z.string().optional().describe('Folder id (g_...) inside the target project; "" for no folder. Omit to join your own task\'s folder (a new one when it has none) when the task lands in your project'),
     priority: PRIORITY.optional().describe('immediate | important | backlog | none'),
     due_date: z.string().optional().describe('YYYY-MM-DD or a full ISO-8601 datetime'),
+    start_date: z.string().optional().describe('When the work starts: YYYY-MM-DD or a full ISO-8601 datetime'),
+    end_date: z.string().optional().describe('When the work ends: YYYY-MM-DD or a full ISO-8601 datetime'),
     description: z.string().optional().describe('Longer body text (write-only)'),
     tags: z.array(z.string()).optional().describe('Initial task tags'),
     pinned: z.boolean().optional().describe('Join the pinned board. Default: your task\'s (from inside a task), otherwise true. false keeps the task off the board'),
@@ -619,7 +621,8 @@ defineOp({
             ...extra, execution: { state: 'not_started', error }, start_error: error,
           }),
           `${where}Task ${id} was created but NOT started: ${error}${await cardLine(false)}`,
-          `Start it after one of the running subtasks finishes: walnut tools call task_start '{"id":"${id}"}'`,
+          `Start it after one of the running subtasks finishes: walnut tools call task_start '{"id":"${id}"}'. `
+            + 'When the user asked for it now, pass their words as user_request.',
         )
       }
       return withOutcome(

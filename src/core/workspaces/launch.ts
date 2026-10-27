@@ -63,29 +63,69 @@ export function workspaceStartPlace(task: Pick<Task, 'workspace'>, params: { cwd
 
 export interface DeferredTaskStart { taskId: string; title: string; started: false; preparing: true }
 
-/** task_start of a task whose workspace is not ready: remember the start, make the workspace, start then. */
-export async function deferTaskStart(task: Task, params: {
-  message?: string; model?: string; mode?: string; engine?: string; cwd?: string
-  callerSid?: string; expectReply?: boolean; replyTimeoutSecs?: number; source: string
-}): Promise<DeferredTaskStart | null> {
-  const ws = task.workspace
-  if (!ws || (params.cwd !== undefined && !belongsToWorkspace(ws, params.cwd))) return null
-  if (ws.state === 'removing') throw new QuickStartError('This task\'s workspace is being removed; start the session after it is gone.', 409)
-  if (ws.state !== 'creating' && !needsCreation(ws)) return null
-  const pending: WorkspacePendingStart = {
+/** What a task-start hands a workspace to replay once it is ready. */
+interface TaskStartAsk {
+  message?: string; model?: string; mode?: string; effort?: string; engine?: string; cwd?: string
+  callerSid?: string; userRequest?: string; expectReply?: boolean; replyTimeoutSecs?: number; source: string
+}
+
+function taskStartPending(task: Task, params: TaskStartAsk): WorkspacePendingStart {
+  return {
     via: 'task-start',
     message: params.message?.trim() || task.description || `Working on task: ${task.title}`,
     ...(params.model ? { model: params.model } : {}),
     ...(params.mode ? { mode: params.mode } : {}),
+    ...(params.effort ? { effort: params.effort } : {}),
     ...(params.engine ? { engine: params.engine } : {}),
     ...(params.callerSid ? { caller_sid: params.callerSid } : {}),
+    ...(params.userRequest ? { user_request: params.userRequest } : {}),
     ...(params.expectReply !== undefined ? { expect_reply: params.expectReply } : {}),
     ...(params.replyTimeoutSecs !== undefined ? { reply_timeout_secs: params.replyTimeoutSecs } : {}),
     source: params.source,
     at: new Date().toISOString(),
   }
+}
+
+/** Would deferTaskStart take this start (its workspace is on the way, or must be made again)? */
+export function willDeferStart(task: Pick<Task, 'workspace'>, params: { cwd?: string }): boolean {
+  const ws = task.workspace
+  if (!ws || (params.cwd !== undefined && !belongsToWorkspace(ws, params.cwd))) return false
+  return ws.state === 'removing' || ws.state === 'creating' || needsCreation(ws)
+}
+
+/** task_start of a task whose workspace is not ready: remember the start, make the workspace, start then. */
+export async function deferTaskStart(task: Task, params: TaskStartAsk): Promise<DeferredTaskStart | null> {
+  const ws = task.workspace
+  if (!ws || !willDeferStart(task, params)) return null
+  if (ws.state === 'removing') throw new QuickStartError('This task\'s workspace is being removed; start the session after it is gone.', 409)
   try {
-    await deferStart(task.id, pending)
+    await deferStart(task.id, taskStartPending(task, params))
+  } catch (err) {
+    throw asQuickStartError(err)
+  }
+  return { taskId: task.id, title: task.title, started: false, preparing: true }
+}
+
+/**
+ * task_start that asks for an isolated workspace (`workspace: { provider, inputs? }`,
+ * the draft's "Isolated workspace" row): the same requestWorkspace the draft's
+ * launch reaches, with the start waiting in it. `place` is where the start would
+ * run without one (the anchor folder and host). Null = nothing to make: the task
+ * already has a ready workspace (the start runs in it) or one on the way
+ * (deferTaskStart queues the start).
+ */
+export async function requestTaskStartWorkspace(
+  task: Task, params: TaskStartAsk, asked: { provider: string; inputs?: unknown }, place: { cwd: string; host?: string },
+): Promise<DeferredTaskStart | null> {
+  const ws = task.workspace
+  if (ws && (isLaunchReady(ws) || ws.state === 'creating')) return null
+  if (ws?.state === 'removing') throw new QuickStartError('This task\'s workspace is being removed; start the session after it is gone.', 409)
+  if (role() === 'replica') throw new QuickStartError('Isolated workspaces are made by the Walnut on your Mac.', 409)
+  try {
+    await requestWorkspace(task.id, {
+      provider: asked.provider, host: normHost(place.host), anchor: place.cwd, inputs: asked.inputs,
+      pending: taskStartPending(task, params),
+    })
   } catch (err) {
     throw asQuickStartError(err)
   }

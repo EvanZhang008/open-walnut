@@ -75,6 +75,9 @@ All v1 errors use one shape (plus optional endpoint-specific extras):
 | `bridge_offline` | 503 | Cloud companion has no live bridge to the needed host (or the primary's server is disconnected from its daemon) |
 | `not_supported_cloud` | 501 | The endpoint cannot run on a cloud REPLICA at all |
 | `cron_owner` | 409 | `POST /sessions/:id/terminate` refused: the session owns armed recurring crons — delete them first or pass `force: true` |
+| `own_session` | 409 | `POST /sessions/:id/terminate` or `/restart` refused: the caller's `x-walnut-caller-sid` is that session (additive, 2026-10-27; a session ends its own work by completing its task) |
+| `own_lead` | 409 | `POST /sessions/:id/terminate` or `/restart` from a session whose task works for that session's task (its lead, up the chain). Additive, 2026-10-27 |
+| `main_session` | 409 | `POST /sessions/:id/terminate` or `/restart` from a session, aimed at Main's session (only the user stops or restarts Main). Additive, 2026-10-27 |
 | `session_exists` | 409 | `POST /tasks/:id/start` refused: the task already has a live session (`existing_session_id`); message it with `POST /messages` |
 | `project_elsewhere` | 409 | `POST /tasks` from a session: `project` names a project other than the caller task's own and `project_reason` is missing or under 10 characters. Nothing is created; the body also carries `callerProject` and `requestedProject` |
 | `related_open_tasks` | 409 | `POST /tasks` (and the legacy `POST /api/tasks` with a caller header) from a session: open tasks look like the same work and the body has no `confirm_new: true`. Nothing is created. Extras: `candidates` (at most 5, best first: `id`, `title`, `project`, `folder?`, `phase`, `user_status?`, `session_running`, `updated_at?`, `reason`, `your_subtask?`) and `hint` (the two ways out). `confirm_new: true` without a `new_reason` of 10+ characters is `400 bad_request` |
@@ -1329,6 +1332,17 @@ prefix → `400 bad_request`, unknown → `404 not_found`.
   that already has 8 subtasks running (IN_PROGRESS or starting, the task being
   started excluded) answers `409 too_many_running_subtasks` and nothing starts
   (additive, 2026-09-28); the human and a Personal AI ask are never limited.
+  Additive, 2026-10-27 (the draft column's launch choices, for agents):
+  `"effort"?` (`low|medium|high|xhigh|max`, claude engine only; `400` with an
+  ACP engine), `"create_cwd"?: true` (make `cwd` on its host first),
+  `"workspace"?: { "provider", "inputs"? }` (an isolated workspace; answers
+  `preparing: true` and starts in it once ready; `409` when the task already
+  has a live session or a conversation, or is complete; `400` when the task has
+  no folder to copy or `create_cwd` comes with it) and `"user_request"?` (the
+  user's own words asking for the start, 10+ characters: a worker caller then
+  runs under a ceiling of 16 running subtasks instead of 8; shorter is `400`).
+  The answer adds `applied`, the names of those fields it honoured; a server
+  older than them omits it and ignores the fields.
   `202` means ACCEPTED,
   not spawned (the spawn is async in session-runner), same as `POST /sessions`.
   Class C: `501 not_supported_cloud` on a REPLICA (no session-runner there);

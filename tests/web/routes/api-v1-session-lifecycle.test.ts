@@ -453,3 +453,69 @@ describe('GET /api/v1/sessions/:id/changes', () => {
     expect(res.body.error.code).toBe('not_found')
   })
 })
+
+// task_stop / task_restart reach these routes from a session; one acting on
+// ITSELF would cut the very tool call that asked (2026-10-27).
+describe('a session cannot stop or restart itself (409 own_session)', () => {
+  it('terminate and restart from the same session id are refused before anything reaches the host', async () => {
+    await createSessionRecord('lc-own-1', 'task-own', 'proj', '/tmp', { initialProcessStatus: 'running', pid: process.pid })
+    stopConn.value = daemonThatAnswers({ ok: true, stopped: true })
+    const reinit = vi.spyOn(sessionRunner, 'reinitialize').mockResolvedValue(undefined as never)
+
+    const stop = await request(createApp()).post('/api/v1/sessions/lc-own-1/terminate')
+      .set('x-walnut-caller-sid', 'lc-own-1').send({})
+    expect(stop.status).toBe(409)
+    expect(stop.body.error.code).toBe('own_session')
+    const restart = await request(createApp()).post('/api/v1/sessions/lc-own-1/restart')
+      .set('x-walnut-caller-sid', 'lc-own-1').send({})
+    expect(restart.status).toBe(409)
+    expect(restart.body.error.code).toBe('own_session')
+
+    expect(stopCalls).toEqual([])
+    expect(reinit).not.toHaveBeenCalled()
+    expect((await getSessionByClaudeId('lc-own-1'))?.stopRequest).toBeUndefined()
+  })
+
+  it('another session (a lead) and the person (no caller id) still stop it, through the same graceful stop', async () => {
+    await createSessionRecord('lc-own-2', 'task-own2', 'proj', '/tmp', { initialProcessStatus: 'running', pid: process.pid })
+    stopConn.value = daemonThatAnswers({ ok: true, stopped: true })
+    const res = await request(createApp()).post('/api/v1/sessions/lc-own-2/terminate')
+      .set('x-walnut-caller-sid', 'lead-session-9').send({})
+    expect(res.status).toBe(200)
+    expect(res.body.status).toBe('terminated')
+    expect(stopCalls).toEqual([{ command: 'stop', args: { sid: 'lc-own-2', reason: 'user', stopRequestId: expect.any(String) } }])
+
+    const reinit = vi.spyOn(sessionRunner, 'reinitialize').mockResolvedValue(undefined as never)
+    const restart = await request(createApp()).post('/api/v1/sessions/lc-own-2/restart').send({})
+    expect(restart.status).toBe(200)
+    expect(reinit).toHaveBeenCalledWith('lc-own-2')
+  })
+})
+
+describe('a session cannot stop or restart its own lead or Main', () => {
+  it('worker → its lead: 409 own_lead; lead → its worker: stopped; anyone → Main: 409 main_session', async () => {
+    const { addTask } = await import('../../../src/core/task-manager.js')
+    const { task: lead } = await addTask({ title: 'Guard lead', project: 'guard' })
+    const { task: worker } = await addTask({ title: 'Guard worker', project: 'guard', parent_task_id: lead.id })
+    const { task: main } = await addTask({ title: 'Main', project: 'Ask Walnut', walnut_agent: true, org_role: 'main' } as never)
+    await createSessionRecord('lc-lead', lead.id, 'guard', '/tmp', { initialProcessStatus: 'running', pid: process.pid })
+    await createSessionRecord('lc-worker', worker.id, 'guard', '/tmp', { initialProcessStatus: 'running', pid: process.pid })
+    await createSessionRecord('lc-main', main.id, 'Ask Walnut', '/tmp', { initialProcessStatus: 'running', pid: process.pid })
+    stopConn.value = daemonThatAnswers({ ok: true, stopped: true })
+
+    const up = await request(createApp()).post('/api/v1/sessions/lc-lead/terminate').set('x-walnut-caller-sid', 'lc-worker').send({})
+    expect(up.status).toBe(409)
+    expect(up.body.error.code).toBe('own_lead')
+    const toMain = await request(createApp()).post('/api/v1/sessions/lc-main/restart').set('x-walnut-caller-sid', 'lc-lead').send({})
+    expect(toMain.status).toBe(409)
+    expect(toMain.body.error.code).toBe('main_session')
+    expect(stopCalls).toEqual([])
+
+    const down = await request(createApp()).post('/api/v1/sessions/lc-worker/terminate').set('x-walnut-caller-sid', 'lc-lead').send({})
+    expect(down.status).toBe(200)
+    expect(stopCalls.map((c) => c.args.sid)).toEqual(['lc-worker'])
+    // The person may stop Main from the panel (no caller id).
+    const human = await request(createApp()).post('/api/v1/sessions/lc-main/terminate').send({})
+    expect(human.status).toBe(200)
+  })
+})

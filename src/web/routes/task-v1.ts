@@ -40,7 +40,7 @@ import { Router, type Request, type Response, type NextFunction } from 'express'
 import { log } from '../../logging/index.js'
 import { bus, EventNames } from '../../core/event-bus.js'
 import { CLOUD_MODE } from '../../constants.js'
-import type { Task, TaskPhase } from '../../core/types.js'
+import type { SessionEffort, Task, TaskPhase } from '../../core/types.js'
 import { isKnownEngine } from '../../core/agents/engine-registry.js'
 import { PIN_TIER_POLICY, SESSION_ENGINE_IDS, migrateFocusTier } from '../../core/types.js'
 import { isNeedsLeaderError } from '../../core/replication/needs-leader.js'
@@ -264,8 +264,10 @@ taskV1Router.post('/tasks/:id/complete', async (req: Request, res: Response, nex
   }
 })
 
-// POST /api/v1/tasks/:id/start { message?, cwd?, host?, model?, mode?, engine?,
-// expect_reply?, reply_timeout? } — start a NEW session for an EXISTING task
+// POST /api/v1/tasks/:id/start { message?, cwd?, host?, model?, mode?, effort?,
+// engine?, expect_reply?, reply_timeout?, user_request?, create_cwd?, workspace? }
+// → 202 { taskId, title, sessionId?, requestId?, started, preparing?, continued?,
+// applied? } (`applied` names the newer launch fields it honoured). — start a NEW session for an EXISTING task
 // (the session_start op). Distinct from POST /api/v1/sessions, whose body
 // requires an absolute `cwd`: this one names only a task and lets the
 // session-runner resolve cwd from the task/project chain. A live session →
@@ -292,6 +294,12 @@ taskV1Router.post('/tasks/:id/start', async (req: Request, res: Response, next: 
       sendError(res, 400, 'bad_request', 'start_attempt_id must be a UUID')
       return
     }
+    const ws = b.workspace
+    if (ws !== undefined && (!ws || typeof ws !== 'object' || Array.isArray(ws) || typeof (ws as { provider?: unknown }).provider !== 'string')) {
+      sendError(res, 400, 'bad_request', 'workspace must be { provider, inputs? }')
+      return
+    }
+    const workspace = ws as { provider: string; inputs?: unknown } | undefined
     const rawSid = req.headers['x-walnut-caller-sid']
     const callerSid = (Array.isArray(rawSid) ? rawSid[0] : rawSid ?? '').trim() || undefined
     const { startSessionForTask, SessionExistsError } = await import('../../core/sessions/task-start.js')
@@ -306,6 +314,10 @@ taskV1Router.post('/tasks/:id/start', async (req: Request, res: Response, next: 
         host: typeof b.host === 'string' ? b.host : undefined,
         model: str('model'),
         mode: str('mode'),
+        effort: str('effort') as SessionEffort | undefined,
+        userRequest: str('user_request'),
+        ...(b.create_cwd === true ? { createCwd: true } : {}),
+        ...(workspace ? { workspace } : {}),
         engine: b.engine,
         // Tri-state, NOT `=== true`: omitting the flag must reach the core as
         // `undefined` so it can apply the session-caller default (on).

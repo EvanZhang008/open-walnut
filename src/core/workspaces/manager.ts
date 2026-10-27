@@ -17,7 +17,7 @@
 import { randomBytes } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
-import type { Task } from '../types.js'
+import type { SessionEffort, Task } from '../types.js'
 import type { TaskWorkspace, WorkspacePendingStart, WorkspaceProbeSummary } from './types.js'
 import { workspaceRpc, WorkspaceError, replyError, hostLabel } from './daemon-client.js'
 import { findProvider, validateInputs, workspaceProviderCatalog, GIT_WORKTREE_ID } from './registry.js'
@@ -79,7 +79,9 @@ const realDeps: WorkspaceManagerDeps = {
       const { startSessionForTask } = await import('../sessions/task-start.js')
       await startSessionForTask({
         taskIdPrefix: task.id, message: pending.message, model: pending.model, mode: pending.mode,
-        engine: pending.engine as never, callerSid: pending.caller_sid, expectReply: pending.expect_reply,
+        ...(pending.effort ? { effort: pending.effort as SessionEffort } : {}),
+        engine: pending.engine as never, callerSid: pending.caller_sid,
+        ...(pending.user_request ? { userRequest: pending.user_request } : {}), expectReply: pending.expect_reply,
         replyTimeoutSecs: pending.reply_timeout_secs, source: pending.source ?? 'workspace',
       })
       return

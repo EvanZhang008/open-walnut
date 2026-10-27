@@ -34,10 +34,14 @@ export interface WorkspacePendingStart {
   messagePrefix?: string
   model?: string
   mode?: string
+  /** Reasoning effort (task-start only; an older Walnut replaying the start ignores it). */
+  effort?: string
   engine?: string
   /** The client-owned session id of a draft launch (quick-start only). */
   session_id?: string
   caller_sid?: string
+  /** The user's words a deferred task-start was asked with (subtask-limits.ts). */
+  user_request?: string
   expect_reply?: boolean
   reply_timeout_secs?: number
   source?: string

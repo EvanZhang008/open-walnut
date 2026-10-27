@@ -21,6 +21,7 @@ import './places.js'
 import './time.js'
 import './mcp.js'
 import './transfer.js'
+import './task-lifecycle.js'
 
 export {
   defineOp,
