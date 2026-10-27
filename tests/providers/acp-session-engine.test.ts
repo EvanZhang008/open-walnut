@@ -500,7 +500,8 @@ describe('acpStartEnv: the worker and adapter run inside this server\'s runtime 
     expect(acpStartEnv({ CODEX_HOME: '/h/.codex' }, info)).toEqual({ CODEX_HOME: '/h/.codex', WALNUT_RUNTIME_DIR: '/stage-2/runtime' });
     expect(acpStartEnv(undefined, info)).toEqual({ WALNUT_RUNTIME_DIR: '/stage-2/runtime' });
     // The daemon merges it over its own env (the stage-1 value it was started with).
-    expect(mergeAcpSpawnEnv({ WALNUT_RUNTIME_DIR: '/stage-1/runtime', PATH: '/bin' }, acpStartEnv(undefined, info)).WALNUT_RUNTIME_DIR).toBe('/stage-2/runtime');
+    const merged = mergeAcpSpawnEnv({ WALNUT_RUNTIME_DIR: '/stage-1/runtime', KEEP: 'yes' }, acpStartEnv(undefined, info));
+    expect(merged).toMatchObject({ WALNUT_RUNTIME_DIR: '/stage-2/runtime', KEEP: 'yes' });
   });
 
   it('adds nothing for a server that is not the compiled file', () => {
