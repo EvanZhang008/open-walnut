@@ -67,9 +67,9 @@ describe('destination shapes that become a file-link', () => {
   it.each([
     ['no position', `${ABS}`, ''],
     [':42', `${ABS}:42`, ' data-file-line="42"'],
-    [':10-20 range (start line wins)', `${ABS}:10-20`, ' data-file-line="10"'],
+    [':10-20 range (start and end line)', `${ABS}:10-20`, ' data-file-line="10" data-file-end-line="20"'],
     ['#L42', `${ABS}#L42`, ' data-file-line="42"'],
-    ['#L10-L20 range', `${ABS}#L10-L20`, ' data-file-line="10"'],
+    ['#L10-L20 range', `${ABS}#L10-L20`, ' data-file-line="10" data-file-end-line="20"'],
     ['#42 (GitHub short form)', `${ABS}#42`, ' data-file-line="42"'],
     [':42:7 (editor form, column dropped)', `${ABS}:42:7`, ' data-file-line="42"'],
   ])('absolute file, %s', (_name, dest, lineAttr) => {

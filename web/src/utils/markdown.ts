@@ -13,7 +13,7 @@ import {
 // HTTP edges so that "what position does `file.go#L58` name" and "is this a
 // traversal" each have exactly one definition; the module is dependency-free by
 // contract (no fs, no async, no imports) and is bundled into the browser here.
-import { hasTraversalSegment, parsePathDestination } from '../../../src/providers/path-ref-parse';
+import { hasTraversalSegment, parsePathDestination, parsePathRef, type ParsedRef } from '../../../src/providers/path-ref-parse';
 import { linkBareTaskIds, type BareTaskIdMode, type BareTaskIdRenderer } from './bare-task-ids';
 import { ensureReadableText, withReadableInk } from './html-contrast';
 import '@/styles/rich-ink.css';
@@ -633,7 +633,7 @@ export function entityRefsToMarkdownLinks(text: string): string {
 }
 
 /** DOMPurify attributes preserved for entity ref, image, and file link rendering */
-const SANITIZE_ATTRS = ['data-task-id', 'data-session-id', 'data-project', 'data-lightbox-src', 'data-file-path', 'data-file-line', 'data-rel-path', 'data-cwd', 'loading', 'target', 'rel'];
+const SANITIZE_ATTRS = ['data-task-id', 'data-session-id', 'data-project', 'data-lightbox-src', 'data-file-path', 'data-file-line', 'data-file-end-line', 'data-rel-path', 'data-cwd', 'loading', 'target', 'rel'];
 
 /**
  * True for an http(s) href that points OUTSIDE the console's own origin.
@@ -797,6 +797,12 @@ function blockCodeRanges(text: string): [number, number][] {
   let indentStart: number | null = null;
   let indentEnd = 0;
   let prevBlank = true;
+  // The previous line is paragraph text that a fence line could continue.
+  let prevPara = false;
+  // A list item is open (a lazy continuation line keeps it open; marked ends the
+  // item at a fence line, so a last-line fence there is a fence).
+  let listOpen = false;
+  let listBlank = false;
   // Content indent of the innermost open list item — an indented code block
   // inside `- item` starts at 2+4 columns, not 4.
   let listIndent = 0;
@@ -815,15 +821,24 @@ function blockCodeRanges(text: string): [number, number][] {
         fence = null;
       }
       prevBlank = blank;
+      prevPara = false;
       continue;
     }
 
     // A fence may be indented up to 3 columns past its container's content indent.
     const open = /^[ \t]*(`{3,}|~{3,})(.*)$/.exec(line);
-    if (open && indent <= listIndent + 3 && !(open[1]![0] === '`' && open[2]!.includes('`'))) {
+    // marked lets a fence interrupt a paragraph only when a newline FOLLOWS the
+    // fence line, so a closing ``` on the last line, right under prose, stays in
+    // the paragraph: there it closes a code span opened mid-line
+    // (`did u find it?```go` + `// /abs/x.go:31-34` + "```", the 2026-10-27
+    // report). Read as a fence here, the span was unprotected and the path link
+    // injected into it came out as escaped `<a class=…>` text.
+    const continuesPara = prevPara && !listOpen && lineEnd === text.length;
+    if (open && !continuesPara && indent <= listIndent + 3 && !(open[1]![0] === '`' && open[2]!.includes('`'))) {
       if (indentStart !== null) { ranges.push([indentStart, indentEnd]); indentStart = null; }
       fence = { char: open[1]![0]!, len: open[1]!.length, start: lineStart };
       prevBlank = false;
+      prevPara = false;
       continue;
     }
 
@@ -832,14 +847,21 @@ function blockCodeRanges(text: string): [number, number][] {
     const li = /^[ \t]*([-*+]|\d{1,9}[.)])([ \t]+)/.exec(line);
     if (li) listIndent = indent + li[1]!.length + li[2]!.length;
     else if (!blank && indent === 0) listIndent = 0;
+    if (li) { listOpen = true; listBlank = false; }
+    else if (blank) listBlank = listOpen;
+    else if (listBlank && indent === 0) listOpen = listBlank = false;
 
+    let codeLine = false;
     if (!blank && indent >= listIndent + 4) {
-      if (indentStart !== null) indentEnd = lineEnd;
-      else if (prevBlank) { indentStart = lineStart; indentEnd = lineEnd; }
+      if (indentStart !== null) { indentEnd = lineEnd; codeLine = true; }
+      else if (prevBlank) { indentStart = lineStart; indentEnd = lineEnd; codeLine = true; }
     } else if (!blank && indentStart !== null) {
       ranges.push([indentStart, indentEnd]);
       indentStart = null;
     }
+    // Paragraph text: not a heading, a rule or setext underline, a list marker
+    // line (marked ends the item at a fence) or code.
+    prevPara = !blank && !codeLine && !li && !/^ {0,3}(?:#{1,6}(?:\s|$)|(?:[-*_][ \t]*){3,}$|(?:=+|-+)[ \t]*$)/.test(line);
     prevBlank = blank;
   }
 
@@ -931,6 +953,42 @@ const PATH_SP_CHUNK = `(?:(?=[A-Z0-9\\u4e00-\\u9fff\\u3040-\\u30ff])${CHUNK_CH}+
 // {0,9} bounds backtracking (a 10+-word segment is prose, not a filename); lazy
 // so the shortest expansion that reaches `.ext` wins.
 const PATH_SEG_SP = `${PATH_SEG}(?: ${PATH_SP_CHUNK}){0,9}?`;
+/**
+ * Where an absolute path may START. Not after a word character or `/` (the middle
+ * of `src/providers/foo.ts`, or a URL's path), and not after a `./` or `../`
+ * token (`../lib/x.ts` is RELATIVE: read as `/lib/x.ts` it opened a file that has
+ * nothing to do with the reference; `e.g./tmp/x.md` still links). Shared by the
+ * file and directory passes, prose and code.
+ */
+const ABS_START = '(?<![\\/\\w])(?<!(?:^|\\W)\\.{1,2})';
+/** In code, also not after `word:`: `host:/etc/x.conf`, `-v /src:/app/x.conf`,
+ *  `C:/Users/x.ts` and the tail of a `PATH=a:b` list name another machine, a
+ *  container or a search path, not a file on this host. Prose keeps `Output:/x`. */
+const ABS_START_CODE = `${ABS_START}(?<!\\w:)`;
+
+/**
+ * The position a bare path may carry, linked WITH the path so a range is never
+ * cut at its first number (`object.go:31-34` used to link up to `:31` and leave
+ * `-34` outside). Exactly the suffixes parsePathRef reads, most specific first:
+ * `#L10-L20`, `#L42`/`#42`, `:10-20`, `:42:7`, `:L42`, `:42`, `(42,7)`, `(42)`.
+ * A `#` form must end there: `guide.md#2-setup` is a heading anchor, not line 2.
+ * One capture group; positionAttrs turns it into anchor attributes.
+ */
+const POS_SUFFIX_SRC = '(#L\\d+[-\\u2013]L?\\d+(?![\\w-])|#L?\\d+(?![\\w-])|:\\d+[-\\u2013]\\d+|:\\d+:\\d+|:L\\d+|:\\d+|\\(\\d+,[ \\t]*\\d+\\)|\\(\\d+\\))?';
+
+/** `data-file-line` (+ `data-file-end-line` for a range) for a parsed position.
+ *  A column (`:42:7`, `(42,7)`) lands on its line: the viewer has no column. */
+function lineAttrs(ref: Pick<ParsedRef, 'line' | 'endLine'>): string {
+  if (!ref.line) return '';
+  const end = ref.endLine && ref.endLine > ref.line ? ` data-file-end-line="${ref.endLine}"` : '';
+  return ` data-file-line="${ref.line}"${end}`;
+}
+
+/** Anchor attributes for a POS_SUFFIX_SRC capture, read with the path parser. */
+function positionAttrs(suffix: string | undefined): string {
+  return suffix ? lineAttrs(parsePathRef(`x${suffix}`)) : '';
+}
+
 /** Absolute FILE path source, spaces allowed: /dir/My Dir/H1 2026 File.md(:line).
  * The leaf is an ORDERED alternation `(?:PATH_SEG|PATH_SEG_SP)`: the space-free
  * alternative is exhausted (including greedy-shrink) BEFORE any space-chunk
@@ -940,7 +998,9 @@ const PATH_SEG_SP = `${PATH_SEG}(?: ${PATH_SP_CHUNK}){0,9}?`;
  * before shrinking the first word — running the match into the following prose.
  * Build a fresh `new RegExp(ABS_FILE_RE_SRC, 'g')` per use — shared global regexes
  * carry lastIndex state across callers. */
-const ABS_FILE_RE_SRC = `(?<![\\/\\w])(~?\\/(?:${PATH_SEG_SP}\\/)+(?:${PATH_SEG}|${PATH_SEG_SP})\\.[\\w]+)(?::(\\d+))?`;
+const ABS_FILE_BODY_SRC = `(~?\\/(?:${PATH_SEG_SP}\\/)+(?:${PATH_SEG}|${PATH_SEG_SP})\\.[\\w]+)${POS_SUFFIX_SRC}`;
+const ABS_FILE_RE_SRC = `${ABS_START}${ABS_FILE_BODY_SRC}`;
+const ABS_FILE_CODE_RE_SRC = `${ABS_START_CODE}${ABS_FILE_BODY_SRC}`;
 
 // ── Markdown links whose destination is a LOCAL path ──
 //
@@ -1038,7 +1098,7 @@ function fileLinkAttrsForDestination(rawDest: string, cwd?: string): string | nu
   if (!p || p.includes('?') || p.includes('#') || DEST_FORBIDDEN_RE.test(p)) return null;
   if (/^[a-z][a-z0-9+.-]*:/i.test(p.split('/')[0] ?? '')) return null;
   if (hasTraversalSegment(p)) return null;
-  const lineAttr = ref.line ? ` data-file-line="${ref.line}"` : '';
+  const lineAttr = lineAttrs(ref);
   const segs = p.replace(/^~?\//, '').replace(/\/+$/, '').split('/');
   const leaf = segs[segs.length - 1] ?? '';
   const hasExt = /^[^.].*\.\w+$|^\.\w+$/.test(leaf);
@@ -1124,23 +1184,20 @@ export function filePathsToHtml(text: string, sessionCwd?: string): string {
   while ((m = absRe.exec(text)) !== null) {
     const fullMatch = m[0];
     const filePath = m[1];
-    const lineNum = m[2];
 
     if (shouldSkip(m.index, fullMatch)) continue;
 
     const ext = filePath.split('.').pop()?.toLowerCase() ?? '';
     if (IMAGE_EXTENSIONS.has(ext)) continue;
 
-    const lineAttr = lineNum ? ` data-file-line="${lineNum}"` : '';
-    const display = lineNum ? `${filePath}:${lineNum}` : filePath;
-    const replacement = `<a class="file-link" data-file-path="${filePath}"${lineAttr} href="#">${display}</a>`;
+    const replacement = `<a class="file-link" data-file-path="${filePath}"${positionAttrs(m[2])} href="#">${fullMatch}</a>`;
     replacements.push({ start: m.index, end: m.index + fullMatch.length, replacement });
   }
 
   // Pass 1b: Absolute DIRECTORY paths (no file extension) — /dir/sub/leaf.
   // Requires ≥3 segments to avoid matching short prose-y roots like "/usr/bin".
   // Skips anything already linkified by Pass 1 (overlap check) and URLs/fences.
-  const absDirRe = /(?<![\/\w])(~?\/(?:[\w@.+-]+\/){2,}[\w@.+-]+)\/?(?=[\s,;)"'`\]]|$)/g;
+  const absDirRe = new RegExp(`${ABS_START}(~?\\/(?:[\\w@.+-]+\\/){2,}[\\w@.+-]+)\\/?(?=[\\s,;)"'\`\\]]|$)`, 'g');
   while ((m = absDirRe.exec(text)) !== null) {
     const dirPath = m[1];
     if (shouldSkip(m.index, dirPath)) continue;
@@ -1157,19 +1214,19 @@ export function filePathsToHtml(text: string, sessionCwd?: string): string {
   // Pass 2: Relative paths with extension — dir/file.ext or ./file.ext:42
   // Only linkify if sessionCwd is available (needed to resolve absolute path)
   if (sessionCwd) {
-    const relRe = /(?:^|[\s"'`(])((\.\/|[\w@][\w@.+-]*\/)+[\w@.+-]+\.(\w+))(?::(\d+))?/gm;
+    const relRe = new RegExp(`(?:^|[\\s"'\`(])((\\.\\/|[\\w@][\\w@.+-]*\\/)+[\\w@.+-]+\\.(\\w+))${POS_SUFFIX_SRC}`, 'gm');
     while ((m = relRe.exec(text)) !== null) {
-      // m[1] = the path, m[3] = extension, m[4] = line number
+      // m[1] = the path, m[3] = extension, m[4] = position suffix
       const pathPart = m[1];
       const ext = m[3]?.toLowerCase();
-      const lineNum = m[4];
+      const suffix = m[4] ?? '';
 
       if (!ext || IMAGE_EXTENSIONS.has(ext)) continue;
       if (!CODE_EXTENSIONS.has(ext)) continue;
 
       // Calculate the actual match position (m[1] may start after whitespace)
       const pathStart = m.index + m[0].indexOf(pathPart);
-      const fullEnd = lineNum ? pathStart + pathPart.length + 1 + lineNum.length : pathStart + pathPart.length;
+      const fullEnd = pathStart + pathPart.length + suffix.length;
 
       if (shouldSkip(pathStart, pathPart)) continue;
 
@@ -1180,9 +1237,7 @@ export function filePathsToHtml(text: string, sessionCwd?: string): string {
       // Carry rel+cwd instead of pre-joining: the path may live in a sibling
       // package, so resolution (cwd → walk up → repo root) happens on click.
       const relClean = pathPart.replace(/^\.\//, '');
-      const lineAttr = lineNum ? ` data-file-line="${lineNum}"` : '';
-      const display = lineNum ? `${pathPart}:${lineNum}` : pathPart;
-      const replacement = `<a class="file-link" data-rel-path="${relClean}" data-cwd="${sessionCwd}"${lineAttr} href="#">${display}</a>`;
+      const replacement = `<a class="file-link" data-rel-path="${relClean}" data-cwd="${sessionCwd}"${positionAttrs(suffix)} href="#">${pathPart}${suffix}</a>`;
       replacements.push({ start: pathStart, end: fullEnd, replacement });
     }
 
@@ -1260,15 +1315,13 @@ function linkifyPathsInCode(html: string, sessionCwd?: string): string {
     const inUrl = (idx: number) => urlRanges.some(([s, e]) => idx >= s && idx < e);
 
     // Absolute paths: /dir/file.ext(:line) — space-in-segment rules per ABS_FILE_RE_SRC
-    const absRe = new RegExp(ABS_FILE_RE_SRC, 'g');
-    let out = inner.replace(absRe, (m, filePath: string, lineNum: string | undefined, offset: number) => {
+    const absRe = new RegExp(ABS_FILE_CODE_RE_SRC, 'g');
+    let out = inner.replace(absRe, (m, filePath: string, suffix: string | undefined, offset: number) => {
       if (inUrl(offset)) return m;
       const ext = filePath.split('.').pop()?.toLowerCase() ?? '';
       if (IMAGE_EXTENSIONS.has(ext)) return m;
       changed = true;
-      const lineAttr = lineNum ? ` data-file-line="${lineNum}"` : '';
-      const display = lineNum ? `${filePath}:${lineNum}` : filePath;
-      return `<a class="file-link" data-file-path="${filePath}"${lineAttr} href="#">${display}</a>`;
+      return `<a class="file-link" data-file-path="${filePath}"${positionAttrs(suffix)} href="#">${m}</a>`;
     });
 
     // Anchors created by earlier passes contain the path in BOTH the attr and the
@@ -1289,7 +1342,7 @@ function linkifyPathsInCode(html: string, sessionCwd?: string): string {
       while ((um = urlRe.exec(out)) !== null) urlR.push([um.index, um.index + um[0].length]);
       const aR = anchorRanges(out);
       const inU = (idx: number) => urlR.some(([s, e]) => idx >= s && idx < e) || aR.some(([s, e]) => idx >= s && idx < e);
-      const absDirRe = /(?<![\/\w])(~?\/(?:[\w@.+-]+\/){2,}[\w@.+-]+)\/?(?=[\s,;)"'`\]<]|$)/g;
+      const absDirRe = new RegExp(`${ABS_START_CODE}(~?\\/(?:[\\w@.+-]+\\/){2,}[\\w@.+-]+)\\/?(?=[\\s,;)"'\`\\]<]|$)`, 'g');
       out = out.replace(absDirRe, (m, dirPath: string, offset: number) => {
         if (inU(offset)) return m;
         if (m.includes('file-link')) return m;
@@ -1309,8 +1362,8 @@ function linkifyPathsInCode(html: string, sessionCwd?: string): string {
       const aR2 = anchorRanges(out);
       const inUrl2 = (idx: number) => urlRanges2.some(([s, e]) => idx >= s && idx < e) || aR2.some(([s, e]) => idx >= s && idx < e);
 
-      const relRe = /(^|[\s"'`(>])((?:\.\/|[\w@][\w@.+-]*\/)+[\w@.+-]+\.(\w+))(?::(\d+))?/g;
-      out = out.replace(relRe, (m, lead: string, pathPart: string, ext: string, lineNum: string | undefined, offset: number) => {
+      const relRe = new RegExp(`(^|[\\s"'\`(>])((?:\\.\\/|[\\w@][\\w@.+-]*\\/)+[\\w@.+-]+\\.(\\w+))${POS_SUFFIX_SRC}`, 'g');
+      out = out.replace(relRe, (m, lead: string, pathPart: string, ext: string, suffix: string | undefined, offset: number) => {
         if (inUrl2(offset)) return m;
         const e = ext?.toLowerCase();
         if (!e || IMAGE_EXTENSIONS.has(e) || !CODE_EXTENSIONS.has(e)) return m;
@@ -1319,9 +1372,7 @@ function linkifyPathsInCode(html: string, sessionCwd?: string): string {
         changed = true;
         // Carry rel+cwd; resolution (sibling pkg / repo root) happens on click.
         const relClean = pathPart.replace(/^\.\//, '');
-        const lineAttr = lineNum ? ` data-file-line="${lineNum}"` : '';
-        const display = lineNum ? `${pathPart}:${lineNum}` : pathPart;
-        return `${lead}<a class="file-link" data-rel-path="${relClean}" data-cwd="${sessionCwd}"${lineAttr} href="#">${display}</a>`;
+        return `${lead}<a class="file-link" data-rel-path="${relClean}" data-cwd="${sessionCwd}"${positionAttrs(suffix)} href="#">${pathPart}${suffix ?? ''}</a>`;
       });
     }
 

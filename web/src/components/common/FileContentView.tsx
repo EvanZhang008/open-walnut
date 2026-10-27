@@ -80,6 +80,8 @@ interface FileContentViewProps {
   /** The keyword the jump landed on (reference panel) — flashed at `line` so
    *  the eye finds the term, not just the row. */
   lineTerm?: string;
+  /** Last line of a range jump (`x.go:31-34`): `line`..`lineEnd` is highlighted. */
+  lineEnd?: number;
   host?: string;
   /**
    * Session whose agent may be writing this file. Only Live Edit uses it: a
@@ -126,12 +128,13 @@ interface FileContentViewProps {
 
 /** Build line-numbered HTML from raw file content. Lines get Prism syntax
  *  coloring when the language is known (highlightLines); plain escape otherwise. */
-function buildLineNumberedHtml(content: string, path: string, highlightLine?: number): string {
+function buildLineNumberedHtml(content: string, path: string, highlightLine?: number, highlightEnd?: number): string {
   const lines = content.split('\n');
   const colored = highlightLines(content, path);
   const rows = lines.map((lineText, i) => {
     const lineNum = i + 1;
-    const isHighlighted = lineNum === highlightLine;
+    const isHighlighted = highlightLine !== undefined && (lineNum === highlightLine
+      || (highlightEnd !== undefined && lineNum > highlightLine && lineNum <= highlightEnd));
     const html = colored ? colored[i]! : lineText
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')
@@ -196,7 +199,7 @@ function findScroller(start: HTMLElement | null): HTMLElement | null {
 }
 
 export function FileContentView({
-  path: filePath, line, lineTerm, host, sessionId, hidePopout, reloadToken = 0,
+  path: filePath, line, lineTerm, lineEnd, host, sessionId, hidePopout, reloadToken = 0,
   onSelectCode, onSaved, onSymbolLookup, onOpenPath,
 }: FileContentViewProps) {
   const [data, setData] = useState<FileContentResponse | null>(null);
@@ -932,8 +935,8 @@ export function FileContentView({
   // CodeMirror highlights itself — so skip the (quadratic-ish) work for them.
   const lineNumberedHtml = useMemo(() => {
     if (!data?.content || editing) return '';
-    return buildLineNumberedHtml(data.content, filePath, line);
-  }, [data, filePath, line, editing]);
+    return buildLineNumberedHtml(data.content, filePath, line, lineEnd);
+  }, [data, filePath, line, lineEnd, editing]);
 
   /**
    * Everything that must become true once bytes are on disk. Shared by the
@@ -1845,8 +1848,8 @@ export function FileContentView({
   // after the final remount is what makes the landing flash actually visible.
   useEffect(() => {
     if (!line || !editingSource) return;
-    editorRef.current?.scrollToLine?.(line, lineTerm);
-  }, [line, lineTerm, editingSource, data, baseHash]);
+    editorRef.current?.scrollToLine?.(line, lineTerm, lineEnd);
+  }, [line, lineTerm, lineEnd, editingSource, data, baseHash]);
 
   const [pathCopied, setPathCopied] = useState(false);
   const handleCopyPath = useCallback(() => {
@@ -2461,6 +2464,7 @@ export function FileContentView({
             onDocChange={handleDocChange}
             onSave={() => { void handleSave(); }}
             initialLine={line}
+            initialEndLine={lineEnd}
             initialFlashTerm={lineTerm}
             onSelectText={onSelectCode ? setSelection : undefined}
             onSymbolClick={onSymbolLookup ? handleCmSymbolClick : undefined}

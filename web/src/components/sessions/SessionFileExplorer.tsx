@@ -62,6 +62,8 @@ interface SessionFileExplorerProps {
   /** Keyword to flash at `initialLine` (a reference jump from the Changed tab
    *  lands on the symbol, not just the row). */
   initialTerm?: string;
+  /** Last line of a range deep link (`x.go:31-34`): lines initialLine..initialEndLine are highlighted. */
+  initialEndLine?: number;
   /** Bumped by every open of a path (a chat path click, a question's file): the
    *  same path opened again lands on it even after the reader browsed to another
    *  file in the tree, which a reset keyed on `cwd` alone never noticed
@@ -168,7 +170,7 @@ function lastSegment(p: string): string {
   return trimmed.slice(trimmed.lastIndexOf('/') + 1) || trimmed;
 }
 
-export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initialTerm, openNonce, memoryScope, onSelectCode, barRightSlot }: SessionFileExplorerProps) {
+export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initialEndLine, initialTerm, openNonce, memoryScope, onSelectCode, barRightSlot }: SessionFileExplorerProps) {
   const [root, setRoot] = useState<string>(cwd || '~');
   const [showHidden, setShowHidden] = useState(false);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -1537,6 +1539,7 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
               sessionId={sessionId}
               // Reference jumps ride refLine; the mount-time deep link keeps initialLine.
               line={refLine?.file === selectedFile ? refLine.line : (selectedFile === cwd ? initialLine : undefined)}
+              lineEnd={refLine?.file === selectedFile ? undefined : (selectedFile === cwd ? initialEndLine : undefined)}
               lineTerm={refLine?.file === selectedFile ? refLine.term : (selectedFile === cwd ? initialTerm : undefined)}
               reloadToken={reloadToken}
               onSelectCode={onSelectCode}

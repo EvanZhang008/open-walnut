@@ -64,6 +64,17 @@ The fix keeps marked owning its grammar. Do not move either half:
 
 Acceptance gate: `tests/web/markdown/link-to-local-path.test.ts` (the report verbatim, every declined shape, ReDoS tripwires for the fence) and `tests/e2e/browser/link-to-local-path.spec.ts` (the seeded `pw-vscode-session` turn, clicked in Chromium and WebKit, opens the file at the line with no page load).
 
+## Bare paths in code and prose: what counts, and line ranges
+
+`linkifyPathsInCode` links paths inside `<code>` (fenced, indented and inline) after marked ran; `filePathsToHtml` does prose. One rule for both, pinned by `tests/web/markdown/code-block-paths.test.ts` (2026-10-27 report: `// /…/object.go:31-34` in a Go block, and `:237-239` in prose linked only up to `:237`):
+
+- **Absolute** (`/a/b.ext`, `~/a/b.ext`; a directory needs 3+ segments), starting at a token boundary (`ABS_START`): not after a word character or `/` (mid-path, a URL's path), not after a `./` or `../` token (a relative path; read as absolute it opened `/lib/x.ts`). In code also not after `word:` (`ABS_START_CODE`: `host:/x`, a `-v src:/dst` volume, `C:/x`, a `PATH=a:b` tail); prose keeps `Output:/tmp/x.md`.
+- Never inside an `https?://` URL; `file:///…` and `s3://…` fail the boundary. Escaped slashes never match, so a regex literal stays text.
+- **Relative** needs the session cwd, a code extension, and start of text, whitespace, `(` or a backtick before it, so a quoted import specifier (`'./a/b.ts'`, `&#39;` once escaped) stays text.
+- **The position is part of the link** (`POS_SUFFIX_SRC`), in exactly the forms `parsePathRef` reads: `:42`, `:42:7`, `:L42`, `:10-20`, `#L42`, `#42`, `#L10-L20`, `(42)`, `(42,7)`. A `#` form must end there (`guide.md#2-setup` is a heading). A range adds `data-file-end-line`; the click passes it as `onFileOpen`'s 4th argument and the viewer flashes (CodeMirror) or highlights (read-only rows) every line of it. `(a,b)` is line and column, so it lands on line a.
+
+**`codeRegions` must agree with marked about fences.** marked lets a fence line interrupt a paragraph only when a newline follows it, so a closing ``` on the LAST line right under prose closes a code span opened mid-line (`did u find it?```go` / path / "```"). Read as a fence, the span was unprotected and the pre-pass anchor came out as escaped `<a class=…>` text. Inside a list item marked ends the item at that fence, so there it IS a fence (`listOpen`).
+
 ## Bare loopback addresses (`bareLoopbackUrlExtension`)
 
 Dev servers print `localhost:5173` / `0.0.0.0:8080` / `127.0.0.1:8000/x` without a scheme, and GFM only autolinks `http(s)://` and `www.`. The inline extension links those, registered on BOTH instances. It requires a port and a word start: the previous token's last char must not be one of `\w : / . @ - [`, so an ssh `-L 8080:localhost:8080` spec, `ws://localhost:1`, `user@localhost:22` stay text; `localhost:8080:host:80` is refused by a lookahead. It returns a plain `link` token, so the renderer adds nothing Walnut-specific: which links open in the session's Web view is decided at click time (see `walnut-web-frontend`, "Service links"). Tests: `tests/web/markdown/bare-loopback-url.test.ts`.

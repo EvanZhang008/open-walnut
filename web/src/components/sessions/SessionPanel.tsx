@@ -1124,7 +1124,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
   // File-path click target for the Files split view. When set, the explorer roots
   // at the clicked file (backend lists its parent + preselects it, VS Code style)
   // instead of the session cwd. Cleared when the split closes / view switches.
-  const [fileViewTarget, setFileViewTarget] = useState<{ path: string; line?: number; term?: string; nonce: number } | null>(null);
+  const [fileViewTarget, setFileViewTarget] = useState<{ path: string; line?: number; endLine?: number; term?: string; nonce: number } | null>(null);
   // Toggle a split view: same view → close (exit fullscreen); other/none → open it.
   //
   // Exception kept: Files opened via a file-path click (fileViewTarget set) — the
@@ -1195,14 +1195,15 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
   // EVERY file type goes here, vault notes included: a click must never navigate
   // the app away from the session (that jump was reverted 2026-08-09). Notes get
   // an explicit "Open in Notes" button in the preview toolbar / right-click menu.
-  const handleFileOpen = useCallback((path: string, line?: number, term?: string) => {
+  // `endLine`: the last line of a range reference (`x.go:31-34`), flashed with `line`.
+  const handleFileOpen = useCallback((path: string, line?: number, term?: string, endLine?: number) => {
     traceInteraction('view-open:files-from-path', { sessionId });
     // A nested column has no Files split: the file opens in a tab of its own (the
     // preview's own "Open in new tab"), so the Board and this chat stay put.
-    if (inset) { openPopout('file', { path, host: session?.host, line }); return; }
+    if (inset) { openPopout('file', { path, host: session?.host, line, endLine }); return; }
     // A new nonce every time: the same path again still lands on it (the explorer
     // resets on it) after the reader browsed to another file in the tree.
-    setFileViewTarget((prev) => ({ path, line, term, nonce: (prev?.nonce ?? 0) + 1 }));
+    setFileViewTarget((prev) => ({ path, line, endLine, term, nonce: (prev?.nonce ?? 0) + 1 }));
     setActiveView('files');
     enterFullscreen();
   }, [enterFullscreen, inset, session?.host]);
@@ -2664,6 +2665,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
                         host={session?.host}
                         sessionId={sessionId}
                         initialLine={fileViewTarget?.line}
+                        initialEndLine={fileViewTarget?.endLine}
                         initialTerm={fileViewTarget?.term}
                         openNonce={fileViewTarget?.nonce}
                         // ONE memory key for both ways in, and one PER SESSION. `cwd`

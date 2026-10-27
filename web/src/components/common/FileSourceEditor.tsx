@@ -77,7 +77,8 @@ export interface FileSourceEditorHandle {
   /** Scroll a 1-based line into view (centered) — reference-jump target.
    *  `term` flashes the landed-on keyword so the eye finds it instantly.
    *  Optional: the WYSIWYG editor shares this handle type and has no lines. */
-  scrollToLine?: (line: number, term?: string) => void;
+  /** `endLine`: flash `line`..`endLine` (a range reference) instead of one line. */
+  scrollToLine?: (line: number, term?: string, endLine?: number) => void;
   /** In-file search (the shared FileSearchBar drives these; CM surface only). */
   searchUpdate?: (query: string, caseSensitive: boolean) => CmSearchStatus;
   searchNav?: (dir: 1 | -1) => CmSearchStatus;
@@ -122,6 +123,8 @@ interface FileSourceEditorProps {
    *  Lives HERE, not only on the imperative handle: a cross-file jump mounts a
    *  fresh editor, and a flash dispatched at any earlier instance dies with it. */
   initialFlashTerm?: string;
+  /** Last line of a range deep link: the landing flash covers initialLine..initialEndLine. */
+  initialEndLine?: number;
   /**
    * Mouse selection reporting for the quote-to-ask pill. Called with the
    * selection on mouseup (line resolved from the CodeMirror doc, which the
@@ -169,7 +172,7 @@ const editorTheme = EditorView.theme({
 });
 
 export const FileSourceEditor = forwardRef<FileSourceEditorHandle, FileSourceEditorProps>(
-  function FileSourceEditor({ initialValue, baseValue, path, onDirtyChange, onDocChange, onSave, initialLine, initialFlashTerm, onSelectText, onSymbolClick }, ref) {
+  function FileSourceEditor({ initialValue, baseValue, path, onDirtyChange, onDocChange, onSave, initialLine, initialEndLine, initialFlashTerm, onSelectText, onSymbolClick }, ref) {
     const hostRef = useRef<HTMLDivElement>(null);
     const viewRef = useRef<EditorView | null>(null);
     // Latest-callback refs: the listeners live inside a once-created view and must
@@ -223,13 +226,13 @@ export const FileSourceEditor = forwardRef<FileSourceEditorHandle, FileSourceEdi
           selection: { anchor: Math.min(sel.anchor, text.length), head: Math.min(sel.head, text.length) },
         });
       },
-      scrollToLine: (line: number, term?: string) => {
+      scrollToLine: (line: number, term?: string, endLine?: number) => {
         const view = viewRef.current;
         if (!view || line < 1 || line > view.state.doc.lines) return;
         view.dispatch({
           effects: EditorView.scrollIntoView(view.state.doc.line(line).from, { y: 'center' }),
         });
-        cmFlashTerm(view, line, term);
+        cmFlashTerm(view, line, term, endLine);
       },
       searchUpdate: (query, caseSensitive) =>
         viewRef.current ? cmUpdateSearch(viewRef.current, query, caseSensitive) : { count: 0, index: 0 },
@@ -348,7 +351,7 @@ export const FileSourceEditor = forwardRef<FileSourceEditorHandle, FileSourceEdi
             view.dispatch({ effects: EditorView.scrollIntoView(pos, { y: 'center' }) });
             // Landing cue for reference jumps: flash the jumped-to term (or
             // line). Runs on THIS instance, so a remount can't strand it.
-            cmFlashTerm(view, initialLine, initialFlashTerm);
+            cmFlashTerm(view, initialLine, initialFlashTerm, initialEndLine);
           }
         });
       }

@@ -419,6 +419,26 @@ await fs.writeFile(
         subtasks: [],
       },
       {
+        // Paths in code blocks and line ranges (code-block-paths.spec.ts).
+        id: 'pw-task-codepath',
+        title: 'Code block paths fixture task',
+        status: 'in_progress',
+        phase: 'IN_PROGRESS',
+        priority: 'none',
+        project: 'Walnut',
+        source: 'local',
+        session_ids: ['pw-codepath-session'],
+        active_session_ids: [],
+        session_id: 'pw-codepath-session',
+        session_status: { process_status: 'stopped', mode: 'bypass' },
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        description: '',
+        summary: '',
+        note: '',
+        subtasks: [],
+      },
+      {
         // Real id shape (`<base36>-<hex4>`), which only a real task id has: the
         // pill pass links an id only when the task store knows it.
         id: 'mpwidref-7c2e',
@@ -2145,6 +2165,53 @@ await fs.mkdir(idrefFixtureRoot, { recursive: true })
   )
 }
 
+// Paths in code blocks fixture (code-block-paths.spec.ts), the 2026-10-27
+// report with neutral names: a Go block whose first line is a path comment with
+// a line range, the user's own message quoting it (``` opened mid-line, closed
+// on the last line), and a prose path with a range. Every target line carries a
+// marker, so the spec can tell which lines the viewer landed on.
+const codepathFixtureRoot = path.join(tmpBase, 'projects', 'codepath-fixture')
+const codepathObjectGo = path.join(codepathFixtureRoot, 'remotessh', 'acme', 'src', 'marina', 'pkg', 'remote', 'object.go')
+const codepathValidationGo = path.join(codepathFixtureRoot, 'k8s-src', 'objectmeta_validation.go')
+{
+  const numbered = (n: number, pkg: string) =>
+    [`package ${pkg}`, ...Array.from({ length: n - 1 }, (_, i) => `// line ${i + 2} LINE_${i + 2}_MARKER`)].join('\n') + '\n'
+  await fs.mkdir(path.dirname(codepathObjectGo), { recursive: true })
+  await fs.writeFile(codepathObjectGo, numbered(60, 'remote'))
+  await fs.mkdir(path.dirname(codepathValidationGo), { recursive: true })
+  await fs.writeFile(codepathValidationGo, numbered(260, 'validation'))
+  const encodedCwd = codepathFixtureRoot.replace(/[^a-zA-Z0-9]/g, '-')
+  const jsonlDir = path.join(tmpBase, '.claude', 'projects', encodedCwd)
+  await fs.mkdir(jsonlDir, { recursive: true })
+  const line = (ts: number, role: 'user' | 'assistant', text: string) => JSON.stringify({
+    type: role,
+    sessionId: 'pw-codepath-session',
+    timestamp: new Date(ts).toISOString(),
+    message: role === 'user' ? { role, content: text } : { role, content: [{ type: 'text', text }] },
+  })
+  const reply = [
+    'The key is built here:',
+    '',
+    '```go',
+    `// ${codepathObjectGo}:31-34`,
+    'func (o *Object) Key() string {',
+    '\treturn o.Namespace + "/" + o.Name',
+    '}',
+    '```',
+    '',
+    `And the name check is ${codepathValidationGo}:237-239 in the copy.`,
+  ].join('\n')
+  await fs.writeFile(
+    path.join(jsonlDir, 'pw-codepath-session.jsonl'),
+    [
+      line(sessionFixtureNow - 25_000, 'user', 'Where is the object key built?'),
+      line(sessionFixtureNow - 22_000, 'assistant', reply),
+      line(sessionFixtureNow - 20_000, 'user', `did u find it?\`\`\`go\n// ${codepathObjectGo}:31-34\n\`\`\``),
+      '',
+    ].join('\n'),
+  )
+}
+
 // Real Claude Code JSONL for pw-vscode-session, so its chat renders an assistant
 // message containing that absolute path — the clickable `a.file-link` the
 // file-view-history spec needs. HOME is the fixture tmpBase (set at the top), so
@@ -3153,6 +3220,19 @@ await fs.writeFile(
         messageCount: 2,
         cwd: serviceFixtureRoot,
         title: 'Service preview fixture session',
+      },
+      {
+        claudeSessionId: 'pw-codepath-session',
+        taskId: 'pw-task-codepath',
+        project: 'Walnut',
+        process_status: 'stopped',
+        mode: 'bypass',
+        last_status_change: new Date().toISOString(),
+        startedAt: new Date(sessionFixtureNow - 30_000).toISOString(),
+        lastActiveAt: new Date(sessionFixtureNow - 20_000).toISOString(),
+        messageCount: 3,
+        cwd: codepathFixtureRoot,
+        title: 'Code block paths fixture session',
       },
       ...(['pw-idref-session', 'pw-idref-target-session'] as const).map((sid) => ({
         claudeSessionId: sid,

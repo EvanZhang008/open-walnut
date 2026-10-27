@@ -125,14 +125,18 @@ export function cmFlashExtension() {
 
 /**
  * Briefly highlight `term` on a 1-based line (the whole line when the term
- * isn't found there) — the "you landed HERE" cue after a reference jump.
+ * isn't found there) — the "you landed HERE" cue after a reference jump. With
+ * `endLine` (a range reference, `x.go:31-34`) the cue covers every line of the
+ * range, clamped to the document.
  */
-export function cmFlashTerm(view: EditorView, lineNum: number, term?: string): void {
+export function cmFlashTerm(view: EditorView, lineNum: number, term?: string, endLine?: number): void {
   if (lineNum < 1 || lineNum > view.state.doc.lines) return;
   const lineObj = view.state.doc.line(lineNum);
   let from = lineObj.from;
   let to = lineObj.to;
-  if (term) {
+  if (endLine && endLine > lineNum) {
+    to = view.state.doc.line(Math.min(endLine, view.state.doc.lines)).to;
+  } else if (term) {
     const idx = lineObj.text.indexOf(term);
     if (idx >= 0) { from = lineObj.from + idx; to = from + term.length; }
   }

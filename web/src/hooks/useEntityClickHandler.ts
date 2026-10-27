@@ -9,7 +9,8 @@
  *  - task-link click → onTaskClick(taskId) → select + scroll + open session (no detail)
  *  - session-link click → onSessionClick(sessionId) → open session panel
  *  - project-link click → navigate('/tasks') (no per-project route exists yet)
- *  - file-link click → onFileOpen(path, line?) → open FileViewer overlay
+ *  - file-link click → onFileOpen(path, line?, undefined, endLine?) → open FileViewer overlay
+ *    (a range reference such as `x.go:31-34` carries data-file-end-line)
  *  - Fallback: navigate to /tasks/:id or /sessions?id=:id when callbacks are absent
  */
 import { useCallback } from 'react';
@@ -19,7 +20,9 @@ import { resolvePath } from '@/api/files';
 export function useEntityClickHandler(
   onTaskClick?: (taskId: string) => void,
   onSessionClick?: (sessionId: string) => void,
-  onFileOpen?: (path: string, line?: number) => void,
+  /** The third parameter is the session panel's jump term, never set here; the
+   *  fourth is the last line of a range reference. */
+  onFileOpen?: (path: string, line?: number, term?: undefined, endLine?: number) => void,
   /** Host for resolving relative paths (remote sessions). Local when omitted. */
   fileHost?: string,
   /** Session whose transcript should inform path resolution. Strongly wanted:
@@ -73,11 +76,13 @@ export function useEntityClickHandler(
       if (!onFileOpen) return;
       const fileLine = fileAnchor.dataset.fileLine;
       const line = fileLine ? parseInt(fileLine, 10) : undefined;
+      const fileEndLine = fileAnchor.dataset.fileEndLine;
+      const endLine = line && fileEndLine ? parseInt(fileEndLine, 10) : undefined;
       const filePath = fileAnchor.dataset.filePath;
       if (filePath) {
         // Absolute path — open directly. The Files panel self-heals if it turns
         // out not to exist (a stale or wrong-prefix path), so no round trip here.
-        onFileOpen(filePath, line);
+        onFileOpen(filePath, line, undefined, endLine);
         return;
       }
       // Relative path — the host resolves it (transcript, ancestor walk, git
@@ -91,8 +96,8 @@ export function useEntityClickHandler(
           // parsed it); otherwise take whatever position the reference carried,
           // which the resolver reports even for shapes markdown doesn't linkify
           // (`#L42`, `(42,7)`, `, line 42`).
-          .then((r) => onFileOpen(r.path, line ?? r.line))
-          .catch(() => onFileOpen(`${cwd.replace(/\/$/, '')}/${rel.replace(/^\.\//, '')}`, line));
+          .then((r) => onFileOpen(r.path, line ?? r.line, undefined, line ? endLine : r.endLine))
+          .catch(() => onFileOpen(`${cwd.replace(/\/$/, '')}/${rel.replace(/^\.\//, '')}`, line, undefined, endLine));
       }
     }
   }, [onTaskClick, onSessionClick, onFileOpen, fileHost, fileSessionId, navigate]);
