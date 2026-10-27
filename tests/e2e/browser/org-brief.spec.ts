@@ -14,6 +14,8 @@
  *     with no new turn of the lead;
  *  3. Fold keeps the first lines; the pick and the fold survive a reload;
  *  4. the lead rewrites its Brief while the page is open: the new letter shows with no reload;
+ *     a needs-you line with no task is flagged under it, and a rewrite that keeps the rules
+ *     clears the flag;
  *  5. a node whose contact keeps no Brief (one team, no lead) has no switch.
  * The fixture is shared, so this file makes its own projects and removes what it made.
  */
@@ -170,6 +172,17 @@ test('a rewrite reaches an open Brief at once, with no reload', async ({ page, r
   await expect(body).toContainText('pick the parser\'s output format', { timeout: 60_000 })
   await expect(body).not.toContainText('the parser is half done')
   await expect(body.locator(`a.task-link[data-task-id="${ids.parser}"]`)).toHaveAttribute('data-user-state', 'needs')
+  // Its needs-you line names no task: Walnut stores the Brief with that issue and says so (brief-rules.ts).
+  const issues = detail.getByTestId('org-brief-issues')
+  await expect(issues).toContainText('1 line breaks the Brief rules (no task)')
+  await expect(issues).toHaveAttribute('title', /pick the parser's output format/)
+  // A rewrite that keeps the rules clears it (after the triage cooldown, so its turn is reported).
+  await page.waitForTimeout(6_000)
+  const fixed = `- <task-ref id="${ids.parser}" label="Parser"/>: pick the parser's output format, JSON or CSV.`
+  const again = await request.post(`/api/v1/sessions/${sid}/messages`, { data: { text: `snapshot-clean-turn:Fixed.\nbrief: ${fixed}` } })
+  expect(again.status(), await again.text()).toBeLessThan(300)
+  await expect(body).toContainText('JSON or CSV', { timeout: 60_000 })
+  await expect(issues).toHaveCount(0)
 })
 
 test('a node whose contact keeps no Brief has no switch', async ({ page }) => {

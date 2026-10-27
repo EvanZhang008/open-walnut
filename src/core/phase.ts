@@ -226,16 +226,16 @@ export function applyPhase(task: Task, phase: TaskPhase): void {
   for (const f of derived.clear) task[f] = undefined;
 }
 
-/** The fields a phase clears (completed_at off COMPLETE; the session slots on it). */
-export type PhaseClearedField = 'completed_at' | 'session_id' | 'plan_session_id' | 'exec_session_id';
+/** The fields a phase clears (completed_at and a Done user_status off COMPLETE; the session slots on it). */
+export type PhaseClearedField = 'completed_at' | 'session_id' | 'plan_session_id' | 'exec_session_id' | 'user_status';
 
 /**
  * What a phase write derives besides phase and status, THE one rule both write paths
  * use: applyPhase (updateTask) and the offline drain's raw row write
  * (offline-merge/apply-fields.ts), so an away task_update / task_complete ends as the
  * online call does. `set`: the read marker the phase implies (readMarkerForPhase), and
- * on COMPLETE a completed_at (`nowIso`) when the task has none. `clear`: on COMPLETE the
- * session slots (new 1-slot, legacy 2-slot), off it completed_at.
+ * on COMPLETE a completed_at (`nowIso`) when the task has none and a Done user_status. `clear`: on COMPLETE the
+ * session slots (new 1-slot, legacy 2-slot), off it completed_at and a Done user_status.
  */
 export function phaseDerivedFields(
   task: Readonly<Partial<Task>>, phase: TaskPhase, nowIso: string,
@@ -245,9 +245,14 @@ export function phaseDerivedFields(
   const set: Partial<Task> = { ...readMarkerForPhase(phase) };
   if (phase === 'COMPLETE') {
     if (!task.completed_at) set.completed_at = nowIso;
+    // A completed task is verified (the user mostly closes it after checking): its stored
+    // status reads Done in the same write, so no reader meets its last open words
+    // ("waits on the user to install the build"). A reopen derives it again (user-status-sync).
+    set.user_status = { state: 'done' };
     return { set, clear: ['session_id', 'plan_session_id', 'exec_session_id'] };
   }
-  return { set, clear: ['completed_at'] };
+  // Reopened: Done is no longer true; readers fall back to the phase until the sync derives it.
+  return { set, clear: task.user_status?.state === 'done' ? ['completed_at', 'user_status'] : ['completed_at'] };
 }
 
 // ── Phase migration (legacy data) ──

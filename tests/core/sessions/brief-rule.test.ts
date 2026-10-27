@@ -11,7 +11,8 @@ import { createMockConstants } from '../../helpers/mock-constants.js'
 vi.mock('../../../src/constants.js', () => createMockConstants('walnut-brief-rule'))
 
 import { BRIEF_LINE, buildSessionContext } from '../../../src/core/sessions/session-context.js'
-import { briefMoveLines, briefPrompt, keepsBrief, readBrief, untaggedBriefLines } from '../../../src/core/sessions/brief.js'
+import { briefMoveLines, briefPrompt, keepsBrief, readBrief } from '../../../src/core/sessions/brief.js'
+import { briefIssues, briefItemLines } from '../../../src/core/sessions/brief-rules.js'
 import { buildSelfReportPrompt, extractField } from '../../../src/core/session-hooks/builtins.js'
 import { BRIEF_MAX_CHARS, briefMoves, briefTeam } from '../../../src/core/user-status.js'
 import type { Task } from '../../../src/core/types.js'
@@ -31,8 +32,10 @@ describe('the Brief rule', () => {
       /At the end of every turn Walnut asks you for it \(FOR_USER_BRIEF\)/,
       /rewrite it whole each time/,
       /what needs the user first/,
-      /every line starts with the <task-ref\/> of the task it is about/,
-      /Walnut shows each task it names with its live status/,
+      /one thing per line, each line starting with the <task-ref\/> of the task it is about/,
+      /Main names the VP who leads it right after/,
+      /Walnut checks these rules/,
+      /shows each task it names with its live status/,
     ]) expect(BRIEF_LINE).toMatch(re)
   })
 
@@ -82,9 +85,12 @@ describe('the turn-end ask', () => {
 })
 
 describe('lines that name no task', () => {
-  it('are the item lines with no <task-ref/>, for the log', () => {
+  it('are the item lines with no <task-ref/>; section labels are not items', () => {
     const text = '**Needs you:**\n- Delete the six stacks?\n- <task-ref id="w1" label="Fence"/>: pick a supplier.\n\n**Work:**\n1. Login is faster now.\nA plain sentence.'
-    expect(untaggedBriefLines(text)).toEqual(['- Delete the six stacks?', '1. Login is faster now.'])
+    expect(briefItemLines(text)).toEqual(['- Delete the six stacks?', '- <task-ref id="w1" label="Fence"/>: pick a supplier.', '1. Login is faster now.', 'A plain sentence.'])
+    const owner = task({ id: 'lead', title: 'Lead', org_role: 'lead', project: 'Garden' })
+    expect(briefIssues(text, owner, [owner]).filter((i) => i.kind === 'no_task').map((i) => i.line))
+      .toEqual(['- Delete the six stacks?', '1. Login is faster now.', 'A plain sentence.'])
   })
 })
 

@@ -199,7 +199,9 @@ export function redReasonOf(
   signals: readonly BoardSignal[] = [],
   isChoice?: (id: string) => boolean,
 ): KanbanStatus | null {
-  const done = task.phase === 'COMPLETE';
+  // A completed task is verified (the user mostly closes it after checking): nothing on it
+  // reads as needing them, and it rolls up no need to its parent's card.
+  if (task.phase === 'COMPLETE' || task.status === 'done') return null;
   const sessionId = resolveTaskSessionId(task) ?? undefined;
   const ps = (sessionId ? live?.process_status : undefined) as ProcessStatus | undefined;
   const tool = live?.pendingPermissionTool || '';
@@ -213,14 +215,14 @@ export function redReasonOf(
     };
     return { ...permissionStatus(tool, detail), tone: 'red', prompt };
   }
-  if (display === 'error' && !done) { // an error after the work completed is not the user's to fix
+  if (display === 'error') {
     const msg = firstLine(live?.errorMessage);
     const text = msg ? `Error: ${msg}` : 'Error: the session stopped';
     return { text, tone: 'red', kind: 'error', tooltip: live?.errorMessage?.trim() || text };
   }
   // The one user status (src/core/user-status.ts): the session asked the user something.
   const us = task.user_status;
-  if (us && !done && us.state === 'needs' && us.ask) {
+  if (us && us.state === 'needs' && us.ask) {
     return { text: `Needs you: ${us.ask}`, tone: 'red', kind: 'needs', tooltip: us.ask };
   }
   const handedBack = card?.handed_back_at;

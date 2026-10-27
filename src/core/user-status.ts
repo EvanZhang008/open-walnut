@@ -88,6 +88,10 @@ export interface UserStatusInput {
   report?: StatusReport | null;
 }
 
+/** 2026-10-27, the user: "If the task is closed, mostly close by me means I already verified ...
+ *  this is generic rules". Every agent-facing text that lists or reports tasks says it. */
+export const COMPLETE_IS_VERIFIED = 'A COMPLETE task counts as verified by the user: write it as done, never as waiting on their check or test, and never remind them of it.';
+
 export interface UserStatus {
   state: UserState;
   /** waiting only. */
@@ -263,10 +267,15 @@ export function userStatusLine(c: UserStatusCounts, opts: { withDone?: boolean }
 // ── The Brief (FOR_USER_BRIEF): Main's or a lead's short letter to the user ──
 
 /** What the session wrote, and when (Task.brief). */
-export interface TaskBrief { text: string; at: string }
+export interface TaskBrief {
+  text: string;
+  at: string;
+  /** The lines that break the Brief's rules (sessions/brief-rules.ts), as Walnut found them. */
+  issues?: Array<{ kind: 'no_task' | 'no_vp' | 'several_things'; line: string; vp?: { id: string; title: string } }>;
+}
 
-/** The longest Brief kept: a dozen short lines, not a document. */
-export const BRIEF_MAX_CHARS = 2400;
+/** The longest Brief kept: a dozen lines, not a document (Main's lines carry two task refs). */
+export const BRIEF_MAX_CHARS = 4000;
 
 /** The fields the Brief's team and its moves are read from. */
 export interface BriefTask {

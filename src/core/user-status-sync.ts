@@ -292,7 +292,11 @@ export async function syncUserStatuses(ids: ReadonlySet<string> | null, nowMs = 
   for (const task of targets) {
     const next = deriveUserStatus(statusInputOf(task, facts), nowMs);
     if (sameStatus(task.user_status, next)) continue;
-    const res = await updateTaskRaw(task.id, { user_status: next }, { emitEvent: true, source: OWN_SOURCE }).catch((err) => {
+    const res = await updateTaskRaw(task.id, { user_status: next }, {
+      emitEvent: true, source: OWN_SOURCE,
+      // Completed while its facts were read: it reads Done, and the write would announce it again.
+      shouldUpdate: (cur) => cur.phase !== 'COMPLETE' && cur.status !== 'done',
+    }).catch((err) => {
       log.task.debug('user-status: write skipped', { taskId: task.id, error: errText(err) });
       return { changed: false };
     });

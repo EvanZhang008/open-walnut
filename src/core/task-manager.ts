@@ -8069,6 +8069,10 @@ function prepareRawUpdate(
       if (safeUpdates.completed_at === undefined) {
         (safeUpdates as Record<string, unknown>).completed_at = null;
       }
+      // A Done status is no longer true either (phaseDerivedFields' twin); the sync derives it again.
+      if (safeUpdates.user_status === undefined && task.user_status?.state === 'done') {
+        (safeUpdates as Record<string, unknown>).user_status = null;
+      }
     } else {
       log.task.warn('terminal phase guard (raw): blocked sync phase change', {
         taskId: task.id, currentPhase: task.phase, requestedPhase: incomingPhase,
@@ -8077,6 +8081,11 @@ function prepareRawUpdate(
       delete safeUpdates.status;
       delete safeUpdates.completed_at;
     }
+  }
+  // A raw write that completes the task stores it as Done, as applyPhase does (phaseDerivedFields):
+  // a completed task is verified, and its last open words must not stay on the row.
+  if (!TERMINAL_PHASES.has(task.phase) && incomingPhase && TERMINAL_PHASES.has(incomingPhase) && safeUpdates.user_status === undefined) {
+    (safeUpdates as Record<string, unknown>).user_status = { state: 'done' };
   }
   // Held-phase guard (raw twin of updateTask's heldPhaseBlocks): a pull may
   // close a WAITING task, never wake it. The session machine passes leaveHeld:

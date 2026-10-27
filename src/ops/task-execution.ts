@@ -53,6 +53,11 @@ export function taskView(task: Record<string, unknown>): Record<string, unknown>
     session_history_count, session_status_unavailable, agent_memory, ...fields } = task
   // Another task's own MEMORY.md is not task_get material: its size only; agent_memory_read reads it.
   const memoryChars = (agent_memory as { text?: string } | undefined)?.text?.length
+  // A completed task is verified: Done, with none of its last open words (as the v1 projection).
+  if (fields.phase === 'COMPLETE' || status === 'done') {
+    delete fields.status_report
+    fields.user_status = { state: 'done' }
+  }
   return { ...fields, ...(memoryChars ? { agent_memory_chars: memoryChars } : {}), execution: taskExecution(task) }
 }
 

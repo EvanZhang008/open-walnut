@@ -103,6 +103,44 @@ describe('the Brief in the turn-end self-report', () => {
     expect((await getTask(lead.id)).brief?.text).toBe('**Needs you:** the fence supplier.')
   })
 
+  it('a Brief that breaks its rules is stored with its issues and asked for once more, right then', async () => {
+    const bad = '**Needs you:**\n- The docs sync can be pushed.'
+    const good = `**Needs you:**\n- <task-ref id="${worker.id}" label="Fix the fence"/>: approve the push of the fence notes to the shared repo.`
+    const fake = fakeSession(LEAD_SID, REPORT(bad))
+    fake.askSideQuestion.mockImplementationOnce(async () => REPORT(bad)).mockImplementationOnce(async () => `FOR_USER_BRIEF:\n${good}`)
+    await updateTaskRaw(lead.id, { phase: 'IN_PROGRESS' } as never, { reopenTerminal: true })
+    await runTriage(payload(LEAD_SID, await getTask(lead.id)))
+    // The re-ask runs after the hook, without holding it.
+    await vi.waitFor(async () => expect((await getTask(lead.id)).brief?.text).toBe(good))
+    expect(fake.askSideQuestion).toHaveBeenCalledTimes(2)
+    const fix = fake.askSideQuestion.mock.calls[1]![0] as string
+    expect(fix).toContain('- names no task (start it with the <task-ref/> of the task it is about): - The docs sync can be pushed.')
+    expect(fix).toContain(`<brief>\n${bad}\n</brief>`)
+    expect((await getTask(lead.id)).brief).not.toHaveProperty('issues')
+  })
+
+  it('keeps the issues when the rewrite is no better, and the next ask lists them', async () => {
+    __resetTriageRateLimiter()
+    const bad = '- Still waiting on your pick.'
+    const fake = fakeSession(LEAD_SID, REPORT(bad))
+    await runTriage(payload(LEAD_SID, await getTask(lead.id)))
+    await vi.waitFor(() => expect(fake.askSideQuestion).toHaveBeenCalledTimes(2))
+    await new Promise((r) => setTimeout(r, 50))
+    expect((await getTask(lead.id)).brief).toMatchObject({ text: bad, issues: [{ kind: 'no_task', line: bad }] })
+    // The same broken line again is not re-asked: the next ask lists it.
+    __resetTriageRateLimiter()
+    const same = fakeSession(LEAD_SID, REPORT(bad))
+    await runTriage(payload(LEAD_SID, await getTask(lead.id)))
+    await new Promise((r) => setTimeout(r, 50))
+    expect(same.askSideQuestion).toHaveBeenCalledTimes(1)
+    __resetTriageRateLimiter()
+    const next = fakeSession(LEAD_SID, REPORT(`- <task-ref id="${worker.id}" label="Fix the fence"/>: half done.`))
+    await runTriage(payload(LEAD_SID, await getTask(lead.id)))
+    expect(next.askSideQuestion.mock.calls[0]![0] as string).toContain('Walnut found these lines of your last Brief breaking the rules')
+    expect(next.askSideQuestion).toHaveBeenCalledTimes(1)
+    expect((await getTask(lead.id)).brief).not.toHaveProperty('issues')
+  })
+
   it('never asks a worker, and stores nothing on it', async () => {
     const fake = fakeSession(WORKER_SID, REPORT('should not be stored'))
     await runTriage(payload(WORKER_SID, await getTask(worker.id)))

@@ -102,6 +102,7 @@
   font-size: 12px;
 }
 .org-brief-moves { display: contents; }
+.org-brief-issues { color: color-mix(in srgb, var(--warning) 55%, var(--fg)); cursor: help; }
 .org-brief-move {
   border: 1px solid var(--border);
   border-radius: 999px;

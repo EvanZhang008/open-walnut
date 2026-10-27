@@ -7,7 +7,7 @@
  */
 import { useMemo } from 'react';
 import type { Task } from '@open-walnut/core';
-import { briefMoves, USER_STATE_LABELS, type UserState } from '@open-walnut/user-status';
+import { briefMoves, USER_STATE_LABELS, type TaskBrief, type UserState } from '@open-walnut/user-status';
 import { userStateOf } from '@open-walnut/org-tree';
 import { renderMarkdownWithRefs } from '@/utils/markdown';
 import { useEntityLabelsVersion } from '@/hooks/useEntityLabels';
@@ -42,6 +42,7 @@ export function OrgBrief({ owner, tasks, name, onOpenTask, now, folded }: Props)
     () => (owner && brief?.at ? briefMoves(owner, tasks, Date.parse(brief.at)) : []),
     [owner, tasks, brief?.at],
   );
+  const issues = brief?.issues ?? [];
   const onClick = (e: React.MouseEvent) => {
     const a = (e.target as HTMLElement).closest('[data-task-id]');
     if (!a) return;
@@ -61,6 +62,11 @@ export function OrgBrief({ owner, tasks, name, onOpenTask, now, folded }: Props)
       <div className="org-brief-body markdown-body" data-testid="org-brief-body" onClick={onClick} dangerouslySetInnerHTML={html} />
       <div className="org-brief-foot" data-testid="org-brief-foot">
         <span className="org-muted">Written {timeAgo(brief.at, { now })}</span>
+        {issues.length > 0 && (
+          <span className="org-brief-issues" data-testid="org-brief-issues" title={issues.map((i) => i.line).join('\n')}>
+            · {issues.length === 1 ? '1 line breaks' : `${issues.length} lines break`} the Brief rules ({issueWords(issues)}); Walnut asked {name} to fix {issues.length === 1 ? 'it' : 'them'}
+          </span>
+        )}
         {moves.length > 0 && (
           <span className="org-brief-moves" data-testid="org-brief-moves">
             <span className="org-muted"> · Since then:</span>
@@ -72,7 +78,7 @@ export function OrgBrief({ owner, tasks, name, onOpenTask, now, folded }: Props)
                 data-task-id={task.id}
                 data-user-state={states.get(task.id)}
                 onClick={() => onOpenTask(task.id)}
-                title={task.user_status?.ask ?? task.user_status?.waitingOn ?? task.user_status?.now ?? ''}
+                title={states.get(task.id) === 'done' ? '' : task.user_status?.ask ?? task.user_status?.waitingOn ?? task.user_status?.now ?? ''}
               >
                 {task.title} <span className="org-muted">{stateWord(states.get(task.id))}</span>
               </button>
@@ -82,6 +88,12 @@ export function OrgBrief({ owner, tasks, name, onOpenTask, now, folded }: Props)
       </div>
     </div>
   );
+}
+
+/** What the broken lines miss, in a few words: "no task, no VP". */
+function issueWords(issues: NonNullable<TaskBrief['issues']>): string {
+  const words = { no_task: 'no task', no_vp: 'no VP', several_things: 'several things in one line' } as const;
+  return [...new Set(issues.map((i) => words[i.kind]))].join(', ');
 }
 
 function stateWord(state: UserState | undefined): string {
