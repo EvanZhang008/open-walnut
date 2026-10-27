@@ -8,7 +8,8 @@
  *
  * All SSH is stubbed at sshExec and the prewarm itself at prewarmRemoteFolds
  * (its real run is pinned by remote-fold-prewarm.test.ts); no process, socket
- * or tunnel is created.
+ * or tunnel is created. The new daemon an update puts on the host before its
+ * stop (stageUpgrade) is stubbed at deployDaemon, as in the service guard tests.
  */
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { DaemonConnection, remoteServiceProbePaths } from '../../src/providers/daemon-connection.js'
@@ -25,10 +26,12 @@ const probeReply = () => [...remoteServiceProbePaths().map((p) => `absent ${p}`)
 function skewedHost(conn: DaemonConnection): string[] {
   const seen: string[] = []
   vi.spyOn(priv(conn), 'getExpectedDaemonVersion').mockReturnValue(EXPECTED_VERSION)
+  vi.spyOn(priv(conn), 'deployDaemon').mockImplementation(async () => { seen.push('DEPLOY'); return 'node' })
   vi.spyOn(priv(conn), 'sshExec').mockImplementation(async (...args: unknown[]) => {
     const cmd = String(args[0])
     seen.push(cmd)
     if (cmd.includes('walnut-service-probe-done')) return probeReply()
+    if (cmd.includes('uname -m')) return 'x86_64'
     if (cmd.includes('walnut-daemon-stop-confirmed')) return 'walnut-daemon-stop-confirmed\n'
     if (cmd.includes('daemon.version')) return 'walnut-daemon-old00000'
     return ''
@@ -54,10 +57,13 @@ describe('DaemonConnection upgrade with a remote fold prewarm', () => {
     const conn = new DaemonConnection('devbox', TARGET)
     const seen = skewedHost(conn)
     const order: string[] = []
-    vi.spyOn(priv(conn), 'prewarmRemoteFolds').mockImplementation(async () => { order.push(`prewarm@${stops(seen).length}`) })
+    vi.spyOn(priv(conn), 'prewarmRemoteFolds').mockImplementation(async () => { order.push(`prewarm@${stops(seen).length}${seen.includes('DEPLOY') ? '+staged' : ''}`) })
     await expect(priv(conn).shouldUpgradeDaemon('/tmp/open-walnut/daemon-linux-x64')).resolves.toBe(true)
     expect(order).toEqual(['prewarm@0'])
     expect(stops(seen)).toHaveLength(1)
+    // Then the new daemon goes onto the host, still before the stop.
+    expect(seen.indexOf('DEPLOY')).toBeGreaterThan(-1)
+    expect(seen.indexOf('DEPLOY')).toBeLessThan(seen.findIndex((c) => c.includes('walnut-daemon-stop-confirmed')))
   })
 
   it('a long prewarm keeps the old daemon serving, then the update is decided again at once', async () => {
