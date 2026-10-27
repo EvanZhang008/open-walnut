@@ -25,6 +25,14 @@ const VIEWS: { value: CostView; label: string }[] = [
   { value: 'agents', label: 'Agents' },
 ];
 
+/** The engines always offered in the agents view; another one with sessions in the period joins them. */
+const ENGINES: { value: string; label: string }[] = [
+  { value: 'all', label: 'All engines' },
+  { value: 'claude', label: 'Claude Code' },
+  { value: 'codex', label: 'Codex' },
+  { value: 'opencode', label: 'OpenCode' },
+];
+
 const VIEW_HELP: Record<CostView, string> = {
   walnut: "Walnut's own model calls: the Personal AI's chat, titles, parsing, summaries, search, plugins.",
   agents: 'Coding sessions: Claude Code, Codex, OpenCode and other engines, on every host.',
@@ -51,10 +59,23 @@ function totalTokens(line: CostLine): number {
   return line.tokens.input + line.tokens.output + line.tokens.cacheRead + line.tokens.cacheWrite;
 }
 
+/** "1,234 requests · 5.6M tokens", the part every breakdown row carries under its amount. */
+function volume(requests: number, tokens?: number): string {
+  return tokens === undefined ? count(requests, 'request') : `${count(requests, 'request')} · ${formatTokens(tokens)} tokens`;
+}
+
+/** The engine a report counts, by its label; undefined for all engines. */
+function engineName(report: CostReport): string | undefined {
+  if (report.view !== 'agents' || !report.engine) return undefined;
+  return report.engines?.find((e) => e.key === report.engine)?.label
+    ?? ENGINES.find((e) => e.value === report.engine)?.label ?? report.engine;
+}
+
 export function UsageSection() {
   const [view, setView] = useState<CostView>('walnut');
   const [time, setTime] = useState<TimeSelection>({ preset: '7d' });
-  const { report, current, loading, error, refresh, range } = useUsageCosts(view, time);
+  const [engine, setEngine] = useState('all');
+  const { report, current, loading, error, refresh, range } = useUsageCosts(view, time, engine);
   const [updating, setUpdating] = useState(false);
   const [updateError, setUpdateError] = useState('');
   const update = async () => {
@@ -66,6 +87,18 @@ export function UsageSection() {
   const shown = current ?? report;
   const presetValue = (time.preset === 'custom' ? '' : time.preset) as Period;
   const chartSelectedDay = time.preset === 'custom' && time.start && time.start === time.end ? time.start : undefined;
+  // The usual engines, plus any other the period has sessions for (Goose, say), plus the picked one.
+  const engineOptions = useMemo(() => {
+    const out = [...ENGINES];
+    for (const e of shown?.view === 'agents' ? shown.engines ?? [] : []) {
+      if (!out.some((o) => o.value === e.key)) out.push({ value: e.key, label: e.label });
+    }
+    if (!out.some((o) => o.value === engine)) out.push({ value: engine, label: engine });
+    return out;
+  }, [shown, engine]);
+  const scope = shown ? engineName(shown) : undefined;
+  // With one engine picked, every heading names it, so no list reads as the whole.
+  const heading = (h: string) => scope ? `${h} · ${scope}` : h;
 
   return (
     <SettingsSection
@@ -85,6 +118,14 @@ export function UsageSection() {
           control={<SegmentedControl aria-label="Show" value={view} onChange={(v) => setView(v)}
             options={VIEWS.map((v) => ({ value: v.value, label: v.label, testId: `usage-view-${v.value}` }))} />}
         />
+        {view === 'agents' && (
+          <SettingsRow
+            label="Engine"
+            help={engine === 'all' ? 'Every coding engine added up. Pick one to see only its sessions.' : `Only ${engineOptions.find((o) => o.value === engine)?.label ?? engine} sessions are counted below.`}
+            control={<SegmentedControl aria-label="Engine" value={engine} onChange={(v) => setEngine(v)}
+              options={engineOptions.map((o) => ({ value: o.value, label: o.label, testId: `usage-engine-${o.value}` }))} />}
+          />
+        )}
         <SettingsRow
           label="Period"
           control={
@@ -106,13 +147,13 @@ export function UsageSection() {
       {!shown ? (
         <SettingsGroup><SettingsLoadingRow>Loading usage...</SettingsLoadingRow></SettingsGroup>
       ) : (
-        <div aria-busy={loading || undefined} data-testid="usage-costs" data-view={shown.view}>
+        <div aria-busy={loading || undefined} data-testid="usage-costs" data-view={shown.view} data-engine={shown.engine ?? 'all'}>
           <Headline report={shown} />
           {shown.totals.requests === 0 ? (
-            <SettingsGroup><SettingsEmpty>No model calls in this period.</SettingsEmpty></SettingsGroup>
+            <SettingsGroup><SettingsEmpty>{scope ? `No ${scope} sessions in this period.` : 'No model calls in this period.'}</SettingsEmpty></SettingsGroup>
           ) : (
             <>
-              <SettingsGroup heading="By day">
+              <SettingsGroup heading={heading('By day')}>
                 <div className="settings-row settings-row-stacked usage-chart-section" data-wide="true">
                   <UsageDailyChart data={chartDays(shown, range)} loading={loading} selectedDate={chartSelectedDay}
                     onSelectDay={(date) => {
@@ -121,8 +162,8 @@ export function UsageSection() {
                     }} />
                 </div>
               </SettingsGroup>
-              {shown.view === 'agents' && <TaskList report={shown} />}
-              {shown.groups.map((group) => <LineGroup key={group.id} id={group.id} heading={group.heading} lines={group.lines} total={shown.totals.costUsd} />)}
+              {shown.view === 'agents' && <TaskList report={shown} heading={heading('By task')} />}
+              {shown.groups.map((group) => <LineGroup key={group.id} id={group.id} heading={heading(group.heading)} lines={group.lines} total={shown.totals.costUsd} />)}
             </>
           )}
           <HowCounted report={shown} />
@@ -132,19 +173,34 @@ export function UsageSection() {
   );
 }
 
+/** Why requests are not in the total, one clause per model and source: a missing model name reads differently from an unknown price. */
+export function unpricedNote(report: CostReport): string | undefined {
+  const t = report.totals;
+  if (t.unpriced <= 0) return undefined;
+  const parts = report.unpriced?.length
+    ? report.unpriced.map((u) => u.model === 'unknown' || !u.model
+      ? `${count(u.requests, 'request')} from ${u.where} recorded no model name, so ${u.requests === 1 ? 'it has' : 'they have'} no price`
+      : `${count(u.requests, 'request')} to ${u.model} (${u.where}) ${u.requests === 1 ? 'has' : 'have'} no public price`)
+    : [`${count(t.unpriced, 'request')} with no public price (${report.unpricedModels.join(', ')})`];
+  return `Not in the total: ${parts.join('; ')}.`;
+}
+
 function Headline({ report }: { report: CostReport }) {
   const t = report.totals;
+  const scope = engineName(report);
+  const unpriced = unpricedNote(report);
   return (
     <SettingsGroup className="settings-addons-summary" data-testid="usage-summary">
+      {scope && <p className="usage-scope" data-testid="usage-scope">{`${scope} sessions only`}</p>}
       <div className="settings-addons-stats">
-        <Stat value={money(t.costUsd)} label="Estimated cost" testId="usage-total-cost" />
+        <Stat value={money(t.costUsd)} label={scope ? `${scope} cost` : 'Estimated cost'} testId="usage-total-cost" />
         <Stat value={formatTokens(totalTokens(t))} label="Tokens" />
         <Stat value={t.requests.toLocaleString('en-US')} label="Requests" />
       </div>
       <p className="settings-addons-muted usage-headline-note">
         {`In ${formatTokens(t.tokens.input)} · out ${formatTokens(t.tokens.output)} · cache read ${formatTokens(t.tokens.cacheRead)} · cache write ${formatTokens(t.tokens.cacheWrite)}.`}
-        {t.unpriced > 0 && ` ${count(t.unpriced, 'request')} with no public price (${report.unpricedModels.join(', ')}) ${t.unpriced === 1 ? 'is' : 'are'} not in the total.`}
       </p>
+      {unpriced && <p className="settings-addons-muted usage-headline-note" data-testid="usage-unpriced">{unpriced}</p>}
     </SettingsGroup>
   );
 }
@@ -164,7 +220,7 @@ function LineRow({ line, share, label, help, onOpen }: { line: CostLine; share?:
     <SettingsRow
       className="usage-line"
       label={<span className="usage-line-label" title={label ?? line.label}>{label ?? line.label}</span>}
-      help={help ?? `${count(line.requests, 'request')} · ${formatTokens(totalTokens(line))} tokens${share !== undefined ? ` · ${share.toFixed(share < 10 ? 1 : 0)}%` : ''}`}
+      help={help ?? `${volume(line.requests, totalTokens(line))}${share !== undefined ? ` · ${share.toFixed(share < 10 ? 1 : 0)}% of the cost` : ''}${line.unpriced ? ` · ${line.unpriced.toLocaleString('en-US')} without a price` : ''}`}
       control={onOpen ? <SettingsButton onClick={onOpen}>{amount}</SettingsButton> : amount}
     />
   );
@@ -187,19 +243,19 @@ function LineGroup({ id, heading, lines, total }: { id: string; heading: string;
   );
 }
 
-function TaskList({ report }: { report: CostReport }) {
+function TaskList({ report, heading }: { report: CostReport; heading: string }) {
   const navigate = useNavigate();
   const hostName = useHostDisplayLabels();
   const tasks = report.tasks ?? [];
   if (!tasks.length && !report.shortSessions) return null;
-  const help = (t: CostTaskLine) => [t.project || 'Inbox', t.engines.join(', '), t.hosts.map(hostName).join(', '), count(t.requests, 'request')].join(' · ');
+  const help = (t: CostTaskLine) => [t.project || 'Inbox', t.engines.join(', '), t.hosts.map(hostName).join(', '), volume(t.requests, totalTokens(t))].join(' · ');
   const row = (t: CostTaskLine) => <LineRow key={t.key} line={t} help={help(t)}
     onOpen={t.sessionId ? () => openSessionOnHome(t.sessionId!, navigate) : undefined} />;
   return (
-    <SettingsGroup heading="By task" data-testid="usage-group-task">
+    <SettingsGroup heading={heading} data-testid="usage-group-task">
       {tasks.map(row)}
       {report.moreTasks && <SettingsRow label={`${count(report.moreTasks.count, 'more task')}`}
-        help={count(report.moreTasks.requests, 'request')} control={<span className="usage-line-cost">{money(report.moreTasks.costUsd)}</span>} />}
+        help={volume(report.moreTasks.requests, report.moreTasks.tokens)} control={<span className="usage-line-cost">{money(report.moreTasks.costUsd)}</span>} />}
       {report.shortSessions && <details className="usage-more" data-testid="usage-short-sessions">
         <summary>{`${count(report.shortSessions.count, 'short session')} (tests and one-offs) · ${money(report.shortSessions.costUsd)}`}</summary>
         {report.shortSessions.lines.map(row)}

@@ -161,7 +161,7 @@ describe('cost report', () => {
     trackerTable();
     response({ source: 'chat', session_id: 'c1', task_id: null, input_tokens: 1 * M });                  // chat $4
     call({ source: 'title', input_tokens: 1 * M });                                                       // $4
-    call({ source: 'task-search-agent', model: 'sonnet', input_tokens: 500, cost_usd: 0.3 });             // alias: its own reported cost
+    call({ source: 'task-search-agent', model: 'house-model', input_tokens: 500, cost_usd: 0.3 });        // no list price: its own reported cost
     call({ source: 'jev', model: 'internal/jev', input_tokens: 0, output_tokens: 0, external_cost_usd: 0.05 }); // cost only
     call({ source: 'plugin', agent_id: 'plugin:mail', input_tokens: 100_000 });                           // $0.40
     call({ source: 'session', input_tokens: 10 * M });                                                   // a coding session: not here
@@ -172,6 +172,58 @@ describe('cost report', () => {
     expect(features).toEqual([['Personal AI chat', 4], ['Titles', 4], ['Plugin: mail', 0.4], ['AI task search', 0.3], ['Decision checks', 0.05]]);
     expect(report.totals.costUsd).toBeCloseTo(8.75, 9);
     expect(report.unpricedModels).toEqual([]);
+  });
+
+  it('prices a bare Claude Code alias as the newest model of its family the price book has', async () => {
+    resetPriceBookForTests({ ...SNAPSHOT, models: { ...SNAPSHOT.models,
+      'claude-haiku-4-5': { provider: 'anthropic', input: 1, output: 5 },
+      'claude-haiku-4-5-20251001': { provider: 'anthropic', input: 1, output: 5 },
+      'claude-haiku-5-5': { provider: 'anthropic', input: 0.5, output: 2.5 },
+      // Newer than 5-5 by number, older by string order: proves the versions are compared as numbers.
+      'claude-haiku-5-10': { provider: 'anthropic', input: 0.1, output: 0.5 },
+    } });
+    trackerTable();
+    call({ source: 'title', model: 'haiku', input_tokens: 1 * M });                 // as claude-haiku-5-10: $0.10
+    call({ source: 'cron', model: 'haiku', input_tokens: 1 * M, cost_usd: 0.9 });  // the cost it reported wins: it knew what ran
+    call({ source: 'summary', model: 'opus[1m]', input_tokens: 1 * M });            // as claude-opus-5-5: $4
+    call({ source: 'task-hook', model: 'unknown', input_tokens: 10, output_tokens: 3_000 }); // no model name: no price
+    call({ source: 'cron', model: 'unknown', input_tokens: 0, output_tokens: 0 });  // no tokens: nothing to price
+    await ready();
+    const report = await buildCostReport('walnut', {}, deps());
+    expect(report.totals.costUsd).toBeCloseTo(5, 9);
+    expect(report.groups.find(g => g.id === 'model')!.lines.map(l => [l.label, Number(l.costUsd.toFixed(2)), l.unpriced])).toEqual([
+      ['opus[1m] (claude-opus-5-5)', 4, 0], ['haiku (claude-haiku-5-10)', 1, 0], ['unknown', 0, 1]]);
+    expect(report.totals.unpriced).toBe(1);
+    expect(report.unpricedModels).toEqual(['unknown']);
+    expect(report.unpriced).toEqual([{ model: 'unknown', where: 'Task overview upkeep', requests: 1 }]);
+  });
+
+  it('counts one engine when asked, and still offers every engine of the period', async () => {
+    response({ input_tokens: 1 * M });                                                            // Claude Code, t1: $4
+    await ready();
+    const codex = { sessionId: 'x1', host: 'devbox', engine: 'codex', taskId: 't2', source: 'session' };
+    await store.rollup.replaceSession(codex, [{ day: '2026-10-19', model: 'gpt-6.1-sol', band: 0, responses: 2, input: 1 * M, output: 0,
+      cacheRead: 0, cacheWrite5m: 0, cacheWrite1h: 0, cacheWrite: 0 }]);                         // Codex, t2: $2
+    const all = await buildCostReport('agents', {}, deps());
+    expect(all.engine).toBeNull();
+    expect(all.totals.costUsd).toBeCloseTo(6, 9);
+    expect(all.groups.map(g => g.id)).toEqual(['engine', 'model', 'host', 'project']);
+    const only = await buildCostReport('agents', { engine: 'codex' }, deps());
+    expect(only.engine).toBe('codex');
+    expect(only.engines).toEqual([{ key: 'codex', label: 'Codex' }, { key: 'claude', label: 'Claude Code' }]);
+    expect(only.totals).toMatchObject({ requests: 2 });
+    expect(only.totals.costUsd).toBeCloseTo(2, 9);
+    expect(only.daily).toEqual([{ date: '2026-10-19', costUsd: 2, requests: 2 }]);
+    // One engine: no "By engine" group, and every other group holds only its sessions.
+    expect(only.groups.map(g => g.id)).toEqual(['model', 'host', 'project']);
+    expect(only.groups.find(g => g.id === 'model')!.lines.map(l => l.label)).toEqual(['gpt-6.1-sol']);
+    expect(only.groups.find(g => g.id === 'host')!.lines.map(l => l.label)).toEqual(['devbox']);
+    expect(only.tasks!.map(l => [l.label, l.engines, l.hosts])).toEqual([['Task t2', ['Codex'], ['devbox']]]);
+    expect(only.shortSessions).toBeUndefined();
+    expect((await buildCostReport('agents', { engine: 'opencode' }, deps())).totals.requests).toBe(0);
+    // A malformed engine counts every engine; the Walnut view has none.
+    expect((await buildCostReport('agents', { engine: "x'; DROP" }, deps())).engine).toBeNull();
+    expect((await buildCostReport('walnut', { engine: 'codex' }, deps())).engine).toBeNull();
   });
 
   it('dates a call by the local day it happened, also late in the evening', async () => {

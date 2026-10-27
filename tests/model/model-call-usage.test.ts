@@ -1,8 +1,7 @@
 /**
  * model.ts records a call in the usage table when the caller names a feature
  * (`usage`), and only then: callers that record their own usage (micro-agent,
- * ai-direct, the overview maintainer, compaction) pass nothing and stay counted
- * once. Recording runs off the caller's path and never fails the call.
+ * ai-direct, compaction) pass nothing and stay counted once. Recording runs off the caller's path and never fails the call.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import fs from 'node:fs'
@@ -96,10 +95,18 @@ describe('model call usage', () => {
   // Callers that record their own usage must not ask model.ts to record too.
   const root = path.resolve(import.meta.dirname, '../..')
   it.each([
-    'src/model/micro-agent.ts', 'src/core/ai/ai-direct.ts', 'src/core/overview-maintainer.ts', 'src/web/routes/chat.ts',
+    'src/model/micro-agent.ts', 'src/core/ai/ai-direct.ts', 'src/web/routes/chat.ts',
   ])('%s records its own usage and passes none to model.ts', (file) => {
     const src = fs.readFileSync(path.join(root, file), 'utf8')
     expect(src).toMatch(/usageTracker\.record\(/)
     expect(src).not.toMatch(/\busage: \{ source:/)
+  })
+
+  // The overview maintainer once recorded its own rows with model "unknown" when the
+  // reply named none; model.ts records it with the model the call resolved to.
+  it('the overview maintainer leaves recording to model.ts', () => {
+    const src = fs.readFileSync(path.join(root, 'src/core/overview-maintainer.ts'), 'utf8')
+    expect(src).not.toMatch(/usageTracker\.record\(/)
+    expect(src).toMatch(/\busage: \{ source: options\.source, agentId: SUBSCRIBER \}/)
   })
 })

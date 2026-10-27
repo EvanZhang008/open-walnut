@@ -27,9 +27,10 @@ usageRouter.get('/overview', (req: Request, res: Response, next: NextFunction) =
   } catch (err) { next(err) }
 })
 
-// GET /api/usage/costs?view=walnut|agents&start&end — the Usage & Costs page:
+// GET /api/usage/costs?view=walnut|agents&start&end&engine: the Usage & Costs page,
 // dollars (tokens x public prices) and tokens for a period, read from the
-// per-day sums (cost-report.ts), never from the per-response table.
+// per-day sums (cost-report.ts), never from the per-response table. `engine`
+// (claude, codex, opencode, goose...) counts one coding engine; agents view only.
 usageRouter.get('/costs', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const view = req.query.view === 'agents' ? 'agents' : 'walnut'
@@ -38,7 +39,8 @@ usageRouter.get('/costs', async (req: Request, res: Response, next: NextFunction
       import('../../core/task-manager.js'), import('../../core/session-tracker.js'),
     ])
     const store = responseUsageStore()
-    const report = await buildCostReport(view, { start: parseDate(req.query.start), end: parseDate(req.query.end) }, {
+    const engine = typeof req.query.engine === 'string' && req.query.engine !== 'all' ? req.query.engine : undefined
+    const report = await buildCostReport(view, { start: parseDate(req.query.start), end: parseDate(req.query.end), engine }, {
       rollup: store.rollup, db: store.database, timeZone: store.timezone, overrides: (await getConfig()).usage?.prices,
       tasks: async (ids) => new Map((ids.length ? await listTasksByIds(ids) : []).map(t => [t.id, { title: t.title, project: t.project ?? '' }])),
       sessions: async () => new Map((await listSessions()).map(s => [s.claudeSessionId, {

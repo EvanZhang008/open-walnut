@@ -1,7 +1,7 @@
 /**
  * A realistic GET /api/usage/costs answer for browser specs: a busy week with
  * long task titles, many models and hosts, folded short sessions and an
- * unpriced model, for both views.
+ * unpriced model, for both views, and the agents view for one engine.
  */
 const tokens = (n: number) => ({ input: n * 10, output: n * 40, cacheRead: n * 9000, cacheWrite: n * 300 })
 const line = (key: string, label: string, costUsd: number, requests: number, unpriced = 0) =>
@@ -14,8 +14,11 @@ function days(start: string | null, end: string | null) {
   return out
 }
 
+const ENGINES = [{ key: 'claude', label: 'Claude Code' }, { key: 'codex', label: 'Codex' }]
+
 const common = (view: string, start: string | null, end: string | null) => ({
-  view, range: { start, end }, daily: days(start, end), unpricedModels: [] as string[],
+  view, range: { start, end }, engine: null as string | null, engines: [] as { key: string; label: string }[],
+  daily: days(start, end), unpricedModels: [] as string[], unpriced: [] as { model: string; where: string; requests: number }[],
   prices: { source: 'litellm', asOf: '2026-10-20T00:00:00.000Z' }, ready: true, timeZone: 'America/Los_Angeles',
   bounds: { min: '2026-09-01', max: '2026-09-23' },
   countedUntil: [{ host: '__local__', until: '2026-09-23T18:00:00.000Z' }, { host: 'devbox', until: '2026-09-23T17:30:00.000Z' }],
@@ -25,25 +28,38 @@ const common = (view: string, start: string | null, end: string | null) => ({
 
 export const LONG_TITLE = 'Investigate why the nightly export of every archived project to the shared drive keeps timing out after the third retry on the slow host'
 
-export function costReport(view: string, start: string | null, end: string | null) {
+export function costReport(view: string, start: string | null, end: string | null, engine: string | null = null) {
   if (view === 'walnut') {
     const features = [line('chat', 'Personal AI chat', 61.2, 412), line('title', 'Titles', 3.41, 2210), line('task-search-agent', 'AI task search', 2.05, 380),
       line('summary', 'Summaries', 1.12, 140), line('plugin:plugin:mail', 'Plugin: mail', 0.4, 60), line('quick-parse', 'Quick add', 0.08, 41),
       line('memory', 'Memory upkeep', 0.05, 12), line('commit-message', 'Commit messages', 0.03, 9), line('transfer', 'Session transfer', 0.02, 4),
       line('jev', 'Decision checks', 0.004, 2)]
     const total = features.reduce((n, l) => n + l.costUsd, 0), requests = features.reduce((n, l) => n + l.requests, 0)
-    return { ...common(view, start, end), totals: line('total', 'Total', total, requests),
+    return { ...common(view, start, end), totals: line('total', 'Total', total, requests + 2, 2),
+      unpricedModels: ['unknown'], unpriced: [{ model: 'unknown', where: 'Task overview upkeep', requests: 2 }],
       groups: [{ id: 'feature', heading: 'By feature', lines: features },
         { id: 'model', heading: 'By model', lines: [line('claude-opus-5-5', 'claude-opus-5-5', 61.2, 412), line('claude-haiku-5-5', 'claude-haiku-5-5', total - 61.2, requests - 412)] }] }
   }
+  if (engine === 'codex') {
+    const task = { ...line('task:t3', 'Coding task 4', 810, 1000), taskId: 't3', sessionId: 's3', project: 'Walnut', hosts: ['devbox'], engines: ['Codex'] }
+    return { ...common(view, start, end), engine, engines: ENGINES, totals: line('total', 'Total', 810, 1000),
+      daily: days(start, end).map((d) => ({ ...d, costUsd: 5, requests: 7 })), tasks: [task],
+      groups: [
+        { id: 'model', heading: 'By model', lines: [line('gpt-6.1-sol', 'gpt-6.1-sol', 810, 1000)] },
+        { id: 'host', heading: 'By host', lines: [line('devbox', 'devbox', 810, 1000)] },
+        { id: 'project', heading: 'By project', lines: [line('Walnut', 'Walnut', 810, 1000)] },
+      ] }
+  }
+  if (engine) return { ...common(view, start, end), engine, engines: ENGINES, totals: line('total', 'Total', 0, 0), daily: [], tasks: [], groups: [] }
   const tasks = Array.from({ length: 25 }, (_, i) => ({ ...line(`task:t${i}`, i === 0 ? LONG_TITLE : `Coding task ${i + 1}`, 900 - i * 30, 2000 - i * 50),
     taskId: `t${i}`, sessionId: `s${i}`, project: i % 3 ? 'Walnut' : 'Notes', hosts: i % 2 ? ['devbox'] : ['__local__', 'devbox'],
     engines: i === 3 ? ['Codex'] : ['Claude Code'] }))
   const short = Array.from({ length: 12 }, (_, i) => ({ ...line(`session:x${i}`, `Probe ${i + 1}`, 0.2, 2), sessionId: `x${i}`, project: '',
     hosts: ['__local__'], engines: ['Claude Code'] }))
   const total = tasks.reduce((n, l) => n + l.costUsd, 0) + 2400 + 2.4
-  return { ...common(view, start, end), totals: line('total', 'Total', total, 61_000, 14), unpricedModels: ['internal-model'],
-    tasks, moreTasks: { count: 140, costUsd: 2400, requests: 21_000 }, shortSessions: { count: 12, costUsd: 2.4, requests: 24, lines: short },
+  return { ...common(view, start, end), engines: ENGINES, totals: line('total', 'Total', total, 61_000, 14), unpricedModels: ['internal-model'],
+    unpriced: [{ model: 'internal-model', where: 'Claude Code', requests: 14 }],
+    tasks, moreTasks: { count: 140, costUsd: 2400, requests: 21_000, tokens: 195_000_000 }, shortSessions: { count: 12, costUsd: 2.4, requests: 24, tokens: 223_000, lines: short },
     groups: [
       { id: 'engine', heading: 'By engine', lines: [line('claude', 'Claude Code', total - 120, 60_000), line('codex', 'Codex', 120, 1000)] },
       { id: 'model', heading: 'By model', lines: Array.from({ length: 11 }, (_, i) => line(`m${i}`, `claude-model-${i}`, 1000 - i * 80, 3000 - i * 100)) },
@@ -52,13 +68,18 @@ export function costReport(view: string, start: string | null, end: string | nul
     ] }
 }
 
-/** Answers every /api/usage/costs read from the fixture; returns the URLs asked for. */
-export async function routeCosts(page: import('@playwright/test').Page): Promise<URL[]> {
+/**
+ * Answers every /api/usage/costs read from the fixture; returns the URLs asked for.
+ * `hold` may delay one answer (a slow reply that lands after the user moved on).
+ */
+export async function routeCosts(page: import('@playwright/test').Page, hold?: (url: URL) => Promise<void> | undefined): Promise<URL[]> {
   const asked: URL[] = []
-  await page.route('**/api/usage/costs**', (route) => {
+  await page.route('**/api/usage/costs**', async (route) => {
     const url = new URL(route.request().url())
     asked.push(url)
-    return route.fulfill({ json: costReport(url.searchParams.get('view') ?? 'walnut', url.searchParams.get('start'), url.searchParams.get('end')) })
+    await hold?.(url)
+    return route.fulfill({ json: costReport(url.searchParams.get('view') ?? 'walnut', url.searchParams.get('start'), url.searchParams.get('end'),
+      url.searchParams.get('engine')) })
   })
   return asked
 }

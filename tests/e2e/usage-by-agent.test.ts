@@ -66,6 +66,21 @@ describe('reconciled usage through the real server', () => {
     const dated = await get(`/api/usage/costs?view=agents&start=2000-01-01&end=2000-01-02`);
     expect(dated.totals.requests).toBe(0);
   });
+  it('counts one coding engine when the page asks for it', async () => {
+    const all = await get('/api/usage/costs?view=agents&engine=all');
+    expect(all.engine).toBeNull();
+    expect(all.engines).toEqual([{ key: 'claude', label: 'Claude Code' }]);
+    expect(all.groups.map((g: { id: string }) => g.id)).toContain('engine');
+    const claude = await get('/api/usage/costs?view=agents&engine=claude');
+    expect(claude).toMatchObject({ engine: 'claude', totals: { requests: 3 } });
+    // One engine: its "By engine" would be one row, so it is left out.
+    expect(claude.groups.map((g: { id: string }) => g.id)).toEqual(['model', 'host', 'project']);
+    const codex = await get('/api/usage/costs?view=agents&engine=codex');
+    expect(codex).toMatchObject({ engine: 'codex', totals: { requests: 0 }, daily: [], tasks: [] });
+    expect(codex.engines).toEqual([{ key: 'claude', label: 'Claude Code' }]);
+    expect((await get('/api/usage/costs?view=agents&engine=%27%3B%20DROP')).engine).toBeNull();
+    expect((await get('/api/usage/costs?view=walnut&engine=codex')).engine).toBeNull();
+  });
   it('rejects invalid collection windows without starting a scan', async () => {
     for (const body of [{ since: 'invalid' }, { since: '2026-10-14' },
       { since: '2026-10-14T12:00:00Z', until: '2026-10-13T12:00:00Z' }]) {

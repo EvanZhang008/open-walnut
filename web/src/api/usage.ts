@@ -148,18 +148,25 @@ export type CostView = 'walnut' | 'agents';
 export interface CostTokens { input: number; output: number; cacheRead: number; cacheWrite: number }
 export interface CostLine { key: string; label: string; costUsd: number; requests: number; tokens: CostTokens; unpriced: number }
 export interface CostTaskLine extends CostLine { taskId?: string; sessionId?: string; project: string; hosts: string[]; engines: string[] }
+export interface CostUnpriced { model: string; where: string; requests: number }
+export interface CostFold { count: number; costUsd: number; requests: number; tokens?: number }
 export interface CostSourceCheck { source: string; host: string; status: string; matchedCalls: number; unmatchedCalls: number; detail: string }
 
 export interface CostReport {
   view: CostView;
   range: { start: string | null; end: string | null };
+  /** Agents only: the one engine counted (claude, codex, opencode...), null for all. */
+  engine?: string | null;
+  /** Agents only: the engines with sessions in the period. */
+  engines?: { key: string; label: string }[];
   totals: CostLine;
   daily: { date: string; costUsd: number; requests: number }[];
   groups: { id: string; heading: string; lines: CostLine[] }[];
   tasks?: CostTaskLine[];
-  moreTasks?: { count: number; costUsd: number; requests: number };
-  shortSessions?: { count: number; costUsd: number; requests: number; lines: CostTaskLine[] };
+  moreTasks?: CostFold;
+  shortSessions?: CostFold & { lines: CostTaskLine[] };
   unpricedModels: string[];
+  unpriced?: CostUnpriced[];
   prices: { source: string; asOf?: string };
   ready: boolean;
   timeZone: string;
@@ -169,9 +176,11 @@ export interface CostReport {
   collection?: { running: boolean; startedAt?: string; finishedAt?: string; error?: string };
 }
 
-export function fetchUsageCosts(view: CostView, range: { start?: string; end?: string }): Promise<CostReport> {
+/** `engine`: one coding engine's key, agents view only; absent or 'all' counts every engine. */
+export function fetchUsageCosts(view: CostView, range: { start?: string; end?: string }, engine?: string): Promise<CostReport> {
   const q: Record<string, string> = { view };
   if (range.start) q.start = range.start;
   if (range.end) q.end = range.end;
+  if (view === 'agents' && engine && engine !== 'all') q.engine = engine;
   return apiGet('/api/usage/costs', q);
 }

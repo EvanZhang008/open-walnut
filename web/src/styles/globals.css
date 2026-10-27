@@ -19755,11 +19755,11 @@ a.task-kebab-info:hover {
   opacity: 0.6;
 }
 
+/* Portalled to <body>; useMenuPlacement sets position, top, right and maxHeight.
+   overflow-y is the required counterpart of that maxHeight. */
 .usage-daterange-pop {
-  position: absolute;
-  top: calc(100% + 6px);
-  left: 0;
-  z-index: 30;
+  box-sizing: border-box;
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: 10px;

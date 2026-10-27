@@ -38,7 +38,7 @@ import { recordSkillCreated, recordSkillPatched } from './skill-usage.js';
 import { screenSkillWrite } from './memory-safety.js';
 import { bus, EventNames, type BusEvent } from './event-bus.js';
 import { addNotification as addFeedNotification } from './notifications/store.js';
-import { usageTracker, type UsageSource } from './usage/index.js';
+import type { UsageSource } from './usage/index.js';
 import { log } from '../logging/index.js';
 
 const SUBSCRIBER = 'overview-maintainer';
@@ -226,22 +226,12 @@ async function defaultRunner(userMessage: string, options: MaintainerRunOptions)
       signal: controller.signal,
       // A helper nobody waits on: the utility band when the server was raised.
       purpose: 'background',
+      // Recorded by the model layer, which names the model the call resolved to
+      // when the reply does not say (this hook used to record "unknown" then).
+      usage: { source: options.source, agentId: SUBSCRIBER },
     });
   } finally {
     clearTimeout(timer);
-  }
-  if (result.usage) {
-    try {
-      usageTracker.record({
-        source: options.source,
-        model: result.usage.model ?? 'unknown',
-        input_tokens: result.usage.input_tokens,
-        output_tokens: result.usage.output_tokens,
-        cache_creation_input_tokens: result.usage.cache_creation_input_tokens,
-        cache_read_input_tokens: result.usage.cache_read_input_tokens,
-        agentId: SUBSCRIBER,
-      });
-    } catch { /* accounting must never fail the hook */ }
   }
   const response = (result.content ?? [])
     .map((b) => (b.type === 'text' && 'text' in b ? (b as { text: string }).text : ''))

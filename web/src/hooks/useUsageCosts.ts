@@ -24,11 +24,12 @@ export function costRange(time: TimeSelection): { start?: string; end?: string }
 }
 
 /**
- * One view's cost report for one period. A reply that arrives after the view or
- * period changed is dropped. While past usage is still being summed, or a
- * collection is running, it reads again a few seconds later.
+ * One view's cost report for one period (and, in the agents view, one engine or
+ * 'all'). A reply that arrives after the view, period or engine changed is
+ * dropped. While past usage is still being summed, or a collection is running,
+ * it reads again a few seconds later.
  */
-export function useUsageCosts(view: CostView, time: TimeSelection) {
+export function useUsageCosts(view: CostView, time: TimeSelection, engine = 'all') {
   const [report, setReport] = useState<CostReport | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -36,20 +37,22 @@ export function useUsageCosts(view: CostView, time: TimeSelection) {
   // Today's date is part of the key, so "Today" left open past midnight moves on with the clock.
   const today = localDay(new Date());
   const range = useMemo(() => costRange(time), [time, today]); // eslint-disable-line react-hooks/exhaustive-deps
+  // The Walnut view has no engines: its key stays 'all' whatever the agents view picked.
+  const wanted = view === 'agents' ? engine : 'all';
 
   const refresh = useCallback(async () => {
     const mine = ++seq.current;
     setLoading(true);
     setError(null);
     try {
-      const data = await fetchUsageCosts(view, range);
+      const data = await fetchUsageCosts(view, range, wanted);
       if (mine === seq.current) setReport(data);
     } catch (err) {
       if (mine === seq.current) setError(err instanceof Error ? err.message : String(err));
     } finally {
       if (mine === seq.current) setLoading(false);
     }
-  }, [view, range]);
+  }, [view, range, wanted]);
 
   useEffect(() => { void refresh(); }, [refresh]);
 
@@ -60,8 +63,8 @@ export function useUsageCosts(view: CostView, time: TimeSelection) {
     return () => clearTimeout(timer);
   }, [busy, report, refresh]);
 
-  // A report for another view or period is not this one's: show it only while the new one loads.
+  // A report for another view, period or engine is not this one's: show it only while the new one loads.
   const current = report && report.view === view && (report.range.start ?? undefined) === range.start
-    && (report.range.end ?? undefined) === range.end ? report : null;
+    && (report.range.end ?? undefined) === range.end && (report.engine ?? 'all') === wanted ? report : null;
   return { report, current, loading, error, refresh, range };
 }
