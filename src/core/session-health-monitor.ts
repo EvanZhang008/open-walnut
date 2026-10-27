@@ -1170,14 +1170,28 @@ export class SessionHealthMonitor {
 
     emitSessionStatusChanged(updated, {}, ['*'], { source: 'health-monitor' })
 
-    // Phase sync: idle timeout → WAIT (we killed the session, not a normal completion).
-    // Not for the main agent: an idle Main reaped is not a failure (org/main-stays-active.ts).
+    // Phase sync: idle timeout hands the task back (we killed the session, not a normal
+    // completion), except a standing routine, which waits on its next fire (phase.ts
+    // standingRoutineWaits). Not for the main agent: an idle Main reaped is not a failure
+    // (org/main-stays-active.ts).
     if (session.taskId && !await isMainAgentTaskId(session.taskId)) {
       try {
-        const { applySessionPhase } = await import('./phase.js')
+        const { applySessionPhase, sessionErrorPhase, standingRoutineWaits } = await import('./phase.js')
+        const parks = await standingRoutineWaits(session.taskId)
+        if (parks) {
+          // What the session:error edge would have cleared: a fire turn or an interrupted wait
+          // left from the reaped turn must not reshape the next hand-back.
+          const { dropFireTurn, dropInterruptedWait } = await import('./task-wait-resume.js')
+          dropFireTurn(session.taskId)
+          dropInterruptedWait(session.taskId, 'session-error')
+        }
         await applySessionPhase(
-          session.taskId, 'session:error', 'health-monitor:idle-timeout',
-          { sessionId: session.claudeSessionId, processAlive: false },
+          session.taskId, parks ? 'reconciler' : 'session:error', 'health-monitor:idle-timeout',
+          {
+            sessionId: session.claudeSessionId, processAlive: false,
+            // Parks only work in flight: a task already on the user, parked or done stays so.
+            ...(parks ? { newPhase: 'WAITING' as const, shouldApply: (current: { phase: TaskPhase }) => sessionErrorPhase(current.phase) !== null } : {}),
+          },
         )
       } catch (err) {
         log.session.warn('health monitor: phase sync failed on idle timeout', {

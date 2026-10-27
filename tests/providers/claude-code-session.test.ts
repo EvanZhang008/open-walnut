@@ -4105,6 +4105,63 @@ describe('handleProcessDeath — init failure vs ordinary shutdown', () => {
     expect(initFailure?.meta?.stderr).toBeUndefined();
   });
 
+  describe('a death with no result: the CLI\'s exit decides, never its stderr', () => {
+    // 2026-10-26: newer CLIs end the advisory line at "ignored" and add tagged diagnostics;
+    // the advisory was quoted as "Its session failed" on a turn that had ended normally.
+    const NEW_ADVISORY = 'Managed settings contain invalid entries (remaining valid policies are still enforced):\n'
+      + '  /Library/Application Support/ClaudeCode/managed-settings.json (allowedMcpServers[]): Invalid entry was ignored\n'
+      + '[claude-code:unrecognized_model] {"model":"mock-model","query_source":"sdk"}'
+    let busErrors: BusEvent[]
+    beforeEach(() => {
+      busErrors = []
+      bus.subscribe('main-ai', (event: BusEvent) => {
+        if (event.name === EventNames.SESSION_ERROR) busErrors.push(event)
+      })
+    })
+    const midTurn = (session: ClaudeCodeSession, exitCode: number | null) => {
+      /* eslint-disable @typescript-eslint/no-explicit-any */
+      ;(session as any).resultEmitted = false
+      ;(session as any)._turnResultEmitted = false
+      ;(session as any)._exitCode = exitCode
+      /* eslint-enable @typescript-eslint/no-explicit-any */
+      return session
+    }
+
+    it('a clean exit (code 0) with only advisories on stderr is not a failure', () => {
+      die(midTurn(makeDeadSession('death-clean-advisory', { initialized: true, stderr: NEW_ADVISORY }), 0))
+      expect(busErrors).toEqual([])
+    })
+
+    it('a clean exit is not a failure even when stderr holds something else', () => {
+      die(midTurn(makeDeadSession('death-clean-other', { initialized: true, stderr: 'warning: something odd' }), 0))
+      expect(busErrors).toEqual([])
+    })
+
+    it('a stop Walnut asked for is not a failure, whatever the exit code', () => {
+      const session = midTurn(makeDeadSession('death-reaped', { initialized: true, stderr: 'Error: connect ECONNREFUSED' }), 143)
+      session.markExpectedTeardown('idle_timeout')
+      die(session)
+      expect(busErrors).toEqual([])
+    })
+
+    it('an unknown exit (the pid was found gone) with only advisories is not a failure', () => {
+      // The incident's shape: the liveness check finds the process gone, no exit code known.
+      die(midTurn(makeDeadSession('death-unknown-exit', { initialized: true, stderr: NEW_ADVISORY }), null))
+      expect(busErrors).toEqual([])
+    })
+
+    it('a failing exit names the real diagnostic, without the advisories', () => {
+      die(midTurn(makeDeadSession('death-real', { initialized: true, stderr: `${NEW_ADVISORY}\nError: connect ECONNREFUSED` }), 1))
+      expect(busErrors).toHaveLength(1)
+      expect((busErrors[0]!.data as { error: string }).error).toBe('Error: connect ECONNREFUSED')
+    })
+
+    it('a failing exit with only advisories on stderr quotes none of them', () => {
+      die(midTurn(makeDeadSession('death-real-noise', { initialized: true, stderr: NEW_ADVISORY }), 1))
+      expect(busErrors).toEqual([])
+    })
+  })
+
   it('an attached session (init is historic fact) never reports an init failure', async () => {
     const record = {
       claudeSessionId: 'death-attached', taskId: 'task-death-attached', project: 'proj',
@@ -4272,6 +4329,14 @@ describe('CLI startup advisories are classified as noise, not failure', () => {
       .toBe('Error: connect ECONNREFUSED');
     expect(stripCliStartupNoise('Error: connect ECONNREFUSED'))
       .toBe('Error: connect ECONNREFUSED');
+  });
+
+  it('strips the newer advisory line and the CLI\'s tagged diagnostics', () => {
+    const newer = 'Managed settings contain invalid entries (remaining valid policies are still enforced):\n'
+      + '  /Library/Application Support/ClaudeCode/managed-settings.json (allowedMcpServers[]): Invalid entry was ignored\n'
+      + '[claude-code:unrecognized_model] {"model":"mock-model"}';
+    expect(stripCliStartupNoise(newer)).toBe('');
+    expect(stripCliStartupNoise(`${newer}\nfatal: out of memory`)).toBe('fatal: out of memory');
   });
 
   it('treats an advisory-only stderr as benign, a real error as not', () => {

@@ -519,7 +519,11 @@ function isBenignSshStderr(stderr: string): boolean {
  */
 const CLI_STARTUP_NOISE: RegExp[] = [
   /^Managed settings contain invalid entries/i,
-  /Invalid entry was ignored: failed validation$/i,
+  // Newer CLIs end the line at "ignored" (2026-10-26, on every start of every session).
+  /Invalid entry was ignored(: failed validation)?$/i,
+  // The CLI's note that it has no price for a model name (`[claude-code:unrecognized_model]
+  // {"model":...}`): about the bill, never why a process ended. Only this tag: another may be fatal.
+  /^\[claude-code:unrecognized_model\]/i,
 ]
 
 /**
@@ -1940,6 +1944,8 @@ export class ClaudeCodeSession {
    *  eviction, idle timeout). Suppresses the death-path error toast/SESSION_ERROR:
    *  the user already knows, and the session record's status_reason carries the why. */
   private _expectedTeardown = false
+  /** Why Walnut asked this process to end (markExpectedTeardown's reason), while it is expected. */
+  private _teardownReason: string | undefined
 
   constructor(
     /** Written once more only by bindTask: a taskless session that a task adopts. */
@@ -4510,13 +4516,23 @@ export class ClaudeCodeSession {
    */
   markExpectedTeardown(reason: string): () => void {
     const previous = this._expectedTeardown
+    const previousReason = this._teardownReason
     const transport = this._transport
     const turnGen = this._turnGen
     this._expectedTeardown = true
+    this._teardownReason = reason
     log.session.debug('session teardown expected', { taskId: this.taskId, sessionId: this.claudeSessionId ?? undefined, reason })
     return () => {
-      if (this._transport === transport && this._turnGen === turnGen) this._expectedTeardown = previous
+      if (this._transport === transport && this._turnGen === turnGen) {
+        this._expectedTeardown = previous
+        this._teardownReason = previousReason
+      }
     }
+  }
+
+  /** Why this process is ending when Walnut asked it to (markExpectedTeardown), else undefined. */
+  get teardownReason(): string | undefined {
+    return this._expectedTeardown ? this._teardownReason : undefined
   }
 
   /** Record-side lane changes (side-thread consume/promote) must reach the live
@@ -4754,15 +4770,23 @@ export class ClaudeCodeSession {
           stderr = this._exitStderr.slice(0, 10240)
         }
 
-        const isRealError = stderr && !isBenignSshStderr(stderr)
+        // Whether the session failed is the CLI's to say: an error result (above), or an
+        // exit that is not a clean stop. A stop Walnut asked for (idle reap, eviction,
+        // completion) and exit 0 are never failures, whatever stderr holds: the CLI
+        // prints advisories there on a healthy run, and quoting one as the failure
+        // handed tasks to the user as "Its session failed" (2026-10-26, a managed-settings
+        // advisory on a turn that had ended normally). Stderr only names a real failure.
+        const failureText = stripCliStartupNoise(stderr)
+        const isRealError = !this._expectedTeardown && this._exitCode !== 0
+          && !!failureText && !isBenignSshStderr(failureText)
 
         if (isRealError) {
           this._activity = undefined
-          this.emitStatusChanged('NEED_ACTION', stderr.slice(0, 500))
+          this.emitStatusChanged('NEED_ACTION', failureText.slice(0, 500))
           bus.emit(EventNames.SESSION_ERROR, {
             sessionId: this.claudeSessionId,
             taskId: this.taskId,
-            error: stderr,
+            error: failureText,
           }, ['main-ai', 'session-runner'], { source: 'session-runner' })
         } else {
           this._activity = undefined

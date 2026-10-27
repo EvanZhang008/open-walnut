@@ -4,6 +4,12 @@ import path from 'node:path'
 import { createMockConstants } from '../helpers/mock-constants.js'
 
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-handback'))
+// The task's triggers, as task-wait-until.ts reads them from the routines store.
+const watching = vi.hoisted(() => ({ triggers: [] as Array<{ state: string; fires?: number }> }))
+vi.mock('../../src/core/task-wait-until.js', async (orig) => ({
+  ...(await orig<typeof import('../../src/core/task-wait-until.js')>()),
+  triggersWatching: async () => watching.triggers,
+}))
 
 import { reconcileSessions } from '../../src/core/session-reconciler.js'
 import { handBackTaskOnSessionEnd, sessionResultPhase } from '../../src/core/phase.js'
@@ -24,6 +30,7 @@ import { WALNUT_HOME, TASKS_FILE } from '../../src/constants.js'
 const HANDBACK_PHASE = sessionResultPhase('IN_PROGRESS')!
 
 beforeEach(async () => {
+  watching.triggers = []
   closeDb()
   _resetSessionTrackerForTesting()
   await fsp.rm(WALNUT_HOME, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
@@ -160,6 +167,66 @@ describe('handBackTaskOnSessionEnd', () => {
     } finally {
       recovery.stop()
     }
+  })
+
+  describe('a standing routine (an armed trigger that keeps firing)', () => {
+    async function routineTask(sid: string): Promise<string> {
+      const taskId = await seedTask('a watch between fires')
+      await updateTask(taskId, { phase: 'IN_PROGRESS' })
+      await createSessionRecord(sid, taskId, 'proj')
+      await updateSessionRecord(sid, { process_status: 'stopped' })
+      watching.triggers = [{ state: 'armed', fires: 5 }]
+      return taskId
+    }
+
+    it('waits on its next fire when Walnut stopped its session (an idle reap)', async () => {
+      const taskId = await routineTask('sid-reaped')
+      vi.spyOn(sessionRunner, 'findSessionByClaudeId')
+        .mockImplementation((id) => id === 'sid-reaped' ? { processStatus: 'stopped', teardownReason: 'idle_timeout' } as never : undefined)
+      expect(await handBackTaskOnSessionEnd(taskId, 'sid-reaped', 'test')).toBe(true)
+      const task = await getTask(taskId)
+      expect(task.phase).toBe('WAITING')
+      expect(task.wait_until).toBeTruthy()
+    })
+
+    it('waits too when the reap is known only from the session record', async () => {
+      const taskId = await routineTask('sid-reaped-record')
+      await updateSessionRecord('sid-reaped-record', { status_reason: 'idle_timeout' } as never)
+      expect(await handBackTaskOnSessionEnd(taskId, 'sid-reaped-record', 'test')).toBe(true)
+      expect((await getTask(taskId)).phase).toBe('WAITING')
+    })
+
+    it('is handed back when the user stopped it (any stop but an idle reap)', async () => {
+      const taskId = await routineTask('sid-user-stop')
+      vi.spyOn(sessionRunner, 'findSessionByClaudeId')
+        .mockImplementation((id) => id === 'sid-user-stop' ? { processStatus: 'stopped', teardownReason: 'user_terminated' } as never : undefined)
+      expect(await handBackTaskOnSessionEnd(taskId, 'sid-user-stop', 'test')).toBe(true)
+      expect((await getTask(taskId)).phase).toBe(HANDBACK_PHASE)
+    })
+
+    it('never parks the main agent', async () => {
+      const taskId = await routineTask('sid-main')
+      await taskManager.updateTaskRaw(taskId, { org_role: 'main' } as never)
+      vi.spyOn(sessionRunner, 'findSessionByClaudeId')
+        .mockImplementation((id) => id === 'sid-main' ? { processStatus: 'stopped', teardownReason: 'idle_timeout' } as never : undefined)
+      await handBackTaskOnSessionEnd(taskId, 'sid-main', 'test')
+      expect((await getTask(taskId)).phase).not.toBe('WAITING')
+    })
+
+    it('is still handed back when its process ended on its own (it may have crashed)', async () => {
+      const taskId = await routineTask('sid-died')
+      expect(await handBackTaskOnSessionEnd(taskId, 'sid-died', 'test')).toBe(true)
+      expect((await getTask(taskId)).phase).toBe(HANDBACK_PHASE)
+    })
+
+    it('is handed back when the stopped session had failed', async () => {
+      const taskId = await routineTask('sid-failed')
+      await updateSessionRecord('sid-failed', { process_status: 'error' })
+      vi.spyOn(sessionRunner, 'findSessionByClaudeId')
+        .mockImplementation((id) => id === 'sid-failed' ? { processStatus: 'error', teardownReason: 'idle_timeout' } as never : undefined)
+      expect(await handBackTaskOnSessionEnd(taskId, 'sid-failed', 'test')).toBe(true)
+      expect((await getTask(taskId)).phase).toBe(HANDBACK_PHASE)
+    })
   })
 
   it('is a no-op for a session with no task', async () => {

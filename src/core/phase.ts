@@ -693,6 +693,30 @@ export async function applySessionPhase(
   return { changed: false, oldPhase } // unreachable but TS needs it
 }
 
+/**
+ * A standing routine (an armed trigger that keeps firing, task-wait-resume.ts) waits on its next
+ * fire, so Walnut's idle reap of its quiet session parks it instead of handing it to the user
+ * (2026-10-26: a watch reaped after hours of quiet read "needs you" until its lead parked it).
+ * Any other stop (the user's, a crash, an error) still hands it back, and Main never parks.
+ */
+export async function standingRoutineWaits(taskId: string): Promise<boolean> {
+  try {
+    const { triggersWatching } = await import('./task-wait-until.js')
+    return triggersStanding(await triggersWatching(taskId))
+  } catch {
+    return false
+  }
+}
+
+/** Walnut's idle reap ended this session: the live process says so, else its record. */
+async function endedByIdleReap(sessionId: string): Promise<boolean> {
+  const { sessionRunner } = await import('../providers/claude-code-session.js')
+  const live = sessionRunner.findSessionByClaudeId(sessionId)
+  if (live) return live.teardownReason === 'idle_timeout'
+  const { getSessionByClaudeId } = await import('./session-tracker.js')
+  return (await getSessionByClaudeId(sessionId).catch(() => null))?.status_reason === 'idle_timeout'
+}
+
 async function sessionEndedInError(sessionId: string | undefined): Promise<boolean> {
   if (!sessionId) return false
   const { getSessionByClaudeId } = await import('./session-tracker.js')
@@ -718,9 +742,11 @@ export async function handBackTaskOnSessionEnd(
     const { sessionRunner } = await import('../providers/claude-code-session.js')
     const { getSessionAutoRecover } = await import('./session-auto-recover.js')
     await getSessionsForTask(taskId)
+    const parks = !isMainAgentTask(task) && await endedByIdleReap(sessionId)
+      && !(await sessionEndedInError(sessionId)) && await standingRoutineWaits(taskId)
     const res = await applySessionPhase(taskId, 'reconciler', source, {
       sessionId,
-      newPhase: handback,
+      newPhase: parks ? 'WAITING' : handback,
       turnEnd: opts?.turnEnd === true,
       shouldApply: (current) => {
         if (opts?.shouldApply && !opts.shouldApply(current)) return false
@@ -739,7 +765,8 @@ export async function handBackTaskOnSessionEnd(
       },
     })
     if (res.changed) {
-      log.session.warn(res.newPhase === 'WAITING'
+      log.session.warn(parks ? 'standing routine parked after Walnut stopped its session'
+        : res.newPhase === 'WAITING'
         ? 'interrupted wait restored after out-of-band session end'
         : 'task handed back after out-of-band session end', {
         taskId, sessionId, source, oldPhase: res.oldPhase,
