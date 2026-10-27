@@ -40,8 +40,13 @@ if (missing) process.stdout.write(`\n[fleet] companion upgrade SKIPPED: no ${mis
 
 const sha256 = (t: string) => crypto.createHash('sha256').update(t, 'utf-8').digest('hex')
 const token = () => crypto.randomBytes(16).toString('hex')
-const MAC_CHECKLIST = '# Mac checklist\n- the build is green\n'
-const COMPANION_CHECKLIST = '# Companion checklist\n- an old copy\n'
+// What the phone reads and writes across versions: USER.md through /api/v1/memory/user, which every
+// release in the fleet serves (the heartbeat checklist it used before is gone from the new Walnut).
+const MAC_PROFILE = '# About me (Mac)\n- the build is green\n'
+const COMPANION_PROFILE = '# About me (companion)\n- an old copy\n'
+const NEXT_PROFILE = '# About me (Mac)\n- written from the phone through an old companion\n'
+const userMd = (data: string) => path.join(data, 'memory', 'USER.md')
+const writeUserMd = (data: string, content: string) => { fs.mkdirSync(path.dirname(userMd(data)), { recursive: true }); fs.writeFileSync(userMd(data), content) }
 
 function gitEnv(): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { PATH: '/usr/bin:/bin', HOME: os.tmpdir() }
@@ -134,7 +139,7 @@ describe.skipIf(!!missing)('the fleet: the companion stays old while its Mac mov
       { name: 'phone', tokenHash: sha256(tokens.phone), createdAt: now },
       { name: 'bridge-local', tokenHash: sha256(tokens.local), createdAt: now, kind: 'machine' },
     ] }), { mode: 0o600 })
-    fs.writeFileSync(path.join(box.data, 'HEARTBEAT.md'), COMPANION_CHECKLIST)
+    writeUserMd(box.data, COMPANION_PROFILE)
     companionProgram.env!.WALNUT_GIT_HUB_DIR = path.join(base, 'hub')
     companion = await startMac(path.join(base, 'box'), ssh, windows, {}, companionProgram)
     note(`companion (old release, cloud mode) on :${companion.port}`)
@@ -151,7 +156,7 @@ describe.skipIf(!!missing)('the fleet: the companion stays old while its Mac mov
     execFileSync('git', ['-C', m.data, 'remote', 'add', 'cloud', `http://mac:${tokens.phone}@127.0.0.1:${companion.port}/git/data.git`], { env: gitEnv() })
     fs.mkdirSync(path.join(m.data, 'sync'), { recursive: true })
     fs.writeFileSync(path.join(m.data, 'sync', 'bridge-tokens.json'), JSON.stringify({ 'bridge-local': tokens.local }), { mode: 0o600 })
-    fs.writeFileSync(path.join(m.data, 'HEARTBEAT.md'), MAC_CHECKLIST)
+    writeUserMd(m.data, MAC_PROFILE)
     mac = await startMac(path.join(base, 'mac'), ssh, windows, {}, program(OLD, 'old'))
     note(`old Mac on :${mac.port}, its daemon: ${macDaemon().slice(0, 140)}`)
   }, 900_000)
@@ -183,15 +188,14 @@ describe.skipIf(!!missing)('the fleet: the companion stays old while its Mac mov
     const view = await heard()
     note(`companion's view of the new Mac: ${JSON.stringify({ role: view.role, primaryHeard: view.primaryHeard, backupAllowed: view.backupAllowed })}`)
     await answeredByMac()
-    const read = await phone('/api/v1/heartbeat/checklist')
+    const read = await phone('/api/v1/memory/user')
     expect(read).toMatchObject({ status: 200, by: 'primary' })
-    expect(read.json.content).toBe(MAC_CHECKLIST)
-    const next = '# Mac checklist\n- written from the phone through an old companion\n'
-    const w = await phone('/api/v1/heartbeat/checklist', { method: 'PUT', body: JSON.stringify({ content: next }) })
+    expect(read.json.memory?.content).toBe(MAC_PROFILE)
+    const w = await phone('/api/v1/memory/user', { method: 'PUT', body: JSON.stringify({ content: NEXT_PROFILE }) })
     expect(w).toMatchObject({ status: 200, by: 'primary' })
-    expect(fs.readFileSync(path.join(mac.data, 'HEARTBEAT.md'), 'utf8')).toBe(next)
+    expect(fs.readFileSync(userMd(mac.data), 'utf8')).toBe(NEXT_PROFILE)
     // The companion's own copy may follow later through the data hub; the write itself was the Mac's.
-    note(`companion's copy of the checklist right after the write: ${JSON.stringify(fs.readFileSync(path.join(companion.data, 'HEARTBEAT.md'), 'utf8').slice(0, 80))}`)
+    note(`companion's copy of USER.md right after the write: ${JSON.stringify((fs.existsSync(userMd(companion.data)) ? fs.readFileSync(userMd(companion.data), 'utf8') : '(none)').slice(0, 80))}`)
     // A task the phone makes is the Mac's, made once.
     const made = await phone('/api/v1/tasks', { method: 'POST', body: JSON.stringify({ title: 'Made from the phone across versions' }) })
     expect(made).toMatchObject({ status: 201, by: 'primary' })
@@ -205,10 +209,10 @@ describe.skipIf(!!missing)('the fleet: the companion stays old while its Mac mov
   it('K3: the compiled Mac sleeps: the companion answers by itself, then the Mac again', async () => {
     mac.sleep({ ssh: false })
     try {
-      const first = await phone('/api/v1/heartbeat/checklist')
+      const first = await phone('/api/v1/memory/user')
       note(`Mac asleep: first call ${first.status} by ${first.by} in ${first.ms} ms`)
       expect(first).toMatchObject({ status: 200, by: 'companion' })
-      const second = await phone('/api/v1/heartbeat/checklist')
+      const second = await phone('/api/v1/memory/user')
       expect(second).toMatchObject({ status: 200, by: 'companion' })
     } finally {
       mac.wake()
@@ -223,8 +227,8 @@ describe.skipIf(!!missing)('the fleet: the companion stays old while its Mac mov
     note(`rolled-back Mac's daemon: ${macDaemon().slice(0, 160)}`)
     await heard()
     await answeredByMac()
-    const r = await phone('/api/v1/heartbeat/checklist')
+    const r = await phone('/api/v1/memory/user')
     expect(r).toMatchObject({ status: 200, by: 'primary' })
-    expect(r.json.content).toBe('# Mac checklist\n- written from the phone through an old companion\n')
+    expect(r.json.memory?.content).toBe(NEXT_PROFILE)
   }, 600_000)
 })

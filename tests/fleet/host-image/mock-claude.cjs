@@ -10,7 +10,7 @@
  *                               tests/helpers/replica-mock-cli.cjs does)
  *
  * A turn answers "echo: <the person's words>" after MOCK_THINK_MS (default 300 ms),
- * with Walnut's own wrapping (banners, reminders, the reference card) peeled off.
+ * with Walnut's own wrapping (banners, notes, reminders, the reference card) peeled off.
  *
  * "please update <task id> title <words> after <n>s" waits n seconds (so the test
  * can close the Mac's lid or cut its link mid-turn), then runs
@@ -69,7 +69,9 @@ function file(row) {
 function stripBanners(text) {
   let body = text
   for (;;) {
-    const m = body.match(/^\s*\[([^\]\n]+)\]\n[\s\S]*?\n\[\/\1\]\s*/)
+    // A bracketed banner, or one of Walnut's own notes riding in front of the words (a moved task,
+    // a restart, default instructions that changed: <walnut-message kind="notification">).
+    const m = body.match(/^\s*\[([^\]\n]+)\]\n[\s\S]*?\n\[\/\1\]\s*/) || body.match(/^\s*<walnut-message\b[\s\S]*?<\/walnut-message>\s*/)
     if (!m) break
     body = body.slice(m[0].length)
   }
@@ -87,7 +89,7 @@ function stripInputDecorations(text) {
       while (i < lines.length && lines[i].trim() !== '---/walnut-refs---') i++
       continue
     }
-    if (t.startsWith('[Rich output mode')) continue
+    if (t.startsWith('[Rich output mode') || t.startsWith('[Reply language')) continue
     if (/^\(Back to (the main conversation|the earlier (thread|question) about)/.test(t)) continue
     kept.push(lines[i])
   }
