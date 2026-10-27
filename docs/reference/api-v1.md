@@ -1045,6 +1045,20 @@ reconcile, `NOTES_UPDATED` events) with the web UI's `/api/notes-v2`.
   adds `placement: { parent_task_id, parent_title?, previous_parent_task_id? }`,
   and the adopted task's live session is told through a Walnut notification.
 
+### A task's own MEMORY.md (additive, 2026-10-27): `/tasks/:id/agent-memory`
+
+The working memory Main, a lead or a leader keeps for itself (`src/core/sessions/agent-memory.ts`):
+pending items, deadlines, reminders. It is not the global `MEMORY.md` and no list, Brief or Board
+shows it; `GET /tasks` (slim and minimal) omits `agent_memory`, and `task_get` reports only
+`agent_memory_chars`.
+
+- `GET /api/v1/tasks/:id/agent-memory` → `200 { "task_id", "title", "memory": { "text", "at",
+  "refused"? } | null, "chars", "soft_limit": 12000, "limit": 20000 }`.
+- `PUT /api/v1/tasks/:id/agent-memory { "content", "mode"?: "append" | "replace" }` (append adds
+  one dated entry and is the default) → `200` as GET. `403 not_your_memory` when a session writes
+  another task's file, `409 task_complete` on a completed task, `413 agent_memory_too_long` past
+  20,000 characters (nothing written), `501 not_supported_cloud` on a replica.
+
 ### Task board (additive, 2026-10-01): `/tasks/:id/board`
 
 One HTML document per task, written by the task's session or any task in its

@@ -845,6 +845,9 @@ export interface Task {
   /** Main's or a lead's Brief: the short letter to the user it rewrites at every turn end
    *  (FOR_USER_BRIEF), shown above its chat on the Org page. Local-only, payload blob. */
   brief?: TaskBrief;
+  /** The agent's own MEMORY.md (Main, a lead, a leader): its working memory, not shown to the
+   *  user by default and not Walnut's global MEMORY.md (src/core/sessions/agent-memory.ts). */
+  agent_memory?: { text: string; at: string; refused?: { at: string; chars: number } };
   /** Task-level working directory override. Takes precedence over project default_cwd in session resolution. */
   cwd?: string;
   /** Set by the cwd rename detector / turn-end check when task.cwd no longer exists on disk.

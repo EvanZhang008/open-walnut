@@ -50,8 +50,10 @@ export function taskExecution(task: Record<string, unknown>): Record<string, unk
 export function taskView(task: Record<string, unknown>): Record<string, unknown> {
   const { status, session_status, exec_session_status, plan_session_status,
     session_id, exec_session_id, plan_session_id, session_ids, last_start,
-    session_history_count, session_status_unavailable, ...fields } = task
-  return { ...fields, execution: taskExecution(task) }
+    session_history_count, session_status_unavailable, agent_memory, ...fields } = task
+  // Another task's own MEMORY.md is not task_get material: its size only; agent_memory_read reads it.
+  const memoryChars = (agent_memory as { text?: string } | undefined)?.text?.length
+  return { ...fields, ...(memoryChars ? { agent_memory_chars: memoryChars } : {}), execution: taskExecution(task) }
 }
 
 export async function startTask(id: string, body: Record<string, unknown>, call: Call): Promise<Record<string, unknown>> {

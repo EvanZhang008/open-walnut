@@ -129,6 +129,10 @@ export async function collectOpenItems(
         const teams = await teamSnapshotText(task, now);
         if (teams) items.text = [items.text, teams].filter(Boolean).join('\n\n');
       }
+      // Its own MEMORY.md read back whole: a summary must not be where it lives (agent-memory.ts).
+      const { agentMemoryAfterCompaction } = await import('./agent-memory.js');
+      const memory = task.phase !== 'COMPLETE' ? agentMemoryAfterCompaction(task) : '';
+      if (memory) items.text = [items.text, memory].filter(Boolean).join('\n\n');
       // Every default-instruction line that changed since spawn: the summary may have dropped the notices.
       const { instructionNoticeFor, noteInstructionNoticeStatedByHook } = await import('./instruction-notice.js');
       const changed = instructionNoticeFor(caller.record, task, { ignoreTold: true });

@@ -172,7 +172,10 @@ export const BRIEF_LINE =
   + '(FOR_USER_BRIEF) and lists what moved in your teams since the last one: rewrite it whole each time, '
   + 'what needs the user first, then one line per piece of work, what is done and what it waits on now, on whom; '
   + 'every line starts with the <task-ref/> of the task it is about (your own task for your own work). Walnut shows each task it names with its live status and marks what moved after '
-  + 'you wrote it, so keep it to the work that matters now.\n\n'
+  + 'you wrote it, so keep it to the work that matters now. Everything else you need to remember (a deadline days '
+  + 'away, a reminder, a thing to raise later) goes into your own MEMORY.md, which only you read: Walnut asks for it '
+  + 'at every turn end too, and agent_memory_read / agent_memory_write change it any time. It is not Walnut\'s '
+  + 'global MEMORY.md (memory_read).\n\n'
 
 /**
  * 2d. The org above the work (src/core/org/): the main agent talks to one

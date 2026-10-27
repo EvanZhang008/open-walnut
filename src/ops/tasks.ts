@@ -785,6 +785,62 @@ defineOp({
   tags: { readonly: false, remote: 'allow' },
 })
 
+// A task's own MEMORY.md (src/core/sessions/agent-memory.ts): Main's, a lead's, a leader's working memory.
+const AGENT_MEMORY_SCOPE = 'Your own MEMORY.md is the working memory of your task (Main, a lead, a leader): pending items, '
+  + 'a deadline days away, reminders, things to raise later, facts you learned for this work. Only you read it; it never '
+  + 'reaches the user\'s Brief, Board or status. It is NOT Walnut\'s global MEMORY.md / USER.md (memory_read / memory_write).'
+
+defineOp({
+  name: 'agent_memory_read',
+  title: 'Read a task\'s own MEMORY.md',
+  description: `${AGENT_MEMORY_SCOPE} Returns its text, its size and the limits. task defaults to your own task.`,
+  input: {
+    task: z.string().min(1).optional().describe('Task id or unique prefix; default: your own task'),
+  },
+  handler: async (args, call) => {
+    const id = typeof args.task === 'string' && args.task.trim()
+      ? args.task.trim()
+      : ((await call('GET', '/me')) as { task?: { id?: string } } | undefined)?.task?.id
+    if (!id) throw new Error('No task of your own: pass task.')
+    const body = await call('GET', `/tasks/${encodeURIComponent(id)}/agent-memory`) as
+      { title?: string; memory?: { text: string; at: string } | null; chars?: number; soft_limit?: number; limit?: number }
+    const chars = body.chars ?? 0
+    return withOutcome(
+      body,
+      body.memory ? `MEMORY.md of "${body.title}": ${chars} of ${body.soft_limit} characters, written ${body.memory.at}.` : `MEMORY.md of "${body.title}" is empty.`,
+      chars > (body.soft_limit ?? Infinity) ? 'It is over its size: rewrite it shorter with agent_memory_write (mode replace), keeping everything still valid.' : 'No further action is required.',
+    )
+  },
+  tags: { readonly: true, remote: 'allow' },
+})
+
+defineOp({
+  name: 'agent_memory_write',
+  title: 'Write your task\'s own MEMORY.md',
+  description: `${AGENT_MEMORY_SCOPE} mode \`append\` (default) adds one dated entry; \`replace\` sets the whole file (read it first). `
+    + 'Past the limit the write is refused whole and nothing changes: rewrite it shorter. Only your own task\'s session writes it.',
+  input: {
+    content: z.string().max(40_000).describe('Markdown: the entry to add (append) or the whole file (replace)'),
+    mode: z.enum(['append', 'replace']).optional().describe('append (default) or replace'),
+    task: z.string().min(1).optional().describe('Task id; default: your own task'),
+  },
+  handler: async (args, call) => {
+    const id = typeof args.task === 'string' && args.task.trim()
+      ? args.task.trim()
+      : ((await call('GET', '/me')) as { task?: { id?: string } } | undefined)?.task?.id
+    if (!id) throw new Error('No task of your own to keep a MEMORY.md for.')
+    const body = await call('PUT', `/tasks/${encodeURIComponent(id)}/agent-memory`, { content: args.content, mode: args.mode ?? 'append' }) as
+      { title?: string; chars?: number; soft_limit?: number }
+    const over = (body.chars ?? 0) > (body.soft_limit ?? Infinity)
+    return withOutcome(
+      body,
+      `MEMORY.md of "${body.title}" ${args.mode === 'replace' ? 'replaced' : 'has a new entry'}: ${body.chars} of ${body.soft_limit} characters.`,
+      over ? 'It is over its size: rewrite it shorter (mode replace) soon, keeping everything still valid.' : 'No further action is required.',
+    )
+  },
+  tags: { readonly: false, remote: 'allow' },
+})
+
 /** What completion does to the task's own sessions (completeTaskSessions): a live one is stopped, the caller's own at its turn end. */
 const COMPLETED_OUTCOME = 'Task marked complete. Its own session, if one was live, is stopped (yours, if this is your task, when this turn ends); its leader, if it has one and is still open, hears about it unless the leader is you.'
 

@@ -3093,6 +3093,8 @@ function rowToSlimTask(row: Record<string, any>, minimal = false): SlimTask {
   // shape doesn't accidentally carry an empty `note` alongside `has_note`.
   delete base.note;
   delete base.conversation_log;
+  // An agent's own MEMORY.md (up to 20k characters, sessions/agent-memory.ts): no list shows it.
+  delete base.agent_memory;
   if (minimal) {
     // Heavy columns weren't SELECT'd, so rowToTask defaulted them (summary=''
     // / description='' / ext={}). Strip those empty placeholders on the Partial
@@ -3129,7 +3131,7 @@ function rowToSlimTask(row: Record<string, any>, minimal = false): SlimTask {
  * `tests/core/task-query-cache-path.test.ts` pins the two projections equal.
  */
 function taskToSlimTask(task: Task, minimal: boolean): SlimTask {
-  const { note, conversation_log, ...rest } = task;
+  const { note, conversation_log, agent_memory: _agentMemory, ...rest } = task;
   const slim: SlimTask = {
     ...rest,
     has_note: typeof note === 'string' && note !== '',

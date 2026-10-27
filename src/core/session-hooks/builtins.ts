@@ -27,6 +27,7 @@ import { engineCaps, isAcpEngine } from '../agents/engine-registry.js';
 import { toDisplayedUserText } from '../sessions/reference-cards.js';
 import { isAwaitingTurnEnd } from '../sessions/self-complete-stop.js';
 import { briefMoveLines, briefPrompt, keepsBrief, readBrief, untaggedBriefLines } from '../sessions/brief.js';
+import { agentMemoryPrompt, applyAgentMemoryAnswer, keepsAgentMemory, readAgentMemoryField, splitAgentMemory } from '../sessions/agent-memory.js';
 import { withoutLeadingRiders } from '../../lib/history-walnut-riders.js';
 
 // ── Triage dedup state ──
@@ -298,7 +299,7 @@ This is the MAIN AGENT's task: its NOTE is the user's tracking note for everythi
 export function buildSelfReportPrompt(
   existingNote?: string,
   currentTitle?: string,
-  opts?: { uiLanguage?: string; mainAgent?: boolean; brief?: { hadBrief: boolean; moves: readonly string[]; ownId?: string } },
+  opts?: { uiLanguage?: string; mainAgent?: boolean; brief?: { hadBrief: boolean; moves: readonly string[]; ownId?: string }; memory?: { title: string; current?: NonNullable<Task['agent_memory']> } },
 ): string {
   const existing = existingNote?.trim() ?? '';
   const reorg = existing.length > NOTE_REORG_CAP;
@@ -345,7 +346,7 @@ NEXT_STEPS: What you'd do next, or what you need from the human.
 BLOCKERS: Anything blocking, or "none".
 USER_INTENT: <question-pending | workflow-command | autonomous> — gist of user's last message.
 VERIFIED: <ran-and-saw-pass | assumed | not-applicable>.
-${FOR_USER_PROMPT}${opts?.brief ? briefPrompt({ ...opts.brief, ...(uiLang ? { language: uiLanguageName(uiLang) } : {}) }) : ''}`;
+${FOR_USER_PROMPT}${opts?.brief ? briefPrompt({ ...opts.brief, ...(uiLang ? { language: uiLanguageName(uiLang) } : {}) }) : ''}${opts?.memory ? agentMemoryPrompt(opts.memory.current, opts.memory.title) : ''}`;
 }
 
 /** The exact labels emitted by buildSelfReportPrompt. Used to anchor extractField's
@@ -371,7 +372,7 @@ const SELF_REPORT_LABELS = [
   'TITLE', 'OVERVIEW', 'LINKS', 'RECAP',
   'TASK_SUMMARY', 'WHAT_I_DID', 'STATUS', 'CHANGES_TRIED', 'PHASE_SIGNAL', 'NEXT_STEPS',
   'BLOCKERS', 'USER_INTENT', 'VERIFIED', 'ARTIFACTS',
-  'FOR_USER_STATE', 'FOR_USER_ASK', 'FOR_USER_WAITING_ON', 'FOR_USER_NOW', 'FOR_USER_NEXT', 'FOR_USER_BRIEF',
+  'FOR_USER_STATE', 'FOR_USER_ASK', 'FOR_USER_WAITING_ON', 'FOR_USER_NOW', 'FOR_USER_NEXT', 'FOR_USER_BRIEF', 'AGENT_MEMORY',
 ] as const;
 const NEXT_LABEL_LOOKAHEAD = `(?:${[
   ...SELF_REPORT_LABELS,
@@ -832,6 +833,7 @@ export async function runTriage(p: OnTurnCompletePayload, opts: { final?: boolea
     // When the moves were read: a move after this was not in the prompt, so it must show as
     // "Since then" under the new Brief and be listed in the next prompt.
     let briefAskedAt = '';
+    let memory: { title: string; current?: NonNullable<Task['agent_memory']> } | undefined;
     const askedAt = Date.now();
     try {
       try {
@@ -851,6 +853,12 @@ export async function runTriage(p: OnTurnCompletePayload, opts: { final?: boolea
           const all = await listTasks().catch(() => [] as Task[]);
           brief = { hadBrief: !!taskRow.brief?.text, moves: briefMoveLines(taskRow, all), ownId: taskRow.id };
         }
+        // Main, every lead and every leader keep their own MEMORY.md (sessions/agent-memory.ts).
+        const leads = !brief && (await (await import('../task-manager.js')).getChildTasks(taskRow.id).catch(() => [] as Task[]))
+          .some((c) => c.phase !== 'COMPLETE');
+        if (keepsAgentMemory(taskRow, leads)) {
+          memory = { title: taskRow.title, ...(taskRow.agent_memory ? { current: taskRow.agent_memory } : {}) };
+        }
       } catch (err) {
         // Do NOT degrade to an empty note: the prompt would say "NOTE is EMPTY,
         // write ALL sections", the model rewrites from scratch, the shrink
@@ -868,7 +876,7 @@ export async function runTriage(p: OnTurnCompletePayload, opts: { final?: boolea
       uiLanguage = await configuredUiLanguage();
       selfReport = (await sessionRunner.requestTurnCompleteSelfReport(
         p.sessionId,
-        buildSelfReportPrompt(existingNote, promptedTitle, { uiLanguage, mainAgent, ...(brief ? { brief } : {}) }), SELF_REPORT_TIMEOUT_MS,
+        buildSelfReportPrompt(existingNote, promptedTitle, { uiLanguage, mainAgent, ...(brief ? { brief } : {}), ...(memory ? { memory } : {}) }), SELF_REPORT_TIMEOUT_MS,
       )).trim();
     } catch (err) {
       log.session.warn('turn-complete-summary: provider self-report failed — skipped (next turn will merge)', {
@@ -882,6 +890,10 @@ export async function runTriage(p: OnTurnCompletePayload, opts: { final?: boolea
       selfReportInFlight.delete(p.sessionId);
     }
     if (!selfReport) return;
+    // Its own MEMORY.md is the last field and free text: cut it off before any other field is
+    // read, so a line in it that looks like a label neither ends it nor feeds that field.
+    let memoryField: string | null = null;
+    if (memory) ({ head: selfReport, field: memoryField } = splitAgentMemory(selfReport));
 
     // The ask can take minutes (the CLI answers control requests between turns).
     // The note may have been written meanwhile — by a human in the Note editor, or
@@ -1049,6 +1061,42 @@ export async function runTriage(p: OnTurnCompletePayload, opts: { final?: boolea
         });
       } catch (err) {
         log.session.debug('turn-complete-summary: brief persist skipped', {
+          sessionId: p.sessionId, taskId, error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+    // (a1d) Its own MEMORY.md: the entry or rewrite it gave, under the row lock, within the limit
+    // (sessions/agent-memory.ts). A rewrite of a file that changed since the ask is skipped.
+    const memoryAsk = memory ? readAgentMemoryField(memoryField) : null;
+    if (memory && memoryField && !memoryAsk && !/^[*_`"']*(unchanged|none|n\/a|no change)/i.test(memoryField)) {
+      log.session.warn('turn-complete-summary: own MEMORY.md answer unclear, kept as it was', { sessionId: p.sessionId, taskId, head: memoryField.slice(0, 120) });
+    }
+    const shownRefusal = memory?.current?.refused;
+    if (memory && !memoryAsk && shownRefusal) {
+      // The refusal was said once; an answer that writes nothing lets it go.
+      const { updateTaskRaw } = await import('../task-manager.js');
+      await updateTaskRaw(taskId, (current) => {
+        const m = current.agent_memory;
+        if (!m?.refused || m.refused.at !== shownRefusal.at) return null;
+        const { refused: _r, ...rest } = m;
+        return { agent_memory: rest };
+      }, { shouldUpdate: (current) => current.phase !== 'COMPLETE' }).catch(() => {});
+    }
+    if (memory && memoryAsk) {
+      try {
+        const { updateTaskRaw } = await import('../task-manager.js');
+        const now = new Date().toISOString();
+        let outcome = '';
+        await updateTaskRaw(taskId, (current) => {
+          const next = applyAgentMemoryAnswer(current.agent_memory, memoryAsk, memory!.current?.at, now);
+          outcome = next.outcome;
+          return next.memory ? { agent_memory: next.memory } : null;
+        }, { emitEvent: true, source: 'status-report', shouldUpdate: (current) => current.phase !== 'COMPLETE' });
+        if (outcome && outcome !== 'written') {
+          log.session.warn('turn-complete-summary: own MEMORY.md not written', { sessionId: p.sessionId, taskId, mode: memoryAsk.mode, outcome, chars: memoryAsk.content.length });
+        }
+      } catch (err) {
+        log.session.warn('turn-complete-summary: own MEMORY.md write failed', {
           sessionId: p.sessionId, taskId, error: err instanceof Error ? err.message : String(err),
         });
       }

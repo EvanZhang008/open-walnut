@@ -2249,6 +2249,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // Task Boards (additive): one html document per task + threads + marks.
   // Reads work on a replica; writes are primary-only (501).
   app.use('/api/v1', boardV1Router)
+  app.use('/api/v1', (await import('./routes/agent-memory-v1.js')).agentMemoryV1Router)
   // Kanban lanes, cards and the seen baseline of a board (same prefix and rules).
   app.use('/api/v1', boardKanbanV1Router)
   // The org above the work: main agent, project leads, the org chart (reads anywhere, writes primary-only).
