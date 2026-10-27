@@ -29,6 +29,7 @@ import { collectOpenItems } from '../../../src/core/sessions/open-items.js'
 import { updateConfig } from '../../../src/core/config-manager.js'
 import { createOpenItemsText } from '../../../src/core/sessions/open-items-text.js'
 import { RICH_OUTPUT_MODE_ON_INSTRUCTION, RICH_OUTPUT_MODE_REMINDER } from '../../../src/core/sessions/output-mode.js'
+import { renderHintBlock } from '../../../src/core/hints/hint-format.js'
 
 describe('placeFromPrompt (reads back the lines session-context.ts writes)', () => {
   it('a project, a folder and a leader', () => {
@@ -298,21 +299,31 @@ describe('sendMessageToSession carries the note (real store and queue)', () => {
   })
 
   // The summary drops the rich instruction; a compaction in the middle of a turn
-  // must not leave the rest of that turn without it (2026-10-23).
+  // must not leave the rest of that turn without it (2026-10-23). It is the
+  // `rich-output` message hint's after_compaction trigger (src/core/hints/).
   describe('the compaction hook restates the rich instruction', () => {
+    const RICH_ON = renderHintBlock('rich-output', RICH_OUTPUT_MODE_ON_INSTRUCTION)
     const hook = (sid: string) => collectOpenItems(sid, Date.now(), { afterCompaction: true })
     const told = (sid: string) => updateSessionRecord(sid, { output_mode_injected: 'rich' })
 
-    it('a rich session gets the full instruction from the hook, and the next send only the reminder', async () => {
+    it('a rich session gets the full instruction from the hook, and the next send nothing again', async () => {
       const { sid } = await spawned('acme', { outputMode: 'rich' })
       await told(sid)
       await notePlaceCompaction(sid, 'boundary-1')
       expect((await getSessionByClaudeId(sid))?.output_mode_injected).toBeUndefined()
       const open = await hook(sid)
-      expect(open.text).toContain(RICH_OUTPUT_MODE_ON_INSTRUCTION)
+      expect(open.text).toContain(RICH_ON)
       expect((await getSessionByClaudeId(sid))?.output_mode_injected).toBe('rich')
+      expect((await getSessionByClaudeId(sid))?.hintState?.told['rich-output']).toMatchObject({ hash: 'rich', compact: 'boundary-1' })
       await sendMessageToSession(sid, 'after', { source: 'peer' })
-      expect((await rows(sid)).at(-1)).toBe(`after\n\n${RICH_OUTPUT_MODE_REMINDER}`)
+      expect((await rows(sid)).at(-1)).toBe('after')
+      // The short reminder comes back every 5 messages, not on every one.
+      for (const n of [2, 3, 4]) {
+        await sendMessageToSession(sid, `after ${n}`, { source: 'peer' })
+        expect((await rows(sid)).at(-1)).toBe(`after ${n}`)
+      }
+      await sendMessageToSession(sid, 'after 5', { source: 'peer' })
+      expect((await rows(sid)).at(-1)).toBe(`after 5\n\n${renderHintBlock('rich-output', RICH_OUTPUT_MODE_REMINDER)}`)
     })
 
     it('the hook answering before the boundary is read still counts for that compaction', async () => {
@@ -321,8 +332,9 @@ describe('sendMessageToSession carries the note (real store and queue)', () => {
       await hook(sid)
       await notePlaceCompaction(sid, 'boundary-1')
       expect((await getSessionByClaudeId(sid))?.output_mode_injected).toBe('rich')
+      expect((await getSessionByClaudeId(sid))?.hintState?.told['rich-output']?.compact).toBe('boundary-1')
       await sendMessageToSession(sid, 'after', { source: 'peer' })
-      expect((await rows(sid)).at(-1)).toBe(`after\n\n${RICH_OUTPUT_MODE_REMINDER}`)
+      expect((await rows(sid)).at(-1)).toBe('after')
     })
 
     it('a stale hook statement does not cover a later compaction', async () => {
@@ -331,12 +343,12 @@ describe('sendMessageToSession carries the note (real store and queue)', () => {
       await hook(sid)
       await notePlaceCompaction(sid, 'boundary-1', Date.now() + 10 * 60_000)
       await sendMessageToSession(sid, 'after', { source: 'peer' })
-      expect((await rows(sid)).at(-1)).toBe(`after\n\n${RICH_OUTPUT_MODE_ON_INSTRUCTION}`)
+      expect((await rows(sid)).at(-1)).toBe(`after\n\n${RICH_ON}`)
     })
 
     it('a direct open_items call and a markdown session restate nothing', async () => {
       const { sid } = await spawned('acme', { outputMode: 'rich' })
-      expect((await collectOpenItems(sid)).text).not.toContain('Rich output mode')
+      expect((await collectOpenItems(sid)).text).not.toContain(RICH_OUTPUT_MODE_ON_INSTRUCTION)
       expect((await getSessionByClaudeId(sid))?.outputModeHookAt).toBeUndefined()
       const md = await spawned('acme')
       expect((await hook(md.sid)).text).toBe('')
@@ -345,7 +357,7 @@ describe('sendMessageToSession carries the note (real store and queue)', () => {
     it('restates the reply language after a compaction only when one is set', async () => {
       const md = await spawned('acme')
       await updateConfig({ session: { reply_language: 'Answer in French; code stays English.' } })
-      expect((await hook(md.sid)).text).toBe('[Reply language: Answer in French; code stays English.]')
+      expect((await hook(md.sid)).text).toBe(renderHintBlock('reply-language', 'Answer in French; code stays English.'))
       expect((await collectOpenItems(md.sid)).text).toBe('')
       await updateConfig({ session: {} })
       expect((await hook(md.sid)).text).toBe('')

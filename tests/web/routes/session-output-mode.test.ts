@@ -1,30 +1,29 @@
 /**
- * Output mode ("markdown" vs rich HTML) as the CLI actually learns it. Two
- * injections, the same shape plan mode uses (src/web/routes/chat.ts):
+ * Output mode ("markdown" vs rich HTML) as the CLI actually learns it: the
+ * `rich-output` message hint (src/core/hints/hint-registry.ts), one
+ * `<system-reminder>` block AFTER the user's text (user-requested 2026-08-31; the
+ * instruction used to be a prefix, which is also what broke slash commands):
  *
- *   · EDGE — the full instruction rides the first `session:send` after the
- *     effective mode changed (including "nothing was ever said"), once.
- *   · STANDING — while rich holds, a one-line reminder rides every later send.
- *     Without it the model wrote HTML for the turn that carried the
- *     instruction and drifted back to markdown a turn or two later (the bug this
- *     file grew for). Markdown mode appends nothing at all.
- *
- * Both land AFTER the user's text (user-requested 2026-08-31 — the instruction
- * used to be a prefix, which is also what broke slash commands).
+ *   · FULL — the whole instruction at session start (nothing was ever said),
+ *     after a compaction, and when the effective mode changed (the OFF words on
+ *     a switch back to markdown).
+ *   · REMINDER — while rich holds, a one-line reminder every 5 messages (it used
+ *     to ride every message; 2026-10-27 the user asked for less). Without any
+ *     reminder the model wrote HTML for the turn that carried the instruction and
+ *     drifted back to markdown a turn or two later. Markdown mode sends nothing.
  *
  * The effective mode is `record.output_mode ?? config.session.output_mode ??
  * DEFAULT_SESSION_OUTPUT_MODE`, so a session that never touched the pill follows
- * the config LIVE and flipping the config produces a real edge for it. The edge
- * itself lives on the record (`output_mode_injected`), so a reload or a second
- * device can't inject a second copy — and `output_mode_injected: undefined` must
+ * the config LIVE and flipping the config is a change for it. What was told lives
+ * on the record (`hintState`, with `output_mode_injected` kept for a rollback), so
+ * a reload or a second device can't inject a second copy, and "never told" must
  * read as "nothing said yet", NOT as markdown, or a default-rich session would
  * silently never hear the instruction.
  *
- * Would-fail-if-reverted: drop the `applyOutputModeDirective` call in
- * session-chat.ts and every instruction/reminder assertion breaks; drop the
- * `output_mode_injected` write and the instruction repeats forever; compare the
- * edge against DEFAULT_SESSION_OUTPUT_MODE instead of the model's native style
- * and the default-rich session gets nothing.
+ * Would-fail-if-reverted: drop the `prepareHintedSend` call in session-chat.ts
+ * and every instruction/reminder assertion breaks; drop the commit and the
+ * instruction repeats forever; treat "never told" as the default mode and the
+ * default-rich session gets nothing.
  *
  * The RPC handler is captured by stubbing `registerMethod` (same harness as
  * session-send-retry.test.ts) — no WS server, port, or `claude` process.
@@ -65,9 +64,12 @@ import { DEFAULT_SESSION_OUTPUT_MODE } from '../../../src/core/types.js'
 import type { SessionOutputMode } from '../../../src/core/types.js'
 import {
   RICH_OUTPUT_MODE_ON_INSTRUCTION, RICH_OUTPUT_MODE_OFF_INSTRUCTION,
-  RICH_OUTPUT_MODE_REMINDER, resolveOutputModeDirective, resolveEffectiveOutputMode,
-  stripOutputModeWrappers, applyOutputModeDirective,
+  RICH_OUTPUT_MODE_REMINDER, resolveEffectiveOutputMode, stripLegacyHintLines, _setLegacyHintCutoffForTesting,
 } from '../../../src/core/sessions/output-mode.js'
+import { composeHinted, parseHinted, renderHintBlock } from '../../../src/core/hints/hint-format.js'
+import { effectiveHints } from '../../../src/core/hints/hint-registry.js'
+import { planHints } from '../../../src/core/hints/hint-send.js'
+import type { SessionHintState } from '../../../src/core/types.js'
 import { parseSessionMessages } from '../../../src/core/session-history.js'
 import { notePlaceCompaction } from '../../../src/core/sessions/place-notice.js'
 import {
@@ -81,7 +83,24 @@ const TEXT = 'explain how the daemon adopts an orphaned session'
 
 const fakeClient = {} as never
 
-/** Config stubs for the pure resolver tests. */
+/** The rich-output hint's three texts, as blocks. */
+const ON = renderHintBlock('rich-output', RICH_OUTPUT_MODE_ON_INSTRUCTION)
+const OFF = renderHintBlock('rich-output', RICH_OUTPUT_MODE_OFF_INSTRUCTION)
+const REMIND = renderHintBlock('rich-output', RICH_OUTPUT_MODE_REMINDER)
+/** The pre-registry bracket lines old transcripts still hold (the texts then). */
+const LEGACY_ON = '[Rich output mode: ON] Write markdown for what markdown does well; raw HTML only for what it cannot express.'
+const LEGACY_OFF = '[Rich output mode: OFF] Reply in plain markdown again.'
+const LEGACY_REMIND = '[Rich output mode is still on: markdown first; a real diagram is inline <svg>.]'
+/** A message with one hint block after it, as composed. */
+const hinted = (text: string, block: string) => `${text}\n\n${block}`
+/** What every display shows of a delivered message. */
+const shown = (text: string) => parseHinted(text).text
+/** Hint state whose next send is due the short reminder (told 5 sends back). */
+const reminderDue = (): SessionHintState => ({
+  sends: 4, told: { 'rich-output': { send: 0, hash: 'rich', at: new Date(0).toISOString() } },
+})
+
+/** Config stubs for the pure planner tests. */
 const cfgRich = { session: { output_mode: 'rich' as SessionOutputMode } }
 const cfgMarkdown = { session: { output_mode: 'markdown' as SessionOutputMode } }
 
@@ -145,51 +164,43 @@ describe('resolveEffectiveOutputMode', () => {
   })
 })
 
-describe('resolveOutputModeDirective', () => {
+/** What the rich-output hint says on the next send of a record (pure planner). */
+function richNext(record: Record<string, unknown> | null, config: typeof cfgRich | null = null): string[] {
+  return planHints({ hints: effectiveHints(config), target: { sessionId: 's' }, record: record as never, config })
+    .carried.filter((h) => h.kind === 'rich-output').map((h) => h.text)
+}
+
+describe('the rich-output hint (pure planner)', () => {
   it('markdown with nothing owed costs exactly nothing', () => {
     for (const record of [null, {}, { output_mode: 'markdown' as SessionOutputMode }]) {
-      expect(resolveOutputModeDirective(record, cfgMarkdown)).toEqual({
-        mode: 'markdown', instruction: null, reminder: null, language: null,
-      })
+      expect(richNext(record, cfgMarkdown)).toEqual([])
     }
-    // An explicit markdown record ignores a rich CONFIG — the human's per-session
+    // An explicit markdown record ignores a rich CONFIG: the human's per-session
     // choice is the point of the pill.
-    expect(resolveOutputModeDirective({ output_mode: 'markdown' }, cfgRich)).toEqual({
-      mode: 'markdown', instruction: null, reminder: null, language: null,
-    })
+    expect(richNext({ output_mode: 'markdown' }, cfgRich)).toEqual([])
   })
 
   it('fires the FULL instruction once per direction', () => {
-    expect(resolveOutputModeDirective({ output_mode: 'rich' }, cfgMarkdown)).toEqual({
-      mode: 'rich', instruction: RICH_OUTPUT_MODE_ON_INSTRUCTION, reminder: null, language: null,
-    })
-    expect(resolveOutputModeDirective({ output_mode: 'markdown', output_mode_injected: 'rich' }, cfgRich)).toEqual({
-      mode: 'markdown', instruction: RICH_OUTPUT_MODE_OFF_INSTRUCTION, reminder: null, language: null,
-    })
+    expect(richNext({ output_mode: 'rich' }, cfgMarkdown)).toEqual([RICH_OUTPUT_MODE_ON_INSTRUCTION])
+    expect(richNext({ output_mode: 'markdown', output_mode_injected: 'rich' }, cfgRich)).toEqual([RICH_OUTPUT_MODE_OFF_INSTRUCTION])
   })
 
   it('a default-rich session with nothing told yet still gets the instruction', () => {
-    // THE trap of adding a config default: if `output_mode_injected: undefined`
-    // read as the DEFAULT rather than as "nothing said yet", a brand-new session
-    // would compare rich against rich and never be told anything — the default
-    // would silently do nothing.
-    expect(resolveOutputModeDirective({}, cfgRich)).toEqual({
-      mode: 'rich', instruction: RICH_OUTPUT_MODE_ON_INSTRUCTION, reminder: null, language: null,
-    })
-    expect(resolveOutputModeDirective(null, cfgRich).instruction).toBe(RICH_OUTPUT_MODE_ON_INSTRUCTION)
+    // THE trap of adding a config default: if "never told" read as the DEFAULT
+    // rather than as "nothing said yet", a brand-new session would compare rich
+    // against rich and never be told anything; the default would do nothing.
+    expect(richNext({}, cfgRich)).toEqual([RICH_OUTPUT_MODE_ON_INSTRUCTION])
+    expect(richNext(null, cfgRich)).toEqual([RICH_OUTPUT_MODE_ON_INSTRUCTION])
   })
 
-  it('once told, rich carries the standing reminder instead (never both)', () => {
-    expect(resolveOutputModeDirective({ output_mode_injected: 'rich' }, cfgRich)).toEqual({
-      mode: 'rich', instruction: null, reminder: RICH_OUTPUT_MODE_REMINDER, language: null,
-    })
-    expect(resolveOutputModeDirective({ output_mode: 'rich', output_mode_injected: 'rich' }, cfgMarkdown)).toEqual({
-      mode: 'rich', instruction: null, reminder: RICH_OUTPUT_MODE_REMINDER, language: null,
-    })
-    // The edge send says everything the reminder says — no double.
-    expect(resolveOutputModeDirective({ output_mode: 'rich' }, cfgRich).reminder).toBeNull()
+  it('once told, rich carries the short reminder every 5 messages (never both)', () => {
+    // Told on the send before: nothing this time.
+    expect(richNext({ output_mode_injected: 'rich' }, cfgRich)).toEqual([])
+    // Told 5 sends back: the reminder, not the full instruction.
+    expect(richNext({ hintState: reminderDue() }, cfgRich)).toEqual([RICH_OUTPUT_MODE_REMINDER])
+    expect(richNext({ output_mode: 'rich', hintState: reminderDue() }, cfgMarkdown)).toEqual([RICH_OUTPUT_MODE_REMINDER])
     // Markdown never gets a reminder, told or not.
-    expect(resolveOutputModeDirective({ output_mode_injected: 'markdown' }, cfgMarkdown).reminder).toBeNull()
+    expect(richNext({ output_mode_injected: 'markdown', hintState: { ...reminderDue(), told: {} } }, cfgMarkdown)).toEqual([])
   })
 
   it('tells the model the truth about scripts, and points at the recipes', () => {
@@ -203,10 +214,10 @@ describe('resolveOutputModeDirective', () => {
     // the skill instead of inlining it.
     expect(RICH_OUTPUT_MODE_ON_INSTRUCTION).toContain('skill_read')
     expect(RICH_OUTPUT_MODE_ON_INSTRUCTION).toContain('rich-output')
-    // One line each, so the client's blank-line strip finds the user's own text.
+    // One line each: the hint block holds one line of text.
     expect(RICH_OUTPUT_MODE_ON_INSTRUCTION).not.toContain('\n')
     expect(RICH_OUTPUT_MODE_OFF_INSTRUCTION).not.toContain('\n')
-    // The reminder rides EVERY message, so it stays one short line.
+    // The reminder rides every few messages, so it stays one short line.
     expect(RICH_OUTPUT_MODE_REMINDER).not.toContain('\n')
     expect(RICH_OUTPUT_MODE_REMINDER.length).toBeLessThan(300)
   })
@@ -218,8 +229,7 @@ describe('resolveOutputModeDirective', () => {
       expect(s).toMatch(/unless (?:the user asks|requested)/)
       expect(s).toMatch(/blank lines/)
     }
-    const afterCompact = resolveOutputModeDirective({ output_mode: 'rich', output_mode_injected: 'rich' })
-    expect(applyOutputModeDirective(afterCompact, 'Show a diagram')).toContain('raw HTML directly in this reply')
+    expect(richNext({ output_mode: 'rich', hintState: reminderDue() }).join('')).toContain('raw HTML directly in this reply')
   })
 
   it('says markdown FIRST, and names what HTML is actually for', () => {
@@ -317,30 +327,35 @@ describe('session:send — markdown', () => {
 })
 
 describe('session:send — rich', () => {
-  it('appends the ON instruction once, then reminds on every later send', async () => {
+  it('appends the ON instruction once, then a short reminder every 5 messages', async () => {
     await setConfigOutputMode('markdown')
     const sid = await newSession()
     await patchSession(sid, { output_mode: 'rich' })
 
     const first = await callSend({ sessionId: sid, message: TEXT })
     const firstText = await drain(sid)
-    expect(firstText).toBe(`${TEXT}\n\n${RICH_OUTPUT_MODE_ON_INSTRUCTION}`)
-    // No dedupText: history hides the wrapper, so what it shows IS what the user
+    expect(firstText).toBe(hinted(TEXT, ON))
+    // No dedupText: history hides the hint, so what it shows IS what the user
     // typed and there is nothing extra to match on (see the absorption suite).
     expect(first.dedupText).toBeUndefined()
-    // The edge advanced server-side — this is what makes a reload safe.
-    expect((await getSessionByClaudeId(sid))?.output_mode_injected).toBe('rich')
+    // What was told is recorded server-side; this is what makes a reload safe.
+    const told = await getSessionByClaudeId(sid)
+    expect(told?.output_mode_injected).toBe('rich')
+    expect(told?.hintState?.told['rich-output']).toMatchObject({ send: 1, hash: 'rich' })
 
-    // Second send: the STANDING reminder, and NOT the full instruction again.
-    const second = await callSend({ sessionId: sid, message: 'and now the pgid scan?' })
-    const secondText = await drain(sid)
-    expect(secondText).toBe(`and now the pgid scan?\n\n${RICH_OUTPUT_MODE_REMINDER}`)
-    expect(secondText).not.toContain(RICH_OUTPUT_MODE_ON_INSTRUCTION)
-    expect(second.dedupText).toBeUndefined()
-
-    // Third send: same — this is the drift fix, so it must not decay either.
-    await callSend({ sessionId: sid, message: 'and the third?' })
-    expect(await drain(sid)).toBe(`and the third?\n\n${RICH_OUTPUT_MODE_REMINDER}`)
+    // Sends 2 to 5: nothing, NOT the full instruction again (2026-10-27: the user
+    // asked for less than a reminder on every message).
+    for (let n = 2; n <= 5; n++) {
+      const res = await callSend({ sessionId: sid, message: `msg ${n}` })
+      expect(await drain(sid)).toBe(`msg ${n}`)
+      expect(res.dedupText).toBeUndefined()
+    }
+    // Send 6: the short reminder, so rich mode does not decay into markdown.
+    await callSend({ sessionId: sid, message: 'msg 6' })
+    expect(await drain(sid)).toBe(hinted('msg 6', REMIND))
+    // …and the count starts over from there.
+    await callSend({ sessionId: sid, message: 'msg 7' })
+    expect(await drain(sid)).toBe('msg 7')
   })
 
   // 2026-10-22: after an auto-compaction the summary no longer held the full
@@ -349,62 +364,71 @@ describe('session:send — rich', () => {
     await setConfigOutputMode('rich')
     const sid = await newSession()
     await callSend({ sessionId: sid, message: TEXT })
-    expect(await drain(sid)).toBe(`${TEXT}\n\n${RICH_OUTPUT_MODE_ON_INSTRUCTION}`)
+    expect(await drain(sid)).toBe(hinted(TEXT, ON))
 
     await notePlaceCompaction(sid, 'boundary-1')
     expect((await getSessionByClaudeId(sid))?.output_mode_injected).toBeUndefined()
     await callSend({ sessionId: sid, message: 'after the compaction' })
-    expect(await drain(sid)).toBe(`after the compaction\n\n${RICH_OUTPUT_MODE_ON_INSTRUCTION}`)
+    expect(await drain(sid)).toBe(hinted('after the compaction', ON))
     expect((await getSessionByClaudeId(sid))?.output_mode_injected).toBe('rich')
 
     // A replayed tail re-reads the same boundary: it must not void the re-tell.
     await notePlaceCompaction(sid, 'boundary-1')
     await callSend({ sessionId: sid, message: 'and then' })
-    expect(await drain(sid)).toBe(`and then\n\n${RICH_OUTPUT_MODE_REMINDER}`)
+    expect(await drain(sid)).toBe('and then')
 
     // A second, real compaction owes it again.
     await notePlaceCompaction(sid, 'boundary-2')
     await callSend({ sessionId: sid, message: 'second compaction' })
-    expect(await drain(sid)).toBe(`second compaction\n\n${RICH_OUTPUT_MODE_ON_INSTRUCTION}`)
+    expect(await drain(sid)).toBe(hinted('second compaction', ON))
   })
 
-  it('turns nobody typed carry the directive too: trigger, peer, wait_until, notices, auto-continue', async () => {
+  it('turns nobody typed carry the hint too: trigger, peer, wait_until, notices, auto-continue', async () => {
     await setConfigOutputMode('rich')
     const sid = await newSession()
-    // Never told: the first automated turn carries the full instruction and advances the edge.
+    // Never told: the first automated turn carries the full instruction and records it.
     await sendMessageToSession(sid, 'trigger fired: PR has a new comment', { source: 'routine-trigger' })
-    expect(await drain(sid)).toBe(`trigger fired: PR has a new comment\n\n${RICH_OUTPUT_MODE_ON_INSTRUCTION}`)
+    expect(await drain(sid)).toBe(hinted('trigger fired: PR has a new comment', ON))
     expect((await getSessionByClaudeId(sid))?.output_mode_injected).toBe('rich')
-    for (const source of ['routine-watcher', 'wait-until', 'peer', 'walnut-notify', 'human-inbox', 'auto-continue', 'auto-recover']) {
+    // They count as sends: the sixth turn (human-inbox here) carries the reminder.
+    const sources = ['routine-watcher', 'wait-until', 'peer', 'walnut-notify', 'human-inbox', 'auto-continue', 'auto-recover', 'app-state']
+    for (const [i, source] of sources.entries()) {
       await sendMessageToSession(sid, `from ${source}`, { source })
-      expect(await drain(sid)).toBe(`from ${source}\n\n${RICH_OUTPUT_MODE_REMINDER}`)
+      expect(await drain(sid), source).toBe(i + 2 === 6 ? hinted(`from ${source}`, REMIND) : `from ${source}`)
     }
+    expect((await getSessionByClaudeId(sid))?.hintState?.lastSendBy).toBe('agent')
   })
 
-  it('a peer message keeps its display text clean; the directive rides the text the CLI gets', async () => {
+  it('a peer message keeps its display text clean; the hint rides the text the CLI gets', async () => {
     await setConfigOutputMode('rich')
     const sid = await newSession()
-    await updateSessionRecord(sid, { output_mode_injected: 'rich' })
+    await updateSessionRecord(sid, { hintState: reminderDue() })
     const seen: string[] = []
     bus.subscribe('test-send-watch', (e) => {
       if (e.name === 'session:send') seen.push((e.data as { message: string }).message)
     }, { global: true })
     await sendMessageToSession(sid, 'bus text', { source: 'peer', enqueueMessage: '<walnut-message>hi</walnut-message>' })
-    expect(await drain(sid)).toBe(`<walnut-message>hi</walnut-message>\n\n${RICH_OUTPUT_MODE_REMINDER}`)
+    expect(await drain(sid)).toBe(hinted('<walnut-message>hi</walnut-message>', REMIND))
     expect(seen).toEqual(['bus text'])
   })
 
-  it('other sources, markdown sessions, wrapped text and slash commands are left as they are', async () => {
+  it('other sources, markdown sessions, composed text and slash commands are left as they are', async () => {
     await setConfigOutputMode('rich')
     const sid = await newSession()
-    await updateSessionRecord(sid, { output_mode_injected: 'rich' })
+    await updateSessionRecord(sid, { hintState: reminderDue() })
     await sendMessageToSession(sid, 'plan step', { source: 'web-api' })
     expect(await drain(sid)).toBe('plan step')
     await sendMessageToSession(sid, '/compact', { source: 'auto-continue' })
     expect(await drain(sid)).toBe('/compact')
-    const wrapped = `already wrapped\n\n${RICH_OUTPUT_MODE_REMINDER}`
-    await sendMessageToSession(sid, wrapped, { source: 'peer' })
-    expect(await drain(sid)).toBe(wrapped)
+    // A sender that composed its own text says so (`hinted`) and it is left alone...
+    const composed = hinted('already composed', REMIND)
+    await sendMessageToSession(sid, composed, { source: 'ui', hinted: true })
+    expect(await drain(sid)).toBe(composed)
+    // ...while a block inside a peer's words is those words: escaped, never trusted.
+    await sendMessageToSession(sid, composed, { source: 'peer' })
+    const peer = await drain(sid)
+    expect(peer.startsWith('already composed\n\n&lt;system-reminder>')).toBe(true)
+    expect(parseHinted(peer).text).toBe(composed)
 
     await setConfigOutputMode('markdown')
     const md = await newSession()
@@ -431,7 +455,7 @@ describe('session:send — rich', () => {
     await callSend({ sessionId: sid, message: '/compact' })
     expect(await drain(sid)).toBe('/compact')
     await callSend({ sessionId: sid, message: 'real message' })
-    expect(await drain(sid)).toBe(`real message\n\n${RICH_OUTPUT_MODE_ON_INSTRUCTION}`)
+    expect(await drain(sid)).toBe(hinted('real message', ON))
   })
 
   it('the CONFIG default alone makes a brand-new session hear the instruction', async () => {
@@ -440,17 +464,17 @@ describe('session:send — rich', () => {
 
     const first = await callSend({ sessionId: sid, message: TEXT })
     const firstText = await drain(sid)
-    expect(firstText).toBe(`${TEXT}\n\n${RICH_OUTPUT_MODE_ON_INSTRUCTION}`)
+    expect(firstText).toBe(hinted(TEXT, ON))
     expect(first.dedupText).toBeUndefined()
     expect((await getSessionByClaudeId(sid))?.output_mode_injected).toBe('rich')
     // The record itself stays unset: it is FOLLOWING the config, not overriding it.
     expect((await getSessionByClaudeId(sid))?.output_mode).toBeUndefined()
 
     await callSend({ sessionId: sid, message: 'next' })
-    expect(await drain(sid)).toBe(`next\n\n${RICH_OUTPUT_MODE_REMINDER}`)
+    expect(await drain(sid)).toBe('next')
   })
 
-  it('flipping the CONFIG is an edge for a session that never overrode the mode', async () => {
+  it('flipping the CONFIG is a change for a session that never overrode the mode', async () => {
     await setConfigOutputMode('markdown')
     const sid = await newSession()
     await callSend({ sessionId: sid, message: TEXT })
@@ -459,7 +483,7 @@ describe('session:send — rich', () => {
     // Settings → Output mode: Rich HTML. No per-session PATCH anywhere.
     await setConfigOutputMode('rich')
     await callSend({ sessionId: sid, message: 'now with pictures' })
-    expect(await drain(sid)).toBe(`now with pictures\n\n${RICH_OUTPUT_MODE_ON_INSTRUCTION}`)
+    expect(await drain(sid)).toBe(hinted('now with pictures', ON))
     expect((await getSessionByClaudeId(sid))?.output_mode_injected).toBe('rich')
   })
 
@@ -472,19 +496,22 @@ describe('session:send — rich', () => {
 
     await patchSession(sid, { output_mode: 'markdown' })
     await callSend({ sessionId: sid, message: 'plain please' })
-    expect(await drain(sid)).toBe(`plain please\n\n${RICH_OUTPUT_MODE_OFF_INSTRUCTION}`)
+    expect(await drain(sid)).toBe(hinted('plain please', OFF))
     expect((await getSessionByClaudeId(sid))?.output_mode_injected).toBe('markdown')
 
-    await callSend({ sessionId: sid, message: 'still plain' })
-    expect(await drain(sid)).toBe('still plain')
+    // Never a reminder in markdown, however many messages follow.
+    for (let n = 0; n < 6; n++) {
+      await callSend({ sessionId: sid, message: `still plain ${n}` })
+      expect(await drain(sid)).toBe(`still plain ${n}`)
+    }
   })
 
-  it('composes with the image preamble: attachments → text → instruction/reminder', async () => {
+  it('composes with the image preamble: attachments → text → hint', async () => {
     await setConfigOutputMode('markdown')
     const sid = await newSession()
     await patchSession(sid, { output_mode: 'rich' })
 
-    // Edge send: the instruction lands after everything, no reminder yet.
+    // First send: the instruction lands after everything.
     const first = await callSend({
       sessionId: sid,
       message: TEXT,
@@ -492,15 +519,16 @@ describe('session:send — rich', () => {
     })
     const enqueued = await drain(sid)
     expect(enqueued.startsWith('[Images attached')).toBe(true)
-    expect(enqueued.endsWith(`\n\n${TEXT}\n\n${RICH_OUTPUT_MODE_ON_INSTRUCTION}`)).toBe(true)
+    expect(enqueued.endsWith(`\n\n${hinted(TEXT, ON)}`)).toBe(true)
     // dedupText = what history will SHOW: the image preamble survives the
-    // projection, the instruction does not.
-    expect(first.dedupText).toBe(stripOutputModeWrappers(enqueued))
+    // projection, the hint does not.
+    expect(first.dedupText).toBe(shown(enqueued))
     expect(first.dedupText).toContain('[Images attached')
     expect(first.dedupText).not.toContain('Rich output mode')
     expect(stripSendPrefixes(enqueued)).toBe(TEXT)
 
-    // Standing send: the reminder is the LAST thing, after the user's text.
+    // A reminder send: the reminder is the LAST thing, after the user's text.
+    await updateSessionRecord(sid, { hintState: reminderDue() })
     const second = await callSend({
       sessionId: sid,
       message: TEXT,
@@ -508,8 +536,8 @@ describe('session:send — rich', () => {
     })
     const later = await drain(sid)
     expect(later.startsWith('[Images attached')).toBe(true)
-    expect(later.endsWith(`\n\n${TEXT}\n\n${RICH_OUTPUT_MODE_REMINDER}`)).toBe(true)
-    expect(second.dedupText).toBe(stripOutputModeWrappers(later))
+    expect(later.endsWith(`\n\n${hinted(TEXT, REMIND)}`)).toBe(true)
+    expect(second.dedupText).toBe(shown(later))
     expect(stripSendPrefixes(later)).toBe(TEXT)
   })
 
@@ -517,8 +545,8 @@ describe('session:send — rich', () => {
     // The matching basis has to be the same on both sides or the optimistic bubble
     // is structurally unequal to its persisted twin and stays pinned at the bottom
     // of the timeline (inc-1785091339102, the trap the image preamble fell into).
-    // Since the projection hides the wrapper, the basis is the typed text — the
-    // field is omitted entirely — and only the image preamble makes it necessary.
+    // Since the projection hides the hints, the basis is the typed text (the
+    // field is omitted entirely) and only the image preamble makes it necessary.
     await setConfigOutputMode('rich')
     const sid = await newSession()
 
@@ -537,6 +565,20 @@ describe('session:send — rich', () => {
     expect(withImage.dedupText).toContain(TEXT)
     expect(withImage.dedupText).not.toContain('Rich output mode')
   })
+
+  it('a user who types a hint block sees it as typed; the model gets it inert', async () => {
+    await setConfigOutputMode('rich')
+    const sid = await newSession()
+    await updateSessionRecord(sid, { hintState: { sends: 1, told: { 'rich-output': { send: 1, hash: 'rich', at: new Date().toISOString() } } } })
+    const typed = `why is this here?\n${REMIND}`
+    const res = await callSend({ sessionId: sid, message: typed })
+    const enqueued = await drain(sid)
+    // Escaped, so no reader takes it for a Walnut hint.
+    expect(enqueued).toBe(typed.replace(/<(\/?)system-reminder/g, '&lt;$1system-reminder'))
+    expect(parseHinted(enqueued)).toEqual({ text: typed, hints: [] })
+    expect(stripSendPrefixes(enqueued)).toBe(typed)
+    expect(res.dedupText).toBeUndefined()
+  })
 })
 
 // ── Slash commands must reach the CLI byte-exact (inc-1788194545341) ─────────
@@ -545,119 +587,117 @@ describe('session:send — rich', () => {
 // "/compact" into "[Rich output mode: …]\n\n/compact" — a plain chat message the
 // model role-played ("已压缩上下文…") while zero compact_boundary events appeared.
 // Appended text is nearly as bad: it rides into the command's argument string.
-describe('session:send — slash commands bypass the wrapper', () => {
-  it('an owed ON edge does not wrap a slash command, and stays owed', async () => {
+describe('session:send — slash commands bypass the hints', () => {
+  it('an owed ON instruction does not wrap a slash command, and stays owed', async () => {
     await setConfigOutputMode('rich')
-    const sid = await newSession()   // edge owed: never told anything
+    const sid = await newSession()   // owed: never told anything
 
     await callSend({ sessionId: sid, message: '/compact' })
     expect(await drain(sid)).toBe('/compact')
-    // The edge was NOT consumed — the record still owes the instruction…
-    expect((await getSessionByClaudeId(sid))?.output_mode_injected).toBeUndefined()
+    // Not consumed and not counted: the record still owes the instruction…
+    const rec = await getSessionByClaudeId(sid)
+    expect(rec?.output_mode_injected).toBeUndefined()
+    expect(rec?.hintState).toBeUndefined()
 
     // …and the next real message carries it.
     await callSend({ sessionId: sid, message: TEXT })
-    expect(await drain(sid)).toBe(`${TEXT}\n\n${RICH_OUTPUT_MODE_ON_INSTRUCTION}`)
+    expect(await drain(sid)).toBe(hinted(TEXT, ON))
     expect((await getSessionByClaudeId(sid))?.output_mode_injected).toBe('rich')
   })
 
-  it('the standing reminder never rides a slash command (it would land in the args)', async () => {
+  it('a due reminder never rides a slash command (it would land in the args)', async () => {
     await setConfigOutputMode('rich')
     const sid = await newSession()
-    await callSend({ sessionId: sid, message: TEXT })   // consume the edge
-    await drain(sid)
+    await updateSessionRecord(sid, { hintState: reminderDue() })
 
     await callSend({ sessionId: sid, message: '/compact keep the file list' })
     expect(await drain(sid)).toBe('/compact keep the file list')
 
-    // Ordinary sends still get the reminder — the skip is per-message.
+    // The next ordinary send still gets it: the skip is per-message.
     await callSend({ sessionId: sid, message: 'back to normal' })
-    expect(await drain(sid)).toBe(`back to normal\n\n${RICH_OUTPUT_MODE_REMINDER}`)
+    expect(await drain(sid)).toBe(hinted('back to normal', REMIND))
   })
 
-  it('an owed OFF edge does not wrap a slash command either', async () => {
+  it('an owed OFF instruction does not wrap a slash command either', async () => {
     await setConfigOutputMode('markdown')
     const sid = await newSession()
     await patchSession(sid, { output_mode: 'rich' })
     await callSend({ sessionId: sid, message: TEXT })
     await drain(sid)
 
-    await patchSession(sid, { output_mode: 'markdown' })   // OFF edge now owed
+    await patchSession(sid, { output_mode: 'markdown' })   // OFF now owed
     await callSend({ sessionId: sid, message: '/compact' })
     expect(await drain(sid)).toBe('/compact')
     expect((await getSessionByClaudeId(sid))?.output_mode_injected).toBe('rich')
 
     await callSend({ sessionId: sid, message: 'plain please' })
-    expect(await drain(sid)).toBe(`plain please\n\n${RICH_OUTPUT_MODE_OFF_INSTRUCTION}`)
+    expect(await drain(sid)).toBe(hinted('plain please', OFF))
   })
 })
 
-// The client must render what the user typed, not the machine wrapper. This is
-// the inverse of the emitter above, so keeping the two in one file makes a
-// format drift fail loudly instead of silently showing the instruction.
+// The client must render what the user typed, not the hints. This is the inverse
+// of the emitter above, so keeping the two in one file makes a format drift fail
+// loudly instead of silently showing the instruction.
 describe('stripSendPrefixes (client display)', () => {
-  it('peels the output-mode instruction (current trailing form)', () => {
-    expect(stripSendPrefixes(`${TEXT}\n\n${RICH_OUTPUT_MODE_ON_INSTRUCTION}`)).toBe(TEXT)
-    expect(stripSendPrefixes(`${TEXT}\n\n${RICH_OUTPUT_MODE_OFF_INSTRUCTION}`)).toBe(TEXT)
-  })
-
-  it('still peels the LEGACY prefix form (old transcripts echo it forever)', () => {
-    expect(stripSendPrefixes(`${RICH_OUTPUT_MODE_ON_INSTRUCTION}\n\n${TEXT}`)).toBe(TEXT)
-    expect(stripSendPrefixes(`${RICH_OUTPUT_MODE_OFF_INSTRUCTION}\n\n${TEXT}`)).toBe(TEXT)
-  })
-
-  it('peels the trailing standing reminder', () => {
-    expect(stripSendPrefixes(`${TEXT}\n\n${RICH_OUTPUT_MODE_REMINDER}`)).toBe(TEXT)
+  it('peels the rich-output hint block (ON, OFF, reminder)', () => {
+    expect(stripSendPrefixes(hinted(TEXT, ON))).toBe(TEXT)
+    expect(stripSendPrefixes(hinted(TEXT, OFF))).toBe(TEXT)
+    expect(stripSendPrefixes(hinted(TEXT, REMIND))).toBe(TEXT)
     // A multi-paragraph message keeps all of its own paragraphs.
-    expect(stripSendPrefixes(`first para\n\nsecond para\n\n${RICH_OUTPUT_MODE_REMINDER}`))
-      .toBe('first para\n\nsecond para')
+    expect(stripSendPrefixes(hinted('first para\n\nsecond para', REMIND))).toBe('first para\n\nsecond para')
   })
 
-  it('peels instruction + image preamble + reminder together', () => {
-    const enqueued = `${RICH_OUTPUT_MODE_ON_INSTRUCTION}\n\n`
-      + `[Images attached — use the Read tool to view them]\n- /tmp/a.png\n\n${TEXT}`
-      + `\n\n${RICH_OUTPUT_MODE_REMINDER}`
+  it('peels several blocks and the image preamble together', () => {
+    const lang = renderHintBlock('reply-language', 'Answer in French; code stays English.')
+    const enqueued = composeHinted(`[Images attached — use the Read tool to view them]\n- /tmp/a.png\n\n${TEXT}`, { before: [], after: [ON, lang] })
     expect(stripSendPrefixes(enqueued)).toBe(TEXT)
   })
 
-  it('peels the reference-card block in production order (cards, then reminder)', () => {
+  it('peels the reference-card block in production order (cards, then hints)', () => {
     const typed = '<task-ref id="mt1" label="Fix it"/> please look'
     const cards = `${REFERENCE_CARDS_OPEN}\nReferenced by the user (Walnut context; use task_get / session_send / project_list for more):\n- task mt1 "Fix it" · phase TODO · project Inbox\n${REFERENCE_CARDS_CLOSE}`
-    const enqueued = `${appendReferenceCards(typed, cards)}\n\n${RICH_OUTPUT_MODE_REMINDER}`
+    const enqueued = composeHinted(appendReferenceCards(typed, cards), { before: [], after: [REMIND] })
     expect(stripSendPrefixes(enqueued)).toBe(typed)
     // Client and server agree byte-for-byte on what history will show.
     expect(stripSendPrefixes(enqueued)).toBe(toDisplayedUserText(enqueued))
   })
 
-  it('leaves an ordinary message alone (including one that merely mentions the mode)', () => {
+  it('an old bracket line is shown as typed: the client matches structure, never words', () => {
+    // The pre-registry forms are stripped only by the server's history projection,
+    // and only on rows dated before the cutoff (stripLegacyHintLines).
     expect(stripSendPrefixes(TEXT)).toBe(TEXT)
-    expect(stripSendPrefixes(`what does [Rich output mode: ON] do?`)).toBe('what does [Rich output mode: ON] do?')
-    // Mentioned mid-text rather than as the trailing line: not ours to remove.
-    expect(stripSendPrefixes(`is ${RICH_OUTPUT_MODE_REMINDER} still true?`))
-      .toBe(`is ${RICH_OUTPUT_MODE_REMINDER} still true?`)
+    for (const old of [
+      `${TEXT}\n\n${LEGACY_ON}`,
+      `${LEGACY_ON}\n\n${TEXT}`,
+      `${TEXT}\n\n${LEGACY_REMIND}`,
+      'what does [Rich output mode: ON] do?',
+      `is ${LEGACY_REMIND} still true?`,
+    ]) {
+      expect(stripSendPrefixes(old)).toBe(old)
+    }
   })
 
-  it('a malformed wrapper is left visible rather than eating the text', () => {
-    // Unterminated reminder line (no closing bracket) — leave it alone.
-    expect(stripSendPrefixes(`${TEXT}\n\n[Rich output mode is still on`)).toBe(`${TEXT}\n\n[Rich output mode is still on`)
-    // A message that is NOTHING BUT the literal wrapper is someone quoting it at
-    // us — never strip a message down to empty.
-    expect(stripSendPrefixes('[Rich output mode: ON] no separator here')).toBe('[Rich output mode: ON] no separator here')
-    expect(stripSendPrefixes(RICH_OUTPUT_MODE_REMINDER)).toBe(RICH_OUTPUT_MODE_REMINDER)
+  it('a malformed block is left visible rather than eating the text', () => {
+    // Unterminated block: not a hint.
+    const open = `${TEXT}\n\n<system-reminder>\nWalnut (rich-output): ${RICH_OUTPUT_MODE_REMINDER}`
+    expect(stripSendPrefixes(open)).toBe(open)
+    // A message that is NOTHING BUT a hint block is someone quoting it at us:
+    // never strip a message down to empty.
+    expect(stripSendPrefixes(REMIND)).toBe(REMIND)
   })
 
   it('client and server strip identically (one contract, two runtimes)', () => {
     const cases = [
       TEXT,
-      `${TEXT}\n\n${RICH_OUTPUT_MODE_ON_INSTRUCTION}`,
-      `${RICH_OUTPUT_MODE_ON_INSTRUCTION}\n\n${TEXT}`,   // legacy prefix form
-      `${TEXT}\n\n${RICH_OUTPUT_MODE_REMINDER}`,
-      `${RICH_OUTPUT_MODE_ON_INSTRUCTION}\n\n[Images attached — use the Read tool to view them]\n- /tmp/a.png\n\n${TEXT}\n\n${RICH_OUTPUT_MODE_REMINDER}`,
-      `first\n${RICH_OUTPUT_MODE_REMINDER}\nsecond\n${RICH_OUTPUT_MODE_REMINDER}`,
-      `is ${RICH_OUTPUT_MODE_REMINDER} still true?`,
+      hinted(TEXT, ON),
+      hinted(TEXT, REMIND),
+      composeHinted(`[Images attached — use the Read tool to view them]\n- /tmp/a.png\n\n${TEXT}`, { before: [], after: [ON] }),
+      // A merged batch: two composed messages joined by the CLI with one '\n'.
+      `${hinted('first', REMIND)}\n${hinted('second', REMIND)}`,
+      composeHinted(`quoting ${REMIND} here`, { before: [], after: [] }),
     ]
     for (const c of cases) {
-      expect(stripOutputModeWrappersClient(c), c.slice(0, 40)).toBe(stripOutputModeWrappers(c))
+      expect(stripOutputModeWrappersClient(c), c.slice(0, 40)).toBe(shown(c))
     }
   })
 })
@@ -669,11 +709,13 @@ describe('stripSendPrefixes (client display)', () => {
 // is a bug (user-reported, screenshot-confirmed on :3456). Fixed at the history
 // projection choke point, so web, phone, notification previews and auto-titles
 // are all covered by these assertions.
-describe('history projection strips the wrapper (display only)', () => {
+describe('history projection strips the hints (display only)', () => {
   let ts = 0
+  // Rows dated 2026-01: before the legacy cutoff (the moment this Walnut home first
+  // ran the hint registry; the process start in a test), so old bracket lines go too.
   const nextTs = () => new Date(Date.UTC(2026, 0, 1) + (ts += 1000)).toISOString()
-  const userLine = (content: string) => JSON.stringify({
-    type: 'user', timestamp: nextTs(), uuid: `u-${ts}`, message: { role: 'user', content },
+  const userLine = (content: string, timestamp = nextTs()) => JSON.stringify({
+    type: 'user', timestamp, uuid: `u-${ts += 1}`, message: { role: 'user', content },
   })
   const assistantLine = (text: string) => JSON.stringify({
     type: 'assistant', timestamp: nextTs(), message: { id: `a-${ts}`, role: 'assistant', content: [{ type: 'text', text }] },
@@ -681,32 +723,47 @@ describe('history projection strips the wrapper (display only)', () => {
   const userTexts = (jsonl: string) =>
     parseSessionMessages(jsonl).filter((m) => m.role === 'user').map((m) => m.text)
 
-  it('the edge instruction never reaches the bubble — current trailing AND legacy prefix forms', () => {
+  it('a hint block never reaches the bubble, including a merged batch', () => {
     const jsonl = [
-      userLine(`${TEXT}\n\n${RICH_OUTPUT_MODE_ON_INSTRUCTION}`),
+      userLine(hinted(TEXT, ON)),
       assistantLine('<div>ok</div>'),
-      // Old transcripts echo the pre-2026-08-31 prefix placement forever.
-      userLine(`${RICH_OUTPUT_MODE_ON_INSTRUCTION}\n\n${TEXT}`),
-      assistantLine('<div>still ok</div>'),
-    ].join('\n')
-    expect(userTexts(jsonl)).toEqual([TEXT, TEXT])
-  })
-
-  it('the standing reminder never reaches the bubble — including a merged batch', () => {
-    const jsonl = [
-      userLine(`${TEXT}\n\n${RICH_OUTPUT_MODE_REMINDER}`),
-      assistantLine('one'),
-      // A merged batch echoes as ONE line, joined by the CLI with a single '\n',
-      // so BOTH reminders sit mid-text. An end-anchored strip would leave the first.
-      userLine(`first message\n${RICH_OUTPUT_MODE_REMINDER}\nsecond message\n${RICH_OUTPUT_MODE_REMINDER}`),
+      // A merged batch echoes as ONE line, joined by the CLI with a single '\n'.
+      userLine(`${hinted('first message', REMIND)}\n${hinted('second message', REMIND)}`),
       assistantLine('two'),
     ].join('\n')
-    expect(userTexts(jsonl)).toEqual([TEXT, 'first message\nsecond message'])
+    expect(userTexts(jsonl)).toEqual([TEXT, 'first message\n\nsecond message'])
+  })
+
+  it('old rows: the edge instruction and the standing reminder are stripped, trailing AND legacy prefix forms', () => {
+    const jsonl = [
+      userLine(`${TEXT}\n\n${LEGACY_ON}`),
+      assistantLine('<div>ok</div>'),
+      // Old transcripts echo the pre-2026-08-31 prefix placement forever.
+      userLine(`${LEGACY_ON}\n\n${TEXT}`),
+      assistantLine('<div>still ok</div>'),
+      userLine(`${TEXT}\n\n${LEGACY_OFF}`),
+      userLine(`first message\n${LEGACY_REMIND}\nsecond message\n${LEGACY_REMIND}`),
+    ].join('\n')
+    expect(userTexts(jsonl)).toEqual([TEXT, TEXT, TEXT, 'first message\nsecond message'])
+  })
+
+  it('a row after the cutoff keeps a bracket line as typed', () => {
+    _setLegacyHintCutoffForTesting(Date.parse('2026-11-01T00:00:00.000Z'))
+    try {
+      const typed = `${TEXT}\n\n${LEGACY_REMIND}`
+      expect(userTexts(userLine(typed, '2026-11-02T00:00:00.000Z'))).toEqual([typed])
+      expect(stripLegacyHintLines(typed, '2026-11-02T00:00:00.000Z')).toBe(typed)
+      expect(stripLegacyHintLines(typed, '2026-10-20T00:00:00.000Z')).toBe(TEXT)
+      // No time at all: never matched against the old patterns.
+      expect(stripLegacyHintLines(typed)).toBe(typed)
+    } finally {
+      _setLegacyHintCutoffForTesting(Date.now())
+    }
   })
 
   it('keeps the image preamble (real information) and the user\'s own mention of the mode', () => {
-    const withImages = `${RICH_OUTPUT_MODE_ON_INSTRUCTION}\n\n`
-      + `[Images attached — use the Read tool to view them]\n- /tmp/a.png\n\n${TEXT}\n\n${RICH_OUTPUT_MODE_REMINDER}`
+    const withImages = composeHinted(
+      `[Images attached — use the Read tool to view them]\n- /tmp/a.png\n\n${TEXT}`, { before: [], after: [REMIND] })
     const jsonl = [
       userLine(withImages),
       userLine('why does [Rich output mode: ON] appear in my bubble?'),
@@ -719,7 +776,7 @@ describe('history projection strips the wrapper (display only)', () => {
 
   it('an ordinary message is returned untouched (identity, not a rebuild)', () => {
     const plain = 'nothing to strip here\n\nsecond paragraph'
-    expect(stripOutputModeWrappers(plain)).toBe(plain)
+    expect(shown(plain)).toBe(plain)
     expect(userTexts(userLine(plain))).toEqual([plain])
   })
 })
@@ -736,20 +793,19 @@ describe('optimistic bubble is absorbed exactly once (inc-1785091339102)', () =>
     await setConfigOutputMode('rich')
     const sid = await newSession()
 
-    // First send takes the edge, so the second is the interesting one: image
-    // preamble AND standing reminder in the same message.
-    await callSend({ sessionId: sid, message: TEXT })
-    await drain(sid)
+    // A reminder send is the interesting one: image preamble AND a hint in the
+    // same message.
+    await updateSessionRecord(sid, { hintState: reminderDue() })
     const res = await callSend({
       sessionId: sid, message: TEXT,
       images: [{ data: 'iVBORw0KGgo=', mediaType: 'image/png' }],
     })
     const enqueued = await drain(sid)
 
-    // What the CLI got vs what the human will read: the wrapper is in the first
+    // What the CLI got vs what the human will read: the hint is in the first
     // and in neither of the others.
-    expect(enqueued).toContain(RICH_OUTPUT_MODE_REMINDER)
-    const projected = stripOutputModeWrappers(enqueued)
+    expect(enqueued).toContain(REMIND)
+    const projected = shown(enqueued)
     expect(res.dedupText).toBe(projected)
     expect(projected).toContain('[Images attached')
     expect(projected).not.toContain('Rich output mode')
@@ -767,25 +823,23 @@ describe('optimistic bubble is absorbed exactly once (inc-1785091339102)', () =>
   it('rich, no attachments: no dedupText at all, plain text evidence is enough', async () => {
     await setConfigOutputMode('rich')
     const sid = await newSession()
-    await callSend({ sessionId: sid, message: TEXT })
-    await drain(sid)
-
     const res = await callSend({ sessionId: sid, message: TEXT })
-    // The wrapper is the ONLY difference from what the user typed, and history
-    // hides it — so there is nothing to dedup against and the field is omitted.
+    expect(await drain(sid)).toBe(hinted(TEXT, ON))
+    // The hint is the ONLY difference from what the user typed, and history
+    // hides it, so there is nothing to dedup against and the field is omitted.
     expect(res.dedupText).toBeUndefined()
     expect(dedupeOptimisticMessages([bubble(res.messageId!, TEXT)], [persisted(TEXT)], 0)).toEqual([])
   })
 
   it('echo-claim binding survives the strip (id evidence keeps working)', () => {
     // The claim holds what the CLI RECEIVED; history projects the stripped form.
-    // Without the candidate widening in echo-claims.ts, every rich-mode send
-    // would silently lose its walnutMessageId and fall back to text matching.
+    // Without the candidate widening in echo-claims.ts, every hinted send would
+    // silently lose its walnutMessageId and fall back to text matching.
     const sid = 'echo-claim-session'
-    const sent = `${TEXT}\n\n${RICH_OUTPUT_MODE_ON_INSTRUCTION}`
+    const sent = hinted(TEXT, ON)
     registerEchoClaims(sid, ['qm-echo-1'], sent)
     const messages = [{
-      role: 'user', text: stripOutputModeWrappers(sent), timestamp: new Date().toISOString(), msgId: 'u-1',
+      role: 'user', text: shown(sent), timestamp: new Date().toISOString(), msgId: 'u-1',
     }]
     bindEchoClaims(sid, messages)
     expect(messages[0].walnutMessageId).toBe('qm-echo-1')

@@ -495,7 +495,12 @@ let resultText = '';
 let questionSeq = null;
 function stripBanners(text) {
   questionSeq = null;
-  let body = text;
+  // Walnut's message hints (`<system-reminder>` blocks, src/core/hints/hint-format.ts),
+  // wherever they sit; the question hint carries the number the reply must tag.
+  let body = text.replace(/<system-reminder>\s*Walnut \(([a-z][a-z0-9-]*)(?: ([^)\s]+))?\):[\s\S]*?<\/system-reminder>\s*/g, (_m, kind, arg) => {
+    if (kind === 'question' && arg) questionSeq = Number(arg);
+    return '';
+  }).trim();
   for (;;) {
     const m = body.match(/^\s*\[([^\]\n]+)\]\n[\s\S]*?\n\[\/\1\]\s*/);
     if (!m) break;
@@ -1079,7 +1084,7 @@ if (outputFormat === 'stream-json') {
       // `{env:NAME}` in the text becomes that variable as this CLI sees it
       // (`<unset>` when absent), so a test can check what a spawn passed down.
       const text = (effectiveMessage.includes(':')
-        ? effectiveMessage.split('\n\n[Rich output mode')[0].split(':').slice(1).join(':')
+        ? effectiveMessage.split('\n\n[Rich output mode')[0].split('\n\n<system-reminder>')[0].split(':').slice(1).join(':')
         : 'Clean turn done; process stays alive.')
         .replace(/\{env:([A-Z0-9_]+)\}/g, (_m, name) => process.env[name] ?? '<unset>');
       const sid = outputSessionId;

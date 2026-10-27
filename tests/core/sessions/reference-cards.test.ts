@@ -10,10 +10,10 @@
  *     costs exactly its own card, never the send. buildReferenceCards must never
  *     throw, because its caller is the send path.
  *   · STRIP — the block is MACHINE text, so every display surface removes it,
- *     exactly like the output-mode wrapper. `stripReferenceCards` must be the
+ *     exactly like the message hints. `stripReferenceCards` must be the
  *     exact inverse of `appendReferenceCards` for the text a human typed, and
- *     `toDisplayedUserText` must remove BOTH wrappers in one pass (a rich-mode
- *     send with a pill in it carries both).
+ *     `toDisplayedUserText` must remove BOTH in one pass (a rich-mode send with
+ *     a pill in it carries both).
  *
  * Would-fail-if-reverted: drop the dedupe and a doubled pill renders twice; drop
  * the per-kind try/catch and one dead loader empties the whole block (or throws
@@ -39,7 +39,8 @@ import {
   type TaskCard,
 } from '../../../src/core/sessions/reference-cards.js';
 import { taskRefTag, sessionRefTag, projectRefTag } from '../../../src/utils/entity-refs.js';
-import { RICH_OUTPUT_MODE_REMINDER } from '../../../src/core/sessions/output-mode.js';
+import { RICH_OUTPUT_MODE_REMINDER, _setLegacyHintCutoffForTesting } from '../../../src/core/sessions/output-mode.js';
+import { composeHinted, renderHintBlock } from '../../../src/core/hints/hint-format.js';
 
 const TASK: TaskCard = {
   id: 'mr1a2b3c-4d5e',
@@ -208,14 +209,30 @@ describe('stripReferenceCards', () => {
 });
 
 describe('toDisplayedUserText', () => {
-  it('removes the output-mode wrapper and the card block in one pass', async () => {
+  it('removes the message hints and the card block in one pass', async () => {
     const cards = await buildReferenceCards(projectRefTag('Marina'), fakeLoaders());
     const typed = 'what is left on Marina?';
-    // Production order: cards ride the text first, the output-mode reminder last.
-    const delivered = `${appendReferenceCards(typed, cards)}\n\n${RICH_OUTPUT_MODE_REMINDER}`;
+    // Production order: cards ride the text first, the hint blocks after it.
+    const delivered = composeHinted(appendReferenceCards(typed, cards), {
+      before: [], after: [renderHintBlock('rich-output', RICH_OUTPUT_MODE_REMINDER)],
+    });
 
     expect(delivered).toContain(RICH_OUTPUT_MODE_REMINDER);
     expect(delivered).toContain(REFERENCE_CARDS_OPEN);
     expect(toDisplayedUserText(delivered)).toBe(typed);
+  });
+
+  it('strips the old bracket lines only from a row written before the hint registry', () => {
+    // The cutoff is when this Walnut home first ran the registry.
+    _setLegacyHintCutoffForTesting(Date.parse('2026-11-01T00:00:00Z'));
+    try {
+      const typed = 'hello\n\n[Rich output mode is still on: markdown first.]';
+      expect(toDisplayedUserText(typed, '2026-10-20T00:00:00Z')).toBe('hello');
+      // A row from then on is shown as typed, bracket line and all.
+      expect(toDisplayedUserText(typed, '2026-11-02T00:00:00Z')).toBe(typed);
+      expect(toDisplayedUserText(typed)).toBe(typed);
+    } finally {
+      _setLegacyHintCutoffForTesting(Date.now());
+    }
   });
 });

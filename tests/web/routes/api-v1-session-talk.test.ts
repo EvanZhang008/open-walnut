@@ -142,9 +142,8 @@ describe('POST /api/v1/sessions/:id/messages', () => {
     const { getQueue } = await import('../../../src/core/session-message-queue.js')
     const queue = await getQueue(SID)
     // The human's words are the START of the enqueued text. They are no longer
-    // the WHOLE of it: a phone send now carries the output-mode directive the
-    // console has always carried (see the output-mode describe block below), and
-    // that machine line is appended AFTER the message.
+    // the WHOLE of it: a phone send carries the message hints the console's do
+    // (see the output-mode describe block below), as blocks AFTER the message.
     const queued = queue.find((m) => m.id === body.messageId)
     expect(queued?.message.startsWith('hello from the phone')).toBe(true)
   })
@@ -216,15 +215,15 @@ describe('POST /api/v1/sessions/:id/messages', () => {
  * time only the web `session:send` RPC injected it. So a rich session answered
  * the console in HTML and answered the phone in plain markdown, and a phone turn
  * in the middle of a rich session dropped the standing reminder that stops the
- * model drifting back to markdown. Both paths now go through
- * core/sessions/output-mode-send.ts, so the semantics pinned in
- * session-output-mode.test.ts apply here too: full instruction on the edge, a
- * one-line reminder afterwards, nothing at all in markdown mode, and never a
- * wrapper on a slash command.
+ * model drifting back to markdown. Both paths now go through the message-hint
+ * pipeline (core/hints/hint-send.ts), so the semantics pinned in
+ * session-output-mode.test.ts apply here too: the full instruction at session
+ * start, a short reminder every 5 messages, nothing at all in markdown mode, and
+ * never a hint on a slash command.
  *
- * Would-fail-if-reverted: drop the prepareOutputModeSend call in
- * session-stream-v1.ts and the first two assertions break; skip the commit() and
- * the reminder case sees a second full instruction instead.
+ * Would-fail-if-reverted: drop the prepareHintedSend call in session-send-v1.ts
+ * and the first assertions break; skip the commit() and the second send sees a
+ * second full instruction instead.
  */
 describe('POST /api/v1/sessions/:id/messages — output mode', () => {
   async function freshSession(id: string, patch?: Record<string, unknown>): Promise<void> {
@@ -252,24 +251,26 @@ describe('POST /api/v1/sessions/:id/messages — output mode', () => {
     return queue.find((m) => m.id === messageId)?.message ?? ''
   }
 
-  it('first send carries the full instruction and advances the edge; the next carries the reminder', async () => {
+  it('first send carries the full instruction and records it; the reminder comes every 5 messages', async () => {
     const sid = 'talk-output-mode-edge-01'
     await freshSession(sid)
     const {
       RICH_OUTPUT_MODE_ON_INSTRUCTION, RICH_OUTPUT_MODE_REMINDER,
     } = await import('../../../src/core/sessions/output-mode.js')
+    const { renderHintBlock } = await import('../../../src/core/hints/hint-format.js')
     const { getSessionByClaudeId } = await import('../../../src/core/session-tracker.js')
 
     const first = await enqueued(sid, await send(sid, 'explain the daemon'))
-    expect(first.startsWith('explain the daemon')).toBe(true)
-    expect(first).toContain(RICH_OUTPUT_MODE_ON_INSTRUCTION)
-    // The edge is recorded on the RECORD, so a second device cannot inject a
-    // second copy of the instruction.
+    expect(first).toBe(`explain the daemon\n\n${renderHintBlock('rich-output', RICH_OUTPUT_MODE_ON_INSTRUCTION)}`)
+    // What was told is recorded on the RECORD, so a second device cannot inject
+    // a second copy of the instruction.
     expect((await getSessionByClaudeId(sid))?.output_mode_injected).toBe('rich')
 
     const second = await enqueued(sid, await send(sid, 'and the reconnect path?'))
-    expect(second).not.toContain(RICH_OUTPUT_MODE_ON_INSTRUCTION)
-    expect(second).toContain(RICH_OUTPUT_MODE_REMINDER)
+    expect(second).toBe('and the reconnect path?')
+    for (const n of [3, 4, 5]) expect(await enqueued(sid, await send(sid, `msg ${n}`))).toBe(`msg ${n}`)
+    const sixth = await enqueued(sid, await send(sid, 'msg 6'))
+    expect(sixth).toBe(`msg 6\n\n${renderHintBlock('rich-output', RICH_OUTPUT_MODE_REMINDER)}`)
   })
 
   it('markdown mode leaves the phone message byte-identical', async () => {
@@ -293,13 +294,12 @@ describe('POST /api/v1/sessions/:id/messages — output mode', () => {
 
 /**
  * `voice: true` — the phone's voice mode. The person spoke the message and will
- * HEAR the answer, so the CLI also gets the voice-reply line, LAST (after the
- * output-mode tail it overrides for this reply), and every display strips it.
+ * HEAR the answer, so the CLI also gets the voice-reply hint, LAST (after the
+ * rich-output hint it overrides for this reply), and every display strips it.
  *
- * Would-fail-if-reverted: drop the applyVoiceReply call in session-send-v1.ts and
- * the first case breaks; put it before prepareOutputModeSend and the ordering
- * assertion breaks; drop the marker from stripOutputModeWrappers and the history
- * case shows the machine line in the bubble.
+ * Would-fail-if-reverted: drop the voice-reply request in session-send-v1.ts and
+ * the first case breaks; drop the hint parse from the history projection and the
+ * history case shows the machine block in the bubble.
  */
 describe('POST /api/v1/sessions/:id/messages — voice', () => {
   async function post(id: string, body: Record<string, unknown>): Promise<Response> {
@@ -314,17 +314,19 @@ describe('POST /api/v1/sessions/:id/messages — voice', () => {
     return (await getQueue(id)).find((m) => m.id === messageId)?.message ?? ''
   }
 
-  it('appends the voice line after the text and after the output-mode tail', async () => {
+  it('appends the voice hint after the text and after the rich-output hint', async () => {
     const sid = 'talk-voice-01'
     await createSessionRecord(sid, `task-${sid}`, 'test-project', '/tmp', { title: sid })
-    const { VOICE_REPLY_INSTRUCTION } = await import('../../../src/core/sessions/voice-reply.js')
+    const { voiceReplyBlock } = await import('../../../src/core/sessions/voice-reply.js')
     const { RICH_OUTPUT_MODE_ON_INSTRUCTION } = await import('../../../src/core/sessions/output-mode.js')
-    const res = await post(sid, { text: '把测试跑一下', voice: true })
+    // Non-ASCII words (a spoken Chinese request) as test data.
+    const words = '\u628a\u6d4b\u8bd5\u8dd1\u4e00\u4e0b'
+    const res = await post(sid, { text: words, voice: true })
     expect(res.status).toBe(202)
     const text = await enqueued(sid, ((await res.json()) as { messageId: string }).messageId)
-    expect(text.startsWith('把测试跑一下')).toBe(true)
-    expect(text.endsWith(VOICE_REPLY_INSTRUCTION)).toBe(true)
-    expect(text.indexOf(RICH_OUTPUT_MODE_ON_INSTRUCTION)).toBeLessThan(text.indexOf(VOICE_REPLY_INSTRUCTION))
+    expect(text.startsWith(words)).toBe(true)
+    expect(text.endsWith(voiceReplyBlock())).toBe(true)
+    expect(text.indexOf(RICH_OUTPUT_MODE_ON_INSTRUCTION)).toBeLessThan(text.indexOf(voiceReplyBlock()))
   })
 
   it('voice:false and absent leave the send as it was; a non-boolean is a 400', async () => {
@@ -350,16 +352,20 @@ describe('POST /api/v1/sessions/:id/messages — voice', () => {
   })
 
   it('history shows only what the person said', async () => {
-    const { VOICE_REPLY_INSTRUCTION } = await import('../../../src/core/sessions/voice-reply.js')
+    const { voiceReplyBlock } = await import('../../../src/core/sessions/voice-reply.js')
     const { RICH_OUTPUT_MODE_REMINDER } = await import('../../../src/core/sessions/output-mode.js')
+    const { composeHinted, renderHintBlock } = await import('../../../src/core/hints/hint-format.js')
     const { toDisplayedUserText } = await import('../../../src/core/sessions/reference-cards.js')
     const { stripOutputModeWrappers: clientStrip } = await import('../../../web/src/hooks/useSessionSend')
-    const sent = `run the tests\n\n${RICH_OUTPUT_MODE_REMINDER}\n\n${VOICE_REPLY_INSTRUCTION}`
+    const sent = composeHinted('run the tests', { before: [], after: [renderHintBlock('rich-output', RICH_OUTPUT_MODE_REMINDER), voiceReplyBlock()] })
     expect(toDisplayedUserText(sent)).toBe('run the tests')
     expect(clientStrip(sent)).toBe('run the tests')
-    // A person merely quoting the marker mid-sentence keeps their words.
+    // A person quoting the old marker keeps their words, mid-sentence or on a line of its own.
     const quoted = 'what does [Voice reply: x] mean in the log'
     expect(toDisplayedUserText(quoted)).toBe(quoted)
+    const ownLine = 'look at this\n\n[Voice reply: x]'
+    expect(toDisplayedUserText(ownLine)).toBe(ownLine)
+    expect(clientStrip(ownLine)).toBe(ownLine)
   })
 })
 

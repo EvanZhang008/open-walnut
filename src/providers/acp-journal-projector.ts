@@ -1,5 +1,5 @@
 import type { JournalRecord } from './acp-worker/protocol.js'
-import { toDisplayedUserText } from '../core/sessions/reference-cards.js'
+import { projectUserText } from '../core/sessions/reference-cards.js'
 import type {
   SessionHistoryMessage,
   SessionHistoryTool,
@@ -495,12 +495,15 @@ export class AcpHistoryFold {
       const timestamp = new Date(event.ts).toISOString()
       switch (event.type) {
         case 'user': {
+          const shown = projectUserText(event.text, event.ts)
           const message: SessionHistoryMessage = {
             role: 'user',
-            text: toDisplayedUserText(event.text),
+            text: shown.text,
             timestamp,
             msgId: event.msgId,
             walnutMessageId: event.walnutMessageId,
+            ...(shown.hints.length ? { hints: shown.hints } : {}),
+            ...(shown.text !== event.text ? { rawText: event.text } : {}),
           }
           this.messages.push(message)
           this.byMessageId.set(event.msgId, message)

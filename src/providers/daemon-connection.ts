@@ -1958,8 +1958,10 @@ export class DaemonConnection {
         // does: the replica has no session record to resolve it from, and the
         // edge marker lives here on the primary, which is why the wrapping
         // happens at the enqueue rather than back on the EC2 box.
-        const { prepareOutputModeSend } = await import('../core/sessions/output-mode-send.js')
-        const outputMode = await prepareOutputModeSend(sessionId, record, message)
+        const { prepareHintedSend } = await import('../core/hints/hint-send.js')
+        // The companion composes the voice hint into a voice send; it is kept.
+        const { voiceReplyBlock } = await import('../core/sessions/voice-reply.js')
+        const outputMode = await prepareHintedSend(sessionId, record, message, { sentBy: 'person', upstreamBlocks: [voiceReplyBlock()] })
         const { sendMessageToSession } = await import('../core/session-message-queue.js')
         // The row and the id's fate are one write (relay-fates.ts): no crash
         // point leaves a queued message the companion would be told is unseen.
@@ -1970,6 +1972,7 @@ export class DaemonConnection {
           stopFence,
           relayTaken: true,
           ...(outputMode.changed ? { enqueueMessage: outputMode.enqueueText } : {}),
+          hinted: true,
         })
         await outputMode.commit()
         log.session.info('DaemonConnection: message relay enqueued (durable)', {

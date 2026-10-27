@@ -22,6 +22,7 @@ import './time.js'
 import './mcp.js'
 import './transfer.js'
 import './task-lifecycle.js'
+import './hints.js'
 
 export {
   defineOp,

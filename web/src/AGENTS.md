@@ -397,9 +397,11 @@ show inline after the open ones, other completed hits that show the query fold i
   filed there (2026-10-08). A reply tag that only echoes the row's OWN banner never overrides the
   row's own anchor (`bannerSeqOf` in `withTagAnchors`): the banner is what Walnut numbered, so when
   they disagree the number was wrong.
-  **The reply tag files the answer.** A question's send (and every follow-up) opens with the
-  `[Question Q<n>]…[/Question Q<n>]` banner asking the model to begin with the line `[Q<n>]`; the
-  bubble hides that banner (`QUESTION_BANNER_RE`), `SessionMessage` and `StreamingBlockView` strip
+  **The reply tag files the answer.** A question's send (and every follow-up) asks for the
+  `question` message hint (`hints: questionHint(n)`; the server writes it ahead of the words as a
+  `Walnut (question <n>)` block, `src/core/hints/`) asking the model to begin with the line `[Q<n>]`;
+  the bubble never shows the block (old rows' `[Question Q<n>]` banner is hidden by
+  `QUESTION_BANNER_RE`), `SessionMessage` and `StreamingBlockView` strip
   the tag from the text on screen, and the tag decides where the turn belongs: `withTagAnchors`
   adds a client-side synthetic anchor for a turn whose first answer text names another question
   (or none was recorded), and `tagKeyOfBlocks` routes live blocks the same way, both ahead of the

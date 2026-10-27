@@ -43,6 +43,7 @@ import { noteSettledLine, settledLineUuid } from './session-queue-lines.js';
 import { staleTriggerText } from './routines/trigger-stale.js';
 import type { PendingInstructionNotice } from './sessions/instruction-notice.js';
 import { PERSON_SEND_SOURCES, queueSentBy } from './sessions/send-sent-by.js';
+import { replaceHintedText } from './hints/hint-format.js';
 
 // ── Types and store (session-queue-store.ts) ──
 
@@ -197,6 +198,8 @@ export async function sendMessageToSession(
     closesPrompt?: boolean;
     /** What a waiting task waited for (SessionSendEvent.endsWait). */
     endsWait?: boolean;
+    /** The text already went through the hint pipeline (hints/hint-send.ts prepareHintedSend): enqueued as it is. */
+    hinted?: boolean;
   },
 ): Promise<QueuedMessage> {
   const { bus, EventNames } = await import('./event-bus.js');
@@ -211,9 +214,9 @@ export async function sendMessageToSession(
   // The main agent's org update rides the same way: one folded note, never a turn (org/org-store.ts).
   const { pendingOrgDigest } = await import('./org/org-store.js');
   const digest = await pendingOrgDigest(sessionId);
-  // A turn nobody typed still answers the user: it carries the reply-style
-  // directive a human send would (sessions/output-mode-send.ts).
-  const { prepareAutomatedOutputModeSend } = await import('./sessions/output-mode-send.js');
+  // Every message is escaped, and a turn nobody typed still carries the message
+  // hints a human send would (hints/hint-send.ts), unless its sender composed them.
+  const { prepareQueuedHintedSend } = await import('./hints/hint-send.js');
   const rawBody = opts?.enqueueMessage ?? message;
   // What a plugin App shows (an editor, a test run) rides the same way: what
   // changed since this session last read it, never a turn (sessions/app-state.ts).
@@ -225,7 +228,7 @@ export async function sendMessageToSession(
   // A lead that handed its project over hears so on every message that still reaches it (org/retired-lead.ts).
   const { pendingRetiredLeadNote } = await import('./org/retired-lead.js');
   const retiredNote = await pendingRetiredLeadNote(sessionId, rawBody);
-  const outputMode = await prepareAutomatedOutputModeSend(sessionId, opts?.source, rawBody);
+  const outputMode = opts?.hinted ? null : await prepareQueuedHintedSend(sessionId, opts?.source, rawBody);
   const body = outputMode?.enqueueText ?? rawBody;
   const notes = [place?.text, restart?.text, digest?.text, appState?.text, waitNote, retiredNote].filter(Boolean).join('\n\n');
   const enqueueText = notes ? `${notes}\n\n${body}` : body;
@@ -461,7 +464,9 @@ export async function editMessage(
     if (!msg || msg.status !== 'pending') return false;
     if (opts?.onlyUnsent && (msg.lineUuid || msg.lineTries || msg.lineInDoubt)) return false;
 
-    msg.message = newText;
+    // Its hint blocks stay (their state is already recorded); the new words are escaped.
+    // A slash command stays byte-exact (the CLI reads a command only at the start).
+    msg.message = newText.startsWith('/') ? newText : replaceHintedText(msg.message, newText);
     return true;
   });
 }

@@ -271,12 +271,14 @@ test.describe('Conversation Mode, the mode pill and the question tag', () => {
     await expect(rows).toHaveCount(3)
     await expect(rows.nth(2).locator('.thread-map-num')).toHaveText(String(n))
     await expect(panel.locator('.thread-turn-label-by')).toHaveCount(0)
-    // The record: the question got its number, and the send carried the banner
-    // asking for `[Q<n>]` (the mock CLI answers it the way a real model does).
+    // The record: the question got its number, and the send asked for the
+    // question hint, which the server writes ahead of the words and which asks
+    // for `[Q<n>]`: the mock CLI reads the number from that block and answers
+    // tagged, so the reply filed under n above proves the block arrived (this
+    // fixture session is not persisted; message-hints.spec.ts checks history).
     await expect.poll(async () => (await readRecord(request, TAGGED_SESSION)).threadMeta?.find((m) => (m as { seq?: number }).seq === n)?.headId, { timeout: 20_000 }).toBeTruthy()
     const sent = await page.evaluate(() => (window as unknown as { __sent: string[] }).__sent.join('\n'))
-    expect(sent).toContain(`[Question Q${n}]`)
-    expect(sent).toContain(`Begin your reply with the line \\"[Q${n}]\\"`)
+    expect(sent).toContain(`"hints":{"question":{"arg":"${n}"}}`)
     await shot(page, 'ask-in-conversation-mode', panel)
   })
 

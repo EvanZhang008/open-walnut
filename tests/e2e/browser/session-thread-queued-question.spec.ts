@@ -82,8 +82,8 @@ test.describe('a question the CLI took mid-turn keeps its number, and its follow
     // A follow-up from the card goes out under question 2 and is answered there.
     await card.locator('.thread-card-input').fill('slow:12000 And for a burst of retries?')
     await card.locator('.thread-card-input').press('Enter')
-    await expect.poll(() => sent.some((f) => f.includes('[Question Q2]')), { timeout: 15_000 }).toBe(true)
-    expect(sent.some((f) => f.includes('[Question Q1]')), 'no send is numbered as question 1').toBe(false)
+    await expect.poll(() => sent.some((f) => f.includes('"question":{"arg":"2"}')), { timeout: 15_000 }).toBe(true)
+    expect(sent.some((f) => f.includes('"question":{"arg":"1"}')), 'no send is numbered as question 1').toBe(false)
     await expect(card).toHaveAttribute('data-answering', 'true', { timeout: 30_000 })
     await expect(threadRows.nth(0)).toHaveAttribute('data-status', 'answering')
     await expect(card.locator('.thread-card-body')).toContainText('processed your message', { timeout: 60_000 })

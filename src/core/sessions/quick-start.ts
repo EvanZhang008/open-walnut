@@ -331,6 +331,10 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
     const { buildReferenceCards, appendReferenceCards } = await import('./reference-cards.js');
     const refCards = await buildReferenceCards(message);
     if (refCards) sessionMessage = appendReferenceCards(sessionMessage, refCards);
+    // Escaped like every send (hints/hint-format.ts), so a Walnut-shaped block in
+    // the words is never taken for one of Walnut's hints, and shows as typed.
+    const { escapeHintTags } = await import('../hints/hint-format.js');
+    sessionMessage = escapeHintTags(sessionMessage);
     // Last of the human-side text, after the cards: a reply-style line is read
     // best nearest the end (the same placement the send path uses).
     if (params.messageSuffix && message.trim()) sessionMessage = `${sessionMessage}\n\n${params.messageSuffix}`;

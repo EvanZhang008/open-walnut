@@ -21,6 +21,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { DeviceCopy } from './device-copy.js'
 import type { Route } from './route.js'
+import { escapeHintTags } from '../core/hints/hint-format.js'
 
 export const ALONE_PREFIX = '/_alone/'
 /** How much of a conversation's file one transcript read takes. */
@@ -141,7 +142,9 @@ export function createAloneApi(deps: AloneApiDeps) {
     if (text.length > TEXT_MAX_CHARS) throw new AloneError(413, 'too_large', 'The message is too long.')
     // The daemon's message id shape (offline-host-core.ts messageId); another one gets a fresh id there.
     const messageId = typeof body.messageId === 'string' && /^qm-[A-Za-z0-9-]{1,64}$/.test(body.messageId) ? body.messageId : undefined
-    const r = await call('follower.send', { sid, text, ...(messageId ? { messageId } : {}) }, 'sending', 20_000)
+    // Escaped as the server's queue would (hints/hint-format.ts): the host delivers it as it is.
+    const words = text.startsWith('/') ? text : escapeHintTags(text)
+    const r = await call('follower.send', { sid, text: words, ...(messageId ? { messageId } : {}) }, 'sending', 20_000)
     deps.log('info', 'host server: a message sent while alone', { sid, device, messageId: r.messageId })
     return { status: 'delivered', sessionId: sid, messageId: r.messageId ?? messageId ?? null }
   }

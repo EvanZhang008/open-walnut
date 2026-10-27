@@ -33,7 +33,7 @@ import {
   rememberedAskModel,
   resolveLaunchAskAgent,
 } from './ask-launch-plan.js';
-import { VOICE_REPLY_INSTRUCTION } from './voice-reply.js';
+import { voiceReplyBlock } from './voice-reply.js';
 import { log } from '../../logging/index.js';
 
 /** Launch-time permission modes — the full registry set (core/types.ts). */
@@ -311,7 +311,7 @@ export async function performMobileLaunch(
   const wsPlace = input.taskId && !ask ? await mobileWorkspacePlace(input.taskId, input.cwd, input.host) : null;
   const task = await quickStartSession({
     message: input.message,
-    ...(input.voice ? { messageSuffix: VOICE_REPLY_INSTRUCTION } : {}),
+    ...(input.voice ? { messageSuffix: voiceReplyBlock() } : {}),
     cwd: ask ? ASK_LAUNCH_CWD : wsPlace?.cwd ?? input.cwd,
     host: wsPlace ? wsPlace.host : input.host,
     model: ask ? ask.model : input.model,

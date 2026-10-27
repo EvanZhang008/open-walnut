@@ -254,4 +254,9 @@ export interface SessionHistoryMessage {
    *  dumps, compaction continuation summaries, image-read metadata). Rendered
    *  as a collapsed context row, never a "You" bubble. */
   injected?: boolean;
+  /** User rows: the message hints Walnut sent with it (src/core/hints/hint-format.ts). */
+  hints?: import('@open-walnut/hint-format').CarriedHint[];
+  /** User rows whose display differs from what the model received: the text as
+   *  received, every hint included (the raw view). */
+  rawText?: string;
 }

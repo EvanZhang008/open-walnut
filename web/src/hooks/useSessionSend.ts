@@ -8,6 +8,7 @@ import type { ImageAttachment } from '@/api/chat';
 import { removeBatchMessages, markDeliveredMessages, statusOnAdopt, unmatchedDeliveredIds } from '@/components/sessions/optimistic-dedup';
 import { launchSeedFor } from '@/components/sessions/launch-prompt-seed';
 import { withoutLeadingRiders } from '@open-walnut/history-walnut-riders';
+import { parseHinted } from '@open-walnut/hint-format';
 
 /** Per-send extras that ride the `session:send` RPC. */
 export interface SessionSendOptions {
@@ -20,6 +21,12 @@ export interface SessionSendOptions {
    * byte-identical to a plain send.
    */
   userUuid?: string;
+  /**
+   * Message hints this send asks for (`on_request`, src/core/hints/hint-registry.ts):
+   * `{ question: { arg: '4' } }` makes the server put the question-number hint ahead
+   * of the text. The bubble shows only the text; the hint is the server's to write.
+   */
+  hints?: Record<string, { arg?: string }>;
 }
 
 interface UseSessionSendReturn {
@@ -96,58 +103,15 @@ function stripImageRefPrefix(message: string): string {
 }
 
 /**
- * Same deal for the output-mode wrapper: `session:send` prefixes a one-time
- * `[Rich output mode: ON|OFF] …` line on a mode change and, while rich holds,
- * appends a `[Rich output mode is still on …]` reminder line after the user's
- * text (src/core/sessions/output-mode.ts).
- *
- * MIRROR of stripOutputModeWrappers() there, which the server also applies to the
- * history projection — so this is only needed for a row rehydrated from the disk
- * QUEUE (not yet delivered, hence not yet echoed into history). Line-anchored: a
- * sentence that merely mentions the mode does not START with the marker, and a
- * merged batch carrying two reminders loses both.
+ * The message hints (`<system-reminder>` blocks the server composes around the
+ * text, src/core/hints/hint-format.ts, the same file through an alias): taken off
+ * by structure, never by matching the user's words, and the escape the server put
+ * on the user's own `<system-reminder>` undone. The server applies the same parse
+ * to the history projection, so this is only needed for a row rehydrated from the
+ * disk QUEUE (not yet delivered, hence not yet echoed into history).
  */
-const OUTPUT_MODE_INSTRUCTION_MARKER = '[Rich output mode: ';
-const OUTPUT_MODE_REMINDER_MARKER = '[Rich output mode is still on';
-/** The phone's voice-reply line (src/core/sessions/voice-reply.ts), stripped the same way. */
-const VOICE_REPLY_MARKER = '[Voice reply: ';
-/** The reply-language line (REPLY_LANGUAGE_MARKER in src/core/sessions/output-mode.ts), stripped the same way. */
-const REPLY_LANGUAGE_MARKER = '[Reply language: ';
-
-function isOutputModeLine(line: string): boolean {
-  const t = line.trim();
-  if (t.startsWith(OUTPUT_MODE_INSTRUCTION_MARKER)) return true;
-  if (t.startsWith(VOICE_REPLY_MARKER) && t.endsWith(']')) return true;
-  if (t.startsWith(REPLY_LANGUAGE_MARKER) && t.endsWith(']')) return true;
-  return t.startsWith(OUTPUT_MODE_REMINDER_MARKER) && t.endsWith(']');
-}
-
-/** The form HISTORY will show: the output-mode wrapper gone, the image preamble
- *  kept (the server strips exactly this much). This is therefore the dedup basis
- *  for a rehydrated row — see OptimisticMessage.dedupText. */
 export function stripOutputModeWrappers(message: string): string {
-  if (
-    !message.includes(OUTPUT_MODE_INSTRUCTION_MARKER)
-    && !message.includes(OUTPUT_MODE_REMINDER_MARKER)
-    && !message.includes(VOICE_REPLY_MARKER)
-    && !message.includes(REPLY_LANGUAGE_MARKER)
-  ) {
-    return message;
-  }
-  const lines = message.split('\n');
-  const out: string[] = [];
-  for (let i = 0; i < lines.length; i++) {
-    if (!isOutputModeLine(lines[i])) {
-      out.push(lines[i]);
-      continue;
-    }
-    if (out.length > 0 && out[out.length - 1].trim() === '') out.pop();
-    else if (lines[i + 1]?.trim() === '') i++;
-  }
-  const stripped = out.join('\n').trim();
-  // Never strip a message down to nothing — an "all wrapper" message is someone
-  // quoting the literal text, and their words must stay visible.
-  return stripped === '' ? message : stripped;
+  return parseHinted(message).text;
 }
 
 /**
@@ -182,8 +146,8 @@ export function stripReferenceCards(message: string): string {
   return stripped === '' ? message : stripped;
 }
 
-/** The form HISTORY will show for a delivered user line: both machine wrappers
- *  gone, the image preamble kept — the server's toDisplayedUserText. */
+/** The form HISTORY will show for a delivered user line: the hints and the
+ *  reference cards gone, the image preamble kept (the server's toDisplayedUserText). */
 export function toDisplayedUserText(message: string): string {
   return stripReferenceCards(stripOutputModeWrappers(message));
 }
@@ -340,6 +304,7 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
       // its thread NOW rather than after the next history fetch. Dedup never
       // reads it (it keys on queueId / walnutMessageId / text).
       ...(opts?.userUuid ? { userUuid: opts.userUuid } : {}),
+      ...(opts?.hints ? { requestedHints: opts.hints } : {}),
     };
     setOptimisticMsgs((prev) => [...prev, optimistic]);
 
@@ -352,6 +317,7 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
         message,
         ...(await buildImageRefsPayload(images)),
         ...(opts?.userUuid ? { userUuid: opts.userUuid } : {}),
+        ...(opts?.hints ? { hints: opts.hints } : {}),
       };
       const res = await wsClient.sendRpc<{ messageId: string; dedupText?: string; enqueuedAt?: string }>('session:send', rpcPayload);
       if (res?.messageId) {
@@ -401,6 +367,7 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
       // Same as the plain send path: the pre-assigned uuid puts the bubble in its
       // thread immediately (see the comment there).
       ...(opts?.userUuid ? { userUuid: opts.userUuid } : {}),
+      ...(opts?.hints ? { requestedHints: opts.hints } : {}),
     };
     setOptimisticMsgs((prev) => [...prev, optimistic]);
 
@@ -411,6 +378,7 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
         interrupt: true,
         ...(await buildImageRefsPayload(images)),
         ...(opts?.userUuid ? { userUuid: opts.userUuid } : {}),
+        ...(opts?.hints ? { hints: opts.hints } : {}),
       };
       const res = await wsClient.sendRpc<{ messageId: string; dedupText?: string; enqueuedAt?: string }>('session:send', rpcPayload);
       if (res?.messageId) {
@@ -468,6 +436,7 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
         {
           sessionId, message: failedMsg.text, retryOf: queueId, ...imagePayload,
           ...(failedMsg.userUuid ? { userUuid: failedMsg.userUuid } : {}),
+          ...(failedMsg.requestedHints ? { hints: failedMsg.requestedHints } : {}),
         },
       ))
       .then((res) => {

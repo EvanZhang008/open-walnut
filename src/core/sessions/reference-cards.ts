@@ -32,7 +32,8 @@
 
 import { log } from '../../logging/index.js';
 import { listEntityRefs } from '../../utils/entity-refs.js';
-import { stripOutputModeWrappers } from './output-mode.js';
+import { stripLegacyHintLines } from './output-mode.js';
+import { parseHinted, type CarriedHint } from '../hints/hint-format.js';
 
 /** Block markers, each on its OWN line. Line-anchored like the output-mode
  *  markers so a human sentence quoting one survives the stripper. */
@@ -366,15 +367,22 @@ export function stripReferenceCards(text: string): string {
 }
 
 /**
- * THE projection of a delivered user line to what every display surface shows.
+ * THE projection of a delivered user line to what every display surface shows,
+ * with the message hints it carried.
  *
- * A user message can carry BOTH machine wrappers (the output-mode instruction or
- * reminder, and a reference-card block), and the CLI echoes all of it into its
- * JSONL. Surfaces built from a history parse — web bubbles, the phone, the
- * notification feed, search snippets, auto-titles — must show only what the human
+ * A user message can carry message hints (`<system-reminder>` blocks,
+ * hints/hint-format.ts) and a reference-card block, and the CLI echoes all of it
+ * into its JSONL. Surfaces built from a history parse (web bubbles, the phone, the
+ * notification feed, search snippets, auto-titles) must show only what the human
  * typed, so they go through this one function rather than each remembering which
- * strippers exist.
+ * strippers exist. `at` is the row's time: only a row from before the hint
+ * registry may carry the old bracket lines (output-mode.ts stripLegacyHintLines).
  */
-export function toDisplayedUserText(text: string): string {
-  return stripReferenceCards(stripOutputModeWrappers(text));
+export function projectUserText(text: string, at?: number | string | null): { text: string; hints: CarriedHint[] } {
+  const parsed = parseHinted(text);
+  return { text: stripReferenceCards(stripLegacyHintLines(parsed.text, at)), hints: parsed.hints };
+}
+
+export function toDisplayedUserText(text: string, at?: number | string | null): string {
+  return projectUserText(text, at).text;
 }

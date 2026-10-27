@@ -94,10 +94,10 @@ export async function sendDirectOrHold(ctx: DirectContext): Promise<void> {
     return
   }
   log.web.info('mobile send falling back to direct bridge sequence', { sessionId, host, messageId })
-  // Deliberately carries NO output-mode directive: the wrapper has to be paired
-  // with advancing `output_mode_injected` on the session record, which lives on
-  // the primary, and this path exists precisely for when the primary is not
-  // reachable. The next relayed send fixes the mode.
+  // Deliberately carries NO message hint: a hint has to be paired with advancing
+  // `hintState` on the session record, which lives on the primary, and this path
+  // exists precisely for when the primary is not reachable. The host's next send
+  // through the primary carries what is owed (hints/hint-send.ts).
   const { deliverDirectToHost } = await import('../../core/sessions/direct-host-send.js')
   const direct = deliverDirectToHost({
     host, sessionId, text: ctx.text, messageId, stopFence: ctx.stopFence,

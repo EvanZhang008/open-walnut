@@ -929,6 +929,27 @@ await fs.writeFile(
         subtasks: [],
       },
       {
+        // Message-hint fixture (message-hints.spec.ts): an old bracket-line row,
+        // a hinted row, and live sends whose transcript is kept.
+        id: 'pw-task-hints',
+        title: 'Message hints fixture task',
+        status: 'in_progress',
+        phase: 'IN_PROGRESS',
+        priority: 'none',
+        project: 'Walnut',
+        source: 'local',
+        session_ids: ['pw-hints-session'],
+        active_session_ids: [],
+        session_id: 'pw-hints-session',
+        session_status: { process_status: 'stopped', mode: 'bypass' },
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        description: '',
+        summary: '',
+        note: '',
+        subtasks: [],
+      },
+      {
         id: 'pw-task-workflow',
         title: 'Workflow fixture task',
         status: 'in_progress',
@@ -2450,7 +2471,7 @@ const codepathValidationGo = path.join(codepathFixtureRoot, 'k8s-src', 'objectme
     // user line, the way the real CLI does. Only this session: every other
     // fixture transcript stays byte-identical across a run.
     process.env.MOCK_CLAUDE_PERSIST_DIR = path.join(tmpBase, '.claude', 'projects')
-    process.env.MOCK_CLAUDE_PERSIST_SESSIONS = `${RELOAD_SESSION},${WHALE_SESSION},${WHALE_ANCHOR_SESSION},${WHALE_GAP_SESSION},pw-rider-session,pw-fold-session`
+    process.env.MOCK_CLAUDE_PERSIST_SESSIONS = `${RELOAD_SESSION},${WHALE_SESSION},${WHALE_ANCHOR_SESSION},${WHALE_GAP_SESSION},pw-rider-session,pw-fold-session,pw-hints-session`
     await fs.writeFile(
       path.join(tmpBase, 'session-message-queue.json'),
       JSON.stringify({ version: 1, queues: fixtureParkedQueues(threadsV2, sessionFixtureNow) }),
@@ -2943,6 +2964,39 @@ const codepathValidationGo = path.join(codepathFixtureRoot, 'k8s-src', 'objectme
         '',
       ].join('\n'),
     )
+
+  // Message-hint fixture (message-hints.spec.ts): a row from before the hint
+  // registry (old bracket lines, hidden), and a row carrying a hint block and the
+  // person's own escaped `<system-reminder>` (hint hidden, their words as typed).
+  {
+    const hinted = 'HINTS_TYPED &lt;system-reminder>mine&lt;/system-reminder> stays.\n\n'
+      + '<system-reminder>\nWalnut (reply-language): Talk to the user in Chinese.\n</system-reminder>'
+    const legacy = 'HINTS_LEGACY words.\n\n[Rich output mode is still on: markdown first.]\n\n[Reply language: Chinese.]'
+    await fs.writeFile(
+      path.join(jsonlDir, 'pw-hints-session.jsonl'),
+      [
+        ...[legacy, hinted].flatMap((text, i) => [
+          JSON.stringify({
+            type: 'user', userType: 'external',
+            uuid: `0199ce11-0000-4aaa-8bbb-${String(i).padStart(12, '0')}`,
+            parentUuid: i === 0 ? null : `0199ce12-0000-4aaa-8bbb-${String(i - 1).padStart(12, '0')}`,
+            sessionId: 'pw-hints-session',
+            timestamp: new Date(sessionFixtureNow - 120_000 + i * 2_000).toISOString(),
+            message: { role: 'user', content: text },
+          }),
+          JSON.stringify({
+            type: 'assistant',
+            uuid: `0199ce12-0000-4aaa-8bbb-${String(i).padStart(12, '0')}`,
+            parentUuid: `0199ce11-0000-4aaa-8bbb-${String(i).padStart(12, '0')}`,
+            sessionId: 'pw-hints-session',
+            timestamp: new Date(sessionFixtureNow - 119_000 + i * 2_000).toISOString(),
+            message: { role: 'assistant', content: [{ type: 'text', text: `HINTS_ANSWER_${i + 1} done.` }] },
+          }),
+        ]),
+        '',
+      ].join('\n'),
+    )
+  }
 
   // Turn-fold fixture (session-turn-folds.spec.ts): finished turns whose steps
   // fold into one process row, and answers that end with the no-action line.
@@ -3828,6 +3882,19 @@ await fs.writeFile(
         messageCount: 5,
         cwd: vscodeFixtureRoot,
         title: 'Turn folds: process steps and no-action answers',
+      },
+      {
+        claudeSessionId: 'pw-hints-session',
+        taskId: 'pw-task-hints',
+        project: 'Walnut',
+        process_status: 'stopped',
+        mode: 'bypass',
+        last_status_change: new Date(sessionFixtureNow - 100_000).toISOString(),
+        startedAt: new Date(sessionFixtureNow - 130_000).toISOString(),
+        lastActiveAt: new Date(sessionFixtureNow - 100_000).toISOString(),
+        messageCount: 4,
+        cwd: vscodeFixtureRoot,
+        title: 'Message hints: hidden by structure, shown in the raw view',
       },
       {
         // Rider fixture: the record's project is where the session was told it

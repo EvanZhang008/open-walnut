@@ -9,6 +9,7 @@ import { useOptimisticSetting } from '../inputs/useOptimisticSetting';
 import { useCommitField } from '../inputs/useCommitField';
 import { useSerialSave, type OnSave } from './GeneralSection';
 import { DefaultEngineRow } from './DefaultEngineRow';
+import { MessageHintsGroup } from './MessageHintsGroup';
 
 interface Props {
   config: Config;
@@ -203,7 +204,7 @@ export function SessionsSection({ config, onSave }: Props) {
         />
         <SettingsRow
           label="Reply language"
-          help="One sentence added to every message a session gets; empty adds nothing."
+          help="One sentence a session hears at its start, after a compaction, when you change it, and when a reply drifts; empty sends nothing."
           htmlFor="session-reply-language"
           error={replyLanguage.error}
           control={
@@ -220,6 +221,8 @@ export function SessionsSection({ config, onSave }: Props) {
           }
         />
       </SettingsGroup>
+
+      <MessageHintsGroup />
 
       <SettingsGroup heading="Files">
         <SettingsRow

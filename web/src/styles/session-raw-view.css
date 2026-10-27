@@ -1,0 +1,124 @@
+/* The session raw view (SessionRawView.tsx): a full-height sheet of plain text. */
+
+.raw-view-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 3000;
+  background: rgba(0, 0, 0, 0.35);
+  display: flex;
+  align-items: stretch;
+  justify-content: center;
+  padding: 24px;
+}
+
+.raw-view {
+  width: min(1100px, 100%);
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.25);
+  overflow: hidden;
+}
+
+.raw-view-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-secondary);
+}
+
+.raw-view-sid {
+  color: var(--fg-muted);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.raw-view-close {
+  margin-left: auto;
+  font-size: 20px;
+  line-height: 1;
+  background: none;
+  border: none;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+
+.raw-view-body {
+  overflow: auto;
+  padding: 12px 14px 24px;
+}
+
+.raw-view-more {
+  display: block;
+  margin: 0 auto 12px;
+}
+
+.raw-view-note,
+.raw-view-error {
+  color: var(--fg-muted);
+  padding: 12px 0;
+}
+
+.raw-view-error {
+  color: var(--danger, #c0392b);
+}
+
+.raw-turn {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+}
+
+.raw-turn-head {
+  display: flex;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--fg-muted);
+  margin-bottom: 6px;
+}
+
+.raw-turn-hints {
+  color: var(--accent);
+}
+
+.raw-turn-label,
+.raw-part-tag {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--fg-muted);
+  margin: 8px 0 4px;
+}
+
+.raw-turn-pre {
+  margin: 0;
+  padding: 8px 10px;
+  background: var(--bg-secondary);
+  color: var(--fg);
+  border-radius: 6px;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 480px;
+  overflow: auto;
+}
+
+.raw-turn-empty {
+  color: var(--fg-muted);
+}
+
+.raw-part + .raw-part {
+  margin-top: 6px;
+}

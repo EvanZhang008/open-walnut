@@ -40,7 +40,7 @@
  *    window while optimistic bubbles are still rendered, so this is fine.
  */
 
-import { stripOutputModeWrappers } from './sessions/output-mode.js';
+import { parseHinted } from './hints/hint-format.js';
 import { toDisplayedUserText } from './sessions/reference-cards.js';
 
 const CLAIM_TTL_MS = 2 * 60 * 60 * 1000; // claims older than 2h are stale
@@ -84,16 +84,15 @@ function candidateTexts(text: string): string[] {
     // Re-join the '\n\n'-separated segments with a single '\n' — the CLI form.
     add(primary.split('\n\n').join('\n'));
   }
-  // History PROJECTS a user line with the machine wrappers removed (the
-  // output-mode instruction / standing reminder — src/core/sessions/output-mode.ts
-  // — and the reference-card block for entity pills the human dropped in —
+  // History PROJECTS a user line with the machine wrappers removed (the message
+  // hints, src/core/hints/hint-format.ts, and the reference-card block for entity pills the human dropped in —
   // src/core/sessions/reference-cards.ts), while a claim holds what the CLI
   // actually RECEIVED. Same logical send, several spellings, so all must bind:
   // without this every rich-mode or pill-carrying send loses its id evidence and
   // falls back to text matching. Both strippers are offered because a claim may
   // carry either wrapper alone or both together.
   for (const form of [...out]) {
-    add(stripOutputModeWrappers(form));
+    add(parseHinted(form).text);
     add(toDisplayedUserText(form));
   }
   return out;

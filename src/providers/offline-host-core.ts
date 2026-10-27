@@ -48,11 +48,11 @@ export interface OfflineSliceSession {
   /** The instruction notice for a session spawned before its default instructions changed, sent only while it is due, and the key naming that (instruction-notice.ts). */
   taskRoutingPolicy?: string; taskRoutingDue?: string
   /**
-   * The lines the server's queue would append to a turn nobody typed into this session (the
-   * standing rich output reminder, the reply-language line: sessions/output-mode.ts). A message
-   * this host delivers itself (a peer note or reply between two sessions here) never passes that
-   * queue, so the host appends them (2026-10-27: same-host peer notes reached the main agent
-   * without the language line, and it answered the user in English).
+   * The message hints owed to this session right now (core/hints/hint-send.ts hostReplyTail:
+   * `<system-reminder>` blocks, e.g. the reply language after a reply drifted). A message this
+   * host delivers itself (a peer note or reply between two sessions here) never passes the
+   * server's queue, so the host appends them (2026-10-27: same-host peer notes reached the main
+   * agent without the language line, and it answered the user in English).
    */
   replyTail?: string
 }
@@ -368,6 +368,17 @@ export type LeaderDelivery =
     reply?: boolean
     fromSessionId?: string
   }
+
+/**
+ * A sender's words escaped as the server's queue escapes them (core/hints/hint-format.ts
+ * escapeHintTags, inlined because this file runs in the daemon): only Walnut's own
+ * `<system-reminder>` blocks then read as hints, and display gives the words back as typed.
+ */
+export function escapeSenderWords(text: string): string {
+  if (!/system-reminder/i.test(text)) return text
+  return text.replace(/(<|&(?:amp;)*lt;)(\/?)(system-reminder)/gi, (_m, open: string, slash: string, name: string) =>
+    `${open === '<' ? '&lt;' : `&amp;${open.slice(1)}`}${slash}${name}`)
+}
 
 export function createOfflineHostCore(deps: OfflineHostDeps) {
   const { fs, path, kit } = deps
@@ -896,6 +907,8 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
   function withReplyTail(home: string, sid: string, text: string): string {
     const tail = sessionOf(home, sid)?.replyTail
     if (!tail || text.trimStart().startsWith('/')) return text
+    // Message-hint blocks (core/hints/hint-format.ts) go whole, once.
+    if (tail.includes('<system-reminder>')) return text.includes(tail) ? text : `${text}\n\n${tail}`
     const kinds = new Set(text.split('\n').map((l) => l.trim().slice(0, 12)))
     const missing = tail.split('\n').map((l) => l.trim()).filter((l) => l && !kinds.has(l.slice(0, 12)))
     return missing.length ? `${text}\n\n${missing.join('\n\n')}` : text
@@ -1318,7 +1331,7 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
       const offset = deps.streamOffset(targetSid)
       if (typeof offset === 'number') row.afterV = offset
     }
-    let envelope = kit.buildPeerWrapper(admitted.text, {
+    let envelope = kit.buildPeerWrapper(escapeSenderWords(admitted.text), {
       title: me.title, shortId: callerSid.slice(0, 8), sessionId: callerSid, taskId: me.taskId,
       host: slice.host, ...(row ? { requestId: row.id } : {}),
     }, { title: typeof args.title === 'string' ? args.title : undefined })
@@ -1467,7 +1480,7 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
       const offset = deps.streamOffset(target.sid)
       if (typeof offset === 'number') row.afterV = offset
     }
-    let envelope = kit.buildPeerWrapper(text, {
+    let envelope = kit.buildPeerWrapper(escapeSenderWords(text), {
       title: me.title, shortId: callerSid.slice(0, 8), sessionId: callerSid, taskId: me.taskId,
       host: slice.host, ...(row ? { requestId: row.id } : {}),
     }, { title: typeof args.title === 'string' ? args.title : undefined })
@@ -1507,7 +1520,7 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     const slice = slices.get(home)!
     const wrapped = kit.buildReplyDeliveryText(row, {
       title: me.title, shortId: callerSid.slice(0, 8), host: slice.host, sessionId: callerSid, taskId: me.taskId,
-    }, text, { title: typeof args.title === 'string' ? args.title : undefined })
+    }, escapeSenderWords(text), { title: typeof args.title === 'string' ? args.title : undefined })
     const delivered = await deliverWithTaskRouting(home, asker, wrapped, mid)
     if (!delivered.ok) return null
     if (own) {
@@ -2264,7 +2277,7 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
         const offset = deps.streamOffset(targetSid)
         if (typeof offset === 'number') row.afterV = offset
       }
-      let envelope = kit.buildPeerWrapper(admitted.text, {
+      let envelope = kit.buildPeerWrapper(escapeSenderWords(admitted.text), {
         title: typeof from.title === 'string' ? from.title : '', shortId: from.sid.slice(0, 8), sessionId: from.sid,
         taskId: fromTaskId, host: from.host, ...(row ? { requestId: row.id } : {}),
       }, { title: typeof d.title === 'string' ? d.title : undefined })
@@ -2302,6 +2315,8 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     try {
       if (!slices.get(home)) return fail('not_found', 'this host holds no copy for that Walnut')
       if (!sessionOf(home, sid)) return fail('not_found', 'no session of that Walnut with that id on this host')
+      // Composed and escaped by its sender (the companion away, replica/away-writes.ts; the
+      // host server alone, host-server/alone-api.ts): its Walnut blocks are Walnut's.
       const body = typeof text === 'string' ? text.trim() : ''
       if (!body) return fail('bad_request', 'text must be a non-empty string')
       if (!deps.isLive(sid)) {

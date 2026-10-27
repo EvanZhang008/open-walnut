@@ -28,6 +28,7 @@ import { startServer, stopServer } from '../../../src/web/server.js'
 import { addTask, completeTask } from '../../../src/core/task-manager.js'
 import { createSessionRecord, updateSessionRecord, getSessionByClaudeId } from '../../../src/core/session-tracker.js'
 import { RICH_OUTPUT_MODE_ON_INSTRUCTION } from '../../../src/core/sessions/output-mode.js'
+import { renderHintBlock } from '../../../src/core/hints/hint-format.js'
 import { createSessionRequest, settleReplied } from '../../../src/core/session-requests.js'
 import { executeOp } from '../../../src/ops/executor.js'
 import { LOCAL_ORIGIN } from '../../../src/lib/caller-origin.js'
@@ -186,15 +187,17 @@ describe('open_items op', () => {
     const quiet = await seedSession('Rich and quiet', undefined, 'rich')
     const apiBase = `http://localhost:${port}`
     const direct = await executeOp('open_items', {}, { apiBase, callerSid: quiet.sid, origin: LOCAL_ORIGIN })
-    expect(JSON.stringify((direct as { result: unknown }).result)).not.toContain('Rich output mode')
+    expect(JSON.stringify((direct as { result: unknown }).result)).not.toContain('rich-output')
     expect((await getSessionByClaudeId(quiet.sid))?.outputModeHookAt).toBeUndefined()
 
     const r = await executeOp('open_items', { hook: 'compact' }, { apiBase, callerSid: quiet.sid, origin: LOCAL_ORIGIN })
     expect(r.ok, JSON.stringify(r)).toBe(true)
     const ctx = (r as { result: any }).result.hookSpecificOutput.additionalContext as string
-    expect(ctx).toBe(RICH_OUTPUT_MODE_ON_INSTRUCTION)
+    // The message hints a compaction may have dropped, as blocks (hints/hint-send.ts).
+    expect(ctx).toBe(renderHintBlock('rich-output', RICH_OUTPUT_MODE_ON_INSTRUCTION))
     const record = await getSessionByClaudeId(quiet.sid)
     expect(record?.output_mode_injected).toBe('rich')
+    expect(record?.hintState?.told['rich-output']).toMatchObject({ hash: 'rich', byHookAt: expect.any(String) })
     expect(record?.outputModeHookAt).toEqual(expect.any(String))
   })
 

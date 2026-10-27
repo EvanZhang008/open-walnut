@@ -20,7 +20,7 @@ import type { SessionRecord, Task } from './types.js';
 import { isInfraSessionError } from './session-error-kind.js';
 import { engineCaps } from './agents/engine-registry.js';
 import { instructionNoticeForHost } from './sessions/instruction-notice.js';
-import { hostReplyTail } from './sessions/output-mode.js';
+import { hostReplyTail } from './hints/hint-send.js';
 
 /** Newest sessions kept per host; the daemon intersects with what it runs. */
 const MAX_SESSIONS = 200;
@@ -258,7 +258,8 @@ export async function buildHostSlice(hostKey: string, now = Date.now()): Promise
         return routing ? { taskRoutingPolicy: routing.policy, taskRoutingDue: routing.due } : {};
       })(),
       ...(() => {
-        const tail = hostReplyTail(s, config);
+        let tail: string | null = null;
+        try { tail = hostReplyTail(s, config, s.taskId ? own.get(s.taskId) : undefined); } catch { tail = null; }
         return tail ? { replyTail: tail } : {};
       })(),
       ...(s.taskId ? { taskId: s.taskId } : {}),
@@ -337,7 +338,7 @@ export function ensureHostSliceSync(): void {
           .catch((err) => log.session.warn('host slice: re-push failed', { error: err instanceof Error ? err.message : String(err) }));
       }, PUSH_DEBOUNCE_MS);
       timer.unref?.();
-    // config:changed: the reply-language line each session's replyTail carries.
+    // config:changed: the every-message hints each session's replyTail carries.
     }, { global: true, interest: ['task:', 'session:started', 'session:status-changed', 'session:renamed', 'session-request:', 'board:changed', 'config:changed'] });
   });
 }

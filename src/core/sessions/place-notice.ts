@@ -169,7 +169,8 @@ async function recordTold(sessionId: string, noted: PlaceNoted): Promise<void> {
 
 /**
  * A compaction boundary in the session's stream: a note given before it no
- * longer counts as told, and neither does the rich-output instruction.
+ * longer counts as told, and neither does a message hint (its `after_compaction`
+ * trigger compares against this boundary).
  * Idempotent per boundary (a replayed tail writes the
  * same uuid). Never throws.
  */
@@ -190,7 +191,9 @@ export async function notePlaceCompaction(sessionId: string, boundaryUuid: strin
     // The changed instructions the hook restated (instruction-notice.ts) answer this boundary too.
     const routing = record.taskRoutingNoted;
     const routingHookAnswered = !!routing?.byHookAt && answered(Date.parse(routing.byHookAt));
-    await updateSessionRecordConditionally(sessionId, {
+    // And the message hints it restated (hints/hint-send.ts stateHintsAfterCompaction).
+    const { hintStateAtBoundary, writeHintState } = await import('../hints/hint-send.js');
+    const recorded = await updateSessionRecordConditionally(sessionId, {
       lastCompactUuid: boundaryUuid,
       lastCompactAt: new Date(now).toISOString(),
       // The summary drops the rich-output instruction too: back to "never told",
@@ -201,6 +204,15 @@ export async function notePlaceCompaction(sessionId: string, boundaryUuid: strin
       ...(hookAnswered && noted ? { placeNoted: { ...noted, compactUuid: boundaryUuid } } : {}),
       ...(routingHookAnswered && routing ? { taskRoutingNoted: { ...routing, compactUuid: boundaryUuid } } : {}),
     }, (cur) => cur.lastCompactUuid !== boundaryUuid, { preserveLastActiveAt: true });
+    // Its own compare-and-set on the hint state, so a send's commit landing in
+    // between is never overwritten by the copy read above.
+    if (recorded) {
+      await writeHintState(sessionId, (cur) => {
+        if (cur.lastCompactUuid !== boundaryUuid) return null;
+        const hintState = hintStateAtBoundary(cur.hintState, boundaryUuid, answered);
+        return hintState ? { hintState } : null;
+      });
+    }
   } catch (err) {
     log.session.warn('place notice: compaction not recorded', { sessionId, error: err instanceof Error ? err.message : String(err) });
   }

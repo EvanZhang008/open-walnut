@@ -41,9 +41,12 @@ import {
   createSessionRecord, getSessionByClaudeId, updateSessionRecord,
 } from '../../src/core/session-tracker.js'
 import { sideThreadManager } from '../../src/core/sessions/side-thread-manager.js'
-import {
-  OUTPUT_MODE_INSTRUCTION_MARKER, stripOutputModeWrappers,
-} from '../../src/core/sessions/output-mode.js'
+import { RICH_OUTPUT_MODE_ON_INSTRUCTION } from '../../src/core/sessions/output-mode.js'
+import { parseHinted, renderHintBlock } from '../../src/core/hints/hint-format.js'
+
+/** The full rich instruction as the `rich-output` message hint carries it. */
+const RICH_ON = renderHintBlock('rich-output', RICH_OUTPUT_MODE_ON_INSTRUCTION)
+const shown = (text: string) => parseHinted(text).text
 import { listSideQuestions } from '../../src/core/side-questions.js'
 import type { SessionStartEvent } from '../../src/core/event-types.js'
 
@@ -195,9 +198,9 @@ describe('createThread', () => {
     expect(started).toHaveLength(1)
     const [sentTo, sentText, sentOpts] = mocks.sendMessageToSession.mock.calls.at(-1)!
     expect(sentTo).toBe(standby)
-    expect(sentOpts).toEqual({ source: 'side-thread' })
+    expect(sentOpts).toEqual({ source: 'side-thread', hinted: true })
     // The question itself is verbatim; rich mode (the default) rides behind it.
-    expect(stripOutputModeWrappers(sentText)).toBe('why hasPipe?')
+    expect(shown(sentText)).toBe('why hasPipe?')
 
     await vi.advanceTimersByTimeAsync(120_000)
     await settle()
@@ -207,7 +210,7 @@ describe('createThread', () => {
   it('forks fresh with the question as the first turn when no standby exists', async () => {
     const thread = await sideThreadManager.createThread(PARENT, { question: 'what broke?' })
     expect(started).toHaveLength(1)
-    expect(stripOutputModeWrappers(started[0]!.message)).toBe('what broke?')
+    expect(shown(started[0]!.message)).toBe('what broke?')
     expect(started[0]!.lane).toBe(`side:${PARENT}:${thread.id}`)
     // Riding the spawn is the only race-free delivery — no send is issued.
     expect(mocks.sendMessageToSession).not.toHaveBeenCalled()
@@ -285,10 +288,11 @@ describe('createThread', () => {
     // inc-1788194545341: a prefixed/appended slash command stops being a command.
     const thread = await sideThreadManager.createThread(PARENT, { question: '/compact' })
     expect(started[0]!.message).toBe('/compact')
-    expect(started[0]!.message).not.toContain(OUTPUT_MODE_INSTRUCTION_MARKER)
-    // Edge NOT advanced: the next real message must still carry the instruction.
-    expect((await getSessionByClaudeId(thread.threadSessionId))?.output_mode_injected)
-      .toBeUndefined()
+    expect(started[0]!.message).not.toContain(RICH_ON)
+    // Nothing recorded as told: the next real message must still carry the instruction.
+    const rec = await getSessionByClaudeId(thread.threadSessionId)
+    expect(rec?.output_mode_injected).toBeUndefined()
+    expect(rec?.hintState).toBeUndefined()
   })
 
   it('a consumed standby re-seeds the output mode from the parent\'s CURRENT style', async () => {
@@ -322,10 +326,12 @@ describe('createThread', () => {
     // it — so the question that rides the spawn carries the full instruction.
     const spawned = started[0]!.message
     expect(spawned.startsWith('what broke?')).toBe(true)
-    expect(spawned).toContain(OUTPUT_MODE_INSTRUCTION_MARKER)
-    expect(stripOutputModeWrappers(spawned)).toBe('what broke?')
-    // Edge marker advanced, so the thread's next send doesn't repeat it.
-    expect((await getSessionByClaudeId(thread.threadSessionId))?.output_mode_injected).toBe('rich')
+    expect(spawned).toContain(RICH_ON)
+    expect(shown(spawned)).toBe('what broke?')
+    // Recorded as told, so the thread's next send doesn't repeat it.
+    const rec = await getSessionByClaudeId(thread.threadSessionId)
+    expect(rec?.output_mode_injected).toBe('rich')
+    expect(rec?.hintState?.told['rich-output']?.hash).toBe('rich')
     // The stored row is the user's words only (chip label + promoted task read it).
     const stored = await listSideQuestions(PARENT)
     expect(stored[0]!.question).toBe('what broke?')
@@ -340,20 +346,20 @@ describe('createThread', () => {
 
     const sent = mocks.sendMessageToSession.mock.calls.at(-1)![1]
     expect(sent.startsWith('why hasPipe?')).toBe(true)
-    expect(sent).toContain(OUTPUT_MODE_INSTRUCTION_MARKER)
+    expect(sent).toContain(RICH_ON)
     const record = await getSessionByClaudeId(standby!)
     expect(record?.output_mode).toBe('rich')
     expect(record?.output_mode_injected).toBe('rich')
     expect((await listSideQuestions(PARENT))[0]!.question).toBe('why hasPipe?')
   })
 
-  it('keeps the image preamble first and the mode wrapper last', async () => {
+  it('keeps the image preamble first and the rich hint last', async () => {
     await sideThreadManager.createThread(PARENT, {
       question: 'what is wrong here?', imageContext: 'Read this file: /tmp/shot.png',
     })
     const spawned = started[0]!.message
     expect(spawned.startsWith('Read this file: /tmp/shot.png')).toBe(true)
-    expect(stripOutputModeWrappers(spawned).endsWith('what is wrong here?')).toBe(true)
+    expect(shown(spawned).endsWith('what is wrong here?')).toBe(true)
   })
 
   it('a consumed standby still owes the full output-mode instruction on its first real question', async () => {
@@ -364,7 +370,7 @@ describe('createThread', () => {
     expect((await getSessionByClaudeId(standby!))?.output_mode_injected).toBeUndefined()
 
     const thread = await sideThreadManager.createThread(PARENT, { question: 'now the real one' })
-    expect(mocks.sendMessageToSession.mock.calls.at(-1)![1]).toContain(OUTPUT_MODE_INSTRUCTION_MARKER)
+    expect(mocks.sendMessageToSession.mock.calls.at(-1)![1]).toContain(RICH_ON)
     expect((await getSessionByClaudeId(thread.threadSessionId))?.output_mode_injected).toBe('rich')
   })
 
@@ -409,7 +415,7 @@ describe('requestDigest', () => {
     // RAW: a machine turn must not carry the output-mode instruction (the digest
     // asks for plain text — its destination is a composer, not a bubble).
     const [, sentText] = mocks.sendMessageToSession.mock.calls.at(-1)!
-    expect(sentText).not.toContain(OUTPUT_MODE_INSTRUCTION_MARKER)
+    expect(sentText).not.toContain(RICH_ON)
   })
 
   it('404s an unknown thread', async () => {

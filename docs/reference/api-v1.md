@@ -1821,9 +1821,10 @@ primary box the same endpoints serve directly — no bridge involved.
   session (mid-turn sends are fine — the session reads them between turns).
   - `voice` (additive, 2026-10) — `true` when the person SPOKE this message and
     will hear the answer read aloud (the phone's voice mode). The CLI also
-    receives one `[Voice reply: …]` line after the text, asking for a short
+    receives the `voice-reply` message hint after the text (a
+    `<system-reminder>` block, see "Message hints" below), asking for a short
     spoken answer first and any detail below a line holding only `---`. Every
-    display surface strips the line, like the output-mode lines. Not a boolean:
+    display surface leaves the hint out of the message text. Not a boolean:
     `400 bad_request`. Absent or `false`: unchanged.
   - `messageId` (additive) — a client-supplied stable id (`qm-…`, ≤64 chars of
     `[A-Za-z0-9-]`) that makes the send IDEMPOTENT: a retry after a lost 202
@@ -2446,6 +2447,12 @@ an id outside `[A-Za-z0-9_-]`.
   stream. Rows whose content can still change carry `unsettled: true`. When
   the JSONL/journal is unreachable, `200` with `messages: []` +
   `historyUnavailable` (a human-readable reason) rather than an error.
+  User rows (additive, 2026-10): `text` is what the person wrote; `hints`
+  (optional) lists the message hints Walnut sent with it, each
+  `{ kind, arg?, text }`; `rawText` (optional, only when it differs from
+  `text`) is the message exactly as the model received it, hints and every
+  other Walnut addition included. A raw view shows `rawText ?? text` as a turn's
+  input and the assistant rows after it as its output.
 - `GET /api/v1/sessions/:id/chat-earlier` (additive, 2026-10) → `200 {
   "agentId", "conversationId", "messages": [rows] }` for a chat's lane
   session: what the chat said before this session started (the chat history
@@ -2455,6 +2462,32 @@ an id outside `[A-Za-z0-9_-]`.
   lives elsewhere. Not a chat lane session, or a replica → `200 { "messages":
   [] }`. The read past its 5 s budget, or failing → `200 { "messages": [],
   "degraded": true }`: ask again later.
+
+### Message hints (additive, 2026-10): `/api/v1/hints`
+
+Walnut text that rides a message to a session's model (src/core/hints/): the
+question number, rich output, reply language, voice reply, and custom ones.
+Each goes as one `<system-reminder>` block whose first words are
+`Walnut (<kind>[ <arg>]):`, before or after the message. The message's own
+`<system-reminder` tags are escaped (`&lt;system-reminder`), so every unescaped
+Walnut block is one Walnut wrote; display takes those off and undoes the
+escape, never matching the person's words.
+
+- `GET /api/v1/hints[?session=<sid>]` → `200 { hints: [{ kind, label,
+  description, built_in, enabled, triggers, every_turns?, placement, audience:
+  { roles, agents, sessions }, allowed_triggers, text?, overridden }], triggers,
+  roles, session? }`. Triggers: `every_turn`, `every_n_turns`, `session_start`,
+  `after_compaction`, `on_change`, `on_drift`, `on_request`; any one that holds
+  sends the hint. `session`: `{ session_id, sends, told, drift?, last_send_by?,
+  compact_uuid?, next_message_carries }`; unknown session `404`.
+- `PUT /api/v1/hints/:kind` body any of `{ enabled, triggers, every_turns,
+  placement, audience, text, label }` → `200 { hint }`, merged into the stored
+  change (`config.yaml` `session.hints`). A kind that is not built in needs
+  `text` and becomes a custom hint. Invalid → `400 bad_hint`. Replica → `501`.
+- `DELETE /api/v1/hints/:kind` → `200 { hint | null }`: a built-in back to its
+  default, a custom one removed (`null`). Unknown → `404 hint_not_found`.
+
+Ops: `hint_list`, `hint_set`, `hint_reset`.
 
 ### Personal AI conversation management (additive, Wave 1 2026-08)
 

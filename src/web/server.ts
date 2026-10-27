@@ -2228,6 +2228,10 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // Reads work on a replica; writes are primary-only (501).
   app.use('/api/v1', boardV1Router)
   app.use('/api/v1', (await import('./routes/agent-memory-v1.js')).agentMemoryV1Router)
+  // The message-hint registry: list, change, reset (reads anywhere, writes primary-only).
+  app.use('/api/v1', (await import('./routes/hints-v1.js')).hintsV1Router)
+  // When this home first ran the hint registry: only older rows can carry the old bracket lines.
+  void (await import('../core/sessions/output-mode.js')).loadLegacyHintCutoff()
   // Kanban lanes, cards and the seen baseline of a board (same prefix and rules).
   app.use('/api/v1', boardKanbanV1Router)
   // The org above the work: main agent, project leads, the org chart (reads anywhere, writes primary-only).

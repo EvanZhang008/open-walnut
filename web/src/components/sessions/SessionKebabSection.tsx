@@ -16,6 +16,7 @@ import type { SessionSplitView } from './sessionSplitView';
 import { sessionKebabMetaRows } from './session-kebab-meta';
 import { useBackgroundRunning } from '@/hooks/useBackgroundRunning';
 import { openBackgroundPanel } from '@/stores/background-panel-store';
+import { openSessionRawView } from './SessionRawView';
 import { backgroundRunningLabel } from './background-ledger';
 import {
   useSessionPanelMode,
@@ -270,6 +271,21 @@ export function SessionKebabSection({
         <span>Open in VS Code</span>
       </button>
       <CopyItem label="Copy session ID" value={sessionId} onAfter={onAfterAction} />
+      {/* Every turn's full input (Walnut's hints included) and output, as the model saw them. */}
+      <button
+        type="button"
+        className="task-kebab-item"
+        data-testid="session-kebab-raw-view"
+        onClick={(e) => { e.stopPropagation(); onAfterAction?.(); openSessionRawView(sessionId); }}
+        title="Show every turn's input exactly as the model received it (Walnut's hints included) and its output"
+      >
+        <span className="task-kebab-icon" aria-hidden="true">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M8 6l-5 6 5 6M16 6l5 6-5 6" />
+          </svg>
+        </span>
+        <span>Raw input &amp; output</span>
+      </button>
       <CopyItem label="Copy resume cmd" value={`${cdPrefix}claude -r ${sessionId}`} onAfter={onAfterAction} />
       {/* A copy too: it captures the evidence bundle, then copies every related id. */}
       <button

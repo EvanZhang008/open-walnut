@@ -31,6 +31,8 @@ import { splitLeadingRiders } from '@open-walnut/history-walnut-riders';
 import '@/styles/session-riders.css';
 import { ProcessFoldRow } from './TurnFolds';
 import { QUESTION_BANNER_RE, stripQuestionTag } from '@/utils/question-tag';
+import { MessageHintsRow } from './MessageHintsRow';
+import { showHintTagsAsTyped } from '@/utils/hint-display';
 import { stripTurnMarker } from '@/utils/turn-end-marker';
 import { shortenFileAboutLine } from '@/utils/thread-tree';
 import { InjectedBannerRow } from './InjectedBannerRow';
@@ -1249,10 +1251,11 @@ function SessionMessageBubble({ message, assistantLabel = 'Claude Code', session
           // placeholder inside a user message, and it would also make anything
           // they copied off a web page render as DOM rather than as the text
           // they can see they pasted.
-          <StableMarkdownBody text={bodyText} cwd={sessionCwd} />
+          <StableMarkdownBody text={showHintTagsAsTyped(bodyText)} cwd={sessionCwd} />
         ) : (
           <RichMarkdown text={bodyText} cwd={sessionCwd} scope={message.msgId} />
         ))}
+        {isUser && message.hints && message.hints.length > 0 && <MessageHintsRow hints={message.hints} />}
         {tools && tools.length > 0 && (() => {
           // CLI content order is prose first, tool_use blocks after — render
           // in that order. Merge consecutive generic tools into one "Ran 3

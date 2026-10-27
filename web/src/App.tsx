@@ -18,6 +18,7 @@ import { PluginBoundary } from './components/common/PluginBoundary';
 import { LoadingSpinner } from './components/common/LoadingSpinner';
 import { usePluginUi, useWebPluginRuntime } from './plugins/hooks';
 import { LinkCaptureHost } from './plugins/LinkCaptureHost';
+import { SessionRawViewHost } from './components/sessions/SessionRawView';
 import { MainPage } from './pages/MainPage';
 import { TaskDetailPage } from './pages/TaskDetailPage';
 import { AgentsPage } from './pages/AgentsPage';
@@ -97,7 +98,7 @@ export function App() {
   const navigateRef = useRef<NavigateFunction>(navigate);
   navigateRef.current = navigate;
 
-  if (isPopoutPath(location.pathname)) return <><StaleBuildPill /><LinkCaptureHost /><PopoutRoot /></>;
+  if (isPopoutPath(location.pathname)) return <><StaleBuildPill /><LinkCaptureHost /><SessionRawViewHost /><PopoutRoot /></>;
 
   const isHome = location.pathname === '/';
 
@@ -106,6 +107,7 @@ export function App() {
       <DebugCrashProbe />
       <StaleBuildPill />
       <LinkCaptureHost />
+      <SessionRawViewHost />
       <PageFind />
       <UnpairedNotice />
       <div className={isHome ? 'main-page-wrapper' : 'main-page-wrapper main-page-wrapper-hidden'}>

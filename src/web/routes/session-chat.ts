@@ -16,7 +16,8 @@ import { getSessionPendingPermissions } from '../../core/sessions/session-lifecy
 import { sendMessageToSession, editMessage, deleteMessage, getQueue, isMessageQueued, unparkMessage, settledLineUuid } from '../../core/session-message-queue.js'
 import { heldRows, PROMPT_HOLD_REASON } from '../../providers/line-consumption.js'
 import { sessionStreamBuffer } from '../session-stream-buffer.js'
-import { prepareOutputModeSend } from '../../core/sessions/output-mode-send.js'
+import { prepareHintedSend } from '../../core/hints/hint-send.js'
+import { requestedHintsOf } from '../../core/hints/hint-request.js'
 import { parseSideLaneKey } from '../../core/sessions/side-thread-fork.js'
 import { launchPromptFor, startLaunchPromptRegistry } from '../../core/sessions/launch-prompts.js'
 import { getSideQuestion } from '../../core/side-questions.js'
@@ -271,16 +272,10 @@ export function registerSessionChatRpc(): void {
       })
     }
 
-    // Output mode: the reply-style preference has no control channel, so the
-    // model only learns about it from the conversation. Full instruction on the
-    // CHANGE edge (record-authoritative), then a one-line reminder on every
-    // later send while rich holds — a one-shot instruction decays after a
-    // turn or two. Both land AFTER the user's text. Same shape as plan mode in
-    // routes/chat.ts. The mode itself resolves record → config → built-in
-    // default, so a session that never touched the pill follows Settings live.
-    // The wrapping, the slash-command exemption and the edge advance all live in
-    // core/sessions/output-mode-send.ts, because the PHONE send paths need the
-    // identical three steps and a second copy of them drifted immediately.
+    // Message hints (rich output, reply language, the question number the
+    // client asks for in `hints`, ...): the registry decides which ones this send
+    // carries and composes them as <system-reminder> blocks around the text the
+    // CLI receives (core/hints/hint-send.ts, shared with the phone and the relay).
     // Reference cards: a composer pill (`<task-ref/>` / `<session-ref/>` /
     // `<project-ref/>`) reaches the CLI unchanged, but on its own it is an opaque
     // id — the model would have to spend a tool call just to learn what the human
@@ -297,7 +292,9 @@ export function registerSessionChatRpc(): void {
       if (refCards) augmentedMessage = appendReferenceCards(augmentedMessage, refCards)
     }
 
-    const outputMode = await prepareOutputModeSend(data.sessionId, record, augmentedMessage)
+    const outputMode = await prepareHintedSend(data.sessionId, record, augmentedMessage, {
+      requested: requestedHintsOf(data.hints), sentBy: 'person',
+    })
     augmentedMessage = outputMode.enqueueText
 
     // Enqueue and notify in one call. augmentedMessage may include image refs;
@@ -311,6 +308,7 @@ export function registerSessionChatRpc(): void {
       mode: typeof data.mode === 'string' ? data.mode : undefined,
       interrupt: data.interrupt === true ? true : undefined,
       enqueueMessage: augmentedMessage,
+      hinted: true,
       // The queue row carries the uuid; the drain hands it to the CLI (one uuid
       // per batch — see providers/batch-uuid.ts).
       ...(userUuid ? { userUuid } : {}),

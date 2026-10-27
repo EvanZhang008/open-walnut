@@ -176,6 +176,8 @@ export interface OptimisticMessage extends SessionHistoryMessage {
    *  recorded against, so the bubble belongs to its thread before any history
    *  fetch — see thread-tree's `rowIdOf`. Dedup does not read it. */
   userUuid?: string;
+  /** The message hints the send asked for (SessionSendOptions.hints); a retry asks again. */
+  requestedHints?: Record<string, { arg?: string }>;
   /** Error message when status is 'failed' */
   failedError?: string;
   /** Server PARKED this row (dead-letter): the failure is permanent, so nothing

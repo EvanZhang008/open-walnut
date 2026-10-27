@@ -47,35 +47,33 @@ export function stripQuestionTag(text: string): string {
   return parseQuestionTag(text)?.rest ?? text;
 }
 
-/** The banner name of question n (`[Question Q4]…[/Question Q4]`). */
+/**
+ * A question's number rides its send as the `question` message hint, which the
+ * server writes ahead of the text (src/core/hints/hint-registry.ts); the client
+ * only asks for it (`questionHint`). Sends from before the hint registry carried a
+ * `[Question Q4]…[/Question Q4]` banner in the text instead: the bubble still
+ * hides that one (QUESTION_BANNER_RE) and `questionSeqOfRow` still reads it.
+ */
 export const QUESTION_BANNER_RE = /^Question Q(\d{1,5})$/;
 
-export function questionBannerName(seq: number): string {
-  return `Question Q${seq}`;
+/** The `hints` a question's send asks for. */
+export function questionHint(seq: number): Record<string, { arg: string }> {
+  return { question: { arg: String(seq) } };
 }
 
-/**
- * The machine block a question's send opens with. It uses the repo's
- * `[Name]…[/Name]` banner shape, so every reader that already folds or strips
- * Walnut's banners (the bubble, previews, the titler) handles it the same way;
- * the bubble hides this one outright, since the turn label shows the number.
- */
-export function questionBanner(seq: number): string {
-  const name = questionBannerName(seq);
-  return `[${name}]\nThis message is question ${seq} of this conversation. Begin your reply with the line "[Q${seq}]" (nothing else on that line) so the reply is filed under question ${seq}.\n[/${name}]`;
-}
+const BANNER_IN_TEXT = /^\[Question Q(\d{1,5})\]\nThis message is question \1 of this conversation\.[\s\S]*?^\[\/Question Q\1\]/m;
 
-/** The text sent for a question or a follow-up: the banner, then the message. */
-export function withQuestionBanner(text: string, seq: number): string {
-  return `${questionBanner(seq)}\n\n${text}`;
-}
-
-const BANNER_IN_TEXT = /^\[Question Q(\d{1,5})\]\n[\s\S]*?^\[\/Question Q\1\]/m;
-
-/** The number a sent message's banner gave it, or null (no banner). */
+/** The number an old send's banner gave it, or null (no banner). */
 export function bannerSeqOf(text: string | undefined): number | null {
   const m = text ? BANNER_IN_TEXT.exec(text) : null;
   return m ? Number(m[1]) : null;
+}
+
+/** The number a sent row was given: its question hint, else an old banner. */
+export function questionSeqOfRow(m: { text?: string; hints?: ReadonlyArray<{ kind: string; arg?: string }> }): number | null {
+  const hint = m.hints?.find((h) => h.kind === 'question');
+  if (hint?.arg && /^\d{1,5}$/.test(hint.arg)) return Number(hint.arg);
+  return bannerSeqOf(m.text);
 }
 
 /**
@@ -144,14 +142,14 @@ export function withTagAnchors<M extends ThreadTreeMessage>(
   for (const a of anchors) if (a?.msgId && a.parent) anchorFor.set(a.msgId, a);
   const extra: SessionThreadAnchor[] = [];
   let headId: string | undefined;
-  let headText: string | undefined;
+  let headSeq: number | null = null;
   let headIndex = -1;
   let decided = false;
   for (let i = 0; i < messages.length; i++) {
     const m = messages[i];
     if (m.role === 'user') {
       headId = threadIdOf(m);
-      headText = m.text;
+      headSeq = questionSeqOfRow(m);
       headIndex = i;
       decided = false;
       continue;
@@ -170,7 +168,7 @@ export function withTagAnchors<M extends ThreadTreeMessage>(
     // A tag that only repeats the row's own banner says nothing the anchor does
     // not: the banner is what WE numbered the send, so when they disagree the
     // number was wrong and the anchor (what the user replied in) is right.
-    if (own && bannerSeqOf(headText) === tag.seq) continue;
+    if (own && headSeq === tag.seq) continue;
     const targetAt = messages.findIndex((x) => threadIdOf(x) === targetHead);
     if (targetAt >= 0 && targetAt > headIndex) continue;
     extra.push({

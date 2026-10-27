@@ -138,6 +138,8 @@ export interface ThreadTreeMessage {
    */
   userUuid?: string;
   walnutMessageId?: string;
+  /** The message hints the row carried (the question number among them). */
+  hints?: ReadonlyArray<{ kind: string; arg?: string }>;
   /**
    * A user line sent while a turn ran: the CLI hands it to the model as a
    * `queued_command` attachment and writes no user line, so the transcript row

@@ -11,8 +11,8 @@
 import { describe, it, expect } from 'vitest';
 import {
   QUESTION_BANNER_RE, headsBySeq, keysBySeq, nextQuestionSeq, parseQuestionTag,
-  questionBanner, questionBannerName, questionNumbers, stripQuestionTag,
-  blockTagKeys, tagKeyAtBlock, tagKeyOfBlocks, tagKeysOfBlocks, withQuestionBanner, withTagAnchors,
+  bannerSeqOf, questionHint, questionNumbers, questionSeqOfRow, stripQuestionTag,
+  blockTagKeys, tagKeyAtBlock, tagKeyOfBlocks, tagKeysOfBlocks, withTagAnchors,
 } from '@/utils/question-tag';
 import { buildThreadTree, threadKeyOf, ROOT_THREAD_KEY } from '@/utils/thread-tree';
 import type { ThreadTreeMessage } from '@/utils/thread-tree';
@@ -20,6 +20,12 @@ import { indexMeta } from '@/utils/thread-meta';
 import type { SessionThreadAnchor, SessionThreadMeta } from '@/types/session';
 
 const user = (msgId: string, text = `q ${msgId}`): ThreadTreeMessage => ({ role: 'user', msgId, text });
+/** A question row as history shows it now: the text, with its number in the `question` hint. */
+const asked = (msgId: string, text: string, seq: number): ThreadTreeMessage =>
+  ({ role: 'user', msgId, text, hints: [{ kind: 'question', arg: String(seq) }] });
+/** The banner a send carried before the hint registry (old transcripts still hold it). */
+const legacyBanner = (text: string, seq: number): string =>
+  `[Question Q${seq}]\nThis message is question ${seq} of this conversation. Begin your reply with the line "[Q${seq}]" (nothing else on that line) so the reply is filed under question ${seq}.\n[/Question Q${seq}]\n\n${text}`;
 const reply = (msgId: string, text = `a ${msgId}`): ThreadTreeMessage => ({ role: 'assistant', msgId, text });
 const anchor = (msgId: string, parent: string, extra: Partial<SessionThreadAnchor> = {}): SessionThreadAnchor =>
   ({ msgId, parent, source: 'selection', at: '2026-09-03T10:00:00Z', ...extra });
@@ -57,20 +63,24 @@ describe('parseQuestionTag / stripQuestionTag', () => {
   });
 });
 
-describe('questionBanner', () => {
-  it('uses the repo banner shape so existing readers fold it, and names the tag to write', () => {
-    const b = questionBanner(4);
-    expect(b.startsWith('[Question Q4]\n')).toBe(true);
-    expect(b.endsWith('\n[/Question Q4]')).toBe(true);
-    expect(b).toContain('"[Q4]"');
-    expect(QUESTION_BANNER_RE.test(questionBannerName(4))).toBe(true);
-    expect(QUESTION_BANNER_RE.test('Question Q')).toBe(false);
-    expect(QUESTION_BANNER_RE.test('Walnut')).toBe(false);
+describe('question number on a send (the question hint) and old banners', () => {
+  it('asks the server for the question hint with the number as its argument', () => {
+    expect(questionHint(4)).toEqual({ question: { arg: '4' } });
   });
 
-  it('puts the banner before the user text, separated by a blank line', () => {
-    const sent = withQuestionBanner('Why does this fail?', 2);
-    expect(sent).toBe(`${questionBanner(2)}\n\nWhy does this fail?`);
+  it('reads a row\'s number from its question hint first, else from an old banner', () => {
+    expect(questionSeqOfRow(asked('u1', 'Why?', 2))).toBe(2);
+    expect(questionSeqOfRow({ text: legacyBanner('Why?', 5) })).toBe(5);
+    expect(questionSeqOfRow({ text: 'Why?' })).toBeNull();
+    expect(questionSeqOfRow({ text: 'Why?', hints: [{ kind: 'rich-output' }] })).toBeNull();
+  });
+
+  it('only the exact old banner counts: a person typing a bracket line is not one', () => {
+    expect(bannerSeqOf(legacyBanner('Why?', 3))).toBe(3);
+    expect(bannerSeqOf('[Question Q3]\nmy own words\n[/Question Q3]')).toBeNull();
+    expect(QUESTION_BANNER_RE.test('Question Q4')).toBe(true);
+    expect(QUESTION_BANNER_RE.test('Question Q')).toBe(false);
+    expect(QUESTION_BANNER_RE.test('Walnut')).toBe(false);
   });
 });
 
@@ -174,7 +184,7 @@ describe('withTagAnchors', () => {
     const follow = anchor('f1', 'r2', { quote: { exact: 'third' }, source: 'manual' });
     const messages = [
       user('u1'), reply('r1'), user('u2'), reply('r2'), user('u3'), reply('r3'),
-      user('f1', withQuestionBanner('so is that fine?', 1)), reply('fr', '[Q1]\nyes, it is fine'),
+      asked('f1', 'so is that fine?', 1), reply('fr', '[Q1]\nyes, it is fine'),
     ];
     const heads = headsBySeq([meta('u2', { seq: 1 }), meta('u3', { seq: 3 })]);
     const anchors = [q1, q3, follow];
@@ -203,8 +213,8 @@ describe('a question the CLI took mid-turn (a queue-… row with the sent uuid)'
   const q1 = anchor('u2', 'r1', { quote: { exact: 'first' } });
   const q3 = anchor('q3', 'r2', { quote: { exact: 'third' } });
   const messages: ThreadTreeMessage[] = [
-    user('u1'), reply('r1'), user('u2', withQuestionBanner('first?', 1)), reply('r2', '[Q1]\nanswer one'),
-    { role: 'user', msgId: QUEUE, sourceUuid: 'q3', text: withQuestionBanner('third?', 3) },
+    user('u1'), reply('r1'), asked('u2', 'first?', 1), reply('r2', '[Q1]\nanswer one'),
+    { role: 'user', msgId: QUEUE, sourceUuid: 'q3', text: 'third?', hints: [{ kind: 'question', arg: '3' }] },
     reply('t1', '[Q3]'), { role: 'assistant', msgId: 't2', text: '' },
   ];
   const list = [meta('u2', { seq: 1, status: 'resolved', title: 'First' }), meta('q3', { seq: 3, title: 'Third' }), meta(QUEUE)];

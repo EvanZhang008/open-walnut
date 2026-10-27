@@ -237,52 +237,28 @@ class SideThreadManager {
       if (consumed) {
         threadSessionId = consumed;
       } else {
-        // No record exists yet and the question rides the SPAWN, so this branch
-        // never passes through prepareOutputModeSend. Resolve the directive here
-        // against the mode the new record is about to get — with
-        // `output_mode_injected: undefined`, which is the literal truth for a
-        // process nobody has spoken to, so the first turn carries the FULL
-        // instruction. Without this the first answer ignored rich output while
-        // every follow-up honoured it.
-        const [{ resolveOutputModeDirective, applyOutputModeDirective }, { getConfig }, tracker] =
-          await Promise.all([
-            import('./output-mode.js'),
-            import('../config-manager.js'),
-            import('../session-tracker.js'),
-          ]);
+        // No record exists yet and the question rides the SPAWN. The hint
+        // pipeline runs against the mode the new record is about to get and an
+        // empty hint state, the literal truth for a process nobody has spoken to,
+        // so the first turn carries the full rich instruction and the reply
+        // language. A slash command is left byte-exact by the pipeline itself.
+        const [{ prepareHintedSend }, tracker] = await Promise.all([
+          import('../hints/hint-send.js'),
+          import('../session-tracker.js'),
+        ]);
         const parent = await tracker.getSessionByClaudeId(parentSid).catch(() => null);
-        const config = await getConfig().catch(() => null);
-        const directive = resolveOutputModeDirective(
-          { output_mode: outputMode ?? parent?.output_mode, output_mode_injected: undefined },
-          config,
-        );
-        // A slash command must reach the CLI byte-exact (inc-1788194545341), and
-        // appending is just as bad here — the instruction would ride into the
-        // command's argument string. Skip the wrapper AND the edge advance; the
-        // instruction stays owed and ships with the next real message. Same rule
-        // as output-mode-send.ts, which this branch cannot use (no record yet).
-        const isSlashCommand = message.startsWith('/');
+        const mode = outputMode ?? parent?.output_mode;
+        const prepared = await prepareHintedSend(threadId, mode ? { output_mode: mode } : {}, message, { sentBy: 'person' });
         const forked = await forkSideThreadSession(parentSid, threadId, {
-          message: isSlashCommand ? message : applyOutputModeDirective(directive, message),
+          message: prepared.enqueueText,
           ...(title ? { title } : {}),
           ...(model ? { model } : {}),
           ...(effort ? { effort } : {}),
           ...(outputMode ? { outputMode } : {}),
         });
         threadSessionId = forked.sessionId;
-        if (directive.instruction && !isSlashCommand) {
-          // The spawn owns the text now, so advance the edge marker — and never let
-          // this bookkeeping write fail the ask: repeating the instruction on the
-          // next send is the correct degradation (same rule as output-mode-send.ts).
-          try {
-            await tracker.updateSessionRecord(threadSessionId, { output_mode_injected: directive.mode });
-          } catch (err) {
-            log.session.warn('side thread: output-mode edge persist failed', {
-              threadSessionId, outputMode: directive.mode,
-              error: err instanceof Error ? err.message : String(err),
-            });
-          }
-        }
+        // The spawn owns the text now; never let this bookkeeping fail the ask.
+        await prepared.commit(threadSessionId);
       }
 
       // The fork is committed before the store row — if anything below throws,
@@ -308,10 +284,10 @@ class SideThreadManager {
           const desiredMode = outputMode ?? parentNow?.output_mode;
           if (desiredMode) await updateSessionRecord(threadSessionId, { output_mode: desiredMode });
           const record = await getSessionByClaudeId(threadSessionId).catch(() => null);
-          const { prepareOutputModeSend } = await import('./output-mode-send.js');
-          const prepared = await prepareOutputModeSend(threadSessionId, record, message);
+          const { prepareHintedSend } = await import('../hints/hint-send.js');
+          const prepared = await prepareHintedSend(threadSessionId, record, message, { sentBy: 'person' });
           const { sendMessageToSession } = await import('../session-message-queue.js');
-          await sendMessageToSession(threadSessionId, prepared.enqueueText, { source: 'side-thread' });
+          await sendMessageToSession(threadSessionId, prepared.enqueueText, { source: 'side-thread', hinted: true });
           await prepared.commit();
         }
       } catch (err) {

@@ -1,55 +1,32 @@
 /**
- * Output mode ("markdown" vs "rich HTML") prompt injection.
+ * Output mode ("markdown" vs "rich HTML"): the mode a session is on and the words
+ * that tell its model about it, plus the reply-language text.
  *
- * The mode is a preference, but there is no control channel for a reply STYLE the
- * way there is for permission mode — the model only learns about it from the
- * conversation. Two things ride the outgoing message, exactly like plan mode in
- * web/routes/chat.ts:
- *
- *   · EDGE (the mode changed, or nothing was ever said): the FULL instruction,
- *     once.
- *   · STANDING (rich holds): a one-line reminder on every later send. A one-shot
- *     instruction measurably decays — the model writes HTML for the turn that
- *     carried it and drifts back to plain markdown a turn or two later. The
- *     reminder repeats the inline delivery contract even after compaction.
- *     Markdown mode appends no mode text, so a session on
- *     plain markdown pays nothing for it.
- *   · COMPACTION voids the edge: the summary does not keep the full instruction
- *     (2026-10-22: three hours of reminder-only turns, then a call-path diagram
- *     drawn as ASCII in a code fence), so the compaction recorder clears
- *     `output_mode_injected` (place-notice.ts `notePlaceCompaction`) and the next
- *     send carries the full instruction again.
- *
- * BOTH land AFTER the user's text (recency helps, and the human's words stay
- * first — user-requested 2026-08-31; the instruction used to be a prefix).
- *
- * The edge lives on the RECORD (`output_mode_injected` vs the EFFECTIVE mode),
- * not in the client, so a reload or a second tab cannot each inject their own
- * copy: the send that advances the injected marker makes every LATER send see
- * mode === injected. Note that this is a read-then-write, so it de-duplicates
- * SERIALIZED sends, not simultaneous ones — two sends that both read the record
- * before either writes it would both carry the instruction. Harmless (the model
- * reads the same sentence twice) and not worth a lock. Any send path that wants
- * the behavior calls resolveOutputModeDirective — today that is the web
- * `session:send` RPC.
+ * WHEN those words ride a message is no longer decided here: they are two of the
+ * message hints (src/core/hints/hint-registry.ts, kinds `rich-output` and
+ * `reply-language`), sent as `<system-reminder>` blocks on the schedule the hint
+ * registry gives them (full instruction at session start, after a compaction and on
+ * a mode change; a short reminder every few messages; the language at start, after
+ * a compaction, on a change and when a reply drifts).
  *
  * Effective mode = record.output_mode ?? config.session.output_mode ?? default.
  * A record that never overrode the mode therefore follows the config LIVE, and
- * flipping the config produces a real edge for it on the next send.
+ * flipping the config produces a real change for it on the next send.
  *
- * The same tail carries the user's reply language (`config.session.reply_language`)
- * as one `[Reply language: …]` line on EVERY send, in either mode: the rule lived
- * only in a private CLAUDE.md, which a compacted or non-Claude session loses, and
- * long sessions drifted into the wrong language. Unset = no line.
+ * The bracket lines Walnut wrote before the hint registry (`[Rich output mode: …]`,
+ * `[Rich output mode is still on …]`, `[Reply language: …]`, `[Voice reply: …]`)
+ * live on in old transcripts only. `stripLegacyHintLines` takes them off rows written
+ * before this home first ran the registry, never off a newer row, so a person who
+ * types such a line today sees it as typed.
  */
 
+import fs from 'node:fs/promises';
+import path from 'node:path';
 import type { Config, SessionOutputMode, SessionRecord } from '../types.js';
 import { DEFAULT_SESSION_OUTPUT_MODE } from '../types.js';
-import { VOICE_REPLY_MARKER, isVoiceReplyLine } from './voice-reply.js';
+import { WALNUT_HOME } from '../../constants.js';
 
-/** Opening literal shared by both edge instructions. The client peels the line
- *  off a rehydrated queue row by exactly this marker (useSessionSend.ts), so
- *  building the strings from it keeps emitter and stripper from drifting apart. */
+/** Opening literal of the pre-registry edge instruction, kept to recognise old rows. */
 export const OUTPUT_MODE_INSTRUCTION_MARKER = '[Rich output mode: ';
 
 /** Turning rich output ON. Names the ONE routing rule the client enforces (a
@@ -84,7 +61,7 @@ export const OUTPUT_MODE_INSTRUCTION_MARKER = '[Rich output mode: ';
  *  narrow column. So the instruction names what stays a code block or table, the
  *  shapes that earn an SVG, and how an SVG must be built. */
 export const RICH_OUTPUT_MODE_ON_INSTRUCTION =
-  `${OUTPUT_MODE_INSTRUCTION_MARKER}ON] Write markdown for what markdown does well: headings, lists, `
+  'rich output mode is on. Write markdown for what markdown does well: headings, lists, '
   + 'tables (also for a handful of numbers), and code blocks for real code, commands, terminal output, diffs '
   + 'and file trees. Mix raw HTML into the same reply (separated by a blank line) only for what markdown cannot '
   + 'express. A diagram with branches, a return path, a loop or four or more parts (a flow, a call path, a sequence '
@@ -107,14 +84,12 @@ export const RICH_OUTPUT_MODE_ON_INSTRUCTION =
 
 /** Turning it back OFF. Deliberately terse: the model already has the context. */
 export const RICH_OUTPUT_MODE_OFF_INSTRUCTION =
-  `${OUTPUT_MODE_INSTRUCTION_MARKER}OFF] Return to plain markdown replies.`;
+  'rich output mode is off. Return to plain markdown replies.';
 
-/** Opening literal of the standing reminder — the client strips a trailing line
- *  that starts with this (useSessionSend.ts). Kept separate from the edge marker
- *  so a stripper can never mistake one for the other. */
+/** Opening literal of the pre-registry standing reminder, kept to recognise old rows. */
 export const OUTPUT_MODE_REMINDER_MARKER = '[Rich output mode is still on';
 
-/** The standing reminder. ONE short line, appended AFTER the user's text.
+/** The standing reminder: ONE short line, the `rich-output` hint's periodic form.
  *
  *  It says MARKDOWN FIRST on purpose. The old wording ("reply in HTML where
  *  visual structure helps") read as "answer in HTML", and the observed result was
@@ -124,38 +99,29 @@ export const OUTPUT_MODE_REMINDER_MARKER = '[Rich output mode is still on';
  *  (colour, diagrams, layout markdown has no shape for) is what makes the line
  *  steer instead of just remind (reported 2026-09-03). */
 export const RICH_OUTPUT_MODE_REMINDER =
-  `${OUTPUT_MODE_REMINDER_MARKER}: markdown first; code blocks for real code, output and file trees; `
+  'rich output mode is still on: markdown first; code blocks for real code, output and file trees; '
   + 'a real diagram is responsive inline <svg>, never ASCII or mermaid; '
   + 'colour or layout: raw HTML directly in this reply. '
-  + 'No files, screenshots or HTML fences unless requested; no blank lines in a widget.]';
+  + 'No files, screenshots or HTML fences unless requested; no blank lines in a widget.';
 
-/** Opening literal of the reply-language line; the strippers match lines that
- *  start with it and end with `]` (like the reminder). */
+/** Opening literal of the pre-registry reply-language line, kept to recognise old rows. */
 export const REPLY_LANGUAGE_MARKER = '[Reply language: ';
 
-/** The setting is one sentence; a pasted essay would ride every message. */
+/** The setting is one sentence; a pasted essay would ride every hint. */
 export const REPLY_LANGUAGE_MAX_CHARS = 300;
 
 /**
- * The reply-language line for this config, or null when the setting is empty.
- * Whitespace (newlines included) collapses to single spaces, so it stays ONE
- * line the line-anchored strippers can recognise.
+ * The reply-language text for this config, or null when the setting is empty.
+ * Whitespace (newlines included) collapses to single spaces.
  */
-export function replyLanguageLine(config?: OutputModeConfig | null): string | null {
+export function replyLanguageText(config?: OutputModeConfig | null): string | null {
   const raw = config?.session?.reply_language;
   if (typeof raw !== 'string') return null;
   let text = raw.replace(/\s+/g, ' ').trim();
   if (!text) return null;
   if (text.length > REPLY_LANGUAGE_MAX_CHARS) text = `${text.slice(0, REPLY_LANGUAGE_MAX_CHARS).trimEnd()}…`;
-  return `${REPLY_LANGUAGE_MARKER}${text}]`;
+  return text;
 }
-
-/** The style a model uses when nothing has been said to it. Compared against the
- *  effective mode to decide whether an edge is owed — deliberately NOT
- *  DEFAULT_SESSION_OUTPUT_MODE: with the default at 'rich', treating "never told"
- *  as the default would mean a fresh session silently never hears the
- *  instruction, i.e. the default would do nothing at all. */
-const MODEL_NATIVE_OUTPUT_MODE: SessionOutputMode = 'markdown';
 
 /** Config subset this module reads. Kept structural so callers can pass a full
  *  Config, a stub, or nothing at all. */
@@ -174,102 +140,64 @@ export function resolveEffectiveOutputMode(
   return record?.output_mode ?? config?.session?.output_mode ?? DEFAULT_SESSION_OUTPUT_MODE;
 }
 
-export interface OutputModeDirective {
-  /** The effective mode. Persist as `output_mode_injected` once `instruction` shipped. */
-  mode: SessionOutputMode;
-  /** Full edge instruction to APPEND after the text (a blank line separates it),
-   *  or null when the model has already been told this mode. Non-null ⇒ the
-   *  caller must advance `output_mode_injected` after the text is safely queued. */
-  instruction: string | null;
-  /** One-line standing reminder to APPEND, or null (markdown mode / this send
-   *  already carries the full instruction, which would make it redundant). */
-  reminder: string | null;
-  /** The reply-language line to APPEND after the mode text, or null (unset). */
-  language: string | null;
-}
-
 /**
- * What this send must carry. Never null: markdown with nothing owed and no reply
- * language yields all nulls, i.e. the message is left byte-identical.
+ * Rows written before this (ms) may carry the pre-registry bracket lines; a row
+ * after it never does, because the hint registry writes `<system-reminder>` blocks
+ * only. It is the moment this Walnut home first ran the registry, kept in
+ * `hint-registry-since.json` (loadLegacyHintCutoff, at server start). Until that
+ * read lands it is this process's start, which is never earlier.
  */
-export function resolveOutputModeDirective(
-  record: Pick<SessionRecord, 'output_mode' | 'output_mode_injected'> | null | undefined,
-  config?: OutputModeConfig | null,
-): OutputModeDirective {
-  const mode = resolveEffectiveOutputMode(record, config);
-  const told = record?.output_mode_injected ?? MODEL_NATIVE_OUTPUT_MODE;
-  const edge = mode !== told;
-  return {
-    mode,
-    instruction: edge
-      ? (mode === 'rich' ? RICH_OUTPUT_MODE_ON_INSTRUCTION : RICH_OUTPUT_MODE_OFF_INSTRUCTION)
-      : null,
-    // The full ON instruction already says everything the reminder does, so the
-    // edge send doesn't carry both.
-    reminder: mode === 'rich' && !edge ? RICH_OUTPUT_MODE_REMINDER : null,
-    language: replyLanguageLine(config),
-  };
+let legacyHintLinesUntil = Date.now();
+export const LEGACY_HINT_CUTOFF_FILE = 'hint-registry-since.json';
+
+/** Read (or, the first time, write) when this home started the hint registry. Never throws. */
+export async function loadLegacyHintCutoff(home = WALNUT_HOME, now = Date.now()): Promise<number> {
+  const file = path.join(home, LEGACY_HINT_CUTOFF_FILE);
+  try {
+    const at = Date.parse((JSON.parse(await fs.readFile(file, 'utf8')) as { since?: string }).since ?? '');
+    if (Number.isFinite(at)) return (legacyHintLinesUntil = at);
+  } catch { /* first run, or unreadable: write it */ }
+  try {
+    await fs.writeFile(file, `${JSON.stringify({ since: new Date(now).toISOString() })}\n`, { flag: 'wx' });
+    legacyHintLinesUntil = now;
+  } catch {
+    // Another process wrote it first: read that one.
+    try {
+      const at = Date.parse((JSON.parse(await fs.readFile(file, 'utf8')) as { since?: string }).since ?? '');
+      if (Number.isFinite(at)) legacyHintLinesUntil = at;
+    } catch { /* keep the process start */ }
+  }
+  return legacyHintLinesUntil;
 }
 
-/**
- * The lines a session's HOST appends to a message it delivers itself (a peer note
- * or reply between two sessions on that host never reaches the server's queue;
- * host-slice.ts ships this, offline-host-core.ts appends it). The standing
- * reminder and the language line only: an owed edge instruction stays owed,
- * because only the server can record it as told, and ships with the next send
- * the server makes. Null when there is nothing to add.
- */
-export function hostReplyTail(
-  record: Pick<SessionRecord, 'output_mode' | 'output_mode_injected'> | null | undefined,
-  config?: OutputModeConfig | null,
-): string | null {
-  const d = resolveOutputModeDirective(record, config);
-  const lines = [d.reminder, d.language].filter(Boolean);
-  return lines.length ? lines.join('\n\n') : null;
+/** Tests: pin the cutoff. */
+export function _setLegacyHintCutoffForTesting(ms: number): void {
+  legacyHintLinesUntil = ms;
 }
 
-/**
- * Wrap the text that goes to the CLI. Machine text always lands AFTER the
- * user's words (and after any image preamble the caller already built): the
- * human reads their own message first, and recency serves the model better.
- * The old prefix placement also broke anything position-sensitive about the
- * start of the message — a prefixed "/compact" stopped being a slash command.
- */
-export function applyOutputModeDirective(directive: OutputModeDirective, message: string): string {
-  const tails = [directive.instruction ?? directive.reminder, directive.language].filter(Boolean);
-  return tails.length ? `${message}\n\n${tails.join('\n\n')}` : message;
-}
+/** The phone's pre-registry voice line. */
+const VOICE_REPLY_MARKER = '[Voice reply: ';
 
-/** Is this whole LINE one of ours? Line-anchored on purpose: a human sentence
- *  that merely mentions the mode ("what does [Rich output mode: ON] do?") does
- *  not START with the marker, so it survives. A line that IS the literal machine
- *  text is machine text no matter where it sits — which is what makes a MERGED
- *  batch (two sends joined into one echo, each carrying its own reminder)
- *  strippable at all. */
-function isOutputModeLine(line: string): boolean {
+/** Is this whole LINE one of the old bracket lines? Line-anchored, as before. */
+function isLegacyHintLine(line: string): boolean {
   const t = line.trim();
   if (t.startsWith(OUTPUT_MODE_INSTRUCTION_MARKER)) return true;
   // The phone's voice-reply line rides the same way (voice-reply.ts), so the one
   // display choke point strips it too.
-  if (isVoiceReplyLine(t)) return true;
+  if (t.startsWith(VOICE_REPLY_MARKER) && t.endsWith(']')) return true;
   if (t.startsWith(REPLY_LANGUAGE_MARKER) && t.endsWith(']')) return true;
   return t.startsWith(OUTPUT_MODE_REMINDER_MARKER) && t.endsWith(']');
 }
 
 /**
- * Undo the wrapping for DISPLAY. The CLI echoes what it received into its JSONL,
- * so every surface built from a history parse (web bubbles, phone, notification
- * previews, search snippets, auto-titles) would otherwise show the machine text
- * as part of what the human typed — and with a reminder on EVERY message that is
- * constant noise, not an occasional oddity. Applied at the history projection
- * choke point (core/session-history.ts) and to the `dedupText` the send RPC hands
- * back, so the optimistic bubble matches on the basis history actually renders.
- *
- * Display-only: it never changes what the CLI receives (the queue row keeps the
- * augmented text) and it never touches the image preamble, which is genuine
- * information about the message.
+ * Take the old bracket lines off a row written before the hint registry started
+ * (`at`: the row's time, ms or ISO). A newer row, or one with no time, is returned
+ * as it is: the user's own words are never matched against a pattern.
+ * Display-only, like the hint parse (src/core/hints/hint-format.ts).
  */
-export function stripOutputModeWrappers(text: string): string {
+export function stripLegacyHintLines(text: string, at?: number | string | null): string {
+  const ms = typeof at === 'string' ? Date.parse(at) : at;
+  if (typeof ms !== 'number' || !Number.isFinite(ms) || ms >= legacyHintLinesUntil) return text;
   // Fast path: the overwhelming majority of lines have neither marker, and this
   // runs per user message of every parse (a whale JSONL has thousands).
   if (
@@ -284,7 +212,7 @@ export function stripOutputModeWrappers(text: string): string {
   const lines = text.split('\n');
   const out: string[] = [];
   for (let i = 0; i < lines.length; i++) {
-    if (!isOutputModeLine(lines[i])) {
+    if (!isLegacyHintLine(lines[i])) {
       out.push(lines[i]);
       continue;
     }

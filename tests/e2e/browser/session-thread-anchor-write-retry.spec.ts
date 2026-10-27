@@ -116,10 +116,10 @@ test.describe('a failed question write keeps the question', () => {
     await expect.poll(() => unsavedHeads(page)).toEqual([])
     const rec = await readRecord(request, RELOAD_SESSION)
     expect(rec.threadMeta?.find((m) => m.headId === head), 'the question\'s meta (its number) is stored too').toMatchObject({ seq: expect.any(Number) })
-    const history = await (await page.request.get(`/api/sessions/${RELOAD_SESSION}/history`)).json() as { messages: Array<{ role: string; text?: string }> }
+    const history = await (await page.request.get(`/api/sessions/${RELOAD_SESSION}/history`)).json() as { messages: Array<{ role: string; text?: string; hints?: Array<{ kind: string; arg?: string }> }> }
     const second = history.messages.filter((m) => m.role === 'user' && (m.text ?? '').includes('And after the rotation?'))
     expect(second.length).toBe(1)
-    expect(second[0].text, 'the follow-up carries its question tag').toMatch(/\[Question Q\d+\]/)
+    expect(second[0].hints?.find((h) => h.kind === 'question')?.arg, 'the follow-up carries its question hint').toMatch(/^\d+$/)
     expect(await markOnPassage(page)).not.toBeNull()
   })
 

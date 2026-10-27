@@ -13,7 +13,7 @@
 
 import type { Request, Response, NextFunction } from 'express'
 import { CLOUD_MODE } from '../../constants.js'
-import { prepareOutputModeSend } from '../../core/sessions/output-mode-send.js'
+import { prepareHintedSend } from '../../core/hints/hint-send.js'
 import { applyVoiceReply } from '../../core/sessions/voice-reply.js'
 import { withImagePaths, type SessionImage } from '../../core/sessions/cloud-images.js'
 import { cloudSend } from './cloud-session-send.js'
@@ -91,8 +91,8 @@ export async function postSessionMessage(req: Request, res: Response, next: Next
       const rawMid = req.body?.messageId
       const clientMessageId = typeof rawMid === 'string' && /^qm-[A-Za-z0-9-]{1,64}$/.test(rawMid)
         ? rawMid : undefined
-      // The voice line rides IN the relayed text: the primary applies output mode
-      // to it again and its display projection strips the line like any other.
+      // The voice hint rides IN the relayed text: the primary keeps the block
+      // where it is when it adds its own hints (hint-format.ts splitHinted).
       await cloudSend(res, sessionId, voice ? applyVoiceReply(text) : text, images, clientMessageId)
       return
     }
@@ -132,24 +132,21 @@ export async function postSessionMessage(req: Request, res: Response, next: Next
     const rawMid = req.body?.messageId
     const clientMessageId = typeof rawMid === 'string' && /^qm-[A-Za-z0-9-]{1,64}$/.test(rawMid)
       ? rawMid : undefined
-    // Output mode rides the phone's sends too. The model only learns its reply
-    // STYLE from the conversation, and the instruction/reminder used to be
-    // applied by the web RPC alone, so a rich session answered the console in
-    // HTML and answered the phone in plain markdown, and a phone turn in the
-    // middle of a rich session dropped the standing reminder entirely. Same
-    // three steps as the console (core/sessions/output-mode-send.ts): wrap the
-    // text the CLI receives, leave what the human sees alone, advance the edge
-    // only after the enqueue.
-    const outputMode = await prepareOutputModeSend(sessionId, record, enqueueText ?? text)
-    // Voice goes LAST, after the output-mode tail: it overrides that style for
-    // this one reply, and the line nearest the end is the one the model weighs.
-    const cliText = voice ? applyVoiceReply(outputMode.enqueueText) : outputMode.enqueueText
+    // The phone's sends carry the same message hints as the console's
+    // (core/hints/hint-send.ts): a rich session answers the phone in the same
+    // style, and a voice send asks for the voice-reply hint, which goes last
+    // (it overrides the output style for this one reply).
+    const outputMode = await prepareHintedSend(sessionId, record, enqueueText ?? text, {
+      sentBy: 'person', ...(voice ? { requested: { 'voice-reply': {} } } : {}),
+    })
+    const cliText = outputMode.enqueueText
     const { sendMessageToSession } = await import('../../core/session-message-queue.js')
     const msg = await sendMessageToSession(sessionId, text, {
       source: 'mobile',
       taskId: record.taskId,
       ...(cliText !== text ? { enqueueMessage: cliText } : {}),
       ...(clientMessageId ? { messageId: clientMessageId } : {}),
+      hinted: true,
     })
     await outputMode.commit()
     log.web.info('mobile session send accepted', { sessionId, messageId: msg.id, imageCount: images.length, voice })

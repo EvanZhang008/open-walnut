@@ -39,7 +39,7 @@ import { WALNUT_HOME } from '../../src/constants.js'
 import { startServer, stopServer } from '../../src/web/server.js'
 import { bus, EventNames, type BusEvent } from '../../src/core/event-bus.js'
 import { createSessionRecord, getSessionByClaudeId, updateSessionRecord } from '../../src/core/session-tracker.js'
-import { stripOutputModeWrappers } from '../../src/core/sessions/output-mode.js'
+import { parseHinted } from '../../src/core/hints/hint-format.js'
 import { addTask } from '../../src/core/task-manager.js'
 import type { SessionStartEvent } from '../../src/core/event-types.js'
 
@@ -207,12 +207,12 @@ describe('side-thread routes', () => {
     expect(res.status).toBe(200)
     const { thread } = await res.json() as { thread: { id: string; threadSessionId: string } }
 
-    // The CLI gets the paths to Read, then the user's words. (The output-mode
-    // wrapper, if the effective mode owes one, lands after both — strip it so this
-    // test is about the image preamble, not the reply style.)
+    // The CLI gets the paths to Read, then the user's words. (A message hint, if
+    // one is due, lands after both; take it off so this test is about the image
+    // preamble, not the reply style.)
     const spawn = started.find((s) => s.preassignedSessionId === thread.threadSessionId)
     expect(spawn?.message).toContain('Read this file')
-    expect(stripOutputModeWrappers(spawn!.message).endsWith(question)).toBe(true)
+    expect(parseHinted(spawn!.message).text.endsWith(question)).toBe(true)
 
     // The stored row does NOT: it is what the chip label and a promoted task read.
     const view = await (await fetch(apiUrl(`/api/sessions/${imgParent}/side-threads`)))

@@ -146,13 +146,14 @@ const HUMAN_CODEX_ORIGINATORS = new Set(['codex-tui', 'Codex Desktop', 'codex_de
 
 /**
  * Envelopes only Walnut writes into a user turn. Mirrors CACHE_WARMUP_TAG
- * (core/sessions/side-thread-warmup.ts) and the output-mode and reply-language
- * markers (core/sessions/output-mode.ts); this file can import neither, so a test pins
- * the equality. knownSessionIds only covers THIS server's records, and a Walnut
+ * (core/sessions/side-thread-warmup.ts), the message-hint block
+ * (core/hints/hint-format.ts) and the pre-registry output-mode and reply-language
+ * markers (core/sessions/output-mode.ts); this file can import none of them, so a
+ * test pins the equality. knownSessionIds only covers THIS server's records, and a Walnut
  * session can reach the disk without one: a side-thread fork minted by another
  * Walnut instance sharing the host (a dev or test server), or a fork whose
  * record was lost. Its copied history carries these envelopes, which is how the
- * scan still recognises it. Line-anchored like stripOutputModeWrappers, so a
+ * scan still recognises it. Line-anchored like stripLegacyHintLines, so a
  * sentence that merely mentions the mode is not mistaken for one.
  */
 export const WALNUT_ENVELOPE_MARKERS = {
@@ -160,11 +161,14 @@ export const WALNUT_ENVELOPE_MARKERS = {
   outputModeInstruction: '[Rich output mode: ',
   outputModeReminder: '[Rich output mode is still on',
   replyLanguage: '[Reply language: ',
+  /** A message hint block (core/hints/hint-format.ts): its first line. */
+  hintBlock: '<system-reminder>\nWalnut (',
 }
 
 export function isWalnutEnvelopeText(text: string): boolean {
   const m = WALNUT_ENVELOPE_MARKERS
   if (text.trimStart().startsWith(m.cacheWarmup)) return true
+  if (text.includes(m.hintBlock)) return true
   if (!text.includes(m.outputModeInstruction) && !text.includes(m.outputModeReminder) && !text.includes(m.replyLanguage)) return false
   for (const line of text.split('\n')) {
     const t = line.trim()

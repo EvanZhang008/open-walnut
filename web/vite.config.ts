@@ -26,6 +26,8 @@ export default defineConfig({
       // browser reducer AND in the server stream buffer, or the row count changes
       // when a reload swaps which twin produced the timeline.
       '@open-walnut/compaction-notice': path.resolve(__dirname, '../src/core/stream/compaction-notice.ts'),
+      // The message-hint wire format: the client reads and strips the very blocks the server writes.
+      '@open-walnut/hint-format': path.resolve(__dirname, '../src/core/hints/hint-format.ts'),
       // Same reason once more: the ✦ search's prompt and answer are BUILT by the
       // server and READ BACK by the transcript renderer, so the sentinels and
       // their parser must have one owner or a card silently stops matching.

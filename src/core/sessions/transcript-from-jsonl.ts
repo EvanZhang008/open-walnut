@@ -142,7 +142,7 @@ function clip(text: string): string {
  *  the human's words, and name the sender from the whole text (an envelope cut
  *  short reads as prose), by the primary's rule (transcript-sent-by.ts). */
 function userRow(text: string, timestamp: string): TranscriptRow {
-  const shown = toDisplayedUserText(text)
+  const shown = toDisplayedUserText(text, timestamp)
   return { role: 'user', text: clipTranscriptText(shown, 'live'), timestamp, sentBy: transcriptSentBy({ role: 'user', text: shown }) }
 }
 

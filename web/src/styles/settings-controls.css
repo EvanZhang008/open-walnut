@@ -554,3 +554,26 @@ textarea.settings-input {
     animation: none !important;
   }
 }
+
+/* Settings, Sessions, Message hints (MessageHintsGroup.tsx). */
+.message-hint-name {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+.message-hint-editor {
+  padding: 4px 0 10px 36px;
+}
+.message-hint-actions {
+  display: flex;
+  gap: 8px;
+  padding: 8px 0 0 36px;
+}
+.message-hint-add {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}

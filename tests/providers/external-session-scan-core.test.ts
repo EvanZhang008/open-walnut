@@ -728,16 +728,20 @@ describe('scanExternalSessions — Walnut-driven and reply-less transcripts', ()
     const { CACHE_WARMUP_TAG } = await import('../../src/core/sessions/side-thread-warmup.js')
     const { OUTPUT_MODE_INSTRUCTION_MARKER, OUTPUT_MODE_REMINDER_MARKER, RICH_OUTPUT_MODE_REMINDER, REPLY_LANGUAGE_MARKER } =
       await import('../../src/core/sessions/output-mode.js')
+    const { HINT_TAG, HINT_AUTHOR, composeHinted, renderHintBlock } = await import('../../src/core/hints/hint-format.js')
     expect(WALNUT_ENVELOPE_MARKERS).toEqual({
       cacheWarmup: CACHE_WARMUP_TAG,
       outputModeInstruction: OUTPUT_MODE_INSTRUCTION_MARKER,
       outputModeReminder: OUTPUT_MODE_REMINDER_MARKER,
       replyLanguage: REPLY_LANGUAGE_MARKER,
+      hintBlock: `<${HINT_TAG}>\n${HINT_AUTHOR} (`,
     })
-    // Legacy wrappers remain in transcripts; current wording may change while
-    // the provenance marker stays stable.
+    // Legacy wrappers remain in transcripts; the provenance markers stay stable.
     expect(REMINDER.startsWith(OUTPUT_MODE_REMINDER_MARKER)).toBe(true)
-    writeJsonl(file('current-reminder'), [user('current-reminder', 'continue\n\n' + RICH_OUTPUT_MODE_REMINDER), reply()])
+    // What Walnut writes today: a message hint block (src/core/hints/).
+    const hinted = composeHinted('continue', { before: [], after: [renderHintBlock('rich-output', RICH_OUTPUT_MODE_REMINDER)] })
+    expect(hinted.includes(WALNUT_ENVELOPE_MARKERS.hintBlock)).toBe(true)
+    writeJsonl(file('current-reminder'), [user('current-reminder', hinted), reply()])
     expect((await scan()).candidates).toEqual([])
     // A markdown session's only envelope may be the reply-language line.
     writeJsonl(file('language-only'), [user('language-only', 'continue\n\n[Reply language: Answer in French.]'), reply()])

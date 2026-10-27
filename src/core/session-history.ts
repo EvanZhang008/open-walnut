@@ -27,7 +27,8 @@ import {
 } from './session-file-reader.js';
 import { accumulateWorkflowProgress, sortedPhases, sortedAgents } from './workflow-progress.js';
 import { sessionModeFromCli, type InPlaceRewindCut, type JsonlLineCheck } from './types.js';
-import { toDisplayedUserText } from './sessions/reference-cards.js';
+import { projectUserText } from './sessions/reference-cards.js';
+import type { CarriedHint } from './hints/hint-format.js';
 import { cutEnd } from './text-cut.js';
 import { COMPACTED_MESSAGE, compactedDetail } from './stream/compaction-notice.js';
 import { hookFailureNotice } from './stream/hook-notice.js';
@@ -659,6 +660,11 @@ export interface SessionHistoryMessage {
    *  stdout maps all of those to isSynthetic (QueryEngine emit path). The UI
    *  renders these as a collapsed context row, never a "You" bubble. */
   injected?: boolean;
+  /** User rows: the message hints Walnut sent with it (hints/hint-format.ts). */
+  hints?: CarriedHint[];
+  /** User rows whose display differs from what the model received: the text as
+   *  received, hints and every other machine wrapper included (the raw view). */
+  rawText?: string;
 }
 
 export interface PaginationMeta {
@@ -1578,6 +1584,8 @@ export function parseSessionMessages(content: string, opts?: ParseSessionMessage
     }
 
     let text = textParts.join('\n').trim();
+    // What the model really received, kept when the display differs (the raw view).
+    const receivedText = msg.role === 'user' ? text : '';
 
     // Skip messages with no visible content (e.g. tool_result-only user entries,
     // empty heartbeat lines). These produce ghost "You" bubbles in the UI.
@@ -1610,15 +1618,17 @@ export function parseSessionMessages(content: string, opts?: ParseSessionMessage
       continue;
     }
 
-    // Machine wrappers on a user line (display only). The send path appends a
-    // one-time "[Rich output mode: ON] …" instruction plus, while rich holds, a
-    // one-line reminder, and a `---walnut-refs---` card block for any entity pill
-    // the human dropped in — the CLI echoes all of it into its JSONL, so without
-    // this every user bubble renders the machine text as if the human had typed
-    // it. Stripping HERE (not in each surface) fixes web, phone, notification
-    // previews and search snippets at once. Echo-claim binding compares against
-    // the same stripped form (echo-claims.ts candidateTexts).
-    if (msg.role === 'user') text = toDisplayedUserText(text);
+    // Machine wrappers on a user line (display only): the message hints
+    // (`<system-reminder>` blocks, hints/hint-format.ts) and a `---walnut-refs---`
+    // card block for any entity pill the human dropped in. The CLI echoes all of
+    // it into its JSONL, so without this every user bubble renders the machine
+    // text as if the human had typed it. Stripping HERE (not in each surface)
+    // fixes web, phone, notification previews and search snippets at once.
+    // Echo-claim binding compares against the same stripped form
+    // (echo-claims.ts candidateTexts). The hints are kept beside the text, so a
+    // surface can say which ones the message carried.
+    let hints: CarriedHint[] = [];
+    if (msg.role === 'user') ({ text, hints } = projectUserText(text, msg.timestamp));
 
     // Skip assistant messages with no visible text and no tools.
     // These are typically abandoned API calls where Claude thought but never
@@ -1640,6 +1650,8 @@ export function parseSessionMessages(content: string, opts?: ParseSessionMessage
       ...(msg.injected && msg.role === 'user' ? { injected: true } : {}),
       ...(msg.systemVariant ? { systemVariant: msg.systemVariant } : {}),
       ...(msg.systemDetail ? { systemDetail: msg.systemDetail } : {}),
+      ...(hints.length ? { hints } : {}),
+      ...(receivedText && receivedText !== text ? { rawText: receivedText } : {}),
     });
     resultParentIds.push(msg.parentToolUseId);
   }

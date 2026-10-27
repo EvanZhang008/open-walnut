@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { composeHinted, renderHintBlock } from '../../src/core/hints/hint-format.js'
 import {
   AcpJournalProjector,
   projectAcpJournalHistory,
@@ -23,10 +24,16 @@ const frame = (
 
 describe('ACP journal projector', () => {
   it.each(['prompt-accepted', 'steer-accepted'])('strips display-only wrappers from %s without rewriting the journal', (type) => {
-    const text = 'Keep this message.\n\n[Rich output mode: ON] Internal presentation instruction.\n\n---walnut-refs---\nInternal reference card.\n---/walnut-refs---'
-    const record = meta(1, { type, commandId: 'turn-1', walnutMessageId: 'message-1', text } as never)
+    // A message hint block (the current form) and the reference cards.
+    const text = composeHinted('Keep this message.\n\n---walnut-refs---\nInternal reference card.\n---/walnut-refs---',
+      { before: [], after: [renderHintBlock('rich-output', 'Internal presentation instruction.')] })
+    const record = meta(Date.now(), { type, commandId: 'turn-1', walnutMessageId: 'message-1', text } as never)
     expect(projectAcpJournalHistory('runtime-1', [record])[0].text).toBe('Keep this message.')
     expect(record).toMatchObject({ event: { text } })
+    // An old row (dated before the hint registry) still loses its bracket line.
+    const legacy = 'Keep this message.\n\n[Rich output mode: ON] Internal presentation instruction.\n\n---walnut-refs---\nInternal reference card.\n---/walnut-refs---'
+    const old = meta(1, { type, commandId: 'turn-1', walnutMessageId: 'message-1', text: legacy } as never)
+    expect(projectAcpJournalHistory('runtime-1', [old])[0].text).toBe('Keep this message.')
   })
 
   it('resolves minimal permission details from the current tool without changing raw frames', () => {

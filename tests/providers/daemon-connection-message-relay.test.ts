@@ -15,14 +15,14 @@ import { createMockConstants } from '../helpers/mock-constants.js'
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-msg-relay'))
 
 const getSessionMock = vi.fn()
-// updateSessionRecord is here because the relay now applies the output-mode
-// directive (core/sessions/output-mode-send.ts) and advances the record's edge
-// marker after the enqueue — the phone's sends carry the same instruction the
-// console's do.
-const updateSessionMock = vi.fn(async () => undefined)
+// updateSessionRecordConditionally is here because the relay runs the message-hint
+// pipeline (core/hints/hint-send.ts) and records what the send told after the
+// enqueue: the phone's sends carry the same hints the console's do.
+const updateSessionMock = vi.fn(async (..._args: unknown[]) => ({}))
 vi.mock('../../src/core/session-tracker.js', () => ({
   getSessionByClaudeId: getSessionMock,
   updateSessionRecord: updateSessionMock,
+  updateSessionRecordConditionally: updateSessionMock,
 }))
 
 import { DaemonConnection } from '../../src/providers/daemon-connection.js'
@@ -76,13 +76,17 @@ describe('handleMessageRequest', () => {
     const queue = await getQueue(SID)
     expect(queue).toHaveLength(1)
     expect(queue[0].id).toBe(mid)
-    // The human's words lead; the output-mode instruction is appended after them
+    // The human's words lead; the rich-output hint is appended after them
     // (rich is the default, and this record was never told anything yet).
     const { RICH_OUTPUT_MODE_ON_INSTRUCTION } = await import('../../src/core/sessions/output-mode.js')
+    const { renderHintBlock } = await import('../../src/core/hints/hint-format.js')
     expect(queue[0].message.startsWith('hello')).toBe(true)
-    expect(queue[0].message).toContain(RICH_OUTPUT_MODE_ON_INSTRUCTION)
+    expect(queue[0].message).toContain(renderHintBlock('rich-output', RICH_OUTPUT_MODE_ON_INSTRUCTION))
     expect(queue[0].status).toBe('pending')
-    expect(updateSessionMock).toHaveBeenCalledWith(SID, { output_mode_injected: 'rich' })
+    expect(updateSessionMock).toHaveBeenCalledWith(SID, expect.objectContaining({
+      output_mode_injected: 'rich',
+      hintState: expect.objectContaining({ sends: 1, lastSendBy: 'person', told: { 'rich-output': expect.objectContaining({ hash: 'rich' }) } }),
+    }), expect.any(Function), expect.anything())
   })
 
   it('a markdown-mode session relays the phone text byte-identical', async () => {
@@ -94,7 +98,10 @@ describe('handleMessageRequest', () => {
     await fire(conn, { ev: 'message-request', relayId: 8, sessionId: SID, message: 'plain', messageId: mid })
     const queue = await getQueue(SID)
     expect(queue[0].message).toBe('plain')
-    expect(updateSessionMock).not.toHaveBeenCalled()
+    // The send is counted (every_n_turns); told stays what output_mode_injected seeded.
+    expect(updateSessionMock).toHaveBeenCalledWith(SID, {
+      hintState: expect.objectContaining({ sends: 1, told: { 'rich-output': expect.objectContaining({ hash: 'markdown' }) } }),
+    }, expect.any(Function), expect.anything())
   })
 
   it('a replay AFTER delivery+drain is acked WITHOUT re-enqueueing (ledger)', async () => {

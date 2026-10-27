@@ -40,6 +40,8 @@
  */
 
 import crypto from 'node:crypto'
+import { escapeHintTags, splitHinted } from '../core/hints/hint-format.js'
+import { voiceReplyBlock } from '../core/sessions/voice-reply.js'
 import type { ReplicaWrite, ReplicaWriteResult } from './dispatch.js'
 import { deriveStatusFromPhase, phaseDerivedFields, phaseFromStatus } from '../core/phase.js'
 import { PIN_TIER_POLICY, type Task, type TaskPhase, type TaskStatus } from '../core/types.js'
@@ -336,8 +338,11 @@ export function createWritePort(deps: WritePortDeps): WritePort {
       }))
     },
     async send(w, sid, text, messageId) {
-      const body = text.trim()
-      if (!body) return refusalAnswer('bad_request', 'text must be a non-empty string')
+      const typed = text.trim()
+      if (!typed) return refusalAnswer('bad_request', 'text must be a non-empty string')
+      // The host delivers it as it is, so it is escaped here as the Mac's queue would
+      // (core/hints/hint-format.ts); only the voice block a voice send composed stays.
+      const body = typed.startsWith('/') || splitHinted(typed, [voiceReplyBlock()]) ? typed : escapeHintTags(typed)
       const r = await w.call('follower.send', { sid, text: body, messageId: sendMessageId(messageId, w.opId) })
       if (r.kind === 'answered') return { answered: true }
       if (r.kind === 'refused') return refusalAnswer(r.code, r.message, r.detail, r.retryAfterMs)

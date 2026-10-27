@@ -18,7 +18,7 @@ import { counts as threadCounts, type ThreadCounts } from '@/utils/thread-meta-c
 import { composerDraftKey, isPendingKey, unreadKeysOf } from '@/utils/thread-stack-state';
 import { clearDraft, readDraft, writeDraft } from '@/utils/drafts';
 import { carriedRootDraft, composerKeyOf, pendingPageOf } from '@/utils/composer-quote';
-import { nextQuestionSeq, questionNumbers, withQuestionBanner } from '@/utils/question-tag';
+import { nextQuestionSeq, questionHint, questionNumbers } from '@/utils/question-tag';
 import { markStatesOf, sameMarkStates, type ThreadMarkState } from '@/utils/thread-mark-state';
 import { log } from '@/utils/log';
 import { useEvent } from '@/hooks/useWebSocket';
@@ -284,7 +284,7 @@ export function useSessionViewMode(sessionId: string): {
 
 // ── The panel's question wiring (SessionPanel calls this once) ──
 
-type Dispatch = (sessionId: string, message: string, images?: ImageAttachment[], opts?: { userUuid?: string }) => Promise<boolean>;
+type Dispatch = (sessionId: string, message: string, images?: ImageAttachment[], opts?: { userUuid?: string; hints?: Record<string, { arg?: string }> }) => Promise<boolean>;
 
 export interface UsePanelThreadsArgs {
   sessionId: string;
@@ -574,22 +574,21 @@ export function usePanelThreads(args: UsePanelThreadsArgs): PanelThreads {
       msgId: userUuid, parent, ...(quote ? { quote } : {}), ...(line ? { line } : {}), source: pending ? 'selection' : 'manual', at,
     };
     let text: string;
+    let seq: number | undefined;
     const metaEntries: SessionThreadMetaPatch[] = [];
-    // The question's NUMBER rides the message as a leading banner asking for
-    // the `[Q<n>]` reply tag: a new question takes the next free number (stored
-    // in its meta), a follow-up reuses its question's.
+    // The question's NUMBER rides the message as the `question` hint, which the
+    // server writes ahead of the text and which asks for the `[Q<n>]` reply tag:
+    // a new question takes the next free number (stored in its meta), a
+    // follow-up reuses its question's.
     if (pending) {
-      const seq = nextQuestionSeq(r.tree, r.meta.index, r.meta.list);
-      text = keepCommandFirst(message, (t) => withQuestionBanner(
-        composeAnchoredText(t, { parent, ...(quote ? { quote } : {}), ...(line ? { line } : {}), source: 'selection', label: pending.title }, latestKey), seq,
+      seq = nextQuestionSeq(r.tree, r.meta.index, r.meta.list);
+      text = keepCommandFirst(message, (t) => composeAnchoredText(
+        t, { parent, ...(quote ? { quote } : {}), ...(line ? { line } : {}), source: 'selection', label: pending.title }, latestKey,
       ));
       metaEntries.push({ headId: userUuid, status: 'open', titleState: 'pending', question: message.slice(0, 400), seq });
     } else {
-      const seq = questionNumbers(r.tree, r.meta.index).get(key);
-      text = keepCommandFirst(message, (t) => {
-        const oriented = composeOrientedText(t, { latestKey, currentKey: key, titleOfKey });
-        return seq ? withQuestionBanner(oriented, seq) : oriented;
-      });
+      seq = questionNumbers(r.tree, r.meta.index).get(key);
+      text = keepCommandFirst(message, (t) => composeOrientedText(t, { latestKey, currentKey: key, titleOfKey }));
       if (node && statusOf(node, r.meta.index) === 'older') metaEntries.push({ headId: node.headId, status: 'open' });
     }
     persistAnchor(anchor, metaEntries);
@@ -608,7 +607,7 @@ export function usePanelThreads(args: UsePanelThreadsArgs): PanelThreads {
     if (head) r.stack.markHeadViewed(head);
     noteAsked(pending ? threadKeyOf(anchor) : key);
     log.info('threads', pending ? 'question sent' : 'follow-up sent', { sessionId, headId: pending ? userUuid : node?.headId, rowId: userUuid });
-    const sent = dispatch(sessionId, text, images, { userUuid });
+    const sent = dispatch(sessionId, text, images, { userUuid, ...(seq ? { hints: questionHint(seq) } : {}) });
     if (pending) {
       const stack = r.stack;
       sent.then((ok) => stack.settlePending(pending, ok), () => stack.settlePending(pending, false));
@@ -629,7 +628,8 @@ export function usePanelThreads(args: UsePanelThreadsArgs): PanelThreads {
     log.info('threads', 'retry', { sessionId, headId: node.headId, rowId: userUuid });
     r.stack.markHeadViewed(node.headId);
     noteAsked(key);
-    void r.args.send(sessionId, text, undefined, { userUuid });
+    const seq = questionNumbers(r.tree, r.meta.index).get(key);
+    void r.args.send(sessionId, text, undefined, { userUuid, ...(seq ? { hints: questionHint(seq) } : {}) });
   }, [sessionId, persistAnchor, noteAsked]);
 
   const requestPinJump = useCallback((pinKey: string, threadKey: string) => {

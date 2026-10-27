@@ -303,6 +303,53 @@ export const SESSION_OUTPUT_MODE_IDS: readonly SessionOutputMode[] = ['markdown'
  *  resolve through resolveEffectiveOutputMode(), never by reading this alone. */
 export const DEFAULT_SESSION_OUTPUT_MODE: SessionOutputMode = 'rich';
 
+// ── Message hints (src/core/hints/) ──────────────────────────────────────────
+
+/** When a message hint is sent (src/core/hints/hint-schedule.ts). Any one that holds sends it. */
+export type MessageHintTrigger =
+  | 'every_turn' | 'every_n_turns' | 'session_start' | 'after_compaction' | 'on_change' | 'on_drift' | 'on_request';
+
+/** Who a message hint is for, by the session's task. */
+export type MessageHintRole = 'main' | 'lead' | 'worker' | 'ask' | 'other';
+
+/** A user's or agent's settings for one message hint kind (config `session.hints`). */
+export interface MessageHintSettings {
+  enabled?: boolean;
+  /** Shown in Settings; custom hints only (a built-in keeps its own). */
+  label?: string;
+  /** The hint's text: required for a custom hint, ignored for a built-in. */
+  text?: string;
+  triggers?: MessageHintTrigger[];
+  /** For `every_n_turns`: send it again after this many messages. */
+  every_turns?: number;
+  placement?: 'before' | 'after';
+  /** Empty or unset fields mean everyone. */
+  audience?: { roles?: MessageHintRole[]; agents?: string[]; sessions?: string[] };
+}
+
+/** One hint kind as this session was last told it. */
+export interface SessionHintTold {
+  /** The session's send counter when it went out. */
+  send: number;
+  /** What it said (its identity): `on_change` compares the current one with this. */
+  hash: string;
+  at: string;
+  /** The compaction boundary it was told after (`lastCompactUuid` then). */
+  compact?: string;
+  /** Stated by the post-compaction hook at this time. */
+  byHookAt?: string;
+}
+
+export interface SessionHintState {
+  /** Messages that went through the hint pipeline. */
+  sends: number;
+  told: Record<string, SessionHintTold>;
+  /** A hint kind whose rule the last reply broke, and when (`on_drift`). */
+  drift?: Record<string, string>;
+  /** Who sent the last message: drift is judged only on a reply to a person. */
+  lastSendBy?: 'person' | 'agent';
+}
+
 /**
  * Reasoning-effort capability of a model: whether it accepts an effort level at
  * all, and whether it accepts the higher `xhigh` / top `max` levels specifically.
@@ -1346,12 +1393,16 @@ export interface Config {
 
     /** One sentence saying which language to answer the user in (e.g. "Talk to
      *  the user in Chinese; code, commits, UI strings and repo docs stay English").
-     *  Rides every message Walnut delivers into a session as one
-     *  `[Reply language: …]` line after the text, beside the rich output reminder,
-     *  because a long or compacted session drifts off a rule it read only once.
-     *  Empty/unset = no line. Built by replyLanguageLine() in
-     *  core/sessions/output-mode.ts. */
+     *  The `reply-language` message hint carries it (src/core/hints/hint-registry.ts):
+     *  at session start, after a compaction, when it changes and when a reply
+     *  drifts into another language. Empty/unset = no hint. */
     reply_language?: string;
+
+    /** Message hints (src/core/hints/): per kind, the user's or an agent's change to a
+     *  built-in hint (question, rich-output, reply-language, voice-reply), or a whole
+     *  custom hint (a kind that is not built in, with `text`). Read and written through
+     *  `GET/PUT/DELETE /api/v1/hints`; unset fields keep the built-in default. */
+    hints?: Record<string, MessageHintSettings>;
 
     /** Per-turn working-tree snapshots: at every turn end of a session whose
      *  cwd is in a git repository, the session daemon records the tree under a
@@ -2744,6 +2795,8 @@ export interface SessionRecord {
    *  chosen: a default-rich session must still receive the instruction once.
    *  A compaction boundary clears it (sessions/place-notice.ts). */
   output_mode_injected?: SessionOutputMode;
+  /** What this session's model was told by each message hint (src/core/hints/). */
+  hintState?: SessionHintState;
   /** When the post-compaction hook last restated the rich instruction. A boundary
    *  read right after it keeps `output_mode_injected`, since the hook already told
    *  the model about that compaction. */

@@ -60,9 +60,11 @@ function stripBanners(text) {
   }
   return body
 }
-/** The rest Walnut wraps around the words: the output mode reminder, the reference card, thread lines. */
+/** The rest Walnut wraps around the words: the message hints, the reference card, thread lines. */
 function stripInputDecorations(text) {
-  const lines = text.split('\n')
+  const lines = text
+    .replace(/<system-reminder>\s*Walnut \([^)]*\):[\s\S]*?<\/system-reminder>\s*/g, '')
+    .split('\n')
   const kept = []
   for (let i = 0; i < lines.length; i++) {
     const t = lines[i].trim()

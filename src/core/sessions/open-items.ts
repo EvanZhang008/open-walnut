@@ -117,18 +117,14 @@ export async function collectOpenItems(
       };
     }
     items.text = formatOpenItems(items, now);
-    // The summary does not keep the rich instruction. Restated here, server-side
-    // only (the formatter is shared with the daemon), so a compaction in the
-    // middle of a turn is covered before the next send.
+    // The summary does not keep the message hints (rich output, reply language,
+    // any with an after-compaction trigger). Restated here, server-side only (the
+    // formatter is shared with the daemon), so a compaction in the middle of a
+    // turn is covered before the next send (hints/hint-send.ts).
     if (opts.afterCompaction) {
-      const { stateOutputModeAfterCompaction } = await import('./output-mode-send.js');
-      const rich = await stateOutputModeAfterCompaction(caller.record);
-      if (rich) items.text = [items.text, rich].filter(Boolean).join('\n\n');
-      // The reply language too, so the rest of an interrupted turn keeps it.
-      const { replyLanguageLine } = await import('./output-mode.js');
-      const { getConfig } = await import('../config-manager.js');
-      const language = replyLanguageLine(await getConfig().catch(() => null));
-      if (language) items.text = [items.text, language].filter(Boolean).join('\n\n');
+      const { stateHintsAfterCompaction } = await import('../hints/hint-send.js');
+      const hints = await stateHintsAfterCompaction(caller.record, task);
+      if (hints) items.text = [items.text, hints].filter(Boolean).join('\n\n');
       // A lead reads its teams back in full: the summary drops what earlier notes told it (org/team-note.ts).
       if (task.org_role === 'lead' && task.phase !== 'COMPLETE') {
         const { teamSnapshotText } = await import('../org/team-note.js');

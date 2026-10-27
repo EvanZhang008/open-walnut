@@ -142,6 +142,8 @@ export const CORE_SETTINGS_CONTRIBUTIONS: readonly CoreSettingsContribution[] = 
       'html', 'markdown',
       { word: 'reply language', rowLabel: 'Reply language', anchor: 'session-reply-language' },
       'language', 'chinese', 'english',
+      { word: 'message hints', rowLabel: 'Message hints', anchor: 'message-hints' },
+      'hint', 'reminder', 'system-reminder',
     ],
     render: ({ config, saveSection }) => <SessionsSection config={config} onSave={saveSection} />,
   },
