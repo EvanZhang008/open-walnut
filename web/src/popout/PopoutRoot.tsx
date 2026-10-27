@@ -6,6 +6,7 @@ import { PopoutGlobalNotes } from './PopoutGlobalNotes';
 import { PopoutNote } from './PopoutNote';
 import { PopoutSession } from './PopoutSession';
 import { PopoutTask } from './PopoutTask';
+import { setUpdateNoticeDock } from '@/components/common/update-notice-dock';
 
 /**
  * Theme persistence — must stay in sync with web/src/hooks/useTheme.ts.
@@ -72,5 +73,6 @@ export function PopoutRoot() {
       );
   }
 
-  return <div className="popout-root">{content}</div>;
+  // The update notice docks at the bottom, in the flow, so it covers neither the transcript nor the composer.
+  return <div className="popout-root">{content}<div className="popout-update-dock" ref={setUpdateNoticeDock} /></div>;
 }

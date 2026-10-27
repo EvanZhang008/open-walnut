@@ -9,17 +9,26 @@ import { useAppUpdateState } from '@/hooks/useAppUpdate';
 import { useAppUpdateActions } from '@/components/layout/useAppUpdateActions';
 import { getAppUpdateButtonTooltip, resolveAppUpdateButtonAction, shouldShowAppUpdateItem } from '@/components/layout/app-update-logic';
 import { ConfirmDialog } from './ConfirmDialog';
+import { useUpdateNoticeDock } from './update-notice-dock';
+import { isSnoozed, readSnooze, SNOOZE_KEY, writeSnooze, type UpdateSnooze } from './update-notice-snooze';
 import { gatherUnsavedWork, hasAny, UnsavedWorkDialog, type UnsavedWork } from './UnsavedWorkDialog';
 
-const DISMISS_KEY = 'open-walnut-stale-build-pill-dismissed';
-
-function readDismissed(): string | null {
-  try { return window.sessionStorage.getItem(DISMISS_KEY); } catch { return null; }
+function RefreshIcon() {
+  return (
+    <svg className="stale-build-pill-icon" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"
+      fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M13.2 8a5.2 5.2 0 1 1-1.6-3.75" />
+      <path d="M13.3 2.6v2.9h-2.9" />
+    </svg>
+  );
 }
 
 export function StaleBuildPill() {
   const [state, setState] = useState<StaleBuildState | null>(getStaleBuild);
-  const [dismissed, setDismissed] = useState<string | null>(readDismissed);
+  const [snooze, setSnooze] = useState<UpdateSnooze | null>(readSnooze);
+  // Bumped when the snooze runs out, so the notice can come back on its own.
+  const [, setWoke] = useState(0);
+  const dock = useUpdateNoticeDock();
   // The work a restart or reload would lose, while the user decides about it.
   const [held, setHeld] = useState<{ work: UnsavedWork; verb: 'restart' | 'reload'; go: () => Promise<void> } | null>(null);
   // From the click until the restart request is out (the check, the draft settle).
@@ -44,13 +53,29 @@ export function StaleBuildPill() {
       : shell?.status === 'downloading' && shell.downloadPercent != null ? `Downloading ${Math.floor(shell.downloadPercent)}%`
         : pending ? 'Downloading…' : 'Download'
     : 'Reload';
+  // The collapsed rail is 56px wide: the verb in a word that fits (CSS shows it from data-short).
+  const shortLabel = label.match(/\d+%/)?.[0] ?? (pending ? '…' : label === 'Download' ? 'Update' : label);
   const identity = native ? `app:${installed.update?.token ?? 'restarting'}`
-    : shellVisible ? `release:${shell?.downloadedVersion ?? shell?.availableVersion}` : state?.served;
+    // Download and Restart of one release are two asks: a × on the first must not hide the second.
+    : shellVisible ? `release:${shell?.downloadedVersion ?? shell?.availableVersion}:${shellAction === 'install' ? 'install' : 'download'}` : state?.served;
 
   useEffect(() => {
     setState(getStaleBuild());
     return subscribeStaleBuild(() => setState(getStaleBuild()));
   }, []);
+
+  // A × in another window or tab hides this one too.
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => { if (e.key === null || e.key === SNOOZE_KEY) setSnooze(readSnooze()); };
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
+  }, []);
+  useEffect(() => {
+    const wait = snooze ? snooze.until - Date.now() : 0;
+    if (wait <= 0) return;
+    const timer = window.setTimeout(() => setWoke((n) => n + 1), Math.min(wait + 50, 2 ** 31 - 1));
+    return () => window.clearTimeout(timer);
+  }, [snooze]);
 
   // A newer update replaces the one being decided about.
   useEffect(() => { setHeld(null); }, [identity]);
@@ -84,24 +109,27 @@ export function StaleBuildPill() {
   }, [pending, native, shellVisible, shellAction, shellActions.run, installed.restart, installed.update?.windows, openHome]);
   const onLater = () => {
     if (!identity || pending) return;
-    try { window.sessionStorage.setItem(DISMISS_KEY, identity); } catch { /* quota */ }
-    setDismissed(identity);
+    setSnooze(writeSnooze(identity));
   };
-  const visible = !!identity && (pending || dismissed !== identity);
+  const visible = !!identity && (pending || !isSnoozed(snooze, identity, Date.now()));
+  const docked = !!dock;
+  const heading = shellVisible && !native && shellAction !== 'install' ? 'Walnut update available' : 'Walnut updated';
   const error = installed.error ?? shellActions.error;
   const clearError = () => { installed.clearError(); shellActions.clearError(); };
 
   return <>
     {visible && createPortal(
-      <div className="stale-build-pill" role="status" aria-live="polite"
+      <div className={`stale-build-pill${docked ? ' is-docked' : ''}`} role="status" aria-live="polite"
         data-served={state?.served} data-running={state?.running} data-update-kind={native ? 'app' : shellVisible ? 'release' : 'web'}>
-        <span className="stale-build-pill-text">{native || shellAction === 'install' ? 'Walnut updated' : shellVisible ? 'Walnut update available' : 'Walnut updated'}</span>
+        <span className="stale-build-pill-text">{heading}</span>
         <span className="stale-build-pill-sep" aria-hidden="true">·</span>
-        <button type="button" className="stale-build-pill-action" data-testid="walnut-update-action" data-status={native ? pending ? 'restarting' : 'installed' : shellVisible ? shell?.status : 'stale'} onClick={() => { void onAction(); }} aria-disabled={pending || undefined}
-          title={native ? 'Restart to use the installed app update' : shellVisible && shell ? getAppUpdateButtonTooltip(shell) : undefined}>{label}</button>
+        <button type="button" className="stale-build-pill-action" data-testid="walnut-update-action" data-status={native ? pending ? 'restarting' : 'installed' : shellVisible ? shell?.status : 'stale'} onClick={() => { void onAction(); }} aria-disabled={pending || undefined} data-short={shortLabel}
+          title={native ? 'Restart to use the installed app update' : shellVisible && shell ? getAppUpdateButtonTooltip(shell) : `${heading}: reload this window to use it`}>
+          <RefreshIcon /><span className="stale-build-pill-label">{label}</span>
+        </button>
         <button type="button" className="stale-build-pill-later" onClick={onLater} aria-disabled={pending || undefined}
-          title="Later: hide this update notice" aria-label="Later: hide this update notice">×</button>
-      </div>, document.body,
+          title="Later: hide this update notice for 30 minutes" aria-label="Later: hide this update notice for 30 minutes">×</button>
+      </div>, docked ? dock : document.body,
     )}
     {held && <UnsavedWorkDialog work={held.work} verb={held.verb} onCancel={() => setHeld(null)}
       onAnyway={() => { const { go } = held; setHeld(null); void go(); }} />}

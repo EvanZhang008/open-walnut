@@ -168,7 +168,7 @@ test('a restart timeout reports failure and allows a fresh attempt', async ({ pa
   } finally { release?.() }
 })
 
-test('Later hides only this installed build, and a new token closes a stale question', async ({ page }) => {
+test('Later hides the notice for 30 minutes, a newer build included, and a new token closes a stale question', async ({ page }) => {
   await page.clock.install()
   let token = '12:old:new'
   await page.route(STATUS, r => r.fulfill({ json: { available: true, token } }))
@@ -177,6 +177,8 @@ test('Later hides only this installed build, and a new token closes a stale ques
   await expect(button(page)).toHaveCount(0)
   token = '12:old:newer'
   await page.clock.fastForward(30_000)
+  await expect(button(page)).toHaveCount(0)
+  await page.clock.fastForward(30 * 60_000)
   await expect(button(page)).toHaveText('Restart')
   await probeBox(page)
   await button(page).click()

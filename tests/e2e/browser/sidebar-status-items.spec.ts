@@ -179,8 +179,8 @@ test('an item shows up above the bell, ticks from its timer, and leaves no gap w
 
   await probe(page, 'hide')
   await expect(page.locator('.sidebar-status-item')).toHaveCount(0)
-  // No leftover wrapper or spacer where it was.
-  const first = await page.locator('.sidebar-notification-area > *').first().getAttribute('class')
+  // No leftover wrapper or spacer where it was (the update notice's empty slot takes no room).
+  const first = await page.locator('.sidebar-notification-area > *:visible').first().getAttribute('class')
   expect(first).toContain('sidebar-notification-btn')
   expect(errors).toEqual([])
 })

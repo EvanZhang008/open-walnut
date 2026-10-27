@@ -19,6 +19,7 @@ import '@/styles/notification-quiet.css';
 import { NotificationPanel } from '@/components/common/NotificationPanel';
 import { PluginBoundary } from '@/components/common/PluginBoundary';
 import { SidebarStatusItems } from './SidebarStatusItems';
+import { setUpdateNoticeDock } from '@/components/common/update-notice-dock';
 import { useLendAppUpdateToasts } from './useAppUpdateActions';
 import { useRailPeek } from './useRailPeek';
 import { RailItemPill } from './RailItemPill';
@@ -403,6 +404,8 @@ export function Sidebar({
             <span className="sidebar-label">{formatDuration(audio.totalDuration)}</span>
           </button>
         )}
+        {/* The update notice docks here, in the flow, so it covers nothing (StaleBuildPill). */}
+        {!isMobile && <div className="sidebar-update-dock" ref={setUpdateNoticeDock} />}
         {/* Plugin status items (a live ring each), above the bell; nothing when none is live.
             Voice lives in Settings > Voice (its recordings included) since 2026-10-26. */}
         <SidebarStatusItems onOpenChange={setStatusOpen} />

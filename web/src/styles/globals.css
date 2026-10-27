@@ -33292,24 +33292,29 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
   cursor: pointer;
 }
 
-/* ── Stale-build pill: "Walnut updated · Reload" ──────────────────────────────
-   Shown only when a tab has been running an old bundle long enough that the
+/* ── Update notice: "Walnut updated · Reload" ─────────────────────────────────
+   Shown only when a window has been running an old bundle long enough that the
    silent hidden-tab upgrade clearly is not going to happen (the Mac app window
-   is visible for hours). Bottom centre, above the composer, and deliberately
-   small: it must be ignorable, because the tab still works. */
+   is visible for hours). It must be ignorable, because the window still works.
+   It sits in the flow, so it covers nothing (.is-docked): in the desktop rail
+   above the bell, and in a popout as a thin bar under the composer. Only a
+   window with neither (the phone layout) floats it. No transform anywhere: a fixed box drawn through a
+   translate was hit-tested a few pixels off its paint in the Mac app (2026-10-27,
+   "it has to be a bit down of Reload or x to be clickable"). Its two buttons
+   fill the notice's whole height, so the box that takes the click is the box
+   that is drawn. */
 .stale-build-pill {
   position: fixed;
-  bottom: 92px;
-  left: 50%;
-  transform: translateX(-50%);
-  /* Under dialogs (9500) and menus (9999) — an update is never urgent enough to
+  left: 12px;
+  bottom: calc(12px + var(--wn-safe-bottom, env(safe-area-inset-bottom, 0px)));
+  /* Under dialogs (9500) and menus (9999): an update is never urgent enough to
      sit on top of what the user is doing. */
   z-index: 9300;
   display: flex;
-  align-items: center;
-  gap: 6px;
-  max-width: min(420px, calc(100vw - 32px));
-  padding: 5px 8px 5px 12px;
+  align-items: stretch;
+  max-width: calc(100vw - 24px);
+  min-height: 28px;
+  padding: 0 2px 0 12px;
   font-size: 12px;
   color: var(--fg-secondary);
   background: var(--card-bg);
@@ -33320,11 +33325,13 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
 }
 
 @keyframes stale-build-pill-in {
-  from { opacity: 0; transform: translateX(-50%) translateY(6px); }
-  to { opacity: 1; transform: translateX(-50%) translateY(0); }
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
 
 .stale-build-pill-text {
+  align-self: center;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -33346,39 +33353,52 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
 .unsaved-work-note { color: var(--fg-muted); font-size: 12px; }
 
 .stale-build-pill-sep {
+  align-self: center;
+  margin: 0 2px 0 6px;
   color: var(--fg-muted);
   flex-shrink: 0;
 }
 
-.stale-build-pill-action {
+.stale-build-pill-action,
+.stale-build-pill-later {
+  display: flex;
+  align-items: center;
+  justify-content: center;
   flex-shrink: 0;
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--accent);
+  margin: 0;
   background: none;
   border: none;
-  padding: 0 2px;
+  border-radius: 0;
   cursor: pointer;
+  font: inherit;
 }
 
-.stale-build-pill-action:hover {
+.stale-build-pill-action {
+  gap: 4px;
+  padding: 0 6px;
+  font-weight: 500;
+  color: var(--accent);
+}
+
+.stale-build-pill-icon { display: none; flex-shrink: 0; }
+
+.stale-build-pill-action:hover .stale-build-pill-label {
   text-decoration: underline;
 }
 
 .stale-build-pill-later {
-  flex-shrink: 0;
+  min-width: 26px;
+  padding: 0 6px;
   color: var(--fg-muted);
-  background: none;
-  border: none;
   font-size: 15px;
   line-height: 1;
-  padding: 0 2px;
-  cursor: pointer;
 }
 
 .stale-build-pill-later:hover {
   color: var(--fg);
 }
+
+.stale-build-pill.is-docked .stale-build-pill-later { margin-left: auto; }
 
 /* A light shadow disappears on a dark background; the border carries the edge. */
 [data-theme="dark"] .stale-build-pill {
@@ -33391,9 +33411,125 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
   }
 }
 
-/* On a narrow window the composer is taller and the pill has less room. */
+/* Docked: a row like the rail's own, in the flow. :root lifts it over the
+   floating notice's dark-theme shadow rules above. */
+:root .stale-build-pill.is-docked { box-shadow: none; }
+.sidebar-update-dock:empty { display: none; }
+
+.stale-build-pill.is-docked {
+  position: relative;
+  left: auto;
+  bottom: auto;
+  z-index: auto;
+  max-width: none;
+  margin: 0 0 4px;
+  padding: 0 0 0 10px;
+  border-radius: 8px;
+  border-color: var(--border);
+  box-shadow: none;
+}
+
+/* The collapsed rail is 56px wide: the icon and the verb, stacked, with the × on
+   the card's corner. The words before the verb ride the button's tooltip. */
+.sidebar.collapsed .stale-build-pill.is-docked {
+  flex-direction: column;
+  align-items: stretch;
+  margin: 8px 0 4px;
+  padding: 0;
+  min-height: 0;
+}
+
+.sidebar.collapsed .stale-build-pill.is-docked .stale-build-pill-text,
+.sidebar.collapsed .stale-build-pill.is-docked .stale-build-pill-sep {
+  display: none;
+}
+
+.sidebar.collapsed .stale-build-pill.is-docked .stale-build-pill-action {
+  flex-direction: column;
+  gap: 2px;
+  padding: 7px 0 5px;
+  border-radius: 7px;
+  font-size: 10px;
+  line-height: 1.1;
+}
+
+.sidebar.collapsed .stale-build-pill.is-docked .stale-build-pill-label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+/* The short verb is CSS content, so the button's text stays the full verb. */
+.sidebar.collapsed .stale-build-pill.is-docked .stale-build-pill-action::after {
+  content: attr(data-short);
+  white-space: nowrap;
+}
+
+.sidebar.collapsed .stale-build-pill.is-docked .stale-build-pill-icon { display: block; }
+
+.sidebar.collapsed .stale-build-pill.is-docked .stale-build-pill-action:hover {
+  background: var(--bg-hover, rgba(0, 0, 0, 0.05));
+}
+
+.sidebar.collapsed .stale-build-pill.is-docked .stale-build-pill-action:hover .stale-build-pill-label {
+  text-decoration: none;
+}
+
+.sidebar.collapsed .stale-build-pill.is-docked .stale-build-pill-later {
+  position: absolute;
+  top: -7px;
+  right: -7px;
+  width: 18px;
+  height: 18px;
+  min-width: 0;
+  padding: 0;
+  font-size: 12px;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 50%;
+}
+
+/* A popout has no rail: a thin bar along the window's bottom edge, in the flow,
+   under the composer. The leaf view gives up the bar's height. */
+.popout-root:has(> .popout-update-dock:not(:empty)) {
+  display: flex;
+  flex-direction: column;
+}
+.popout-root:has(> .popout-update-dock:not(:empty)) > :first-child {
+  flex: 1 1 auto;
+  min-height: 0;
+  /* A view without its own scroller (the task view) scrolls here, above the bar. */
+  overflow: auto;
+}
+.popout-root:has(> .popout-update-dock:not(:empty)) { padding-bottom: 0; }
+.popout-update-dock:empty { display: none; }
+/* Edge to edge: out over the root's 16px side padding, where a view keeps it. */
+.popout-update-dock { flex-shrink: 0; margin: 0 -16px; }
+.popout-root:has(.popout-file) > .popout-update-dock,
+.popout-root:has(.popout-session) > .popout-update-dock { margin: 0; }
+.popout-update-dock .stale-build-pill.is-docked {
+  margin: 0;
+  padding-left: 14px;
+  border: none;
+  border-top: 1px solid var(--border);
+  border-radius: 0;
+  background: var(--bg);
+}
+.popout-update-dock .stale-build-pill.is-docked .stale-build-pill-later { margin-left: 0; }
+
+/* The phone: centred above the bottom bar, where the old notice sat. */
 @media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
-  .stale-build-pill { bottom: 76px; font-size: 11px; }
+  .stale-build-pill:not(.is-docked) {
+    left: 0;
+    right: 0;
+    width: max-content;
+    margin: 0 auto;
+    bottom: 76px;
+    font-size: 11px;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

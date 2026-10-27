@@ -24,12 +24,19 @@ async function installed(page: Page, available: boolean) {
   await page.route(/\/api\/system\/desktop-update(\?|$)/, r => r.fulfill({ json: { available, token: available ? '12:old:new' : null } }))
 }
 
+let servedBundle = 'new-notice-build'
 async function drift(page: Page) {
   test.skip(process.env.PW_BUILT_SPA !== '1', 'Bundle drift needs the hashed production build')
+  servedBundle = 'new-notice-build'
   await page.clock.install()
   await page.route('**/api/config', async route => {
-    const response = await route.fetch()
-    await route.fulfill({ response, json: { ...await response.json(), webAssets: { bundle: 'new-notice-build' } } })
+    // A read the clock jumps left in flight when the test ends finds the page gone: not a failure.
+    try {
+      const response = await route.fetch()
+      await route.fulfill({ response, json: { ...await response.json(), webAssets: { bundle: servedBundle } } })
+    } catch (e) {
+      if (!String(e).includes('has been closed')) throw e
+    }
   })
 }
 
@@ -48,11 +55,32 @@ test('web-only drift offers Reload, Later hides one build, and reload is explici
   await showDrift(page)
   await expect(action(page)).toHaveText('Reload')
   await expect(pill(page)).toHaveAttribute('data-update-kind', 'web')
-  const box = (await pill(page).boundingBox())!
-  expect(Math.abs(box.x + box.width / 2 - 600)).toBeLessThan(2)
+  // In the rail, above the bell: it covers nothing of the page.
+  await expect(page.locator('#primary-sidebar .sidebar-update-dock > .stale-build-pill')).toHaveCount(1)
   await page.screenshot({ path: `${SHOTS}/web-only-${test.info().project.name}.png` })
   await action(page).click()
   await expect(pill(page)).toHaveCount(0)
+})
+
+test('web reload: × keeps the notice away for 30 minutes through another deploy, then it shows the newer build once', async ({ page }) => {
+  await drift(page)
+  await loadApp(page)
+  await showDrift(page)
+  await expect(action(page)).toHaveText('Reload')
+  await expect(pill(page)).toHaveAttribute('data-served', 'new-notice-build')
+  await page.locator('.stale-build-pill-later').click()
+  await expect(pill(page)).toHaveCount(0)
+  // Another deploy lands: the next check sees it, and the notice stays away.
+  servedBundle = 'newer-notice-build'
+  const compared = page.waitForEvent('console', { predicate: message => message.text().includes('server serves a newer build than this tab runs') })
+  await page.clock.fastForward(10 * 60_000)
+  await compared
+  await page.clock.fastForward(3 * 60_000)
+  await expect(pill(page)).toHaveCount(0)
+  // 30 minutes after the ×, the newer build is offered.
+  await page.clock.fastForward(18 * 60_000)
+  await expect(action(page)).toHaveText('Reload')
+  await expect(pill(page)).toHaveAttribute('data-served', 'newer-notice-build')
 })
 
 test('both installed app and web drift have one Restart, never a competing Reload, and it restarts on one click', async ({ page }) => {

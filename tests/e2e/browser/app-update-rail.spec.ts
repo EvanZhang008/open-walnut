@@ -87,30 +87,35 @@ async function expectNoSidebarUpdates(page: Page): Promise<void> {
 async function expectNotice(page: Page, status: Status, label: string): Promise<void> {
   await expect(pill(page)).toHaveCount(1)
   await expect(pill(page)).toBeVisible()
-  await expect(page.locator('body > .stale-build-pill')).toHaveCount(1)
+  await expect(page.locator('body > .stale-build-pill, .sidebar-update-dock > .stale-build-pill, .popout-update-dock > .stale-build-pill')).toHaveCount(1)
   await expect(pill(page)).toHaveAttribute('data-update-kind', 'release')
   await expect(action(page)).toHaveAttribute('data-status', status)
   await expect(action(page)).toHaveText(label)
   await expectNoSidebarUpdates(page)
 }
 
-async function expectBottomCentered(page: Page): Promise<void> {
+/**
+ * At the bottom, covering nothing: in the rail above the bell, or in a popout (no rail)
+ * as a thin bar along the window's bottom edge, under the composer.
+ */
+async function expectAtBottom(page: Page): Promise<void> {
   const viewport = page.viewportSize()!
-  await expect.poll(async () => pill(page).evaluate((el) => getComputedStyle(el).position)).toBe('fixed')
-  await expect.poll(async () => {
-    const box = await pill(page).boundingBox()
-    return box ? Math.abs(box.x + box.width / 2 - viewport.width / 2) : Infinity
-  }).toBeLessThanOrEqual(1)
-  await expect.poll(async () => pill(page).evaluate((el) => {
-    const box = el.getBoundingClientRect()
-    return Math.abs(box.bottom + parseFloat(getComputedStyle(el).bottom) - window.innerHeight)
-  })).toBeLessThanOrEqual(1)
   const box = (await pill(page).boundingBox())!
-  expect(box.y).toBeGreaterThan(viewport.height / 2)
   expect(box.x).toBeGreaterThanOrEqual(0)
   expect(box.x + box.width).toBeLessThanOrEqual(viewport.width)
-  expect(viewport.height - box.y - box.height).toBeGreaterThan(0)
-  expect(viewport.height - box.y - box.height).toBeLessThanOrEqual(128)
+  expect(box.y).toBeGreaterThan(viewport.height / 2)
+  if (await page.locator('#primary-sidebar').count()) {
+    await expect(page.locator('#primary-sidebar .sidebar-update-dock > .stale-build-pill.is-docked')).toHaveCount(1)
+    const rail = (await page.locator('#primary-sidebar').boundingBox())!
+    const bell = (await page.locator('.sidebar-notification-btn').boundingBox())!
+    expect(box.x + box.width).toBeLessThanOrEqual(rail.x + rail.width + 0.5)
+    expect(box.y + box.height).toBeLessThanOrEqual(bell.y + 0.5)
+    return
+  }
+  await expect(page.locator('.popout-update-dock > .stale-build-pill.is-docked')).toHaveCount(1)
+  expect(Math.abs(viewport.height - box.y - box.height)).toBeLessThanOrEqual(1)
+  const composer = (await page.locator('.session-panel-input').first().boundingBox())!
+  expect(composer.y + composer.height).toBeLessThanOrEqual(box.y + 0.5)
 }
 
 async function openSessionPopout(page: Page): Promise<Page> {
@@ -188,7 +193,7 @@ test('UC-3: available, download progress, Read more, and Restart that installs a
   await shell.push(page, AVAILABLE)
   await expectNotice(page, 'available', 'Download')
   await expect(action(page)).toHaveAttribute('title', 'Update 0.6.9 ready to download')
-  await expectBottomCentered(page)
+  await expectAtBottom(page)
   await pill(page).screenshot({ path: `${SHOTS}/uc3-available-${browserName}.png` })
 
   await action(page).click()
@@ -253,7 +258,7 @@ test('UC-4: download errors show a home toast or a popout dialog, and both allow
   const child = await openSessionPopout(page)
   try {
     await expectNotice(child, 'available', 'Download')
-    await expectBottomCentered(child)
+    await expectAtBottom(child)
     await action(child).click()
     await expect.poll(() => shell.waiting(child, 'download')).toBe(true)
     await shell.push(child, at(30))
@@ -357,17 +362,16 @@ test('UC-5: install errors keep Restart available and a second click retries', a
   await shell.answer(page, 'install', { accepted: true, completed: true, state: DOWNLOADED })
 })
 
-test('UC-6: one bottom-centered pill stays put when the sidebar expands; Settings drives the same flow', async ({ page, browserName }) => {
+test('UC-6: one notice docked in the rail, collapsed or expanded; Settings drives the same flow', async ({ page, browserName }) => {
   await installShell(page, AVAILABLE)
   await loadApp(page)
   await expect(page.locator('#primary-sidebar')).toHaveClass(/collapsed/)
   await expectNotice(page, 'available', 'Download')
-  await expectBottomCentered(page)
-  const collapsed = (await pill(page).boundingBox())!
+  await expectAtBottom(page)
   await page.screenshot({ path: `${SHOTS}/uc6-collapsed-available-${browserName}.png` })
   await shell.push(page, at(64))
   await expectNotice(page, 'downloading', 'Downloading 64%')
-  await expectBottomCentered(page)
+  await expectAtBottom(page)
   await pill(page).screenshot({ path: `${SHOTS}/uc6-collapsed-downloading-${browserName}.png` })
   await shell.push(page, AVAILABLE)
   await expectNotice(page, 'available', 'Download')
@@ -375,18 +379,15 @@ test('UC-6: one bottom-centered pill stays put when the sidebar expands; Setting
   await page.getByRole('button', { name: 'Expand sidebar' }).click()
   await expect(page.locator('#primary-sidebar')).not.toHaveClass(/collapsed/)
   await expectNotice(page, 'available', 'Download')
-  await expectBottomCentered(page)
-  await expect.poll(async () => {
-    const box = (await pill(page).boundingBox())!
-    return Math.max(Math.abs(box.x - collapsed.x), Math.abs(box.y - collapsed.y))
-  }).toBeLessThanOrEqual(1)
+  await expectAtBottom(page)
+  await expect(page.locator('.stale-build-pill-text')).toBeVisible()
   await page.screenshot({ path: `${SHOTS}/uc6-expanded-${browserName}.png` })
 
   await page.getByTestId('sidebar-core-app-settings').click()
   const settings = page.getByTestId('settings-app-update-btn')
   await expect(settings).toHaveText('Download')
   await expectNotice(page, 'available', 'Download')
-  await expectBottomCentered(page)
+  await expectAtBottom(page)
   await settings.click()
   await expect.poll(() => shell.waiting(page, 'download')).toBe(true)
   await shell.push(page, at(10))
