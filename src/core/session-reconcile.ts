@@ -1018,6 +1018,15 @@ export async function reconcileProcessStatus(
       ['*'],
       { source: 'session-reconcile', urgency: 'urgent' },
     )
+    // The turn ended with no live result: tell the turn-end hooks, as the snapshot lane does
+    // (session-snapshot-apply.ts), or the task never gets its report and keeps reading "its turn
+    // handed it back to you" (2026-10-27: a task whose report said it could be closed).
+    if (to === 'idle' && record.process_status === 'running') {
+      const { bus, EventNames } = await import('./event-bus.js')
+      bus.emit(EventNames.SESSION_TURN_SETTLED, {
+        sessionId: sid, ...(record.taskId ? { taskId: record.taskId } : {}), source: 'session-reconcile',
+      }, ['*'], { source: 'session-reconcile' })
+    }
 
     // Free the task's session slot on terminal converge (mirrors the live result path
     // in session-runner which clears on stopped/error). Without this, a reconciled

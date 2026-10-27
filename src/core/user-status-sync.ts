@@ -29,6 +29,9 @@ const SUBSCRIBER = 'user-status-sync';
 const OWN_SOURCE = 'user-status';
 const DEBOUNCE_MS = 1_500;
 const SWEEP_MS = 60_000;
+/** After start, when the lost turn-end reports are asked for again (sessions attach first). */
+const MISSED_REPORTS_DELAY_MS = 45_000;
+let missedReportsTimer: ReturnType<typeof setTimeout> | null = null;
 /** Emitted by human-inbox/letter-ops.ts when a letter is answered (or withdrawn). */
 const LETTER_ANSWERED = 'human-inbox:answered';
 /** Emitted by human-inbox/store.ts setLetterState: a letter read, archived or pinned. */
@@ -410,6 +413,13 @@ export function startUserStatusSync(): void {
   markAll();
   void import('./sessions/report-phase.js').then(({ applyStoredReports }) => applyStoredReports())
     .catch((err) => log.task.warn('user-status: stored reports not applied', { error: errText(err) }));
+  // Once the sessions are attached again: the reports a restart lost are asked for again.
+  missedReportsTimer = setTimeout(() => {
+    missedReportsTimer = null;
+    void import('./sessions/report-phase.js').then(({ askMissedReports }) => askMissedReports())
+      .catch((err) => log.task.warn('user-status: lost reports not asked again', { error: errText(err) }));
+  }, MISSED_REPORTS_DELAY_MS);
+  missedReportsTimer.unref?.();
   sweep = setInterval(() => { dropSlow(); markAll(); }, SWEEP_MS);
   sweep.unref?.();
   log.task.info('user-status: started');
@@ -431,6 +441,8 @@ export async function settleUserStatusSync(): Promise<void> {
 export function stopUserStatusSync(): void {
   bus.unsubscribe(SUBSCRIBER);
   onReportPendingChange(null);
+  if (missedReportsTimer) clearTimeout(missedReportsTimer);
+  missedReportsTimer = null;
   live = false;
   if (timer) clearTimeout(timer);
   if (sweep) clearInterval(sweep);

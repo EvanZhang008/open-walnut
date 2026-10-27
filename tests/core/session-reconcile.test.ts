@@ -401,12 +401,21 @@ describe('reconcileProcessStatus — convergence (incidents B/D shape)', () => {
     await writeStream(sid, [initEvent(sid), userEvent(sid), resultEvent(sid), stateEvent(sid, 'idle')])
     const record = await stuckRunningRecord(sid, { pid: process.pid })
 
-    const outcome = await reconcileProcessStatus(record, { isAlive: true })
-    expect(outcome).toEqual({ converged: true, from: 'running', to: 'idle' })
+    const settled: unknown[] = []
+    bus.subscribe('test-turn-settled', (e) => { if (e.name === EventNames.SESSION_TURN_SETTLED) settled.push(e.data) },
+      { global: true, interest: [EventNames.SESSION_TURN_SETTLED] })
+    try {
+      const outcome = await reconcileProcessStatus(record, { isAlive: true })
+      expect(outcome).toEqual({ converged: true, from: 'running', to: 'idle' })
+    } finally {
+      bus.unsubscribe('test-turn-settled')
+    }
     const after = await getSessionByClaudeId(sid)
     expect(after?.process_status).toBe('idle')
     // Alive process keeps its PID — the FIFO is still usable for the next turn.
     expect(after?.pid).toBe(process.pid)
+    // The turn-end hooks hear of it (the self-report that sets the task's status).
+    expect(settled).toEqual([expect.objectContaining({ sessionId: sid, source: 'session-reconcile' })])
   })
 
   // 2026-09-29: attachToExisting registers the session manager, reconciles a

@@ -106,3 +106,34 @@ export async function applyStoredReports(): Promise<number> {
   if (moved) log.task.info('status reports moved phases at start', { moved });
   return moved;
 }
+
+/** How long ago a turn the start asks about again may have ended. */
+const MISSED_REPORT_WINDOW_MS = 2 * 60 * 60_000;
+
+/**
+ * At start, the turns whose report a restart lost: the quiet timer and the ask live in the old
+ * process (session-hooks/builtins.ts), so a deploy in those minutes left the task handed back
+ * with no report, reading "its turn handed it back to you" until its next turn (2026-10-27). Each
+ * such turn is announced again as settled, which re-arms its report. Only a task handed back by a
+ * recent turn with no report of it, whose session is alive between turns: a dead one cannot answer.
+ */
+export async function askMissedReports(nowMs = Date.now()): Promise<number> {
+  const { listTasks } = await import('../task-manager.js');
+  const { getSessionByClaudeId } = await import('../session-tracker.js');
+  const { reportIsCurrent } = await import('../user-status.js');
+  const { bus, EventNames } = await import('../event-bus.js');
+  const tasks = await listTasks().catch(() => [] as Task[]);
+  let asked = 0;
+  for (const task of tasks) {
+    if (task.phase !== 'NEED_ACTION' || !task.session_id || !task.phase_changed_at) continue;
+    const endedAt = Date.parse(task.phase_changed_at);
+    if (!Number.isFinite(endedAt) || nowMs - endedAt > MISSED_REPORT_WINDOW_MS) continue;
+    if (task.status_report && reportIsCurrent({ report: task.status_report, phaseChangedAt: task.phase_changed_at })) continue;
+    const rec = await getSessionByClaudeId(task.session_id).catch(() => null);
+    if (rec?.process_status !== 'idle' || rec.pendingPermission) continue;
+    bus.emit(EventNames.SESSION_TURN_SETTLED, { sessionId: task.session_id, taskId: task.id, source: 'restart' }, ['*'], { source: 'report-phase' });
+    asked++;
+  }
+  if (asked) log.task.info('status reports a restart lost: asked again', { asked });
+  return asked;
+}
