@@ -395,6 +395,7 @@ export class ClaudeCliAdapter implements ProtocolAdapter {
       let settled = false;
       let accumulatedText = '';
       let finalResult: ClaudeStreamResult | undefined;
+      let ranModel: string | undefined;
       let stderrTail = '';
       let child: OneShotHandle | undefined;
 
@@ -462,7 +463,7 @@ export class ClaudeCliAdapter implements ProtocolAdapter {
           resolve({
             content,
             stopReason: 'end_turn',
-            usage: toUsageStats(finalResult),
+            usage: toUsageStats(finalResult, ranModel),
           });
         });
       };
@@ -470,6 +471,7 @@ export class ClaudeCliAdapter implements ProtocolAdapter {
       // Consume one parsed JSONL line.
       const consumeLine = (line: string) => {
         const block = parseClaudeJsonlLine(line, {
+          onInit: (init) => { if (init.model) ranModel = init.model; },
           onResult: (r) => { finalResult = r; },
         });
         if (!block) return;
@@ -620,6 +622,7 @@ function sumUsage(a?: UsageStats, b?: UsageStats): UsageStats | undefined {
   if (!b) return a;
   const add = (x?: number, y?: number) => (x ?? 0) + (y ?? 0);
   return {
+    ...((b.model ?? a.model) ? { model: b.model ?? a.model } : {}),
     input_tokens: add(a.input_tokens, b.input_tokens),
     output_tokens: add(a.output_tokens, b.output_tokens),
     cache_creation_input_tokens: add(a.cache_creation_input_tokens, b.cache_creation_input_tokens),
@@ -627,11 +630,16 @@ function sumUsage(a?: UsageStats, b?: UsageStats): UsageStats | undefined {
   };
 }
 
-/** Map the CLI result line's usage into Walnut's UsageStats. */
-function toUsageStats(result?: ClaudeStreamResult): UsageStats | undefined {
+/**
+ * Map the CLI result line's usage into Walnut's UsageStats. `model` is the one
+ * the CLI's init line says it ran, so a call asked for by alias ("haiku") is
+ * recorded, and priced, as the model it resolved to.
+ */
+function toUsageStats(result?: ClaudeStreamResult, model?: string): UsageStats | undefined {
   const u = result?.usage;
   if (!u) return undefined;
   return {
+    ...(model ? { model: model.replace(/\[1m\]$/, '') } : {}),
     input_tokens: u.input_tokens,
     output_tokens: u.output_tokens,
     cache_creation_input_tokens: u.cache_creation_input_tokens,

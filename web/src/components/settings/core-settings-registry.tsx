@@ -263,7 +263,7 @@ export const CORE_SETTINGS_CONTRIBUTIONS: readonly CoreSettingsContribution[] = 
   {
     owner: 'walnut', id: 'usage', label: 'Usage & Costs', title: 'Usage & Costs', group: 'diagnostics',
     icon: 'bar-chart', tint: '#34C759',
-    description: "What Walnut's model calls cost, by day and by feature.",
+    description: 'What models cost: Walnut itself and every coding agent, estimated from tokens at public list prices.',
     keywords: ['cost', 'tokens', 'spend', 'price'],
     render: () => <UsageSection />,
   },

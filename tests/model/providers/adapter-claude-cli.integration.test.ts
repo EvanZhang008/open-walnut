@@ -68,6 +68,8 @@ JSONL
     // Usage came off the result line.
     expect(result.usage?.input_tokens).toBe(11);
     expect(result.usage?.output_tokens).toBe(3);
+    // The model is the one the CLI's init line says it ran (a call by alias is priced as it).
+    expect(result.usage?.model).toBe('claude-opus-4-8');
   });
 
   it('reads the prompt from stdin (the CLI receives our serialized messages)', async () => {
