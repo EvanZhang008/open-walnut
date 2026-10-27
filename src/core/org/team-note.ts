@@ -28,6 +28,7 @@ import type { Task } from '../types.js';
 import { createEnvelopeKit } from '../peers/envelope-kit.js';
 import { buildOrgTree, projectKey, type OrgTaskNode } from './org-tree.js';
 import { newsItem, shortTitle, teamNews, type TeamNewsItem, type TeamNewsTask } from './team-news.js';
+import { askKey, readAsk } from './team-asks.js';
 
 const kit = createEnvelopeKit();
 
@@ -46,10 +47,55 @@ export interface TeamAsk {
   title: string;
   /** Who asked: "the user", or the asking task's title. */
   from: string;
+  /** A person or another task; absent in a row an older Walnut wrote (from "the user" = a person). */
+  by?: 'user' | 'peer';
+  /** One line of what was asked: a question's own words. '' when the words are not known. */
   gist: string;
   at: string;
+  /** The number of the task's question it is about (`[Question Q<n>]`), when it is in one, and the
+   *  session that numbered it (each session numbers its own). */
+  question?: number;
+  sessionId?: string;
+  /** `gist` is the question's own words, as its thread keeps them. */
+  questionWords?: boolean;
+  /** The newest message's words, when it is not the first (a person's chat). */
+  latest?: string;
+  /** Messages it stands for, when more than one: the same question or chat again. */
+  count?: number;
+  /** When the latest of them came. */
+  lastAt?: string;
   /** The queue row it came in: a resend with the same id is the same ask. */
   messageId?: string;
+  /** The rows of the later messages counted on it. */
+  messageIds?: string[];
+}
+
+/** One line of the note: the pending asks that are one (team-asks.ts askKey), told once. */
+export interface TeamAskLine extends TeamAsk {
+  /** Every row it stands for, with the messages it counted on each, cleared once told. */
+  rows: { id: string; count: number }[];
+  count: number;
+  lastAt: string;
+}
+
+/** The pending asks as the note tells them: one line per ask, in the order of its latest message. */
+export function groupTeamAsks(asks: readonly TeamAsk[]): TeamAskLine[] {
+  const lines = new Map<string, TeamAskLine>();
+  for (const raw of asks) {
+    const a = readAsk(raw);
+    const key = askKey(a);
+    const lastAt = a.lastAt ?? a.at;
+    const line = lines.get(key);
+    const count = a.count ?? 1;
+    if (!line) { lines.set(key, { ...a, rows: [{ id: a.id, count }], count, lastAt }); continue; }
+    line.rows.push({ id: a.id, count });
+    line.count += count;
+    if (a.questionWords && !line.questionWords) { line.gist = a.gist; line.questionWords = true; }
+    else if (!line.gist && a.gist) line.gist = a.gist;
+    else if (!line.question && lastAt >= line.lastAt && (a.latest || a.gist)) line.latest = a.latest || a.gist;
+    if (lastAt > line.lastAt) line.lastAt = lastAt;
+  }
+  return [...lines.values()].sort((x, y) => x.lastAt.localeCompare(y.lastAt));
 }
 
 /** A team task that waits on this lead, with what it waits for, in its status's words. */
@@ -65,7 +111,7 @@ export interface TeamNotePlan {
   moved: TeamNewsItem[];
   added: TeamNewsItem[];
   done: string[];
-  asks: TeamAsk[];
+  asks: TeamAskLine[];
   /** The projects the lead leads now; and, against the last note, the ones it took over or let go. */
   led: string[];
   ledAdded: string[];
@@ -142,7 +188,7 @@ export function planTeamNote(
   const byId = new Map(open.map((t) => [t.id, t] as const));
   const waitOf = (i: TeamNewsItem): LeadWait => ({ ...i, waitingOn: clean(byId.get(i.taskId)?.user_status?.waitingOn) });
   const waiting = (i: TeamNewsItem) => waitsOnLead(byId.get(i.taskId)!, ctx.leadId);
-  const asks = [...(ctx.asks ?? [])];
+  const asks = groupTeamAsks(ctx.asks ?? []);
   const none = { added: [] as TeamNewsItem[], done: [] as string[], ledAdded: [] as string[], ledRemoved: [] as string[] };
   if (!prev) {
     const needs = news.filter((i) => i.state === 'needs');
@@ -223,7 +269,13 @@ export function buildTeamNoteText(
     + (ledLine ? `${ledLine.trim()}\n` : '');
   const waitLine = (w: LeadWait) => `${label(w)} (${ago(w.at, nowMs) || 'waiting'})${w.waitingOn ? `: ${shortTitle(w.waitingOn, WORDS_MAX)}` : ''}`
     + (w.words ? `. It said: ${shortTitle(w.words, WORDS_MAX)}` : '');
-  const askLine = (a: TeamAsk) => `${projectOf(a.taskId) ? `[${projectOf(a.taskId)}] ` : ''}"${shortTitle(a.title, 80)}", from ${a.from} (${ago(Date.parse(a.at), nowMs) || 'just now'}): ${shortTitle(a.gist, WORDS_MAX)}`;
+  const askLine = (a: TeamAskLine) => {
+    const latest = ago(Date.parse(a.lastAt), nowMs) || 'just now';
+    const when = [a.question ? 'a question in its chat' : '', a.count > 1 ? `${a.count} messages, the latest ${latest}` : latest].filter(Boolean).join(', ');
+    const latestWords = !a.question && a.latest && a.latest !== a.gist ? `; the latest: ${shortTitle(a.latest, WORDS_MAX)}` : '';
+    const words = (a.gist ? shortTitle(a.gist, WORDS_MAX) : 'read it in the task (task_history)') + latestWords;
+    return `${projectOf(a.taskId) ? `[${projectOf(a.taskId)}] ` : ''}"${shortTitle(a.title, 80)}", from ${a.from} (${when}): ${words}`;
+  };
   const asksSection = plan.asks.length
     ? `Asked of your teams by others:\n${plan.asks.slice(-TEAM_NOTE_MAX.asks).map((a) => `- ${askLine(a)}`).join('\n')}`
       + `${plan.asks.length > TEAM_NOTE_MAX.asks ? `\n- and ${plan.asks.length - TEAM_NOTE_MAX.asks} earlier, in the next note` : ''}\n`
@@ -356,7 +408,7 @@ export async function pendingTeamNote(lead: Task, sessionId: string, nowMs = Dat
           sessionId, taskId: lead.id, error: err instanceof Error ? err.message : String(err),
         }));
         // Only the asks the note showed; the earlier ones ride the next note.
-        if (plan.asks.length) await clearTeamAsks(lead.id, plan.asks.slice(-TEAM_NOTE_MAX.asks).map((a) => a.id)).catch(() => undefined);
+        if (plan.asks.length) await clearTeamAsks(lead.id, plan.asks.slice(-TEAM_NOTE_MAX.asks).flatMap((a) => a.rows)).catch(() => undefined);
         claims.delete(lead.id);
         log.session.info('team note queued', {
           sessionId, taskId: lead.id, kind: plan.kind,

@@ -8,6 +8,7 @@
  *   - the note rides the queued row of an ordinary send, and only that one
  *   - a worker that waits on the lead wakes it with the note, once (lead-waits.ts)
  *   - an ask into a team task from outside the team is listed; the team's own is not (team-asks.ts)
+ *   - one question asked over several messages is one line, in the question's own words
  *   - after a compaction the lead reads its teams back in full (open-items.ts)
  * Only the Claude CLI is mocked (no session is started here).
  */
@@ -20,7 +21,7 @@ vi.mock('../../src/constants.js', () => createMockConstants('walnut-org-team-not
 import { WALNUT_HOME } from '../../src/constants.js'
 import { startServer, stopServer } from '../../src/web/server.js'
 import { addTask, completeTask, getTask, updateTask, updateTaskRaw } from '../../src/core/task-manager.js'
-import { createSessionRecord } from '../../src/core/session-tracker.js'
+import { createSessionRecord, updateSessionRecord } from '../../src/core/session-tracker.js'
 import { ensureProjectLead, pendingOrgDigest } from '../../src/core/org/org-store.js'
 import { _resetTeamNoteClaimsForTesting } from '../../src/core/org/team-note.js'
 import { deleteMessage, getQueue, sendMessageToSession } from '../../src/core/session-message-queue.js'
@@ -176,6 +177,47 @@ describe('what reaches the lead without a message from anyone', () => {
     const note = await pendingOrgDigest(LEAD_SID)
     expect(note!.text).toContain('Asked of your teams by others:\n- "Water the roses", from the user (just now): Please also renew the parking permit.\n- "Water the roses", from Main (just now): Check the fence too')
     await note!.markTold()
+    expect(await pendingTeamAsks(leadId)).toEqual([])
+    for (const m of await getQueue(sid)) await deleteMessage(sid, m.id)
+  })
+
+  it('one question asked over several messages is one line, in the question\'s own words', async () => {
+    // 2026-10-27, the org's reflection: a lead's note listed "[Question Q12]" / "[Question Q13]" six times.
+    const sid = '66666666-7777-4888-9999-aaaaaaaaaaaa'
+    const beds = (await addTask({ title: 'Plan the raised beds', project: 'Garden' })).task.id
+    await createSessionRecord(sid, beds, 'Garden', WALNUT_HOME)
+    const now = new Date().toISOString()
+    await updateSessionRecord(sid, { threadMeta: [{ headId: 'head-12', status: 'open', seq: 12, question: 'How deep should the beds be?\nFor carrots.', title: 'Bed depth', updatedAt: now }] })
+    const banner = (n: number) => `[Question Q${n}]\nThis message is question ${n} of this conversation. Begin your reply with the line "[Q${n}]" (nothing else on that line) so the reply is filed under question ${n}.\n[/Question Q${n}]`
+    // Each one recorded before the next goes in (a recording runs beside its send).
+    const counted = async () => (await pendingTeamAsks(leadId)).reduce((n, a) => n + (a.count ?? 1), 0)
+    const say = async (text: string, total: number) => {
+      await sendMessageToSession(sid, text, { source: 'ui' })
+      await until(`${total} messages counted`, async () => (await counted()) === total)
+    }
+    // The question's first message here is a follow-up: the line still shows the question's own words.
+    await say(`${banner(12)}\n\nand for potatoes?`, 1)
+    await say(`${banner(12)}\n\nand for carrots?`, 2)
+    await say(`${banner(13)}\n\n(Back to the earlier question about \u201cSoil\u201d)\n\n> Mix in compost.\n\nHow much compost?`, 3)
+    await say(`${banner(12)}\n\nand for leeks?`, 4)
+    await say('(Back to the main conversation)\n\nOrder the timber too.', 5)
+    await say('Pine is fine.', 6)
+    expect((await pendingTeamAsks(leadId)).map((a) => [a.question ?? null, a.latest ? `${a.gist} / ${a.latest}` : a.gist, a.count ?? 1])).toEqual([
+      [13, 'How much compost?', 1], [12, 'How deep should the beds be?', 3], [null, 'Order the timber too. / Pine is fine.', 2],
+    ])
+    _resetTeamNoteClaimsForTesting()
+    const note = await pendingOrgDigest(LEAD_SID)
+    const asked = note!.text.slice(note!.text.indexOf('Asked of your teams by others:'))
+    expect(asked).toMatch(/^Asked of your teams by others:\n- "Plan the raised beds", from the user \(a question in its chat, just now\): How much compost\?\n- "Plan the raised beds", from the user \(a question in its chat, 3 messages, the latest just now\): How deep should the beds be\?\n- "Plan the raised beds", from the user \(2 messages, the latest just now\): Order the timber too\.; the latest: Pine is fine\.\n/)
+    expect(note!.text).not.toContain('[Question')
+    // A message that comes in while the note is on its way is not cleared with it: the next note tells it.
+    await say('And stain it.', 7)
+    await note!.markTold()
+    expect((await pendingTeamAsks(leadId)).map((a) => [a.gist, a.count, a.latest])).toEqual([['And stain it.', 1, undefined]])
+    _resetTeamNoteClaimsForTesting()
+    const next = await pendingOrgDigest(LEAD_SID)
+    expect(next!.text).toContain('- "Plan the raised beds", from the user (just now): And stain it.\n')
+    await next!.markTold()
     expect(await pendingTeamAsks(leadId)).toEqual([])
     for (const m of await getQueue(sid)) await deleteMessage(sid, m.id)
   })

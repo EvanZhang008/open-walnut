@@ -1,6 +1,6 @@
 /** What a lead hears about its teams before its next message (src/core/org/team-note.ts), pure part. */
 import { describe, it, expect } from 'vitest'
-import { buildTeamNoteText, planTeamNote, teamFingerprint, TEAM_NOTE_MAX } from '../../../src/core/org/team-note.js'
+import { buildTeamNoteText, groupTeamAsks, planTeamNote, teamFingerprint, TEAM_NOTE_MAX } from '../../../src/core/org/team-note.js'
 import type { TeamNewsTask } from '../../../src/core/org/team-news.js'
 
 const at = (min: number) => new Date(Date.UTC(2026, 9, 26, 12, min)).toISOString()
@@ -170,5 +170,34 @@ describe('what waits on the lead, what it leads, what others asked', () => {
     expect(plan.kind).toBe('moved')
     expect(buildTeamNoteText(lead, plan, at(40), Date.parse(NOW))).toContain('Asked of your teams by others:\n- "a title", from Main (2 min ago): Also check the fence')
   })
-})
 
+  it('the same question or chat is told once, in its own words, with how many messages it was', () => {
+    const prev = planTeamNote(undefined, base, [], at(40)).next
+    const ask = (id: string, min: number, extra: Record<string, unknown>) =>
+      ({ id, taskId: 'a', title: 'a title', from: 'the user', gist: '', at: at(min), ...extra })
+    // An older Walnut's rows: one per message, the question kept as its banner line.
+    const asks = [
+      ask('q1', 41, { gist: 'Who removes the finalizer?', question: 12 }),
+      ask('q2', 42, { gist: '[Question Q12]' }),
+      ask('q3', 43, { gist: '[Question Q13]' }),
+      ask('q4', 44, { gist: '[Question Q12]' }),
+      ask('q5', 45, { gist: '[Question Q13]' }),
+      ask('c1', 46, { gist: 'sure, what else to decide?' }),
+      ask('c2', 47, { gist: '(Back to the main conversation)' }),
+      ask('c3', 48, { gist: 'is the big function async?', count: 2, lastAt: at(50) }),
+      { id: 'm1', taskId: 'a', title: 'a title', from: 'Main', by: 'peer', gist: 'Check the fence too', at: at(49) },
+    ]
+    const lines = groupTeamAsks(asks)
+    expect(lines.map((l) => [l.rows.map((r) => r.id), l.count])).toEqual([
+      [['q1', 'q2', 'q4'], 3], [['q3', 'q5'], 2], [['m1'], 1], [['c1', 'c2', 'c3'], 4],
+    ])
+    const text = buildTeamNoteText(lead, planTeamNote(prev, base, [], NOW, { ...ctx, asks }), at(40), Date.parse(NOW))
+    expect(text).toContain('Asked of your teams by others:\n'
+      + '- "a title", from the user (a question in its chat, 3 messages, the latest 16 min ago): Who removes the finalizer?\n'
+      + '- "a title", from the user (a question in its chat, 2 messages, the latest 15 min ago): read it in the task (task_history)\n'
+      + '- "a title", from Main (11 min ago): Check the fence too\n'
+      + '- "a title", from the user (4 messages, the latest 10 min ago): sure, what else to decide?; the latest: is the big function async?\n')
+    expect(text).not.toContain('[Question')
+    expect(text).not.toContain('Back to the main')
+  })
+})
