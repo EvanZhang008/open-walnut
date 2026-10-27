@@ -9,7 +9,9 @@
   height: 0;
   /* The timeline's flex gap would otherwise add 4px for an empty layer. */
   margin-bottom: -4px;
-  z-index: 6;
+  /* Above the timeline's own floating controls (the jump-to-bottom arrow is
+     10): an open card is what the reader is working in. */
+  z-index: 11;
   overflow: visible;
   pointer-events: none;
 }

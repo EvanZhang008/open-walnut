@@ -320,6 +320,20 @@ test.describe('the fullscreen review sidebar', () => {
     await expect(fifth).toHaveAttribute('data-enlarged', 'true')
     expect(await fifth.evaluate((el) => getComputedStyle(el).visibility)).toBe('hidden')
     await expect(card.locator('.thread-card-input')).toHaveValue('half a thought, and more')
+    // Nothing of the timeline floats over the card (2026-10-27 on prod: the
+    // jump-to-bottom arrow sat on the enlarged card's box).
+    const covered = await card.evaluate((el) => {
+      const c = el.getBoundingClientRect()
+      for (const o of document.querySelectorAll('.scroll-to-bottom-btn, .session-toc')) {
+        const r = o.getBoundingClientRect()
+        const x0 = Math.max(c.left, r.left), x1 = Math.min(c.right, r.right), y0 = Math.max(c.top, r.top), y1 = Math.min(c.bottom, r.bottom)
+        if (x1 - x0 < 2 || y1 - y0 < 2) continue
+        const hit = document.elementFromPoint((x0 + x1) / 2, (y0 + y1) / 2)
+        if (!hit || !el.contains(hit)) return o.className
+      }
+      return null
+    })
+    expect(covered, 'the card is on top').toBeNull()
     // The whole conversation: each question as the blue bubble (the follow-up
     // just asked from the review card is the second), the answers in full.
     await expect(card.locator('.thread-card-q .session-msg-user')).toHaveCount(2)
