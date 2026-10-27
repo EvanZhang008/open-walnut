@@ -15,7 +15,7 @@ import { DeliveryMetaLine } from './DeliveryMetaLine';
 import { latestTurnStartTop, READER_SCROLL_EVENT } from './phone-session-layer';
 import { isPhoneLayout } from '@/hooks/usePhoneLayout';
 import { JumpPillLabel, PromptWaitingPill } from './PhoneTimelinePills';
-import { SessionMessage, SessionThinking, StableMarkdownBody, ToolRunShell, StreamRunMembers, streamRunSummary, streamRunHasCallingTool, isToolOnlyMessage, isThinkingOnlyMessage, isTextPlusMergeableTools, mergeThinkingOnly, trailingThinkingOnlyStart, MergedHistoryToolRun, SystemGroupRun, systemGroupMemberFromHistory, type SystemGroupMember, type StreamRunMember } from './SessionMessage';
+import { SessionMessage, SessionThinking, StableMarkdownBody, ToolRunShell, StreamRunMembers, streamRunSummary, streamRunHasCallingTool, runRowKey, isToolOnlyMessage, isThinkingOnlyMessage, isTextPlusMergeableTools, mergeThinkingOnly, trailingThinkingOnlyStart, MergedHistoryToolRun, SystemGroupRun, systemGroupMemberFromHistory, type SystemGroupMember, type StreamRunMember } from './SessionMessage';
 import { useEntityClickHandler } from '@/hooks/useEntityClickHandler';
 import { StreamingBlockView, WorkingIndicator, countStreamChars } from './StreamingBlockView';
 import { SessionWorkingIndicator } from './SessionWorkingIndicator';
@@ -53,6 +53,7 @@ import { ThreadStackHeader } from './ThreadStackHeader';
 import { ThreadTurnLabel } from './ThreadTurnLabel';
 import { foldGroupOf, foldOpenKeys, foldParts, isFolded } from '@/utils/thread-fold';
 import { groupProcessParts, processPhrase, type ContextCounts } from './process-fold';
+import { chunkByKind, leadingStepGroup, stepGroups, type StepGroup, type StepKind } from './stream-step-groups';
 import { isEnvelopeOnly, parseSessionEnvelopes } from '@open-walnut/history-session-envelope';
 import { HiddenTurnsRow, NoActionMark, ProcessFoldRow, hiddenTurnsKey, openTurnFold, processFoldKey, turnFoldKey } from './TurnFolds';
 import { shapeTurns, type TurnShape } from '@/utils/turn-shape';
@@ -2769,6 +2770,25 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     isTransparentStreamItem(item)
     || (item.kind === 'block' && consumedBlockIndices.has(item.index) && !groupedByIndex.has(item.index));
 
+  // A card an agent sent (another task's note, Walnut's notice, a trigger) folds
+  // the moment it arrives, as history folds it once the turn is over; shown in
+  // full until then, it sat open for seconds (2026-10-26, the user: "why it still
+  // show for few second, I think directly collapse"). Who sent it comes from the
+  // send's source (OptimisticMessage.sentBy); a person's row never folds, and nor
+  // does anything with words besides the cards. Neighbours share one row (not in
+  // stack or Conversation Mode, which file each row under its own question).
+  const isAgentCard = (m: OptimisticMessage) => m.sentBy === 'agent' && m.status !== 'failed' && editingId !== m.queueId
+    && isEnvelopeOnly(parseSessionEnvelopes(m.text ?? ''));
+  // What each timeline item is to the step groups (stream-step-groups.ts): steps
+  // and agent cards with nothing a person reads between them are one row.
+  const stepKinds: StepKind[] = timeline.map((item) => {
+    if (isSilentStreamItem(item)) return 'silent';
+    if (isMergeableStreamItem(item, consumedBlockIndices, groupedByIndex)) return 'step';
+    if (item.kind === 'user' && !stackMode && !convMode && isAgentCard(item.msg)) return 'card';
+    return 'other';
+  });
+  const leadingGroup = leadingStepGroup(stepKinds);
+
   // The live turn's first blocks continue history's last run across the
   // history/stream boundary. Trailing reasoning that led to whatever ended the
   // scan stays in the stream (it becomes its own row there, the way the
@@ -2808,6 +2828,10 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     return injectedContextKind(part.m);
   };
   const isContextPart = (part: HistoryPart) => contextKindOf(part) !== null;
+  /** Reasoning alone, a "Thinking ›" row: no words, no tools. */
+  const isThinkingPart = (part: HistoryPart): boolean => part.kind === 'msg' && part.m.role === 'assistant'
+    && part.globalIndex !== forkBoundaryIndex && !gapAt.has(part.globalIndex)
+    && !(part.m.text ?? '').trim() && (part.m.tools?.length ?? 0) === 0 && !!(part.m.thinking ?? '').trim();
   const contextCounts = (parts: readonly HistoryPart[]): ContextCounts => {
     const n = { skills: 0, other: 0 };
     for (const part of parts) {
@@ -2817,8 +2841,10 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     }
     return n;
   };
+  // The fold takes the stream's whole leading group (steps and the cards between
+  // them); a group holding a card opens it over history's trailing runs too.
   const liveTailStart = (() => {
-    if (!isStreaming || stackMode || convMode || boundaryHasForkDivider || leadingStreamRunIndices.length === 0) return -1;
+    if (!isStreaming || stackMode || convMode || boundaryHasForkDivider || !leadingGroup) return -1;
     let s = historyParts.length;
     let inbound = false;
     let context = false;
@@ -2827,12 +2853,16 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       const isInbound = part.kind === 'msg' && part.m.role === 'user' && part.globalIndex !== forkBoundaryIndex
         && !gapAt.has(part.globalIndex) && isHistorySentRow(part.m) && !isHistoryUserTurn(part.m);
       const isContext = !isInbound && isContextPart(part);
-      if (!isInbound && !isContext && part.kind !== 'run') break;
+      if (!isInbound && !isContext && part.kind !== 'run' && !isThinkingPart(part)) break;
       inbound ||= isInbound;
       context ||= isContext;
       s--;
     }
-    if (inbound) return s;
+    // A card in the group takes history's trailing steps only back to the person's
+    // message that started this turn, never a previous turn's tail.
+    const stopAt = historyParts[s - 1];
+    const personStart = stopAt?.kind === 'msg' && isHistoryUserTurn(stopAt.m);
+    if (inbound || (leadingGroup.cards > 0 && s < historyParts.length && personStart)) return s;
     // Context alone opens it only right after the person's message: that is
     // where the answered turn's fold starts too (pushTurnFold), so the row keeps
     // its key and open state when the turn ends. After words mid-turn it would not.
@@ -2843,7 +2873,8 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     && boundaryHistoryRun != null
     && !boundaryHasForkDivider
     && leadingStreamRunIndices.length > 0;
-  const boundaryStreamIndices = mergeBoundary || liveTailStart >= 0 ? new Set(leadingStreamRunIndices) : new Set<number>();
+  const boundaryStreamIndices = liveTailStart >= 0 && leadingGroup ? new Set(leadingGroup.members)
+    : mergeBoundary ? new Set(leadingStreamRunIndices) : new Set<number>();
   const renderedHistoryParts = mergeBoundary ? historyParts.slice(0, -1) : historyParts;
   // A finished, clean turn that something other than a person started and that
   // ended with the acknowledgement line alone (turn-end-marker.ts): hidden.
@@ -3011,6 +3042,13 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       const t = timeline[k];
       return t.kind === 'block' && isRunMemberBlock(t.block) ? [t.block] : [];
     });
+
+  /** A stream run's calls, read the way a history row's tools are. */
+  const streamToolsOf = (members: readonly StreamRunMember[]): SessionHistoryTool[] => members.flatMap((b) => (
+    b.type === 'tool_call' ? [{ name: b.name ?? 'unknown', input: b.input, isError: b.status === 'error' } as SessionHistoryTool] : []
+  ));
+  const streamFailedOf = (members: readonly StreamRunMember[]): number => members
+    .filter((b) => b.type === 'tool_call' && b.status === 'error' && !isRoutedQuestion(b.name, b.result)).length;
 
   const hasContent = messages.length > 0 || timeline.length > 0 || isStreaming
     || deduped.length > 0;
@@ -3615,9 +3653,10 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
 
   /**
    * The finished steps of a turn, folded (process-fold.ts): a row's tools when it
-   * is one, `null` when it must stay on screen. Text, thinking, a failure, a
-   * question, a plan or agent card, and a row carrying a fork or gap divider all
-   * stay out, so nothing the reader must see goes behind a click.
+   * is one, `null` when it must stay on screen. Text, a failure, a question, a
+   * plan or agent card, and a row carrying a fork or gap divider all stay out, so
+   * nothing the reader must see goes behind a click. Reasoning alone is not a
+   * tool row either; it joins a group as `isThinkingPart` (process-fold.ts).
    */
   const processToolsOf = (part: HistoryPart): SessionHistoryTool[] | null => {
     // Read once per part object: the parts array is memoized, and this runs on
@@ -3703,6 +3742,8 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // Asked-from list (spec 4 item 5, N30); rendered once, after the queue rows,
   // only when that last answer has no list.
   let stripPlaced = false;
+  // The live tail's fold, pushed once the stream's row renderers exist.
+  let liveTailRow: (() => React.ReactNode) | null = null;
   const lastPart = visibleHistoryParts.length - 1;
   // The last history line's folded question: the live tail goes on from it.
   let tailFoldGroup: string | null = null;
@@ -3733,6 +3774,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       isOutboundTool,
       ({ part, i }) => !askedAfter.has(i) && isInboundPart(part),
       ({ part, i }) => !askedAfter.has(i) && isContextPart(part),
+      ({ part, i }) => !askedAfter.has(i) && isThinkingPart(part),
     ).forEach((item) => {
       if (item.kind === 'process') { into.push(renderProcessParts(item.parts.map((p) => p.part))); return; }
       const { part, i } = item.part;
@@ -3847,35 +3889,35 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     }
     flushHidden();
     if (at < items.length) renderDefault(items.slice(at), pageRows);
-    if (liveTailStart >= 0) {
+    if (liveTailStart >= 0 && leadingGroup) {
       const tail = visibleHistoryParts.slice(tailFrom);
       const id = idOf(tail[0]);
-      const members = runMembersOf(leadingStreamRunIndices);
       markAll(tail.map((part, k) => ({ part, i: tailFrom + k })), turnFoldKey(id));
-      // Every call in it, a failed one in history too (it is folded with the rest
-      // while the turn runs, so the header has to say so).
-      const tailTools = tail.flatMap((part) => (part.kind === 'run' ? part.memberMsgs : [])).flatMap((m) => m.tools ?? []);
-      const tools = [
-        ...tailTools,
-        ...members.flatMap((b) => (b.type === 'tool_call' ? [{ name: b.name ?? 'unknown', input: b.input, isError: b.status === 'error' }] : [])),
-      ] as SessionHistoryTool[];
-      const failed = tailTools.filter((t) => t.isError && !isRoutedQuestion(t.name, t.result)).length
-        + members.filter((b) => b.type === 'tool_call' && b.status === 'error' && !isRoutedQuestion(b.name, b.result)).length;
       const head = headOf(tail[0]);
-      // Keyed like the answered turn's fold (pushTurnFold), so the row and its
-      // open state carry over when the turn ends and history takes the tools.
-      pageRows.push(
-        <div key={`turn-${id}`} data-turn-fold-index={head.globalIndex} {...threadWrapperProps(head.m.msgId ?? head.m.walnutMessageId, 'session-msg-bare')}>
-          <ProcessFoldRow foldId={id} foldKey={turnFoldKey(id)} testId="turn-fold" failed={failed}
-            running={isThinkingTail(leadingStreamRunIndices[leadingStreamRunIndices.length - 1]) || streamRunHasCallingTool(members)}
-            phrase={processPhrase(tools, isOutboundTool, tail.filter(isInboundPart).length, contextCounts(tail))}>
-            {tail.map(renderHistoryPart)}
-            <StreamRunMembers members={members} live={isThinkingTail(leadingStreamRunIndices[leadingStreamRunIndices.length - 1])}
-              sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost}
-              onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />
-          </ProcessFoldRow>
-        </div>,
-      );
+      const group = leadingGroup;
+      // Built once renderQueuedRow exists (the group's cards render with it).
+      liveTailRow = () => {
+        const stepIdx = group.members.filter((k) => stepKinds[k] === 'step');
+        const members = runMembersOf(stepIdx);
+        // Every call in it, a failed one in history too (it is folded with the rest
+        // while the turn runs, so the header has to say so).
+        const tailTools = tail.flatMap((part) => (part.kind === 'run' ? part.memberMsgs : [])).flatMap((m) => m.tools ?? []);
+        const tools = [...tailTools, ...streamToolsOf(members)];
+        const failed = tailTools.filter((t) => t.isError && !isRoutedQuestion(t.name, t.result)).length + streamFailedOf(members);
+        const live = isThinkingTail(stepIdx[stepIdx.length - 1] ?? -1);
+        // Keyed like the answered turn's fold (pushTurnFold), so the row and its
+        // open state carry over when the turn ends and history takes the tools.
+        return (
+          <div key={`turn-${id}`} data-turn-fold-index={head.globalIndex} {...threadWrapperProps(head.m.msgId ?? head.m.walnutMessageId, 'session-msg-bare')}>
+            <ProcessFoldRow foldId={id} foldKey={turnFoldKey(id)} testId="turn-fold" failed={failed}
+              running={live || streamRunHasCallingTool(members)}
+              phrase={processPhrase(tools, isOutboundTool, tail.filter(isInboundPart).length + group.cards, contextCounts(tail))}>
+              {tail.map(renderHistoryPart)}
+              {renderGroupBody(group)}
+            </ProcessFoldRow>
+          </div>
+        );
+      };
     }
   }
 
@@ -4011,15 +4053,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // Always mount the scroll container so containerRef is available for scroll effects.
   // Remote sessions have a gap between Phase 1 (empty, local streams) and Phase 2 (SSH fetch)
   // where containerRef was previously null, breaking auto-scroll.
-  // A card an agent sent (another task's note, Walnut's notice, a trigger) folds
-  // the moment it arrives, as history folds it once the turn is over; shown in
-  // full until then, it sat open for seconds (2026-10-26, the user: "why it still
-  // show for few second, I think directly collapse"). Who sent it comes from the
-  // send's source (OptimisticMessage.sentBy); a person's row never folds, and nor
-  // does anything with words besides the cards. Neighbours share one row (not in
-  // stack or Conversation Mode, which file each row under its own question).
-  const isAgentCard = (m: OptimisticMessage) => m.sentBy === 'agent' && m.status !== 'failed' && editingId !== m.queueId
-    && isEnvelopeOnly(parseSessionEnvelopes(m.text ?? ''));
+  // Agent cards fold on arrival (isAgentCard, above); neighbours share one row.
   const queuedFolds = (() => {
     const starts = new Map<number, number[]>();
     const members = new Set<number>();
@@ -4111,6 +4145,50 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       </div>
     );
   };
+
+  // A step group's rows, unchanged, as its fold shows them opened: each stretch of
+  // steps as the run members a run row holds, each card as its queued row.
+  const renderGroupBody = (group: StepGroup): React.ReactNode[] => chunkByKind(group.members, (k) => stepKinds[k]).map((chunk) => (
+    chunk.kind === 'card'
+      ? chunk.members.map((k) => renderQueuedRow((timeline[k] as Extract<TimelineItem, { kind: 'user' }>).msg))
+      : (
+        <StreamRunMembers key={runRowKey(runMembersOf(chunk.members), chunk.members[0])} members={runMembersOf(chunk.members)}
+          live={isThinkingTail(chunk.members[chunk.members.length - 1])}
+          sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost}
+          onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />
+      )
+  ));
+  // Steps and cards in one stretch of the stream are one row (stream-step-groups.ts);
+  // a group of one kind keeps its own row (a run, or "Received N messages").
+  const mixedStart = new Map<number, StepGroup>();
+  const mixedMember = new Set<number>();
+  if (!stackMode && !convMode) {
+    for (const g of stepGroups(stepKinds)) {
+      if (g.cards === 0 || g.steps === 0 || g.members.some((k) => boundaryStreamIndices.has(k))) continue;
+      mixedStart.set(g.members[0], g);
+      for (const k of g.members.slice(1)) mixedMember.add(k);
+    }
+  }
+  const renderStepGroup = (group: StepGroup): React.ReactNode => {
+    const stepIdx = group.members.filter((k) => stepKinds[k] === 'step');
+    const members = runMembersOf(stepIdx);
+    const first = timeline[group.members[0]];
+    // A card heads it: the id its history row will carry, so the row keeps its key
+    // and open state if the card is taken into history mid-turn (the live tail's key).
+    const key = first.kind === 'user' ? (first.msg.msgId ?? first.msg.walnutMessageId ?? first.msg.queueId)
+      : runRowKey(runMembersOf([group.members[0]]), group.members[0]);
+    const live = isThinkingTail(stepIdx[stepIdx.length - 1] ?? -1);
+    return (
+      <div key={`turn-${key}`} className="session-msg-bare" data-testid="session-step-group-row">
+        <ProcessFoldRow foldId={key} foldKey={turnFoldKey(key)} testId="step-group-fold" failed={streamFailedOf(members)}
+          running={live || streamRunHasCallingTool(members)}
+          phrase={processPhrase(streamToolsOf(members), isOutboundTool, group.cards)}>
+          {renderGroupBody(group)}
+        </ProcessFoldRow>
+      </div>
+    );
+  };
+  if (liveTailRow) pageRows.push(liveTailRow());
 
   return (
     <>
@@ -4504,6 +4582,9 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
                 if (!isTransparentStreamItem(item)) tailFoldGroup = null;
               }
               if (boundaryStreamIndices.has(i) || isTransparentStreamItem(item)) return null;
+              if (mixedMember.has(i)) return null;
+              const stepGroup = mixedStart.get(i);
+              if (stepGroup) return renderStepGroup(stepGroup);
               if (systemRunMember.has(i)) return null;
               const systemRunIdx = systemRunStart.get(i);
               if (systemRunIdx && item.kind === 'block') {

@@ -50,17 +50,37 @@ export function groupProcessParts<P>(
   isInbound: (part: P) => boolean = () => false,
   /** Context the CLI injected (a loaded skill, a note): already a folded row. */
   isContext: (part: P) => boolean = () => false,
+  /** Reasoning alone (a "Thinking ›" row): it joins a group that holds a message
+   *  or context, so a turn receiving notices while it works reads as one row; among
+   *  tool runs alone it keeps its own row, as before. */
+  isQuiet: (part: P) => boolean = () => false,
 ): ProcessItem<P>[] {
   const out: ProcessItem<P>[] = [];
   let run: P[] = [];
   let start = -1;
   let sent = false;
+  let context = false;
+  const emit = (members: P[], from: number) => {
+    if (members.length >= 2 || (members.length === 1 && sent)) out.push({ kind: 'process', parts: members, start: from });
+    else members.forEach((part, k) => out.push({ kind: 'one', part, index: from + k }));
+  };
   const flush = () => {
-    if (run.length >= 2 || (run.length === 1 && sent)) out.push({ kind: 'process', parts: run, start });
-    else run.forEach((part, k) => out.push({ kind: 'one', part, index: start + k }));
+    if (!sent && !context && run.some(isQuiet)) {
+      // Nothing received, sent or injected: the reasoning splits the steps, as before.
+      let sub: P[] = [];
+      let subStart = start;
+      run.forEach((part, k) => {
+        if (!isQuiet(part)) { if (sub.length === 0) subStart = start + k; sub.push(part); return; }
+        emit(sub, subStart);
+        sub = [];
+        out.push({ kind: 'one', part, index: start + k });
+      });
+      emit(sub, subStart);
+    } else emit(run, start);
     run = [];
     start = -1;
     sent = false;
+    context = false;
   };
   parts.forEach((part, i) => {
     if (isInbound(part)) {
@@ -70,6 +90,12 @@ export function groupProcessParts<P>(
       return;
     }
     if (isContext(part)) {
+      if (run.length === 0) start = i;
+      run.push(part);
+      context = true;
+      return;
+    }
+    if (isQuiet(part)) {
       if (run.length === 0) start = i;
       run.push(part);
       return;

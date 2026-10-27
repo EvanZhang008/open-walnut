@@ -68,6 +68,19 @@ describe('groupProcessParts', () => {
       .map((g) => (g.kind === 'one' ? g.part.id : `[${g.parts.map((p) => p.id).join(',')}]`))).toEqual(['[run,note1]', 'words', '[skill1,note2]']);
   });
 
+  it('reasoning between received messages and runs joins their row; among runs alone it keeps its own', () => {
+    // The reported live shape (2026-10-26): Received, Thinking, Received, Ran 31 commands.
+    type R = { id: string; tools: SessionHistoryTool[] | null; inbound?: boolean; quiet?: boolean };
+    const rows: R[] = [
+      { id: 'in1', tools: null, inbound: true }, { id: 'think', tools: null, quiet: true },
+      { id: 'in2', tools: null, inbound: true }, { id: 'run', tools: [read('a')] }, { id: 'text', tools: null },
+      { id: 'run2', tools: [read('b')] }, { id: 'think2', tools: null, quiet: true }, { id: 'answer', tools: null },
+    ];
+    const got = groupProcessParts(rows, (r) => r.tools, isOutbound, (r) => !!r.inbound, () => false, (r) => !!r.quiet)
+      .map((g) => (g.kind === 'one' ? g.part.id : `[${g.parts.map((p) => p.id).join(',')}]`));
+    expect(got).toEqual(['[in1,think,in2,run]', 'text', 'run2', 'think2', 'answer']);
+  });
+
   it('nothing in, nothing out', () => {
     expect(groupProcessParts([], (r: Row) => r.tools, isOutbound)).toEqual([]);
   });
