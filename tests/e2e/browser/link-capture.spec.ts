@@ -182,8 +182,8 @@ test('a handled link opens in its plugin from a task and a session; the rest go 
   let modal = await openDetails(page)
   await modal.getByRole('link', { name: 'the permalink' }).click()
   await expectOpenedInPlugin(page, links.permalink, 'click')
-  await expect(page.getByTestId('link-fixture-channel')).toHaveText('C09N75FP9GR')
-  await expect(page.getByTestId('link-fixture-ts')).toHaveText('1791925699018009')
+  await expect(page.getByTestId('link-fixture-channel')).toHaveText('C0123ABCDEF')
+  await expect(page.getByTestId('link-fixture-ts')).toHaveText('1700000000123456')
   await expect(page.getByTestId('link-fixture-thread')).toHaveText('')
   // The modal the link was in closed: it does not sit on top of the App.
   await expect(page.locator('.task-detail-modal')).toHaveCount(0)
@@ -197,7 +197,7 @@ test('a handled link opens in its plugin from a task and a session; the rest go 
     // Several rounds: the second click after a trip to the App must work like the first.
     await answer.getByRole('link', { name: 'the thread reply' }).click()
     await expectOpenedInPlugin(page, links.reply, 'click')
-    await expect(page.getByTestId('link-fixture-thread')).toHaveText('1791925699.018009')
+    await expect(page.getByTestId('link-fixture-thread')).toHaveText('1700000000.123456')
     await backHome(page)
   }
   await col.locator(`a[href="${links.reply}"]`).filter({ hasText: links.reply }).first().click()
@@ -361,7 +361,7 @@ test('the notes editor opens a handled link in its plugin, once', async ({ page 
   const before = tabs().length
   await editor.getByRole('link', { name: 'the thread reply' }).click()
   await expectOpenedInPlugin(page, links.reply, 'click')
-  await expect(page.getByTestId('link-fixture-thread')).toHaveText('1791925699.018009')
+  await expect(page.getByTestId('link-fixture-thread')).toHaveText('1700000000.123456')
   await page.goBack()
   await expect(editor.getByRole('link', { name: 'the permalink' })).toBeVisible({ timeout: 30_000 })
   // A modifier click in the editor goes to the browser, as everywhere else.

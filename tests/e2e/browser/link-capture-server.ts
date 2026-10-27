@@ -33,13 +33,13 @@ const repoRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname), '
 
 const LINKS = {
   /** The shape of a real chat permalink, on a made-up host the plugin handles. */
-  permalink: 'https://acme.enterprise.chat.example.com/archives/C09N75FP9GR/p1791925699018009',
+  permalink: 'https://acme.enterprise.chat.example.com/archives/C0123ABCDEF/p1700000000123456',
   /** A reply in a thread: the same path plus the thread's ts. */
-  reply: 'https://acme.enterprise.chat.example.com/archives/C09N75FP9GR/p1791925712000200?thread_ts=1791925699.018009&cid=C09N75FP9GR',
+  reply: 'https://acme.enterprise.chat.example.com/archives/C0123ABCDEF/p1700000013000200?thread_ts=1700000000.123456&cid=C0123ABCDEF',
   /** A workspace the plugin is not signed into (its `accepts` says no). */
-  unknownWorkspace: 'https://unknown.chat.example.com/archives/C1/p1791925699018009',
+  unknownWorkspace: 'https://unknown.chat.example.com/archives/C1/p1700000000123456',
   /** A channel the plugin cannot open (its `open` returns false). */
-  declined: 'https://acme.enterprise.chat.example.com/archives/CDECLINE/p1791925699018009',
+  declined: 'https://acme.enterprise.chat.example.com/archives/CDECLINE/p1700000000123456',
   /** A site no plugin handles. */
   plain: 'https://docs.example.org/guide/start',
 }

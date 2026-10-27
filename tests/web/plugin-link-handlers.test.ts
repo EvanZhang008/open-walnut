@@ -22,7 +22,7 @@ import {
   type LinkHandlerContribution,
 } from '../../web/src/plugins/link-handlers.js'
 
-const PERMALINK = 'https://acme.chat.example.com/archives/C09N75FP9GR/p1791925699018009'
+const PERMALINK = 'https://acme.chat.example.com/archives/C0123ABCDEF/p1700000000123456'
 
 function matches(pattern: string, href: string): boolean {
   const compiled = compileLinkPattern(pattern)
@@ -60,7 +60,7 @@ afterEach(async () => {
 describe('link patterns', () => {
   it('match by scheme, host wildcard and path glob, with the query and never the fragment', () => {
     expect(matches('https://*.chat.example.com/archives/*', PERMALINK)).toBe(true)
-    expect(matches('https://*.chat.example.com/archives/*', `${PERMALINK}?thread_ts=1791925600.000100&cid=C09N75FP9GR`)).toBe(true)
+    expect(matches('https://*.chat.example.com/archives/*', `${PERMALINK}?thread_ts=1700000000.000100&cid=C0123ABCDEF`)).toBe(true)
     // `*.host` takes the bare host too.
     expect(matches('https://*.chat.example.com/archives/*', 'https://chat.example.com/archives/C1/p2')).toBe(true)
     expect(matches('https://*.chat.example.com/archives/*', 'https://evilchat.example.com/archives/C1/p2')).toBe(false)
