@@ -3,6 +3,12 @@
 
 title = "open-walnut gitleaks config"
 
+# A config file REPLACES the built-in rules unless it extends them. Without this
+# block the file had no rules at all, so every gitleaks run with it (the pre-push
+# scan included) found nothing, from 2026-03-14 to 2026-10-27.
+[extend]
+useDefault = true
+
 [allowlist]
   # Test fixtures that intentionally contain fake secrets
   paths = [

@@ -17,6 +17,7 @@ import {
   readFileBounded,
   scanForConflictMarkers,
 } from '../utils/json-conflict-recovery.js';
+import { SECRET_IGNORE_PATTERNS, holdStagedSecrets, setAsideHeldTouchedBy } from './git-sync-secrets.js';
 
 export interface SyncStatus {
   initialized: boolean;
@@ -862,6 +863,9 @@ recording-state.json
 .smart-env
 secrets/
 
+# Credential stores by name. git-sync-secrets.ts also scans what every commit adds.
+${SECRET_IGNORE_PATTERNS.join('\n')}
+
 # Dead pre-SQLite session store. sessions.sqlite is the source of truth (ignored
 # above). session-db-migration.ts still reads sessions.json and writes
 # sessions.json.migrated-from-json.backup next to it, so a fresh install CAN
@@ -992,6 +996,9 @@ const EXTRA_IGNORE_PATTERNS = [
   // quiet.json: machine-local runtime state (see GITIGNORE_CONTENT), new in 2026-09.
   'quiet.json',
   // (/local/, new in 2026-09, is a CRITICAL_IGNORE_DIRS entry since 2026-10: untracked too.)
+  // Credential stores by name (.env, SSH keys, keystores, .netrc), 2026-10-27. The
+  // content scan in git-sync-secrets.ts is the guarantee; these keep git from even listing them.
+  ...SECRET_IGNORE_PATTERNS,
 ];
 
 /**
@@ -1052,6 +1059,10 @@ export function stageAllArgs(cloudMode: boolean): string {
   return `add -A -- . ${excludes}`;
 }
 
+function gitRunnerAt(root: string): (args: string[], input?: string) => Promise<string> {
+  return (args, input) => execGitArgsGroup(args, { cwd: root, timeout: LOCAL_TIMEOUT, ...(input === undefined ? {} : { input }) });
+}
+
 /**
  * Stage the worktree for an auto-commit, honouring the replica's never-author
  * list. Every routine commit path funnels through here.
@@ -1075,18 +1086,22 @@ export async function stageAllForCommit(
 ): Promise<void> {
   const cloudMode = opts.cloudMode ?? CLOUD_MODE;
   const gitOpts = opts.cwd ? { cwd: opts.cwd } : undefined;
+  const root = gitOpts?.cwd ?? WALNUT_HOME;
   if (cloudMode) await restoreNeverStagePaths(gitOpts);
-  else await prepareSyncedPluginFiles(gitOpts?.cwd ?? WALNUT_HOME);
+  else await prepareSyncedPluginFiles(root);
   await gitAsync(stageAllArgs(cloudMode), gitOpts);
   if (!cloudMode) {
     await keepUnfitPluginFilesOut(gitOpts);
-    return;
+  } else {
+    for (const p of NEVER_STAGE_PATHS) {
+      // Best-effort: a repo with no HEAD yet (initSync's first commit) has nothing
+      // to reset to, and there is nothing staged there to drop either.
+      await gitSafeAsync(`reset -q -- "${p}"`, gitOpts);
+    }
   }
-  for (const p of NEVER_STAGE_PATHS) {
-    // Best-effort: a repo with no HEAD yet (initSync's first commit) has nothing
-    // to reset to, and there is nothing staged there to drop either.
-    await gitSafeAsync(`reset -q -- "${p}"`, gitOpts);
-  }
+  // Last, on what is really staged: no secret is committed (git-sync-secrets.ts).
+  // Throws when a flagged file cannot be unstaged, so the caller commits nothing.
+  await holdStagedSecrets(gitRunnerAt(root), root);
 }
 
 const unfitPluginFilesReported = new Set<string>();
@@ -1454,13 +1469,12 @@ export function initSync(remoteUrl?: string): void {
   // Initial commit if repo is empty
   const hasCommits = gitSafe('log --oneline -1') !== null;
   if (!hasCommits) {
-    // Same never-author rule as the tick's commits (see stageAllForCommit): a
-    // replica must not publish primary-authoritative data even in its very first
-    // commit. Nothing to reset or restore here — there is no HEAD yet.
-    // plugin-files/ waits for the first tick, whose guarded stage (stageAllForCommit) keeps a
-    // nested repo, a link or a big or binary file out; a bare add here would fail on the one
-    // and commit the others.
-    git(CLOUD_MODE ? stageAllArgs(true) : `add -A -- . ':(exclude)${SYNCED_FILES_DIR}'`);
+    // The first commit holds the .gitignore alone. Everything else waits for the
+    // first tick, whose guarded stage (stageAllForCommit) applies every rule a bare
+    // add here would skip: the secret scan (an existing data folder may already hold
+    // a credential under a name no rule lists), the replica's never-author paths,
+    // and plugin-files/'s size and type limits.
+    git('add -- .gitignore');
     gitSafe('commit -m "open-walnut init"');
   }
 }
@@ -1861,11 +1875,20 @@ export async function recoverOrphanedGitSurgery(
     await prepareSyncedPluginFiles(repoDir);
     await gitSafeAsync('add -A', opts);
     if (!CLOUD_MODE) await keepUnfitPluginFilesOut({ cwd: repoDir }).catch(() => undefined);
+    // The rescue is merged into the branch and pushed, so no secret may ride it. A
+    // held file stays on disk (untracked, or changed against HEAD); step 2 sets the
+    // local copy aside first when `checkout -f` would overwrite or discard it.
+    try {
+      await holdStagedSecrets(gitRunnerAt(repoDir), repoDir);
+    } catch (error) {
+      return { recovered: false, kind: 'rebase', rescueBranch, error: error instanceof Error ? error.message : String(error) };
+    }
     await gitSafeAsync('commit -q -m "rescue: live worktree at orphaned-rebase recovery"', opts);
     const rescueTip = await gitSafeAsync('rev-parse HEAD', opts);
     if (rescueTip) await gitSafeAsync(`branch -f ${rescueBranch} ${rescueTip}`, opts);
 
     // 2. Back to the pre-rebase branch tip (keeps every un-replayed local commit).
+    await setAsideHeldTouchedBy(gitRunnerAt(repoDir), repoDir, branch, 'replace').catch(() => undefined);
     if (await gitSafeAsync(`checkout -f ${branch}`, { ...opts, timeout: PULL_TIMEOUT }) === null) {
       return { recovered: false, kind: 'rebase', rescueBranch, error: `checkout -f ${branch} failed` };
     }
@@ -1919,7 +1942,8 @@ export async function recoverOrphanedGitSurgery(
       );
       if (healed.restored.length > 0 || healed.quarantined.length > 0) {
         await gitSafeAsync('add -A', opts);
-        await gitSafeAsync('commit -q -m "rescue: restore JSON files that carried conflict markers"', opts);
+        const held = await holdStagedSecrets(gitRunnerAt(repoDir), repoDir).then(() => true, () => false);
+        if (held) await gitSafeAsync('commit -q -m "rescue: restore JSON files that carried conflict markers"', opts);
       }
     }
 
@@ -2569,6 +2593,11 @@ async function lwwMerge(branch: string, remoteBefore: string | null = null): Pro
     return { merged: false, conflicts: 0 };
   }
 
+  // A file held for a secret is untracked or changed here, and git refuses to write
+  // its path when the other box changed it (the safe failure, but sync would stay stuck).
+  // Set that copy aside (never synced) first, so this tick can take the change.
+  await setAsideHeldTouchedBy(gitRunnerAt(WALNUT_HOME), WALNUT_HOME, remoteRef, 'merge').catch((error) => log.git.warn('git-sync: secret-hold set-aside failed', { error: error instanceof Error ? error.message : String(error) }));
+
   // Upstream history rewrite (weekly compaction on the primary force-pushes a
   // rewritten main). Merging would join the OLD fat chain with the rewritten
   // one — resurrecting the entire pre-rewrite history into the hub and undoing
@@ -2591,6 +2620,8 @@ async function lwwMerge(branch: string, remoteBefore: string | null = null): Pro
   if (noMergeBase || forceMoved) {
     const localOnly = remoteBefore ? Number(await gitSafeAsync(`rev-list --count ${remoteBefore}..HEAD`) || '0') : null;
     await gitSafeAsync('branch -f pre-rewrite-backup HEAD');
+    // reset --hard discards a held file's local copy: it goes aside first.
+    await setAsideHeldTouchedBy(gitRunnerAt(WALNUT_HOME), WALNUT_HOME, remoteRef, 'replace').catch(() => undefined);
     if (await gitSafeAsync(`reset --hard ${remoteRef}`) === null) {
       log.git.error('git-sync: upstream history rewritten but reset --hard failed — will retry next cycle', { localHead, remoteHead });
       return { merged: false, conflicts: 0 };

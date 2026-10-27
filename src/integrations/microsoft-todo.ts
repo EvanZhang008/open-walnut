@@ -1,7 +1,8 @@
 import * as msal from '@azure/msal-node';
 import https from 'node:https';
+import fs from 'node:fs/promises';
 import path from 'node:path';
-import { SYNC_DIR } from '../constants.js';
+import { SYNC_DIR, WALNUT_HOME } from '../constants.js';
 import { readJsonFile, writeJsonFile } from '../utils/fs.js';
 import { getConfig } from '../core/config-manager.js';
 import { log } from '../logging/index.js';
@@ -58,7 +59,41 @@ function getMsTodoList(task: Task): string | undefined {
   return msExt(task)?.list_id as string | undefined;
 }
 
-const TOKENS_FILE = path.join(SYNC_DIR, 'ms-todo-tokens.json');
+// The sign-in cache (an access token and the MSAL refresh token) lives in secrets/,
+// which git-sync never commits, temps included. It used to live in sync/, where only
+// `sync/*.json` kept it out of the data repo, and its atomic-write temp
+// (`.open-walnut-<hash>.tmp`) was committed on 2026-07-26.
+const TOKENS_FILE = path.join(WALNUT_HOME, 'secrets', 'ms-todo-tokens.json');
+const LEGACY_TOKENS_FILE = path.join(SYNC_DIR, 'ms-todo-tokens.json');
+
+/**
+ * The cached sign-in. A cache an older Walnut wrote in sync/ is read too, and the
+ * newer of the two wins, so a downgrade and a later upgrade both keep the sign-in.
+ * Writes go to secrets/ only; the old file is left alone (`sync/*.json` keeps it out
+ * of the data repo, and nothing here writes a temp beside it any more).
+ */
+async function readTokenCache(): Promise<TokenCache | null> {
+  const [current, legacy] = await Promise.all([TOKENS_FILE, LEGACY_TOKENS_FILE].map(async (file) => ({
+    cache: await readJsonFile<TokenCache | null>(file, null),
+    mtime: await fs.stat(file).then((st) => st.mtimeMs, () => 0),
+  })));
+  if (legacy.cache && (!current.cache || legacy.mtime > current.mtime)) {
+    await writeTokenCacheFile(legacy.cache).catch((err) => {
+      log.web.warn('ms-todo: could not copy the sign-in cache into secrets/', { error: err instanceof Error ? err.message : String(err) });
+    });
+    return legacy.cache;
+  }
+  return current.cache;
+}
+
+/** Test seam: the cache read, legacy location included. */
+export const readMsTodoTokenCacheForTest = (): Promise<unknown> => readTokenCache();
+
+async function writeTokenCacheFile(cache: TokenCache): Promise<void> {
+  await fs.mkdir(path.dirname(TOKENS_FILE), { recursive: true, mode: 0o700 });
+  await writeJsonFile(TOKENS_FILE, cache, { mode: 0o600 });
+}
+
 const DELTA_FILE = path.join(SYNC_DIR, 'ms-todo-delta.json');
 
 const GRAPH_BASE = 'https://graph.microsoft.com/v1.0';
@@ -208,7 +243,7 @@ async function createMsalClient(): Promise<msal.PublicClientApplication> {
   const app = new msal.PublicClientApplication(msalConfig);
 
   // Restore cached tokens if available
-  const cached = await readJsonFile<TokenCache | null>(TOKENS_FILE, null);
+  const cached = await readTokenCache();
   if (cached?.msalCache) {
     app.getTokenCache().deserialize(cached.msalCache);
   }
@@ -222,7 +257,7 @@ async function saveTokenCache(app: msal.PublicClientApplication, accessToken: st
     expiresAt: (expiresOn ?? new Date(Date.now() + 3600 * 1000)).toISOString(),
     msalCache: app.getTokenCache().serialize(),
   };
-  await writeJsonFile(TOKENS_FILE, cache);
+  await writeTokenCacheFile(cache);
 }
 
 // -- Connection state (what Settings and the notification feed show) --
@@ -392,7 +427,7 @@ export async function getAuthStatus(): Promise<PluginConnectionStatus> {
     };
   }
 
-  const cached = await readJsonFile<TokenCache | null>(TOKENS_FILE, null);
+  const cached = await readTokenCache();
   let account: string | undefined;
   let hasAccount = false;
   if (cached?.msalCache) {
@@ -483,7 +518,7 @@ export async function getAccessToken(): Promise<string> {
   }
 
   // Renewal failed: the access token already in hand is still good until it expires.
-  const cached = await readJsonFile<TokenCache | null>(TOKENS_FILE, null);
+  const cached = await readTokenCache();
   if (cached && new Date(cached.expiresAt) > new Date()) {
     return cached.accessToken;
   }

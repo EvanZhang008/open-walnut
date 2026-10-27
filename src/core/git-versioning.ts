@@ -13,7 +13,7 @@ import { promisify } from 'node:util';
 import { bus, EventNames } from './event-bus.js';
 import { WALNUT_HOME } from '../constants.js';
 import { log } from '../logging/index.js';
-import { credentialGuardArgs } from '../integrations/git-sync.js';
+import { credentialGuardArgs, stageAllForCommit } from '../integrations/git-sync.js';
 import type { Config } from './types.js';
 
 const execFileAsync = promisify(execFile);
@@ -239,7 +239,8 @@ export class GitVersioningService {
     const message = this.buildCommitMessage(entries);
 
     try {
-      await this.gitCmd(['add', '-A']);
+      // The guarded stage (secret scan, replica and plugin-file rules), never a bare `add -A`.
+      await stageAllForCommit();
       await this.gitCmd(['commit', '-m', message, '--allow-empty-message']);
       log.git.info('committed', { files: entries.size, message: message.split('\n')[0] });
     } catch (err) {

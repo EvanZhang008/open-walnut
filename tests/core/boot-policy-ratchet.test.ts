@@ -103,7 +103,7 @@ const OTHERS: Array<[string, number, string]> = [
   ['src/core/triage/collect.ts', 1, off('triage-bootstrap')],
   ['src/integrations/cloud-bridge-config.ts', 4, leader('a host replica has no cloud bridge config (the config copy is an allowlist)')],
   ['src/integrations/git-maintenance.ts', 2, off('git-maintenance')],
-  ['src/integrations/git-sync.ts', 3, off('git-auto-commit')],
+  ['src/integrations/git-sync.ts', 2, off('git-auto-commit')],
   ['src/providers/cloud-tunnel-daemon.ts', 1, COMPANION + ' (it clears the env key for the tunnel daemon it spawns)'],
   ['src/providers/claude-code-session.ts', 1, leader('a local start reaches localDaemon.ensureRunning, which refuses on a host replica')],
   ['src/providers/daemon-version-check.ts', 1, leader('`web --replica` never runs the check (commands/web.ts)')],

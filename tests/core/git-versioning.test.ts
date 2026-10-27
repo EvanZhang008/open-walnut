@@ -10,9 +10,12 @@ const execFileAsync = promisify(execFile);
 // Mock WALNUT_HOME to a temp dir
 let tmpDir: string;
 
-vi.mock('../../src/constants.js', () => ({
+// The commit stages through git-sync's guarded stageAllForCommit, which reads the rest of constants.
+vi.mock('../../src/constants.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
   get WALNUT_HOME() { return tmpDir; },
   get MEMORY_DIR() { return path.join(tmpDir, 'memory'); },
+  CLOUD_MODE: false,
 }));
 
 // We need a real event bus for testing event subscriptions

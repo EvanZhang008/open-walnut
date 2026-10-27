@@ -521,7 +521,7 @@ death).
 | Plugins | `src/core/integration-*.ts` | [ARCHITECTURE.md](./ARCHITECTURE.md) |
 | Chat history | `src/core/chat-history.ts` | skill `walnut-core-internals` |
 | Usage tracking | `src/core/usage/` | [ARCHITECTURE.md](./ARCHITECTURE.md) |
-| Git sync (data hub) | `src/integrations/git-sync.ts` | Mac ⇄ EC2 data plane; secrets NEVER ride it; every git spawn takes `gitChildEnv()` (`src/lib/git-env.ts`), because an inherited `GIT_DIR` outranks `cwd` and git exports one while running hooks |
+| Git sync (data hub) | `src/integrations/git-sync.ts` | Mac ⇄ EC2 data plane; secrets NEVER ride it: ignore rules are only the first layer, every commit path stages through `stageAllForCommit`, whose content scan (`git-sync-secrets.ts`) holds any file with a credential out of the commit and tells the user (2026-07-26: an unlisted atomic-write temp of a sign-in cache was committed); every git spawn takes `gitChildEnv()` (`src/lib/git-env.ts`), because an inherited `GIT_DIR` outranks `cwd` and git exports one while running hooks |
 | Logging & ops | `src/logging/` | skill `walnut-ops` + [src/logging/AGENTS.md](./src/logging/AGENTS.md) |
 | Testing | `tests/` | skill `walnut-testing` + [tests/AGENTS.md](./tests/AGENTS.md) |
 
