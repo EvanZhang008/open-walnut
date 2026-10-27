@@ -60,6 +60,9 @@ struct WalnutApp: App {
             AppClock.applyDemoPin()
             DemoEntry.startFreshAtLaunch()
         }
+        // Attached-file copies an earlier run left (a draft, a send given up on): a
+        // day old and no kept send needs them. Off the main thread.
+        Task.detached(priority: .background) { ComposerFileStore.purgeStale(keeping: PendingFileSends.keptFileIDs()) }
         let connection = ConnectionStore()
         let chat = ChatStore()
         let notes = NotesStore()

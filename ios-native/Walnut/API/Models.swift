@@ -188,6 +188,13 @@ struct ChatMessage: Codable, Identifiable, Equatable {
     /// image references, so historical messages never show these. Excluded from
     /// Codable so it never rides the wire or the disk cache.
     var localImages: [Data]? = nil
+    /// Client-only: files attached to THIS message (a video, a PDF), uploaded to
+    /// the session's host before the message goes (`SessionFileUploader`). Not
+    /// in Codable, like `localImages`.
+    var localFiles: [ComposerFile]? = nil
+    /// Client-only: bytes the session's host holds of each of `localFiles`, by
+    /// upload id, while they upload. Drawn as each file's progress.
+    var uploadHeld: [String: Int64]? = nil
     /// Client-only: the `qm-mobile-*` id this bubble was POSTed under. EVERY
     /// re-send of this bubble (auto-retry after a bridge_offline, or the user
     /// tapping "retry") must reuse it — the server's durable message queue is

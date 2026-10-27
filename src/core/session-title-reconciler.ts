@@ -28,6 +28,7 @@
  */
 
 import { log } from '../logging/index.js';
+import { withoutAttachmentHeaders } from './sessions/session-uploads.js';
 import { bootPolicy } from './boot-policy.js';
 import { backgroundAiDisabled } from './cheap-model.js';
 import { engineCaps } from './agents/engine-registry.js';
@@ -230,7 +231,7 @@ function pickTitleSource(texts: string[]): string {
   const notSlash = (t: string) => {
     // Walnut's notices in front of the words (place note, org digest…) carry no
     // titling signal either.
-    const stripped = withoutLeadingRiders(t).replace(/^\[Images attached[^\]]*\]\n(?:- \S[^\n]*\n)*\n?/, '').trim();
+    const stripped = withoutAttachmentHeaders(withoutLeadingRiders(t)).trim();
     return stripped && !/^\/[a-z][\w-]*(\s|$)/i.test(stripped) ? stripped : '';
   };
   const substantive = texts.find((t) => {

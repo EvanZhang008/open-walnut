@@ -687,6 +687,17 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // fsyncs and renames. Both twins, not bridge-reachable, not for followers. Optional:
   // without it a workspace move cannot relay files through the server to this host.
   'fs-write-part-v1',
+  // 'upload-part-v1' (transfer-core.ts uploadPart): `upload.part {uploadId, name, size,
+  // offset, data, sha256?, sessionId?, taskId?}`, a file a person attached to a
+  // session from a phone, in chunks of at most 4 MB, the same staging rules as
+  // fs.writePart, written ONLY as <task dir>/uploads/<uploadId>/<name> (the task the
+  // daemon started that session for; else a folder beside the task dirs): the id and
+  // name are checked, never a path from the caller, and a chunk is refused with
+  // `no_space` when the disk cannot hold the rest of the file plus 512 MB. The last
+  // chunk answers `path`. Both twins, bridge-reachable (the companion relays a phone's
+  // upload), not for followers. Optional: without it the server answers
+  // `files_need_daemon_upgrade` until the next auto-deploy.
+  'upload-part-v1',
   // 'transfer-v1' (transfer-pack-core.ts, transfer-core.ts): `transfer.pack {cwd, outDir}`
   // packs a workspace host-side (meta.json, changes.patch, untracked.tgz, repo.bundle for
   // commits no remote has, workspace.tgz for a plain folder) and answers each file's size

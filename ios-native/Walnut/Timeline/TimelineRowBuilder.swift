@@ -223,18 +223,35 @@ final class TimelineRowBuilder {
                 height: TimelineMetrics.localImageSide + 4
             ))
         }
-        let imageSend = MessageRow.imageSendParts(message.text)
-        if let imageSend {
-            for path in imageSend.paths {
+        // Files still on this phone: one card each, with the upload's progress.
+        for file in message.localFiles ?? [] {
+            let chip = TimelineFileChip.local(file, held: message.uploadHeld?[file.id],
+                                              pending: message.pending == true, failed: message.failed == true)
+            rows.append(TimelineRow(
+                id: nextID(), revision: 0, content: .fileAttachment(chip),
+                height: TimelineFileChip.height(uploading: chip.progress != nil)
+            ))
+        }
+        let sent = MessageRow.attachmentSendParts(message.text)
+        if let sent {
+            // A file that is a picture shows as one, like the photos above it.
+            let pictures = sent.imagePaths + sent.filePaths.filter { MarkdownParser.isImagePath($0) }
+            for path in pictures {
                 rows.append(TimelineRow(
                     id: nextID(), revision: 0,
                     content: .image(raw: path, alt: (path as NSString).lastPathComponent,
-                                    spoken: Self.sentPhotosLabel(count: 1)),
+                                    spoken: Self.sentPhotosLabel(count: 1), mine: true),
                     height: TimelineMetrics.imageSlotHeight
                 ))
             }
+            for path in sent.filePaths where !MarkdownParser.isImagePath(path) {
+                rows.append(TimelineRow(
+                    id: nextID(), revision: 0, content: .fileAttachment(.sent(path: path)),
+                    height: TimelineFileChip.height(uploading: false)
+                ))
+            }
         }
-        let displayText = imageSend?.text ?? message.text
+        let displayText = sent?.text ?? message.text
         if !displayText.isEmpty {
             let failed = message.failed == true
             let text = TimelineTextStyler.inlineText(displayText)

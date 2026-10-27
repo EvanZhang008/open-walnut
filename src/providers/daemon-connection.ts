@@ -570,7 +570,7 @@ export class DaemonConnection {
    * and so are fs.writePart (a relayed file chunk, transfer-core.ts) and
    * attachments.put (a 2 MB chunk of a note's picture, attachment-replica.ts).
    */
-  private static readonly BULK_COMMANDS = new Set(['fs.read', 'fs.readRange', 'fs.readImage', 'git.diff', 'changes.compute', 'changes.file', 'transcript.rewindProbe', 'replica.put', 'fs.writePart', 'attachments.put'])
+  private static readonly BULK_COMMANDS = new Set(['fs.read', 'fs.readRange', 'fs.readImage', 'git.diff', 'changes.compute', 'changes.file', 'transcript.rewindProbe', 'replica.put', 'fs.writePart', 'attachments.put', 'upload.part'])
   /** Delay before re-dialing the bulk channel after it drops (main stays up). */
   private static BULK_REDIAL_DELAY_MS = 10_000
   /** Within this window, refuse a second upgrade toward the same expected version. */

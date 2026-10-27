@@ -3384,6 +3384,11 @@ var BRIDGE_ALLOWED_COMMANDS = new Set([
   // attach pictures to a session over the cloud box. NOT fs.write: a
   // compromised cloud box must never get arbitrary file writes on exec hosts.
   'image.save',
+  // Narrow session upload ('upload-part-v1', transfer-core.ts uploadPart): a
+  // file a phone attached, in chunks, written ONLY as <uploads root>/<id>/<name>
+  // with the id and name checked and the root this daemon's own. NOT fs.write
+  // or fs.writePart: the caller never names a path.
+  'upload.part',
   // Narrow bounded file read (2MB cap + host-side path sandbox: traversal
   // rejection, realpath resolution, secret-path denylist) — lets the cloud
   // box serve phone file previews (HTML/text) for files on this host. NOT
@@ -3666,6 +3671,8 @@ function dispatchCommand(ws, id, cmd) {
     // Keep in sync with daemon-standalone.ts.
     // A private write ('transfer-private-v1') is authorized by this socket's own
     // binding (leader.configure / leader.claim), never by a field of the command.
+    // 'upload-part-v1': a phone's attachment, bridge-reachable (see BRIDGE_ALLOWED_COMMANDS).
+    case 'upload.part': return replyTransfer(ws, id, 'upload.part', function () { return transferCore.uploadPart(cmd, uploadsRootFor(cmd, ws.origin === 'bridge')); }, false);
     case 'fs.writePart': return replyTransfer(ws, id, 'fs.writePart', function () { return transferCore.writePart(cmd, { boundHome: gatewayClientHomes.get(ws) || null, origin: ws.origin || null }); }, false);
     case 'transfer.pack': return replyTransfer(ws, id, 'transfer.pack', function () { return transferPack.pack(cmd); }, true);
     case 'transfer.reach': return replyTransfer(ws, id, 'transfer.reach', function () { return transferCore.reach(cmd); }, false);
@@ -11582,6 +11589,24 @@ const TASK_DIR_ROOT = taskDirCore ? taskDirCore.taskDirRoot(process.env, HOME_DI
 function ensureTaskDirFor(taskId, home) {
   if (!taskDirCore || !TASK_DIR_ROOT) return null;
   try { return taskDirCore.ensureTaskDir(TASK_DIR_ROOT, taskId, home); } catch (err) { return null; }
+}
+// Where a session's uploads land ('upload-part-v1'): the task's own directory,
+// the task being the one THIS daemon started the session for (a bridge caller
+// cannot name another), else a durable folder beside the task directories. Made
+// by an upload's first chunk only. Keep in sync with daemon-standalone.ts.
+function uploadsRootFor(cmd, bridge) {
+  var sid = typeof cmd.sessionId === 'string' ? cmd.sessionId : '';
+  var s = sid ? sessions.get(sid) : null;
+  var rec = sid && !(s && s.spawnInfo && s.spawnInfo.task) ? hostResume.recall(sid) : null;
+  var known = (s && s.spawnInfo && s.spawnInfo.task) || (rec && rec.task) || undefined;
+  var taskId = known || (bridge ? undefined : cmd.taskId);
+  var fallback = TASK_DIR_ROOT ? path.join(path.dirname(TASK_DIR_ROOT), 'uploads') : path.join(DAEMON_DIR, 'uploads');
+  if (cmd.offset !== 0) {
+    var dir0 = taskDirCore && TASK_DIR_ROOT && taskDirCore.isTaskDirId(taskId) ? taskDirCore.taskDirPath(TASK_DIR_ROOT, taskId) : null;
+    return dir0 && fs.existsSync(dir0) ? path.join(dir0, 'uploads') : fallback;
+  }
+  var dir = ensureTaskDirFor(taskId, bridge ? undefined : cmd.home);
+  return dir ? path.join(dir, 'uploads') : fallback;
 }
 
 // Embedded VS Code sidecar (vscode-server-core.cjs) — same sidecar rationale:

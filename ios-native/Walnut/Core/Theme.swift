@@ -24,6 +24,9 @@ enum Theme {
     static let workingText = Color(dynamic: UIColor(light: 0x1D4FC4, dark: 0x7FA8FF))
     static let doneText = Color(dynamic: UIColor(light: 0x186A2C, dark: 0x4CD964))
     static let stuckText = Color(dynamic: UIColor(light: 0x854E00, dark: 0xFFD60A))
+    /// A secondary line at 4.5:1 or more on secondarySystemBackground in both
+    /// appearances (the system's secondary label reaches only 3.3:1 there).
+    static let secondaryOnCard = Color(dynamic: UIColor(light: 0x55555B, dark: 0xB8B8BE))
     /// Whole-row wash for "this needs a human" (a task at NEED_ACTION).
     ///
     /// Deliberately the same recipe the desktop uses — `rgba(255,59,48,0.08)` in

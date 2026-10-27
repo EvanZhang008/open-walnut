@@ -148,9 +148,13 @@ enum TimelineRowContent {
     /// Inline image (assistant output or historical user image send).
     /// Fixed-height slot; the cell aspect-fits the loaded image. `spoken`: what
     /// VoiceOver says for it, set for the user's own photo (nil: as before).
-    case image(raw: String, alt: String, spoken: String? = nil)
+    /// `mine`: the user's own picture, drawn on their side like their bubble.
+    case image(raw: String, alt: String, spoken: String? = nil, mine: Bool = false)
     /// Local (just-sent) user image thumbnails — JPEG datas from the picker.
     case localImages(datas: [Data], dimmed: Bool)
+    /// A file the user attached (a video, a PDF): the sent message's own, or
+    /// one still uploading (`TimelineFileChip`).
+    case fileAttachment(TimelineFileChip)
     /// Markdown table — hosted grid (rare; bounded by maxRenderedTableRows).
     case table(header: [AttributedString], rows: [[AttributedString]])
     /// Tool call chip. ONE line, always: tapping it opens the shared activity
@@ -257,8 +261,9 @@ extension TimelineRowContent {
     /// Store r7 gate, finding 11). nil for every other row.
     var spokenLabel: String? {
         switch self {
-        case .image(_, _, let spoken): return spoken
+        case .image(_, _, let spoken, _): return spoken
         case .localImages(let datas, _): return TimelineRowBuilder.sentPhotosLabel(count: datas.count)
+        case .fileAttachment(let chip): return chip.spokenLabel
         default: return nil
         }
     }
@@ -273,6 +278,7 @@ extension TimelineRowContent {
         case .code: return "code"
         case .image: return "image"
         case .localImages: return "localImages"
+        case .fileAttachment: return "fileAttachment"
         case .table: return "table"
         case .toolChip: return "toolChip"
         case .thinking: return "thinking"
@@ -315,14 +321,17 @@ extension TimelineRowContent {
             hasher.combine(stacked)
         case .code(let text, _):
             hasher.combine(text)
-        case .image(let raw, let alt, let spoken):
+        case .image(let raw, let alt, let spoken, let mine):
             hasher.combine(raw)
             hasher.combine(alt)
             hasher.combine(spoken)
+            hasher.combine(mine)
         case .localImages(let datas, let dimmed):
             hasher.combine(datas.count)
             for data in datas { hasher.combine(data.count) }
             hasher.combine(dimmed)
+        case .fileAttachment(let chip):
+            hasher.combine(chip)
         case .table(let header, let rows):
             hasher.combine(header)
             hasher.combine(rows)

@@ -402,6 +402,15 @@ actor TimelineLayoutActor {
         if m.pending == true { key += "|p" }
         if m.failed == true { key += "|f" }
         if let images = m.localImages, !images.isEmpty { key += "|i\(images.count)" }
+        // Files: their count, and how far each upload is (whole percents, so a
+        // chunk that moves nothing visible does not rebuild the rows).
+        if let files = m.localFiles, !files.isEmpty {
+            key += "|u" + files.map { file in
+                // "n": nothing held yet reads differently from 0% held.
+                guard let held = m.uploadHeld?[file.id] else { return "n" }
+                return String(file.size == 0 ? 0 : Int(held * 100 / max(1, file.size)))
+            }.joined(separator: ",")
+        }
         if expandedRowIDs.contains("\(namespace)#0") { key += "|x" }
         return key
     }

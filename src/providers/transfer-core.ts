@@ -207,6 +207,157 @@ export function createTransferCore(deps: TransferCoreDeps) {
     })
   }
 
+  // ── Session uploads ('upload-part-v1') ──
+  // `upload.part` is fs.writePart for a file a person attached to a session from a
+  // phone, and it is bridge-reachable, so it writes ONE shape only:
+  //   <uploadsRoot>/<uploadId>/<name>
+  // The root is the twin's (the task's own directory when there is one), never the
+  // caller's; the id and the name are checked, never cleaned up here, so a caller
+  // that got either wrong is refused instead of writing somewhere it did not name.
+  var UPLOAD_ID = /^up-[A-Za-z0-9-]{8,64}$/
+  var MAX_UPLOAD_BYTES = 4 * 1024 * 1024 * 1024
+  var MAX_UPLOAD_NAME_BYTES = 200
+  // Room left on the disk beyond the file itself, so an upload never fills it.
+  var UPLOAD_DISK_MARGIN = 512 * 1024 * 1024
+
+  function checkUploadName(name: unknown): string {
+    if (typeof name !== 'string' || !name) throw fail('bad_request', 'name is required')
+    if (Buffer.byteLength(name, 'utf8') > MAX_UPLOAD_NAME_BYTES) throw fail('bad_request', 'name is longer than ' + MAX_UPLOAD_NAME_BYTES + ' bytes')
+    if (/[\u0000-\u001f\u007f\/\\]/.test(name)) throw fail('bad_request', 'name may not hold a slash or a control character')
+    if (name.charAt(0) === '.' || name.trim() !== name) throw fail('bad_request', 'name may not start with a dot or a space')
+    if (name.slice(-STAGING_SUFFIX.length) === STAGING_SUFFIX) throw fail('bad_request', 'name may not end in ' + STAGING_SUFFIX)
+    return name
+  }
+
+  async function freeBytes(dir: string): Promise<number | null> {
+    var statfs = (deps.fs.promises as unknown as { statfs?: (p: string) => Promise<{ bavail: number; bsize: number }> }).statfs
+    if (typeof statfs !== 'function') return null
+    // The nearest existing ancestor: the upload's own folder is made by its first chunk.
+    var probe = dir
+    for (var i = 0; i < 32; i++) {
+      try {
+        var s = await statfs(probe)
+        return Number(s.bavail) * Number(s.bsize)
+      } catch (_e) {
+        var up = deps.path.dirname(probe)
+        if (up === probe) return null
+        probe = up
+      }
+    }
+    return null
+  }
+
+  // The upload's declared size, written by its first chunk beside the file (a
+  // dot name, which no upload name can take): every later chunk must name the
+  // same size, so the free-space check made for it holds for the whole upload.
+  var UPLOAD_RECORD = '.upload.json'
+  // Staging files nobody touched for this long are uploads given up on.
+  var UPLOAD_STALE_MS = 24 * 60 * 60 * 1000
+
+  async function readUploadSize(dir: string): Promise<number | null> {
+    try {
+      var rec = JSON.parse(await deps.fs.promises.readFile(deps.path.join(dir, UPLOAD_RECORD), 'utf8'))
+      return rec && typeof rec.size === 'number' ? rec.size : null
+    } catch (_e) { return null }
+  }
+
+  // Best effort, never awaited by a chunk: remove uploads whose staging file has
+  // not moved in a day, and their folders once empty. Finished files stay; they
+  // go with the task's directory.
+  async function sweepStaleUploads(root: string, keep: string): Promise<void> {
+    var ids: string[]
+    try { ids = await deps.fs.promises.readdir(root) } catch (_e) { return }
+    for (var i = 0; i < ids.length && i < 500; i++) {
+      if (ids[i] === keep || !UPLOAD_ID.test(ids[i])) continue
+      var dir = deps.path.join(root, ids[i])
+      try {
+        var names = await deps.fs.promises.readdir(dir)
+        var parts = names.filter(function (n) { return n.slice(-STAGING_SUFFIX.length) === STAGING_SUFFIX })
+        var stale = 0
+        for (var j = 0; j < parts.length; j++) {
+          var st = await deps.fs.promises.stat(deps.path.join(dir, parts[j]))
+          if (now() - st.mtimeMs > UPLOAD_STALE_MS) { await deps.fs.promises.unlink(deps.path.join(dir, parts[j])); stale++ }
+        }
+        if (stale > 0 && names.length === stale + (names.indexOf(UPLOAD_RECORD) >= 0 ? 1 : 0)) {
+          await deps.fs.promises.rm(dir, { recursive: true, force: true })
+        }
+      } catch (_e) { /* the next first chunk tries again */ }
+    }
+  }
+
+  async function uploadPart(cmd: Record<string, unknown>, uploadsRoot: string): Promise<WritePartReply> {
+    if (typeof uploadsRoot !== 'string' || !deps.path.isAbsolute(uploadsRoot)) throw fail('unavailable', 'this host has no place for uploads')
+    var uploadId = typeof cmd.uploadId === 'string' ? cmd.uploadId : ''
+    if (!UPLOAD_ID.test(uploadId)) throw fail('bad_request', 'uploadId must look like up-<id>')
+    var name = checkUploadName(cmd.name)
+    var size = optInt(cmd.size, 'size', 0, MAX_UPLOAD_BYTES)
+    if (size === undefined) throw fail('bad_request', 'size is required')
+    var offset = optInt(cmd.offset, 'offset', 0, MAX_UPLOAD_BYTES)
+    if (offset === undefined) throw fail('bad_request', 'offset is required')
+    var dir = deps.path.join(uploadsRoot, uploadId)
+    var target = deps.path.join(dir, name)
+    // The part's length decides whether it is the last one, not a flag the caller
+    // sets; read from the base64 text without decoding it (writePart decodes once).
+    var clean = typeof cmd.data === 'string' ? cmd.data.replace(/=+$/, '') : ''
+    var length = Math.floor(clean.length * 3 / 4)
+    var final = offset + length === size
+    var sha = optSha(cmd.sha256, 'sha256')
+    // One chunk of an upload at a time, from the finished check to the reply: a
+    // repeat racing the last chunk then sees the finished file, never a half
+    // state (writePart serializes on the target itself, so this key differs).
+    var total: number = size, at: number = offset
+    return serialize('upload:' + target, function () {
+      return uploadChunk(cmd, uploadsRoot, dir, target, name, total, at, final, sha)
+    })
+  }
+
+  async function uploadChunk(
+    cmd: Record<string, unknown>, uploadsRoot: string, dir: string, target: string, name: string,
+    size: number, offset: number, final: boolean, sha: string | undefined,
+  ): Promise<WritePartReply> {
+    var uploadId = deps.path.basename(dir)
+    // A finished upload is never written again. The repeat of its last chunk (the
+    // same checksum) answers its path, so a lost reply still gets it; any earlier
+    // chunk of the same size (a phone resending after it was ended mid-send)
+    // answers `gap` at the end, and its empty last chunk gets the path.
+    var finished = await sizeOf(target)
+    if (finished >= 0) {
+      if (final && sha && finished === size && await sha256File(target) === sha) {
+        return { staged: size, done: true, sha256: sha, path: target }
+      }
+      if (!final && finished === size) throw fail('gap', 'this upload is finished; send its last chunk', { have: size })
+      throw fail('bad_request', 'this upload is finished; send the file under a new upload id')
+    }
+    if (offset === 0) {
+      void sweepStaleUploads(uploadsRoot, uploadId).catch(function () { /* best effort */ })
+    } else {
+      var declared = await readUploadSize(dir)
+      if (declared !== null && declared !== size) throw fail('bad_request', 'this upload was started for ' + declared + ' bytes, not ' + size)
+    }
+    // Every chunk checks the room the rest of the file needs, so two uploads that
+    // each fit alone stop with a clear answer instead of filling the disk.
+    var free = await freeBytes(dir)
+    if (free !== null && free < (size - offset) + UPLOAD_DISK_MARGIN) {
+      throw fail('no_space', 'this host has ' + free + ' bytes free, the file needs ' + (size - offset) + ' more', { free: free })
+    }
+    if (offset === 0) {
+      await deps.fs.promises.mkdir(dir, { recursive: true })
+      await deps.fs.promises.writeFile(deps.path.join(dir, UPLOAD_RECORD), JSON.stringify({ size: size, name: name }) + '\n')
+    }
+    var reply: WritePartReply
+    try {
+      reply = await writePart({ path: target, offset: offset, data: cmd.data, size: size, final: final, sha256: sha })
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOSPC') throw fail('no_space', 'this host ran out of disk space', {})
+      throw err
+    }
+    if (reply.done) {
+      await deps.fs.promises.unlink(deps.path.join(dir, UPLOAD_RECORD)).catch(function () { /* already gone */ })
+      return { staged: reply.staged, done: true, sha256: reply.sha256, path: target }
+    }
+    return { staged: reply.staged }
+  }
+
   // ── Private transcript stage ('transfer-private-v1') ──
   // `fs.writePart` with `private: true` writes ONE shape only:
   //   <root>/xf-<uuid>/transcript/<uuid>.jsonl
@@ -709,5 +860,5 @@ export function createTransferCore(deps: TransferCoreDeps) {
     }
   }
 
-  return { writePart: writePart, reach: reach, fetch: fetch, realpath: realpath, stagingSuffix: STAGING_SUFFIX }
+  return { writePart: writePart, uploadPart: uploadPart, reach: reach, fetch: fetch, realpath: realpath, stagingSuffix: STAGING_SUFFIX }
 }

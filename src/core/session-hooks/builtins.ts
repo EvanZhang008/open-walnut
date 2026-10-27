@@ -32,6 +32,7 @@ import { briefFixPrompt, briefIssues, briefNeedsRewrite, briefVpLines, completeB
 import { agentMemoryPrompt, applyAgentMemoryAnswer, keepsAgentMemory, readAgentMemoryField, splitAgentMemory } from '../sessions/agent-memory.js';
 import { withoutLeadingRiders } from '../../lib/history-walnut-riders.js';
 import { setReportPending, __resetReportPending } from '../sessions/report-pending.js';
+import { withoutAttachmentHeaders } from '../sessions/session-uploads.js';
 
 // ── Triage dedup state ──
 // Prevents burst triage dispatches when daemon replays old JSONL events after
@@ -1923,7 +1924,7 @@ export async function autoTitleFromObservedMessage(
   // This sees the RAW observed message, so it cannot rely on the history
   // projection's strip. An image-only message leaves nothing.
   const message = toDisplayedUserText(
-    withoutLeadingRiders(rawMessage).replace(/^\[Images attached[^\]]*\]\n(?:- \S[^\n]*\n)*\n?/, ''),
+    withoutAttachmentHeaders(withoutLeadingRiders(rawMessage)),
   ).trim();
   if (!message) return false;
   if (/^\/[a-z][\w-]*(\s|$)/i.test(message)) return false; // slash command

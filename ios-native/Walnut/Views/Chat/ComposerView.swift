@@ -143,6 +143,12 @@ struct ComposerBar: View {
     /// none. It follows send's no-loss rule (`deliver`): the field clears at once and the
     /// words come back when the action answers false.
     var secondaryAction: ComposerSecondaryAction? = nil
+    /// The send for a message with attached FILES (a video, a PDF, anything from
+    /// Files), the same "are these words safe with you" answer as `onSend`.
+    /// Present = this composer takes files: the `+` offers Files and the photo
+    /// picker offers videos too. Absent (the chat, the new-session draft) =
+    /// photos only, as before.
+    var onSendFiles: ((String, [SelectedImage], [ComposerFile]) async -> Bool)? = nil
     /// Returns **"are these words safe with you"**, which is deliberately NOT "did
     /// the send succeed". Stores here own no-loss: a dead round trip becomes a
     /// retryable failed bubble that still holds the full text, and that counts as
@@ -220,6 +226,13 @@ struct ComposerBar: View {
     /// "images were skipped" line cannot clobber the one row that tells the user
     /// how to fix it.
     @State private var cameraNotice: String?
+    /// The Files picker (`.fileImporter`), raised from the `+` like the others.
+    @State private var showFileImporter = false
+    /// Files being copied in right now (a big video takes a moment): drawn as a
+    /// placeholder card, and send waits for them.
+    @State private var importingFiles = 0
+    /// A file that could not be attached (too large, unreadable, over the count).
+    @State private var fileNotice: String?
     /// A send the owner would not keep, so the words are back in the field. Local
     /// (not owner-supplied) because the owner that refused may have nothing to say
     /// about it — see `send()`.
@@ -234,6 +247,7 @@ struct ComposerBar: View {
     /// existing automation: it must keep meaning "open the photo picker".
     static let photoItemID = "chat.photo"
     static let cameraItemID = "chat.camera"
+    static let filesItemID = "chat.files"
     /// `ComposerHostRow`'s own id, spelled here only so the menu model below can
     /// state the full order. The row itself still owns it.
     static let hostRowItemID = "composer.hostRow"
@@ -255,9 +269,11 @@ struct ComposerBar: View {
     }
 
     private var selectedImages: [SelectedImage] { drafts.images(draftKey) }
+    private var selectedFiles: [ComposerFile] { drafts.files(draftKey) }
+    private var acceptsFiles: Bool { onSendFiles != nil }
 
     private var trimmed: String { draft.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines) }
-    private var hasContent: Bool { !trimmed.isEmpty || !selectedImages.isEmpty }
+    private var hasContent: Bool { !trimmed.isEmpty || !selectedImages.isEmpty || !selectedFiles.isEmpty }
     /// A turn is running AND this composer is not the field it is waiting on.
     /// Now read by ONE thing, the field's placeholder: it is the honest caption
     /// for an EMPTY composer mid-turn, and an empty composer is the only time a
@@ -269,8 +285,10 @@ struct ComposerBar: View {
     /// somewhere to go and left a user who had just dictated a paragraph with no way
     /// to send it. A composer whose owner cannot hold them keeps the old gate.
     private var canSend: Bool {
-        Self.canSend(hasContent: hasContent, disabled: disabled,
-                     waitingForReply: waitingForReply, busyAcceptsSend: busyAcceptsSend)
+        // A file still being copied in: send waits for it (greyed, not gone).
+        importingFiles == 0
+            && Self.canSend(hasContent: hasContent, disabled: disabled,
+                            waitingForReply: waitingForReply, busyAcceptsSend: busyAcceptsSend)
     }
 
     /// Whether a tap on the send button is ACCEPTED, as a pure rule.
@@ -323,6 +341,11 @@ struct ComposerBar: View {
                     self.cameraNotice = nil
                 }
             }
+            if let fileNotice {
+                noticeRow(fileNotice, icon: Symbol.fileNotice) {
+                    self.fileNotice = nil
+                }
+            }
             // What the recorder has to say, right above the input: its error
             // (a denied microphone, a failed transcription), then preserved takes
             // (failed upload / interruption / crash / view dismissal) offered back
@@ -343,7 +366,7 @@ struct ComposerBar: View {
                 if voice.state == .recording {
                     recordingRow
                 } else {
-                    if !selectedImages.isEmpty { thumbnailStrip }
+                    if !selectedImages.isEmpty || !selectedFiles.isEmpty || importingFiles > 0 { thumbnailStrip }
                     fieldRow
                     bottomControlRow
                 }
@@ -493,10 +516,20 @@ struct ComposerBar: View {
         .photosPicker(
             isPresented: $showPhotoPicker,
             selection: $pickerItems,
-            maxSelectionCount: Self.maxImages,
-            matching: .images,
+            // A composer that takes files takes videos too (as files).
+            maxSelectionCount: acceptsFiles ? Self.maxImages + ComposerFile.maxFiles : Self.maxImages,
+            matching: acceptsFiles ? .any(of: [.images, .videos]) : .images,
+            // The video as it was recorded: no transcode before it is attached.
+            preferredItemEncoding: .current,
             photoLibrary: .shared()
         )
+        .fileImporter(isPresented: $showFileImporter, allowedContentTypes: [.item],
+                      allowsMultipleSelection: true) { result in
+            switch result {
+            case .success(let urls): Task { await importFiles(urls.map { .file($0) }) }
+            case .failure(let error): fileNotice = "Files couldn't open that (\(error.localizedDescription))."
+            }
+        }
         // The camera, full screen (a viewfinder in a sheet is a viewfinder with a
         // gesture that dismisses it mid-shot). Both exits lower the flag and
         // NOTHING else touches the draft: a cancel returns to exactly the text and
@@ -747,6 +780,7 @@ struct ComposerBar: View {
     /// No room for another attachment. Both sources are disabled at the ceiling
     /// rather than accepting an image the merge would then drop.
     private var atImageCeiling: Bool { selectedImages.count >= Self.maxImages }
+    private var atFileCeiling: Bool { selectedFiles.count + importingFiles >= ComposerFile.maxFiles }
 
     /// The `+` menu's items, as their accessibility identifiers, in order.
     ///
@@ -761,10 +795,13 @@ struct ComposerBar: View {
     /// assumption), so a rule that asked UIKit for itself could only ever be
     /// exercised one way.
     static func plusMenuItems(
-        cameraAvailable: Bool, hasHostProvenance: Bool, actionIDs: [String] = []
+        cameraAvailable: Bool, hasHostProvenance: Bool, actionIDs: [String] = [],
+        acceptsFiles: Bool = false
     ) -> [String] {
         var items = [photoItemID]
         if cameraAvailable { items.append(cameraItemID) }
+        // Files closes the inputs: the third way to attach something.
+        if acceptsFiles { items.append(filesItemID) }
         // The owner's rows (a session's Side question, Note, Fork) after the
         // inputs, and before the read-only provenance, which stays last.
         items += actionIDs
@@ -857,6 +894,9 @@ struct ComposerBar: View {
     enum Symbol {
         static let plus = "plus"
         static let photo = "photo"
+        static let files = "doc"
+        static let fileNotice = "doc.badge.ellipsis"
+        static let fileImporting = "arrow.down.doc"
         static let camera = "camera"
         static let mic = "mic.fill"
         static let send = "arrow.up"
@@ -878,8 +918,8 @@ struct ComposerBar: View {
         // The voice notices' glyphs are `VoiceNoticeRows`' own (VoiceInputControls.swift).
 
         static let all = [
-            plus, photo, camera, mic, send, stop, voiceMode, confirm, cancel, removeImage,
-            offlineNotice, imageNotice, cameraDeniedNotice, queueFullNotice,
+            plus, photo, files, fileNotice, fileImporting, camera, mic, send, stop, voiceMode, confirm,
+            cancel, removeImage, offlineNotice, imageNotice, cameraDeniedNotice, queueFullNotice,
         ]
     }
 
@@ -1031,6 +1071,17 @@ struct ComposerBar: View {
                         .accessibilityIdentifier("chat.imageRemove")
                     }
                 }
+                ForEach(selectedFiles) { file in
+                    ComposerFileCard(file: file) {
+                        drafts.setFiles(selectedFiles.filter { $0.id != file.id }, key: draftKey)
+                        ComposerFileStore.remove(file)
+                        // Room was made: what the last pick skipped no longer stands.
+                        fileNotice = nil
+                    }
+                }
+                if importingFiles > 0 {
+                    ComposerFileCard.importing(count: importingFiles)
+                }
             }
             .padding(.horizontal, 12)
             .padding(.top, 8)
@@ -1165,13 +1216,21 @@ struct ComposerBar: View {
         let items = Self.plusMenuItems(
             cameraAvailable: CameraPicker.isAvailable,
             hasHostProvenance: hostProvenance != nil,
-            actionIDs: plusActions.map(\.id)
+            actionIDs: plusActions.map(\.id),
+            acceptsFiles: acceptsFiles
         )
-        return VStack(alignment: .leading, spacing: 0) {
+        let rows = VStack(alignment: .leading, spacing: 0) {
             ForEach(Array(items.enumerated()), id: \.element) { index, item in
                 if index > 0 { Divider() }
                 attachmentMenuRow(item)
             }
+        }
+        // At the accessibility sizes the rows can be taller than the room the
+        // popover has above the keyboard: they scroll instead of being cut off.
+        return ViewThatFits(in: .vertical) {
+            rows
+            ScrollView(.vertical) { rows }
+                .scrollBounceBehavior(.basedOnSize)
         }
         .frame(width: Self.attachmentMenuWidth(
             isAccessibilitySize: dynamicTypeSize.isAccessibilitySize,
@@ -1183,9 +1242,20 @@ struct ComposerBar: View {
     private func attachmentMenuRow(_ item: String) -> some View {
         switch item {
         case Self.photoItemID:
-            attachmentSourceRow(
-                title: Self.attachmentSourceLabel("Photos", attached: selectedImages.count),
-                icon: Symbol.photo, identifier: item, action: openPhotoPicker
+            // With files on, the library row is never greyed: a video still fits
+            // when five photos are attached (the picked photos past the ceiling
+            // are named by the notice, as before).
+            plusMenuRow(
+                title: Self.attachmentSourceLabel(acceptsFiles ? "Photos & Videos" : "Photos", attached: selectedImages.count),
+                icon: Symbol.photo, identifier: item,
+                enabled: acceptsFiles ? !atFileCeiling || !atImageCeiling : !atImageCeiling,
+                action: openPhotoPicker
+            )
+        case Self.filesItemID:
+            plusMenuRow(
+                title: selectedFiles.isEmpty ? "Files" : "Files (\(selectedFiles.count)/\(ComposerFile.maxFiles))",
+                icon: Symbol.files, identifier: item, enabled: !atFileCeiling,
+                action: openFileImporter
             )
         case Self.cameraItemID:
             // Disabled at the five-image ceiling for the same reason the library item
@@ -1398,15 +1468,26 @@ struct ComposerBar: View {
     private func send() {
         let text = trimmed
         let images = selectedImages
-        guard !text.isEmpty || !images.isEmpty else { return }
+        let files = selectedFiles
+        guard !text.isEmpty || !images.isEmpty || !files.isEmpty, importingFiles == 0 else { return }
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
         pickerItems = []
         refusedNotice = nil
+        // The files go with this message: what an earlier pick skipped is over.
+        if !files.isEmpty { fileNotice = nil }
         Task {
-            let disposition = await Self.deliver(
-                text: text, images: images, draftKey: draftKey, drafts: drafts,
-                onSend: onSend
-            )
+            let disposition: SendDisposition
+            if !files.isEmpty, let onSendFiles {
+                disposition = await Self.deliver(
+                    text: text, images: images, files: files, draftKey: draftKey, drafts: drafts,
+                    onSend: onSendFiles
+                )
+            } else {
+                disposition = await Self.deliver(
+                    text: text, images: images, draftKey: draftKey, drafts: drafts,
+                    onSend: onSend
+                )
+            }
             // Silent when the owner already has a sentence on screen (`ownerNotice`
             // names the real ceiling); this covers every other refusal, where the
             // text reappearing with no explanation reads as a bug.
@@ -1453,6 +1534,22 @@ struct ComposerBar: View {
         return .returnedToDraft
     }
 
+    /// The same rule for a message with attached files: the field clears, and a
+    /// refusal puts the words, the photos and the files back.
+    @MainActor
+    static func deliver(
+        text: String, images: [SelectedImage], files: [ComposerFile], draftKey: String,
+        drafts: ComposerDrafts, onSend: (String, [SelectedImage], [ComposerFile]) async -> Bool
+    ) async -> SendDisposition {
+        FreezeContext.shared.note("send", text.utf8.count)
+        FreezeContext.shared.setDraftChars(0)
+        drafts.clear(draftKey)
+        if await onSend(text, images, files) { return .kept }
+        restoreRefusedDraft(text, images, draftKey: draftKey, drafts: drafts)
+        drafts.setFiles(files + drafts.files(draftKey).filter { new in !files.contains { $0.id == new.id } }, key: draftKey)
+        return .returnedToDraft
+    }
+
     /// Put a refused message back in the composer.
     ///
     /// MERGES rather than overwrites, because the round trip is not instant and the
@@ -1490,6 +1587,56 @@ struct ComposerBar: View {
         showPhotoPicker = true
     }
 
+    /// Raise the Files picker. Lowers the other two first, the same one-at-a-time
+    /// rule (see the two flags' comment).
+    private func openFileImporter() {
+        showCamera = false
+        showPhotoPicker = false
+        showFileImporter = true
+    }
+
+    /// Where an attached file comes from.
+    enum FileSource {
+        case file(URL)
+        case video(PhotosPickerItem)
+    }
+
+    /// Copy each pick into the app's store (off the main actor), in order, up to
+    /// the per-message ceiling, and name what was skipped.
+    private func importFiles(_ sources: [FileSource]) async {
+        let room = max(0, ComposerFile.maxFiles - selectedFiles.count - importingFiles)
+        let taking = Array(sources.prefix(room))
+        var problems: [String] = []
+        if sources.count > taking.count {
+            problems.append("\(sources.count - taking.count) over the \(ComposerFile.maxFiles)-file limit")
+        }
+        importingFiles += taking.count
+        for source in taking {
+            do {
+                let file: ComposerFile
+                switch source {
+                case .file(let url): file = try await ComposerFileStore.importCopy(of: url, scoped: true)
+                case .video(let item): file = try await ComposerFileStore.importVideo(item)
+                }
+                drafts.setFiles(drafts.files(draftKey) + [file], key: draftKey)
+                AppLog.info("composer", "file attached", ["kind": file.kind.rawValue, "bytes": String(file.size), "key": draftKey])
+            } catch {
+                problems.append(error.localizedDescription)
+                AppLog.info("composer", "file not attached", ["error": String(describing: error), "key": draftKey])
+            }
+            importingFiles -= 1
+        }
+        // Each pick says what it skipped; one that skipped nothing clears the last say.
+        fileNotice = Self.fileSkippedNotice(problems)
+    }
+
+    /// One sentence for the files that did not attach, or nil.
+    static func fileSkippedNotice(_ problems: [String]) -> String? {
+        guard !problems.isEmpty else { return nil }
+        if problems.count == 1 { return problems[0] }
+        return "Some files were not attached: " + problems.joined(separator: "; ")
+    }
+
     /// Raise the camera, or explain why not. The permission question is asked
     /// HERE, once, from the pure rule; the picker owns the system prompt.
     private func openCamera() {
@@ -1515,11 +1662,21 @@ struct ComposerBar: View {
     /// merge into the selection. Surfaces a dismissible notice for images that are
     /// too large, over budget, or failed to decode.
     private func loadPicked(_ items: [PhotosPickerItem]) async {
-        let outcome = await Self.loadUntilFull(items, onto: selectedImages) { item in
-            await SelectedImage.load(from: item)
+        // Videos (offered only where files are taken) become attached files;
+        // photos stay photos, under their own ceiling and budget.
+        let isVideo: (PhotosPickerItem) -> Bool = { item in
+            item.supportedContentTypes.contains { $0.conforms(to: .movie) }
         }
-        merge(outcome.loaded, notLoaded: outcome.notLoaded)
+        let videos = acceptsFiles ? items.filter(isVideo) : []
+        let photos = acceptsFiles ? items.filter { !isVideo($0) } : items
         pickerItems = []
+        if !photos.isEmpty {
+            let outcome = await Self.loadUntilFull(photos, onto: selectedImages) { item in
+                await SelectedImage.load(from: item)
+            }
+            merge(outcome.loaded, notLoaded: outcome.notLoaded)
+        }
+        if !videos.isEmpty { await importFiles(videos.map { .video($0) }) }
     }
 
     /// Load picked items IN SELECTION ORDER, stopping once the selection is actually
@@ -1877,7 +2034,8 @@ struct ComposerBar: View {
                 .accessibilityLabel("Dismiss")
             }
         }
-        .foregroundStyle(.secondary)
+        // 4.5:1 or more in light: the system's secondary grey read 3.5:1 here.
+        .foregroundStyle(Theme.secondaryOnCard)
         .padding(.horizontal, 16)
         .padding(.top, 6)
         .frame(maxWidth: .infinity, alignment: onDismiss == nil ? .center : .leading)

@@ -338,6 +338,8 @@ extension ChatMessage {
         copy.pending = pending
         copy.failed = failed
         copy.localImages = localImages
+        copy.localFiles = localFiles
+        copy.uploadHeld = uploadHeld
         copy.clientMessageId = clientMessageId
         copy.retryNotice = retryNotice
         return copy

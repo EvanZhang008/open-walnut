@@ -134,12 +134,13 @@ enum TimelineHostedCell {
                 collapsible: collapsible, expanded: expanded,
                 onToggle: { delegate?.timelineCell(didRequest: .toggleExpanded(rowID: row.id)) }
             )
-        case .image(let raw, let alt, let spoken):
+        case .image(let raw, let alt, let spoken, let mine):
             HStack {
+                if mine { Spacer(minLength: TimelineMetrics.bubbleLeadingGap) }
                 AttachmentImageView(raw: raw, alt: alt)
                     .frame(maxHeight: TimelineMetrics.imageSlotHeight - 8)
                     .modifier(SpokenImage(label: spoken))
-                Spacer(minLength: TimelineMetrics.assistantTrailingGap)
+                if !mine { Spacer(minLength: TimelineMetrics.assistantTrailingGap) }
             }
             .padding(.horizontal, TimelineMetrics.hMargin)
             .padding(.vertical, 4)
@@ -156,6 +157,10 @@ enum TimelineHostedCell {
             .opacity(dimmed ? 0.65 : 1)
             .padding(.horizontal, TimelineMetrics.hMargin)
             .frame(maxWidth: .infinity, alignment: .trailing)
+        case .fileAttachment(let chip):
+            TimelineFileChipView(chip: chip) { path in
+                delegate?.timelineCell(didRequest: .previewFile(ref: FilePathRef(path: path)))
+            }
         case .table(let header, let rows):
             TimelineTableView(header: header, rows: rows)
         case .truncationChip:

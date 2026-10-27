@@ -355,6 +355,8 @@ struct SessionConversationView: View {
             // already running there), so it shows as provenance in the `+`.
             // Picking a host happens at CREATION (NewSessionChatView).
             hostProvenance: .session(hostAlias: session.host, cwd: session.cwd),
+            // Videos and files ride this session's uploads (SessionFileUploader).
+            onSendFiles: { text, images, files in await store.sendFromComposer(text, images: images, files: files) },
             onSend: { text, images in await store.sendFromComposer(text, images: images) }
         )
     }

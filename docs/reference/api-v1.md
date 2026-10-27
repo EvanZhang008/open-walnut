@@ -70,6 +70,11 @@ All v1 errors use one shape (plus optional endpoint-specific extras):
 | `turn_active` | 409 | A turn is already running on this conversation |
 | `images_need_daemon_upgrade` | 400 | Session-talk images sent via the cloud companion to a host whose daemon predates `image.save` — self-heals on the next primary-box reconnect (auto-deploy) |
 | `image_upload_failed` | 400 | Session-talk image save failed on the session's host (daemon refused the payload or the write errored) |
+| `files_need_daemon_upgrade` | 400 | `PUT /sessions/:id/uploads/:uploadId`: the session's host runs a daemon without `upload-part-v1` (or, through the companion, without it on its bridge allowlist). Self-heals on the next primary-box reconnect (auto-deploy) |
+| `upload_offset_mismatch` | 409 | `PUT /sessions/:id/uploads/:uploadId`: the host holds a different number of bytes than the chunk assumed; `error.received` is where to send from |
+| `upload_checksum_mismatch` | 422 | `PUT /sessions/:id/uploads/:uploadId`: the finished file's sha256 differs from the one sent; start again from offset 0 |
+| `host_disk_full` | 507 | `PUT /sessions/:id/uploads/:uploadId`: the host cannot hold the rest of the file plus 512 MB |
+| `upload_failed` | 502 | `PUT /sessions/:id/uploads/:uploadId`: the host could not write the chunk for another reason (retryable) |
 | `session_launch_needs_upgrade` | 400 | Session creation via the cloud companion when the primary's daemon predates the `session.launch` relay — self-heals on the next primary-box reconnect (auto-deploy) |
 | `session_control_needs_upgrade` | 400 | Any `session.control`-relayed action (model/effort/fork/lifecycle/notifications) via the cloud companion when the primary's daemon OR server predates that action — self-heals on the next primary-box upgrade/reconnect |
 | `bridge_offline` | 503 | Cloud companion has no live bridge to the needed host (or the primary's server is disconnected from its daemon) |
@@ -231,6 +236,7 @@ path on the companion".
 | GET | `/api/v1/sessions/:id/subagent/:agentId/history` | One subagent lane's history (cloud relays) |
 | POST | `/api/v1/sessions/:id/execute-compact` | Execute a plan after a compact boundary (cloud relays) |
 | GET | `/api/v1/sessions/:id/messages/:messageId` | What became of a message the companion held (`queued`); cloud only |
+| PUT | `/api/v1/sessions/:id/uploads/:uploadId` | One chunk of a file attached to a session (a video, a PDF), saved on the session's host; resumable (cloud relays to the host) |
 | GET | `/api/v1/sessions/:id/queue` | Queued messages (cloud relays). A row may carry `sentBy` (`person` \| `agent`, read from the send's source; additive, absent on older rows) |
 | PATCH | `/api/v1/sessions/:id/queue/:messageId` | Edit a queued message (cloud relays) |
 | DELETE | `/api/v1/sessions/:id/queue/:messageId` | Delete a queued message (cloud relays) |
@@ -1997,6 +2003,59 @@ primary box the same endpoints serve directly — no bridge involved.
 
     A settled messageId is never taken again; to send the text, send it as a
     NEW message (new `messageId`).
+- `PUT /api/v1/sessions/:id/uploads/:uploadId?offset=&size=&name=&sha256=`
+  (additive 2026-10) → `200 { "received", "size", "done", "path"? }`. One chunk
+  of a file a person attaches to a session (a video from the photo library, a
+  PDF or any file from Files), raw bytes (`Content-Type:
+  application/octet-stream`), at most 2 MB per chunk, at most 4 GB per file.
+  - `uploadId` is the client's own, `up-` plus 8 to 64 letters, digits or
+    dashes (a UUID), one per file. `name` is the file name the session sees:
+    no slash, backslash or control character, no leading dot or space, at most
+    200 UTF-8 bytes, not ending in `.walnut-part` (anything else is `400`).
+    `size` is the whole file, `offset` where this chunk starts.
+  - The session's host writes it through its daemon (`upload.part`, capability
+    `upload-part-v1`) as `<task directory>/uploads/<uploadId>/<name>` (the
+    task's directory survives a reboot and is cleaned with the task), the task
+    being the one the host started the session for; without one, a folder
+    beside the task directories. The client never names a path. On the
+    companion a session on another machine is relayed over the bridge to its
+    host; the primary sends it over that host's daemon connection. An upload
+    left unfinished for a day is removed by the host.
+  - Resumable and safe to retry: `received` is how many bytes the host holds, so
+    the next chunk starts there. A chunk the host already holds is acknowledged
+    without writing; `offset=0` starts over; a chunk past what the host holds is
+    `409 upload_offset_mismatch` with `error.received` (send from there). The
+    chunk that reaches `size` is the last: send `sha256` (64 hex, of the whole
+    file) on it; the host checks it (`422 upload_checksum_mismatch` on a
+    difference, start over), moves the file into place and answers
+    `done: true` with `path`, the file's absolute path on the host. The last
+    chunk sent again after that answers `done` with the same `path`; an earlier
+    chunk of a finished upload answers `409 upload_offset_mismatch` with
+    `received` equal to `size` (send the empty last chunk at `offset=size` with
+    `sha256` for the path), and a chunk naming another size is `400` (a finished
+    file is never written again). Every chunk names the `size` the first one did (else `400`). An
+    empty file is one empty chunk at `offset=0`.
+  - Then send the message naming the paths, the same shape the server writes
+    for pictures (`[Images attached …]`), the dash being U+2014:
+
+    ```
+    [Files attached — open them from these paths]
+    - /home/me/.local/state/open-walnut/tasks/<task>/uploads/up-…/clip.mov
+
+    what the person typed
+    ```
+
+    The phone writes this text itself, so it travels every send path above
+    (held, relayed, direct) as ordinary words; with `images` too, the server
+    puts the pictures' header in front of it. Session titles skip both headers.
+  - Errors: `400 bad_request`, `404 not_found`, `413 too_large` (a chunk over
+    2 MB, a file over 4 GB), `409 upload_offset_mismatch`, `422
+    upload_checksum_mismatch`, `507 host_disk_full` (the host cannot hold the
+    rest of the file plus 512 MB; checked on every chunk), `400
+    files_need_daemon_upgrade`, `503 bridge_offline` (no live link to the host,
+    or a chunk that got no answer: retry the same chunk), `502 upload_failed`
+    (retryable). An older server answers `404` for the route: it cannot take
+    files.
 - `GET /api/v1/sessions/:id/messages/:messageId` (additive, cloud only; the
   primary answers `404`, it never holds a message) → `200 { "messageId", "state", … }`.
   Read-only, safe to ask repeatedly. `state`: `held` (`waitingFor`,

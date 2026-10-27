@@ -317,9 +317,10 @@ describe('leader protocol: both twins', () => {
     'stream.data', 'stream.end', 'stt',
   ]
   for (const [name, src] of Object.entries(twins)) {
-    it(`${name}: the bridge adds only stream.open and the narrow session.permission command`, () => {
+    it(`${name}: the bridge adds only stream.open and the narrow session.permission and upload.part commands`, () => {
       const set = [...new Set(allowlist(src).match(/'[\w.-]+'/g)!.map((x) => x.slice(1, -1)))].sort()
-      expect(set).toEqual([...BRIDGE_SET_BEFORE_WP13, 'stream.open', 'session.permission'].sort())
+      // upload.part writes only <uploads root>/<uploadId>/<name> (transfer-core.ts uploadPart).
+      expect(set).toEqual([...BRIDGE_SET_BEFORE_WP13, 'stream.open', 'session.permission', 'upload.part'].sort())
     })
 
     it(`${name}: the bridge hello says what the daemon does for the companion, and a test can hide it`, () => {

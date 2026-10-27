@@ -168,7 +168,7 @@ import { buildScheduledMessage, buildTriggerMessage } from './trigger-envelope-c
 import { START_TASK_TOKEN, clockDueMs, clockFireOwed, clockStateOnArm, dropStaleClockFires, type ClockReport } from './trigger-clock-core.js'
 import { createClockSchedule } from './clock-schedule-core.js'
 import { resolvePathHostLocal } from './path-resolve-core.js'
-import { ensureTaskDir, listTaskDirs, removeTaskDirs, taskDirRoot } from './task-dir-core.js'
+import { ensureTaskDir, isTaskDirId, listTaskDirs, removeTaskDirs, taskDirPath, taskDirRoot } from './task-dir-core.js'
 import { scanHostUsage, scanCostState, scanSessionCost, createUsagePages } from './usage-host-core.js'
 import { createUsageBudgetRuntime, type BudgetPrices, type BudgetVerdict } from './usage-budget-runtime.js'
 import { createBudgetControl } from './usage-budget-control.js'
@@ -776,6 +776,11 @@ const BRIDGE_ALLOWED_COMMANDS = new Set([
   // attach pictures to a session over the cloud box. NOT fs.write: a
   // compromised cloud box must never get arbitrary file writes on exec hosts.
   'image.save',
+  // Narrow session upload ('upload-part-v1', transfer-core.ts uploadPart): a
+  // file a phone attached, in chunks, written ONLY as <uploads root>/<id>/<name>
+  // with the id and name checked and the root this daemon's own. NOT fs.write
+  // or fs.writePart: the caller never names a path.
+  'upload.part',
   // Narrow bounded file read (2MB cap + host-side path sandbox: traversal
   // rejection, realpath resolution, secret-path denylist) — lets the cloud
   // box serve phone file previews (HTML/text) for files on this host. NOT
@@ -2385,6 +2390,8 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     // Keep in sync with daemon-source.ts.
     // A private write ('transfer-private-v1') is authorized by this socket's own
     // binding (leader.configure / leader.claim), never by a field of the command.
+    // 'upload-part-v1': a phone's attachment, bridge-reachable (see BRIDGE_ALLOWED_COMMANDS).
+    case 'upload.part': return replyTransfer(ws, id as number, 'upload.part', () => transferCore.uploadPart(cmd, uploadsRootFor(cmd, ws.data?.origin === 'bridge')), false)
     case 'fs.writePart': return replyTransfer(ws, id as number, 'fs.writePart', () => transferCore.writePart(cmd, { boundHome: gatewayClientHomes.get(ws) ?? null, origin: ws.data?.origin ?? null }), false)
     case 'transfer.pack': return replyTransfer(ws, id as number, 'transfer.pack', () => transferPack.pack(cmd), true)
     case 'transfer.reach': return replyTransfer(ws, id as number, 'transfer.reach', () => transferCore.reach(cmd), false)
@@ -9996,6 +10003,28 @@ function readDaemonOwnerStamp(): string | null | undefined {
  * `tracked` work (a pack, a fetch) rides the command drain, so a shutdown waits
  * for it instead of cutting a bundle or a download in half.
  */
+/**
+ * Where a session's uploads land: the task's own directory, which survives a
+ * reboot and is cleaned with the task. The task is the one THIS daemon started
+ * the session for; a bridge caller cannot name another, and only the server's
+ * own link may name it for a session this daemon does not know. Without a task,
+ * a durable folder beside the task directories (never /tmp, which a reboot
+ * empties). The directory is made by an upload's first chunk only. Keep in sync
+ * with daemon-source.ts.
+ */
+function uploadsRootFor(cmd: Record<string, unknown>, bridge: boolean): string {
+  const sid = typeof cmd.sessionId === 'string' ? cmd.sessionId : ''
+  const known = sid ? (sessions.get(sid)?.spawnInfo?.task ?? hostResume.recall(sid)?.task) : undefined
+  const taskId = known ?? (bridge ? undefined : cmd.taskId)
+  const fallback = path.join(path.dirname(TASK_DIR_ROOT), 'uploads')
+  if (cmd.offset !== 0) {
+    const dir = isTaskDirId(taskId) ? taskDirPath(TASK_DIR_ROOT, taskId) : null
+    return dir && fs.existsSync(dir) ? path.join(dir, 'uploads') : fallback
+  }
+  const dir = ensureTaskDir(TASK_DIR_ROOT, taskId, bridge ? undefined : cmd.home)
+  return dir ? path.join(dir, 'uploads') : fallback
+}
+
 function replyTransfer(ws: ServerWebSocket<WsData>, id: number, name: string, work: () => Promise<unknown>, tracked: boolean) {
   const answer = () => work().then(
     (r) => sendOk(ws, id, r as Record<string, unknown>),

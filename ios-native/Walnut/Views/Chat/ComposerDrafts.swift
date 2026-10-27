@@ -24,6 +24,9 @@ final class ComposerDrafts {
 
     private var text: [String: String] = [:]
     private var images: [String: [SelectedImage]] = [:]
+    /// Attached files (a session's videos and documents). Memory-only like the
+    /// images; the bytes are the app's copies in `ComposerFileStore`.
+    private var files: [String: [ComposerFile]] = [:]
 
     private static let storageKey = "walnut.composerDrafts"
     /// Cap the persisted set so a long-lived install can't grow it without
@@ -55,6 +58,15 @@ final class ComposerDrafts {
         if value.isEmpty { images[key] = nil } else { images[key] = value }
     }
 
+    func files(_ key: String) -> [ComposerFile] { files[key] ?? [] }
+
+    func setFiles(_ value: [ComposerFile], key: String) {
+        if value.isEmpty { files[key] = nil } else { files[key] = value }
+    }
+
+    /// Every file any draft holds, so a launch-time sweep keeps their copies.
+    var heldFileIDs: Set<String> { Set(files.values.flatMap { $0.map(\.id) }) }
+
     /// Called after a send hands the content to a store — the store owns
     /// no-loss preservation from that point (failed bubbles keep text + images).
     /// Clears persist IMMEDIATELY (they're rare and must not be resurrected
@@ -62,6 +74,7 @@ final class ComposerDrafts {
     func clear(_ key: String) {
         text[key] = nil
         images[key] = nil
+        files[key] = nil
         persistNow()
     }
 
@@ -126,6 +139,8 @@ extension ComposerDrafts {
         persistTask = nil
         text = [:]
         images = [:]
+        files = [:]
+        ComposerFileStore.removeAll()
         AppPrefs.defaults.removeObject(forKey: Self.storageKey)
     }
 }

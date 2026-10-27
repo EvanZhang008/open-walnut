@@ -322,12 +322,16 @@ final class ComposerCameraTests: XCTestCase {
             "case Self.photoItemID:",
             "case Self.cameraItemID:",
             "case Self.hostRowItemID:",
-            "Self.attachmentSourceLabel(\"Photos\", attached: selectedImages.count)",
+            "Self.attachmentSourceLabel(acceptsFiles ? \"Photos & Videos\" : \"Photos\", attached: selectedImages.count)",
             "Self.attachmentSourceLabel(\"Take Photo\", attached: selectedImages.count)",
             "icon: Symbol.camera",
             "action: openCamera",
             "noticeRow(cameraNotice, icon: Symbol.cameraDeniedNotice)",
-            "Self.loadUntilFull(items, onto: selectedImages)",
+            "Self.loadUntilFull(photos, onto: selectedImages)",
+            // Files ride beside the photos: their row, their picker, their cards.
+            "case Self.filesItemID:",
+            "action: openFileImporter",
+            ".fileImporter(",
         ] {
             XCTAssertTrue(
                 source.contains(fragment),

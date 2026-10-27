@@ -145,6 +145,20 @@ export function writePart(host: string, opts: WritePartOptions): Promise<WritePa
   return call<WritePartReply>(host, WRITE_PART_CAPABILITY, 'fs.writePart', { ...rest, data }, PART_RPC_MS)
 }
 
+export const UPLOAD_PART_CAPABILITY = 'upload-part-v1'
+
+export interface UploadPartOptions {
+  uploadId: string; name: string; size: number; offset: number; data: Buffer
+  sha256?: string; taskId?: string; home?: string
+  /** The host prefers the task it started this session for over `taskId`. */
+  sessionId?: string
+}
+
+/** One chunk of a phone's session upload onto `host` ('upload-part-v1'); the daemon picks the path. */
+export function uploadPart(host: string, opts: UploadPartOptions): Promise<WritePartReply> {
+  return call<WritePartReply>(host, UPLOAD_PART_CAPABILITY, 'upload.part', { ...opts, data: opts.data.toString('base64') }, PART_RPC_MS)
+}
+
 /** Refuses unless `host` can hold a private stage; nothing is read or sent. */
 export async function assertPrivateStage(host: string): Promise<void> {
   await connectionFor(host, PRIVATE_STAGE_CAPABILITY)

@@ -11,7 +11,7 @@
  */
 import { afterAll, afterEach, describe, expect, it } from 'vitest'
 import { WebSocket } from 'ws'
-import { spawn, execFileSync, type ChildProcess } from 'node:child_process'
+import { spawn, spawnSync, execFileSync, type ChildProcess } from 'node:child_process'
 import * as crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -27,6 +27,12 @@ fs.writeFileSync(scriptPath, getDaemonSource(), { mode: 0o755 })
 const BUN = [process.env.BUN_INSTALL && path.join(process.env.BUN_INSTALL, 'bin/bun'), path.join(os.homedir(), '.bun/bin/bun'), '/opt/homebrew/bin/bun', '/usr/local/bin/bun']
   .find((p): p is string => !!p && fs.existsSync(p))
 const STANDALONE = path.resolve(__dirname, '../../src/providers/daemon-standalone.ts')
+// The source twin finds task directories through its sidecar, as deployed next to it.
+if (BUN) {
+  const built = spawnSync(BUN, ['build', '--target=node', '--format=cjs', '--outfile', path.join(root, 'task-dir-core.cjs'),
+    path.resolve(__dirname, '../../src/providers/task-dir-core.ts')], { encoding: 'utf8' })
+  if (built.status !== 0) throw new Error('sidecar build failed: ' + built.stderr)
+}
 const TWINS: Array<{ name: string; command: () => [string, string[]] }> = [
   { name: 'source twin (node)', command: () => [process.execPath, [scriptPath, '--start']] },
   ...(BUN ? [{ name: 'standalone twin (bun)', command: (): [string, string[]] => [BUN, [STANDALONE, '--start']] }] : []),
@@ -54,6 +60,7 @@ async function boot(twin: (typeof TWINS)[number], dir: string): Promise<string> 
     ...process.env, SHELL: '/bin/sh', PATH: guardedPath([], '/usr/bin:/bin'), HOME: home, WALNUT_HOME_OVERRIDE: home,
     WALNUT_DAEMON_DIR: path.join(dir, 'daemon'), WALNUT_STREAMS_DIR: path.join(dir, 'streams'),
     WALNUT_LEGACY_STREAMS_DIR: path.join(dir, 'no-legacy'), WALNUT_SPAWN_JOURNAL: path.join(dir, 'spawn-journal.jsonl'),
+    WALNUT_TASK_DIR_ROOT: path.join(dir, 'state', 'tasks'),
   }
   for (const k of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE']) delete env[k]
   const [cmd, args] = twin.command()
@@ -125,5 +132,33 @@ describe.each(TWINS)('$name', (twin) => {
 
     expect(await rpc({ cmd: 'transfer.reach', host: '-oProxyCommand=evil' })).toMatchObject({ ok: false, code: 'bad_request' })
     expect(await rpc({ cmd: 'transfer.fetch', host: 'a', files: [{ remotePath: '/x y', localPath: '/tmp/x' }] })).toMatchObject({ ok: false, code: 'bad_request' })
+  }, 120_000)
+
+  it('upload.part files a session upload under its task directory, made by the first chunk only', async () => {
+    const dir = path.join(root, twin.name.replace(/\W+/g, '-') + '-upload')
+    await boot(twin, dir)
+    const body = crypto.randomBytes(3000)
+    const sha = crypto.createHash('sha256').update(body).digest('hex')
+    const up = 'up-11111111-2222-3333-4444-555555555555'
+    const part = (offset: number, end: number, extra: Record<string, unknown> = {}) => rpc({
+      cmd: 'upload.part', uploadId: up, name: 'clip.mov', size: body.length, offset,
+      data: body.subarray(offset, end).toString('base64'), sessionId: 'not-a-session-here', taskId: 'task-upl-1', ...extra,
+    })
+    expect(await part(0, 1000)).toMatchObject({ ok: true, staged: 1000 })
+    // Without bun there is no sidecar, and the source twin has no task directories.
+    const taskDirs = !!BUN
+    const fallback = taskDirs ? path.join(dir, 'state', 'uploads') : path.join(dir, 'daemon', 'uploads')
+    const taskDir = taskDirs ? path.join(dir, 'state', 'tasks', 'task-upl-1') : path.dirname(fallback)
+    const target = taskDirs ? path.join(taskDir, 'uploads', up, 'clip.mov') : path.join(fallback, up, 'clip.mov')
+    expect(await part(1000, 3000, { sha256: sha })).toMatchObject({ ok: true, staged: 3000, done: true, path: target })
+    expect(fs.readFileSync(target).equals(body)).toBe(true)
+    // A refusal keeps its code; a later chunk for a task with no directory never makes one.
+    expect(await rpc({ cmd: 'upload.part', uploadId: up, name: '../x', size: 1, offset: 0, data: 'eA==' })).toMatchObject({ ok: false, code: 'bad_request' })
+    expect(await rpc({ cmd: 'upload.part', uploadId: up, name: 'late.bin', size: 9, offset: 3, data: 'eA==', taskId: 'task-upl-2' }))
+      .toMatchObject({ ok: false, code: 'gap' })
+    expect(fs.existsSync(path.join(dir, 'state', 'tasks', 'task-upl-2'))).toBe(false)
+    // No task at all: a durable folder beside the task directories, never the daemon's temp dir.
+    expect(await rpc({ cmd: 'upload.part', uploadId: up, name: 'loose.txt', size: 5, offset: 0, data: Buffer.from('hello').toString('base64') }))
+      .toMatchObject({ ok: true, done: true, path: path.join(fallback, up, 'loose.txt') })
   }, 120_000)
 })
