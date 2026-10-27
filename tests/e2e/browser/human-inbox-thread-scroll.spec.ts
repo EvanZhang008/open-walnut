@@ -251,3 +251,47 @@ test('a letter with no thread keeps its single scroll', async ({ page, request }
   expect(turn.y).toBeGreaterThanOrEqual(pane.y - 1)
   expect(await view.locator('.hib-thread-scroll').evaluate((el) => el.scrollHeight - el.clientHeight)).toBeLessThanOrEqual(1)
 })
+
+/** The reader's box and its two panes, in px. */
+const sizes = (view: Locator) => view.evaluate((el) => {
+  const h = (s: string) => Math.round(el.querySelector(s)!.getBoundingClientRect().height)
+  return { reader: Math.round(el.parentElement!.getBoundingClientRect().height), doc: h('.hib-reader-body'), pane: h('.hib-thread-pane') }
+})
+
+test('the reader keeps its size: no drift, and it comes back after the window shrinks', async ({ page, request }) => {
+  // The report (2026-10-26): a letter shorter than the overlay's max-height kept
+  // shrinking with no input, and stayed smaller after a resize, because the
+  // split read the space from the overlay's own height, which the panes set.
+  const subject = `PW thread scroll steady ${NONCE}`
+  const wide = 'A wide line in a code block that runs past the reader. '.repeat(6)
+  const id = await send(request, {
+    subject, type: 'info',
+    markdown: `**Status**: ${'a line of context. '.repeat(20)}\n\n\`\`\`\n${`${wide}\n`.repeat(14)}\`\`\`\n\n${'More of the letter. '.repeat(30)}`,
+  })
+  await agentReply(request, id, { text: `One agent turn: ${'the update in a few lines. '.repeat(12)}` })
+  await home(page)
+  const view = await openLetter(page, subject)
+  await expectNewestInView(view, 'One agent turn')
+  const first = await sizes(view)
+
+  // Re-renders with no layout input: typing in the reply box, then clearing it.
+  const input = view.locator('.hib-composer-input')
+  await input.pressSequentially('abc')
+  await input.fill('')
+  for (let i = 0; i < 6; i++) {
+    await page.waitForTimeout(500)
+    expect(await sizes(view)).toEqual(first)
+  }
+
+  const viewport = page.viewportSize()!
+  await page.setViewportSize({ width: viewport.width, height: viewport.height - 160 })
+  await expect.poll(async () => (await sizes(view)).reader).toBeLessThan(first.reader)
+  await page.setViewportSize(viewport)
+  await expect.poll(() => sizes(view)).toEqual(first)
+
+  // A new reply grows the conversation; the overlay keeps its height.
+  await agentReply(request, id, { text: `A second agent turn ${NONCE}` })
+  await expectNewestInView(view, `A second agent turn ${NONCE}`)
+  expect((await sizes(view)).reader).toBe(first.reader)
+  await page.screenshot({ path: `${SHOTS}/steady-after-reply.png` })
+})

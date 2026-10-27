@@ -30,16 +30,31 @@ function pickAnchor(scroller: HTMLElement): Anchor | null {
 }
 
 /**
- * What the two panes share: the view minus its head, meta and composer. Read
- * from the view, never from the panes, because before the first sizing the
- * document pane is as tall as its content and overflows.
+ * What the two panes share: the room the view has minus its head, meta and
+ * composer. Read from the view, never from the panes, because before the first
+ * sizing the document pane is as tall as its content and overflows.
+ *
+ * The room is the most the view can be, never its current height. The overlay
+ * grows with its content up to a max-height, so a letter that does not fill it
+ * is exactly as tall as the panes make it: read from there, the split fed on
+ * itself and drifted with every pass (2026-10-26, live prod: Chromium shrank
+ * the letter from 750px to 500px in a minute with no input, and WebKit kept a
+ * smaller size after the window shrank and grew back). The session tab's view
+ * fills a column of fixed height, so its current height is its room.
  */
 function paneSpace(view: HTMLElement, doc: HTMLElement, pane: HTMLElement): number {
   let chrome = 0;
   for (const child of view.children) {
     if (child !== doc && child !== pane) chrome += (child as HTMLElement).offsetHeight;
   }
-  return view.clientHeight - chrome;
+  let room = view.clientHeight;
+  const host = view.parentElement;
+  const limit = host ? parseFloat(getComputedStyle(host).maxHeight) : NaN;
+  if (host && Number.isFinite(limit)) {
+    // What the host holds besides the view (its border, any sibling) stays.
+    room = limit - (host.offsetHeight - view.offsetHeight);
+  }
+  return room - chrome;
 }
 
 /** Vertical padding of an element, from its computed style. */
@@ -153,10 +168,15 @@ export function useThreadPane({ letterId, turns, enabled }: {
       ['touchend', input(2500)],
     ];
     for (const [type, fn] of listeners) scroller?.addEventListener(type, fn, { passive: true });
+    // The overlay's max-height is a share of the window, and a letter shorter
+    // than it does not resize when the window does, so no observer sees it.
+    const onWindow = () => { layout(); keepPlace(); };
+    window.addEventListener('resize', onWindow);
     return () => {
       ro.disconnect();
       cancelAnimationFrame(frame);
       for (const [type, fn] of listeners) scroller?.removeEventListener(type, fn);
+      window.removeEventListener('resize', onWindow);
     };
   }, [enabled, letterId, layout, keepPlace]);
 
