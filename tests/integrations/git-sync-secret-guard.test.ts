@@ -23,6 +23,7 @@ vi.mock('../../src/constants.js', () => createMockConstants('walnut-secretguard-
 import {
   initSync,
   commitIfDirty,
+  ensureMachineLocalUntracked,
   resetSyncGuardForTest,
   setRemote,
   stageAllForCommit,
@@ -121,7 +122,6 @@ describe('findSecretsInText', () => {
     expect(secretPathKind('a/store.p12')).toBe('key-store');
     expect(secretPathKind('notes/env.md')).toBeNull();
     expect(secretPathKind('notes/keys.md')).toBeNull();
-    expect(secretPathKind('code-server/instance.json')).toBe('editor-instance');
   });
 
   it('finds Slack tokens of the newer formats and a bearer token', () => {
@@ -356,7 +356,17 @@ describe('auto-commit with the secret guard', () => {
 
   it('the .gitignore template lists credential stores by name', () => {
     const gitignore = fs.readFileSync(path.join(repo, '.gitignore'), 'utf-8');
-    for (const line of ['.env', '.env.*', '!.env.example', 'id_ed25519', '*.p12', '.netrc', '/code-server/instance.json']) expect(gitignore.split('\n')).toContain(line);
+    for (const line of ['.env', '.env.*', '!.env.example', 'id_ed25519', '*.p12', '.netrc']) expect(gitignore.split('\n')).toContain(line);
+  });
+
+  it('the editor instance file is machine-local: an install that tracked it untracks it, the file stays', async () => {
+    await writeFile('code-server/instance.json', '{"port":1,"pid":2}\n');
+    run('git add -f code-server/instance.json && git commit -q -m "older install"');
+    ensureMachineLocalUntracked();
+    await commitIfDirty();
+    expect(showHead('code-server/instance.json')).toBeNull();
+    expect(fs.existsSync(path.join(repo, 'code-server/instance.json'))).toBe(true);
+    expect(run('git check-ignore code-server/instance.json')).toBe('code-server/instance.json');
   });
 
   it('scans a big first commit without stalling: 6 MB of transcripts', async () => {

@@ -129,8 +129,6 @@ const SECRET_PATH_RES: Array<{ id: string; re: RegExp }> = [
   { id: 'credentials-file', re: /(?:^|\/)\.?credentials(?:\.json)?$/ },
   { id: 'aws-credentials', re: /(?:^|\/)\.aws\/(?:credentials|config)$/ },
   { id: 'browser-cookies', re: /(?:^|\/)Cookies(?:-journal)?$|\.cookies(?:\.txt)?$/ },
-  // The in-app editor's running instance: its access token, without a recognisable prefix.
-  { id: 'editor-instance', re: /^code-server\/instance\.json$/ },
 ];
 
 /**
@@ -141,7 +139,7 @@ export const SECRET_IGNORE_PATTERNS = [
   '.env', '.env.*', '!.env.example', '!.env.sample', '!.env.template',
   'id_rsa', 'id_dsa', 'id_ecdsa', 'id_ed25519',
   '*.p12', '*.pfx', '*.jks', '*.keystore', '*.kdbx', '*.keychain', '*.keychain-db', '*.ppk',
-  '.netrc', '_netrc', '.credentials.json', '/code-server/instance.json',
+  '.netrc', '_netrc', '.credentials.json',
 ];
 
 export function secretPathKind(file: string): string | null {

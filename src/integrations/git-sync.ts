@@ -742,6 +742,8 @@ triage-state.json
 # it would let LWW roll a settled row back to pending and re-notify — same class
 # as the cron-state storm above.
 session-requests.json
+# The in-app editor running on this box (port, pid, instance id): machine-local.
+code-server/instance.json
 # Quiet mode holds (src/core/quiet/quiet-state.ts): machine-local runtime state.
 # An LWW echo of another box's older holds would silence notifications here.
 quiet.json
@@ -919,6 +921,10 @@ const GITIGNORE_CONTENT = withPluginFilesBlockLast(GITIGNORE_BODY);
  *    companion reads the Mac's reply requests from its copy
  *    (replication/kinds/requests.ts), and git was never their backup: a fresh
  *    install never tracked them. local/ is root-anchored like models/.
+ *  - code-server/instance.json: the in-app editor running on THIS box (its port,
+ *    pid and instance id). Tracked since 2026-08-18, so the other box read the
+ *    Mac's running editor as its own. Not a credential (the editor binds loopback
+ *    with no auth, and the id only detects a stale URL), just machine-local.
  *
  * These are also actively untracked (see ensureMachineLocalUntracked): being
  * gitignored on THIS box while still tracked in the index is the dangerous
@@ -926,7 +932,7 @@ const GITIGNORE_CONTENT = withPluginFilesBlockLast(GITIGNORE_BODY);
  */
 const CRITICAL_IGNORE_FILES = [
   'auth.json', 'auth.json.bak', 'cloud-setup-job.json', 'config.yaml', 'config.yaml.bak', 'cron-state.json',
-  'triage-state.json', 'session-requests.json',
+  'triage-state.json', 'session-requests.json', 'code-server/instance.json',
 ];
 /** Repo-relative dir prefixes: what the untrack pass matches `ls-files` output against. */
 const CRITICAL_IGNORE_DIRS = ['health/', 'models/', 'places/', 'voice-archive/', 'plugin-data/', 'secrets/', 'local/'];
