@@ -6,6 +6,7 @@ enum SettingsRoute: Hashable {
     case routines
     case connectionRoutes
     case voiceHistory
+    case focusMusic
 }
 
 /// Settings tab — connection status card, server info (Wave 2 /v1/config),
@@ -38,6 +39,10 @@ struct SettingsView: View {
                 serverSection
                 serverInfoSection
                 automationSection
+                // Focus music streams from the paired Mac; the demo has none.
+                if !inDemo {
+                    focusSection
+                }
                 // The demo has no server: no notification registration, nothing to
                 // upload diagnostics to, no connection to test and nothing to
                 // disconnect from. Leave demo (in the Demo section) is its way out.
@@ -75,6 +80,7 @@ struct SettingsView: View {
                 case .routines: RoutinesView()
                 case .connectionRoutes: ConnectionRoutesView()
                 case .voiceHistory: VoiceHistoryView()
+                case .focusMusic: FocusMusicView()
                 }
             }
             .confirmationDialog(
@@ -188,6 +194,21 @@ struct SettingsView: View {
                 Label("Routines", systemImage: "calendar.badge.clock")
             }
             .accessibilityIdentifier("settings.routines")
+        }
+    }
+
+    /// Rhythm's focus music, from the folder on the Mac. Says "Playing" while it plays,
+    /// so the way back to Stop is easy to find after leaving the screen.
+    private var focusSection: some View {
+        Section("Focus") {
+            NavigationLink(value: SettingsRoute.focusMusic) {
+                LabeledContent {
+                    if FocusMusicPlayer.shared.isOn { Text("Playing") }
+                } label: {
+                    Label("Focus music", systemImage: "waveform")
+                }
+            }
+            .accessibilityIdentifier("settings.focusMusic")
         }
     }
 

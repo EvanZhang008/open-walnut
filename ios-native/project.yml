@@ -101,7 +101,9 @@ targets:
         # reading an answer the user asked to hear (SpeechOutput, capped at about
         # 40 s by SpokenText) when the screen locks or they switch apps. Nothing
         # new is read in the background: voice mode starts reading only while
-        # Walnut is active (VoiceModeController).
+        # Walnut is active (VoiceModeController). And the focus music the user
+        # started in Settings, Focus music (FocusMusicPlayer), which keeps playing
+        # with the screen locked until they stop it or their focus block ends.
         UIBackgroundModes:
           - audio
           # Human Inbox letter pushes carry `content-available`, so the app is
