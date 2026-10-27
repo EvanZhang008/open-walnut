@@ -26,6 +26,7 @@ import { createSessionRecord, updateSessionRecord, getSessionByClaudeId } from '
 import { sendMessageToSession, getQueue, resetCache } from '../../../src/core/session-message-queue.js'
 import { notePlaceCompaction } from '../../../src/core/sessions/place-notice.js'
 import { collectOpenItems } from '../../../src/core/sessions/open-items.js'
+import { updateConfig } from '../../../src/core/config-manager.js'
 import { createOpenItemsText } from '../../../src/core/sessions/open-items-text.js'
 import { RICH_OUTPUT_MODE_ON_INSTRUCTION, RICH_OUTPUT_MODE_REMINDER } from '../../../src/core/sessions/output-mode.js'
 
@@ -338,6 +339,15 @@ describe('sendMessageToSession carries the note (real store and queue)', () => {
       expect((await collectOpenItems(sid)).text).not.toContain('Rich output mode')
       expect((await getSessionByClaudeId(sid))?.outputModeHookAt).toBeUndefined()
       const md = await spawned('acme')
+      expect((await hook(md.sid)).text).toBe('')
+    })
+
+    it('restates the reply language after a compaction only when one is set', async () => {
+      const md = await spawned('acme')
+      await updateConfig({ session: { reply_language: 'Answer in French; code stays English.' } })
+      expect((await hook(md.sid)).text).toBe('[Reply language: Answer in French; code stays English.]')
+      expect((await collectOpenItems(md.sid)).text).toBe('')
+      await updateConfig({ session: {} })
       expect((await hook(md.sid)).text).toBe('')
     })
   })

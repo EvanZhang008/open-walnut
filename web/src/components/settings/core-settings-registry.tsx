@@ -140,6 +140,8 @@ export const CORE_SETTINGS_CONTRIBUTIONS: readonly CoreSettingsContribution[] = 
       'approve', 'mode', 'plan',
       { word: 'output mode', rowLabel: 'Output mode', anchor: 'session-output-mode' },
       'html', 'markdown',
+      { word: 'reply language', rowLabel: 'Reply language', anchor: 'session-reply-language' },
+      'language', 'chinese', 'english',
     ],
     render: ({ config, saveSection }) => <SessionsSection config={config} onSave={saveSection} />,
   },

@@ -91,6 +91,12 @@ export function SessionsSection({ config, onSave }: Props) {
     (v) => saveSession({ output_mode: v }, 'sessions.output-mode'),
     { rowKey: 'sessions.output-mode' },
   );
+  // '' clears it: the server adds no line for an empty setting.
+  const replyLanguage = useCommitField<string>(
+    config.session?.reply_language ?? '',
+    (v) => saveSession({ reply_language: v.trim() || undefined }, 'sessions.reply-language'),
+    { rowKey: 'sessions.reply-language', kind: 'text' },
+  );
   const turnSnapshots = useOptimisticSetting<boolean>(
     config.session?.turn_snapshots?.enabled !== false,
     (v) => saveSession({ turn_snapshots: { ...(config.session?.turn_snapshots ?? {}), enabled: v } }, 'sessions.turn-snapshots'),
@@ -192,6 +198,23 @@ export function SessionsSection({ config, onSave }: Props) {
               value={output.value}
               options={OUTPUT_OPTIONS}
               onChange={output.set}
+            />
+          }
+        />
+        <SettingsRow
+          label="Reply language"
+          help="One sentence added to every message a session gets; empty adds nothing."
+          htmlFor="session-reply-language"
+          error={replyLanguage.error}
+          control={
+            <input
+              id="session-reply-language"
+              data-testid="session-reply-language"
+              type="text"
+              className="settings-input settings-input--long"
+              placeholder="Answer me in Chinese; code and commits stay English."
+              maxLength={300}
+              {...replyLanguage.inputProps}
             />
           }
         />

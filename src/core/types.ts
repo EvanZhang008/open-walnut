@@ -1318,6 +1318,15 @@ export interface Config {
      *  resolveEffectiveOutputMode() in core/sessions/output-mode.ts. */
     output_mode?: SessionOutputMode;
 
+    /** One sentence saying which language to answer the user in (e.g. "Talk to
+     *  the user in Chinese; code, commits, UI strings and repo docs stay English").
+     *  Rides every message Walnut delivers into a session as one
+     *  `[Reply language: …]` line after the text, beside the rich output reminder,
+     *  because a long or compacted session drifts off a rule it read only once.
+     *  Empty/unset = no line. Built by replyLanguageLine() in
+     *  core/sessions/output-mode.ts. */
+    reply_language?: string;
+
     /** Per-turn working-tree snapshots: at every turn end of a session whose
      *  cwd is in a git repository, the session daemon records the tree under a
      *  hidden ref (refs/walnut/turns/<sessionId>/<n>) without touching the

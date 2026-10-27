@@ -12,8 +12,8 @@
  *     instruction measurably decays — the model writes HTML for the turn that
  *     carried it and drifts back to plain markdown a turn or two later. The
  *     reminder repeats the inline delivery contract even after compaction.
- *     Markdown mode appends NOTHING, so a session on
- *     plain markdown still pays exactly zero.
+ *     Markdown mode appends no mode text, so a session on
+ *     plain markdown pays nothing for it.
  *   · COMPACTION voids the edge: the summary does not keep the full instruction
  *     (2026-10-22: three hours of reminder-only turns, then a call-path diagram
  *     drawn as ASCII in a code fence), so the compaction recorder clears
@@ -36,6 +36,11 @@
  * Effective mode = record.output_mode ?? config.session.output_mode ?? default.
  * A record that never overrode the mode therefore follows the config LIVE, and
  * flipping the config produces a real edge for it on the next send.
+ *
+ * The same tail carries the user's reply language (`config.session.reply_language`)
+ * as one `[Reply language: …]` line on EVERY send, in either mode: the rule lived
+ * only in a private CLAUDE.md, which a compacted or non-Claude session loses, and
+ * long sessions drifted into the wrong language. Unset = no line.
  */
 
 import type { Config, SessionOutputMode, SessionRecord } from '../types.js';
@@ -118,6 +123,27 @@ export const RICH_OUTPUT_MODE_REMINDER =
   + 'colour or layout: raw HTML directly in this reply. '
   + 'No files, screenshots or HTML fences unless requested; no blank lines in a widget.]';
 
+/** Opening literal of the reply-language line; the strippers match lines that
+ *  start with it and end with `]` (like the reminder). */
+export const REPLY_LANGUAGE_MARKER = '[Reply language: ';
+
+/** The setting is one sentence; a pasted essay would ride every message. */
+export const REPLY_LANGUAGE_MAX_CHARS = 300;
+
+/**
+ * The reply-language line for this config, or null when the setting is empty.
+ * Whitespace (newlines included) collapses to single spaces, so it stays ONE
+ * line the line-anchored strippers can recognise.
+ */
+export function replyLanguageLine(config?: OutputModeConfig | null): string | null {
+  const raw = config?.session?.reply_language;
+  if (typeof raw !== 'string') return null;
+  let text = raw.replace(/\s+/g, ' ').trim();
+  if (!text) return null;
+  if (text.length > REPLY_LANGUAGE_MAX_CHARS) text = `${text.slice(0, REPLY_LANGUAGE_MAX_CHARS).trimEnd()}…`;
+  return `${REPLY_LANGUAGE_MARKER}${text}]`;
+}
+
 /** The style a model uses when nothing has been said to it. Compared against the
  *  effective mode to decide whether an edge is owed — deliberately NOT
  *  DEFAULT_SESSION_OUTPUT_MODE: with the default at 'rich', treating "never told"
@@ -152,11 +178,13 @@ export interface OutputModeDirective {
   /** One-line standing reminder to APPEND, or null (markdown mode / this send
    *  already carries the full instruction, which would make it redundant). */
   reminder: string | null;
+  /** The reply-language line to APPEND after the mode text, or null (unset). */
+  language: string | null;
 }
 
 /**
- * What this send must carry. Never null: markdown with nothing owed yields
- * `{ instruction: null, reminder: null }`, i.e. the message is left byte-identical.
+ * What this send must carry. Never null: markdown with nothing owed and no reply
+ * language yields all nulls, i.e. the message is left byte-identical.
  */
 export function resolveOutputModeDirective(
   record: Pick<SessionRecord, 'output_mode' | 'output_mode_injected'> | null | undefined,
@@ -173,6 +201,7 @@ export function resolveOutputModeDirective(
     // The full ON instruction already says everything the reminder does, so the
     // edge send doesn't carry both.
     reminder: mode === 'rich' && !edge ? RICH_OUTPUT_MODE_REMINDER : null,
+    language: replyLanguageLine(config),
   };
 }
 
@@ -184,8 +213,8 @@ export function resolveOutputModeDirective(
  * start of the message — a prefixed "/compact" stopped being a slash command.
  */
 export function applyOutputModeDirective(directive: OutputModeDirective, message: string): string {
-  const tail = directive.instruction ?? directive.reminder;
-  return tail ? `${message}\n\n${tail}` : message;
+  const tails = [directive.instruction ?? directive.reminder, directive.language].filter(Boolean);
+  return tails.length ? `${message}\n\n${tails.join('\n\n')}` : message;
 }
 
 /** Is this whole LINE one of ours? Line-anchored on purpose: a human sentence
@@ -200,6 +229,7 @@ function isOutputModeLine(line: string): boolean {
   // The phone's voice-reply line rides the same way (voice-reply.ts), so the one
   // display choke point strips it too.
   if (isVoiceReplyLine(t)) return true;
+  if (t.startsWith(REPLY_LANGUAGE_MARKER) && t.endsWith(']')) return true;
   return t.startsWith(OUTPUT_MODE_REMINDER_MARKER) && t.endsWith(']');
 }
 
@@ -223,6 +253,7 @@ export function stripOutputModeWrappers(text: string): string {
     !text.includes(OUTPUT_MODE_INSTRUCTION_MARKER)
     && !text.includes(OUTPUT_MODE_REMINDER_MARKER)
     && !text.includes(VOICE_REPLY_MARKER)
+    && !text.includes(REPLY_LANGUAGE_MARKER)
   ) {
     return text;
   }

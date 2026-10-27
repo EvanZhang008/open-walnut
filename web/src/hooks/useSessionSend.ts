@@ -111,11 +111,14 @@ const OUTPUT_MODE_INSTRUCTION_MARKER = '[Rich output mode: ';
 const OUTPUT_MODE_REMINDER_MARKER = '[Rich output mode is still on';
 /** The phone's voice-reply line (src/core/sessions/voice-reply.ts), stripped the same way. */
 const VOICE_REPLY_MARKER = '[Voice reply: ';
+/** The reply-language line (REPLY_LANGUAGE_MARKER in src/core/sessions/output-mode.ts), stripped the same way. */
+const REPLY_LANGUAGE_MARKER = '[Reply language: ';
 
 function isOutputModeLine(line: string): boolean {
   const t = line.trim();
   if (t.startsWith(OUTPUT_MODE_INSTRUCTION_MARKER)) return true;
   if (t.startsWith(VOICE_REPLY_MARKER) && t.endsWith(']')) return true;
+  if (t.startsWith(REPLY_LANGUAGE_MARKER) && t.endsWith(']')) return true;
   return t.startsWith(OUTPUT_MODE_REMINDER_MARKER) && t.endsWith(']');
 }
 
@@ -127,6 +130,7 @@ export function stripOutputModeWrappers(message: string): string {
     !message.includes(OUTPUT_MODE_INSTRUCTION_MARKER)
     && !message.includes(OUTPUT_MODE_REMINDER_MARKER)
     && !message.includes(VOICE_REPLY_MARKER)
+    && !message.includes(REPLY_LANGUAGE_MARKER)
   ) {
     return message;
   }

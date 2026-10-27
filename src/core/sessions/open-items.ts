@@ -123,6 +123,11 @@ export async function collectOpenItems(
       const { stateOutputModeAfterCompaction } = await import('./output-mode-send.js');
       const rich = await stateOutputModeAfterCompaction(caller.record);
       if (rich) items.text = [items.text, rich].filter(Boolean).join('\n\n');
+      // The reply language too, so the rest of an interrupted turn keeps it.
+      const { replyLanguageLine } = await import('./output-mode.js');
+      const { getConfig } = await import('../config-manager.js');
+      const language = replyLanguageLine(await getConfig().catch(() => null));
+      if (language) items.text = [items.text, language].filter(Boolean).join('\n\n');
       // A lead reads its teams back in full: the summary drops what earlier notes told it (org/team-note.ts).
       if (task.org_role === 'lead' && task.phase !== 'COMPLETE') {
         const { teamSnapshotText } = await import('../org/team-note.js');

@@ -149,22 +149,22 @@ describe('resolveOutputModeDirective', () => {
   it('markdown with nothing owed costs exactly nothing', () => {
     for (const record of [null, {}, { output_mode: 'markdown' as SessionOutputMode }]) {
       expect(resolveOutputModeDirective(record, cfgMarkdown)).toEqual({
-        mode: 'markdown', instruction: null, reminder: null,
+        mode: 'markdown', instruction: null, reminder: null, language: null,
       })
     }
     // An explicit markdown record ignores a rich CONFIG — the human's per-session
     // choice is the point of the pill.
     expect(resolveOutputModeDirective({ output_mode: 'markdown' }, cfgRich)).toEqual({
-      mode: 'markdown', instruction: null, reminder: null,
+      mode: 'markdown', instruction: null, reminder: null, language: null,
     })
   })
 
   it('fires the FULL instruction once per direction', () => {
     expect(resolveOutputModeDirective({ output_mode: 'rich' }, cfgMarkdown)).toEqual({
-      mode: 'rich', instruction: RICH_OUTPUT_MODE_ON_INSTRUCTION, reminder: null,
+      mode: 'rich', instruction: RICH_OUTPUT_MODE_ON_INSTRUCTION, reminder: null, language: null,
     })
     expect(resolveOutputModeDirective({ output_mode: 'markdown', output_mode_injected: 'rich' }, cfgRich)).toEqual({
-      mode: 'markdown', instruction: RICH_OUTPUT_MODE_OFF_INSTRUCTION, reminder: null,
+      mode: 'markdown', instruction: RICH_OUTPUT_MODE_OFF_INSTRUCTION, reminder: null, language: null,
     })
   })
 
@@ -174,17 +174,17 @@ describe('resolveOutputModeDirective', () => {
     // would compare rich against rich and never be told anything — the default
     // would silently do nothing.
     expect(resolveOutputModeDirective({}, cfgRich)).toEqual({
-      mode: 'rich', instruction: RICH_OUTPUT_MODE_ON_INSTRUCTION, reminder: null,
+      mode: 'rich', instruction: RICH_OUTPUT_MODE_ON_INSTRUCTION, reminder: null, language: null,
     })
     expect(resolveOutputModeDirective(null, cfgRich).instruction).toBe(RICH_OUTPUT_MODE_ON_INSTRUCTION)
   })
 
   it('once told, rich carries the standing reminder instead (never both)', () => {
     expect(resolveOutputModeDirective({ output_mode_injected: 'rich' }, cfgRich)).toEqual({
-      mode: 'rich', instruction: null, reminder: RICH_OUTPUT_MODE_REMINDER,
+      mode: 'rich', instruction: null, reminder: RICH_OUTPUT_MODE_REMINDER, language: null,
     })
     expect(resolveOutputModeDirective({ output_mode: 'rich', output_mode_injected: 'rich' }, cfgMarkdown)).toEqual({
-      mode: 'rich', instruction: null, reminder: RICH_OUTPUT_MODE_REMINDER,
+      mode: 'rich', instruction: null, reminder: RICH_OUTPUT_MODE_REMINDER, language: null,
     })
     // The edge send says everything the reminder says — no double.
     expect(resolveOutputModeDirective({ output_mode: 'rich' }, cfgRich).reminder).toBeNull()

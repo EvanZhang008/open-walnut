@@ -119,6 +119,8 @@ export const CONFIG_COPY_DROPPED_FIELDS: Readonly<Record<string, Readonly<Record
     language: 'the agent reply language of turns on the Mac',
     main_provider: 'names a provider entry, which is not copied',
   },
+  // Read only by the leader's send path. Named in the copy, an older replica would refuse the whole session row.
+  session: { reply_language: 'the reply-language line the Mac adds to each message it delivers' },
   'agent.available_models.[]': { compat: 'request quirks for calls the Mac makes', cost: 'pricing of usage on the Mac' },
   'hosts.*': {
     shell_setup: 'a shell command line that may carry tokens',

@@ -146,8 +146,8 @@ const HUMAN_CODEX_ORIGINATORS = new Set(['codex-tui', 'Codex Desktop', 'codex_de
 
 /**
  * Envelopes only Walnut writes into a user turn. Mirrors CACHE_WARMUP_TAG
- * (core/sessions/side-thread-warmup.ts) and the two output-mode markers
- * (core/sessions/output-mode.ts); this file can import neither, so a test pins
+ * (core/sessions/side-thread-warmup.ts) and the output-mode and reply-language
+ * markers (core/sessions/output-mode.ts); this file can import neither, so a test pins
  * the equality. knownSessionIds only covers THIS server's records, and a Walnut
  * session can reach the disk without one: a side-thread fork minted by another
  * Walnut instance sharing the host (a dev or test server), or a fork whose
@@ -159,16 +159,18 @@ export const WALNUT_ENVELOPE_MARKERS = {
   cacheWarmup: '<walnut-cache-warmup>',
   outputModeInstruction: '[Rich output mode: ',
   outputModeReminder: '[Rich output mode is still on',
+  replyLanguage: '[Reply language: ',
 }
 
 export function isWalnutEnvelopeText(text: string): boolean {
   const m = WALNUT_ENVELOPE_MARKERS
   if (text.trimStart().startsWith(m.cacheWarmup)) return true
-  if (!text.includes(m.outputModeInstruction) && !text.includes(m.outputModeReminder)) return false
+  if (!text.includes(m.outputModeInstruction) && !text.includes(m.outputModeReminder) && !text.includes(m.replyLanguage)) return false
   for (const line of text.split('\n')) {
     const t = line.trim()
     if (t.startsWith(m.outputModeInstruction)) return true
     if (t.startsWith(m.outputModeReminder) && t.endsWith(']')) return true
+    if (t.startsWith(m.replyLanguage) && t.endsWith(']')) return true
   }
   return false
 }

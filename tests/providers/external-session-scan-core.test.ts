@@ -726,17 +726,21 @@ describe('scanExternalSessions — Walnut-driven and reply-less transcripts', ()
   it('mirrors the markers Walnut actually writes', async () => {
     const { WALNUT_ENVELOPE_MARKERS } = await import('../../src/providers/external-session-scan-core.js')
     const { CACHE_WARMUP_TAG } = await import('../../src/core/sessions/side-thread-warmup.js')
-    const { OUTPUT_MODE_INSTRUCTION_MARKER, OUTPUT_MODE_REMINDER_MARKER, RICH_OUTPUT_MODE_REMINDER } =
+    const { OUTPUT_MODE_INSTRUCTION_MARKER, OUTPUT_MODE_REMINDER_MARKER, RICH_OUTPUT_MODE_REMINDER, REPLY_LANGUAGE_MARKER } =
       await import('../../src/core/sessions/output-mode.js')
     expect(WALNUT_ENVELOPE_MARKERS).toEqual({
       cacheWarmup: CACHE_WARMUP_TAG,
       outputModeInstruction: OUTPUT_MODE_INSTRUCTION_MARKER,
       outputModeReminder: OUTPUT_MODE_REMINDER_MARKER,
+      replyLanguage: REPLY_LANGUAGE_MARKER,
     })
     // Legacy wrappers remain in transcripts; current wording may change while
     // the provenance marker stays stable.
     expect(REMINDER.startsWith(OUTPUT_MODE_REMINDER_MARKER)).toBe(true)
     writeJsonl(file('current-reminder'), [user('current-reminder', 'continue\n\n' + RICH_OUTPUT_MODE_REMINDER), reply()])
+    expect((await scan()).candidates).toEqual([])
+    // A markdown session's only envelope may be the reply-language line.
+    writeJsonl(file('language-only'), [user('language-only', 'continue\n\n[Reply language: Answer in French.]'), reply()])
     expect((await scan()).candidates).toEqual([])
   })
 })
