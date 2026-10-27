@@ -7,8 +7,10 @@
  * producer the two things worth asserting are: the turn is delivered to the lane,
  * and the producer still persists what the user needs to see.
  *
- * The third producer here is the isolated cron job, which does not join the
- * conversation at all — it starts its own Personal AI session.
+ * Exception: a cron "main" turn goes to the current Main task's conversation,
+ * not the lane (2026-10-27, routines/main-target.ts). The third producer here is
+ * the isolated cron job, which does not join the conversation at all: it starts
+ * its own Personal AI session.
  *
  * What's real: Express server, the cron service + its deps,
  * the triage dispatch path, chat history, session records, the lane modules.
@@ -161,52 +163,34 @@ async function cronDeps() {
 }
 
 async function runCronJob(prompt: string, jobName: string): Promise<void> {
-  await (await cronDeps()).runMainAgentWithPrompt(prompt, jobName)
+  await (await cronDeps()).runMainAgentWithPrompt(prompt, jobName, { id: `job-${jobName}`, name: jobName } as CronJob)
+}
+
+async function mainTaskId(): Promise<string> {
+  const { ensureMainTask } = await import('../../../src/core/org/org-store.js')
+  return (await ensureMainTask()).id
 }
 
 describe('cron runMainAgentWithPrompt', () => {
-  it('delivers the cron-prefixed prompt to the lane', async () => {
+  // 2026-10-27: a "main" routine ran in the old home chat lane session, which
+  // has no task. It goes to the current Main task's conversation now.
+  it('delivers the prompt to the Main task, never the chat lane', async () => {
     await boot()
     await runCronJob('check the build', 'nightly')
 
-    // First cron turn creates the lane, so the prompt rides the spawn.
     expect(started).toHaveLength(1)
-    expect(started[0].message).toBe('[Scheduled Job "nightly"] check the build')
-    const conv = await mainConversationId()
-    expect(started[0].lane).toBe(`chat:general:${conv}`)
+    expect(started[0].taskId).toBe(await mainTaskId())
+    expect(started[0].lane).toBeUndefined()
+    expect(started[0].message).toContain('check the build')
+    // Nothing is written into the home chat as if the lane had answered.
+    const entries = await displayed(await mainConversationId())
+    expect(entries.some((c) => c.includes('check the build'))).toBe(false)
 
-    // Both halves are visible in chat: the trigger and the answer.
-    const entries = await displayed(conv)
-    expect(entries.some((c) => c.includes('[Scheduled Job "nightly"] check the build'))).toBe(true)
-    expect(entries.some((c) => c === 'lane answer')).toBe(true)
-  })
-
-  it('a second job reuses the lane and sends instead of spawning', async () => {
-    await boot()
-    await runCronJob('first', 'job-a')
+    // A second job is sent into that same session, never a second new conversation.
     await runCronJob('second', 'job-b')
-
     expect(started).toHaveLength(1)
-    expect(sent.map((s) => s.message)).toEqual(['[Scheduled Job "job-b"] second'])
-  })
-
-  it('a failed lane turn fails the job (cron records the error)', async () => {
-    // resultText === null must NOT be silently swallowed — the cron system's
-    // "last run failed" signal is the only place a stuck Personal AI shows up.
-    // (The real timeout is 10 min, so the failure is driven through
-    // session:error, which resolves null through the same branch.)
-    laneReply = null
-    await boot()
-    const deps = await cronDeps()
-    const failSoon = setInterval(() => {
-      const sid = started[0]?.preassignedSessionId
-      if (sid) bus.emit(EventNames.SESSION_ERROR, { error: 'CLI died', sessionId: sid }, ['main-ai'], { source: 'test' })
-    }, 100)
-    try {
-      await expect(deps.runMainAgentWithPrompt('x', 'doomed')).rejects.toThrow(/cron lane turn/)
-    } finally {
-      clearInterval(failSoon)
-    }
+    expect(sent.map((s) => s.sessionId)).toEqual([started[0].preassignedSessionId])
+    expect(sent[0].message).toContain('second')
   })
 })
 

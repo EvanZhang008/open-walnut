@@ -667,6 +667,12 @@ export interface Task {
     session_id?: string;
     error?: string;
   };
+  /**
+   * The routine run that made this task, until its session is confirmed up
+   * (src/core/routines/run-start.ts). `launch` is kept only while `starting`, so
+   * a restart can retry the run; it is dropped once the run settles.
+   */
+  routine_start?: RoutineStart;
   session_history_count?: number;
   session_status_unavailable?: boolean;
   /** Enrichment-only (not stored): live status of the linked session. */
@@ -2048,6 +2054,37 @@ export type RestartLossVerdict = 'resume' | 'waiting_user' | 'settled' | 'wait_h
  * 2026-10-26 that rewrite made every queued recovery read as "not infra" and
  * abort, and every interrupted task was handed back as if it waited on the user.
  */
+/** What a routine run asked for, enough to start the same session again. */
+export interface RoutineLaunch {
+  message: string;
+  cwd: string;
+  host?: string;
+  model?: string;
+  taskTitle?: string;
+  project?: string;
+  walnutAgent?: boolean;
+  agentId?: string;
+  /** The launch's event-bus source ('routine', 'cron-isolated'). */
+  source: string;
+}
+
+/** A routine run's start, stored on the task it made (Task.routine_start). */
+export interface RoutineStart {
+  job_id: string;
+  job_name: string;
+  /** ISO time the run was dispatched (the routine's lastRunAtMs). */
+  run_at: string;
+  /** 1 = the run's own start, 2 = the one retry. */
+  attempt: 1 | 2;
+  /** ISO time this attempt was launched. */
+  attempt_at: string;
+  /** The attempt's session id (absent for an engine that issues its own). */
+  session_id?: string;
+  state: 'starting' | 'started' | 'failed';
+  error?: string;
+  launch?: RoutineLaunch;
+}
+
 export interface SessionRestartLoss {
   /** ISO time the loss was observed (server boot, host reconnect). */
   at: string;
@@ -2087,6 +2124,14 @@ export interface SessionRestartLoss {
   before?: { status?: string; lastActiveAt?: string; permission?: boolean };
   /** ISO time the resume message went out (state 'sent'). */
   sentAt?: string;
+  /**
+   * The resume could not be delivered because the host's session daemon could
+   * not take it (it could not start, or did not answer: on a Mac, the window
+   * after the user's login ended and before the new login's daemon serves). The
+   * message waits in the session's queue, which the daemon's reconnect delivers;
+   * recovery holds the task meanwhile and spends no attempt on it.
+   */
+  waitingHost?: { since: string; error: string; /** The queued resume, removed if recovery gives up. */ messageId?: string };
 }
 
 export type StatusReason =

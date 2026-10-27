@@ -1,8 +1,9 @@
 /**
- * main-agent executor — delivers the routine's instructions into the home chat
- * conversation. The TYPE string 'main-agent' is a legacy storage format (saved
- * jobs carry it); the engine behind it is an ordinary Claude Code lane session
- * (runMainAgentWithPrompt → runLaneTurn) — the old in-process agent is gone.
+ * main-agent executor — delivers the routine's instructions to the main agent:
+ * the CURRENT Main task's conversation, resolved at every run
+ * (runMainAgentWithPrompt → routines/main-target.ts). The TYPE string
+ * 'main-agent' is a legacy storage format (saved jobs carry it); it no longer
+ * runs on the home chat's taskless lane session.
  *
  * NOTE: jobs with this executor type are dispatched through the cron engine's
  * legacy 'main' path (timer.ts), which owns the notification/wake plumbing.
@@ -14,7 +15,7 @@ import type { ExecutorDefinition } from '../types.js';
 
 export type MainAgentExecutorDeps = {
   broadcastCronNotification: (text: string, jobName: string, opts?: { agentWillRespond?: boolean }) => Promise<void>;
-  runMainAgentWithPrompt: (prompt: string, jobName: string) => Promise<void>;
+  runMainAgentWithPrompt: (prompt: string, jobName: string, job?: import('../../cron/types.js').CronJob) => Promise<void>;
   queueCronNotificationForAgent?: (text: string, jobName: string) => void;
 };
 
@@ -43,9 +44,9 @@ export function createMainAgentExecutor(deps: MainAgentExecutorDeps): ExecutorDe
       return { ok: true, config: { instructions: c.instructions.trim() } };
     },
     async run(job, _executor, message) {
-      await deps.broadcastCronNotification(message, job.name, { agentWillRespond: job.wakeMode === 'now' });
+      await deps.broadcastCronNotification(message, job.name, { agentWillRespond: false });
       if (job.wakeMode === 'now') {
-        await deps.runMainAgentWithPrompt(message, job.name);
+        await deps.runMainAgentWithPrompt(message, job.name, job);
       } else {
         deps.queueCronNotificationForAgent?.(message, job.name);
       }

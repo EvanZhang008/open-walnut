@@ -47,6 +47,10 @@ class World {
   sends: Array<{ sessionId: string; message: string; source: string }> = []
   handBacks: string[] = []
   notes: Array<{ sessionId: string; message: string }> = []
+  /** Messages waiting in each session's queue (a delivery the host could not take puts its batch back). */
+  pending = new Map<string, number>()
+  deliveryFailed = new Map<string, (error: string) => void>()
+  dropped: Array<{ sid: string; messageId: string }> = []
   /** What a send does to the record: bring it back (default), fail the spawn, or nothing. */
   onSend: (sid: string) => void = (sid) => { this.patch(sid, { process_status: 'running' }) }
 
@@ -93,6 +97,15 @@ class World {
         if (t && (t.phase === 'IN_PROGRESS' || t.phase === 'TODO')) t.phase = 'NEED_ACTION'
       },
       emitNote: (sessionId, _t, message) => { this.notes.push({ sessionId, message }) },
+      pendingMessages: async (sid) => this.pending.get(sid) ?? 0,
+      onDeliveryFailed: (sid, cb) => {
+        this.deliveryFailed.set(sid, cb)
+        return () => { this.deliveryFailed.delete(sid) }
+      },
+      dropMessage: async (sid, messageId) => {
+        this.dropped.push({ sid, messageId })
+        this.pending.set(sid, 0)
+      },
     }
   }
 
@@ -447,6 +460,72 @@ describe('resume queue', () => {
     expect(w.records.get('a')!.autoRecover?.attempts).toBe(3)
     expect(w.loss('a')?.state).toBe('gave_up')
     expect(w.handBacks).toEqual(['task-a'])
+  })
+
+  // 2026-10-26: the user's login on the Mac ended; for hours the session daemon
+  // could not start ("port file not created within 30s"). A resume then puts its
+  // message back in the queue and reports delivery_failed; the record is not touched.
+  const DAEMON_DOWN = 'Local daemon failed to start — port file not created within 30s, and the Walnut Sessions host (pid 44765) is still running'
+  function hostCannotTake(w: World): void {
+    w.onSend = (sid) => {
+      w.pending.set(sid, 1)
+      queueMicrotask(() => w.deliveryFailed.get(sid)?.(DAEMON_DOWN))
+    }
+  }
+
+  it('a resume the host daemon could not take waits for the host: no attempt spent, no second send, the task held', async () => {
+    const w = new World()
+    hostCannotTake(w)
+    const sar = make(w)
+    const { rec, before } = dead(w, 'a', 'IN_PROGRESS', { snapshot: snap({ turnActive: true }) })
+    sar.noteLoss(rec, 'server_restart', before, { requireInfra: false })
+    await w.advance(2 * 3_600_000)
+    expect(w.sends).toHaveLength(1)
+    expect(w.records.get('a')!.autoRecover?.attempts).toBe(0)
+    expect(w.loss('a')).toMatchObject({ state: 'queued', waitingHost: { error: DAEMON_DOWN } })
+    expect(w.loss('a')?.reason).toContain("this computer's session daemon")
+    expect(sar.holdsHandBack(w.records.get('a')!)).toBe(true)
+    expect(w.handBacks).toEqual([])
+    // The new login's daemon serves: its reconnect delivers the queued message.
+    w.pending.set('a', 0)
+    w.patch('a', { process_status: 'running' })
+    await w.advance(61_000)
+    expect(w.sends).toHaveLength(1)
+    expect(w.loss('a')).toMatchObject({ state: 'resumed' })
+    expect(w.loss('a')?.waitingHost).toBeUndefined()
+    expect(w.handBacks).toEqual([])
+  })
+
+  it('a host that never takes the resume is handed back after the host-wait window, with the daemon error as the reason', async () => {
+    const w = new World()
+    hostCannotTake(w)
+    const sar = make(w, { ownerWaitMs: 30 * 60_000 })
+    const { rec, before } = dead(w, 'a', 'IN_PROGRESS', { snapshot: snap({ turnActive: true }) })
+    sar.noteLoss(rec, 'server_restart', before, { requireInfra: false })
+    await w.advance(40 * 60_000)
+    expect(w.sends).toHaveLength(1)
+    expect(w.loss('a')?.state).toBe('gave_up')
+    expect(w.handBacks).toEqual(['task-a'])
+    expect(w.notes.at(-1)?.message).toContain("this computer's session daemon could not take the resume")
+    expect(w.notes.at(-1)?.message).toContain('port file not created')
+    // The queued resume is removed, so it never goes out after the hand-back.
+    expect(w.dropped).toEqual([{ sid: 'a', messageId: expect.stringMatching(/^qm-recover-/) }])
+  })
+
+  it('a queued message that left without bringing the session back is judged afresh (a normal attempt)', async () => {
+    const w = new World()
+    hostCannotTake(w)
+    const sar = make(w)
+    const { rec, before } = dead(w, 'a', 'IN_PROGRESS', { snapshot: snap({ turnActive: true }) })
+    sar.noteLoss(rec, 'server_restart', before, { requireInfra: false })
+    await w.advance(5 * 60_000)
+    expect(w.loss('a')?.waitingHost).toBeDefined()
+    // The batch was parked (or delivered and died): nothing waits in the queue any more.
+    w.pending.set('a', 0)
+    w.onSend = (sid) => { w.patch(sid, { process_status: 'running' }) }
+    await w.advance(61_000)
+    expect(w.sends).toHaveLength(2)
+    expect(w.loss('a')?.state).toBe('resumed')
   })
 
   it('a send that throws goes back to the queue and is retried', async () => {

@@ -1,19 +1,20 @@
 /**
- * E2E test: Cron job with wakeMode='now' triggers visible agent response.
+ * E2E: a routine aimed at the main agent reaches the CURRENT Main task's
+ * session, never the home chat's taskless lane session.
  *
- * Real server, real WebSocket, real cron execution.
- * Proves: when a cron job fires with wakeMode='now', the UI receives
- * either agent:text-delta/agent:response (success) or agent:error (failure),
- * and the response is persisted in chat history.
+ * Real server, real WebSocket, real cron execution, real delivery path
+ * (routines/main-target.ts → the session executor → quickStartSession / the
+ * message queue). The 'session-runner' bus subscriber is replaced by a recorder,
+ * so nothing here can spawn a CLI: the assertion is WHERE the server sends.
  *
- * The turn is answered by the conversation's lane session, so the 'session-runner'
- * bus subscriber is replaced by a fake that answers with a synthetic session:result
- * — the assertion is the SERVER's delivery of a visible event, never a real `claude`.
+ * 2026-10-27: "Main daily reflection" ran in Main AND in the old home chat lane
+ * session (no task, no longer Main); earlier one-off routines ran only there.
  *
  * All test cron jobs are cleaned up in afterAll.
  */
-import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import fs from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
 import type { Server as HttpServer } from 'node:http';
 import { WebSocket } from 'ws';
 import { createMockConstants } from '../helpers/mock-constants.js';
@@ -99,44 +100,85 @@ function drainQueue(sessionId: string): void {
   void p.finally(() => inFlightDrains.delete(p));
 }
 
+/** Every start and send the server asked the session runner for. */
+const asked: Array<{ kind: 'start' | 'send'; sessionId?: string; taskId?: string; message: string }> = [];
+
 /**
- * Fake session-runner: answers every lane start/send with a synthetic
- * session:result. Registered by NAME after startServer, which displaces the real
- * subscriber, so nothing in this file can spawn a CLI.
+ * Recording session-runner, registered by NAME after startServer, which displaces
+ * the real subscriber. A send's queue row is drained so no message stays pending
+ * (a pending one is what a reconnect would cold-resume into a spawn).
  */
-function installFakeRunner(): void {
+function installRecorder(): void {
   bus.subscribe('session-runner', (event: BusEvent) => {
-    let sid: string | undefined;
-    if (event.name === EventNames.SESSION_START) sid = (event.data as SessionStartEvent).preassignedSessionId;
-    else if (event.name === EventNames.SESSION_SEND) sid = (event.data as SessionSendEvent).sessionId;
-    if (!sid) return;
-    drainQueue(sid);
-    setTimeout(() => {
-      bus.emit(EventNames.SESSION_RESULT, { sessionId: sid!, result: 'Hello from the lane.', isError: false },
-        ['main-ai', 'session-runner'], { source: 'session-runner' });
-    }, 5);
+    if (event.name === EventNames.SESSION_START) {
+      const d = event.data as SessionStartEvent;
+      asked.push({ kind: 'start', sessionId: d.preassignedSessionId, taskId: d.taskId, message: d.message });
+    } else if (event.name === EventNames.SESSION_SEND) {
+      const d = event.data as SessionSendEvent;
+      asked.push({ kind: 'send', sessionId: d.sessionId, taskId: d.taskId, message: d.message });
+      drainQueue(d.sessionId);
+    }
   });
+}
+
+async function createJob(body: Record<string, unknown>): Promise<string> {
+  const res = await fetch(apiUrl('/api/cron'), {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ schedule: { kind: 'every', everyMs: 3600000 }, sessionTarget: 'main', ...body }),
+  });
+  expect(res.status).toBe(201);
+  const { job } = (await res.json()) as { job: { id: string } };
+  createdJobIds.push(job.id);
+  return job.id;
+}
+
+async function runJob(id: string): Promise<{ lastStatus?: string; lastError?: string }> {
+  const res = await fetch(apiUrl(`/api/cron/${id}/run`), { method: 'POST' });
+  expect(res.status).toBe(200);
+  const body = (await res.json()) as { result: { ok: boolean; ran: boolean } };
+  expect(body.result).toMatchObject({ ok: true, ran: true });
+  const got = await fetch(apiUrl(`/api/cron/${id}`));
+  return ((await got.json()) as { job: { state: { lastStatus?: string; lastError?: string } } }).job.state;
+}
+
+async function waitFor<T>(fn: () => T | undefined, ms = 5000): Promise<T> {
+  const until = Date.now() + ms;
+  for (;;) {
+    const v = fn();
+    if (v !== undefined) return v;
+    if (Date.now() > until) throw new Error('timed out');
+    await delay(25);
+  }
 }
 
 // ── Setup / Teardown ──
 
-// Cron writes background turns to the MAIN conversation (server.ts), so the
-// test reads chat history from that same conversation.
 let mainConvId: string;
+let mainTaskId: string;
+/** The home chat's lane session: taskless, what used to receive these routines. */
+const laneSid = randomUUID();
 
 beforeAll(async () => {
   await fs.rm(WALNUT_HOME, { recursive: true, force: true });
   await fs.mkdir(WALNUT_HOME, { recursive: true });
   server = await startServer({ port: 0, dev: true });
-  installFakeRunner();
+  installRecorder();
   const addr = server.address();
   port = typeof addr === 'object' && addr ? addr.port : 0;
   const { getMainConversationId } = await import('../../src/core/conversations.js');
   mainConvId = await getMainConversationId('general');
+  const { createSessionRecord } = await import('../../src/core/session-tracker.js');
+  const { personalAiLaneKey } = await import('../../src/core/sessions/personal-ai-lane.js');
+  await createSessionRecord(laneSid, '', '', WALNUT_HOME, {
+    lane: personalAiLaneKey('general', mainConvId), initialProcessStatus: 'idle',
+  });
+  const { ensureMainTask } = await import('../../src/core/org/org-store.js');
+  mainTaskId = (await ensureMainTask()).id;
 });
 
+beforeEach(() => { asked.length = 0; });
+
 afterAll(async () => {
-  // Clean up all test cron jobs
   for (const id of createdJobIds) {
     try {
       await fetch(apiUrl(`/api/cron/${id}`), { method: 'DELETE' });
@@ -152,140 +194,61 @@ afterAll(async () => {
 
 // ── Tests ──
 
-describe('Cron agent response delivery (wakeMode=now)', () => {
-  it('cron job with wakeMode=now produces visible agent event (response or error)', async () => {
-    // Step 1: Create a cron job with wakeMode='now', sessionTarget='main'
-    const createRes = await fetch(apiUrl('/api/cron'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        name: 'Agent Response Test',
-        schedule: { kind: 'every', everyMs: 3600000 }, // 1 hour (won't auto-fire)
-        sessionTarget: 'main',
-        wakeMode: 'now',
-        payload: { kind: 'systemEvent', text: 'Say hello in one sentence.' },
-      }),
-    });
-    expect(createRes.status).toBe(201);
-    const { job } = (await createRes.json()) as { job: { id: string } };
-    createdJobIds.push(job.id);
-
-    // Step 2: Connect WS and start collecting agent events
+describe('a routine aimed at the main agent', () => {
+  it('reaches the Main task\'s conversation as a scheduled message, and never the home chat lane', async () => {
+    const id = await createJob({ name: 'Main daily reflection', wakeMode: 'now', payload: { kind: 'systemEvent', text: 'Write the daily reflection.' } });
     const ws = await connectWs();
-    const agentEventNames = [
-      'agent:text-delta',
-      'agent:response',
-      'agent:error',
-      'cron:notification',
-      'cron:chat-message',
-    ];
-    const msgPromise = collectWsMessagesByName(ws, agentEventNames, 3, 30000);
-
-    // Step 3: Trigger the cron job manually
-    const runRes = await fetch(apiUrl(`/api/cron/${job.id}/run`), { method: 'POST' });
-    expect(runRes.status).toBe(200);
-    const runBody = (await runRes.json()) as { result: { ok: boolean; ran: boolean } };
-    expect(runBody.result.ok).toBe(true);
-    expect(runBody.result.ran).toBe(true);
-
-    // Step 4: Wait for WS events
-    const messages = await msgPromise;
+    const toast = collectWsMessagesByName(ws, ['cron:notification'], 1, 10000);
+    const state = await runJob(id);
+    expect(state.lastStatus).toBe('ok');
+    const hit = await waitFor(() => asked.find((a) => a.taskId === mainTaskId));
+    expect(hit.kind).toBe('start');
+    expect(hit.message).toContain('Write the daily reflection.');
+    // The scheduled envelope: the session can tell a routine from a person.
+    expect(hit.message).toContain('<walnut-message');
+    expect(hit.message).toContain('Main daily reflection');
+    expect(asked.some((a) => a.sessionId === laneSid)).toBe(false);
+    // The toast still tells the user; the home chat history is not written.
+    expect((await toast).length).toBe(1);
     ws.close();
-
-    // Step 5: Verify cron notification was broadcast
-    const notifMsg = messages.find((m) => m.name === 'cron:notification');
-    expect(notifMsg).toBeDefined();
-
-    // Step 6: Verify agent produced SOME visible output (response OR error).
-    // With the fake runner answering, that is agent:response; a lane that stalls
-    // or errors broadcasts agent:error. Either way, the UI must NOT be left in
-    // silence — that is the whole subject of this test.
-    const agentResponse = messages.find((m) => m.name === 'agent:response');
-    const agentError = messages.find((m) => m.name === 'agent:error');
-    const agentDelta = messages.find((m) => m.name === 'agent:text-delta');
-
-    const hasAgentOutput = agentResponse || agentError || agentDelta;
-    expect(hasAgentOutput).toBeDefined();
-
-    // Step 7: Verify chat history was updated (not empty)
-    // Give a moment for persistence
-    await delay(500);
     const display = await chatHistory.getDisplayHistory('general', mainConvId);
-    // Should have at least the cron notification message
-    expect(display.length).toBeGreaterThan(0);
+    expect(display.some((m) => typeof m.content === 'string' && m.content.includes('Write the daily reflection.'))).toBe(false);
   });
 
-  it('cron job with wakeMode=next-cycle does NOT trigger agent (by design)', async () => {
-    // Create a next-cycle job
-    const createRes = await fetch(apiUrl('/api/cron'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        name: 'Next Cycle Test',
-        schedule: { kind: 'every', everyMs: 3600000 },
-        sessionTarget: 'main',
-        wakeMode: 'next-cycle',
-        payload: { kind: 'systemEvent', text: 'Queued notification test.' },
-      }),
-    });
-    expect(createRes.status).toBe(201);
-    const { job } = (await createRes.json()) as { job: { id: string } };
-    createdJobIds.push(job.id);
-
-    // Connect WS and collect events
-    const ws = await connectWs();
-    const agentEventNames = ['agent:text-delta', 'agent:response', 'agent:error'];
-    // Short timeout — we expect NO agent events
-    const msgPromise = collectWsMessagesByName(ws, agentEventNames, 1, 3000);
-
-    // Trigger
-    const runRes = await fetch(apiUrl(`/api/cron/${job.id}/run`), { method: 'POST' });
-    expect(runRes.status).toBe(200);
-    const runBody = (await runRes.json()) as { result: { ok: boolean; ran: boolean } };
-    expect(runBody.result.ok).toBe(true);
-    expect(runBody.result.ran).toBe(true);
-
-    // Wait — should time out with no agent events
-    const messages = await msgPromise;
-    ws.close();
-
-    // No agent events should have been received
-    expect(messages).toHaveLength(0);
+  it('a second run continues the same conversation on the Main task', async () => {
+    const id = await createJob({ name: 'Main check-in', wakeMode: 'now', payload: { kind: 'systemEvent', text: 'Check in.' } });
+    await runJob(id);
+    const first = await waitFor(() => asked.find((a) => a.taskId === mainTaskId));
+    const firstSid = first.sessionId;
+    asked.length = 0;
+    await runJob(id);
+    const second = await waitFor(() => asked.find((a) => a.taskId === mainTaskId || a.sessionId === firstSid));
+    expect(second.kind).toBe('send');
+    expect(second.sessionId).toBe(firstSid);
+    expect(asked.some((a) => a.sessionId === laneSid)).toBe(false);
   });
 
-  it('cron notification appears in chat history display messages', async () => {
-    // Clear chat first
-    await chatHistory.clear('general', mainConvId);
+  it('next-cycle routines also go to the Main task (there is no taskless chat to wait in)', async () => {
+    const id = await createJob({ name: 'Queued note', wakeMode: 'next-cycle', payload: { kind: 'systemEvent', text: 'Queued notification test.' } });
+    await runJob(id);
+    const hit = await waitFor(() => asked.find((a) => a.message.includes('Queued notification test.')));
+    expect(hit.taskId === mainTaskId || hit.kind === 'send').toBe(true);
+    expect(asked.some((a) => a.sessionId === laneSid)).toBe(false);
+  });
 
-    // Create a next-cycle job (fast, no agent call)
-    const createRes = await fetch(apiUrl('/api/cron'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        name: 'Chat History Test',
-        schedule: { kind: 'every', everyMs: 3600000 },
-        sessionTarget: 'main',
-        wakeMode: 'next-cycle',
-        payload: { kind: 'systemEvent', text: 'Chat history persistence test.' },
-      }),
-    });
-    expect(createRes.status).toBe(201);
-    const { job } = (await createRes.json()) as { job: { id: string } };
-    createdJobIds.push(job.id);
-
-    // Trigger
-    await fetch(apiUrl(`/api/cron/${job.id}/run`), { method: 'POST' });
-
-    // Wait for persistence
-    await delay(500);
-
-    // Verify the notification was persisted to display messages
-    const display = await chatHistory.getDisplayHistory('general', mainConvId);
-    const cronMsg = display.find(
-      (m) => typeof m.content === 'string' && m.content.includes('Chat history persistence test'),
-    );
-    expect(cronMsg).toBeDefined();
-    // Cron notifications are stored with role='user' and source='cron'
-    expect(cronMsg!.role).toBe('user');
+  it('follows the CURRENT Main: a new Main receives the next run, the old one does not', async () => {
+    const { updateTaskRaw, addTask } = await import('../../src/core/task-manager.js');
+    await updateTaskRaw(mainTaskId, { org_role: undefined });
+    const { task: next } = await addTask({ title: 'Main', project: 'Ask Walnut', source: 'local', walnut_agent: true, org_role: 'main' });
+    try {
+      const id = await createJob({ name: 'Main after handover', wakeMode: 'now', payload: { kind: 'systemEvent', text: 'Hello, new Main.' } });
+      await runJob(id);
+      const hit = await waitFor(() => asked.find((a) => a.message.includes('Hello, new Main.')));
+      expect(hit.taskId).toBe(next.id);
+      expect(asked.some((a) => a.taskId === mainTaskId)).toBe(false);
+    } finally {
+      await updateTaskRaw(next.id, { org_role: undefined });
+      await updateTaskRaw(mainTaskId, { org_role: 'main' });
+    }
   });
 });

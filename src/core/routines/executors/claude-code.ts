@@ -19,8 +19,8 @@
  * Walnut's default engine switches their routines with it.
  */
 
-import { quickStartSession } from '../../sessions/quick-start.js';
 import { getConfig } from '../../config-manager.js';
+import type { RoutineRunStarter } from '../run-start.js';
 import type { ExecutorDefinition } from '../types.js';
 import { clearHostGateNotices, noteHostGateRefusal, resetHostGateNotices } from '../host-gate-notice.js';
 
@@ -99,8 +99,9 @@ export function renderRoutineTitleTemplate(
   return rendered.trim();
 }
 
-export function createClaudeCodeExecutor(opts: { notify?: RoutineGateNotify } = {}): ExecutorDefinition {
+export function createClaudeCodeExecutor(opts: { notify?: RoutineGateNotify; starter?: () => Promise<RoutineRunStarter> } = {}): ExecutorDefinition {
   const notify = opts.notify ?? defaultGateNotify;
+  const starter = opts.starter ?? (async () => (await import('../run-start-deps.js')).routineRunStarter());
   return {
     type: 'claude-code',
     label: 'Claude Code',
@@ -209,26 +210,28 @@ export function createClaudeCodeExecutor(opts: { notify?: RoutineGateNotify } = 
       const count = readTriageCountHint(message);
       const sessionMessage = stripTriageCountHint(message);
 
-      let task;
+      let started;
       try {
-        task = await quickStartSession({
-          message: sessionMessage,
-          cwd: config.cwd,
-          host: config.host,
-          model: config.model,
-          taskTitle: config.titleTemplate
-            ? renderRoutineTitleTemplate(config.titleTemplate, { nowMs: Date.now(), count })
-            : config.taskTitle || `Routine: ${job.name}`,
-          // Routines are background automation: an explicit null keeps every run
-          // OFF the pinned board (a daily job would otherwise add a card a day),
-          // where an omitted pinTier would take the new-task board default.
-          taskMeta: { pinTier: null },
-          project: config.project || 'Routines',
-          source: 'routine',
-          // Engine stays unset on purpose: quickStartSession inherits
-          // config.defaults.engine for it.
-          ...(config.walnutAgent ? { walnutAgent: true } : {}),
-          ...(config.agentId ? { agentId: config.agentId } : {}),
+        // The start is held to a deadline (run-start.ts): a session that never
+        // comes up is retried once, then this run is recorded failed.
+        started = await (await starter()).start({
+          job: { id: job.id, name: job.name },
+          runAtMs: job.state?.runningAtMs ?? Date.now(),
+          launch: {
+            message: sessionMessage,
+            cwd: config.cwd,
+            host: config.host,
+            model: config.model,
+            taskTitle: config.titleTemplate
+              ? renderRoutineTitleTemplate(config.titleTemplate, { nowMs: Date.now(), count })
+              : config.taskTitle || `Routine: ${job.name}`,
+            project: config.project || 'Routines',
+            source: 'routine',
+            // Engine stays unset on purpose: quickStartSession inherits
+            // config.defaults.engine for it.
+            ...(config.walnutAgent ? { walnutAgent: true } : {}),
+            ...(config.agentId ? { agentId: config.agentId } : {}),
+          },
         });
       } catch (err) {
         // The host gate refused (host-start-gate.ts): the run fails with the
@@ -239,11 +242,14 @@ export function createClaudeCodeExecutor(opts: { notify?: RoutineGateNotify } = 
       }
       clearHostGateNotices(job.id);
 
-      // Fire-and-forget by design: the session's lifecycle is observable in the
-      // SessionPanel; the routine run is "ok" once the session has been started.
+      // The task id stays in the summary: a later verdict on this run finds its row by it.
+      const where = `${config.cwd}${config.host ? ` @ ${config.host}` : ''}`;
       return {
         status: 'ok',
-        summary: `Started Claude Code session for task ${task.id} (${config.cwd}${config.host ? ` @ ${config.host}` : ''})`,
+        summary: started.confirmed
+          ? `Started Claude Code session for task ${started.task.id} (${where})`
+          : `Starting Claude Code session for task ${started.task.id} (${where}); not confirmed yet, a start that never comes up is retried once and then recorded failed`,
+        ...(started.sessionId ? { delivered: { sessionId: started.sessionId, text: sessionMessage } } : {}),
       };
     },
   };

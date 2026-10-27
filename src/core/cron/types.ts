@@ -416,7 +416,8 @@ export type CronServiceDeps = {
   cronEnabled: boolean;
   broadcastCronNotification: (text: string, jobName: string, opts?: { agentWillRespond?: boolean }) => Promise<void>;
   queueCronNotificationForAgent?: (text: string, jobName: string) => void;
-  runMainAgentWithPrompt: (prompt: string, jobName: string) => Promise<void>;
+  /** Deliver to the main agent: the CURRENT Main task (routines/main-target.ts). `job` names the run. */
+  runMainAgentWithPrompt: (prompt: string, jobName: string, job?: CronJob) => Promise<void>;
   runIsolatedAgentJob: (params: { job: CronJob; message: string }) => Promise<{
     status: 'ok' | 'error';
     summary?: string;

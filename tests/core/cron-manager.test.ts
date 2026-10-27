@@ -1211,7 +1211,8 @@ describe('executeJob — execution flow', () => {
     const job = await service.add(makeEveryInput());
 
     await service.run(job.id, 'force');
-    expect(broadcastFn).toHaveBeenCalledWith('periodic check', 'Every Job', { agentWillRespond: true });
+    // The toast says the prompt was sent; the Main task's session answers in its own conversation.
+    expect(broadcastFn).toHaveBeenCalledWith('periodic check', 'Every Job', { agentWillRespond: false });
   });
 
   it('main session job with wakeMode=now also calls runMainAgentWithPrompt', async () => {
@@ -1223,7 +1224,7 @@ describe('executeJob — execution flow', () => {
     });
 
     await service.run(job.id, 'force');
-    expect(runMainFn).toHaveBeenCalledWith('periodic check', 'Every Job');
+    expect(runMainFn).toHaveBeenCalledWith('periodic check', 'Every Job', expect.objectContaining({ id: job.id }));
   });
 
   it('main session job with wakeMode=next-cycle does NOT call runMainAgentWithPrompt', async () => {

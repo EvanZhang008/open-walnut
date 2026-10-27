@@ -103,6 +103,16 @@ export class CronService {
     return await ops.recordRunOutcome(this.state, id, entry, ref);
   }
 
+  /** Boot repair of `session` routine targets (routines/target-repair.ts). */
+  async applyTargetRepairs(repairs: Array<{ id: string; from: string; retarget?: string; disable?: string }>): Promise<string[]> {
+    return await ops.applyTargetRepairs(this.state, repairs);
+  }
+
+  /** A run whose session never started, learned after its dispatch (routines/run-start.ts). */
+  async recordRunStartFailure(id: string, input: { runAtMs: number; error: string; ref: string; sessionId?: string }): Promise<boolean> {
+    return await ops.recordRunStartFailure(this.state, id, input);
+  }
+
   /**
    * walnut-trigger: fold a daemon's `trigger.checked` / `trigger.fired` event
    * into this store. Only the store bookkeeping lives here; the routines layer

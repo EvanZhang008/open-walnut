@@ -18,7 +18,7 @@ vi.mock('../../src/constants.js', () => createMockConstants());
 const { quickStartSession } = vi.hoisted(() => ({
   quickStartSession: vi.fn(async () => ({ id: 'task-1' })),
 }));
-vi.mock('../../src/core/sessions/quick-start.js', () => ({ quickStartSession }));
+vi.mock('../../src/core/sessions/quick-start.js', () => ({ quickStartSession, continuedSessionOf: () => undefined }));
 
 import {
   registerExecutor,
@@ -41,10 +41,24 @@ import {
   syncExecutorFields,
 } from '../../src/core/cron/executor-compat.js';
 import { normalizeCronJobCreate } from '../../src/core/cron/normalize.js';
+import { RoutineRunStarter } from '../../src/core/routines/run-start.js';
+import { defaultRunStartDeps } from '../../src/core/routines/run-start-deps.js';
 import { CronService } from '../../src/core/cron/service.js';
 import type { CronServiceDeps, CronJob } from '../../src/core/cron/types.js';
 
 let tmpDir: string;
+
+/**
+ * The executor's start goes through the real launch wiring (so the params
+ * quickStartSession receives are the real ones); only the session record is
+ * faked, reading as confirmed at once, and the task write is a no-op.
+ */
+const confirmedStarter = async () => new RoutineRunStarter({
+  ...defaultRunStartDeps(),
+  getSession: async (sid) => ({ claudeSessionId: sid, pid: 4242, process_status: 'running' }) as never,
+  writeStart: async () => {},
+});
+const claudeCode = () => createClaudeCodeExecutor({ starter: confirmedStarter });
 
 function createMockLog() {
   return {
@@ -120,14 +134,14 @@ describe('executor registry', () => {
 
 describe('executor validate()', () => {
   it('claude-code requires instructions and cwd', () => {
-    const def = createClaudeCodeExecutor();
+    const def = claudeCode();
     expect(def.validate({}).ok).toBe(false);
     expect(def.validate({ instructions: 'x' }).ok).toBe(false);
     expect(def.validate({ instructions: 'x', cwd: '/tmp' }).ok).toBe(true);
   });
 
   it('claude-code drops __local__ host sentinel', () => {
-    const def = createClaudeCodeExecutor();
+    const def = claudeCode();
     const res = def.validate({ instructions: 'x', cwd: '/tmp', host: '__local__' });
     expect(res.ok).toBe(true);
     if (res.ok) expect(res.config.host).toBeUndefined();
@@ -155,7 +169,7 @@ describe('claude-code run() — ordinary routines are unchanged', () => {
   beforeEach(() => { quickStartSession.mockClear(); });
 
   it('a config with none of the new fields produces exactly the old params', async () => {
-    const def = createClaudeCodeExecutor();
+    const def = claudeCode();
     const res = await def.run(job, {
       type: 'claude-code', config: { instructions: 'go', cwd: '/repo' },
     }, 'go');
@@ -171,11 +185,15 @@ describe('claude-code run() — ordinary routines are unchanged', () => {
       taskMeta: { pinTier: null },
       project: 'Routines',
       source: 'routine',
+      // Minted so the record exists before the spawn and its failure lands on it (run-start.ts).
+      preassignedSessionId: expect.stringMatching(/^[0-9a-f-]{36}$/),
     });
+    expect(res.summary).toContain('Started Claude Code session for task task-1');
+    expect(res.delivered?.sessionId).toBe((quickStartSession.mock.calls[0][0] as { preassignedSessionId: string }).preassignedSessionId);
   });
 
   it('taskTitle still wins over the routine name, and no agent keys appear', async () => {
-    const def = createClaudeCodeExecutor();
+    const def = claudeCode();
     await def.run(job, {
       type: 'claude-code', config: { instructions: 'go', cwd: '/repo', taskTitle: 'Mine' },
     }, 'go');
@@ -187,7 +205,7 @@ describe('claude-code run() — ordinary routines are unchanged', () => {
   });
 
   it('validate() drops the new fields when absent (a form-authored routine is untouched)', () => {
-    const def = createClaudeCodeExecutor();
+    const def = claudeCode();
     const res = def.validate({ instructions: 'x', cwd: '/tmp', taskTitle: 'T' });
     expect(res.ok).toBe(true);
     if (res.ok) expect(res.config).toEqual({ instructions: 'x', cwd: '/tmp', taskTitle: 'T' });
@@ -200,7 +218,7 @@ describe('claude-code run() — walnut-agent routines', () => {
   beforeEach(() => { quickStartSession.mockClear(); });
 
   it('passes walnutAgent / agentId / project through and leaves engine unset', async () => {
-    const def = createClaudeCodeExecutor();
+    const def = claudeCode();
     await def.run(job, {
       type: 'claude-code',
       config: {
@@ -219,7 +237,7 @@ describe('claude-code run() — walnut-agent routines', () => {
   });
 
   it('refuses a routine naming an agent that does not exist, without starting anything', async () => {
-    const def = createClaudeCodeExecutor();
+    const def = claudeCode();
     const res = await def.run(job, {
       type: 'claude-code',
       config: { instructions: 'x', cwd: '/tmp', walnutAgent: true, agentId: 'no-such-agent' },
@@ -232,7 +250,7 @@ describe('claude-code run() — walnut-agent routines', () => {
   });
 
   it('validate() keeps all four fields when present', () => {
-    const def = createClaudeCodeExecutor();
+    const def = claudeCode();
     const res = def.validate({
       instructions: 'x', cwd: '/tmp', walnutAgent: true, agentId: ' triage ',
       project: ' Ask Inbox Triage ', titleTemplate: ' Triage · {time} ',
@@ -285,7 +303,7 @@ describe('claude-code titleTemplate + the count hint', () => {
   });
 
   it('the run uses the template and never forwards the hint', async () => {
-    const def = createClaudeCodeExecutor();
+    const def = claudeCode();
     await def.run(job, {
       type: 'claude-code',
       config: {
@@ -300,7 +318,7 @@ describe('claude-code titleTemplate + the count hint', () => {
   });
 
   it('a template with no hint still names the run by its clock', async () => {
-    const def = createClaudeCodeExecutor();
+    const def = claudeCode();
     await def.run(job, {
       type: 'claude-code',
       config: {
@@ -522,7 +540,9 @@ describe('service with executors', () => {
     await service.run(job.id, 'force');
 
     expect(broadcast).toHaveBeenCalled();
-    expect(runMain).toHaveBeenCalledWith('ping me', 'Main');
+    // The job rides along: the main agent's target is resolved from it at run time (main-target.ts).
+    expect(runMain).toHaveBeenCalledWith('ping me', 'Main', expect.objectContaining({ id: job.id, name: 'Main' }));
+    expect(broadcast).toHaveBeenCalledWith('ping me', 'Main', { agentWillRespond: false });
     expect(runExecutorMock).not.toHaveBeenCalled();
   });
 

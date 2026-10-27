@@ -6,7 +6,7 @@
  */
 
 import type { CronJob, CronJobCreate, CronJobPatch, CronServiceState, CronStatusSummary, TriggerAuditEntry } from './types.js';
-import { mergeRunOutcome, TRIGGER_FIRE_LOG_MAX } from './trigger-audit.js';
+import { auditDelivery, mergeRunOutcome, TRIGGER_FIRE_LOG_MAX } from './trigger-audit.js';
 import {
   applyJobPatch,
   clockOnDaemon,
@@ -402,6 +402,48 @@ export async function recordRunOutcome(
 }
 
 /**
+ * A run whose session never started, learned after the dispatch returned 'ok'
+ * (routines/run-start.ts). The card's status becomes that run's real result,
+ * unless a later run has replaced it since; the History row is merged either way.
+ */
+export async function recordRunStartFailure(
+  state: CronServiceState,
+  id: string,
+  input: { runAtMs: number; error: string; ref: string; sessionId?: string },
+): Promise<boolean> {
+  return await locked(state, async () => {
+    await ensureLoaded(state, { forceReload: true, skipRecompute: true });
+    const job = state.store?.jobs.find((j) => j.id === id);
+    if (!job) return false;
+    if (!job.state) job.state = {};
+    const last = job.state.lastRunAtMs;
+    // A clock tick of slack: the timer stamps lastRunAtMs from the same dispatch time.
+    if (typeof last !== 'number' || last <= input.runAtMs + 5_000) {
+      job.state.lastStatus = 'error';
+      job.state.lastError = input.error;
+      job.state.consecutiveErrors = (job.state.consecutiveErrors ?? 0) + 1;
+    }
+    job.state.fireLog = mergeRunOutcome(job.state.fireLog, {
+      atMs: input.runAtMs,
+      outcome: 'fired',
+      error: input.error.slice(0, 300),
+      delivery: auditDelivery({
+        status: 'error',
+        retry: false,
+        // The full task id stays in the summary, so the row is found by `ref` again.
+        summary: `task ${input.ref}: the session never started`,
+        error: input.error,
+        ...(input.sessionId ? { sessionId: input.sessionId } : {}),
+      }),
+    }, input.ref, TRIGGER_FIRE_LOG_MAX);
+    await persist(state);
+    // 'finished', not 'updated': the definition did not change (no wake or clock recompile).
+    emit(state, { jobId: job.id, action: 'finished', status: job.state.lastStatus, error: input.error, runAtMs: input.runAtMs, nextRunAtMs: job.state.nextRunAtMs });
+    return true;
+  });
+}
+
+/**
  * A deliberate switch off is a pause and is stamped, so the task card can say
  * "Paused 2h ago" and tell it apart from a trigger the server stopped after its
  * check kept failing (which never passes through here). Switching on clears it
@@ -474,4 +516,44 @@ function restartHostClock(job: CronJob, now: number): void {
   const next = scheduleNextRunAtMs(job, now);
   job.state.nextRunAtMs = next;
   if (next !== undefined) job.state.clockFromMs = next;
+}
+
+/**
+ * Boot repair of `session` routine targets (routines/target-repair.ts decides).
+ * Applied under the lock only where the target is still the one decided on.
+ * `retarget` rewrites it to a task; `disable` turns the routine off with the
+ * reason on its card, for a target nothing can deliver to.
+ */
+export async function applyTargetRepairs(
+  state: CronServiceState,
+  repairs: Array<{ id: string; from: string; retarget?: string; disable?: string }>,
+): Promise<string[]> {
+  if (repairs.length === 0) return [];
+  return await locked(state, async () => {
+    await ensureLoaded(state, { forceReload: true, skipRecompute: true });
+    const done: string[] = [];
+    for (const r of repairs) {
+      const job = state.store?.jobs.find((j) => j.id === r.id);
+      const config = job?.executor?.type === 'session' ? job.executor.config as Record<string, unknown> : undefined;
+      if (!job || !config || config.target !== r.from) continue;
+      if (r.retarget) {
+        config.target = r.retarget;
+      } else if (r.disable) {
+        job.enabled = false;
+        job.state.nextRunAtMs = undefined;
+        job.state.lastStatus = 'error';
+        job.state.lastError = r.disable;
+      } else {
+        continue;
+      }
+      job.updatedAtMs = state.deps.nowMs();
+      done.push(job.id);
+    }
+    if (done.length > 0) {
+      await persist(state);
+      for (const id of done) emit(state, { jobId: id, action: 'updated' });
+      armTimer(state);
+    }
+    return done;
+  });
 }

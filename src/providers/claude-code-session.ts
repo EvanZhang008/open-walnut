@@ -9396,17 +9396,23 @@ export class SessionRunner {
                 refused: err instanceof Error ? err.message : String(err),
               }, ['transfer'], { source: 'session-runner' })
             }
+            await this.failUnspawnedStart(startData, err)
             throw err
           }
-          if (isAcpEngine(startData.engine)) {
-            log.session.info('session routing', { taskId: startData.taskId, type: 'acp' })
-            await this.handleAcpStart(startData)
-          } else if (this.sdkClient?.connected) {
-            log.session.info('session routing', { taskId: startData.taskId, type: 'sdk' })
-            await this.handleStartSdk(startData)
-          } else {
-            log.session.info('session routing', { taskId: startData.taskId, type: 'cli' })
-            await this.handleStart(startData)
+          try {
+            if (isAcpEngine(startData.engine)) {
+              log.session.info('session routing', { taskId: startData.taskId, type: 'acp' })
+              await this.handleAcpStart(startData)
+            } else if (this.sdkClient?.connected) {
+              log.session.info('session routing', { taskId: startData.taskId, type: 'sdk' })
+              await this.handleStartSdk(startData)
+            } else {
+              log.session.info('session routing', { taskId: startData.taskId, type: 'cli' })
+              await this.handleStart(startData)
+            }
+          } catch (err) {
+            await this.failUnspawnedStart(startData, err)
+            throw err
           }
         }
           break
@@ -10830,6 +10836,34 @@ export class SessionRunner {
         sessionId: deliverySessionId, messageId: message.id,
       })
       injected = true
+    }
+  }
+
+  /**
+   * A bus start that threw before its spawn (an unknown host, a cwd that could
+   * not be resolved) leaves its caller-minted record reading "idle, awaiting
+   * spawn" until the orphan sweep, with the reason only in the log. Say it on the
+   * record, the way a failed spawn does, so whoever waits on the start (a
+   * routine's start deadline, the task's execution state) reads the failure.
+   */
+  private async failUnspawnedStart(data: { preassignedSessionId?: string; taskId?: string }, err: unknown): Promise<void> {
+    const sid = data.preassignedSessionId
+    if (!sid) return
+    try {
+      const { getSessionByClaudeId, updateSessionRecord } = await import('../core/session-tracker.js')
+      const rec = await getSessionByClaudeId(sid)
+      if (!rec || (typeof rec.pid === 'number' && rec.pid > 1) || rec.status_reason !== 'awaiting_spawn') return
+      // A daemon command that timed out may still run: unknown, for the recovery probes, not a failure.
+      const unknown = isDaemonCommandOutcomeUnknown(err)
+      await updateSessionRecord(sid, {
+        process_status: 'error', status_reason: unknown ? 'spawn_outcome_unknown' : 'api_error', status_changed_by: 'session-runner',
+        ...(unknown ? { errorKind: 'infra' as const } : {}),
+        errorMessage: (err instanceof Error ? err.message : String(err)).slice(0, 500),
+      })
+    } catch (writeErr) {
+      log.session.warn('failed start: record not updated', {
+        sessionId: sid, taskId: data.taskId, error: writeErr instanceof Error ? writeErr.message : String(writeErr),
+      })
     }
   }
 

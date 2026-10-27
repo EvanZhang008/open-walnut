@@ -47,6 +47,7 @@
  * queued until it returns, for at most `ownerWaitMs`.
  */
 
+import { randomUUID } from 'node:crypto'
 import { bus, EventNames } from './event-bus.js'
 import type { BusEvent } from './event-bus.js'
 import type { RestartLossCause, SessionRecord, SessionRestartLoss, StatusReason } from './types.js'
@@ -83,6 +84,14 @@ const UNSTAMPED_HOLD_MS = 10 * 60_000
 const RECHECK_MS = 15_000
 /** Poll interval while a resume waits for its session to come back. */
 const SETTLE_POLL_MS = 2_000
+/** How often a resume parked on its host's daemon looks again. */
+const HOST_WAIT_RECHECK_MS = 60_000
+
+/** Where a loss's host-wait window starts: its observation (one clock, also while it waits on a delivery). */
+const lossClock = (loss: SessionRestartLoss): number => Date.parse(loss.at)
+
+const hostName = (host: string | null | undefined): string =>
+  isLocalHost(host) ? "this computer's session daemon" : `the session daemon on ${host}`
 
 type LossBefore = NonNullable<SessionRestartLoss['before']>
 
@@ -145,7 +154,7 @@ export class SessionAutoRecover {
     const now = this.deps.now()
     // A loss nobody resolved within the host-wait window stops holding, so a
     // stuck record can never pin a task's phase forever.
-    if (loss && now - Date.parse(loss.at) <= this.cfg.ownerWaitMs) {
+    if (loss && now - lossClock(loss) <= this.cfg.ownerWaitMs) {
       if (loss.state === 'pending' || loss.state === 'queued') return true
       if (loss.state === 'sent') {
         // On its way back; past the settle window the session's own state speaks.
@@ -325,7 +334,7 @@ export class SessionAutoRecover {
       const sid = rec.claudeSessionId
       if (!loss || this.tracked(sid) || rec.archived) continue
       if (loss.state !== 'pending' && loss.state !== 'queued') continue
-      if (this.deps.now() - Date.parse(loss.at) > this.cfg.ownerWaitMs) continue
+      if (this.deps.now() - lossClock(loss) > this.cfg.ownerWaitMs) continue
       if (isLive(rec)) {
         await this.deps.patchLoss(sid, (cur) => cur && { ...cur, state: 'resumed', reason: 'came back' })
         continue
@@ -425,7 +434,7 @@ export class SessionAutoRecover {
       }
       if (isLive(rec)) {
         // A human, a peer or a trigger got there first; the note rode on it.
-        await this.deps.patchLoss(sid, (cur) => cur && { ...cur, state: 'resumed', reason: 'resumed by another message' })
+        await this.deps.patchLoss(sid, (cur) => cur && { ...cur, state: 'resumed', reason: 'resumed by another message', waitingHost: undefined })
         return
       }
       const task = await this.deps.getTask(rec.taskId)
@@ -433,6 +442,23 @@ export class SessionAutoRecover {
         await this.deps.patchLoss(sid, (cur) => cur && { ...cur, state: 'skipped', reason: `task moved to ${task?.phase ?? 'nothing'}`, revision: rec.statusRevision })
         log.session.info('restart recovery: skipped, task phase changed', { sessionId: sid, was: loss.phaseAtLoss, now: task?.phase ?? null })
         return
+      }
+      if (loss.waitingHost) {
+        // Its resume is still in the session's queue, put back when the host's
+        // daemon could not take it; the daemon's reconnect delivers it. Nothing
+        // is sent again and no attempt is spent while it waits.
+        if (await this.deps.pendingMessages(sid) > 0) {
+          if (this.deps.now() - lossClock(loss) > this.cfg.ownerWaitMs) {
+            // A resume that goes out after the hand-back would start work the user now owns.
+            if (loss.waitingHost.messageId) await this.deps.dropMessage(sid, loss.waitingHost.messageId)
+            await this.giveUp(rec, `${hostName(rec.host)} could not take the resume within ${Math.round(this.cfg.ownerWaitMs / 3_600_000)} h of the restart (last error: ${loss.waitingHost.error})`)
+            return
+          }
+          this.requeue(item, HOST_WAIT_RECHECK_MS)
+          return
+        }
+        // The batch left the queue without bringing the session back: judge it afresh.
+        await this.deps.patchLoss(sid, (cur) => cur && { ...cur, waitingHost: undefined })
       }
       const owner = await this.deps.recoveryOwner(rec)
       if (owner === 'daemon') {
@@ -461,10 +487,19 @@ export class SessionAutoRecover {
       })
       if (this.stopped) return
       const revBefore = rec.statusRevision
-      await this.deps.send(sid, RESUME_MESSAGE, { source: AUTO_RECOVER_SOURCE, taskId: rec.taskId })
-      const sentAt = new Date(this.deps.now()).toISOString()
-      await this.deps.patchLoss(sid, (cur) => cur && cur.state === 'queued' ? { ...cur, state: 'sent', sentAt } : cur)
-      await this.settle(item, attempts, revBefore)
+      // A delivery the host's daemon could not take puts the batch back in the
+      // queue and says so only on the bus (the record is left as it was), and it
+      // can say so before the send returns: listen first.
+      const undelivered: { error?: string; messageId: string } = { messageId: `qm-recover-${randomUUID()}` }
+      const stopListening = this.deps.onDeliveryFailed(sid, (error) => { undelivered.error = error })
+      try {
+        await this.deps.send(sid, RESUME_MESSAGE, { source: AUTO_RECOVER_SOURCE, taskId: rec.taskId, messageId: undelivered.messageId })
+        const sentAt = new Date(this.deps.now()).toISOString()
+        await this.deps.patchLoss(sid, (cur) => cur && cur.state === 'queued' ? { ...cur, state: 'sent', sentAt } : cur)
+        await this.settle(item, attempts, revBefore, undelivered)
+      } finally {
+        stopListening()
+      }
     } catch (err) {
       log.session.warn('restart recovery: resume failed', {
         sessionId: sid, error: err instanceof Error ? err.message : String(err),
@@ -479,15 +514,19 @@ export class SessionAutoRecover {
   }
 
   /** Hold the slot until the session is back, its spawn failed, or the timeout. */
-  private async settle(item: QueueItem, attempt: number, revBefore: number | undefined): Promise<void> {
+  private async settle(item: QueueItem, attempt: number, revBefore: number | undefined, undelivered: { error?: string; messageId?: string }): Promise<void> {
     const deadline = this.deps.now() + this.cfg.settleTimeoutMs
     while (!this.stopped && this.deps.now() < deadline) {
       await new Promise<void>((resolve) => { this.deps.setTimer(resolve, SETTLE_POLL_MS) })
       const rec = await this.deps.getSession(item.sid)
       if (!rec) return
       if (isLive(rec)) {
-        await this.deps.patchLoss(item.sid, (cur) => cur && { ...cur, state: 'resumed', reason: `resumed (attempt ${attempt})` })
+        await this.deps.patchLoss(item.sid, (cur) => cur && { ...cur, state: 'resumed', reason: `resumed (attempt ${attempt})`, waitingHost: undefined })
         log.session.info('restart recovery: session is back', { sessionId: item.sid, attempt })
+        return
+      }
+      if (undelivered.error !== undefined && await this.deps.pendingMessages(item.sid) > 0) {
+        await this.waitForHost(item, rec, attempt, undelivered.error, undelivered.messageId)
         return
       }
       // Only an error written after the send is this spawn's failure.
@@ -501,6 +540,28 @@ export class SessionAutoRecover {
     // Still not back: the message waits in the session's queue, which owns its
     // delivery from here. The loss stays 'sent' and stops holding the phase
     // once the host-wait window passes.
+  }
+
+  /**
+   * The host could not take the resume: the same infra loss as a host that is
+   * offline, not a failed attempt. 2026-10-26: after the user's login on this Mac
+   * ended, its session daemon could not start for hours ("port file not created
+   * within 30s"); each resume burned an attempt and the tasks were handed back as
+   * if they waited on the user. Now the attempt is given back, the task stays
+   * held, and the queued message goes out when the daemon serves again.
+   */
+  private async waitForHost(item: QueueItem, rec: SessionRecord, attempt: number, error: string, messageId?: string): Promise<void> {
+    await this.deps.noteAttempt(item.sid, Math.max(0, attempt - 1), rec.status_reason)
+    const since = new Date(this.deps.now()).toISOString()
+    await this.deps.patchLoss(item.sid, (cur) => cur && {
+      ...cur, state: 'queued', reason: `waiting for ${hostName(rec.host)}: ${error}`,
+      waitingHost: {
+        since: cur.waitingHost?.since ?? since, error: error.slice(0, 300),
+        ...(messageId ?? cur.waitingHost?.messageId ? { messageId: messageId ?? cur.waitingHost?.messageId } : {}),
+      },
+    })
+    log.session.warn('restart recovery: the host could not take the resume, waiting for it', { sessionId: item.sid, host: item.hostKey, error })
+    this.requeue(item, HOST_WAIT_RECHECK_MS)
   }
 
   stop(): void {

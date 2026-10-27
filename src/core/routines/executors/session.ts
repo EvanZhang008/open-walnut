@@ -53,6 +53,11 @@ export interface SessionDelivery {
   sendToSession(sessionId: string, message: string, taskId: string): Promise<void>;
   getTask(taskId: string): Promise<{ id: string; cwd?: string; phase?: string; transferred_to?: string } | null>;
   /**
+   * When `id` is a session id rather than a task id: its task ('' = a session
+   * with no task). Undefined = no such session.
+   */
+  taskOfSession?(id: string): Promise<string | undefined>;
+  /**
    * Returns the new session's id when the launch knows it up front (an id minted
    * for the launch, whose record exists before this returns). An engine that
    * issues its own ids reports nothing, and the executor waits for the record.
@@ -97,6 +102,12 @@ function defaultDelivery(): SessionDelivery {
     async getTask(taskId) {
       const { getTask } = await import('../../task-manager.js');
       return await getTask(taskId).catch(() => null);
+    },
+    async taskOfSession(id) {
+      const { getSessionByClaudeId } = await import('../../session-tracker.js');
+      const rec = await getSessionByClaudeId(id).catch(() => null);
+      // A session detached from its task still names it (the one repairs retarget to).
+      return rec ? rec.taskId || rec.legacyTaskId || '' : undefined;
     },
     async startSession(params) {
       const { quickStartSession } = await import('../../sessions/quick-start.js');
@@ -258,6 +269,22 @@ export function createSessionExecutor(deps: SessionExecutorDeps = {}): ExecutorD
     // A task moved to another engine or host (task_transfer) completes and points
     // at the task that took the work over: the fire follows it there.
     let taskId = config.target;
+    // A target is a task. One that names a session (an old or hand-made routine)
+    // goes to that session's task; a session with no task never receives a routine.
+    if (delivery.taskOfSession && !(await delivery.getTask(taskId).catch(() => null))) {
+      const owner = await delivery.taskOfSession(taskId).catch(() => undefined);
+      if (owner === '') {
+        const error = `target ${taskId} is a session with no task; a routine delivers to a task, never to a bare session`;
+        await delivery.notify({
+          title: `Routine "${job.name}" has nowhere to deliver`,
+          body: `${error}. Edit the routine to name the task it is for.`,
+          dedupKey: `trigger-target:${job.id}:taskless`,
+        }).catch(() => { /* the run result already carries the error */ });
+        log.cron.warn('routine target is a taskless session', { jobId: job.id, sessionId: taskId });
+        return { status: 'error', error };
+      }
+      if (owner) taskId = owner;
+    }
     for (let hop = 0; hop < 8; hop++) {
       const moved = await delivery.getTask(taskId).catch(() => null);
       if (!moved || moved.phase !== 'COMPLETE' || !moved.transferred_to) break;

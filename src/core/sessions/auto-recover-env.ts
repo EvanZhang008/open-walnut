@@ -75,7 +75,7 @@ export interface AutoRecoverDeps {
   now: () => number
   setTimer: (fn: () => void, ms: number) => ReturnType<typeof setTimeout>
   clearTimer: (handle: ReturnType<typeof setTimeout>) => void
-  send: (sessionId: string, message: string, opts: { source: string; taskId?: string }) => Promise<unknown>
+  send: (sessionId: string, message: string, opts: { source: string; taskId?: string; messageId?: string }) => Promise<unknown>
   getSession: (sessionId: string) => Promise<SessionRecord | null>
   listSessions: () => Promise<SessionRecord[]>
   /** null = no such task (deleted). */
@@ -98,6 +98,12 @@ export interface AutoRecoverDeps {
   /** Hand the task back the normal way (NEED_ACTION) when its work is not resumed. */
   handBack: (taskId: string, sessionId: string) => Promise<void>
   emitNote: (sessionId: string, taskId: string | undefined, message: string) => void
+  /** Messages still waiting in the session's queue (a failed delivery puts its batch back). */
+  pendingMessages: (sessionId: string) => Promise<number>
+  /** Calls back with the error of each delivery to the session that failed and was put back; returns the unsubscribe. */
+  onDeliveryFailed: (sessionId: string, cb: (error: string) => void) => () => void
+  /** Remove one still-queued message (a resume that must not go out after the hand-back). */
+  dropMessage: (sessionId: string, messageId: string) => Promise<void>
 }
 
 export const LOCAL_HOST = '__local__'
@@ -105,6 +111,22 @@ export const isLocalHost = (host: string | null | undefined): boolean => !host |
 
 export function defaultDeps(): AutoRecoverDeps {
   return {
+    pendingMessages: async (sessionId) => {
+      const { getQueue } = await import('../session-message-queue.js')
+      return (await getQueue(sessionId).catch(() => [])).filter((m) => m.status === 'pending').length
+    },
+    dropMessage: async (sessionId, messageId) => {
+      const { deleteMessage } = await import('../session-message-queue.js')
+      await deleteMessage(sessionId, messageId).catch(() => false)
+    },
+    onDeliveryFailed: (sessionId, cb) => {
+      const name = `auto-recover-delivery-${sessionId}-${Math.random().toString(36).slice(2, 10)}`
+      bus.subscribe(name, (event) => {
+        const d = event.data as { sessionId?: string; error?: string; errorKind?: string }
+        if (event.name === EventNames.SESSION_ERROR && d.sessionId === sessionId && d.errorKind === 'delivery_failed') cb(d.error ?? 'delivery failed')
+      }, { global: true, interest: [EventNames.SESSION_ERROR] })
+      return () => bus.unsubscribe(name)
+    },
     now: () => Date.now(),
     setTimer: (fn, ms) => setTimeout(fn, ms),
     clearTimer: (handle) => clearTimeout(handle),

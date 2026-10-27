@@ -1686,20 +1686,13 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     storePath: CRON_FILE,
     cronEnabled: true,
     log: log.cron,
-    broadcastCronNotification: async (text, jobName, opts) => {
-      const timestamp = new Date().toISOString()
+    broadcastCronNotification: async (text, jobName) => {
       // Numeric epoch ms shared by the WS event AND the feed dedupKey below. The
       // frontend builds its dedupKey from this same numeric value, so the live
       // toast and the server-persisted feed record collapse to ONE entry on
-      // refresh. Do NOT key off the ISO `timestamp` here — the two representations
+      // refresh. Do NOT key off an ISO timestamp here — the two representations
       // would differ and the feed would show the cron notification twice.
       const eventTs = Date.now()
-      // Background events have no UI "tab" — they target the agent's stable MAIN
-      // conversation (NOT activeConversationId, which is whatever the user last
-      // clicked). This is the bug fix: previously these wrote the orphaned legacy
-      // chat-history file (no conversationId) instead of the visible conversation.
-      const { getMainConversationId } = await import('../core/conversations.js')
-      const conversationId = await getMainConversationId('general')
       // Toast notification
       broadcastEvent('cron:notification', { text, jobName, timestamp: eventTs })
       // Persist to the durable notification feed (survives refresh). Fire-and-forget:
@@ -1715,58 +1708,28 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         dedupKey: `cron:${jobName}:${eventTs}`,
         ...(refSessionId ? { sessionId: refSessionId } : {}), ...(refTaskId ? { taskId: refTaskId } : {}),
       }).catch(err => log.cron.warn('failed to persist cron notification', { jobName, error: err instanceof Error ? err.message : String(err) }))
-      // Chat message (for inline display)
-      broadcastEvent('cron:chat-message', { content: text, jobName, timestamp, agentWillRespond: opts?.agentWillRespond ?? false, conversationId })
-      // Persist notification to chat history (survives refresh)
-      await chatHistory.addNotification({
-        role: 'user', content: text, timestamp,
-        source: 'cron', cronJobName: jobName,
-        agentId: 'general', conversationId,
-      })
+      // No longer written into the home chat's history: a routine aimed at the
+      // main agent is delivered to the Main task (runMainAgentWithPrompt below),
+      // and the home chat's lane session has no task (routines/main-target.ts).
     },
     queueCronNotificationForAgent: (text, jobName) => {
-      pendingCronNotifications.push({ text, jobName, timestamp: Date.now() })
-      log.cron.info('queued cron notification for next agent interaction', { jobName })
+      // "Tell it at its next turn" has no taskless chat to wait in any more: the
+      // Main task's session hears it now (routines/main-target.ts).
+      void import('../core/routines/main-target.js')
+        .then(({ deliverToMainAgent }) => deliverToMainAgent(text, { id: `cron:${jobName}`, name: jobName }))
+        .then((res) => log.cron.info('cron notification delivered to the Main task', { jobName, taskId: res.taskId, status: res.status, error: res.error }))
+        .catch((err) => log.cron.warn('cron notification not delivered to the Main task', { jobName, error: err instanceof Error ? err.message : String(err) }))
     },
-    runMainAgentWithPrompt: async (prompt, jobName) => {
-      // Enqueue into the main agent turn queue — serialized with chat and triage turns
-      await enqueueMainAgentTurn(`cron:${jobName}`, async () => {
-        // Background turn → general's stable MAIN conversation (see rationale in
-        // broadcastCronNotification above).
-        const { getMainConversationId } = await import('../core/conversations.js')
-        const conversationId = await getMainConversationId('general')
-        const cronPrompt = `[Scheduled Job "${jobName}"] ${prompt}`
-        try {
-          const laneTs = new Date().toISOString()
-          // The model context lives in the CLI's own transcript, so only the
-          // human-visible notification is persisted.
-          await chatHistory.addNotification({
-            role: 'user', content: cronPrompt, source: 'cron', cronJobName: jobName,
-            notification: true, agentId: 'general', conversationId, timestamp: laneTs,
-          })
-          const { runLaneTurn } = await import('../core/sessions/lane-turn.js')
-          const { sessionId: laneSessionId, resultText } =
-            await runLaneTurn('general', conversationId, cronPrompt, { source: 'cron' })
-          if (resultText === null) {
-            // The catch below broadcasts agent:error and re-throws so the cron
-            // system records a failed run.
-            throw new Error('cron lane turn timed out or errored')
-          }
-          await chatHistory.addNotification({
-            role: 'assistant', content: resultText, source: 'cron', cronJobName: jobName,
-            notification: true, sessionId: laneSessionId, agentId: 'general', conversationId,
-          })
-          broadcastEvent('agent:response', { text: resultText, source: 'cron', agentId: 'general', conversationId })
-          log.cron.info('cron lane turn done', { jobName, sessionId: laneSessionId, resultLength: resultText.length })
-          // No background compaction here — the CLI compacts its own context.
-        } catch (err) {
-          const errMsg = err instanceof Error ? err.message : String(err)
-          log.cron.error('cron runMainAgentWithPrompt failed', { jobName, error: errMsg })
-          // Broadcast error so the UI clears streaming state
-          broadcastEvent('agent:error', { error: `Cron job "${jobName}" agent failed: ${errMsg}`, agentId: 'general', conversationId })
-          throw err // Re-throw so the cron system records the error status
-        }
-      })
+    runMainAgentWithPrompt: async (prompt, jobName, job) => {
+      // The CURRENT Main task, resolved now; never the home chat's taskless lane
+      // session, which is what kept receiving routines after Main became a task.
+      const { deliverToMainAgent } = await import('../core/routines/main-target.js')
+      const res = await deliverToMainAgent(prompt, job ?? { id: `cron:${jobName}`, name: jobName })
+      if (res.status === 'error') {
+        log.cron.error('cron delivery to the Main task failed', { jobName, taskId: res.taskId, error: res.error })
+        throw new Error(res.error ?? 'delivery to the Main task failed')
+      }
+      log.cron.info('cron delivered to the Main task', { jobName, taskId: res.taskId, summary: res.summary })
     },
     runIsolatedAgentJob: async ({ job, message }) => {
       // An isolated job runs as its own Personal AI session (the same launch path
@@ -1777,20 +1740,28 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       // the summary can only name what was started, never the model's answer.
       // Consequence for `delivery.mode: 'announce'`: the main session is told
       // which session to look at rather than being handed its conclusion.
-      const { quickStartSession } = await import('../core/sessions/quick-start.js')
+      // The start is held to a deadline like the claude-code executor's
+      // (core/routines/run-start.ts): retried once, then recorded failed.
+      const { routineRunStarter } = await import('../core/routines/run-start-deps.js')
       try {
-        const task = await quickStartSession({
-          message,
-          cwd: WALNUT_HOME,
-          walnutAgent: true,
-          taskTitle: `Routine: ${job.name}`,
-          // Background automation: an explicit null keeps every run off the
-          // pinned board (a daily job would otherwise add a card a day).
-          taskMeta: { pinTier: null },
-          project: 'Routines',
-          source: 'cron-isolated',
+        const started = await (await routineRunStarter()).start({
+          job: { id: job.id, name: job.name },
+          runAtMs: job.state?.runningAtMs ?? Date.now(),
+          launch: {
+            message,
+            cwd: WALNUT_HOME,
+            walnutAgent: true,
+            taskTitle: `Routine: ${job.name}`,
+            project: 'Routines',
+            source: 'cron-isolated',
+          },
         })
-        return { status: 'ok', summary: `Started session for task ${task.id} (${job.name})` }
+        return {
+          status: 'ok',
+          summary: started.confirmed
+            ? `Started session for task ${started.task.id} (${job.name})`
+            : `Starting session for task ${started.task.id} (${job.name}); not confirmed yet`,
+        }
       } catch (err) {
         return { status: 'error', error: err instanceof Error ? err.message : String(err) }
       }
@@ -5407,7 +5378,25 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // Keeping it here left the whole multi-second boot without a SIGTERM handler.
 
   // -- Start post-listen services (port already bound above) --
-  if (bootPolicy('cron')) cronService.start().catch((err) => {
+  // Before the clock runs (start() also runs the missed jobs at once): repair
+  // stored targets that name a bare session (a routine delivers to a task,
+  // routines/target-repair.ts), and pick up every routine start the last server
+  // left unconfirmed, whose deadline and retry continue here (routines/run-start.ts).
+  if (bootPolicy('cron')) (async () => {
+    try {
+      const { repairRoutineTargets } = await import('../core/routines/target-repair.js')
+      await repairRoutineTargets()
+    } catch (err) {
+      log.cron.warn('routine target repair failed', { error: err instanceof Error ? err.message : String(err) })
+    }
+    try {
+      const { resumeRoutineStarts } = await import('../core/routines/run-start-deps.js')
+      await resumeRoutineStarts()
+    } catch (err) {
+      log.cron.warn('routine start pickup failed', { error: err instanceof Error ? err.message : String(err) })
+    }
+    await cronService.start()
+  })().catch((err) => {
     log.cron.error('failed to start cron service', { error: err instanceof Error ? err.message : String(err) })
   })
 

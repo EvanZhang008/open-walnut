@@ -439,11 +439,12 @@ async function executeJobCore(
     }
 
     const text = initOutput ? `${initOutput}\n\n${job.payload.text}` : job.payload.text;
-    await state.deps.broadcastCronNotification(text, job.name, { agentWillRespond: job.wakeMode === 'now' });
+    // The answer comes in the Main task's session, never in the home chat.
+    await state.deps.broadcastCronNotification(text, job.name, { agentWillRespond: false });
 
     if (job.wakeMode === 'now') {
       try {
-        await state.deps.runMainAgentWithPrompt(text, job.name);
+        await state.deps.runMainAgentWithPrompt(text, job.name, job);
       } catch (err) {
         const errMsg = err instanceof Error ? err.message : String(err);
         state.deps.log.warn('runMainAgentWithPrompt failed', {
@@ -481,11 +482,11 @@ async function executeJobCore(
     const prefix = 'Cron';
     const label =
       res.status === 'error' ? `${prefix} (error): ${summaryText}` : `${prefix}: ${summaryText}`;
-    await state.deps.broadcastCronNotification(label, job.name, { agentWillRespond: job.wakeMode === 'now' });
+    await state.deps.broadcastCronNotification(label, job.name, { agentWillRespond: false });
 
     if (job.wakeMode === 'now') {
       try {
-        await state.deps.runMainAgentWithPrompt(label, job.name);
+        await state.deps.runMainAgentWithPrompt(label, job.name, job);
       } catch (err) {
         const errMsg = err instanceof Error ? err.message : String(err);
         state.deps.log.warn('runMainAgentWithPrompt failed (announce)', {
