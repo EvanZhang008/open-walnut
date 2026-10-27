@@ -17,7 +17,8 @@ enum Theme {
 
     static let success = Color(dynamic: UIColor(light: 0x34C759, dark: 0x30D158))
     static let warning = Color(dynamic: UIColor(light: 0xFF9F0A, dark: 0xFFD60A))
-    static let danger = Color(dynamic: UIColor(light: 0xFF3B30, dark: 0xFF453A))
+    static let danger = Color(dynamic: dangerColor)
+    static let dangerColor = UIColor(light: 0xFF3B30, dark: 0xFF453A)
     /// The user states as words (UserStatePill.textColor): 4.5:1 on the light background and
     /// on the dark one, where the bright tints above only work as dots and washes.
     static let needsText = Color(dynamic: UIColor(light: 0xB23A06, dark: 0xFF9A5C))

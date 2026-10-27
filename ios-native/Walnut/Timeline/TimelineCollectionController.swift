@@ -197,7 +197,12 @@ final class TimelineCollectionController: UIViewController {
         // their viewport. Intent is re-read LIVE at every application point
         // below (never captured once): a multi-batch progressive fill outlives
         // any flag captured here, and the user can unpin mid-fill.
-        let anchor = isPinned() ? nil : captureAnchor()
+        // A row the reader just opened or closed holds its place on screen, also
+        // for a reader pinned to the bottom (following the bottom pushed the
+        // heading they tapped off the top while the card grew under it).
+        let toggled = takeToggleAnchor(for: snapshot)
+        let anchor = toggled ?? (isPinned() ? nil : captureAnchor())
+        let holdsRow = toggled != nil
 
         if rows.isEmpty || diff.changeCount > TimelineApplyBudgeter.sliceRows {
             // Progressive fill: budgeted slices, reloadData per batch (cheap:
@@ -213,7 +218,7 @@ final class TimelineCollectionController: UIViewController {
                 self.layout.rowHeights = self.rows.map(\.height)
                 self.collectionView.reloadData()
                 self.layout.invalidateLayout()
-                self.followOrRestore(anchor: anchor)
+                self.followOrRestore(anchor: anchor, holdsRow: holdsRow)
                 _ = isFinal
             }
         } else {
@@ -245,7 +250,7 @@ final class TimelineCollectionController: UIViewController {
                     collectionView.reloadData()
                     layout.invalidateLayout()
                 }
-                followOrRestore(anchor: anchor)
+                followOrRestore(anchor: anchor, holdsRow: holdsRow)
             }
         }
     }
@@ -254,7 +259,7 @@ final class TimelineCollectionController: UIViewController {
     /// the viewport. A pinned reader follows the bottom; an unpinned reader
     /// stays glued to the row they were reading (bottom-anchoring an unpinned
     /// viewport was the build-37 field bug). Never fights an active gesture.
-    private func followOrRestore(anchor: ViewportAnchor?) {
+    private func followOrRestore(anchor: ViewportAnchor?, holdsRow: Bool = false) {
         collectionView.layoutIfNeeded()
         // A live gesture (finger down OR deceleration) owns the position in
         // BOTH branches. Restoring the anchor mid-deceleration is not benign:
@@ -263,11 +268,46 @@ final class TimelineCollectionController: UIViewController {
         // could never reach the repin zone. Appends land below the viewport,
         // so skipping the restore during a gesture doesn't visibly shift rows.
         guard !userScrollActive else { return }
-        if isPinned() {
+        if holdsRow, let anchor {
+            restoreAnchor(anchor)
+            // Reading the card they opened, no longer the bottom: the next apply
+            // must not pin it away. Scrolling back down repins as usual.
+            if isPinned() && distanceFromBottom() > Self.repinThreshold { setPinned(false) }
+        } else if isPinned() {
             pinToBottom(animated: false)
         } else if let anchor {
             restoreAnchor(anchor)
         }
+    }
+
+    // MARK: - Opening a row in place
+
+    /// The row the reader asked to open or close, until the snapshot that does it
+    /// lands (or the request goes stale: the build is async, and a row that never
+    /// changes must not hold a later apply).
+    private var pendingToggle: (rowID: String, until: CFTimeInterval)?
+    private static let toggleHoldSeconds: CFTimeInterval = 2
+
+    /// The anchor for the apply that opens or closes the tapped row: that row,
+    /// where it sits on screen now. Nil while the row is unchanged in `snapshot`
+    /// (an apply between the tap and its rebuild, a streaming tick).
+    private func takeToggleAnchor(for snapshot: TimelineSnapshot) -> ViewportAnchor? {
+        guard let pending = pendingToggle else { return nil }
+        guard CACurrentMediaTime() <= pending.until,
+              let old = rows.firstIndex(where: { $0.id == pending.rowID }),
+              let new = snapshot.rows.first(where: { $0.id == pending.rowID }) else {
+            pendingToggle = nil
+            return nil
+        }
+        guard new.revision != rows[old].revision || new.height != rows[old].height else { return nil }
+        pendingToggle = nil
+        guard let cv = collectionView, let minY = layout.rowMinY(old) else { return nil }
+        return ViewportAnchor(candidates: [.init(rowID: pending.rowID, offsetDelta: cv.contentOffset.y - minY)])
+    }
+
+    private func distanceFromBottom() -> CGFloat {
+        max(0, collectionView.contentSize.height + collectionView.adjustedContentInset.bottom
+            - collectionView.bounds.maxY)
     }
 
     // MARK: - Viewport anchoring (unpinned readers)
@@ -394,11 +434,7 @@ final class TimelineCollectionController: UIViewController {
         // the freeze: a programmatic scroll can land mid-flick.
         guard collectionView.isTracking
             || CACurrentMediaTime() >= programmaticFreezeUntil else { return }
-        let distance = max(
-            0,
-            collectionView.contentSize.height + collectionView.adjustedContentInset.bottom
-                - collectionView.bounds.maxY
-        )
+        let distance = distanceFromBottom()
         let want: Bool
         if distance > Self.unpinThreshold {
             want = false
@@ -509,6 +545,9 @@ extension TimelineCollectionController: TimelineCellActionDelegate {
             } else {
                 UIApplication.shared.open(url)
             }
+        case .toggleExpanded(let rowID):
+            pendingToggle = (rowID, CACurrentMediaTime() + Self.toggleHoldSeconds)
+            onAction(action)
         default:
             onAction(action)
         }

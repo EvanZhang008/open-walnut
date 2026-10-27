@@ -91,7 +91,7 @@ enum TimelineHostedCell {
         case .toolChip(let name, let detail, _, _, let agent, let phase, _, let stacked):
             TimelineToolChipView(
                 name: name, detail: detail, agent: agent, running: phase == .running,
-                stacked: stacked,
+                failed: phase == .failed, stacked: stacked,
                 onOpen: {
                     // The ROW carries everything the drawer shows, phase included
                     // (see `TimelineActivityDetail.tool(row:)`): the sheet never
@@ -127,10 +127,10 @@ enum TimelineHostedCell {
             .padding(.vertical, TimelineMetrics.chipRowVMargin)
             .frame(maxWidth: .infinity, alignment: .leading)
         case .notification(let badge, let icon, let isError, let body,
-                           let collapsedLine, let collapsible, let expanded):
+                           let collapsedLine, let collapsedLimit, let collapsible, let expanded):
             TimelineNotificationView(
                 badge: badge, icon: icon, isError: isError,
-                body: body, collapsedLine: collapsedLine,
+                body: body, collapsedLine: collapsedLine, collapsedLimit: collapsedLimit,
                 collapsible: collapsible, expanded: expanded,
                 onToggle: { delegate?.timelineCell(didRequest: .toggleExpanded(rowID: row.id)) }
             )
@@ -561,6 +561,7 @@ struct TimelineExpandSection: View {
         case .running: return "Running…"
         case .liveFinished: return "Finished. The output arrives when the turn ends."
         case .transcript: return "No output"
+        case .failed: return "Failed with no output"
         }
     }
 
@@ -693,6 +694,9 @@ struct TimelineChipChevron: View {
 private struct TimelineChipRow<Content: View>: View {
     let identifier: String
     let label: String
+    /// A row whose text may wrap: its ink is a rounded rectangle that is a capsule
+    /// on one line, never a pill whose round ends cut into a second line.
+    var wraps = false
     let onOpen: () -> Void
     @ViewBuilder let content: () -> Content
 
@@ -701,7 +705,7 @@ private struct TimelineChipRow<Content: View>: View {
             .foregroundStyle(ReadableText.secondary)
             .padding(.horizontal, TimelineMetrics.chipHPad)
             .padding(.vertical, TimelineMetrics.chipVPad)
-            .background(Color(.tertiarySystemFill), in: Capsule())
+            .background(Color(.tertiarySystemFill), in: TimelineChipShape(roundCap: wraps ? 16 : .infinity))
             // The row's own vertical margin sits INSIDE the tap shape: it is
             // otherwise dead space in the middle of a 37pt pitch.
             .padding(.vertical, TimelineMetrics.chipRowVMargin)
@@ -713,6 +717,16 @@ private struct TimelineChipRow<Content: View>: View {
             .accessibilityIdentifier(identifier)
             .accessibilityLabel(label)
             .accessibilityAddTraits(.isButton)
+    }
+}
+
+/// The chip's ink: a capsule, or for a wrapping row a rounded rectangle whose radius
+/// stops at `roundCap`, which on a one-line row is the same capsule.
+private struct TimelineChipShape: Shape {
+    let roundCap: CGFloat
+
+    func path(in rect: CGRect) -> Path {
+        RoundedRectangle(cornerRadius: min(rect.height / 2, roundCap), style: .circular).path(in: rect)
     }
 }
 
@@ -733,6 +747,8 @@ private struct TimelineToolChipView: View {
     let detail: String?
     let agent: String?
     let running: Bool
+    /// The call returned an error: a red warning glyph in place of the tool's.
+    var failed = false
     /// The detail gets its own line (see `TimelineChipLayout`). Passed IN with the
     /// row, never read from the environment here: the row's height was reserved for
     /// exactly this shape.
@@ -753,7 +769,7 @@ private struct TimelineToolChipView: View {
         TimelineChipRow(
             identifier: "tool.chip",
             label: TimelineChipAccessibility.tool(name: name, detail: detail,
-                                                  agent: agent, running: running),
+                                                  agent: agent, running: running, failed: failed),
             onOpen: onOpen
         ) {
             if let agent, !agent.isEmpty {
@@ -769,8 +785,10 @@ private struct TimelineToolChipView: View {
                 .padding(.vertical, TimelineMetrics.badgeVPad)
                 .background(Color.indigo.opacity(0.14), in: Capsule())
             }
-            Image(systemName: agent == nil ? "wrench.and.screwdriver" : "arrow.triangle.branch")
+            Image(systemName: failed ? "exclamationmark.triangle.fill"
+                  : agent == nil ? "wrench.and.screwdriver" : "arrow.triangle.branch")
                 .font(.caption2)
+                .foregroundStyle(failed ? AnyShapeStyle(Theme.danger) : AnyShapeStyle(ReadableText.secondary))
                 .opacity(breathing ? ReadableText.shimmerFloor : 1)
                 .animation(
                     animates
@@ -1039,15 +1057,15 @@ private struct TimelineToolRunView: View {
             identifier: "tool.run",
             label: TimelineChipAccessibility.toolRun(phrase: phrase, failCount: failCount,
                                                     expanded: expanded),
+            wraps: true,
             onOpen: onToggle
         ) {
-            // The phrase is the row's whole content and wins the squeeze; the badge
-            // is short and must stay legible, so the phrase is what truncates. ONE
-            // line at every text size: the height was reserved for one.
+            // The phrase is the row's whole content; the badge is short and keeps
+            // its width, and the phrase WRAPS beside it (the builder measured every
+            // line), so an accessibility size never cuts it to "Show 2 hidden…".
             Text(phrase)
                 .font(.caption.weight(.medium))
-                .lineLimit(1)
-                .truncationMode(.tail)
+                .fixedSize(horizontal: false, vertical: true)
                 .layoutPriority(1)
                 .opacity(breathing ? ReadableText.shimmerFloor : 1)
                 .animation(
@@ -1589,17 +1607,20 @@ private struct TimelineNotificationView: View {
     let isError: Bool
     let body_: NSAttributedString
     let collapsedLine: String
+    let collapsedLimit: Int?
     let collapsible: Bool
     let expanded: Bool
     let onToggle: () -> Void
 
     init(badge: String, icon: String, isError: Bool, body: NSAttributedString,
-         collapsedLine: String, collapsible: Bool, expanded: Bool, onToggle: @escaping () -> Void) {
+         collapsedLine: String, collapsedLimit: Int?, collapsible: Bool, expanded: Bool,
+         onToggle: @escaping () -> Void) {
         self.badge = badge
         self.icon = icon
         self.isError = isError
         self.body_ = body
         self.collapsedLine = collapsedLine
+        self.collapsedLimit = collapsedLimit
         self.collapsible = collapsible
         self.expanded = expanded
         self.onToggle = onToggle
@@ -1632,10 +1653,20 @@ private struct TimelineNotificationView: View {
                     Text(AttributedString(body_))
                         .font(.subheadline)
                 } else {
+                    // The folded card's title in the readable quiet colour: `.secondary`
+                    // measured 3.32:1 on the tinted card in light mode. A tap on it
+                    // opens the card, as a tap on the header does.
                     Text(inline: collapsedLine)
                         .font(.subheadline)
-                        .lineLimit(2)
-                        .foregroundStyle(.secondary)
+                        .lineLimit(collapsedLimit)
+                        .foregroundStyle(ReadableText.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            guard collapsible else { return }
+                            onToggle()
+                        }
                 }
             }
             .padding(.leading, 10)

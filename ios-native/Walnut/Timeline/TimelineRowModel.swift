@@ -120,6 +120,9 @@ enum TimelineToolPhase: Hashable, Sendable {
     /// A transcript row: always returned, and an empty Result there really is no
     /// output, because the whole turn is on disk by then.
     case transcript
+    /// A transcript row whose call returned an error: the chip says so itself, so
+    /// an opened "1 failed" run shows WHICH call failed.
+    case failed
 }
 
 enum TimelineRowContent {
@@ -225,9 +228,10 @@ enum TimelineRowContent {
     /// Small grey capsule (generic one-line status capsules).
     case chip(icon: String, text: String)
     /// Notification card (session error / cron / …). Collapse mirrors the
-    /// SwiftUI card; both heights pre-measured.
+    /// SwiftUI card; both heights pre-measured. `collapsedLimit` caps the folded
+    /// line's wrap (nil: it wraps whole, as a received card's heading does).
     case notification(badge: String, icon: String, isError: Bool,
-                      body: NSAttributedString, collapsedLine: String,
+                      body: NSAttributedString, collapsedLine: String, collapsedLimit: Int?,
                       collapsible: Bool, expanded: Bool)
     /// Raw-HTML run from a rich reply, rendered as ONE self-contained web
     /// document. Nothing is stripped from the markup: the document runs with
@@ -370,12 +374,13 @@ extension TimelineRowContent {
             hasher.combine(icon)
             hasher.combine(text)
         case .notification(let badge, let icon, let isError, let body,
-                           let collapsedLine, let collapsible, let expanded):
+                           let collapsedLine, let collapsedLimit, let collapsible, let expanded):
             hasher.combine(badge)
             hasher.combine(icon)
             hasher.combine(isError)
             hasher.combine(body.string)
             hasher.combine(collapsedLine)
+            hasher.combine(collapsedLimit)
             hasher.combine(collapsible)
             hasher.combine(expanded)
         case .richHTML(_, let key, let streaming):
@@ -613,8 +618,9 @@ enum TimelineChipAccessibility {
     /// detail, and finally the state — "running" only while the call is in flight,
     /// because a chip that has returned says nothing about state at all.
     static func tool(name: String, detail: String?, agent: String?,
-                     running: Bool) -> String {
+                     running: Bool, failed: Bool = false) -> String {
         var parts = [name]
+        if failed { parts.append("failed") }
         if let agent = agent?.trimmingCharacters(in: .whitespacesAndNewlines),
            !agent.isEmpty {
             parts.append("delegated to \(agent)")

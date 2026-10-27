@@ -103,6 +103,21 @@ enum TimelineTurnFold {
     private static let outboundOps = ["task_send", "session_send", "org_send", "human_inbox_send",
                                       "human_inbox_reply", "board_post"]
 
+    /// What a tool chip calls a Walnut send: the web's words for it, never the MCP
+    /// name (`mcp__walnut__task_send` read as raw code on an opened trigger turn).
+    /// Any other tool keeps its own name.
+    static func toolLabel(_ name: String) -> String {
+        guard name.hasPrefix("mcp__"), let cut = name.range(of: "__", options: .backwards),
+              cut.lowerBound > name.index(name.startIndex, offsetBy: 4) else { return name }
+        switch String(name[cut.upperBound...]) {
+        case "task_send", "session_send", "org_send": return "Sent a message"
+        case "human_inbox_send": return "Wrote to your inbox"
+        case "human_inbox_reply": return "Replied in your inbox"
+        case "board_post": return "Posted on the Board"
+        default: return name
+        }
+    }
+
     /// "Received a message, ran 2 commands, sent a message": the web's process line.
     static func phrase(tools: [ChatMessage], received: Int) -> String {
         let sent = tools.filter(isOutbound).count

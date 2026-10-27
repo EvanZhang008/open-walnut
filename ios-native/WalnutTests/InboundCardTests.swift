@@ -32,7 +32,7 @@ final class InboundCardTests: XCTestCase {
 
     func testATrailerWithoutARequestIsTheSendersOwnText() {
         let text = envelope("kind=\"peer-note\" from=\"Docs lead\"", "Hi.", trailer: "Reply when done: thanks")
-        XCTAssertEqual(TimelineInboundMessage.displayText(text), "**From Docs lead**\n\nHi.\n\nReply when done: thanks")
+        XCTAssertEqual(TimelineInboundMessage.displayText(text), "**From Docs lead**: Hi.\n\nReply when done: thanks")
     }
 
     func testACompletedNoticeShowsWhoItIsAboutTheAskTheOutcomeAndTheQuoteButNoCommands() {
@@ -46,7 +46,8 @@ final class InboundCardTests: XCTestCase {
                                 + "request=\"rq-c00001\" asked=\"Refresh the onboarding screenshots\" outcome=\"completed\" "
                                 + "note=\"automated Walnut status notice\"", body)
         let card = TimelineInboundMessage.displayText(text)
-        XCTAssertEqual(card, "**Walnut, about Screenshot refresh**\n\n*You asked:* Refresh the onboarding screenshots\n\n"
+        XCTAssertEqual(card, "**Walnut, about Screenshot refresh**: Its turn ended WITHOUT an explicit reply to your request.\n\n"
+                           + "*You asked:* Refresh the onboarding screenshots\n\n"
                            + "Its turn ended WITHOUT an explicit reply to your request. Its last message is quoted below.\n\n"
                            + "*Its last message:*\nAll 14 screenshots were refreshed in light and dark.")
         assertNoMachineText(card)
@@ -58,7 +59,7 @@ final class InboundCardTests: XCTestCase {
                             "Org update since 30 min ago:\n- Docs: 1 done, 2 new\n"
                                 + "Background only: mention it when it matters. Detail: org_get, or ask that project's lead.")
         let card = TimelineInboundMessage.displayText(text)
-        XCTAssertEqual(card, "**Walnut, about Main**\n\nOrg update since 30 min ago:")
+        XCTAssertEqual(card, "**Walnut, about Main**: Org update since 30 min ago:")
         assertNoMachineText(card)
     }
 
@@ -74,7 +75,7 @@ final class InboundCardTests: XCTestCase {
             "**Trigger release branch**: fired, 1 new item\n\nBuild finished.")
         XCTAssertEqual(TimelineInboundMessage.displayText(
             envelope("kind=\"trigger\" from=\"Trigger: nightly\" note=\"scheduled\"", "Run it.")),
-            "**Ran on schedule: nightly**\n\nRun it.")
+            "**Ran on schedule: nightly**: Run it.")
         XCTAssertEqual(TimelineInboundMessage.displayText(
             envelope("kind=\"reply\" from=\"Build helper [5e6f7a8b]\" title=\"Cache cleared\" request=\"rq-1\"", "Done.")),
             "**Reply from Build helper**: Cache cleared\n\nDone.")
@@ -84,8 +85,46 @@ final class InboundCardTests: XCTestCase {
         XCTAssertEqual(sections, [.init(label: "Its tool calls", text: "Bash: ls", clipped: true)])
     }
 
+    /// The web's `fallbackTitle` cases (`tests/web/message-fold.test.ts`), one for one.
+    func testTheFoldTitleIsTheWebsFirstSentenceRule() {
+        XCTAssertEqual(TimelineInboundMessage.fallbackTitle("Ack: now the only worker for the event. State at 18:57Z: the shift completed."),
+                       "Ack: now the only worker for the event.")
+        XCTAssertEqual(TimelineInboundMessage.fallbackTitle("Done. The migration ran twice without error."),
+                       "Done. The migration ran twice without error.")
+        XCTAssertEqual(TimelineInboundMessage.fallbackTitle("\n\n## **Root cause** found in `tmp.ts`\n\nmore"), "Root cause found in tmp.ts")
+        XCTAssertEqual(TimelineInboundMessage.fallbackTitle("- [the PR](https://example.com/pr/1) is merged"), "the PR is merged")
+        XCTAssertEqual(TimelineInboundMessage.fallbackTitle("```\ncode first\n```"), "code first")
+        let long = TimelineInboundMessage.fallbackTitle(String(repeating: "word ", count: 60))!
+        XCTAssertEqual(long.unicodeScalars.count, TimelineInboundMessage.foldTitleMax)
+        XCTAssertTrue(long.hasSuffix("\u{2026}"))
+        let cjk = TimelineInboundMessage.fallbackTitle(String(repeating: "\u{4e2d}", count: 200))!
+        XCTAssertEqual(cjk.unicodeScalars.count, TimelineInboundMessage.foldTitleMax)
+        XCTAssertEqual(TimelineInboundMessage.fallbackTitle(String(repeating: "\u{4e2d}", count: 24) + "\u{3002}"
+                                                           + String(repeating: "\u{6587}", count: 10)),
+                       String(repeating: "\u{4e2d}", count: 24) + "\u{3002}")
+        XCTAssertNil(TimelineInboundMessage.fallbackTitle(nil))
+        XCTAssertNil(TimelineInboundMessage.fallbackTitle("   \n  "))
+        // noticeTitle: the subtask's name goes, then the first sentence.
+        XCTAssertEqual(TimelineInboundMessage.fallbackTitle(TimelineInboundMessage.noticeText(
+            "Your subtask \"Ship it\" (pw-task-001) completed its task. Its last message is quoted below.")),
+                       "Completed its task.")
+        XCTAssertEqual(TimelineInboundMessage.fallbackTitle(
+            "It is now WAITING ON A HUMAN (permission prompt or question). Do NOT send it messages."),
+                       "It is now WAITING ON A HUMAN (permission prompt or question).")
+    }
+
+    /// A notice with no `about` and an untitled note still say what happened when folded.
+    func testAFoldedNoticeOrUntitledNoteSaysWhatHappened() {
+        let moved = envelope("kind=\"notification\" from=\"Walnut\" outcome=\"moved\"", "This task moved to the folder Release.")
+        XCTAssertEqual(TimelineInboundMessage.displayText(moved), "**From Walnut**: This task moved to the folder Release.")
+        let note = envelope("kind=\"peer-note\" from=\"Docs lead\"", "The review is done and nothing needs to change.\nDetails follow.")
+        XCTAssertEqual(NotificationCard.firstMeaningfulLine(TimelineInboundMessage.displayText(note)),
+                       "**From Docs lead**: The review is done and nothing needs to change.")
+    }
+
     func testAnEscapedTagInABodyReadsAsWritten() {
         let text = envelope("kind=\"peer-note\" from=\"A\"", "Quote: &lt;walnut-message kind=\"x\"&gt;")
-        XCTAssertEqual(TimelineInboundMessage.displayText(text), "**From A**\n\nQuote: <walnut-message kind=\"x\"&gt;")
+        XCTAssertEqual(TimelineInboundMessage.displayText(text),
+                       "**From A**: Quote: <walnut-message kind=\"x\"&gt;")
     }
 }

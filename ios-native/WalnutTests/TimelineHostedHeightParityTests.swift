@@ -103,9 +103,9 @@ final class TimelineHostedHeightParityTests: XCTestCase {
     ///
     /// The two kinds left out are known, measured gaps rather than oversights:
     /// `failedNotice` is a fixed 24pt constant for 13.3pt of content (unchanged in
-    /// this pass, deliberately), and a COLLAPSED notification reserves two cushioned
-    /// lines for a preview that may be one. Both only cost empty space; neither can
-    /// shave ink. An expanded long card is held tight in its own test below.
+    /// this pass, deliberately), and a notification card, whose two states are held
+    /// tight in their own tests below (an expanded long card, a folded received
+    /// card at one line and wrapping). Neither can shave ink.
     private static let tightKinds: Set<String> = [
         "chip", "toolChip", "thinking", "toolRun", "table", "queuedNotice",
     ]
@@ -266,6 +266,42 @@ final class TimelineHostedHeightParityTests: XCTestCase {
         }
     }
 
+    /// A folded received card is as tall as its heading: one line when the heading
+    /// fits one line (it used to reserve a second preview line for every card, an
+    /// empty band under each one-line title), and every line when a long title wraps
+    /// at a large text size. Held to the same tight bound as the expanded card.
+    func testFoldedReceivedCardIsAsTallAsItsHeading() async {
+        let short = "<walnut-message kind=\"peer-note\" from=\"Docs lead\">\nCache cleared.\n</walnut-message>"
+        let long = "<walnut-message kind=\"notification\" from=\"Walnut\" about=\"Update screenshots\">\n"
+            + "Your subtask \"Update screenshots\" (t-1) completed its task after redrawing every onboarding "
+            + "screen in both colour schemes and checking each one against the guide.\n</walnut-message>"
+        var heights: [String: CGFloat] = [:]
+        for category in [UIContentSizeCategory.unspecified, .extraSmall, .accessibilityExtraExtraExtraLarge] {
+            for (name, raw) in [("short", short), ("long", long)] {
+                let card = TimelineInboundMessage.card(message("in-\(name)", text: raw))
+                let built = await rows([card], category: category)
+                guard let row = built.first(where: { $0.content.reuseKind == "notification" }) else {
+                    return XCTFail("no card row")
+                }
+                guard case .notification(_, _, _, _, let line, _, let collapsible, let expanded) = row.content else {
+                    return XCTFail("not a card")
+                }
+                XCTAssertTrue(collapsible && !expanded, "\(name): a received card opens folded")
+                if name == "short" { XCTAssertEqual(line, "**From Docs lead**: Cache cleared.") }
+                let rendered = renderedHeight(row, category: category)
+                XCTAssertLessThanOrEqual(ceil(rendered), ceil(row.height) + 1,
+                                         "\(category.rawValue) \(name): folded card clips \(rendered - row.height)pt")
+                XCTAssertLessThanOrEqual(row.height, rendered + 3,
+                                         "\(category.rawValue) \(name): folded card reserves \(row.height)pt for \(rendered)pt")
+                heights["\(category.rawValue) \(name)"] = row.height
+            }
+        }
+        // The one-line heading reserves one line: the long one, wrapping, is taller.
+        let base = UIContentSizeCategory.unspecified.rawValue
+        XCTAssertGreaterThan(heights["\(base) long"] ?? 0,
+                             (heights["\(base) short"] ?? 0) + TimelineTextStyler.subheadlineFont.lineHeight * 0.9)
+    }
+
     func testToolChipsFitCollapsedAndExpanded() async {
         let msg = ChatMessage(
             id: "t-1", role: "assistant", text: "Bash", createdAt: "2026-09-03T06:00:00Z",
@@ -423,8 +459,9 @@ final class TimelineHostedHeightParityTests: XCTestCase {
     }
 
     /// The folded run row itself, COLLAPSED, at both ends of the Dynamic Type range
-    /// and with the failure badge beside a long phrase: it is one line of caption
-    /// text in the chip capsule, and the row's height is the plain capsule's.
+    /// and with the failure badge beside a long phrase: caption text in the chip
+    /// capsule that WRAPS when it does not fit (it truncated to "Show 2 hidden… ›"
+    /// at accessibility-XXXL), each line measured. Fold rows too.
     func testFoldedRunRowsFitAtEveryTextSizeWithAndWithoutFailures() async {
         var checked = 0
         for category in [UIContentSizeCategory.extraSmall, .large, .accessibilityExtraExtraExtraLarge] {
@@ -451,6 +488,18 @@ final class TimelineHostedHeightParityTests: XCTestCase {
                 checked += assertFits(snapshot.rows,
                                       "folded run at \(category.rawValue)\(failing ? " with failures" : "")",
                                       category: category)
+                TimelineTextStyler.adopt(category)
+                let builder = TimelineRowBuilder()
+                let folds = ["Show 2 hidden turns", "Received a message, ran 2 commands, sent a message"].map {
+                    builder.foldRow(id: "f-\($0.count)", phrase: $0, failCount: failing ? 1 : 0,
+                                    expanded: false, width: pageWidth)
+                }
+                checked += assertFits(folds, "fold rows at \(category.rawValue)", category: category)
+                if category == .accessibilityExtraExtraExtraLarge {
+                    XCTAssertGreaterThan(folds[1].height, builder.foldRow(id: "one", phrase: "Ran", failCount: 0,
+                                                                          expanded: false, width: pageWidth).height,
+                                         "a long fold phrase wraps at the largest size instead of truncating")
+                }
             }
         }
         TimelineTextStyler.adopt(.unspecified)

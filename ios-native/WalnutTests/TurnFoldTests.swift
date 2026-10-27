@@ -92,7 +92,7 @@ final class TurnFoldTests: XCTestCase {
             switch row.content {
             case .text(let s): return s.string
             case .userBubble(let s, _, _, _): return s.string
-            case .notification(_, _, _, let body, _, _, _): return body.string
+            case .notification(_, _, _, let body, _, _, _, _): return body.string
             case .chip(_, let text): return text
             default: return ""
             }
@@ -164,7 +164,7 @@ final class TurnFoldTests: XCTestCase {
         XCTAssertEqual(TimelineInboundMessage.splitRiders("<walnut-message kind=\"notification\" from=\"Walnut\" outcome=\"moved\">\n</walnut-message>\n\nHi.")?.body, "Hi.")
         // A clipped row lost its close tag: the head line still never prints.
         let cut = TimelineInboundMessage.displayText("<walnut-message kind=\"peer-note\" from=\"Docs lead [1a2b3c4d]\">\nA long note that was cl\u{2026}")
-        XCTAssertEqual(cut, "**From Docs lead**\n\nA long note that was cl\u{2026}")
+        XCTAssertEqual(cut, "**From Docs lead**: A long note that was cl\u{2026}")
     }
 
     func testFoldKeysNameTheRowsPlaceNotItsPayload() {
@@ -311,7 +311,7 @@ final class TurnFoldTests: XCTestCase {
         }
         let opened = await rows(history, expanded: [fold.id])
         let cards = opened.compactMap { row -> (collapsible: Bool, expanded: Bool, line: String)? in
-            if case .notification(_, _, _, _, let line, let collapsible, let expanded) = row.content {
+            if case .notification(_, _, _, _, let line, _, let collapsible, let expanded) = row.content {
                 return (collapsible, expanded, line)
             }
             return nil
@@ -359,7 +359,7 @@ final class TurnFoldTests: XCTestCase {
         let two = "<walnut-message kind=\"notification\" from=\"Walnut\">\nA.\n</walnut-message>\n"
             + "<walnut-message kind=\"trigger\">\nB.\n</walnut-message>"
         XCTAssertEqual(TimelineInboundMessage.parse(two)?.envelopes.count, 2)
-        XCTAssertEqual(TimelineInboundMessage.displayText(two), "**From Walnut**\n\nA.\n\n**From a trigger**\n\nB.")
+        XCTAssertEqual(TimelineInboundMessage.displayText(two), "**From Walnut**: A.\n\n**From a trigger**: B.")
         // A shape this reader does not know is shown as it is.
         XCTAssertEqual(TimelineInboundMessage.displayText("[Walnut notification] legacy"), "[Walnut notification] legacy")
         // A tag that never closes is not an envelope.

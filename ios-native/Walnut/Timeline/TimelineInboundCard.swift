@@ -28,21 +28,30 @@ extension TimelineInboundMessage {
         return blocks.joined(separator: "\n\n")
     }
 
+    /// One card: a heading that names who it is from and, after a colon, its fold
+    /// title (`foldTitle` on the web), then what the reader would open it for. The
+    /// heading is the card's first line, so it is also what the folded card shows.
     static func block(_ envelope: Envelope) -> String {
         let a = envelope.attributes
         let body = unescapeBody(envelope.body)
         var parts: [String] = []
+        func heading(_ who: String, _ title: String?) {
+            parts.append(title.map { "**\(who)**: \($0)" } ?? "**\(who)**")
+        }
         switch a["kind"] ?? "" {
         case "notification":
             // A notice is ABOUT a session; its first line, the outcome, is its content.
-            let about = handleTitle(a["about"])
-            parts.append(about.map { "**Walnut, about \($0)**" } ?? "**From \(sender(envelope))**")
-            if let asked = nonEmpty(a["asked"]) { parts.append("*You asked:* \(asked)") }
             let lines = body.components(separatedBy: "\n")
-            if let status = nonEmpty(lines.first.map(noticeText)) { parts.append(status) }
+            let status = nonEmpty(lines.first.map(noticeText))
             var rest = lines.dropFirst().joined(separator: "\n")
             if let next = rest.range(of: "\n\nNext:\n", options: .backwards) { rest = String(rest[..<next.lowerBound]) }
-            for section in quoteSections(rest) {
+            let quotes = quoteSections(rest)
+            let title = status.flatMap { fallbackTitle($0) } ?? fallbackTitle(quotes.first?.text)
+            heading(handleTitle(a["about"]).map { "Walnut, about \($0)" } ?? "From \(sender(envelope))", title)
+            if let asked = nonEmpty(a["asked"]) { parts.append("*You asked:* \(asked)") }
+            // The outcome is repeated open only when the title cut it.
+            if let status, status != title { parts.append(status) }
+            for section in quotes {
                 parts.append("*\(section.label)\(section.clipped ? " (clipped)" : ""):*\n\(section.text)")
             }
         case "trigger":
@@ -50,27 +59,80 @@ extension TimelineInboundMessage {
             var name = (a["from"] ?? "").trimmingCharacters(in: .whitespaces)
             if name.hasPrefix("Trigger:") { name = String(name.dropFirst(8)).trimmingCharacters(in: .whitespaces) }
             let note = nonEmpty(a["note"])
-            if note == "scheduled" {
-                parts.append("**Ran on schedule: \(name.isEmpty ? "Routine" : name)**")
-            } else {
-                let heading = name.isEmpty ? "**From a trigger**" : "**Trigger \(name)**"
-                parts.append(note.map { "\(heading): \($0)" } ?? heading)
-            }
-            if let body = nonEmpty(body) { parts.append(body) }
+            let scheduled = note == "scheduled"
+            let title = (scheduled ? nil : note) ?? fallbackTitle(body)
+            if scheduled { heading("Ran on schedule: \(name.isEmpty ? "Routine" : name)", title) }
+            else { heading(name.isEmpty ? "From a trigger" : "Trigger \(name)", title) }
+            if let body = nonEmpty(body), body != title { parts.append(body) }
         case "app-state":
-            var heading = "**App state from \(nonEmpty(a["from"]) ?? "an App")**"
-            if let title = nonEmpty(a["title"]) { heading += ": \(title)" }
-            parts.append(heading)
-            if let body = nonEmpty(body) { parts.append(body) }
+            let title = nonEmpty(a["title"])
+            heading("App state from \(nonEmpty(a["from"]) ?? "an App")", title)
+            if let body = nonEmpty(body), body != title { parts.append(body) }
         default: // peer-note, reply
-            var heading = a["kind"] == "reply" ? "**Reply from \(sender(envelope))**" : "**From \(sender(envelope))**"
-            if let title = nonEmpty(a["title"]) { heading += ": \(title)" }
-            parts.append(heading)
+            let who = a["kind"] == "reply" ? "Reply from \(sender(envelope))" : "From \(sender(envelope))"
+            let title = nonEmpty(a["title"]) ?? fallbackTitle(body)
+            heading(who, title)
             if let asked = nonEmpty(a["asked"]) { parts.append("*You asked:* \(asked)") }
-            if let body = nonEmpty(body) { parts.append(body) }
+            // A body that is all title is said once.
+            if let body = nonEmpty(body), body != title { parts.append(body) }
             if envelope.replyRequested { parts.append("*Reply requested*") }
         }
         return parts.joined(separator: "\n\n")
+    }
+
+    /// How long a derived title may run before it is cut (`FOLD_TITLE_MAX`).
+    static let foldTitleMax = 140
+
+    /// The first sentence of a message as a one-line title, the web's
+    /// `fallbackTitle` (`message-fold.ts`): the first line that is not a fence or a
+    /// table row, its markdown dropped, cut at the first sentence end that comes
+    /// 16 or more UTF-16 units in, and at `max` code points with an ellipsis.
+    static func fallbackTitle(_ text: String?, max: Int = foldTitleMax) -> String? {
+        guard let text else { return nil }
+        var line = ""
+        for raw in text.components(separatedBy: "\n") {
+            if matches(fenceOrTable, raw) { continue }
+            line = plainLine(raw)
+            if !line.isEmpty { break }
+        }
+        guard !line.isEmpty else { return nil }
+        let ns = line as NSString
+        for m in sentenceStop?.matches(in: line, range: NSRange(location: 0, length: ns.length)) ?? []
+        where m.range.location >= 16 {
+            line = ns.substring(to: m.range.location + m.range.length)
+            break
+        }
+        let points = Array(line.unicodeScalars)
+        guard points.count > max else { return line }
+        var cut = String(String.UnicodeScalarView(points.prefix(max - 1)))
+        while cut.last?.isWhitespace == true { cut.removeLast() }
+        return cut + "\u{2026}"
+    }
+
+    /// Markdown that would print as noise in a one-line title (`plainLine`).
+    private static func plainLine(_ line: String) -> String {
+        var s = replace(listMark, in: line, with: "")
+        s = replace(link, in: s, with: "$1")
+        s = replace(emphasis, in: s, with: "")
+        s = replace(spaces, in: s, with: " ")
+        return s.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static let fenceOrTable = try? NSRegularExpression(pattern: #"^\s*(```|~~~|\|)"#)
+    private static let listMark = try? NSRegularExpression(pattern: #"^\s{0,3}(?:#{1,6}\s+|>\s?|[-*+]\s+|\d+[.)]\s+)"#)
+    private static let link = try? NSRegularExpression(pattern: #"!?\[([^\]]*)\]\([^)]*\)"#)
+    private static let emphasis = try? NSRegularExpression(pattern: #"(\*\*|__|`)"#)
+    private static let spaces = try? NSRegularExpression(pattern: #"\s+"#)
+    private static let sentenceStop = try? NSRegularExpression(pattern: #"[.!?](?=\s|$)|[\u3002\uff01\uff1f]"#)
+
+    private static func matches(_ pattern: NSRegularExpression?, _ s: String) -> Bool {
+        pattern?.firstMatch(in: s, range: NSRange(location: 0, length: (s as NSString).length)) != nil
+    }
+
+    private static func replace(_ pattern: NSRegularExpression?, in s: String, with template: String) -> String {
+        guard let pattern else { return s }
+        return pattern.stringByReplacingMatches(in: s, range: NSRange(location: 0, length: (s as NSString).length),
+                                                withTemplate: template)
     }
 
     /// A handle's title without the short id Walnut appends ("Docs lead [1a2b3c4d]").

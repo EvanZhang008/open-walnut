@@ -313,6 +313,31 @@ final class ToolRunFoldTests: XCTestCase {
         XCTAssertEqual(detail, "Tell the reviewer")
     }
 
+    /// A failed call's chip says it failed (its own glyph and spoken word), and a
+    /// Walnut send reads as the web's words, never `mcp__walnut__task_send`.
+    func testAFailedChipSaysSoAndASendChipReadsAsWords() async throws {
+        let failed = ChatMessage(id: "f", role: "assistant", text: "Bash", createdAt: "2026-10-03T00:00:01Z",
+                                 kind: .tool, detail: "Rebuild the docs site", isError: true)
+        let send = ChatMessage(id: "m", role: "assistant", text: "mcp__walnut__task_send",
+                               createdAt: "2026-10-03T00:00:02Z", kind: .tool, detail: "Docs lead")
+        // A lone call folds into a run row here (no sender facts): open every run.
+        let closed = await rows([failed, send])
+        let runs = Set(closed.filter { $0.content.reuseKind == "toolRun" }.map(\.id))
+        let built = await rows([failed, send], expanded: runs)
+        let chips = built.compactMap { row -> (String, TimelineToolPhase)? in
+            guard case .toolChip(let name, _, _, _, _, let phase, _, _) = row.content else { return nil }
+            return (name, phase)
+        }
+        XCTAssertEqual(chips.map(\.0), ["Bash", "Sent a message"])
+        XCTAssertEqual(chips.map(\.1), [.failed, .transcript])
+        XCTAssertEqual(TimelineChipAccessibility.tool(name: "Bash", detail: "Rebuild the docs site", agent: nil,
+                                                      running: false, failed: true),
+                       "Bash, failed, Rebuild the docs site")
+        XCTAssertEqual(TimelineTurnFold.toolLabel("mcp__walnut__human_inbox_send"), "Wrote to your inbox")
+        XCTAssertEqual(TimelineTurnFold.toolLabel("mcp__walnut__task_get"), "mcp__walnut__task_get")
+        XCTAssertEqual(TimelineTurnFold.toolLabel("Bash"), "Bash")
+    }
+
     func testOnlyARealSendAtACommandPositionCounts() {
         func sends(_ command: String) -> Bool {
             TimelineToolRunFold.staysOutOfRuns(name: "Bash", detail: nil,

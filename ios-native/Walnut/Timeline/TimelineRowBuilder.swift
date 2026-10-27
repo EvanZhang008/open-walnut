@@ -883,24 +883,26 @@ final class TimelineRowBuilder {
             // RETURNED, and one with no `resultPreview` there produced no output.
             // Only the live region knows a call still in flight, or one whose
             // output has not been relayed yet.
-            content: .toolChip(name: message.text, detail: message.detail,
+            content: .toolChip(name: TimelineTurnFold.toolLabel(message.text), detail: message.detail,
                                inputPreview: message.inputPreview,
                                resultPreview: message.resultPreview,
-                               agent: message.agent, phase: .transcript,
+                               agent: message.agent,
+                               phase: TimelineTurnShape.isFailure(message) ? .failed : .transcript,
                                detailRef: message.activityDetailRef, stacked: stacked),
             height: Self.capsuleRowHeight(badged: message.agent?.isEmpty == false,
                                           stacked: stacked)
         )
     }
 
-    /// The folded run's own row: one capsule line (see `TimelineToolRunFold`).
+    /// The folded run's own row: a capsule (see `TimelineToolRunFold`).
     ///
-    /// Its height is the plain capsule's, in both states: opening a run does not
-    /// grow THIS row, it makes the actor lay the member rows out after it. The
-    /// revision is content-derived because the id is stable while the run grows
-    /// (a live turn folds each finished call into the same first-member id).
+    /// Its height is the plain capsule's while the phrase fits one line, in both
+    /// states: opening a run does not grow THIS row, it makes the actor lay the
+    /// member rows out after it. The revision is content-derived because the id is
+    /// stable while the run grows (a live turn folds each finished call into the
+    /// same first-member id). `width` 0 (a caller that has none) is one line.
     func toolRunRow(id: String, members: [TimelineToolRunPhrase.Member], failCount: Int,
-                    running: Bool, expanded: Bool) -> TimelineRow {
+                    running: Bool, expanded: Bool, width: CGFloat = 0) -> TimelineRow {
         let phrase = TimelineToolRunPhrase.phrase(members)
         var hasher = Hasher()
         hasher.combine(phrase)
@@ -911,15 +913,45 @@ final class TimelineRowBuilder {
             id: id, revision: hasher.finalize(),
             content: .toolRun(phrase: phrase, failCount: failCount, running: running,
                               expanded: expanded),
-            height: Self.capsuleRowHeight(badged: false)
+            height: runRowHeight(phrase: phrase, failCount: failCount, width: width)
         )
+    }
+
+    /// A run or fold row's height: the one-line capsule, or every line the phrase
+    /// wraps into beside its failure badge and chevron. The row wraps rather than
+    /// truncating, so "Show 2 hidden turns" stays readable at accessibility sizes
+    /// (it read "Show 2 hidden… ›"). The text's width is what the cell's `HStack`
+    /// leaves it: the badge and the chevron keep their own widths (spacing 5).
+    private func runRowHeight(phrase: String, failCount: Int, width: CGFloat) -> CGFloat {
+        let oneLine = Self.capsuleRowHeight(badged: false)
+        guard width > 0, !phrase.isEmpty else { return oneLine }
+        let caption = TimelineTextStyler.captionFont
+        let chevronSize = TimelineTextStyler.scaled(8, relativeTo: .caption2)
+        let chevron = UIImage(systemName: "chevron.right",
+                              withConfiguration: UIImage.SymbolConfiguration(pointSize: chevronSize, weight: .semibold))?
+            .size.width ?? chevronSize * 0.7
+        var textWidth = width - TimelineMetrics.hMargin * 2 - TimelineMetrics.chipHPad * 2 - 5 - ceil(chevron)
+        if failCount > 0 {
+            let badgeFont = UIFont.systemFont(ofSize: caption.pointSize, weight: .semibold)
+            let badge = (TimelineChipAccessibility.failedBadge(failCount) as NSString)
+                .size(withAttributes: [.font: badgeFont]).width
+            textWidth -= 5 + ceil(badge)
+        }
+        let font = UIFont.systemFont(ofSize: caption.pointSize, weight: .medium)
+        let lines = measurer.lineCount(NSAttributedString(string: phrase, attributes: [.font: font]),
+                                       width: max(40, textWidth))
+        guard lines > 1 else { return oneLine }
+        // The one-line capsule's cushion (`hostedLineHeight` over a tight line) kept.
+        let cushion = TimelineMetrics.hostedLineHeight(caption) - TimelineMetrics.hostedTextHeight(lines: 1, font: caption)
+        return TimelineMetrics.hostedTextHeight(lines: lines, font: caption) + cushion
+            + TimelineMetrics.chipVPad * 2 + TimelineMetrics.chipRowVMargin * 2
     }
 
     /// A turn fold's own row (`TimelineTurnFold`): the run row's capsule, reading
     /// the fold's words. Opening it lays the members out after it, as a run does.
     /// `running` breathes the row while a live call inside it runs.
     func foldRow(id: String, phrase: String, failCount: Int, expanded: Bool,
-                 running: Bool = false) -> TimelineRow {
+                 running: Bool = false, width: CGFloat = 0) -> TimelineRow {
         var hasher = Hasher()
         hasher.combine(phrase)
         hasher.combine(failCount)
@@ -928,7 +960,7 @@ final class TimelineRowBuilder {
         return TimelineRow(
             id: id, revision: hasher.finalize(),
             content: .toolRun(phrase: phrase, failCount: failCount, running: running, expanded: expanded),
-            height: Self.capsuleRowHeight(badged: false)
+            height: runRowHeight(phrase: phrase, failCount: failCount, width: width)
         )
     }
 
@@ -1015,7 +1047,8 @@ final class TimelineRowBuilder {
                 id: runID,
                 members: folded.map { TimelineToolRunPhrase.Member(name: $0.call.name,
                                                                    detail: $0.call.detail) },
-                failCount: 0, running: folded.contains { !$0.call.finished }, expanded: expanded
+                failCount: 0, running: folded.contains { !$0.call.finished }, expanded: expanded,
+                width: width
             ))
             if expanded {
                 rows.append(contentsOf: liveThinkingRows(liveThinking: liveThinking,
@@ -1080,7 +1113,7 @@ final class TimelineRowBuilder {
         return TimelineRow(
             id: TimelineScope.namespace(scope, "live-tool-\(index)"),
             revision: hasher.finalize(),
-            content: .toolChip(name: call.name, detail: call.detail,
+            content: .toolChip(name: TimelineTurnFold.toolLabel(call.name), detail: call.detail,
                                inputPreview: input,
                                resultPreview: call.resultPreview,
                                agent: nil,
@@ -1138,16 +1171,24 @@ final class TimelineRowBuilder {
             bodyHeight = TimelineMetrics.hostedTextHeight(lines: max(1, lines),
                                                           font: TimelineTextStyler.subheadlineFont)
         } else {
-            // Two-line collapsed preview, at the height SwiftUI gives a line
-            // (this branch is a `Text(...).lineLimit(2)`, not a TextKit measurement,
-            // so `UIFont.lineHeight` was 4.5pt short across the two lines).
-            bodyHeight = TimelineMetrics.hostedLineHeight(TimelineTextStyler.subheadlineFont) * 2
+            // The folded line at the lines it wraps into, never a reserved second
+            // line: a one-line heading over a two-line slot left an empty band under
+            // every folded received card. Counted as the expanded body is (fonts
+            // kept, spacing dropped, SwiftUI's line height per line).
+            let folded = NSMutableAttributedString(attributedString: TimelineTextStyler.inlineText(
+                styled.collapsedLine, font: TimelineTextStyler.subheadlineFont))
+            folded.removeAttribute(.paragraphStyle, range: NSRange(location: 0, length: folded.length))
+            var lines = max(1, measurer.lineCount(folded, width: max(40, bodyWidth)))
+            if let limit = styled.collapsedLimit { lines = min(lines, limit) }
+            bodyHeight = TimelineMetrics.hostedTextHeight(lines: lines,
+                                                          font: TimelineTextStyler.subheadlineFont)
         }
         return TimelineRow(
             id: id, revision: expanded ? 1 : 0,
             content: .notification(
                 badge: styled.badgeLabel, icon: styled.iconName, isError: styled.isError,
                 body: body, collapsedLine: styled.collapsedLine,
+                collapsedLimit: styled.collapsedLimit,
                 collapsible: collapsible, expanded: expanded
             ),
             height: headerHeight + bodyHeight + TimelineMetrics.notificationPadding * 2
@@ -1247,4 +1288,9 @@ struct NotificationStyling {
     }
 
     var collapsedLine: String { NotificationCard.firstMeaningfulLine(displayText) }
+
+    /// How many lines the folded line may wrap into: a received card's heading
+    /// (who, then a title of at most 140 characters) wraps whole, so a large text
+    /// size never cuts it; any other notice keeps its two-line preview.
+    var collapsedLimit: Int? { message.source == TimelineInboundMessage.inboundSource ? nil : 2 }
 }

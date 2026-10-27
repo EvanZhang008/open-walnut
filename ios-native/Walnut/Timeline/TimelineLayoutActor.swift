@@ -166,7 +166,7 @@ actor TimelineLayoutActor {
                 id: runID,
                 members: TimelineToolRunFold.phraseMembers(members),
                 failCount: TimelineToolRunFold.failCount(members),
-                running: false, expanded: expanded
+                running: false, expanded: expanded, width: input.width
             ))
             if expanded {
                 for member in members {
@@ -195,7 +195,8 @@ actor TimelineLayoutActor {
                     let id = TimelineTurnFold.rowID(scope: input.scope, key: fold.key)
                     let expanded = input.expandedRowIDs.contains(id)
                     rows.append(builder.foldRow(id: id, phrase: TimelineTurnFold.label(fold, expanded: expanded),
-                                                failCount: fold.failCount, expanded: expanded))
+                                                failCount: fold.failCount, expanded: expanded,
+                                                width: input.width))
                     if expanded { appendPlan(fold.members) }
                 }
             }
@@ -225,7 +226,8 @@ actor TimelineLayoutActor {
                 phrase: TimelineTurnFold.phrase(tools: earlier + live,
                                                 received: tail.rows.filter(TimelineTurnShape.isInbound).count),
                 failCount: historyTools.filter(TimelineTurnShape.isFailure).count,
-                expanded: expanded, running: input.streaming && liveCalls.contains { !$0.finished }))
+                expanded: expanded, running: input.streaming && liveCalls.contains { !$0.finished },
+                width: input.width))
             if expanded {
                 appendPlan(tail.members)
                 rows.append(contentsOf: builder.liveRunMembers(

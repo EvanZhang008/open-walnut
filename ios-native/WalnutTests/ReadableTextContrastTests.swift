@@ -160,4 +160,20 @@ final class ReadableTextContrastTests: XCTestCase {
                 glyphMinimum, "the shipped 0.35 shimmer should measure as unreadable")
         }
     }
+
+    /// A folded notice's title sits on the card's own tint (the accent at 7% over
+    /// the page). In `.secondary` it measured 3.32:1 in light mode; the readable
+    /// grey it draws in now clears the text bar on both accents, both schemes.
+    func testAFoldedCardTitleClearsTheTextBarOnTheCardsTint() {
+        let accents: [(String, UIColor)] = [("tint", Theme.tintColor),
+                                             ("danger", Theme.dangerColor)]
+        for dark in [false, true] {
+            for (name, accent) in accents {
+                let card = UIColor { accent.resolvedColor(with: $0).withAlphaComponent(0.07) }
+                let ratio = contrast(ReadableText.secondaryUIColor, over: card, dark: dark)
+                XCTAssertGreaterThanOrEqual(ratio, textMinimum,
+                                            "\(name) card \(dark ? "dark" : "light"): \(String(format: "%.2f", ratio)):1")
+            }
+        }
+    }
 }
