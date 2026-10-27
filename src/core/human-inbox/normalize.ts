@@ -150,6 +150,7 @@ function normalizeRecord(raw: unknown): LetterRecord | null {
     // Same reason as readAt: a rewrite must not erase when the flag moved.
     ...(typeof r.pinnedAt === 'number' && r.pinnedAt > 0 ? { pinnedAt: r.pinnedAt } : {}),
     ...(typeof r.archivedAt === 'number' && r.archivedAt > 0 ? { archivedAt: r.archivedAt } : {}),
+    ...(r.archived === true && r.archivedReason === 'task_completed' ? { archivedReason: 'task_completed' as const } : {}),
     thread: normalizeThread(r.thread),
     ...(actions ? { actions } : {}),
     ...(r.items !== undefined ? { items: normalizeItems(r.items) } : {}),

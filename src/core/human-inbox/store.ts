@@ -42,6 +42,7 @@ import {
   LETTER_INLINE_BODY_MAX_BYTES,
   letterFieldMaxBytes,
   type AgentReplyInput,
+  type LetterArchiveReason,
   type LetterDetail,
   type LetterList,
   type LetterRecord,
@@ -730,10 +731,13 @@ function setPinnedFlag(letter: LetterRecord, pinned: boolean): void {
   letter.pinnedAt = Date.now();
 }
 
-function setArchivedFlag(letter: LetterRecord, archived: boolean): void {
+function setArchivedFlag(letter: LetterRecord, archived: boolean, reason?: LetterArchiveReason): void {
   if (letter.archived === archived) return;
   letter.archived = archived;
   letter.archivedAt = Date.now();
+  // The reason belongs to this one archive: any other move of the flag drops it.
+  if (archived && reason) letter.archivedReason = reason;
+  else delete letter.archivedReason;
 }
 
 /**
@@ -934,6 +938,31 @@ export async function setPinned(id: string, pinned: boolean): Promise<LetterReco
  */
 export async function setArchived(id: string, archived: boolean): Promise<LetterRecord> {
   return (await setLetterState(id, 'archived', archived)).letter;
+}
+
+/**
+ * Archive, in one write, the open letters `pick` chooses, stamping `reason`.
+ * Same signals as setLetterState (the envelope mirror, `human-inbox:state`), so
+ * the bell and every status surface follow. Returns the ids it archived.
+ */
+export async function archiveLettersWhere(
+  pick: (letter: LetterRecord) => boolean,
+  reason: LetterArchiveReason,
+): Promise<string[]> {
+  const ids = await withWriteLock(() => withStore((store) => {
+    const moved: string[] = [];
+    for (const letter of store.letters) {
+      if (letter.archived || !pick(letter)) continue;
+      setArchivedFlag(letter, true, reason);
+      moved.push(letter.id);
+    }
+    return moved;
+  }));
+  for (const id of ids) {
+    void mirrorLetterReadState(id, true);
+    bus.emit('human-inbox:state', { letterId: id, field: 'archived', value: true }, [], { source: 'human-inbox' });
+  }
+  return ids;
 }
 
 /**

@@ -1860,6 +1860,9 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     // What waits on a lead (its status says so) reaches that lead (src/core/org/lead-waits.ts).
     const { startLeadWaits } = await import('../core/org/lead-waits.js')
     startLeadWaits()
+    // A completed task's own "please check this" letters leave the inbox (src/core/human-inbox/complete-archive.ts).
+    const { startCompleteArchive } = await import('../core/human-inbox/complete-archive.js')
+    startCompleteArchive()
   }
 
   // ── Task workspaces: cleanup on complete/delete + resume interrupted jobs (src/core/workspaces/).
@@ -6308,6 +6311,7 @@ export async function stopServer(): Promise<void> {
   bus.unsubscribe('task-wait-until') // WAIT_UNTIL_SUBSCRIBER, core/task-wait-until.ts
   bus.unsubscribe('user-status-sync') // core/user-status-sync.ts; its timers stop below
   void import('../core/user-status-sync.js').then((m) => m.stopUserStatusSync()).catch(() => { /* never started */ })
+  void import('../core/human-inbox/complete-archive.js').then((m) => m.stopCompleteArchive()).catch(() => { /* never started */ })
   void import('../core/org/lead-waits.js').then((m) => m.stopLeadWaits()).catch(() => { /* never started */ })
   bus.unsubscribe('board-store') // BOARD_SUBSCRIBER, core/boards/board-store.ts
   bus.unsubscribe('task-workspaces') // core/workspaces/watch.ts

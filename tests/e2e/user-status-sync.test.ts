@@ -72,7 +72,8 @@ describe('user status sync', () => {
     await createSessionRecord('sess-running-1', running.id, 'Acme')
     await updateSessionRecord('sess-running-1', { process_status: 'running' })
     await updateTask(running.id, { phase: 'IN_PROGRESS' })
-    // A turn that ended and handed the task back (NEED_ACTION): it needs the user, with its words.
+    // A turn that ended and handed the task back (NEED_ACTION) with its report of done: nothing to
+    // answer (2026-10-27), it waits on its lead to check and close it, with its words.
     await createSessionRecord('sess-ended-1', ended.id, 'Acme')
     await updateSessionRecord('sess-ended-1', { process_status: 'stopped' })
     await updateTask(ended.id, { phase: 'NEED_ACTION' })
@@ -90,7 +91,7 @@ describe('user status sync', () => {
     await setBoardHtml(lead.id, `<html><body><walnut-choice id="c1" title="Which host?" options="a:Mac,b:Cloud" task="${choice.id}"></walnut-choice></body></html>`, { by: `task:${lead.id}` })
 
     expect((await statusOf(running.id, (t) => t.user_status!.state === 'working')).user_status).toMatchObject({ state: 'working' })
-    expect((await statusOf(ended.id, (t) => t.user_status!.state === 'needs')).user_status).toMatchObject({ state: 'needs', source: 'session', now: 'Shipped it.' })
+    expect((await statusOf(ended.id, (t) => t.user_status!.state === 'waiting')).user_status).toMatchObject({ state: 'waiting', kind: 'lead', now: 'Shipped it.' })
     expect((await statusOf(asks.id, (t) => t.user_status!.state === 'needs')).user_status).toMatchObject({ state: 'needs', source: 'letter', ask: 'Pick a design' })
     expect((await statusOf(choice.id, (t) => t.user_status!.state === 'needs')).user_status).toMatchObject({ state: 'needs', source: 'choice', ask: 'Which host?' })
     expect((await statusOf(todo.id, (t) => t.user_status!.state === 'waiting')).user_status).toMatchObject({ kind: 'not-started' })
@@ -98,12 +99,12 @@ describe('user status sync', () => {
     // The phone's projection carries the same value.
     const { tasks } = await v1<{ tasks: { id: string; user_status?: { state: string } }[] }>('/tasks')
     expect(tasks.find((t) => t.id === asks.id)?.user_status?.state).toBe('needs')
-    expect(tasks.find((t) => t.id === ended.id)?.user_status?.state).toBe('needs')
+    expect(tasks.find((t) => t.id === ended.id)?.user_status?.state).toBe('waiting')
 
-    // The Org page counts by it: exactly the tasks whose phase is NEED_ACTION.
+    // The Org page counts by it: the letter and the choice need the user, the turn that only ended does not.
     const reports = await v1<{ rows: { project?: string; needs_you: number; running: number }[] }>('/org/reports')
     const acme = reports.rows.find((r) => (r.project ?? '').toLowerCase() === 'acme')
-    expect(acme?.needs_you).toBe(3)
+    expect(acme?.needs_you).toBe(2)
     expect(acme?.running).toBe(1)
 
     // Facts move, the status follows: the letter answered, the session stopped.
@@ -128,12 +129,13 @@ describe('user status sync', () => {
     // Past the debounce and a pass: the sync never touched it.
     await new Promise((r) => setTimeout(r, 4_000))
     expect(writes).toEqual([])
-    expect((await getTask(choice.id)).user_status?.state).not.toBe('done')
+    // The completing write itself stores Done (phase.ts phaseDerivedFields), not the sync.
+    expect((await getTask(choice.id)).user_status?.state).toBe('done')
     const after = await v1<{ tasks: { id: string; phase: string }[] }>('/tasks?include_done=1')
     const row = after.tasks.find((t) => t.id === choice.id)
     if (row) expect(row.phase).toBe('COMPLETE')
     const org = await v1<{ rows: { project?: string; needs_you: number }[] }>('/org/reports')
-    expect(org.rows.find((r) => (r.project ?? '').toLowerCase() === 'acme')?.needs_you).toBe(2)
+    expect(org.rows.find((r) => (r.project ?? '').toLowerCase() === 'acme')?.needs_you).toBe(1)
     bus.unsubscribe('test-status-writes')
   }, 90_000)
 })

@@ -76,6 +76,8 @@ export interface LetterEnvelope {
   readAt?: number;
   pinned: boolean;
   archived: boolean;
+  /** Set when Walnut archived it on its own: `task_completed` = its task was completed. */
+  archivedReason?: 'task_completed';
   actions?: LetterAction[];
   items?: InboxLetterItem[];
   answered?: LetterAnswer;

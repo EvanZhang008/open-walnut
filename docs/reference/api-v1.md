@@ -3166,6 +3166,10 @@ A replica asks the primary first for `GET /api/v1/human-inbox`, `GET /api/v1/hum
 
 A client treats `queued` like any successful write and needs no change. Relay detail: the primary's `server.human-inbox.{read,pin,archive}` accepts `since` (epoch ms), and its answer also carries `storeUpdatedAt` (the index clock the write stamped) and `superseded: true` for a skipped replay. The replica keeps both for itself: it holds a change on top of its copy until the copy's clock reaches `storeUpdatedAt`, which covers a Mac that sleeps before its next sync.
 
+### A completed task's own review letters are archived (additive, 2026-10)
+
+When a task becomes `COMPLETE`, the primary archives the open letters that task sent which only ask the human to look at, install or check its work: `type` `review` or `completion`, not pinned, no `actions`, no `items`, never un-archived before. With a person completing the task (no caller session), unread ones go too; with a session completing it, only read ones. `action_required` and `info` letters stay. Each archived letter carries `"archivedReason": "task_completed"` beside `archived: true` and `archivedAt`; any later move of the flag drops the field. A reopen does not bring the letters back. At startup the primary does the same for tasks completed while it was down, taking read letters sent before `completed_at` only. A client that ignores the field sees an ordinary archived letter.
+
 ### Session model and effort on a replica while the primary is away (additive, 2026-10)
 
 While the primary answers, `GET /api/v1/sessions/:id/model-options`, `POST .../model` and `POST .../effort` are the primary's, as before. While it is away (no bridge, silent, a forward since its last beat unanswered, or the replica standing in for a host):

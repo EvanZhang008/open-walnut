@@ -82,10 +82,14 @@ export interface UserStatusInput {
   openWorkers?: number;
   /** Main (org_role 'main'): the user's next message or a team's news wakes it, never a timer. */
   isMain?: boolean;
+  /** A lead (org_role 'lead'): like Main, never closed. */
+  isLead?: boolean;
   /** When the phase last moved (a turn's end, a park). A report older than this was written
    *  before the latest turn and only lends its words, never the state. */
   phaseChangedAt?: string | null;
   report?: StatusReport | null;
+  /** Its session's turn-end report is still to come (sessions/report-pending.ts). */
+  reportPending?: boolean;
 }
 
 /** 2026-10-27, the user: "If the task is closed, mostly close by me means I already verified ...
@@ -189,6 +193,23 @@ function derive(input: UserStatusInput, nowMs: number): UserStatus {
     if (report?.state === 'needs' && !none(report.ask)) return strip({ state: 'needs', source: 'session', ask: clean(report.ask), ...w });
     if (report?.state === 'waiting' && report.waiting_kind === 'you' && !none(report.waiting_on)) {
       return strip({ state: 'needs', source: 'session', ask: clean(report.waiting_on), ...w });
+    }
+    // Handed back only because its turn ended (2026-10-27, the lead on the user's demo: a turn that
+    // answered the user's question and only confirmed the plan read Needs you everywhere). Its own
+    // report says done: nothing to answer, the user reads it and closes it when they like. A task
+    // with a leader moves to WAITING on that report instead (report-phase.ts).
+    if (report?.state === 'done') {
+      // Main and a lead are never closed: they wait on the user's next message.
+      if (input.isMain || input.isLead) return strip({ state: 'waiting', kind: 'you', waitingOn: 'Your next message, or news from its teams', ...w });
+      return strip({
+        state: 'waiting', kind: input.hasLeader ? 'lead' : 'you',
+        waitingOn: input.hasLeader ? 'Its lead, to check the result and close it' : 'You, to read the result and close it (no rush)',
+        ...w,
+      });
+    }
+    // Its turn just ended and its report is on the way: only that report can say it asks anything.
+    if (input.reportPending) {
+      return strip({ state: 'waiting', kind: 'other', waitingOn: 'Its report on the turn that just ended', ...w });
     }
     return strip({ state: 'needs', source: 'session', ask: 'Its turn ended and handed the task back to you: read it and reply.', ...w });
   }

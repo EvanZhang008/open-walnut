@@ -312,6 +312,9 @@ export function LetterView({
           {shown.sender?.project && <span className="hib-chip">{shown.sender.project}</span>}
           {shown.sender?.host && <span className="hib-chip">{shown.sender.host}</span>}
           <span className="hib-time">{formatRelative(shown.createdAt)}</span>
+          {shown.archived && shown.archivedReason === 'task_completed' && (
+            <span className="hib-chip" data-testid="letter-archived-reason">Archived: its task was completed</span>
+          )}
           {showOpenSession && openSessionHref && (
             <button className="hib-row-btn" onClick={() => onNavigate(openSessionHref)}>
               Open session ↗

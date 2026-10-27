@@ -22,6 +22,7 @@ import { bus, EventNames } from './event-bus.js';
 import { log } from '../logging/index.js';
 import { bootPolicy } from './boot-policy.js';
 import { deriveUserStatus, type UserStatus, type UserStatusInput } from './user-status.js';
+import { isReportPending, onReportPendingChange } from './sessions/report-pending.js';
 import type { Task } from './types.js';
 
 const SUBSCRIBER = 'user-status-sync';
@@ -264,6 +265,9 @@ export function statusInputOf(task: Task, facts: StatusFacts): UserStatusInput {
     isMain: task.org_role === 'main',
     phaseChangedAt: task.phase_changed_at ?? null,
     report: task.status_report ?? null,
+    // The task's own session when it has one: an older session's pending report says nothing of this turn.
+    reportPending: task.session_id ? isReportPending(task.session_id) : own.some(([sid]) => isReportPending(sid)),
+    isLead: task.org_role === 'lead',
   };
 }
 
@@ -401,6 +405,8 @@ export function startUserStatusSync(): void {
       EventNames.CRON_JOB_ADDED, EventNames.CRON_JOB_UPDATED, EventNames.CRON_JOB_REMOVED,
     ],
   });
+  // A turn-end report armed, asked or settled changes what the task waits on (user-status.ts).
+  onReportPendingChange((sid) => markSession(sid));
   markAll();
   void import('./sessions/report-phase.js').then(({ applyStoredReports }) => applyStoredReports())
     .catch((err) => log.task.warn('user-status: stored reports not applied', { error: errText(err) }));
@@ -424,6 +430,7 @@ export async function settleUserStatusSync(): Promise<void> {
 
 export function stopUserStatusSync(): void {
   bus.unsubscribe(SUBSCRIBER);
+  onReportPendingChange(null);
   live = false;
   if (timer) clearTimeout(timer);
   if (sweep) clearInterval(sweep);

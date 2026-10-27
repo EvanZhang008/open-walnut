@@ -376,7 +376,7 @@ async function moveProjectNow(name: string, target: string): Promise<{ result: P
     moved.push(...await moveWorkers(now, l.id, fresh.id));
     if (l.phase === 'COMPLETE') continue;
     if (hasLeadSession(l)) handovers.push({ from: l, to: fresh, project: canonical, led, ends: true });
-    else { await completeTask(l.id); closed.push(l.id); } // never talked: nothing to hand over
+    else { await completeTask(l.id, { source: 'org' }); closed.push(l.id); } // never talked: nothing to hand over
   }
   for (const l of before) {
     // The VP it was under before: it keeps its own project and hands this one over.

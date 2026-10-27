@@ -680,7 +680,7 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
       },
       async complete(id: string) {
         const { completeTask } = await import('../task-manager.js')
-        return publicTask((await completeTask(id)).task)
+        return publicTask((await completeTask(id, { source: 'plugin' })).task)
       },
       async delete(id: string) {
         const { deleteTask } = await import('../task-manager.js')

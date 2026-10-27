@@ -27,6 +27,7 @@ import { addTask } from '../../src/core/task-manager.js';
 import { updateConfig } from '../../src/core/config-manager.js';
 import { turnCompleteTriageHook, messageSendTriageHook } from '../../src/core/session-hooks/builtins.js';
 import type { OnTurnCompletePayload, OnMessageSendPayload } from '../../src/core/session-hooks/types.js';
+import { isReportPending } from '../../src/core/sessions/report-pending.js';
 import type { Task } from '../../src/core/types.js';
 
 // Short real-time window, large enough that the fire path's fs I/O (~tens of ms) is
@@ -150,6 +151,25 @@ describe('turn-complete triage: trailing debounce', () => {
     // Cross the threshold (+ slack for the async fire path's fs I/O) → fires once.
     await sleep(DEBOUNCE_MS * 2);
     expect(cap.firedFor(sid)).toBe(1);
+  });
+
+  it('marks the report pending from the turn end until its run settles (the task status waits on it)', async () => {
+    const sid = 'dbnc-pending';
+    registerFakeSession(sid);
+    await turnCompleteTriageHook.handler!(turnPayload(sid));
+    expect(isReportPending(sid)).toBe(true);
+    await sleep(DEBOUNCE_MS * 3);
+    expect(fakeSessions.get(sid)!.askSideQuestion).toHaveBeenCalled();
+    expect(isReportPending(sid)).toBe(false);
+  });
+
+  it('a user message-send clears the pending report with the timer', async () => {
+    const sid = 'dbnc-pending-cancel';
+    registerFakeSession(sid);
+    await turnCompleteTriageHook.handler!(turnPayload(sid));
+    expect(isReportPending(sid)).toBe(true);
+    await messageSendTriageHook.handler!(messagePayload(sid));
+    expect(isReportPending(sid)).toBe(false);
   });
 
   it('collapses a burst of turn-completes into a single dispatch', async () => {

@@ -14,7 +14,7 @@ const report = (r: Partial<StatusReport>): StatusReport => ({ at: ago(60_000), .
 const PHASES = ['TODO', 'IN_PROGRESS', 'WAITING', 'NEED_ACTION', 'COMPLETE'] as const
 
 describe('the state is the phase', () => {
-  it('needs you exactly when the phase is NEED_ACTION, whatever letters, choices or reports say', () => {
+  it('needs you when the phase is NEED_ACTION, whatever letters, choices or reports say', () => {
     const noisy: Partial<UserStatusInput> = {
       hasSession: true, processStatus: 'idle', openLetter: 'Pick a design', openChoice: 'Which host?',
       report: report({ state: 'needs', ask: 'Approve?' }), triggers: ['CI watch'], openWorkers: 2,
@@ -61,6 +61,30 @@ describe('the words say why', () => {
     expect(deriveUserStatus({ ...base, report: report({ state: 'waiting', waiting_kind: 'you', waiting_on: 'A real-device test when you have time' }) }, NOW))
       .toMatchObject({ source: 'session', ask: 'A real-device test when you have time' })
     expect(deriveUserStatus(base, NOW)).toMatchObject({ state: 'needs', ask: expect.stringContaining('read it and reply') })
+  })
+
+  // 2026-10-27, the lead on the user's demo: the user answered a question, the turn only confirmed
+  // the plan, and every surface still read Needs you, for the four minutes until the report and for
+  // good once it said done.
+  it('a turn that only ended is not Needs you: its report of done, or its report still to come', () => {
+    const base = { phase: 'NEED_ACTION', hasSession: true, processStatus: 'idle', phaseChangedAt: ago(5 * 60_000) }
+    expect(deriveUserStatus({ ...base, report: report({ state: 'done', now: 'Plan: ship in 2.4.' }) }, NOW))
+      .toMatchObject({ state: 'waiting', kind: 'you', waitingOn: expect.stringContaining('close it'), now: 'Plan: ship in 2.4.' })
+    expect(deriveUserStatus({ ...base, hasLeader: true, report: report({ state: 'done' }) }, NOW)).toMatchObject({ state: 'waiting', kind: 'lead' })
+    // Main and a lead are never closed: they wait on the user's next message.
+    for (const who of [{ isMain: true }, { isLead: true }]) {
+      expect(deriveUserStatus({ ...base, ...who, report: report({ state: 'done' }) }, NOW)).toMatchObject({ state: 'waiting', kind: 'you', waitingOn: expect.stringContaining('next message') })
+    }
+    expect(deriveUserStatus({ ...base, reportPending: true }, NOW)).toMatchObject({ state: 'waiting', kind: 'other', waitingOn: expect.stringContaining('report') })
+    // A done report from before the latest hand-back is an older turn's: with none coming, the turn needs reading.
+    expect(deriveUserStatus({ ...base, phaseChangedAt: ago(10_000), report: report({ state: 'done', at: ago(20 * 60_000) }) }, NOW))
+      .toMatchObject({ state: 'needs', ask: expect.stringContaining('read it and reply') })
+    // What does need the user still does, report pending or not.
+    expect(deriveUserStatus({ ...base, reportPending: true, openLetter: 'Approve the quota raise' }, NOW)).toMatchObject({ state: 'needs', source: 'letter' })
+    expect(deriveUserStatus({ ...base, reportPending: true, openChoice: 'Raise the quota?' }, NOW)).toMatchObject({ state: 'needs', source: 'choice' })
+    expect(deriveUserStatus({ ...base, reportPending: true, pendingPermissionTool: 'AskUserQuestion' }, NOW)).toMatchObject({ state: 'needs', source: 'prompt' })
+    expect(deriveUserStatus({ ...base, reportPending: true, processStatus: 'error', errorMessage: 'auth expired' }, NOW)).toMatchObject({ state: 'needs', source: 'error' })
+    expect(deriveUserStatus({ ...base, report: report({ state: 'needs', ask: 'Pick A or B?' }), reportPending: true }, NOW)).toMatchObject({ state: 'needs', ask: 'Pick A or B?' })
   })
 
   it('a report from before the latest phase move lends its words, never its ask', () => {

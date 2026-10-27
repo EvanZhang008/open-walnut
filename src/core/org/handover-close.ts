@@ -93,7 +93,7 @@ async function closeIfDone(sid: string, wait: PendingHandover): Promise<void> {
       log.task.info('org: handover lead kept, it leads its project again', { taskId: wait.taskId, project: wait.project });
       return;
     }
-    await completeTask(wait.taskId);
+    await completeTask(wait.taskId, { source: 'org' });
     log.task.info('org: lead closed after its handover', { taskId: wait.taskId, project: wait.project, sessionId: sid, vpTaskId: now.id });
   } catch (err) {
     log.task.warn('org: lead not closed after its handover', { taskId: wait.taskId, sessionId: sid, error: err instanceof Error ? err.message : String(err) });

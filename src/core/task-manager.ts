@@ -3718,7 +3718,12 @@ function heldPhaseBlocks(current: TaskPhase, next: TaskPhase, source: string): b
  * the phase event so the notices it causes can skip their own author
  * (session-request-watch: a leader completing its worker already knows).
  */
-export async function completeTask(idPrefix: string, opts?: { actorSid?: string }): Promise<{ task: Task }> {
+export async function completeTask(
+  idPrefix: string,
+  // `source` names an internal closer (a triage run, an org handover, a plugin) on the phase event;
+  // left out it is 'api', a person's or a session's call through the routes.
+  opts?: { actorSid?: string; source?: string },
+): Promise<{ task: Task }> {
   // Lock-internal phase: write local store. Push runs OUTSIDE the lock because
   // autoPushIfConfigured() acquires the same lock when setting sync_error;
   // holding the lock during the await would self-deadlock the whole task system.
@@ -3754,7 +3759,7 @@ export async function completeTask(idPrefix: string, opts?: { actorSid?: string 
     throw new Error(`Sync to ${task.source} failed: ${syncResult.error ?? 'unknown error'}`);
   }
   autoCompleteTaskSessions(task, opts?.actorSid);
-  emitPhaseChanged(task, oldPhase, 'api', opts?.actorSid);
+  emitPhaseChanged(task, oldPhase, opts?.source ?? 'api', opts?.actorSid);
 
   return { task };
 }

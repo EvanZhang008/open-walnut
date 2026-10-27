@@ -16,6 +16,9 @@ export type * from '../../../packages/plugin-api/src/inbox-items.js';
 /** WHY the letter exists. Drives how the UI treats it (badges, Needs Action). */
 export type LetterType = 'completion' | 'action_required' | 'review' | 'info';
 
+/** Why Walnut archived a letter on its own: `task_completed` = its task was completed. */
+export type LetterArchiveReason = 'task_completed';
+
 /** Body is either ready-made HTML or markdown the reader renders. */
 export type LetterBodyFormat = 'html' | 'markdown';
 
@@ -138,6 +141,11 @@ export interface LetterRecord {
    */
   pinnedAt?: number;
   archivedAt?: number;
+  /**
+   * Why Walnut archived it, when Walnut did rather than a person. Only on an
+   * archived letter; any later move of the flag drops it.
+   */
+  archivedReason?: LetterArchiveReason;
   /**
    * Size of the body document as the SENDER wrote it. Stamped at send time, so
    * it travels with the index — which is what lets a box holding only a COPY of

@@ -30,6 +30,7 @@ import { briefMoveLines, briefPrompt, keepsBrief, readBrief } from '../sessions/
 import { briefFixPrompt, briefIssues, briefNeedsRewrite, briefVpLines, formatBriefIssues, type BriefIssue } from '../sessions/brief-rules.js';
 import { agentMemoryPrompt, applyAgentMemoryAnswer, keepsAgentMemory, readAgentMemoryField, splitAgentMemory } from '../sessions/agent-memory.js';
 import { withoutLeadingRiders } from '../../lib/history-walnut-riders.js';
+import { setReportPending, __resetReportPending } from '../sessions/report-pending.js';
 
 // ── Triage dedup state ──
 // Prevents burst triage dispatches when daemon replays old JSONL events after
@@ -74,6 +75,7 @@ export function __resetTriageRateLimiter(): void {
   turnEndedAt.clear();
   finalSummaries.clear();
   finalSummaryWaiters.clear();
+  __resetReportPending();
 }
 
 /** Test-only: clear ONLY the dispatch cooldown, keeping the in-flight set —
@@ -89,6 +91,7 @@ function cancelPendingTriage(sessionId: string): void {
   if (t) {
     clearTimeout(t);
     triageDebounceTimers.delete(sessionId);
+    if (!triageRuns.has(sessionId)) setReportPending(sessionId, false);
   }
 }
 
@@ -138,8 +141,10 @@ function startTriage(p: OnTurnCompletePayload, final?: { gen: number | undefined
   const begin = () => runTriage(p, { final: !!final });
   const run = (running ? running.run.catch(() => {}).then(begin) : begin()).finally(() => {
     if (triageRuns.get(p.sessionId)?.run === run) triageRuns.delete(p.sessionId);
+    setReportPending(p.sessionId, triageDebounceTimers.has(p.sessionId) || triageRuns.has(p.sessionId));
   });
   triageRuns.set(p.sessionId, { run, final });
+  setReportPending(p.sessionId, true);
   return run;
 }
 
@@ -1344,6 +1349,8 @@ export const turnCompleteTriageHook: SessionHookDefinition = {
     }, debounceMs);
     timer.unref?.(); // don't keep the process alive for a pending triage
     triageDebounceTimers.set(p.sessionId, timer);
+    // Until the report comes, the task's status waits on it (sessions/report-pending.ts).
+    setReportPending(p.sessionId, true);
 
     log.session.debug('turn-complete-triage: armed debounce', {
       sessionId: p.sessionId, taskId: p.taskId, debounceMs,
