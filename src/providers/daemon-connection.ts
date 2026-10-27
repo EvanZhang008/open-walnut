@@ -666,7 +666,9 @@ export class DaemonConnection {
    * The runtime an update deployed while the old daemon still ran (stageUpgrade):
    * the start that follows the stop uses it instead of deploying again.
    */
-  private _staged: { runtime: RemoteRuntime; dir: string; at: number } | null = null
+  private _staged: { runtime: RemoteRuntime; dir: string; at: number; bunPath: string | null } | null = null
+  /** Failed uploads of the new daemon toward one version: their own backoff, which a decision does not reset. */
+  private _stageFail: { expected: string; attempt: number } | null = null
 
   constructor(hostKey: string, sshTarget: SshTarget | null) {
     this.hostKey = hostKey
@@ -3033,9 +3035,14 @@ export class DaemonConnection {
       const verdict = await this.unmanagedTakeover(takeover)
       try {
         await this.stageUpgrade(liveRuntime)
+        this._stageFail = null
       } catch (err) {
         if (!(err instanceof DaemonStageError)) throw err
-        this.postponeUpgrade(`the new daemon could not be put on the host, so the running one keeps serving (${err.message.split('\n')[0].slice(0, 200)})`, expected, remoteVersion)
+        // Every decision above clears the recheck count, so a failed upload keeps its own:
+        // a link that kills large transfers is asked again less and less often.
+        const attempt = this._stageFail?.expected === expected ? this._stageFail.attempt : 0
+        this._stageFail = { expected, attempt: attempt + 1 }
+        this.postponeUpgrade(`the new daemon could not be put on the host, so the running one keeps serving (${err.message.split('\n')[0].slice(0, 200)})`, expected, remoteVersion, { attempt })
         return false
       }
       // The upload may have taken minutes: work that started meanwhile still holds the stop.
@@ -3188,16 +3195,16 @@ export class DaemonConnection {
    * never reached a remote host), an ACP turn open at connect, a version read that
    * timed out. Nothing else re-ran the check until some later reconnect.
    */
-  private postponeUpgrade(reason: string, expected: string, remoteVersion: string, opts: { steady?: boolean } = {}): void {
+  private postponeUpgrade(reason: string, expected: string, remoteVersion: string, opts: { steady?: boolean; attempt?: number } = {}): void {
     if (this.isReadOnlyRemote || this._destroyed) return
     // Work in progress ends on its own: ask again every minute. No answer may
     // last a while: back off.
     const delays = UPGRADE_RECHECK_DELAYS_MS
-    const delayMs = opts.steady ? delays[0] : delays[Math.min(this._upgradeRecheckAttempt, delays.length - 1)]
-    if (!opts.steady) this._upgradeRecheckAttempt += 1
+    const delayMs = opts.steady ? delays[0] : delays[Math.min(opts.attempt ?? this._upgradeRecheckAttempt, delays.length - 1)]
+    if (!opts.steady && opts.attempt === undefined) this._upgradeRecheckAttempt += 1
     log.session.warn('DaemonConnection: daemon update postponed; checking again', {
       host: this.hostKey, reason, expected, remoteVersion: remoteVersion || '(missing)',
-      attempt: this._upgradeRecheckAttempt, retryInMs: delayMs,
+      attempt: opts.attempt !== undefined ? opts.attempt + 1 : this._upgradeRecheckAttempt, retryInMs: delayMs,
     })
     if (this.upgradeRecheckTimer) clearTimeout(this.upgradeRecheckTimer)
     this.upgradeRecheckTimer = setTimeout(() => {
@@ -3667,7 +3674,7 @@ export class DaemonConnection {
       if (err instanceof DaemonStageError) throw err
       throw new DaemonStageError(err instanceof Error ? err.message : String(err))
     }
-    this._staged = { runtime, dir: this._remoteDir, at: Date.now() }
+    this._staged = { runtime, dir: this._remoteDir, at: Date.now(), bunPath: this._bunPath }
     log.session.info('DaemonConnection: the new daemon is on the host; stopping the old one next', { host: this.hostKey, runtime, dir: this._remoteDir })
     return runtime
   }
@@ -3678,6 +3685,11 @@ export class DaemonConnection {
     this._staged = null
     if (!staged || staged.dir !== this._remoteDir || Date.now() - staged.at > 10 * 60_000) return null
     if (staged.runtime !== 'node' && this._failedRuntimes.has(staged.runtime)) return null
+    if (staged.runtime === 'bun' && !staged.bunPath) return null
+    // The reconnect between the stop and this start cleared the deploy flags the staging set:
+    // without them a daemon staged for bun would start on node.
+    this._bunPath = staged.runtime === 'bun' ? staged.bunPath : null
+    this._deployedViaSource = staged.runtime !== 'binary'
     return staged.runtime
   }
 

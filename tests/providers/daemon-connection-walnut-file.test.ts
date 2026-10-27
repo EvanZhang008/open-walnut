@@ -261,6 +261,34 @@ describe('an update puts the new daemon on the host before it stops the old one'
     priv(conn).clearUpgradeRecheck()
   })
 
+  it('a daemon staged for bun starts on bun after the reconnect that follows the stop', async () => {
+    const { conn, deploys, starts } = setup({ ...upgrade, bun: [BUN_OK], start: { bun: STARTED } })
+    expect(await priv(conn).shouldUpgradeDaemon('/tmp/open-walnut/daemon.cjs', undefined, undefined, 'bun')).toBe(true)
+    expect(deploys).toEqual(['source:bun'])
+    // What reconnect() does before it deploys: the deploy flags are cleared.
+    const flags = conn as unknown as { _bunPath: string | null; _deployedViaSource: boolean }
+    flags._bunPath = null
+    flags._deployedViaSource = false
+    expect(await priv(conn).deployAndStart()).toBe(32100)
+    expect(deploys).toEqual(['source:bun'])
+    expect(starts.map((s) => s.split(':')[0])).toEqual(['bun'])
+    expect(starts[0]).toContain('/home/me/.bun/bin/bun')
+  })
+
+  it('failed uploads toward one version are asked again less and less often', async () => {
+    compiledMac()
+    const { conn } = setup({ ...upgrade, uploadFails: 'chunk 12 of 400 failed after 5 tries', start: { binary: STARTED } })
+    const timer = vi.spyOn(globalThis, 'setTimeout')
+    const delays: number[] = []
+    for (let i = 0; i < 3; i++) {
+      timer.mockClear()
+      expect(await priv(conn).shouldUpgradeDaemon(SLOT, undefined, undefined, 'binary')).toBe(false)
+      delays.push(...timer.mock.calls.map((c) => Number(c[1])).filter((ms) => ms >= 60_000))
+    }
+    expect(delays).toEqual([60_000, 120_000, 300_000])
+    priv(conn).clearUpgradeRecheck()
+  })
+
   it('an old daemon on node: a failed walnut file upload falls to the source as before, still ahead of the stop', async () => {
     compiledMac()
     const { conn, seen, deploys } = setup({ ...upgrade, uploadFails: 'link dropped', start: { node: STARTED } })
