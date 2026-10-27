@@ -52,6 +52,24 @@ describe.skipIf(!!missing)('the fleet: the companion stays old while its Mac mov
   let base = ''
   let ssh: SshIdentity
   let companion: MacNode
+  let boxWatch: ReturnType<typeof setInterval> | undefined
+  let boxStopping = false
+  let reviving = false
+  const alive = (pid: number) => { try { process.kill(pid, 0); return true } catch { return false } }
+  /** Starts the box again when its server ended by itself (a restart into the Mac's build). */
+  async function reviveBox(): Promise<void> {
+    if (boxStopping || reviving || !companion || alive(companion.pid)) return
+    reviving = true
+    try {
+      const last = companion.logLines(/restarting into the trial|SERVER EXIT/).slice(-2).map((l) => l.slice(0, 160)).join(' | ')
+      note(`the box's server ended by itself (${last || 'no reason logged'}); starting it again as the old release on :${companion.port}`)
+      companion = await startMac(path.join(base, 'box'), ssh, windows, {}, companionProgram)
+    } catch (e) {
+      note(`the box did not start again: ${String(e).slice(0, 300)}`)
+    } finally {
+      reviving = false
+    }
+  }
   let mac: MacNode
   const tokens = { phone: token(), local: token() }
   const notes: string[] = []
@@ -120,6 +138,12 @@ describe.skipIf(!!missing)('the fleet: the companion stays old while its Mac mov
     companionProgram.env!.WALNUT_GIT_HUB_DIR = path.join(base, 'hub')
     companion = await startMac(path.join(base, 'box'), ssh, windows, {}, companionProgram)
     note(`companion (old release, cloud mode) on :${companion.port}`)
+    // Its own restart: companion-build's last step ends the box's server so its launcher starts the
+    // build the Mac sent. A real box comes back under systemd (Restart=always, setup.sh) and its
+    // launcher picks that build; here nothing would start it at all, so it starts again as the old
+    // release on its port (the Mac's link names it), and the companion stays old as this file says.
+    companionProgram.port = companion.port
+    boxWatch = setInterval(() => { void reviveBox() }, 1_000)
     // The Mac's pairing, as `walnut cloud` leaves it: the `cloud` remote with the phone's token, the machine credential.
     const m = macDirs(path.join(base, 'mac'))
     fs.mkdirSync(m.data, { recursive: true, mode: 0o700 })
@@ -135,6 +159,8 @@ describe.skipIf(!!missing)('the fleet: the companion stays old while its Mac mov
   afterAll(async () => {
     process.stdout.write(`[fleet] notes:\n  ${notes.join('\n  ')}\n`)
     await mac?.stop()
+    boxStopping = true
+    if (boxWatch) clearInterval(boxWatch)
     await companion?.stop()
     if (base) { saveMacLogs(macDirs(path.join(base, 'mac')).daemon, `companion-${path.basename(base)}/mac`); saveMacLogs(macDirs(path.join(base, 'box')).daemon, `companion-${path.basename(base)}/box`) }
     if (base && !process.env.KEEP_FLEET) fs.rmSync(base, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 })

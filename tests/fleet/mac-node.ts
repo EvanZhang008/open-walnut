@@ -47,7 +47,7 @@ export interface MacSeed {
  */
 export type MacProgram =
   | { kind: 'source' }
-  | { kind: 'release'; label: string; command: string; env?: Record<string, string> }
+  | { kind: 'release'; label: string; command: string; env?: Record<string, string>; /** The port to serve on (a restart keeps its old one); a free one when absent. */ port?: number }
 
 export interface MacNode {
   port: number
@@ -208,7 +208,7 @@ export async function startMac(base: string, ssh: SshIdentity, windows: Record<s
   if (program.kind === 'source') {
     proc = spawn(MAC_RUNTIME, [bootFile], { cwd: ROOT, env, stdio: ['ignore', 'pipe', 'pipe'] })
   } else {
-    const port = await freePort()
+    const port = program.port ?? await freePort()
     proc = spawn(program.command, ['web', '--port', String(port)], { cwd: d.home, env, stdio: ['ignore', 'pipe', 'pipe'] })
     proc.stdout!.on('data', (b: Buffer) => { if (process.env.DEBUG_FLEET) process.stderr.write(`[mac ${program.label}] ${b}`) })
   }
