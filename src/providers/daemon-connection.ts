@@ -69,6 +69,8 @@ import {
   buildBunInstallScript, buildBunProbeScript, installTailForError, isRuntimeStartFailure, nextRuntimeAfterStartFailure,
   parseBunInstall, parseBunProbe, type RemoteRuntime,
 } from './remote-runtime.js'
+import { runRemoteFoldPrewarm } from './remote-fold-prewarm.js'
+import { FOLD_CHECKPOINT_FORMAT } from './fold-checkpoint-core.js'
 import { annotateCredentialFailure, SSH_EVIDENCE_PREFIX } from './ssh-credential-evidence.js'
 import { cancelRecordedForwards, controlSocketPath, exitControlMaster, planControlMaster, recordForward, startControlMaster } from './ssh-control-master.js'
 import {
@@ -540,6 +542,10 @@ export class DaemonConnection {
    * the stamping/deploy pipeline is broken and killing it again won't help.
    */
   private _lastUpgradeAttempt: { expected: string, at: number } | null = null
+  /** The fold prewarm for the version an upgrade is waiting on (remote-fold-prewarm.ts). */
+  private _foldPrewarm: { version: string; done: boolean; promise: Promise<void> } | null = null
+  /** How long a connect waits inline for the prewarm before it serves the old daemon instead. */
+  static FOLD_PREWARM_INLINE_WAIT_MS = 8_000
 
   /** Command timeout in ms. Generous for initial deploy operations. */
   private static COMMAND_TIMEOUT_MS = 30_000
@@ -2995,6 +3001,10 @@ export class DaemonConnection {
       } catch {}
 
       if (this.holdUpgrade(gate, expected, remoteVersion)) return false
+      // The new daemon's checkpoints first, while this one still serves; the
+      // gate is asked again after it, right before the stop.
+      if (await this.holdUpgradeForFoldPrewarm(expected, remoteVersion)) return false
+      if (this.holdUpgrade(gate, expected, remoteVersion)) return false
       // Mismatch (or legacy daemon that predates daemon.version) → upgrade.
       log.session.info('DaemonConnection: daemon version mismatch — stopping for upgrade', {
         host: this.hostKey, expected, remoteVersion: remoteVersion || '(missing)',
@@ -3013,6 +3023,79 @@ export class DaemonConnection {
         this.postponeUpgrade(`the version check did not finish (${detail.slice(0, 200)})`, expected, remoteVersion)
       }
       return false
+    }
+  }
+
+  /**
+   * Prepare the new daemon's fold checkpoints before the stop (remote-fold-prewarm.ts).
+   * True: hold the upgrade, the old daemon keeps serving and the update is asked
+   * again when the prewarm is over. A failed prewarm lets the upgrade go ahead.
+   */
+  private async holdUpgradeForFoldPrewarm(expected: string, remoteVersion: string): Promise<boolean> {
+    let run = this._foldPrewarm
+    if (run && run.version === expected && run.done) return false
+    if (!run || run.version !== expected) {
+      const started = { version: expected, done: false, promise: Promise.resolve() }
+      started.promise = this.prewarmRemoteFolds()
+        .catch((err) => {
+          log.session.warn('DaemonConnection: fold prewarm failed; the upgrade goes ahead without it', {
+            host: this.hostKey, expected, error: err instanceof Error ? err.message : String(err),
+          })
+        })
+        .finally(() => {
+          started.done = true
+          // Postponed for this prewarm: decide now, not at the next minute.
+          if (this._foldPrewarm === started && this.upgradeRecheckTimer) {
+            clearTimeout(this.upgradeRecheckTimer)
+            this.upgradeRecheckTimer = null
+            void this.recheckPostponedUpgrade()
+          }
+        })
+      this._foldPrewarm = started
+      run = started
+    }
+    let timer: ReturnType<typeof setTimeout> | null = null
+    await Promise.race([run.promise, new Promise<void>((r) => { timer = setTimeout(r, DaemonConnection.FOLD_PREWARM_INLINE_WAIT_MS) })])
+    if (timer) clearTimeout(timer)
+    if (run.done) return false
+    this.postponeUpgrade('fold checkpoints for the new daemon are being prepared', expected, remoteVersion, { steady: true })
+    return true
+  }
+
+  private async prewarmRemoteFolds(): Promise<void> {
+    const result = await runRemoteFoldPrewarm({
+      daemonDir: this._remoteDir,
+      format: FOLD_CHECKPOINT_FORMAT,
+      exec: (script, timeoutMs) => this.sshExec(script, timeoutMs),
+      upload: async (remotePath, content) => {
+        const run = await runSshBounded([...this.baseSshArgs, this.sshHostString, markedUploadCommand(remotePath)], {
+          input: content, timeoutMs: SOURCE_UPLOAD_TIMEOUT_MS,
+        })
+        if (run.spawnError) throw run.spawnError
+        if (run.timedOut) throw new Error(`fold prewarm upload timed out after ${SOURCE_UPLOAD_TIMEOUT_MS}ms`)
+        if (run.code !== 0) throw new Error(`fold prewarm upload failed with code ${run.code}`)
+      },
+      source: () => getDaemonSource(),
+      bunPath: async () => {
+        if (this._failedRuntimes.has('bun')) return null
+        try {
+          const probe = parseBunProbe(await this.sshExec(buildBunProbeScript(), 20_000))
+          return probe.path && probe.ok ? probe.path : null
+        } catch { return null }
+      },
+      preamble: userShellPathScript(buildRemotePreamble(this.ssh.shell_setup)),
+      env: this.dirEnv,
+      alive: () => !this._destroyed,
+    })
+    if (result.outcome === 'ran') {
+      log.session.info('DaemonConnection: fold checkpoints prepared for the new daemon', {
+        host: this.hostKey, streams: result.streams, mb: Math.round(result.bytes / 1048576),
+        runtime: result.runtime, summary: result.summary, ms: result.ms,
+      })
+    } else if (result.outcome === 'not-needed') {
+      log.session.info('DaemonConnection: fold checkpoints already in the new format; no prewarm', { host: this.hostKey })
+    } else if (result.outcome === 'waited') {
+      log.session.info('DaemonConnection: waited for the fold prewarm an earlier server started', { host: this.hostKey, ms: result.ms })
     }
   }
 

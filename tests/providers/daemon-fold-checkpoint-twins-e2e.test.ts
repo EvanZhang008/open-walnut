@@ -81,15 +81,21 @@ async function boot(twin: Twin, dirs: Dirs): Promise<void> {
 async function stop(signal: NodeJS.Signals): Promise<void> {
   try { ws?.close() } catch { /* already closed */ }
   ws = null
-  if (proc && proc.exitCode === null && proc.signalCode === null) {
-    const exited = new Promise<void>((resolve) => {
-      const t = setTimeout(resolve, 10_000)
-      proc!.once('exit', () => { clearTimeout(t); resolve() })
-    })
-    proc.kill(signal)
-    await exited
-  }
+  const child = proc
   proc = null
+  if (child && child.exitCode === null && child.signalCode === null) {
+    // The files a graceful stop writes are read right after it, so a daemon still
+    // shutting down (a loaded machine) must fail here, not as a missing file.
+    const exited = await new Promise<boolean>((resolve) => {
+      const t = setTimeout(() => resolve(false), 60_000)
+      child.once('exit', () => { clearTimeout(t); resolve(true) })
+      child.kill(signal)
+    })
+    if (!exited) {
+      child.kill('SIGKILL')
+      throw new Error(`daemon did not exit within 60s of ${signal}`)
+    }
+  }
 }
 
 function rpc(cmd: Record<string, unknown>, timeoutMs = 30_000): Promise<Record<string, unknown>> {
@@ -113,6 +119,24 @@ async function waitFor(check: () => boolean, ms = 20_000): Promise<boolean> {
     await new Promise((r) => setTimeout(r, 100))
   }
   return check()
+}
+
+/**
+ * Wait until the daemon's own fold of a live session reaches `size` bytes. Its
+ * tailer reads 8 MB a tick, and on a loaded machine one tick took over a second,
+ * so a fixed wait let the SIGTERM land on a fold still below the checkpoint
+ * threshold, which (correctly) writes no checkpoint.
+ */
+async function foldReaches(sid: string, size: number, ms = 60_000): Promise<number> {
+  const until = Date.now() + ms
+  let v = -1
+  while (Date.now() < until) {
+    const state = await rpc({ cmd: 'getState', sid })
+    v = (state.snapshot as { v?: number } | undefined)?.v ?? -1
+    if (v >= size) break
+    await new Promise((r) => setTimeout(r, 100))
+  }
+  return v
 }
 
 const L = (o: unknown) => JSON.stringify(o) + '\n'
@@ -235,7 +259,7 @@ describe.each(TWINS)('fold checkpoints: $name', (twin) => {
     const jsonl = path.join(dirs.streams, 'ck-2.jsonl')
     // Let the tailer fold everything the "CLI" wrote.
     expect(await waitFor(() => fs.existsSync(jsonl) && fs.statSync(jsonl).size >= size)).toBe(true)
-    await waitFor(() => false, 1500)
+    expect(await foldReaches('ck-2', size)).toBe(fs.statSync(jsonl).size)
     expect(fs.existsSync(jsonl + '.fold')).toBe(false)
 
     await stop('SIGTERM')
@@ -271,7 +295,7 @@ describe.each(TWINS)('fold checkpoints: $name', (twin) => {
     expect(started.ok).toBe(true)
     const jsonl = path.join(dirs.streams, 'ck-3.jsonl')
     expect(await waitFor(() => fs.existsSync(jsonl) && fs.statSync(jsonl).size >= size)).toBe(true)
-    await waitFor(() => false, 1500)
+    expect(await foldReaches('ck-3', size)).toBe(fs.statSync(jsonl).size)
 
     // The old daemon stops and leaves its checkpoint in a format the new one rejects.
     await stop('SIGTERM')
