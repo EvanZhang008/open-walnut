@@ -81,14 +81,16 @@ test.afterAll(async () => {
 const base = () => `http://127.0.0.1:${fixture.port}`
 
 /** Every outside site lands on a stub, and every window it opens is recorded. */
-async function prepare(page: Page): Promise<{ errors: string[]; tabs: () => string[] }> {
+async function prepare(page: Page): Promise<{ errors: string[]; tabs: () => string[]; windows: () => number }> {
   const errors: string[] = []
   page.on('pageerror', (error) => errors.push(error.message))
   const context = page.context()
   await context.route(/^https:\/\/[^/]*example\.(com|org)\//, (route) =>
     route.fulfill({ status: 200, contentType: 'text/html', body: '<p>stub</p>' }))
   const opened: string[] = []
+  let windows = 0
   context.on('page', (tab) => {
+    windows += 1
     // A new tab starts on about:blank before it navigates to the link.
     void tab.waitForURL((url) => url.href !== 'about:blank', { timeout: 15_000 }).catch(() => undefined)
       .then(() => { opened.push(tab.url()); void tab.close() })
@@ -112,7 +114,7 @@ async function prepare(page: Page): Promise<{ errors: string[]; tabs: () => stri
   await expect(page.locator('.todo-panel')).toBeVisible({ timeout: 60_000 })
   // The plugin's web module has loaded once its App is in the Sidebar.
   await expect(page.locator(`a[href="${APP_PATH}"]`).first()).toBeAttached({ timeout: 60_000 })
-  return { errors, tabs: () => [...opened] }
+  return { errors, tabs: () => [...opened], windows: () => windows }
 }
 
 async function openDetails(page: Page): Promise<Locator> {
@@ -172,8 +174,8 @@ const here = (page: Page) => page.evaluate(() => window.location.href)
 
 const linkMenu = (page: Page) => page.getByTestId('link-ctx-menu')
 
-test('a handled link opens in its plugin from a task and a session; the rest go to the browser', async ({ page }) => {
-  const { errors, tabs } = await prepare(page)
+test('a handled link opens in its plugin from a task and a session; the rest go to the browser', async ({ page, browserName }) => {
+  const { errors, tabs, windows } = await prepare(page)
   const { links } = fixture
 
   // ── Task details: the description's permalink opens the plugin on that message ──
@@ -220,8 +222,16 @@ test('a handled link opens in its plugin from a task and a session; the rest go 
 
   // ── A modifier click is the user asking for the browser ──
   const before = tabs().length
+  const windowsBefore = windows()
   await answer.getByRole('link', { name: 'the permalink' }).click({ modifiers: ['ControlOrMeta'] })
-  await expect.poll(() => tabs().slice(before), { timeout: 15_000 }).toEqual([links.permalink])
+  if (browserName === 'webkit') {
+    // Walnut leaves this click to the browser, and Playwright's WebKit opens the new
+    // page for a modifier click on a native anchor but never loads it (a bare
+    // <a target=_blank> does the same). So here the proof is the new window itself.
+    await expect.poll(windows, { timeout: 15_000 }).toBe(windowsBefore + 1)
+  } else {
+    await expect.poll(() => tabs().slice(before), { timeout: 15_000 }).toEqual([links.permalink])
+  }
   expect(new URL(await here(page)).pathname).toBe('/')
   await expect(page.getByTestId('link-fixture-app')).toHaveCount(0)
   expect(errors).toEqual([])
@@ -258,17 +268,19 @@ test('a right-click on a handled link offers the plugin, the browser and Copy li
   await menu.getByRole('menuitem', { name: 'Copy link' }).click()
   await expect.poll(() => page.evaluate(() => (window as unknown as { __copied: string[] }).__copied)).toEqual([links.permalink])
 
-  // A link nobody handles keeps the browser's own menu: no Walnut link menu.
-  await answer.getByRole('link', { name: 'plain site' }).click({ button: 'right' })
-  await expect(menu).toHaveCount(0)
-  await page.keyboard.press('Escape')
-
   // Open in Team Chat
   before = tabs().length
   await permalink.click({ button: 'right' })
   await menu.getByRole('menuitem', { name: 'Open in Team Chat' }).click()
   await expectOpenedInPlugin(page, links.permalink, 'menu')
   expect(tabs().slice(before)).toEqual([])
+  await backHome(page)
+
+  // A link nobody handles keeps the browser's own menu: no Walnut link menu.
+  // Last on purpose: Playwright's WebKit then holds its native menu open, and no
+  // later click reaches the page (Escape does not close it).
+  await answer.getByRole('link', { name: 'plain site' }).click({ button: 'right' })
+  await expect(menu).toHaveCount(0)
   expect(errors).toEqual([])
 })
 
