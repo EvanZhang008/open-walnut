@@ -14,13 +14,17 @@ export interface PluginGeneration {
   entry: string
   /** Set when this copy could not become self-contained, so a reload cannot fully replace the old code. */
   unsafeReason?: string
+  /** Links out of the plugin directory that only dev tooling uses, left out of the copy. */
+  skippedLinks: string[]
 }
 
 export interface PluginTreeProbe {
   /** Native addons the plugin's runtime code can load: its own, or one inside a runtime dependency. */
   native: string[]
-  /** Links leaving the plugin directory are never followed: the target is not ours to copy. */
+  /** Links leaving the plugin directory that runtime code can reach. Never followed: the target is not ours to copy. */
   external: string[]
+  /** Links leaving the plugin directory that runtime code never reaches (a `.bin` shim, a devDependency). Never followed either. */
+  skipped: string[]
 }
 
 const liveRoots = new Map<string, Set<string>>()
@@ -46,6 +50,8 @@ interface WalkContext {
   stopEarly: boolean
   /** Decides whether a `.node` file is runtime code. Absent: native addons are not recorded (the copy never reads them). */
   loadsAddon?: (file: string) => Promise<boolean>
+  /** Decides whether a link out of the plugin directory is one runtime code can reach. */
+  linkReachable: (link: string) => Promise<boolean>
 }
 
 async function walk(src: string, dest: string | null, ctx: WalkContext): Promise<void> {
@@ -75,8 +81,11 @@ async function copyLink(from: string, to: string | null, ctx: WalkContext): Prom
   const real = await fs.realpath(from).catch(() => null)
   if (!real) return
   if (real !== ctx.srcRoot && !real.startsWith(ctx.srcRoot + path.sep)) {
-    // Outside the plugin directory: not followed, not copied, not scanned.
-    ctx.probe.external.push(path.relative(ctx.srcRoot, from))
+    // Outside the plugin directory: not followed, not copied, not scanned. Only a link runtime code
+    // can reach keeps the copy from replacing the old code; a dev tool's link is simply left out.
+    const relative = path.relative(ctx.srcRoot, from)
+    if (await ctx.linkReachable(from)) ctx.probe.external.push(relative)
+    else ctx.probe.skipped.push(relative)
     return
   }
   // Relink inside the copy — pointing at the original would resolve to the old module graph.
@@ -86,15 +95,23 @@ async function copyLink(from: string, to: string | null, ctx: WalkContext): Prom
   await fs.symlink(path.relative(path.dirname(to), target), to)
 }
 
+/** The package a skipped link stands for (`node_modules/@s/x` → `@s/x`), or null for a `.bin` shim and the like. */
+export function skippedLinkPackage(relative: string): string | null {
+  const place = linkPlace('/', path.join('/', relative))
+  return place.kind === 'package' ? place.name : null
+}
+
 /** Reasons this tree cannot be copied into a replaceable generation. Stops at the first one. */
 export async function probePluginTree(dir: string): Promise<PluginTreeProbe> {
   const root = await fs.realpath(dir).catch(() => dir)
+  const runtime = runtimeFilters(root)
   const ctx: WalkContext = {
     srcRoot: root,
     destRoot: null,
-    probe: { native: [], external: [] },
+    probe: { native: [], external: [], skipped: [] },
     stopEarly: true,
-    loadsAddon: runtimeAddonFilter(root),
+    loadsAddon: runtime.loadsAddon,
+    linkReachable: runtime.linkReachable,
   }
   await walk(root, null, ctx)
   return ctx.probe
@@ -106,18 +123,78 @@ export async function probePluginTree(dir: string): Promise<PluginTreeProbe> {
 
 const RUNTIME_FIELDS = ['dependencies', 'optionalDependencies', 'peerDependencies'] as const
 
-function runtimeAddonFilter(root: string): (file: string) => Promise<boolean> {
-  let closure: Promise<Set<string> | null> | undefined
-  return async (file) => {
-    const owner = owningPackageDir(root, file)
-    // The plugin's own addon (`build/Release/x.node`, `addon.node`) is always runtime code.
-    if (!owner) return true
-    // Resolved once, and only for a tree that has an addon inside node_modules.
-    closure ??= runtimeClosure(root)
-    const packages = await closure
-    if (!packages) return true // no readable manifest: every addon counts, as before
-    return packages.has(await fs.realpath(owner).catch(() => owner))
+/**
+ * Which addons and outbound links runtime code can reach, judged from the runtime closure below.
+ *
+ * A link leaving the plugin directory counts when runtime code can pass through it:
+ *   - it is not inside any node_modules (the plugin's own file or folder points elsewhere);
+ *   - it IS a package directory that a runtime field resolves to (a `file:` or `npm link`ed dependency);
+ *   - it sits inside a package of the runtime closure, or in that package's own node_modules.
+ * It does not count when it is a `node_modules/.bin` shim (an executable, never imported) or the
+ * package of a devDependency, which the built entry never imports and a Plugin Store install omits.
+ * Without a readable manifest every link counts, as before. A link that counts is never followed
+ * either way; counting only decides whether a reload can fully replace the old code.
+ */
+function runtimeFilters(root: string): {
+  loadsAddon: (file: string) => Promise<boolean>
+  linkReachable: (link: string) => Promise<boolean>
+} {
+  let closure: Promise<RuntimeClosure | null> | undefined
+  // Resolved once, and only for a tree that has an addon or an outbound link inside node_modules.
+  const view = () => (closure ??= runtimeClosure(root))
+  return {
+    loadsAddon: async (file) => {
+      const owner = owningPackageDir(root, file)
+      // The plugin's own addon (`build/Release/x.node`, `addon.node`) is always runtime code.
+      if (!owner) return true
+      const runtime = await view()
+      if (!runtime) return true // no readable manifest: every addon counts, as before
+      return runtime.packages.has(await fs.realpath(owner).catch(() => owner))
+    },
+    linkReachable: async (link) => {
+      const place = linkPlace(root, link)
+      if (place.kind === 'own') return true
+      if (place.kind === 'bin') return false
+      const runtime = await view()
+      if (!runtime) return true
+      if (place.kind === 'package') {
+        if (runtime.outside.has(place.dir)) return true
+        // Nested in a runtime package (`a/node_modules/b`): a's code may import b undeclared.
+        if (place.parent && runtime.packages.has(await fs.realpath(place.parent).catch(() => place.parent!))) return true
+        return false
+      }
+      return runtime.packages.has(await fs.realpath(place.dir).catch(() => place.dir))
+    },
   }
+}
+
+type LinkPlace =
+  | { kind: 'own' }
+  | { kind: 'bin' }
+  /** The link is a package directory itself (`node_modules/x`, `node_modules/@s/x`); `parent` is the package whose node_modules holds it. */
+  | { kind: 'package'; dir: string; name: string; parent?: string }
+  /** The link sits inside the package at `dir`. */
+  | { kind: 'inside'; dir: string }
+
+function linkPlace(root: string, link: string): LinkPlace {
+  const parts = path.relative(root, link).split(path.sep)
+  for (let index = parts.length - 2; index >= 0; index--) {
+    if (parts[index] !== 'node_modules') continue
+    const name = parts[index + 1]
+    if (name === '.bin' && parts.length === index + 3) return { kind: 'bin' }
+    const end = index + (name.startsWith('@') ? 2 : 1)
+    // `node_modules/@scope` itself linked out: any runtime package of that scope could be behind it.
+    if (end > parts.length - 1) return { kind: 'own' }
+    const dir = path.join(root, ...parts.slice(0, end + 1))
+    if (end !== parts.length - 1) return { kind: 'inside', dir }
+    return {
+      kind: 'package',
+      dir,
+      name: parts.slice(index + 1, end + 1).join('/'),
+      ...(index > 0 ? { parent: path.join(root, ...parts.slice(0, index)) } : {}),
+    }
+  }
+  return { kind: 'own' }
 }
 
 /** The innermost node_modules package directory holding `file`, or null when it is the plugin's own file. */
@@ -165,32 +242,44 @@ function isPackageName(name: string): boolean {
   return segments.every(segment => segment && segment !== '.' && segment !== '..' && segment !== '@' && !segment.includes('\\'))
 }
 
+interface RuntimeClosure {
+  /** Real paths of the runtime packages inside the plugin directory. */
+  packages: Set<string>
+  /** Where a runtime name resolved to a link leaving the plugin directory (the link's own path). */
+  outside: Set<string>
+}
+
 /**
- * Real paths of every package the root's runtime fields reach, transitively, resolved the way Node
- * does and never above the plugin root. Null when a manifest on the way is missing or unreadable:
- * then nobody can say which addon is runtime code.
+ * Every package the root's runtime fields reach, transitively, resolved the way Node does and never
+ * above the plugin root. Null when a manifest on the way is missing or unreadable: then nobody can
+ * say which addon or link is runtime code.
  */
-async function runtimeClosure(root: string): Promise<Set<string> | null> {
+async function runtimeClosure(root: string): Promise<RuntimeClosure | null> {
   const rootManifest = await readManifest(root)
   if (!rootManifest) return null
-  const found = new Set<string>()
+  const found: RuntimeClosure = { packages: new Set(), outside: new Set() }
   const queue: Array<{ dir: string; manifest: PackageManifest }> = [{ dir: root, manifest: rootManifest }]
   while (queue.length) {
     const { dir, manifest } = queue.shift()!
     for (const name of runtimeNames(manifest)) {
       const resolved = await resolvePackage(root, dir, name)
-      if (!resolved || found.has(resolved)) continue
-      found.add(resolved)
-      const next = await readManifest(resolved)
+      if (!resolved) continue
+      if ('outside' in resolved) {
+        found.outside.add(resolved.outside)
+        continue
+      }
+      if (found.packages.has(resolved.real)) continue
+      found.packages.add(resolved.real)
+      const next = await readManifest(resolved.real)
       if (!next) return null
-      queue.push({ dir: resolved, manifest: next })
+      queue.push({ dir: resolved.real, manifest: next })
     }
   }
   return found
 }
 
 /** `<dir>/node_modules/<name>`, then each parent's, up to and including the plugin root. A miss is fine: optional and peer packages may be absent. */
-async function resolvePackage(root: string, from: string, name: string): Promise<string | null> {
+async function resolvePackage(root: string, from: string, name: string): Promise<{ real: string } | { outside: string } | null> {
   let dir = from
   for (;;) {
     if (path.basename(dir) !== 'node_modules') {
@@ -198,7 +287,7 @@ async function resolvePackage(root: string, from: string, name: string): Promise
       const real = await fs.realpath(candidate).catch(() => null)
       if (real && await fs.stat(real).then(stat => stat.isDirectory()).catch(() => false)) {
         // A link out of the tree is reported on its own; its contents are not walked, so not followed here either.
-        return real === root || real.startsWith(root + path.sep) ? real : null
+        return real === root || real.startsWith(root + path.sep) ? { real } : { outside: candidate }
       }
     }
     if (dir === root) return null
@@ -235,7 +324,13 @@ export async function createPluginGeneration(options: {
   const srcRoot = await fs.realpath(dir).catch(() => dir)
   if (root === srcRoot || root.startsWith(srcRoot + path.sep)) throw new Error('generation cache must live outside the plugin directory')
   const before = await sourceSignature(srcRoot)
-  const ctx: WalkContext = { srcRoot, destRoot: root, probe: { native: [], external: [] }, stopEarly: false }
+  const ctx: WalkContext = {
+    srcRoot,
+    destRoot: root,
+    probe: { native: [], external: [], skipped: [] },
+    stopEarly: false,
+    linkReachable: runtimeFilters(srcRoot).linkReachable,
+  }
   try {
     await walk(srcRoot, root, ctx)
     if (await sourceSignature(srcRoot) !== before) throw new Error('plugin source changed while it was being copied')
@@ -250,6 +345,7 @@ export async function createPluginGeneration(options: {
     root,
     entry: path.join(root, entryRelative),
     unsafeReason: describeUnsafe(await dependenciesOutsideCopy(srcRoot, root), ctx.probe.external),
+    skippedLinks: ctx.probe.skipped,
   }
   const set = liveRoots.get(id) ?? new Set<string>()
   set.add(root)

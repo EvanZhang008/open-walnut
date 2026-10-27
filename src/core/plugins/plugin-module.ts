@@ -8,6 +8,7 @@ import {
   disposePluginGeneration,
   probePluginTree,
   pruneOrphanGenerations,
+  skippedLinkPackage,
 } from './plugin-module-snapshot.js'
 
 export interface PluginModuleFunctions {
@@ -86,7 +87,7 @@ async function loadPrecompiled(options: LoadOptions, entry: string): Promise<Loa
   if (probe.native.length || probe.external.length) {
     const reason = probe.native.length
       ? `native addon ${path.basename(probe.native[0])} is loaded in place and cannot be replaced in a running process`
-      : `link ${probe.external[0]} leaves the plugin directory, so this load cannot be copied into a replaceable generation`
+      : `link ${probe.external[0]} leaves the plugin directory and runtime code can reach it, so this load cannot be copied into a replaceable generation`
     if (options.replacement) throw new Error(`Plugin "${manifest.id}" requires a process restart: ${reason}`)
     return { mod: await evaluate(options, entry, false), reloadUnsafeReason: reason }
   }
@@ -98,8 +99,21 @@ async function loadPrecompiled(options: LoadOptions, entry: string): Promise<Loa
       if (options.replacement) throw new Error(`Plugin "${manifest.id}" requires a process restart: ${generation.unsafeReason}`)
       return { mod: await evaluate(options, entry, false), reloadUnsafeReason: generation.unsafeReason }
     }
+    let mod: Record<string, any>
+    try {
+      mod = await evaluate(options, generation.entry, false)
+    } catch (error) {
+      // The copy left out dev-only links. A plugin whose runtime code still imports through one (a
+      // runtime package listed under devDependencies) loads in place, as every outbound link did before.
+      const missing = missingSkippedPackage(error, generation.skippedLinks)
+      if (!missing) throw error
+      await disposePluginGeneration(generation)
+      const reason = `runtime code imports ${missing}, a devDependency that links out of the plugin directory; list it under dependencies`
+      if (options.replacement) throw new Error(`Plugin "${manifest.id}" requires a process restart: ${reason}`)
+      return { mod: await evaluate(options, entry, false), reloadUnsafeReason: reason }
+    }
     return {
-      mod: await evaluate(options, generation.entry, false),
+      mod,
       dispose: () => disposePluginGeneration(generation),
       reloadUnsafeReason: generation.unsafeReason,
       sourceRoot: generation.root,
@@ -108,6 +122,21 @@ async function loadPrecompiled(options: LoadOptions, entry: string): Promise<Loa
     if (!(error instanceof Error && error.name === 'PluginCodeTimeoutError')) await disposePluginGeneration(generation)
     throw error
   }
+}
+
+/**
+ * The skipped package a failed import was looking for, or null. Only that miss falls back: the
+ * plugin's own missing file or a typo stays the error it is, never a "restart" it cannot fix.
+ */
+function missingSkippedPackage(error: unknown, skippedLinks: string[]): string | null {
+  const code = (error as NodeJS.ErrnoException | null)?.code
+  if (code !== 'ERR_MODULE_NOT_FOUND' && code !== 'MODULE_NOT_FOUND') return null
+  // Node names the specifier in quotes: "Cannot find package 'x' imported from", "Cannot find module 'x'".
+  const specifier = /Cannot find (?:package|module) '([^']+)'/.exec((error as Error).message)?.[1]
+  if (!specifier || specifier.startsWith('.') || path.isAbsolute(specifier)) return null
+  const segments = specifier.split('/')
+  const name = specifier.startsWith('@') ? segments.slice(0, 2).join('/') : segments[0]
+  return skippedLinks.some(link => skippedLinkPackage(link) === name) ? name : null
 }
 
 export async function preparePluginModule(options: LoadOptions): Promise<PluginModuleFunctions> {

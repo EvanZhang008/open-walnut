@@ -462,12 +462,12 @@ describe('preparePluginModule:trees that cannot be copied', () => {
       .rejects.toThrow(/requires a process restart/)
   })
 
-  it('loads in place when a link leaves the plugin directory', async () => {
+  it('loads in place when a runtime dependency links out of the plugin directory', async () => {
     const outside = path.join(tmp, 'outside-dep')
     await fsp.mkdir(outside, { recursive: true })
     await fsp.writeFile(path.join(outside, 'index.js'), 'module.exports = { version: "outside" }\n')
     const dir = await writePlugin('linked-plugin', {
-      'package.json': JSON.stringify({ name: 'linked-plugin' }),
+      'package.json': JSON.stringify({ name: 'linked-plugin', dependencies: { linked: 'file:../../outside-dep' } }),
       'index.cjs': 'module.exports = { activate: () => __dirname }\n',
     })
     await fsp.mkdir(path.join(dir, 'node_modules'), { recursive: true })
@@ -478,5 +478,183 @@ describe('preparePluginModule:trees that cannot be copied', () => {
     expect(await module.activate!({})).toBe(dir)
     expect(module.reloadUnsafeReason).toMatch(/leaves the plugin directory/)
     expect(await generations('linked-plugin')).toEqual([])
+  })
+})
+
+/** A package outside the plugin directory, the way a `file:` install of a checkout's package looks. */
+async function outsidePackage(name: string, files: Record<string, string> = {}): Promise<string> {
+  const dir = path.join(tmp, 'checkout', name)
+  await fsp.mkdir(dir, { recursive: true })
+  await fsp.writeFile(path.join(dir, 'package.json'), JSON.stringify({ name, main: 'index.js' }))
+  await fsp.writeFile(path.join(dir, 'index.js'), 'module.exports = { from: "outside" }\n')
+  for (const [relative, content] of Object.entries(files)) {
+    await fsp.mkdir(path.dirname(path.join(dir, relative)), { recursive: true })
+    await fsp.writeFile(path.join(dir, relative), content)
+  }
+  return dir
+}
+
+async function link(target: string, at: string): Promise<void> {
+  await fsp.mkdir(path.dirname(at), { recursive: true })
+  await fsp.symlink(target, at)
+}
+
+describe('preparePluginModule: links out of the plugin directory', () => {
+  // The "Build a plugin" fallback while the author packages are not on npm: both devDependencies
+  // are `file:` links into a Walnut checkout, and npm adds a `.bin` shim through one of them.
+  async function fallbackScaffold(name: string, server: string, extraPackage: Record<string, unknown> = {}): Promise<string> {
+    const api = await outsidePackage('plugin-api')
+    const cli = await outsidePackage('plugin-cli', { 'dist/cli.js': '#!/usr/bin/env node\n' })
+    const dir = await writePlugin(name, {
+      'package.json': JSON.stringify({
+        name,
+        type: 'module',
+        devDependencies: { '@open-walnut/plugin-api': 'file:../../checkout/plugin-api', '@open-walnut/plugin-cli': 'file:../../checkout/plugin-cli', typescript: '*' },
+        ...extraPackage,
+      }),
+      'node_modules/typescript/package.json': JSON.stringify({ name: 'typescript' }),
+      'dist/server.mjs': server,
+    })
+    await link(api, path.join(dir, 'node_modules/@open-walnut/plugin-api'))
+    await link(cli, path.join(dir, 'node_modules/@open-walnut/plugin-cli'))
+    await link('../@open-walnut/plugin-cli/dist/cli.js', path.join(dir, 'node_modules/.bin/walnut-plugin'))
+    return dir
+  }
+
+  it('replaces a plugin whose only outbound links are dev tooling, on every save', async () => {
+    const dir = await fallbackScaffold('fallback-plugin', 'export function activate() { return "v1" }\n')
+    const manifest = { id: 'fallback-plugin', apiVersion: 1 as const, server: 'dist/server.mjs' }
+
+    const first = await prepare(dir, manifest)
+    expect(first.reloadUnsafeReason).toBeUndefined()
+    expect(first.sourceRoot?.startsWith(path.join(cacheRoot, 'fallback-plugin'))).toBe(true)
+    expect(await first.activate!({})).toBe('v1')
+    // Left out of the copy, never followed: nothing of the checkout lands in Walnut's cache.
+    const copied = await listTree(first.sourceRoot!)
+    expect(copied).not.toContain(path.join('node_modules', '.bin', 'walnut-plugin'))
+    expect(copied).not.toContain(path.join('node_modules', '@open-walnut', 'plugin-api'))
+    expect(copied).not.toContain(path.join('node_modules', '@open-walnut', 'plugin-cli'))
+    expect(copied).toContain(path.join('node_modules', 'typescript', 'package.json'))
+
+    for (const version of ['v2', 'v3']) {
+      await fsp.writeFile(path.join(dir, 'dist/server.mjs'), `export function activate() { return "${version}" }\n`)
+      const next = await prepare(dir, manifest, true)
+      expect(next.reloadUnsafeReason).toBeUndefined()
+      expect(await next.activate!({})).toBe(version)
+    }
+    expect(await first.activate!({})).toBe('v1')
+  })
+
+  it('still loads in place when the plugin\'s own folder links out', async () => {
+    const outside = await outsidePackage('shared-assets')
+    const dir = await writePlugin('own-link', {
+      'package.json': JSON.stringify({ name: 'own-link' }),
+      'index.cjs': 'module.exports = { activate: () => "own" }\n',
+    })
+    await link(outside, path.join(dir, 'assets'))
+
+    const module = await prepare(dir, { id: 'own-link', apiVersion: 1, server: 'index.cjs' })
+    expect(module.reloadUnsafeReason).toMatch(/link assets leaves the plugin directory/)
+    await expect(prepare(dir, { id: 'own-link', apiVersion: 1, server: 'index.cjs' }, true))
+      .rejects.toThrow(/requires a process restart/)
+    expect(await generations('own-link')).toEqual([])
+  })
+
+  it('counts a link a transitive runtime package resolves through', async () => {
+    const outside = await outsidePackage('deep')
+    const dir = await writePlugin('transitive-link', {
+      'package.json': JSON.stringify({ name: 'transitive-link', dependencies: { mid: '1.0.0' } }),
+      'node_modules/mid/package.json': JSON.stringify({ name: 'mid', dependencies: { deep: '1.0.0' } }),
+      'node_modules/mid/index.js': 'module.exports = 1\n',
+      'index.cjs': 'module.exports = { activate: () => "t" }\n',
+    })
+    await link(outside, path.join(dir, 'node_modules/mid/node_modules/deep'))
+
+    const module = await prepare(dir, { id: 'transitive-link', apiVersion: 1, server: 'index.cjs' })
+    expect(module.reloadUnsafeReason).toMatch(/node_modules\/mid\/node_modules\/deep leaves the plugin directory/)
+  })
+
+  it('counts a link inside a runtime package', async () => {
+    const outside = await outsidePackage('data')
+    const dir = await writePlugin('inside-runtime', {
+      'package.json': JSON.stringify({ name: 'inside-runtime', optionalDependencies: { dep: '1.0.0' } }),
+      'node_modules/dep/package.json': JSON.stringify({ name: 'dep' }),
+      'index.cjs': 'module.exports = { activate: () => "i" }\n',
+    })
+    await link(outside, path.join(dir, 'node_modules/dep/data'))
+
+    const module = await prepare(dir, { id: 'inside-runtime', apiVersion: 1, server: 'index.cjs' })
+    expect(module.reloadUnsafeReason).toMatch(/node_modules\/dep\/data leaves the plugin directory/)
+  })
+
+  it('counts every outbound link when the plugin has no readable manifest', async () => {
+    const outside = await outsidePackage('anything')
+    const dir = await writePlugin('no-manifest', {
+      'index.cjs': 'module.exports = { activate: () => "n" }\n',
+    })
+    await link(outside, path.join(dir, 'node_modules/anything'))
+
+    const module = await prepare(dir, { id: 'no-manifest', apiVersion: 1, server: 'index.cjs' })
+    expect(module.reloadUnsafeReason).toMatch(/node_modules\/anything leaves the plugin directory/)
+  })
+
+  it('a .bin shim does not hide the runtime package it points through', async () => {
+    const outside = await outsidePackage('tool', { 'bin.js': '' })
+    const dir = await writePlugin('bin-runtime', {
+      'package.json': JSON.stringify({ name: 'bin-runtime', peerDependencies: { tool: '*' } }),
+      'index.cjs': 'module.exports = { activate: () => "b" }\n',
+    })
+    await link(outside, path.join(dir, 'node_modules/tool'))
+    await link('../tool/bin.js', path.join(dir, 'node_modules/.bin/tool'))
+
+    const module = await prepare(dir, { id: 'bin-runtime', apiVersion: 1, server: 'index.cjs' })
+    expect(module.reloadUnsafeReason).toMatch(/node_modules\/tool leaves the plugin directory/)
+  })
+
+  it('loads in place when runtime code imports a devDependency that links out', async () => {
+    // A package used at runtime but listed under devDependencies: the copy cannot resolve it.
+    const dir = await fallbackScaffold(
+      'misdeclared',
+      'import { createRequire } from "node:module"\nconst api = createRequire(import.meta.url)("@open-walnut/plugin-api")\nexport function activate() { return api.from }\n',
+    )
+    const manifest = { id: 'misdeclared', apiVersion: 1 as const, server: 'dist/server.mjs' }
+
+    const module = await prepare(dir, manifest)
+    expect(await module.activate!({})).toBe('outside')
+    expect(module.reloadUnsafeReason).toMatch(/runtime code imports @open-walnut\/plugin-api, a devDependency that links out/)
+    expect(await generations('misdeclared')).toEqual([])
+    await expect(prepare(dir, manifest, true)).rejects.toThrow(/requires a process restart: runtime code imports @open-walnut\/plugin-api/)
+    expect(await generations('misdeclared')).toEqual([])
+  })
+
+  it('the plugin\'s own missing file stays its own error, never a restart request', async () => {
+    const dir = await fallbackScaffold('missing-chunk', 'import "./chunk.mjs"\nexport function activate() {}\n')
+    const manifest = { id: 'missing-chunk', apiVersion: 1 as const, server: 'dist/server.mjs' }
+    await expect(prepare(dir, manifest)).rejects.toThrow(/chunk\.mjs/)
+    await expect(prepare(dir, manifest, true)).rejects.not.toThrow(/requires a process restart/)
+    // An undeclared package that is not one of the skipped links is not ours to explain either.
+    await fsp.writeFile(path.join(dir, 'dist/server.mjs'), 'import "left-pad"\nexport function activate() {}\n')
+    await expect(prepare(dir, manifest, true)).rejects.toThrow(/left-pad/)
+    await expect(prepare(dir, manifest, true)).rejects.not.toThrow(/requires a process restart/)
+    expect(await generations('missing-chunk')).toEqual([])
+  })
+
+  it('counts an undeclared package linked out inside a runtime package\'s node_modules', async () => {
+    const outside = await outsidePackage('phantom')
+    const dir = await writePlugin('phantom-dep', {
+      'package.json': JSON.stringify({ name: 'phantom-dep', dependencies: { host: '1.0.0' } }),
+      'node_modules/host/package.json': JSON.stringify({ name: 'host' }),
+      'index.cjs': 'module.exports = { activate: () => "p" }\n',
+    })
+    await link(outside, path.join(dir, 'node_modules/host/node_modules/phantom'))
+
+    const module = await prepare(dir, { id: 'phantom-dep', apiVersion: 1, server: 'index.cjs' })
+    expect(module.reloadUnsafeReason).toMatch(/node_modules\/host\/node_modules\/phantom leaves the plugin directory/)
+  })
+
+  it('a runtime error in the copy is still an error, not a fall back to in-place', async () => {
+    const dir = await fallbackScaffold('broken', 'throw new Error("boom")\n')
+    await expect(prepare(dir, { id: 'broken', apiVersion: 1, server: 'dist/server.mjs' })).rejects.toThrow(/boom/)
+    expect(await generations('broken')).toEqual([])
   })
 })
