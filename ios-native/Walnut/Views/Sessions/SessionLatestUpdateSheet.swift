@@ -8,12 +8,20 @@ import SwiftUI
 struct SessionLatestUpdateSheet: View {
     let overall: String?
     let latest: String?
+    /// When the text was written, so an old recap reads as old.
+    var updatedAt: Date? = nil
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
+                    if let updatedAt {
+                        Text("Updated \(RelativeTime.short(date: updatedAt))")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .accessibilityIdentifier("session.latestUpdate.updated")
+                    }
                     if let overall {
                         row(label: "Overall", text: overall, id: "session.latestUpdate.overall")
                     }

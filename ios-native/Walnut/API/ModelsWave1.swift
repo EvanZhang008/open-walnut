@@ -278,6 +278,12 @@ struct SessionDetail: Codable {
             if o.isEmpty && r.isEmpty { return nil }
             return (o.isEmpty ? nil : o, r.isEmpty ? nil : r)
         }
+
+        /// When the shown text was last written: the newer of the two stamps, as
+        /// the web's "Latest update" header reads it.
+        var latestUpdateAt: Date? {
+            [overviewAt, recapAt].compactMap { WalnutTask.parseISO($0) }.max()
+        }
     }
 
     let session: Record

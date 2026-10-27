@@ -207,7 +207,7 @@ struct SessionConversationView: View {
         }
         .sheet(isPresented: $showLatestUpdate) {
             let update = lifecycle.detail?.session.latestUpdate
-            SessionLatestUpdateSheet(overall: update?.overall, latest: update?.latest)
+            SessionLatestUpdateSheet(overall: update?.overall, latest: update?.latest, updatedAt: lifecycle.detail?.session.latestUpdateAt)
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
         }

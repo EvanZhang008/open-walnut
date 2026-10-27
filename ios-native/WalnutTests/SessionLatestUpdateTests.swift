@@ -37,4 +37,11 @@ final class SessionLatestUpdateTests: XCTestCase {
         let r = try record(#", "recap": "\u5df2\u90e8\u7f72""#)
         XCTAssertEqual(r.latestUpdate?.latest, "\u{5df2}\u{90e8}\u{7f72}")
     }
+
+    /// The sheet's "Updated …" line reads the newer stamp; none when neither parses.
+    func testUpdatedAtIsTheNewerStamp() throws {
+        let r = try record(#", "overview": "A", "overviewAt": "2026-10-26T09:00:00.000Z", "recap": "B", "recapAt": "2026-10-26T09:05:00.000Z""#)
+        XCTAssertEqual(r.latestUpdateAt, WalnutTask.parseISO("2026-10-26T09:05:00.000Z"))
+        XCTAssertNil(try record(#", "recap": "B""#).latestUpdateAt)
+    }
 }
