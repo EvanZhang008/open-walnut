@@ -26,7 +26,7 @@ import type {
 import { engineCaps, isAcpEngine } from '../agents/engine-registry.js';
 import { toDisplayedUserText } from '../sessions/reference-cards.js';
 import { isAwaitingTurnEnd } from '../sessions/self-complete-stop.js';
-import { briefMoveLines, briefPrompt, keepsBrief, readBrief } from '../sessions/brief.js';
+import { briefMoveLines, briefPrompt, keepsBrief, readBrief, untaggedBriefLines } from '../sessions/brief.js';
 import { withoutLeadingRiders } from '../../lib/history-walnut-riders.js';
 
 // ── Triage dedup state ──
@@ -298,7 +298,7 @@ This is the MAIN AGENT's task: its NOTE is the user's tracking note for everythi
 export function buildSelfReportPrompt(
   existingNote?: string,
   currentTitle?: string,
-  opts?: { uiLanguage?: string; mainAgent?: boolean; brief?: { hadBrief: boolean; moves: readonly string[] } },
+  opts?: { uiLanguage?: string; mainAgent?: boolean; brief?: { hadBrief: boolean; moves: readonly string[]; ownId?: string } },
 ): string {
   const existing = existingNote?.trim() ?? '';
   const reorg = existing.length > NOTE_REORG_CAP;
@@ -407,6 +407,10 @@ export function extractField(report: string, label: string): string {
 function extractLabeledField(report: string, labelPattern: string): string {
   const re = new RegExp(
     `(?:^|\\n)[^\\S\\n]*\\*{0,2}(?:${labelPattern})\\*{0,2}[^\\S\\n]*${LABEL_END}`
+    // A label bolded around its colon ("**LABEL:** value") closes its bold after the colon:
+    // those two stars belong to the label, not the value (2026-10-26: every Brief Main wrote
+    // that way opened with a stray "**" line). A value's own bold follows a space or newline.
+    + `(?:\\*\\*(?=\\s))?`
     + `\\s*([\\s\\S]*?)`
     + `(?=\\n[^\\S\\n]*\\*{0,2}${NEXT_LABEL_LOOKAHEAD}\\*{0,2}[^\\S\\n]*${LABEL_END_IN_LOOKAHEAD}|$)`,
   );
@@ -824,7 +828,7 @@ export async function runTriage(p: OnTurnCompletePayload, opts: { final?: boolea
     let selfReport = '';
     let uiLanguage: string | undefined;
     let mainAgent = false;
-    let brief: { hadBrief: boolean; moves: string[] } | undefined;
+    let brief: { hadBrief: boolean; moves: string[]; ownId: string } | undefined;
     // When the moves were read: a move after this was not in the prompt, so it must show as
     // "Since then" under the new Brief and be listed in the next prompt.
     let briefAskedAt = '';
@@ -845,7 +849,7 @@ export async function runTriage(p: OnTurnCompletePayload, opts: { final?: boolea
           briefAskedAt = new Date().toISOString();
           const { listTasks } = await import('../task-manager.js');
           const all = await listTasks().catch(() => [] as Task[]);
-          brief = { hadBrief: !!taskRow.brief?.text, moves: briefMoveLines(taskRow, all) };
+          brief = { hadBrief: !!taskRow.brief?.text, moves: briefMoveLines(taskRow, all), ownId: taskRow.id };
         }
       } catch (err) {
         // Do NOT degrade to an empty note: the prompt would say "NOTE is EMPTY,
@@ -1031,6 +1035,12 @@ export async function runTriage(p: OnTurnCompletePayload, opts: { final?: boolea
     // (a1c) Main's or a lead's Brief, the letter above its chat (sessions/brief.ts).
     const briefNow = brief ? readBrief(extractField(selfReport, 'FOR_USER_BRIEF'), briefAskedAt || undefined) : null;
     if (briefNow) {
+      const untagged = untaggedBriefLines(briefNow.text);
+      if (untagged.length) {
+        log.session.warn('turn-complete-summary: Brief lines name no task', {
+          sessionId: p.sessionId, taskId, count: untagged.length, lines: untagged.slice(0, 5).map((l) => l.slice(0, 120)),
+        });
+      }
       try {
         const { updateTaskRaw } = await import('../task-manager.js');
         // A write to a COMPLETE row would announce the completion again (as the report below).

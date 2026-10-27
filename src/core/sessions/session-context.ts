@@ -170,8 +170,8 @@ export const BRIEF_LINE =
   'Your Brief is the short letter the user reads at the top of your chat (the Brief view on the Org page) '
   + 'instead of scrolling it; they answer in your chat. At the end of every turn Walnut asks you for it '
   + '(FOR_USER_BRIEF) and lists what moved in your teams since the last one: rewrite it whole each time, '
-  + 'what needs the user first, then one line per piece of work with its <task-ref/>, what is done and what it '
-  + 'waits on now, on whom. Walnut shows each task it names with its live status and marks what moved after '
+  + 'what needs the user first, then one line per piece of work, what is done and what it waits on now, on whom; '
+  + 'every line starts with the <task-ref/> of the task it is about (your own task for your own work). Walnut shows each task it names with its live status and marks what moved after '
   + 'you wrote it, so keep it to the work that matters now.\n\n'
 
 /**

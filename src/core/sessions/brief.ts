@@ -29,20 +29,29 @@ export function briefMoveLines(owner: Task, tasks: readonly Task[]): string[] {
   });
 }
 
+/** The Brief's item lines that name no task (each should start with its <task-ref/>): logged,
+ *  so a Brief drifting from the rule shows in the logs. */
+export function untaggedBriefLines(text: string): string[] {
+  return text.split('\n')
+    .filter((l) => /^\s*(?:[-*+]|\d+[.)])\s+\S/.test(l) && !/<task-ref\b/.test(l))
+    .map((l) => l.trim());
+}
+
 /** The self-report's Brief section (after the FOR_USER lines), for Main and leads only. */
-export function briefPrompt(opts: { hadBrief: boolean; moves: readonly string[]; language?: string }): string {
+export function briefPrompt(opts: { hadBrief: boolean; moves: readonly string[]; language?: string; ownId?: string }): string {
   const moved = opts.moves.length
     ? `\nSince your last Brief, these moved in your team (Walnut's list; each must be right in the new one):\n${opts.moves.join('\n')}`
     : '';
   return `
-Then your BRIEF, the short letter the user reads at the top of your chat instead of scrolling it. ${opts.hadBrief ? 'Rewrite it whole' : 'Write it'} every time (never "unchanged"): Markdown, at most 12 short lines, plain words${opts.language ? `, in ${opts.language}` : ''}. First what needs the user (the decision or action, one line each), then one line per piece of work: its <task-ref id="..." label="..."/>, what is done, what it waits on now and on whom. Walnut shows each named task's live status beside it, so name tasks with <task-ref/>, never a bare id. No codenames, hashes or file names.${moved}
+Then your BRIEF, the short letter the user reads at the top of your chat instead of scrolling it. ${opts.hadBrief ? 'Rewrite it whole' : 'Write it'} every time (never "unchanged"): Markdown, at most 12 short lines, plain words${opts.language ? `, in ${opts.language}` : ''}. First what needs the user (the decision or action, one line each), then one line per piece of work: what is done, what it waits on now and on whom. EVERY line, the ones that need the user too, starts with the <task-ref id="..." label="..."/> of the task it is about (the worker that owns it; your own task, ${opts.ownId ? `<task-ref id="${opts.ownId}" label="..."/>, ` : ''}for your own work). Walnut shows each named task's live status beside it, so name tasks with <task-ref/>, never a bare id. Plain Markdown with no bold labels around the field name. No codenames, hashes or file names.${moved}
 FOR_USER_BRIEF:
 <the letter>`;
 }
 
-/** The Brief out of a self-report, or null when it wrote none. */
+/** The Brief out of a self-report, or null when it wrote none. A line of bare emphasis marks
+ *  at its top (a label bold left open) is dropped. */
 export function readBrief(field: string, nowIso: string = new Date().toISOString()): TaskBrief | null {
-  const text = field.replace(/^<the letter>\s*/i, '').trim();
+  const text = field.replace(/^<the letter>\s*/i, '').replace(/^(?:[ \t]*[*_]+[ \t]*\r?\n)+/, '').trim();
   if (!text || /^(unchanged|none|n\/a)\.?$/i.test(text)) return null;
   return { text: text.length > BRIEF_MAX_CHARS ? `${text.slice(0, BRIEF_MAX_CHARS - 1).trimEnd()}…` : text, at: nowIso };
 }

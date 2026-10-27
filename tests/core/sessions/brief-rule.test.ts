@@ -11,7 +11,7 @@ import { createMockConstants } from '../../helpers/mock-constants.js'
 vi.mock('../../../src/constants.js', () => createMockConstants('walnut-brief-rule'))
 
 import { BRIEF_LINE, buildSessionContext } from '../../../src/core/sessions/session-context.js'
-import { briefMoveLines, briefPrompt, keepsBrief, readBrief } from '../../../src/core/sessions/brief.js'
+import { briefMoveLines, briefPrompt, keepsBrief, readBrief, untaggedBriefLines } from '../../../src/core/sessions/brief.js'
 import { buildSelfReportPrompt, extractField } from '../../../src/core/session-hooks/builtins.js'
 import { BRIEF_MAX_CHARS, briefMoves, briefTeam } from '../../../src/core/user-status.js'
 import type { Task } from '../../../src/core/types.js'
@@ -31,7 +31,7 @@ describe('the Brief rule', () => {
       /At the end of every turn Walnut asks you for it \(FOR_USER_BRIEF\)/,
       /rewrite it whole each time/,
       /what needs the user first/,
-      /one line per piece of work with its <task-ref\/>/,
+      /every line starts with the <task-ref\/> of the task it is about/,
       /Walnut shows each task it names with its live status/,
     ]) expect(BRIEF_LINE).toMatch(re)
   })
@@ -56,6 +56,10 @@ describe('the turn-end ask', () => {
     expect(lead).toContain(moves[0])
     expect(buildSelfReportPrompt('', 'A worker')).not.toContain('FOR_USER_BRIEF')
     expect(briefPrompt({ hadBrief: false, moves: [], language: 'Chinese' })).toContain('in Chinese')
+    // Every line names its task, the needs-you lines too, the writer's own task for its own work.
+    const own = briefPrompt({ hadBrief: true, moves: [], ownId: 'lead-1' })
+    expect(own).toContain('EVERY line, the ones that need the user too, starts with the <task-ref')
+    expect(own).toContain('<task-ref id="lead-1" label="..."/>')
   })
 
   it('reads the letter back whole, after the FOR_USER lines, and caps it', () => {
@@ -64,8 +68,23 @@ describe('the turn-end ask', () => {
     const brief = readBrief(extractField(report, 'FOR_USER_BRIEF'), '2026-10-26T10:00:00.000Z')
     expect(brief).toEqual({ text: '**Needs you:** pick a supplier.\n- <task-ref id="w1" label="Fix the fence"/>: done, waits on the review.', at: '2026-10-26T10:00:00.000Z' })
     expect(readBrief('unchanged')).toBeNull()
+    // A session that bolds the label ("**FOR_USER_BRIEF:**") closes the bold after the colon:
+    // those stars are the label's, and the letter keeps its own bold (2026-10-26, Main's Brief
+    // opened with a lone "**" line).
+    const bolded = '**FOR_USER_NEXT:** I merge.\n**FOR_USER_BRIEF:**\n**Needs you:**\n- <task-ref id="w1" label="Fence"/>: pick a supplier.'
+    expect(extractField(bolded, 'FOR_USER_NEXT')).toBe('I merge.')
+    expect(extractField(bolded, 'FOR_USER_BRIEF')).toBe('**Needs you:**\n- <task-ref id="w1" label="Fence"/>: pick a supplier.')
+    expect(extractField('FOR_USER_BRIEF: **Needs you:** nothing.', 'FOR_USER_BRIEF')).toBe('**Needs you:** nothing.')
+    expect(readBrief('**\n**Needs you:** nothing.')!.text).toBe('**Needs you:** nothing.')
     expect(readBrief('')).toBeNull()
     expect(readBrief('x'.repeat(BRIEF_MAX_CHARS + 50))!.text.length).toBe(BRIEF_MAX_CHARS)
+  })
+})
+
+describe('lines that name no task', () => {
+  it('are the item lines with no <task-ref/>, for the log', () => {
+    const text = '**Needs you:**\n- Delete the six stacks?\n- <task-ref id="w1" label="Fence"/>: pick a supplier.\n\n**Work:**\n1. Login is faster now.\nA plain sentence.'
+    expect(untaggedBriefLines(text)).toEqual(['- Delete the six stacks?', '1. Login is faster now.'])
   })
 })
 
