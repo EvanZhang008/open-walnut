@@ -66,13 +66,19 @@ export interface ThreadCommentCardProps {
   unread: boolean;
   /** The question's turns, rendered by the owner (the same row renderer the timeline uses). */
   children?: ReactNode;
-  /** The answer is still arriving into this question. */
+  /** A turn for this question is live (queued or running). */
   answering: boolean;
+  /** Sent and no answer text yet: the card says it waits, not that it answers. */
+  waiting?: boolean;
+  /** Queued behind the turn running now (with `waiting`). */
+  queued?: boolean;
   canAsk: boolean;
   /** The header's menu (the owner supplies the page menu). */
   menu?: ReactNode;
   onSend: (text: string) => Promise<boolean> | boolean;
   onClose: () => void;
+  /** "Quote in chat": the chat's composer writes to this question from now on. */
+  onQuote?: () => void;
   /** What the box opens with for a draft (words kept from an earlier visit). */
   initialText?: string;
   /** Every change of the box's text (the owner keeps an unsent Ask's words). */
@@ -263,6 +269,7 @@ export const ThreadCommentCard = memo(function ThreadCommentCard(p: ThreadCommen
       data-thread-key={p.threadKey}
       data-draft={p.draft ? 'true' : undefined}
       data-answering={p.answering ? 'true' : undefined}
+      data-waiting={p.waiting ? 'true' : undefined}
       data-expanded={grown ? 'true' : undefined}
       style={{ top: p.style.top, left: box.left, width: box.width, ['--thread-card-maxh' as string]: `${box.maxHeight}px` }}
       onKeyDown={onCardKeyDown}
@@ -279,6 +286,16 @@ export const ThreadCommentCard = memo(function ThreadCommentCard(p: ThreadCommen
         {p.naming && <span className="thread-naming">Naming…</span>}
         {!p.draft && <ThreadStatusWord status={p.status} unread={p.unread} className="thread-card-status" />}
         <span className="thread-card-head-actions">
+          {p.onQuote && (
+            <button
+              type="button"
+              className="thread-card-quote"
+              title="Write your next chat message to this question (the chat box names it)"
+              onClick={p.onQuote}
+            >
+              Quote in chat
+            </button>
+          )}
           {p.menu}
           {canGrow && (
             <button
@@ -300,7 +317,12 @@ export const ThreadCommentCard = memo(function ThreadCommentCard(p: ThreadCommen
       {!p.draft && (
         <div ref={bodyRef} className="thread-card-body" onScroll={onBodyScroll}>
           {p.children}
-          {p.answering && (
+          {p.waiting ? (
+            <div className="thread-card-answering thread-card-waiting" role="status">
+              <span className="thread-card-wait-dot" aria-hidden="true" />
+              {p.queued ? 'Queued: waits for the answer running now' : 'Waiting for the first words…'}
+            </div>
+          ) : p.answering && (
             <div className="thread-card-answering" role="status">
               <span className="session-streaming-dot" />
               Answering…

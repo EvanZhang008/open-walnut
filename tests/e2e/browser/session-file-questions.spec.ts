@@ -235,7 +235,7 @@ test.describe('Questions about a file passage (Files tab)', () => {
     await expect(card.locator('.thread-card-head .thread-map-num')).toHaveText(String(next))
   })
 
-  test('a sidebar row opens the Files tab on the file with the card beside the passage; the composer targets it; Main is plain chat', async ({ page, request }) => {
+  test('a sidebar row opens the Files tab on the file with the card beside the passage; Quote in chat targets it; × is plain chat', async ({ page, request }) => {
     const panel = await openSession(page)
     const next = await nextQuestionNumber(request, TAGGED_SESSION)
     const view = await openFile(page, panel, MD_FILE)
@@ -248,10 +248,14 @@ test.describe('Questions about a file passage (Files tab)', () => {
     await expect(card.locator('.thread-card-head .thread-map-num')).toHaveText(String(next), { timeout: 30_000 })
     await expect(card.locator('.thread-card-body')).toContainText('processed your message', { timeout: 60_000 })
 
-    // Close the Files tab; the question is still the composer's target.
+    // Asking never quotes the question into the composer (2026-10-27); the
+    // card's Quote in chat does, and survives closing the Files tab.
+    const composer = panel.locator('.chat-input-textarea').first()
+    await expect(composer).not.toHaveAttribute('placeholder', /Reply in/)
+    await card.getByRole('button', { name: 'Quote in chat' }).click()
+    await expect(card).toHaveCount(0)
     await panel.getByRole('button', { name: 'Files' }).click()
     await expect(panel.locator('.session-file-explorer')).toHaveCount(0)
-    const composer = panel.locator('.chat-input-textarea').first()
     await expect(composer).toHaveAttribute('placeholder', /Reply in/)
     // A send from the main composer goes INTO the question (prefix routing).
     await composer.fill('Follow-up from the main composer')
@@ -262,8 +266,8 @@ test.describe('Questions about a file passage (Files tab)', () => {
     await unfoldQuestions(panel)
     await expect(panel.locator('.session-history')).toContainText('Follow-up from the main composer', { timeout: 30_000 })
 
-    // Main conversation: no target, a plain chat placeholder.
-    await panel.locator('.thread-map .thread-map-row[data-kind="root"]').click()
+    // × on the chip: no target, a plain chat placeholder.
+    await panel.locator('[data-testid="composer-thread-target-clear"]').click()
     await expect(composer).not.toHaveAttribute('placeholder', /Reply in/)
 
     // The sidebar row of the file question: the Files tab opens on the file,

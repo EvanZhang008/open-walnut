@@ -89,7 +89,8 @@ test.describe('Selection pill: Ask here and Quote', () => {
 
     // Ask here still asks about the passage: from Tree Mode the column switches
     // to Conversation Mode and the question's card opens beside the passage, its
-    // own box focused, the composer naming the passage. (Quote showed the end of
+    // own box focused; the composer stays on the main conversation (2026-10-27:
+    // nothing is quoted into it unless the reader asks). (Quote showed the end of
     // the conversation, where its message will land.)
     await composer.fill('')
     await centreInHistory(page, panel, phrase, { tolerance: 20 })
@@ -100,7 +101,7 @@ test.describe('Selection pill: Ask here and Quote', () => {
     await expect(card).toBeVisible()
     await expect(card.locator('.thread-card-input')).toBeFocused()
     await expect(card.locator('.thread-card-input')).toHaveValue('')
-    await expect(panel.locator('[data-testid="composer-thread-target"][data-pending="true"]')).toContainText(phrase)
+    await expect(panel.locator('[data-testid="composer-thread-target"]')).toHaveCount(0)
     await expect(panel.locator('.thread-stack-header')).toHaveCount(0)
     await shot(page, 'ask-here-card')
   })
@@ -126,10 +127,14 @@ test.describe('Selection pill: Ask here and Quote', () => {
     await expect(composer).toHaveValue('a follow-up for Q4')
   })
 
-  test('Conversation Mode with a question as the target: Quote lets go of it', async ({ page }) => {
+  test('Conversation Mode with a question quoted into the chat: Quote lets go of it', async ({ page }) => {
     const panel = await open(page, MAP_SESSION, MAP_TASK, MAP_READY, 'linear')
     await switchView(panel, 'linear')
-    await mapRow(panel, MAP_TITLES.Q4).click()
+    const quoteQ4 = async () => {
+      await mapRow(panel, MAP_TITLES.Q4).click()
+      await panel.locator('.thread-card').getByRole('button', { name: 'Quote in chat' }).click()
+    }
+    await quoteQ4()
     const target = panel.locator('[data-testid="composer-thread-target"]')
     await expect(target).toContainText(MAP_TITLES.Q4)
     const composer = composerOf(panel)
@@ -140,11 +145,11 @@ test.describe('Selection pill: Ask here and Quote', () => {
     await selectPassage(page, panel, phrase)
     await pill(page).getByRole('button', { name: 'Quote' }).click()
     await expect(target).toHaveCount(0)
-    await expect(mapRow(panel, 'Main conversation')).toHaveAttribute('aria-current', 'page')
     await expect(composer).toHaveValue(`> ${phrase}\n\n`)
     await expect(composer).toBeFocused()
     await shot(page, 'linear-main')
-    await mapRow(panel, MAP_TITLES.Q4).click()
+    // Quoted again, the question's own words are still there.
+    await quoteQ4()
     await expect(target).toContainText(MAP_TITLES.Q4)
     await expect(composer).toHaveValue('a reply in Q4')
   })

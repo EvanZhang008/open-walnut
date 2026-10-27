@@ -82,15 +82,22 @@ export function useSessionThreadMeta(
   const sessionRef = useRef(sessionId);
   sessionRef.current = sessionId;
 
+  /** Entries of a question whose write failed after it went out, with the time
+   *  they were made: laid over every list adopted until they are written. */
+  const unsaved = useRef<Map<string, { patch: SessionThreadMetaPatch; at: string }>>(new Map());
+
   const adopt = useCallback((next: SessionThreadMeta[]) => {
-    listRef.current = next;
-    setList(next);
+    let shown = next;
+    for (const { patch: p, at } of unsaved.current.values()) shown = mergeMetaPatch(shown, [withoutPendingName(p)], at);
+    listRef.current = shown;
+    setList(shown);
   }, []);
 
   // Session switch: adopt the new session's list outright.
   useEffect(() => {
     inFlight.current = 0;
     wroteLocally.current = false;
+    unsaved.current = new Map();
     confirmed.current = serverMeta ?? [];
     adopt(serverMeta ?? []);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- session switch only; the effect below handles updates
@@ -125,7 +132,8 @@ export function useSessionThreadMeta(
   const stage = useCallback((entries: SessionThreadMetaPatch[]): ThreadMetaStage => {
     const before = listRef.current;
     const heads = new Set(entries.map((e) => e.headId));
-    adopt(mergeMetaPatch(before, entries.map(withoutPendingName), new Date().toISOString()));
+    const stagedAt = new Date().toISOString();
+    adopt(mergeMetaPatch(before, entries.map(withoutPendingName), stagedAt));
     wroteLocally.current = true;
     inFlight.current += 1;
     let settled = false;
@@ -146,6 +154,14 @@ export function useSessionThreadMeta(
         log.warn('threads', 'meta write failed, rolling back', { sessionId, headIds: [...heads] });
         adopt(restoreEntries(listRef.current, before, heads));
       },
+      keep: () => {
+        if (!done() || forSession !== sessionRef.current) return;
+        for (const e of entries) {
+          const was = unsaved.current.get(e.headId);
+          unsaved.current.set(e.headId, { patch: { ...was?.patch, ...e }, at: stagedAt });
+        }
+        log.warn('threads', 'meta write failed, kept as unsaved', { sessionId, headIds: [...heads] });
+      },
     };
   }, [sessionId, adopt, settle]);
 
@@ -165,6 +181,22 @@ export function useSessionThreadMeta(
 
   const adoptRecord = useCallback<ThreadMetaStore['adoptRecord']>((record) => settle(record, sessionRef.current), [settle]);
 
+  const restoreUnsaved = useCallback((entries: SessionThreadMetaPatch[]) => {
+    if (entries.length === 0) return;
+    const at = new Date().toISOString();
+    for (const e of entries) {
+      const was = unsaved.current.get(e.headId);
+      unsaved.current.set(e.headId, { patch: { ...was?.patch, ...e }, at: was?.at ?? at });
+    }
+    adopt(listRef.current);
+  }, [adopt]);
+
+  const clearUnsaved = useCallback((headIds: string[]) => {
+    let changed = false;
+    for (const h of headIds) changed = unsaved.current.delete(h) || changed;
+    if (changed && inFlight.current === 0) adopt(confirmed.current);
+  }, [adopt]);
+
   const index = useMemo(() => indexMeta(list), [list]);
-  return useMemo(() => ({ list, index, patch, stage, adoptRecord }), [list, index, patch, stage, adoptRecord]);
+  return useMemo(() => ({ list, index, patch, stage, adoptRecord, restoreUnsaved, clearUnsaved }), [list, index, patch, stage, adoptRecord, restoreUnsaved, clearUnsaved]);
 }

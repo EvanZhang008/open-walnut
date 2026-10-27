@@ -92,13 +92,15 @@ function persistPlainTurn(sid, prompt, assistantEvent) {
   if (!persistedUser) persistPlainUser(sid, prompt);
   if (!persistedUser) return;
   const { file, userId } = persistedUser;
+  const after = persistedUser.parent;
   persistedUser = null;
   const shared = { sessionId: sid, cwd: process.cwd(), timestamp: new Date().toISOString(), isSidechain: false };
   // `MOCK_HEAVY_RESULTS:<n>x<kb>` in the prompt: the turn first makes n tool calls
   // whose results weigh kb KB each (a turn of screenshots), so one turn can append
   // more than a whale's tail window holds.
   const heavy = /MOCK_HEAVY_RESULTS:(\d+)x(\d+)/.exec(prompt ?? '');
-  let parent = userId;
+  // Chained after the words the turn already wrote (sayMidTurn), as the CLI chains them.
+  let parent = after ?? userId;
   // Each line its own time, as the CLI writes them (an older page ends at a timestamp).
   const t0 = Date.now();
   const at = (k) => new Date(t0 + k).toISOString();
@@ -463,7 +465,6 @@ function persistWriteTurn(sid, prompt, userUuid, lines) {
   }
   fs.appendFileSync(file, rows.map((r) => JSON.stringify(r)).join('\n') + '\n');
 }
-
 const outputSessionId = sessionId || 'mock-session-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
 
 // Simulate error — exit non-zero with stderr
@@ -548,6 +549,10 @@ let rawEcho = false;
 // question first, then moves on to question n after ms (one turn, two `[Qn]`
 // tags, the way a CLI that took a second question mid-turn answers both).
 let tagSwitch = null;
+// `MOCK_SPEAK_AT:<ms>` in a slow question's words: the turn says nothing until
+// ms, then its tag and first words, and its result lands at the slow delay. A
+// mark can then be looked at waiting (no words yet) and answering (words in).
+let speakAtMs = null;
 function computeMessageParts() {
   slowDelayMs = 0;
   const bare = stripInputDecorations(stripBanners(message), questionSeq !== null);
@@ -555,7 +560,10 @@ function computeMessageParts() {
   rawEcho = /(^|\s)echo-input(\s|$)/.test(bare);
   const sw = /\s*MOCK_TAG_SWITCH:(\d+):(\d+)\s*/.exec(bare);
   tagSwitch = sw ? { seq: Number(sw[1]), ms: Number(sw[2]) } : null;
-  const words = sw ? bare.replace(sw[0], ' ').trim() : bare;
+  const sp = /\s*MOCK_SPEAK_AT:(\d+)\s*/.exec(sw ? bare.replace(sw[0], ' ') : bare);
+  speakAtMs = sp ? Number(sp[1]) : null;
+  let words = sw ? bare.replace(sw[0], ' ').trim() : bare;
+  if (sp) words = words.replace(/\s*MOCK_SPEAK_AT:\d+\s*/, ' ').trim();
   effectiveMessage = words;
   const slowMatch = words.match(/^slow:(\d+)\s+(.*)/);
   if (slowMatch) {
@@ -588,22 +596,36 @@ function computeMessageParts() {
 }
 computeMessageParts();
 
-/** A tag switch's first two texts: the turn's own question now, question n after ms. */
+/** A slow turn's words before its result: a tag switch's first two texts (the
+ *  turn's own question now, question n after ms), or MOCK_SPEAK_AT's first words. */
 function startTagSwitch() {
+  if (speakAtMs !== null && questionSeq) {
+    const t = setTimeout(() => sayMidTurn(`[Q${questionSeq}]\nWorking on it: ${effectiveMessage}`), speakAtMs);
+    return () => clearTimeout(t);
+  }
   if (!tagSwitch || !questionSeq) return () => {};
-  const say = (text) => process.stdout.write(JSON.stringify({
-    type: 'assistant',
-    message: {
-      id: `msg_mock_switch_${process.pid.toString(36)}${Date.now().toString(36)}`,
-      type: 'message', role: 'assistant', model: 'mock-model',
-      content: [{ type: 'text', text }], stop_reason: null,
-      usage: { input_tokens: 10, output_tokens: 5 },
-    },
-    session_id: outputSessionId,
-  }) + '\n');
-  say(`[Q${questionSeq}]\nFirst, this question: ${effectiveMessage}`);
-  const t = setTimeout(() => say(`[Q${tagSwitch.seq}]\nNow back to question ${tagSwitch.seq}.`), tagSwitch.ms);
+  sayMidTurn(`[Q${questionSeq}]\nFirst, this question: ${effectiveMessage}`);
+  const t = setTimeout(() => sayMidTurn(`[Q${tagSwitch.seq}]\nNow back to question ${tagSwitch.seq}.`), tagSwitch.ms);
   return () => clearTimeout(t);
+}
+function sayMidTurn(text) {
+  const message = {
+    id: `msg_mock_switch_${process.pid.toString(36)}${Date.now().toString(36)}`,
+    type: 'message', role: 'assistant', model: 'mock-model',
+    content: [{ type: 'text', text }], stop_reason: null,
+    usage: { input_tokens: 10, output_tokens: 5 },
+  };
+  // A session whose turns reach its transcript gets these words there too, as
+  // the CLI writes every assistant line (else the live block is never absorbed).
+  if (persistedUser) {
+    const uuid = randomUUID();
+    fs.appendFileSync(persistedUser.file, JSON.stringify({
+      sessionId: outputSessionId, cwd: process.cwd(), timestamp: new Date().toISOString(), isSidechain: false,
+      type: 'assistant', uuid, parentUuid: persistedUser.parent ?? persistedUser.userId, message,
+    }) + '\n');
+    persistedUser.parent = uuid;
+  }
+  process.stdout.write(JSON.stringify({ type: 'assistant', message, session_id: outputSessionId }) + '\n');
 }
 
 // ── stream-json mode: emit JSONL lines ──

@@ -18,8 +18,12 @@ import {
   forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, type RefObject,
 } from 'react';
 import { useSessionThreadsApi } from '@/contexts/SessionThreadsContext';
-import { liveBarsFor, markHighlightName, useAnsweringKeys, useThreadMarks } from '@/hooks/useThreadMarks';
-import { LIVE_BAR_HEIGHT, LIVE_LINE_CLASS, LIVE_SCAN_MS, paintLiveBars, type BoxLike } from '@/utils/thread-live-lines';
+import {
+  byUrgency, liveBarsFor, markFlagsOf, markHighlightName, markPriority, useAnsweringKeys, useThreadMarks,
+} from '@/hooks/useThreadMarks';
+import {
+  LIVE_BAR_HEIGHT, LIVE_LINE_CLASS, LIVE_SCAN_MS, WAIT_LINE_CLASS, WAIT_PULSE_MS, paintLiveBars, type BoxLike,
+} from '@/utils/thread-live-lines';
 import { ThreadMarkTipLayer } from '@/components/sessions/ThreadStackFrame';
 import { fileOfParent, fileParentOf, findSamePassageThread } from '@/utils/thread-tree';
 import { pendingPageKey } from '@/utils/thread-stack-state';
@@ -31,6 +35,7 @@ import {
 import { FileQuestionRail } from '@/components/common/FileQuestionRail';
 import { caretFromPoint, hitMark, rafThrottle, selectionIsEmpty, type ThreadMark } from '@/utils/thread-mark-hit';
 import { log } from '@/utils/log';
+import { ContextMenu } from '@/components/common/ContextMenu';
 import '@/styles/file-thread.css';
 
 export type FileThreadSurface = 'html' | 'wysiwyg' | 'source' | 'preview' | 'pre' | 'none';
@@ -62,18 +67,28 @@ function bodyOf(root: HTMLElement | null, frame: HTMLIFrameElement | null, surfa
 
 const FRAME_STYLE_ID = 'walnut-file-marks';
 const FRAME_LIVE_ID = 'walnut-live-lines';
-/** The frame's copy of the mark paint (thread-stack-page.css), live line included. */
+/** The frame's copy of the mark paint (thread-stack-page.css, light theme: the
+ *  page in the frame brings its own colors), the live and waiting lines included. */
 const FRAME_STYLE = `
-::highlight(thread-mark-neutral) { background-color: hsl(42 95% 55% / 0.28); text-decoration: underline 2px hsl(34 85% 45% / 0.9); text-underline-offset: 3px; }
+::highlight(thread-mark-waiting-neutral) { background-color: hsl(45 95% 55% / 0.32); text-decoration: underline dashed 2px hsl(36 90% 42% / 0.95); text-underline-offset: 3px; }
+::highlight(thread-mark-live-neutral) { background-color: hsl(140 60% 48% / 0.22); }
+::highlight(thread-mark-unread-neutral) { background-color: hsl(0 90% 60% / 0.22); text-decoration: underline 3px hsl(0 78% 46%); text-underline-offset: 3px; }
+::highlight(thread-mark-failed-neutral) { background-color: hsl(345 70% 60% / 0.12); text-decoration: underline dotted 2px hsl(345 70% 44%); text-underline-offset: 3px; }
+::highlight(thread-mark-neutral) { background-color: hsl(140 50% 48% / 0.15); text-decoration: underline 1px hsl(145 55% 34% / 0.85); text-underline-offset: 3px; }
 ::highlight(thread-mark-done-neutral) { background-color: hsl(0 0% 50% / 0.12); text-decoration: underline 1.5px hsl(0 0% 52% / 0.6); text-underline-offset: 3px; }
-::highlight(thread-mark-live-neutral) { background-color: hsl(42 95% 55% / 0.28); }
 body[data-thread-mark-hover] { cursor: pointer; }
 #${FRAME_LIVE_ID} { position: absolute; top: 0; left: 0; width: 0; height: 0; overflow: visible; pointer-events: none; z-index: 2147483000; }
 .${LIVE_LINE_CLASS} { position: absolute; height: ${LIVE_BAR_HEIGHT}px; border-radius: 1px; pointer-events: none;
-  background: linear-gradient(90deg, transparent, #9a6235, transparent) no-repeat, hsl(28 40% 70% / 0.55);
+  background: linear-gradient(90deg, transparent, hsl(145 75% 30%), transparent) no-repeat, hsl(140 45% 58% / 0.55);
   background-size: 40% 100%, 100% 100%; animation: walnut-live-scan ${LIVE_SCAN_MS}ms ease-in-out infinite; }
+.${WAIT_LINE_CLASS} { position: absolute; height: ${LIVE_BAR_HEIGHT}px; border-radius: 1px; pointer-events: none;
+  background: repeating-linear-gradient(90deg, hsl(38 92% 46%) 0 6px, transparent 6px 10px); animation: walnut-wait-pulse ${WAIT_PULSE_MS}ms ease-in-out infinite; }
 @keyframes walnut-live-scan { 0% { background-position: -40% 0, 0 0; } 100% { background-position: 140% 0, 0 0; } }
-@media (prefers-reduced-motion: reduce) { .${LIVE_LINE_CLASS} { animation: none; background: #9a6235; opacity: 0.7; } }
+@keyframes walnut-wait-pulse { 0%, 100% { opacity: 0.25; } 50% { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  .${LIVE_LINE_CLASS} { animation: none; background: hsl(145 75% 30%); opacity: 0.7; }
+  .${WAIT_LINE_CLASS} { animation: none; opacity: 0.8; }
+}
 `;
 
 export const FileThreadLayer = forwardRef<FileThreadLayerHandle, FileThreadLayerProps>(function FileThreadLayer(
@@ -100,8 +115,15 @@ export const FileThreadLayer = forwardRef<FileThreadLayerHandle, FileThreadLayer
   const draftPages = threads.stack.draftPages;
   // The Ask being written, then the drafts left with words (each a dashed mark).
   const unsent = useMemo(() => (pending ? [pending, ...draftPages] : draftPages), [pending, draftPages]);
-  const specs = useMemo(() => fileQuestionMarks(threads.tree, threads.hiddenKeys, threads.metaIndex, filePath, unsent),
-    [threads.tree, threads.hiddenKeys, threads.metaIndex, filePath, unsent]);
+  // Each painted by its question's state; an Ask not sent yet in the waiting
+  // color, without the pulse.
+  const markStates = threads.markStates;
+  const specs = useMemo(() => fileQuestionMarks(threads.tree, threads.hiddenKeys, threads.metaIndex, filePath, unsent)
+    .map((m) => {
+      const state = m.draft ? 'waiting' : markStates.get(m.key);
+      return state ? { ...m, state } : m;
+    }),
+  [threads.tree, threads.hiddenKeys, threads.metaIndex, filePath, unsent, markStates]);
   // The rail's rows: the same questions, the open card (else the target) current.
   const railCurrent = threads.openCardKey ?? threads.currentThreadKey;
   const railRows = useMemo(
@@ -166,8 +188,12 @@ export const FileThreadLayer = forwardRef<FileThreadLayerHandle, FileThreadLayer
   const tips = useThreadMarks({
     sessionId, panelKey: `file:${sessionId}:${filePath}`, enabled: surface !== 'html' && surface !== 'none',
     containerRef: rootRef, specs, renderNonce: surfaceNonce, locatePassage, onOpen: (key) => openCard(key, 'file-mark'),
+    // The mark's own menu quotes into the chat, which only Conversation Mode does.
+    ...(threads.viewMode === 'linear' ? { onMenu: (key: string, at: { x: number; y: number }) => setMarkMenu({ key, point: at }) } : {}),
     live: { keys: liveKeys, layerRef: liveRef, overlay: true, clip: visibleBox },
   });
+  // A right-click on a mark: open its question, or quote it into the chat.
+  const [markMenu, setMarkMenu] = useState<{ key: string; point: { x: number; y: number } } | null>(null);
 
   // ── Marks inside the HTML preview's frame (its own document and highlight registry) ──
   const frameMarks = useRef<ThreadMark[]>([]);
@@ -191,7 +217,7 @@ export const FileThreadLayer = forwardRef<FileThreadLayerHandle, FileThreadLayer
     const paintLive = () => {
       if (!doc?.documentElement) return;
       let layer = doc.getElementById(FRAME_LIVE_ID);
-      if (!frameMarks.current.some((m) => m.live)) { layer?.remove(); return; }
+      if (!frameMarks.current.some((m) => m.live || m.wait)) { layer?.remove(); return; }
       if (!layer) {
         layer = doc.createElement('div');
         layer.id = FRAME_LIVE_ID;
@@ -206,25 +232,30 @@ export const FileThreadLayer = forwardRef<FileThreadLayerHandle, FileThreadLayer
       const reg = w?.CSS?.highlights;
       const Ctor = w?.Highlight;
       const out: ThreadMark[] = [];
-      const byName = new Map<string, Range[]>();
+      const byName = new Map<string, { ranges: Range[]; priority: number }>();
       for (const s of specs) {
         const range = rangeForQuote(doc.body, s.quote);
         if (!range) continue;
-        const live = liveKeys.has(s.key);
-        out.push({ key: s.key, headId: s.headId, range, hue: s.hue, resolved: s.resolved, title: s.title, neutral: true, ...(live ? { live } : {}) });
-        const name = markHighlightName(s.hue, s.resolved, true, live);
-        byName.set(name, [...(byName.get(name) ?? []), range]);
+        const { live, wait } = markFlagsOf(s, liveKeys);
+        out.push({
+          key: s.key, headId: s.headId, range, hue: s.hue, resolved: s.resolved, title: s.title, neutral: true,
+          ...(s.state ? { state: s.state } : {}), ...(live ? { live } : {}), ...(wait ? { wait } : {}),
+        });
+        const name = markHighlightName(s.hue, s.resolved, true, live, s.state);
+        const entry = byName.get(name) ?? { ranges: [], priority: markPriority(s.state) };
+        entry.ranges.push(range);
+        byName.set(name, entry);
       }
-      frameMarks.current = out;
+      frameMarks.current = byUrgency(out);
       paintLive();
       if (!reg || !Ctor) return;
       for (const n of names) if (!byName.has(n)) reg.delete(n);
       names.clear();
-      for (const [name, ranges] of byName) { const h = new Ctor(...ranges); h.priority = 2; reg.set(name, h); names.add(name); }
+      for (const [name, e] of byName) { const h = new Ctor(...e.ranges); h.priority = e.priority; reg.set(name, h); names.add(name); }
     };
     const later = () => { if (!raf) raf = requestAnimationFrame(() => { raf = 0; paint(); }); };
     // An inner scroller of the page (not the page itself) moves the passage too.
-    const onFrameScroll = () => { if (frameMarks.current.some((m) => m.live)) paintLive(); };
+    const onFrameScroll = () => { if (frameMarks.current.some((m) => m.live || m.wait)) paintLive(); };
     const at = (x: number, y: number) => (doc ? hitMark(frameMarks.current, caretFromPoint(doc, x, y), x, y) : null);
     const move = rafThrottle<{ x: number; y: number }>(({ x, y }) => {
       if (!doc?.body) return;
@@ -466,6 +497,18 @@ export const FileThreadLayer = forwardRef<FileThreadLayerHandle, FileThreadLayer
       <div ref={liveRef} className="fv-live-lines" aria-hidden="true" />
       <FileQuestionRail rows={railRows} top={railBox.top} room={railBox.room} boxWidth={hostW} onOpen={openFromRail} />
       <ThreadMarkTipLayer store={tips} />
+      {markMenu && (
+        <ContextMenu
+          point={markMenu.point}
+          ariaLabel="Question actions"
+          testId="thread-mark-menu"
+          onClose={() => setMarkMenu(null)}
+          items={[
+            { key: 'open', label: 'Open question', onSelect: () => openCard(markMenu.key, 'file-mark-menu') },
+            { key: 'quote', label: 'Quote in chat', onSelect: () => threads.quoteInChat(markMenu.key, 'file-mark-menu') },
+          ]}
+        />
+      )}
       {hover && (
         <button
           type="button"

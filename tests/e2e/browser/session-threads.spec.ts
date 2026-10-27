@@ -173,7 +173,7 @@ test.describe('Question stack', () => {
     await ask.click()
     await expect.poll(() => page.evaluate(() => (window as unknown as { __askFrame?: string | null }).__askFrame)).toBe('linear:1')
     // C1: a new question's card beside the passage, its own input focused and
-    // empty, the composer naming the passage, no chip anywhere. (This session has
+    // empty, the composer left on the main conversation, no chip anywhere. (This session has
     // no question yet, so there is no mode pill: the pending question is asked
     // here, in its card.)
     const card = panel.locator('.thread-card')
@@ -182,7 +182,7 @@ test.describe('Question stack', () => {
     await expect(input).toBeFocused()
     await expect(input).toHaveValue('')
     await expect(input).toHaveAttribute('placeholder', 'Ask about this passage…')
-    await expect(panel.locator('[data-testid="composer-thread-target"][data-pending="true"]')).toContainText(passage)
+    await expect(panel.locator('[data-testid="composer-thread-target"]'), `an Ask on "${passage}" quotes nothing into the composer`).toHaveCount(0)
     await expect(page.locator('[data-testid="thread-anchor-chip"], .thread-anchor-chip')).toHaveCount(0)
     await expect(panel.locator('.thread-stack-header')).toHaveCount(0)
     await shot(page, 'c1-pending-card')

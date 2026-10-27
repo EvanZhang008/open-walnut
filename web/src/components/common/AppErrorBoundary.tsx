@@ -146,6 +146,8 @@ export class AppErrorBoundary extends Component<{ children: ReactNode }, State> 
               style={{
                 width: 'min(640px, 90vw)', height: '40vh', fontFamily: 'ui-monospace, monospace',
                 fontSize: 11, padding: 8, whiteSpace: 'pre', boxSizing: 'border-box',
+                // Unwrapped stack lines scroll sideways (the global textarea rule hides it).
+                overflowX: 'auto',
               }}
             />
           )}

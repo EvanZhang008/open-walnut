@@ -85,6 +85,9 @@ export interface ThreadMetaStage {
   confirm: (record: { threadMeta?: SessionThreadMeta[]; threadAnchors?: { msgId: string }[] }) => void;
   /** The PATCH failed: undo exactly these entries. */
   rollback: () => void;
+  /** The PATCH failed but the question went out: the entries stay on screen,
+   *  UNSAVED, until `clearUnsaved` (a later write of them landed). */
+  keep: () => void;
 }
 
 export interface ThreadMetaStore {
@@ -97,6 +100,11 @@ export interface ThreadMetaStore {
   stage: (entries: SessionThreadMetaPatch[]) => ThreadMetaStage;
   /** Adopt a record returned by a PATCH that carried meta (confirmed copy). */
   adoptRecord: (record: { threadMeta?: SessionThreadMeta[] }) => void;
+  /** Unsaved entries (a failed question write, or read back after a reload) on
+   *  screen without a write; the caller writes them. */
+  restoreUnsaved?: (entries: SessionThreadMetaPatch[]) => void;
+  /** These heads' unsaved entries were written. */
+  clearUnsaved?: (headIds: string[]) => void;
 }
 
 // ── Actions (useThreadActions) ──

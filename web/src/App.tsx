@@ -31,6 +31,7 @@ import { isPopoutPath } from './popout/openPopout';
 import { scheduleNotesPrefetch } from './utils/notes-prefetch';
 import { useTaskLinkClickFallback } from './hooks/useTaskLinkClickFallback';
 import { PLUGIN_STORE_PATH, peekPendingInstall, subscribeOpenLinks } from './utils/open-link';
+import { RouteShownContext } from './contexts/RouteShownContext';
 
 ensureCoreAppsRegistered();
 
@@ -108,7 +109,9 @@ export function App() {
       <PageFind />
       <UnpairedNotice />
       <div className={isHome ? 'main-page-wrapper' : 'main-page-wrapper main-page-wrapper-hidden'}>
-        <StableMainPage visible={isHome} navigateRef={navigateRef} />
+        <RouteShownContext.Provider value={isHome}>
+          <StableMainPage visible={isHome} navigateRef={navigateRef} />
+        </RouteShownContext.Provider>
       </div>
       <Routes>
         <Route path="/" element={null} />

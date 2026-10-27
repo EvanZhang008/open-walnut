@@ -4,15 +4,17 @@
  * Covers: an Ask closed with nothing written (Esc, ×, a click away) leaves
  * nothing behind: no draft row in the sidebar, no composer target, nothing after
  * a reload; words typed into the card keep it as a draft that reopens with them,
- * and emptying it lets it go; the composer names the question it replies in
- * (number and title) and its × sends to the main conversation instead, carrying
- * what was typed; a click into the composer during an Ask keeps the Ask as the
- * composer's target ("Asking about") and brings the card's words along, and ×
- * lets go of it; the card's expand button grows it where it is (same top below
+ * and emptying it lets it go; opening a question never makes it the composer's
+ * target (2026-10-27, the user: "not quote automatically"): only the card's
+ * "Quote in chat" does, and then the composer names it (number and title) and its
+ * × sends to the main conversation instead, carrying what was typed; a click into
+ * the composer during an Ask closes the card (its words kept as a draft), and
+ * Quote in chat on that draft asks it from the composer ("Asking about") with the
+ * card's words; the card's expand button grows it where it is (same top below
  * its passage, wider, taller), Esc brings it back to its size, × closes; in
- * fullscreen, Esc closes the card and the next Esc leaves fullscreen without
- * letting go of the composer's question; the rule beside a question's turn
- * opens its card like its label.
+ * fullscreen, Esc closes the card and the next Esc leaves fullscreen, and Esc
+ * never lets go of a quoted question; the rule beside a question's turn opens
+ * its card like its label.
  *
  * Chromium and WebKit. The tagged fixture session.
  */
@@ -109,71 +111,73 @@ test.describe('Choices around the comment card', () => {
     await expect(unsentRows(panel)).toHaveCount(0)
   })
 
-  test('the composer names the question it replies in, and × sends to the main conversation with the words typed', async ({ page }) => {
+  test('opening a question leaves the composer on the main conversation; Quote in chat names it, × lets go with the words typed', async ({ page }) => {
     const panel = await open(page)
     const rows = panel.locator('.thread-map .thread-map-row[data-kind="thread"]')
+    await composer(panel).fill('Words for the main conversation')
     await rows.nth(0).click()
     await expect(card(panel)).toBeVisible()
+    // Opening is not quoting: no chip, the composer's words and placeholder stay.
+    await expect(chip(panel)).toHaveCount(0)
+    await expect(composer(panel)).toHaveValue('Words for the main conversation')
+    await expect(composer(panel)).toHaveAttribute('placeholder', /Send a message to this session/)
+    await composer(panel).fill('')
+    // Quote in chat: the card closes, the composer names the question.
+    await card(panel).getByRole('button', { name: 'Quote in chat' }).click()
+    await expect(card(panel)).toHaveCount(0)
     await expect(chip(panel)).toBeVisible()
     await expect(chip(panel)).toContainText('Replying in')
     await expect(chip(panel).locator('.thread-map-num')).toHaveText('1')
     await expect(chip(panel).locator('.pill-title')).toHaveText(TAGGED_TITLES.Q1)
+    await expect(composer(panel)).toBeFocused()
     await shot(page, 'composer-chip-reply', panel)
-    // Typing in the composer closes the card; the chip still says where it goes.
-    await composer(panel).click()
-    await expect(card(panel)).toHaveCount(0)
     await composer(panel).fill('This one is for the main thread')
-    await expect(chip(panel)).toBeVisible()
-    // The chip's title opens the question's card again.
+    // The chip's title opens the question's card again; the chip stays.
     await chip(panel).locator('.pill-target').click()
     await expect(card(panel).locator('.thread-card-head .thread-map-num')).toHaveText('1')
+    await expect(chip(panel)).toContainText('Replying in')
     // × : the composer posts to the main conversation, the words stay in it.
     await chip(panel).locator('[data-testid="composer-thread-target-clear"]').click()
     await expect(chip(panel)).toHaveCount(0)
-    await expect(card(panel)).toHaveCount(0)
     await expect(composer(panel)).toHaveValue('This one is for the main thread')
     await expect(composer(panel)).toHaveAttribute('placeholder', /Send a message to this session/)
-    await expect(rows.nth(0)).not.toHaveAttribute('aria-current', 'page')
     await composer(panel).press('Enter')
     const bubble = panel.locator('.session-history .session-msg', { hasText: 'This one is for the main thread' }).first()
     await expect(bubble).toBeVisible({ timeout: 30_000 })
     await expect(panel.locator('.session-history .session-msg--threaded', { hasText: 'This one is for the main thread' })).toHaveCount(0)
   })
 
-  test('a click into the composer during an Ask keeps it as the target ("Asking about") with the card\'s words; × lets it go', async ({ page }) => {
+  test('a click into the composer during an Ask closes the card unquoted; Quote in chat on the draft asks it from the composer with the card\'s words', async ({ page }) => {
     const panel = await open(page)
     await ask(page, panel)
     await composer(panel).click()
     await expect(card(panel)).toHaveCount(0)
-    await expect(chip(panel)).toHaveAttribute('data-pending', 'true')
-    await expect(chip(panel)).toContainText('Asking about')
-    await expect(unsentRows(panel)).toHaveCount(1)
-    await shot(page, 'composer-chip-ask', panel)
-    await chip(panel).locator('[data-testid="composer-thread-target-clear"]').click()
     await expect(chip(panel)).toHaveCount(0)
+    // Nothing written: the Ask goes.
     await expect(unsentRows(panel)).toHaveCount(0)
-    // Words typed in the card come along into the composer, still asking there.
+    // Words typed in the card keep it as a draft; the composer stays empty and unquoted.
     const c = await ask(page, panel)
     await c.locator('.thread-card-input').fill('Why the oldest one')
     await composer(panel).click()
     await expect(card(panel)).toHaveCount(0)
-    await expect(composer(panel)).toHaveValue('Why the oldest one')
-    await expect(chip(panel)).toContainText('Asking about')
-    // × : the words go on to the main conversation's composer.
-    await chip(panel).locator('[data-testid="composer-thread-target-clear"]').click()
     await expect(chip(panel)).toHaveCount(0)
-    await expect(unsentRows(panel)).toHaveCount(0)
-    await expect(composer(panel)).toHaveValue('Why the oldest one')
-    // Straight from the open card to the chip's ×: the card's words follow too.
-    await composer(panel).fill('')
     await expect(composer(panel)).toHaveValue('')
-    const c2 = await ask(page, panel)
-    await c2.locator('.thread-card-input').fill('A second thought')
-    await chip(panel).locator('[data-testid="composer-thread-target-clear"]').click()
+    const draft = panel.locator('.thread-map .thread-map-row[data-kind="draft"]')
+    await expect(draft).toHaveCount(1)
+    // Quote in chat from the reopened draft: asked from the composer, with its words.
+    await draft.click()
+    await expect(card(panel).locator('.thread-card-input')).toHaveValue('Why the oldest one')
+    await card(panel).getByRole('button', { name: 'Quote in chat' }).click()
     await expect(card(panel)).toHaveCount(0)
+    await expect(chip(panel)).toHaveAttribute('data-pending', 'true')
+    await expect(chip(panel)).toContainText('Asking about')
+    await expect(composer(panel)).toHaveValue('Why the oldest one')
+    await shot(page, 'composer-chip-ask', panel)
+    // × : the words go on to the main conversation's composer, the Ask goes.
+    await chip(panel).locator('[data-testid="composer-thread-target-clear"]').click()
     await expect(chip(panel)).toHaveCount(0)
+    await expect(composer(panel)).toHaveValue('Why the oldest one')
     await expect(unsentRows(panel)).toHaveCount(0)
-    await expect(composer(panel)).toHaveValue('A second thought')
   })
 
   test('the expand button grows the card where it is; Esc brings it back to its size; × closes', async ({ page }) => {
@@ -226,7 +230,7 @@ test.describe('Choices around the comment card', () => {
     await expect(card(panel)).toHaveCount(0)
   })
 
-  test('fullscreen: Esc closes the card, the next Esc leaves fullscreen, and the composer keeps its question', async ({ page }) => {
+  test('fullscreen: Esc closes the card, the next Esc leaves fullscreen; Esc never lets go of a quoted question', async ({ page }) => {
     const panel = await open(page)
     await panel.getByRole('button', { name: 'Expand session to full screen' }).click()
     await expect(panel).toHaveClass(/open-walnut-fullscreen/)
@@ -235,12 +239,15 @@ test.describe('Choices around the comment card', () => {
     await card(panel).locator('.thread-card-input').press('Escape')
     await expect(card(panel)).toHaveCount(0)
     await expect(panel).toHaveClass(/open-walnut-fullscreen/)
-    // The second Esc is the panel's: it does not let go of the question first.
+    // The second Esc is the panel's; opening the card quoted nothing.
     await page.keyboard.press('Escape')
     await expect(panel).not.toHaveClass(/open-walnut-fullscreen/)
+    await expect(chip(panel)).toHaveCount(0)
+    // A quoted question: Esc never lets go of it.
+    await panel.locator('.thread-map .thread-map-row[data-kind="thread"]').nth(0).click()
+    await card(panel).getByRole('button', { name: 'Quote in chat' }).click()
     await expect(chip(panel)).toContainText('Replying in')
     await expect(chip(panel).locator('.thread-map-num')).toHaveText('1')
-    // Not fullscreen, Esc with no card open does nothing to the target either.
     await page.keyboard.press('Escape')
     await expect(chip(panel)).toContainText('Replying in')
   })
@@ -256,6 +263,6 @@ test.describe('Choices around the comment card', () => {
     await page.mouse.click(r.x + 1, r.y + Math.min(r.height / 2, 20))
     await expect(card(panel)).toBeVisible()
     await expect(card(panel).locator('.thread-card-head .thread-map-num')).toHaveText('1')
-    await expect(chip(panel)).toContainText('Replying in')
+    await expect(chip(panel)).toHaveCount(0)
   })
 })

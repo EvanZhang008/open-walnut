@@ -324,8 +324,10 @@ test('"Open in Notes" button navigates to the note on /notes', async ({ page }) 
   // outside the subtree App.tsx hides on navigation. MainPage never unmounts, so
   // the blurring sheet survived the route change and covered the Notes page with
   // nothing to dismiss it. The landing page must be clean and interactive.
+  // Since 2026-10-27 the split view is full screen of the HOME tab and stays so
+  // while away (useFullscreen keepAcrossRoutes), hidden with the home page.
   await expect(page.locator('.open-walnut-fullscreen-backdrop')).toHaveCount(0)
-  await expect(page.locator('.open-walnut-fullscreen')).toHaveCount(0)
+  await expect(page.locator('.open-walnut-fullscreen')).toBeHidden()
   // Not merely absent from the DOM — the page underneath must actually be usable.
   const notesTree = page.locator('.notes-tree-panel, .notes-layout, .notes-page').first()
   await expect(notesTree).toBeVisible({ timeout: 15_000 })
@@ -341,14 +343,9 @@ test('"Open in Notes" button navigates to the note on /notes', async ({ page }) 
 
 test('any route change out of a fullscreen split view drops the backdrop', async ({ page }) => {
   // The same leak reached WITHOUT the notes button, proving the fix lives in
-  // useFullscreen (shared by five consumers) rather than in the Open-in-Notes
-  // click path.
-  //
-  // The navigation is driven through history, not a sidebar click, ON PURPOSE:
-  // a fullscreen panel legitimately covers the sidebar, so its links are
-  // pointer-intercepted (Playwright times out on them — which is itself
-  // evidence fullscreen works). Back/forward is a real SPA route change and
-  // exercises exactly the code path under test.
+  // useFullscreen (shared by its consumers) rather than in the Open-in-Notes
+  // click path. Driven through history; the sidebar route is pinned by
+  // fullscreen-is-the-tab.spec.ts.
   const explorer = await openFilesPanel(page)
   await expect(page.locator('.open-walnut-fullscreen-backdrop')).toHaveCount(1)
 
@@ -358,12 +355,14 @@ test('any route change out of a fullscreen split view drops the backdrop', async
   await expect(page.locator('.open-walnut-fullscreen-backdrop')).toHaveCount(0)
   await expect(explorer).toBeHidden()
 
-  // Coming back must not resurrect it — the state was reset, not just masked.
+  // Away, the body scroll lock is released so the other page scrolls.
+  await expect.poll(() => page.evaluate(() => document.body.style.overflow)).not.toBe('hidden')
+
+  // Full screen of the tab: coming back, the split view is full screen again.
   await page.goBack()
   await expect.poll(() => page.url()).toBe(homeUrl)
-  await expect(page.locator('.open-walnut-fullscreen-backdrop')).toHaveCount(0)
-  // And the body scroll lock was released on the way out.
-  await expect.poll(() => page.evaluate(() => document.body.style.overflow)).not.toBe('hidden')
+  await expect(explorer).toBeVisible()
+  await expect(page.locator('.open-walnut-fullscreen-backdrop')).toHaveCount(1)
 })
 
 test('a non-note .md shows NO "Open in Notes" button', async ({ page }) => {

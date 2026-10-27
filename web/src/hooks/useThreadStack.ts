@@ -19,7 +19,7 @@ import { usePanelKeyRouter } from '@/hooks/usePanelKeyRouter';
 import { ROOT_THREAD_KEY, fileOfParent, findSamePassageThread, type ThreadTree } from '@/utils/thread-tree';
 import { fallbackTitle } from '@/utils/thread-meta';
 import {
-  DRAFT_ROW_LABEL, composerDraftKey, escapeDecision, isPendingKey, pageLeave, pendingPageKey, planNavigation, readComposerDraft,
+  DRAFT_ROW_LABEL, composerDraftKey, escapeDecision, isPendingKey, pageLeave, pendingPageKey, planNavigation,
   stackPathOf, widthTier, type PageLanding,
 } from '@/utils/thread-stack-state';
 import {
@@ -27,6 +27,7 @@ import {
   writePersistedStack, type PersistedStack,
 } from '@/utils/thread-stack-persist';
 import { nextSamePassageKeys } from '@/utils/thread-same-passage';
+import { VIEWED_PREFIX, readViewed, writeViewed } from '@/utils/thread-viewed-store';
 import { log } from '@/utils/log';
 
 /** The widths `panelWidth` is compared against (the drawer toggle's narrow form, 560). */
@@ -55,6 +56,11 @@ export interface UseThreadStackArgs {
   toast: ThreadToastApi;
   /** Focus the composer without moving the timeline. */
   focusComposer: () => void;
+  /** Conversation Mode: a pending page the composer is writing to (the reader
+   *  quoted it into the chat) stays a draft when the stack moves off it. */
+  keepPending?: (pageKey: string) => boolean;
+  /** The newest answer's time of a question, when it has one (for unread). */
+  answeredAtOf?: (key: string) => number | undefined;
   /** The whole transcript is loaded (not phase 1, not a windowed tail). Until
    *  then a reload restore whose page head is missing keeps waiting for it. */
   historyComplete?: boolean;
@@ -96,10 +102,17 @@ export interface ThreadStackHandle {
   api: ThreadStackApi;
   bridge: ThreadNavBridge;
   drawer: ThreadDrawerState;
-  /** A pending page's first send landed under `key`: swap it in place. */
-  promotePending: (key: string) => void;
+  /** A pending page's first send landed under `key`: swap it in place. `pageKey`
+   *  names a draft that is not on the path (sent from the chat's composer). */
+  promotePending: (key: string, pageKey?: string) => void;
   /** Head id to when that page was last on screen. */
   lastViewedAt: ReadonlyMap<string, number>;
+  /** The question `key` is (or was until now) on screen: viewed now, or at
+   *  `atLeast` when that is later (its newest answer, so a clock skew between
+   *  the host and this browser never leaves a read answer unread). */
+  markViewed: (key: string, atLeast?: number) => void;
+  /** The same by head id, for a question the tree does not know yet (its first send). */
+  markHeadViewed: (headId: string) => void;
   /** The stack is live (stack view, and questions or a pending page exist). */
   enabled: boolean;
   /**
@@ -135,8 +148,6 @@ interface LeaveOpts {
   /** The open comment card's box: for a pending page, the Ask's words (the
    *  composer probe cannot see them). Absent when no card is open. */
   leftText?: string;
-  /** The words go with the reader to the main conversation's composer. */
-  carryToRoot?: boolean;
 }
 
 export function useThreadStack(args: UseThreadStackArgs): ThreadStackHandle {
@@ -169,11 +180,13 @@ export function useThreadStack(args: UseThreadStackArgs): ThreadStackHandle {
   const restoreWant = useRef<{ want: RestoreWant | null; pages: PersistedStack['pages'] } | null>(null);
   const grace = useRef(new Map<string, number>());
 
-  // Session switch: a fresh stack (never carry a page across transcripts).
+  // Session switch: a fresh stack (never carry a page across transcripts). The
+  // viewed times come from localStorage at once (they decide unread marks).
   useEffect(() => {
     setState(ROOT_STATE);
     landings.clear();
-    lastViewed.current = new Map();
+    lastViewed.current = readViewed(sessionId);
+    setViewedTick((n) => n + 1);
     setDrafts(new Map());
     restored.current = false;
     restoreWant.current = null;
@@ -198,11 +211,42 @@ export function useThreadStack(args: UseThreadStackArgs): ThreadStackHandle {
     });
   }, [landings, headOf]);
 
-  const markViewed = useCallback((key: string) => {
+  /** A later view of an answer already viewed changes no unread mark, so it
+   *  re-renders nothing: the stack's push views the page, and the viewing
+   *  effect views it again a frame later; that second render of the whole
+   *  timeline cost ~35ms per push (C38). `answeredAt`: its newest answer. */
+  const noteViewed = useCallback((head: string, at: number, answeredAt?: number) => {
+    const prev = lastViewed.current.get(head) ?? -Infinity;
+    if (prev >= at) return;
+    lastViewed.current.set(head, at);
+    writeViewed(argsRef.current.sessionId, { [head]: at });
+    if (answeredAt === undefined || prev < answeredAt) setViewedTick((n) => n + 1);
+  }, []);
+  const markViewed = useCallback((key: string, atLeast?: number) => {
     if (key === ROOT_THREAD_KEY || isPendingKey(key)) return;
-    lastViewed.current.set(headOf(key), Date.now());
-    setViewedTick((n) => n + 1);
-  }, [headOf]);
+    // A key the tree does not know has no head to keep it under.
+    const head = argsRef.current.tree.byKey.get(key)?.headId;
+    if (!head) return;
+    const answeredAt = atLeast ?? argsRef.current.answeredAtOf?.(key);
+    noteViewed(head, Math.max(Date.now(), answeredAt ?? 0), answeredAt);
+  }, [noteViewed]);
+  const markHeadViewed = useCallback((head: string) => {
+    if (head) noteViewed(head, Date.now());
+  }, [noteViewed]);
+  // Another tab of this session viewed a question: take its times too.
+  useEffect(() => {
+    const key = `${VIEWED_PREFIX}${sessionId}`;
+    const onStorage = (e: StorageEvent) => {
+      if (e.key !== key) return;
+      let changed = false;
+      for (const [head, at] of readViewed(sessionId)) {
+        if ((lastViewed.current.get(head) ?? -Infinity) < at) { lastViewed.current.set(head, at); changed = true; }
+      }
+      if (changed) setViewedTick((n) => n + 1);
+    };
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
+  }, [sessionId]);
 
   /** Every navigation goes through here: plan, capture the page being left,
    *  keep or drop a pending page's draft, then swap the path. */
@@ -214,19 +258,23 @@ export function useThreadStack(args: UseThreadStackArgs): ThreadStackHandle {
     restored.current = true;
     const a = argsRef.current;
     const leavingPending = !!s.pending && plan.from === s.pending.pageKey;
-    const rootKey = composerDraftKey(a.sessionId, ROOT_THREAD_KEY, a.tree);
+    // Conversation Mode: the path is the card's question, never the composer's,
+    // so the composer's words stay under its own key; only a card's words for
+    // an Ask are kept here.
+    const cardOnly = !a.stackView;
     const leave = pageLeave({
       leavingPending,
-      leavingRoot: plan.from === ROOT_THREAD_KEY,
-      composerText: a.composer.text(),
+      composerText: cardOnly ? '' : a.composer.text(),
       ...(opts?.leftText !== undefined ? { cardText: opts.leftText } : {}),
-      ...(opts?.carryToRoot ? { carryToRoot: true, rootDraft: readComposerDraft(rootKey) } : { rootDraft: '' }),
     });
-    writeDraft(composerDraftKey(a.sessionId, plan.from, a.tree), leave.fromDraft);
-    if (leave.rootDraft !== undefined) writeDraft(rootKey, leave.rootDraft);
+    // A quoted Ask's words are the composer's, under the same key: left alone.
+    const quoted = leavingPending && !!s.pending && !!a.keepPending?.(s.pending.pageKey);
+    if (!cardOnly || (leavingPending && opts?.leftText !== undefined && !quoted)) {
+      writeDraft(composerDraftKey(a.sessionId, plan.from, a.tree), leave.fromDraft);
+    }
     if (leavingPending && s.pending) {
       const left = s.pending;
-      const keep = leave.keepPendingDraft;
+      const keep = leave.keepPendingDraft || quoted;
       setDrafts((prev) => {
         if (!keep && !prev.has(left.pageKey)) return prev;
         const next = new Map(prev);
@@ -332,16 +380,14 @@ export function useThreadStack(args: UseThreadStackArgs): ThreadStackHandle {
     return true;
   }, [navigate]);
 
-  const replyInMain = useCallback((via: ThreadNavVia) => {
-    navigate([ROOT_THREAD_KEY], via, undefined, { carryToRoot: true });
-  }, [navigate]);
-
-  /** The first send of a pending page: the page becomes the question in place
-   *  (same scroll box, no animation), its draft row and draft text go away. */
-  const promotePending = useCallback((key: string) => {
+  /** Drop an Ask not sent yet, wherever it is: the page on screen leaves as an
+   *  Ask closed with nothing written, and a draft off the path goes from the
+   *  drafts with its stored words (the composer chip's × on a quoted Ask). */
+  const dropDraft = useCallback((pageKey: string, via: ThreadNavVia) => {
     const s = stateRef.current;
-    if (!s.pending) return;
-    const pageKey = s.pending.pageKey;
+    if (s.pending?.pageKey === pageKey && s.path[s.path.length - 1] === pageKey) {
+      navigate(s.path.slice(0, -1), via, undefined, { leftText: '' });
+    }
     writeDraft(composerDraftKey(argsRef.current.sessionId, pageKey, argsRef.current.tree), '');
     setDrafts((prev) => {
       if (!prev.has(pageKey)) return prev;
@@ -349,6 +395,23 @@ export function useThreadStack(args: UseThreadStackArgs): ThreadStackHandle {
       next.delete(pageKey);
       return next;
     });
+  }, [navigate]);
+
+  /** The first send of a pending page: the page becomes the question in place
+   *  (same scroll box, no animation), its draft row and draft text go away. */
+  const promotePending = useCallback((key: string, draftKey?: string) => {
+    const s = stateRef.current;
+    const pageKey = draftKey ?? s.pending?.pageKey;
+    if (!pageKey) return;
+    writeDraft(composerDraftKey(argsRef.current.sessionId, pageKey, argsRef.current.tree), '');
+    setDrafts((prev) => {
+      if (!prev.has(pageKey)) return prev;
+      const next = new Map(prev);
+      next.delete(pageKey);
+      return next;
+    });
+    // A draft off the path (sent from the chat's composer): nothing on screen to swap.
+    if (s.pending?.pageKey !== pageKey) return;
     const rec = landings.get(pageKey);
     if (rec) { landings.set(key, rec); landings.delete(pageKey); }
     grace.current.set(key, Date.now() + 15_000);
@@ -372,7 +435,11 @@ export function useThreadStack(args: UseThreadStackArgs): ThreadStackHandle {
     if (!restoreWant.current) {
       const stored = readPersistedStack(sessionId);
       if (stored) {
-        lastViewed.current = new Map(Object.entries(stored.lastViewedAt));
+        // The tab's own copy and localStorage's: the later time wins.
+        for (const [head, at] of Object.entries(stored.lastViewedAt)) {
+          if ((lastViewed.current.get(head) ?? -Infinity) < at) lastViewed.current.set(head, at);
+        }
+        setViewedTick((n) => n + 1);
         if (stored.drafts.length) setDrafts(new Map(stored.drafts.map((d) => [d.pageKey, d])));
       }
       let want: RestoreWant | null = null;
@@ -502,9 +569,9 @@ export function useThreadStack(args: UseThreadStackArgs): ThreadStackHandle {
     draftPages,
     openDraft,
     leavePending,
-    replyInMain,
+    dropDraft,
     persist,
-  }), [state, leafKey, depth, pushTo, popTo, back, ask, landings, setCapture, draftRows, draftPages, openDraft, leavePending, replyInMain, persist]);
+  }), [state, leafKey, depth, pushTo, popTo, back, ask, landings, setCapture, draftRows, draftPages, openDraft, leavePending, dropDraft, persist]);
 
   const bridge = useMemo<ThreadNavBridge>(() => ({
     currentKey: leafKey, depth, pushTo, popTo, popToVisibleAncestor,
@@ -539,5 +606,5 @@ export function useThreadStack(args: UseThreadStackArgs): ThreadStackHandle {
     return () => ro.disconnect();
   }, [args.panelRef, hasQuestions]);
 
-  return { api, bridge, drawer, promotePending, lastViewedAt, enabled, active, panelWidth };
+  return { api, bridge, drawer, promotePending, lastViewedAt, markViewed, markHeadViewed, enabled, active, panelWidth };
 }

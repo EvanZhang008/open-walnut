@@ -100,9 +100,10 @@ test.describe('The comment card in Conversation Mode', () => {
     expect(cb.x + cb.width).toBeLessThanOrEqual(hb.x + hb.width + 1)
     expect(cb.width).toBeGreaterThanOrEqual(260)
     await expect(c).toBeInViewport()
-    // The target follows: the row is current and the composer names the question.
+    // The row is current; the composer is not quoted into it (2026-10-27).
     await expect(rows.nth(0)).toHaveAttribute('aria-current', 'page')
-    await expect(panel.locator('.chat-input-textarea').first()).toHaveAttribute('placeholder', new RegExp(TAGGED_TITLES.Q1))
+    await expect(panel.locator('[data-testid="composer-thread-target"]')).toHaveCount(0)
+    await expect(panel.locator('.chat-input-textarea').first()).not.toHaveAttribute('placeholder', new RegExp(TAGGED_TITLES.Q1))
     await shot(page, 'card-q1', panel)
 
     // Esc closes the card and leaves the timeline where it is.

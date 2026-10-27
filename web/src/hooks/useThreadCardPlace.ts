@@ -70,12 +70,17 @@ export function useThreadCardPlace(args: UseThreadCardPlaceArgs): ThreadCardPlac
         const top = boxRect.top - layerRect.top + 12;
         anchor = { top, bottom: top, left: 0, right: layerRect.width };
       }
-      const maxHeight = Math.max(200, Math.round(el.clientHeight * 0.6));
+      // The box's top padding is what the panel's glass header covers (the
+      // history pads its top by the header's height): a card as tall as the box
+      // would have its head under the header once scrolled whole into view.
+      const covered = parseFloat(getComputedStyle(el).paddingTop) || 0;
+      const room = el.clientHeight - covered;
+      const maxHeight = Math.max(200, Math.round(Math.min(el.clientHeight * 0.6, room - CARD_GROWN_HEADROOM)));
       const wide = placeCard(anchor, layerRect.width, CARD_GROWN_WIDTH);
       const next: ThreadCardPlace = {
         ...placeCard(anchor, layerRect.width),
         maxHeight,
-        grown: { left: wide.left, width: wide.width, maxHeight: Math.max(maxHeight, el.clientHeight - CARD_GROWN_HEADROOM) },
+        grown: { left: wide.left, width: wide.width, maxHeight: Math.max(maxHeight, room - CARD_GROWN_HEADROOM) },
       };
       setPlace((prev) => (prev && prev.top === next.top && prev.left === next.left && prev.width === next.width
         && prev.maxHeight === next.maxHeight && prev.grown.left === next.grown.left && prev.grown.width === next.grown.width

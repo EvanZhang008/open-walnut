@@ -167,11 +167,12 @@ test.describe('Conversation Mode: a turn that moves on, and Archive', () => {
       const h = max === r ? ((g - b) / d) % 6 : max === g ? (b - r) / d + 2 : (r - g) / d + 4
       return { h: (h * 60 + 360) % 360, s: 100 * (l > 0.5 ? d / (2 - max - min) : d / (max + min)) }
     }
-    // Open: amber, a real color. Archived: grey. The fill carries it (WebKit may
-    // not draw a highlight's underline), and so does the line.
-    expect(hs(openPaint.bg).h, `open fill ${openPaint.bg}`).toBeGreaterThanOrEqual(25)
-    expect(hs(openPaint.bg).h, `open fill ${openPaint.bg}`).toBeLessThanOrEqual(60)
-    expect(hs(openPaint.bg).s, `open fill ${openPaint.bg}`).toBeGreaterThanOrEqual(60)
+    // Open and read: green, a real color (thread-mark-state.ts; waiting is
+    // amber, unread red). Archived: grey. The fill carries it (WebKit may not
+    // draw a highlight's underline), and so does the line.
+    expect(hs(openPaint.bg).h, `open fill ${openPaint.bg}`).toBeGreaterThanOrEqual(100)
+    expect(hs(openPaint.bg).h, `open fill ${openPaint.bg}`).toBeLessThanOrEqual(160)
+    expect(hs(openPaint.bg).s, `open fill ${openPaint.bg}`).toBeGreaterThanOrEqual(40)
     expect(hs(archivedPaint.bg).s, `archived fill ${archivedPaint.bg}`).toBeLessThanOrEqual(10)
     expect(archivedPaint.deco).not.toContain('dotted')
     await centreInHistory(page, panel, TAGGED_PASSAGE.slice(0, 30))

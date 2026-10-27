@@ -5,6 +5,7 @@
  * and the marks every asked passage wears.
  */
 import type { SessionPinnedQuote } from '@/types/session';
+import type { ThreadMarkState } from '@/utils/thread-mark-state';
 import type { ThreadMetaIndex } from '@/utils/thread-meta';
 import { displayTitleOf, metaOf } from '@/utils/thread-meta';
 import type { ThreadNode, ThreadTree } from '@/utils/thread-tree';
@@ -152,6 +153,10 @@ export interface PassageMarkSpec {
   title: string;
   /** Painted in the one neutral style (Conversation Mode shows no hue). */
   neutral: true;
+  /** What the mark says (thread-mark-state.ts), set by the caller. */
+  state?: ThreadMarkState;
+  /** An Ask not sent yet (file marks). */
+  draft?: true;
 }
 
 /** Every question with a passage, whichever reply it is about (Conversation

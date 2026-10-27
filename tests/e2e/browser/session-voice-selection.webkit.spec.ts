@@ -30,14 +30,14 @@ import {
 test.use({ browserName: 'webkit' })
 
 /** Ask here asks in Conversation Mode (2026-10-23): the column switches, the
- *  question's card opens beside the passage with its own box focused, and the
- *  composer names the passage it is about. */
+ *  question's card opens beside the passage with its own box focused; the
+ *  composer stays on the main conversation (2026-10-27). */
 async function expectAskCard(panel: Locator, passage: string): Promise<Locator> {
   await expect(panel.locator('.session-history[data-view-mode="linear"]')).toHaveCount(1)
   const card = panel.locator('.thread-card')
   await expect(card).toBeVisible()
   await expect(card.locator('.thread-card-input')).toBeFocused()
-  await expect(panel.locator('[data-testid="composer-thread-target"][data-pending="true"]')).toContainText(passage)
+  await expect(panel.locator('[data-testid="composer-thread-target"]'), `an Ask on "${passage}" quotes nothing into the composer`).toHaveCount(0)
   return card
 }
 

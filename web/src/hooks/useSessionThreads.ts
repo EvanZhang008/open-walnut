@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject, type RefObject } from 'react';
-import { updateSession } from '@/api/sessions';
+import { fetchSession, updateSession } from '@/api/sessions';
 import type { ImageAttachment } from '@/api/chat';
 import type { SessionPinnedMessage, SessionThreadAnchor, SessionThreadMeta, SessionThreadMetaPatch } from '@/types/session';
 import {
@@ -15,9 +15,19 @@ import {
 } from '@/utils/thread-tree';
 import { displayTitleOf, hiddenKeysOf, statusOf } from '@/utils/thread-meta';
 import { counts as threadCounts, type ThreadCounts } from '@/utils/thread-meta-counts';
-import { composerDraftKey, isPendingKey, unreadKeysOf } from '@/utils/thread-stack-state';
+import { composerDraftKey, isPendingKey, readComposerDraft, unreadKeysOf } from '@/utils/thread-stack-state';
+import { carriedRootDraft, composerKeyOf, pendingPageOf } from '@/utils/composer-quote';
 import { nextQuestionSeq, questionNumbers, withQuestionBanner } from '@/utils/question-tag';
+import { markStatesOf, sameMarkStates, type ThreadMarkState } from '@/utils/thread-mark-state';
 import { log } from '@/utils/log';
+import { useEvent } from '@/hooks/useWebSocket';
+import {
+  QUESTION_WRITE_LATER_MS, readUnsavedQuestions, retryWrite, unsavedMeta, withUnsaved, withoutSaved, writeUnsavedQuestions,
+  type UnsavedQuestion,
+} from '@/utils/question-write-retry';
+
+const EMPTY_KEYS: ReadonlySet<string> = new Set();
+const EMPTY_TIMES: ReadonlyMap<string, number> = new Map();
 
 /** One anchor per user message, so the msgId IS the row identity. */
 export function anchorKeyOf(anchor: SessionThreadAnchor): string {
@@ -42,6 +52,11 @@ export function shouldAdoptServerAnchors(
   if (!wroteLocally) return true;
   const keys = new Set(server.map(anchorKeyOf));
   return confirmed.every((a) => keys.has(anchorKeyOf(a)));
+}
+
+/** The confirmed (stored) list holds this anchor. */
+function confirmedHas(confirmed: SessionThreadAnchor[], a: SessionThreadAnchor): boolean {
+  return confirmed.some((c) => c.msgId === a.msgId);
 }
 
 /** The list with `anchor` recorded (one anchor per user row). */
@@ -72,6 +87,9 @@ export interface ThreadAnchorStage {
   confirm: () => void;
   /** The PATCH failed: the anchor list goes back to the confirmed copy. */
   rollback: () => void;
+  /** The PATCH failed but the question went out: the anchor stays on screen,
+   *  UNSAVED, and every later write carries it until one lands. */
+  keep: () => void;
 }
 
 export interface SessionThreadsStore {
@@ -82,6 +100,19 @@ export interface SessionThreadsStore {
   remove: (msgId: string) => void;
   /** Optimistically add `anchor` now; the caller sends `body` and settles it. */
   stage: (anchor: SessionThreadAnchor) => ThreadAnchorStage;
+  /** Put unsaved anchors (kept from a failed write, read back after a reload)
+   *  on screen without a write; the caller writes them. */
+  restoreUnsaved: (anchors: SessionThreadAnchor[]) => void;
+  /** The newest list (unsaved anchors included), for a write built later. */
+  current: () => SessionThreadAnchor[];
+}
+
+/** `server` plus every unsaved anchor it does not hold yet. */
+export function withUnsavedAnchors(server: SessionThreadAnchor[], unsaved: ReadonlyMap<string, SessionThreadAnchor>): SessionThreadAnchor[] {
+  if (unsaved.size === 0) return server;
+  const have = new Set(server.map(anchorKeyOf));
+  const extra = [...unsaved.values()].filter((a) => !have.has(anchorKeyOf(a)));
+  return extra.length ? [...server, ...extra] : server;
 }
 
 /**
@@ -104,16 +135,24 @@ export function useSessionThreads(
   const confirmed = useRef<SessionThreadAnchor[]>(serverAnchors ?? []);
   const inFlight = useRef(0);
   const wroteLocally = useRef(false);
+  /** Anchors whose write failed after their question went out: never dropped by
+   *  a record that lacks them, only by one that holds them (saved). */
+  const unsaved = useRef<Map<string, SessionThreadAnchor>>(new Map());
 
   const adopt = useCallback((next: SessionThreadAnchor[]) => {
-    listRef.current = next;
-    setAnchors(next);
+    for (const a of next) {
+      if (unsaved.current.has(anchorKeyOf(a)) && confirmedHas(confirmed.current, a)) unsaved.current.delete(anchorKeyOf(a));
+    }
+    const shown = withUnsavedAnchors(next, unsaved.current);
+    listRef.current = shown;
+    setAnchors(shown);
   }, []);
 
   // Session switch: adopt the new session's list outright (never carry anchors across).
   useEffect(() => {
     inFlight.current = 0;
     wroteLocally.current = false;
+    unsaved.current = new Map();
     confirmed.current = serverAnchors ?? [];
     adopt(serverAnchors ?? []);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- session switch only; the effect below handles updates
@@ -148,11 +187,21 @@ export function useSessionThreads(
     };
     return {
       body: { thread_anchors: next },
-      confirm: () => { if (done()) confirmed.current = next; },
+      confirm: () => {
+        if (!done()) return;
+        confirmed.current = next;
+        if (unsaved.current.size) adopt(listRef.current);
+      },
       rollback: () => {
         if (!done()) return;
         log.warn('threads', 'thread anchor save failed, reverting', { sessionId });
         adopt(confirmed.current);
+      },
+      keep: () => {
+        if (!done()) return;
+        const confirmedKeys = new Set(confirmed.current.map(anchorKeyOf));
+        for (const a of next) if (!confirmedKeys.has(anchorKeyOf(a))) unsaved.current.set(anchorKeyOf(a), a);
+        log.warn('threads', 'thread anchor save failed, kept as unsaved', { sessionId, unsaved: unsaved.current.size });
       },
     };
   }, [sessionId, adopt]);
@@ -169,13 +218,23 @@ export function useSessionThreads(
 
   const stage = useCallback((anchor: SessionThreadAnchor) => stageList(withAnchor(listRef.current, anchor)), [stageList]);
 
+  const restoreUnsaved = useCallback((list: SessionThreadAnchor[]) => {
+    const fresh = list.filter((a) => a.msgId && a.parent && !confirmed.current.some((c) => c.msgId === a.msgId));
+    if (fresh.length === 0) return;
+    for (const a of fresh) unsaved.current.set(anchorKeyOf(a), a);
+    adopt(listRef.current);
+  }, [adopt]);
+
+  const current = useCallback(() => listRef.current, []);
+
   const remove = useCallback((msgId: string) => {
     const current = listRef.current;
     if (!current.some((a) => a.msgId === msgId)) return;
+    unsaved.current.delete(msgId);
     persist(current.filter((a) => a.msgId !== msgId));
   }, [persist]);
 
-  return useMemo(() => ({ anchors, add, remove, stage }), [anchors, add, remove, stage]);
+  return useMemo(() => ({ anchors, add, remove, stage, restoreUnsaved, current }), [anchors, add, remove, stage, restoreUnsaved, current]);
 }
 
 /**
@@ -251,7 +310,7 @@ export interface PanelThreads {
   toast: ThreadToastApi;
   /** Filled by <ThreadToastBridge> inside the panel's toast provider. */
   toastRef: MutableRefObject<ThreadToastApi | null>;
-  sendAnchored: (message: string, images: ImageAttachment[] | undefined, interrupt: boolean) => Promise<boolean>;
+  sendAnchored: (message: string, images: ImageAttachment[] | undefined, interrupt: boolean, targetKey?: string) => Promise<boolean>;
   composerPlaceholder?: string;
   draftKey: string;
   /** false on a pending Ask: after a reload the stack opens on the root and nothing reads its key. */
@@ -303,8 +362,13 @@ export function usePanelThreads(args: UsePanelThreadsArgs): PanelThreads {
   }, []);
   const [derived, setDerived] = useState<ThreadDerived>(EMPTY_DERIVED);
   const [pinJump, setPinJump] = useState<{ pinKey: string; seq: number } | null>(null);
+  /** Key to when this tab last sent into that question (its mark waits from then). */
+  const [askedAt, setAskedAt] = useState<ReadonlyMap<string, number>>(() => new Map());
+  const noteAsked = useCallback((key: string) => {
+    setAskedAt((m) => new Map(m).set(key, Date.now()));
+  }, []);
   useEffect(() => {
-    setTreeState(emptyThreadTree()); setHistoryComplete(false); setDerived(EMPTY_DERIVED); setPinJump(null);
+    setTreeState(emptyThreadTree()); setHistoryComplete(false); setDerived(EMPTY_DERIVED); setPinJump(null); setAskedAt(new Map());
   }, [sessionId]);
   const hiddenKeys = useMemo(() => hiddenKeysOf(tree, meta.index), [tree, meta.index]);
 
@@ -316,10 +380,29 @@ export function usePanelThreads(args: UsePanelThreadsArgs): PanelThreads {
     dismiss: () => toastRef.current?.dismiss(),
   }), []);
 
+  /** Conversation Mode: the question the chat's composer writes to. Only an
+   *  explicit Quote in chat sets it; opening a card never does (composer-quote.ts). */
+  const [quotedKey, setQuotedKey] = useState<string | null>(null);
+  const quotedRef = useRef(quotedKey);
+  quotedRef.current = quotedKey;
+  const viewModeRef = useRef(viewMode);
+  viewModeRef.current = viewMode;
+  useEffect(() => { setQuotedKey(null); }, [sessionId, viewMode]);
+  // A quoted Ask just sent: its question key and head row, until the tree holds
+  // it. Without it the composer's key fell back to the main conversation for the
+  // frames in between, and a keystroke there went to the main draft.
+  const [born, setBorn] = useState<{ key: string; head: string } | null>(null);
+  useEffect(() => {
+    if (born && (quotedKey !== born.key || tree.byKey.has(born.key))) setBorn(null);
+  }, [born, quotedKey, tree]);
+  const keepPending = useCallback((pageKey: string) => quotedRef.current === pageKey, []);
+  const answeredAtRef = useRef<ReadonlyMap<string, number>>(new Map());
+  const answeredAtOf = useCallback((key: string) => answeredAtRef.current.get(key), []);
+
   const stack = useThreadStack({
     sessionId, tree, anchors: store.anchors, hiddenKeys, metaIndex: meta.index, panelRef: args.panelRef,
     stackView: viewMode === 'stack', composer: args.composer, toast, focusComposer: args.focusComposer,
-    historyComplete,
+    historyComplete, keepPending, answeredAtOf,
   });
   const actions = useThreadActions({
     sessionId, tree, meta, toast, nav: stack.bridge,
@@ -327,25 +410,117 @@ export function usePanelThreads(args: UsePanelThreadsArgs): PanelThreads {
     answeringKeys: derived.answering,
   });
 
+  answeredAtRef.current = derived.answeredAt;
   const refs = useRef({ tree, stack, meta, derived, store, args });
   refs.current = { tree, stack, meta, derived, store, args };
   const titleOfKey = useCallback((key: string) =>
     displayTitleOf(refs.current.tree.byKey.get(key), refs.current.meta.index).title, []);
 
-  /** Stage the anchor (and meta), send ONE PATCH for both, settle both. */
+  // ── Question writes: retried, and never rolled back (question-write-retry.ts) ──
+  /** Questions whose write has not landed yet, mirrored in localStorage. */
+  const unsavedRef = useRef<UnsavedQuestion[]>([]);
+  const flushing = useRef(false);
+  const laterTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const sessionRef = useRef(sessionId);
+  sessionRef.current = sessionId;
+  const setUnsaved = useCallback((sid: string, list: UnsavedQuestion[]) => {
+    if (sid === sessionRef.current) unsavedRef.current = list;
+    writeUnsavedQuestions(sid, list);
+  }, []);
+  const settleUnsaved = useCallback((sid: string, record: { threadAnchors?: { msgId: string }[] }) => {
+    if (sid !== sessionRef.current) return;
+    const left = withoutSaved(unsavedRef.current, record.threadAnchors);
+    const saved = unsavedRef.current.filter((q) => !left.includes(q));
+    if (saved.length === 0) return;
+    setUnsaved(sid, left);
+    refs.current.meta.clearUnsaved?.(saved.flatMap((q) => q.meta.map((e) => e.headId)));
+    log.info('threads', 'unsaved questions written', { sessionId: sid, headIds: saved.map((q) => q.anchor.msgId), left: left.length });
+  }, [setUnsaved]);
+
+  /** Write every unsaved question again, with the same retries. The anchor
+   *  list is a whole-list write, so it is built from a FRESH read of the record
+   *  (after a reload the panel may not have the record yet) plus the unsaved
+   *  anchors it lacks; their meta rides in the same PATCH. */
+  const flushUnsaved = useCallback((why: string) => {
+    const sid = sessionRef.current;
+    if (flushing.current || unsavedRef.current.length === 0) return;
+    flushing.current = true;
+    log.info('threads', 'writing unsaved questions', { sessionId: sid, why, count: unsavedRef.current.length });
+    void retryWrite(async () => {
+      const fresh = await fetchSession(sid);
+      if (!fresh) throw new Error('session record not found');
+      const stored = fresh.threadAnchors ?? [];
+      const missing = unsavedRef.current.filter((q) => !stored.some((x) => x.msgId === q.anchor.msgId));
+      if (missing.length === 0) return fresh;
+      return updateSession(sid, {
+        thread_anchors: [...stored, ...missing.map((q) => q.anchor)],
+        thread_meta: unsavedMeta(missing),
+      });
+    }, { stop: () => sid !== sessionRef.current }).then(
+      (record) => { refs.current.meta.adoptRecord(record); settleUnsaved(sid, record); },
+      (err) => log.warn('threads', 'unsaved questions still not written', { sessionId: sid, why, error: String(err) }),
+    ).finally(() => { flushing.current = false; });
+  }, [settleUnsaved]);
+
+  // Page load / session switch: questions a failed write left behind come back
+  // on screen and are written again.
+  useEffect(() => {
+    const kept = readUnsavedQuestions(sessionId);
+    unsavedRef.current = kept;
+    if (kept.length === 0) return;
+    refs.current.store.restoreUnsaved(kept.map((q) => q.anchor));
+    refs.current.meta.restoreUnsaved?.(unsavedMeta(kept));
+    flushUnsaved('load');
+  }, [sessionId, flushUnsaved]);
+  useEvent('_ws:reconnected', () => flushUnsaved('reconnect'));
+  // A slow timer while anything is unsaved (the stall that failed it may be long).
+  useEffect(() => () => { if (laterTimer.current) clearTimeout(laterTimer.current); }, [sessionId]);
+  const flushLater = useCallback(() => {
+    if (laterTimer.current) clearTimeout(laterTimer.current);
+    laterTimer.current = setTimeout(() => {
+      laterTimer.current = null;
+      if (unsavedRef.current.length === 0) return;
+      flushUnsaved('later');
+      flushLater();
+    }, QUESTION_WRITE_LATER_MS);
+  }, [flushUnsaved]);
+
+  /**
+   * Stage the anchor (and meta), send ONE PATCH for both, settle both. The PATCH
+   * is an idempotent upsert, so it is retried; if every try fails the question
+   * stays on screen as unsaved (its message goes out regardless, so dropping
+   * the anchor would strand the question and send the next follow-up typed in
+   * its card to the main conversation) and is written again later.
+   */
   const persistAnchor = useCallback((anchor: SessionThreadAnchor, metaEntries: SessionThreadMetaPatch[]) => {
     const r = refs.current;
+    const sid = sessionId;
     const a = r.store.stage(anchor);
     const m = metaEntries.length > 0 ? r.meta.stage(metaEntries) : null;
-    updateSession(sessionId, { ...a.body, ...(m ? m.body : {}) }).then(
-      (record) => { a.confirm(); m?.confirm(record); },
+    // Recorded first, so a reload in the middle of the retries still knows it.
+    setUnsaved(sid, withUnsaved(unsavedRef.current, { anchor, meta: metaEntries, at: Date.now() }));
+    // Each try sends the NEWEST anchor list (a whole-list write: a retry carrying
+    // the list from before a later question would delete that one), and earlier
+    // unsaved questions' meta rides along (their anchors are in the list already).
+    const own = m ? m.body.thread_meta : [];
+    const bodyNow = () => {
+      const carried = unsavedMeta(unsavedRef.current.filter((q) => q.anchor.msgId !== anchor.msgId));
+      const meta = [...carried, ...own];
+      return { thread_anchors: sid === sessionRef.current ? refs.current.store.current() : a.body.thread_anchors, ...(meta.length ? { thread_meta: meta } : {}) };
+    };
+    void retryWrite(() => updateSession(sid, bodyNow()), {
+      stop: () => sid !== sessionRef.current,
+      onRetry: (attempt, err) => log.warn('threads', 'question write failed, retrying', { sessionId: sid, headId: anchor.msgId, attempt, error: String(err) }),
+    }).then(
+      (record) => { a.confirm(); m?.confirm(record); settleUnsaved(sid, record); },
       (err) => {
-        log.warn('threads', 'question write failed, rolling back', { sessionId, headId: anchor.msgId, error: String(err) });
-        a.rollback();
-        m?.rollback();
+        log.warn('threads', 'question write failed, kept as unsaved', { sessionId: sid, headId: anchor.msgId, error: String(err) });
+        a.keep();
+        m?.keep();
+        flushLater();
       },
     );
-  }, [sessionId]);
+  }, [sessionId, setUnsaved, settleUnsaved, flushLater]);
 
   /**
    * One send path for the composer (spec 5.4, 7.2).
@@ -360,15 +535,18 @@ export function usePanelThreads(args: UsePanelThreadsArgs): PanelThreads {
    * Without `crypto.randomUUID` the message still goes, without an anchor.
    */
   const sendAnchored = useCallback(async (
-    message: string, images: ImageAttachment[] | undefined, interrupt: boolean,
+    message: string, images: ImageAttachment[] | undefined, interrupt: boolean, targetKey?: string,
   ): Promise<boolean> => {
     const r = refs.current;
     const dispatch = interrupt ? r.args.interruptSend : r.args.send;
     const s = r.stack.api;
-    // Both views: in Conversation Mode the path is the composer's target.
+    // Tree Mode: the page on screen. Conversation Mode: the card's question when
+    // the card sends (`targetKey`), else the question quoted into the chat.
     const live = r.stack.active;
-    const key = live ? s.currentKey : ROOT_THREAD_KEY;
-    const pending = live && s.pending?.pageKey === key ? s.pending : undefined;
+    const want = targetKey ?? (viewModeRef.current === 'linear'
+      ? composerKeyOf(quotedRef.current, r.tree, s.pending, s.draftPages) : s.currentKey);
+    const key = live ? want : ROOT_THREAD_KEY;
+    const pending = live ? pendingPageOf(key, s.pending, s.draftPages) : undefined;
     const latestKey = r.tree.latestKey;
     if (key === ROOT_THREAD_KEY) {
       const text = keepCommandFirst(message, (t) => composeOrientedText(t, { latestKey, currentKey: ROOT_THREAD_KEY, titleOfKey }));
@@ -413,10 +591,23 @@ export function usePanelThreads(args: UsePanelThreadsArgs): PanelThreads {
       if (node && statusOf(node, r.meta.index) === 'older') metaEntries.push({ headId: node.headId, status: 'open' });
     }
     persistAnchor(anchor, metaEntries);
-    if (pending) r.stack.promotePending(threadKeyOf(anchor));
+    if (pending) {
+      r.stack.promotePending(threadKeyOf(anchor), pending.pageKey);
+      // The chat's composer stays on the question it asked.
+      if (quotedRef.current === pending.pageKey) {
+        const asked = threadKeyOf(anchor);
+        if (!r.tree.byKey.has(asked)) setBorn({ key: asked, head: userUuid });
+        setQuotedKey(asked);
+      }
+    }
+    // Asking is looking at it: its answer turns the mark red only if it lands
+    // while the question is off screen.
+    const head = pending ? userUuid : node?.headId;
+    if (head) r.stack.markHeadViewed(head);
+    noteAsked(pending ? threadKeyOf(anchor) : key);
     log.info('threads', pending ? 'question sent' : 'follow-up sent', { sessionId, headId: pending ? userUuid : node?.headId, rowId: userUuid });
     return dispatch(sessionId, text, images, { userUuid });
-  }, [sessionId, titleOfKey, persistAnchor]);
+  }, [sessionId, titleOfKey, persistAnchor, noteAsked]);
 
   /** Retry (spec 5.10): the unanswered question again, same anchor, new uuid. */
   const retry = useCallback((key: string) => {
@@ -429,8 +620,10 @@ export function usePanelThreads(args: UsePanelThreadsArgs): PanelThreads {
       msgId: userUuid, parent: node.parent, ...(node.quote ? { quote: node.quote } : {}), source: 'manual', at: new Date().toISOString(),
     }, []);
     log.info('threads', 'retry', { sessionId, headId: node.headId, rowId: userUuid });
+    r.stack.markHeadViewed(node.headId);
+    noteAsked(key);
     void r.args.send(sessionId, text, undefined, { userUuid });
-  }, [sessionId, persistAnchor]);
+  }, [sessionId, persistAnchor, noteAsked]);
 
   const requestPinJump = useCallback((pinKey: string, threadKey: string) => {
     const s = refs.current.stack.api;
@@ -445,8 +638,54 @@ export function usePanelThreads(args: UsePanelThreadsArgs): PanelThreads {
     setHeadJump((prev) => ({ threadKey, seq: (prev?.seq ?? 0) + 1 }));
   }, []);
 
-  /** The comment card's composer: the same send the panel's composer makes. */
-  const sendToTarget = useCallback((text: string) => sendAnchored(text, undefined, false), [sendAnchored]);
+  /** The comment card's box: into the card's question (the stack's key). */
+  const sendToTarget = useCallback(
+    (text: string) => sendAnchored(text, undefined, false, refs.current.stack.api.currentKey), [sendAnchored]);
+
+  const markViewedNow = useCallback((key: string) => {
+    const r = refs.current;
+    r.stack.markViewed(key, r.derived.answeredAt.get(key));
+  }, []);
+
+  /** Quote a question into the chat: its composer writes there until × (or a Quote of a passage). */
+  const quoteInChat = useCallback((key: string, via: string) => {
+    setQuotedKey(key === ROOT_THREAD_KEY ? null : key);
+    log.info('threads', 'question quoted into the chat', { sessionId, key, via });
+    refs.current.args.focusComposer();
+  }, [sessionId]);
+  const clearQuote = useCallback((via: string, opts?: { keepDraft?: boolean }) => {
+    const q = quotedRef.current;
+    if (!q) return;
+    const r = refs.current;
+    // ×: the words typed go with the reader. A passage quoted into the main
+    // conversation instead leaves the question's words with the question.
+    if (!opts?.keepDraft) {
+      const typed = r.args.composer.text();
+      const rootKey = composerDraftKey(sessionId, ROOT_THREAD_KEY, r.tree);
+      try {
+        const carried = carriedRootDraft(readComposerDraft(rootKey), typed);
+        if (carried.trim()) localStorage.setItem(rootKey, carried);
+      } catch { /* private browsing */ }
+      // The question's own copy goes once the composer has moved off its key:
+      // the composer saves its last keystrokes under the old key as it moves
+      // (ChatInput's key change), which would bring the words back there.
+      leftKey.current = composerDraftKey(sessionId, q, r.tree);
+    }
+    setQuotedKey(null);
+    quotedRef.current = null;
+    // A quoted Ask not sent yet goes with it, wherever it is (on the path, or a
+    // draft since another card opened), as an Ask closed with nothing written.
+    if (isPendingKey(q) && !opts?.keepDraft) r.stack.api.dropDraft(q, 'quote-clear');
+    log.info('threads', 'quoted question let go', { sessionId, key: q, via });
+  }, [sessionId]);
+  const leftKey = useRef<string | null>(null);
+  // Runs after the composer's own key-change effect (a child's effects run first).
+  useEffect(() => {
+    const k = leftKey.current;
+    if (!k || quotedKey !== null) return;
+    leftKey.current = null;
+    try { localStorage.removeItem(k); } catch { /* private browsing */ }
+  }, [quotedKey]);
 
   // The comment card as a shared surface (SessionThreadsContext): the timeline
   // owns and draws it; the Files tab asks for it and lends it a host box.
@@ -465,10 +704,40 @@ export function usePanelThreads(args: UsePanelThreadsArgs): PanelThreads {
   }, []);
   useEffect(() => { publishOpenCardKey(null); setCardRequest(null); setFileCardHostState(null); }, [sessionId]);
 
+  // The question on screen: Tree Mode's page; in Conversation Mode the open
+  // card (its target stays set with the card closed, and is then not looked at).
+  const viewingKey = viewMode === 'linear' ? openCardKey ?? ROOT_THREAD_KEY : stack.api.currentKey;
   const unreadKeys = useMemo(
-    () => unreadKeysOf(tree, derived.answeredAt, stack.lastViewedAt, stack.api.currentKey),
-    [tree, derived.answeredAt, stack.lastViewedAt, stack.api.currentKey],
+    () => unreadKeysOf(tree, derived.answeredAt, stack.lastViewedAt, viewingKey),
+    [tree, derived.answeredAt, stack.lastViewedAt, viewingKey],
   );
+  // Viewed when it comes on screen, when it leaves, and when an answer lands
+  // while it is on screen (so a reload after that finds it read).
+  const viewingAnsweredAt = derived.answeredAt.get(viewingKey);
+  const lastViewing = useRef(ROOT_THREAD_KEY);
+  useEffect(() => { lastViewing.current = ROOT_THREAD_KEY; }, [sessionId]);
+  useEffect(() => {
+    const r = refs.current;
+    const prev = lastViewing.current;
+    lastViewing.current = viewingKey;
+    if (prev !== viewingKey) r.stack.markViewed(prev, r.derived.answeredAt.get(prev));
+    r.stack.markViewed(viewingKey, viewingAnsweredAt);
+  }, [viewingKey, viewingAnsweredAt]);
+
+  // The paint of every passage mark (thread-mark-state.ts), one Map identity
+  // while nothing changes (the marks re-derive on a new one).
+  const markStatesRef = useRef<ReadonlyMap<string, ThreadMarkState>>(new Map());
+  const markStates = useMemo(() => {
+    const next = markStatesOf({
+      tree, live: derived.live, spoke: derived.spoke ?? EMPTY_KEYS, answeredAt: derived.answeredAt,
+      datedAt: derived.datedAt ?? EMPTY_TIMES, sentKeys: derived.sentKeys ?? EMPTY_KEYS,
+      queuedKeys: derived.queuedKeys ?? EMPTY_KEYS, unsentKeys: derived.unsentKeys ?? EMPTY_KEYS,
+      lastViewedAt: stack.lastViewedAt, viewingKey, askedAt,
+      isResolved: (node) => statusOf(node, meta.index) === 'resolved',
+    });
+    if (!sameMarkStates(markStatesRef.current, next)) markStatesRef.current = next;
+    return markStatesRef.current;
+  }, [tree, derived, stack.lastViewedAt, viewingKey, askedAt, meta.index]);
 
   const api = useMemo<SessionThreadsApi>(() => ({
     anchors: store.anchors,
@@ -486,6 +755,7 @@ export function usePanelThreads(args: UsePanelThreadsArgs): PanelThreads {
     derived,
     publishDerived: setDerived,
     unreadKeys,
+    markStates,
     openDrawer: stack.drawer.open,
     revealInTree: stack.drawer.reveal,
     retry,
@@ -494,6 +764,10 @@ export function usePanelThreads(args: UsePanelThreadsArgs): PanelThreads {
     headJump,
     requestHeadJump,
     sendToTarget,
+    quotedKey,
+    quoteInChat,
+    clearQuote,
+    markViewed: markViewedNow,
     openCardKey,
     publishOpenCardKey,
     cardRequest,
@@ -502,8 +776,8 @@ export function usePanelThreads(args: UsePanelThreadsArgs): PanelThreads {
     setFileCardHost,
     canAsk: args.canAsk,
   }), [store.anchors, store.add, store.remove, tree, viewMode, setViewMode, stack.enabled, stack.api, meta.index,
-    hiddenKeys, actions, derived, unreadKeys, stack.drawer.open, stack.drawer.reveal, retry, pinJump, requestPinJump,
-    headJump, requestHeadJump, sendToTarget, openCardKey, cardRequest, requestCard, fileCardHost, setFileCardHost, args.canAsk]);
+    hiddenKeys, actions, derived, unreadKeys, markStates, stack.drawer.open, stack.drawer.reveal, retry, pinJump, requestPinJump,
+    headJump, requestHeadJump, sendToTarget, quotedKey, quoteInChat, clearQuote, markViewedNow, openCardKey, cardRequest, requestCard, fileCardHost, setFileCardHost, args.canAsk]);
 
   // The drawer and its toggle need a real question; a draft-only session keeps
   // its draft row on the page it was asked from (SessionChatHistory).
@@ -514,15 +788,21 @@ export function usePanelThreads(args: UsePanelThreadsArgs): PanelThreads {
     const heads = new Set(tree.threads.map((n) => n.headId));
     return meta.list.filter((m) => m.hidden && heads.has(m.headId)).length;
   }, [tree, meta.list]);
-  const pageKey = stack.active ? stack.api.currentKey : ROOT_THREAD_KEY;
+  // The composer's key: Tree Mode's page, Conversation Mode's quoted question.
+  const bornNow = viewMode === 'linear' && !!born && quotedKey === born.key && !tree.byKey.has(born.key) ? born : null;
+  const pageKey = !stack.active ? ROOT_THREAD_KEY
+    : bornNow ? bornNow.key
+      : viewMode === 'linear' ? composerKeyOf(quotedKey, tree, stack.api.pending, stack.api.draftPages)
+        : stack.api.currentKey;
+  const composerPending = pendingPageOf(pageKey, stack.api.pending, stack.api.draftPages);
   const composerPlaceholder = !stack.active || pageKey === ROOT_THREAD_KEY ? undefined
-    : stack.api.pending?.pageKey === pageKey ? ASK_PLACEHOLDER
+    : composerPending ? ASK_PLACEHOLDER
       : followUpPlaceholder(displayTitleOf(tree.byKey.get(pageKey), meta.index).title);
   // Tree Mode's page already says which question it is; Conversation Mode shows
   // one timeline, so the composer names where its send goes, and lets go of it.
   // An Ask not sent yet is named by its passage (the fallback title is cut short).
-  const pendingTitle = stack.api.pending?.pageKey === pageKey
-    ? stack.api.pending.quote?.exact?.replace(/\s+/g, ' ').trim() || stack.api.pending.title : undefined;
+  const pendingTitle = composerPending
+    ? composerPending.quote?.exact?.replace(/\s+/g, ' ').trim() || composerPending.title : undefined;
   const targetNumber = pageKey === ROOT_THREAD_KEY || pendingTitle !== undefined ? undefined
     : questionNumbers(tree, meta.index).get(pageKey);
   const composerTarget = useMemo<ComposerTarget | undefined>(() => {
@@ -540,7 +820,8 @@ export function usePanelThreads(args: UsePanelThreadsArgs): PanelThreads {
   return {
     api, stack, meta, counts: threadCount, hasQuestions, hiddenCount, toast, toastRef, sendAnchored,
     ...(composerPlaceholder ? { composerPlaceholder } : {}),
-    draftKey: composerDraftKey(sessionId, pageKey, tree),
+    // A question is keyed by its head row: the one just sent already has it.
+    draftKey: bornNow ? `${composerDraftKey(sessionId, ROOT_THREAD_KEY, tree)}:${bornNow.head}` : composerDraftKey(sessionId, pageKey, tree),
     draftKeptOnReload: !isPendingKey(pageKey),
     ...(composerTarget ? { composerTarget } : {}),
   };

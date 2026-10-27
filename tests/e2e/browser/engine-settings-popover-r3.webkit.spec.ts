@@ -194,9 +194,21 @@ test('webkit: one Tab stop for the switch, About last with Close; the dark surfa
   dialog = await openPopover(page, panel)
   await waitForRows(dialog)
   const colours = await dialog.evaluate((el) => {
-    const lum = (rgb: string) => { const m = rgb.match(/\d+(\.\d+)?/g)!.map(Number); return (m[0] + m[1] + m[2]) / 3 }
+    // The surface is frosted glass (overlay-glass.css): a translucent colour,
+    // which WebKit reports as `color(srgb r g b / a)` (0..1). Judge what shows:
+    // that colour laid over the page under it, 0..255.
+    const rgba = (c: string) => {
+      const m = c.match(/-?\d*\.?\d+/g)!.map(Number)
+      const unit = c.startsWith('color(')
+      const [r, g, b] = unit ? m.slice(0, 3).map((v) => v * 255) : m.slice(0, 3)
+      return { r, g, b, a: m.length > 3 ? m[3] : 1 }
+    }
+    const pageBg = rgba(getComputedStyle(document.body).backgroundColor)
+    const popBg = rgba(getComputedStyle(el).backgroundColor)
+    const over = (c: 'r' | 'g' | 'b') => popBg[c] * popBg.a + pageBg[c] * (1 - popBg.a)
+    const lum = (r: number, g: number, b: number) => (r + g + b) / 3
     const pop = getComputedStyle(el)
-    return { popover: pop.backgroundColor, page: getComputedStyle(document.body).backgroundColor, shadow: pop.boxShadow, lighter: lum(pop.backgroundColor) - lum(getComputedStyle(document.body).backgroundColor) }
+    return { popover: pop.backgroundColor, page: getComputedStyle(document.body).backgroundColor, shadow: pop.boxShadow, lighter: lum(over('r'), over('g'), over('b')) - lum(pageBg.r, pageBg.g, pageBg.b) }
   })
   test.info().annotations.push({ type: 'dark-surface', description: JSON.stringify(colours) })
   expect(colours.lighter).toBeGreaterThanOrEqual(20)

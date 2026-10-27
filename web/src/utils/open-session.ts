@@ -42,8 +42,8 @@ export function openSessionOnHome(
   // Note for anyone tempted to defer this until after `navigate('/')`: it does not
   // help. React Router's `useLocation()` still reports the OLD pathname for a beat
   // after the URL changes, so a panel opened from another route mounts thinking it
-  // is on that route and then sees a pathname change. SessionPanel absorbs that
-  // (see DEEP_LINK_SETTLE_MS there) rather than this function guessing at timing.
+  // is on that route; its full screen survives that (useFullscreen keepAcrossRoutes)
+  // rather than this function guessing at timing.
   if (opts?.inboxTab || opts?.inboxLetterId) armSessionInboxLink(sessionId, opts.inboxLetterId);
   navigate('/');
 }

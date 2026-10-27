@@ -164,13 +164,15 @@ export function collectTextMatches(
 }
 
 /** Register ranges under a highlight name in the given window's registry. */
-export function applyHighlights(win: Window, name: string, ranges: Range[]): () => void {
+export function applyHighlights(win: Window, name: string, ranges: Range[], priority = 0): () => void {
   const cssAny = (win as unknown as { CSS?: { highlights?: Map<string, unknown> } }).CSS;
   const HighlightCtor = (win as unknown as { Highlight?: new (...r: Range[]) => unknown }).Highlight;
   const registry = cssAny?.highlights;
   if (!registry || !HighlightCtor) return () => {};
   if (!ranges.length) { registry.delete(name); return () => {}; }
   const highlight = new HighlightCtor(...ranges);
+  // Find paints above question marks (2 and up), as in page-find.ts.
+  if (priority) (highlight as { priority: number }).priority = priority;
   registry.set(name, highlight);
   return () => {
     // 只删除本次绘制，不能清掉其他面板随后接管的同名高亮。
@@ -299,10 +301,11 @@ export class DomSearchController {
   }
 
   private paint(): void {
-    applyHighlights(this.win, HL_SEARCH, this.ranges);
+    applyHighlights(this.win, HL_SEARCH, this.ranges, 10);
     applyHighlights(
       this.win, HL_SEARCH_ACTIVE,
       this.active >= 0 ? [this.ranges[this.active]!] : [],
+      11,
     );
   }
 

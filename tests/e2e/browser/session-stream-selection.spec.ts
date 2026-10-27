@@ -33,14 +33,14 @@ import fs from 'node:fs/promises'
 import { dragPhrase, selectionAnchorNodeType } from './selection-helpers'
 
 /** Ask here asks in Conversation Mode (2026-10-23): the column switches, the
- *  question's card opens beside the passage with its own box focused, and the
- *  composer names the passage it is about. */
+ *  question's card opens beside the passage with its own box focused; the
+ *  composer stays on the main conversation (2026-10-27). */
 async function expectAskCard(panel: Locator, passage: string): Promise<void> {
   await expect(panel.locator('.session-history[data-view-mode="linear"]')).toHaveCount(1)
   const card = panel.locator('.thread-card')
   await expect(card).toBeVisible()
   await expect(card.locator('.thread-card-input')).toBeFocused()
-  await expect(panel.locator('[data-testid="composer-thread-target"][data-pending="true"]')).toContainText(passage)
+  await expect(panel.locator('[data-testid="composer-thread-target"]'), `an Ask on "${passage}" quotes nothing into the composer`).toHaveCount(0)
 }
 
 /** Own fixture records: this spec SENDS turns, which append to a session's stream
@@ -178,7 +178,7 @@ test.describe('Selecting inside a reply that is still streaming', () => {
     await shot(page, '03-pill-survived-turn-end')
 
     // Ask still works after all that: it asks in Conversation Mode, the card
-    // beside the passage and the composer naming it.
+    // beside the passage, the composer left on the main conversation.
     //
     // Pressed the way a HAND presses it: mouse down, a beat, mouse up. Playwright's
     // .click() sends down+up with no frame in between, which hides the real defect
@@ -276,7 +276,7 @@ test.describe('Selecting inside a reply that is still streaming', () => {
     await page.mouse.up()
 
     // Ask asks in Conversation Mode: the card opens beside the passage, the
-    // composer naming it.
+    // composer left on the main conversation.
     await expectAskCard(panel, 'never blocks')
     await shot(page, '06-ask-pressed-mid-answer')
   })

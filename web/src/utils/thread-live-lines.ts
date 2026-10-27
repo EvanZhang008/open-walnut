@@ -11,6 +11,9 @@
  * The bars live in a layer that either scrolls with the text (the timeline's
  * content, the HTML preview's own document) or is re-placed on scroll (the
  * Files tab's overlay), always measured against the layer's own box.
+ *
+ * A question sent and not answered yet (Conversation Mode, files) gets the same
+ * bars as a slow pulse instead (`WAIT_LINE_CLASS`), for the same reason.
  */
 
 export interface BoxLike {
@@ -34,6 +37,9 @@ const LIVE_BAR_RISE = 1;
 /** One sweep, the same pace as the working indicator. */
 export const LIVE_SCAN_MS = 1600;
 export const LIVE_LINE_CLASS = 'thread-live-line';
+/** The waiting pulse: its own class and keyframes, one breath every WAIT_PULSE_MS. */
+export const WAIT_LINE_CLASS = 'thread-wait-line';
+export const WAIT_PULSE_MS = 2000;
 /** Fragments of one line closer than this are one bar (word runs split across
  *  inline elements); farther apart (two table cells) each gets its own. */
 const JOIN_GAP = 6;
@@ -135,12 +141,16 @@ export function overflowClipOf(range: Range, within: Element | null): BoxLike | 
   return clip;
 }
 
+/** A bar to draw: the scan (default) or the waiting pulse. */
+export type PaintedBar = LiveBar & { hue?: number; kind?: 'scan' | 'wait' };
+
 /**
  * Draw `bars` into `layer` (which holds nothing else), reusing the bar elements
  * already there so a bar that only moved keeps its place in the sweep. A new bar
- * starts in phase with the document's clock, so every line sweeps together.
+ * (or one that changes kind) starts in phase with the document's clock, so every
+ * line sweeps or pulses together.
  */
-export function paintLiveBars(layer: HTMLElement, bars: ReadonlyArray<LiveBar & { hue?: number }>): void {
+export function paintLiveBars(layer: HTMLElement, bars: ReadonlyArray<PaintedBar>): void {
   const doc = layer.ownerDocument;
   const kids = Array.from(layer.children) as HTMLElement[];
   for (let i = 0; i < bars.length; i++) {
@@ -148,11 +158,14 @@ export function paintLiveBars(layer: HTMLElement, bars: ReadonlyArray<LiveBar & 
     let el = kids[i];
     if (!el) {
       el = doc.createElement('div');
-      el.className = LIVE_LINE_CLASS;
       el.setAttribute('aria-hidden', 'true');
-      const now = doc.defaultView?.performance.now() ?? 0;
-      el.style.animationDelay = `${-Math.round(now % LIVE_SCAN_MS)}ms`;
       layer.appendChild(el);
+    }
+    const cls = b.kind === 'wait' ? WAIT_LINE_CLASS : LIVE_LINE_CLASS;
+    if (el.className !== cls) {
+      el.className = cls;
+      const now = doc.defaultView?.performance.now() ?? 0;
+      el.style.animationDelay = `${-Math.round(now % (b.kind === 'wait' ? WAIT_PULSE_MS : LIVE_SCAN_MS))}ms`;
     }
     setPx(el, 'top', b.top);
     setPx(el, 'left', b.left);

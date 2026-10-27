@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef, useMemo, Component, type ReactNode, type ErrorInfo, type MouseEvent as ReactMouseEvent, memo } from 'react';
 import { PauseGlyphIcon, PlayGlyphIcon, WarningTriangleIcon } from '@/components/common/PhoneIcons';
-import { useLocation, useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import { copyTextDeferred } from '@/utils/clipboard';
 import { SessionChatHistory } from './SessionChatHistory';
 import { SessionSupervisionBar, useSessionSupervision } from './SessionSupervisionBar';
@@ -42,7 +42,7 @@ import { PeekTabBar } from '@/components/board/PeekTabBar';
 import { usePeekTabs } from '@/components/board/usePeekTabs';
 import { useSessionLetters } from '@/hooks/useSessionLetters';
 import {
-  consumeSessionInboxLink, deepLinkFullscreenReassert, SESSION_INBOX_LINK_EVENT,
+  consumeSessionInboxLink, SESSION_INBOX_LINK_EVENT,
 } from '@/components/inbox/session-inbox-link';
 import { buildPassagePrefill, buildSelectionPrefill, displayPathForPrefill } from './diffPrefill';
 import type { SessionSplitView } from './sessionSplitView';
@@ -402,7 +402,8 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
   // mounts only once the record has loaded, and `/model` can come before that.
   const modelPickerServed = useRef(0);
   // CSS-promotion fullscreen (same instance, no remount)
-  const { isFullscreen, enterFullscreen, exitFullscreen, fullscreenClass, FullscreenBackdrop } = useFullscreen();
+  // Full screen of the tab: it stays across a trip to another page (useFullscreen).
+  const { isFullscreen, enterFullscreen, exitFullscreen, fullscreenClass, FullscreenBackdrop } = useFullscreen({ keepAcrossRoutes: true });
   // A fullscreen panel is an overlay over its column: closing the column behind it would
   // show the person nothing, so the host hears about completions only from the normal view.
   const completedInColumn = useMemo(
@@ -412,20 +413,6 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
     [onTaskCompleted, isFullscreen, sessionId],
   );
 
-  // The route, and when it last CHANGED (0 = not since mount). Both live in refs
-  // read by the fullscreen guard below, so that effect's deps stay on the
-  // fullscreen state (useFullscreen already subscribes this component to the
-  // router, so useLocation costs no extra render here). The change is detected
-  // against the ref rather than trusting the effect's own mount run: a fresh mount
-  // is not a navigation, and StrictMode's double-invoke must stay a no-op.
-  const { pathname } = useLocation();
-  const routePath = useRef(pathname);
-  const routeChangedAt = useRef(0);
-  useEffect(() => {
-    if (routePath.current === pathname) return;
-    routePath.current = pathname;
-    routeChangedAt.current = Date.now();
-  }, [pathname]);
 
   // G4 liquid glass: the header overlays the chat column (position: absolute)
   // so content scrolls UNDER it; the scroll area pads its top by the measured
@@ -856,12 +843,12 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
   const threadsApi = threads.api;
   const threadTree = threadsApi.tree;
   const openComposerTarget = useCallback((key: string) => threadsApi.requestCard(key, 'composer-chip'), [threadsApi]);
-  const replyInMain = threads.stack.api.replyInMain;
+  // × lets go of the quoted question only: an open card stays (opening one never set it).
+  const clearQuote = threadsApi.clearQuote;
   const clearComposerTarget = useCallback(() => {
-    threadsApi.requestCard(null, 'composer-chip');
-    replyInMain('composer-chip');
+    clearQuote('composer-chip');
     focusComposerKeep();
-  }, [threadsApi, replyInMain, focusComposerKeep]);
+  }, [clearQuote, focusComposerKeep]);
 
   /**
    * Dictated text is about to take focus in the composer, which collapses the page's
@@ -1005,7 +992,9 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
         // session itself: write it into the session's own draft and go back to
         // it (ChatInput reloads the draft on the key change).
         try { leadStoredDraft(rootKey, text); } catch { /* storage unavailable */ }
-        threadsForInsert.current.stack.api.popTo(ROOT_THREAD_KEY, 'insert');
+        const t = threadsForInsert.current;
+        if (t.api.viewMode === 'linear') t.api.clearQuote('insert', { keepDraft: true });
+        else t.stack.api.popTo(ROOT_THREAD_KEY, 'insert');
         setComposerFocusNonce((n) => n + 1);
       } else if (detail.mode === 'lead' && draftLeads) {
         // A lead the draft already starts with (the same row clicked twice) only refocuses.
@@ -1029,8 +1018,12 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
   const quoteInChat = useCallback((passage: string) => {
     const t = threadsForInsert.current;
     if (t.draftKey !== sessionDraftKey(sessionId)) {
-      t.api.requestCard(null, 'quote-in-chat');
-      t.stack.api.popTo(ROOT_THREAD_KEY, 'quote-in-chat');
+      // Conversation Mode: let go of the quoted question; Tree Mode: back to Main.
+      if (t.api.viewMode === 'linear') t.api.clearQuote('quote-in-chat', { keepDraft: true });
+      else {
+        t.api.requestCard(null, 'quote-in-chat');
+        t.stack.api.popTo(ROOT_THREAD_KEY, 'quote-in-chat');
+      }
     }
     setPrefillText(buildPassagePrefill(passage));
     setPrefillMode('keep-draft');
@@ -1416,40 +1409,16 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
   // orders them so the batch never commits with fullscreen off and the tab open,
   // which is the only way this guard would eat a view a link just asked for.
   //
-  // …UNLESS a deep link is still SETTLING. A link followed from another route
-  // (`/sessions?id=…&tab=inbox`, or a notification clicked on /tasks) opens the
-  // column before React Router's `useLocation()` catches up with the URL, so the
-  // panel mounts believing it is on the old route and then sees a pathname change —
-  // and a pathname change is useFullscreen's "you navigated away" exit. That
-  // dropped fullscreen a few ms after the tab opened, and this guard read it as
-  // "the user pressed Escape" and closed the very view the link asked for.
-  //
-  // Re-asserting fullscreen is a LOADED move (useFullscreen's backdrop is
-  // portalled to document.body, so putting it back after a REAL navigation strands
-  // a blurred click-blocking sheet over the new page — the 2026-08-09 incident), so
-  // the decision is a pure rule with four conditions and lives in
-  // `deepLinkFullscreenReassert`, where it is unit-pinned.
-  const settledClaim = useRef('');
+  // A link followed from another page no longer needs a re-assert here: this
+  // panel's full screen survives a route change (useFullscreen keepAcrossRoutes),
+  // so the router catching up with the URL is not an exit any more.
   useEffect(() => {
     // A phone never promotes a view to fullscreen: there the view is a layer,
     // and its Back is what closes it.
     if (isFullscreen || !splitOpen || isPhoneLayout()) return;
-    const key = deepLinkFullscreenReassert({
-      claim: claimedInboxLink.current,
-      sessionId,
-      settledKey: settledClaim.current,
-      routeChangedAt: routeChangedAt.current,
-      path: routePath.current,
-      now: Date.now(),
-    });
-    if (key) {
-      settledClaim.current = key;
-      enterFullscreen();
-      return;
-    }
     setActiveView(null);
     setFileViewTarget(null);
-  }, [isFullscreen, splitOpen, sessionId, enterFullscreen]);
+  }, [isFullscreen, splitOpen]);
 
   // planCompleted=true means the plan is definitively done — show Execute even if session is still running
   // (SSH FIFO sessions stay alive after plan completion; execution creates a new session anyway).

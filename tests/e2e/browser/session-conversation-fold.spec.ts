@@ -110,12 +110,13 @@ test.describe('Conversation Mode folds questions in the main chat', () => {
       await expect(row(panel, IDS.Q1a.u)).toBeAttached()
     })
 
-    test('the target folds to its line too; a follow-up as the target keeps its question open', async ({ page }) => {
+    test('an open question folds to its line too; a follow-up open keeps its question open', async ({ page }) => {
       const panel = await open(page, MAP_SESSION, MAP_TASK, MAP_READY)
       const card = panel.locator('.thread-card')
       await panel.locator('.thread-map .thread-map-row', { hasText: MAP_TITLES.Q4 }).first().click()
-      await expect(composerTarget(panel)).toContainText(MAP_TITLES.Q4)
       await expect(card).toBeVisible()
+      // Opening it quotes nothing into the composer (2026-10-27).
+      await expect(composerTarget(panel)).toHaveCount(0)
       // The target and its open card: the line stands in for the turns, the card
       // holds them.
       await expect(foldLine(panel, MAP_TITLES.Q4)).toHaveCount(1)
@@ -124,15 +125,13 @@ test.describe('Conversation Mode folds questions in the main chat', () => {
       await expect(row(panel, IDS.Q1.u)).toHaveCount(0)
       await card.locator('.thread-card-input').press('Escape')
       await expect(card).toHaveCount(0)
-      // The composer chip's x: back to the main conversation, still one line.
-      await composerTarget(panel).locator('.pill-close').click()
-      await expect(composerTarget(panel)).toHaveCount(0)
+      // Closed: still one line.
       await expect(row(panel, IDS.Q4.u)).toHaveCount(0)
       await expect(foldLine(panel, MAP_TITLES.Q4)).toHaveCount(1)
       // A follow-up as the target: its passage is in its question's answer, so
       // that question stays open (and the follow-up shows within it).
       await panel.locator('.thread-map .thread-map-row', { hasText: MAP_TITLES.Q4a }).first().click()
-      await expect(composerTarget(panel)).toContainText(MAP_TITLES.Q4a)
+      await expect(card.locator('.thread-card-title')).toHaveText(MAP_TITLES.Q4a)
       await expect(row(panel, IDS.Q4.u)).toBeAttached()
       await expect(foldLine(panel, MAP_TITLES.Q4)).toHaveCount(0)
       await expect(row(panel, IDS.Q1.u)).toHaveCount(0)
@@ -171,12 +170,12 @@ test.describe('Conversation Mode folds questions in the main chat', () => {
       const card = panel.locator('.thread-card')
       await expect(card).toBeVisible()
       const box = panel.locator('.session-panel-input .chat-input-textarea')
-      // Into the composer: the Ask stays the target ("Asking about").
-      await box.click()
-      await expect(composerTarget(panel)).toHaveAttribute('data-pending', 'true')
-      await box.fill('Why in place?')
-      await box.press('Enter')
-      await expect(box).toHaveValue('')
+      // Asked in the card's own box; the composer stays the main conversation's.
+      await card.locator('.thread-card-input').fill('Why in place?')
+      await card.locator('.thread-card-input').press('Enter')
+      await expect(composerTarget(panel)).toHaveCount(0)
+      await card.locator('.thread-card-input').press('Escape')
+      await expect(card).toHaveCount(0)
       const asked = () => history(panel).locator('.session-msg--threaded', { hasText: 'Why in place?' })
       const fold = history(panel).locator('[data-thread-fold]')
       // The question is the target while it is answered, and still it folds to
@@ -192,8 +191,7 @@ test.describe('Conversation Mode folds questions in the main chat', () => {
       await expect(fold).toHaveCount(1)
       await card.locator('.thread-card-input').press('Escape')
       await expect(card).toHaveCount(0)
-      // Back to the main conversation: still one line.
-      await composerTarget(panel).locator('.pill-close').click()
+      // The main conversation: still one line.
       await expect(composerTarget(panel)).toHaveCount(0)
       await expect(asked()).toHaveCount(0)
       await expect(fold).toHaveCount(1)

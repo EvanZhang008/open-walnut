@@ -65,8 +65,8 @@ test.describe('a question the CLI took mid-turn keeps its number, and its follow
     await expect(threadRows).toHaveCount(1)
     await expect(threadRows.nth(0).locator('.thread-map-label')).toHaveText(QUEUED_TITLES.Q2)
     await expect(threadRows.nth(0).locator('.thread-map-num')).toHaveText('2')
-    // Its passage wears the open mark, question 1's the archived one.
-    await expect.poll(() => highlightTexts(page, 'thread-mark-neutral')).toContain(QUEUED_PASSAGES.Q2)
+    // Its passage wears the failed mark (no answer), question 1's the archived one.
+    await expect.poll(() => highlightTexts(page, 'thread-mark-failed-neutral')).toContain(QUEUED_PASSAGES.Q2)
     await expect.poll(() => highlightTexts(page, 'thread-mark-done-neutral')).toContain(QUEUED_PASSAGES.Q1)
 
     // Its card: number 2, its title, and `No answer` (the reply was the tag and tool calls).

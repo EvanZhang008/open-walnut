@@ -54,23 +54,14 @@ export function composerDraftKey(sessionId: string, pageKey: string, tree: Threa
  * An open card's own box (`cardText`, given only while the card is open) is the
  * Ask's text for a pending page: the composer probe cannot see it, and a draft
  * reopened into the card also sits in the composer's draft, stale once the card
- * is edited. `carryToRoot` (the composer chip's ×) moves the words to
- * the main conversation's draft, after any it already holds.
+ * is edited.
  */
 export function pageLeave(a: {
   leavingPending: boolean;
-  leavingRoot: boolean;
   composerText: string;
   cardText?: string;
-  carryToRoot?: boolean;
-  rootDraft: string;
-}): { fromDraft: string; rootDraft?: string; keepPendingDraft: boolean } {
+}): { fromDraft: string; keepPendingDraft: boolean } {
   const text = a.leavingPending && a.cardText !== undefined ? a.cardText : a.composerText;
-  if (a.carryToRoot && !a.leavingRoot) {
-    const rootDraft = !text.trim() ? a.rootDraft
-      : a.rootDraft.trim() ? `${a.rootDraft.trimEnd()}\n\n${text}` : text;
-    return { fromDraft: '', rootDraft, keepPendingDraft: false };
-  }
   return { fromDraft: text, keepPendingDraft: a.leavingPending && !!text.trim() };
 }
 
@@ -427,6 +418,8 @@ export interface ThreadStats {
   turnEnds: Map<string, 'error' | 'interrupted' | 'silent'>;
   /** User row ids with assistant words after them, inside their turn. */
   answered: Set<string>;
+  /** Thread key to its newest question's row id. */
+  lastAsk: Map<string, string>;
 }
 
 const INTERRUPT_RE = /^\[Request interrupted/;
@@ -441,7 +434,7 @@ export function deriveThreadStats(
   keyOfRow: (rowId: string | undefined) => string,
 ): ThreadStats {
   const out: ThreadStats = {
-    answeredAt: new Map(), lastAnswer: new Map(), lastQuestion: new Map(), turnEnds: new Map(), answered: new Set(),
+    answeredAt: new Map(), lastAnswer: new Map(), lastQuestion: new Map(), turnEnds: new Map(), answered: new Set(), lastAsk: new Map(),
   };
   let turnHead: string | undefined;
   let turnKey = '';
@@ -455,6 +448,7 @@ export function deriveThreadStats(
       turnHead = r.sourceUuid ?? r.msgId ?? r.walnutMessageId;
       turnKey = keyOfRow(turnHead);
       out.lastQuestion.set(turnKey, text);
+      if (turnHead) out.lastAsk.set(turnKey, turnHead);
       continue;
     }
     if (!turnHead) continue;

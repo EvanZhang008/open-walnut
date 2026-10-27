@@ -20,8 +20,8 @@ import {
 } from '../../web/src/components/inbox/session-letters';
 import {
   armSessionInboxLink, clearSessionInboxLink, consumeSessionInboxLink,
-  DEEP_LINK_SETTLE_MS, deepLinkFullscreenReassert, parseSessionInboxTarget,
-  ROUTE_EXIT_WINDOW_MS, sessionInboxLetterHref, SESSION_INBOX_LINK_EVENT,
+  parseSessionInboxTarget,
+  sessionInboxLetterHref, SESSION_INBOX_LINK_EVENT,
   SESSION_INBOX_LINK_TTL_MS, SESSION_SURFACE_PATH,
 } from '../../web/src/components/inbox/session-inbox-link';
 import { navigateToTarget } from '../../web/src/utils/open-session';
@@ -330,58 +330,3 @@ describe('navigateToTarget', () => {
  * backdrop back — a fixed, blurred, click-blocking sheet over whatever page the
  * user navigated to, with the panel it belongs to hidden.
  */
-describe('deepLinkFullscreenReassert', () => {
-  const NOW = 10_000_000;
-  const base = {
-    claim: { sid: 'sess-a', at: NOW - 100 },
-    sessionId: 'sess-a',
-    settledKey: '',
-    routeChangedAt: NOW - 40,
-    path: SESSION_SURFACE_PATH,
-    now: NOW,
-  };
-
-  it('re-asserts once when the ROUTE settling dropped fullscreen', () => {
-    expect(deepLinkFullscreenReassert(base)).toBe(`sess-a:${NOW - 100}`);
-  });
-
-  it('refuses a second time for the same claim — the router settles once, so the next exit is the user', () => {
-    const key = deepLinkFullscreenReassert(base)!;
-    expect(deepLinkFullscreenReassert({ ...base, settledKey: key })).toBeNull();
-  });
-
-  // The major bug: a route change to ANOTHER page also drops fullscreen, and
-  // re-entering there strands the backdrop over that page.
-  it('never re-asserts on a page that is not the session surface', () => {
-    expect(deepLinkFullscreenReassert({ ...base, path: '/notes' })).toBeNull();
-    expect(deepLinkFullscreenReassert({ ...base, path: '/tasks' })).toBeNull();
-  });
-
-  // Escape / backdrop click: no pathname change, so nothing to undo.
-  it('never re-asserts an exit that no route change explains', () => {
-    expect(deepLinkFullscreenReassert({ ...base, routeChangedAt: 0 })).toBeNull();
-    expect(deepLinkFullscreenReassert({
-      ...base,
-      routeChangedAt: NOW - ROUTE_EXIT_WINDOW_MS - 1,
-    })).toBeNull();
-  });
-
-  it('ignores a stale or foreign claim', () => {
-    expect(deepLinkFullscreenReassert({ ...base, claim: null })).toBeNull();
-    expect(deepLinkFullscreenReassert({ ...base, sessionId: 'sess-b' })).toBeNull();
-    expect(deepLinkFullscreenReassert({
-      ...base,
-      claim: { sid: 'sess-a', at: NOW - DEEP_LINK_SETTLE_MS },
-    })).toBeNull();
-  });
-
-  it('treats a re-armed link as a NEW claim (the user followed a second letter)', () => {
-    const first = deepLinkFullscreenReassert(base)!;
-    const again = deepLinkFullscreenReassert({
-      ...base,
-      claim: { sid: 'sess-a', at: NOW - 10 },
-      settledKey: first,
-    });
-    expect(again).toBe(`sess-a:${NOW - 10}`);
-  });
-});

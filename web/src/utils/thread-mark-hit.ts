@@ -7,6 +7,7 @@
  * character, so a point in the empty run after a line would otherwise "hit" the
  * mark that ends there.
  */
+import type { ThreadMarkState } from '@/utils/thread-mark-state';
 
 export interface CaretPoint {
   node: Node;
@@ -68,10 +69,16 @@ export interface ThreadMark<R extends MarkRangeLike = Range> {
   neutral?: boolean;
   /** Its answer is coming in: the scanning line instead of the underline. */
   live?: boolean;
+  /** Neutral marks: what the mark paints (thread-mark-state.ts). */
+  state?: ThreadMarkState;
+  /** Sent, no answer text yet: the slow pulse under the passage. */
+  wait?: boolean;
+  /** An Ask not sent yet (painted waiting, nothing waited on). */
+  draft?: boolean;
 }
 
-/** The mark under the pointer, or null. First match wins (marks never overlap:
- *  one passage, one question). */
+/** The mark under the pointer, or null. First match wins (one passage, one
+ *  question; where two passages overlap, the caller orders the most urgent first). */
 export function hitMark<R extends MarkRangeLike>(
   marks: readonly ThreadMark<R>[],
   caret: CaretPoint | null,

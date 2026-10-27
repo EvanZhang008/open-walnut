@@ -60,15 +60,14 @@ import {
 import { dragPhrase, selectionAnchorNodeType } from './selection-helpers'
 
 /** Ask here asks in Conversation Mode (2026-10-23): the column switches, the
- *  question's card opens beside the passage with its own box focused, and the
- *  composer names the passage it is about. */
+ *  question's card opens beside the passage with its own box focused; the
+ *  composer stays on the main conversation (2026-10-27). */
 async function expectAskCard(panel: Locator, passage: string): Promise<Locator> {
   await expect(panel.locator('.session-history[data-view-mode="linear"]')).toHaveCount(1)
   const card = panel.locator('.thread-card')
   await expect(card).toBeVisible()
   await expect(card.locator('.thread-card-input')).toBeFocused()
-  await expect(composerTarget(panel)).toHaveAttribute('data-pending', 'true')
-  await expect(composerTarget(panel)).toContainText(passage)
+  await expect(composerTarget(panel), `an Ask on "${passage}" quotes nothing into the composer`).toHaveCount(0)
   return card
 }
 
@@ -338,7 +337,7 @@ test.describe('Voice input keeps the selected passage', () => {
       await shot(page, '12-stray-word-sent-at-the-top-level')
     })
 
-    test('dictation keeps the question the user opened; Ask on a held pill opens the next one', async ({ page }) => {
+    test('dictation into the composer goes to the main conversation; Ask on a held pill opens the next one', async ({ page }) => {
       test.setTimeout(150_000)
       await page.context().grantPermissions(['microphone'])
       await stubSttStatus(page)
@@ -352,22 +351,19 @@ test.describe('Voice input keeps the selected passage', () => {
       await pill.locator('[data-testid="quote-ask-btn"]').click()
       await expectAskCard(panel, 'rewrites the index')
 
-      // Dictate. The press into the composer folds the card into it, the words land
-      // there and the unsent question stays the composer's aim: dictation decides
-      // nothing about where a question goes.
+      // Dictate. The press into the composer closes the card (an Ask with nothing
+      // written goes) and the words land in the composer, which stays on the main
+      // conversation: nothing is quoted into it unless the reader asks (2026-10-27).
       const textarea = panel.locator('.chat-input-textarea').first()
       await dictate(page, panel)
       await expect(textarea).toHaveValue(ANY_WORDS, { timeout: 30_000 })
-      await expect(composerTarget(panel)).toHaveAttribute('data-pending', 'true')
-      await expect(composerTarget(panel)).toContainText('rewrites the index')
+      await expect(composerTarget(panel)).toHaveCount(0)
+      await expect(panel.locator('.thread-card')).toHaveCount(0)
       await shot(page, '05-existing-question-untouched')
 
-      // Back to the top level (the chip's x), then a second passage, dictated. A
-      // highlight is not a request: no question opens, and the held pill offers the
-      // move. Without this half, the test above would pass just as well if the pill
-      // had simply died with the selection.
-      await panel.locator('[data-testid="composer-thread-target-clear"]').click()
-      await expect(composerTarget(panel)).toHaveCount(0)
+      // A second passage, dictated. A highlight is not a request: no question
+      // opens, and the held pill offers the move. Without this half, the test
+      // above would pass just as well if the pill had simply died with the selection.
       const held = await selectPassage(page, panel, PHRASE2)
       await dictate(page, panel)
       await expect(textarea).toHaveValue(ANY_WORDS, { timeout: 30_000 })
@@ -410,7 +406,7 @@ test.describe('Voice input keeps the selected passage', () => {
       // The final text takes the caret in the card's own box.
       await expect(box).toBeFocused({ timeout: 10_000 })
       await expect(panel.locator('.chat-input-textarea').first()).toHaveValue('')
-      await expect(composerTarget(panel)).toContainText('rewrites the index')
+      await expect(composerTarget(panel)).toHaveCount(0)
       await shot(page, '09b-card-dictated')
 
       // Typed words around the dictated ones stay; the send takes the whole box.
@@ -583,12 +579,11 @@ test.describe('Voice input keeps the selected passage', () => {
       // under the mouse (a run selected from the row above down to mid-paragraph).
       await expect(card.locator('.thread-card-body')).toContainText(REPLY_PHRASE, { timeout: 30_000 })
 
-      // Back to the top level (Esc closes the card, the chip's x lets go of the
-      // question), then a second passage, dictated. A highlight is not a request: no
-      // question opens, the held pill offers the move, and Ask is the move.
+      // Back to the top level (Esc closes the card; the composer never left the main
+      // conversation), then a second passage, dictated. A highlight is not a request:
+      // no question opens, the held pill offers the move, and Ask is the move.
       await card.locator('.thread-card-input').press('Escape')
       await expect(card).toHaveCount(0)
-      await panel.locator('[data-testid="composer-thread-target-clear"]').click()
       await expect(composerTarget(panel)).toHaveCount(0)
       const held = await selectPassage(page, panel, PHRASE2, SEND_SESSION_ID)
       await dictate(page, panel)

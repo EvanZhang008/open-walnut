@@ -286,6 +286,18 @@ input:focus, textarea:focus, select:focus {
   box-shadow: 0 0 0 3px var(--accent-subtle);
 }
 
+/* A textarea wraps its text, so it never scrolls sideways. Under page zoom
+   (Cmd + / Cmd -) the UA default `overflow: auto` still showed a horizontal
+   bar: WebKit lays an EMPTY box's placeholder out at the box width times the
+   zoom (scrollWidth 500 in a 400px box at 125%), and Chromium can round the
+   content 1px over. A WebKit scrollbar styled above is always visible and takes
+   room (6px, zoomed with the page; a classic system bar takes about 15px), so a
+   one-line box lost part of its line, and a vertical bar followed. Holding the
+   placeholder to the box width also lets a long placeholder wrap at the edge
+   instead of being cut there. Ratchet: tests/e2e/browser/textarea-zoom-no-squash.spec.ts */
+textarea { overflow-x: hidden; }
+textarea::placeholder { max-width: 100%; }
+
 /* Native <select> chrome varies wildly per engine — Safari/WKWebView renders
    the legacy aqua double-arrow stepper. Flatten it everywhere: no native
    appearance, our own chevron glyph, room for it on the right. Component

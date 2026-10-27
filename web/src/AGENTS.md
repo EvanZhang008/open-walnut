@@ -422,13 +422,34 @@ show inline after the open ones, other completed hits that show the query fold i
   page with no words, so no draft row, no dashed mark, no rail entry and no target survive; words
   typed in the card's own box (`onTextChange`, which the composer probe cannot see) or the composer
   keep it a draft that reopens with them (`initialText`; the rule is `pageLeave` in
-  `utils/thread-stack-state.ts`). One exception: a press into the panel's composer closes the card
-  but keeps the Ask as the target, since the reader is writing it there, and appends the card's
-  words to the composer (`COMPOSER_INSERT_EVENT`, mode `append`). **The composer names its
-  target** (`ComposerThreadPill`, `threads.composerTarget`, Conversation Mode only): `Replying in
-  [n] title` or `Asking about title`, the title reopening the card and × (`stack.replyInMain`)
-  sending to the main conversation with the typed words carried into its draft. The user asked to
-  see and take back the choice the placeholder alone hid. **The card expands in place**: its ⤢
+  `utils/thread-stack-state.ts`). **Opening a question never quotes it into the composer
+  (2026-10-27, the user: "not quote automatically ... unless user explicit"):** in Conversation
+  Mode the stack's path is the CARD's question only; the composer has its own target,
+  `threads.quotedKey` (`utils/composer-quote.ts`), set only by an explicit "Quote in chat" (the
+  card's head button, the mark's right-click row `onMenu` in `useThreadMarks`, a review card) and
+  let go by the chip's × (`clearQuote`, the typed words carried into the main draft) or by quoting
+  a passage (`keepDraft`). The stack's navigation writes no composer draft in Conversation Mode
+  (`cardOnly` in `useThreadStack`), a quoted Ask stays a draft when the stack moves off it
+  (`keepPending`), and the card's box sends with `sendAnchored(..., targetKey)`. A press into the
+  panel's composer closes the card like any outside press, except while the composer writes to
+  that very question: then an Ask stays its target and the card's words come along
+  (`COMPOSER_INSERT_EVENT`, mode `append`). **The composer names its target**
+  (`ComposerThreadPill`, `threads.composerTarget`, Conversation Mode only): `Replying in [n] title`
+  or `Asking about title`, the title reopening the card and × sending to the main conversation. The
+  user asked to see and take back the choice the placeholder alone hid. **The card reads like the
+  chat (2026-10-27):** `ThreadCardConversation` draws each question as the chat's blue bubble
+  (`.session-msg-user` with `StableMarkdownBody`, inside `.thread-card-q`) and each answer as an
+  assistant `SessionMessage`; no row there carries `data-message-id` (the marks find passages by
+  it). While a question waits for its first words the card says so (`data-waiting`, head word
+  `Waiting`), `Answering…` only once words arrive. **Fullscreen shows a review sidebar**
+  (`ThreadReviewSidebar`, `useThreadReviewPane`, `hooks/useReviewSidebar.ts`, rules in
+  `utils/review-sidebar.ts`): with the panel `open-walnut-fullscreen`, Conversation Mode and a
+  history box at least `REVIEW_MIN_BOX` (880px) wide, one compact card per asked passage sits in a
+  right gutter (`data-review-sidebar` on `.session-history`), level with its passage in content
+  coordinates (measured from the marks' ranges at each re-derive and resize, never per frame) and
+  pushed down so none overlap (`stackReviewCards`; the picked card sits at its passage). A card
+  click scrolls to the passage and flashes it; a mark click selects the card instead of opening
+  the popover; the picked card shows Open and Quote in chat. **The card expands in place**: its ⤢
   keeps the card's top below its passage and grows it to the owner's `place.grown` (left, width up
   to `CARD_GROWN_WIDTH`, max height; `useThreadCardPlace` and `placeFileCard` compute it), gliding
   only while `is-sizing`; Esc brings it back to its size, × closes. A first version lifted it over
@@ -438,11 +459,11 @@ show inline after the open ones, other completed hits that show the query fold i
   reply's FINAL text row alone with `answerOnly`: no tools, no thinking, no words between steps;
   2026-10-06, the user: "just the final message"), the optimistic row and the newest live text block
   of the turn being answered (it replaces the words that turn already persisted), and a composer that sends through `threadsApi.sendToTarget` (the same anchored
-  path as the panel's composer). It lives in `.thread-card-layer`, a zero-height positioned box at
+  path as the panel's composer, into the card's question). It lives in `.thread-card-layer`, a zero-height positioned box at
   the top of the scroll content, so `top` is a content coordinate and the card scrolls with its
   passage; `placeCard` puts it below the passage's last line, right edges aligned, clamped to the
-  layer. Every asked passage wears ONE amber mark (`allPassageMarks`, highlight
-  `thread-mark-neutral`, the color of a comment in a document), never a per-question hue; an
+  layer. Every asked passage wears ONE neutral mark (`allPassageMarks`, painted by its question's
+  state, see below), never a per-question hue; an
   archived one keeps its line in grey (`thread-mark-done-neutral`; the fill differs too, for
   WebKit, which may not draw a highlight's underline) while the map folds it into `N archived`,
   the row that shows it again. **A live turn belongs to its NEWEST `[Qn]` tag**
@@ -461,6 +482,21 @@ show inline after the open ones, other completed hits that show the query fold i
   overlay `.fv-live-lines`, clipped under the sticky toolbar), and are never clipped by the box
   their layer lives in (a line scrolled out must come back with the text, not a frame later).
   Ratchets: `tests/web/thread-live-lines.test.ts`, `tests/e2e/browser/session-thread-mark-live.spec.ts`.
+  **A neutral mark paints its question's state** (2026-10-26, the user: yellow while queued,
+  green while the answer streams, red when done and not read, green again once opened;
+  `utils/thread-mark-state.ts`, published as `threadsApi.markStates`): waiting (sent or queued,
+  no answer text yet: amber, dashed, a slow pulse `.thread-wait-line` drawn in the same live
+  layer), answering (the live turn has words for it, `derived.spoke`: green with the scan),
+  unread (answered after its last view, card closed: red, thick line), failed (pale red,
+  dotted), read (green, thin), resolved (grey). Highlight priority rises with urgency, so where
+  marks overlap waiting > answering > unread > failed > read > resolved paints on top (find
+  matches sit above all of them). Viewed means the open card in Conversation Mode (the target
+  alone is not looked at) or the page in Tree Mode, marked when it comes on screen, leaves it,
+  gets an answer while on it, and at ask time; the times persist per session in localStorage
+  (`utils/thread-viewed-store.ts`, bounded), so red survives a reload. A question never viewed
+  here is not announced. Tree Mode keeps its hue paint. Ratchets:
+  `tests/web/thread-mark-state.test.ts`, `tests/e2e/browser/session-ask-mark-states.spec.ts`
+  (the mock CLI's `MOCK_SPEAK_AT:<ms>` sends a slow turn's first words early).
   Two rules this slice fixed: `useThreadLanding` takes
   `targetOnly` and does nothing on a navigation in Conversation Mode (a target change is not a page
   change; before, every Ask and every sidebar row "landed at the top" and the whole conversation
@@ -525,7 +561,8 @@ show inline after the open ones, other completed hits that show the query fold i
   a Markdown quote at the head of the MAIN conversation's composer (`buildPassagePrefill`,
   prefill mode `keep-draft`, so typed words follow it). On a question page, or with a question as
   Conversation Mode's composer target, `SessionPanel.quoteInChat` goes back to the main
-  conversation first with `popTo`, not `replyInMain`, so the question keeps its own draft. Only a
+  conversation first with `popTo` (Tree Mode) or `clearQuote(..., { keepDraft: true })`
+  (Conversation Mode), so the question keeps its own draft. Only a
   timeline with a composer passes `onQuoteInChat`. Ratchet:
   `tests/e2e/browser/session-quote-in-chat.spec.ts`.
   **A passage of a FILE in the Files tab is asked about the same way (2026-10-01).** The anchor's

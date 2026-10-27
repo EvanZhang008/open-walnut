@@ -15,7 +15,10 @@
    whose `html body` selectors outweigh these). */
 
 html:root {
-  --overlay-glass-bg: color-mix(in srgb, var(--card-bg) 82%, transparent);
+  /* The raised surface, not the card's: in the dark theme --bg-elevated is one
+     step lighter than the page and its columns, so a menu reads as a layer over
+     them (the same in light, where both are white). */
+  --overlay-glass-bg: color-mix(in srgb, var(--bg-elevated, var(--card-bg)) 82%, transparent);
   --overlay-glass-blur: blur(50px) saturate(1.8);
   /* The Materials Pass menus (globals.css) take the same glass. */
   --glass-bg-menu: var(--overlay-glass-bg);

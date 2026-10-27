@@ -324,7 +324,7 @@ describe('a finished turn is matched to the delivery that started it', () => {
 });
 
 describe('pageLeave: what leaving a page keeps', () => {
-  const base = { leavingPending: true, leavingRoot: false, composerText: '', rootDraft: '' };
+  const base = { leavingPending: true, composerText: '' };
   it('an Ask left with no words keeps nothing (no draft row, no stored text)', () => {
     expect(pageLeave(base)).toEqual({ fromDraft: '', keepPendingDraft: false });
     expect(pageLeave({ ...base, cardText: '   ' })).toEqual({ fromDraft: '   ', keepPendingDraft: false });
@@ -339,12 +339,5 @@ describe('pageLeave: what leaving a page keeps', () => {
   it("the card's words count only for a pending page", () => {
     expect(pageLeave({ ...base, leavingPending: false, cardText: 'why?', composerText: 'how?' }))
       .toEqual({ fromDraft: 'how?', keepPendingDraft: false });
-  });
-  it('carryToRoot moves the words to the main draft after what it holds, and drops the Ask', () => {
-    expect(pageLeave({ ...base, composerText: 'how?', carryToRoot: true }))
-      .toEqual({ fromDraft: '', rootDraft: 'how?', keepPendingDraft: false });
-    expect(pageLeave({ ...base, leavingPending: false, composerText: 'how?', carryToRoot: true, rootDraft: 'earlier\n' }))
-      .toEqual({ fromDraft: '', rootDraft: 'earlier\n\nhow?', keepPendingDraft: false });
-    expect(pageLeave({ ...base, carryToRoot: true, rootDraft: 'earlier' }).rootDraft).toBe('earlier');
   });
 });

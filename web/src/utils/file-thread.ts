@@ -39,7 +39,7 @@ export function fileQuestionMarks(
     if (!p.quote?.exact || fileOfParent(p.parentMsgId) !== path || tree.byKey.has(p.pageKey)) continue;
     out.push({
       key: p.pageKey, headId: p.pageKey, parentMsgId: p.parentMsgId,
-      quote: p.quote, hue: 0, resolved: false, title: p.title, neutral: true,
+      quote: p.quote, hue: 0, resolved: false, title: p.title, neutral: true, draft: true,
     });
   }
   for (const node of tree.threads) {

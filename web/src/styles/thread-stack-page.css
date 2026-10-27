@@ -196,15 +196,23 @@
 ::highlight(thread-mark-done-330) { background-color: hsl(330 12% 55% / 0.14); text-decoration: underline dotted 1.5px hsl(330 45% 50% / 0.75); text-underline-offset: 3px; }
 ::highlight(thread-mark-done-188) { background-color: hsl(188 12% 55% / 0.14); text-decoration: underline dotted 1.5px hsl(188 45% 50% / 0.75); text-underline-offset: 3px; }
 ::highlight(thread-mark-done-214) { background-color: hsl(214 12% 55% / 0.14); text-decoration: underline dotted 1.5px hsl(214 45% 50% / 0.75); text-underline-offset: 3px; }
-/* Conversation Mode paints every asked passage the same way (no hue tells the
-   questions apart; the number does): an amber wash and underline, the color of a
-   comment in a document, so an open question is easy to find in a long answer.
-   An archived question keeps its line in grey (the map folds it away, the
-   passage still says it was asked). The wash differs too, for WebKit, which may
-   not draw a highlight's underline. The comment card opens on a click. */
-::highlight(thread-mark-neutral) { background-color: hsl(42 95% 55% / 0.28); text-decoration: underline 2px hsl(34 85% 45% / 0.9); text-underline-offset: 3px; }
+/* Conversation Mode and file marks paint every asked passage by its question's
+   state (no hue tells the questions apart; the number does; thread-mark-state.ts):
+   waiting amber with a dashed line (and the pulse below), answering green with
+   the scanning line, unread red with a thick line (click to read), failed a pale
+   red with a dotted line, read a quiet green with a thin line. An archived
+   question keeps its line in grey (the map folds it away, the passage still
+   says it was asked). Every state's wash differs too, for WebKit, which may not
+   draw a highlight's underline. The comment card opens on a click. */
+::highlight(thread-mark-waiting-neutral) { background-color: hsl(45 95% 55% / 0.32); text-decoration: underline dashed 2px hsl(36 90% 42% / 0.95); text-underline-offset: 3px; }
+::highlight(thread-mark-unread-neutral) { background-color: hsl(0 90% 60% / 0.22); text-decoration: underline 3px hsl(0 78% 46%); text-underline-offset: 3px; }
+::highlight(thread-mark-failed-neutral) { background-color: hsl(345 70% 60% / 0.12); text-decoration: underline dotted 2px hsl(345 70% 44%); text-underline-offset: 3px; }
+::highlight(thread-mark-neutral) { background-color: hsl(140 50% 48% / 0.15); text-decoration: underline 1px hsl(145 55% 34% / 0.85); text-underline-offset: 3px; }
 ::highlight(thread-mark-done-neutral) { background-color: hsl(0 0% 50% / 0.12); text-decoration: underline 1.5px hsl(0 0% 52% / 0.6); text-underline-offset: 3px; }
-[data-theme="dark"] ::highlight(thread-mark-neutral) { background-color: hsl(42 85% 55% / 0.26); text-decoration-color: hsl(40 90% 62% / 0.9); }
+[data-theme="dark"] ::highlight(thread-mark-waiting-neutral) { background-color: hsl(45 85% 55% / 0.28); text-decoration-color: hsl(42 92% 62%); }
+[data-theme="dark"] ::highlight(thread-mark-unread-neutral) { background-color: hsl(0 80% 62% / 0.30); text-decoration-color: hsl(0 90% 70%); }
+[data-theme="dark"] ::highlight(thread-mark-failed-neutral) { background-color: hsl(345 60% 62% / 0.16); text-decoration-color: hsl(345 80% 72%); }
+[data-theme="dark"] ::highlight(thread-mark-neutral) { background-color: hsl(140 45% 52% / 0.20); text-decoration-color: hsl(145 55% 62% / 0.85); }
 [data-theme="dark"] ::highlight(thread-mark-done-neutral) { background-color: hsl(0 0% 70% / 0.12); text-decoration-color: hsl(0 0% 62% / 0.6); }
 [data-theme="dark"] ::highlight(thread-mark-280) { background-color: hsl(280 70% 62% / 0.34); text-decoration-color: hsl(280 85% 70%); }
 [data-theme="dark"] ::highlight(thread-mark-done-280) { background-color: hsl(280 10% 68% / 0.2); text-decoration-color: hsl(280 40% 68% / 0.8); }
@@ -219,7 +227,10 @@
 [data-theme="dark"] ::highlight(thread-mark-214) { background-color: hsl(214 70% 62% / 0.34); text-decoration-color: hsl(214 85% 70%); }
 [data-theme="dark"] ::highlight(thread-mark-done-214) { background-color: hsl(214 10% 68% / 0.2); text-decoration-color: hsl(214 40% 68% / 0.8); }
 @media (prefers-color-scheme: dark) {
-  :root:not([data-theme]) ::highlight(thread-mark-neutral) { background-color: hsl(42 85% 55% / 0.26); text-decoration-color: hsl(40 90% 62% / 0.9); }
+  :root:not([data-theme]) ::highlight(thread-mark-waiting-neutral) { background-color: hsl(45 85% 55% / 0.28); text-decoration-color: hsl(42 92% 62%); }
+  :root:not([data-theme]) ::highlight(thread-mark-unread-neutral) { background-color: hsl(0 80% 62% / 0.30); text-decoration-color: hsl(0 90% 70%); }
+  :root:not([data-theme]) ::highlight(thread-mark-failed-neutral) { background-color: hsl(345 60% 62% / 0.16); text-decoration-color: hsl(345 80% 72%); }
+  :root:not([data-theme]) ::highlight(thread-mark-neutral) { background-color: hsl(140 45% 52% / 0.20); text-decoration-color: hsl(145 55% 62% / 0.85); }
   :root:not([data-theme]) ::highlight(thread-mark-done-neutral) { background-color: hsl(0 0% 70% / 0.12); text-decoration-color: hsl(0 0% 62% / 0.6); }
   :root:not([data-theme]) ::highlight(thread-mark-280) { background-color: hsl(280 70% 62% / 0.34); text-decoration-color: hsl(280 85% 70%); }
   :root:not([data-theme]) ::highlight(thread-mark-done-280) { background-color: hsl(280 10% 68% / 0.2); text-decoration-color: hsl(280 40% 68% / 0.8); }
@@ -240,15 +251,16 @@
    underline, and a scanning line takes its place (thread-live-lines.ts): the
    working indicator's light band sweeping along the passage until the answer
    ends. A highlight cannot animate a gradient, so the line is an element per
-   line of text, in a layer that scrolls with the timeline's content. */
-::highlight(thread-mark-live-neutral) { background-color: hsl(42 95% 55% / 0.28); }
+   line of text, in a layer that scrolls with the timeline's content. The
+   neutral one is green (its answer text is coming in). */
+::highlight(thread-mark-live-neutral) { background-color: hsl(140 60% 48% / 0.22); }
 ::highlight(thread-mark-live-280) { background-color: hsl(280 70% 60% / 0.22); }
 ::highlight(thread-mark-live-152) { background-color: hsl(152 70% 60% / 0.22); }
 ::highlight(thread-mark-live-28) { background-color: hsl(28 70% 60% / 0.22); }
 ::highlight(thread-mark-live-330) { background-color: hsl(330 70% 60% / 0.22); }
 ::highlight(thread-mark-live-188) { background-color: hsl(188 70% 60% / 0.22); }
 ::highlight(thread-mark-live-214) { background-color: hsl(214 70% 60% / 0.22); }
-[data-theme="dark"] ::highlight(thread-mark-live-neutral) { background-color: hsl(42 85% 55% / 0.26); }
+[data-theme="dark"] ::highlight(thread-mark-live-neutral) { background-color: hsl(140 55% 50% / 0.26); }
 [data-theme="dark"] ::highlight(thread-mark-live-280) { background-color: hsl(280 70% 62% / 0.34); }
 [data-theme="dark"] ::highlight(thread-mark-live-152) { background-color: hsl(152 70% 62% / 0.34); }
 [data-theme="dark"] ::highlight(thread-mark-live-28) { background-color: hsl(28 70% 62% / 0.34); }
@@ -256,6 +268,7 @@
 [data-theme="dark"] ::highlight(thread-mark-live-188) { background-color: hsl(188 70% 62% / 0.34); }
 [data-theme="dark"] ::highlight(thread-mark-live-214) { background-color: hsl(214 70% 62% / 0.34); }
 @media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) ::highlight(thread-mark-live-neutral) { background-color: hsl(140 55% 50% / 0.26); }
   :root:not([data-theme]) ::highlight(thread-mark-live-280) { background-color: hsl(280 70% 62% / 0.34); }
   :root:not([data-theme]) ::highlight(thread-mark-live-152) { background-color: hsl(152 70% 62% / 0.34); }
   :root:not([data-theme]) ::highlight(thread-mark-live-28) { background-color: hsl(28 70% 62% / 0.34); }
@@ -274,8 +287,8 @@
   pointer-events: none;
 }
 .thread-live-line {
-  --live-base: hsl(28 40% 70% / 0.55);
-  --live-band: #9a6235;
+  --live-base: hsl(140 45% 58% / 0.55);
+  --live-band: hsl(145 75% 30%);
   position: absolute;
   height: 2px;
   border-radius: 1px;
@@ -290,16 +303,36 @@
   --live-base: hsl(var(--live-hue) 60% 60% / 0.45);
   --live-band: hsl(var(--live-hue) 80% 42%);
 }
-[data-theme="dark"] .thread-live-line:not([data-hue]) { --live-base: hsl(28 30% 62% / 0.45); --live-band: #e8c9a8; }
+[data-theme="dark"] .thread-live-line:not([data-hue]) { --live-base: hsl(140 35% 50% / 0.5); --live-band: hsl(140 70% 72%); }
 @media (prefers-color-scheme: dark) {
-  :root:not([data-theme]) .thread-live-line:not([data-hue]) { --live-base: hsl(28 30% 62% / 0.45); --live-band: #e8c9a8; }
+  :root:not([data-theme]) .thread-live-line:not([data-hue]) { --live-base: hsl(140 35% 50% / 0.5); --live-band: hsl(140 70% 72%); }
 }
 @keyframes thread-live-scan {
   0% { background-position: -40% 0, 0 0; }
   100% { background-position: 140% 0, 0 0; }
 }
+/* Sent, no answer text yet (neutral marks): the dashed line breathes slowly
+   until the first words arrive. Same layer and placement as the scan. */
+.thread-wait-line {
+  --wait-color: hsl(38 92% 46%);
+  position: absolute;
+  height: 2px;
+  border-radius: 1px;
+  pointer-events: none;
+  background: repeating-linear-gradient(90deg, var(--wait-color) 0 6px, transparent 6px 10px);
+  animation: thread-wait-pulse 2s ease-in-out infinite;
+}
+[data-theme="dark"] .thread-wait-line { --wait-color: hsl(42 92% 62%); }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) .thread-wait-line { --wait-color: hsl(42 92% 62%); }
+}
+@keyframes thread-wait-pulse {
+  0%, 100% { opacity: 0.25; }
+  50% { opacity: 1; }
+}
 @media (prefers-reduced-motion: reduce) {
   .thread-live-line { animation: none; background: var(--live-band); opacity: 0.7; }
+  .thread-wait-line { animation: none; opacity: 0.8; }
 }
 
 /* ── The outline rail: pins on other question pages ── */

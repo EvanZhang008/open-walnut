@@ -86,6 +86,20 @@ function AppShellInner({ children }: AppShellProps) {
   const isFullBleed = activeApp?.fullBleed ?? location.pathname.startsWith('/apps/');
   const focusBar = useFocusBarContext();
   const contentRef = useRef<HTMLDivElement>(null);
+  // Where the page area starts: a full screen panel fills the tab beside the
+  // sidebar (fullscreen-tab.css reads --fullscreen-left; 0 on a phone).
+  const mainRef = useRef<HTMLElement>(null);
+  useEffect(() => {
+    const main = mainRef.current;
+    if (!main) return;
+    const root = document.documentElement;
+    const publish = () => root.style.setProperty('--fullscreen-left', `${Math.max(0, Math.round(main.getBoundingClientRect().left))}px`);
+    publish();
+    const ro = new ResizeObserver(publish);
+    ro.observe(main);
+    window.addEventListener('resize', publish);
+    return () => { ro.disconnect(); window.removeEventListener('resize', publish); };
+  }, []);
   const sidebarRef = useRef<HTMLElement>(null);
   const sidebarToggleRef = useRef<HTMLButtonElement>(null);
   const navigate = useNavigate();
@@ -283,7 +297,7 @@ function AppShellInner({ children }: AppShellProps) {
           tabIndex={-1}
         />
       )}
-      <main className="main-content" inert={sidebarOpen && isMobileSidebar}>
+      <main ref={mainRef} className="main-content" inert={sidebarOpen && isMobileSidebar}>
         {/* A host replica's console while the Mac is away (nothing otherwise). */}
         <AwayLine />
         <div

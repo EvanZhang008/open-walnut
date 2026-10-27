@@ -27,6 +27,8 @@ export { liveRange } from './page-find-geometry';
 export const HL_FIND = 'walnut-find';
 export const HL_FIND_ACTIVE = 'walnut-find-active';
 export const HL_PAGE_SELMATCH = 'walnut-page-selmatch';
+/** Find matches paint above every question mark state (useThreadMarks, 2 to 7). */
+const FIND_PRIORITY = 10;
 
 /** Most matches counted for one query; past it the count reads "10000+". */
 export const FIND_CAP = 10000;
@@ -400,11 +402,11 @@ export class PageFindController {
       this.paintedHi = n;
     }
     if (!sameRanges(slice, this.painted)) {
-      paintRanges(HL_FIND, slice, 1);
+      paintRanges(HL_FIND, slice, FIND_PRIORITY);
       this.painted = slice;
     }
     const a = this.active >= 0 ? this.ranges[this.active] : undefined;
-    paintRanges(HL_FIND_ACTIVE, a ? [a] : [], 2);
+    paintRanges(HL_FIND_ACTIVE, a ? [a] : [], FIND_PRIORITY + 1);
   }
 
   /** The reader scrolled (debounced by the owner): move the painted window. */

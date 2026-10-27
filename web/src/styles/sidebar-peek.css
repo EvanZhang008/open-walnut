@@ -77,3 +77,9 @@
     animation: none;
   }
 }
+
+/* A sheet in full screen (backdrop 9000, sheet 9001) lies over the page area
+   the pill grows into: while one is open the pill goes above both. */
+body:has(> .open-walnut-fullscreen-backdrop) > .rail-item-pill {
+  z-index: 9002;
+}

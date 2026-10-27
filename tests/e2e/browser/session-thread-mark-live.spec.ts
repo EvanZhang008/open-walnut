@@ -1,7 +1,9 @@
 /**
  * The line under a passage whose question is being answered: while the answer
  * comes in, the mark's underline is a light band sweeping along the passage
- * (the working indicator's scan); when it ends, the plain mark is back.
+ * (the working indicator's scan); when it ends, the scan goes (Conversation
+ * Mode: the mark is then red until its card is opened, see
+ * session-ask-mark-states.spec.ts).
  *
  * Covers, in Conversation Mode: a follow-up sent from an open card and a new
  * question sent from a draft card each give their passage a scanning line per
@@ -17,7 +19,9 @@
  * a long page that scrolls).
  *
  * Chromium and WebKit. The tagged fixture session; the mock CLI answers a
- * message that starts with `slow:<ms>` after that delay.
+ * message that starts with `slow:<ms>` after that delay, and `MOCK_SPEAK_AT`
+ * sends its first words early (a neutral mark scans only once words came in;
+ * before that it waits).
  */
 import { expect, test, type Locator, type Page } from '@playwright/test'
 import fs from 'node:fs/promises'
@@ -30,7 +34,7 @@ const MD_FILE = 'cache-design.md'
 const MD_PASSAGE_FULL = 'A late flush can hide an earlier update to the same slot'
 const LONG_FILE = 'cache-handbook.html'
 const LONG_PASSAGE = 'The tie rule reads slot numbers only'
-const SLOW = 'slow:15000'
+const SLOW = 'slow:15000 MOCK_SPEAK_AT:1500'
 const RELOAD_TASK = 'pw-task-threads-reload'
 
 interface Box { left: number; right: number; top: number; bottom: number }
@@ -125,16 +129,17 @@ test.describe('The scanning line under a passage being answered', () => {
     await expect(lines.first()).toBeVisible()
     expectUnder(await boxes(lines), await passageRects(panel, TAGGED_PASSAGE))
 
-    // The answer lands: the plain mark is back. The question's turns stay
-    // folded to their line in the main chat (utils/thread-fold.ts), so the
-    // answer is read in its card.
+    // The answer lands with the card closed: the mark is red (not read yet).
+    // The question's turns stay folded to their line in the main chat
+    // (utils/thread-fold.ts), so the answer is read in its card.
     await expect(lines).toHaveCount(0, { timeout: 60_000 })
     await expect.poll(() => hasHighlight(page, 'thread-mark-live-neutral')).toBe(false)
-    expect(await hasHighlight(page, 'thread-mark-neutral')).toBe(true)
+    expect(await hasHighlight(page, 'thread-mark-unread-neutral')).toBe(true)
     await expect(history.locator('[data-thread-fold]').first()).toBeVisible()
     const landed = await passageRects(panel, TAGGED_PASSAGE)
     await page.mouse.click(landed[0].left + 8, landed[0].top + landed[0].height / 2)
     await expect(card.locator('.thread-card-body')).toContainText('processed your message: And after a restart?')
+    await expect.poll(() => hasHighlight(page, 'thread-mark-neutral'), { message: 'opened: read' }).toBe(true)
     await card.locator('.thread-card-input').press('Escape')
     await expect(card).toHaveCount(0)
 
@@ -169,7 +174,7 @@ test.describe('The scanning line under a passage being answered', () => {
     await page.locator('[data-testid="quote-pin-pill"] [data-testid="quote-ask-btn"]').click()
     const card = panel.locator('.thread-card')
     await expect(card).toHaveAttribute('data-draft', 'true')
-    await card.locator('.thread-card-input').fill('slow:40000 What drains first?')
+    await card.locator('.thread-card-input').fill('slow:40000 MOCK_SPEAK_AT:1500 What drains first?')
     await card.locator('.thread-card-input').press('Enter')
     await expect(card).toHaveAttribute('data-answering', 'true', { timeout: 30_000 })
     const linesOf = (p: Locator) => p.locator('.session-history .thread-live-layer .thread-live-line')

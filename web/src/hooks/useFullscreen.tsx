@@ -1,7 +1,8 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useContext } from 'react';
 import { createPortal } from 'react-dom';
 import type { ReactNode } from 'react';
 import { useLocation } from 'react-router-dom';
+import { RouteShownContext } from '@/contexts/RouteShownContext';
 import { hasActiveModalOverlay, lockScroll, unlockScroll } from './useModalOverlay';
 import { traceInteraction } from '@/utils/interaction-timer';
 import { keyTargetClaimsEscape } from './usePanelKeyRouter';
@@ -63,9 +64,29 @@ export function yieldFullscreen(reason: string): void {
  *  `session:status-changed` write the columns directly, not through those two
  *  entry points, so a sheet only ever drops on the user's own gesture.
  */
-export function useFullscreen() {
+export interface UseFullscreenOptions {
+  /**
+   * Full screen of the TAB (2026-10-27, the user: "during full screen I can
+   * still go from home to org"): the sheet stays full screen across a route
+   * change and is there again on the way back. Only for an element the hidden
+   * home page hides with it (a session panel): while its page is not on show
+   * (RouteShownContext) the backdrop is not drawn, Esc is not taken and the body
+   * is not locked, so the other page works as usual. A sheet entered while the
+   * router is still catching up with a deep link from another page is simply
+   * away for that beat, then on show. Everything else (the dock, which shows on
+   * every page) keeps the ROUTE-CHANGE EXIT below.
+   */
+  keepAcrossRoutes?: boolean;
+}
+
+export function useFullscreen(options: UseFullscreenOptions = {}) {
+  const keepAcrossRoutes = options.keepAcrossRoutes === true;
   const [isFullscreen, setIsFullscreen] = useState(false);
   const { pathname } = useLocation();
+  // Off its page (the hidden home page, RouteShownContext) the sheet is away.
+  const shown = useContext(RouteShownContext);
+  const away = isFullscreen && keepAcrossRoutes && !shown;
+  const active = isFullscreen && !away;
 
   // Timed: "I click outside to get out and it takes like 3 seconds" was reported
   // with no log to point at. Both directions now land in the server log as
@@ -84,14 +105,14 @@ export function useFullscreen() {
   // change (`/?s1=…`, the session columns' own deep-link state) is NOT a
   // navigation away and must not collapse a panel the user just expanded.
   useEffect(() => {
-    setIsFullscreen(false);
-  }, [pathname]);
+    if (!keepAcrossRoutes) setIsFullscreen(false);
+  }, [pathname, keepAcrossRoutes]);
 
-  // ESC key handler + column-open yield + ref-counted body scroll lock (shares
-  // count with useModalOverlay). All subscribed only WHILE fullscreen, so a page
-  // with twenty idle panels pays nothing per yield.
+  // ESC key handler + ref-counted body scroll lock (shares count with
+  // useModalOverlay), and the column-open yield below. All subscribed only WHILE
+  // fullscreen, so a page with twenty idle panels pays nothing per yield.
   useEffect(() => {
-    if (!isFullscreen) return;
+    if (!active) return;
     lockScroll();
     const handleKeyDown = (e: KeyboardEvent) => {
       // A consumer that used the Esc (palette, picker, confirm) prevented it, and a
@@ -111,25 +132,31 @@ export function useFullscreen() {
       e.stopPropagation();
       setIsFullscreen(false);
     };
-    // Its own interaction name, not `fullscreen-exit`: the frame after a yield
-    // also mounts the column that caused it, so timing it as an exit would inflate
-    // the collapse baseline this file's tracing exists to watch.
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown);
+      unlockScroll();
+    };
+  }, [active]);
+
+  // The column-open yield also holds while the sheet is away: a session opened
+  // from another page lands in a home column, which a sheet coming back full
+  // screen would cover. Its own interaction name, not `fullscreen-exit`: the
+  // frame after a yield also mounts the column that caused it, so timing it as
+  // an exit would inflate the collapse baseline this file's tracing exists to watch.
+  useEffect(() => {
+    if (!isFullscreen) return;
     const handleYield = (e: Event) => {
       const reason = (e as CustomEvent<{ reason?: string }>).detail?.reason ?? 'unknown';
       traceInteraction('fullscreen-yield', { reason });
       setIsFullscreen(false);
     };
-    document.addEventListener('keydown', handleKeyDown);
     window.addEventListener(FULLSCREEN_YIELD_EVENT, handleYield);
-    return () => {
-      document.removeEventListener('keydown', handleKeyDown);
-      window.removeEventListener(FULLSCREEN_YIELD_EVENT, handleYield);
-      unlockScroll();
-    };
+    return () => window.removeEventListener(FULLSCREEN_YIELD_EVENT, handleYield);
   }, [isFullscreen]);
 
   // Backdrop portal — rendered by the consumer in their JSX
-  const FullscreenBackdrop: ReactNode = isFullscreen
+  const FullscreenBackdrop: ReactNode = active
     ? createPortal(
         <div
           className="open-walnut-fullscreen-backdrop"
@@ -140,7 +167,10 @@ export function useFullscreen() {
       )
     : null;
 
-  const fullscreenClass = isFullscreen ? ' open-walnut-fullscreen' : '';
+  // Away, the sheet is hidden outright (fullscreen-tab.css): it is position:fixed,
+  // so the hidden home page's overflow does not clip it, and a descendant that
+  // sets its own `visibility: visible` would otherwise paint over the other page.
+  const fullscreenClass = isFullscreen ? (away ? ' open-walnut-fullscreen open-walnut-fullscreen-away' : ' open-walnut-fullscreen') : '';
 
   return { isFullscreen, enterFullscreen, exitFullscreen, fullscreenClass, FullscreenBackdrop };
 }

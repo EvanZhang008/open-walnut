@@ -21,13 +21,21 @@
  * and gets the scanning line instead, drawn into `live.layerRef`
  * (thread-live-lines.ts) on every derive, resize, image load and toggle, and on
  * every scroll when the layer does not scroll with the text.
+ *
+ * Neutral marks (Conversation Mode, files) paint their question's state instead
+ * (`spec.state`, thread-mark-state.ts): waiting is amber with a slow pulse drawn
+ * in the same layer, answering green with the scan, unread red, failed dotted
+ * red, read green, resolved grey. Each state has its own highlight priority, so
+ * where marks overlap the most urgent paints on top. Tree Mode keeps its branch
+ * hues and the live scan by `live.keys`, unchanged.
  */
 import { useCallback, useEffect, useMemo, useRef, type RefObject } from 'react';
 import type { SessionPinnedQuote } from '@/types/session';
 import {
   caretFromPoint, claimPress, hitMark, rafThrottle, selectionIsEmpty, type ThreadMark,
 } from '@/utils/thread-mark-hit';
-import { liveLineBars, overflowClipOf, paintLiveBars, textRectsOf, type BoxLike, type LiveBar } from '@/utils/thread-live-lines';
+import { liveLineBars, overflowClipOf, paintLiveBars, textRectsOf, type BoxLike, type PaintedBar } from '@/utils/thread-live-lines';
+import { MARK_STATE_TIP, markStateRank, type ThreadMarkState } from '@/utils/thread-mark-state';
 import { log } from '@/utils/log';
 
 export interface ThreadMarkSpec {
@@ -41,21 +49,63 @@ export interface ThreadMarkSpec {
   title: string;
   /** Conversation Mode: one neutral paint for every question (no hue). */
   neutral?: boolean;
+  /** Neutral marks: the question's state; absent paints as before (open / done / live). */
+  state?: ThreadMarkState;
+  /** An Ask not sent yet: the waiting paint, no pulse (nothing is waited on). */
+  draft?: boolean;
 }
 
+/** Above the pin highlight (0). Tree Mode marks and resolved neutral ones sit
+ *  here; each more urgent neutral state one higher (thread-mark-state.ts). */
 export const MARK_PRIORITY = 2;
 
-/** Highlight name per hue and state (neutral: one grey pair); globals for every
- *  name live in thread-stack-page.css. A live mark (its answer coming in) is the
- *  open mark's fill with no underline: the scanning line draws that. */
-export function markHighlightName(hue: number, resolved: boolean, neutral = false, live = false): string {
-  const state = live ? '-live' : resolved ? '-done' : '';
-  return `thread-mark${state}-${neutral ? 'neutral' : hue}`;
+export function markPriority(state?: ThreadMarkState): number {
+  return MARK_PRIORITY + markStateRank(state);
+}
+
+const NEUTRAL_STATE_NAME: Record<ThreadMarkState, string> = {
+  waiting: 'thread-mark-waiting-neutral',
+  answering: 'thread-mark-live-neutral',
+  unread: 'thread-mark-unread-neutral',
+  failed: 'thread-mark-failed-neutral',
+  read: 'thread-mark-neutral',
+  resolved: 'thread-mark-done-neutral',
+};
+
+/** Highlight name per hue and state (neutral: one name per question state);
+ *  globals for every name live in thread-stack-page.css. A live mark (its answer
+ *  coming in) is the open mark's fill with no underline: the scanning line draws
+ *  that. */
+export function markHighlightName(hue: number, resolved: boolean, neutral = false, live = false, state?: ThreadMarkState): string {
+  if (neutral && state) return NEUTRAL_STATE_NAME[state];
+  const s = live ? '-live' : resolved ? '-done' : '';
+  return `thread-mark${s}-${neutral ? 'neutral' : hue}`;
+}
+
+/** The mark's tooltip: `Open “title”`, plus what its state needs said. */
+export function markTipText(mark: Pick<ThreadMark, 'title' | 'state' | 'draft'>): string {
+  const extra = mark.state && !mark.draft ? MARK_STATE_TIP[mark.state] : null;
+  // The state leads, so a long title cut at the tip's edge never hides it.
+  return extra ? `${extra[0].toUpperCase()}${extra.slice(1)} · Open “${mark.title}”` : `Open “${mark.title}”`;
+}
+
+/** Spec to mark flags: neutral marks by state, hue marks by the live keys. */
+export function markFlagsOf(s: Pick<ThreadMarkSpec, 'key' | 'neutral' | 'state' | 'draft'>, liveKeys: ReadonlySet<string>): { live: boolean; wait: boolean } {
+  if (s.neutral && s.state) return { live: s.state === 'answering', wait: s.state === 'waiting' && !s.draft };
+  return { live: liveKeys.has(s.key), wait: false };
+}
+
+/** Most urgent first, so a click on overlapping marks opens the one on top. */
+export function byUrgency<M extends { state?: ThreadMarkState }>(marks: M[]): M[] {
+  return marks.map((m, i) => ({ m, i }))
+    .sort((a, b) => markStateRank(b.m.state) - markStateRank(a.m.state) || a.i - b.i)
+    .map((x) => x.m);
 }
 
 // Document-wide paint, merged across panels (CSS.highlights has one namespace).
 const panelMarks = new Map<string, Map<string, Range[]>>();
 const paintedNames = new Set<string>();
+const namePriority = new Map<string, number>();
 
 type HighlightCtor = new (...ranges: Range[]) => { priority: number };
 function highlightApi(): { reg: Map<string, unknown>; Ctor: HighlightCtor } | null {
@@ -75,7 +125,7 @@ function repaintMarks() {
   paintedNames.clear();
   for (const [name, ranges] of union) {
     const h = new api.Ctor(...ranges);
-    h.priority = MARK_PRIORITY;
+    h.priority = namePriority.get(name) ?? MARK_PRIORITY;
     api.reg.set(name, h);
     paintedNames.add(name);
   }
@@ -84,7 +134,8 @@ function repaintMarks() {
 function setPanelMarks(panelKey: string, marks: ThreadMark[]) {
   const byName = new Map<string, Range[]>();
   for (const m of marks) {
-    const name = markHighlightName(m.hue, m.resolved, m.neutral, m.live);
+    const name = markHighlightName(m.hue, m.resolved, m.neutral, m.live, m.state);
+    if (m.neutral && m.state) namePriority.set(name, markPriority(m.state));
     byName.set(name, [...(byName.get(name) ?? []), m.range]);
   }
   if (byName.size === 0) panelMarks.delete(panelKey); else panelMarks.set(panelKey, byName);
@@ -101,6 +152,10 @@ export interface UseThreadMarksArgs {
   renderNonce: unknown;
   locatePassage: (p: { msgId: string; quote?: SessionPinnedQuote }) => Range | null;
   onOpen: (key: string) => void;
+  /** A right-click on a mark (its own menu instead of the row's). */
+  onMenu?: (key: string, at: { x: number; y: number }) => void;
+  /** The marks just derived, with their ranges (the review sidebar places by them). */
+  onDerived?: (marks: readonly ThreadMark[]) => void;
   live?: LiveMarkArgs;
 }
 
@@ -132,16 +187,18 @@ const intersect = (a: BoxLike | null, b: BoxLike | null): BoxLike | null => (!a 
   left: Math.max(a.left, b.left), top: Math.max(a.top, b.top), right: Math.min(a.right, b.right), bottom: Math.min(a.bottom, b.bottom),
 });
 
-/** The live marks' bars, in `layer`'s coordinates (`within`: the box the layer
- *  lives in, see overflowClipOf). */
-export function liveBarsFor(marks: readonly ThreadMark[], layer: HTMLElement, within: Element | null, extraClip: BoxLike | null): Array<LiveBar & { hue?: number }> {
-  const out: Array<LiveBar & { hue?: number }> = [];
+/** The live and waiting marks' bars, in `layer`'s coordinates (`within`: the
+ *  box the layer lives in, see overflowClipOf). */
+export function liveBarsFor(marks: readonly ThreadMark[], layer: HTMLElement, within: Element | null, extraClip: BoxLike | null): PaintedBar[] {
+  const out: PaintedBar[] = [];
   let origin: DOMRect | null = null;
   for (const m of marks) {
-    if (!m.live) continue;
+    if (!m.live && !m.wait) continue;
     origin ??= layer.getBoundingClientRect();
     const clip = intersect(overflowClipOf(m.range, within), extraClip);
-    for (const b of liveLineBars(textRectsOf(m.range), origin, clip)) out.push(m.neutral ? b : { ...b, hue: m.hue });
+    for (const b of liveLineBars(textRectsOf(m.range), origin, clip)) {
+      out.push(m.wait && !m.live ? { ...b, kind: 'wait' } : m.neutral ? b : { ...b, hue: m.hue });
+    }
   }
   return out;
 }
@@ -202,6 +259,7 @@ export function useThreadMarks(args: UseThreadMarksArgs): ThreadMarkTipStore {
       marks.current = [];
       setPanelMarks(panelKey, []);
       if (layer) paintLiveBars(layer, []);
+      argsRef.current.onDerived?.([]);
       return;
     }
     const derive = () => {
@@ -209,15 +267,18 @@ export function useThreadMarks(args: UseThreadMarksArgs): ThreadMarkTipStore {
       for (const s of argsRef.current.specs) {
         const range = argsRef.current.locatePassage({ msgId: s.parentMsgId, quote: s.quote });
         if (range) {
+          const { live, wait } = markFlagsOf(s, liveKeys);
           out.push({
             key: s.key, ...(s.headId ? { headId: s.headId } : {}), range, hue: s.hue, resolved: s.resolved, title: s.title,
-            ...(s.neutral ? { neutral: true } : {}), ...(liveKeys.has(s.key) ? { live: true } : {}),
+            ...(s.neutral ? { neutral: true } : {}), ...(s.neutral && s.state ? { state: s.state } : {}),
+            ...(live ? { live: true } : {}), ...(wait ? { wait: true } : {}), ...(s.draft ? { draft: true } : {}),
           });
         }
       }
-      marks.current = out;
+      marks.current = byUrgency(out);
       setPanelMarks(panelKey, out);
       paintLive();
+      argsRef.current.onDerived?.(out);
     };
     derive();
     let raf = 0;
@@ -237,7 +298,11 @@ export function useThreadMarks(args: UseThreadMarksArgs): ThreadMarkTipStore {
   // a DOM change: the box resizing (text rewraps), an image loading above it, a
   // <details> opening, and a scroll: of an inner scroller (a wide table) for a
   // layer that scrolls with the text, of anything at all for an overlay.
-  const liveOn = enabled && liveKeys.size > 0;
+  const moving = useMemo(() => specs.some((s) => {
+    const f = markFlagsOf(s, liveKeys);
+    return f.live || f.wait;
+  }), [specs, liveKeys]);
+  const liveOn = enabled && moving;
   const overlay = !!args.live?.overlay;
   useEffect(() => {
     const el = containerRef.current;
@@ -279,7 +344,7 @@ export function useThreadMarks(args: UseThreadMarksArgs): ThreadMarkTipStore {
       const hit = at(x, y);
       if (hit) {
         el.setAttribute('data-thread-mark-hover', '');
-        setTip({ text: `Open “${hit.title}”`, at: { x, y } });
+        setTip({ text: markTipText(hit), at: { x, y } });
       } else if (el.hasAttribute('data-thread-mark-hover')) {
         el.removeAttribute('data-thread-mark-hover');
         setTip(null);
@@ -307,9 +372,34 @@ export function useThreadMarks(args: UseThreadMarksArgs): ThreadMarkTipStore {
       log.info('threads', 'mark click', { sessionId: argsRef.current.sessionId, headId: hit.headId ?? '' });
       argsRef.current.onOpen(hit.key);
     };
+    // WebKit selects the word under a right press before contextmenu fires, so
+    // "a selection is open" is read at the press, not at the menu.
+    // A right press, or a ctrl+click (macOS opens the menu on it, button 0).
+    // null: no such press came first (the keyboard's menu key): read it now.
+    let selectedAtPress: boolean | null = null;
+    const onPress = (e: PointerEvent | MouseEvent) => {
+      selectedAtPress = e.button === 2 || (e.button === 0 && e.ctrlKey) ? !selectionIsEmpty(window.getSelection()) : null;
+    };
+    const press = typeof window.PointerEvent === 'function' ? 'pointerdown' : 'mousedown';
+    const onContext = (e: MouseEvent) => {
+      const menu = argsRef.current.onMenu;
+      const selected = selectedAtPress ?? !selectionIsEmpty(window.getSelection());
+      selectedAtPress = null;
+      if (!menu || selected) return;
+      const hit = at(e.clientX, e.clientY);
+      if (!hit || hit.draft) return;
+      e.stopPropagation();
+      e.preventDefault();
+      // The engine's own word selection from this press is not the reader's.
+      if (!selectionIsEmpty(window.getSelection())) window.getSelection()?.removeAllRanges();
+      setTip(null);
+      menu(hit.key, { x: e.clientX, y: e.clientY });
+    };
     el.addEventListener('pointermove', onMove, { passive: true });
     el.addEventListener('pointerleave', onLeave);
     el.addEventListener('click', onClick, true);
+    el.addEventListener(press, onPress as EventListener, true);
+    el.addEventListener('contextmenu', onContext, true);
     el.addEventListener(release, onRelease as EventListener, true);
     return () => {
       el.removeEventListener(release, onRelease as EventListener, true);
@@ -317,6 +407,8 @@ export function useThreadMarks(args: UseThreadMarksArgs): ThreadMarkTipStore {
       el.removeEventListener('pointermove', onMove);
       el.removeEventListener('pointerleave', onLeave);
       el.removeEventListener('click', onClick, true);
+      el.removeEventListener(press, onPress as EventListener, true);
+      el.removeEventListener('contextmenu', onContext, true);
       el.removeAttribute('data-thread-mark-hover');
       setTip(null);
     };

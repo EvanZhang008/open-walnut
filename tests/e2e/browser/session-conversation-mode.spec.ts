@@ -116,7 +116,7 @@ test.describe('Conversation Mode, the mode pill and the question tag', () => {
     await shot(page, 'conversation-mode')
   })
 
-  test('the sidebar numbers the questions with status words and no colour; a row is the composer target', async ({ page }) => {
+  test('the sidebar numbers the questions with status words and no colour; a row opens its question, not the composer', async ({ page }) => {
     await page.goto('/')
     await page.waitForLoadState('networkidle')
     // Wide enough for the labelled sidebar (a box of 640px or more).
@@ -158,8 +158,10 @@ test.describe('Conversation Mode, the mode pill and the question tag', () => {
     await expect(history(panel).locator('[data-thread-fold] .thread-turn-label[data-current="true"]')).toHaveCount(1)
     await expect(row(panel, IDS.Q2.u)).toHaveCount(0)
     await expect(row(panel, IDS.Q1.u)).toHaveCount(0)
-    // The composer says where the next message goes.
-    await expect(panel.locator('.chat-input-textarea').first()).toHaveAttribute('placeholder', new RegExp(TAGGED_TITLES.Q2))
+    // Opening a question never quotes it: the composer still writes to the
+    // main conversation (2026-10-27; session-thread-no-auto-quote.spec.ts).
+    await expect(panel.locator('[data-testid="composer-thread-target"]')).toHaveCount(0)
+    await expect(panel.locator('.chat-input-textarea').first()).not.toHaveAttribute('placeholder', new RegExp(TAGGED_TITLES.Q2))
     // The row also opened the question's card (session-thread-card.spec.ts
     // covers it); closed here so the label under it can be clicked.
     await panel.locator('.thread-card .thread-card-close').click()
@@ -218,7 +220,7 @@ test.describe('Conversation Mode, the mode pill and the question tag', () => {
     await shot(page, 'tree-mode-q1', panel)
   })
 
-  test('Ask in Conversation Mode: the target moves to the new question, the send carries the banner, the reply comes back tagged, stripped and numbered', async ({ page, request }) => {
+  test('Ask in Conversation Mode: the card asks the new question, the send carries the banner, the reply comes back tagged, stripped and numbered', async ({ page, request }) => {
     await page.goto('/')
     await page.waitForLoadState('networkidle')
     await pinPanelWidth(page, 1100)
@@ -228,7 +230,7 @@ test.describe('Conversation Mode, the mode pill and the question tag', () => {
     await passageRects(panel, TAGGED_PASSAGE.slice(0, 30))
     await selectPassage(page, panel, TAGGED_PASSAGE.slice(0, 30))
     await page.locator('[data-testid="quote-pin-pill"] [data-testid="quote-ask-btn"]').click()
-    // No page opens; the draft question is the target, and the map shows it as new.
+    // No page opens; the card holds the draft question, and the map shows it as new.
     await expect(modePill(panel)).toHaveAttribute('data-view-mode', 'linear')
     await expect(panel.locator('.thread-stack-header')).toHaveCount(0)
     const map = panel.locator('.thread-map')
@@ -243,8 +245,8 @@ test.describe('Conversation Mode, the mode pill and the question tag', () => {
         return send.call(this, data)
       }
     })
-    const box = panel.locator('.chat-input-textarea').first()
-    await box.click()
+    // The card's own box asks it (the chat's composer is not quoted into it).
+    const box = panel.locator('.thread-card .thread-card-input')
     await box.fill('Which page wins a tie?')
     await box.press('Enter')
     await expect(box).toHaveValue('')
@@ -257,8 +259,8 @@ test.describe('Conversation Mode, the mode pill and the question tag', () => {
     await expect(panel.locator('.session-history .session-msg--threaded', { hasText: 'Which page wins a tie?' })).toHaveCount(0)
     // Its card holds the bubble and the reply, tag stripped; the banner rides the
     // send but never the bubble.
-    await line.locator('.thread-turn-label').click()
     const card = panel.locator('.thread-card')
+    if (!(await card.count())) await line.locator('.thread-turn-label').click()
     await expect(card.locator('.thread-card-q')).toHaveText(['Which page wins a tie?'])
     await expect(card).not.toContainText(`Question Q${n}`)
     await expect(card).not.toContainText('Begin your reply')

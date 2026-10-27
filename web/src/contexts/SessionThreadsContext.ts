@@ -7,6 +7,7 @@ import type {
 } from '@/components/sessions/thread-ui-contract';
 import type { PageLanding } from '@/utils/thread-stack-state';
 import type { CardGrown } from '@/utils/thread-card';
+import type { ThreadMarkState } from '@/utils/thread-mark-state';
 
 /** One navigation, as the timeline's landing reads it (nonce'd by `seq`). */
 export interface ThreadStackNav {
@@ -60,9 +61,8 @@ export interface ThreadStackApi {
    *  composer's); an Ask that was never written leaves nothing behind. False when
    *  the page on screen is not a pending one. */
   leavePending: (cardText: string | undefined, via: ThreadNavVia) => boolean;
-  /** The composer stops replying in the question: back to the main conversation,
-   *  carrying what was typed into its composer (a pending page is dropped). */
-  replyInMain: (via: ThreadNavVia) => void;
+  /** Drop an Ask not sent yet, on the path or among the drafts, with its words. */
+  dropDraft: (pageKey: string, via: ThreadNavVia) => void;
   /** Write the stack (path, landings, last viewed) to sessionStorage now. */
   persist: () => void;
 }
@@ -78,6 +78,16 @@ export interface ThreadDerived {
   lastQuestion: ReadonlyMap<string, string>;
   /** Keys whose answer is streaming right now. */
   answering: ReadonlySet<string>;
+  /** Keys whose live turn already has answer text (the mark turns from waiting to answering). */
+  spoke?: ReadonlySet<string>;
+  /** When this tab saw each question's answer land (its own clock, utils/thread-answer-dating.ts). */
+  datedAt?: ReadonlyMap<string, number>;
+  /** Questions with a send of this tab on its way (queued or delivered). */
+  sentKeys?: ReadonlySet<string>;
+  /** Questions with a send of this tab still waiting in the queue. */
+  queuedKeys?: ReadonlySet<string>;
+  /** Questions whose newest send of this tab failed to deliver. */
+  unsentKeys?: ReadonlySet<string>;
 }
 
 /** Where a comment card sits inside its host box (left/top relative to the host). */
@@ -146,6 +156,8 @@ export interface SessionThreadsApi {
   publishDerived: (d: ThreadDerived) => void;
   /** Questions answered since their page was last viewed. */
   unreadKeys: ReadonlySet<string>;
+  /** What each question's passage mark paints in Conversation Mode and in files. */
+  markStates: ReadonlyMap<string, ThreadMarkState>;
   openDrawer: (filter?: ThreadDrawerFilter) => void;
   /** `Show in tree`: open the drawer on the current row, ancestors expanded. */
   revealInTree: () => void;
@@ -160,9 +172,18 @@ export interface SessionThreadsApi {
    *  the composer's target. */
   headJump: { threadKey: string; seq: number } | null;
   requestHeadJump: (threadKey: string) => void;
-  /** Send into the composer's target (the comment card's composer): the same
-   *  anchored path the panel's composer takes. False when nothing was sent. */
+  /** Send into the open card's question (the card's own box): the same anchored
+   *  path the panel's composer takes. False when nothing was sent. */
   sendToTarget: (text: string) => Promise<boolean>;
+  /** Conversation Mode: the question the chat's composer writes to, set only by
+   *  an explicit Quote in chat (utils/composer-quote.ts); null = main. */
+  quotedKey: string | null;
+  quoteInChat: (key: string, via: string) => void;
+  /** Let go of the quoted question; its typed words go to the main draft
+   *  (`keepDraft`: they stay the question's). */
+  clearQuote: (via: string, opts?: { keepDraft?: boolean }) => void;
+  /** The reader looked at this question's answer (a review card picked). */
+  markViewed: (key: string) => void;
   /** The comment card open in Conversation Mode (its question's key, a pending
    *  page key for a draft), published by the timeline; null when closed. */
   openCardKey: string | null;
@@ -202,7 +223,7 @@ export const NO_STACK: ThreadStackApi = {
   drafts: [],
   draftPages: [],
   leavePending: () => false,
-  replyInMain: NOOP,
+  dropDraft: NOOP,
   openDraft: NOOP,
   persist: NOOP,
 };
@@ -223,6 +244,7 @@ const EMPTY: SessionThreadsApi = {
   derived: EMPTY_DERIVED,
   publishDerived: NOOP,
   unreadKeys: EMPTY_SET,
+  markStates: EMPTY_MAP,
   openDrawer: NOOP,
   revealInTree: NOOP,
   retry: NOOP,
@@ -231,6 +253,10 @@ const EMPTY: SessionThreadsApi = {
   headJump: null,
   requestHeadJump: NOOP,
   sendToTarget: async () => false,
+  quotedKey: null,
+  quoteInChat: NOOP,
+  clearQuote: NOOP,
+  markViewed: NOOP,
   openCardKey: null,
   publishOpenCardKey: NOOP,
   cardRequest: null,

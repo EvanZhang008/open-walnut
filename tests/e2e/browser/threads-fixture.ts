@@ -26,6 +26,8 @@
  * All text is invented, neutral filler.
  */
 
+import { buildReviewSession } from './threads-review-fixture';
+
 export const DENSE_SESSION = 'pw-threads-dense-session';
 export const AI_SESSION = 'pw-threads-ai-session';
 export const FAILED_SESSION = 'pw-threads-failed-session';
@@ -595,6 +597,7 @@ export function allThreadsFixtures(nowMs: number): ThreadsFixtureSession[] {
   return [
     buildDenseSession(nowMs), buildAiSession(), buildFailedSession(nowMs), buildRewrittenSession(nowMs), buildReloadSession(),
     buildMapSession(nowMs), buildPinsOnlySession(nowMs), buildTaggedSession(nowMs), buildQueuedSession(),
+    buildReviewSession(nowMs),
   ];
 }
 

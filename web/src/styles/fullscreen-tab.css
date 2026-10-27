@@ -1,0 +1,34 @@
+/* Full screen is the full screen of the TAB, not of the app (2026-10-27, the
+   user: "during full screen I can still go from home to org"). A promoted panel
+   is the same sheet as before, laid over the page area beside the sidebar, which
+   stays usable; AppShell writes the page area's left edge to --fullscreen-left
+   (0 on a phone, where the sidebar is a drawer). The gutter keeps a strip of
+   backdrop around the sheet, so a click outside still leaves full screen. The
+   dock and the workflow card take the same area but are not kept across routes:
+   a sidebar click navigates, and that route change ends their full screen.
+   Loaded after globals.css; `html` gives the weight over the centred-sheet
+   rules there. */
+html .open-walnut-fullscreen,
+html .open-walnut-fullscreen.is-changed-open {
+  --fullscreen-gutter: 12px;
+  top: var(--fullscreen-gutter);
+  bottom: var(--fullscreen-gutter);
+  left: calc(var(--fullscreen-left, 0px) + var(--fullscreen-gutter));
+  right: var(--fullscreen-gutter);
+  width: auto;
+  height: auto;
+  max-width: none;
+  margin: 0 !important;
+}
+html .open-walnut-fullscreen-backdrop {
+  left: var(--fullscreen-left, 0px);
+}
+/* A sheet whose page is not on show (useFullscreen keepAcrossRoutes). */
+html .open-walnut-fullscreen-away,
+html .open-walnut-fullscreen-away * {
+  visibility: hidden !important;
+}
+/* The Files view's own full screen takes the same area. */
+html .file-content-view.fv-fullscreen {
+  left: var(--fullscreen-left, 0px);
+}

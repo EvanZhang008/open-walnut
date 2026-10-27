@@ -1,6 +1,8 @@
 import { test, expect, type Page } from '@playwright/test'
 import { isolateUiPrefs } from './todo-panel-helpers'
 import { openHome } from './home-navigation-helpers'
+import { openThreadsSession } from './threads-helpers'
+import { TAGGED_READY, TAGGED_SESSION, TAGGED_TASK } from './threads-fixture'
 
 /**
  * The collapsed rail's item peek (useRailPeek.ts, RailItemPill.tsx): hovering ONE icon
@@ -299,4 +301,23 @@ test.describe('touch', () => {
     await page.waitForTimeout(300)
     await expect(pill(page)).toHaveCount(0)
   })
+})
+
+test('with a session panel in full screen, the pill shows above the sheet and takes its click', async ({ page, baseURL }) => {
+  await boot(page, baseURL!)
+  const panel = await openThreadsSession(page, TAGGED_SESSION, TAGGED_TASK, TAGGED_READY, { view: 'linear' })
+  await panel.getByRole('button', { name: 'Expand session to full screen' }).click()
+  await expect(panel).toHaveClass(/open-walnut-fullscreen/)
+  await expect(page.locator('.open-walnut-fullscreen-backdrop')).toHaveCount(1)
+  const at = await centerOf(page, 'sidebar-core-app-settings')
+  await page.mouse.move(at.x, at.y)
+  await expect(pill(page)).toHaveText('Settings')
+  await grown(page)
+  // The name, past the rail's edge over the sheet's backdrop, is what the pointer finds there.
+  const box = (await pill(page).boundingBox())!
+  expect(box.x + box.width).toBeGreaterThan(80)
+  const onTop = await page.evaluate(([x, y]) => !!document.elementFromPoint(x, y)?.closest('[data-testid="rail-item-pill"]'),
+    [box.x + box.width - 8, box.y + box.height / 2] as const)
+  expect(onTop, 'the pill is above the full screen sheet').toBe(true)
+  await page.screenshot({ path: `${SHOTS}/${test.info().project.name}-over-fullscreen.png`, clip: { x: 0, y: 0, width: 360, height: 800 } })
 })
