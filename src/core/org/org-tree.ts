@@ -275,7 +275,10 @@ function vpOf(lead: OrgTaskLike, project: string): string | undefined {
 }
 
 /** Build the whole org from the task list. */
-export function buildOrgTree(tasks: readonly OrgTaskLike[]): OrgTree {
+export function buildOrgTree(all: readonly OrgTaskLike[]): OrgTree {
+  // A task kept to a plugin's own view, or a test run's (src/core/test-run.ts), is in no part of
+  // the tree: not a member, and not a lead that keeps an empty project on the chart.
+  const tasks = all.filter((t) => !isPluginOnlyTask(t));
   const members = tasks.filter(isOrgMember);
   const byId = new Map(members.map((t) => [t.id, t]));
   const at = new Map(members.map((t) => [t.id, t.updated_at ?? t.created_at ?? '']));

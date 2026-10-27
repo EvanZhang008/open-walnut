@@ -406,7 +406,9 @@ export async function maybeRefreshForTask(task: Task | undefined, source: string
  */
 export async function runSummaryCatchUp(): Promise<number> {
   const { getStoreProjects, getProjectMetadata, listTasksSlim } = await import('./task-manager.js');
-  const projects = Object.keys(await getStoreProjects());
+  // A test run's project (test-run.ts) gets no summary: it is swept, and the model call is real.
+  const { listedProjects } = await import('./test-run.js');
+  const projects = Object.keys(listedProjects(await getStoreProjects()));
   // ONE store read for the whole sweep — per-project gateAndRefresh calls
   // would re-materialize the full task list once per registry project.
   const all = await listTasksSlim({});

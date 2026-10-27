@@ -1681,6 +1681,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // answer, and a stale forwarded write is refused (docs/plan/walnut-replica-servers-impl.md section 3).
   const { opIdMiddleware } = await import('./middleware/op-id.js')
   app.use('/api', opIdMiddleware())
+  // A test run's writes make test objects, kept off the user's board and swept (src/core/test-run.ts).
+  app.use('/api', await (await import('./middleware/test-run.js')).testRunMiddleware())
 
   // -- Cron service --
   const cronService = new CronService({
@@ -2274,6 +2276,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     // Removal of finished tasks' working directories on every host (core/task-dir-sweep.ts).
     const { startTaskDirSweep } = await import('../core/task-dir-sweep.js')
     const taskDirSweep = startTaskDirSweep()
+    // Removal of test runs' tasks, sessions and projects once idle (core/test-run-sweep.ts).
+    const testRunSweep = (await import('../core/test-run-sweep.js')).startTestRunSweep()
     // The companion's copy of the task store (core/replication/task-replica.ts).
     const { startTaskReplicaSync } = await import('../core/replication/task-replica.js')
     const taskReplica = startTaskReplicaSync()
@@ -2291,7 +2295,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     const copies = (await import('../core/replication/kinds/index.js')).startCopyKinds()
     // A config.yaml edited outside Walnut reaches them like a Settings save (core/config-file-watch.ts).
     const configFile = (await import('../core/config-file-watch.js')).startConfigFileWatch()
-    leaderLoopHandle = { stop: () => { heartbeat.stop(); unwatch(); replicas.stop(); taskDirSweep.stop(); taskReplica.stop(); searchReplica.stop(); deviceReplica.stop(); copies.stop(); configFile.stop() } }
+    leaderLoopHandle = { stop: () => { heartbeat.stop(); unwatch(); replicas.stop(); taskDirSweep.stop(); testRunSweep.stop(); taskReplica.stop(); searchReplica.stop(); deviceReplica.stop(); copies.stop(); configFile.stop() } }
     log.leader.info('leader loops: started (heartbeat, copies to the followers)')
   }
   // A follower (the cloud companion, a server on a host) keeps the leader's

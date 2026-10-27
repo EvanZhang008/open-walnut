@@ -1,5 +1,6 @@
 /**
- * Every same-origin `/api/` fetch carries the device token.
+ * Every same-origin `/api/` fetch carries the device token, and in a test window its
+ * test-run header (./test-run.ts).
  *
  * client.ts attaches it, but about forty loaders call `fetch('/api/...')`
  * directly (the notifications feed, quiet mode, status items, files, session
@@ -14,6 +15,7 @@
  */
 
 import { getDeviceToken } from './device-token';
+import { TEST_RUN_HEADER, testRunLabel } from './test-run';
 
 const NO_TOKEN_PATHS = new Set(['/api/v1/browser-pair']);
 
@@ -55,14 +57,46 @@ export function initWithDeviceToken(
   return { ...init, headers };
 }
 
+/**
+ * The init that adds a test window's `x-walnut-test-run` (./test-run.ts) to a same-origin
+ * `/api/` call, or null to leave it. An explicit header wins.
+ */
+export function initWithTestRun(
+  input: RequestInfo | URL,
+  init: RequestInit | undefined,
+  pageHref: string,
+  label: string | null,
+): RequestInit | null {
+  if (!label) return null;
+  const raw = inputUrl(input);
+  if (raw === null) return null;
+  let url: URL;
+  let page: URL;
+  try {
+    url = new URL(raw, pageHref);
+    page = new URL(pageHref);
+  } catch {
+    return null;
+  }
+  if (url.origin !== page.origin || !url.pathname.startsWith('/api/')) return null;
+  const fromRequest = typeof Request !== 'undefined' && input instanceof Request ? input.headers : undefined;
+  const headers = new Headers(init?.headers ?? fromRequest);
+  if (headers.has(TEST_RUN_HEADER)) return null;
+  headers.set(TEST_RUN_HEADER, label);
+  return { ...init, headers };
+}
+
 let installed = false;
 
 export function installAuthFetch(): void {
   if (installed || typeof window === 'undefined' || typeof window.fetch !== 'function') return;
   installed = true;
   const original = window.fetch.bind(window);
+  const testRun = testRunLabel();
   window.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
-    const next = initWithDeviceToken(input, init, window.location.href, getDeviceToken());
-    return next ? original(input, next) : original(input, init);
+    const href = window.location.href;
+    const withToken = initWithDeviceToken(input, init, href, getDeviceToken()) ?? init;
+    const next = initWithTestRun(input, withToken, href, testRun) ?? withToken;
+    return next ? original(input, next) : original(input);
   };
 }

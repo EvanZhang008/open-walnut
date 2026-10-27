@@ -9,6 +9,8 @@
  * generation's dispose never removes the newer registration.
  */
 
+import { TEST_RUN_OWNER } from '../test-run.js';
+
 export type PluginTaskVisibility = 'everywhere' | 'plugin';
 
 const PLUGIN_CALLER_PREFIX = 'plugin:';
@@ -55,7 +57,8 @@ export async function releaseTasksOfPluginsNotKeeping(keeping: ReadonlySet<strin
   const byPlugin = new Map<string, string[]>()
   for (const task of await listTasks()) {
     const owner = task.plugin_only
-    if (!owner || keeping.has(owner)) continue
+    // A test run's task (TEST_RUN_OWNER, src/core/test-run.ts) is no plugin's: the test-run sweep ends it.
+    if (!owner || keeping.has(owner) || owner === TEST_RUN_OWNER) continue
     const ids = byPlugin.get(owner)
     if (ids) ids.push(task.id)
     else byPlugin.set(owner, [task.id])

@@ -14,6 +14,7 @@ import { normalizeTags } from '../../../src/core/tag-model';
 import { deletedTaskId } from '../../../src/core/task-deleted-id';
 import { markFirstScreen } from '@/utils/after-first-screen';
 import { isPluginOnlyTask } from '@open-walnut/org-tree';
+import { forThisWindow } from '@/api/test-run';
 
 /**
  * Optimistic default status for a newly-linked session (before the first
@@ -799,7 +800,9 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
   // Real-time event handlers — single source of truth for state changes
   // Server emits { task: <Task> } wrapper objects
   useEvent('task:created', (data) => {
-    const { task, clientRequestId } = data as { task: Task; clientRequestId?: string };
+    const { task: raw, clientRequestId } = data as { task: Task; clientRequestId?: string };
+    // A test run's task is ordinary work in its own test window (api/test-run.ts).
+    const task = forThisWindow(raw);
     // Skip tasks with missing or empty titles (e.g. from sync race conditions)
     if (!task.title || task.title.trim() === '') return;
     // A plugin's own task belongs to that plugin's view, never this store (the list
@@ -861,7 +864,8 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
 
   useEvent('task:updated', (data) => {
     wsEventCounts.current.updated++;
-    const { task } = data as { task?: Task };
+    const { task: raw } = data as { task?: Task };
+    const task = raw && forThisWindow(raw);
     if (!task) { log.info('tasks', 'ws task:updated bulk → refetch (debounced)'); scrollLog('drag-trace-ws-updated-bulk-refetch'); scheduleBulkRefetch(); return; }
     // Kept to a plugin's own view (now or since this write): out of the store.
     if (isPluginOnlyTask(task)) { dropPluginOnly(task.id); return; }
@@ -898,7 +902,8 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
 
   useEvent('task:completed', (data) => {
     wsEventCounts.current.completed++;
-    const { task } = data as { task?: Task };
+    const { task: raw } = data as { task?: Task };
+    const task = raw && forThisWindow(raw);
     if (!task) { log.info('tasks', 'ws task:completed bulk → refetch (debounced)'); scheduleBulkRefetch(); return; }
     if (consumeEcho(`complete:${task.id}`)) return;
     setTasks((prev) => {

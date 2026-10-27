@@ -94,6 +94,27 @@ turn, a Playwright click path, a `curl` or `walnut tools call` against the API) 
 `npm run dev:ephemeral`. Reading :3456 is fine; writing to it for a test is not: every probe
 task an agent made there stayed on the user's board (a 2026-09-23 audit found dozens).
 
+**When a check must write on :3456, it runs as a test run** (`src/core/test-run.ts`; 2026-10-27:
+an Org chart acceptance run made 9 tasks and 6 projects there, which showed on the user's board
+and Org page, and its cleanup left 3 session records with no task). A request carrying
+`x-walnut-test-run: <label>` makes test objects: every task it creates (and every subtask of
+one, whoever files it later) is kept off the board, task lists, Org and its counts, search, the
+Brief and the phone the way a plugin's own task is (`plugin_only` = `@test-run`, local, unpinned);
+every project it creates carries `metadata.test_run` and is in no project list while only test
+work lives in it. The test run's own requests still see them, unmarked, so a UI check finds what
+it made. Who sends the header: the web app whenever a browser is under automation
+(`navigator.webdriver`, so every Playwright run, MCP included, without asking) or was opened with
+`?walnut-test-run=<label>` (for the tab; `=0` ends it), the `walnut` CLI with
+`WALNUT_TEST_RUN=<label>` in its env, and `curl -H 'x-walnut-test-run: <label>'`. A plain `curl`
+or `walnut` call without it is a real write. Main and the lead of a real project are never test
+objects. Deleting a test task removes its session records too, and the primary's sweep
+(`src/core/test-run-sweep.ts`, every 30 min) deletes test tasks idle for
+`WALNUT_TEST_RUN_TTL_HOURS` (6) with their sessions, then their empty projects, with no tombstone.
+Still delete what you made when you are done, and never touch the user's own objects from a test
+run: the marker covers what you create, not what you edit. Throwaway servers (ephemeral, the test
+runner, a data home in a temp or task dir) ignore the header; `WALNUT_TEST_RUN_MARK=1` turns it on
+there, as `tests/e2e/test-run-objects.test.ts` does.
+
 The launcher prints `{pid, port, tmpDir, daemonDir, pausedCronJobs, removedPushTokens}`. The
 server is isolated by construction, so nothing it does reaches the real Walnut:
 

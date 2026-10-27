@@ -13,6 +13,8 @@
  * original in-process code path (`runXxxDirect`).
  */
 
+import { TEST_RUN_HEADER, parseTestRunLabel } from '../core/test-run.js';
+
 /** Server the CLI talks to. Override with OPEN_WALNUT_API_URL (tests, alt port). */
 const DEFAULT_BASE_URL = 'http://127.0.0.1:3456';
 
@@ -57,11 +59,18 @@ export class ApiUnreachableError extends Error {
 async function request<T>(method: string, path: string, body?: unknown, opts?: ApiRequestOptions): Promise<T> {
   const base = apiBaseUrl();
   const timeoutMs = opts?.timeoutMs ?? REQUEST_TIMEOUT_MS;
+  // `WALNUT_TEST_RUN=<label>` makes this CLI's writes test objects (src/core/test-run.ts).
+  const testRun = parseTestRunLabel(process.env.WALNUT_TEST_RUN);
+  const headers: Record<string, string> = {
+    ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),
+    ...(testRun ? { [TEST_RUN_HEADER]: testRun } : {}),
+  };
   let res: Response;
   try {
     res = await fetch(base + path, {
       method,
-      ...(body !== undefined ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : {}),
+      ...(Object.keys(headers).length ? { headers } : {}),
+      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
       signal: AbortSignal.timeout(timeoutMs),
     });
   } catch (err) {

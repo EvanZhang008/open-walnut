@@ -47,9 +47,16 @@ function serial<T>(fn: () => Promise<T>): Promise<T> {
 }
 
 // The cached store, not a SQL scan: a fresh scan parses every row's payload on the event loop.
-async function orgTasks(): Promise<OrgTaskLike[]> {
+/**
+ * The tasks the org reads. A test run's tasks (src/core/test-run.ts) are in it only for a
+ * test run's own request, unmarked: a person's contact never reuses a hidden test lead, and a
+ * test window's Org works on what it made.
+ */
+export async function orgTasks(): Promise<Task[]> {
   const { listTasks } = await import('../task-manager.js');
-  return listTasks();
+  const { ambientTestRun, isTestRunTask, unmarkForTestViewer } = await import('../test-run.js');
+  const tasks = await listTasks();
+  return ambientTestRun() !== undefined ? tasks.map(unmarkForTestViewer) : tasks.filter((t) => !isTestRunTask(t));
 }
 
 export async function getOrgTree(): Promise<OrgTree> {

@@ -18,6 +18,7 @@
 
 import { z } from 'zod'
 import { AsyncLocalStorage } from 'node:async_hooks'
+import { TEST_RUN_HEADER, ambientTestRun, parseTestRunLabel } from '../core/test-run.js'
 const humanCallerScope = new AsyncLocalStorage<boolean>()
 import { getOp, type HttpBinding, type WalnutOp } from './registry.js'
 import { getSelfApiRoot, getSelfCallToken } from '../lib/self-api-root.js'
@@ -96,6 +97,15 @@ function causeCode(err: unknown): string | undefined {
 }
 
 /**
+ * A test run's header (src/core/test-run.ts): the scope this call runs in, else the CLI's
+ * `WALNUT_TEST_RUN`, so `WALNUT_TEST_RUN=<label> walnut tools call ...` makes test objects.
+ */
+function testRunHeader(): Record<string, string> {
+  const label = parseTestRunLabel(ambientTestRun() ?? process.env.WALNUT_TEST_RUN)
+  return label ? { [TEST_RUN_HEADER]: label } : {}
+}
+
+/**
  * One raw request. `path` is normally relative to the /api/v1 base; a path
  * that itself starts with `/api/` is treated as SERVER-ROOT-absolute (the
  * `api` passthrough op needs to reach non-v1 routes too).
@@ -124,6 +134,7 @@ async function rawRequest(
         ...(prov.sid ? { [CALLER_SID_HEADER]: prov.sid } : {}),
         ...(prov.host ? { [CALLER_HOST_HEADER]: prov.host } : {}),
         ...(selfToken ? { Authorization: `Bearer ${selfToken}` } : {}),
+        ...testRunHeader(),
         // Always sent, so no self-call can reach a loopback-trusting route unlabelled.
         [ORIGIN_HEADER]: prov.origin,
       },

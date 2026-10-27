@@ -4,6 +4,7 @@ import type { Task as CoreTask } from '../types.js';
 import { allLetterItems, inboxPrepareSchema } from './item-schema.js';
 import { getLetter } from './store.js';
 import { getStoreProjects } from '../task-manager.js';
+import { listedProjects } from '../test-run.js';
 import { fingerprint, stableJson, taskIdForKey } from '../task-create-idempotency.js';
 import { lookupSourceClaim, sourcePairKey } from '../source-task-claims.js';
 import { resolveInboxSource } from './item-source-registry.js';
@@ -45,7 +46,7 @@ export async function prepareInboxItem(letterId: string, itemId: string, raw: un
   const pair = sourcePairKey(item.source.account, item.source.message);
   const claim = await lookupSourceClaim(trusted.key, pair, trusted.adapter).catch(error => { throw new ItemActionError('source_conflict', String(error)); });
   const receipts = await itemReceipts(trusted.key, pair, letterId, itemId);
-  const projects = [{ name: '' }, ...Object.keys(await getStoreProjects()).map(name => ({ name }))];
+  const projects = [{ name: '' }, ...Object.keys(listedProjects(await getStoreProjects())).map(name => ({ name }))];
   const result: InboxItemPrepareResponse = { source: item.source, projects, restrictions: [], receipts };
   if ((claim?.created || claim?.confirmed) && action.kind === 'op' && ['create_task', 'attach_task', 'find_task'].includes(action.intent)) {
     const current = await currentItemTaskStatus(claim!.taskId);

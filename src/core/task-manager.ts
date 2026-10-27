@@ -11,6 +11,7 @@ import { bus, EventNames } from './event-bus.js';
 import { VALID_PRIORITIES as VALID_PRIORITIES_ARRAY, READ_MARKER_KEYS, PIN_TIER_POLICY, RETIRED_PIN_TIERS, migrateFocusTier, defaultWaitUntil, type Task, type TaskStore, type TaskStatus, type TaskPhase, type TaskPriority, type TaskSource, type DashboardData, type ProjectRecord, type TaskGroupRecord, type CustomTierRecord } from './types.js';
 import { applyPhase, deriveStatusFromPhase, phaseFromStatus, VALID_PHASES, TERMINAL_PHASES, HELD_PHASES } from './phase.js';
 import { isMainAgentTask } from './org/main-stays-active.js';
+import { TEST_RUN_OWNER, TEST_RUN_PROJECT_KEY, ambientTestRun, isTestRunProject, isTestRunTask, testRunProjectMetadata, unmarkForTestViewer } from './test-run.js';
 import {
   COMPLETION_TO_PHASES,
   compareTasksForQuery,
@@ -825,6 +826,7 @@ function cloneTaskStore(store: TaskStore): TaskStore {
  */
 async function writeStore(store: TaskStore): Promise<void> {
   const db = getDb()!;
+  if (store.projects) store.projects = realizeUsedTestProjects(store.projects, store.tasks);
 
   if (store.tasks.length === 0) {
     try {
@@ -1451,6 +1453,10 @@ function ensureProjectRowLocked(
   if (existing) {
     return { name: existing.name, source: existing.source as TaskSource, created: false, ...redirect };
   }
+  // A local project a test run makes is a test project: out of every list, swept (test-run.ts).
+  // A provider project stays real: a rename's or a cascade's survivor keeps its claim.
+  const testRun = source === 'local' ? ambientTestRun() : undefined;
+  if (testRun) metadata = { ...(metadata ?? {}), ...testRunProjectMetadata(testRun) };
   const nextOrder = (db
     .prepare('SELECT COALESCE(MAX(order_index), -1) + 1 AS next FROM task_projects')
     .get() as { next: number }).next;
@@ -1459,6 +1465,30 @@ function ensureProjectRowLocked(
   ).run(effective, source, nextOrder, metadata && Object.keys(metadata).length > 0 ? JSON.stringify(metadata) : null);
   log.task.info('project created', { project: effective, source });
   return { name: effective, source, created: true, ...redirect };
+}
+
+/**
+ * A test run's project (test-run.ts) that real work moved into is the user's now: its mark
+ * goes, whichever writer filed the task there (a create, a move, a pull), so every list shows
+ * it again and the sweep never takes it. The registry passes through untouched otherwise.
+ */
+function realizeUsedTestProjects(
+  projects: Record<string, ProjectRecord>,
+  tasks: readonly Task[],
+): Record<string, ProjectRecord> {
+  const marked = Object.keys(projects).filter((k) => isTestRunProject(projects[k]));
+  if (!marked.length) return projects;
+  const used = new Set<string>();
+  for (const t of tasks) if (!isTestRunTask(t) && t.project) used.add(t.project.toLowerCase());
+  let next: Record<string, ProjectRecord> | undefined;
+  for (const key of marked) {
+    if (!used.has(key.toLowerCase())) continue;
+    const { [TEST_RUN_PROJECT_KEY]: _mark, ...metadata } = projects[key].metadata ?? {};
+    next ??= { ...projects };
+    next[key] = { ...projects[key], metadata };
+    log.task.info('test-run project now holds real work: kept', { project: key });
+  }
+  return next ?? projects;
 }
 
 function emitProjectCreated(name: string, source: TaskSource): void {
@@ -1970,6 +2000,33 @@ export async function deleteProject(project: string): Promise<{ movedToInbox: nu
 
   log.task.info('project deleted', { project: canonical, movedToInbox });
   return { movedToInbox };
+}
+
+/**
+ * Remove a test run's project (test-run.ts) once no task lives in it. Unlike deleteProject it
+ * leaves no tombstone: the user never had this project, so a later project of the same name
+ * is an ordinary one. Returns false (and changes nothing) for a project that is not a test
+ * project or still holds a task.
+ */
+export async function removeTestRunProject(name: string): Promise<boolean> {
+  await ensureInit();
+  const removed = await withWriteLock(async () => {
+    const store = await readStore();
+    const projects = store.projects ?? {};
+    const key = Object.keys(projects).find((k) => k.toLowerCase() === name.trim().toLowerCase());
+    if (!key || !isTestRunProject(projects[key])) return null;
+    if (store.tasks.some((t) => (t.project || '').toLowerCase() === key.toLowerCase())) return null;
+    const next = { ...projects };
+    delete next[key];
+    store.projects = next;
+    await writeStore(store);
+    return { name: key, source: projects[key].source };
+  });
+  if (!removed) return false;
+  await migrateProjectInConfigLists(removed.name, null);
+  bus.emit(EventNames.PROJECT_DELETED, { ...removed, movedToInbox: 0 }, ['web-ui'], { source: 'test-run-sweep' });
+  log.task.info('test-run project removed', { project: removed.name });
+  return true;
 }
 
 /**
@@ -2727,6 +2784,14 @@ export async function addTask(input: AddTaskInput): Promise<{ task: Task; syncRe
     // service's list or the board's pins would show it again. Only the plugin's own create
     // makes one; a subtask a kept task's session files is work the user asked for, on the board.
     const pluginOnly = input.plugin_only?.trim() || undefined;
+    // A test run's task (test-run.ts) is kept off the board the same way, under TEST_RUN_OWNER,
+    // and so is every subtask of one, whoever files it. Main and the lead of a real project
+    // are never test objects: a test request may only be the first to need them.
+    const testRun = pluginOnly || input.org_role === 'main'
+      || (input.org_role === 'lead' && registryKey && !isTestRunProject(projects[registryKey]))
+      ? undefined
+      : ambientTestRun() ?? (isTestRunTask(parentTask) ? 'subtask' : undefined);
+    const keptBy = pluginOnly ?? (testRun ? TEST_RUN_OWNER : undefined);
 
     // Source chain: parent (same project) → registry row → caller override → plugin claim.
     // Inbox is structurally local-only: no registry row exists for '' and no
@@ -2742,7 +2807,7 @@ export async function addTask(input: AddTaskInput): Promise<{ task: Task; syncRe
         );
       }
       source = 'local';
-    } else if ((input.source === 'local' && !parentHere) || pluginOnly) {
+    } else if ((input.source === 'local' && !parentHere) || keptBy) {
       // An EXPLICIT 'local' outranks the registry claim: the caller (quick-start,
       // external-session import) is saying "this task must never sync". The
       // project is then just a folder — a local task parked in a provider-claimed
@@ -2781,7 +2846,7 @@ export async function addTask(input: AddTaskInput): Promise<{ task: Task; syncRe
     // tier. The registry we validate against is the one already in `store` —
     // the same snapshot the write commits, so a tier can't be deleted between
     // check and write.
-    const bornPin = pluginOnly
+    const bornPin = keptBy
       ? { pinned: false as const, focus_tier: undefined }
       : resolveNewTaskTier(input, (store.custom_tiers ?? []).map((t) => t.id));
 
@@ -2826,7 +2891,7 @@ export async function addTask(input: AddTaskInput): Promise<{ task: Task; syncRe
       ...(input.walnut_agent ? { walnut_agent: true } : {}),
       ...(input.walnut_agent && input.agent_id ? { agent_id: input.agent_id } : {}),
       ...(input.org_role ? { org_role: input.org_role } : {}),
-      ...(pluginOnly ? { plugin_only: pluginOnly } : {}),
+      ...(keptBy ? { plugin_only: keptBy } : {}),
       // Born pinned (interactive/AI creates — newTaskPinDefault), in the tier
       // the caller named, in ONE store write. An absent focus_tier IS Satellite
       // (see resolveNewTaskTier, which normalizes an explicit 'satellite' away
@@ -2863,7 +2928,10 @@ export async function addTask(input: AddTaskInput): Promise<{ task: Task; syncRe
     // whole registry from this snapshot right after.
     let createdProject: { name: string; source: TaskSource } | undefined;
     if (project && !registryKey) {
-      store.projects = { ...projects, [project]: { source } };
+      store.projects = {
+        ...projects,
+        [project]: { source, ...(testRun ? { metadata: testRunProjectMetadata(testRun) } : {}) },
+      };
       createdProject = { name: project, source };
     }
 
@@ -3409,6 +3477,8 @@ async function runTaskQuery(
    *  and the limit, so a capped page still fills and `total` counts only what it may show. */
   opts: { hidePluginOnly?: boolean } = {},
 ): Promise<TaskQueryPage<Task> | TaskQueryPage<SlimTask>> {
+  // A test run's own window sees its test tasks, unmarked (test-run.ts); everyone else does not.
+  const testViewer = ambientTestRun() !== undefined;
   await ensureInit();
   // ONE captured clock for the whole evaluation — a relative window must not
   // straddle a second boundary between normalization and matching.
@@ -3463,7 +3533,7 @@ async function runTaskQuery(
 
   // The sentinel exclusion is already in SQL; re-check in JS so a shape SQLite's
   // trim() misses (e.g. a Unicode-space-prefixed title) still can't leak out.
-  const matched = candidates.filter((t) =>
+  const matched = (testViewer ? candidates.map(unmarkForTestViewer) : candidates).filter((t) =>
     !isRetiredSentinelTitle(t.title) && !(opts.hidePluginOnly && t.plugin_only) && matchesTaskQuery(t, normalized, ctx));
   matched.sort((a, b) => compareTasksForQuery(a, b, sort));
   // The ONE truncation point: after the derived filter + stable sort. `total` is
@@ -5178,6 +5248,7 @@ export async function deleteTask(idPrefix: string): Promise<{ task: Task }> {
   // 275 sessions were orphaned this way before 2026-08-20). Outside the task
   // write lock: session-tracker takes its own lock and the two must never
   // nest. Best-effort: a failure here must not undo the delete itself.
+  await dropTestRunSessionRecords([result.task]);
   try {
     const { unlinkSessionsFromTasks } = await import('./session-tracker.js');
     await unlinkSessionsFromTasks([result.task.id]);
@@ -5189,6 +5260,39 @@ export async function deleteTask(idPrefix: string): Promise<{ task: Task }> {
   }
 
   return result;
+}
+
+/**
+ * A deleted test task (test-run.ts) takes its session records with it: nobody will open them,
+ * and unlinked they sat in the session lists with no task (2026-10-27: an acceptance run's
+ * cleanup left three). A real task's sessions are only unlinked, as before. Best-effort.
+ */
+async function dropTestRunSessionRecords(deleted: readonly Task[]): Promise<void> {
+  const tests = deleted.filter(isTestRunTask);
+  if (!tests.length) return;
+  try {
+    const { getSessionsForTask, getSessionByClaudeId, deleteSessionRecords } = await import('./session-tracker.js');
+    const ids = new Set<string>();
+    for (const task of tests) {
+      const born = Date.parse(task.created_at);
+      const linked = new Set([...slotSessionIds(task), ...(task.session_ids ?? [])]);
+      for (const rec of await getSessionsForTask(task.id)) linked.add(rec.claudeSessionId);
+      for (const sid of linked) {
+        // Only the test run's own sessions: one started before the task (an existing session
+        // a test linked to it) is someone's real work and is only unlinked.
+        const rec = await getSessionByClaudeId(sid);
+        const started = rec?.startedAt ? Date.parse(rec.startedAt) : Number.NaN;
+        if (rec && Number.isFinite(started) && !(started < born)) ids.add(sid);
+      }
+    }
+    const removed = await deleteSessionRecords(ids, 'test-run-task-deleted');
+    log.task.info('test-run task sessions removed', { taskIds: tests.map((t) => t.id), removed });
+  } catch (err) {
+    log.task.warn('failed to remove test-run task sessions', {
+      taskIds: tests.map((t) => t.id),
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
 }
 
 export interface BatchDeleteResult {
@@ -5267,6 +5371,7 @@ export async function deleteTasksByIds(
 
   // Clear session-side task links (same reasoning as deleteTask; best-effort).
   if (deleted.length) {
+    await dropTestRunSessionRecords(deleted);
     try {
       const { unlinkSessionsFromTasks } = await import('./session-tracker.js');
       await unlinkSessionsFromTasks(deleted.map((t) => t.id));

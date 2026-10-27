@@ -9,7 +9,7 @@ requires:
 
 This skill explains the Walnut web UI so you can operate it confidently via Playwright MCP tools, acting as a human user.
 
-**Which server.** Looking at the real console on :3456 is fine. Anything that creates or changes data to test a flow (a new task, a session, a sent message, a cron job) runs on a throwaway server instead: `npm run dev:ephemeral`, then open the printed port. Test data made on :3456 stays on the user's board. The ephemeral server's sessions and tools talk only to it (see "Live verification" in the repo AGENTS.md).
+**Which server.** Looking at the real console on :3456 is fine. Anything that creates or changes data to test a flow (a new task, a session, a sent message, a cron job) runs on a throwaway server instead: `npm run dev:ephemeral`, then open the printed port. The ephemeral server's sessions and tools talk only to it. When a check must write on :3456, it is a test run: a Playwright browser marks itself (`navigator.webdriver`), and a person's browser opened with `?walnut-test-run=<label>` does too, so what it creates stays off the user's board, Org and counts while the test window still sees it, and is swept after 6 idle hours. A `curl` or `walnut` call needs `-H 'x-walnut-test-run: <label>'` or `WALNUT_TEST_RUN=<label>`, or it lands on the board. Delete what you made, and never change the user's own objects from a test (see "Live verification" in the repo AGENTS.md).
 
 ## Core Mental Models for SPA Console Testing
 

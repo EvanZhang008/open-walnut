@@ -1,3 +1,4 @@
+import { listedProjects } from './test-run.js';
 import { getStoreProjects, listTasksSlim, getProjectMetadata } from './task-manager.js';
 
 const MAX_PROJECTS = 20;
@@ -80,7 +81,8 @@ function capDigest(lines: string[]): string {
 export async function buildProjectDigest(): Promise<ProjectDigest> {
   // Both calls share task-manager initialization; keep them sequential so the
   // first cold request cannot race the project seeding transaction.
-  const storeProjects = await getStoreProjects();
+  // A test run's projects (test-run.ts) are never offered to a person typing a task.
+  const storeProjects = listedProjects(await getStoreProjects());
   const tasks = await listTasksSlim({ minimal: true });
 
   const projects: string[] = [];

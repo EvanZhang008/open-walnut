@@ -22,7 +22,7 @@
 import type { Task } from '../types.js';
 import { log } from '../../logging/index.js';
 import { bus, EventNames } from '../event-bus.js';
-import { OrgError, ensureLeadNow, leadDescription, withOrgLock } from './org-store.js';
+import { OrgError, ensureLeadNow, leadDescription, orgTasks, withOrgLock } from './org-store.js';
 import { ORG_INSTRUCTIONS_MAX, isOrgMember, pickLead, pickOwnLead, projectKey } from './org-tree.js';
 
 export const ORG_NAME_MAX = 60;
@@ -121,7 +121,7 @@ export async function createOrgNode(input: NewOrgNodeInput, vpOnly: boolean, opt
   const instructions = input.instructions === undefined ? '' : cleanInstructions(input.instructions);
   return withOrgLock(async () => {
     const tm = await import('../task-manager.js');
-    const tasks = await tm.listTasks();
+    const tasks = await orgTasks();
     const key = projectKey(name);
     const open = tasks.some((t) => isOrgMember(t) && projectKey(t.project) === key);
     const lead = pickLead(tasks, name);
@@ -204,7 +204,7 @@ async function editNow(task: Task, edit: CleanEdit): Promise<Task> {
   if (edit.name !== undefined) {
     const own = edit.name && projectKey(edit.name) !== projectKey(task.project) ? edit.name : '';
     if (own !== (task.org_name?.trim() ?? '')) {
-      if (own) refuseTaken(await tm.listTasks(), own, { id: task.id, project: task.project ?? '' });
+      if (own) refuseTaken(await orgTasks(), own, { id: task.id, project: task.project ?? '' });
       patch.org_name = (own || null) as string;
     }
   }
@@ -251,7 +251,7 @@ export async function editProjectVp(project: string, edit: OrgNodeEdit): Promise
   const clean = cleanEdit(edit, 'lead');
   return withOrgLock(async () => {
     const tm = await import('../task-manager.js');
-    const tasks = await tm.listTasks();
+    const tasks = await orgTasks();
     const key = projectKey(name);
     const before = pickOwnLead(tasks, name);
     if (!before && !tasks.some((t) => isOrgMember(t) && projectKey(t.project) === key)) {

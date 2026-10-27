@@ -31,6 +31,7 @@ import {
 } from '../../core/task-manager.js'
 import { getProjectSummary } from '../../core/project-memory.js'
 import { getConfig } from '../../core/config-manager.js'
+import { listedProjects } from '../../core/test-run.js'
 import { registry } from '../../core/integration-registry.js'
 import type { TaskSource } from '../../core/types.js'
 
@@ -95,7 +96,12 @@ export async function buildProjectsPayload(): Promise<{
   ])
   const favorites = new Set((config.favorites?.projects ?? []).map((p) => p.toLowerCase()))
 
-  const projects = Object.entries(storeProjects).map(([name, record]) => ({
+  // A test run's project (src/core/test-run.ts) is in no list while only test work lives in it.
+  const shown = listedProjects(storeProjects, (name) => {
+    const c = byProject.get(name.toLowerCase())
+    return !!c && c.todo + c.active + c.done > 0
+  })
+  const projects = Object.entries(shown).map(([name, record]) => ({
     name,
     source: record.source,
     ...(record.order_index !== undefined ? { order_index: record.order_index } : {}),

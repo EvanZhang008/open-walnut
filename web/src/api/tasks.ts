@@ -1,4 +1,5 @@
 import { ApiError, apiGet, apiPost, apiPatch, apiPut, apiDelete } from './client';
+import { forThisWindow } from './test-run';
 import type { Task, DashboardData, QuickTaskParse } from '@open-walnut/core';
 import {
   seedTaskSessionStatuses,
@@ -6,7 +7,9 @@ import {
 } from '@/stores/session-status-store';
 import { hydrateSessionStatuses, hydrateTaskSessionStatuses, openTaskSessionIds } from './sessions';
 
-async function seedTask<T extends Task>(task: T): Promise<T> {
+async function seedTask<T extends Task>(answer: T): Promise<T> {
+  // A test run's task is ordinary work in its own test window (./test-run.ts).
+  const task = forThisWindow(answer);
   seedTaskSessionStatuses(task, 'rest:task');
   await hydrateTaskSessionStatuses([task]);
   return task;
@@ -24,7 +27,8 @@ async function seedTask<T extends Task>(task: T): Promise<T> {
  * an unversioned seed never overrides a versioned one, so the order in which
  * the seed, the hydration and WS events land cannot move a status backwards.
  */
-function seedTasks<T extends Task>(tasks: T[]): T[] {
+function seedTasks<T extends Task>(answer: T[]): T[] {
+  const tasks = answer.map((t) => forThisWindow(t));
   sessionStatusStore.seedTaskList(tasks, 'rest:task-list');
   hydrateListInBackground(openTaskSessionIds(tasks));
   return tasks;
