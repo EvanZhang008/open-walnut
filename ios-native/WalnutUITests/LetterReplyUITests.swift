@@ -475,12 +475,14 @@ final class LetterReplyUITests: XCTestCase {
         // Read up the thread (its own scroll) while the answer is on its way.
         let thread = app.scrollViews["inbox.letter.conversation"]
         let subject = humanTurn(app, "Filler reply 1, long enough to wrap onto a second line so the letter is taller than the screen.")
-        for _ in 0..<5 where !subject.isHittable {
-            thread.swipeDown()
+        // With the keyboard up the pane is short, so each swipe moves little.
+        for _ in 0..<16 where !subject.isHittable {
+            swipeDownInView(thread, app)
             try await Task.sleep(for: .milliseconds(500))
         }
         try await Task.sleep(for: .seconds(1))
         XCTAssertEqual(fieldText(replyField(app)), "", "the field picked up text while reading: \(fieldText(replyField(app)))")
+        if !subject.isHittable { try await stub.screenshot(app, "follow-3-swipe-short") }
         XCTAssertTrue(subject.isHittable, "the swipe did not reach the first reply")
         let before = subject.frame.minY
         try await stub.screenshot(app, "follow-3-scrolled-up-while-sending")
@@ -513,6 +515,7 @@ final class LetterReplyUITests: XCTestCase {
         letter.swipeDown()
         letter.swipeDown()
         try await Task.sleep(for: .seconds(1))
+        if !element(app, "inbox.letter.subject").isHittable { try await stub.screenshot(app, "follow-not-at-the-top") }
         XCTAssertTrue(element(app, "inbox.letter.subject").isHittable, "not reading from the top")
         let text = "Read it all from the top. Ship it."
         enter(text, app)
@@ -619,9 +622,13 @@ final class LetterReplyUITests: XCTestCase {
         XCTAssertTrue(turn(app, "inbox.letter.agentTurn", containing: "Newest agent note").waitForExistence(timeout: 15))
         let conversation = app.scrollViews["inbox.letter.conversation"]
         XCTAssertTrue(conversation.waitForExistence(timeout: 5))
-        conversation.swipeDown()
-        conversation.swipeDown()
+        let newest = turn(app, "inbox.letter.agentTurn", containing: "Newest agent note")
+        for _ in 0..<6 where newest.isHittable {
+            conversation.swipeDown()
+            try await Task.sleep(for: .milliseconds(500))
+        }
         try await Task.sleep(for: .seconds(1.5))
+        XCTAssertFalse(newest.isHittable, "the swipes did not take the reader up the thread")
         let marker = (1...14).lazy
             .map { self.turn(app, "inbox.letter.humanTurn", containing: "Reply \($0):") }
             .first { $0.exists && $0.isHittable }
@@ -630,9 +637,17 @@ final class LetterReplyUITests: XCTestCase {
 
         try await stub.call("POST", "__stub/letter-reply-agent?id=\(Self.letterB)&text=Fresh%20agent%20note")
         // Nothing pushes letter changes to the app; a pull on the document re-reads it.
-        app.scrollViews["inbox.letter.document"].swipeDown()
+        // A long, slow drag: a swipe across the short document pane is too short a pull.
+        // The pane's frame starts under the navigation bar: the pull starts below it.
+        let document = app.scrollViews["inbox.letter.document"]
+        let below = app.navigationBars.firstMatch.frame.maxY + 16 - document.frame.minY
+        let start = document.coordinate(withNormalizedOffset: .zero)
+            .withOffset(CGVector(dx: document.frame.width / 2, dy: below))
+        start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: 0, dy: 420)),
+                    withVelocity: .slow, thenHoldForDuration: 0.3)
         let button = element(app, "inbox.letter.newReply")
-        XCTAssertTrue(button.waitForExistence(timeout: 15), "no New reply button")
+        if !button.waitForExistence(timeout: 15) { try await stub.screenshot(app, "new-reply-missing") }
+        XCTAssertTrue(button.exists, "no New reply button")
         try await Task.sleep(for: .seconds(1))
         try await stub.screenshot(app, "new-reply-button")
         XCTAssertEqual(marker.frame.minY, before, accuracy: 1, "the new reply moved the thread")
@@ -645,6 +660,20 @@ final class LetterReplyUITests: XCTestCase {
         XCTAssertTrue(fresh.isHittable, "the tap did not bring the new reply into view")
         XCTAssertLessThanOrEqual(fresh.frame.maxY, element(app, "inbox.letter.composer").frame.minY + 0.5)
         XCTAssertFalse(button.exists, "the button stayed after the tap")
+    }
+
+    /// A swipe down inside the part of the conversation pane that shows, between
+    /// the bar over it and the reply box. The pane's frame runs on under the reply
+    /// box and the keyboard, so `swipeDown()` from its centre lands on the keyboard.
+    @MainActor
+    func swipeDownInView(_ pane: XCUIElement, _ app: XCUIApplication) {
+        let top = element(app, "inbox.letter.threadBar").frame.maxY
+        let bottom = element(app, "inbox.letter.composer").frame.minY
+        let origin = pane.coordinate(withNormalizedOffset: .zero)
+        let x = pane.frame.midX - pane.frame.minX
+        let start = origin.withOffset(CGVector(dx: x, dy: top + 12 - pane.frame.minY))
+        let end = origin.withOffset(CGVector(dx: x, dy: bottom - 12 - pane.frame.minY))
+        start.press(forDuration: 0.02, thenDragTo: end, withVelocity: .fast, thenHoldForDuration: 0)
     }
 
     @MainActor
@@ -700,7 +729,8 @@ final class LetterReplyUITests: XCTestCase {
             _ = try? await stub.call("POST", "__stub/letter-reply-mark?name=follow-\(tag)-send-\(index + 1)")
             app.buttons["inbox.letter.send"].tap()
             let bubble = humanTurn(app, send.text)
-            XCTAssertTrue(bubble.waitForExistence(timeout: 20), "reply \(index + 1) never landed: \(statusLabels(app))")
+            if !bubble.waitForExistence(timeout: 20) { try await stub.screenshot(app, "follow-\(tag)-reply-\(index + 1)-missing") }
+            XCTAssertTrue(bubble.exists, "reply \(index + 1) never landed: \(statusLabels(app))")
             // The follow scroll runs after the line lays out; give it and its animation time.
             try await Task.sleep(for: .seconds(1.5))
             guard let line = statusLine(under: bubble, app) else {

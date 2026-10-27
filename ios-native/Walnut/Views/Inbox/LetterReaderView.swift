@@ -55,6 +55,12 @@ struct LetterReaderView: View {
     /// The two scrolls' measurements (`LetterPaneSplit`): what both panes share,
     /// the bar between them, and each pane's content.
     @State private var paneSpace: CGFloat = 0
+    /// How far the panes run up under the navigation bar. The page runs up
+    /// behind the bar, so the document pane starts under it: without this the
+    /// bar hid about 100pt of the document's share, and a swipe in its upper
+    /// half landed on the bar (the pane could not be scrolled back to the top
+    /// or pulled to refresh).
+    @State private var paneTopInset: CGFloat = 0
     @State private var paneBarHeight: CGFloat = 0
     @State private var documentContentHeight: CGFloat = 0
     @State private var conversationContentHeight: CGFloat = 0
@@ -175,7 +181,7 @@ struct LetterReaderView: View {
             .frame(height: split ? LetterPaneSplit.documentHeight(
                 space: paneSpace, bar: paneBarHeight,
                 document: documentContentHeight, conversation: conversationContentHeight
-            ) : nil)
+            ).map { $0 + paneTopInset } : nil)
             // Dragging the letter down puts the keyboard away, as in a chat.
             .scrollDismissesKeyboard(.interactively)
             .refreshable { await refresh() }
@@ -194,6 +200,9 @@ struct LetterReaderView: View {
                     .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { conversationContentHeight = $0 }
                 }
                 .scrollDismissesKeyboard(.interactively)
+                // On the scroll view itself: put after the modifier, the name
+                // would also cover its "New reply" button.
+                .accessibilityIdentifier("inbox.letter.conversation")
                 // Opens at the newest turn and follows it while the reader is at
                 // the end; a sent reply and its status line come into view above
                 // the reply box.
@@ -201,12 +210,22 @@ struct LetterReaderView: View {
                     key: newestStatusKey, target: nil, contentId: Self.contentId, sendTick: followTick,
                     keyboardLeaving: keyboardLeavesAfterSend, turnCount: threadItemCount(letter)
                 ))
-                .accessibilityIdentifier("inbox.letter.conversation")
             }
         }
-        .onGeometryChange(for: CGFloat.self) { proxy in
-            proxy.size.height - proxy.safeAreaInsets.top - proxy.safeAreaInsets.bottom
-        } action: { paneSpace = $0 }
+        .onGeometryChange(for: PaneGeometry.self) { proxy in
+            PaneGeometry(
+                topInset: proxy.safeAreaInsets.top,
+                space: proxy.size.height - proxy.safeAreaInsets.top - proxy.safeAreaInsets.bottom
+            )
+        } action: { geometry in
+            paneTopInset = geometry.topInset
+            paneSpace = geometry.space
+        }
+    }
+
+    private struct PaneGeometry: Equatable {
+        var topInset: CGFloat
+        var space: CGFloat
     }
 
     /// The letter itself: everything above its conversation.

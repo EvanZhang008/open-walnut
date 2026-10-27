@@ -92,6 +92,8 @@ struct LetterFollowsNewestStatus: ViewModifier {
     final class FollowIntent {
         var following = false
         var distanceFromEnd: CGFloat = 0
+        /// The visible height of the pane, above the reply box and keyboard.
+        var viewport: CGFloat = 0
         var userScrolling = false
         /// Between a keyboard's will-show/hide and its did-show/hide.
         var keyboardMoving = false
@@ -116,10 +118,17 @@ struct LetterFollowsNewestStatus: ViewModifier {
     struct Sample: Equatable {
         var distanceFromEnd: CGFloat
         var bottomInset: CGFloat
+        var viewport: CGFloat
     }
 
     /// A finger that leaves the end by more than this stops the following...
     static let stopFollowingBeyond: CGFloat = 160
+    /// ...or by a third of a short pane. With the keyboard up the conversation
+    /// pane can be under 200pt tall, where one swipe moves less than 160pt: the
+    /// reader stayed "at the end" and the next status change put them back.
+    static func stopFollowingDistance(viewport: CGFloat) -> CGFloat {
+        min(stopFollowingBeyond, max(followAgainWithin * 2, viewport / 3))
+    }
     /// ...and one that comes back within this starts it again. Between the two,
     /// the last choice stands, so a small drag near the end changes nothing.
     static let followAgainWithin: CGFloat = 40
@@ -136,10 +145,12 @@ struct LetterFollowsNewestStatus: ViewModifier {
                         distanceFromEnd: max(
                             0, geometry.contentSize.height - (geometry.visibleRect.maxY - geometry.contentInsets.bottom)
                         ),
-                        bottomInset: geometry.contentInsets.bottom
+                        bottomInset: geometry.contentInsets.bottom,
+                        viewport: max(0, geometry.visibleRect.height - geometry.contentInsets.bottom)
                     )
                 } action: { old, new in
                     intent.distanceFromEnd = new.distanceFromEnd
+                    intent.viewport = new.viewport
                     if intent.keyboardMoving, new.bottomInset < old.bottomInset {
                         intent.insetShrank = true
                         if intent.sendScrollOnInset {
@@ -362,7 +373,7 @@ struct LetterFollowsNewestStatus: ViewModifier {
 
     /// Only ever called while a finger is scrolling.
     static func decide(_ intent: FollowIntent) {
-        if intent.distanceFromEnd > stopFollowingBeyond {
+        if intent.distanceFromEnd > stopFollowingDistance(viewport: intent.viewport) {
             intent.following = false
         } else if intent.distanceFromEnd < followAgainWithin {
             intent.following = true

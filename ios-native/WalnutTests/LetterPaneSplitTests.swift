@@ -31,4 +31,15 @@ final class LetterPaneSplitTests: XCTestCase {
         XCTAssertNil(LetterPaneSplit.documentHeight(space: 0, bar: 30, document: 400, conversation: 400))
         XCTAssertNil(LetterPaneSplit.documentHeight(space: 20, bar: 30, document: 400, conversation: 400))
     }
+
+    /// A full-height pane keeps the 160pt rule; a short one (keyboard up) stops
+    /// following after a third of its height, never closer than twice the
+    /// distance that starts following again.
+    func testAShortPaneStopsFollowingAfterAThirdOfItsHeight() {
+        typealias F = LetterFollowsNewestStatus
+        XCTAssertEqual(F.stopFollowingDistance(viewport: 700), 160)
+        XCTAssertEqual(F.stopFollowingDistance(viewport: 180), 80)
+        XCTAssertEqual(F.stopFollowingDistance(viewport: 300), 100)
+        XCTAssertEqual(F.stopFollowingDistance(viewport: 0), 80)
+    }
 }
