@@ -3656,9 +3656,9 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       try {
         const { collectUsage, collectionStale, INCREMENTAL, USAGE_COLLECT_MS } = await import('../core/usage/collection.js')
         const { runPeriodic } = await import('../core/periodic-task.js')
-        // Each pass reads every transcript on each host (its dedupe needs every copy), so
-        // it runs every few hours, plus on Update now; a restart starts one only when the
-        // last finished pass is that old (deploys restart the server many times a day).
+        // Each host reads only what its transcripts gained since its last pass (its file
+        // index, usage-scan-index.ts); a restart starts a pass only when the last finished
+        // one is an interval old (deploys restart the server many times a day).
         const handle = runPeriodic('usage-collect', USAGE_COLLECT_MS, 40 * 60_000, async () => {
           await collectUsage(INCREMENTAL).catch((err) => log.usage.warn('usage collection failed', { error: String(err) }))
         })

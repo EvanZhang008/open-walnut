@@ -692,3 +692,13 @@ export async function scanCostState(options: { projectsDir: string; sessionId: s
   }
   return undefined;
 }
+
+/**
+ * The fold's own pieces, for the host scan's file index (usage-scan-index.ts),
+ * so an indexed scan decides owners and counters with exactly these rules.
+ */
+export const scanFold = {
+  diagnostics, yieldBudget, assertRoot, boundary, object, canonicalFiles, candidateLines, parseLine, responseIdentity,
+  invalidUsage, sourceOwner, ownerBefore, chooseOwner, updateUsage, strongerFinal, toRecord, NEWLINE, CANDIDATES, CHUNK_BYTES,
+};
+export type { LogFile as ScanLogFile, ResponseSnapshot as ScanSnapshot, ResponseOwner as ScanOwner, ResponseGroup as ScanGroup, CanonicalScanResult };

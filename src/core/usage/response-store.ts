@@ -112,7 +112,7 @@ export class ResponseUsageStore {
       { source: 'Provider invoice', host, status: 'unverified', matchedCalls: 0, unmatchedCalls: 0,
         detail: 'Account-wide, delayed usage. Not attributable to a session without a matching request route and time window.' },
       { source: 'Collection diagnostics', host, status: 'unverified', matchedCalls: 0, unmatchedCalls: 0,
-        detail: `Canonical parse: ${evidence.canonical.diagnostics.invalid_lines ?? 0} invalid lines, ${evidence.canonical.diagnostics.unreadable_files ?? 0} unreadable files. Upstream parse: ${evidence.upstream.diagnostics.length} diagnostics. These cover all scanned files, not only selected sessions.` },
+        detail: `Canonical parse: ${evidence.canonical.diagnostics.invalid_lines ?? 0} invalid lines, ${evidence.canonical.diagnostics.unreadable_files ?? 0} unreadable files. Upstream parse: ${evidence.upstream.diagnostics.length} diagnostics. These cover the lines read in this pass, not only selected sessions.` },
     ];
     // A re-import may move a response to another day or session: its old pair is
     // re-summed too, or the per-day sums would still count it there.

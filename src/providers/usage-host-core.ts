@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { scanCanonicalUsage, scanCostState } from './usage-scan-core.js';
+import { scanCanonicalUsageIndexed, usageIndexPath } from './usage-scan-index.js';
 import { scanProxyUsage, reconcileUsageAsync } from './usage-reconcile-core.js';
 import { setImmediate } from 'node:timers/promises';
 import { priceUsage } from '../core/usage/pricing.js';
@@ -12,7 +13,11 @@ export interface UsageScanRequest {
   until: string;
   sessionIds?: string[];
   lifetime?: boolean;
+  /** Where the host keeps its transcript file index (usage-scan-index.ts); unset: read every file. */
+  indexDir?: string;
 }
+
+const NEAR_MS = 10 * 60_000;
 
 export async function scanHostUsage(request: UsageScanRequest) {
   const since = request.since === undefined ? undefined : Date.parse(request.since);
@@ -34,6 +39,11 @@ export async function scanHostUsage(request: UsageScanRequest) {
     } catch { /* Missing evidence stays unverified. */ }
   }
   const upstream = await scanProxyUsage({ files, sessionIds: request.sessionIds });
+  // Requests ten minutes or more outside the window cannot compete for one of its
+  // responses; keeping them would stretch the transcript read back by days.
+  if (since !== undefined && !request.lifetime) {
+    upstream.records = upstream.records.filter(r => (r.finishedMs ?? r.startedMs) >= since - NEAR_MS && r.startedMs < until + NEAR_MS);
+  }
   let retainedSince = since;
   let retainedUntil = since === until ? until + 1 : until;
   // Retain every competitor before clipping; proxy compatibility includes its right endpoint.
@@ -42,10 +52,14 @@ export async function scanHostUsage(request: UsageScanRequest) {
     retainedUntil = Math.max(retainedUntil, (record.finishedMs ?? record.startedMs) + 5_000 + 1);
   }
   const retainedEnd = new Date(retainedUntil);
-  const canonical = await scanCanonicalUsage({ ...request,
+  const window = { ...request,
     since: request.lifetime || retainedSince === undefined ? undefined : new Date(retainedSince),
     until: request.lifetime ? undefined : Number.isFinite(retainedEnd.getTime()) ? retainedEnd : undefined,
-  });
+  };
+  const indexed = request.indexDir && !request.lifetime
+    ? await scanCanonicalUsageIndexed({ ...window, indexPath: usageIndexPath(request.indexDir, request.projectsDir) })
+    : undefined;
+  const canonical = indexed ?? await scanCanonicalUsage(window);
   const scoped = await reconcileUsageAsync(canonical.records, upstream.records, request.lifetime ? {} : { since, until });
   const used = new Set<typeof upstream.records[number]>();
   for (const [index, record] of scoped.records.entries()) {
@@ -58,7 +72,7 @@ export async function scanHostUsage(request: UsageScanRequest) {
     if (index % 100 === 99) await setImmediate();
   }
   return { canonical: { ...canonical, records: scoped.records }, upstream: { ...upstream, records: inWindow },
-    reconciliation: scoped, until: request.until };
+    reconciliation: scoped, until: request.until, ...(indexed ? { scan: indexed.scan } : {}) };
 }
 
 export function createUsagePages() {

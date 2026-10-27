@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { log } from '../../logging/index.js';
 import { USAGE_DB_FILE } from '../../constants.js';
 import { ResponseUsageStore, type UsageEvidence, type UsageOwner, type SourceCheck } from './response-store.js';
 import { getConfig } from '../config-manager.js';
@@ -22,7 +23,7 @@ export function collectionState() { return state; }
 const OVERLAP_MS = 2 * 60 * 60_000;
 
 /** How often the leader collects every host's usage (server.ts). */
-export const USAGE_COLLECT_MS = 2 * 60 * 60_000;
+export const USAGE_COLLECT_MS = 30 * 60_000;
 
 /** True when a host never finished a pass, or the oldest finished one is a collect interval old. */
 export function collectionStale(now = Date.now()): boolean {
@@ -92,8 +93,11 @@ async function collect(since: string | undefined, until: string) {
         proxyLogDir: config.usage?.proxy_log_dirs?.[host] }, 30 * 60_000);
       let responses = 0, verified = 0, unverified = 0;
       let checks: SourceCheck[] = [];
+      let logged = false;
       for (;;) {
         if (!reply.ok || !reply.result) throw new Error(String(reply.error ?? 'No usage evidence returned.'));
+        const scan = (reply.result as { scan?: unknown }).scan;
+        if (scan && !logged) { logged = true; log.usage.info('usage scan read', { host, scan }); }
         const imported = await responseUsageStore().importHost(host, reply.result as UsageEvidence, owners);
         responses += imported.responses; verified += imported.verified; unverified += imported.unverified;
         checks = imported.checks;

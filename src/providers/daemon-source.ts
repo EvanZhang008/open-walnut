@@ -11963,6 +11963,8 @@ async function cmdUsageScan(ws, id, cmd) {
     projectsDir: path.join(process.env.CLAUDE_CONFIG_DIR || path.join(HOME_DIR, '.claude'), 'projects'),
     ...(typeof cmd.proxyLogDir === 'string' ? { proxyLogDir: cmd.proxyLogDir } : {}),
     ...(typeof cmd.since === 'string' ? { since: cmd.since } : {}), until, sessionIds,
+    // The transcript file index: a scan reads only what the files gained since the last one.
+    indexDir: path.join(DAEMON_DIR, 'usage-scan-index'),
   }));
   usageScanInflight = work.then(() => {}, () => {});
   try { sendOk(ws, id, usagePages.put(await work)); }
