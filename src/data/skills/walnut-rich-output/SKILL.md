@@ -147,6 +147,51 @@ Anything that has to compute (canvas, a value the reader types, physics, three.j
 
 Island limits, by design: no access to Walnut data (no cookies, no `/api`, no parent DOM), no network at all, and it only appears once the fence closes — so keep islands small and put the explanation in the prose above, not inside.
 
+### Keep the island's state: use `localStorage`
+
+The frame can be built again at any time: the reply re-renders, a folded question opens again, the reader switches sessions or reloads the page. Walnut keeps one `localStorage` per island (per reply and per island content; the console's browsers share it, the phone keeps its own) and hands it back, already filled, before your first line runs. So write the island like a page that must survive a reload:
+
+- Read the saved state at the top of your script and draw from it; write it again after every change the reader makes.
+- Save everything needed to redraw, including anything random: a shuffled question order, a seed, the reader's picks, the score, the current step. A quiz that shuffles on load and saves only "question 7" comes back on a different question 7.
+- Give the reader a way to start over (a "Restart" button that resets the state and redraws). Never `location.reload()`: the frame reloads with the state it was built with, not the latest.
+- `sessionStorage` is the same store. Keep the state small: up to 48 KB is kept (a larger write is refused and the last one stays).
+
+### Hand a result back: `walnut.report(text)`
+
+When the island produces something the AI should see (a quiz score, the options picked, a form the reader filled), call `walnut.report(text)`. Walnut shows that exact text under the island with a **Send to AI** button; nothing is sent unless the reader presses it, and what they press sends the text exactly as shown, as their own message. A string is sent as written; anything else is sent as pretty JSON.
+
+- Write the text for the AI to act on, self-contained: what the block was, the outcome, and the details (for a quiz: the score, and for each wrong answer the question, the reader's pick and the right answer).
+- Report when the result is complete (the last question answered), and again if it changes (a retake). The same text twice is offered once.
+- Never ask the reader to copy and paste a result; that is what this is for.
+- Do not start the text with `/` (it would run as a command, so Walnut will not send it), and report only when the result changes: Send waits a moment after every change so the reader sends what they read.
+
+````
+```html-app
+<div id="q"></div><button id="next">Next</button> <button id="restart">Restart</button>
+<script>
+const QS = [{q:'2+2?', a:['3','4'], ok:1}, {q:'Capital of France?', a:['Paris','Rome'], ok:0}];
+const fresh = () => ({i:0, picks:[], order:QS.map((_, n) => n).sort(() => Math.random() - 0.5)});
+let s = JSON.parse(localStorage.getItem('quiz') || 'null') || fresh();
+const save = () => localStorage.setItem('quiz', JSON.stringify(s));
+function draw() {
+  if (s.i >= QS.length) {
+    const wrong = s.order.filter((n, k) => s.picks[k] !== QS[n].ok);
+    q.textContent = `Done: ${QS.length - wrong.length}/${QS.length}`;
+    walnut.report(`Quiz result: ${QS.length - wrong.length}/${QS.length} right.\n`
+      + wrong.map(n => `Wrong: "${QS[n].q}" picked "${QS[n].a[s.picks[s.order.indexOf(n)]]}", right "${QS[n].a[QS[n].ok]}"`).join('\n'));
+    return;
+  }
+  const item = QS[s.order[s.i]];
+  q.innerHTML = item.q + item.a.map((t, k) => `<label><input type=radio name=a value=${k}>${t}</label>`).join('');
+}
+next.onclick = () => { const c = document.querySelector('input:checked'); if (!c) return;
+  s.picks[s.i] = +c.value; s.i++; save(); draw(); };
+restart.onclick = () => { s = fresh(); save(); draw(); };
+draw();
+</script>
+```
+````
+
 ## Streaming behaviour worth knowing
 
 A block freezes once its top-level tag closes, and frozen blocks are never re-rendered — that is what lets the reader click your stepper while the rest of the reply is still arriving. Two consequences: keep one widget in one contiguous block (no blank line in the middle of it), and put the widget before the long tail of prose if you want it clickable early.

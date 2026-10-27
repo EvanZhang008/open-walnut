@@ -60,6 +60,10 @@ export const OUTPUT_MODE_INSTRUCTION_MARKER = '[Rich output mode: ';
  *  would be a lie it might work around. The skill pointer keeps this line short:
  *  the component recipes are a whole document, loaded only if the model wants it.
  *
+ *  The island clause names its state and result contract (2026-10-27: a quiz island
+ *  kept its progress in variables and went back to question 1 when the reply was
+ *  re-rendered); the details and an example are in the skill.
+ *
  *  The contrast rule earns its sentence: models reach for a pale hardcoded panel
  *  (`background:#fff5f5`) and then leave the text muted or inherited, so the panel
  *  arrives with grey-on-pink body copy that is genuinely hard to read (reported
@@ -95,7 +99,9 @@ export const RICH_OUTPUT_MODE_ON_INSTRUCTION =
   + 'Set text and background colour together or neither: a custom background with '
   + 'inherited or muted text loses contrast (theme vars --fg, --fg-muted, --bg-secondary, --border always fit). '
   + 'For anything needing <script>, emit a ```html-app fenced block '
-  + '(rendered in a sandboxed iframe). A short answer needs none of this. '
+  + '(rendered in a sandboxed iframe, rebuilt whenever the reply re-renders or the page reloads): keep its state in '
+  + 'localStorage, which Walnut restores, and call walnut.report(text) to offer a result the user can send to you. '
+  + 'A short answer needs none of this. '
   + 'Component recipes (steppers, SVG diagrams, animations, islands): '
   + `\`walnut tools call skill_read '{"dirName":"walnut-rich-output"}'\`.`;
 

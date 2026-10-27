@@ -1,0 +1,83 @@
+/* The result an html-app island offers the AI (IslandResultCard.tsx). It sits under
+   the frame, in the app's own chrome, so the page inside cannot draw or press it. */
+.island-result {
+  margin: 8px 0 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+  color: var(--fg);
+  font-size: 13px;
+}
+.island-result[data-sent='true'] {
+  opacity: 0.85;
+}
+.island-result-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  margin-bottom: 6px;
+}
+.island-result-title {
+  font-weight: 600;
+}
+.island-result-note {
+  color: var(--fg-muted);
+  font-size: 12px;
+}
+.island-result-text {
+  margin: 0;
+  max-height: 220px;
+  overflow: auto;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.island-result-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 8px;
+}
+.island-result-error {
+  margin-right: auto;
+  color: var(--error);
+  font-size: 12px;
+}
+.island-result-send,
+.island-result-secondary {
+  border-radius: 6px;
+  padding: 4px 12px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.island-result-send {
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: #fff;
+  font-weight: 600;
+}
+.island-result-send:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+.island-result-send:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.island-result-secondary {
+  border: 1px solid var(--border-strong);
+  background: var(--bg);
+  color: var(--fg-secondary);
+}
+.island-result-secondary:hover {
+  background: var(--bg-hover);
+}

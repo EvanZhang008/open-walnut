@@ -13,6 +13,10 @@
  * bubble); inline code, bold, italic, strike, [text](http link) and bare
  * http(s) URLs. Anything else stays literal text.
  *
+ * No html-app islands here: a ```html-app fence is a code block like any other.
+ * An interactive block that keeps its state and hands a result back is a session
+ * reply's (web/src/components/chat/island-runtime.ts; the walnut-board skill says so).
+ *
  * A message must never become markup: its text is escaped before any tag is
  * added, only fixed tags come out, and a link keeps its href only for http(s)
  * (escaped, class wn-link, so the core's click handler opens it in a new tab).

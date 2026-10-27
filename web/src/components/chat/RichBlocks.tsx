@@ -39,7 +39,7 @@
  *    sandboxed iframe island (`allow-scripts` and nothing else, so it has no
  *    same-origin access, no cookies, no DOM of ours), never to innerHTML.
  */
-import { memo, useEffect, useId, useMemo, useState, type RefObject } from 'react';
+import { memo, useContext, useEffect, useId, useMemo, useRef, useState, type RefObject } from 'react';
 import { renderMarkdownWithRefs } from '@/utils/markdown';
 import { useEntityLabelsVersion } from '@/hooks/useEntityLabels';
 import { useStableHtml } from '@/hooks/useStableHtml';
@@ -47,6 +47,10 @@ import {
   splitRichChunks, scopeStyleHtml, hasRichContent, extractAppHtml, isAppComplete,
   collapseHtmlBlankLines, stripTransparentWrapper, richScopeId, richChunkKey, type RichChunk,
 } from '@/utils/rich-blocks';
+import { islandRuntimeScript, readResultMessage, readStateMessage, type IslandItems } from './island-runtime';
+import { flushIslands, islandStoreKey, offerIslandResult, readIsland, saveIslandItems, type IslandResult } from './island-store';
+import { IslandHostContext } from './island-host';
+import { IslandResultCard } from './IslandResultCard';
 
 /** An island can never be shorter than this or taller than this (px). */
 const ISLAND_MIN_H = 40;
@@ -125,7 +129,7 @@ export function RichMarkdown({ text, cwd, scope, onClick, hostRef }: {
     <div key="rich" ref={hostRef} className="rich-blocks" data-rblk={scopeId} onClick={onClick}>
       {chunks.map((chunk, i) => {
         const key = richChunkKey(scopeId, i);
-        if (chunk.kind === 'app') return <AppChunk key={key} chunk={chunk} scopeKey={key} />;
+        if (chunk.kind === 'app') return <AppChunk key={key} chunk={chunk} messageScope={scope} />;
         return <RichChunkView key={key} text={chunk.text} kind={chunk.kind} scopeId={scopeId} cwd={cwd} />;
       })}
     </div>
@@ -177,11 +181,11 @@ const RichChunkView = memo(function RichChunkView({ text, kind, scopeId, cwd }: 
 });
 
 /** A script-bearing chunk: sandboxed island once complete, placeholder while not. */
-function AppChunk({ chunk, scopeKey }: { chunk: RichChunk; scopeKey: string }) {
+function AppChunk({ chunk, messageScope }: { chunk: RichChunk; messageScope?: string }) {
   if (!isAppComplete(chunk)) {
     return <div className="rich-app-building">{'⚙︎'} building interactive block…</div>;
   }
-  return <HtmlAppIsland html={extractAppHtml(chunk)} scopeKey={scopeKey} />;
+  return <HtmlAppIsland html={extractAppHtml(chunk)} messageScope={messageScope} />;
 }
 
 /**
@@ -209,34 +213,46 @@ function hasCspMeta(html: string): boolean {
  * Wrap island content in a document.
  *
  * Content that already IS a document keeps its own head (a model that wrote
- * `<!doctype html>` chose its own styling); it only gets the reporter and the CSP.
- * Everything else gets a minimal frame. The font is spelled out rather than
- * inherited: a separate document inherits nothing from ours, so `font-family:
+ * `<!doctype html>` chose its own styling); it only gets the runtime, the reporter
+ * and the CSP. Everything else gets a minimal frame. The font is spelled out rather
+ * than inherited: a separate document inherits nothing from ours, so `font-family:
  * inherit` there would silently mean "browser default".
+ *
+ * The runtime (island-runtime.ts) goes first in the head, before any script of the
+ * model's, so the page's own first line can already read its saved state.
  */
-function wrapIslandHtml(html: string, key: string): string {
+function wrapIslandHtml(html: string, key: string, seed: IslandItems): string {
   const reporter = heightReporter(key);
+  const runtime = islandRuntimeScript(key, seed);
   const csp = hasCspMeta(html) ? '' : ISLAND_CSP;
   const head = html.trimStart().slice(0, 32).toLowerCase();
   if (head.startsWith('<!doctype') || head.startsWith('<html')) {
     // A `<meta>` must land in the head to apply, so aim for an explicit `<head>`
     // first; failing that, right after `<html …>`, where the parser puts it in the
     // implied head anyway.
-    const withCsp = csp === ''
-      ? html
-      : /<head[^>]*>/i.test(html)
-        ? html.replace(/<head[^>]*>/i, (m) => `${m}${csp}`)
-        : /<html[^>]*>/i.test(html)
-          ? html.replace(/<html[^>]*>/i, (m) => `${m}<head>${csp}</head>`)
-          : csp + html;
-    return /<\/body\s*>/i.test(withCsp)
-      ? withCsp.replace(/<\/body\s*>/i, `${reporter}</body>`)
-      : withCsp + reporter;
+    const top = csp + runtime;
+    // `<head` followed by a space or `>`, so a `<header>` is never taken for it.
+    const withHead = /<head(?:\s[^>]*)?>/i.test(html)
+      ? html.replace(/<head(?:\s[^>]*)?>/i, (m) => `${m}${top}`)
+      : /<html[^>]*>/i.test(html)
+        ? html.replace(/<html[^>]*>/i, (m) => `${m}<head>${top}</head>`)
+        : top + html;
+    return /<\/body\s*>/i.test(withHead)
+      ? withHead.replace(/<\/body\s*>/i, `${reporter}</body>`)
+      : withHead + reporter;
   }
-  return `<!doctype html><html><head>${csp}<style>`
+  return `<!doctype html><html><head>${csp}${runtime}<style>`
     + 'html,body{margin:0;background:transparent}'
     + 'body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;font-size:14px}'
     + `</style></head><body>${html}${reporter}</body></html>`;
+}
+
+/** How long an unmounted island still takes its frame's last messages (ms). */
+const ISLAND_LATE_MS = 2000;
+
+/** A name for one frame's messages, made once per mounted island. */
+function newFrameKey(): string {
+  return `wf${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36)}`;
 }
 
 /**
@@ -245,33 +261,91 @@ function wrapIslandHtml(html: string, key: string): string {
  * `sandbox="allow-scripts"` and nothing else — NEVER allow-same-origin, which
  * together with allow-scripts would let the frame reach into the app's DOM,
  * storage and cookies and remove its own sandbox.
+ *
+ * The document is built ONCE per mounted island from the html and the state saved
+ * for it, and never again while it stays mounted: a new `srcDoc` reloads the frame,
+ * which is the reset this exists to prevent. Nothing about the message (its id, its
+ * chunk key) is in it. When the island is mounted again anyway, the saved state is
+ * in the new document, so the page comes back where the user left it.
+ *
+ * Every message is taken only from THIS frame (`event.source`), so one island can
+ * neither resize nor write the state of another.
  */
-const HtmlAppIsland = memo(function HtmlAppIsland({ html, scopeKey }: {
+const HtmlAppIsland = memo(function HtmlAppIsland({ html, messageScope }: {
   html: string;
-  scopeKey: string;
+  /** The message's own id (the caller's `scope`): the same quiz in a new reply is a new island. */
+  messageScope?: string;
 }) {
+  const host = useContext(IslandHostContext);
+  const frameRef = useRef<HTMLIFrameElement>(null);
+  const [frameKey] = useState(newFrameKey);
+  const storeKey = useMemo(
+    () => islandStoreKey(html, host.sessionId, messageScope),
+    [html, host.sessionId, messageScope],
+  );
   const [height, setHeight] = useState(ISLAND_MIN_H);
-  const srcDoc = useMemo(() => wrapIslandHtml(html, scopeKey), [html, scopeKey]);
+  // Read once per document: the state the page writes later reaches the store, and
+  // must not rebuild the document it came from.
+  const srcDoc = useMemo(
+    () => wrapIslandHtml(html, frameKey, readIsland(storeKey).items),
+    [html, frameKey, storeKey],
+  );
+  const [result, setResult] = useState<IslandResult | undefined>(() => readIsland(storeKey).result);
+  useEffect(() => { setResult(readIsland(storeKey).result); }, [storeKey]);
 
   useEffect(() => {
+    // The frame's window, held past unmount: a frame taken down right after a click
+    // (a question folding, the stream copy giving way to the saved row) still has its
+    // last write in flight, and that write must reach the store.
+    let frame: Window | null = frameRef.current?.contentWindow ?? null;
+    let mounted = true;
     const onMessage = (e: MessageEvent) => {
+      if (!frame) frame = frameRef.current?.contentWindow ?? null;
+      if (!frame || e.source !== frame) return;
       const d = e.data as { t?: string; k?: string; h?: number } | null;
-      if (!d || d.t !== 'wn-island-h' || d.k !== scopeKey || typeof d.h !== 'number') return;
-      setHeight(Math.min(ISLAND_MAX_H, Math.max(ISLAND_MIN_H, Math.ceil(d.h))));
+      if (d && d.t === 'wn-island-h' && d.k === frameKey && typeof d.h === 'number') {
+        setHeight(Math.min(ISLAND_MAX_H, Math.max(ISLAND_MIN_H, Math.ceil(d.h))));
+        return;
+      }
+      const items = readStateMessage(e.data, frameKey);
+      if (items) { saveIslandItems(storeKey, items); return; }
+      const text = readResultMessage(e.data, frameKey);
+      if (text !== null) {
+        const offered = offerIslandResult(storeKey, text);
+        if (mounted) setResult(offered);
+      }
     };
     window.addEventListener('message', onMessage);
-    return () => window.removeEventListener('message', onMessage);
-  }, [scopeKey]);
+    return () => {
+      mounted = false;
+      flushIslands(storeKey);
+      setTimeout(() => {
+        window.removeEventListener('message', onMessage);
+        flushIslands(storeKey);
+      }, ISLAND_LATE_MS);
+    };
+  }, [frameKey, storeKey]);
 
   return (
-    <iframe
-      className="rich-island"
-      sandbox="allow-scripts"
-      allowTransparency
-      loading="lazy"
-      title="Interactive block"
-      style={{ height: `${height}px`, background: 'transparent' }}
-      srcDoc={srcDoc}
-    />
+    <div className="rich-island-wrap">
+      <iframe
+        ref={frameRef}
+        className="rich-island"
+        sandbox="allow-scripts"
+        allowTransparency
+        loading="lazy"
+        title="Interactive block"
+        style={{ height: `${height}px`, background: 'transparent' }}
+        srcDoc={srcDoc}
+      />
+      {result && !result.dismissed && (
+        <IslandResultCard
+          storeKey={storeKey}
+          result={result}
+          onChange={setResult}
+          sendResult={host.sendResult}
+        />
+      )}
+    </div>
   );
 });

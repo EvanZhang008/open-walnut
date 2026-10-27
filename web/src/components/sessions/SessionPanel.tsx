@@ -134,6 +134,7 @@ import { useMainQuickPlusActions } from '@/components/org/useMainQuickPlusAction
 import { useTitleMetaFit, useToolRowFit } from './useSessionHeaderFit';
 import { HiddenPillRows, SessionHeaderMoreMenu } from './SessionHeaderMore';
 import '@/styles/session-header-fit.css';
+import { IslandHostContext, type IslandHost } from '@/components/chat/island-host';
 
 /**
  * Below this viewport width a split view opens with the chat column collapsed:
@@ -1668,6 +1669,13 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
     [composerPlusActions, mainQuickActions],
   );
 
+  // An html-app island's "Send to AI" (island-host.ts): the session's own send, never
+  // anchored to a side thread the composer may have open.
+  const islandHost = useMemo<IslandHost>(() => ({
+    sessionId,
+    sendResult: (text: string) => send(sessionId, text),
+  }), [sessionId, send]);
+
   const handleInterruptSend = useCallback((message: string, images?: ImageAttachment[]) => {
     return sendAnchored(message, images, true);
   }, [sendAnchored]);
@@ -2772,6 +2780,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
             <SessionSupervisionBar sid={sessionId} snapshot={supervisionSnapshot} onRetryStop={handleTerminate} archived={session?.archived} />
           )}
           <CronJobsCard sid={sessionId} snapshot={supervisionSnapshot} open={cronDetailOpen} onClose={() => setCronDetailOpen(false)} archived={session?.archived} />
+          <IslandHostContext.Provider value={islandHost}>
           <SessionChatHistory
             key={`${sessionId}:${rewindEpoch}`}
             sessionId={sessionId}
@@ -2805,6 +2814,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
             onRequestComposerFocus={requestComposerFocus}
             onQuoteInChat={quoteInChat}
           />
+          </IslandHostContext.Provider>
         </div>
 
         <div className="session-panel-input" ref={composerWrapRef}>
