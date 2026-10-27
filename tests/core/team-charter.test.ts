@@ -47,6 +47,7 @@ describe('the charter itself', () => {
       /the conclusion first in plain, full sentences, then the decision needed or the next owner/,
       /long evidence in a file and give its path/,
       /what needs their action or changes their picture of the work, the important point first/,
+      /When you pass on the user's request to another task, quote their own words first, exactly, with every screenshot they gave \(its path or link\), then your summary\./,
     ]) expect(TEAM_CHARTER).toMatch(re)
   })
 
@@ -56,6 +57,7 @@ describe('the charter itself', () => {
     expect(TEAM_CHARTER).toMatch(/Standing rules you were given still apply: asking the user before splitting an ask into several tasks, the inbox rule, permission prompts/)
     expect(MESSAGE_TEXT_HINT).toMatch(/always send an answer someone is waiting for/)
     expect(MESSAGE_TEXT_HINT).toMatch(/outward steps, deletes, spending, credentials and permissions stay theirs/)
+    expect(MESSAGE_TEXT_HINT).toMatch(/Passing on the user's request: their exact words and screenshots first, your summary after\./)
     expect(TEAM_CHARTER).toMatch(/None of this permits an outward step, a public push, a destructive action or a way around a safety limit/)
   })
 
@@ -133,6 +135,7 @@ describe('skills', () => {
     expect(skill).toContain('a hard-to-reverse choice no existing rule covers')
     expect(skill).toMatch(/Hard to act on:[\s\S]*Clear:/)
     expect(skill).not.toContain('Keep messages short and factual')
+    expect(skill).toContain("**Pass on the user's words, not your reading of them.**")
   })
 
   it('the walnut skill points at it', () => {

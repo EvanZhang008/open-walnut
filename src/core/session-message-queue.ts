@@ -41,7 +41,7 @@ import {
 } from './session-queue-store.js';
 import { noteSettledLine, settledLineUuid } from './session-queue-lines.js';
 import { staleTriggerText } from './routines/trigger-stale.js';
-import type { PendingTaskRouting } from './sessions/task-routing-notice.js';
+import type { PendingInstructionNotice } from './sessions/instruction-notice.js';
 import { PERSON_SEND_SOURCES, queueSentBy } from './sessions/send-sent-by.js';
 
 // ── Types and store (session-queue-store.ts) ──
@@ -315,8 +315,8 @@ export async function markProcessing(
   stopFence?: string | null,
   opts?: { tracked?: boolean },
 ): Promise<QueuedMessage[]> {
-  // An older Main or lead learns the current routing rules on the first line
-  // frozen for it (sessions/task-routing-notice.ts). Read before the lock, and
+  // A session spawned before its default instructions changed learns the changed
+  // lines on the first line frozen for it (sessions/instruction-notice.ts). Read before the lock, and
   // only when a fresh row waits to be frozen.
   const routing = await pendingTaskRouting(sessionId);
   const pending = await mutateStore((s) => {
@@ -364,12 +364,12 @@ function isFreshRow(m: QueuedMessage): boolean {
   return !m.lineUuid && !m.lineInDoubt && !m.lineTries;
 }
 
-/** The routing notice for the next frozen line, looked up only when a fresh row waits. */
-async function pendingTaskRouting(sessionId: string): Promise<PendingTaskRouting | null> {
+/** The instruction notice for the next frozen line, looked up only when a fresh row waits. */
+async function pendingTaskRouting(sessionId: string): Promise<PendingInstructionNotice | null> {
   const queue = (await getStore()).queues[sessionId];
   if (!queue?.some((m) => m.status === 'pending' && isFreshRow(m))) return null;
-  const { taskRoutingPolicyForSession } = await import('./sessions/task-routing-notice.js');
-  return taskRoutingPolicyForSession(sessionId);
+  const { instructionNoticeForSession } = await import('./sessions/instruction-notice.js');
+  return instructionNoticeForSession(sessionId);
 }
 
 /**
@@ -436,10 +436,10 @@ export async function removeProcessed(sessionId: string, ids?: string[]): Promis
   });
   if (!found) return;
   log.session.debug('message queue drained', { sessionId, scoped: !!ids });
-  // A delivered line led by the routing notice: the session has now been told.
+  // A delivered line led by the instruction notice: the session has now been told its lines.
   if (found.some((m) => m.includes('outcome="task-routing-policy"'))) {
-    const { noteTaskRoutingDelivered } = await import('./sessions/task-routing-notice.js');
-    await noteTaskRoutingDelivered(sessionId, found);
+    const { noteInstructionNoticeDelivered } = await import('./sessions/instruction-notice.js');
+    await noteInstructionNoticeDelivered(sessionId, found);
   }
 }
 

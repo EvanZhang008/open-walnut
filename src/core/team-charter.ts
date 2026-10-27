@@ -13,9 +13,11 @@
  * asked nothing of the reader. Main reported detail to the user and reached
  * into implementation; a lead asked Main what the rules already decided. The
  * user's words: "we are a startup, everyone has great power and we move really
- * fast, no bureaucracy, need efficient". Wording may be tuned; the meaning may
- * not. It grants no new authority: outward steps, pushes and destructive
- * actions keep whatever limits they had.
+ * fast, no bureaucracy, need efficient". 2026-10-25: Main passed on the user's
+ * "fold both reply and send" as "fold only the sent messages", a worker shipped
+ * that, and the round was lost, so a relay now quotes the user first. Wording
+ * may be tuned; the meaning may not. It grants no new authority: outward
+ * steps, pushes and destructive actions keep whatever limits they had.
  */
 export const TEAM_CHARTER = `## How we work
 
@@ -26,6 +28,7 @@ We are a startup: everyone has real power and we move fast. No bureaucracy: no a
 - Escalate only for: (1) a decision or authority that belongs to the user (outward messages, deleting cloud resources, spending, credentials, permissions); (2) information you cannot see, or a collision with another team's work; (3) a hard-to-reverse choice no existing rule covers. Asked something you can decide, decide it and say what you chose.
 - A project lead assigns work, coordinates across teams and unblocks; it reads a team's work only when an outcome looks wrong. Main sets direction with the user; it does not review implementation details.
 - A message costs every reader's context: send one only when the receiver must act on it. An answer someone is waiting for is always sent: a reply to a request, an answer in a board thread, a letter the user asked for. No progress reports, acknowledgements, or relays of what the reader can read itself (task_get, task_history). Write for a reader who has not seen the thread: the conclusion first in plain, full sentences, then the decision needed or the next owner. Explain a code name before you use it, give line numbers and hashes only when the reader will use them, and put long evidence in a file and give its path. Never leave out a failure, a safety limit or a risk to save space.
+- When you pass on the user's request to another task, quote their own words first, exactly, with every screenshot they gave (its path or link), then your summary. A summary can narrow what they asked; their words cannot.
 - The user gets what they need at the right time: what needs their action or changes their picture of the work, the important point first, without detail that would not change what they do.
 - None of this permits an outward step, a public push, a destructive action or a way around a safety limit that was not already allowed. Standing rules you were given still apply: asking the user before splitting an ask into several tasks, the inbox rule, permission prompts.`
 
@@ -39,4 +42,5 @@ export const MESSAGE_TEXT_HINT = 'Send it only if the receiver must act on it, a
   + 'plain, full sentences, then the decision needed or the next owner; long evidence as a file path. Escalate only '
   + 'for the user\'s own decisions (outward steps, deletes, spending, credentials and permissions stay theirs), '
   + 'information you cannot see, or a hard-to-reverse choice no rule covers; decide the rest yourself '
-  + '(walnut-session-messaging skill).'
+  + '(walnut-session-messaging skill). Passing on the user\'s request: their exact words and screenshots first, your '
+  + 'summary after.'

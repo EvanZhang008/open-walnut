@@ -87,6 +87,7 @@
 import { TEAM_CHARTER } from '../team-charter.js'
 import { WORK_PLACE_RULE, taskDirLine } from '../work-place.js'
 import { taskDirForHost } from './task-dir-place.js'
+import { isAskTask } from './caller-placement.js'
 
 import { TASK_ROUTING_CONTRACT } from '../task-routing-contract.js'
 
@@ -228,6 +229,16 @@ export function orgRoleLine(task: { org_role?: string; project?: string; org_lea
 }
 
 /**
+ * The default instructions for a session of this task: its prompt with the
+ * state left out. A session spawned before a change keeps its old prompt (a
+ * resume replays it byte for byte), so instruction-notice.ts compares these
+ * lines with the stored prompt and tells it the ones it lacks.
+ */
+export function defaultInstructions(task: InstructionTask): string {
+  return composePrompt(task, { taskLine: '', taskDir: '' })
+}
+
+/**
  * Returns the system-prompt context to append for a session.
  *
  * Task lookup is best-effort: a missing/unknown task just drops line 2 —
@@ -241,9 +252,7 @@ export async function buildSessionContext(
   opts?: { task?: import('../types.js').Task },
 ): Promise<SessionContext> {
   let taskLine = ''
-  let ask = false
-  let projectLead = false
-  let mainAgent = false
+  let found: import('../types.js').Task | undefined
   if (taskId) {
     try {
       const { getTask } = await import('../task-manager.js')
@@ -287,14 +296,25 @@ export async function buildSessionContext(
           + 'keep it current with the walnut-board skill '
           + '(walnut tools call skill_read \'{"dirName":"walnut-board"}\').\n\n'
       }
-      // An org node (see 2d): the main agent, or a project's lead.
-      taskLine += orgRoleLine(task)
-      const { isAskTask } = await import('./caller-placement.js')
-      ask = isAskTask(task)
-      projectLead = task.org_role === 'lead'
-      mainAgent = task.org_role === 'main'
+      found = task
     } catch { /* unknown task — identity + tooling lines still apply */ }
   }
+  const taskDir = taskId ? taskDirLine(await taskDirForHost(taskId, host).catch(() => null)) : ''
+  return { systemPrompt: composePrompt(found, { taskLine, taskDir }) }
+}
+
+/** The task fields the default instructions depend on (role, project, ask). */
+export type InstructionTask = { org_role?: string; project?: string; org_leads?: readonly string[]; walnut_agent?: boolean }
+
+/**
+ * A session's prompt in order. `state` is what describes this task right now
+ * (its title and place, its leader, its workers, its directory); everything
+ * else is the default instructions for the task's role.
+ */
+function composePrompt(task: InstructionTask | undefined, state: { taskLine: string; taskDir: string }): string {
+  const ask = task ? isAskTask(task) : false
+  const projectLead = task?.org_role === 'lead'
+  const mainAgent = task?.org_role === 'main'
   // A worker splits work with its own tools and makes a Walnut task only on the
   // user's signal; an ask is the dispatcher, whose persona decides (see 4 above).
   // Main routes work in its role line (2d, 2f), so the ask's rule would contradict it.
@@ -322,12 +342,13 @@ export async function buildSessionContext(
       + 'with a fresh session, even in an area a teammate already owns. It '
       + 'lands beside yours: same project, folder and board tier, same host and '
       + 'directory. Omit project; naming another needs project_reason.\n\n'
-  const lines =
-    'You are a coding session opened by Walnut, the user\'s personal AI. '
+  return 'You are a coding session opened by Walnut, the user\'s personal AI. '
     + 'Walnut is the layer above you: it keeps the user\'s board of tasks and '
     + 'projects, runs the work on those tasks, and holds their memory, notes, '
     + 'and the history of that work.\n\n'
-    + taskLine
+    + state.taskLine
+    // An org node (see 2d): the main agent, or a project's lead.
+    + (task ? orgRoleLine(task) : '')
     + 'This session is how that task runs, so the task id is how everything '
     + 'else addresses your work. Walnut is not your toolbox: do the work with '
     + 'your own tools. The `walnut` CLI on your '
@@ -373,9 +394,9 @@ export async function buildSessionContext(
     // Where work lives (src/core/work-place.ts): this task's durable directory on
     // the session's host, then the rule. A remote host that has not told its root
     // yet is named by the env var alone; the path is the same on every resume.
-    + (taskId ? taskDirLine(await taskDirForHost(taskId, host).catch(() => null)) : '')
+    + state.taskDir
     + WORK_PLACE_RULE + '\n\n'
     // The team charter (see 8 above).
     + TEAM_CHARTER
-  return { systemPrompt: lines }
 }
+

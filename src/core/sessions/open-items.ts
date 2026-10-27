@@ -129,12 +129,12 @@ export async function collectOpenItems(
         const teams = await teamSnapshotText(task, now);
         if (teams) items.text = [items.text, teams].filter(Boolean).join('\n\n');
       }
-      const { taskRoutingPolicyFor } = await import('./task-routing-notice.js');
-      const routing = taskRoutingPolicyFor(caller.record, task, { ignoreTold: true });
-      if (routing) {
-        items.text = [routing, items.text].filter(Boolean).join('\n\n');
-        const { noteTaskRoutingStatedByHook } = await import('./task-routing-notice.js');
-        await noteTaskRoutingStatedByHook(caller.record);
+      // Every default-instruction line that changed since spawn: the summary may have dropped the notices.
+      const { instructionNoticeFor, noteInstructionNoticeStatedByHook } = await import('./instruction-notice.js');
+      const changed = instructionNoticeFor(caller.record, task, { ignoreTold: true });
+      if (changed) {
+        items.text = [changed, items.text].filter(Boolean).join('\n\n');
+        await noteInstructionNoticeStatedByHook(caller.record, task);
       }
     }
     return items;

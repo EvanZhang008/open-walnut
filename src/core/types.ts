@@ -2669,10 +2669,12 @@ export interface SessionRecord {
    */
   placeNoted?: { promptHash: string; compactUuid?: string; byHookAt?: string; project: string; folderId?: string; folder?: string; leaderId?: string; leader?: string };
   /**
-   * The task routing rules version an older Main or lead was last told, against
-   * which prompt and compaction (src/core/sessions/task-routing-notice.ts).
+   * The changed default-instruction lines this session was told (hashes), against
+   * which prompt and compaction (src/core/sessions/instruction-notice.ts). Named for
+   * the task routing rules, the first change it carried; a record from then has no
+   * `lines` and is told again once.
    */
-  taskRoutingNoted?: { version: string; promptHash: string; compactUuid?: string; byHookAt?: string };
+  taskRoutingNoted?: { version: string; promptHash: string; compactUuid?: string; byHookAt?: string; lines?: string[] };
   /**
    * The uuid of the last compaction boundary Walnut saw in this session's
    * stream. A place note given before it may be gone from the context, so it

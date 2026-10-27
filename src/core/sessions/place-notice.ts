@@ -187,7 +187,7 @@ export async function notePlaceCompaction(sessionId: string, boundaryUuid: strin
       && (!record.lastCompactAt || at > Date.parse(record.lastCompactAt));
     const hookAnswered = answered(hookAt);
     const modeHookAnswered = answered(record.outputModeHookAt ? Date.parse(record.outputModeHookAt) : NaN);
-    // The task routing rules the hook restated (task-routing-notice.ts) answer this boundary too.
+    // The changed instructions the hook restated (instruction-notice.ts) answer this boundary too.
     const routing = record.taskRoutingNoted;
     const routingHookAnswered = !!routing?.byHookAt && answered(Date.parse(routing.byHookAt));
     await updateSessionRecordConditionally(sessionId, {

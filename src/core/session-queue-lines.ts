@@ -38,10 +38,10 @@ export async function removeTaken(sessionId: string, ids: string[], opts?: { ran
   });
   if (found === false) return;
   log.session.debug('taken messages removed from queue', { sessionId, count: ids.length });
-  // The CLI took a line led by the routing notice: the session has now been told.
+  // The CLI took a line led by the instruction notice: the session has now been told its lines.
   if (found.some((m) => m.includes('outcome="task-routing-policy"'))) {
-    const { noteTaskRoutingDelivered } = await import('./sessions/task-routing-notice.js');
-    await noteTaskRoutingDelivered(sessionId, found);
+    const { noteInstructionNoticeDelivered } = await import('./sessions/instruction-notice.js');
+    await noteInstructionNoticeDelivered(sessionId, found);
   }
 }
 

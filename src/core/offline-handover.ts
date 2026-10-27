@@ -851,10 +851,10 @@ async function applyRecord(
       return;
     }
     case 'delivery': {
-      // A delivery the host led with the routing notice: the session is told.
+      // A delivery the host led with the instruction notice: the session is told.
       if (typeof record.routingTold === 'string') {
-        const { noteTaskRoutingToldByHost } = await import('./sessions/task-routing-notice.js');
-        await noteTaskRoutingToldByHost(record.toSessionId, record.routingTold);
+        const { noteInstructionNoticeToldByHost } = await import('./sessions/instruction-notice.js');
+        await noteInstructionNoticeToldByHost(record.toSessionId, record.routingTold);
       }
       // The online send reopens a COMPLETE task a peer writes to; the offline
       // delivery did the same work, so the board says the same thing.

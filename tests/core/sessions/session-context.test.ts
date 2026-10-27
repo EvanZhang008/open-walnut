@@ -318,7 +318,10 @@ describe('buildSessionContext (identity note)', () => {
     // 5800 → 6850 (2026-10-25) for where work lives (work-place.ts): a restart
     // emptied /tmp and took clones, an unmerged commit and evidence with it; where
     // a clone goes is decided before the first command that makes one. 6,705.
-    expect(systemPrompt.length).toBeLessThan(6850)
+    // 6850 → 7050 (2026-10-27) for the charter's relay rule: quote the user's own
+    // words and screenshots first, a summary after; Main's summary had narrowed a
+    // request and a worker shipped the narrowed version. 6,888.
+    expect(systemPrompt.length).toBeLessThan(7050)
   })
 
   it('asks for the agent acknowledgement line alone, only for agent messages, never after words', async () => {

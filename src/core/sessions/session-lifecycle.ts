@@ -931,9 +931,9 @@ export async function retrySession(sessionId: string): Promise<RetryResult> {
     // fall back to the walnut-side stream history's first user message.
     const { getQueue } = await import('../session-message-queue.js');
     const pendingMsgs = await getQueue(sessionId);
-    // The replacement spawns on the current prompt: an old routing notice frozen into a row is dropped.
-    const { stripTaskRoutingNotice } = await import('./task-routing-notice.js');
-    const pendingText = pendingMsgs.map((m) => stripTaskRoutingNotice(m.message)).filter(Boolean).join('\n');
+    // The replacement spawns on the current prompt: an old instruction notice frozen into a row is dropped.
+    const { stripInstructionNotice } = await import('./instruction-notice.js');
+    const pendingText = pendingMsgs.map((m) => stripInstructionNotice(m.message)).filter(Boolean).join('\n');
     if (pendingText) {
       retryMessage = pendingText;
     } else {

@@ -45,7 +45,7 @@ import type { LetterCheck } from '../core/human-inbox/letter-check.js'
  */
 export interface OfflineSliceSession {
   sid: string; taskId?: string; title?: string; aside?: boolean; noResume?: boolean
-  /** The routing notice for an older Main or lead, sent only while it is due, and the key naming that (task-routing-notice.ts). */
+  /** The instruction notice for a session spawned before its default instructions changed, sent only while it is due, and the key naming that (instruction-notice.ts). */
   taskRoutingPolicy?: string; taskRoutingDue?: string
 }
 
@@ -844,13 +844,13 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     return slices.get(home)?.sessions.find((s) => s.sid === sid) ?? startedOf(home).find((s) => s.sid === sid)
   }
 
-  /** sid -> the due key this host already led a delivery with (task-routing-notice.ts). */
+  /** sid -> the due key this host already led a delivery with (instruction-notice.ts). */
   const routingTold = new Map<string, string>()
   /** messageId -> due key, until that delivery's record is journaled (append). */
   const routedMids = new Map<string, string>()
 
   /**
-   * The text an older Main or lead gets: led by the routing notice while the
+   * The text a session spawned before its instructions changed gets: led by the notice while the
    * server says it is due and this host has not delivered it under that key.
    * `restate` (the compaction hook) states it whatever was said before.
    */

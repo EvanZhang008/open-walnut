@@ -81,6 +81,8 @@ Asked something you can decide, decide it and say what you chose. None of this p
 
 **Write for a reader who has not seen the thread.** The conclusion first, in plain, full sentences, then the decision needed or the next owner. Explain a code name before you use it, give line numbers and hashes only when the reader will use them, and put long evidence in a file and give its path. Never leave out a failure, a safety limit or a risk to save space.
 
+**Pass on the user's words, not your reading of them.** When you hand the user's request to another task, quote their own words first, exactly as they wrote them, with every screenshot they gave (its path or link), then add your summary. A summary can narrow what they asked; their words cannot.
+
 Hard to act on:
 
 ```text

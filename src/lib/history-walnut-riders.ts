@@ -2,7 +2,7 @@
  * Walnut's own notices that ride IN FRONT OF a message — pure, render-agnostic.
  *
  * When Walnut has something the session should know in passing (its task moved,
- * the org changed, the routing rules, an App's state), it does not spend a turn
+ * the org changed, its default instructions changed, an App's state), it does not spend a turn
  * on it: the next message into the session carries the note first, in the same
  * queue row (`${notes}\n\n${body}`, src/core/session-message-queue.ts). The CLI
  * therefore stores ONE user line holding Walnut's notes AND the human's words,
@@ -14,7 +14,8 @@
  *
  * A rider is recognized by a CLOSED list, the four notes Walnut has ever put in
  * front of a message: a `notification` from Walnut whose outcome is `moved`,
- * `org-update` or `task-routing-policy`, or an `app-state`. It is a display
+ * `org-update` or `task-routing-policy` (changed default instructions; the name
+ * is from when they were only the routing rules), or an `app-state`. It is a display
  * grouping, not an authorization: a person who pastes one gets a card, exactly
  * as with every other envelope (see history-session-envelope.ts).
  *

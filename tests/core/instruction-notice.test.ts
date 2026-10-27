@@ -1,14 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs/promises';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { createMockConstants } from '../helpers/mock-constants.js';
-vi.mock('../../src/constants.js', () => createMockConstants('walnut-routing-notice'));
+vi.mock('../../src/constants.js', () => createMockConstants('walnut-instruction-notice'));
 import { WALNUT_HOME } from '../../src/constants.js';
 import { addTask, deleteTask, updateTask } from '../../src/core/task-manager.js';
 import { createSessionRecord, getSessionByClaudeId, updateSessionRecord } from '../../src/core/session-tracker.js';
-import { stripTaskRoutingNotice, taskRoutingPolicyForSession } from '../../src/core/sessions/task-routing-notice.js';
+import { stripInstructionNotice, instructionNoticeForSession } from '../../src/core/sessions/instruction-notice.js';
 import { parkMessages } from '../../src/core/session-queue-park.js';
 import { TASK_ROUTING_CONTRACT } from '../../src/core/task-routing-contract.js';
+import { TEAM_CHARTER } from '../../src/core/team-charter.js';
 import { buildSessionContext } from '../../src/core/sessions/session-context.js';
 import { renderSelfKnowledgeContract } from '../../src/core/self-knowledge-contract.js';
 import { sendMessageToSession, getQueue, enqueueMessage, resetCache, editMessage, deleteMessage,
@@ -21,15 +22,27 @@ beforeEach(async () => {
   await fs.mkdir(WALNUT_HOME, { recursive: true });
   resetCache();
 });
-async function seed(role?: 'main' | 'lead', prompt: string | null = 'Old area-owner routing') {
-  const { task } = await addTask({ title: role ?? 'Work', project: role === 'main' ? 'Ask Walnut' : 'marina',
-    ...(role ? { org_role: role } : {}), ...(role === 'main' ? { walnut_agent: true } : {}) });
+/** The charter's relay rule (2026-10-27): the first change this notice carried. */
+const RELAY = TEAM_CHARTER.split('\n').find((l) => l.startsWith("- When you pass on the user's request"))!;
+/** Today's prompt for the task without `drop`'s lines: a session spawned before they were added. */
+async function oldPrompt(taskId: string, drop: string[] = [RELAY]) {
+  const current = (await buildSessionContext(taskId)).systemPrompt;
+  const gone = new Set(drop.flatMap((d) => d.split('\n')).map((l) => l.trim()).filter(Boolean));
+  return current.split('\n').filter((l) => !gone.has(l.trim())).join('\n');
+}
+type Role = 'main' | 'lead' | 'ask' | undefined;
+async function seed(role?: Role, prompt: string | null | 'old' | 'current' = 'old', drop?: string[]) {
+  const main = role === 'main';
+  const { task } = await addTask({ title: role ?? 'Work', project: main || role === 'ask' ? 'Ask Walnut' : 'marina',
+    ...(main || role === 'lead' ? { org_role: role } : {}), ...(main || role === 'ask' ? { walnut_agent: true } : {}) });
   const sid = randomUUID();
   await createSessionRecord(sid, task.id, task.project, WALNUT_HOME);
-  if (prompt !== null) await updateSessionRecord(sid, { appliedAppendSystemPrompt: prompt });
+  const text = prompt === 'old' ? await oldPrompt(task.id, drop)
+    : prompt === 'current' ? (await buildSessionContext(task.id)).systemPrompt : prompt;
+  if (text !== null) await updateSessionRecord(sid, { appliedAppendSystemPrompt: text });
   return { sid, task };
 }
-const copies = (text: string) => text.split(TASK_ROUTING_CONTRACT).length - 1;
+const copies = (text: string) => text.split(RELAY).length - 1;
 async function deliver(sid: string, text: string, pick = markProcessing) {
   await enqueueMessage(sid, text);
   const batch = await pick(sid);
@@ -37,13 +50,13 @@ async function deliver(sid: string, text: string, pick = markProcessing) {
   return batch;
 }
 
-describe('current task routing for an older Main or lead', () => {
+describe('changed default instructions for a session spawned before them', () => {
   it('a replacement session drops a notice frozen into an old row', async () => {
     const { sid } = await seed('main');
     await sendMessageToSession(sid, 'Keep this request');
     const [row] = await markProcessing(sid);
-    expect(stripTaskRoutingNotice(row.message)).toBe('Keep this request');
-    expect(stripTaskRoutingNotice('Plain text')).toBe('Plain text');
+    expect(stripInstructionNotice(row.message)).toBe('Keep this request');
+    expect(stripInstructionNotice('Plain text')).toBe('Plain text');
   });
   it('uses one canonical rule in persona, Main and lead without conflicting worker rules', async () => {
     expect(renderSelfKnowledgeContract()).toContain(TASK_ROUTING_CONTRACT);
@@ -62,7 +75,7 @@ describe('current task routing for an older Main or lead', () => {
   it('is told once on its first frozen line, again after a compaction or on another prompt', async () => {
     const { sid } = await seed('main');
     const queued = await sendMessageToSession(sid, 'Independent sorting goal', { source: 'web-ui' });
-    expect(queued.message).not.toContain(TASK_ROUTING_CONTRACT);
+    expect(queued.message).not.toContain(RELAY);
     const [first] = await markProcessing(sid);
     expect(first.message.startsWith('<walnut-message kind="notification"')).toBe(true);
     expect(first.message.endsWith('Independent sorting goal')).toBe(true);
@@ -72,7 +85,7 @@ describe('current task routing for an older Main or lead', () => {
     await notePlaceCompaction(sid, 'boundary-1');
     expect(copies((await deliver(sid, 'After compaction'))[0].message)).toBe(1);
     expect(copies((await deliver(sid, 'Later'))[0].message)).toBe(0);
-    await updateSessionRecord(sid, { appliedAppendSystemPrompt: 'Another old prompt' });
+    await updateSessionRecord(sid, { appliedAppendSystemPrompt: (await oldPrompt((await getSessionByClaudeId(sid))!.taskId!)) + '\nRespawned' });
     expect(copies((await deliver(sid, 'On another prompt', markNextProcessing))[0].message)).toBe(1);
     expect(copies((await deliver(sid, 'Then quiet', markNextProcessing))[0].message)).toBe(0);
   });
@@ -82,7 +95,7 @@ describe('current task routing for an older Main or lead', () => {
     const frozen = await markProcessing(sid);
     expect(copies(frozen[0].message)).toBe(1);
     // A second freeze while that line is in flight does not carry it again.
-    const racing = (await taskRoutingPolicyForSession(sid))!;
+    const racing = (await instructionNoticeForSession(sid))!;
     expect(racing.apply('Mid-turn input')).toBe('Mid-turn input');
     // The user stops the session: the line is parked, never delivered.
     expect(await parkMessages(frozen, 'user-stop')).toBe(1);
@@ -138,7 +151,7 @@ describe('current task routing for an older Main or lead', () => {
     expect(await editMessage(sid, row.id, 'Edited input')).toBe(true);
     const batch = await pick(sid);
     expect(batch).toHaveLength(1);
-    expect(batch[0].message).toContain(TASK_ROUTING_CONTRACT);
+    expect(copies(batch[0].message)).toBe(1);
     expect(batch[0].message).toContain('Edited input');
     expect(batch[0].message).not.toContain('Original input');
   });
@@ -149,20 +162,20 @@ describe('current task routing for an older Main or lead', () => {
     expect(await deleteMessage(sid, a.id)).toBe(true);
     const batch = await markProcessing(sid);
     expect(batch.map((row) => row.id)).toEqual([b.id]);
-    expect(batch[0].message).toContain(TASK_ROUTING_CONTRACT);
+    expect(copies(batch[0].message)).toBe(1);
     expect(batch[0].message).toContain('Input B');
   });
   it('editing and freezing race under the same queue lock without losing policy', async () => {
     const { sid } = await seed('main');
     const row = await enqueueMessage(sid, 'Original');
     const [edited, batch] = await Promise.all([editMessage(sid, row.id, 'Changed'), markProcessing(sid)]);
-    expect(batch[0].message).toContain(TASK_ROUTING_CONTRACT);
+    expect(copies(batch[0].message)).toBe(1);
     expect(batch[0].message).toContain(edited ? 'Changed' : 'Original');
     expect(await deleteMessage(sid, row.id)).toBe(false);
   });
   it('a row quoting the notice in its body still gets a formal leading notice', async () => {
     const { sid } = await seed('main');
-    const policy = (await taskRoutingPolicyForSession(sid))!.text;
+    const policy = (await instructionNoticeForSession(sid))!.text;
     await enqueueMessage(sid, `User quote:\n${policy}`);
     const batch = await markProcessing(sid);
     expect(batch[0].message.startsWith(policy)).toBe(true);
@@ -204,7 +217,7 @@ describe('current task routing for an older Main or lead', () => {
     try {
       const batch = await markProcessing(sid);
       expect(batch[0].message).toContain('so what it reports may be out of date');
-      expect(batch[0].message).toContain(TASK_ROUTING_CONTRACT);
+      expect(copies(batch[0].message)).toBe(1);
       await revertToPending(batch);
       resetCache();
       clock.mockReturnValue(Date.parse(row.enqueuedAt) + 3 * 60 * 60_000);
@@ -225,36 +238,83 @@ describe('current task routing for an older Main or lead', () => {
     const next = await sendMessageToSession(sid, 'Next input');
     expect(next.message).not.toContain('outcome="moved"');
   });
-  it('stays silent for workers, current prompts, ACP engines, an unknown prompt and a deleted task', async () => {
-    for (const role of [undefined, 'main', 'lead'] as const) {
-      const { sid } = await seed(role, role ? TASK_ROUTING_CONTRACT : 'Old worker');
-      expect(await taskRoutingPolicyForSession(sid)).toBeNull();
-      expect(copies((await deliver(sid, 'Plain input'))[0].message)).toBe(0);
+  it('stays silent for current prompts, ACP engines, an unknown or non-Walnut prompt and a deleted task', async () => {
+    for (const role of [undefined, 'ask', 'main', 'lead'] as const) {
+      const { sid } = await seed(role, 'current');
+      expect(await instructionNoticeForSession(sid)).toBeNull();
+      expect((await deliver(sid, 'Plain input'))[0].message).toBe('Plain input');
     }
     const acp = await seed('lead');
     await updateSessionRecord(acp.sid, { engine: 'codex' });
-    expect(await taskRoutingPolicyForSession(acp.sid)).toBeNull();
-    expect(await taskRoutingPolicyForSession((await seed('main', null)).sid)).toBeNull();
+    expect(await instructionNoticeForSession(acp.sid)).toBeNull();
+    expect(await instructionNoticeForSession((await seed('main', null)).sid)).toBeNull();
+    // A slim profile runs on its caller's prompt alone, even one that quotes the charter.
+    expect(await instructionNoticeForSession((await seed(undefined, `App lane prompt\n\n${TEAM_CHARTER}`)).sid)).toBeNull();
     const gone = await seed('lead');
     await deleteTask(gone.task.id);
-    expect(await taskRoutingPolicyForSession(gone.sid)).toBeNull();
+    expect(await instructionNoticeForSession(gone.sid)).toBeNull();
     // A repaired persona on the record is not what the live CLI runs on.
     const old = await seed('main');
-    await updateSessionRecord(old.sid, { profile: { systemPrompt: TASK_ROUTING_CONTRACT } });
-    expect(await taskRoutingPolicyForSession(old.sid)).not.toBeNull();
+    await updateSessionRecord(old.sid, { profile: { systemPrompt: RELAY } });
+    expect(await instructionNoticeForSession(old.sid)).not.toBeNull();
   });
-  it('the compaction hook restates the rules even when told, and that counts as told in either order', async () => {
+  it.each([undefined, 'ask', 'main', 'lead'] as const)('tells a %s session only the lines that changed, under their heading', async (role) => {
+    const { sid } = await seed(role);
+    const notice = (await instructionNoticeForSession(sid))!.text;
+    expect(copies(notice)).toBe(1);
+    expect(notice).toContain('## How we work');
+    expect(notice).toContain('outcome="task-routing-policy"');
+    // Nothing the session already has: not the charter's other points, not its identity line.
+    expect(notice).not.toContain('We are a startup');
+    expect(notice).not.toContain('You are a coding session opened by Walnut');
+    expect(notice.length).toBeLessThan(1200);
+  });
+  it('an older Main lacking the routing rules and the relay rule gets both; Main gets no worker rule', async () => {
+    const { sid } = await seed('main', 'old', [RELAY, TASK_ROUTING_CONTRACT]);
+    const notice = (await instructionNoticeForSession(sid))!.text;
+    expect(notice).toContain('## Task routing');
+    for (const line of TASK_ROUTING_CONTRACT.split('\n').filter((l) => l.startsWith('- '))) expect(notice).toContain(line);
+    expect(copies(notice)).toBe(1);
+    expect(notice).not.toContain('arm a trigger yourself');
+  });
+  it('a later change sends only its own lines; a compaction sends them all again', async () => {
+    const LATER = TASK_ROUTING_CONTRACT.split('\n').find((l) => l.startsWith('- A COMPLETE task'))!;
+    const { sid } = await seed('lead', 'old', [RELAY, LATER]);
+    // Told RELAY earlier, against this prompt: as if LATER had been added after.
+    const hash = (t: string) => createHash('sha256').update(t).digest('hex').slice(0, 16);
+    const prompt = (await getSessionByClaudeId(sid))!.appliedAppendSystemPrompt!;
+    await updateSessionRecord(sid, { taskRoutingNoted: { version: 'v', promptHash: hash(prompt), lines: [hash(RELAY)] } });
+    const [first] = await deliver(sid, 'Next');
+    expect(first.message).toContain(LATER);
+    expect(copies(first.message)).toBe(0);
+    expect((await getSessionByClaudeId(sid))?.taskRoutingNoted?.lines).toEqual(expect.arrayContaining([hash(RELAY), hash(LATER)]));
+    expect((await deliver(sid, 'Quiet'))[0].message).toBe('Quiet');
+    await notePlaceCompaction(sid, 'boundary-x');
+    const [again] = await deliver(sid, 'After compaction');
+    expect(again.message).toContain(LATER);
+    expect(copies(again.message)).toBe(1);
+  });
+  it('a record told the routing rules before lines were kept is told the changed lines once', async () => {
+    const { sid } = await seed('main');
+    const hash = (t: string) => createHash('sha256').update(t).digest('hex').slice(0, 16);
+    const prompt = (await getSessionByClaudeId(sid))!.appliedAppendSystemPrompt!;
+    await updateSessionRecord(sid, { taskRoutingNoted: { version: 'routing-v1', promptHash: hash(prompt) } });
+    expect(copies((await deliver(sid, 'One'))[0].message)).toBe(1);
+    expect(copies((await deliver(sid, 'Two'))[0].message)).toBe(0);
+  });
+  it('the compaction hook restates the changed lines even when told, and that counts as told in either order', async () => {
     const { sid } = await seed('main');
     expect(copies((await deliver(sid, 'First'))[0].message)).toBe(1);
     // Hook first, then the server reads the boundary.
-    expect((await collectOpenItems(sid, Date.now(), { afterCompaction: true })).text).toContain(TASK_ROUTING_CONTRACT);
+    expect(copies((await collectOpenItems(sid, Date.now(), { afterCompaction: true })).text)).toBe(1);
     await notePlaceCompaction(sid, 'one');
     expect(copies((await deliver(sid, 'After hook then boundary'))[0].message)).toBe(0);
     // Boundary first, then the hook.
     await notePlaceCompaction(sid, 'two');
-    expect((await collectOpenItems(sid, Date.now(), { afterCompaction: true })).text).toContain(TASK_ROUTING_CONTRACT);
+    expect(copies((await collectOpenItems(sid, Date.now(), { afterCompaction: true })).text)).toBe(1);
     expect(copies((await deliver(sid, 'After boundary then hook'))[0].message)).toBe(0);
-    await updateSessionRecord(sid, { appliedAppendSystemPrompt: TASK_ROUTING_CONTRACT });
-    expect((await collectOpenItems(sid, Date.now(), { afterCompaction: true })).text).not.toContain(TASK_ROUTING_CONTRACT);
+    // A session on the current prompt hears nothing from the hook.
+    await updateSessionRecord(sid, { appliedAppendSystemPrompt: (await buildSessionContext((await getSessionByClaudeId(sid))!.taskId!)).systemPrompt });
+    expect(copies((await collectOpenItems(sid, Date.now(), { afterCompaction: true })).text)).toBe(0);
   });
 });
