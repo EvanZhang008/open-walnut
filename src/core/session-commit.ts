@@ -72,7 +72,7 @@ export interface SessionCommitDeps {
   now(): number
   sleep(ms: number): Promise<void>
   taskTitle(taskId: string): Promise<string | null>
-  askModel(system: string, prompt: string): Promise<string | null>
+  askModel(system: string, prompt: string, ids?: { sessionId?: string; taskId?: string }): Promise<string | null>
 }
 
 const jobs = new Map<string, ServerCommitJob>()
@@ -143,7 +143,7 @@ const realDeps: SessionCommitDeps = {
       return (await getTask(taskId))?.title ?? null
     } catch { return null }
   },
-  async askModel(system, prompt) {
+  async askModel(system, prompt, ids) {
     const { sendMessage } = await import('../model/model.js')
     const { getConfig } = await import('./config-manager.js')
     const { fastModelFor } = await import('./cheap-model.js')
@@ -158,6 +158,7 @@ const realDeps: SessionCommitDeps = {
         messages: [{ role: 'user', content: prompt }],
         config: { maxTokens: 400, ...(model ? { model } : {}) },
         signal: controller.signal,
+        usage: { source: 'commit-message', ...ids },
       })
       if (result.aborted) return null
       return (result.content ?? [])
@@ -365,7 +366,9 @@ export async function suggestSessionCommitMessage(sessionId: string, body: Recor
   ].join('\n')
   let answer: string | null = null
   try {
-    answer = await deps.askModel('You write short, specific git commit messages. Reply with only the message.', prompt)
+    answer = await deps.askModel('You write short, specific git commit messages. Reply with only the message.', prompt, {
+      sessionId, ...(info.taskId ? { taskId: info.taskId } : {}),
+    })
   } catch (err) {
     log.session.warn('session-commit: suggest failed', { sessionId, error: err instanceof Error ? err.message : String(err) })
   }

@@ -51,7 +51,7 @@ export function setPluginFastTextTestGuard(on: boolean): void {
   testGuard = on
 }
 
-export async function pluginFastText(request: PluginFastTextRequest): Promise<string> {
+export async function pluginFastText(request: PluginFastTextRequest, pluginId?: string): Promise<string> {
   if (override) return override(request)
   if (inTestRun()) throw new Error('No model call in a test run (install setPluginFastTextOverride).')
   const { getConfig } = await import('../config-manager.js')
@@ -63,6 +63,7 @@ export async function pluginFastText(request: PluginFastTextRequest): Promise<st
     messages: request.messages.map((message) => ({ role: message.role, content: message.content })),
     config: { maxTokens, ...(model ? { model } : {}) },
     ...(request.signal ? { signal: request.signal } : {}),
+    usage: { source: 'plugin', ...(pluginId ? { agentId: `plugin:${pluginId}` } : {}) },
   })
   if (request.signal?.aborted) throw new Error('aborted')
   return (result.content ?? [])

@@ -69,6 +69,7 @@ const OLD_TRUTH: Record<BootJob, (cloud: boolean) => boolean> = {
   'lane-ask-sync': leaderOnly,
   'pin-retirement': leaderOnly,
   'budget-letters': leaderOnly,
+  'usage-collect': leaderOnly, // new: the leader reads every host's usage through its daemon
   'session-health-monitor': leaderOnly,
   'overview-maintainer': leaderOnly, // 4d: its project skill writes would land on the box's copy
   'project-summary': always,

@@ -141,3 +141,37 @@ export async function fetchRecentRecords(limit = 50): Promise<UsageRecord[]> {
 export async function fetchPricing(): Promise<{ models: PricingEntry[]; version: string }> {
   return apiGet('/api/usage/pricing');
 }
+
+// ── Usage & Costs (GET /api/usage/costs, src/core/usage/cost-report.ts) ──
+
+export type CostView = 'walnut' | 'agents';
+export interface CostTokens { input: number; output: number; cacheRead: number; cacheWrite: number }
+export interface CostLine { key: string; label: string; costUsd: number; requests: number; tokens: CostTokens; unpriced: number }
+export interface CostTaskLine extends CostLine { taskId?: string; sessionId?: string; project: string; hosts: string[]; engines: string[] }
+export interface CostSourceCheck { source: string; host: string; status: string; matchedCalls: number; unmatchedCalls: number; detail: string }
+
+export interface CostReport {
+  view: CostView;
+  range: { start: string | null; end: string | null };
+  totals: CostLine;
+  daily: { date: string; costUsd: number; requests: number }[];
+  groups: { id: string; heading: string; lines: CostLine[] }[];
+  tasks?: CostTaskLine[];
+  moreTasks?: { count: number; costUsd: number; requests: number };
+  shortSessions?: { count: number; costUsd: number; requests: number; lines: CostTaskLine[] };
+  unpricedModels: string[];
+  prices: { source: string; asOf?: string };
+  ready: boolean;
+  timeZone: string;
+  bounds: { min: string | null; max: string | null };
+  countedUntil: { host: string; until: string }[];
+  checks: CostSourceCheck[];
+  collection?: { running: boolean; startedAt?: string; finishedAt?: string; error?: string };
+}
+
+export function fetchUsageCosts(view: CostView, range: { start?: string; end?: string }): Promise<CostReport> {
+  const q: Record<string, string> = { view };
+  if (range.start) q.start = range.start;
+  if (range.end) q.end = range.end;
+  return apiGet('/api/usage/costs', q);
+}

@@ -3531,3 +3531,34 @@ describe('one CLI per session id parity (cli-owner-v1)', () => {
     }
   })
 })
+
+// usage.sessionCost's day split (session-cost-day-v1): both twins pass `byDay`
+// through to the one core; the source twin advertises it only when the usage-core
+// sidecar it loaded is new enough to honour it, so the server never sends byDay to
+// a daemon that would silently answer undivided buckets as if they were split.
+describe('session cost day split parity (session-cost-day-v1)', () => {
+  const standaloneSrc = readFile(path.join(ROOT, 'src/providers/daemon-standalone.ts'))
+  const templateSrc = readFile(sourcePath)
+
+  it('both twins pass byDay through to scanSessionCost', () => {
+    for (const src of [standaloneSrc, templateSrc]) {
+      const start = src.indexOf('async function cmdUsageSessionCost(')
+      expect(start).toBeGreaterThan(-1)
+      const body = src.slice(start, src.indexOf('\n}\n', start))
+      expect(body).toMatch(/scanSessionCost\(\{/)
+      expect(body).toMatch(/byDay: \{ timeZone: \(?cmd\.byDay/)
+    }
+  })
+
+  it("'session-cost-day-v1' is advertised, not required, and sidecar-gated on the core's marker in the source twin", () => {
+    const capsSrc = readFile(path.join(ROOT, 'src/providers/daemon-capabilities.ts'))
+    const reqStart = capsSrc.indexOf('REQUIRED_DAEMON_CAPABILITIES = [')
+    expect(capsSrc.slice(reqStart, capsSrc.indexOf('] as const', reqStart))).not.toMatch(/'session-cost-day-v1'/)
+    const advStart = capsSrc.indexOf('ADVERTISED_DAEMON_CAPABILITIES = [')
+    expect(capsSrc.slice(advStart, capsSrc.indexOf('] as const', advStart))).toMatch(/'session-cost-day-v1'/)
+    expect(templateSrc).toMatch(/SIDECAR_GATED_CAPABILITIES = new Set\(\[[^\]]*'session-cost-day-v1'/)
+    expect(templateSrc).toMatch(/usageCore\.SESSION_COST_DAY_SPLIT === true\) caps\.push\('session-cost-day-v1'\)/)
+    expect(readFile(path.join(ROOT, 'src/providers/usage-host-core.ts'))).toMatch(/export \{ scanSessionCost, SESSION_COST_DAY_SPLIT \}/)
+    expect(readFile(path.join(ROOT, 'src/providers/session-cost-core.ts'))).toMatch(/export const SESSION_COST_DAY_SPLIT = true/)
+  })
+})

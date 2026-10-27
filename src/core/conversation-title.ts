@@ -141,6 +141,7 @@ export async function generateConversationTitle(
         signal: controller.signal,
         // A helper nobody waits on: the utility band when the server was raised.
         purpose: 'background',
+        usage: { source: 'title', agentId: 'conversation-title' },
       });
     } finally {
       clearTimeout(timer);

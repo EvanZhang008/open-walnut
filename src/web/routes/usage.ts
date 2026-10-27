@@ -5,7 +5,7 @@
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { DEFAULT_PRICING, PRICING_VERSION } from '../../core/usage/index.js'
 import type { UsagePeriod, UsageFilter } from '../../core/usage/types.js'
-import { reconciledOverview, collectUsage, collectionState } from '../../core/usage/collection.js'
+import { reconciledOverview, collectUsage, collectionState, INCREMENTAL, responseUsageStore } from '../../core/usage/collection.js'
 
 export const usageRouter = Router()
 
@@ -27,6 +27,28 @@ usageRouter.get('/overview', (req: Request, res: Response, next: NextFunction) =
   } catch (err) { next(err) }
 })
 
+// GET /api/usage/costs?view=walnut|agents&start&end — the Usage & Costs page:
+// dollars (tokens x public prices) and tokens for a period, read from the
+// per-day sums (cost-report.ts), never from the per-response table.
+usageRouter.get('/costs', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const view = req.query.view === 'agents' ? 'agents' : 'walnut'
+    const [{ buildCostReport }, { getConfig }, { listTasksByIds }, { listSessions }] = await Promise.all([
+      import('../../core/usage/cost-report.js'), import('../../core/config-manager.js'),
+      import('../../core/task-manager.js'), import('../../core/session-tracker.js'),
+    ])
+    const store = responseUsageStore()
+    const report = await buildCostReport(view, { start: parseDate(req.query.start), end: parseDate(req.query.end) }, {
+      rollup: store.rollup, db: store.database, timeZone: store.timezone, overrides: (await getConfig()).usage?.prices,
+      tasks: async (ids) => new Map((ids.length ? await listTasksByIds(ids) : []).map(t => [t.id, { title: t.title, project: t.project ?? '' }])),
+      sessions: async () => new Map((await listSessions()).map(s => [s.claudeSessionId, {
+        title: s.title, taskId: s.taskId || undefined, project: s.project, engine: s.engine }])),
+    })
+    res.json({ ...report, timeZone: store.timezone, bounds: store.rollup.bounds(), countedUntil: store.countedUntil(),
+      checks: store.sourceChecks(), collection: collectionState() })
+  } catch (err) { next(err) }
+})
+
 usageRouter.post('/collect', (req: Request, res: Response) => {
   const { since, until } = req.body ?? {}
   const valid = (value: unknown) => value === undefined || (typeof value === 'string'
@@ -35,7 +57,7 @@ usageRouter.post('/collect', (req: Request, res: Response) => {
     res.status(400).json({ error: 'Invalid usage collection window. Use timestamps with an explicit timezone.' })
     return
   }
-  void collectUsage(since, until).catch(() => {})
+  void collectUsage(since ?? (req.body?.full ? undefined : INCREMENTAL), until).catch(() => {})
   res.status(202).json(collectionState())
 })
 usageRouter.get('/collection', (_req: Request, res: Response) => res.json(collectionState()))

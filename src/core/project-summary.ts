@@ -218,6 +218,7 @@ export async function generateProjectSummary(
           // The maintainer's refresh is background (the utility band when the
           // server was raised); "Regenerate summary" is a person waiting.
           purpose: opts.purpose ?? 'interactive',
+          usage: { source: 'summary', agentId: 'project-summary' },
         });
       } finally {
         clearTimeout(timer);

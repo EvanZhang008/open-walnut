@@ -214,7 +214,7 @@ export function getDaemonSource(): string {
   // external-scan-core.cjs, path-resolve-core.cjs) and daemonCapabilities() in
   // the template adds the capability back at runtime only when that sidecar
   // actually loads.
-  const SIDECAR_GATED_CAPABILITIES = new Set(['changes-v1', 'external-scan-v1', 'external-scan-filter-v1', 'external-describe-v1', 'external-human-v1', 'path-resolve-v1', 'task-dir-v1', 'vscode-v1', 'rewind-probe-v1', 'triggers-v1', 'trigger-claim-v1', 'trigger-host-resume-v1', 'offline-triggers-v1', 'clock-routine-v1', 'clock-host-start-v1', 'acp-model-catalog-v1', 'usage-scan-v1', 'session-cost-v1', 'budget-v2'])
+  const SIDECAR_GATED_CAPABILITIES = new Set(['changes-v1', 'external-scan-v1', 'external-scan-filter-v1', 'external-describe-v1', 'external-human-v1', 'path-resolve-v1', 'task-dir-v1', 'vscode-v1', 'rewind-probe-v1', 'triggers-v1', 'trigger-claim-v1', 'trigger-host-resume-v1', 'offline-triggers-v1', 'clock-routine-v1', 'clock-host-start-v1', 'acp-model-catalog-v1', 'usage-scan-v1', 'session-cost-v1', 'session-cost-day-v1', 'budget-v2'])
   const capsLiteral = JSON.stringify(
     [...ADVERTISED_DAEMON_CAPABILITIES].filter((c) => !SIDECAR_GATED_CAPABILITIES.has(c)),
   )
@@ -11658,6 +11658,7 @@ function daemonCapabilities() {
   if (changesCore) caps.push('changes-v1');
   if (usageCore) caps.push('usage-scan-v1');
   if (usageCore && typeof usageCore.scanSessionCost === 'function') caps.push('session-cost-v1');
+  if (usageCore && typeof usageCore.scanSessionCost === 'function' && usageCore.SESSION_COST_DAY_SPLIT === true) caps.push('session-cost-day-v1');
   if (usageBudget && budgetControl) caps.push('budget-v2');
   if (externalScanCore) caps.push('external-scan-v1');
   if (externalScanCore && externalScanCore.isExcludedExternalCwd) caps.push('external-scan-filter-v1');
@@ -11980,7 +11981,8 @@ async function cmdUsageCostState(ws, id, cmd) {
 }
 
 // 'session-cost-v1': one session's per-request usage (session-cost-core.ts via the
-// usage-core.cjs sidecar). Keep in sync with daemon-standalone.ts.
+// usage-core.cjs sidecar); 'session-cost-day-v1' adds the optional byDay split.
+// Keep in sync with daemon-standalone.ts.
 async function cmdUsageSessionCost(ws, id, cmd) {
   if (!usageCore || typeof usageCore.scanSessionCost !== 'function') return sendError(ws, id, 'usage.sessionCost unsupported: sidecar not loaded');
   if (typeof cmd.sid !== 'string' || !cmd.sid) return sendError(ws, id, 'usage.sessionCost: missing sid');
@@ -11991,6 +11993,7 @@ async function cmdUsageSessionCost(ws, id, cmd) {
       ...(typeof cmd.cwd === 'string' ? { cwd: cmd.cwd } : {}),
       thresholds: Array.isArray(cmd.thresholds) ? cmd.thresholds.filter((t) => typeof t === 'number') : [],
       projectsDir: path.join(process.env.CLAUDE_CONFIG_DIR || path.join(HOME_DIR, '.claude'), 'projects'),
+      ...(cmd.byDay && typeof cmd.byDay.timeZone === 'string' ? { byDay: { timeZone: cmd.byDay.timeZone } } : {}),
     });
     sendOk(ws, id, { result });
   } catch (err) { sendError(ws, id, 'usage.sessionCost failed: ' + err.message); }

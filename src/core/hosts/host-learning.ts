@@ -90,6 +90,7 @@ export async function generateHostSummary(
           config: { maxTokens: 800, ...(provider ? { provider } : {}), ...(model ? { model } : {}) },
           signal: controller.signal,
           purpose: 'background',
+          usage: { source: 'host-learning' },
         });
       } finally {
         clearTimeout(timer);

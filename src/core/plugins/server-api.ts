@@ -1126,7 +1126,7 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
       }): Promise<string> {
         assertLive('model.fastText')
         const { pluginFastText } = await import('./plugin-fast-text.js')
-        return pluginFastText(request)
+        return pluginFastText(request, pluginId)
       },
     },
 

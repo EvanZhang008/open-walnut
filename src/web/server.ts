@@ -3660,6 +3660,26 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     })()
   }
 
+  // Usage & Costs: read each host's new usage every 30 min (incremental, so
+  // Today stays current); the first pass waits 2 min after boot.
+  if (bootPolicy('usage-collect') && !process.env.VITEST) {
+    void (async () => {
+      try {
+        const { collectUsage, INCREMENTAL } = await import('../core/usage/collection.js')
+        const { runPeriodic } = await import('../core/periodic-task.js')
+        const handle = runPeriodic('usage-collect', 30 * 60_000, 20 * 60_000, async () => {
+          await collectUsage(INCREMENTAL).catch((err) => log.usage.warn('usage collection failed', { error: String(err) }))
+        })
+        const kick = setTimeout(() => handle.kick(), 120_000)
+        kick.unref?.()
+      } catch (err) {
+        log.web.warn('usage collection wiring failed; Usage & Costs only updates on Update now', {
+          error: err instanceof Error ? err.message : String(err),
+        })
+      }
+    })()
+  }
+
   // -- Init SubagentRunner + SessionRunner --
   subagentRunner.init()
   sessionRunner.init(reconnectable)

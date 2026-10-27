@@ -445,3 +445,34 @@ span.plugin-store-why {
   justify-content: flex-end;
   min-width: 176px;
 }
+
+/* Usage & Costs: dollars first; a task title stays on one line however long its prompt was. */
+.usage-line .usage-line-label {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+.usage-line-cost {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.usage-headline-note {
+  margin: 0;
+  padding: 0 16px 12px;
+  font-size: 12.5px;
+}
+.usage-more > summary {
+  cursor: pointer;
+  padding: 10px 16px;
+  font-size: 13px;
+  color: var(--text-secondary, var(--fg-muted));
+}
+.usage-how > summary {
+  cursor: pointer;
+  padding: 10px 4px;
+  font-size: 13px;
+  color: var(--text-secondary, var(--fg-muted));
+}

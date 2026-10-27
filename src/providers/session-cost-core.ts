@@ -14,7 +14,8 @@
  * model, speed, region, service tier, and how many of the caller's context
  * thresholds the request's prompt went past (a long prompt changes the rate of
  * the WHOLE request for tiered models, so a sum of tokens alone cannot be priced).
- * Pricing happens on the server, which owns the price data.
+ * Pricing happens on the server, which owns the price data. With `byDay` the
+ * buckets are split once more by the local calendar day each response was written.
  */
 import { execFile } from 'node:child_process';
 import { constants } from 'node:fs';
@@ -33,6 +34,11 @@ export interface SessionCostRequest {
   codexHome?: string;
   /** Answer by then with a `pending` scan while a long first read goes on (ms). */
   softDeadlineMs?: number;
+  /**
+   * Split buckets by the calendar day (YYYY-MM-DD) each response was written, in
+   * this IANA zone. An unknown zone counts in UTC. Unset: no day, as before.
+   */
+  byDay?: { timeZone: string };
 }
 
 export interface SessionCostBucket {
@@ -55,6 +61,8 @@ export interface SessionCostBucket {
   incomplete: number;
   firstAt: string;
   lastAt: string;
+  /** Local day of these responses (byDay only; absent when no response time is known). */
+  day?: string;
 }
 
 export type SessionCostSource = 'claude-transcript' | 'codex-rollout' | 'opencode-export' | 'none';
@@ -74,13 +82,20 @@ export interface SessionCostScan {
   lastAt?: string;
   /** What the engine itself says about the session (its own cost and clocks). */
   engineTotals?: { costUsd?: number; apiDurationMs?: number; durationMs?: number };
+  /** Set only on a day-split answer: the zone the days are in (UTC when the asked one was unknown). */
+  byDay?: { timeZone: string };
   scanMs: number;
 }
+
+/** Marker for the source twin: this sidecar honours `byDay` (session-cost-day-v1). */
+export const SESSION_COST_DAY_SPLIT = true;
 
 interface UsageRow {
   model: string; speed?: string | null; geo?: string | null; tier?: string | null;
   input: number; output: number; cacheRead: number; cacheWrite5m: number; cacheWrite1h: number; cacheWrite: number;
   webSearches?: number; incomplete?: boolean; at: string;
+  /** The engine wrote no time for this response (`at` is then the epoch). */
+  undated?: boolean;
 }
 
 const NO_USAGE_REASON: Record<string, string> = {
@@ -99,17 +114,48 @@ function band(prompt: number, thresholds: number[]): number {
   return n;
 }
 
-export function bucketRows(rows: UsageRow[], thresholds: number[]): SessionCostBucket[] {
+const dayFormats = new Map<string, Intl.DateTimeFormat>();
+
+/** The zone days are counted in: the asked one when this runtime knows it, else UTC. */
+export function dayZone(timeZone: string): string {
+  if (dayFormats.has(timeZone)) return timeZone;
+  try {
+    dayFormats.set(timeZone, new Intl.DateTimeFormat('en-US', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' }));
+    return timeZone;
+  } catch {
+    if (!dayFormats.has('UTC')) dayFormats.set('UTC', new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', year: 'numeric', month: '2-digit', day: '2-digit' }));
+    return 'UTC';
+  }
+}
+
+/** YYYY-MM-DD of an instant in a zone `dayZone` returned. */
+export function localDay(ms: number, zone: string): string {
+  const parts = dayFormats.get(zone)!.formatToParts(ms);
+  const part = (type: string) => parts.find(p => p.type === type)?.value ?? '';
+  return `${part('year')}-${part('month')}-${part('day')}`;
+}
+
+export function bucketRows(rows: UsageRow[], thresholds: number[], zone?: string): SessionCostBucket[] {
   const buckets = new Map<string, SessionCostBucket>();
+  // A response the engine wrote no time for takes the day of the nearest EARLIER
+  // dated response in the same file (rows arrive in file order); none: no day.
+  let lastDay: string | undefined;
   for (const row of rows) {
     const prompt = row.input + row.cacheRead + row.cacheWrite5m + row.cacheWrite1h + row.cacheWrite;
-    const key = [row.model, row.speed || 'standard', row.geo || 'global', row.tier || 'standard', band(prompt, thresholds)];
+    const key: (string | number | null)[] = [row.model, row.speed || 'standard', row.geo || 'global', row.tier || 'standard', band(prompt, thresholds)];
+    let day: string | undefined;
+    if (zone) {
+      const ms = row.undated ? NaN : Date.parse(row.at);
+      if (Number.isFinite(ms)) lastDay = localDay(ms, zone);
+      day = lastDay;
+      key.push(day ?? null);
+    }
     const id = JSON.stringify(key);
     let b = buckets.get(id);
     if (!b) {
       b = { model: key[0] as string, speed: key[1] as string, geo: key[2] as string, tier: key[3] as string, band: key[4] as number,
         responses: 0, input: 0, output: 0, cacheRead: 0, cacheWrite5m: 0, cacheWrite1h: 0, cacheWrite: 0,
-        webSearches: 0, incomplete: 0, firstAt: row.at, lastAt: row.at };
+        webSearches: 0, incomplete: 0, firstAt: row.at, lastAt: row.at, ...(day ? { day } : {}) };
       buckets.set(id, b);
     }
     b.responses++;
@@ -246,6 +292,7 @@ function foldCodexLine(fold: CodexFold, line: string): void {
     model: fold.model, input: prompt - cached - written, output: finite(last.output_tokens),
     cacheRead: cached, cacheWrite5m: 0, cacheWrite1h: 0, cacheWrite: written,
     at: typeof row.timestamp === 'string' ? row.timestamp : new Date(0).toISOString(),
+    ...(typeof row.timestamp === 'string' ? {} : { undated: true }),
   });
 }
 
@@ -318,6 +365,7 @@ export function parseOpenCodeExport(text: string): { rows: UsageRow[]; costUsd: 
       cacheWrite5m: model.startsWith('claude-') ? write : 0, cacheWrite1h: 0,
       cacheWrite: model.startsWith('claude-') ? 0 : write,
       at: new Date(typeof created === 'number' ? created : 0).toISOString(),
+      ...(typeof created === 'number' ? {} : { undated: true }),
     });
   }
   return { rows, costUsd };
@@ -374,16 +422,17 @@ export async function scanSessionCost(req: SessionCostRequest): Promise<SessionC
     throw new Error('Session ID must be a filename component');
   }
   const thresholds = [...new Set((req.thresholds ?? []).filter(t => Number.isFinite(t) && t > 0))].sort((a, b) => a - b);
-  const key = JSON.stringify([req.engine, req.sessionId, thresholds]);
+  const zone = req.byDay ? dayZone(String(req.byDay.timeZone)) : undefined;
+  const key = JSON.stringify(zone ? [req.engine, req.sessionId, thresholds, zone] : [req.engine, req.sessionId, thresholds]);
   const base = { engine: req.engine, sessionId: req.sessionId, files: 0, buckets: [] as SessionCostBucket[] };
   const done = (partial: Omit<SessionCostScan, 'engine' | 'sessionId' | 'scanMs' | 'files' | 'buckets'> & Partial<SessionCostScan>, rows?: UsageRow[]): SessionCostScan => {
-    const buckets = rows ? bucketRows(rows, thresholds) : [];
+    const buckets = rows ? bucketRows(rows, thresholds, zone) : [];
     let firstAt: string | undefined, lastAt: string | undefined;
     for (const b of buckets) {
       if (!firstAt || b.firstAt < firstAt) firstAt = b.firstAt;
       if (!lastAt || b.lastAt > lastAt) lastAt = b.lastAt;
     }
-    return { ...base, ...partial, buckets, ...(firstAt ? { firstAt, lastAt } : {}), scanMs: Date.now() - started };
+    return { ...base, ...partial, buckets, ...(firstAt ? { firstAt, lastAt } : {}), ...(zone ? { byDay: { timeZone: zone } } : {}), scanMs: Date.now() - started };
   };
 
   if (req.engine === 'claude') {

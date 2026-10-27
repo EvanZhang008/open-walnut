@@ -322,7 +322,8 @@ export class MockDaemon {
         const projectsDir = this.usageDirs.projects
         if (!projectsDir) return this.sendError(ws, id, 'unknown command: usage.sessionCost')
         void scanSessionCost({ engine: String(cmd.engine ?? 'claude'), sessionId: String(cmd.sid), cwd: cmd.cwd as string | undefined,
-          thresholds: (cmd.thresholds as number[] | undefined) ?? [], projectsDir, codexHome: this.usageDirs.codex })
+          thresholds: (cmd.thresholds as number[] | undefined) ?? [], projectsDir, codexHome: this.usageDirs.codex,
+          ...(cmd.byDay ? { byDay: cmd.byDay as { timeZone: string } } : {}) })
           .then(result => this.sendOk(ws, id, { result }), err => this.sendError(ws, id, String(err)))
         return
       }

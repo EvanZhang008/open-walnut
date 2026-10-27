@@ -197,43 +197,6 @@ test('N05 N06: plugin provider sub-rows are plain indented rows that say their s
   }
 })
 
-function usageWithCliRow() {
-  const group = (name: string, cost: number, pct: number, tokens = true) => ({ name, cost_usd: cost,
-    input_tokens: tokens ? 123456 : 0, output_tokens: tokens ? 23456 : 0, cache_read_tokens: tokens ? 3456789 : 0,
-    cache_creation_tokens: tokens ? 45678 : 0, api_calls: 12, percentage: pct })
-  return {
-    summary: { total_cost: 60, session_cost: 1, input_tokens: 1, output_tokens: 1, cache_read_tokens: 1, cache_creation_tokens: 1, api_calls: 3 },
-    daily: Array.from({ length: 14 }, (_, i) => ({ date: `2026-09-${String(10 + i).padStart(2, '0')}`, cost_usd: 1 + i, input_tokens: 1, output_tokens: 1 })),
-    bySource: [group('claude-code', 45.47, 97.1, false), group('jev', 1.2, 2.9)],
-    byModel: [group('example-model', 46.67, 100)],
-    byAgent: [group('helper-agent', 2, 100)],
-    recent: [],
-    dateBounds: { min: '2026-09-01', max: '2026-09-23' },
-  }
-}
-
-test('N09: usage headers and shares fit, unknown tokens are a dash, names capitalized, axis text >= 11px', async ({ page }) => {
-  await recordWrites(page)
-  await page.route('**/api/usage/overview**', (route) => route.fulfill({ json: usageWithCliRow() }))
-  await openSettings(page)
-  await clickNav(page, 'usage')
-  const table = page.locator('.settings-usage-breakdown').first()
-  await expect(table).toBeVisible({ timeout: 20_000 })
-  const clipped = await table.evaluate((t) => Array.from(t.querySelectorAll<HTMLElement>('th, td'))
-    .filter((c) => c.scrollWidth > c.clientWidth + 1).map((c) => c.textContent))
-  expect(clipped).toEqual([])
-  const cli = table.locator('tbody tr', { hasText: '45.47' })
-  await expect(cli.locator('td').nth(2)).toHaveText('-')
-  await expect(table.locator('tbody')).toContainText('Jev')
-  await expect(table.locator('tbody')).not.toContainText(/\bjev\b/)
-  const axis = await page.locator('.usage-chart-svg').first().evaluate((svg) => {
-    const scale = svg.getBoundingClientRect().width / 1000
-    return Array.from(svg.querySelectorAll('.usage-chart-axis')).map((t) => parseFloat(getComputedStyle(t).fontSize) * scale)
-  })
-  expect(axis.length).toBeGreaterThan(0)
-  for (const px of axis) expect(px).toBeGreaterThanOrEqual(10.9)
-})
-
 test('N08 N26: accuracy chips stay on one line, the list is capped, Refresh sits in the pane header', async ({ page }) => {
   await recordWrites(page)
   const long = '/Users/example/workplace/a-very-long-project-folder-name/with/many/nested/levels/src/app'

@@ -118,6 +118,7 @@ export async function titleViaBackendModel(
         signal: controller.signal,
         // A helper nobody waits on: the utility band when the server was raised.
         purpose: 'background',
+        usage: { source: 'title', agentId: 'session-title' },
       });
     } finally {
       clearTimeout(timer);

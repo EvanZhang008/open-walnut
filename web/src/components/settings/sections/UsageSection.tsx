@@ -3,13 +3,12 @@ import { useNavigate } from 'react-router-dom';
 import { SettingsSection, SettingsNotice, SettingsGroup, SettingsRow, SettingsLoadingRow, SettingsEmpty } from '../SettingsSection';
 import { SettingsButton } from '../inputs/SettingsButton';
 import { SegmentedControl } from '../inputs/SegmentedControl';
-import { useUsageOverview } from '@/hooks/useUsageOverview';
+import { useUsageCosts } from '@/hooks/useUsageCosts';
+import type { TimeSelection } from '@/hooks/useUsageOverview';
 import { formatTokens } from '@/utils/format';
 import { UsageDailyChart } from '@/components/usage/UsageDailyChart';
-import { SettingsUsageBreakdown, SettingsUsageRecent, usageRangeHint } from './UsageTables';
-import { UsageFilterChips, chipValue, type Chip } from '@/components/usage/UsageFilterChips';
 import { UsageDateRange } from '@/components/usage/UsageDateRange';
-import { collectUsage, type Period } from '@/api/usage';
+import { collectUsage, type CostLine, type CostReport, type CostTaskLine, type CostView, type DailyCost, type Period } from '@/api/usage';
 import { openSessionOnHome } from '@/utils/open-session';
 import { useHostDisplayLabels } from '@/hooks/useHostDisplayLabel';
 import '@/styles/settings-sections-addons.css';
@@ -21,202 +20,225 @@ const PRESETS: { value: Period; label: string }[] = [
   { value: 'all', label: 'All time' },
 ];
 
+const VIEWS: { value: CostView; label: string }[] = [
+  { value: 'walnut', label: 'Walnut' },
+  { value: 'agents', label: 'Agents' },
+];
+
+const VIEW_HELP: Record<CostView, string> = {
+  walnut: "Walnut's own model calls: the Personal AI's chat, titles, parsing, summaries, search, plugins.",
+  agents: 'Coding sessions: Claude Code, Codex, OpenCode and other engines, on every host.',
+};
+
+/** Rows shown before a group folds the rest into "N more". */
+const VISIBLE = 8;
+
+export function money(usd: number): string {
+  if (usd > 0 && usd < 0.01) return '<$0.01';
+  return usd.toLocaleString('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function count(n: number, one: string, many = `${one}s`): string {
+  return `${n.toLocaleString('en-US')} ${n === 1 ? one : many}`;
+}
+
+function totalTokens(line: CostLine): number {
+  return line.tokens.input + line.tokens.output + line.tokens.cacheRead + line.tokens.cacheWrite;
+}
+
 export function UsageSection() {
-  const navigate = useNavigate();
-  const hostName = useHostDisplayLabels();
-  const { overview, loading, error, time, setTime, drill, setDrill, clearDrill, refresh, effectiveRange } = useUsageOverview();
-  const [collecting, setCollecting] = useState(false);
-  const [collectError, setCollectError] = useState('');
-  const collect = async () => {
-    setCollecting(true); setCollectError('');
-    try { await collectUsage(); refresh(); }
-    catch (error) { setCollectError(error instanceof Error ? error.message : String(error)); }
-    finally { setCollecting(false); }
+  const [view, setView] = useState<CostView>('walnut');
+  const [time, setTime] = useState<TimeSelection>({ preset: '7d' });
+  const { report, current, loading, error, refresh, range } = useUsageCosts(view, time);
+  const [updating, setUpdating] = useState(false);
+  const [updateError, setUpdateError] = useState('');
+  const update = async () => {
+    setUpdating(true); setUpdateError('');
+    try { await collectUsage(); await refresh(); }
+    catch (err) { setUpdateError(err instanceof Error ? err.message : String(err)); }
+    finally { setUpdating(false); }
   };
-
-  // The chart drives a single-day custom range when a day is clicked; detect that.
-  const chartSelectedDay = time.preset === 'custom' && time.start && time.start === time.end ? time.start : undefined;
-
-  const chips: Chip[] = useMemo(() => {
-    const out: Chip[] = [];
-    if (drill.source) out.push({ key: 'source', label: 'Source', value: chipValue(drill.source), onRemove: () => setDrill((d) => ({ ...d, source: undefined })) });
-    if (drill.model) out.push({ key: 'model', label: 'Model', value: chipValue(drill.model), onRemove: () => setDrill((d) => ({ ...d, model: undefined })) });
-    if (drill.agentId) out.push({ key: 'agent', label: 'Agent', value: chipValue(drill.agentId), onRemove: () => setDrill((d) => ({ ...d, agentId: undefined })) });
-    return out;
-  }, [drill, setDrill]);
-
-  const bounds = overview?.dateBounds ?? { min: null, max: null };
-
-  const summary = overview?.summary ?? null;
-  const empty = !loading && !error && summary !== null && summary.api_calls === 0 && chips.length === 0;
-  // The first read has no numbers yet: one loading row, not three `--` stats that
-  // may turn into the empty sentence a moment later. A refresh keeps the numbers.
-  const firstLoad = loading && summary === null && !error;
+  const shown = current ?? report;
   const presetValue = (time.preset === 'custom' ? '' : time.preset) as Period;
-  const rangeHint = usageRangeHint(effectiveRange.start, effectiveRange.end);
+  const chartSelectedDay = time.preset === 'custom' && time.start && time.start === time.end ? time.start : undefined;
 
   return (
     <SettingsSection
       id="usage"
       title="Usage & Costs"
+      description="What models cost, estimated from tokens at public list prices."
       actions={(
-        <SettingsButton className="usage-refresh-btn" onClick={collect} busy={collecting || overview?.collection?.running} busyLabel="Checking sources...">
-          Check sources
+        <SettingsButton className="usage-refresh-btn" onClick={update} busy={updating || !!shown?.collection?.running} busyLabel="Updating...">
+          Update now
         </SettingsButton>
       )}
     >
       <SettingsGroup>
         <SettingsRow
+          label="Show"
+          help={VIEW_HELP[view]}
+          control={<SegmentedControl aria-label="Show" value={view} onChange={(v) => setView(v)}
+            options={VIEWS.map((v) => ({ value: v.value, label: v.label, testId: `usage-view-${v.value}` }))} />}
+        />
+        <SettingsRow
           label="Period"
           control={
             <span className="settings-addons-inline usage-period-tabs">
-              <SegmentedControl
-                aria-label="Period"
-                value={presetValue}
-                onChange={(v) => setTime({ preset: v })}
-                options={PRESETS.map((p) => ({ value: p.value, label: p.label, testId: `usage-period-${p.value}` }))}
-              />
-              <UsageDateRange
-                active={time.preset === 'custom'}
-                start={time.start}
-                end={time.end}
-                bounds={bounds}
-                onApply={(start, end) => setTime({ preset: 'custom', start, end })}
-              />
+              <SegmentedControl aria-label="Period" value={presetValue} onChange={(v) => setTime({ preset: v })}
+                options={PRESETS.map((p) => ({ value: p.value, label: p.label, testId: `usage-period-${p.value}` }))} />
+              <UsageDateRange active={time.preset === 'custom'} start={time.start} end={time.end}
+                bounds={shown?.bounds ?? { min: null, max: null }}
+                onApply={(start, end) => setTime({ preset: 'custom', start, end })} />
             </span>
           }
         />
-        {chips.length > 0 && (
-          <div className="settings-row">
-            <UsageFilterChips chips={chips} onClearAll={clearDrill} />
-          </div>
-        )}
       </SettingsGroup>
 
       {error && <SettingsNotice kind="error" role="alert">{`Couldn't load usage: ${error}`}</SettingsNotice>}
-      {collectError && <SettingsNotice kind="error" role="alert">{collectError}</SettingsNotice>}
-      {overview?.accuracy && <details className="settings-group" data-testid="usage-evidence">
-        <summary>Source checks · {overview.accuracy.status === 'verified' ? 'Matched' : 'Partial coverage'}</summary>
-        <SettingsGroup heading="Evidence">
-        <SettingsRow label={overview.accuracy.note} help={`${overview.accuracy.timezone} · Prices ${overview.accuracy.pricingVersion}${overview.accuracy.until ? ` · Checked ${new Date(overview.accuracy.until).toLocaleString('en-US')}` : ''}`} />
-        {overview.accuracy.checks.map(check => <div className="settings-row settings-row-stacked" key={`${check.host}:${check.source}`}>
-          <div><strong>{check.source}</strong> <span className="settings-addons-muted">{hostName(check.host)} · {check.status === 'matched' ? 'Matched' : 'Unverified'}</span></div>
-          <p className="settings-addons-muted">{check.detail} {check.matchedCalls > 0 && `${check.matchedCalls.toLocaleString()} matched calls. `}{check.unmatchedCalls > 0 && `${check.unmatchedCalls.toLocaleString()} unmatched calls.`}</p>
-          {!!check.residuals?.length && <details><summary>Unmatched tokens by model</summary>
-            {check.residuals.map(r => <p key={`${r.source}:${r.model}`}><strong>{r.model}</strong>: {r.count} calls, input {r.input_tokens === null ? 'Unknown' : formatTokens(r.input_tokens)}, output {r.output_tokens === null ? 'Unknown' : formatTokens(r.output_tokens)}, cache read {r.cache_read_input_tokens === null ? 'Unknown' : formatTokens(r.cache_read_input_tokens)}, cache write {r.cache_creation_input_tokens === null ? 'Unknown' : formatTokens(r.cache_creation_input_tokens)}</p>)}
-          </details>}
-        </div>)}
-        </SettingsGroup>
-      </details>}
+      {updateError && <SettingsNotice kind="error" role="alert">{updateError}</SettingsNotice>}
+      {shown && !shown.ready && <SettingsNotice kind="info">Adding up past usage. The numbers fill in within a minute.</SettingsNotice>}
 
-      {firstLoad ? (
-        <SettingsGroup>
-          <SettingsLoadingRow>Loading usage...</SettingsLoadingRow>
-        </SettingsGroup>
-      ) : empty ? (
-        <SettingsGroup>
-          <SettingsEmpty>No response evidence collected for this period. Check sources to rebuild usage.</SettingsEmpty>
-        </SettingsGroup>
+      {!shown ? (
+        <SettingsGroup><SettingsLoadingRow>Loading usage...</SettingsLoadingRow></SettingsGroup>
       ) : (
-        <>
-          <SettingsGroup className="settings-addons-summary" data-testid="usage-summary">
-            <div className="settings-addons-stats" aria-busy={loading || undefined}>
-              <Stat value={summary && (summary.verified_calls ?? 0) > 0 ? `$${summary.total_cost.toFixed(2)}` : 'Unverified'} label="Verified token estimate" />
-              <Stat value={summary ? String(summary.verified_calls ?? 0) : '--'} label="Matched calls" />
-              <Stat value={summary ? String(summary.unverified_calls ?? 0) : '--'} label="Unverified calls" />
-              <Stat value={summary ? summary.token_counts_complete === false ? 'Unknown' : formatTokens(summary.input_tokens + summary.output_tokens) : '--'} label="Tokens in and out" />
-            </div>
-          </SettingsGroup>
-
-          {!!overview?.sessions?.length && <SettingsGroup heading="By task" headingTrailing="Includes coding sessions">
-            {overview.sessions.slice(0, 10).map(session => <SettingsRow key={session.sessionId}
-              label={session.title || 'Untitled task'}
-              help={`${session.project || 'Inbox'} · ${hostName(session.host)} · ${session.calls.toLocaleString()} calls${session.unverified ? ` · ${session.unverified.toLocaleString()} unverified` : ''}`}
-              control={<SettingsButton onClick={() => openSessionOnHome(session.sessionId, navigate)}>
-                {session.unverified === session.calls ? 'Unverified' : `$${session.cost.toFixed(2)}`}
-              </SettingsButton>} />)}
-            {overview.sessions.length > 10 && <details><summary>{overview.sessions.length - 10} more tasks</summary>
-              {overview.sessions.slice(10).map(session => <SettingsRow key={session.sessionId} label={session.title || 'Untitled task'}
-                help={`${session.project || 'Inbox'} · ${session.calls.toLocaleString()} calls`}
-                control={<SettingsButton onClick={() => openSessionOnHome(session.sessionId, navigate)}>{session.unverified === session.calls ? 'Unverified' : `$${session.cost.toFixed(2)}`}</SettingsButton>} />)}
-            </details>}
-          </SettingsGroup>}
-
-          <SettingsGroup heading="Daily costs" headingTrailing="Verified calls only">
-            <div className="settings-row settings-row-stacked usage-chart-section" data-wide="true">
-              <UsageDailyChart
-                data={overview?.daily ?? []}
-                loading={loading}
-                selectedDate={chartSelectedDay}
-                onSelectDay={(date) => {
-                  // Toggle: clicking the already-selected day clears back to 7 days.
-                  if (chartSelectedDay === date) setTime({ preset: '7d' });
-                  else setTime({ preset: 'custom', start: date, end: date });
-                }}
-              />
-            </div>
-          </SettingsGroup>
-
-          {([
-            ['By source', overview?.bySource, drill.source, (name: string) => setDrill((d) => ({ ...d, source: d.source === name ? undefined : name }))],
-            ['By agent', overview?.byAgent, drill.agentId, (name: string) => setDrill((d) => ({ ...d, agentId: d.agentId === name ? undefined : name }))],
-            ['By model', overview?.byModel, drill.model, (name: string) => setDrill((d) => ({ ...d, model: d.model === name ? undefined : name }))],
-          ] as const).map(([heading, data, active, onSelect]) => (
-            <SettingsGroup key={heading} heading={heading}>
-              <div className="settings-row settings-row-stacked usage-breakdown-panel" data-wide="true">
-                <SettingsUsageBreakdown data={data ?? []} loading={loading} activeName={active} onSelect={onSelect} />
-              </div>
-            </SettingsGroup>
-          ))}
-
-          {summary && (
-            <SettingsGroup heading="Cache efficiency" className="usage-cache-card">
-              <CacheStats summary={summary} />
-            </SettingsGroup>
+        <div aria-busy={loading || undefined} data-testid="usage-costs" data-view={shown.view}>
+          <Headline report={shown} />
+          {shown.totals.requests === 0 ? (
+            <SettingsGroup><SettingsEmpty>No model calls in this period.</SettingsEmpty></SettingsGroup>
+          ) : (
+            <>
+              <SettingsGroup heading="By day">
+                <div className="settings-row settings-row-stacked usage-chart-section" data-wide="true">
+                  <UsageDailyChart data={chartDays(shown, range)} loading={loading} selectedDate={chartSelectedDay}
+                    onSelectDay={(date) => {
+                      if (chartSelectedDay === date) setTime({ preset: '7d' });
+                      else setTime({ preset: 'custom', start: date, end: date });
+                    }} />
+                </div>
+              </SettingsGroup>
+              {shown.view === 'agents' && <TaskList report={shown} />}
+              {shown.groups.map((group) => <LineGroup key={group.id} id={group.id} heading={group.heading} lines={group.lines} total={shown.totals.costUsd} />)}
+            </>
           )}
-
-          <SettingsGroup heading="Recent activity" headingTrailing={rangeHint}>
-            <div className="settings-row settings-row-stacked usage-recent-section" data-wide="true">
-              <SettingsUsageRecent data={overview?.recent ?? []} loading={loading} />
-            </div>
-          </SettingsGroup>
-        </>
+          <HowCounted report={shown} />
+        </div>
       )}
     </SettingsSection>
   );
 }
 
-function Stat({ value, label }: { value: string; label: string }) {
+function Headline({ report }: { report: CostReport }) {
+  const t = report.totals;
   return (
-    <div className="settings-addons-stat">
+    <SettingsGroup className="settings-addons-summary" data-testid="usage-summary">
+      <div className="settings-addons-stats">
+        <Stat value={money(t.costUsd)} label="Estimated cost" testId="usage-total-cost" />
+        <Stat value={formatTokens(totalTokens(t))} label="Tokens" />
+        <Stat value={t.requests.toLocaleString('en-US')} label="Requests" />
+      </div>
+      <p className="settings-addons-muted usage-headline-note">
+        {`In ${formatTokens(t.tokens.input)} · out ${formatTokens(t.tokens.output)} · cache read ${formatTokens(t.tokens.cacheRead)} · cache write ${formatTokens(t.tokens.cacheWrite)}.`}
+        {t.unpriced > 0 && ` ${count(t.unpriced, 'request')} with no public price (${report.unpricedModels.join(', ')}) ${t.unpriced === 1 ? 'is' : 'are'} not in the total.`}
+      </p>
+    </SettingsGroup>
+  );
+}
+
+function Stat({ value, label, testId }: { value: string; label: string; testId?: string }) {
+  return (
+    <div className="settings-addons-stat" data-testid={testId}>
       <span className="settings-addons-stat-value">{value}</span>
       <span className="settings-addons-stat-label">{label}</span>
     </div>
   );
 }
 
-function CacheStats({ summary }: { summary: NonNullable<ReturnType<typeof useUsageOverview>['overview']>['summary'] }) {
-  const unknown = summary.token_counts_complete === false;
-  const totalIn = summary.input_tokens + summary.cache_read_tokens + summary.cache_creation_tokens;
-  const hitRate = unknown ? null : totalIn > 0 ? (summary.cache_read_tokens / totalIn) * 100 : 0;
-  const fmt = (n: number) => (n >= 1_000_000 ? (n / 1_000_000).toFixed(1) + 'M' : n >= 1_000 ? (n / 1_000).toFixed(1) + 'k' : String(n));
-  const stats = [
-    { label: 'Cache hit rate', value: hitRate === null ? 'Unknown' : `${hitRate.toFixed(1)}%` },
-    { label: 'Total input', value: unknown ? 'Unknown' : fmt(totalIn) },
-    { label: 'Cache read', value: unknown ? 'Unknown' : fmt(summary.cache_read_tokens) },
-    { label: 'Cache write', value: unknown ? 'Unknown' : fmt(summary.cache_creation_tokens) },
-    { label: 'Uncached input', value: unknown ? 'Unknown' : fmt(summary.input_tokens) },
-  ];
+function LineRow({ line, share, label, help, onOpen }: { line: CostLine; share?: number; label?: string; help?: string; onOpen?: () => void }) {
+  const amount = <span className="usage-line-cost">{money(line.costUsd)}</span>;
   return (
-    <>
-      {stats.map((s) => (
-        <SettingsRow
-          key={s.label}
-          className="usage-cache-stat"
-          label={s.label}
-          control={<span className="settings-addons-muted usage-cache-value">{s.value}</span>}
-        />
-      ))}
-    </>
+    <SettingsRow
+      className="usage-line"
+      label={<span className="usage-line-label" title={label ?? line.label}>{label ?? line.label}</span>}
+      help={help ?? `${count(line.requests, 'request')} · ${formatTokens(totalTokens(line))} tokens${share !== undefined ? ` · ${share.toFixed(share < 10 ? 1 : 0)}%` : ''}`}
+      control={onOpen ? <SettingsButton onClick={onOpen}>{amount}</SettingsButton> : amount}
+    />
   );
+}
+
+function LineGroup({ id, heading, lines, total }: { id: string; heading: string; lines: CostLine[]; total: number }) {
+  const hostName = useHostDisplayLabels();
+  if (!lines.length) return null;
+  const label = (line: CostLine) => id === 'host' ? hostName(line.key) : line.label;
+  const share = (line: CostLine) => total > 0 ? line.costUsd / total * 100 : undefined;
+  const head = lines.slice(0, VISIBLE), rest = lines.slice(VISIBLE);
+  return (
+    <SettingsGroup heading={heading} data-testid={`usage-group-${id}`}>
+      {head.map((line) => <LineRow key={line.key} line={line} label={label(line)} share={share(line)} />)}
+      {rest.length > 0 && <details className="usage-more">
+        <summary>{`${rest.length} more · ${money(rest.reduce((n, l) => n + l.costUsd, 0))}`}</summary>
+        {rest.map((line) => <LineRow key={line.key} line={line} label={label(line)} share={share(line)} />)}
+      </details>}
+    </SettingsGroup>
+  );
+}
+
+function TaskList({ report }: { report: CostReport }) {
+  const navigate = useNavigate();
+  const hostName = useHostDisplayLabels();
+  const tasks = report.tasks ?? [];
+  if (!tasks.length && !report.shortSessions) return null;
+  const help = (t: CostTaskLine) => [t.project || 'Inbox', t.engines.join(', '), t.hosts.map(hostName).join(', '), count(t.requests, 'request')].join(' · ');
+  const row = (t: CostTaskLine) => <LineRow key={t.key} line={t} help={help(t)}
+    onOpen={t.sessionId ? () => openSessionOnHome(t.sessionId!, navigate) : undefined} />;
+  return (
+    <SettingsGroup heading="By task" data-testid="usage-group-task">
+      {tasks.map(row)}
+      {report.moreTasks && <SettingsRow label={`${count(report.moreTasks.count, 'more task')}`}
+        help={count(report.moreTasks.requests, 'request')} control={<span className="usage-line-cost">{money(report.moreTasks.costUsd)}</span>} />}
+      {report.shortSessions && <details className="usage-more" data-testid="usage-short-sessions">
+        <summary>{`${count(report.shortSessions.count, 'short session')} (tests and one-offs) · ${money(report.shortSessions.costUsd)}`}</summary>
+        {report.shortSessions.lines.map(row)}
+      </details>}
+    </SettingsGroup>
+  );
+}
+
+function HowCounted({ report }: { report: CostReport }) {
+  const hostName = useHostDisplayLabels();
+  const asOf = report.prices.asOf ? new Date(report.prices.asOf).toLocaleDateString('en-US') : undefined;
+  return (
+    <details className="settings-group usage-how" data-testid="usage-how">
+      <summary>How this is counted</summary>
+      <SettingsGroup>
+        <SettingsRow label="Prices" help={`Each request's tokens at the model's public list price${report.prices.source === 'litellm' ? ' (LiteLLM price list' : ' (built-in price list'}${asOf ? `, ${asOf})` : ')'}, at its prompt-size rate. An estimate, not a bill: discounts, credits and taxes are not known here.`} />
+        {report.view === 'agents'
+          ? <SettingsRow label="Sources" help="Claude Code: each host's transcripts, every response counted once. Codex and OpenCode: their own session records." />
+          : <SettingsRow label="Sources" help="The Personal AI's chat from its transcripts; every other call as Walnut records it. The speech model runs on this Mac and costs nothing." />}
+        <SettingsRow label="Up to date" help={report.countedUntil.length
+          ? report.countedUntil.map((u) => `${hostName(u.host)}: ${u.until ? new Date(u.until).toLocaleString('en-US') : 'not read yet'}`).join(' · ')
+          : 'Nothing read yet. Update now reads every host.'} />
+        {report.checks.filter((c) => c.source === 'Canonical transcript' || c.source === 'Upstream token log' || c.source === 'Host collection').map((c) => (
+          <SettingsRow key={`${c.host}:${c.source}`} label={`${c.source} · ${hostName(c.host)}`}
+            help={`${c.status === 'matched' ? 'Matched' : c.status === 'partial' ? 'Partly matched' : 'Not checked'}. ${c.detail}`} />
+        ))}
+      </SettingsGroup>
+    </details>
+  );
+}
+
+/** One bar per day of the period, empty days included, in the chart's shape (the newest 400 days at most). */
+function chartDays(report: CostReport, range: { start?: string; end?: string }): DailyCost[] {
+  const byDate = new Map(report.daily.map((d) => [d.date, d]));
+  const start = range.start ?? report.bounds.min ?? report.daily[0]?.date;
+  const end = range.end ?? report.daily[report.daily.length - 1]?.date ?? start;
+  const out: DailyCost[] = [];
+  if (start && end) {
+    const stop = Date.parse(`${end}T00:00:00Z`);
+    for (let t = Math.max(Date.parse(`${start}T00:00:00Z`), stop - 399 * 86_400_000); t <= stop; t += 86_400_000) {
+      const date = new Date(t).toISOString().slice(0, 10);
+      const d = byDate.get(date);
+      out.push({ date, cost_usd: d?.costUsd ?? 0, api_calls: d?.requests ?? 0, input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_creation_tokens: 0 });
+    }
+  }
+  return out.length ? out : report.daily.map((d) => ({ date: d.date, cost_usd: d.costUsd, api_calls: d.requests, input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_creation_tokens: 0 }));
 }

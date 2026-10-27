@@ -5,6 +5,7 @@
  * Writes are intercepted with page.route unless a test says otherwise.
  */
 import { test, expect, type Page, type Request } from '@playwright/test'
+import { routeCosts } from './usage-costs-fixture'
 
 if (process.env.PW_WEBKIT) test.use({ browserName: 'webkit' })
 test.setTimeout(120_000)
@@ -242,52 +243,25 @@ test('F10 F24: a paired phone is a plain row with a neutral Show QR and a human 
   expect(await nestedBoxes(page)).toEqual([])
 })
 
-function usageOverview() {
-  const group = (name: string, cost: number, pct: number) => ({ name, cost_usd: cost, input_tokens: 123456,
-    output_tokens: 23456, cache_read_tokens: 3456789, cache_creation_tokens: 45678, api_calls: 12, percentage: pct })
-  const recent = Array.from({ length: 30 }, (_, i) => ({
-    id: `r${i}`, timestamp: new Date(Date.UTC(2026, 8, 23, 1 + (i % 12), 25)).toISOString(), date: '2026-09-23',
-    source: i % 2 ? 'ai-task-search' : 'session-summary', model: 'global.anthropic.claude-example-model-5',
-    input_tokens: 12345, output_tokens: 2345, cache_creation_input_tokens: 345, cache_read_input_tokens: 45678,
-    cost_usd: 0.0123, ...(i % 3 === 0 ? { agentId: 'helper-agent' } : {}),
-  }))
-  return {
-    summary: { total_cost: 12.34, session_cost: 1, input_tokens: 1234567, output_tokens: 234567,
-      cache_read_tokens: 3456789, cache_creation_tokens: 45678, api_calls: 321 },
-    daily: [{ date: '2026-09-22', cost_usd: 4, input_tokens: 1, output_tokens: 1 }, { date: '2026-09-23', cost_usd: 8, input_tokens: 1, output_tokens: 1 }],
-    bySource: [group('session-summary', 8.1, 65.6), group('ai-task-search', 4.24, 34.4)],
-    byModel: [group('global.anthropic.claude-example-model-5', 12.34, 100)],
-    byAgent: [group('helper-agent', 2, 16.2)],
-    recent,
-    dateBounds: { min: '2026-09-01', max: '2026-09-23' },
-  }
-}
-
-test('F10 F11 F12: Usage tables are sentence case, one line per cell, dash free, one scroller', async ({ page }) => {
+test('F10 F11 F12: Usage rows are one line each, dash free, one scroller', async ({ page }) => {
   await recordWrites(page)
-  await page.route('**/api/usage/overview**', (route) => route.fulfill({ json: usageOverview() }))
+  await routeCosts(page)
   await openSettings(page)
   await clickNav(page, 'usage')
   const pane = page.locator('.settings-pane')
-  await expect(pane.locator('.settings-usage-recent tbody tr')).toHaveCount(30)
+  await page.getByTestId('usage-view-agents').click()
+  await expect(pane.getByTestId('usage-group-task').locator('.usage-line:visible')).toHaveCount(25)
   const audit = await pane.evaluate((el) => {
     const out: string[] = []
-    for (const th of Array.from(el.querySelectorAll<HTMLElement>('th'))) {
-      if (getComputedStyle(th).textTransform !== 'none') out.push(`th ${th.textContent} transformed`)
-    }
-    for (const cell of Array.from(el.querySelectorAll<HTMLElement>('th, td'))) {
-      const lh = parseFloat(getComputedStyle(cell).lineHeight) || 17
-      const pad = parseFloat(getComputedStyle(cell).paddingTop) + parseFloat(getComputedStyle(cell).paddingBottom)
-      if (cell.getBoundingClientRect().height - pad > lh * 1.5) out.push(`cell wraps: ${cell.textContent}`)
+    for (const label of Array.from(el.querySelectorAll<HTMLElement>('.usage-line .usage-line-label'))) {
+      const lh = parseFloat(getComputedStyle(label).lineHeight) || 17
+      if (label.getBoundingClientRect().height > lh * 1.5) out.push(`label wraps: ${label.textContent}`)
     }
     if (/[\u2013\u2014]/.test(el.textContent ?? '')) out.push('dash in pane text')
     for (const s of Array.from(el.querySelectorAll<HTMLElement>('*'))) {
       const cs = getComputedStyle(s)
       if (s !== el && /(auto|scroll)/.test(cs.overflowY) && s.scrollHeight > s.clientHeight + 1) out.push(`inner scroller ${s.className}`)
     }
-    const widths = Array.from(el.querySelectorAll<HTMLTableElement>('.settings-usage-breakdown'))
-      .map((t) => Array.from(t.querySelectorAll('th')).map((th) => Math.round(th.getBoundingClientRect().left)).join(','))
-    if (new Set(widths).size > 1) out.push(`breakdown columns differ: ${widths.join(' | ')}`)
     return out
   })
   expect(audit).toEqual([])

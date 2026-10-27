@@ -220,3 +220,134 @@ describe('opencode export and engines without usage', () => {
     ]);
   });
 });
+
+// byDay: the Usage page's Today / 7 days count each response on the local calendar
+// day it was written, so the buckets split once more by that day.
+describe('day split (byDay)', () => {
+  const LA = { timeZone: 'America/Los_Angeles' };
+  const CID = '01a1326c-f449-75a3-a614-a0a0bbcde579';
+  const days = (scan: { buckets: { day?: string; responses: number }[] }) =>
+    scan.buckets.map(b => [b.day ?? null, b.responses]).sort((a, b) => String(a[0]).localeCompare(String(b[0])));
+  function count(total: number, at: string | undefined) {
+    return { ...(at ? { timestamp: at } : {}), type: 'event_msg', payload: { type: 'token_count', info: {
+      total_token_usage: { total_tokens: total }, last_token_usage: { input_tokens: 900, cached_input_tokens: 100, output_tokens: 100 } } } };
+  }
+  async function rollout(rows: unknown[]) {
+    await lines(path.join(root, 'codex', 'sessions', `rollout-2026-10-25T23-00-00-${CID}.jsonl`),
+      [{ timestamp: '2026-10-26T05:00:00.000Z', type: 'turn_context', payload: { model: 'openai.gpt-6.1-sol' } }, ...rows]);
+  }
+  const codexReq = (byDay?: { timeZone: string }) => ({ engine: 'codex', sessionId: CID, thresholds: T, projectsDir: root,
+    codexHome: path.join(root, 'codex'), ...(byDay ? { byDay } : {}) });
+
+  it('claude: splits a session crossing local midnight, by the local day not the UTC one', async () => {
+    const projects = path.join(root, 'projects');
+    // 06:30Z is 23:30 on Oct 25 in Los Angeles (PDT); 07:30Z is 00:30 on Oct 26. Both are Oct 26 in UTC.
+    await lines(path.join(projects, 'p', `${SID}.jsonl`), [
+      assistant('a', '2026-10-26T06:30:00.000Z'),
+      assistant('b', '2026-10-26T07:30:00.000Z'),
+      assistant('c', '2026-10-26T08:00:00.000Z'),
+    ]);
+    const req = { engine: 'claude', sessionId: SID, thresholds: T, projectsDir: projects };
+    const la = await scanSessionCost({ ...req, byDay: LA });
+    expect(la.byDay).toEqual(LA);
+    expect(days(la)).toEqual([['2026-10-25', 1], ['2026-10-26', 2]]);
+    const before = la.buckets.find(b => b.day === '2026-10-25')!;
+    expect(before).toMatchObject({ firstAt: '2026-10-26T06:30:00.000Z', lastAt: '2026-10-26T06:30:00.000Z', model: 'claude-opus-5-5' });
+    // Same transcript in UTC: one day. The cache keeps the two zones apart.
+    const utc = await scanSessionCost({ ...req, byDay: { timeZone: 'UTC' } });
+    expect(days(utc)).toEqual([['2026-10-26', 3]]);
+    // Tokyo is ahead: 2026-10-25T16:00Z is already Oct 26 there.
+    resetSessionCostCachesForTests();
+    await lines(path.join(projects, 'p', `${SID}.jsonl`), [assistant('t', '2026-10-25T16:00:00.000Z')]);
+    expect(days(await scanSessionCost({ ...req, byDay: { timeZone: 'Asia/Tokyo' } }))).toEqual([['2026-10-26', 1]]);
+    expect(days(await scanSessionCost({ ...req, byDay: { timeZone: 'UTC' } }))).toEqual([['2026-10-25', 1]]);
+  });
+
+  it('without byDay the answer is exactly the undivided one', async () => {
+    const projects = path.join(root, 'projects');
+    await lines(path.join(projects, 'p', `${SID}.jsonl`), [
+      assistant('a', '2026-10-26T06:30:00.000Z'), assistant('b', '2026-10-26T07:30:00.000Z')]);
+    const req = { engine: 'claude', sessionId: SID, thresholds: T, projectsDir: projects };
+    const plain = await scanSessionCost(req);
+    expect(plain.buckets).toEqual([{ model: 'claude-opus-5-5', speed: 'standard', geo: 'global', tier: 'standard', band: 0,
+      responses: 2, input: 20, output: 40, cacheRead: 2_000, cacheWrite5m: 200, cacheWrite1h: 400, cacheWrite: 0,
+      webSearches: 0, incomplete: 0, firstAt: '2026-10-26T06:30:00.000Z', lastAt: '2026-10-26T07:30:00.000Z' }]);
+    expect(Object.keys(plain)).not.toContain('byDay');
+    // A day-split read in between leaves the plain answer as it was.
+    await scanSessionCost({ ...req, byDay: LA });
+    const again = await scanSessionCost(req);
+    expect({ ...again, scanMs: 0 }).toEqual({ ...plain, scanMs: 0 });
+    // bucketRows itself: no zone, no day key.
+    const row = { model: 'm', input: 1, output: 1, cacheRead: 0, cacheWrite5m: 0, cacheWrite1h: 0, cacheWrite: 0, at: '2026-10-26T06:30:00.000Z' };
+    expect(Object.keys(bucketRows([row], T)[0]!)).not.toContain('day');
+  });
+
+  it('codex: splits at local midnight; a call with no time takes the nearest earlier one\'s day', async () => {
+    await rollout([
+      // 06:59Z = 23:59 Oct 25 in Los Angeles, 07:01Z = 00:01 Oct 26.
+      count(1_000, '2026-10-26T06:59:00.000Z'),
+      count(2_000, undefined),
+      count(3_000, '2026-10-26T07:01:00.000Z'),
+    ]);
+    const scan = await scanSessionCost(codexReq(LA));
+    expect(scan).toMatchObject({ source: 'codex-rollout', found: true, byDay: LA });
+    expect(days(scan)).toEqual([['2026-10-25', 2], ['2026-10-26', 1]]);
+    const total = scan.buckets.reduce((n, b) => n + b.input, 0);
+    const plain = await scanSessionCost(codexReq());
+    expect(plain.buckets).toHaveLength(1);
+    expect(plain.buckets[0]!.responses).toBe(3);
+    expect(plain.buckets[0]!.input).toBe(total);
+    expect(plain.buckets[0]!.day).toBeUndefined();
+  });
+
+  it('codex: a call with no time and nothing dated before it gets no day', async () => {
+    await rollout([count(1_000, undefined), count(2_000, '2026-10-26T12:00:00.000Z')]);
+    const scan = await scanSessionCost(codexReq(LA));
+    expect(days(scan)).toEqual([['2026-10-26', 1], [null, 1]]);
+    expect(Object.keys(scan.buckets.find(b => !b.day)!)).not.toContain('day');
+  });
+
+  it('an unknown zone counts in UTC instead of throwing', async () => {
+    await rollout([count(1_000, '2026-10-26T06:59:00.000Z'), count(2_000, '2026-10-26T07:01:00.000Z')]);
+    const scan = await scanSessionCost(codexReq({ timeZone: 'Mars/Olympus_Mons' }));
+    expect(scan.byDay).toEqual({ timeZone: 'UTC' });
+    expect(days(scan)).toEqual([['2026-10-26', 2]]);
+  });
+
+  describe('opencode export', () => {
+    let savedPath: string | undefined;
+    let savedData: string | undefined;
+    beforeEach(() => { savedPath = process.env.PATH; savedData = process.env.XDG_DATA_HOME; });
+    afterEach(() => {
+      process.env.PATH = savedPath;
+      if (savedData === undefined) delete process.env.XDG_DATA_HOME; else process.env.XDG_DATA_HOME = savedData;
+    });
+
+    it('splits messages by their own created time, a message without one taking the earlier day', async () => {
+      const at = (iso: string) => Date.parse(iso);
+      const message = (created?: number) => ({ info: { role: 'assistant', modelID: 'gpt-6.1-sol', cost: 0.01,
+        ...(created === undefined ? {} : { time: { created } }), tokens: { input: 10, output: 5, reasoning: 0, cache: { write: 0, read: 0 } } } });
+      const doc = { messages: [
+        // 2026-10-25T15:30Z is 00:30 Oct 26 in Tokyo; 14:30Z is 23:30 Oct 25.
+        message(at('2026-10-25T14:30:00.000Z')), message(undefined), message(at('2026-10-25T15:30:00.000Z')),
+      ] };
+      const bin = path.join(root, 'bin');
+      await mkdir(bin, { recursive: true });
+      await writeFile(path.join(root, 'export.json'), JSON.stringify(doc));
+      // A stand-in `opencode` (first on PATH) that prints the export.
+      await writeFile(path.join(bin, 'opencode'), `#!/bin/sh\ncat '${path.join(root, 'export.json')}'\n`, { mode: 0o755 });
+      process.env.PATH = `${bin}${path.delimiter}${savedPath ?? ''}`;
+      process.env.XDG_DATA_HOME = path.join(root, 'data');
+      const req = { engine: 'opencode', sessionId: 'ses_1', thresholds: T, projectsDir: root };
+      const scan = await scanSessionCost({ ...req, byDay: { timeZone: 'Asia/Tokyo' } });
+      expect(scan).toMatchObject({ source: 'opencode-export', found: true, byDay: { timeZone: 'Asia/Tokyo' } });
+      expect(days(scan)).toEqual([['2026-10-25', 2], ['2026-10-26', 1]]);
+      const utc = await scanSessionCost({ ...req, byDay: { timeZone: 'UTC' } });
+      expect(days(utc)).toEqual([['2026-10-25', 3]]);
+      const plain = await scanSessionCost(req);
+      expect(plain.buckets).toHaveLength(1);
+      expect(plain.buckets[0]).toMatchObject({ responses: 3, input: 30 });
+      expect(plain.buckets[0]!.day).toBeUndefined();
+    });
+  });
+});

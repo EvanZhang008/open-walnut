@@ -21,6 +21,8 @@ import {
 } from './providers/defaults.js';
 import { MODEL_CATALOG } from './providers/model-catalog.js';
 import type { UsageStats, ModelResult, ThinkingConfig, ModelEntry, CallPurpose } from './providers/types.js';
+import type { UsageSource } from '../core/usage/types.js';
+import { log } from '../logging/index.js';
 
 /** The smallest thinking budget the Anthropic API accepts: a call with no more output room than this cannot think. */
 const MIN_THINKING_BUDGET = 1024;
@@ -172,6 +174,44 @@ async function resolveForCall(config?: ModelConfig) {
   };
 }
 
+// ── Usage accounting ──
+
+/** Who a call is spent for. Set it only when the caller does not record the
+ *  call's usage itself, or the call is counted twice. */
+export interface CallUsage {
+  source: UsageSource;
+  agentId?: string;
+  taskId?: string;
+  sessionId?: string;
+}
+
+/** Record one usage row off the caller's path: never throws, never delays the result. */
+function recordCallUsage(usage: CallUsage | undefined, result: ModelResult, model: string, startedAt: number): void {
+  if (!usage || !result.usage) return;
+  const stats = result.usage;
+  const durationMs = Date.now() - startedAt;
+  void import('../core/usage/index.js')
+    .then(({ usageTracker }) => {
+      usageTracker.record({
+        source: usage.source,
+        model: stats.model ?? model,
+        input_tokens: stats.input_tokens,
+        output_tokens: stats.output_tokens,
+        cache_creation_input_tokens: stats.cache_creation_input_tokens,
+        cache_read_input_tokens: stats.cache_read_input_tokens,
+        duration_ms: durationMs,
+        ...(usage.agentId && { agentId: usage.agentId }),
+        ...(usage.taskId && { taskId: usage.taskId }),
+        ...(usage.sessionId && { sessionId: usage.sessionId }),
+      });
+    })
+    .catch((err: unknown) => {
+      log.usage.debug('model call usage not recorded', {
+        source: usage.source, error: err instanceof Error ? err.message : String(err),
+      });
+    });
+}
+
 // ── Public API (unchanged signatures) ──
 
 /**
@@ -186,14 +226,19 @@ export async function sendMessage(opts: {
   signal?: AbortSignal;
   /** `background` for a helper nobody waits on (AdapterCallOptions.purpose). */
   purpose?: CallPurpose;
+  /** Record the call in the usage table under this feature (CallUsage). */
+  usage?: CallUsage;
 }): Promise<ModelResult> {
   const { adapter, config: providerConfig, model, maxTokens, betas, thinking } = await resolveForCall(opts.config);
 
-  return adapter.sendMessage({
+  const startedAt = Date.now();
+  const result = await adapter.sendMessage({
     providerConfig, model, maxTokens,
     system: opts.system, messages: opts.messages, tools: opts.tools,
     signal: opts.signal, betas, thinking, purpose: opts.purpose,
   });
+  recordCallUsage(opts.usage, result, model, startedAt);
+  return result;
 }
 
 /**
@@ -209,14 +254,19 @@ export async function sendMessageStream(opts: {
   signal?: AbortSignal;
   onTextDelta?: (delta: string) => void;
   purpose?: CallPurpose;
+  /** Record the call in the usage table under this feature (CallUsage). */
+  usage?: CallUsage;
 }): Promise<ModelResult> {
   const { adapter, config: providerConfig, model, maxTokens, betas, thinking } = await resolveForCall(opts.config);
 
-  return adapter.sendMessageStream({
+  const startedAt = Date.now();
+  const result = await adapter.sendMessageStream({
     providerConfig, model, maxTokens,
     system: opts.system, messages: opts.messages, tools: opts.tools,
     signal: opts.signal, onTextDelta: opts.onTextDelta, betas, thinking, purpose: opts.purpose,
   });
+  recordCallUsage(opts.usage, result, model, startedAt);
+  return result;
 }
 
 /**

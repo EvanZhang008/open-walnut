@@ -459,6 +459,7 @@ export async function parseQuickTask(
         messages: [{ role: 'user', content }],
         config: { maxTokens: 320, ...(model ? { model } : {}) },
         signal: controller.signal,
+        usage: { source: 'quick-parse' },
       });
     } finally {
       parseMs = Date.now() - parseStarted;

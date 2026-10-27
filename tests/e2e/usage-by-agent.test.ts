@@ -48,6 +48,24 @@ describe('reconciled usage through the real server', () => {
     expect(check.residuals[0]).toMatchObject({ source: 'canonical', count: 1, input_tokens: 100 });
     expect(body.accuracy.checks.find((x: { source: string }) => x.source === 'Provider invoice').status).toBe('unverified');
   });
+  it('answers the cost page in dollars for both views, once past usage is summed', async () => {
+    let body = await get('/api/usage/costs?view=agents');
+    for (let i = 0; !body.ready && i < 50; i++) { await new Promise(r => setTimeout(r, 100)); body = await get('/api/usage/costs?view=agents'); }
+    expect(body.ready).toBe(true);
+    expect(body.totals.requests).toBe(3);
+    // 300 input at $4/M + 60 output at $20/M (claude-opus-5-5 list price).
+    expect(body.totals.costUsd).toBeCloseTo(0.0024, 8);
+    expect(body.groups.find((g: { id: string }) => g.id === 'engine').lines[0].label).toBe('Claude Code');
+    // Three requests under a cent: a one-off, folded out of the task list.
+    expect(body.tasks).toEqual([]);
+    expect(body.shortSessions.lines[0]).toMatchObject({ taskId: 'task-one', label: 'Removed task', requests: 3 });
+    expect(body.timeZone).toBeTruthy();
+    const walnut = await get('/api/usage/costs?view=walnut');
+    expect(walnut.view).toBe('walnut');
+    expect(walnut.totals.requests).toBe(0);
+    const dated = await get(`/api/usage/costs?view=agents&start=2000-01-01&end=2000-01-02`);
+    expect(dated.totals.requests).toBe(0);
+  });
   it('rejects invalid collection windows without starting a scan', async () => {
     for (const body of [{ since: 'invalid' }, { since: '2026-10-14' },
       { since: '2026-10-14T12:00:00Z', until: '2026-10-13T12:00:00Z' }]) {

@@ -9823,7 +9823,8 @@ async function cmdUsageCostState(ws: ServerWebSocket<WsData>, id: number, cmd: R
 }
 
 // 'session-cost-v1': one session's per-request usage, folded host-side from the
-// engine's own records (session-cost-core.ts). Keep in sync with daemon-source.ts.
+// engine's own records (session-cost-core.ts); 'session-cost-day-v1' adds the
+// optional `byDay` split. Keep in sync with daemon-source.ts.
 async function cmdUsageSessionCost(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
   if (typeof cmd.sid !== 'string' || !cmd.sid) return sendError(ws, id, 'usage.sessionCost: missing sid')
   try {
@@ -9833,6 +9834,8 @@ async function cmdUsageSessionCost(ws: ServerWebSocket<WsData>, id: number, cmd:
       ...(typeof cmd.cwd === 'string' ? { cwd: cmd.cwd } : {}),
       thresholds: Array.isArray(cmd.thresholds) ? cmd.thresholds.filter((t): t is number => typeof t === 'number') : [],
       projectsDir: path.join(process.env.CLAUDE_CONFIG_DIR || path.join(HOME_DIR, '.claude'), 'projects'),
+      ...(cmd.byDay && typeof (cmd.byDay as { timeZone?: unknown }).timeZone === 'string'
+        ? { byDay: { timeZone: (cmd.byDay as { timeZone: string }).timeZone } } : {}),
     })
     sendOk(ws, id, { result })
   } catch (err) { sendError(ws, id, 'usage.sessionCost failed: ' + (err as Error).message) }

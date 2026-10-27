@@ -3,6 +3,7 @@
  * guesses and the S3 Backup refresh race. Same conventions as
  * settings-layout.spec.ts: both engines, real nav clicks, writes intercepted.
  */
+import { routeCosts } from './usage-costs-fixture'
 import { test, expect, type Page, type Request } from '@playwright/test'
 
 if (process.env.PW_WEBKIT) test.use({ browserName: 'webkit' })
@@ -83,27 +84,6 @@ async function nestedBoxes(page: Page): Promise<string[]> {
   })
 }
 
-function usageOverview() {
-  const group = (name: string, cost: number, pct: number) => ({ name, cost_usd: cost, input_tokens: 123456,
-    output_tokens: 23456, cache_read_tokens: 3456789, cache_creation_tokens: 45678, api_calls: 12, percentage: pct })
-  const recent = Array.from({ length: 30 }, (_, i) => ({
-    id: `r${i}`, timestamp: new Date(Date.UTC(2026, 8, 23, 1 + (i % 12), 25)).toISOString(), date: '2026-09-23',
-    source: i % 2 ? 'ai-task-search' : 'session-summary', model: 'global.anthropic.claude-example-model-5',
-    input_tokens: 12345, output_tokens: 2345, cache_creation_input_tokens: 345, cache_read_input_tokens: 45678,
-    cost_usd: 0.0123, ...(i % 3 === 0 ? { agentId: 'helper-agent' } : {}),
-  }))
-  return {
-    summary: { total_cost: 12.34, session_cost: 1, input_tokens: 1234567, output_tokens: 234567,
-      cache_read_tokens: 3456789, cache_creation_tokens: 45678, api_calls: 321 },
-    daily: [{ date: '2026-09-22', cost_usd: 4, input_tokens: 1, output_tokens: 1 }, { date: '2026-09-23', cost_usd: 8, input_tokens: 1, output_tokens: 1 }],
-    bySource: [group('session-summary', 8.1, 65.6), group('ai-task-search', 4.24, 34.4)],
-    byModel: [group('global.anthropic.claude-example-model-5', 12.34, 100)],
-    byAgent: [group('helper-agent', 2, 16.2)],
-    recent,
-    dateBounds: { min: '2026-09-01', max: '2026-09-23' },
-  }
-}
-
 test('F27 N03 F31 F33 F36: number fields end on the content edge, no-op bulk links are off, no steppers', async ({ page }) => {
   await recordWrites(page)
   await openSettings(page)
@@ -182,13 +162,14 @@ test('F17 F18 F28 F35: plugin slots line up, install rows stack, engine menus sh
 
 test('F12: Usage Refresh keeps its x when the header turns compact', async ({ page }) => {
   await recordWrites(page)
-  await page.route('**/api/usage/overview**', (route) => route.fulfill({ json: usageOverview() }))
+  await routeCosts(page)
   await openSettings(page)
   await clickNav(page, 'usage')
   const refresh = page.locator('.usage-refresh-btn')
   await expect(refresh.first()).toBeVisible()
-  // Scroll only once the mocked tables are in, or the pane is too short to scroll.
-  await expect(page.locator('.settings-usage-recent tbody tr')).toHaveCount(30)
+  // Scroll only once the mocked rows are in, or the pane is too short to scroll.
+  await page.getByTestId('usage-view-agents').click()
+  await expect(page.getByTestId('usage-group-task').locator('.usage-line:visible')).toHaveCount(25)
   const before = await refresh.first().evaluate((b) => Math.round(b.getBoundingClientRect().right))
   await page.locator('.settings-pane').evaluate((el) => { el.scrollTop = el.scrollHeight })
   await expect(page.locator('.settings-pane-stickybar.is-compact')).toHaveCount(1)

@@ -116,6 +116,7 @@ export async function draftRoutine(
       // A draft is a small JSON object; cap output so the SDK doesn't demand
       // streaming (it rejects non-streaming calls with very large max_tokens).
       config: { maxTokens: 4096 },
+      usage: { source: 'routine-draft' },
     });
     raw = result.content
       .filter((b) => b.type === 'text')

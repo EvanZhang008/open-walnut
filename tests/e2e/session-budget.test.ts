@@ -286,5 +286,16 @@ describe('session budget through the real server and owning daemon', () => {
     const cost = await priceSessionScan(scanned.result as never, thresholds);
     expect(cost.status).toBe('priced');
     expect(cost.totalUsd).toBeCloseTo(resumed.body.budget.spentUsd, 10);
+    // The real source twin + sidecar honour the day split (session-cost-day-v1): the same
+    // responses, each bucket dated in the asked zone, and the undivided answer unchanged.
+    expect(capabilities.has('session-cost-day-v1')).toBe(true);
+    const byDay = await rpc('usage.sessionCost', { sid, engine: 'claude', cwd: home, thresholds, byDay: { timeZone: 'America/Los_Angeles' } });
+    expect(byDay.ok).toBe(true);
+    expect(byDay.result.byDay).toEqual({ timeZone: 'America/Los_Angeles' });
+    const responses = (scan: { buckets: { responses: number }[] }) => scan.buckets.reduce((n, b) => n + b.responses, 0);
+    expect(responses(byDay.result)).toBe(responses(scanned.result));
+    for (const bucket of byDay.result.buckets) expect(bucket.day).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(scanned.result.byDay).toBeUndefined();
+    for (const bucket of scanned.result.buckets) expect(bucket.day).toBeUndefined();
   }, 90_000);
 });

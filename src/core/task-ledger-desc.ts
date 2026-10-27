@@ -91,6 +91,7 @@ export async function generateLedgerDesc(
         signal: controller.signal,
         // A helper nobody waits on: the utility band when the server was raised.
         purpose: 'background',
+        usage: { source: 'summary', agentId: 'task-ledger-desc' },
       });
     } finally {
       clearTimeout(timer);

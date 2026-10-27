@@ -182,6 +182,7 @@ export async function suggestSessionPlacement(
         signal: controller.signal,
         // A helper nobody waits on: the utility band when the server was raised.
         purpose: 'background',
+        usage: { source: 'organize', ...(opts.taskId ? { taskId: opts.taskId } : {}) },
       });
     } finally {
       clearTimeout(timer);

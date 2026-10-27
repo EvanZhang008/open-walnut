@@ -19,7 +19,17 @@ export type UsageSource =
   | 'background-review' // every-N-turn Personal AI self-review fork
   | 'task-hook'    // task lifecycle → overview maintainer agent
   | 'task-search-agent' // AI task search (claude -p one-shot behind /api/search/agent)
-  | 'plugin';      // a plugin's or App's direct ai.run call (src/core/ai/); agentId = plugin:<id>
+  | 'plugin'       // a plugin's ai.run or model.fastText call; agentId = plugin:<id>
+  // Walnut's own one-shot model calls (model.ts sendMessage `usage`); agentId names the helper.
+  | 'title'        // conversation, session, fork and group titles
+  | 'quick-parse'  // quick-add text parsed into a task
+  | 'summary'      // project summaries and task one-line labels
+  | 'organize'     // where a new session's task belongs
+  | 'commit-message' // suggested git commit message for a session's diff
+  | 'memory'       // working-memory file upkeep
+  | 'transfer'     // handoff brief when a session moves engine or host
+  | 'routine-draft' // routine drafted from a plain-text request
+  | 'host-learning'; // what a host is used for, learned from its sessions
 
 export interface UsageRecord {
   id: string;

@@ -477,6 +477,7 @@ export async function transferTask(req: TransferRequest, transferId = `xf-${rand
       const { writeHandoffBrief } = await import('./brief.js');
       const brief = await writeHandoffBrief(messages, {
         title: task.title, sourceEngine: engineCaps(plan.source.engine).displayName, sourceHost: hostLabel(plan.source.host),
+        taskId: task.id, ...(session.claudeSessionId ? { sessionId: session.claudeSessionId } : {}),
       });
       historyText = `## Handoff brief\n\n${brief.text}`;
     } else {

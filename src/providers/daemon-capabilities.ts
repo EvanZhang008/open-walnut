@@ -286,6 +286,9 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // One session's per-request usage (usage.sessionCost, session-cost-core.ts), folded
   // host-side from the engine's own records; sidecar-gated in the source twin.
   'session-cost-v1',
+  // usage.sessionCost honours `byDay: { timeZone }` (buckets split by local day, for
+  // the Usage page's Today / 7 days). An older daemon ignores it and answers undivided.
+  'session-cost-day-v1',
   // Session budgets on the owning host (usage-budget-runtime.ts): spend priced from the
   // engine's own usage with the server's pushed price list; paused at the limit or on
   // an unpriced request; usage.budget.list for the server's pause notices.

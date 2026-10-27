@@ -6,6 +6,7 @@ import { setImmediate } from 'node:timers/promises';
 import { priceReconciledUsage, PRICING_VERSION } from './pricing.js';
 import type { UsageFilter } from './types.js';
 import type { scanHostUsage } from '../../providers/usage-host-core.js';
+import { CostRollup } from './cost-rollup.js';
 
 type HostEvidence = Awaited<ReturnType<typeof scanHostUsage>>;
 export type UsageEvidence = HostEvidence & {
@@ -29,6 +30,8 @@ interface StoredResponse {
 
 export class ResponseUsageStore {
   private db: Database.Database;
+  /** Per-day sums every Usage & Costs read goes through (cost-rollup.ts). */
+  readonly rollup: CostRollup;
   readonly timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
   constructor(dbPath: string) {
     fs.mkdirSync(path.dirname(dbPath), { recursive: true });
@@ -46,7 +49,11 @@ export class ResponseUsageStore {
     `);
     const columns = this.db.prepare('PRAGMA table_info(response_usage)').all() as { name: string }[];
     if (!columns.some(c => c.name === 'cache_creation_tokens')) this.db.exec('ALTER TABLE response_usage ADD COLUMN cache_creation_tokens INTEGER');
+    this.rollup = new CostRollup(this.db);
   }
+
+  /** The live usage table (tracker.ts) in the same file, for Walnut's own calls. */
+  get database(): Database.Database { return this.db; }
 
   async importHost(host: string, evidence: UsageEvidence, owners: UsageOwner[]) {
     const map = new Map(owners.map(o => [o.sessionId, o]));
@@ -107,11 +114,22 @@ export class ResponseUsageStore {
       { source: 'Collection diagnostics', host, status: 'unverified', matchedCalls: 0, unmatchedCalls: 0,
         detail: `Canonical parse: ${evidence.canonical.diagnostics.invalid_lines ?? 0} invalid lines, ${evidence.canonical.diagnostics.unreadable_files ?? 0} unreadable files. Upstream parse: ${evidence.upstream.diagnostics.length} diagnostics. These cover all scanned files, not only selected sessions.` },
     ];
-    const writeBatch = this.db.transaction((batch: typeof rows) => { for (const row of batch) insert.run(row); });
+    // A re-import may move a response to another day or session: its old pair is
+    // re-summed too, or the per-day sums would still count it there.
+    const before = this.db.prepare('SELECT session_id sessionId, date FROM response_usage WHERE id=?');
+    const moved: { sessionId: string; date: string }[] = [];
+    const writeBatch = this.db.transaction((batch: typeof rows) => {
+      for (const row of batch) {
+        const old = before.get(row.id) as { sessionId: string; date: string } | undefined;
+        if (old && (old.sessionId !== row.sessionId || old.date !== row.date)) moved.push(old);
+        insert.run(row);
+      }
+    });
     for (let index = 0; index < rows.length; index += 100) {
       writeBatch(rows.slice(index, index + 100));
       await setImmediate();
     }
+    await this.rollup.refreshPairs([...moved, ...rows.map(r => ({ sessionId: r.sessionId, date: r.date }))]);
     return { host, responses: rows.length, verified: matched, unverified: rows.length - matched, checks };
   }
 
@@ -148,6 +166,16 @@ export class ResponseUsageStore {
     if (filter.model) { clauses.push('model = ?'); args.push(filter.model); }
     if (filter.agentId) { clauses.push('agent_id = ?'); args.push(filter.agentId); }
     return this.db.prepare(`SELECT source, model, COUNT(*) calls FROM usage WHERE ${clauses.join(' AND ')} GROUP BY source, model`).all(...args) as { source: string; model: string; calls: number }[];
+  }
+
+  /** Each host's last collected time ('' when it never finished a pass). */
+  countedUntil(): { host: string; until: string }[] {
+    return this.db.prepare('SELECT host, until FROM usage_checks ORDER BY host').all() as { host: string; until: string }[];
+  }
+
+  /** The stored source checks, for the page's collapsed "How this is counted". */
+  sourceChecks(): SourceCheck[] {
+    return (this.db.prepare('SELECT checks FROM usage_checks').all() as { checks: string }[]).flatMap(r => JSON.parse(r.checks) as SourceCheck[]);
   }
 
   markHostUnavailable(host: string, detail: string) {

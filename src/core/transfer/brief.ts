@@ -29,7 +29,7 @@ export interface HandoffBrief { text: string; byModel: boolean }
 
 export async function writeHandoffBrief(
   messages: readonly SessionHistoryMessage[],
-  meta: { title: string; sourceEngine: string; sourceHost: string },
+  meta: { title: string; sourceEngine: string; sourceHost: string; taskId?: string; sessionId?: string },
 ): Promise<HandoffBrief> {
   const seed = renderTranscriptSeed(messages, BRIEF_INPUT_CHARS);
   if (!seed.text) return { text: '_The source conversation was empty._', byModel: false };
@@ -46,6 +46,11 @@ export async function writeHandoffBrief(
         }],
         config: { maxTokens: 4_000 },
         signal: controller.signal,
+        usage: {
+          source: 'transfer',
+          ...(meta.taskId ? { taskId: meta.taskId } : {}),
+          ...(meta.sessionId ? { sessionId: meta.sessionId } : {}),
+        },
       });
       const text = (result.content ?? [])
         .map((b) => (b.type === 'text' && 'text' in b ? (b as { text: string }).text : ''))

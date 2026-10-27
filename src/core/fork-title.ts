@@ -100,6 +100,7 @@ export async function summarizeForkPrompt(prompt: string, timeoutMs?: number): P
         signal: controller.signal,
         // A helper nobody waits on: the utility band when the server was raised.
         purpose: 'background',
+        usage: { source: 'title', agentId: 'fork-title' },
       });
     } finally {
       clearTimeout(timer);
@@ -164,6 +165,7 @@ export async function summarizeGroupLabel(titles: string[], timeoutMs?: number):
         signal: controller.signal,
         // A helper nobody waits on: the utility band when the server was raised.
         purpose: 'background',
+        usage: { source: 'title', agentId: 'group-label' },
       });
     } finally {
       clearTimeout(timer);

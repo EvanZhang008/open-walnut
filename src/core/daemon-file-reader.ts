@@ -333,13 +333,22 @@ export class DaemonFileReader implements SessionFileReader {
     return reply.result as { totalCostUsd: number } | null
   }
 
-  /** One session's per-request usage, folded on its host (session-cost-v1). Null on a daemon without it. */
-  async readSessionCost(params: { sessionId: string; engine: string; cwd?: string; thresholds: number[] }, timeoutMs = 25_000): Promise<unknown | null> {
+  /**
+   * One session's per-request usage, folded on its host (session-cost-v1). Null on a daemon without it.
+   *
+   * `byDay` asks for buckets split by local day; it is sent only to a daemon with
+   * 'session-cost-day-v1' (an older one would ignore it and answer undivided). The
+   * answer is day-split exactly when the scan carries `byDay: { timeZone }` (the zone
+   * the host counted in, UTC when it did not know the asked one); without it, read
+   * the buckets as undivided.
+   */
+  async readSessionCost(params: { sessionId: string; engine: string; cwd?: string; thresholds: number[]; byDay?: { timeZone: string } }, timeoutMs = 25_000): Promise<unknown | null> {
     await this.resolve()
     const conn = await getDaemonConnection(this.host, this.sshTarget!)
     await conn.connect()
     if (!conn.hasCapability('session-cost-v1')) return null
-    const reply = await conn.send('usage.sessionCost', { sid: params.sessionId, engine: params.engine, cwd: params.cwd, thresholds: params.thresholds }, timeoutMs)
+    const byDay = params.byDay && conn.hasCapability('session-cost-day-v1') ? { byDay: { timeZone: params.byDay.timeZone } } : {}
+    const reply = await conn.send('usage.sessionCost', { sid: params.sessionId, engine: params.engine, cwd: params.cwd, thresholds: params.thresholds, ...byDay }, timeoutMs)
     if (!reply.ok) throw new Error(String(reply.error ?? 'Session usage read failed'))
     return reply.result ?? null
   }

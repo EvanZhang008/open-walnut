@@ -271,6 +271,7 @@ export const runWorkingMemoryUpdate: WorkingMemoryRunner = async (prompt) => {
       signal: controller.signal,
       // A helper nobody waits on: the utility band when the server was raised.
       purpose: 'background',
+      usage: { source: 'memory', agentId: 'working-memory' },
     });
     return (result.content ?? [])
       .map((b) => (b.type === 'text' && 'text' in b ? (b as { text: string }).text : ''))
