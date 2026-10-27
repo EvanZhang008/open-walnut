@@ -8,7 +8,9 @@
  *     that VP's card then lists both projects, each still its own project.
  *
  * The cards are the Org page's channel rows (org-channels-model.ts), so the chart and the page
- * always show the same names and numbers. No invented names: a VP is named after its project.
+ * always show the same names and numbers. No invented names: a VP is named after its project,
+ * or what the user named it (its lead's title, "<name> lead"). A VP the user made only to put
+ * projects under (Task.org_vp_only) lists its own project only while it has open work.
  */
 import type { ChannelRow } from './org-channels-model';
 import { projectKey } from '@open-walnut/org-tree';
@@ -33,7 +35,13 @@ export interface VpProject {
 export interface VpCard {
   key: string;
   project: string;
+  /** The VP's name: its project's, or the one the user gave it. */
   name: string;
+  /** Its own project, listed in `projects` unless the VP was made only to put projects under. */
+  home: VpProject;
+  /** Its lead (the CEO's VP), when it has one: the one whose name and instructions the user sets. */
+  leadId?: string;
+  vpOnly: boolean;
   /** 'VP' for a project; the Inbox is no one's team. */
   role: 'VP' | 'Inbox';
   line: string;
@@ -62,6 +70,12 @@ function projectOf(row: ChannelRow): VpProject {
   };
 }
 
+/** A VP's name as the chart says it: what the user named its lead, else its project's name. */
+export function vpNameOf(row: ChannelRow): string {
+  if (!row.project) return 'Inbox';
+  return (!row.vp && row.vpName) || row.project;
+}
+
 /** The VP cards, in the rows' order: a project under another VP joins that VP's card. */
 export function vpCards(rows: readonly ChannelRow[]): VpCard[] {
   const home = new Map(rows.filter((r) => r.project).map((r) => [projectKey(r.project), r] as const));
@@ -71,9 +85,12 @@ export function vpCards(rows: readonly ChannelRow[]): VpCard[] {
   const byKey = new Map<string, VpCard>();
   for (const row of rows) {
     if (vpOf(row)) continue;
+    const home = projectOf(row);
+    const vpOnly = !!row.vpOnly;
     const card: VpCard = {
-      key: row.key, project: row.project, name: row.project || 'Inbox', role: row.project ? 'VP' : 'Inbox',
-      line: '', news: '', newsAt: 0, needsYou: 0, projects: [projectOf(row)], row,
+      key: row.key, project: row.project, name: vpNameOf(row), home, vpOnly, ...(row.leadId ? { leadId: row.leadId } : {}),
+      role: row.project ? 'VP' : 'Inbox',
+      line: '', news: '', newsAt: 0, needsYou: 0, projects: vpOnly && row.counts.open === 0 ? [] : [home], row,
     };
     cards.push(card);
     if (row.project) byKey.set(projectKey(row.project), card);
@@ -83,12 +100,19 @@ export function vpCards(rows: readonly ChannelRow[]): VpCard[] {
     if (vp) byKey.get(vp)?.projects.push(projectOf(row));
   }
   for (const card of cards) {
-    card.needsYou = card.projects.reduce((n, p) => n + p.needsYou, 0);
-    card.line = card.projects.length === 1 ? card.projects[0]!.line : groupLine(card.projects);
-    const top = [...card.projects].sort((a, b) => Number(b.needsYou > 0) - Number(a.needsYou > 0) || b.newsAt - a.newsAt)[0]!;
-    card.news = card.projects.length === 1 ? top.news : `${top.name} · ${top.news}`;
-    card.newsAt = top.newsAt;
-    if (top.newsTask) card.newsTask = top.newsTask;
+    // A hidden home still speaks for the VP itself: its own ask of the user is on that row.
+    const all = card.projects[0] === card.home ? card.projects : [card.home, ...card.projects];
+    card.needsYou = all.reduce((n, p) => n + p.needsYou, 0);
+    card.line = card.projects.length === 0 ? 'No projects yet: drag one here'
+      : card.projects.length === 1 ? card.projects[0]!.line : groupLine(card.projects);
+    const top = [...all].sort((a, b) => Number(b.needsYou > 0) - Number(a.needsYou > 0) || b.newsAt - a.newsAt)[0]!;
+    const hiddenHome = !card.projects.includes(card.home);
+    // A hidden home's line is the VP's own; with nothing listed and nothing asked, there is no news.
+    card.news = hiddenHome && top === card.home
+      ? (top.needsYou || card.projects.length ? top.news : '')
+      : card.projects.length === 1 ? top.news : `${top.name} · ${top.news}`;
+    card.newsAt = card.news ? top.newsAt : 0;
+    if (card.news && top.newsTask) card.newsTask = top.newsTask;
   }
   return cards;
 }
@@ -143,7 +167,7 @@ export function dropPlan(cards: readonly VpCard[], project: VpProject, target: V
       hint: `Drop: ${project.name} gets a dedicated VP`,
       title: `Create a dedicated VP for ${project.name}?`,
       lines: [
-        `${project.name} gets a dedicated VP again; ${theVp(from.name)} keeps ${from.name}.`,
+        `${project.name} gets a dedicated VP again${from.projects.includes(from.home) ? `; ${theVp(from.name)} keeps ${from.home.name}` : ''}.`,
         `${TheVp(from.name)} sums up its work on ${project.name} for it.`,
         'No task changes project.',
       ],
@@ -151,11 +175,11 @@ export function dropPlan(cards: readonly VpCard[], project: VpProject, target: V
     };
   }
   if (target.role !== 'VP' || target.key === from.key) return null;
-  const carried = isHome ? from.projects.slice(1).map((p) => p.name) : [];
+  const carried = isHome ? from.projects.filter((p) => p !== from.home).map((p) => p.name) : [];
   const names = [project.name, ...carried];
   // Who lets go: the project's own lead (it steps down), or the VP it is under now (it stays).
   const letsGo = isHome ? project.row.node?.lead : from.row.node?.lead;
-  const leaving = isHome ? project.name : from.name;
+  const leaving = from.name;
   const handover = !letsGo
     ? null
     : !isHome

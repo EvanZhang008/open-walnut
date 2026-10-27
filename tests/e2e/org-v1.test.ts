@@ -584,6 +584,33 @@ describe('/api/v1/org', () => {
     })
   })
 
+  describe('made on the Org page', () => {
+    it('a new VP and a new project with its own VP; only a person writes instructions', async () => {
+      const vp = await api<{ task: { id: string; project: string; org_vp_only?: boolean } }>('POST', '/org/vps', { name: 'Harvest VP', instructions: 'Own the harvest.' })
+      expect(vp.status).toBe(201)
+      expect(vp.json.task).toMatchObject({ project: 'Harvest', org_role: 'lead', org_vp_only: true })
+      const made = await api<{ task: { id: string; org_name?: string } }>('POST', '/org/projects', { name: 'Barn', vpName: 'Hay' })
+      expect([made.status, made.json.task.org_name]).toEqual([201, 'Hay'])
+      expect((await api('POST', '/org/projects', { name: 'barn' })).json).toMatchObject({ code: 'project_exists' })
+      expect((await api('PUT', `/org/nodes/${made.json.task.id}`, { name: 'Harvest' })).status).toBe(409)
+      // A session may make and name a VP, never write the user's own words.
+      const sid = '99999999-aaaa-4bbb-8ccc-dddddddddddd'
+      const caller = (await addTask({ title: 'Sort the barn', project: 'Barn' })).task
+      await createSessionRecord(sid, caller.id, 'Barn', WALNUT_HOME)
+      const as = async (method: string, p: string, body: unknown) => {
+        const res = await fetch(`http://localhost:${port}/api/v1${p}`, {
+          method, headers: { 'content-type': 'application/json', 'x-walnut-caller-sid': sid }, body: JSON.stringify(body),
+        })
+        return { status: res.status, json: await res.json().catch(() => ({})) as { code?: string } }
+      }
+      expect(await as('PUT', `/org/nodes/${vp.json.task.id}`, { instructions: 'Mine now.' })).toMatchObject({ status: 403, json: { code: 'human_only' } })
+      expect(await as('POST', '/org/vps', { name: 'Silo', instructions: 'x' })).toMatchObject({ status: 403 })
+      expect((await as('PUT', `/org/nodes/${vp.json.task.id}`, { name: 'Reaping' })).status).toBe(200)
+      expect((await getTask(vp.json.task.id)).org_instructions?.text).toBe('Own the harvest.')
+      expect((await api('PUT', '/org/nodes/nope', { name: 'x' })).status).toBe(404)
+    })
+  })
+
   describe('the org\'s own names', () => {
     it('reads the defaults, saves a name and a role to config.yaml, and a blank goes back to the default', async () => {
       expect((await api('GET', '/org/settings')).json).toEqual({ name: 'Org', founderTitle: 'Founder' })

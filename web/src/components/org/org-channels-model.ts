@@ -65,6 +65,12 @@ export interface ChannelRow {
   unread: boolean;
   /** Led by another project's VP (the org chart): that VP's own project. */
   vp?: string;
+  /** The lead that leads the row's project now (its own, or the VP it is under). */
+  leadId?: string;
+  /** Its own lead was made as a VP to put projects under (Task.org_vp_only): the project is only its home. */
+  vpOnly?: boolean;
+  /** The name the user gave its own lead (Task.org_name), when it has one. */
+  vpName?: string;
   /** A VP's row: the projects it leads besides its own, each its own row (the chart lists them).
    *  The row itself already counts their work: their teams, alerts and news are its own. */
   led?: ChannelRow[];
@@ -172,6 +178,9 @@ function projectRow(p: OrgProjectNode, byId: ReadonlyMap<string, Task>, probe: A
     lastAt: Math.max(0, ...ids.map((id) => taskTime(byId.get(id)))),
     unread: !!(lead ?? contact)?.unread,
     ...(p.vp ? { vp: p.vp } : {}),
+    ...(p.lead ? { leadId: p.lead.id } : {}),
+    ...(lead?.org_vp_only && !p.vp ? { vpOnly: true } : {}),
+    ...(lead?.org_name?.trim() && !p.vp ? { vpName: lead.org_name.trim() } : {}),
     node: p,
   };
 }
@@ -308,7 +317,7 @@ export function movedProjects(channels: OrgChannels, tasks: readonly Task[]): Mo
         key: projectRowKey(name),
         project: name,
         vpKey: vp?.key ?? projectRowKey(lead.project ?? ''),
-        vpName: vp?.name ?? (lead.project || 'Inbox'),
+        vpName: lead.org_name?.trim() || vp?.name || lead.project || 'Inbox',
         ...(old ? { from: { id: old.id, title: orgDisplayTitle(old), open: old.phase !== 'COMPLETE' } } : {}),
       });
     }

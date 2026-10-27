@@ -62,6 +62,35 @@ describe('org chart cards', () => {
     expect(both.projects.map((p) => p.news)).toEqual(['The check passed; only your signature is left.', 'Needs you: Choose one of two quotes'])
   })
 
+  it('a VP the user named carries that name; a VP made only to put projects under lists none until one is dragged there', () => {
+    // 2026-10-26, the user: "Create vp means a VP, don't have a project that is fine, I usually will drag".
+    // The name is the user's (Task.org_name), never the title its session's topic grows.
+    const named = { ...gardenLead, title: 'Garden lead · weekly watering plan', org_name: 'Green Thumb' }
+    expect(cardsOf([...garden, { ...named, org_name: undefined }]).find((c) => c.project === 'Garden')!.name).toBe('Garden')
+    const growth = t('Growth', { org_role: 'lead', title: 'Growth lead', org_vp_only: true } as Partial<OrgTaskLike>)
+    let cards = cardsOf([...garden, ...seeds, named, seedsLead, growth])
+    expect(cards.find((c) => c.project === 'Garden')!.name).toBe('Green Thumb')
+    const g = cards.find((c) => c.project === 'Growth')!
+    expect([g.name, g.role, g.vpOnly, g.projects.length, g.line, g.news]).toEqual(['Growth', 'VP', true, 0, 'No projects yet: drag one here', ''])
+    expect(g.leadId).toBe(growth.id)
+    // A project dragged under it is its only one; the VP's own ask of the user still counts.
+    cards = cardsOf([...garden, ...seeds, named, { ...seedsLead, phase: 'COMPLETE' as const }, { ...growth, org_leads: ['Seeds'], phase: 'NEED_ACTION' as const }])
+    const g2 = cards.find((c) => c.project === 'Growth')!
+    expect(g2.projects.map((p) => p.name)).toEqual(['Seeds'])
+    expect(g2.line).toBe('1 working · 1 waiting')
+    expect(g2.needsYou).toBe(1)
+    // Its own project shows once it has open work.
+    cards = cardsOf([...garden, ...seeds, named, seedsLead, growth, t('Growth', { phase: 'IN_PROGRESS' })])
+    expect(cards.find((c) => c.project === 'Growth')!.projects.map((p) => p.name)).toEqual(['Growth'])
+    // Taking its one project back out: it keeps nothing of its own to name, unless its home has work.
+    const under = cardsOf([...garden, ...seeds, named, { ...seedsLead, phase: 'COMPLETE' as const }, { ...growth, org_leads: ['Seeds'] }])
+    const seedsUnder = under.find((c) => c.project === 'Growth')!.projects[0]!
+    expect(dropPlan(under, seedsUnder, null)!.lines[0]).toBe('Seeds gets a dedicated VP again.')
+    const busyHome = cardsOf([...garden, ...seeds, named, { ...seedsLead, phase: 'COMPLETE' as const }, { ...growth, org_leads: ['Seeds'] }, t('Growth', { phase: 'IN_PROGRESS' })])
+    const seedsBusy = busyHome.find((c) => c.project === 'Growth')!.projects.find((p) => p.name === 'Seeds')!
+    expect(dropPlan(busyHome, seedsBusy, null)!.lines[0]).toBe('Seeds gets a dedicated VP again; the Growth VP keeps Growth.')
+  })
+
   it('vpLine says what moves, else what is open, else nothing', () => {
     expect(vpLine({ open: 3, running: 0, needsYou: 0, waiting: 0 })).toBe('3 open')
     expect(vpLine({ open: 0, running: 0, needsYou: 0, waiting: 0 })).toBe('Nothing open')

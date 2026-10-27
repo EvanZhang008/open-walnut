@@ -826,6 +826,20 @@ export interface Task {
    *  project with its own tasks; this lead is its contact. Payload blob,
    *  local-only, never pushed to sync backends. */
   org_leads?: string[];
+  /** Main or a lead only: the user's own standing instructions for it, written on the Org page
+   *  (src/core/org/org-node-edit.ts). Its session prompt carries them after its role line
+   *  (session-context.ts), and a running session hears an edit through the instruction notice.
+   *  `text` '' = cleared. Payload blob, local-only, never pushed to sync backends; an older
+   *  Walnut ignores it. */
+  org_instructions?: { text: string; at: string };
+  /** A lead the user made as a VP to put projects under (the org chart's "New VP"): its own
+   *  project is only its home, so the chart lists that project only while it has open work.
+   *  Payload blob, local-only; an older Walnut ignores it. */
+  org_vp_only?: boolean;
+  /** A lead only: the VP's name the user gave it on the Org page, when not its project's. The
+   *  title stays the session's own (its turn-end topic may grow it), so the chart and the Org list
+   *  read this instead (orgDisplayTitle). Payload blob, local-only; an older Walnut ignores it. */
+  org_name?: string;
   /** The plugin (its id) whose own view is the only place this task shows: a plugin whose
    *  manifest says `taskVisibility: "plugin"` stamps the tasks its agents run in. Hidden from
    *  the board, the task lists, default search, the Org page and every needs-you count, and

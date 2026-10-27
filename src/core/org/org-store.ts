@@ -15,6 +15,7 @@ import fs from 'node:fs/promises';
 import { WALNUT_HOME } from '../../constants.js';
 import { log } from '../../logging/index.js';
 import type { Task } from '../types.js';
+import { bus, EventNames } from '../event-bus.js';
 import { ASK_WALNUT_PROJECT } from '../sessions/ask-list.js';
 import { createEnvelopeKit } from '../peers/envelope-kit.js';
 import {
@@ -35,6 +36,10 @@ export class OrgError extends Error {
 
 /** One org write at a time, so two first contacts never make two leads (or two mains). */
 let chain: Promise<unknown> = Promise.resolve();
+/** Org writes one at a time (a lead made twice, a move racing a move). org-node-edit.ts takes it too. */
+export function withOrgLock<T>(fn: () => Promise<T>): Promise<T> {
+  return serial(fn);
+}
 function serial<T>(fn: () => Promise<T>): Promise<T> {
   const run = chain.then(fn, fn);
   chain = run.catch(() => undefined);
@@ -87,8 +92,8 @@ export function ensureProjectLead(project: string): Promise<Task> {
   return serial(() => ensureLeadNow(name));
 }
 
-/** ensureProjectLead's body, for a caller already inside `serial`. */
-async function ensureLeadNow(name: string): Promise<Task> {
+/** ensureProjectLead's body, for a caller already inside `serial` (withOrgLock). */
+export async function ensureLeadNow(name: string): Promise<Task> {
   const { addTask, getTask, updateTask } = await import('../task-manager.js');
   const tasks = await orgTasks();
   const existing = pickLead(tasks, name);
@@ -110,6 +115,8 @@ async function ensureLeadNow(name: string): Promise<Task> {
     description: leadDescription([canonical]),
   });
   log.task.info('org: project lead created', { taskId: task.id, project: canonical });
+  // addTask announces nothing: open pages learn the new lead from this.
+  bus.emit(EventNames.TASK_CREATED, { task }, ['web-ui'], { source: 'org' });
   return task;
 }
 
@@ -122,7 +129,7 @@ function canonicalProject(tasks: readonly OrgTaskLike[], name: string): string {
 const LEAD_DESCRIPTION_HEAD = 'Leads the work in project';
 
 /** A lead's description, while Walnut wrote it: the projects it leads. */
-function leadDescription(projects: readonly string[]): string {
+export function leadDescription(projects: readonly string[]): string {
   const names = projects.map((p) => `"${p}"`);
   const list = names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}` : names[0];
   return `${LEAD_DESCRIPTION_HEAD}${names.length > 1 ? 's' : ''} ${list} and reports it to the main agent. Made by Walnut.`;
@@ -441,8 +448,15 @@ export async function resolveOrgContact(to: string, opts: { askerTaskId?: string
     }
     return { task: await ensureProjectLead(node.project), kind: 'lead', project: node.project };
   }
+  // A VP by the name the user gave it ("Green Thumb", "Green Thumb VP"), as the org chart shows it.
+  const tasks = await orgTasks();
+  const named = namedLead(tasks, want);
+  if (named) {
+    const lead = await getTask(named.id);
+    return { task: lead, kind: 'lead', project: (lead.project ?? '').trim() };
+  }
   // A project whose work is all done still has the lead someone closed: bring it back.
-  if (pickLead(await orgTasks(), want)) {
+  if (pickLead(tasks, want)) {
     const lead = await ensureProjectLead(want);
     return { task: lead, kind: 'lead', project: (lead.project ?? want).trim() };
   }
@@ -461,6 +475,13 @@ export async function resolveOrgContact(to: string, opts: { askerTaskId?: string
     if (lead.id !== task.id) return { task: lead, kind: 'lead', project, handedOverBy: { id: task.id, title: task.title } };
   }
   return { task, kind: task.org_role === 'lead' ? 'lead' : 'task', project };
+}
+
+/** The open lead the user named `want` (Task.org_name), with or without the role word. */
+function namedLead(tasks: readonly OrgTaskLike[], want: string): OrgTaskLike | undefined {
+  const key = projectKey(want.replace(/\s+(VP|lead)$/i, ''));
+  if (!key) return undefined;
+  return tasks.find((t) => t.org_role === 'lead' && t.phase !== 'COMPLETE' && t.org_name && projectKey(t.org_name) === key);
 }
 
 /** What one org node reports to the agent asking: its direct reports, compactly. */
@@ -505,7 +526,7 @@ export async function orgReportsOf(of: Task | undefined): Promise<{ of: string; 
         const contact: OrgReportRow['contact'] = p.contactId
           ? {
             id: p.contactId,
-            title: p.lead?.title ?? p.teams.find((t) => t.id === p.contactId)?.title ?? p.contactId,
+            title: (p.lead?.name ? `${p.lead.name} VP` : p.lead?.title) ?? p.teams.find((t) => t.id === p.contactId)?.title ?? p.contactId,
             kind: p.lead ? 'lead' : 'team',
           }
           : p.needsLead ? { title: `${p.project} lead (made on first contact)`, kind: 'lead' } : undefined;

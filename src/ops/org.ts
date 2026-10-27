@@ -42,7 +42,7 @@ defineOp({
     + 'the old team\'s conversation: task_create gives that goal a fresh task and session. A contact\'s project or '
     + 'area does not prove it owns the same deliverable. Asks for a reply by default.',
   input: {
-    to: z.string().min(1).describe('A project name ("Inbox" for the Inbox) or a task id'),
+    to: z.string().min(1).describe('A project name ("Inbox" for the Inbox), the name the user gave a VP, or a task id'),
     title: z.string().min(1).max(200).optional().describe('One-line TL;DR the reader sees first'),
     text: z.string().min(1).describe(`What you ask or hand over. ${MESSAGE_TEXT_HINT}`),
     expect_reply: z.boolean().optional().describe('Ask for a reply (default true); false = fire and forget'),

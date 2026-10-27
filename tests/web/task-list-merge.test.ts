@@ -100,6 +100,19 @@ describe('mergeFetchedTasks', () => {
     expect(listRowEqual(b, { ...b, brief } as Task)).toBe(false);
   });
 
+  it('detects a VP renamed, instructed or given a project on the Org page, whose writes leave updated_at alone', () => {
+    const lead = task({ id: 'l', org_role: 'lead', project: 'Garden' } as Partial<Task>);
+    const same = { ...lead } as Task;
+    expect(listRowEqual(lead, same)).toBe(true);
+    expect(listRowEqual(lead, { ...lead, org_name: 'Green Thumb' } as Task)).toBe(false);
+    expect(listRowEqual(lead, { ...lead, org_vp_only: true } as Task)).toBe(false);
+    expect(listRowEqual(lead, { ...lead, org_leads: ['Seeds'] } as Task)).toBe(false);
+    const said = { text: 'Water before nine.', at: '2026-10-27T10:00:00Z' };
+    const told = { ...lead, org_instructions: said } as Task;
+    expect(listRowEqual(told, { ...told, org_instructions: { ...said } } as Task)).toBe(true);
+    expect(listRowEqual(told, { ...told, org_instructions: { text: '', at: '2026-10-27T10:05:00Z' } } as Task)).toBe(false);
+  });
+
   it('detects is_blocked flips (blocked badge must heal on refetch)', () => {
     const a = task({ id: 'a' });
     const blocked = { ...a, is_blocked: true } as unknown as Task;

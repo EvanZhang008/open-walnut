@@ -39,6 +39,11 @@ export function tasksShallowEqual(a: Task, b: Task): boolean {
   if (JSON.stringify(a.user_status ?? null) !== JSON.stringify(b.user_status ?? null)) return false;
   // Main's or a lead's Brief (Org page): its rewrite leaves updated_at alone.
   if (a.brief?.at !== b.brief?.at || a.brief?.text !== b.brief?.text) return false;
+  // The org's own fields (the Org page and its chart): a VP's name and instructions, a VP made
+  // only to put projects under, and those projects are written raw, leaving updated_at alone.
+  if (a.org_role !== b.org_role || a.org_name !== b.org_name || a.org_vp_only !== b.org_vp_only
+    || a.org_instructions?.at !== b.org_instructions?.at || a.org_instructions?.text !== b.org_instructions?.text
+    || (a.org_leads ?? []).join('\n') !== (b.org_leads ?? []).join('\n')) return false;
   const arrKeys: (keyof Task)[] = ['tags', 'depends_on'];
   for (const k of arrKeys) {
     const av = (a[k] as string[] | undefined) ?? [];

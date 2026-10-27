@@ -316,7 +316,8 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabChange, onSel
           </div>
           {!!row.led?.length && (
             <div className="org-detail-led org-muted" data-testid="org-detail-led">
-              Leads {[row.name, ...row.led.map((l) => l.name)].join(', ')}
+              {/* A VP made only to put projects under leads no work of its own while its home has none. */}
+              Leads {[...(row.vpOnly && !row.node?.counts.open ? [] : [row.name]), ...row.led.map((l) => l.name)].join(', ')}
             </div>
           )}
         </div>

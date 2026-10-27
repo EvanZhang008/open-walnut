@@ -88,6 +88,8 @@ import { TEAM_CHARTER } from '../team-charter.js'
 import { WORK_PLACE_RULE, taskDirLine } from '../work-place.js'
 import { taskDirForHost } from './task-dir-place.js'
 import { isAskTask } from './caller-placement.js'
+import { createHash } from 'node:crypto'
+import { ORG_INSTRUCTIONS_MAX } from '../org/org-tree.js'
 
 import { TASK_ROUTING_CONTRACT } from '../task-routing-contract.js'
 
@@ -187,7 +189,7 @@ export const BRIEF_LINE =
  * independent goal gets a new task, the same deliverable continues its own.
  * Said at spawn because the role is the task's for good.
  */
-export function orgRoleLine(task: { org_role?: string; project?: string; org_leads?: readonly string[] }): string {
+export function orgRoleLine(task: { org_role?: string; project?: string; org_leads?: readonly string[]; org_vp_only?: boolean; org_name?: string }): string {
   if (task.org_role === 'main') {
     return  'You are the user\'s main agent: with the user you run their org as co-CEOs, and you set its direction '
       + 'with them. Every project reports to you through one contact, its lead (Walnut makes one once a project has '
@@ -213,8 +215,19 @@ export function orgRoleLine(task: { org_role?: string; project?: string; org_lea
     const what = also.length
       ? `projects "${project}" and ${also.map((p) => `"${p}"`).join(', ')} (each stays its own project)`
       : `project "${project}"`
-    return `Your task is the lead of ${what}: ${also.length ? 'their' : 'its'} open top-level tasks (its teams) report to you, and `
-      + 'you report to the user\'s main agent, whose messages are the user\'s direction. You assign work, coordinate '
+    const quoted = also.map((p) => `"${p}"`).join(', ')
+    // A VP the user made only to put projects under (Task.org_vp_only): its project is a home, not work.
+    const head = !task.org_vp_only
+      ? `Your task is the lead of ${what}: ${also.length ? 'their' : 'its'} open top-level tasks (its teams) report to you, and you `
+      : also.length
+        ? `Your task is the VP of ${also.length > 1 ? 'projects' : 'project'} ${quoted} (each stays its own project; "${project}" `
+          + 'is only your home): their open top-level tasks (their teams) report to you, and you '
+        : 'Your task is a VP with no project yet: the user puts projects under you on the org chart, and their open '
+          + `top-level tasks (their teams) then report to you. "${project}" is only your home. You `
+    // The name the user gave this VP (Task.org_name): how they and the org chart call it.
+    const name = task.org_name?.trim()
+    return (name ? `The user calls you the "${name}" VP. ` : '') + head
+      + 'report to the user\'s main agent, whose messages are the user\'s direction. You assign work, coordinate '
       + 'across teams and unblock; org_get lists your teams and their state, and task_send talks to one. Read a '
       + 'team\'s work (task_get, task_history) only when an outcome looks wrong. Route work by deliverable, not area: '
       + 'independent work gets a fresh task even when a team already works in that area; only the same deliverable '
@@ -307,8 +320,32 @@ export async function buildSessionContext(
   return { systemPrompt: composePrompt(found, { taskLine, taskDir }) }
 }
 
-/** The task fields the default instructions depend on (role, project, ask). */
-export type InstructionTask = { org_role?: string; project?: string; org_leads?: readonly string[]; walnut_agent?: boolean }
+/** The task fields the default instructions depend on (role, project, ask, the user's own instructions). */
+export type InstructionTask = {
+  org_role?: string; project?: string; org_leads?: readonly string[]; walnut_agent?: boolean;
+  org_instructions?: { text: string; at?: string }; org_vp_only?: boolean; org_name?: string;
+}
+
+/**
+ * The user's own standing instructions for Main or a lead (the Org page), after its role line.
+ * The instruction notice tells a running session only the prompt lines it lacks, so every line
+ * carries the version (a hash of the words and when they were set): an edit makes every line new,
+ * and the session reads the whole new set, never a removed line as still in force, nor a kept
+ * one as dropped. The tag also keeps a user's "# heading" from reading as a prompt heading.
+ */
+function orgInstructionsLine(task: InstructionTask): string {
+  if (task.org_role !== 'main' && task.org_role !== 'lead') return ''
+  const own = task.org_instructions
+  if (!own?.at) return ''
+  const text = own.text.trim().slice(0, ORG_INSTRUCTIONS_MAX)
+  const version = `v${createHash('sha1').update(`${own.at}\n${text}`).digest('hex').slice(0, 8)}`
+  const when = `${own.at.slice(0, 16).replace('T', ' ')} UTC`
+  if (!text) return `Your user cleared their own instructions for your role (${version}, ${when}): drop every earlier version.\n\n`
+  const lines = text.split('\n').map((l) => l.trimEnd()).filter((l) => l.trim()).map((l) => `[${version}] ${l}`)
+  return `Your user's own instructions for your role (${version}, set ${when}). They replace every earlier version, `
+    + `and where any other part of these instructions says otherwise, they win. Each line of this version starts with [${version}]:\n`
+    + lines.join('\n') + '\n\n'
+}
 
 /**
  * A session's prompt in order. `state` is what describes this task right now
@@ -326,8 +363,11 @@ function composePrompt(task: InstructionTask | undefined, state: { taskLine: str
     // A lead assigns work (the charter): Main's or the user's request is its signal.
     ? 'Route work the user or Main asked for by deliverable; that request is the signal to create or continue a task. '
       + 'Follow-ups you discover stay with the same deliverable, never new tasks. '
-      + 'New work becomes one of your project\'s teams, at its top level (no folder). '
-      + 'Omit project; naming another needs project_reason.\n\n'
+      + (task?.org_vp_only
+        ? 'New work becomes a team of the project it belongs to among the ones you lead, at its top level (no folder): '
+          + 'name that project, with project_reason. Your home project is only for work that belongs to none of them.\n\n'
+        : 'New work becomes one of your project\'s teams, at its top level (no folder). '
+          + 'Omit project; naming another needs project_reason.\n\n')
     : ask
     // No "lands beside yours" line: an ask's work keeps the old defaults for
     // project, folder, tier and cwd (caller-placement.ts), so it would be false.
@@ -352,7 +392,7 @@ function composePrompt(task: InstructionTask | undefined, state: { taskLine: str
     + 'and the history of that work.\n\n'
     + state.taskLine
     // An org node (see 2d): the main agent, or a project's lead.
-    + (task ? orgRoleLine(task) : '')
+    + (task ? orgRoleLine(task) + orgInstructionsLine(task) : '')
     + 'This session is how that task runs, so the task id is how everything '
     + 'else addresses your work. Walnut is not your toolbox: do the work with '
     + 'your own tools. The `walnut` CLI on your '

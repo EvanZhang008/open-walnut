@@ -67,14 +67,15 @@ function Row({ row, selected, now, onSelect, onMenu }: { row: ChannelRow; select
       data-testid={row.kind === 'main' ? 'org-channel-main' : 'org-channel'}
       data-key={row.key}
       data-state={row.state}
-      title={`${row.name}: ${STATE_LABEL[row.state]}${row.lastAt ? `, moved ${timeAgo(new Date(row.lastAt).toISOString(), { now })}` : ''}`}
+      title={`${row.vpName ?? row.name}: ${STATE_LABEL[row.state]}${row.lastAt ? `, moved ${timeAgo(new Date(row.lastAt).toISOString(), { now })}` : ''}`}
       onClick={() => onSelect(row.key)}
       onContextMenu={onMenu ? (e) => onMenu(e, { row }) : undefined}
     >
       <OrgAvatar row={row} />
       <span className="org-channel-mid">
         <span className="org-channel-top">
-          <span className="org-channel-name">{row.name}</span>
+          {/* A VP the user named goes by that name, as on the org chart. */}
+          <span className="org-channel-name">{row.vpName ?? row.name}</span>
           {!!row.led?.length && (
             <span className="org-channel-led" data-testid="org-channel-led" title={`Also leads ${row.led.map((l) => l.name).join(', ')}`}>+{row.led.length}</span>
           )}

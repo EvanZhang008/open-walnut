@@ -1245,7 +1245,7 @@ itself). The `board_*` ops default to the caller's team board.
   choice?, reminder?, section?, version }` with `taskId` at the top level
   (`task` = the card's task; `kanban: true` on a kanban seen write).
 
-### Org (additive, 2026-10): `/org`, `/org/reports`, `/org/main`, `/org/contact`, `/org/vp`, `/org/settings`
+### Org (additive, 2026-10): `/org`, `/org/reports`, `/org/main`, `/org/contact`, `/org/vp`, `/org/settings`, `/org/projects`, `/org/vps`, `/org/nodes`
 
 The org is derived from tasks: Main (the user's main agent) → projects → teams (a
 project's top-level open tasks) → workers (`parent_task_id`). The stored facts
@@ -1280,6 +1280,30 @@ team is talked to through that task; the Inbox never gets a lead.
   chart (default `"Founder"`), kept in config.yaml under `org`.
   `PUT /api/v1/org/settings { name?, founderTitle? }` → the same after the change;
   a blank value goes back to the default; `400 bad_name` for a non-string.
+- `POST /api/v1/org/projects { name, vpName?, instructions? }` → `201 { task }`: a
+  new project with its own VP (its lead); `vpName` names the VP when it is not the
+  project's name. `POST /api/v1/org/vps { name, instructions? }` → `201 { task }`: a
+  VP with no project of its own (`org_vp_only: true`; the project it lives in is
+  only its home), for projects put under it with `/org/vp`. `task` carries `org_name` and
+  `org_vp_only` when set. `400 bad_name` (empty, over 60 characters, `Inbox`, a name
+  starting with `Ask`, a path separator), `409 project_exists | name_taken |
+  project_unavailable` (a project the user deleted comes back only on a person's
+  create; a renamed one is refused). A closed lead of that project is reopened with
+  its name, instructions and led projects cleared.
+- `PUT /api/v1/org/nodes/:id { name?, instructions? }` → `200 { task }`: renames a
+  VP (`org_name`; its project's name or `""` gives it back) or sets the CEO's or a
+  VP's own instructions (`org_instructions { text, at }`, at most 4000 characters;
+  `""` or `null` clears them; once set they are cleared, never removed, so a session
+  spawned on older words is told to drop them). The instructions ride the node's
+  session prompt, so a running session is told an edit with its next message.
+  Unchanged fields write nothing. `PUT /api/v1/org/projects/:project/vp` does the
+  same for a project's VP, making its lead first when it has none (after every
+  check, so a refused edit makes none). `404 not_org_node | unknown_project`,
+  `400 bad_name` (the CEO keeps its name) `| bad_instructions | no_lead_for_inbox`,
+  `409 name_taken` (another VP's name, or a project it does not lead). An agent's
+  `org_send` reaches a VP by the name the user gave it.
+  Instructions are the user's own words: a request from a session
+  (`x-walnut-caller-sid`) that carries `instructions` is `403 human_only`.
 - Every POST and PUT answers `501` on a replica.
 
 ### Task actions (additive, Wave 1 2026-08) — detail / delete / field setters / batch / focus

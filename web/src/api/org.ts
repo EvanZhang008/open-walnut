@@ -60,3 +60,27 @@ export async function fetchOrgSettings(): Promise<OrgSettings> {
 export async function saveOrgSettings(patch: Partial<OrgSettings>): Promise<OrgSettings> {
   return apiPut<OrgSettings>('/api/v1/org/settings', patch);
 }
+
+/** An org node as the org routes answer it. */
+export interface OrgNodeBrief { id: string; title: string; project: string; phase: string; org_role?: string; org_name?: string; org_vp_only?: boolean }
+
+/** A new project with its own VP, or a new VP to put projects under (`kind` 'vp'). Returns its lead. */
+export async function createOrgNode(
+  kind: 'project' | 'vp',
+  input: { name: string; vpName?: string; instructions?: string },
+): Promise<OrgNodeBrief> {
+  const res = await apiPost<{ task: OrgNodeBrief }>(kind === 'vp' ? '/api/v1/org/vps' : '/api/v1/org/projects', input);
+  return res.task;
+}
+
+/** Rename a VP ('' gives it its project's name), or set the CEO's or a VP's own instructions ('' clears them). */
+export async function editOrgNode(taskId: string, edit: { name?: string; instructions?: string }): Promise<OrgNodeBrief> {
+  const res = await apiPut<{ task: OrgNodeBrief }>(`/api/v1/org/nodes/${encodeURIComponent(taskId)}`, edit);
+  return res.task;
+}
+
+/** A project's VP: its name and instructions, its lead made first when the project has none yet. */
+export async function editProjectVp(project: string, edit: { name?: string; instructions?: string }): Promise<OrgNodeBrief> {
+  const res = await apiPut<{ task: OrgNodeBrief }>(`/api/v1/org/projects/${encodeURIComponent(project)}/vp`, edit);
+  return res.task;
+}

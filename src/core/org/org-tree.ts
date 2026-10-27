@@ -36,6 +36,8 @@ export interface OrgTaskLike {
   org_role?: OrgRole;
   /** A lead only: the other projects it leads (Task.org_leads). */
   org_leads?: readonly string[];
+  /** A lead only: the name the user gave it (Task.org_name). */
+  org_name?: string;
   /** A plugin's own task (Task.plugin_only): never org work. */
   plugin_only?: string;
   walnut_agent?: boolean;
@@ -79,6 +81,8 @@ export interface OrgNodeRef {
   title: string;
   phase: TaskPhase;
   hasSession: boolean;
+  /** A lead the user named (Task.org_name): "<name> VP" wherever the org is shown. */
+  name?: string;
 }
 
 export interface OrgProjectNode {
@@ -116,10 +120,15 @@ export function isOrgNode(task: { org_role?: string }): boolean {
 export const CEO_LABEL = 'CEO';
 export const VP_LABEL = 'VP';
 
-/** A task's title as the UI shows it: Main is the CEO, a lead's Walnut-made "<project> lead" its
- *  "<project> VP" (a title the user wrote stays as written). */
-export function orgDisplayTitle(task: { title: string; org_role?: string }): string {
+/** The most the user's own instructions for the CEO or a VP may hold (Task.org_instructions). */
+export const ORG_INSTRUCTIONS_MAX = 4000;
+
+/** A task's title as the UI shows it: Main is the CEO, a lead the name the user gave it on the
+ *  Org page as "<name> VP", else its Walnut-made "<project> lead" as "<project> VP" (a title the
+ *  user wrote stays as written). */
+export function orgDisplayTitle(task: { title: string; org_role?: string; org_name?: string }): string {
   if (task.org_role === 'main') return CEO_LABEL;
+  if (task.org_role === 'lead' && task.org_name?.trim()) return `${task.org_name.trim()} ${VP_LABEL}`;
   if (task.org_role === 'lead') return task.title.replace(/ lead$/i, ` ${VP_LABEL}`);
   return task.title;
 }
@@ -164,7 +173,8 @@ function hasSession(task: OrgTaskLike): boolean {
 }
 
 function refOf(task: OrgTaskLike): OrgNodeRef {
-  return { id: task.id, title: task.title, phase: task.phase, hasSession: hasSession(task) };
+  const name = task.org_name?.trim();
+  return { id: task.id, title: task.title, phase: task.phase, hasSession: hasSession(task), ...(name ? { name } : {}) };
 }
 
 const PHASE_RANK: Record<TaskPhase, number> = { NEED_ACTION: 0, IN_PROGRESS: 1, WAITING: 2, TODO: 3, COMPLETE: 4 };

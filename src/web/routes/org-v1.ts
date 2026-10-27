@@ -29,6 +29,7 @@ import { getOrgSettings, setOrgSettings } from '../../core/org/org-settings.js'
 import {
   OrgError, contactLaunch, ensureMainTask, getOrgTree, orgReportsOf, resolveOrgContact, setProjectVp,
 } from '../../core/org/org-store.js'
+import { createOrgNode, editOrgNode, editProjectVp } from '../../core/org/org-node-edit.js'
 
 export const orgV1Router = Router()
 
@@ -129,6 +130,65 @@ orgV1Router.post('/org/vp', async (req: Request, res: Response, next: NextFuncti
     const vp = req.body?.vp
     if (vp !== undefined && typeof vp !== 'string') throw new OrgError('bad_vp', 400, '`vp` is a project name, or "" for the project\'s own.')
     res.json(await setProjectVp(project, vp ?? ''))
+  } catch (err) {
+    sendError(res, next, err)
+  }
+})
+
+// Make a project with its own VP, or a VP to put projects under, and name or instruct a VP or
+// the CEO (src/core/org/org-node-edit.ts; the org chart's "+ New VP", "+ New project" and ⋯).
+// Instructions are the user's own words, so a session may not write them.
+function nodeCaller(req: Request): { human: boolean } {
+  const human = !header(req, 'x-walnut-caller-sid')
+  if (!human && req.body?.instructions !== undefined) {
+    throw new OrgError('human_only', 403, 'A VP\'s or the CEO\'s instructions are the user\'s own words: ask the user to set them on the Org page.')
+  }
+  return { human }
+}
+
+/** A node as the chart's form reads it back: the name the server kept, for its done line. */
+function nodeBrief(task: Task): Record<string, unknown> {
+  return { ...brief(task), ...(task.org_name ? { org_name: task.org_name } : {}), ...(task.org_vp_only ? { org_vp_only: true } : {}) }
+}
+
+orgV1Router.post('/org/projects', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    primaryOnly('A project is made')
+    const lead = await createOrgNode({ name: req.body?.name, vpName: req.body?.vpName, instructions: req.body?.instructions }, false, nodeCaller(req))
+    res.status(201).json({ task: nodeBrief(lead) })
+  } catch (err) {
+    sendError(res, next, err)
+  }
+})
+
+orgV1Router.post('/org/vps', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    primaryOnly('A VP is made')
+    const lead = await createOrgNode({ name: req.body?.name, instructions: req.body?.instructions }, true, nodeCaller(req))
+    res.status(201).json({ task: nodeBrief(lead) })
+  } catch (err) {
+    sendError(res, next, err)
+  }
+})
+
+orgV1Router.put('/org/nodes/:id', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    primaryOnly('A VP or the CEO is changed')
+    nodeCaller(req)
+    const task = await editOrgNode(String(req.params.id), { name: req.body?.name, instructions: req.body?.instructions })
+    res.json({ task: nodeBrief(task) })
+  } catch (err) {
+    sendError(res, next, err)
+  }
+})
+
+// A project's VP, made first when the project has none yet (one team, never talked to).
+orgV1Router.put('/org/projects/:project/vp', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    primaryOnly('A VP is changed')
+    nodeCaller(req)
+    const task = await editProjectVp(String(req.params.project), { name: req.body?.name, instructions: req.body?.instructions })
+    res.json({ task: nodeBrief(task) })
   } catch (err) {
     sendError(res, next, err)
   }
