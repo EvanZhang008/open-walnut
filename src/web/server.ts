@@ -3665,12 +3665,15 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   if (bootPolicy('usage-collect') && !process.env.VITEST) {
     void (async () => {
       try {
-        const { collectUsage, INCREMENTAL } = await import('../core/usage/collection.js')
+        const { collectUsage, collectionStale, INCREMENTAL, USAGE_COLLECT_MS } = await import('../core/usage/collection.js')
         const { runPeriodic } = await import('../core/periodic-task.js')
-        const handle = runPeriodic('usage-collect', 30 * 60_000, 20 * 60_000, async () => {
+        // Each pass reads every transcript on each host (its dedupe needs every copy), so
+        // it runs every few hours, plus on Update now; a restart starts one only when the
+        // last finished pass is that old (deploys restart the server many times a day).
+        const handle = runPeriodic('usage-collect', USAGE_COLLECT_MS, 40 * 60_000, async () => {
           await collectUsage(INCREMENTAL).catch((err) => log.usage.warn('usage collection failed', { error: String(err) }))
         })
-        const kick = setTimeout(() => handle.kick(), 120_000)
+        const kick = setTimeout(() => { if (collectionStale()) handle.kick() }, 120_000)
         kick.unref?.()
       } catch (err) {
         log.web.warn('usage collection wiring failed; Usage & Costs only updates on Update now', {

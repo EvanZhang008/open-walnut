@@ -24,6 +24,10 @@ export async function scanHostUsage(request: UsageScanRequest) {
     try {
       for (const name of await fs.readdir(request.proxyLogDir)) {
         if (name === 'proxy.log' || /^proxy\.log\.\d{4}-\d{2}-\d{2}$/.test(name)) {
+          // A log rotated three days before the window opens holds none of its requests
+          // (by the date in its name: a copied file's mtime is not to be trusted).
+          const rotated = name.slice('proxy.log.'.length);
+          if (since !== undefined && rotated && Date.parse(`${rotated}T00:00:00Z`) < since - 3 * 86_400_000) continue;
           files.push(path.join(request.proxyLogDir, name));
         }
       }

@@ -21,6 +21,16 @@ export function collectionState() { return state; }
 /** Re-read overlap for an incremental pass: imports dedupe by response id, so overlap is free. */
 const OVERLAP_MS = 2 * 60 * 60_000;
 
+/** How often the leader collects every host's usage (server.ts). */
+export const USAGE_COLLECT_MS = 2 * 60 * 60_000;
+
+/** True when a host never finished a pass, or the oldest finished one is a collect interval old. */
+export function collectionStale(now = Date.now()): boolean {
+  const untils = responseUsageStore().countedUntil();
+  if (!untils.length) return true;
+  return untils.some(u => !u.until || now - Date.parse(u.until) >= USAGE_COLLECT_MS);
+}
+
 /** Ask `collectUsage` to read each host from where its last finished pass ended. */
 export const INCREMENTAL = 'incremental';
 
@@ -79,7 +89,7 @@ async function collect(since: string | undefined, until: string) {
       await conn.connect();
       if (!conn.hasCapability('usage-scan-v1')) throw new Error('This host needs the usage collector daemon upgrade.');
       let reply = await conn.send('usage.scan', { since: sinceFor(host), until, sessionIds: owners.map(o => o.sessionId),
-        proxyLogDir: config.usage?.proxy_log_dirs?.[host] }, 600_000);
+        proxyLogDir: config.usage?.proxy_log_dirs?.[host] }, 30 * 60_000);
       let responses = 0, verified = 0, unverified = 0;
       let checks: SourceCheck[] = [];
       for (;;) {
