@@ -2540,7 +2540,7 @@ export class DaemonConnection {
       this.sshHostString,
       // `sh -c` + markers (remote-sh.ts): the login shell may be csh, and an rc
       // banner on stdout must not read as the checksum.
-      markedUploadCommand(remotePath, `sha256sum ${q} | awk '{print $1}' && wc -c < ${q}`),
+      markedUploadCommand(remotePath, data.length, `sha256sum ${q} | awk '{print $1}' && wc -c < ${q}`),
     ]
     const proc = spawn('ssh', args, { stdio: ['pipe', 'pipe', 'pipe'] })
     proc.stdin!.on('error', () => {})
@@ -2587,7 +2587,7 @@ export class DaemonConnection {
   private async pipeChunk(data: Buffer, remoteDir: string, chunkIndex: number): Promise<boolean> {
     const chunkFile = `${remoteDir}/chunk_${String(chunkIndex).padStart(4, '0')}`
     // Write data then echo the byte count for verification (marked: see pipeSingleStream)
-    const args = [...this.freshSshArgs, this.sshHostString, markedUploadCommand(chunkFile, `wc -c < ${shq(chunkFile)}`)]
+    const args = [...this.freshSshArgs, this.sshHostString, markedUploadCommand(chunkFile, data.length, `wc -c < ${shq(chunkFile)}`)]
     const proc = spawn('ssh', args, { stdio: ['pipe', 'pipe', 'pipe'] })
     proc.stdin!.on('error', () => {})  // swallow EPIPE if SSH dies mid-write
 
@@ -3068,7 +3068,7 @@ export class DaemonConnection {
       format: FOLD_CHECKPOINT_FORMAT,
       exec: (script, timeoutMs) => this.sshExec(script, timeoutMs),
       upload: async (remotePath, content) => {
-        const run = await runSshBounded([...this.baseSshArgs, this.sshHostString, markedUploadCommand(remotePath)], {
+        const run = await runSshBounded([...this.baseSshArgs, this.sshHostString, markedUploadCommand(remotePath, Buffer.byteLength(content))], {
           input: content, timeoutMs: SOURCE_UPLOAD_TIMEOUT_MS,
         })
         if (run.spawnError) throw run.spawnError
@@ -3900,7 +3900,7 @@ export class DaemonConnection {
       const dir = this._remoteDir
       await exec(`mkdir -p ${shq(dir)} && rm -f ${shq(dir + '/daemon.js')}`)
 
-      const args = [...sshArgs, this.sshHostString, markedUploadCommand(`${dir}/daemon.cjs`)]
+      const args = [...sshArgs, this.sshHostString, markedUploadCommand(`${dir}/daemon.cjs`, Buffer.byteLength(source))]
       // Bounded: these uploads had no deadline at all (remote-sh.ts runSshBounded).
       const upload = await runSshBounded(args, { input: source, timeoutMs: SOURCE_UPLOAD_TIMEOUT_MS })
       if (upload.spawnError) throw upload.spawnError
@@ -3920,8 +3920,11 @@ export class DaemonConnection {
       for (const sidecarFile of ['changes-core.cjs', 'usage-core.cjs', 'external-scan-core.cjs', 'path-resolve-core.cjs', 'task-dir-core.cjs', 'vscode-server-core.cjs', 'transcript-rewind-core.cjs', 'daemon-cron-runtime.cjs', 'daemon-instance-lock.cjs', 'daemon-service-cli.cjs', 'trigger-check-core.cjs']) {
         try {
           const sidecar = fs.readFileSync(path.join(DAEMON_BINARIES_DIR, sidecarFile), 'utf-8')
-          const scArgs = [...sshArgs, this.sshHostString, markedUploadCommand(`${dir}/${sidecarFile}`)]
-          const sc = await runSshBounded(scArgs, { input: sidecar, timeoutMs: SOURCE_UPLOAD_TIMEOUT_MS })
+          const upload = (args: string[]) => runSshBounded([...args, this.sshHostString, markedUploadCommand(`${dir}/${sidecarFile}`, Buffer.byteLength(sidecar))], { input: sidecar, timeoutMs: SOURCE_UPLOAD_TIMEOUT_MS })
+          let sc = await upload(sshArgs)
+          // One ssh in a burst of uploads fails now and then (exit 255 on the shared
+          // master): once more on a fresh connection before the host goes without it.
+          if (!sc.spawnError && !sc.timedOut && sc.code === 255) sc = await upload(this.freshSshArgs)
           if (sc.spawnError) throw sc.spawnError
           if (sc.timedOut) throw new Error(`${sidecarFile} sidecar deploy timed out after ${SOURCE_UPLOAD_TIMEOUT_MS}ms`)
           if (sc.code !== 0) throw new Error(`${sidecarFile} sidecar deploy failed with code ${sc.code}`)

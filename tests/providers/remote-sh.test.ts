@@ -9,7 +9,7 @@
  * `ssh host <line>`. Everything lives in a temp dir; PATH is restored after.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -166,13 +166,29 @@ describe('runRemoteSh against fake login shells', () => {
 describe('upload commands (stdin carries data)', () => {
   it('wrap one line in `sh -c` and mark the verification output', async () => {
     const target = path.join(dir, 'up load.bin')
-    const cmd = markedUploadCommand(target, `wc -c < '${target}'`)
+    const cmd = markedUploadCommand(target, 5, `wc -c < '${target}'`)
     expect(cmd.startsWith("sh -c '")).toBe(true)
     // Through the csh-like login shell, exactly as ssh would hand it over.
     const out = execFileSync(path.join(dir, 'csh-like'), ['-c', cmd], { input: 'hello', encoding: 'utf-8' })
     expect(fs.readFileSync(target, 'utf-8')).toBe('hello')
     const marked = extractMarkedOutput(out)
     expect(marked.found && marked.body.trim()).toBe('5')
+  })
+
+  it('keeps the old file when the upload is cut short, and leaves no partial copy', () => {
+    const target = path.join(dir, 'a sidecar.cjs')
+    fs.writeFileSync(target, 'the good copy')
+    // A dead ssh hands the remote `cat` a plain EOF: two bytes of five arrived.
+    const short = spawnSync(path.join(dir, 'csh-like'), ['-c', markedUploadCommand(target, 5)], { input: 'he' })
+    expect(short.status).not.toBe(0)
+    const empty = spawnSync(path.join(dir, 'csh-like'), ['-c', markedUploadCommand(target, 5)], { input: '' })
+    expect(empty.status).not.toBe(0)
+    expect(fs.readFileSync(target, 'utf-8')).toBe('the good copy')
+    expect(fs.readdirSync(dir).filter((f) => f.includes('.up.') || f.startsWith('.a sidecar'))).toEqual([])
+    const whole = spawnSync(path.join(dir, 'csh-like'), ['-c', markedUploadCommand(target, 5)], { input: 'hello' })
+    expect(whole.status).toBe(0)
+    expect(fs.readFileSync(target, 'utf-8')).toBe('hello')
+    expect(() => markedUploadCommand(target, -1)).toThrow()
   })
 
   it('refuses a line csh or fish would misread', () => {

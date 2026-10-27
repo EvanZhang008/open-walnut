@@ -218,11 +218,22 @@ export function shDataCommand(line: string): string {
 }
 
 /**
- * An upload command whose verification output is marked: `cat > path`, then the
- * markers around `verify`. Pair with extractMarkedOutput on the reply.
+ * An upload command whose verification output is marked: the data goes to a file
+ * beside `remotePath` and replaces it only once it holds exactly `bytes` bytes,
+ * then the markers around `verify`. Pair with extractMarkedOutput on the reply.
+ *
+ * Never `cat > path`: that empties the file before the first byte arrives, and a
+ * dead ssh gives the remote `cat` a plain EOF (no tty, no signal), so a cut upload
+ * left a short or empty file in place of a good one (2026-10-27: an empty
+ * usage-core.cjs on a host turned its budgets and usage scans off).
  */
-export function markedUploadCommand(remotePath: string, verify?: string): string {
-  const write = `cat > ${shq(remotePath)}`
+export function markedUploadCommand(remotePath: string, bytes: number, verify?: string): string {
+  if (!Number.isSafeInteger(bytes) || bytes < 0) throw new Error('markedUploadCommand: bytes must be a byte count')
+  // A dot name beside the target: same filesystem for the rename, and no glob
+  // (`chunk_*`, `*.cjs`) ever picks up a copy a killed upload left behind.
+  const slash = remotePath.lastIndexOf('/')
+  const temp = `${remotePath.slice(0, slash + 1)}.${remotePath.slice(slash + 1)}.up.`
+  const write = `t=${shq(temp)}$$; if cat > "$t" && wc -c < "$t" | awk '{ exit ($1 == ${bytes} ? 0 : 1) }' && mv -f "$t" ${shq(remotePath)}; then :; else rm -f "$t"; exit 1; fi`
   if (!verify) return shDataCommand(write)
   return shDataCommand(`${write} && echo ${REMOTE_BEGIN_MARKER} && ${verify} && echo ${REMOTE_END_MARKER}`)
 }
