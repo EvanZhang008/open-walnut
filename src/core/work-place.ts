@@ -22,11 +22,10 @@ import { TASK_DIR_KEEP_DAYS } from '../lib/task-dir.js'
 
 export const WORK_PLACE_RULE = `## Where work lives
 
-Temp directories (/tmp and the OS temp dir) are emptied at every reboot and swept by cleaners between boots. Only what you can lose goes there: screenshots, one-off scratch output, builds you can rebuild.
-- Everything you must not lose goes in your task directory, \`$WALNUT_TASK_DIR\`: drafts, plans and notes, temporary clones and worktrees, unmerged commits, candidate builds, evidence and reports. Name what you put there by purpose (\`<repo>\`, \`evidence/\`, \`reports/\`) and remove what you no longer need when you finish.
-- The disk is shared by every session, and filled to the refusal line twice in one evening (2026-10-26). Clone from a local checkout with \`git clone --shared\` (or add a worktree) instead of a full copy; keep one build output per repo (one \`-derivedDataPath\`, one \`dist\`) and reuse it instead of a copy per variant; delete DerivedData, \`dist\`, \`node_modules\`, \`.xcresult\` bundles and downloaded installers as soon as their result is recorded.
-- Walnut makes it on the host your session runs on, keeps it across reboots, and removes it ${TASK_DIR_KEEP_DAYS} days after the task completes, never while a repo in it holds changes or commits that exist nowhere else. What someone needs after that belongs in a merged commit, the task's note or summary, or a note.
-- Walnut refuses a git clone, git worktree add or git commit in a temp directory, and flags a draft, plan or note saved there with Write. When \`$WALNUT_TASK_DIR\` is empty, \`walnut tools call task_dir\` makes it and prints its path.`
+Temp directories (/tmp and the OS temp dir) are emptied at every reboot and swept by cleaners. Only what you can lose goes there: screenshots, scratch output, rebuildable builds.
+- What you must not lose goes in your task directory, \`$WALNUT_TASK_DIR\`: drafts, plans, notes, clones, worktrees, unmerged commits, evidence. Walnut keeps it across reboots and removes it ${TASK_DIR_KEEP_DAYS} days after the task completes, never while a repo in it holds commits or changes found nowhere else. Anything needed later goes in a merged commit or the task's note.
+- The disk is shared: clone with \`git clone --shared\` or a worktree, keep one build output per repo, and delete build output (DerivedData, dist, node_modules, .xcresult, installers) once its result is recorded.
+- Walnut refuses a git clone, worktree add or commit in a temp directory and flags a draft or plan saved there. If \`$WALNUT_TASK_DIR\` is empty, \`walnut tools call task_dir\` makes it.`
 
 /** The prompt's line naming this session's own directory; path null = only the env var is known. */
 export function taskDirLine(taskDir: string | null): string {

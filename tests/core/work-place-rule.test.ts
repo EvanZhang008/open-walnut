@@ -38,15 +38,14 @@ describe('the rule itself', () => {
   it('says what goes where, and that Walnut enforces and cleans it', () => {
     for (const re of [
       /Temp directories \(\/tmp and the OS temp dir\) are emptied at every reboot and swept by cleaners/,
-      /Only what you can lose goes there: screenshots, one-off scratch output, builds you can rebuild/,
-      /your task directory, `\$WALNUT_TASK_DIR`: drafts, plans and notes, temporary clones and worktrees, unmerged commits, candidate builds, evidence and reports/,
-      /remove what you no longer need when you finish/,
-      /keeps it across reboots, and removes it \d+ days after the task completes, never while a repo in it holds changes or commits that exist nowhere else/,
-      /Walnut refuses a git clone, git worktree add or git commit in a temp directory, and flags a draft, plan or note saved there with Write/,
-      /`walnut tools call task_dir` makes it and prints its path/,
-      /Clone from a local checkout with `git clone --shared` \(or add a worktree\) instead of a full copy/,
-      /keep one build output per repo \(one `-derivedDataPath`, one `dist`\) and reuse it/,
-      /delete DerivedData, `dist`, `node_modules`, `\.xcresult` bundles and downloaded installers as soon as their result is recorded/,
+      /Only what you can lose goes there: screenshots, scratch output, rebuildable builds/,
+      /your task directory, `\$WALNUT_TASK_DIR`: drafts, plans, notes, clones, worktrees, unmerged commits, evidence/,
+      /keeps it across reboots and removes it \d+ days after the task completes, never while a repo in it holds commits or changes found nowhere else/,
+      /Anything needed later goes in a merged commit or the task's note/,
+      /clone with `git clone --shared` or a worktree, keep one build output per repo/,
+      /delete build output \(DerivedData, dist, node_modules, \.xcresult, installers\) once its result is recorded/,
+      /Walnut refuses a git clone, worktree add or commit in a temp directory and flags a draft or plan saved there/,
+      /`walnut tools call task_dir` makes it/,
     ]) expect(WORK_PLACE_RULE).toMatch(re)
   })
 
