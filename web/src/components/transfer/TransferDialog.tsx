@@ -3,9 +3,14 @@
  * permissions the new session runs with, a directory and how the new task
  * starts. Every choice is a row of radio-style buttons (no native
  * <select>); a pair the server marks blocked stays visible, disabled, with its
- * reason. State lives in TransferDialogHost so it survives a hide.
+ * reason. State lives in TransferDialogHost so it survives a hide; the two text
+ * boxes are also kept as drafts of the task being moved, so a Cancel-less close
+ * or a reload gives them back. A submit drops them (the host keeps the form while
+ * it runs) and a refusal keeps them again.
  */
 import { useEffect, useRef, type ReactNode } from 'react';
+import { useDraft } from '@/hooks/useDraft';
+import { draftKey } from '@/utils/drafts';
 import { createPortal } from 'react-dom';
 import { useModalOverlay } from '@/hooks/useModalOverlay';
 import { MicField, type BoxMicHandle } from '@/components/common/BoxMic';
@@ -70,6 +75,30 @@ export function TransferDialog({ options, loadError, form, busy, error, onChange
   const source = options?.source ?? null;
   const dir: DirChoice | null = form && source ? effectiveDir(form, source) : null;
   useEffect(() => { if (form?.dir === 'custom') customRef.current?.focus(); }, [form?.dir]);
+
+  const taskId = options?.taskId ?? null;
+  const messageDraft = useDraft(taskId ? draftKey('transfer', taskId, 'message') : null);
+  const pathDraft = useDraft(taskId ? draftKey('transfer', taskId, 'path') : null);
+  // A fresh form (the dialog was closed, or the page reloaded) takes the kept words back.
+  const hasForm = !!form;
+  useEffect(() => {
+    if (!hasForm || busy) return;
+    const patch: Partial<TransferForm> = {};
+    if (!form!.message && messageDraft.text) patch.message = messageDraft.text;
+    if (!form!.customPath && pathDraft.text) patch.customPath = pathDraft.text;
+    if (Object.keys(patch).length) onChange(patch);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hasForm, taskId]);
+  // A refused transfer: the words in the form are unsent again (each refusal
+  // ends a busy spell, so the same message twice is caught too).
+  useEffect(() => {
+    if (busy || !error || !form) return;
+    if (form.message) messageDraft.setText(form.message);
+    if (form.customPath) pathDraft.setText(form.customPath);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [error, busy]);
+  const setMessage = (message: string) => { messageDraft.setText(message); onChange({ message }); };
+  const setCustomPath = (customPath: string) => { pathDraft.setText(customPath); onChange({ customPath }); };
 
   const blocker = options && form ? submitBlocker(options, form) : null;
   const isNow = (engine: string, host: string) => !!source && source.engine === engine && source.host === host;
@@ -145,11 +174,12 @@ export function TransferDialog({ options, loadError, form, busy, error, onChange
           {dir === 'custom' && (
             <input
               ref={customRef}
+              data-draft-key={pathDraft.key ?? undefined}
               className="app-modal-input xfer-path"
               value={form.customPath}
               placeholder="/absolute/path/on/the/host"
               aria-label="Directory on the target host"
-              onChange={(e) => onChange({ customPath: e.target.value })}
+              onChange={(e) => setCustomPath(e.target.value)}
               data-testid="xfer-dir-input"
             />
           )}
@@ -163,15 +193,16 @@ export function TransferDialog({ options, loadError, form, busy, error, onChange
           <span>Keep the original task open</span>
         </label>
         <label className="xfer-label xfer-label-field" htmlFor="xfer-message">First instruction (optional)</label>
-        <MicField boxRef={messageBox} text={form.message} setText={(message) => onChange({ message })} handleRef={messageMic} disabled={busy}>
+        <MicField boxRef={messageBox} text={form.message} setText={setMessage} handleRef={messageMic} disabled={busy}>
           <textarea
             ref={messageBox}
+            data-draft-key={messageDraft.key ?? undefined}
             id="xfer-message"
             className="app-modal-input xfer-message"
             rows={2}
             value={form.message}
             placeholder="What should the new task do first?"
-            onChange={(e) => onChange({ message: e.target.value })}
+            onChange={(e) => setMessage(e.target.value)}
             data-testid="xfer-message"
           />
         </MicField>
@@ -208,13 +239,13 @@ export function TransferDialog({ options, loadError, form, busy, error, onChange
         <div className="app-modal-actions xfer-actions">
           {blocker && options?.source && !busy && <span className="xfer-hint" data-testid="xfer-hint">{blocker}</span>}
           {busy && <span className="xfer-hint">You can close this. Walnut opens the new task when it is ready.</span>}
-          <button type="button" className="app-modal-btn" onClick={onClose}>{busy ? 'Hide' : 'Cancel'}</button>
+          <button type="button" className="app-modal-btn" onClick={() => { if (!busy) { messageDraft.clear(); pathDraft.clear(); } onClose(); }}>{busy ? 'Hide' : 'Cancel'}</button>
           <button
             type="button"
             className="app-modal-btn primary"
             disabled={busy || !!blocker || !form}
             title={blocker ?? undefined}
-            onClick={() => { messageMic.current?.clear(); onSubmit(); }}
+            onClick={() => { messageMic.current?.clear(); messageDraft.clear(); pathDraft.clear(); onSubmit(); }}
             data-testid="xfer-submit"
           >
             {busy ? 'Transferring…' : 'Transfer'}

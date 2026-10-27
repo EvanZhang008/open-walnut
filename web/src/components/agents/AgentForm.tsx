@@ -1,5 +1,7 @@
-import { useState, useEffect, useMemo, useRef } from 'react';
+import { useState, useEffect, useMemo, useRef, type SetStateAction } from 'react';
 import { MicField, type BoxMicHandle } from '@/components/common/BoxMic';
+import { useDraftValue } from '@/hooks/useDraft';
+import { draftKey } from '@/utils/drafts';
 import type { AgentDefinition, AgentStatefulConfig, CreateAgentInput, UpdateAgentInput, ContextSourceId, ContextSourceConfig, SkillMeta } from '@/api/agents';
 
 interface AgentFormProps {
@@ -51,6 +53,7 @@ function SkillsPicker({ skillsMeta, selectedSkills, onChangeSkills, skillFilter,
           Select skills to include in this agent&apos;s system prompt.
         </p>
         <input
+          data-no-draft="search"
           type="text"
           className="skills-picker-filter"
           placeholder="Filter skills..."
@@ -122,36 +125,116 @@ const CONTEXT_SOURCE_DEFS: { id: ContextSourceId; label: string; auto: boolean; 
   { id: 'main_daily_log', label: 'Main Agent Daily Log', auto: false, defaultBudget: 3000, description: "General agent's daily activity logs (read-only)" },
 ];
 
+type ContextSourcesState = Record<ContextSourceId, { enabled: boolean; budget: number | '' }>;
+
+/** Every field the form edits, kept as ONE draft until Save or Cancel. */
+interface KeptAgent {
+  id: string;
+  name: string;
+  description: string;
+  runner: 'embedded' | 'cli';
+  model: string;
+  region: string;
+  maxTokens: number | '';
+  maxToolRounds: number | '';
+  workingDirectory: string;
+  systemPrompt: string;
+  selectedSkills: string[];
+  hasStateful: boolean;
+  memoryProject: string;
+  memoryBudget: number | '';
+  memorySource: string;
+  contextSources: ContextSourcesState;
+  customModel: string;
+  useCustom: boolean;
+}
+
+/** The form filled from the agent being edited or cloned (empty for a new one). */
+function keptFrom(source: AgentDefinition | undefined, cloneFrom: AgentDefinition | undefined, availableModels: string[]): KeptAgent {
+  const contextSources: Record<string, { enabled: boolean; budget: number | '' }> = {};
+  for (const def of CONTEXT_SOURCE_DEFS) {
+    contextSources[def.id] = { enabled: def.auto, budget: '' };
+  }
+  const empty: KeptAgent = {
+    id: '', name: '', description: '', runner: 'embedded', model: '', region: '',
+    maxTokens: '', maxToolRounds: '', workingDirectory: '', systemPrompt: '', selectedSkills: [],
+    hasStateful: false, memoryProject: '', memoryBudget: '', memorySource: '',
+    contextSources: contextSources as ContextSourcesState, customModel: '', useCustom: false,
+  };
+  if (!source) return empty;
+  // Initialize context sources from agent definition
+  for (const src of source.context_sources ?? []) {
+    if (contextSources[src.id]) {
+      contextSources[src.id] = { enabled: src.enabled, budget: src.token_budget ?? '' };
+    }
+  }
+  const custom = !!source.model && availableModels.length > 0 && !availableModels.includes(source.model);
+  return {
+    ...empty,
+    id: cloneFrom ? `${source.id}-copy` : source.id,
+    name: cloneFrom ? `${source.name} (Copy)` : source.name,
+    description: source.description ?? '',
+    runner: source.runner,
+    model: source.model ?? '',
+    customModel: custom ? source.model ?? '' : '',
+    useCustom: custom,
+    region: source.region ?? '',
+    maxTokens: source.max_tokens ?? '',
+    maxToolRounds: source.max_tool_rounds ?? '',
+    workingDirectory: source.working_directory ?? '',
+    systemPrompt: source.system_prompt ?? '',
+    selectedSkills: source.skills ?? [],
+    // Initialize stateful memory
+    hasStateful: !!source.stateful,
+    memoryProject: source.stateful?.memory_project ?? '',
+    memoryBudget: source.stateful?.memory_budget_tokens ?? '',
+    memorySource: source.stateful?.memory_source ?? '',
+  };
+}
+
 export function AgentForm({ agent, cloneFrom, availableModels = [], skillsMeta = [], onSave, onCancel }: AgentFormProps) {
   const source = cloneFrom || agent;
   const isEdit = !!agent;
 
-  const [id, setId] = useState('');
-  const [name, setName] = useState('');
-  const [description, setDescription] = useState('');
-  const [runner, setRunner] = useState<'embedded' | 'cli'>('embedded');
-  const [model, setModel] = useState('');
-  const [region, setRegion] = useState('');
-  const [maxTokens, setMaxTokens] = useState<number | ''>('');
-  const [maxToolRounds, setMaxToolRounds] = useState<number | ''>('');
-  const [workingDirectory, setWorkingDirectory] = useState('');
-  const [systemPrompt, setSystemPrompt] = useState('');
-  const [selectedSkills, setSelectedSkills] = useState<string[]>([]);
+  // The form is a draft of this agent (its clone, or the new one) until Save or
+  // Cancel, so leaving the page or a reload keeps what was typed.
+  const baseline = keptFrom(source, cloneFrom, availableModels);
+  const kept = useDraftValue<KeptAgent>(
+    draftKey('agent-form', agent ? agent.id : cloneFrom ? `clone-${cloneFrom.id}` : 'new'),
+    baseline,
+  );
+  // Over the baseline, so a draft kept by an older form never lacks a field.
+  const {
+    id, name, description, runner, model, region, maxTokens, maxToolRounds, workingDirectory, systemPrompt,
+    selectedSkills, hasStateful, memoryProject, memoryBudget, memorySource, customModel, useCustom,
+  } = { ...baseline, ...kept.value };
+  const contextSources = { ...baseline.contextSources, ...kept.value.contextSources };
+  const setKept = kept.setValue;
+  const slice = <K extends keyof KeptAgent>(field: K) => (next: SetStateAction<KeptAgent[K]>) =>
+    setKept((prev) => ({
+      ...prev,
+      [field]: typeof next === 'function' ? (next as (p: KeptAgent[K]) => KeptAgent[K])(prev[field]) : next,
+    }));
+  const setId = slice('id');
+  const setName = slice('name');
+  const setDescription = slice('description');
+  const setRunner = slice('runner');
+  const setModel = slice('model');
+  const setRegion = slice('region');
+  const setMaxTokens = slice('maxTokens');
+  const setMaxToolRounds = slice('maxToolRounds');
+  const setWorkingDirectory = slice('workingDirectory');
+  const setSystemPrompt = slice('systemPrompt');
+  const setSelectedSkills = slice('selectedSkills');
+  const setHasStateful = slice('hasStateful');
+  const setMemoryProject = slice('memoryProject');
+  const setMemoryBudget = slice('memoryBudget');
+  const setMemorySource = slice('memorySource');
+  const setContextSources = slice('contextSources');
+  const setCustomModel = slice('customModel');
+  const setUseCustom = slice('useCustom');
   const [skillFilter, setSkillFilter] = useState('');
-  const [hasStateful, setHasStateful] = useState(false);
-  const [memoryProject, setMemoryProject] = useState('');
-  const [memoryBudget, setMemoryBudget] = useState<number | ''>('');
-  const [memorySource, setMemorySource] = useState('');
-  const [contextSources, setContextSources] = useState<Record<ContextSourceId, { enabled: boolean; budget: number | '' }>>(() => {
-    const initial: Record<string, { enabled: boolean; budget: number | '' }> = {};
-    for (const def of CONTEXT_SOURCE_DEFS) {
-      initial[def.id] = { enabled: def.auto, budget: '' };
-    }
-    return initial as Record<ContextSourceId, { enabled: boolean; budget: number | '' }>;
-  });
 
-  const [customModel, setCustomModel] = useState('');
-  const [useCustom, setUseCustom] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const descRef = useRef<HTMLInputElement | null>(null);
@@ -164,52 +247,11 @@ export function AgentForm({ agent, cloneFrom, availableModels = [], skillsMeta =
     ? CUSTOM_MODEL_VALUE
     : model === '' ? '' : availableModels.includes(model) ? model : CUSTOM_MODEL_VALUE;
 
+  // Another agent fills the form (from the draft hook): a dictation on its way belongs to the old one.
   useEffect(() => {
     if (!source) return;
     descMic.current?.clear();
     promptMic.current?.clear();
-    setId(cloneFrom ? `${source.id}-copy` : source.id);
-    setName(cloneFrom ? `${source.name} (Copy)` : source.name);
-    setDescription(source.description ?? '');
-    setRunner(source.runner);
-    setModel(source.model ?? '');
-    if (source.model && availableModels.length > 0 && !availableModels.includes(source.model)) {
-      setCustomModel(source.model);
-      setUseCustom(true);
-    } else {
-      setUseCustom(false);
-    }
-    setRegion(source.region ?? '');
-    setMaxTokens(source.max_tokens ?? '');
-    setMaxToolRounds(source.max_tool_rounds ?? '');
-    setWorkingDirectory(source.working_directory ?? '');
-    setSystemPrompt(source.system_prompt ?? '');
-    // Initialize context sources from agent definition
-    if (source.context_sources?.length) {
-      setContextSources((prev) => {
-        const next = { ...prev };
-        for (const src of source.context_sources!) {
-          if (next[src.id]) {
-            next[src.id] = { enabled: src.enabled, budget: src.token_budget ?? '' };
-          }
-        }
-        return next;
-      });
-    }
-    // Initialize skills
-    setSelectedSkills(source.skills ?? []);
-    // Initialize stateful memory
-    if (source.stateful) {
-      setHasStateful(true);
-      setMemoryProject(source.stateful.memory_project ?? '');
-      setMemoryBudget(source.stateful.memory_budget_tokens ?? '');
-      setMemorySource(source.stateful.memory_source ?? '');
-    } else {
-      setHasStateful(false);
-      setMemoryProject('');
-      setMemoryBudget('');
-      setMemorySource('');
-    }
   }, [source, cloneFrom]);
 
   async function handleSubmit(e: React.FormEvent) {
@@ -267,11 +309,13 @@ export function AgentForm({ agent, cloneFrom, availableModels = [], skillsMeta =
       ...(stateful ? { stateful } : {}),
     };
 
+    const sentKey = kept.key;
     try {
       // A transcription still on its way lands after the save, unsaved: drop it now.
       descMic.current?.clear();
       promptMic.current?.clear();
       await onSave(input);
+      kept.clear(sentKey);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Failed to save');
     } finally {
@@ -300,6 +344,7 @@ export function AgentForm({ agent, cloneFrom, availableModels = [], skillsMeta =
             <div className="form-group">
               <label htmlFor="agent-id">ID (slug)</label>
               <input
+                data-draft-key={kept.key ?? undefined}
                 id="agent-id"
                 type="text"
                 value={id}
@@ -312,6 +357,7 @@ export function AgentForm({ agent, cloneFrom, availableModels = [], skillsMeta =
             <div className="form-group">
               <label htmlFor="agent-name">Name</label>
               <input
+                data-draft-key={kept.key ?? undefined}
                 id="agent-name"
                 type="text"
                 value={name}
@@ -324,6 +370,7 @@ export function AgentForm({ agent, cloneFrom, availableModels = [], skillsMeta =
             <label htmlFor="agent-desc">Description (optional)</label>
             <MicField inline boxRef={descRef} text={description} setText={setDescription} handleRef={descMic}>
               <input
+                data-draft-key={kept.key ?? undefined}
                 ref={descRef}
                 id="agent-desc"
                 type="text"
@@ -378,6 +425,7 @@ export function AgentForm({ agent, cloneFrom, availableModels = [], skillsMeta =
                 </select>
                 {selectValue === CUSTOM_MODEL_VALUE && (
                   <input
+                    data-draft-key={kept.key ?? undefined}
                     type="text"
                     className="font-mono"
                     style={{ marginTop: 6 }}
@@ -389,6 +437,7 @@ export function AgentForm({ agent, cloneFrom, availableModels = [], skillsMeta =
               </>
             ) : (
               <input
+                data-draft-key={kept.key ?? undefined}
                 id="agent-model"
                 type="text"
                 value={model}
@@ -401,6 +450,7 @@ export function AgentForm({ agent, cloneFrom, availableModels = [], skillsMeta =
           <div className="form-group">
             <label htmlFor="agent-region">Region (optional)</label>
             <input
+              data-draft-key={kept.key ?? undefined}
               id="agent-region"
               type="text"
               value={region}
@@ -412,6 +462,7 @@ export function AgentForm({ agent, cloneFrom, availableModels = [], skillsMeta =
             <div className="form-group">
               <label htmlFor="agent-max-tokens">Max Tokens</label>
               <input
+                data-draft-key={kept.key ?? undefined}
                 id="agent-max-tokens"
                 type="number"
                 min="1"
@@ -423,6 +474,7 @@ export function AgentForm({ agent, cloneFrom, availableModels = [], skillsMeta =
             <div className="form-group">
               <label htmlFor="agent-max-rounds">Max Tool Rounds</label>
               <input
+                data-draft-key={kept.key ?? undefined}
                 id="agent-max-rounds"
                 type="number"
                 min="1"
@@ -436,6 +488,7 @@ export function AgentForm({ agent, cloneFrom, availableModels = [], skillsMeta =
             <div className="form-group">
               <label htmlFor="agent-cwd">Working Directory</label>
               <input
+                data-draft-key={kept.key ?? undefined}
                 id="agent-cwd"
                 type="text"
                 value={workingDirectory}
@@ -452,6 +505,7 @@ export function AgentForm({ agent, cloneFrom, availableModels = [], skillsMeta =
             <label htmlFor="agent-prompt">System Prompt (optional)</label>
             <MicField boxRef={promptRef} text={systemPrompt} setText={setSystemPrompt} handleRef={promptMic}>
               <textarea
+                data-draft-key={kept.key ?? undefined}
                 ref={promptRef}
                 id="agent-prompt"
                 value={systemPrompt}
@@ -495,6 +549,7 @@ export function AgentForm({ agent, cloneFrom, availableModels = [], skillsMeta =
                       </label>
                       {!def.auto && state.enabled && (
                         <input
+                          data-draft-key={kept.key ?? undefined}
                           type="number"
                           className="context-source-budget"
                           min="100"
@@ -550,6 +605,7 @@ export function AgentForm({ agent, cloneFrom, availableModels = [], skillsMeta =
                 <div className="form-group">
                   <label htmlFor="agent-mem-project">Memory Project Path</label>
                   <input
+                    data-draft-key={kept.key ?? undefined}
                     id="agent-mem-project"
                     type="text"
                     value={memoryProject}
@@ -565,6 +621,7 @@ export function AgentForm({ agent, cloneFrom, availableModels = [], skillsMeta =
                   <div className="form-group">
                     <label htmlFor="agent-mem-budget">Token Budget</label>
                     <input
+                      data-draft-key={kept.key ?? undefined}
                       id="agent-mem-budget"
                       type="number"
                       min="100"
@@ -576,6 +633,7 @@ export function AgentForm({ agent, cloneFrom, availableModels = [], skillsMeta =
                   <div className="form-group">
                     <label htmlFor="agent-mem-source">Memory Source</label>
                     <input
+                      data-draft-key={kept.key ?? undefined}
                       id="agent-mem-source"
                       type="text"
                       value={memorySource}
@@ -590,7 +648,7 @@ export function AgentForm({ agent, cloneFrom, availableModels = [], skillsMeta =
         )}
 
         <div className="form-actions">
-          <button type="button" className="btn" onClick={onCancel} disabled={saving}>
+          <button type="button" className="btn" onClick={() => { kept.clear(); onCancel(); }} disabled={saving}>
             Cancel
           </button>
           <button type="submit" className="btn btn-primary" disabled={saving}>

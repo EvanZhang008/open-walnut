@@ -117,6 +117,7 @@ function FormNumber({ id, defaultValue, unit, placeholder, min, max, step, readO
         id={id}
         name={id}
         type="number"
+        data-no-draft="autosave"
         inputMode="decimal"
         className="number-input settings-input settings-input--number"
         defaultValue={defaultValue ?? ''}

@@ -141,6 +141,7 @@ export function DiagnosticsFallback({ copy, testId }: { copy: DiagnosticsCopy; t
     <div className="settings-diagnostics-fallback" data-testid={testId}>
       <p className="settings-diagnostics-fallback-note">The clipboard is not available here. Select the text below and copy it, or click the button again.</p>
       <textarea
+        data-no-draft="mirror"
         className="settings-input"
         readOnly
         value={copy.fallbackText}

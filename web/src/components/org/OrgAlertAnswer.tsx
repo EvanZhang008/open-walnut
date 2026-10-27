@@ -21,6 +21,10 @@ import { getLetterSnapshot, loadLetters, patchLetter, subscribeLetters } from '@
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 import { useSessionSend } from '@/hooks/useSessionSend';
+import { useDraft } from '@/hooks/useDraft';
+import { clearDraft, draftKey } from '@/utils/drafts';
+import { sessionDraftKey } from '@/utils/composer-insert';
+import { boardChoiceDraftKey } from '@/components/board/BoardReplyDock';
 import { resolveTaskSessionId } from '@/utils/session-status';
 import { log } from '@/utils/log';
 import { answerShape, openLetterFor } from './org-answer-shape';
@@ -55,21 +59,30 @@ function Options({ options, recommended, onPick, testId }: {
   );
 }
 
-/** A line in the user's own words, for an ask with no structure or beside one that has it. */
-function WordsField({ placeholder, initial = '', onSend, sendLabel = 'Send', autoFocus }: {
+/**
+ * A line in the user's own words, for an ask with no structure or beside one that has it. The
+ * words are kept under `draftKey` (the same draft the ask's own box keeps: the session's
+ * composer, the Board choice's) until the answer is taken; the caller clears it then.
+ */
+function WordsField({ placeholder, initial = '', draftKey: key, onSend, sendLabel = 'Send', autoFocus }: {
   placeholder: string;
   initial?: string;
+  draftKey: string | null;
   onSend: (text: string) => void;
   sendLabel?: string;
   autoFocus?: boolean;
 }) {
-  const [text, setText] = useState(initial);
-  const send = () => { const t = text.trim(); if (t) onSend(t); };
+  const draft = useDraft(key);
+  const [plain, setPlain] = useState(initial);
+  const text = key ? draft.text : plain;
+  const setText = key ? draft.setText : setPlain;
+  const send = () => { const t = text.trim(); if (t) { draft.flush(); onSend(t); } };
   return (
     <div className="org-answer-words">
       <textarea
         className="org-answer-input"
         data-testid="org-answer-input"
+        data-draft-key={key ?? undefined}
         rows={2}
         value={text}
         placeholder={placeholder}
@@ -108,14 +121,20 @@ function LetterAnswer({ alert, failure, onSend, onWords }: FormProps & { onWords
     return () => { alive = false; };
   }, []);
   const letter = useMemo(() => openLetterFor(snap.letters, alert.taskId), [snap.letters, alert.taskId]);
-  const [note, setNote] = useState(failure?.draft ?? '');
+  // The note with a choice is the letter's own note draft (LetterView keeps the same one).
+  const noteDraft = useDraft(letter ? draftKey('letter-note', letter.id) : null);
+  const note = noteDraft.text || (noteDraft.key ? '' : failure?.draft ?? '');
+  const setNote = noteDraft.setText;
   useEffect(() => { if (fresh && !letter) onWords(); }, [fresh, letter, onWords]);
   if (!letter) return <div className="org-answer-note" role="status">{fresh ? '' : 'Loading the letter…'}</div>;
   const pick = (actionId: string) => {
     const typed = note;
+    const noteKey = noteDraft.key;
+    noteDraft.flush();
     const settle = onSend();
     answerLetter(letter.id, actionId, typed.trim() || undefined).then((result) => {
       if (result.letter) patchLetter(letter.id, { answered: result.letter.answered, read: true });
+      clearDraft(noteKey);
       log.info('org-page', 'org alert answered', { taskId: alert.taskId, shape: 'letter', letterId: letter.id, actionId, delivery: result.delivery });
       settle();
     }, (err: unknown) => {
@@ -137,6 +156,7 @@ function LetterAnswer({ alert, failure, onSend, onWords }: FormProps & { onWords
       <input
         className="org-answer-input org-answer-note-input"
         data-testid="org-answer-note"
+        data-draft-key={noteDraft.key ?? undefined}
         value={note}
         placeholder="Add a note (optional)"
         onChange={(e) => setNote(e.target.value)}
@@ -164,10 +184,12 @@ function ChoiceAnswer({ alert, failure, onSend, onWords }: FormProps & { onWords
   }, [alert.taskId]);
   useEffect(() => { if (found === null) onWords(); }, [found, onWords]);
   if (!found) return <div className="org-answer-note" role="status">{found === undefined ? 'Loading the choice…' : ''}</div>;
+  const wordsKey = boardChoiceDraftKey(found.owner, found.id);
   const answer = (body: { option?: string; text?: string }) => {
     const settle = onSend();
     apiPut(`/api/v1/tasks/${encodeURIComponent(found.owner)}/board/choices/${encodeURIComponent(found.id)}`, body).then(() => {
       log.info('org-page', 'org alert answered', { taskId: alert.taskId, shape: 'choice', owner: found.owner, choiceId: found.id, option: body.option ?? '' });
+      if (body.text) clearDraft(wordsKey);
       settle();
     }, (err: unknown) => {
       log.warn('org-page', 'org alert answer failed', { taskId: alert.taskId, shape: 'choice', error: String(err) });
@@ -186,6 +208,7 @@ function ChoiceAnswer({ alert, failure, onSend, onWords }: FormProps & { onWords
       <WordsField
         placeholder={found.options.length ? 'Or say it in your words' : 'Your answer'}
         initial={failure?.draft ?? ''}
+        draftKey={wordsKey}
         onSend={(t) => answer({ text: t })}
         autoFocus={!found.options.length && !failure}
       />
@@ -199,10 +222,12 @@ function WordsAnswer({ alert, failure, onSend, sessionId }: FormProps & { sessio
   // A failed session: its probe says so, or the task's status names the failure as its ask.
   const failed = alert.kind === 'error' || alert.source === 'error';
   if (!sessionId) return <div className="org-answer-note">It has no session to answer. Open it to start one.</div>;
+  const wordsKey = sessionDraftKey(sessionId);
   const reply = (text: string) => {
     const settle = onSend();
     void send(sessionId, text).catch(() => false).then((ok) => {
       log.info('org-page', 'org alert answered', { taskId: alert.taskId, shape: 'words', sessionId, ok });
+      if (ok) clearDraft(wordsKey);
       settle(ok ? undefined : { message: 'Not sent. Try again.', draft: text });
     });
   };
@@ -222,7 +247,7 @@ function WordsAnswer({ alert, failure, onSend, sessionId }: FormProps & { sessio
       {failed && (
         <Options testId="org-answer-retry" options={[{ value: 'retry', label: 'Retry', title: 'Start the failed session again' }]} onPick={retry} />
       )}
-      <WordsField placeholder={failed ? 'Or tell it what to do' : 'Your answer'} initial={failure?.draft ?? ''} onSend={reply} autoFocus={!failure} />
+      <WordsField placeholder={failed ? 'Or tell it what to do' : 'Your answer'} initial={failure?.draft ?? ''} draftKey={wordsKey} onSend={reply} autoFocus={!failure} />
       <Failed failure={failure} />
     </>
   );

@@ -142,7 +142,7 @@ export function TodoSearchBar({
   return (
     <div className="todo-search-bar">
       <span className="todo-search-icon">{ICON_SEARCH}</span>
-      <input
+      <input data-no-draft="search"
         ref={inputRef}
         type={phone ? 'search' : 'text'}
         enterKeyHint={phone ? 'search' : undefined}

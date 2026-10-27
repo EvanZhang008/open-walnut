@@ -114,7 +114,7 @@ export function SessionSearchPanel({ open, onClose, onOpenSession }: SessionSear
     <div className="session-search-panel" ref={panelRef}>
       <div className="session-search-input-row">
         <span className="session-search-icon">{ICON_SEARCH}</span>
-        <input
+        <input data-no-draft="search"
           ref={inputRef}
           type="text"
           className="session-search-input"

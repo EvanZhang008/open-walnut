@@ -1,6 +1,8 @@
 import { useState, useCallback, useRef } from 'react';
 import { MicField, type BoxMicHandle } from '@/components/common/BoxMic';
 import type { CommandDef } from '@/api/commands';
+import { useDraft } from '@/hooks/useDraft';
+import { draftKey } from '@/utils/drafts';
 
 interface CommandFormProps {
   command?: CommandDef;
@@ -10,9 +12,17 @@ interface CommandFormProps {
 
 export function CommandForm({ command, onSave, onCancel }: CommandFormProps) {
   const isEditing = !!command;
-  const [name, setName] = useState(command?.name ?? '');
-  const [description, setDescription] = useState(command?.description ?? '');
-  const [content, setContent] = useState(command?.content ?? '');
+  // Each field is a draft of this command (or of the new one) until Create/Update or Cancel.
+  const formId = command?.name ?? 'new';
+  const nameDraft = useDraft(draftKey('command-form', formId, 'name'), { baseline: command?.name ?? '' });
+  const descDraft = useDraft(draftKey('command-form', formId, 'description'), { baseline: command?.description ?? '' });
+  const contentDraft = useDraft(draftKey('command-form', formId, 'content'), { baseline: command?.content ?? '' });
+  const { text: name, setText: setName, clear: clearName } = nameDraft;
+  const { text: description, setText: setDescription, clear: clearDesc } = descDraft;
+  const { text: content, setText: setContent, clear: clearContent } = contentDraft;
+  const clearDrafts = useCallback((keys?: Array<string | null>) => {
+    [clearName, clearDesc, clearContent].forEach((clear, i) => clear(keys ? keys[i] : undefined));
+  }, [clearName, clearDesc, clearContent]);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const contentRef = useRef<HTMLTextAreaElement | null>(null);
@@ -36,6 +46,7 @@ export function CommandForm({ command, onSave, onCancel }: CommandFormProps) {
     }
 
     setSaving(true);
+    const sentKeys = [nameDraft.key, descDraft.key, contentDraft.key];
     try {
       // A transcription still on its way lands after the save, unsaved: drop it now.
       mic.current?.clear();
@@ -44,12 +55,13 @@ export function CommandForm({ command, onSave, onCancel }: CommandFormProps) {
         content: content.trim(),
         description: description.trim() || undefined,
       });
+      clearDrafts(sentKeys);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setSaving(false);
     }
-  }, [name, description, content, onSave]);
+  }, [name, description, content, onSave, nameDraft.key, descDraft.key, contentDraft.key, clearDrafts]);
 
   return (
     <form onSubmit={handleSubmit} className="cmd-form card">
@@ -63,6 +75,7 @@ export function CommandForm({ command, onSave, onCancel }: CommandFormProps) {
             <label htmlFor="cmd-name">Name</label>
             <input
               id="cmd-name"
+              data-draft-key={nameDraft.key ?? undefined}
               type="text"
               className="font-mono"
               value={name}
@@ -75,6 +88,7 @@ export function CommandForm({ command, onSave, onCancel }: CommandFormProps) {
             <label htmlFor="cmd-desc">Description</label>
             <input
               id="cmd-desc"
+              data-draft-key={descDraft.key ?? undefined}
               type="text"
               value={description}
               onChange={(e) => setDescription(e.target.value)}
@@ -91,6 +105,7 @@ export function CommandForm({ command, onSave, onCancel }: CommandFormProps) {
             <textarea
               ref={contentRef}
               id="cmd-content"
+              data-draft-key={contentDraft.key ?? undefined}
               className="font-mono cmd-form-textarea"
               value={content}
               onChange={(e) => setContent(e.target.value)}
@@ -102,7 +117,7 @@ export function CommandForm({ command, onSave, onCancel }: CommandFormProps) {
       </div>
 
       <div className="form-actions">
-        <button type="button" className="btn" onClick={onCancel}>
+        <button type="button" className="btn" onClick={() => { clearDrafts(); onCancel(); }}>
           Cancel
         </button>
         <button type="submit" className="btn btn-primary" disabled={saving}>

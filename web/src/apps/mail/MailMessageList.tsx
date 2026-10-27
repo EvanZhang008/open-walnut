@@ -184,6 +184,7 @@ export function MailMessageList({ snapshot, narrow, onShowMailboxes }: Props) {
         >
           <span className="mail-search-glyph" aria-hidden="true"><SearchIcon size={13} /></span>
           <input
+            data-no-draft="search"
             className="mail-search-input"
             data-testid="mail-search-input"
             type="search"

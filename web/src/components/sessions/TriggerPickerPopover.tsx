@@ -8,6 +8,8 @@
  * pointerdown or Escape closes it. Its height is capped by the placement and it
  * scrolls itself, so a long template or option list never pushes it off screen.
  */
+import { useDraft, useDraftValue } from '@/hooks/useDraft';
+import { draftKey } from '@/utils/drafts';
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import {
@@ -208,6 +210,8 @@ function TriggerList({ loaded, onRetry, onPick, onDescribe, onIdea }: {
   );
 }
 
+const EMPTY_PARAMS = { values: {}, shown: {} };
+
 function TemplateForm({ template, taskId, sessionId, onHandoff, onDone }: {
   template: TriggerTemplate;
   taskId: string;
@@ -215,9 +219,12 @@ function TemplateForm({ template, taskId, sessionId, onHandoff, onDone }: {
   onHandoff: (params: Record<string, string>) => void;
   onDone: () => void;
 }) {
-  const [values, setValues] = useState<Record<string, string>>({});
-  const [shown, setShown] = useState<Record<string, string>>({});
-  const [prompt, setPrompt] = useState('');
+  // What is filled in stays until the trigger is armed: closing the picker keeps it.
+  const params = useDraftValue<{ values: Record<string, string>; shown: Record<string, string> }>(
+    draftKey('trigger-form', taskId, template.id), EMPTY_PARAMS);
+  const { values, shown } = params.value;
+  const promptDraft = useDraft(draftKey('trigger-form', taskId, template.id, 'prompt'));
+  const { text: prompt, setText: setPrompt } = promptDraft;
   const [every, setEvery] = useState(template.every);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -229,8 +236,7 @@ function TemplateForm({ template, taskId, sessionId, onHandoff, onDone }: {
   useEffect(() => { firstRef.current?.focus({ preventScroll: true }); }, []);
 
   const set = (key: string, value: string, label = value) => {
-    setValues((v) => ({ ...v, [key]: value }));
-    setShown((s) => ({ ...s, [key]: label }));
+    params.setValue((p) => ({ values: { ...p.values, [key]: value }, shown: { ...p.shown, [key]: label } }));
     setError(null);
   };
 
@@ -241,7 +247,11 @@ function TemplateForm({ template, taskId, sessionId, onHandoff, onDone }: {
     try {
       // A transcription still on its way lands after the save, unsaved: drop it now.
       promptMic.current?.clear();
+      const paramsKey = params.key;
+      const promptKey = promptDraft.key;
       const result = await createTemplateTrigger({ template: template.id, params: values, taskId, every, prompt });
+      params.clear(paramsKey);
+      promptDraft.clear(promptKey);
       log.info('trigger', 'template trigger created from composer', { sessionId, taskId, template: template.id, jobId: result.id });
       onRoutinesChanged();
       setCreated(result);
@@ -278,6 +288,7 @@ function TemplateForm({ template, taskId, sessionId, onHandoff, onDone }: {
           value={shown[param.key] ?? ''}
           onType={(text) => set(param.key, text)}
           onChoose={(option) => set(param.key, option.value, option.label)}
+          draftKey={params.key}
         />
       ))}
       <label className="trigger-picker-field">
@@ -286,6 +297,7 @@ function TemplateForm({ template, taskId, sessionId, onHandoff, onDone }: {
           <textarea
             ref={promptBox}
             className="trigger-picker-input"
+            data-draft-key={promptDraft.key ?? undefined}
             rows={2}
             value={prompt}
             placeholder="What the AI should do with each new item, e.g. summarize it and tell me if it needs me"
@@ -329,7 +341,8 @@ function TemplateForm({ template, taskId, sessionId, onHandoff, onDone }: {
   );
 }
 
-function ParamField({ param, template, value, inputRef, onType, onChoose }: {
+function ParamField({ param, template, value, inputRef, onType, onChoose, draftKey: formKey }: {
+  draftKey: string | null;
   param: TriggerTemplateParam;
   template: string;
   value: string;
@@ -376,6 +389,7 @@ function ParamField({ param, template, value, inputRef, onType, onChoose }: {
           id={`tp-${template}-${param.key}`}
           ref={inputRef}
           className="trigger-picker-input"
+          data-draft-key={formKey ?? undefined}
           value={value}
           placeholder={param.placeholder}
           autoComplete="off"

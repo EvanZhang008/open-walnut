@@ -1,4 +1,6 @@
 import { memo, useEffect, useMemo, useRef, useState, useCallback, type ReactNode, type ReactElement, type MouseEvent as ReactMouseEvent } from 'react';
+import { useDraft } from '@/hooks/useDraft';
+import { draftHash, draftKey } from '@/utils/drafts';
 import { usePhoneLayout } from '@/hooks/usePhoneLayout';
 import {
   Diff, Hunk, Decoration, tokenize, markEdits, useSourceExpansion,
@@ -300,8 +302,10 @@ function TreeRow({
  *    immediately (the old behavior), bypassing the batch.
  * ⌘/Ctrl+Enter = Add (the default); ⌘/Ctrl+Shift+Enter = Send now.
  */
-function CommentBox({ loc, onAdd, onSendNow, onCancel, onDirtyChange }: {
+function CommentBox({ loc, keepKey, onAdd, onSendNow, onCancel, onDirtyChange }: {
   loc: string;
+  /** Where the half-typed comment is kept (per session and line) until it is added, sent or cancelled. */
+  keepKey: string;
   onAdd: (text: string) => void;
   onSendNow: (text: string) => void;
   onCancel: () => void;
@@ -310,21 +314,26 @@ function CommentBox({ loc, onAdd, onSendNow, onCancel, onDirtyChange }: {
    *  comment is never silently discarded — the user must Add / Send now / Cancel. */
   onDirtyChange?: (dirty: boolean) => void;
 }) {
-  const [text, setText] = useState('');
+  const draft = useDraft(keepKey);
+  const { text, setText } = draft;
   const ref = useRef<HTMLTextAreaElement>(null);
   const mic = useRef<BoxMicHandle | null>(null);
   useEffect(() => { ref.current?.focus(); }, []);
+  // Kept words reopen the box dirty, so the lock holds them as it holds fresh typing.
+  useEffect(() => { if (draft.text.trim()) onDirtyChange?.(true); }, []); // eslint-disable-line react-hooks/exhaustive-deps
   // Clear the dirty lock when this box goes away (Add / Send / Cancel / file switch).
   useEffect(() => () => onDirtyChange?.(false), [onDirtyChange]);
   const update = (v: string) => { setText(v); onDirtyChange?.(v.trim().length > 0); };
-  const add = () => { const t = text.trim(); if (t) { mic.current?.clear(); onAdd(t); } };
-  const sendNow = () => { const t = text.trim(); if (t) { mic.current?.clear(); onSendNow(t); } };
+  const add = () => { const t = text.trim(); if (t) { mic.current?.clear(); draft.clear(); onAdd(t); } };
+  const sendNow = () => { const t = text.trim(); if (t) { mic.current?.clear(); draft.clear(); onSendNow(t); } };
+  const cancel = () => { draft.clear(); onCancel(); };
   return (
     <div className="session-diff-comment-box">
       <div className="session-diff-comment-loc">{loc}</div>
       <textarea
         ref={ref}
         className="session-diff-comment-input"
+        data-draft-key={draft.key ?? undefined}
         placeholder="Leave a comment… (⌘/Ctrl+Enter to add, +Shift to send now)"
         value={text}
         onChange={(e) => update(e.target.value)}
@@ -332,6 +341,7 @@ function CommentBox({ loc, onAdd, onSendNow, onCancel, onDirtyChange }: {
           if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
             e.preventDefault();
             if (e.shiftKey) sendNow(); else add();
+          // Esc closes the box and keeps its words (they come back on this line); Cancel drops them.
           } else if (e.key === 'Escape') { e.preventDefault(); onCancel(); }
           e.stopPropagation();
         }}
@@ -339,7 +349,7 @@ function CommentBox({ loc, onAdd, onSendNow, onCancel, onDirtyChange }: {
       />
       <div className="session-diff-comment-actions">
         <BoxMic boxRef={ref} text={text} setText={update} handleRef={mic} />
-        <button className="session-diff-comment-cancel" onMouseDown={(e) => e.preventDefault()} onClick={onCancel}>Cancel</button>
+        <button className="session-diff-comment-cancel" onMouseDown={(e) => e.preventDefault()} onClick={cancel}>Cancel</button>
         <button className="session-diff-comment-sendnow" onMouseDown={(e) => e.preventDefault()} onClick={sendNow} disabled={!text.trim()} title="Send this one comment to the agent right now">Send now</button>
         <button className="session-diff-comment-add" onMouseDown={(e) => e.preventDefault()} onClick={add} disabled={!text.trim()} title="Record this comment; submit the whole review at the end">Add comment</button>
       </div>
@@ -985,7 +995,7 @@ export const FileDiffPane = memo(function FileDiffPane({
             />
           ))}
           {draftHere && (
-            <CommentBox loc={draft!.loc} onAdd={addDraft} onSendNow={sendDraftNow} onCancel={cancelDraft} onDirtyChange={onDraftDirtyChange} />
+            <CommentBox loc={draft!.loc} keepKey={draftKey('diff-comment', sessionId, draftHash(draft!.loc))} onAdd={addDraft} onSendNow={sendDraftNow} onCancel={cancelDraft} onDirtyChange={onDraftDirtyChange} />
           )}
         </>
       );
@@ -993,7 +1003,7 @@ export const FileDiffPane = memo(function FileDiffPane({
     // Draft anchored on a line that has no recorded comments yet.
     if (draft && !byAnchor.has(draft.anchorKey)) {
       map[draft.anchorKey] = (
-        <CommentBox loc={draft.loc} onAdd={addDraft} onSendNow={sendDraftNow} onCancel={cancelDraft} onDirtyChange={onDraftDirtyChange} />
+        <CommentBox loc={draft.loc} keepKey={draftKey('diff-comment', sessionId, draftHash(draft.loc))} onAdd={addDraft} onSendNow={sendDraftNow} onCancel={cancelDraft} onDirtyChange={onDraftDirtyChange} />
       );
     }
     return Object.keys(map).length ? map : undefined;
@@ -1074,7 +1084,7 @@ export const FileDiffPane = memo(function FileDiffPane({
           />
         ))}
         {draftHere && (
-          <CommentBox loc={draft!.loc} onAdd={addDraft} onSendNow={sendDraftNow} onCancel={cancelDraft} onDirtyChange={onDraftDirtyChange} />
+          <CommentBox loc={draft!.loc} keepKey={draftKey('diff-comment', sessionId, draftHash(draft!.loc))} onAdd={addDraft} onSendNow={sendDraftNow} onCancel={cancelDraft} onDirtyChange={onDraftDirtyChange} />
         )}
       </RenderedMarkdownRow>
     );

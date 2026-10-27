@@ -12,6 +12,8 @@
  * the model's draft; the model can take up to 12 s and the local drafts must be clickable long before
  * that (C28).
  */
+import { useDraftValue } from '@/hooks/useDraft';
+import { draftKey } from '@/utils/drafts';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
@@ -101,6 +103,8 @@ export function pushLearnedUndo(input: {
 
 type Step = 'where' | 'rule';
 
+const EMPTY_WORDS = { newName: '', note: '' };
+
 export function MailCorrectPopover({ request }: { request: MailCorrectRequest }) {
   const cardRef = useRef<HTMLDivElement>(null);
   const anchorRef = useRef<HTMLElement | null>(request.anchor);
@@ -114,8 +118,11 @@ export function MailCorrectPopover({ request }: { request: MailCorrectRequest })
   const [step, setStep] = useState<Step>('where');
   // The destination the menu item named is picked when the card opens: that was the request.
   const [choice, setChoice] = useState<string | null>(request.preset ?? null);
-  const [newName, setNewName] = useState('');
-  const [note, setNote] = useState('');
+  // The new group's name and the "why" are kept per message until the rule is saved (closing keeps them).
+  const words = useDraftValue(draftKey('mail-correct', request.accountId, request.messageId), EMPTY_WORDS);
+  const { newName, note } = words.value;
+  const setNewName = (v: string) => words.setValue((w) => ({ ...w, newName: v }));
+  const setNote = (v: string) => words.setValue((w) => ({ ...w, note: v }));
   const [local, setLocal] = useState<MailProposeResponse | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [model, setModel] = useState<MailProposeResponse['model'] | null>(null);
@@ -249,8 +256,10 @@ export function MailCorrectPopover({ request }: { request: MailCorrectRequest })
     const doc = withLearnedRule(docOf(rules), {
       rule: option, note, id, created: todayIso(), newGroup: createdGroup, insertAt: kept.get(option.key),
     });
+    const wordsKey = words.key;
     try {
       const saved = await putMailRules({ ...doc, baseRev: rules.fileRev, touch: { accountId: request.accountId, messageId: request.messageId } });
+      words.clear(wordsKey);
       pushLearnedUndo({
         statusId: `rule-saved:${id}`,
         viewKey: request.viewKey,
@@ -328,7 +337,8 @@ export function MailCorrectPopover({ request }: { request: MailCorrectRequest })
       newNameProblem={problem}
       note={note}
       onNote={setNote}
-      onCancel={() => close(true)}
+      draftKey={words.key}
+      onCancel={() => { words.clear(); close(true); }}
       onNext={() => { setStep('rule'); void propose(); }}
     />
   ) : (

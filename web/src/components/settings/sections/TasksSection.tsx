@@ -135,6 +135,7 @@ export function TasksSection({ config, onSave, onReload }: Props) {
               <input
                 id="settings-project"
                 type="text"
+                data-no-draft="autosave"
                 className="settings-input settings-input--short"
                 placeholder="Inbox"
                 list="settings-project-options"

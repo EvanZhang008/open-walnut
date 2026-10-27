@@ -250,7 +250,7 @@ export const CollapsibleUrlEditor = forwardRef<CollapsibleUrlEditorHandle, Colla
     }), []);
 
     return (
-      <div
+      <div data-no-draft="autosave"
         ref={rootRef}
         className={className}
         // plaintext-only blocks rich insertions in Chrome/Safari; unsupporting

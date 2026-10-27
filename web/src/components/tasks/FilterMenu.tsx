@@ -260,7 +260,7 @@ export function PanelMenu({ filters: c, display: d, flashOption }: PanelMenuProp
     >
       <div className="fb-search fb-menu-search">
         <span className="fb-search-icon" aria-hidden="true">{ICON_SEARCH}</span>
-        <input
+        <input data-no-draft="search"
           ref={inputRef}
           type="text"
           className="fb-search-input"

@@ -209,6 +209,7 @@ export function SessionsSection({ config, onSave }: Props) {
           control={
             <input
               id="session-reply-language"
+              data-no-draft="autosave"
               data-testid="session-reply-language"
               type="text"
               className="settings-input settings-input--long"

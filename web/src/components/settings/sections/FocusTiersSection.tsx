@@ -33,6 +33,8 @@ import {
   ICON_TIER_CUSTOM,
 } from '@/components/common/Icons';
 import { useConfirm } from '@/hooks/useConfirm';
+import { useDraft } from '@/hooks/useDraft';
+import { draftKey } from '@/utils/drafts';
 import { useFocusBarContextSafe } from '@/contexts/FocusBarContext';
 
 const BUILTIN_ROWS = [
@@ -50,7 +52,9 @@ export function FocusTiersSection() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [newLabel, setNewLabel] = useState('');
+  // A tier name typed and not added yet survives leaving the pane; a successful Add ends it.
+  const newTier = useDraft(draftKey('focus-tier', 'new'));
+  const { text: newLabel, setText: setNewLabel } = newTier;
   const [busy, setBusy] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editValue, setEditValue] = useState('');
@@ -82,10 +86,11 @@ export function FocusTiersSection() {
     setBusy(true);
     setError(null);
     setNotice(null);
+    const sentKey = newTier.key;
     try {
       const res = await track(createCustomTier(label));
       setTiers(res.tiers);
-      setNewLabel('');
+      newTier.clear(sentKey);
     } catch (err) {
       // Server rejections (duplicate label, tier cap) arrive as {error} to message.
       setError(err instanceof Error ? err.message : String(err));
@@ -184,6 +189,7 @@ export function FocusTiersSection() {
                     <span className="focus-tiers-icon todo-tier-icon-custom" aria-hidden="true">{ICON_TIER_CUSTOM}</span>
                     {editingId === t.id ? (
                       <input
+                        data-no-draft="rename"
                         className="focus-tiers-edit-input settings-input settings-input--short"
                         aria-label={`Rename ${t.label}`}
                         value={editValue}
@@ -222,6 +228,7 @@ export function FocusTiersSection() {
                   <input
                     id="focus-tiers-new"
                     type="text"
+                    data-draft-key={newTier.key ?? undefined}
                     className="settings-input settings-input--short"
                     value={newLabel}
                     maxLength={LABEL_MAX}

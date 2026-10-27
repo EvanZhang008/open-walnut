@@ -480,7 +480,7 @@ export function DashboardPage() {
               )}
             </>
           )}
-          <input
+          <input data-no-draft="search"
             className="tp-search"
             type="search"
             placeholder="Search tasks…"

@@ -3,10 +3,28 @@ import { quickParseTask, type QuickTaskParse } from '@/api/tasks';
 import { useQuickParseEnabled, ensureQuickParseLoaded } from '@/hooks/useQuickParse';
 import { QuickTaskConfirm, type ConfirmDraft, type ConfirmField } from './QuickTaskConfirm';
 import { MicField, type BoxMicHandle } from '@/components/common/BoxMic';
+import { useDraftClaim } from '@/hooks/useDraft';
+import { clearDraft, draftKey, readDraftJson, writeDraftJson } from '@/utils/drafts';
 import '@/styles/task-mic.css';
 
 /** Built-in tier name or a custom tier id (`ct_*`). */
 type PinTier = string;
+
+/**
+ * The sentence and the form are one draft (utils/drafts.ts): closing the panel
+ * (Esc, a click outside) keeps them, a reload or a restart brings them back,
+ * and only a created task clears them.
+ */
+const QUICK_TASK_DRAFT = draftKey('quick-task', 'composer');
+interface StoredQuickTask {
+  text: string;
+  draft: Omit<ConfirmDraft, 'aiFields'> & { aiFields: ConfirmField[] };
+  edited: ConfirmField[];
+}
+function readStoredQuickTask(): StoredQuickTask | undefined {
+  const v = readDraftJson<StoredQuickTask>(QUICK_TASK_DRAFT);
+  return v && typeof v.text === 'string' && v.draft && typeof v.draft.title === 'string' ? v : undefined;
+}
 
 interface Props {
   open: boolean;
@@ -51,8 +69,11 @@ export function QuickTaskComposer({ open, onClose, onCreate, projectOptions, ini
     due: initialDatesRef.current?.due,
   }), []);
 
-  const [text, setText] = useState('');
-  const [draft, setDraft] = useState<ConfirmDraft>(emptyDraft);
+  const [stored] = useState(readStoredQuickTask);
+  const [text, setText] = useState(stored?.text ?? '');
+  const [draft, setDraft] = useState<ConfirmDraft>(() => (stored
+    ? { ...stored.draft, aiFields: new Set(Array.isArray(stored.draft.aiFields) ? stored.draft.aiFields : []) }
+    : emptyDraft()));
   const [parseInFlight, setParseInFlight] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   // `agent.quick_parse`. The toggle lives in the draft composer's "+" menu; this
@@ -68,11 +89,20 @@ export function QuickTaskComposer({ open, onClose, onCreate, projectOptions, ini
   const requestNonceRef = useRef(0);
   // Fields the user hand-edited — neither the sentence mirror nor a late AI
   // result may overwrite these.
-  const userEditedRef = useRef(new Set<ConfirmField>());
+  const userEditedRef = useRef(new Set<ConfirmField>(Array.isArray(stored?.edited) ? stored.edited : []));
 
   textRef.current = text;
   draftRef.current = draft;
   submittingRef.current = submitting;
+
+  // Every change is kept at once; an empty panel keeps nothing.
+  useEffect(() => {
+    if (!text.trim() && !draft.title.trim()) { clearDraft(QUICK_TASK_DRAFT); return; }
+    writeDraftJson(QUICK_TASK_DRAFT, {
+      text, draft: { ...draft, aiFields: [...draft.aiFields] }, edited: [...userEditedRef.current],
+    } satisfies StoredQuickTask);
+  }, [text, draft]);
+  useDraftClaim(QUICK_TASK_DRAFT);
 
   const reset = useCallback(() => {
     mic.current?.clear();
@@ -85,11 +115,11 @@ export function QuickTaskComposer({ open, onClose, onCreate, projectOptions, ini
     setParseInFlight(false);
   }, [emptyDraft]);
 
+  // Closing keeps what was typed (the draft); only a created task clears it.
   const close = useCallback(() => {
     if (submittingRef.current) return;
-    reset();
     onClose();
-  }, [onClose, reset]);
+  }, [onClose]);
 
   useEffect(() => {
     if (!open) return;
@@ -97,9 +127,10 @@ export function QuickTaskComposer({ open, onClose, onCreate, projectOptions, ini
     return () => clearTimeout(timer);
   }, [open]);
 
+  // An opening with nothing typed starts from this opening's seeds (the calendar slot clicked).
   useEffect(() => {
-    if (open) return;
-    reset();
+    if (!open) return;
+    if (!textRef.current.trim() && !draftRef.current.title.trim()) reset();
   }, [open, reset]);
 
   useEffect(() => {
@@ -305,6 +336,7 @@ export function QuickTaskComposer({ open, onClose, onCreate, projectOptions, ini
         <input
           ref={inputRef}
           className="qtc-input"
+          data-draft-key={QUICK_TASK_DRAFT}
           value={text}
           maxLength={500}
           autoFocus={open}
@@ -327,6 +359,7 @@ export function QuickTaskComposer({ open, onClose, onCreate, projectOptions, ini
         submitting={submitting}
         onChange={handleDraftChange}
         onCreate={() => create(draftRef.current)}
+        draftKey={QUICK_TASK_DRAFT}
       />
     </div>
   );

@@ -1,4 +1,6 @@
 import { useRef, useState } from 'react';
+import { useDraft } from '@/hooks/useDraft';
+import { draftKey } from '@/utils/drafts';
 import { MicField, type BoxMicHandle } from '@/components/common/BoxMic';
 import { draftRoutine } from '@/api/routines';
 import type { CreateRoutineInput } from '@/api/routines';
@@ -31,7 +33,8 @@ interface RoutineComposerProps {
 }
 
 export function RoutineComposer({ onDraft, onDraftFailed, onManual }: RoutineComposerProps) {
-  const [text, setText] = useState('');
+  const words = useDraft(draftKey('routine-ask', 'new'));
+  const { text, setText } = words;
   const [drafting, setDrafting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const boxRef = useRef<HTMLTextAreaElement | null>(null);
@@ -42,7 +45,9 @@ export function RoutineComposer({ onDraft, onDraftFailed, onManual }: RoutineCom
     setDrafting(true);
     setError(null);
     try {
+      const sentKey = words.key;
       const draft = await draftRoutine(text);
+      words.clear(sentKey);
       mic.current?.clear();
       onDraft(draft);
     } catch (err) {
@@ -60,6 +65,7 @@ export function RoutineComposer({ onDraft, onDraftFailed, onManual }: RoutineCom
         <textarea
           ref={boxRef}
           className="routine-composer-input"
+          data-draft-key={words.key ?? undefined}
           value={text}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => {

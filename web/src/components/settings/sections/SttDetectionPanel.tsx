@@ -339,11 +339,11 @@ export function SttDetectionPanel({ config, onSave, onConfigured, draft, onDraft
             <SecretInput id="stt-openai-key" value={draft.openaiApiKey} onChange={(v) => onDraft({ openaiApiKey: v })} placeholder="sk-... or ${env:OPENAI_API_KEY}" />
           } />
           <SettingsRow indent wide label="Base URL" htmlFor="stt-openai-url" control={
-            <input id="stt-openai-url" type="text" className="settings-input settings-input--long settings-input--mono" spellCheck={false}
+            <input id="stt-openai-url" type="text" data-no-draft="autosave" className="settings-input settings-input--long settings-input--mono" spellCheck={false}
               value={draft.openaiBaseUrl} onChange={(e) => onDraft({ openaiBaseUrl: e.target.value })} />
           } />
           <SettingsRow indent wide label="Transcription model" htmlFor="stt-openai-model" control={
-            <input id="stt-openai-model" type="text" className="settings-input settings-input--long settings-input--mono" spellCheck={false}
+            <input id="stt-openai-model" type="text" data-no-draft="autosave" className="settings-input settings-input--long settings-input--mono" spellCheck={false}
               value={draft.openaiModel} onChange={(e) => onDraft({ openaiModel: e.target.value })} />
           } />
         </>

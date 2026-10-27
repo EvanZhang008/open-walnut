@@ -38,6 +38,7 @@ export const GhostTextInput = forwardRef<HTMLInputElement, Props>(function Ghost
         </div>
       )}
       <input
+        data-no-draft="picker"
         ref={ref}
         className={`sps-search-input${editing ? ' editing' : ''}${ghost ? ' has-ghost' : ''}`}
         type="text"

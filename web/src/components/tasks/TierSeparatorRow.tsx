@@ -61,7 +61,7 @@ function SeparatorLabel({ id, label, onRename }: {
         // reaches them starts a keyboard DRAG instead of submitting the name.
         onPointerDown={(e) => e.stopPropagation()} draggable={false}
         onDragStart={(e) => { e.preventDefault(); e.stopPropagation(); }}>
-        <input ref={inputRef} className="tier-separator-label-input" defaultValue={label ?? ''}
+        <input data-no-draft="rename" ref={inputRef} className="tier-separator-label-input" defaultValue={label ?? ''}
           placeholder="Heading…" autoFocus
           onBlur={commit}
           onKeyDown={(e) => {

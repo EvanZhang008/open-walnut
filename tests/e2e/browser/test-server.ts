@@ -36,6 +36,9 @@ process.env.WALNUT_DAEMON_DIR = path.join(tmpBase, 'daemon')
 process.env.WALNUT_SPAWN_JOURNAL = path.join(tmpBase, 'spawn-journal.jsonl')
 process.env.WALNUT_STREAMS_DIR = path.join(tmpBase, 'daemon-streams')
 process.env.WALNUT_DISABLE_SEARCH = '1'
+// Every spec's new browser starts with no drafts: only a spec that sends the
+// mirror header shares drafts through the server (src/web/routes/drafts.ts).
+process.env.WALNUT_DRAFTS_MIRROR = 'opt-in'
 // A low full-read ceiling so a ~17 MB fixture transcript is a "whale" (served as a
 // 4 MB tail, never read whole) without writing 40 MB on every boot.
 process.env.WALNUT_MAX_FILE_READ_BYTES = String(WHALE_CEILING_BYTES)

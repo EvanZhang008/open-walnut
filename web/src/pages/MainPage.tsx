@@ -80,12 +80,14 @@ import {
   realColumnCount,
   addSessionColumn,
   forceAddSessionColumn,
+  withDraftSlots,
   removeSessionColumn,
   replaceSessionColumn,
   toggleLockSlot,
 } from './sessionColumns';
 import { useColumnCompleteClose } from './useColumnCompleteClose';
 import { isDraftColumnId, isPendingColumnId, isPlaceholderColumnId, DRAFT_COL_PREFIX } from '@/utils/column-ids';
+import { restoreDraftColumns, saveDraftColumns } from '@/components/sessions/draft-column-persist';
 import { reconcileActiveSession } from '@/stores/active-session';
 import { loadColWeights, saveColWeights, resizeAtBoundary } from './columnSizing';
 import {
@@ -497,14 +499,24 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   const closeCompanion = useCallback(() => closeCompanionPane(setCalendarVisible, 'sidebar-toggle-calendar'), [closeCompanionPane]);
   const closeScratchpad = useCallback(() => closeCompanionPane(setScratchpadVisible, 'sidebar-toggle-scratchpad'), [closeCompanionPane]);
 
+  // New-session drafts whose composer still holds words come back in their
+  // slots (draft-column-persist.ts); read once, before either list's first render.
+  const [restoredDrafts] = useState(() => restoreDraftColumns((id) => ({
+    id, cwd: '', host: null, openedCwd: '', openedHost: null, meta: freshLauncherMeta(),
+  })));
   // Session columns state — up to 2 sessions displayed side by side
-  const [sessionColumns, setSessionColumns] = useState<SessionSlot[]>(loadSessionColumns);
+  const [sessionColumns, setSessionColumns] = useState<SessionSlot[]>(
+    () => restoredDrafts.reduce((cols, d) => forceAddSessionColumn(cols, d.id), loadSessionColumns()),
+  );
 
   // ── Draft session columns ("+" → an empty column, zero network) ──
   // The DraftColumn rows are the ONLY home of a draft's cwd/host/project/meta;
   // sessionColumns just carries the `draft:` id that keys the strip slot. Both
   // must be mutated together (open / close / Start).
-  const [draftColumns, setDraftColumns] = useState<DraftColumn[]>([]);
+  const [draftColumns, setDraftColumns] = useState<DraftColumn[]>(() => restoredDrafts);
+  // Each live draft's row is kept beside its words; a closed or started draft's row goes.
+  const keptDraftRowsRef = useRef(new Set(restoredDrafts.map(d => d.id)));
+  useEffect(() => { saveDraftColumns(draftColumns, keptDraftRowsRef.current); }, [draftColumns]);
   // Ref mirror so handlers can read the current drafts synchronously without
   // being re-created on every draft edit (same pattern as sessionColumnsRef).
   const draftColumnsRef = useRef(draftColumns);
@@ -859,7 +871,9 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
         // Same rationale as the visibility restore below: don't truncate a deep
         // link against the pre-config default panel count.
         const cols = p.sessionIds.map(id => ({ id, locked: lockedById.get(id) ?? false }));
-        setSessionColumns(panelModeLoadedRef.current ? fitRestoredColumns(cols, maxPanelsRef.current) : cols);
+        const fitted = panelModeLoadedRef.current ? fitRestoredColumns(cols, maxPanelsRef.current) : cols;
+        // The URL never names a new-session draft: one kept with its words keeps its slot.
+        setSessionColumns(prev => withDraftSlots(fitted, prev.filter(s => isDraftColumnId(s.id)).map(s => s.id)));
       }
       if (p.project !== null) setActiveProject(p.project);
       urlSync.clearPending();
@@ -897,8 +911,9 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       // Truncate only once the real panel setting is known — see the eviction
       // effect. Restoring un-truncated is safe: that effect trims as soon as the
       // config settles, whereas truncating early loses a column permanently.
-      if (restored.length > 0) {
-        setSessionColumns(panelModeLoadedRef.current ? fitRestoredColumns(restored, maxPanelsRef.current) : restored);
+      const drafts = draftColumnsRef.current.map(d => d.id);
+      if (restored.length > 0 || drafts.length > 0) {
+        setSessionColumns(withDraftSlots(panelModeLoadedRef.current ? fitRestoredColumns(restored, maxPanelsRef.current) : restored, drafts));
       }
     }
     // visible/tasks/focusedTask/sessionColumns are intentional — this effect only fires
@@ -1496,18 +1511,10 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     }));
   });
 
-  // One-time sweep of orphaned composer drafts. Draft ids are timestamped, so a
-  // key from a previous page load can never be reached again — without this the
-  // user's unsent text would accumulate in localStorage forever.
+  // Drafts without words were swept by restoreDraftColumns at mount; one with
+  // words came back as a column, so no draft text is thrown away on a load.
   useEffect(() => {
     try {
-      const prefix = draftComposerKey('');
-      const stale: string[] = [];
-      for (let i = 0; i < localStorage.length; i++) {
-        const key = localStorage.key(i);
-        if (key?.startsWith(prefix)) stale.push(key);
-      }
-      for (const key of stale) localStorage.removeItem(key);
       // The launcher's retired sticky-tier pref. Swept here rather than left to
       // rot: it is an `open-walnut-` key, so ui-prefs-sync mirrors it, and a value
       // nothing reads would keep syncing between browsers forever. Guarded on

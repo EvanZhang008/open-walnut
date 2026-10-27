@@ -15,6 +15,8 @@ import { SettingsGroup, SettingsRow } from '../../SettingsSection';
 import { SettingsButton } from '../../inputs/SettingsButton';
 import { PairingQrBlock } from './PairingQrBlock';
 import { usePairDevice, type PairingTarget } from './usePairDevice';
+import { useDraft } from '@/hooks/useDraft';
+import { draftKey } from '@/utils/drafts';
 
 interface Props {
   /** Companion hostname, for the copy; pairing itself reads the server's target. */
@@ -23,8 +25,14 @@ interface Props {
 
 export function PairPhoneCard({ domain }: Props) {
   const [targets, setTargets] = useState<PairingTarget[] | null>(null);
-  const [name, setName] = useState('iPhone');
-  const { created, qrDataURL, error, busy, mint, dismiss } = usePairDevice();
+  // A name typed and not paired yet survives leaving the pane; a successful pairing ends it.
+  const nameDraft = useDraft(draftKey('pair-device-name', 'cloud'), { baseline: 'iPhone' });
+  const { text: name, setText: setName } = nameDraft;
+  const { created, qrDataURL, error, busy, mint: mintQr, dismiss } = usePairDevice();
+  const mint = async (args: Parameters<typeof mintQr>[0]) => {
+    const sentKey = nameDraft.key;
+    if (await mintQr(args)) nameDraft.clear(sentKey);
+  };
 
   const loadTargets = useCallback(async () => {
     try {
@@ -61,6 +69,7 @@ export function PairPhoneCard({ domain }: Props) {
               <input
                 id="cloud-pair-name"
                 type="text"
+                data-draft-key={nameDraft.key ?? undefined}
                 className="settings-input settings-input--short"
                 value={name}
                 placeholder="Device name, for example iPhone"

@@ -16,6 +16,7 @@ import { initInputLatencyMonitor } from './utils/input-latency-monitor';
 import { initMainThreadTracer, startPhase, endPhase, tracePhase } from './utils/main-thread-tracer';
 import { publishScrollbarMetrics } from './utils/scrollbar-metrics';
 import { initUiPrefsSync } from './utils/ui-prefs-sync';
+import { initDraftSync } from './utils/drafts';
 import { pressKeepsSelection, selectionIntersects } from './utils/selection-guard';
 import { initSessionStatusStore } from './stores/init-session-status-store';
 import { initRecapTipStore } from './stores/recap-tip-store';
@@ -155,7 +156,8 @@ function bootApp(): void {
   // BEFORE first render — components read them in useState initializers.
   // Never throws; offline just falls back to plain localStorage.
   startPhase('boot:ui-prefs-sync');
-  initUiPrefsSync().finally(() => {
+  // Unsent drafts too (utils/drafts.ts): every box reads its words in a useState initializer.
+  Promise.all([initUiPrefsSync(), initDraftSync()]).finally(() => {
     endPhase('boot:ui-prefs-sync');
     startPhase('boot:react-mount');
     // react-mount phase ends on the first post-render macrotask — everything

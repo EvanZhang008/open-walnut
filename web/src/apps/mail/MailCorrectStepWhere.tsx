@@ -4,6 +4,9 @@
  * Real radios, never a native `<select>` (web/src/AGENTS.md, menus): the list is short and bounded
  * (Important plus the groups), so it stays inline. `Next` is disabled until a destination is chosen,
  * and a new group's name must not collide with one that exists.
+ *
+ * Both boxes are controlled: their words are MailCorrectPopover's draft (`newName`, `note`, kept
+ * under `draftKey` until the rule is saved).
  */
 import { useId, useRef, type RefObject } from 'react';
 import { MicField, type BoxMicHandle } from '@/components/common/BoxMic';
@@ -32,6 +35,8 @@ export interface StepWhereProps {
   onNote: (note: string) => void;
   onCancel: () => void;
   onNext: () => void;
+  /** The owner's draft that keeps both boxes' words. */
+  draftKey: string | null;
 }
 
 export function canGoNext(value: string | null, newNameProblem: string | null): boolean {
@@ -85,6 +90,7 @@ export function MailCorrectStepWhere(props: StepWhereProps) {
         {value === NEW_GROUP_VALUE && (
           <div className="mail-correct-new-group">
             <input
+              data-draft-key={props.draftKey ?? undefined}
               type="text"
               className="mail-correct-input"
               aria-label={COPY.newGroupAria}
@@ -105,6 +111,7 @@ export function MailCorrectStepWhere(props: StepWhereProps) {
       <MicField boxRef={whyRef} text={note} setText={(t) => props.onNote(t.slice(0, MAX_NOTE))} handleRef={mic}>
         <textarea
           ref={whyRef}
+          data-draft-key={props.draftKey ?? undefined}
           id={whyId}
           className="mail-correct-why"
           data-testid="mail-correct-why"

@@ -20,6 +20,8 @@
 import { useEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import { useModalOverlay } from '@/hooks/useModalOverlay';
+import { useDraft } from '@/hooks/useDraft';
+import { draftKey, readDraft } from '@/utils/drafts';
 import {
   mailFailure,
   type AccountSetupField,
@@ -61,6 +63,40 @@ function initialState(fields: AccountSetupField[]): PresetState {
   return { values: initialValues(fields), edited: [], chosen: null };
 }
 
+function accountDraftKey(providerId: string): string {
+  return draftKey('mail-add-account', providerId);
+}
+
+/** The form as kept in the draft store: every value but a password, which is never stored. */
+function keptForm(fields: AccountSetupField[], state: PresetState): string {
+  const plain = (name: string) => fields.some((field) => field.name === name && field.kind !== 'password');
+  const strip = (one: PresetState) => JSON.stringify({
+    values: Object.fromEntries(Object.entries(one.values).filter(([name]) => plain(name))),
+    edited: one.edited.filter(plain),
+    chosen: one.chosen,
+  });
+  const kept = strip(state);
+  return kept === strip(initialState(fields)) ? '' : kept;
+}
+
+/** A provider's form, with what was kept for it typed back in (the password stays empty). */
+function restoredState(fields: AccountSetupField[], stored: string): PresetState {
+  const base = initialState(fields);
+  if (!stored) return base;
+  try {
+    const kept = JSON.parse(stored) as Partial<PresetState>;
+    const values = { ...base.values };
+    for (const field of fields) {
+      const value = kept.values?.[field.name];
+      if (field.kind !== 'password' && typeof value === 'string') values[field.name] = value;
+    }
+    const edited = Array.isArray(kept.edited) ? kept.edited.filter((name) => typeof name === 'string' && name in values) : [];
+    return { values, edited, chosen: typeof kept.chosen === 'string' ? kept.chosen : null };
+  } catch {
+    return base;
+  }
+}
+
 export function AddAccountDialog({ providers, onClose, onAdded }: Props) {
   useModalOverlay(onClose);
   // One provider means there is nothing to choose: skip the picker entirely.
@@ -69,10 +105,20 @@ export function AddAccountDialog({ providers, onClose, onAdded }: Props) {
     () => providers.find((one) => one.id === providerId),
     [providers, providerId],
   );
-  const [state, setState] = useState<PresetState>(
-    () => initialState(providers.length === 1 ? providers[0]!.setupFields : []),
-  );
+  const [state, setState] = useState<PresetState>(() => providers.length === 1
+    ? restoredState(providers[0]!.setupFields, readDraft(accountDraftKey(providers[0]!.id)))
+    : initialState([]));
   const values = state.values;
+  // What was typed is kept per provider until the account is added or Cancel is pressed, so a
+  // dialog closed by Esc or a click outside, or a reload, gives it back. Never the password.
+  const draft = useDraft(providerId ? accountDraftKey(providerId) : null);
+  const keptText = provider ? keptForm(provider.setupFields, state) : null;
+  const { setText: keepText } = draft;
+  useEffect(() => {
+    if (keptText !== null && keptText !== draft.text) keepText(keptText);
+    // Only a change of the form writes; a cleared draft must not be written back.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [keptText, keepText]);
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<{ status: number; message: string } | null>(null);
 
@@ -86,7 +132,7 @@ export function AddAccountDialog({ providers, onClose, onAdded }: Props) {
 
   const pickProvider = (next: MailProviderSummary) => {
     setProviderId(next.id);
-    setState(initialState(next.setupFields));
+    setState(restoredState(next.setupFields, readDraft(accountDraftKey(next.id))));
     setFailure(null);
   };
 
@@ -116,8 +162,10 @@ export function AddAccountDialog({ providers, onClose, onAdded }: Props) {
     if (!provider || busy || missing) return;
     setBusy(true);
     setFailure(null);
+    const sentKey = draft.key;
     try {
       await addMailAccount(provider.id, values);
+      draft.clear(sentKey);
       onAdded();
     } catch (error) {
       const reason = mailFailure(error);
@@ -201,6 +249,7 @@ export function AddAccountDialog({ providers, onClose, onAdded }: Props) {
                 <SetupField
                   field={field}
                   value={values[field.name] ?? ''}
+                  draftKey={draft.key}
                   supersededBy={field.name === helpAfter && !!chosenPreset?.help}
                   inputRef={index === 0 ? firstFieldRef : undefined}
                   onChange={(next) => setState((prev) => {
@@ -235,7 +284,7 @@ export function AddAccountDialog({ providers, onClose, onAdded }: Props) {
             )}
 
             <div className="app-modal-actions">
-              <button type="button" className="app-modal-btn" onClick={onClose}>Cancel</button>
+              <button type="button" className="app-modal-btn" onClick={() => { draft.clear(); onClose(); }}>Cancel</button>
               <button
                 type="submit"
                 className="app-modal-btn primary"
@@ -358,9 +407,11 @@ function PresetHelp({ preset }: { preset: AccountSetupPreset }) {
   );
 }
 
-function SetupField({ field, value, inputRef, onChange, supersededBy }: {
+function SetupField({ field, value, draftKey: keptUnder, inputRef, onChange, supersededBy }: {
   field: AccountSetupField;
   value: string;
+  /** The draft the form is kept under; a password field is never part of it. */
+  draftKey?: string | null;
   inputRef?: RefObject<HTMLInputElement | null>;
   onChange: (next: string) => void;
   /**
@@ -386,6 +437,8 @@ function SetupField({ field, value, inputRef, onChange, supersededBy }: {
         <input
           id={id}
           ref={inputRef}
+          data-draft-key={field.kind === 'password' ? undefined : keptUnder ?? undefined}
+          data-no-draft={field.kind === 'password' ? 'secret' : undefined}
           className="app-modal-input mail-setup-input"
           data-testid={`mail-setup-${field.name}`}
           type={field.kind === 'password' ? 'password' : 'text'}

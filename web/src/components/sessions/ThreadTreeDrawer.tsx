@@ -317,7 +317,7 @@ export function ThreadTreeDrawer(p: ThreadTreeDrawerProps) {
         )}
         <div className="thread-drawer-search">
           <ThreadSearchIcon size={13} />
-          <input
+          <input data-no-draft="search"
             ref={searchRef}
             type="search"
             className="thread-drawer-search-input"

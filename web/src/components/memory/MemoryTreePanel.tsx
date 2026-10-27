@@ -135,7 +135,7 @@ export function MemoryTreePanel({ tree, selectedPath, onSelect }: MemoryTreePane
         <span className="memory-tree-header-title">Memory</span>
       </div>
       <div className="memory-tree-filter">
-        <input
+        <input data-no-draft="search"
           type="text"
           className="memory-filter-input"
           placeholder="Filter files..."

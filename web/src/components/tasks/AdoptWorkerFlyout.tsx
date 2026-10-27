@@ -120,7 +120,7 @@ export function AdoptWorkerFlyout({ open, anchorRef, anchorPoint, align, leader,
       onClick={(e) => e.stopPropagation()}
     >
       <div className="adopt-worker-title">Adopt a worker for &ldquo;{leader.title}&rdquo;</div>
-      <input
+      <input data-no-draft="search"
         className="adopt-worker-filter"
         placeholder="Filter tasks…"
         value={filter}

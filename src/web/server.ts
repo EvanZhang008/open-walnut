@@ -35,6 +35,7 @@ import { backupRouter, setBackupScheduler } from './routes/backup.js'
 import { projectsRouter } from './routes/projects.js'
 import { favoritesRouter } from './routes/favorites.js'
 import { uiPrefsRouter } from './routes/ui-prefs.js'
+import { draftsRouter } from './routes/drafts.js'
 import { devicesRouter } from './routes/devices.js'
 import { deviceAdoptionRouter } from './routes/devices-adopt.js'
 import { devicesTailscaleRouter } from './routes/devices-tailscale.js'
@@ -1974,6 +1975,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   app.use('/api/projects', projectsRouter)
   app.use('/api/favorites', favoritesRouter)
   app.use('/api/ui-prefs', uiPrefsRouter)
+  app.use('/api/drafts', draftsRouter)
   app.use('/api/devices/tailscale', devicesTailscaleRouter)
   app.use('/api/devices', deviceAdoptionRouter)
   // The browser sign-in code, and this server's tunnel (docs/plan/walnut-servers-everywhere.md).

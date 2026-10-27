@@ -5,6 +5,8 @@ import type { SessionUsage } from '@/api/session-usage';
 import type { SessionUsageView } from '@/hooks/useSessionBudgetUsage';
 import { useModalOverlay } from '@/hooks/useModalOverlay';
 import { useDialogFocus } from '@/hooks/useDialogFocus';
+import { useDraft } from '@/hooks/useDraft';
+import { draftKey, readDraft } from '@/utils/drafts';
 import {
   budgetPauseLabel, checkCadence, draftFromUsage, formatUsageCost, parseBudgetLimit,
   reconcileBudgetDraft, remainingAllowance, type BudgetDraft,
@@ -33,7 +35,15 @@ export function SessionBudgetStatus({ data, onOpen }: { data: SessionUsage | nul
 export function SessionUsageDialog({ sessionId, title, usage, onClose }: SessionUsageDialogProps) {
   const data = usage.data?.sessionId === sessionId ? usage.data : null;
   const [panel, setPanel] = useState<HTMLDivElement | null>(null);
-  const [draft, setDraft] = useState<BudgetDraft | null>(() => data ? draftFromUsage(data) : null);
+  // The unsaved limit is also kept in the draft store, so it survives closing the
+  // dialog and a reload; a clean draft built from the server picks it back up.
+  const kept = useDraft(draftKey('session-budget', sessionId), { baseline: data ? draftFromUsage(data).text : '' });
+  const keptKey = kept.key;
+  const withKept = useCallback((d: BudgetDraft): BudgetDraft => {
+    const stored = readDraft(keptKey);
+    return !d.dirty && stored && stored !== d.text ? { ...d, text: stored, dirty: true } : d;
+  }, [keptKey]);
+  const [draft, setDraft] = useState<BudgetDraft | null>(() => data ? withKept(draftFromUsage(data)) : null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
   const [conflictPending, setConflictPending] = useState(false);
@@ -48,8 +58,8 @@ export function SessionUsageDialog({ sessionId, title, usage, onClose }: Session
   useDialogFocus(panel, 'Usage & Budget');
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   useEffect(() => {
-    if (data) setDraft(current => reconcileBudgetDraft(current, data));
-  }, [data]);
+    if (data) setDraft(current => withKept(reconcileBudgetDraft(current, data)));
+  }, [data, withKept]);
 
   const refreshConflict = useCallback(async () => {
     const sid = sessionId;
@@ -65,12 +75,14 @@ export function SessionUsageDialog({ sessionId, title, usage, onClose }: Session
     const parsed = remove ? { valid: true as const, limitUsd: null } : parseBudgetLimit(draft.text);
     if (!parsed.valid) { setSaveError(parsed.error); return; }
     const sid = sessionId;
+    const sentKey = kept.key;
     if (remove) setDraft({ ...draft, text: '', dirty: true });
     saving.current = true;
     setSaveError(null);
     setSaved(false);
     try {
       const latest = await usage.save(parsed.limitUsd, draft.revision);
+      kept.clear(sentKey);
       if (!mounted.current || identity.current !== sid) return;
       setDraft(draftFromUsage(latest));
       setSaved(true);
@@ -119,8 +131,8 @@ export function SessionUsageDialog({ sessionId, title, usage, onClose }: Session
             <form className="session-usage-budget" onSubmit={event => { event.preventDefault(); void save(); }}>
               <label htmlFor={`${labelId}-limit`}>Budget for this session (USD)</label>
               <div className="session-usage-edit-row">
-                <input id={`${labelId}-limit`} className="app-modal-input" type="text" inputMode="decimal" autoComplete="off" placeholder="No limit" value={draft?.text ?? ''} disabled={!draft || usage.saving} aria-describedby={`${helpId}${saveError ? ` ${errorId}` : ''}`} aria-invalid={draft?.dirty && parsed?.valid === false ? true : undefined}
-                  onChange={event => { const text = event.target.value; setDraft(current => current ? { ...current, text, dirty: true } : current); setSaved(false); if (!conflictPending) setSaveError(null); }} />
+                <input id={`${labelId}-limit`} data-draft-key={kept.key ?? undefined} className="app-modal-input" type="text" inputMode="decimal" autoComplete="off" placeholder="No limit" value={draft?.text ?? ''} disabled={!draft || usage.saving} aria-describedby={`${helpId}${saveError ? ` ${errorId}` : ''}`} aria-invalid={draft?.dirty && parsed?.valid === false ? true : undefined}
+                  onChange={event => { const text = event.target.value; kept.setText(text); setDraft(current => current ? { ...current, text, dirty: true } : current); setSaved(false); if (!conflictPending) setSaveError(null); }} />
                 <button type="submit" className="app-modal-btn primary" disabled={!draft?.dirty || usage.saving || conflictPending}>{usage.saving ? 'Saving…' : 'Save limit'}</button>
               </div>
               <p id={helpId} className="session-usage-hint">Counts every request the session made, priced like the cost in the model picker. Never resets. At the limit, or on a request with no price, the session is stopped and you get an inbox letter. Leave blank for no limit.</p>

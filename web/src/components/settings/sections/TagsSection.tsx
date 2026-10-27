@@ -196,6 +196,7 @@ export function TagsSection() {
                   <input
                     id="tags-filter"
                     type="search"
+                    data-no-draft="search"
                     className="settings-input settings-input--short"
                     value={filter}
                     placeholder="Tag or namespace"

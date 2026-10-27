@@ -791,7 +791,7 @@ export const NotesTreePanel = memo(function NotesTreePanel({
       >
         <FileIcon />
         {isRenaming ? (
-          <input
+          <input data-no-draft="rename"
             ref={renameInputRef}
             className="notes-tree-inline-input"
             value={renameValue}
@@ -816,7 +816,7 @@ export const NotesTreePanel = memo(function NotesTreePanel({
       style={{ paddingLeft: `${12 + depth * 16}px` }}
     >
       {newItemType === 'folder' ? <FolderIcon /> : <FileIcon />}
-      <input
+      <input data-no-draft="rename"
         ref={newItemInputRef}
         className="notes-tree-inline-input"
         placeholder={newItemType === 'folder' ? 'folder name' : 'note name'}
@@ -854,7 +854,7 @@ export const NotesTreePanel = memo(function NotesTreePanel({
       </div>
 
       <div className="notes-tree-search">
-        <input
+        <input data-no-draft="search"
           type="text"
           placeholder="Search notes..."
           value={searchQuery}

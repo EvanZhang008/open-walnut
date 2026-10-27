@@ -3,6 +3,8 @@
  * message box, Commit, then Push / Open PR behind an inline confirm, and the
  * running job's progress, hook output and result. See SessionCommitDialog.
  */
+import { useDraft, useDraftValue } from '@/hooks/useDraft';
+import { draftKey } from '@/utils/drafts';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useEvent } from '@/hooks/useWebSocket';
 import { ApiError } from '@/api/client';
@@ -128,12 +130,12 @@ function shortRef(ref: string): string {
   return ref.replace(/^refs\/heads\//, '');
 }
 
+const EMPTY_PR = { title: '', body: '' };
+
 export function SessionCommitRepo(props: {
   sessionId: string;
   repo: CommitPlanRepo;
   initialJob: CommitJob | null;
-  draft: string;
-  onDraft: (text: string) => void;
   confirm: 'push' | 'pr' | null;
   onConfirm: (kind: 'push' | 'pr' | null) => void;
   onReload: () => void;
@@ -145,17 +147,22 @@ export function SessionCommitRepo(props: {
   const [sel, setSel] = useState<RepoSelection>(() => defaultSelection(repo));
   // A reloaded plan (after a commit, or Reload) starts again from the defaults.
   useEffect(() => { setSel(defaultSelection(repo)); }, [repo]);
-  const [message, setMessage] = useState(props.draft);
+  // The message and the pull request's words are drafts of this session's repo (utils/drafts.ts):
+  // closing the dialog, a reload or a restart keeps them until the commit or the PR is made.
+  const msgDraft = useDraft(draftKey('commit-message', sessionId, repo.repoRoot));
+  const { text: message } = msgDraft;
+  const prDraft = useDraftValue(draftKey('commit-pr', sessionId, repo.repoRoot), EMPTY_PR);
   const [othersOpen, setOthersOpen] = useState(false);
   const [suggesting, setSuggesting] = useState(false);
   const [requestError, setRequestError] = useState<string | null>(null);
-  const [prTitle, setPrTitle] = useState('');
-  const [prBody, setPrBody] = useState('');
+  const { title: prTitle, body: prBody } = prDraft.value;
+  const setPrTitle = (title: string) => prDraft.setValue((p) => ({ ...p, title }));
+  const setPrBody = (body: string) => prDraft.setValue((p) => ({ ...p, body }));
   const messageBox = useRef<HTMLTextAreaElement | null>(null);
   const messageMic = useRef<BoxMicHandle | null>(null);
   const prBodyBox = useRef<HTMLTextAreaElement | null>(null);
   const prBodyMic = useRef<BoxMicHandle | null>(null);
-  const writeMessage = (text: string) => { setMessage(text); props.onDraft(text); };
+  const writeMessage = msgDraft.setText;
   const { job, begin } = useCommitJob(sessionId, props.initialJob);
   const [lastCommit, setLastCommit] = useState<{ sha: string; shortSha: string; subject: string; indexError?: string } | null>(null);
   const [lastPush, setLastPush] = useState<{ remote: string; ref: string; upToDate: boolean } | null>(null);
@@ -179,7 +186,7 @@ export function SessionCommitRepo(props: {
         sha: String(r.sha ?? ''), shortSha: String(r.shortSha ?? ''), subject: String(r.subject ?? ''),
         ...(typeof r.indexError === 'string' ? { indexError: r.indexError } : {}),
       });
-      setMessage('');
+      msgDraft.clear();
       messageMic.current?.clear();
       props.onCommitted();
       props.onReload();
@@ -188,6 +195,7 @@ export function SessionCommitRepo(props: {
       props.onReload();
     } else if (job.action === 'pr') {
       setPrUrl(String(r.url ?? ''));
+      prDraft.clear();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [job]);
@@ -260,6 +268,7 @@ export function SessionCommitRepo(props: {
           ref={messageBox}
           className="scd-message"
           data-testid="scd-message"
+          data-draft-key={msgDraft.key ?? undefined}
           placeholder="Commit message"
           value={message}
           rows={3}
@@ -276,7 +285,7 @@ export function SessionCommitRepo(props: {
         <span className="scd-muted">{counts.files} file{counts.files === 1 ? '' : 's'} selected{counts.hunks ? `, ${counts.hunks} change${counts.hunks === 1 ? '' : 's'}` : ''}</span>
         <span className="scd-spacer" />
         {canPr && (
-          <button type="button" className="app-modal-btn" data-testid="scd-pr" disabled={running || unpushed} title={unpushed ? 'Push your commits first' : undefined} onClick={() => { setPrTitle(subjectGuess); onConfirm('pr'); }}>
+          <button type="button" className="app-modal-btn" data-testid="scd-pr" disabled={running || unpushed} title={unpushed ? 'Push your commits first' : undefined} onClick={() => { if (!prTitle.trim()) setPrTitle(subjectGuess); onConfirm('pr'); }}>
             Open PR
           </button>
         )}
@@ -315,9 +324,9 @@ export function SessionCommitRepo(props: {
       {confirm === 'pr' && repo.upstream && (
         <div className="scd-confirm" data-testid="scd-confirm" role="group" aria-label="Confirm pull request">
           <div>Open a pull request from <b>{repo.branch}</b> on <b>{repo.upstream.remote}</b>?</div>
-          <input className="app-modal-input" value={prTitle} onChange={(e) => setPrTitle(e.target.value)} placeholder="Title" aria-label="Pull request title" />
+          <input className="app-modal-input" data-draft-key={prDraft.key ?? undefined} value={prTitle} onChange={(e) => setPrTitle(e.target.value)} placeholder="Title" aria-label="Pull request title" />
           <MicField boxRef={prBodyBox} text={prBody} setText={setPrBody} handleRef={prBodyMic}>
-            <textarea ref={prBodyBox} className="scd-message" value={prBody} onChange={(e) => setPrBody(e.target.value)} placeholder="Description (optional)" rows={2} aria-label="Pull request description" />
+            <textarea ref={prBodyBox} className="scd-message" data-draft-key={prDraft.key ?? undefined} value={prBody} onChange={(e) => setPrBody(e.target.value)} placeholder="Description (optional)" rows={2} aria-label="Pull request description" />
           </MicField>
           <div className="scd-confirm-actions">
             <button type="button" className="app-modal-btn" onClick={() => onConfirm(null)}>Cancel</button>

@@ -67,6 +67,24 @@ const rawSet: Storage['setItem'] = raw?.set ?? noop;
 const rawRemove: Storage['removeItem'] = raw?.remove ?? noop;
 const FLUSH_DEBOUNCE_MS = 800;
 
+/** localStorage without the mirror: a write through these is seen by no listener. */
+export const rawLocalStorage = {
+  get: (key: string): string | null => { try { return rawGet.call(localStorage, key); } catch { return null; } },
+  set: (key: string, value: string): void => { rawSet.call(localStorage, key, value); },
+  remove: (key: string): void => { rawRemove.call(localStorage, key); },
+};
+
+type StorageWriteListener = (key: string, value: string | null) => void;
+const writeListeners = new Set<StorageWriteListener>();
+/** Every localStorage write after boot, from any code path (the draft mirror reads its keys here). */
+export function onLocalStorageWrite(cb: StorageWriteListener): () => void {
+  writeListeners.add(cb);
+  return () => { writeListeners.delete(cb); };
+}
+function notifyWrite(key: string, value: string | null): void {
+  for (const cb of writeListeners) { try { cb(key, value); } catch { /* a listener never fails the write */ } }
+}
+
 interface PrefEntry { v: string | null; ts: number }
 
 /** Whether a localStorage key is mirrored to the server. Exported so a feature
@@ -234,10 +252,10 @@ export function wrapLocalStorageWrites(): void {
     // re-saved its state used to PUT it back every load (N19).
     const unchanged = this === localStorage && rawGet.call(this, key) === String(value);
     rawSet.call(this, key, value);
-    if (this === localStorage && !unchanged) queue(key, value);
+    if (this === localStorage && !unchanged) { queue(key, value); notifyWrite(key, String(value)); }
   };
   storageProto.removeItem = function removeItem(this: Storage, key: string) {
     rawRemove.call(this, key);
-    if (this === localStorage) queue(key, null);
+    if (this === localStorage) { queue(key, null); notifyWrite(key, null); }
   };
 }

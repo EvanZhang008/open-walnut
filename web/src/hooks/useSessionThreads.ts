@@ -15,7 +15,8 @@ import {
 } from '@/utils/thread-tree';
 import { displayTitleOf, hiddenKeysOf, statusOf } from '@/utils/thread-meta';
 import { counts as threadCounts, type ThreadCounts } from '@/utils/thread-meta-counts';
-import { composerDraftKey, isPendingKey, readComposerDraft, unreadKeysOf } from '@/utils/thread-stack-state';
+import { composerDraftKey, isPendingKey, unreadKeysOf } from '@/utils/thread-stack-state';
+import { clearDraft, readDraft, writeDraft } from '@/utils/drafts';
 import { carriedRootDraft, composerKeyOf, pendingPageOf } from '@/utils/composer-quote';
 import { nextQuestionSeq, questionNumbers, withQuestionBanner } from '@/utils/question-tag';
 import { markStatesOf, sameMarkStates, type ThreadMarkState } from '@/utils/thread-mark-state';
@@ -313,7 +314,8 @@ export interface PanelThreads {
   sendAnchored: (message: string, images: ImageAttachment[] | undefined, interrupt: boolean, targetKey?: string) => Promise<boolean>;
   composerPlaceholder?: string;
   draftKey: string;
-  /** false on a pending Ask: after a reload the stack opens on the root and nothing reads its key. */
+  /** Always true now: a pending Ask with words comes back as a draft row after a
+   *  reload (thread-stack-persist.ts `askDraftsKey`), and its key is read when it opens. */
   draftKeptOnReload: boolean;
   /** Conversation Mode, the composer replying in a question (or asking a new
    *  one): what its chip names. Absent when it posts to the main conversation. */
@@ -606,7 +608,12 @@ export function usePanelThreads(args: UsePanelThreadsArgs): PanelThreads {
     if (head) r.stack.markHeadViewed(head);
     noteAsked(pending ? threadKeyOf(anchor) : key);
     log.info('threads', pending ? 'question sent' : 'follow-up sent', { sessionId, headId: pending ? userUuid : node?.headId, rowId: userUuid });
-    return dispatch(sessionId, text, images, { userUuid });
+    const sent = dispatch(sessionId, text, images, { userUuid });
+    if (pending) {
+      const stack = r.stack;
+      sent.then((ok) => stack.settlePending(pending, ok), () => stack.settlePending(pending, false));
+    }
+    return sent;
   }, [sessionId, titleOfKey, persistAnchor, noteAsked]);
 
   /** Retry (spec 5.10): the unanswered question again, same anchor, new uuid. */
@@ -662,10 +669,8 @@ export function usePanelThreads(args: UsePanelThreadsArgs): PanelThreads {
     if (!opts?.keepDraft) {
       const typed = r.args.composer.text();
       const rootKey = composerDraftKey(sessionId, ROOT_THREAD_KEY, r.tree);
-      try {
-        const carried = carriedRootDraft(readComposerDraft(rootKey), typed);
-        if (carried.trim()) localStorage.setItem(rootKey, carried);
-      } catch { /* private browsing */ }
+      const carried = carriedRootDraft(readDraft(rootKey), typed);
+      if (carried.trim()) writeDraft(rootKey, carried);
       // The question's own copy goes once the composer has moved off its key:
       // the composer saves its last keystrokes under the old key as it moves
       // (ChatInput's key change), which would bring the words back there.
@@ -684,7 +689,7 @@ export function usePanelThreads(args: UsePanelThreadsArgs): PanelThreads {
     const k = leftKey.current;
     if (!k || quotedKey !== null) return;
     leftKey.current = null;
-    try { localStorage.removeItem(k); } catch { /* private browsing */ }
+    clearDraft(k);
   }, [quotedKey]);
 
   // The comment card as a shared surface (SessionThreadsContext): the timeline
@@ -822,7 +827,7 @@ export function usePanelThreads(args: UsePanelThreadsArgs): PanelThreads {
     ...(composerPlaceholder ? { composerPlaceholder } : {}),
     // A question is keyed by its head row: the one just sent already has it.
     draftKey: bornNow ? `${composerDraftKey(sessionId, ROOT_THREAD_KEY, tree)}:${bornNow.head}` : composerDraftKey(sessionId, pageKey, tree),
-    draftKeptOnReload: !isPendingKey(pageKey),
+    draftKeptOnReload: true,
     ...(composerTarget ? { composerTarget } : {}),
   };
 }

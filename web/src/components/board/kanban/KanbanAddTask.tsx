@@ -6,6 +6,8 @@
  * (G15): their chips show live under the input and × drops one (and its
  * token). No session starts.
  */
+import { useDraft } from '@/hooks/useDraft';
+import { draftKey } from '@/utils/drafts';
 import { usePhoneLayout } from '@/hooks/usePhoneLayout';
 import { memo, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ICON_PLUS } from '@/components/common/Icons';
@@ -45,8 +47,11 @@ function KanbanAddTaskInner({ laneId, laneName, api, autoFocus: autoFocusProp }:
   // a board the user only came to read (C19). The Add task button stays one tap away.
   const phone = usePhoneLayout();
   const autoFocus = !!autoFocusProp && !phone;
-  const [open, setOpen] = useState(autoFocus);
-  const [text, setText] = useState('');
+  // The title being typed is kept per lane until it is added or cleared with Esc;
+  // a lane with kept words opens on them.
+  const draft = useDraft(draftKey('kanban-add-task', laneId));
+  const { text, setText } = draft;
+  const [open, setOpen] = useState(() => autoFocus || !!draft.text);
   const [error, setError] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
   const btnRef = useRef<HTMLButtonElement>(null);
@@ -105,7 +110,7 @@ function KanbanAddTaskInner({ laneId, laneName, api, autoFocus: autoFocusProp }:
   return (
     <div ref={formRef} className="kanban-add-task-form" data-testid="kanban-add-task-form" onPointerDown={(e) => e.stopPropagation()}>
       <input
-        ref={inputRef} className="kanban-add-task-input" data-testid="kanban-add-task-input" placeholder="Task title"
+        ref={inputRef} className="kanban-add-task-input" data-testid="kanban-add-task-input" data-draft-key={draft.key ?? undefined} placeholder="Task title"
         aria-label={`New task in ${laneName}`} value={text} maxLength={500}
         onChange={(e) => { setText(e.target.value); if (error) setError(''); }}
         onKeyDown={(e) => {

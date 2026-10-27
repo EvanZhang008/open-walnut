@@ -9,7 +9,10 @@
  * exposed here.
  */
 
+import { useEffect, useRef } from 'react';
 import type { CloudSetupDomainMode, CloudSetupProvider, CloudSetupProviderId } from '@/api/cloud-setup';
+import { draftKey, readDraft, readDraftJson, writeDraftJson } from '@/utils/drafts';
+import { DRAFT_FLUSH_EVENT, noteDraftWrite, type DraftFlushDetail } from '@/utils/unsaved-work';
 import { SettingsGroup, SettingsRow, SettingsDisclosure, SettingsNotice } from '../../SettingsSection';
 import { SettingsButton } from '../../inputs/SettingsButton';
 import { SegmentedControl } from '../../inputs/SegmentedControl';
@@ -66,6 +69,10 @@ export interface ConfigureValues {
   profile: string;
 }
 
+/** The fields kept as a draft: the typed ones, never the API token. */
+const KEPT_FIELDS = ['domain', 'region', 'instanceType'] as const;
+type KeptField = typeof KEPT_FIELDS[number];
+
 interface Props {
   provider: CloudSetupProvider;
   values: ConfigureValues;
@@ -81,8 +88,41 @@ interface Props {
 export function CloudConfigureForm({
   provider, values, onChange, onBack, onStart, onProfileChange, busy, error,
 }: Props) {
-  const set = <K extends keyof ConfigureValues>(key: K, value: ConfigureValues[K]) =>
-    onChange({ ...values, [key]: value });
+  // The typed fields (never the token) are kept in the draft store per provider until a
+  // setup starts from them, so leaving the pane or reloading keeps them.
+  const keptKey = draftKey('cloud-configure', provider.id);
+  useEffect(() => {
+    const kept = readDraftJson<Partial<Pick<ConfigureValues, KeptField>>>(keptKey);
+    if (kept) onChange({ ...values, ...kept });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [keptKey]);
+  const set = <K extends keyof ConfigureValues>(key: K, value: ConfigureValues[K]) => {
+    const next = { ...values, [key]: value };
+    onChange(next);
+    if (!(KEPT_FIELDS as readonly string[]).includes(key)) return;
+    const kept = Object.fromEntries(KEPT_FIELDS.filter((k) => next[k]).map((k) => [k, next[k]]));
+    writeDraftJson(keptKey, Object.keys(kept).length > 0 ? kept : undefined);
+    noteDraftWrite();
+  };
+  // A started setup unmounts this form in the same render that ends `busy`; a failed one
+  // renders it again with `busy` false. Only the first ends the draft.
+  const started = useRef(false);
+  const busyRef = useRef(busy);
+  busyRef.current = busy;
+  useEffect(() => { if (!busy) started.current = false; }, [busy]);
+  useEffect(() => () => { if (started.current && busyRef.current) { writeDraftJson(keptKey, undefined); noteDraftWrite(); } }, [keptKey]);
+  // Written at once on every change: tell a reload's unsaved-work check these boxes are kept.
+  useEffect(() => {
+    const onFlush = (e: Event) => {
+      const claims = (e as CustomEvent<DraftFlushDetail>).detail?.claims;
+      if (!claims) return;
+      for (const element of Array.from(document.querySelectorAll(`[data-draft-key="${CSS.escape(keptKey)}"]`))) {
+        claims.push({ element, key: keptKey, text: readDraft(keptKey) });
+      }
+    };
+    window.addEventListener(DRAFT_FLUSH_EVENT, onFlush);
+    return () => window.removeEventListener(DRAFT_FLUSH_EVENT, onFlush);
+  }, [keptKey]);
 
   const needsToken = provider.canProvision && provider.detect.needs === 'api-token';
   const domainMissing = values.domainMode === 'own-domain' && !values.domain.trim();
@@ -176,6 +216,7 @@ export function CloudConfigureForm({
               <input
                 id="cloud-domain"
                 type="text"
+                data-draft-key={keptKey}
                 className="cloud-domain-input settings-input settings-input--long settings-input--mono"
                 value={values.domain}
                 placeholder="walnut.example.com"
@@ -197,6 +238,7 @@ export function CloudConfigureForm({
               <input
                 id="cloud-api-token"
                 type="password"
+                data-no-draft="secret"
                 className="settings-input settings-input--short settings-input--mono"
                 value={values.credentials}
                 aria-label="Provider API token"
@@ -212,7 +254,7 @@ export function CloudConfigureForm({
               label="Region"
               htmlFor="cloud-region"
               control={
-                <input id="cloud-region" type="text" className="settings-input settings-input--short"
+                <input id="cloud-region" type="text" data-draft-key={keptKey} className="settings-input settings-input--short"
                   value={values.region} placeholder="Your CLI default" aria-label="Region"
                   onChange={(e) => set('region', e.target.value.trim())} />
               }
@@ -221,7 +263,7 @@ export function CloudConfigureForm({
               label="Instance size"
               htmlFor="cloud-instance-size"
               control={
-                <input id="cloud-instance-size" type="text" className="settings-input settings-input--short"
+                <input id="cloud-instance-size" type="text" data-draft-key={keptKey} className="settings-input settings-input--short"
                   value={values.instanceType} placeholder="Recommended size" aria-label="Instance size"
                   onChange={(e) => set('instanceType', e.target.value.trim())} />
               }
@@ -241,7 +283,7 @@ export function CloudConfigureForm({
 
       <div className="cloud-actions settings-addons-actions">
         <SettingsButton onClick={onBack} disabled={busy}>Back</SettingsButton>
-        <SettingsButton variant="primary" disabled={domainMissing} busy={busy} busyLabel="Starting..." onClick={onStart}>
+        <SettingsButton variant="primary" disabled={domainMissing} busy={busy} busyLabel="Starting..." onClick={() => { started.current = true; onStart(); }}>
           {provider.canProvision ? 'Start setup' : 'Generate the script'}
         </SettingsButton>
       </div>

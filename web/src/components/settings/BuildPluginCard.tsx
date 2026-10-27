@@ -19,6 +19,8 @@ import { SettingsGroup, SettingsRow } from './SettingsSection'
 import { SettingsButton } from './inputs/SettingsButton'
 import { BUILD_CWD, buildPrompt, PLUGIN_CREATE_COMMAND } from './build-plugin-prompt'
 import { MicField, type BoxMicHandle } from '@/components/common/BoxMic'
+import { useDraft } from '@/hooks/useDraft'
+import { draftKey } from '@/utils/drafts'
 import '@/styles/settings-sections-addons.css'
 import '@/styles/settings-mic.css'
 
@@ -29,7 +31,9 @@ export function BuildPluginCard({ showGuideLink = true, showManual = true }: {
   showManual?: boolean
 } = {}) {
   const navigate = useNavigate()
-  const [request, setRequest] = useState('')
+  // The description typed and not built yet survives leaving the page; a started session ends it.
+  const draft = useDraft(draftKey('build-plugin', 'new'))
+  const { text: request, setText: setRequest } = draft
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [cloud, setCloud] = useState(false)
@@ -41,6 +45,7 @@ export function BuildPluginCard({ showGuideLink = true, showManual = true }: {
     if (busy) return
     setBusy(true)
     setError(null)
+    const sentKey = draft.key
     try {
       const installDir = await fetchInstallDir()
       const result = await quickStartSession({
@@ -49,7 +54,7 @@ export function BuildPluginCard({ showGuideLink = true, showManual = true }: {
         project: 'Walnut Plugins',
         message: buildPrompt(request, installDir),
       })
-      setRequest('')
+      draft.clear(sentKey)
       mic.current?.clear()
       // Land on the session column so the user watches it build.
       if (result.sessionId) openSessionOnHome(result.sessionId, navigate)
@@ -101,6 +106,7 @@ export function BuildPluginCard({ showGuideLink = true, showManual = true }: {
                 ref={requestRef}
                 id="build-plugin-request"
                 type="text"
+                data-draft-key={draft.key ?? undefined}
                 className="settings-input settings-input--long"
                 value={request}
                 onChange={(e) => setRequest(e.target.value)}

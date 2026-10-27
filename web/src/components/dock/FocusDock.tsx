@@ -1,4 +1,6 @@
 import { useState, useCallback, useEffect, useRef, memo, useMemo } from 'react';
+import { useDraft } from '@/hooks/useDraft';
+import { draftKey } from '@/utils/drafts';
 import type { Task } from '@open-walnut/core';
 import { PHASE_LABELS, resolveTaskSessionId } from '@/utils/session-status';
 import { NO_AUTOFILL_PROPS } from '@/utils/no-autofill';
@@ -222,8 +224,10 @@ interface DockQuickAddProps {
 }
 
 const DockQuickAdd = memo(function DockQuickAdd({ onAdd }: DockQuickAddProps) {
-  const [open, setOpen] = useState(false);
-  const [title, setTitle] = useState('');
+  // The title is kept until the task is added or the box is cleared with Esc; kept words open the box.
+  const draft = useDraft(draftKey('quick-task', 'focus-dock'));
+  const { text: title, setText: setTitle } = draft;
+  const [open, setOpen] = useState(() => !!draft.text);
   const [busy, setBusy] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -234,8 +238,9 @@ const DockQuickAdd = memo(function DockQuickAdd({ onAdd }: DockQuickAddProps) {
     if (!t || busy) return;
     setBusy(true);
     try {
+      const sentKey = draft.key;
       await onAdd(t);
-      setTitle('');
+      draft.clear(sentKey);
       setOpen(false);
     } catch {
       // onAdd rethrows after reporting the failure (useTasks.create → onOpError →
@@ -245,7 +250,7 @@ const DockQuickAdd = memo(function DockQuickAdd({ onAdd }: DockQuickAddProps) {
     } finally {
       setBusy(false);
     }
-  }, [title, busy, onAdd]);
+  }, [title, busy, onAdd, draft]);
 
   if (!open) {
     return (
@@ -265,6 +270,7 @@ const DockQuickAdd = memo(function DockQuickAdd({ onAdd }: DockQuickAddProps) {
       <input
         ref={inputRef}
         type="text"
+        data-draft-key={draft.key ?? undefined}
         value={title}
         onChange={(e) => setTitle(e.target.value)}
         placeholder="Add to Focus…"
@@ -272,7 +278,7 @@ const DockQuickAdd = memo(function DockQuickAdd({ onAdd }: DockQuickAddProps) {
         {...NO_AUTOFILL_PROPS}
         onKeyDown={(e) => {
           if (e.key === 'Enter') { e.preventDefault(); submit(); }
-          if (e.key === 'Escape') { setTitle(''); setOpen(false); }
+          if (e.key === 'Escape') { draft.clear(); setOpen(false); }
         }}
         onBlur={() => { if (!title.trim()) setOpen(false); }}
       />

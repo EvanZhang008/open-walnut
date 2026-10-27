@@ -1,5 +1,7 @@
 import { useRef, useState } from 'react';
 import { MicField, type BoxMicHandle } from '@/components/common/BoxMic';
+import { useDraft } from '@/hooks/useDraft';
+import { draftKey } from '@/utils/drafts';
 
 interface SkillFormProps {
   onSave: (input: { dirName: string; content: string; target: 'claude' | 'walnut' }) => Promise<void>;
@@ -17,8 +19,11 @@ Instructions for the AI agent when this skill is activated.
 `;
 
 export function SkillForm({ onSave, onCancel }: SkillFormProps) {
-  const [dirName, setDirName] = useState('');
-  const [content, setContent] = useState(SKILL_TEMPLATE);
+  // The new skill's name and SKILL.md are drafts until Create Skill or Cancel.
+  const nameDraft = useDraft(draftKey('skill-form', 'new', 'dirName'));
+  const contentDraft = useDraft(draftKey('skill-form', 'new', 'content'), { baseline: SKILL_TEMPLATE });
+  const { text: dirName, setText: setDirName } = nameDraft;
+  const { text: content, setText: setContent } = contentDraft;
   const [target, setTarget] = useState<'claude' | 'walnut'>('claude');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -37,10 +42,13 @@ export function SkillForm({ onSave, onCancel }: SkillFormProps) {
     }
     setSaving(true);
     setError('');
+    const sentKeys = [nameDraft.key, contentDraft.key] as const;
     try {
       // A transcription still on its way lands after the save, unsaved: drop it now.
       mic.current?.clear();
       await onSave({ dirName: dirName.trim(), content, target });
+      nameDraft.clear(sentKeys[0]);
+      contentDraft.clear(sentKeys[1]);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to create skill');
       setSaving(false);
@@ -54,6 +62,7 @@ export function SkillForm({ onSave, onCancel }: SkillFormProps) {
       <div className="skill-form-section">
         <label className="skill-form-label">Directory Name</label>
         <input
+          data-draft-key={nameDraft.key ?? undefined}
           type="text"
           className="skill-form-input"
           value={dirName}
@@ -78,6 +87,7 @@ export function SkillForm({ onSave, onCancel }: SkillFormProps) {
         <MicField boxRef={contentRef} text={content} setText={setContent} handleRef={mic}>
           <textarea
             ref={contentRef}
+            data-draft-key={contentDraft.key ?? undefined}
             className="skill-form-textarea"
             value={content}
             onChange={(e) => setContent(e.target.value)}
@@ -87,7 +97,7 @@ export function SkillForm({ onSave, onCancel }: SkillFormProps) {
         </MicField>
       </div>
       <div className="skill-form-actions">
-        <button type="button" className="btn" onClick={onCancel}>Cancel</button>
+        <button type="button" className="btn" onClick={() => { nameDraft.clear(); contentDraft.clear(); onCancel(); }}>Cancel</button>
         <button type="submit" className="btn btn-primary" disabled={saving}>
           {saving ? 'Creating...' : 'Create Skill'}
         </button>

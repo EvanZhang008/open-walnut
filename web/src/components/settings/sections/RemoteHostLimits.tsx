@@ -3,22 +3,25 @@
  * limit, the same shape as Search > Excluded folders (N3-21). The limits
  * themselves are rows above it.
  */
-import { useState } from 'react';
+import { useDraftValue } from '@/hooks/useDraft';
+import { draftKey } from '@/utils/drafts';
 import { SettingsRow } from '../SettingsSection';
 import { NumberInput } from '../inputs/NumberInput';
 import { SettingsButton } from '../inputs/SettingsButton';
 
 export function AddLimitRow({ taken, onAdd }: { taken: string[]; onAdd: (alias: string, max: number) => void }) {
-  const [alias, setAlias] = useState('');
-  const [max, setMax] = useState<number | undefined>(undefined);
+  // A limit typed and not added yet survives leaving the pane; Add ends it.
+  const form = useDraftValue<{ alias: string; max?: number }>(draftKey('host-limit', 'new'), { alias: '' });
+  const { alias, max } = form.value;
+  const setAlias = (next: string) => form.setValue((f) => ({ ...f, alias: next }));
+  const setMax = (next: number | undefined) => form.setValue((f) => ({ ...f, max: next }));
   const name = alias.trim();
   const clash = name !== '' && taken.includes(name);
   const ready = name !== '' && !clash && max !== undefined;
   const add = () => {
     if (!ready) return;
     onAdd(name, max);
-    setAlias('');
-    setMax(undefined);
+    form.clear();
   };
   return (
     <SettingsRow
@@ -32,6 +35,7 @@ export function AddLimitRow({ taken, onAdd }: { taken: string[]; onAdd: (alias: 
           <input
             id="rh-limit-new-host"
             type="text"
+            data-draft-key={form.key ?? undefined}
             className="settings-input settings-input--short settings-input--mono"
             value={alias}
             placeholder="local"
@@ -40,7 +44,7 @@ export function AddLimitRow({ taken, onAdd }: { taken: string[]; onAdd: (alias: 
             onChange={(e) => setAlias(e.target.value)}
             onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); add(); } }}
           />
-          <NumberInput id="rh-limit-new-max" value={max} onChange={setMax} onEnter={add} min={0} placeholder="4" aria-label="Most sessions" />
+          <NumberInput id="rh-limit-new-max" data-draft-key={form.key ?? undefined} value={max} onChange={setMax} onEnter={add} min={0} placeholder="4" aria-label="Most sessions" />
           <SettingsButton onClick={add} disabled={!ready} title={ready ? undefined : 'Type a host and a number first.'}>Add</SettingsButton>
         </>
       }

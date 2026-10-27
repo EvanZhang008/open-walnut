@@ -2222,6 +2222,8 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
           <ChatInput
             // Same rule in the plan popup's composer: dictation keeps the passage.
             onDictationInsert={holdDictationSelection}
+            // The session's own draft: the words follow between this box and the panel's composer.
+            draftKey={threads.draftKey}
             sendBlocked={macSessionAway}
             plusMenuActions={engineSettingsEntry.plusMenuActions}
             addMenuControls={{ handleRef: planComposerControlsRef, ids: ['output', 'btw', ...(noteState.hasNote ? [] : ['note'])] }}

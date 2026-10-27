@@ -74,7 +74,7 @@ export function PhoneTaskDetailHead({ task }: { task: Task }) {
   return (
     <div className="phone-detail-head" data-testid="phone-detail-head">
       <label className="phone-detail-title-label" htmlFor={`phone-detail-title-${task.id}`}>Title</label>
-      <textarea
+      <textarea data-no-draft="autosave"
         id={`phone-detail-title-${task.id}`}
         className="phone-detail-title"
         value={draft}

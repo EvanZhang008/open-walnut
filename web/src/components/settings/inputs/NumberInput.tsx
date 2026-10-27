@@ -66,6 +66,7 @@ export function NumberInput({
         {...rest}
         id={id}
         type="number"
+        data-no-draft="number"
         inputMode="decimal"
         {...events}
         placeholder={placeholder}

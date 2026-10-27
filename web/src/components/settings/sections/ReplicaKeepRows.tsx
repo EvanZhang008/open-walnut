@@ -79,6 +79,7 @@ export function ReplicaKeepRows({ idOf, name, keep, excludeText, onKeep, onExclu
             <input
               id={idOf('exclude')}
               type="text"
+              data-no-draft="autosave"
               className="settings-input settings-input--long"
               value={excludeText}
               disabled={disabled}

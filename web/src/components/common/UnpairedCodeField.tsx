@@ -94,6 +94,7 @@ export function UnpairedCodeField({
       noValidate
     >
       <input
+        data-no-draft="secret"
         ref={inputRef}
         className="unpaired-notice-input"
         type="text"

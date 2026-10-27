@@ -86,6 +86,7 @@ export function CloudManualPaste({ job }: Props) {
             It holds a one-time pairing code, so paste it into your VM and nowhere else.
           </p>
           <textarea
+            data-no-draft="mirror"
             className="cloud-userdata-box settings-input settings-input--mono"
             readOnly
             rows={12}

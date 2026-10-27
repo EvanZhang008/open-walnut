@@ -14,6 +14,8 @@ import { useSttStatus } from '@/hooks/useSttStatus';
 import { fetchSttDetection, fetchVocab, addVocabWord, fetchRecordings, retranscribeRecording, MODEL_CATALOG, type GgmlModel, type VoiceRecording } from '@/api/stt';
 import { registerVoiceInsertTarget } from '@/utils/voice-status';
 import { log } from '@/utils/log';
+import { useDraft } from '@/hooks/useDraft';
+import { draftKey } from '@/utils/drafts';
 import { KEEP_SELECTION_ATTR } from '@/utils/selection-guard';
 
 interface MicButtonProps {
@@ -154,7 +156,10 @@ export function MicButton({ onTranscribe, onDraft, onRefine, controlRef, languag
   const [modelsLoading, setModelsLoading] = useState(false);
   // Vocab state
   const [vocabWords, setVocabWords] = useState<string[]>([]);
-  const [vocabInput, setVocabInput] = useState('');
+  // The word being added is kept as a draft (one vocabulary, so one key) until it is added.
+  const vocabDraft = useDraft(draftKey('stt-vocab', 'new'));
+  const vocabInput = vocabDraft.text;
+  const setVocabInput = vocabDraft.setText;
   const [vocabStatus, setVocabStatus] = useState<string | null>(null);
   const vocabInputRef = useRef<HTMLInputElement>(null);
   // Voice history (server-side recordings — survives lost responses)
@@ -375,10 +380,11 @@ export function MicButton({ onTranscribe, onDraft, onRefine, controlRef, languag
     // Check client-side duplicate
     if (vocabWords.some(v => v.toLowerCase() === w.toLowerCase())) {
       setVocabStatus(`"${w}" already exists`);
-      setVocabInput('');
+      vocabDraft.clear();
       setTimeout(() => setVocabStatus(null), 2000);
       return;
     }
+    const sentKey = vocabDraft.key;
     try {
       const res = await addVocabWord(w);
       if (res.added) {
@@ -387,12 +393,12 @@ export function MicButton({ onTranscribe, onDraft, onRefine, controlRef, languag
       } else {
         setVocabStatus(`"${w}" already exists`);
       }
-      setVocabInput('');
+      vocabDraft.clear(sentKey);
       setTimeout(() => setVocabStatus(null), 2000);
     } catch (err) {
       setVocabStatus(`Error: ${err}`);
     }
-  }, [vocabInput, vocabWords]);
+  }, [vocabInput, vocabWords, vocabDraft]);
 
   if (!isSupported) return null;
 
@@ -597,6 +603,7 @@ export function MicButton({ onTranscribe, onDraft, onRefine, controlRef, languag
           <div className="mic-vocab-input-row">
             <input
               ref={vocabInputRef}
+              data-draft-key={vocabDraft.key ?? undefined}
               className="mic-vocab-input"
               type="text"
               placeholder="Add word..."

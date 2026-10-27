@@ -22,8 +22,6 @@ import { errorText } from '@/components/sessions/sessionCommitModel';
 import { log } from '@/utils/log';
 import '@/styles/session-commit.css';
 
-/** Unsent commit messages survive closing the dialog (per session + repo). */
-const drafts = new Map<string, string>();
 
 export interface CommitConfirm { repoRoot: string; kind: 'push' | 'pr' }
 
@@ -103,12 +101,10 @@ export function SessionCommitDialog({ sessionId, onClose, onCommitted }: {
             sessionId={sessionId}
             repo={repo}
             initialJob={runningFor(repo.repoRoot)}
-            draft={drafts.get(sessionId + '\u0000' + repo.repoRoot) ?? ''}
-            onDraft={(text) => { drafts.set(sessionId + '\u0000' + repo.repoRoot, text); }}
             confirm={confirm?.repoRoot === repo.repoRoot ? confirm.kind : null}
             onConfirm={(kind) => setConfirm(kind ? { repoRoot: repo.repoRoot, kind } : null)}
             onReload={() => void load()}
-            onCommitted={() => { drafts.delete(sessionId + '\u0000' + repo.repoRoot); onCommitted?.(); }}
+            onCommitted={() => { onCommitted?.(); }}
             startJob={(b) => startCommitJob(sessionId, b)}
             suggest={(diff, files) => suggestCommitMessage(sessionId, diff, files)}
           />

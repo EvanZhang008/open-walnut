@@ -1298,7 +1298,7 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
         <button type="button" className="sfe-btn sfe-up-btn" onClick={goUp} title="Go to parent directory" aria-label="Go to parent directory">↑</button>
         {editingPath ? (
           <div className="sfe-path-edit">
-            <input
+            <input data-no-draft="picker"
               className="sfe-root-path-input"
               defaultValue={focusedDir ?? root}
               autoFocus

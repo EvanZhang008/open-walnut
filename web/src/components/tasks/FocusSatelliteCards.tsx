@@ -508,7 +508,7 @@ export const SortableTierCard = memo(function SortableTierCard({ task, tier, isF
         {ICONS.binaryPhaseIcon(isDone, task.phase)}
       </button>
       {/* Editable title */}
-      <span
+      <span data-no-draft="rename"
         ref={titleRef}
         className={`todo-pinned-title${isEditing ? ' editing' : ''}${task.walnut_agent ? ' walnut-task-title' : ''}`}
         contentEditable={isEditing}

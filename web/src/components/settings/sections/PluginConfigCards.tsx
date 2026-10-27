@@ -15,7 +15,7 @@ import { SettingsButton } from '../inputs/SettingsButton';
 import { SettingsGroup, SettingsRow, SettingsTag } from '../SettingsSection';
 import { couldntSave } from '../inputs/useOptimisticSetting';
 import { saveErrorMessage, useSettingsSaved } from '../settings-pane-context';
-import { MaskedValueError } from '../../../../../src/core/config-secret-shape';
+import { MaskedValueError, isSecretKey } from '../../../../../src/core/config-secret-shape';
 import {
   SECRET_LIST_HINT,
   editedMaskField,
@@ -29,6 +29,14 @@ import {
   type PluginFieldSchema,
 } from '../plugin-config-fields';
 import { PLUGINS_CHANGED_EVENT, emitPluginsChanged } from '@/utils/plugin-events';
+import { draftKey, readDraft, readDraftJson, writeDraftJson } from '@/utils/drafts';
+import { DRAFT_FLUSH_EVENT, noteDraftWrite, type DraftFlushDetail } from '@/utils/unsaved-work';
+
+/**
+ * One plugin's fields typed and not saved yet, kept in the draft store until its Save lands
+ * (leaving the pane, a reload, a restart keep them). Secret fields are never kept.
+ */
+const pluginDraftKey = (pluginId: string) => draftKey('plugin-config', pluginId);
 
 interface PluginSettingsMeta {
   id: string;
@@ -140,6 +148,12 @@ export function PluginConfigCards({ config, onSave, excludeIds = [], onlyIds, ba
   // instead of showing the previous plugin's fields.
   const scope = onlyIds ? onlyIds.join(',') : '';
 
+  // Fields the user edited since the last save, per plugin. Only those (plus
+  // seeded values config does not hold yet) are sent: the draft also holds every
+  // field as first loaded, and re-sending one that changed elsewhere meanwhile
+  // (a calendar hidden from Calendar Accounts) would put its old value back.
+  const touched = useRef<Record<string, Set<string>>>({});
+
   const refresh = useCallback(() => {
     fetch('/api/integrations/settings')
       .then(r => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
@@ -153,8 +167,11 @@ export function PluginConfigCards({ config, onSave, excludeIds = [], onlyIds, ba
           && Object.keys(p.configSchema?.properties ?? {}).length > 0);
         setPlugins(visible);
         setPhase('ready');
-        // Merge: keep in-flight edits, seed fields for newly-appeared plugins
-        setDrafts(d => Object.fromEntries(visible.map(p => [p.id, { ...p.values, ...d[p.id] }])));
+        // Merge: keep in-flight edits, seed fields for newly-appeared plugins. Edits kept
+        // in the draft store (typed before a reload) come back as edits.
+        const kept = Object.fromEntries(visible.map(p => [p.id, readDraftJson<Record<string, unknown>>(pluginDraftKey(p.id)) ?? {}]));
+        for (const [id, fields] of Object.entries(kept)) for (const k of Object.keys(fields)) (touched.current[id] ??= new Set()).add(k);
+        setDrafts(d => Object.fromEntries(visible.map(p => [p.id, { ...p.values, ...kept[p.id], ...d[p.id] }])));
       })
       // A failed refetch keeps the fields already shown; only a first load can fail.
       .catch(() => { setPhase((current) => (current === 'ready' ? current : 'failed')); });
@@ -169,15 +186,31 @@ export function PluginConfigCards({ config, onSave, excludeIds = [], onlyIds, ba
     return () => window.removeEventListener(PLUGINS_CHANGED_EVENT, refresh);
   }, [refresh]);
 
-  // Fields the user edited since the last save, per plugin. Only those (plus
-  // seeded values config does not hold yet) are sent: the draft also holds every
-  // field as first loaded, and re-sending one that changed elsewhere meanwhile
-  // (a calendar hidden from Calendar Accounts) would put its old value back.
-  const touched = useRef<Record<string, Set<string>>>({});
   const setField = (pluginId: string, key: string, value: unknown) => {
     (touched.current[pluginId] ??= new Set()).add(key);
     setDrafts(d => ({ ...d, [pluginId]: { ...d[pluginId], [key]: value } }));
+    if (isSecretKey(key)) return;
+    const kept = readDraftJson<Record<string, unknown>>(pluginDraftKey(pluginId)) ?? {};
+    const original = plugins.find(p => p.id === pluginId)?.values[key];
+    if (JSON.stringify(value) === JSON.stringify(original)) delete kept[key];
+    else kept[key] = value;
+    writeDraftJson(pluginDraftKey(pluginId), Object.keys(kept).length > 0 ? kept : undefined);
+    noteDraftWrite();
   };
+
+  // Written at once on every change, so a reload's unsaved-work check only needs to be told so.
+  useEffect(() => {
+    const onFlush = (e: Event) => {
+      const claims = (e as CustomEvent<DraftFlushDetail>).detail?.claims;
+      if (!claims) return;
+      for (const element of Array.from(document.querySelectorAll('[data-draft-key^="draft:plugin-config:"]'))) {
+        const key = element.getAttribute('data-draft-key')!;
+        claims.push({ element, key, text: readDraft(key) });
+      }
+    };
+    window.addEventListener(DRAFT_FLUSH_EVENT, onFlush);
+    return () => window.removeEventListener(DRAFT_FLUSH_EVENT, onFlush);
+  }, []);
 
   const savePlugin = async (plugin: PluginSettingsMeta) => {
     const draft = drafts[plugin.id] ?? {};
@@ -206,6 +239,10 @@ export function PluginConfigCards({ config, onSave, excludeIds = [], onlyIds, ba
         },
       } as Partial<Config>);
       for (const k of Object.keys(cleaned)) edited.delete(k);
+      const kept = readDraftJson<Record<string, unknown>>(pluginDraftKey(plugin.id)) ?? {};
+      for (const k of Object.keys(cleaned)) delete kept[k];
+      writeDraftJson(pluginDraftKey(plugin.id), Object.keys(kept).length > 0 ? kept : undefined);
+      noteDraftWrite();
       // A save clamps to the manifest's bounds, so show what was stored (15), not what was typed (5).
       setDrafts(d => ({ ...d, [plugin.id]: { ...d[plugin.id], ...cleaned } }));
       // Server soft-reloads the plugin on CONFIG_CHANGED (async); poll a couple
@@ -302,6 +339,8 @@ export function PluginConfigCards({ config, onSave, excludeIds = [], onlyIds, ba
                     control={
                       <textarea
                         id={fieldId}
+                        // A list of secrets keeps no draft (setField skips it).
+                        data-draft-key={secretList ? undefined : pluginDraftKey(plugin.id)}
                         rows={3}
                         className="settings-input settings-input--long settings-input--mono"
                         aria-invalid={isMissing || undefined}
@@ -329,6 +368,8 @@ export function PluginConfigCards({ config, onSave, excludeIds = [], onlyIds, ba
                     control={
                       <input
                         id={fieldId}
+                        // A secret field keeps no draft (setField skips it).
+                        data-draft-key={isSecretKey(key) ? undefined : pluginDraftKey(plugin.id)}
                         type={numeric ? 'number' : 'text'}
                         className={`settings-input ${numeric ? 'settings-input--number' : 'settings-input--long settings-input--mono'}`}
                         aria-invalid={isMissing || undefined}

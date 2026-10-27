@@ -203,7 +203,7 @@ export function BackupSection({ config, onSave }: Props) {
           label="Bucket"
           htmlFor="backup-bucket"
           control={
-            <input id="backup-bucket" type="text" className="settings-input settings-input--short"
+            <input id="backup-bucket" type="text" data-no-draft="autosave" className="settings-input settings-input--short"
               value={bucket} onChange={(e) => setBucket(e.target.value)} placeholder="my-walnut-backup" />
           }
         />
@@ -211,7 +211,7 @@ export function BackupSection({ config, onSave }: Props) {
           label="Region"
           htmlFor="backup-region"
           control={
-            <input id="backup-region" type="text" className="settings-input settings-input--short"
+            <input id="backup-region" type="text" data-no-draft="autosave" className="settings-input settings-input--short"
               value={region} onChange={(e) => setRegion(e.target.value)} placeholder="us-west-2" />
           }
         />
@@ -220,7 +220,7 @@ export function BackupSection({ config, onSave }: Props) {
           htmlFor="backup-prefix"
           help="Folder inside the bucket; use a distinct prefix per machine."
           control={
-            <input id="backup-prefix" type="text" className="settings-input settings-input--short"
+            <input id="backup-prefix" type="text" data-no-draft="autosave" className="settings-input settings-input--short"
               value={prefix} onChange={(e) => setPrefix(e.target.value)} placeholder="walnut" />
           }
         />
@@ -264,7 +264,7 @@ export function BackupSection({ config, onSave }: Props) {
                 ))}
               </select>
             ) : (
-              <input id="backup-profile" type="text" className="settings-input settings-input--short"
+              <input id="backup-profile" type="text" data-no-draft="autosave" className="settings-input settings-input--short"
                 value={profile} onChange={(e) => setProfile(e.target.value)} placeholder="default" />
             )}
           />
@@ -276,7 +276,7 @@ export function BackupSection({ config, onSave }: Props) {
               htmlFor="backup-access-key"
               indent
               control={
-                <input id="backup-access-key" type="text" className="settings-input settings-input--short settings-input--mono"
+                <input id="backup-access-key" type="text" data-no-draft="autosave" className="settings-input settings-input--short settings-input--mono"
                   value={accessKey} onChange={(e) => setAccessKey(e.target.value)} autoComplete="off" />
               }
             />

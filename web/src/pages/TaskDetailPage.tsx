@@ -1,4 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { useDraft } from '@/hooks/useDraft';
+import { draftKey } from '@/utils/drafts';
 import { useParams, useNavigate, useLocation, useSearchParams } from 'react-router-dom';
 import type { Task } from '@open-walnut/core';
 import { renderNoteMarkdown } from '@/utils/markdown';
@@ -94,7 +96,9 @@ function TaskDetailView({ id, isPopout = false, showOperationError }: TaskDetail
   const [detail, setDetail] = useState<TaskDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [newNote, setNewNote] = useState('');
+  // The line being added to the note is kept per task until it is added.
+  const newNoteDraft = useDraft(id ? draftKey('task-note-line', id) : null);
+  const { text: newNote, setText: setNewNote } = newNoteDraft;
   const newNoteBox = useRef<HTMLInputElement | null>(null);
   const newNoteMic = useRef<BoxMicHandle | null>(null);
   // Another task on the same page: a late transcription must not land in its note.
@@ -359,8 +363,9 @@ function TaskDetailView({ id, isPopout = false, showOperationError }: TaskDetail
   // update optimistically.
   const handleAddNote = async () => {
     if (!id || !newNote.trim()) return;
+    const sentKey = newNoteDraft.key;
     mergeDetail(await addNote(id, newNote.trim()));
-    setNewNote('');
+    newNoteDraft.clear(sentKey);
     newNoteMic.current?.clear();
   };
 
@@ -435,7 +440,7 @@ function TaskDetailView({ id, isPopout = false, showOperationError }: TaskDetail
           </div>
           {showDepPicker && (
             <div style={{ marginBottom: '0.5rem' }}>
-              <input
+              <input data-no-draft="search"
                 type="text"
                 value={depSearch}
                 onChange={(e) => handleDepSearch(e.target.value)}
@@ -691,6 +696,7 @@ function TaskDetailView({ id, isPopout = false, showOperationError }: TaskDetail
           <input
             ref={newNoteBox}
             type="text"
+            data-draft-key={newNoteDraft.key ?? undefined}
             value={newNote}
             onChange={(e) => setNewNote(e.target.value)}
             onKeyDown={(e) => { if (e.nativeEvent.isComposing || e.keyCode === 229) return; if (e.key === 'Enter') handleAddNote(); }}

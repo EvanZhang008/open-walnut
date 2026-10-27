@@ -18,6 +18,8 @@ import {
 } from '@/api/mail-groups';
 import type { MailAccountDto } from '@/api/mail';
 import { menuPlacementStyle, useMenuPlacement } from '@/hooks/useMenuPlacement';
+import { useDraftValue } from '@/hooks/useDraft';
+import { draftHash, draftKey } from '@/utils/drafts';
 import { SettingsButton } from '../inputs/SettingsButton';
 import { MicField, type BoxMicHandle } from '@/components/common/BoxMic';
 import '@/styles/settings-mic.css';
@@ -124,20 +126,49 @@ function previewSentence(answer: MailPreviewResponse): string {
   return answer.moves < answer.matches ? `${head} · moves ${answer.moves.toLocaleString('en-US')}` : head;
 }
 
+interface RuleForm { rows: ConditionRow[]; then: string; newGroup: string; note: string; skipInbox: boolean }
+
+/** The form for a rule as stored (or a new one). Row keys count from 1, so the same rule gives the same form. */
+function formOf(initial: MailRule | null): RuleForm {
+  let seq = 0;
+  const next = () => { seq += 1; return seq; };
+  return {
+    rows: initial ? rowsOfWhen(initial.when, next) : [{ key: next(), field: 'from', value: '' }],
+    then: initial?.then ?? 'Important',
+    newGroup: '',
+    note: initial?.note ?? '',
+    skipInbox: initial?.skipInbox === true,
+  };
+}
+
+/** The draft of the editor for `rule` (null: a new rule). A rule with no id is
+ *  told apart by its stored content, so two id-less rules never share a draft. */
+export function mailRuleDraftKey(rule: MailRule | null | undefined): string {
+  if (!rule) return draftKey('mail-rule', 'new');
+  return rule.id ? draftKey('mail-rule', rule.id) : draftKey('mail-rule', 'stored', draftHash(JSON.stringify(rule)));
+}
+
 export function MailRuleEditor(props: MailRuleEditorProps) {
-  const keySeq = useRef(0);
-  const nextKey = () => { keySeq.current += 1; return keySeq.current; };
-  const [rows, setRows] = useState<ConditionRow[]>(() => (props.initial ? rowsOfWhen(props.initial.when, nextKey) : [{ key: nextKey(), field: 'from', value: '' }]));
-  const [then, setThen] = useState(props.initial?.then ?? 'Important');
-  const [newGroup, setNewGroup] = useState('');
-  const [note, setNote] = useState(props.initial?.note ?? '');
-  const [skipInbox, setSkipInbox] = useState(props.initial?.skipInbox === true);
+  // The rule being edited and not saved is kept in the draft store: closing the editor by
+  // leaving the pane or reloading keeps it; Save (once it landed) and Cancel end it.
+  const form = useDraftValue<RuleForm>(mailRuleDraftKey(props.initial), formOf(props.initial));
+  const { rows, then, newGroup, note, skipInbox } = form.value;
+  const nextKeyOf = (prev: ConditionRow[]) => prev.reduce((max, one) => Math.max(max, one.key), 0) + 1;
+  const setRows = (next: (prev: ConditionRow[]) => ConditionRow[]) => form.setValue((f) => ({ ...f, rows: next(f.rows) }));
+  const setThen = (value: string) => form.setValue((f) => ({ ...f, then: value }));
+  const setNewGroup = (value: string) => form.setValue((f) => ({ ...f, newGroup: value }));
+  const setNote = (value: string) => form.setValue((f) => ({ ...f, note: value }));
+  const setSkipInbox = (value: boolean) => form.setValue((f) => ({ ...f, skipInbox: value }));
   const [preview, setPreview] = useState<{ text: string; error?: string } | null>(null);
   const noteId = useId();
   const noteRef = useRef<HTMLInputElement | null>(null);
   const noteMic = useRef<BoxMicHandle | null>(null);
   const dirtyRef = useRef(false);
   const markDirty = () => { if (!dirtyRef.current) { dirtyRef.current = true; props.onDirty(true); } };
+  // A kept draft is an edit in progress from the first render.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { if (form.dirty) markDirty(); }, []);
+  // A save that went through ends the draft in the section (MailRulesSection.saveEdited).
 
   // Important and Not important first (the catalog lists them first), then every group; a rule's own
   // target stays offered even when no unread mail is in that group today.
@@ -211,7 +242,7 @@ export function MailRuleEditor(props: MailRuleEditorProps) {
     }
     if (row.field === 'cc') return <span className="mail-rules-help">Not available for Outlook accounts</span>;
     return (
-      <input type="text" className="settings-input mail-rule-value-input" aria-label={label} data-testid="mail-rule-value"
+      <input type="text" className="settings-input mail-rule-value-input" aria-label={label} data-testid="mail-rule-value" data-draft-key={form.key ?? undefined}
         value={row.value} placeholder={row.field === 'from' ? 'issues@*, Survey Desk' : row.field === 'group' ? 'Ticket updates' : ''}
         onChange={(event) => setRow(row.key, { value: event.target.value })} />
     );
@@ -255,7 +286,7 @@ export function MailRuleEditor(props: MailRuleEditorProps) {
       </ul>
       {attempted && problems.get(-1) && <p className="mail-rule-field-error" role="alert">{problems.get(-1)}</p>}
       <SettingsButton variant="text" data-testid="mail-rule-add-condition"
-        onClick={() => { markDirty(); setRows((prev) => [...prev, { key: nextKey(), field: 'subject', value: '' }]); }}>
+        onClick={() => { markDirty(); setRows((prev) => [...prev, { key: nextKeyOf(prev), field: 'subject', value: '' }]); }}>
         + Add condition
       </SettingsButton>
       <div className="mail-rule-editor-head">Then</div>
@@ -263,7 +294,7 @@ export function MailRuleEditor(props: MailRuleEditorProps) {
         <MailRulesPicker ariaLabel="Goes to" value={then} options={targets} testId="mail-rule-then"
           onChange={(value) => { markDirty(); setThen(value); }} />
         {then === NEW_GROUP && (
-          <input type="text" className="settings-input" aria-label="New group name" maxLength={40} value={newGroup}
+          <input type="text" className="settings-input" aria-label="New group name" maxLength={40} value={newGroup} data-draft-key={form.key ?? undefined}
             data-testid="mail-rule-new-group" onChange={(event) => { markDirty(); setNewGroup(event.target.value); }} />
         )}
       </div>
@@ -276,7 +307,7 @@ export function MailRuleEditor(props: MailRuleEditorProps) {
       <label className="mail-rule-editor-head" htmlFor={noteId}>Note</label>
       <MicField inline fieldClassName="settings-mic-field" boxRef={noteRef} text={note} handleRef={noteMic} disabled={props.saving}
         setText={(t) => { markDirty(); setNote(t.slice(0, 300)); }}>
-        <input ref={noteRef} id={noteId} type="text" className="settings-input" maxLength={300} value={note} data-testid="mail-rule-note"
+        <input ref={noteRef} id={noteId} type="text" className="settings-input" maxLength={300} value={note} data-testid="mail-rule-note" data-draft-key={form.key ?? undefined}
           placeholder="Optional: why this rule exists" onChange={(event) => { markDirty(); setNote(event.target.value); }} />
       </MicField>
       {otherErrors.map((one, index) => <p key={index} className="mail-rule-field-error" role="alert">{one.message}</p>)}
@@ -284,7 +315,7 @@ export function MailRuleEditor(props: MailRuleEditorProps) {
         {preview?.error ? <span className="mail-rule-field-error">{preview.error}</span> : preview?.text ?? ''}
       </p>
       <div className="mail-rule-editor-actions">
-        <SettingsButton onClick={props.onCancel} data-testid="mail-rule-cancel" disabled={props.saving}>Cancel</SettingsButton>
+        <SettingsButton onClick={() => { form.clear(); props.onCancel(); }} data-testid="mail-rule-cancel" disabled={props.saving}>Cancel</SettingsButton>
         <SettingsButton variant="primary" onClick={save} busy={props.saving} busyLabel="Saving…" data-testid="mail-rule-save"
           disabled={props.saving || (attempted && !canSave)}>
           Save

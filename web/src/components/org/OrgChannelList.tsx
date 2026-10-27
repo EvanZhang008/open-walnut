@@ -199,7 +199,7 @@ export function OrgChannelList({ main, rows, moved = [], rowMenu, total, selecte
         </h1>
         <button type="button" className="btn btn-sm" data-testid="org-open-chart" onClick={onOpenChart} title="The CEO and every project's VP on one sheet; drag a project onto another VP to put it under that VP">Org chart</button>
       </header>
-      <input
+      <input data-no-draft="search"
         className="org-search"
         type="search"
         value={query}

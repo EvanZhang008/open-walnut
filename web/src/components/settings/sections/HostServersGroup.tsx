@@ -235,6 +235,7 @@ export function HostServersGroup({ hosts }: { hosts: Config['hosts'] }) {
                       <input
                         id={`host-server-option-${host.hostKey}-${option.key}`}
                         type="text"
+                        data-no-draft="autosave"
                         className="settings-input settings-input--short"
                         value={optionValue(option.key)}
                         placeholder={option.default}

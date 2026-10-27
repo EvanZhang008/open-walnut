@@ -6,9 +6,12 @@
  * The server owns the rules (src/core/org/org-node-edit.ts): a new project has its own VP, a new
  * VP has no project until one is dragged under it, and the instructions ride the node's session
  * prompt, so a running session is told an edit with its next message (the instruction notice).
- * Its own words are shown when the server refuses, and nothing typed is lost.
+ * Its own words are shown when the server refuses, and nothing typed is lost: the form is a draft
+ * (hooks/useDraft.ts) until it is saved or cancelled.
  */
 import { useState, type FormEvent, type KeyboardEvent } from 'react';
+import { useDraftValue } from '@/hooks/useDraft';
+import { draftKey } from '@/utils/drafts';
 import type { Task } from '@open-walnut/core';
 import { createOrgNode, editOrgNode, editProjectVp } from '@/api/org';
 import { log } from '@/utils/log';
@@ -38,10 +41,17 @@ interface Props {
 export function OrgNodeEditor({ mode, onClose, onBusy, onDone }: Props) {
   const editing = mode.kind === 'edit' ? mode : null;
   const isCeo = editing?.task?.org_role === 'main';
-  const [name, setName] = useState(editing?.name ?? '');
-  const [vpName, setVpName] = useState('');
   const before = editing?.task?.org_instructions?.text ?? '';
-  const [instructions, setInstructions] = useState(before);
+  // The form is a draft of this node (or of the new one) until it is saved or
+  // cancelled: Escape, a click outside and a reload keep what was typed.
+  const formKey = mode.kind === 'edit'
+    ? draftKey('org-node', 'edit', editing?.task?.id ?? `vp:${editing?.project ?? ''}`)
+    : draftKey('org-node', mode.kind);
+  const form = useDraftValue(formKey, { name: editing?.name ?? '', vpName: '', instructions: before });
+  const { name, vpName, instructions } = form.value;
+  const setName = (v: string) => form.setValue((f) => ({ ...f, name: v }));
+  const setVpName = (v: string) => form.setValue((f) => ({ ...f, vpName: v }));
+  const setInstructions = (v: string) => form.setValue((f) => ({ ...f, instructions: v }));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
@@ -63,11 +73,12 @@ export function OrgNodeEditor({ mode, onClose, onBusy, onDone }: Props) {
         // Only what changed is sent: an untouched name never renames, an untouched text never re-dates.
         const renamed = !isCeo && name.trim() !== (mode.name ?? '').trim();
         const changed = words !== before.trim();
-        if (!renamed && !changed) { onClose(); return; }
+        if (!renamed && !changed) { form.clear(formKey); onClose(); return; }
         const edit = { ...(renamed ? { name: name.trim() } : {}), ...(changed ? { instructions: words } : {}) };
         const t = mode.task ? await editOrgNode(mode.task.id, edit) : await editProjectVp(mode.project ?? '', edit);
         log.info('org-chart', 'org node edited', { taskId: t.id, role: t.org_role, renamed, instructions: changed ? words.length : undefined });
         const who = isCeo ? 'The CEO' : theVp(t.org_name ?? t.project).replace(/^the /, 'The ');
+        form.clear(formKey);
         onDone(changed ? `Saved. ${who} reads the new instructions with its next message.` : `Saved. It is ${theVp(t.org_name ?? t.project)} now.`);
       } else {
         const t = await createOrgNode(mode.kind === 'new-vp' ? 'vp' : 'project', {
@@ -76,6 +87,7 @@ export function OrgNodeEditor({ mode, onClose, onBusy, onDone }: Props) {
           ...(words ? { instructions: words } : {}),
         });
         log.info('org-chart', 'org node made', { taskId: t.id, kind: mode.kind, project: t.project });
+        form.clear(formKey);
         onDone(mode.kind === 'new-vp'
           ? `Made ${theVp(t.org_name ?? t.project)}. Drag projects onto it to put them under it.`
           : `Made the project ${t.project} with its own VP.`);
@@ -116,6 +128,7 @@ export function OrgNodeEditor({ mode, onClose, onBusy, onDone }: Props) {
               onChange={(e) => setName(e.target.value)}
               maxLength={NAME_MAX}
               placeholder={mode.kind === 'new-project' ? 'Garden' : 'Growth'}
+              data-draft-key={formKey}
               data-testid="org-node-name"
               autoFocus
               readOnly={busy}
@@ -130,6 +143,7 @@ export function OrgNodeEditor({ mode, onClose, onBusy, onDone }: Props) {
               onChange={(e) => setVpName(e.target.value)}
               maxLength={NAME_MAX}
               placeholder={name.trim() || 'Same as the project'}
+              data-draft-key={formKey}
               data-testid="org-node-vp-name"
               readOnly={busy}
             />
@@ -144,6 +158,7 @@ export function OrgNodeEditor({ mode, onClose, onBusy, onDone }: Props) {
             maxLength={INSTRUCTIONS_MAX}
             rows={6}
             placeholder={isCeo ? 'How the CEO should run the org for you.' : 'What this VP owns, how it works, what to watch for.'}
+            data-draft-key={formKey}
             data-testid="org-node-instructions"
             autoFocus={isCeo}
             readOnly={busy}
@@ -152,7 +167,7 @@ export function OrgNodeEditor({ mode, onClose, onBusy, onDone }: Props) {
         </label>
         {error && <p className="oc-confirm-error" role="alert" data-testid="org-node-error">Not saved. {error}</p>}
         <div className="oc-confirm-actions">
-          <button type="button" className="btn btn-sm" onClick={onClose} disabled={busy}>Cancel</button>
+          <button type="button" className="btn btn-sm" onClick={() => { form.clear(formKey); onClose(); }} disabled={busy}>Cancel</button>
           <button type="submit" className="btn btn-sm btn-primary" data-testid="org-node-save" disabled={!canSave}>
             {busy ? 'Working…' : mode.kind === 'edit' ? 'Save' : 'Create'}
           </button>

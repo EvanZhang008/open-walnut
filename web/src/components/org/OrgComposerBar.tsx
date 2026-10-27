@@ -6,6 +6,8 @@
 import { useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
 import { log } from '@/utils/log';
 import { BoxMic, type BoxMicHandle } from '@/components/common/BoxMic';
+import { useDraft } from '@/hooks/useDraft';
+import { sessionDraftKey } from '@/utils/composer-insert';
 
 interface Props {
   sessionId: string;
@@ -16,7 +18,9 @@ interface Props {
 }
 
 export function OrgComposerBar({ sessionId, to, send, onSent }: Props) {
-  const [text, setText] = useState('');
+  // The session's own draft: the words follow between this bar and the session's composer.
+  const draft = useDraft(sessionDraftKey(sessionId));
+  const { text, setText } = draft;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const box = useRef<HTMLTextAreaElement>(null);
@@ -34,11 +38,12 @@ export function OrgComposerBar({ sessionId, to, send, onSent }: Props) {
     if (!message || busy) return;
     setBusy(true);
     setError(null);
+    const sentKey = draft.key;
     const ok = await send(message).catch(() => false);
     setBusy(false);
     log.info('org-page', 'composer send', { sessionId, ok });
     if (!ok) { setError('Not sent. Try again.'); return; }
-    setText('');
+    draft.clear(sentKey);
     mic.current?.clear();
     onSent();
   };
@@ -52,6 +57,7 @@ export function OrgComposerBar({ sessionId, to, send, onSent }: Props) {
       <textarea
         ref={box}
         className="org-composer-input"
+        data-draft-key={draft.key ?? undefined}
         rows={1}
         value={text}
         placeholder={`Message ${to}…`}

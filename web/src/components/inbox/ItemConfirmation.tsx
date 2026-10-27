@@ -6,7 +6,7 @@ import type { InboxFrozenInput, InboxItemPlan, InboxItemPrepareResponse, InboxLe
 import { itemError } from '@/api/human-inbox-items';
 import { ItemOperationDetails } from './ItemOperationDetails';
 import { PHASE_TEXT, mailDateText } from './item-receipt-model';
-import { useItemDraft } from './item-drafts';
+import { itemDraftKey, useItemDraft } from './item-drafts';
 import { MicField, type BoxMicHandle } from '@/components/common/BoxMic';
 import '@/styles/inbox-mic.css';
 
@@ -93,7 +93,7 @@ export function ItemConfirmation({ draftKey, item, actionId, target, retry, agai
       <p>{target.project || 'Inbox'} · {PHASE_TEXT[target.phase] ?? target.phase}</p>
       <button type="button" className="hib-row-btn" onClick={onFind} disabled={submitting || submitted}>Choose another task</button></div>}
     {!again && !attach && !retry && !work && <>
-      <label>Task title<input value={title} readOnly={submitting || submitted} onChange={e => change(setTitle, e.target.value)} /></label>
+      <label>Task title<input data-draft-key={itemDraftKey(draftKey, `${field}title`)} value={title} readOnly={submitting || submitted} onChange={e => change(setTitle, e.target.value)} /></label>
       <label>Project</label><div className="hii-projects" role="group" aria-label="Project">
         {(response?.projects ?? [{ name: '' }]).map(p => <button type="button" key={p.name} aria-pressed={project === p.name}
           className="hib-row-btn" disabled={submitting || submitted} onClick={() => change(setProject, p.name)}>{p.name || 'Inbox'}</button>)}
@@ -101,7 +101,7 @@ export function ItemConfirmation({ draftKey, item, actionId, target, retry, agai
     </>}
     {!again && <label htmlFor={goalId}>Work goal<MicField boxRef={goalBox} text={goal} setText={v => change(setGoal, v)} handleRef={goalMic}
       disabled={submitting || submitted || !!retry || workLocked}>
-      <textarea ref={goalBox} id={goalId} aria-label="Work goal" rows={3} value={goal} readOnly={submitting || submitted || !!retry || workLocked}
+      <textarea ref={goalBox} id={goalId} data-draft-key={itemDraftKey(draftKey, `${field}goal`)} aria-label="Work goal" rows={3} value={goal} readOnly={submitting || submitted || !!retry || workLocked}
         onChange={e => change(setGoal, e.target.value)} /></MicField></label>}
     {!again && !goal.trim() && <p>Add a work goal before continuing.</p>}
     <p>{again ? 'Set this email to read again. The previous receipt is kept.'

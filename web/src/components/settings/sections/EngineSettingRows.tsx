@@ -140,6 +140,7 @@ function TextSettingControl({ id, item, onSet }: ControlProps) {
       <input
         id={id}
         type="text"
+        data-no-draft="autosave"
         className="engine-setting-text"
         value={draft ?? stored}
         list={listId}
@@ -204,6 +205,7 @@ function SelectSettingControl({ id, item, onSet }: ControlProps) {
       {custom !== null && (
         <input
           type="text"
+          data-no-draft="autosave"
           className="engine-setting-custom"
           // Safe to steal focus: this input exists only because the user just
           // picked "Custom..." in the select next to it.

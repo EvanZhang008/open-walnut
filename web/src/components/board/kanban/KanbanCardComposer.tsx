@@ -13,6 +13,9 @@ import { useEffect, useRef, useState } from 'react';
 import { wsClient } from '@/api/ws';
 import { log } from '@/utils/log';
 import { BoxMic, type BoxMicHandle } from '@/components/common/BoxMic';
+import { useDraft } from '@/hooks/useDraft';
+import { sessionDraftKey } from '@/utils/composer-insert';
+import { draftKey } from '@/utils/drafts';
 import type { KanbanCardComposerProps } from './kanban-contract';
 import { cutTitle } from './kanban-changes-model';
 
@@ -40,7 +43,9 @@ function reasonOf(err: unknown): string {
 }
 
 export function KanbanCardComposer({ card, onSent, onClose }: KanbanCardComposerProps) {
-  const [text, setText] = useState('');
+  // The worker's session draft (the same words its own composer shows); a card with no session yet keeps its own.
+  const draft = useDraft(card.sessionId ? sessionDraftKey(card.sessionId) : draftKey('kanban-card', card.taskId));
+  const { text, setText } = draft;
   const [sending, setSending] = useState(false);
   const [error, setError] = useState('');
   const ref = useRef<HTMLTextAreaElement>(null);
@@ -55,11 +60,12 @@ export function KanbanCardComposer({ card, onSent, onClose }: KanbanCardComposer
     setSending(true);
     setError('');
     const started = Date.now();
+    const sentKey = draft.key;
     try {
       await sendToCardSession(sessionId, message);
       log.info('board', 'kanban card message sent', { cardTaskId: card.taskId, sessionId, ms: Date.now() - started });
       setSending(false);
-      setText('');
+      draft.clear(sentKey);
       mic.current?.clear();
       onSent();
     } catch (err) {
@@ -77,6 +83,7 @@ export function KanbanCardComposer({ card, onSent, onClose }: KanbanCardComposer
           ref={ref}
           className="kanban-composer-input"
           data-testid="kanban-card-composer-input"
+          data-draft-key={draft.key ?? undefined}
           rows={1}
           placeholder={composerPlaceholder(card.title)}
           aria-label={`Message ${card.title}`}

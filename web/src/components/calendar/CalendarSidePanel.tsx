@@ -284,10 +284,14 @@ export function CalendarSidePanel({ onClose, active = true, width, panelRef: ext
           anchorEl={openItem.anchorEl}
           onClose={() => setOpenItem(null)}
           onSaveEvent={async (ev, patch) => {
-            if (await confirmCalendarWrite(ev, 'update')) calendar.moveEvent(ev.id, { ...patch, human_confirm: calendarEventNeedsApproval(ev) });
+            if (!(await confirmCalendarWrite(ev, 'update'))) return false;
+            calendar.moveEvent(ev.id, { ...patch, human_confirm: calendarEventNeedsApproval(ev) });
+            return true;
           }}
           onDeleteEvent={async (ev) => {
-            if (await confirmCalendarWrite(ev, 'delete')) calendar.removeEvent(ev.id, calendarEventNeedsApproval(ev));
+            if (!(await confirmCalendarWrite(ev, 'delete'))) return false;
+            calendar.removeEvent(ev.id, calendarEventNeedsApproval(ev));
+            return true;
           }}
           onHideEvent={calendar.hideEvent}
           onSaveTaskWhen={saveTaskWhen}

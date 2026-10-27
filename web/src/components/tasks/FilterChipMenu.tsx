@@ -62,7 +62,7 @@ export function FilterChipMenu({ controller: c, dim, anchorRef, onClose, onRemov
       {searchable && (
         <div className="fb-search fb-list-search">
           <span className="fb-search-icon" aria-hidden="true">{ICON_SEARCH}</span>
-          <input
+          <input data-no-draft="search"
             ref={inputRef}
             type="text"
             className="fb-search-input"

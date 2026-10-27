@@ -66,6 +66,7 @@ export function SecretInput({
         ref={inputRef}
         id={id}
         type={visible ? 'text' : 'password'}
+        data-no-draft="secret"
         value={value}
         onChange={(e) => onChange(e.target.value)}
         onBlur={() => {

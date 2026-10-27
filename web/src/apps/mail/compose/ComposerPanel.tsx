@@ -384,6 +384,7 @@ function ComposerForm({ composer, canSend, cannotSendTitle, senderAddressedBy }:
           <div className="mail-compose-field">
             <label className="mail-compose-label" htmlFor="mail-compose-subject">Subject</label>
             <input
+              data-no-draft="autosave"
               id="mail-compose-subject"
               className="mail-compose-input mail-compose-subject"
               data-testid="mail-compose-subject"
@@ -493,6 +494,7 @@ function BodyArea({ boxRef: ref, value, autoFocus, onChange }: {
   useEffect(() => { if (autoFocus) ref.current?.focus(); }, [autoFocus]);
   return (
     <textarea
+      data-no-draft="autosave"
       ref={ref}
       className="mail-compose-body"
       data-testid="mail-compose-body"

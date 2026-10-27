@@ -147,7 +147,7 @@ export function KanbanFilters({ board, filter, seen, mode, searchRef, onRevealCa
       )}
       <div className="kanban-search-box">
         <span className="kanban-search-icon" aria-hidden>{ICON_SEARCH}</span>
-        <input
+        <input data-no-draft="search"
           ref={inputRef}
           type="text"
           className="kanban-search"

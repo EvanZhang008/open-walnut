@@ -68,7 +68,7 @@ export function FileTreeEditRow({
       >
         <span className="sfe-arrow" />
         <span className="sfe-icon">{isDir ? '📁' : '📄'}</span>
-        <input
+        <input data-no-draft="rename"
           ref={inputRef}
           className="sfe-edit-input"
           aria-label={ARIA_LABEL[kind]}

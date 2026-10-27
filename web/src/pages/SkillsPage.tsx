@@ -104,7 +104,7 @@ export function SkillsPage() {
       )}
 
       <div className="skill-search-row">
-        <input
+        <input data-no-draft="search"
           type="text"
           className="skill-search-input"
           placeholder="Search skills..."

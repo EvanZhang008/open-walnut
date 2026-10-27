@@ -138,7 +138,7 @@ export class AppErrorBoundary extends Component<{ children: ReactNode }, State> 
             </button>
           </div>
           {this.state.showReport && this.state.report && (
-            <textarea
+            <textarea data-no-draft="mirror"
               ref={this.reportRef}
               readOnly
               value={this.state.report}

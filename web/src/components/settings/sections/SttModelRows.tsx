@@ -227,7 +227,7 @@ export function WhisperModelRows({ detection, config, engine, onSave, onRefresh 
         </>
       ) : (
         <SettingsRow indent wide label="Model file" help="Full path to a GGML model file." htmlFor="stt-manual-model" error={manual.error} control={
-          <input id="stt-manual-model" type="text" className="settings-input settings-input--long settings-input--mono" spellCheck={false}
+          <input id="stt-manual-model" type="text" data-no-draft="autosave" className="settings-input settings-input--long settings-input--mono" spellCheck={false}
             placeholder="/path/to/ggml-base.en.bin" {...manual.inputProps} />
         } />
       )}
@@ -340,7 +340,7 @@ export function SherpaModelRows({ config, onSave, onRefresh }: { config: Config;
       ) : (
         <>
           <SettingsRow indent wide label="Model folder" htmlFor="stt-sherpa-manual-dir" error={dir.error} control={
-            <input id="stt-sherpa-manual-dir" type="text" className="settings-input settings-input--long settings-input--mono" spellCheck={false}
+            <input id="stt-sherpa-manual-dir" type="text" data-no-draft="autosave" className="settings-input settings-input--long settings-input--mono" spellCheck={false}
               placeholder="~/.local/share/sherpa-onnx/my-model" {...dir.inputProps} />
           } />
           <SettingsRow indent label="Model type" htmlFor="stt-sherpa-manual-type" error={type.error} control={

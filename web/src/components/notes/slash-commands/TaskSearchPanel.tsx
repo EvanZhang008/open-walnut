@@ -108,6 +108,7 @@ export function TaskSearchPanel({ tasks, focusedTaskId, onSelect, onBack }: Task
           &larr;
         </button>
         <input
+          data-no-draft="picker"
           ref={inputRef}
           className="notes-task-search-input"
           type="text"

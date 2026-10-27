@@ -1,6 +1,8 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useRef, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { useModalOverlay } from '@/hooks/useModalOverlay';
+import { useDraft } from '@/hooks/useDraft';
+import { draftHash, draftKey } from '@/utils/drafts';
 
 interface ConfirmDialogProps {
   title: string;
@@ -44,7 +46,16 @@ export function ConfirmDialog({
   const confirmRef = useRef<HTMLButtonElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const isPrompt = promptDefaultValue !== undefined;
-  const [value, setValue] = useState(promptDefaultValue ?? '');
+  // A prompt's typed text is kept under its title and the value it started from
+  // (the group or project being renamed, the link being edited), so a dialog that
+  // closed by Esc or outside click, or a reload, gives it back. Confirm or the
+  // Cancel button drops it.
+  const draft = useDraft(
+    isPrompt ? draftKey('prompt', draftHash(`${title}\n${promptDefaultValue ?? ''}`)) : null,
+    { baseline: promptDefaultValue ?? '' },
+  );
+  const value = draft.text;
+  const setValue = draft.setText;
 
   // Prompt: focus + select the input so the user can type/replace immediately.
   // Otherwise focus the confirm button so Enter works and the default is obvious.
@@ -61,6 +72,7 @@ export function ConfirmDialog({
     if (isPrompt) {
       const trimmed = value.trim();
       if (!trimmed && !promptAllowEmpty) return; // empty rejected — keep the dialog open
+      draft.clear();
       onConfirm(trimmed);
     } else {
       onConfirm();
@@ -83,6 +95,7 @@ export function ConfirmDialog({
         {isPrompt && (
           <input
             ref={inputRef}
+            data-draft-key={draft.key ?? undefined}
             className="app-modal-input"
             value={value}
             placeholder={promptPlaceholder}
@@ -95,7 +108,7 @@ export function ConfirmDialog({
         )}
         <div className="app-modal-actions">
           {cancelLabel && (
-            <button className="app-modal-btn" onClick={onCancel}>
+            <button className="app-modal-btn" onClick={() => { draft.clear(); onCancel(); }}>
               {cancelLabel}
             </button>
           )}

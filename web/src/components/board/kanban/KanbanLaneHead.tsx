@@ -103,7 +103,7 @@ export function KanbanLaneHead({ lane: vm, lanes, index, mode, folded, onToggleF
   );
   const nameEl = renaming ? (
     <span className="kanban-lane-rename">
-      <input
+      <input data-no-draft="rename"
         ref={inputRef}
         className="kanban-lane-rename-input"
         data-testid="kanban-lane-rename-input"

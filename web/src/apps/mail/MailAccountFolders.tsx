@@ -256,6 +256,7 @@ export function MailAccountFolders({
         {expanded && folders.hidden.length > 0 && (
           <li>
             <input
+              data-no-draft="search"
               type="search"
               className="mail-tail-filter"
               data-testid="mail-tail-filter"

@@ -461,6 +461,7 @@ export function SettingsNav({ model, activePane, onOpenPane }: SettingsNavProps)
         <input
           ref={inputRef}
           type="search"
+          data-no-draft="search"
           className="settings-filter"
           data-testid="settings-filter"
           placeholder="Find a setting"

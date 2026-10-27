@@ -418,7 +418,7 @@ export function ProjectPickerFlyout({ open, anchorRef, anchorPoint, align, curre
       onPointerDown={(e) => e.stopPropagation()}
     >
       {options.length > 6 && (
-        <input
+        <input data-no-draft="search"
           className="task-kebab-project-filter"
           placeholder="Filter projects…"
           value={filter}

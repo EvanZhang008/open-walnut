@@ -16,8 +16,10 @@
  * `answers` construction, the completeness gate, pill toggling) — this component
  * owns only the selection state and the markup.
  */
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { MicField } from '@/components/common/BoxMic';
+import { useDraftValue } from '@/hooks/useDraft';
+import { askAnswerDraftKey } from '@/utils/drafts';
 import '@/styles/prompt-mic.css';
 import {
   buildAskUserAnswers, allAskUserQuestionsAnswered, toggleAskUserSelection,
@@ -26,8 +28,8 @@ import {
 
 /** One question's own-words answer, with the composer's mic inside its right edge.
  *  A submit settles the ask and unmounts the form, which discards a late recording. */
-function OtherAnswerInput({ placeholder, value, disabled, onChange }: {
-  placeholder: string; value: string; disabled: boolean; onChange: (v: string) => void;
+function OtherAnswerInput({ placeholder, value, disabled, onChange, draftKey }: {
+  placeholder: string; value: string; disabled: boolean; onChange: (v: string) => void; draftKey: string | null;
 }) {
   const box = useRef<HTMLInputElement | null>(null);
   return (
@@ -35,6 +37,7 @@ function OtherAnswerInput({ placeholder, value, disabled, onChange }: {
       <input
         ref={box}
         className="nfc-answer-input"
+        data-draft-key={draftKey ?? undefined}
         placeholder={placeholder}
         value={value}
         disabled={disabled}
@@ -68,7 +71,12 @@ export function PermissionAnswerForm({
   questions, disabled, resolved, onSubmit, onDismissQuestions, scrollable, dismissLabel = 'Dismiss', dismissTitle,
 }: PermissionAnswerFormProps) {
   const [selections, setSelections] = useState<Record<string, string[]>>({});
-  const [otherText, setOtherText] = useState<Record<string, string>>({});
+  // The own-words answers are a draft of this ask (the toast, the panel and the card share it).
+  const otherDraft = useDraftValue<Record<string, string>>(askAnswerDraftKey(questions), {});
+  const { value: otherText, setValue: setOtherText } = otherDraft;
+  // Settled (answered or dismissed, here or on another surface): the words are spent.
+  const clearOther = otherDraft.clear;
+  useEffect(() => { if (resolved) clearOther(); }, [resolved, clearOther]);
   const complete = allAskUserQuestionsAnswered(questions, selections, otherText);
 
   if (resolved) return null;
@@ -110,6 +118,7 @@ export function PermissionAnswerForm({
               value={otherText[q.question] ?? ''}
               disabled={disabled}
               onChange={(v) => setOtherText(prev => ({ ...prev, [q.question]: v }))}
+              draftKey={otherDraft.key}
             />
           </div>
         );

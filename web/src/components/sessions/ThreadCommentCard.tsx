@@ -23,6 +23,7 @@ import type { CardGrown } from '@/utils/thread-card';
 import type { ThreadViewStatus } from '@/utils/thread-meta';
 import { ICON_COLLAPSE, ICON_EXPAND } from '@/components/common/Icons';
 import { BoxMic, type BoxMicHandle } from '@/components/common/BoxMic';
+import { useDraft } from '@/hooks/useDraft';
 import { ThreadStatusWord } from './ThreadStatusWord';
 import { ThreadCloseIcon } from './ThreadIcons';
 import '@/styles/thread-card.css';
@@ -79,7 +80,10 @@ export interface ThreadCommentCardProps {
   onClose: () => void;
   /** "Quote in chat": the chat's composer writes to this question from now on. */
   onQuote?: () => void;
-  /** What the box opens with for a draft (words kept from an earlier visit). */
+  /** Where the box keeps its unsent words (the question's composer draft key):
+   *  closing the card, leaving the page or a reload keeps them. */
+  draftKey?: string | null;
+  /** What the box opens with for a draft when it has no `draftKey`. */
   initialText?: string;
   /** Every change of the box's text (the owner keeps an unsent Ask's words). */
   onTextChange?: (text: string) => void;
@@ -106,7 +110,8 @@ function restoreGrowScroll(list: Array<{ el: Element; before: number; after: num
 }
 
 export const ThreadCommentCard = memo(function ThreadCommentCard(p: ThreadCommentCardProps) {
-  const [text, setText] = useState('');
+  const draft = useDraft(p.draftKey);
+  const { text, setText } = draft;
   const [sending, setSending] = useState(false);
   const boxRef = useRef<HTMLTextAreaElement | null>(null);
   // The question is dictated the way the composer's message is: into this box.
@@ -131,7 +136,8 @@ export const ThreadCommentCard = memo(function ThreadCommentCard(p: ThreadCommen
     mic.current?.clear();
     // A grow's scroll record belongs to the question left.
     grewScroll.current = [];
-    setText(p.draft ? initialRef.current ?? '' : '');
+    // A kept box (draftKey) loads its own words for the new key.
+    if (!p.draftKey) setText(p.draft ? initialRef.current ?? '' : '');
     setExpanded(false);
     userSized.current = false;
     const body = bodyRef.current;
@@ -199,19 +205,21 @@ export const ThreadCommentCard = memo(function ThreadCommentCard(p: ThreadCommen
     const t = text.trim();
     if (!t || sending || !p.canAsk) return;
     setSending(true);
+    // A first send turns an Ask into a question with its own key: the words go from the one they were typed under.
+    const sentKey = draft.key;
     try {
       const ok = await p.onSend(t);
       if (ok) {
         // A transcription landing after the send would repeat what was just sent.
         mic.current?.clear();
-        setText('');
+        draft.clear(sentKey, t);
         pinned.current = true;
       }
     } finally {
       setSending(false);
       boxRef.current?.focus({ preventScroll: true });
     }
-  }, [text, sending, p]);
+  }, [text, sending, p, draft]);
 
   const g = p.style.grown;
   // Worth a button only when expanding gains real room.
@@ -334,6 +342,7 @@ export const ThreadCommentCard = memo(function ThreadCommentCard(p: ThreadCommen
         <textarea
           ref={boxRef}
           className="thread-card-input"
+          data-draft-key={draft.key ?? undefined}
           rows={1}
           value={text}
           placeholder={p.canAsk ? placeholder : 'This engine cannot take questions'}

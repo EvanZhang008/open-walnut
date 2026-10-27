@@ -18,6 +18,8 @@ import {
 } from '@/api/config';
 import { InstallButton } from '@/components/common/InstallButton';
 import { useSystemHealth } from '@/hooks/useSystemHealth';
+import { useDraft } from '@/hooks/useDraft';
+import { draftKey } from '@/utils/drafts';
 import { useSerialSave, type OnSave } from './GeneralSection';
 import { resolveMainProvider } from './main-provider';
 
@@ -320,7 +322,7 @@ function BedrockRows({ config, serverInfo, onSave, onAfterSave, onTest, testStat
       {method === 'keys' && (
         <>
           <SettingsRow indent label="Access key ID" htmlFor="bedrock-access-key" help={envHelp} control={
-            <input id="bedrock-access-key" type="text" className="settings-input settings-input--short settings-input--mono" value={accessKey}
+            <input id="bedrock-access-key" type="text" data-no-draft="autosave" className="settings-input settings-input--short settings-input--mono" value={accessKey}
               onChange={(e) => setAccessKey(e.target.value)} onBlur={commit} onKeyDown={onEnter} placeholder="AKIA..." autoComplete="off" />
           } />
           <SettingsRow indent label="Secret access key" htmlFor="bedrock-secret-key" control={
@@ -337,7 +339,7 @@ function BedrockRows({ config, serverInfo, onSave, onAfterSave, onTest, testStat
               {profiles.map((p) => <option key={p} value={p}>{p}</option>)}
             </select>
           ) : (
-            <input id="bedrock-profile" type="text" className="settings-input settings-input--short" value={profile}
+            <input id="bedrock-profile" type="text" data-no-draft="autosave" className="settings-input settings-input--short" value={profile}
               onChange={(e) => setProfile(e.target.value)} onBlur={commit} onKeyDown={onEnter} placeholder="Profile name" />
           )
         } />
@@ -345,7 +347,7 @@ function BedrockRows({ config, serverInfo, onSave, onAfterSave, onTest, testStat
       {method === 'export' && (
         <SettingsRow indent wide label="Credential command" htmlFor="bedrock-credential-export"
           help={envHelp ?? 'Prints temporary AWS credentials as JSON; refreshed near expiry.'} control={
-          <input id="bedrock-credential-export" type="text" className="settings-input settings-input--long settings-input--mono"
+          <input id="bedrock-credential-export" type="text" data-no-draft="autosave" className="settings-input settings-input--long settings-input--mono"
             value={credentialExport} onChange={(e) => setCredentialExport(e.target.value)} onBlur={commit} onKeyDown={onEnter}
             placeholder="aws configure export-credentials --format process" autoComplete="off" spellCheck={false} />
         } />
@@ -368,7 +370,9 @@ function ModelRows({ providerName, models, config, onSave, onAfterSave }: {
   onSave: OnSave;
   onAfterSave: () => Promise<void>;
 }) {
-  const [newModelId, setNewModelId] = useState('');
+  // A model id typed and not added yet survives leaving the pane; it goes once the add saved.
+  const newModel = useDraft(draftKey('provider-add-model', providerName));
+  const newModelId = newModel.text;
   const [listError, setListError] = useState<string | null>(null);
   const save = useSerialSave(config, onSave);
   const saveAgent = (patch: Record<string, unknown>, rowKey: string) =>
@@ -385,7 +389,7 @@ function ModelRows({ providerName, models, config, onSave, onAfterSave }: {
     catch (err) { setPickError(couldntSave(saveErrorMessage(err))); }
   };
   const configModels = (config.providers as Record<string, { models?: ModelEntry[]; api?: string }> | undefined)?.[providerName];
-  const saveModels = async (next: ModelEntry[]) => {
+  const saveModels = async (next: ModelEntry[]): Promise<boolean> => {
     const template = ALL_PROVIDERS.find((p) => p.name === providerName);
     setListError(null);
     try {
@@ -396,15 +400,17 @@ function ModelRows({ providerName, models, config, onSave, onAfterSave }: {
         } as Config['providers'],
       }, { rowKey: 'providers.models' });
       await onAfterSave();
+      return true;
     } catch (err) {
       setListError(couldntSave(saveErrorMessage(err)));
+      return false;
     }
   };
-  const add = () => {
+  const add = async () => {
     const id = newModelId.trim();
     if (!id) return;
-    setNewModelId('');
-    void saveModels([...(configModels?.models ?? []), { id, provider: providerName }]);
+    const sentKey = newModel.key;
+    if (await saveModels([...(configModels?.models ?? []), { id, provider: providerName }])) newModel.clear(sentKey);
   };
 
   return (
@@ -418,7 +424,7 @@ function ModelRows({ providerName, models, config, onSave, onAfterSave }: {
         } />
       ) : (
         <SettingsRow indent wide label="API model" htmlFor="main-model" help="Empty uses the provider's default." error={model.error} control={
-          <input id="main-model" type="text" className="settings-input settings-input--long settings-input--mono" spellCheck={false}
+          <input id="main-model" type="text" data-no-draft="autosave" className="settings-input settings-input--long settings-input--mono" spellCheck={false}
             placeholder="Default" {...model.inputProps} />
         } />
       )}
@@ -429,10 +435,10 @@ function ModelRows({ providerName, models, config, onSave, onAfterSave }: {
         ))}
         <SettingsRow indent wide label="Add a model" htmlFor="provider-add-model" error={listError} control={
           <span className="settings-control-cluster">
-            <input id="provider-add-model" type="text" className="settings-input settings-input--long settings-input--mono" value={newModelId}
-              placeholder="Model id" spellCheck={false} onChange={(e) => setNewModelId(e.target.value)}
-              onKeyDown={(e) => { if (e.nativeEvent.isComposing) return; if (e.key === 'Enter') { e.preventDefault(); add(); } }} />
-            <SettingsButton disabled={!newModelId.trim()} title={newModelId.trim() ? undefined : 'Type a model id first.'} onClick={add}>Add</SettingsButton>
+            <input id="provider-add-model" type="text" data-draft-key={newModel.key ?? undefined} className="settings-input settings-input--long settings-input--mono" value={newModelId}
+              placeholder="Model id" spellCheck={false} onChange={(e) => newModel.setText(e.target.value)}
+              onKeyDown={(e) => { if (e.nativeEvent.isComposing) return; if (e.key === 'Enter') { e.preventDefault(); void add(); } }} />
+            <SettingsButton disabled={!newModelId.trim()} title={newModelId.trim() ? undefined : 'Type a model id first.'} onClick={() => void add()}>Add</SettingsButton>
           </span>
         } />
       </SettingsDisclosure>

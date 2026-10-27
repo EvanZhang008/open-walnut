@@ -92,6 +92,8 @@ import { RESTART_PENDING_STATE, sourceRowKey, type UpdateState, type UpdateStatu
 import { buildInstallLink, INSTALL_LINK_SCHEME, type InstallLinkTarget } from '../../../../../src/core/plugin-install-link';
 import type { PluginCategory } from '../../../../../src/core/plugins/plugin-category';
 import { peekPendingInstall, settlePendingInstall, subscribeOpenLinks } from '@/utils/open-link';
+import { useDraft } from '@/hooks/useDraft';
+import { draftKey } from '@/utils/drafts';
 import '@/styles/settings-sections-addons.css';
 
 /** Mirrors PluginRegistryRow in src/core/plugins/plugin-catalog.ts. */
@@ -266,7 +268,9 @@ export function PluginStoreSection({ config, onSave, filter = 'all', query = '',
   // once while the registry (a few seconds when it scans linked checkouts) refreshes.
   const [registry, setRegistry] = useState<RegistryResponse | null>(() => lastRegistry);
   const [sources, setSources] = useState<PluginSource[]>([]);
-  const [url, setUrl] = useState('');
+  // A source typed or pasted and not installed yet survives leaving the page; a successful Add ends it.
+  const urlDraft = useDraft(draftKey('plugin-source', 'new'));
+  const { text: url, setText: setUrl } = urlDraft;
   const [trusted, setTrusted] = useState(false);
   // A source an install link asked for (utils/open-link.ts), shown in its own card.
   const [linkRequest, setLinkRequest] = useState<InstallLinkTarget | null>(null);
@@ -489,13 +493,14 @@ export function PluginStoreSection({ config, onSave, filter = 'all', query = '',
     setBusy('add');
     setError(null);
     setNotice(null);
+    const sentKey = urlDraft.key;
     try {
       // A share snippet is JSON and a git remote has a scheme; everything else
       // goes to the npm path so the error message is about the right thing.
       const isSnippet = value.startsWith('{');
       const isInstallLink = value.toLowerCase().startsWith(INSTALL_LINK_SCHEME);
       await installSource(isSnippet || isInstallLink || looksLikeGitUrl(value) ? { url: value } : { spec: value });
-      setUrl('');
+      urlDraft.clear(sentKey);
       setTrusted(false); // trust is granted per install, never sticky
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -1295,6 +1300,7 @@ export function PluginStoreSection({ config, onSave, filter = 'all', query = '',
                     id="plugin-source-url"
                     ref={urlInputRef}
                     type="text"
+                    data-draft-key={urlDraft.key ?? undefined}
                     className="settings-input settings-input--long settings-input--mono"
                     value={url}
                     onChange={e => setUrl(e.target.value)}

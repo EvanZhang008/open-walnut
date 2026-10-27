@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { MicField, type BoxMicHandle } from '@/components/common/BoxMic';
 import { fetchRepository } from '@/api/repositories';
+import { useDraftValue } from '@/hooks/useDraft';
+import { draftKey } from '@/utils/drafts';
 
 interface RepoFormProps {
   editSlug: string | null;
@@ -216,9 +218,28 @@ function yamlToForm(content: string): FormData {
   return data;
 }
 
+/** What the form keeps as a draft: every field plus the slug. */
+interface KeptForm {
+  form: FormData;
+  slug: string;
+}
+
 export function RepoForm({ editSlug, onSave, onCancel }: RepoFormProps) {
-  const [slug, setSlug] = useState(editSlug || '');
-  const [form, setForm] = useState<FormData>({ ...EMPTY_FORM, hosts: [{ label: 'local', path: '', ssh_host: '' }] });
+  // The saved repository (the empty form for a new one); the form is a draft over
+  // it until Create/Update or Cancel, so leaving the page or a reload keeps it.
+  const [saved, setSaved] = useState<KeptForm>(() => ({
+    form: { ...EMPTY_FORM, hosts: [{ label: 'local', path: '', ssh_host: '' }] },
+    slug: editSlug || '',
+  }));
+  const draft = useDraftValue<KeptForm>(draftKey('repo-form', editSlug ?? 'new'), saved);
+  const { form, slug } = draft.value;
+  const { setValue: setKept } = draft;
+  const setForm = useCallback((next: (prev: FormData) => FormData) => {
+    setKept(prev => ({ ...prev, form: next(prev.form) }));
+  }, [setKept]);
+  const setSlug = useCallback((next: string) => {
+    setKept(prev => ({ ...prev, slug: next }));
+  }, [setKept]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(!!editSlug);
@@ -232,8 +253,7 @@ export function RepoForm({ editSlug, onSave, onCancel }: RepoFormProps) {
     let cancelled = false;
     fetchRepository(editSlug).then((detail) => {
       if (!cancelled) {
-        setForm(yamlToForm(detail.content));
-        setSlug(editSlug);
+        setSaved({ form: yamlToForm(detail.content), slug: editSlug });
         setLoading(false);
       }
     }).catch((err) => {
@@ -251,11 +271,11 @@ export function RepoForm({ editSlug, onSave, onCancel }: RepoFormProps) {
     if (!editSlug) {
       setSlug(name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, ''));
     }
-  }, [editSlug]);
+  }, [editSlug, setForm, setSlug]);
 
   const updateField = useCallback((key: keyof FormData, value: string) => {
     setForm(prev => ({ ...prev, [key]: value }));
-  }, []);
+  }, [setForm]);
 
   const updateHost = useCallback((index: number, field: keyof HostEntry, value: string) => {
     setForm(prev => {
@@ -263,21 +283,21 @@ export function RepoForm({ editSlug, onSave, onCancel }: RepoFormProps) {
       hosts[index] = { ...hosts[index], [field]: value };
       return { ...prev, hosts };
     });
-  }, []);
+  }, [setForm]);
 
   const addHost = useCallback(() => {
     setForm(prev => ({
       ...prev,
       hosts: [...prev.hosts, { label: '', path: '', ssh_host: '' }],
     }));
-  }, []);
+  }, [setForm]);
 
   const removeHost = useCallback((index: number) => {
     setForm(prev => ({
       ...prev,
       hosts: prev.hosts.filter((_, i) => i !== index),
     }));
-  }, []);
+  }, [setForm]);
 
   const handleSubmit = useCallback(async (e: React.FormEvent) => {
     e.preventDefault();
@@ -299,6 +319,7 @@ export function RepoForm({ editSlug, onSave, onCancel }: RepoFormProps) {
       setError('At least one host with a label and path is required');
       return;
     }
+    const sentKey = draft.key;
     try {
       setSaving(true);
       setError(null);
@@ -307,12 +328,13 @@ export function RepoForm({ editSlug, onSave, onCancel }: RepoFormProps) {
       descMic.current?.clear();
       archMic.current?.clear();
       await onSave(trimmedSlug, yaml);
+      draft.clear(sentKey);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setSaving(false);
     }
-  }, [slug, form, onSave]);
+  }, [slug, form, onSave, draft]);
 
   if (loading) return <p className="text-muted">Loading...</p>;
 
@@ -329,6 +351,7 @@ export function RepoForm({ editSlug, onSave, onCancel }: RepoFormProps) {
         <div className="repo-form-field repo-form-field-grow">
           <label htmlFor="repo-name">Name</label>
           <input
+            data-draft-key={draft.key ?? undefined}
             id="repo-name"
             type="text"
             value={form.name}
@@ -341,6 +364,7 @@ export function RepoForm({ editSlug, onSave, onCancel }: RepoFormProps) {
         <div className="repo-form-field">
           <label htmlFor="repo-slug">Slug</label>
           <input
+            data-draft-key={draft.key ?? undefined}
             id="repo-slug"
             type="text"
             value={slug}
@@ -358,6 +382,7 @@ export function RepoForm({ editSlug, onSave, onCancel }: RepoFormProps) {
         <label htmlFor="repo-desc">Description</label>
         <MicField inline boxRef={descRef} text={form.description} setText={(t) => updateField('description', t)} handleRef={descMic}>
           <input
+            data-draft-key={draft.key ?? undefined}
             ref={descRef}
             id="repo-desc"
             type="text"
@@ -373,6 +398,7 @@ export function RepoForm({ editSlug, onSave, onCancel }: RepoFormProps) {
       <div className="repo-form-field">
         <label htmlFor="repo-tech">Tech Stack</label>
         <input
+          data-draft-key={draft.key ?? undefined}
           id="repo-tech"
           type="text"
           value={form.tech_stack}
@@ -390,6 +416,7 @@ export function RepoForm({ editSlug, onSave, onCancel }: RepoFormProps) {
           {form.hosts.map((host, i) => (
             <div key={i} className="repo-form-host-row">
               <input
+                data-draft-key={draft.key ?? undefined}
                 type="text"
                 value={host.label}
                 onChange={(e) => updateHost(i, 'label', e.target.value)}
@@ -398,6 +425,7 @@ export function RepoForm({ editSlug, onSave, onCancel }: RepoFormProps) {
                 title="Host label"
               />
               <input
+                data-draft-key={draft.key ?? undefined}
                 type="text"
                 value={host.path}
                 onChange={(e) => updateHost(i, 'path', e.target.value)}
@@ -406,6 +434,7 @@ export function RepoForm({ editSlug, onSave, onCancel }: RepoFormProps) {
                 title="Absolute path"
               />
               <input
+                data-draft-key={draft.key ?? undefined}
                 type="text"
                 value={host.ssh_host}
                 onChange={(e) => updateHost(i, 'ssh_host', e.target.value)}
@@ -429,6 +458,7 @@ export function RepoForm({ editSlug, onSave, onCancel }: RepoFormProps) {
         <label htmlFor="repo-arch">Architecture Notes</label>
         <MicField boxRef={archRef} text={form.architecture_notes} setText={(t) => updateField('architecture_notes', t)} handleRef={archMic}>
           <textarea
+            data-draft-key={draft.key ?? undefined}
             ref={archRef}
             id="repo-arch"
             value={form.architecture_notes}
@@ -445,6 +475,7 @@ export function RepoForm({ editSlug, onSave, onCancel }: RepoFormProps) {
       <div className="repo-form-field">
         <label htmlFor="repo-cmds">Common Commands</label>
         <textarea
+          data-draft-key={draft.key ?? undefined}
           id="repo-cmds"
           value={form.common_commands}
           onChange={(e) => updateField('common_commands', e.target.value)}
@@ -456,7 +487,7 @@ export function RepoForm({ editSlug, onSave, onCancel }: RepoFormProps) {
       </div>
 
       <div className="repo-form-actions">
-        <button type="button" className="btn btn-ghost" onClick={onCancel}>Cancel</button>
+        <button type="button" className="btn btn-ghost" onClick={() => { draft.clear(); onCancel(); }}>Cancel</button>
         <button type="submit" className="btn btn-primary" disabled={saving}>
           {saving ? 'Saving...' : (editSlug ? 'Update' : 'Create')}
         </button>

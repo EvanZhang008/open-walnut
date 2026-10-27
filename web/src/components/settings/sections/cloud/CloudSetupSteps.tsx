@@ -7,7 +7,7 @@
  * are indented rows under it, never a nested box.
  */
 
-import { Fragment, useState } from 'react';
+import { Fragment, useEffect, useState } from 'react';
 import {
   CLOUD_SETUP_STEP_IDS,
   type CloudSetupJob,
@@ -17,6 +17,8 @@ import {
 import { SettingsGroup, SettingsRow, SettingsTag, SettingsDisclosure, SettingsMonoBlock } from '../../SettingsSection';
 import { SettingsButton } from '../../inputs/SettingsButton';
 import { CopyButton } from '../../inputs/CopyButton';
+import { useDraft } from '@/hooks/useDraft';
+import { draftKey } from '@/utils/drafts';
 import '@/styles/settings-sections-addons.css';
 
 const STEP_LABELS: Record<CloudSetupStepId, string> = {
@@ -68,7 +70,11 @@ interface Props {
 export function CloudSetupSteps({
   job, logLines, busy, onProvideIp, onConfirmDns, onProvideCredentials, onRetry, onCancel, onClear,
 }: Props) {
-  const [ip, setIp] = useState('');
+  // The VM address typed and not accepted yet survives leaving the pane; it goes once the job holds an IP.
+  const ipDraft = useDraft(draftKey('cloud-vm-ip', job.id));
+  const { text: ip, setText: setIp } = ipDraft;
+  const { clear: clearIp } = ipDraft;
+  useEffect(() => { if (job.ip) clearIp(); }, [job.ip, clearIp]);
   const [token, setToken] = useState('');
 
   const awaiting = job.status === 'awaiting-input' ? job.awaitingInput : undefined;
@@ -118,6 +124,7 @@ export function CloudSetupSteps({
                       <span className="settings-addons-inline">
                         <input
                           type="text"
+                          data-draft-key={ipDraft.key ?? undefined}
                           className="settings-input settings-input--short settings-input--mono"
                           value={ip}
                           placeholder="203.0.113.10"
@@ -139,6 +146,7 @@ export function CloudSetupSteps({
                       <span className="settings-addons-inline">
                         <input
                           type="password"
+                          data-no-draft="secret"
                           className="settings-input settings-input--short settings-input--mono"
                           value={token}
                           placeholder="Provider API token"

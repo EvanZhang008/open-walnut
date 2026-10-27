@@ -266,6 +266,7 @@ export function RemoteHostsSection({ config, onSave }: Props) {
         <input
           id={`rh-${field}-${idx}`}
           type="text"
+          data-no-draft="autosave"
           className={`settings-input settings-input--${size}${mono ? ' settings-input--mono' : ''}`}
           value={hosts[idx][field]}
           onChange={(e) => updateHost(idx, field, e.target.value)}
@@ -382,6 +383,7 @@ export function RemoteHostsSection({ config, onSave }: Props) {
                     control={
                       <textarea
                         id={`rh-shell-${idx}`}
+                        data-no-draft="autosave"
                         className="settings-input settings-input--long settings-input--mono"
                         value={host.shell_setup}
                         onChange={(e) => updateHost(idx, 'shell_setup', e.target.value)}

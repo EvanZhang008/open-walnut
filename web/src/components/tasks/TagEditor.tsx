@@ -178,7 +178,7 @@ export function TagEditor({ tags, onAdd, onRemove, derived = [], placeholder = '
           </button>
         )}
         <div className="tag-editor-input-wrapper">
-          <input
+          <input data-no-draft="picker"
             ref={inputRef}
             className={`tag-editor-input${problem ? ' tag-editor-input-invalid' : ''}`}
             type="text"

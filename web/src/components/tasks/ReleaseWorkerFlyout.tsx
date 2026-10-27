@@ -108,7 +108,7 @@ export function ReleaseWorkerFlyout({ open, anchorRef, leader, onClose, onPicked
     >
       <div className="adopt-worker-title">Release a worker of &ldquo;{leader.title}&rdquo;</div>
       {all.length >= RELEASE_FILTER_FROM && (
-        <input
+        <input data-no-draft="search"
           className="adopt-worker-filter"
           placeholder="Filter workers…"
           value={filter}

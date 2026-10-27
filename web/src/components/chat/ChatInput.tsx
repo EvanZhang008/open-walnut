@@ -20,6 +20,7 @@ import { MicButton } from '../common/MicButton';
 import { NO_AUTOFILL_PROPS } from '@/utils/no-autofill';
 import { pasteRichTextAsMarkdown, isOfficeClipboardHtml } from '@/utils/html-to-markdown';
 import { DRAFT_FLUSH_EVENT, noteDraftWrite, type DraftFlushDetail } from '@/utils/unsaved-work';
+import { subscribeDraft } from '@/utils/drafts';
 import { PlusMenuActionRows } from './PlusMenuActionRows';
 import { plusButtonLabel, selectPlusMenuAction, type PlusMenuAction } from './plus-menu-actions';
 import { keepCommandFirst } from './leading-command';
@@ -369,6 +370,18 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
     } catch { /* localStorage unavailable */ }
   }, [draftKey]);
 
+  // Typed in another window or on another device (utils/drafts.ts): shown here
+  // while this box is not being typed in.
+  useEffect(() => {
+    if (!draftKey) return;
+    return subscribeDraft(draftKey, (remote) => {
+      if (pendingDraftRef.current || document.activeElement === textareaRef.current) return;
+      if (remote === composeRefs(valueRef.current, tableRef.current)) return;
+      applyText(remote, { keepRefs: false });
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draftKey]);
+
   // Unmount: the pending save is written now, not dropped with its timer.
   useEffect(() => {
     return () => { flushDraft(); };
@@ -704,6 +717,20 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
     try { localStorage.removeItem(key); } catch { /* ignore */ }
   }, []);
 
+  /** A send under `sentKey` was accepted: that key's draft goes, and only that
+   *  key's. The box may have moved to another question or session during the
+   *  send (its words stay), or the user may have typed the next message under
+   *  the same key (the box's own save owns the key then). */
+  const clearSentDraft = useCallback((sentKey: string | null | undefined) => {
+    if (!sentKey) return;
+    if (sentKey === draftKeyRef.current) {
+      if (composeRefs(valueRef.current, tableRef.current).trim()) return;
+      clearTimeout(draftTimerRef.current);
+      pendingDraftRef.current = null;
+    }
+    try { localStorage.removeItem(sentKey); } catch { /* ignore */ }
+  }, []);
+
   // Clear the input UI. By default the persisted draft is cleared too, but callers
   // that send asynchronously pass keepDraft=true so the draft survives until the
   // send is confirmed successful (otherwise a failed send loses the user's text).
@@ -757,15 +784,22 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
   ) => {
     // Optimistically clear the box for snappy feel, but keep the draft until we know
     // the send was accepted server-side.
+    // The key the words were typed under: the box may show another one by the
+    // time the send settles.
+    const sentKey = draftKeyRef.current;
     resetInput(true);
+    const failed = () => {
+      if (sentKey === draftKeyRef.current) restoreInput(text, imgs);
+      else if (sentKey) { try { localStorage.setItem(sentKey, text); } catch { /* unavailable */ } }
+    };
     const result = cb(text, imgs.length > 0 ? imgs : undefined);
     if (result instanceof Promise) {
       result.then((ok) => {
-        if (ok) clearDraft();
-        else restoreInput(text, imgs);
-      }).catch(() => restoreInput(text, imgs));
+        if (ok) clearSentDraft(sentKey);
+        else failed();
+      }).catch(failed);
     } else {
-      clearDraft();
+      clearSentDraft(sentKey);
     }
   };
 
@@ -1514,6 +1548,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
           <textarea
             ref={textareaRef}
             className="chat-input-textarea"
+            data-draft-key={draftKey}
             defaultValue={initialDraft.body}
             onChange={(e) => handleChange(e.target.value)}
             onKeyDown={handleKeyDown}

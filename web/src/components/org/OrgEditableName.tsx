@@ -44,7 +44,7 @@ export function OrgEditableName({ value, label, onSave, className = '', testId, 
     onSave(next).catch(() => setFailed(true));
   };
   return (
-    <input
+    <input data-no-draft="rename"
       ref={input}
       className={`org-name-input ${className}`}
       data-testid={`${testId}-input`}

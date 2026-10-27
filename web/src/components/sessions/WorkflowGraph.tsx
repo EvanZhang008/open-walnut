@@ -154,7 +154,7 @@ export const WorkflowGraph = memo(function WorkflowGraph({ phases, agents, finis
   return (
     <div ref={rootRef} className={`wf-overview ${wide ? 'wf-overview--wide' : 'wf-overview--narrow'}`}>
       <div className="wf-overview-tools">
-        <input className="wf-search" type="search" value={query} onChange={event => onQueryChange(event.target.value)}
+        <input data-no-draft="search" className="wf-search" type="search" value={query} onChange={event => onQueryChange(event.target.value)}
           aria-label="Find agents" placeholder="Find agents in this workflow…" />
       </div>
       {wide && <StageStrip stages={stages} openIndex={searching ? undefined : openIndex} onChoose={choose} />}

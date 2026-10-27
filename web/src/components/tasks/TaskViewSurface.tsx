@@ -154,7 +154,7 @@ export function TaskViewSurface({
               Group
             </button>
           )}
-          <input
+          <input data-no-draft="search"
             type="search"
             aria-label="Filter Plugin tasks"
             placeholder="Filter tasks…"

@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { useDraft } from '@/hooks/useDraft';
+import { draftKey } from '@/utils/drafts';
 import {
   DndContext,
   PointerSensor,
@@ -118,8 +120,10 @@ export function TasksPageRail({
   titleAction,
   projectMenuExtras,
 }: TasksPageRailProps) {
-  const [creating, setCreating] = useState(false);
-  const [draft, setDraft] = useState('');
+  // The new project's name is kept until it is made or cancelled with Esc; leaving the box keeps it.
+  const nameDraft = useDraft(draftKey('new-project', 'tasks-rail'));
+  const { text: draft, setText: setDraft } = nameDraft;
+  const [creating, setCreating] = useState(() => !!nameDraft.text);
   const [draftSource, setDraftSource] = useState('local');
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -179,7 +183,7 @@ export function TasksPageRail({
 
   const cancelCreate = () => {
     setCreating(false);
-    setDraft('');
+    nameDraft.clear();
     setDraftSource('local');
   };
 
@@ -192,8 +196,12 @@ export function TasksPageRail({
       const name = draft.trim();
       const source = draftSource;
       if (!name) { cancelCreate(); return; }
-      cancelCreate();
-      void onCreateProject(name, source === 'local' ? undefined : source);
+      // The name goes once the project is made; a refused create keeps it for the next try.
+      const sentKey = nameDraft.key;
+      setCreating(false);
+      setDraftSource('local');
+      void Promise.resolve(onCreateProject(name, source === 'local' ? undefined : source))
+        .then(() => nameDraft.clear(sentKey), () => {});
     }
   };
 
@@ -240,11 +248,12 @@ export function TasksPageRail({
             <input
               ref={inputRef}
               className="tp-rail-newproj-input"
+              data-draft-key={nameDraft.key ?? undefined}
               placeholder="Project name…"
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
               onKeyDown={handleCreateKey}
-              onBlur={cancelCreate}
+              onBlur={() => setCreating(false)}
             />
             {/* provider claim for the new project; chips preventDefault on
                 pointerdown so picking one doesn't blur-cancel the input */}

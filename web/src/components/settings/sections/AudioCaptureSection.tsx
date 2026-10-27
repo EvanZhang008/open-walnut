@@ -8,6 +8,8 @@ import { ToggleSwitch } from '../inputs/ToggleSwitch';
 import { useSettingsAutoSave } from '../inputs/useSettingsAutoSave';
 import { fetchAudioApps, type AppInfo } from '@/api/audio';
 import { useAudioCapture } from '@/hooks/useAudioCapture';
+import { useDraft } from '@/hooks/useDraft';
+import { draftKey } from '@/utils/drafts';
 import '@/styles/settings-sections-addons.css';
 
 function formatDuration(seconds: number): string {
@@ -35,7 +37,10 @@ export function AudioCaptureSection({ config, onSave }: Props) {
   const [refreshInterval, setRefreshInterval] = useState(config.audio?.refresh_interval_sec ?? 60);
   const [deleteAfterTranscription, setDeleteAfterTranscription] = useState(config.audio?.delete_after_transcription !== false);
   const [retentionDays, setRetentionDays] = useState(config.audio?.retention_days ?? 7);
-  const [newApp, setNewApp] = useState('');
+  // The app name typed and not added yet survives leaving the pane.
+  const newAppDraft = useDraft(draftKey('audio-exclude-app', 'new'));
+  const newApp = newAppDraft.text;
+  const setNewApp = newAppDraft.setText;
   const [runningApps, setRunningApps] = useState<AppInfo[]>([]);
   const [loadingApps, setLoadingApps] = useState(false);
   // The start/stop control lives here (not the sidebar): recording is still an
@@ -192,15 +197,16 @@ export function AudioCaptureSection({ config, onSave }: Props) {
               <input
                 id="audio-add-app"
                 type="text"
+                data-draft-key={newAppDraft.key ?? undefined}
                 className="settings-input settings-input--long settings-input--mono"
                 value={newApp}
                 onChange={(e) => setNewApp(e.target.value)}
                 placeholder="com.example.app or app name"
                 onKeyDown={(e) => {
-                  if (e.key === 'Enter') { e.preventDefault(); addApp(newApp); setNewApp(''); }
+                  if (e.key === 'Enter') { e.preventDefault(); addApp(newApp); newAppDraft.clear(); }
                 }}
               />
-              <SettingsButton onClick={() => { addApp(newApp); setNewApp(''); }} disabled={!newApp.trim()} title={newApp.trim() ? undefined : 'Type an app name first.'}>
+              <SettingsButton onClick={() => { addApp(newApp); newAppDraft.clear(); }} disabled={!newApp.trim()} title={newApp.trim() ? undefined : 'Type an app name first.'}>
                 Add
               </SettingsButton>
             </span>

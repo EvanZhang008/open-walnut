@@ -4,6 +4,8 @@ import type { SkillInfo, RefFile } from '@/api/skills';
 import { fetchReferences } from '@/api/skills';
 import { formatSize } from '@/utils/format';
 import { useAlert } from '@/hooks/useConfirm';
+import { useDraft } from '@/hooks/useDraft';
+import { draftKey, readDraft } from '@/utils/drafts';
 
 interface SkillDetailProps {
   skill: SkillInfo;
@@ -14,8 +16,11 @@ interface SkillDetailProps {
 
 export function SkillDetail({ skill, onSave, onDelete, onToggle }: SkillDetailProps) {
   const alert = useAlert();
-  const [content, setContent] = useState(skill.content);
-  const [dirty, setDirty] = useState(false);
+  // An unsaved edit is a draft of this skill's SKILL.md until Save or Reset, so
+  // switching skills, leaving the page or a reload keeps it.
+  const draft = useDraft(draftKey('skill-content', skill.dirName), { baseline: skill.content });
+  const { text: content, setText: setContent } = draft;
+  const [dirty, setDirty] = useState(() => !!readDraft(draft.key));
   const [saving, setSaving] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [refs, setRefs] = useState<RefFile[]>([]);
@@ -27,13 +32,12 @@ export function SkillDetail({ skill, onSave, onDelete, onToggle }: SkillDetailPr
   // server refuses the write too — offering an editor here would promise a lasting edit.
   const isReadonly = skill.source === 'workspace' || skill.source === 'plugin';
 
-  // Only reset editor when switching to a different skill.
-  // Do NOT depend on skill.content — refetches after toggle/update would
-  // overwrite unsaved user edits.
+  // Only reset editor state when switching to a different skill (the draft hook
+  // loads that skill's own text). Do NOT depend on skill.content: refetches after
+  // toggle/update would overwrite unsaved user edits.
   useEffect(() => {
     mic.current?.clear();
-    setContent(skill.content);
-    setDirty(false);
+    setDirty(!!readDraft(draftKey('skill-content', skill.dirName)));
     setConfirmDelete(false);
     setRefsOpen(false);
     setRefsLoaded(false);
@@ -59,10 +63,12 @@ export function SkillDetail({ skill, onSave, onDelete, onToggle }: SkillDetailPr
 
   const handleSave = async () => {
     setSaving(true);
+    const sentKey = draft.key;
     try {
       // A transcription still on its way lands after the save, unsaved: drop it now.
       mic.current?.clear();
       await onSave(skill.dirName, content);
+      draft.clear(sentKey);
       setDirty(false);
     } catch (err) {
       await alert({ title: 'Save failed', message: err instanceof Error ? err.message : 'Failed to save' });
@@ -73,7 +79,7 @@ export function SkillDetail({ skill, onSave, onDelete, onToggle }: SkillDetailPr
 
   const handleReset = () => {
     mic.current?.clear();
-    setContent(skill.content);
+    draft.clear();
     setDirty(false);
   };
 
@@ -128,6 +134,8 @@ export function SkillDetail({ skill, onSave, onDelete, onToggle }: SkillDetailPr
         >
           <textarea
             ref={contentRef}
+            data-draft-key={isReadonly ? undefined : draft.key ?? undefined}
+            data-no-draft={isReadonly ? 'mirror' : undefined}
             className="skill-detail-textarea"
             value={content}
             onChange={(e) => { setContent(e.target.value); setDirty(true); }}

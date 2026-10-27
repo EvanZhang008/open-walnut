@@ -13,6 +13,8 @@ import { useProjectRegistry } from '@/hooks/useProjectRegistry';
 import { QuickTaskComposer } from '@/components/tasks/QuickTaskComposer';
 import type { CreateTaskInput } from '@/api/tasks';
 import { listCalendarSources, type CalendarInfo } from '@/api/calendar';
+import { useDraft } from '@/hooks/useDraft';
+import { draftKey } from '@/utils/drafts';
 
 export interface CreateSeed {
   /** Slot's date ("YYYY-MM-DD") or datetime ("…T09:00:00"). */
@@ -180,7 +182,10 @@ function EventCreateForm({
   onClose: () => void;
   onCreateEvent: NonNullable<Props['onCreateEvent']>;
 }) {
-  const [title, setTitle] = useState('');
+  // The new event's title is a draft until it is created or Cancel is pressed;
+  // Esc or a click outside keeps it for the next slot the popover opens on.
+  const titleDraft = useDraft(draftKey('calendar-event', 'new'));
+  const { text: title, setText: setTitle } = titleDraft;
   const [calendars, setCalendars] = useState<CalendarInfo[] | null>(null);
   const [calendarId, setCalendarId] = useState('');
   const [defaultWarning, setDefaultWarning] = useState<string | null>(null);
@@ -261,7 +266,9 @@ function EventCreateForm({
     try {
       const start = allDay ? day : `${day}T${startTime}:00`;
       const end = allDay ? (seed.end ?? day) : `${day}T${endTime}:00`;
+      const sentKey = titleDraft.key;
       await onCreateEvent({ calendarId, title: title.trim(), start, end, allDay });
+      titleDraft.clear(sentKey);
       onClose();
     } catch (err) {
       // 400, not 200: a refused write names its fix at the end of a ~170-character message.
@@ -273,6 +280,7 @@ function EventCreateForm({
   return (
     <div className="cal-event-form" role="dialog" aria-label="Add an event">
       <input
+        data-draft-key={titleDraft.key ?? undefined}
         className="cal-event-form-title"
         placeholder="Event title…"
         value={title}
@@ -324,7 +332,7 @@ function EventCreateForm({
         <button className="cal-event-form-create" disabled={!title.trim() || !calendarId || submitting || invalid} onClick={submit}>
           {submitting ? 'Creating…' : 'Create event'}
         </button>
-        <button onClick={onClose}>Cancel</button>
+        <button onClick={() => { titleDraft.clear(); onClose(); }}>Cancel</button>
       </div>
     </div>
   );

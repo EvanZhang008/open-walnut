@@ -1,4 +1,6 @@
 import { Fragment, useState, useMemo, useCallback, useEffect, useLayoutEffect, useRef, useDeferredValue, memo, startTransition, type CSSProperties, type DragEvent as ReactDragEvent, type ReactNode } from 'react';
+import { useDraft } from '@/hooks/useDraft';
+import { draftKey } from '@/utils/drafts';
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import type { Task as CoreTask } from '@open-walnut/core';
@@ -1261,7 +1263,7 @@ const TaskRowBody = memo(function TaskRowBody({ task, isFocused, isDetailOpen, i
           >
             {ICONS.binaryPhaseIcon(isDone, task.phase)}
           </button>
-          <span
+          <span data-no-draft="rename"
             ref={titleRef}
             className={`todo-item-title${isEditing ? ' editing' : ''}${task.walnut_agent ? ' walnut-task-title' : ''}`}
             contentEditable={isEditing}
@@ -1957,7 +1959,7 @@ function TierNavigationGroup({ def, isAll, headless, folded, collapsed, onToggle
             <TierDropZone id={`${def.id}-drop-zone`} isEmpty={isEmpty}>
               {children}
             </TierDropZone>
-            <InlineAdd label={headless ? 'Add a pinned task…' : `Add to ${def.label}…`} onAdd={onAdd} openSignal={addOpenSignal} onOpenSignalConsumed={onAddSignalConsumed} />
+            <InlineAdd draftId={`tier:${def.id}${headless ? ':pinned' : ''}`} label={headless ? 'Add a pinned task…' : `Add to ${def.label}…`} onAdd={onAdd} openSignal={addOpenSignal} onOpenSignalConsumed={onAddSignalConsumed} />
           </div>
         </SortableContext>
       )}
@@ -1968,9 +1970,12 @@ function TierNavigationGroup({ def, isAll, headless, folded, collapsed, onToggle
 // ── InlineAdd — "+" row at the bottom of a tier or project group to add a task
 // directly into that context. Reuses the parent onCreate (optimistic + tier-correct path).
 // `openSignal`: bump to force-open + focus from outside (project header "+ → Add task"). ──
-function InlineAdd({ onAdd, label = 'Add to Focus…', openSignal, onOpenSignalConsumed }: { onAdd: (title: string) => void | Promise<unknown>; label?: string; openSignal?: number; onOpenSignalConsumed?: () => void }) {
-  const [open, setOpen] = useState(false);
-  const [value, setValue] = useState('');
+function InlineAdd({ onAdd, draftId, label = 'Add to Focus…', openSignal, onOpenSignalConsumed }: { onAdd: (title: string) => void | Promise<unknown>; draftId: string; label?: string; openSignal?: number; onOpenSignalConsumed?: () => void }) {
+  // A title typed here stays until it is added or cleared with Esc (one draft per
+  // add row, named by its place: labels repeat across tiers); kept words open the row.
+  const draft = useDraft(draftKey('quick-task', 'todo', draftId));
+  const { text: value, setText: setValue } = draft;
+  const [open, setOpen] = useState(() => !!draft.text);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => { if (open) inputRef.current?.focus(); }, [open]);
@@ -2019,13 +2024,14 @@ function InlineAdd({ onAdd, label = 'Add to Focus…', openSignal, onOpenSignalC
       <input
         ref={inputRef}
         type="text"
+        data-draft-key={draft.key ?? undefined}
         value={value}
         placeholder="Task title — Enter to add, Esc to close"
         onChange={(e) => setValue(e.target.value)}
         onKeyDown={(e) => {
           if (e.nativeEvent.isComposing || e.keyCode === 229) return;
           if (e.key === 'Enter') { e.preventDefault(); submit(); }
-          if (e.key === 'Escape') { e.preventDefault(); setValue(''); setOpen(false); }
+          if (e.key === 'Escape') { e.preventDefault(); draft.clear(); setOpen(false); }
         }}
         onBlur={() => { if (!value.trim()) setOpen(false); }}
       />
@@ -2043,7 +2049,9 @@ function InlineAdd({ onAdd, label = 'Add to Focus…', openSignal, onOpenSignalC
 // no scroll compensation is needed here: the new empty group appears above it.
 // Esc, a blur with no name, and a successful create all end it via `onClose`. ──
 function NewProjectRow({ onCreated, onError, onClose }: { onCreated: (name: string) => void; onError?: (msg: string) => void; onClose: () => void }) {
-  const [value, setValue] = useState('');
+  // The name is kept until the project is made or the row is cancelled with Esc.
+  const draft = useDraft(draftKey('new-project', 'todo'));
+  const { text: value, setText: setValue } = draft;
   const [source, setSource] = useState('local');
   const [busy, setBusy] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -2057,7 +2065,9 @@ function NewProjectRow({ onCreated, onError, onClose }: { onCreated: (name: stri
     if (!name || busy) return;
     setBusy(true);
     try {
+      const sentKey = draft.key;
       const res = await createProject(name, source === 'local' ? undefined : source);
+      draft.clear(sentKey);
       onClose();
       onCreated(res.name); // canonical spelling from the server (NOCASE registry)
     } catch (err) {
@@ -2080,6 +2090,7 @@ function NewProjectRow({ onCreated, onError, onClose }: { onCreated: (name: stri
         <input
           ref={inputRef}
           type="text"
+          data-draft-key={draft.key ?? undefined}
           value={value}
           disabled={busy}
           aria-label="New project name"
@@ -2088,7 +2099,7 @@ function NewProjectRow({ onCreated, onError, onClose }: { onCreated: (name: stri
           onKeyDown={(e) => {
             if (e.nativeEvent.isComposing || e.keyCode === 229) return;
             if (e.key === 'Enter') { e.preventDefault(); void submit(); }
-            if (e.key === 'Escape') { e.preventDefault(); onClose(); }
+            if (e.key === 'Escape') { e.preventDefault(); draft.clear(); onClose(); }
           }}
           onBlur={() => { if (!value.trim()) onClose(); }}
         />
@@ -2287,7 +2298,7 @@ function SortableRecentCard({ task, isFocused, isVanishing, isSessionOpen, isDet
         {ICONS.binaryPhaseIcon(isDone, task.phase)}
       </button>
       {/* Editable title */}
-      <span
+      <span data-no-draft="rename"
         ref={titleRef}
         className={`todo-pinned-title${isEditing ? ' editing' : ''}${task.walnut_agent ? ' walnut-task-title' : ''}`}
         contentEditable={isEditing}
@@ -6852,6 +6863,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   const runAddRow = useCallback((tier: string, project: string) => (
     <InlineAdd
       key={`runadd:${tier}:${project}`}
+      draftId={`run:${tier}:${project}`}
       label={`Add to ${project || 'Inbox'}…`}
       openSignal={runAddSignal?.tier === tier && runAddSignal.project === project ? runAddSignal.nonce : undefined}
       onOpenSignalConsumed={() => setRunAddSignal((s) => (s ? { ...s, nonce: 0 } : s))}
@@ -8134,6 +8146,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                             />
                           ))}
                           <InlineAdd
+                            draftId={`project:${project}`}
                             label={`Add to ${project || 'Inbox'}\u2026`}
                             openSignal={headerAddSignal?.project === project ? headerAddSignal.nonce : undefined}
                             onOpenSignalConsumed={clearHeaderAddSignal}

@@ -17,6 +17,8 @@ import { browserRowLabels } from './browser-labels';
 import { usePairDevice, type PairingTarget, type PairTargetKind } from './cloud/usePairDevice';
 import { bestOfferedKind, preferredKind } from './cloud/pair-targets';
 import { useIsCloudReplica } from '@/hooks/useIsCloudReplica';
+import { useDraft } from '@/hooks/useDraft';
+import { draftKey } from '@/utils/drafts';
 import { RemoteAccessCard } from './cloud/RemoteAccessCard';
 import { BackupLeaderGroup } from './cloud/BackupLeaderGroup';
 import { CompanionKeepGroup } from './cloud/CompanionKeepGroup';
@@ -127,7 +129,9 @@ export function DevicesSection({ config, onSave }: { config?: Config; onSave?: (
   // that then vanish and pull a deep-linked section below them upward (C74).
   const [listState, setListState] = useState<'loading' | 'ready' | 'failed'>('loading');
   const [target, setTarget] = useState<TargetKind>('lan');
-  const [newName, setNewName] = useState('');
+  // A device name typed and not paired yet survives leaving the pane; a successful pairing ends it.
+  const nameDraft = useDraft(draftKey('pair-device-name', 'new'));
+  const { text: newName, setText: setNewName } = nameDraft;
   const [nameError, setNameError] = useState<string | null>(null);
   // Minting + QR rendering is shared with the Cloud Companion section.
   const { created, qrDataURL, error, busy, mint, dismiss } = usePairDevice();
@@ -222,8 +226,9 @@ export function DevicesSection({ config, onSave }: { config?: Config; onSave?: (
     // Only send an explicit target when one was actually offered — otherwise
     // let the server pick (it falls back to a token-only QR).
     const chosen = targets.some((t) => t.kind === target) ? target : undefined;
+    const sentKey = nameDraft.key;
     if (await mint({ name, target: chosen })) {
-      setNewName('');
+      nameDraft.clear(sentKey);
       await refresh();
     }
   };
@@ -555,6 +560,7 @@ export function DevicesSection({ config, onSave }: { config?: Config; onSave?: (
                 <input
                   id="devices-new-name"
                   type="text"
+                  data-draft-key={nameDraft.key ?? undefined}
                   className="settings-input settings-input--short"
                   value={newName}
                   placeholder="My iPhone"

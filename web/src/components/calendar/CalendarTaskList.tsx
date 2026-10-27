@@ -160,6 +160,7 @@ export const CalendarTaskList = memo(function CalendarTaskList({ tasks }: Props)
       <div className="cal-rail-header">
         <span className="cal-rail-title">Unscheduled</span>
         <input
+          data-no-draft="search"
           className="cal-rail-search"
           placeholder="Filter…"
           value={filter}

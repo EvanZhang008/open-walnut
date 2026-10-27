@@ -97,9 +97,9 @@ export function KanbanCardEditor({ field, card, openedAt, api, onClose }: Kanban
       if (!rootRef.current?.contains(e.relatedTarget as Node | null) && !conflict) save();
     }} data-testid={`kanban-card-${isSummary ? 'summary' : 'waiting'}-editor`} data-saving={saving || undefined}>
       {isSummary ? (
-        <textarea ref={ref} className="kanban-editor-input is-summary" data-testid="kanban-card-summary-input" rows={4} {...common} />
+        <textarea ref={ref} className="kanban-editor-input is-summary" data-testid="kanban-card-summary-input" data-no-draft="autosave" rows={4} {...common} />
       ) : (
-        <input ref={ref} className="kanban-editor-input" data-testid="kanban-card-waiting-input" placeholder="A CR, a team, a person" {...common} />
+        <input ref={ref} className="kanban-editor-input" data-testid="kanban-card-waiting-input" data-no-draft="autosave" placeholder="A CR, a team, a person" {...common} />
       )}
       <div
         className="kanban-editor-foot"

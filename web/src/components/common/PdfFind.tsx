@@ -89,7 +89,7 @@ export function PdfFind({ pdf, root }: { pdf?: PDFDocumentProxy; root: React.Ref
     <button type="button" className={`fv-html-tab${open ? ' active' : ''}`} disabled={!pdf}
       title="Find in PDF (⌘F)" onClick={() => { setOpen((value) => !value); requestAnimationFrame(() => inputRef.current?.focus()); }}>Find</button>
     {open && <div className="fv-pdf-find">
-      <input ref={inputRef} type="search" aria-label="Find in PDF" placeholder="Find in PDF" value={query}
+      <input data-no-draft="search" ref={inputRef} type="search" aria-label="Find in PDF" placeholder="Find in PDF" value={query}
         onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => {
           if (event.key === 'Enter') { event.preventDefault(); next(event.shiftKey ? -1 : 1); }
           if (event.key === 'Escape') { event.stopPropagation(); setOpen(false); }

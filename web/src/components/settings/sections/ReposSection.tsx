@@ -132,6 +132,7 @@ export function ReposSection() {
     >
       <div className="repos-search-row">
         <input
+          data-no-draft="search"
           className="repos-search-input"
           type="text"
           placeholder="Search repositories..."

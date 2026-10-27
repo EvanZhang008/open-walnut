@@ -25,8 +25,11 @@ import { useEffect, useId, useState } from 'react';
 import { useStoreTask } from '@/contexts/TasksContext';
 import { fetchWorkspaceCandidates } from '@/api/workspaces';
 import { log } from '@/utils/log';
+import { useDraftValue } from '@/hooks/useDraft';
+import { draftKey } from '@/utils/drafts';
 import {
   isPickable, selectedCandidate, setDraftWorkspace, useDraftWorkspace, getDraftWorkspace,
+  type DraftWorkspaceChoice,
 } from './draft-workspace-store';
 import '@/styles/workspaces.css';
 
@@ -43,6 +46,22 @@ export function DraftWorkspaceRow({ draftId, cwd, host, boundTaskId }: {
   const inline = inlineAtMount && !boundTask?.workspace;
   const fieldIdBase = useId();
   const place = cwd ? `${host ?? ''}::${cwd}` : '';
+
+  // The provider fields typed for this draft are also kept in the draft store: the
+  // choice itself lives in memory (draft-workspace-store.ts), so after a reload the
+  // kept values are put back into it.
+  const kept = useDraftValue<DraftWorkspaceChoice['values']>(draftKey('draft-workspace', draftId), {});
+  const keptValues = kept.value;
+  useEffect(() => {
+    if (Object.keys(keptValues).length && !Object.keys(getDraftWorkspace(draftId).values).length) {
+      setDraftWorkspace(draftId, { values: keptValues });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draftId]);
+  const setValues = (values: DraftWorkspaceChoice['values']) => {
+    setDraftWorkspace(draftId, { values });
+    kept.setValue(values);
+  };
 
   // Ask the host when the option is on and the folder is new to this choice.
   // No cleanup guard on purpose: writing `candidatesFor` re-runs this effect, and
@@ -158,7 +177,7 @@ export function DraftWorkspaceRow({ draftId, cwd, host, boundTaskId }: {
                   className={`draft-workspace-provider${value === true ? ' is-picked' : ''}`}
                   aria-pressed={value === true}
                   title={field.description}
-                  onClick={() => setDraftWorkspace(draftId, { values: { ...choice.values, [key]: value !== true } })}
+                  onClick={() => setValues({ ...choice.values, [key]: value !== true })}
                 >
                   {field.title ?? key}
                 </button>
@@ -175,7 +194,7 @@ export function DraftWorkspaceRow({ draftId, cwd, host, boundTaskId }: {
                       role="radio"
                       aria-checked={(value ?? field.default) === opt}
                       className={`draft-workspace-provider${(value ?? field.default) === opt ? ' is-picked' : ''}`}
-                      onClick={() => setDraftWorkspace(draftId, { values: { ...choice.values, [key]: opt } })}
+                      onClick={() => setValues({ ...choice.values, [key]: opt })}
                     >
                       {opt}
                     </button>
@@ -188,11 +207,12 @@ export function DraftWorkspaceRow({ draftId, cwd, host, boundTaskId }: {
                 <span className="draft-workspace-field-label">{label}</span>
                 <input
                   id={id}
+                  data-draft-key={kept.key ?? undefined}
                   className="draft-workspace-input"
                   data-testid={`draft-workspace-input-${key}`}
                   value={typeof value === 'string' ? value : ''}
                   placeholder={field.placeholder ?? (field.type === 'array' ? 'names, separated by commas' : '')}
-                  onChange={(e) => setDraftWorkspace(draftId, { values: { ...choice.values, [key]: e.target.value } })}
+                  onChange={(e) => setValues({ ...choice.values, [key]: e.target.value })}
                   // The composer owns Enter; a field must not start the launch half-filled.
                   onKeyDown={(e) => { if (e.key === 'Enter') e.preventDefault(); }}
                 />

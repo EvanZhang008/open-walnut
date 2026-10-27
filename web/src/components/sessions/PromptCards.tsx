@@ -10,7 +10,7 @@
  * card and gives the buttons back. The command reads in full: over 6 lines it
  * shows the first 3, an ellipsis and the last 3, with `Show all (N lines)`.
  */
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { usePhoneLayerWithBar } from './phone-session-layer';
 import { usePhoneLayout } from '@/hooks/usePhoneLayout';
@@ -19,6 +19,8 @@ import { foldLongCommand } from './tool-call-grouping';
 import { ChevronRightIcon, QuestionCircleIcon } from '@/components/common/PhoneIcons';
 import { NO_AUTOFILL_PROPS } from '@/utils/no-autofill';
 import { BoxMic } from '@/components/common/BoxMic';
+import { useDraftValue } from '@/hooks/useDraft';
+import { askAnswerDraftKey } from '@/utils/drafts';
 import {
   isSettledPermission, respondToPermissionRequest, usePermissionRequest,
   type PermissionRequestStatus,
@@ -27,8 +29,8 @@ import { parseAskUserQuestionInput, buildAskUserAnswers, allAskUserQuestionsAnsw
 
 /** One question's own-words answer, with the composer's mic. A submit settles the
  *  card and unmounts this, which discards a recording still on its way. */
-function AskOtherInput({ placeholder, value, disabled, onChange }: {
-  placeholder: string; value: string; disabled: boolean; onChange: (v: string) => void;
+function AskOtherInput({ placeholder, value, disabled, onChange, draftKey }: {
+  placeholder: string; value: string; disabled: boolean; onChange: (v: string) => void; draftKey: string | null;
 }) {
   const box = useRef<HTMLInputElement | null>(null);
   return (
@@ -36,6 +38,7 @@ function AskOtherInput({ placeholder, value, disabled, onChange }: {
       <input
         ref={box}
         className="qp-input"
+        data-draft-key={draftKey ?? undefined}
         placeholder={placeholder}
         value={value}
         disabled={disabled}
@@ -66,7 +69,13 @@ function AskUserQuestionCard({ questions, onSubmit, onDismiss, status, busy, ans
   answered?: Record<string, string>;
 }) {
   const [selections, setSelections] = useState<Record<string, string[]>>({});
-  const [otherText, setOtherText] = useState<Record<string, string>>({});
+  // The own-words answers are a draft of this ask (the toast, the panel and the card share it).
+  const otherDraft = useDraftValue<Record<string, string>>(askAnswerDraftKey(questions), {});
+  const { value: otherText, setValue: setOtherText } = otherDraft;
+  // Settled (answered or dismissed, here or on another surface): the words are spent.
+  const settledNow = isSettledPermission(status);
+  const clearOther = otherDraft.clear;
+  useEffect(() => { if (settledNow) clearOther(); }, [settledNow, clearOther]);
   const phone = usePhoneLayout();
   const arm = useArmAfterAppear<HTMLDivElement>(undefined, phone && !isSettledPermission(status));
   const locked = !!busy || !arm.armed;
@@ -145,6 +154,7 @@ function AskUserQuestionCard({ questions, onSubmit, onDismiss, status, busy, ans
               value={otherText[q.question] ?? ''}
               disabled={locked}
               onChange={(v) => setOtherText(prev => ({ ...prev, [q.question]: v }))}
+              draftKey={otherDraft.key}
             />
           </div>
         );

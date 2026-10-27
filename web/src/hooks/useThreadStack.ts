@@ -22,10 +22,12 @@ import {
   DRAFT_ROW_LABEL, composerDraftKey, escapeDecision, isPendingKey, pageLeave, pendingPageKey, planNavigation,
   stackPathOf, widthTier, type PageLanding,
 } from '@/utils/thread-stack-state';
+import { readDraft, writeDraft as writeStoredDraft } from '@/utils/drafts';
 import {
-  headIdsOfPath, pathForLeaf, readPersistedStack, readUrlLeaf, restorePath, setThreadLeaf,
-  writePersistedStack, type PersistedStack,
+  headIdsOfPath, pathForLeaf, readAskDrafts, readPersistedStack, readUrlLeaf, restorePath, setThreadLeaf,
+  writeAskDrafts, writePersistedStack, type PersistedStack,
 } from '@/utils/thread-stack-persist';
+import { subscribeDraft } from '@/utils/drafts';
 import { nextSamePassageKeys } from '@/utils/thread-same-passage';
 import { VIEWED_PREFIX, readViewed, writeViewed } from '@/utils/thread-viewed-store';
 import { log } from '@/utils/log';
@@ -105,6 +107,9 @@ export interface ThreadStackHandle {
   /** A pending page's first send landed under `key`: swap it in place. `pageKey`
    *  names a draft that is not on the path (sent from the chat's composer). */
   promotePending: (key: string, pageKey?: string) => void;
+  /** That first send settled: its words go when it was accepted, and come back
+   *  as a draft row when it was refused. */
+  settlePending: (page: ThreadPendingPage, ok: boolean) => void;
   /** Head id to when that page was last on screen. */
   lastViewedAt: ReadonlyMap<string, number>;
   /** The question `key` is (or was until now) on screen: viewed now, or at
@@ -137,11 +142,9 @@ interface StackState {
 
 const ROOT_STATE: StackState = { path: [ROOT_THREAD_KEY], nav: null, samePassageKeys: [] };
 
+/** A page's words in the draft store (utils/drafts.ts); blank words are no draft. */
 function writeDraft(key: string, text: string) {
-  try {
-    if (text.trim()) localStorage.setItem(key, text);
-    else localStorage.removeItem(key);
-  } catch { /* private browsing */ }
+  writeStoredDraft(key, text.trim() ? text : '');
 }
 
 interface LeaveOpts {
@@ -181,13 +184,18 @@ export function useThreadStack(args: UseThreadStackArgs): ThreadStackHandle {
   const grace = useRef(new Map<string, number>());
 
   // Session switch: a fresh stack (never carry a page across transcripts). The
-  // viewed times come from localStorage at once (they decide unread marks).
+  // viewed times come from localStorage at once (they decide unread marks). The
+  // Asks left with words come back at once, from the durable list: a navigation
+  // before the tree is ready must not write a list without them.
   useEffect(() => {
     setState(ROOT_STATE);
     landings.clear();
     lastViewed.current = readViewed(sessionId);
     setViewedTick((n) => n + 1);
-    setDrafts(new Map());
+    const kept = new Map(readAskDrafts(sessionId).filter((d) => readDraft(composerDraftKey(sessionId, d.pageKey, argsRef.current.tree)).trim())
+      .map((d) => [d.pageKey, d] as const));
+    draftsRef.current = kept;
+    setDrafts(kept);
     restored.current = false;
     restoreWant.current = null;
   }, [sessionId, landings]);
@@ -203,12 +211,23 @@ export function useThreadStack(args: UseThreadStackArgs): ThreadStackHandle {
       if (isPendingKey(key)) continue;
       pages[key === ROOT_THREAD_KEY ? '' : headOf(key)] = rec;
     }
-    writePersistedStack(argsRef.current.sessionId, {
+    const sid = argsRef.current.sessionId;
+    const hasWords = (pageKey: string) => !!readDraft(composerDraftKey(sid, pageKey, t)).trim();
+    const drafts = [...draftsRef.current.values()];
+    // The Ask on screen with words typed for it is a draft too: a reload or a
+    // restart before it is left must not lose which passage it was about.
+    if (s.pending && !draftsRef.current.has(s.pending.pageKey) && hasWords(s.pending.pageKey)) drafts.push(s.pending);
+    writePersistedStack(sid, {
       path: headIdsOfPath(t, s.path),
       pages,
       lastViewedAt: Object.fromEntries(lastViewed.current),
-      drafts: [...draftsRef.current.values()],
+      drafts,
     });
+    // Another tab or browser keeps its own Asks in the same list: theirs stay
+    // while their words do (a sent or emptied Ask has none left).
+    const mine = new Set(drafts.map((d) => d.pageKey));
+    const theirs = readAskDrafts(sid).filter((d) => !mine.has(d.pageKey));
+    writeAskDrafts(sid, [...drafts, ...theirs].filter((d) => hasWords(d.pageKey)));
   }, [landings, headOf]);
 
   /** A later view of an answer already viewed changes no unread mark, so it
@@ -398,12 +417,12 @@ export function useThreadStack(args: UseThreadStackArgs): ThreadStackHandle {
   }, [navigate]);
 
   /** The first send of a pending page: the page becomes the question in place
-   *  (same scroll box, no animation), its draft row and draft text go away. */
+   *  (same scroll box, no animation), its draft row goes away. Its words stay
+   *  stored until the send is accepted (settlePending). */
   const promotePending = useCallback((key: string, draftKey?: string) => {
     const s = stateRef.current;
     const pageKey = draftKey ?? s.pending?.pageKey;
     if (!pageKey) return;
-    writeDraft(composerDraftKey(argsRef.current.sessionId, pageKey, argsRef.current.tree), '');
     setDrafts((prev) => {
       if (!prev.has(pageKey)) return prev;
       const next = new Map(prev);
@@ -426,6 +445,18 @@ export function useThreadStack(args: UseThreadStackArgs): ThreadStackHandle {
     queueMicrotask(persist);
   }, [landings, headOf, persist]);
 
+  const settlePending = useCallback((page: ThreadPendingPage, ok: boolean) => {
+    const key = composerDraftKey(argsRef.current.sessionId, page.pageKey, argsRef.current.tree);
+    if (ok) { writeDraft(key, ''); queueMicrotask(persist); return; }
+    if (!readDraft(key).trim()) return;
+    const next = new Map(draftsRef.current);
+    next.set(page.pageKey, page);
+    draftsRef.current = next;
+    setDrafts(next);
+    log.info('threads', 'pending page send refused, kept as a draft', { sessionId: argsRef.current.sessionId });
+    queueMicrotask(persist);
+  }, [persist]);
+
   // ── Reload restore (C69): once per session, when the tree knows its questions.
   // Every head on the stored path must still exist, else the root, silently.
   const treeReady = tree.threads.length > 1;
@@ -440,7 +471,13 @@ export function useThreadStack(args: UseThreadStackArgs): ThreadStackHandle {
           if ((lastViewed.current.get(head) ?? -Infinity) < at) lastViewed.current.set(head, at);
         }
         setViewedTick((n) => n + 1);
-        if (stored.drafts.length) setDrafts(new Map(stored.drafts.map((d) => [d.pageKey, d])));
+        if (stored.drafts.length) {
+          setDrafts((prev) => {
+            const next = new Map(prev);
+            for (const d of stored.drafts) if (!next.has(d.pageKey)) next.set(d.pageKey, d);
+            return next;
+          });
+        }
       }
       let want: RestoreWant | null = null;
       if (stored && stored.path.length > 0) want = { path: stored.path };
@@ -474,6 +511,13 @@ export function useThreadStack(args: UseThreadStackArgs): ThreadStackHandle {
 
   // Drafts changed (a pending page left with text, or sent): persist.
   useEffect(() => { if (restored.current) persist(); }, [drafts, persist]);
+  // Words typed for the Ask on screen (its card or the composer): the durable
+  // list follows, so the Ask is there after a reload even before it is left.
+  const pendingKey = state.pending?.pageKey;
+  useEffect(() => {
+    if (!pendingKey) return;
+    return subscribeDraft(composerDraftKey(sessionId, pendingKey, argsRef.current.tree), () => { queueMicrotask(persist); });
+  }, [pendingKey, sessionId, persist]);
 
   // The page's question left the transcript (a rewrite): back to the root, once.
   // A just-promoted page gets a grace period: the tree that knows it is published
@@ -606,5 +650,5 @@ export function useThreadStack(args: UseThreadStackArgs): ThreadStackHandle {
     return () => ro.disconnect();
   }, [args.panelRef, hasQuestions]);
 
-  return { api, bridge, drawer, promotePending, lastViewedAt, markViewed, markHeadViewed, enabled, active, panelWidth };
+  return { api, bridge, drawer, promotePending, settlePending, lastViewedAt, markViewed, markHeadViewed, enabled, active, panelWidth };
 }

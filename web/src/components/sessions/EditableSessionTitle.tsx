@@ -66,7 +66,7 @@ export function EditableSessionTitle({ sessionId, taskId, title, className, onSa
 
   if (editing) {
     return (
-      <input
+      <input data-no-draft="rename"
         ref={inputRef}
         className="session-panel-title-input"
         value={value}

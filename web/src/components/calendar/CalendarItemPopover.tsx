@@ -10,6 +10,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
+import { useDraft } from '@/hooks/useDraft';
+import { draftKey } from '@/utils/drafts';
 import type { CalendarItem } from './calendar-items';
 import { calendarEventNeedsApproval, type CalendarEvent } from '@/api/calendar';
 import './visibility.css';
@@ -18,8 +20,9 @@ interface Props {
   item: CalendarItem;
   anchorEl: HTMLElement;
   onClose: () => void;
-  onSaveEvent?: (ev: CalendarEvent, patch: { start: string; end: string; title?: string }) => void;
-  onDeleteEvent?: (ev: CalendarEvent) => void;
+  /** Resolves false when the write was declined or failed: the typed title is kept. */
+  onSaveEvent?: (ev: CalendarEvent, patch: { start: string; end: string; title?: string }) => void | Promise<boolean>;
+  onDeleteEvent?: (ev: CalendarEvent) => void | Promise<boolean>;
   /** Hide this one event in Walnut (read-only calendars too). */
   onHideEvent?: (eventId: string) => void;
   /** Persist the task date this chip represents; '' clears it (unschedule). */
@@ -37,7 +40,13 @@ export function CalendarItemPopover({ item, anchorEl, onClose, onSaveEvent, onDe
   const isEvent = item.kind === 'event';
   const readonly = isEvent && !!item.event.readonly;
 
-  const [title, setTitle] = useState(isEvent ? item.event.title : item.task.title);
+  // An event's new title is a draft of that event until Save (or Delete); closing
+  // the popover keeps it. A task's title is not edited here.
+  const titleDraft = useDraft(
+    isEvent && !readonly ? draftKey('calendar-event', item.event.id, 'title') : null,
+    { baseline: isEvent ? item.event.title : item.task.title },
+  );
+  const { text: title, setText: setTitle } = titleDraft;
   // Deleting writes through to the REAL external calendar with no undo — a
   // single misclick must not be enough (same two-step as CalendarContextMenu).
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -84,7 +93,9 @@ export function CalendarItemPopover({ item, anchorEl, onClose, onSaveEvent, onDe
     if (readonly || invalid) return;
     if (isEvent) {
       if (!title.trim()) return;
-      onSaveEvent?.(item.event, { start: composeStart(), end: composeEnd(), title: title.trim() });
+      const sentKey = titleDraft.key;
+      void Promise.resolve(onSaveEvent?.(item.event, { start: composeStart(), end: composeEnd(), title: title.trim() }))
+        .then((ok) => { if (ok !== false) titleDraft.clear(sentKey); }, () => {});
     } else {
       onSaveTaskWhen?.(item, composeStart(), isTaskStart ? composeTaskEnd() : undefined);
     }
@@ -222,6 +233,7 @@ export function CalendarItemPopover({ item, anchorEl, onClose, onSaveEvent, onDe
       >
         {isEvent ? (
           <input
+            data-draft-key={titleDraft.key ?? undefined}
             className="cal-item-title"
             value={title}
             disabled={readonly}
@@ -309,7 +321,9 @@ export function CalendarItemPopover({ item, anchorEl, onClose, onSaveEvent, onDe
                   setConfirmDelete(true);
                   return;
                 }
-                onDeleteEvent(item.event);
+                const sentKey = titleDraft.key;
+                void Promise.resolve(onDeleteEvent(item.event))
+                  .then((ok) => { if (ok !== false) titleDraft.clear(sentKey); }, () => {});
                 onClose();
               }}
             >

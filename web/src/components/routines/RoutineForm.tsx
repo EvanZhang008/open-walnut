@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef } from 'react';
+import { useState, useEffect, useMemo, useRef, type SetStateAction } from 'react';
 import type {
   Routine, CreateRoutineInput, RoutineSchedule, RoutineExecutorRef, RoutineCheck,
   RoutineCheckTestResult, ExecutorInfo, ExecutorOptions, ExecutorFieldSpec,
@@ -8,6 +8,8 @@ import { describeSchedule, describeWake } from '@/utils/routine-format';
 import '@/styles/routine-description.css';
 import '@/styles/routine-mic.css';
 import { BoxMic, MicField, type BoxMicHandle } from '@/components/common/BoxMic';
+import { useDraftValue } from '@/hooks/useDraft';
+import { draftHash, draftKey } from '@/utils/drafts';
 
 interface RoutineFormProps {
   /** Prefill from an AI draft or an existing routine (edit mode). */
@@ -173,12 +175,14 @@ function tzAbbrev(tz: string): string {
 }
 
 /** A multi-line executor field with the composer's mic. `resetKey` changes when the form is refilled. */
-function FieldMicTextarea({ id, value, onChange, placeholder, resetKey }: {
+function FieldMicTextarea({ id, value, onChange, placeholder, resetKey, draftKey: keptUnder }: {
   id: string;
   value: string;
   onChange: (next: string) => void;
   placeholder?: string;
   resetKey: unknown;
+  /** The form's draft, which keeps this field's words. */
+  draftKey: string | null;
 }) {
   const boxRef = useRef<HTMLTextAreaElement | null>(null);
   const mic = useRef<BoxMicHandle | null>(null);
@@ -188,6 +192,7 @@ function FieldMicTextarea({ id, value, onChange, placeholder, resetKey }: {
       <textarea
         ref={boxRef}
         id={id}
+        data-draft-key={keptUnder ?? undefined}
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
@@ -200,6 +205,29 @@ function FieldMicTextarea({ id, value, onChange, placeholder, resetKey }: {
 
 // ── Form ─────────────────────────────────────────────────────────────────────
 
+/** Every field the form edits, kept as ONE draft until Save or Cancel. */
+interface KeptRoutine {
+  name: string;
+  description: string;
+  trigger: TriggerState;
+  executorType: string;
+  config: Record<string, unknown>;
+  check: CheckDraft;
+  checkOpen: boolean;
+}
+
+function keptFrom(source: CreateRoutineInput | undefined): KeptRoutine {
+  return {
+    name: source?.name ?? '',
+    description: source?.description ?? '',
+    trigger: scheduleToTrigger(source?.schedule),
+    executorType: source?.executor?.type ?? 'claude-code',
+    config: source?.executor?.config ?? {},
+    check: checkToDraft(source?.check ?? undefined),
+    checkOpen: !!source?.check,
+  };
+}
+
 export function RoutineForm({ draft, routine, executors, options, onSave, onCancel }: RoutineFormProps) {
   const source: CreateRoutineInput | undefined = routine
     ? {
@@ -208,13 +236,28 @@ export function RoutineForm({ draft, routine, executors, options, onSave, onCanc
       }
     : draft;
 
-  const [name, setName] = useState(source?.name ?? '');
-  const [description, setDescription] = useState(source?.description ?? '');
-  const [trigger, setTrigger] = useState<TriggerState>(() => scheduleToTrigger(source?.schedule));
-  const [executorType, setExecutorType] = useState(source?.executor?.type ?? 'claude-code');
-  const [config, setConfig] = useState<Record<string, unknown>>(source?.executor?.config ?? {});
-  const [check, setCheck] = useState<CheckDraft>(() => checkToDraft(source?.check ?? undefined));
-  const [checkOpen, setCheckOpen] = useState(!!source?.check);
+  // The form is a draft of this routine (or of the new one) until Save or Cancel:
+  // Esc, the close button and a click outside keep it, and so does a reload.
+  const baseline = keptFrom(source);
+  // An AI-drafted routine is its own draft, so it never takes over the words of
+  // one typed by hand (or of another AI draft).
+  const draftId = routine?.id ?? (draft ? `ai-${draftHash(JSON.stringify(draft))}` : 'new');
+  const kept = useDraftValue<KeptRoutine>(draftKey('routine-form', draftId), baseline);
+  // Over the baseline, so a draft kept by an older form never lacks a field.
+  const { name, description, trigger, executorType, config, check, checkOpen } = { ...baseline, ...kept.value };
+  const setKept = kept.setValue;
+  const slice = <K extends keyof KeptRoutine>(field: K) => (next: SetStateAction<KeptRoutine[K]>) =>
+    setKept((prev) => ({
+      ...prev,
+      [field]: typeof next === 'function' ? (next as (p: KeptRoutine[K]) => KeptRoutine[K])(prev[field]) : next,
+    }));
+  const setName = slice('name');
+  const setDescription = slice('description');
+  const setTrigger = slice('trigger');
+  const setExecutorType = slice('executorType');
+  const setConfig = slice('config');
+  const setCheck = slice('check');
+  const setCheckOpen = slice('checkOpen');
   const [checkTest, setCheckTest] = useState<{ busy: boolean; result?: RoutineCheckTestResult; error?: string }>({ busy: false });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -223,18 +266,11 @@ export function RoutineForm({ draft, routine, executors, options, onSave, onCanc
   const instrRef = useRef<HTMLTextAreaElement | null>(null);
   const instrMic = useRef<BoxMicHandle | null>(null);
 
-  // Re-prefill when a new draft arrives (user drafted again)
+  // A new draft arrives (user drafted again): its own key brings its fields.
   useEffect(() => {
     if (!draft) return;
     descMic.current?.clear();
     instrMic.current?.clear();
-    setName(draft.name ?? '');
-    setDescription(draft.description ?? '');
-    setTrigger(scheduleToTrigger(draft.schedule));
-    setExecutorType(draft.executor?.type ?? 'claude-code');
-    setConfig(draft.executor?.config ?? {});
-    setCheck(checkToDraft(draft.check ?? undefined));
-    setCheckOpen(!!draft.check);
     setCheckTest({ busy: false });
     setError(null);
   }, [draft]);
@@ -344,12 +380,14 @@ export function RoutineForm({ draft, routine, executors, options, onSave, onCanc
       : routine?.check ? { check: null } : {};
     setSaving(true);
     setError(null);
+    const sentKey = kept.key;
     try {
       // Sent even when empty: on an edit that is how a cleared description is removed.
       // A transcription still on its way lands after the save, unsaved: drop it now.
       descMic.current?.clear();
       instrMic.current?.clear();
       await onSave({ name: name.trim(), description: description.trim(), schedule, executor, ...checkField });
+      kept.clear(sentKey);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to save');
     } finally {
@@ -367,6 +405,7 @@ export function RoutineForm({ draft, routine, executors, options, onSave, onCanc
           onChange={(next) => setField(f.name, next)}
           placeholder={f.placeholder}
           resetKey={draft}
+          draftKey={kept.key}
         />
       );
     }
@@ -387,6 +426,7 @@ export function RoutineForm({ draft, routine, executors, options, onSave, onCanc
     if (f.kind === 'number') {
       return (
         <input
+          data-draft-key={kept.key ?? undefined}
           id={`routine-f-${f.name}`}
           type="number"
           min={String(f.min ?? 1)}
@@ -397,6 +437,7 @@ export function RoutineForm({ draft, routine, executors, options, onSave, onCanc
     }
     return (
       <input
+        data-draft-key={kept.key ?? undefined}
         id={`routine-f-${f.name}`}
         type="text"
         value={typeof value === 'string' ? value : ''}
@@ -420,6 +461,7 @@ export function RoutineForm({ draft, routine, executors, options, onSave, onCanc
           <div className="form-group">
             <label htmlFor="routine-name">Name *</label>
             <input
+              data-draft-key={kept.key ?? undefined}
               id="routine-name"
               type="text"
               value={name}
@@ -433,6 +475,7 @@ export function RoutineForm({ draft, routine, executors, options, onSave, onCanc
             <label htmlFor="routine-description">Description</label>
             <MicField boxRef={descRef} text={description} setText={(t) => setDescription(t.slice(0, 600))} handleRef={descMic}>
               <textarea
+                data-draft-key={kept.key ?? undefined}
                 ref={descRef}
                 id="routine-description"
                 className="routine-description-input"
@@ -450,6 +493,7 @@ export function RoutineForm({ draft, routine, executors, options, onSave, onCanc
               <label htmlFor="routine-f-instructions">Instructions</label>
               <div className="routine-instructions-box">
                 <textarea
+                  data-draft-key={kept.key ?? undefined}
                   ref={instrRef}
                   id="routine-f-instructions"
                   value={typeof config.instructions === 'string' ? config.instructions : ''}
@@ -515,6 +559,7 @@ export function RoutineForm({ draft, routine, executors, options, onSave, onCanc
                   )}
                   <span className="routine-trigger-at">At</span>
                   <input
+                    data-draft-key={kept.key ?? undefined}
                     type="time"
                     value={trigger.time}
                     onChange={(e) => setTrigger({ ...trigger, time: e.target.value })}
@@ -527,6 +572,7 @@ export function RoutineForm({ draft, routine, executors, options, onSave, onCanc
                 <div className="routine-trigger-row">
                   <span className="routine-trigger-at">At minute</span>
                   <input
+                    data-draft-key={kept.key ?? undefined}
                     type="number" min="0" max="59" value={trigger.minute}
                     onChange={(e) => setTrigger({ ...trigger, minute: Math.min(59, Math.max(0, Number(e.target.value) || 0)) })}
                     aria-label="Minute of the hour"
@@ -539,6 +585,7 @@ export function RoutineForm({ draft, routine, executors, options, onSave, onCanc
                 <div className="routine-trigger-row">
                   <span className="routine-trigger-at">At</span>
                   <input
+                    data-draft-key={kept.key ?? undefined}
                     type="datetime-local"
                     value={trigger.at}
                     onChange={(e) => setTrigger({ ...trigger, at: e.target.value })}
@@ -564,12 +611,12 @@ export function RoutineForm({ draft, routine, executors, options, onSave, onCanc
                   {trigger.customKind === 'cron' ? (
                     <div className="form-row">
                       <div className="form-group">
-                        <input type="text" className="font-mono" value={trigger.expr}
+                        <input data-draft-key={kept.key ?? undefined} type="text" className="font-mono" value={trigger.expr}
                           onChange={(e) => setTrigger({ ...trigger, expr: e.target.value })} placeholder="0 9 * * 1-5"
                           aria-label="Cron expression" />
                       </div>
                       <div className="form-group">
-                        <input type="text" value={trigger.tz}
+                        <input data-draft-key={kept.key ?? undefined} type="text" value={trigger.tz}
                           onChange={(e) => setTrigger({ ...trigger, tz: e.target.value })} placeholder="America/Los_Angeles"
                           aria-label="Timezone" />
                       </div>
@@ -577,7 +624,7 @@ export function RoutineForm({ draft, routine, executors, options, onSave, onCanc
                   ) : (
                     <div className="routine-trigger-row">
                       <span className="routine-trigger-at">Every</span>
-                      <input type="number" min="1" value={trigger.everyMin}
+                      <input data-draft-key={kept.key ?? undefined} type="number" min="1" value={trigger.everyMin}
                         onChange={(e) => setTrigger({ ...trigger, everyMin: Number(e.target.value), everyMsStored: undefined })}
                         aria-label="Interval minutes" style={{ width: 88 }} />
                       <span className="routine-trigger-at">minutes</span>
@@ -610,6 +657,7 @@ export function RoutineForm({ draft, routine, executors, options, onSave, onCanc
                 <div className="form-group">
                   <label htmlFor="routine-check-run">Command *</label>
                   <input
+                    data-draft-key={kept.key ?? undefined}
                     id="routine-check-run"
                     type="text"
                     className="font-mono"
@@ -633,6 +681,7 @@ export function RoutineForm({ draft, routine, executors, options, onSave, onCanc
                   <div className="form-group">
                     <label htmlFor="routine-check-timeout">Timeout (seconds)</label>
                     <input
+                      data-draft-key={kept.key ?? undefined}
                       id="routine-check-timeout"
                       type="number"
                       min="1"
@@ -647,6 +696,7 @@ export function RoutineForm({ draft, routine, executors, options, onSave, onCanc
                       Fires per day
                     </label>
                     <input
+                      data-draft-key={kept.key ?? undefined}
                       id="routine-check-fires"
                       type="number"
                       min="0"
@@ -659,6 +709,7 @@ export function RoutineForm({ draft, routine, executors, options, onSave, onCanc
                 <div className="form-group">
                   <label htmlFor="routine-check-cwd">Working directory</label>
                   <input
+                    data-draft-key={kept.key ?? undefined}
                     id="routine-check-cwd"
                     type="text"
                     className="font-mono"
@@ -716,7 +767,7 @@ export function RoutineForm({ draft, routine, executors, options, onSave, onCanc
           ))}
 
           <div className="form-actions">
-            <button type="button" className="btn" onClick={onCancel} disabled={saving}>Cancel</button>
+            <button type="button" className="btn" onClick={() => { kept.clear(); onCancel(); }} disabled={saving}>Cancel</button>
             <button type="submit" className="btn btn-primary" disabled={saving}>
               {saving ? 'Saving…' : routine ? 'Save' : 'Create'}
             </button>

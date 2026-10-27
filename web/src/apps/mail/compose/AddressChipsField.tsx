@@ -98,6 +98,7 @@ export function AddressChipsField({ label, name, chips, onChange, autoFocus, tra
           </span>
         ))}
         <input
+          data-no-draft="autosave"
           id={`mail-compose-${name}`}
           className="mail-compose-chip-input"
           data-testid={`mail-compose-${name}`}

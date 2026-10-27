@@ -215,6 +215,11 @@ export function forceAddSessionColumn(cols: SessionSlot[], id: string): SessionS
   return insertLeftmost(id, unlocked, locked);
 }
 
+/** `cols` with a slot for each draft id it lacks (drafts are placeholders: trim-exempt). */
+export function withDraftSlots(cols: SessionSlot[], draftIds: readonly string[]): SessionSlot[] {
+  return draftIds.reduce((acc, id) => (acc.some(c => c.id === id) ? acc : forceAddSessionColumn(acc, id)), cols);
+}
+
 export function removeSessionColumn(cols: SessionSlot[], id: string): SessionSlot[] {
   return cols.filter(c => c.id !== id);
 }

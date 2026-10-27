@@ -41,6 +41,8 @@ import { BoxMic, MicField, type BoxMicHandle } from '@/components/common/BoxMic'
 import { useLetterEnvelope } from './letter-store';
 import { sessionInboxLetterHref } from './session-inbox-link';
 import { useThreadPane } from './useThreadPane';
+import { useDraft } from '@/hooks/useDraft';
+import { draftKey } from '@/utils/drafts';
 import '@/styles/human-inbox.css';
 
 /** Where a file reference in a letter body should open. */
@@ -103,8 +105,11 @@ export function LetterView({
   const [loadError, setLoadError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [delivery, setDelivery] = useState<string | null>(null);
-  const [replyText, setReplyText] = useState('');
-  const [freeText, setFreeText] = useState('');
+  // Both boxes keep their words per letter until they are sent (utils/drafts.ts).
+  const replyDraft = useDraft(draftKey('letter-reply', letterId));
+  const { text: replyText, setText: setReplyText } = replyDraft;
+  const noteDraft = useDraft(draftKey('letter-note', letterId));
+  const { text: freeText, setText: setFreeText } = noteDraft;
   const replyBox = useRef<HTMLTextAreaElement | null>(null);
   const replyMic = useRef<BoxMicHandle | null>(null);
   const noteBox = useRef<HTMLTextAreaElement | null>(null);
@@ -207,10 +212,11 @@ export function LetterView({
   const onAnswer = useCallback(async (actionId: string) => {
     if (busy) return;
     setBusy(true);
+    const sentKey = noteDraft.key;
     try {
       const result = await answerLetter(letterId, actionId, freeText.trim() || undefined);
       applyResult(result.letter, deliveryText(result.delivery, result.reason));
-      setFreeText('');
+      noteDraft.clear(sentKey);
       noteMic.current?.clear();
       log.info('inbox', 'letter answered', { letterId, actionId, delivery: result.delivery });
     } catch (err) {
@@ -227,7 +233,7 @@ export function LetterView({
     } finally {
       setBusy(false);
     }
-  }, [busy, letterId, freeText, applyResult]);
+  }, [busy, letterId, freeText, applyResult, noteDraft]);
 
   const turns = letter?.thread.length ?? 0;
   const thread = useThreadPane({ letterId, turns, enabled: turns > 0 });
@@ -239,10 +245,11 @@ export function LetterView({
     setBusy(true);
     // The human's own reply always comes into view, wherever they were reading.
     followThread();
+    const sentKey = replyDraft.key;
     try {
       const result = await humanReplyToLetter(letterId, text);
       applyResult(result.letter, deliveryText(result.delivery, result.reason));
-      setReplyText('');
+      replyDraft.clear(sentKey);
       replyMic.current?.clear();
       log.info('inbox', 'letter human reply sent', { letterId, delivery: result.delivery });
     } catch (err) {
@@ -251,7 +258,7 @@ export function LetterView({
     } finally {
       setBusy(false);
     }
-  }, [replyText, busy, letterId, applyResult, followThread]);
+  }, [replyText, busy, letterId, applyResult, followThread, replyDraft]);
 
   const answered = shown?.answered;
   const actions = shown?.actions ?? [];
@@ -346,6 +353,7 @@ export function LetterView({
             <MicField boxRef={noteBox} text={freeText} setText={setFreeText} handleRef={noteMic} disabled={busy}>
               <textarea
                 ref={noteBox}
+                data-draft-key={noteDraft.key ?? undefined}
                 className="hib-freetext"
                 placeholder="Optional note to send with your choice"
                 value={freeText}
@@ -448,6 +456,7 @@ export function LetterView({
         {delivery && <div className="hib-delivery">{delivery}</div>}
         <textarea
           ref={replyBox}
+          data-draft-key={replyDraft.key ?? undefined}
           className="hib-composer-input"
           placeholder="Reply to this letter…"
           value={replyText}

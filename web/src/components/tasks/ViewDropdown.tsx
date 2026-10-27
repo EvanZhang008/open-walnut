@@ -299,7 +299,7 @@ export function ViewDropdown({
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.3" aria-hidden>
               <circle cx="11" cy="11" r="7" /><path d="M20 20l-4-4" />
             </svg>
-            <input
+            <input data-no-draft="search"
               ref={searchRef}
               autoFocus
               value={search}
@@ -496,7 +496,7 @@ function TimeSection({ query, patchQuery }: {
         <div className="vd-grid" style={{ marginTop: 6 }}>
           <div className="vd-field">
             <span className="vd-label">Last</span>
-            <input
+            <input data-no-draft="number"
               className="vd-sel"
               type="number"
               min={1}

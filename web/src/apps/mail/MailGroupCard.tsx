@@ -21,6 +21,8 @@ import { getMailRules, putMailRules, renameMailGroup } from '@/api/mail-groups';
 import { menuPlacementStyle, useMenuPlacement } from '@/hooks/useMenuPlacement';
 import { MicField, type BoxMicHandle } from '@/components/common/BoxMic';
 import { log } from '@/utils/log';
+import { useDraft } from '@/hooks/useDraft';
+import { draftKey } from '@/utils/drafts';
 import {
   closeMailLearnRequest, pushMailListStatus, requestGroupsRefresh, type MailGroupCardRequest,
 } from './mail-groups-bus';
@@ -75,7 +77,14 @@ export function MailGroupCard({ request }: { request: MailGroupCardRequest }) {
   const fieldId = useId();
   const important = request.kind === 'group-important';
   const filter = request.kind === 'group-filter';
-  const [text, setText] = useState(important || filter ? '' : request.label);
+  // The note or the new name is a draft of this group's card until Save or Cancel;
+  // Esc or a click outside keeps it for the next time the card opens.
+  const draft = useDraft(
+    filter ? null : draftKey('mail-group-card', request.kind, request.groupId),
+    { baseline: important || filter ? '' : request.label },
+  );
+  const text = draft.text;
+  const setText = draft.setText;
   const [moveNow, setMoveNow] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -124,6 +133,7 @@ export function MailGroupCard({ request }: { request: MailGroupCardRequest }) {
     if (saving || renameProblem !== null || unchanged) return;
     setSaving(true);
     setError(null);
+    const sentKey = draft.key;
     try {
       if (important) {
         await saveImportantRule(request, text);
@@ -135,6 +145,7 @@ export function MailGroupCard({ request }: { request: MailGroupCardRequest }) {
       }
       requestGroupsRefresh();
       mic.current?.clear();
+      draft.clear(sentKey);
       close(true);
     } catch (failure) {
       const refusal = saveRefusalOf(failure);
@@ -194,6 +205,7 @@ export function MailGroupCard({ request }: { request: MailGroupCardRequest }) {
               <textarea
                 id={fieldId}
                 ref={(el) => { fieldRef.current = el; }}
+                data-draft-key={draft.key ?? undefined}
                 className="mail-correct-why"
                 data-testid="mail-group-card-why"
                 rows={2}
@@ -208,6 +220,7 @@ export function MailGroupCard({ request }: { request: MailGroupCardRequest }) {
           <input
             id={fieldId}
             ref={(el) => { fieldRef.current = el; }}
+            data-draft-key={draft.key ?? undefined}
             type="text"
             className="mail-correct-input"
             aria-label={RENAME_ARIA}
@@ -222,7 +235,7 @@ export function MailGroupCard({ request }: { request: MailGroupCardRequest }) {
           <p className="mail-correct-field-error" role="alert" data-testid="mail-group-card-error">{error ?? renameProblem}</p>
         )}
         <div className="mail-correct-actions">
-          <button type="button" className="btn btn-sm" disabled={saving} onClick={() => close(true)} data-testid="mail-group-card-cancel">
+          <button type="button" className="btn btn-sm" disabled={saving} onClick={() => { draft.clear(); close(true); }} data-testid="mail-group-card-cancel">
             Cancel
           </button>
           <button

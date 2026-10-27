@@ -25,6 +25,8 @@ import { sortByModelStrength } from '@/utils/model-strength-order';
 import { parseAcpModelId, acpProviderGroupId, shortAcpModelName, groupAcpModels, acpFilterMatch, acpEffortLadder, acpEffortLabel } from './acp-model-id';
 import type { AcpModelFamily } from './acp-model-id';
 import { SessionCostBlock } from './SessionCostBlock';
+import { useDraft } from '@/hooks/useDraft';
+import { draftKey } from '@/utils/drafts';
 
 const EFFORTS = SESSION_EFFORTS;
 
@@ -577,9 +579,12 @@ export function ModelPicker({
   // canonical short ID ("claude-fable-5[1m]"): it acks success but 400s at
   // the wire and silently falls back — full pipeline in the doc comment on
   // resolveModelSwitchValue (src/core/types.ts).
-  const [customValue, setCustomValue] = React.useState('');
+  // A typed id is kept per session (a draft picker shares one 'new' key) until it is applied.
+  const customDraft = useDraft(draftKey('custom-model', sessionId ?? 'new'));
+  const customValue = customDraft.text;
+  const setCustomValue = customDraft.setText;
   const customResolved = customValue.trim() ? resolveModelSwitchValue(customValue) : null;
-  const submitCustom = () => { if (customResolved) onSwitch(customResolved); };
+  const submitCustom = () => { if (customResolved) { onSwitch(customResolved); customDraft.clear(); } };
 
   // Close on Escape key
   React.useEffect(() => {
@@ -831,6 +836,7 @@ export function ModelPicker({
             <>
               {acpFilterable && !acpLoading && (
                 <input
+                  data-no-draft="search"
                   className="model-picker-filter"
                   type="text"
                   placeholder={`Filter ${acpAllFamilies.length} models…`}
@@ -1264,6 +1270,7 @@ export function ModelPicker({
           gaps), org-specific inference profiles, brand-new model IDs. */}
       <div className="model-picker-custom" data-testid="picker-custom-model">
         <input
+          data-draft-key={customDraft.key ?? undefined}
           className="model-picker-custom-input"
           type="text"
           placeholder="Custom model ID… (e.g. global.anthropic.claude-fable-5[1m])"

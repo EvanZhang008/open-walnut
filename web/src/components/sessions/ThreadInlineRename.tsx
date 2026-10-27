@@ -52,7 +52,7 @@ export function ThreadInlineRename({ initial, max, ariaLabel, className, placeho
   };
 
   return (
-    <input
+    <input data-no-draft="rename"
       ref={ref}
       type="text"
       className={className ? `thread-inline-rename ${className}` : 'thread-inline-rename'}

@@ -248,6 +248,7 @@ export function BrowserAccessGroup() {
                 <input
                   id={`browser-access-option-${option.key}`}
                   type="text"
+                  data-no-draft="autosave"
                   className="settings-input settings-input--short"
                   value={options[option.key] ?? ''}
                   placeholder={option.default}

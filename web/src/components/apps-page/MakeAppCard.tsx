@@ -17,6 +17,8 @@ import { openSessionOnHome } from '@/utils/open-session'
 import { copyTextRobust } from '@/utils/clipboard'
 import { BUILD_CWD, buildPrompt } from '@/components/settings/build-plugin-prompt'
 import { BoxMic, type BoxMicHandle } from '@/components/common/BoxMic'
+import { useDraft } from '@/hooks/useDraft'
+import { draftKey } from '@/utils/drafts'
 import '@/styles/apps-make-mic.css'
 
 /** The by-hand loop, one command per line, as README.md shows it. */
@@ -29,7 +31,10 @@ const IDEAS = ['A Pomodoro timer tied to my current task', 'A reading list from 
 
 export function MakeAppCard() {
   const navigate = useNavigate()
-  const [request, setRequest] = useState('')
+  // The description typed and not built yet survives leaving the page; a started session ends it.
+  // The same key as the Build a plugin card: both start the same build.
+  const draft = useDraft(draftKey('build-plugin', 'new'))
+  const { text: request, setText: setRequest } = draft
   const requestRef = useRef<HTMLInputElement | null>(null)
   const mic = useRef<BoxMicHandle | null>(null)
   const [busy, setBusy] = useState(false)
@@ -47,6 +52,7 @@ export function MakeAppCard() {
     if (busy || !request.trim()) return
     setBusy(true)
     setError(null)
+    const sentKey = draft.key
     try {
       const installDir = await fetchInstallDir()
       const result = await quickStartSession({
@@ -55,7 +61,7 @@ export function MakeAppCard() {
         project: 'Walnut Plugins',
         message: buildPrompt(request, installDir),
       })
-      setRequest('')
+      draft.clear(sentKey)
       mic.current?.clear()
       // Land on the session column so the user watches it build.
       if (result.sessionId) openSessionOnHome(result.sessionId, navigate)
@@ -95,6 +101,7 @@ export function MakeAppCard() {
             <input
               ref={requestRef}
               type="text"
+              data-draft-key={draft.key ?? undefined}
               value={request}
               onChange={(e) => setRequest(e.target.value)}
               placeholder="What should it do? For example a Pomodoro timer tied to my current task"

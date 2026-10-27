@@ -362,7 +362,7 @@ export function PdfPreview({ path, host, reloadToken }: Props) {
             event.preventDefault(); passwordRequest.submit(password);
           }}>
             <label>This PDF needs a password.
-              <input type="password" aria-label="PDF password" value={password} autoComplete="off"
+              <input data-no-draft="secret" type="password" aria-label="PDF password" value={password} autoComplete="off"
                 onChange={(event) => setPassword(event.target.value)} />
             </label>
             {passwordRequest.incorrect && <div role="alert">Incorrect password. Try again.</div>}

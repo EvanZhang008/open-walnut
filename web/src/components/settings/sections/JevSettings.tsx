@@ -186,6 +186,7 @@ export function JevSettings({ config, onSave, onReload }: Props) {
           <input
             id="jev-endpoint"
             type="text"
+            data-no-draft="autosave"
             className="settings-input settings-input--long settings-input--mono"
             placeholder={DEFAULT_ENDPOINT}
             spellCheck={false}
@@ -203,6 +204,7 @@ export function JevSettings({ config, onSave, onReload }: Props) {
           <input
             id="jev-model"
             type="text"
+            data-no-draft="autosave"
             className="settings-input settings-input--short settings-input--mono"
             placeholder={DEFAULT_MODEL}
             spellCheck={false}

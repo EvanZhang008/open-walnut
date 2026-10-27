@@ -204,6 +204,7 @@ export function GeneralSection({ config, onSave }: Props) {
             <input
               id="settings-name"
               type="text"
+              data-no-draft="autosave"
               className="settings-input settings-input--short"
               placeholder="Your name"
               {...name.inputProps}

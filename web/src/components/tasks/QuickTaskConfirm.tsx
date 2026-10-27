@@ -40,6 +40,8 @@ interface Props {
   submitting: boolean;
   onChange: (patch: Partial<ConfirmDraft>) => void;
   onCreate: () => void;
+  /** The draft the owner keeps this form in (its fields carry it). */
+  draftKey?: string;
 }
 
 function AiBadge({ visible }: { visible: boolean }) {
@@ -58,6 +60,7 @@ export function QuickTaskConfirm({
   submitting,
   onChange,
   onCreate,
+  draftKey,
 }: Props) {
   const [datePickerOpen, setDatePickerOpen] = useState(false);
   const [startPickerOpen, setStartPickerOpen] = useState(false);
@@ -89,6 +92,7 @@ export function QuickTaskConfirm({
         <span className="qtc-confirm-label">Title <AiBadge visible={draft.aiFields.has('title')} /></span>
         <input
           className="qtc-confirm-input qtc-confirm-title"
+          data-draft-key={draftKey}
           value={draft.title}
           maxLength={500}
           disabled={submitting}
@@ -181,6 +185,7 @@ export function QuickTaskConfirm({
           </span>
           <input
             className="qtc-confirm-input qtc-confirm-project"
+            data-draft-key={draftKey}
             value={draft.project ?? ''}
             list="qtc-project-options"
             disabled={submitting}

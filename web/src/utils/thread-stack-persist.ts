@@ -59,6 +59,38 @@ export function sanitizePersistedStack(raw: unknown): PersistedStack | null {
   return { path, pages, lastViewedAt, drafts };
 }
 
+/**
+ * The Asks left with words, kept beyond this tab: the stack itself is per tab
+ * (sessionStorage), but an unsent question is a draft like any other (utils/drafts.ts),
+ * so it survives an app restart and shows in another browser. Its words are the
+ * composer draft under the page's key; this list says which passage each is about.
+ */
+export function askDraftsKey(sessionId: string): string {
+  return `draft:ask-pages:${sessionId}`;
+}
+
+export function readAskDrafts(sessionId: string, store: ReadStore | undefined = durableStore()): ThreadPendingPage[] {
+  if (!store || !sessionId) return [];
+  try {
+    const raw = store.getItem(askDraftsKey(sessionId));
+    return raw ? sanitizePersistedStack({ drafts: JSON.parse(raw) })?.drafts ?? [] : [];
+  } catch { return []; }
+}
+
+export function writeAskDrafts(sessionId: string, drafts: readonly ThreadPendingPage[], store: Pick<Storage, 'setItem' | 'removeItem' | 'getItem'> | undefined = durableStore()): void {
+  if (!store || !sessionId) return;
+  try {
+    const key = askDraftsKey(sessionId);
+    if (!drafts.length) { if (store.getItem(key) !== null) store.removeItem(key); return; }
+    const text = JSON.stringify(drafts);
+    if (store.getItem(key) !== text) store.setItem(key, text);
+  } catch { /* quota or private mode */ }
+}
+
+function durableStore(): Storage | undefined {
+  try { return typeof localStorage === 'undefined' ? undefined : localStorage; } catch { return undefined; }
+}
+
 type ReadStore = Pick<Storage, 'getItem'>;
 type WriteStore = Pick<Storage, 'setItem'>;
 

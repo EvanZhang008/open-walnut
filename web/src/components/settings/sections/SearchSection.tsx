@@ -14,6 +14,8 @@ import {
 import { log } from '@/utils/log';
 import { visibleInterval } from '@/utils/page-visibility';
 import { useConfirm } from '@/hooks/useConfirm';
+import { useDraft } from '@/hooks/useDraft';
+import { draftKey } from '@/utils/drafts';
 import { useSerialSave, type OnSave } from './GeneralSection';
 
 interface Props {
@@ -112,7 +114,9 @@ export function SearchSection({ config, onSave }: Props) {
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [actionPending, setActionPending] = useState(false);
-  const [draft, setDraft] = useState('');
+  // A folder typed and not added yet survives leaving the pane; Add (shown in the list at once) ends it.
+  const folderDraft = useDraft(draftKey('search-excluded-folder', 'new'));
+  const { text: draft, setText: setDraft } = folderDraft;
   const pollRef = useRef<(() => void) | undefined>(undefined);
 
   const save = useSerialSave(config, onSave);
@@ -201,7 +205,7 @@ export function SearchSection({ config, onSave }: Props) {
 
   const add = () => {
     const merged = parseExcludedFolders([...excluded.value, draft].join('\n'));
-    setDraft('');
+    folderDraft.clear();
     if (merged.length !== excluded.value.length) excluded.set(merged);
   };
 
@@ -309,6 +313,7 @@ export function SearchSection({ config, onSave }: Props) {
               <input
                 id="search-excluded-folders"
                 type="text"
+                data-draft-key={folderDraft.key ?? undefined}
                 className="settings-input settings-input--long settings-input--mono"
                 placeholder="Folder name"
                 spellCheck={false}

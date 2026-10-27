@@ -201,6 +201,7 @@ export function HostProfileDisclosure({ alias, name }: { alias: string; name: st
                     <input
                       ref={noteRef}
                       id={`host-note-${alias}`}
+                      data-no-draft="autosave"
                       className="settings-input settings-input--long"
                       value={note}
                       maxLength={600}

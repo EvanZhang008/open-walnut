@@ -185,7 +185,7 @@ export function PhoneSearchLayer({ open, onClose, onOpenTask }: PhoneSearchLayer
   return createPortal(
     <div className="phone-search-layer" role="dialog" aria-label="Search" data-testid="phone-search-layer">
       <form className="phone-search-field" role="search" onSubmit={(e) => { e.preventDefault(); inputRef.current?.blur(); }}>
-        <input
+        <input data-no-draft="search"
           ref={inputRef}
           type="search"
           enterKeyHint="search"

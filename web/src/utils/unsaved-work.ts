@@ -5,8 +5,8 @@
  * the silent stale-build reload, the Mac app shell's page recycle and window
  * close), so the rule lives here once:
  *
- *  - A composer draft that is already in storage is NOT lost: ChatInput restores
- *    it on the next mount. Before looking, every composer is asked to save its
+ *  - A composer draft that is already in storage is NOT lost: ChatInput (or any
+ *    box on useDraft, hooks/useDraft.ts) restores it on the next mount. Before looking, every composer is asked to save its
  *    text now (DRAFT_FLUSH_EVENT), and only one that confirms the save is let
  *    through. 2026-10-24: the old rule counted every non-empty `<textarea>`, so
  *    one persisted draft in any mounted composer blocked the restart, and the
@@ -149,6 +149,8 @@ export function listUnsavedWork(doc: Document = document, active: Element | null
     items.push(item('note', 'A note that could not be saved', el, el.matches('.global-notes-error') ? 'Scratchpad' : undefined));
   }
   const tag = active?.tagName?.toUpperCase();
+  // A box kept in the draft store (useDraft) comes back with its words.
+  if (active && saved.has(active)) return items;
   if (tag === 'INPUT') {
     const type = (active!.getAttribute('type') ?? '').toLowerCase();
     // Focus-gated on purpose: most single-line inputs are search and filter boxes.

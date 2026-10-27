@@ -8,6 +8,7 @@
  * open (`plugin:mail:rules-changed`) refreshes it when nothing is being edited, and otherwise says so
  * and lets the person choose between the file and their unsaved edit.
  */
+import { clearDraft } from '@/utils/drafts';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
@@ -31,7 +32,7 @@ import { createRulesSaveQueue, RulesQueueCancelled, type RulesDoc } from './mail
 import { COPY, moveItem, newRuleId, storedRule } from './mail-rules-model';
 import { MailRulesFileRow } from './MailRulesFileRow';
 import { MailRulesBuiltinList, MailRulesRulesList, type MoveFocus } from './MailRulesList';
-import { MailRuleEditor } from './MailRuleEditor';
+import { MailRuleEditor, mailRuleDraftKey } from './MailRuleEditor';
 import './mail-rules.css';
 
 const MOVED_MS = 1_500;
@@ -225,10 +226,13 @@ function MailRulesPanel() {
     const nextRules = index >= 0 ? stored.map((one, at) => (at === index ? rule : one)) : [rule, ...stored];
     const groups = newGroup && !docGroups.some((one) => one.toLowerCase() === newGroup.toLowerCase()) ? [...docGroups, newGroup] : docGroups;
     const at = index >= 0 ? index : 0;
+    // The editor's draft (MailRuleEditor) ends with a save that went through, never before.
+    const editorDraft = mailRuleDraftKey(base ? storedRule(base) : null);
     setEditorSaving(true);
     setServerErrors([]);
     queue.save({ groups, rules: nextRules }).then(
       async () => {
+        clearDraft(editorDraft);
         setEditorSaving(false);
         setEditing(null);
         dirty.current = false;

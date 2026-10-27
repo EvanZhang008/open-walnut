@@ -74,7 +74,7 @@ export interface FilterBarProps {
 export function EngineSettingsFilterBar({ inputRef, value, onChange, disabled }: FilterBarProps) {
   return (
     <div className="engine-settings-filter-bar">
-      <input
+      <input data-no-draft="search"
         ref={inputRef}
         type="search"
         className="engine-settings-filter"

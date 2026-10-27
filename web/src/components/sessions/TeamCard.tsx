@@ -5,6 +5,8 @@
  * conversation (from polled JSONL events) or a placeholder for unloaded tabs.
  */
 
+import { useDraft } from '@/hooks/useDraft';
+import { draftKey } from '@/utils/drafts';
 import { useState, useCallback, useEffect, useRef, memo, useMemo } from 'react';
 import { useTeamStream, type TeamMember, type TeamAgentEvent } from '@/hooks/useTeamStream';
 import { wsClient } from '@/api/ws';
@@ -86,7 +88,8 @@ function TeamChatInput({ teamName, agentName, agentStatus, onSent }: {
   agentStatus?: 'calling' | 'done' | 'error';
   onSent?: (text: string) => void;
 }) {
-  const [message, setMessage] = useState('');
+  const draft = useDraft(draftKey('team-message', teamName, agentName));
+  const { text: message, setText: setMessage } = draft;
   const [sending, setSending] = useState(false);
   const box = useRef<HTMLInputElement | null>(null);
   const mic = useRef<BoxMicHandle | null>(null);
@@ -97,9 +100,10 @@ function TeamChatInput({ teamName, agentName, agentStatus, onSent }: {
     if (!message.trim()) return;
     const text = message.trim();
     setSending(true);
+    const sentKey = draft.key;
     try {
       await wsClient.sendRpc('session:team-send', { teamName, agentName, message: text });
-      setMessage('');
+      draft.clear(sentKey);
       mic.current?.clear();
       // Show the sent message in the UI immediately
       onSent?.(text);
@@ -108,7 +112,7 @@ function TeamChatInput({ teamName, agentName, agentStatus, onSent }: {
     } finally {
       setSending(false);
     }
-  }, [teamName, agentName, message, onSent]);
+  }, [teamName, agentName, message, onSent, draft]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.nativeEvent.isComposing || e.keyCode === 229) return;
@@ -128,6 +132,7 @@ function TeamChatInput({ teamName, agentName, agentStatus, onSent }: {
       <input
         ref={box}
         type="text"
+        data-draft-key={draft.key ?? undefined}
         value={message}
         onChange={e => setMessage(e.target.value)}
         onKeyDown={handleKeyDown}

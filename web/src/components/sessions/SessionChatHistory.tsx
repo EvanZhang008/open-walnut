@@ -1,4 +1,6 @@
 import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, useSyncExternalStore, memo, type ReactNode } from 'react';
+import { useDraft } from '@/hooks/useDraft';
+import { draftHash, draftKey, writeDraft } from '@/utils/drafts';
 import { staleBannerText } from './stale-banner-text';
 import { scrollDebugEnabled } from '@/utils/scroll-debug';
 import { NO_AUTOFILL_PROPS } from '@/utils/no-autofill';
@@ -81,7 +83,7 @@ import { pageRowsBefore } from '@/utils/thread-page-window';
 import { deriveThreadLiveStates, displayTitleOf, metaOf, viewStatusOf } from '@/utils/thread-meta';
 import { newAnswerDating, stepAnswerDating } from '@/utils/thread-answer-dating';
 import {
-  MAIN_TITLE, askedFromGroups, blockPageKey, composerDraftKey, deliveryEntries, isPendingKey, readComposerDraft, deriveThreadStats, markSpecsFor, newTurnBook,
+  MAIN_TITLE, askedFromGroups, blockPageKey, composerDraftKey, deliveryEntries, isPendingKey, deriveThreadStats, markSpecsFor, newTurnBook,
   recordTurnSegments, sliverBars, trackTurn, type AskedFromRow, type MarkSpec, type StreamTurnSegment, type TurnBook,
 } from '@/utils/thread-stack-state';
 import { pinKeyOf, pinLabelFor } from '@/hooks/useSessionPins';
@@ -294,15 +296,19 @@ function isMergeableStreamItem(
 }
 
 /** Inline edit component for queued messages */
-function EditableQueuedMessage({ message, onSave, onCancel }: {
+function EditableQueuedMessage({ queueId, message, onSave, onCancel }: {
+  queueId: string;
   message: string;
   onSave: (text: string) => void;
   onCancel: () => void;
 }) {
-  const [value, setValue] = useState(message);
+  // The edit is kept while the message waits (a reload brings it back if it is still queued).
+  const draft = useDraft(draftKey('queued-edit', queueId, draftHash(message)), { baseline: message });
+  const { text: value, setText: setValue } = draft;
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const mic = useRef<BoxMicHandle | null>(null);
-  const save = () => { mic.current?.clear(); onSave(value.trim() || message); };
+  const save = () => { mic.current?.clear(); draft.clear(); onSave(value.trim() || message); };
+  const cancel = () => { draft.clear(); onCancel(); };
 
   useEffect(() => { textareaRef.current?.focus(); }, []);
 
@@ -315,16 +321,17 @@ function EditableQueuedMessage({ message, onSave, onCancel }: {
         onKeyDown={(e) => {
           if (e.nativeEvent.isComposing || e.keyCode === 229) return;
           if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); save(); }
-          if (e.key === 'Escape') onCancel();
+          if (e.key === 'Escape') cancel();
         }}
         className="session-msg-edit-textarea"
+        data-draft-key={draft.key ?? undefined}
         rows={2}
         {...NO_AUTOFILL_PROPS}
       />
       <div className="session-msg-edit-actions">
         <BoxMic boxRef={textareaRef} text={value} setText={setValue} handleRef={mic} />
         <button onClick={save} className="btn btn-sm btn-primary">Save</button>
-        <button onClick={onCancel} className="btn btn-sm">Cancel</button>
+        <button onClick={cancel} className="btn btn-sm">Cancel</button>
       </div>
     </div>
   );
@@ -4073,8 +4080,9 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     return () => document.removeEventListener('pointerdown', onDown, true);
   }, [cardKey, closeCard, sessionId]);
   const cardTurns = useMemo(() => cardTurnsOf(messages, cardNode), [messages, cardNode]);
-  // A draft (an Ask left with words) opens with them in the card's box again.
-  const cardInitialText = cardPending && !cardNode ? readComposerDraft(composerDraftKey(sessionId, cardPending.pageKey, threadTree)) : '';
+  // The card's box keeps its words under the question's composer draft key: an
+  // Ask left with words, or a reply typed and not sent, is there when it opens again.
+  const cardDraftKey = cardKey ? composerDraftKey(sessionId, cardKey, threadTree) : null;
   // Sent and no words yet: the card's head and body say it waits (2026-10-27,
   // the user: "more obvious that it is queuing"); `Answering…` once words come.
   const cardMark = cardKey ? threadsApi.markStates.get(cardKey) : undefined;
@@ -4122,10 +4130,11 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   const quoteCardInChat = useCallback(() => {
     const key = cardKeyRef.current;
     if (!key) return;
-    // The composer loads the Ask's words from its draft key when it moves there.
+    // The composer loads the Ask's words from its draft key when it moves there
+    // (the card keeps them under that key; written now, ahead of its debounce).
     const words = cardTextRef.current;
     if (isPendingKey(key) && words.trim()) {
-      try { localStorage.setItem(composerDraftKey(sessionId, key, threadTree), words); } catch { /* private browsing */ }
+      writeDraft(composerDraftKey(sessionId, key, threadTree), words);
       cardTextRef.current = '';
     }
     setCardOpen(false);
@@ -4181,6 +4190,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       return (
         <div key={`r-${m.queueId}`} className="session-msg-received">
           <EditableQueuedMessage
+            queueId={m.queueId}
             message={m.text}
             onSave={(newText) => {
               setEditingId(null);
@@ -4433,7 +4443,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
                 queued={cardWaiting && threadDerived.live.get(cardKey) === 'queued'}
                 canAsk={threadsApi.canAsk}
                 menu={cardMenu}
-                initialText={cardInitialText}
+                draftKey={cardDraftKey}
                 onTextChange={onCardText}
                 onSend={sendFromCard}
                 onClose={closeCard}
@@ -4461,7 +4471,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
             queued={cardWaiting && threadDerived.live.get(cardKey) === 'queued'}
             canAsk={threadsApi.canAsk}
             menu={cardMenu}
-            initialText={cardInitialText}
+            draftKey={cardDraftKey}
             onTextChange={onCardText}
             onSend={sendFromCard}
             onClose={closeCard}

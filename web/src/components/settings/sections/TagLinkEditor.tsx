@@ -10,6 +10,8 @@
  */
 
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
+import { useDraft } from '@/hooks/useDraft';
+import { draftKey } from '@/utils/drafts';
 import { SettingsRow } from '../SettingsSection';
 import { SettingsButton } from '../inputs/SettingsButton';
 import { useSettingsSaved } from '../settings-pane-context';
@@ -62,7 +64,9 @@ export function linkToWrite(
 export function TagLinkEditor({ pattern, probe, example, links, onClose }: TagLinkEditorProps) {
   const own = links.find((rule) => rule.source === 'user' && rule.pattern === pattern);
   const inherited = inheritedLink(links, pattern, probe);
-  const [text, setText] = useState(own ? own.link : inherited?.link ?? '');
+  // A link typed and not saved survives closing the row (Esc) and leaving the pane; Save or Cancel ends it.
+  const draft = useDraft(draftKey('tag-link', pattern), { baseline: own ? own.link : inherited?.link ?? '' });
+  const { text, setText } = draft;
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const input = useRef<HTMLInputElement>(null);
@@ -74,8 +78,10 @@ export function TagLinkEditor({ pattern, probe, example, links, onClose }: TagLi
   const write = async (next: string | null) => {
     setBusy(true);
     setError(null);
+    const sentKey = draft.key;
     try {
       await track(setTagLink(pattern, next));
+      draft.clear(sentKey);
       onClose();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -87,7 +93,7 @@ export function TagLinkEditor({ pattern, probe, example, links, onClose }: TagLi
   const save = () => {
     const plan = linkToWrite(text, own, inherited);
     if ('error' in plan) { setError(plan.error); return; }
-    if ('same' in plan) { onClose(); return; }
+    if ('same' in plan) { draft.clear(); onClose(); return; }
     void write(plan.write);
   };
 
@@ -129,6 +135,7 @@ export function TagLinkEditor({ pattern, probe, example, links, onClose }: TagLi
             id={id}
             ref={input}
             type="url"
+            data-draft-key={draft.key ?? undefined}
             className="settings-input"
             value={text}
             placeholder="https://tracker.example.com/{value}"
@@ -143,7 +150,7 @@ export function TagLinkEditor({ pattern, probe, example, links, onClose }: TagLi
           {secondary && (
             <SettingsButton disabled={busy} onClick={() => void write(secondary.next)} data-testid="tag-link-clear">{secondary.label}</SettingsButton>
           )}
-          <SettingsButton variant="text" disabled={busy} onClick={onClose} data-testid="tag-link-cancel">Cancel</SettingsButton>
+          <SettingsButton variant="text" disabled={busy} onClick={() => { draft.clear(); onClose(); }} data-testid="tag-link-cancel">Cancel</SettingsButton>
         </span>
       }
     />

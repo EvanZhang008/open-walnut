@@ -326,7 +326,7 @@ export function CommandPalette({ onNavigate, onCreate, onPreviewAttachment }: Co
       <div className="notes-cmdk" onMouseDown={(e) => e.stopPropagation()}>
         <div className="notes-cmdk-input-row">
           <span className="notes-cmdk-glyph" aria-hidden>{'⌘K'}</span>
-          <input
+          <input data-no-draft="picker"
             ref={inputRef}
             className="notes-cmdk-input"
             type="text"

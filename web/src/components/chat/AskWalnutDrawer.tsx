@@ -304,7 +304,7 @@ export function AskWalnutDrawer({
 
         <div className="ask-walnut-drawer-search">
           <span className="ask-walnut-drawer-search-ic" aria-hidden="true">{'⌕'}</span>
-          <input
+          <input data-no-draft="search"
             ref={searchRef}
             type="search"
             className="ask-walnut-drawer-search-input"

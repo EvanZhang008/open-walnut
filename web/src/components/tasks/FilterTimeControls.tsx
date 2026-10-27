@@ -17,7 +17,7 @@ export function CustomTime({ c, w, origin }: { c: FilterBarController; w: Filter
     w.write((s) => ({ ...s, time: { ...s.time, preset: 'custom', ...patch } }), origin);
   return (
     <div className="fb-custom-time">
-      <input
+      <input data-no-draft="number"
         type="number"
         className="fb-custom-input"
         min={1}

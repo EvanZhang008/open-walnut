@@ -1,7 +1,9 @@
-import { useRef, useState, type FormEvent } from 'react';
+import { useRef, type FormEvent } from 'react';
 import type { Task, TaskPriority } from '@open-walnut/core';
 import { BoxMic, type BoxMicHandle } from '../common/BoxMic';
 import { useShowPriority } from '@/hooks/useShowPriority';
+import { useDraftValue } from '@/hooks/useDraft';
+import { draftKey } from '@/utils/drafts';
 
 export interface TaskFormData {
   title: string;
@@ -15,17 +17,27 @@ export interface TaskFormData {
 interface TaskFormProps {
   initial?: Partial<Task>;
   projects: string[];
-  onSubmit: (data: TaskFormData) => void;
+  /** A promise that rejects keeps the form's draft (the create did not land). */
+  onSubmit: (data: TaskFormData) => void | Promise<unknown>;
   onCancel: () => void;
 }
 
 export function TaskForm({ initial, projects, onSubmit, onCancel }: TaskFormProps) {
   const showPriority = useShowPriority();
-  const [title, setTitle] = useState(initial?.title ?? '');
-  const [priority, setPriority] = useState<TaskPriority>(initial?.priority ?? 'none');
-  const [project, setProject] = useState(initial?.project ?? '');
-  const [dueDate, setDueDate] = useState(initial?.due_date ?? '');
-  const [note, setNote] = useState('');
+  // The whole form is one draft of this task (or of a new one): closing the dialog keeps
+  // it, Save or Add drops it, and so does Cancel.
+  const form = useDraftValue<TaskFormData>(draftKey('task-form', initial?.id ?? 'new'), {
+    title: initial?.title ?? '', priority: initial?.priority ?? 'none', project: initial?.project ?? '',
+    due_date: initial?.due_date ?? '', note: '',
+  });
+  const { title, priority, project, due_date: dueDate, note } = form.value;
+  const field = <K extends keyof TaskFormData>(k: K) => (v: TaskFormData[K]) => form.setValue((f) => ({ ...f, [k]: v }));
+  const setTitle = field('title');
+  const setPriority = field('priority');
+  const setProject = field('project');
+  const setDueDate = field('due_date');
+  const setNote = field('note');
+  const cancel = () => { form.clear(); onCancel(); };
   const titleBox = useRef<HTMLInputElement | null>(null);
   const titleMic = useRef<BoxMicHandle | null>(null);
   const noteBox = useRef<HTMLTextAreaElement | null>(null);
@@ -36,13 +48,14 @@ export function TaskForm({ initial, projects, onSubmit, onCancel }: TaskFormProp
     if (!title.trim()) return;
     titleMic.current?.clear();
     noteMic.current?.clear();
-    onSubmit({
+    const sentKey = form.key;
+    void Promise.resolve(onSubmit({
       title: title.trim(),
       priority,
       project: project.trim(),
       due_date: dueDate,
       note: note.trim(),
-    });
+    })).then(() => form.clear(sentKey), () => {});
   };
 
   return (
@@ -57,6 +70,7 @@ export function TaskForm({ initial, projects, onSubmit, onCancel }: TaskFormProp
               ref={titleBox}
               id="task-title"
               type="text"
+              data-draft-key={form.key ?? undefined}
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               placeholder="Task title"
@@ -97,6 +111,7 @@ export function TaskForm({ initial, projects, onSubmit, onCancel }: TaskFormProp
           <input
             id="task-project"
             type="text"
+            data-draft-key={form.key ?? undefined}
             value={project}
             onChange={(e) => setProject(e.target.value)}
             list="projects-list"
@@ -114,6 +129,7 @@ export function TaskForm({ initial, projects, onSubmit, onCancel }: TaskFormProp
               <textarea
                 ref={noteBox}
                 id="task-note"
+                data-draft-key={form.key ?? undefined}
                 value={note}
                 onChange={(e) => setNote(e.target.value)}
                 placeholder="Optional note..."
@@ -126,7 +142,7 @@ export function TaskForm({ initial, projects, onSubmit, onCancel }: TaskFormProp
         )}
 
         <div className="form-actions">
-          <button type="button" className="btn" onClick={onCancel}>Cancel</button>
+          <button type="button" className="btn" onClick={cancel}>Cancel</button>
           <button type="submit" className="btn btn-primary">{initial ? 'Save' : 'Add Task'}</button>
         </div>
       </form>

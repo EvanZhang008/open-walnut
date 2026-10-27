@@ -159,7 +159,7 @@ export function SessionWebView({ sessionId, host, request, onNavigate, barRightS
       <div className="session-code-header session-web-header">
         <form className="session-web-address-form" onSubmit={handleSubmit}>
           <span className="session-code-label">Web</span>
-          <input
+          <input data-no-draft="search"
             ref={addressRef}
             className={`session-web-address${addressError ? ' session-web-address-invalid' : ''}`}
             value={address}

@@ -8,6 +8,8 @@
  * format), so onAdded can scroll to it and focus its Add task (G35). At 12
  * lanes the button is aria-disabled and says why.
  */
+import { useDraft } from '@/hooks/useDraft';
+import { draftKey } from '@/utils/drafts';
 import { useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { ICON_PLUS } from '@/components/common/Icons';
 import { log } from '@/utils/log';
@@ -32,8 +34,10 @@ export function insertLane(lanes: readonly BoardLane[], lane: BoardLane): BoardL
 }
 
 export function KanbanAddLane({ lanes, mode, api, onAdded }: KanbanAddLaneProps) {
-  const [open, setOpen] = useState(false);
-  const [name, setName] = useState('');
+  // A half-typed lane name is kept until the lane is added or the form is closed with Esc.
+  const nameDraft = useDraft(draftKey('kanban-add-lane', 'new'));
+  const { text: name, setText: setName } = nameDraft;
+  const [open, setOpen] = useState(() => !!nameDraft.text);
   const [picked, setPicked] = useState<BoardLaneKind | null>(null);
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
@@ -42,7 +46,7 @@ export function KanbanAddLane({ lanes, mode, api, onAdded }: KanbanAddLaneProps)
   const blocked = api.readOnly ? READ_ONLY_TITLE : full ? MAX_LANES_TITLE : '';
   const kind = picked ?? defaultLaneKind(name);
 
-  const close = () => { setOpen(false); setName(''); setPicked(null); setError(''); };
+  const close = () => { setOpen(false); nameDraft.clear(); setPicked(null); setError(''); };
   const add = async () => {
     if (saving) return;
     const err = laneNameError(lanes, null, name);
@@ -88,7 +92,7 @@ export function KanbanAddLane({ lanes, mode, api, onAdded }: KanbanAddLaneProps)
   return (
     <div className={`kanban-add-lane-wrap is-${mode} is-open`}>
       <div className="kanban-add-lane-form" data-testid="kanban-add-lane-form" onKeyDown={onKeyDown} onPointerDown={(e) => e.stopPropagation()}>
-        <input
+        <input data-draft-key={nameDraft.key ?? undefined}
           ref={inputRef}
           className="kanban-add-lane-input"
           data-testid="kanban-add-lane-input"

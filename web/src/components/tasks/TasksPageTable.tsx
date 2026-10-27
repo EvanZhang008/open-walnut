@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, Fragment, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react';
+import { useDraft } from '@/hooks/useDraft';
+import { draftKey, readDraft, writeDraft } from '@/utils/drafts';
 import { useNavigate } from 'react-router-dom';
 import type { Task, TaskPriority } from '@open-walnut/core';
 import { useConfirm } from '@/hooks/useConfirm';
@@ -262,7 +264,7 @@ function ProjectCell({ task, sourceByName, projectNames, onUpdate }: {
           onPointerDown={(e) => e.stopPropagation()}
         >
           {options.length > 6 && (
-            <input
+            <input data-no-draft="search"
               className="tp-proj-filter"
               placeholder="Filter projects…"
               value={filter}
@@ -406,7 +408,11 @@ export function TasksPageTable({
 
   // ── ghost add-row state (keyed by group so only one ghost is editing) ──
   const [addingIn, setAddingIn] = useState<string | null>(null);
-  const [draft, setDraft] = useState('');
+  // Each group's ghost row keeps its own half-typed title until it is created or cleared with Esc.
+  const ghostDraft = useDraft(addingIn === null ? null : draftKey('quick-task', 'tasks-table', addingIn));
+  const { text: draft, setText: setDraft } = ghostDraft;
+  const ghostKeyRef = useRef(ghostDraft.key);
+  ghostKeyRef.current = ghostDraft.key;
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -417,13 +423,19 @@ export function TasksPageTable({
     if (e.nativeEvent.isComposing || e.keyCode === 229) return;
     if (e.key === 'Escape') {
       e.stopPropagation();
+      ghostDraft.clear();
       setAddingIn(null);
-      setDraft('');
     } else if (e.key === 'Enter') {
       const title = draft.trim();
       if (!title) return;
+      const sentKey = ghostDraft.key;
       setDraft('');
-      void onCreate(title, project);
+      // A refused create puts the title back in its own group's draft, unless
+      // something new was typed there meanwhile.
+      void Promise.resolve(onCreate(title, project)).catch(() => {
+        if (sentKey === ghostKeyRef.current) setDraft((cur) => cur || title);
+        else if (sentKey && !readDraft(sentKey)) writeDraft(sentKey, title);
+      });
       inputRef.current?.focus(); // re-arm for rapid entry
     }
   };
@@ -467,7 +479,7 @@ export function TasksPageTable({
         key={ghostKey}
         className={`tp-ghost${editing ? ' editing' : ''}`}
         data-testid="tasks-ghost-row"
-        onClick={() => { if (!editing) { setAddingIn(ghostKey); setDraft(''); } }}
+        onClick={() => { if (!editing) setAddingIn(ghostKey); }}
       >
         <span className="tp-cell-title">
           <span className="tp-gplus">＋</span>
@@ -475,11 +487,12 @@ export function TasksPageTable({
             <input
               ref={inputRef}
               className="tp-ghost-input"
+              data-draft-key={ghostDraft.key ?? undefined}
               placeholder="Task title — Enter to create"
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
               onKeyDown={(e) => handleGhostKey(e, project)}
-              onBlur={() => { if (!draft.trim()) { setAddingIn(null); setDraft(''); } }}
+              onBlur={() => setAddingIn(null)}
             />
           ) : (
             <span className="tp-ghost-text">New task… ({scopeLabel})</span>
