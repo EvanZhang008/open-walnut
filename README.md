@@ -265,7 +265,7 @@ one source does not overwhelm the others.
   skills from the web app.
 - **Task integrations**: Sync Microsoft To-Do and Jira through built-in plugins.
 - **Custom plugins**: Install trusted Git or npm Plugins that add server logic, a native React App, Tools, Skills, Commands, Hooks, Agents, Providers, routes, and task sync without changing Walnut.
-- **Notifications**: Send optional Slack notifications for important events.
+- **Notifications**: The inbox, and push notifications on the iPhone app, tell you when a task needs you.
 
 ### Writing a plugin
 
@@ -308,7 +308,7 @@ switching works, and [Cloud sync](docs/reference/cloud-sync.md) for the companio
 - Open Walnut does not include telemetry or require an Open Walnut account.
 - Model prompts are sent only to the provider you configure.
 - Remote sessions connect only to hosts you configure.
-- Cloud access, task integrations, Slack, and Git remotes are optional.
+- Cloud access, task integrations, and Git remotes are optional.
 - Private plugins stay outside the repository.
 
 ## Web Pages
