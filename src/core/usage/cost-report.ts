@@ -18,7 +18,7 @@ import { DEFAULT_PRICING } from './pricing.js';
 import { priceBucket } from './session-cost-pricing.js';
 import type { SessionCostBucket } from '../../providers/session-cost-core.js';
 import type { CostRollup } from './cost-rollup.js';
-import type Database from 'better-sqlite3';
+import type { Database as DatabaseType } from '../../lib/sqlite.js';
 
 export type CostView = 'walnut' | 'agents';
 
@@ -53,7 +53,7 @@ export interface CostReport {
 
 export interface CostReportDeps {
   rollup: CostRollup;
-  db: Database.Database;
+  db: DatabaseType;
   timeZone: string;
   overrides?: Record<string, UserPriceRates>;
   /** taskId -> title/project as they are now. */
@@ -204,7 +204,7 @@ function bandSql(thresholds: number[]): string {
 }
 
 /** The live tracker's rows for Walnut's own calls (not coding sessions, not chat: chat comes from transcripts). */
-function trackerRows(db: Database.Database, thresholds: number[], start: string | undefined, end: string | undefined, timeZone: string) {
+function trackerRows(db: DatabaseType, thresholds: number[], start: string | undefined, end: string | undefined, timeZone: string) {
   if (!db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='usage'").get()) return [];
   db.exec('CREATE INDEX IF NOT EXISTS idx_usage_timestamp ON usage(timestamp)');
   const clauses = ["source NOT IN ('session','chat')"]; const args: string[] = [];

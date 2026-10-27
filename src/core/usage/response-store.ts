@@ -53,7 +53,7 @@ export class ResponseUsageStore {
   }
 
   /** The live usage table (tracker.ts) in the same file, for Walnut's own calls. */
-  get database(): Database.Database { return this.db; }
+  get database(): DatabaseType { return this.db; }
 
   async importHost(host: string, evidence: UsageEvidence, owners: UsageOwner[]) {
     const map = new Map(owners.map(o => [o.sessionId, o]));

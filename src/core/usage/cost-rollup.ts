@@ -11,7 +11,7 @@
  * same rule as the daemon's session-cost buckets (session-cost-core.ts), so a
  * long-context rate prices the same here as in the model picker.
  */
-import type Database from 'better-sqlite3';
+import type { Database as DatabaseType } from '../../lib/sqlite.js';
 import { setImmediate } from 'node:timers/promises';
 
 export interface RollupRow {
@@ -36,7 +36,7 @@ export class CostRollup {
   private thresholdsKey = '';
   private thresholds: number[] = [];
 
-  constructor(private readonly db: Database.Database) {
+  constructor(private readonly db: DatabaseType) {
     db.exec(`CREATE TABLE IF NOT EXISTS usage_rollup (
       date TEXT NOT NULL, host TEXT NOT NULL, source TEXT NOT NULL, engine TEXT NOT NULL, session_id TEXT NOT NULL,
       task_id TEXT, model TEXT NOT NULL, agent TEXT NOT NULL, band INTEGER NOT NULL,

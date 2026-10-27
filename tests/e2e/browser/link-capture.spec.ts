@@ -2,6 +2,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import fs from 'node:fs/promises'
 import net from 'node:net'
 import { expect, test, type BrowserContext, type Locator, type Page } from '@playwright/test'
+import { bunRuntime } from '../../helpers/bun-runtime.js'
 import { showCustomBoard } from './board-view-helpers'
 
 /**
@@ -53,7 +54,7 @@ test.beforeAll(async () => {
   await fs.mkdir(SHOTS, { recursive: true })
   const port = await reservePort()
   let output = ''
-  child = spawn('./node_modules/.bin/tsx', ['tests/e2e/browser/link-capture-server.ts'], {
+  child = spawn(bunRuntime(), ['tests/e2e/browser/link-capture-server.ts'], {
     cwd: process.cwd(),
     env: { ...process.env, PW_LINK_CAPTURE_PORT: String(port) },
     stdio: ['ignore', 'pipe', 'pipe'],
