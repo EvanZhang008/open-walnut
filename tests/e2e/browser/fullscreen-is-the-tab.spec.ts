@@ -4,6 +4,9 @@
  * panel in full screen fills the page area beside the sidebar; the sidebar stays
  * clickable, another page works as usual, and coming back the panel is still full
  * screen. The column-open yield still drops it (fullscreen-yields-to-column-open).
+ * A second click on the open view's tab closes that view and stays full screen
+ * (2026-10-27, the user: "it should make this file panel disappear but not exit
+ * the full screen").
  * Run both engines: PW_WEBKIT=1 ... for the Mac app.
  */
 import { test, expect } from '@playwright/test'
@@ -56,5 +59,25 @@ test('the sidebar stays usable in full screen, and the tab is still full screen 
   // A click on the backdrop strip beside the sheet still leaves full screen.
   const box = (await panel.boundingBox())!
   await page.mouse.click(box.x + box.width / 2, box.y + box.height + 6)
+  await expect(panel).not.toHaveClass(/open-walnut-fullscreen/)
+})
+
+test('a second click on the open view\'s tab closes that view and stays full screen', async ({ page }) => {
+  const panel = await openSessionPanel(page)
+  const split = panel.locator('.session-panel-split')
+  for (const tab of ['Files', 'Changed'] as const) {
+    await panel.getByRole('button', { name: tab, exact: true }).click()
+    await expect(split).toHaveClass(/is-changed-open/, { timeout: 15_000 })
+    await expect(panel).toHaveClass(/open-walnut-fullscreen/)
+    // The same tab again: the view goes, the chat fills the sheet, still full screen.
+    await panel.getByRole('button', { name: tab, exact: true }).click()
+    await expect(split).not.toHaveClass(/is-changed-open/)
+    await expect(panel.locator('.session-file-explorer')).toHaveCount(0)
+    await expect(panel).toHaveClass(/open-walnut-fullscreen/)
+    await expect(page.locator('.open-walnut-fullscreen-backdrop')).toHaveCount(1)
+    await expect(panel.locator('.chat-input-textarea').first()).toBeVisible()
+  }
+  // Esc still leaves full screen.
+  await page.keyboard.press('Escape')
   await expect(panel).not.toHaveClass(/open-walnut-fullscreen/)
 })

@@ -1148,8 +1148,12 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
     setActiveView(next);
     // Phone: the view is a layer under the top bar (its Back closes it), never a
     // full-screen promotion over that bar.
-    if (next) { if (!isPhoneLayout()) enterFullscreen(); applyOpenCollapse(next); } else { exitFullscreen(); collapseChat(false); }
-  }, [enterFullscreen, exitFullscreen, fileViewTarget, activeView, applyOpenCollapse, collapseChat, inset, session?.taskId, sessionId, onLocateTask, onTaskClick, navigate]);
+    // A second click on the open view's tab closes that view and stays full
+    // screen, back on the chat (2026-10-27, the user: "it should make this file
+    // panel disappear but not exit the full screen"); X, Esc and the backdrop
+    // still leave full screen.
+    if (next) { if (!isPhoneLayout()) enterFullscreen(); applyOpenCollapse(next); } else { collapseChat(false); }
+  }, [enterFullscreen, fileViewTarget, activeView, applyOpenCollapse, collapseChat, inset, session?.taskId, sessionId, onLocateTask, onTaskClick, navigate]);
   // An open Board whose task stops leading (its last open subtask finished and it
   // keeps no Board of its own, or the Board was deleted) closes back to the chat
   // instead of leaving an empty pane behind a tab that is gone.
