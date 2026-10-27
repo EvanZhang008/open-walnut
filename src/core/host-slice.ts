@@ -20,6 +20,7 @@ import type { SessionRecord, Task } from './types.js';
 import { isInfraSessionError } from './session-error-kind.js';
 import { engineCaps } from './agents/engine-registry.js';
 import { instructionNoticeForHost } from './sessions/instruction-notice.js';
+import { hostReplyTail } from './sessions/output-mode.js';
 
 /** Newest sessions kept per host; the daemon intersects with what it runs. */
 const MAX_SESSIONS = 200;
@@ -242,6 +243,8 @@ export async function buildHostSlice(hostKey: string, now = Date.now()): Promise
     });
 
   const { boards, boardOf } = await teamBoards(sessionTaskIds);
+  // What the queue would append to a turn nobody typed; the host appends it to what it delivers itself.
+  const config = await (await import('./config-manager.js')).getConfig().catch(() => null);
 
   const body = {
     home: WALNUT_HOME,
@@ -253,6 +256,10 @@ export async function buildHostSlice(hostKey: string, now = Date.now()): Promise
         // Only while due: the host adds it once and journals it as told.
         const routing = task ? instructionNoticeForHost(s, task) : null;
         return routing ? { taskRoutingPolicy: routing.policy, taskRoutingDue: routing.due } : {};
+      })(),
+      ...(() => {
+        const tail = hostReplyTail(s, config);
+        return tail ? { replyTail: tail } : {};
       })(),
       ...(s.taskId ? { taskId: s.taskId } : {}),
       ...(s.title ? { title: s.title } : {}),
@@ -330,6 +337,7 @@ export function ensureHostSliceSync(): void {
           .catch((err) => log.session.warn('host slice: re-push failed', { error: err instanceof Error ? err.message : String(err) }));
       }, PUSH_DEBOUNCE_MS);
       timer.unref?.();
-    }, { global: true, interest: ['task:', 'session:started', 'session:status-changed', 'session:renamed', 'session-request:', 'board:changed'] });
+    // config:changed: the reply-language line each session's replyTail carries.
+    }, { global: true, interest: ['task:', 'session:started', 'session:status-changed', 'session:renamed', 'session-request:', 'board:changed', 'config:changed'] });
   });
 }

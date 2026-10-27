@@ -47,6 +47,14 @@ export interface OfflineSliceSession {
   sid: string; taskId?: string; title?: string; aside?: boolean; noResume?: boolean
   /** The instruction notice for a session spawned before its default instructions changed, sent only while it is due, and the key naming that (instruction-notice.ts). */
   taskRoutingPolicy?: string; taskRoutingDue?: string
+  /**
+   * The lines the server's queue would append to a turn nobody typed into this session (the
+   * standing rich output reminder, the reply-language line: sessions/output-mode.ts). A message
+   * this host delivers itself (a peer note or reply between two sessions here) never passes that
+   * queue, so the host appends them (2026-10-27: same-host peer notes reached the main agent
+   * without the language line, and it answered the user in English).
+   */
+  replyTail?: string
 }
 
 export interface OfflineSliceTask {
@@ -880,15 +888,28 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     if (routedMids.size > 200) routedMids.delete(routedMids.keys().next().value as string)
   }
 
+  /**
+   * The text with the session's reply tail after it, never on a slash command. A tail line is
+   * left out when the text already holds a line of its kind (same opening 12 characters, so a
+   * leader's text that carries the full rich instruction does not also get the reminder).
+   */
+  function withReplyTail(home: string, sid: string, text: string): string {
+    const tail = sessionOf(home, sid)?.replyTail
+    if (!tail || text.trimStart().startsWith('/')) return text
+    const kinds = new Set(text.split('\n').map((l) => l.trim().slice(0, 12)))
+    const missing = tail.split('\n').map((l) => l.trim()).filter((l) => l && !kinds.has(l.slice(0, 12)))
+    return missing.length ? `${text}\n\n${missing.join('\n\n')}` : text
+  }
+
   async function deliverWithTaskRouting(home: string, sid: string, text: string, messageId: string): Promise<DeliverResult> {
-    const routed = withTaskRouting(home, sid, text)
+    const routed = withTaskRouting(home, sid, withReplyTail(home, sid, text))
     const delivered = await deps.deliver(sid, routed.text, messageId)
     if (delivered.ok && routed.due) markRouted(sid, messageId, routed.due)
     return delivered
   }
 
   async function resumeWithTaskRouting(home: string, sid: string, text: string, messageId: string, taskId: string): Promise<DeliverResult> {
-    const routed = withTaskRouting(home, sid, text)
+    const routed = withTaskRouting(home, sid, withReplyTail(home, sid, text))
     const resumed = await deps.resume!(home, sid, routed.text, messageId, taskId)
     if (resumed.ok && routed.due) markRouted(sid, messageId, routed.due)
     return resumed

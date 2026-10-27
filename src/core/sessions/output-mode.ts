@@ -206,6 +206,23 @@ export function resolveOutputModeDirective(
 }
 
 /**
+ * The lines a session's HOST appends to a message it delivers itself (a peer note
+ * or reply between two sessions on that host never reaches the server's queue;
+ * host-slice.ts ships this, offline-host-core.ts appends it). The standing
+ * reminder and the language line only: an owed edge instruction stays owed,
+ * because only the server can record it as told, and ships with the next send
+ * the server makes. Null when there is nothing to add.
+ */
+export function hostReplyTail(
+  record: Pick<SessionRecord, 'output_mode' | 'output_mode_injected'> | null | undefined,
+  config?: OutputModeConfig | null,
+): string | null {
+  const d = resolveOutputModeDirective(record, config);
+  const lines = [d.reminder, d.language].filter(Boolean);
+  return lines.length ? lines.join('\n\n') : null;
+}
+
+/**
  * Wrap the text that goes to the CLI. Machine text always lands AFTER the
  * user's words (and after any image preamble the caller already built): the
  * human reads their own message first, and recency serves the model better.
