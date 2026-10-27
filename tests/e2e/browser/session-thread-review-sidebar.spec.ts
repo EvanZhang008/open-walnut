@@ -113,6 +113,20 @@ test.describe('the fullscreen review sidebar', () => {
     const answers = await sidebarCards(panel).locator('.thread-review-a').allTextContents()
     expect(answers.filter((t) => /\[Q\s?\d+\]/.test(t))).toEqual([])
     expect(answers.filter((t) => t.trim().length > 0).length).toBeGreaterThan(REVIEW_COUNT / 2)
+    // A long question is clamped to one line inside its bubble: the bubble is
+    // that line plus its padding, so the next line never shows through the
+    // bottom padding (prod, 2026-10-27, both engines).
+    const bubbles = await sidebarCards(panel).locator('.thread-review-q').evaluateAll((els) => els.map((el) => {
+      const text = el.querySelector('.thread-review-q-text') as HTMLElement
+      const cs = getComputedStyle(el)
+      const pad = parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom)
+      return { box: el.getBoundingClientRect().height, text: text.getBoundingClientRect().height, line: parseFloat(cs.lineHeight), pad, clamped: text.scrollHeight > text.clientHeight + 1 }
+    }))
+    expect(bubbles.some((b) => b.clamped), 'a question is long enough to clamp').toBe(true)
+    for (const b of bubbles) {
+      expect(b.text).toBeLessThan(b.line * 1.5)
+      expect(Math.abs(b.box - b.text - b.pad)).toBeLessThan(1.5)
+    }
     // Level with its passage or below it (pushed down), never overlapping.
     const ordered = REVIEW_TITLES.map((t) => cards.find((c) => c.title === t)!)
     for (let i = 0; i < ordered.length; i++) {

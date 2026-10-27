@@ -45,7 +45,10 @@ export function buildReviewSession(nowMs: number): ThreadsFixtureSession & { ids
   const meta: FixtureMeta[] = []
   for (let i = 0; i < REVIEW_COUNT; i++) {
     const passage = reviewPassage(i)
-    const rounds = i === 0 ? REVIEW_ROUNDS : [`What does point ${i + 1} protect?`]
+    // Point 2's question runs past one line, so its review bubble is clamped.
+    const rounds = i === 0 ? REVIEW_ROUNDS
+      : i === 1 ? [`What does point 2 protect when the reader and the writer both hold the same slot at once?`]
+      : [`What does point ${i + 1} protect?`]
     rounds.forEach((q, r) => {
       const answer = i === 0 && r === 1
         ? `Two cases:\n\n- **Before the seal**: the page is dropped.\n- **After the seal**: the index keeps the old copy.\n\n${filler(400 + r, 30)}`

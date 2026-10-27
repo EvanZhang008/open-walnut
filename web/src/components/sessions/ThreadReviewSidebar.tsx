@@ -194,7 +194,7 @@ export const ThreadReviewSidebar = memo(function ThreadReviewSidebar(p: ThreadRe
             <span className="thread-review-title" title={e.title}>{e.title}</span>
             <span className="thread-review-state">{STATE_WORDS[e.state]}</span>
           </button>
-          {e.question && <div className="session-msg session-msg-user thread-review-q">{e.question}</div>}
+          {e.question && <div className="session-msg session-msg-user thread-review-q"><span className="thread-review-q-text">{e.question}</span></div>}
           <div className="thread-review-a">{answerLine(e)}</div>
           <div className="thread-review-actions">
             {e.rounds > 1 && <span className="thread-review-rounds">{e.rounds} rounds</span>}

@@ -73,6 +73,10 @@
   font-size: 12px;
   line-height: 1.4;
   overflow-wrap: anywhere;
+}
+/* Clamped inside the bubble: a clamp on the padded bubble itself shows the
+   next line's top through the bottom padding. */
+.thread-review-q-text {
   display: -webkit-box;
   -webkit-line-clamp: 1;
   -webkit-box-orient: vertical;
@@ -88,7 +92,7 @@
 }
 /* Compact until picked, so a dense reply keeps each card level with its line;
    the picked one opens up: more of both, and its actions. */
-.thread-review-card[data-selected="true"] .thread-review-q { -webkit-line-clamp: 4; }
+.thread-review-card[data-selected="true"] .thread-review-q-text { -webkit-line-clamp: 4; }
 .thread-review-card[data-selected="true"] .thread-review-a { -webkit-line-clamp: 8; }
 .thread-review-actions { display: none; align-items: center; gap: 4px; justify-content: flex-end; }
 .thread-review-card[data-selected="true"] .thread-review-actions,
