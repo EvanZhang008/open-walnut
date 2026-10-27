@@ -64,6 +64,7 @@ Rules that keep an App correct:
 - Badges are a non-negative integer, `'dot'`, or `null`. Clear the badge when the user has seen the thing it counted.
 - Import React normally and let the CLI alias it to the host shims. A second React copy breaks hooks and context.
 - Compose with `walnut.ui.views` (`TaskView`, `ChatView`, `SessionView`, `CalendarView`, `FileView`, `NoteView`, `TerminalView`) instead of copying host internals, and give every stateful View instance its own `storageKey` or `draftKey`.
+- Voice input in a text box you draw is `walnut.ui.views.MicButton` (`boxRef`, `value`, `onChange`, `handleRef`): Walnut's own mic with the person's Voice settings and engine, words appearing as they speak. Never record or transcribe audio yourself. It only fills the box; call `handleRef.current.clear()` when your Send takes the text or the box switches drafts. Optional: draw no mic when it is missing. Details: `docs/reference/plugin-development.md`, "Voice input in your own text box".
 - Use `ui.settings` for configuration and `ui.injectCss` for styles, scoped to a class you own. Use `ui.page` only for a standalone route that is genuinely not an App.
 
 Do not write nav items, dashboard panels, or panel layouts. Those contributions no longer exist: Core Apps, native plugin Apps, and legacy Webviews are rows in one App Registry, and an App owns its own screen.

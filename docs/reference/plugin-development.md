@@ -1047,7 +1047,7 @@ Home, Tasks, Notes, Calendar, Routines, and Settings are the Core Apps. Home's C
 
 ### Stable Views
 
-`walnut.ui.views` hands you host-owned React facades: `CalendarView`, `FileView`, `NoteView`, `TerminalView`, `SessionView`, `TaskView`, `ChatView`, and `PluginSettingsView` (your plugin's generated settings form, for `settingsIn: 'app'`; optional, since an older host does not have it). These are stable contracts, unlike private component imports.
+`walnut.ui.views` hands you host-owned React facades: `CalendarView`, `FileView`, `NoteView`, `TerminalView`, `SessionView`, `TaskView`, `ChatView`, `MicButton` (dictation into your own text box, below; optional), and `PluginSettingsView` (your plugin's generated settings form, for `settingsIn: 'app'`; optional, since an older host does not have it). These are stable contracts, unlike private component imports.
 
 ```tsx compile=web-views
 import type { AppProps, WalnutWebApi } from '@open-walnut/plugin-api/web'
@@ -1072,6 +1072,44 @@ export function activate(walnut: WalnutWebApi) {
 ```
 
 `TaskView` accepts the shared task query model plus optional instance-scoped persistence. `ChatView` keeps append-only streaming and binds drafts to the plugin owner. Give every stateful View instance its own `storageKey` or `draftKey`, otherwise two instances fight over the same local state.
+
+### Voice input in your own text box
+
+`walnut.ui.views.MicButton` is the mic of Walnut's own composer, for a textarea or one-line input your plugin draws. It records and transcribes with the person's Voice settings and engine (Settings → Voice), so there is nothing to configure in your plugin and no second voice setup. Words appear in the box while the person speaks when the engine can draft live, then the final text replaces them and the box takes the focus with the caret after it. A right-click on the mic opens the same retry menu as everywhere else (another model, the vocabulary, recent recordings). While voice is not set up, or its engine is not working, a click opens Settings → Voice instead of recording. A browser that cannot record draws no mic at all.
+
+You keep the text: pass the box's ref, its value and its setter, and the words go in through `onChange` the way typing does (at the caret, with a space where they touch other text). The mic never sends. When your own Send takes the text, or the box switches to another draft, call `clear()` on its handle, so a transcription still on its way does not land a second time or in the wrong draft. When one box holds several drafts (one per conversation, say), also give the mic a `key` per draft: the old mic then goes with its draft, and nothing it still delivers can reach the next one.
+
+```tsx compile=web-mic
+import { useRef, useState } from 'react'
+import type { AppProps, MicButtonHandle, WalnutWebApi } from '@open-walnut/plugin-api/web'
+
+export function activate(walnut: WalnutWebApi) {
+  // Optional on the views object: an older Walnut has no MicButton, so the box just has no mic.
+  const { MicButton } = walnut.ui.views
+
+  function NoteBox(_props: AppProps) {
+    const [text, setText] = useState('')
+    const box = useRef<HTMLTextAreaElement | null>(null)
+    const mic = useRef<MicButtonHandle | null>(null)
+    const send = () => {
+      mic.current?.clear()
+      walnut.log.info('send', { length: text.length })
+      setText('')
+    }
+    return (
+      <div>
+        <textarea ref={box} value={text} onChange={(event) => setText(event.target.value)} />
+        {MicButton ? <MicButton boxRef={box} value={text} onChange={setText} handleRef={mic} /> : null}
+        <button type="button" onClick={send}>Send</button>
+      </div>
+    )
+  }
+
+  walnut.ui.app({ id: 'notes', title: 'Quick note', component: NoteBox })
+}
+```
+
+`size` is `'sm'` (the default, the smaller icon) or `'md'`; the button is Walnut's own round 34px mic either way. `disabled` follows your box. Place the mic in your box's button row rather than over the text; it is drawn by Walnut, so its look follows Walnut's, and its inner class names are not part of this contract.
 
 ## Optional Webview
 

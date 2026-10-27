@@ -1,4 +1,4 @@
-import type { ComponentType } from 'react'
+import type { ComponentType, RefObject } from 'react'
 
 export interface Disposable {
   dispose(): void | Promise<void>
@@ -272,6 +272,21 @@ export interface AskObjectViewProps {
   restoreFocusTo?: string
 }
 
+/** Mirrors `@open-walnut/plugin-api`'s `MicButtonHandle`. */
+export interface MicButtonHandle {
+  clear(): void
+}
+
+/** Mirrors `@open-walnut/plugin-api`'s `MicButtonProps` (see ChatViewProps for why it must). */
+export interface MicButtonProps {
+  boxRef: RefObject<HTMLTextAreaElement | HTMLInputElement | null>
+  value: string
+  onChange(text: string): void
+  disabled?: boolean
+  size?: 'sm' | 'md'
+  handleRef?: RefObject<MicButtonHandle | null>
+}
+
 export interface PluginViews {
   CalendarView: ComponentType<Record<string, never>>
   FileView: ComponentType<FileViewProps>
@@ -281,6 +296,8 @@ export interface PluginViews {
   TaskView: ComponentType<TaskViewProps>
   ChatView: ComponentType<ChatViewProps>
   AskObjectView: ComponentType<AskObjectViewProps>
+  /** Dictation into the plugin's own text box: the composer's mic (BoxMic). */
+  MicButton: ComponentType<MicButtonProps>
   /** The plugin's own generated Settings form (manifest configSchema + uiHints), as rows. */
   PluginSettingsView: ComponentType<Record<string, never>>
 }

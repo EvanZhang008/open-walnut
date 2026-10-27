@@ -20,6 +20,23 @@ export function spliceDictation(value: string, caret: number, span: DictationSpa
   return { next: before + pre + words + post + after, start: pos + pre.length };
 }
 
+/** Where a caret at `pos` belongs after the `oldLen` characters at `start` became `newLen` characters:
+ *  after them it moves with them, inside them it stays inside. */
+export function shiftCaret(pos: number, start: number, oldLen: number, newLen: number): number {
+  if (pos >= start + oldLen) return pos + newLen - oldLen;
+  return Math.min(pos, start + newLen);
+}
+
+/** Run `place` in the first frame where the box shows `wanted()`: React may commit the new text a
+ *  frame after the write, and a caret placed on the old text is lost when the new one lands (the
+ *  browser puts it at the end). Gives up waiting after a few frames and places it anyway. */
+function whenShown(el: HTMLTextAreaElement | HTMLInputElement, wanted: () => string, place: () => void, frames = 6): void {
+  requestAnimationFrame(() => {
+    if (el.value === wanted() || frames <= 0) place();
+    else whenShown(el, wanted, place, frames - 1);
+  });
+}
+
 export function useBoxDictation(boxRef: RefObject<HTMLTextAreaElement | HTMLInputElement | null>, text: string, setText: (t: string) => void) {
   // The recorder's callbacks outlive renders: read the box's text through a ref.
   const textRef = useRef(text);
@@ -50,9 +67,15 @@ export function useBoxDictation(boxRef: RefObject<HTMLTextAreaElement | HTMLInpu
     if (isDraft) { spanRef.current = { start, length: words.length }; draftText.current = words; return; }
     spanRef.current = null;
     lastRef.current = { start, text: words };
-    const caret = start + words.length;
-    // The card sits inside the timeline's scroll box: focus must not move it.
-    requestAnimationFrame(() => { el?.focus({ preventScroll: true }); el?.setSelectionRange(caret, caret); });
+    // The card sits inside the timeline's scroll box: focus must not move it. The caret goes after
+    // the words as they stand then: a refine that landed before this frame has already changed them.
+    if (!el) return;
+    whenShown(el, () => textRef.current, () => {
+      el.focus({ preventScroll: true });
+      const at = lastRef.current;
+      const caret = at ? at.start + at.text.length : start + words.length;
+      el.setSelectionRange(caret, caret);
+    });
   }, [boxRef, setText]);
 
   const onRefine = useCallback((finalText: string, provisional: string): boolean => {
@@ -62,11 +85,21 @@ export function useBoxDictation(boxRef: RefObject<HTMLTextAreaElement | HTMLInpu
     if (value.slice(at.start, at.start + provisional.length) !== provisional) return false;
     if (finalText === provisional) return true;
     const next = value.slice(0, at.start) + finalText + value.slice(at.start + provisional.length);
+    // A new value puts the browser's caret at the end of the box: keep it where the person had it.
+    const el = boxRef.current;
+    const held = el && document.activeElement === el
+      ? { from: el.selectionStart ?? next.length, to: el.selectionEnd ?? next.length }
+      : null;
     textRef.current = next;
     setText(next);
     lastRef.current = { start: at.start, text: finalText };
+    if (el && held) {
+      const from = shiftCaret(held.from, at.start, provisional.length, finalText.length);
+      const to = shiftCaret(held.to, at.start, provisional.length, finalText.length);
+      whenShown(el, () => textRef.current, () => { if (document.activeElement === el) el.setSelectionRange(from, to); });
+    }
     return true;
-  }, [setText]);
+  }, [boxRef, setText]);
 
   /** The mic was pressed to start a recording (not the press that stops one). */
   const started = useCallback(() => {

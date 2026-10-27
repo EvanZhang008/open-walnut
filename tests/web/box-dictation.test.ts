@@ -5,7 +5,7 @@
  * by the final text, never appended to.
  */
 import { describe, expect, it } from 'vitest'
-import { spliceDictation } from '../../web/src/hooks/useBoxDictation'
+import { shiftCaret, spliceDictation } from '../../web/src/hooks/useBoxDictation'
 
 describe('spliceDictation', () => {
   it('fills an empty box', () => {
@@ -35,5 +35,25 @@ describe('spliceDictation', () => {
     // Test data: e-acute and CJK "hello".
     const value = 'café 你好'
     expect(spliceDictation(value, value.length, null, 'ok').next).toBe('café 你好 ok')
+  })
+})
+
+describe('shiftCaret (a refine swapping the provisional words for the final ones)', () => {
+  // 'Note: why does phase done.' -> 'Note: why does phase two matter done.' (words at 6, 14 -> 25 chars)
+  it('a caret right after the words stays right after them', () => {
+    expect(shiftCaret(20, 6, 14, 25)).toBe(31)
+  })
+
+  it('a caret further on moves with the text after the words', () => {
+    expect(shiftCaret(26, 6, 14, 25)).toBe(37)
+  })
+
+  it('a caret before the words, or inside them, stays put', () => {
+    expect(shiftCaret(3, 6, 14, 25)).toBe(3)
+    expect(shiftCaret(10, 6, 14, 25)).toBe(10)
+  })
+
+  it('a caret inside words that got shorter stays inside them', () => {
+    expect(shiftCaret(18, 6, 14, 5)).toBe(11)
   })
 })

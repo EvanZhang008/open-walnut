@@ -42,3 +42,11 @@ const publicLink = hostImplementsPublicContract.ui.link?.({
 const hostLink = hostApi.ui.link({ id: 'async-links', patterns: ['*://*/*'], open: async () => false })
 void publicLink
 void hostLink.dispose
+
+// A plugin's own box with Walnut's dictation: the public props must be the ones the host draws.
+type PublicMicButton = NonNullable<PublicWebApi['ui']['views']['MicButton']>
+type HostMicButton = HostWebApi['ui']['views']['MicButton']
+const hostMicIsPublicMic: PublicMicButton = null as unknown as HostMicButton
+const publicMicIsHostMic: HostMicButton = null as unknown as PublicMicButton
+void hostMicIsPublicMic
+void publicMicIsHostMic

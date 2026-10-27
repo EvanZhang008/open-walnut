@@ -1,6 +1,6 @@
 export type * from './shared.js'
 
-import type { ComponentType } from 'react'
+import type { ComponentType, RefObject } from 'react'
 import type { AiService, Disposable, PluginLogger, TaskPhase, TaskPriority } from './shared.js'
 import type { AppStatePublishOptions, EventApi, OpsService, PluginFetchInit, PluginFetchResponse } from './server.js'
 
@@ -224,6 +224,32 @@ export interface AskObjectViewProps {
   restoreFocusTo?: string
 }
 
+/** What a `MicButton` puts in `handleRef`. */
+export interface MicButtonHandle {
+  /** Stop and throw away a live recording, and forget what dictation wrote, so no late words land. */
+  clear(): void
+}
+
+/**
+ * Walnut's dictation for a text box you draw (a textarea or a one-line input): the mic of Walnut's own
+ * composer, with the user's Voice settings and engine, words appearing while they speak when the engine
+ * can, and the same retry menu on a right-click. Words go in through `onChange`, the way typing does: at
+ * the caret, each live draft replacing the last, the final text taking the focus. It never sends
+ * anything. While voice is not set up or not working, a click opens Settings → Voice instead.
+ *
+ * Call `handleRef.current.clear()` when you send the text or point the box at another draft, so words
+ * still being transcribed never land twice or in the wrong draft. Optional on the views object: a host
+ * older than this view does not have it, so feature-detect and draw no mic.
+ */
+export interface MicButtonProps {
+  boxRef: RefObject<HTMLTextAreaElement | HTMLInputElement | null>
+  value: string
+  onChange(text: string): void
+  disabled?: boolean
+  size?: 'sm' | 'md'
+  handleRef?: RefObject<MicButtonHandle | null>
+}
+
 export interface LinkOpenContext {
   /** Navigate within the console (an App path, `/tasks/<id>`, ...). */
   navigate(path: string): void
@@ -291,6 +317,8 @@ export interface WebUiService {
     TaskView: PluginComponent<TaskViewProps>
     ChatView: PluginComponent<ChatViewProps>
     AskObjectView?: PluginComponent<AskObjectViewProps>
+    /** Dictation into your own text box (see MicButtonProps). Optional on the views object: feature-detect. */
+    MicButton?: PluginComponent<MicButtonProps>
     /**
      * Your plugin's generated Settings form (manifest `configSchema` + `uiHints`), the same rows
      * the Configure card in Settings → Plugins draws, with their Save. Render it inside your own

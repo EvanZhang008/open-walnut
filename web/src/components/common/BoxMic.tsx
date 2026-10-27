@@ -28,9 +28,12 @@ export interface BoxMicProps {
 export function BoxMic({ boxRef, text, setText, disabled, size = 'sm', className, handleRef }: BoxMicProps) {
   const dictation = useBoxDictation(boxRef, text, setText);
   const micControl = useRef<{ discard: () => void } | null>(null);
+  // On the stable `reset`, not the per-render `dictation` object: the handle would otherwise be
+  // detached and re-attached on every commit, so a clear() from a layout cleanup found null.
+  const reset = dictation.reset;
   useImperativeHandle(handleRef, () => ({
-    clear: () => { micControl.current?.discard(); dictation.reset(); },
-  }), [dictation]);
+    clear: () => { micControl.current?.discard(); reset(); },
+  }), [reset]);
   // A box that goes away takes its recording with it.
   useEffect(() => () => micControl.current?.discard(), []);
   // Only the mic itself starts a recording: its chevron and menu sit in the same wrapper.

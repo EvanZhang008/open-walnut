@@ -7,10 +7,12 @@ import { TaskViewSurface } from '@/components/tasks/TaskViewSurface'
 import { PluginChatView } from '@/components/chat/PluginChatView'
 import { AskObjectDrawer } from '@/components/chat/AskObjectDrawer'
 import { PluginSettingsForm } from '@/components/settings/PluginSettingsForm'
+import { BoxMic } from '@/components/common/BoxMic'
 import type {
   AskObjectViewProps,
   ChatViewProps,
   FileViewProps,
+  MicButtonProps,
   PluginViews,
   SessionViewProps,
   TaskViewProps,
@@ -69,6 +71,14 @@ function scopedStorageKey(pluginId: string, kind: 'task-view' | 'chat', localKey
   return `open-walnut-plugin:${encodeURIComponent(pluginId)}:${kind}:${encodeURIComponent(trimmed)}`
 }
 
+/**
+ * The composer's mic for a box the plugin draws: BoxMic as it is, so the user's Voice settings and
+ * engine, the live drafts, the retry menu and the Voice panel's Insert all come with it.
+ */
+function MicButton({ boxRef, value, onChange, disabled, size, handleRef }: MicButtonProps) {
+  return <BoxMic boxRef={boxRef} text={value} setText={onChange} disabled={disabled} size={size} handleRef={handleRef} className="plugin-mic-button" />
+}
+
 export function createPluginViews(pluginId: string): PluginViews {
   function TaskView({ storageKey, ...props }: TaskViewProps) {
     return (
@@ -119,6 +129,7 @@ export function createPluginViews(pluginId: string): PluginViews {
     TaskView,
     ChatView,
     AskObjectView,
+    MicButton,
     PluginSettingsView,
   }
 }
