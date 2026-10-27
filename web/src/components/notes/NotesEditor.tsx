@@ -49,6 +49,7 @@ import { EditorMic } from '@/components/common/EditorMic';
 import type { TagSuggestion } from './TagAutocomplete';
 import type { NoteListItem } from '@/api/notes-v2';
 import type { Task } from '@open-walnut/core';
+import { openExternalLink, openInDefaultBrowser } from '@/plugins/link-handlers';
 import './notes-editor.css';
 import './editor-mic.css';
 
@@ -358,10 +359,14 @@ export function NotesEditor({ content, readOnly = false, onDirty, placeholder, c
           if (taskId) onTaskClickRef.current(taskId);
           return true; // tell ProseMirror we handled it
         }
-        // External link — open in new tab (openOnClick is disabled so we do it manually)
+        // External link (openOnClick is disabled so we do it manually): the plugin that
+        // handles it, else a new tab. ProseMirror acts on mouseup, before the document's
+        // click capture, which skips editable links for this reason.
         if (href && isUrl(href)) {
           event.preventDefault();
-          window.open(href, '_blank', 'noopener,noreferrer');
+          // A modifier click is the user asking for the browser, as everywhere else.
+          if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) openInDefaultBrowser(href);
+          else openExternalLink(href);
           return true;
         }
         return false;

@@ -1,0 +1,11 @@
+{
+  "id": "link-capture-fixture",
+  "name": "Team Chat Fixture",
+  "description": "Browser-test plugin: opens chat permalinks of a made-up host in its own App (walnut.ui.link).",
+  "version": "0.1.0",
+  "apiVersion": 1,
+  "engines": {
+    "walnut": ">=0.3.2"
+  },
+  "web": "web.mjs"
+}

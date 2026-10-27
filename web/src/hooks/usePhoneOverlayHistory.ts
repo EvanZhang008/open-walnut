@@ -229,6 +229,21 @@ function flushDeferredPushes(): void {
     if (!e.pushed) { pushEntry(e); changed = true; }
   }
   if (changed) notify();
+  for (const fn of afterBacks.splice(0)) {
+    try { fn(); } catch (err) { log.error('phone-overlay', 'after-backs callback threw', { error: String(err) }); }
+  }
+}
+
+const afterBacks: Array<() => void> = [];
+
+/**
+ * Run `fn` once every `history.back()` a closing layer started has landed (now, when
+ * none is pending). A route push made before then is undone by the back (the first
+ * trap above), so a caller that closes layers and then navigates waits here.
+ */
+export function afterPhoneOverlayBacks(fn: () => void): void {
+  if (pendingBacks === 0) { fn(); return; }
+  afterBacks.push(fn);
 }
 
 function removeFromStack(e: LiveEntry): boolean {
@@ -455,6 +470,7 @@ export function __resetPhoneOverlaysForTest(): void {
   stack = [];
   releasing.clear();
   pendingBacks = 0;
+  afterBacks.length = 0;
   pushedThisLoad = false;
   installed = false;
   snapshot = { top: null, depth: 0 };

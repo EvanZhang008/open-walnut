@@ -57,6 +57,8 @@ import { AwaySyncMark } from '@/components/tasks/AwaySyncMark';
 import { useBoardView } from './useBoardView';
 import { useTeamOverview } from './useTeamOverview';
 import { keepIfSame, NO_PROJECTS, projectsOfTeam, type ProjectOf } from './board-view-projects';
+import { openExternalLink, openInDefaultBrowser } from '@/plugins/link-handlers';
+import { showLinkMenu } from '@/plugins/LinkCaptureHost';
 import '@/styles/task-board.css';
 
 export interface TaskBoardPaneProps {
@@ -372,7 +374,17 @@ export function TaskBoardPane({ taskId, sessionId, barRightSlot, onOpenTask, onL
       }
       case 'wn-board:open-link': {
         const href = safeExternalHref(d.href);
-        if (href) window.open(href, '_blank', 'noopener,noreferrer');
+        if (!href) return;
+        if (d.modified === true) openInDefaultBrowser(href);
+        else openExternalLink(href);
+        return;
+      }
+      case 'wn-board:link-menu': {
+        const href = safeExternalHref(d.href);
+        const frame = frameRef.current;
+        if (!href || !frame || !Number.isFinite(d.x) || !Number.isFinite(d.y)) return;
+        const box = frame.getBoundingClientRect();
+        showLinkMenu(href, { x: box.left + Math.max(0, d.x as number), y: box.top + Math.max(0, d.y as number) });
         return;
       }
       case 'wn-board:view':

@@ -26,7 +26,7 @@ The complete executable example is [examples/plugins/walnut-demo](../../examples
 
 ## What a plugin can add
 
-One plugin can contribute any mix of: a native React App in the console, small Slots (one fact each) in the task details and the session menu, Settings sections, owner-scoped CSS, Ops that sessions and the CLI call, Tools for routine watchers, Skills, slash Commands, Hooks, Cron actions, Agents, model Providers, HTTP routes, WebSocket methods, Services other plugins build on, task sync with its display metadata, and its own storage, secrets, and timers.
+One plugin can contribute any mix of: a native React App in the console, small Slots (one fact each) in the task details and the session menu, Link handlers that open matching links in your App, Settings sections, owner-scoped CSS, Ops that sessions and the CLI call, Tools for routine watchers, Skills, slash Commands, Hooks, Cron actions, Agents, model Providers, HTTP routes, WebSocket methods, Services other plugins build on, task sync with its display metadata, and its own storage, secrets, and timers.
 
 There is no fixed dashboard, no dashboard page, and no panel grid. The unit of plugin UI is an App.
 
@@ -1002,6 +1002,33 @@ export function activate(walnut: WalnutWebApi) {
 ```
 
 Several plugins can fill the same place; `order` (default 500, lower first) sorts them. Every slot renders inside its own error boundary, so a slot that throws shows nothing instead of taking the task popup or the session menu down with it. A slot belongs to your plugin like a page does: it is gone the moment the plugin is disabled, and an unknown `target` or an empty `title` is refused at the call. The walnut-time plugin's Time facts are a complete example.
+
+### Links: open matching links in your App
+
+`walnut.ui.link` names the links your plugin opens. A plain click on a matching link anywhere in the console (a chat or session message, a note, a task, a Board, an HTML preview) calls your `open` instead of leaving for the browser. A Cmd, Ctrl, Shift or Alt click still goes to the browser, and a right-click shows Walnut's menu: **Open in <title>**, **Open in default browser**, **Copy link**. A link no plugin takes keeps the browser's own click and menu.
+
+```ts
+const app = walnut.ui.app({ id: 'main', title: 'Team Chat', component: ChatApp })
+
+walnut.ui.link?.({
+  id: 'permalinks',
+  title: 'Team Chat', // the menu says "Open in Team Chat"; defaults to the plugin name
+  patterns: ['https://*.chat.example.com/archives/*'],
+  // Optional, synchronous: only the workspaces you are signed into.
+  accepts: (url) => signedInHosts.has(url.hostname),
+  open(url, { navigate }) {
+    const message = parsePermalink(url)
+    if (!message) return false // the host opens it in the default browser
+    navigate(`${app.path}?link=${encodeURIComponent(url.href)}`)
+  },
+})
+```
+
+Patterns use the browser-extension match pattern syntax, `<scheme>://<host><path>`: scheme `http`, `https` or `*` (either); host `*`, `*.example.com` (the host and every subdomain) or an exact host, compared case-insensitively with the port ignored; a path starting with `/` where `*` is any run of characters, matched against the path plus the query and never the fragment. A pattern that does not parse is refused at the call. When several plugins take the same link, the first one registered wins.
+
+`open` gets its own copy of the URL and a `via` of `'click'` or `'menu'`. Return `false` (or throw) when you cannot open the link, and Walnut opens it in the default browser. Decide quickly: a browser may refuse a window opened long after the click, so an asynchronous `false` falls back only on a best-effort basis. Opening closes any modal the link was in, so your App is not left under it. Like every contribution, the handler is gone the moment your plugin is disabled. Optional on older hosts: call it as `walnut.ui.link?.(...)`.
+
+Links inside script-less frames (an HTML mail body, a letter's HTML body) are out of reach of the page and still open in the browser.
 
 ### One App Registry for everything
 

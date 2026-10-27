@@ -28,3 +28,17 @@ const appPath: string = app.path
 app.setBadge(3)
 app.setBadge(null)
 void appPath
+
+const publicLink = hostImplementsPublicContract.ui.link?.({
+  id: 'chat-links',
+  patterns: ['https://*.example.com/archives/*'],
+  title: 'Chat',
+  accepts: (url) => url.hostname.endsWith('example.com'),
+  open: (url, context) => {
+    context.navigate(`${appPath}?link=${encodeURIComponent(url.href)}`)
+    return context.via === 'click'
+  },
+})
+const hostLink = hostApi.ui.link({ id: 'async-links', patterns: ['*://*/*'], open: async () => false })
+void publicLink
+void hostLink.dispose

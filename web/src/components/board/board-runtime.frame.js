@@ -584,6 +584,9 @@
     if (e.defaultPrevented || e.button !== 0) return;
     var a = e.target && e.target.closest ? e.target.closest('a[href]') : null;
     if (!a) return;
+    // A script's synthetic click must not open a link: a plugin that handles it
+    // moves the whole console (LinkCaptureHost.tsx). `#` jumps stay script-driven.
+    if (!trusted(e) && (a.getAttribute('href') || '').charAt(0) !== '#') { e.preventDefault(); return; }
     var href = a.getAttribute('href') || '';
     e.preventDefault();
     if (href.charAt(0) === '#') {
@@ -593,7 +596,21 @@
       if (target) { openAncestors(target); target.scrollIntoView(); } else if (!id) window.scrollTo(0, 0);
       return;
     }
-    if (/^https?:\/\//i.test(href)) send({ t: 'wn-board:open-link', href: href });
+    // A modifier click is the reader asking for the browser (plugin link handlers
+    // take only a plain click, LinkCaptureHost.tsx).
+    var modified = !!(e.metaKey || e.ctrlKey || e.shiftKey || e.altKey);
+    if (/^https?:\/\//i.test(href)) send({ t: 'wn-board:open-link', href: href, modified: modified });
+  });
+  // A right-click on a web link opens the console's link menu (open in the plugin that
+  // handles it, in the default browser, copy) at the same spot on the host's page.
+  document.addEventListener('contextmenu', function (e) {
+    if (e.defaultPrevented || !trusted(e)) return;
+    var a = e.target && e.target.closest ? e.target.closest('a[href]') : null;
+    if (!a) return;
+    var href = a.getAttribute('href') || '';
+    if (!/^https?:\/\//i.test(href)) return;
+    e.preventDefault();
+    send({ t: 'wn-board:link-menu', href: href, x: e.clientX, y: e.clientY });
   });
 
   // ── The reader's view goes to the host as it changes (scrolling, a <details> opened or closed) ──

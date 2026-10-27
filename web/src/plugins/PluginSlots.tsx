@@ -14,6 +14,7 @@
  */
 import { Fragment, useCallback, useLayoutEffect, useMemo, useRef, useState, type ComponentType, type ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { afterPhoneOverlayBacks } from '@/hooks/usePhoneOverlayHistory'
 import { PluginBoundary } from '@/components/common/PluginBoundary'
 import { isPopoutPath } from '@/popout/openPopout'
 import { usePluginUi } from './hooks'
@@ -54,7 +55,8 @@ export function PluginSlots<T extends PluginSlotTarget>({ target, props, wrap, i
       return
     }
     onNavigate?.()
-    routerNavigate(path)
+    // On a phone the host's close is a history back; a push made before it lands is undone.
+    afterPhoneOverlayBacks(() => routerNavigate(path))
   }, [routerNavigate, onNavigate])
   const entries = useMemo(
     () => ui.slots

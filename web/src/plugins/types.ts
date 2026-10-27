@@ -131,6 +131,34 @@ export interface PluginSlotContribution<T extends PluginSlotTarget = PluginSlotT
   order?: number
 }
 
+/** A plugin's link handler (`walnut.ui.link`); matching and opening live in link-handlers.ts. */
+export interface LinkOpenContext {
+  /** Navigate within the console (an App path, `/tasks/<id>`, ...). */
+  navigate(path: string): void
+  /** `'click'` for a plain click, `'menu'` for the right-click menu's row. */
+  via: 'click' | 'menu'
+}
+
+export interface LinkHandlerContribution {
+  /** Local id, unique within the plugin. */
+  id: string
+  /** Match patterns (see the module comment). At least one. */
+  patterns: string[]
+  /** What the right-click row says after "Open in". Defaults to the plugin's name. */
+  title?: string
+  /**
+   * A finer test, run synchronously at click time after a pattern matched (a host
+   * the plugin is signed into, an id it can read). False leaves the link to the browser.
+   */
+  accepts?(url: URL): boolean
+  /**
+   * Open it. Return `false` (or throw) when it cannot, and the host opens it in the
+   * default browser. Decide quickly: a browser may refuse a window opened long after
+   * the click, so an asynchronous `false` falls back only on a best-effort basis.
+   */
+  open(url: URL, context: LinkOpenContext): boolean | void | Promise<boolean | void>
+}
+
 export interface RegisteredUiContribution<T> {
   key: string
   pluginId: string
@@ -284,6 +312,7 @@ export interface WalnutWebApiHost {
     page(contribution: PluginPageContribution): Disposable
     settings(contribution: PluginSettingsContribution): Disposable
     slot<T extends PluginSlotTarget>(contribution: PluginSlotContribution<T>): Disposable
+    link(contribution: LinkHandlerContribution): Disposable
     injectCss(css: string): Disposable
     readonly views: PluginViews
   }

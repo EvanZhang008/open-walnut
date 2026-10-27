@@ -224,6 +224,49 @@ export interface AskObjectViewProps {
   restoreFocusTo?: string
 }
 
+export interface LinkOpenContext {
+  /** Navigate within the console (an App path, `/tasks/<id>`, ...). */
+  navigate(path: string): void
+  /** `'click'` for a plain click, `'menu'` for the row in the link's right-click menu. */
+  via: 'click' | 'menu'
+}
+
+/**
+ * Links your plugin opens. A plain click on a matching link anywhere in the console (a
+ * chat or session message, a note, a task, a Board) opens it with `open` instead of
+ * leaving for the browser; a modifier click (Cmd, Ctrl, Shift, Alt) still goes to the
+ * browser, and a right-click shows "Open in <title>", "Open in default browser" and
+ * "Copy link".
+ *
+ * `patterns` use the browser-extension match pattern syntax, `<scheme>://<host><path>`:
+ * scheme `http`, `https` or `*` (either); host `*`, `*.example.com` (the host and every
+ * subdomain) or an exact host, compared case-insensitively with the port ignored; path
+ * starting with `/` where `*` is any run of characters, matched against the path plus the
+ * query, never the fragment. Example: `https://*.example.com/archives/*`.
+ *
+ * When several plugins take the same link, the first one registered wins.
+ */
+export interface LinkHandlerContribution {
+  /** Local id, unique within the plugin. */
+  id: string
+  /** At least one, at most 32. A pattern that does not parse throws. */
+  patterns: string[]
+  /** What the right-click row says after "Open in". Defaults to your plugin's name. */
+  title?: string
+  /**
+   * A finer test, run synchronously at click time after a pattern matched (a host you are
+   * signed into, say). Return false to leave the link to the browser.
+   */
+  accepts?(url: URL): boolean
+  /**
+   * Open the link, usually by navigating to your App (`navigate(app.path + '?link=...')`).
+   * Return `false` (or throw) when you cannot, and the host opens it in the default
+   * browser instead. Decide quickly: a browser may refuse a window opened long after the
+   * click, so an asynchronous `false` falls back only on a best-effort basis.
+   */
+  open(url: URL, context: LinkOpenContext): boolean | void | Promise<boolean | void>
+}
+
 export interface WebUiService {
   app(contribution: AppContribution): AppHandle
   page(contribution: PageContribution): Disposable
@@ -233,6 +276,11 @@ export interface WebUiService {
    * older than slots does not have it, so call it as `walnut.ui.slot?.(...)`.
    */
   slot?<T extends SlotTarget>(contribution: SlotContribution<T>): Disposable
+  /**
+   * Open matching links in your plugin (see LinkHandlerContribution). Optional: a host
+   * older than link handlers does not have it, so call it as `walnut.ui.link?.(...)`.
+   */
+  link?(contribution: LinkHandlerContribution): Disposable
   injectCss(css: string): Disposable
   readonly views: {
     CalendarView: PluginComponent

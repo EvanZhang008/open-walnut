@@ -4,6 +4,7 @@ import { appRegistry } from '@/apps/registry'
 import { createWebPluginApi } from './host-api'
 import { WebPluginContext, disposable } from './disposable'
 import { pluginUiRegistry } from './registry'
+import { removeLinkHandlersOf } from './link-handlers'
 import type { Disposable, PluginWebModuleDescriptor, WalnutWebApiHost } from './types'
 
 /** `cause`: the plain reason, when `error` wraps it in loader wording (a skipped build). */
@@ -157,6 +158,7 @@ function releaseOwner(pluginId: string, token: number): void {
   owners.delete(pluginId)
   pluginUiRegistry.removeOwner(pluginId)
   appRegistry.removeOwner(pluginId)
+  removeLinkHandlersOf(pluginId)
 }
 
 /** Rows left behind by a generation that never made it into `loaded`. */
@@ -164,6 +166,7 @@ export function sweepUnownedRows(pluginId: string): void {
   if (owners.has(pluginId)) return
   pluginUiRegistry.removeOwner(pluginId)
   appRegistry.removeOwner(pluginId)
+  removeLinkHandlersOf(pluginId)
 }
 
 function trackPending(

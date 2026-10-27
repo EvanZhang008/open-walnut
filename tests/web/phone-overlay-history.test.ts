@@ -7,7 +7,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import {
   popToDepth, markerDepth, markerId, stateWithMarker, stateWithoutMarker, nextDepth, closePlan,
   edgeSwipeCloses, __phoneOverlayInternals as store, __resetPhoneOverlaysForTest,
-  isPhoneOverlayOpen, phoneOverlayIds, type StackItem,
+  isPhoneOverlayOpen, phoneOverlayIds, afterPhoneOverlayBacks, type StackItem,
 } from '../../web/src/hooks/usePhoneOverlayHistory'
 
 const item = (id: string, depth: number, pushed = true): StackItem => ({ id, kind: 'session', depth, pushed })
@@ -158,6 +158,25 @@ describe('store against an async history', () => {
     expect(markerId(history.state)).toBe('chat')
     expect(markerDepth(history.state)).toBe(1)
     expect(history.length).toBe(2)
+  })
+
+  it('a navigation after closing layers waits for their backs, so the back cannot undo it', async () => {
+    // A link opened in a plugin's App closes the modal it was in, then navigates
+    // (plugins/LinkCaptureHost.tsx). Pushed at once, the route would be the entry the
+    // back then leaves.
+    const detail = open('task-detail:t')
+    store.close(detail)
+    const ran: string[] = []
+    afterPhoneOverlayBacks(() => { ran.push('nav'); history.pushState({ key: 'app', idx: 1 }, '', 'https://w.test/apps/x') })
+    expect(ran).toEqual([])
+    await tick()
+    expect(closes).toEqual(['task-detail:t:true'])
+    expect(ran).toEqual(['nav'])
+    expect(history.entries[history.index].url).toBe('https://w.test/apps/x')
+    // Nothing pending: it runs at once, and only once.
+    afterPhoneOverlayBacks(() => ran.push('now'))
+    await tick()
+    expect(ran).toEqual(['nav', 'now'])
   })
 
   it('open flipping false pops only its own entry and never calls onClose', async () => {

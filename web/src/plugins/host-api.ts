@@ -7,6 +7,7 @@ import { log } from '@/utils/log'
 import { disposable, type WebPluginContext } from './disposable'
 import { APP_PLACEMENTS, appRegistry, assertBadge, type AppBadge, type AppContribution } from '@/apps/registry'
 import { pluginUiRegistry } from './registry'
+import { registerLinkHandler, type LinkHandlerContribution } from './link-handlers'
 import { createWebAi } from './plugin-ai'
 import { createPluginViews } from './views'
 import type {
@@ -328,6 +329,13 @@ export function createWebPluginApi(
           throw new Error('Plugin slot order must be finite')
         }
         return own(pluginUiRegistry.registerSlot(pluginId, pluginName, contribution as unknown as PluginSlotContribution))
+      },
+      link(contribution: LinkHandlerContribution) {
+        validateLocalId(contribution.id)
+        if (contribution.title !== undefined && typeof contribution.title !== 'string') {
+          throw new Error('Plugin link handler title must be a string')
+        }
+        return own(registerLinkHandler(pluginId, pluginName, contribution))
       },
       injectCss(css: string) {
         if (typeof css !== 'string') throw new Error('Plugin CSS must be a string')

@@ -96,6 +96,10 @@ export function useUrlSync(opts: UseUrlSyncOpts): {
 
     if (timerRef.current) clearTimeout(timerRef.current);
     timerRef.current = setTimeout(() => {
+      // The console may have left Home inside the debounce (a link opened in a
+      // plugin's App right after closing the details): writing `/` then would put
+      // Home's address on another page's entry.
+      if (window.location.pathname !== '/') return;
       const search = buildSearch({ focusedTaskId, sessionColumns, activeProject });
       // Compare against live URL to avoid redundant replaceState calls.
       // This also prevents echo: when we apply URL params → state changes → effect fires,

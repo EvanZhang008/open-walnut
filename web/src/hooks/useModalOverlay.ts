@@ -1,4 +1,4 @@
-import { useEffect, useCallback } from 'react';
+import { useEffect, useCallback, useRef } from 'react';
 
 /**
  * Ref-counted body scroll lock — multiple overlapping modals
@@ -8,9 +8,21 @@ import { useEffect, useCallback } from 'react';
  */
 let scrollLockCount = 0;
 let activeModalCount = 0;
+const openModalClosers = new Set<{ current: () => void }>();
 
 export function hasActiveModalOverlay(): boolean {
   return activeModalCount > 0;
+}
+
+/**
+ * Close every open modal, newest first: the console is about to show another page
+ * (a link opened in a plugin's App, plugins/LinkCaptureHost.tsx), and a modal left
+ * open would sit on top of it, as a slot's `onNavigate` closes its own (PluginSlots).
+ */
+export function closeModalOverlays(): void {
+  for (const closer of [...openModalClosers].reverse()) {
+    try { closer.current(); } catch { /* one modal's close must not keep the rest open */ }
+  }
 }
 
 export function lockScroll() {
@@ -50,6 +62,13 @@ export function useModalOverlay(onClose: () => void) {
       onClose();
     }
   }, [onClose]);
+
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
+  useEffect(() => {
+    openModalClosers.add(closeRef);
+    return () => { openModalClosers.delete(closeRef); };
+  }, []);
 
   useEffect(() => {
     activeModalCount++;
