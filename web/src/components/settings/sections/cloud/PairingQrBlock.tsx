@@ -6,6 +6,7 @@
  * the QR centered in its own row at most 200px wide.
  */
 
+import { useEffect, useRef } from 'react';
 import { SettingsRow } from '../../SettingsSection';
 import { SettingsButton } from '../../inputs/SettingsButton';
 import { CopyButton } from '../../inputs/CopyButton';
@@ -17,15 +18,30 @@ interface Props {
   qrDataURL: string;
   onDismiss: () => void;
   dismissLabel?: string;
+  /** A new QR for a phone already paired: its app may still be signed in with the old token. */
+  repair?: boolean;
 }
 
-export function PairingQrBlock({ created, qrDataURL, onDismiss, dismissLabel = 'Done' }: Props) {
+/** What to do with the code on the phone, in the words the app's Setup screen uses. */
+export const QR_SCAN_HINT = 'Open the Walnut app on the phone, tap Scan QR from your console, and point the camera at this code.';
+/** A paired phone shows Setup again only after it disconnects. */
+export const QR_REPAIR_HINT = 'If the app is still signed in, tap Disconnect in its Settings first.';
+
+export function PairingQrBlock({ created, qrDataURL, onDismiss, dismissLabel = 'Done', repair }: Props) {
+  // The code appears where the user is looking: bring it into view when it lands
+  // (the block itself is display:contents, so scroll its image).
+  const imgRef = useRef<HTMLImageElement>(null);
+  useEffect(() => {
+    imgRef.current?.scrollIntoView?.({ block: 'nearest', behavior: 'smooth' });
+  }, [qrDataURL]);
   return (
-    <div className="devices-qr-block settings-addons-contents">
+    <div className="devices-qr-block settings-addons-contents" data-qr-for={created.name}>
       <div className="settings-row settings-row-stacked settings-addons-qr-row">
-        <img src={qrDataURL} alt={`Pairing QR code for ${created.name}`} width={200} height={200} />
-        <p className="devices-qr-hint settings-row-help">
-          Scan with the Walnut iOS app under Setup, Scan QR; it is shown once and the server keeps only a hash.
+        <img ref={imgRef} src={qrDataURL} alt={`Pairing QR code for ${created.name}`} width={200} height={200} />
+        <p className="devices-qr-hint settings-row-help" role="status">
+          {QR_SCAN_HINT}
+          {repair && <>{' '}{QR_REPAIR_HINT}</>}
+          {' '}It is shown once; the server keeps only a hash.
           {created.server && (
             <>
               {' '}Points at <code>{created.server.replace(/^https?:\/\//, '')}</code>.

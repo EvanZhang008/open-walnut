@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { Fragment, useState, useEffect, useCallback, useRef } from 'react';
 import { getDeviceToken } from '@/api/device-token';
 import { SectionCard } from '../inputs/SectionCard';
 import { SettingsEmpty, SettingsGroup, SettingsRow, SettingsTag, SettingsDisclosure, SettingsNotice } from '../SettingsSection';
@@ -139,6 +139,12 @@ export function DevicesSection({ config, onSave }: { config?: Config; onSave?: (
   const [cloudUnpaired, setCloudUnpaired] = useState(false);
   // "Unpair this Mac" is two deliberate clicks with the warning between them.
   const [unpairArmed, setUnpairArmed] = useState(false);
+  // Show QR on a row: the row asks first (a new code signs the phone out), and the
+  // code opens under that row, never at the bottom of the page.
+  const [qrAsk, setQrAsk] = useState<string | null>(null);
+  const [qrRow, setQrRow] = useState<string | null>(null);
+  const [mintingRow, setMintingRow] = useState<string | null>(null);
+  const closeQr = () => { dismiss(); setQrRow(null); };
   const { notifySaved } = useSettingsSaved();
   // A browser signed in with a code: its own row says so, other rows offer no Remove.
   const caller = useDeviceCaller();
@@ -191,9 +197,18 @@ export function DevicesSection({ config, onSave }: { config?: Config; onSave?: (
     // must not silently flip the UI back to the Wi-Fi default.
     setTarget(kind);
     setRowError(null);
+    setQrAsk(null);
+    // Any QR on screen is replaced by this one, so the bottom one closes too.
+    dismiss();
+    setQrRow(name);
+    setMintingRow(name);
     // A refusal belongs on the row that was clicked, not under "Device name".
     const onError = (message: string) => setRowError({ name, verb: 're-pair', message });
-    if (await mint({ name, target: kind, replace: true, onError })) await refresh();
+    try {
+      if (await mint({ name, target: kind, replace: true, onError })) await refresh();
+    } finally {
+      setMintingRow((cur) => (cur === name ? null : cur));
+    }
   };
 
   const addDevice = async () => {
@@ -202,6 +217,8 @@ export function DevicesSection({ config, onSave }: { config?: Config; onSave?: (
     const name = deviceNameForServer(newName);
     if (!name) { setNameError('Use at least one letter or digit in the name.'); return; }
     setNameError(null);
+    // A row's code must never move down here and pass for the new device's.
+    closeQr();
     // Only send an explicit target when one was actually offered — otherwise
     // let the server pick (it falls back to a token-only QR).
     const chosen = targets.some((t) => t.kind === target) ? target : undefined;
@@ -226,6 +243,8 @@ export function DevicesSection({ config, onSave }: { config?: Config; onSave?: (
         devicesListChanged();
       }
       notifySaved();
+      // Its code was revoked with it.
+      if (qrRow === name) closeQr();
       await refresh();
       window.dispatchEvent(new Event(DEVICES_CHANGED_EVENT));
     } catch (err) {
@@ -292,6 +311,10 @@ export function DevicesSection({ config, onSave }: { config?: Config; onSave?: (
   const browserLabels = browserRowLabels(rows.filter((r) => r.role === 'browser'));
   const macs = rows.filter((r) => r.role === 'mac');
   const others = rows.filter((r) => (r.role ?? 'phone') !== 'phone' && r.role !== 'mac' && r.role !== 'browser');
+  // Keyboard focus follows the ask: a button that unmounts would drop it to the page.
+  const focusShowQr = (name: string) => requestAnimationFrame(() => {
+    document.querySelector<HTMLElement>(`#devices .devices-row[data-device-name="${CSS.escape(name)}"] [data-testid="devices-show-qr"]`)?.focus();
+  });
   const rowErrorFor = (name: string) => (rowError?.name === name ? `Couldn't ${rowError.verb}: ${rowError.message}` : undefined);
 
   /** This Mac as the companion knows it: no QR, and removal is a deliberate unpair. */
@@ -350,7 +373,7 @@ export function DevicesSection({ config, onSave }: { config?: Config; onSave?: (
           ...(d.lastUsedAt ? [`last used ${formatAbsoluteTime(d.lastUsedAt)}`] : []),
         ].join(', ')
       : ROLE_NOTE[role];
-    return (
+    const row = (
       <SettingsRow
         key={d.name}
         className="devices-row"
@@ -371,19 +394,36 @@ export function DevicesSection({ config, onSave }: { config?: Config; onSave?: (
         data-own-device={own ? 'true' : undefined}
         control={own ? <OwnDeviceSignOut name={d.name} touch={caller.touch} /> : caller.isDevice ? undefined : (
           <>
-            {role === 'phone' && (
-              <InlineConfirmButton
-                label="Show QR"
-                confirmLabel="Confirm new QR"
+            {role === 'phone' && (qrAsk === d.name ? (
+              <>
+                <SettingsButton variant="text" data-testid="devices-show-qr-cancel" onClick={() => { setQrAsk(null); focusShowQr(d.name); }}>
+                  Cancel
+                </SettingsButton>
+                <SettingsButton
+                  variant="primary"
+                  data-testid="devices-show-qr-confirm"
+                  autoFocus
+                  disabled={busy}
+                  onClick={() => { focusShowQr(d.name); void repair(d.name, preferredKind(d.kinds, targets.map((t) => t.kind))); }}
+                >
+                  Show new QR
+                </SettingsButton>
+              </>
+            ) : (
+              <SettingsButton
                 variant="text"
-                disabled={busy}
-                aria-label={`Show a new QR code for ${d.name}; its current token stops working`}
+                disabled={busy && mintingRow !== d.name}
+                busy={mintingRow === d.name}
+                busyLabel="Making QR..."
+                aria-label={`Show a new QR code for ${d.name}`}
                 data-testid="devices-show-qr"
-                onConfirm={() => repair(d.name, preferredKind(d.kinds, targets.map((t) => t.kind)))}
-              />
-            )}
+                onClick={() => { setRowError(null); setQrAsk(d.name); }}
+              >
+                Show QR
+              </SettingsButton>
+            ))}
             {/* This Mac's own cloud record never reaches here (renderSelfRow). */}
-            {role !== 'self' && (
+            {role !== 'self' && qrAsk !== d.name && (
               <InlineConfirmButton
                 aria-label={`Remove ${d.name}`}
                 data-testid="devices-remove"
@@ -392,7 +432,23 @@ export function DevicesSection({ config, onSave }: { config?: Config; onSave?: (
             )}
           </>
         )}
-      />
+      >
+        {qrAsk === d.name && (
+          <SettingsNotice kind="warn" role="alert">
+            {`A new code replaces the one ${d.name} signed in with, so the app stops connecting until it scans the new code.`}
+          </SettingsNotice>
+        )}
+      </SettingsRow>
+    );
+    // The new code opens right under the row it was asked for. Always a Fragment,
+    // so the row is not remounted (and focus not lost) when the code opens or closes.
+    return (
+      <Fragment key={d.name}>
+        {row}
+        {role === 'phone' && qrRow === d.name && created && qrDataURL && (
+          <PairingQrBlock created={created} qrDataURL={qrDataURL} onDismiss={closeQr} repair />
+        )}
+      </Fragment>
     );
   };
 
@@ -406,7 +462,7 @@ export function DevicesSection({ config, onSave }: { config?: Config; onSave?: (
           </p>
         )}
         {/* A phone signed in only by browser: its group is Signed-in browsers, no empty box here. */}
-        {(phones.length > 0 || listState !== 'ready' || browsers.length === 0 || others.length > 0 || selfRow || cloudUnpaired || cloudError) && (
+        {(phones.length > 0 || listState !== 'ready' || browsers.length === 0 || cloudUnpaired || cloudError) && (
         <SettingsGroup heading="Paired phones" data-testid="devices-phones-group">
           {phones.length === 0 && (listState !== 'ready' || browsers.length === 0) && (
             <SettingsEmpty>
@@ -419,18 +475,6 @@ export function DevicesSection({ config, onSave }: { config?: Config; onSave?: (
           {phones.map(renderRow)}
           {cloudUnpaired && <SettingsNotice kind="info">{CLOUD_UNPAIRED_NOTICE}</SettingsNotice>}
           {cloudError && <SettingsNotice kind="error" role="alert">{cloudError}</SettingsNotice>}
-          {(others.length > 0 || selfRow) && (
-            <SettingsDisclosure
-              id="devices-others"
-              data-testid="devices-others"
-              label="Other entries"
-              help="This Mac and simulators."
-              summary={String(others.length + (selfRow ? 1 : 0))}
-            >
-              {selfRow && renderSelfRow(selfRow)}
-              {others.map(renderRow)}
-            </SettingsDisclosure>
-          )}
         </SettingsGroup>
         )}
 
@@ -530,11 +574,28 @@ export function DevicesSection({ config, onSave }: { config?: Config; onSave?: (
               </span>
             }
           />
-          {created && error && <p className="settings-row-error devices-error" role="alert">{error}</p>}
-          {created && qrDataURL && (
-            <PairingQrBlock created={created} qrDataURL={qrDataURL} onDismiss={dismiss} />
+          {created && !qrRow && error && <p className="settings-row-error devices-error" role="alert">{error}</p>}
+          {created && !qrRow && qrDataURL && (
+            <PairingQrBlock created={created} qrDataURL={qrDataURL} onDismiss={closeQr} />
           )}
         </SettingsGroup>
+
+        {/* Not phones (this Mac's own cloud link, simulators): folded at the very end,
+            so the phones list holds only phones. */}
+        {(others.length > 0 || selfRow) && (
+          <SettingsGroup heading="Advanced" data-testid="devices-others-group">
+            <SettingsDisclosure
+              id="devices-others"
+              data-testid="devices-others"
+              label="This Mac and test devices"
+              help="This Mac's own link to the cloud companion, and iOS simulators. None of these is a phone."
+              summary={String(others.length + (selfRow ? 1 : 0))}
+            >
+              {selfRow && renderSelfRow(selfRow)}
+              {others.map(renderRow)}
+            </SettingsDisclosure>
+          </SettingsGroup>
+        )}
       </div>
     </SectionCard>
   );

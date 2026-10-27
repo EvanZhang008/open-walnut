@@ -91,6 +91,8 @@ a.settings-button { text-decoration: none; }
 
 /* A row that is one big choice (cloud provider): a button styled as a row. */
 .settings-addons-contents { display: contents; }
+/* The QR rows belong to the caller's group; globals.css's boxed .devices-qr-block can load after this file. */
+.devices-qr-block.settings-addons-contents { display: contents; }
 .settings-group .settings-row.settings-addons-choice {
   width: 100%;
   appearance: none;

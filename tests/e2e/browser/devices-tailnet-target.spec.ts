@@ -158,8 +158,7 @@ test.describe('Settings → Phones & Cloud tailnet pairing', () => {
 
     const local = section.locator('.devices-row[data-device-name="Kitchen-tablet"]').getByTestId('devices-show-qr')
     await local.click()
-    await expect(local).toHaveText('Confirm new QR')
-    await local.click()
+    await section.locator('.devices-row[data-device-name="Kitchen-tablet"]').getByTestId('devices-show-qr-confirm').click()
     await expect.poll(() => mints.length).toBe(1)
     expect(mints[0]).toMatchObject({ name: 'Kitchen-tablet', target: 'tailnet', replace: true })
     await expect(section.locator('.devices-qr-hint')).toContainText('Points at 100.101.102.103:3456')
@@ -168,7 +167,7 @@ test.describe('Settings → Phones & Cloud tailnet pairing', () => {
 
     const both = section.locator('.devices-row[data-device-name="Work-phone"]').getByTestId('devices-show-qr')
     await both.click()
-    await both.click()
+    await section.locator('.devices-row[data-device-name="Work-phone"]').getByTestId('devices-show-qr-confirm').click()
     await expect.poll(() => mints.length).toBe(2)
     expect(mints[1]).toMatchObject({ name: 'Work-phone', target: 'cloud', replace: true })
     await expect(section.getByTestId('devices-target-cloud')).toHaveAttribute('aria-checked', 'true')

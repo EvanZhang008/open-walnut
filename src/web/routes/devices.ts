@@ -129,6 +129,14 @@ function reportsAsComputer(info?: DeviceSelfInfo): boolean {
   return /^(Mac|Computer)$/.test(info?.model?.trim() ?? '') || /^macOS\b/i.test(info?.os?.trim() ?? '')
 }
 
+/**
+ * An iOS Simulator reports the Mac's CPU as its model (`arm64`, `x86_64`); a real
+ * phone reports a hardware id (`iPhone18,2`). Named `sim2-…`, one was listed as a phone.
+ */
+function reportsAsSimulator(info?: DeviceSelfInfo): boolean {
+  return /^(arm64|x86_64|i386)$/.test(info?.model?.trim() ?? '')
+}
+
 type DeviceRole = 'phone' | 'simulator' | 'browser' | 'mac' | 'self'
 
 /**
@@ -138,9 +146,9 @@ type DeviceRole = 'phone' | 'simulator' | 'browser' | 'mac' | 'self'
  * as a phone (Show QR, "Model unknown until the app opens on this phone"),
  * which invited minting a phone QR over a Mac's pairing.
  */
-function roleOf(d: DeviceInfo & { role?: unknown }, macs: ReadonlySet<string>): DeviceRole {
+export function roleOf(d: DeviceInfo & { role?: unknown }, macs: ReadonlySet<string>): DeviceRole {
   if (d.role === 'mac' || macs.has(d.name) || reportsAsComputer(d.info)) return 'mac'
-  if (/(^|-)sim(-|$)|simulator/i.test(d.name)) return 'simulator'
+  if (/(^|-)sim\d*(-|$)|simulator/i.test(d.name) || reportsAsSimulator(d.info)) return 'simulator'
   // A browser signed in with a code (routes/browser-pair.ts) is named browser-<6 hex>.
   return /^browser-[0-9a-f]{6}$/.test(d.name) ? 'browser' : 'phone'
 }
