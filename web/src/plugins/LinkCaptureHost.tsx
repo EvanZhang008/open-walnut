@@ -23,6 +23,7 @@ import { afterPhoneOverlayBacks } from '@/hooks/usePhoneOverlayHistory'
 import { isPopoutPath } from '@/popout/openPopout'
 import { copyTextRobust } from '@/utils/clipboard'
 import { log } from '@/utils/log'
+import { createPressSelectionKeeper } from './link-menu-selection'
 import {
   findLinkHandler,
   openInDefaultBrowser,
@@ -150,12 +151,18 @@ export function LinkCaptureHost() {
       if (!found) return
       e.preventDefault()
       e.stopPropagation()
+      // WebKit has already selected the link's word; that is not the user's selection.
+      keeper.settle()
       setMenu({ point: { x: e.clientX, y: e.clientY }, url: found.url, handler: found.handler, returnFocus: anchor })
     }
+    const keeper = createPressSelectionKeeper(() => window.getSelection())
+    const onPress = (e: PointerEvent) => keeper.press(e)
+    document.addEventListener('pointerdown', onPress, true)
     document.addEventListener('click', onClick, true)
     document.addEventListener('contextmenu', onContextMenu, true)
     return () => {
       if (showMenuImpl === setMenu) showMenuImpl = null
+      document.removeEventListener('pointerdown', onPress, true)
       document.removeEventListener('click', onClick, true)
       document.removeEventListener('contextmenu', onContextMenu, true)
     }

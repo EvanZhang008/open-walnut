@@ -69,6 +69,7 @@ import { copyTextRobust } from '@/utils/clipboard';
 import { classifyPreviewLink, classifyPreviewNavigation } from '@/utils/html-preview-links';
 import { findLinkHandler, openWithHandler } from '@/plugins/link-handlers';
 import { showLinkMenu } from '@/plugins/LinkCaptureHost';
+import { createPressSelectionKeeper } from '@/plugins/link-menu-selection';
 import { openPopout } from '@/popout/openPopout';
 import { log } from '@/utils/log';
 import '@/styles/live-edit.css';
@@ -1529,15 +1530,21 @@ export function FileContentView({
     };
 
     // The console's link menu for a link a plugin handles, as on the page around it.
+    const keeper = createPressSelectionKeeper(() => doc?.getSelection() ?? null);
+    const onFramePress = (e: PointerEvent) => keeper.press(e);
     const onFrameMenu = (e: MouseEvent) => {
       if (e.defaultPrevented) return;
       const a = (e.target as Element | null)?.closest?.('a[href]') as HTMLAnchorElement | null;
       if (!a || !findLinkHandler(a.href)) return;
       const box = frame.getBoundingClientRect();
-      if (showLinkMenu(a.href, { x: box.left + e.clientX, y: box.top + e.clientY })) e.preventDefault();
+      if (showLinkMenu(a.href, { x: box.left + e.clientX, y: box.top + e.clientY })) {
+        e.preventDefault();
+        keeper.settle(); // the word WebKit selected under the press
+      }
     };
 
     const attach = (fromLoad: boolean) => {
+      doc?.removeEventListener('pointerdown', onFramePress, true);
       doc?.removeEventListener('contextmenu', onFrameMenu);
       doc?.removeEventListener('click', onFrameClick);
       doc?.removeEventListener('keydown', onFrameKey);
@@ -1552,6 +1559,7 @@ export function FileContentView({
         setStrayed(null);
         try { doc = frame.contentDocument; } catch { doc = null; }
         doc?.addEventListener('click', onFrameClick);
+        doc?.addEventListener('pointerdown', onFramePress, true);
         doc?.addEventListener('contextmenu', onFrameMenu);
         doc?.addEventListener('keydown', onFrameKey);
         return;
@@ -1567,6 +1575,7 @@ export function FileContentView({
     if (frame.contentDocument?.readyState === 'complete') attach(false);
     return () => {
       frame.removeEventListener('load', onLoad);
+      doc?.removeEventListener('pointerdown', onFramePress, true);
       doc?.removeEventListener('contextmenu', onFrameMenu);
       doc?.removeEventListener('click', onFrameClick);
       doc?.removeEventListener('keydown', onFrameKey);

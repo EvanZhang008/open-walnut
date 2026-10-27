@@ -603,6 +603,16 @@
   });
   // A right-click on a web link opens the console's link menu (open in the plugin that
   // handles it, in the default browser, copy) at the same spot on the host's page.
+  // WebKit selects the word under a right-press before `contextmenu`: the link menu
+  // puts back the selection the press found (plugins/link-menu-selection.ts).
+  var menuPress = null;
+  document.addEventListener('pointerdown', function (e) {
+    if (e.button !== 2 && !(e.button === 0 && e.ctrlKey)) { menuPress = null; return; }
+    var sel = window.getSelection();
+    var ranges = [];
+    if (sel) for (var ri = 0; ri < sel.rangeCount; ri++) ranges.push(sel.getRangeAt(ri).cloneRange());
+    menuPress = { text: sel && !sel.isCollapsed ? sel.toString() : '', at: Date.now(), ranges: ranges };
+  }, true);
   document.addEventListener('contextmenu', function (e) {
     if (e.defaultPrevented || !trusted(e)) return;
     var a = e.target && e.target.closest ? e.target.closest('a[href]') : null;
@@ -610,6 +620,14 @@
     var href = a.getAttribute('href') || '';
     if (!/^https?:\/\//i.test(href)) return;
     e.preventDefault();
+    var press = menuPress;
+    menuPress = null;
+    var sel = window.getSelection();
+    var live = sel && !sel.isCollapsed ? sel.toString() : '';
+    if (press && sel && live && Date.now() - press.at <= 1500 && press.text.trim() !== live.trim()) {
+      sel.removeAllRanges();
+      for (var rj = 0; rj < press.ranges.length; rj++) sel.addRange(press.ranges[rj]);
+    }
     send({ t: 'wn-board:link-menu', href: href, x: e.clientX, y: e.clientY });
   });
 

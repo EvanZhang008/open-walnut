@@ -237,8 +237,36 @@ test('a handled link opens in its plugin from a task and a session; the rest go 
   expect(errors).toEqual([])
 })
 
-test('a right-click on a handled link offers the plugin, the browser and Copy link', async ({ page }) => {
+/**
+ * Chromium selects nothing on a right-press; WebKit (the Mac app) selects the word
+ * under the pointer before `contextmenu` reaches the page, unless the press is inside
+ * the selection. This does the same from a window capture listener, which runs before
+ * the page's own, so the Chromium run meets the gesture the Mac app does.
+ */
+async function emulateWebKitRightPressSelect(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    window.addEventListener('contextmenu', (e) => {
+      const sel = window.getSelection()
+      const at = document.caretRangeFromPoint(e.clientX, e.clientY)
+      if (!sel || !at || at.startContainer.nodeType !== Node.TEXT_NODE) return
+      if (sel.rangeCount && !sel.isCollapsed && sel.getRangeAt(0).isPointInRange(at.startContainer, at.startOffset)) return
+      const text = at.startContainer.textContent ?? ''
+      let a = at.startOffset
+      let b = at.startOffset
+      while (a > 0 && /\w/.test(text[a - 1]!)) a--
+      while (b < text.length && /\w/.test(text[b]!)) b++
+      const word = document.createRange()
+      word.setStart(at.startContainer, a)
+      word.setEnd(at.startContainer, b)
+      sel.removeAllRanges()
+      sel.addRange(word)
+    }, true)
+  })
+}
+
+test('a right-click on a handled link offers the plugin, the browser and Copy link', async ({ page, browserName }) => {
   const { errors, tabs } = await prepare(page)
+  if (browserName === 'chromium') await emulateWebKitRightPressSelect(page)
   const { links } = fixture
   const col = await openColumn(page)
   const answer = col.locator('.session-msg-content', { hasText: 'link capture answer' }).last()
@@ -251,9 +279,34 @@ test('a right-click on a handled link offers the plugin, the browser and Copy li
   // Walnut's link menu, not the message's own row menu.
   await expect(page.getByTestId('session-msg-ctx-menu')).toHaveCount(0)
   await page.screenshot({ path: `${SHOTS}/${test.info().project.name}-2-link-menu.png` })
+  // Only the link's menu: no text selected under it, so no Pin / Quote / Copy bar
+  // (WebKit selects the word under a right-press; link-menu-selection.ts undoes it).
+  const selected = () => page.evaluate(() => window.getSelection()?.toString() ?? '')
+  expect(await selected()).toBe('')
+  await page.waitForTimeout(700) // past the selection bar's own settle delay
+  await expect(page.getByTestId('quote-pin-pill')).toHaveCount(0)
   // Escape closes it and leaves everything where it was.
   await page.keyboard.press('Escape')
   await expect(menu).toHaveCount(0)
+
+  // A selection the user makes still gets its bar, and a right-click on a link inside
+  // it keeps it.
+  const item = answer.locator('li', { hasText: 'Message:' })
+  const box = (await item.boundingBox())!
+  await page.mouse.move(box.x + 2, box.y + box.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(box.x + box.width - 2, box.y + box.height / 2, { steps: 8 })
+  await page.mouse.up()
+  await expect(page.getByTestId('quote-pin-pill')).toBeVisible({ timeout: 5_000 })
+  const own = await selected()
+  expect(own).toContain('the permalink')
+  await permalink.click({ button: 'right' })
+  await expect(menu).toBeVisible()
+  expect(await selected()).toBe(own)
+  await page.keyboard.press('Escape')
+  await expect(menu).toHaveCount(0)
+  await page.evaluate(() => window.getSelection()?.removeAllRanges())
+  await expect(page.getByTestId('quote-pin-pill')).toHaveCount(0)
 
   // Open in default browser
   let before = tabs().length
