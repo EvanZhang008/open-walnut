@@ -413,12 +413,12 @@ describe('the forward on a stream (bridge-stream-v1)', () => {
     const s = await setup()
     s.primary.up = false
     const h = forwardOver(s)
-    const w = await request(h.app).put('/api/v1/heartbeat/checklist').send({ content: 'x' })
+    const w = await request(h.app).put('/api/v1/memory/user').send({ content: 'x' })
     expect(w.body).toEqual({ from: 'mac-over-server-http' })
     expect(h.calls).toHaveLength(1)
     expect(h.fwd.status()).toMatchObject({ forwarded: 1, streamed: 0, streamRefused: 1, suspectAt: null })
     // ...its frame cap included: a 2 MB body stays on the companion.
-    const big = await request(h.app).put('/api/v1/heartbeat/checklist').send({ content: 'y'.repeat(2 * 1024 * 1024) })
+    const big = await request(h.app).put('/api/v1/memory/user').send({ content: 'y'.repeat(2 * 1024 * 1024) })
     expect(big.body).toMatchObject({ from: 'companion' })
     expect(h.fwd.status().answeredHere).toMatchObject({ 'body-size': 1 })
     // A Mac whose link takes no companion stream: the same.
@@ -533,7 +533,7 @@ describe('the Mac\'s door when its own route cannot be reached (the listener clo
       expect(h.fwd.status().answeredHere).toMatchObject({ unanswered: 1 })
       expect(h.fwd.status().suspectAt).not.toBeNull()
       const h2 = forwardOver(s)
-      const w = await request(h2.app).put('/api/v1/heartbeat/checklist').send({ content: 'x' })
+      const w = await request(h2.app).put('/api/v1/memory/user').send({ content: 'x' })
       expect(w.status).toBe(504)
       expect(w.body.error.code).toBe('primary_timeout')
       expect(JSON.stringify(w.body)).not.toMatch(/ECONNREFUSED|127\.0\.0\.1/)

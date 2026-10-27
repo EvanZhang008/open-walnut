@@ -50,12 +50,6 @@ declare global {
   }
 }
 
-/** Paths to skip logging (high-frequency polling / health checks). */
-const SKIP_PATHS = new Set([
-  '/api/heartbeat',
-  '/api/heartbeat/',
-])
-
 /**
  * A path segment that is an identifier, not part of the route template:
  * UUIDs, hex ids, walnut ids like `ms4utt4g-1bc6`, numeric ids. Heuristic:
@@ -159,9 +153,9 @@ function safeQuery(query: Record<string, unknown>): Record<string, unknown> | un
  * Express middleware: log every API request with timing + request ID.
  */
 export function requestLogger(req: Request, res: Response, next: NextFunction): void {
-  // Skip noisy endpoints entirely; and a request an earlier mount already logs (a host
-  // replica mounts this before its away routes, server.ts) gets one line, not two.
-  if (SKIP_PATHS.has(req.path) || req.reqId) {
+  // A request an earlier mount already logs (a host replica mounts this before
+  // its away routes, server.ts) gets one line, not two.
+  if (req.reqId) {
     next()
     return
   }

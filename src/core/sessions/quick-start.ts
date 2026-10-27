@@ -94,7 +94,7 @@ export interface QuickStartParams {
   /**
    * Coding-agent engine. Omitted = INHERIT `config.defaults.engine` (resolved
    * below through resolveDefaultEngine, which answers 'claude' unless the user
-   * picked another one in Settings › Engines). A caller that names an engine
+   * picked another one in Settings › Sessions). A caller that names an engine
    * always wins; a caller that mints its own `preassignedSessionId` must resolve
    * the same way BEFORE deciding to mint (an ACP engine issues its own ids), so
    * the HTTP route and the mobile launch pass the resolved value explicitly.

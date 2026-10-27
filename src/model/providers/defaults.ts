@@ -29,7 +29,7 @@ export const KNOWN_PROVIDERS: Record<string, Omit<ProviderConfig, 'api_key'>> = 
 export const DEFAULT_MODEL = 'global.anthropic.claude-opus-5-5';
 /**
  * Conservative default — works with every known model.
- * Users wanting more output (e.g. Opus 4 supports 32768) set agent.maxTokens in config.
+ * A call that wants more output passes its own maxTokens.
  */
 export const DEFAULT_MAX_TOKENS = 4096;
 

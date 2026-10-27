@@ -13,7 +13,7 @@ import { fixtureHome } from './engine-settings-helpers'
 import { seedColumns } from './draft-helpers'
 import {
   HOST_LABEL, banner, claimUserFile, dialogOf, engineSettingsRow, fixtureRoot, makeGitProject, openPanels, openPlusMenu,
-  openPopover, panelFor, plusButton, popoverRow, popoverRowWrap, readLocal, restoreSeed, rowControl, rowsArea,
+  openPopover, panelFor, plusButton, popoverGroup, popoverGroups, popoverRow, popoverRowWrap, readLocal, restoreSeed, rowControl, rowsArea,
   scopeOption, startSessionAt, stubGet, stubPatch, waitForRows, watchSettingsRequests, type View,
 } from './engine-settings-popover-helpers'
 
@@ -59,15 +59,31 @@ test.describe('engine settings popover: failures and edge shapes', () => {
     await page.keyboard.press('Escape')
     await expect(dialog).toHaveCount(0)
 
-    // Nothing a running session reads.
-    const empty = await stubGet(page, (real) => ({
+    // Nothing a running session reads: the other groups are still there to edit.
+    const noSessionRows = await stubGet(page, (real) => ({
       ...real, groups: real.groups.map((g) => (g.id === 'sessions' ? { ...g, items: [] } : g)),
+    }), { scope: 'default', times: 1 })
+    dialog = await openPopover(page, panel)
+    await expect(dialog).toHaveAttribute('data-state', 'ready')
+    await expect(dialog.locator('.engine-settings-popover-empty')).toHaveCount(0)
+    await expect(popoverRow(dialog, 'alwaysThinkingEnabled')).toHaveCount(0)
+    await expect(popoverGroups(dialog)).toHaveCount(2)
+    await expect(popoverGroup(dialog, 'updates').locator('summary')).toHaveText(/^Updates \(\d+\)$/)
+    await expect(popoverGroup(dialog, 'terminal').locator('summary')).toHaveText(/^Terminal only \(\d+\)$/)
+    await noSessionRows.unroute()
+    await page.keyboard.press('Escape')
+    await expect(dialog).toHaveCount(0)
+
+    // No group has a row: the empty sentence, with no way out to a Settings page.
+    const empty = await stubGet(page, (real) => ({
+      ...real, groups: real.groups.map((g) => ({ ...g, items: [] })),
     }), { scope: 'default', times: 1 })
     dialog = await openPopover(page, panel)
     await expect(dialog).toHaveAttribute('data-state', 'empty')
     const emptyBox = dialog.locator('.engine-settings-popover-empty')
-    await expect(emptyBox).toContainText('Claude Code reports no settings that a running session reads. Its other settings are in Settings › Engines.')
-    await expect(emptyBox.locator('a[href="/settings#engines"]')).toBeVisible()
+    await expect(emptyBox).toHaveText('Claude Code reports no settings Walnut can edit.')
+    await expect(emptyBox.locator('a')).toHaveCount(0)
+    await expect(popoverGroups(dialog)).toHaveCount(0)
     await empty.unroute()
     await page.keyboard.press('Escape')
 
@@ -234,7 +250,7 @@ test.describe('engine settings popover: failures and edge shapes', () => {
     await page.keyboard.press('Escape')
   })
 
-  test('a Codex-shaped view drives the link, the file count, the sentences; the row extras', async ({ page }) => {
+  test('a Codex-shaped view drives the groups, the file count, the sentences; the row extras', async ({ page }) => {
     const [panel] = await openPanels(page, [sid])
     const codex = await stubGet(page, (real) => {
       const sessions = real.groups.find((g) => g.id === 'sessions')!
@@ -248,18 +264,20 @@ test.describe('engine settings popover: failures and edge shapes', () => {
     await waitForRows(dialog)
     // The engine's name comes from the catalog (the session really is a Claude one here), the rest from the view.
     await expect(dialog.locator('h2.engine-settings-popover-title')).toHaveText(/^(Codex|Claude Code) settings$/)
-    await expect(dialog.locator('a.engine-settings-more-link')).toHaveText('Updates settings (1) are in Settings › Engines')
+    await expect(popoverGroups(dialog)).toHaveCount(1)
+    await expect(popoverGroup(dialog, 'updates').locator('summary')).toHaveText('Updates (1)')
     await expect(dialog.getByTestId('engine-settings-files').locator('summary')).toHaveText('Files (1)')
     await expect(dialog.getByTestId('engine-settings-applies-on')).toHaveText(/^Applies to new (Codex|Claude Code) sessions; this session keeps its current settings\.$/)
     expect(await dialog.getAttribute('aria-label')).toMatch(/^(Codex|Claude Code) settings for new sessions in /)
     await codex.unroute()
     await page.keyboard.press('Escape')
 
-    // No other group with rows -> a plain link.
+    // No other group with rows -> the session rows alone, no group, no link.
     const only = await stubGet(page, (real) => ({ ...real, groups: real.groups.filter((g) => g.id === 'sessions') }), { scope: 'default', times: 1 })
     dialog = await openPopover(page, panel)
     await waitForRows(dialog)
-    await expect(dialog.locator('a.engine-settings-more-link')).toHaveText('Open Settings › Engines')
+    await expect(popoverGroups(dialog)).toHaveCount(0)
+    await expect(dialog.locator('a.engine-settings-more-link')).toHaveCount(0)
     await only.unroute()
     await page.keyboard.press('Escape')
 
@@ -313,7 +331,7 @@ test.describe('engine settings popover: failures and edge shapes', () => {
     await row.click({ force: true })
     await expect(dialogOf(page)).toHaveCount(0)
     await expect(menu).toBeVisible()
-    await expect(row).toHaveAttribute('title', 'Could not read the engine list; open Settings › Engines', { timeout: 6000 })
+    await expect(row).toHaveAttribute('title', 'Could not read the engine list; try again in a moment', { timeout: 6000 })
     await expect(row).toHaveAttribute('aria-disabled', 'true')
     await page.keyboard.press('Escape')
 

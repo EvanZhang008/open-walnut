@@ -115,26 +115,15 @@ describe('N17: Find a setting hints read like labels and keep the matched word',
   })
 })
 
-import { chunkRows, engineName, sentenceCase } from '../../web/src/components/settings/sections/EnginesSection.js'
-import { isSmallEnum, optionLabel } from '../../web/src/components/settings/sections/EngineSettingRows.js'
+import { engineName } from '../../web/src/components/settings/sections/DefaultEngineRow.js'
+import { optionLabel } from '../../web/src/components/settings/sections/EngineSettingRows.js'
 
-describe('N12 N30: Engines copy and grouping', () => {
-  it('chunks are balanced: no single leftover row under a continued heading', () => {
-    expect(chunkRows(Array.from({ length: 11 }, (_, i) => i)).map((c) => c.length)).toEqual([6, 5])
-    expect(chunkRows(Array.from({ length: 10 }, (_, i) => i)).map((c) => c.length)).toEqual([10])
-  })
-  it('labels and options read in sentence case, ids stay as sent', () => {
-    expect(sentenceCase('user settings')).toBe('User settings')
+describe('N12 N30: engine copy', () => {
+  it('options read in sentence case, ids stay as sent', () => {
     expect(optionLabel('auto')).toBe('Auto')
     expect(optionLabel('follows the permission mode')).toBe('Follows the permission mode')
     expect(optionLabel('in-process')).toBe('in-process')
     expect(optionLabel('24-hour UTC')).toBe('24-hour UTC')
-  })
-  it('only a closed enum of up to three short words becomes segmented', () => {
-    const opt = (label: string) => ({ value: label, label })
-    expect(isSmallEnum({ type: 'select', options: [opt('Fresh'), opt('HEAD')] })).toBe(true)
-    expect(isSmallEnum({ type: 'select', options: [opt('Accept'), opt('Hold for review'), opt('Refuse')] })).toBe(false)
-    expect(isSmallEnum({ type: 'select', allowCustom: true, options: [opt('a'), opt('b')] })).toBe(false)
   })
   it('the engine is Claude Code, never bare Claude', () => {
     expect(engineName('Claude')).toBe('Claude Code')

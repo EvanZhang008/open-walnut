@@ -87,21 +87,27 @@ test('a Bedrock credential method pick writes nothing; a region pick keeps the s
 })
 
 test('a Voice draft is saved when the pane closes before Save', async ({ page }) => {
+  // A Dictation draft (the Read aloud fields this used are gone, 2026-10-27):
+  // the OpenAI-compatible engine's transcription model.
   const server = await mockConfigServer(page, (cfg) => {
-    const tools = (cfg.tools as Cfg | undefined) ?? {}
-    cfg.tools = { ...tools, tts: { provider: 'say', voice: 'Samantha' } }
+    const stt = (cfg.stt as Cfg | undefined) ?? {}
+    cfg.stt = { ...stt, engine: 'openai', openai_base_url: 'https://api.openai.com/v1', openai_model: 'whisper-1' }
   })
   await openSettings(page)
   await clickNav(page, 'stt')
-  const voice = page.locator('#tts-voice')
-  await expect(voice).toHaveValue('Samantha', { timeout: 20_000 })
-  await voice.fill('Alex')
+  const model = page.locator('#stt-openai-model')
+  await expect(model).toHaveValue('whisper-1', { timeout: 20_000 })
+  await model.fill('gpt-4o-transcribe')
   await clickNav(page, 'tasks')
-  await expect.poll(() => ((server.state().tools as Cfg | undefined)?.tts as Cfg | undefined)?.voice, { timeout: 10_000 }).toBe('Alex')
+  await expect.poll(() => (server.state().stt as Cfg | undefined)?.openai_model, { timeout: 10_000 }).toBe('gpt-4o-transcribe')
+  // Voice no longer writes `tools` (the old Read aloud block lived there).
+  expect(server.puts.some((p) => 'tools' in p)).toBe(false)
 
   // And the value is what Voice shows when it opens again.
   await clickNav(page, 'stt')
-  await expect(page.locator('#tts-voice')).toHaveValue('Alex', { timeout: 20_000 })
+  await expect(page.locator('#stt-openai-model')).toHaveValue('gpt-4o-transcribe', { timeout: 20_000 })
+  await expect(page.getByTestId('stt-read-aloud')).toHaveCount(0)
+  await expect(page.locator('#tts-voice, #tts-provider')).toHaveCount(0)
 })
 
 test('clearing a remote host alias to retype it renames the host, never deletes it', async ({ page }) => {

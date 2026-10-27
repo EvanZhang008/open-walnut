@@ -89,11 +89,11 @@ test.describe('engine settings popover: review round two', () => {
     expect(notesBox.slack, JSON.stringify(notesBox)).toBeLessThanOrEqual(8)
     // The group help is not in the flow between the filter and the rows.
     await expect(dialog.locator('.engine-settings-group-help')).toHaveCount(0)
-    // The footer's link and Files share one line.
-    const linkBox = await rect(dialog.locator('a.engine-settings-more-link'))
+    // The footer has no link to a Settings page; Files sits on its own line inside the dialog.
+    await expect(dialog.locator('a.engine-settings-more-link')).toHaveCount(0)
     const summaryBox = await rect(dialog.getByTestId('engine-settings-files').locator('summary'))
-    expect(Math.abs(linkBox.top - summaryBox.top)).toBeLessThanOrEqual(2)
-    expect(linkBox.right).toBeLessThanOrEqual(summaryBox.left + 0.5)
+    expect(summaryBox.right).toBeLessThanOrEqual(d.right + 0.5)
+    expect(summaryBox.bottom).toBeLessThanOrEqual(d.bottom + 0.5)
     await shot(page, 'r3/dense-1280x800')
 
     // The subtitle's tail is the repo segment, fully visible, and differs between the two sessions.

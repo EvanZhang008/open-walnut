@@ -21,7 +21,7 @@ import { EngineSettingsPopover, type EngineSettingsCloseReason } from './EngineS
 
 export const ENGINE_SETTINGS_ACTION_ID = 'engine-settings';
 export const ENGINE_SETTINGS_PENDING_TITLE = 'Checking what this engine supports';
-export const ENGINE_SETTINGS_FAILED_TITLE = 'Could not read the engine list; open Settings › Engines';
+export const ENGINE_SETTINGS_FAILED_TITLE = 'Could not read the engine list; try again in a moment';
 /** A composer box up to this tall (one or two lines of draft) anchors the popover's bottom; taller, the "+" row does. */
 export const COMPOSER_ANCHOR_MAX_PX = 120;
 

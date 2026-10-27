@@ -3,8 +3,8 @@
  *
  * - library-v1: agent WRITES answer 501 (machine-local config, no write-back);
  *   agent READS + commands/skills/repositories stay local (git-synced).
- * - console-extras-v1: usage / qmd / timeline / heartbeat-runner answer 501;
- *   config/providers + integrations + heartbeat checklist answer locally.
+ * - console-extras-v1: usage / qmd / timeline answer 501;
+ *   config/providers + integrations answer locally.
  * - routines-v1 draft: relays as `server.routines.draft` over the bridge.
  * - projects-v1 metadata PUT + summary regenerate answer 501; metadata GET local.
  */
@@ -95,26 +95,22 @@ describe('console extras on a REPLICA', () => {
       '/api/v1/usage/summary', '/api/v1/usage/daily', '/api/v1/usage/by-source',
       '/api/v1/usage/by-model', '/api/v1/usage/by-agent', '/api/v1/usage/recent',
       '/api/v1/qmd/status', '/api/v1/timeline', '/api/v1/timeline/dates',
-      '/api/v1/heartbeat',
     ]) {
       const res = await request(app).get(p)
       expect(res.status, p).toBe(501)
       expect(res.body.error.code, p).toBe('not_supported_cloud')
     }
-    const trigger = await request(app).post('/api/v1/heartbeat/trigger')
-    expect(trigger.status).toBe(501)
     const toggle = await request(app).post('/api/v1/timeline/toggle')
     expect(toggle.status).toBe(501)
   })
 
-  it('pricing / providers / integrations / checklist answer locally', async () => {
+  it('pricing / providers / integrations answer locally', async () => {
     const app = createApp()
     expect((await request(app).get('/api/v1/usage/pricing')).status).toBe(200)
     const providers = await request(app).get('/api/v1/config/providers')
     expect(providers.status).toBe(200)
     expect(providers.body.cloud).toBe(true)
     expect((await request(app).get('/api/v1/integrations')).status).toBe(200)
-    expect((await request(app).get('/api/v1/heartbeat/checklist')).status).toBe(200)
   })
 })
 

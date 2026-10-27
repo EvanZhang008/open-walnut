@@ -2,7 +2,7 @@
  * Review round three of the engine settings popover in WEBKIT (the Mac app is a
  * WKWebView): the filter and the rows keep their top through skeleton, dense,
  * filter and scope switch; the default sentence names both
- * exceptions; the footer link reads the response's groups; the
+ * exceptions; the response's other groups are collapsed details that open; the
  * guard dims the note; the Files chevron turns; the not-honoured
  * sentence sits in the card; the switch is one Tab stop and About sits
  * with Close; the dark surface is raised.
@@ -11,8 +11,8 @@
  */
 import { test, expect, type Locator } from '@playwright/test'
 import {
-  LOCAL_SCOPE_NOTE, captureView, claimUserFile, filterBox, fixtureRoot, makeGitProject, openPanels, openPopover, otherGroupsLinkText,
-  popoverRow, popoverRowWrap, rect, restoreSeed, rowControl, rowsArea, scopeOption, shot, startSessionAt, stubGet, waitForRows,
+  LOCAL_SCOPE_NOTE, captureView, claimUserFile, filterBox, fixtureRoot, makeGitProject, openPanels, openPopover, otherGroupsOf,
+  groupOpen, settleToggle, popoverGroup, popoverGroups, popoverRow, popoverRowWrap, rect, restoreSeed, rowControl, rowsArea, scopeOption, shot, startSessionAt, stubGet, waitForRows,
 } from './engine-settings-popover-helpers'
 
 test.use({ browserName: 'webkit' })
@@ -49,8 +49,31 @@ test('webkit: stable filter top through every state; both sentences from the res
   await waitForRows(dialog)
   const g1 = await geometry()
   await expect(dialog.getByTestId('engine-settings-scope-note')).toHaveText(LOCAL_SCOPE_NOTE)
-  await expect(dialog.locator('a.engine-settings-more-link')).toHaveText(otherGroupsLinkText(captured))
-  await expect(dialog.locator('a.engine-settings-more-link')).toHaveText(/ settings \(\d+\) are in Settings › Engines$/)
+  // The other groups: collapsed "<Title> (N)" details after the session rows,
+  // no footer link. WebKit draws <details> itself, so open and close are pinned here.
+  const others = otherGroupsOf(captured)
+  await expect(popoverGroups(dialog)).toHaveCount(others.length)
+  for (const g of others) {
+    await expect(popoverGroup(dialog, g.id).locator('summary')).toHaveText(`${g.title} (${g.items.length})`)
+    expect(await groupOpen(popoverGroup(dialog, g.id))).toBe(false)
+    await expect(popoverRow(dialog, g.items[0].key)).toBeHidden()
+  }
+  await expect(dialog.locator('a.engine-settings-more-link')).toHaveCount(0)
+  const terminal = popoverGroup(dialog, 'terminal')
+  await terminal.locator('summary').click()
+  await expect.poll(() => groupOpen(terminal)).toBe(true)
+  await expect(popoverRow(dialog, 'timeFormat')).toBeVisible()
+  await terminal.locator('summary').click()
+  await expect.poll(() => groupOpen(terminal)).toBe(false)
+  await expect(popoverRow(dialog, 'timeFormat')).toBeHidden()
+  await settleToggle(page)
+  // A filter hit in a closed group opens it.
+  await filterBox(dialog).fill('time format')
+  await expect.poll(() => groupOpen(terminal)).toBe(true)
+  await expect(popoverRow(dialog, 'timeFormat')).toBeVisible()
+  await expect(popoverRow(dialog, 'alwaysThinkingEnabled')).toHaveCount(0)
+  await filterBox(dialog).fill('')
+  await expect.poll(() => groupOpen(terminal)).toBe(false)
   await filterBox(dialog).fill('zzzz')
   await expect(dialog.locator('.engine-settings-popover-nomatch')).toBeVisible()
   const g2 = await geometry()

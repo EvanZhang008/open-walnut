@@ -125,14 +125,26 @@ async function bootServer(s: LiveServer, name: string, cloud: boolean, env: Node
   await bootLiveServer(procs!, s, { base, repo: REPO_ROOT, file: path.join(base, `${name}-boot.mts`), script: BOOT(s.data, cloud), env, ownDaemon: !cloud })
 }
 
-const MAC_CHECKLIST = '# Mac checklist\n- the build is green\n'
-const COMPANION_CHECKLIST = '# Companion checklist\n- an old copy\n'
+// A Mac-side file the companion also has a copy of: a user command (core/command-store.ts),
+// <data>/commands/<name>.md on each box. Not a copy kind and not journaled; with no git remote
+// on the companion here, nothing brings the Mac's file over, so each box answers from its own.
+const NOTE = '/api/v1/commands/marina-note'
+const noteFile = (s: LiveServer): string => path.join(s.data, 'commands', 'marina-note.md')
+const readNote = (s: LiveServer): string => fs.readFileSync(noteFile(s), 'utf8')
+// A save writes the content plus a newline (no description, so no frontmatter), and a read
+// answers the file as it is: the seeded texts end with one, a written text does not.
+const MAC_NOTE = '# Mac note\n- the build is green\n'
+const COMPANION_NOTE = '# Companion note\n- an old copy\n'
+const seedNote = async (s: LiveServer, text: string): Promise<void> => {
+  await fsp.mkdir(path.dirname(noteFile(s)), { recursive: true })
+  await fsp.writeFile(noteFile(s), text)
+}
 
 async function startCompanion(): Promise<void> {
   await prepareServer(companion, base, 'companion')
   await fsp.mkdir(path.join(base, 'hub'), { recursive: true })
   await fsp.writeFile(path.join(companion.data, 'config.yaml'), 'version: 1\nuser:\n  name: Box\n')
-  await fsp.writeFile(path.join(companion.data, 'HEARTBEAT.md'), COMPANION_CHECKLIST)
+  await seedNote(companion, COMPANION_NOTE)
   const now = new Date().toISOString()
   await fsp.writeFile(path.join(companion.data, 'auth.json'), JSON.stringify({ devices: [
     { name: 'phone', tokenHash: sha256(tokens.phone), createdAt: now },
@@ -150,7 +162,7 @@ async function startPrimary(): Promise<void> {
   await fsp.mkdir(path.join(primary.data, 'sync'), { recursive: true })
   await fsp.writeFile(path.join(primary.data, 'sync', 'bridge-tokens.json'), JSON.stringify({ 'bridge-local': tokens.local }), { mode: 0o600 })
   await fsp.writeFile(path.join(primary.data, 'config.yaml'), 'version: 1\nuser:\n  name: Tester\ndefaults:\n  priority: none\n  platform: local\nprovider:\n  type: claude-code\n')
-  await fsp.writeFile(path.join(primary.data, 'HEARTBEAT.md'), MAC_CHECKLIST)
+  await seedNote(primary, MAC_NOTE)
   await bootServer(primary, 'primary', false, serverEnv(primary, { WALNUT_LEADER_HEARTBEAT_MS: '500' }))
 }
 
@@ -230,35 +242,35 @@ describe.skipIf(!liveWallsAvailable())('one request path on the companion (real 
   }, 60_000)
 
   it('a read the companion could answer from its own files is the Mac\'s', async () => {
-    const r = await phone('/api/v1/heartbeat/checklist')
+    const r = await phone(NOTE)
     expect(r).toMatchObject({ status: 200, by: 'primary' })
-    expect(r.json.content).toBe(MAC_CHECKLIST)
+    expect(r.json.command.content).toBe(MAC_NOTE)
   })
 
   it('a write is applied once, on the Mac', async () => {
-    const next = '# Mac checklist\n- written from the phone\n'
-    const r = await phone('/api/v1/heartbeat/checklist', { method: 'PUT', body: JSON.stringify({ content: next }) })
+    const next = '# Mac note\n- written from the phone'
+    const r = await phone(NOTE, { method: 'PUT', body: JSON.stringify({ content: next }) })
     expect(r).toMatchObject({ status: 200, by: 'primary' })
-    expect(fs.readFileSync(path.join(primary.data, 'HEARTBEAT.md'), 'utf8')).toBe(next)
-    expect(fs.readFileSync(path.join(companion.data, 'HEARTBEAT.md'), 'utf8')).toBe(COMPANION_CHECKLIST)
-    expect((await phone('/api/v1/heartbeat/checklist')).json.content).toBe(next)
+    expect(readNote(primary)).toBe(`${next}\n`)
+    expect(readNote(companion)).toBe(COMPANION_NOTE)
+    expect((await phone(NOTE)).json.command.content).toBe(`${next}\n`)
   })
 
   // WP13: the Mac's own daemon says bridge-stream-v1 in its bridge hello, so the
   // forward rides a stream through it: no size cap either way.
   it('the forward rides a stream through the Mac\'s daemon: a 4 MB body reaches the Mac, a 4 MB reply comes back', async () => {
-    const big = '# Mac checklist\n- written from the phone\n' + 'x'.repeat(4 * 1024 * 1024) + '\n'
+    const big = '# Mac note\n- written from the phone\n' + 'x'.repeat(4 * 1024 * 1024)
     const before = (await leaderView()).forward.streamed as number
-    const w = await phone('/api/v1/heartbeat/checklist', { method: 'PUT', body: JSON.stringify({ content: big }) })
+    const w = await phone(NOTE, { method: 'PUT', body: JSON.stringify({ content: big }) })
     expect(w).toMatchObject({ status: 200, by: 'primary' })
-    expect(fs.readFileSync(path.join(primary.data, 'HEARTBEAT.md'), 'utf8')).toBe(big)
-    const r = await phone('/api/v1/heartbeat/checklist')
+    expect(readNote(primary)).toBe(`${big}\n`)
+    const r = await phone(NOTE)
     expect(r).toMatchObject({ status: 200, by: 'primary' })
-    expect(r.json.content).toBe(big)
+    expect(r.json.command.content).toBe(`${big}\n`)
     expect((await leaderView()).forward.streamed).toBeGreaterThanOrEqual(before + 2)
-    const small = '# Mac checklist\n- written from the phone\n'
-    expect((await phone('/api/v1/heartbeat/checklist', { method: 'PUT', body: JSON.stringify({ content: small }) })).status).toBe(200)
-    expect(fs.readFileSync(path.join(companion.data, 'HEARTBEAT.md'), 'utf8')).toBe(COMPANION_CHECKLIST)
+    const small = '# Mac note\n- written from the phone'
+    expect((await phone(NOTE, { method: 'PUT', body: JSON.stringify({ content: small }) })).status).toBe(200)
+    expect(readNote(companion)).toBe(COMPANION_NOTE)
   }, 120_000)
 
   // WP13: the companion's task writes go to the Mac while it answers (one writer); its
@@ -356,11 +368,11 @@ describe.skipIf(!liveWallsAvailable())('one request path on the companion (real 
     await waitFor(() => drainsKnown().includes('task-fields'), 30_000, 'the Mac to have drained the companion\'s journal once')
     await sleepMac()
     const stoppedAt = Date.now()
-    const first = await phone('/api/v1/heartbeat/checklist')
+    const first = await phone(NOTE)
     expect(first).toMatchObject({ status: 200, by: 'companion' })
-    expect(first.json.content).toBe(COMPANION_CHECKLIST)
+    expect(first.json.command.content).toBe(COMPANION_NOTE)
     expect(first.ms).toBeLessThan(15_000)
-    const second = await phone('/api/v1/heartbeat/checklist')
+    const second = await phone(NOTE)
     expect(second).toMatchObject({ status: 200, by: 'companion' })
     expect(second.ms).toBeLessThan(2_000)
     // Long after: the Mac is silent, so nothing waits on it.
@@ -424,10 +436,10 @@ describe.skipIf(!liveWallsAvailable())('one request path on the companion (real 
   it('the Mac wakes: the Mac answers again', async () => {
     await wakeMac()
     const r = await waitFor(async () => {
-      const x = await phone('/api/v1/heartbeat/checklist')
+      const x = await phone(NOTE)
       return x.by === 'primary' ? x : null
     }, 60_000, 'the Mac to answer after it wakes')
-    expect(r.json.content).toMatch(/written from the phone/)
+    expect(r.json.command.content).toMatch(/written from the phone/)
     // The console edit kept while away reaches the Mac (its drain of the journal), merged by
     // field, and leaves the journal; nothing of it was queued.
     await waitFor(async () => {
@@ -450,20 +462,20 @@ describe.skipIf(!liveWallsAvailable())('one request path on the companion (real 
     await bootServer(primary, 'primary-old-daemon', false, serverEnv(primary, { WALNUT_LEADER_HEARTBEAT_MS: '500', WALNUT_BRIDGE_HIDE_CAPS: 'bridge-stream-v1' }))
     const before = (await leaderView()).forward
     const r = await waitFor(async () => {
-      const x = await phone('/api/v1/heartbeat/checklist')
+      const x = await phone(NOTE)
       return x.by === 'primary' ? x : null
     }, 180_000, 'the Mac to answer again with the older daemon')
-    expect(r.json.content).toMatch(/written from the phone/)
-    const write = await phone('/api/v1/heartbeat/checklist', { method: 'PUT', body: JSON.stringify({ content: '# Mac checklist\n- over server.http\n' }) })
+    expect(r.json.command.content).toMatch(/written from the phone/)
+    const write = await phone(NOTE, { method: 'PUT', body: JSON.stringify({ content: '# Mac note\n- over server.http' }) })
     expect(write).toMatchObject({ status: 200, by: 'primary' })
-    expect(fs.readFileSync(path.join(primary.data, 'HEARTBEAT.md'), 'utf8')).toBe('# Mac checklist\n- over server.http\n')
+    expect(readNote(primary)).toBe('# Mac note\n- over server.http\n')
     const after = (await leaderView()).forward
     expect(after.streamed).toBe(before.streamed)
     // Not a stream that was refused and fell back: the companion never tried one (the hello had no cap).
     expect(after.streamRefused).toBe(before.streamRefused)
     expect(after.forwarded).toBeGreaterThanOrEqual(before.forwarded + 2)
     // The server.http frame keeps its cap: a 2 MB body stays on the companion.
-    const big = await phone('/api/v1/heartbeat/checklist', { method: 'PUT', body: JSON.stringify({ content: 'y'.repeat(2 * 1024 * 1024) }) })
+    const big = await phone(NOTE, { method: 'PUT', body: JSON.stringify({ content: 'y'.repeat(2 * 1024 * 1024) }) })
     expect(big).toMatchObject({ status: 200, by: 'companion' })
     expect((await leaderView()).forward.answeredHere['body-size']).toBeGreaterThanOrEqual(1)
   }, 300_000)

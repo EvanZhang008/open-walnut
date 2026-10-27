@@ -1,7 +1,6 @@
 /**
  * useEngineSettings: load and edit one engine's own settings for one target,
- * shared by Settings › Engines (`{ host }`) and the composer's per-session
- * popover (`{ sessionId, scope }`).
+ * for the composer's per-session popover (`{ sessionId, scope }`).
  *
  * This edits files the ENGINE owns, not Walnut config, so three things are
  * deliberate and live here rather than in either surface:
@@ -38,9 +37,10 @@ import {
 } from '@/api/engine-settings';
 import { decideWriteFailure, findItem, mapItem, mergeLanded, optimisticReset, optimisticSet } from './engine-settings-model';
 
-export type EngineSettingsHookTarget =
-  | { host: string }
-  | { sessionId: string; scope: EngineSettingsWriteScope };
+export interface EngineSettingsHookTarget {
+  sessionId: string;
+  scope: EngineSettingsWriteScope;
+}
 
 export interface EngineSettingsLoadError {
   phase: 'initial' | 'rescope' | 'reload';
@@ -76,7 +76,7 @@ export interface EngineSettingsHook {
 /** The part of a target whose change means "another set of files": scope is excluded on purpose. */
 function targetIdentity(engine: string | undefined, target: EngineSettingsHookTarget): string {
   if (!engine) return '';
-  return 'host' in target ? `${engine}|host:${target.host}` : `${engine}|session:${target.sessionId}`;
+  return `${engine}|session:${target.sessionId}`;
 }
 
 export function useEngineSettings(
@@ -84,14 +84,9 @@ export function useEngineSettings(
   target: EngineSettingsHookTarget,
   enabled: boolean,
 ): EngineSettingsHook {
-  const host = 'host' in target ? target.host : undefined;
-  const sessionId = 'sessionId' in target ? target.sessionId : undefined;
-  const scope: EngineSettingsWriteScope = 'sessionId' in target ? target.scope : 'default';
+  const { sessionId, scope } = target;
   const identity = targetIdentity(engine, target);
-  const apiTarget = useMemo<EngineSettingsTarget>(
-    () => (host !== undefined ? { host } : { sessionId, scope }),
-    [host, sessionId, scope],
-  );
+  const apiTarget = useMemo<EngineSettingsTarget>(() => ({ sessionId, scope }), [sessionId, scope]);
 
   const [view, setView] = useState<EngineSettingsView | null>(null);
   const [inFlight, setInFlight] = useState(false);
@@ -165,10 +160,10 @@ export function useEngineSettings(
         setView(null);
         setLoadError({ phase, message: engineSettingsErrorText(err) });
         setInFlight(false);
-        log.warn('settings', 'engine settings load failed', { engine, host, sessionId, scope, phase, error: String(err) });
+        log.warn('settings', 'engine settings load failed', { engine, sessionId, scope, phase, error: String(err) });
       });
     return () => { controller.abort(); };
-  }, [engine, enabled, identity, apiTarget, host, sessionId, scope, reloadNonce]);
+  }, [engine, enabled, identity, apiTarget, sessionId, scope, reloadNonce]);
 
   const runPatch = useCallback((
     key: string,
@@ -199,7 +194,7 @@ export function useEngineSettings(
       .catch((err) => {
         if (gen !== genRef.current) return;
         setBanner(engineSettingsErrorText(err));
-        log.warn('settings', 'engine setting update failed', { engine, host, sessionId, scope, key, error: String(err) });
+        log.warn('settings', 'engine setting update failed', { engine, sessionId, scope, key, error: String(err) });
         if (decideWriteFailure(err) === 'revert') {
           setView((prev) => (prev ? mapItem(prev, key, () => before) : prev));
           return;
@@ -210,7 +205,7 @@ export function useEngineSettings(
         if (gen !== genRef.current) return;
         setSavingKeys((prev) => prev.filter((k) => k !== key));
       });
-  }, [engine, enabled, apiTarget, host, sessionId, scope]);
+  }, [engine, enabled, apiTarget, sessionId, scope]);
 
   const onSet = useCallback((key: string, value: EngineSettingValue) => {
     runPatch(key, { set: { [key]: value } }, (prev) => optimisticSet(prev, value));

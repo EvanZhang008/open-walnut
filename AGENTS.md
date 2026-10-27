@@ -291,7 +291,7 @@ Personal AI: tasks + knowledge + AI sessions. **Tasks are the atom.** `Project �
   `tests/e2e/browser/draft-helpers.ts`) or pinned by `data-session-id`. The slot's panel sits
   earlier in the DOM, so an unscoped `.first()` grabs the wrong one. Tasks also have two
   surfaces: the Homepage `TodoPanel` (primary) and `/tasks` →
-  `DashboardPage`/`TaskList`/`TaskCard` (secondary). Default to the Homepage panels for any
+  `DashboardPage`/`TasksPageTable` (secondary). Default to the Homepage panels for any
   Task/Session work, demos, and recordings.
 - Concurrency: `tasks.json`/`sessions.json` use in-process + cross-process file locks
 - **Skill discovery has TWO scopes — don't collapse them** (`src/core/skill-loader.ts`). The

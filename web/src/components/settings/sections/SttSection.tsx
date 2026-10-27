@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Config } from '@open-walnut/core';
 import { SectionCard } from '../inputs/SectionCard';
-import { SettingsGroup, SettingsRow } from '../SettingsSection';
+import { SettingsGroup } from '../SettingsSection';
 import { SttDetectionPanel, sttDraftOf, type SttDraft } from './SttDetectionPanel';
 import { useSerialSave, type OnSave } from './GeneralSection';
 import { invalidateSttStatusCache } from '@/hooks/useSttStatus';
@@ -13,15 +13,13 @@ interface Props {
   onReload?: () => void;
 }
 
-type VoiceDraft = SttDraft & { ttsProvider: string; ttsVoice: string };
+type VoiceDraft = SttDraft;
 
-function draftOf(config: Config): VoiceDraft {
-  return { ...sttDraftOf(config), ttsProvider: config.tools?.tts?.provider ?? '', ttsVoice: config.tools?.tts?.voice ?? '' };
-}
+const draftOf = sttDraftOf;
 
 /**
- * Voice, both directions: the recent recordings (every take, to copy or redo),
- * Dictation (the STT engine, its models, the language) and Read aloud (TTS). The only settings form with an explicit Save: the
+ * Voice: the recent recordings (every take, to copy or redo) and Dictation
+ * (the STT engine, its models, the language). The only settings form with an explicit Save: the
  * drafts below are committed together by Save (or Cmd+S); an engine pick, a
  * model activation or a model path save at once. A draft still unsaved when
  * the pane closes or the page hides is saved then, never dropped. The section
@@ -58,10 +56,6 @@ export function SttSection({ config, onSave, onReload }: Props) {
           openai_model: draft.openaiModel || undefined,
         } : {}),
       } as Config['stt'],
-      tools: {
-        ...c.tools,
-        tts: { ...c.tools?.tts, provider: draft.ttsProvider || undefined, voice: draft.ttsVoice || undefined },
-      },
     }), { rowKey: 'stt.form' });
     invalidateSttStatusCache();
     handleConfigured();
@@ -91,16 +85,6 @@ export function SttSection({ config, onSave, onReload }: Props) {
       </SettingsGroup>
       <SettingsGroup heading="Dictation" data-testid="stt-dictation">
         <SttDetectionPanel config={config} onSave={onSave} onConfigured={handleConfigured} draft={draft} onDraft={onDraft} />
-      </SettingsGroup>
-      <SettingsGroup heading="Read aloud" data-testid="stt-read-aloud">
-        <SettingsRow label="Speech provider" help={<>The program that reads a reply aloud; <code>say</code> is the one built into macOS.</>} htmlFor="tts-provider" control={
-          <input id="tts-provider" type="text" className="settings-input settings-input--short" placeholder="say"
-            value={draft.ttsProvider} onChange={(e) => onDraft({ ttsProvider: e.target.value })} />
-        } />
-        <SettingsRow label="Voice" help="A voice name that program accepts; the Mac lists its voices under Spoken Content." htmlFor="tts-voice" control={
-          <input id="tts-voice" type="text" className="settings-input settings-input--short" placeholder="Samantha"
-            value={draft.ttsVoice} onChange={(e) => onDraft({ ttsVoice: e.target.value })} />
-        } />
       </SettingsGroup>
     </SectionCard>
   );

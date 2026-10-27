@@ -23,7 +23,7 @@ interface HashRef { file: string; hash: string }
 function settingsHashRefs(): HashRef[] {
   const refs: HashRef[] = []
   const patterns = [
-    /settings#([A-Za-z0-9_-]+)/g, // '/settings#engines'
+    /settings#([A-Za-z0-9_-]+)/g, // '/settings#providers'
     /settingsHash:\s*'([A-Za-z0-9_-]+)'/g, // error suggestions
     /(?:onNavigateSettings|handleNavigateSettings)\('#([A-Za-z0-9_-]+)'\)/g, // setup banner
   ]
@@ -45,7 +45,7 @@ describe('settings deep links in the app', () => {
 
   it('finds the known entry points (the scan itself works)', () => {
     const hashes = new Set(settingsHashRefs().map((r) => r.hash))
-    for (const h of ['providers', 'engines', 'calendar', 'remote-hosts']) expect(hashes).toContain(h)
+    for (const h of ['providers', 'calendar', 'remote-hosts']) expect(hashes).toContain(h)
   })
 
   it('opens a real pane for every hash, never the unknown fallback', () => {

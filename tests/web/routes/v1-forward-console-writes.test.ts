@@ -152,11 +152,11 @@ describe('the console\'s task writes on the companion', () => {
     expect(h.calls).toEqual([])
     expect(h.fwd.status().answeredHere['queue-first']).toBe(4)
     // A write that is not of the task store does not wait on the task queue.
-    expect((await request(h.app).put('/api/v1/heartbeat/checklist').send({ content: 'x' })).headers['x-walnut-answered-by']).toBe('primary')
+    expect((await request(h.app).put('/api/v1/memory/user').send({ content: 'x' })).headers['x-walnut-answered-by']).toBe('primary')
     // The queue drained: the Mac is the one writer again.
     pending = false
     expect((await request(h.app).patch('/api/tasks/k1').send({ title: 'to the Mac' })).headers['x-walnut-answered-by']).toBe('primary')
-    expect(h.calls.map((c) => `${c.method} ${c.url}`)).toEqual(['PUT /api/v1/heartbeat/checklist', 'PATCH /api/tasks/k1'])
+    expect(h.calls.map((c) => `${c.method} ${c.url}`)).toEqual(['PUT /api/v1/memory/user', 'PATCH /api/tasks/k1'])
     expect(h.localRuns).toEqual(['PATCH /api/tasks/k1', 'POST /api/tasks/k1/complete', 'PATCH /api/v1/tasks/k1', 'PUT /api/v1/focus/reorder'])
   })
 

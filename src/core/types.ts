@@ -982,17 +982,6 @@ export interface AgentDefinition {
   overrides_builtin?: boolean;
 }
 
-export interface SubagentGlobalConfig {
-  model?: string;
-  /** Provider name for subagents. Maps to config.providers[name]. */
-  provider?: string;
-  region?: string;
-  max_tokens?: number;
-  max_concurrent?: number;
-  max_tool_rounds?: number;
-  denied_tools?: string[];
-}
-
 export type AgentRunStatus = 'queued' | 'running' | 'completed' | 'error';
 
 export interface AgentRun {
@@ -1011,16 +1000,16 @@ export interface AgentRun {
 }
 
 export interface AgentConfig {
+  /** Retired (nothing reads them); typed only because an older leader's config copy still carries them. */
   region?: string;
   maxTokens?: number;
-  subagent?: SubagentGlobalConfig;
   agents?: Omit<AgentDefinition, 'source'>[];
   /**
    * Triage throttling. Turn-complete triage trailing-debounces by `debounce_minutes`
    * (default 4) so a burst of interactive turns collapses into one end-of-interaction
    * triage. `notify_mode` gates the expensive home-chat notification:
    *   - 'off' (default): never wake the home chat; task.summary still updates (poll model)
-   *   - 'buffered': don't wake in real time, but nudge the heartbeat to review soon
+   *   - 'buffered': an older value (it nudged the heartbeat, which is gone); acts as 'off'
    *   - 'realtime': enqueue a home-chat turn immediately on each Outcome-B milestone
    */
   triage?: {
@@ -1225,16 +1214,12 @@ export interface Config {
     enabled?: boolean;
     /** Port for the local session server. Default: 7890. */
     port?: number;
-    /** Auto-start the session server when Walnut starts. Default: true when enabled. */
-    auto_start?: boolean;
   };
   hosts?: Record<string, {
     hostname: string;
     user?: string;
     port?: number;
     label?: string;
-    /** Session server WebSocket URL for this host. Overrides CLI for this host. */
-    session_server_url?: string;
     /** Shell snippet run before claude on remote sessions (e.g. 'source $HOME/.nvm/nvm.sh').
      *  Use to set up PATH for node managers (nvm, fnm, volta, asdf) or other env. */
     shell_setup?: string;
@@ -1407,7 +1392,6 @@ export interface Config {
      *  tool-list context in every session, so it stays opt-in. */
     premount_walnut_mcp?: boolean;
   };
-  heartbeat?: import('../heartbeat/types.js').HeartbeatConfig;
   /** Inbox Triage — batched mail/Slack triage. Opt-in; every default lives at
    *  the reader (src/core/triage/config.ts), never in DEFAULT_CONFIG. */
   triage?: import('./triage/types.js').TriageConfig;
@@ -1470,29 +1454,6 @@ export interface Config {
       ignore?: string[];
     };
   };
-  tools?: {
-    exec?: {
-      security?: string;
-      deny?: string[];
-      allow?: string[];
-      timeout?: number;
-      max_output?: number;
-    };
-    slack?: { bot_token?: string; default_channel?: string };
-    tts?: { provider?: string; voice?: string };
-    web_search?: {
-      provider?: string;
-      api_key?: string;
-      perplexity_api_key?: string;
-      perplexity_base_url?: string;
-      perplexity_model?: string;
-      timeout?: number;
-    };
-    web_fetch?: {
-      max_chars?: number;
-      timeout?: number;
-    };
-  };
   search?: import('./embedding/types.js').EmbeddingConfig;
   git_versioning?: {
     enabled?: boolean;              // default: true
@@ -1535,20 +1496,6 @@ export interface Config {
       priority?: number;
       timeoutMs?: number;
     }>;
-  };
-  developer?: {
-    /** Show "UI ONLY" triage messages in chat. Default: false (hidden for less noise). */
-    show_ui_only_triage?: boolean;
-    /** Show "UI ONLY" session result messages. Default: false. */
-    show_ui_only_session?: boolean;
-    /** Show "UI ONLY" session error messages. Default: false. */
-    show_ui_only_session_error?: boolean;
-    /** Show "UI ONLY" subagent result messages. Default: false. */
-    show_ui_only_subagent?: boolean;
-    /** Show "UI ONLY" heartbeat messages. Default: false. */
-    show_ui_only_heartbeat?: boolean;
-    /** Show "UI ONLY" agent error messages. Default: false. */
-    show_ui_only_agent_error?: boolean;
   };
   /** "Ask AI to fix" on an error notification starts a coding session in
    *  Walnut's own source. Resolution order: the checkout the server runs from,

@@ -40,7 +40,7 @@ export interface EngineUiCaps {
   providerModelCatalog: boolean;
   /** Permission modes are provider config options, not the Claude mode set. */
   configModes: boolean;
-  /** The engine's own settings files can be read and edited from Settings › Engines. */
+  /** The engine's own settings files can be read and edited from the session's Engine settings popover. */
   ownSettings: boolean;
   /** The engine's CLI/adapter is present on this machine. */
   installed: boolean;

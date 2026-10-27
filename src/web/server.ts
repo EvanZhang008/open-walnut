@@ -172,11 +172,6 @@ import { initLetterPush } from '../core/push/letter-push.js'
 import { takeQosClampRequest } from '../lib/background-qos.js'
 import { enqueueMainAgentTurn, getQueueStatus, recordLastTurnTokens } from './agent-turn-queue.js'
 import { activeRelayedTurnCount } from './routes/chat-turn-relay.js'
-import {
-  startHeartbeatRunner,
-  isHeartbeatOk,
-  type HeartbeatRunnerHandle,
-} from '../heartbeat/index.js'
 
 /**
  * Who a job turned off by the boot policy is off for, in its skip line: the
@@ -602,7 +597,6 @@ let hostWarmup: import('../core/hosts/host-warmup.js').HostWarmup | null = null
 let unsubscribeHostPhase: (() => void) | null = null
 /** Unhooks the local Claude Code readiness → system:health push. */
 let unsubscribeLocalClaude: (() => void) | null = null
-let heartbeatHandle: HeartbeatRunnerHandle | null = null
 /** The primary's leader heartbeat, or the companion's takeover loop (core/leader/). */
 let leaderLoopHandle: { stop: () => void } | null = null
 let searchCopyHandle: { stop: () => Promise<void> } | null = null
@@ -1745,7 +1739,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         try {
           const laneTs = new Date().toISOString()
           // The model context lives in the CLI's own transcript, so only the
-          // human-visible notification is persisted (same shape heartbeat uses).
+          // human-visible notification is persisted.
           await chatHistory.addNotification({
             role: 'user', content: cronPrompt, source: 'cron', cronJobName: jobName,
             notification: true, agentId: 'general', conversationId, timestamp: laneTs,
@@ -1840,10 +1834,6 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         // A routine whose work runs on a host keeps its clock there (clock-routine-v1):
         // a changed definition may move it, so the hosts' sets are compiled again.
         void import('../core/routines/clock-placement.js').then((m) => m.scheduleClockPlacement()).catch(() => {})
-      }
-      // Wake heartbeat when a cron job finishes
-      if (evt.action === 'finished' && heartbeatHandle) {
-        heartbeatHandle.requestNow('cron-completed', `Cron job "${evt.summary ?? evt.jobId}" just finished.`)
       }
     },
   })
@@ -2057,7 +2047,6 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   app.use('/api/commands', createCommandsRouter())
   app.use('/api/skills', createSkillsRouter())
   app.use('/api/slash-commands', createSlashCommandsRouter())
-  app.use('/api/heartbeat', (await import('./routes/heartbeat.js')).heartbeatRouter)
   app.use('/api/keep-awake', (await import('./routes/keep-awake.js')).keepAwakeRouter)
   app.use('/api/timeline', timelineRouter)
   app.use('/api/notes', notesRouter)
@@ -2369,7 +2358,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // ~/.claude/skills stays read-only), repositories — mostly A-class.
   app.use('/api/v1', libraryV1Router)
   // Console extras (additive, Wave 3): usage breakdowns, provider status
-  // (key_hint stripped), search-index status, integrations read, timeline, heartbeat —
+  // (key_hint stripped), search-index status, integrations read, timeline —
   // primary-bound stores answer 501 on a REPLICA.
   app.use('/api/v1', consoleExtrasV1Router)
   app.use('/api/browser-logs', browserLogsRouter)
@@ -2403,7 +2392,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // writes it, but the process holding the turn's promise dies, so nothing
   // persists it into the conversation. The deploy waits on this count before
   // killing. Two sources, deliberately: the per-agent turn queue covers every
-  // transport (WS chat, REST, cron/heartbeat/triage), and the relay map covers
+  // transport (WS chat, REST, cron/triage), and the relay map covers
   // the window where a phone turn is accepted but not yet enqueued.
   //
   // Read-only, purely in-memory (two map walks, no I/O, no await) so it stays
@@ -3998,7 +3987,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     // answer (core/hosts/cloud-box-probe.ts), never with a config write, so the
     // config:changed refresh above cannot see it: refresh the map here, push the
     // frame, and tell open pickers their host list moved (a direct broadcast,
-    // not a bus CONFIG_CHANGED, which would also restart the heartbeat).
+    // not a bus CONFIG_CHANGED, which would also re-read every config consumer).
     const { onCloudBoxStateChange, CLOUD_BOX_HOST_ALIAS } = await import('../core/hosts/cloud-box-host.js')
     const { clearDaemonFailureCache, expediteReconnect } = await import('../providers/daemon-connection.js')
     const offCloudBox = onCloudBoxStateChange((next) => {
@@ -4100,35 +4089,6 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       }
     }
   }, { global: true, interest: ['task:created', 'task:updated', 'task:completed', 'task:deleted'] })
-
-  // -- Heartbeat config reload: restart runner when heartbeat config changes --
-  bus.subscribe('heartbeat-config', async (event) => {
-    if (event.name !== EventNames.CONFIG_CHANGED) return
-    // Re-read config and restart heartbeat if settings changed
-    try {
-      const { getConfig } = await import('../core/config-manager.js')
-      const newConfig = await getConfig()
-      const wasRunning = heartbeatHandle !== null
-      const shouldRun = newConfig.heartbeat?.enabled === true
-
-      if (wasRunning && !shouldRun) {
-        // Heartbeat was disabled
-        heartbeatHandle?.stop()
-        heartbeatHandle = null
-        log.heartbeat.info('heartbeat disabled via config change')
-      } else if (shouldRun) {
-        // Config changed — restart with new settings
-        heartbeatHandle?.stop()
-        heartbeatHandle = null
-        await startHeartbeatIfConfigured()
-        log.heartbeat.info('heartbeat restarted with new config')
-      }
-    } catch (err) {
-      log.heartbeat.warn('heartbeat config reload failed', {
-        error: err instanceof Error ? err.message : String(err),
-      })
-    }
-  })
 
   // -- Re-check provider readiness when config changes (e.g. user adds API key in Settings) --
   bus.subscribe('setup-health', async (event) => {
@@ -5140,8 +5100,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         // conversation into the costly model). Default 'off': the triage subagent already
         // wrote task.summary/note/phase via its own tools, so the main agent sees the work
         // when it next polls the task — no real-time wake needed. 'realtime' = legacy behavior
-        // (enqueue a main-agent turn now). 'buffered' = don't enqueue, but nudge the heartbeat
-        // to review on its next cycle.
+        // (enqueue a main-agent turn now). 'buffered' used to nudge the heartbeat, which is
+        // gone, so it now acts as 'off'.
         const notifyMode = triageConf2.agent?.triage?.notify_mode ?? 'off'
         const willNotifyMainAgent = !!(triageUpdate && taskId) && notifyMode === 'realtime'
 
@@ -5156,14 +5116,6 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
           displayTaskRef = taskId ?? ''
         }
         const triageTimestamp = new Date().toISOString()
-
-        // Wake heartbeat after session triage — only when notify_mode allows it. In 'off'
-        // mode the user wants the main agent fully quiet (poll-only), so skip the wake too;
-        // waking it would re-introduce the cost via a heartbeat turn. 'buffered' and
-        // 'realtime' both let the heartbeat review on its next cycle.
-        if (heartbeatHandle && notifyMode !== 'off') {
-          heartbeatHandle.requestNow('session-ended', `Session for task ${taskId} just completed and was triaged.`)
-        }
 
         if (willNotifyMainAgent) {
           // ── Single Source of Truth: AI and human see the SAME content ──
@@ -5454,11 +5406,6 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     log.cron.error('failed to start cron service', { error: err instanceof Error ? err.message : String(err) })
   })
 
-  // -- Start heartbeat runner (if enabled in config) --
-  startHeartbeatIfConfigured().catch((err) => {
-    log.heartbeat.error('failed to start heartbeat', { error: err instanceof Error ? err.message : String(err) })
-  })
-
   // -- Inbox Triage: reconcile its ONE routine with config.triage --
   // A REPLICA must not touch cron-jobs.json (the primary owns it — the
   // dual-engine blind-write rule), and the primary's git-synced config would
@@ -5735,111 +5682,6 @@ function startGitAutoCommit(): { stop: () => void; health: GitAutoCommitHealth }
     },
     health,
   }
-}
-
-/**
- * Start the heartbeat runner if enabled in config.
- * The heartbeat periodically wakes the AI agent to check HEARTBEAT.md
- * and decide whether anything needs the user's attention.
- */
-async function startHeartbeatIfConfigured(): Promise<void> {
-  // config.yaml is git-synced from the primary box — if heartbeat is enabled
-  // there, running it here too would double-fire the same agent turns.
-  if (!bootPolicy('heartbeat')) {
-    log.heartbeat.info(`${offByPolicy()}: heartbeat skipped (primary box owns heartbeat turns)`)
-    return
-  }
-  // An ephemeral server runs over a copy of the real config: its heartbeat would
-  // fire the user's real agent turns a second time.
-  if (IS_EPHEMERAL) {
-    log.heartbeat.info('ephemeral server: heartbeat skipped (the real Walnut owns heartbeat turns)')
-    return
-  }
-  const { getConfig } = await import('../core/config-manager.js')
-  const config = await getConfig()
-
-  if (!config.heartbeat?.enabled) {
-    log.heartbeat.info('heartbeat disabled (set heartbeat.enabled: true in config.yaml)')
-    return
-  }
-
-  heartbeatHandle = startHeartbeatRunner(
-    config.heartbeat,
-    {
-      runAgentTurn: async (prompt) => {
-        // Run heartbeat as a main-agent turn, serialized with chat and triage
-        return enqueueMainAgentTurn('heartbeat', async () => {
-          // Background turn → general's stable MAIN conversation (see rationale in
-          // broadcastCronNotification above).
-          const { getMainConversationId } = await import('../core/conversations.js')
-          const conversationId = await getMainConversationId('general')
-          const heartbeatUserContent = '[Heartbeat] Periodic self-check…'
-          const heartbeatTs = new Date().toISOString()
-
-          // Broadcast heartbeat as a user message so frontend shows it
-          broadcastEvent('heartbeat:chat-message', {
-            content: heartbeatUserContent,
-            timestamp: heartbeatTs,
-            conversationId,
-          })
-          // Persist the heartbeat trigger as a user notification
-          await chatHistory.addNotification({
-            role: 'user',
-            content: heartbeatUserContent,
-            timestamp: heartbeatTs,
-            source: 'heartbeat',
-            notification: true,
-            agentId: 'general', conversationId,
-          })
-
-          // A silent "all clear" is stored as one compact line instead of the
-          // routine full response.
-          const persistSilentHeartbeat = () => chatHistory.addNotification({
-            role: 'assistant',
-            content: '**Heartbeat** — all clear, nothing needs attention.',
-            source: 'heartbeat',
-            notification: true,
-            agentId: 'general', conversationId,
-          })
-
-          const { runLaneTurn } = await import('../core/sessions/lane-turn.js')
-          const { sessionId: laneSessionId, resultText } =
-            await runLaneTurn('general', conversationId, prompt, { source: 'heartbeat' })
-          // heartbeat-runner records the error and emits heartbeat:error.
-          if (resultText === null) throw new Error('heartbeat lane turn timed out')
-          if (resultText) {
-            broadcastEvent('agent:response', { text: resultText, source: 'heartbeat', agentId: 'general', conversationId })
-          }
-          if (isHeartbeatOk(resultText)) {
-            await persistSilentHeartbeat()
-          } else {
-            // The model context lives in the CLI's transcript, so the substantive
-            // answer is persisted as one assistant notification (with a link back
-            // to the session that produced it) rather than as API messages.
-            await chatHistory.addNotification({
-              role: 'assistant', content: resultText, source: 'heartbeat',
-              notification: true, sessionId: laneSessionId,
-              agentId: 'general', conversationId,
-            })
-          }
-          // No background compaction here — the CLI compacts its own context.
-          return resultText
-        })
-      },
-
-      isQueueBusy: () => {
-        const status = getQueueStatus()
-        return status.active > 0
-      },
-
-      broadcastEvent,
-    },
-  )
-}
-
-/** Expose heartbeat handle for event-driven triggers from outside server.ts. */
-export function getHeartbeatHandle(): HeartbeatRunnerHandle | null {
-  return heartbeatHandle
 }
 
 /** Cooperative yield — give the event loop a chance to run pending I/O / handlers. */
@@ -6329,10 +6171,6 @@ export async function stopServer(): Promise<void> {
   localDaemonLaneOwner++
   localDaemonLane?.stop()
   localDaemonLane = null
-  if (heartbeatHandle) {
-    heartbeatHandle.stop()
-    heartbeatHandle = null
-  }
   // Tell the companion this is a restart, not the Mac going away, so a deploy
   // never hands it the lead. Bounded: never holds the shutdown up.
   leaderLoopHandle?.stop()
@@ -6674,7 +6512,6 @@ export async function stopServer(): Promise<void> {
   bus.unsubscribe('web-ui')
   bus.unsubscribe('task-outbox')
   bus.unsubscribe('main-ai')
-  bus.unsubscribe('heartbeat-config')
   bus.unsubscribe('plugin-config-reload')
   bus.unsubscribe('plugin-late-recovery')
   bus.unsubscribe('embedding-sync')

@@ -339,7 +339,6 @@ export const MOBILE_STAGED_IMAGES_DIR = path.join(IMAGES_DIR, 'mobile');
 // then carries the file path instead of megabytes of text. /tmp like
 // IMAGES_DIR: same lifecycle, same remote-transfer treatment.
 export const PASTES_DIR = path.join(LOG_DIR, 'pastes');
-export const HEARTBEAT_FILE = path.join(WALNUT_HOME, 'HEARTBEAT.md');
 export const COMMANDS_DIR = path.join(WALNUT_HOME, 'commands');
 // Resolve builtin commands dir. tsup inlines this into each entry point
 // (dist/cli.js, dist/web/server.js) so import.meta.url varies by bundle.

@@ -742,7 +742,7 @@ async function resolveLane(
 ): Promise<LaneSession> {
   const config = await getConfig();
   // The chat engine: the caller's explicit choice (a relay that already knows)
-  // > the ONE default engine (Settings > Engines), the same one coding sessions,
+  // > the ONE default engine (Settings > Sessions), the same one coding sessions,
   // Ask Walnut asks and routines inherit. A separate chat-only knob existed for
   // a day and was removed: users read "which engine does Walnut use" as one
   // question. resolveDefaultEngine also degrades an uninstalled or unknown

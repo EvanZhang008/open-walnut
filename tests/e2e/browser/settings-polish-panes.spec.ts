@@ -1,5 +1,5 @@
 /**
- * Settings per-pane polish: narrow widths, Engines headings, device names,
+ * Settings per-pane polish: narrow widths, device names,
  * Calendar, Voice, Hooks, Remote Hosts. Same conventions as settings-polish.spec.ts:
  * both engines, real nav clicks after the first load, config writes
  * intercepted so the fixture config never changes under another spec.
@@ -50,12 +50,6 @@ async function recordWrites(page: Page): Promise<string[]> {
   return writes
 }
 
-/** Engines rows loaded (the fixture's Claude Code settings). */
-async function openEngines(page: Page) {
-  await clickNav(page, 'engines')
-  await expect(page.getByTestId('engine-setting-row-alwaysThinkingEnabled')).toBeVisible({ timeout: 20_000 })
-}
-
 /** Rendered line count of an element from its height and line-height. */
 async function lines(page: Page, selector: string): Promise<Array<{ text: string; lines: number }>> {
   return page.evaluate((sel) => Array.from(document.querySelectorAll<HTMLElement>(sel))
@@ -75,81 +69,37 @@ async function narrowWithSidebar(page: Page) {
     .toBeLessThan(700)
 }
 
-test('N3-01, C42: at 660px no Engines or General label wraps word by word and no control leaves its row', async ({ page }) => {
+test('N3-01, C42: at 660px no Sessions or General label wraps word by word and no control leaves its row', async ({ page }) => {
   await recordWrites(page)
   await openSettings(page)
   await narrowWithSidebar(page)
-  await openEngines(page)
-  const labels = await lines(page, '.settings-pane .engine-setting-row-pane .settings-row-label')
-  expect(labels.length).toBeGreaterThan(10)
+  // Sessions holds the Default engine row since the Engines pane was retired.
+  await clickNav(page, 'sessions')
+  await expect(page.getByTestId('default-engine-row')).toBeVisible()
+  const labels = await lines(page, '.settings-pane .settings-row-label')
+  expect(labels.length).toBeGreaterThan(4)
   // A long label may take two lines; a word-per-line column is three or more.
   expect(labels.filter((l) => l.lines > 2), JSON.stringify(labels)).toEqual([])
   // Every label keeps at least 45% of its row, or its row put the control underneath.
-  const squeezed = await page.evaluate(() => Array.from(document.querySelectorAll<HTMLElement>('.settings-pane .engine-setting-row-pane'))
-    .filter((r) => r.getBoundingClientRect().height > 0)
+  const squeezed = await page.evaluate(() => Array.from(document.querySelectorAll<HTMLElement>('.settings-pane .settings-row'))
+    .filter((r) => r.getBoundingClientRect().height > 0 && r.querySelector(':scope > .settings-row-copy') && r.querySelector(':scope > .settings-row-actions'))
     .map((r) => {
       const row = r.getBoundingClientRect()
-      const copy = r.querySelector('.settings-row-copy')!.getBoundingClientRect()
-      const actions = r.querySelector('.settings-row-actions')!
+      const copy = r.querySelector(':scope > .settings-row-copy')!.getBoundingClientRect()
+      const actions = r.querySelector(':scope > .settings-row-actions')!
       const a = actions.getBoundingClientRect()
       const clipped = Array.from(actions.querySelectorAll<HTMLElement>('*')).some((el) => el.scrollWidth > el.clientWidth + 1 && getComputedStyle(el).overflowX !== 'visible')
-      return { key: r.dataset.testid, share: copy.width / row.width, below: a.top >= copy.bottom - 1, out: a.right > row.right + 1, clipped }
+      return { key: r.dataset.testid ?? r.querySelector('.settings-row-label')?.textContent, share: copy.width / row.width, below: a.top >= copy.bottom - 1, out: a.right > row.right + 1, clipped }
     })
     .filter((r) => (r.share < 0.45 && !r.below) || r.out || r.clipped))
   expect(squeezed, JSON.stringify(squeezed)).toEqual([])
-  await page.screenshot({ path: `${SHOTS}/${ENGINE}-660-engines.png` })
+  await page.screenshot({ path: `${SHOTS}/${ENGINE}-660-sessions.png` })
   await clickNav(page, 'general')
   const general = await lines(page, '.settings-pane .settings-row-label')
   expect(general.filter((l) => l.lines > 2), JSON.stringify(general)).toEqual([])
   const helps = await lines(page, '.settings-pane .settings-row-help')
   expect(helps.filter((l) => l.lines > 3), JSON.stringify(helps)).toEqual([])
   await page.screenshot({ path: `${SHOTS}/${ENGINE}-660-general.png` })
-})
-
-test('N3-02: Engines headings are real topics, never "continued"', async ({ page }) => {
-  await recordWrites(page)
-  await openSettings(page)
-  await openEngines(page)
-  const headings = await page.locator('.settings-pane .settings-group-title').allInnerTexts()
-  expect(headings.filter((h) => /continued/i.test(h))).toEqual([])
-  expect(headings).toEqual(expect.arrayContaining(['Model', 'Replies', 'Workflows', 'Safety']))
-})
-
-test('N3-06, N3-07: one source-tag column per group; free text goes under its label', async ({ page }) => {
-  await recordWrites(page)
-  await page.setViewportSize({ width: 1280, height: 800 })
-  await openSettings(page)
-  await openEngines(page)
-  const spread = await page.evaluate(() => Array.from(document.querySelectorAll('.settings-pane .engine-settings-grid')).map((g) => {
-    const xs = Array.from(g.querySelectorAll<HTMLElement>('.engine-setting-row-pane .engine-pane-tag-slot .settings-tag'))
-      .filter((t) => t.getBoundingClientRect().height > 0).map((t) => Math.round(t.getBoundingClientRect().left))
-    return xs.length ? Math.max(...xs) - Math.min(...xs) : 0
-  }))
-  expect(spread.every((d) => d <= 1), JSON.stringify(spread)).toBe(true)
-  // Every row shows its source, tri-state rows included.
-  const untagged = await page.locator('.settings-pane .engine-setting-row-pane:not(:has(.settings-tag))').count()
-  expect(untagged).toBe(0)
-  const model = page.getByTestId('engine-setting-row-model')
-  const help = await lines(page, '[data-testid="engine-setting-row-model"] .settings-row-help')
-  expect(help[0].lines).toBeLessThanOrEqual(2)
-  const labelBox = await model.locator('.settings-row-label').boundingBox()
-  const inputBox = await model.locator('input.engine-setting-text').boundingBox()
-  expect(Math.abs(inputBox!.x - labelBox!.x)).toBeLessThanOrEqual(1)
-  expect(inputBox!.y).toBeGreaterThan(labelBox!.y + labelBox!.height)
-  const langFont = await page.getByTestId('engine-setting-row-language').locator('input').evaluate((el) => getComputedStyle(el).fontFamily)
-  expect(langFont).not.toMatch(/mono|menlo|courier/i)
-  await page.screenshot({ path: `${SHOTS}/${ENGINE}-1280-engines.png` })
-})
-
-test('N3-17: an overridden engine row has no live control, Reset included', async ({ page }) => {
-  await recordWrites(page)
-  await openSettings(page)
-  await openEngines(page)
-  const overridden = page.locator('.settings-pane .engine-setting-row-pane[aria-disabled="true"]')
-  expect(await overridden.count()).toBeGreaterThan(0)
-  const live = await overridden.evaluateAll((rows) => rows.flatMap((r) => Array.from(r.querySelectorAll<HTMLButtonElement | HTMLInputElement | HTMLSelectElement>('button, input, select'))
-    .filter((el) => !el.disabled && !el.closest('fieldset:disabled')).map((el) => `${(r as HTMLElement).dataset.testid}: ${el.textContent || el.tagName}`)))
-  expect(live).toEqual([])
 })
 
 test('N3-03: the placeholder-shaped name "Test phone" pairs as Test-phone, no rule error', async ({ page }) => {
@@ -233,7 +183,9 @@ test('N3-09, N3-10: the compact bar is opaque from its first frame; header actio
   const title = (await page.locator('.settings-pane .settings-pane-title').first().boundingBox())!
   const trailing = (await page.locator('.settings-pane .settings-pane-header-trailing').first().boundingBox())!
   expect(Math.abs(trailing.y + trailing.height / 2 - (title.y + title.height / 2))).toBeLessThanOrEqual(1)
-  await openEngines(page)
+  // A pane tall enough to scroll 700px (the Engines pane this used is gone).
+  await clickNav(page, 'hooks')
+  await expect(page.locator('.hook-row').first()).toBeVisible({ timeout: 20_000 })
   const state = await page.evaluate(async () => {
     const scroller = document.querySelector<HTMLElement>('.settings-pane')!
     const inner = document.querySelector<HTMLElement>('.settings-pane .settings-pane-stickybar-inner')!
@@ -360,7 +312,6 @@ test('N3-23, N3-24, N3-25, N3-26: Advanced dims the SDK port, shows seconds and 
   const unit = (id: string) => page.locator('.settings-input-with-unit', { has: page.locator(`#${id}`) }).locator('.settings-input-unit')
   await expect(unit('git-debounce')).toHaveText('seconds')
   await expect(unit('git-interval')).toHaveText('minutes')
-  await expect(unit('exec-timeout')).toHaveText('seconds')
   await page.getByTestId('advanced-disclosure-raw').click()
   const pre = page.getByTestId('advanced-raw-config')
   const css = await pre.evaluate((el) => ({ pb: parseFloat(getComputedStyle(el).paddingBottom), bw: parseFloat(getComputedStyle(el).borderBottomWidth) }))
@@ -445,7 +396,7 @@ test('evidence: 660px panes keep controls inside their groups with no horizontal
   await openSettings(page)
   await narrowWithSidebar(page)
   // Plugins is measured on the Apps page its nav row now opens, with the same rule.
-  for (const id of ['general', 'tasks', 'engines', 'remote-hosts', 'advanced', 'plugin-store']) {
+  for (const id of ['general', 'tasks', 'sessions', 'remote-hosts', 'advanced', 'plugin-store']) {
     const apps = id === 'plugin-store'
     if (apps) await openApps(page)
     else await clickNav(page, id)

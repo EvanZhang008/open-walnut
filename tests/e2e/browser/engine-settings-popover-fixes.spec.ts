@@ -379,7 +379,7 @@ test.describe('engine settings popover: nitpick fixes', () => {
     await expect(dialog).toHaveCount(0, { timeout: 5_000 })
   })
 
-  test('off toggle visible on a hovered row, one host rule, footer link as one phrase', async ({ page }) => {
+  test('off toggle visible on a hovered row, one host rule, each other group as one phrase', async ({ page }) => {
     const [panel] = await openPanels(page, [sidA])
     const menu = await openPlusMenu(panel)
     await expect(menu.locator('button.chat-plus-menu-item', { hasText: 'Engine settings' }))
@@ -391,8 +391,11 @@ test.describe('engine settings popover: nitpick fixes', () => {
     await expect(dialog).toHaveAttribute('aria-label', new RegExp(` on ${HOST_LABEL}$`))
     await expect(dialog.getByTestId('engine-settings-scope-note')).toContainText(`on ${HOST_LABEL},`)
     expect(await dialog.evaluate((el) => (el as HTMLElement).innerText)).not.toMatch(/this Mac/)
-    // The link is one phrase.
-    await expect(dialog.locator('a.engine-settings-more-link')).toHaveText(/^.+ settings \(\d+\) are in Settings › Engines$/)
+    // Each other group's summary is one phrase, "<Title> (N)"; no footer link.
+    const summaries = dialog.locator('details.engine-settings-popover-group > summary')
+    expect(await summaries.count()).toBeGreaterThan(0)
+    for (const text of await summaries.allTextContents()) expect(text).toMatch(/^.+ \(\d+\)$/)
+    await expect(dialog.locator('a.engine-settings-more-link')).toHaveCount(0)
     // The verbose row is seeded off; hovered, its track keeps a border and a background unlike the row's.
     const row = popoverRow(dialog, 'verbose')
     await row.scrollIntoViewIfNeeded()

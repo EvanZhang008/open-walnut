@@ -100,7 +100,7 @@ describe('companionAnswers: the routes the companion keeps', () => {
     ['POST', '/sessions/abc/restart'],
     ['GET', '/sessions/recent'],
     ['POST', '/actions/invoke'],
-    ['GET', '/heartbeat/checklist'],
+    ['GET', '/memory/user'],
     ['GET', '/memory/global'],
   ])('%s %s goes to the Mac while it answers', (method, rel) => {
     expect(companionAnswers(method, rel)).toBeNull()

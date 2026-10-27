@@ -26,7 +26,6 @@ export const log = {
   cron: createSubsystemLogger('cron'),
   notif: createSubsystemLogger('notif'),
   usage: createSubsystemLogger('usage'),
-  heartbeat: createSubsystemLogger('heartbeat'),
   git: createSubsystemLogger('git'),
   browser: createSubsystemLogger('browser'),
   audio: createSubsystemLogger('audio'),

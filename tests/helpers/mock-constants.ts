@@ -106,7 +106,6 @@ export function createMockConstants(prefix = 'walnut-test', overrides: Record<st
     REMOTE_IMAGES_DIR: path.join(tmpBase, 'images', 'remote'),
     MOBILE_STAGED_IMAGES_DIR: path.join(tmpBase, 'images', 'mobile'),
     PASTES_DIR: path.join(tmpBase, 'pastes'),
-    HEARTBEAT_FILE: path.join(tmpBase, 'HEARTBEAT.md'),
     LOG_DIR: logDir,
     // Per-test dtach socket dir. MUST stay isolated: the terminal orphan reaper
     // kills every socket here whose sessionId is missing from the (empty) test

@@ -318,7 +318,7 @@ test('F08: the compact bar pins flush at the pane top with nothing above it', as
   await recordWrites(page)
   await openSettings(page)
   // Plugins left Settings for the Apps page, so its pane is no longer one of these.
-  for (const id of ['hooks', 'engines']) {
+  for (const id of ['hooks', 'tasks']) {
     await clickNav(page, id)
     await page.waitForTimeout(300)
     // Panes fill in after their own reads; scroll once there is room to scroll.
@@ -374,10 +374,12 @@ test('F20 F21 F22: filter Enter lands on the row, flashes it, and the heading ha
   await openSettings(page)
   await clickNav(page, 'sessions')
   const filter = page.getByTestId('settings-filter')
-  await filter.fill('all clear')
+  // A keyword that names a row in another pane (the Heartbeat all clear row this
+  // used went with Chat notifications on 2026-10-27).
+  await filter.fill('show task priority')
   await filter.press('Enter')
-  await expect(page.getByTestId(NAV('general'))).toHaveAttribute('aria-current', 'page')
-  const row = page.locator('.settings-row:has(#settings-notify-heartbeat)')
+  await expect(page.getByTestId(NAV('tasks'))).toHaveAttribute('aria-current', 'page')
+  const row = page.locator('.settings-row:has(#settings-show-priority)')
   await expect(row).toHaveClass(/settings-anchor-flash/, { timeout: 10_000 })
   await expect(row).toBeInViewport()
   const peak = await row.evaluate((el) => Number((getComputedStyle(el).backgroundColor.match(/[\d.]+/g) ?? [])[3] ?? 0))

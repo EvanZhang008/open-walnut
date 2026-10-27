@@ -775,25 +775,6 @@ export function useChat(agentId: string = 'general', conversationId: string | nu
     }
   });
 
-  // Handle heartbeat chat messages — show heartbeat triggers in chat (General only)
-  // Heartbeat always triggers an agent response, so always set streaming indicator
-  useEvent('heartbeat:chat-message', (data) => {
-    if (agentIdRef.current !== 'general') return;
-    const { content, timestamp } = data as { content: string; timestamp: string };
-    setMessages((prev) => [
-      ...prev,
-      {
-        key: nextMessageKey(),
-        role: 'user',
-        content,
-        timestamp,
-        source: 'heartbeat',
-        notification: true,
-      },
-    ]);
-    setIsStreaming(true);
-  });
-
   // Handle session results — show completed session output in chat (General only)
   useEvent('session:result', (data) => {
     if (agentIdRef.current !== 'general') return;

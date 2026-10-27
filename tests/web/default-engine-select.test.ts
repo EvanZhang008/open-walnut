@@ -1,5 +1,5 @@
 /**
- * Settings › Engines — the "Default engine for new sessions" picker's logic.
+ * Settings › Sessions: the "Default engine" picker's logic.
  *
  * The save shape is the assertion with teeth: `updateConfig` replaces a whole
  * top-level key, so a patch of `{ defaults: { engine } }` would delete the

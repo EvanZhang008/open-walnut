@@ -10,20 +10,19 @@ const EXPECTED_IDS = [
   // (ReposSection and its API stay; only the Settings entry is gone).
   'hooks',
   // No separate chat-engine or provider entry: the one default engine lives in
-  // Engines, and the API alternative is folded under Advanced (last below).
+  // Sessions, and the API alternative is folded under Advanced (last below).
   'general',
   // Tasks owns task defaults + Task Summary; Focus Tiers renders under it and
   // shares its nav entry (navHidden).
-  // Sessions = how Walnut runs an engine; Engines = the engine's OWN settings
-  // (its command-line config screen's keys) on the host the sessions run on.
-  // Engines sits directly after Sessions, which is the next question a reader asks.
-  'tasks', 'focus-tiers', 'tags', 'sessions', 'engines',
+  // Sessions = how Walnut runs an engine, its default engine included. No
+  // Engines entry (removed 2026-10-27): an engine's OWN settings are in the
+  // session's Engine settings popover.
+  'tasks', 'focus-tiers', 'tags', 'sessions',
   // `stt` is labelled Voice and also carries Text-to-Speech now.
   // No `jev` row: Jev is one runner choice inside Tasks › Smart task creation.
-  // Inbox Triage sits directly after Heartbeat: both are "Walnut wakes itself up
-  // and works", and it is the question a reader asks next. Mail rules follows
+  // No Integrations or Heartbeat entry (removed 2026-10-27). Mail rules follows
   // Triage, which reads only Important mail when grouping is on.
-  'stt', 'audio-capture', 'integrations', 'calendar', 'permissions', 'heartbeat', 'triage', 'mail-rules', 'search', 'backup',
+  'stt', 'audio-capture', 'calendar', 'permissions', 'triage', 'mail-rules', 'search', 'backup',
   // Phones & Cloud: `devices` is the nav entry, `cloud` renders under it (navHidden).
   'devices', 'cloud', 'remote-hosts', 'advanced',
   // Use an API instead of Claude Code: renders under Advanced (navHidden).

@@ -1,16 +1,16 @@
 /**
- * Background PRODUCERS — cron, the heartbeat, and triage.
+ * Background PRODUCERS — cron and triage.
  *
  * Chat is not the only thing that writes into the Personal AI's MAIN conversation:
- * these three run main-agent turns too, and every one of them is answered by the
+ * these two run main-agent turns too, and every one of them is answered by the
  * conversation's LANE session (a `claude` CLI). There is no second engine, so per
  * producer the two things worth asserting are: the turn is delivered to the lane,
  * and the producer still persists what the user needs to see.
  *
- * The fourth producer here is the isolated cron job, which does not join the
+ * The third producer here is the isolated cron job, which does not join the
  * conversation at all — it starts its own Personal AI session.
  *
- * What's real: Express server, the cron service + its deps, the heartbeat runner,
+ * What's real: Express server, the cron service + its deps,
  * the triage dispatch path, chat history, session records, the lane modules.
  * What's mocked: constants.js (temp dir) and the 'session-runner' bus subscriber —
  * a fake that answers a lane turn with a synthetic session:result and NEVER
@@ -25,8 +25,8 @@ import { createMockConstants } from '../../helpers/mock-constants.js'
 vi.mock('../../../src/constants.js', () => createMockConstants())
 
 import type { Server as HttpServer } from 'node:http'
-import { WALNUT_HOME, CONFIG_FILE, HEARTBEAT_FILE } from '../../../src/constants.js'
-import { startServer, stopServer, getHeartbeatHandle } from '../../../src/web/server.js'
+import { WALNUT_HOME, CONFIG_FILE } from '../../../src/constants.js'
+import { startServer, stopServer } from '../../../src/web/server.js'
 import { bus, EventNames, type BusEvent } from '../../../src/core/event-bus.js'
 import type { SessionStartEvent, SessionSendEvent } from '../../../src/core/event-types.js'
 import type { CronJob } from '../../../src/core/cron/types.js'
@@ -242,48 +242,6 @@ describe('cron runIsolatedAgentJob', () => {
     expect(task!.pinned).not.toBe(true)
     // The summary is what cron records + announces, so it must name the task.
     expect(res.summary).toContain(task!.id)
-  })
-})
-
-// ══════════════════════════════════════════════════════════════════
-//  Heartbeat — driven through the runner's own requestNow()
-// ══════════════════════════════════════════════════════════════════
-
-async function bootHeartbeat(): Promise<void> {
-  // every:'0' disables the periodic timer — requestNow is the only trigger, so
-  // the test drives exactly one turn.
-  await boot({ heartbeat: { enabled: true, every: '0' } })
-  await fs.writeFile(HEARTBEAT_FILE, '- Check whether anything needs attention\n', 'utf-8')
-  // startServer kicks the runner off fire-and-forget, so the handle can still be
-  // null right after boot.
-  await until(async () => getHeartbeatHandle() !== null)
-}
-
-describe('heartbeat runAgentTurn', () => {
-  it('delivers the heartbeat prompt to the lane and persists the answer', async () => {
-    await bootHeartbeat()
-    getHeartbeatHandle()!.requestNow('manual')
-    await until(async () => started.length > 0)
-
-    expect(started[0].message).toContain('HEARTBEAT.md contents')
-
-    const conv = await mainConversationId()
-    await until(async () => (await displayed(conv)).some((c) => c === 'lane answer'))
-    const entries = await displayed(conv)
-    expect(entries.some((c) => c.includes('[Heartbeat] Periodic self-check'))).toBe(true)
-  })
-
-  it('a HEARTBEAT_OK answer collapses to the compact "all clear" line', async () => {
-    // The silent-heartbeat rule is the whole reason the response text has to come
-    // back from the lane at all — it must keep working off the lane's text.
-    laneReply = 'HEARTBEAT_OK'
-    await bootHeartbeat()
-    getHeartbeatHandle()!.requestNow('manual')
-
-    const conv = await mainConversationId()
-    await until(async () => (await displayed(conv)).some((c) => c.includes('all clear, nothing needs attention')))
-    const entries = await displayed(conv)
-    expect(entries.some((c) => c === 'HEARTBEAT_OK')).toBe(false)
   })
 })
 

@@ -1,5 +1,5 @@
 /**
- * Settings polish: provider naming, disabled rows, Engines wrapping, usage
+ * Settings polish: provider naming, disabled rows, usage
  * tables, button weights and keyboard reach. Same conventions as
  * settings-layout-fields.spec.ts: both engines, real nav clicks, config writes
  * intercepted so the fixture config never changes under another spec.
@@ -73,13 +73,15 @@ async function effectiveOpacity(page: Page, selector: string): Promise<{ text: s
     }), selector)
 }
 
-test('N01: a named claude-cli provider reads as Claude Code in Tasks, Engines and Advanced', async ({ page }) => {
+test('N01: a named claude-cli provider reads as Claude Code in Tasks, Sessions and Advanced', async ({ page }) => {
   await recordWrites(page)
   await openSettings(page)
   await clickNav(page, 'tasks')
   await expect(page.getByTestId('smart-runner-default')).toHaveText('Claude Code')
   await expect(page.getByTestId('smart-runner-row')).not.toContainText('your API')
-  await clickNav(page, 'engines')
+  // The default engine row (in Sessions since the Engines pane was retired) warns only for an API.
+  await clickNav(page, 'sessions')
+  await expect(page.getByTestId('default-engine-row')).toBeVisible()
   await expect(page.locator('.settings-pane')).not.toContainText('Small background jobs use an API instead')
   await clickNav(page, 'advanced')
   await expect(page.getByTestId('providers-summary')).toHaveText('Off')
@@ -97,7 +99,7 @@ test('N02 N07: a disabled row is dimmed once, to 45%, inside disclosures too', a
   for (const r of adv) expect(r.op, r.text).toBeCloseTo(0.45, 2)
   await clickNav(page, 'triage')
   await page.waitForTimeout(300)
-  for (const pane of ['triage', 'backup', 'heartbeat']) {
+  for (const pane of ['triage', 'backup']) {
     if (pane !== 'triage') await clickNav(page, pane)
     await page.waitForTimeout(300)
     const rows = await effectiveOpacity(page, '.settings-pane .settings-row, .settings-pane .settings-row :is(input, button, [role="switch"])')
@@ -109,59 +111,6 @@ test('N02 N07: a disabled row is dimmed once, to 45%, inside disclosures too', a
   const dimmed = await effectiveOpacity(page, '.settings-pane .settings-row[aria-disabled="true"]')
   for (const r of dimmed) expect(r.op, r.text).toBeCloseTo(0.45, 2)
 })
-
-/** Per visible row: does the control sit under the label, and where. */
-async function rowWraps(page: Page, sel: string) {
-  return page.evaluate((s) => Array.from(document.querySelectorAll<HTMLElement>(s))
-    .filter((r) => r.getBoundingClientRect().height > 0)
-    .map((r) => {
-      const row = r.getBoundingClientRect()
-      const copy = r.querySelector<HTMLElement>(':scope > .settings-row-copy')!.getBoundingClientRect()
-      // From a 600px group the actions wrapper is display: contents (subgrid
-      // columns, N3-06), so the control and the Reset slot carry the geometry.
-      const ctl = (r.querySelector<HTMLElement>('.engine-setting-control') ?? r.querySelector<HTMLElement>(':scope > .settings-row-actions'))!.getBoundingClientRect()
-      const reset = r.querySelector<HTMLElement>('.engine-pane-reset-slot')?.getBoundingClientRect()
-      const group = r.closest('.settings-group')!.getBoundingClientRect()
-      const label = r.querySelector<HTMLElement>('.settings-row-label')!.getBoundingClientRect()
-      return {
-        label: (r.querySelector('.settings-row-label')?.textContent ?? '').trim(),
-        wide: r.hasAttribute('data-wide'),
-        wrapped: ctl.top >= copy.bottom - 1,
-        copyShare: Math.round((copy.width / row.width) * 100) / 100,
-        groupW: Math.round(group.width),
-        ctlLeftVsLabel: Math.round(ctl.left - label.left),
-        overflow: Math.round(Math.max(ctl.right, reset?.right ?? 0) - group.right),
-      }
-    }), sel)
-}
-
-for (const [w, h] of [[1280, 800], [900, 800], [720, 800]] as const) {
-  test(`N04: Engines rows wrap by group width only (${w}px)`, async ({ page }) => {
-    await page.setViewportSize({ width: w, height: h })
-    await recordWrites(page)
-    await openSettings(page)
-    await clickNav(page, 'engines')
-    await expect(page.locator('.engine-setting-row-pane').first()).toBeVisible({ timeout: 20_000 })
-    await expandAll(page)
-    const rows = await rowWraps(page, '.settings-pane .settings-row.engine-setting-row-pane')
-    expect(rows.length).toBeGreaterThan(3)
-    for (const r of rows) {
-      const why = `${r.label} ${JSON.stringify(r)}`
-      expect(r.overflow, why).toBeLessThanOrEqual(0)
-      if (r.groupW < 360) continue
-      // Free text (model ids, paths) always sits under its label, from the label's x (N3-07).
-      if (r.wide) {
-        expect(r.wrapped, why).toBe(true)
-        expect(Math.abs(r.ctlLeftVsLabel), why).toBeLessThanOrEqual(1)
-      } else if (r.groupW >= 600) {
-        expect(r.wrapped, why).toBe(false)
-      } else {
-        // Under 600px a label keeps 45% of its row, or the control drops under it (N3-01).
-        expect(r.wrapped || r.copyShare >= 0.45, why).toBe(true)
-      }
-    }
-  })
-}
 
 // A plugin's Apps are tiles on the Apps page now; the sub-rows left under a plugin row are its
 // providers (and an App that failed to load).
@@ -227,33 +176,7 @@ test('N08 N26: accuracy chips stay on one line, the list is capped, Refresh sits
   await expect(page.locator('.suggest-accuracy-record')).toHaveCount(20)
 })
 
-test('N12 N28 C8: Engines groups all have headings, labels start upper case, paths sit in code', async ({ page }) => {
-  await recordWrites(page)
-  await openSettings(page)
-  await clickNav(page, 'engines')
-  await expect(page.locator('.engine-setting-row-pane').first()).toBeVisible({ timeout: 20_000 })
-  const facts = await page.locator('.settings-pane').evaluate((pane) => {
-    const groups = Array.from(pane.querySelectorAll<HTMLElement>('.engine-settings-groups > *'))
-    const unheaded = groups.filter((g) => !g.querySelector('.settings-group-title') && !g.querySelector('.settings-disclosure-row'))
-    const files = Array.from(pane.querySelectorAll('.engine-settings-file .settings-row-label')).map((l) => (l.textContent ?? '').trim())
-    const floating = Array.from(pane.querySelectorAll('.settings-section > p.settings-group-footer, .settings-pane-body > p.engine-settings-note')).length
-    const note = pane.querySelector('[data-testid="engine-settings-note"]')
-    return { unheaded: unheaded.length, files, floating, noteInFooter: !!note?.closest('.settings-group-footer'),
-      notePathsInCode: note ? !/~\/\S+/.test(Array.from(note.childNodes).filter((n) => n.nodeType === 3).map((n) => n.textContent).join('')) : true }
-  })
-  expect(facts.unheaded).toBe(0)
-  for (const f of facts.files) expect(f.charAt(0), f).toBe(f.charAt(0).toUpperCase())
-  expect(facts.floating).toBe(0)
-  if (await page.getByTestId('engine-settings-note').count()) expect(facts.noteInFooter).toBe(true)
-  expect(facts.notePathsInCode).toBe(true)
-  // A tri-state Default segment is never paired with a visible "Default" tag.
-  const dup = await page.locator('.engine-setting-row-pane').evaluateAll((rows) => rows.filter((r) =>
-    Array.from(r.querySelectorAll('[role="radio"]')).some((s) => (s.textContent ?? '').trim() === 'Default')
-    && Array.from(r.querySelectorAll('.settings-tag')).some((t) => (t.textContent ?? '').trim() === 'Default')).length)
-  expect(dup).toBe(0)
-})
-
-test('N10 N11: an off host keeps its controls at full strength; text buttons end on the content edge', async ({ page }) => {
+test('N10: an off host keeps its controls at full strength', async ({ page }) => {
   await recordWrites(page)
   await openSettings(page)
   await clickNav(page, 'remote-hosts')
@@ -265,21 +188,7 @@ test('N10 N11: an off host keeps its controls at full strength; text buttons end
   for (const o of ops) expect(o.op, o.text).toBe(1)
   const label = await effectiveOpacity(page, '.rh-host-row[data-host-off="true"] .settings-row-label')
   expect(label[0].op).toBeCloseTo(0.45, 2)
-  // N11: a text button that ends a row has its glyphs on the content edge
-  // (its 6px padding hangs past it), like the Engines Reset slot.
-  await clickNav(page, 'engines')
-  await expect(page.locator('.engine-setting-row-pane').first()).toBeVisible({ timeout: 20_000 })
-  const edges = await page.locator('.settings-pane .engine-setting-row-pane').evaluateAll((rows) => rows
-    .filter((r) => r.getBoundingClientRect().height > 0).slice(0, 8).map((row) => {
-      const pad = parseFloat(getComputedStyle(row).paddingRight)
-      const btn = row.querySelector<HTMLElement>('.engine-setting-reset')!
-      const inner = parseFloat(getComputedStyle(btn).paddingRight)
-      return Math.round(row.getBoundingClientRect().right - pad - (btn.getBoundingClientRect().right - inner))
-    }))
-  expect(edges.length).toBeGreaterThan(0)
-  for (const e of edges) expect(Math.abs(e)).toBeLessThanOrEqual(1)
-  const deco = await page.locator('.settings-pane .engine-setting-reset').first().evaluate((b) => getComputedStyle(b).textDecorationLine)
-  expect(deco).toBe('none')
+  // N11 (the Engines Reset slot's edge) went with the Engines pane on 2026-10-27.
 })
 
 test('N13: plugin row controls are centred on the row like every pane', async ({ page }) => {
@@ -322,8 +231,9 @@ test('N30 N23 N27: Claude Code is named in full, empties share one style, Phones
   const devicesGets: string[] = []
   page.on('request', (r) => { if (r.method() === 'GET' && new URL(r.url()).pathname === '/api/devices') devicesGets.push(r.url()) })
   await openSettings(page)
-  await clickNav(page, 'engines')
-  await expect(page.getByTestId('engine-settings-tab-claude')).toHaveText('Claude Code')
+  await clickNav(page, 'sessions')
+  // The default engine picker (segments, or a select past five engines) names it in full.
+  await expect(page.locator('[data-testid="default-engine-option-claude"], [data-testid="default-engine-select"] option[value="claude"]')).toHaveText('Claude Code')
   await clickNav(page, 'devices')
   await page.waitForTimeout(1_500)
   // Dev mode runs each mount effect twice (StrictMode); three readers once each would be 3+.
@@ -337,7 +247,7 @@ test('C50: disclosure help keeps 4.5:1 on its hover band in dark mode', async ({
   await page.emulateMedia({ colorScheme: 'dark' })
   await recordWrites(page)
   await openSettings(page)
-  await clickNav(page, 'engines')
+  await clickNav(page, 'advanced')
   const row = page.locator('.settings-pane .settings-disclosure-row').first()
   await expect(row).toBeVisible({ timeout: 20_000 })
   await row.hover()

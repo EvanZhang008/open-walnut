@@ -1,8 +1,7 @@
 /**
  * The ONE reader for `config.triage`.
  *
- * Every default and every clamp lives here, for the same reason the heartbeat's
- * do: config-manager spreads a parsed config.yaml OVER DEFAULT_CONFIG at the TOP
+ * Every default and every clamp lives here, because config-manager spreads a parsed config.yaml OVER DEFAULT_CONFIG at the TOP
  * level, so a default seeded inside DEFAULT_CONFIG.triage would be dropped by any
  * file that has a `triage:` section at all. Readers also give one place to put
  * the "a typo must not be able to mint a session every 30 seconds" floor.
@@ -13,7 +12,7 @@
  */
 
 import { log } from '../../logging/index.js';
-import { parseDuration, isWithinActiveHours } from '../../heartbeat/heartbeat-runner.js';
+import { parseDuration, isWithinActiveHours } from './schedule-window.js';
 import {
   DEFAULT_TRIAGE_ACTIVE_HOURS,
   DEFAULT_TRIAGE_EVERY,
@@ -38,8 +37,7 @@ export interface TriageConfigHolder {
 export interface ResolvedTriageConfig {
   /**
    * Run triage at all. False when the user never enabled it AND when `every` is
-   * "0" — "no interval" is how heartbeat spells "off", so triage spells it the
-   * same way rather than inventing a second switch. An `every` nobody can PARSE is
+   * "0": "no interval" spells "off", rather than a second switch. An `every` nobody can PARSE is
    * not a zero and does not disable anything (see readEveryMs).
    */
   enabled: boolean;

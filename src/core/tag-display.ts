@@ -5,7 +5,7 @@
  * them is running.
  *
  * A change is announced as `task:tag-display-changed` (never CONFIG_CHANGED, which also reloads
- * every plugin's settings and rechecks the heartbeat: a plugin declaring its defaults at start
+ * every plugin's settings: a plugin declaring its defaults at start
  * would set that off on every boot).
  */
 

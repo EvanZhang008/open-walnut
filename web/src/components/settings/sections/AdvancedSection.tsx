@@ -92,19 +92,6 @@ export function readAdvancedForm(form: HTMLFormElement, config: Config): Partial
       commit_debounce_ms: toMs(num('git-debounce'), SECOND, config.git_versioning?.commit_debounce_ms),
       push_interval_ms: toMs(num('git-interval'), MINUTE, config.git_versioning?.push_interval_ms),
     },
-    tools: {
-      ...config.tools,
-      exec: { ...config.tools?.exec, timeout: toMs(num('exec-timeout'), SECOND, config.tools?.exec?.timeout), max_output: num('exec-max') },
-    },
-    agent: {
-      ...config.agent,
-      subagent: {
-        ...config.agent?.subagent,
-        model: val('sub-model') || undefined,
-        max_concurrent: num('sub-concurrent'),
-        max_tool_rounds: num('sub-rounds'),
-      },
-    } as Config['agent'],
     session_server: { ...config.session_server, enabled: bool('sdk-enabled'), port: num('sdk-port') ?? 7890 },
   };
   if (has('ka-enabled')) {
@@ -148,8 +135,6 @@ function FormNumber({ id, defaultValue, unit, placeholder, min, max, step, readO
 
 export function AdvancedSection({ config, onSave }: Props) {
   const git = config.git_versioning ?? {};
-  const exec = config.tools?.exec ?? {};
-  const sub = config.agent?.subagent ?? {};
   const keepAwake = config.keep_awake ?? {};
   const offlineReleaseMinutes = keepAwake.offline_grace_minutes ?? 5;
   const { notifySaved } = useSettingsSaved();
@@ -275,33 +260,6 @@ export function AdvancedSection({ config, onSave }: Props) {
             control={<FormNumber id="git-debounce" defaultValue={fromMs(git.commit_debounce_ms ?? 30000, SECOND)} unit="seconds" min={1} step="any" />} />
           <SettingsRow indent label="Push interval" htmlFor="git-interval" disabled={!gitPush}
             control={<FormNumber id="git-interval" defaultValue={fromMs(git.push_interval_ms ?? 600000, MINUTE)} unit="minutes" min={1} step="any" readOnly={!gitPush} />} />
-        </SettingsDisclosure>
-
-        <SettingsDisclosure id="advanced-exec" data-testid="advanced-disclosure-exec" label="Command safety"
-          summary={exec.timeout || exec.max_output || exec.deny?.length || exec.allow?.length ? 'Custom limits' : 'Defaults'}>
-          <SettingsRow indent label="Timeout" htmlFor="exec-timeout"
-            control={<FormNumber id="exec-timeout" defaultValue={fromMs(exec.timeout, SECOND)} unit="seconds" placeholder="Default" min={0} step="any" />} />
-          <SettingsRow indent label="Max output" htmlFor="exec-max"
-            control={<FormNumber id="exec-max" defaultValue={exec.max_output} unit="characters" placeholder="Default" min={0} />} />
-          {exec.deny?.length ? (
-            <SettingsRow indent label="Deny patterns" help={<code>{exec.deny.join(', ')}</code>} />
-          ) : null}
-          {exec.allow?.length ? (
-            <SettingsRow indent label="Allow patterns" help={<code>{exec.allow.join(', ')}</code>} />
-          ) : null}
-        </SettingsDisclosure>
-
-        <SettingsDisclosure id="advanced-subagent" data-testid="advanced-disclosure-subagent" label="Subagent defaults"
-          summary={sub.model ? 'Own model' : 'Main model'}>
-          <SettingsRow indent wide label="Subagent model" help="Leave empty to use the main model." htmlFor="sub-model"
-            control={
-              <input id="sub-model" name="sub-model" type="text" defaultValue={sub.model ?? ''} placeholder="Model id"
-                className="settings-input settings-input--long settings-input--mono" spellCheck={false} />
-            } />
-          <SettingsRow indent label="Max concurrent" htmlFor="sub-concurrent"
-            control={<FormNumber id="sub-concurrent" defaultValue={sub.max_concurrent} placeholder="20" min={1} />} />
-          <SettingsRow indent label="Max tool rounds" htmlFor="sub-rounds"
-            control={<FormNumber id="sub-rounds" defaultValue={sub.max_tool_rounds} placeholder="30" min={1} />} />
         </SettingsDisclosure>
 
         {/* Keep Awake: macOS console only, hidden when the route reports unsupported. */}

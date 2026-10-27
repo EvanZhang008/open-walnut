@@ -1,7 +1,8 @@
 /**
  * /settings Configure panes after the redesign (General, Tasks, Sessions,
- * Engines, Hooks, Advanced + API provider, Integrations, Heartbeat, Triage,
- * Search, Voice): rows, save feedback, failures, sizes and copy.
+ * Hooks, Advanced + API provider, Triage, Search, Voice): rows, save
+ * feedback, failures, sizes and copy. Engines, Integrations and Heartbeat
+ * were removed on 2026-10-27; the default engine row now heads Sessions.
  *
  * Runs in both engines against one fixture: Chromium by default, WebKit (the
  * Mac app is a WKWebView) with `PW_WEBKIT=1 ... --project=webkit`. Every pane
@@ -33,7 +34,7 @@ interface FakeConfig {
   failPuts: (on: boolean) => void
   /** Hold every PUT this long before answering (a slow disk). */
   delayPuts: (ms: number) => void
-  /** Heartbeat value each GET answered (debug aid for C57). */
+  /** Every GET and PUT, with the PUT's top-level keys (a debug aid). */
   gets: () => unknown[]
 }
 
@@ -60,13 +61,13 @@ async function fakeConfig(page: Page, seed: (c: Json) => void = () => {}): Promi
         seed(state.config)
       }
       if (req.method() === 'GET') {
-        gets.push(`${Date.now() % 100000} GET hb=${state!.config?.developer?.show_ui_only_heartbeat} sa=${state!.config?.developer?.show_ui_only_subagent}`)
+        gets.push(`${Date.now() % 100000} GET`)
         return await route.fulfill({ json: state, headers })
       }
       if (req.method() === 'PUT') {
         const patch = req.postDataJSON() as Json
         puts.push(patch)
-        gets.push(`${Date.now() % 100000} PUT sa=${patch.developer?.show_ui_only_subagent}`)
+        gets.push(`${Date.now() % 100000} PUT ${Object.keys(patch).join(',')}`)
         if (delay > 0) await new Promise((r) => setTimeout(r, delay))
         if (failing) return await route.fulfill({ status: 500, json: { error: 'disk full' }, headers })
         state = { ...state, config: { ...state!.config, ...patch } }
@@ -154,21 +155,21 @@ test('C12: a config switch shows Saved for about 2s; a window-only switch never 
 test('C13 + C68: a failed switch reverts, says why under the row, and the row stays put', async ({ page }) => {
   const cfg = await fakeConfig(page)
   await openSettings(page)
-  const general = await clickNav(page, 'general')
+  const sessions = await clickNav(page, 'sessions')
   const saved = await recordSaved(page)
-  const target = row(general, 'Heartbeat all clear')
+  const target = row(sessions, 'Intercept permission prompts')
   const sw = target.getByRole('switch')
   const before = await sw.getAttribute('aria-checked')
   cfg.failPuts(true)
   await sw.click()
   await expect(sw).toHaveAttribute('aria-checked', before!, { timeout: 10_000 })
-  const alert = general.locator('.settings-row-error[role="alert"]')
+  const alert = sessions.locator('.settings-row-error[role="alert"]')
   await expect(alert).toContainText("Couldn't save")
   await expect(indicator(page)).toHaveText(/Not saved/)
   expect(await saved()).not.toContain('Saved')
 
   // C68: the error is never timed, so the rows under it never move.
-  const next = row(general, 'Subagent results')
+  const next = row(sessions, 'Auto approve in bypass mode')
   const box1 = await next.boundingBox()
   await page.waitForTimeout(7_000)
   await expect(alert).toBeVisible()
@@ -179,35 +180,15 @@ test('C13 + C68: a failed switch reverts, says why under the row, and the row st
   await expect(alert).toHaveCount(0, { timeout: 10_000 })
 })
 
-test('C57: chat notifications write developer.* through config and keep the sibling keys', async ({ page }) => {
-  const cfg = await fakeConfig(page, (c) => {
-    c.developer = { ...c.developer, show_ui_only_heartbeat: true, show_ui_only_session_error: true, show_ui_only_agent_error: false }
-  })
-  await openSettings(page)
-  const general = await clickNav(page, 'general')
-  const sw = row(general, 'Heartbeat all clear').getByRole('switch')
-  await expect(sw).toHaveAttribute('aria-checked', 'true')
-  await sw.click()
-  await expect.poll(() => cfg.puts.length).toBeGreaterThan(0)
-  const put = cfg.puts[cfg.puts.length - 1]
-  expect(put.developer.show_ui_only_heartbeat).toBe(false)
-  expect(put.developer.show_ui_only_session_error).toBe(true)
-  expect(put.developer.show_ui_only_agent_error).toBe(false)
-  await expect(sw).toHaveAttribute('aria-checked', 'false')
-  await expect(row(general, 'Session triage results')).toHaveCount(1)
-
-  cfg.failPuts(true)
-  await sw.click()
-  await expect(sw, JSON.stringify({ puts: cfg.puts.map((p) => p.developer?.show_ui_only_heartbeat), gets: cfg.gets() }))
-    .toHaveAttribute('aria-checked', 'false', { timeout: 10_000 })
-  await expect(general.locator('.settings-row-error[role="alert"]')).toContainText("Couldn't save")
-
+test('C57 (source half): General saves only through onSave, never updateConfig or uncontrolled inputs', async () => {
+  // The Chat notifications rows this test drove were removed (2026-10-27); the
+  // rule they proved still holds for every row General keeps.
   const code = src('GeneralSection.tsx')
   expect(code).not.toContain('updateConfig(')
   expect(code).not.toContain('defaultChecked')
 })
 
-/** Open every disclosure row of the visible pane (Advanced, Integrations, Engines). */
+/** Open every disclosure row of the visible pane (Advanced has them). */
 async function expandAll(page: Page) {
   for (let i = 0; i < 20; i++) {
     const closed = page.locator('.settings-pane button[aria-expanded="false"].settings-disclosure-row:visible')
@@ -216,7 +197,7 @@ async function expandAll(page: Page) {
   }
 }
 
-const CONFIGURE_PANES = ['general', 'tasks', 'sessions', 'engines', 'hooks', 'advanced', 'integrations', 'heartbeat', 'triage', 'search', 'stt']
+const CONFIGURE_PANES = ['general', 'tasks', 'sessions', 'hooks', 'advanced', 'triage', 'search', 'stt']
 
 test('C14 + C19 + C20: every boolean is a switch; no stray checkbox, form-group, details or emoji', async ({ page }) => {
   await fakeConfig(page)
@@ -278,9 +259,6 @@ test('C30: input sizes and units', async ({ page }) => {
   expect(Math.abs(await width('#idle-timeout') - 120)).toBeLessThanOrEqual(4)
   await expect(row(sessions, 'Idle timeout').locator('.settings-input-unit')).toHaveText('minutes')
   const advanced = await clickNav(page, 'advanced')
-  await advanced.getByTestId('advanced-disclosure-subagent').click()
-  expect(Math.abs(await width('#sub-model') - 380)).toBeLessThanOrEqual(4)
-  expect(await page.locator('#sub-model').evaluate((el) => getComputedStyle(el).fontFamily)).toMatch(/mono|Menlo|Monaco|Courier/i)
   await advanced.getByTestId('advanced-disclosure-sdk').click()
   expect(Math.abs(await width('#sdk-port') - 120)).toBeLessThanOrEqual(4)
   await expect(page.locator('#sdk-port')).not.toHaveValue(/,/)
@@ -346,14 +324,22 @@ test('C34: session modes are six styled checkboxes; the last one cannot be untic
   await expect(sessions.locator('#session-output-mode[role="radiogroup"] [role="radio"]')).toHaveCount(2)
 })
 
-test('C35: Advanced opens with six closed disclosures; an open one survives a pane switch', async ({ page }) => {
+test('C35: Advanced opens with four closed disclosures; an open one survives a pane switch', async ({ page }) => {
   await fakeConfig(page)
+  // Keep awake is macOS only and hides itself when its route says unsupported
+  // (this fixture may run on Linux): answer as a Mac would, so the count is fixed.
+  const kaState = { supported: true, enabled: false, holding: false, reason: 'off', runningLocalSessions: 0, battery: null, online: true, needsSudo: false, setupDone: true, checkedAt: null }
+  await page.route('**/api/keep-awake**', (route) => route.fulfill({ json: { state: kaState, sudoSetupCommand: '' } }))
   await openSettings(page)
   await page.evaluate(() => { for (const k of Object.keys(sessionStorage)) if (k.startsWith('walnut.settings.disclosure.')) sessionStorage.removeItem(k) })
   const advanced = await clickNav(page, 'advanced')
   const rows = advanced.getByTestId('advanced-group').locator(':scope > .settings-disclosure-row')
-  await expect(rows).toHaveCount(6)
-  for (let i = 0; i < 6; i++) await expect(rows.nth(i)).toHaveAttribute('aria-expanded', 'false')
+  // Git versioning, Keep awake, SDK session server, Raw config (Command safety
+  // and Subagent defaults were removed on 2026-10-27).
+  await expect(rows).toHaveCount(4)
+  expect(await rows.evaluateAll((els) => els.map((e) => e.getAttribute('data-testid'))))
+    .toEqual(['advanced-disclosure-git', 'advanced-disclosure-keep-awake', 'advanced-disclosure-sdk', 'advanced-disclosure-raw'])
+  for (let i = 0; i < 4; i++) await expect(rows.nth(i)).toHaveAttribute('aria-expanded', 'false')
   const git = advanced.getByTestId('advanced-disclosure-git')
   await git.click()
   await expect(git).toHaveAttribute('aria-expanded', 'true')
@@ -389,10 +375,12 @@ test('C56: flipping one switch in a folded form keeps every other field (FormDat
   expect(put.git_versioning.commit_debounce_ms).toBe(45000)
   expect(put.session_server.enabled).toBe(true)
   expect(put.session_server.port).toBe(7891)
-  expect(put.tools.exec.timeout).toBe(12345)
-  expect(put.tools.exec.max_output).toBe(5000)
-  expect(put.agent.subagent.max_concurrent).toBe(7)
-  expect(put.agent.subagent.max_tool_rounds).toBe(9)
+  // Advanced no longer owns `tools` or `agent`: it never writes them, so the
+  // values another surface keeps there survive untouched.
+  expect(put.tools).toBeUndefined()
+  expect(put.agent).toBeUndefined()
+  expect(cfg.state().tools.exec.timeout).toBe(12345)
+  expect(cfg.state().agent.subagent.max_concurrent).toBe(7)
   // Keep awake's rows are hidden (route 404 = unsupported?) or collapsed; either way its value survives.
   expect(put.keep_awake?.enabled ?? cfg.state().keep_awake.enabled).toBe(true)
 })
@@ -424,79 +412,56 @@ test('C60: a typed number saves when the pane is left 200ms later; a failure mar
   await clickNav(page, 'sessions')
   const saved = await recordSaved(page)
   await page.locator('#idle-timeout').fill('42')
-  await page.getByTestId('settings-nav-engines').click()
+  await page.getByTestId('settings-nav-tasks').click()
   await expect.poll(() => cfg.puts.some((p) => p.session?.idle_timeout_minutes === 42), { timeout: 10_000 }).toBe(true)
-  await expect(page.locator('#engines.settings-section')).toBeVisible()
+  await expect(page.locator('#tasks.settings-section')).toBeVisible()
   await page.waitForTimeout(2_500)
   expect(await saved()).not.toContain('Saved')
 
   cfg.failPuts(true)
   await clickNav(page, 'sessions')
   await page.locator('#idle-timeout').fill('43')
-  await page.getByTestId('settings-nav-engines').click()
+  await page.getByTestId('settings-nav-tasks').click()
   await expect(page.getByTestId('settings-nav-error-sessions')).toBeVisible({ timeout: 10_000 })
   await clickNav(page, 'sessions')
   await expect(page.locator('#idle-timeout-row + .settings-row-error[role="alert"]')).toContainText("Couldn't save")
 })
 
-/** Engine settings as the fixture serves them, with overrides a real machine can have. */
-async function engineOverrides(page: Page) {
-  const keys: Json = {}
-  await page.route('**/api/engines/claude/settings**', async (route) => {
-    if (route.request().method() !== 'GET') return route.fallback()
-    let body: Json
-    try {
-      body = await (await route.fetch()).json() as Json
-    } catch {
-      return // page closed mid-read
-    }
-    const items = (body.groups as Json[]).flatMap((g) => g.items as Json[]).filter((i) => i.type !== 'boolean' || i.default !== null)
-    const projectFile = { id: 'fixture-project-local', path: '/tmp/fixture-repo/.claude/settings.local.json', label: 'the project file', format: 'json', scope: 'project', readOnly: false, exists: false }
-    body.files = [...body.files, projectFile]
-    items[0].envOverride = { name: 'CLAUDE_FIXTURE_FLAG', value: '1' }
-    items[1].overriddenBy = { file: 'fixture-shared', path: '/tmp/fixture-repo/.claude/settings.json' }
-    items[2].writeTarget = { file: projectFile.id, path: projectFile.path, holds: false }
-    items[3].source = 'file'
-    items[3].writeTarget = { file: items[3].file, path: body.files[0].path, holds: true }
-    Object.assign(keys, { env: items[0].key, shared: items[1].key, target: items[2].key, set: items[3].key })
-    return route.fulfill({ json: body, headers: { 'cache-control': 'no-store' } }).catch(() => {})
-  })
-  return keys
-}
-
-async function openEngines(page: Page) {
-  const engines = await clickNav(page, 'engines')
-  await expect(engines.locator('.engine-setting-row').first()).toBeVisible({ timeout: 30_000 })
-  return engines
-}
-
-test('C61: Default engine is one sentence; the small-jobs warning only when it applies; segments are radios', async ({ page }) => {
+test('C61: Default engine heads Sessions, is one sentence; the small-jobs warning only when it applies; segments are radios', async ({ page }) => {
   await fakeConfig(page, (c) => {
     c.agent = { ...c.agent, main_provider: 'claude_cli' }
     c.defaults = { ...c.defaults, engine: 'claude' }
-    c.hosts = { ...c.hosts, fixturebox: { hostname: 'fixturebox.invalid', enabled: true, label: 'Fixture box' } }
   })
   await openSettings(page)
-  const engines = await openEngines(page)
-  const def = row(engines, 'Default engine')
+  const sessions = await clickNav(page, 'sessions')
+  const def = row(sessions, 'Default engine')
+  await expect(def).toHaveAttribute('data-testid', 'default-engine-row')
+  // The first row of the pane.
+  await expect(sessions.locator('.settings-row').first()).toHaveAttribute('data-testid', 'default-engine-row')
   await expect(def.getByTestId('default-engine-used-for')).toHaveText("Everything Walnut starts uses it; a session can still pick its own.")
-  await expect(engines.getByText('Small background jobs')).toHaveCount(0)
-  const tab = engines.getByTestId('engine-settings-tab-claude')
-  await expect(tab).toHaveAttribute('role', 'radio')
-  await tab.click()
-  await expect(tab).toHaveAttribute('aria-checked', 'true')
-  const host = engines.getByTestId('engine-settings-host')
-  await expect(host.locator('[role="radio"]')).toHaveCount(2)
-  // N12: one status tag, the picked host's, beside the picker (no second host list).
-  await expect(engines.locator('[data-testid^="engine-settings-host-status-"]')).toHaveCount(1)
-  await expect(host.getByTestId('engine-settings-host-status-__local__')).toBeVisible()
+  await expect(sessions.getByText('Small background jobs')).toHaveCount(0)
+  // Segments (radios) for five engines or fewer, a select beyond that; either
+  // way Claude Code is the picked one.
+  const picker = def.getByTestId('default-engine-select')
+  await expect(picker).toBeVisible()
+  if (await picker.evaluate((el) => el.tagName) === 'SELECT') {
+    await expect(picker).toHaveValue('claude')
+    await expect(picker.locator('option[value="claude"]')).toHaveText('Claude Code')
+  } else {
+    const claude = def.getByTestId('default-engine-option-claude')
+    await expect(claude).toHaveAttribute('role', 'radio')
+    await expect(claude).toHaveAttribute('aria-checked', 'true')
+  }
+  // No per-engine settings anywhere in Settings: they live in the session's popover.
+  await expect(page.locator('[data-testid^="engine-settings-tab-"], [data-testid="engine-settings-host"], .engine-setting-row')).toHaveCount(0)
+  await expect(page.getByTestId('settings-nav-engines')).toHaveCount(0)
 })
 
 test('C61: an API in use shows the small-jobs warning in warning colour', async ({ page }) => {
   await fakeConfig(page, (c) => { c.agent = { ...c.agent, main_provider: 'anthropic' } })
   await openSettings(page)
-  const engines = await clickNav(page, 'engines')
-  const warn = engines.getByTestId('default-engine-small-jobs')
+  const sessions = await clickNav(page, 'sessions')
+  const warn = sessions.getByTestId('default-engine-small-jobs')
   await expect(warn).toContainText('Small background jobs use an API instead')
   const [color, expected] = await warn.evaluate((el) => {
     const probe = document.createElement('span')
@@ -507,48 +472,6 @@ test('C61: an API in use shows the small-jobs warning in warning colour', async 
     return out
   })
   expect(color).toBe(expected)
-})
-
-test('C55 + C62 + C79: engine rows carry a source tag, override warnings, one sentence and a reserved Reset', async ({ page }) => {
-  await fakeConfig(page)
-  const keys = await engineOverrides(page)
-  await openSettings(page)
-  const engines = await openEngines(page)
-  await engines.getByTestId('engine-settings-tab-claude').click()
-  const r = (key: string) => engines.getByTestId(`engine-setting-row-${key}`)
-  await expect(r(keys.env)).toBeVisible({ timeout: 20_000 })
-  await expect(r(keys.env).locator('.settings-tag')).toHaveText('Environment')
-  await expect(r(keys.env)).toHaveAttribute('aria-disabled', 'true')
-  await expect(r(keys.env).locator('.engine-setting-help')).toContainText("changes here won't apply")
-  await expect(r(keys.shared).locator('.settings-tag')).toHaveText('Shared project')
-  await expect(r(keys.shared)).toHaveAttribute('aria-disabled', 'true')
-  await expect(r(keys.target).locator('.engine-setting-help')).toHaveText(/^Saves to /)
-  await expect(r(keys.set).locator('.settings-tag')).toHaveText('User')
-  expect(await r(keys.set).locator('.settings-tag').getAttribute('title')).toBeTruthy()
-
-  // One sentence visible, the whole text on title.
-  const helps = await engines.locator('.engine-setting-help').evaluateAll((els) =>
-    els.map((el) => ({ shown: (el.textContent ?? '').trim(), full: (el.getAttribute('title') ?? '').trim() })))
-  for (const h of helps) {
-    if (h.shown.startsWith('Overridden by') || h.shown.startsWith('Saves to')) continue
-    expect(h.full.startsWith(h.shown), h.full).toBe(true)
-    expect(h.shown.replace(/\b(e\.g|i\.e)\. /g, '').match(/\.\s+\S/), h.shown).toBeNull()
-  }
-
-  // Tag left of the control; Reset reachable by keyboard; hover moves nothing.
-  const setRow = r(keys.set)
-  const tagBox = await setRow.locator('.settings-tag').boundingBox()
-  const ctlBox = await setRow.locator('.engine-setting-control').boundingBox()
-  expect(tagBox!.x + tagBox!.width).toBeLessThanOrEqual(ctlBox!.x + 0.5)
-  const reset = setRow.getByTestId(`engine-setting-reset-${keys.set}`)
-  await reset.focus()
-  await expect(reset).toBeFocused()
-  await expect(reset).toBeVisible()
-  await setRow.hover()
-  const tagAfter = await setRow.locator('.settings-tag').boundingBox()
-  const ctlAfter = await setRow.locator('.engine-setting-control').boundingBox()
-  expect(Math.abs(tagAfter!.x - tagBox!.x)).toBeLessThanOrEqual(1)
-  expect(Math.abs(ctlAfter!.x - ctlBox!.x)).toBeLessThanOrEqual(1)
 })
 
 const JEV_ON = (c: Json) => {
@@ -564,7 +487,9 @@ test('C63: Tasks rows, the after-session group and the triage label in General',
   await expect(row(tasks, 'Default priority')).toBeVisible()
   const after = tasks.getByTestId('tasks-after-session')
   await expect(after).toContainText('After a session finishes')
-  await expect(after.locator('#triage-notify-mode[role="radiogroup"] [role="radio"]')).toHaveCount(3)
+  // Off and Right away (On heartbeat went with the heartbeat, 2026-10-27).
+  await expect(after.locator('#triage-notify-mode[role="radiogroup"] [role="radio"]')).toHaveCount(2)
+  await expect(after.getByTestId('triage-notify-buffered')).toHaveCount(0)
   await expect(row(after, 'Tell Ask Walnut')).toBeVisible()
   await expect(row(after, 'Wait before summarizing')).toBeVisible()
   expect(await tasks.innerText()).not.toContain('Default engine')
@@ -576,8 +501,9 @@ test('C63: Tasks rows, the after-session group and the triage label in General',
   await expect(row(tasks, 'Default project')).toHaveAttribute('data-state', 'warning')
   await project.press('Escape')
 
+  // General's Chat notifications group (where the triage label sat) is gone.
   const general = await clickNav(page, 'general')
-  await expect(row(general, 'Session triage results')).toBeVisible()
+  await expect(row(general, 'Session triage results')).toHaveCount(0)
 })
 
 test('C76: Uses names the resolved runner; .check() on both segments switches and saves', async ({ page }) => {
@@ -710,21 +636,11 @@ test('C81: Raw config is a read-only pre with Copy', async ({ page, context, bro
   await expect(copy).toHaveText('Copy', { timeout: 3_000 })
 })
 
-test('C51: with the master switch off, Heartbeat and Triage rows are dimmed and inert', async ({ page }) => {
+test('C51: with the master switch off, Triage rows are dimmed and inert', async ({ page }) => {
   await fakeConfig(page, (c) => {
-    c.heartbeat = { ...c.heartbeat, enabled: false, every: '30m' }
     c.triage = { ...c.triage, enabled: false }
   })
   await openSettings(page)
-  const hb = await clickNav(page, 'heartbeat')
-  for (const id of ['hb-every-row', 'hb-hours-row']) {
-    const r = hb.getByTestId(id)
-    await expect(r).toBeVisible()
-    await expect(r).toHaveAttribute('aria-disabled', 'true')
-    await expect(r).toHaveCSS('opacity', '0.45')
-    await expect(r.locator('input')).toBeDisabled()
-  }
-  await expect(hb.getByTestId('heartbeat-checklist')).toContainText('HEARTBEAT.md')
   const tr = await clickNav(page, 'triage')
   for (const id of ['inbox-triage-every-row', 'inbox-triage-messages-row', 'inbox-triage-hours-row', 'inbox-triage-mode-row']) {
     await expect(tr.getByTestId(id)).toHaveAttribute('aria-disabled', 'true')
@@ -747,37 +663,18 @@ test('C59: the API provider is one group with a segmented choice; every model la
   expect(await providers.locator('.settings-group').count()).toBe(1)
   expect(await providers.locator('.provider-card, .provider-radio').count()).toBe(0)
   await expect(providers.locator('.settings-row-label', { hasText: /^API model$/ })).toHaveCount(1)
-  await advanced.getByTestId('advanced-disclosure-subagent').click()
-  await expect(advanced.locator('.settings-row-label', { hasText: /^Subagent model$/ })).toHaveCount(1)
+  // Max tokens and Subagent model are gone (2026-10-27).
+  await expect(providers.locator('#max-tokens')).toHaveCount(0)
+  await expect(advanced.locator('.settings-row-label', { hasText: /^(Subagent model|Max tokens)$/ })).toHaveCount(0)
 
   const labels: string[] = []
   const collect = async () => labels.push(...await page.locator('.settings-pane .settings-row-label').allInnerTexts())
   await collect()
-  await clickNav(page, 'engines')
-  await expect(page.locator('.engine-setting-row').first()).toBeVisible({ timeout: 30_000 })
-  await page.getByTestId('engine-settings-tab-claude').click()
-  await expect(page.locator('.engine-setting-row').first()).toBeVisible({ timeout: 30_000 })
-  await expandAll(page)
+  await clickNav(page, 'sessions')
   await collect()
   expect(labels.map((l) => l.trim()).filter((l) => l === 'Model' || l === 'Default model')).toEqual([])
-  expect(labels).toContain('Claude Code model')
-})
-
-test('C64: Integrations holds only the agent tool keys; no MS To-Do, no switches', async ({ page }) => {
-  await fakeConfig(page)
-  await openSettings(page)
-  const pane = await clickNav(page, 'integrations')
-  await expect(pane.locator('.settings-card-desc').first()).toHaveText("Keys for the agent's own tools.")
-  await expect(pane).not.toContainText('MS To-Do')
-  expect(src('IntegrationsSection.tsx')).not.toMatch(/plugins\s*\[\s*['"]ms-todo['"]\s*\]|ms-todo/)
-  const slack = pane.getByTestId('integrations-slack')
-  await expect(slack.locator('.settings-row-label')).toHaveText('Slack bot for the agent')
-  await expect(slack.locator('.settings-disclosure-summary')).toHaveText(/^(Token saved|No token)$/)
-  await slack.click()
-  await expect(pane.locator('#slack-token')).toBeVisible()
-  await pane.getByTestId('integrations-web-search').click()
-  await expect(pane.getByTestId('ws-provider-tavily')).toBeVisible()
-  expect(await pane.locator('[role="switch"]').count()).toBe(0)
+  expect(labels).toContain('API model')
+  expect(labels).toContain('Default engine')
 })
 
 test('C64 + C63: the filter finds Apps for slack and Tasks for jev', async ({ page }) => {
@@ -800,7 +697,11 @@ test('C77: a change in one window reaches another window on the same server', as
   await expect(row(general, 'Appearance').locator('.settings-row-help')).toHaveText('Applies here now, and to other windows when they next open.')
   await expect(row(general, 'Focus bar').locator('.settings-row-help')).toContainText('other windows follow when they next open')
   await expect(general).not.toContainText('this window only')
-  const sw = row(general, 'Heartbeat all clear').getByRole('switch')
+  // A config switch that changes nothing another spec on this fixture reads
+  // (Chat notifications, which this test used, are gone).
+  const sessions = await clickNav(page, 'sessions')
+  const sw = row(sessions, 'Auto approve in bypass mode').getByRole('switch')
+  await expect(sw).toBeEnabled()
   const original = await sw.getAttribute('aria-checked')
   const flipped = original === 'true' ? 'false' : 'true'
   const other = await browser.newContext({ viewport: { width: 1280, height: 900 } })
@@ -812,8 +713,8 @@ test('C77: a change in one window reaches another window on the same server', as
     const pageB = await other.newPage()
     await pageB.goto(new URL('/settings', page.url()).toString())
     await expect(pageB.locator('.settings-nav')).toBeVisible({ timeout: 30_000 })
-    const generalB = await clickNav(pageB, 'general')
-    await expect(row(generalB, 'Heartbeat all clear').getByRole('switch')).toHaveAttribute('aria-checked', flipped, { timeout: 10_000 })
+    const sessionsB = await clickNav(pageB, 'sessions')
+    await expect(row(sessionsB, 'Auto approve in bypass mode').getByRole('switch')).toHaveAttribute('aria-checked', flipped, { timeout: 10_000 })
   } finally {
     await other.close()
     if ((await sw.getAttribute('aria-checked')) !== original) {
@@ -849,7 +750,6 @@ test('C8 + C10 + C80: configure panes use sentence case, no dashes, no decorativ
   await openSettings(page)
   for (const id of CONFIGURE_PANES) {
     await clickNav(page, id)
-    if (id === 'engines') await expect(page.locator('.engine-setting-row').first()).toBeVisible({ timeout: 30_000 })
     await expandAll(page)
     const { text, transformed } = await paneText(page)
     expect(transformed, `${id}: text-transform`).toEqual([])
@@ -859,8 +759,8 @@ test('C8 + C10 + C80: configure panes use sentence case, no dashes, no decorativ
     expect(text, `${id}: symbols`).not.toMatch(BANNED_SYMBOLS)
   }
   for (const f of ['GeneralSection.tsx', 'TasksSection.tsx', 'SmartTaskCreation.tsx', 'JevSettings.tsx', 'FocusTiersSection.tsx',
-    'SessionsSection.tsx', 'EnginesSection.tsx', 'EngineSettingRows.tsx', 'AdvancedSection.tsx', 'ProvidersSection.tsx', 'HooksSection.tsx',
-    'IntegrationsSection.tsx', 'HeartbeatSection.tsx', 'TriageSection.tsx', 'SearchSection.tsx', 'SttSection.tsx', 'SttDetectionPanel.tsx', 'SttSetupProgress.tsx', 'SttSetupRow.tsx', 'SttModelRows.tsx']) {
+    'SessionsSection.tsx', 'DefaultEngineRow.tsx', 'EngineSettingRows.tsx', 'AdvancedSection.tsx', 'ProvidersSection.tsx', 'HooksSection.tsx',
+    'TriageSection.tsx', 'SearchSection.tsx', 'SttSection.tsx', 'SttDetectionPanel.tsx', 'SttSetupProgress.tsx', 'SttSetupRow.tsx', 'SttModelRows.tsx']) {
     const code = src(f).replace(/\/\/.*$|\/\*[\s\S]*?\*\//gm, '')
     expect(code, `${f}: dashes`).not.toMatch(DASHES)
     expect(code, `${f}: symbols`).not.toMatch(BANNED_SYMBOLS)
@@ -873,7 +773,6 @@ test('captures every configure pane for review', async ({ page, browserName }) =
   await openSettings(page)
   for (const id of CONFIGURE_PANES) {
     await clickNav(page, id)
-    if (id === 'engines') await expect(page.locator('.engine-setting-row').first()).toBeVisible({ timeout: 30_000 })
     await page.waitForTimeout(500)
     // CSS pixels: WebKit's Desktop Safari profile renders at 2x.
     await page.locator('.settings-pane').screenshot({ path: `/tmp/settings-redesign/p3-${id}-${browserName}.png`, scale: 'css' })
@@ -882,19 +781,19 @@ test('captures every configure pane for review', async ({ page, browserName }) =
 
 test('a double click on a switch while the first write is still in flight saves the second click', async ({ page }) => {
   const cfg = await fakeConfig(page, (c) => {
-    c.developer = { ...c.developer, show_ui_only_subagent: true }
+    c.session = { ...c.session, permission_prompt: true }
     c.triage = { ...c.triage, enabled: false }
   })
   cfg.delayPuts(600)
   await openSettings(page)
-  const general = await clickNav(page, 'general')
-  const sw = row(general, 'Subagent results').getByRole('switch')
+  const sessions = await clickNav(page, 'sessions')
+  const sw = row(sessions, 'Intercept permission prompts').getByRole('switch')
   await expect(sw).toHaveAttribute('aria-checked', 'true')
   await sw.click()
   await sw.click()
   await expect.poll(() => cfg.puts.length, { timeout: 15_000 }).toBeGreaterThanOrEqual(2)
   await page.waitForTimeout(1_500)
-  expect(cfg.state().developer.show_ui_only_subagent, cfg.gets().join('\n')).toBe(true)
+  expect(cfg.state().session.permission_prompt, cfg.gets().join('\n')).toBe(true)
   await expect(sw).toHaveAttribute('aria-checked', 'true')
 
   // Two different rows of one key in quick succession both land.

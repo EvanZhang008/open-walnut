@@ -54,7 +54,6 @@ must live under one of these top-level categories instead of directly under
   apply updates.
 - [Testing pipeline](reference/testing-pipeline.md) - the four layers, which one
   to run when, the known-failure baseline, and the free CI setup.
-- [Heartbeat example](reference/heartbeat-example.md)
 - [ACP seam map](reference/acp-seam-map.md)
 - [Frozen API v1 contract](reference/api-v1.md)
 - [Plugin development](reference/plugin-development.md): the authoritative plugin guide. One-command authoring, the full-trust model and its real security boundaries, the manifest, server and native web entries, the `walnut.ui.app` atom with its host-derived route, deep links and badge, the shared App Registry, storage and secrets, lifecycle, publish-check, and troubleshooting. The runnable companion is [examples/plugins/walnut-demo](../examples/plugins/walnut-demo), the Walnut Plugin Demo.
@@ -69,7 +68,7 @@ must live under one of these top-level categories instead of directly under
 - [Jev decisions](reference/jev-decisions.md) - optional System One backend for
   background classifications (session→project placement, quick-parse fields):
   config, confidence floors, and the rules for adding a new decision
-- [Engine settings](reference/engine-settings.md) - Settings → Engines: editing
+- [Engine settings](reference/engine-settings.md) - a session's Engine settings: editing
   Claude Code's `/config` rows and Codex's `config.toml` from Walnut, where each
   key is stored, and the atomic conditional write that keeps the engine's file
   intact

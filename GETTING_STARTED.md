@@ -489,22 +489,6 @@ Skills are pluggable knowledge modules (`.md` files) that extend the agent's cap
 
 Each skill is a `SKILL.md` file with optional requirements (binaries, environment variables, platform). Only eligible skills appear in the agent's context.
 
-### Heartbeat
-
-A periodic self-check where the agent runs through a checklist you define:
-
-1. Create `~/.open-walnut/HEARTBEAT.md` with your checklist items
-2. Enable in config:
-
-```yaml
-heartbeat:
-  enabled: true
-  every: "30m"           # How often to run
-  activeHours: [8, 22]   # Only during these hours (optional)
-```
-
-See the [heartbeat example](docs/reference/heartbeat-example.md) for a full example.
-
 ### Slash Commands
 
 Create custom slash commands as Markdown files in `~/.open-walnut/commands/`:
@@ -743,6 +727,5 @@ See [Search & Embedding Setup](#search--embedding-setup) for all model options.
 - **[README.md](README.md)** — Feature overview and screenshots
 - **[ARCHITECTURE.md](ARCHITECTURE.md)** — Deep technical documentation of every subsystem
 - **[CONTRIBUTING.md](CONTRIBUTING.md)** — How to contribute to the project
-- **[Heartbeat example](docs/reference/heartbeat-example.md)** — Full heartbeat checklist example
 
 Have questions? [Open an issue](https://github.com/EvanZhang008/open-walnut/issues) on GitHub.

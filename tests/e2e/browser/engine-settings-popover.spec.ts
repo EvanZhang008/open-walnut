@@ -12,11 +12,11 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { fixtureHome, readClaudeSettings } from './engine-settings-helpers'
 import {
-  HOST_LABEL, LOCAL_SCOPE_NOTE, NEXT_TURN_SENTENCE, NEW_SOURCES, REPO, captureView, claimUserFile, clickComposerOutside, clickOutside,
-  composerTextarea, dialogOf, engineSettingsRow, expectInViewport, expectSideBySide, filterBox, fixtureRoot, makeGitProject, openPanels,
-  openPlusMenu, openPopover, otherGroupsLinkText, plusButton, popoverRow, popoverRowWrap, popoverSources, rect,
-  restoreSeed, rowControl, rowsArea, savedLine, savedUserSentence, scopeOption, sessionsGroup,
-  sessionsItems, shortCwd, shot, startSessionAt, stubGet, waitForRows, watchSettingsRequests, type View,
+  HOST_LABEL, LOCAL_SCOPE_NOTE, NEXT_TURN_SENTENCE, NEW_SOURCES, REPO, allItems, captureView, claimUserFile, clickComposerOutside,
+  clickOutside, composerTextarea, dialogOf, engineSettingsRow, expectInViewport, expectSideBySide, filterBox, fixtureRoot, makeGitProject,
+  openPanels, openPlusMenu, openPopover, plusButton, popoverRow, popoverRowWrap, popoverSources, rect, restoreSeed, rowControl, rowsArea,
+  savedLine, savedUserSentence, scopeOption, sessionsGroup, sessionsItems, shortCwd, shot, startSessionAt, stubGet, visibleRowKeys,
+  waitForRows, watchSettingsRequests, type ItemView, type View,
 } from './engine-settings-popover-helpers'
 
 test.describe.configure({ mode: 'serial' })
@@ -43,16 +43,23 @@ test.describe('composer "+" -> Engine settings popover', () => {
     const seen = watchSettingsRequests(page)
     const short = shortCwd(cwd)
 
-    // Its own separator right above it, after the Shortcuts block.
+    // In the block after the Shortcuts block: a separator closes Shortcuts, and
+    // the rows between it and Engine settings are menu items of that same block
+    // (the trigger rows joined it in 8ac701347).
     const menu = await openPlusMenu(panel)
     const row = engineSettingsRow(menu)
     await expect(row).toBeVisible()
     await expect(row).toHaveAttribute('role', 'menuitem')
     expect(await row.evaluate((el) => {
-      const prev = el.previousElementSibling
       const kids = Array.from(el.parentElement!.children)
+      const at = kids.indexOf(el)
       const shortcuts = kids.findIndex((k) => k.classList.contains('chat-plus-menu-label') && k.textContent === 'Shortcuts')
-      return { sep: prev?.getAttribute('role') === 'separator' && prev.classList.contains('chat-plus-menu-divider'), after: kids.indexOf(el) > shortcuts && shortcuts >= 0 }
+      let sep = -1
+      for (let i = at - 1; i >= 0; i--) {
+        if (kids[i].getAttribute('role') === 'separator') { sep = i; break }
+      }
+      const between = kids.slice(sep + 1, at).every((k) => k.getAttribute('role') === 'menuitem')
+      return { sep: sep >= 0 && kids[sep].classList.contains('chat-plus-menu-divider') && between, after: sep > shortcuts && shortcuts >= 0 }
     })).toEqual({ sep: true, after: true })
     // The tooltip names the engine, the cwd and the host.
     await expect(row).toHaveAttribute('title', `Claude Code settings for sessions in ${short} on ${HOST_LABEL}`)
@@ -91,12 +98,14 @@ test.describe('composer "+" -> Engine settings popover', () => {
     await expect(dialog.getByTestId('engine-settings-scope-note')).toHaveText(LOCAL_SCOPE_NOTE)
     await expect(dialog.getByTestId('engine-settings-applies-on')).toHaveText(NEXT_TURN_SENTENCE)
 
-    // Only the sessions group, in response order.
-    const keys = await dialog.locator('.engine-settings-popover-row').evaluateAll((els) => els.map((e) => e.getAttribute('data-key')))
-    expect(keys).toEqual(sessionsItems(captured).map((i) => i.key))
+    // The session rows first, in response order; the other groups follow them,
+    // collapsed (pinned in engine-settings-popover-groups.spec.ts).
+    expect(await visibleRowKeys(dialog)).toEqual(sessionsItems(captured).map((i) => i.key))
     await expect(popoverRow(dialog, 'alwaysThinkingEnabled')).toBeVisible()
-    await expect(popoverRow(dialog, 'autoUpdates')).toHaveCount(0)
-    await expect(popoverRow(dialog, 'theme')).toHaveCount(0)
+    await expect(popoverRow(dialog, 'autoUpdates')).toBeHidden()
+    await expect(popoverRow(dialog, 'theme')).toBeHidden()
+    // No way out to a Settings page any more: everything editable is here.
+    await expect(dialog.locator('a[href^="/settings"]')).toHaveCount(0)
 
     // the group help comes from the response, small and muted, and
     // lives in the About overlay rather than between the filter and the rows.
@@ -366,7 +375,7 @@ test.describe('composer "+" -> Engine settings popover', () => {
     await page.keyboard.press('Escape')
   })
 
-  test('filter, footer link, Files list, slow note, themes and source hygiene', async ({ page }) => {
+  test('filter, Files list, slow note, themes and source hygiene', async ({ page }) => {
     const [panel] = await openPanels(page, [sid])
     const short = shortCwd(cwd)
 
@@ -381,18 +390,22 @@ test.describe('composer "+" -> Engine settings popover', () => {
     await slow.unroute()
 
     // Label hits win; help hits mark; no match says so; Escape clears, then closes.
-    const visibleKeys = () => dialog.locator('.engine-settings-popover-row').evaluateAll((els) => els.map((e) => e.getAttribute('data-key')))
+    // The filter covers every group (an open group shows its hits), so the
+    // expected lists come from all the view's rows.
+    const visibleKeys = () => visibleRowKeys(dialog)
+    const items = allItems(captured)
+    const byName = (q: string) => items.filter((i: ItemView) => i.label.toLowerCase().includes(q) || i.key.toLowerCase().includes(q)).map((i) => i.key)
     await filterBox(dialog).fill('think')
     await expect.poll(visibleKeys).toEqual(['alwaysThinkingEnabled'])
     await filterBox(dialog).fill('plan')
-    const planKeys = await visibleKeys()
-    const items = sessionsItems(captured)
-    expect(planKeys).toEqual(items.filter((i) => /plan/i.test(i.label) || /plan/i.test(i.key)).map((i) => i.key))
-    expect(planKeys).not.toContain('enableWorkflows')
+    await expect.poll(visibleKeys).toEqual(byName('plan'))
+    expect(await visibleKeys()).not.toContain('enableWorkflows')
     // A word that only the help of one row contains (from the response, never guessed).
-    const helpOnly = items.find((i) => /\bcompaction summary\b/i.test(i.help) && !/compaction summary/i.test(i.label))!
+    const helpOnly = sessionsItems(captured).find((i) => /\bcompaction summary\b/i.test(i.help) && !/compaction summary/i.test(i.label))!
+    expect(byName('compaction summary')).toEqual([])
     await filterBox(dialog).fill('compaction summary')
-    await expect.poll(visibleKeys).toEqual([helpOnly.key])
+    await expect.poll(visibleKeys).toEqual(items.filter((i) => i.help.toLowerCase().includes('compaction summary')).map((i) => i.key))
+    expect(await visibleKeys()).toContain(helpOnly.key)
     // The match is marked: in place through the Highlight API where the browser has it, else as a marked copy.
     const wrap = popoverRowWrap(dialog, helpOnly.key)
     await expect(wrap).toHaveAttribute('data-help-match', /^(in-place|copy)$/)
@@ -406,12 +419,11 @@ test.describe('composer "+" -> Engine settings popover', () => {
     await filterBox(dialog).press('Escape')
     await expect(dialog).toHaveCount(0)
 
-    // Footer link text from the response; Files (N) with the missing ones marked.
     dialog = await openPopover(page, panel)
     await waitForRows(dialog)
-    const link = dialog.locator('a.engine-settings-more-link')
-    await expect(link).toHaveText(otherGroupsLinkText(captured))
-    await expect(link).toHaveAttribute('href', '/settings#engines')
+    await expect(dialog.locator('a.engine-settings-more-link')).toHaveCount(0)
+
+    // Files (N) with the missing ones marked.
     const files = dialog.getByTestId('engine-settings-files')
     await expect(files.locator('summary')).toHaveText(`Files (${captured.files.length})`)
     await files.locator('summary').click()
@@ -440,21 +452,7 @@ test.describe('composer "+" -> Engine settings popover', () => {
     await page.reload()
     await expect(plusButton(panel)).toBeVisible({ timeout: 30_000 })
 
-    // The link is an SPA hop to Settings > Engines (no load event), and closes the popover.
-    dialog = await openPopover(page, panel)
-    await waitForRows(dialog)
-    let loads = 0
-    page.on('load', () => { loads += 1 })
-    await dialog.locator('a.engine-settings-more-link').click()
-    await expect(dialog).toHaveCount(0)
-    await expect.poll(() => page.url()).toContain('/settings#engines')
-    await expect(page.locator('#engines')).toBeVisible({ timeout: 15_000 })
-    expect(loads).toBe(0)
-
     // Dense shots in both themes; new sources carry no emoji and no hex colours (rgba shadows aside).
-    // Back to '/' through history (a popstate, still SPA routing).
-    await page.goBack()
-    await expect(plusButton(panel)).toBeVisible({ timeout: 30_000 })
     dialog = await openPopover(page, panel)
     await waitForRows(dialog)
     await shot(page, 'dense-light')

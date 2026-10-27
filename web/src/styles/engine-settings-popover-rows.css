@@ -217,3 +217,41 @@
 
 .engine-settings-row-lock:disabled { opacity: 0.6; }
 .is-global-only .engine-setting-target { display: none; }
+
+/* The groups a running session does not read (Updates, Terminal only), each
+   collapsed under its title after the session rows. */
+.engine-settings-popover-group {
+  margin-top: 6px;
+}
+
+.engine-settings-popover-group > summary {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 2px;
+  list-style: none;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg-muted);
+}
+
+.engine-settings-popover-group > summary::-webkit-details-marker { display: none; }
+.engine-settings-popover-group > summary:hover { color: var(--fg); }
+
+.engine-settings-popover-group[open] > summary .engine-settings-files-chevron {
+  transform: rotate(90deg);
+}
+
+.engine-settings-popover-group[open] {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.engine-settings-popover-group-help {
+  margin: 0 2px 2px;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--fg-muted);
+}

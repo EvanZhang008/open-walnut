@@ -39,6 +39,8 @@ const ALLOW: Record<string, AllowSpec> = {
   defaults: { priority: true, platform: true, project: true, engine: true },
   provider: { type: true, model: true, bedrock_region: true },
   agent: {
+    // region and maxTokens are read by nothing now, but an older leader still sends them in
+    // this row, and a row with a field outside the spec is refused whole (configRowAdmissible).
     region: true, maxTokens: true, session_effort: true, main_model: true, fast_model: true, quick_parse: true,
     available_models: { '[]': { id: true, provider: true, model_id: true, label: true, context_window: true, max_tokens: true } },
     triage: { debounce_minutes: true, notify_mode: true },
@@ -87,15 +89,12 @@ export const CONFIG_COPY_DROPPED: Readonly<Record<string, string>> = Object.free
   session_server: 'the Mac server process settings',
   hosts_warmup: 'ssh warmup on the Mac',
   ssh_login_files: 'ssh files on the Mac',
-  heartbeat: 'heartbeat turns run on the Mac',
   triage: 'inbox triage runs on the Mac',
   backup: 'backup targets of the Mac',
-  tools: 'tool credentials (search and chat keys)',
   search: 'embedding endpoints and keys; the search copy carries its own',
   git_versioning: 'data backups of the Mac',
   session_hooks: 'hook actions run on the Mac',
   hooks: 'hook actions run on the Mac and may carry credentials',
-  developer: 'developer switches of the Mac',
   self_repair: 'the repair loop of the Mac',
   jev: 'an API key',
   api_keys: 'pairing credentials',
@@ -115,7 +114,6 @@ export const CONFIG_COPY_DROPPED: Readonly<Record<string, string>> = Object.free
 export const CONFIG_COPY_DROPPED_FIELDS: Readonly<Record<string, Readonly<Record<string, string>>>> = Object.freeze({
   provider: { bedrock_bearer_token: 'a credential' },
   agent: {
-    subagent: 'subagent settings for runs on the Mac',
     agents: 'agent definitions (prompts, tools) run on the Mac',
     session_organize: 'a background job of the Mac',
     language: 'the agent reply language of turns on the Mac',
@@ -123,7 +121,6 @@ export const CONFIG_COPY_DROPPED_FIELDS: Readonly<Record<string, Readonly<Record
   },
   'agent.available_models.[]': { compat: 'request quirks for calls the Mac makes', cost: 'pricing of usage on the Mac' },
   'hosts.*': {
-    session_server_url: 'a server address of the Mac',
     shell_setup: 'a shell command line that may carry tokens',
     autofix: 'repair runs from the Mac',
     cloud_box: 'the companion link of the Mac',
@@ -219,6 +216,16 @@ export function allowThrough(value: unknown, spec: AllowSpec): unknown {
   return out
 }
 
+/**
+ * Top-level keys of features Walnut no longer has. An older config.yaml may
+ * still carry them; they are dropped quietly, never named as unknown.
+ * Removed 2026-10-27: heartbeat (the check-in feature), developer (chat
+ * notification switches nothing read any more) and tools (settings of the
+ * removed in-process agent's tools; older files may still hold search and
+ * chat keys there, which is one more reason never to copy it).
+ */
+export const RETIRED_CONFIG_KEYS: ReadonlySet<string> = new Set(['heartbeat', 'developer', 'tools'])
+
 export interface ConfigCopyRow { key: string; value: unknown }
 
 export interface ConfigCopyRows {
@@ -237,7 +244,7 @@ export function configCopyRows(config: Readonly<Record<string, unknown>>): Confi
   for (const key of Object.keys(config).sort()) {
     const spec = Object.prototype.hasOwnProperty.call(CONFIG_COPY_ALLOWLIST, key) ? CONFIG_COPY_ALLOWLIST[key] : undefined
     if (spec === undefined) {
-      if (!Object.prototype.hasOwnProperty.call(CONFIG_COPY_DROPPED, key)) unknown.push(key)
+      if (!Object.prototype.hasOwnProperty.call(CONFIG_COPY_DROPPED, key) && !RETIRED_CONFIG_KEYS.has(key)) unknown.push(key)
       continue
     }
     const value = allowThrough(config[key], spec)

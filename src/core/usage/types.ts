@@ -10,7 +10,7 @@ export type UsageSource =
   | 'image-tool'   // direct sendMessage for image analysis
   | 'session'      // Claude Code CLI session (external process)
   | 'chat'         // Personal AI turn answered by a lane-bound CLI session (agent.provider='claude-code')
-  | 'perplexity'   // web search via Perplexity
+  | 'perplexity'   // web search via Perplexity (removed; older records only)
   | 'glm'          // Zhipu GLM-4 API calls
   | 'jev'          // TypeSafe Jev decision calls (System One)
   | 'heartbeat'    // periodic health checks

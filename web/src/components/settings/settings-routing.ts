@@ -60,6 +60,19 @@ export const ROW_TARGETS: Readonly<Record<string, { paneId: string; elementId: s
   'session-panels': { paneId: 'general', elementId: 'settings-session-panels' },
 }
 
+/**
+ * Panes that were removed, mapped to the pane that now holds what is left of
+ * them, so an old link or bookmark still lands somewhere that makes sense.
+ * Engines (2026-10-27): its one Walnut setting, the default engine, is in
+ * Sessions; each engine's own settings are in the session's popover.
+ */
+export const RETIRED_PANES: Readonly<Record<string, string>> = {
+  engines: 'sessions',
+  // Removed the same day with nothing left to show: General, without the unknown-hash warning.
+  integrations: 'general',
+  heartbeat: 'general',
+}
+
 function decodeHash(hash: string): string {
   const raw = hash.startsWith('#') ? hash.slice(1) : hash
   try {
@@ -83,6 +96,8 @@ export function resolvePane(
   if (!id) return { paneId: DEFAULT_PANE_ID, targetId: null, known: true }
   const owner = NAV_OWNER[id]
   if (owner) return { paneId: owner, targetId: owner === id ? null : id, known: true }
+  const retired = RETIRED_PANES[id]
+  if (retired) return { paneId: retired, targetId: null, known: true }
   const row = ROW_TARGETS[id]
   if (row) return { paneId: row.paneId, targetId: row.elementId, known: true, row: true }
   // One host's row inside Remote Hosts (`#rh-host-<alias>`, host-settings-nav.ts):

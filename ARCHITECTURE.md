@@ -175,7 +175,7 @@ JSON data stores (`tasks.json`, `sessions.json`, `chat-history.json`, `config.ya
 | `cron-jobs.json` | Yes (own lock) | No | No hook writes to this file |
 | SQLite stores | N/A | N/A | SQLite has its own locking |
 
-3. **Personal AI Turn Queue** (`enqueueMainAgentTurn` in `src/web/agent-turn-queue.ts`): serializes the turns that share one conversation's `chat-history.json` entries (WS chat, a `main-agent` cron job, heartbeat, triage). Max concurrency = 1. Callers with independent history (a routine's isolated session, hook-dispatched agents, the compaction summarizer) bypass the queue.
+3. **Personal AI Turn Queue** (`enqueueMainAgentTurn` in `src/web/agent-turn-queue.ts`): serializes the turns that share one conversation's `chat-history.json` entries (WS chat, a `main-agent` cron job, triage). Max concurrency = 1. Callers with independent history (a routine's isolated session, hook-dispatched agents, the compaction summarizer) bypass the queue.
 
 Nothing guards a token budget any more: the CLI owns each session's context window and compacts it itself, so there is no Walnut-side payload to trim.
 
@@ -421,14 +421,6 @@ A pluggable hook system that reacts to session bus events. Replaces hardcoded tr
 
 ---
 
-## Heartbeat System — Implementation
-
-**Checklist CRUD**: REST endpoints `GET/PUT /api/heartbeat/checklist` (in `src/web/routes/heartbeat.ts`) use `readHeartbeatChecklist()` / `writeHeartbeatChecklist()` from `src/heartbeat/checklist-io.ts`. Settings page (`web/src/pages/SettingsPage.tsx`) has a textarea editor for HEARTBEAT.md. A heartbeat run is a lane turn, so its own edits go through the session, not through a Walnut-side tool.
-
-**Key files**: `src/heartbeat/` (types, runner, checklist-io, barrel), `src/web/routes/heartbeat.ts` (REST), `src/web/server.ts` (integration), `web/src/hooks/useChat.ts` (WS handler), `web/src/components/chat/ChatMessage.tsx` (rendering), `web/src/styles/globals.css` (styling).
-
----
-
 ## Cron Job System — Detail
 
 ### Directory layout
@@ -512,7 +504,7 @@ Context sources are **read-only** injection at launch time. `stateful.memory_pro
 
 ## Logging — Subsystem Loggers
 
-**Subsystem loggers**: `log.bus`, `log.agent`, `log.session`, `log.subagent`, `log.web`, `log.ws`, `log.hook`, `log.task`, `log.memory`, `log.usage`, `log.heartbeat`. Child loggers: `log.agent.child('loop')` → tag `agent/loop`.
+**Subsystem loggers**: `log.bus`, `log.agent`, `log.session`, `log.subagent`, `log.web`, `log.ws`, `log.hook`, `log.task`, `log.memory`, `log.usage`. Child loggers: `log.agent.child('loop')` → tag `agent/loop`.
 
 See `src/logging/AGENTS.md` for code examples, log levels, and redaction patterns.
 
@@ -521,7 +513,7 @@ See `src/logging/AGENTS.md` for code examples, log levels, and redaction pattern
 ## Usage Tracking — Implementation
 
 **Components**:
-- `types.ts` — `UsageRecord`, `UsageSummary`, `UsageSource` (agent, agent-cli, subagent, compaction, image-tool, session, perplexity, glm, heartbeat, cron, triage). `parent_source` optional field tracks which source invoked a subagent (e.g. subagent called from 'cron' records `parent_source: 'cron'`).
+- `types.ts` — `UsageRecord`, `UsageSummary`, `UsageSource` (agent, agent-cli, subagent, compaction, image-tool, session, glm, cron, triage; `perplexity` and `heartbeat` only on older records). `parent_source` optional field tracks which source invoked a subagent (e.g. subagent called from 'cron' records `parent_source: 'cron'`).
 - `pricing.ts` — Multi-provider pricing table (Claude, GLM-4, Perplexity) with substring pattern matching on model IDs. `computeCost()` computes from tokens; `external_cost_usd` overrides when provided (e.g. session costs from Claude Code CLI).
 - `tracker.ts` — `UsageTracker` class with `record()`, `getSummary()`, `getDailyCosts()`, `getBySource()`, `getByModel()`, `getRecentRecords()`, `prune()`. Uses parameterized SQL queries.
 - `index.ts` — Barrel + singleton `usageTracker` instance (lazy DB init).

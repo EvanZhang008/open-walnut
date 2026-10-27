@@ -1,7 +1,7 @@
 /**
  * Voice lives in Settings (2026-10-26, the user: "the voice can be part of
  * setting"): the sidebar has no Voice button and no Voice history slide-out;
- * Settings > Voice opens on its recent recordings, then Dictation and Read aloud.
+ * Settings > Voice opens on its recent recordings, then Dictation.
  *  - a recording from today shows its time, an older one its day too;
  *  - a row with words copies them (no chat box on the Settings page);
  *  - a failed take re-transcribes from its stored audio, and the new words

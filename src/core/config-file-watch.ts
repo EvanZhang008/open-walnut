@@ -5,8 +5,8 @@
  * Every reader already reads the file on each call (getConfig), but the things
  * that act on a change start on CONFIG_CHANGED or onConfigWritten, which only
  * Walnut's own writes fired: the followers' copies (core/replication/kinds/),
- * a host's notes copy and what it keeps (core/host-replica-sync.ts), the
- * heartbeat, the host list. Before this, a hand-set
+ * a host's notes copy and what it keeps (core/host-replica-sync.ts) and
+ * the host list. Before this, a hand-set
  * `hosts.<alias>.keep.notes_exclude` left the note on that host until the next
  * 5-minute sweep.
  *

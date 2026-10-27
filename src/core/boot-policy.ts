@@ -108,7 +108,6 @@ export const BOOT_POLICY = [
   { job: 'companion-plugin-cards', leader: false, replica: false, companionUntil: '5b', why: 'plugins never load on a host replica' },
   { job: 'plugin-sync-polling', leader: true, replica: false, why: 'plugins never load on a host replica' },
   { job: 'cron', leader: true, replica: false, capability: 'backup-leader', why: 'routines never run on a host replica' },
-  { job: 'heartbeat', leader: true, replica: false, why: 'the Mac owns heartbeat turns' },
   { job: 'triage-bootstrap', leader: true, replica: false, why: 'the Mac owns cron-jobs.json' },
   { job: 'board-store-watch', leader: true, replica: false, why: 'boards are copies on a host replica (WP4)' },
   { job: 'board-kanban-watch', leader: true, replica: false, why: 'board facts are written on the Mac' },

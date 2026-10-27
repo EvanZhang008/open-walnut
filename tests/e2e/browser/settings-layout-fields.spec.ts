@@ -106,8 +106,11 @@ test('F27 N03 F31 F33 F36: number fields end on the content edge, no-op bulk lin
     expect(new Set(rights.map((x) => x.inset)), `${id} ${JSON.stringify(rights)}`).toEqual(new Set([0]))
     for (const x of rights) expect(x.a).toBe('textfield')
   }
-  await clickNav(page, 'integrations')
-  const empties = await page.locator('.settings-pane .settings-secret').evaluate((els) => els ? 1 : 0).catch(() => 0)
+  // A secret field with nothing in it shows no reveal toggle (Tasks holds the
+  // Jev key; the Integrations pane this used to read is gone).
+  await clickNav(page, 'tasks')
+  // count(), not evaluate(): a pane with no secret field must not wait for one.
+  const empties = await page.locator('.settings-pane .settings-secret').count()
   if (empties) {
     const bad = await page.locator('.settings-pane').evaluate((el) =>
       Array.from(el.querySelectorAll<HTMLElement>('.settings-secret')).filter((w) => !(w.querySelector('input') as HTMLInputElement).value
@@ -126,7 +129,7 @@ test('F27 N03 F31 F33 F36: number fields end on the content edge, no-op bulk lin
   }
 })
 
-test('F17 F18 F28 F35: plugin slots line up, install rows stack, engine menus show a chevron', async ({ page }) => {
+test('F17 F18 F28: plugin slots line up, install rows stack', async ({ page }) => {
   await recordWrites(page)
   await openSettings(page)
   // Plugins live on the Apps page; the Settings nav's Plugins row links there.
@@ -146,12 +149,7 @@ test('F17 F18 F28 F35: plugin slots line up, install rows stack, engine menus sh
   // Back to Settings from the sidebar for the panes after it.
   await page.getByTestId('sidebar-core-app-settings').click()
   await expect(page.locator('.settings-nav')).toBeVisible({ timeout: 20_000 })
-  await clickNav(page, 'engines')
-  const selects = page.locator('.engine-setting-row-pane select.engine-setting-select')
-  for (let i = 0; i < await selects.count(); i++) {
-    const bg = await selects.nth(i).evaluate((el) => getComputedStyle(el).backgroundImage)
-    expect(bg).toContain('svg')
-  }
+  // F35 (an engine menu's chevron) went with the Engines pane on 2026-10-27.
   await page.route('**/api/backup/status', (route) => route.fulfill({ json: { configured: true, running: false, consecutiveFailures: 0, versioningEnabled: false } }))
   await clickNav(page, 'backup')
   const warn = page.getByTestId('backup-versioning-off')

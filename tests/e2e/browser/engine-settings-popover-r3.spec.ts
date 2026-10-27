@@ -2,9 +2,9 @@
  * Composer "+" -> "Engine settings" popover: review round three, copy and
  * chrome (chromium). Each test would have failed before its fix:
  * the default-scope sentence names the second exception (keys the engine files per project)
- * the footer link is built from the response: "<titles joined by and> settings (N) are in Settings › Engines"
- * the same for a Codex-shaped view; a plain link when no other group has rows
- * while loading the link is a neutral "Settings › Engines" and the (i) is there, disabled
+ * every other group of the response is a collapsed "<Title> (N)" group after the session rows
+ * the same for a Codex-shaped view; no group at all when no other group has rows
+ * while loading no group is drawn and the (i) is there, disabled
  * a failed first load leaves the filter disabled, like the switch
  * the filter box and the rows keep their top through skeleton, dense, a filter, a scope switch
  * the draft guard dims the note instead of leaving a blank band
@@ -14,8 +14,8 @@
  */
 import { test, expect, type Locator } from '@playwright/test'
 import {
-  LOADING_LINK_TEXT, LOCAL_SCOPE_NOTE, captureView, claimUserFile, filterBox, fixtureRoot, makeGitProject, openPanels, openPopover,
-  otherGroupsLinkText, popoverRow, rect, restoreSeed, rowControl, rowsArea, scopeOption, shot, startSessionAt, stubGet,
+  LOCAL_SCOPE_NOTE, captureView, claimUserFile, filterBox, fixtureRoot, groupOpen, makeGitProject, openPanels,
+  openPopover, otherGroupsOf, popoverGroup, popoverGroups, popoverRow, rect, restoreSeed, rowControl, rowsArea, scopeOption, shot, startSessionAt, stubGet,
   waitForRows,
 } from './engine-settings-popover-helpers'
 
@@ -38,7 +38,7 @@ test.afterAll(async ({ request }) => { await restoreSeed(request) })
 const opacity = (loc: Locator) => loc.evaluate((el) => Number(getComputedStyle(el).opacity))
 
 test.describe('engine settings popover: round three, copy and chrome', () => {
-  test('the default sentence admits both exceptions; the link reads the response', async ({ page, request }) => {
+  test('the default sentence admits both exceptions; the other groups read the response', async ({ page, request }) => {
     const captured = await captureView(request, sidA)
     const [panel] = await openPanels(page, [sidA])
     const dialog = await openPopover(page, panel)
@@ -49,23 +49,32 @@ test.describe('engine settings popover: round three, copy and chrome', () => {
     // (Output style still writes the project file; the data says so, hidden).
     await expect(popoverRow(dialog, 'outputStyle')).toHaveAttribute('data-write-target', 'project-local')
     await expect(popoverRow(dialog, 'outputStyle').locator('.engine-setting-target')).toBeHidden()
-    // Titles in response order joined by " and ", N = the sum of those groups' rows (never a literal).
-    const link = dialog.locator('a.engine-settings-more-link')
-    const others = captured.groups.filter((g) => g.id !== 'sessions' && g.items.length > 0)
+    // One group per other group of the response, in response order, each
+    // "<Title> (N)" with N its own row count (never a literal); no footer link.
+    const others = otherGroupsOf(captured)
     expect(others.length).toBeGreaterThanOrEqual(2)
-    const n = others.reduce((s, g) => s + g.items.length, 0)
-    await expect(link).toHaveText(`${others.map((g) => g.title).join(' and ')} settings (${n}) are in Settings › Engines`)
-    await expect(link).toHaveText(otherGroupsLinkText(captured))
-    // Still a SPA navigation to the Engines section.
-    await page.evaluate(() => { (window as unknown as { __r3marker?: number }).__r3marker = 1 })
-    await link.click()
+    await expect(popoverGroups(dialog)).toHaveCount(others.length)
+    expect(await popoverGroups(dialog).evaluateAll((els) => els.map((e) => e.getAttribute('data-testid'))))
+      .toEqual(others.map((g) => `engine-settings-popover-group-${g.id}`))
+    for (const g of others) {
+      await expect(popoverGroup(dialog, g.id).locator('summary')).toHaveText(`${g.title} (${g.items.length})`)
+      expect(await groupOpen(popoverGroup(dialog, g.id))).toBe(false)
+    }
+    await expect(dialog.locator('a.engine-settings-more-link')).toHaveCount(0)
+    // A click opens one group and leaves the dialog where it is.
+    const before = await rect(dialog)
+    await popoverGroup(dialog, others[0].id).locator('summary').click()
+    await expect.poll(() => groupOpen(popoverGroup(dialog, others[0].id))).toBe(true)
+    await expect(popoverRow(dialog, others[0].items[0].key)).toBeVisible()
+    expect(await groupOpen(popoverGroup(dialog, others[1].id))).toBe(false)
+    const after = await rect(dialog)
+    expect(Math.abs(after.top - before.top)).toBeLessThanOrEqual(1)
+    expect(Math.abs(after.height - before.height)).toBeLessThanOrEqual(1)
+    await page.keyboard.press('Escape')
     await expect(dialog).toHaveCount(0)
-    await expect.poll(() => page.url()).toContain('/settings#engines')
-    expect(await page.evaluate(() => (window as unknown as { __r3marker?: number }).__r3marker)).toBe(1)
-    await expect(page.locator('#engines')).toBeVisible({ timeout: 15_000 })
   })
 
-  test('a Codex-shaped view; a plain link when no other group has rows', async ({ page }) => {
+  test('a Codex-shaped view; no group when no other group has rows', async ({ page }) => {
     const [panel] = await openPanels(page, [sidA])
     const codex = await stubGet(page, (real) => {
       const sessions = real.groups.find((g) => g.id === 'sessions')!
@@ -77,7 +86,8 @@ test.describe('engine settings popover: round three, copy and chrome', () => {
     }, { scope: 'default', times: 1 })
     let dialog = await openPopover(page, panel)
     await waitForRows(dialog)
-    await expect(dialog.locator('a.engine-settings-more-link')).toHaveText('Updates settings (1) are in Settings › Engines')
+    await expect(popoverGroups(dialog)).toHaveCount(1)
+    await expect(popoverGroup(dialog, 'updates').locator('summary')).toHaveText('Updates (1)')
     await expect(dialog.getByTestId('engine-settings-files').locator('summary')).toHaveText('Files (1)')
     await codex.unroute()
     await page.keyboard.press('Escape')
@@ -85,19 +95,21 @@ test.describe('engine settings popover: round three, copy and chrome', () => {
     const only = await stubGet(page, (real) => ({ ...real, groups: real.groups.filter((g) => g.id === 'sessions') }), { scope: 'default', times: 1 })
     dialog = await openPopover(page, panel)
     await waitForRows(dialog)
-    await expect(dialog.locator('a.engine-settings-more-link')).toHaveText('Open Settings › Engines')
+    await expect(dialog).toHaveAttribute('data-state', 'ready')
+    await expect(popoverGroups(dialog)).toHaveCount(0)
+    await expect(dialog.locator('a.engine-settings-more-link')).toHaveCount(0)
     await only.unroute()
     await page.keyboard.press('Escape')
   })
 
-  test('a stable link and a present (i) while loading; a failed first load disables the filter', async ({ page }) => {
+  test('no group and a present (i) while loading; a failed first load disables the filter', async ({ page }) => {
     const [panel] = await openPanels(page, [sidA])
     // GET held: the skeleton is on screen long enough to read the chrome.
     const slow = await stubGet(page, 'real', { scope: 'default', delayMs: 1500, times: 1 })
     let dialog = await openPopover(page, panel)
     await expect(dialog).toHaveAttribute('data-state', 'loading')
-    const link = dialog.locator('a.engine-settings-more-link')
-    await expect(link).toHaveText(LOADING_LINK_TEXT)
+    await expect(popoverGroups(dialog)).toHaveCount(0)
+    await expect(dialog.locator('a.engine-settings-more-link')).toHaveCount(0)
     const about = dialog.locator('button.engine-settings-about')
     await expect(about).toHaveCount(1)
     await expect(about).toBeDisabled()
@@ -111,8 +123,7 @@ test.describe('engine settings popover: round three, copy and chrome', () => {
     const aboutBoxReady = await rect(about)
     expect(Math.abs(aboutBoxReady.top - aboutBoxLoading.top)).toBeLessThanOrEqual(0.5)
     expect(Math.abs(aboutBoxReady.left - aboutBoxLoading.left)).toBeLessThanOrEqual(0.5)
-    await expect(link).toHaveText(/ settings \(\d+\) are in Settings › Engines$/)
-    await expect(link).toContainText(LOADING_LINK_TEXT)
+    await expect(popoverGroups(dialog).first().locator('summary')).toHaveText(/^.+ \(\d+\)$/)
     await slow.unroute()
     await page.keyboard.press('Escape')
     await expect(dialog).toHaveCount(0)
@@ -124,7 +135,7 @@ test.describe('engine settings popover: round three, copy and chrome', () => {
     await expect(dialog.locator('.engine-settings-popover-error')).toHaveText('The host devbox could not be reached in time.')
     await expect(filterBox(dialog)).toBeDisabled()
     await expect(dialog.locator('.engine-settings-scope[role=radiogroup]')).toHaveAttribute('aria-disabled', 'true')
-    await expect(link).toHaveText(LOADING_LINK_TEXT)
+    await expect(popoverGroups(dialog)).toHaveCount(0)
     await shot(page, 'r4/first-fail-filter-disabled')
     await failed.unroute()
     await dialog.locator('button.engine-settings-retry').click()

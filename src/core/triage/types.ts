@@ -8,7 +8,7 @@
  * lives in notes and in the agent's standing memory file, never in a long-lived
  * session — see docs and the `walnut-inbox-triage` skill.
  *
- * Shaped one-for-one on src/heartbeat/types.ts: a small config interface plus
+ * A small config interface plus
  * DEFAULT_* constants, and the defaults live at the READER
  * (src/core/triage/config.ts), never in DEFAULT_CONFIG — config-manager spreads
  * the parsed file over its defaults at the TOP level, so anything seeded under a
@@ -40,7 +40,7 @@ export interface TriageConfig {
   /**
    * Interval between timed batches as a duration string ("30m", "1h").
    * Clamped up to MIN_TRIAGE_EVERY_MS; "0" / "0m" disables triage entirely
-   * (same vocabulary as `heartbeat.every`). Default: "30m".
+   * (parsed by schedule-window.ts). Default: "30m".
    */
   every?: string;
 

@@ -85,7 +85,6 @@ const OLD_TRUTH: Record<BootJob, (cloud: boolean) => boolean> = {
   'companion-plugin-cards': cloudOnly,
   'plugin-sync-polling': leaderOnly,
   'cron': always,
-  'heartbeat': leaderOnly,
   'triage-bootstrap': leaderOnly,
   'board-store-watch': leaderOnly,
   'board-kanban-watch': leaderOnly,
@@ -137,7 +136,7 @@ describe('boot policy', () => {
   })
 
   it('the self-gated starts the plan names are off on a host replica', () => {
-    for (const job of ['board-reminders', 'wait-until', 'title-reconciler', 'notes-indexer', 'local-daemon', 'plugins', 'cron', 'heartbeat', 'replica-pushes', 'leader-heartbeat'] as const) {
+    for (const job of ['board-reminders', 'wait-until', 'title-reconciler', 'notes-indexer', 'local-daemon', 'plugins', 'cron', 'replica-pushes', 'leader-heartbeat'] as const) {
       expect(bootPolicy(job, 'host'), job).toBe(false)
     }
   })

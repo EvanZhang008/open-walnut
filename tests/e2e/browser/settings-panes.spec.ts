@@ -100,13 +100,17 @@ test('C4: a same-page #link and a router navigation both switch panes without a 
   await expect(page.getByTestId(NAV('advanced'))).toHaveAttribute('aria-current', 'page')
   await expect(page.locator('#providers')).toBeVisible({ timeout: 20_000 })
   await expect(page).toHaveURL(/\/settings#providers$/)
-  // A router navigation (what navigate('/settings#engines') does): push + popstate.
+  // A router navigation (what an old navigate('/settings#engines') does): push +
+  // popstate. Engines is retired, so its hash lands on Sessions, which holds the
+  // default engine row now.
   await page.evaluate(() => {
     window.history.pushState({}, '', '/settings#engines')
     window.dispatchEvent(new PopStateEvent('popstate', { state: {} }))
   })
-  await expect(page.getByTestId(NAV('engines'))).toHaveAttribute('aria-current', 'page')
-  await expect(page.locator('#engines.settings-section')).toBeVisible({ timeout: 20_000 })
+  await expect(page.getByTestId(NAV('sessions'))).toHaveAttribute('aria-current', 'page')
+  await expect(page.locator('#sessions.settings-section')).toBeVisible({ timeout: 20_000 })
+  await expect(page.getByTestId('default-engine-row')).toBeVisible()
+  await expect(page.getByTestId(NAV('engines'))).toHaveCount(0)
   expect(await page.evaluate(() => (window as unknown as { __paneMarker?: string }).__paneMarker)).toBe('kept')
 })
 
@@ -205,9 +209,11 @@ test('C73: model, all clear, cloud companion, focus tiers, use an api, agent', a
   await openSettings(page)
   const filter = page.getByTestId('settings-filter')
   await filter.fill('model')
-  await expect.poll(() => visibleNavKeys(page)).toEqual(expect.arrayContaining([NAV('engines'), NAV('advanced'), NAV('tasks')]))
+  await expect.poll(() => visibleNavKeys(page)).toEqual(expect.arrayContaining([NAV('advanced'), NAV('tasks')]))
+  expect(await visibleNavKeys(page)).not.toContain(NAV('engines'))
+  // "Heartbeat all clear" left with the Chat notifications group: General no longer matches.
   await filter.fill('all clear')
-  await expect(page.getByTestId(NAV('general')).locator('.settings-nav-hint')).toHaveText('Matches "Heartbeat all clear"')
+  await expect.poll(() => visibleNavKeys(page)).not.toContain(NAV('general'))
   await filter.fill('cloud companion')
   await expect.poll(() => visibleNavKeys(page)).toContain(NAV('devices'))
   await filter.fill('focus tiers')
@@ -217,8 +223,9 @@ test('C73: model, all clear, cloud companion, focus tiers, use an api, agent', a
   await filter.fill('agent')
   await expect(page.getByTestId(NAV('agents'))).toBeVisible()
   await filter.press('Enter')
-  await expect(page).toHaveURL(/\/settings#engines$/)
-  await expect(page.getByTestId(NAV('engines'))).toHaveAttribute('aria-current', 'page')
+  // The first pane "agent" names is Sessions ("coding agent", the default engine's home).
+  await expect(page).toHaveURL(/\/settings#sessions$/)
+  await expect(page.getByTestId(NAV('sessions'))).toHaveAttribute('aria-current', 'page')
   await expect(page.getByTestId(NAV('agents'))).toBeVisible()
 })
 
@@ -297,7 +304,7 @@ test('C47: nav clicks replace history, so one Back leaves Settings', async ({ pa
   await expect(page.locator('.settings-nav')).toBeVisible({ timeout: 30_000 })
   await clickNav(page, 'general')
   await clickNav(page, 'sessions')
-  await clickNav(page, 'engines')
+  await clickNav(page, 'tasks')
   await page.goBack()
   await expect(page).toHaveURL(/\/skills/)
 })
@@ -388,7 +395,7 @@ test('C38: a crashing core section shows its own shell and Try again', async ({ 
   await expect(section).toContainText("This section couldn't load.")
   await expect(section.getByRole('button', { name: 'Try again' })).toBeVisible()
   await expect.poll(() => warnings.some((w) => w.includes('section crashed'))).toBe(true)
-  await clickNav(page, 'engines')
+  await clickNav(page, 'tasks')
   await clickNav(page, 'sessions')
   await page.evaluate(() => { delete (window as HookWindow).__walnutSettingsCrash })
   await section.getByRole('button', { name: 'Try again' }).click()
@@ -627,18 +634,18 @@ test('C60: a change left behind by a pane switch still saves, and a failure mark
   await clickNav(page, 'sessions')
   const idle = page.locator('#idle-timeout')
   await idle.fill('47')
-  await page.getByTestId(NAV('engines')).click()
-  await expect(page.locator('#engines.settings-section')).toBeVisible({ timeout: 20_000 })
+  await page.getByTestId(NAV('tasks')).click()
+  await expect(page.locator('#tasks.settings-section')).toBeVisible({ timeout: 20_000 })
   await expect.poll(() => bodies.some((b) => b.includes('"idle_timeout_minutes":47')), { timeout: 5_000 }).toBe(true)
-  // The save belonged to Sessions: Engines never says Saved.
+  // The save belonged to Sessions: Tasks never says Saved.
   for (let i = 0; i < 10; i++) {
-    await expect(page.locator('#engines [data-testid="settings-saved-indicator"]')).toHaveCount(0)
+    await expect(page.locator('#tasks [data-testid="settings-saved-indicator"]')).toHaveCount(0)
     await page.waitForTimeout(250)
   }
   fail = true
   await clickNav(page, 'sessions')
   await idle.fill('48')
-  await page.getByTestId(NAV('engines')).click()
+  await page.getByTestId(NAV('tasks')).click()
   await expect(page.getByTestId('settings-nav-error-sessions')).toBeVisible({ timeout: 5_000 })
   await expect(page.getByTestId('settings-nav-error-sessions')).toHaveAttribute('title', "A change here wasn't saved.")
   await clickNav(page, 'sessions')

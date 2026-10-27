@@ -7,9 +7,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createElement as h } from '../../web/node_modules/react/index.js'
 import { renderToStaticMarkup } from '../../web/node_modules/react-dom/server.node.js'
 import type { Config } from '../../src/core/types.js'
-import { developerKeyFor, useSerialSave, type BuildPatch, type SaveOpts } from '../../web/src/components/settings/sections/GeneralSection.js'
-import { firstSentence, paneSettingLabel } from '../../web/src/components/settings/sections/EngineSettingRows.js'
-import { chunkRows, engineOwnerName, hostTagOf } from '../../web/src/components/settings/sections/EnginesSection.js'
+import { useSerialSave, type BuildPatch, type SaveOpts } from '../../web/src/components/settings/sections/GeneralSection.js'
+import { firstSentence } from '../../web/src/components/settings/sections/EngineSettingRows.js'
 import { toggleMode } from '../../web/src/components/settings/sections/SessionsSection.js'
 import { toggleSource } from '../../web/src/components/settings/sections/TriageSection.js'
 import { parseExcludedFolders } from '../../web/src/components/settings/sections/SearchSection.js'
@@ -28,24 +27,6 @@ describe('engine rows', () => {
     expect(firstSentence('Use e.g. opus here. Second.')).toBe('Use e.g. opus here.')
     expect(firstSentence('Set `a. b` first. Then.')).toBe('Set `a. b` first.')
     expect(firstSentence('No period')).toBe('No period')
-  })
-
-  it('names the owner of a bare model label', () => {
-    expect(paneSettingLabel('Default model', 'Claude Code')).toBe('Claude Code model')
-    expect(paneSettingLabel('Model', 'Codex')).toBe('Codex model')
-    expect(paneSettingLabel('Effort', 'Codex')).toBe('Effort')
-    expect(paneSettingLabel('Model', undefined)).toBe('Model')
-    expect(paneSettingLabel('Default model', engineOwnerName('claude', 'Claude'))).toBe('Claude Code model')
-    expect(engineOwnerName('codex', 'Codex')).toBe('Codex')
-  })
-
-  it('chunks long groups at ten rows and words host tags plainly', () => {
-    const rows = Array.from({ length: 23 }, (_, i) => i)
-    expect(chunkRows(rows).map((c) => c.length)).toEqual([8, 8, 7]) // N12: balanced, no lone tail
-    expect(chunkRows([])).toEqual([])
-    expect(hostTagOf('connected').text).toBe('Reachable')
-    expect(hostTagOf('error').text).toBe('Offline')
-    expect(hostTagOf('testing').text).toBe('Checking')
   })
 })
 
@@ -125,7 +106,6 @@ describe('summaries and result lines are plain words', () => {
       unknownProjectWarning('A', true, () => false) ?? '', testResultText({ kind: 'fail', error: 'e' }) ?? '',
     ]
     for (const s of all) expect(s).not.toMatch(DASH)
-    expect(developerKeyFor('heartbeat' as never)).toBe('show_ui_only_heartbeat')
   })
 })
 

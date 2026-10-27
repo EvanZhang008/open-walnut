@@ -10,7 +10,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import {
   CONFIG_COPY_ALLOWLIST, CONFIG_COPY_DROPPED, CONFIG_COPY_DROPPED_FIELDS, allowThrough, configCopyRows, configRowAdmissible, findSecrets,
-  secretKeyName, secretShapedValue, type AllowSpec,
+  secretKeyName, secretShapedValue, RETIRED_CONFIG_KEYS, type AllowSpec,
 } from '../../../src/core/replication/config-allowlist.js'
 import { maskSecretTail, PLUGIN_FORM_MASK } from '../../../src/core/config-secret-shape.js'
 import { fullConfigFixture, PLANTED_SECRETS } from '../../helpers/full-config-fixture.js'
@@ -89,6 +89,17 @@ describe('the ratchet: every config key is allowlisted or dropped', () => {
     const r = configCopyRows({ version: 1, brand_new_section: { mode: 'fast' }, ui: { theme: 'dark' } })
     expect(r.rows.map((x) => x.key)).toEqual(['ui', 'version'])
     expect(r.unknown).toEqual(['brand_new_section'])
+  })
+
+  it('an older leader\'s agent row (still carrying region and maxTokens) is admitted', () => {
+    expect(configRowAdmissible({ key: 'agent', value: { main_model: 'acme-model-large', region: 'us-west-2', maxTokens: 8192 } })).toBe(true)
+  })
+
+  it('a retired key an older config.yaml still holds is dropped quietly, never named as unknown', () => {
+    const r = configCopyRows({ version: 1, heartbeat: { enabled: true, every: '30m' }, developer: { show_ui_only_triage: true } })
+    expect(r.rows.map((x) => x.key)).toEqual(['version'])
+    expect(r.unknown).toEqual([])
+    for (const k of RETIRED_CONFIG_KEYS) expect([k, own(CONFIG_COPY_ALLOWLIST, k) || own(CONFIG_COPY_DROPPED, k)]).toEqual([k, false])
   })
 
   it('a sub-key an allowed section does not name is dropped too', () => {

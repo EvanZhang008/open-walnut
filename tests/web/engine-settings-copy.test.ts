@@ -6,15 +6,13 @@
  * guesses the home directory;
  * 2. savedSentence: the six landing sentences, five gitExclude outcomes with
  * `failed` carrying the server's reason, none naming the exclude file;
- * 3. otherGroupsLink is built from the response;
- * 4. filterSettingRows: label/key hits win, help is the fallback with marks;
- * 5. the one-line sentences and their two branches.
+ * 3. filterSettingRows: label/key hits win, help is the fallback with marks;
+ * 4. the one-line sentences and their two branches.
  */
 import { describe, expect, it } from 'vitest'
 import type {
   EngineSettingView,
   EngineSettingsFileView,
-  EngineSettingsGroupView,
   EngineSettingsWriteResult,
   GitExcludeOutcome,
 } from '../../web/src/api/engine-settings'
@@ -28,13 +26,11 @@ import {
   hostLabel,
   menuActionTitle,
   noMatchSentence,
-  otherGroupsLink,
   projectFileRelative,
   projectFileShort,
   savedSentence,
   scopeSentence,
   scopeStorageKey,
-  SETTINGS_ENGINES_LINK,
   scopeUnavailableReason,
   shortenCwd,
   shortenUnderCwd,
@@ -203,11 +199,6 @@ describe('savedSentence (spec 6.6)', () => {
   })
 })
 
-function group(id: string, title: string, n: number): EngineSettingsGroupView {
-  const items = Array.from({ length: n }, (_, i) => row(`${id}.${i}`, `${title} ${i}`, '', 'user'))
-  return { id, title, help: '', items }
-}
-
 describe('removedSentence via savedSentence op=unset', () => {
   const after = (item: Partial<EngineSettingView>): EngineSettingsWriteResult => {
     const base = result('project-local')
@@ -240,29 +231,6 @@ describe('removedSentence via savedSentence op=unset', () => {
 
   it('op=set (and no op at all) keeps the saved sentence', () => {
     expect(savedSentence({ ...input(result('project-local')), op: 'set' })).toBe(`Saved to this project (local), ${CWD_SHORT} only.`)
-  })
-})
-
-describe('otherGroupsLink', () => {
-  it('Claude: two other groups, titles in response order joined by and, the real count', () => {
-    const groups = [group('sessions', 'Sessions', 12), group('updates', 'Updates', 3), group('terminal', 'Terminal only', 9)]
-    expect(otherGroupsLink(groups)).toBe('Updates and Terminal only settings (12) are in Settings › Engines')
-  })
-
-  it('Codex: one other group', () => {
-    expect(otherGroupsLink([group('sessions', 'Sessions', 4), group('updates', 'Updates', 1)]))
-      .toBe('Updates settings (1) are in Settings › Engines')
-  })
-
-  it('no other group with rows: a plain link', () => {
-    expect(otherGroupsLink([group('sessions', 'Sessions', 4)])).toBe('Open Settings › Engines')
-    expect(otherGroupsLink([group('sessions', 'Sessions', 4), group('terminal', 'Terminal only', 0)])).toBe('Open Settings › Engines')
-    expect(otherGroupsLink([])).toBe('Open Settings › Engines')
-  })
-
-  it('no view yet: the neutral text, never a count or an "Open" it would flip away from', () => {
-    expect(otherGroupsLink(null)).toBe('Settings › Engines')
-    expect(SETTINGS_ENGINES_LINK).toBe('Settings › Engines')
   })
 })
 
@@ -342,7 +310,7 @@ describe('one-line sentences', () => {
     expect(envUncheckedSentence('devbox')).toBe("Environment variables on devbox were not checked: one set for the engine's processes there can take precedence over these files.")
     expect(scopeUnavailableReason({ cwd: undefined, displayName: 'Codex' })).toBe('This session has no working directory, so there is no project file to write.')
     expect(scopeUnavailableReason({ cwd: '/work/app', displayName: 'Codex' })).toBe('Codex keeps no per-project settings file.')
-    expect(emptySentence('Codex')).toBe('Codex reports no settings that a running session reads. Its other settings are in Settings › Engines.')
+    expect(emptySentence('Codex')).toBe('Codex reports no settings Walnut can edit.')
     expect(scopeStorageKey('__local__', '/work/app')).toBe('walnut:engine-settings-scope:__local__:/work/app')
     // Per engine, so a Codex session never inherits a Claude Code memory for the same directory.
     expect(scopeStorageKey('__local__', '/work/app', 'claude')).toBe('walnut:engine-settings-scope:claude:__local__:/work/app')

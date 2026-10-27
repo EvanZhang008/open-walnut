@@ -297,9 +297,6 @@ path on the companion".
 | GET | `/api/v1/timeline/dates` | Dates with capture data (501 on REPLICA) |
 | GET | `/api/v1/timeline/images/:date/:file` | Thumbnail JPG (501 on REPLICA) |
 | POST | `/api/v1/timeline/toggle` | Enable/disable the Life Tracker job (501 on REPLICA) |
-| GET | `/api/v1/heartbeat` | Heartbeat runner status (501 on REPLICA) |
-| POST | `/api/v1/heartbeat/trigger` | Manual heartbeat, debounced (501 on REPLICA) |
-| GET/PUT | `/api/v1/heartbeat/checklist` | Read/write HEARTBEAT.md |
 | GET | `/api/v1/projects/:name/metadata` | Project detail-pane payload |
 | PUT | `/api/v1/projects/:name/metadata` | Merge project settings (501 on REPLICA) |
 | POST | `/api/v1/projects/:name/summary/regenerate` | Rebuild the AI project summary (501 on REPLICA) |
@@ -2995,7 +2992,7 @@ usual (absent → `general`).
     non-slug names (traversal probes) → `400`.
   - `DELETE /api/v1/repositories/:name` → `{ "ok": true }`.
 
-### Console extras (additive, Wave 3 2026-08) — usage detail / providers / qmd / integrations / timeline / heartbeat
+### Console extras (additive, Wave 3 2026-08) — usage detail / providers / qmd / integrations / timeline
 
 - Usage detail breakdowns (complete the Wave-2 composite `/usage/overview`;
   **`501 not_supported_cloud` on a REPLICA** — the usage DB lives on the
@@ -3031,13 +3028,9 @@ usual (absent → `general`).
     traversal rejected).
   - `POST /api/v1/timeline/toggle` → `{ "enabled", "jobId" }`; no tracker
     job yet → `404`.
-- Heartbeat:
-  - `GET /api/v1/heartbeat` → `{ enabled, state }` — **REPLICA: 501** (the
-    runner lives on the primary; a replica answering "disabled" would lie).
-  - `POST /api/v1/heartbeat/trigger` body `{ "context"? }` → `{ "ok" }`
-    (debounced ~250ms). REPLICA: 501; not enabled → `400`.
-  - `GET/PUT /api/v1/heartbeat/checklist` → `{ "content" }` / `{ "ok" }` —
-    HEARTBEAT.md rides git-sync (Class A, both boxes).
+- Heartbeat: removed on 2026-10-27 with the heartbeat feature.
+  `GET /api/v1/heartbeat`, `POST /api/v1/heartbeat/trigger` and
+  `GET/PUT /api/v1/heartbeat/checklist` now answer `404`; no client used them.
 
 ### Long-tail additions (additive, Wave 3 2026-08) — folded into existing domains
 

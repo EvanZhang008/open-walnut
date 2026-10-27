@@ -567,7 +567,7 @@ export function AskWalnutSlot({
     // The same payload launchQuickStart builds for a walnut draft: the server
     // owns the cwd AND the engine, and `pinTier: null` (never undefined) is how
     // "don't pin" survives JSON.stringify. No engine is sent, which is what lets
-    // an ask inherit `defaults.engine` (Settings › Engines) — the server carries
+    // an ask inherit `defaults.engine` (Settings › Sessions) — the server carries
     // the agent's persona on the first message when that engine is an ACP one.
     // The model rides only when the user picked one, and a pick made in the
     // claude picker is ignored server-side on an ACP launch (that adapter never

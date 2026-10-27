@@ -148,22 +148,7 @@
   column-gap: 6px;
 }
 
-.engine-settings-more-link {
-  grid-column: 1;
-  grid-row: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--accent);
-  text-decoration: none;
-  line-height: 1.45;
-}
-
-.engine-settings-more-link:hover { text-decoration: underline; }
-
-/* The details box spans the row and is painted over the link; only its summary
-   and its list take the pointer, so the link under the empty part stays clickable. */
+/* The details box spans the row; only its summary and its list take the pointer. */
 .engine-settings-popover .engine-settings-files {
   grid-column: 1 / -1;
   grid-row: 1;
@@ -177,8 +162,7 @@
   pointer-events: auto;
 }
 
-/* Shrink-to-fit at the right end of the first line: the summary's box is its
-   text, so the link next to it (grid column one) is never under it. */
+/* Shrink-to-fit at the right end of the first line: the summary's box is its text. */
 .engine-settings-popover .engine-settings-files > summary {
   display: flex;
   align-items: center;

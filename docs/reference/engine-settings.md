@@ -2,18 +2,19 @@
 
 Walnut lets you edit each coding-agent engine's own settings: the rows Claude
 Code's `/config` screen edits, and the top-level keys of Codex's `config.toml`.
-Two surfaces share one implementation: Settings → Engines edits a host's
-user-wide files, and the composer's "+" menu in a session opens the same rows
-for that session (its engine, host and working directory), where a change can
-also be scoped to that project only. Walnut writes the engine's own files on the
+The composer's "+" menu in a session opens them for that session (its engine,
+host and working directory), where a change can also be scoped to that project
+only. (A Settings → Engines pane used to edit a host's user-wide files; it was
+removed on 2026-10-27, and its one Walnut setting, the default engine, is in
+Settings → Sessions. The route still takes `?host=`.) Walnut writes the engine's own files on the
 host where that engine's sessions run, so a terminal on that host and every
 Walnut session see the same values.
 
 ## How it fits together
 
 ```text
-Settings → Engines (host picker)      Session composer "+" → Engine settings (this session)
-        │  GET/PATCH /api/engines/:id/settings?host=          ?sessionId=&scope=default|project
+Session composer "+" → Engine settings (this session)
+        │  GET/PATCH /api/engines/:id/settings?sessionId=&scope=default|project  (or ?host=)
         ▼
 src/web/routes/engines.ts            resolves host + cwd (from the session), wires the daemon transport
         ▼
@@ -62,7 +63,7 @@ Verified against Claude Code 2.1.258:
 - The CLI's own screen writes four rows (Show tips, Reduce motion, Output style,
   Default view) to the project's `.claude/settings.local.json`; the data marks
   them `cliWritesTo`. With a working directory known, Walnut's default scope
-  follows the CLI and writes them there too; without one (Settings → Engines)
+  follows the CLI and writes them there too; without one (a `?host=` read)
   they go to the user file as the user-wide default.
 - Precedence, highest first: managed settings, CLI flags, the project's local
   file `<cwd>/.claude/settings.local.json`, the project's shared file
@@ -101,7 +102,7 @@ it is committed with the repo, so Walnut never edits a teammate's choices and
 overrides them through the local file instead). Project files are consulted
 only when a working directory is known: the route takes it from `?cwd=` or
 from the session named by `?sessionId=` (its host as well). Without one the
-view is the host-wide one Settings → Engines shows.
+view is the host-wide one.
 
 Every row in the view says which layer holds the value in force (`source`:
 `file`, `overlay` with the overlay named, `legacy`, `default`) and where a save
@@ -234,10 +235,10 @@ What the dialog shows:
   layer or an older location holding the value), as do the override,
   environment and invalid lines. A filter box narrows by label or key, and
   falls back to help text with the match marked.
-- The other groups (updates, terminal only) are one link away: the footer link
-  text is built from the response ("Updates and Terminal only settings (34) are
-  in Settings › Engines"; a neutral "Settings › Engines" until the view answers)
-  and shares its line with "Files (N)" (a chevron marks the disclosure), which lists
+- The other groups (updates, terminal only) follow the session rows, each
+  collapsed under its title and row count and opened while a filter is typed
+  (one filter over every row, so a name hit anywhere wins over a help hit).
+  The footer holds "Files (N)" (a chevron marks the disclosure), which lists
   every file the engine reads, paths under the cwd shortened and wrapped only
   after a slash, clickable paths styled as links, with "(not created yet)" and
   "created just now" as they change.

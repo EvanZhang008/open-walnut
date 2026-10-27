@@ -1,7 +1,7 @@
 /**
  * The content blocks of EngineSettingsPopover: the sentences under the scope
  * switch, the filter, the rows area (skeleton, error, empty, no match, rows)
- * and the footer (saved sentence, link to the full page, Files list).
+ * and the footer (saved sentence, Files list).
  *
  * Every sentence comes from `@/utils/engine-settings-copy`; nothing here
  * branches on an engine id. Row rendering is `EngineSettingRow` as-is; what
@@ -9,13 +9,13 @@
  * line, the help match, the project-scope lock for a global-only file) sits in
  * the row's wrapper so the shared component stays untouched.
  */
-import { useEffect, useLayoutEffect, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode, type RefObject } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 import type { EngineSettingView, EngineSettingsView, EngineSettingsWriteScope } from '@/api/engine-settings';
 import type { EngineSettingsHook, EngineSettingsLastWrite } from '@/hooks/useEngineSettings';
-import { rowHonoredHere, rowLacksProjectLayer, sessionsGroup } from '@/hooks/engine-settings-model';
+import { otherGroups, rowHonoredHere, rowLacksProjectLayer, sessionsGroup } from '@/hooks/engine-settings-model';
 import {
   appliesOnSentence, emptySentence, envUncheckedSentence, filterSettingRows, noMatchSentence,
-  otherGroupsLink, projectFileRelative, savedSentence, scopeSentence, shortenUnderCwd,
+  projectFileRelative, savedSentence, scopeSentence, shortenUnderCwd,
 } from '@/utils/engine-settings-copy';
 import { EngineSettingRow } from '@/components/settings/sections/EngineSettingRows';
 import { log } from '@/utils/log';
@@ -170,13 +170,13 @@ export interface RowsAreaProps {
   scope: EngineSettingsWriteScope;
   filter: string;
   busy: boolean;
-  onLink: (e: ReactMouseEvent) => void;
 }
 
 export function EngineSettingsRowsArea(props: RowsAreaProps) {
-  const { rowsRef, settings, engine, displayName, hostText, scope, filter, busy, onLink } = props;
+  const { rowsRef, settings, engine, displayName, hostText, scope, filter, busy } = props;
   const { view, loading, loadError } = settings;
   const group = sessionsGroup(view);
+  const others = otherGroups(view).filter((g) => g.items.length > 0);
   let body: ReactNode;
   if (loading) {
     body = <Skeleton hostText={hostText} />;
@@ -187,35 +187,84 @@ export function EngineSettingsRowsArea(props: RowsAreaProps) {
         <button type="button" className="engine-settings-retry" onClick={settings.reload}>Retry</button>
       </div>
     );
-  } else if (!view || !group || group.items.length === 0) {
-    body = (
-      <p className="engine-settings-popover-empty">
-        {emptySentence(displayName)}{' '}
-        <a href="/settings#engines" onClick={onLink}>Open Settings › Engines</a>
-      </p>
-    );
+  } else if (!view || ((group?.items.length ?? 0) === 0 && others.length === 0)) {
+    body = <p className="engine-settings-popover-empty">{emptySentence(displayName)}</p>;
   } else {
-    const { items, helpMarks } = filterSettingRows(group.items, filter);
+    // ONE filter over every row, so a name hit anywhere wins over a help hit
+    // anywhere; the rows then go back to their own group, in order.
+    const { items, helpMarks } = filterSettingRows([...(group?.items ?? []), ...others.flatMap((g) => g.items)], filter);
+    const shown = new Set(items.map((i) => i.key));
+    const renderRow = (item: EngineSettingView) => (
+      <PopoverRow
+        key={item.key}
+        engine={engine}
+        item={item}
+        view={view}
+        scope={scope}
+        saving={settings.savingKeys.includes(item.key)}
+        onSet={settings.onSet}
+        onReset={settings.onReset}
+        helpMarks={helpMarks.get(item.key)}
+      />
+    );
     body = items.length === 0
       ? <p className="engine-settings-popover-nomatch">{noMatchSentence(filter.trim())}</p>
-      : items.map((item) => (
-        <PopoverRow
-          key={item.key}
-          engine={engine}
-          item={item}
-          view={view}
-          scope={scope}
-          saving={settings.savingKeys.includes(item.key)}
-          onSet={settings.onSet}
-          onReset={settings.onReset}
-          helpMarks={helpMarks.get(item.key)}
-        />
-      ));
+      : (
+        <>
+          {(group?.items ?? []).filter((i) => shown.has(i.key)).map(renderRow)}
+          {others.map((g) => {
+            const rows = g.items.filter((i) => shown.has(i.key));
+            if (rows.length === 0) return null;
+            return (
+              <OtherGroup key={g.id} id={g.id} title={g.title} help={g.help} count={rows.length} filtering={filter.trim() !== ''}>
+                {rows.map(renderRow)}
+              </OtherGroup>
+            );
+          })}
+        </>
+      );
   }
   return (
     <div ref={rowsRef} className="engine-settings-popover-rows" aria-busy={busy || undefined}>
       {body}
     </div>
+  );
+}
+
+/**
+ * A group a running session does not read (the CLI's updater, the terminal's
+ * own preferences): collapsed under its title so the session rows stay first,
+ * and opened while a filter is typed so a hit in it is visible.
+ */
+function OtherGroup({ id, title, help, count, filtering, children }: {
+  id: string; title: string; help: string | undefined; count: number; filtering: boolean; children: ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  // While filtering the group starts open; a click that closes it is remembered until the filter is cleared.
+  const [closedWhileFiltering, setClosedWhileFiltering] = useState(false);
+  useEffect(() => { if (!filtering) setClosedWhileFiltering(false); }, [filtering]);
+  const shown = filtering ? !closedWhileFiltering : open;
+  return (
+    <details
+      className="engine-settings-popover-group"
+      data-testid={`engine-settings-popover-group-${id}`}
+      open={shown}
+      onToggle={(e) => {
+        const now = e.currentTarget.open;
+        if (now === shown) return;
+        if (filtering) setClosedWhileFiltering(!now);
+        else setOpen(now);
+      }}
+    >
+      <summary>
+        <svg className="engine-settings-files-chevron" width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+          <path d="M6 3l5 5-5 5" />
+        </svg>
+        <span>{title} ({count})</span>
+      </summary>
+      {help && <p className="engine-settings-popover-group-help">{help}</p>}
+      {children}
+    </details>
   );
 }
 
@@ -301,7 +350,6 @@ export interface FooterProps {
   cwdShort: string;
   isLocalHost: boolean;
   existedAtOpen: Map<string, boolean> | null;
-  onLink: (e: ReactMouseEvent) => void;
   onOpenPath?: (path: string) => void;
 }
 
@@ -388,7 +436,7 @@ function PathText({ path }: { path: string }) {
 }
 
 export function EngineSettingsFooter(props: FooterProps) {
-  const { view, lastWrite, banner, onDismissBanner, hostText, cwdShort, isLocalHost, existedAtOpen, onLink, onOpenPath } = props;
+  const { view, lastWrite, banner, onDismissBanner, hostText, cwdShort, isLocalHost, existedAtOpen, onOpenPath } = props;
   const files = view?.files ?? [];
   const anyError = files.some((f) => !!f.error);
   const [filesOpen, setFilesOpen] = useState(anyError);
@@ -401,14 +449,8 @@ export function EngineSettingsFooter(props: FooterProps) {
   return (
     <footer className="engine-settings-popover-footer">
       <StatusSlot banner={banner} onDismissBanner={onDismissBanner} saved={saved} />
-      {/* The link and the Files disclosure share ONE line (the details
-          spans the row; its summary sits in the reserved right column). */}
+      {/* The Files disclosure spans the row; its summary sits in the reserved right column. */}
       <div className="engine-settings-footer-row">
-        {/* Neutral text until the view answers; the sentence with the
-            groups and the count is built from that answer. */}
-        <a className="engine-settings-more-link" href="/settings#engines" onClick={onLink} title={otherGroupsLink(view ? view.groups : null)}>
-          {otherGroupsLink(view ? view.groups : null)}
-        </a>
         {view && (
           <details className="engine-settings-files" data-testid="engine-settings-files" open={filesOpen} onToggle={(e) => setFilesOpen(e.currentTarget.open)}>
             {/* A chevron says the line unfolds, and points down while it is open. */}

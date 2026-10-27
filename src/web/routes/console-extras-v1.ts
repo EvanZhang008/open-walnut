@@ -1,9 +1,9 @@
 /**
  * /api/v1 console extras (additive, Wave 3) — usage detail breakdowns,
- * provider status, search-index status, plugin metadata, Life Tracker
- * timeline, and heartbeat. Semantics identical to the internal routes
- * (usage.ts / config.ts / search-index.ts / integrations.ts / timeline.ts /
- * heartbeat.ts) — same shared functions, zero duplicated logic.
+ * provider status, search-index status, plugin metadata and Life Tracker
+ * timeline. Semantics identical to the internal routes
+ * (usage.ts / config.ts / search-index.ts / integrations.ts / timeline.ts) —
+ * same shared functions, zero duplicated logic.
  *
  *   GET  /usage/summary | /daily | /by-source | /by-model | /by-agent
  *        | /recent | /pricing                → usage aggregates
@@ -15,21 +15,19 @@
  *   GET  /timeline/dates                     → { dates }
  *   GET  /timeline/images/:date/:file        → JPEG bytes
  *   POST /timeline/toggle                    → { enabled, jobId }
- *   GET  /heartbeat                          → status
- *   POST /heartbeat/trigger { context? }     → { ok }
- *   GET  /heartbeat/checklist                → { content }
- *   PUT  /heartbeat/checklist { content }    → { ok }
+ *
+ * The heartbeat routes (/heartbeat, /heartbeat/trigger, /heartbeat/checklist)
+ * went with the heartbeat feature on 2026-10-27 and now answer 404.
  *
  * Replica classes:
- * - usage / qmd status / timeline / heartbeat status+trigger: C — the usage
- *   DB, search index, timeline captures (gitignored dir) and heartbeat runner
- *   all live on the primary → 501 not_supported_cloud.
+ * - usage / qmd status / timeline: C — the usage DB, search index and
+ *   timeline captures (gitignored dir) all live on the primary → 501
+ *   not_supported_cloud.
  * - config/providers: local read describing the ANSWERING box's provider
  *   credentials (the replica's Personal AI uses its own) — served on both boxes,
  *   with `key_hint` (last-4 of a key) STRIPPED: any paired device can call
  *   v1, and even a key fragment doesn't belong on that trust level.
- * - integrations / heartbeat checklist: A — registry runs on both boxes
- *   (values masked); HEARTBEAT.md rides git-sync.
+ * - integrations: A — registry runs on both boxes (values masked).
  *
  * Frozen-contract note: everything here is additive (docs/reference/api-v1.md).
  */
@@ -298,83 +296,6 @@ consoleExtrasV1Router.post('/timeline/toggle', async (_req: Request, res: Respon
   if (primaryOnly(res, 'The Life Tracker cron job')) return
   const { toggleLifeTracker } = await import('./timeline.js')
   await runTimelineOp(res, next, () => toggleLifeTracker())
-})
-
-// ── Heartbeat ────────────────────────────────────────────────────────────────
-
-// GET /api/v1/heartbeat — heartbeat runner status. C-class: the runner lives
-// on the primary; the replica answering `enabled: false` for a heartbeat that
-// IS running on the primary would be a lie.
-consoleExtrasV1Router.get('/heartbeat', async (_req: Request, res: Response, next: NextFunction) => {
-  try {
-    if (primaryOnly(res, 'The heartbeat runner')) return
-    const { getHeartbeatHandle } = await import('../server.js')
-    const handle = getHeartbeatHandle()
-    if (!handle) {
-      res.json({
-        enabled: false,
-        state: null,
-        message: 'Heartbeat is not enabled. Set heartbeat.enabled: true in config.yaml.',
-      })
-      return
-    }
-    const state = handle.getState()
-    res.json({
-      enabled: true,
-      state: {
-        running: state.running,
-        lastRunAt: state.lastRunAt ? new Date(state.lastRunAt).toISOString() : null,
-        nextDueAt: state.nextDueAt ? new Date(state.nextDueAt).toISOString() : null,
-        stopped: state.stopped,
-      },
-    })
-  } catch (err) {
-    next(err)
-  }
-})
-
-// POST /api/v1/heartbeat/trigger { context? } — manual heartbeat (debounced).
-consoleExtrasV1Router.post('/heartbeat/trigger', async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    if (primaryOnly(res, 'The heartbeat runner')) return
-    const { getHeartbeatHandle } = await import('../server.js')
-    const handle = getHeartbeatHandle()
-    if (!handle) {
-      sendError(res, 400, 'bad_request', 'Heartbeat is not enabled. Set heartbeat.enabled: true in config.yaml.')
-      return
-    }
-    const context = typeof req.body?.context === 'string' ? req.body.context : undefined
-    handle.requestNow('manual', context)
-    res.json({ ok: true, message: 'Heartbeat triggered (debounced, will fire within 250ms).' })
-  } catch (err) {
-    next(err)
-  }
-})
-
-// GET /api/v1/heartbeat/checklist — HEARTBEAT.md content (A: git-synced).
-consoleExtrasV1Router.get('/heartbeat/checklist', async (_req: Request, res: Response, next: NextFunction) => {
-  try {
-    const { readHeartbeatChecklist } = await import('../../heartbeat/checklist-io.js')
-    res.json({ content: await readHeartbeatChecklist() })
-  } catch (err) {
-    next(err)
-  }
-})
-
-// PUT /api/v1/heartbeat/checklist { content } — write HEARTBEAT.md.
-consoleExtrasV1Router.put('/heartbeat/checklist', async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const { content } = (req.body ?? {}) as Record<string, unknown>
-    if (typeof content !== 'string') {
-      sendError(res, 400, 'bad_request', 'content (string) is required')
-      return
-    }
-    const { writeHeartbeatChecklist } = await import('../../heartbeat/checklist-io.js')
-    await writeHeartbeatChecklist(content)
-    res.json({ ok: true })
-  } catch (err) {
-    next(err)
-  }
 })
 
 // Router-level error funnel — keeps unexpected failures in the frozen shape.

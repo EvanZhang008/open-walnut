@@ -3,13 +3,11 @@
  * regression fails here before anyone opens the page.
  */
 import { describe, expect, it } from 'vitest'
-import { categorizeSettings } from '../../web/src/components/settings/sections/engine-setting-categories.js'
 import { deviceNameForServer } from '../../web/src/components/settings/sections/device-name.js'
 import { sttScanSummary } from '../../web/src/components/settings/sections/stt-scan-summary.js'
 import { fieldOwnerFor } from '../../web/src/components/settings/plugin-config-fields.js'
 import { truncateHint, HINT_MAX } from '../../web/src/components/settings/settings-filter.js'
 import { groupShowsTags } from '../../web/src/components/settings/sections/HooksSection.js'
-import { paneControlKind, textIsCode } from '../../web/src/components/settings/sections/EngineSettingRows.js'
 import { fromMs, toMs } from '../../web/src/components/settings/sections/AdvancedSection.js'
 import { providerStatusTag } from '../../web/src/components/settings/sections/ProvidersSection.js'
 import { jevTestText } from '../../web/src/components/settings/sections/JevSettings.js'
@@ -21,24 +19,6 @@ const CLAUDE_SESSION_KEYS = [
   'workflowKeywordTriggerEnabled', 'workflowSizeGuideline', 'enableArtifact', 'precomputeCompactionEnabled',
   'useAutoModeDuringPlan', 'worktree.baseRef', 'teammateMode', 'dialogExpiry', 'crossSessionInbound', 'modelProposedGoals',
 ]
-
-describe('N3-02: a long engine group splits under real topic headings', () => {
-  const items = CLAUDE_SESSION_KEYS.map((key) => ({ key, label: key }))
-  const cats = categorizeSettings('sessions', 'Sessions', items)
-
-  it('never generates a "continued" heading and keeps every row', () => {
-    expect(cats.map((c) => c.title)).toEqual(['Model', 'Replies', 'Context', 'Workflows', 'Safety'])
-    expect(cats.some((c) => /continued/i.test(c.title))).toBe(false)
-    expect(cats.flatMap((c) => c.items.map((i) => i.key)).sort()).toEqual([...CLAUDE_SESSION_KEYS].sort())
-    expect(Math.max(...cats.map((c) => c.items.length))).toBeLessThanOrEqual(10)
-  })
-
-  it('leaves a short group alone and files an unknown key under Other', () => {
-    expect(categorizeSettings('updates', 'Updates', [{ key: 'a', label: 'A' }]).map((c) => c.title)).toEqual(['Updates'])
-    const extra = [...items, { key: 'somethingNew', label: 'Something new' }]
-    expect(categorizeSettings('sessions', 'Sessions', extra).at(-1)).toMatchObject({ title: 'Other' })
-  })
-})
 
 describe('N3-03: the placeholder device name pairs', () => {
   it('turns a name with spaces into the id the server accepts', () => {
@@ -96,20 +76,6 @@ describe('N3-11: a tag only when it tells rows apart', () => {
     expect(groupShowsTags([{ source: 'builtin' }, { source: 'inline' }] as never)).toBe(false)
     expect(groupShowsTags([{ source: 'daemon-policy' }, { source: 'daemon-policy' }] as never)).toBe(false)
     expect(groupShowsTags([{ source: 'builtin' }, { source: 'config' }] as never)).toBe(true)
-  })
-})
-
-describe('N3-01, N3-07: the Engines row layout keys off the control it draws', () => {
-  it('names the control kind', () => {
-    expect(paneControlKind({ type: 'boolean', default: true } as never)).toBe('switch')
-    expect(paneControlKind({ type: 'boolean', default: null } as never)).toBe('segmented')
-    expect(paneControlKind({ type: 'select', options: [{ value: 'a', label: 'Auto' }, { value: 'b', label: 'On' }] } as never)).toBe('segmented')
-    expect(paneControlKind({ type: 'select', options: Array.from({ length: 6 }, (_, i) => ({ value: `${i}`, label: `${i}` })) } as never)).toBe('select')
-    expect(paneControlKind({ type: 'text' } as never)).toBe('text')
-  })
-  it('sets a language in the text font and a model id in mono', () => {
-    expect(textIsCode({ key: 'language', label: 'Language' })).toBe(false)
-    expect(textIsCode({ key: 'model', label: 'Default model' })).toBe(true)
   })
 })
 

@@ -20,18 +20,17 @@
  * the project layer exists, so a session without a cwd never sends
  * scope=project, and a first load that still answers 400 falls back
  * to the default scope and forgets the memory.
- * - Focus returns to the "+" button only for Escape, Close and the footer
- * link. An outside pointerdown leaves focus where the user clicked,
+ * - Focus returns to the "+" button only for Escape, Close and opening a
+ * settings file. An outside pointerdown leaves focus where the user clicked,
  * after blurring the active element so an uncommitted text draft is
  * committed before the node unmounts.
  */
 import {
   useCallback, useEffect, useId, useRef, useState,
-  type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent,
+  type CSSProperties, type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent, type RefObject,
 } from 'react';
 import { createPortal } from 'react-dom';
-import { useNavigate } from 'react-router-dom';
 import { LOCAL_HOST, type EngineSettingsWriteScope } from '@/api/engine-settings';
 import { useMenuPlacement } from '@/hooks/useMenuPlacement';
 import { findItem, sessionsGroup } from '@/hooks/engine-settings-model';
@@ -80,7 +79,6 @@ export function EngineSettingsPopover(props: EngineSettingsPopoverProps) {
   const rowsRef = useRef<HTMLDivElement>(null);
   const filterRef = useRef<HTMLInputElement>(null);
   const reasonId = useId();
-  const navigate = useNavigate();
 
   const [filter, setFilter] = useState('');
   const [draftGuard, setDraftGuard] = useState<string | null>(null);
@@ -126,7 +124,7 @@ export function EngineSettingsPopover(props: EngineSettingsPopoverProps) {
   const projectAvailable = view?.projectScopeAvailable ?? false;
   const switchLocked = saving || loadError?.phase === 'initial' || (!view && !loadError);
   const group = sessionsGroup(view);
-  const dataState = loadError ? 'error' : !view ? 'loading' : (group?.items.length ?? 0) === 0 ? 'empty' : 'ready';
+  const dataState = loadError ? 'error' : !view ? 'loading' : view.groups.every((g) => g.items.length === 0) ? 'empty' : 'ready';
 
   // Reset per open (the scope itself is the memory hook's): the filter empty,
   // the file baseline taken from the first answer.
@@ -332,14 +330,6 @@ export function EngineSettingsPopover(props: EngineSettingsPopoverProps) {
     close('link');
   }, [onOpenPath, close]);
 
-  const onFooterLink = useCallback((e: ReactMouseEvent) => {
-    e.preventDefault();
-    const anchor = anchorRef.current;
-    close('link');
-    anchor?.focus({ preventScroll: true });
-    navigate('/settings#engines');
-  }, [anchorRef, close, navigate]);
-
   if (!open) return null;
   const projectLockedReason = view && !projectAvailable ? scopeUnavailableReason({ cwd: view.cwd, displayName }) : null;
   const scopeTitle = saving ? 'Wait for the current save to finish' : undefined;
@@ -446,7 +436,6 @@ export function EngineSettingsPopover(props: EngineSettingsPopoverProps) {
         scope={scope}
         filter={filter}
         busy={refreshing}
-        onLink={onFooterLink}
       />
       <EngineSettingsFooter
         view={view}
@@ -458,7 +447,6 @@ export function EngineSettingsPopover(props: EngineSettingsPopoverProps) {
         cwdShort={cwdShort}
         isLocalHost={!host || host === LOCAL_HOST}
         existedAtOpen={existedAtOpenRef.current}
-        onLink={onFooterLink}
         onOpenPath={onOpenPath ? onOpenFilePath : undefined}
       />
       {/* Last in DOM order, both drawn in the header corner: Tab runs switch ->

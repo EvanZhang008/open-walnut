@@ -437,7 +437,7 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
     }
 
     // THE engine this launch will run on. A body that names one wins; a body that
-    // names none inherits `config.defaults.engine` (Settings › Engines), which is
+    // names none inherits `config.defaults.engine` (Settings › Sessions), which is
     // how every Walnut-initiated launch picks the user's engine up.
     //
     // Resolved HERE and not only inside quickStartSession because THIS handler

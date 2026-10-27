@@ -545,35 +545,14 @@ put_file() {
   mv -fT "$tmp" "$1"
 }
 ENV_FILE="$ETC_WALNUT/walnut.env"
-# KEY VALUE: walnut.env with KEY=VALUE in place of any earlier KEY line.
-env_set() {
-  { if [ -f "$ENV_FILE" ]; then grep -v "^$1=" "$ENV_FILE" || true; fi; printf '%s=%s\n' "$1" "$2"; } | put_file "$ENV_FILE" 600
-}
-# Secrets the companion needs at runtime (e.g. TAVILY_API_KEY for web search)
-# live in SSM Parameter Store under /walnut/* and materialize
-# into walnut.env here. Config.yaml is the wrong home for them: it git-syncs
-# through the data hub, and cloud-held secrets must never ride a repo.
-# Idempotent and best-effort: a missing parameter just means that feature stays
-# off. Non-AWS providers (and a hand-run of this script off-instance) have no
-# aws CLI; every lookup is optional, so skip the whole block rather than eating
-# a `command not found` per parameter.
+# walnut.env holds secrets the companion needs at runtime. Config.yaml is the
+# wrong home for them: it git-syncs through the data hub, and cloud-held
+# secrets must never ride a repo. Nothing writes one today (the web search key
+# went with web search); a line an older setup left there is kept as it is.
 # Voice is transcribed on the companion itself (it installs Qwen3-ASR on its
 # own), so the old hosted-STT key is dropped from an env file that still has it.
 if [ -f "$ENV_FILE" ] && grep -q '^OPENAI_API_KEY=' "$ENV_FILE"; then
   { grep -v '^OPENAI_API_KEY=' "$ENV_FILE" || true; } | put_file "$ENV_FILE" 600
-fi
-if command -v aws >/dev/null 2>&1; then
-  # web_search (Tavily) — same pattern: config.yaml is machine-local and never
-  # carries secrets, so the key rides SSM → env. web-search-tool falls back to
-  # TAVILY_API_KEY when tools.web_search.api_key is absent from config.
-  if TAVILY_KEY=$(aws ssm get-parameter --name /walnut/tavily-api-key \
-      --with-decryption --query Parameter.Value --output text 2>/dev/null); then
-    env_set TAVILY_API_KEY "$TAVILY_KEY"
-  else
-    echo "    (no /walnut/tavily-api-key in SSM — web_search disabled on the companion)"
-  fi
-else
-  echo "    (no aws CLI — skipping SSM secrets)"
 fi
 # Rewritten every run, so a file an older layout left to the service user is
 # root's again (its content is kept: it only ever configures that service).
@@ -620,7 +599,7 @@ Environment=HOME=$WALNUT_LIB
 # Path, not value — the pairing code stays out of 'systemctl show'. Absent file
 # = no provisioned token, and the server mints+prints a random one as before.
 Environment=WALNUT_SETUP_TOKEN_FILE=$CLAIM_DIR/setup-token
-# Optional secrets (SSM-materialized above); '-' = absent file is fine.
+# Optional secrets (see walnut.env above); '-' = absent file is fine.
 EnvironmentFile=-$ENV_FILE
 ExecStart=$NODE_BIN $REPO_DIR/dist/cli.js web --port 3456
 Restart=always

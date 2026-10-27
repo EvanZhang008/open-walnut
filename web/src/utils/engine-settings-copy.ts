@@ -285,25 +285,6 @@ export function savedSentence(input: SavedSentenceInput): string {
   }
 }
 
-/** The footer link's text before any view has answered: neutral, never a count it does not know. */
-export const SETTINGS_ENGINES_LINK = 'Settings › Engines';
-
-/**
- * The footer link to the groups the popover does not show, built from the
- * response: the group titles in response order joined with " and ",
- * then the real row count ("Updates and Terminal only settings (34) are in
- * Settings › Engines"). No group with rows: a plain link. No view yet (`null`):
- * the neutral text, so the link does not flip from a different sentence when
- * the view lands.
- */
-export function otherGroupsLink(groups: readonly EngineSettingsGroupView[] | null): string {
-  if (groups === null) return SETTINGS_ENGINES_LINK;
-  const others = groups.filter((g) => g.id !== 'sessions' && g.items.length > 0);
-  if (others.length === 0) return `Open ${SETTINGS_ENGINES_LINK}`;
-  const count = others.reduce((n, g) => n + g.items.length, 0);
-  return `${others.map((g) => g.title).join(' and ')} settings (${count}) are in ${SETTINGS_ENGINES_LINK}`;
-}
-
 export interface FilteredSettingRows {
   items: EngineSettingView[];
   /** `key` -> [start, end) ranges inside `item.help` to mark; only set when the row matched by help alone. */
@@ -344,9 +325,9 @@ export function filterSettingRows(items: readonly EngineSettingView[], query: st
   return { items: byHelp, helpMarks };
 }
 
-/** The sessions group came back empty: say so, and where the rest lives. */
+/** The engine reported no settings at all. */
 export function emptySentence(displayName: string): string {
-  return `${displayName} reports no settings that a running session reads. Its other settings are in Settings › Engines.`;
+  return `${displayName} reports no settings Walnut can edit.`;
 }
 
 export function noMatchSentence(query: string): string {

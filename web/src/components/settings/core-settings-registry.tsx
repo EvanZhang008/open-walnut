@@ -7,12 +7,9 @@ import { BugReportSection } from './sections/BugReportSection'
 import { CalendarSection } from './sections/CalendarSection'
 import { CloudSection } from './sections/CloudSection'
 import { DevicesSection } from './sections/DevicesSection'
-import { EnginesSection } from './sections/EnginesSection'
 import { FocusTiersSection } from './sections/FocusTiersSection'
 import { GeneralSection } from './sections/GeneralSection'
-import { HeartbeatSection } from './sections/HeartbeatSection'
 import { HooksSection } from './sections/HooksSection'
-import { IntegrationsSection } from './sections/IntegrationsSection'
 import { MailRulesSection } from './sections/MailRulesSection'
 import { PermissionsSection } from './sections/PermissionsSection'
 import { ProvidersSection } from './sections/ProvidersSection'
@@ -84,16 +81,14 @@ export const CORE_SETTINGS_CONTRIBUTIONS: readonly CoreSettingsContribution[] = 
   {
     owner: 'walnut', id: 'general', label: 'General', title: 'General', group: 'configure',
     icon: 'gear', tint: '#8E8E93',
-    description: 'Appearance, window layout and what shows up in chat.',
+    description: 'Appearance, window layout and updates.',
     keywords: [
       { word: 'theme', rowLabel: 'Appearance', anchor: 'settings-theme' },
       { word: 'dark', rowLabel: 'Appearance', anchor: 'settings-theme' },
       { word: 'light', rowLabel: 'Appearance', anchor: 'settings-theme' },
       'appearance', 'panels', 'columns',
       { word: 'your name', rowLabel: 'Your name', anchor: 'settings-name' },
-      'notifications', 'focus bar',
-      { word: 'heartbeat all clear', rowLabel: 'Heartbeat all clear', anchor: 'settings-notify-heartbeat' },
-      'triage', 'session results', 'subagent',
+      'focus bar',
     ],
     render: ({ config, saveSection }) => <GeneralSection config={config} onSave={saveSection} />,
   },
@@ -136,6 +131,8 @@ export const CORE_SETTINGS_CONTRIBUTIONS: readonly CoreSettingsContribution[] = 
     icon: 'two-speech-bubbles', tint: '#5856D6',
     description: 'How sessions run, time out and ask before acting.',
     keywords: [
+      { word: 'default engine', rowLabel: 'Default engine', anchor: 'default-engine-select' },
+      'engine', 'claude code', 'codex', 'coding agent',
       { word: 'idle timeout', rowLabel: 'Idle timeout', anchor: 'idle-timeout' },
       { word: 'max idle sessions', rowLabel: 'Max idle sessions', anchor: 'max-idle' },
       { word: 'permission prompts', rowLabel: 'Intercept permission prompts', anchor: 'permission-prompt' },
@@ -146,31 +143,12 @@ export const CORE_SETTINGS_CONTRIBUTIONS: readonly CoreSettingsContribution[] = 
     ],
     render: ({ config, saveSection }) => <SessionsSection config={config} onSave={saveSection} />,
   },
-  // Sessions is how WALNUT runs an engine; Engines is the engine's OWN settings
-  // (what its command-line config screen edits) on the host the sessions run on.
-  // Directly after Sessions because that is the question a reader asks next.
-  // `saveSection` is for the ONE Walnut-config control in there (the default
-  // engine for new sessions); the rest of the section writes the engines' own files.
-  {
-    owner: 'walnut', id: 'engines', label: 'Engines', title: 'Engines', group: 'configure',
-    icon: 'cpu-chip', tint: '#AF52DE',
-    description: "The coding agents' own settings on the host your sessions run on.",
-    keywords: [
-      'claude code', 'codex',
-      { word: 'default engine', rowLabel: 'Default engine', anchor: 'default-engine-select' },
-      'coding agent', 'engine',
-      { word: 'model', rowLabel: 'Claude Code model' },
-      'claude code model', 'language', 'output style',
-      'fast mode', 'checkpoints', 'workflow',
-    ],
-    render: ({ config, saveSection }) => <EnginesSection config={config} onSave={saveSection} />,
-  },
-  // Voice = both directions: dictation in (STT) and read-aloud out (TTS).
+  // Voice = dictation (STT) and the recordings it keeps.
   {
     owner: 'walnut', id: 'stt', label: 'Voice', title: 'Voice', group: 'configure',
     icon: 'waveform', tint: '#FF2D55',
-    description: 'Dictation in and read aloud out.',
-    keywords: ['speech', 'transcription', 'microphone', 'dictate', 'read aloud', 'tts', 'stt', 'whisper'],
+    description: 'Dictation and the recordings it keeps.',
+    keywords: ['speech', 'transcription', 'microphone', 'dictate', 'stt', 'whisper'],
     render: ({ config, saveSection, reload }) => <SttSection config={config} onSave={saveSection} onReload={reload} />,
   },
   {
@@ -179,14 +157,6 @@ export const CORE_SETTINGS_CONTRIBUTIONS: readonly CoreSettingsContribution[] = 
     description: 'Recording audio on this Mac for transcripts.',
     keywords: ['record', 'meeting', 'system audio', 'capture'],
     render: ({ config, saveSection }) => <AudioCaptureSection config={config} onSave={saveSection} />,
-  },
-  {
-    owner: 'walnut', id: 'integrations', label: 'Integrations', title: 'Integrations', group: 'configure',
-    icon: 'plug', tint: '#30B0C7',
-    description: "Keys for the agent's own tools.",
-    keywords: ['token', 'bot', 'web search', 'key', 'tool',
-      { word: 'slack', rowLabel: 'Slack bot for the agent', anchor: 'slack-token' }],
-    render: ({ config, saveSection }) => <IntegrationsSection config={config} onSave={saveSection} />,
   },
   // "Calendar Accounts" / "macOS Access": the two used to be "Calendar" and
   // "Permissions", which collided with the Calendar page and with the session
@@ -205,19 +175,6 @@ export const CORE_SETTINGS_CONTRIBUTIONS: readonly CoreSettingsContribution[] = 
     keywords: ['privacy', 'accessibility', 'screen recording', 'full disk', 'automation', 'tcc'],
     render: () => <PermissionsSection />,
   },
-  {
-    owner: 'walnut', id: 'heartbeat', label: 'Heartbeat', title: 'Heartbeat', group: 'configure',
-    icon: 'heart-pulse', tint: '#FF6B6B',
-    description: 'A regular check-in where Walnut works through your checklist.',
-    keywords: [
-      { word: 'interval', rowLabel: 'Interval', anchor: 'hb-every' },
-      { word: 'active hours', rowLabel: 'Active hours', anchor: 'hb-hours' },
-      'checklist', 'heartbeat.md', 'schedule',
-    ],
-    render: ({ config, saveSection }) => <HeartbeatSection config={config} onSave={saveSection} />,
-  },
-  // Directly after Heartbeat: both are "Walnut wakes itself up and works", and a
-  // reader who just set the heartbeat's clock asks about this one next.
   {
     owner: 'walnut', id: 'triage', label: 'Inbox Triage', title: 'Inbox Triage', group: 'configure',
     icon: 'tray', tint: '#007AFF',
@@ -281,10 +238,9 @@ export const CORE_SETTINGS_CONTRIBUTIONS: readonly CoreSettingsContribution[] = 
   {
     owner: 'walnut', id: 'advanced', label: 'Advanced', title: 'Advanced', group: 'configure',
     icon: 'sliders', tint: '#8E8E93',
-    description: 'Git versioning, command safety, subagents and developer options.',
+    description: 'Git versioning, keep awake and developer options.',
     keywords: [
-      'git', 'commit', 'push', 'exec', 'timeout', 'subagent',
-      { word: 'subagent model', rowLabel: 'Subagent model', anchor: 'sub-model' },
+      'git', 'commit', 'push',
       'keep awake', 'lid', 'battery', 'sdk',
       { word: 'port', rowLabel: 'Port', anchor: 'sdk-port' }, // the row's real label (N17)
       'raw config', 'json', 'background jobs',
@@ -293,7 +249,7 @@ export const CORE_SETTINGS_CONTRIBUTIONS: readonly CoreSettingsContribution[] = 
   },
   // The API alternative to Claude Code for Walnut's small background jobs
   // (names, summaries, memory upkeep, quick-add on the default runner). Folded
-  // under Advanced and collapsed: there is ONE engine choice (Engines), and
+  // under Advanced and collapsed: there is ONE engine choice (Sessions > Default engine), and
   // this only matters on a machine without Claude Code or for someone who wants
   // those jobs faster. The `#providers` anchor (setup banner) expands it.
   {

@@ -1,6 +1,6 @@
 /**
  * The pure half of editing an engine's own settings (web/src/hooks/engine-settings-model.ts),
- * shared by Settings › Engines and the composer popover:
+ * used by the composer popover:
  *
  * 1. mergeLanded: a write's answer that arrives AFTER a newer write already
  * painted places only its own key, and rows with a write still in

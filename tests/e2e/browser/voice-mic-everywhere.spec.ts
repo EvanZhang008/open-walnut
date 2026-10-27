@@ -177,15 +177,6 @@ async function settingsLinkTo(page: Page, id: string, url: string): Promise<void
   }, { timeout: 30_000 }).toContain(url)
 }
 
-async function settingsPane(page: Page, id: string): Promise<Locator> {
-  const item = page.getByTestId(`settings-nav-${id}`)
-  await item.click()
-  await expect(item).toHaveAttribute('aria-current', 'page')
-  const section = page.locator(`[id="${id}"].settings-section`)
-  await expect(section).toBeVisible({ timeout: 20_000 })
-  return section
-}
-
 // ── Seeding ─────────────────────────────────────────────────────────────────
 
 async function post<T>(request: APIRequestContext, url: string, data: unknown, headers?: Record<string, string>): Promise<T> {
@@ -599,15 +590,6 @@ test.describe('Routines', () => {
 // ── Settings ────────────────────────────────────────────────────────────────
 
 test.describe('Settings', () => {
-  test('the Heartbeat checklist has the mic inside it', async ({ page }) => {
-    test.setTimeout(120_000)
-    await home(page)
-    await openSettings(page)
-    const section = await settingsPane(page, 'heartbeat')
-    // Only looked at, never focused: the checklist saves on blur.
-    await expectMicField(page, 'settings-heartbeat', section.locator('.mic-field').filter({ has: page.locator('#heartbeat-editor') }))
-  })
-
   test('a skill\'s content has the mic inside it', async ({ page }) => {
     test.setTimeout(120_000)
     await home(page)

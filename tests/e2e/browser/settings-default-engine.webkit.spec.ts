@@ -11,7 +11,7 @@
  * server about the current value, and can open the list.
  */
 import { test, expect } from '@playwright/test'
-import { openEnginesSection } from './engine-settings-helpers'
+import { openSessionsSection } from './engine-settings-helpers'
 
 test.use({ browserName: 'webkit' })
 test.setTimeout(90_000)
@@ -26,7 +26,7 @@ test('webkit: the default-engine row renders, matches the config and offers the 
   const body = await res.json() as { config?: { defaults?: { engine?: string } } }
   const configured = body.config?.defaults?.engine ?? 'claude'
 
-  const section = await openEnginesSection(page)
+  const section = await openSessionsSection(page)
   // A segmented control for five engines or fewer, a select beyond that.
   const picker = section.getByTestId('default-engine-select')
   await expect(picker).toBeVisible()

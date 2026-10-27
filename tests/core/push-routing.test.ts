@@ -185,7 +185,7 @@ describe('an APNs token never reaches exp.host', () => {
 
   it('the token shape wins over a stored kind label: a hex token marked expo still goes to APNs', async () => {
     getConfig.mockResolvedValue({ push_tokens: [apnsRow({ kind: 'expo' })] })
-    await emit(EventNames.AGENT_RESPONSE, { text: REPLY, source: 'heartbeat' })
+    await emit(EventNames.AGENT_RESPONSE, { text: REPLY, source: 'cron' })
     expect(expoCalls()).toEqual([])
     expect(apnsCalls()).toHaveLength(1)
     expect(apnsCalls()[0][0].map((t) => t.token)).toEqual([APNS_TOKEN])
@@ -193,7 +193,7 @@ describe('an APNs token never reaches exp.host', () => {
 
   it('an Expo token marked apns still goes to Expo, never to Apple', async () => {
     getConfig.mockResolvedValue({ push_tokens: [expoRow({ kind: 'apns' })] })
-    await emit(EventNames.AGENT_RESPONSE, { text: REPLY, source: 'heartbeat' })
+    await emit(EventNames.AGENT_RESPONSE, { text: REPLY, source: 'cron' })
     expect(apnsCalls()).toHaveLength(0)
     expect(expoCalls()).toHaveLength(1)
     expect(expoCalls()[0].messages.map((m) => m.to)).toEqual([EXPO_TOKEN])
@@ -228,7 +228,6 @@ const EVENTS: Array<{
   type: string
 }> = [
   { name: 'a cron agent reply', event: EventNames.AGENT_RESPONSE, data: { text: REPLY, source: 'cron' }, title: 'Walnut', body: REPLY, type: 'agent_response' },
-  { name: 'a heartbeat agent reply', event: EventNames.AGENT_RESPONSE, data: { text: REPLY, source: 'heartbeat' }, title: 'Walnut', body: REPLY, type: 'agent_response' },
   { name: 'a triage agent reply', event: EventNames.AGENT_RESPONSE, data: { text: REPLY, source: 'triage' }, title: 'Walnut', body: REPLY, type: 'agent_response' },
   { name: 'a Personal AI lane result', event: EventNames.SESSION_RESULT, data: { sessionId: 'lane-sid', result: REPLY }, title: 'Walnut', body: REPLY, type: 'session_result' },
   { name: 'a coding session result', event: EventNames.SESSION_RESULT, data: { sessionId: 'plain-sid-1234', result: REPLY }, title: 'Session Complete', body: 'Session plain-si finished', type: 'session_result' },
@@ -292,7 +291,7 @@ describe('each event reaches every token once, through the service that fits it'
 })
 
 describe('gated events send to neither service', () => {
-  it('an interactive chat reply (no cron/heartbeat/triage source) is not pushed', async () => {
+  it('an interactive chat reply (no cron/triage source) is not pushed', async () => {
     await emit(EventNames.AGENT_RESPONSE, { text: REPLY, agentId: 'general' }, false)
     expect(fetchMock).not.toHaveBeenCalled()
     expect(sendApns).not.toHaveBeenCalled()

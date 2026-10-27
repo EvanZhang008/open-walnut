@@ -667,7 +667,7 @@ configRouter.put('/', async (req: Request, res: Response, next: NextFunction) =>
     const shownHosts = withoutCloudBoxHost(read.hosts)
     const merged = shownHosts === read.hosts ? read : { ...read, hosts: shownHosts }
     // In the client view, like GET: `web-ui` broadcasts this event to every connected client.
-    emitConfigChanged(merged, ['web-ui', 'heartbeat-config', 'setup-health', 'plugin-config-reload'], { source: 'api' })
+    emitConfigChanged(merged, ['web-ui', 'setup-health', 'plugin-config-reload'], { source: 'api' })
     res.json({ ok: true })
   } catch (err) {
     if (err instanceof MaskedValueError) {

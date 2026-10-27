@@ -1,7 +1,7 @@
 /**
  * /api/v1 console extras (Wave 3) — console-extras-v1.ts: usage breakdowns,
  * provider status (key_hint stripped), qmd status, integrations read,
- * timeline, heartbeat checklist.
+ * timeline.
  *
  * The test that matters most: /config/providers must never carry `key_hint`
  * — the shared builder emits it for the desktop settings screen, and the v1
@@ -18,7 +18,7 @@ import express from 'express'
 import request from 'supertest'
 import { consoleExtrasV1Router } from '../../../src/web/routes/console-extras-v1.js'
 import { errorHandler } from '../../../src/web/middleware/error-handler.js'
-import { WALNUT_HOME, CONFIG_FILE, TIMELINE_DIR, HEARTBEAT_FILE } from '../../../src/constants.js'
+import { WALNUT_HOME, CONFIG_FILE, TIMELINE_DIR } from '../../../src/constants.js'
 
 function createApp() {
   const app = express()
@@ -145,19 +145,11 @@ describe('timeline', () => {
   })
 })
 
-describe('heartbeat checklist', () => {
-  it('GET answers empty before first write; PUT persists', async () => {
+describe('heartbeat routes (removed 2026-10-27)', () => {
+  it('answer 404', async () => {
     const app = createApp()
-    const before = await request(app).get('/api/v1/heartbeat/checklist')
-    expect(before.status).toBe(200)
-    expect(before.body.content).toBe('')
-
-    const put = await request(app).put('/api/v1/heartbeat/checklist').send({ content: '- [ ] check disk' })
-    expect(put.status).toBe(200)
-    expect(put.body).toEqual({ ok: true })
-    expect(await fs.readFile(HEARTBEAT_FILE, 'utf-8')).toBe('- [ ] check disk')
-
-    const bad = await request(app).put('/api/v1/heartbeat/checklist').send({ content: 42 })
-    expect(bad.status).toBe(400)
+    expect((await request(app).get('/api/v1/heartbeat')).status).toBe(404)
+    expect((await request(app).get('/api/v1/heartbeat/checklist')).status).toBe(404)
+    expect((await request(app).put('/api/v1/heartbeat/checklist').send({ content: 'x' })).status).toBe(404)
   })
 })

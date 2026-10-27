@@ -45,7 +45,6 @@ const EXEMPT_PATHS = [
  * (child process + timeout + cached value). Lower/remove entries freely.
  */
 const BASELINE: Record<string, number> = {
-  'src/integrations/tmux.ts': 11,
   'src/integrations/git-sync.ts': 3,
   'src/utils/process.ts': 1,
   'src/providers/daemon-core.ts': 1,

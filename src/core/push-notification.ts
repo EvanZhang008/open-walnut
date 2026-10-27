@@ -103,9 +103,9 @@ export function initPushNotifications(): void {
       switch (event.name) {
         case EventNames.AGENT_RESPONSE: {
           const data = eventData<typeof EventNames.AGENT_RESPONSE>(event)
-          // Only push for non-interactive agent responses (cron, heartbeat, triage)
+          // Only push for non-interactive agent responses (cron, triage)
           const source = data.source
-          if (source && ['cron', 'heartbeat', 'triage'].includes(source)) {
+          if (source && ['cron', 'triage'].includes(source)) {
             const text = data.text ? data.text.slice(0, 150) : 'New response'
             await maybePush('Walnut', text, { type: 'agent_response', source })
           }

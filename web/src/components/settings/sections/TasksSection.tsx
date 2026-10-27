@@ -17,11 +17,10 @@ interface Props {
   onReload: () => Promise<void>;
 }
 
-export type TriageNotifyMode = 'off' | 'buffered' | 'realtime';
+export type TriageNotifyMode = 'off' | 'realtime';
 
 const NOTIFY_OPTIONS: { value: TriageNotifyMode; label: string; testId: string }[] = [
   { value: 'off', label: 'Off', testId: 'triage-notify-off' },
-  { value: 'buffered', label: 'On heartbeat', testId: 'triage-notify-buffered' },
   { value: 'realtime', label: 'Right away', testId: 'triage-notify-realtime' },
 ];
 
@@ -72,7 +71,8 @@ export function TasksSection({ config, onSave, onReload }: Props) {
     // Spread config.agent: updateConfig replaces the whole `agent` key.
     save((c) => ({ agent: { ...c.agent, triage: { ...c.agent?.triage, ...patch } } } as Partial<Config>), { rowKey });
   const notify = useOptimisticSetting<TriageNotifyMode>(
-    config.agent?.triage?.notify_mode ?? 'off',
+    // 'buffered' (an older value: it waited for the heartbeat, which is gone) acts as 'off'.
+    config.agent?.triage?.notify_mode === 'realtime' ? 'realtime' : 'off',
     (v) => saveTriage({ notify_mode: v }, 'tasks.triage-notify'),
     { rowKey: 'tasks.triage-notify' },
   );

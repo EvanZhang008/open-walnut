@@ -482,7 +482,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
       // feed entry — that noise is what makes users tune notifications out.
       dedupKey: key,
       persistent: true,
-      ...(isAuth ? { action: { label: 'Open Settings', kind: 'navigate' as const, to: '/settings#engines' } } : {}),
+      ...(isAuth ? { action: { label: 'Open Settings', kind: 'navigate' as const, to: '/settings#providers' } } : {}),
     });
   });
 

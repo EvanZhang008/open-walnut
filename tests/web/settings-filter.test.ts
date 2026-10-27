@@ -23,17 +23,14 @@ const hit = (q: string, key: string) => filterEntries(ENTRIES, q).find((h) => h.
 
 describe('Find a setting matcher', () => {
   it('finds every pane that talks about models', () => {
-    expect(keys('model')).toEqual(expect.arrayContaining(['engines', 'advanced', 'tasks']))
-    // F22: the hint names the row, and the exact keyword wins the Enter.
-    expect(hit('model', 'engines')?.hint).toBe('Claude Code model')
-    expect(primaryHit(filterEntries(ENTRIES, 'model'))?.key).toBe('engines')
-    expect(hit('model', 'advanced')?.hint).toBe('Subagent model')
+    expect(keys('model')).toEqual(expect.arrayContaining(['advanced', 'tasks']))
+    // F22: the hint names the row.
+    expect(hit('model', 'advanced')?.hint).toBe('Api model')
   })
 
   it('shows the row label for an anchored or row keyword', () => {
-    expect(keys('all clear')).toEqual(['general'])
-    expect(hit('all clear', 'general')?.hint).toBe('Heartbeat all clear')
-    expect(hit('all clear', 'general')?.anchor).toBe('settings-notify-heartbeat') // F20
+    expect(hit('default engine', 'sessions')?.hint).toBe('Default engine')
+    expect(hit('default engine', 'sessions')?.anchor).toBe('default-engine-select') // F20
     const name = hit('your name', 'general')
     expect(name?.hint).toBe('Your name')
     expect(name?.anchor).toBe('settings-name')
@@ -47,17 +44,16 @@ describe('Find a setting matcher', () => {
     expect(primaryHit(filterEntries(ENTRIES, 'use an api'))?.key).toBe('advanced')
   })
 
-  it('opens Engines for agent: a word-start keyword beats mid-word, panes beat page links', () => {
+  it('opens Sessions for agent: a word-start keyword beats mid-word, panes beat page links', () => {
     const hits = filterEntries(ENTRIES, 'agent')
     expect(hits.map((h) => h.key)).toContain('link:agents')
     expect(hits[0].key).toBe('link:agents') // label prefix ranks first ...
-    expect(primaryHit(hits)?.key).toBe('engines') // ... but Enter stays in Settings
-    expect(hit('agent', 'engines')?.wordStart).toBe(true)
-    expect(hit('agent', 'general')?.wordStart).toBe(false) // `subagent`
+    expect(primaryHit(hits)?.key).toBe('sessions') // ... but Enter stays in Settings
+    expect(hit('agent', 'sessions')?.wordStart).toBe(true)
   })
 
-  it('finds triage in General, Tasks and Inbox Triage', () => {
-    expect(keys('triage')).toEqual(expect.arrayContaining(['general', 'tasks', 'triage']))
+  it('finds triage in Tasks and Inbox Triage', () => {
+    expect(keys('triage')).toEqual(expect.arrayContaining(['tasks', 'triage']))
     expect(primaryHit(filterEntries(ENTRIES, 'triage'))?.key).toBe('triage')
     expect(hit('triage', 'triage')?.hint).toBeNull()
     expect(hit('triage', 'triage')?.labelRanges).toEqual([[6, 12]])
@@ -68,7 +64,7 @@ describe('Find a setting matcher', () => {
   })
 
   it('sends plugin words to the Apps page link', () => {
-    // Integrations (Slack notifications) may rank first for `slack`; the Apps link is still a hit.
+    // Inbox Triage (it reads Slack) may rank first for `slack`; the Apps link is still a hit.
     expect(keys('slack')).toContain('link:apps')
     expect(primaryHit(filterEntries(ENTRIES, 'plugin'))?.key).toBe('link:apps')
   })
@@ -87,9 +83,9 @@ describe('Find a setting matcher', () => {
   })
 
   it('N17: a folded title that only mentions a term never outranks the pane that owns it', () => {
-    // "Use an API instead of Claude Code" is folded under Advanced; Claude Code lives in Engines.
-    expect(primaryHit(filterEntries(ENTRIES, 'claude code'))?.key).toBe('engines')
-    expect(primaryHit(filterEntries(ENTRIES, 'claude'))?.key).toBe('engines')
+    // "Use an API instead of Claude Code" is folded under Advanced; Claude Code lives in Sessions.
+    expect(primaryHit(filterEntries(ENTRIES, 'claude code'))?.key).toBe('sessions')
+    expect(primaryHit(filterEntries(ENTRIES, 'claude'))?.key).toBe('sessions')
     // ... but a query that starts the folded title still opens its pane first.
     expect(primaryHit(filterEntries(ENTRIES, 'use an api'))?.key).toBe('advanced')
     expect(hit('instead', 'advanced')?.hint).toContain('instead')
@@ -98,7 +94,7 @@ describe('Find a setting matcher', () => {
   it('F22: word-start keywords beat mid-word labels; hints name rows; wifi and slack are found', () => {
     expect(primaryHit(filterEntries(ENTRIES, 'port'))?.key).toBe('advanced')
     expect(hit('port', 'advanced')?.hint).toBe('Port') // N17: the row's real label
-    expect(keys('slack')).toContain('integrations')
+    expect(keys('slack')).toContain('triage')
     expect(keys('wifi')).toContain('devices')
     expect(hit('theme', 'general')?.hint).toBe('Appearance')
     expect(hit('qr', 'devices')?.hint).toBe('Device name')

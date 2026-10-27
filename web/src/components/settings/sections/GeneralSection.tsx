@@ -8,7 +8,6 @@ import { useCommitField } from '../inputs/useCommitField';
 import { useTheme, type ThemePreference } from '@/hooks/useTheme';
 import { useFocusBarContext } from '@/contexts/FocusBarContext';
 import { useSessionPanelMode, type SessionPanelMode } from '@/hooks/useSessionPanelMode';
-import { UI_ONLY_CATEGORIES, setShowUiOnlyCategory, type UiOnlyCategory } from '@/hooks/useDeveloperSettings';
 import { useUpdateStatus } from '@/hooks/useUpdateStatus';
 import { AppUpdateRow } from '../AppUpdateRow';
 import '@/styles/settings-sections-configure.css';
@@ -95,21 +94,6 @@ const PANEL_OPTIONS: { value: SessionPanelMode; label: string }[] = [
   { value: 'auto', label: 'Auto' },
 ];
 
-/** Settings copy for the chat notification switches (the hook's labels serve the chat). */
-export const CHAT_NOTIFICATION_COPY: Record<UiOnlyCategory, { label: string; help: string }> = {
-  triage: { label: 'Session triage results', help: 'Session triage analysis.' },
-  session: { label: 'Session results', help: 'Summaries of finished sessions.' },
-  subagent: { label: 'Subagent results', help: 'Results from embedded subagents.' },
-  heartbeat: { label: 'Heartbeat all clear', help: 'Routine check-ins when nothing needs you; issues always show.' },
-};
-
-/** config.developer key for a chat notification category. */
-export function developerKeyFor(category: UiOnlyCategory): string {
-  return `show_ui_only_${category.replace(/-/g, '_')}`;
-}
-
-type DeveloperBlock = NonNullable<Config['developer']>;
-
 function isPanelMode(v: unknown): v is SessionPanelMode {
   return typeof v === 'string' && PANEL_OPTIONS.some((o) => o.value === v);
 }
@@ -117,34 +101,6 @@ function isPanelMode(v: unknown): v is SessionPanelMode {
 interface Props {
   config: Config;
   onSave: OnSave;
-}
-
-function ChatNotificationRow({ category, config, save }: { category: UiOnlyCategory; config: Config; save: ReturnType<typeof useSerialSave> }) {
-  const key = developerKeyFor(category);
-  const def = UI_ONLY_CATEGORIES.find((c) => c.key === category)?.defaultOn ?? false;
-  const stored = (config.developer as Record<string, boolean | undefined> | undefined)?.[key];
-  const rowKey = `general.notify.${category}`;
-  const setting = useOptimisticSetting<boolean>(
-    stored ?? def,
-    async (v) => {
-      await save((c) => ({ developer: { ...(c.developer ?? {}), [key]: v } as DeveloperBlock }), { rowKey });
-      // This window's chat reads the local mirror; keep it in step with config.
-      setShowUiOnlyCategory(category, v);
-    },
-    { rowKey },
-  );
-  const id = `settings-notify-${category}`;
-  const copy = CHAT_NOTIFICATION_COPY[category];
-  return (
-    <SettingsRow
-      label={copy.label}
-      help={copy.help}
-      htmlFor={id}
-      error={setting.error}
-      data-testid={`settings-notify-row-${category}`}
-      control={<ToggleSwitch id={id} checked={setting.value} busy={setting.busy} onChange={setting.set} />}
-    />
-  );
 }
 
 /**
@@ -256,11 +212,6 @@ export function GeneralSection({ config, onSave }: Props) {
         />
         <UpdateOnStartRow config={config} save={save} />
         <AppUpdateRow />
-      </SettingsGroup>
-      <SettingsGroup heading="Chat notifications" footer="Background notifications that appear in chat.">
-        {UI_ONLY_CATEGORIES.map((cat) => (
-          <ChatNotificationRow key={cat.key} category={cat.key} config={config} save={save} />
-        ))}
       </SettingsGroup>
     </SettingsSection>
   );

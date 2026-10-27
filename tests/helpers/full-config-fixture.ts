@@ -13,9 +13,7 @@ export const PLANTED_SECRETS = [
   'sk-ant-enginePlanted0123456789abcdefghijk',
   'mailbox-plugin-planted-password-7319',
   'pluginClientSecretPlanted0123456789Q',
-  'slackPlantedBotToken0123456789abcQ',
   'sk-toolsSearchPlanted0123456789abcdefgh',
-  'pplx-perplexityPlanted0123456789abcdefQ',
   'sk-sttOpenAiPlanted0123456789abcdefghij',
   'jevApiKeyPlanted0123456789abcdefghijQ',
   'wk_pairingKeyPlanted0123456789abcdefQ',
@@ -28,14 +26,13 @@ export const PLANTED_SECRETS = [
   'calendarPasswordPlanted-4410',
   'bridgeTokenPlanted0123456789abcdefQZ',
   'cloudDeviceTokenPlanted0123456789abQ',
-  'heartbeatPlantedWebhookToken0123456Q',
   'triagePlantedImapPassword-8812',
   'backupPlantedS3SecretKey0123456789abQ',
 ] as const
 
-const [bearer, provKey, header, credProc, engineKey, pluginPass, pluginSecret, slack, toolsKey, pplx, sttKey, jevKey,
+const [bearer, provKey, header, credProc, engineKey, pluginPass, pluginSecret, toolsKey, sttKey, jevKey,
   pairKey, pushToken, keyPath, syncPass, exposeAuth, npmToken, hookSecret, calPass, bridgeToken, cloudToken,
-  heartbeatToken, triagePass, backupKey] = PLANTED_SECRETS
+  triagePass, backupKey] = PLANTED_SECRETS
 
 export function fullConfigFixture(): Record<string, unknown> {
   return {
@@ -47,7 +44,7 @@ export function fullConfigFixture(): Record<string, unknown> {
     providers: { acme: { type: 'openai', api_key: provKey, headers: { Authorization: `Bearer ${header}` } }, marina: { type: 'bedrock', credential_process: credProc } },
     engines: { alt: { command: 'claude', env: { ANTHROPIC_API_KEY: engineKey } } },
     usage: { proxy_log_dirs: { acme: '/Users/marina/proxy-logs' } },
-    agent: { region: 'us-west-2', maxTokens: 8192, main_model: 'acme-model-large', fast_model: 'acme-model-small', available_models: ['acme-model-large', 'acme-model-small'], session_effort: 'high', quick_parse: true, agents: [{ id: 'mentor', mcp: { env: { TOKEN: engineKey } } }] },
+    agent: { main_model: 'acme-model-large', fast_model: 'acme-model-small', available_models: ['acme-model-large', 'acme-model-small'], session_effort: 'high', quick_parse: true, agents: [{ id: 'mentor', mcp: { env: { TOKEN: engineKey } } }] },
     plugins: { mailbox: { enabled: true, password: pluginPass, client_secret: pluginSecret } },
     calendar: { accounts: [{ user: 'marina', password: calPass }] },
     plugin_sources: [{ url: `https://marina:${syncPass}@plugins.example.com/index.json` }],
@@ -63,17 +60,14 @@ export function fullConfigFixture(): Record<string, unknown> {
     session_limits: { devbox: 4 },
     external_session_import: { auto_complete_after_days: 7, excluded_cwds: { devbox: ['/Users/marina/scratch'] } },
     session: { cron_policy: 'session-only', idle_timeout_minutes: 120, turn_retry: { enabled: true, max_attempts: 3 } },
-    heartbeat: { enabled: true, webhook_token: heartbeatToken },
     triage: { enabled: true, imap_password: triagePass },
     backup: { target: 's3', secret_access_key: backupKey },
     keep_awake: { enabled: false },
     time: { work_hours: { start: '09:00', end: '17:00', days: [1, 2, 3, 4, 5] }, meetings: { ignore: ['Acme standup'] } },
-    tools: { slack: { bot_token: slack, default_channel: 'acme' }, search: { api_key: toolsKey, perplexity_api_key: pplx } },
     search: { model: 'acme-embed', api_key: toolsKey },
     git_versioning: { enabled: true, remote: `https://marina:${syncPass}@git.example.com/data.git` },
     session_hooks: { enabled: true },
     hooks: { defs: [{ id: 'notify', action: { type: 'webhook', secret: hookSecret } }] },
-    developer: { debug: true },
     self_repair: { enabled: false },
     updates: { auto: true },
     ui: { session_panels: 'auto', show_priority: true },

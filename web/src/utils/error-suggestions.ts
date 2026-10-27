@@ -7,7 +7,7 @@
 
 export interface ErrorSuggestion {
   suggestion: string;
-  /** Settings hash fragment: 'providers' | 'search' | 'sessions' | 'remote-hosts' | 'integrations' */
+  /** Settings hash fragment: 'providers' | 'search' | 'sessions' | 'remote-hosts' */
   settingsHash?: string;
   /** Human label for the settings link, e.g. "AI Provider" */
   settingsLabel?: string;
@@ -21,7 +21,7 @@ export interface ErrorContext {
   /** 'cli' | 'sdk' | 'embedded' */
   provider?: string;
   /** Explicit domain hint — prevents cross-domain mismatches */
-  domain?: 'session' | 'embedding' | 'git';
+  domain?: 'session' | 'embedding';
   /** The session's host has a HostProblem: its own error line (SessionHostErrorBar) says what to do. */
   hostProblem?: boolean;
 }
@@ -136,15 +136,6 @@ const RULES: Rule[] = [
  */
 export function getErrorSuggestion(errorText: string, ctx?: ErrorContext): ErrorSuggestion | null {
   const c = ctx ?? {};
-
-  // Git domain: always return git suggestion regardless of error text
-  if (c.domain === 'git') {
-    return {
-      suggestion: 'Configure git backup for data protection.',
-      settingsHash: 'integrations',
-      settingsLabel: 'Integrations',
-    };
-  }
 
   for (const rule of RULES) {
     if (!rule.pattern.test(errorText)) continue;

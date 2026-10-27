@@ -5,7 +5,6 @@ import {
   SettingsDisclosure, SettingsGroup, SettingsLoadingRow, SettingsRow, SettingsSection, SettingsTag,
 } from '../SettingsSection';
 import { SecretInput } from '../inputs/SecretInput';
-import { NumberInput } from '../inputs/NumberInput';
 import { SegmentedControl } from '../inputs/SegmentedControl';
 import { SettingsButton } from '../inputs/SettingsButton';
 import { InlineConfirmButton } from '../inputs/InlineConfirmButton';
@@ -361,7 +360,7 @@ function BedrockRows({ config, serverInfo, onSave, onAfterSave, onTest, testStat
   );
 }
 
-/** API model, Max tokens and the provider's model list, as indent rows. */
+/** API model and the provider's model list, as indent rows. */
 function ModelRows({ providerName, models, config, onSave, onAfterSave }: {
   providerName: string;
   models: ModelEntry[];
@@ -378,11 +377,6 @@ function ModelRows({ providerName, models, config, onSave, onAfterSave }: {
     config.agent?.main_model ?? '',
     (v) => saveAgent({ main_model: v.trim() || undefined }, 'providers.main-model'),
     { rowKey: 'providers.main-model', kind: 'text' },
-  );
-  const maxTokens = useCommitField<number | undefined>(
-    config.agent?.maxTokens,
-    (v) => saveAgent({ maxTokens: v }, 'providers.max-tokens'),
-    { rowKey: 'providers.max-tokens', kind: 'number' },
   );
   const [pickError, setPickError] = useState<string | null>(null);
   const pickModel = async (v: string) => {
@@ -428,9 +422,6 @@ function ModelRows({ providerName, models, config, onSave, onAfterSave }: {
             placeholder="Default" {...model.inputProps} />
         } />
       )}
-      <SettingsRow indent label="Max tokens" htmlFor="max-tokens" error={maxTokens.error} control={
-        <NumberInput id="max-tokens" field={maxTokens.inputProps} placeholder="16384" min={1} />
-      } />
       <SettingsDisclosure id="providers-models" label="Available models" summary={String(models.length)} data-testid="provider-models-toggle">
         {models.map((m) => (
           <SettingsRow key={m.id} indent label={<code className="settings-mono-value" title={m.id}>{m.id}</code>} help={m.label}

@@ -23,7 +23,10 @@ import { test, expect, type APIRequestContext, type Page } from '@playwright/tes
 test.describe.configure({ mode: 'serial' })
 test.setTimeout(90_000)
 
-type Cfg = { agent?: Record<string, unknown>; jev?: Record<string, unknown>; tools?: Record<string, unknown>; providers?: Record<string, unknown> }
+type Cfg = {
+  agent?: Record<string, unknown>; jev?: Record<string, unknown>; tools?: Record<string, unknown>; providers?: Record<string, unknown>
+  git_versioning?: Record<string, unknown>; session_server?: Record<string, unknown>; keep_awake?: Record<string, unknown>
+}
 
 async function serverConfig(request: APIRequestContext): Promise<Cfg> {
   const res = await request.get('/api/config')
@@ -53,6 +56,10 @@ test.afterAll(async ({ request }) => {
   await request.put('/api/config', { data: { agent: original.agent ?? {} } })
   await request.put('/api/config', { data: { jev: original.jev ?? null } })
   await request.put('/api/config', { data: { tools: original.tools ?? {} } })
+  // The Advanced autosave below writes these three keys whole.
+  for (const key of ['git_versioning', 'session_server', 'keep_awake'] as const) {
+    await request.put('/api/config', { data: { [key]: original[key] ?? null } })
+  }
 })
 
 test('the nav has one engine choice: no AI Provider, no Jev Decisions', async ({ page }) => {
@@ -60,7 +67,12 @@ test('the nav has one engine choice: no AI Provider, no Jev Decisions', async ({
   await expect(page.getByTestId('settings-nav-tasks')).toBeVisible({ timeout: 30_000 })
   await expect(page.getByTestId('settings-nav-providers')).toHaveCount(0)
   await expect(page.getByTestId('settings-nav-jev')).toHaveCount(0)
-  await expect(page.getByTestId('settings-nav-engines')).toBeVisible()
+  // The one engine choice is the Default engine row at the top of Sessions
+  // (the Engines pane that held it was retired on 2026-10-27).
+  await expect(page.getByTestId('settings-nav-engines')).toHaveCount(0)
+  await page.getByTestId('settings-nav-sessions').click()
+  await expect(page.locator('#sessions').getByTestId('default-engine-row')).toBeVisible({ timeout: 20_000 })
+  await expect(page.getByTestId('default-engine-row')).toHaveCount(1)
 })
 
 test('both switches save, together, and survive a reload', async ({ page, request }) => {
@@ -224,19 +236,20 @@ test('an autosave on a page opened earlier keeps what another window changed', a
   const nav = page.getByTestId('settings-nav-advanced')
   await expect(nav).toBeVisible({ timeout: 30_000 })
   await nav.click()
-  await page.getByTestId('advanced-disclosure-exec').click()
-  const timeout = page.locator('#exec-timeout')
-  await expect(timeout).toBeVisible({ timeout: 15_000 })
+  // Git versioning's debounce (Command safety, which this test used, is gone).
+  await page.getByTestId('advanced-disclosure-git').click()
+  const debounce = page.locator('#git-debounce')
+  await expect(debounce).toBeVisible({ timeout: 15_000 })
 
   // Another writer, after this page loaded.
   const agent = (await serverConfig(request)).agent ?? {}
   await request.put('/api/config', { data: { agent: { ...agent, session_organize: false, language: 'stale-page-marker' } } })
 
   // The field is in seconds (N3-24); config keeps milliseconds.
-  await timeout.fill('43')
+  await debounce.fill('43')
   await expect.poll(async () => {
-    const tools = (await serverConfig(request)).tools as { exec?: { timeout?: number } } | undefined
-    return tools?.exec?.timeout
+    const git = (await serverConfig(request)).git_versioning as { commit_debounce_ms?: number } | undefined
+    return git?.commit_debounce_ms
   }, { timeout: 15_000 }).toBe(43000)
 
   const after = (await serverConfig(request)).agent ?? {}

@@ -8,6 +8,7 @@ import { SettingsCheckbox } from '../inputs/SettingsCheckbox';
 import { useOptimisticSetting } from '../inputs/useOptimisticSetting';
 import { useCommitField } from '../inputs/useCommitField';
 import { useSerialSave, type OnSave } from './GeneralSection';
+import { DefaultEngineRow } from './DefaultEngineRow';
 
 interface Props {
   config: Config;
@@ -100,6 +101,9 @@ export function SessionsSection({ config, onSave }: Props) {
     <SettingsSection id="sessions" title="Sessions">
       {/* Session model is a RUNTIME choice made in the session picker; Walnut
           keeps no config-time default model, so there is no picker here. */}
+      <SettingsGroup>
+        <DefaultEngineRow config={config} save={save} />
+      </SettingsGroup>
       <SettingsGroup>
         <SettingsRow
           anchor="idle-timeout-row"

@@ -318,15 +318,38 @@ export const projectScopeNote = (_cwd: string) =>
   'Saves to .claude/settings.local.json in this project · not tracked by git.'
 export const savedUserSentence = `Saved to user settings on ${HOST_LABEL} (all projects).`
 export const savedProjectBase = (cwd: string) => `Saved to this project (local), ${shortCwd(cwd)} only.`
-/** The footer link before the view answers. */
-export const LOADING_LINK_TEXT = 'Settings › Engines'
-/**: `<titles joined by " and "> settings (<count>) are in Settings › Engines`, from the response. */
-export const otherGroupsLinkText = (view: View): string => {
-  const others = view.groups.filter((g) => g.id !== 'sessions' && g.items.length > 0)
-  if (others.length === 0) return 'Open Settings › Engines'
-  const count = others.reduce((n, g) => n + g.items.length, 0)
-  return `${others.map((g) => g.title).join(' and ')} settings (${count}) are in Settings › Engines`
-}
+/**
+ * The groups a running session does not read (Updates, Terminal only), in
+ * response order: each one is a collapsed `<details>` after the session rows.
+ */
+export const otherGroupsOf = (view: View): GroupView[] => view.groups.filter((g) => g.id !== 'sessions' && g.items.length > 0)
+/** Every row of the view in the order the popover draws it: the session rows, then each other group's. */
+export const allItems = (view: View): ItemView[] => [...sessionsItems(view), ...otherGroupsOf(view).flatMap((g) => g.items)]
+/** `<Title> (<count>)`, the summary of one other group. */
+export const groupSummaryText = (group: GroupView, count = group.items.length): string => `${group.title} (${count})`
+export const popoverGroup = (dialog: Locator, id: string): Locator => dialog.getByTestId(`engine-settings-popover-group-${id}`)
+export const popoverGroups = (dialog: Locator): Locator => dialog.locator('details.engine-settings-popover-group')
+/**
+ * Let a summary click's `toggle` event reach React before the next input. The
+ * event is a queued task, and a fill sent right after the click can be handled
+ * first: the group then keeps the open state it had before the click, and a
+ * filter typed at that instant does not open it (a human never types that fast).
+ */
+export const settleToggle = (page: Page): Promise<void> =>
+  page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => setTimeout(resolve, 50))))
+/** The `open` state of one group's details element. */
+export const groupOpen = (group: Locator): Promise<boolean> => group.evaluate((el) => (el as HTMLDetailsElement).open)
+/** Row keys in DOM order, rows inside closed groups included. */
+export const renderedKeys = (dialog: Locator): Promise<Array<string | null>> =>
+  dialog.locator('.engine-settings-popover-row').evaluateAll((els) => els.map((e) => e.getAttribute('data-key')))
+/**
+ * Row keys a user can see right now: a row inside a closed group is not. Read
+ * from the details' `open` (checkVisibility is not reliable for this in WebKit).
+ */
+export const visibleRowKeys = (dialog: Locator): Promise<Array<string | null>> =>
+  dialog.locator('.engine-settings-popover-row').evaluateAll((els) => els
+    .filter((e) => { const d = e.closest('details'); return !d || (d as HTMLDetailsElement).open })
+    .map((e) => e.getAttribute('data-key')))
 /** The footer sentence after a Reset under project scope, when the user file holds the key. */
 export const removedProjectSentence = (label: string) =>
   `Removed ${label} from this project (local); the user settings value applies again.`

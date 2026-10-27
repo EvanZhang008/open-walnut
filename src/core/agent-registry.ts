@@ -75,7 +75,7 @@ const BUILTIN_NOTE: AgentDefinition = {
 - The notes live under \`notes/\`. Never touch files outside the vault unless explicitly asked.`,
   allowed_tools: [
     'file_read', 'file_write', 'file_edit', 'file_list', 'file_glob', 'file_grep',
-    'memory_notes_search', 'web_fetch', 'web_search',
+    'memory_notes_search', 'web_fetch',
   ],
   context_sources: [
     { id: 'global_memory', enabled: true },
@@ -219,8 +219,6 @@ const TOOL_NAME_MIGRATION: Record<string, string> = {
   create_command: 'command_create',
   update_command: 'command_update',
   delete_command: 'command_delete',
-  get_heartbeat_checklist: 'heartbeat_get',
-  update_heartbeat_checklist: 'heartbeat_update',
   ask_question: 'user_ask',
   create_subagent: 'subagent_create',
   files_read: 'file_read',

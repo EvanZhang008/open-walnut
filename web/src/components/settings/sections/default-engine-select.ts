@@ -1,5 +1,5 @@
 /**
- * Settings, Engines: the "Default engine for new sessions" picker's logic.
+ * Settings, Sessions: the "Default engine" picker's logic (DefaultEngineRow).
  *
  * Pure on purpose: the two decisions that can silently regress are WHICH engines
  * may be offered and WHAT the save writes, and neither is visible from the DOM.

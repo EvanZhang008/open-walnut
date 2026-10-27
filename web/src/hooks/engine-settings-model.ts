@@ -1,6 +1,6 @@
 /**
  * Engine settings view model: the pure half of editing an engine's own config
- * files, shared by Settings › Engines and the composer's per-session popover.
+ * files, used by the composer's per-session popover.
  *
  * Nothing here touches React or the network. It answers three questions the
  * hook asks on every write:
