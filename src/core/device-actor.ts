@@ -192,6 +192,9 @@ export function deviceChangeDecision(
 /** Said to a caller that asked this Mac to change devices on its cloud companion. */
 export const CLOUD_RELAY_REFUSAL = 'Only this Mac itself can pair or remove devices on the cloud companion, in Settings › Phones & Cloud on this Mac.'
 
+/** Said in GET /api/devices to a caller off this Mac when a companion exists: its half is left out of the answer. */
+export const CLOUD_LIST_WITHHELD = 'The cloud companion\'s pairing target and the phones paired there are shown only to a caller on this Mac itself, so this answer leaves them out; it does not mean there are none.'
+
 /**
  * May `actor` have THIS Mac act on its cloud companion (the relay behind
  * `target: 'cloud'`, a cloud removal, the cloud half of the device list)? The

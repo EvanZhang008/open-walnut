@@ -168,6 +168,8 @@ describe('a companion the Mac owns', () => {
     expect((await call('GET', '/api/devices', T.mac)).body.caller).toBe('mac-primary')
     expect((await call('GET', '/api/devices', T.second)).body.caller).toBe('mac-second')
     expect((await call('GET', '/api/devices', T.phone)).body.caller).toBe('my-phone')
+    // The companion IS the cloud half: it never says its own list is withheld.
+    for (const t of [T.mac, T.second, T.phone]) expect((await call('GET', '/api/devices', t)).body).not.toHaveProperty('cloudWithheld')
   })
 
   it('a self-report from a token that no longer matches is refused before it can land anywhere', async () => {

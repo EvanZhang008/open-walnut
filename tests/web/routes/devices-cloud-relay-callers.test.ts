@@ -62,6 +62,7 @@ import { startServer, stopServer } from '../../../src/web/server.js'
 import { _resetDeviceAuthForTesting } from '../../../src/core/device-auth.js'
 import { getConfig, updateConfig } from '../../../src/core/config-manager.js'
 import { localDaemon } from '../../../src/providers/local-daemon.js'
+import { markCloudUnpaired, resetCloudUnpairedForTest } from '../../../src/core/cloud-unpaired.js'
 
 const created = '2026-09-01T00:00:00.000Z'
 const sha = (t: string) => crypto.createHash('sha256').update(t, 'utf-8').digest('hex')
@@ -73,6 +74,8 @@ const CLOUD_RELAY_REFUSAL = 'Only this Mac itself can pair or remove devices on 
 const SELF_CALL_REFUSAL = 'Only this Mac itself can pair new devices, in Settings › Phones & Cloud on this Mac.'
 const API_KEY_REFUSAL = 'An API key cannot pair, re-pair or remove devices.'
 const KEYS_REFUSAL = 'Only this Mac itself can create or remove API keys.'
+/** What a caller off this Mac hears instead of reading an empty cloud half as "no companion". */
+const CLOUD_LIST_WITHHELD = 'The cloud companion\'s pairing target and the phones paired there are shown only to a caller on this Mac itself, so this answer leaves them out; it does not mean there are none.'
 const changeRefusal = (name: string) => `Only ${name} itself or this Mac can remove or re-pair ${name}.`
 /** A config.yaml API key: a credential, but no paired device. */
 const API_KEY = `wlnt_sk_${tok()}`
@@ -262,6 +265,8 @@ describe('only this Mac itself may act on its cloud companion', () => {
       expect(listed.status).toBe(200)
       expect(listed.body?.cloudDevices).toEqual([])
       expect((listed.body?.targets as Array<{ kind: string }>).map((t) => t.kind)).not.toContain('cloud')
+      // And it is told so: left out, not missing.
+      expect(listed.body?.cloudWithheld).toBe(CLOUD_LIST_WITHHELD)
 
       // Nothing reached the companion, and its records are as they were.
       expect(box.seen).toEqual([])
@@ -282,6 +287,7 @@ describe('only this Mac itself may act on its cloud companion', () => {
       expect(listed.status).toBe(200)
       expect((listed.body?.cloudDevices as Array<{ name: string }>).map((d) => d.name)).toEqual(['mac-primary', 'mac-second', 'my-phone'])
       expect((listed.body?.targets as Array<{ kind: string }>).map((t) => t.kind)).toContain('cloud')
+      expect(listed.body).not.toHaveProperty('cloudWithheld')
 
       const pair = await call(caller, 'POST', '/api/devices', { name: 'another-phone', target: 'cloud' })
       expect(pair.status).toBe(201)
@@ -341,6 +347,7 @@ async function expectNoCloudHalf(caller: Caller): Promise<void> {
   expect(listed.status).toBe(200)
   expect(listed.body?.cloudDevices).toEqual([])
   expect((listed.body?.targets as Array<{ kind: string }>).map((t) => t.kind)).not.toContain('cloud')
+  expect(listed.body?.cloudWithheld).toBe(CLOUD_LIST_WITHHELD)
 }
 
 const keyNames = async () => ((await getConfig()).api_keys ?? []).map((k) => k.name)
@@ -410,4 +417,39 @@ describe('an API key (config.yaml) is a credential, not a device and not this Ma
       expect(authCore()).toEqual(before)
     })
   }
+})
+
+describe('the withheld note is said only while there is a companion to withhold', () => {
+  // The reported case: a session on another exec host asking through the op executor.
+  const offMac = ON_BEHALF_OF[0]
+
+  it('no companion configured: an off-Mac caller hears nothing about one', async () => {
+    const domain = remote.domain
+    remote.domain = ''
+    try {
+      const listed = await call(offMac, 'GET', '/api/devices')
+      expect(listed.status).toBe(200)
+      expect(listed.body?.cloudDevices).toEqual([])
+      expect((listed.body?.targets as Array<{ kind: string }>).map((t) => t.kind)).not.toContain('cloud')
+      expect(listed.body).not.toHaveProperty('cloudWithheld')
+    } finally {
+      remote.domain = domain
+    }
+    expect(box.seen).toEqual([])
+  })
+
+  it('this Mac unpaired itself from it: no note either, since even this Mac has no cloud half', async () => {
+    await markCloudUnpaired({ origin: `http://${remote.domain}`, token: remote.token })
+    try {
+      const listed = await call(offMac, 'GET', '/api/devices')
+      expect(listed.status).toBe(200)
+      expect(listed.body?.cloudDevices).toEqual([])
+      expect(listed.body).not.toHaveProperty('cloudWithheld')
+    } finally {
+      fs.rmSync(path.join(WALNUT_HOME, 'sync', 'cloud-unpaired.json'), { force: true })
+      resetCloudUnpairedForTest()
+    }
+    // Paired again as far as the rules know: the note is back.
+    expect((await call(offMac, 'GET', '/api/devices')).body?.cloudWithheld).toBe(CLOUD_LIST_WITHHELD)
+  })
 })

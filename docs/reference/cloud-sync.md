@@ -510,9 +510,12 @@ Mac server ──wss /daemon-tunnel (machine token)──▶ Caddy ──▶ rep
   the companion, which may change any device there. So only this Mac itself
   may ask for them: its own console, or a local client. Any paired device
   (a phone, another Mac) hears `403 device_change_refused` before the companion
-  is asked anything (a phone asking to pair hears `403 phone_cannot_pair`), and
-  its device list has no cloud half and no Cloud target. A device's standing
-  on the companion is its own token there, presented to the companion itself.
+  is asked anything (a phone asking to pair hears `403 phone_cannot_pair`).
+  Every caller off this Mac (a paired device, an API key, a self-call made for
+  another host) gets a device list with no cloud half and no Cloud target;
+  while this Mac is paired with a companion, that list says so in
+  `cloudWithheld`. A device's standing on the companion is its own token
+  there, presented to the companion itself.
   Removing a cloud device waits up to 15 seconds for the companion; the console
   waits longer than that, so a timeout reads "Could not reach the cloud
   companion (timed out after 15s)" in every browser.

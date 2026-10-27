@@ -17,7 +17,7 @@
 
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { createDeviceAs, revokePairingAs, rotateDevice, listDevices, listDeviceRecords, readDeviceRegistry, type DeviceInfo, type DeviceSelfInfo } from '../../core/device-auth.js'
-import { DeviceChangeRefused, LOCAL_ACTOR, cloudRelayDecision, companionOwnerRecord, recordForToken, type DeviceActor, type DeviceChange } from '../../core/device-actor.js'
+import { CLOUD_LIST_WITHHELD, DeviceChangeRefused, LOCAL_ACTOR, cloudRelayDecision, companionOwnerRecord, recordForToken, type DeviceActor, type DeviceChange } from '../../core/device-actor.js'
 import { CLOUD_UNPAIRED_SENTENCE, isCloudUnpaired, markCloudUnpaired } from '../../core/cloud-unpaired.js'
 import { getPairingTargets, getCloudPairingEndpoint } from '../../core/pairing-targets.js'
 import { tailscaleSummary } from '../../core/tailnet.js'
@@ -328,8 +328,12 @@ devicesRouter.get('/', async (req: Request, res: Response, next: NextFunction) =
     // list, and says why its half is missing).
     // The cloud half is this Mac's view on its companion (its own token there):
     // for this Mac itself only, like every other relay (cloudRelayAllowed).
-    const relayed = !CLOUD_MODE && cloudRelayDecision([], actorOf(req), 'list').ok
+    const macServer = !CLOUD_MODE
+    const relayed = macServer && cloudRelayDecision([], actorOf(req), 'list').ok
     const cloud = relayed ? await listCloudDevices() : { devices: [] } as CloudDeviceList
+    // A caller off this Mac reads an empty cloud half as "no companion": say it is withheld,
+    // but only when there is a Cloud target to withhold (liveTargets already dropped a self-unpaired one).
+    const withheld = macServer && !relayed && targets.some((t) => t.kind === 'cloud')
     // On the companion, its owner is the Mac it belongs to (recorded, else the one owning its machine credentials).
     const owner = CLOUD_MODE ? companionOwnerRecord(await readDeviceRegistry()) : undefined
     const macs = new Set(owner ? [owner.name] : [])
@@ -353,6 +357,7 @@ devicesRouter.get('/', async (req: Request, res: Response, next: NextFunction) =
       ...(cloud.unpaired ? { cloudUnpaired: { origin: cloud.unpaired } } : {}),
       // So Cloud Companion stops saying "Connected" for a token the companion refuses.
       ...(cloud.refused ? { cloudRefused: true } : {}),
+      ...(withheld ? { cloudWithheld: CLOUD_LIST_WITHHELD } : {}),
       // On the companion: which record the caller is (the Mac reads it, above).
       ...(CLOUD_MODE ? { caller: await callerRecordName(req) } : {}),
       targets: targets.filter((t) => CLOUD_MODE || relayed || t.kind !== 'cloud').map(({ kind, origin: o, label }) => ({ kind, origin: o, label })),
