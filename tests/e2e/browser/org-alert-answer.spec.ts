@@ -5,7 +5,8 @@
  *   - each row is the task's name (a link to it), Quote and Answer, nothing else
  *   - Answer opens a dropdown shaped by the ask: a live question's options, a decision letter's
  *     actions (two side by side), a Board choice's options, and a line for an ask with no shape
- *   - one pick answers it where it is: the answer reaches the task, and the row stops counting
+ *   - one pick answers it where it is: the answer reaches the task, and the row stops counting at
+ *     once (its session may hand it back a moment later with its next ask: the status is its phase)
  *   - Quote puts the ask in this VP's chat composer, the draft kept after it, never in a Home
  *     column of the same session behind the page
  * The fixture is shared, so this file makes its own project and removes what it made.
@@ -41,6 +42,12 @@ async function startSession(request: APIRequestContext, taskId: string, message:
   return sessionId
 }
 
+/** The task asks the user: its phase says so (the one status counts the phase, src/core/user-status.ts). */
+async function needsUser(request: APIRequestContext, id: string): Promise<void> {
+  const res = await request.patch(`/api/tasks/${id}`, { data: { phase: 'NEED_ACTION' } })
+  expect(res.ok(), await res.text()).toBe(true)
+}
+
 async function source(request: APIRequestContext, id: string): Promise<string> {
   return ((await (await request.get(`/api/tasks/${id}`)).json()).task?.user_status?.source ?? '') as string
 }
@@ -64,6 +71,24 @@ async function openTeam(page: Page, homeColumns: readonly string[] = []): Promis
 }
 
 const alertRow = (page: Page, id: string) => page.locator(`[data-testid="org-alert"][data-task-id="${id}"]`)
+
+/** Watch for the task's row to leave the list on an answer, and what the counts read then. The
+ *  session may answer and hand the task back a moment later, which lists it again with its next
+ *  ask (the status is the task's phase), so "gone" is checked at the moment it went. */
+async function watchRowGone(page: Page, id: string): Promise<() => Promise<{ gone: boolean; counts: string }>> {
+  await page.evaluate((taskId) => {
+    const w = window as unknown as { __rowGone?: { gone: boolean; counts: string } }
+    w.__rowGone = { gone: false, counts: '' }
+    const sel = `[data-testid="org-alert"][data-task-id="${taskId}"]`
+    const obs = new MutationObserver(() => {
+      if (document.querySelector(sel)) return
+      w.__rowGone = { gone: true, counts: document.querySelector('[data-testid="org-detail-counts"]')?.textContent ?? '' }
+      obs.disconnect()
+    })
+    obs.observe(document.body, { childList: true, subtree: true })
+  }, id)
+  return () => page.evaluate(() => (window as unknown as { __rowGone: { gone: boolean; counts: string } }).__rowGone)
+}
 
 async function openAnswer(page: Page, id: string, shape: string) {
   const row = alertRow(page, id)
@@ -112,9 +137,15 @@ test.beforeAll(async ({ request }) => {
       + `<walnut-choice id="venue-${STAMP}" task="${ids.open}" title="Where should it be ${STAMP}?"></walnut-choice>` },
   })
   expect(board.ok(), await board.text()).toBe(true)
+  // A Board choice says what the task asks; its phase says that it asks (no session moves these two).
+  await needsUser(request, ids.choice)
+  await needsUser(request, ids.open)
   // An ask in the session's own words (no structure): its session, settled before the page opens.
   ids.wordsSid = await startSession(request, ids.words, `Budget ready ${STAMP}`)
-  await expect.poll(() => historyText(request, ids.wordsSid), { timeout: 60_000 }).toContain(`Budget ready ${STAMP}`)
+  await expect.poll(() => historyText(request, ids.wordsSid), { timeout: 60_000 }).toContain(`I processed your message: Budget ready ${STAMP}`)
+  // The letter's task and this one asked the user when their turn ended.
+  await needsUser(request, ids.letter)
+  await needsUser(request, ids.words)
   for (const [id, want] of [[ids.letter, 'letter'], [ids.choice, 'choice'], [ids.open, 'choice']] as const) {
     await expect.poll(() => source(request, id), { timeout: 60_000 }).toBe(want)
   }
@@ -143,8 +174,9 @@ test('each row is the task\'s name, Quote and Answer; the rows hold still under 
   await page.getByTestId('org-alerts').screenshot({ path: `test-results/org-alert-rows-${test.info().project.name}.png` })
   // Under the pointer the rows hold their order: a new ask joins at the end.
   const order = () => page.getByTestId('org-alert').evaluateAll((els) => els.map((e) => e.getAttribute('data-task-id')))
-  // Every ask the fixture raised is listed: the letter, two choices and the live question.
-  await expect(page.getByTestId('org-alert')).toHaveCount(4, { timeout: 60_000 })
+  // Every ask the fixture raised is listed: the letter, two choices, the live question and the
+  // task whose turn handed it back (the VP's own is in its chat).
+  await expect(page.getByTestId('org-alert')).toHaveCount(5, { timeout: 60_000 })
   await row.getByTestId('org-alert-link').hover()
   const before = await order()
   const late = await createTask(request, `Late ask ${STAMP}`)
@@ -154,6 +186,7 @@ test('each row is the task\'s name, Quote and Answer; the rows hold still under 
     data: { subject: `Late question ${STAMP}?`, type: 'action_required', markdown: 'Pick one.', actions: [{ id: 'y', label: 'Yes' }, { id: 'n', label: 'No' }] },
   })
   expect(sent.status(), await sent.text()).toBe(201)
+  await needsUser(request, late)
   await expect(alertRow(page, late)).toBeVisible({ timeout: 60_000 })
   const after = await order()
   expect(after.slice(0, before.length)).toEqual(before)
@@ -175,10 +208,21 @@ test('a decision letter: its two actions side by side, one click answers it, the
   await expect(options.getByTestId('org-answer-option')).toHaveText(['Sign it', 'Not yet'])
   await menu.getByTestId('org-answer-note').fill(`Signed ${STAMP}`)
   await page.screenshot({ path: `test-results/org-answer-letter-${test.info().project.name}.png` })
+  // The row answers the click, not the server: it goes at once, and a refused answer brings it back
+  // with the reason, the dropdown open and the note kept.
+  const answerUrl = '**/api/v1/human-inbox/*/answer'
+  await page.route(answerUrl, (route) => route.fulfill({ status: 500, contentType: 'application/json', body: '{"error":"refused"}' }))
+  const refused = await watchRowGone(page, ids.letter)
+  await options.getByTestId('org-answer-option').filter({ hasText: 'Sign it' }).click()
+  await expect.poll(async () => (await refused()).gone).toBe(true)
+  await expect(menu.getByTestId('org-answer-error')).toHaveText('Not sent. Try again.', { timeout: 15_000 })
+  await expect(menu.getByTestId('org-answer-note')).toHaveValue(`Signed ${STAMP}`)
+  await page.unroute(answerUrl)
+  const gone = await watchRowGone(page, ids.letter)
   await options.getByTestId('org-answer-option').filter({ hasText: 'Sign it' }).click()
   await expect(menu).toHaveCount(0)
-  await expect(alertRow(page, ids.letter)).toHaveCount(0)
-  await expect(counts).not.toContainText(`${before} need`)
+  await expect.poll(async () => (await gone()).gone).toBe(true)
+  expect((await gone()).counts).not.toContain(`${before} need`)
   // The answer is on record.
   await expect.poll(async () => {
     const res = await request.get('/api/v1/human-inbox')
@@ -198,9 +242,10 @@ test('a Board choice: its options, the recommended one marked; a pick answers it
   await expect(menu.locator('.org-answer-q')).toBeVisible()
   expect((await menu.locator('.org-answer-q').boundingBox())!.height).toBeGreaterThan(10)
   await page.screenshot({ path: `test-results/org-answer-choice-${test.info().project.name}.png` })
+  const gone = await watchRowGone(page, ids.choice)
   await options.locator('[data-value="c"]').click()
   await expect(menu).toHaveCount(0)
-  await expect(alertRow(page, ids.choice)).toHaveCount(0)
+  await expect.poll(async () => (await gone()).gone).toBe(true)
   await expect.poll(async () => ((await (await request.get(`/api/v1/tasks/${ids.lead}/board`)).json()).choices?.[`plan-${STAMP}`]?.option ?? ''),
     { timeout: 30_000 }).toBe('c')
 })
@@ -213,9 +258,10 @@ test('a Board choice with no options: a line, answered on that Board', async ({ 
   const input = menu.getByTestId('org-answer-input')
   await expect(input).toBeFocused()
   await input.fill(`The river hall ${STAMP}`)
+  const gone = await watchRowGone(page, ids.open)
   await input.press('Enter')
   await expect(menu).toHaveCount(0)
-  await expect(alertRow(page, ids.open)).toHaveCount(0)
+  await expect.poll(async () => (await gone()).gone).toBe(true)
   await expect.poll(async () => ((await (await request.get(`/api/v1/tasks/${ids.lead}/board`)).json()).choices?.[`venue-${STAMP}`]?.text ?? ''),
     { timeout: 30_000 }).toBe(`The river hall ${STAMP}`)
 })
@@ -226,21 +272,24 @@ test('a live question: its own options, answered in place, and the session hears
   await expect(menu.locator('.nfc-answer')).toBeVisible({ timeout: 30_000 })
   await page.screenshot({ path: `test-results/org-answer-question-${test.info().project.name}.png` })
   await menu.locator('.nfc-answer-opt', { hasText: 'Staging' }).click()
+  const gone = await watchRowGone(page, ids.q)
   await menu.getByRole('button', { name: 'Submit' }).click()
   await expect(menu).toHaveCount(0)
-  await expect(alertRow(page, ids.q)).toHaveCount(0)
+  await expect.poll(async () => (await gone()).gone).toBe(true)
   await expect.poll(() => historyText(request, ids.qSid), { timeout: 60_000 }).toContain('AskUserQuestion decision received: Staging')
 })
 
 test('an ask with no shape: a line, sent to that task\'s session', async ({ page, request }) => {
-  // The session's own words are the one ask the fixture cannot raise for real: the task list
-  // the page loads says so, as a server would after that turn's report.
+  // The session's own words are the one ask the fixture cannot raise for real (the mock CLI
+  // reports nothing): the task list the page loads carries them, as a server would after a report.
   await page.route('**/api/tasks?*', async (route) => {
     if (route.request().method() !== 'GET') return route.fallback()
     const res = await route.fetch()
     const body = await res.json() as { tasks?: Array<Record<string, unknown>> }
     for (const t of body.tasks ?? []) {
-      if (t.id === ids.words) t.user_status = { state: 'needs', source: 'session', ask: `How much can it spend ${STAMP}?`, at: new Date().toISOString() }
+      // Only the words: the task's own state stays the server's (its phase), so an answer moves it.
+      const st = t.user_status as { state?: string } | undefined
+      if (t.id === ids.words && st?.state === 'needs') t.user_status = { ...st, source: 'session', ask: `How much can it spend ${STAMP}?` }
     }
     await route.fulfill({ response: res, json: body })
   })
@@ -251,19 +300,25 @@ test('an ask with no shape: a line, sent to that task\'s session', async ({ page
   await expect(input).toBeFocused()
   await input.fill(`Up to 40 dollars ${STAMP}`)
   await page.screenshot({ path: `test-results/org-answer-words-${test.info().project.name}.png` })
+  const gone = await watchRowGone(page, ids.words)
   await input.press('Enter')
   await expect(menu).toHaveCount(0)
-  await expect(alertRow(page, ids.words)).toHaveCount(0)
+  await expect.poll(async () => (await gone()).gone).toBe(true)
   await expect.poll(() => historyText(request, ids.wordsSid), { timeout: 60_000 }).toContain(`Up to 40 dollars ${STAMP}`)
 })
 
-test('Quote puts the ask in this VP\'s chat, ahead of what was typed, not in its Home column', async ({ page }) => {
+test('Quote puts the ask in this VP\'s chat, ahead of what was typed, not in its Home column', async ({ page, request }) => {
+  // Answered in the test before: it asks again.
+  await needsUser(request, ids.words)
+  await expect.poll(async () => ((await (await request.get(`/api/tasks/${ids.words}`)).json()).task?.user_status?.state ?? ''), { timeout: 30_000 }).toBe('needs')
   await page.route('**/api/tasks?*', async (route) => {
     if (route.request().method() !== 'GET') return route.fallback()
     const res = await route.fetch()
     const body = await res.json() as { tasks?: Array<Record<string, unknown>> }
     for (const t of body.tasks ?? []) {
-      if (t.id === ids.words) t.user_status = { state: 'needs', source: 'session', ask: `Quote me ${STAMP}`, at: new Date().toISOString() }
+      // Only the words: the task's own state stays the server's (its phase), so an answer moves it.
+      const st = t.user_status as { state?: string } | undefined
+      if (t.id === ids.words && st?.state === 'needs') t.user_status = { ...st, source: 'session', ask: `Quote me ${STAMP}` }
     }
     await route.fulfill({ response: res, json: body })
   })

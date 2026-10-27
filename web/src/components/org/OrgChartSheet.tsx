@@ -27,7 +27,7 @@ import { OrgAvatar, shortAgo } from './OrgChannelList';
 import { OrgChartProject } from './OrgChartProject';
 import { OrgEditableName } from './OrgEditableName';
 import { useOrgSettings } from './useOrgSettings';
-import { cardOf, ceoLine, dropPlan, vpCards, type DropPlan, type VpCard, type VpProject } from './org-chart-model';
+import { cardOf, ceoLine, dropPlan, theVp, vpCards, type DropPlan, type VpCard, type VpProject } from './org-chart-model';
 import type { ChannelRow } from './org-channels-model';
 import '@/styles/org-chart.css';
 
@@ -67,7 +67,7 @@ function pressable(onPress: () => void) {
   };
 }
 const needsTitle = (n: number) => `${n} ${n === 1 ? 'needs' : 'need'} you`;
-/** The drop zone that gives a project back its own VP. */
+/** The drop zone that gives a project a dedicated VP again. */
 const OWN = '__own__';
 
 /** "23m · Renew the permit": when the news was written, and the task it is about. */
@@ -128,7 +128,7 @@ export function OrgChartSheet({ main, rows, tasks, onClose, onPick, onOpenTask, 
     try {
       const res = await setProjectVp(pending.project, pending.vp);
       log.info('org-chart', 'project vp changed', { project: res.project, vp: res.vp, leadTaskId: res.lead?.id, moved: res.moved.length, handover: res.handover.length });
-      setDone(res.vp ? `${res.project} is now under ${res.vp}'s VP.` : `${res.project} has its own VP again.`);
+      setDone(res.vp ? `${res.project} is now under ${theVp(res.vp)}.` : `${res.project} has a dedicated VP again.`);
       setPending(null);
     } catch (err) {
       // The server's own words when it answered; a dropped connection is just "try again".
@@ -195,10 +195,10 @@ export function OrgChartSheet({ main, rows, tasks, onClose, onPick, onOpenTask, 
     const own = dropPlan(cards, project, null);
     const others = cards.filter((c) => dropPlan(cards, project, c));
     const items: ContextMenuItem[] = [{ key: 'head', section: true, label: `Move ${project.name} under` }];
-    for (const c of others) items.push({ key: `vp:${c.key}`, label: `${c.name}'s VP`, onSelect: () => ask(dropPlan(cards, project, c)) });
+    for (const c of others) items.push({ key: `vp:${c.key}`, label: `${c.name} VP`, onSelect: () => ask(dropPlan(cards, project, c)) });
     if (own) {
       if (others.length) items.push({ key: 'sep', divider: true });
-      items.push({ key: 'own', label: 'Its own VP', onSelect: () => ask(own) });
+      items.push({ key: 'own', label: 'A dedicated VP', onSelect: () => ask(own) });
     }
     if (!others.length && !own) items.push({ key: 'none', info: true, label: 'No other VP to move to' });
     return items;
@@ -283,8 +283,8 @@ export function OrgChartSheet({ main, rows, tasks, onClose, onPick, onOpenTask, 
               {...dropZone(OWN, null)}
             >
               {overKey === OWN ? planFor(null)?.hint
-                : ownActive ? `Drop here to give ${dragged!.name} its own VP`
-                  : 'Drag a project here to give it its own VP'}
+                : ownActive ? `Drop here to create a dedicated VP for ${dragged!.name}`
+                  : 'Drag a project here to create a dedicated VP for it'}
             </div>
           )}
           {cards.length === 0 ? (
@@ -327,7 +327,7 @@ export function OrgChartSheet({ main, rows, tasks, onClose, onPick, onOpenTask, 
                         {c.needsYou > 0 && <span className="oc-badge" data-testid="org-chart-vp-needs" title={needsTitle(c.needsYou)}>{c.needsYou}</span>}
                       </div>
                     </div>
-                    <ul className="oc-projects" data-testid="org-chart-projects" aria-label={`Projects ${c.name}'s VP leads`}>
+                    <ul className="oc-projects" data-testid="org-chart-projects" aria-label={`Projects the ${c.name} VP leads`}>
                       {c.projects.map((p) => (
                         <OrgChartProject
                           key={p.key}

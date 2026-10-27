@@ -19,7 +19,7 @@ import { useSessionSend } from '@/hooks/useSessionSend';
 import { resolveTaskSessionId } from '@/utils/session-status';
 import { timeAgo } from '@/utils/time';
 import { OrgComposerBar } from './OrgComposerBar';
-import { OrgAlertAnswer } from './OrgAlertAnswer';
+import { OrgAlertAnswer, type AnswerFailure, type AnswerSettle } from './OrgAlertAnswer';
 import { holdOrder } from './hold-order';
 import { COMPOSER_INSERT_EVENT, type ComposerInsertDetail } from '@/utils/composer-insert';
 import { recentMainStart } from './ask-main';
@@ -32,6 +32,16 @@ import {
 } from './org-channels-model';
 
 export type OrgTab = 'board' | 'team' | 'chat';
+
+/** What the rows need from the page to answer in place. */
+export interface OrgAnswers {
+  /** An answer leaves now: the page counts it answered (the row goes), and the settle says how it went. */
+  start: (taskId: string) => AnswerSettle;
+  /** The last try that failed, by task: its row is back with the reason. */
+  failed: ReadonlyMap<string, AnswerFailure>;
+  /** The user closed the dropdown that told them. */
+  seen: (taskId: string) => void;
+}
 
 interface Props {
   row: ChannelRow;
@@ -46,8 +56,8 @@ interface Props {
   onOpenTask: (taskId: string, opts?: { inbox?: boolean }) => void;
   /** Open a session a chat names: the page's side panel. */
   onOpenSession: (sessionId: string) => void;
-  /** An ask answered from its row: the page counts it answered until the server's status moves. */
-  onAnswered: (taskId: string) => void;
+  /** Asks answered from their rows (the page's holds, OrgPage). */
+  answers: OrgAnswers;
   /** Start a chat with this node, which has no session yet. */
   onStartChat: (row: ChannelRow) => void;
   /** Phone: back to the list. */
@@ -82,13 +92,13 @@ function CountPills({ row }: { row: ChannelRow }) {
 
 /** One row per ask (2026-10-26, the user: "it need to show the task link clickable, just 2 button,
  *  quote just quote ... and answer"): the task's name is a link to it, Quote and Answer. */
-function AlertList({ alerts, tasks, onOpen, onQuote, canQuote, onAnswered, compact }: {
+function AlertList({ alerts, tasks, onOpen, onQuote, canQuote, answers, compact }: {
   alerts: readonly OrgAlertView[];
   tasks: readonly Task[];
   onOpen: (a: OrgAlertView) => void;
   onQuote: (a: OrgAlertView) => void;
   canQuote: boolean;
-  onAnswered: (taskId: string) => void;
+  answers: OrgAnswers;
   compact?: boolean;
 }) {
   const byId = useMemo(() => new Map(tasks.map((t) => [t.id, t])), [tasks]);
@@ -130,7 +140,13 @@ function AlertList({ alerts, tasks, onOpen, onQuote, canQuote, onAnswered, compa
               title={canQuote ? 'Quote it in this chat, to talk it over here' : 'Start a chat here first'}
               onClick={() => onQuote(a)}
             >Quote</button>
-            <OrgAlertAnswer alert={a} task={byId.get(a.taskId)} onAnswered={onAnswered} />
+            <OrgAlertAnswer
+              alert={a}
+              task={byId.get(a.taskId)}
+              onAnswer={answers.start}
+              onFailureSeen={answers.seen}
+              {...(answers.failed.get(a.taskId) ? { failure: answers.failed.get(a.taskId)! } : {})}
+            />
           </span>
         </div>
       ))}
@@ -169,7 +185,7 @@ function TeamBoard({ columns, onPick, emptyText }: {
   );
 }
 
-export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabChange, onSelect, onOpenTask, onOpenSession, onAnswered, onStartChat, onBack, now }: Props) {
+export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabChange, onSelect, onOpenTask, onOpenSession, answers, onStartChat, onBack, now }: Props) {
   const contact = useMemo(() => (row.contactId ? tasks.find((t) => t.id === row.contactId) : undefined), [tasks, row.contactId]);
   // A Main started a moment ago by a quick action: its session before the store has it.
   const launch = row.kind === 'main' ? recentMainStart(row.contactId) : null;
@@ -348,7 +364,7 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabChange, onSel
       {/* On the chat, the contact's own prompt is in view already; its letter or choice is not, so it stays.
           Both views keep it: what needs the user never hides behind the Brief. */}
       {alertsShown.length > 0 && (
-        <AlertList alerts={alertsShown} tasks={tasks} onOpen={openAlert} onQuote={quoteAlert} canQuote={!!sessionId} onAnswered={onAnswered} compact={shown === 'chat'} />
+        <AlertList alerts={alertsShown} tasks={tasks} onOpen={openAlert} onQuote={quoteAlert} canQuote={!!sessionId} answers={answers} compact={shown === 'chat'} />
       )}
 
       <div

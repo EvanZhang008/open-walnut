@@ -4,19 +4,29 @@
  * later (src/core/user-status-sync.ts) and the session's prompt clears a moment later; until then
  * the page shows the task as working, which is what an answer starts.
  *
- * A hold keeps what the task showed when it was answered: its whole status (statusSig; `at` alone
- * is the session's last report, which the next ask may share) and the live prompt its session
- * showed. It hides only those. Any move of the status is the server's word, and a prompt that
- * appears after the answered one went (or a different one) is a new ask: either ends the hold, as
- * does a minute for an answer the server never saw.
+ * A hold keeps what the task showed when it was answered: its phase, which is what makes it need
+ * the user (src/core/user-status.ts), the source of its ask, and the live prompt its session
+ * showed. It hides the ask until the task asks again: it is handed back to the user anew (it takes
+ * NEED_ACTION again, after the session took the answer), another letter or Board choice of its own
+ * waits on the user, its session fails, or a prompt appears after the answered one went (or a
+ * different one). Until then its status reads as working: the server may re-derive "its turn
+ * handed it back" before the answer has reached the session, and a status derived a moment before
+ * the session took the answer still says Needs you.
+ * The status leaving Needs you ends the hold too, as does a minute for an answer that never moved
+ * the task.
  */
 import type { Task } from '@open-walnut/core';
+import { userStateOf } from '@open-walnut/org-tree';
 
 export const ANSWERED_HOLD_MS = 60_000;
 
 export interface AnsweredHold {
-  /** The task's status when it was answered (statusSig). */
-  sig: string;
+  /** The task's phase when it was answered, with when it took it (phaseMark): a phase that left and
+   *  came back between two reads (the session took the answer and handed the task back) is a move. */
+  phase: string;
+  /** Where its ask lived then (UserStatus.source) and its words, '' for none. */
+  source: string;
+  ask: string;
   /** The live prompt its session showed then (promptKey), '' for none. */
   probe: string;
   until: number;
@@ -27,10 +37,20 @@ export interface AnsweredHold {
 /** Answered asks by task id. */
 export type AnsweredHolds = ReadonlyMap<string, AnsweredHold>;
 
-/** A task's status, all of it: a change in any part is the server moving it. */
-export function statusSig(t: Task | undefined): string {
-  const s = t?.user_status;
-  return s ? [s.state, s.source ?? '', s.ask ?? '', s.at ?? ''].join('\u0001') : '';
+// The rows' own rule (collectAlerts): a task not derived yet needs the user by its phase.
+const needs = (t: Task): boolean => userStateOf(t) === 'needs';
+
+/** The task's phase and when it took it. */
+export const phaseMark = (t: Task | undefined): string => (t ? `${t.phase}@${t.phase_changed_at ?? ''}` : '');
+
+/** The task asks again since the answer: handed back to the user anew, another of its letters or
+ *  choices waits, or its session failed. Only the fallback words ("its turn handed it back") are
+ *  the same ask said again. */
+function askedAgain(h: AnsweredHold, t: Task): boolean {
+  if (t.phase === 'NEED_ACTION' && phaseMark(t) !== h.phase) return true;
+  const src = t.user_status?.source ?? '';
+  if ((src === 'letter' || src === 'choice') && (src !== h.source || (t.user_status?.ask ?? '') !== h.ask)) return true;
+  return src === 'error' && h.source !== 'error';
 }
 
 /** The live prompt key of a probe result ('' for none). */
@@ -58,8 +78,8 @@ export function settleHolds(
     else {
       const cleared = h.cleared || (!!h.probe && !p);
       const promptHeld = !!h.probe && !cleared;
-      // The server moved the status, and no answered prompt is left on screen to hide.
-      if (statusSig(t) !== h.sig && !promptHeld) keep = null;
+      // The task asks again (or needs no one), and no answered prompt is left on screen to hide.
+      if ((askedAgain(h, t) || !needs(t)) && !promptHeld) keep = null;
       else if (cleared !== !!h.cleared) keep = { ...h, cleared };
     }
     if (keep !== h) {
@@ -70,12 +90,12 @@ export function settleHolds(
   return next ?? holds;
 }
 
-/** The tasks as the page shows them: a held one reads as working while its status has not moved. */
+/** The tasks as the page shows them: a held one reads as working until it asks again. */
 export function withAnswered(tasks: readonly Task[], holds: AnsweredHolds, nowMs: number): readonly Task[] {
   if (!holds.size) return tasks;
   return tasks.map((t) => {
     const h = holds.get(t.id);
-    if (!h || h.until <= nowMs || statusSig(t) !== h.sig) return t;
+    if (!h || h.until <= nowMs || !needs(t) || askedAgain(h, t)) return t;
     const { ask: _ask, source: _source, ...rest } = t.user_status ?? { state: 'working' as const };
     return { ...t, user_status: { ...rest, state: 'working' as const } };
   });
@@ -85,4 +105,12 @@ export function withAnswered(tasks: readonly Task[], holds: AnsweredHolds, nowMs
 export function promptAnswered(holds: AnsweredHolds, taskId: string, key: string, nowMs: number): boolean {
   const h = holds.get(taskId);
   return !!h && h.until > nowMs && !!key && !h.cleared && key === h.probe;
+}
+
+/** The map without `key`: the same map when it has none. */
+export function without<V>(map: ReadonlyMap<string, V>, key: string): ReadonlyMap<string, V> {
+  if (!map.has(key)) return map;
+  const next = new Map(map);
+  next.delete(key);
+  return next;
 }

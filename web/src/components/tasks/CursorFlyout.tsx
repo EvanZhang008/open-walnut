@@ -20,8 +20,10 @@ export interface CursorPoint { x: number; y: number }
 
 export interface CursorFlyoutHandle<T> {
   /** The open picker's target and anchor, or null. The point is stable while open (it is state). */
-  state: { payload: T; point: CursorPoint } | null;
-  open: (payload: T, point: CursorPoint) => void;
+  state: { payload: T; point: CursorPoint; origin?: HTMLElement | null } | null;
+  /** `origin`: the row the menu was opened on, when the host has it (ContextMenu's `returnFocus`).
+   *  Then only a scroll that moves that row closes the picker, and Escape puts focus back on it. */
+  open: (payload: T, point: CursorPoint, origin?: HTMLElement | null) => void;
   close: () => void;
   /** `useMenuPlacement` wants a trigger ref; a cursor anchor has none, so this stays empty by design. */
   noTrigger: RefObject<HTMLElement | null>;
@@ -31,33 +33,50 @@ const insideFlyout = (target: EventTarget | null) =>
   !!(target as HTMLElement | null)?.closest?.('.task-kebab-project-flyout');
 
 export function useCursorFlyout<T>(): CursorFlyoutHandle<T> {
-  const [state, setState] = useState<{ payload: T; point: CursorPoint } | null>(null);
+  const [state, setState] = useState<{ payload: T; point: CursorPoint; origin?: HTMLElement | null } | null>(null);
   const noTrigger = useRef<HTMLElement | null>(null);
   const picking = state !== null;
+  const origin = state?.origin ?? null;
 
-  // The picker outlives the menu that opened it, so it owns its own dismissal. A scroll closes it
-  // outright: a cursor anchor is a frozen viewport point.
+  // The picker outlives the menu that opened it, so it owns its own dismissal. A scroll closes it:
+  // a cursor anchor is a frozen viewport point. With the row it was opened on known, only a scroller
+  // that carries that row does, the rule ContextMenu keeps (2026-09-22: a pane following its own
+  // tail took the menu down under a hand that never moved), and it arms a frame late, as there: the
+  // close of the menu re-renders the row and can clamp its list's scrollTop.
   useEffect(() => {
     if (!picking) return;
     const close = () => setState(null);
     const onDown = (e: MouseEvent) => { if (!insideFlyout(e.target)) close(); };
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.stopPropagation(); close(); } };
-    const onScroll = (e: Event) => { if (!insideFlyout(e.target)) close(); };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      e.stopPropagation();
+      close();
+      if (origin?.isConnected) origin.focus({ preventScroll: true });
+    };
+    let armed = false;
+    const arm = requestAnimationFrame(() => { armed = true; });
+    const onScroll = (e: Event) => {
+      if (!armed || insideFlyout(e.target)) return;
+      const scrolled = e.target;
+      if (origin?.isConnected && scrolled instanceof Node && !scrolled.contains(origin)) return;
+      close();
+    };
     document.addEventListener('mousedown', onDown);
     document.addEventListener('keydown', onKey);
     window.addEventListener('scroll', onScroll, true);
     window.addEventListener('resize', close);
     return () => {
+      cancelAnimationFrame(arm);
       document.removeEventListener('mousedown', onDown);
       document.removeEventListener('keydown', onKey);
       window.removeEventListener('scroll', onScroll, true);
       window.removeEventListener('resize', close);
     };
-  }, [picking]);
+  }, [picking, origin]);
 
   return {
     state,
-    open: (payload, point) => setState({ payload, point }),
+    open: (payload, point, from) => setState({ payload, point, ...(from ? { origin: from } : {}) }),
     close: () => setState(null),
     noTrigger,
   };

@@ -32,18 +32,25 @@ import { OrgChartSheet, type ChartStart } from '@/components/org/OrgChartSheet';
 import { OrgChannelList, type ChannelMenuTarget } from '@/components/org/OrgChannelList';
 import { placeParams, readOrgPlace, writeOrgPlace } from '@/components/org/org-place';
 import type { ContextMenuItem } from '@/components/common/ContextMenu';
-import { dropPlan, vpCards } from '@/components/org/org-chart-model';
-import { OrgNodeDetail, type OrgTab } from '@/components/org/OrgNodeDetail';
+import { vpCards } from '@/components/org/org-chart-model';
+import { OptionPickerFlyout, useCursorFlyout, type CursorPoint } from '@/components/tasks/CursorFlyout';
+import { orgRowMenu, type OrgRowPick } from '@/components/org/org-row-menu';
+import { OrgNodeDetail, type OrgAnswers, type OrgTab } from '@/components/org/OrgNodeDetail';
+import type { AnswerFailure } from '@/components/org/OrgAlertAnswer';
 import { OrgSidePanel, parseSideTarget, sideTargetParam, type OrgSideTarget } from '@/components/org/OrgSidePanel';
 import {
   MAIN_KEY, buildChannels, filterChannels, flattenNodes, movedProjects, pickChannel, projectRowKey, rowOf, type AlertProbe, type ChannelRow,
 } from '@/components/org/org-channels-model';
 import {
-  ANSWERED_HOLD_MS, promptAnswered, promptKey, settleHolds, statusSig, withAnswered, type AnsweredHolds,
+  ANSWERED_HOLD_MS, phaseMark, promptAnswered, promptKey, settleHolds, withAnswered, without, type AnsweredHolds,
 } from '@/components/org/org-answered';
 import '@/styles/org-page.css';
 
 const TABS: readonly OrgTab[] = ['board', 'team', 'chat'];
+
+/** The URL's params now. setParams hands its updater the params of the last render, so two quick
+ *  changes (a tab, then a task opened beside it, before the page drew the first) lost the first. */
+const liveParams = (): URLSearchParams => new URLSearchParams(window.location.search);
 
 /** A question or approval the task's session waits on now, else a failed session. */
 const probe: AlertProbe = (task: Task) => {
@@ -83,13 +90,31 @@ export function OrgPage() {
 
   /** Asks answered from their row, by task: what the task showed then (org-answered.ts). */
   const [answered, setAnswered] = useState<AnsweredHolds>(() => new Map());
+  /** Answers that failed, by task: the row is back with the reason (OrgAlertAnswer). */
+  const [failedAnswers, setFailedAnswers] = useState<ReadonlyMap<string, AnswerFailure>>(() => new Map());
   const allTasks = tasks;
-  const onAnswered = useCallback((taskId: string) => {
-    const task = allTasks.find((t) => t.id === taskId);
-    const hold = { sig: statusSig(task), probe: task ? promptKey(probe(task)) : '', until: Date.now() + ANSWERED_HOLD_MS };
-    setAnswered((prev) => new Map(prev).set(taskId, hold));
-  }, [allTasks]);
-  // A hold ends when the task's status or its session's prompt moves (a new ask shows at once).
+  const tasksNow = useRef(allTasks);
+  tasksNow.current = allTasks;
+  const answers = useMemo<OrgAnswers>(() => ({
+    // The row goes on the click, before the server answers: the hold keeps what the task showed now.
+    start: (taskId) => {
+      const task = tasksNow.current.find((t) => t.id === taskId);
+      const hold = {
+        phase: phaseMark(task), source: task?.user_status?.source ?? '', ask: task?.user_status?.ask ?? '',
+        probe: task ? promptKey(probe(task)) : '', until: Date.now() + ANSWERED_HOLD_MS,
+      };
+      setAnswered((prev) => new Map(prev).set(taskId, hold));
+      setFailedAnswers((prev) => without(prev, taskId));
+      return (failure) => {
+        if (!failure) return;
+        setAnswered((prev) => (prev.get(taskId) === hold ? without(prev, taskId) : prev));
+        setFailedAnswers((prev) => new Map(prev).set(taskId, failure));
+      };
+    },
+    failed: failedAnswers,
+    seen: (taskId) => setFailedAnswers((prev) => without(prev, taskId)),
+  }), [failedAnswers]);
+  // A hold ends when the task asks again or its session's prompt moves (a new ask shows at once).
   useEffect(() => {
     setAnswered((prev) => settleHolds(prev, allTasks, (t) => promptKey(probe(t)), Date.now()));
   }, [allTasks, epoch]);
@@ -148,8 +173,8 @@ export function OrgPage() {
   useLayoutEffect(() => {
     if (!restore) return;
     log.info('org-page', 'place restored', restore);
-    setParams((prev) => {
-      const next = new URLSearchParams(prev);
+    setParams(() => {
+      const next = liveParams();
       for (const [k, v] of Object.entries(restore)) next.set(k, v);
       return next;
     }, { replace: true });
@@ -180,8 +205,8 @@ export function OrgPage() {
   // A phone pushes the pick (Back returns to the list); the desktop replaces it. A new pick
   // closes the side panel: what it showed belonged to the node the user left.
   const select = useCallback((key: string, tab?: OrgTab) => {
-    setParams((prev) => {
-      const next = new URLSearchParams(prev);
+    setParams(() => {
+      const next = liveParams();
       next.set('node', key);
       if (tab) next.set('tab', tab); else next.delete('tab');
       next.delete('open');
@@ -191,7 +216,7 @@ export function OrgPage() {
   const back = useCallback(() => {
     if ((window.history.state as { usr?: { orgPick?: boolean } } | null)?.usr?.orgPick) { navigate(-1); return; }
     // Opened straight on a node (a link, a reload): the list is this page's own way back.
-    setParams((prev) => { const next = new URLSearchParams(prev); next.delete('node'); next.delete('tab'); return next; }, { replace: true });
+    setParams(() => { const next = liveParams(); next.delete('node'); next.delete('tab'); return next; }, { replace: true });
   }, [navigate, setParams]);
 
   // Only for the node still shown, and keeping the entry's state (a phone's pick marker).
@@ -199,8 +224,8 @@ export function OrgPage() {
   shownKey.current = selected.key;
   const setTab = useCallback((key: string, tab: OrgTab) => {
     if (key !== shownKey.current) return;
-    setParams((prev) => {
-      const next = new URLSearchParams(prev);
+    setParams(() => {
+      const next = liveParams();
       next.set('node', key);
       next.set('tab', tab);
       return next;
@@ -218,8 +243,8 @@ export function OrgPage() {
     log.info('org-page', 'open beside', { kind: t.kind, id: t.id });
     const push = phone && !sideOpen.current;
     sideOpen.current = true;
-    setParams((prev) => {
-      const next = new URLSearchParams(prev);
+    setParams(() => {
+      const next = liveParams();
       next.set('open', sideTargetParam(t));
       return next;
     }, push
@@ -252,7 +277,7 @@ export function OrgPage() {
     sideOpen.current = false;
     setSideInbox(null);
     if ((window.history.state as { usr?: { orgSide?: boolean } } | null)?.usr?.orgSide) { navigate(-1); return; }
-    setParams((prev) => { const next = new URLSearchParams(prev); next.delete('open'); return next; },
+    setParams(() => { const next = liveParams(); next.delete('open'); return next; },
       { replace: true, state: (window.history.state as { usr?: unknown } | null)?.usr ?? null });
   }, [navigate, setParams]);
 
@@ -275,44 +300,15 @@ export function OrgPage() {
   }, [chatOnHome, showOperationError]);
 
   // A right-click on a row: open it on a tab, and move its project the way the chart does
-  // (the chart opens on the same question, so a move is confirmed in one place).
+  // (the chart opens on the same question, so a move is confirmed in one place). The menu stays
+  // short (2026-10-26, the user: "too messy"): a list of VPs or projects is one row that opens a
+  // picker at the cursor, the way a folder menu's Project row does.
   const cards = useMemo(() => vpCards(channels.projects), [channels.projects]);
-  const rowMenu = useCallback((target: ChannelMenuTarget): ContextMenuItem[] => {
-    const projectOf = (key: string) => cards.flatMap((c) => c.projects).find((p) => p.key === key);
-    const giveBack = (key: string, name: string): ContextMenuItem[] => {
-      const p = projectOf(key);
-      return p && dropPlan(cards, p, null)
-        ? [{ key: `own:${key}`, label: `Give ${name} its own VP…`, onSelect: () => openChart({ project: key, to: null }) }]
-        : [];
-    };
-    if ('moved' in target) {
-      const m = target.moved;
-      return [
-        { key: 'head', section: true, label: m.project },
-        { key: 'open', label: `Open the ${m.vpName} VP`, onSelect: () => select(m.vpKey) },
-        { key: 'sep', divider: true },
-        ...giveBack(m.key, m.project),
-      ];
-    }
-    const r = target.row;
-    // The detail's own tabs: chat with whoever answers for it (OrgNodeDetail canTalk), its team.
-    const canTalk = r.kind === 'main' || !!r.contactId || !!r.node?.needsLead;
-    const items: ContextMenuItem[] = [
-      { key: 'head', section: true, label: r.name },
-      ...(canTalk ? [{ key: 'chat', label: 'Open chat', onSelect: () => select(r.key, 'chat') }] : []),
-      { key: 'team', label: r.kind === 'main' ? 'Open VPs' : 'Open team', onSelect: () => select(r.key, 'team') },
-    ];
-    if (r.kind === 'main') return [...items, { key: 'sep', divider: true }, { key: 'chart', label: 'Open the org chart', onSelect: () => openChart() }];
-    const own = projectOf(r.key);
-    const under = own ? cards.filter((c) => c.key !== r.key && dropPlan(cards, own, c)) : [];
-    if (under.length) {
-      items.push({ key: 'sep-move', divider: true }, { key: 'move', section: true, label: `Move ${r.name} under` });
-      for (const c of under) items.push({ key: `vp:${c.key}`, label: `${c.name}'s VP…`, onSelect: () => openChart({ project: r.key, to: c.key }) });
-    }
-    const back = (r.led ?? []).flatMap((l) => giveBack(l.key, l.name));
-    if (back.length) items.push({ key: 'sep-back', divider: true }, ...back);
-    return items;
-  }, [cards, select, openChart]);
+  const picker = useCursorFlyout<OrgRowPick>();
+  const rowMenu = useCallback((target: ChannelMenuTarget, point: CursorPoint, origin: HTMLElement | null): ContextMenuItem[] =>
+    orgRowMenu({ target, cards, select, openChart, pick: (p) => picker.open(p, point, origin) }),
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- picker.open only sets its state
+  [cards, select, openChart]);
 
   // A phone shows one of the three at a time; the opened task covers the rest.
   const phoneView = !phone ? null : side ? 'side' : showDetail ? 'detail' : 'list';
@@ -334,6 +330,17 @@ export function OrgPage() {
           now={now}
         />
       )}
+      {picker.state && (
+        <OptionPickerFlyout
+          anchorPoint={picker.state.point}
+          anchorRef={picker.noTrigger}
+          options={picker.state.payload.options}
+          current={undefined}
+          ariaLabel={picker.state.payload.label}
+          onPick={picker.state.payload.onPick}
+          onClose={picker.close}
+        />
+      )}
       {showDetail && (!phone || phoneView === 'detail') && (
         <section className="org-detail-pane" aria-label={selected.name}>
           <OrgNodeDetail
@@ -346,7 +353,7 @@ export function OrgPage() {
             onSelect={select}
             onOpenTask={openTask}
             onOpenSession={openSession}
-            onAnswered={onAnswered}
+            answers={answers}
             onStartChat={(row) => { void startChat(row); }}
             {...(phone ? { onBack: back } : {})}
             now={now}

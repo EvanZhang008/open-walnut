@@ -82,6 +82,12 @@ test.beforeAll(async ({ request }) => {
   ids.lead = contact.task.id
   made.push(ids.lead)
   ids.leadSid = await startSession(request, ids.lead, `Alpha lead ready ${STAMP}`)
+  // Its first turn hands it back to the user (NEED_ACTION, the one status counts the phase); here
+  // the lead waits on its team instead, so only the question needs the user.
+  await expect.poll(async () => ((await (await request.get(`/api/tasks/${ids.lead}`)).json()).task?.phase ?? ''), { timeout: 60_000 })
+    .not.toMatch(/^(TODO|IN_PROGRESS)$/)
+  const parked = await request.patch(`/api/tasks/${ids.lead}`, { data: { phase: 'WAITING' } })
+  expect(parked.ok(), await parked.text()).toBe(true)
   ids.askSid = await startSession(request, ids.ask, 'status-permission-test:AskUserQuestion', 'default')
   await expect.poll(async () => ((await (await request.get(`/api/sessions/${ids.askSid}`)).json()).session?.pendingPermission?.toolName ?? ''),
     { timeout: 90_000 }).toBe('AskUserQuestion')
@@ -261,8 +267,11 @@ test('a task whose Board asks the user to choose needs them: its row, its line, 
     data: { html: `<h1>Renewal</h1><walnut-choice id="renew" title="Pick the renewal date ${STAMP}" options="may:In May,june:In June"></walnut-choice>` },
   })
   expect(put.ok(), await put.text()).toBe(true)
-  await expect.poll(async () => ((await (await request.get(`/api/tasks/${id}`)).json()).task?.user_status?.state ?? ''), { timeout: 30_000 })
-    .toBe('needs')
+  // The choice gives the words; the task's phase says it asks the user (src/core/user-status.ts).
+  const asked = await request.patch(`/api/tasks/${id}`, { data: { phase: 'NEED_ACTION' } })
+  expect(asked.ok(), await asked.text()).toBe(true)
+  await expect.poll(async () => ((await (await request.get(`/api/tasks/${id}`)).json()).task?.user_status?.source ?? ''), { timeout: 30_000 })
+    .toBe('choice')
 
   await openOrg(page)
   await page.getByTestId('org-search').fill(project)
@@ -426,6 +435,19 @@ test('the org\'s name and the user\'s role are renamed in place, kept, and the C
   await page.getByTestId('org-chart-founder-title-input').press('Enter')
   await expect(role).toHaveText('Chair')
   await expect.poll(async () => (await (await request.get('/api/v1/org/settings')).json()).founderTitle).toBe('Chair')
+
+  // A change that lands while the page is still reading the names is read again: here a read
+  // answers with the names from before the reset, and only after the reset happened.
+  let held = 0
+  await page.route('**/api/v1/org/settings', async (route) => {
+    if (route.request().method() !== 'GET' || held++ > 0) return route.fallback()
+    const stale = await route.fetch()
+    await new Promise((r) => setTimeout(r, 3_000))
+    await route.fulfill({ response: stale })
+  })
+  // Any config change makes the page read the names (that read is the held one).
+  expect((await request.put('/api/v1/org/settings', { data: { founderTitle: 'Chair' } })).ok()).toBe(true)
+  await expect.poll(() => held, { timeout: 15_000 }).toBeGreaterThan(0)
 
   // Blank goes back to the defaults (and leaves the shared fixture as it was).
   const reset = await request.put('/api/v1/org/settings', { data: { name: '', founderTitle: '' } })

@@ -125,7 +125,11 @@ export interface DropPlan {
   confirm: string;
 }
 
-/** Drop `project` (a project on some card) onto `target` (a VP card, or null = its own VP). */
+/** A VP named in a sentence (2026-10-26, the user: "Routines's VP" reads badly): "the Routines VP". */
+export const theVp = (name: string): string => `the ${name} VP`;
+const TheVp = (name: string): string => `The ${name} VP`;
+
+/** Drop `project` (a project on some card) onto `target` (a VP card, or null = a dedicated VP of its own). */
 export function dropPlan(cards: readonly VpCard[], project: VpProject, target: VpCard | null): DropPlan | null {
   if (!project.project) return null; // the Inbox has no VP
   const from = cardOf(cards, project.key);
@@ -136,14 +140,14 @@ export function dropPlan(cards: readonly VpCard[], project: VpProject, target: V
     return {
       project: project.project,
       vp: '',
-      hint: `Drop: ${project.name} gets its own VP`,
-      title: `Give ${project.name} its own VP?`,
+      hint: `Drop: ${project.name} gets a dedicated VP`,
+      title: `Create a dedicated VP for ${project.name}?`,
       lines: [
-        `${project.name} gets its own VP again; ${from.name}'s VP keeps ${from.name}.`,
-        `${from.name}'s VP sums up its work on ${project.name} for it.`,
+        `${project.name} gets a dedicated VP again; ${theVp(from.name)} keeps ${from.name}.`,
+        `${TheVp(from.name)} sums up its work on ${project.name} for it.`,
         'No task changes project.',
       ],
-      confirm: 'Give it its own VP',
+      confirm: 'Create a dedicated VP',
     };
   }
   if (target.role !== 'VP' || target.key === from.key) return null;
@@ -155,21 +159,21 @@ export function dropPlan(cards: readonly VpCard[], project: VpProject, target: V
   const handover = !letsGo
     ? null
     : !isHome
-      ? `${leaving}'s VP sums up its work on ${project.name} for ${target.name}'s VP.`
+      ? `${TheVp(leaving)} sums up its work on ${project.name} for ${theVp(target.name)}.`
       : letsGo.hasSession
-        ? `${leaving}'s VP sums up its work for ${target.name}'s VP, then steps down.`
-        : `${leaving}'s VP steps down; it never started, so there is nothing to hand over.`;
+        ? `${TheVp(leaving)} sums up its work for ${theVp(target.name)}, then steps down.`
+        : `${TheVp(leaving)} steps down; it never started, so there is nothing to hand over.`;
   return {
     project: project.project,
     vp: target.project,
-    hint: `Drop: ${target.name}'s VP takes over ${project.name}`,
-    title: `Put ${project.name} under ${target.name}'s VP?`,
+    hint: `Drop: ${theVp(target.name)} takes over ${project.name}`,
+    title: `Put ${project.name} under ${theVp(target.name)}?`,
     lines: [
-      `${target.name}'s VP leads ${listNames(names)} from now on. ${names.length > 1 ? 'Each stays its own project' : `${project.name} stays its own project`}; no task changes project.`,
+      `${TheVp(target.name)} leads ${listNames(names)} from now on. ${names.length > 1 ? 'Each stays its own project' : `${project.name} stays its own project`}; no task changes project.`,
       ...(handover ? [handover] : []),
       'Drag it out again to undo.',
     ],
-    confirm: `Put under ${target.name}`,
+    confirm: `Put under ${theVp(target.name)}`,
   };
 }
 

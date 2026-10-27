@@ -6,14 +6,15 @@
  *   - dragging one project onto another VP says what the drop does before it happens, asks
  *     first, and Cancel changes nothing; after Confirm that VP's card lists both projects,
  *     each still its own project (no task moved), and the VP that let go has stepped down
- *   - dragging it onto "own VP" gives it back; the ⋯ menu does the same without a drag, and
+ *   - dragging it onto the drop zone creates a dedicated VP for it again; the ⋯ menu does the same without a drag, and
  *     Escape closes the question before the sheet
  *   - a project opens to its tasks and where each stands; a task opens beside the Org page
  *   - a project under another VP is part of that VP's channel on the Org page, not one of its own
  *   - a card opens its project on the Org page, on its chat (chat is the first tab)
  *   - a click outside the sheet closes it (the menu and the question close first)
- *   - a right-click on an Org row opens Walnut's menu: its tabs, a move under another VP and a
- *     give-back, each asked in the chart first; "Archived" lists what moved
+ *   - a right-click on an Org row opens Walnut's menu, kept short: its tabs, "Move under another VP…"
+ *     (a picker of VPs) and "Create a dedicated VP for X…", each asked in the chart first;
+ *     "Archived" lists what moved
  * The fixture is shared, so this file makes its own projects and removes what it made.
  */
 import { expect, test, type APIRequestContext, type Locator, type Page } from '@playwright/test'
@@ -116,10 +117,10 @@ test('a drag onto another VP says what it does, asks first, and puts the project
 
   // While over A, the card says what the drop would do.
   await dragOver(page, handle(page, B), vp(page, A))
-  await expect(page.getByTestId('org-chart-hint')).toHaveText(`Drop: ${A}'s VP takes over ${B}`)
+  await expect(page.getByTestId('org-chart-hint')).toHaveText(`Drop: the ${A} VP takes over ${B}`)
   await page.mouse.up()
   const confirm = page.getByTestId('org-chart-confirm')
-  await expect(confirm).toContainText(`Put ${B} under ${A}'s VP?`)
+  await expect(confirm).toContainText(`Put ${B} under the ${A} VP?`)
   await expect(confirm).toContainText('no task changes project')
   await expect(confirm).toContainText('steps down')
 
@@ -131,7 +132,7 @@ test('a drag onto another VP says what it does, asks first, and puts the project
   // The same drop again, confirmed.
   await handle(page, B).dragTo(vp(page, A))
   await page.getByTestId('org-chart-apply').click()
-  await expect(page.getByTestId('org-chart-done')).toHaveText(`${B} is now under ${A}'s VP.`)
+  await expect(page.getByTestId('org-chart-done')).toHaveText(`${B} is now under the ${A} VP.`)
   const card = vp(page, A)
   await expect(card.getByTestId('org-chart-project')).toHaveCount(2)
   await expect(card.getByTestId('org-chart-project').nth(1)).toContainText(B)
@@ -186,15 +187,15 @@ test('a drag onto another VP says what it does, asks first, and puts the project
   await expect(page.getByTestId('org-detail-led')).toHaveText(`Leads ${A}, ${B}`)
 })
 
-test('a drag onto "own VP" gives it back; the menu asks the same without a drag', async ({ page, request }) => {
+test('a drag onto the drop zone creates a dedicated VP again; the menu asks the same without a drag', async ({ page, request }) => {
   await openChart(page)
   const row = vp(page, A).locator(`[data-testid="org-chart-project"][data-project="${B}"]`)
   await dragOver(page, row, page.getByTestId('org-chart-own'))
-  await expect(page.getByTestId('org-chart-own')).toHaveText(`Drop: ${B} gets its own VP`)
+  await expect(page.getByTestId('org-chart-own')).toHaveText(`Drop: ${B} gets a dedicated VP`)
   await page.mouse.up()
-  await expect(page.getByTestId('org-chart-confirm')).toContainText(`Give ${B} its own VP?`)
+  await expect(page.getByTestId('org-chart-confirm')).toContainText(`Create a dedicated VP for ${B}?`)
   await page.getByTestId('org-chart-apply').click()
-  await expect(page.getByTestId('org-chart-done')).toHaveText(`${B} has its own VP again.`)
+  await expect(page.getByTestId('org-chart-done')).toHaveText(`${B} has a dedicated VP again.`)
   await expect(vp(page, B)).toBeVisible()
   await expect(vp(page, A).getByTestId('org-chart-project')).toHaveCount(1)
   const b = (await project(request, B))!
@@ -205,8 +206,8 @@ test('a drag onto "own VP" gives it back; the menu asks the same without a drag'
   await vp(page, B).getByTestId('org-chart-project-menu').click()
   const menu = page.getByTestId('org-chart-move-menu')
   await expect(menu).toContainText(`Move ${B} under`)
-  await menu.getByText(`${A}'s VP`).click()
-  await expect(page.getByTestId('org-chart-confirm')).toContainText(`Put ${B} under ${A}'s VP?`)
+  await menu.getByText(`${A} VP`, { exact: true }).click()
+  await expect(page.getByTestId('org-chart-confirm')).toContainText(`Put ${B} under the ${A} VP?`)
   await page.keyboard.press('Escape')
   await expect(page.getByTestId('org-chart-confirm')).toHaveCount(0)
   await expect(page.getByTestId('org-chart')).toBeVisible()
@@ -230,7 +231,7 @@ test('a click outside the sheet closes it; inside, or with the menu or the quest
   await expect(sheet).toBeVisible()
   // The question open: the click outside closes only the question.
   await vp(page, B).getByTestId('org-chart-project-menu').click()
-  await page.getByTestId('org-chart-move-menu').getByText(`${A}'s VP`).click()
+  await page.getByTestId('org-chart-move-menu').getByText(`${A} VP`, { exact: true }).click()
   await expect(page.getByTestId('org-chart-confirm')).toBeVisible()
   await page.mouse.click(box.x + box.width / 2, box.y + box.height + 12)
   await expect(page.getByTestId('org-chart-confirm')).toHaveCount(0)
@@ -247,7 +248,7 @@ test('a click outside the sheet closes it; inside, or with the menu or the quest
   await expect(sheet).toHaveCount(0)
 })
 
-test('a right-click on an Org row opens Walnut\'s menu: open it, move its project, give it back', async ({ page, request }) => {
+test('a right-click on an Org row opens Walnut\'s menu, kept short: open it, move its project, create a dedicated VP', async ({ page, request }) => {
   await isolateUiPrefs(page)
   await loadHome(page)
   await page.getByTestId('sidebar-org').click()
@@ -263,34 +264,70 @@ test('a right-click on an Org row opens Walnut\'s menu: open it, move its projec
   await page.keyboard.press('Escape')
   await expect(menu).toHaveCount(0)
 
-  // A VP row: open it on its team.
+  // A VP row: open it on its team. The VPs it could move under are one row, not a row each.
   await channel(B).click({ button: 'right' })
-  await expect(menu).toContainText(`Move ${B} under`)
+  await expect(menu.getByRole('menuitem')).toHaveText(['Open chat', 'Open team', 'Move under another VP…'])
+  await expect(menu).not.toContainText(`${A} VP`)
   await menu.getByText('Open team', { exact: true }).click()
   await expect(menu).toHaveCount(0)
   await expect(channel(B)).toHaveAttribute('aria-selected', 'true')
   await expect(page.getByTestId('org-tab-team')).toHaveAttribute('aria-selected', 'true')
 
-  // Move it: the chart opens on the same question as a drag, and nothing moves before Confirm.
+  // Move it: the row opens the VPs at the cursor, a pick opens the chart on the same question as
+  // a drag, and nothing moves before Confirm.
   await channel(B).click({ button: 'right' })
-  await menu.getByText(`${A}'s VP…`, { exact: true }).click()
-  await expect(page.getByTestId('org-chart-confirm')).toContainText(`Put ${B} under ${A}'s VP?`)
+  await menu.getByText('Move under another VP…', { exact: true }).click()
+  await expect(menu).toHaveCount(0)
+  const picker = page.locator(`.task-kebab-project-flyout[aria-label="Move ${B} under"]`)
+  await expect(picker).toBeVisible()
+  const pbox = (await picker.boundingBox())!
+  const vpSize = page.viewportSize()!
+  expect(pbox.x + pbox.width).toBeLessThanOrEqual(vpSize.width + 0.5)
+  expect(pbox.y + pbox.height).toBeLessThanOrEqual(vpSize.height + 0.5)
+  await page.screenshot({ path: `test-results/org-row-move-picker-${test.info().project.name}.png` })
+  // A pane that scrolls on its own (a chat following its tail) leaves it open; Escape puts the
+  // focus back on the row it was opened from.
+  await page.evaluate(async () => {
+    const pane = document.createElement('div')
+    pane.dataset.testid = 'other-pane'
+    pane.style.cssText = 'position:fixed;left:0;bottom:0;width:40px;height:40px;overflow:auto'
+    pane.innerHTML = '<div style="height:400px"></div>'
+    document.body.appendChild(pane)
+    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))
+    pane.scrollTop = 200
+    await new Promise((r) => setTimeout(r, 300))
+    pane.remove()
+  })
+  await expect(picker).toBeVisible()
+  await page.keyboard.press('Escape')
+  await expect(picker).toHaveCount(0)
+  await expect(channel(B)).toBeFocused()
+  await channel(B).click({ button: 'right' })
+  await menu.getByText('Move under another VP…', { exact: true }).click()
+  await expect(picker).toBeVisible()
+  await picker.getByRole('option', { name: `${A} VP`, exact: true }).click()
+  await expect(picker).toHaveCount(0)
+  await expect(page.getByTestId('org-chart-confirm')).toContainText(`Put ${B} under the ${A} VP?`)
   expect((await project(request, B))?.vp).toBeUndefined()
   await page.getByTestId('org-chart-apply').click()
-  await expect(page.getByTestId('org-chart-done')).toHaveText(`${B} is now under ${A}'s VP.`)
+  await expect(page.getByTestId('org-chart-done')).toHaveText(`${B} is now under the ${A} VP.`)
   await page.keyboard.press('Escape')
   await expect(page.getByTestId('org-chart')).toHaveCount(0)
   await expect(channel(B)).toHaveCount(0)
+  // The VP that took it over offers a dedicated VP for it, by name.
+  await channel(A).click({ button: 'right' })
+  await expect(menu).toContainText(`Create a dedicated VP for ${B}…`)
+  await page.keyboard.press('Escape')
 
   // Under "Archived", the moved project's menu gives it back.
   await page.getByTestId('org-moved-toggle').click()
   const movedB = page.locator(`[data-testid="org-moved-row"][data-key="project:${B.toLowerCase()}"]`)
   await movedB.click({ button: 'right' })
   await expect(menu).toContainText(`Open the ${A} VP`)
-  await menu.getByText(`Give ${B} its own VP…`, { exact: true }).click()
-  await expect(page.getByTestId('org-chart-confirm')).toContainText(`Give ${B} its own VP?`)
+  await menu.getByText(`Create a dedicated VP for ${B}…`, { exact: true }).click()
+  await expect(page.getByTestId('org-chart-confirm')).toContainText(`Create a dedicated VP for ${B}?`)
   await page.getByTestId('org-chart-apply').click()
-  await expect(page.getByTestId('org-chart-done')).toHaveText(`${B} has its own VP again.`)
+  await expect(page.getByTestId('org-chart-done')).toHaveText(`${B} has a dedicated VP again.`)
   await page.keyboard.press('Escape')
   await expect(channel(B)).toBeVisible()
   await expect(movedB).toHaveCount(0)

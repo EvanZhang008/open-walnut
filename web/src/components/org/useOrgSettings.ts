@@ -7,25 +7,25 @@ import { useCallback, useEffect, useState } from 'react';
 import { fetchOrgSettings, saveOrgSettings, type OrgSettings } from '@/api/org';
 import { useEvent } from '@/hooks/useWebSocket';
 import { log } from '@/utils/log';
+import { coalesceRefresh } from '@/utils/coalesce-refresh';
 
 export const ORG_DEFAULTS: OrgSettings = { name: 'Org', founderTitle: 'Founder' };
 
 let known: OrgSettings | null = null;
 const listeners = new Set<(s: OrgSettings) => void>();
-let reading: Promise<void> | null = null;
 
 function publish(s: OrgSettings): void {
   known = s;
   for (const l of listeners) l(s);
 }
 
-function refresh(): Promise<void> {
-  reading ??= fetchOrgSettings()
-    .then(publish)
-    .catch((err) => log.warn('org-page', 'org names read failed', { error: err instanceof Error ? err.message : String(err) }))
-    .finally(() => { reading = null; });
-  return reading;
-}
+// A change that arrives during a read is read again after it: that read may have started before
+// the change, and joining it kept the old names on screen (a reset through the API left the chart
+// on the old role until a reload).
+const reader = coalesceRefresh(() => fetchOrgSettings()
+  .then(publish)
+  .catch((err) => log.warn('org-page', 'org names read failed', { error: err instanceof Error ? err.message : String(err) })), 0);
+const refresh = (): Promise<void> => reader.request();
 
 export function useOrgSettings(): { settings: OrgSettings; save: (patch: Partial<OrgSettings>) => Promise<void> } {
   const [settings, setSettings] = useState<OrgSettings>(known ?? ORG_DEFAULTS);

@@ -77,13 +77,13 @@ describe('org chart drops', () => {
     const seedsCard = cards.find((c) => c.name === 'Seeds')!
     const gardenCard = cards.find((c) => c.name === 'Garden')!
     const plan = dropPlan(cards, seedsCard.projects[0]!, gardenCard)!
-    expect(plan).toMatchObject({ project: 'Seeds', vp: 'Garden', hint: 'Drop: Garden\'s VP takes over Seeds', confirm: 'Put under Garden' })
+    expect(plan).toMatchObject({ project: 'Seeds', vp: 'Garden', hint: 'Drop: the Garden VP takes over Seeds', confirm: 'Put under the Garden VP' })
     expect(plan.lines.join(' ')).toContain('Seeds stays its own project; no task changes project.')
-    expect(plan.lines.join(' ')).toContain('Seeds\'s VP sums up its work for Garden\'s VP, then steps down.')
+    expect(plan.lines.join(' ')).toContain('The Seeds VP sums up its work for the Garden VP, then steps down.')
     // A lead that never talked has nothing to hand over; a project with no lead says nothing of one.
     const quiet = cardsOf([...garden, ...seeds, gardenLead, { ...seedsLead, session_id: undefined }])
     expect(dropPlan(quiet, quiet.find((c) => c.name === 'Seeds')!.projects[0]!, quiet.find((c) => c.name === 'Garden')!)!.lines)
-      .toContain('Seeds\'s VP steps down; it never started, so there is nothing to hand over.')
+      .toContain('The Seeds VP steps down; it never started, so there is nothing to hand over.')
     const noLead = cardsOf([...garden, ...seeds])
     expect(dropPlan(noLead, noLead.find((c) => c.name === 'Seeds')!.projects[0]!, noLead.find((c) => c.name === 'Garden')!)!.lines)
       .toHaveLength(2)
@@ -106,13 +106,13 @@ describe('org chart drops', () => {
     const g = cards.find((c) => c.name === 'Garden')!
     const seedsOnG = g.projects.find((p) => p.name === 'Seeds')!
     const own = dropPlan(cards, seedsOnG, null)!
-    expect(own).toMatchObject({ project: 'Seeds', vp: '', title: 'Give Seeds its own VP?' })
-    expect(own.lines).toContain('Garden\'s VP sums up its work on Seeds for it.')
+    expect(own).toMatchObject({ project: 'Seeds', vp: '', title: 'Create a dedicated VP for Seeds?' })
+    expect(own.lines).toContain('The Garden VP sums up its work on Seeds for it.')
     const k = cards.find((c) => c.name === 'Kitchen')!
     const on = dropPlan(cards, seedsOnG, k)!
     expect(on.vp).toBe('Kitchen')
     // The VP it leaves keeps its own project, so it does not step down.
-    expect(on.lines.join(' ')).toContain('Garden\'s VP sums up its work on Seeds for Kitchen\'s VP.')
+    expect(on.lines.join(' ')).toContain('The Garden VP sums up its work on Seeds for the Kitchen VP.')
   })
 
   it('a VP\'s own project moved onto another VP takes the projects it led along', () => {
@@ -121,7 +121,7 @@ describe('org chart drops', () => {
     const g = cards.find((c) => c.name === 'Garden')!
     const k = cards.find((c) => c.name === 'Kitchen')!
     const plan = dropPlan(cards, g.projects[0]!, k)!
-    expect(plan.lines[0]).toBe('Kitchen\'s VP leads Garden and Seeds from now on. Each stays its own project; no task changes project.')
+    expect(plan.lines[0]).toBe('The Kitchen VP leads Garden and Seeds from now on. Each stays its own project; no task changes project.')
     expect(grouped().find((c) => c.name === 'Garden')!.projects).toHaveLength(2)
   })
 })

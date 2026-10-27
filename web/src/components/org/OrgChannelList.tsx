@@ -139,8 +139,10 @@ interface Props {
   rows: readonly ChannelRow[];
   /** Projects another VP took over (movedProjects). */
   moved?: readonly MovedRow[];
-  /** What a right-click on a row offers; no menu without it. */
-  rowMenu?: (target: ChannelMenuTarget) => ContextMenuItem[];
+  /** What a right-click on a row offers; no menu without it. `point` is where the click landed:
+   *  a picker one of its rows opens anchors there. */
+  /** `origin`: the row right-clicked, for a picker the menu opens (focus goes back to it). */
+  rowMenu?: (target: ChannelMenuTarget, point: { x: number; y: number }, origin: HTMLElement | null) => ContextMenuItem[];
   total: number;
   selectedKey: string | null;
   query: string;
@@ -225,7 +227,7 @@ export function OrgChannelList({ main, rows, moved = [], rowMenu, total, selecte
       {menu.state && rowMenu && (
         <ContextMenu
           point={menu.state.point}
-          items={rowMenu(menu.state.payload)}
+          items={rowMenu(menu.state.payload, menu.state.point, menu.state.origin)}
           onClose={menu.close}
           returnFocus={menu.state.origin}
           ariaLabel="Org row actions"

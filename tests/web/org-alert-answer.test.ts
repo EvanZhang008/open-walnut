@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest'
 import type { Task } from '@open-walnut/core'
 import type { LetterEnvelope } from '../../web/src/api/human-inbox'
 import { answerShape, openLetterFor } from '../../web/src/components/org/org-answer-shape'
-import { promptAnswered, settleHolds, statusSig, withAnswered, type AnsweredHold } from '../../web/src/components/org/org-answered'
+import { phaseMark, promptAnswered, settleHolds, withAnswered, without, type AnsweredHold } from '../../web/src/components/org/org-answered'
 import type { OrgAlertView } from '../../web/src/components/org/org-channels-model'
 
 const alert = (over: Partial<OrgAlertView>): OrgAlertView => ({ taskId: 't1', title: 'Lease', kind: 'needs', ...over })
@@ -56,14 +56,14 @@ describe('the letter that waits on the user', () => {
 
 describe('an answered row stops counting at once', () => {
   const task = (over: Partial<Task>): Task => ({
-    id: 't1', title: 'Lease', status: 'todo', phase: 'NEED_ACTION', priority: 'none', project: 'Marina',
+    id: 't1', title: 'Lease', status: 'todo', phase: 'NEED_ACTION', phase_changed_at: '2026-10-26T01:00:00Z', priority: 'none', project: 'Marina',
     created_at: '2026-10-26T00:00:00Z', updated_at: '2026-10-26T00:00:00Z',
     user_status: { state: 'needs', source: 'letter', ask: 'Sign it?', at: '2026-10-26T01:00:00Z' }, ...over,
   } as Task)
   const hold = (t: Task, over: Partial<AnsweredHold> = {}): Map<string, AnsweredHold> =>
-    new Map([[t.id, { sig: statusSig(t), probe: '', until: 5000, ...over }]])
+    new Map([[t.id, { phase: phaseMark(t), source: t.user_status?.source ?? '', ask: t.user_status?.ask ?? '', probe: '', until: 5000, ...over }]])
 
-  it('reads as working while the server has not moved its status', () => {
+  it('reads as working while the task has not moved', () => {
     const t = task({})
     const [held] = withAnswered([t], hold(t), 1000)
     expect(held!.user_status).toEqual({ state: 'working', at: '2026-10-26T01:00:00Z' })
@@ -74,18 +74,56 @@ describe('an answered row stops counting at once', () => {
     expect(withAnswered(list, new Map(), 1000)).toBe(list)
   })
 
-  it('ends when any part of the status moves, the same report time included', () => {
+  it('stays hidden while only the words move, the answer not yet with the session', () => {
     const t = task({})
     const holds = hold(t)
-    // The session's next ask keeps the report's time: the status still moved.
-    const next = task({ user_status: { state: 'needs', source: 'letter', ask: 'Sign the other one?', at: '2026-10-26T01:00:00Z' } })
+    // The server re-derived the status before the answer reached the session: same phase, new words.
+    const reworded = task({ user_status: { state: 'needs', source: 'session', ask: 'Its turn ended and handed the task back to you: read it and reply.', at: '2026-10-26T01:00:00Z' } })
+    expect(withAnswered([reworded], holds, 1000)[0]!.user_status?.state).toBe('working')
+    expect(settleHolds(holds, [reworded], () => '', 1000)).toBe(holds)
+  })
+
+  it('stays hidden while the session works on the answer, its status not yet caught up', () => {
+    const t = task({})
+    const holds = hold(t)
+    // The session took the answer; the status was derived a moment before and still needs the user.
+    const taken = task({ phase: 'IN_PROGRESS', phase_changed_at: '2026-10-26T01:00:05Z' })
+    expect(withAnswered([taken], holds, 1000)[0]!.user_status?.state).toBe('working')
+    expect(settleHolds(holds, [taken], () => '', 1000)).toBe(holds)
+  })
+
+  it('ends when the task asks again, a round trip included, or needs no one, or a minute passes', () => {
+    const t = task({})
+    const holds = hold(t)
+    const working = task({ phase: 'IN_PROGRESS', phase_changed_at: '2026-10-26T01:00:05Z', user_status: { state: 'working', at: '2026-10-26T01:00:05Z' } })
+    expect(settleHolds(holds, [working], () => '', 1000).size).toBe(0)
+    // The session took the answer and handed the task back between two reads: a new ask.
+    const back = task({ phase_changed_at: '2026-10-26T01:00:09Z', user_status: { state: 'needs', source: 'session', ask: 'Read my reply.', at: '2026-10-26T01:00:09Z' } })
+    expect(withAnswered([back], holds, 1000)[0]).toBe(back)
+    expect(settleHolds(holds, [back], () => '', 1000).size).toBe(0)
+    // Its session failed on the answer: shown, unless the answer was a Retry of that failure.
+    const failed = task({ phase: 'IN_PROGRESS', phase_changed_at: '2026-10-26T01:00:05Z', user_status: { state: 'needs', source: 'error', ask: 'Its session failed.', at: '2026-10-26T01:00:05Z' } })
+    expect(withAnswered([failed], holds, 1000)[0]).toBe(failed)
+    expect(settleHolds(holds, [failed], () => '', 1000).size).toBe(0)
+    const retried = hold(failed)
+    expect(withAnswered([failed], retried, 1000)[0]!.user_status?.state).toBe('working')
+    // Another letter of its own waits, or a Board choice: a new ask in the same phase.
+    const next = task({ user_status: { state: 'needs', source: 'letter', ask: 'Pay the deposit?', at: '2026-10-26T01:00:01Z' } })
     expect(withAnswered([next], holds, 1000)[0]).toBe(next)
     expect(settleHolds(holds, [next], () => '', 1000).size).toBe(0)
-    // Unmoved: the very same map.
-    expect(settleHolds(holds, [t], () => '', 1000)).toBe(holds)
-    // A minute on, an answer the server never saw lapses.
+    const choice = task({ user_status: { state: 'needs', source: 'choice', ask: 'Sign it?', at: '2026-10-26T01:00:01Z' } })
+    expect(withAnswered([choice], holds, 1000)[0]).toBe(choice)
+    const waiting = task({ user_status: { state: 'waiting', at: '2026-10-26T01:00:00Z' } })
+    expect(settleHolds(holds, [waiting], () => '', 1000).size).toBe(0)
     expect(withAnswered([t], holds, 6000)[0]).toBe(t)
     expect(settleHolds(holds, [t], () => '', 6000).size).toBe(0)
+  })
+
+  it('hides a task its status was never derived for, as the rows count it by its phase', () => {
+    const bare = task({ user_status: undefined })
+    const holds = hold(bare)
+    expect(withAnswered([bare], holds, 1000)[0]!.user_status?.state).toBe('working')
+    expect(settleHolds(holds, [bare], () => '', 1000)).toBe(holds)
   })
 
   it('hides the answered prompt until it goes, and shows the next one at once', () => {
@@ -99,15 +137,15 @@ describe('an answered row stops counting at once', () => {
     holds = settleHolds(holds, [t], () => '', 1000)
     expect(holds.get('t1')?.cleared).toBe(true)
     expect(withAnswered([t], holds, 1000)[0]!.user_status?.state).toBe('working')
-    // The session asks again (same tool, the status never left needs): a new ask, shown.
+    // The session asks again (same tool, the phase never left NEED_ACTION): a new ask, shown.
     expect(promptAnswered(holds, 't1', 'permission:Bash', 1000)).toBe(false)
     expect(settleHolds(holds, [t], () => 'permission:Bash', 1000).size).toBe(0)
   })
 
-  it('keeps hiding an answered prompt the session still shows after the server moved', () => {
+  it('keeps hiding an answered prompt the session still shows after the task moved', () => {
     const t = task({ user_status: { state: 'needs', source: 'prompt', ask: 'Answer the prompt.', at: '2026-10-26T01:00:00Z' } })
     const holds = hold(t, { probe: 'question:' })
-    const moved = task({ user_status: { state: 'working', at: '2026-10-26T01:00:05Z' } })
+    const moved = task({ phase: 'IN_PROGRESS', phase_changed_at: '2026-10-26T01:00:05Z', user_status: { state: 'working', at: '2026-10-26T01:00:05Z' } })
     expect(settleHolds(holds, [moved], () => 'question:', 1000)).toBe(holds)
     expect(settleHolds(holds, [moved], () => '', 1000).size).toBe(0)
   })
@@ -117,5 +155,14 @@ describe('an answered row stops counting at once', () => {
     expect(settleHolds(hold(t), [t], () => 'question:', 1000).size).toBe(0)
     // A different prompt from the one answered is new too.
     expect(settleHolds(hold(t, { probe: 'permission:Bash' }), [t], () => 'permission:Edit', 1000).size).toBe(0)
+  })
+})
+
+describe('without', () => {
+  it('drops one key, and is the same map when it has none', () => {
+    const m = new Map([['a', 1], ['b', 2]])
+    expect([...without(m, 'a')]).toEqual([['b', 2]])
+    expect(without(m, 'z')).toBe(m)
+    expect([...m]).toEqual([['a', 1], ['b', 2]])
   })
 })
