@@ -64,7 +64,8 @@ async function turn(line) {
   if (line.uuid) out({ type: 'command_lifecycle', command_uuid: line.uuid, state: 'started' })
   out({ type: 'system', subtype: 'session_state_changed', state: 'running' })
   // A real turn takes a model round trip; the server sees it running before it ends.
-  await new Promise((r) => setTimeout(r, 1500))
+  // SLOW-TURN: a turn that is sure to outlast the turn that sent it.
+  await new Promise((r) => setTimeout(r, /SLOW-TURN/.test(text) ? 6000 : 1500))
   let answer = 'Checked: all green.'
   const rq = /PLEASE-REPLY/.test(text) && /rq-[a-f0-9]{6,}/.exec(text)
   if (rq) {
@@ -328,6 +329,14 @@ describe('a request the lead hands on waits for that answer (real server, real d
     worker = await sessionOf(workerTask)
     await waitFor(() => [asker, lead, worker].every((s) => inboxOf(s).length > 0), 30_000, 'three first turns')
     await waitFor(() => hostCopyHas([asker, lead, worker]), 30_000, 'the host copy of all three sessions')
+    // The inbox line is written when a turn STARTS: wait for the startup turns to
+    // end, or one ending a few ms after a request is made settles that request.
+    await waitFor(async () => {
+      for (const id of [askerTask, leadTask, workerTask]) {
+        if (((await api('GET', `/api/tasks/${id}`)).task as { phase?: string }).phase === 'IN_PROGRESS') return false
+      }
+      return true
+    }, 30_000, 'the three startup turns to end')
   }, 120_000)
 
   it('the lead hands the request to its worker mid-turn: the asker hears once, after the worker, and is told where it went', async () => {
@@ -337,7 +346,7 @@ describe('a request the lead hands on waits for that answer (real server, real d
     const owed = String(r.ok && r.result.requestId)
     // Inside the lead's turn (it takes a moment, as a model call does), it asks its worker.
     await waitFor(() => inboxOf(lead).slice(before).some((m) => m.includes(owed)), 15_000, 'the lead reads the request')
-    const onward = await gateway(lead, 'task_send', { to: workerTask, text: 'Fix the login timeout.', title: 'Login timeout', hands_on: owed })
+    const onward = await gateway(lead, 'task_send', { to: workerTask, text: 'Fix the login timeout. SLOW-TURN', title: 'Login timeout', hands_on: owed })
     expect(onward.ok, JSON.stringify(onward)).toBe(true)
     // A hand-off links rows in the server's ledger, so the host leaves it to the server.
     expect(onward.ok && onward.result.via).toBeUndefined()
