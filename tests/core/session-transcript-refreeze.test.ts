@@ -22,7 +22,7 @@ vi.mock('../../src/constants.js', () => createMockConstants('walnut-transcript-r
 vi.mock('../../src/core/daemon-file-reader.js', () => mockLocalDaemonReader())
 
 import { CLAUDE_HOME } from '../../src/constants.js'
-import { createSessionRecord, updateSessionRecord } from '../../src/core/session-tracker.js'
+import { createSessionRecord, updateSessionRecord, updateSessionRecordConditionally } from '../../src/core/session-tracker.js'
 import { encodeProjectPath } from '../../src/core/session-history.js'
 import {
   exportSessionProjection, exportSessionTranscripts, readSessionTranscript,
@@ -42,7 +42,8 @@ const line = (role: 'user' | 'assistant', text: string): string => JSON.stringif
     : { id: `msg-${seq}`, role, content: [{ type: 'text', text }] },
 })
 
-async function seed(sid: string): Promise<void> {
+/** `endAt`: the session's end, when a test orders by it (two seeds can land in the same ms). */
+async function seed(sid: string, endAt?: string): Promise<void> {
   await createSessionRecord(sid, '', '', CWD, { title: 'Subtask', initialProcessStatus: 'idle' })
   await fs.mkdir(path.dirname(jsonlPath(sid)), { recursive: true })
   await fs.writeFile(jsonlPath(sid), [line('user', 'do it'), line('assistant', 'Final answer.')].join('\n') + '\n')
@@ -51,7 +52,8 @@ async function seed(sid: string): Promise<void> {
     version: 1, sessionId: sid, exportedAt: '2026-01-01T00:00:00.000Z', truncated: false,
     messages: [{ role: 'user', text: 'do it', timestamp: '2026-01-01T00:00:00.000Z' }],
   })
-  await updateSessionRecord(sid, { process_status: 'stopped' })
+  if (endAt) await updateSessionRecordConditionally(sid, { process_status: 'stopped' }, () => true, { setLastActiveAt: endAt })
+  else await updateSessionRecord(sid, { process_status: 'stopped' })
 }
 
 async function sweep(): Promise<number> {
@@ -75,7 +77,9 @@ describe('transcript sweep re-freeze', () => {
 
   it('re-freezes at most ten archives per sweep, newest end first', async () => {
     const sids = Array.from({ length: 12 }, (_, i) => `sess-refreeze-burst-${String(i).padStart(2, '0')}`)
-    for (const sid of sids) await seed(sid)
+    // A second apart: on a fast machine two seeds made in a row share a millisecond (2026-10-28 CI).
+    const start = Date.now() - 60_000
+    for (const [i, sid] of sids.entries()) await seed(sid, new Date(start + i * 1000).toISOString())
     await sweep()
     const fixed = async (): Promise<string[]> => {
       const out: string[] = []

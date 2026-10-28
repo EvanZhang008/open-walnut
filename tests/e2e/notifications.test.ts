@@ -304,7 +304,8 @@ describe('Notification feed API', () => {
     expect(matches[0].dedupKey).toBe(scope);
     expect(matches[0].lastTimestamp).toBeGreaterThanOrEqual(matches[0].timestamp);
 
-    // First occurrence toasts; the fold patches the same card in place.
+    // First occurrence toasts; the fold patches the same card in place (its frame may trail the GET).
+    for (const deadline = Date.now() + 3000; notifFrames.filter((f) => f.data?.dedupKey === scope).length < 2 && Date.now() < deadline;) await delay(20);
     const frames = notifFrames.filter((f) => f.data?.dedupKey === scope);
     expect(frames.map((f) => f.name)).toEqual(['notification:new', 'notification:updated']);
 
@@ -324,7 +325,11 @@ describe('Notification feed API', () => {
     expect(again[0].count).toBe(2);
     expect(again[0].resolved).toBeUndefined();
     expect(again[0].body).toContain('CLI exited with code 3');
-    const last = notifFrames.filter((f) => f.data?.dedupKey === scope).at(-1)!;
+    // The store answers the GET before the socket frame of the same write arrives
+    // (2026-10-28 CI): wait for the frame instead of reading the last one at once.
+    const lastFrame = () => notifFrames.filter((f) => f.data?.dedupKey === scope).at(-1);
+    for (const deadline = Date.now() + 3000; lastFrame()?.data?.count !== 2 && Date.now() < deadline;) await delay(20);
+    const last = lastFrame()!;
     expect(last.name).toBe('notification:updated');
     expect(last.data.count).toBe(2);
   });
