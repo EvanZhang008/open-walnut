@@ -1,4 +1,4 @@
-import { Fragment, useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { getDeviceToken } from '@/api/device-token';
 import { SectionCard } from '../inputs/SectionCard';
 import { SettingsEmpty, SettingsGroup, SettingsRow, SettingsTag, SettingsDisclosure, SettingsNotice } from '../SettingsSection';
@@ -10,7 +10,11 @@ import { formatAbsoluteTime } from './addons-format';
 import { apiGet, apiDelete } from '@/api/client';
 import { devicesListChanged, fetchDevicesList } from './cloud/devices-list';
 import { log } from '@/utils/log';
-import { PairingQrBlock } from './cloud/PairingQrBlock';
+import { PairQrDialog, type PairQrPhase } from './cloud/PairQrDialog';
+import { WaysOverview } from './cloud/WaysOverview';
+import { deriveWays, type WayId } from './cloud/ways-model';
+import { SETTINGS_ANCHOR_EVENT } from '../settings-anchor-event';
+import type { ExposeStatus } from './cloud/browser-access-status';
 import { requestFailureText } from '@/utils/request-failure';
 import { deviceNameForServer } from './device-name';
 import { browserRowLabels } from './browser-labels';
@@ -108,6 +112,35 @@ interface DevicesListResponse {
   devices: DeviceEntry[];
   cloudDevices?: DeviceEntry[];
   targets?: PairingTarget[];
+  tailscale?: { installed: boolean; running: boolean };
+}
+
+/** The pairing QR dialog: which phone, whether it replaces a paired phone's code, and its step. */
+interface QrDialogState {
+  name: string;
+  repair: boolean;
+  target?: TargetKind;
+  phase: PairQrPhase;
+  error: string | null;
+}
+
+/** Which way's settings are open under the cards; kept for the tab's session. */
+const OPEN_WAY_KEY = 'walnut:devices-open-way';
+/**
+ * A Find a setting hit (or a deep link) on a row inside a way's settings opens that
+ * way first, so the row exists to scroll to (SettingsPage's holdAnchor announces it).
+ */
+function wayForAnchor(id: string): WayId | null {
+  if (id === 'devices-backup-leader' || id.startsWith('companion-keep')) return 'cloud';
+  if (id.startsWith('browser-access')) return 'browser';
+  if (id.startsWith('remote-access')) return 'tailscale';
+  return null;
+}
+function readOpenWay(): WayId | null {
+  try {
+    const v = sessionStorage.getItem(OPEN_WAY_KEY);
+    return v === 'cloud' || v === 'tailscale' || v === 'browser' ? v : null;
+  } catch { return null; }
 }
 
 /**
@@ -143,12 +176,20 @@ export function DevicesSection({ config, onSave }: { config?: Config; onSave?: (
   const [cloudUnpaired, setCloudUnpaired] = useState(false);
   // "Unpair this Mac" is two deliberate clicks with the warning between them.
   const [unpairArmed, setUnpairArmed] = useState(false);
-  // Show QR on a row: the row asks first (a new code signs the phone out), and the
-  // code opens under that row, never at the bottom of the page.
-  const [qrAsk, setQrAsk] = useState<string | null>(null);
-  const [qrRow, setQrRow] = useState<string | null>(null);
-  const [mintingRow, setMintingRow] = useState<string | null>(null);
-  const closeQr = () => { dismiss(); setQrRow(null); };
+  // Show QR and Pair new device: the code opens in a dialog in front of the user.
+  const [qrDialog, setQrDialog] = useState<QrDialogState | null>(null);
+  const qrReturnFocus = useRef<HTMLElement | null>(null);
+  const [tailscale, setTailscale] = useState<DevicesListResponse['tailscale']>(undefined);
+  const [cloudWithheld, setCloudWithheld] = useState(false);
+  const [expose, setExpose] = useState<ExposeStatus | null | 'failed'>(null);
+  const [openWay, setOpenWayState] = useState<WayId | null>(readOpenWay);
+  const setOpenWay = useCallback((next: WayId | null) => {
+    setOpenWayState(next);
+    try {
+      if (next) sessionStorage.setItem(OPEN_WAY_KEY, next);
+      else sessionStorage.removeItem(OPEN_WAY_KEY);
+    } catch { /* private mode: open state is per page then */ }
+  }, []);
   const { notifySaved } = useSettingsSaved();
   // A browser signed in with a code: its own row says so, other rows offer no Remove.
   const caller = useDeviceCaller();
@@ -162,12 +203,14 @@ export function DevicesSection({ config, onSave }: { config?: Config; onSave?: (
   const refresh = useCallback(async () => {
     const seq = ++readSeq.current;
     try {
-      const res = await fetchDevicesList<DevicesListResponse & { cloudError?: string; cloudUnpaired?: { origin: string } }>();
+      const res = await fetchDevicesList<DevicesListResponse & { cloudError?: string; cloudUnpaired?: { origin: string }; cloudWithheld?: string }>();
       if (seq !== readSeq.current) return;
       setDevices(res.devices);
       setCloudDevices(res.cloudDevices ?? []);
       setCloudError(res.cloudError ?? null);
       setCloudUnpaired(Boolean(res.cloudUnpaired));
+      setTailscale(res.tailscale);
+      setCloudWithheld(Boolean(res.cloudWithheld));
       const list = res.targets ?? [];
       setTargets(list);
       // Keep the current pick while it is still offered. The first pick is this
@@ -186,33 +229,89 @@ export function DevicesSection({ config, onSave }: { config?: Config; onSave?: (
     void refresh();
   }, [refresh]);
 
+  // The server leaves Tailscale out of the list until its first probe answers: ask
+  // again a few times, so the card does not sit on "Checking..." (an older server never says).
+  const tailscaleAsks = useRef(0);
+  useEffect(() => {
+    if (replica || listState !== 'ready' || tailscale || tailscaleAsks.current >= 3) return;
+    const t = setTimeout(() => { tailscaleAsks.current += 1; void refresh(); }, 4_000);
+    return () => clearTimeout(t);
+  }, [replica, listState, tailscale, refresh]);
+
+  // The browser link card's state (GET /api/expose): read when a way opens or closes,
+  // then every 30s, every 5s while it moves or its settings are open (they change it
+  // there), never while the tab is hidden. A companion has none.
+  const exposeMoving = expose !== null && expose !== 'failed' && ['starting', 'retrying', 'needs-sign-in'].includes(expose.state);
+  useEffect(() => {
+    if (replica) return;
+    let live = true;
+    const read = () => {
+      if (document.hidden) return;
+      apiGet<{ status: ExposeStatus }>('/api/expose')
+        .then((res) => { if (live) setExpose(res.status); })
+        .catch((err) => {
+          log.warn('settings', 'expose state read failed', { error: String(err) });
+          if (live) setExpose((prev) => (prev && prev !== 'failed' ? prev : 'failed'));
+        });
+    };
+    read();
+    const timer = setInterval(read, openWay === 'browser' || exposeMoving ? 5_000 : 30_000);
+    return () => { live = false; clearInterval(timer); };
+  }, [replica, openWay, exposeMoving]);
+
+  // A row inside a folded way was asked for: open that way.
+  useEffect(() => {
+    const onAnchor = (e: Event) => {
+      const way = wayForAnchor(String((e as CustomEvent<{ id?: string }>).detail?.id ?? ''));
+      if (way) setOpenWay(way);
+    };
+    window.addEventListener(SETTINGS_ANCHOR_EVENT, onAnchor);
+    return () => window.removeEventListener(SETTINGS_ANCHOR_EVENT, onAnchor);
+  }, [setOpenWay]);
+
+  const openQrDialog = (next: QrDialogState) => {
+    qrReturnFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    setQrDialog(next);
+  };
+  const closeQrDialog = () => {
+    dismiss();
+    setQrDialog(null);
+    const back = qrReturnFocus.current;
+    qrReturnFocus.current = null;
+    if (back?.isConnected) requestAnimationFrame(() => back.focus());
+  };
+
+  /** Make the code the dialog is for; a failure stays in the dialog with Try again. */
+  const runMint = async (dlg: QrDialogState) => {
+    if (busy) return;
+    setQrDialog({ ...dlg, phase: 'working', error: null });
+    let failure: string | null = null;
+    const made = await mint({ name: dlg.name, target: dlg.target, replace: dlg.repair || undefined, onError: (m) => { failure = m; } });
+    setQrDialog((cur) => (cur && cur.name === dlg.name
+      ? { ...cur, phase: made ? 'shown' : 'failed', error: made ? null : failure }
+      : cur));
+    if (made) {
+      if (!dlg.repair) nameDraft.clear(nameDraft.key);
+      await refresh();
+    }
+  };
+
   /**
    * Re-pair an existing device: mint a FRESH token for the same name and show
    * the QR again. Needed because tokens are one-time — after an app reinstall
    * iOS wipes UserDefaults (server URL + device name), so the phone has to be
    * re-paired, and there is nothing to "show again". Rotating in place beats
-   * making the user Revoke-then-Add by hand.
+   * making the user Revoke-then-Add by hand. The dialog asks first: the new code
+   * signs the phone out until it scans it.
    */
-  const repair = async (name: string, kind: TargetKind) => {
+  const repair = (name: string, kind: TargetKind) => {
     if (busy) return;
-    // Two-step button (InlineConfirmButton) instead of window.confirm: the Mac
-    // app's WKWebView has no confirm panel, so confirm() was a silent Cancel.
     // Keep the picker on the device's OWN target — re-pairing a cloud phone
     // must not silently flip the UI back to the Wi-Fi default.
     setTarget(kind);
     setRowError(null);
-    setQrAsk(null);
-    // Any QR on screen is replaced by this one, so the bottom one closes too.
     dismiss();
-    setQrRow(name);
-    setMintingRow(name);
-    // A refusal belongs on the row that was clicked, not under "Device name".
-    const onError = (message: string) => setRowError({ name, verb: 're-pair', message });
-    try {
-      if (await mint({ name, target: kind, replace: true, onError })) await refresh();
-    } finally {
-      setMintingRow((cur) => (cur === name ? null : cur));
-    }
+    openQrDialog({ name, repair: true, target: kind, phase: 'ask', error: null });
   };
 
   const addDevice = async () => {
@@ -221,16 +320,13 @@ export function DevicesSection({ config, onSave }: { config?: Config; onSave?: (
     const name = deviceNameForServer(newName);
     if (!name) { setNameError('Use at least one letter or digit in the name.'); return; }
     setNameError(null);
-    // A row's code must never move down here and pass for the new device's.
-    closeQr();
+    dismiss();
     // Only send an explicit target when one was actually offered — otherwise
     // let the server pick (it falls back to a token-only QR).
     const chosen = targets.some((t) => t.kind === target) ? target : undefined;
-    const sentKey = nameDraft.key;
-    if (await mint({ name, target: chosen })) {
-      nameDraft.clear(sentKey);
-      await refresh();
-    }
+    const dlg: QrDialogState = { name, repair: false, target: chosen, phase: 'working', error: null };
+    openQrDialog(dlg);
+    await runMint(dlg);
   };
 
   /**
@@ -248,8 +344,6 @@ export function DevicesSection({ config, onSave }: { config?: Config; onSave?: (
         devicesListChanged();
       }
       notifySaved();
-      // Its code was revoked with it.
-      if (qrRow === name) closeQr();
       await refresh();
       window.dispatchEvent(new Event(DEVICES_CHANGED_EVENT));
     } catch (err) {
@@ -264,7 +358,6 @@ export function DevicesSection({ config, onSave }: { config?: Config; onSave?: (
   const showPicker = targets.length > 1;
   // How to reach Walnut from anywhere without a cloud server: the guided card
   // (cloud/RemoteAccessCard.tsx), on a primary only (a companion has nothing to install).
-  const showRemoteCard = !replica;
   const chooseTailnet = () => {
     setTarget('tailnet');
     document.getElementById('devices-new-name')?.focus();
@@ -310,16 +403,39 @@ export function DevicesSection({ config, onSave }: { config?: Config; onSave?: (
     return [...byName.values()].sort((a, b) => rank(a.role) - rank(b.role));
   })();
   const selfRow = cloudDevices.find((d) => d.role === 'self');
-  const phones = ownFirst(rows.filter((r) => (r.role ?? 'phone') === 'phone'), caller.name);
+  // The phone used most recently leads: it is the one the line above the cards is about.
+  const byLastUse = (a: { lastUsedAt?: string }, b: { lastUsedAt?: string }) => (b.lastUsedAt ?? '').localeCompare(a.lastUsedAt ?? '');
+  const phones = ownFirst(rows.filter((r) => (r.role ?? 'phone') === 'phone').sort(byLastUse), caller.name);
   const browsers = ownFirst(rows.filter((r) => r.role === 'browser'), caller.name);
   // "iPhone Safari", "iPhone Safari 2": the kind recorded at sign-in, never the id (N2-21).
   const browserLabels = browserRowLabels(rows.filter((r) => r.role === 'browser'));
   const macs = rows.filter((r) => r.role === 'mac');
   const others = rows.filter((r) => (r.role ?? 'phone') !== 'phone' && r.role !== 'mac' && r.role !== 'browser');
-  // Keyboard focus follows the ask: a button that unmounts would drop it to the page.
-  const focusShowQr = (name: string) => requestAnimationFrame(() => {
-    document.querySelector<HTMLElement>(`#devices .devices-row[data-device-name="${CSS.escape(name)}"] [data-testid="devices-show-qr"]`)?.focus();
+  // How the phone reaches Walnut now and the three ways (cloud/ways-model.ts): a primary only.
+  const showWays = !replica;
+  const isPhone = (d: DeviceEntry) => (d.role ?? 'phone') === 'phone';
+  const waysView = deriveWays({
+    listState,
+    phoneUses: [
+      ...devices.filter(isPhone).map((d) => ({ name: d.name, via: 'lan' as const, lastUsedAt: d.lastUsedAt })),
+      ...cloudDevices.filter(isPhone).map((d) => ({ name: d.name, via: 'cloud' as const, lastUsedAt: d.lastUsedAt })),
+    ],
+    targets,
+    cloudError,
+    cloudUnpaired,
+    cloudWithheld,
+    tailscale,
+    expose,
   });
+  const onWayAction = (id: WayId) => {
+    if (openWay === id) { setOpenWay(null); return; }
+    // A companion not set up yet: its setup is the Cloud Companion section below.
+    if (id === 'cloud' && waysView.ways[0].action.primary) {
+      document.getElementById('cloud')?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+      return;
+    }
+    setOpenWay(id);
+  };
   const rowErrorFor = (name: string) => (rowError?.name === name ? `Couldn't ${rowError.verb}: ${rowError.message}` : undefined);
 
   /** This Mac as the companion knows it: no QR, and removal is a deliberate unpair. */
@@ -332,7 +448,7 @@ export function DevicesSection({ config, onSave }: { config?: Config; onSave?: (
       label={
         <span className="settings-addons-inline devices-name">
           <span className="settings-addons-ellipsis" title={d.name}>This Mac</span>
-          <SettingsTag>Cloud</SettingsTag>
+          <SettingsTag>Cloud companion</SettingsTag>
         </span>
       }
       help={<span className="devices-meta">{`${d.name}: ${ROLE_NOTE.self}`}</span>}
@@ -378,7 +494,7 @@ export function DevicesSection({ config, onSave }: { config?: Config; onSave?: (
           ...(d.lastUsedAt ? [`last used ${formatAbsoluteTime(d.lastUsedAt)}`] : []),
         ].join(', ')
       : ROLE_NOTE[role];
-    const row = (
+    return (
       <SettingsRow
         key={d.name}
         className="devices-row"
@@ -390,7 +506,7 @@ export function DevicesSection({ config, onSave }: { config?: Config; onSave?: (
             {own && <span className="devices-own-tag" data-testid="devices-own-tag">{caller.touch ? 'This phone' : 'This browser'}</span>}
             {/* A browser signs in on this Mac only: a "Local" tag on every row tells nothing. */}
             {role !== 'browser' && d.kinds.map((k) => (
-              <SettingsTag key={k}>{k === 'cloud' ? 'Cloud' : 'Local'}</SettingsTag>
+              <SettingsTag key={k}>{k === 'cloud' ? 'Cloud companion' : 'Direct'}</SettingsTag>
             ))}
           </span>
         }
@@ -399,36 +515,19 @@ export function DevicesSection({ config, onSave }: { config?: Config; onSave?: (
         data-own-device={own ? 'true' : undefined}
         control={own ? <OwnDeviceSignOut name={d.name} touch={caller.touch} /> : caller.isDevice ? undefined : (
           <>
-            {role === 'phone' && (qrAsk === d.name ? (
-              <>
-                <SettingsButton variant="text" data-testid="devices-show-qr-cancel" onClick={() => { setQrAsk(null); focusShowQr(d.name); }}>
-                  Cancel
-                </SettingsButton>
-                <SettingsButton
-                  variant="primary"
-                  data-testid="devices-show-qr-confirm"
-                  autoFocus
-                  disabled={busy}
-                  onClick={() => { focusShowQr(d.name); void repair(d.name, preferredKind(d.kinds, targets.map((t) => t.kind))); }}
-                >
-                  Show new QR
-                </SettingsButton>
-              </>
-            ) : (
+            {role === 'phone' && (
               <SettingsButton
                 variant="text"
-                disabled={busy && mintingRow !== d.name}
-                busy={mintingRow === d.name}
-                busyLabel="Making QR..."
+                disabled={busy}
                 aria-label={`Show a new QR code for ${d.name}`}
                 data-testid="devices-show-qr"
-                onClick={() => { setRowError(null); setQrAsk(d.name); }}
+                onClick={() => repair(d.name, preferredKind(d.kinds, targets.map((t) => t.kind)))}
               >
                 Show QR
               </SettingsButton>
-            ))}
+            )}
             {/* This Mac's own cloud record never reaches here (renderSelfRow). */}
-            {role !== 'self' && qrAsk !== d.name && (
+            {role !== 'self' && (
               <InlineConfirmButton
                 aria-label={`Remove ${d.name}`}
                 data-testid="devices-remove"
@@ -437,23 +536,7 @@ export function DevicesSection({ config, onSave }: { config?: Config; onSave?: (
             )}
           </>
         )}
-      >
-        {qrAsk === d.name && (
-          <SettingsNotice kind="warn" role="alert">
-            {`A new code replaces the one ${d.name} signed in with, so the app stops connecting until it scans the new code.`}
-          </SettingsNotice>
-        )}
-      </SettingsRow>
-    );
-    // The new code opens right under the row it was asked for. Always a Fragment,
-    // so the row is not remounted (and focus not lost) when the code opens or closes.
-    return (
-      <Fragment key={d.name}>
-        {row}
-        {role === 'phone' && qrRow === d.name && created && qrDataURL && (
-          <PairingQrBlock created={created} qrDataURL={qrDataURL} onDismiss={closeQr} repair />
-        )}
-      </Fragment>
+      />
     );
   };
 
@@ -466,6 +549,44 @@ export function DevicesSection({ config, onSave }: { config?: Config; onSave?: (
             out after a week without a visit.
           </p>
         )}
+        {showWays && (
+          <WaysOverview now={waysView.now} ways={waysView.ways} openWay={openWay} onAction={onWayAction} />
+        )}
+        {showWays && openWay && (
+          <div className="devices-way-panel" id={`devices-way-panel-${openWay}`} data-testid={`devices-way-panel-${openWay}`}>
+            {openWay === 'tailscale' && (
+              <RemoteAccessCard
+                heading="Tailscale"
+                devices={listState === 'ready' ? [...devices, ...cloudDevices] : null}
+                tailnetOffered={targets.some((t) => t.kind === 'tailnet')}
+                onChooseTailnet={chooseTailnet}
+                onTailnetChange={refresh}
+              />
+            )}
+            {/* A tunnel and browser codes: a companion is reached through its own address. */}
+            {openWay === 'browser' && <BrowserAccessGroup heading="Browser link" />}
+            {openWay === 'cloud' && (
+              <>
+                <SettingsGroup heading="Cloud companion">
+                  <SettingsRow
+                    label="Setup and updates"
+                    help="The companion's address, its updates, and pairing this Mac with it."
+                    control={<a className="settings-button settings-button-default" href="#cloud" data-testid="devices-cloud-open">Open</a>}
+                  />
+                </SettingsGroup>
+                {/* Only with a cloud companion to take over, and only on the Mac it would stand in for. */}
+                {config && onSave && targets.some((t) => t.kind === 'cloud') && (
+                  <BackupLeaderGroup config={config} onSave={onSave} />
+                )}
+                {/* What the companion keeps: the same rows and defaults as a host's (Remote Hosts). */}
+                {config && onSave && targets.some((t) => t.kind === 'cloud') && (
+                  <CompanionKeepGroup config={config} onSave={onSave} />
+                )}
+              </>
+            )}
+          </div>
+        )}
+
         {/* A phone signed in only by browser: its group is Signed-in browsers, no empty box here. */}
         {(phones.length > 0 || listState !== 'ready' || browsers.length === 0 || cloudUnpaired || cloudError) && (
         <SettingsGroup heading="Paired phones" data-testid="devices-phones-group">
@@ -499,29 +620,7 @@ export function DevicesSection({ config, onSave }: { config?: Config; onSave?: (
           </SettingsGroup>
         )}
 
-        {showRemoteCard && (
-          <RemoteAccessCard
-            devices={listState === 'ready' ? [...devices, ...cloudDevices] : null}
-            tailnetOffered={targets.some((t) => t.kind === 'tailnet')}
-            onChooseTailnet={chooseTailnet}
-            onTailnetChange={refresh}
-          />
-        )}
-
-        {/* A tunnel and browser codes: a companion is reached through its own address. */}
-        {!replica && <BrowserAccessGroup />}
-
-        {/* Only with a cloud companion to take over, and only on the Mac it would stand in for. */}
-        {!replica && config && onSave && targets.some((t) => t.kind === 'cloud') && (
-          <BackupLeaderGroup config={config} onSave={onSave} />
-        )}
-
-        {/* What the companion keeps: the same rows and defaults as a host's (Remote Hosts). */}
-        {!replica && config && onSave && targets.some((t) => t.kind === 'cloud') && (
-          <CompanionKeepGroup config={config} onSave={onSave} />
-        )}
-
-        <SettingsGroup heading="Pair a phone">
+        <SettingsGroup heading="Add a phone" data-testid="devices-add-group">
           {/* Three long labels left the copy a word-wide column beside them: stack the row. */}
           {showPicker && (
             <SettingsRow
@@ -554,7 +653,7 @@ export function DevicesSection({ config, onSave }: { config?: Config; onSave?: (
             htmlFor="devices-new-name"
             wide
             help={nameHelp}
-            error={nameError ?? (!created && error ? error : undefined)}
+            error={nameError ?? undefined}
             control={
               <span className="settings-addons-inline devices-add-row">
                 <input
@@ -580,10 +679,6 @@ export function DevicesSection({ config, onSave }: { config?: Config; onSave?: (
               </span>
             }
           />
-          {created && !qrRow && error && <p className="settings-row-error devices-error" role="alert">{error}</p>}
-          {created && !qrRow && qrDataURL && (
-            <PairingQrBlock created={created} qrDataURL={qrDataURL} onDismiss={closeQr} />
-          )}
         </SettingsGroup>
 
         {/* Not phones (this Mac's own cloud link, simulators): folded at the very end,
@@ -603,6 +698,27 @@ export function DevicesSection({ config, onSave }: { config?: Config; onSave?: (
           </SettingsGroup>
         )}
       </div>
+      {qrDialog && (
+        <PairQrDialog
+          name={qrDialog.name}
+          phase={qrDialog.phase}
+          repair={qrDialog.repair}
+          reach={reachWords(qrDialog.target)}
+          created={created}
+          qrDataURL={qrDataURL}
+          error={qrDialog.error}
+          onConfirm={() => void runMint(qrDialog)}
+          onClose={closeQrDialog}
+        />
+      )}
     </SectionCard>
   );
+}
+
+/** What the code in the dialog reaches, in the words the cards use. */
+function reachWords(kind?: TargetKind): string | undefined {
+  if (kind === 'cloud') return 'Uses the cloud companion, so it works from anywhere.';
+  if (kind === 'tailnet') return 'Uses Tailscale, so it works anywhere the phone is on your tailnet.';
+  if (kind === 'lan') return 'Uses this Wi-Fi; the phone learns the other ways once it connects.';
+  return undefined;
 }

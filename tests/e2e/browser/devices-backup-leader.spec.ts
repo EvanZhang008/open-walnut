@@ -13,6 +13,7 @@
  */
 import { mkdirSync } from 'node:fs'
 import { test, expect, type Page, type Route } from '@playwright/test'
+import { openWay } from './devices-ways-helpers'
 
 test.setTimeout(120_000)
 
@@ -57,6 +58,7 @@ async function openDevices(page: Page) {
   await expect(nav).toHaveAttribute('aria-current', 'page')
   const section = page.locator('#devices')
   await expect(section).not.toContainText('Loading paired phones...', { timeout: 30_000 })
+  await openWay(page, 'cloud')
   return section
 }
 

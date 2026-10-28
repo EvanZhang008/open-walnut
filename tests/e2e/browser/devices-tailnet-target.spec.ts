@@ -16,6 +16,7 @@
  */
 import { mkdirSync } from 'node:fs'
 import { test, expect, type Page, type Route } from '@playwright/test'
+import { openWay, qrDialog } from './devices-ways-helpers'
 
 test.setTimeout(120_000)
 
@@ -134,17 +135,14 @@ test.describe('Settings → Phones & Cloud tailnet pairing', () => {
     await expect.poll(() => mints.length).toBe(1)
     expect(mints[0]).toMatchObject({ name: 'Travel-phone', target: 'tailnet' })
 
-    const qr = section.locator('.devices-qr-block img')
+    const qr = qrDialog(page).locator('img')
     await expect(qr).toBeVisible({ timeout: 60_000 })
     expect(await qr.getAttribute('src')).toMatch(/^data:image\/png;base64,/)
-    const hint = section.locator('.devices-qr-hint')
+    const hint = qrDialog(page)
     await expect(hint).toContainText('Points at 100.101.102.103:3456')
-    // The QR rows are display:contents, so frame the whole "Pair a phone" group.
-    const pairGroup = section.locator('.settings-group-block', { hasText: 'Pair a phone' })
-    await pairGroup.scrollIntoViewIfNeeded()
-    await shot(page, 'three-targets-tailnet-qr', pairGroup)
-    await section.getByRole('button', { name: /^Done$/ }).click()
-    await expect(section.locator('.devices-qr-block')).toHaveCount(0)
+    await shot(page, 'three-targets-tailnet-qr', qrDialog(page))
+    await qrDialog(page).getByTestId('devices-qr-done').click()
+    await expect(qrDialog(page)).toHaveCount(0)
     // The picker keeps the address the user picked for the next pairing.
     await expect(section.getByTestId('devices-target-tailnet')).toHaveAttribute('aria-checked', 'true')
   })
@@ -158,16 +156,16 @@ test.describe('Settings → Phones & Cloud tailnet pairing', () => {
 
     const local = section.locator('.devices-row[data-device-name="Kitchen-tablet"]').getByTestId('devices-show-qr')
     await local.click()
-    await section.locator('.devices-row[data-device-name="Kitchen-tablet"]').getByTestId('devices-show-qr-confirm').click()
+    await qrDialog(page).getByTestId('devices-show-qr-confirm').click()
     await expect.poll(() => mints.length).toBe(1)
     expect(mints[0]).toMatchObject({ name: 'Kitchen-tablet', target: 'tailnet', replace: true })
-    await expect(section.locator('.devices-qr-hint')).toContainText('Points at 100.101.102.103:3456')
+    await expect(qrDialog(page)).toContainText('Points at 100.101.102.103:3456')
     await expect(section.getByTestId('devices-target-tailnet')).toHaveAttribute('aria-checked', 'true')
-    await section.getByRole('button', { name: /^Done$/ }).click()
+    await qrDialog(page).getByTestId('devices-qr-done').click()
 
     const both = section.locator('.devices-row[data-device-name="Work-phone"]').getByTestId('devices-show-qr')
     await both.click()
-    await section.locator('.devices-row[data-device-name="Work-phone"]').getByTestId('devices-show-qr-confirm').click()
+    await qrDialog(page).getByTestId('devices-show-qr-confirm').click()
     await expect.poll(() => mints.length).toBe(2)
     expect(mints[1]).toMatchObject({ name: 'Work-phone', target: 'cloud', replace: true })
     await expect(section.getByTestId('devices-target-cloud')).toHaveAttribute('aria-checked', 'true')
@@ -182,6 +180,7 @@ test.describe('Settings → Phones & Cloud tailnet pairing', () => {
 
     // One target: no picker; the card says what to do.
     await expect(section.getByRole('radiogroup', { name: 'Pairing target' })).toHaveCount(0)
+    await openWay(page, 'tailscale')
     const macStep = section.locator('.remote-access-step[data-step="mac"]')
     await expect(macStep).toContainText('Get Tailscale from the App Store, then come back here.')
     const link = section.getByTestId('remote-access-download')
@@ -197,7 +196,7 @@ test.describe('Settings → Phones & Cloud tailnet pairing', () => {
     await section.getByRole('button', { name: /Pair new device/i }).click()
     await expect.poll(() => mints.length).toBe(1)
     expect(mints[0]).toMatchObject({ name: 'Spare-phone', target: 'lan' })
-    await expect(section.locator('.devices-qr-block img')).toBeVisible({ timeout: 60_000 })
+    await expect(qrDialog(page).locator('img')).toBeVisible({ timeout: 60_000 })
   })
 
   test('Tailscale installed but stopped: the card asks to open it, and the picker row carries no extra line', async ({ page }) => {
@@ -209,6 +208,7 @@ test.describe('Settings → Phones & Cloud tailnet pairing', () => {
 
     const picker = section.getByRole('radiogroup', { name: 'Pairing target' })
     await expect(picker.getByRole('radio')).toHaveCount(2)
+    await openWay(page, 'tailscale')
     await expect(section.locator('.remote-access-step[data-step="mac"]')).toContainText('Open Tailscale and sign in')
     await expect(section.getByTestId('remote-access-open')).toBeVisible()
     // Switching target swaps only the target sentence.
@@ -222,6 +222,7 @@ test.describe('Settings → Phones & Cloud tailnet pairing', () => {
     await mockDevices(page, { targets: [LAN, CLOUD] })
     const section = await openDevices(page)
     await expect(section.getByRole('radiogroup', { name: 'Pairing target' })).toBeVisible()
+    await openWay(page, 'tailscale')
     await expect(section.locator('.remote-access-step[data-step="mac"]')).toContainText('Get Tailscale from the App Store, then come back here.')
   })
 
@@ -269,7 +270,7 @@ test.describe('Settings → Phones & Cloud tailnet pairing', () => {
     await expect(section).toContainText('Loading paired phones...')
     await section.locator('#devices-new-name').fill('Early phone')
     await section.getByRole('button', { name: /Pair new device/i }).click()
-    await expect(section.locator('.devices-qr-block img')).toBeVisible({ timeout: 30_000 })
+    await expect(qrDialog(page).locator('img')).toBeVisible({ timeout: 30_000 })
     expect(paired).toEqual(['Early-phone'])
     await expect(section.locator('.devices-row[data-device-name="Early-phone"]')).toHaveCount(1, { timeout: 15_000 })
     // The slow first read lands last and must not wipe the row.

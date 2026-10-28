@@ -13,6 +13,7 @@
  */
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { devices, expect, test, type Browser, type BrowserContext, type Page } from '@playwright/test'
+import { openWay } from './devices-ways-helpers'
 import { findSmallTargets, findSmallText } from './phone-helpers'
 
 test.setTimeout(240_000)
@@ -272,6 +273,7 @@ test.describe('on the computer Walnut runs on, phone sized', () => {
     await page.goto('/')
     await openSettings(page)
     await openPane(page, 'settings-nav-devices', 'Phones & Cloud')
+    await openWay(page, 'browser')
     await expect(page.getByTestId('browser-access-make-code')).toBeVisible({ timeout: 30_000 })
     await expect(page.getByTestId('browser-access-codes-elsewhere')).toHaveCount(0)
     // N2-36: this tab is on the computer's own address and holds no device token,
@@ -339,6 +341,7 @@ test.describe('a phone signed in through a tunnel', () => {
     await openPane(phone, 'settings-nav-devices', 'Phones & Cloud')
     const devices = phone.locator('#devices')
     await expect(devices.getByTestId('devices-browsers-group')).toBeVisible({ timeout: 30_000 })
+    await openWay(phone, 'browser')
     await expect(phone.getByTestId('browser-access-make-code')).toHaveCount(0)
     await expect(phone.getByTestId('browser-access-codes-elsewhere')).toHaveText('Make sign-in codes on the computer Walnut runs on.')
     await expect(devices).not.toContainText('No phones paired yet.')
@@ -407,6 +410,7 @@ test.describe('on a computer', () => {
     const nav = (await page.locator('.settings-nav').boundingBox())!
     const pane = (await page.locator('.settings-pane').boundingBox())!
     expect(pane.x).toBeGreaterThanOrEqual(nav.x + nav.width - 1)
+    await openWay(page, 'browser')
     await expect(page.getByTestId('browser-access-make-code')).toBeVisible({ timeout: 30_000 })
   })
 })

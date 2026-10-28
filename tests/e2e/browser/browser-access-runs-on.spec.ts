@@ -12,6 +12,7 @@
  */
 import { mkdirSync } from 'node:fs'
 import { expect, test, type Page, type Route } from '@playwright/test'
+import { openWay } from './devices-ways-helpers'
 
 test.setTimeout(120_000)
 
@@ -86,6 +87,7 @@ test('runs on the always-on host by default; moves to this computer and back', a
   const s: Server = { runOn: null, puts: [], places: true }
   await serve(page, s)
   await openSettings(page, 'settings-nav-devices')
+  await openWay(page, 'browser')
   const group = page.getByTestId('browser-access')
   await expect(group).not.toContainText('Loading...', { timeout: 30_000 })
   const runsOn = page.getByTestId('browser-access-runs-on')
@@ -132,6 +134,7 @@ test('an older server without places shows no Runs on row', async ({ page }) => 
   const s: Server = { runOn: 'here', puts: [], places: false }
   await serve(page, s)
   await openSettings(page, 'settings-nav-devices')
+  await openWay(page, 'browser')
   const group = page.getByTestId('browser-access')
   await expect(group).not.toContainText('Loading...', { timeout: 30_000 })
   await expect(page.getByTestId('browser-access-enabled')).toBeVisible()

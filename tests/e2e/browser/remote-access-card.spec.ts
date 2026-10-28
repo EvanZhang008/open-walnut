@@ -1,5 +1,5 @@
 /**
- * Settings → Phones & Cloud: the "Reach Walnut from anywhere" card.
+ * Settings → Phones & Cloud: the Tailscale steps, opened from the Tailscale card.
  *
  * Three numbered steps with a status dot each (muted / amber / green), fed by
  * GET /api/devices/tailscale (polled every 5s while step 1 or 2 is open) and
@@ -12,6 +12,7 @@
  */
 import { mkdirSync } from 'node:fs'
 import { test, expect, type Locator, type Page, type Route } from '@playwright/test'
+import { openWay, type DeviceWay } from './devices-ways-helpers'
 
 test.setTimeout(120_000)
 
@@ -75,7 +76,7 @@ async function mockEndpoints(page: Page, fx: Fixture) {
 }
 
 /** Real-user navigation, as devices-qr-pairing.spec.ts does it (no page.goto to /settings). */
-async function openDevices(page: Page) {
+async function openDevices(page: Page, way: DeviceWay | null = 'tailscale') {
   await page.goto('/')
   await page.waitForLoadState('domcontentloaded')
   await page.getByRole('link', { name: /settings/i }).first().click()
@@ -86,6 +87,8 @@ async function openDevices(page: Page) {
   const section = page.locator('#devices')
   await expect(section).toBeVisible()
   await expect(section).not.toContainText('Loading paired phones...', { timeout: 30_000 })
+  // The Tailscale steps sit under the Tailscale card until it is opened.
+  if (way) await openWay(page, way)
   return section
 }
 
@@ -108,10 +111,10 @@ test.describe('Settings → Phones & Cloud: Reach Walnut from anywhere', () => {
 
     const card = section.getByTestId('remote-access-card')
     await expect(card).toBeVisible()
-    await expect(card).toContainText('Reach Walnut from anywhere')
-    // Placed above "Pair a phone", below the paired list.
-    const pairHeading = section.getByRole('heading', { name: 'Pair a phone', exact: true })
-    expect((await card.boundingBox())!.y).toBeLessThan((await pairHeading.boundingBox())!.y)
+    // Opened from its card, it is named after it and sits right under the cards.
+    await expect(card.getByRole('heading', { name: 'Tailscale', exact: true })).toBeVisible()
+    const addHeading = section.getByRole('heading', { name: 'Add a phone', exact: true })
+    expect((await card.boundingBox())!.y).toBeLessThan((await addHeading.boundingBox())!.y)
 
     const mac = step(card, 'mac')
     await expect(mac).toHaveAttribute('data-dot', 'action')
@@ -320,7 +323,7 @@ test.describe('Settings → Phones & Cloud: Reach Walnut from anywhere', () => {
       list: { devices: [PAIRED_PHONE], cloudDevices: [], targets: [{ kind: 'cloud', origin: 'https://walnut.example.com', label: 'This server' }] },
     }
     const calls = await mockEndpoints(page, fx)
-    const section = await openDevices(page)
+    const section = await openDevices(page, null)
     await expect(section.locator('#devices-new-name')).toBeVisible()
     await expect(section.getByTestId('remote-access-card')).toHaveCount(0)
     await page.waitForTimeout(1_000)

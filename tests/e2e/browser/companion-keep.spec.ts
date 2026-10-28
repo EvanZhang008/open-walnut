@@ -27,6 +27,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import yaml from 'js-yaml'
 import { test, expect, type Page, type Route } from '@playwright/test'
+import { openWay } from './devices-ways-helpers'
 import { fixtureHome } from './engine-settings-helpers'
 
 test.setTimeout(120_000)
@@ -73,6 +74,7 @@ async function openGroup(page: Page) {
   const nav = page.getByTestId('settings-nav-devices')
   await nav.click()
   await expect(nav).toHaveAttribute('aria-current', 'page')
+  await openWay(page, 'cloud')
   const group = page.getByTestId('companion-keep')
   await expect(group).toBeVisible({ timeout: 30_000 })
   return group

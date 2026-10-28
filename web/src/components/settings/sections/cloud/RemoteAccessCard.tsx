@@ -42,6 +42,8 @@ interface Props {
   onChooseTailnet: () => void;
   /** This Mac joined or left the tailnet: the picker's addresses changed. */
   onTailnetChange: () => void;
+  /** The group's heading; Phones & Cloud names it after its card ("Tailscale"). */
+  heading?: string;
 }
 
 const STATUS_PATH = '/api/devices/tailscale';
@@ -67,7 +69,7 @@ function StepTitle({ n, dot, title }: { n: number; dot: StepDot; title: string }
   );
 }
 
-export function RemoteAccessCard({ devices, tailnetOffered, onChooseTailnet, onTailnetChange }: Props) {
+export function RemoteAccessCard({ devices, tailnetOffered, onChooseTailnet, onTailnetChange, heading = 'Reach Walnut from anywhere' }: Props) {
   const [status, setStatus] = useState<TailscaleDetailResponse | null>(null);
   const [failed, setFailed] = useState(false);
   const [unavailable, setUnavailable] = useState(false);
@@ -259,7 +261,7 @@ export function RemoteAccessCard({ devices, tailnetOffered, onChooseTailnet, onT
     : 'Pair the phone below with the Tailscale address.';
 
   return (
-    <SettingsGroup heading="Reach Walnut from anywhere" className="remote-access-card" data-testid="remote-access-card">
+    <SettingsGroup heading={heading} className="remote-access-card" data-testid="remote-access-card">
       <SettingsRow
         className="remote-access-step"
         data-step="mac"

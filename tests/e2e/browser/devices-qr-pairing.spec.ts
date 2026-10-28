@@ -8,6 +8,7 @@
  * address the QR carries is never loopback.
  */
 import { test, expect } from '@playwright/test'
+import { qrDialog } from './devices-ways-helpers'
 
 test.describe('Settings → Phones & Cloud pairing', () => {
   test('Devices section is reachable and its QR never points at loopback', async ({ page }) => {
@@ -41,19 +42,19 @@ test.describe('Settings → Phones & Cloud pairing', () => {
     // does a server round-trip (and a cloud-target pairing mints on the cloud
     // box), and this Mac routinely sits at load >40, where fixture requests
     // that take 150ms idle take seconds.
-    const qr = section.locator('.devices-qr-block img')
+    const qr = qrDialog(page).locator('img')
     await expect(qr).toBeVisible({ timeout: 60_000 })
     const src = await qr.getAttribute('src')
     expect(src).toMatch(/^data:image\/png;base64,/)
 
     // THE REGRESSION: the pairing address must never be loopback. The UI
     // echoes it under the QR, so assert on what the user is actually told.
-    const hint = await section.locator('.devices-qr-hint').innerText()
+    const hint = await qrDialog(page).innerText()
     expect(hint).not.toMatch(/localhost|127\.0\.0\.1/)
 
     // Dismiss, then clean up the device we created.
-    await section.getByRole('button', { name: /^Done$/ }).click()
-    await expect(section.locator('.devices-qr-block')).toHaveCount(0)
+    await qrDialog(page).getByTestId('devices-qr-done').click()
+    await expect(qrDialog(page)).toHaveCount(0)
 
     // Remove is two-step in place (no browser dialog): the first click arms it,
     // the second confirms.

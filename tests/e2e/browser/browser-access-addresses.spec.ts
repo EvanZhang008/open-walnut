@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test'
+import { openWay } from './devices-ways-helpers'
 
 /**
  * "Sign in a browser" with more than one address (BrowserAccessGroup.tsx): the
@@ -25,6 +26,7 @@ async function openDevices(page: Page) {
   await page.getByRole('link', { name: /settings/i }).first().click()
   await expect(page.getByRole('heading', { name: 'Settings', exact: true })).toBeVisible({ timeout: 30_000 })
   await page.getByTestId('settings-nav-devices').click()
+  await openWay(page, 'browser')
   const group = page.getByTestId('browser-access')
   await expect(group).not.toContainText('Loading...', { timeout: 30_000 })
   await page.getByTestId('browser-access-make-code').scrollIntoViewIfNeeded()

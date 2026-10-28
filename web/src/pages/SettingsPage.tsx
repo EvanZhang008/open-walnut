@@ -51,6 +51,7 @@ import { appRegistry } from '@/apps/registry'
 import { log } from '@/utils/log'
 import { usePhoneSettingsPane } from '@/components/settings/usePhoneSettingsPane'
 import '@/styles/phone-settings.css'
+import { announceSettingsAnchor } from '@/components/settings/settings-anchor-event'
 
 /** Any of these means the person took the wheel: hash anchoring lets go. */
 const USER_TAKEOVER_EVENTS = ['wheel', 'touchmove', 'keydown', 'pointerdown'] as const
@@ -137,6 +138,8 @@ interface AnchorRequest {
  * once when the person scrolls or types.
  */
 function holdAnchor(scroller: HTMLElement, req: AnchorRequest): () => void {
+  // A section that folds this row away opens it now; the retries below then find it.
+  announceSettingsAnchor(req.id)
   let stopped = false
   let el: HTMLElement | null = null
   let tries = 0

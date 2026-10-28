@@ -1,0 +1,128 @@
+/* Settings, Phones & Cloud: how the phone reaches Walnut now, the three ways to
+   reach it away from home (components/settings/sections/cloud/WaysOverview.tsx),
+   and the pairing QR dialog (cloud/PairQrDialog.tsx). Colors through tokens; the
+   tag tints are the ones .settings-tag uses (settings-controls-misc.css). */
+
+.devices-ways { margin: 0 0 22px; }
+
+/* "iphone reaches Walnut through the cloud companion" */
+.devices-now {
+  box-sizing: border-box;
+  margin: 0 0 22px;
+  padding: 14px var(--settings-row-pad-x, 16px);
+  background: var(--settings-group-bg);
+  border: 1px solid var(--settings-group-border);
+  border-left: 3px solid var(--fg-muted);
+  border-radius: 10px;
+}
+.devices-now[data-tone='ok'] { border-left-color: var(--success); }
+.devices-now[data-tone='warn'] { border-left-color: var(--warning); }
+.devices-now-title { font-size: 15px; font-weight: 600; line-height: 21px; color: var(--fg); }
+.devices-now-hops { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-top: 6px; }
+.devices-now-hop-wrap { display: inline-flex; align-items: center; gap: 4px; }
+.devices-now-hop {
+  padding: 1px 8px;
+  border-radius: 6px;
+  background: var(--bg-tertiary, var(--bg-secondary));
+  color: var(--fg);
+  font-size: 12.5px;
+  line-height: 18px;
+}
+.devices-now-arrow { color: var(--fg-muted); font-size: 12px; }
+.devices-now-detail { margin-top: 6px; color: var(--fg-muted); font-size: 13px; line-height: 18px; }
+
+/* Three cards side by side; one column when the pane is narrow. */
+.devices-ways-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 10px;
+}
+.devices-way {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  padding: 14px;
+  background: var(--settings-group-bg);
+  border: 1px solid var(--settings-group-border);
+  border-radius: 10px;
+}
+/* The way the phone used last: framed, so "which one is active" reads at a glance. */
+.devices-way[data-in-use='true'] { border-color: var(--success); box-shadow: inset 0 0 0 1px var(--success); }
+.devices-way[data-open='true'] { border-color: var(--accent); }
+.devices-way-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.devices-way-title { margin: 0; font-size: 14.5px; font-weight: 600; line-height: 20px; color: var(--fg); }
+.devices-way-tag {
+  flex: 0 0 auto;
+  padding: 0 7px;
+  border-radius: 5px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 18px;
+  background: var(--bg-tertiary, var(--bg-secondary));
+  color: var(--fg-secondary, var(--fg-muted));
+}
+.devices-way-tag[data-dot='on'] { background: rgba(52, 199, 89, 0.14); color: var(--settings-tag-success-fg, var(--success)); }
+.devices-way-tag[data-dot='warn'] { background: rgba(255, 149, 0, 0.14); color: var(--priority-important-text, var(--warning)); }
+.devices-way-what { margin: 0; font-size: 13px; line-height: 18px; color: var(--fg); }
+.devices-way-facts { margin: 0; font-size: 12.5px; line-height: 17px; }
+.devices-way-facts dt { margin-top: 6px; color: var(--fg-muted); }
+.devices-way-facts dd { margin: 1px 0 0; color: var(--fg); overflow-wrap: anywhere; }
+.devices-way-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 6px;
+  border-radius: 50%;
+  background: var(--fg-muted);
+  opacity: 0.55;
+  vertical-align: 0;
+}
+.devices-way-dot[data-dot='on'] { background: var(--success); opacity: 1; }
+.devices-way-dot[data-dot='warn'] { background: var(--warning); opacity: 1; }
+.devices-way-foot { margin-top: auto; padding-top: 8px; display: flex; gap: 8px; flex-wrap: wrap; }
+.devices-ways-home { margin: 8px 0 0; padding: 0 calc(var(--settings-row-pad-x, 16px) + 1px); }
+
+/* A way's own settings, opened from its card, right under the cards. */
+.devices-way-panel { margin: 0 0 22px; }
+
+/* The pairing QR dialog. */
+.app-modal.devices-qr-dialog { width: min(440px, calc(100vw - 32px)); max-height: calc(100vh - 32px); overflow-y: auto; box-sizing: border-box; }
+.devices-qr-dialog-sub { margin: 6px 0 0; font-size: 13px; line-height: 18px; color: var(--fg-muted); }
+.devices-qr-dialog-note {
+  margin: 12px 0 0;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: rgba(255, 149, 0, 0.12);
+  color: var(--fg);
+  font-size: 13px;
+  line-height: 18px;
+}
+.devices-qr-dialog-error { margin: 12px 0 0; }
+.devices-qr-dialog-img {
+  display: block;
+  width: 220px;
+  max-width: 100%;
+  height: auto;
+  aspect-ratio: 1 / 1;
+  margin: 14px auto 6px;
+  padding: 6px;
+  border-radius: 8px;
+  background: #fff;
+  image-rendering: pixelated;
+}
+.devices-qr-dialog .devices-qr-dialog-steps {
+  margin: 8px 0 0;
+  padding-left: 20px;
+  max-width: none;
+  text-align: left;
+  font-size: 13.5px;
+  line-height: 20px;
+  color: var(--fg);
+}
+.devices-qr-dialog-manual { margin-top: 10px; font-size: 13px; }
+.devices-qr-dialog-manual > summary { cursor: pointer; color: var(--accent); }
+.devices-qr-dialog-token { display: flex; align-items: flex-start; gap: 8px; margin-top: 6px; }
+.devices-qr-dialog-token .devices-token { flex: 1; min-width: 0; margin-top: 0; }
+.app-modal.devices-qr-dialog:focus { outline: none; }

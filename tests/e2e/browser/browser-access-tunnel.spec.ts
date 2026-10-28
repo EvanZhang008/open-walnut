@@ -27,6 +27,7 @@
  */
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { test, expect, devices, type Browser, type Locator, type Page } from '@playwright/test'
+import { openWay } from './devices-ways-helpers'
 import { browserKindFromUserAgent } from '../../../src/core/browser-kind'
 
 test.setTimeout(180_000)
@@ -94,6 +95,7 @@ async function openDevices(page: Page) {
   const nav = page.getByTestId('settings-nav-devices')
   await nav.click()
   await expect(nav).toHaveAttribute('aria-current', 'page')
+  await openWay(page, 'browser')
   const group = page.getByTestId('browser-access')
   await expect(group).toBeVisible({ timeout: 30_000 })
   await expect(group).not.toContainText('Loading...', { timeout: 30_000 })

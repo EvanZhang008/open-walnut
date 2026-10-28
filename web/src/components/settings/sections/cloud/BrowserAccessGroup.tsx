@@ -55,7 +55,8 @@ interface BrowserCode {
 
 const qrFor = (link: string) => QRCode.toDataURL(link, { errorCorrectionLevel: 'M', width: 220, margin: 2 }).catch(() => undefined);
 
-export function BrowserAccessGroup() {
+/** `heading`: Phones & Cloud names the group after its card ("Browser link"). */
+export function BrowserAccessGroup({ heading = 'Open from a browser' }: { heading?: string } = {}) {
   // A browser signed in with a code is refused every code (403
   // person_at_this_machine): say where codes come from, no button.
   const [deviceCaller] = useState(isDeviceCaller);
@@ -188,7 +189,7 @@ export function BrowserAccessGroup() {
 
   if (!data) {
     return (
-      <SettingsGroup heading="Open from a browser" data-testid="browser-access">
+      <SettingsGroup heading={heading} data-testid="browser-access">
         <SettingsEmpty>{loadFailed ? "Couldn't read the tunnel state." : 'Loading...'}</SettingsEmpty>
       </SettingsGroup>
     );
@@ -213,7 +214,7 @@ export function BrowserAccessGroup() {
   };
 
   return (
-    <SettingsGroup heading="Open from a browser" data-testid="browser-access">
+    <SettingsGroup heading={heading} data-testid="browser-access">
       {providers.length === 0 ? (
         <SettingsRow
           label="Tunnel"

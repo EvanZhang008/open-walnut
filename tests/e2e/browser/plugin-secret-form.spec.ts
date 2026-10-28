@@ -4,6 +4,7 @@ import fs from 'node:fs/promises'
 import net from 'node:net'
 import yaml from 'js-yaml'
 import { expect, test, type Locator, type Page, type Response } from '@playwright/test'
+import { openWay } from './devices-ways-helpers'
 
 /**
  * Editing hidden secrets in Settings, through real clicks, and what lands on disk.
@@ -453,6 +454,7 @@ test('a URL moved to another host with its password hidden is refused, and the e
 test('the tunnel form keeps a refused option in its box, with the reason under it', async ({ page }, info) => {
   await reset()
   await openSettings(page, 'settings-nav-devices')
+  await openWay(page, 'browser')
   const group = page.getByTestId('browser-access')
   const endpoint = group.getByTestId('browser-access-option-endpoint')
   await expect(endpoint).toBeVisible({ timeout: 60_000 })
@@ -517,6 +519,7 @@ async function switchProviderAndBack(page: Page, testIdOf: (provider: string) =>
 test('Open from a browser: a refused option keeps its value and reason while another option saves and the switch flips, until it is put back', async ({ page }, info) => {
   await reset()
   await openSettings(page, 'settings-nav-devices')
+  await openWay(page, 'browser')
   const group = page.getByTestId('browser-access')
   const endpoint = group.getByTestId('browser-access-option-endpoint')
   const token = group.getByTestId('browser-access-option-token')
@@ -688,6 +691,7 @@ test('a space typed after a hidden token is refused under that option in both tu
   const message = (field: string) => `${field} was sent back hidden, with other text added to it. Keep the hidden value exactly as it was shown, or replace it with the full value of ${field}.`
   // Gate r10 T6, Open from a browser.
   await openSettings(page, 'settings-nav-devices')
+  await openWay(page, 'browser')
   const token = page.getByTestId('browser-access').getByTestId('browser-access-option-token')
   await expect(token).toHaveValue(tail(fixture!.expose.options.token!), { timeout: 60_000 })
   const refused = putTo(page, '/api/expose')
@@ -727,6 +731,7 @@ test('a space typed after a hidden token is refused under that option in both tu
 test('Open from a browser: text typed while an option is being saved stays in its box', async ({ page }) => {
   await reset()
   await openSettings(page, 'settings-nav-devices')
+  await openWay(page, 'browser')
   const group = page.getByTestId('browser-access')
   const name = group.getByTestId('browser-access-option-name')
   await expect(name).toHaveValue(fixture!.expose.options.name!, { timeout: 60_000 })

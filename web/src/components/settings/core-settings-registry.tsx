@@ -218,8 +218,8 @@ export const CORE_SETTINGS_CONTRIBUTIONS: readonly CoreSettingsContribution[] = 
   {
     owner: 'walnut', id: 'devices', label: 'Phones & Cloud', title: 'Phones & Cloud', group: 'configure',
     icon: 'phone', tint: '#5856D6',
-    description: 'Phones paired with this Mac and the cloud companion they reach it through.',
-    keywords: ['phone', 'iphone', 'pair',
+    description: 'How your phone and browsers reach Walnut: the cloud companion, Tailscale, or a browser link.',
+    keywords: ['phone', 'iphone', 'pair', 'tailscale', 'tunnel', 'browser link',
       { word: 'qr code', rowLabel: 'Device name', anchor: 'devices-new-name' },
       { word: 'away sleep take over backup leader', rowLabel: 'Cloud companion takes over', anchor: 'devices-backup-leader' },
       { word: 'wifi wi-fi', rowLabel: 'Pairing target' }],

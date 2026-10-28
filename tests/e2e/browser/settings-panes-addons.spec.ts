@@ -382,33 +382,29 @@ test('C54 C79: removing a phone and showing a new QR are two-step, and the butto
   await expect(remove).toHaveText('Remove', { timeout: 5_000 })
   expect(deletes).toEqual([])
 
-  // Show QR (a new token for the same phone): the row says what a new code does
+  // Show QR (a new token for the same phone): a dialog says what a new code does
   // and asks; Cancel leaves everything as it was.
   const showQr = row.getByTestId('devices-show-qr')
+  const dlg = page.locator('.devices-qr-dialog')
   await showQr.click()
-  await expect(row.getByRole('alert')).toContainText('A new code replaces the one Test phone signed in with')
-  await expect(row.getByTestId('devices-remove')).toHaveCount(0)
-  await row.getByTestId('devices-show-qr-cancel').click()
-  await expect(row.getByRole('alert')).toHaveCount(0)
-  await expect(row.getByTestId('devices-remove')).toBeVisible()
+  await expect(dlg.getByTestId('devices-show-qr-warning')).toContainText('This replaces the code Test phone signed in with')
+  await dlg.getByTestId('devices-show-qr-cancel').click()
+  await expect(dlg).toHaveCount(0)
   expect(mints).toEqual([])
-  // Asked again and confirmed: the code opens right under this row, in view,
-  // with how to scan it (never at the bottom of the page under "Pair a phone").
+  // Asked again and confirmed: the code shows in the dialog, in view, with how to scan it.
   await showQr.click()
-  await row.getByTestId('devices-show-qr-confirm').click()
+  await dlg.getByTestId('devices-show-qr-confirm').click()
   await expect.poll(() => mints.length).toBe(1)
   expect(mints[0]).toMatchObject({ name: 'Test phone', replace: true })
-  const qr = page.locator('#devices .devices-row[data-device-name="Test phone"] + .devices-qr-block img')
+  const qr = dlg.locator('img')
   await expect(qr).toBeVisible()
   await expect(qr).toBeInViewport()
-  await expect(page.locator('#devices .devices-qr-block')).toHaveCount(1)
-  expect((await qr.boundingBox())!.width).toBeLessThanOrEqual(200.5)
-  const hint = page.locator('#devices .devices-qr-hint')
-  await expect(hint).toContainText('Open the Walnut app on the phone, tap Scan QR from your console')
-  await expect(hint).toContainText('tap Disconnect in its Settings first')
+  expect((await qr.boundingBox())!.width).toBeLessThanOrEqual(220.5)
+  await expect(dlg.locator('.devices-qr-dialog-steps')).toContainText('Tap Scan QR from your console')
+  await expect(dlg.locator('.devices-qr-dialog-steps')).toContainText('tap Settings, then Disconnect')
   await shot(page, 'devices-qr')
-  await page.locator('#devices').getByRole('button', { name: 'Done' }).click()
-  await expect(page.locator('#devices .devices-qr-block')).toHaveCount(0)
+  await dlg.getByTestId('devices-qr-done').click()
+  await expect(dlg).toHaveCount(0)
 
   await remove.click()
   await remove.click()
