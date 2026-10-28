@@ -65,12 +65,30 @@ struct LetterSender: Codable, Equatable {
     let host: String?
 }
 
+/// The task that answered a letter, or wrote a reply turn, in the user's place.
+struct LetterAnsweredBy: Codable, Equatable {
+    let sessionId: String?
+    let taskId: String?
+    let name: String?
+
+    /// The task's name as the inbox shows it; never its id (the web's `answeredByName`).
+    var displayName: String { label(or: "a task") }
+
+    /// The task's name, or `fallback` when it has none ("A task" to open a line).
+    func label(or fallback: String) -> String {
+        let n = name?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return n.isEmpty ? fallback : n
+    }
+}
+
 /// The human's answer to an action_required letter (epoch-ms `at`).
 struct LetterAnswer: Codable, Equatable {
     let actionId: String
     let label: String?
     let freeText: String?
     let at: Double?
+    /// A task answered in the user's place; nil when the user answered.
+    var by: LetterAnsweredBy? = nil
 
     var date: Date? { at.map { Date(timeIntervalSince1970: $0 / 1000) } }
 }
@@ -98,6 +116,8 @@ struct LetterThreadEntry: Codable, Equatable, Identifiable {
     /// that predate the field.
     let delivery: LetterTurnDelivery?
     @LossyInboxItems var items: [InboxEmailItem]? = nil
+    /// Human turns only: a task wrote this turn in the user's place.
+    var by: LetterAnsweredBy? = nil
 
     /// Stable within one letter: the store appends turns and never reorders.
     var id: String { "\(from)|\(at ?? 0)|\(bodyFile ?? "")" }
@@ -188,9 +208,11 @@ struct Letter: Codable, Identifiable, Equatable {
         return nowMs < endsAt
     }
 
-    /// Buttons to render. Empty unless the letter still wants a decision.
+    /// Buttons to render, as the web's LetterView (`canDecide`) does: an action_required letter
+    /// nobody answered, or one a task answered in the user's place, which the user may answer over.
+    /// Archived or not: an archived decision opened from the archive can still be made.
     var openActions: [LetterAction] {
-        guard isAwaitingDecision else { return [] }
+        guard kind == .actionRequired, answered == nil || answered?.by != nil else { return [] }
         return actions ?? []
     }
 

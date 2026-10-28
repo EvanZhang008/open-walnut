@@ -443,7 +443,8 @@ struct SessionConversationView: View {
                     Button {
                         showMemory = true
                     } label: {
-                        Label("Memory & Instructions", systemImage: "brain")
+                        // One line at the default text size: the longer name wrapped and pushed Terminate off the menu.
+                        Label("Core Instructions", systemImage: "brain")
                     }
                     .accessibilityIdentifier("session.memoryInstructions")
                 }

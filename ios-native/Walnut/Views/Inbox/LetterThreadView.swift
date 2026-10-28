@@ -124,16 +124,26 @@ struct LetterThreadView: View {
         }
     }
 
-    private func header(isHuman: Bool, date: Date?) -> some View {
-        HStack(spacing: 5) {
-            Image(systemName: isHuman ? "person.fill" : "sparkles")
-                .font(.system(size: 9))
-            Text(isHuman ? "You" : "Agent")
-                .font(.caption2.weight(.semibold))
-            if let date {
-                Text(date.formatted(date: .abbreviated, time: .shortened))
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
+    /// `by`: the task that wrote a human turn in the user's place, named instead of "You".
+    @ViewBuilder
+    private func header(isHuman: Bool, date: Date?, by: LetterAnsweredBy? = nil) -> some View {
+        let icon = Image(systemName: isHuman && by == nil ? "person.fill" : "sparkles").font(.system(size: 9))
+        let name = Text(isHuman ? (by.map { $0.label(or: "A task") } ?? "You") : "Agent").font(.caption2.weight(.semibold))
+        let when = date.map { Text($0.formatted(date: .abbreviated, time: .shortened)).font(.caption2) }
+        // Name and date side by side while both fit whole; else the date goes under the name, so a
+        // task's long name or a large text size never pushes the turn past the screen.
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 5) {
+                icon
+                name.lineLimit(1)
+                if let when { when.foregroundStyle(.tertiary) }
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(alignment: .firstTextBaseline, spacing: 5) {
+                    icon
+                    name.lineLimit(2).truncationMode(.tail)
+                }
+                if let when { when.foregroundStyle(.tertiary) }
             }
         }
         .foregroundStyle(.secondary)
@@ -141,7 +151,7 @@ struct LetterThreadView: View {
 
     private func turn(_ entry: LetterThreadEntry) -> some View {
         VStack(alignment: .leading, spacing: 5) {
-            header(isHuman: entry.isHuman, date: entry.date)
+            header(isHuman: entry.isHuman, date: entry.date, by: entry.by)
 
             if let body = entry.body, !body.isEmpty {
                 if entry.isHTMLBody {

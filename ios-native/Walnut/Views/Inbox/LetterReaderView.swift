@@ -423,6 +423,13 @@ struct LetterReaderView: View {
                 .foregroundStyle(Theme.success)
             Text(answer.label ?? answer.actionId)
                 .font(.callout.weight(.medium))
+            if let by = answer.by {
+                // The name in semibold, so the line does not run into the note under it.
+                Text("by \(Text(by.displayName).fontWeight(.semibold))")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .accessibilityIdentifier("inbox.letter.answeredBy")
+            }
             if let note = answer.freeText, !note.isEmpty {
                 Text(note).font(.caption).foregroundStyle(.secondary)
             }
@@ -434,6 +441,8 @@ struct LetterReaderView: View {
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Theme.success.opacity(0.1), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        // A container, so its lines keep their own identifiers ("by" included).
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("inbox.letter.answered")
     }
 

@@ -430,10 +430,33 @@ struct LinkTagView: Codable, Equatable {
     let gone: Bool?
 }
 
-/// The user's own words for the CEO or a VP (`Task.org_instructions`), and when they were set.
+/// The CEO's or a VP's core instructions (`Task.org_instructions`), when they were set, and who
+/// wrote them: the user (`by` "human", or absent on older rows) or an agent (`by` "task:<id>" or
+/// "agent", with `by_name` as the user reads it).
 struct OrgInstructions: Codable, Equatable {
     let text: String
     let at: String?
+    var by: String? = nil
+    var byName: String? = nil
+    /// An agent wrote them because the user asked (override_user): they count as the user's.
+    var forUser: Bool? = nil
+
+    private enum CodingKeys: String, CodingKey {
+        case text, at, by
+        case byName = "by_name"
+        case forUser = "for_user"
+    }
+
+    var byUser: Bool { by == nil || by == "human" }
+    /// The user's words (written by them, or for them): they replace Walnut's default.
+    var usersWords: Bool { byUser || forUser == true }
+
+    /// "you", or the agent's name when it wrote them.
+    var author: String {
+        guard !byUser else { return "you" }
+        let name = byName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return name.isEmpty ? "an agent" : name
+    }
 }
 
 /// Envelope for the endpoints answering { task: <full row> }.

@@ -63,8 +63,8 @@ struct LetterEnvelopeRow: View {
                 HStack(spacing: 6) {
                     if Self.showsTypeBadge(letter) { typeBadge }
                     chip(letter.hostLabel, icon: letter.hostLabel == "Mac" ? "laptopcomputer" : "server.rack")
-                    if letter.answered != nil {
-                        chip("Answered", icon: "checkmark")
+                    if let answer = letter.answered {
+                        chip(answer.by.map { "Answered by \($0.displayName)" } ?? "Answered", icon: "checkmark")
                     }
                 }
             }
@@ -136,7 +136,8 @@ struct LetterEnvelopeRow: View {
             if let icon {
                 Image(systemName: icon).font(.system(size: 9))
             }
-            Text(text).font(.caption2)
+            // One line (two at accessibility sizes): a task's name may run to 200 characters.
+            Text(text).font(.caption2).lineLimit(timeUnderSubject ? 2 : 1).truncationMode(.tail)
         }
         .padding(.horizontal, 6)
         .padding(.vertical, 2)

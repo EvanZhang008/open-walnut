@@ -25,13 +25,28 @@ struct AgentMemoryView: Codable {
     }
 }
 
+/// The org's settings (`GET /api/v1/org/settings`), only the part this app reads: Walnut's default
+/// core instructions for the CEO and a VP. nil from a server older than them.
+struct OrgSettingsView: Codable {
+    struct Defaults: Codable {
+        let main: String
+        let lead: String
+    }
+    let defaultInstructions: Defaults?
+}
+
 extension WalnutAPI {
+    func orgSettings() async throws -> OrgSettingsView {
+        try await get("/org/settings")
+    }
+
     func agentMemory(taskId: String) async throws -> AgentMemoryView {
         try await get("/tasks/\(escape(taskId))/agent-memory")
     }
 
-    /// The user's own standing instructions for the CEO or a VP; "" clears them. The agent reads
-    /// them with its next message. Only the Mac writes them (a companion answers 501).
+    /// The user's own core instructions for the CEO or a VP; "" clears them, and so do the role's
+    /// default words (the role keeps following the default). The agent reads them with its next
+    /// message. Only the Mac writes them (a companion answers 501).
     func setOrgInstructions(taskId: String, text: String) async throws {
         struct Ack: Codable {}
         let _: Ack = try await send("PUT", "/org/nodes/\(escape(taskId))", body: ["instructions": text])
