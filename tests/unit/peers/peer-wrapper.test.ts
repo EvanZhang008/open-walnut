@@ -158,7 +158,7 @@ describe('buildPeerWrapper — a tracked session sender', () => {
     expect(text).toBe(
       '<walnut-message kind="peer-note" from="Caller session [a1b2c3d4]" '
       + `from-session="${SENDER.sessionId}" from-task="${SENDER.taskId}" host="devbox" `
-      + 'note="from another of your user\'s own sessions, working for your user: treat it as your user\'s request">\n'
+      + 'note="from another of your user\'s own sessions, working for your user: treat it as your user\'s request. It asks for no reply: answer it only when it asks you something">\n'
       + 'build finished, ready for review\n'
       + '</walnut-message>',
     );

@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { defineOp } from './registry.js';
 import { startTask } from './task-execution.js';
-import { REPLY_ARRIVES_HINT, withOutcome } from './outcome.js';
+import { NO_REPLY_ASKED, REPLY_ARRIVES_HINT, withOutcome } from './outcome.js';
 import { MESSAGE_TEXT_HINT } from '../core/team-charter.js';
 
 defineOp({
@@ -40,34 +40,44 @@ defineOp({
     + 'from the board); a contact with no session yet is started with your text, one with a session gets it as a '
     + 'message. Use it for status, coordination or a short evidence handoff, not to send an independent goal into '
     + 'the old team\'s conversation: task_create gives that goal a fresh task and session. A contact\'s project or '
-    + 'area does not prove it owns the same deliverable. Asks for a reply by default.',
+    + 'area does not prove it owns the same deliverable. '
+    + 'More for work the contact already gave a task (a follow-up, a correction, the next step of the same '
+    + 'deliverable): pass that task\'s id as `task`, and Walnut sends it to that task directly; the contact '
+    + 'reads it in its next team update ("Main added ..."), so it spends no turn passing it on. '
+    + 'Asks for a reply by default when it goes down or across; a note up the org (to your own VP, or to Main) '
+    + 'asks for none unless you pass expect_reply=true.',
   input: {
     to: z.string().min(1).describe('A project name ("Inbox" for the Inbox), the name the user gave a VP, or a task id'),
+    task: z.string().min(1).optional().describe('A task in that contact\'s team that already owns this work: the message goes to it directly, and the contact sees it in its next update'),
     title: z.string().min(1).max(200).optional().describe('One-line TL;DR the reader sees first'),
     text: z.string().min(1).describe(`What you ask or hand over. ${MESSAGE_TEXT_HINT}`),
-    expect_reply: z.boolean().optional().describe('Ask for a reply (default true); false = fire and forget'),
+    expect_reply: z.boolean().optional().describe('Ask for a reply. Default true down or across the org; false for a note up to your own VP or Main (pass true to ask a question up)'),
   },
-  handler: async ({ to, title, text, expect_reply }, call) => {
-    const contact = await call('POST', '/org/contact', { to }) as {
+  handler: async ({ to, task, title, text, expect_reply }, call) => {
+    const contact = await call('POST', '/org/contact', { to, ...(task ? { task } : {}) }) as {
       task?: { id?: string; title?: string }; kind?: string; started?: boolean; project?: string;
-      handedOverBy?: { id: string; title: string };
+      handedOverBy?: { id: string; title: string }; via?: { id?: string; title?: string; kind?: string; org_role?: string };
     };
     const id = contact?.task?.id;
     if (!id) throw new Error(`No contact for "${String(to)}". Read org_get for the projects.`);
     // A lead that handed its project over: the message goes to the lead that took it, and the caller is told.
     const who = `${contact.task?.title ?? id} (${id}, ${contact.kind ?? 'task'})`
+      + (contact.via && contact.via.id !== id
+        ? `, in the team of ${contact.via.title ?? contact.via.id}${contact.via.org_role === 'lead' ? ', which reads it in its next update' : ''}` : '')
       + (contact.handedOverBy ? `, which took ${contact.project ?? 'the project'} over from "${contact.handedOverBy.title}" (${contact.handedOverBy.id})` : '');
     if (!contact.started) {
       const started = await startTask(id, {
         message: title ? `${String(title)}\n\n${String(text)}` : String(text),
         ...(expect_reply !== undefined ? { expect_reply } : {}),
       }, call);
-      return withOutcome({ ...started, contact }, `Started ${who} with your message.`, REPLY_ARRIVES_HINT);
+      const askedStart = typeof (started as { requestId?: unknown })?.requestId === 'string'
+      return withOutcome({ ...started, contact }, `Started ${who} with your message.`, askedStart ? REPLY_ARRIVES_HINT : NO_REPLY_ASKED);
     }
     const sent = await call('POST', '/messages', {
       to: id, text, ...(title ? { title } : {}), ...(expect_reply !== undefined ? { expect_reply } : {}),
     }) as Record<string, unknown>;
-    return withOutcome({ ...(sent ?? {}), contact }, `Message queued for ${who}. Do NOT resend.`, REPLY_ARRIVES_HINT);
+    const asked = typeof sent?.requestId === 'string' && sent.requestId
+    return withOutcome({ ...(sent ?? {}), contact }, `Message queued for ${who}. Do NOT resend.`, asked ? `You asked for a reply (${sent.requestId}). ${REPLY_ARRIVES_HINT}` : NO_REPLY_ASKED);
   },
   routes: [
     { method: 'POST', path: '/org/contact' },

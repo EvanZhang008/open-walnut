@@ -98,6 +98,51 @@ export function groupTeamAsks(asks: readonly TeamAsk[]): TeamAskLine[] {
   return [...lines.values()].sort((x, y) => x.lastAt.localeCompare(y.lastAt));
 }
 
+/** Everything asked of one task, as one line of the note (2026-10-27, the org's reflection: a
+ *  task the user talks with filled the section one message a line). */
+export interface TeamAskTaskLine {
+  taskId: string;
+  title: string;
+  /** The user's messages in its chat, its questions included: how many, the latest, its words. */
+  user?: { count: number; lastAt: string; words: string };
+  /** Each other sender: how many messages, the latest, and what each ask said. */
+  peers: { from: string; count: number; lastAt: string; gists: string[] }[];
+  rows: { id: string; count: number }[];
+  lastAt: string;
+}
+
+/** The asks, one line per task, in the order of each task's latest message. */
+export function groupAsksByTask(lines: readonly TeamAskLine[]): TeamAskTaskLine[] {
+  const out = new Map<string, TeamAskTaskLine>();
+  for (const l of lines) {
+    const g = out.get(l.taskId) ?? { taskId: l.taskId, title: l.title, peers: [], rows: [], lastAt: l.lastAt };
+    out.set(l.taskId, g);
+    g.rows.push(...l.rows);
+    if (l.lastAt > g.lastAt) { g.lastAt = l.lastAt; g.title = l.title; }
+    const words = l.question ? l.gist : l.latest || l.gist;
+    if (l.by === 'user' || (!l.by && l.from === 'the user')) {
+      const u = g.user ?? { count: 0, lastAt: '', words: '' };
+      u.count += l.count;
+      // The newest message's words; an older one's only while the newest says none.
+      if (l.lastAt >= u.lastAt) { u.lastAt = l.lastAt; if (words) u.words = words; }
+      else if (!u.words && words) u.words = words;
+      g.user = u;
+      continue;
+    }
+    let p = g.peers.find((x) => x.from === l.from);
+    if (!p) { p = { from: l.from, count: 0, lastAt: l.lastAt, gists: [] }; g.peers.push(p); }
+    p.count += l.count;
+    if (l.lastAt > p.lastAt) p.lastAt = l.lastAt;
+    if (l.gist && !p.gists.includes(l.gist)) p.gists.push(l.gist);
+  }
+  return [...out.values()].sort((x, y) => x.lastAt.localeCompare(y.lastAt));
+}
+
+/** The task lines a note shows (the newest), and so the asks it clears once told. */
+export function shownAskTasks(asks: readonly TeamAskLine[]): TeamAskTaskLine[] {
+  return groupAsksByTask(asks).slice(-TEAM_NOTE_MAX.asks);
+}
+
 /** A team task that waits on this lead, with what it waits for, in its status's words. */
 export interface LeadWait extends TeamNewsItem {
   waitingOn: string;
@@ -284,16 +329,25 @@ export function buildTeamNoteText(
     + (ledLine ? `${ledLine.trim()}\n` : '');
   const waitLine = (w: LeadWait) => `${label(w)} (${ago(w.at, nowMs) || 'waiting'})${w.waitingOn ? `: ${shortTitle(w.waitingOn, WORDS_MAX)}` : ''}`
     + (w.words ? `. It said: ${shortTitle(w.words, WORDS_MAX)}` : '');
-  const askLine = (a: TeamAskLine) => {
-    const latest = ago(Date.parse(a.lastAt), nowMs) || 'just now';
-    const when = [a.question ? 'a question in its chat' : '', a.count > 1 ? `${a.count} messages, the latest ${latest}` : latest].filter(Boolean).join(', ');
-    const latestWords = !a.question && a.latest && a.latest !== a.gist ? `; the latest: ${shortTitle(a.latest, WORDS_MAX)}` : '';
-    const words = (a.gist ? shortTitle(a.gist, WORDS_MAX) : 'read it in the task (task_history)') + latestWords;
-    return `${projectOf(a.taskId) ? `[${projectOf(a.taskId)}] ` : ''}"${shortTitle(a.title, 80)}", from ${a.from} (${when}): ${words}`;
+  const count = (n: number, lastAt: string) => {
+    const latest = ago(Date.parse(lastAt), nowMs) || 'just now';
+    return n > 1 ? `${n} messages, the latest ${latest}` : latest;
   };
-  const asksSection = plan.asks.length
-    ? `Asked of your teams by others:\n${plan.asks.slice(-TEAM_NOTE_MAX.asks).map((a) => `- ${askLine(a)}`).join('\n')}`
-      + `${plan.asks.length > TEAM_NOTE_MAX.asks ? `\n- and ${plan.asks.length - TEAM_NOTE_MAX.asks} earlier, in the next note` : ''}\n`
+  const quoted = (w: string) => `"${shortTitle(w, WORDS_MAX)}"`;
+  const READ_IT = 'read it in the task (task_history)';
+  const askLine = (g: TeamAskTaskLine) => {
+    const parts: string[] = [];
+    if (g.user) parts.push(`the user is talking with it in its own chat (${count(g.user.count, g.user.lastAt)}): ${g.user.words ? quoted(g.user.words) : READ_IT}`);
+    for (const p of g.peers) {
+      const said = p.gists.slice(-3).map(quoted).join(', ') + (p.gists.length > 3 ? ` and ${p.gists.length - 3} more` : '');
+      parts.push(`${p.from} added (${count(p.count, p.lastAt)}): ${said || READ_IT}`);
+    }
+    return `${projectOf(g.taskId) ? `[${projectOf(g.taskId)}] ` : ''}"${shortTitle(g.title, 80)}": ${parts.join('; ')}`;
+  };
+  const askTasks = groupAsksByTask(plan.asks);
+  const asksSection = askTasks.length
+    ? `Asked of your teams by others:\n${askTasks.slice(-TEAM_NOTE_MAX.asks).map((g) => `- ${askLine(g)}`).join('\n')}`
+      + `${askTasks.length > TEAM_NOTE_MAX.asks ? `\n- and ${askTasks.length - TEAM_NOTE_MAX.asks} more tasks, in the next note` : ''}\n`
     : '';
   const doneLine = plan.done.length
     ? `Done: ${plan.done.slice(0, TEAM_NOTE_MAX.done).map((t) => `"${shortTitle(t, 80)}"`).join(', ')}${plan.done.length > TEAM_NOTE_MAX.done ? ` and ${plan.done.length - TEAM_NOTE_MAX.done} more` : ''}\n`
@@ -398,8 +452,13 @@ export async function pendingTeamNote(lead: Task, sessionId: string, nowMs = Dat
     }
     const open = tasks.filter((t) => projectById.has(t.id));
     const prev = validState((await readAll())[lead.id]);
-    const { pendingTeamAsks, clearTeamAsks } = await import('./team-asks.js');
-    const asks = await pendingTeamAsks(lead.id);
+    const { pendingTeamAsks, clearTeamAsks, answeredUserAsks } = await import('./team-asks.js');
+    const pending = await pendingTeamAsks(lead.id);
+    // What the user said in a task's own chat that the task already answered is no ask of the team.
+    const answered = answeredUserAsks(tasks, pending);
+    if (answered.length) await clearTeamAsks(lead.id, answered.map((a) => ({ id: a.id, count: a.count ?? 1 }))).catch(() => undefined);
+    const gone = new Set(answered.map((a) => a.id));
+    const asks = pending.filter((a) => !gone.has(a.id));
     // Done here: told about before, and finished in a project this lead still leads.
     const ledKeys = new Set(led.map((p) => projectKey(p.project)));
     const completed = prev
@@ -427,7 +486,7 @@ export async function pendingTeamNote(lead: Task, sessionId: string, nowMs = Dat
           sessionId, taskId: lead.id, error: err instanceof Error ? err.message : String(err),
         }));
         // Only the asks the note showed; the earlier ones ride the next note.
-        if (plan.asks.length) await clearTeamAsks(lead.id, plan.asks.slice(-TEAM_NOTE_MAX.asks).flatMap((a) => a.rows)).catch(() => undefined);
+        if (plan.asks.length) await clearTeamAsks(lead.id, shownAskTasks(plan.asks).flatMap((g) => g.rows)).catch(() => undefined);
         claims.delete(lead.id);
         log.session.info('team note queued', {
           sessionId, taskId: lead.id, kind: plan.kind,
@@ -462,9 +521,11 @@ export async function teamSnapshotText(lead: Task, nowMs = Date.now()): Promise<
       if (t.parent_task_id === lead.id && t.phase !== 'COMPLETE' && !t.plugin_only && !projectById.has(t.id)) projectById.set(t.id, t.project ?? '');
     }
     const open = tasks.filter((t) => projectById.has(t.id));
-    const { pendingTeamAsks } = await import('./team-asks.js');
+    const { pendingTeamAsks, answeredUserAsks } = await import('./team-asks.js');
+    const pending = await pendingTeamAsks(lead.id);
+    const gone = new Set(answeredUserAsks(tasks, pending).map((a) => a.id));
     const plan = planTeamNote(undefined, open, [], new Date(nowMs).toISOString(), {
-      leadId: lead.id, led: led.map((p) => p.project || 'Inbox'), asks: await pendingTeamAsks(lead.id),
+      leadId: lead.id, led: led.map((p) => p.project || 'Inbox'), asks: pending.filter((a) => !gone.has(a.id)),
     });
     if (!plan.led.length && plan.kind === 'none') return '';
     const named = led.length > 1;

@@ -935,6 +935,22 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     return resumed
   }
 
+  /**
+   * The server's expect_reply default (core/sessions/reply-direction.ts): a note up the org reports and
+   * asks for no reply. This copy carries the parent links, not org roles, so here "up" is the sender's
+   * own leaders; a note to Main or a project's VP keeps the old default (both run beside the server).
+   */
+  function reportsUp(home: string, fromTaskId: string | undefined, toTaskId: string | undefined): boolean {
+    if (!fromTaskId || !toTaskId || fromTaskId === toTaskId) return false
+    const byId = new Map(tasksWithOverlay(home).map((t) => [t.id, t] as const))
+    const seen = new Set<string>()
+    for (let t = byId.get(fromTaskId); t?.parent_task_id && !seen.has(t.id); t = byId.get(t.parent_task_id)) {
+      seen.add(t.id)
+      if (t.parent_task_id === toTaskId) return true
+    }
+    return false
+  }
+
   function callerIdentity(home: string, sid: string): { title: string; taskId?: string } {
     const row = sessionOf(home, sid)
     const taskId = row?.taskId
@@ -1315,9 +1331,10 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     if (denied) return denied
     const slice = slices.get(home)!
     const me = callerIdentity(home, callerSid)
-    // Same default as the server: a session asking another session wants the answer.
+    // Same default as the server: a session asking another session wants the answer, except a
+    // note up to its own leader, which reports.
     let row: OfflineRequestRow | undefined
-    if (args.expect_reply !== false) {
+    if (args.expect_reply !== false && !(args.expect_reply === undefined && !args.hands_on && reportsUp(home, me.taskId, target.taskId))) {
       const implicit = args.expect_reply === undefined
       row = {
         id: `rq-${deps.randomHex(6)}`,
@@ -1470,7 +1487,7 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     const slice = slices.get(home)!
     const me = callerIdentity(home, callerSid)
     let row: OfflineRequestRow | undefined
-    if (args.expect_reply !== false) {
+    if (args.expect_reply !== false && !(args.expect_reply === undefined && !args.hands_on && reportsUp(home, me.taskId, target.taskId))) {
       const implicit = args.expect_reply === undefined
       row = {
         id: `rq-${deps.randomHex(6)}`,
@@ -2255,7 +2272,7 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
       const denied = admitWrite(from.sid) ?? roomFor(home)
       if (denied) return denied
       let row: OfflineRequestRow | undefined
-      if (d.expect_reply !== false) {
+      if (d.expect_reply !== false && !(d.expect_reply === undefined && reportsUp(home, fromTaskId, target.taskId))) {
         const implicit = d.expect_reply === undefined
         row = {
           id: `rq-${deps.randomHex(6)}`,

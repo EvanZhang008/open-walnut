@@ -49,6 +49,8 @@ export interface StatusReport {
   next?: string;
   /** When the session wrote it (ISO). */
   at: string;
+  /** When the turn it reports on ended (ISO); absent on a report an older Walnut stored. */
+  turn_ended_at?: string;
 }
 
 /** The facts a status is derived from. Everything optional: a missing fact never invents a state. */

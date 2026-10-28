@@ -213,14 +213,21 @@ export async function startSessionForTask(params: SessionStartParams): Promise<S
     let requestId: string | undefined;
     if (params.handsOn !== undefined && !/^rq-[a-f0-9]{6,}$/.test(params.handsOn)) throw new QuickStartError('hands_on must be an rq-… id', 400);
     if (params.handsOn && params.expectReply === false) throw new QuickStartError('hands_on needs a reply request: leave expect_reply on', 400);
+    // Resolved once: the reply request needs the caller, and so does the team's note of an ask.
+    // A fire-and-forget start that names no caller resolves nothing.
+    const { resolveCaller } = await import('./session-send-core.js');
+    const caller = params.expectReply !== false || params.callerSid ? await resolveCaller(params.callerSid) : undefined;
     if (params.expectReply !== false) {
-      const { resolveCaller } = await import('./session-send-core.js');
-      const caller = await resolveCaller(params.callerSid);
-      if (caller.kind !== 'session') {
+      if (!caller || caller.kind !== 'session') {
         if (params.expectReply === true || params.handsOn) throw new QuickStartError('expect_reply needs a session caller', 400);
       } else {
         callerSessionId = caller.record.claudeSessionId;
         callerTaskId = caller.record.taskId || undefined;
+        // A start up the org reports, as a send does (reply-direction.ts): no request unless asked.
+        if (params.expectReply === undefined && !params.handsOn) {
+          const { goesUp } = await import('./reply-direction.js');
+          if (await goesUp(callerTaskId, task.id).catch(() => false)) callerSessionId = undefined;
+        }
       }
     }
     const attempt: NonNullable<Task['last_start']> = {
@@ -276,6 +283,16 @@ export async function startSessionForTask(params: SessionStartParams): Promise<S
           });
           seeded = true;
           await linkSession(task.id, sid);
+          // A start is an ask too: one from outside the task's team is its VP's to know, as a
+          // message is (team-asks.ts; org_send `task` starts a team task that has no session).
+          if (caller?.kind === 'session' && launch.message) {
+            const { buildPeerWrapper } = await import('../peers/peer-wrapper.js');
+            const envelope = buildPeerWrapper(launch.message, {
+              title: caller.record.title ?? '', shortId: caller.record.claudeSessionId.slice(0, 8),
+              sessionId: caller.record.claudeSessionId, taskId: caller.record.taskId, host: 'local',
+            });
+            void import('../org/team-asks.js').then((m) => m.noteTeamAsk(sid, launch.message, envelope, 'peer')).catch(() => {});
+          }
         }
         const { sessionRunner } = await import('../../providers/claude-code-session.js');
         const starting = sessionRunner.startSession({ ...launch, preassignedSessionId: sid, runtimeId: sid ? undefined : runtimeId, waitForSpawn: true }).then(async (ready) => {

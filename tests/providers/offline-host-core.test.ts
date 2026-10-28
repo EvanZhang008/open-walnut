@@ -254,6 +254,16 @@ describe('offline host: messages between sessions on this host', () => {
     expect(h.delivered[0].text).not.toContain('Reply when done')
   })
 
+  it('a note up to its own leader asks for no reply unless the worker asks for one, as on the server', async () => {
+    const h = harness()
+    h.host.configure(slice())
+    const up = await call(h, B, 'task_send', { to: 'mtaskaaa-0001', text: 'The page is live; nothing for you to do.' })
+    expect(up.ok && up.result.requestId).toBeUndefined()
+    expect(h.delivered[0].text).not.toContain('Reply when done')
+    const asked = await call(h, B, 'task_send', { to: 'mtaskaaa-0001', text: 'Which header?', expect_reply: true })
+    expect(asked.ok ? String(asked.result.requestId) : '').toMatch(/^rq-/)
+  })
+
   it('a task with two live sessions here gets the message in its current one, else the newest, as on the server', async () => {
     const D = 'eeeeeeee-5555-4555-8555-555555555555'
     const twoOf = (sessionId?: string) => slice({

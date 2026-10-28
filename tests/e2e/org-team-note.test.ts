@@ -175,7 +175,7 @@ describe('what reaches the lead without a message from anyone', () => {
     ])
     _resetTeamNoteClaimsForTesting()
     const note = await pendingOrgDigest(LEAD_SID)
-    expect(note!.text).toContain('Asked of your teams by others:\n- "Water the roses", from the user (just now): Please also renew the parking permit.\n- "Water the roses", from Main (just now): Check the fence too')
+    expect(note!.text).toContain('Asked of your teams by others:\n- "Water the roses": the user is talking with it in its own chat (just now): "Please also renew the parking permit."; Main added (just now): "Check the fence too"\n')
     await note!.markTold()
     expect(await pendingTeamAsks(leadId)).toEqual([])
     for (const m of await getQueue(sid)) await deleteMessage(sid, m.id)
@@ -208,7 +208,8 @@ describe('what reaches the lead without a message from anyone', () => {
     _resetTeamNoteClaimsForTesting()
     const note = await pendingOrgDigest(LEAD_SID)
     const asked = note!.text.slice(note!.text.indexOf('Asked of your teams by others:'))
-    expect(asked).toMatch(/^Asked of your teams by others:\n- "Plan the raised beds", from the user \(a question in its chat, just now\): How much compost\?\n- "Plan the raised beds", from the user \(a question in its chat, 3 messages, the latest just now\): How deep should the beds be\?\n- "Plan the raised beds", from the user \(2 messages, the latest just now\): Order the timber too\.; the latest: Pine is fine\.\n/)
+    // One line for the task, however many questions and messages it was.
+    expect(asked).toMatch(/^Asked of your teams by others:\n- "Plan the raised beds": the user is talking with it in its own chat \(6 messages, the latest just now\): "Pine is fine\."\n(?!- "Plan)/)
     expect(note!.text).not.toContain('[Question')
     // A message that comes in while the note is on its way is not cleared with it: the next note tells it.
     await say('And stain it.', 7)
@@ -216,9 +217,36 @@ describe('what reaches the lead without a message from anyone', () => {
     expect((await pendingTeamAsks(leadId)).map((a) => [a.gist, a.count, a.latest])).toEqual([['And stain it.', 1, undefined]])
     _resetTeamNoteClaimsForTesting()
     const next = await pendingOrgDigest(LEAD_SID)
-    expect(next!.text).toContain('- "Plan the raised beds", from the user (just now): And stain it.\n')
+    expect(next!.text).toContain('- "Plan the raised beds": the user is talking with it in its own chat (just now): "And stain it."\n')
     await next!.markTold()
     expect(await pendingTeamAsks(leadId)).toEqual([])
+    for (const m of await getQueue(sid)) await deleteMessage(sid, m.id)
+  })
+
+  it('what the user said in a task\'s own chat that the task answered is no ask of the team', async () => {
+    const sid = '77777777-8888-4999-aaaa-bbbbbbbbbbbb'
+    const hedge = (await addTask({ title: 'Trim the hedge', project: 'Garden' })).task.id
+    await createSessionRecord(sid, hedge, 'Garden', WALNUT_HOME)
+    await sendMessageToSession(sid, 'Keep it at waist height.', { source: 'ui' })
+    await until('the ask is recorded', async () => (await pendingTeamAsks(leadId)).some((a) => a.taskId === hedge))
+    // A failed delivery or a reap moves the session's status, which is no answer: still listed.
+    await updateSessionRecord(sid, { process_status: 'idle', last_status_change: new Date(Date.now() + 1000).toISOString() })
+    _resetTeamNoteClaimsForTesting()
+    const before = await pendingOrgDigest(LEAD_SID)
+    expect(before?.text ?? '').toContain('"Trim the hedge": the user is talking with it in its own chat')
+    _resetTeamNoteClaimsForTesting()
+    // Its turn-end report came after the message: it answered.
+    // A report read after the message about a turn that ended before it answers nothing.
+    await updateTaskRaw(hedge, { status_report: { state: 'done', now: 'Trimmed', at: new Date(Date.now() + 1000).toISOString(), turn_ended_at: new Date(Date.now() - 60_000).toISOString() } })
+    _resetTeamNoteClaimsForTesting()
+    const stale = await pendingOrgDigest(LEAD_SID)
+    expect(stale?.text ?? '').toContain('"Trim the hedge": the user is talking with it in its own chat')
+    await updateTaskRaw(hedge, { status_report: { state: 'done', now: 'Trimmed to waist height', at: new Date(Date.now() + 1000).toISOString(), turn_ended_at: new Date(Date.now() + 1000).toISOString() } })
+    _resetTeamNoteClaimsForTesting()
+    const note = await pendingOrgDigest(LEAD_SID)
+    expect(note?.text ?? '').not.toContain('"Trim the hedge": the user')
+    await note?.markTold()
+    expect((await pendingTeamAsks(leadId)).some((a) => a.taskId === hedge)).toBe(false)
     for (const m of await getQueue(sid)) await deleteMessage(sid, m.id)
   })
 

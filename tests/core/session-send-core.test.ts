@@ -517,6 +517,39 @@ describe('performSessionSend — expect_reply', () => {
     expect(text).not.toContain('Reply when done');
   });
 
+  it('a note up the org asks for no reply by default; work handed down or across still does', async () => {
+    // 2026-10-27, the org's reflection: "X is live, nothing for you to do" reached Main with a request id.
+    tasks = [
+      { id: 'task-main', title: 'Main', org_role: 'main' },
+      { id: 'task-lead', title: 'Garden lead', org_role: 'lead', project: 'Garden' },
+      { id: 'task-work', title: 'Water the roses', parent_task_id: 'task-lead', project: 'Garden' },
+      { id: 'task-sub', title: 'Fix the hose', parent_task_id: 'task-work', project: 'Garden' },
+      { id: 'task-other', title: 'Paint the shed', project: 'Shed' },
+    ];
+    sessions = [
+      rec('sess-main', { title: 'Main', taskId: 'task-main' }), rec('sess-lead', { title: 'Garden lead', taskId: 'task-lead' }),
+      rec('sess-work', { title: 'Water the roses', taskId: 'task-work' }), rec('sess-sub', { title: 'Fix the hose', taskId: 'task-sub' }),
+      rec('sess-other', { title: 'Paint the shed', taskId: 'task-other' }),
+    ];
+    // Each its own words: the peer throttle drops a repeat of the same text.
+    let n = 0;
+    const send = (from: string, to: string, extra: Record<string, unknown> = {}) =>
+      performSessionSend({ to, text: `The page is live (${++n}).`, callerSid: from, ...extra });
+    // Up: its leader, its leader's leader, Main.
+    for (const [from, to] of [['sess-work', 'sess-lead'], ['sess-sub', 'sess-lead'], ['sess-lead', 'sess-main'], ['sess-work', 'sess-main']] as const) {
+      sendMessageToSession.mockClear();
+      expect((await send(from, to)).requestId, `${from} -> ${to}`).toBeUndefined();
+      expect(deliveredText()).toContain('It asks for no reply: answer it only when it asks you something');
+      expect(deliveredText()).not.toContain('Reply when done');
+    }
+    // A question up asks for its answer.
+    expect((await send('sess-work', 'sess-lead', { expectReply: true })).requestId).toMatch(/^rq-/);
+    // Down and across: a reply is asked for, as before.
+    for (const [from, to] of [['sess-lead', 'sess-work'], ['sess-main', 'sess-lead'], ['sess-work', 'sess-other'], ['sess-main', 'sess-sub']] as const) {
+      expect((await send(from, to)).requestId, `${from} -> ${to}`).toMatch(/^rq-/);
+    }
+  });
+
   it('registers a pending row, stamps the request in the tag, and adds ONE trailer line', async () => {
     sessions = [
       rec('sess-caller-4', { title: 'Asker', host: 'devbox' }),

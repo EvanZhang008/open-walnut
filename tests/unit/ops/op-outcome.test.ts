@@ -22,7 +22,7 @@
 import { describe, it, expect } from 'vitest'
 import { z } from 'zod'
 import { getOp } from '../../../src/ops/index.js'
-import { dispatchHint, withOutcome, REPLY_ARRIVES_HINT } from '../../../src/ops/outcome.js'
+import { dispatchHint, withOutcome, NO_REPLY_ASKED, REPLY_ARRIVES_HINT } from '../../../src/ops/outcome.js'
 
 type Method = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
 type Reply = (method: Method, path: string, body?: unknown) => Promise<unknown>
@@ -881,8 +881,8 @@ describe('task_send: queued, deferred, and replies', () => {
       { to: TASK.id, text: 'One more thing.' })
     expect(r.outcome).toContain('parked on a human permission prompt')
     expect(r.outcome).toContain('Do NOT resend')
-    // No request id: the plain arrival line still tells the caller not to poll.
-    expect(r.next).toBe(REPLY_ARRIVES_HINT)
+    // No request id: nothing comes back, and the caller is told not to wait for it.
+    expect(r.next).toBe(NO_REPLY_ASKED)
   })
 
   it('a reply routes by request id even when the body names no target', () => {

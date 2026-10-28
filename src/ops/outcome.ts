@@ -39,6 +39,11 @@ export const REPLY_ARRIVES_HINT =
   'Its reply arrives in your session on its own; do not poll. '
   + 'Only if you cannot continue without it: walnut wait <task-id | rq-id>.'
 
+/** A message that carries no reply request (a note up the org, a fire-and-forget): nothing to wait for. */
+export const NO_REPLY_ASKED =
+  'It asks for no reply, so do not wait for one; the receiver answers only if it has something you must act on. '
+  + 'To ask a question, send with expect_reply=true.'
+
 /** What a parent hears about a subtask it started, beyond the reply (sessions/subtask-notices.ts). */
 export const SUBTASK_WATCH_HINT =
   'A subtask of yours also tells you, through Walnut, whenever it stops, completes, errors or waits on the user, '

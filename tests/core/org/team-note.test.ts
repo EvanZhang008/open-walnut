@@ -168,10 +168,10 @@ describe('what waits on the lead, what it leads, what others asked', () => {
     const asks = [{ id: 'k1', taskId: 'a', title: 'a title', from: 'Main', gist: 'Also check the fence', at: at(58) }]
     const plan = planTeamNote(prev, base, [], NOW, { ...ctx, asks })
     expect(plan.kind).toBe('moved')
-    expect(buildTeamNoteText(lead, plan, at(40), Date.parse(NOW))).toContain('Asked of your teams by others:\n- "a title", from Main (2 min ago): Also check the fence')
+    expect(buildTeamNoteText(lead, plan, at(40), Date.parse(NOW))).toContain('Asked of your teams by others:\n- "a title": Main added (2 min ago): "Also check the fence"\n')
   })
 
-  it('the same question or chat is told once, in its own words, with how many messages it was', () => {
+  it('everything asked of one task is one line: the user\'s chat with its count and latest words, then each other sender', () => {
     const prev = planTeamNote(undefined, base, [], at(40)).next
     const ask = (id: string, min: number, extra: Record<string, unknown>) =>
       ({ id, taskId: 'a', title: 'a title', from: 'the user', gist: '', at: at(min), ...extra })
@@ -193,10 +193,14 @@ describe('what waits on the lead, what it leads, what others asked', () => {
     ])
     const text = buildTeamNoteText(lead, planTeamNote(prev, base, [], NOW, { ...ctx, asks }), at(40), Date.parse(NOW))
     expect(text).toContain('Asked of your teams by others:\n'
-      + '- "a title", from the user (a question in its chat, 3 messages, the latest 16 min ago): Who removes the finalizer?\n'
-      + '- "a title", from the user (a question in its chat, 2 messages, the latest 15 min ago): read it in the task (task_history)\n'
-      + '- "a title", from Main (11 min ago): Check the fence too\n'
-      + '- "a title", from the user (4 messages, the latest 10 min ago): sure, what else to decide?; the latest: is the big function async?\n')
+      + '- "a title": the user is talking with it in its own chat (9 messages, the latest 10 min ago): "is the big function async?"; '
+      + 'Main added (11 min ago): "Check the fence too"\n')
+    // Several tasks: one line each, the newest last, the rest counted.
+    const many = Array.from({ length: TEAM_NOTE_MAX.asks + 2 }, (_, i) => ({ id: `t${i}`, taskId: `task-${i}`, title: `task ${i}`, from: 'Main', by: 'peer' as const, gist: `Do ${i}`, at: at(41 + i) }))
+    const told = buildTeamNoteText(lead, planTeamNote(prev, base, [], NOW, { ...ctx, asks: many }), at(40), Date.parse(NOW))
+    expect(told.match(/^- "task \d+": Main added/gm)).toHaveLength(TEAM_NOTE_MAX.asks)
+    expect(told).toContain(`- "task ${TEAM_NOTE_MAX.asks + 1}": Main added`)
+    expect(told).toContain('- and 2 more tasks, in the next note')
     expect(text).not.toContain('[Question')
     expect(text).not.toContain('Back to the main')
   })

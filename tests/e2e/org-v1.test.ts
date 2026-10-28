@@ -126,6 +126,22 @@ describe('/api/v1/org', () => {
     expect(byId.json).toMatchObject({ kind: 'task', task: { id: a.id } })
   })
 
+  it('org_send `task`: more for a task already in the contact\'s team goes to it; one outside is refused', async () => {
+    // 2026-10-27, the org's reflection: every follow-up Main had for a task went through its VP.
+    const lead = (await api<{ task: { id: string } }>('POST', '/org/contact', { to: 'Walnut' })).json.task.id
+    const worker = (await listTasks()).find((t) => t.project === 'Walnut' && t.title === 'Fix the reconnect bug')!
+    const sub = (await addTask({ title: 'Write the reconnect test', project: 'Walnut', parent_task_id: worker.id })).task
+    for (const id of [worker.id, sub.id]) {
+      const direct = await api<{ task: { id: string }; kind: string; via: { id: string } }>('POST', '/org/contact', { to: 'Walnut', task: id })
+      expect(direct.json).toMatchObject({ kind: 'task', task: { id }, via: { id: lead } })
+    }
+    const health = (await listTasks()).find((t) => t.project === 'Health')!
+    const outside = await api<{ code?: string; error?: string }>('POST', '/org/contact', { to: 'Walnut', task: health.id })
+    expect([outside.status, outside.json.code]).toEqual([400, 'task_outside_contact'])
+    expect((await api<{ code?: string }>('POST', '/org/contact', { to: 'Walnut', task: 'no-such-task' })).json.code).toBe('task_not_found')
+    await deleteTask(sub.id)
+  })
+
   it('a lead\'s launch follows its project and is never written to the lead', async () => {
     type Contact = { task: { id: string }; started: boolean; launch?: { cwd: string; host: string | null } }
     const own = path.join(WALNUT_HOME, 'repos', 'site')

@@ -1331,11 +1331,14 @@ team is talked to through that task; the Inbox never gets a lead.
   a lead → its teams; any other task → its workers.
 - `POST /api/v1/org/main` → `200 { task }`: Main's task, made once (local, filed
   under `Ask Walnut`).
-- `POST /api/v1/org/contact { "to": project name | task id }` → `200 { task,
+- `POST /api/v1/org/contact { "to": project name | task id, "task"? }` → `200 { task,
   kind: "lead" | "team" | "task", project, started, launch? }`; `launch`
   (`{ cwd, host }`, host `null` = the primary) is where a lead with no session
   would start, read only and absent when it has no place yet; `400 no_lead_for_inbox`,
-  `404 unknown_contact`.
+  `404 unknown_contact`. With `task` (additive, 2026-10-27; `org_send`'s): that task when it
+  is the contact or works under it (its team, its subtasks), as `{ task, kind: "task", via }`
+  (`via` = the contact), so a follow-up goes to it directly and the contact reads it in its
+  next team note; `400 task_outside_contact`, `404 task_not_found`.
 - `POST /api/v1/org/vp { "project", "vp" }` → `200 { project, vp, lead?, closed,
   handover, moved, unchanged? }`: puts `project` under the lead of `vp` (`""` =
   back to its own lead). No task changes project; open workers move to the lead

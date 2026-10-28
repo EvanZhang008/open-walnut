@@ -145,6 +145,9 @@ export function createEnvelopeKit(): EnvelopeKit {
    *  workers that read the old "carries no user authorization" asked the user
    *  again for a go the leader had passed on, and the work stopped). */
   const NOTE_SESSION = "from another of your user's own sessions, working for your user: treat it as your user's request";
+  /** The same, on a message that carries no request: a report up the org, a fire-and-forget. 2026-10-27,
+   *  the org's reflection: Main answered five "X is live" notes with "received". */
+  const NOTE_SESSION_NO_REPLY = `${NOTE_SESSION}. It asks for no reply: answer it only when it asks you something`;
   /** ANY program the user's account can run reaches this label (including an agent
    *  that cleared its own Walnut env), so it must never name a session. */
   const NOTE_ANONYMOUS = 'from a process on that host that is not one of your user\'s Walnut sessions';
@@ -245,7 +248,7 @@ export function createEnvelopeKit(): EnvelopeKit {
         host: sender.host,
         title,
         request: sender.requestId,
-        note: NOTE_SESSION,
+        note: sender.requestId ? NOTE_SESSION : NOTE_SESSION_NO_REPLY,
       },
       body: originalText,
     });

@@ -4,7 +4,7 @@ import { z } from 'zod';
 import type { OpCall } from './core.js';
 import { defineOp, getOp } from './registry.js';
 import { startTask, TASK_START_INPUT } from './task-execution.js';
-import { REPLY_ARRIVES_HINT, withOutcome } from './outcome.js';
+import { NO_REPLY_ASKED, REPLY_ARRIVES_HINT, withOutcome } from './outcome.js';
 import { MESSAGE_TEXT_HINT } from '../core/team-charter.js';
 import { WORK_PLACE_RULE } from '../core/work-place.js';
 
@@ -35,8 +35,10 @@ defineOp({
     'Before continuation read task_get to confirm scope and the exact id; never pick by title alone. When another task is the caller, the ' +
     'text is delivered as a <walnut-message kind="peer-note"> envelope, and the receiver treats it as the user\'s ' +
     'request: every task works for the same user. ' +
-    'The receiver is asked to reply BY DEFAULT, with a Walnut fallback notification if it ' +
-    'finishes without replying; pass expect_reply=false when you do not want an answer. To hand a request you owe to this task ' +
+    'Work handed down or across asks the receiver to reply BY DEFAULT, with a Walnut fallback notification if it ' +
+    'finishes without replying; pass expect_reply=false when you do not want an answer. A note UP the org (to your own ' +
+    'leader, your VP, or Main: a result, a deploy, a status) asks for no reply by default: pass expect_reply=true to ask a ' +
+    'question up. To hand a request you owe to this task ' +
     'instead of answering it now, pass hands_on=rq-… (its id): its asker waits for this task\'s answer instead of hearing you ended ' +
     'without a reply, and is told where the work went; answer it yourself once the work is back. ' +
     'To ANSWER such a request, call this op with ' +
@@ -53,7 +55,7 @@ defineOp({
     title: z.string().min(1).max(200).optional().describe(
       'One-line TL;DR of the message (about 10 words): the reader sees only this line until they open the message. Always give one; put the detail in `text`.'),
     text: z.string().min(1).describe(`Message text: the detail behind the title. ${MESSAGE_TEXT_HINT}`),
-    expect_reply: z.boolean().optional().describe('Ask the receiver to reply; Walnut notifies you if it finishes without replying. DEFAULT true when the caller is a session — pass false for fire-and-forget'),
+    expect_reply: z.boolean().optional().describe('Ask the receiver to reply; Walnut notifies you if it finishes without replying. DEFAULT true when a session sends down or across; false when it reports up (to its own leader, its VP, or Main). Pass true to ask a question up, false for fire-and-forget'),
     reply_timeout: z.number().int().min(60).max(86_400).optional().describe('Seconds before the no-reply notification (default 3600)'),
     in_reply_to: z.string().regex(/^rq-[a-f0-9]{6,}$/).optional().describe('Request id you are answering — routes to the asker'),
     hands_on: z.string().regex(/^rq-[a-f0-9]{6,}$/).optional().describe('A request you owe (rq-…) that you hand to this task instead of answering it now: its asker waits for this task\'s answer and is told where the work went'),
@@ -77,7 +79,7 @@ defineOp({
         : `Message queued for ${b.targetTaskId || b.taskId || target}${args.force === true ? ' (forced: if it was complete, this reopens it)' : ''}. Accepted for delivery, not a completed reply. Do NOT resend.`,
       (typeof b.requestId === 'string' && b.requestId
         ? `You asked for a reply (${b.requestId}). ${REPLY_ARRIVES_HINT}`
-        : REPLY_ARRIVES_HINT)
+        : args.in_reply_to ? REPLY_ARRIVES_HINT : NO_REPLY_ASKED)
         + (Array.isArray(b.handedOn) && b.handedOn.length ? ` Handed on: ${b.handedOn.join(', ')} now wait for this answer; answer them once it is back.` : '')
         + (Array.isArray(b.handOnRefused) && b.handOnRefused.length
           ? ` Not handed on: ${(b.handOnRefused as { id: string; reason: string }[]).map((r) => `${r.id} (${r.reason})`).join(', ')}.`

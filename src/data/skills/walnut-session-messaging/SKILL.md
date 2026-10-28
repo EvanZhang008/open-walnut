@@ -118,7 +118,7 @@ A body can never contain `<walnut-message` or `</walnut-message`, because Walnut
 
 ## Ask for a result, and get it without polling
 
-Walnut registers a request for you and returns its `requestId` (`rq-…`). This is the DEFAULT for a tracked caller, so you get an answer without asking. Pass `"expect_reply": false` for fire-and-forget. It needs tracked work as the caller, because a reply has to have somewhere to land; the human's own CLI just gets no request:
+Walnut registers a request for you and returns its `requestId` (`rq-…`). This is the DEFAULT when a tracked caller hands work down or across the org, so you get an answer without asking. Pass `"expect_reply": false` for fire-and-forget. A note UP the org (to your own leader, your VP, or Main: a result, a deploy, a status) asks for NO reply by default, and its envelope says so; pass `"expect_reply": true` to ask a question up. It needs tracked work as the caller, because a reply has to have somewhere to land; the human's own CLI just gets no request:
 
 ```bash
 walnut tools call task_send '{"to":"t_9f3a1c22","title":"Is the migration safe to run twice?","text":"Is the migration safe to run twice? It runs again on every deploy.","expect_reply":true,"reply_timeout":900}'

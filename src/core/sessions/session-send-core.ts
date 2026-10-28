@@ -472,7 +472,11 @@ export async function performSessionSend(input: SessionSendInput): Promise<Sessi
   // errors, because then the caller asked for something impossible.
   // (An inReplyTo send never reaches here — performReply returns at :259.)
   let request: (SessionRequest & { handOnRefused?: { id: string; reason: string }[] }) | undefined;
-  if (input.expectReply !== false) {
+  // A note up the org (to its own leader, its VP, or Main) reports: no request unless asked for one
+  // (reply-direction.ts). A hand-off keeps its asker's request.
+  const reportsUp = input.expectReply === undefined && !input.handsOn && caller.kind === 'session'
+    && await (await import('./reply-direction.js')).goesUp(caller.record.taskId, target.taskId ?? target.session.taskId).catch(() => false);
+  if (input.expectReply !== false && !reportsUp) {
     if (caller.kind !== 'session') {
       if (input.handsOn) throw new SendError('bad_request', 'hands_on needs a session caller: only a session owes a request');
       if (input.expectReply === true) {

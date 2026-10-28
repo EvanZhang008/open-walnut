@@ -1169,13 +1169,15 @@ export async function runTriage(p: OnTurnCompletePayload, opts: { final?: boolea
         // row would announce it as completed again (updateTaskRaw names the event by phase).
         const current = await getTask(taskId).catch(() => null);
         if (current && current.phase !== 'COMPLETE' && current.status !== 'done') {
-          await updateTaskRaw(taskId, { status_report: statusReport }, {
+          // When the turn it reports on ended: the report itself may be read minutes later.
+          const turnEnded = turnEndedAt.get(p.sessionId) ?? askedAt;
+          await updateTaskRaw(taskId, { status_report: { ...statusReport, turn_ended_at: new Date(turnEnded).toISOString() } }, {
             emitEvent: true, source: 'status-report', shouldUpdate: (cur) => cur.phase !== 'COMPLETE' && cur.status !== 'done',
           });
           // The report is the task's own word on where it stands: it moves the phase, which is
           // what every surface counts (sessions/report-phase.ts).
           const { applyReportPhase } = await import('../sessions/report-phase.js');
-          await applyReportPhase(taskId, p.sessionId, statusReport, turnEndedAt.get(p.sessionId) ?? askedAt);
+          await applyReportPhase(taskId, p.sessionId, statusReport, turnEnded);
         }
       } catch (err) {
         log.session.debug('turn-complete-summary: status report persist skipped', {

@@ -113,6 +113,18 @@ orgV1Router.post('/org/contact', async (req: Request, res: Response, next: NextF
     const caller = await resolveCaller(Array.isArray(rawSid) ? rawSid[0] : rawSid)
     const askerTaskId = caller.kind === 'human' ? undefined : caller.kind === 'session' ? caller.record.taskId ?? '' : ''
     const contact = await resolveOrgContact(to, { askerTaskId })
+    // `task`: more for a task the contact already gave this work to, sent to it directly; the contact
+    // reads it in its next team note (team-asks.ts) instead of spending a turn passing it on.
+    const named = typeof req.body?.task === 'string' ? req.body.task.trim() : ''
+    if (named) {
+      const target = await teamTaskOf(contact, named)
+      res.json({
+        task: brief(target), kind: 'task', project: contact.project, started: hasSession(target),
+        via: { ...brief(contact.task), kind: contact.kind },
+        ...(contact.handedOverBy ? { handedOverBy: contact.handedOverBy } : {}),
+      })
+      return
+    }
     const started = hasSession(contact.task)
     const launch = contact.kind === 'lead' && !started ? await contactLaunch(contact.task) : undefined
     res.json({
@@ -123,6 +135,27 @@ orgV1Router.post('/org/contact', async (req: Request, res: Response, next: NextF
     sendError(res, next, err)
   }
 })
+
+/** The task `id` names, when it is the contact or works under it: in its team, or below it. */
+async function teamTaskOf(contact: { task: Task; kind: string; project?: string }, id: string): Promise<Task> {
+  const { listTasks } = await import('../../core/task-manager.js')
+  const tasks = await listTasks()
+  const exact = tasks.find((t) => t.id === id)
+  const byPrefix = exact ? [exact] : tasks.filter((t) => t.id.startsWith(id))
+  if (byPrefix.length !== 1) throw new OrgError('task_not_found', 404, byPrefix.length ? `"${id}" names more than one task: give the whole id.` : `No task "${id}".`)
+  const target = byPrefix[0]!
+  if (target.id === contact.task.id) return target
+  const byId = new Map(tasks.map((t) => [t.id, t] as const))
+  const seen = new Set<string>()
+  for (let t: Task | undefined = target; t?.parent_task_id && !seen.has(t.id); t = byId.get(t.parent_task_id)) {
+    seen.add(t.id)
+    if (t.parent_task_id === contact.task.id) return target
+  }
+  const { teamOf } = await import('../../core/org/team-asks.js')
+  if (contact.task.org_role === 'lead' && teamOf(tasks, target)?.lead.id === contact.task.id) return target
+  throw new OrgError('task_outside_contact', 400,
+    `"${target.title}" (${target.id}) is not in ${contact.project ? `the ${contact.project} team` : 'that team'}: send it there yourself with task_send, or leave out \`task\`.`)
+}
 
 orgV1Router.post('/org/vp', async (req: Request, res: Response, next: NextFunction) => {
   try {

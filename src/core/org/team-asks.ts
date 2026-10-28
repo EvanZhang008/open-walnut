@@ -250,3 +250,21 @@ export async function noteTeamAsk(
     log.session.debug('team ask not recorded', { sessionId, error: err instanceof Error ? err.message : String(err) });
   }
 }
+
+/**
+ * The user's asks the task already answered: the turn its session last reported on
+ * (`task.status_report.turn_ended_at`, the FOR_USER lines) ended after the ask's latest message.
+ * 2026-10-27, the org's reflection: the user talking with a task in its own chat is not the team
+ * being asked something by others once the task has answered; a lead's note listed each of those
+ * lines anyway. The turn's end, not the report's time (a report is read up to minutes after its turn,
+ * so a message in between would read as answered) and not the session's process status (a failed
+ * delivery or a reap moves that without any answer). A report with no turn time answers nothing.
+ */
+export function answeredUserAsks(tasks: readonly Task[], asks: readonly TeamAsk[]): TeamAsk[] {
+  const byId = new Map(tasks.map((t) => [t.id, t] as const));
+  return asks.filter((a) => {
+    if (!byUser(readAsk(a))) return false;
+    const ended = Date.parse(byId.get(a.taskId)?.status_report?.turn_ended_at ?? '');
+    return Number.isFinite(ended) && ended > Date.parse(a.lastAt ?? a.at);
+  });
+}
