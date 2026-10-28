@@ -491,30 +491,30 @@ re-run the job afterwards (`gh run rerun <run-id> --failed`) and it publishes.
 
 ### npm packages
 
-The six platform packages need the same, once, and npm sets up a trusted publisher only for
-a package that exists. So before the first release that ships the file, the owner:
+The platform packages publish the same way, and npm lets the workflow publish only to a package
+name that exists with a trusted publisher, while creating a name takes the owner's 2FA. So every
+name is reserved ahead, once: the six targets and `windows-x64` and `windows-arm64`, which Bun
+also builds. Each holds a tiny placeholder, `0.0.0-reserved.0` under the tag `reserved` (a
+`package.json` and a README, with the target's `os`/`cpu`/`libc`); the launcher pins exact
+versions, so it never installs one. `NPM_RESERVED` in `scripts/npm-packages.mjs` lists the names
+that are set up, and `tests/scripts/release-files.test.ts` fails when a target is not in it.
 
-1. Creates the npm organization `open-walnut` (the `@open-walnut` scope), free for public
+To set up a name, signed in to npm with 2FA (`npm login`, in the browser):
+
+1. The npm organization `open-walnut` (the `@open-walnut` scope) must exist, free for public
    packages.
-2. Builds and publishes the platform packages once by hand, from a checkout at that release's
-   commit, signed in with 2FA (`--provenance` only works from CI):
+2. Publish the placeholder from a directory holding its `package.json` and README:
+   `npm publish --access public --tag reserved`.
+3. Set its trusted publisher with npm 12 (npm 11 sends no permissions, and the registry answers
+   `400 permissions is required`): `npm trust github @open-walnut/<target> --file release.yml
+   --repo <owner>/open-walnut --allow-publish --yes` (2FA again, so tick npm's "skip for 5
+   minutes" in the browser).
+4. Add the name to `NPM_RESERVED`.
 
-   ```bash
-   bun install --frozen-lockfile
-   bun scripts/release-build.mjs --version <x.y.z> --out /tmp/walnut-release
-   for t in darwin-arm64 darwin-x64 linux-arm64 linux-x64 linux-arm64-musl linux-x64-musl; do
-     npm publish "/tmp/walnut-release/npm/@open-walnut/$t" --access public --tag latest
-   done
-   ```
-
-   (or any version, a `0.0.0-bootstrap.0` under `--tag bootstrap`: the release publishes its own
-   versions on top). Leave `open-walnut` itself to the workflow.
-3. Sets the trusted publisher on each: `npm trust github @open-walnut/<target> --file
-   release.yml --repo <owner>/open-walnut`, or on npmjs.com as above.
-
-Until a platform package has its trusted publisher, the release fails at that package, before
-the launcher: nothing a user installs changes. `scripts/npm-packages.mjs publish` skips the
-packages already up, so a re-run after the setup finishes the publish.
+A target whose name is not set up fails the release at that package, before the launcher, so
+nothing a user installs changes, and the error says the name needs this setup.
+`scripts/npm-packages.mjs publish` skips the packages already up, so a re-run after the setup
+finishes the publish.
 
 ## npm 12
 

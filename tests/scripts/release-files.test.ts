@@ -15,7 +15,7 @@ import path from 'node:path'
 import zlib from 'node:zlib'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { TARGETS, assetName, builtName, fileName, filesIn, writeAssets } from '../../scripts/release-files.mjs'
-import { INSTALL_ACCEPT, LAUNCHER, LAUNCHER_LIB, buildPackages, installerSees, launcherManifest, npmNeedsAuth, platformManifest, probeRegistry, publishOrder, publishPackages, waitUntilVisible } from '../../scripts/npm-packages.mjs'
+import { INSTALL_ACCEPT, LAUNCHER, LAUNCHER_LIB, buildPackages, installerSees, launcherManifest, npmNeedsAuth, NPM_RESERVED, platformManifest, probeRegistry, publishOrder, publishPackages, waitUntilVisible } from '../../scripts/npm-packages.mjs'
 import { createRequire } from 'node:module'
 import { formula } from '../../scripts/homebrew/formula.mjs'
 import { hostTarget } from '../../scripts/release-build.mjs'
@@ -183,6 +183,13 @@ describe('npm-packages.mjs', () => {
     try { publishPackages({ ...quiet, exists: () => true }) } catch (err) { thrown = err }
     expect(String(thrown)).toMatch(/exited 1:[\s\S]*ENEEDAUTH/)
     expect(String(thrown)).not.toMatch(/never been published/)
+  })
+
+  it('ships only targets whose npm name is reserved with a trusted publisher', () => {
+    // A new name needs the owner's 2FA once (releasing.md, "npm packages"); without it every
+    // nightly and stable fails at that package, as all of them did from 2026-10-28.
+    const unreserved = TARGETS.map(({ target }) => target).filter((t) => !NPM_RESERVED.includes(t))
+    expect(unreserved, `reserve these on npm first (releasing.md, "npm packages"), then add them to NPM_RESERVED`).toEqual([])
   })
 
   it('reads a login refusal from npm\'s words, not from any 4xx', () => {

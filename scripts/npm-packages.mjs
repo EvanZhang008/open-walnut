@@ -48,6 +48,15 @@ export const LAUNCHER = 'open-walnut'
 export const SCOPE = '@open-walnut'
 export const platformName = (target) => `${SCOPE}/${target}`
 
+/**
+ * Every platform package name that exists on npm with this repo's release.yml as its trusted
+ * publisher (docs/reference/releasing.md, "npm packages"). The workflow can publish only to a
+ * name that exists, and creating one takes the owner's 2FA, so names are reserved ahead: the
+ * release targets and the two Windows ones Bun also builds. A target added without its name here
+ * would fail every release at its first publish; the release-files test refuses it first.
+ */
+export const NPM_RESERVED = ['darwin-arm64', 'darwin-x64', 'linux-arm64', 'linux-x64', 'linux-arm64-musl', 'linux-x64-musl', 'windows-x64', 'windows-arm64']
+
 const OS_WORDS = { darwin: 'macOS', linux: 'Linux' }
 const describeTarget = ({ os, cpu, libc }) => `${OS_WORDS[os]} ${cpu}${libc === 'musl' ? ' (musl)' : ''}`
 
