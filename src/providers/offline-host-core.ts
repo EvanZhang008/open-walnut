@@ -382,6 +382,13 @@ export function escapeSenderWords(text: string): string {
 
 export function createOfflineHostCore(deps: OfflineHostDeps) {
   const { fs, path, kit } = deps
+  // The same as the module's escapeSenderWords: the factory body reaches nothing at
+  // module scope, because daemon-source.ts inlines only its source text.
+  const escapeSenderWords = (text: string): string => {
+    if (!/system-reminder/i.test(text)) return text
+    return text.replace(/(<|&(?:amp;)*lt;)(\/?)(system-reminder)/gi, (_m, open: string, slash: string, name: string) =>
+      `${open === '<' ? '&lt;' : `&amp;${open.slice(1)}`}${slash}${name}`)
+  }
   const MAX_RECORDS = 1000
   const MAX_ARGS_BYTES = 256 * 1024
   const WRITE_BUDGET = 30
