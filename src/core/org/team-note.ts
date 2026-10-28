@@ -108,6 +108,8 @@ export interface TeamNotePlan {
   kind: 'none' | 'now' | 'moved';
   needs: TeamNewsItem[];
   waits: LeadWait[];
+  /** Team tasks the machine stopped, newly: Walnut resumes them, the lead restarts what it cannot. */
+  machine: LeadWait[];
   moved: TeamNewsItem[];
   added: TeamNewsItem[];
   done: string[];
@@ -152,13 +154,21 @@ function isStuck(t: TeamNewsTask): boolean {
   return t.user_status?.state === 'waiting' && t.user_status.kind === 'stuck';
 }
 
+/** Stopped by the machine (user-status.ts machineStop), or waiting on it by its own report: Walnut
+ *  resumes it once the cause clears, and the lead is the one to restart it when that fails. The
+ *  user is not told (2026-10-28: a host drop listed two tasks under "Needs the user now"). */
+export function isMachineStop(t: TeamNewsTask): boolean {
+  const s = t.user_status;
+  return !!s && s.state !== 'needs' && (s.stoppedBy === 'machine' || (s.state === 'waiting' && s.kind === 'machine'));
+}
+
 /** What a lead is told about: an ask for the user, the session's own words, or being stuck.
  *  A turn that only started or ended, the same words reported again, or what Walnut says a
  *  task waits on after a phase move ("Its worker (1 open)") is not news. */
 function newsKey(t: TeamNewsTask): string {
   const item = newsItem(t);
   if (item.state === 'needs') return `needs|${item.words}`;
-  return `|${(t.user_status?.now ?? '').replace(/\s+/g, ' ').trim()}|${isStuck(t) ? 'stuck' : ''}`;
+  return `|${(t.user_status?.now ?? '').replace(/\s+/g, ' ').trim()}|${isStuck(t) ? 'stuck' : ''}${isMachineStop(t) ? `|machine:${clean(t.user_status?.waitingOn)}` : ''}`;
 }
 
 export function teamFingerprint(t: TeamNewsTask): string {
@@ -188,14 +198,16 @@ export function planTeamNote(
   const byId = new Map(open.map((t) => [t.id, t] as const));
   const waitOf = (i: TeamNewsItem): LeadWait => ({ ...i, waitingOn: clean(byId.get(i.taskId)?.user_status?.waitingOn) });
   const waiting = (i: TeamNewsItem) => waitsOnLead(byId.get(i.taskId)!, ctx.leadId);
+  const stopped = (i: TeamNewsItem) => isMachineStop(byId.get(i.taskId)!);
   const asks = groupTeamAsks(ctx.asks ?? []);
   const none = { added: [] as TeamNewsItem[], done: [] as string[], ledAdded: [] as string[], ledRemoved: [] as string[] };
   if (!prev) {
     const needs = news.filter((i) => i.state === 'needs');
     const waits = news.filter((i) => i.state !== 'needs' && waiting(i)).map(waitOf);
-    const moved = news.filter((i) => i.state !== 'needs' && !waiting(i) && i.reported).slice(0, 5);
-    const any = needs.length + waits.length + moved.length + asks.length > 0;
-    return { kind: any ? 'now' : 'none', needs, waits, moved, asks, led, ...none, next };
+    const machine = news.filter((i) => i.state !== 'needs' && !waiting(i) && stopped(i)).map(waitOf);
+    const moved = news.filter((i) => i.state !== 'needs' && !waiting(i) && !stopped(i) && i.reported).slice(0, 5);
+    const any = needs.length + waits.length + machine.length + moved.length + asks.length > 0;
+    return { kind: any ? 'now' : 'none', needs, waits, machine, moved, asks, led, ...none, next };
   }
   const key = (names: readonly string[]) => new Set(names.map(projectKey));
   const ledBefore = prev.led;
@@ -205,6 +217,7 @@ export function planTeamNote(
   const fresh = key(ledAdded);
   const needs: TeamNewsItem[] = [];
   const waits: LeadWait[] = [];
+  const machine: LeadWait[] = [];
   const moved: TeamNewsItem[] = [];
   const added: TeamNewsItem[] = [];
   for (const item of news) {
@@ -217,18 +230,20 @@ export function planTeamNote(
     if (item.state === 'needs') { if (was !== is) needs.push(item); }
     // Then what now waits on this lead: its to act on. A wait that ended is no news by itself.
     else if (isWaiting !== undefined && isWaiting !== wasWaiting) waits.push(waitOf(item));
+    // Then what the machine stopped: Walnut's to resume, the lead's when Walnut cannot.
+    else if (isMachineStop(t)) { if (was !== is) machine.push(waitOf(item)); }
     else if (before === undefined) { if (!fresh.has(projectKey(t.project || 'Inbox'))) added.push(item); }
     // Words that went away (a report with nothing new) are no news.
     else if (was !== is && (item.reported || isStuck(t))) moved.push(item);
   }
   const done = completed.filter((t) => prev.seen[t.id] !== undefined).map((t) => t.title);
-  const any = needs.length + waits.length + moved.length + added.length + done.length + asks.length
+  const any = needs.length + waits.length + machine.length + moved.length + added.length + done.length + asks.length
     + ledAdded.length + ledRemoved.length > 0;
-  return { kind: any ? 'moved' : 'none', needs, waits, moved, added, done, asks, led, ledAdded, ledRemoved, next };
+  return { kind: any ? 'moved' : 'none', needs, waits, machine, moved, added, done, asks, led, ledAdded, ledRemoved, next };
 }
 
 /** Most lines a section carries; the rest are counted. */
-export const TEAM_NOTE_MAX = { needs: 6, waits: 8, asks: 6, moved: 8, added: 6, done: 6 } as const;
+export const TEAM_NOTE_MAX = { needs: 6, waits: 8, machine: 8, asks: 6, moved: 8, added: 6, done: 6 } as const;
 const WORDS_MAX = 240;
 
 function ago(at: number, nowMs: number): string {
@@ -286,10 +301,14 @@ export function buildTeamNoteText(
   const body = head
     + section('Needs the user:', plan.needs, TEAM_NOTE_MAX.needs, (i) => `${label(i)}${words(i)}`)
     + section('Waiting on you:', plan.waits, TEAM_NOTE_MAX.waits, (i) => waitLine(i as LeadWait))
+    + section('Stopped by the machine, not the work (Walnut resumes these once the cause clears):', plan.machine ?? [], TEAM_NOTE_MAX.machine, (i) => waitLine(i as LeadWait))
     + asksSection
     + section(plan.kind === 'now' ? 'Latest:' : 'Changed:', plan.moved, TEAM_NOTE_MAX.moved, (i) => `${label(i)} (${when(i)})${words(i)}`)
     + section('New:', plan.added, TEAM_NOTE_MAX.added, (i) => `${label(i)} (${when(i)})${words(i)}`)
     + doneLine
+    + (plan.machine?.length
+      ? 'A task the machine stopped is yours to bring back, not the user\'s: once its cause clears (the host answers, the disk has room), check it (task_get) and restart it (task_restart) or send it a message if Walnut has not. Tell the user only what you cannot fix yourself (a sign-in or a payment only they can give). '
+      : '')
     + (plan.waits.length
       ? 'The tasks under "Waiting on you" wait for you: read each (task_get) and answer or close it. The rest is background. The user sees the same on the Org page.'
       : 'Background, not a request: use it when it matters to what you do next. The user sees the same on the Org page. Detail: org_get or task_get.');

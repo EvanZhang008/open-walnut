@@ -167,6 +167,32 @@ describe('pollDiskWatermarkOnce side effects', () => {
     expect(notify.mock.calls.map((c) => c[2])).toEqual(['disk:critical']);
   });
 
+  it('writes resuming (critical → warn or ok) fires once, so the tasks waiting on the disk retry', async () => {
+    const resumed = vi.fn();
+    stubUsedPct(50);
+    await pollDiskWatermarkOnce(vi.fn(), undefined, undefined, resumed);
+    stubUsedPct(85);
+    await pollDiskWatermarkOnce(vi.fn(), undefined, undefined, resumed);
+    // ok → warn never blocked writes: nothing resumed.
+    expect(resumed).not.toHaveBeenCalled();
+    stubUsedPct(95);
+    await pollDiskWatermarkOnce(vi.fn(), undefined, undefined, resumed);
+    await pollDiskWatermarkOnce(vi.fn(), undefined, undefined, resumed);
+    expect(resumed).not.toHaveBeenCalled();
+    stubUsedPct(85);
+    await pollDiskWatermarkOnce(vi.fn(), undefined, undefined, resumed);
+    expect(resumed).toHaveBeenCalledTimes(1);
+    stubUsedPct(50);
+    await pollDiskWatermarkOnce(vi.fn(), undefined, undefined, resumed);
+    expect(resumed).toHaveBeenCalledTimes(1);
+    // Straight from critical to ok is one resume too.
+    stubUsedPct(95);
+    await pollDiskWatermarkOnce(vi.fn(), undefined, undefined, resumed);
+    stubUsedPct(40);
+    await pollDiskWatermarkOnce(vi.fn(), undefined, undefined, resumed);
+    expect(resumed).toHaveBeenCalledTimes(2);
+  });
+
   it('a first measurement that reads warn or critical is NOT a recovery', async () => {
     const recovered = vi.fn();
     stubUsedPct(95);

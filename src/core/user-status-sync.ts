@@ -49,6 +49,7 @@ export interface StatusFacts {
   /** Per session id: what its record says. */
   sessions: Map<string, {
     processStatus?: string; errorMessage?: string; errorReason?: string; statusSince?: string;
+    errorKind?: string; restartLoss?: { state: string; cause?: string };
     pendingTool?: string; taskId?: string; archived?: boolean; startedAt?: string;
   }>;
   /** Task id -> subject of its newest unanswered action_required letter. */
@@ -67,6 +68,8 @@ export interface StatusFacts {
   sessionsOf: Map<string, string[]>;
   /** Task id -> how many of its direct subtasks are open (filled by syncUserStatuses). */
   openWorkers?: Map<string, number>;
+  /** Project keys (trimmed, lower case) that have an open lead (filled by syncUserStatuses). */
+  projectLeads?: Set<string>;
 }
 
 const errText = (err: unknown) => (err instanceof Error ? err.message : String(err));
@@ -178,6 +181,23 @@ async function readRoutines(schedules: boolean): Promise<Map<string, any>> {
  *  isOpenDecision), so a letter read and left for five minutes stops saying "Needs you" there and here. */
 const DECISION_SEEN_GRACE_MS = 5 * 60 * 1000;
 
+/**
+ * A restart loss that speaks for the session's CURRENT death, else undefined: one recovery still
+ * holds (queued, sent: the same test the hand-back uses, holdsHandBack), or one it gave up on
+ * with no status change since. A loss stays on the record after it is decided, so an older one
+ * must never paint a later life (a manual resume that failed for its own reasons).
+ */
+export function liveRestartLoss(
+  rec: import('./types.js').SessionRecord,
+  recovery: { holdsHandBack(record: import('./types.js').SessionRecord): boolean } | null | undefined,
+): { state: string; cause?: string } | undefined {
+  const loss = rec.restartLoss;
+  if (!loss) return undefined;
+  if (loss.state === 'gave_up') return loss.revision === rec.statusRevision ? { state: loss.state, cause: loss.cause } : undefined;
+  if ((loss.state === 'queued' || loss.state === 'sent') && recovery?.holdsHandBack(rec)) return { state: loss.state, cause: loss.cause };
+  return undefined;
+}
+
 /** Read every fact source (the slow ones from the cache). Never throws: a store that cannot be
  *  read contributes nothing. `allIds` resolves a Board choice's task prefix. */
 export async function readStatusFacts(tasks: readonly Task[], allIds: readonly string[] = tasks.map((t) => t.id)): Promise<StatusFacts> {
@@ -189,6 +209,8 @@ export async function readStatusFacts(tasks: readonly Task[], allIds: readonly s
   }
 
   const sessions: StatusFacts['sessions'] = new Map();
+  const { getSessionAutoRecover } = await import('./session-auto-recover.js');
+  const recovery = getSessionAutoRecover();
   await safely('sessions', async () => {
     const { listSessionsForTasks } = await import('./session-tracker.js');
     for (const rec of await listSessionsForTasks(taskIds, sessionIds)) {
@@ -196,6 +218,8 @@ export async function readStatusFacts(tasks: readonly Task[], allIds: readonly s
       sessions.set(rec.claudeSessionId, {
         processStatus: rec.process_status, errorMessage: rec.errorMessage,
         errorReason: rec.status_reason, statusSince: rec.statusUpdatedAt || rec.last_status_change || rec.lastActiveAt,
+        errorKind: rec.errorKind,
+        restartLoss: liveRestartLoss(rec, recovery),
         pendingTool: rec.pendingPermission ? (rec.pendingPermission.toolName ?? 'permission') : undefined,
         taskId: rec.taskId, archived: rec.archived, startedAt: rec.startedAt,
       });
@@ -255,6 +279,9 @@ export function statusInputOf(task: Task, facts: StatusFacts): UserStatusInput {
     processStatus: anyRunning ? 'running' : main?.processStatus,
     errorMessage: main?.errorMessage ?? null,
     errorReason: main?.errorReason ?? null,
+    errorKind: main?.errorKind ?? null,
+    restartLoss: main?.restartLoss ?? null,
+    projectLead: !!facts.projectLeads?.has((task.project ?? '').trim().toLowerCase()) && task.org_role !== 'lead',
     statusSince: main?.statusSince ?? null,
     pendingPermissionTool: prompt,
     openLetter: facts.letters.get(task.id) ?? null,
@@ -294,6 +321,14 @@ export async function syncUserStatuses(ids: ReadonlySet<string> | null, nowMs = 
   for (const t of everything) {
     if (!t.parent_task_id || t.phase === 'COMPLETE' || t.status === 'done') continue;
     facts.openWorkers.set(t.parent_task_id, (facts.openWorkers.get(t.parent_task_id) ?? 0) + 1);
+  }
+  facts.projectLeads = new Set();
+  for (const t of everything) {
+    if (t.org_role !== 'lead' || t.phase === 'COMPLETE' || t.status === 'done') continue;
+    for (const p of [t.project, ...(t.org_leads ?? [])]) {
+      const key = (p ?? '').trim().toLowerCase();
+      if (key) facts.projectLeads.add(key);
+    }
   }
   let changed = 0;
   for (const task of targets) {

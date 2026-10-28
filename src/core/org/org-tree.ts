@@ -470,8 +470,12 @@ export interface OrgAlert {
   key: string;
   project: string;
   title: string;
-  kind: 'question' | 'permission' | 'error';
+  /** `machine`: stopped by the machine in a project with no lead; told to Main as background,
+   *  never under "Needs the user now" (org-store.ts orgAlerts). */
+  kind: 'question' | 'permission' | 'error' | 'machine';
   tool?: string;
+  /** machine only: what stopped it (session-error-kind.ts infraStopCause). */
+  cause?: 'host' | 'restart' | 'process';
 }
 
 /**
@@ -519,6 +523,10 @@ export function planOrgNote(
 
 /** One short line per alert. */
 export function formatAlertLine(alert: OrgAlert): string {
+  if (alert.kind === 'machine') {
+    const by = alert.cause === 'host' ? 'its host went away' : alert.cause === 'restart' ? 'Walnut restarted' : 'its process stopped';
+    return `${alert.project || 'Inbox'}: "${alert.title}" stopped because ${by}; Walnut resumes it once that clears (restart it if it has not)`;
+  }
   const what = alert.kind === 'question' ? 'asks the user a question'
     : alert.kind === 'permission' ? `waits for the user to approve ${alert.tool || 'a tool'}`
       : 'stopped on an error';

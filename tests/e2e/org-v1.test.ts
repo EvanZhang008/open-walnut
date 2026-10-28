@@ -363,12 +363,34 @@ describe('/api/v1/org', () => {
       expect(twice!.text).toContain('- Walnut: "fails" stopped on an error')
       expect(twice!.text).not.toContain('loses its host')
       await twice!.markTold()
-      // The host stays lost for 20 minutes (recovery gave up): now it is the user's.
+      // The host stays lost for 20 minutes: still not the user's (2026-10-28, an SSH drop listed
+      // two idle sessions under "Needs the user now"). Walnut has a lead, whose team note tells it.
       const lost = new Date(told - 20 * 60_000).toISOString()
       await updateSessionRecord(flakySid, { status_history: [{ timestamp: lost, process_status: 'error', reason: 'remote_unreachable', changed_by: 'health-monitor' }] })
-      const stuck = await pendingOrgDigest(sid, told + 460)
-      expect(stuck!.text).toContain('- Walnut: "loses its host" stopped on an error')
+      expect(await pendingOrgDigest(sid, told + 460)).toBeNull()
+      // In a project with no lead, Main is the contact: it hears the stop as background.
+      const lone = (await addTask({ title: 'lone host loss', project: 'Leadless' })).task
+      const loneSid = '7a7a7a7a-8888-4999-8aaa-bbbbbbbbbbbb'
+      await createSessionRecord(loneSid, lone.id, 'Leadless', WALNUT_HOME)
+      await updateTaskRaw(lone.id, { session_id: loneSid })
+      await updateSessionRecord(loneSid, { process_status: 'error', status_reason: 'remote_unreachable' })
+      const stuck = await pendingOrgDigest(sid, told + 470)
+      expect(stuck!.text).toContain('Stopped by the machine, not for the user')
+      expect(stuck!.text).toContain('- Leadless: "lone host loss" stopped because its host went away')
+      expect(stuck!.text).not.toContain('Needs the user now')
+      expect(stuck!.text).not.toContain('loses its host')
       await stuck!.markTold()
+      // A lead stopped itself: no team note covers its own session, so Main hears it.
+      const walnutLead = (await listTasks()).find((x) => x.org_role === 'lead' && x.project === 'Walnut')!
+      const leadOwnSid = '7b7b7b7b-8888-4999-8aaa-bbbbbbbbbbbb'
+      await createSessionRecord(leadOwnSid, walnutLead.id, 'Walnut', WALNUT_HOME)
+      await updateTaskRaw(walnutLead.id, { session_id: leadOwnSid })
+      await updateSessionRecord(leadOwnSid, { process_status: 'error', status_reason: 'remote_unreachable' })
+      const leadDown = await pendingOrgDigest(sid, told + 480)
+      expect(leadDown!.text).toContain(`- Walnut: "${walnutLead.title}" stopped because its host went away`)
+      expect(leadDown!.text).not.toContain('Needs the user now')
+      await leadDown!.markTold()
+      await updateSessionRecord(leadOwnSid, { process_status: 'stopped', status_reason: 'user_stopped' })
 
       // The window passes: the folded counts come, without the alerts already told. The counts
       // are the stored user status, so wait for the server's sync to have derived the prompt and the failure.

@@ -99,10 +99,13 @@ function opCall(callerSid: string) {
 async function phasesDuring(taskId: string, run: () => Promise<void>, settled: (seen: string[]) => boolean, timeoutMs?: number): Promise<string[]> {
   const { bus, EventNames } = await import('../../src/core/event-bus.js')
   const seen: string[] = []
+  // Edges away from where the task stands now: a late write that repeats the current phase (the
+  // user status sync's debounced write after a park) is not an edge.
+  let last = (await task(taskId)).phase as string
   const name = `task-wait-resume-e2e-${Math.random().toString(36).slice(2)}`
   bus.subscribe(name, (e) => {
     const t = (e.data as { task?: { id: string; phase: string } }).task
-    if (t?.id === taskId && seen[seen.length - 1] !== t.phase) seen.push(t.phase)
+    if (t?.id === taskId && last !== t.phase) { seen.push(t.phase); last = t.phase }
   }, { global: true, interest: [EventNames.TASK_UPDATED] })
   try {
     await run()

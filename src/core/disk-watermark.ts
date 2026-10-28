@@ -176,6 +176,8 @@ export async function pollDiskWatermarkOnce(
   notify?: WatermarkNotify,
   dir = WALNUT_HOME,
   onRecovered?: WatermarkRecovered,
+  /** Called once when the level leaves 'critical' (writes stop answering 507). */
+  onWritesResumed?: () => void,
 ): Promise<DiskWatermarkState> {
   let usedPct: number;
   let availBytes: number;
@@ -245,6 +247,9 @@ export async function pollDiskWatermarkOnce(
     }
   }
 
+  // Writes work again: whatever waited on them (src/core/sessions/machine-wake.ts) may retry.
+  if (prev === 'critical' && level !== 'critical') onWritesResumed?.();
+
   // Idempotent (setDiskPullOnly no-ops on same value) — asserting it every poll
   // keeps git-sync honest even if some other code path cleared the flag.
   setDiskPullOnly(level === 'critical', { usedPct, availBytes, dir });
@@ -267,6 +272,8 @@ export function startDiskWatermarkMonitor(opts: {
   notify?: WatermarkNotify;
   /** Called once when the level drops back to 'ok' (see WatermarkRecovered). */
   onRecovered?: WatermarkRecovered;
+  /** Called once when the level leaves 'critical': writes stop answering 507. */
+  onWritesResumed?: () => void;
   intervalMs?: number;
   dir?: string;
 } = {}): DiskWatermarkHandle {
@@ -278,7 +285,7 @@ export function startDiskWatermarkMonitor(opts: {
   let timer: ReturnType<typeof setTimeout> | null = null;
   const tick = async (): Promise<void> => {
     try {
-      await pollDiskWatermarkOnce(opts.notify, dir, opts.onRecovered);
+      await pollDiskWatermarkOnce(opts.notify, dir, opts.onRecovered, opts.onWritesResumed);
     } finally {
       if (!stopped) {
         timer = setTimeout(() => { void tick(); }, intervalMs);
@@ -303,6 +310,6 @@ export function startDiskWatermarkMonitor(opts: {
       stopped = true;
       if (timer) clearTimeout(timer);
     },
-    poll: () => pollDiskWatermarkOnce(opts.notify, dir, opts.onRecovered),
+    poll: () => pollDiskWatermarkOnce(opts.notify, dir, opts.onRecovered, opts.onWritesResumed),
   };
 }

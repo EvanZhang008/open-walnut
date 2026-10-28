@@ -22,6 +22,8 @@
  * Pure and browser-safe: the server (org counts, API payloads) and the web app import it.
  */
 
+import { infraStopCause } from './session-error-kind.js';
+
 export type UserState = 'needs' | 'working' | 'waiting' | 'done';
 
 /** On what a waiting task waits. */
@@ -61,6 +63,13 @@ export interface UserStatusInput {
   errorMessage?: string | null;
   /** Why its session stopped (SessionRecord.status_reason): a lost host is Walnut's to recover. */
   errorReason?: string | null;
+  /** Its session's error class (SessionRecord.errorKind): 'infra' = the machine's, not the work's. */
+  errorKind?: string | null;
+  /** A restart killed its session (SessionRecord.restartLoss): only a loss of its current death
+   *  that recovery still holds (queued, sent) or gave up on; the sync drops every other. */
+  restartLoss?: { state: string; cause?: string } | null;
+  /** Its project has an open lead (a VP), who restarts what Walnut could not. */
+  projectLead?: boolean;
   /** When its session's status last moved (ISO). */
   statusSince?: string | null;
   /** A live permission prompt or question the session is blocked on. */
@@ -116,10 +125,59 @@ export interface UserStatus {
   at?: string;
   /** The words are a day or more old while the task is not running. */
   stale?: boolean;
+  /** The machine stopped it (a lost host, a restart, a dead process), not its work: Walnut
+   *  resumes it, its lead restarts it when Walnut cannot (machineStop). */
+  stoppedBy?: 'machine';
 }
 
-/** Session stops a host outage causes; Walnut resumes those itself. */
-const HOST_LOST_REASONS = new Set(['remote_unreachable', 'spawn_outcome_unknown', 'liveness_check_failed']);
+/** What a restart that killed a session was, in words. */
+const RESTART_WORDS: Record<string, string> = {
+  machine_reboot: 'this computer restarted', server_restart: 'Walnut restarted', host_restart: 'its host restarted',
+};
+
+/**
+ * Stopped by the machine, not by the work (2026-10-28: a full disk, a restart and an SSH drop put
+ * tasks under "Needs the user now"). Walnut resumes such a task itself once the cause clears, and
+ * its lead restarts it when Walnut cannot; only what neither can fix reaches the user. Read from
+ * the session record's structured facts only (errorKind, status_reason, restartLoss), never text.
+ */
+function machineStop(input: UserStatusInput, w: ReturnType<typeof words>, nowMs: number): UserStatus | null {
+  // The sync passes only a loss of the session's CURRENT death (user-status-sync.ts liveRestartLoss).
+  const loss = input.restartLoss;
+  const live = input.processStatus === 'running' || input.processStatus === 'idle';
+  const owner = input.hasLeader || input.projectLead;
+  const parked = input.phase === 'WAITING';
+  if (loss && !live) {
+    const after = RESTART_WORDS[loss.cause ?? ''] ?? 'a restart';
+    if (loss.state === 'queued' || loss.state === 'sent') {
+      return strip<UserStatus>({ state: 'waiting', kind: 'machine', waitingOn: `Walnut, resuming it after ${after}`, ...w, stoppedBy: 'machine' });
+    }
+    if (loss.state === 'gave_up') {
+      return owner
+        ? strip<UserStatus>({ state: 'waiting', kind: 'lead', waitingOn: `Its lead, to restart it: Walnut could not resume it after ${after}`, ...w, stoppedBy: 'machine' })
+        : strip<UserStatus>({ state: 'needs', source: 'error', ask: `Walnut could not resume it after ${after}. Restart it or open it.`, ...w, stoppedBy: 'machine' });
+    }
+  }
+  const cause = infraStopCause(input);
+  // A parked task needs no process: only a lost host (whose daemon runs its watches) stops its wait.
+  if (!cause || (parked && cause !== 'host')) return null;
+  // A day gone is no longer a blip Walnut rides out: its lead, else the user, looks at it.
+  const since = input.statusSince ? Date.parse(input.statusSince) : NaN;
+  if (Number.isFinite(since) && nowMs - since >= MACHINE_STOP_ESCALATE_MS) {
+    const what = cause === 'host' ? 'Its host has been unreachable' : 'It has been stopped by the machine';
+    return owner
+      ? strip<UserStatus>({ state: 'waiting', kind: 'lead', waitingOn: `Its lead, to check it: ${what.toLowerCase()} for a day`, ...w, stoppedBy: 'machine' })
+      : strip<UserStatus>({ state: 'needs', source: 'error', ask: `${what} for a day. Check the host, or restart it elsewhere.`, ...w, stoppedBy: 'machine' });
+  }
+  const who = owner ? ', and its lead restarts it if that fails' : '';
+  const waitingOn = cause === 'host' ? `Its host to come back: Walnut reconnects and resumes it by itself${who}`
+    : cause === 'restart' ? `Walnut, resuming it after Walnut restarted${who}`
+      : `Walnut, resuming it after its process stopped under it${who}`;
+  return strip<UserStatus>({ state: 'waiting', kind: 'machine', waitingOn, ...w, stoppedBy: 'machine' });
+}
+
+/** A machine stop standing this long goes to its lead (or the user when it has none). */
+export const MACHINE_STOP_ESCALATE_MS = 24 * 60 * 60_000;
 
 /** A report older than this, on a task that is not running, is flagged as old. */
 export const STALE_REPORT_MS = 24 * 60 * 60_000;
@@ -173,6 +231,10 @@ function derive(input: UserStatusInput, nowMs: number): UserStatus {
   const w = words(anyReport, nowMs, running);
   // Only a report of the latest turn says what it is waiting on or asking.
   const report = reportIsCurrent(input) ? anyReport : null;
+  // The machine stopped it: unless its own latest report asks the user something, it is Walnut's
+  // and its lead's to bring back, not the user's.
+  const asksUser = report?.state === 'needs' || (report?.state === 'waiting' && report.waiting_kind === 'you');
+  const machine = asksUser ? null : machineStop(input, w, nowMs);
 
   // A live prompt blocks on the user (the session machine moves the phase to NEED_ACTION with it).
   if (input.pendingPermissionTool) {
@@ -186,7 +248,9 @@ function derive(input: UserStatusInput, nowMs: number): UserStatus {
   if (input.phase === 'NEED_ACTION') {
     if (!none(input.openLetter)) return strip({ state: 'needs', source: 'letter', ask: clean(input.openLetter), ...w });
     if (!none(input.openChoice)) return strip({ state: 'needs', source: 'choice', ask: clean(input.openChoice), ...w });
-    if (input.processStatus === 'error') {
+    if (machine) return machine;
+    // A machine stop under a turn that asked the user something: the ask is what they answer.
+    if (input.processStatus === 'error' && !infraStopCause(input)) {
       const why = clean(input.errorMessage);
       return strip({ state: 'needs', source: 'error', ask: why ? `Its session failed (${why.slice(0, 140)}). Retry it or open it.` : 'Its session failed. Retry it or open it.', ...w });
     }
@@ -222,6 +286,7 @@ function derive(input: UserStatusInput, nowMs: number): UserStatus {
 
   if (input.phase === 'IN_PROGRESS') {
     if (running || !input.hasSession) return strip({ state: 'working', ...w });
+    if (machine) return machine;
     // It said it carries on by itself (a background job it started will wake it) and its process is there.
     if (report?.state === 'working' && input.processStatus === 'idle') return strip({ state: 'working', ...w });
     // In progress with nothing running: on whom it waits, so no one reads "working" on an idle session.
@@ -242,9 +307,7 @@ function derive(input: UserStatusInput, nowMs: number): UserStatus {
   const until = input.waitUntil && Date.parse(input.waitUntil) > nowMs ? input.waitUntil : null;
   const reported = report?.state === 'waiting' && !none(report.waiting_on) ? clean(report.waiting_on) : '';
   const reportedKind = report?.state === 'waiting' ? report.waiting_kind : undefined;
-  if (input.processStatus === 'error' && input.errorReason && HOST_LOST_REASONS.has(input.errorReason)) {
-    return strip({ state: 'waiting', kind: 'machine', waitingOn: 'Its host to come back (Walnut reconnects by itself)', ...w });
-  }
+  if (machine) return machine;
   if (tasks.length) return strip({ state: 'waiting', kind: 'task', waitingOn: reported || `A reply from ${tasks.join(', ')}`, ...w });
   if (reported && reportedKind && reportedKind !== 'stuck') return strip({ state: 'waiting', kind: reportedKind, waitingOn: reported, ...(until ? { until } : {}), ...w });
   // A standing routine: between fires it waits on the next one.

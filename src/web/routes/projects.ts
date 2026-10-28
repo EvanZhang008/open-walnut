@@ -34,6 +34,8 @@ import { getConfig } from '../../core/config-manager.js'
 import { listedProjects } from '../../core/test-run.js'
 import { registry } from '../../core/integration-registry.js'
 import type { TaskSource } from '../../core/types.js'
+import type { SlimTask } from '../../core/task-manager.js'
+import { orgDisplayTitle, pickLead } from '../../core/org/org-tree.js'
 
 export const projectsRouter = Router()
 
@@ -60,8 +62,8 @@ function conflictBody(err: ProjectSourceConflictError) {
 }
 
 /** Per-project + Inbox task counts, computed in one pass over the slim list. */
-async function collectCounts(): Promise<{ byProject: Map<string, Counts>; inbox: Counts }> {
-  // minimal projection: this endpoint only needs project/phase/title.
+async function collectCounts(): Promise<{ byProject: Map<string, Counts>; inbox: Counts; tasks: SlimTask[] }> {
+  // minimal projection: this endpoint only needs project/phase/title (and the org fields for the lead).
   const tasks = await listTasksSlim({ minimal: true })
   const byProject = new Map<string, Counts>()
   const inbox = emptyCounts()
@@ -75,21 +77,28 @@ async function collectCounts(): Promise<{ byProject: Map<string, Counts>; inbox:
     if (!entry) { entry = emptyCounts(); byProject.set(key, entry) }
     tally(entry, t.phase)
   }
-  return { byProject, inbox }
+  return { byProject, inbox, tasks }
+}
+
+/** A project's open lead (its VP in the org chart), the same one the Org page names. */
+function leadOf(leads: readonly SlimTask[], project: string): { id: string; title: string } | undefined {
+  const lead = pickLead(leads, project)
+  return lead ? { id: lead.id, title: orgDisplayTitle(lead) } : undefined
 }
 
 /**
  * Build the projects listing payload — registry rows + task counts + favorite
  * flag, plus Inbox counts. Envelope (NOT a bare array — Inbox has no registry
  * row and needs its own slot):
- *   { projects: [{ name, source, order_index?, metadata?, favorite, counts }], inbox: { counts } }
+ *   { projects: [{ name, source, order_index?, metadata?, favorite, counts, lead? }], inbox: { counts } }
+ * `lead` (additive): the project's open lead, `{ id, title }`, when it has one.
  * Shared by GET /api/projects and GET /api/v1/projects.
  */
 export async function buildProjectsPayload(): Promise<{
   projects: Array<Record<string, unknown>>
   inbox: { counts: Counts }
 }> {
-  const [storeProjects, { byProject, inbox }, config] = await Promise.all([
+  const [storeProjects, { byProject, inbox, tasks }, config] = await Promise.all([
     getStoreProjects(),
     collectCounts(),
     getConfig(),
@@ -101,14 +110,19 @@ export async function buildProjectsPayload(): Promise<{
     const c = byProject.get(name.toLowerCase())
     return !!c && c.todo + c.active + c.done > 0
   })
-  const projects = Object.entries(shown).map(([name, record]) => ({
-    name,
-    source: record.source,
-    ...(record.order_index !== undefined ? { order_index: record.order_index } : {}),
-    ...(record.metadata ? { metadata: record.metadata } : {}),
-    favorite: favorites.has(name.toLowerCase()),
-    counts: byProject.get(name.toLowerCase()) ?? emptyCounts(),
-  }))
+  const leads = tasks.filter((t) => t.org_role === 'lead' && t.phase !== 'COMPLETE')
+  const projects = Object.entries(shown).map(([name, record]) => {
+    const lead = leadOf(leads, name)
+    return {
+      name,
+      source: record.source,
+      ...(record.order_index !== undefined ? { order_index: record.order_index } : {}),
+      ...(record.metadata ? { metadata: record.metadata } : {}),
+      favorite: favorites.has(name.toLowerCase()),
+      counts: byProject.get(name.toLowerCase()) ?? emptyCounts(),
+      ...(lead ? { lead } : {}),
+    }
+  })
 
   return { projects, inbox: { counts: inbox } }
 }

@@ -3127,6 +3127,10 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       // Already an edge (the module only calls this when the level CHANGES to
       // ok), so no transition tracker is needed on this side.
       onRecovered: () => { void publishRecovery(['disk']) },
+      // The tasks that reported waiting on the machine retry now (core/sessions/machine-wake.ts).
+      onWritesResumed: () => {
+        void import('../core/sessions/machine-wake.js').then((m) => m.wakeMachineWaiters('disk')).catch(() => undefined)
+      },
     })
 
     // Scheduled git maintenance (weekly / size-triggered): sweeps the debris

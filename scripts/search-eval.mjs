@@ -85,7 +85,7 @@ const MODEL = opt('--model', 'e5-small');
 // the instrument used to prove a ranking or passage change; running it under a
 // different policy than production measures the wrong engine.
 const KIND_WEIGHTS = {
-  task: { weight: 1.0 },
+  task: { weight: 1.0, noteOnlyCoverage: 0.5 },
   memory: { weight: 1.1 },
   session: { weight: 0.9, passages: { overflow: 'tail' } },
   note: { weight: 1.0 },

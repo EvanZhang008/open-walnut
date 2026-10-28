@@ -607,30 +607,31 @@ function ago(fromIso: string, nowMs: number): string {
  */
 export function buildDigestText(
   mainTask: Pick<Task, 'id' | 'title'>, lines: string[], more: number, since: string, nowMs: number,
-  alerts: string[] = [], alertsMore = 0,
+  alerts: string[] = [], alertsMore = 0, machine: string[] = [],
 ): string {
   const list = (items: string[]) => items.map((l) => `- ${l}`).join('\n');
   const needs = alerts.length
     ? `Needs the user now:\n${list(alerts)}${alertsMore > 0 ? `\n- and ${alertsMore} more` : ''}\n`
     : '';
+  // Stopped by the machine in a project with no lead (orgAlerts): Main is its contact, the user is not.
+  const stopped = machine.length
+    ? `Stopped by the machine, not for the user (yours to restart if Walnut does not):\n${list(machine)}\n`
+    : '';
   const moved = lines.length
-    ? (alerts.length ? 'Work moved:\n' : '') + list(lines)
+    ? (alerts.length || machine.length ? 'Work moved:\n' : '') + list(lines)
       + (more > 0 ? `\n- and ${more} more project${more === 1 ? '' : 's'}` : '') + '\n'
     : '';
   const how = alerts.length
     ? 'Tell the user what is under "Needs the user now" in your reply, one line each; the rest is background.'
     : 'Background only: mention it when it matters to what the user says.';
   const body = (lines.length ? `Org update since ${ago(since, nowMs)}:\n` : 'Org update:\n')
-    + needs + moved + `${how} Detail: org_get, or ask that project's lead.`;
+    + needs + stopped + moved + `${how} Detail: org_get, or ask that project's lead.`;
   return kit.buildWalnutMessage({
     kind: 'notification',
     attrs: { from: 'Walnut', about: kit.sessionHandle(mainTask.title, undefined) || 'Main', 'about-task': mainTask.id, outcome: 'org-update', note: 'automated Walnut status notice' },
     body,
   });
 }
-
-/** An infrastructure failure still standing after this long is no longer Walnut's alone to fix. */
-const INFRA_ALERT_AFTER_MS = 15 * 60_000;
 
 /**
  * What newly needs the user, read off the current session of each open task and
@@ -645,7 +646,8 @@ async function orgAlerts(tasks: readonly OrgTaskLike[], nowMs: number): Promise<
   }
   if (!bySession.size) return [];
   const { listSessionsForTasks } = await import('../session-tracker.js');
-  const { isInfraSessionError } = await import('../session-error-kind.js');
+  const { infraStopCause } = await import('../session-error-kind.js');
+  const leads = tasks.filter((t) => t.org_role === 'lead' && t.phase !== 'COMPLETE');
   const alerts: OrgAlert[] = [];
   const seen = new Set<string>();
   for (const r of await listSessionsForTasks(new Set(), new Set(bySession.keys()))) {
@@ -661,9 +663,21 @@ async function orgAlerts(tasks: readonly OrgTaskLike[], nowMs: number): Promise<
       // One key per failure: the transition into 'error' (newest first), so a failed session
       // written as failed again is no news and a second failure after a resume is.
       const entry = r.status_history?.[0]?.process_status === 'error' ? r.status_history[0] : undefined;
-      // A lost host or daemon is Walnut's to recover (session-auto-recover.ts); it is the
-      // user's once it has stayed lost (recovery gave up, or is off).
-      if (isInfraSessionError(r) && !(entry && nowMs - Date.parse(entry.timestamp) >= INFRA_ALERT_AFTER_MS)) continue;
+      // Stopped by the machine (a lost host, a restart, a dead process) is never the user's by
+      // itself, however long it lasts (2026-10-28: an SSH drop listed two idle sessions under
+      // "Needs the user now"): Walnut resumes it, and its project's lead hears it in its team
+      // note and restarts it when Walnut cannot. A project with no lead has Main as its contact,
+      // so Main hears it as background. Read from the record's structured facts, never its text.
+      const cause = infraStopCause({ processStatus: r.process_status, errorKind: r.errorKind, errorReason: r.status_reason });
+      if (cause) {
+        // A lead stopped itself is told to Main: no team note covers a lead's own session.
+        const lead = pickLead(leads, base.project);
+        if (!lead || lead.id === task.id) {
+          alerts.push({ ...base, key: `machine:${task.id}:${r.claudeSessionId}:${entry?.timestamp ?? ''}`, kind: 'machine', cause });
+        }
+        seen.add(task.id);
+        continue;
+      }
       alerts.push({ ...base, key: `error:${task.id}:${r.claudeSessionId}:${entry?.timestamp ?? ''}`, kind: 'error' });
       seen.add(task.id);
     }
@@ -723,7 +737,9 @@ export async function pendingOrgDigest(sessionId: string, nowMs = Date.now()): P
         await writeDigestState(mainId, { ...digest.next, alerts: alerts.map((a) => a.key) });
         return null;
       }
-      const plan = planOrgNote(prev, digest, alerts, nowMs, digestFoldMs);
+      // The machine lines are background, never a share of the user's alert lines.
+      const machineCount = alerts.filter((a) => a.kind === 'machine').length;
+      const plan = planOrgNote(prev, digest, alerts, nowMs, digestFoldMs, DIGEST_MAX_LINES + machineCount);
       if (plan.kind === 'none') {
         // A state from before alerts: what needs the user right now is recorded as known.
         if (!prev.alerts) await writeDigestState(mainId, plan.next);
@@ -733,7 +749,11 @@ export async function pendingOrgDigest(sessionId: string, nowMs = Date.now()): P
       const shown = lines.slice(0, DIGEST_MAX_LINES).map(formatDigestLine);
       handedOut = true;
       return {
-        text: buildDigestText(own, shown, lines.length - shown.length, prev.at, nowMs, plan.alerts.map(formatAlertLine), plan.more),
+        text: buildDigestText(
+          own, shown, lines.length - shown.length, prev.at, nowMs,
+          plan.alerts.filter((a) => a.kind !== 'machine').map(formatAlertLine), plan.more,
+          plan.alerts.filter((a) => a.kind === 'machine').map(formatAlertLine),
+        ),
         markTold: async () => {
           await writeDigestState(mainId, plan.next).catch((err) => log.session.warn('org digest: state not recorded', {
             sessionId, error: err instanceof Error ? err.message : String(err),

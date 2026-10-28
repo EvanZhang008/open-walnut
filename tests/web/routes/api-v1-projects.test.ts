@@ -49,6 +49,24 @@ describe('GET /api/v1/projects', () => {
     expect(marina.source).toBe('local')
     expect(marina.counts.todo).toBe(1)
     expect(res.body.inbox.counts.todo).toBe(1)
+    // No lead yet: the additive field is absent, never null.
+    expect(marina).not.toHaveProperty('lead')
+  })
+
+  it('names each project\'s open lead (its VP), by the name the user gave it', async () => {
+    await ensureProject('marina', 'local')
+    await addTask({ title: 'team one', project: 'marina' })
+    const lead = (await addTask({ title: 'marina lead', project: 'marina', org_role: 'lead' } as never)).task
+    // A lead that also leads another project (the org chart's drag) is that project's lead too.
+    await ensureProject('dock', 'local')
+    await addTask({ title: 'dock team', project: 'dock' })
+    const { updateTaskRaw } = await import('../../../src/core/task-manager.js')
+    await updateTaskRaw(lead.id, { org_leads: ['dock'], org_name: 'Pier' })
+
+    const res = await request(createApp()).get('/api/v1/projects')
+    const by = (n: string) => res.body.projects.find((p: { name: string }) => p.name === n)
+    expect(by('marina').lead).toEqual({ id: lead.id, title: 'Pier VP' })
+    expect(by('dock').lead).toEqual({ id: lead.id, title: 'Pier VP' })
   })
 })
 

@@ -206,7 +206,7 @@ path on the companion".
 | DELETE | `/api/v1/routines/:id` | Delete a routine — 404 on unknown id (cloud relays) |
 | POST | `/api/v1/routines/:id/toggle` | Enable/disable (cloud relays) |
 | POST | `/api/v1/routines/:id/run` | Run now, forced (cloud relays) |
-| GET | `/api/v1/projects` | Project registry + counts + favorite flags + Inbox |
+| GET | `/api/v1/projects` | Project registry + counts + favorite flags + Inbox; each row's `lead` `{ id, title }` (added 2026-10-28) is its open org lead, when it has one |
 | POST | `/api/v1/projects` | Idempotent create (201 new / 200 existing) |
 | PATCH | `/api/v1/projects/:name` | Rename, merge-on-collision (501 on REPLICA) |
 | DELETE | `/api/v1/projects/:name?remote=1` | Delete; ?remote=1 = provider cascade (501 on REPLICA) |
@@ -857,7 +857,10 @@ reconcile, `NOTES_UPDATED` events) with the web UI's `/api/notes-v2`.
   `time`, `machine`, `you`, `lead`, `not-started`, `stuck` or `other`, `waitingOn`
   in words, `until` its next check) or `done`. `now` / `next` are the session's own
   plain words from its last turn, written `at`; `stale` marks words a day old on a
-  task that is not running. The server derives it (src/core/user-status.ts) and
+  task that is not running. `stoppedBy: 'machine'` (added 2026-10-28) marks a task the
+  machine stopped (a lost host, a restart, a dead process): Walnut resumes it and its
+  lead restarts it, so it reads `waiting` (`machine`, or `lead` once Walnut gave up or a
+  day passed), not `needs`. The server derives it (src/core/user-status.ts) and
   every surface shows it instead of the phase, so a `NEED_ACTION` phase alone is
   not "needs you". A client reading an older server sees no field and falls back
   to the phase. Additive and optional.

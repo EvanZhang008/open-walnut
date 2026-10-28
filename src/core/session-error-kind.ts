@@ -217,3 +217,35 @@ export function isRescuableStoppedRecord(record: Pick<SessionRecord,
   if (!Number.isFinite(changedAt)) return false
   return nowMs - changedAt <= RESCUABLE_STOPPED_WINDOW_MS
 }
+
+/**
+ * Which part of the machine stopped a session, read from its record's STRUCTURED
+ * fields only (`errorKind`, `status_reason`), never from its message text:
+ *   host     its host or the connection to it went away (an SSH drop, a host reboot);
+ *   restart  Walnut itself restarted under it;
+ *   process  its process died under a healthy turn (the daemon says so).
+ * Undefined when the session is not in error or the cause is not the machine's.
+ *
+ * This is the user status's test (src/core/user-status.ts) for "stopped by the
+ * machine": Walnut resumes such a session itself, and its lead restarts it when
+ * that fails, so it never reads Needs you on its own (2026-10-28: two sessions
+ * on a host that dropped were listed under "Needs the user now").
+ */
+export type InfraStopCause = 'host' | 'restart' | 'process'
+
+const HOST_STOP_REASONS: ReadonlySet<string> = new Set<StatusReason>([
+  'remote_unreachable', 'liveness_check_failed', 'spawn_outcome_unknown', 'retry_reconnect',
+])
+
+export function infraStopCause(fact: {
+  processStatus?: string | null
+  errorKind?: string | null
+  errorReason?: string | null
+}): InfraStopCause | undefined {
+  if (fact.processStatus !== 'error' || fact.errorKind === 'terminal') return undefined
+  const reason = fact.errorReason ?? ''
+  if (HOST_STOP_REASONS.has(reason)) return 'host'
+  if (reason === 'server_restart') return 'restart'
+  if (INFRA_STATUS_REASONS.has(reason) || fact.errorKind === 'infra') return 'process'
+  return undefined
+}

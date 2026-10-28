@@ -180,3 +180,79 @@ describe('counts', () => {
     expect(userStatusLine({ needs: 1, working: 0, waiting: 0, done: 0 }, { withDone: false })).toBe('1 needs you · 0 working · 0 waiting')
   })
 })
+
+// 2026-10-28: the Mac disk filled, a host dropped, and the org update listed the tasks it stopped
+// under "Needs the user now". The machine's failures are Walnut's and the lead's to bring back.
+describe('stopped by the machine, not the work', () => {
+  const lost = { hasSession: true, processStatus: 'error', errorReason: 'remote_unreachable' }
+
+  it('reads Waiting on the machine in every open phase, never Needs you', () => {
+    for (const phase of ['NEED_ACTION', 'IN_PROGRESS', 'WAITING'] as const) {
+      expect(deriveUserStatus({ phase, ...lost }, NOW), phase).toMatchObject({ state: 'waiting', kind: 'machine', stoppedBy: 'machine' })
+    }
+    expect(deriveUserStatus({ phase: 'COMPLETE', ...lost }, NOW).state).toBe('done')
+  })
+
+  it('reads the cause from the structured facts only, never the message text', () => {
+    const at = (f: Partial<UserStatusInput>) => deriveUserStatus({ phase: 'NEED_ACTION', hasSession: true, processStatus: 'error', ...f }, NOW)
+    expect(at({ errorReason: 'remote_unreachable' }).waitingOn).toMatch(/^Its host to come back/)
+    expect(at({ errorReason: 'server_restart' }).waitingOn).toBe('Walnut, resuming it after Walnut restarted')
+    expect(at({ errorReason: 'daemon_reported_exit' }).waitingOn).toMatch(/its process stopped under it/)
+    expect(at({ errorKind: 'infra', errorReason: 'snapshot_projection' })).toMatchObject({ kind: 'machine' })
+    // A real failure still needs the user, and prose that sounds like a lost host proves nothing.
+    expect(at({ errorReason: 'api_error' })).toMatchObject({ state: 'needs', source: 'error' })
+    expect(at({ errorMessage: 'Connection lost — unable to reach remote host' })).toMatchObject({ state: 'needs', source: 'error' })
+    expect(at({ errorKind: 'terminal', errorReason: 'remote_unreachable' })).toMatchObject({ state: 'needs' })
+  })
+
+  it('names the lead as the one who restarts it, when there is one', () => {
+    expect(deriveUserStatus({ phase: 'IN_PROGRESS', ...lost, projectLead: true }, NOW).waitingOn).toContain('its lead restarts it if that fails')
+    expect(deriveUserStatus({ phase: 'IN_PROGRESS', ...lost }, NOW).waitingOn).not.toContain('lead')
+  })
+
+  it('keeps the ask of its own latest turn: a decision the user owes stays theirs', () => {
+    const asked = report({ state: 'needs', ask: 'CRD or CFN?', at: ago(30_000) })
+    const s = deriveUserStatus({ phase: 'NEED_ACTION', ...lost, report: asked, phaseChangedAt: ago(60_000) }, NOW)
+    expect(s).toMatchObject({ state: 'needs', source: 'session', ask: 'CRD or CFN?' })
+  })
+
+  it('a restart loss reads Walnut resuming it, and the lead when Walnut gave up', () => {
+    const dead = { phase: 'IN_PROGRESS', hasSession: true, processStatus: 'stopped' }
+    for (const state of ['queued', 'sent']) {
+      expect(deriveUserStatus({ ...dead, restartLoss: { state, cause: 'machine_reboot' } }, NOW))
+        .toMatchObject({ state: 'waiting', kind: 'machine', waitingOn: 'Walnut, resuming it after this computer restarted' })
+    }
+    const gaveUp = { ...dead, phase: 'NEED_ACTION', restartLoss: { state: 'gave_up', cause: 'server_restart' } }
+    expect(deriveUserStatus({ ...gaveUp, projectLead: true }, NOW)).toMatchObject({ state: 'waiting', kind: 'lead', stoppedBy: 'machine' })
+    expect(deriveUserStatus({ ...gaveUp, hasLeader: true }, NOW)).toMatchObject({ state: 'waiting', kind: 'lead' })
+    // No lead to restart it: the user is the one.
+    expect(deriveUserStatus(gaveUp, NOW)).toMatchObject({ state: 'needs', source: 'error', ask: expect.stringContaining('Walnut could not resume it') })
+    // Undecided yet (most are decided settled a moment later): not told as a stop.
+    expect(deriveUserStatus({ ...dead, restartLoss: { state: 'pending' } }, NOW).kind).toBe('stuck')
+    // Back and alive, or decided as settled: the loss says nothing more.
+    expect(deriveUserStatus({ ...dead, processStatus: 'idle', restartLoss: { state: 'queued' } }, NOW).kind).not.toBe('machine')
+    expect(deriveUserStatus({ ...dead, phase: 'NEED_ACTION', restartLoss: { state: 'skipped' } }, NOW).state).toBe('needs')
+  })
+
+  it('a turn that reported waiting on the machine (a full disk) reads so', () => {
+    const disk = report({ state: 'waiting', waiting_kind: 'machine', waiting_on: 'Free disk on the Walnut server' })
+    expect(deriveUserStatus({ phase: 'WAITING', hasSession: true, processStatus: 'idle', report: disk }, NOW))
+      .toMatchObject({ state: 'waiting', kind: 'machine', waitingOn: 'Free disk on the Walnut server' })
+    expect(phaseForReport(disk, {}, true)).toBe('WAITING')
+  })
+
+  it('a parked task needs no process: only a lost host stops its wait', () => {
+    const parked = { phase: 'WAITING', hasSession: true, triggers: ['CI watch'] }
+    expect(deriveUserStatus({ ...parked, processStatus: 'error', errorReason: 'daemon_reported_exit' }, NOW))
+      .toMatchObject({ kind: 'other', waitingOn: 'A watch: CI watch' })
+    expect(deriveUserStatus({ ...parked, processStatus: 'error', errorReason: 'server_restart' }, NOW).kind).toBe('other')
+    expect(deriveUserStatus({ ...parked, processStatus: 'error', errorReason: 'remote_unreachable' }, NOW).kind).toBe('machine')
+  })
+
+  it('a stop that stands a day goes to its lead, or to the user when it has none', () => {
+    const old = { phase: 'IN_PROGRESS', ...lost, statusSince: ago(25 * 3600_000) }
+    expect(deriveUserStatus({ ...old, projectLead: true }, NOW)).toMatchObject({ state: 'waiting', kind: 'lead', stoppedBy: 'machine' })
+    expect(deriveUserStatus(old, NOW)).toMatchObject({ state: 'needs', source: 'error', ask: expect.stringContaining('unreachable for a day') })
+    expect(deriveUserStatus({ ...old, statusSince: ago(3600_000) }, NOW).kind).toBe('machine')
+  })
+})

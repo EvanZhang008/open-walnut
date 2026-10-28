@@ -100,6 +100,11 @@ export interface KindConfig {
    * the rest without telling anyone.
    */
   passages?: Partial<PassagePolicy>;
+  /**
+   * How much a query term counts toward coverage when a doc of this kind holds it only in
+   * its note (0..1, default 1). See KeywordSearchOptions.noteOnlyCoverage.
+   */
+  noteOnlyCoverage?: number;
 }
 
 export interface EmbedderConfig {
@@ -412,9 +417,11 @@ export function createSearchIndex(options: SearchIndexOptions): SearchIndex {
     });
   }
   const kindWeights: Record<string, number> = {};
+  const noteOnlyCoverage: Record<string, number> = {};
   const kindPolicies = new Map<string, PassagePolicy>();
   for (const [kind, config] of Object.entries(options.kinds ?? {})) {
     if (typeof config.weight === 'number') kindWeights[kind] = config.weight;
+    if (typeof config.noteOnlyCoverage === 'number') noteOnlyCoverage[kind] = config.noteOnlyCoverage;
     kindPolicies.set(kind, { ...DEFAULT_PASSAGE_POLICY, ...config.passages });
   }
   const passagesOf = (doc: { kind: string; title: string; summary: string; note: string }): string[] =>
@@ -499,6 +506,7 @@ export function createSearchIndex(options: SearchIndexOptions): SearchIndex {
       limit,
       dfThreshold: options.dfThreshold ?? DEFAULT_DF_THRESHOLD,
       kindWeights,
+      noteOnlyCoverage,
     });
   }
 

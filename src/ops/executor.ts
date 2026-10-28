@@ -86,6 +86,16 @@ function resolveCallerSid(explicit?: string): string | undefined {
   return sid || undefined
 }
 
+/**
+ * What an agent reads after a 507 (the server's disk guard: its data disk is full). The disk is
+ * the machine, not the work and not the user's decision: on 2026-10-28 agents that hit it asked
+ * the user, and their tasks read Needs you. Walnut wakes a task that reports waiting on the
+ * machine once writes work again (src/core/sessions/machine-wake.ts).
+ */
+export const DISK_FULL_HINT = ' This is the machine, not your work: do not ask the user about it and do not stop on it.'
+  + ' Free space only from your own build output or scratch if you have some. Otherwise report your turn as'
+  + ' waiting on the machine (FOR_USER_STATE: waiting, FOR_USER_WAITING_ON: machine: free disk on the Walnut server);'
+  + ' Walnut tells your lead, and wakes this task when writes work again.'
 
 /**
  * A test run's header (src/core/test-run.ts): the scope this call runs in, else the CLI's
@@ -155,7 +165,7 @@ async function rawRequest(
     const msg = typeof e === 'object' && typeof e?.message === 'string' ? e.message
       : typeof e === 'string' ? e
         : (text || res.statusText)
-    return { ok: false, message: `Walnut API error (${code}): ${msg}` }
+    return { ok: false, message: `Walnut API error (${code}): ${msg}${res.status === 507 ? DISK_FULL_HINT : ''}` }
   }
   return { ok: true, result: parsed }
 }

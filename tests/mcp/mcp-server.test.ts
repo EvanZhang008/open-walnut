@@ -395,6 +395,14 @@ describe('walnut mcp — reads', () => {
       const projects = jsonOf(await client.callTool({ name: 'project_list', arguments: {} }))
       const names = (projects.projects as Array<{ name: string }>).map((p) => p.name)
       expect(names).toContain('marina')
+      // Compact by default: no settings or summary, and it says how to get them.
+      const row = (projects.projects as Array<Record<string, unknown>>).find((p) => p.name === 'marina')!
+      expect(Object.keys(row).sort()).toEqual(['counts', 'name'])
+      expect(projects.detail).toMatch(/"name":"<project>"/)
+      const one = jsonOf(await client.callTool({ name: 'project_list', arguments: { name: 'MARINA' } }))
+      expect((one.project as Record<string, unknown>)).toMatchObject({ name: 'marina', source: 'local' })
+      const full = jsonOf(await client.callTool({ name: 'project_list', arguments: { detail: true } }))
+      expect((full.projects as Array<Record<string, unknown>>).find((p) => p.name === 'marina')).toHaveProperty('source', 'local')
     } finally {
       await close()
     }

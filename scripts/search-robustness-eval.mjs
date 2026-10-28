@@ -347,7 +347,7 @@ async function runLib(query) {
       dbPath: INDEX_DB,
       // Mirrors SEARCH_V2_KIND_WEIGHTS in src/core/search/wiring.ts.
       kinds: {
-        task: { weight: 1.0 }, memory: { weight: 1.1 }, session: { weight: 0.9, passages: { overflow: 'tail' } },
+        task: { weight: 1.0, noteOnlyCoverage: 0.5 }, memory: { weight: 1.1 }, session: { weight: 0.9, passages: { overflow: 'tail' } },
         note: { weight: 1.0 }, skill: { weight: 1.0 },
       },
       embedder: SEMANTIC ? {

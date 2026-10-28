@@ -173,7 +173,7 @@ Prefer the named operations below. Their schemas are the current source of truth
 | `tag_display_list` | List which tags a task shows (read) | (none) |
 | `tag_display_set` | Show, shorten or hide a tag on tasks (write, local-only) | pattern (string): One tag (e.g. "label:urgent") or a key as "<key>:*" (e.g. "ticket-id:*"); display? (shown\|value\|hidden\|null): shown \| value \| hidden, or null to remove your rule; link? (string\|null): URL template with {value}, e.g. "https://tracker.example.com/{value}"; "" = no link; null removes your link |
 | `search` | Search Walnut (read) | q (string): Search query; types? (string): Comma-separated subset of: task,memory,session (default: all three); limit? (integer): Max results (default 20) |
-| `project_list` | List Walnut projects (read) | (none) |
+| `project_list` | List Walnut projects (read) | name? (string): One project in full, by name (case-insensitive); "Inbox" for the Inbox counts; detail? (boolean): Every project in full: source, order, favorite, settings and summary (large) |
 | `walnut_status` | Walnut server status (read) | (none) |
 | `memory_read` | Read Walnut memory (MEMORY.md / USER.md) (read) | doc (global\|user): Which memory document |
 | `memory_write` | Write Walnut memory (MEMORY.md / USER.md) (write) | doc (global\|user): Which memory document; content (string): Complete new document content |

@@ -201,3 +201,36 @@ describe('what waits on the lead, what it leads, what others asked', () => {
     expect(text).not.toContain('Back to the main')
   })
 })
+
+// 2026-10-28: a host drop and a full disk put tasks under "Needs the user now". The lead is the one
+// to bring them back when Walnut cannot, so its note says it, once per stop.
+describe('team note: stopped by the machine', () => {
+  const machine = (id: string, waitingOn = 'Its host to come back: Walnut reconnects and resumes it by itself') =>
+    t(id, { phase: 'NEED_ACTION', user_status: { state: 'waiting', kind: 'machine', waitingOn, stoppedBy: 'machine' } })
+
+  it('first note: the stopped tasks have their own section and an instruction to restart them', () => {
+    const plan = planTeamNote(undefined, [...base, machine('m')], [], NOW)
+    expect(plan.machine.map((i) => i.taskId)).toEqual(['m'])
+    expect(plan.moved.map((i) => i.taskId)).not.toContain('m')
+    const text = buildTeamNoteText(lead, plan, undefined, Date.parse(NOW))
+    expect(text).toContain('Stopped by the machine, not the work')
+    expect(text).toContain('"m title"')
+    expect(text).toContain('Its host to come back')
+    expect(text).toContain('restart it (task_restart)')
+    expect(text).toContain('Tell the user only what you cannot fix yourself')
+    expect(text).not.toContain('Needs the user:')
+  })
+
+  it('later: a new stop is told once; the same stop again is no news; a lost-then-back task is recorded', () => {
+    const prev = planTeamNote(undefined, base, [], at(40)).next
+    const stopped = planTeamNote(prev, [...base.slice(0, 2), machine('c')], [], NOW)
+    expect(stopped.kind).toBe('moved')
+    expect(stopped.machine.map((i) => i.taskId)).toEqual(['c'])
+    expect(planTeamNote(stopped.next, [...base.slice(0, 2), machine('c')], [], NOW).kind).toBe('none')
+    // A task that reported waiting on the machine itself (the disk) is in the same section.
+    const disk = t('c', { phase: 'WAITING', user_status: { state: 'waiting', kind: 'machine', waitingOn: 'Free disk on the Walnut server', now: 'Tests passed; the commit waits on disk space', at: at(55) } })
+    expect(planTeamNote(prev, [...base.slice(0, 2), disk], [], NOW).machine.map((i) => i.taskId)).toEqual(['c'])
+    // No instruction when nothing stopped.
+    expect(buildTeamNoteText(lead, planTeamNote(undefined, base, [], NOW), undefined, Date.parse(NOW))).not.toContain('task_restart')
+  })
+})

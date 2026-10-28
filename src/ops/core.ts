@@ -42,12 +42,50 @@ defineOp({
   name: 'project_list',
   title: 'List Walnut projects',
   description:
-    'Project registry rows with per-project task counts, favorite flags, and the Inbox counts. ' +
+    'The user\'s projects, compact by default: each row is the name, its task counts (todo, active, done) ' +
+    'and its lead (the VP who owns it, when it has one), plus the Inbox counts. For the details (source, ' +
+    'order, settings such as default_cwd/default_host, the project summary) pass {"name":"<project>"} for ' +
+    'one project, or {"detail":true} for every project in full (large). ' +
     'Tasks group by project, then by folder inside a project; a task with no project lives in the Inbox.',
-  input: {},
+  input: {
+    name: z.string().min(1).optional().describe('One project in full, by name (case-insensitive); "Inbox" for the Inbox counts'),
+    detail: z.boolean().optional().describe('Every project in full: source, order, favorite, settings and summary (large)'),
+  },
   bind: { method: 'GET', path: '/projects' },
+  mapResult: ({ body, args }) => projectListResult(body, args),
   tags: { readonly: true, remote: 'allow' },
 })
+
+/**
+ * project_list's shape. The route returns every row in full (the web and iOS read it that
+ * way); a full list ran to ~40,000 characters on a real board, over an agent's tool-result
+ * limit, so the op answers compact unless asked (2026-10-27).
+ */
+export function projectListResult(body: unknown, args: Record<string, unknown>): unknown {
+  const b = (body ?? {}) as { projects?: unknown; inbox?: unknown }
+  const rows = (Array.isArray(b.projects) ? b.projects : []) as Array<Record<string, unknown>>
+  if (args.detail === true && typeof args.name !== 'string') return body
+  if (typeof args.name === 'string') {
+    const want = args.name.trim().toLowerCase()
+    if (want === 'inbox') return { inbox: b.inbox }
+    const row = rows.find((r) => typeof r.name === 'string' && r.name.trim().toLowerCase() === want)
+    if (row) return { project: row }
+    return {
+      project: null,
+      error: `No project named "${args.name}". Projects: ${rows.map((r) => String(r.name)).join(', ')}`,
+    }
+  }
+  return {
+    projects: rows.map((r) => ({
+      name: r.name,
+      counts: r.counts,
+      ...(r.lead ? { lead: r.lead } : {}),
+      ...(r.favorite === true ? { favorite: true } : {}),
+    })),
+    inbox: b.inbox,
+    detail: 'Compact rows. {"name":"<project>"} returns one project in full (source, settings, summary); {"detail":true} returns every project in full.',
+  }
+}
 
 /**
  * Add the printed `Title [8hex]` handle to one session row, when it has an id.

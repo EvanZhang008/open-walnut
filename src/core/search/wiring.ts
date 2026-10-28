@@ -67,8 +67,15 @@ import { backfillBatchLogFields, crossedProgressMilestone } from './backfill-log
  */
 export const LIGHT_PHASE_MAX_NOTE_CHARS = PASSAGE_MAX_CHARS * 2;
 
+/**
+ * `noteOnlyCoverage` on task: a query term the task holds only in its note counts half toward
+ * coverage, which the merge ranks by first (src/core/search.ts). A task's summary says what it
+ * delivers; on 2026-10-28 "the Walnut tunnel and server replica redesign tasks" missed the two
+ * tasks whose summaries named tunnels and replica servers, under tasks whose 27-33KB notes held
+ * every word somewhere. Sessions, notes and memories keep full credit: their body IS their content.
+ */
 export const SEARCH_V2_KIND_WEIGHTS = {
-  task: { weight: 1.0 },
+  task: { weight: 1.0, noteOnlyCoverage: 0.5 },
   memory: { weight: 1.1 },
   session: { weight: 0.9, passages: { overflow: 'tail' as const } },
   note: { weight: 1.0 },

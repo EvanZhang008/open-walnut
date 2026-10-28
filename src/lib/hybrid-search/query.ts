@@ -84,6 +84,11 @@ const SUB_COLUMNS = '{tsub ssub nsub msub}';
  *  `bodyCoverage` is to be blind to them. */
 const BODY_COLUMNS = '{summary note ssub nsub}';
 const BODY_SUB_COLUMNS = '{ssub nsub}';
+/** Every column but the note: the short fields that say what a doc IS (its name, its curated
+ *  summary, its project and tags). A term found only in the note is the weaker evidence
+ *  `noteOnlyCoverage` discounts. */
+const FOCUS_COLUMNS = '{title summary meta tsub ssub msub}';
+const FOCUS_SUB_COLUMNS = '{tsub ssub msub}';
 
 export const DEFAULT_DF_THRESHOLD = 0.15;
 const DEFAULT_CANDIDATES = 250;
@@ -160,6 +165,14 @@ export interface KeywordSearchOptions {
   candidateLimit?: number;
   dfThreshold?: number;
   kindWeights?: Record<string, number>;
+  /**
+   * Per kind: how much a query term counts toward coverage when the doc holds it ONLY in its
+   * note (default 1, the term counts wherever it is). Below 1, a doc whose name or summary says
+   * the query's words outranks one that mentions them somewhere in a long note. For tasks: a
+   * task's summary states what it delivers, and a description of that deliverable should find
+   * it before tasks whose 30KB notes happen to hold every word (2026-10-28).
+   */
+  noteOnlyCoverage?: Record<string, number>;
   /** Injected clock for deterministic tests. */
   now?: number;
 }
@@ -213,9 +226,12 @@ interface Term {
   coverExpr: string;
   /** Same match, restricted to the body streams (see BODY_COLUMNS). */
   bodyExpr: string;
+  /** Same match, restricted to the focus columns (see FOCUS_COLUMNS). */
+  focusExpr: string;
   /** Phrase forms (a split compound), matched once over the whole index. */
   phraseFormsExpr?: string;
   bodyPhraseFormsExpr?: string;
+  focusPhraseFormsExpr?: string;
   /** Relaxed-lane OR members (orig + sub parts / bigrams). */
   relaxedExprs: string[];
 }
@@ -653,6 +669,7 @@ function compileTerm(
       gateExpr: phrase,
       coverExpr: phrase,
       bodyExpr: `${BODY_SUB_COLUMNS}:"${bigramPhrase}"`,
+      focusExpr: `${FOCUS_SUB_COLUMNS}:"${bigramPhrase}"`,
       relaxedExprs: bigrams.map((b) => `${SUB_COLUMNS}:${ftsQuote(b)}`),
     };
   }
@@ -682,8 +699,13 @@ function compileTerm(
     gateExpr: spellings.length > 0 ? `(${[quoted, ...spellings].join(' OR ')})` : quoted,
     coverExpr,
     bodyExpr: `${BODY_COLUMNS}:${coverExpr}`,
+    focusExpr: `${FOCUS_COLUMNS}:${coverExpr}`,
     ...(phraseFormsExpr
-      ? { phraseFormsExpr, bodyPhraseFormsExpr: `${BODY_COLUMNS}:${phraseFormsExpr}` }
+      ? {
+        phraseFormsExpr,
+        bodyPhraseFormsExpr: `${BODY_COLUMNS}:${phraseFormsExpr}`,
+        focusPhraseFormsExpr: `${FOCUS_COLUMNS}:${phraseFormsExpr}`,
+      }
       : {}),
     relaxedExprs: [
       quoted,
@@ -991,21 +1013,24 @@ export function searchKeyword(
   // to ~2ms (1,800 docs), ~8ms for a word in half the index. So only a bare
   // token as common as the df gate rejects keeps the per-id path, whose cost
   // stays flat as the index grows.
-  const probeSet = (expr: string, phraseFormsExpr: string | undefined, perId: boolean): Set<number> => {
+  const probeSet = (
+    expr: string, phraseFormsExpr: string | undefined, perId: boolean,
+    among: readonly number[] = ids, stmt = coverStmt,
+  ): Set<number> => {
     let found: Set<number>;
     if (!perId) {
       const all = rowsOfForms(expr);
-      found = new Set(ids.filter((id) => all.has(id)));
+      found = new Set(among.filter((id) => all.has(id)));
     } else {
       try {
-        found = new Set((coverStmt.all(expr) as Array<{ rowid: number }>).map((r) => r.rowid));
+        found = new Set((stmt.all(expr) as Array<{ rowid: number }>).map((r) => r.rowid));
       } catch {
         found = new Set();
       }
     }
     if (phraseFormsExpr) {
       const viaForms = rowsOfForms(phraseFormsExpr);
-      for (const id of ids) if (viaForms.has(id)) found.add(id);
+      for (const id of among) if (viaForms.has(id)) found.add(id);
     }
     return found;
   };
@@ -1023,6 +1048,23 @@ export function searchKeyword(
   const bodyTermSets = new Map<string, Set<number>>();
   for (const term of bodyTerms) {
     bodyTermSets.set(term.token, probeSet(term.bodyExpr, term.bodyPhraseFormsExpr, perId(term)));
+  }
+
+  // ── focus sets: which candidates hold each term outside their note ──
+  // Probed only for the kinds that discount a note-only term, over those candidates alone.
+  const noteOnlyShare = (kind: string): number => {
+    const v = options.noteOnlyCoverage?.[kind];
+    return typeof v === 'number' && Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : 1;
+  };
+  const focusTermSets = new Map<string, Set<number>>();
+  const discounted = docRows.filter((r) => noteOnlyShare(r.kind) < 1).map((r) => r.id);
+  if (discounted.length > 0) {
+    const focusStmt = db.prepare(
+      `SELECT rowid FROM doc_fts WHERE doc_fts MATCH ? AND rowid IN (${discounted.join(',')})`,
+    );
+    for (const term of terms) {
+      focusTermSets.set(term.token, probeSet(term.focusExpr, term.focusPhraseFormsExpr, perId(term), discounted, focusStmt));
+    }
   }
 
   // ── score ──
@@ -1049,8 +1091,10 @@ export function searchKeyword(
   for (const row of docRows) {
     const lanes = candidates.get(row.id)!;
     let covered = 0;
+    const share = noteOnlyShare(row.kind);
     terms.forEach((term, i) => {
-      if (termSets.get(term.token)?.has(row.id)) covered += weights[i];
+      if (!termSets.get(term.token)?.has(row.id)) return;
+      covered += share < 1 && !focusTermSets.get(term.token)?.has(row.id) ? weights[i] * share : weights[i];
     });
     let bodyCovered = 0;
     for (const term of bodyTerms) {

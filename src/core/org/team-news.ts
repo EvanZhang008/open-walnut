@@ -26,7 +26,7 @@ export interface TeamNewsTask {
   /** When its phase last moved: a wait on its lead that began later is a new one. */
   phase_changed_at?: string;
   project?: string;
-  user_status?: Pick<UserStatus, 'state' | 'kind' | 'ask' | 'source' | 'now' | 'waitingOn' | 'at' | 'stale'>;
+  user_status?: Pick<UserStatus, 'state' | 'kind' | 'ask' | 'source' | 'now' | 'waitingOn' | 'at' | 'stale' | 'stoppedBy'>;
 }
 
 export interface TeamNewsItem {
