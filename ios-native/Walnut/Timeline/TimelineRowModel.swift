@@ -714,5 +714,9 @@ enum TimelineRowAction {
     /// rebuilds so the row carries the real number. Handled INSIDE the
     /// coordinator (like `toggleExpanded`) — the page never sees it.
     case richHeight(rowID: String, key: String, width: CGFloat, height: CGFloat)
+    /// The user pressed "Send to AI" on an island's result (TimelineIslandResult):
+    /// send `text` exactly as the user's own message in this conversation, then call
+    /// `reply` with whether it was taken. Only ever raised by that press.
+    case sendIslandResult(text: String, reply: IslandSendReply)
     case loadEarlier
 }

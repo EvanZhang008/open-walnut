@@ -89,6 +89,10 @@ struct SessionTimelineBody: View {
                             textTarget = TextFileTarget(ref: ref, host: previewHost,
                                                         cwd: previewCwd, sessionID: previewSessionID)
                         }
+                    case .sendIslandResult(let text, let reply):
+                        // The user pressed Send on an island's result: the exact text,
+                        // through the composer's own send, as their message.
+                        Task { reply(await store.sendFromComposer(text)) }
                     default:
                         break
                     }

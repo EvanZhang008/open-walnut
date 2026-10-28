@@ -124,6 +124,26 @@ struct TimelineHost: UIViewControllerRepresentable {
         var expandedRowIDs: Set<String> = []
         var onAction: (TimelineRowAction) -> Void = { _ in }
         private let actor = TimelineLayoutActor()
+        private var islandObserver: NSObjectProtocol?
+
+        init() {
+            // An island's result strip is part of its row's height, and it comes and
+            // goes without the transcript changing (the page reported, the user sent
+            // or dismissed it): re-bank that island's rows and rebuild.
+            islandObserver = NotificationCenter.default.addObserver(
+                forName: IslandStateStore.resultChanged, object: nil, queue: .main
+            ) { [weak self] note in
+                guard let islandKey = note.userInfo?["islandKey"] as? String else { return }
+                MainActor.assumeIsolated {
+                    RichHTMLHeightCache.shared.markDocumentChanged(key: islandKey)
+                    self?.resubmit()
+                }
+            }
+        }
+
+        deinit {
+            if let islandObserver { NotificationCenter.default.removeObserver(islandObserver) }
+        }
 
         /// Ship the latest input to the actor (latest-wins there) and apply
         /// completed snapshots back on the main queue.

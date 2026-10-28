@@ -151,6 +151,52 @@ enum TimelineRichFixtures {
     ```
     """
 
+    /// An island that keeps its state and hands a result back (`IslandRuntime`): a
+    /// three-question quiz written the way the `walnut-rich-output` skill teaches,
+    /// reading its step from `localStorage` on load and calling `walnut.report` when
+    /// the last answer is in. The 2026-10-27 report was a 15-question quiz that went
+    /// back to question 1 halfway through; this one must come back where it was.
+    static let islandQuiz = """
+    A short quiz. Your progress is kept if you scroll away or reopen the app.
+
+    ```html-app
+    <div style="font:-apple-system-body;font-family:-apple-system,sans-serif;color:var(--fg)">
+      <p id="q" style="margin:0 0 8px"></p>
+      <div id="a"></div>
+      <p style="margin:8px 0 0"><button id="restart">Restart quiz</button></p>
+      <script>
+        const QS = [{q: '2 + 2 = ?', a: ['3', '4'], ok: 1},
+                    {q: 'Capital of France?', a: ['Paris', 'Rome'], ok: 0},
+                    {q: 'Largest planet?', a: ['Mars', 'Jupiter'], ok: 1}];
+        const fresh = () => ({i: 0, picks: []});
+        let s = JSON.parse(localStorage.getItem('quiz') || 'null') || fresh();
+        const save = () => localStorage.setItem('quiz', JSON.stringify(s));
+        function draw() {
+          const qEl = document.getElementById('q'), aEl = document.getElementById('a');
+          if (s.i >= QS.length) {
+            const right = QS.filter((x, k) => s.picks[k] === x.ok).length;
+            qEl.textContent = `Quiz done: ${right} of ${QS.length} right`;
+            aEl.innerHTML = '';
+            walnut.report(`Quiz result: ${right}/${QS.length} right.`
+              + QS.map((x, k) => s.picks[k] === x.ok ? ''
+                : `\\nWrong: "${x.q}" picked "${x.a[s.picks[k]]}", right "${x.a[x.ok]}"`).join(''));
+            return;
+          }
+          const item = QS[s.i];
+          qEl.textContent = `Question ${s.i + 1} of ${QS.length}: ${item.q}`;
+          aEl.innerHTML = item.a.map((t, k) =>
+            `<button data-k="${k}" style="margin:4px 8px 4px 0;padding:8px 14px">Answer ${t}</button>`).join('');
+          aEl.querySelectorAll('button').forEach(b => b.onclick = () => {
+            s.picks[s.i] = +b.dataset.k; s.i++; save(); draw();
+          });
+        }
+        document.getElementById('restart').onclick = () => { s = fresh(); save(); draw(); };
+        draw();
+      </script>
+    </div>
+    ```
+    """
+
     /// Every fixture as a message list, oldest first.
     static func messages(startingAt index: Int) -> [(id: String, text: String)] {
         let bodies = [callout, styledCard, contrastPanels, unpairedBackgrounds,

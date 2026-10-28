@@ -170,6 +170,18 @@ final class TimelineRichHTMLCell: UICollectionViewCell {
         var width: CGFloat = 0
     }
     private let stamp = LoadStamp()
+    /// The island's record in `IslandStateStore` ("" for a content card): what its
+    /// page saved, which seeds the next document, and the result it offered the AI.
+    private var islandStoreKey = ""
+    /// Relay for the island runtime's messages (`IslandRuntime`), weak like `HeightRelay`.
+    private var islandRelay: IslandRelay?
+    /// The token each island document this web view was given names in its messages,
+    /// with the record it belongs to. A message is honoured only under a token this
+    /// cell issued, so a page cannot write another island's record; several are kept
+    /// because the document being replaced still flushes on `pagehide`.
+    private var islandTokens: [(token: String, key: String)] = []
+    /// The strip under an island with a result (`IslandResultStrip`).
+    private var resultStrip: IslandResultStripView?
     /// An incomplete island's row revision changes on every tick (its html is
     /// growing), so `apply` runs at the full tick rate while the placeholder is
     /// up. This makes the second and later ticks free.
@@ -185,6 +197,10 @@ final class TimelineRichHTMLCell: UICollectionViewCell {
         registerForTraitChanges([UITraitUserInterfaceStyle.self]) { (cell: TimelineRichHTMLCell, _) in
             cell.reloadForInterfaceStyleChange()
         }
+        // The island's result comes and goes without this row changing (its page
+        // reported, the user sent or dismissed it), so the strip follows the store.
+        NotificationCenter.default.addObserver(self, selector: #selector(islandResultChanged(_:)),
+                                               name: IslandStateStore.resultChanged, object: nil)
     }
 
     @available(*, unavailable)
@@ -219,6 +235,8 @@ final class TimelineRichHTMLCell: UICollectionViewCell {
         self.contentWidth = contentWidth
         self.streaming = streaming
         accessibilityIdentifier = Self.isIsland(kind) ? "chat.richIsland" : "chat.richHTML"
+        islandStoreKey = Self.isIsland(kind)
+            ? IslandStateStore.storeKey(rowID: rowID, islandKey: key) : ""
 
         // Is this cell holding some OTHER row's pixels? Read once, before
         // `showWebView` un-hides anything, because BOTH of the exits below can be
@@ -232,9 +250,11 @@ final class TimelineRichHTMLCell: UICollectionViewCell {
             // of "Building interactive block…", for good. `showBuildingPlaceholder`
             // now drops the still frame with the same call that hides the web view.
             showBuildingPlaceholder()
+            refreshResultStrip()
             return
         }
         showWebView(kind: kind)
+        refreshResultStrip()
         let style = traitCollection.userInterfaceStyle
         let identity = Self.identity(key: key, width: contentWidth, style: style)
         // IDEMPOTENT, and load-bearing: configure runs on every cell attach AND
@@ -277,9 +297,7 @@ final class TimelineRichHTMLCell: UICollectionViewCell {
             removeCover()
         }
         loadedBody = html
-        let document = RichHTMLDocument.page(
-            body: html, palette: Self.palette(for: style), kind: kind
-        )
+        let document = makeDocument(body: html, kind: kind, style: style)
         scheduleLoad(document, identity: identity)
     }
 
@@ -307,6 +325,9 @@ final class TimelineRichHTMLCell: UICollectionViewCell {
         // would flip it off and on again every 300ms under a stream, cancelling the
         // drag of a reader scrolling inside a tall card.
         if let scrollView = webView?.scrollView { Self.setScrolling(false, on: scrollView) }
+        // The strip is the row's, not the cell's: the next configure shows it again
+        // for the row it serves, if that row's island has a result.
+        resultStrip?.isHidden = true
         // `displayedIdentity` deliberately survives: it describes what the web
         // view still holds, which is what makes re-attaching the same row a
         // no-op rather than a reload.
@@ -315,10 +336,8 @@ final class TimelineRichHTMLCell: UICollectionViewCell {
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        let box = contentView.bounds.inset(by: UIEdgeInsets(
-            top: TimelineMetrics.richVMargin, left: TimelineMetrics.hMargin,
-            bottom: TimelineMetrics.richVMargin, right: TimelineMetrics.hMargin
-        ))
+        let box = documentBox()
+        layoutResultStrip()
         buildingLabel?.frame = box
         // The document gets its OWN height, never the row's.
         //
@@ -350,14 +369,11 @@ final class TimelineRichHTMLCell: UICollectionViewCell {
     /// number.
     private func applyDocumentFrame(in box: CGRect? = nil) {
         guard let webView else { return }
-        let box = box ?? contentView.bounds.inset(by: UIEdgeInsets(
-            top: TimelineMetrics.richVMargin, left: TimelineMetrics.hMargin,
-            bottom: TimelineMetrics.richVMargin, right: TimelineMetrics.hMargin
-        ))
+        let box = box ?? documentBox()
         var frame = box
         frame.size.height = reportedHeight > 0
             ? reportedHeight
-            : min(box.height, Self.measureProbeHeight)
+            : max(1, min(box.height, Self.measureProbeHeight))
         webView.frame = frame
     }
 
@@ -501,9 +517,7 @@ final class TimelineRichHTMLCell: UICollectionViewCell {
         guard !placeholderShown else { return }
         guard let body = loadedBody, let kind = loadedKind, webView != nil else { return }
         let style = traitCollection.userInterfaceStyle
-        let document = RichHTMLDocument.page(
-            body: body, palette: Self.palette(for: style), kind: kind
-        )
+        let document = makeDocument(body: body, kind: kind, style: style)
         // Straight to the load: a scheme flip is a one-off, so the streaming
         // throttle has nothing to protect here.
         performLoad(document,
@@ -528,6 +542,7 @@ final class TimelineRichHTMLCell: UICollectionViewCell {
         }
         let created = makeWebView(kind: kind)
         installHeightObserver(on: created)
+        if Self.isIsland(kind) { installIslandChannel(on: created) }
         contentView.addSubview(created)
         webView = created
         loadedKind = kind
@@ -1063,8 +1078,7 @@ extension TimelineRichHTMLCell: WKNavigationDelegate {
         // document over the recovery.
         displayedIdentity = nil
         let style = traitCollection.userInterfaceStyle
-        performLoad(RichHTMLDocument.page(body: body, palette: Self.palette(for: style),
-                                          kind: kind),
+        performLoad(makeDocument(body: body, kind: kind, style: style),
                     identity: Self.identity(key: documentKey, width: contentWidth, style: style))
     }
 
@@ -1121,4 +1135,162 @@ extension TimelineRichHTMLCell: WKNavigationDelegate {
         // visible on a crash that heals.
         return error.domain == "WKErrorDomain" && error.code == 2
     }
+}
+
+// MARK: - Island state and result
+
+extension TimelineRichHTMLCell {
+    /// The document for `body`. An island's carries the runtime (`IslandRuntime`),
+    /// seeded with what this island saved last time, under a fresh token.
+    private func makeDocument(body: String, kind: RichHTMLDocument.Kind,
+                              style: UIUserInterfaceStyle) -> String {
+        var seed: IslandRuntime.Seed?
+        if Self.isIsland(kind), !islandStoreKey.isEmpty {
+            let token = UUID().uuidString
+            islandTokens.append((token: token, key: islandStoreKey))
+            if islandTokens.count > 8 { islandTokens.removeFirst(islandTokens.count - 8) }
+            seed = IslandRuntime.Seed(token: token, items: IslandStateStore.shared.items(islandStoreKey))
+        }
+        return RichHTMLDocument.page(body: body, palette: Self.palette(for: style),
+                                     kind: kind, island: seed)
+    }
+
+    /// Where the document goes: the row minus its margins and minus the result strip.
+    private func documentBox() -> CGRect {
+        contentView.bounds.inset(by: UIEdgeInsets(
+            top: TimelineMetrics.richVMargin, left: TimelineMetrics.hMargin,
+            bottom: TimelineMetrics.richVMargin + stripBlockHeight(), right: TimelineMetrics.hMargin
+        ))
+    }
+
+    private func stripBlockHeight() -> CGFloat {
+        guard let strip = resultStrip, !strip.isHidden, let result = strip.result else { return 0 }
+        return IslandResultStrip.blockHeight(result, width: stripWidth())
+    }
+
+    /// The strip's width: the row's content width, the same number the builder sized
+    /// the strip at (`TimelineMetrics.richContentWidth`).
+    private func stripWidth() -> CGFloat {
+        contentWidth > 0 ? contentWidth : max(40, contentView.bounds.width - TimelineMetrics.hMargin * 2)
+    }
+
+    private func layoutResultStrip() {
+        guard let strip = resultStrip, !strip.isHidden, let result = strip.result else { return }
+        let width = stripWidth()
+        let height = IslandResultStrip.boxHeight(result, width: width)
+        strip.frame = CGRect(x: TimelineMetrics.hMargin,
+                             y: contentView.bounds.maxY - TimelineMetrics.richVMargin - height,
+                             width: width, height: height)
+    }
+
+    /// Show, update or hide the strip from the island's record. Never for a content
+    /// card, and never over the building placeholder (an island still arriving).
+    private func refreshResultStrip() {
+        let result = !islandStoreKey.isEmpty && !placeholderShown
+            ? IslandStateStore.shared.result(islandStoreKey) : nil
+        guard let result else {
+            if resultStrip?.isHidden == false {
+                resultStrip?.isHidden = true
+                setNeedsLayout()
+            }
+            return
+        }
+        let strip: IslandResultStripView
+        if let existing = resultStrip {
+            strip = existing
+        } else {
+            strip = IslandResultStripView()
+            strip.onReview = { [weak self] in self?.presentResultSheet() }
+            contentView.addSubview(strip)
+            resultStrip = strip
+        }
+        let changed = strip.isHidden || strip.result != result
+        strip.isHidden = false
+        if changed {
+            strip.configure(result)
+            setNeedsLayout()
+        }
+    }
+
+    @objc private func islandResultChanged(_ note: Notification) {
+        guard let key = note.userInfo?["key"] as? String, key == islandStoreKey else { return }
+        refreshResultStrip()
+    }
+
+    private func installIslandChannel(on webView: WKWebView) {
+        let controller = webView.configuration.userContentController
+        let relay = IslandRelay()
+        relay.cell = self
+        islandRelay = relay
+        // The PAGE world, because that is where the island's own code (and so the
+        // runtime the document carries) runs.
+        controller.removeScriptMessageHandler(forName: IslandRuntime.handlerName, contentWorld: .page)
+        controller.add(relay, contentWorld: .page, name: IslandRuntime.handlerName)
+    }
+
+    /// A message from an island document, already shape-checked.
+    fileprivate func receiveIslandMessage(_ message: IslandRuntime.Message) {
+        let token: String
+        switch message {
+        case .state(let t, _), .result(let t, _): token = t
+        }
+        guard let key = islandTokens.last(where: { $0.token == token })?.key else {
+            AppLog.debug("island", "message under an unknown token dropped", ["rowID": rowID])
+            return
+        }
+        switch message {
+        case .state(_, let items):
+            IslandStateStore.shared.saveItems(items, key: key)
+        case .result(_, let text):
+            IslandStateStore.shared.offerResult(text, key: key)
+        }
+    }
+
+    /// "Review & Send": the whole text in a sheet. The send goes through the action
+    /// delegate to the page that owns the conversation; nothing is sent from here.
+    private func presentResultSheet() {
+        let key = islandStoreKey
+        guard !key.isEmpty, let result = IslandStateStore.shared.result(key),
+              let host = presentingController() else { return }
+        weak var delegate = self.delegate
+        IslandResultSheet.present(from: host, storeKey: key, result: result) { text in
+            await withCheckedContinuation { continuation in
+                let reply = IslandSendReply { continuation.resume(returning: $0) }
+                guard let delegate else { return reply(false) }
+                delegate.timelineCell(didRequest: .sendIslandResult(text: text, reply: reply))
+            }
+        }
+    }
+
+    private func presentingController() -> UIViewController? {
+        var responder: UIResponder? = self
+        while let current = responder {
+            if let controller = current as? UIViewController {
+                var top = controller
+                while let presented = top.presentedViewController, !presented.isBeingDismissed {
+                    top = presented
+                }
+                return top
+            }
+            responder = current.next
+        }
+        return window?.rootViewController
+    }
+
+    /// Weak bridge from the island runtime back to the cell (see `islandRelay`).
+    fileprivate final class IslandRelay: NSObject, WKScriptMessageHandler {
+        weak var cell: TimelineRichHTMLCell?
+        func userContentController(_ controller: WKUserContentController,
+                                   didReceive message: WKScriptMessage) {
+            guard message.frameInfo.isMainFrame,
+                  let parsed = IslandRuntime.parse(message.body) else { return }
+            cell?.receiveIslandMessage(parsed)
+        }
+    }
+
+    #if DEBUG
+    /// The strip, for tests (nil until an island with a result was shown).
+    var resultStripForTesting: IslandResultStripView? { resultStrip }
+    var islandStoreKeyForTesting: String { islandStoreKey }
+    #endif
 }

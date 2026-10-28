@@ -459,7 +459,7 @@ final class TimelineRowBuilder {
         // reason). Its placeholder height is a constant, so the row does not
         // resize on every tick while the model finishes writing the block.
         let height = complete
-            ? richRowHeight(id: id, html: html, key: key, width: width)
+            ? islandRowHeight(id: id, html: html, key: key, width: width)
             : TimelineMetrics.richIslandBuildingHeight + TimelineMetrics.richVMargin * 2
         return TimelineRow(
             // Completion must be visible to the diff even if the html between
@@ -477,6 +477,18 @@ final class TimelineRowBuilder {
                                width: CGFloat) -> CGFloat {
         documentHeight(id: id, html: html, key: key, width: width)
             + TimelineMetrics.richVMargin * 2
+    }
+
+    /// A complete island's row: its document, plus the result strip under it when the
+    /// island has offered the AI a result (`IslandResultStrip`; the cell lays the strip
+    /// out with the same function). A strip that comes or goes reports the document's
+    /// identity as moved, so `rebankRichHeights` lands here again.
+    private func islandRowHeight(id: String, html: String, key: String,
+                                 width: CGFloat) -> CGFloat {
+        richRowHeight(id: id, html: html, key: key, width: width)
+            + IslandResultStrip.rowExtra(
+                storeKey: IslandStateStore.storeKey(rowID: id, islandKey: key),
+                width: TimelineMetrics.richContentWidth(width))
     }
 
     /// The height-cache identities the rich rows in `rows` read: a rich row's
@@ -524,7 +536,7 @@ final class TimelineRowBuilder {
                 guard complete, Self.moved(row.id, key, changed) else { continue }
                 out[index] = TimelineRow(
                     id: row.id, revision: row.revision, content: row.content,
-                    height: richRowHeight(id: row.id, html: html, key: key, width: width))
+                    height: islandRowHeight(id: row.id, html: html, key: key, width: width))
             default:
                 continue
             }

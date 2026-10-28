@@ -136,6 +136,17 @@ final class RichHTMLHeightCache: @unchecked Sendable {
         if document || row { generationValue += 1 }
     }
 
+    /// Something other than a measurement moved a rich row's height: an island's
+    /// result strip appeared, changed or went away (`IslandResultStrip`). Nothing
+    /// banked changes; the document's identity is reported so the actor re-banks the
+    /// rows that show it instead of replaying their memoized height.
+    func markDocumentChanged(key: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        markChanged(Self.documentIdentity(key))
+        generationValue += 1
+    }
+
     // MARK: - Per-row streaming estimate
 
     /// Last height this ROW had, whatever its content was. A streaming card

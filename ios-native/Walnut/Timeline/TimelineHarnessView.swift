@@ -42,6 +42,12 @@ struct TimelineHarnessView: View {
                 geometryFrozen: { false },
                 onAction: { action in
                     if case .openActivity(let detail) = action { activityDetail = detail }
+                    // An island's "Send to AI": recorded, not sent anywhere, and
+                    // answered as taken so the strip turns to "Sent to the AI".
+                    if case .sendIslandResult(let text, let reply) = action {
+                        store.islandSends.append(text)
+                        reply(true)
+                    }
                 }
             )
             .accessibilityIdentifier("harness.timeline")
@@ -117,6 +123,18 @@ struct TimelineHarnessView: View {
                 .accessibilityIdentifier("harness.letterTable")
                 Spacer(minLength: 0)
             }
+            HStack(spacing: 12) {
+                // An island that keeps its state and reports a result.
+                Button("Quiz") { store.replaceWithIslandQuiz() }
+                    .accessibilityIdentifier("harness.islandQuiz")
+                Text("Sent \(store.islandSends.count)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("harness.islandSent")
+                    // The last text sent, so a test can hold it against what the sheet showed.
+                    .accessibilityValue(store.islandSends.last ?? "")
+                Spacer(minLength: 0)
+            }
         }
         .font(.footnote)
         .lineLimit(1)
@@ -137,6 +155,8 @@ final class TimelineHarnessStore {
     var liveTools: [LiveToolCall] = []
     var activity: String?
     var scrollToBottomSignal = 0
+    /// Texts an island's "Send to AI" handed the page (see `onAction`).
+    var islandSends: [String] = []
     @ObservationIgnored var bottomPinned = true
     @ObservationIgnored var streamOn = false
     @ObservationIgnored private var streamTask: Task<Void, Never>?
@@ -151,7 +171,14 @@ final class TimelineHarnessStore {
         // `--timeline-harness-turns` opens on the turn-shape fixture instead, and
         // `--timeline-harness-turns-live` on a live turn a received message started.
         let arguments = ProcessInfo.processInfo.arguments
-        if arguments.contains(where: { $0.contains("timeline-harness-turns-live") }) {
+        if arguments.contains(where: { $0.contains("timeline-harness-island") }) {
+            // `--timeline-harness-island` opens on the quiz island, with whatever it
+            // saved last time; `--timeline-harness-island-fresh` forgets that first.
+            if arguments.contains(where: { $0.contains("timeline-harness-island-fresh") }) {
+                IslandStateStore.shared.removeAll(scope: "harness")
+            }
+            messages = Self.islandQuizMessages()
+        } else if arguments.contains(where: { $0.contains("timeline-harness-turns-live") }) {
             let live = TimelineTurnFixtures.liveTurn()
             messages = live.messages
             liveTools = live.tools
@@ -182,6 +209,18 @@ final class TimelineHarnessStore {
         } else {
             appendMessages(120)
         }
+    }
+
+    func replaceWithIslandQuiz() {
+        messages = Self.islandQuizMessages()
+        scrollToBottomSignal += 1
+    }
+
+    private static func islandQuizMessages() -> [ChatMessage] {
+        [ChatMessage(id: "h-quiz-ask", role: "user", text: "Give me a short quiz.",
+                     createdAt: "2026-08-08T07:00:00Z", kind: nil),
+         ChatMessage(id: "h-quiz", role: "assistant", text: TimelineRichFixtures.islandQuiz,
+                     createdAt: "2026-08-08T07:00:01Z", kind: nil)]
     }
 
     func replaceWithTurnMessages() {

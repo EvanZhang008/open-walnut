@@ -80,6 +80,18 @@ struct ChatTimelineBody: View {
                         } else {
                             textTarget = TextFileTarget(ref: ref, host: nil)
                         }
+                    case .sendIslandResult(let text, let reply):
+                        // The user pressed Send on an island's result: the exact text,
+                        // as their own message in this conversation. Never while the agent
+                        // waits on a question: `send` would file it as that answer.
+                        if chat.pendingQuestion {
+                            reply(false)
+                        } else {
+                            // Taken once the words are kept anywhere: a turn started, a
+                            // bubble queued behind the running turn, or a failed bubble
+                            // the user retries from. Only "nothing kept" lets them press again.
+                            Task { reply(await chat.sendReportingOutcome(text).keptTheWords) }
+                        }
                     default:
                         break
                     }

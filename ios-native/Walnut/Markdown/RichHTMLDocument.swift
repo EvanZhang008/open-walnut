@@ -130,15 +130,25 @@ enum RichHTMLDocument {
     /// reader reads. Ordered AFTER the markdown pass so what it inspects is exactly
     /// the bytes WebKit will get; the two cannot interfere either way, since one only
     /// ever rewrites TEXT and the other only ever appends inside a declaration block.
-    static func page(body: String, palette: RichHTMLPalette, kind: Kind) -> String {
+    ///
+    /// An island also gets `IslandRuntime`'s script, FIRST in the head and so before any
+    /// of the model's own code: working `localStorage` seeded from `island` (the state
+    /// the island saved last time), and `walnut.report`. A content document never
+    /// does (it has no scripting at all). An island built without a seed still gets
+    /// the runtime, with an empty store, so its code never meets a throwing storage.
+    static func page(body: String, palette: RichHTMLPalette, kind: Kind,
+                     island: IslandRuntime.Seed? = nil) -> String {
         let markdown = kind == .island ? body : RichHTMLSegments.inlineMarkdown(body)
         let content = RichHTMLContrast.pairTextColours(in: markdown, palette: palette)
+        let runtime = kind == .island
+            ? IslandRuntime.script(island ?? IslandRuntime.Seed(token: "-", items: [:])) + "\n"
+            : ""
         return """
         <!DOCTYPE html><html><head>
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <meta http-equiv="Content-Security-Policy" content="\(csp(kind))">
-        <style>
+        \(runtime)<style>
         \(variables(palette))
         \(baseCSS)
         </style>
