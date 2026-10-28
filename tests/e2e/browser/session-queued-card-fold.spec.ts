@@ -56,7 +56,7 @@ test('an agent\'s card folds on arrival, mid-turn, and neighbours share the row'
   await queued(page, 'qm-qf-1', notice(1), 'agent');
   const fold = hist.locator('[data-testid="step-group-fold"]');
   await expect(fold).toHaveCount(1);
-  await expect(fold.locator(':scope > .tool-run-toggle')).toHaveText(/^Received a message, ran 2 commands/);
+  await expect(fold.locator(':scope > .tool-run-toggle')).toHaveText(/^Ran 2 commands, a notice: QF_NOTICE_1 It set its task to WAITING/);
   await expect(fold).toHaveAttribute('data-open', 'false');
   await expect(hist.locator('.provenance-card')).toHaveCount(0);
   await page.screenshot({ path: `${SHOTS}/${test.info().project.name}-arrived.png`, clip: (await hist.boundingBox())! }).catch(() => {});
@@ -65,7 +65,7 @@ test('an agent\'s card folds on arrival, mid-turn, and neighbours share the row'
   // A second one right after joins the same row.
   await queued(page, 'qm-qf-2', notice(2), 'agent');
   await expect(fold).toHaveCount(1);
-  await expect(fold.locator(':scope > .tool-run-toggle')).toHaveText(/^Received 2 messages, ran 2 commands/);
+  await expect(fold.locator(':scope > .tool-run-toggle')).toHaveText(/^Ran 2 commands, 2 notices›?$/);
   expect(await page.evaluate(() => (window as any).__openCardSeen)).toBe(false);
 
   // Opened: both cards, as they were.
@@ -89,10 +89,10 @@ test('a person\'s message never folds, and splits two agent cards', async ({ pag
   await queued(page, 'qm-qp-3', notice(3), 'agent');
   await expect(hist.locator('.session-msg', { hasText: 'QF_PHONE_WORDS' })).toBeVisible();
   // Before the person's message: the command and the card, one row; after it, the card alone.
-  await expect(hist.locator('[data-testid="step-group-fold"] > .tool-run-toggle')).toHaveText([/^Received a message, ran a command/]);
+  await expect(hist.locator('[data-testid="step-group-fold"] > .tool-run-toggle')).toHaveText([/^Ran make check, a notice: QF_NOTICE_1/]);
   const folds = hist.locator('[data-testid="received-fold"]');
   await expect(folds).toHaveCount(1);
-  await expect(folds.locator(':scope > .tool-run-toggle')).toHaveText(/^Received a message/);
+  await expect(folds.locator(':scope > .tool-run-toggle')).toHaveText(/^A notice: QF_NOTICE_3/);
   // An envelope a person's source sent (a letter they answered) shows too.
   await queued(page, 'qm-qp-4', notice(4), 'person');
   await expect(hist.locator('.provenance-card', { hasText: 'QF_NOTICE_4' })).toBeVisible();
@@ -110,7 +110,7 @@ test('a peer\'s note (bare on the bus, enveloped in the queue) folds as its card
     sentBy: 'agent', queuedText: note, enqueuedAt: new Date().toISOString(),
   });
   const fold = hist.locator('[data-testid="received-fold"]');
-  await expect(fold.locator(':scope > .tool-run-toggle')).toHaveText(/^Received a message/);
+  await expect(fold.locator(':scope > .tool-run-toggle')).toHaveText(/^From Sample lead: QF_PEER_TITLE check/);
   await expect(hist.locator('.session-msg-user', { hasText: 'QF_PEER_BODY' })).toHaveCount(0);
   await fold.locator(':scope > .tool-run-toggle').click();
   await expect(fold.locator('.provenance-card')).toHaveCount(1);

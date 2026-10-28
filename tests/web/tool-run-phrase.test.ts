@@ -50,3 +50,12 @@ describe('a question in the tool run', () => {
     expect(isRoutedQuestion('AskUserQuestion', undefined)).toBe(false)
   })
 })
+
+describe("Walnut's messaging ops in a tool run", () => {
+  it('say they sent a message or wrote to the inbox, never "used a tool"', () => {
+    expect(toolRunPhrase([{ name: 'mcp__walnut__org_send' }])).toBe('Sent a message')
+    expect(toolRunPhrase([{ name: 'mcp__walnut__task_send' }, { name: 'Bash' }, { name: 'mcp__walnut__session_send' }])).toBe('Sent 2 messages, ran a command')
+    expect(toolRunPhrase([{ name: 'mcp__walnut__human_inbox_send' }])).toBe('Wrote to your inbox')
+    expect(toolRunPhrase([{ name: 'mcp__walnut__task_get' }])).toBe('Used a tool')
+  })
+})

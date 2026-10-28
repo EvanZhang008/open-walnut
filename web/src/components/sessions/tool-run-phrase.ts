@@ -12,7 +12,13 @@ function toolPhraseCategory(name: string): string {
     case 'Skill': return 'skill';
     case 'TodoWrite': case 'TaskCreate': case 'TaskUpdate': return 'todo';
     case 'AskUserQuestion': return 'ask';
-    default: return 'other';
+    default: {
+      // Walnut's messaging ops say what they did, never "used a tool".
+      const op = /^mcp__.+__(.+)$/.exec(name)?.[1];
+      if (op === 'task_send' || op === 'session_send' || op === 'org_send' || op === 'board_post') return 'send';
+      if (op === 'human_inbox_send' || op === 'human_inbox_reply') return 'inbox';
+      return 'other';
+    }
   }
 }
 
@@ -68,6 +74,8 @@ export function toolRunPhrase(tools: ToolRunMember[]): string {
       case 'skill': parts.push(n === 1 ? 'launched a skill' : `launched ${n} skills`); break;
       case 'todo': parts.push('updated tasks'); break;
       case 'ask': parts.push(n === 1 ? 'asked a question' : `asked ${n} questions`); break;
+      case 'send': parts.push(n === 1 ? 'sent a message' : `sent ${n} messages`); break;
+      case 'inbox': parts.push(n === 1 ? 'wrote to your inbox' : `wrote to your inbox ${n}\u00d7`); break;
       default: parts.push(n === 1 ? 'used a tool' : `used ${n} tools`); break;
     }
   }

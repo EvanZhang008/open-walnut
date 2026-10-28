@@ -21,23 +21,14 @@
   padding-left: 0;
 }
 
-/* Turns that needed nothing: one quiet line, small and muted, never a card. */
-.hidden-turns {
-  margin: 2px 0;
+/* A fold's line is one line: a long list of steps ends in an ellipsis (the
+   whole line is its tooltip, the steps are one click away). */
+.process-fold > .tool-run-toggle {
+  max-width: 100%;
 }
 
-.hidden-turns-toggle {
-  background: none;
-  border: none;
-  padding: 0;
-  font: inherit;
-  font-size: 12px;
-  color: var(--fg-muted);
-  opacity: 0.7;
-  cursor: pointer;
-}
-
-.hidden-turns-toggle:hover {
-  opacity: 1;
-  text-decoration: underline;
+.process-fold > .tool-run-toggle .tool-run-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }

@@ -141,7 +141,7 @@ test('the words after an org digest are a user bubble; the digest is a card abov
   const rider = riderAbove(b)
   const fold = rider.locator('[data-testid="rider-fold"]')
   await expect(fold).toHaveAttribute('data-open', 'false')
-  await expect(fold.locator('.tool-run-toggle')).toHaveText(/Received a message/)
+  await expect(fold.locator('.tool-run-toggle')).toHaveText(/^Notice about Main: Org update/)
   await expect(rider.locator('.provenance-card')).toHaveCount(0)
   await reveal(page, panel, b)
   await shot(page, rider, 'org-digest-folded')
@@ -180,8 +180,8 @@ test('four stacked notices fold into cards above one bubble', async ({ page }) =
   const shown = await b.innerText()
   for (const m of ['RIDER_ROUTING_MARKER', 'RIDER_ORG_MARKER', 'RIDER_APP_MARKER', 'now stands in']) expect(shown).not.toContain(m)
   expect(await previousRowClass(b)).toContain('session-msg-envelope')
-  // All four behind one muted line.
-  await expect(riderAbove(b).locator('[data-testid="rider-fold"] .tool-run-toggle')).toHaveText(/Received 4 messages/)
+  // All four behind one muted line that says, in order, who sent what.
+  await expect(riderAbove(b).locator('[data-testid="rider-fold"] .tool-run-toggle')).toHaveText(/^Notice about Rider fixture task: .*, notice about Main: Org update since \d+ min ago, from Sample App: 1 change/)
   await expect(riderAbove(b).locator('.provenance-card')).toHaveCount(0)
 })
 
@@ -208,7 +208,7 @@ test('a notice alone, or ahead of a trigger delivery, is still no bubble', async
   const panel = await openRiderSession(page)
   // Shapes 8 and 9 started their turns with no person's words: each folds into the
   // row before its answer (turn-shape.ts). Open those to read the cards.
-  const folds = panel.locator('.session-history [data-testid="turn-fold"]').filter({ hasText: 'Received' })
+  const folds = panel.locator('.session-history [data-testid="turn-fold"]').filter({ hasText: /^Notice about Main/ })
   await expect(folds).toHaveCount(2)
   for (let i = 0; i < 2; i++) {
     await reveal(page, panel, folds.nth(i))

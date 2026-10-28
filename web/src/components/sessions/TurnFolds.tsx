@@ -1,11 +1,10 @@
 /**
- * The folds the session timeline draws around finished work:
- *  · ProcessFoldRow: consecutive finished steps of a turn (tool runs, messages
- *    sent and received) as one "Read 2 files, sent a message ›" row
- *    (process-fold.ts), and a turn's whole work before its answer (turn-shape.ts);
- *  · HiddenTurnsRow: turns that needed nothing from the person, as one
- *    "Show N hidden turns" line.
- * Both start folded and remember an open state for the page, so a fold the
+ * The fold the session timeline draws around finished work: ProcessFoldRow, one
+ * "Received a message from X, ran 2 commands ›" row for every stretch of quiet
+ * steps between two things the person reads (finished steps, messages sent and
+ * received, a turn's work before its answer, whole turns that needed nothing;
+ * turn-shape.ts), its line saying what the steps did, in order (fold-steps.ts).
+ * It starts folded and remembers an open state for the page, so a fold the
  * reader opened stays open when its rows remount: when the turn ends, when
  * history is fetched again, after a reconnect.
  */
@@ -36,7 +35,6 @@ export function _clearTurnFolds(): void {
 /** The fold keys the timeline uses, so it can name the fold a row sits in. */
 export const processFoldKey = (foldId: string) => `process:${foldId}`;
 export const turnFoldKey = (foldId: string) => `turn:${foldId}`;
-export const hiddenTurnsKey = (foldId: string) => `hidden:${foldId}`;
 
 function useTurnFold(key: string): [boolean, () => void] {
   const open = useSyncExternalStore(subscribe, () => opened.has(key));
@@ -61,7 +59,7 @@ export function ProcessFoldRow({ foldId, phrase, children, foldKey, failed = 0, 
   return (
     <div className="tool-run-row process-fold" data-testid={testId} data-open={open ? 'true' : 'false'}>
       <button type="button" className="tool-run-toggle" aria-expanded={open} onClick={toggle}>
-        <span className="tool-run-label">{phrase}</span>
+        <span className="tool-run-label" title={phrase}>{phrase}</span>
         {failed > 0 && <span className="tool-run-fail">{failed} failed</span>}
         {running && <span className="tool-run-live-dot" />}
         <span className={`tool-run-chevron${open ? ' tool-run-chevron--open' : ''}`}>{'›'}</span>
@@ -72,29 +70,13 @@ export function ProcessFoldRow({ foldId, phrase, children, foldKey, failed = 0, 
 }
 
 /**
- * Inside opened hidden turns: where a turn ended with the acknowledgement line
+ * Inside an opened fold: where a turn ended with the acknowledgement line
  * alone (turn-end-marker.ts), the line itself, small. Nothing is behind it.
  */
 export function NoActionMark() {
   return (
     <div className="tool-run-row no-action-mark" data-testid="no-action-mark">
       <span className="tool-run-label">Acknowledged</span>
-    </div>
-  );
-}
-
-/**
- * Turns that needed nothing from the person (turn-shape.ts), out of the way: a
- * quiet line in their place that opens them, everything kept.
- */
-export function HiddenTurnsRow({ foldId, count, children }: { foldId: string; count: number; children: ReactNode }) {
-  const [open, toggle] = useTurnFold(hiddenTurnsKey(foldId));
-  return (
-    <div className="hidden-turns" data-testid="hidden-turns" data-open={open ? 'true' : 'false'}>
-      <button type="button" className="hidden-turns-toggle" aria-expanded={open} onClick={toggle}>
-        {open ? 'Hide' : 'Show'} {count === 1 ? '1 hidden turn' : `${count} hidden turns`}
-      </button>
-      {open && <div className="process-fold-body">{children}</div>}
     </div>
   );
 }

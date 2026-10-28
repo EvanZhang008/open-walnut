@@ -54,10 +54,11 @@ import { ThreadAskedFromList } from './ThreadAskedFromList';
 import { ThreadStackHeader } from './ThreadStackHeader';
 import { ThreadTurnLabel } from './ThreadTurnLabel';
 import { foldGroupOf, foldOpenKeys, foldParts, isFolded } from '@/utils/thread-fold';
-import { groupProcessParts, processPhrase, type ContextCounts } from './process-fold';
+import { envelopeSteps, foldStepsPhrase, type FoldStep } from './fold-steps';
 import { chunkByKind, leadingStepGroup, stepGroups, type StepGroup, type StepKind } from './stream-step-groups';
 import { isEnvelopeOnly, parseSessionEnvelopes } from '@open-walnut/history-session-envelope';
-import { HiddenTurnsRow, NoActionMark, ProcessFoldRow, hiddenTurnsKey, openTurnFold, processFoldKey, turnFoldKey } from './TurnFolds';
+import { usePeerNameOf } from './peer-name';
+import { NoActionMark, ProcessFoldRow, openTurnFold, turnFoldKey } from './TurnFolds';
 import { shapeTurns, type TurnShape } from '@/utils/turn-shape';
 import { noActionRows, readTurnMarker, stripTurnMarker } from '@/utils/turn-end-marker';
 import { detectOutboundSend } from './session-outbound';
@@ -203,6 +204,8 @@ export interface OptimisticMessage extends SessionHistoryMessage {
   sentBy?: 'person' | 'agent';
 }
 
+/** Parsed envelopes by row text: a quiet fold's line reads them on every frame. */
+const ENVELOPE_CACHE = new Map<string, ReturnType<typeof parseSessionEnvelopes>>();
 /** Walnut's messaging ops besides task_send (which renders its own card): a process fold counts them as sent messages. */
 const MESSAGE_OPS = /^mcp__[^_].*__(?:org_send|human_inbox_send|human_inbox_reply)$/;
 
@@ -1285,6 +1288,8 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   /** Conversation Mode with questions: every turn in order, each question's
    *  turns labelled; the stack path is the composer's target, never a filter. */
   const convMode = threadsApi.viewMode === 'linear' && hasQuestions;
+  // Who sent each received message, by the live session title (a quiet fold's line).
+  const peerName = usePeerNameOf();
   const currentKey = stackMode ? stack.currentKey : ROOT_THREAD_KEY;
   /** The question the composer posts into (both views). */
   const targetKey = hasQuestions ? stack.currentKey : ROOT_THREAD_KEY;
@@ -2872,14 +2877,12 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   const isThinkingPart = (part: HistoryPart): boolean => part.kind === 'msg' && part.m.role === 'assistant'
     && part.globalIndex !== forkBoundaryIndex && !gapAt.has(part.globalIndex)
     && !(part.m.text ?? '').trim() && (part.m.tools?.length ?? 0) === 0 && !!(part.m.thinking ?? '').trim();
-  const contextCounts = (parts: readonly HistoryPart[]): ContextCounts => {
-    const n = { skills: 0, other: 0 };
-    for (const part of parts) {
-      const kind = contextKindOf(part);
-      if (kind === 'skill') n.skills++;
-      else if (kind) n.other++;
-    }
-    return n;
+  /** The no-action line and nothing else (reasoning allowed): the turn needed nothing. */
+  const isAckPart = (part: HistoryPart): boolean => {
+    if (part.kind !== 'msg' || part.m.role !== 'assistant' || part.globalIndex === forkBoundaryIndex || gapAt.has(part.globalIndex)) return false;
+    if ((part.m.tools?.length ?? 0) > 0) return false;
+    const read = readTurnMarker(stripQuestionTag(part.m.text ?? ''));
+    return read.noAction && !read.text.trim();
   };
   // The fold takes the stream's whole leading group (steps and the cards between
   // them); a group holding a card opens it over history's trailing runs too.
@@ -2893,7 +2896,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       const isInbound = part.kind === 'msg' && part.m.role === 'user' && part.globalIndex !== forkBoundaryIndex
         && !gapAt.has(part.globalIndex) && isHistorySentRow(part.m) && !isHistoryUserTurn(part.m);
       const isContext = !isInbound && isContextPart(part);
-      if (!isInbound && !isContext && part.kind !== 'run' && !isThinkingPart(part)) break;
+      if (!isInbound && !isContext && part.kind !== 'run' && !isThinkingPart(part) && !isAckPart(part)) break;
       inbound ||= isInbound;
       context ||= isContext;
       s--;
@@ -3784,6 +3787,13 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
           // The line alone has nothing to show; it reads "Acknowledged" only where
           // the turn rule agrees (an agent's turn, no failure, question or plan).
           noActionSet.has(globalIndex) ? <NoActionMark /> : null
+        ) : isAckPart(part) ? (
+          // The line after some reasoning: the reasoning, then the mark. Drawn as a
+          // message it was a "Thinking" row and an empty footer under it.
+          <>
+            <SessionThinking text={m.thinking ?? ''} />
+            {noActionSet.has(globalIndex) ? <NoActionMark /> : null}
+          </>
         ) : (
           <SessionMessage message={m} assistantLabel={assistantLabel} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} suppressTools={part.suppressTools} {...(thinkingFolded.has(globalIndex) ? { answerOnly: true } : {})} showCopyActions={globalIndex === lastAssistantTextIndex} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />
         )}
@@ -3837,25 +3847,46 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     if ((forkBoundaryIndex != null && part.globalIndex === forkBoundaryIndex) || gapAt.has(part.globalIndex)) return false;
     return isHistorySentRow(part.m) && !isHistoryUserTurn(part.m);
   };
-  const renderProcessParts = (parts: HistoryPart[]): React.ReactNode => {
-    const first = parts[0];
-    const head = first.kind === 'msg' ? { m: first.m, globalIndex: first.globalIndex } : first.members[0];
-    const id = head.m.msgId ?? head.m.walnutMessageId ?? `${head.m.timestamp}:${head.globalIndex}`;
-    const tools = parts.flatMap((p) => processToolsOf(p) ?? []);
-    for (const p of parts) {
-      for (const { m } of p.kind === 'msg' ? [{ m: p.m }] : p.kind === 'run' ? p.members : []) {
-        const memberId = m.msgId ?? m.walnutMessageId;
-        if (memberId) markFolded(memberId, processFoldKey(id));
-      }
-    }
-    return (
-      <div key={`proc-${id}`} data-process-fold-index={head.globalIndex} {...threadWrapperProps(head.m.msgId ?? head.m.walnutMessageId, 'session-msg-bare')}>
-        <ProcessFoldRow foldId={id} phrase={processPhrase(tools, isOutboundTool, parts.filter(isInboundPart).length, contextCounts(parts))}>
-          {parts.map(renderHistoryPart)}
-        </ProcessFoldRow>
-      </div>
-    );
+  // What a quiet row did, for its fold's line (fold-steps.ts).
+  const receivedSteps = (text: string): FoldStep[] => {
+    // Least recently used out first: a long history keeps its hits.
+    let segs = ENVELOPE_CACHE.get(text);
+    if (segs === undefined) {
+      segs = parseSessionEnvelopes(text);
+      if (ENVELOPE_CACHE.size >= 2000) ENVELOPE_CACHE.delete(ENVELOPE_CACHE.keys().next().value!);
+    } else ENVELOPE_CACHE.delete(text);
+    ENVELOPE_CACHE.set(text, segs);
+    return envelopeSteps(segs, peerName);
   };
+  const toolSteps = (tools: readonly SessionHistoryTool[]): FoldStep[] => tools.map((t) => (
+    isOutboundTool(t) ? { kind: /__human_inbox_(?:send|reply)$/.test(t.name) ? 'inbox' : 'sent' } : { kind: 'calls', tools: [{ name: t.name, input: t.input as Record<string, unknown> | undefined }] }
+  ));
+  const foldStepsOf = (part: HistoryPart): FoldStep[] => {
+    if (isInboundPart(part) && part.kind === 'msg') return receivedSteps(part.m.text ?? '');
+    const ctx = contextKindOf(part);
+    if (ctx) return [{ kind: 'context', skill: ctx === 'skill' }];
+    if (isThinkingPart(part)) return [{ kind: 'thought' }];
+    if (isAckPart(part)) return [{ kind: 'ack' }];
+    const out: FoldStep[] = [];
+    for (const m of part.kind === 'msg' ? [part.m] : part.members.map((x) => x.m)) {
+      if (m.role === 'user' && isHistorySentRow(m) && !isHistoryUserTurn(m)) { out.push(...receivedSteps(m.text ?? '')); continue; }
+      if (m.role !== 'assistant') continue;
+      const read = readTurnMarker(stripQuestionTag(m.text ?? ''));
+      if (read.text.trim()) out.push({ kind: 'update' });
+      else if (read.noAction) out.push({ kind: 'ack' });
+      if (!(part.kind === 'msg' && part.suppressTools)) out.push(...toolSteps(m.tools ?? []));
+    }
+    return out;
+  };
+  /** A live step group's steps, in order: its cards and its stream blocks. */
+  const streamFoldStepsOf = (group: StepGroup): FoldStep[] => group.members.flatMap((k): FoldStep[] => {
+    const item = timeline[k];
+    if (stepKinds[k] === 'card' && item.kind === 'user') return receivedSteps(item.msg.text ?? '');
+    if (item.kind !== 'block') return [];
+    if (item.block.type === 'thinking') return [{ kind: 'thought' }];
+    if (item.block.type === 'tool_call') return toolSteps(streamToolsOf([item.block as StreamRunMember]));
+    return [];
+  });
 
   const pageNode = stackMode && currentKey !== ROOT_THREAD_KEY ? threadTree.byKey.get(currentKey) : undefined;
   const pageMeta = pageNode ? metaOf(pageNode, threadsApi.metaIndex) : undefined;
@@ -3887,152 +3918,145 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   const lastPart = visibleHistoryParts.length - 1;
   // The last history line's folded question: the live tail goes on from it.
   let tailFoldGroup: string | null = null;
-  if (convMode) {
-    let pending: HistoryPart[] = [];
-    const flushPending = () => {
-      for (const it of groupProcessParts(pending, processToolsOf, isOutboundTool, isInboundPart, isContextPart)) {
-        pageRows.push(it.kind === 'one' ? renderHistoryPart(it.part) : renderProcessParts(it.parts));
+  type Item = { part: HistoryPart; i: number };
+  const headOf = (part: HistoryPart) => (part.kind === 'msg' ? { m: part.m, globalIndex: part.globalIndex } : part.members[0]);
+  const idOf = (part: HistoryPart) => {
+    const h = headOf(part);
+    return h.m.msgId ?? h.m.walnutMessageId ?? `${h.m.timestamp}:${h.globalIndex}`;
+  };
+  const rowsOf = (part: HistoryPart) => (part.kind === 'msg' ? [part.m] : part.members.map((x) => x.m));
+  const markAll = (items: readonly Item[], key: string) => {
+    for (const { part } of items) {
+      for (const m of rowsOf(part)) { const id = m.msgId ?? m.walnutMessageId; if (id) markFolded(id, key); }
+    }
+  };
+  /** One row as it renders on its own; a row an Asked-from list follows hangs the list. */
+  const renderOne = ({ part, i }: Item) => {
+    pageRows.push(renderHistoryPart(part));
+    const asked = askedAfter.get(i);
+    if (asked && i === lastPart && pageStrip) { pageRows.push(pageStrip); stripPlaced = true; }
+    if (asked) {
+      pageRows.push(
+        <ThreadAskedFromList
+          key={`asked-${asked[0].key}`}
+          rows={asked}
+          onOpen={openFromRow}
+          onRetry={threadsApi.retry}
+          onMarkDone={markDoneFromRow}
+          onNotYet={notYetFromRow}
+        />,
+      );
+    }
+  };
+  // The quiet steps between two things the person reads (fold-steps.ts): every
+  // finished step, message received or sent, reasoning alone, the no-action line,
+  // a whole turn that needed nothing, and everything before a turn's answer. Each
+  // stretch of them is ONE row whatever turns it spans, its line saying what the
+  // steps were (2026-10-27, the user: "if it is collapsed near collapsed, need to
+  // combine"; one Main reply was followed by five such rows). In Conversation
+  // Mode a stretch stays within one question, and a question's own rows keep
+  // their label.
+  let quiet: Item[] = [];
+  let quietKey = '';
+  const emitQuiet = (answerThinking?: string) => {
+    const items = quiet;
+    quiet = [];
+    if (items.length === 0) return;
+    // One step alone renders as itself, except a message received or sent: that
+    // is always a folded row, never its whole card between two answers.
+    const sends = (part: HistoryPart) => rowsOf(part).some((m) => (m.tools ?? []).some(isOutboundTool));
+    if (items.length === 1 && !answerThinking && !isInboundPart(items[0].part) && !sends(items[0].part)) { renderOne(items[0]); return; }
+    const id = idOf(items[0].part);
+    const body = items.map((x) => renderHistoryPart(x.part));
+    if (answerThinking) body.push(<SessionThinking key={`fold-thinking-${id}`} text={answerThinking} />);
+    markAll(items, turnFoldKey(id));
+    let failed = 0;
+    for (const { part } of items) {
+      for (const m of rowsOf(part)) {
+        if (m.role === 'system' && m.systemVariant === 'error') failed++;
+        if (!(part.kind === 'msg' && part.suppressTools)) failed += (m.tools ?? []).filter((t) => t.isError && !isRoutedQuestion(t.name, t.result)).length;
       }
-      pending = [];
-    };
+    }
+    const steps = items.flatMap((x) => foldStepsOf(x.part));
+    if (answerThinking) steps.push({ kind: 'thought' });
+    const head = headOf(items[0].part);
+    pageRows.push(
+      <div key={`turn-${id}`} data-turn-fold-index={head.globalIndex} {...threadWrapperProps(head.m.msgId ?? head.m.walnutMessageId, 'session-msg-bare')}>
+        <ProcessFoldRow foldId={id} foldKey={turnFoldKey(id)} testId="turn-fold" failed={failed} phrase={foldStepsPhrase(steps)}>
+          {body}
+        </ProcessFoldRow>
+      </div>,
+    );
+  };
+  const groupKeyOf = (part: HistoryPart) => (convMode ? partThreadKey(part) : '');
+  const pushQuiet = (item: Item) => {
+    const key = groupKeyOf(item.part);
+    if (quiet.length > 0 && key !== quietKey) emitQuiet();
+    quietKey = key;
+    quiet.push(item);
+  };
+  /** A row the person reads. An answer right after quiet steps gives its reasoning
+   *  to their row ("Received a message, thought ›"), so the two are one row. */
+  const pushVisible = (item: Item) => {
+    const { part } = item;
+    let thinking: string | undefined;
+    if (part.kind === 'msg' && part.m.role === 'assistant' && (part.m.tools?.length ?? 0) === 0 && (part.m.thinking ?? '').trim()
+      && quiet.length > 0 && quietKey === groupKeyOf(part) && !askedAfter.has(item.i)) {
+      thinking = part.m.thinking;
+      thinkingFolded.add(part.globalIndex);
+    }
+    emitQuiet(thinking);
+    renderOne(item);
+  };
+  /** A row an open turn renders: quiet when it is a finished step, a message
+   *  received, reasoning alone or the no-action line, and no Asked-from list hangs off it. */
+  const isQuietItem = ({ part, i }: Item) => !askedAfter.has(i)
+    && (isInboundPart(part) || isContextPart(part) || isThinkingPart(part) || isAckPart(part) || processToolsOf(part) !== null);
+  // Each row's turn (turn-shape.ts); a turn an Asked-from list hangs off renders open.
+  const turnOfIndex = new Map<number, TurnShape>();
+  for (const t of turnShapes) for (let g = Math.max(0, t.start); g < t.end; g++) turnOfIndex.set(g, t);
+  const askedTurns = new Set<TurnShape>();
+  visibleHistoryParts.forEach((part, i) => {
+    const t = turnOfIndex.get(headOf(part).globalIndex);
+    if (t && askedAfter.has(i)) askedTurns.add(t);
+  });
+  /** A question's own row in Conversation Mode: it carries the question's label. */
+  const isLabelledRow = (part: HistoryPart) => convMode && part.kind === 'msg' && part.m.role === 'user'
+    && (rowThreadInfo(part.m.msgId ?? part.m.walnutMessageId)?.depth ?? 0) >= 1;
+  const place = (item: Item) => {
+    const g = headOf(item.part).globalIndex;
+    const t = turnOfIndex.get(g);
+    const kind = !t || askedTurns.has(t) ? 'open' : t.kind;
+    const person = !!t && t.byPerson && g === t.start;
+    if (person || isLabelledRow(item.part)) { pushVisible(item); return; }
+    if (kind === 'hidden' || (kind === 'answered' && g < t!.answer)) { pushQuiet(item); return; }
+    if (kind === 'open' && isQuietItem(item)) { pushQuiet(item); return; }
+    pushVisible(item);
+  };
+  if (convMode) {
     for (const item of foldParts(visibleHistoryParts, (part) => foldGroupOf(threadTree, partThreadKey(part)), groupFolded)) {
       if (item.kind === 'fold') {
-        flushPending();
+        emitQuiet();
         const first = item.part.kind === 'msg' ? item.part.m : item.part.members[0].m;
         const rowId = first.msgId ?? first.walnutMessageId;
         pageRows.push(foldLine(item.key, rowId, rowId ?? first.timestamp ?? String(item.index)));
-      } else pending.push(item.part);
+      } else place({ part: item.part, i: item.index });
       tailFoldGroup = item.kind === 'fold' ? item.key : null;
     }
-    flushPending();
+    emitQuiet();
   } else {
-    type Item = { part: HistoryPart; i: number };
-    const renderDefault = (items: Item[], into: React.ReactNode[]) => groupProcessParts(
-      items,
-      // A row an Asked-from list follows stays its own row: the list hangs off it.
-      ({ part, i }) => (askedAfter.has(i) ? null : processToolsOf(part)),
-      isOutboundTool,
-      ({ part, i }) => !askedAfter.has(i) && isInboundPart(part),
-      ({ part, i }) => !askedAfter.has(i) && isContextPart(part),
-      ({ part, i }) => !askedAfter.has(i) && isThinkingPart(part),
-    ).forEach((item) => {
-      if (item.kind === 'process') { into.push(renderProcessParts(item.parts.map((p) => p.part))); return; }
-      const { part, i } = item.part;
-      into.push(renderHistoryPart(part));
-      const asked = askedAfter.get(i);
-      if (asked && i === lastPart && pageStrip) { into.push(pageStrip); stripPlaced = true; }
-      if (asked) {
-        into.push(
-          <ThreadAskedFromList
-            key={`asked-${asked[0].key}`}
-            rows={asked}
-            onOpen={openFromRow}
-            onRetry={threadsApi.retry}
-            onMarkDone={markDoneFromRow}
-            onNotYet={notYetFromRow}
-          />,
-        );
-      }
-    });
-    const headOf = (part: HistoryPart) => (part.kind === 'msg' ? { m: part.m, globalIndex: part.globalIndex } : part.members[0]);
-    const idOf = (part: HistoryPart) => {
-      const h = headOf(part);
-      return h.m.msgId ?? h.m.walnutMessageId ?? `${h.m.timestamp}:${h.globalIndex}`;
-    };
-    const markAll = (items: Item[], key: string) => {
-      for (const { part } of items) {
-        const rows = part.kind === 'msg' ? [part.m] : part.members.map((x) => x.m);
-        for (const m of rows) { const id = m.msgId ?? m.walnutMessageId; if (id) markFolded(id, key); }
-      }
-    };
-    // Everything before a turn's answer, as one row (turn-shape.ts). Opened, the
-    // rows show as they are, not folded a second time.
-    const pushTurnFold = (items: Item[], answerThinking?: string) => {
-      const id = idOf(items[0].part);
-      const body = items.map((x) => renderHistoryPart(x.part));
-      // The answer's own reasoning is the last step before it, not a row of its own.
-      if (answerThinking) body.push(<SessionThinking key={`fold-thinking-${id}`} text={answerThinking} />);
-      markAll(items, turnFoldKey(id));
-      const tools: SessionHistoryTool[] = [];
-      let notes = 0;
-      let errors = 0;
-      for (const { part } of items) {
-        const rows = part.kind === 'msg' ? [part.m] : part.members.map((x) => x.m);
-        for (const m of rows) {
-          if (m.role === 'system' && m.systemVariant === 'error') errors++;
-          if (m.role === 'assistant' && stripTurnMarker(stripQuestionTag(m.text ?? '')).trim()) notes++;
-          if (!(part.kind === 'msg' && part.suppressTools)) tools.push(...(m.tools ?? []));
-        }
-      }
-      const failed = errors + tools.filter((t) => t.isError && !isRoutedQuestion(t.name, t.result)).length;
-      const pieces = [processPhrase(tools, isOutboundTool, items.filter((x) => isInboundPart(x.part)).length, contextCounts(items.map((x) => x.part)))];
-      if (notes > 0) pieces.push(notes === 1 ? 'an update' : `${notes} updates`);
-      const phrase = pieces.filter(Boolean).join(', ');
-      const head = headOf(items[0].part);
-      pageRows.push(
-        <div key={`turn-${id}`} data-turn-fold-index={head.globalIndex} {...threadWrapperProps(head.m.msgId ?? head.m.walnutMessageId, 'session-msg-bare')}>
-          <ProcessFoldRow foldId={id} foldKey={turnFoldKey(id)} testId="turn-fold" failed={failed}
-            phrase={phrase ? phrase.charAt(0).toUpperCase() + phrase.slice(1) : 'Thinking'}>
-            {body}
-          </ProcessFoldRow>
-        </div>,
-      );
-    };
-    let hidden: Item[] = [];
-    let hiddenTurns = 0;
-    const flushHidden = () => {
-      if (hidden.length === 0) return;
-      const id = idOf(hidden[0].part);
-      const body = hidden.map((x) => renderHistoryPart(x.part));
-      markAll(hidden, hiddenTurnsKey(id));
-      const head = headOf(hidden[0].part);
-      pageRows.push(
-        <div key={`hidden-${id}`} data-hidden-turns-index={head.globalIndex} {...threadWrapperProps(head.m.msgId ?? head.m.walnutMessageId, 'session-msg-bare')}>
-          <HiddenTurnsRow foldId={id} count={hiddenTurns}>{body}</HiddenTurnsRow>
-        </div>,
-      );
-      hidden = [];
-      hiddenTurns = 0;
-    };
     const tailFrom = liveTailStart >= 0 ? liveTailStart : visibleHistoryParts.length;
-    const items: Item[] = visibleHistoryParts.slice(0, tailFrom).map((part, i) => ({ part, i }));
-    let at = 0;
-    for (const t of turnShapes) {
-      const mine: Item[] = [];
-      while (at < items.length && headOf(items[at].part).globalIndex < t.end) mine.push(items[at++]);
-      if (mine.length === 0) continue;
-      const kind = mine.some((x) => askedAfter.has(x.i)) ? 'open' : t.kind;
-      if (kind === 'hidden') { hidden.push(...mine); hiddenTurns++; continue; }
-      const ans = kind === 'answered' ? mine.findIndex((x) => x.part.kind === 'msg' && x.part.globalIndex === t.answer) : -1;
-      if (ans < 0) { flushHidden(); renderDefault(mine, pageRows); continue; }
-      // The person's own message always shows.
-      const lead = t.byPerson && headOf(mine[0].part).globalIndex === t.start ? 1 : 0;
-      const answerPart = mine[ans].part;
-      const answerThinking = answerPart.kind === 'msg' && answerPart.m.role === 'assistant' && (answerPart.m.thinking ?? '').trim()
-        ? answerPart.m.thinking : undefined;
-      // Turns hidden just before one nobody typed fold into its row: "Show 1
-      // hidden turn" above "Received a message" was two rows for one reading
-      // (2026-10-26, the user: "why it is 2 3, just collapse into one message").
-      const own = mine.slice(lead, ans);
-      const merge = !lead && hidden.length > 0 && (own.length > 0 || !!answerThinking);
-      const steps = merge ? [...hidden, ...own] : own;
-      if (merge) { hidden = []; hiddenTurns = 0; } else flushHidden();
-      if (lead) renderDefault(mine.slice(0, 1), pageRows);
-      // One row is already a folded row: no fold around it, unless the answer's
-      // reasoning joins it.
-      if (steps.length === 1 && !answerThinking && (steps[0].part.kind === 'run' || isContextPart(steps[0].part))) renderDefault(steps, pageRows);
-      else if (steps.length > 0) {
-        if (answerThinking && answerPart.kind === 'msg') thinkingFolded.add(answerPart.globalIndex);
-        pushTurnFold(steps, answerThinking);
-      }
-      renderDefault(mine.slice(ans), pageRows);
-    }
-    flushHidden();
-    if (at < items.length) renderDefault(items.slice(at), pageRows);
+    visibleHistoryParts.slice(0, tailFrom).forEach((part, i) => place({ part, i }));
+    // Quiet steps right before the live turn (a hidden turn's narration, which
+    // the walk back stops at) open its row, as they will once the turn ends: the
+    // row keeps its key, and so its open state, across the turn's end.
+    const lead = liveTailStart >= 0 && leadingGroup ? quiet.splice(0) : [];
+    emitQuiet();
     if (liveTailStart >= 0 && leadingGroup) {
-      const tail = visibleHistoryParts.slice(tailFrom);
+      const tailItems = [...lead, ...visibleHistoryParts.slice(tailFrom).map((part, k) => ({ part, i: tailFrom + k }))];
+      const tail = tailItems.map((x) => x.part);
       const id = idOf(tail[0]);
-      markAll(tail.map((part, k) => ({ part, i: tailFrom + k })), turnFoldKey(id));
+      markAll(tailItems, turnFoldKey(id));
       const head = headOf(tail[0]);
       const group = leadingGroup;
       // Built once renderQueuedRow exists (the group's cards render with it).
@@ -4042,16 +4066,15 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
         // Every call in it, a failed one in history too (it is folded with the rest
         // while the turn runs, so the header has to say so).
         const tailTools = tail.flatMap((part) => (part.kind === 'run' ? part.memberMsgs : [])).flatMap((m) => m.tools ?? []);
-        const tools = [...tailTools, ...streamToolsOf(members)];
         const failed = tailTools.filter((t) => t.isError && !isRoutedQuestion(t.name, t.result)).length + streamFailedOf(members);
         const live = isThinkingTail(stepIdx[stepIdx.length - 1] ?? -1);
-        // Keyed like the answered turn's fold (pushTurnFold), so the row and its
-        // open state carry over when the turn ends and history takes the tools.
+        // Keyed like the answered turn's fold, so the row and its open state carry
+        // over when the turn ends and history takes the tools.
         return (
           <div key={`turn-${id}`} data-turn-fold-index={head.globalIndex} {...threadWrapperProps(head.m.msgId ?? head.m.walnutMessageId, 'session-msg-bare')}>
             <ProcessFoldRow foldId={id} foldKey={turnFoldKey(id)} testId="turn-fold" failed={failed}
               running={live || streamRunHasCallingTool(members)}
-              phrase={processPhrase(tools, isOutboundTool, tail.filter(isInboundPart).length + group.cards, contextCounts(tail))}>
+              phrase={foldStepsPhrase([...tail.flatMap(foldStepsOf), ...streamFoldStepsOf(group)])}>
               {tail.map(renderHistoryPart)}
               {renderGroupBody(group)}
             </ProcessFoldRow>
@@ -4335,7 +4358,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       <div key={`turn-${key}`} className="session-msg-bare" data-testid="session-step-group-row">
         <ProcessFoldRow foldId={key} foldKey={turnFoldKey(key)} testId="step-group-fold" failed={streamFailedOf(members)}
           running={live || streamRunHasCallingTool(members)}
-          phrase={processPhrase(streamToolsOf(members), isOutboundTool, group.cards)}>
+          phrase={foldStepsPhrase(streamFoldStepsOf(group))}>
           {renderGroupBody(group)}
         </ProcessFoldRow>
       </div>
@@ -4929,7 +4952,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
                 return (
                   <div key={`qf-${m.queueId}`} className="session-msg-bare" data-testid="session-received-fold-row">
                     <ProcessFoldRow foldId={m.queueId} foldKey={`queued:${m.queueId}`} testId="received-fold"
-                      phrase={rows.length === 1 ? 'Received a message' : `Received ${rows.length} messages`}>
+                      phrase={foldStepsPhrase(rows.flatMap((r) => receivedSteps(r.text ?? '')))}>
                       {rows.map(renderQueuedRow)}
                     </ProcessFoldRow>
                   </div>

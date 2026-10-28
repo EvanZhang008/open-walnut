@@ -5,8 +5,9 @@
  *  · turn fold: everything before a turn's answer (narration, two reads, two
  *    edits, a message to the lead; notices, sends and replies) is ONE folded
  *    row and only the answer shows; a failure inside says so in the header;
- *  · hidden turns: a turn a peer's message started that ended with the
- *    no-action line does not show at all, a quiet toggle opens it;
+ *  · quiet turns: a turn a peer's message started that ended with the
+ *    no-action line is one folded row that says what happened ("From Sample
+ *    lead: …, acknowledged"), never a count of hidden turns;
  *  · no-action fold: a clean finished turn whose answer ends with the no-action
  *    line is one "No action needed" row; opened, the whole answer is there and
  *    copies without the line; a turn with a failure keeps its answer open (the
@@ -85,7 +86,8 @@ test('everything before a turn\'s answer is one row; the answer shows', async ({
   const history = panel.locator('.session-history')
   await expect(history).toContainText('FOLD_FINAL_A here is the answer.')
   const fold = history.locator('[data-testid="turn-fold"]').first()
-  await expect(fold.locator('.tool-run-label')).toHaveText('Read 2 files, edited 2 files, sent a message, an update')
+  // What the steps did, in the order they happened.
+  await expect(fold.locator(':scope > .tool-run-toggle .tool-run-label')).toHaveText('An update, read 2 files, edited 2 files, sent a message')
   await expect(fold).toHaveAttribute('data-open', 'false')
   // Folded, the narration, the steps and the sent card are off screen.
   expect(await history.innerText()).not.toContain('FOLD_NARRATION_A')
@@ -107,7 +109,7 @@ test('sends, replies and messaging ops fold with the steps, reasoning included; 
   const panel = await openFoldSession(page)
   const history = panel.locator('.session-history')
   await expect(history).toContainText('FOLD_FINAL_I passed it on.')
-  const fold = history.locator('[data-testid="turn-fold"]').filter({ hasText: 'sent 4 messages' })
+  const fold = history.locator('[data-testid="turn-fold"]').filter({ hasText: 'Sent a message, used task_update, sent a message, wrote to your inbox, sent a message' })
   await expect(fold).toHaveCount(1)
   expect(await history.innerText()).not.toContain('FOLD_SENT_NINE')
   expect(await history.innerText()).not.toContain('FOLD_REPLY_NINE')
@@ -156,22 +158,24 @@ test('an answer to the person shows in full even with the line under it; nothing
   expect(copied.at(-1)).toBe('FOLD_NOACTION_B all handled, nothing for you.\n\nSecond paragraph of it.')
 })
 
-test('a turn a peer started that needed nothing is hidden; a quiet toggle opens it', async ({ page }) => {
+test('a turn a peer started that needed nothing is one row saying what happened; it opens to the card', async ({ page }) => {
   test.setTimeout(90_000)
   const panel = await openFoldSession(page)
   const history = panel.locator('.session-history')
   // Both peer FYIs (after turn five's answer, and after G's; the second on the line's first name).
-  const hidden = history.locator('[data-testid="hidden-turns"]')
+  const hidden = history.locator('[data-testid="turn-fold"]').filter({ hasText: 'FOLD_PEER_FYI' })
   await expect(hidden).toHaveCount(2)
-  await expect(hidden.last().locator('button')).toHaveText('Show 1 hidden turn')
-  expect(await history.innerText()).not.toContain('FOLD_PEER_FYI')
+  await expect(hidden.last().locator(':scope > .tool-run-toggle .tool-run-label')).toHaveText('From Sample lead: FOLD_PEER_FYI_TWO status only, acknowledged')
+  await expect(history).not.toContainText(/hidden turn/)
+  // Folded, the note's words are off screen; only its title is on the line.
+  expect(await history.innerText()).not.toContain('Second status, nothing to do.')
   await expect(history.locator('[data-testid="no-action-mark"]')).toHaveCount(0)
   // The raw line prints nowhere but in turn four, which quotes it in code.
   await expect(history.locator('.session-msg', { hasText: '<walnut-turn' })).toHaveCount(1)
   await expect(history.locator('.session-msg', { hasText: '<walnut-turn' })).toContainText('FOLD_QUOTED_D')
   await reveal(page, panel, hidden.last())
   await shot(page, hidden.last(), 'hidden-turns')
-  await hidden.last().locator('button').click()
+  await hidden.last().locator(':scope > .tool-run-toggle').click()
   await expect(hidden.last()).toContainText('FOLD_PEER_FYI_TWO status only')
   await expect(hidden.last().locator('[data-testid="no-action-mark"]')).toHaveCount(1)
   await shot(page, hidden.last(), 'hidden-turns-open')

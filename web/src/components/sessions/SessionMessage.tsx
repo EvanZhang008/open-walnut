@@ -21,7 +21,7 @@ import { markdownToRichHtml } from '@/utils/markdown';
 import { SuggestSegments, useSuggestSegments } from '@/components/chat/SuggestSegments';
 import { RichMarkdown } from '@/components/chat/RichBlocks';
 import { BashToolCall } from './BashToolCall';
-import { parseSessionEnvelopes } from '@open-walnut/history-session-envelope';
+import { parseSessionEnvelopes, type EnvelopeSegment } from '@open-walnut/history-session-envelope';
 import { injectedContextKind } from './injected-context';
 import { detectOutboundSend } from './session-outbound';
 import { SessionEnvelopeSegments } from './SessionProvenanceCard';
@@ -30,6 +30,8 @@ import { splitLeadingBanners } from '@open-walnut/history-injected-banner';
 import { splitLeadingRiders } from '@open-walnut/history-walnut-riders';
 import '@/styles/session-riders.css';
 import { ProcessFoldRow } from './TurnFolds';
+import { envelopeSteps, foldStepsPhrase } from './fold-steps';
+import { usePeerNameOf } from './peer-name';
 import { QUESTION_BANNER_RE, stripQuestionTag } from '@/utils/question-tag';
 import { MessageHintsRow } from './MessageHintsRow';
 import { showHintTagsAsTyped } from '@/utils/hint-display';
@@ -1064,6 +1066,17 @@ function specialSessionRow({ message }: SessionMessageProps): ReactNode | undefi
   return undefined;
 }
 
+/** Walnut's notes above a person's words, folded; the line names who sent what (fold-steps.ts). */
+function RiderFold({ foldId, segments, children }: { foldId: string; segments: EnvelopeSegment[]; children: ReactNode }) {
+  const peerName = usePeerNameOf();
+  return (
+    <ProcessFoldRow foldId={foldId} foldKey={`rider:${foldId === 'rider' ? '' : foldId}`} testId="rider-fold"
+      phrase={foldStepsPhrase(envelopeSteps(segments, peerName))}>
+      {children}
+    </ProcessFoldRow>
+  );
+}
+
 /**
  * A special row and a bubble are two components, so React remounts across the
  * switch instead of running a different number of hooks when a row changes kind
@@ -1359,15 +1372,11 @@ function SessionMessageBubble({ message, assistantLabel = 'Claude Code', session
   // their own (2026-10-25, the user: "the user doesn't care"). Ahead of another
   // envelope the row already sits in a turn's fold, so the cards show as they are.
   const personWords = !(envelopeSegments || (bannerSplit && !bodyText));
-  const count = riderSegments.length;
   return (
     <>
       <div className="session-msg session-msg-envelope session-msg-riders" data-testid="session-rider-row">
         {personWords ? (
-          <ProcessFoldRow foldId={msgId ?? timestamp ?? 'rider'} foldKey={`rider:${msgId ?? timestamp ?? ''}`} testId="rider-fold"
-            phrase={count === 1 ? 'Received a message' : `Received ${count} messages`}>
-            {cards}
-          </ProcessFoldRow>
+          <RiderFold foldId={msgId ?? timestamp ?? 'rider'} segments={riderSegments}>{cards}</RiderFold>
         ) : cards}
       </div>
       {row}
