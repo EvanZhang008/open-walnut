@@ -268,9 +268,14 @@ export async function smokeDesktopApp({ app: given, work: made, version, release
       const command = pid ? execFileSync('ps', ['-o', 'command=', '-p', pid], { encoding: 'utf8' }).trim() : ''
       const rt = installedRuntime(runtimeDir)
       if (!rt) throw new Error(`nothing the app can run is installed in ${runtimeDir}`)
-      // The file, run through its link; an older app's archive, on its own Node.
-      const runs = rt.kind === 'file' ? fs.realpathSync(rt.file) : fs.realpathSync(rt.node)
-      if (!fs.realpathSync(command.split(' ')[0]).startsWith(runs)) throw new Error(`the server on ${port} is "${command}", not the installed ${rt.kind === 'file' ? 'file' : 'runtime\'s Node'}`)
+      // The file, run through its link; or something the archive an older app
+      // installed holds: its own Node, or the compiled file its npm launcher put in
+      // its node_modules (what the archive starts since the Bun migration).
+      const exe = fs.realpathSync(command.split(' ')[0])
+      const ours = rt.kind === 'file'
+        ? exe === fs.realpathSync(rt.file)
+        : exe.startsWith(fs.realpathSync(path.join(runtimeDir, 'app', 'runtime')) + path.sep)
+      if (!ours) throw new Error(`the server on ${port} is "${command}", not the installed ${rt.kind === 'file' ? 'file' : 'archive'}`)
       const started = desktopLog().split('\n').map((l) => { try { return JSON.parse(l) } catch { return null } })
         .filter((r) => r?.event === 'runtime_install_started')
       const from = started.at(-1)?.from
