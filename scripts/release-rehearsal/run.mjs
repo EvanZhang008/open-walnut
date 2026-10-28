@@ -117,8 +117,19 @@ async function scenario(name, fn) {
   }
 }
 
+/** The daemon's own logs in `dir`, newest last (at most two). */
+function daemonLogs(dir) {
+  try {
+    return fs.readdirSync(dir).filter((f) => /^daemon.*\.log$/.test(f)).map((f) => path.join(dir, f))
+      .sort((a, b) => fs.statSync(a).mtimeMs - fs.statSync(b).mtimeMs).slice(-2)
+  } catch { return [] }
+}
+
+// The rehearsal's own polling of a session's history, which would fill the tail.
+const POLL_LINE = /GET \/api\/v1\/sessions\/[^ ]+\/history/
+
 function tailOf(file, lines = 80) {
-  try { return fs.readFileSync(file, 'utf8').split('\n').slice(-lines).join('\n') } catch { return '(no log)' }
+  try { return fs.readFileSync(file, 'utf8').split('\n').filter((l) => !POLL_LINE.test(l)).slice(-lines).join('\n') } catch { return '(no log)' }
 }
 
 /** The binary's version, or what running it said (mid-install it may not run). */
@@ -179,7 +190,11 @@ async function finish(opts, work, title, expected) {
   // A scenario that failed half way left its server and daemon running.
   for (const x of walnuts) await x.shutdown().catch(() => {})
   for (const r of results.filter((r) => !r.ok)) {
-    for (const x of walnuts) process.stdout.write(`\n── ${x.logFile} (tail, for ${r.name}) ──\n${tailOf(x.logFile)}\n`)
+    for (const x of walnuts) {
+      process.stdout.write(`\n── ${x.logFile} (tail, for ${r.name}) ──\n${tailOf(x.logFile)}\n`)
+      // The daemon spawns the sessions: a session that never answers is told here.
+      for (const f of daemonLogs(x.daemonDir)) process.stdout.write(`\n── ${f} (tail) ──\n${tailOf(f, 60)}\n`)
+    }
     break
   }
   const table = ['| Scenario | Result | Time | Detail |', '|---|---|---|---|',
