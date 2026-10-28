@@ -3,20 +3,20 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Walnut — The open-source home for all your Claude Code</title>
-<meta name="description" content="Walnut is a self-hosted, open-source web UI that runs every Claude Code session on your laptop and your remote dev boxes from one console — plus a per-session diff review, tasks, notes, and a self-organizing memory. Local-first, MIT licensed." />
+<title>Open Walnut: AI agents that run your work like a small company</title>
+<meta name="description" content="Replace Notion and your Claude Code terminals with one open-source app. You talk to a CEO agent (Main), and each project gets a lead that runs its own Claude Code sessions. Tasks, notes, calendar and every coding session in one self-hosted app. MIT." />
 <link rel="icon" type="image/png" href="assets/walnut-icon.png" />
 
 <!-- Open Graph / social -->
 <meta property="og:type" content="website" />
 <meta property="og:url" content="https://openwalnut.dev/" />
-<meta property="og:title" content="Walnut — The open-source home for all your Claude Code" />
-<meta property="og:description" content="One console that runs every Claude Code session — local and remote-over-SSH — with GitHub-style per-session diff review, tasks, notes, and a memory that organizes itself. Local-first, MIT." />
-<meta property="og:image" content="https://openwalnut.dev/assets/hero.png" />
+<meta property="og:title" content="Open Walnut: AI agents that run your work like a small company" />
+<meta property="og:description" content="Replace Notion and your Claude Code terminals with one open-source app. You talk to a CEO agent (Main), and each project gets a lead that runs its own Claude Code sessions. Tasks, notes, calendar and every coding session in one self-hosted app. MIT." />
+<meta property="og:image" content="https://openwalnut.dev/assets/lead-team.png" />
 <meta name="twitter:card" content="summary_large_image" />
-<meta name="twitter:title" content="Walnut — The open-source home for all your Claude Code" />
-<meta name="twitter:description" content="One console for every Claude Code session, local and remote-over-SSH — per-session diff review, tasks, notes, and a self-organizing memory." />
-<meta name="twitter:image" content="https://openwalnut.dev/assets/hero.png" />
+<meta name="twitter:title" content="Open Walnut: AI agents that run your work like a small company" />
+<meta name="twitter:description" content="Replace Notion and your Claude Code terminals with one open-source app. You talk to a CEO agent (Main), and each project gets a lead that runs its own Claude Code sessions. Tasks, notes, calendar and every coding session in one self-hosted app. MIT." />
+<meta name="twitter:image" content="https://openwalnut.dev/assets/lead-team.png" />
 
 <style>
   :root{
@@ -75,6 +75,29 @@
   .video-wrap{max-width:880px;margin:42px auto 0;border-radius:16px;overflow:hidden;
     border:1px solid var(--line);box-shadow:0 30px 80px rgba(0,0,0,.5);position:relative;aspect-ratio:16/9;background:#000}
   .video-wrap iframe{position:absolute;inset:0;width:100%;height:100%;border:0}
+  .hero-media{display:block;max-width:960px;margin:42px auto 0;border-radius:16px;overflow:hidden;
+    border:1px solid var(--line);box-shadow:0 30px 80px rgba(0,0,0,.5);background:#fff}
+  .hero-media img{display:block;width:100%;height:auto}
+  .hero-install{max-width:760px;margin:28px auto 0;text-align:left}
+  .hero-install .code{margin:0;max-width:none;font-size:13.5px;white-space:nowrap}
+  .hero-install .alt{color:var(--muted);font-size:14.5px;margin-top:12px;text-align:center}
+  .opts{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;margin-top:34px}
+  @media(max-width:760px){.opts{grid-template-columns:1fr}}
+  .opts>*{min-width:0}
+  .opts .code{margin:10px 0 0;max-width:none;font-size:13px;padding:14px 16px 50px;white-space:normal;word-break:break-all}
+  .opts .code.copyable{padding-right:16px}
+  .opts .copy{top:auto;bottom:10px;transform:none}
+  .hero-install,.hero-install .code{min-width:0;width:100%}
+  .hero-install{max-width:560px}
+  .code.copyable{position:relative;padding-right:84px}
+  .copy{position:absolute;top:50%;right:12px;transform:translateY(-50%);font:600 13px/1 -apple-system,system-ui,sans-serif;
+    color:var(--ink);background:rgba(120,130,255,.14);border:1px solid var(--line);border-radius:8px;padding:8px 12px;cursor:pointer;
+    user-select:none;-webkit-user-select:none}
+  .copy:hover{background:rgba(120,130,255,.26)}
+  @media(max-width:640px){
+    .hero-install .code.copyable{white-space:normal;word-break:break-all;padding-right:22px;padding-bottom:54px}
+    .hero-install .copy{top:auto;bottom:10px;transform:none}
+  }
 
   /* sections */
   section{padding:60px 0}
@@ -115,18 +138,22 @@
       <a href="#features">Features</a>
       <a href="#plugins">Plugins</a>
       <a href="#install">Install</a>
-      <a href="https://youtu.be/uN4WCZ-n2mw">Demo</a>
+      <a href="https://youtu.be/uN4WCZ-n2mw">Video tour</a>
       <a class="btn btn-ghost" href="https://github.com/EvanZhang008/open-walnut">★ GitHub</a>
     </div>
   </nav>
 
   <header>
     <span class="pill">● OPEN SOURCE · SELF-HOSTED · MIT</span>
-    <h1>The open-source home for<br/>all your <span class="hl">Claude Code</span></h1>
-    <p class="sub">A self-hosted web UI that runs every Claude Code session on your laptop <i>and</i> your remote dev boxes from one console — streaming every tool call live, with a GitHub-style review of exactly what each session changed. Plus tasks, notes, and a memory that organizes itself. Your data stays on your machine.</p>
+    <h1>AI agents that run your work<br/>like a <span class="hl">small company</span></h1>
+    <p class="sub">Replace Notion and your Claude Code terminals with one open-source app. You talk to one CEO agent (Main, in the app), and each project gets a lead that runs its own Claude Code sessions and workers. Tasks, notes, calendar and every coding session, on your machine.</p>
+    <div class="hero-install">
+      <div class="code copyable" data-copy="curl -fsSL https://openwalnut.dev/install.sh | sh &amp;&amp; ~/.local/bin/walnut web"><button type="button" class="copy">Copy</button>curl -fsSL https://openwalnut.dev/install.sh | sh<br/>~/.local/bin/walnut web</div>
+      <p class="alt">macOS or Linux. It needs only Claude Code, signed in once. Then open <code>http://localhost:3456</code>. Or <a href="#install">Homebrew and the Mac app</a>.</p>
+    </div>
     <div class="cta">
-      <a class="btn btn-primary" href="https://github.com/EvanZhang008/open-walnut">★ Star on GitHub</a>
-      <a class="btn btn-ghost" href="https://youtu.be/uN4WCZ-n2mw">▶ Watch the demo</a>
+      <a class="btn btn-primary" href="#install">Install</a>
+      <a class="btn btn-ghost" href="https://github.com/EvanZhang008/open-walnut">★ Star on GitHub</a>
     </div>
     <div class="trusted">
       <div class="label">Used by engineers at</div>
@@ -136,93 +163,111 @@
       </div>
     </div>
 
-    <div class="video-wrap">
-      <iframe src="https://www.youtube.com/embed/uN4WCZ-n2mw" title="Walnut demo" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>
-    </div>
+    <a class="hero-media" href="assets/org.gif">
+      <img src="assets/org.gif" width="960" height="600" alt="The org chart, a lead per area, and the one question that needs you, answered in the session where it waits" />
+    </a>
   </header>
 
   <section id="features">
-    <h2>One app for everything around Claude Code</h2>
-    <p class="lead">Stop losing sessions in terminal tabs. Walnut gives Claude Code a real UI and ties it to the work it's for.</p>
+    <h2>One app for your work and your agents</h2>
+    <p class="lead">Stop losing work in terminal tabs and note pages. Walnut gives your agents an org, gives Claude Code a real UI, and ties every session to the work it's for.</p>
+
+    <div class="feature">
+      <div class="ftext">
+        <h3>Main, and a lead for each project</h3>
+        <p>The Org page is where you run the company. <b>Main</b>, your CEO agent, sees every project. Each project has a <b>lead</b> that plans the work and hands it to workers, each one its own Claude Code session.</p>
+        <p>Every lead's row says what it is working on or what it <b>asks you</b>, and you answer right where the question waits. The org chart shows the whole team; drag a task onto another to make it that task's worker.</p>
+      </div>
+      <img src="assets/org-chart.png" alt="The org chart: Main on top, a lead per project, and the workers under each task" loading="lazy"/>
+    </div>
+
+    <div class="feature">
+      <div class="ftext">
+        <h3>Sessions that draw</h3>
+        <p><b>Rich mode</b> is on by default: a session can answer with a diagram, a table, or a laid-out page instead of a wall of text, and it draws in as the answer streams.</p>
+      </div>
+      <img src="assets/rich-mode-draw.gif" alt="A Claude Code session drawing how a web request reaches a server, live" loading="lazy"/>
+    </div>
 
     <div class="feature">
       <div class="ftext">
         <h3>Natural language → task → live session</h3>
-        <p>Tell the main agent what you want. It creates the task and spawns a Claude Code session for it — in one shot — then streams every tool call and output live in your browser.</p>
+        <p>Tell the main agent what you want. It creates the task and spawns a Claude Code session for it in one shot, then streams every tool call and output live in your browser.</p>
       </div>
-      <img src="assets/01-task-to-session.gif" alt="Create a task and a Claude Code session from natural language"/>
+      <img loading="lazy" src="assets/01-task-to-session.gif" alt="Create a task and a Claude Code session from natural language"/>
     </div>
 
     <div class="feature">
       <div class="ftext">
         <h3>A real session panel</h3>
-        <p>Chat with the session and switch modes like the CLI, open a real terminal, browse files, recap past messages, or fork into a sub-session — all in one click.</p>
+        <p>Chat with the session and switch modes like the CLI, open a real terminal, browse files, recap past messages, or fork into a sub-session, each in one click.</p>
       </div>
-      <img src="assets/02-session-panel.gif" alt="Claude Code session panel: chat, terminal, files, fork"/>
+      <img loading="lazy" src="assets/02-session-panel.gif" alt="Claude Code session panel: chat, terminal, files, fork"/>
     </div>
 
     <div class="feature">
       <div class="ftext">
-        <h3>Focus, Satellite, Wait</h3>
-        <p>Drag what you're actively working on into <b>Focus</b>, park secondary work in <b>Satellite</b>, and hold blocked work in <b>Wait</b>. Status is color-coded and updates as the AI works.</p>
+        <h3>Focus, Satellite, Parked</h3>
+        <p>Drag what you're actively working on into <b>Focus</b>, keep secondary work in <b>Satellite</b>, and shelve what waits in <b>Parked</b>. Status is color-coded and updates as the AI works.</p>
       </div>
-      <img src="assets/03-focus-tiers.gif" alt="Drag tasks between Focus, Satellite, and Wait tiers"/>
+      <img loading="lazy" src="assets/03-focus-tiers.gif" alt="Drag tasks between Focus, Satellite, and Parked tiers"/>
     </div>
 
     <div class="feature">
       <div class="ftext">
-        <h3>Tasks, agent chat &amp; Claude Code — one screen</h3>
+        <h3>Tasks, agent chat &amp; Claude Code on one screen</h3>
         <p>Tasks on the left, the main agent chat in the middle, your live Claude Code session on the right. The agent manages it all with full context from your memory and notes.</p>
       </div>
-      <img src="assets/04-home-three-pane.gif" alt="Home page: tasks, agent chat, and Claude Code side by side"/>
+      <img loading="lazy" src="assets/04-home-three-pane.gif" alt="Home page: tasks, agent chat, and Claude Code side by side"/>
     </div>
 
     <div class="feature">
       <div class="ftext">
         <h3>Notes &amp; memory the AI can search</h3>
-        <p>An Obsidian-style notes vault stored locally and indexed in a local vector database. Ask <i>"what is my health routine?"</i> and the agent finds it across your notes — nothing leaves your disk.</p>
+        <p>An Obsidian-style notes vault stored locally and indexed in a local vector database. Ask <i>"what is my health routine?"</i> and the agent finds it across your notes. Nothing leaves your disk.</p>
       </div>
-      <img src="assets/05-notes-memory.gif" alt="Ask the AI to find information across your local notes"/>
+      <img loading="lazy" src="assets/05-notes-memory.gif" alt="Ask the AI to find information across your local notes"/>
     </div>
 
     <div class="feature">
       <div class="ftext">
         <h3>One console, every machine</h3>
-        <p>One Walnut console drives Claude Code on your laptop <b>and</b> any number of SSH hosts — and the main agent can drive both. Point at a host and Walnut auto-detects its node version and deploys its own daemon over SSH; no manual <code>scp</code>.</p>
-        <p><b>Crash-resilient</b>: if the tunnel or daemon dies, the daemon re-adopts the still-running <code>claude -p</code> processes on reconnect — nothing is lost. Terminal, files, diff, and the command palette all work over SSH.</p>
+        <p>One Walnut console drives Claude Code on your laptop <b>and</b> any number of SSH hosts, and your agents can start work on either. Point at a host and Walnut deploys its own small daemon there over SSH; no manual copy step.</p>
+        <p>Sessions keep running when the SSH connection drops, and terminal, files, diff, and the command palette all work over SSH.</p>
       </div>
-      <img src="assets/remote-topology.svg" alt="One Walnut console driving local and multiple remote hosts over SSH"/>
+      <img loading="lazy" src="assets/remote-topology.svg" alt="One Walnut console driving local and multiple remote hosts over SSH"/>
     </div>
 
     <div class="feature">
       <div class="ftext">
         <h3>Review what the agent changed</h3>
-        <p>A <b>GitHub-style, per-session diff</b> — see exactly what each session touched, split or unified, grouped by repo. Rebuilt from the session's <b>own history</b>, so edits stay attributed per session even when several agents share a repo.</p>
+        <p>A <b>GitHub-style, per-session diff</b>: see exactly what each session touched, split or unified, grouped by repo. Rebuilt from the session's <b>own history</b>, so edits stay attributed per session even when several agents share a repo.</p>
         <p><b>Select code → "Ask about this"</b> drops it into the same agent's chat, and <b>click a line</b> for a PR-style comment box that batches into one review.</p>
       </div>
-      <img src="assets/06-changed-review.gif" alt="A GitHub-style per-session diff in Walnut showing exactly what one Claude Code session changed"/>
+      <img loading="lazy" src="assets/06-changed-review.gif" alt="A GitHub-style per-session diff in Walnut showing exactly what one Claude Code session changed"/>
     </div>
 
     <div class="feature">
       <div class="ftext">
         <h3>See dynamic workflows as a live flow-graph</h3>
-        <p>Claude Code can fan out into a <b>dynamic multi-agent workflow</b> — Walnut is where you actually <i>watch</i> it run. Each phase becomes a column, each subagent a node with its live status, model, token spend, and duration.</p>
+        <p>Claude Code can fan out into a <b>dynamic multi-agent workflow</b>, and Walnut is where you actually <i>watch</i> it run. Each phase becomes a column, each subagent a node with its live status, model, token spend, and duration.</p>
         <p><b>Full Claude Code dynamic-workflow support</b>: parallel fan-out and sequential stages are parsed straight from the session stream. <b>Click any node</b> for that subagent's full transcript; it even <b>survives a reload</b>, rebuilt from the on-disk manifest.</p>
       </div>
-      <img src="assets/workflow-viz.png" alt="Walnut visualizing a Claude Code dynamic workflow as a phase flow-graph: a FAN OUT stage of 4 parallel subagents feeding a SYNTHESIZE stage, each node showing model, tokens, and duration"/>
+      <img loading="lazy" src="assets/workflow-viz.png" alt="Walnut visualizing a Claude Code dynamic workflow as a phase flow-graph: a FAN OUT stage of 4 parallel subagents feeding a SYNTHESIZE stage, each node showing model, tokens, and duration"/>
     </div>
 
     <div class="grid">
       <div class="gcard"><h4>🖥️ Multi-session dashboard</h4><p>Run and monitor dozens of Claude Code sessions side by side, with live status, mid-session model switching, and plan → execute.</p></div>
-      <div class="gcard"><h4>✅ Tasks that drive sessions</h4><p>A 4-layer Category → Project → Task → Subtask hierarchy with priorities, due dates, dependencies, and tags — each task wired to its Claude Code session.</p></div>
-      <div class="gcard"><h4>🔌 Sync with any task platform</h4><p>Two-way sync to Microsoft To-Do and Jira ships built in — and they're just plugins. One generic sync contract means any platform (Asana, Linear, GitHub Issues, an internal tracker) is onboarded by dropping a plugin into <code>~/.open-walnut/plugins/</code>. Internal plugins never leave your machine.</p></div>
-      <div class="gcard"><h4>🧠 Self-organizing memory</h4><p>Working memory updates as you go, and a background agent distills daily logs into searchable topic pages — recency-weighted, hybrid BM25 + vector search.</p></div>
-      <div class="gcard"><h4>📓 Notes the AI can search</h4><p>Obsidian-style markdown with [[wiki-links]], backlinks, a folder tree, and hybrid search — injected into every session as context.</p></div>
+      <div class="gcard"><h4>✅ Tasks that drive sessions</h4><p>A Project → Folder → Task → Subtask hierarchy with priorities, due dates, dependencies, and tags, each task wired to its Claude Code session.</p></div>
+      <div class="gcard"><h4>🔌 Sync with any task platform</h4><p>Two-way sync to Microsoft To-Do and Jira ships built in, and they're just plugins. One generic sync contract means any platform (Asana, Linear, GitHub Issues, an internal tracker) is onboarded by dropping a plugin into <code>~/.open-walnut/plugins/</code>. Internal plugins never leave your machine.</p></div>
+      <div class="gcard"><h4>🧠 Self-organizing memory</h4><p>Working memory updates as you go, and a background agent distills daily logs into searchable topic pages, with recency-weighted, hybrid BM25 + vector search.</p></div>
+      <div class="gcard"><h4>📓 Notes the AI can search</h4><p>Obsidian-style markdown with [[wiki-links]], backlinks, a folder tree, and hybrid search your agents and sessions can use.</p></div>
       <div class="gcard"><h4>💬 Multi-conversation agents</h4><p>Create on-demand agents, each with independent fresh-context conversations; what you discuss is auto-distilled into that agent's memory.</p></div>
       <div class="gcard"><h4>⚙️ Cron &amp; automation</h4><p>One-time, interval, and cron-expression jobs with timezones, heartbeat checklists, and automated session triage on a dedicated page.</p></div>
-      <div class="gcard"><h4>⌨️ Command &amp; skill palettes</h4><p>Browse and run slash commands and skills from one place — including the ones discovered on your remote hosts.</p></div>
-      <div class="gcard"><h4>🔊 Free text-to-speech</h4><p>A built-in TTS tool the agent can speak through — no API key, no extra cost.</p></div>
-      <div class="gcard"><h4>🔒 Local-first &amp; private</h4><p>Plain JSON / Markdown / SQLite in a local folder. No telemetry, no cloud database — your data stays on your machine.</p></div>
+      <div class="gcard"><h4>⌨️ Command &amp; skill palettes</h4><p>Browse and run slash commands and skills from one place, including the ones discovered on your remote hosts.</p></div>
+      <div class="gcard"><h4>🤖 Every coding agent</h4><p>Claude Code by default, and Codex, Gemini, OpenCode, and Goose sessions in the same columns, each tied to its task (install their CLIs first).</p></div>
+      <div class="gcard"><h4>📅 Calendar</h4><p>Your calendar beside your tasks: drag a task onto the calendar to schedule it.</p></div>
+      <div class="gcard"><h4>🔒 Local-first &amp; private</h4><p>Plain JSON / Markdown / SQLite in a local folder. No telemetry, no cloud database: your data stays on your machine.</p></div>
     </div>
   </section>
 
@@ -258,16 +303,22 @@ npm run dev
   </section>
 
   <section id="install">
-    <h2>Get started in two commands</h2>
-    <p class="lead">macOS or Linux and the Claude Code CLI. No Node needed: Walnut brings its own.</p>
-    <div class="code">
-<span class="c"># install</span><br/>
-curl -fsSL https://github.com/EvanZhang008/open-walnut/releases/latest/download/install.sh | sh<br/>
-<span class="c"># or: brew install evanzhang008/tap/open-walnut</span><br/><br/>
-<span class="c"># run, then open http://localhost:3456</span><br/>
-walnut web
+    <h2>Install in one line</h2>
+    <p class="lead">macOS or Linux. Walnut brings everything it runs on, so there is nothing else to install first. Its agents run on <a href="https://docs.anthropic.com/en/docs/claude-code">Claude Code</a>, signed in once.</p>
+    <div class="opts">
+      <div class="gcard"><h4>One-line script</h4><p>macOS 12+ or Linux (glibc 2.28+), arm64 or x64.</p>
+        <div class="code copyable" data-copy="curl -fsSL https://github.com/EvanZhang008/open-walnut/releases/latest/download/install.sh | sh &amp;&amp; ~/.local/bin/walnut web"><button type="button" class="copy">Copy</button>curl -fsSL https://github.com/EvanZhang008/open-walnut/releases/latest/download/install.sh | sh<br/>~/.local/bin/walnut web</div>
+        <p style="margin-top:10px;font-size:13.5px">It installs into <code>~/.local</code>. Add <code>~/.local/bin</code> to your PATH to run plain <code>walnut web</code>.</p></div>
+      <div class="gcard"><h4>Homebrew</h4><p>macOS or Linux.</p>
+        <div class="code copyable" data-copy="brew install evanzhang008/tap/open-walnut &amp;&amp; walnut web"><button type="button" class="copy">Copy</button>brew install evanzhang008/tap/open-walnut<br/>walnut web</div></div>
+      <div class="gcard"><h4>Mac app</h4><p>Walnut inside, and it keeps itself up to date.</p>
+        <div class="cta" style="margin-top:12px;justify-content:flex-start">
+          <a class="btn btn-ghost" style="font-size:14px;padding:9px 14px" href="https://github.com/EvanZhang008/open-walnut/releases/latest/download/Walnut-arm64.dmg">Apple silicon</a>
+          <a class="btn btn-ghost" style="font-size:14px;padding:9px 14px" href="https://github.com/EvanZhang008/open-walnut/releases/latest/download/Walnut-x64.dmg">Intel</a>
+        </div>
+        <p style="margin-top:10px;font-size:13.5px">Or <code>brew install --cask evanzhang008/tap/walnut</code>.</p></div>
     </div>
-    <p class="lead" style="margin-top:16px">On a Mac, get the app instead: <a href="https://github.com/EvanZhang008/open-walnut/releases/latest/download/Walnut-arm64.dmg">Apple silicon</a> or <a href="https://github.com/EvanZhang008/open-walnut/releases/latest/download/Walnut-x64.dmg">Intel</a> (or <code>brew install --cask evanzhang008/tap/walnut</code>). It carries Walnut inside and keeps itself up to date.</p>
+    <p class="lead" style="margin-top:22px">Then open <code>http://localhost:3456</code>. The first start downloads a local search model (about 640 MB) and, on Apple silicon and Linux, a local voice model (1 to 2.5 GB), in the background.</p>
     <div class="cta" style="margin-top:30px">
       <a class="btn btn-primary" href="https://github.com/EvanZhang008/open-walnut">★ Star on GitHub</a>
       <a class="btn btn-ghost" href="https://github.com/EvanZhang008/open-walnut/blob/main/GETTING_STARTED.md">📖 Getting started</a>
@@ -276,7 +327,7 @@ walnut web
 
   <section id="star-history" style="padding-top:20px">
     <h2>Built in the open</h2>
-    <p class="lead">A solo-maintained, MIT-licensed project. If it saves you a lost session, a star helps others find it.</p>
+    <p class="lead">A solo-maintained, MIT-licensed project. If it helps you run your work, a star helps others find it.</p>
     <a href="https://star-history.com/#EvanZhang008/open-walnut&Date" style="display:block;max-width:680px;margin:34px auto 0;border-radius:14px;overflow:hidden;border:1px solid var(--line)">
       <img src="https://api.star-history.com/svg?repos=EvanZhang008/open-walnut&type=Date" alt="Open Walnut GitHub star history" style="width:100%;display:block"/>
     </a>
@@ -290,7 +341,22 @@ walnut web
     <a href="https://youtu.be/uN4WCZ-n2mw">Demo video</a>
     <a href="https://github.com/EvanZhang008/open-walnut/blob/main/LICENSE">MIT License</a>
   </div>
-  Walnut — a Personal AI. Open source &amp; self-hosted. Built with Claude Code.
+  Open Walnut: your work, run by your agents. Open source &amp; self-hosted. Built with Claude Code.
 </footer>
+<script>
+document.querySelectorAll('.copyable').forEach(function (box) {
+  var btn = box.querySelector('.copy');
+  if (!navigator.clipboard) { btn.style.display = 'none'; return; }
+  btn.addEventListener('click', function () {
+    navigator.clipboard.writeText(box.getAttribute('data-copy')).then(function () {
+      btn.textContent = 'Copied';
+      setTimeout(function () { btn.textContent = 'Copy'; }, 1600);
+    }, function () {
+      btn.textContent = 'Select and copy';
+      setTimeout(function () { btn.textContent = 'Copy'; }, 2400);
+    });
+  });
+});
+</script>
 </body>
 </html>

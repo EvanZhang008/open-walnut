@@ -2,34 +2,35 @@
 
 Open Walnut is a Personal AI that manages tasks, accumulates knowledge, and coordinates Claude Code sessions from one web UI. This guide walks you through installation, configuration, and your first productive session.
 
-> **Time estimate**: 5 minutes for the fast track (plus a one-time ~1.16 GB model download on first start), 10 minutes for the full walkthrough.
+> **Time estimate**: 5 minutes for the fast track (plus one-time model downloads on first start: ~640 MB for search, and 1 to 2.5 GB for voice on Apple silicon and Linux, both in the background), 10 minutes for the full walkthrough.
 
 ---
 
 ## Fast Track (5 Minutes + Model Download)
 
-Walnut is one compiled file with everything inside, and one command installs it on macOS or
-Linux with nothing installed first (no Node, no npm). On Alpine, run
-`apk add libstdc++ libgcc` first: the musl build links the C++ runtime.
+Walnut carries everything it runs on, and one command installs it on macOS 12+ or Linux (glibc 2.28+)
+with nothing installed first (no Node, no npm). Alpine (musl) builds start with the release
+after 0.6.19; there, run `apk add libstdc++ libgcc` first: the musl build links the C++ runtime.
 
 ```bash
-# 1. Install Claude Code CLI (needed for coding sessions)
+# 1. Install Claude Code (every Walnut agent runs on it)
 curl -fsSL https://claude.ai/install.sh | bash
-claude --version                      # verify it's installed
+claude                                # run it once and sign in
 
-# 2. Install Walnut (one file, nothing to build)
+# 2. Install Walnut (nothing to build)
 curl -fsSL https://github.com/EvanZhang008/open-walnut/releases/latest/download/install.sh | sh
 
-# 3. Set your API key (Anthropic — simplest option)
-export ANTHROPIC_API_KEY=sk-ant-...   # get one at console.anthropic.com
-
-# 4. Start
+# 3. Start
 walnut web                            # starts on port 3456
 ```
 
+If the shell says `walnut: command not found`, `~/.local/bin` is not on your PATH yet (it is
+not by default on macOS): run `~/.local/bin/walnut web`, and add
+`export PATH="$HOME/.local/bin:$PATH"` to your `~/.zshrc` or `~/.bashrc` for next time. No API
+key is needed: Walnut runs every AI turn through the Claude Code you signed in to in step 1.
+
 Homebrew works too (`brew install evanzhang008/tap/open-walnut`), and so does npm for people
-who use it: `npm install -g open-walnut` (any Node 8 or newer) installs a small launcher and
-only the file built for your machine; start it with `open-walnut web`.
+who use it: `npm install -g open-walnut` (Node 22 or newer), then `open-walnut web`.
 
 Working on Walnut itself? Swap step 2 for a checkout, installed with
 [Bun](https://bun.sh) (`curl -fsSL https://bun.sh/install | bash`), and start with
@@ -42,11 +43,9 @@ bun install
 bun run start
 ```
 
-Open [http://localhost:3456](http://localhost:3456) — type "hello" in the chat and the agent should reply. You're done!
+Open [http://localhost:3456](http://localhost:3456), type "hello" to Main, and it should reply. You're done!
 
 > **First start is slower**: The Qwen3-Embedding-0.6B embedding model (~640 MB) downloads automatically on first launch. This is a one-time download that can take 5-30 minutes depending on your connection. The server starts and is usable while the download happens in the background.
-
-> **Want coding sessions too?** Run `claude` once in your terminal to complete the Claude Code CLI auth flow. This is separate from the API key above.
 
 > **Not working?** See [Troubleshooting](#troubleshooting) below, or continue reading for the full setup.
 
@@ -57,7 +56,7 @@ Open [http://localhost:3456](http://localhost:3456) — type "hello" in the chat
 - [Fast Track (5 Minutes + Model Download)](#fast-track-5-minutes--model-download)
 - [Prerequisites](#prerequisites)
 - [Installation](#installation)
-- [Provider Configuration](#provider-configuration)
+- [Provider Configuration](#provider-configuration-optional)
 - [First Run](#first-run)
 - [Your First Tasks](#your-first-tasks)
 - [Starting Sessions (Claude Code)](#starting-sessions-claude-code)
@@ -79,14 +78,14 @@ Open [http://localhost:3456](http://localhost:3456) — type "hello" in the chat
 | Dependency | Version | How to install | Why |
 |---|---|---|---|
 | **Claude Code CLI** | Latest | `curl -fsSL https://claude.ai/install.sh \| bash`, then run `claude` once to sign in | Every AI turn is a `claude` session: the home page chat, coding sessions, scheduled routines, and the agents a session hook dispatches |
-| **Disk space** | ~2 GB free | — | For the embedding model (~640 MB) and search index |
+| **Disk space** | ~5 GB free | None | For Walnut itself (~1 GB), the embedding model (~640 MB), the search index, and on Apple silicon and Linux the voice model (1 to 2.5 GB) |
 
 ### Optional
 
 | Dependency | How to install | Why | Without it |
 |---|---|---|---|
 | **Git** | macOS: `xcode-select --install`, Ubuntu: `sudo apt install git`, or [git-scm.com](https://git-scm.com/) | Cloning the repo, and auto-backup of `~/.open-walnut/` every 30 seconds | An installed Walnut needs no git. Data is still saved locally, just not version-controlled. |
-| **Provider key** | See [Provider Configuration](#provider-configuration) | Sends the small background single calls (session titles, summaries, voice cleanup, quick parses) to Anthropic, Bedrock, or another provider instead of your Claude Code login | Those calls go through Claude Code, which is the default. Chat, coding sessions, and routines never read a key. |
+| **Provider key** | See [Provider Configuration](#provider-configuration-optional) | Sends the small background single calls (session titles, summaries, voice cleanup, quick parses) to Anthropic, Bedrock, or another provider instead of your Claude Code login | Those calls go through Claude Code, which is the default. Chat, coding sessions, and routines never read a key. |
 | **Bun** | [bun.sh](https://bun.sh/) (1.4.4 or newer) | Required for a checkout, and the only thing it needs besides git: it installs the dependencies (`bun install`), runs the build and the tests, and builds the prebuilt session-daemon binaries (faster deploys to remote hosts) and the ACP worker bundle | Not needed by an installed Walnut, which carries all of that inside. |
 
 ### One AI login: Claude Code
@@ -118,7 +117,11 @@ This installs both backend and frontend dependencies, at the exact versions in
 
 ### Updating and rolling back
 
-The one-line installer keeps each version in its own folder and one link to the version in use:
+This layout starts with the release after 0.6.19. The 0.6.19 installer unpacks Walnut, with
+its own Node, into `~/.local/share/open-walnut/app`; running it again replaces that folder,
+and `walnut web` updates the install in place.
+
+From the next release on, the one-line installer keeps each version in its own folder and one link to the version in use:
 
 ```text
 ~/.local/share/open-walnut/versions/<version>/walnut
