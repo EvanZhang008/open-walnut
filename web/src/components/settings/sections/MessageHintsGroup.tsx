@@ -86,7 +86,8 @@ function HintEditor({ hint, onSave, onReset }: {
       {!hint.built_in && (
         <SettingsRow
           indent
-          wide
+          // Stacked: a long control beside the label squeezes it to nothing (2026-10-28).
+          className="settings-row-stacked"
           label="Text"
           htmlFor={`hint-text-${hint.kind}`}
           control={(
@@ -239,7 +240,9 @@ export function MessageHintsGroup() {
       ))}
       {hints && (
         <SettingsRow
-          wide
+          // Stacked: the name, text and button beside the label squeezed it to one
+          // letter per line (2026-10-28, WebKit and Chromium at 1280px).
+          className="settings-row-stacked"
           label="Add a hint"
           help="A name (lowercase, dashes) and its text; sent at session start, after a compaction and when edited."
           control={(

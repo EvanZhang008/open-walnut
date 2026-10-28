@@ -576,4 +576,10 @@ textarea.settings-input {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
+  align-items: center;
+}
+/* The name box stays short; the text box takes the rest of the row. */
+.message-hint-add > input:first-child {
+  flex: 0 0 140px;
+  width: 140px;
 }

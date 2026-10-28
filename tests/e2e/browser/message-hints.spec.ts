@@ -29,12 +29,30 @@ async function openSessions(page: Page): Promise<Locator> {
   return group
 }
 
+/**
+ * A row's label stays a readable line: at least `minWidth` wide and one line
+ * high. 2026-10-28, prod WebKit at 1280x860: the "Add a hint" row's controls took
+ * the whole row and squeezed its label to one letter per line.
+ */
+async function expectReadableLabel(row: Locator, minWidth = 60): Promise<void> {
+  const label = row.locator('.settings-row-label').first()
+  await expect(label).toBeVisible()
+  const box = (await label.boundingBox())!
+  const lineHeight = await label.evaluate((el) => parseFloat(getComputedStyle(el).lineHeight) || 20)
+  expect(box.width, `label width ${box.width}`).toBeGreaterThan(minWidth)
+  expect(box.height, `label height ${box.height} (line ${lineHeight})`).toBeLessThan(lineHeight * 1.6)
+}
+
 test.afterAll(async ({ request }) => {
   for (const kind of ['pw-tone', 'pw-marker', 'rich-output']) await request.delete(`/api/v1/hints/${kind}`).catch(() => undefined)
 })
 
 test('Settings: change a built-in, reset it, add and remove a custom hint', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 860 })
   const group = await openSessions(page)
+  const addRow = group.locator('.settings-row', { has: page.getByTestId('hint-new-kind') })
+  await expectReadableLabel(addRow)
+  await addRow.screenshot({ path: `${SHOTS}/add-row.png` })
   const rich = group.getByTestId('message-hint-rich-output')
   await expect(rich).toContainText('Every 5 messages', { ignoreCase: true })
   await rich.getByRole('button', { name: /Rich output/ }).click()
@@ -52,6 +70,11 @@ test('Settings: change a built-in, reset it, add and remove a custom hint', asyn
   await expect(group.getByTestId('message-hint-pw-tone')).toBeVisible()
   expect((await hints(page)).find((h) => h.kind === 'pw-tone')?.text).toBe('Keep answers short.')
   await group.getByTestId('message-hint-pw-tone').getByRole('button', { name: /pw-tone/ }).click()
+  // The custom hint's Text row has a long control too.
+  const textRow = group.locator('.settings-row', { has: page.locator('#hint-text-pw-tone') })
+  await expectReadableLabel(textRow)
+  await textRow.scrollIntoViewIfNeeded()
+  await textRow.screenshot({ path: `${SHOTS}/custom-editor.png` })
   await page.getByTestId('hint-reset-pw-tone').click()
   await expect(group.getByTestId('message-hint-pw-tone')).toHaveCount(0)
   expect((await hints(page)).map((h) => h.kind)).not.toContain('pw-tone')
