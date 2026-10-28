@@ -120,6 +120,19 @@ describe('island messages', () => {
     expect(readResultMessage({ t: ISLAND_RESULT_MSG, k: 'a', text: 'a\u2066b' }, 'a')).toBe('ab');
   });
 
+  it('hidden text cannot ride a result: tag characters, selectors, controls, fillers', () => {
+    // "hi" spelled in tag characters (ASCII smuggling), a run of variation selectors
+    // (bytes hidden as selectors), a soft hyphen, ALM, a Hangul filler, NUL and ESC.
+    const tags = '\u{E0068}\u{E0069}';
+    expect(cleanResultText(`Score 8/10${tags}`)).toBe('Score 8/10');
+    expect(cleanResultText('A\uFE01\u{E0101}\u{E01EF}B')).toBe('AB');
+    expect(cleanResultText('a\u00ADb\u061Cc\u3164d\u0000e\u001Bf')).toBe('abcdef');
+    // Newlines, tabs and an emoji's own selector stay; a run of selectors is one.
+    expect(cleanResultText('x\n\ty')).toBe('x\n\ty');
+    expect(cleanResultText('\u2764\uFE0F ok')).toBe('\u2764\uFE0F ok');
+    expect(cleanResultText('\u2764\uFE0F\uFE0F\uFE0E\uFE0F ok')).toBe('\u2764\uFE0F ok');
+  });
+
   it('a result that would run as a slash command is recognised', () => {
     expect(isCommandLike('/clear')).toBe(true);
     expect(isCommandLike('  /compact now')).toBe(true);

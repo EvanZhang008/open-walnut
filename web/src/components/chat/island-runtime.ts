@@ -34,14 +34,19 @@ export const ISLAND_RESULT_MAX = 16000;
 export const ISLAND_STATE_MAX = 48 * 1024;
 
 /**
- * Characters that change what the reader sees without being seen: bidi overrides and
- * isolates, zero-width spaces and joiners other than ZWJ (emoji need it), the BOM. A
- * result keeps none of them, so the text the user reads is the text the AI gets.
+ * Characters that change what the reader sees without being seen. A result keeps
+ * none of them, so the text the user reads is the text the AI gets: every control
+ * and format character (bidi overrides and isolates, zero-width spaces, the BOM, the
+ * soft hyphen, tag characters that can spell out hidden ASCII) except newline, tab
+ * and ZWJ (emoji need it), the blank fillers, and the variation selectors that can
+ * encode hidden bytes. Emoji keep one U+FE0E/U+FE0F; a run of them collapses to one.
+ * The iOS twin is `IslandRuntime.cleanResultText`.
  */
-const INVISIBLE_RE = /[\u200B\u200C\u200E\u200F\u202A-\u202E\u2060-\u2064\u2066-\u2069\uFEFF]/g;
+const INVISIBLE_RE = /(?![\n\t\u200D])[\p{Cc}\p{Cf}\u034F\u115F\u1160\u3164\uFFA0\uFE00-\uFE0D\u{E0100}-\u{E01EF}]/gu;
+const SELECTOR_RUN_RE = /([\uFE0E\uFE0F])[\uFE0E\uFE0F]+/g;
 
 export function cleanResultText(text: string): string {
-  return text.replace(INVISIBLE_RE, '');
+  return text.replace(INVISIBLE_RE, '').replace(SELECTOR_RUN_RE, '$1');
 }
 
 /** A result that would run as a slash command instead of reaching the AI as words. */
