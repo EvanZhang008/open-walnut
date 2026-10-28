@@ -18,7 +18,7 @@
 import { createHash } from 'node:crypto'
 import { log } from '../../logging/index.js'
 import { voicePrimaryAction } from './voice-archive-replication.js'
-import { VOICE_CHUNK_BYTES } from './voice-archive.js'
+import { VOICE_CHUNK_BYTES, voiceAsr, type VoiceAsr } from './voice-archive.js'
 
 interface Forward {
   /** Hops in order; each waits for the one before. */
@@ -131,7 +131,7 @@ async function sha256(bytes: Buffer): Promise<string> {
  * Null whenever that cannot be trusted; the take then goes the ordinary way.
  * The caller races it against the Mac leaving.
  */
-export async function finishOnMac(id: string, file: Buffer, dataStart: number, pcm: Int16Array, language: string | undefined): Promise<string | null> {
+export async function finishOnMac(id: string, file: Buffer, dataStart: number, pcm: Int16Array, language: string | undefined): Promise<{ text: string; asr?: VoiceAsr } | null> {
   const f = forwards.get(id)
   if (!f || f.broken || f.finishing) return null
   f.finishing = true
@@ -142,7 +142,7 @@ export async function finishOnMac(id: string, file: Buffer, dataStart: number, p
   }
 }
 
-async function finish(id: string, f: Forward, file: Buffer, dataStart: number, pcm: Int16Array, language: string | undefined): Promise<string | null> {
+async function finish(id: string, f: Forward, file: Buffer, dataStart: number, pcm: Int16Array, language: string | undefined): Promise<{ text: string; asr?: VoiceAsr } | null> {
   // The Mac keeps what it holds: when it is asked to transcribe the file next,
   // the samples it already did are reused if they match the file's start.
   const giveUp = (why: string): null => { breakForward(id, f, why); return null }
@@ -166,8 +166,10 @@ async function finish(id: string, f: Forward, file: Buffer, dataStart: number, p
   const samples = Buffer.from(pcm.buffer, pcm.byteOffset, pcm.byteLength)
   try {
     const result = await voicePrimaryAction('live-finish', id, { pcmBytes: samples.length, pcmSha256: await sha256(samples), language }, LIVE_FINISH_TIMEOUT_MS)
-    const text = (result.body as { text?: unknown } | undefined)?.text
-    return typeof text === 'string' ? text : null
+    const body = result.body as { text?: unknown; asr?: unknown } | undefined
+    if (typeof body?.text !== 'string') return null
+    const asr = voiceAsr(body.asr)
+    return { text: body.text, ...(asr ? { asr } : {}) }
   } catch (err) {
     log.stt.info(`live hand-over ${id}: the Mac did not finish it (${err instanceof Error ? err.message : String(err)})`)
     return null

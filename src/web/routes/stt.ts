@@ -35,6 +35,11 @@ const ALLOWED_FORMATS = new Set(['webm', 'wav', 'mp3', 'ogg', 'mp4', 'm4a', 'fla
 sttRouter.post('/transcribe', express.json({ limit: '35mb' }), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { audio, format, language, model } = req.body;
+    // Where the dictation came from, kept with the recording for accuracy work.
+    const origin = {
+      ...(typeof req.body.surface === 'string' && req.body.surface ? { surface: req.body.surface.slice(0, 100) } : {}),
+      ...(req.get('user-agent') ? { userAgent: String(req.get('user-agent')).slice(0, 200) } : {}),
+    };
     if (!audio || typeof audio !== 'string') {
       res.status(400).json({ error: 'Missing or invalid "audio" field (base64 string expected)' });
       return;
@@ -105,6 +110,7 @@ sttRouter.post('/transcribe', express.json({ limit: '35mb' }), async (req: Reque
             format,
             language: effectiveLanguage || 'auto',
             audioSizeBytes: Math.round(audio.length * 3 / 4),
+        ...origin,
             error: engineErr instanceof Error ? engineErr.message : String(engineErr),
           }).catch(() => {});
         }
@@ -117,6 +123,7 @@ sttRouter.post('/transcribe', express.json({ limit: '35mb' }), async (req: Reque
         format,
         language: effectiveLanguage || 'auto',
         audioSizeBytes: Math.round(audio.length * 3 / 4),
+        ...origin,
         // Model-override retries run one-shot whisper-cli; otherwise the configured engine
         engine: model ? 'whisper-cpp' : getOrCreateEngine(config)?.name,
         result,

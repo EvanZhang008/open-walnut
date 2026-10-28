@@ -238,6 +238,7 @@ export function createLlamaEngine(cfg: LlamaEngineConfig): SttEngine {
 
   return {
     name: 'qwen',
+    model: `Qwen3-ASR-${cfg.size}`,
 
     async isAvailable() {
       if (!(await isLlamaInstalled(cfg.target, cfg.size, home))) {

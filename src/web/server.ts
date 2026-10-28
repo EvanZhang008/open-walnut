@@ -2829,6 +2829,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   }
 
   // -- Audio transcription + capture (macOS ScreenCaptureKit — not on cloud) --
+  // -- Voice recordings: bring what an older run kept within stt.keep_recordings --
+  void import('../core/stt/voice-retention.js').then((m) => m.scheduleVoiceRetention(), () => {})
   if (!bootPolicy('audio')) {
     log.web.info(`${offByPolicy()}: skipping audio transcriber + capture resume`)
   } else {

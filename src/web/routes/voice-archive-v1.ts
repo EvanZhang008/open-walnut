@@ -1,8 +1,9 @@
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { createReadStream } from 'node:fs'
 import { pipeline } from 'node:stream/promises'
-import { voiceArchive, VoiceArchiveError, voiceRecordingId, decodeVoiceAudio, VOICE_MAX_CHUNK_BYTES, type VoiceChunkBody, type VoiceCommitBody } from '../../core/stt/voice-archive.js'
+import { voiceArchive, VoiceArchiveError, voiceRecordingId, decodeVoiceAudio, voiceAsr, VOICE_MAX_CHUNK_BYTES, type VoiceAsr, type VoiceChunkBody, type VoiceCommitBody } from '../../core/stt/voice-archive.js'
 import { deferVoiceReplication, startVoiceArchiveReplication } from '../../core/stt/voice-archive-replication.js'
+import { scheduleVoiceRetention } from '../../core/stt/voice-retention.js'
 import { transcribeVoiceRecording } from '../../core/stt/voice-archive-transcribe.js'
 
 export const voiceArchiveV1Router = Router()
@@ -23,10 +24,11 @@ export async function runVoiceArchiveAction(params: Record<string, unknown>): Pr
         // the next retry pass.
         const { hasLiveForward } = await import('../../core/stt/live-forward.js')
         if (!hasLiveForward(record.id)) deferVoiceReplication(record.id)
+        scheduleVoiceRetention()
         return { status: 200, body: record }
       }
       case 'text': {
-        const record = await voiceArchive.saveText(id, body?.text as string, body?.via as string | undefined)
+        const record = await voiceArchive.saveText(id, body?.text as string, body?.via as string | undefined, voiceAsr(body?.asr))
         deferVoiceReplication(record.id)
         // Pieces the companion handed over for a take it finished itself.
         const { dropLive } = await import('../../core/stt/live-transcript.js')
@@ -82,19 +84,20 @@ async function acceptLive(raw: string, body: Record<string, unknown> | undefined
 }
 
 /** `live-finish` { pcmBytes, pcmSha256, language? }: the take's text from the pieces this server was handed. */
-async function finishLiveHere(raw: string, body: Record<string, unknown> | undefined): Promise<{ text: string }> {
+async function finishLiveHere(raw: string, body: Record<string, unknown> | undefined): Promise<{ text: string; asr: VoiceAsr }> {
+  const since = Date.now()
   const id = voiceRecordingId(raw)
   const { pcmBytes, pcmSha256, language } = body ?? {}
   if (!Number.isSafeInteger(pcmBytes) || (pcmBytes as number) < 0 || typeof pcmSha256 !== 'string' || !/^[0-9a-f]{64}$/.test(pcmSha256)) {
     throw new VoiceArchiveError(400, 'bad_request', 'pcmBytes and a hex pcmSha256 are required')
   }
   if (language !== undefined && (typeof language !== 'string' || language.length > 100)) throw new VoiceArchiveError(400, 'bad_request', 'language must be a short string')
-  const [{ finishLiveFromSamples }, { localTranscribe }] = await Promise.all([
+  const [{ finishLiveFromSamples }, { localTranscribe, localAsr }] = await Promise.all([
     import('../../core/stt/live-transcript.js'), import('../../core/stt/voice-archive-transcribe.js'),
   ])
   const text = await finishLiveFromSamples(id, pcmBytes as number, pcmSha256, localTranscribe, language as string | undefined)
   if (text === null) throw new VoiceArchiveError(409, 'live_unusable', 'The live pieces do not match the finished recording')
-  return { text }
+  return { text, asr: await localAsr(id, language as string | undefined, since) }
 }
 
 function archiveError(err: unknown, res: Response, next: NextFunction): void {

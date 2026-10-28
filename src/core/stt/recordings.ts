@@ -11,8 +11,8 @@
  *   <WALNUT_HOME>/tmp/stt-recordings/<iso-ts>.<format>   raw audio
  *   <WALNUT_HOME>/tmp/stt-recordings/<iso-ts>.json       metadata + result/error
  *
- * Under tmp/ because these are machine-local binary blobs (capped at
- * MAX_RECORDINGS): regenerable-by-recording, never worth syncing. The old
+ * Under tmp/ because these are machine-local binary blobs (kept within the
+ * stt.keep_recordings limits, voice-retention.ts): never worth syncing. The old
  * location was `homedir()/.open-walnut/stt-debug` — a hardcoded home that
  * ignored WALNUT_HOME, so test runs and ephemeral child servers wrote into the
  * REAL user directory. tmp/ is gitignored, so nothing here reaches sync.
@@ -20,7 +20,7 @@
  * simply stop being listed.
  */
 
-import { mkdir, writeFile, readFile, readdir, unlink } from 'node:fs/promises';
+import { mkdir, writeFile, readFile, readdir, stat, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { TMP_DIR } from '../../constants.js';
 import type { SttResult } from './types.js';
@@ -30,8 +30,6 @@ import type { SttResult } from './types.js';
 function dir(): string {
   return join(TMP_DIR, 'stt-recordings');
 }
-const MAX_RECORDINGS = 100;
-
 // IDs are the ISO-timestamp basename (colons/dots → dashes). Strict allowlist —
 // these become file paths, so anything else would be a traversal vector.
 const ID_RE = /^[0-9A-Za-z-]+$/;
@@ -59,6 +57,9 @@ export interface RecordingMeta {
   error?: string;
   /** Present when a shadow engine (stt.secondary_engine) also ran */
   secondary?: SecondaryResult;
+  /** Where the dictation came from: the page it was made on, and the browser or app. */
+  surface?: string;
+  userAgent?: string;
 }
 
 export function recordingsDir(): string {
@@ -90,7 +91,7 @@ export async function writeRecordingResult(
   await mkdir(dir(), { recursive: true });
   const stamped = { timestamp: new Date().toISOString(), ...meta };
   await writeFile(join(dir(), `${id}.json`), JSON.stringify(stamped, null, 2));
-  await pruneOldRecordings().catch(() => {});
+  void import('./voice-retention.js').then((m) => m.scheduleVoiceRetention(), () => {});
   return stamped.timestamp;
 }
 
@@ -173,18 +174,33 @@ export async function readRecordingAudio(
   return { audio: buf.toString('base64'), format: audioFile.slice(id.length + 1) };
 }
 
-/** Keep only the newest MAX_RECORDINGS recordings. */
-async function pruneOldRecordings(): Promise<void> {
-  const files = await readdir(dir());
-  const jsonFiles = files.filter(f => f.endsWith('.json')).sort();
-  if (jsonFiles.length <= MAX_RECORDINGS) return;
-  for (const jf of jsonFiles.slice(0, jsonFiles.length - MAX_RECORDINGS)) {
-    const stem = jf.slice(0, -5);
-    await unlink(join(dir(), jf)).catch(() => {});
-    for (const af of files) {
-      if (af.startsWith(`${stem}.`) && !af.endsWith('.json')) {
-        await unlink(join(dir(), af)).catch(() => {});
-      }
-    }
+/** Every recording with its size, for retention (voice-retention.ts). */
+export async function inventoryRecordings(): Promise<Array<{ id: string; bytes: number; modifiedMs: number }>> {
+  let files: string[];
+  try {
+    files = await readdir(dir());
+  } catch {
+    return [];
+  }
+  const byId = new Map<string, { id: string; bytes: number; modifiedMs: number }>();
+  for (const file of files) {
+    const dot = file.indexOf('.');
+    const id = dot > 0 ? file.slice(0, dot) : '';
+    if (!id || !ID_RE.test(id)) continue;
+    const info = await stat(join(dir(), file)).catch(() => null);
+    if (!info) continue;
+    const entry = byId.get(id) ?? { id, bytes: 0, modifiedMs: 0 };
+    entry.bytes += info.size;
+    entry.modifiedMs = Math.max(entry.modifiedMs, info.mtimeMs);
+    byId.set(id, entry);
+  }
+  return [...byId.values()];
+}
+
+/** Remove a recording's audio and metadata. */
+export async function discardRecording(id: string): Promise<void> {
+  if (!ID_RE.test(id)) return;
+  for (const file of await readdir(dir()).catch(() => [] as string[])) {
+    if (file.startsWith(`${id}.`)) await unlink(join(dir(), file)).catch(() => {});
   }
 }

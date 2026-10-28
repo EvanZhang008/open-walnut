@@ -1658,6 +1658,12 @@ export interface Config {
     qwen_size?: '0.6B' | '1.7B';
     /** ISO 639-1 language hint (e.g. zh, en). Empty = auto-detect. */
     language?: string;
+    /**
+     * Voice recordings this server keeps (phone takes and dictation together,
+     * kept for accuracy work, never synced): past either limit the oldest are
+     * removed. Default 1000 recordings and 1024 MB (voice-retention.ts).
+     */
+    keep_recordings?: { max_count?: number; max_mb?: number };
     // sherpa-onnx — local (SenseVoice / Whisper / Paraformer / other ONNX models)
     sherpa_model_dir?: string;
     sherpa_model_type?: 'sense_voice' | 'whisper' | 'paraformer';

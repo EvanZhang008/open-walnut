@@ -144,7 +144,8 @@ export async function transcribeAudio(
   const res = await sttFetch('/api/stt/transcribe', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ audio: audioBase64, format, language, model }),
+    // The page it was said on (a session, a plugin's composer), kept with the recording.
+    body: JSON.stringify({ audio: audioBase64, format, language, model, surface: location.pathname.slice(0, 100) }),
     signal: AbortSignal.timeout(FINAL_PASS_TIMEOUT_MS),
   });
   if (!res.ok) {

@@ -1,6 +1,6 @@
 import { isCompanion } from '../server-role.js'
 import { log } from '../../logging/index.js'
-import { voiceArchive, voiceRecordingId, type VoiceArchiveStore } from './voice-archive.js'
+import { voiceArchive, voiceAsr, voiceRecordingId, type VoiceArchiveStore } from './voice-archive.js'
 
 const HOP_TIMEOUT_MS = 10_000
 const COPY_TIMEOUT_MS = 120_000
@@ -26,6 +26,15 @@ export async function voicePrimaryAction(operation: string, id: string, body: un
   return result
 }
 
+/** A copy of `id` is running here (retention leaves it alone). */
+export function isCopying(id: string): boolean {
+  for (const key of active.keys()) if (key.endsWith(`|${id}`)) return true
+  return false
+}
+
+/** The Mac removed the take to keep its recordings within their limit (voice-retention.ts): never copy it back. */
+const removedThere = (error: unknown): boolean => (error as { status?: number })?.status === 410
+
 export function replicateVoiceRecording(raw: string, store: VoiceArchiveStore = voiceArchive, budgetMs = COPY_TIMEOUT_MS): Promise<boolean> {
   const id = voiceRecordingId(raw)
   const key = `${store.root}|${id}`
@@ -44,39 +53,48 @@ export function replicateVoiceRecording(raw: string, store: VoiceArchiveStore = 
       if (record.text !== undefined) return true
       try {
         const answer = await send('get', undefined)
-        const primary = answer.body as { id?: unknown; audioSha256?: unknown; text?: unknown; via?: unknown }
+        const primary = answer.body as { id?: unknown; audioSha256?: unknown; text?: unknown; via?: unknown; asr?: unknown }
         if (primary?.id !== id || primary.audioSha256 !== record.audioSha256) throw new Error('Voice archive copy identity does not match')
         if (typeof primary.text === 'string' && primary.text.trim()) {
-          const saved = await store.saveText(id, primary.text, typeof primary.via === 'string' ? primary.via : undefined)
+          const saved = await store.saveText(id, primary.text, typeof primary.via === 'string' ? primary.via : undefined, voiceAsr(primary.asr))
           await store.markPrimarySaved(id, saved.text)
         }
         return true
       } catch (error) {
+        if (removedThere(error)) return true
         if ((error as { status?: number }).status !== 404) throw error
         await store.resetPrimaryChunks(id)
         return false
       }
     }
-    for (let index = nextPrimaryChunk; index < chunkCount; index++) {
-      const audio = await store.readChunk(id, index)
-      await send('chunk', { index, audio: audio.toString('base64'), format: record.format, createdAt: record.createdAt, surface: record.surface, durationSeconds: record.durationSeconds })
-      await store.markPrimaryChunk(id, index + 1)
-    }
     try {
-      await send('commit', { chunkCount, audioSizeBytes: record.audioSizeBytes, audioSha256: record.audioSha256 })
+      for (let index = nextPrimaryChunk; index < chunkCount; index++) {
+        const audio = await store.readChunk(id, index)
+        await send('chunk', { index, audio: audio.toString('base64'), format: record.format, createdAt: record.createdAt, surface: record.surface, durationSeconds: record.durationSeconds })
+        await store.markPrimaryChunk(id, index + 1)
+      }
+      try {
+        await send('commit', { chunkCount, audioSizeBytes: record.audioSizeBytes, audioSha256: record.audioSha256 })
+      } catch (error) {
+        if ((error as { status?: number }).status === 404 || (error as { status?: number }).status === 400) await store.resetPrimaryChunks(id)
+        throw error
+      }
     } catch (error) {
-      if ((error as { status?: number }).status === 404 || (error as { status?: number }).status === 400) await store.resetPrimaryChunks(id)
-      throw error
+      if (!removedThere(error)) throw error
+      // Settled: the Mac had it and let it go; this copy keeps its own.
+      const latest = await store.get(id)
+      await store.markPrimarySaved(id, latest.text)
+      return true
     }
     // Pick up a transcript saved during the copy rather than marking only audio replicated.
     const latest = await store.get(id)
     if (latest.text !== undefined) {
       try {
-        await send('text', { text: latest.text, via: latest.via })
+        await send('text', { text: latest.text, via: latest.via, ...(latest.asr ? { asr: latest.asr } : {}) })
       } catch (error) {
         // 409: the Mac transcribed it too, and its own text stays. Each box keeps
         // the transcript it made; retrying could never change that.
-        if ((error as { status?: number }).status !== 409) throw error
+        if ((error as { status?: number }).status !== 409 && !removedThere(error)) throw error
       }
     }
     const marked = await store.markPrimarySaved(id, latest.text)

@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { mkdir, open, readFile, readdir, rename, stat, unlink } from 'node:fs/promises'
+import { mkdir, open, readFile, readdir, rename, rm, stat, unlink } from 'node:fs/promises'
 import { join } from 'node:path'
 import { WALNUT_HOME } from '../../constants.js'
 import { isCompanion } from '../server-role.js'
@@ -25,6 +25,34 @@ export interface VoiceRecord {
   state: 'uploading' | 'saved' | 'transcribed'
   primarySaved?: boolean
   storage: 'companion' | 'primary'
+  /** How the text was made, kept for accuracy work (voiceAsr). */
+  asr?: VoiceAsr
+}
+/** The engine behind a take's text: which model, which language was asked, how long it took. */
+export interface VoiceAsr {
+  engine?: string
+  model?: string
+  /** The language asked for; absent = detected by the model. */
+  language?: string
+  /** Time from asking for the text to having it, on the server the phone asked (the companion's whole wait when the Mac made it). */
+  ms?: number
+  /** Pieces transcribed while the take was recorded, and the seconds left at the stop. */
+  livePieces?: number
+  leftSeconds?: number
+}
+/** A valid `asr` from a request body, or undefined: an older or odd sender only loses the detail. */
+export function voiceAsr(raw: unknown): VoiceAsr | undefined {
+  if (!raw || typeof raw !== 'object') return undefined
+  const out: VoiceAsr = {}
+  for (const key of ['engine', 'model', 'language'] as const) {
+    const value = (raw as Record<string, unknown>)[key]
+    if (typeof value === 'string' && value && value.length <= 200) out[key] = value
+  }
+  for (const key of ['ms', 'livePieces', 'leftSeconds'] as const) {
+    const value = (raw as Record<string, unknown>)[key]
+    if (typeof value === 'number' && Number.isFinite(value) && value >= 0) out[key] = Math.round(value * 10) / 10
+  }
+  return Object.keys(out).length ? out : undefined
 }
 export interface VoiceChunkBody {
   index: number; audio: string; format: string; createdAt: string
@@ -101,8 +129,16 @@ export class VoiceArchiveStore {
   }
   private async required(id: string): Promise<Stored> {
     const stored = await this.stored(id)
-    if (!stored) throw new VoiceArchiveError(404, 'not_found', 'Recording not found')
+    if (!stored) {
+      if (await this.removed(id)) throw new VoiceArchiveError(410, 'removed', 'Recording was removed to keep the stored recordings within their limit')
+      throw new VoiceArchiveError(404, 'not_found', 'Recording not found')
+    }
     return stored
+  }
+  /** Taken out by retention (voice-retention.ts): a mark that outlives the take, so a copy never brings it back. */
+  private removedMark(id: string): string { return join(this.root, '.removed', voiceRecordingId(id)) }
+  private async removed(id: string): Promise<boolean> {
+    try { await stat(this.removedMark(id)); return true } catch (err) { if (missing(err)) return false; throw err }
   }
   private async save(id: string, stored: Stored): Promise<VoiceRecord> {
     await durableWrite(join(this.dir(id), 'metadata.json'), JSON.stringify(stored))
@@ -131,6 +167,7 @@ export class VoiceArchiveStore {
         if (!duplicate) return conflict()
         return { ...existing.record }
       }
+      if (!existing && await this.removed(id)) throw new VoiceArchiveError(410, 'removed', 'Recording was removed to keep the stored recordings within their limit')
       if (!existing) await this.save(id, { record: { id, ...identity, state: 'uploading', audioSizeBytes: 0, audioSha256: '', storage: this.cloud ? 'companion' : 'primary' } })
       let total = 0
       for (const file of await readdir(this.dir(id))) {
@@ -195,16 +232,22 @@ export class VoiceArchiveStore {
     })
   }
 
-  async saveText(raw: string, text: string, via?: string): Promise<VoiceRecord> {
+  async saveText(raw: string, text: string, via?: string, asr?: VoiceAsr): Promise<VoiceRecord> {
     text = textValue(text)
     if (!text) return this.get(raw)
     if (via !== undefined && (typeof via !== 'string' || via.length > 100)) return bad('via must be at most 100 characters')
+    asr = voiceAsr(asr)
     return this.locked(raw, async (id) => {
       const stored = await this.required(id)
       if (stored.record.state === 'uploading') throw new VoiceArchiveError(409, 'not_committed', 'Commit audio before saving a transcript')
       if (stored.record.text !== undefined && stored.record.text !== text) return conflict()
-      if (stored.record.text === text) return { ...stored.record }
-      stored.record = { ...stored.record, text, via, state: 'transcribed', primarySaved: !this.cloud }
+      if (stored.record.text === text) {
+        // The same text again (a copy from the box that made it) may bring the detail this copy lacks.
+        if (!asr || stored.record.asr) return { ...stored.record }
+        stored.record = { ...stored.record, asr }
+        return this.save(id, stored)
+      }
+      stored.record = { ...stored.record, text, via, state: 'transcribed', primarySaved: !this.cloud, ...(asr ? { asr } : {}) }
       return this.save(id, stored)
     })
   }
@@ -276,6 +319,72 @@ export class VoiceArchiveStore {
     const last = recordings.at(-1)
     return { recordings, ...(records.length > limit && last ? { nextBefore: `${last.createdAt}|${last.id}` } : {}) }
   }
+  /** Every take on disk with its size, for retention (voice-retention.ts). */
+  async inventory(): Promise<Array<{ id: string; record?: VoiceRecord; bytes: number; modifiedMs: number }>> {
+    let entries: string[]
+    try { entries = await readdir(this.root) } catch (err) { if (missing(err)) return []; throw err }
+    const out: Array<{ id: string; record?: VoiceRecord; bytes: number; modifiedMs: number }> = []
+    for (const name of entries) {
+      // A discard a crash interrupted.
+      if (name.startsWith('.discard-')) { await rm(join(this.root, name), { recursive: true, force: true }); continue }
+      if (!UUID.test(name)) continue
+      const id = name.toLowerCase()
+      let bytes = 0
+      let modifiedMs = 0
+      try {
+        // A take that has only its directory so far is as new as the directory.
+        modifiedMs = (await stat(join(this.root, name))).mtimeMs
+        for (const file of await readdir(join(this.root, name))) {
+          const info = await stat(join(this.root, name, file))
+          bytes += info.size
+          modifiedMs = Math.max(modifiedMs, info.mtimeMs)
+        }
+      } catch (err) { if (missing(err)) continue; throw err }
+      const stored = await this.stored(id).catch(() => null)
+      out.push({ id, ...(stored ? { record: { ...stored.record } } : {}), bytes, modifiedMs })
+    }
+    return out
+  }
+  /**
+   * Drop a take for good (retention), after any write already queued for it, and
+   * only if `still` holds for it then (it may have moved on since the take was
+   * chosen). Leaves a mark: a later copy or chunk of it is refused with 410.
+   */
+  async discard(raw: string, still: (record: VoiceRecord | undefined, modifiedMs: number) => boolean = () => true): Promise<boolean> {
+    const id = voiceRecordingId(raw)
+    const previous = this.locks.get(id) ?? Promise.resolve()
+    const current = previous.catch(() => {}).then(async () => {
+      let modifiedMs = 0
+      try {
+        modifiedMs = (await stat(this.dir(id))).mtimeMs
+        for (const file of await readdir(this.dir(id))) modifiedMs = Math.max(modifiedMs, (await stat(join(this.dir(id), file))).mtimeMs)
+      } catch (err) { if (missing(err)) return false; throw err }
+      const record = (await this.stored(id).catch(() => null))?.record
+      if (!still(record, modifiedMs)) return false
+      // An upload never finished is not marked: its phone may still come back to finish it.
+      if (record && record.state !== 'uploading') {
+        await mkdir(join(this.root, '.removed'), { recursive: true, mode: 0o700 })
+        await durableWrite(this.removedMark(id), new Date().toISOString())
+      }
+      // Out of the way in one step, so a crash never leaves half a take that still lists.
+      const trash = join(this.root, `.discard-${randomUUID()}`)
+      try { await rename(this.dir(id), trash) } catch (err) { if (missing(err)) return false; throw err }
+      await rm(trash, { recursive: true, force: true })
+      return true
+    })
+    this.locks.set(id, current)
+    try { return await current } finally { if (this.locks.get(id) === current) this.locks.delete(id) }
+  }
+  /** Forget removal marks older than `maxAgeMs`: by then no copy of the take is still trying. */
+  async forgetRemovedMarks(maxAgeMs: number, now = Date.now()): Promise<void> {
+    const dir = join(this.root, '.removed')
+    let names: string[]
+    try { names = await readdir(dir) } catch (err) { if (missing(err)) return; throw err }
+    for (const name of names) {
+      const info = await stat(join(dir, name)).catch(() => null)
+      if (info && now - info.mtimeMs > maxAgeMs) await unlink(join(dir, name)).catch(() => {})
+    }
+  }
   async ingestAudio(input: { id?: string; audio: Buffer | string; format: string; createdAt?: string; surface?: string; durationSeconds?: number }): Promise<VoiceRecord> {
     const audio = Buffer.isBuffer(input.audio) ? input.audio : decodeVoiceAudio(input.audio)
     if (!audio.length) return bad('audio must not be empty')
@@ -291,5 +400,5 @@ export class VoiceArchiveStore {
 }
 export const voiceArchive = new VoiceArchiveStore()
 export const readAudio = (id: string) => voiceArchive.readAudio(id)
-export const saveText = (id: string, text: string, via?: string) => voiceArchive.saveText(id, text, via)
+export const saveText = (id: string, text: string, via?: string, asr?: VoiceAsr) => voiceArchive.saveText(id, text, via, asr)
 export const ingestAudio = (input: Parameters<VoiceArchiveStore['ingestAudio']>[0]) => voiceArchive.ingestAudio(input)

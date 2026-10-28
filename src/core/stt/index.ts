@@ -308,7 +308,7 @@ export async function transcribeAudio(config: Config, req: SttRequest): Promise<
   const result = await engine.transcribe(req);
   log.stt.info(`Transcription complete: ${result.text.length} chars in ${result.durationMs}ms`);
   if (req.prompt) result.text = stripVocabEcho(result.text, req.prompt);
-  return result;
+  return { ...result, engine: engine.name, ...(engine.model ? { model: engine.model } : {}) };
 }
 
 /**

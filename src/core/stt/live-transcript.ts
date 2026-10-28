@@ -91,6 +91,7 @@ interface Take {
 
 const takes = new Map<string, Take>()
 const done = new Map<string, number>()
+const stats = new Map<string, { livePieces: number; leftSeconds: number }>()
 let sweeper: NodeJS.Timeout | null = null
 
 function sweep(): void {
@@ -365,12 +366,22 @@ async function finishRest(id: string, take: Take, rest: Int16Array, transcribe: 
     texts.push(await transcribe(pcmToWav(piece), language))
   }
   log.stt.info(`live transcript ${id}: ${take.segments.length} piece(s) done live, ${(rest.length / SAMPLE_RATE).toFixed(1)}s left at the end`)
+  stats.set(id, { livePieces: take.segments.length, leftSeconds: Math.round(rest.length / SAMPLE_RATE * 10) / 10 })
+  if (stats.size > 64) stats.delete(stats.keys().next().value!)
   return joinSegmentTexts(texts)
+}
+
+/** How the last finish of `id` went, once (kept with the take's text). */
+export function takeLiveStats(id: string): { livePieces: number; leftSeconds: number } | undefined {
+  const found = stats.get(id)
+  stats.delete(id)
+  return found
 }
 
 /** Test hook. */
 export function _resetLiveTakesForTest(): void {
   takes.clear()
   done.clear()
+  stats.clear()
   if (sweeper) { clearInterval(sweeper); sweeper = null }
 }

@@ -20,10 +20,15 @@ export interface SttRequest {
 export interface SttResult {
   text: string;
   durationMs: number;
+  /** The engine and model that made the text (recorded with each take). */
+  engine?: string;
+  model?: string;
 }
 
 export interface SttEngine {
   readonly name: string;
+  /** The model it runs, when it has one worth naming (recorded with each take). */
+  readonly model?: string;
   /** Check if this engine is available (model exists, binary found, etc.) */
   isAvailable(): Promise<{ available: boolean; error?: string }>;
   /** Transcribe audio to text */

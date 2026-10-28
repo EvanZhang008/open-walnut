@@ -72,7 +72,7 @@ beforeEach(async () => {
     if (operation === 'get') answer = await primary.get(id)
     else if (operation === 'chunk') answer = await primary.saveChunk(id, body)
     else if (operation === 'commit') answer = await primary.commit(id, body)
-    else if (operation === 'text') answer = await primary.saveText(id, body.text, body.via)
+    else if (operation === 'text') answer = await primary.saveText(id, body.text, body.via, body.asr)
     else if (operation === 'transcribe') {
       const saved = await primary.saveText(id, 'primary full text', 'primary')
       answer = { text: saved.text, via: saved.via, recordingId: id, primarySaved: true }
@@ -103,7 +103,8 @@ async function fakeMacLive(operation: string, id: string, body: { from?: number;
     return { ok: true, result: { status: 200, body: 'gap' in ack ? { accepted: true, gap: true, receivedBytes: ack.receivedBytes, segments: 0 } : ack } }
   }
   const text = await mac.finishLiveFromSamples(id, body!.pcmBytes!, body!.pcmSha256!, macEngine, body!.language)
-  return { ok: true, result: text === null ? { status: 409, body: { error: { code: 'live_unusable' } } } : { status: 200, body: { text } } }
+  // The real Mac also says how it made the text (finishLiveHere): its engine, the live counts, its own time.
+  return { ok: true, result: text === null ? { status: 409, body: { error: { code: 'live_unusable' } } } : { status: 200, body: { text, asr: { engine: 'mlx', ...mac.takeLiveStats(id), ms: 1 } } } }
 }
 const macHas = async (id: string) => (await macModule()).hasLiveTake(id)
 
@@ -150,6 +151,19 @@ describe('durable voice cloud copies', () => {
     expect(await replicateVoiceRecording(record.id)).toBe(true)
     expect(bridge.mock.calls.filter((call) => call[2].params.operation === 'chunk').map((call) => call[2].params.body.index)).toEqual([1, 2])
     expect((await primary.readAudio(record.id)).audio.equals((await voiceArchive.readAudio(record.id)).audio)).toBe(true)
+  })
+  it('never copies back a take the Mac removed for its recording limit (410)', async () => {
+    const record = await voiceArchive.ingestAudio({ audio: Buffer.alloc(VOICE_CHUNK_BYTES * 2, 1), format: 'caf' })
+    const removed = { ok: true, result: { status: 410, body: { error: { code: 'removed' } } } }
+    // Not on the Mac yet: its first chunk is refused as removed, and the take counts as settled.
+    bridge.mockResolvedValue(removed)
+    expect(await replicateVoiceRecording(record.id)).toBe(true)
+    expect((await voiceArchive.get(record.id)).primarySaved).toBe(true)
+    // Already on the Mac with no text yet: the check is refused the same way, and nothing is sent again.
+    bridge.mockClear()
+    expect(await replicateVoiceRecording(record.id)).toBe(true)
+    expect(bridge.mock.calls.map((call) => call[2].params.operation)).toEqual(['get'])
+    expect((await voiceArchive.readAudio(record.id)).audio.length).toBe(VOICE_CHUNK_BYTES * 2)
   })
   it('resumes an expired copy budget on daemon activity without a reconnect or phone request', async () => {
     const record = await voiceArchive.ingestAudio({ audio: Buffer.alloc(VOICE_CHUNK_BYTES * 3, 1), format: 'caf' })
@@ -733,6 +747,10 @@ describe('live pieces handed to the Mac while it answers', () => {
     expect(await macHas(id)).toBe(false)
     // The copy follows in the background and carries the text to the Mac.
     await vi.waitFor(async () => { expect((await primary.get(id)).text).toBe(answer.text) })
+    // Both copies say how the text was made: the Mac's pieces, and the wait here.
+    expect(answer.asr).toMatchObject({ engine: 'mlx', livePieces: expect.any(Number), leftSeconds: expect.any(Number), ms: expect.any(Number) })
+    expect(answer.asr!.livePieces).toBeGreaterThanOrEqual(1)
+    await vi.waitFor(async () => { expect((await primary.get(id)).asr).toEqual(answer.asr) })
   })
 
   it('a finished file with a chunk after its samples still lines up with what the Mac heard', async () => {

@@ -301,6 +301,7 @@ sttV1Router.post('/stt/transcribe', async (req: Request, res: Response, next: Ne
       return
     }
     const lang = typeof language === 'string' && language !== '' ? language : undefined
+    const since = Date.now()
     const { ingestAudio, saveText } = await import('../../core/stt/voice-archive.js')
     const recording = await ingestAudio({ audio, format })
     const { deferVoiceReplication, startVoiceArchiveReplication } = await import('../../core/stt/voice-archive-replication.js')
@@ -315,7 +316,11 @@ sttV1Router.post('/stt/transcribe', async (req: Request, res: Response, next: Ne
       (err) => isUndecodableAudio(err instanceof Error ? err.message : String(err)))
     const tried = result.attempts.map((a) => `${a.id}:${a.outcome}`)
     if (result.ok) {
-      await saveText(recording.id, result.output.text, result.via)
+      const output = result.output as { text: string; engine?: string; model?: string }
+      await saveText(recording.id, output.text, result.via, {
+        ...(output.engine ? { engine: output.engine } : {}), ...(output.model ? { model: output.model } : {}), ...(lang ? { language: lang } : {}), ms: Date.now() - since,
+      })
+      void import('../../core/stt/voice-retention.js').then((m) => m.scheduleVoiceRetention(), () => {})
       deferVoiceReplication(recording.id)
       log.web.info('stt transcribed', { recordingId: recording.id, via: result.via, chars: result.output.text.length, tried })
       res.json({ text: result.output.text, durationMs: result.output.durationMs ?? 0, via: result.via, recordingId: recording.id })

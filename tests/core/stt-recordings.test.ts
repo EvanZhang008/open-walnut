@@ -12,6 +12,8 @@ let dir: string;
 // relocation fixed: it ignored WALNUT_HOME entirely).
 vi.mock('../../src/constants.js', () => ({
   get TMP_DIR() { return join(dir, 'tmp'); },
+  get WALNUT_HOME() { return dir; },
+  CLOUD_MODE: false,
 }));
 
 import {
@@ -77,7 +79,8 @@ describe('stt recordings store', () => {
     ).rejects.toThrow(/Invalid recording id/);
   });
 
-  it('prunes beyond the cap keeping newest', async () => {
+  it('prunes beyond the limit keeping newest', async () => {
+    const { pruneVoiceRecordings } = await import('../../src/core/stt/voice-retention.js');
     for (let i = 0; i < 105; i++) {
       const id = `2026-01-01T00-00-00-${String(i).padStart(3, '0')}Z`;
       await writeRecordingResult(id, {
@@ -85,9 +88,13 @@ describe('stt recordings store', () => {
         result: { text: `t${i}`, durationMs: 1 },
       });
     }
+    // Written just now: nothing is old enough to go yet.
+    expect((await pruneVoiceRecordings({ maxCount: 100, maxBytes: 1 << 30 })).removed).toBe(0);
+    const later = Date.now() + 2 * 60 * 60_000;
+    expect((await pruneVoiceRecordings({ maxCount: 100, maxBytes: 1 << 30 }, later)).removed).toBe(5);
     const files = await readdir(join(dir, 'tmp', 'stt-recordings'));
     const jsons = files.filter(f => f.endsWith('.json'));
-    expect(jsons.length).toBeLessThanOrEqual(100);
+    expect(jsons.length).toBe(100);
     // The newest survives
     expect(jsons.some(f => f.includes('-104Z'))).toBe(true);
     // The oldest are gone

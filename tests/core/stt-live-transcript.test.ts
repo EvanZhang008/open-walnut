@@ -367,7 +367,9 @@ describe('POST /api/v1/stt/recordings/:id/live, then the archive', () => {
     await vi.waitFor(() => expect(seen.length).toBeGreaterThanOrEqual(1))
     const final = wavPcm(cafToWav(caf(pcm, true))!)
     const done = await runVoiceArchiveAction({ operation: 'live-finish', id, body: { pcmBytes: final.byteLength, pcmSha256: pcmSha(final) } })
-    expect(done).toEqual({ status: 200, body: { text: seen.map((_, i) => `mac${i + 1}`).join(' ') } })
+    expect(done).toMatchObject({ status: 200, body: { text: seen.map((_, i) => `mac${i + 1}`).join(' ') } })
+    // With how it was made: the pieces done live and the seconds left at the stop.
+    expect((done.body as { asr: { livePieces: number; leftSeconds: number } }).asr).toMatchObject({ livePieces: expect.any(Number), leftSeconds: expect.any(Number), ms: expect.any(Number) })
     // Asked again, or for samples that do not match: refused, never a guess.
     expect(await runVoiceArchiveAction({ operation: 'live-finish', id, body: { pcmBytes: final.byteLength, pcmSha256: pcmSha(final) } })).toMatchObject({ status: 409 })
     expect(await runVoiceArchiveAction({ operation: 'live-finish', id, body: { pcmBytes: 1 } })).toMatchObject({ status: 400 })

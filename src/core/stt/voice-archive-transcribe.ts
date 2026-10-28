@@ -1,14 +1,14 @@
 import { isCompanion } from '../server-role.js'
-import { voiceArchive, VoiceArchiveError, type VoiceRecord } from './voice-archive.js'
+import { voiceArchive, VoiceArchiveError, voiceAsr, type VoiceAsr, type VoiceRecord } from './voice-archive.js'
 import { deferVoiceReplication, replicateUnlessSilent, replicateVoiceRecording, voicePrimaryAction, VOICE_TRANSCRIBE_TIMEOUT_MS } from './voice-archive-replication.js'
-import { dropLive, finishLive, hasLiveTake, type LiveTranscribe } from './live-transcript.js'
+import { dropLive, finishLive, hasLiveTake, takeLiveStats, type LiveTranscribe } from './live-transcript.js'
 import { dropLiveForward, finishOnMac, hasLiveForward } from './live-forward.js'
 import { cafToWav, cafDataLayout } from './caf-to-wav.js'
 import { isConformingWav } from './audio-convert.js'
 import { wavPcm } from './wav-segment.js'
 
-export interface VoiceTranscript { text: string; via?: string; recordingId: string; primarySaved?: boolean; storage: 'companion' | 'primary' }
-const reply = (record: VoiceRecord): VoiceTranscript => ({ text: record.text ?? '', via: record.via, recordingId: record.id, primarySaved: record.primarySaved, storage: record.storage })
+export interface VoiceTranscript { text: string; via?: string; recordingId: string; primarySaved?: boolean; storage: 'companion' | 'primary'; asr?: VoiceAsr }
+const reply = (record: VoiceRecord): VoiceTranscript => ({ text: record.text ?? '', via: record.via, recordingId: record.id, primarySaved: record.primarySaved, storage: record.storage, ...(record.asr ? { asr: record.asr } : {}) })
 const pending = new Map<string, Promise<VoiceTranscript>>()
 /** The companion: the Mac transcribes while it answers, this box's engine when it does not. */
 const FOLLOWER = isCompanion()
@@ -189,6 +189,19 @@ export const localTranscribe: LiveTranscribe = async (wav, language) => {
   return (await transcribeAudio(await getConfig(), { audio: wav.toString('base64'), format: 'wav', language })).text
 }
 
+/** This server's own engine, the language asked, the time since `since`, and the live counts of `id`. */
+export async function localAsr(id: string, language: string | undefined, since: number): Promise<VoiceAsr> {
+  let engine: { name: string; model?: string } | null = null
+  try {
+    const [{ getConfig }, { getOrCreateEngine }] = await Promise.all([import('../config-manager.js'), import('./index.js')])
+    engine = getOrCreateEngine(await getConfig())
+  } catch { /* the detail only */ }
+  return {
+    ...(engine ? { engine: engine.name } : {}), ...(engine?.model ? { model: engine.model } : {}),
+    ...(language ? { language } : {}), ms: Date.now() - since, ...takeLiveStats(id),
+  }
+}
+
 async function finishLiveTake(id: string, language?: string): Promise<string | null> {
   if (!hasLiveTake(id)) return null
   try {
@@ -207,7 +220,7 @@ async function finishLiveTake(id: string, language?: string): Promise<string | n
  * (live-forward.ts), or null. Asked before the recording is copied, which then
  * follows in the background: the copy alone cost 4 s of a 60 s take.
  */
-async function finishLiveOnMac(id: string, language?: string): Promise<string | null> {
+async function finishLiveOnMac(id: string, language?: string): Promise<{ text: string; asr?: VoiceAsr } | null> {
   const watch = whenMacAway(id)
   try {
     const { audio, record } = await voiceArchive.readAudio(id)
@@ -215,8 +228,8 @@ async function finishLiveOnMac(id: string, language?: string): Promise<string | 
     const wav = layout ? cafToWav(audio) : null
     if (!layout || !wav) { dropLiveForward(id); return null }
     // A Mac that leaves meanwhile hands the take back to this box at once.
-    const text = await Promise.race([finishOnMac(id, audio, layout.dataStart, wavPcm(wav), language), watch.away])
-    return text === 'away' ? null : text
+    const done = await Promise.race([finishOnMac(id, audio, layout.dataStart, wavPcm(wav), language), watch.away])
+    return done === 'away' ? null : done
   } catch {
     dropLiveForward(id)
     return null
@@ -226,13 +239,15 @@ async function finishLiveOnMac(id: string, language?: string): Promise<string | 
 }
 
 async function transcribe(id: string, language?: string): Promise<VoiceTranscript> {
+  const since = Date.now()
   const record = await voiceArchive.get(id)
   if (record.text !== undefined) return reply(record)
   if (FOLLOWER && hasLiveForward(id) && await macAnswers()) {
-    const text = await finishLiveOnMac(id, language)
-    if (text !== null && text.trim()) {
+    const done = await finishLiveOnMac(id, language)
+    if (done !== null && done.text.trim()) {
       dropLive(id)
-      const saved = await voiceArchive.saveText(id, text, 'primary')
+      // The Mac's engine and live counts; the time is the whole wait here.
+      const saved = await voiceArchive.saveText(id, done.text, 'primary', { ...done.asr, ms: Date.now() - since })
       deferVoiceReplication(id)
       return reply(saved)
     }
@@ -270,7 +285,7 @@ async function transcribe(id: string, language?: string): Promise<VoiceTranscrip
     }
     if (primary !== 'away') {
       dropLive(id)
-      const saved = await voiceArchive.saveText(id, primary.text, primary.via)
+      const saved = await voiceArchive.saveText(id, primary.text, primary.via, { ...voiceAsr(primary.asr), ms: Date.now() - since })
       await voiceArchive.markPrimarySaved(id, saved.text)
       return reply(await voiceArchive.get(id))
     }
@@ -279,7 +294,7 @@ async function transcribe(id: string, language?: string): Promise<VoiceTranscrip
   const live = await finishLiveTake(id, language)
   // Nothing heard goes the ordinary way, which never stores an empty transcript.
   if (live !== null && live.trim()) {
-    const saved = await voiceArchive.saveText(id, live, FOLLOWER ? 'local' : 'primary')
+    const saved = await voiceArchive.saveText(id, live, FOLLOWER ? 'local' : 'primary', await localAsr(id, language, since))
     deferVoiceReplication(id)
     return reply(saved)
   }
@@ -315,7 +330,11 @@ async function transcribe(id: string, language?: string): Promise<VoiceTranscrip
     }
     throw new VoiceArchiveError(503, 'stt_unavailable', 'Transcription is unavailable; your recording remains saved')
   }
-  const saved = await voiceArchive.saveText(id, result.output.text, result.via)
+  const output = result.output as { text: string; engine?: string; model?: string; asr?: unknown }
+  const saved = await voiceArchive.saveText(id, output.text, result.via, {
+    ...voiceAsr(output.asr), ...(output.engine ? { engine: output.engine } : {}), ...(output.model ? { model: output.model } : {}),
+    ...(language ? { language } : {}), ms: Date.now() - since,
+  })
   deferVoiceReplication(id)
   return reply(saved)
 }

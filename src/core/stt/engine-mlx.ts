@@ -402,6 +402,7 @@ export function createMlxEngine(cfg: MlxEngineConfig): SttEngine {
 
   return {
     name: 'mlx',
+    model,
 
     async warmup() {
       await ensureServerRunning();
