@@ -35,7 +35,8 @@ export interface TransferRequest {
   permissionMode?: SessionMode;
   /** What the new task should do first, after taking the work over. */
   message?: string;
-  /** Leave the source task open (a copy). Default: the source task completes. */
+  /** Leave the source task open (a copy). Default: the source task completes, except from a
+   *  session when the source is still in use (source-in-use.ts), where it stays open. */
   keepSource?: boolean;
   callerSid?: string;
 }

@@ -10,7 +10,8 @@
  *   - too wide → a plain ssh outage strands a message the user must retry by hand
  */
 import { describe, it, expect } from 'vitest';
-import { BudgetCheckingError, BudgetPausedError, classifyDeliveryFailure, isPermanentDeliveryFailure, isDaemonCommandOutcomeUnknown, sendMayHaveLanded } from '../../src/providers/delivery-failure.js';
+import { BudgetCheckingError, BudgetPausedError, classifyDeliveryFailure, heldByAnotherProcess, holderKindOf, holderPidOf, isPermanentDeliveryFailure, isDaemonCommandOutcomeUnknown, sendMayHaveLanded, SessionHeldElsewhereError } from '../../src/providers/delivery-failure.js';
+import { isHeldElsewhereReason } from '../../src/core/sessions/undelivered-requests.js';
 import { CwdMissingError } from '../../src/providers/cwd-check.js';
 import { SessionStopSupersededError } from '../../src/core/sessions/session-stop.js';
 
@@ -112,8 +113,8 @@ describe('isDaemonCommandOutcomeUnknown', () => {
 
   it('a definite daemon verdict is NOT unknown — the daemon answered', () => {
     for (const message of [
-      'Daemon start failed on host "clouddev": cwd missing',
-      'Daemon spawn failed on host "clouddev": no PID returned (cwd: "/gone")',
+      'Daemon start failed on host "devbox": cwd missing',
+      'Daemon spawn failed on host "devbox": no PID returned (cwd: "/gone")',
       'Session working directory no longer exists',
       'spawn EMFILE',
     ]) {
@@ -124,5 +125,41 @@ describe('isDaemonCommandOutcomeUnknown', () => {
   it('non-Error inputs are never unknown-outcome', () => {
     expect(isDaemonCommandOutcomeUnknown('daemon command timeout: start')).toBe(false);
     expect(isDaemonCommandOutcomeUnknown(undefined)).toBe(false);
+  });
+});
+
+
+describe('classifyDeliveryFailure — the host refuses the session (another process holds it)', () => {
+  const TERMINAL = 'start: this session already has a running CLI (pid 4087, started by a process no Walnut daemon recorded); not started a second time'
+  it('parks it with plain words: the user is in it in a terminal, the task is fine, the message waits', () => {
+    const err = new SessionHeldElsewhereError('devbox', 'session_live', holderPidOf(TERMINAL), holderKindOf(TERMINAL));
+    const verdict = classifyDeliveryFailure(err);
+    expect(verdict).toMatchObject({ kind: 'permanent', code: 'session_live' });
+    expect(verdict.reason).toMatch(/^Not delivered yet: the user \(or someone\) has this session open in a terminal right now \(Claude Code pid 4087 on host "devbox"\)\./);
+    expect(verdict.reason).toContain('The task is fine, not broken.');
+    expect(verdict.reason).toContain('this message waits');
+    expect(verdict.reason).toContain('Do not move the work elsewhere or close the task.');
+    // Kept whole: people and agents decide what to do from it.
+    expect(verdict.reason).toBe(err.message);
+    expect(isHeldElsewhereReason(verdict.reason)).toBe(true);
+  });
+  it('another Walnut holding it is named as that, and this machine plainly', () => {
+    const walnut = 'start: this session already has a running CLI (pid 9, started by the Walnut at /data/other); not started a second time';
+    expect(holderKindOf(walnut)).toBe('walnut');
+    const reason = classifyDeliveryFailure(new SessionHeldElsewhereError('__local__', 'session_live', 9, holderKindOf(walnut))).reason;
+    expect(reason).toMatch(/^Not delivered yet: another Walnut runs this session right now \(Claude Code pid 9 on this machine\)/);
+    expect(isHeldElsewhereReason(reason)).toBe(true);
+    expect(classifyDeliveryFailure(new SessionHeldElsewhereError('box', 'session_other_walnut')).reason).toContain('belongs to another Walnut');
+  });
+  it('only a CLI another process started counts as held: not its own daemon, not a start in progress', () => {
+    expect(heldByAnotherProcess(TERMINAL)).toBe(true);
+    expect(heldByAnotherProcess('start: this session already has a running CLI (pid 5, started by this daemon); not started a second time')).toBe(false);
+    expect(heldByAnotherProcess('start: another daemon is starting this session now (another Walnut daemon); not started twice')).toBe(false);
+    expect(heldByAnotherProcess(undefined)).toBe(false);
+  });
+  it('reads the holder pid only from a pid mention', () => {
+    expect(holderPidOf('a running CLI (pid 12, started by')).toBe(12);
+    expect(holderPidOf('no pid here')).toBeUndefined();
+    expect(holderPidOf(undefined)).toBeUndefined();
   });
 });

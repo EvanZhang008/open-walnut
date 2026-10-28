@@ -25,13 +25,15 @@ export type DeliveryFailureKind = 'permanent' | 'transient';
 export interface DeliveryFailureVerdict {
   kind: DeliveryFailureKind;
   /** Stable label for logs/tests. Absent for transient failures. */
-  code?: 'cwd_missing' | 'session_missing' | 'session_stopped' | 'budget_paused' | 'inherited_session';
+  code?: 'cwd_missing' | 'session_missing' | 'session_stopped' | 'budget_paused' | 'inherited_session' | 'session_live';
   /** Human-readable cause, stored on the parked row and shown in the UI. */
   reason: string;
 }
 
 /** Cap the stored reason: it lands in a JSON row and in a UI label. */
 const REASON_MAX = 300;
+/** The held-elsewhere reason is read by people and agents deciding what to do: kept whole. */
+const HELD_REASON_MAX = 600;
 
 /**
  * The working directory is gone (local existsSync / remote fs.ls ENOENT), or was
@@ -56,6 +58,9 @@ export function classifyDeliveryFailure(err: unknown): DeliveryFailureVerdict {
   if (isSessionStopSuperseded(err)) return { kind: 'permanent', code: 'session_stopped', reason };
   // A test server refusing a session it did not start: retrying changes nothing.
   if (err instanceof InheritedSessionRefusedError || /^inherited_session:/.test(message)) return { kind: 'permanent', code: 'inherited_session', reason };
+  // Another process holds the session on its host: every retry is refused the
+  // same way until that process ends, so the batch waits for the user's Retry.
+  if (err instanceof SessionHeldElsewhereError) return { kind: 'permanent', code: 'session_live', reason: err.message.slice(0, HELD_REASON_MAX) };
   if (err instanceof CwdMissingError) return { kind: 'permanent', code: 'cwd_missing', reason };
   if (CWD_MISSING.test(message)) return { kind: 'permanent', code: 'cwd_missing', reason };
   if (SESSION_MISSING.test(message)) return { kind: 'permanent', code: 'session_missing', reason };
@@ -105,6 +110,69 @@ export class SendOutcomeUnknownError extends Error {
     super(`Delivery unconfirmed: the host never said whether the message reached the session (${cause})`);
     this.name = 'SendOutcomeUnknownError';
   }
+}
+
+/**
+ * The host refused to start the session's CLI because another process already
+ * runs it there (the daemon's one-CLI-per-session guard, cli-owner-core.ts:
+ * errorKind `session_live`), or because the session belongs to another Walnut
+ * (`session_other_walnut`, test servers only). Nothing was spawned and nothing
+ * read the message. 2026-10-28: a `claude -r <sid>` left open in a terminal
+ * refused every send to a task for hours, and the server retried each one on
+ * every reconnect while telling the sender the target's turn had ended.
+ */
+export class SessionHeldElsewhereError extends Error {
+  readonly code = 'SESSION_LIVE';
+  constructor(
+    readonly host: string,
+    readonly kind: 'session_live' | 'session_other_walnut',
+    readonly holderPid?: number,
+    /** Who holds it: a process no Walnut recorded (a terminal: most likely the user), or another Walnut. */
+    readonly holder: 'terminal' | 'walnut' = 'terminal',
+  ) {
+    super(heldElsewhereText(host, kind, holderPid, holder));
+    this.name = 'SessionHeldElsewhereError';
+  }
+}
+
+/**
+ * The words the sender, the parked row and the task's status all carry. Plain on
+ * purpose (2026-10-28: a lead read the old wording as "this task is broken",
+ * moved the work to a new task and closed the one the user was working in).
+ */
+function heldElsewhereText(host: string, kind: SessionHeldElsewhereError['kind'], pid: number | undefined, holder: 'terminal' | 'walnut'): string {
+  const where = host === '__local__' ? 'this machine' : `host "${host}"`;
+  const proc = pid ? `Claude Code pid ${pid} on ${where}` : `on ${where}`;
+  if (kind === 'session_other_walnut') return `Not delivered: this session belongs to another Walnut on ${where}, and a test server does not run it.`;
+  if (holder === 'walnut') {
+    return `Not delivered yet: another Walnut runs this session right now (${proc}). The task is fine, not broken: `
+      + 'this message waits in the session\'s queue, and Retry sends it once that process has ended.';
+  }
+  return `Not delivered yet: the user (or someone) has this session open in a terminal right now (${proc}). `
+    + 'The task is fine, not broken. Walnut runs one process per session, so this message waits in the session\'s queue; '
+    + 'Retry sends it once that terminal is closed. Do not move the work elsewhere or close the task.';
+}
+
+/**
+ * The daemon's session_live refusal names a CLI another process started: a
+ * terminal's `claude -r`, another Walnut's daemon. Not its own CLI ("started by
+ * this daemon") and not another daemon's start in progress ("is starting this
+ * session now"), which a retry gets past.
+ */
+export function heldByAnotherProcess(text: unknown): boolean {
+  const t = typeof text === 'string' ? text : '';
+  return /already has a running CLI \(pid \d+, started by /.test(t) && !/started by this daemon\)/.test(t);
+}
+
+/** Who the refusal names: a process no Walnut daemon recorded (a terminal) or another Walnut. */
+export function holderKindOf(text: unknown): 'terminal' | 'walnut' {
+  return typeof text === 'string' && /started by a process no Walnut daemon recorded/.test(text) ? 'terminal' : 'walnut';
+}
+
+/** The holder's pid from the daemon's refusal text ("… a running CLI (pid 4087, …"). */
+export function holderPidOf(text: unknown): number | undefined {
+  const m = /\bpid (\d+)/.exec(typeof text === 'string' ? text : '');
+  return m ? Number(m[1]) : undefined;
 }
 
 /** The session's budget is paused (over its limit, unpriced, unreadable): nothing is sent until the user raises or removes it. */

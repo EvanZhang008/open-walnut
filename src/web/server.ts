@@ -4968,7 +4968,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     // Route session errors to Notifications. Session panels retain their own
     // contextual error/retry state; the general chat must remain conversational.
     if (event.name === 'session:error') {
-      const { error, taskId, sessionId, errorKind } = eventData<'session:error'>(event)
+      const { error, taskId, sessionId, errorKind, parked } = eventData<'session:error'>(event)
       const isDeliveryFailure = errorKind === 'delivery_failed'
       const { inboxOwnsStartFailure } = await import('../core/human-inbox/item-start-notification.js')
       let shouldPublish = !(taskId && !isDeliveryFailure && await inboxOwnsStartFailure(taskId, sessionId).catch(() => false))
@@ -5007,7 +5007,9 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       const errorTaskRef = taskId ? await resolveTaskRef(taskId) : null
       if (shouldPublish) {
         const body = isDeliveryFailure
-          ? `${errorTaskRef ? `${errorTaskRef}: ` : ''}${error}\n\nYour message was not lost. It stays queued and will be re-sent when you press Retry, send another message, or the connection recovers.`
+          ? `${errorTaskRef ? `${errorTaskRef}: ` : ''}${error}\n\n${parked
+            ? 'Your message was not lost. It is kept in its session and goes out when you press Retry.'
+            : 'Your message was not lost. It stays queued and will be re-sent when you press Retry, send another message, or the connection recovers.'}`
           : `${errorTaskRef ? `${errorTaskRef}: ` : ''}${error}`
         const published = await publishSessionErrorNotification({
           title: isDeliveryFailure ? 'Session Delivery Failed' : 'Session Error',

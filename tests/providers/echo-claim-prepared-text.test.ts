@@ -68,6 +68,8 @@ describe('echo-claim text vs prepareOutbound rewrite', () => {
     const fakeSession = {
       writeSyntheticUserEvent: vi.fn(),
       lastPreparedOutbound: PREPARED_TEXT,
+      // The resumed CLI already read the line (its init came), so nothing is held.
+      holdResumeLineUntilRead: () => false,
     };
     (runner as unknown as {
       settleResumeSuccess: (sid: string, session: typeof fakeSession, msgs: typeof batch) => void;
@@ -92,6 +94,7 @@ describe('echo-claim text vs prepareOutbound rewrite', () => {
     const fakeSession = {
       writeSyntheticUserEvent: vi.fn(),
       lastPreparedOutbound: undefined,
+      holdResumeLineUntilRead: () => false,
     };
     (runner as unknown as {
       settleResumeSuccess: (sid: string, session: typeof fakeSession, msgs: typeof batch) => void;

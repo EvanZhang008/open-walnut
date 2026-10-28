@@ -2235,6 +2235,9 @@ export type StatusReason =
   | 'reconciled_authoritative'
   | 'streaming_evidence_self_heal'
   | 'turn_interrupted'
+  /** The host refused to run the session (another process holds it there): the
+   *  message waits parked, nothing ran (providers/delivery-failure.ts). */
+  | 'message_not_delivered'
   | 'user_stopped'
   | 'user_terminated'
   /** A death WE requested (task done, capacity eviction, idle timeout) — daemon exit
@@ -2891,6 +2894,11 @@ export interface SessionRecord {
   autoRecover?: SessionAutoRecoverState;
   /** Set when a restart (machine, server, host) killed this session's process. */
   restartLoss?: SessionRestartLoss;
+  /** When a person (console, phone, CLI, a letter) last sent this session a message. */
+  humanInputAt?: string;
+  /** The last time the host refused to start this session because another process
+   *  had it open (a terminal's `claude -r`, most often the user's; or another Walnut). */
+  heldElsewhere?: { at: string; host: string; pid?: number; holder: 'terminal' | 'walnut' };
   stopRequest?: { id: string; requestedAt: string; state: 'pending' | 'confirmed'; error?: string };
   /** Why the last process_status change happened (K8s condition style). */
   status_reason?: StatusReason;

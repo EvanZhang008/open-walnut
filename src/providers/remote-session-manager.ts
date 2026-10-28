@@ -25,7 +25,7 @@ import {
 } from '../core/remote-image-mirror.js'
 import { log } from '../logging/index.js'
 import { getDaemonConnection, getDirectDaemonConnection, DaemonConnection, type DaemonEvent, type DaemonTaskState, type DaemonGetStateResult } from './daemon-connection.js'
-import { BudgetCheckingError, BudgetPausedError, isDaemonCommandOutcomeUnknown, sendMayHaveLanded, SendHeldError, SendOutcomeUnknownError } from './delivery-failure.js'
+import { BudgetCheckingError, BudgetPausedError, heldByAnotherProcess, holderKindOf, holderPidOf, isDaemonCommandOutcomeUnknown, sendMayHaveLanded, SendHeldError, SendOutcomeUnknownError, SessionHeldElsewhereError } from './delivery-failure.js'
 import { InheritedSessionRefusedError } from './ephemeral-session-gate.js'
 import { linkFailureKind } from './link-failure.js'
 import { CloudSessionLink } from './cloud-session-link.js'
@@ -372,6 +372,17 @@ export class RemoteSessionManager implements SessionManager {
       if (result.reason === 'budget_paused' || result.errorKind === 'budget_paused') throw new BudgetPausedError()
       if (result.reason === 'budget_checking' || result.errorKind === 'budget_checking') throw new BudgetCheckingError()
       if (result.reason === 'session_stopped') throw new SessionStopSupersededError('Session start was superseded by a stop request')
+      // Another process runs this session on the host (cli-owner-core.ts): typed,
+      // so the queue parks the message with that cause instead of retrying it.
+      // Not when the holder is this host's own daemon (Walnut's own CLI, which
+      // the server lost track of) or a start in progress elsewhere (a claim held
+      // for seconds): those pass, and stay the plain retryable failure they were.
+      if (result.errorKind === 'session_other_walnut' || result.reason === 'session_other_walnut') {
+        throw new SessionHeldElsewhereError(this.hostKey, 'session_other_walnut')
+      }
+      if ((result.errorKind === 'session_live' || result.reason === 'session_live') && heldByAnotherProcess(result.error)) {
+        throw new SessionHeldElsewhereError(this.hostKey, 'session_live', holderPidOf(result.error), holderKindOf(result.error))
+      }
       // The daemon's spawn gate already wrote the sentence the user needs (claude
       // not installed / npm build without node, with the install command): pass
       // it through verbatim instead of burying it in a "start failed" wrapper.

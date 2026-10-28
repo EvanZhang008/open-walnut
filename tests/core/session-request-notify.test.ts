@@ -39,8 +39,9 @@ vi.mock('../../src/core/session-message-queue.js', () => ({
   sendMessageToSession: (...args: unknown[]) => sendMessageToSession(...args),
   enqueueMessage: (...args: unknown[]) => enqueueMessage(...args),
   editMessage: async () => false,
-  getQueue: async () => [],
+  getQueue: (...args: unknown[]) => getQueue(...args),
 }));
+const getQueue = vi.fn();
 
 const listTasksByIds = vi.fn();
 const getTask = vi.fn();
@@ -191,6 +192,8 @@ beforeEach(() => {
   enqueueMessage.mockResolvedValue({ id: 'qm-parked' });
   listTasksByIds.mockResolvedValue([{ id: 'task-77', title: 'Run the migration' }]);
   getTask.mockRejectedValue(new Error('no such task'));
+  getQueue.mockReset();
+  getQueue.mockResolvedValue([]);
   buildSessionTranscript.mockReset();
   readSessionTranscript.mockReset();
   buildSessionTranscript.mockResolvedValue(transcriptOf());
@@ -1104,5 +1107,80 @@ describe('sessionRequestWatchHook — a request handed on waits for that answer'
     backdateDeadline(owed.id);
     expect(await sweepSessionRequests()).toBe(1);
     expect(deliveredText()).toContain('It handed your request on to "Fix login timeout" (task-88), which is still working on it.');
+  });
+});
+
+
+describe('notifyRequesterFallback — a message that has not reached its target', () => {
+  /** The target's queue row that carries request `id` (a peer's ask, as task_send files it). */
+  function rowFor(id: string, over: Record<string, unknown> = {}) {
+    return {
+      id: 'qm-1', sessionId: TARGET, status: 'pending', enqueuedAt: NOW,
+      message: `<walnut-message kind="peer-note" from="Asker [sess-ask]" request="${id}" note="n">\ncount the rows\n</walnut-message>`,
+      ...over,
+    };
+  }
+
+  it('a turn end while the message still waits in the queue does not settle the request', async () => {
+    const request = await arm();
+    getQueue.mockResolvedValue([rowFor(request.id)]);
+    buildSessionTranscript.mockResolvedValue(transcriptOf('an answer from an earlier turn'));
+    expect(await notifyRequesterFallback(request, 'completed', { phase: 'NEED_ACTION' })).toBe(false);
+    expect(await notifyRequesterFallback(request, 'error', { phase: 'NEED_ACTION' })).toBe(false);
+    expect((await getSessionRequest(request.id))?.status).toBe('pending');
+    expect(sendMessageToSession).not.toHaveBeenCalled();
+  });
+
+  it('a parked message is reported NOT DELIVERED with its reason, and nothing of the target is quoted', async () => {
+    const request = await arm();
+    getQueue.mockResolvedValue([rowFor(request.id, { status: 'parked', parkedReason: 'Not delivered: another Claude Code process (pid 4087) already has this session open' })]);
+    buildSessionTranscript.mockResolvedValue(transcriptOf('an answer from an earlier turn'));
+    expect(await notifyRequesterFallback(request, 'completed', { phase: 'NEED_ACTION' })).toBe(true);
+    const text = deliveredText();
+    const envelope = parseWalnutMessage(text)!;
+    expect(envelope.attrs.outcome).toBe('error');
+    expect(envelope.body).toContain('Your message was NOT DELIVERED');
+    expect(envelope.body).toContain('Why: Not delivered: another Claude Code process (pid 4087)');
+    expect(envelope.body).not.toContain('an answer from an earlier turn');
+    expect(envelope.body).not.toContain('Its turn ended');
+    expect((await getSessionRequest(request.id))).toMatchObject({ status: 'notified', outcome: 'error' });
+  });
+
+  it('the target\'s task completed with the ask still queued: the asker hears now that it was not delivered', async () => {
+    const request = await arm();
+    getQueue.mockResolvedValue([rowFor(request.id)]);
+    expect(await notifyRequesterFallback(request, 'completed', { phase: 'COMPLETE' })).toBe(true);
+    const envelope = parseWalnutMessage(deliveredText())!;
+    expect(envelope.attrs.outcome).toBe('error');
+    expect(envelope.body).toContain('Why: its task was completed before its session read this message');
+    expect((await getSessionRequest(request.id))).toMatchObject({ status: 'notified', outcome: 'error' });
+  });
+
+  it('the user has the target open in a terminal: the notice says so plainly', async () => {
+    const request = await arm();
+    const { SessionHeldElsewhereError } = await import('../../src/providers/delivery-failure.js');
+    getQueue.mockResolvedValue([rowFor(request.id, { status: 'parked', parkedReason: new SessionHeldElsewhereError('devbox', 'session_live', 4087, 'terminal').message })]);
+    expect(await notifyRequesterFallback(request, 'error', { phase: 'NEED_ACTION' })).toBe(true);
+    const body = parseWalnutMessage(deliveredText())!.body;
+    expect(body).toContain('most likely the user working in it in a terminal');
+    expect(body).toContain('The task is fine, not broken.');
+    expect(body).not.toContain('once the cause is gone');
+  });
+
+  it('the deadline with the message still queued says so, instead of "has not replied"', async () => {
+    const request = await arm();
+    getQueue.mockResolvedValue([rowFor(request.id)]);
+    expect(await notifyRequesterFallback(request, 'timeout')).toBe(true);
+    const body = parseWalnutMessage(deliveredText())!.body;
+    expect(body).toContain('has NOT BEEN DELIVERED yet');
+    expect(body).not.toContain('send it again');
+  });
+
+  it('a reply addressed TO the target names its receiver\'s request, not this one: it is not counted', async () => {
+    const request = await arm();
+    getQueue.mockResolvedValue([rowFor(request.id, { message: `<walnut-message kind="reply" request="${request.id}">\nok\n</walnut-message>` })]);
+    buildSessionTranscript.mockResolvedValue(transcriptOf('done, 42 rows'));
+    expect(await notifyRequesterFallback(request, 'completed', { phase: 'NEED_ACTION' })).toBe(true);
+    expect(deliveredText()).toContain('done, 42 rows');
   });
 });

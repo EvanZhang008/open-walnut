@@ -70,6 +70,8 @@ export interface UserStatusInput {
   restartLoss?: { state: string; cause?: string } | null;
   /** Its project has an open lead (a VP), who restarts what Walnut could not. */
   projectLead?: boolean;
+  /** A message to its session was parked, never delivered, since the phase last moved: the reason. */
+  undeliveredMessage?: string | null;
   /** When its session's status last moved (ISO). */
   statusSince?: string | null;
   /** A live permission prompt or question the session is blocked on. */
@@ -248,12 +250,24 @@ function derive(input: UserStatusInput, nowMs: number): UserStatus {
   if (input.phase === 'NEED_ACTION') {
     if (!none(input.openLetter)) return strip({ state: 'needs', source: 'letter', ask: clean(input.openLetter), ...w });
     if (!none(input.openChoice)) return strip({ state: 'needs', source: 'choice', ask: clean(input.openChoice), ...w });
+    // A message that never reached the session: the cause is what the user fixes,
+    // not a session that "failed" or a turn that ended (2026-10-28).
+    if (!none(input.undeliveredMessage)) {
+      const raw = clean(input.undeliveredMessage);
+      // The user's own terminal holds the session: say that, not "failed" (2026-10-28).
+      const terminal = /has this session open in a terminal right now \(([^)]*)\)/.exec(raw);
+      if (terminal) {
+        return strip({ state: 'needs', source: 'error', ask: `The user (or someone) has its session open in a terminal right now (${terminal[1].slice(0, 80)}), so a message to it waits. The task is fine; Retry it once that terminal is closed.`, ...w });
+      }
+      const why = raw.replace(/^Not delivered( yet)?:\s*/i, '');
+      return strip({ state: 'needs', source: 'error', ask: `A message to it was not delivered: ${why.slice(0, 220)}`, ...w });
+    }
     if (machine) return machine;
     // A machine stop under a turn that asked the user something: the ask is what they answer.
     if (input.processStatus === 'error' && !infraStopCause(input)) {
-      const why = clean(input.errorMessage);
-      return strip({ state: 'needs', source: 'error', ask: why ? `Its session failed (${why.slice(0, 140)}). Retry it or open it.` : 'Its session failed. Retry it or open it.', ...w });
-    }
+    const why = clean(input.errorMessage);
+    return strip({ state: 'needs', source: 'error', ask: why ? `Its session failed (${why.slice(0, 140)}). Retry it or open it.` : 'Its session failed. Retry it or open it.', ...w });
+  }
     if (report?.state === 'needs' && !none(report.ask)) return strip({ state: 'needs', source: 'session', ask: clean(report.ask), ...w });
     if (report?.state === 'waiting' && report.waiting_kind === 'you' && !none(report.waiting_on)) {
       return strip({ state: 'needs', source: 'session', ask: clean(report.waiting_on), ...w });

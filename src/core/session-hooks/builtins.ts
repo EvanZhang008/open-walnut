@@ -2226,6 +2226,9 @@ export const cwdRenameDetectorHook: SessionHookDefinition = {
  * is not reported "stopped" (the reply was the update), and its completion then
  * carries no quote. The child's transcript is read ONCE for both notices.
  */
+/** A park this recent explains the hand-back edge it caused (the park comes first). */
+const UNDELIVERED_EDGE_MS = 2 * 60_000;
+
 export const sessionRequestWatchHook: SessionHookDefinition = {
   id: 'session-request-watch',
   name: 'Session Request Watch',
@@ -2329,6 +2332,33 @@ export const sessionRequestWatchHook: SessionHookDefinition = {
     }
     if (pending.length === 0 && !parentTaskId) return;
 
+    // The edge came from a message that never reached the session (the host refused
+    // it, or the resumed CLI exited before reading it): its asker was told that when
+    // the row was parked, and the transcript's last words are from an older turn, so
+    // nothing here quotes them (2026-10-28).
+    // Only a hand-back with no live CLI behind it: a process that is idle or running
+    // just ran a real turn, whatever an older park says. Never a completion or a park.
+    let undelivered: { reason: string; parentAsked?: boolean; held: boolean } | undefined;
+    if (isPhaseEdge && parentTaskId && phase === 'NEED_ACTION'
+      && record?.process_status !== 'running' && record?.process_status !== 'idle') {
+      const { recentNeverRanPark, peerAskOf, isHeldElsewhereReason } = await import('../sessions/undelivered-requests.js');
+      const since = Date.now() - UNDELIVERED_EDGE_MS;
+      const row = await recentNeverRanPark(sessionId ?? record?.claudeSessionId, since).catch(() => undefined);
+      if (row) {
+        const ask = peerAskOf(row);
+        undelivered = {
+          reason: row.parkedReason ?? '',
+          // The parent's own ask: it was answered at the park (a plain send was not).
+          parentAsked: !!ask?.requestId && ask.fromTask === parentTaskId,
+          held: isHeldElsewhereReason(row.parkedReason),
+        };
+      } else if (record?.status_reason === 'message_not_delivered' && record.errorMessage
+        && Date.parse(record.heldElsewhere?.at ?? '') >= since) {
+        // The host refused the start just now: the record says so before the park is written.
+        undelivered = { reason: record.errorMessage, held: isHeldElsewhereReason(record.errorMessage) };
+      }
+    }
+
     // Whether the parent hears about this edge, decided BEFORE the transcript
     // read (up to LAST_MESSAGE_READ_MS): the parent's own sessions as askers are
     // answered by the fallback notice; a parent that answered lately needs no
@@ -2339,7 +2369,7 @@ export const sessionRequestWatchHook: SessionHookDefinition = {
       const parentSids = new Set((await getSessionsForTask(parentTaskId).catch(() => [])).map((s) => s.claudeSessionId));
       const kind: SubtaskNoticeKind =
         phase === 'COMPLETE' ? 'completed'
-          : outcome === 'error' ? 'error'
+          : outcome === 'error' || undelivered ? 'error'
             : outcome === 'awaiting_human' ? 'blocked'
               : phase === 'WAITING' ? 'waiting'
                 : 'stopped';
@@ -2349,6 +2379,10 @@ export const sessionRequestWatchHook: SessionHookDefinition = {
       const parentHears = !pending.some((r) => parentSids.has(r.fromSessionId))
         && !(actorSid && parentSids.has(actorSid))
         && !(kind === 'stopped' && answeredLately)
+        // The parent sent the message itself (it heard at the park), or the user has the
+        // session open in a terminal: the task is in use, not failed, and the parent has
+        // nothing to do about it.
+        && !(undelivered && (undelivered.parentAsked || undelivered.held))
         && await notices.parentCanHear(parentTaskId);
       if (parentHears) subtask = { kind, answeredLately };
     }
@@ -2364,7 +2398,7 @@ export const sessionRequestWatchHook: SessionHookDefinition = {
 
     // One transcript read serves every notice of this edge.
     const notify = await import('../sessions/session-request-notify.js');
-    const lastTurn = lastMessage ? undefined : await notify.readLastTurn(sessionId ?? record?.claudeSessionId);
+    const lastTurn = lastMessage || (undelivered && speak.length === 0) ? undefined : await notify.readLastTurn(sessionId ?? record?.claudeSessionId);
     for (const request of speak) {
       await notify.notifyRequesterFallback(request, outcome, { phase, lastMessage, lastWords: lastTurn?.words });
     }
@@ -2372,15 +2406,16 @@ export const sessionRequestWatchHook: SessionHookDefinition = {
 
     const { clipNoticeMessage } = await import('../session-requests.js');
     const { queueSubtaskNotice } = await import('../sessions/subtask-notices.js');
-    const errorText = 'error' in payload && !isPhaseEdge
-      ? String((payload as { error?: unknown }).error ?? '')
-      : record?.errorMessage;
+    const errorText = undelivered ? undelivered.reason
+      : 'error' in payload && !isPhaseEdge
+        ? String((payload as { error?: unknown }).error ?? '')
+        : record?.errorMessage;
     await queueSubtaskNotice({
       parentTaskId,
       child: { id: task.id, title: task.title, sessionId: sessionId ?? record?.claudeSessionId },
       kind: subtask.kind,
-      lastWords: lastMessage ? clipNoticeMessage(lastMessage) : lastTurn?.words,
-      startedBy: notify.turnStarterOf(lastTurn?.openedBy, parentTaskId),
+      lastWords: undelivered ? undefined : lastMessage ? clipNoticeMessage(lastMessage) : lastTurn?.words,
+      startedBy: undelivered ? undefined : notify.turnStarterOf(lastTurn?.openedBy, parentTaskId),
       error: subtask.kind === 'error' ? errorText : undefined,
       blockedOn: subtask.kind === 'blocked' ? record?.pendingPermission?.toolName : undefined,
       waitUntil: subtask.kind === 'waiting' ? task.wait_until ?? undefined : undefined,

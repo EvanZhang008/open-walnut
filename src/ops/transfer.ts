@@ -10,7 +10,9 @@ defineOp({
   description:
     'Move a task\'s work to another coding engine (e.g. Claude Code to Codex) and/or another host. ' +
     'It always makes a NEW task beside this one (a task keeps one session for its whole life) and starts it; ' +
-    'the source task completes unless keep_source is true. ' +
+    'the source task completes unless keep_source is true, and it STAYS OPEN, keep_source:false or not, when the task is still in use: ' +
+    'the user wrote in it or its session in the last 7 days, its session was open in a terminal (the user working in it) in that time, ' +
+    'or it leads work (open subtasks, an org role, an armed trigger); the answer names why in sourceKeptOpen. ' +
     'mode=carry (default) brings the conversation (Claude to Claude on the same host and directory, e.g. a model change: the CLI\'s own transcript, forked; ' +
     'every other pair, Claude to Claude elsewhere included: a transcript file plus a seed); ' +
     'a forked carry is done only once the new session started, and the source completes only then; ' +
@@ -28,7 +30,7 @@ defineOp({
     effort: z.enum(['low', 'medium', 'high', 'xhigh', 'max']).optional().describe('Reasoning effort for the new Claude Code session; omit to keep the current one (same engine)'),
     permission_mode: z.enum(['plan', 'default', 'dontAsk', 'accept', 'auto', 'bypass']).optional().describe('Permission mode the new session starts in; omit to keep the current one'),
     message: z.string().min(1).optional().describe('What the new task should do first once it has the work'),
-    keep_source: z.boolean().optional().describe('Leave the source task open (a copy); default false: it completes'),
+    keep_source: z.boolean().optional().describe('Leave the source task open (a copy); default false: it completes, unless it is still in use (then it stays open)'),
     wait_ms: z.number().int().min(0).max(25_000).optional().describe('How long to wait for it to finish before answering "running" (default 20000)'),
   },
   bind: { method: 'POST', path: '/tasks/:id/transfer' },
@@ -58,7 +60,10 @@ function transferOutcome(body: unknown): unknown {
   return withOutcome(
     { ...b, ref: `<task-ref id="${String(b.taskId ?? '')}" label="${String(b.title ?? '').replace(/"/g, '&quot;')}"/>` },
     `Task ${String(b.taskId)} took over the work (${target.engine} on ${target.host} in ${target.cwd}); `
-      + `the conversation came as ${String(b.history)}${b.sourceCompleted ? ', and the source task is complete' : ''}.`,
+      + `the conversation came as ${String(b.history)}${b.sourceCompleted ? ', and the source task is complete' : ''}.`
+      + (Array.isArray(b.sourceKeptOpen) && b.sourceKeptOpen.length > 0
+        ? ` The source task ${String(b.sourceTaskId)} stays open because it is still in use: ${(b.sourceKeptOpen as string[]).join('; ')}. Do not complete it yourself.`
+        : ''),
     'Its session is starting; read it with task_history. Talk to it with task_send to the NEW task id.',
   );
 }

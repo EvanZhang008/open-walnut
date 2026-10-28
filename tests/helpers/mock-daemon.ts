@@ -97,6 +97,7 @@ export class MockDaemon {
   private _sendFaults = new Map<string, SendFault>()
   /** Spawn fault returned by every cmdStart until cleared (see injectStartFault). */
   private _startFault: string | null = null
+  private _startFaultData: Record<string, unknown> | undefined
   /** Command names to silently swallow (no reply) — one-shot each; forces a
    *  client-side command timeout (bulk-channel self-heal tests). */
   private _swallowNext = new Set<string>()
@@ -410,7 +411,7 @@ export class MockDaemon {
     // (missing cwd / mkfifo failed / no pid) — envelope ok:false, no session
     // registered, so the client's transport.start() rejects. Sticky until cleared.
     if (this._startFault) {
-      return this.sendError(ws, id, this._startFault)
+      return this.sendError(ws, id, this._startFault, this._startFaultData)
     }
 
     const streamsDir = this.streamsDir
@@ -504,7 +505,12 @@ export class MockDaemon {
         session.pollTimer = null
         if (ownsSid()) {
           this.pollJsonl(ws, session.sid, session)
-          this.sendEvent(ws, 'exit', { sid: session.sid, code: session.exitCode! })
+          // A failed CLI's stderr rides its exit, as the real daemon replays its `.err`.
+          let stderr: string | undefined
+          if (session.exitCode !== 0) {
+            try { stderr = fs.readFileSync(jsonlPath + '.err', 'utf8').slice(-2000) || undefined } catch { /* none */ }
+          }
+          this.sendEvent(ws, 'exit', { sid: session.sid, code: session.exitCode!, ...(stderr ? { stderr } : {}) })
         }
         markExited()
       }, 100) // 100ms delay ensures JSONL file is fully flushed to disk
@@ -1056,8 +1062,11 @@ export class MockDaemon {
    * failing so a resurrected retry loop still shows up as N batch-failures.
    * Call `injectStartFault(null)` to clear.
    */
-  injectStartFault(reason: string | null): void {
+  injectStartFault(reason: string | null, data?: Record<string, unknown>): void {
     this._startFault = reason
+    // Extra envelope fields the real daemon sends beside the text (errorKind,
+    // reason, code: e.g. the cli-owner refusal's session_live).
+    this._startFaultData = reason ? data : undefined
   }
 
   /** Broadcast a `session_state` event to all connected ws clients. */
@@ -1236,9 +1245,9 @@ export class MockDaemon {
     }
   }
 
-  private sendError(ws: WebSocket, id: number, error: string): void {
+  private sendError(ws: WebSocket, id: number, error: string, data?: Record<string, unknown>): void {
     if (ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ id, ok: false, error }))
+      ws.send(JSON.stringify({ ...data, id, ok: false, error }))
     }
   }
 

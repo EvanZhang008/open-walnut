@@ -846,7 +846,14 @@ describe('the sink under the daemon fan-out', () => {
     while (!sends.some((s) => s.cmd === 'triggers.ack') && Date.now() < deadline) await settle(50)
     await settle(500)
     expect(sends.filter((s) => s.cmd === 'triggers.ack')).toHaveLength(1)
-    expect(envelopesSentToDaemon().filter((t) => t.includes('FAN-1'))).toHaveLength(1)
+    // One line, by its uuid: the mock CLI exits at each turn end, so a line written
+    // into a turn that then ends is rewritten under the SAME uuid to the next
+    // process (the CLI dedupes by uuid); a second delivery would be a second line.
+    const fanLines = new Set(daemon.getCommandHistory()
+      .filter((c) => (c.cmd === 'send' || c.cmd === 'start') && String(c.payload.message ?? '').includes('FAN-1'))
+      .map((c) => String(c.payload.uuid ?? '')))
+    expect([...fanLines]).toHaveLength(1)
+    expect(envelopesSentToDaemon().filter((t) => t.includes('FAN-1')).length).toBeGreaterThanOrEqual(1)
     expect((await jobState(id)).state.lastFireSeq).toBe(1)
   })
 })

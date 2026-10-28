@@ -500,8 +500,23 @@ fork) first claims `<spawn-journal dir>/cli-owners/<config dir key>/<sid>.json` 
 there is judged against the process table (CLI pid alive with its start time, or a live daemon's claim
 under 120 s), never trusted, and a stale one is broken. After the claim a `ps` scan refuses a live
 process of the same sid in the same `~/.claude` that no record names (an older daemon's CLI). A refusal
-is `errorKind: 'session_live'`, spawns nothing and touches no one's FIFO or process; the message stays
-queued with the reason. A daemon replacing its own CLI waits for its whole process group to exit
+is `errorKind: 'session_live'`, spawns nothing and touches no one's FIFO or process. The server reads
+it as `SessionHeldElsewhereError` (`delivery-failure.ts`): the message is parked with that cause (a
+Retry sends it once the other process is gone), the session goes back to stopped, the task to
+NEED_ACTION with the cause as its status, and an asker waiting on a reply is told at once that its
+message was NOT delivered (2026-10-28: a `claude -r` left open in a terminal refused every send for
+hours, the server retried on each reconnect, and the asker read "its turn ended" with a quote from
+hours before). The words say plainly that the user (or someone) has the session open in a terminal,
+the task is fine and the message waits, so nobody takes the task for broken; a lead is not told its
+worker failed, and the record keeps `heldElsewhere` (2026-10-28: a lead read the old words as "broken",
+moved the work and closed the task the user was working in). `task_transfer` from a session never
+completes a source still in use (`src/core/transfer/source-in-use.ts`: a person wrote in it, or its
+session was open elsewhere, within 7 days; open subtasks, an org role, an armed trigger); it says why
+in `sourceKeptOpen`. Every park answers the askers of the rows it parks
+(`src/core/sessions/undelivered-requests.ts`), a request whose message still waits in the target's
+queue is never settled by a turn end of the target, and a cold resume's first line stays queued until
+the new process's init (a CLI that dies loading the session parks it instead of losing it). Ratchet:
+`tests/e2e/session-undelivered-e2e.test.ts`. A daemon replacing its own CLI waits for its whole process group to exit
 first. An ephemeral server's starts carry `strict`, and the daemon refuses one for a transcript the
 spawn journal records for another Walnut (`session_other_walnut`), live or not. Ratchets:
 `tests/providers/cli-owner-core.test.ts`, `tests/providers/daemon-cli-owner-twins-e2e.test.ts`.

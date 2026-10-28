@@ -128,8 +128,11 @@ describe('a cold --resume whose first line went in behind a cut copy (r5 gate N1
     await vi.waitFor(async () => expect((await rows()).map((r) => r.status)).toEqual(['pending']))
     expect((await rows())[0].lineUuid).toBe(uuid)
 
-    // The next delivery finds the process gone and resumes a new one, which gets it once.
+    // The next delivery finds the process gone and resumes a new one, which gets it once:
+    // its rows leave the queue once that process shows it read them (its init).
     await internals.processNext(SID)
+    await vi.waitFor(() => expect(second.sent.filter((s) => s.cmd === 'send')).toHaveLength(1), { timeout: 10_000 })
+    second.emit(initLine())
     await vi.waitFor(async () => expect(await rows()).toEqual([]), { timeout: 10_000 })
     const intoNext = second.sent.filter((s) => s.cmd === 'send')
     expect(intoNext).toHaveLength(1)
@@ -138,7 +141,7 @@ describe('a cold --resume whose first line went in behind a cut copy (r5 gate N1
     runner.destroyAndKill()
   }, 30_000)
 
-  it('control: a plain first line is removed at the spawn and reported delivered once', async () => {
+  it('control: a plain first line is reported delivered at the spawn, and leaves the queue at the CLI\'s init', async () => {
     const only = scriptedDaemon({
       start: [{ ok: true, pid: 4444, outputFile: '/nonexistent/cold-resume.jsonl', offset: 0 }],
       send: [{ ok: true }],
@@ -152,11 +155,61 @@ describe('a cold --resume whose first line went in behind a cut copy (r5 gate N1
     const [row] = await getQueue(SID)
     const runner = new SessionRunner('/bin/true')
     await (runner as unknown as { processNext(sid: string): Promise<void> }).processNext(SID)
+    await vi.waitFor(() => expect(delivered).toEqual([[row.id]]), { timeout: 10_000 })
+    // Kept until the resumed process shows it read the line: a CLI that cannot load
+    // the session exits before its init, and the line must outlive it.
+    expect((await rows()).map((r) => r.status)).toEqual(['processing'])
+    only.emit(initLine())
     await vi.waitFor(async () => expect(await rows()).toEqual([]), { timeout: 10_000 })
     expect(delivered).toEqual([[row.id]])
     runner.destroyAndKill()
   }, 30_000)
 })
+
+describe('a cold --resume whose process ends before its init', () => {
+  const resume = async () => {
+    const only = scriptedDaemon({
+      start: [{ ok: true, pid: 4646, outputFile: '/nonexistent/cold-resume.jsonl', offset: 0 }],
+      send: [{ ok: true }],
+    })
+    h.make = (tmpId: string) => {
+      const mgr = new RemoteSessionManager(tmpId, '__local__', null)
+      Object.assign(mgr as unknown as Record<string, unknown>, { conn: only.conn, ensureConnected: async () => only.conn })
+      return mgr
+    }
+    await enqueueMessage(SID, 'the decision')
+    const runner = new SessionRunner('/bin/true')
+    await (runner as unknown as { processNext(sid: string): Promise<void> }).processNext(SID)
+    await vi.waitFor(() => expect(delivered).toHaveLength(1), { timeout: 10_000 })
+    return { only, runner }
+  }
+
+  it('it never read the line: parked with the CLI\'s words once its last lines had time to land', async () => {
+    const { only, runner } = await resume()
+    only.emit({ ev: 'exit', sid: SID, code: 1, stderr: 'Error: could not load the conversation' })
+    // Not at once: the daemon's exit can overtake the process's last stream lines.
+    await settle()
+    expect((await rows()).map((r) => r.status)).toEqual(['processing'])
+    await vi.waitFor(async () => expect((await rows()).map((r) => r.status)).toEqual(['parked']), { timeout: 10_000 })
+    expect((await getQueue(SID))[0].parkedReason).toMatch(/^Not delivered: Claude Code exited with code 1 while resuming this session.*could not load the conversation/)
+    runner.destroyAndKill()
+  }, 30_000)
+
+  it('its init lands just after the exit event: the line ran, and it leaves the queue', async () => {
+    const { only, runner } = await resume()
+    only.emit({ ev: 'exit', sid: SID, code: 1, stderr: 'boom' })
+    only.emit(initLine())
+    await vi.waitFor(async () => expect(await rows()).toEqual([]), { timeout: 10_000 })
+    await new Promise((r) => setTimeout(r, 2_500))
+    expect(await rows()).toEqual([])
+    runner.destroyAndKill()
+  }, 30_000)
+})
+
+/** The resumed CLI's system/init, as the daemon streams it (it prints it once it took the line). */
+function initLine(): Record<string, unknown> {
+  return { ev: 'jsonl', sid: SID, line: JSON.stringify({ type: 'system', subtype: 'init', session_id: SID, cwd: WALNUT_HOME, tools: [], model: 'test' }) }
+}
 
 type Internals = {
   sessions: Map<string, ClaudeCodeSession>

@@ -30,6 +30,7 @@ import { computeCliLoadedChain, type TranscriptChainLine } from '../transcript-c
 import { getResumeFileGate, LOCAL_HOST, planTransfer, TransferError, type HistoryMethod, type TransferPlan, type TransferRequest } from './planner.js';
 import { renderTranscriptMarkdownChunked, renderTranscriptSeed } from './transcript.js';
 import { hostDisplayName } from '../hosts/host-display-name.js';
+import { sourceInUse } from './source-in-use.js';
 import { chooseTargetCwd, moveWorkspace, pruneLocalTransfers, transfersDir, workspaceInstructions, type MovedWorkspace } from './workspace.js';
 import {
   probeIsStale, readHostProfile, recordProbedFacts, recordRepoPath, repoKey, type HostProfile,
@@ -534,7 +535,13 @@ export async function transferTask(req: TransferRequest, transferId = `xf-${rand
 
   await tm.updateTaskRaw(task.id, { transferred_to: target.id }, { source: 'transfer' });
   let sourceCompleted = false;
-  if (!req.keepSource && task.phase !== 'COMPLETE') {
+  // A session's handoff never closes a task the user still uses (2026-10-28: a lead
+  // closed one the user was working in from a terminal). A person decides for themself.
+  const inUse = req.keepSource || !req.callerSid || task.phase === 'COMPLETE' ? [] : await sourceInUse(task, req.callerSid);
+  if (inUse.length > 0) {
+    log.session.info('transfer: the source stays open, it is still in use', { transferId, taskId: task.id, reasons: inUse.map((r) => r.code) });
+  }
+  if (!req.keepSource && inUse.length === 0 && task.phase !== 'COMPLETE') {
     try {
       await tm.updateTask(task.id, { phase: 'COMPLETE' }, { source: 'transfer', ...(req.callerSid ? { actorSid: req.callerSid } : {}) });
       sourceCompleted = true;
@@ -546,6 +553,7 @@ export async function transferTask(req: TransferRequest, transferId = `xf-${rand
   return {
     taskId: target.id, title: target.title, ...(sessionId ? { sessionId } : {}), ...(requestId ? { requestId } : {}),
     sourceTaskId: task.id, sourceCompleted, history: plan.history,
+    ...(inUse.length > 0 ? { sourceKeptOpen: inUse.map((r) => r.text) } : {}),
     target: {
       engine: plan.target.engine, host: plan.target.host, cwd,
       ...(plan.target.model ? { model: plan.target.model } : {}),

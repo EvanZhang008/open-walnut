@@ -26,6 +26,7 @@ import { parseWalnutMessage } from '../peers/walnut-message-tag.js';
 import type { EnvelopeHandedOn } from '../peers/envelope-kit.js';
 import {
   buildRequestNotification,
+  buildUndeliveredNotification,
   clipNoticeMessage,
   overdueRequests,
   settleNotified,
@@ -135,6 +136,8 @@ export interface FallbackContext {
   lastWords?: NoticeLastMessage;
   /** The tasks the target handed this request on to, and where each answer stands. */
   handedOn?: EnvelopeHandedOn[];
+  /** The message never reached the target, for this reason (its row was parked): said instead of any quote. */
+  notDelivered?: string;
 }
 
 /**
@@ -191,6 +194,36 @@ export async function notifyRequesterFallback(
   // the asker hears "no reply" after it already got one.
   const { waitForOfflineHandovers } = await import('../offline-handover.js');
   await waitForOfflineHandovers();
+  // The asker's message itself may not have reached the target yet. A turn end or
+  // error then belongs to an earlier turn and says nothing of this request: the
+  // message is still on its way, and its own turn (or a park, or the deadline)
+  // speaks. A parked row means it never will: say that, not "its turn ended".
+  let undelivered: { why: string; stillQueued: boolean } | undefined = context.notDelivered
+    ? { why: context.notDelivered, stillQueued: false } : undefined;
+  if (!undelivered) {
+    const { undeliveredRowFor, parkMeansNeverRan, parkByStop } = await import('./undelivered-requests.js');
+    const row = await undeliveredRowFor(request.toSessionId, request.id).catch(() => undefined);
+    if (row?.status === 'parked') {
+      // A park that cannot say whether the line ran (the CLI never acknowledged it) is no proof.
+      if (parkMeansNeverRan(row.parkedReason) || parkByStop(row.parkedReason)) {
+        undelivered = { why: row.parkedReason || 'the message could not be delivered', stillQueued: false };
+      }
+    } else if (row) {
+      // Its task was completed with the message still queued: no turn will run on it
+      // (the completion stops its sessions), so say that now, not at the deadline.
+      if (context.phase === 'COMPLETE' && row.status === 'pending') {
+        undelivered = { why: 'its task was completed before its session read this message', stillQueued: false };
+      } else if (outcome === 'completed' || outcome === 'error') {
+        log.session.info('request fallback: the message has not reached its target yet, edge ignored', {
+          requestId: request.id, toSessionId: request.toSessionId, outcome, rowStatus: row.status, messageId: row.id,
+        });
+        return false;
+      }
+      if (!undelivered && outcome === 'timeout' && row.status === 'pending') {
+        undelivered = { why: `it was queued at ${row.enqueuedAt} and has not been delivered since`, stillQueued: true };
+      }
+    }
+  }
   // A Walnut notice never goes into a COMPLETE task's session: nothing there
   // waits for it, and delivering would run a turn on finished work. Withdrawn,
   // not notified (nobody was told), so reopening the task restores it.
@@ -202,7 +235,8 @@ export async function notifyRequesterFallback(
     }
     return false;
   }
-  const settled = await settleNotified(request.id, outcome);
+  // A message that never arrived is an error for the asker, whatever edge noticed it.
+  const settled = await settleNotified(request.id, undelivered && !undelivered.stillQueued ? 'error' : outcome);
   if (!settled) return false; // replied / already notified — someone else spoke
 
   try {
@@ -232,6 +266,20 @@ export async function notifyRequesterFallback(
         targetPhase ??= task?.phase;
         targetSessionId ??= task?.session_id ?? undefined;
       } catch { /* title stays generic */ }
+    }
+    if (undelivered) {
+      const text = buildUndeliveredNotification(settled, {
+        title: targetTitle, sessionId: request.toSessionId, taskId: request.toTaskId,
+      }, undelivered.why, undelivered.stillQueued);
+      const { deliverToSession } = await import('./session-send-core.js');
+      const { delivery } = await deliverToSession(origin, {
+        busText: text, enqueueText: text, source: 'walnut-notify', taskId: origin.taskId, endsWait: true,
+      });
+      log.session.info('request fallback notification delivered (message not delivered)', {
+        requestId: request.id, fromSessionId: request.fromSessionId, toSessionId: origin.claudeSessionId,
+        outcome, delivery, stillQueued: undelivered.stillQueued, why: undelivered.why.slice(0, 200),
+      });
+      return true;
     }
     // So is the quote: the turn's own result when the edge carried it, else the transcript.
     const lastMessage = (context.lastMessage ? clipNoticeMessage(context.lastMessage) : undefined)

@@ -256,3 +256,30 @@ describe('stopped by the machine, not the work', () => {
     expect(deriveUserStatus({ ...old, statusSince: ago(3600_000) }, NOW).kind).toBe('machine')
   })
 })
+
+// 2026-10-28: a refused send read as "Its turn ended and handed the task back to you".
+describe('a message that never reached the session', () => {
+  it('names the cause, ahead of the session error it also caused', () => {
+    const base = { phase: 'NEED_ACTION', hasSession: true, processStatus: 'error', errorMessage: 'Session process exited with code 1' }
+    const why = 'Not delivered: another Claude Code process (pid 4087) already has this session open on host "box", and Walnut runs one process per session.'
+    expect(deriveUserStatus({ ...base, undeliveredMessage: why }, NOW)).toMatchObject({
+      state: 'needs', source: 'error',
+      ask: 'A message to it was not delivered: another Claude Code process (pid 4087) already has this session open on host "box", and Walnut runs one process per session.',
+    })
+    expect(deriveUserStatus({ ...base, undeliveredMessage: null }, NOW).ask).toContain('Its session failed')
+    // Only a handed-back task: the same park on a running task is not what it waits on.
+    expect(deriveUserStatus({ phase: 'IN_PROGRESS', hasSession: true, processStatus: 'running', undeliveredMessage: why }, NOW).state).toBe('working')
+  })
+
+  it('counts a park from the latest hand-back only, not one from before the phase last moved', async () => {
+    const { statusInputOf } = await import('../../src/core/user-status-sync.js')
+    const facts = {
+      sessions: new Map([['sid-a', { processStatus: 'stopped', taskId: 't1' }]]), letters: new Map(), choices: new Map(),
+      requestsFrom: new Map(), triggers: new Map(), schedules: new Map(), titles: new Map(), sessionsOf: new Map([['t1', ['sid-a']]]),
+      undelivered: new Map([['sid-a', { reason: 'Not delivered: x', at: '2026-10-28T06:05:03.000Z' }]]),
+    } as unknown as import('../../src/core/user-status-sync.js').StatusFacts
+    const task = (moved: string) => ({ id: 't1', title: 'x', phase: 'NEED_ACTION', session_id: 'sid-a', phase_changed_at: moved }) as unknown as import('../../src/core/types.js').Task
+    expect(statusInputOf(task('2026-10-28T06:05:04.000Z'), facts).undeliveredMessage).toBe('Not delivered: x')
+    expect(statusInputOf(task('2026-10-28T07:00:00.000Z'), facts).undeliveredMessage).toBeNull()
+  })
+})

@@ -22,6 +22,7 @@ import { WALNUT_HOME } from '../constants.js';
 import { readJsonFile, updateJsonFile } from '../utils/fs.js';
 import { buildWalnutMessage, sessionHandle } from './peers/walnut-message-tag.js';
 import { createEnvelopeKit, type EnvelopeHandedOn } from './peers/envelope-kit.js';
+import { isHeldElsewhereReason } from './sessions/undelivered-requests.js';
 import { log } from '../logging/index.js';
 
 const REQUESTS_FILE = path.join(WALNUT_HOME, 'session-requests.json');
@@ -613,6 +614,55 @@ export function buildRequestNotification(
   target: { title?: string; sessionId?: string; taskId?: string; phase?: string; lastMessage?: NoticeLastMessage; handedOn?: EnvelopeHandedOn[] },
 ): string {
   return kit.buildRequestNotification(request, outcome, target);
+}
+
+/**
+ * What the ASKER reads when its message never reached the target: the host
+ * refused to run the session, the resumed CLI exited before it read the line,
+ * or the message still waits in the target's queue at the deadline. No turn ran
+ * on it, so nothing of the target is quoted (2026-10-28: a refused send was
+ * reported as "Its turn ended WITHOUT an explicit reply" with the target's
+ * message from hours before, which the asker read as the answer).
+ * `stillQueued`: the message may yet go out (the deadline sweeper's case).
+ */
+export function buildUndeliveredNotification(
+  request: SessionRequest,
+  target: { title?: string; sessionId?: string; taskId?: string },
+  why: string,
+  stillQueued = false,
+): string {
+  const next = target.taskId ? [`  walnut tools call task_get '{"id":"${target.taskId}"}'          # its task state`] : [];
+  // Another process has the session open (the user's terminal, most often): the
+  // task is in use, not broken, and the reason says so in plain words.
+  const held = isHeldElsewhereReason(why);
+  return buildWalnutMessage({
+    kind: 'notification',
+    attrs: {
+      from: 'Walnut',
+      about: sessionHandle(target.title, target.sessionId),
+      'about-session': target.sessionId,
+      'about-task': target.taskId,
+      request: request.id,
+      asked: request.preview,
+      outcome: stillQueued ? 'timeout' : 'error',
+      note: 'automated Walnut status notice',
+    },
+    body: [
+      held
+        ? 'Your message has NOT BEEN DELIVERED yet: that session is open in another process right now, most likely the user working in it in a terminal.'
+        : stillQueued
+          ? 'Your message has NOT BEEN DELIVERED yet: it still waits in that session\'s queue, and no turn has run on it.'
+          : 'Your message was NOT DELIVERED: no turn ran on it in that session, so it has not read your request.',
+      `Why: ${why.replace(/\s+/g, ' ').trim()}`,
+      held
+        ? 'If you send it again yourself instead, it may run twice.'
+        : stillQueued
+          ? 'It goes out by itself once that session can take it.'
+          : 'It is kept in that session\'s queue, and a Retry there sends it once the cause is gone. '
+            + 'If you send it again yourself instead, it may run twice.',
+      ...(next.length > 0 ? [`Next:\n${next.join('\n')}`] : []),
+    ].join('\n\n'),
+  });
 }
 
 /** How many ids the fork hand-off names before it stops listing. */

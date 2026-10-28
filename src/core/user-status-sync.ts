@@ -70,6 +70,8 @@ export interface StatusFacts {
   openWorkers?: Map<string, number>;
   /** Project keys (trimmed, lower case) that have an open lead (filled by syncUserStatuses). */
   projectLeads?: Set<string>;
+  /** Session id -> its newest parked message (never delivered): why, and when it was parked. */
+  undelivered?: Map<string, { reason: string; at: string }>;
 }
 
 const errText = (err: unknown) => (err instanceof Error ? err.message : String(err));
@@ -226,6 +228,20 @@ export async function readStatusFacts(tasks: readonly Task[], allIds: readonly s
     }
   }, undefined);
 
+  const undelivered: NonNullable<StatusFacts['undelivered']> = new Map();
+  await safely('undelivered', async () => {
+    const { getQueue } = await import('./session-message-queue.js');
+    const { parkMeansNeverRan } = await import('./sessions/undelivered-requests.js');
+    for (const sid of new Set([...sessionIds, ...sessions.keys()])) {
+      for (const m of await getQueue(sid)) {
+        // Only a park that proves the message never ran: a Stop's park is the user's choice.
+        if (m.status !== 'parked' || !m.parkedAt || !parkMeansNeverRan(m.parkedReason)) continue;
+        const prev = undelivered.get(sid);
+        if (!prev || prev.at < m.parkedAt) undelivered.set(sid, { reason: m.parkedReason || 'it could not be delivered', at: m.parkedAt });
+      }
+    }
+  }, undefined);
+
   const letters = await cachedSlow('letters', allIds);
   const choices = await cachedSlow('choices', allIds);
 
@@ -255,8 +271,11 @@ export async function readStatusFacts(tasks: readonly Task[], allIds: readonly s
     for (const sid of t.session_ids ?? []) link(t.id, sid);
   }
   for (const [sid, s] of sessions) if (s.taskId && taskIds.has(s.taskId)) link(s.taskId, sid);
-  return { sessions, letters, choices, requestsFrom, triggers, schedules, titles, sessionsOf };
+  return { sessions, letters, choices, requestsFrom, triggers, schedules, titles, sessionsOf, undelivered };
 }
+
+/** A park lands just before the hand-back it causes; the two clocks are the same process's. */
+const UNDELIVERED_SLACK_MS = 60_000;
 
 /** The input deriveUserStatus takes for one task, from the facts. Exported for tests. */
 export function statusInputOf(task: Task, facts: StatusFacts): UserStatusInput {
@@ -269,6 +288,14 @@ export function statusInputOf(task: Task, facts: StatusFacts): UserStatusInput {
     : own.map(([, s]) => s).sort((a, b) => (b.startedAt ?? '').localeCompare(a.startedAt ?? ''))[0];
   const prompt = own.map(([, s]) => s.pendingTool).find(Boolean) ?? null;
   const anyRunning = own.some(([, s]) => s.processStatus === 'running');
+  // A message parked since the phase last moved: the hand-back is about it.
+  const movedAt = task.phase_changed_at ? Date.parse(task.phase_changed_at) : NaN;
+  // Not while a CLI is up (idle or running): that process just ran a real turn.
+  const undelivered = Number.isFinite(movedAt) && !anyRunning && main?.processStatus !== 'idle'
+    ? own.map(([sid]) => facts.undelivered?.get(sid))
+      .filter((u): u is { reason: string; at: string } => !!u && Date.parse(u.at) >= movedAt - UNDELIVERED_SLACK_MS)
+      .sort((a, b) => b.at.localeCompare(a.at))[0]
+    : undefined;
   const waitingOnTasks = own.flatMap(([sid]) => facts.requestsFrom.get(sid) ?? [])
     .filter((id) => id !== task.id)
     .map((id) => facts.titles.get(id) ?? 'another task');
@@ -282,6 +309,7 @@ export function statusInputOf(task: Task, facts: StatusFacts): UserStatusInput {
     errorKind: main?.errorKind ?? null,
     restartLoss: main?.restartLoss ?? null,
     projectLead: !!facts.projectLeads?.has((task.project ?? '').trim().toLowerCase()) && task.org_role !== 'lead',
+    undeliveredMessage: undelivered?.reason ?? null,
     statusSince: main?.statusSince ?? null,
     pendingPermissionTool: prompt,
     openLetter: facts.letters.get(task.id) ?? null,

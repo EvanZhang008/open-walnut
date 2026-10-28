@@ -19,6 +19,7 @@ const edges = vi.hoisted(() => ({
   sessionServer: false,
   serverConnected: false,
   failStart: false,
+  triggers: [] as Array<{ id: string; state: string; fires: number }>,
 }));
 
 vi.mock('../../../src/constants.js', () => createMockConstants('transfer-task'));
@@ -76,6 +77,10 @@ vi.mock('../../../src/core/sessions/task-start.js', () => ({
     return { started: true, sessionId: 'new-codex-sid' };
   },
 }));
+vi.mock('../../../src/core/task-wait-until.js', async (orig) => ({
+  ...(await orig<typeof import('../../../src/core/task-wait-until.js')>()),
+  triggersWatching: async () => edges.triggers,
+}));
 vi.mock('../../../src/core/sessions/session-controls.js', async (orig) => ({
   ...(await orig<typeof import('../../../src/core/sessions/session-controls.js')>()),
   forkSessionToTask: async (sid: string, input: Record<string, unknown>) => {
@@ -98,6 +103,7 @@ beforeEach(async () => {
   await fsp.mkdir(WALNUT_HOME, { recursive: true });
   edges.starts.length = 0; edges.forks.length = 0; edges.writes.length = 0; edges.copies.length = 0; edges.cwds.length = 0;
   edges.hosts = {}; edges.failStart = false; edges.sessionServer = false; edges.serverConnected = false;
+  edges.triggers = [];
 });
 
 afterEach(async () => {
@@ -295,5 +301,76 @@ describe('transferTask', () => {
     const message = String(edges.starts[0].message);
     expect(message).toContain('Set it up at /srv/fresh-copy');
     expect(message).not.toContain('already has it at /srv/marina');
+  });
+});
+
+// 2026-10-28: a lead took a task whose session the user had open in a terminal for
+// broken, moved its work and closed it while the user was working in it.
+describe('a handoff from a session never closes a task still in use', () => {
+  const ago = (days: number) => new Date(Date.now() - days * 86_400_000).toISOString();
+  const fromSession = (taskId: string, keepSource?: boolean) =>
+    transferTask({ taskId, engine: 'codex', callerSid: 'lead-session', ...(keepSource !== undefined ? { keepSource } : {}) });
+
+  async function expectKeptOpen(src: string, res: Awaited<ReturnType<typeof transferTask>>, words: RegExp) {
+    expect(res.sourceCompleted).toBe(false);
+    expect((res as { sourceKeptOpen?: string[] }).sourceKeptOpen?.join('; ')).toMatch(words);
+    expect((await getTask(src)).phase).not.toBe('COMPLETE');
+    expect((await getTask(src)).transferred_to).toBe(res.taskId);
+  }
+
+  it('the user wrote in its session this week: the source stays open, even with keep_source false', async () => {
+    const src = await taskWithConversation();
+    await updateSessionRecord('claude-sid', { humanInputAt: ago(2) } as never);
+    await expectKeptOpen(src, await fromSession(src, false), /the user wrote in it at /);
+  });
+
+  it('its session was open in the user\'s terminal this week: the source stays open', async () => {
+    const src = await taskWithConversation();
+    await updateSessionRecord('claude-sid', { heldElsewhere: { at: ago(1), host: 'devbox', pid: 4087, holder: 'terminal' } } as never);
+    await expectKeptOpen(src, await fromSession(src), /open in a terminal at .*\(pid 4087\)/);
+  });
+
+  it('it leads work (open subtasks, an org role, an armed trigger): the source stays open', async () => {
+    const lead = await taskWithConversation();
+    await addTask({ title: 'Worker', project: 'Marina', parent_task_id: lead } as never);
+    await expectKeptOpen(lead, await fromSession(lead), /1 open subtask/);
+
+    closeTaskDb(); closeSessionDb(); _resetForTesting(); _resetSessionTrackerForTesting();
+    await fsp.rm(WALNUT_HOME, { recursive: true, force: true });
+    await fsp.mkdir(WALNUT_HOME, { recursive: true });
+    const vp = await taskWithConversation();
+    await updateTaskRaw(vp, { org_role: 'lead' } as never, { source: 'test' });
+    await expectKeptOpen(vp, await fromSession(vp), /org/);
+
+    closeTaskDb(); closeSessionDb(); _resetForTesting(); _resetSessionTrackerForTesting();
+    await fsp.rm(WALNUT_HOME, { recursive: true, force: true });
+    await fsp.mkdir(WALNUT_HOME, { recursive: true });
+    const watched = await taskWithConversation();
+    edges.triggers = [{ id: 'job-1', state: 'armed', fires: 0 }];
+    await expectKeptOpen(watched, await fromSession(watched), /1 armed trigger/);
+  });
+
+  it('nothing recent and nothing it leads: the source completes as before', async () => {
+    const src = await taskWithConversation();
+    await updateSessionRecord('claude-sid', { humanInputAt: ago(8), heldElsewhere: { at: ago(9), host: 'devbox', holder: 'terminal' } } as never);
+    edges.triggers = [{ id: 'job-2', state: 'paused', fires: 3 }];
+    const res = await fromSession(src);
+    expect(res.sourceCompleted).toBe(true);
+    expect((res as { sourceKeptOpen?: string[] }).sourceKeptOpen).toBeUndefined();
+    expect((await getTask(src)).phase).toBe('COMPLETE');
+  });
+
+  it('its own session moving it (the user asked there): the user\'s activity is the ask, it completes', async () => {
+    const src = await taskWithConversation();
+    await updateSessionRecord('claude-sid', { humanInputAt: ago(0) } as never);
+    const res = await transferTask({ taskId: src, engine: 'codex', callerSid: 'claude-sid' });
+    expect(res.sourceCompleted).toBe(true);
+  });
+
+  it('a person transferring their own task decides for themself: it completes', async () => {
+    const src = await taskWithConversation();
+    await updateSessionRecord('claude-sid', { humanInputAt: ago(0) } as never);
+    const res = await transferTask({ taskId: src, engine: 'codex' });
+    expect(res.sourceCompleted).toBe(true);
   });
 });

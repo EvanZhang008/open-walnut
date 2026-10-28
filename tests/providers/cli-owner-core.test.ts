@@ -8,6 +8,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { createCliOwner, type CliOwnerDeps, type CliOwnerHolder } from '../../src/providers/cli-owner-core.js'
+import { heldByAnotherProcess, holderKindOf, holderPidOf } from '../../src/providers/delivery-failure.js'
 
 interface Proc { startTime: string; args: string; home?: string | null; configDir?: string; pgid?: number }
 
@@ -299,5 +300,32 @@ describe('adopt and prune', () => {
     ;(await a.claim(sid2)).commit(301, 'gone')
     expect(a.prune()).toBe(1)
     expect(await refusal(owner('b', 200).claim(SID))).toMatchObject({ pid: 300 })
+  })
+})
+
+// The server reads this refusal's words (delivery-failure.ts): a change to them here
+// must not quietly turn a held session back into a retry loop (2026-10-28).
+describe('the refusal as the server reads it', () => {
+  async function refusalText(p: Promise<unknown>): Promise<string> {
+    try { await p } catch (err) { return (err as Error).message }
+    throw new Error('expected a refusal')
+  }
+
+  it('a terminal\'s claude -r is held by another process, named a terminal, with its pid', async () => {
+    procs.set(300, { startTime: 's', args: cliArgs(SID) })
+    const text = await refusalText(owner('a', 100).claim(SID))
+    expect(heldByAnotherProcess(text)).toBe(true)
+    expect(holderKindOf(text)).toBe('terminal')
+    expect(holderPidOf(text)).toBe(300)
+  })
+
+  it('another daemon\'s CLI is another Walnut; this daemon\'s own CLI is not held elsewhere', async () => {
+    const a = owner('a', 100)
+    ;(await a.claim(SID)).commit(303, 'cli-4')
+    procs.set(303, { startTime: 'cli-4', args: cliArgs(SID) })
+    const other = await refusalText(owner('b', 200).claim(SID))
+    expect(heldByAnotherProcess(other)).toBe(true)
+    expect(holderKindOf(other)).toBe('walnut')
+    expect(heldByAnotherProcess(await refusalText(a.claim(SID)))).toBe(false)
   })
 })

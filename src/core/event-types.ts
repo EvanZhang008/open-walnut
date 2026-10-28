@@ -323,6 +323,8 @@ export interface SessionErrorEvent {
    *   caused the 2-req/s infinite retry loop of 2026-06-10).
    */
   errorKind?: 'conversation_lost' | 'delivery_failed';
+  /** delivery_failed only: the batch was parked (it waits for a Retry), not put back to be re-sent. */
+  parked?: boolean;
 }
 
 // ── Session streaming events ──

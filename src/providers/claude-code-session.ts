@@ -72,7 +72,7 @@ import type { DaemonTaskState } from './daemon-connection.js'
 import { checkCwdExists, CwdMissingError } from './cwd-check.js'
 import { isWakeupArmed } from './daemon-fold.js'
 import { noteSuppressedErrorReason } from '../core/session-snapshot-gate.js'
-import { BudgetCheckingError, BudgetPausedError, classifyDeliveryFailure, isDaemonCommandOutcomeUnknown, SendHeldError, SendOutcomeUnknownError } from './delivery-failure.js'
+import { BudgetCheckingError, BudgetPausedError, classifyDeliveryFailure, isDaemonCommandOutcomeUnknown, SendHeldError, SendOutcomeUnknownError, SessionHeldElsewhereError } from './delivery-failure.js'
 import { describeClaudeLaunchFailure } from './host-runtime-core.js'
 import { AcpSession, emitAcpIdentityBoundary, sessionMcpServerToAcp, splitAcpModelId } from './acp-session.js'
 import { engineCaps, isAcpEngine, resolveEngine } from '../core/agents/engine-registry.js'
@@ -660,6 +660,8 @@ function resumeProfileOpts(
 // ── ClaudeCodeSession ──
 
 const MAX_FULL_TEXT = 100 * 1024 // 100KB cap on accumulated text
+/** How long a resumed line whose process ended waits for that process's last stream lines. */
+const RESUME_LINE_SETTLE_MS = 2_000
 const LIVENESS_INTERVAL_MS = 3000
 const INTERRUPT_ACK_TIMEOUT_MS = 5_000
 const INTERRUPT_SETTLE_TIMEOUT_MS = 3_000
@@ -2622,6 +2624,8 @@ export class ClaudeCodeSession {
     this._cwd = cwd ?? null
     // A new process holds no cut copy (its first line may say otherwise: settleSpawnLine).
     this._cutPid = null
+    // A hold left by the previous process is settled by what that process showed.
+    this.parkUnreadResumeLine()
     this._initSeenThisProcess = false
 
     const isResume = !!resumeSessionId && !forkSession
@@ -2890,6 +2894,44 @@ export class ClaudeCodeSession {
             taskId: this.taskId,
             error: err instanceof Error ? err.message : String(err),
           }, ['main-ai', 'session-runner'], { source: 'session-runner' })
+        } else if (err instanceof SessionHeldElsewhereError && this._transport === transport) {
+          // The host refused the spawn: another process runs this session there.
+          // Nothing started, so the session is stopped again (not the 'running'
+          // this spawn claimed, which a later sweep reads as a death) and the task
+          // waits on the user, with the cause. settleResumeFailure parked the batch.
+          this._processStatus = 'stopped'
+          this._activity = undefined
+          this.clearStallDiagTimer()
+          this.stopLivenessMonitor()
+          this.finalizeTurnSpeed({ interrupted: true })
+          this.emitStatusChanged('NEED_ACTION', err.message.slice(0, 500),
+            { status_reason: 'message_not_delivered', status_changed_by: 'session-runner' })
+          const taskId = this.taskId
+          const sid = this.claudeSessionId
+          // The phase moves only once the record says why (the cause above, and the
+          // holder: a task whose session the user has open in a terminal is in use, so
+          // a handoff leaves it open, core/transfer/source-in-use.ts). The hooks on
+          // that edge read the record, never a "turn ended".
+          const heldElsewhere = err.kind === 'session_live'
+            ? { at: new Date().toISOString(), host: err.host, holder: err.holder, ...(err.holderPid ? { pid: err.holderPid } : {}) }
+            : undefined
+          void this._statusCommit
+            .then(async () => {
+              if (sid && heldElsewhere) {
+                const { updateSessionRecord } = await import('../core/session-tracker.js')
+                await updateSessionRecord(sid, { heldElsewhere }).catch((recErr) => log.session.warn('start refused: recording the holder failed', {
+                  sessionId: sid, error: recErr instanceof Error ? recErr.message : String(recErr),
+                }))
+              }
+              if (!taskId) return
+              const { applySessionPhase } = await import('../core/phase.js')
+              await applySessionPhase(taskId, 'session:error', 'session-runner:start-refused', {
+                ...(sid ? { sessionId: sid } : {}), processAlive: false,
+              })
+            })
+            .catch((phaseErr) => log.session.warn('start refused: phase update failed', {
+              taskId, sessionId: sid, error: phaseErr instanceof Error ? phaseErr.message : String(phaseErr),
+            }))
         }
       }
     })
@@ -4091,7 +4133,10 @@ export class ClaudeCodeSession {
    */
   private noteInitCapabilities(capabilities: unknown, replayed: boolean): void {
     const reports = Array.isArray(capabilities) && capabilities.includes('msg_lifecycle_v1')
-    if (!replayed) this._initSeenThisProcess = true
+    if (!replayed) {
+      this._initSeenThisProcess = true
+      this.releaseResumeLine()
+    }
     if (reports) {
       this._sawCommandLifecycle = true
       this._provisionalLines.clear()
@@ -4310,6 +4355,61 @@ export class ClaudeCodeSession {
     this.emitStatusChanged('NEED_ACTION')
   }
 
+  /**
+   * The first line of a cold --resume stays in the queue until this process shows
+   * it read it: its init, which Claude Code prints once it has loaded the
+   * transcript and taken the line. A process that ends first never read it (it
+   * could not load the session, or died loading it), so the rows are parked with
+   * that cause instead of being reported delivered and dropped (the rows used to
+   * be removed as soon as the spawn was confirmed).
+   */
+  private _resumeLineHold: QueuedMessage[] | null = null
+
+  /** Hold `rows` until this process reads them. False when it already did (remove them now). */
+  holdResumeLineUntilRead(rows: QueuedMessage[], endsBefore: number): boolean {
+    if (rows.length === 0 || this._initSeenThisProcess) return false
+    this._resumeLineHold = rows
+    // The process ended while the spawn was being confirmed: it never read them.
+    if (this._processEnds !== endsBefore) this.parkUnreadResumeLine(RESUME_LINE_SETTLE_MS)
+    return true
+  }
+
+  private releaseResumeLine(): void {
+    const rows = this._resumeLineHold
+    const sid = this.claudeSessionId
+    this._resumeLineHold = null
+    if (!rows || !sid) return
+    removeProcessed(sid, rows.map((m) => m.id)).catch((err) => {
+      log.session.warn('removeProcessed failed after the resumed process read its first line', { sessionId: sid, error: err instanceof Error ? err.message : String(err) })
+    })
+  }
+
+  /**
+   * `settle`: wait this long first. A daemon's exit event can overtake the last
+   * stream lines of a process that crashed right after its init, and that init
+   * releases the hold when it lands (noteInitCapabilities). A new spawn decides at once.
+   */
+  private parkUnreadResumeLine(settleMs = 0): void {
+    const held = this._resumeLineHold
+    if (!held) return
+    if (this._initSeenThisProcess) { this.releaseResumeLine(); return }
+    if (settleMs > 0) {
+      const timer = setTimeout(() => { if (this._resumeLineHold === held) this.parkUnreadResumeLine() }, settleMs)
+      timer.unref?.()
+      return
+    }
+    const rows = held
+    this._resumeLineHold = null
+    const stderr = this._exitStderr ? stripCliStartupNoise(this._exitStderr).trim().replace(/\s+/g, ' ').slice(0, 300) : ''
+    const where = this._host ? ` on ${this._host}` : ''
+    // A stop Walnut asked for: the user's choice, worded like every other stop's park,
+    // so nobody is told to resend (undelivered-requests.ts parkByStop).
+    if (this._expectedTeardown) { this.parkLineRows(rows, 'The session ended before Claude Code ran this message'); return }
+    const how = this._exitCode != null ? `exited with code ${this._exitCode}` : 'exited'
+    this.parkLineRows(rows, `Not delivered: Claude Code ${how} while resuming this session${where}, before it read this message${stderr ? ` (${stderr})` : ''}. `
+      + 'Retry it; if the session cannot be resumed, start a fresh session for the task.')
+  }
+
   private _lineReclaims = 0
   private _lineReclaimDone: Promise<void> = Promise.resolve()
 
@@ -4333,6 +4433,7 @@ export class ClaudeCodeSession {
     this._processEnds++
     this._processEnded = true
     this._provisionalLines.clear()
+    this.parkUnreadResumeLine(RESUME_LINE_SETTLE_MS)
     const sid = this.claudeSessionId
     if (!sid) return
     this.handBackLines(sid, untakenLines(sid, this.pid), why, announce)
@@ -6695,6 +6796,9 @@ export class ClaudeCodeSession {
           this._turnResultEmitted = true
           break
         }
+        // A live result proves this process read its input, also when no init
+        // came first (a slash command answered locally): its first line ran.
+        this.releaseResumeLine()
 
         // ── Task-notification-origin results (#870) — checked BEFORE the duplicate
         // guards. A followup result is not a turn-over, so it never sets
@@ -11598,11 +11702,16 @@ export class SessionRunner {
           if (cancelled > 0) log.session.info('handleSendSdk: cancelled stale triage', { taskId: record.taskId, cancelled })
         } catch { /* non-fatal */ }
 
-        const { applySessionPhase, sendSourceReopensTerminal } = await import('../core/phase.js')
+        const { applySessionPhase, sendSourceReopensTerminal, isPersonSendSource } = await import('../core/phase.js')
         await applySessionPhase(record.taskId, 'session:input', 'session.ts:handleSendSdk', {
           sessionId, reopenTerminal: sendSourceReopensTerminal(source),
           sendSource: source, sendEndsWait: endsWait,
         })
+        if (isPersonSendSource(source)) {
+          const { updateSessionRecord: stampHuman } = await import('../core/session-tracker.js')
+          stampHuman(sessionId, { humanInputAt: new Date().toISOString() }).catch(err =>
+            log.session.warn('humanInputAt stamp failed', { sessionId, error: String(err) }))
+        }
         // A message into an imported session adopts its task: the import tag
         // comes off, so it leaves the imported type (no pill, never auto-completed).
         const { adoptImportedTask } = await import('../core/sessions/external-session-import.js')
@@ -11757,11 +11866,16 @@ export class SessionRunner {
           if (cancelled > 0) log.session.info('handleSend: cancelled stale triage', { taskId: record.taskId, cancelled })
         } catch { /* non-fatal */ }
 
-        const { applySessionPhase, sendSourceReopensTerminal } = await import('../core/phase.js')
+        const { applySessionPhase, sendSourceReopensTerminal, isPersonSendSource } = await import('../core/phase.js')
         await applySessionPhase(record.taskId, 'session:input', 'session.ts:handleSend', {
           sessionId, reopenTerminal: sendSourceReopensTerminal(source),
           sendSource: source, sendEndsWait: endsWait,
         })
+        if (isPersonSendSource(source)) {
+          const { updateSessionRecord: stampHuman } = await import('../core/session-tracker.js')
+          stampHuman(sessionId, { humanInputAt: new Date().toISOString() }).catch(err =>
+            log.session.warn('humanInputAt stamp failed', { sessionId, error: String(err) }))
+        }
         // A message into an imported session adopts its task: the import tag
         // comes off, so it leaves the imported type (no pill, never auto-completed).
         const { adoptImportedTask } = await import('../core/sessions/external-session-import.js')
@@ -12058,10 +12172,13 @@ export class SessionRunner {
       session.settleSpawnLine(first.lineUuid, msgs, { cut: true }, first.endsBefore ?? session.processEndCount)
       return
     }
-    // The resumed process's first line: it takes it at start, before anything else.
-    removeProcessed(sessionId, msgs.map((m) => m.id)).catch((err) => {
-      log.session.warn('eager removeProcessed failed after --resume spawn', { sessionId, error: err instanceof Error ? err.message : String(err) })
-    })
+    // The resumed process's first line: it takes it at start, before anything else,
+    // unless it ends first (it could not load the session): kept until its init.
+    if (!session.holdResumeLineUntilRead(msgs, first.endsBefore ?? session.processEndCount)) {
+      removeProcessed(sessionId, msgs.map((m) => m.id)).catch((err) => {
+        log.session.warn('eager removeProcessed failed after --resume spawn', { sessionId, error: err instanceof Error ? err.message : String(err) })
+      })
+    }
     reportDelivered(sessionId, ids, session.turnGen)
     this.logDeliveryLatency(sessionId, 'resume', msgs, session)
   }
@@ -12115,6 +12232,7 @@ export class SessionRunner {
         sessionId,
         error: err.message,
         errorKind: 'delivery_failed' as const,
+        ...(verdict.kind === 'permanent' ? { parked: true } : {}),
       }, ['main-ai'], { source: 'session-runner' })
     })
   }
@@ -13292,11 +13410,12 @@ export class SessionRunner {
 
       reportBatchFailed(sessionId, msgs.map((m) => m.id), errorMsg)
 
-      // delivery_failed: batch is back in 'pending' — see settleResumeFailure.
+      // delivery_failed: the batch is back in 'pending', or parked (see settleResumeFailure).
       bus.emit(EventNames.SESSION_ERROR, {
         sessionId,
         error: errorMsg,
         errorKind: 'delivery_failed' as const,
+        ...(verdict.kind === 'permanent' ? { parked: true } : {}),
       }, ['main-ai'], { source: 'session-runner' })
     }
   }

@@ -22,13 +22,22 @@ import { compareEnqueueOrder, mutateStore, readQueueFileFresh, type QueuedMessag
  */
 export const MAX_PENDING_AGE_MS = 7 * 24 * 60 * 60_000;
 
-/** One greppable line per parked row, shared by both park paths. */
+/**
+ * One greppable line per parked row, shared by every park path, and the askers
+ * told: a parked peer ask will never be read, so its request is settled now
+ * with the reason (sessions/undelivered-requests.ts), off the store's write chain.
+ */
 function logParked(rows: QueuedMessage[], reason: string): void {
   for (const m of rows) {
     log.session.warn('message parked: permanent delivery failure', {
       sessionId: m.sessionId, messageId: m.id, reason,
     });
   }
+  if (rows.length === 0) return;
+  const parked = rows.map((m) => ({ ...m, parkedReason: m.parkedReason ?? reason }));
+  void import('./sessions/undelivered-requests.js')
+    .then(({ notifyParkedRequests }) => notifyParkedRequests(parked))
+    .catch(() => {});
 }
 
 /**
