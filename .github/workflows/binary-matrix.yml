@@ -117,8 +117,22 @@ jobs:
         with:
           name: walnut-files
           path: dist-bin
+      # A download cut short can pass with the file missing (2026-10-28, macos-26-intel):
+      # download once more before failing (tests/scripts/binary-matrix-download.test.ts).
+      - id: files
+        if: inputs.files == ''
+        run: |
+          if [ -s "dist-bin/$FILE" ]; then echo "missing=false" >> "$GITHUB_OUTPUT"
+          else echo "::warning::dist-bin/$FILE is missing after the download; downloading walnut-files again"; echo "missing=true" >> "$GITHUB_OUTPUT"; fi
+      - uses: actions/download-artifact@v4
+        if: inputs.files == '' && steps.files.outputs.missing == 'true'
+        with:
+          name: walnut-files
+          path: dist-bin
       - if: inputs.files == ''
-        run: chmod +x dist-bin/walnut-*
+        run: |
+          [ -s "dist-bin/$FILE" ] || { echo "::error::dist-bin/$FILE is not in the walnut-files artifact after two downloads"; ls -la dist-bin || true; exit 1; }
+          chmod +x dist-bin/walnut-*
       # A release's files: this row's target out of the very .gz the release
       # publishes, and package.json at the version the file reports.
       - uses: actions/download-artifact@v4
@@ -162,8 +176,22 @@ jobs:
         with:
           name: walnut-files
           path: dist-bin
+      # A download cut short can pass with the file missing (2026-10-28, macos-26-intel):
+      # download once more before failing (tests/scripts/binary-matrix-download.test.ts).
+      - id: files
+        if: inputs.files == ''
+        run: |
+          if [ -s "dist-bin/$FILE" ]; then echo "missing=false" >> "$GITHUB_OUTPUT"
+          else echo "::warning::dist-bin/$FILE is missing after the download; downloading walnut-files again"; echo "missing=true" >> "$GITHUB_OUTPUT"; fi
+      - uses: actions/download-artifact@v4
+        if: inputs.files == '' && steps.files.outputs.missing == 'true'
+        with:
+          name: walnut-files
+          path: dist-bin
       - if: inputs.files == ''
-        run: chmod +x dist-bin/walnut-*
+        run: |
+          [ -s "dist-bin/$FILE" ] || { echo "::error::dist-bin/$FILE is not in the walnut-files artifact after two downloads"; ls -la dist-bin || true; exit 1; }
+          chmod +x dist-bin/walnut-*
       - uses: actions/download-artifact@v4
         if: inputs.files != ''
         with:
@@ -204,8 +232,26 @@ jobs:
         with:
           name: walnut-files
           path: dist-bin
+      # A download cut short can pass with the file missing (2026-10-28, macos-26-intel):
+      # download once more before failing (tests/scripts/binary-matrix-download.test.ts).
+      - id: files
+        if: inputs.files == ''
+        env:
+          FILE: walnut-linux-x64
+        run: |
+          if [ -s "dist-bin/$FILE" ]; then echo "missing=false" >> "$GITHUB_OUTPUT"
+          else echo "::warning::dist-bin/$FILE is missing after the download; downloading walnut-files again"; echo "missing=true" >> "$GITHUB_OUTPUT"; fi
+      - uses: actions/download-artifact@v4
+        if: inputs.files == '' && steps.files.outputs.missing == 'true'
+        with:
+          name: walnut-files
+          path: dist-bin
       - if: inputs.files == ''
-        run: chmod +x dist-bin/walnut-*
+        env:
+          FILE: walnut-linux-x64
+        run: |
+          [ -s "dist-bin/$FILE" ] || { echo "::error::dist-bin/$FILE is not in the walnut-files artifact after two downloads"; ls -la dist-bin || true; exit 1; }
+          chmod +x dist-bin/walnut-*
       - uses: actions/download-artifact@v4
         if: inputs.files != ''
         with:
