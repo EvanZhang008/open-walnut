@@ -2686,6 +2686,7 @@ async function lwwMerge(branch: string, remoteBefore: string | null = null): Pro
       keptRemote: carried?.keptRemote.slice(0, 50) ?? [],
       keptRemoved: carried?.keptRemoved.slice(0, 50) ?? [],
       squashed: carried?.squashed ?? false,
+      fileLevel: carried?.fileLevel ?? false,
     });
     try { rewriteAdoptedListener?.(); } catch { /* the listener only schedules */ }
     // Carried onto a commit the upstream has already built on: merge the rest
