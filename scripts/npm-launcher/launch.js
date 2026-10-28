@@ -186,6 +186,7 @@ function ownVersion(packageRoot) {
  * into this launcher without checking.
  */
 function launch(entry) {
+  const parent = orphanParent()
   const packageRoot = path.dirname(path.dirname(path.resolve(entry)))
   const targets = candidateTargets()
   if (targets.length === 0) {
@@ -197,7 +198,7 @@ function launch(entry) {
     process.stderr.write(`open-walnut: ${unreadableLine(found.unreadable)}\n`)
     process.exit(1)
   }
-  if (found) return run(found, packageRoot)
+  if (found) return run(found, packageRoot, parent)
   const version = ownVersion(packageRoot)
   const missing = `the Walnut for ${targets[0]} was not installed with the package (npm leaves out an optional dependency it could not get)`
   if (!fetchWritable(packageRoot)) {
@@ -210,7 +211,7 @@ function launch(entry) {
   Promise.resolve()
     // An absolute path: Node 8 and 10 read the working directory for a relative one, and it may be gone.
     .then(() => require(path.join(__dirname, 'fetch-platform.js')).fetchPlatformPackage({ packageRoot, target: targets[0], version, log }))
-    .then((file) => run({ target: targets[0], file }, packageRoot), (err) => {
+    .then((file) => run({ target: targets[0], file }, packageRoot, parent), (err) => {
       process.stderr.write(
         `open-walnut: could not fetch it either: ${err instanceof Error ? err.message : String(err)}.\n`
         + `Install it again with: ${reinstallCommand(packageRoot, version)}\n`,
@@ -238,17 +239,25 @@ function startDir(packageRoot, cwd, exists) {
  * The Mac app sets OPEN_WALNUT_EXIT_ON_ORPHAN for the server it starts: when the
  * app dies without stopping it (a crash, a force quit), the server must go too,
  * or it holds the port with no app to show it. The app's child here is this
- * launcher, so it watches for that: once its parent is gone (it was handed to
- * launchd, or to a subreaper), `onOrphan` runs once. Returns the timer, or null
- * when nothing asked for it.
+ * launcher, so it watches for that: `onOrphan` runs once the parent is gone, at
+ * once when it already went (`parent` is read when the launcher starts, before a
+ * missing file is fetched), else when the parent pid next changes (launchd or a
+ * subreaper took this process). The file reads the same variable and removes it
+ * from its own children's environment. Returns the timer, or null.
  */
-function watchForOrphan(onOrphan, env, ppid, everyMs) {
+function orphanParent(env, ppid) {
   if (env === undefined) env = process.env
   if (ppid === undefined) ppid = () => process.ppid
-  if (env.OPEN_WALNUT_EXIT_ON_ORPHAN !== '1') return null
-  const parent = ppid()
-  // Already launchd's (or no parent to read): nothing to outlive.
-  if (!(parent > 1)) return null
+  return env.OPEN_WALNUT_EXIT_ON_ORPHAN === '1' ? ppid() : null
+}
+
+function watchForOrphan(parent, onOrphan, ppid, everyMs) {
+  if (parent === null || parent === undefined) return null
+  if (ppid === undefined) ppid = () => process.ppid
+  if (!(parent > 1) || ppid() !== parent) {
+    onOrphan()
+    return null
+  }
   const timer = setInterval(() => {
     if (ppid() === parent) return
     clearInterval(timer)
@@ -258,7 +267,7 @@ function watchForOrphan(onOrphan, env, ppid, everyMs) {
   return timer
 }
 
-function run(found, packageRoot) {
+function run(found, packageRoot, parent) {
   const env = Object.assign({}, process.env, {
     OPEN_WALNUT_PACKAGE_ROOT: packageRoot,
     OPEN_WALNUT_LAUNCHED_FILE: found.file,
@@ -276,7 +285,7 @@ function run(found, packageRoot) {
       process.on(signal, forward[signal])
     }
     // The app that started this died without stopping the file: stop it the way the app would have.
-    const orphanWatch = watchForOrphan(() => forward.SIGTERM())
+    const orphanWatch = watchForOrphan(parent, () => forward.SIGTERM())
     const detach = () => {
       for (const signal of Object.keys(forward)) process.removeListener(signal, forward[signal])
       if (orphanWatch) clearInterval(orphanWatch)
@@ -305,4 +314,4 @@ function run(found, packageRoot) {
   start(false)
 }
 
-module.exports = { SCOPE, INSTALL_SH, isMusl, lddLibc, candidateTargets, hasMuslCxxRuntime, findFile, unreadableLine, installWritable, fetchWritable, archivePrefixOf, reinstallCommand, ownVersion, startDir, watchForOrphan, launch }
+module.exports = { SCOPE, INSTALL_SH, isMusl, lddLibc, candidateTargets, hasMuslCxxRuntime, findFile, unreadableLine, installWritable, fetchWritable, archivePrefixOf, reinstallCommand, ownVersion, startDir, orphanParent, watchForOrphan, launch }

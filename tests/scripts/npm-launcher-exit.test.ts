@@ -14,7 +14,7 @@ import { realNodeOnPath } from '../../scripts/outside-node.mjs'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { ENTRY } from '../../scripts/npm-packages.mjs'
 
-const { startDir } = createRequire(import.meta.url)('../../scripts/npm-launcher/launch.js')
+const { startDir, orphanParent, watchForOrphan } = createRequire(import.meta.url)('../../scripts/npm-launcher/launch.js')
 
 const ROOT = path.resolve(__dirname, '../..')
 // The launcher runs on the Node npm installs it with. Under `bun --bun` the first `node` on
@@ -93,6 +93,8 @@ describe('the npm launcher exits as its file did', () => {
   // forever (2026-10-28 rehearsal: "the server goes when the app does" timed out).
   // Here a shell stands in for the app: it starts the launcher, waits until the file
   // runs, and exits without a word to either.
+  // The run's own environment may hold the request (a session of a Walnut the Mac app started).
+  const withoutOrphanRequest = () => { const env = { ...process.env }; delete env.OPEN_WALNUT_EXIT_ON_ORPHAN; return env }
   function orphaned(withEnv: boolean): { pid: number; term: () => boolean; stop: () => void } {
     const dir = fs.mkdtempSync(path.join(tmp, 'orphan-'))
     const started = path.join(dir, 'started')
@@ -101,7 +103,7 @@ describe('the npm launcher exits as its file did', () => {
     const res = spawnSync('/bin/sh', ['-c',
       `${withEnv ? 'OPEN_WALNUT_EXIT_ON_ORPHAN=1 ' : ''}"$1" "$2" </dev/null >/dev/null 2>&1 &
        n=0; while [ ! -f "$3" ] && [ $n -lt 100 ]; do sleep 0.1; n=$((n+1)); done; exit 0`,
-      'sh', node, bin, started], { encoding: 'utf8', timeout: 20_000 })
+      'sh', node, bin, started], { encoding: 'utf8', timeout: 20_000, env: withoutOrphanRequest() })
     expect(res.status, res.stderr).toBe(0)
     const pid = Number(fs.readFileSync(started, 'utf8').trim())
     expect(pid).toBeGreaterThan(1)
@@ -133,6 +135,16 @@ describe('the npm launcher exits as its file did', () => {
     } finally {
       file.stop()
     }
+  })
+
+  it('the parent is read when the launcher starts, so an app gone before the file runs stops it at once', () => {
+    expect(orphanParent({ OPEN_WALNUT_EXIT_ON_ORPHAN: '1' }, () => 4242)).toBe(4242)
+    expect(orphanParent({}, () => 4242)).toBeNull()
+    let stopped = 0
+    expect(watchForOrphan(4242, () => { stopped++ }, () => 1)).toBeNull()
+    expect(stopped).toBe(1)
+    expect(watchForOrphan(null, () => { stopped++ }, () => 1)).toBeNull()
+    expect(stopped).toBe(1)
   })
 
   it('startDir: this directory while it exists, else PWD, else the package root, else home', () => {
