@@ -68,8 +68,9 @@ import { backfillBatchLogFields, crossedProgressMilestone } from './backfill-log
 export const LIGHT_PHASE_MAX_NOTE_CHARS = PASSAGE_MAX_CHARS * 2;
 
 /**
- * `noteOnlyCoverage` on task: a query term the task holds only in its note counts half toward
- * coverage, which the merge ranks by first (src/core/search.ts). A task's summary says what it
+ * `noteOnlyCoverage` on task: a query term the task holds only in its note, while its summary does
+ * not say it, counts half toward coverage, which the merge ranks by first (src/core/search.ts). A
+ * task with no summary keeps full credit (its note is all it says). A task's summary says what it
  * delivers; on 2026-10-28 "the Walnut tunnel and server replica redesign tasks" missed the two
  * tasks whose summaries named tunnels and replica servers, under tasks whose 27-33KB notes held
  * every word somewhere. Sessions, notes and memories keep full credit: their body IS their content.

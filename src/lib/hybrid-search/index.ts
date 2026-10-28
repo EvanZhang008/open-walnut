@@ -102,7 +102,8 @@ export interface KindConfig {
   passages?: Partial<PassagePolicy>;
   /**
    * How much a query term counts toward coverage when a doc of this kind holds it only in
-   * its note (0..1, default 1). See KeywordSearchOptions.noteOnlyCoverage.
+   * its note while it has a summary that does not (0..1, default 1). See
+   * KeywordSearchOptions.noteOnlyCoverage.
    */
   noteOnlyCoverage?: number;
 }

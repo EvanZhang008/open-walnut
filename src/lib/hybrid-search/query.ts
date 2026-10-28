@@ -167,8 +167,8 @@ export interface KeywordSearchOptions {
   kindWeights?: Record<string, number>;
   /**
    * Per kind: how much a query term counts toward coverage when the doc holds it ONLY in its
-   * note (default 1, the term counts wherever it is). Below 1, a doc whose name or summary says
-   * the query's words outranks one that mentions them somewhere in a long note. For tasks: a
+   * note while it has a summary that does not (default 1, the term counts wherever it is). Below 1,
+   * a doc whose name or summary says the query's words outranks one that mentions them somewhere in a long note. For tasks: a
    * task's summary states what it delivers, and a description of that deliverable should find
    * it before tasks whose 30KB notes happen to hold every word (2026-10-28).
    */
@@ -979,8 +979,8 @@ export function searchKeyword(
   // ── doc rows ──
   const ids = [...candidates.keys()];
   const docRows = db.prepare(
-    `SELECT id, kind, ref, title, updated_at FROM doc WHERE id IN (${ids.map(() => '?').join(',')})`,
-  ).all(...ids) as Array<{ id: number; kind: string; ref: string; title: string; updated_at: number }>;
+    `SELECT id, kind, ref, title, updated_at, summary <> '' AS has_summary FROM doc WHERE id IN (${ids.map(() => '?').join(',')})`,
+  ).all(...ids) as Array<{ id: number; kind: string; ref: string; title: string; updated_at: number; has_summary: number }>;
 
   // ── coverage sets, bounded to the candidates ──
   const idList = ids.join(',');
@@ -1057,7 +1057,11 @@ export function searchKeyword(
     return typeof v === 'number' && Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : 1;
   };
   const focusTermSets = new Map<string, Set<number>>();
-  const discounted = docRows.filter((r) => noteOnlyShare(r.kind) < 1).map((r) => r.id);
+  // Only a doc WITH a summary is discounted: its summary says what it is, and it does not say the
+  // query. A doc with none has its note as its only description (the 2026-09-21 "tablet reader app"
+  // case: a full note beside an empty stub titled with the query must still win).
+  const shareOf = (r: { kind: string; has_summary: number }): number => (r.has_summary ? noteOnlyShare(r.kind) : 1);
+  const discounted = docRows.filter((r) => shareOf(r) < 1).map((r) => r.id);
   if (discounted.length > 0) {
     const focusStmt = db.prepare(
       `SELECT rowid FROM doc_fts WHERE doc_fts MATCH ? AND rowid IN (${discounted.join(',')})`,
@@ -1091,7 +1095,7 @@ export function searchKeyword(
   for (const row of docRows) {
     const lanes = candidates.get(row.id)!;
     let covered = 0;
-    const share = noteOnlyShare(row.kind);
+    const share = shareOf(row);
     terms.forEach((term, i) => {
       if (!termSets.get(term.token)?.has(row.id)) return;
       covered += share < 1 && !focusTermSets.get(term.token)?.has(row.id) ? weights[i] * share : weights[i];
