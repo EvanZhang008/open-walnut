@@ -20,7 +20,8 @@ cd "$(git rev-parse --show-toplevel)"
 TMP=$(mktemp -d /tmp/committed-bundle.XXXXXX)
 trap 'rm -rf "$TMP"' EXIT
 
-git archive HEAD src package.json tsconfig.json | tar -x -C "$TMP"
+# packages/: src/lib/sqlite.ts imports the plugin API's SQLite binding from there.
+git archive HEAD src packages package.json tsconfig.json | tar -x -C "$TMP"
 
 ESBUILD="node_modules/.bin/esbuild"
 [ -x "$ESBUILD" ] || { echo "check-committed-bundle: esbuild not found, skipping (run bun install)"; exit 0; }
@@ -104,7 +105,7 @@ if ! walnut_find_bun .; then
   exit 1
 fi
 BUN="$BUN_BIN"
-# tsconfig.json includes only src/**, which the archive above already holds.
+# tsconfig.json includes only src/**; the archive above holds it and the packages/ it imports.
 ln -s "$OLDPWD/node_modules" "$TMP/node_modules" 2>/dev/null || true
 echo "Type-checking the committed tree (src/ is dirty, so HEAD differs)…"
 if ! (cd "$TMP" && "$BUN" "$OLDPWD/$TSC" --noEmit 2>"$TMP/tsc.log"); then
