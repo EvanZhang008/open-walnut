@@ -128,13 +128,19 @@ describe('the user vs a session (C11, G10)', () => {
     expect(moved.card.lane_suggested).toBeUndefined()
   })
 
-  it('accept is the user\'s move to the suggested lane, dismiss only forgets it, sessions may not answer', async () => {
+  it('accept is the answerer\'s move to the suggested lane, dismiss only forgets it; a session answers as the user would', async () => {
     const owner = await task('Suggestion board')
     const worker = await task('V1000000104 webhook retries', owner, ['ticket:V1000000104'])
     const leader = `task:${owner}` as const
     await moveBoardCard(owner, worker, { lane: 'investigating', order: [] }, { by: HUMAN })
     await boardError(() => setBoardCard(owner, worker, { lane: 'mitigating' }, { by: leader }))
-    expect((await boardError(() => answerSuggestion(owner, worker, 'accept', { by: leader }))).statusCode).toBe(403)
+    // A session accepting: the card moves and the move is the session's.
+    const bySession = await answerSuggestion(owner, worker, 'accept', { by: leader })
+    expect(bySession.card).toMatchObject({ lane: 'mitigating', lane_by: leader })
+    expect(bySession.card.lane_suggested).toBeUndefined()
+    // The user puts it back and the session suggests again; the user's accept is the user's move.
+    await moveBoardCard(owner, worker, { lane: 'investigating', order: [] }, { by: HUMAN })
+    await boardError(() => setBoardCard(owner, worker, { lane: 'mitigating' }, { by: leader }))
     const accepted = await answerSuggestion(owner, worker, 'accept', { by: HUMAN })
     expect(accepted.card).toMatchObject({ lane: 'mitigating', lane_by: 'human' })
     expect(accepted.card.lane_suggested).toBeUndefined()
@@ -317,6 +323,28 @@ describe('a task added from a lane (C17 server half)', () => {
     expect(out.task.tags).toEqual(expect.arrayContaining(['ticket:V1000000140', 'sev:2']))
     expect(out.task.session_ids ?? []).toEqual([])
     expect((await getBoard(owner))!.cards[out.task.id]).toMatchObject({ lane: 'investigating' })
+  })
+
+  it('a braked session adds one too: the card is its, a long title is cut with the long form kept, the depth cap holds', async () => {
+    const owner = await task('Agent add board')
+    const long = 'Investigate why the checkout latency doubled after the cache change went out on Tuesday night'
+    const out = await createBoardCardTask(owner, { title: long }, { by: `task:${owner}`, braked: true })
+    expect(out.card).toMatchObject({ lane: 'todo', lane_by: `task:${owner}` })
+    expect(out.task.title.length).toBeLessThanOrEqual(60)
+    expect(out.task.title).not.toBe(long)
+    expect(out.task.description).toBe(long)
+    // Three levels down a session may add no deeper (task_create's 409 subtask_too_deep).
+    const l1 = await task('Depth one', owner)
+    const l2 = await task('Depth two', l1)
+    const l3 = await task('Depth three', l2)
+    const deep = await boardError(() => createBoardCardTask(l3, { title: 'Too deep' }, { by: `task:${l3}`, braked: true }))
+    expect([deep.statusCode, deep.code]).toEqual([409, 'subtask_too_deep'])
+    // The user is never braked.
+    expect((await createBoardCardTask(l3, { title: 'The user may' }, { by: HUMAN })).task.parent_task_id).toBe(l3)
+    // An unbraked writer (the route passes braked: false only for the user or a process that is no session): no cap, title whole.
+    const free = await createBoardCardTask(l3, { title: long }, { by: 'agent', braked: false })
+    expect(free.task).toMatchObject({ title: long, parent_task_id: l3 })
+    expect(free.card).toMatchObject({ lane_by: 'agent' })
   })
 
   it('an unknown lane is refused before any task is made; an empty title is 400', async () => {

@@ -57,8 +57,47 @@ const TASK_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 /** Thread message ids, as postBoardMessage makes them (`bm-` + 12 hex). */
 const MESSAGE_ID_RE = /^bm-[a-f0-9]{6,32}$/;
 
-export type BoardWriter = 'human' | `task:${string}`;
-export type BoardAuthor = 'user' | `task:${string}`;
+/**
+ * Who wrote: the user ('human'), a session's task (`task:<id>`), or an agent Walnut
+ * could not place ('agent': a session with no task, an env-less `walnut`). Every
+ * action the user takes on a Board an agent may take too (2026-10-27, the user:
+ * "all human action can be done by agent also"); the record says who did.
+ */
+export type BoardWriter = 'human' | 'agent' | `task:${string}`;
+/** A thread post's author: the user, a session's task, or an agent with no task ('agent'). */
+export type BoardAuthor = 'user' | 'agent' | `task:${string}`;
+
+/**
+ * Who wrote a record the user also writes (a read tick, a choice answer, a section
+ * seen), and their name as the user reads it ("the CEO", "the Growth VP",
+ * `the task "..."`). On the record a human's write leaves neither field: a record
+ * with no `by` is the user's, as every record an older Walnut wrote is.
+ */
+export interface BoardWriterStamp {
+  by: BoardWriter;
+  by_name?: string;
+}
+
+/** True for the user's own record: no writer stamped, or 'human'. */
+export function isUsers(by: BoardWriter | undefined): boolean {
+  return !by || by === 'human';
+}
+
+/**
+ * The refusal for an agent changing what the user wrote (a post, an answer, a
+ * mark, a reminder) without saying the user asked for it: 409 user_wrote. The
+ * user's own words and marks stay theirs until then.
+ */
+export function userWrote(what: string, details: Record<string, unknown>): BoardError {
+  return new BoardError('user_wrote', 409, { ...details, author: 'user' },
+    `This is the user's own ${what}: pass override_user: true to change it, only when the user asked for that`);
+}
+
+/** The fields `writer` leaves on such a record: none for the user, `by` (and `by_name`) for an agent. */
+export function agentStamp(writer: BoardWriterStamp | undefined): Partial<BoardWriterStamp> {
+  if (!writer || writer.by === 'human') return {};
+  return { by: writer.by, ...(writer.by_name ? { by_name: writer.by_name } : {}) };
+}
 
 export interface BoardMessage {
   id: string;
@@ -67,10 +106,14 @@ export interface BoardMessage {
   ts: string;
 }
 
+/** A note on the page. No `by`: the user wrote it (every mark before 2026-10-27 is the user's). */
 export interface BoardMark {
   state?: string;
   note?: string;
   updated_at: string;
+  /** An agent wrote it (agentStamp). */
+  by?: BoardWriter;
+  by_name?: string;
 }
 
 export const BOARD_PROJECT_STATUSES = ['decide', 'wip', 'wait', 'done'] as const;
@@ -104,21 +147,36 @@ export interface BoardProject {
   status_at?: string;
 }
 
-/** The user's read tick on a `<walnut-check>` point: the hash of the version they read. */
+/** A read tick on a `<walnut-check>` point: the hash of the version read. No `by`: the user ticked it. */
 export interface BoardCheck {
   hash: string;
   read_at: string;
+  /** An agent ticked it (agentStamp). */
+  by?: BoardWriter;
+  by_name?: string;
 }
 
-/** The user's answer to a `<walnut-choice>`. */
+/** The answer to a `<walnut-choice>`, the user's or an agent's. */
 export interface BoardChoice {
-  /** The option picked; '' when the user answered in their own words alone. */
+  /** The option picked; '' when the answer is words alone. */
   option: string;
   label?: string;
   at: string;
-  /** The user's own words, beside a pick or instead of one. */
+  /** Who picked the option (agentStamp; absent = the user). */
+  by?: BoardWriter;
+  by_name?: string;
+  /** Words beside a pick or instead of one. */
   text?: string;
   text_at?: string;
+  /** Who wrote the words (absent = the user). */
+  text_by?: BoardWriter;
+  text_by_name?: string;
+  /**
+   * The last delivery of this answer to the board task's session did not go out
+   * (a failed send, a COMPLETE task): the same answer given again is delivered
+   * again instead of answering `unchanged`. Cleared once one goes out.
+   */
+  undelivered?: true;
 }
 
 /** "Remind me later" on a choice or a thread (one per target). The clock is board-reminders.ts. */
@@ -135,10 +193,12 @@ export interface BoardReminder {
   attempts?: number;
 }
 
-/** The user saw a section in this version (the frame hashes the section's text; the server only keeps it). */
+/** A section seen in this version (the frame hashes the section's text; the server only keeps it). */
 export interface BoardSectionSeen {
   hash: string;
   at: string;
+  /** An agent marked it seen (only in `section_seen_agent`; absent = the user). */
+  by?: BoardWriter;
 }
 
 export interface BoardFile {
@@ -153,7 +213,10 @@ export interface BoardFile {
   checks: Record<string, BoardCheck>;
   choices: Record<string, BoardChoice>;
   reminders: Record<string, BoardReminder>;
+  /** The user's: what "Changed since you last looked" counts from. Only the user moves it. */
   section_seen: Record<string, BoardSectionSeen>;
+  /** Sections an agent marked seen (each with `by`), kept apart so the user's baseline stays theirs. */
+  section_seen_agent?: Record<string, BoardSectionSeen>;
   /** Kanban (board-kanban.ts; never bumps `version`): stored lanes, null = still on the template. */
   lanes: BoardLane[] | null;
   lanes_template?: LaneTemplateId;
@@ -161,8 +224,10 @@ export interface BoardFile {
   lanes_by?: BoardWriter;
   /** Key = full task id of a card's (sub)task. */
   cards: Record<string, BoardCard>;
-  /** The user's "Changed" baseline (board-kanban-seen.ts); null = never looked. */
+  /** The user's "Changed" baseline (board-kanban-seen.ts); null = never looked. Only the user moves it. */
   kanban_seen: BoardKanbanSeen | null;
+  /** The last agent's baseline (with `by`), kept apart from the user's. */
+  kanban_seen_agent?: BoardKanbanSeen | null;
 }
 
 /** Fired, or its time has passed: the user sees it as due until they act on that item. */
@@ -188,10 +253,7 @@ const DEFAULT_MESSAGES: Record<string, string> = {
   board_version_conflict: 'The board changed since that version: re-read it and retry',
   board_edit_not_found: 'An edit\'s `old` text does not occur in the board',
   board_edit_not_unique: 'An edit\'s `old` text occurs more than once in the board',
-  not_in_team: 'Only the board task\'s own session or its subtasks\' sessions may write this board',
-  human_only: 'Only a human may do this',
   message_not_found: 'No such message in that thread',
-  not_author: 'A session may delete only its own posts',
   bad_status: 'A project status is one of decide, wip, wait, done (or "" to clear)',
   bad_task: 'Unknown task',
   check_not_found: 'No <walnut-check> with that id on the board',
@@ -201,6 +263,7 @@ const DEFAULT_MESSAGES: Record<string, string> = {
   target_not_found: 'No <walnut-choice> or <walnut-thread> with that id on the board',
   bad_time: '`at` must be an ISO-8601 time in the future, at most 90 days out',
   too_many: 'This board has too many of these',
+  user_wrote: 'This is the user\'s own post: pass override_user: true to delete it, only when the user asked for that',
 };
 
 /** A store failure that carries the HTTP status and details the route answers with. */
@@ -335,12 +398,14 @@ function normalize(raw: BoardFile | null, taskId: string): BoardFile | null {
     choices: map(raw.choices),
     reminders: map(raw.reminders),
     section_seen: map(raw.section_seen),
+    ...(Object.keys(map(raw.section_seen_agent)).length ? { section_seen_agent: map<BoardSectionSeen>(raw.section_seen_agent) } : {}),
     lanes: normalizeLanes(raw.lanes),
     ...(isLaneTemplateId(raw.lanes_template) ? { lanes_template: raw.lanes_template } : {}),
     ...(typeof raw.lanes_at === 'string' && raw.lanes_at ? { lanes_at: raw.lanes_at } : {}),
     ...(raw.lanes_by ? { lanes_by: raw.lanes_by } : {}),
     cards: normalizeCards(raw.cards),
     kanban_seen: normalizeKanbanSeen(raw.kanban_seen),
+    ...(raw.kanban_seen_agent ? { kanban_seen_agent: normalizeKanbanSeen(raw.kanban_seen_agent) } : {}),
   };
 }
 
@@ -509,19 +574,30 @@ export async function postBoardMessage(
 }
 
 /**
- * Remove one thread message and return it. A human may delete any message; a
- * session only its own (`author` equal to its `task:<id>`). A thread left empty
- * is dropped.
+ * Remove one thread message and return it. Any writer may delete any message, the
+ * user and every session alike (`by` is who deletes; the route logs it beside the
+ * message's author), with one guard: a post the user wrote is deleted by an agent
+ * only with `overrideUser` (409 user_wrote otherwise), as a status the user
+ * picked is, and then the board file is copied to boards/.deleted/ first (as a
+ * deleted board is), so the post can be put back. A thread left empty is dropped.
  */
 export async function deleteBoardMessage(
   taskId: string,
   thread: string,
   messageId: string,
-  opts: { by: BoardWriter },
+  opts: { by: BoardWriter; overrideUser?: boolean },
 ): Promise<BoardMessage> {
   checkItemId(thread, 'thread');
   if (typeof messageId !== 'string' || !MESSAGE_ID_RE.test(messageId)) {
     throw new BoardError('bad_id', 400, { message: messageId }, 'Invalid message id (bm- and hex digits, as board_get lists them)');
+  }
+  const agent = !isUsers(opts.by);
+  if (agent && opts.overrideUser === true) {
+    const before = await getBoard(taskId);
+    if ((before?.threads[thread] ?? []).some((m) => m.id === messageId && m.author === 'user')) {
+      const copy = await keepBoardCopy(taskId);
+      if (copy) log.task.info('board copy kept before an agent deletes the user\'s post', { taskId, thread, messageId, by: opts.by, copy });
+    }
   }
   let removed: BoardMessage | undefined;
   const next = await updateBoard(taskId, (raw) => {
@@ -529,8 +605,8 @@ export async function deleteBoardMessage(
     const list = current.threads[thread] ?? [];
     const index = list.findIndex((m) => m.id === messageId);
     if (index === -1) throw new BoardError('message_not_found', 404, { thread, id: messageId });
-    if (opts.by !== 'human' && list[index].author !== opts.by) {
-      throw new BoardError('not_author', 403, { thread, id: messageId });
+    if (list[index].author === 'user' && agent && opts.overrideUser !== true) {
+      throw new BoardError('user_wrote', 409, { thread, id: messageId, author: 'user' });
     }
     removed = list[index];
     const threads = { ...current.threads };
@@ -543,11 +619,17 @@ export async function deleteBoardMessage(
   return removed!;
 }
 
-/** Replace one mark; a mark with neither a state nor a note is removed (returns null). */
+/**
+ * Replace one mark; a mark with neither a state nor a note is removed (returns
+ * null). `writer` (default the user) is stamped on it. An agent changing or
+ * clearing the user's mark (one with no `by`) is 409 user_wrote unless it passes
+ * `overrideUser`; the same text again changes nothing and keeps the user's.
+ */
 export async function setBoardMark(
   taskId: string,
   markId: string,
   input: { state?: string | null; note?: string | null },
+  opts: { writer?: BoardWriterStamp; overrideUser?: boolean } = {},
 ): Promise<BoardMark | null> {
   checkItemId(markId, 'mark');
   const state = typeof input.state === 'string' ? input.state.trim() : '';
@@ -557,34 +639,112 @@ export async function setBoardMark(
       `Mark state is longer than ${BOARD_STATE_MAX_CHARS} characters`);
   }
   if (bytes(note) > BOARD_NOTE_MAX_BYTES) throw new BoardError('note_too_long', 413, { max: BOARD_NOTE_MAX_BYTES });
-  const mark: BoardMark | null = state || note
-    ? { ...(state ? { state } : {}), ...(note ? { note } : {}), updated_at: new Date().toISOString() }
+  const stamp = agentStamp(opts.writer);
+  let mark: BoardMark | null = state || note
+    ? { ...(state ? { state } : {}), ...(note ? { note } : {}), updated_at: new Date().toISOString(), ...stamp }
     : null;
+  let kept = false;
   const next = await updateBoard(taskId, (raw) => {
     const current = requireBoard(raw);
+    const prev = own(current.marks, markId);
+    if (prev && stamp.by && isUsers(prev.by)) {
+      // The user's note stays theirs: the same text again is no change.
+      if (mark && (prev.state ?? '') === state && (prev.note ?? '') === note) {
+        mark = prev;
+        kept = true;
+        return current;
+      }
+      if (opts.overrideUser !== true) throw userWrote('note', { mark: markId });
+    }
     const marks = { ...current.marks };
     if (mark) marks[markId] = mark;
     else delete marks[markId];
     return { ...current, marks };
   });
-  emitChanged({ taskId, kind: 'mark', mark: markId, version: next.version });
+  if (!kept) emitChanged({ taskId, kind: 'mark', mark: markId, version: next.version });
   return mark;
 }
 
-/** Remove a task's board. Idempotent: false when there was none. */
-export async function deleteBoard(taskId: string): Promise<boolean> {
+/** Copies of deleted boards kept per task (boards/.deleted/, newest first). */
+export const DELETED_BOARD_COPIES = 5;
+
+function deletedBoardsDir(): string {
+  return path.join(boardsDir(), '.deleted');
+}
+
+/** `<taskId>-<ISO time with : and . as ->.json`: names sort by time within one task. */
+function deletedCopyName(taskId: string, at: Date): string {
+  return `${taskId}-${at.toISOString().replace(/[:.]/g, '-')}.json`;
+}
+
+const COPY_STAMP_RE = /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z\.json$/;
+
+/** A copy path no earlier copy of this task holds (two in one millisecond take the next one). */
+async function freshCopyPath(taskId: string): Promise<string> {
+  await fsp.mkdir(deletedBoardsDir(), { recursive: true });
+  for (let ms = Date.now(); ; ms += 1) {
+    const copy = path.join(deletedBoardsDir(), deletedCopyName(taskId, new Date(ms)));
+    if (!(await fsp.stat(copy).then(() => true, () => false))) return copy;
+  }
+}
+
+/** Copy a task's board file to boards/.deleted/ as it stands (kept like a deleted board's). Undefined when it has none. */
+async function keepBoardCopy(taskId: string): Promise<string | undefined> {
   const file = boardFile(taskId);
-  const existed = await withFileLock(file, async () => {
+  const copy = await freshCopyPath(taskId);
+  try {
+    await fsp.copyFile(file, copy);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    throw err;
+  }
+  await pruneDeletedCopies(taskId);
+  return copy;
+}
+
+/** Drop all but the newest DELETED_BOARD_COPIES copies of one task's board. Best effort. */
+async function pruneDeletedCopies(taskId: string): Promise<void> {
+  const names = await fsp.readdir(deletedBoardsDir()).catch(() => [] as string[]);
+  const prefix = `${taskId}-`;
+  const mine = names.filter((n) => n.startsWith(prefix) && COPY_STAMP_RE.test(n.slice(prefix.length))).sort();
+  for (const name of mine.slice(0, Math.max(0, mine.length - DELETED_BOARD_COPIES))) {
+    await fsp.rm(path.join(deletedBoardsDir(), name), { force: true }).catch(() => undefined);
+  }
+}
+
+/**
+ * Remove a task's board. Idempotent: `existed` false when there was none. With
+ * `keepCopy` (the Board's own delete, the user's or a session's) the file is
+ * moved to boards/.deleted/ instead of removed, and the newest
+ * DELETED_BOARD_COPIES per task are kept: an agent may delete any board, so one
+ * deleted by mistake can be put back by hand. Readers list `*.json` names only,
+ * so the copies are never read as boards.
+ */
+export async function removeBoard(taskId: string, opts: { keepCopy?: boolean } = {}): Promise<{ existed: boolean; copy?: string }> {
+  const file = boardFile(taskId);
+  const out = await withFileLock(file, async () => {
     try {
+      if (opts.keepCopy) {
+        await fsp.stat(file);
+        const copy = await freshCopyPath(taskId);
+        await fsp.rename(file, copy);
+        return { existed: true, copy };
+      }
       await fsp.rm(file);
-      return true;
+      return { existed: true };
     } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return false;
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { existed: false };
       throw err;
     }
   });
-  if (existed) emitChanged({ taskId, kind: 'deleted', version: 0 });
-  return existed;
+  if (out.copy) await pruneDeletedCopies(taskId);
+  if (out.existed) emitChanged({ taskId, kind: 'deleted', version: 0 });
+  return out;
+}
+
+/** Remove a task's board with no copy (its task was deleted). Idempotent: false when there was none. */
+export async function deleteBoard(taskId: string): Promise<boolean> {
+  return (await removeBoard(taskId)).existed;
 }
 
 // ── Task deletion takes its board with it ──
@@ -619,4 +779,9 @@ export function stopBoardStore(): void {
 /** Test seam: where a task's board lives. */
 export function _boardFilePath(taskId: string): string {
   return boardFile(taskId);
+}
+
+/** Test seam: where copies of deleted boards go. */
+export function _deletedBoardsDir(): string {
+  return deletedBoardsDir();
 }

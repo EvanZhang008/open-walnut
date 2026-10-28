@@ -17,6 +17,7 @@ import { createOrgNode, editOrgNode, editProjectVp } from '@/api/org';
 import { log } from '@/utils/log';
 import { ORG_INSTRUCTIONS_MAX as INSTRUCTIONS_MAX } from '@open-walnut/org-tree';
 import { theVp } from './org-chart-model';
+import { instructionsSource } from './instructions-source';
 
 const NAME_MAX = 60;
 
@@ -150,7 +151,7 @@ export function OrgNodeEditor({ mode, onClose, onBusy, onDone }: Props) {
           </label>
         )}
         <label className="oc-field">
-          <span>Instructions <em>optional</em></span>
+          <span>Instructions <em data-testid="org-node-instructions-source">{instructionsSource({ edited: instructions.trim() !== before.trim(), stored: editing?.task?.org_instructions, typed: instructions }) || 'optional'}</em></span>
           <textarea
             value={instructions}
             onChange={(e) => setInstructions(e.target.value)}

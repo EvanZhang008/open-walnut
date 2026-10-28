@@ -8,16 +8,20 @@
  *   - "+ New project" makes a project with its own VP card
  *   - a VP card's ⋯ (or a right-click) edits its name and instructions; the CEO's sets the CEO's
  *   - a refused name keeps what was typed and says why; Escape closes the form before the sheet
+ *   - an agent writes a VP's instructions as the user does (2026-10-27, the user: "all human action
+ *     can be done by agent also"); the form says who wrote them and when, and the user writes back
  * The fixture is shared, so this file makes its own names and removes what it made.
  */
 import { expect, test, type APIRequestContext, type Locator, type Page } from '@playwright/test'
 import { loadHome } from './draft-helpers'
 import { isolateUiPrefs } from './todo-panel-helpers'
+import { discoverBrowserFixture } from './codex-test-audit'
 
 const STAMP = `${Date.now().toString(36)}${process.pid.toString(36)}`
 const VP = `Growth ${STAMP}`
 const PROJECT = `Pond ${STAMP}`
 const OTHER = `Shed ${STAMP}`
+const GATE = `Gate ${STAMP}`
 const made: string[] = []
 
 test.describe.configure({ mode: 'serial' })
@@ -56,9 +60,9 @@ test.beforeAll(async ({ request }) => {
 })
 
 test.afterAll(async ({ request }) => {
-  const leads = (await allTasks(request)).filter((t) => t.org_role === 'lead' && [VP, PROJECT, OTHER].includes(t.project ?? '')).map((t) => t.id)
+  const leads = (await allTasks(request)).filter((t) => t.org_role === 'lead' && [VP, PROJECT, OTHER, GATE].includes(t.project ?? '')).map((t) => t.id)
   for (const id of [...made, ...leads]) await removeTask(request, id)
-  for (const p of [VP, PROJECT, OTHER]) await request.delete(`/api/v1/projects/${encodeURIComponent(p)}`).catch(() => undefined)
+  for (const p of [VP, PROJECT, OTHER, GATE]) await request.delete(`/api/v1/projects/${encodeURIComponent(p)}`).catch(() => undefined)
 })
 
 test('+ New VP makes a VP with no project, named and instructed as typed', async ({ page, request }) => {
@@ -93,6 +97,46 @@ test('+ New VP makes a VP with no project, named and instructed as typed', async
   await expect(form).toHaveCount(0)
   await expect(page.getByTestId('org-chart')).toBeVisible()
   await expect(page.getByTestId('org-chart-new-vp')).toBeFocused()
+})
+
+test('an agent writes a VP\'s instructions; the form says who and when, and the user writes them back', async ({ page, request }) => {
+  test.setTimeout(240_000)
+  // An agent: a task with a session, calling the API with its caller id as the org ops do.
+  const port = Number(process.env.PW_TEST_PORT ?? 3457)
+  const { fixtureRoot } = await discoverBrowserFixture(port)
+  const writer = `Agent writer ${STAMP}`
+  const made1 = await request.post('/api/tasks', { data: { title: writer, project: GATE, source: 'local' } })
+  expect(made1.ok(), await made1.text()).toBe(true)
+  const writerId = ((await made1.json()) as { task: { id: string } }).task.id
+  made.push(writerId)
+  const started = await request.post('/api/sessions/quick-start', { data: { cwd: `${fixtureRoot}/projects/walnut`, message: `snapshot-clean-turn:writer ready ${STAMP}`, taskId: writerId } })
+  expect(started.ok(), await started.text()).toBe(true)
+  const sid = ((await started.json()) as { sessionId: string }).sessionId
+  const words = `Answer the launch questions first. ${STAMP}`
+  const put = await request.put(`/api/v1/org/projects/${encodeURIComponent(GATE)}/vp`, { headers: { 'x-walnut-caller-sid': sid }, data: { instructions: words } })
+  expect(put.ok(), await put.text()).toBe(true)
+  expect(((await put.json()) as { task: { org_instructions?: unknown } }).task.org_instructions).toMatchObject({ text: words, by: `task:${writerId}`, by_name: `the task "${writer}"` })
+
+  await openChart(page)
+  await vp(page, GATE).getByTestId('org-chart-vp-menu').click()
+  await page.getByTestId('org-chart-node-menu').getByText('Edit name and instructions…').click()
+  const form = page.getByTestId('org-node-editor')
+  const box = form.getByTestId('org-node-instructions')
+  const source = form.getByTestId('org-node-instructions-source')
+  await expect(box).toHaveValue(words)
+  await expect(source).toHaveText(`by the task "${writer}", just now`)
+  // The user's own words replace the agent's.
+  await box.fill(`${words} Then the rest.`)
+  await expect(source).toHaveText('yours')
+  await form.getByTestId('org-node-save').click()
+  await expect(form).toHaveCount(0)
+  expect((await leadOf(request, GATE))?.org_instructions).toMatchObject({ text: `${words} Then the rest.`, by: 'human' })
+  await vp(page, GATE).getByTestId('org-chart-vp-menu').click()
+  await page.getByTestId('org-chart-node-menu').getByText('Edit name and instructions…').click()
+  await expect(source).toHaveText('by you, just now')
+  await page.keyboard.press('Escape')
+  await expect(form).toHaveCount(0)
+  await request.post(`/api/v1/sessions/${sid}/terminate`, { data: { force: true } }).catch(() => undefined)
 })
 
 test('+ New project makes a project with its own VP card', async ({ page, request }) => {

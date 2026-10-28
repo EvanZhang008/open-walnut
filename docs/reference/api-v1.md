@@ -81,8 +81,8 @@ All v1 errors use one shape (plus optional endpoint-specific extras):
 | `not_supported_cloud` | 501 | The endpoint cannot run on a cloud REPLICA at all |
 | `cron_owner` | 409 | `POST /sessions/:id/terminate` refused: the session owns armed recurring crons — delete them first or pass `force: true` |
 | `own_session` | 409 | `POST /sessions/:id/terminate` or `/restart` refused: the caller's `x-walnut-caller-sid` is that session (additive, 2026-10-27; a session ends its own work by completing its task) |
-| `own_lead` | 409 | `POST /sessions/:id/terminate` or `/restart` from a session whose task works for that session's task (its lead, up the chain). Additive, 2026-10-27 |
-| `main_session` | 409 | `POST /sessions/:id/terminate` or `/restart` from a session, aimed at Main's session (only the user stops or restarts Main). Additive, 2026-10-27 |
+| `own_lead` | 409 | Retired 2026-10-27, no longer sent: a session may stop or restart its lead's session, as a person may |
+| `main_session` | 409 | Retired 2026-10-27, no longer sent: a session may stop or restart Main's session, as a person may |
 | `session_exists` | 409 | `POST /tasks/:id/start` refused: the task already has a live session (`existing_session_id`); message it with `POST /messages` |
 | `project_elsewhere` | 409 | `POST /tasks` from a session: `project` names a project other than the caller task's own and `project_reason` is missing or under 10 characters. Nothing is created; the body also carries `callerProject` and `requestedProject` |
 | `related_open_tasks` | 409 | `POST /tasks` (and the legacy `POST /api/tasks` with a caller header) from a session: open tasks look like the same work and the body has no `confirm_new: true`. Nothing is created. Extras: `candidates` (at most 5, best first: `id`, `title`, `project`, `folder?`, `phase`, `user_status?`, `session_running`, `updated_at?`, `reason`, `your_subtask?`) and `hint` (the two ways out). `confirm_new: true` without a `new_reason` of 10+ characters is `400 bad_request` |
@@ -1066,10 +1066,14 @@ shows it; `GET /tasks` (slim and minimal) omits `agent_memory`, and `task_get` r
 `agent_memory_chars`.
 
 - `GET /api/v1/tasks/:id/agent-memory` → `200 { "task_id", "title", "memory": { "text", "at",
-  "refused"? } | null, "chars", "soft_limit": 12000, "limit": 20000 }`.
+  "refused"?, "by"?, "by_name"?, "by_at"? } | null, "chars", "soft_limit": 12000, "limit": 20000 }`.
+  `by` (`"human"`, `"task:<id>"` or `"agent"`), `by_name` (`"the CEO"`, `"the Growth VP"`,
+  `the task "..."`; none for the user) and `by_at` name the latest write by someone other than
+  the task's own session; that session's appends keep them, its replacing the whole file clears
+  them (additive, 2026-10-27).
 - `PUT /api/v1/tasks/:id/agent-memory { "content", "mode"?: "append" | "replace" }` (append adds
-  one dated entry and is the default) → `200` as GET. `403 not_your_memory` when a session writes
-  another task's file, `409 task_complete` on a completed task, `413 agent_memory_too_long` past
+  one dated entry and is the default) → `200` as GET. Any caller writes it, another task's session
+  included (`403 not_your_memory` is retired, 2026-10-27), `409 task_complete` on a completed task, `413 agent_memory_too_long` past
   20,000 characters (nothing written), `501 not_supported_cloud` on a replica.
 
 ### Task board (additive, 2026-10-01): `/tasks/:id/board`
@@ -1081,7 +1085,17 @@ subtree through the `walnut` CLI (`board_get` / `board_set` / `board_edit` /
 html the chat threads, the user's marks, the board's projects, the user's read
 ticks and answers, reminders, and the sections the user has seen. Reads work
 everywhere; writes are primary-only (`501 not_supported_cloud` on a replica).
-A session caller outside the board task's subtree gets `403 not_in_team`. Item
+Every caller may write every board, the user and any session alike (2026-10-27;
+`403 not_in_team` and `403 human_only` are retired): the writer is recorded, and
+a read tick, a choice answer or a section seen by an agent carries `by` (`task:<id>`,
+or `agent` for a session with no task) and `by_name` (as the user reads it: "the
+CEO", "the Growth VP", `the task "..."`); a record without `by` is the user's.
+What the user did stays theirs until an agent says the user asked for the change
+with `override_user: true` (`409 user_wrote { ..., author: "user" }` otherwise,
+never silently): a session deleting a post the user wrote, changing or clearing a
+part of an answer the user gave, a mark the user wrote, or a reminder the user
+set. An agent's tick or untick on a point the user read keeps the user's tick, and
+an agent's seen marks are kept apart from the user's baseline. Item
 ids (thread, mark, project, check, choice, reminder target, section) are
 `[A-Za-z0-9][A-Za-z0-9._:-]{0,127}` (`400 bad_id` otherwise).
 
@@ -1098,22 +1112,25 @@ itself). The `board_*` ops default to the caller's team board.
   "updated_by" }, "threads": { [thread]: Message[] }, "marks": { [id]: Mark },
   "projects": { [id]: Project }, "checks": { [id]: CheckState }, "choices": {
   [id]: Choice }, "reminders": { [target]: Reminder }, "section_seen": { [id]:
-  Seen }, "refs": { "ref", "id", "title", "phase", "status" }[] }`. Without
+  Seen }, "section_seen_agent"?: { [id]: Seen }, "refs": { "ref", "id", "title",
+  "phase", "status" }[] }`. Without
   `team` the board is `:id`'s own; with `team=1` it is the team board owner's,
   and `board_task_id` / `board_task_title` name it (write to that id).
   `refs` are the tasks the html names in `<walnut-task id="…">` plus the tasks
   the projects hold.
-  `Message = { id, author: "user" | "task:<id>", text, ts }`,
-  `Mark = { state?, note?, updated_at }`,
+  `Message = { id, author: "user" | "task:<id>" | "agent", text, ts }`,
+  `Mark = { state?, note?, updated_at, by?, by_name? }` (no `by`: the user's),
   `Project = { title?, status?: "decide" | "wip" | "wait" | "done", tasks?:
   fullTaskId[], updated_at, updated_by }`,
-  `CheckState = { hash, read, read_at?, changed? }` for EVERY
-  `<walnut-check id>` on the page now (`hash` is the current one; `read` = the
-  user read this exact version; `changed: true` = read once, edited since),
-  `Choice = { option, label?, at }`,
+  `CheckState = { hash, read, read_at?, changed?, by?, by_name? }` for EVERY
+  `<walnut-check id>` on the page now (`hash` is the current one; `read` = read
+  in this exact version; `changed: true` = read once, edited since),
+  `Choice = { option, label?, at, by?, by_name?, text?, text_at?, text_by?, text_by_name?, undelivered? }`,
   `Reminder = { at, set_at, set_by, note?, fired_at?, delivered_at?, attempts? }`
   (due when `fired_at` is set or `at` has passed),
-  `Seen = { hash, at }`.
+  `Seen = { hash, at, by? }` (`section_seen` is the user's and carries no `by`;
+  `section_seen_agent`, present once an agent marked a section, holds the
+  agents' marks).
 - `GET /api/v1/tasks/:id/board/owner[?tab=1]` → `200 { "task_id", "title", "self",
   "has_board" }`: the team board owner, by the rule above. With `tab=1` it also
   answers `"own_board"` and `"open_subtasks"`: `own_board` is true when the task
@@ -1137,17 +1154,25 @@ itself). The `board_*` ops default to the caller's team board.
   the session reads it with `board_get`). With a caller sid the author is
   `task:<callerTaskId>` and the message is stored only. The text renders as
   light markdown on the Board tab.
-- `DELETE /api/v1/tasks/:id/board/threads/:thread/messages/:message` → `200 {
-  "message" }` (the removed one; a thread left empty disappears from `threads`).
-  Without a caller sid (a human) any message may go; a session may delete only
-  a message whose author is its own `task:<id>` (`403 not_author`). Unknown
+- `DELETE /api/v1/tasks/:id/board/threads/:thread/messages/:message[?override_user=true]`
+  → `200 { "message" }` (the removed one; a thread left empty disappears from
+  `threads`). Any caller may delete any message (`403 not_author` is retired);
+  the server log names who deleted it and whose it was. A post the user wrote
+  (`author: "user"`) deleted by a session answers `409 user_wrote { thread, id,
+  author }` unless the request passes `override_user=true` (query, or `true`
+  in a JSON body); the user deletes their own and anyone's freely. Before a
+  session deletes the user's post that way, the board file is copied to
+  `boards/.deleted/` (as a deleted board is), so the post can be put back. Unknown
   thread or message → `404 message_not_found`; no board → `404 no_board`; a
   malformed thread or message id → `400 bad_id`. Emits `board:changed` kind
   `thread`.
-- `PUT /api/v1/tasks/:id/board/marks/:mark { "note"?, "state"? }` → `200 { "mark" }`
-  (both empty removes the mark → `"mark": null`). A mark is the user's note for
-  the leader; `state` is still accepted from older pages, and a write without
-  it drops a stored one (a project's status is the project's, below).
+- `PUT /api/v1/tasks/:id/board/marks/:mark { "note"?, "state"?, "override_user"? }`
+  → `200 { "mark" }` (both empty removes the mark → `"mark": null`). A mark is
+  the user's note for the leader; `state` is still accepted from older pages,
+  and a write without it drops a stored one (a project's status is the
+  project's, below). An agent's mark carries `by` / `by_name`; an agent changing
+  or clearing the user's mark → `409 user_wrote { mark }` unless
+  `override_user: true` (the same text again changes nothing).
 - `PUT /api/v1/tasks/:id/board/projects/:project { "title"?, "status"?,
   "tasks"?, "delete"?, "override_user"? }` → `200 { "project", "delivery"? }`.
   Any team member, and the user (the pill on the page). A project records who
@@ -1164,8 +1189,11 @@ itself). The `board_*` ops default to the caller's team board.
   (`"project": null`). Caps: 200 projects, 200 tasks each, a 200-char title
   (`400 too_many` / `400 bad_request`). Emits `board:changed` kind `project`.
 - `PUT /api/v1/tasks/:id/board/checks/:check { "read": bool, "hash"? }` → `200
-  { "check": null | { "hash", "read_at" }, "hash" }`. Humans only (any caller
-  sid → `403 human_only`). `read: true` needs `hash` equal to the point's
+  { "check": null | { "hash", "read_at", "by"?, "by_name"? }, "hash" }`. The
+  user or an agent (its tick carries `by` / `by_name`; ticking a point another
+  agent read stamps it anew, the user's tick on the same version stays the
+  user's and is answered unchanged, and an agent's `read: false` on the user's
+  tick answers that tick unchanged: it may untick only an agent's). `read: true` needs `hash` equal to the point's
   CURRENT hash, recomputed from the html under the write lock; otherwise `409
   check_changed { check, hash }` with the current one. A check id not on the
   page → `404 check_not_found`. `read: false` removes the tick. The server is the
@@ -1173,25 +1201,39 @@ itself). The `board_*` ops default to the caller's team board.
   with whitespace runs collapsed), so an edit of the point brings it back unread.
   At 2000 ticks, ticks on points no longer on the page are dropped first. Emits
   kind `check`.
-- `PUT /api/v1/tasks/:id/board/choices/:choice { "option"?, "text"? }` → `200 {
-  "choice", "delivery" }`. Humans only. An answer is an option, the user's own
-  words (`text`, trimmed, up to 8 KiB like a thread message, else `413
+- `PUT /api/v1/tasks/:id/board/choices/:choice { "option"?, "text"?, "override_user"? }`
+  → `200 { "choice", "delivery" }`. The user or an agent. An answer is an option, words
+  (`text`, trimmed, up to 8 KiB like a thread message, else `413
   answer_too_long`), or both; at least one field is required (`400
   bad_request`). Each field given replaces that part and keeps the other, `""`
   takes that part back, and an answer left with neither is cleared. The stored
-  `choice` is `{ option, label?, at, text?, text_at? }`, `option: ""` when the
-  user answered in words alone. `options="key:Label,key:Label"` on the
-  `<walnut-choice>` element (the format of walnut-project's `labels`); an option
+  `choice` is `{ option, label?, at, by?, by_name?, text?, text_at?, text_by?,
+  text_by_name?, undelivered? }`, `option: ""` for words alone; `by` names an agent that picked,
+  `text_by` one that wrote the words, and a part kept from before keeps its
+  writer, except that the user giving the same part again takes it over (no
+  `by` / `text_by` any more, no delivery). An agent changing or clearing a part
+  the user gave (the pick, or the words) → `409 user_wrote { choice, part:
+  "option" | "text" }` unless `override_user: true`; a first answer, or a part an
+  agent gave, it may change. `options="key:Label,key:Label"` on the `<walnut-choice>` element (the format of walnut-project's `labels`); an option
   not among them → `400 bad_option { options }`; a choice id not on the page →
   `404 choice_not_found`. A changed answer is delivered to the board task's
-  session like a human thread message, ONE message with the choice id, the pick
-  (or "picking no option") and the words quoted (`delivery` as for a thread
-  post); the same answer again → `delivery: { state: "skipped", reason:
-  "unchanged" }` (no second delivery); clearing → `{ "choice": null, "delivery":
+  session, ONE message with the choice id, the pick (or "picking no option") and
+  the words quoted, each part naming who gave it (`delivery` as for a thread
+  post): the user's like a human thread message, an agent's from the agent's own
+  session (a peer message naming its task: no reply request); an agent's answer,
+  whoever sends it (a session, or a caller with no task), never reopens a
+  COMPLETE board task: `delivery` is `stored` with `reason: "target_complete"`;
+  the board task's own session answering its own choice →
+  `delivery: { state: "skipped", reason: "self" }`; the same answer again →
+  `delivery: { state: "skipped", reason: "unchanged" }` (no second delivery),
+  except when the last delivery of that answer did not go out (`undelivered:
+  true` on the choice): then it is delivered again; clearing → `{ "choice": null, "delivery":
   { state: "skipped", reason: "cleared" } }`. Answering clears a DUE reminder on
   that choice in the same write. Emits kind `choice`.
 - `PUT /api/v1/tasks/:id/board/reminders/:target { "at": ISO-8601 | null,
-  "note"? }` → `200 { "reminder" }`. Any team member. One reminder per target (a
+  "note"?, "override_user"? }` → `200 { "reminder" }`. Any caller; an agent
+  replacing or clearing one the user set (`set_by: "human"`) → `409 user_wrote
+  { target }` unless `override_user: true`. One reminder per target (a
   `<walnut-choice>` or `<walnut-thread>` id; otherwise `404 target_not_found`);
   a new one replaces it; `null` (or `""`) clears, also for a target no longer on
   the page. `at` must be in the future and at most 90 days out (`400 bad_time`).
@@ -1201,17 +1243,24 @@ itself). The `board_*` ops default to the caller's team board.
   that thread clears a DUE reminder on it in the same write. Emits kind
   `reminder`.
 - `PUT /api/v1/tasks/:id/board/seen/:section { "hash" }` → `200 { "seen": null |
-  { "hash", "at" } }`. Humans only. The frame hashes the section's text; the
-  server only stores it (`""` forgets it). At most 500 kept; the oldest goes
-  first. Emits kind `seen`.
-- `DELETE /api/v1/tasks/:id/board` → `204` (humans only; `403 human_only`).
+  { "hash", "at", "by"? } }`. The user or an agent: the user's mark goes to
+  `section_seen`, an agent's (with `by`) to `section_seen_agent`, so an agent
+  never moves the user's "changed" baseline. The frame hashes the section's
+  text; the server only stores it (`""` forgets the caller's own mark). At most
+  500 kept per map; the oldest goes first. Emits kind `seen`.
+- `DELETE /api/v1/tasks/:id/board` → `204`, from the user or any session (the
+  log names who). The file is moved to `boards/.deleted/<taskId>-<time>.json`
+  in the data directory, not removed, and the newest 5 copies per task are
+  kept, so a board deleted by mistake can be put back by hand. (A board that
+  goes with its deleted task is removed outright.)
 - Kanban (additive, 2026-10-04). Every board GET also carries `lanes` (stored,
   `null` = still on the template), `lanes_effective` (the lanes to draw: stored,
   or the template the team's tags pick: `triage` when any task has a `ticket:`
   or `ticket-id:` tag, else `general`), `lanes_template`, `cards` (`{ [taskId]:
   Card }`), `team` (`{ id, phase, completed_at? }[]`: the owner's direct
   subtasks, open first, at most 500, old completions included), `kanban_seen`
-  (the user's baseline or `null`) and `board_version`, also when `board` is
+  (the user's baseline or `null`), `kanban_seen_agent` (only once an agent wrote
+  its own) and `board_version`, also when `board` is
   `null`. `?fields=kanban` answers only `board_task_id`, `board_task_title`,
   `board_version` and those kanban keys (no html). `:id` below is the board's
   OWNER. Lane and card writes never bump `version`; the first one creates the
@@ -1239,14 +1288,20 @@ itself). The `board_*` ops default to the caller's team board.
   - `POST /api/v1/tasks/:id/board/cards { "title", "lane"?, "tags"? }` → `201 {
     task, card }`: a subtask of the owner in its project and folder, no session;
     a failed placement still answers 201 with `card: null, warning:
-    "placement_failed"`. Humans only (`403 human_only`): a session files work
-    with `task_create`, which places it and applies the subtask limits.
+    "placement_failed"`. The user or a session; every session's add (a worker's,
+    a Personal AI ask's, one with no task) meets `task_create`'s brakes (`409
+    subtask_too_deep`, a long title cut to its head with the long form as the
+    description), as its `task_create` would; the user's never does. The card's
+    `lane_by` is the writer.
   - `POST /api/v1/tasks/:id/board/cards/:task/suggestion { "action": "accept" |
-    "dismiss" }` → `200 { card, lane_effective }` (humans only; no suggestion →
-    `404 no_suggestion`).
+    "dismiss" }` → `200 { card, lane_effective }` (the user or a session; an
+    accept is the answerer's move, `lane_by` theirs; no suggestion → `404
+    no_suggestion`).
   - `PUT /api/v1/tasks/:id/board/kanban-seen { "cards"?: ids | "all",
     "snapshot"?: { [taskId]: { lane, summaryHash, outputAt?, unread? } },
-    "visit_end"? }` → `200 { kanban_seen }` (humans only): snapshot entries win,
+    "visit_end"? }` → `200 { kanban_seen }` (the user or a session; the answer
+    is the writer's own baseline: the user's `kanban_seen`, or an agent's, with
+    `by`, stored as `kanban_seen_agent`, which never moves the user's): snapshot entries win,
     listed ids without one are computed by the server; `"all"` or `visit_end`
     moves `at` to `previous_at`.
 - Live: the console's WebSocket carries `board:changed { taskId, kind: "html" |
@@ -1290,19 +1345,21 @@ team is talked to through that task; the Inbox never gets a lead.
   chart (default `"Founder"`), kept in config.yaml under `org`.
   `PUT /api/v1/org/settings { name?, founderTitle? }` → the same after the change;
   a blank value goes back to the default; `400 bad_name` for a non-string.
-- `POST /api/v1/org/projects { name, vpName?, instructions? }` → `201 { task }`: a
+- `POST /api/v1/org/projects { name, vpName?, instructions?, override_user? }` → `201 { task }`: a
   new project with its own VP (its lead); `vpName` names the VP when it is not the
-  project's name. `POST /api/v1/org/vps { name, instructions? }` → `201 { task }`: a
+  project's name. `POST /api/v1/org/vps { name, instructions?, override_user? }` → `201 { task }`: a
   VP with no project of its own (`org_vp_only: true`; the project it lives in is
   only its home), for projects put under it with `/org/vp`. `task` carries `org_name` and
   `org_vp_only` when set. `400 bad_name` (empty, over 60 characters, `Inbox`, a name
   starting with `Ask`, a path separator), `409 project_exists | name_taken |
-  project_unavailable` (a project the user deleted comes back only on a person's
-  create; a renamed one is refused). A closed lead of that project is reopened with
-  its name, instructions and led projects cleared.
-- `PUT /api/v1/org/nodes/:id { name?, instructions? }` → `200 { task }`: renames a
+  project_unavailable` (a project that was deleted comes back on this create, a
+  person's or an agent's; a renamed one is refused). A closed lead of that project is reopened with
+  its name, instructions and led projects cleared; an agent bringing back one whose instructions
+  the user wrote passes `override_user: true` (else `409 user_wrote`), and so does an agent's
+  `PUT .../vp` that reopens such a lead.
+- `PUT /api/v1/org/nodes/:id { name?, instructions?, override_user? }` → `200 { task }`: renames a
   VP (`org_name`; its project's name or `""` gives it back) or sets the CEO's or a
-  VP's own instructions (`org_instructions { text, at }`, at most 4000 characters;
+  VP's standing instructions (`org_instructions { text, at, by?, by_name? }`, at most 4000 characters;
   `""` or `null` clears them; once set they are cleared, never removed, so a session
   spawned on older words is told to drop them). The instructions ride the node's
   session prompt, so a running session is told an edit with its next message.
@@ -1310,10 +1367,17 @@ team is talked to through that task; the Inbox never gets a lead.
   same for a project's VP, making its lead first when it has none (after every
   check, so a refused edit makes none). `404 not_org_node | unknown_project`,
   `400 bad_name` (the CEO keeps its name) `| bad_instructions | no_lead_for_inbox`,
-  `409 name_taken` (another VP's name, or a project it does not lead). An agent's
+  `409 name_taken` (another VP's name, or a project it does not lead) `| user_wrote` (an agent
+  replacing or clearing instructions the user wrote, without `override_user: true`, which it
+  passes only when the user asked for the change). An agent's
   `org_send` reaches a VP by the name the user gave it.
-  Instructions are the user's own words: a request from a session
-  (`x-walnut-caller-sid`) that carries `instructions` is `403 human_only`.
+  The user or any agent may make, name and instruct a node (2026-10-27; ops
+  `org_node_create`, `org_node_edit`). Every instructions write records who made it:
+  `by` is `"human"`, `"task:<id>"` for an agent's task (with `by_name` as the user reads
+  it: `"the CEO"`, `"the Growth VP"`, `the task "…"`), or `"agent"` for a session Walnut
+  could not place; a row without `by` was written by the user. The node's prompt and the
+  Org page name the writer, and the user may change the words back at any time. `task`
+  in every answer carries `org_instructions` (additive).
 - Every POST and PUT answers `501` on a replica.
 
 ### Task actions (additive, Wave 1 2026-08) — detail / delete / field setters / batch / focus

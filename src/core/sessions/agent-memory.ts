@@ -19,12 +19,64 @@
  */
 import type { Task } from '../types.js';
 import { cutEnd } from '../text-cut.js';
+import { orgDisplayTitle } from '../org/org-tree.js';
+
+/** Who made a write: the user, another task, or a caller Walnut cannot name. */
+export type AgentMemoryWriter = 'human' | 'agent' | `task:${string}`;
 
 export interface AgentMemory {
   text: string;
   at: string;
   /** A turn-end answer that was not written because it was over the limit: the next ask says so. */
   refused?: { at: string; chars: number };
+  /**
+   * The latest write by someone other than the task's own session, and when (2026-10-27: a
+   * worker's lines written into its lead's file read, after a compaction, as the lead's own
+   * notes). `by_name` is the writer as the user reads it, none for the user. The owner appends
+   * at every turn end, so its appends keep the record; only the owner replacing the whole file
+   * (it has then rewritten every line itself) clears it.
+   */
+  by?: AgentMemoryWriter;
+  by_name?: string;
+  by_at?: string;
+}
+
+export type AgentMemoryWriterStamp = { by: AgentMemoryWriter; by_name?: string };
+
+/**
+ * The writer record a write leaves. `stamp` is the writer when it is not the task's own session
+ * (null for its own): another's write records itself with its time, the owner's append keeps the
+ * record there, the owner's replace clears it.
+ */
+export function agentMemoryWriterAfter(
+  current: AgentMemory | undefined, mode: 'replace' | 'append', stamp: AgentMemoryWriterStamp | null, nowIso: string,
+): Pick<AgentMemory, 'by' | 'by_name' | 'by_at'> {
+  if (stamp) return { by: stamp.by, ...(stamp.by_name ? { by_name: stamp.by_name } : {}), by_at: nowIso };
+  if (mode === 'append' && current?.by) {
+    return { by: current.by, ...(current.by_name ? { by_name: current.by_name } : {}), by_at: current.by_at ?? current.at };
+  }
+  return {};
+}
+
+const WRITER_NAME_MAX = 60;
+
+function clip(s: string, max: number): string {
+  return s.length > max ? `${s.slice(0, max - 1)}\u2026` : s;
+}
+
+/** A writer task as the user reads it: "the CEO", "the Growth VP", `the task "..."`; at most 60 characters. */
+export function agentMemoryWriterName(task: Pick<Task, 'title' | 'org_role' | 'org_name'> | undefined): string {
+  if (!task) return 'an agent';
+  const flat = (s: string) => s.replace(/\s+/g, ' ').trim();
+  if (task.org_role === 'main' || task.org_role === 'lead') return clip(`the ${flat(orgDisplayTitle(task))}`, WRITER_NAME_MAX);
+  return `the task "${clip(flat(task.title), WRITER_NAME_MAX - 'the task ""'.length)}"`;
+}
+
+/** One line for whoever reads the file back when someone other than its own session wrote in it; '' otherwise. */
+export function agentMemoryWriterNote(memory: Pick<AgentMemory, 'at' | 'by' | 'by_name' | 'by_at'> | null | undefined): string {
+  if (!memory?.by) return '';
+  const name = memory.by === 'human' ? 'the user' : memory.by_name?.trim() || 'an agent';
+  return `Last written by ${name} at ${memory.by_at ?? memory.at}.`;
 }
 
 /** Past this the agent is asked, at every turn end, to compress it (about 3,000 tokens). */
@@ -99,10 +151,13 @@ export function applyAgentMemoryAnswer(
 ): { memory: AgentMemory; outcome: 'written' | 'refused' } | { memory: null; outcome: 'stale' } {
   if (ask.mode === 'replace' && (current?.at ?? undefined) !== shownAt) return { memory: null, outcome: 'stale' };
   try {
-    return { memory: { text: nextAgentMemory(current?.text ?? '', ask.content, ask.mode, nowIso), at: nowIso }, outcome: 'written' };
+    // The owner's own answer: an entry keeps the record of another's write, a whole rewrite clears it.
+    const text = nextAgentMemory(current?.text ?? '', ask.content, ask.mode, nowIso);
+    return { memory: { text, at: nowIso, ...agentMemoryWriterAfter(current, ask.mode, null, nowIso) }, outcome: 'written' };
   } catch (err) {
     if (!(err instanceof AgentMemoryTooLongError)) throw err;
-    return { memory: { text: current?.text ?? '', at: current?.at ?? nowIso, refused: { at: nowIso, chars: err.chars } }, outcome: 'refused' };
+    // Nothing was written, so the last writer stays whoever it was.
+    return { memory: { ...current, text: current?.text ?? '', at: current?.at ?? nowIso, refused: { at: nowIso, chars: err.chars } }, outcome: 'refused' };
   }
 }
 
@@ -111,12 +166,13 @@ export function agentMemoryPrompt(memory: AgentMemory | undefined, taskTitle: st
   const text = memory?.text.trim() ?? '';
   const size = text.length;
   const over = size > AGENT_MEMORY_SOFT_CHARS;
+  const writer = agentMemoryWriterNote(memory);
   const refused = memory?.refused
     ? `\nYour last answer (${memory.refused.chars} characters) was NOT written: it is over the ${AGENT_MEMORY_MAX_CHARS}-character limit. Give it again, shorter.`
     : '';
   return `
 Last, YOUR OWN MEMORY.md (the working memory of "${taskTitle.replace(/"/g, "'")}", for you only; the user does not read it, and it is not Walnut's global MEMORY.md): pending items, a deadline days away, reminders, things to raise later, facts you learned for this work. Anything that does not need the user now or change their picture of the work goes here, not into the Brief or the FOR_USER lines.
-${text ? `<own_memory chars="${size}" limit="${AGENT_MEMORY_SOFT_CHARS}">\n${text}\n</own_memory>` : 'It is empty.'}${over ? `\nIt is over its ${AGENT_MEMORY_SOFT_CHARS}-character size: answer with replace and the whole file rewritten shorter, keeping everything still valid (merge entries, drop what is done or no longer true).` : ''}
+${text ? `<own_memory chars="${size}" limit="${AGENT_MEMORY_SOFT_CHARS}">\n${text}\n</own_memory>${writer ? `\n${writer}` : ''}` : 'It is empty.'}${over ? `\nIt is over its ${AGENT_MEMORY_SOFT_CHARS}-character size: answer with replace and the whole file rewritten shorter, keeping everything still valid (merge entries, drop what is done or no longer true).` : ''}
 A file past ${AGENT_MEMORY_MAX_CHARS} characters is not written at all.${refused}
 Answer with exactly one of: "AGENT_MEMORY: unchanged", "AGENT_MEMORY: append: <one new entry>", or "AGENT_MEMORY: replace:" followed by the whole file on the next lines. Write nothing after it.
 AGENT_MEMORY:`;
@@ -130,5 +186,6 @@ export function agentMemoryAfterCompaction(task: Pick<Task, 'title' | 'agent_mem
   const shown = text.length > AFTER_COMPACTION_CHARS
     ? `${text.slice(0, cut)}\n… (${text.length - cut} more characters: agent_memory_read reads the whole file)`
     : text;
-  return `Your own MEMORY.md (for "${task.title}", yours only, not Walnut's global MEMORY.md; agent_memory_write changes it):\n${shown}`;
+  const writer = agentMemoryWriterNote(task.agent_memory);
+  return `Your own MEMORY.md (for "${task.title}", yours only, not Walnut's global MEMORY.md; agent_memory_write changes it):\n${writer ? `${writer}\n` : ''}${shown}`;
 }

@@ -32,7 +32,8 @@ import type { OnTurnCompletePayload } from '../../../src/core/session-hooks/type
 import type { Task } from '../../../src/core/types.js'
 import {
   AGENT_MEMORY_MAX_CHARS, AGENT_MEMORY_SOFT_CHARS, AgentMemoryTooLongError, agentMemoryAfterCompaction,
-  agentMemoryPrompt, applyAgentMemoryAnswer, keepsAgentMemory, nextAgentMemory, readAgentMemoryField, splitAgentMemory,
+  agentMemoryPrompt, agentMemoryWriterName, agentMemoryWriterNote, applyAgentMemoryAnswer, keepsAgentMemory, nextAgentMemory,
+  readAgentMemoryField, splitAgentMemory,
 } from '../../../src/core/sessions/agent-memory.js'
 import { taskView } from '../../../src/ops/task-execution.js'
 import { agentMemoryV1Router } from '../../../src/web/routes/agent-memory-v1.js'
@@ -92,6 +93,15 @@ describe('the MEMORY.md rules', () => {
     expect(refused).toEqual({ memory: { ...cur, refused: { at: NOW, chars: AGENT_MEMORY_MAX_CHARS + 1 } }, outcome: 'refused' })
     // A later good write drops the refusal.
     expect(applyAgentMemoryAnswer(refused.memory!, { mode: 'append', content: 'c' }, cur.at, NOW).memory).not.toHaveProperty('refused')
+    // The answer is the task's own write: an entry keeps the record of another's write (its time
+    // too), a whole rewrite clears it, a refused one keeps it.
+    const stamped = { ...cur, by: 'task:w1' as const, by_name: 'the task "W"', by_at: cur.at }
+    expect(applyAgentMemoryAnswer(stamped, { mode: 'append', content: 'd' }, undefined, NOW).memory)
+      .toMatchObject({ at: NOW, by: 'task:w1', by_name: 'the task "W"', by_at: cur.at })
+    const rewritten = applyAgentMemoryAnswer(stamped, { mode: 'replace', content: 'all mine' }, cur.at, NOW).memory!
+    expect(rewritten).toEqual({ text: 'all mine', at: NOW })
+    expect(applyAgentMemoryAnswer(stamped, { mode: 'replace', content: 'r'.repeat(AGENT_MEMORY_MAX_CHARS + 1) }, cur.at, NOW).memory)
+      .toMatchObject({ by: 'task:w1', by_name: 'the task "W"', by_at: cur.at, refused: { at: NOW } })
   })
 
   it('Main, a lead and a leader keep one; a plain worker does not', () => {
@@ -302,11 +312,92 @@ describe('the MEMORY.md route and the task lists', () => {
     await updateTaskRaw(lead.id, { agent_memory: { text: '# Garden\n- one', at: NOW } } as never)
   })
 
-  it("refuses another task's session", async () => {
+  // 2026-10-27, the user: "all human action can be done by agent also". A person writes any
+  // task's MEMORY.md, so another task's session may too; the write is logged with who wrote it.
+  it("another task's session writes it too, logged with its session and task", async () => {
+    const { log } = await import('../../../src/logging/index.js')
+    const info = vi.spyOn(log.task, 'info')
+    ownCallers.set('worker-own-sid', worker.id)
     const res = await request(createApp()).put(`/api/v1/tasks/${lead.id}/agent-memory`)
-      .set('x-walnut-caller-sid', 'some-other-session').send({ content: 'mine now' })
-    expect(res.status).toBe(403)
-    expect((await getTask(lead.id)).agent_memory?.text).toBe('# Garden\n- one')
+      .set('x-walnut-caller-sid', 'worker-own-sid').send({ content: 'Fence paint arrives Friday' })
+    expect(res.status).toBe(200)
+    const written = (await getTask(lead.id)).agent_memory!
+    expect(written.text).toMatch(/^# Garden\n- one\n- \d{4}-\d{2}-\d{2}: Fence paint arrives Friday$/)
+    expect(info).toHaveBeenCalledWith("agent memory written by another task's session", {
+      taskId: lead.id, mode: 'append', callerSid: 'worker-own-sid', callerTaskId: worker.id, chars: res.body.chars,
+    })
+    // The writer is on the file, so the owner reading it back (the ask, a compaction) is told whose it was.
+    expect(written).toMatchObject({ by: `task:${worker.id}`, by_name: 'the task "Fix the fence"' })
+    expect(res.body.memory).toMatchObject({ by: `task:${worker.id}`, by_name: 'the task "Fix the fence"' })
+    const note = `Last written by the task "Fix the fence" at ${written.at}.`
+    expect(agentMemoryPrompt(written, 'Garden lead')).toContain(`</own_memory>\n${note}`)
+    expect(agentMemoryAfterCompaction({ title: 'Garden lead', agent_memory: written })).toContain(`agent_memory_write changes it):\n${note}\n# Garden`)
+    // Its own session's write clears the writer and logs no such line.
+    info.mockClear()
+    ownCallers.set('lead-own-sid', lead.id)
+    const own = await request(createApp()).put(`/api/v1/tasks/${lead.id}/agent-memory`)
+      .set('x-walnut-caller-sid', 'lead-own-sid').send({ content: '# Garden\n- one', mode: 'replace' })
+    expect(own.status).toBe(200)
+    expect(info.mock.calls.filter(([msg]) => String(msg).includes('another task'))).toEqual([])
+    const cleared = (await getTask(lead.id)).agent_memory!
+    expect(cleared).not.toHaveProperty('by')
+    expect(cleared).not.toHaveProperty('by_name')
+    expect(agentMemoryPrompt(cleared, 'Garden lead')).not.toContain('Last written by')
+    // A person's write is recorded as the user's, with no name.
+    const person = await request(createApp()).put(`/api/v1/tasks/${lead.id}/agent-memory`).send({ content: '# Garden\n- one', mode: 'replace' })
+    expect(person.status).toBe(200)
+    const byPerson = (await getTask(lead.id)).agent_memory!
+    expect(byPerson.by).toBe('human')
+    expect(byPerson).not.toHaveProperty('by_name')
+    expect(agentMemoryWriterNote(byPerson)).toBe(`Last written by the user at ${byPerson.at}.`)
+    info.mockRestore()
+    await updateTaskRaw(lead.id, { agent_memory: { text: '# Garden\n- one', at: NOW } } as never)
+  })
+
+  // 2026-10-27 review: the owner appends at every turn end, so an append must not erase the
+  // record of a worker's write; only the owner rewriting the whole file does.
+  it("the owner's turn-end entry keeps a worker's record; the owner replacing the file clears it", async () => {
+    ownCallers.set('worker-own-sid', worker.id)
+    ownCallers.set('lead-own-sid', lead.id)
+    const put = await request(createApp()).put(`/api/v1/tasks/${lead.id}/agent-memory`)
+      .set('x-walnut-caller-sid', 'worker-own-sid').send({ content: 'Paint is blue, not green' })
+    expect(put.status).toBe(200)
+    const byWorker = (await getTask(lead.id)).agent_memory!
+    expect(byWorker).toMatchObject({ by: `task:${worker.id}`, by_name: 'the task "Fix the fence"', by_at: byWorker.at })
+    const note = `Last written by the task "Fix the fence" at ${byWorker.at}.`
+
+    // The lead's own turn end appends an entry: the worker's record and its time stay.
+    __resetTriageRateLimiter()
+    const fake = fakeSession(LEAD_SID, REPORT('unchanged', 'append: Order the blue paint.'))
+    await runTriage(payload(LEAD_SID, await getTask(lead.id)))
+    expect(fake.askSideQuestion.mock.calls[0]![0] as string).toContain(`</own_memory>\n${note}`)
+    const afterAppend = (await getTask(lead.id)).agent_memory!
+    expect(afterAppend.text).toMatch(/Paint is blue, not green\n- \d{4}-\d{2}-\d{2}: Order the blue paint\.$/)
+    expect(afterAppend).toMatchObject({ by: `task:${worker.id}`, by_name: 'the task "Fix the fence"', by_at: byWorker.at })
+    expect(agentMemoryAfterCompaction({ title: 'Garden lead', agent_memory: afterAppend })).toContain(note)
+    // Its own PUT append keeps it too.
+    await request(createApp()).put(`/api/v1/tasks/${lead.id}/agent-memory`).set('x-walnut-caller-sid', 'lead-own-sid').send({ content: 'one more' })
+    expect(agentMemoryWriterNote((await getTask(lead.id)).agent_memory)).toBe(note)
+
+    // The lead replaces the whole file: every line is its own now, and the note is gone.
+    const replaced = await request(createApp()).put(`/api/v1/tasks/${lead.id}/agent-memory`)
+      .set('x-walnut-caller-sid', 'lead-own-sid').send({ content: '# Garden\n- one', mode: 'replace' })
+    expect(replaced.status).toBe(200)
+    const mine = (await getTask(lead.id)).agent_memory!
+    expect(mine).toEqual({ text: '# Garden\n- one', at: mine.at })
+    expect(agentMemoryAfterCompaction({ title: 'Garden lead', agent_memory: mine })).not.toContain('Last written by')
+    expect(agentMemoryPrompt(mine, 'Garden lead')).not.toContain('Last written by')
+    await updateTaskRaw(lead.id, { agent_memory: { text: '# Garden\n- one', at: NOW } } as never)
+  })
+
+  it('names a writer as the user reads it, whitespace collapsed, at most 60 characters', () => {
+    expect(agentMemoryWriterName({ title: 'Main', org_role: 'main' } as Task)).toBe('the CEO')
+    expect(agentMemoryWriterName({ title: 'Growth lead', org_role: 'lead', org_name: '  Growth \n team ' } as Task)).toBe('the Growth team VP')
+    expect(agentMemoryWriterName({ title: 'Fix   the\tfence' } as Task)).toBe('the task "Fix the fence"')
+    const long = agentMemoryWriterName({ title: 'w'.repeat(200) } as Task)
+    expect(long.length).toBe(60)
+    expect(long).toMatch(/^the task "w+\u2026"$/)
+    expect(agentMemoryWriterName(undefined)).toBe('an agent')
   })
 
   it('a completed task keeps its file (409), so the write never announces the completion again', async () => {

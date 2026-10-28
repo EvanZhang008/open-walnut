@@ -873,12 +873,13 @@ export interface Task {
    *  project with its own tasks; this lead is its contact. Payload blob,
    *  local-only, never pushed to sync backends. */
   org_leads?: string[];
-  /** Main or a lead only: the user's own standing instructions for it, written on the Org page
-   *  (src/core/org/org-node-edit.ts). Its session prompt carries them after its role line
-   *  (session-context.ts), and a running session hears an edit through the instruction notice.
-   *  `text` '' = cleared. Payload blob, local-only, never pushed to sync backends; an older
-   *  Walnut ignores it. */
-  org_instructions?: { text: string; at: string };
+  /** Main or a lead only: its standing instructions as written on the Org page or through the org
+   *  ops (src/core/org/org-node-edit.ts), by the user or an agent (`by`: 'human' | 'agent' |
+   *  `task:<id>`, with `by_name` as the user reads it; no `by` = the user). Its session prompt
+   *  carries them after its role line (session-context.ts), and a running session hears an edit
+   *  through the instruction notice. `text` '' = cleared. Payload blob, local-only, never pushed to
+   *  sync backends; an older Walnut ignores it and its extra fields. */
+  org_instructions?: { text: string; at: string; by?: 'human' | 'agent' | `task:${string}`; by_name?: string };
   /** A lead the user made as a VP to put projects under (the org chart's "New VP"): its own
    *  project is only its home, so the chart lists that project only while it has open work.
    *  Payload blob, local-only; an older Walnut ignores it. */
@@ -913,8 +914,11 @@ export interface Task {
    *  (FOR_USER_BRIEF), shown above its chat on the Org page. Local-only, payload blob. */
   brief?: TaskBrief;
   /** The agent's own MEMORY.md (Main, a lead, a leader): its working memory, not shown to the
-   *  user by default and not Walnut's global MEMORY.md (src/core/sessions/agent-memory.ts). */
-  agent_memory?: { text: string; at: string; refused?: { at: string; chars: number } };
+   *  user by default and not Walnut's global MEMORY.md (src/core/sessions/agent-memory.ts).
+   *  `by` / `by_name` / `by_at`: the latest write by someone other than the task's own session (the
+   *  user, another task), so the owner never reads another's lines as its own. The owner's appends
+   *  keep it; only the owner replacing the whole file clears it. */
+  agent_memory?: { text: string; at: string; refused?: { at: string; chars: number }; by?: 'human' | 'agent' | `task:${string}`; by_name?: string; by_at?: string };
   /** Task-level working directory override. Takes precedence over project default_cwd in session resolution. */
   cwd?: string;
   /** Set by the cwd rename detector / turn-end check when task.cwd no longer exists on disk.

@@ -11,8 +11,10 @@
  *    dragging them there (setProjectVp), as under any VP.
  *  - A VP's name is `org_name` (shown as "<name> VP", and an agent may address it by it); the
  *    title stays its session's own, which its turn-end topic may grow. The CEO keeps its name.
- *  - Instructions are the user's own standing words for the CEO or a VP (Task.org_instructions).
- *    Its session prompt carries them (session-context.ts orgInstructionsLine), so a new or
+ *  - Instructions are the CEO's or a VP's standing instructions (Task.org_instructions), written
+ *    by the user or by any agent (2026-10-27, the user: "all human action can be done by agent
+ *    also"); each write records who wrote it (`by`, `by_name`), which the Org page shows and the
+ *    prompt names. Its session prompt carries them (session-context.ts orgInstructionsLine), so a new or
  *    resumed session reads them, and a running one is told an edit by the instruction notice.
  *    Once set, they are never removed, only cleared (`text: ''`): a session's stored prompt may
  *    still hold the old words, and only a newer version (the cleared one) tells it to drop them.
@@ -24,6 +26,23 @@ import { log } from '../../logging/index.js';
 import { bus, EventNames } from '../event-bus.js';
 import { OrgError, ensureLeadNow, leadDescription, orgTasks, withOrgLock } from './org-store.js';
 import { ORG_INSTRUCTIONS_MAX, isOrgMember, pickLead, pickOwnLead, projectKey } from './org-tree.js';
+import type { OrgInstructionsWriter } from './instructions-author.js';
+
+/** Who writes: the user, or an agent (its task, and its name as the user reads it). */
+export interface OrgWriter {
+  by: OrgInstructionsWriter;
+  byName?: string;
+}
+
+const USER: OrgWriter = { by: 'human' };
+
+/** A stamp of `text` by `writer`, now. A row the user wrote carries no name. */
+function stamp(text: string, writer: OrgWriter): NonNullable<Task['org_instructions']> {
+  return {
+    text, at: new Date().toISOString(), by: writer.by,
+    ...(writer.by !== 'human' && writer.byName ? { by_name: writer.byName } : {}),
+  };
+}
 
 export const ORG_NAME_MAX = 60;
 
@@ -93,14 +112,29 @@ function refuseTaken(tasks: readonly Task[], name: string, own?: { id?: string; 
   if (other) throw new OrgError('name_taken', 409, `"${name}" is already on the org chart (${other}): pick another name.`);
 }
 
-/** A closed lead coming back starts clean; words it was told before are cleared, not dropped. */
-function cleanSlate(task: Task | undefined): Partial<Task> {
+/**
+ * A closed lead coming back starts clean; words it was told before are cleared, not dropped,
+ * and the clear names who brought it back.
+ */
+function cleanSlate(task: Task | undefined, writer: OrgWriter): Partial<Task> {
   return {
     org_vp_only: null as unknown as boolean,
     org_name: null as unknown as string,
     org_leads: null as unknown as string[],
-    org_instructions: (task?.org_instructions ? { text: '', at: new Date().toISOString() } : null) as Task['org_instructions'],
+    org_instructions: (task?.org_instructions ? stamp('', writer) : null) as Task['org_instructions'],
   };
+}
+
+/**
+ * The user's own words are theirs until an agent says the user asked for the change, as a Board
+ * project status the user picked is (board_project_set override_user): an agent replacing or
+ * clearing them, directly or by bringing a closed VP back, passes `override_user`.
+ */
+function refuseUserWords(prior: Task['org_instructions'], writer: OrgWriter, override: boolean | undefined): void {
+  const userWrote = !!prior?.text.trim() && (!prior.by || prior.by === 'human');
+  if (writer.by !== 'human' && userWrote && !override) {
+    throw new OrgError('user_wrote', 409, 'The user wrote these instructions. Replace or clear them only when the user asked for it, and then pass override_user: true.');
+  }
 }
 
 export interface NewOrgNodeInput {
@@ -109,13 +143,16 @@ export interface NewOrgNodeInput {
   /** A new project only: its VP's name, when not the project's. */
   vpName?: unknown;
   instructions?: unknown;
+  /** An agent bringing back a closed VP whose instructions the user wrote says so (else 409 user_wrote). */
+  overrideUser?: unknown;
 }
 
 /**
  * A new project with its own VP (`vpOnly` false), or a new VP to put projects under. Returns its
- * lead. `human`: the user asked (a deleted project of that name comes back, as POST /projects does).
+ * lead. `human`: asked for by name, by the user or an agent (a deleted project of that name comes
+ * back, as POST /projects does); `writer`: who, for the instructions' stamp.
  */
-export async function createOrgNode(input: NewOrgNodeInput, vpOnly: boolean, opts: { human?: boolean } = {}): Promise<Task> {
+export async function createOrgNode(input: NewOrgNodeInput, vpOnly: boolean, opts: { human?: boolean; writer?: OrgWriter } = {}): Promise<Task> {
   const name = vpOnly ? cleanVpName(input.name) : oneLine(input.name, 'The project\'s name');
   const vpName = !vpOnly && typeof input.vpName === 'string' && input.vpName.trim() ? cleanVpName(input.vpName) : '';
   const instructions = input.instructions === undefined ? '' : cleanInstructions(input.instructions);
@@ -134,6 +171,8 @@ export async function createOrgNode(input: NewOrgNodeInput, vpOnly: boolean, opt
     }
     refuseTaken(tasks, name, { project: name });
     if (vpName) refuseTaken(tasks, vpName, { project: name });
+    // A closed lead comes back below with a clean slate: checked before anything is written.
+    if (own) refuseUserWords(own.org_instructions, opts.writer ?? USER, input.overrideUser === true);
     // A project the user deleted comes back on their explicit ask; a renamed one is not this one.
     const made = await tm.ensureProject(name, 'local', { writer: 'org-chart', human: opts.human === true }).catch((err: unknown) => {
       if (err instanceof tm.InvalidProjectNameError) throw new OrgError('bad_name', 400, err.message);
@@ -164,10 +203,10 @@ export async function createOrgNode(input: NewOrgNodeInput, vpOnly: boolean, opt
       });
       id = task.id;
     }
-    const fields: Partial<Task> = { ...cleanSlate(own) };
+    const fields: Partial<Task> = { ...cleanSlate(own, opts.writer ?? USER) };
     if (vpOnly) fields.org_vp_only = true;
     if (vpName && projectKey(vpName) !== key) fields.org_name = vpName;
-    if (instructions) fields.org_instructions = { text: instructions, at: new Date().toISOString() };
+    if (instructions) fields.org_instructions = stamp(instructions, opts.writer ?? USER);
     // A new lead is announced whole once it is written; a reopened one by its own updates.
     await tm.updateTaskRaw(id, fields, { emitEvent: !!own, source: 'api' });
     log.task.info('org: node made on the Org page', { taskId: id, project: made.name, vpOnly, named: !!vpName, reopened: !!own, instructions: instructions.length });
@@ -180,11 +219,13 @@ export async function createOrgNode(input: NewOrgNodeInput, vpOnly: boolean, opt
 export interface OrgNodeEdit {
   /** A VP's name; its project's name (or '') goes back to that. */
   name?: unknown;
-  /** The user's own instructions; '' (or null) clears them. */
+  /** The node's standing instructions; '' (or null) clears them. */
   instructions?: unknown;
+  /** An agent replacing or clearing words the user wrote says so (else 409 user_wrote). */
+  overrideUser?: unknown;
 }
 
-interface CleanEdit { name?: string; instructions?: string }
+interface CleanEdit { name?: string; instructions?: string; overrideUser?: boolean }
 
 /** The edit's own checks, before anything is written. */
 function cleanEdit(edit: OrgNodeEdit, role: string | undefined): CleanEdit {
@@ -194,11 +235,12 @@ function cleanEdit(edit: OrgNodeEdit, role: string | undefined): CleanEdit {
     out.name = edit.name === '' ? '' : cleanVpName(edit.name);
   }
   if (edit.instructions !== undefined) out.instructions = cleanInstructions(edit.instructions);
+  if (edit.overrideUser === true) out.overrideUser = true;
   return out;
 }
 
 /** editOrgNode's body, inside the org lock. */
-async function editNow(task: Task, edit: CleanEdit): Promise<Task> {
+async function editNow(task: Task, edit: CleanEdit, writer: OrgWriter): Promise<Task> {
   const tm = await import('../task-manager.js');
   const patch: Partial<Task> = {};
   if (edit.name !== undefined) {
@@ -212,13 +254,15 @@ async function editNow(task: Task, edit: CleanEdit): Promise<Task> {
     const text = edit.instructions;
     // Nothing set and nothing asked writes nothing; a clear of set words is a new version.
     if (text !== (task.org_instructions?.text ?? '') && (text || task.org_instructions)) {
-      patch.org_instructions = { text, at: new Date().toISOString() };
+      refuseUserWords(task.org_instructions, writer, edit.overrideUser);
+      patch.org_instructions = stamp(text, writer);
     }
   }
   if (Object.keys(patch).length) {
     await tm.updateTaskRaw(task.id, patch, { emitEvent: true, source: 'api' });
     log.task.info('org: node edited on the Org page', {
       taskId: task.id, role: task.org_role, named: 'org_name' in patch, instructions: patch.org_instructions?.text.length,
+      by: patch.org_instructions?.by,
     });
   }
   return tm.getTask(task.id);
@@ -234,10 +278,10 @@ async function orgNode(taskId: string): Promise<Task> {
 }
 
 /** Rename a VP, or set the CEO's or a VP's instructions. Unchanged fields write nothing. */
-export async function editOrgNode(taskId: string, edit: OrgNodeEdit): Promise<Task> {
+export async function editOrgNode(taskId: string, edit: OrgNodeEdit, writer: OrgWriter = USER): Promise<Task> {
   const task = await orgNode(taskId);
   const clean = cleanEdit(edit, task.org_role);
-  return withOrgLock(async () => editNow(await orgNode(taskId), clean));
+  return withOrgLock(async () => editNow(await orgNode(taskId), clean, writer));
 }
 
 /**
@@ -245,7 +289,7 @@ export async function editOrgNode(taskId: string, edit: OrgNodeEdit): Promise<Ta
  * team, never talked to). Everything is checked before the lead is made, so a refused edit leaves
  * no lead behind; a closed lead brought back for it starts clean, as one a new project reopens.
  */
-export async function editProjectVp(project: string, edit: OrgNodeEdit): Promise<Task> {
+export async function editProjectVp(project: string, edit: OrgNodeEdit, writer: OrgWriter = USER): Promise<Task> {
   const name = project.trim();
   if (!name || projectKey(name) === projectKey('Inbox')) throw new OrgError('no_lead_for_inbox', 400, 'The Inbox has no VP.');
   const clean = cleanEdit(edit, 'lead');
@@ -263,10 +307,12 @@ export async function editProjectVp(project: string, edit: OrgNodeEdit): Promise
     const home = target?.project ?? name;
     if (clean.name && projectKey(clean.name) !== projectKey(home)) refuseTaken(tasks, clean.name, { id: target?.id, project: home });
     // A new lead is announced by ensureLeadNow; a reopened one by its updates.
+    // A closed own lead comes back with a clean slate (below): the user's words in it are checked first.
+    if (target?.phase === 'COMPLETE' && before?.id === target.id) refuseUserWords(target.org_instructions, writer, clean.overrideUser);
     const lead = await ensureLeadNow(name);
     if (before?.phase === 'COMPLETE' && before.id === lead.id) {
-      await tm.updateTaskRaw(lead.id, cleanSlate(before), { emitEvent: true, source: 'api' });
+      await tm.updateTaskRaw(lead.id, cleanSlate(before, writer), { emitEvent: true, source: 'api' });
     }
-    return editNow(await tm.getTask(lead.id), clean);
+    return editNow(await tm.getTask(lead.id), clean, writer);
   });
 }

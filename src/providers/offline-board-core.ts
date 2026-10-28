@@ -66,7 +66,8 @@ export function createBoardOffline() {
   /**
    * Check one write against the board as this host sees it now. Ok: the args
    * to journal (`version` dropped: the server checks the text itself on
-   * replay). `by` is the writer's `task:<id>`.
+   * replay). `by` is the writer's `task:<id>` ('agent' for a session with no
+   * task); any session may write any board this host keeps, as online.
    */
   function prepare(board: OfflineSliceBoard | undefined, op: string, args: Record<string, unknown>, by: string): { ok: true; args: Record<string, unknown> } | BoardOpError {
     if (op === 'board_set') {

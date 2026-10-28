@@ -224,7 +224,7 @@ describe('the tunnel port, through a bare pipe of a tunnel', () => {
     await api('/api/expose', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ enabled: false }) })
   })
 
-  it('a session cannot change it', async () => {
+  it('a session cannot change it; it may press Retry', async () => {
     const res = await api('/api/expose', {
       method: 'PUT', headers: { 'content-type': 'application/json', 'x-walnut-caller-sid': 'sess-1' }, body: JSON.stringify({ enabled: true, provider: 'command' }),
     })
@@ -235,6 +235,13 @@ describe('the tunnel port, through a bare pipe of a tunnel', () => {
     })
     expect(viaConfig.status).toBe(403)
     expect((await exposeStatus()).enabled).toBe(false)
+    // Retry changes no setting, so a session on this machine may press it: the tunnel stays off.
+    const retry = await api('/api/expose/retry', { method: 'POST', headers: { 'x-walnut-caller-sid': 'sess-1' } })
+    expect(retry.status).toBe(200)
+    expect((await retry.json()).status).toMatchObject({ enabled: false })
+    expect((await exposeStatus()).enabled).toBe(false)
+    // A session on another host is not at this machine.
+    expect((await api('/api/expose/retry', { method: 'POST', headers: { 'x-walnut-caller-sid': 'sess-1', 'x-walnut-origin': 'host:devbox' } })).status).toBe(403)
     // A write that carries the section back unchanged is not a change.
     const current = (await (await api('/api/expose')).json()).settings
     expect(current.enabled).toBe(false)

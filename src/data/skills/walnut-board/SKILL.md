@@ -30,21 +30,45 @@ notes and read ticks are readable by you, task chips and section status show liv
 
 | Operation | What |
 |---|---|
-| `board_get {task?}` | The board html, every thread's messages, the user's notes (`marks`), the projects and their status (`status_by: "human"` is the user's pick), which points the user read (and which changed since), the user's answers, the reminders, and the live state of each task the board names. Read it before every edit. |
+| `board_get {task?}` | The board html, every thread's messages, the user's notes (`marks`), the projects and their status (`status_by: "human"` is the user's pick), which points were read (and which changed since), the answers to choices, the reminders, and the live state of each task the board names. A tick or an answer an agent made carries `by` and `by_name` (`text_by` for words); one without is the user's. Read it before every edit. |
 | `board_set {task?, html}` | Write the whole board. First version, or a rebuild. |
 | `board_edit {task?, edits: [{old, new}]}` | Replace exact strings. Each `old` must occur ONCE in the current html, or nothing is written and the error names the edit. This is the normal way to update. |
 | `board_post {task?, thread, text}` | Your answer or note in a section's thread. One message per post. The outcome names the new message id. |
-| `board_post_delete {task?, thread, id}` | Delete one of your own posts (a wrong or outdated answer). The user can delete any post from the Board tab. |
+| `board_post_delete {task?, thread, id, override_user?}` | Delete a post (a wrong or outdated answer, yours or another's). Anyone may delete any post; Walnut logs who did. A post the user wrote (author `user`) is refused (409 `user_wrote`) unless you pass `override_user: true`; do that only when the user asked for it. |
 | `board_project_set {task?, id, title?, status?, tasks?, summary?, latest?, next?, waiting?, meta?, delete?, override_user?}` | A project's status (`decide`, `wip`, `wait`, `done`, or `""` to clear), title, tasks and card text. The page recolors on its own. A status the user picked stays theirs: changing or removing it is refused unless you pass `override_user: true`. The Board tab's Overview shows every project as a card in the page's order: its status, `tasks` as live chips (a named task's own subtasks follow it; a team member no project names falls to "Other tasks" at the end, so name every task of an area), and your text: `summary` (what this area is, a few sentences), `latest` (the newest update; Walnut stamps its time), `next` (the next step and who takes it), `waiting` (a short tag, "3 CRs to deploy") and `meta` (a short count, "6 tickets"). Light markdown; `""` clears one. Set `latest` and `next` on every update, so the card is never staler than the page; Walnut shows each with its time and marks it old after a day. Plain words only (section 3). The card also shows the choices and threads inside the project's `data-project` section, and the user asks questions there: they arrive like a thread message on the thread with the project's id. |
-| `board_remind {task?, target, at, note?}` | A reminder on a choice or a thread (`at` is an ISO time, `""` clears). |
+| `board_remind {task?, target, at, note?, override_user?}` | A reminder on a choice or a thread (`at` is an ISO time, `""` clears). One the user set stays theirs: replacing or clearing it is refused (409 `user_wrote`) unless you pass `override_user: true` because the user asked. |
 | `board_card_set {task?, card, lane?, summary?, waiting_on?, override_user?}` | One worker's card on the Board's kanban. After a worker reports, set its `summary` (plain text, what the ticket is and where it stands); when the ticket moves in the process, set `lane` (an id from `board_get` `lanes_effective`); when it blocks on a CR, a team or a customer, set `waiting_on`. `""` clears a field. A card the user dragged keeps their lane: your lane is refused (409 `status_set_by_user`) and kept on the card as a suggestion the user can accept, unless you pass `override_user: true`. |
 | `board_lanes_set {task?, lanes: [{id?, name, kind}], override_user?}` | The kanban's whole lane list, in column order (kinds `todo`, `active`, `wait`, `review`, `done`; one `done` lane at least). Only when the team's process really differs from the template; the user edits lanes too, and your write over theirs is refused unless `override_user: true`. |
 
 **A team shares one board**: the nearest ancestor that has a board, else the root
 leader's. Every `board_*` call defaults to it, so a worker updates the shared board
 without naming the leader, and the outcome says when the board is the leader's. Pass
-`task` only to reach another board. Humans and any task in the leader's tree may write;
-nobody else.
+`task` only to reach another board. Anyone may write any board, the user and every
+session; Walnut records who wrote what.
+
+**What the user does on the page, you may do too**: tick a point, answer a choice,
+mark a section seen, and the rest below. Do it when the user said so (they answered
+that choice in chat, they told you they read it) or when the decision is yours to
+make, never to make the board look read or decided. There is no named op; use the
+`api` op on the board's task id. The Board shows the user that you did it (a tick or
+an answer "by the CEO", `by the task "..."`), and the user can change it back.
+What the user did stays theirs until the user asks you to change it: their answer
+(the pick, the words), their notes, their reminders and their posts are refused
+(409 `user_wrote`) unless you pass `override_user: true`, which says the user asked
+for it; never pass it otherwise. Ticking or unticking a point they read leaves their
+tick, and your seen marks are kept apart from theirs, so their "changed" dots stay
+until they look.
+
+| What | `walnut tools call api '{"method":..., "path":..., "body":...}'` |
+|---|---|
+| Tick a point read (or unread) | `PUT /api/v1/tasks/<board>/board/checks/<check>` `{"read":true,"hash":"<the point's hash from board_get>"}` |
+| Answer a choice | `PUT /api/v1/tasks/<board>/board/choices/<choice>` `{"option":"<value>"}` and/or `{"text":"..."}` (`""` takes a part back; a part the user gave needs `"override_user":true`). The board task's session hears it as a message from your task; answering your own board's choice tells no one. |
+| Write a note on a mark | `PUT /api/v1/tasks/<board>/board/marks/<mark>` `{"note":"..."}` (`""` clears; the user's note needs `"override_user":true`) |
+| Mark a section seen | `PUT /api/v1/tasks/<board>/board/seen/<section>` `{"hash":"..."}` |
+| Add a task from a lane | `POST /api/v1/tasks/<board>/board/cards` `{"title":"...","lane":"<lane id>"}` (a subtask of the board's task; it meets task_create's depth and title brakes, as every session's create does) |
+| Accept or dismiss a card's suggestion | `POST /api/v1/tasks/<board>/board/cards/<task>/suggestion` `{"action":"accept"}` |
+| Mark the kanban's cards seen | `PUT /api/v1/tasks/<board>/board/kanban-seen` `{"cards":"all"}` (your own baseline, `kanban_seen_agent`) |
+| Delete the whole board | `DELETE /api/v1/tasks/<board>/board` (Walnut keeps a copy in `boards/.deleted/` of its data directory, the newest 5 per task) |
 
 A board is one page per team. Never fork a second one; rewrite in place.
 
@@ -126,7 +150,7 @@ make sense to someone who has not seen your chat:
 - **Edit small.** One `board_edit` pass per change, several edits in one call when they belong together. Rebuild with `board_set` only when the structure changes.
 - **A user's question in a thread is three writes**: your answer with `board_post`, the change it caused in that section's points or status with `board_edit` / `board_project_set`, and one line about it in your chat reply (Walnut writes your task's note and work log from your session; there is no op for it). Walnut delivers the question into your session with the thread and the task it is about; answer in the thread, not only in chat.
 - **A thread is a conversation.** One message per post: never paste a history as one blob, post it message by message. Light markdown. The user answers in the thread's own composer (typed or by voice), never in your chat.
-- **Statuses, notes, read ticks and choices are the user talking to you without typing.** A status the user picks arrives in your session like a choice answer: "Waiting" or "Done" means stop asking about it, "Needs you" means they want it raised. It stays theirs; do not move it back on your next `board_project_set` unless the work itself moved, and then say why in the section. Read notes on every `board_get`. A changed point they had read needs nothing from you, they see it unread. A choice answer also arrives in your session: act on it, then update that section.
+- **Statuses, notes, read ticks and choices are the user talking to you without typing** (an answer another agent gave arrives from its task and says so). A status the user picks arrives in your session like a choice answer: "Waiting" or "Done" means stop asking about it, "Needs you" means they want it raised. It stays theirs; do not move it back on your next `board_project_set` unless the work itself moved, and then say why in the section. Read notes on every `board_get`. A changed point they had read needs nothing from you, they see it unread. A choice answer also arrives in your session: act on it, then update that section.
 - **When the user says "later", set a reminder** (`board_remind`, or they use the Remind me control). When it comes due Walnut tells you in your session and the board shows it due; raise that item with the user again.
 - **A worker's area belongs to the worker.** When a thread's question is about a task you lead, hand it over with `task_send` and show that task's live chip and last step in the section; do not investigate it yourself.
 - **Never mirror lanes in the page; the page is for what a card cannot say.** Where each ticket stands is its card (`board_card_set`); the page holds causes, decisions and explanations.

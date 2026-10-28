@@ -5,15 +5,18 @@
  * user picked, and a reminder that came due all reach the board task's session
  * through performSessionSend as the
  * human (no caller sid, no reply request), the way a human `task_send` does: a
- * stopped session is woken, a COMPLETE task reopens. Anything the user (or the
- * board's author) wrote is block-quoted, so nothing inside reads as Walnut's own
+ * stopped session is woken, a COMPLETE task reopens. A choice an AGENT answered
+ * goes the same way but from that agent's session (`callerSid`), so it arrives as
+ * a peer's message naming its task, under the peer rules (no reply request, a
+ * COMPLETE board task is not reopened by it). Anything the user (or the board's
+ * author) wrote is block-quoted, so nothing inside reads as Walnut's own
  * instruction.
  */
 
 import { log } from '../../logging/index.js';
 import { choiceSpecs, own, threadMeta } from './board-html.js';
 import { BOARD_PROJECT_STATUS_LABELS } from './board-items.js';
-import type { BoardChoice, BoardProject, BoardProjectStatus, BoardReminder } from './board-store.js';
+import type { BoardChoice, BoardProject, BoardProjectStatus, BoardReminder, BoardWriter } from './board-store.js';
 
 export type BoardDelivery =
   | { state: 'queued' | 'deferred'; sessionId: string }
@@ -62,11 +65,17 @@ export function buildBoardThreadPrompt(heading: string, thread: string, text: st
     + NOT_AN_ORDER;
 }
 
+/** Who wrote a part of an answer, as the board's session reads it: the user, or the agent's name. */
+function answeredBy(by: BoardWriter | undefined, name: string | undefined): string {
+  return !by || by === 'human' ? 'the user' : name || 'an agent';
+}
+
 /**
  * `On your Board the user chose option 2 "Run it now" (recommended was 1 "Wait
  * for the deploy") for "Deploy timing" (choice deploy-when, about task …)`, the
- * label quoted, the user's own words quoted below it when they wrote any (or
- * instead of it: "answered in their own words, picking no option"), and the next step.
+ * label quoted, the words quoted below it when there are any (or instead of it:
+ * "answered in their own words, picking no option"), and the next step. Each part
+ * names who wrote it: "the user", or the agent ("the CEO chose ...").
  */
 export async function buildChoicePrompt(html: string, choiceId: string, choice: BoardChoice): Promise<string> {
   const spec = own(choiceSpecs(html), choiceId);
@@ -74,6 +83,8 @@ export async function buildChoicePrompt(html: string, choiceId: string, choice: 
   const what = spec?.title ? ` for "${spec.title}"` : '';
   const where = `(choice ${choiceId}${await aboutTask(spec?.task)})`;
   const words = choice.text ? choice.text : '';
+  const picker = answeredBy(choice.by, choice.by_name);
+  const writer = answeredBy(choice.text_by, choice.text_by_name);
   let head: string;
   if (choice.option) {
     const index = options.findIndex((o) => o.value === choice.option);
@@ -86,10 +97,10 @@ export async function buildChoicePrompt(html: string, choiceId: string, choice: 
         ? ' (the recommended one)'
         : ` (recommended was ${r + 1} "${options[r].label}")`;
     }
-    head = `On your Board the user chose option ${num} "${label}"${recommended}${what} ${where}:\n\n${quote(`${num}. ${label}`)}\n\n`
-      + (words ? `and wrote in their own words:\n\n${quote(words)}\n\n` : '');
+    head = `On your Board ${picker} chose option ${num} "${label}"${recommended}${what} ${where}:\n\n${quote(`${num}. ${label}`)}\n\n`
+      + (words ? `and ${writer === picker ? '' : `${writer} `}wrote in their own words:\n\n${quote(words)}\n\n` : '');
   } else {
-    head = `On your Board the user answered${what} ${where} in their own words, picking no option:\n\n${quote(words)}\n\n`;
+    head = `On your Board ${writer} answered${what} ${where} in their own words, picking no option:\n\n${quote(words)}\n\n`;
   }
   return head
     + 'Act on that answer now, then update that section with board_edit (and its project with board_project_set if the status changed); '
@@ -117,7 +128,7 @@ export function buildProjectStatusPrompt(
   let was = '; it had no status in Walnut before (the page showed its own)';
   if (previous?.status) {
     const by = previous.status_by ?? previous.updated_by;
-    const who = by === 'human' ? 'by the user' : by === `task:${boardTaskId}` ? 'by you' : `by ${by.replace(/^task:/, 'task ')}`;
+    const who = by === 'human' ? 'by the user' : by === `task:${boardTaskId}` ? 'by you' : by === 'agent' ? 'by an agent' : `by ${by.replace(/^task:/, 'task ')}`;
     was = `; it was ${statusName(previous.status)}, set ${who}`;
   }
   return `On your Board the user set project ${name} to ${statusName(project.status)}${was}. `
@@ -132,7 +143,8 @@ export async function buildReminderPrompt(html: string, target: string, reminder
   const meta = spec ? null : threadMeta(html, target);
   const kind = spec ? 'choice' : meta ? 'thread' : 'item';
   const title = spec?.title || meta?.title;
-  const who = reminder.set_by === 'human' ? 'the user set' : `${reminder.set_by.replace(/^task:/, 'task ')} set for the user`;
+  const who = reminder.set_by === 'human' ? 'the user set'
+    : `${reminder.set_by === 'agent' ? 'an agent' : reminder.set_by.replace(/^task:/, 'task ')} set for the user`;
   const name = `${title ? `"${title}" ` : ''}(${kind} ${target}${await aboutTask(spec?.task ?? meta?.task)})`;
   const note = reminder.note ? `, note:\n\n${quote(reminder.note)}\n\n` : '.\n\n';
   const ask = 'Raise it with the user now: update that section and ask again if it still needs them '
@@ -140,15 +152,29 @@ export async function buildReminderPrompt(html: string, target: string, reminder
   return `A reminder ${who} on your Board is due: ${name}${note}${ask}${reminder.note ? ` ${NOT_AN_ORDER}` : ''}`;
 }
 
-/** Never throws: the board write already landed, so a send failure is reported, not raised. */
+/**
+ * Never throws: the board write already landed, so a send failure is reported, not
+ * raised. `callerSid` sends it as that session (an agent's answer); none = as the user.
+ * An agent's text never reopens a COMPLETE board task, whatever the caller is (a
+ * session, a session with no task, an env-less `walnut`): it is stored as
+ * `target_complete`, as a session's own send to a closed task is refused.
+ */
 export async function deliverBoardText(
   taskId: string,
   text: string,
   ctx: Record<string, unknown>,
+  opts: { callerSid?: string } = {},
 ): Promise<BoardDelivery> {
+  if (opts.callerSid !== undefined) {
+    const { getTask } = await import('../task-manager.js');
+    if ((await getTask(taskId).catch(() => null))?.phase === 'COMPLETE') {
+      log.web.info('board item stored but not delivered', { taskId, ...ctx, reason: 'target_complete' });
+      return { state: 'stored', reason: 'target_complete' };
+    }
+  }
   const { performSessionSend, SendError } = await import('../sessions/session-send-core.js');
   try {
-    const result = await performSessionSend({ to: taskId, text, callerSid: undefined, expectReply: false });
+    const result = await performSessionSend({ to: taskId, text, callerSid: opts.callerSid, expectReply: false });
     return { state: result.delivery, sessionId: result.targetSessionId };
   } catch (err) {
     // A SendError is a known state (e.g. the task was never started); anything else is a fault.

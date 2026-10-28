@@ -10,7 +10,7 @@
  *   C87  In a wait lane the same card says `Waiting 3d` and still counts as stale.
  *   C61  A message the user sends is not `New output`; the turn's output shows once.
  *   C62  Two windows count the same; one's Mark all seen reaches the other; a session
- *        cannot write the baseline (403 human_only).
+ *        may mark cards seen too, into its own baseline (with its `by`), never the user's.
  *   C63  A visit's end (the Page view, or 5 minutes hidden on a controlled clock)
  *        makes what was on screen the baseline; the chip's tooltip names that time.
  *   C88  What changed lists the changes in time order, inside the viewport, a row
@@ -178,7 +178,7 @@ test('C61: the user message is not New output; the turn output shows once, as th
   if (!board.cards?.[id]?.output_at) expect(foot).not.toContain('New output')
 })
 
-test('C62: two windows count the same, one window marking all seen reaches the other, a session cannot write it', async ({ page, browser }) => {
+test('C62: two windows count the same, one window marking all seen reaches the other, a session\'s seen leaves the user\'s', async ({ page, browser }) => {
   test.setTimeout(180_000)
   await seenAll()
   await leaderSet(team.all[10], { lane: 'investigating' })
@@ -201,11 +201,14 @@ test('C62: two windows count the same, one window marking all seen reaches the o
   await expect.poll(() => chipCount(chip(a, 'changed')), { timeout: 5_000 }).toBe(0)
   await expect.poll(() => chipCount(chip(b, 'changed')), { timeout: 2_500 }).toBe(0)
   await otherCtx.close()
+  const before = (await seenNow()).kanban_seen
   const res = await fetch(`${BASE}/api/v1/tasks/${team.leader}/board/kanban-seen`, {
     method: 'PUT', headers: { 'Content-Type': 'application/json', 'x-walnut-caller-sid': team.leaderSid }, body: JSON.stringify({ cards: 'all' }),
   })
-  expect(res.status).toBe(403)
-  expect(JSON.stringify(await res.json())).toContain('human_only')
+  expect(res.status).toBe(200)
+  expect(((await res.json()) as { kanban_seen?: { by?: string } }).kanban_seen?.by).toBe(`task:${team.leader}`)
+  // The user's own baseline did not move.
+  expect((await seenNow()).kanban_seen).toEqual(before)
 })
 
 test('C63: a visit that ends (the Page view) makes what was shown the baseline; later changes still count', async ({ page }) => {

@@ -64,17 +64,22 @@ async function sendLocalError(res: Response, next: NextFunction, err: unknown): 
 }
 
 /**
- * A session stopping or restarting a session it may not touch (itself, its own
- * lead, Main): 409 with the reason (core/sessions/session-control-guard.ts).
- * Humans send no caller id, so the panel's Stop and Restart are never refused.
+ * A session stopping or restarting itself: 409 own_session with the reason
+ * (core/sessions/session-control-guard.ts). It may stop or restart any other
+ * session, its lead's and Main's included; that call is logged with the caller's
+ * session and task. Humans send no caller id, so the panel's Stop and Restart
+ * are never refused.
  */
 async function refuseSessionControl(req: Request, res: Response, sessionId: string, action: 'stop' | 'restart'): Promise<boolean> {
   const raw = req.headers['x-walnut-caller-sid']
-  const { sessionControlRefusal } = await import('../../core/sessions/session-control-guard.js')
-  const refusal = await sessionControlRefusal(Array.isArray(raw) ? raw[0] : raw, sessionId, action)
-  if (!refusal) return false
-  sendError(res, 409, refusal.code, refusal.message)
-  return true
+  const { sessionControlCheck } = await import('../../core/sessions/session-control-guard.js')
+  const { refusal, actor } = await sessionControlCheck(Array.isArray(raw) ? raw[0] : raw, sessionId, action)
+  if (refusal) {
+    sendError(res, 409, refusal.code, refusal.message)
+    return true
+  }
+  if (actor) log.session.info(`session ${action} asked by another session`, { sessionId, action, ...actor })
+  return false
 }
 
 /** The frozen { session } row for a mode the companion applied on the session's host. */

@@ -155,7 +155,7 @@ describe('PUT /tasks/:id/board/lanes', () => {
     expect(over.json.lanes).toHaveLength(6)
   })
 
-  it('error bodies: no done lane 400 needs_done_lane, not an array 400, an outsider 403, stale editor 409 changed_since', async () => {
+  it('error bodies: no done lane 400 needs_done_lane, not an array 400, stale editor 409 changed_since; an outsider writes', async () => {
     const t = await makeTeam('Lane errors')
     const noDone = await call('PUT', b(t.leader, '/lanes'), { body: { lanes: [{ name: 'Open', kind: 'todo' }] } })
     expect([noDone.status, noDone.json.error.code]).toEqual([400, 'needs_done_lane'])
@@ -164,8 +164,10 @@ describe('PUT /tasks/:id/board/lanes', () => {
     expect([notArray.status, notArray.json.error.code]).toEqual([400, 'bad_request'])
     const tooMany = await call('PUT', b(t.leader, '/lanes'), { body: { lanes: Array.from({ length: 13 }, (_, i) => ({ name: `L${i}`, kind: 'done' })) } })
     expect([tooMany.status, tooMany.json.error.code, tooMany.json.max]).toEqual([400, 'bad_request', 12])
+    // Any session writes any board's lanes; the writer is recorded.
     const outsider = await call('PUT', b(t.leader, '/lanes'), { body: { lanes: [{ name: 'Done', kind: 'done' }] }, sid: t.sid.outsider })
-    expect([outsider.status, outsider.json.error.code]).toEqual([403, 'not_in_team'])
+    expect(outsider.status).toBe(200)
+    expect((await getBoard(t.leader))!.lanes_by).toBe(`task:${t.outsider}`)
     await call('PUT', b(t.leader, '/lanes'), { body: { lanes: [{ name: 'Open', kind: 'todo' }, { name: 'Done', kind: 'done' }] } })
     const stale = await call('PUT', b(t.leader, '/lanes'), { body: { lanes: [{ name: 'Done', kind: 'done' }], if_unchanged_since: '' } })
     expect([stale.status, stale.json.error.code]).toEqual([409, 'changed_since'])
@@ -191,8 +193,14 @@ describe('PUT /tasks/:id/board/cards/:task', () => {
     const after = (await call('GET', `${b(t.leader)}?fields=kanban`)).json.cards[t.a]
     expect(after).toMatchObject({ lane: 'waiting-cr', lane_by: 'human', lane_suggested: { lane: 'mitigating', by: t.leader } })
     expect(after.summary).toBeUndefined()
+    // A session answers a suggestion as the user would; the move is the session's.
     const sessionAnswer = await call('POST', b(t.leader, `/cards/${t.a}/suggestion`), { body: { action: 'accept' }, sid: t.sid.leader })
-    expect([sessionAnswer.status, sessionAnswer.json.error.code]).toEqual([403, 'human_only'])
+    expect(sessionAnswer.status).toBe(200)
+    expect(sessionAnswer.json).toMatchObject({ card: { lane: 'mitigating', lane_by: `task:${t.leader}` }, lane_effective: 'mitigating' })
+    expect(sessionAnswer.json.card.lane_suggested).toBeUndefined()
+    // The user puts it back; the leader suggests again; the user's accept is the user's move.
+    await call('POST', b(t.leader, `/cards/${t.a}/move`), { body: { lane: 'waiting-cr', order: [t.a] } })
+    expect((await call('PUT', b(t.leader, `/cards/${t.a}`), { body: { lane: 'mitigating' }, sid: t.sid.leader })).status).toBe(409)
     const accepted = await call('POST', b(t.leader, `/cards/${t.a}/suggestion`), { body: { action: 'accept' } })
     expect(accepted.status).toBe(200)
     expect(accepted.json).toMatchObject({ card: { lane: 'mitigating', lane_by: 'human' }, lane_effective: 'mitigating' })
@@ -310,27 +318,60 @@ describe('POST /tasks/:id/board/cards', () => {
     expect(k.cards[made.id]).toMatchObject({ lane: 'investigating' })
     expect((await call('POST', b(t.leader, '/cards'), { body: { title: 5 } })).status).toBe(400)
     expect((await call('POST', b(t.leader, '/cards'), { body: { title: 'x', tags: 'sev:2' } })).status).toBe(400)
-    // A session files work with task_create (placement, depth and title brakes); this route is the user's Add task.
-    for (const sid of [t.sid.leader, t.sid.outsider]) {
-      const refused = await call('POST', b(t.leader, '/cards'), { body: { title: 'x' }, sid })
-      expect([refused.status, refused.json.error.code]).toEqual([403, 'human_only'])
+    // A session adds one as the user would (with task_create's depth and title brakes); the card is the session's.
+    for (const [sid, by] of [[t.sid.leader, t.leader], [t.sid.outsider, t.outsider]]) {
+      const bySession = await call('POST', b(t.leader, '/cards'), { body: { title: 'Filed by a session' }, sid })
+      expect(bySession.status).toBe(201)
+      expect(bySession.json.card).toMatchObject({ lane_by: `task:${by}` })
+      expect((await getTask(bySession.json.task.id)).parent_task_id).toBe(t.leader)
     }
+  })
+
+  it('the brakes are task_create\'s: every session (a worker, a Personal AI ask, a task-less one) is braked, the user never', async () => {
+    const t = await makeTeam('Brakes')
+    // Three levels below the top: one more subtask would be a fourth.
+    const deep1 = await task('Brakes depth two', t.a)
+    const deep = await task('Brakes depth three', deep1)
+    const { task: ask } = await addTask({ title: 'Ask about the cache', project: 'Ask Walnut' })
+    const askSid = await sessionFor(ask.id, 'Ask about the cache')
+    const untrackedSid = await sessionFor('', 'No task')
+    const long = 'Investigate why the checkout latency doubled after the cache change went out on Tuesday night'
+    for (const sid of [t.sid.worker, askSid, untrackedSid]) {
+      const braked = await call('POST', b(deep, '/cards'), { body: { title: 'Too deep' }, sid })
+      expect([braked.status, braked.json.error?.code]).toEqual([409, 'subtask_too_deep'])
+      const cut = await call('POST', b(t.leader, '/cards'), { body: { title: long }, sid })
+      expect(cut.status).toBe(201)
+      expect(cut.json.task.title).not.toBe(long)
+      expect(cut.json.task.description).toBe(long)
+    }
+    const free = await call('POST', b(deep, '/cards'), { body: { title: long } })
+    expect(free.status).toBe(201)
+    expect(free.json.task).toMatchObject({ title: long, parent_task_id: deep })
   })
 })
 
 describe('PUT /tasks/:id/board/kanban-seen', () => {
-  it('humans only; the baseline answers and reaches every pane as kind seen with kanban true (C62 server half)', async () => {
+  it('a session writes its own baseline (with by), never the user\'s; the user\'s answers and reaches every pane as kind seen with kanban true (C62 server half)', async () => {
     const t = await makeTeam('Seen')
-    const refused = await call('PUT', b(t.leader, '/kanban-seen'), { body: { cards: 'all' }, sid: t.sid.leader })
-    expect([refused.status, refused.json.error.code]).toEqual([403, 'human_only'])
+    const bySession = await call('PUT', b(t.leader, '/kanban-seen'), { body: { cards: 'all' }, sid: t.sid.leader })
+    expect(bySession.status).toBe(200)
+    expect(bySession.json.kanban_seen).toMatchObject({ by: `task:${t.leader}` })
+    // The user has not looked: their baseline is still none.
+    const before = (await call('GET', `${b(t.leader)}?fields=kanban`)).json
+    expect(before.kanban_seen).toBeNull()
+    expect(before.kanban_seen_agent).toEqual(bySession.json.kanban_seen)
     events = []
     const ok = await call('PUT', b(t.leader, '/kanban-seen'), { body: { cards: 'all' } })
     expect(ok.status).toBe(200)
+    expect(ok.json.kanban_seen).not.toHaveProperty('by')
     expect(Object.keys(ok.json.kanban_seen.cards).sort()).toEqual([t.a, t.c, t.old].sort())
     expect(ok.json.kanban_seen.cards[t.old].lane).toBe('resolved')
     expect(events).toContainEqual({ taskId: t.leader, kind: 'seen', kanban: true, version: 0 })
     const got = (await call('GET', `${b(t.leader)}?fields=kanban`)).json.kanban_seen
     expect(got).toEqual(ok.json.kanban_seen)
+    // A session's later look leaves the user's baseline where it is.
+    expect((await call('PUT', b(t.leader, '/kanban-seen'), { body: { cards: 'all' }, sid: t.sid.leader })).status).toBe(200)
+    expect((await call('GET', `${b(t.leader)}?fields=kanban`)).json.kanban_seen).toEqual(ok.json.kanban_seen)
     const bad = await call('PUT', b(t.leader, '/kanban-seen'), { body: { cards: 7 } })
     expect(bad.status).toBe(400)
   })

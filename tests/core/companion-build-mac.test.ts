@@ -539,10 +539,16 @@ describe('/api/cloud/companion-build', () => {
     expect(await off.json()).toMatchObject({ state: 'off', autoUpdate: false })
   })
 
-  it('POST /retry is for the person at this machine only', async () => {
-    const refused = await fetch(`${base}/retry`, { method: 'POST', headers: { 'x-walnut-caller-sid': 'a-session' } })
+  // Retry changes no setting, so a session on this machine may press it as the person may
+  // (2026-10-27); a caller on another host is not at this machine.
+  it('POST /retry is for callers on this machine, the person or a session', async () => {
+    const refused = await fetch(`${base}/retry`, { method: 'POST', headers: { 'x-walnut-caller-sid': 'a-session', 'x-walnut-origin': 'host:devbox' } })
     expect(refused.status).toBe(403)
     box.running = { id: h.mine, version: '0.6.14', commit: '5408d5875', base: false, trial: false }
+    const bySession = await fetch(`${base}/retry`, { method: 'POST', headers: { 'x-walnut-caller-sid': 'a-session' } })
+    expect(bySession.status).toBe(200)
+    await tickCompanionBuild('retry')
+    expect(companionBuildView().state).toBe('current')
     const ok = await fetch(`${base}/retry`, { method: 'POST' })
     expect(ok.status).toBe(200)
     await tickCompanionBuild('retry')

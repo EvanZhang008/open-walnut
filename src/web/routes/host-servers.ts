@@ -9,8 +9,10 @@
  *
  * Reading is for any caller the auth middleware let in. Changing it installs and
  * runs a program on the host and can put a tunnel in front of it, so it is for
- * the person at this machine (routes/expose.ts isPersonAtThisMachine). A replica
- * has no host servers: 404.
+ * the person at this machine (routes/expose.ts isPersonAtThisMachine). The two
+ * retries change no setting (they redo what the person set up), so a session on
+ * this machine may ask for them too (isOnThisMachine). A replica has no host
+ * servers: 404.
  */
 
 import { Router, type Request, type Response, type NextFunction } from 'express'
@@ -23,7 +25,7 @@ import { getHostServerManager, hostServerSettingsFrom, withThisWalnutTunnel } fr
 import { emitConfigChanged } from '../../core/config-broadcast.js'
 import { log } from '../../logging/index.js'
 import { DEFAULT_COPY_CHOICE, copyChoiceChanged, copyChoiceFrom } from '../../core/replication/kinds/copy-kind.js'
-import { isPersonAtThisMachine } from './expose.js'
+import { isOnThisMachine, isPersonAtThisMachine } from './expose.js'
 
 export const hostServersRouter = Router()
 
@@ -148,12 +150,19 @@ hostServersRouter.put('/:hostKey', async (req: Request, res: Response, next: Nex
   }
 })
 
+/** A session's retry, recorded: the person's own click needs no line. */
+function noteSessionRetry(req: Request, what: string, hostKey: string): void {
+  const callerSid = req.get('x-walnut-caller-sid')
+  if (callerSid) log.web.info(`host server: ${what} asked by a session`, { host: hostKey, callerSid })
+}
+
 hostServersRouter.post('/:hostKey/retry', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    if (!isPersonAtThisMachine(req)) return refuse(res)
+    if (!isOnThisMachine(req)) return refuse(res)
     const hostKey = String(req.params.hostKey)
     if (!HOST_KEY.test(hostKey) || !(await hostEntry(hostKey))) { res.status(404).json({ error: `No host named ${hostKey}` }); return }
-    // The person's Retry: a failed install and a build that did not answer are tried again.
+    noteSessionRetry(req, 'retry', hostKey)
+    // The Retry (the person's, or a session's on this machine): a failed install and a build that did not answer are tried again.
     void getHostServerManager()?.reconcile(hostKey, { retry: true })
     res.json({ host: await hostEntry(hostKey) })
   } catch (err) {
@@ -163,9 +172,10 @@ hostServersRouter.post('/:hostKey/retry', async (req: Request, res: Response, ne
 
 hostServersRouter.post('/:hostKey/expose/retry', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    if (!isPersonAtThisMachine(req)) return refuse(res)
+    if (!isOnThisMachine(req)) return refuse(res)
     const hostKey = String(req.params.hostKey)
     if (!HOST_KEY.test(hostKey) || !(await hostEntry(hostKey))) { res.status(404).json({ error: `No host named ${hostKey}` }); return }
+    noteSessionRetry(req, 'tunnel retry', hostKey)
     await getHostServerManager()?.retryExpose(hostKey).catch((err: Error) => { throw Object.assign(err, { status: 502 }) })
     res.json({ host: await hostEntry(hostKey) })
   } catch (err) {

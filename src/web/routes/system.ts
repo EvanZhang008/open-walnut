@@ -5,7 +5,8 @@
 import { Router } from 'express'
 import { getSystemHealth } from '../server.js'
 import { getDaemonPoolStatus, getConnectedDaemonConnection } from '../../providers/daemon-connection.js'
-import { isPersonAtThisMachine } from './expose.js'
+import { isOnThisMachine } from './expose.js'
+import { log } from '../../logging/index.js'
 import { getConfig } from '../../core/config-manager.js'
 import { CLOUD_MODE } from '../../constants.js'
 import { validateBearerCredential } from '../middleware/auth.js'
@@ -78,8 +79,10 @@ systemRouter.get('/desktop-update', async (req, res) => {
   const empty = { available: false, token: null, version: null }
   // Only a page that shows the update in its bottom notice asks with `notice=1`.
   // An older page would show it as a sidebar item; it hears nothing, and its own
-  // "Walnut updated · Reload" notice brings it to the page that asks.
-  if (req.query.notice !== '1' || !isPersonAtThisMachine(req) || process.platform !== 'darwin') { res.json(empty); return }
+  // "Walnut updated · Reload" notice brings it to the page that asks. A session on
+  // this machine reads it too (it may restart the app as the person may); a paired
+  // device or the companion hears nothing.
+  if (req.query.notice !== '1' || !isOnThisMachine(req) || process.platform !== 'darwin') { res.json(empty); return }
   const daemon = getConnectedDaemonConnection('__local__')
   if (!daemon?.hasCapability('desktop-update-v1')) { res.json(empty); return }
   // The last answer, refreshed behind the request (desktop-update-cache.ts).
@@ -93,18 +96,30 @@ systemRouter.get('/desktop-update', async (req, res) => {
   }))
 })
 
+// A session on this machine may restart the app as the person may (2026-10-27, the
+// user: "all human action can be done by agent also"); the call is logged with it.
+// `force` is the page's word that the person checked every open window, which a
+// session cannot do: a session's restart always goes through the open-windows
+// guard, and the answer says when its `force` was ignored.
 systemRouter.post('/desktop-update/restart', async (req, res) => {
-  if (!isPersonAtThisMachine(req) || process.platform !== 'darwin') { res.status(403).json({ error: 'Restart is only available at this computer.' }); return }
+  if (!isOnThisMachine(req) || process.platform !== 'darwin') { res.status(403).json({ error: 'Restart is only available at this computer.' }); return }
   const daemon = getConnectedDaemonConnection('__local__')
   if (!daemon?.hasCapability('desktop-update-v1')) { res.status(503).json({ error: 'The local daemon is not ready.' }); return }
   const token = req.body?.token
   if (typeof token !== 'string' || !token || token.length > 200) { res.status(400).json({ error: 'An update token is required.' }); return }
   try {
+    const callerSid = req.get('x-walnut-caller-sid')
+    const asked = req.body?.force === true
+    const forceIgnored = !!callerSid && asked
+    if (callerSid) log.web.info('desktop update: restart asked by a session', { callerSid, force: asked, forceIgnored })
+    const ignoredNote = forceIgnored
+      ? { forceIgnored: true, note: 'force was ignored: only the person at this computer can confirm the other open app windows. While one is open the app does not restart; ask the user.' }
+      : {}
     // force: the page checked every app window (or the user chose to restart anyway).
-    const result = await daemon.send('desktop.restart', { token, force: req.body?.force === true }, 7000)
+    const result = await daemon.send('desktop.restart', { token, force: asked && !callerSid }, 7000)
     if (result.ok && result.accepted) desktopUpdateCache.noteRestart()
-    if (!result.ok || !result.accepted) { res.status(409).json({ error: 'The installed update changed. Check again before restarting.' }); return }
-    res.status(202).json({ accepted: true })
+    if (!result.ok || !result.accepted) { res.status(409).json({ error: 'The installed update changed. Check again before restarting.', ...ignoredNote }); return }
+    res.status(202).json({ accepted: true, ...ignoredNote })
   } catch { res.status(503).json({ error: 'Could not request the app restart. Try again.' }) }
 })
 

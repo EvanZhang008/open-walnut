@@ -245,6 +245,27 @@ describe('the user\'s own instructions for the CEO or a VP', () => {
     await expect(editProjectVp('Nowhere', { name: 'x' })).rejects.toMatchObject({ code: 'unknown_project', status: 404 });
   });
 
+  it('an agent bringing back a closed VP whose instructions the user wrote says the user asked for it', async () => {
+    const agent = { by: 'task:t-agent' as const, byName: 'the task "Tidy"' };
+    await addTask({ title: 'Rake the leaves', project: 'Orchard' });
+    const made = await editProjectVp('Orchard', { instructions: 'Pick on dry days.' });
+    expect(made.org_instructions).toMatchObject({ text: 'Pick on dry days.', by: 'human' });
+    await updateTask(made.id, { phase: 'COMPLETE' }, { source: 'api' });
+    // A rename would bring it back with a clean slate: refused, and nothing reopened.
+    await expect(editProjectVp('Orchard', { name: 'Grove' }, agent)).rejects.toMatchObject({ code: 'user_wrote', status: 409 });
+    expect((await listTasks()).find((t) => t.id === made.id)).toMatchObject({ phase: 'COMPLETE', org_instructions: { text: 'Pick on dry days.' } });
+    // Said so: it comes back, and the clear names the agent, not the user.
+    const back = await editProjectVp('Orchard', { name: 'Grove', overrideUser: true }, agent);
+    expect(back).toMatchObject({ id: made.id, phase: 'TODO', org_name: 'Grove', org_instructions: { text: '', by: 'task:t-agent', by_name: 'the task "Tidy"' } });
+    // A new project named after one whose closed VP holds the user's words: the same check.
+    const cellar = await createOrgNode({ name: 'Cellar', instructions: 'Keep it cool.' }, false);
+    await updateTask(cellar.id, { phase: 'COMPLETE' }, { source: 'api' });
+    await expect(createOrgNode({ name: 'Cellar' }, false, { writer: agent })).rejects.toMatchObject({ code: 'user_wrote' });
+    expect((await listTasks()).find((t) => t.id === cellar.id)?.phase).toBe('COMPLETE');
+    const again = await createOrgNode({ name: 'Cellar', overrideUser: true }, false, { writer: agent });
+    expect(again).toMatchObject({ id: cellar.id, org_instructions: { text: '', by: 'task:t-agent' } });
+  });
+
   it('an agent reaches a VP by the name the user gave it', async () => {
     const lead = await createOrgNode({ name: 'Greenhouse', vpName: 'Glass' }, false);
     expect((await resolveOrgContact('Glass VP')).task.id).toBe(lead.id);

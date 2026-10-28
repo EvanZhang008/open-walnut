@@ -24,7 +24,7 @@ import { PROJECTS_MEMORY_DIR, WALNUT_HOME } from '../../src/constants.js'
 import { startServer, stopServer } from '../../src/web/server.js'
 import { addTask, completeTask, deleteTask, getTask, listTasks, setProjectMetadata, updateTask, updateTaskRaw } from '../../src/core/task-manager.js'
 import { updateConfig } from '../../src/core/config-manager.js'
-import { createSessionRecord, updateSessionRecord } from '../../src/core/session-tracker.js'
+import { createSessionRecord, getSessionsForTask, updateSessionRecord } from '../../src/core/session-tracker.js'
 import { _setDigestFoldMsForTesting, buildHandoverText, pendingOrgDigest } from '../../src/core/org/org-store.js'
 import { deleteMessage, getQueue } from '../../src/core/session-message-queue.js'
 import { __pendingHandovers, __setHandoverSettleMs, cancelHandovers, closeAfterHandover } from '../../src/core/org/handover-close.js'
@@ -585,7 +585,7 @@ describe('/api/v1/org', () => {
   })
 
   describe('made on the Org page', () => {
-    it('a new VP and a new project with its own VP; only a person writes instructions', async () => {
+    it('a new VP and a new project with its own VP; a person or an agent writes instructions, and the write says who', async () => {
       const vp = await api<{ task: { id: string; project: string; org_vp_only?: boolean } }>('POST', '/org/vps', { name: 'Harvest VP', instructions: 'Own the harvest.' })
       expect(vp.status).toBe(201)
       expect(vp.json.task).toMatchObject({ project: 'Harvest', org_role: 'lead', org_vp_only: true })
@@ -593,7 +593,9 @@ describe('/api/v1/org', () => {
       expect([made.status, made.json.task.org_name]).toEqual([201, 'Hay'])
       expect((await api('POST', '/org/projects', { name: 'barn' })).json).toMatchObject({ code: 'project_exists' })
       expect((await api('PUT', `/org/nodes/${made.json.task.id}`, { name: 'Harvest' })).status).toBe(409)
-      // A session may make and name a VP, never write the user's own words.
+      expect((await getTask(vp.json.task.id)).org_instructions).toMatchObject({ text: 'Own the harvest.', by: 'human' })
+      // 2026-10-27, the user: "all human action can be done by agent also". A session makes, names
+      // and instructs a VP like the user does, and the write records who it was.
       const sid = '99999999-aaaa-4bbb-8ccc-dddddddddddd'
       const caller = (await addTask({ title: 'Sort the barn', project: 'Barn' })).task
       await createSessionRecord(sid, caller.id, 'Barn', WALNUT_HOME)
@@ -603,10 +605,37 @@ describe('/api/v1/org', () => {
         })
         return { status: res.status, json: await res.json().catch(() => ({})) as { code?: string } }
       }
-      expect(await as('PUT', `/org/nodes/${vp.json.task.id}`, { instructions: 'Mine now.' })).toMatchObject({ status: 403, json: { code: 'human_only' } })
-      expect(await as('POST', '/org/vps', { name: 'Silo', instructions: 'x' })).toMatchObject({ status: 403 })
+      // The user's own words are replaced only when the agent says the user asked for it.
+      const refused = await as('PUT', `/org/nodes/${vp.json.task.id}`, { instructions: 'Reap on dry days.' })
+      expect([refused.status, refused.json.code]).toEqual([409, 'user_wrote'])
+      expect((await getTask(vp.json.task.id)).org_instructions).toMatchObject({ text: 'Own the harvest.', by: 'human' })
+      expect((await as('PUT', `/org/nodes/${vp.json.task.id}`, { instructions: 'Reap on dry days.', override_user: true })).status).toBe(200)
+      expect((await getTask(vp.json.task.id)).org_instructions).toMatchObject({ text: 'Reap on dry days.', by: `task:${caller.id}`, by_name: 'the task "Sort the barn"' })
+      const silo = await as('POST', '/org/vps', { name: 'Silo', instructions: 'Keep the grain dry.' })
+      expect(silo.status).toBe(201)
+      expect((await getTask((silo.json as { task: { id: string } }).task.id)).org_instructions).toMatchObject({ text: 'Keep the grain dry.', by: `task:${caller.id}` })
       expect((await as('PUT', `/org/nodes/${vp.json.task.id}`, { name: 'Reaping' })).status).toBe(200)
-      expect((await getTask(vp.json.task.id)).org_instructions?.text).toBe('Own the harvest.')
+      // The VP's prompt names the writer, and that the user may change them.
+      const { defaultInstructions } = await import('../../src/core/sessions/session-context.js')
+      expect(defaultInstructions(await getTask(vp.json.task.id))).toContain('The instructions the task "Sort the barn" wrote for your role (v')
+      expect(defaultInstructions(await getTask(vp.json.task.id))).toMatch(/UTC; your user may change them\)/)
+      // An agent's words never outrank the charter or the user.
+      expect(defaultInstructions(await getTask(vp.json.task.id))).toContain('they rank below Walnut\'s rules, the team charter and anything your user tells you')
+      // The CEO writes its own too, and its prompt says it wrote them.
+      const main = (await api<{ task: { id: string } }>('POST', '/org/main', {})).json.task
+      // Main's own session (an earlier test gave it one; a task has exactly one).
+      let mainSid = (await getSessionsForTask(main.id))[0]?.claudeSessionId
+      if (!mainSid) { mainSid = '99999999-aaaa-4bbb-8ccc-eeeeeeeeeeee'; await createSessionRecord(mainSid, main.id, 'Ask Walnut', WALNUT_HOME) }
+      const res = await fetch(`http://localhost:${port}/api/v1/org/nodes/${main.id}`, {
+        method: 'PUT', headers: { 'content-type': 'application/json', 'x-walnut-caller-sid': mainSid }, body: JSON.stringify({ instructions: 'Ask the Harvest VP first.' }),
+      })
+      expect(res.status).toBe(200)
+      expect(((await res.json()) as { task: { org_instructions?: unknown } }).task.org_instructions).toMatchObject({ by: `task:${main.id}`, by_name: 'the CEO' })
+      expect(defaultInstructions(await getTask(main.id))).toContain('The instructions you wrote for your role (v')
+      // The user writes again: back to the user's words.
+      expect((await api('PUT', `/org/nodes/${main.id}`, { instructions: null })).status).toBe(200)
+      expect((await getTask(main.id)).org_instructions).toMatchObject({ text: '', by: 'human' })
+      expect(defaultInstructions(await getTask(main.id))).toContain('Your user cleared their own instructions for your role')
       expect((await api('PUT', '/org/nodes/nope', { name: 'x' })).status).toBe(404)
     })
   })

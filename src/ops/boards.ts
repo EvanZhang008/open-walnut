@@ -12,7 +12,11 @@
  * session's own task (GET /me, then GET /tasks/<it>/board/owner: the task itself
  * when it has a board, else the nearest ancestor with one, else the root of the
  * tree), so a worker updates its leader's board without naming the leader.
- * No op writes read ticks, choices or sections seen: those are the user's word.
+ * Naming `task` writes any other board: every session may write every board,
+ * and Walnut records the writer. What the user does on the page (tick a point,
+ * answer a choice, mark a section seen, add a lane task, answer a card
+ * suggestion, delete a board) an agent does through the `api` op on the same
+ * routes (board-v1.ts, board-kanban-v1.ts); the Board shows who did it.
  */
 import { z } from 'zod';
 import type { OpCall } from './core.js';
@@ -176,10 +180,11 @@ defineOp({
     'Read your team\'s Board (or the one of the task you name): its html, every chat thread with the user\'s ' +
     'messages and yours, the user\'s notes (under `marks`), the board\'s projects and their status (with who ' +
     'set it: status_by "human" is the user\'s pick), which points ' +
-    'the user ticked read (and which changed since), the user\'s answers to choices (an option, their own words ' +
-    'under `text`, or both), reminders, and the live ' +
-    'state of each task the board names. Read it before every edit. No board yet means a leader has not made ' +
-    'one: the walnut-board skill says how.',
+    'were ticked read (and which changed since), the answers to choices (an option, words under `text`, or ' +
+    'both), reminders, and the live state of each task the board names; a tick or an answer an agent made ' +
+    'carries `by` / `by_name` (`text_by` for the words), one with none is the user\'s. Read it before every edit. ' +
+    'No board yet means a leader has not made one: the walnut-board skill says how. Anything the user does on ' +
+    'the page you may do too, with the api op on its route (the skill lists them).',
   input: { task: TASK_ARG },
   handler: async (args, call) => {
     const target = await resolveBoardTask(args, call);
@@ -214,7 +219,7 @@ defineOp({
     'when the structure changes. For everything else use board_edit. The html may use <walnut-task id>, ' +
     '<walnut-thread id title>, <walnut-mark id>, <walnut-project id>, <walnut-check id>, ' +
     '<walnut-choice id options recommended title>, <walnut-strip>, <walnut-unread> and data-project="id" on a ' +
-    'section; the walnut-board skill has the template. Only the board\'s task and the tasks it leads may write.',
+    'section; the walnut-board skill has the template. Any session may write any board; Walnut records who wrote it.',
   input: {
     task: TASK_ARG,
     html: z.string().min(1).describe('The complete html document'),
@@ -300,13 +305,16 @@ defineOp({
   name: 'board_post_delete',
   title: 'Delete a post from a board thread',
   description:
-    'Delete one of your own posts from a thread of your team\'s Board (or of the task you name): a ' +
-    'wrong or outdated answer. board_post names the id it made; board_get lists every message id under ' +
-    '`threads`. A session may delete only its own posts; the user deletes any from the Board tab.',
+    'Delete one post from a thread of your team\'s Board (or of the task you name): a wrong or outdated ' +
+    'answer, yours or another\'s. board_post names the id it made; board_get lists every message id under ' +
+    '`threads`. Any session or the user may delete any post; Walnut logs who deleted it. A post the user ' +
+    'wrote (author "user") is refused (409 user_wrote) unless you pass override_user: true.',
   input: {
     task: TASK_ARG,
     thread: z.string().min(1).max(128).describe('The thread id (the <walnut-thread id> attribute)'),
     id: z.string().min(1).max(64).describe('The message id (bm-…)'),
+    override_user: z.boolean().optional().describe(
+      'true: delete a post the user wrote; without it the user\'s own posts stay'),
   },
   handler: async (args, call) => {
     const target = await resolveBoardTask(args, call);
@@ -314,7 +322,8 @@ defineOp({
     const id = String(args.id);
     const body = await call(
       'DELETE',
-      boardPath(target.taskId, `/threads/${encodeURIComponent(thread)}/messages/${encodeURIComponent(id)}`),
+      boardPath(target.taskId, `/threads/${encodeURIComponent(thread)}/messages/${encodeURIComponent(id)}`)
+        + (args.override_user === true ? '?override_user=true' : ''),
     ) as Record<string, unknown>;
     return withOutcome(
       { task_id: target.taskId, ...body },
@@ -392,12 +401,15 @@ defineOp({
     'Set (or clear) a reminder on one <walnut-choice> or <walnut-thread> of your team\'s Board (or of the task ' +
     'you name), for when the user says "later". When it comes due Walnut tells you in this session and the ' +
     'Board shows it due to the user; raise that item with the user then. One reminder per item; a new one ' +
-    'replaces it. The user sets them too, with the Remind me control.',
+    'replaces it. The user sets them too, with the Remind me control; one the user set is refused (409 ' +
+    'user_wrote) unless you pass override_user: true.',
   input: {
     task: TASK_ARG,
     target: z.string().min(1).max(128).describe('The choice or thread id'),
     at: z.string().describe('When, as an ISO-8601 time in the future (at most 90 days out); "" clears the reminder'),
     note: z.string().max(4096).optional().describe('What to raise, in a few words'),
+    override_user: z.boolean().optional().describe(
+      'true: replace or clear a reminder the user set; only when the user asked for it'),
   },
   handler: async (args, call) => {
     const target = await resolveBoardTask(args, call);
@@ -406,6 +418,7 @@ defineOp({
     const body = await call('PUT', boardPath(target.taskId, `/reminders/${encodeURIComponent(item)}`), {
       at: at || null,
       ...(typeof args.note === 'string' && args.note.trim() ? { note: args.note } : {}),
+      ...(args.override_user === true ? { override_user: true } : {}),
     }) as { reminder?: { at?: string } | null };
     return withOutcome(
       { task_id: target.taskId, ...body },

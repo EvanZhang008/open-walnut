@@ -25,6 +25,7 @@ import type { OrgRole, TaskPhase } from '../types.js';
 import { fallbackUserState, type UserState, type UserStatus } from '../user-status.js';
 // The team's news (its tasks' own words) rides the same import for the web (@open-walnut/org-tree).
 export * from './team-news.js';
+export * from './instructions-author.js';
 
 /** The fields the org reads off a task. */
 export interface OrgTaskLike {

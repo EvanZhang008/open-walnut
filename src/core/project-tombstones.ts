@@ -18,9 +18,11 @@
  *     naming it is FOLLOWED FORWARD to the survivor.
  *
  * A LIVE registry row always wins over a tombstone: the ledger is consulted only
- * at the moment a writer would MINT a new row. Explicit human creation
- * (POST /projects, the console's new-project gesture) clears the tombstone — that
- * is the only way back, and it is deliberately a human-only door.
+ * at the moment a writer would MINT a new row. An explicit create that names the
+ * project (POST /projects, the console's new-project gesture, the org chart's new
+ * project), the user's or an agent's, clears the tombstone: that is the only way
+ * back. A writer that only mentions the name (a sync pull, a task filed into it)
+ * never does.
  *
  * All writers are the FRAMEWORK (task-manager mutation paths), never plugin
  * hooks — a plugin that forgets a rule must not be able to break the invariant.

@@ -5,6 +5,7 @@
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import fs from 'node:fs/promises'
+import path from 'node:path'
 import { createMockConstants } from '../../helpers/mock-constants.js'
 
 vi.mock('../../../src/constants.js', () => createMockConstants('walnut-board-store'))
@@ -18,8 +19,12 @@ import {
   BoardError,
   _boardFilePath,
   applyBoardEdits,
+  DELETED_BOARD_COPIES,
+  _deletedBoardsDir,
   deleteBoard,
   deleteBoardMessage,
+  listBoardTaskIds,
+  removeBoard,
   editBoardHtml,
   extractTaskRefs,
   getBoard,
@@ -254,17 +259,36 @@ describe('deleting a post', () => {
     expect((await getBoard(T))!.threads['rc-1'].map((x) => x.id)).toEqual([m.user.id, m.leader.id])
   })
 
-  it('a session deleting someone else\'s post (the user\'s, its leader\'s) is 403 not_author and writes nothing', async () => {
+  it('a session deletes someone else\'s post too (its leader\'s), as the user may; an unnamed agent as well', async () => {
     const m = await seed()
-    const before = await rawFile()
     events = []
-    for (const id of [m.user.id, m.leader.id]) {
-      const err = await boardError(() => deleteBoardMessage(T, 'rc-1', id, { by: 'task:worker-1' }))
-      expect(err).toMatchObject({ code: 'not_author', statusCode: 403, details: { thread: 'rc-1', id } })
-      expect(err.message).toBe('A session may delete only its own posts')
+    expect(await deleteBoardMessage(T, 'rc-1', m.leader.id, { by: 'agent' })).toEqual(m.leader)
+    expect(await deleteBoardMessage(T, 'rc-1', m.worker.id, { by: 'task:leader-1' })).toEqual(m.worker)
+    expect((await getBoard(T))!.threads['rc-1']).toEqual([m.user])
+    expect(events).toHaveLength(2)
+  })
+
+  it('a post the user wrote needs override_user from a session (409 user_wrote, the post stays); with it, it goes', async () => {
+    const m = await seed()
+    events = []
+    for (const by of ['task:worker-1', 'agent'] as const) {
+      const err = await boardError(() => deleteBoardMessage(T, 'rc-1', m.user.id, { by }))
+      expect([err.statusCode, err.code, err.details]).toEqual([409, 'user_wrote', { thread: 'rc-1', id: m.user.id, author: 'user' }])
+      expect(err.message).toContain('override_user: true')
     }
-    expect(await rawFile()).toBe(before)
-    expect(events).toEqual([])
+    expect((await getBoard(T))!.threads['rc-1'].map((x) => x.id)).toContain(m.user.id)
+    expect(events).toHaveLength(0)
+    expect(await fs.readdir(_deletedBoardsDir()).catch(() => [])).toEqual([])
+    expect(await deleteBoardMessage(T, 'rc-1', m.user.id, { by: 'task:worker-1', overrideUser: true })).toEqual(m.user)
+    expect((await getBoard(T))!.threads['rc-1'].map((x) => x.id)).not.toContain(m.user.id)
+    // The board as it was, the user's post included, is kept in boards/.deleted/ to restore from.
+    const copies = await fs.readdir(_deletedBoardsDir())
+    expect(copies).toHaveLength(1)
+    const copy = JSON.parse(await fs.readFile(path.join(_deletedBoardsDir(), copies[0]), 'utf-8'))
+    expect(copy.threads['rc-1'].map((x: { id: string }) => x.id)).toContain(m.user.id)
+    // Deleting a session's post, or the user deleting their own, keeps no copy.
+    await deleteBoardMessage(T, 'rc-1', m.worker.id, { by: 'task:leader-1', overrideUser: true })
+    expect(await fs.readdir(_deletedBoardsDir())).toHaveLength(1)
   })
 
   it('unknown board, thread or message is 404; a malformed id is 400', async () => {
@@ -322,6 +346,28 @@ describe('marks', () => {
     expect((await getBoard(T))!.marks).toEqual({})
   })
 
+  it('an agent\'s mark carries its writer; the user\'s mark stays theirs (409 user_wrote unless override_user)', async () => {
+    await setBoardHtml(T, '<p/>', { by: 'human' })
+    const ceo = { by: 'task:main-1' as const, by_name: 'the CEO' }
+    expect(await setBoardMark(T, 'sec-a', { note: 'Agent note' }, { writer: ceo })).toMatchObject({ note: 'Agent note', by: 'task:main-1', by_name: 'the CEO' })
+    // The user writing over an agent's note makes it theirs.
+    expect(await setBoardMark(T, 'sec-a', { note: 'My note now' })).not.toHaveProperty('by')
+    const mine = (await getBoard(T))!.marks['sec-a']
+    events = []
+    for (const input of [{ note: 'Changed by an agent' }, { note: '' }, {}]) {
+      const err = await boardError(() => setBoardMark(T, 'sec-a', input, { writer: ceo }))
+      expect([err.statusCode, err.code, err.details]).toEqual([409, 'user_wrote', { mark: 'sec-a', author: 'user' }])
+    }
+    // The same text again is no change and no event; old marks with no by are the user's.
+    expect(await setBoardMark(T, 'sec-a', { note: 'My note now' }, { writer: ceo })).toEqual(mine)
+    expect((await getBoard(T))!.marks['sec-a']).toEqual(mine)
+    expect(events).toEqual([])
+    expect(await setBoardMark(T, 'sec-a', { note: 'Rewritten as asked' }, { writer: ceo, overrideUser: true }))
+      .toMatchObject({ note: 'Rewritten as asked', by: 'task:main-1' })
+    // An agent's note another agent may change or clear.
+    expect(await setBoardMark(T, 'sec-a', {}, { writer: { by: 'agent', by_name: 'an agent' } })).toBeNull()
+  })
+
   it('a mark on a task with no board is 404 no_board', async () => {
     expect(await boardError(() => setBoardMark(T, 'sec-1', { state: 'x' }))).toMatchObject({ code: 'no_board' })
   })
@@ -353,6 +399,31 @@ describe('delete', () => {
     expect(await rawFile()).toBeNull()
     expect(await deleteBoard(T)).toBe(false)
     expect(await getBoard(T)).toBeNull()
+    expect(await fs.readdir(_deletedBoardsDir()).catch(() => [])).toEqual([])
+  })
+
+  it('removeBoard with keepCopy moves the file to boards/.deleted/, keeps the newest 5 per task, and no reader lists them', async () => {
+    const other = 'mt0abc12-cccc'
+    await setBoardHtml(other, '<p>other</p>', { by: 'human' })
+    expect((await removeBoard(other, { keepCopy: true })).existed).toBe(true)
+    const copies: string[] = []
+    for (let i = 0; i < DELETED_BOARD_COPIES + 2; i += 1) {
+      await setBoardHtml(T, `<p>v${i}</p>`, { by: 'human' })
+      const out = await removeBoard(T, { keepCopy: true })
+      expect(out.existed).toBe(true)
+      expect(path.dirname(out.copy!)).toBe(_deletedBoardsDir())
+      copies.push(path.basename(out.copy!))
+      expect(await rawFile()).toBeNull()
+      await new Promise((r) => setTimeout(r, 3))
+    }
+    const kept = (await fs.readdir(_deletedBoardsDir())).filter((n) => n.startsWith(`${T}-`)).sort()
+    expect(kept).toEqual(copies.slice(-DELETED_BOARD_COPIES))
+    const newest = JSON.parse(await fs.readFile(path.join(_deletedBoardsDir(), kept[kept.length - 1]), 'utf-8'))
+    expect(newest).toMatchObject({ task_id: T, html: `<p>v${DELETED_BOARD_COPIES + 1}</p>` })
+    // Another task's copy is not pruned with these.
+    expect((await fs.readdir(_deletedBoardsDir())).filter((n) => n.startsWith(`${other}-`))).toHaveLength(1)
+    expect(await listBoardTaskIds()).toEqual([])
+    expect(await removeBoard(T, { keepCopy: true })).toEqual({ existed: false })
   })
 
   it('deleting the task removes its board (also when the event names no destination)', async () => {

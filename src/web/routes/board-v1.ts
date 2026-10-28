@@ -12,30 +12,42 @@
  *   PUT    /tasks/:id/board                  { html, version? }      → { board }
  *   POST   /tasks/:id/board/edits            { edits, version? }     → { board }
  *   POST   /tasks/:id/board/threads/:thread  { text }                → 201 { message, delivery }
- *   DELETE /tasks/:id/board/threads/:thread/messages/:message       → { message } (the removed one)
- *   PUT    /tasks/:id/board/marks/:mark      { note?, state? (legacy) } → { mark | null }
+ *   DELETE /tasks/:id/board/threads/:thread/messages/:message[?override_user=true] → { message } (the removed one)
+ *   PUT    /tasks/:id/board/marks/:mark      { note?, state? (legacy), override_user? } → { mark | null }
  *   PUT    /tasks/:id/board/projects/:project { title?, status?, tasks?, summary?, latest?, next?, waiting?, meta?,
  *                                                delete?, override_user? }
  *                                                → { project | null, delivery? (a human's new status) }
- *   PUT    /tasks/:id/board/checks/:check    { read, hash? }         → { check | null, hash } (humans only)
- *   PUT    /tasks/:id/board/choices/:choice  { option?, text? }      → { choice | null, delivery } (humans only)
- *   PUT    /tasks/:id/board/reminders/:target { at | null, note? }   → { reminder | null }
- *   PUT    /tasks/:id/board/seen/:section    { hash }                → { seen | null } (humans only)
- *   DELETE /tasks/:id/board                  → 204 (humans only)
+ *   PUT    /tasks/:id/board/checks/:check    { read, hash? }         → { check | null, hash }
+ *   PUT    /tasks/:id/board/choices/:choice  { option?, text?, override_user? } → { choice | null, delivery }
+ *   PUT    /tasks/:id/board/reminders/:target { at | null, note?, override_user? } → { reminder | null }
+ *   PUT    /tasks/:id/board/seen/:section    { hash }                → { seen | null }
+ *   DELETE /tasks/:id/board                  → 204 (the file is kept in boards/.deleted/, newest 5 per task)
  *
- * The caller comes from `x-walnut-caller-sid`: none = a human; a session may
- * write only a board its task belongs to (board-team.ts). A human's thread
- * message and a human's choice are delivered to the board task's session through
- * the one send path (core/boards/board-delivery.ts); a session's post is stored
- * only (it IS the answer). A human may delete any thread message, a session only
- * its own (403 not_author). Read ticks, choices and sections seen are the
- * user's word, so a session gets 403 human_only. A board project is one area
- * of this board (a cause, a ticket), not a Walnut project; the user picks its
- * status on the page too, that pick is delivered like a choice, and a session's
- * write that would change it is 409 status_set_by_user unless it passes
- * `override_user: true`. A team shares one
- * board: `?team=1` and `/owner` answer with the nearest ancestor that has one
- * (else the root of the tree).
+ * The caller comes from `x-walnut-caller-sid`: none = a human. Every write is
+ * open to every caller, the user and any session alike (2026-10-27, the user:
+ * "all human action can be done by agent also"); the writer is recorded
+ * (board-team.ts), and a read tick, a choice answer or a section seen by an
+ * agent carries `by` / `by_name`, which the Board shows. What the user did stays
+ * theirs until an agent says the user asked for the change (`override_user`,
+ * 409 user_wrote otherwise): their posts, answers (each part), marks and
+ * reminders. An agent ticking or unticking a point the user read gets the
+ * user's tick back unchanged, and an agent's seen marks (section and kanban)
+ * are kept apart from the user's baseline, which only the user moves. A human's thread
+ * message and a choice answer are delivered to the board task's session through
+ * the one send path (core/boards/board-delivery.ts): the user's as the user, an
+ * agent's as a message from that agent's task, and never to the session that
+ * answered (its own board); a COMPLETE board task is never reopened by an
+ * agent's answer, and an answer whose delivery did not go out is delivered again
+ * when it is given again. A session's post is stored only (it IS the answer).
+ * Anyone may delete any thread message, the log names who; a post the user
+ * wrote takes `override_user=true` from a session (409 user_wrote otherwise).
+ * A board project is
+ * one area of this board (a cause, a ticket), not a Walnut project; the user
+ * picks its status on the page too, that pick is delivered like a choice, and a
+ * session's write that would change it is 409 status_set_by_user unless it
+ * passes `override_user: true`. A team shares one board: `?team=1` and `/owner`
+ * answer with the nearest ancestor that has one (else the root of the tree),
+ * the default target of every board_* op.
  *
  * Replica: reads work (boards arrive with the data sync); writes answer 501,
  * because the primary is the single writer and delivery needs its sessions.
@@ -48,7 +60,7 @@ import type { Task } from '../../core/types.js'
 import {
   BoardError,
   boardHasContent,
-  deleteBoard,
+  removeBoard,
   deleteBoardMessage,
   editBoardHtml,
   extractTaskRefs,
@@ -69,6 +81,7 @@ import {
   setBoardChoice,
   setBoardReminder,
   setBoardSectionSeen,
+  markChoiceDelivery,
 } from '../../core/boards/board-items.js'
 import {
   buildChoicePrompt,
@@ -78,7 +91,9 @@ import {
   buildBoardThreadPrompt,
   type BoardDelivery,
 } from '../../core/boards/board-delivery.js'
-import { callerMayWriteBoard, kanbanFields, resolveTeamBoardTask, teamSnapshot, type BoardCaller } from '../../core/boards/board-team.js'
+import {
+  boardWriter, boardWriterStamp, kanbanFields, resolveBoardCaller, resolveTeamBoardTask, teamSnapshot, type BoardCaller,
+} from '../../core/boards/board-team.js'
 import { sendV1Error as sendError } from './v1-control-relay.js'
 
 export { buildBoardThreadPrompt }
@@ -119,6 +134,26 @@ export function body(req: Request): Record<string, unknown> {
   return b && typeof b === 'object' && !Array.isArray(b) ? b as Record<string, unknown> : {}
 }
 
+/** An optional boolean body field (`override_user`): absent = false, anything but a boolean 400. */
+function bodyFlag(b: Record<string, unknown>, field: string): boolean {
+  if (b[field] !== undefined && typeof b[field] !== 'boolean') throw new RouteError(400, 'bad_request', `\`${field}\` must be a boolean`)
+  return b[field] === true
+}
+
+/** `override_user` on a DELETE: `?override_user=true` (or 1), or `true` in a JSON body. */
+function overrideUserFlag(req: Request): boolean {
+  const q = req.query.override_user
+  const v = Array.isArray(q) ? q[0] : q
+  if (v !== undefined) {
+    if (v === 'true' || v === '1') return true
+    if (v === 'false' || v === '0' || v === '') return false
+    throw new RouteError(400, 'bad_request', '`override_user` must be true or false')
+  }
+  const b = body(req).override_user
+  if (b !== undefined && typeof b !== 'boolean') throw new RouteError(400, 'bad_request', '`override_user` must be a boolean')
+  return b === true
+}
+
 export class RouteError extends Error {
   constructor(readonly status: number, readonly code: string, message: string, readonly extra?: Record<string, unknown>) {
     super(message)
@@ -141,22 +176,15 @@ export function refuseOnReplica(): void {
   if (CLOUD_MODE) throw new RouteError(501, 'not_supported_cloud', 'Boards are written on the primary box')
 }
 
-/** Every write: replica refusal, then the task, then the team check. */
+/** Every write: replica refusal, then the task, then who is writing. */
 export async function prepareWrite(req: Request): Promise<{ task: Task; caller: BoardCaller }> {
   refuseOnReplica()
   const task = await resolveTask(param(req.params.id))
-  const caller = await callerMayWriteBoard(task.id, header(req, 'x-walnut-caller-sid'))
+  const caller = await resolveBoardCaller(header(req, 'x-walnut-caller-sid'))
   return { task, caller }
 }
 
-/** A write only the user may make (a read tick, a choice): any caller sid is a session. */
-export async function prepareHumanWrite(req: Request, what: string): Promise<Task> {
-  refuseOnReplica()
-  if (header(req, 'x-walnut-caller-sid')) throw new BoardError('human_only', 403, undefined, `Only the user ${what}`)
-  return resolveTask(param(req.params.id))
-}
-
-export const writer = (caller: BoardCaller) => (caller.kind === 'human' ? 'human' as const : `task:${caller.taskId}` as const)
+export const writer = boardWriter
 
 function optionalVersion(v: unknown): number | undefined {
   if (v === undefined || v === null) return undefined
@@ -291,6 +319,7 @@ boardV1Router.get('/tasks/:id/board', route(async (req, res) => {
     choices: board?.choices ?? {},
     reminders: board?.reminders ?? {},
     section_seen: board?.section_seen ?? {},
+    ...(board?.section_seen_agent ? { section_seen_agent: board.section_seen_agent } : {}),
     refs: board ? await resolveRefs(boardRefIds(board)) : [],
     board_version: board?.version ?? 0,
     ...kanban,
@@ -327,7 +356,7 @@ boardV1Router.post('/tasks/:id/board/threads/:thread', route(async (req, res) =>
   const thread = param(req.params.thread)
   const b = body(req)
   if (typeof b.text !== 'string') throw new RouteError(400, 'bad_request', '`text` must be a string')
-  const author = caller.kind === 'human' ? 'user' as const : `task:${caller.taskId}` as const
+  const author = caller.kind === 'human' ? 'user' as const : caller.kind === 'task' ? `task:${caller.taskId}` as const : 'agent' as const
   const message = await postBoardMessage(task.id, thread, { author, text: b.text })
   if (caller.kind !== 'human') {
     res.status(201).json({ message, delivery: { state: 'stored' } })
@@ -339,25 +368,30 @@ boardV1Router.post('/tasks/:id/board/threads/:thread', route(async (req, res) =>
 boardV1Router.delete('/tasks/:id/board/threads/:thread/messages/:message', route(async (req, res) => {
   const { task, caller } = await prepareWrite(req)
   const thread = param(req.params.thread)
-  const message = await deleteBoardMessage(task.id, thread, param(req.params.message), { by: writer(caller) })
+  const overrideUser = overrideUserFlag(req)
+  const message = await deleteBoardMessage(task.id, thread, param(req.params.message), { by: writer(caller), overrideUser })
   log.web.info('board thread message deleted', {
     taskId: task.id, thread, messageId: message.id, by: writer(caller), author: message.author,
+    ...(overrideUser ? { overrideUser: true } : {}),
   })
   res.json({ message })
 }))
 
 boardV1Router.put('/tasks/:id/board/marks/:mark', route(async (req, res) => {
-  const { task } = await prepareWrite(req)
+  const { task, caller } = await prepareWrite(req)
   const b = body(req)
   for (const field of ['state', 'note'] as const) {
     if (b[field] !== undefined && b[field] !== null && typeof b[field] !== 'string') {
       throw new RouteError(400, 'bad_request', `\`${field}\` must be a string`)
     }
   }
-  const mark = await setBoardMark(task.id, param(req.params.mark), {
+  const markId = param(req.params.mark)
+  const overrideUser = bodyFlag(b, 'override_user')
+  const mark = await setBoardMark(task.id, markId, {
     state: b.state as string | null | undefined,
     note: b.note as string | null | undefined,
-  })
+  }, { writer: await boardWriterStamp(caller), overrideUser })
+  if (caller.kind !== 'human') log.web.info('board mark written by an agent', { taskId: task.id, mark: markId, by: writer(caller), overrideUser })
   res.json({ mark })
 }))
 
@@ -420,34 +454,44 @@ boardV1Router.put('/tasks/:id/board/projects/:project', route(async (req, res) =
 }))
 
 boardV1Router.put('/tasks/:id/board/checks/:check', route(async (req, res) => {
-  const task = await prepareHumanWrite(req, 'ticks a point read')
+  const { task, caller } = await prepareWrite(req)
   const b = body(req)
   if (typeof b.read !== 'boolean') throw new RouteError(400, 'bad_request', '`read` must be a boolean')
   if (b.hash !== undefined && typeof b.hash !== 'string') throw new RouteError(400, 'bad_request', '`hash` must be a string')
-  const out = await setBoardCheck(task.id, param(req.params.check), { read: b.read, hash: b.hash as string | undefined })
+  const out = await setBoardCheck(task.id, param(req.params.check), { read: b.read, hash: b.hash as string | undefined },
+    { writer: await boardWriterStamp(caller) })
   res.json(out)
 }))
 
 boardV1Router.put('/tasks/:id/board/choices/:choice', route(async (req, res) => {
-  const task = await prepareHumanWrite(req, 'answers a choice')
+  const { task, caller } = await prepareWrite(req)
   const b = body(req)
-  // An option, the user's own words, or both: each one given replaces that part ("" takes it back).
+  // An option, words, or both: each one given replaces that part ("" takes it back).
   const { option, text } = b
   if (option !== undefined && typeof option !== 'string') throw new RouteError(400, 'bad_request', '`option` must be a string ("" clears)')
   if (text !== undefined && typeof text !== 'string') throw new RouteError(400, 'bad_request', '`text` must be a string ("" clears)')
   if (option === undefined && text === undefined) throw new RouteError(400, 'bad_request', 'Give `option`, `text` or both')
   const choiceId = param(req.params.choice)
-  const result = await setBoardChoice(task.id, choiceId, { option: option as string | undefined, text: text as string | undefined })
-  let delivery: BoardDelivery | { state: 'skipped'; reason: 'unchanged' | 'cleared' }
+  const overrideUser = bodyFlag(b, 'override_user')
+  const result = await setBoardChoice(task.id, choiceId, { option: option as string | undefined, text: text as string | undefined },
+    { writer: await boardWriterStamp(caller), overrideUser })
+  let delivery: BoardDelivery | { state: 'skipped'; reason: 'unchanged' | 'cleared' | 'self' }
   if (!result.choice) delivery = { state: 'skipped', reason: 'cleared' }
-  else if (!result.changed) delivery = { state: 'skipped', reason: 'unchanged' }
+  // The same answer again: nothing to say, unless its last delivery did not go out.
+  else if (!result.changed && !result.choice.undelivered) delivery = { state: 'skipped', reason: 'unchanged' }
+  // The board task's own session answering its own choice: it knows already.
+  else if (caller.kind === 'task' && caller.taskId === task.id) delivery = { state: 'skipped', reason: 'self' }
   else {
     const board = await getBoard(task.id)
     const text = await buildChoicePrompt(board?.html ?? '', choiceId, result.choice)
-    delivery = await deliverBoardText(task.id, text, { choice: choiceId, option: result.choice.option })
+    // The user's answer goes as the user; an agent's as a message from that agent's session (peer provenance).
+    delivery = await deliverBoardText(task.id, text, { choice: choiceId, option: result.choice.option },
+      caller.kind === 'human' ? undefined : { callerSid: caller.sessionId })
+    result.choice = await markChoiceDelivery(task.id, choiceId, result.choice, delivery.state !== 'stored')
   }
   log.web.info('board choice answered', {
-    taskId: task.id, choice: choiceId, option: result.choice?.option ?? '', textChars: result.choice?.text?.length ?? 0, delivery: delivery.state,
+    taskId: task.id, choice: choiceId, option: result.choice?.option ?? '', textChars: result.choice?.text?.length ?? 0,
+    by: writer(caller), delivery: delivery.state, ...(overrideUser ? { overrideUser: true } : {}),
   })
   res.json({ choice: result.choice, delivery })
 }))
@@ -462,23 +506,23 @@ boardV1Router.put('/tasks/:id/board/reminders/:target', route(async (req, res) =
   const reminder = await setBoardReminder(task.id, param(req.params.target), {
     at: b.at === '' ? null : b.at as string | null,
     note,
-  }, { by: writer(caller) })
+  }, { by: writer(caller), overrideUser: bodyFlag(b, 'override_user') })
   res.json({ reminder })
 }))
 
 boardV1Router.put('/tasks/:id/board/seen/:section', route(async (req, res) => {
-  const task = await prepareHumanWrite(req, 'marks a section seen')
+  const { task, caller } = await prepareWrite(req)
   const b = body(req)
   if (typeof b.hash !== 'string') throw new RouteError(400, 'bad_request', '`hash` must be a string ("" forgets)')
-  const seen = await setBoardSectionSeen(task.id, param(req.params.section), { hash: b.hash })
+  const seen = await setBoardSectionSeen(task.id, param(req.params.section), { hash: b.hash }, { by: writer(caller) })
   res.json({ seen })
 }))
 
 boardV1Router.delete('/tasks/:id/board', route(async (req, res) => {
-  refuseOnReplica()
-  if (header(req, 'x-walnut-caller-sid')) throw new BoardError('human_only', 403, undefined, 'Only a human may delete a board')
-  const task = await resolveTask(param(req.params.id))
-  await deleteBoard(task.id)
+  const { task, caller } = await prepareWrite(req)
+  // Kept as a copy (boards/.deleted/), whoever deletes it: an agent may delete any board.
+  const { existed, copy } = await removeBoard(task.id, { keepCopy: true })
+  if (existed) log.web.info('board deleted', { taskId: task.id, by: writer(caller), copy })
   res.status(204).end()
 }))
 

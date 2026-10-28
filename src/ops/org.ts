@@ -106,3 +106,66 @@ defineOp({
   routes: [{ method: 'POST', path: '/org/vp' }],
   tags: { readonly: false, remote: 'allow', primaryOnly: true },
 });
+
+// The org chart's "+ New VP", "+ New project" and a node's "Name and instructions", for agents as for
+// the user (2026-10-27, the user: "all human action can be done by agent also"). The write records
+// who made it; the Org page shows it, and the user may change it back.
+defineOp({
+  name: 'org_node_create',
+  title: 'Make a VP or a project on the org chart',
+  description:
+    'Makes a new project with its own VP (kind "project"), or a VP with no project of its own yet (kind "vp"), '
+    + 'which projects are then put under with org_vp_set. `instructions` are the VP\'s standing instructions: its '
+    + 'session prompt carries them, and the Org page shows that you wrote them. A name another VP or project uses is refused. '
+    + 'A closed VP of that project comes back with a clean slate; when the user wrote its instructions, pass `override_user: true` '
+    + '(else 409 user_wrote), only when the user asked for it.',
+  input: {
+    kind: z.enum(['project', 'vp']).describe('"project": a project with its own VP; "vp": a VP to put projects under'),
+    name: z.string().min(1).describe('The project\'s name, or the VP\'s'),
+    vp_name: z.string().optional().describe('kind "project" only: its VP\'s name, when not the project\'s'),
+    instructions: z.string().optional().describe('The VP\'s standing instructions (at most 4000 characters)'),
+    override_user: z.boolean().optional().describe('Bring back a closed VP whose instructions the user wrote; only when the user asked for it'),
+  },
+  handler: async ({ kind, name, vp_name, instructions, override_user }, call) => {
+    const body = await call('POST', kind === 'vp' ? '/org/vps' : '/org/projects', {
+      name, ...(vp_name ? { vpName: vp_name } : {}), ...(instructions !== undefined ? { instructions } : {}),
+      ...(override_user ? { override_user: true } : {}),
+    }) as { task?: { id?: string; title?: string; project?: string } };
+    const lead = body?.task;
+    return withOutcome(body ?? {}, `Made ${lead?.title ?? name} (${lead?.id ?? 'no id'}).`, 'org_get shows it; org_node_edit names or instructs it.');
+  },
+  routes: [{ method: 'POST', path: '/org/vps' }, { method: 'POST', path: '/org/projects' }],
+  tags: { readonly: false, remote: 'allow', primaryOnly: true },
+});
+
+defineOp({
+  name: 'org_node_edit',
+  title: 'Name or instruct the CEO or a VP',
+  description:
+    'Renames a VP or writes the standing instructions of the CEO or a VP, as the user does on the org chart. '
+    + 'Name the node by `task_id` (the CEO\'s or a VP\'s task), or by `project` for that project\'s VP (made first '
+    + 'when the project has none). `instructions` replace the earlier ones whole; "" clears them. The node\'s '
+    + 'session reads them with its next message, and the Org page shows who wrote them and when. Words the user '
+    + 'wrote are replaced or cleared only with `override_user: true` (else 409 user_wrote): pass it only when the '
+    + 'user asked for the change.',
+  input: {
+    task_id: z.string().optional().describe('The CEO\'s or a VP\'s task id'),
+    project: z.string().optional().describe('Or: the project whose VP this is'),
+    name: z.string().optional().describe('A VP\'s new name; its project\'s name or "" gives it back'),
+    instructions: z.string().optional().describe('The new standing instructions, whole; "" clears them (at most 4000 characters)'),
+    override_user: z.boolean().optional().describe('Replace or clear instructions the user wrote; only when the user asked for it'),
+  },
+  handler: async ({ task_id, project, name, instructions, override_user }, call) => {
+    if (!task_id === !project) throw new Error('Name the node by task_id or by project, one of them.');
+    const edit = {
+      ...(name !== undefined ? { name } : {}), ...(instructions !== undefined ? { instructions } : {}),
+      ...(override_user ? { override_user: true } : {}),
+    };
+    const path = task_id ? `/org/nodes/${encodeURIComponent(String(task_id))}` : `/org/projects/${encodeURIComponent(String(project))}/vp`;
+    const body = await call('PUT', path, edit) as { task?: { id?: string; title?: string; org_name?: string } };
+    const who = body?.task?.org_name ? `the ${body.task.org_name} VP` : body?.task?.title ?? 'the node';
+    return withOutcome(body ?? {}, `Saved for ${who}.`, 'Its session reads new instructions with its next message.');
+  },
+  routes: [{ method: 'PUT', path: '/org/nodes/:id' }, { method: 'PUT', path: '/org/projects/:project/vp' }],
+  tags: { readonly: false, remote: 'allow', primaryOnly: true },
+});

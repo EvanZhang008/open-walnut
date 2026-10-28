@@ -492,9 +492,13 @@ describe('a session cannot stop or restart itself (409 own_session)', () => {
   })
 })
 
-describe('a session cannot stop or restart its own lead or Main', () => {
-  it('worker → its lead: 409 own_lead; lead → its worker: stopped; anyone → Main: 409 main_session', async () => {
+// 2026-10-27, the user: "all human action can be done by agent also". A person
+// may stop or restart any session, so a session may too, its lead's and Main's
+// included; the call is logged with who asked.
+describe('a session may stop or restart its own lead and Main, as a person may', () => {
+  it('worker → its lead: stopped; lead → Main: restarted; each logged with the caller\'s session and task', async () => {
     const { addTask } = await import('../../../src/core/task-manager.js')
+    const { log } = await import('../../../src/logging/index.js')
     const { task: lead } = await addTask({ title: 'Guard lead', project: 'guard' })
     const { task: worker } = await addTask({ title: 'Guard worker', project: 'guard', parent_task_id: lead.id })
     const { task: main } = await addTask({ title: 'Main', project: 'Ask Walnut', walnut_agent: true, org_role: 'main' } as never)
@@ -502,20 +506,33 @@ describe('a session cannot stop or restart its own lead or Main', () => {
     await createSessionRecord('lc-worker', worker.id, 'guard', '/tmp', { initialProcessStatus: 'running', pid: process.pid })
     await createSessionRecord('lc-main', main.id, 'Ask Walnut', '/tmp', { initialProcessStatus: 'running', pid: process.pid })
     stopConn.value = daemonThatAnswers({ ok: true, stopped: true })
+    const info = vi.spyOn(log.session, 'info')
+    const reinit = vi.spyOn(sessionRunner, 'reinitialize').mockResolvedValue(undefined as never)
 
     const up = await request(createApp()).post('/api/v1/sessions/lc-lead/terminate').set('x-walnut-caller-sid', 'lc-worker').send({})
-    expect(up.status).toBe(409)
-    expect(up.body.error.code).toBe('own_lead')
-    const toMain = await request(createApp()).post('/api/v1/sessions/lc-main/restart').set('x-walnut-caller-sid', 'lc-lead').send({})
-    expect(toMain.status).toBe(409)
-    expect(toMain.body.error.code).toBe('main_session')
-    expect(stopCalls).toEqual([])
+    expect(up.status).toBe(200)
+    expect(up.body.status).toBe('terminated')
+    expect(stopCalls.map((c) => c.args.sid)).toEqual(['lc-lead'])
+    expect((await getSessionByClaudeId('lc-lead'))?.process_status).toBe('stopped')
+    expect(info).toHaveBeenCalledWith('session stop asked by another session', {
+      sessionId: 'lc-lead', action: 'stop', callerSid: 'lc-worker', callerTaskId: worker.id, targetTaskId: lead.id,
+    })
 
-    const down = await request(createApp()).post('/api/v1/sessions/lc-worker/terminate').set('x-walnut-caller-sid', 'lc-lead').send({})
-    expect(down.status).toBe(200)
-    expect(stopCalls.map((c) => c.args.sid)).toEqual(['lc-worker'])
-    // The person may stop Main from the panel (no caller id).
-    const human = await request(createApp()).post('/api/v1/sessions/lc-main/terminate').send({})
+    const toMain = await request(createApp()).post('/api/v1/sessions/lc-main/restart').set('x-walnut-caller-sid', 'lc-lead').send({})
+    expect(toMain.status).toBe(200)
+    expect(toMain.body.status).toBe('restarted')
+    expect(reinit).toHaveBeenCalledWith('lc-main')
+    expect(info).toHaveBeenCalledWith('session restart asked by another session', {
+      sessionId: 'lc-main', action: 'restart', callerSid: 'lc-lead', callerTaskId: lead.id, targetTaskId: main.id,
+    })
+
+    // A worker's stop of Main goes through too; the person's (no caller id) logs no actor line.
+    const workerToMain = await request(createApp()).post('/api/v1/sessions/lc-main/terminate').set('x-walnut-caller-sid', 'lc-worker').send({})
+    expect(workerToMain.status).toBe(200)
+    expect(stopCalls.map((c) => c.args.sid)).toEqual(['lc-lead', 'lc-main'])
+    info.mockClear()
+    const human = await request(createApp()).post('/api/v1/sessions/lc-worker/terminate').send({})
     expect(human.status).toBe(200)
+    expect(info.mock.calls.filter(([msg]) => String(msg).includes('asked by another session'))).toEqual([])
   })
 })

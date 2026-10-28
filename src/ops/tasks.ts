@@ -10,6 +10,7 @@ import { dispatchHint, withOutcome } from './outcome.js'
 import { startTask, TASK_START_INPUT, taskView } from './task-execution.js'
 import { PHASE_ORDER } from '../core/phase.js'
 import { laneById, normalizeLanes, placeCard } from '../core/boards/board-lanes.js'
+import { agentMemoryWriterNote, type AgentMemory } from '../core/sessions/agent-memory.js'
 import type { OpCall } from './core.js'
 import {
   BULK_GET_FIELDS,
@@ -806,11 +807,13 @@ defineOp({
       : ((await call('GET', '/me')) as { task?: { id?: string } } | undefined)?.task?.id
     if (!id) throw new Error('No task of your own: pass task.')
     const body = await call('GET', `/tasks/${encodeURIComponent(id)}/agent-memory`) as
-      { title?: string; memory?: { text: string; at: string } | null; chars?: number; soft_limit?: number; limit?: number }
+      { title?: string; memory?: AgentMemory | null; chars?: number; soft_limit?: number; limit?: number }
     const chars = body.chars ?? 0
+    // Someone other than the task's own session wrote it last: say who, so its lines are not read as the owner's.
+    const writer = agentMemoryWriterNote(body.memory)
     return withOutcome(
       body,
-      body.memory ? `MEMORY.md of "${body.title}": ${chars} of ${body.soft_limit} characters, written ${body.memory.at}.` : `MEMORY.md of "${body.title}" is empty.`,
+      body.memory ? `MEMORY.md of "${body.title}": ${chars} of ${body.soft_limit} characters, written ${body.memory.at}.${writer ? ` ${writer}` : ''}` : `MEMORY.md of "${body.title}" is empty.`,
       chars > (body.soft_limit ?? Infinity) ? 'It is over its size: rewrite it shorter with agent_memory_write (mode replace), keeping everything still valid.' : 'No further action is required.',
     )
   },
@@ -819,19 +822,20 @@ defineOp({
 
 defineOp({
   name: 'agent_memory_write',
-  title: 'Write your task\'s own MEMORY.md',
+  title: 'Write a task\'s own MEMORY.md',
   description: `${AGENT_MEMORY_SCOPE} mode \`append\` (default) adds one dated entry; \`replace\` sets the whole file (read it first). `
-    + 'Past the limit the write is refused whole and nothing changes: rewrite it shorter. Only your own task\'s session writes it.',
+    + 'Past the limit the write is refused whole and nothing changes: rewrite it shorter. task defaults to your own task; '
+    + 'another task\'s id writes that task\'s MEMORY.md (a deadline you note for a worker, say), as a person may.',
   input: {
     content: z.string().max(40_000).describe('Markdown: the entry to add (append) or the whole file (replace)'),
     mode: z.enum(['append', 'replace']).optional().describe('append (default) or replace'),
-    task: z.string().min(1).optional().describe('Task id; default: your own task'),
+    task: z.string().min(1).optional().describe('Task id or unique prefix; default: your own task'),
   },
   handler: async (args, call) => {
     const id = typeof args.task === 'string' && args.task.trim()
       ? args.task.trim()
       : ((await call('GET', '/me')) as { task?: { id?: string } } | undefined)?.task?.id
-    if (!id) throw new Error('No task of your own to keep a MEMORY.md for.')
+    if (!id) throw new Error('No task of your own to keep a MEMORY.md for: pass task.')
     const body = await call('PUT', `/tasks/${encodeURIComponent(id)}/agent-memory`, { content: args.content, mode: args.mode ?? 'append' }) as
       { title?: string; chars?: number; soft_limit?: number }
     const over = (body.chars ?? 0) > (body.soft_limit ?? Infinity)

@@ -49,7 +49,7 @@ function isLater(a: string | undefined, b: string | undefined): boolean {
 }
 
 const laneName = (lanes: readonly BoardLane[], id: string | undefined) => laneById(lanes, id)?.name ?? id ?? '';
-const writerTaskId = (by: BoardWriter) => (by === 'human' ? '' : by.slice('task:'.length));
+const writerTaskId = (by: BoardWriter) => (by.startsWith('task:') ? by.slice('task:'.length) : '');
 
 /**
  * The board a kanban write starts from: the file (or a new empty one), its
@@ -357,8 +357,9 @@ export async function moveBoardCard(
 }
 
 /**
- * The user's answer to a session's refused lane (G10): accept = the user's own
- * move to that lane; dismiss = forget it. Humans only.
+ * The answer to a session's refused lane (G10): accept = a move to that lane by
+ * the answerer (`lane_by` is theirs: the user's, or the agent's that answered as
+ * the user would); dismiss = forget it.
  */
 export async function answerSuggestion(
   ownerId: string,
@@ -366,12 +367,11 @@ export async function answerSuggestion(
   action: 'accept' | 'dismiss',
   opts: { by: BoardWriter },
 ): Promise<{ card: BoardCard; lane_effective: string }> {
-  if (opts.by !== 'human') throw new BoardError('human_only', 403, undefined, 'Only the user answers a suggestion');
   if (action !== 'accept' && action !== 'dismiss') throw new BoardError('bad_request', 400, undefined, '`action` is accept or dismiss');
   const snap = await teamSnapshot(ownerId);
   const task = requireCardTask(ownerId, cardId, snap);
   const next = await updateBoard(ownerId, (raw) => {
-    const board = prepareKanbanBoard(raw, ownerId, snap, 'human');
+    const board = prepareKanbanBoard(raw, ownerId, snap, opts.by);
     const current = board.cards[cardId];
     const suggestion = current?.lane_suggested;
     if (!suggestion) throw new BoardError('no_suggestion', 404, { task: cardId }, 'This card has no suggestion to answer');
@@ -379,13 +379,27 @@ export async function answerSuggestion(
     delete c.lane_suggested;
     if (action === 'accept') {
       requireLane(board.lanes ?? [], suggestion.lane);
-      c = placed(c, suggestion.lane, 'human', new Date().toISOString());
+      c = placed(c, suggestion.lane, opts.by, new Date().toISOString());
     }
     return { ...board, cards: { ...board.cards, [cardId]: c } };
   });
   emitChanged({ taskId: ownerId, kind: 'card', task: cardId, version: next.version });
   const card = next.cards[cardId] ?? {};
   return { card, lane_effective: laneEffective(next, card, task) };
+}
+
+/** A session's create brakes (create-rules.ts), for a task a session adds from a lane; the user's add has none. */
+async function sessionBrakes(owner: Task, title: string, braked: boolean): Promise<{ title: string; from?: string }> {
+  if (!braked) return { title };
+  const { assertSubtaskDepth, SubtaskLimitError } = await import('../sessions/subtask-limits.js');
+  try {
+    await assertSubtaskDepth(owner.id, owner.title);
+  } catch (err) {
+    if (err instanceof SubtaskLimitError) throw new BoardError(err.code, err.statusCode, { task: owner.id }, err.message);
+    throw err;
+  }
+  const { needsShortening, heuristicShortTitle } = await import('../sessions/task-title-brake.js');
+  return needsShortening(title) ? { title: heuristicShortTitle(title), from: title } : { title };
 }
 
 export interface NewCardInput {
@@ -400,11 +414,16 @@ export interface NewCardInput {
  * folder, tagged, with no session, then placed in the lane. Two writes: when
  * the board write fails the task exists anyway (it shows in the first todo
  * lane by itself), so the answer is the task, card null, warning placement_failed.
+ * A braked caller's add (`braked`: any session's, a worker's, an ask's or one
+ * with no task, never the user's; board-team.ts boardCallerBraked) meets the
+ * brakes its task_create would (create-rules.ts): the subtask depth cap (409
+ * subtask_too_deep) and the short title (a long one is cut to its head, the long
+ * form kept as the description, and refined later).
  */
 export async function createBoardCardTask(
   ownerId: string,
   input: NewCardInput,
-  opts: KanbanWriteOpts,
+  opts: KanbanWriteOpts & { braked?: boolean },
 ): Promise<{ task: Task; card: BoardCard | null; warning?: 'placement_failed'; error?: string }> {
   const title = typeof input.title === 'string' ? input.title.trim() : '';
   if (!title) throw new BoardError('bad_request', 400, undefined, '`title` must be a non-empty string');
@@ -421,8 +440,10 @@ export async function createBoardCardTask(
   const lanes = before.lanes ?? [];
   const lane = input.lane?.trim() || (lanes.find((l) => l.kind === 'todo') ?? lanes[0])?.id || '';
   requireLane(lanes, lane);
+  const braked = await sessionBrakes(owner, title, opts.braked === true);
   const { task } = await addTask({
-    title,
+    title: braked.title,
+    ...(braked.from ? { description: braked.from } : {}),
     project: owner.project ?? '',
     parent_task_id: owner.id,
     ...(owner.group_id ? { group_id: owner.group_id } : {}),
@@ -431,6 +452,10 @@ export async function createBoardCardTask(
   // As POST /tasks does: every open window's task store (and the kanban watch) hears of it.
   const { bus, EventNames } = await import('../event-bus.js');
   bus.emit(EventNames.TASK_CREATED, { task }, ['web-ui'], { source: 'board-kanban' });
+  if (braked.from) {
+    const { refineShortTitle } = await import('../sessions/task-title-brake.js');
+    void refineShortTitle(task.id, braked.title, braked.from);
+  }
   try {
     // The lanes the user added it from: a `ticket:` tag on the new task must not switch a board still on its template.
     const { card } = await setBoardCard(ownerId, task.id, { lane }, { by: opts.by, overrideUser: true, template: before.lanes_template });

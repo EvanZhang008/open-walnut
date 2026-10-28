@@ -67,7 +67,8 @@ replicasStatusRouter.get('/replicas/status', async (_req: Request, res: Response
 replicasStatusRouter.post('/replicas/confirm-removal', async (req: Request, res: Response) => {
   if (leaderOnly(res)) return
   // The confirm lifts the one guard against a leader that lost its store: the
-  // user's answer only, never a session's (as board-v1's human-only actions).
+  // user's answer only, never a session's: it deletes the user's data on a replica, which the
+  // team charter keeps for the user (an approval rule, listed in tests/core/agent-parity-ratchet.test.ts).
   if (req.get('x-walnut-caller-sid')) {
     res.status(403).json({ ok: false, error: 'human_only', message: 'Only the user may confirm a removal of most rows' })
     return

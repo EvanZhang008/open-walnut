@@ -1,6 +1,7 @@
 /**
  * The user's kanban "Changed" baseline (src/core/boards/board-kanban-seen.ts):
- * humans only, the first write creates the file and the baseline, 'all' and a
+ * an agent's look is its own baseline (`kanban_seen_agent`, with `by`) and never moves the user's, the
+ * first write creates the file and the baseline, 'all' and a
  * visit's end move `at` to `previous_at`, a snapshot entry wins over the
  * server's own computation, listed cards are computed with the web's rules,
  * and entries of tasks no longer on the team are dropped.
@@ -40,12 +41,24 @@ afterAll(async () => {
 })
 
 describe('kanban seen baseline', () => {
-  it('a session is 403 human_only and writes nothing', async () => {
-    const owner = await task('Seen refusal board')
-    const err = await setKanbanSeen(owner, { cards: 'all' }, { by: `task:${owner}` }).catch((e: unknown) => e)
-    expect(err).toBeInstanceOf(BoardError)
-    expect([(err as BoardError).statusCode, (err as BoardError).code]).toEqual([403, 'human_only'])
-    expect(await getBoard(owner)).toBeNull()
+  it('a session marks cards seen into its own baseline; the user\'s baseline survives it and moves only when the user looks', async () => {
+    const owner = await task('Seen by an agent board')
+    const a = await task('V1000000311 a', owner)
+    const out = await setKanbanSeen(owner, { cards: 'all' }, { by: `task:${owner}` })
+    expect(out.kanban_seen).toMatchObject({ by: `task:${owner}`, cards: { [a]: expect.any(Object) } })
+    let stored = (await getBoard(owner))!
+    expect(stored.kanban_seen).toBeNull()
+    expect(stored.kanban_seen_agent).toEqual(out.kanban_seen)
+    expect(stored.updated_by).toBe(`task:${owner}`)
+    const mine = await setKanbanSeen(owner, { cards: 'all' }, { by: 'human' })
+    expect(mine.kanban_seen).not.toHaveProperty('by')
+    await tick()
+    // The agent looks again: its own baseline restarts, the user's stays as they left it.
+    const again = await setKanbanSeen(owner, { cards: 'all' }, { by: `task:${owner}` })
+    stored = (await getBoard(owner))!
+    expect(stored.kanban_seen).toEqual(mine.kanban_seen)
+    expect(stored.kanban_seen_agent).toEqual(again.kanban_seen)
+    expect(again.kanban_seen.previous_at).toBe(out.kanban_seen.at)
   })
 
   it('the first write creates the file and the baseline; all and visit_end move at to previous_at', async () => {

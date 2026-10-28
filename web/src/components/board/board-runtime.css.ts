@@ -217,6 +217,9 @@ walnut-check[data-read]:hover { opacity: 1; }
 }
 .wn-check-hint[hidden] { display: none; }
 .wn-check-hint.wn-failed { background: rgba(217,48,37,.12); }
+/* An agent's tick names it, small and muted ("by the CEO"); the user's own shows nothing. */
+.wn-check-by, .wn-mark-by { margin-right: 6px; font-size: .78em; opacity: .75; }
+.wn-check-by[hidden], .wn-mark-by[hidden] { display: none; }
 
 /* ── <walnut-choice>: numbered options, the recommended one marked ── */
 .wn-choice { margin: 8px 0; padding: 8px 10px 10px; border: 1px solid rgba(128,128,128,.25); border-radius: 12px; }
@@ -274,6 +277,7 @@ walnut-choice[data-folded] > :not(.wn-fold-row) { display: none !important; }
 .wn-fold-sum { flex: 1 1 0; min-width: 4em; overflow: hidden; text-overflow: ellipsis; opacity: .8; }
 .wn-fold-words { font-style: italic; }
 .wn-fold-when { flex: none; font-size: .82em; opacity: .6; }
+.wn-fold-by { flex: none; font-size: .82em; opacity: .6; }
 .wn-fold-btn {
   padding: 0 6px; border: 0; background: transparent; color: inherit; font: inherit; font-size: .85em; font-weight: 400;
   opacity: .6; cursor: pointer;

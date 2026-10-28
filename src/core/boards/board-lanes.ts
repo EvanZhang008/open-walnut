@@ -8,7 +8,7 @@
 import { stripMarkdown } from './board-summary-text.js';
 
 /** Same shape as BoardWriter in board-store.ts (kept local so this file stays import free). */
-export type BoardCardWriter = 'human' | `task:${string}`;
+export type BoardCardWriter = 'human' | 'agent' | `task:${string}`;
 
 export type BoardLaneKind = 'todo' | 'active' | 'wait' | 'review' | 'done';
 export const LANE_KINDS: readonly BoardLaneKind[] = ['todo', 'active', 'wait', 'review', 'done'];
@@ -63,6 +63,8 @@ export interface BoardKanbanSeen {
   at: string;
   previous_at?: string;
   cards: Record<string, BoardKanbanSeenCard>;
+  /** An agent wrote this baseline (absent = the user). */
+  by?: BoardCardWriter;
 }
 
 /** One direct subtask of the board's owner, as GET reports the team. */
@@ -385,7 +387,7 @@ export function summaryHash(text: string | null | undefined): string {
 const isObj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
 const str = (v: unknown): string | undefined => (typeof v === 'string' && v ? v : undefined);
 const writer = (v: unknown): BoardCardWriter | undefined =>
-  v === 'human' || (typeof v === 'string' && v.startsWith('task:') && v.length > 5) ? (v as BoardCardWriter) : undefined;
+  v === 'human' || v === 'agent' || (typeof v === 'string' && v.startsWith('task:') && v.length > 5) ? (v as BoardCardWriter) : undefined;
 
 /** Stored lanes, or null (still on the template) when absent or unreadable. */
 export function normalizeLanes(raw: unknown): BoardLane[] | null {
@@ -447,6 +449,8 @@ export function normalizeKanbanSeen(raw: unknown): BoardKanbanSeen | null {
   }
   const seen: BoardKanbanSeen = { at: raw.at as string, cards };
   if (str(raw.previous_at)) seen.previous_at = raw.previous_at as string;
+  const by = writer(raw.by);
+  if (by && by !== 'human') seen.by = by;
   return seen;
 }
 

@@ -10,6 +10,7 @@
  */
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest'
 import fs from 'node:fs/promises'
+import path from 'node:path'
 import type { Server as HttpServer } from 'node:http'
 import { createMockConstants } from '../../helpers/mock-constants.js'
 
@@ -23,7 +24,7 @@ vi.mock('../../../src/core/sessions/session-send-core.js', async (importOriginal
 
 import { WALNUT_HOME } from '../../../src/constants.js'
 import { startServer, stopServer } from '../../../src/web/server.js'
-import { addTask, completeTask } from '../../../src/core/task-manager.js'
+import { addTask, completeTask, getTask } from '../../../src/core/task-manager.js'
 import { createSessionRecord } from '../../../src/core/session-tracker.js'
 import { bus, EventNames, type BusEvent } from '../../../src/core/event-bus.js'
 import { SendError } from '../../../src/core/sessions/session-send-core.js'
@@ -170,21 +171,25 @@ describe('writing the html', () => {
     for (const e of events) expect(e.destinations).toEqual(['web-ui'])
   })
 
-  it('an outsider and a task-less session get 403 not_in_team; nothing is written', async () => {
-    const before = (await getBoard(team.leader))!.version
-    for (const sid of [team.sid.outsider, team.sid.untracked, 'external']) {
-      const res = await call('PUT', boardPath(team.leader), { sid, body: { html: '<p>hijack</p>' } })
-      expect(res.status).toBe(403)
-      expect(res.json.error.code).toBe('not_in_team')
-      const edit = await call('POST', `${boardPath(team.leader)}/edits`, { sid, body: { edits: [{ old: 'a', new: 'b' }] } })
-      expect(edit.json.error.code).toBe('not_in_team')
-      expect((await call('POST', `${boardPath(team.leader)}/threads/t1`, { sid, body: { text: 'x' } })).status).toBe(403)
-      expect((await call('PUT', `${boardPath(team.leader)}/marks/m1`, { sid, body: { state: 'x' } })).status).toBe(403)
+  it('any session writes any board: an outsider, a task-less session, an env-less caller; the writer is recorded', async () => {
+    const other = await task('Another team board')
+    const set = await call('PUT', boardPath(other), { sid: team.sid.outsider, body: { html: '<p>by an outsider</p>' } })
+    expect(set.status).toBe(200)
+    expect(set.json.board.updated_by).toBe(`task:${team.outsider}`)
+    // A session with no task and an unidentified process: an agent Walnut cannot name.
+    for (const sid of [team.sid.untracked, 'external']) {
+      const edit = await call('POST', `${boardPath(other)}/edits`, { sid, body: { edits: [{ old: '</p>', new: '.</p>' }] } })
+      expect(edit.status).toBe(200)
+      expect(edit.json.board.updated_by).toBe('agent')
+      const post = await call('POST', `${boardPath(other)}/threads/t1`, { sid, body: { text: 'Noted.' } })
+      expect(post.status).toBe(201)
+      expect(post.json).toMatchObject({ message: { author: 'agent' }, delivery: { state: 'stored' } })
+      expect((await call('PUT', `${boardPath(other)}/marks/m1`, { sid, body: { state: 'x' } })).status).toBe(200)
     }
-    // The leader is not in its worker's team.
-    expect((await call('PUT', boardPath(team.worker), { sid: team.sid.leader, body: { html: '<p/>' } })).status).toBe(403)
-    expect((await getBoard(team.leader))!.version).toBe(before)
-    expect(events).toEqual([])
+    // A leader writes a board outside its tree too (its team's board is only the default target).
+    const byLeader = await call('PUT', boardPath(other), { sid: team.sid.leader, body: { html: '<p>by the leader</p>' } })
+    expect(byLeader.json.board.updated_by).toBe(`task:${team.leader}`)
+    expect(performSessionSendMock).not.toHaveBeenCalled()
   })
 
   it('409s: a stale version, an edit anchor missing or repeated; 404 editing a task with no board', async () => {
@@ -298,12 +303,24 @@ describe('marks', () => {
     expect(set.status).toBe(200)
     expect(set.json.mark).toMatchObject({ state: 'revisit', note: 'check after deploy' })
     const byWorker = await call('PUT', `${boardPath(team.leader)}/marks/sec-2`, { sid: team.sid.worker, body: { state: 'reviewed' } })
-    expect(byWorker.json.mark).toMatchObject({ state: 'reviewed' })
+    expect(byWorker.json.mark).toMatchObject({ state: 'reviewed', by: `task:${team.worker}`, by_name: 'the task "Fix the cache"' })
     expect((await call('GET', boardPath(team.leader))).json.marks).toMatchObject({ 'sec-1': { state: 'revisit' }, 'sec-2': { state: 'reviewed' } })
     expect(events.map((e) => e.data)).toEqual([
       { taskId: team.leader, kind: 'mark', mark: 'sec-1', version: expect.any(Number) },
       { taskId: team.leader, kind: 'mark', mark: 'sec-2', version: expect.any(Number) },
     ])
+
+    // The user's mark stays theirs: a session changing or clearing it says the user asked.
+    for (const body of [{ note: 'An agent rewrote this' }, { state: '', note: null }]) {
+      const refused = await call('PUT', `${boardPath(team.leader)}/marks/sec-1`, { sid: team.sid.worker, body })
+      expect([refused.status, refused.json.error.code]).toEqual([409, 'user_wrote'])
+    }
+    expect((await getBoard(team.leader))!.marks['sec-1']).toMatchObject({ state: 'revisit', note: 'check after deploy' })
+    expect((await getBoard(team.leader))!.marks['sec-1']).not.toHaveProperty('by')
+    const asked = await call('PUT', `${boardPath(team.leader)}/marks/sec-1`,
+      { sid: team.sid.worker, body: { note: 'Rewritten as the user asked', override_user: true } })
+    expect(asked.json.mark).toMatchObject({ note: 'Rewritten as the user asked', by: `task:${team.worker}` })
+    expect((await call('PUT', `${boardPath(team.leader)}/marks/sec-1`, { body: { note: 'x', override_user: 'yes' } })).status).toBe(400)
 
     const cleared = await call('PUT', `${boardPath(team.leader)}/marks/sec-1`, { body: { state: '', note: null } })
     expect(cleared.json).toEqual({ mark: null })
@@ -321,22 +338,52 @@ describe('marks', () => {
 describe('DELETE /tasks/:id/board/threads/:thread/messages/:message', () => {
   const post = async (sid: string | undefined, text: string): Promise<Json> =>
     (await call('POST', `${boardPath(team.leader)}/threads/del-1`, { sid, body: { text } })).json.message as Json
-  const del = (id: string, sid?: string, thread = 'del-1') =>
-    call('DELETE', `${boardPath(team.leader)}/threads/${thread}/messages/${id}`, { sid })
+  const del = (id: string, sid?: string, thread = 'del-1', query = '') =>
+    call('DELETE', `${boardPath(team.leader)}/threads/${thread}/messages/${id}${query}`, { sid })
 
-  it('a worker deleting the leader\'s post is 403 not_author; an outsider is 403 not_in_team; nothing moves', async () => {
+  it('anyone deletes any post: a worker the leader\'s, an outsider and a task-less session the user\'s by saying so', async () => {
     const lead = await post(team.sid.leader, 'Leader note')
+    const mine = await post(undefined, 'My note')
+    const again = await post(undefined, 'My second note')
     events = []
     const byWorker = await del(lead.id, team.sid.worker)
-    expect(byWorker.status).toBe(403)
-    expect(byWorker.json.error).toMatchObject({ code: 'not_author', message: 'A session may delete only its own posts' })
-    for (const sid of [team.sid.outsider, team.sid.untracked]) {
-      const res = await del(lead.id, sid)
-      expect(res.status).toBe(403)
-      expect(res.json.error.code).toBe('not_in_team')
+    expect(byWorker.status).toBe(200)
+    expect(byWorker.json).toEqual({ message: lead })
+    // The user's own post: a session needs override_user, else 409 user_wrote and the post stays.
+    for (const sid of [team.sid.outsider, team.sid.untracked, team.sid.leader]) {
+      const refused = await del(mine.id, sid)
+      expect([refused.status, refused.json.error.code]).toEqual([409, 'user_wrote'])
+      expect(refused.json.error.message).toContain('override_user')
     }
-    expect((await getBoard(team.leader))!.threads['del-1'].map((m) => m.id)).toContain(lead.id)
-    expect(events).toEqual([])
+    expect((await getBoard(team.leader))!.threads['del-1'].map((m) => m.id)).toEqual([mine.id, again.id])
+    const deletedDir = path.join(WALNUT_HOME, 'boards', '.deleted')
+    const copiesBefore = (await fs.readdir(deletedDir).catch(() => [] as string[])).filter((n) => n.startsWith(`${team.leader}-`)).length
+    expect((await del(mine.id, team.sid.outsider, 'del-1', '?override_user=true')).json).toEqual({ message: mine })
+    // The board as it was is kept, so the user's post can be put back.
+    const copies = (await fs.readdir(deletedDir)).filter((n) => n.startsWith(`${team.leader}-`)).sort()
+    expect(copies.length).toBe(copiesBefore + 1)
+    const kept = JSON.parse(await fs.readFile(path.join(deletedDir, copies[copies.length - 1]), 'utf-8')) as Json
+    expect((kept.threads['del-1'] as Json[]).map((m) => m.id)).toContain(mine.id)
+    // In a JSON body too, as the api op may send it.
+    const viaBody = await call('DELETE', `${boardPath(team.leader)}/threads/del-1/messages/${again.id}`,
+      { sid: team.sid.untracked, body: { override_user: true } })
+    expect(viaBody.json).toEqual({ message: again })
+    expect((await getBoard(team.leader))!.threads).not.toHaveProperty('del-1')
+    expect(events).toHaveLength(3)
+    expect((await del('bm-000000000000', team.sid.leader, 'del-1', '?override_user=maybe')).status).toBe(400)
+  })
+
+  it('board_post_delete passes override_user for a post the user wrote', async () => {
+    const mine = await post(undefined, 'Delete me through the op')
+    const args = { task: team.leader, thread: 'del-1', id: mine.id }
+    const ctx = { apiBase: `http://localhost:${port}`, callerSid: team.sid.worker, origin: LOCAL_ORIGIN }
+    const refused = await executeOp('board_post_delete', args, ctx)
+    expect(refused.ok).toBe(false)
+    expect(JSON.stringify(refused)).toContain('user_wrote')
+    expect((await getBoard(team.leader))!.threads['del-1'].map((m) => m.id)).toContain(mine.id)
+    const done = await executeOp('board_post_delete', { ...args, override_user: true }, ctx)
+    expect(done.ok, JSON.stringify(done)).toBe(true)
+    expect((await getBoard(team.leader))!.threads).not.toHaveProperty('del-1')
   })
 
   it('the leader deletes its own post; the human deletes a session\'s and its own; the emptied thread goes', async () => {
@@ -349,7 +396,7 @@ describe('DELETE /tasks/:id/board/threads/:thread/messages/:message', () => {
     expect(own.json).toEqual({ message: lead })
     expect((await del(work.id)).json.message).toEqual(work)
     expect((await del(mine.id)).json.message).toEqual(mine)
-    // The earlier test's leader note is still there; delete it too, and the thread key goes.
+    // Anything left in the thread goes too, and the thread key with it.
     for (const m of (await getBoard(team.leader))!.threads['del-1'] ?? []) expect((await del(m.id)).status).toBe(200)
     const got = await call('GET', boardPath(team.leader))
     expect(got.json.threads).not.toHaveProperty('del-1')
@@ -374,11 +421,20 @@ describe('DELETE /tasks/:id/board/threads/:thread/messages/:message', () => {
 })
 
 describe('DELETE /tasks/:id/board', () => {
-  it('a session, even the leader, gets 403 human_only; the human deletes (204, idempotent)', async () => {
-    for (const sid of [team.sid.leader, team.sid.worker, team.sid.outsider]) {
-      const res = await call('DELETE', boardPath(team.leader), { sid })
-      expect(res.status).toBe(403)
-      expect(res.json.error.code).toBe('human_only')
+  it('a session deletes a board as the user may, its own or another\'s; the human deletes (204, idempotent); a copy stays', async () => {
+    const deletedDir = path.join(WALNUT_HOME, 'boards', '.deleted')
+    for (const sid of [team.sid.leader, team.sid.outsider]) {
+      const scratch = await task('Scratch board')
+      await call('PUT', boardPath(scratch), { body: { html: '<p>scratch</p>' } })
+      events = []
+      expect((await call('DELETE', boardPath(scratch), { sid })).status).toBe(204)
+      expect(await getBoard(scratch)).toBeNull()
+      expect(events.map((e) => e.data)).toEqual([{ taskId: scratch, kind: 'deleted', version: 0 }])
+      // The file moved to boards/.deleted/, whole, and is no board any reader lists.
+      const copies = (await fs.readdir(deletedDir)).filter((n) => n.startsWith(`${scratch}-`))
+      expect(copies).toHaveLength(1)
+      const copy = JSON.parse(await fs.readFile(path.join(deletedDir, copies[0]), 'utf-8')) as Json
+      expect(copy).toMatchObject({ task_id: scratch, html: '<p>scratch</p>' })
     }
     expect(await getBoard(team.leader)).not.toBeNull()
     events = []
@@ -449,7 +505,7 @@ describe('round two', () => {
       expect(shared.json.board.html).toContain('walnut-choice')
       const own = await call('GET', boardPath(crew.w1))
       expect(own.json).toMatchObject({ board_task_id: crew.w1, board_task_title: 'Cache worker', board: null })
-      // A worker writes the shared board by its owner id (the team check already allows it).
+      // A worker writes the shared board by its owner id (any session may write any board).
       const post = await call('POST', `${boardPath(shared.json.board_task_id)}/threads/cause-a`, { sid: crew.sid.w1, body: { text: 'On it.' } })
       expect(post.status).toBe(201)
     })
@@ -537,10 +593,10 @@ describe('round two', () => {
       expect(Object.keys((await call('GET', boardPath(crew.boss))).json.projects)).toEqual(['cause-a'])
     })
 
-    it('403 not_in_team for an outsider; 400 bad_status, bad_task (unknown or ambiguous), bad bodies; 404 no_board', async () => {
+    it('an outsider is a session like any other (the user\'s pick holds); 400 bad_status, bad_task, bad bodies; 404 no_board', async () => {
       const out = await call('PUT', `${boardPath(crew.boss)}/projects/cause-a`, { sid: crew.sid.solo, body: { status: 'done' } })
-      expect(out.status).toBe(403)
-      expect(out.json.error.code).toBe('not_in_team')
+      expect(out.status).toBe(409)
+      expect(out.json.error.code).toBe('status_set_by_user')
       const bad = await call('PUT', `${boardPath(crew.boss)}/projects/cause-a`, { body: { status: 'blocked' } })
       expect(bad.status).toBe(400)
       expect(bad.json.error.code).toBe('bad_status')
@@ -626,22 +682,49 @@ describe('round two', () => {
       expect((await call('GET', boardPath(crew.boss))).json.checks['fact-1']).not.toHaveProperty('changed')
     })
 
-    it('read: false removes the tick; a session is 403 human_only; unknown id 404; bad bodies 400', async () => {
+    it('read: false removes the tick; unknown id 404; bad bodies 400', async () => {
       const hash = (await call('GET', boardPath(crew.boss))).json.checks['fact-1'].hash
       const off = await call('PUT', `${boardPath(crew.boss)}/checks/fact-1`, { body: { read: false } })
       expect(off.json).toEqual({ check: null, hash })
       expect((await getBoard(crew.boss))!.checks).not.toHaveProperty('fact-1')
-      for (const sid of [crew.sid.boss, crew.sid.w1, crew.sid.solo]) {
-        const res = await call('PUT', `${boardPath(crew.boss)}/checks/fact-1`, { sid, body: { read: true, hash } })
-        expect(res.status).toBe(403)
-        expect(res.json.error.code).toBe('human_only')
-      }
       const missing = await call('PUT', `${boardPath(crew.boss)}/checks/no-such-point`, { body: { read: true, hash } })
       expect(missing.status).toBe(404)
       expect(missing.json.error.code).toBe('check_not_found')
       expect((await call('PUT', `${boardPath(crew.boss)}/checks/fact-1`, { body: { read: 'yes' } })).status).toBe(400)
       expect((await call('PUT', `${boardPath(crew.boss)}/checks/fact-1`, { body: { read: true } })).status).toBe(400)
       expect((await getBoard(crew.boss))!.checks).not.toHaveProperty('fact-1')
+    })
+
+    it('a session ticks a point as the user would (the leader, a worker, an outsider); the tick and GET name it', async () => {
+      const hash = (await call('GET', boardPath(crew.boss))).json.checks['fact-1'].hash
+      const sessions: Array<[string, string, string]> = [
+        [crew.sid.boss, crew.boss, 'Cache incident lead'], [crew.sid.w1, crew.w1, 'Cache worker'], [crew.sid.solo, crew.solo, 'Lonely task'],
+      ]
+      for (const [sid, taskId, title] of sessions) {
+        const res = await call('PUT', `${boardPath(crew.boss)}/checks/fact-1`, { sid, body: { read: true, hash } })
+        expect(res.status).toBe(200)
+        const stamp = { by: `task:${taskId}`, by_name: `the task "${title}"` }
+        expect(res.json).toEqual({ check: { hash, read_at: expect.any(String), ...stamp }, hash })
+        expect((await call('GET', boardPath(crew.boss))).json.checks['fact-1']).toEqual({ hash, read: true, read_at: res.json.check.read_at, ...stamp })
+      }
+      expect(performSessionSendMock).not.toHaveBeenCalled()
+      // The user can always take it back.
+      expect((await call('PUT', `${boardPath(crew.boss)}/checks/fact-1`, { body: { read: false } })).json.check).toBeNull()
+    })
+
+    it('an agent ticking a point the user already read keeps the user\'s tick', async () => {
+      const hash = (await call('GET', boardPath(crew.boss))).json.checks['fact-1'].hash
+      const mine = await call('PUT', `${boardPath(crew.boss)}/checks/fact-1`, { body: { read: true, hash } })
+      expect(mine.json.check).toEqual({ hash, read_at: expect.any(String) })
+      const agent = await call('PUT', `${boardPath(crew.boss)}/checks/fact-1`, { sid: crew.sid.w1, body: { read: true, hash } })
+      expect(agent.status).toBe(200)
+      expect(agent.json).toEqual({ check: mine.json.check, hash })
+      expect((await getBoard(crew.boss))!.checks['fact-1']).toEqual(mine.json.check)
+      // Nor does its untick: the user's tick comes back unchanged.
+      const untick = await call('PUT', `${boardPath(crew.boss)}/checks/fact-1`, { sid: crew.sid.w1, body: { read: false } })
+      expect(untick.json).toEqual({ check: mine.json.check, hash })
+      expect((await getBoard(crew.boss))!.checks['fact-1']).toEqual(mine.json.check)
+      expect((await call('PUT', `${boardPath(crew.boss)}/checks/fact-1`, { body: { read: false } })).json.check).toBeNull()
     })
   })
 
@@ -677,14 +760,11 @@ describe('round two', () => {
       expect((await getBoard(crew.boss))!.choices).toEqual({})
     })
 
-    it('400 bad_option, 404 choice_not_found, 403 human_only for a session; a send failure keeps the answer', async () => {
+    it('400 bad_option, 404 choice_not_found; a send failure keeps the answer', async () => {
       const bad = await call('PUT', `${boardPath(crew.boss)}/choices/when`, { body: { option: 'later' } })
       expect(bad.status).toBe(400)
       expect(bad.json).toMatchObject({ error: { code: 'bad_option' }, options: ['wait', 'now'] })
       expect((await call('PUT', `${boardPath(crew.boss)}/choices/nope`, { body: { option: 'now' } })).json.error.code).toBe('choice_not_found')
-      const bySession = await call('PUT', `${boardPath(crew.boss)}/choices/when`, { sid: crew.sid.boss, body: { option: 'now' } })
-      expect(bySession.status).toBe(403)
-      expect(bySession.json.error.code).toBe('human_only')
       expect((await call('PUT', `${boardPath(crew.boss)}/choices/when`, { body: {} })).status).toBe(400)
       expect(performSessionSendMock).not.toHaveBeenCalled()
       performSessionSendMock.mockRejectedValueOnce(new SendError('task_has_no_session', 'not started', 409))
@@ -731,15 +811,116 @@ describe('round two', () => {
       expect((performSessionSendMock.mock.calls[1][0] as { text: string }).text).toContain('and wrote in their own words:\n\n> Tell the on-call first.')
     })
 
-    it('words: 400 for a non-string, 413 past a thread message\'s size, 403 for a session', async () => {
+    it('words: 400 for a non-string, 413 past a thread message\'s size', async () => {
       const bad = await call('PUT', `${boardPath(crew.boss)}/choices/when`, { body: { text: 42 } })
       expect(bad.status).toBe(400)
       expect(bad.json.error.code).toBe('bad_request')
       const long = await call('PUT', `${boardPath(crew.boss)}/choices/when`, { body: { text: 'y'.repeat(8 * 1024 + 1) } })
       expect(long.status).toBe(413)
       expect(long.json.error.code).toBe('answer_too_long')
-      const bySession = await call('PUT', `${boardPath(crew.boss)}/choices/when`, { sid: crew.sid.boss, body: { text: 'From a session' } })
-      expect(bySession.json.error.code).toBe('human_only')
+    })
+
+    it('an agent answers: stored with its name, delivered from the agent\'s own session (a peer\'s message), never as the user', async () => {
+      await call('PUT', `${boardPath(crew.boss)}/choices/when`, { body: { option: '', text: '' } })
+      performSessionSendMock.mockClear()
+      events = []
+      const res = await call('PUT', `${boardPath(crew.boss)}/choices/when`, { sid: crew.sid.w1, body: { option: 'now' } })
+      expect(res.status).toBe(200)
+      expect(res.json).toEqual({
+        choice: { option: 'now', label: 'Run it now', at: expect.any(String), by: `task:${crew.w1}`, by_name: 'the task "Cache worker"' },
+        delivery: { state: 'queued', sessionId: 'leader-session' },
+      })
+      expect(performSessionSendMock).toHaveBeenCalledTimes(1)
+      const input = performSessionSendMock.mock.calls[0][0] as { to: string; text: string; callerSid?: string; expectReply?: boolean }
+      // The worker's own sid: the send core wraps it as a peer note from the worker's task, with no reply request.
+      expect(input).toMatchObject({ to: crew.boss, callerSid: crew.sid.w1, expectReply: false })
+      expect(input.text).toContain('On your Board the task "Cache worker" chose option 2 "Run it now" (recommended was 1 "Wait for the deploy") for "Deploy timing" (choice when):')
+      expect(input.text).not.toContain('the user chose')
+      expect(events.map((e) => e.data)).toEqual([{ taskId: crew.boss, kind: 'choice', choice: 'when', version: expect.any(Number) }])
+      expect((await call('GET', boardPath(crew.boss))).json.choices.when).toEqual(res.json.choice)
+
+      // An outsider's words beside the worker's pick: each part names its own writer, in the data and in the message.
+      const words = await call('PUT', `${boardPath(crew.boss)}/choices/when`, { sid: crew.sid.solo, body: { text: 'Tell the on-call first.' } })
+      expect(words.json.choice).toMatchObject({
+        option: 'now', by: `task:${crew.w1}`, text: 'Tell the on-call first.', text_by: `task:${crew.solo}`, text_by_name: 'the task "Lonely task"',
+      })
+      const second = performSessionSendMock.mock.calls[1][0] as { text: string; callerSid?: string }
+      expect(second.callerSid).toBe(crew.sid.solo)
+      expect(second.text).toContain('On your Board the task "Cache worker" chose option 2 "Run it now"')
+      expect(second.text).toContain('\n\nand the task "Lonely task" wrote in their own words:\n\n> Tell the on-call first.\n')
+    })
+
+    it('the board task\'s own session answering its own choice is stored and tells no one; a failed send keeps an agent\'s answer', async () => {
+      performSessionSendMock.mockClear()
+      const own = await call('PUT', `${boardPath(crew.boss)}/choices/when`, { sid: crew.sid.boss, body: { option: 'wait' } })
+      expect(own.status).toBe(200)
+      expect(own.json).toEqual({
+        choice: expect.objectContaining({ option: 'wait', by: `task:${crew.boss}`, by_name: 'the task "Cache incident lead"' }),
+        delivery: { state: 'skipped', reason: 'self' },
+      })
+      expect(performSessionSendMock).not.toHaveBeenCalled()
+      performSessionSendMock.mockRejectedValueOnce(new SendError('target_complete', 'that task is complete', 409))
+      const kept = await call('PUT', `${boardPath(crew.boss)}/choices/when`, { sid: crew.sid.w1, body: { option: 'now' } })
+      expect(kept.json.delivery).toEqual({ state: 'stored', reason: 'target_complete' })
+      expect(kept.json.choice).toMatchObject({ option: 'now', undelivered: true })
+      expect((await getBoard(crew.boss))!.choices.when).toMatchObject({ option: 'now', by: `task:${crew.w1}`, undelivered: true })
+      // The same answer again after a delivery that did not go out: delivered this time, and the marker goes.
+      performSessionSendMock.mockClear()
+      const retried = await call('PUT', `${boardPath(crew.boss)}/choices/when`, { sid: crew.sid.w1, body: { option: 'now' } })
+      expect(retried.json.delivery).toEqual({ state: 'queued', sessionId: 'leader-session' })
+      expect(retried.json.choice).not.toHaveProperty('undelivered')
+      expect(performSessionSendMock).toHaveBeenCalledTimes(1)
+      expect((await getBoard(crew.boss))!.choices.when).not.toHaveProperty('undelivered')
+      // Once it went out, the same answer is unchanged again.
+      const third = await call('PUT', `${boardPath(crew.boss)}/choices/when`, { sid: crew.sid.w1, body: { option: 'now' } })
+      expect(third.json.delivery).toEqual({ state: 'skipped', reason: 'unchanged' })
+      expect(performSessionSendMock).toHaveBeenCalledTimes(1)
+      // The user can always change it back: their clear removes the agents' answer.
+      expect((await call('PUT', `${boardPath(crew.boss)}/choices/when`, { body: { option: '', text: '' } })).json.choice).toBeNull()
+    })
+
+    it('the user\'s answer stays theirs: a session changing or clearing a part the user gave is 409 user_wrote, nobody told; override_user lets it through', async () => {
+      await call('PUT', `${boardPath(crew.boss)}/choices/when`, { body: { option: 'wait', text: 'After the deploy.' } })
+      performSessionSendMock.mockClear()
+      for (const body of [{ option: 'now' }, { text: '' }, { option: '', text: '' }]) {
+        const refused = await call('PUT', `${boardPath(crew.boss)}/choices/when`, { sid: crew.sid.w1, body })
+        expect([refused.status, refused.json.error.code], JSON.stringify(body)).toEqual([409, 'user_wrote'])
+        expect(refused.json.error.message).toContain('override_user')
+      }
+      expect(performSessionSendMock).not.toHaveBeenCalled()
+      expect((await getBoard(crew.boss))!.choices.when).toMatchObject({ option: 'wait', text: 'After the deploy.' })
+      expect((await getBoard(crew.boss))!.choices.when).not.toHaveProperty('by')
+      const asked = await call('PUT', `${boardPath(crew.boss)}/choices/when`, { sid: crew.sid.w1, body: { option: 'now', override_user: true } })
+      expect(asked.json.choice).toMatchObject({ option: 'now', by: `task:${crew.w1}`, text: 'After the deploy.' })
+      expect(asked.json.delivery).toEqual({ state: 'queued', sessionId: 'leader-session' })
+      // The user picking that same option again takes it over: theirs now, nothing delivered.
+      performSessionSendMock.mockClear()
+      const again = await call('PUT', `${boardPath(crew.boss)}/choices/when`, { body: { option: 'now' } })
+      expect(again.json.delivery).toEqual({ state: 'skipped', reason: 'unchanged' })
+      expect(again.json.choice).not.toHaveProperty('by')
+      expect((await call('GET', boardPath(crew.boss))).json.choices.when).not.toHaveProperty('by')
+      expect(performSessionSendMock).not.toHaveBeenCalled()
+      expect((await call('PUT', `${boardPath(crew.boss)}/choices/when`, { body: { option: '', text: '' } })).json.choice).toBeNull()
+    })
+
+    it('an agent\'s answer never reopens a COMPLETE board task, whoever sends it: an env-less caller, a task-less session, a task', async () => {
+      const closed = await task('Closed board')
+      expect((await call('PUT', boardPath(closed), { body: { html: CREW_HTML() } })).status).toBe(200)
+      await completeTask(closed)
+      performSessionSendMock.mockClear()
+      for (const sid of ['external', team.sid.untracked, crew.sid.w1]) {
+        await call('PUT', `${boardPath(closed)}/choices/when`, { body: { option: '', text: '' } })
+        const res = await call('PUT', `${boardPath(closed)}/choices/when`, { sid, body: { option: 'now' } })
+        expect(res.status).toBe(200)
+        expect(res.json.delivery).toEqual({ state: 'stored', reason: 'target_complete' })
+        expect(res.json.choice).toMatchObject({ option: 'now', undelivered: true })
+      }
+      expect(performSessionSendMock).not.toHaveBeenCalled()
+      expect((await getTask(closed)).phase).toBe('COMPLETE')
+      // The user's own answer still goes as a human send would.
+      await call('PUT', `${boardPath(closed)}/choices/when`, { body: { option: 'wait' } })
+      expect(performSessionSendMock).toHaveBeenCalledTimes(1)
+      expect((performSessionSendMock.mock.calls[0][0] as { callerSid?: string }).callerSid).toBeUndefined()
     })
   })
 
@@ -761,7 +942,7 @@ describe('round two', () => {
       expect(events.map((e) => e.data)).toContainEqual({ taskId: crew.boss, kind: 'reminder', reminder: 'when', version: expect.any(Number) })
     })
 
-    it('400 bad_time for the past, past 90 days or not a time; 404 target_not_found; 403 not_in_team', async () => {
+    it('400 bad_time for the past, past 90 days or not a time; 404 target_not_found; an outsider sets one too', async () => {
       for (const at of [inHours(-1), inHours(24 * 91), 'tomorrow', 42]) {
         const res = await call('PUT', `${boardPath(crew.boss)}/reminders/when`, { body: { at } })
         expect(res.status, String(at)).toBe(400)
@@ -771,7 +952,13 @@ describe('round two', () => {
       const missing = await call('PUT', `${boardPath(crew.boss)}/reminders/fact-1`, { body: { at: inHours(1) } })
       expect(missing.status).toBe(404)
       expect(missing.json.error.code).toBe('target_not_found')
-      expect((await call('PUT', `${boardPath(crew.boss)}/reminders/when`, { sid: crew.sid.solo, body: { at: inHours(1) } })).json.error.code).toBe('not_in_team')
+      // The reminder on "when" is the user's: a session replaces it only by saying the user asked.
+      const refused = await call('PUT', `${boardPath(crew.boss)}/reminders/when`, { sid: crew.sid.solo, body: { at: inHours(1) } })
+      expect([refused.status, refused.json.error.code]).toEqual([409, 'user_wrote'])
+      expect((await getBoard(crew.boss))!.reminders.when.set_by).toBe('human')
+      const byOutsider = await call('PUT', `${boardPath(crew.boss)}/reminders/when`,
+        { sid: crew.sid.solo, body: { at: inHours(1), override_user: true } })
+      expect(byOutsider.json.reminder).toMatchObject({ set_by: `task:${crew.solo}` })
     })
 
     it('comes due on the server clock: fired_at is set and the leader\'s session is told once', async () => {
@@ -844,7 +1031,7 @@ describe('round two', () => {
   })
 
   describe('sections seen', () => {
-    it('the human stores a section\'s hash; "" forgets it; GET returns them; a session is 403 human_only', async () => {
+    it('the human stores a section\'s hash; "" forgets it; GET returns them; a session\'s is its own and leaves the user\'s', async () => {
       events = []
       const res = await call('PUT', `${boardPath(crew.boss)}/seen/cause-a`, { body: { hash: 'h-3f9a' } })
       expect(res.status).toBe(200)
@@ -852,8 +1039,15 @@ describe('round two', () => {
       expect((await call('GET', boardPath(crew.boss))).json.section_seen).toEqual({ 'cause-a': res.json.seen })
       expect(events.map((e) => e.data)).toEqual([{ taskId: crew.boss, kind: 'seen', section: 'cause-a', version: expect.any(Number) }])
       const bySession = await call('PUT', `${boardPath(crew.boss)}/seen/cause-a`, { sid: crew.sid.boss, body: { hash: 'x' } })
-      expect(bySession.status).toBe(403)
-      expect(bySession.json.error.code).toBe('human_only')
+      expect(bySession.status).toBe(200)
+      expect(bySession.json).toEqual({ seen: { hash: 'x', at: expect.any(String), by: `task:${crew.boss}` } })
+      // The user's baseline did not move: their "changed" dot stays until they look.
+      const got = (await call('GET', boardPath(crew.boss))).json
+      expect(got.section_seen).toEqual({ 'cause-a': res.json.seen })
+      expect(got.section_seen_agent).toEqual({ 'cause-a': bySession.json.seen })
+      // The session forgetting its mark forgets only its own.
+      expect((await call('PUT', `${boardPath(crew.boss)}/seen/cause-a`, { sid: crew.sid.boss, body: { hash: '' } })).json).toEqual({ seen: null })
+      expect((await getBoard(crew.boss))!.section_seen).toEqual({ 'cause-a': res.json.seen })
       expect((await call('PUT', `${boardPath(crew.boss)}/seen/-bad`, { body: { hash: 'x' } })).json.error.code).toBe('bad_id')
       expect((await call('PUT', `${boardPath(crew.boss)}/seen/cause-a`, { body: {} })).status).toBe(400)
       expect((await call('PUT', `${boardPath(crew.boss)}/seen/cause-a`, { body: { hash: '' } })).json).toEqual({ seen: null })

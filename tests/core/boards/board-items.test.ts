@@ -341,6 +341,39 @@ describe('checks', () => {
     const last = `c${BOARD_MAX_CHECKS}`
     expect(await boardError(() => setBoardCheck(T, last, { read: true, hash: hashes[last] }))).toMatchObject({ code: 'too_many' })
   })
+
+  it('an agent ticks a point: the tick and its state carry by and by_name; the user ticking it again makes it theirs', async () => {
+    const hash = checkHashes(PAGE)['fact-1']
+    const ceo = { by: 'task:main-1' as const, by_name: 'the CEO' }
+    const byAgent = await setBoardCheck(T, 'fact-1', { read: true, hash }, { writer: ceo })
+    expect(byAgent.check).toEqual({ hash, read_at: expect.any(String), by: 'task:main-1', by_name: 'the CEO' })
+    expect(boardCheckStates((await getBoard(T))!)['fact-1'])
+      .toEqual({ hash, read: true, read_at: byAgent.check!.read_at, by: 'task:main-1', by_name: 'the CEO' })
+    // The same agent again keeps its tick; the user's tick replaces it with the user's own (no by).
+    expect((await setBoardCheck(T, 'fact-1', { read: true, hash }, { writer: ceo })).check).toEqual(byAgent.check)
+    const mine = await setBoardCheck(T, 'fact-1', { read: true, hash }, { writer: { by: 'human' } })
+    expect(mine.check).toEqual({ hash, read_at: expect.any(String) })
+    expect(boardCheckStates((await getBoard(T))!)['fact-1']).not.toHaveProperty('by')
+  })
+
+  it('an agent ticking or unticking a point the user already read keeps the user\'s tick and answers it', async () => {
+    const hash = checkHashes(PAGE)['fact-1']
+    const mine = await setBoardCheck(T, 'fact-1', { read: true, hash }, { writer: { by: 'human' } })
+    const ceo = { by: 'task:main-1' as const, by_name: 'the CEO' }
+    const byAgent = await setBoardCheck(T, 'fact-1', { read: true, hash }, { writer: ceo })
+    expect(byAgent).toEqual({ check: mine.check, hash })
+    expect((await getBoard(T))!.checks['fact-1']).toEqual(mine.check)
+    expect(boardCheckStates((await getBoard(T))!)['fact-1']).not.toHaveProperty('by')
+    events = []
+    expect(await setBoardCheck(T, 'fact-1', { read: false }, { writer: ceo })).toEqual({ check: mine.check, hash })
+    expect((await getBoard(T))!.checks['fact-1']).toEqual(mine.check)
+    expect(events).toEqual([])
+    // An agent's own tick it may take back; the user takes back their own.
+    const fix = checkHashes(PAGE)['fix-1']
+    await setBoardCheck(T, 'fix-1', { read: true, hash: fix }, { writer: ceo })
+    expect((await setBoardCheck(T, 'fix-1', { read: false }, { writer: ceo })).check).toBeNull()
+    expect((await setBoardCheck(T, 'fact-1', { read: false })).check).toBeNull()
+  })
 })
 
 describe('choices', () => {
@@ -415,6 +448,63 @@ describe('choices', () => {
     expect((await setBoardChoice(T, 'when', { text: words })).choice).toMatchObject({ text: words })
   })
 
+  it('an agent answers: by / by_name on the pick, text_by / text_by_name on the words, each part keeps its own writer', async () => {
+    const vp = { by: 'task:lead-1' as const, by_name: 'the Growth VP' }
+    const picked = await setBoardChoice(T, 'when', { option: 'now' }, { writer: vp })
+    expect(picked.choice).toEqual({ option: 'now', label: 'Run it now', at: expect.any(String), by: 'task:lead-1', by_name: 'the Growth VP' })
+    // The user adds words: the pick stays the VP's, the words are the user's.
+    const worded = await setBoardChoice(T, 'when', { text: 'Tell the on-call first.' })
+    expect(worded.choice).toEqual({ ...picked.choice, text: 'Tell the on-call first.', text_at: expect.any(String) })
+    // An unnamed agent rewrites the user's words because the user asked: only the words change hands.
+    const agent = { by: 'agent' as const, by_name: 'an agent' }
+    const rewritten = await setBoardChoice(T, 'when', { text: 'Page the on-call.' }, { writer: agent, overrideUser: true })
+    expect(rewritten.choice).toMatchObject({ by: 'task:lead-1', text: 'Page the on-call.', text_by: 'agent', text_by_name: 'an agent' })
+    // The user's own pick takes the pick back as theirs; the agent's words stay the agent's.
+    const mine = await setBoardChoice(T, 'when', { option: 'wait' })
+    expect(mine.choice).not.toHaveProperty('by')
+    expect(mine.choice).toMatchObject({ option: 'wait', text_by: 'agent' })
+    expect((await getBoard(T))!.choices.when).toEqual(mine.choice)
+  })
+
+  it('the user\'s answer stays theirs: an agent changing or clearing a part the user gave is 409 user_wrote unless it says the user asked', async () => {
+    const ceo = { by: 'task:main-1' as const, by_name: 'the CEO' }
+    const mine = await setBoardChoice(T, 'when', { option: 'wait', text: 'After the deploy.' })
+    const attempts: Array<[{ option?: string; text?: string }, string]> = [
+      [{ option: 'now' }, 'option'], [{ option: '' }, 'option'], [{ text: '' }, 'text'], [{ text: 'Now.' }, 'text'], [{ option: '', text: '' }, 'option'],
+    ]
+    for (const [input, part] of attempts) {
+      const err = await boardError(() => setBoardChoice(T, 'when', input, { writer: ceo }))
+      expect([err.statusCode, err.code, err.details], JSON.stringify(input)).toEqual([409, 'user_wrote', { choice: 'when', part, author: 'user' }])
+      expect(err.message).toContain('override_user')
+    }
+    expect((await getBoard(T))!.choices.when).toEqual(mine.choice)
+    // The same parts again change nothing and keep the user's; with override_user the agent's pick lands.
+    expect((await setBoardChoice(T, 'when', { option: 'wait' }, { writer: ceo })).choice).toEqual(mine.choice)
+    const over = await setBoardChoice(T, 'when', { option: 'now' }, { writer: ceo, overrideUser: true })
+    expect(over).toMatchObject({ changed: true, choice: { option: 'now', by: 'task:main-1', text: 'After the deploy.' } })
+    expect(over.choice).not.toHaveProperty('text_by')
+    // A part an agent gave, another agent may change.
+    const vp = { by: 'task:lead-1' as const, by_name: 'the Growth VP' }
+    expect((await setBoardChoice(T, 'when', { option: 'wait' }, { writer: vp })).choice).toMatchObject({ option: 'wait', by: 'task:lead-1' })
+  })
+
+  it('the user giving an agent\'s part again takes it over: no longer the agent\'s, not a change to deliver', async () => {
+    const ceo = { by: 'task:main-1' as const, by_name: 'the CEO' }
+    await setBoardChoice(T, 'when', { option: 'now', text: 'Run it tonight.' }, { writer: ceo })
+    events = []
+    const pick = await setBoardChoice(T, 'when', { option: 'now' })
+    expect(pick.changed).toBe(false)
+    expect(pick.choice).not.toHaveProperty('by')
+    expect(pick.choice).toMatchObject({ option: 'now', text: 'Run it tonight.', text_by: 'task:main-1' })
+    const words = await setBoardChoice(T, 'when', { text: 'Run it tonight.' })
+    expect(words.changed).toBe(false)
+    expect(words.choice).not.toHaveProperty('text_by')
+    expect((await getBoard(T))!.choices.when).toEqual(words.choice)
+    expect(events.map((e) => (e.data as { kind: string }).kind)).toEqual(['choice', 'choice'])
+    // Once it is the user's, the same again is a plain no-op.
+    expect((await setBoardChoice(T, 'when', { option: 'now', text: 'Run it tonight.' })).choice).toEqual(words.choice)
+  })
+
   it('words answer a choice in the reminder sense too: a due reminder on it is cleared', async () => {
     const now = Date.now()
     await setBoardReminder(T, 'when', { at: new Date(now - 1_000).toISOString() }, { by: 'human', nowMs: now - 2_000 })
@@ -425,6 +515,20 @@ describe('choices', () => {
 
 describe('reminders', () => {
   beforeEach(async () => { await setBoardHtml(T, PAGE, { by: 'human' }) })
+
+  it('a reminder the user set stays theirs: an agent replacing or clearing it is 409 user_wrote unless it says the user asked', async () => {
+    const mine = await setBoardReminder(T, 'when', { at: new Date(Date.now() + HOUR).toISOString(), note: 'after lunch' }, { by: 'human' })
+    for (const at of [new Date(Date.now() + 2 * HOUR).toISOString(), null]) {
+      const err = await boardError(() => setBoardReminder(T, 'when', { at }, { by: 'task:main-1' }))
+      expect([err.statusCode, err.code, err.details]).toEqual([409, 'user_wrote', { target: 'when', author: 'user' }])
+    }
+    expect((await getBoard(T))!.reminders.when).toEqual(mine)
+    // An agent's own reminder it replaces freely; the user's with override_user.
+    await setBoardReminder(T, 'cause-a', { at: new Date(Date.now() + HOUR).toISOString() }, { by: 'task:lead' })
+    expect(await setBoardReminder(T, 'cause-a', { at: null }, { by: 'task:main-1' })).toBeNull()
+    expect(await setBoardReminder(T, 'when', { at: null }, { by: 'task:main-1', overrideUser: true })).toBeNull()
+    expect((await getBoard(T))!.reminders).toEqual({})
+  })
 
   it('on a choice or a thread, in the future, at most 90 days out; replaced by a new one; cleared by null', async () => {
     const at = new Date(Date.now() + HOUR).toISOString()
@@ -485,5 +589,20 @@ describe('sections seen', () => {
     expect(Object.keys(after)).toHaveLength(BOARD_MAX_SECTION_SEEN)
     expect(after).not.toHaveProperty('s7')
     expect(after).toHaveProperty('fresh')
+  })
+
+  it('an agent marking a section seen leaves its by in its own map; the user\'s baseline survives it', async () => {
+    const mine = await setBoardSectionSeen(T, 'cause-a', { hash: 'abd' }, { by: 'human' })
+    expect(mine).toEqual({ hash: 'abd', at: expect.any(String) })
+    const agent = await setBoardSectionSeen(T, 'cause-a', { hash: 'abc' }, { by: 'task:main-1' })
+    expect(agent).toEqual({ hash: 'abc', at: expect.any(String), by: 'task:main-1' })
+    let board = (await getBoard(T))!
+    expect(board.section_seen).toEqual({ 'cause-a': mine })
+    expect(board.section_seen_agent).toEqual({ 'cause-a': agent })
+    // An agent forgetting forgets its own mark only.
+    expect(await setBoardSectionSeen(T, 'cause-a', { hash: '' }, { by: 'task:main-1' })).toBeNull()
+    board = (await getBoard(T))!
+    expect(board.section_seen).toEqual({ 'cause-a': mine })
+    expect(board).not.toHaveProperty('section_seen_agent')
   })
 })

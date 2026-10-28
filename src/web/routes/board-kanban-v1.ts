@@ -6,13 +6,17 @@
  *   PUT  /tasks/:id/board/cards/:task           { lane?, summary?, waiting_on?, override_user?, if_unchanged_since? }
  *                                                → { card, lane_effective }
  *   POST /tasks/:id/board/cards/:task/move      { lane, order, rank_only? } → { card, order }
- *   POST /tasks/:id/board/cards                 { title, lane?, tags? } → 201 { task, card, warning? } (humans only:
- *                                                a session files work with task_create, which places it and brakes it)
- *   POST /tasks/:id/board/cards/:task/suggestion { action: accept | dismiss } → { card, lane_effective } (humans only)
- *   PUT  /tasks/:id/board/kanban-seen           { cards?, snapshot?, visit_end? } → { kanban_seen } (humans only)
+ *   POST /tasks/:id/board/cards                 { title, lane?, tags? } → 201 { task, card, warning? } (a
+ *                                                session's add, an ask's included, meets task_create's depth
+ *                                                and title brakes; the user's never does)
+ *   POST /tasks/:id/board/cards/:task/suggestion { action: accept | dismiss } → { card, lane_effective }
+ *   PUT  /tasks/:id/board/kanban-seen           { cards?, snapshot?, visit_end? } → { kanban_seen } (the
+ *                                                writer's own baseline: an agent's is kept apart from the
+ *                                                user's, which only the user moves)
  *
  * Same rules as board-v1.ts: replica 501, the caller from x-walnut-caller-sid,
- * a session only on a board its task belongs to. Mounted at the same prefix.
+ * every caller may write every board and the writer is recorded (`*_by`).
+ * Mounted at the same prefix.
  */
 
 import { Router } from 'express'
@@ -21,7 +25,8 @@ import {
   answerSuggestion, createBoardCardTask, fullTaskId, moveBoardCard, setBoardCard, setBoardLanes, type KanbanWriteOpts,
 } from '../../core/boards/board-kanban.js'
 import { setKanbanSeen } from '../../core/boards/board-kanban-seen.js'
-import { body, param, prepareHumanWrite, prepareWrite, route, RouteError, writer } from './board-v1.js'
+import { boardCallerBraked } from '../../core/boards/board-team.js'
+import { body, param, prepareWrite, route, RouteError, writer } from './board-v1.js'
 
 export const boardKanbanV1Router = Router()
 
@@ -81,13 +86,13 @@ boardKanbanV1Router.post('/tasks/:id/board/cards/:task/move', route(async (req, 
 }))
 
 boardKanbanV1Router.post('/tasks/:id/board/cards', route(async (req, res) => {
-  const task = await prepareHumanWrite(req, 'adds a task from a lane (a session uses task_create)')
+  const { task, caller } = await prepareWrite(req)
   const b = body(req)
   if (typeof b.title !== 'string') throw new RouteError(400, 'bad_request', '`title` must be a string')
   if (b.tags !== undefined && !Array.isArray(b.tags)) throw new RouteError(400, 'bad_request', '`tags` must be an array of strings')
   const out = await createBoardCardTask(task.id, {
     title: b.title, lane: stringField(b, 'lane'), tags: b.tags as string[] | undefined,
-  }, { by: 'human' })
+  }, { by: writer(caller), braked: boardCallerBraked(caller) })
   if (out.warning) {
     log.web.warn('board card task made but not placed', { taskId: task.id, cardTaskId: out.task.id, error: out.error })
   }
@@ -95,19 +100,19 @@ boardKanbanV1Router.post('/tasks/:id/board/cards', route(async (req, res) => {
 }))
 
 boardKanbanV1Router.post('/tasks/:id/board/cards/:task/suggestion', route(async (req, res) => {
-  const task = await prepareHumanWrite(req, 'answers a suggestion')
+  const { task, caller } = await prepareWrite(req)
   const b = body(req)
   if (b.action !== 'accept' && b.action !== 'dismiss') throw new RouteError(400, 'bad_request', '`action` must be accept or dismiss')
   const cardId = await fullTaskId(param(req.params.task))
-  res.json(await answerSuggestion(task.id, cardId, b.action, { by: 'human' }))
+  res.json(await answerSuggestion(task.id, cardId, b.action, { by: writer(caller) }))
 }))
 
 boardKanbanV1Router.put('/tasks/:id/board/kanban-seen', route(async (req, res) => {
-  const task = await prepareHumanWrite(req, 'marks cards seen')
+  const { task, caller } = await prepareWrite(req)
   const b = body(req)
   res.json(await setKanbanSeen(task.id, {
     cards: b.cards as string[] | 'all' | undefined,
     snapshot: b.snapshot as Record<string, never> | undefined,
     visit_end: b.visit_end as boolean | undefined,
-  }, { by: 'human' }))
+  }, { by: writer(caller) }))
 }))

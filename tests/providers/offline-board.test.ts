@@ -157,10 +157,14 @@ describe('board on the host: writes', () => {
     expect(await call(LEAD, 'board_edit', { edits: [{ old: 'API: red', new: 'x' }] })).toMatchObject({ ok: false, error: { code: 'board_edit_not_found' } })
   })
 
-  it('only the board task and the tasks below it write; anyone may read', async () => {
+  it('any session reads and writes any board this host keeps, as online; the writer is recorded', async () => {
     const { call } = harness()
     expect((await call(OUTSIDER, 'board_get', { task: LEAD_TASK }) as Ok).result.task_id).toBe(LEAD_TASK)
-    expect(await call(OUTSIDER, 'board_edit', { task: LEAD_TASK, edits: [{ old: 'API: red', new: 'mine' }] })).toMatchObject({ ok: false, error: { code: 'not_in_team' } })
+    const r = await call(OUTSIDER, 'board_edit', { task: LEAD_TASK, edits: [{ old: 'API: red', new: 'API: amber' }] }) as Ok
+    expect(r.result).toMatchObject({ queued: true, task_id: LEAD_TASK, version: 4 })
+    const read = await call(LEAD, 'board_get') as Ok
+    expect(read.result.board).toMatchObject({ version: 4, updated_by: `task:${OUT_TASK}` })
+    expect(read.result.board.html).toContain('API: amber')
   })
 
   it('a thread post is appended with the writer\'s task as author', async () => {

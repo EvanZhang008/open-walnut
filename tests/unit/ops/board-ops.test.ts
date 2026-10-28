@@ -241,8 +241,9 @@ describe('board ops', () => {
     expect(cleared.outcome).toBe('Reminder on "when" of lead01\'s board cleared.')
   })
 
-  it('the board ops are exactly these: none writes the user\'s read ticks, choices, sections or cards seen', () => {
-    // board_lanes_set / board_card_set are the kanban writers (board-kanban-ops.ts); kanban-seen stays human only.
+  it('the board ops are exactly these: read ticks, choices, sections and cards seen have no named op', () => {
+    // board_lanes_set / board_card_set are the kanban writers (board-kanban-ops.ts). An agent ticks, answers and
+    // marks seen through the api op on the same routes the page uses (open to every caller since 2026-10-27).
     expect(listOps().map((op) => op.name).filter((n) => n.startsWith('board_')).sort()).toEqual([
       'board_card_set', 'board_edit', 'board_get', 'board_lanes_set', 'board_post', 'board_post_delete', 'board_project_set',
       'board_remind', 'board_set',

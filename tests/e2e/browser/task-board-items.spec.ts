@@ -34,6 +34,9 @@
  *   B3. A note's "Dictate…" docks the same composer (mic included) over the note:
  *      it starts from the note's text (unsaved typing is saved first), Send saves
  *      it, Escape and a closing Board keep what was written, an empty Send clears it.
+ *   B4. An agent ticks a point and answers a choice, as the user does (2026-10-27, the user: "all
+ *      human action can be done by agent also"): the Board says whose they are, the leader hears
+ *      the answer as from that task, and the user's own pick replaces it.
  *   C. A worker has no Board tab (the tab is a lead's, 2026-10-26); its board post
  *      (board_post's path: its owner's board, with its caller id) lands on the
  *      leader's board, which the leader's own tab shows, and a post from there
@@ -92,7 +95,7 @@ interface BoardGet {
   board: { html: string; version: number } | null
   threads: Record<string, Array<{ id: string; author: string; text: string; ts: string }>>
   checks: Record<string, { hash: string; read: boolean; changed?: boolean }>
-  choices: Record<string, { option: string }>
+  choices: Record<string, { option: string; by?: string }>
   reminders: Record<string, { at: string; fired_at?: string }>
   section_seen: Record<string, { hash: string }>
   projects: Record<string, { status?: string; status_by?: string }>
@@ -672,6 +675,54 @@ test('a choice takes the user\'s own words, alone or beside a pick', async ({ pa
   await choice.screenshot({ path: `${SHOT_DIR}/${engine}-B2-words-and-pick.png` })
 
   expect(pageErrors).toEqual([])
+})
+
+test('an agent ticks a point and answers a choice; the Board says whose they are', async ({ page }) => {
+  test.setTimeout(240_000)
+  const engine = test.info().project.name
+  const stamp = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`
+  const project = `${engine}-items-agent ${stamp}`
+  const { id: leader, sid: leaderSid } = await taskWithSession(`${engine}-items-agent-lead ${stamp}`, { project }, 'Agent lead ready')
+  const workerTitle = `${engine}-items-agent-worker ${stamp}`
+  const { id: worker, sid: workerSid } = await taskWithSession(workerTitle, { project, parent_task_id: leader }, 'Agent worker ready')
+  await api('PUT', `/api/v1/tasks/${leader}/board`, { html: itemsBoard(engine, stamp, worker) })
+
+  // The worker's session ticks a point and picks an option, with its caller id, as an agent does.
+  const asWorker = { 'x-walnut-caller-sid': workerSid }
+  const hash = (await getBoard(leader)).checks['cause-timeout']!.hash
+  await api('PUT', `/api/v1/tasks/${leader}/board/checks/cause-timeout`, { read: true, hash }, asWorker)
+  await api('PUT', `/api/v1/tasks/${leader}/board/choices/deploy-when`, { option: 'now' }, asWorker)
+  expect((await getBoard(leader)).choices['deploy-when']).toMatchObject({ option: 'now', by: `task:${worker}` })
+  // The leader's session hears it as from the worker's task, once.
+  await expect.poll(() => historyText(leaderSid), { timeout: 60_000 }).toContain('Run it now')
+  expect(occurrences(await historyText(leaderSid), 'Run it now')).toBeGreaterThanOrEqual(1)
+
+  await isolateUiPrefs(page)
+  await presetPanelView(page, { section: 'all', project: '' })
+  await openHome(page)
+  const { pane, frame } = await openBoardTab(page, leader, leaderSid)
+  const check = frame.locator('walnut-check[id="cause-timeout"]')
+  await expect(check.locator('.wn-check-box')).toHaveAttribute('aria-pressed', 'true', { timeout: 15_000 })
+  await expect(check.locator('.wn-check-by')).toHaveText(`by the task "${workerTitle}"`)
+  const other = frame.locator('walnut-check[id="fix-retry"]')
+  await expect(other.locator('.wn-check-by')).toBeHidden()
+  const choice = frame.locator('walnut-choice[id="deploy-when"]')
+  // An answered choice opens folded, its one line naming whose answer it is.
+  await expect(choice.locator('.wn-fold-row .wn-fold-by')).toHaveText(`by the task "${workerTitle}"`, { timeout: 15_000 })
+  await choice.locator('.wn-fold-row').click()
+  await expect(choice.locator('.wn-choice-status')).toContainText(`Answered by the task "${workerTitle}"`)
+  await page.screenshot({ path: `${SHOT_DIR}/${engine}-B4-agent-answers.png` })
+
+  // The user picks another option: theirs replaces the agent's, and says nothing of an agent.
+  await choice.locator('.wn-choice-opt').nth(0).click()
+  await expect.poll(async () => (await getBoard(leader)).choices['deploy-when'], { timeout: 15_000 }).toMatchObject({ option: 'wait' })
+  expect((await getBoard(leader)).choices['deploy-when']?.by).toBeUndefined()
+  await expect(choice.locator('.wn-choice-status')).not.toContainText('by the task', { timeout: 15_000 })
+  // And the user unticks the agent's point.
+  await check.locator('.wn-check-box').click()
+  await expect(check.locator('.wn-check-box')).toHaveAttribute('aria-pressed', 'false', { timeout: 15_000 })
+  await expect(check.locator('.wn-check-by')).toBeHidden()
+  await expect(pane).toBeVisible()
 })
 
 test('a note docks Walnut\'s composer (voice included) through Dictate…', async ({ page }) => {

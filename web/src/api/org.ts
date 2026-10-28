@@ -62,7 +62,11 @@ export async function saveOrgSettings(patch: Partial<OrgSettings>): Promise<OrgS
 }
 
 /** An org node as the org routes answer it. */
-export interface OrgNodeBrief { id: string; title: string; project: string; phase: string; org_role?: string; org_name?: string; org_vp_only?: boolean }
+export interface OrgNodeBrief {
+  id: string; title: string; project: string; phase: string; org_role?: string; org_name?: string; org_vp_only?: boolean;
+  /** Who wrote its instructions, and when (additive). */
+  org_instructions?: Task['org_instructions'];
+}
 
 /** A new project with its own VP, or a new VP to put projects under (`kind` 'vp'). Returns its lead. */
 export async function createOrgNode(

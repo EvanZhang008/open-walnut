@@ -1,18 +1,19 @@
 /**
- * Who may write a task's Board.
+ * Who writes a task's Board, and which board a team shares.
  *
- * Humans always (no caller sid: the web UI, the phone, the user's own CLI). A
- * session only when its task IS the board's task or one of its descendants
- * (`parent_task_id` chain): the leader and its workers share one board. Every
- * other caller is refused, including a session with no task and an unidentified
- * process (the `external` gateway label), which proves no team membership.
+ * Anyone may write any board (2026-10-27, the user: "all human action can be done
+ * by agent also"): the user (no caller sid: the web UI, the phone), a session's
+ * task (`task:<id>`), and an agent Walnut cannot place ('agent': a session with no
+ * task, an env-less `walnut`). The writer is recorded, never refused; the Board
+ * shows who wrote what, and the user can change it back.
  *
- * And which board a team shares (resolveTeamBoardTask): a worker opening the
- * Board, or calling board_* without naming a task, lands on its leader's.
+ * Which board a team shares (resolveTeamBoardTask): a worker opening the Board, or
+ * calling board_* without naming a task, lands on its leader's. That is only the
+ * default target; naming another task's board writes that one.
  */
 
 import type { Task } from '../types.js';
-import { BoardError, hasBoard, type BoardFile } from './board-store.js';
+import { hasBoard, type BoardFile, type BoardWriter, type BoardWriterStamp } from './board-store.js';
 import { effectiveLanes, type BoardTeamEntry } from './board-lanes.js';
 
 /** Ancestors walked before giving up; subtasks nest at most a few levels. */
@@ -59,40 +60,74 @@ export async function resolveTeamBoardTask(taskId: string): Promise<TeamBoardOwn
 
 export type BoardCaller =
   | { kind: 'human' }
-  | { kind: 'task'; taskId: string; sessionId: string };
+  | { kind: 'task'; taskId: string; sessionId: string }
+  /**
+   * A session with no task (`untracked`), or a sid Walnut cannot place
+   * (`external`: an env-less `walnut`, or an unknown sid).
+   */
+  | { kind: 'agent'; sessionId: string; untracked?: true };
 
-/**
- * True when `taskId` is `boardTaskId` or below it. Walks `parent_task_id`
- * upward with a seen set and a cap, so a corrupt cyclic chain terminates.
- */
-export async function isWithinTeam(boardTaskId: string, taskId: string): Promise<boolean> {
-  const { getTask } = await import('../task-manager.js');
-  const seen = new Set<string>();
-  let current: string | undefined = taskId;
-  for (let step = 0; current && step <= TEAM_WALK_CAP; step++) {
-    if (current === boardTaskId) return true;
-    if (seen.has(current)) return false;
-    seen.add(current);
-    const parent: string | undefined = await getTask(current).then((t) => t.parent_task_id, () => undefined);
-    current = parent || undefined;
-  }
-  return false;
-}
-
-/** Resolve the caller and refuse anyone outside the board task's team (403 `not_in_team`). */
-export async function callerMayWriteBoard(boardTaskId: string, callerSid: string | undefined): Promise<BoardCaller> {
+/** Who is writing (from `x-walnut-caller-sid`). Never refuses: every caller may write every board. */
+export async function resolveBoardCaller(callerSid: string | undefined): Promise<BoardCaller> {
   const { resolveCallerPlacement } = await import('../sessions/caller-placement.js');
   const caller = await resolveCallerPlacement(callerSid);
   if (caller.kind === 'human') return { kind: 'human' };
   if (caller.kind === 'ask' || caller.kind === 'worker') {
-    if (await isWithinTeam(boardTaskId, caller.task.id)) {
-      return { kind: 'task', taskId: caller.task.id, sessionId: caller.session.id };
-    }
-    throw new BoardError('not_in_team', 403, { callerTaskId: caller.task.id });
+    return { kind: 'task', taskId: caller.task.id, sessionId: caller.session.id };
   }
-  throw new BoardError('not_in_team', 403, undefined, caller.kind === 'untracked'
-    ? 'This session has no task, so it is in no board\'s team'
-    : 'Unidentified callers may not write a board');
+  if (caller.kind === 'untracked') return { kind: 'agent', sessionId: caller.session.id, untracked: true };
+  return { kind: 'agent', sessionId: (callerSid ?? '').trim() };
+}
+
+/**
+ * Whether the brakes a session's task_create meets (subtask depth, short title)
+ * apply to this caller's board writes that make a task. The same rule as
+ * create-rules.ts (`'session' in caller`): every session, a worker's, a Personal
+ * AI ask's and one with no task alike; never the user or a process that is no
+ * session at all.
+ */
+export function boardCallerBraked(caller: BoardCaller): boolean {
+  return caller.kind === 'task' || (caller.kind === 'agent' && caller.untracked === true);
+}
+
+/** The caller as a board record names it. */
+export function boardWriter(caller: BoardCaller): BoardWriter {
+  return caller.kind === 'human' ? 'human' : caller.kind === 'task' ? `task:${caller.taskId}` : 'agent';
+}
+
+const NAME_TITLE_MAX = 60;
+
+/**
+ * The caller as the user reads it beside what it did: "the CEO" (Main), "the
+ * Growth VP" (a lead), `the task "..."` (its title on one line, at most 60
+ * characters), or "an agent" (no task Walnut can find); undefined for the user,
+ * whose writes carry no name.
+ */
+export async function boardWriterName(caller: BoardCaller): Promise<string | undefined> {
+  if (caller.kind === 'human') return undefined;
+  if (caller.kind === 'agent') return 'an agent';
+  const { getTask } = await import('../task-manager.js');
+  const task = await getTask(caller.taskId).catch(() => undefined);
+  if (!task) return 'an agent';
+  if (task.org_role === 'main' || task.org_role === 'lead') {
+    const { orgDisplayTitle } = await import('../org/org-tree.js');
+    const role = oneLine(orgDisplayTitle(task));
+    if (role) return `the ${role}`;
+  }
+  const title = oneLine(task.title ?? '');
+  return title ? `the task "${title}"` : 'a task';
+}
+
+/** A title as one short line: every run of whitespace (newlines, tabs) one space, at most NAME_TITLE_MAX characters. */
+function oneLine(text: string): string {
+  const flat = text.replace(/\s+/g, ' ').trim();
+  return flat.length > NAME_TITLE_MAX ? `${flat.slice(0, NAME_TITLE_MAX - 1).trimEnd()}\u2026` : flat;
+}
+
+/** `by` and, for an agent, `by_name`: what a write the user could also make records. */
+export async function boardWriterStamp(caller: BoardCaller): Promise<BoardWriterStamp> {
+  const name = await boardWriterName(caller);
+  return { by: boardWriter(caller), ...(name ? { by_name: name } : {}) };
 }
 
 // ── The team as the kanban sees it ──
@@ -158,5 +193,6 @@ export function kanbanFields(board: BoardFile | null, snap: TeamSnapshot) {
     cards: board?.cards ?? {},
     team,
     kanban_seen: board?.kanban_seen ?? null,
+    ...(board?.kanban_seen_agent ? { kanban_seen_agent: board.kanban_seen_agent } : {}),
   };
 }

@@ -8,7 +8,9 @@
  *
  * Reading is for any caller the auth middleware let in. Changing it installs a
  * build on the companion, so it is for the person at this machine
- * (routes/expose.ts isPersonAtThisMachine). Mounted on the leader only.
+ * (routes/expose.ts isPersonAtThisMachine). Retry changes no setting (it looks
+ * again under the one the person chose), so a session on this machine may ask
+ * for it too (isOnThisMachine). Mounted on the leader only.
  */
 
 import { Router, type Request, type Response, type NextFunction } from 'express'
@@ -18,7 +20,7 @@ import {
   companionAutoUpdateChanged, refreshCompanionBuildView, retryCompanionBuild, companionBuildView,
 } from '../../core/companion-build/mac.js'
 import { log } from '../../logging/index.js'
-import { isPersonAtThisMachine } from './expose.js'
+import { isOnThisMachine, isPersonAtThisMachine } from './expose.js'
 
 export const companionBuildRouter = Router()
 
@@ -36,7 +38,9 @@ companionBuildRouter.get('/', async (_req: Request, res: Response, next: NextFun
 
 companionBuildRouter.post('/retry', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    if (!isPersonAtThisMachine(req)) return refuse(res)
+    if (!isOnThisMachine(req)) return refuse(res)
+    const callerSid = req.get('x-walnut-caller-sid')
+    if (callerSid) log.web.info('companion build: retry asked by a session', { callerSid })
     await retryCompanionBuild()
     res.json(companionBuildView())
   } catch (err) {

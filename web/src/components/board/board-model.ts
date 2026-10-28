@@ -14,7 +14,7 @@ export type {
   LaneTemplateId,
 } from '../../../../src/core/boards/board-lanes';
 
-export type BoardAuthor = 'user' | `task:${string}`;
+export type BoardAuthor = 'user' | 'agent' | `task:${string}`;
 
 export interface BoardMessage {
   id: string;
@@ -27,6 +27,9 @@ export interface BoardMark {
   state?: string;
   note?: string;
   updated_at: string;
+  /** An agent wrote it (absent = the user). */
+  by?: string;
+  by_name?: string;
 }
 
 export interface BoardDoc {
@@ -72,24 +75,33 @@ export interface BoardProject {
   meta?: string;
 }
 
-/** A point on the page as GET reports it: `hash` is the CURRENT one, `read` = the user read this version. */
+/** A point on the page as GET reports it: `hash` is the CURRENT one, `read` = read in this version. */
 export interface BoardCheck {
   hash: string;
   read: boolean;
   read_at?: string;
   /** Read once, and the point's text changed since. */
   changed?: boolean;
+  /** An agent ticked it (`task:<id>` or 'agent') and its name as the user reads it; absent = the user. */
+  by?: string;
+  by_name?: string;
 }
 
-/** The user's answer to a `<walnut-choice>`. */
+/** The answer to a `<walnut-choice>`, the user's or an agent's. */
 export interface BoardChoice {
-  /** The option picked; '' when the user answered in their own words alone. */
+  /** The option picked; '' when the answer is words alone. */
   option: string;
   label?: string;
   at: string;
-  /** The user's own words, beside a pick or instead of one. */
+  /** An agent picked it (absent = the user). */
+  by?: string;
+  by_name?: string;
+  /** Words beside a pick or instead of one. */
   text?: string;
   text_at?: string;
+  /** An agent wrote the words (absent = the user). */
+  text_by?: string;
+  text_by_name?: string;
 }
 
 /** A "remind me" on a choice or a thread; `fired_at` once Walnut told the leader. */
@@ -103,10 +115,12 @@ export interface BoardReminder {
   attempts?: number;
 }
 
-/** The text hash of a `[data-project]` section the user last saw (the frame hashes it). */
+/** The text hash of a `[data-project]` section last seen (the frame hashes it). */
 export interface BoardSectionSeen {
   hash: string;
   at?: string;
+  /** An agent marked it seen (absent = the user). */
+  by?: string;
 }
 
 export interface BoardPayload {

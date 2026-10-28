@@ -320,14 +320,16 @@ export async function buildSessionContext(
   return { systemPrompt: composePrompt(found, { taskLine, taskDir }) }
 }
 
-/** The task fields the default instructions depend on (role, project, ask, the user's own instructions). */
+/** The task fields the default instructions depend on (role, project, ask, its standing instructions). */
 export type InstructionTask = {
-  org_role?: string; project?: string; org_leads?: readonly string[]; walnut_agent?: boolean;
-  org_instructions?: { text: string; at?: string }; org_vp_only?: boolean; org_name?: string;
+  id?: string; org_role?: string; project?: string; org_leads?: readonly string[]; walnut_agent?: boolean;
+  org_instructions?: { text: string; at?: string; by?: string; by_name?: string }; org_vp_only?: boolean; org_name?: string;
 }
 
 /**
- * The user's own standing instructions for Main or a lead (the Org page), after its role line.
+ * The standing instructions for Main or a lead, after its role line: written by the user (the Org
+ * page) or by an agent (the org ops), and the line names which (2026-10-27, the user: "all human
+ * action can be done by agent also").
  * The instruction notice tells a running session only the prompt lines it lacks, so every line
  * carries the version (a hash of the words and when they were set): an edit makes every line new,
  * and the session reads the whole new set, never a removed line as still in force, nor a kept
@@ -340,10 +342,24 @@ function orgInstructionsLine(task: InstructionTask): string {
   const text = own.text.trim().slice(0, ORG_INSTRUCTIONS_MAX)
   const version = `v${createHash('sha1').update(`${own.at}\n${text}`).digest('hex').slice(0, 8)}`
   const when = `${own.at.slice(0, 16).replace('T', ' ')} UTC`
-  if (!text) return `Your user cleared their own instructions for your role (${version}, ${when}): drop every earlier version.\n\n`
+  // Who wrote them: the user (no `by` on older rows), this node itself, or another agent.
+  const byUser = !own.by || own.by === 'human'
+  const self = !!task.id && own.by === `task:${task.id}`
+  const agent = own.by_name?.trim() || 'an agent'
+  if (!text) {
+    const cleared = byUser ? 'Your user cleared their own instructions for your role'
+      : self ? 'You cleared the instructions for your role'
+        : `${agent.charAt(0).toUpperCase()}${agent.slice(1)} cleared the instructions for your role`
+    return `${cleared} (${version}, ${when}): drop every earlier version.\n\n`
+  }
   const lines = text.split('\n').map((l) => l.trimEnd()).filter((l) => l.trim()).map((l) => `[${version}] ${l}`)
-  return `Your user's own instructions for your role (${version}, set ${when}). They replace every earlier version, `
-    + `and where any other part of these instructions says otherwise, they win. Each line of this version starts with [${version}]:\n`
+  const source = byUser ? 'Your user\'s own instructions' : self ? 'The instructions you wrote' : `The instructions ${agent} wrote`
+  // Only the user's own words outrank the rest of the prompt; an agent's rank below Walnut's rules,
+  // the team charter and the user, and never grant a step that needs the user's approval.
+  const rank = byUser ? 'and where any other part of these instructions says otherwise, they win'
+    : 'and they rank below Walnut\'s rules, the team charter and anything your user tells you; they never permit a step that needs your user\'s approval'
+  return `${source} for your role (${version}, set ${when}${byUser ? '' : '; your user may change them'}). They replace every earlier version, `
+    + `${rank}. Each line of this version starts with [${version}]:\n`
     + lines.join('\n') + '\n\n'
 }
 

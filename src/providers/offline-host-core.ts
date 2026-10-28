@@ -1786,28 +1786,18 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
         // Journal v2: the writer is the record's actor; a post keeps its writer-minted id.
         if (kit.WRITE_OPS.indexOf(r.op) === -1 || r.args.task !== boardId) continue
         const a = r.actor
-        const by = a?.kind === 'session' ? `task:${callerIdentity(home, a.sid).taskId ?? ''}` : a?.kind === 'device' ? `device:${a.name ?? a.deviceId}` : 'task:'
+        const sessionTask = a?.kind === 'session' ? callerIdentity(home, a.sid).taskId : undefined
+        const by = sessionTask ? `task:${sessionTask}` : a?.kind === 'device' ? `device:${a.name ?? a.deviceId}` : 'agent'
         const postId = r.postId
         board = kit.apply(board, r.op, r.args, by, new Date(r.at).toISOString(), boardId, () => postId ?? `bm-offline-${r.seq}`)
         continue
       }
       if (r.kind !== 'op' || kit.WRITE_OPS.indexOf(r.op) === -1 || r.args.task !== boardId) continue
-      const by = `task:${callerIdentity(home, r.callerSid).taskId ?? ''}`
+      const opTask = callerIdentity(home, r.callerSid).taskId
+      const by = opTask ? `task:${opTask}` : 'agent'
       board = kit.apply(board, r.op, r.args, by, new Date(r.at).toISOString(), boardId, () => `bm-offline-${r.seq}`)
     }
     return board
-  }
-
-  /** The board's task itself or a task below it, as the copy knows the tree. */
-  function inTeam(home: string, boardId: string, taskId: string | undefined): boolean {
-    const tasks = slices.get(home)?.tasks ?? []
-    let cur = taskId
-    for (let i = 0; cur && i < 12; i++) {
-      if (cur === boardId) return true
-      const at: string = cur
-      cur = tasks.find((t) => t.id === at)?.parent_task_id
-    }
-    return false
   }
 
   function opBoard(home: string, callerSid: string, name: string, args: Record<string, unknown>): GatewayResult {
@@ -1832,11 +1822,9 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
         next: 'Keep it current with board_edit; a write is applied here now and reaches Walnut when the server reconnects.',
       })
     }
+    // Any session writes any board it can see here, as online (board-team.ts); the writer is recorded.
     const me = callerIdentity(home, callerSid)
-    if (!inTeam(home, boardId, me.taskId)) {
-      return fail('not_in_team', 'Only the board task\'s own session or its subtasks\' sessions may write this board')
-    }
-    const prepared = kit.prepare(board, name, args, `task:${me.taskId}`)
+    const prepared = kit.prepare(board, name, args, me.taskId ? `task:${me.taskId}` : 'agent')
     if (!prepared.ok) return fail(prepared.code, prepared.message, prepared.detail !== undefined ? { detail: prepared.detail } : undefined)
     const denied = admitWrite(callerSid) ?? roomFor(home)
     if (denied) return denied

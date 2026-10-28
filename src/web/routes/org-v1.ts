@@ -29,7 +29,8 @@ import { getOrgSettings, setOrgSettings } from '../../core/org/org-settings.js'
 import {
   OrgError, contactLaunch, ensureMainTask, getOrgTree, orgReportsOf, resolveOrgContact, setProjectVp,
 } from '../../core/org/org-store.js'
-import { createOrgNode, editOrgNode, editProjectVp } from '../../core/org/org-node-edit.js'
+import { createOrgNode, editOrgNode, editProjectVp, type OrgWriter } from '../../core/org/org-node-edit.js'
+import { orgDisplayTitle } from '../../core/org/org-tree.js'
 
 export const orgV1Router = Router()
 
@@ -137,24 +138,43 @@ orgV1Router.post('/org/vp', async (req: Request, res: Response, next: NextFuncti
 
 // Make a project with its own VP, or a VP to put projects under, and name or instruct a VP or
 // the CEO (src/core/org/org-node-edit.ts; the org chart's "+ New VP", "+ New project" and ⋯).
-// Instructions are the user's own words, so a session may not write them.
-function nodeCaller(req: Request): { human: boolean } {
-  const human = !header(req, 'x-walnut-caller-sid')
-  if (!human && req.body?.instructions !== undefined) {
-    throw new OrgError('human_only', 403, 'A VP\'s or the CEO\'s instructions are the user\'s own words: ask the user to set them on the Org page.')
-  }
-  return { human }
+// The user or any agent may (2026-10-27, the user: "all human action can be done by agent also"):
+// a create names what it makes, so it brings a deleted project back for either; the instructions
+// record who wrote them, which the Org page shows.
+async function nodeCaller(req: Request): Promise<{ human: boolean; writer: OrgWriter }> {
+  const sid = header(req, 'x-walnut-caller-sid')
+  if (!sid) return { human: true, writer: { by: 'human' } }
+  const { resolveCaller } = await import('../../core/sessions/session-send-core.js')
+  const caller = await resolveCaller(sid)
+  const taskId = caller.kind === 'session' ? caller.record.taskId : undefined
+  if (!taskId) return { human: true, writer: { by: 'agent', byName: 'an agent' } }
+  const { getTask } = await import('../../core/task-manager.js')
+  const task = await getTask(taskId).catch(() => null)
+  return { human: true, writer: { by: `task:${taskId}`, byName: writerName(task) } }
 }
 
-/** A node as the chart's form reads it back: the name the server kept, for its done line. */
+/** An agent's task as the user reads it on the Org page: "the CEO", "the Growth VP", the task's title. */
+function writerName(task: Task | null): string {
+  if (!task) return 'an agent'
+  // One line of at most 60 characters: a lead with no name of its own reads by its title, which grows.
+  const cap = (raw: string) => { const one = raw.replace(/\s+/g, ' ').trim(); return one.length > 60 ? `${one.slice(0, 59)}…` : one }
+  if (task.org_role === 'main' || task.org_role === 'lead') return `the ${cap(orgDisplayTitle(task))}`
+  return `the task "${cap(task.title) || 'untitled'}"`
+}
+
+/** A node as the chart's form reads it back: the name the server kept, for its done line, and
+ *  its instructions' stamp (who wrote them, when). */
 function nodeBrief(task: Task): Record<string, unknown> {
-  return { ...brief(task), ...(task.org_name ? { org_name: task.org_name } : {}), ...(task.org_vp_only ? { org_vp_only: true } : {}) }
+  return {
+    ...brief(task), ...(task.org_name ? { org_name: task.org_name } : {}), ...(task.org_vp_only ? { org_vp_only: true } : {}),
+    ...(task.org_instructions ? { org_instructions: task.org_instructions } : {}),
+  }
 }
 
 orgV1Router.post('/org/projects', async (req: Request, res: Response, next: NextFunction) => {
   try {
     primaryOnly('A project is made')
-    const lead = await createOrgNode({ name: req.body?.name, vpName: req.body?.vpName, instructions: req.body?.instructions }, false, nodeCaller(req))
+    const lead = await createOrgNode({ name: req.body?.name, vpName: req.body?.vpName, instructions: req.body?.instructions, overrideUser: req.body?.override_user }, false, await nodeCaller(req))
     res.status(201).json({ task: nodeBrief(lead) })
   } catch (err) {
     sendError(res, next, err)
@@ -164,7 +184,7 @@ orgV1Router.post('/org/projects', async (req: Request, res: Response, next: Next
 orgV1Router.post('/org/vps', async (req: Request, res: Response, next: NextFunction) => {
   try {
     primaryOnly('A VP is made')
-    const lead = await createOrgNode({ name: req.body?.name, instructions: req.body?.instructions }, true, nodeCaller(req))
+    const lead = await createOrgNode({ name: req.body?.name, instructions: req.body?.instructions, overrideUser: req.body?.override_user }, true, await nodeCaller(req))
     res.status(201).json({ task: nodeBrief(lead) })
   } catch (err) {
     sendError(res, next, err)
@@ -174,8 +194,8 @@ orgV1Router.post('/org/vps', async (req: Request, res: Response, next: NextFunct
 orgV1Router.put('/org/nodes/:id', async (req: Request, res: Response, next: NextFunction) => {
   try {
     primaryOnly('A VP or the CEO is changed')
-    nodeCaller(req)
-    const task = await editOrgNode(String(req.params.id), { name: req.body?.name, instructions: req.body?.instructions })
+    const { writer } = await nodeCaller(req)
+    const task = await editOrgNode(String(req.params.id), { name: req.body?.name, instructions: req.body?.instructions, overrideUser: req.body?.override_user }, writer)
     res.json({ task: nodeBrief(task) })
   } catch (err) {
     sendError(res, next, err)
@@ -186,8 +206,8 @@ orgV1Router.put('/org/nodes/:id', async (req: Request, res: Response, next: Next
 orgV1Router.put('/org/projects/:project/vp', async (req: Request, res: Response, next: NextFunction) => {
   try {
     primaryOnly('A VP is changed')
-    nodeCaller(req)
-    const task = await editProjectVp(String(req.params.project), { name: req.body?.name, instructions: req.body?.instructions })
+    const { writer } = await nodeCaller(req)
+    const task = await editProjectVp(String(req.params.project), { name: req.body?.name, instructions: req.body?.instructions, overrideUser: req.body?.override_user }, writer)
     res.json({ task: nodeBrief(task) })
   } catch (err) {
     sendError(res, next, err)

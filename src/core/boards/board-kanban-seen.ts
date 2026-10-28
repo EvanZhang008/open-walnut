@@ -1,8 +1,11 @@
 /**
  * The user's "Changed since you last looked" baseline of a Board's kanban
  * (spec 8.4): kept on the server beside the board (`kanban_seen`), so every
- * window and device counts the same changes. Humans only: a session's write
- * is 403 human_only (it is the user's attention, not the leader's).
+ * window and device counts the same changes. An agent may mark cards seen too,
+ * as the user would (2026-10-27, the user: "all human action can be done by
+ * agent also"), but its baseline is its own (`kanban_seen_agent`, with `by`):
+ * only the user moves `kanban_seen`, so their "Changed" count stays until they
+ * look.
  *
  * A write names cards (a list, or 'all'), may carry the snapshot the browser
  * showed for some of them (those entries win: they are what the user saw), and
@@ -57,12 +60,12 @@ function checkSnapshot(raw: unknown): Record<string, BoardKanbanSeenCard> {
   return out;
 }
 
+/** Writes the caller's own baseline and answers it: the user's `kanban_seen`, an agent's `kanban_seen_agent`. */
 export async function setKanbanSeen(
   ownerId: string,
   input: KanbanSeenInput,
   opts: { by: BoardWriter },
 ): Promise<{ kanban_seen: BoardKanbanSeen }> {
-  if (opts.by !== 'human') throw new BoardError('human_only', 403, undefined, 'Only the user marks cards seen');
   const listed = input.cards;
   if (listed !== undefined && listed !== 'all'
     && (!Array.isArray(listed) || listed.some((id) => typeof id !== 'string'))) {
@@ -72,10 +75,11 @@ export async function setKanbanSeen(
   if (input.visit_end !== undefined && typeof input.visit_end !== 'boolean') throw new BoardError('bad_request', 400, undefined, '`visit_end` must be a boolean');
   const snapshot = checkSnapshot(input.snapshot);
   const snap = await teamSnapshot(ownerId);
+  const field = opts.by === 'human' ? 'kanban_seen' : 'kanban_seen_agent';
   const next = await updateBoard(ownerId, (raw) => {
-    const board = raw ?? emptyBoard(ownerId, 'human');
+    const board = raw ?? emptyBoard(ownerId, opts.by);
     const lanes = effectiveLanes(board.lanes, teamTags(snap), board.lanes_template).lanes;
-    const prev = board.kanban_seen;
+    const prev = board[field] ?? null;
     const now = new Date().toISOString();
     const cards: Record<string, BoardKanbanSeenCard> = {};
     for (const [id, e] of Object.entries(prev?.cards ?? {})) if (snap.members.has(id)) cards[id] = e;
@@ -90,8 +94,9 @@ export async function setKanbanSeen(
     const seen: BoardKanbanSeen = { at: restart ? now : prev.at, cards };
     if (restart && prev?.at) seen.previous_at = prev.at;
     else if (!restart && prev?.previous_at) seen.previous_at = prev.previous_at;
-    return { ...board, kanban_seen: seen };
+    if (opts.by !== 'human') seen.by = opts.by;
+    return { ...board, [field]: seen };
   });
   emitChanged({ taskId: ownerId, kind: 'seen', kanban: true, version: next.version });
-  return { kanban_seen: next.kanban_seen! };
+  return { kanban_seen: next[field]! };
 }

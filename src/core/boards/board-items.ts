@@ -6,12 +6,17 @@
  *               and its status (decide / wip / wait / done), owned by Walnut so
  *               the page recolors when the leader or the user changes it (a
  *               status the user picked is theirs until a session overrides it);
- *   checks      the user's read ticks: the hash of the point they read, so an
- *               edit of the point brings it back unread;
- *   choices     the user's answer to a `<walnut-choice>`;
+ *   checks      read ticks: the hash of the point read, so an edit of the point
+ *               brings it back unread;
+ *   choices     the answer to a `<walnut-choice>`;
  *   reminders   "remind me later" on a choice or a thread (clock: board-reminders.ts);
- *   section_seen  the sections the user has seen, by the hash the frame computed
- *               (a red dot marks a section the leader changed since).
+ *   section_seen  the sections seen, by the hash the frame computed (a red dot
+ *               marks a section the leader changed since).
+ *
+ * Ticks, answers and sections seen are the user's, or an agent's acting as the user
+ * would (2026-10-27, the user: "all human action can be done by agent also"): an
+ * agent's record carries `by` (and `by_name`, which the Board shows beside it); a
+ * record without `by` is the user's.
  *
  * Checks and choices are validated against the html INSIDE the lock, so a
  * concurrent board_edit can never let a stale tick or a removed option through.
@@ -22,12 +27,16 @@ import {
   BOARD_CHOICE_TEXT_MAX_BYTES,
   BOARD_NOTE_MAX_BYTES,
   BoardError,
+  agentStamp,
   bytes,
   checkItemId,
   emitChanged,
+  getBoard,
+  isUsers,
   reminderIsDue,
   requireBoard,
   updateBoard,
+  userWrote,
   withoutKey,
   type BoardProject,
   type BoardProjectStatus,
@@ -37,8 +46,10 @@ import {
   type BoardReminder,
   type BoardSectionSeen,
   type BoardWriter,
+  type BoardWriterStamp,
 } from './board-store.js';
 import { checkHashes, choiceSpecs, own, threadMeta, type BoardChoiceSpec } from './board-html.js';
+import { log } from '../../logging/index.js';
 
 export const BOARD_MAX_PROJECTS = 200;
 export const BOARD_MAX_CHECKS = 2000;
@@ -205,17 +216,22 @@ export async function writeBoardProject(
   return out;
 }
 
-// ── Checks (the user's read ticks) ──
+// ── Checks (read ticks) ──
 
 /**
  * Tick a point read or unread. `read: true` must quote the point's CURRENT hash
  * (the one Walnut gave the frame); a point that changed since is 409
- * `check_changed` with the new hash, so the user sees the new text first.
+ * `check_changed` with the new hash, so the reader sees the new text first.
+ * `writer` (default the user) is stamped on the tick; ticking a point already read
+ * in this version keeps that tick unless someone else ticks it. The user's tick
+ * stays theirs: an agent ticking it again, or unticking it, gets it back unchanged
+ * (an agent may untick only an agent's tick).
  */
 export async function setBoardCheck(
   taskId: string,
   id: string,
   input: { read: boolean; hash?: string },
+  opts: { writer?: BoardWriterStamp } = {},
 ): Promise<{ check: BoardCheck | null; hash: string }> {
   checkItemId(id, 'check');
   if (typeof input.read !== 'boolean') throw new BoardError('bad_request', 400, undefined, '`read` must be a boolean');
@@ -223,32 +239,45 @@ export async function setBoardCheck(
     throw new BoardError('bad_request', 400, undefined, '`hash` (the point\'s hash from GET) is required to mark it read');
   }
   let out: { check: BoardCheck | null; hash: string } | undefined;
+  const stamp = agentStamp(opts.writer);
+  let kept = false;
   const next = await updateBoard(taskId, (raw) => {
     const current = requireBoard(raw);
     const hashes = checkHashes(current.html);
     const hash = own(hashes, id);
     if (hash === undefined) throw new BoardError('check_not_found', 404, { check: id });
     if (!input.read) {
+      const ticked = own(current.checks, id);
+      if (ticked && stamp.by && isUsers(ticked.by)) {
+        out = { check: ticked, hash };
+        kept = true;
+        return current;
+      }
       out = { check: null, hash };
       return { ...current, checks: withoutKey(current.checks, id) };
     }
     if (input.hash !== hash) throw new BoardError('check_changed', 409, { check: id, hash });
     const prev = own(current.checks, id);
-    const check = prev?.hash === hash ? prev : { hash, read_at: new Date().toISOString() };
+    const sameWriter = (prev?.by ?? 'human') === (stamp.by ?? 'human');
+    // The user's tick on this version stays theirs: an agent ticking it again changes nothing.
+    const keep = prev?.hash === hash && (sameWriter || !prev.by);
+    const check: BoardCheck = keep ? prev : { hash, read_at: new Date().toISOString(), ...stamp };
     const checks = makeRoom(current.checks, id, hashes, BOARD_MAX_CHECKS, 'read ticks');
     out = { check, hash };
     return { ...current, checks: { ...checks, [id]: check } };
   });
-  emitChanged({ taskId, kind: 'check', check: id, version: next.version });
+  if (!kept) emitChanged({ taskId, kind: 'check', check: id, version: next.version });
   return out!;
 }
 
-/** Every check on the page now: its current hash, and whether the user read THIS version. */
+/** Every check on the page now: its current hash, and whether it was read in THIS version (and by whom, when an agent). */
 export interface BoardCheckState {
   hash: string;
   read: boolean;
   read_at?: string;
   changed?: boolean;
+  by?: BoardWriter;
+  by_name?: string;
 }
 
 export function boardCheckStates(board: Pick<BoardFile, 'html' | 'checks'>): Record<string, BoardCheckState> {
@@ -260,12 +289,13 @@ export function boardCheckStates(board: Pick<BoardFile, 'html' | 'checks'>): Rec
       read: stored?.hash === hash,
       ...(stored ? { read_at: stored.read_at } : {}),
       ...(stored && stored.hash !== hash ? { changed: true } : {}),
+      ...agentStamp(writerOf(stored?.by, stored?.by_name)),
     };
   }
   return out;
 }
 
-// ── Choices (the user's answers) ──
+// ── Choices (answers) ──
 
 export interface ChoiceResult {
   choice: BoardChoice | null;
@@ -275,15 +305,22 @@ export interface ChoiceResult {
 }
 
 /**
- * The user's answer to a `<walnut-choice>`: an option, their own words, or both.
- * Each field given replaces that part and keeps the other (`option: ""` takes the
- * pick back, `text: ""` the words); an answer with neither is cleared. Text alone
- * is an answer. Answering clears a due reminder on the choice.
+ * The answer to a `<walnut-choice>`: an option, words, or both. Each field given
+ * replaces that part and keeps the other (`option: ""` takes the pick back,
+ * `text: ""` the words); an answer with neither is cleared. Text alone is an
+ * answer. Answering clears a due reminder on the choice. `writer` (default the
+ * user) is stamped on the part it wrote: `by` for the pick, `text_by` for the
+ * words; a part kept from before keeps its own writer, except that the user
+ * giving the same part again takes it over (no delivery: nothing changed).
+ * The user's answer stays theirs: an agent changing or clearing a part the user
+ * gave (the pick, or the words) is 409 user_wrote unless it passes
+ * `overrideUser`; a first answer, or a part an agent gave, it may change.
  */
 export async function setBoardChoice(
   taskId: string,
   id: string,
   input: { option?: string; text?: string },
+  opts: { writer?: BoardWriterStamp; overrideUser?: boolean } = {},
 ): Promise<ChoiceResult> {
   checkItemId(id, 'choice');
   if (input.option !== undefined && typeof input.option !== 'string') {
@@ -302,6 +339,9 @@ export async function setBoardChoice(
   }
   let out: ChoiceResult | undefined;
   let clearedReminder = false;
+  let tookOver = false;
+  const stamp = agentStamp(opts.writer);
+  const human = !stamp.by;
   const next = await updateBoard(taskId, (raw) => {
     const current = requireBoard(raw);
     const specs = choiceSpecs(current.html);
@@ -315,6 +355,10 @@ export async function setBoardChoice(
     const now = new Date().toISOString();
     const nextOption = option ?? prev?.option ?? '';
     const nextText = text ?? prev?.text ?? '';
+    if (prev && !human && opts.overrideUser !== true) {
+      if (prev.option && nextOption !== prev.option && isUsers(prev.by)) throw userWrote('answer', { choice: id, part: 'option' });
+      if (prev.text && nextText !== prev.text && isUsers(prev.text_by)) throw userWrote('answer', { choice: id, part: 'text' });
+    }
     if (!nextOption && !nextText) {
       out = { choice: null, changed: !!prev, spec };
       return { ...current, choices: withoutKey(current.choices, id) };
@@ -322,23 +366,70 @@ export async function setBoardChoice(
     const due = own(current.reminders, id);
     clearedReminder = !!due && reminderIsDue(due);
     const reminders = clearedReminder ? withoutKey(current.reminders, id) : current.reminders;
-    if (prev && (prev.option ?? '') === nextOption && (prev.text ?? '') === nextText) {
-      out = { choice: prev, changed: false, spec };
-      return { ...current, reminders };
-    }
-    const choice: BoardChoice = nextOption === (prev?.option ?? '') && prev
-      ? { option: prev.option, ...(prev.label ? { label: prev.label } : {}), at: prev.at }
-      : { option: nextOption, ...(picked ? { label: picked.label } : {}), at: now };
+    // A part kept as it was keeps its writer, unless the user gave it again: then it is theirs.
+    const pickSame = !!prev && nextOption === (prev.option ?? '');
+    const pickWriter = pickSame && !(human && option !== undefined) ? writerOf(prev!.by, prev!.by_name) : opts.writer;
+    const choice: BoardChoice = pickSame
+      ? { option: prev!.option, ...(prev!.label ? { label: prev!.label } : {}), at: prev!.at, ...agentStamp(pickWriter) }
+      : { option: nextOption, ...(picked ? { label: picked.label } : {}), at: now, ...stamp };
+    const wordsSame = !!prev?.text && nextText === prev.text && !!prev.text_at;
     if (nextText) {
       choice.text = nextText;
-      choice.text_at = nextText === prev?.text && prev.text_at ? prev.text_at : now;
+      choice.text_at = wordsSame ? prev!.text_at : now;
+      const words = agentStamp(wordsSame && !(human && text !== undefined) ? writerOf(prev!.text_by, prev!.text_by_name) : opts.writer);
+      if (words.by) choice.text_by = words.by;
+      if (words.by_name) choice.text_by_name = words.by_name;
+    }
+    if (prev && pickSame && (prev.text ?? '') === nextText) {
+      // The same answer: nothing to deliver. The user repeating an agent's part takes it over.
+      tookOver = (choice.by ?? '') !== (prev.by ?? '') || (choice.text_by ?? '') !== (prev.text_by ?? '');
+      const kept = tookOver ? { ...choice, ...(prev.undelivered ? { undelivered: true as const } : {}) } : prev;
+      out = { choice: kept, changed: false, spec };
+      return { ...current, choices: tookOver ? { ...current.choices, [id]: kept } : current.choices, reminders };
     }
     const choices = makeRoom(current.choices, id, specs, BOARD_MAX_CHOICES, 'answered choices');
     out = { choice, changed: true, spec };
     return { ...current, choices: { ...choices, [id]: choice }, reminders };
   });
-  if (out!.changed || clearedReminder) emitChanged({ taskId, kind: 'choice', choice: id, version: next.version });
+  if (out!.changed || clearedReminder || tookOver) emitChanged({ taskId, kind: 'choice', choice: id, version: next.version });
   return out!;
+}
+
+/**
+ * Record whether the delivery of `answer` went out (`delivered`), so a repeat of
+ * an undelivered answer is delivered again (BoardChoice.undelivered). Touches the
+ * file only when the marker changes, and only while the stored answer is still
+ * `answer` (a newer one has its own delivery). Answers `answer` with the marker
+ * as it now stands. Best effort: never throws.
+ */
+export async function markChoiceDelivery(
+  taskId: string, id: string, answer: BoardChoice, delivered: boolean,
+): Promise<BoardChoice> {
+  const { undelivered: _given, ...plain } = answer;
+  const marked: BoardChoice = delivered ? plain : { ...plain, undelivered: true };
+  const same = (c: BoardChoice | undefined) => !!c && c.option === answer.option && c.at === answer.at
+    && (c.text ?? '') === (answer.text ?? '') && (c.text_at ?? '') === (answer.text_at ?? '');
+  const current = own((await getBoard(taskId).catch(() => null))?.choices ?? {}, id);
+  if (!same(current)) return answer;
+  if (!!current!.undelivered === !delivered) return marked;
+  try {
+    await updateBoard(taskId, (raw) => {
+      const board = requireBoard(raw);
+      const choice = own(board.choices, id);
+      if (!same(choice)) return board;
+      const { undelivered: _was, ...rest } = choice!;
+      return { ...board, choices: { ...board.choices, [id]: delivered ? rest : { ...rest, undelivered: true } } };
+    });
+    return marked;
+  } catch (err) {
+    log.web.warn('board choice delivery marker not written', { taskId, choice: id, error: err instanceof Error ? err.message : String(err) });
+    return answer;
+  }
+}
+
+/** A stored `by` / `by_name` pair as a stamp (none: the user). */
+function writerOf(by: BoardWriter | undefined, byName: string | undefined): BoardWriterStamp | undefined {
+  return by ? { by, ...(byName ? { by_name: byName } : {}) } : undefined;
 }
 
 // ── Reminders ──
@@ -357,7 +448,7 @@ export async function setBoardReminder(
   taskId: string,
   target: string,
   input: { at: string | null; note?: string | null },
-  opts: { by: BoardWriter; nowMs?: number },
+  opts: { by: BoardWriter; nowMs?: number; overrideUser?: boolean },
 ): Promise<BoardReminder | null> {
   checkItemId(target, 'target');
   const nowMs = opts.nowMs ?? Date.now();
@@ -378,6 +469,11 @@ export async function setBoardReminder(
   const next = await updateBoard(taskId, (raw) => {
     const current = requireBoard(raw);
     const onPage = isReminderTarget(current.html, target);
+    // A reminder the user set stays theirs: an agent replaces or clears it only by saying the user asked.
+    const prev = own(current.reminders, target);
+    if (prev && prev.set_by === 'human' && !isUsers(opts.by) && opts.overrideUser !== true) {
+      throw userWrote('reminder', { target });
+    }
     if (at === null) {
       if (!onPage && !Object.hasOwn(current.reminders, target)) throw new BoardError('target_not_found', 404, { target });
       return { ...current, reminders: withoutKey(current.reminders, target) };
@@ -421,18 +517,19 @@ export async function patchBoardReminder(
   return result;
 }
 
-// ── Sections the user has seen ──
+// ── Sections seen ──
 
 /**
- * The user saw `section` as the frame hashed it (`hash: ""` forgets it). The
- * server never computes this hash: the frame hashes the section's text and
- * compares on its side. At most BOARD_MAX_SECTION_SEEN entries; the oldest
- * goes first when a new one would pass the cap.
+ * `section` was seen as the frame hashed it (`hash: ""` forgets it). The server
+ * never computes this hash: the frame hashes the section's text and compares on
+ * its side. At most BOARD_MAX_SECTION_SEEN entries; the oldest goes first when a
+ * new one would pass the cap. `by` (default the user) is kept for an agent.
  */
 export async function setBoardSectionSeen(
   taskId: string,
   section: string,
   input: { hash: string },
+  opts: { by?: BoardWriter } = {},
 ): Promise<BoardSectionSeen | null> {
   checkItemId(section, 'section');
   if (typeof input.hash !== 'string') throw new BoardError('bad_request', 400, undefined, '`hash` must be a string ("" forgets)');
@@ -440,16 +537,22 @@ export async function setBoardSectionSeen(
   if (hash.length > SEEN_HASH_MAX_CHARS) {
     throw new BoardError('bad_request', 400, { max: SEEN_HASH_MAX_CHARS }, `\`hash\` is at most ${SEEN_HASH_MAX_CHARS} characters`);
   }
-  const seen: BoardSectionSeen | null = hash ? { hash, at: new Date().toISOString() } : null;
+  const agent = !!opts.by && opts.by !== 'human';
+  const seen: BoardSectionSeen | null = hash
+    ? { hash, at: new Date().toISOString(), ...(agent ? { by: opts.by } : {}) }
+    : null;
+  // The user's baseline is the user's: an agent's mark (or its forgetting) goes to its own map.
+  const field = agent ? 'section_seen_agent' : 'section_seen';
   const next = await updateBoard(taskId, (raw) => {
     const current = requireBoard(raw);
-    if (!seen) return { ...current, section_seen: withoutKey(current.section_seen, section) };
-    let rest = current.section_seen;
+    const marks = current[field] ?? {};
+    if (!seen) return { ...current, [field]: withoutKey(marks, section) };
+    let rest = marks;
     if (!Object.hasOwn(rest, section) && Object.keys(rest).length >= BOARD_MAX_SECTION_SEEN) {
       const oldest = Object.entries(rest).sort(([, a], [, b]) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0))[0][0];
       rest = withoutKey(rest, oldest);
     }
-    return { ...current, section_seen: { ...rest, [section]: seen } };
+    return { ...current, [field]: { ...rest, [section]: seen } };
   });
   emitChanged({ taskId, kind: 'seen', section, version: next.version });
   return seen;

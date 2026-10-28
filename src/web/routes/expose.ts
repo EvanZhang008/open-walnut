@@ -12,7 +12,9 @@
  * Reading is for any caller the auth middleware let in. Changing it (turning a
  * tunnel on puts this server one address away from the internet) is for the
  * person at this machine: a request from this machine with no session caller
- * header. A paired device, a session and a replica get 403.
+ * header. A paired device, a session and a replica get 403. Retry changes no
+ * setting (it starts again only a tunnel the person turned on), so a session on
+ * this machine may press it too (isOnThisMachine).
  */
 
 import { Router, type Request, type Response, type NextFunction } from 'express'
@@ -32,11 +34,19 @@ export const exposeRouter = Router()
 
 const MAX_OPTION_LENGTH = 200
 
+/**
+ * A caller on this machine, the person or a session it runs: for a button that
+ * changes no setting and grants nothing, only redoes what the person chose (a
+ * Retry). A paired device, a session on another host and a replica stay out.
+ */
+export function isOnThisMachine(req: Request): boolean {
+  if (CLOUD_MODE) return false
+  return isLocalOrigin(requestOrigin(req))
+}
+
 /** The person at this machine, not a paired device and not a session acting for one. */
 export function isPersonAtThisMachine(req: Request): boolean {
-  if (CLOUD_MODE) return false
-  if (req.get('x-walnut-caller-sid')) return false
-  return isLocalOrigin(requestOrigin(req))
+  return !req.get('x-walnut-caller-sid') && isOnThisMachine(req)
 }
 
 function refuse(res: Response): void {
@@ -133,8 +143,10 @@ exposeRouter.put('/', async (req: Request, res: Response, next: NextFunction) =>
 })
 
 exposeRouter.post('/retry', (req: Request, res: Response) => {
-  if (!isPersonAtThisMachine(req)) return refuse(res)
+  if (!isOnThisMachine(req)) return refuse(res)
   const runtime = getExposeRuntime()
+  const callerSid = req.get('x-walnut-caller-sid')
+  if (callerSid) log.web.info('expose: retry asked by a session', { callerSid })
   runtime?.retry()
   res.json({ status: runtime?.status() ?? offStatus() })
 })

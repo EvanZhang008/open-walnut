@@ -56,12 +56,13 @@ export function cutTitle(title: string, max = CUT): string {
 const EMPTY_HASH = '811c9dc5';
 
 /**
- * Who wrote: 'the leader' for the owner's session, 'you' for a human, 'the worker' for the card's own
- * task (`selfId`: a foot never spends its width on the card's own title, R3-04), else the writer
- * task's title cut to 24; '' = unknown.
+ * Who wrote: 'the leader' for the owner's session, 'you' for a human, 'an agent' for a session Walnut
+ * could not place, 'the worker' for the card's own task (`selfId`: a foot never spends its width on the
+ * card's own title, R3-04), else the writer task's title cut to 24; '' = unknown.
  */
 export function writerText(by: BoardCardWriter | string | undefined, ownerId: string, titleOf: (id: string) => string, selfId?: string): string {
   if (by === 'human') return 'you';
+  if (by === 'agent') return 'an agent';
   if (!by || !by.startsWith('task:')) return '';
   const id = by.slice(5);
   if (id === ownerId) return 'the leader';

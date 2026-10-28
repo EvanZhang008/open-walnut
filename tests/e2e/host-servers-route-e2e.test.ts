@@ -56,9 +56,14 @@ describe('a host\'s Walnut, as a setting', () => {
     expect(Array.isArray(body.providers)).toBe(true)
   })
 
-  it('a session may not turn one on, here or through the config write', async () => {
+  it('a session may not turn one on, here or through the config write; its Retry changes nothing', async () => {
     expect((await api('/api/host-servers/devbox', { method: 'PUT', headers: SESSION, body: JSON.stringify({ enabled: true }) })).status).toBe(403)
-    expect((await api('/api/host-servers/devbox/retry', { method: 'POST', headers: SESSION })).status).toBe(403)
+    // Retry redoes only what the person set up, so a session on this machine may press it (2026-10-27).
+    const retry = await api('/api/host-servers/devbox/retry', { method: 'POST', headers: SESSION })
+    expect(retry.status).toBe(200)
+    expect(((await retry.json()) as { host: { settings: { enabled: boolean } } }).host.settings.enabled).toBe(false)
+    // A session on another host is not at this machine: still refused.
+    expect((await api('/api/host-servers/devbox/retry', { method: 'POST', headers: { ...SESSION, 'x-walnut-origin': 'host:devbox' } })).status).toBe(403)
     const viaConfig = await api('/api/config', {
       method: 'PUT', headers: SESSION,
       body: JSON.stringify({ hosts: { devbox: { hostname: 'devbox.invalid', enabled: false, server: { enabled: true } } } }),

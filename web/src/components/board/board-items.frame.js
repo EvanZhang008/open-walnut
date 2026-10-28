@@ -5,7 +5,10 @@
  * rules: plain ES2017, loaded as a string, runs only inside the board frame.
  *
  * These are the user talking to the leader, so every write starts from a
- * trusted event and goes up as a request the host acks: `wn-board:mark` (a
+ * trusted event and goes up as a request the host acks. An agent may tick a
+ * point or answer a choice too (through the server, never this frame): its
+ * record carries `by_name`, shown beside the result ("by the CEO"); the user's
+ * own carries none and reads as it always did. Writes going up: `wn-board:mark` (a
  * note), `wn-board:project` (a status the user picks), `wn-board:check`,
  * `wn-board:choice`, `wn-board:remind`. A check's hash is the server's (the
  * frame never hashes a point): "read" means read THIS version of its text.
@@ -35,9 +38,13 @@
     d.setHours(9, 0, 0, 0);
     return d;
   }
+  /** An agent's name on a record (`by` set and not the user), else '' (the user's own). */
+  function agentName(by, name) { return by && by !== 'human' ? String(name || 'an agent') : ''; }
+  function cap(s) { return s ? s.charAt(0).toUpperCase() + s.slice(1) : s; }
   /** Who set a status, in the board's words. */
   function writerLabel(by) {
     if (by === 'human') return 'you';
+    if (by === 'agent') return 'an agent';
     var id = String(by || '').indexOf('task:') === 0 ? by.slice(5) : '';
     if (id && id === state.boardTaskId) return 'the leader';
     var ref = id ? state.refs[id] : null;
@@ -189,8 +196,10 @@
         + '<textarea class="wn-mark-note" rows="1" placeholder="Note for the leader" aria-label="Note for the leader" hidden></textarea>'
         + '<button type="button" class="wn-mark-voice" aria-pressed="false"'
         + ' title="Write the note in Walnut\'s composer, voice included">Dictate…</button>'
+        + '<span class="wn-mark-by" hidden></span>'
         + '<span class="wn-saved" aria-live="polite"></span>';
       this.wnNote = this.querySelector('.wn-mark-note');
+      this.wnBy = this.querySelector('.wn-mark-by');
       this.wnNoteToggle = this.querySelector('.wn-mark-note-toggle');
       this.wnVoice = this.querySelector('.wn-mark-voice');
       // The frame has no microphone: a trusted click asks the host to dock its
@@ -286,6 +295,10 @@
       if (this.wnDirty || this.wnSaving || document.activeElement === this.wnNote) { this.wnPaintNote(); return; }
       var mark = state.marks[this.wnId];
       var note = mark && mark.note ? mark.note : '';
+      // A note an agent wrote says so; the user's own carries no name.
+      var by = mark && note ? agentName(mark.by, mark.by_name) : '';
+      if (this.wnBy.hidden !== !by) this.wnBy.hidden = !by;
+      if (this.wnBy.textContent !== (by ? 'Written by ' + by : '')) this.wnBy.textContent = by ? 'Written by ' + by : '';
       // Typed in the document before this one and not saved yet: shown again, and saved now.
       var draft = Object.prototype.hasOwnProperty.call(state.note_drafts, this.wnId) ? state.note_drafts[this.wnId] : null;
       if (typeof draft === 'string' && draft !== note) {
@@ -429,10 +442,12 @@
       var ctl = document.createElement('span');
       ctl.className = 'wn-check-ctl';
       ctl.setAttribute('data-wn-ui', '');
-      ctl.innerHTML = '<button type="button" class="wn-check-box" aria-pressed="false"></button><span class="wn-check-hint" hidden></span>';
+      ctl.innerHTML = '<button type="button" class="wn-check-box" aria-pressed="false"></button><span class="wn-check-hint" hidden></span>'
+        + '<span class="wn-check-by" hidden></span>';
       this.wnCtl = ctl;
-      this.wnBox = ctl.firstChild;
-      this.wnHint = ctl.lastChild;
+      this.wnBox = ctl.querySelector('.wn-check-box');
+      this.wnHint = ctl.querySelector('.wn-check-hint');
+      this.wnBy = ctl.querySelector('.wn-check-by');
       this.wnBox.addEventListener('click', function (e) { e.preventDefault(); if (trusted(e)) self.wnToggle(); });
     }
     wnToggle() {
@@ -467,7 +482,9 @@
       var changed = !read && !!c.changed;
       if (this.hasAttribute('data-read') !== read) this.toggleAttribute('data-read', read);
       if (this.hasAttribute('data-changed') !== changed) this.toggleAttribute('data-changed', changed);
-      var label = read ? 'Read. Click to mark it unread.'
+      // An agent's tick says whose it is; the user's own says nothing.
+      var by = read && !this.wnSaving ? agentName(c.by, c.by_name) : '';
+      var label = read ? 'Read' + (by ? ' by ' + by : '') + '. Click to mark it unread.'
         : changed ? 'Changed since you read it. Click to mark it read.' : 'Mark as read';
       this.wnBox.setAttribute('aria-pressed', read ? 'true' : 'false');
       this.wnBox.setAttribute('aria-label', label);
@@ -478,6 +495,9 @@
       this.wnHint.hidden = !hint;
       this.wnHint.textContent = hint;
       this.wnHint.classList.toggle('wn-failed', !!this.wnError);
+      this.wnBy.hidden = !by;
+      this.wnBy.textContent = by ? 'by ' + by : '';
+      this.wnBy.title = by ? 'Marked read by ' + by + (c.read_at ? ', ' + kit.when(c.read_at) : '') : '';
     }
   }
 
@@ -624,10 +644,12 @@
         if (again && document.activeElement !== again) again.focus();
       }
 
-      // The user's own words, beside the pick or instead of it.
+      // The words, beside the pick or instead of it (the user's, or an agent's that says so).
       var words = answer && answer.text ? String(answer.text) : '';
+      var pickBy = answer ? agentName(answer.by, answer.by_name) : '';
+      var wordsBy = answer ? agentName(answer.text_by, answer.text_by_name) : '';
       kit.setHtml(this.wnWords, words
-        ? '<div class="wn-msg-meta"><span class="wn-who">You wrote</span>'
+        ? '<div class="wn-msg-meta"><span class="wn-who">' + (wordsBy ? esc(cap(wordsBy)) + ' wrote' : 'You wrote') + '</span>'
           + (answer.text_at ? '<span class="wn-when">' + esc(kit.when(answer.text_at)) + '</span>' : '')
           + '</div><div class="wn-text">' + kit.richText(words) + '</div>'
         : '');
@@ -646,8 +668,9 @@
       // An answer the options no longer list still says what it was.
       var listed = options.filter(function (o) { return o.key === chosen; })[0];
       var status = this.wnStatus || (chosen
-        ? (listed ? 'Answered' : 'You chose "' + (answer.label || chosen) + '"') + (answer.at ? ' ' + kit.when(answer.at) : '')
-        : words ? 'Answered in your own words' : '');
+        ? (listed ? 'Answered' + (pickBy ? ' by ' + pickBy : '') : (pickBy ? cap(pickBy) : 'You') + ' chose "' + (answer.label || chosen) + '"')
+          + (answer.at ? ' ' + kit.when(answer.at) : '')
+        : words ? (wordsBy ? 'Answered by ' + wordsBy : 'Answered in your own words') : '');
       if (this.wnStatusEl.textContent !== status) this.wnStatusEl.textContent = status;
       this.wnStatusEl.classList.toggle('wn-failed', this.wnFailed);
 
@@ -663,11 +686,14 @@
         var pick = chosen ? (listed ? listed.label : answer.label || chosen) : '';
         var said = words.replace(/\s+/g, ' ').trim();
         var at = answer.text_at && (!answer.at || answer.text_at > answer.at) ? answer.text_at : answer.at;
+        // Whose answer it is: the pick's writer, else the words' (none for the user's own).
+        var foldBy = chosen ? pickBy : wordsBy;
         kit.setHtml(this.wnFoldRow, '<span class="wn-fold-caret" aria-hidden="true">\u25b8</span>'
           + '<span class="wn-fold-title">' + esc(title || id) + '</span>'
           + (pick ? '<span class="wn-fold-pick">' + esc(pick) + '</span>' : '')
           + (summary ? '<span class="wn-fold-sum">' + esc(summary) + '</span>'
             : said ? '<span class="wn-fold-sum wn-fold-words">"' + esc(said.length > 140 ? said.slice(0, 139) + '\u2026' : said) + '"</span>' : '')
+          + (foldBy ? '<span class="wn-fold-by">by ' + esc(foldBy) + '</span>' : '')
           + (at ? '<span class="wn-fold-when">' + esc(kit.when(at)) + '</span>' : ''));
       }
       var foldable = answered && !folded && !composing && !this.wnSending;

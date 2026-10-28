@@ -5,7 +5,7 @@
  * process onto a new daemon took a person's click). Each runs the SAME core as
  * the panel (terminateSession, restartSession, applySessionModelChange,
  * applySessionEffortChange, patchSession) through its /api/v1 mirror; the server
- * refuses a session stopping or restarting itself, its own lead or Main
+ * refuses only a session stopping or restarting itself
  * (core/sessions/session-control-guard.ts). A stop is the host's graceful stop
  * request, never a kill of the Claude Code process.
  */
@@ -48,8 +48,8 @@ defineOp({
   description:
     'Stop the session running a task, the same as Stop in its session panel menu: the host stops the Claude Code process ' +
     'gracefully (never a kill) and the task keeps its conversation, so a later task_send or task_start resumes it. ' +
-    'Only when the user asked, or as a lead managing your own team\'s work (a runaway or stuck worker). ' +
-    'Never your own task (409 own_session: complete it or end your turn instead), your own lead (409 own_lead) or Main (409 main_session). ' +
+    'Only when the user asked, or when the work needs it (a runaway or stuck worker, a session to move onto a new daemon). ' +
+    'Any task\'s session a person may stop, your lead\'s and Main\'s included; never your own (409 own_session: complete your task or end your turn instead). ' +
     'A session that owns scheduled jobs is refused (409 cron_owner) unless force is true.',
   input: {
     id: z.string().min(1).describe('Task id or unique prefix'),
@@ -89,8 +89,8 @@ defineOp({
   description:
     'Restart the session running a task, the same as Restart in its session panel menu: Walnut starts a fresh Claude Code ' +
     'process on the same conversation (for example to move it onto an upgraded daemon, or to wake a dead one); messages ' +
-    'waiting for it are delivered after. It runs no new turn by itself. Only when the user asked, or as a lead managing ' +
-    'your own team\'s work. Never your own task (409 own_session), your own lead (409 own_lead) or Main (409 main_session).',
+    'waiting for it are delivered after. It runs no new turn by itself. Only when the user asked, or when the work needs it. ' +
+    'Any task\'s session a person may restart, your lead\'s and Main\'s included; never your own (409 own_session).',
   input: {
     id: z.string().min(1).describe('Task id or unique prefix'),
   },
