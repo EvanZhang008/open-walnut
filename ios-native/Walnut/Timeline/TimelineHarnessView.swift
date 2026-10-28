@@ -20,6 +20,9 @@ struct TimelineHarnessView: View {
     /// at (a section wider than the render window, so the footer has to state the
     /// numbers and carry `Show more`) need text no live server sends today.
     @State private var activityDetail: TimelineActivityDetail?
+    /// The Tables fixtures inside a letter, so `MarkdownView`'s table (letters,
+    /// sheets) can be looked at beside the chat's.
+    @State private var showsTableLetter = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -47,6 +50,13 @@ struct TimelineHarnessView: View {
         .navigationBarTitleDisplayMode(.inline)
         .sheet(item: $activityDetail) { detail in
             TimelineActivitySheet(detail: detail)
+        }
+        .sheet(isPresented: $showsTableLetter) {
+            ScrollView {
+                LetterMarkdownBody(markdown: store.tableLetter)
+                    .padding(16)
+            }
+            .accessibilityIdentifier("harness.letterSheet")
         }
     }
 
@@ -100,6 +110,11 @@ struct TimelineHarnessView: View {
                 // Every turn shape (hidden, answered, riders), see TimelineTurnFixtures.
                 Button("Turns") { store.replaceWithTurnMessages() }
                     .accessibilityIdentifier("harness.turnFolds")
+                Button("Letter") {
+                    store.replaceWithTableMessages()
+                    showsTableLetter = true
+                }
+                .accessibilityIdentifier("harness.letterTable")
                 Spacer(minLength: 0)
             }
         }
@@ -269,6 +284,9 @@ final class TimelineHarnessStore {
         return String(out.prefix(target))
     }
 
+    /// The reported table and the wide one, as one letter (`harness.letterTable`).
+    private(set) var tableLetter = ""
+
     /// Only markdown tables whose cells hold `<br>`, each followed by prose: the
     /// screenshot view for the 2026-10-09 report, where one `<br>` sent a whole
     /// table into a web view as raw `| a | b |` text. A row the formula
@@ -296,7 +314,29 @@ final class TimelineHarnessStore {
 
         Nothing below this line may be covered.
         """
-        messages = [weekend, steps].enumerated().map { offset, text in
+        // The 2026-10-27 report: a two-column table whose cells list several tasks
+        // each, long English and CJK, `<br>` between them. Every row needs its own
+        // separator, and a cell wraps instead of running off the right edge.
+        let running = """
+        | \u{5728}\u{54EA}\u{8DD1} | \u{6B63}\u{5728}\u{8DD1}\u{7684}\u{4EFB}\u{52A1} |
+        |---|---|
+        | devbox | Every input box keeps its unsent draft (\u{8349}\u{7A3F}\u{6C38}\u{4E45}\u{4FDD}\u{5B58},\u{6362}\u{8BBE}\u{5907}\u{4E5F}\u{5728})<br>Phones & Cloud settings confusion and QR flow<br>Reply-language line in the per-message banner<br>Notes lead (Notes VP) |
+        | Mac | Main (\u{6211})<br>Walnut lead (Walnut VP)<br>iOS - \u{4E91}\u{7AEF} Walnut \u{67B6}\u{6784}\u{8BBE}\u{8BA1} \u{B7} App Store<br>iOS uploads files and videos into a session<br>Ask here \u{4E0E}\u{8F93}\u{5165}\u{6846}\u{5F15}\u{7528} \u{B7} Voice Settings<br>Walnut Demo and Promotion Campaign\u{3001}Growth: weekly report and pain map<br>\u{8FD8}\u{6709}\u{51E0}\u{4E2A}\u{6682}\u{65F6}\u{7A7A}\u{95F2}\u{7684}:\u{72B6}\u{6001}\u{548C} Board \u{91CD}\u{65B0}\u{8BBE}\u{8BA1}\u{3001}Usage & Costs \u{9875}\u{9762}\u{91CD}\u{505A} |
+
+        Every task must sit under the right row, and nothing may be cut at the right edge.
+        """
+        let wide = """
+        A wide table: five columns of long text cannot all fit a phone, so it scrolls sideways.
+
+        | Host | Owner | What runs there | Why it runs there | Next step |
+        |---|---|---|---|---|
+        | devbox | Walnut lead | Builds, Linux tests and long gates | Always on, more cores than the Mac | Move the nightly gate there |
+        | Mac | Main | The server, iOS builds and simulators | Signing and WebKit need the Mac | Keep the simulators on lane B |
+
+        The prose after the wide table.
+        """
+        tableLetter = running + "\n\n" + wide
+        messages = [weekend, steps, running, wide].enumerated().map { offset, text in
             ChatMessage(id: "h-table-\(offset)", role: "assistant", text: text,
                         createdAt: "2026-08-08T10:00:0\(offset)Z", kind: nil)
         }

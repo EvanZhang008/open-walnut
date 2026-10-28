@@ -150,43 +150,13 @@ struct MarkdownView: View {
     /// TextKit editor path has its own cap — TableAttachment.maxRenderedRows.)
     private static let maxRenderedTableRows = 60
 
-    /// Simple horizontal-scrolling grid — graceful for the occasional table.
+    /// Wrapping, row-ruled grid that scrolls sideways only when it must
+    /// (`MarkdownTableView`).
     private func tableView(header: [AttributedString], rows: [[AttributedString]]) -> some View {
-        let columns = max(header.count, rows.map(\.count).max() ?? 0)
         let rendered = rows.count > Self.maxRenderedTableRows
             ? Array(rows.prefix(Self.maxRenderedTableRows))
             : rows
-        let omitted = rows.count - rendered.count
-        return ScrollView(.horizontal, showsIndicators: false) {
-            Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 6) {
-                GridRow {
-                    ForEach(0..<columns, id: \.self) { c in
-                        Text(c < header.count ? header[c] : AttributedString(""))
-                            .font(.subheadline.weight(.semibold))
-                    }
-                }
-                Divider()
-                ForEach(Array(rendered.enumerated()), id: \.offset) { _, row in
-                    GridRow {
-                        ForEach(0..<columns, id: \.self) { c in
-                            Text(c < row.count ? row[c] : AttributedString(""))
-                                .font(.subheadline)
-                        }
-                    }
-                }
-                if omitted > 0 {
-                    Divider()
-                    GridRow {
-                        Text("… \(omitted) more row\(omitted == 1 ? "" : "s")")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .gridCellColumns(max(1, columns))
-                    }
-                }
-            }
-            .padding(12)
-        }
-        .background(Color(.secondarySystemBackground).opacity(0.6), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .padding(.vertical, 4)
+        return MarkdownTableView(header: header, rows: rendered, omitted: rows.count - rendered.count)
+            .padding(.vertical, 4)
     }
 }

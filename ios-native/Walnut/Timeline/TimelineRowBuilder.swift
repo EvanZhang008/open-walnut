@@ -145,6 +145,12 @@ enum TimelineMetrics {
         max(40, pageWidth - hMargin * 2)
     }
 
+    /// Width a markdown table's columns get at a given page width (inside its
+    /// card's padding); a table wider than this scrolls sideways.
+    static func tableContentWidth(_ pageWidth: CGFloat) -> CGFloat {
+        max(40, pageWidth - hMargin * 2 - tablePadding * 2)
+    }
+
     /// Width available to user-bubble text.
     static func bubbleTextWidth(_ pageWidth: CGFloat) -> CGFloat {
         max(40, pageWidth - hMargin * 2 - bubbleLeadingGap - bubbleHPad * 2)
@@ -416,7 +422,7 @@ final class TimelineRowBuilder {
                 ))
             case .table(let header, let tableRows):
                 rows.append(tableRow(id: nextID(), revision: revision,
-                                     header: header, rows: tableRows))
+                                     header: header, rows: tableRows, width: width))
             }
         }
     }
@@ -1139,39 +1145,14 @@ final class TimelineRowBuilder {
 
     // MARK: - Table
 
-    private func tableRow(id: String, revision: Int,
-                          header: [AttributedString], rows: [[AttributedString]]) -> TimelineRow {
-        let rendered = rows.count > TimelineMetrics.maxRenderedTableRows
-            ? Array(rows.prefix(TimelineMetrics.maxRenderedTableRows)) : rows
-        let omitted = rows.count - rendered.count
-        // Cells never wrap (horizontal scroll), so height is line arithmetic:
-        // header + divider + body rows (+ omitted line), spacing 6, padding 12.
-        // A row is as tall as its cell with the most explicit breaks (`<br>`), and
-        // each line after a Text's first adds the font's LEADING too. Measured on the
-        // pinned simulator, subheadline (lineHeight 17.9, leading 2.1): 1 line 18pt,
-        // 2 lines 38, 3 lines 58, for Latin, CJK, Thai and emoji alike.
-        let font = TimelineTextStyler.subheadlineFont
-        let lineH = font.lineHeight
-        func rowHeight(_ cells: [AttributedString]) -> CGFloat {
-            let lines = CGFloat(cells.map(MarkdownParser.explicitLineCount).max() ?? 1)
-            return lineH + (lines - 1) * (lineH + font.leading)
+    private func tableRow(id: String, revision: Int, header: [AttributedString],
+                          rows: [[AttributedString]], width: CGFloat) -> TimelineRow {
+        let table = TimelineTable.layout(header: header, rows: rows, width: width) { text, w in
+            measurer.lineCount(text, width: w)
         }
-        var contentH = rowHeight(header)
-        contentH += TimelineMetrics.tableRowSpacing + 1 // divider
-        for row in rendered {
-            contentH += rowHeight(row) + TimelineMetrics.tableRowSpacing
-        }
-        if omitted > 0 { contentH += 1 + TimelineTextStyler.captionFont.lineHeight + TimelineMetrics.tableRowSpacing * 2 }
-        // A Grid's rows come out at the font's own line height (unlike a lone
-        // `Text`), so the shortfall here is not per line — measured at 1.4pt total,
-        // from the divider and the grid's spacing rounding. Rounded UP, because the
-        // cell clips: 2pt of slack beats a shaved bottom row.
-        contentH += 2
         return TimelineRow(
-            id: id, revision: revision,
-            content: .table(header: header, rows: rendered
-                + (omitted > 0 ? [[AttributedString("… \(omitted) more rows")]] : [])),
-            height: contentH + TimelineMetrics.tablePadding * 2 + TimelineMetrics.codeVMargin * 2
+            id: id, revision: revision, content: .table(table),
+            height: table.gridHeight + TimelineMetrics.tablePadding * 2 + TimelineMetrics.codeVMargin * 2
         )
     }
 

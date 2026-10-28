@@ -161,8 +161,8 @@ enum TimelineHostedCell {
             TimelineFileChipView(chip: chip) { path in
                 delegate?.timelineCell(didRequest: .previewFile(ref: FilePathRef(path: path)))
             }
-        case .table(let header, let rows):
-            TimelineTableView(header: header, rows: rows)
+        case .table(let table):
+            TimelineTableView(table: table)
         case .truncationChip:
             HStack(spacing: 5) {
                 Image(systemName: "ellipsis").font(.caption2)
@@ -1701,46 +1701,58 @@ private struct TimelineLocalThumb: View {
     }
 }
 
-/// Markdown table — same Grid rendering as MarkdownView.tableView, on
-/// actor-prepared (already row-capped) data.
-///
-/// Cells never WRAP (the table scrolls sideways), but a cell may hold explicit
-/// breaks (a `<br>` the model wrote), so each cell is its ideal size: as many lines
-/// as it has breaks. `tableRow` measures the row by the same rule; a `lineLimit(1)`
-/// here once cut every such cell to its first line.
+/// Markdown table, drawn at the sizes the actor laid it out at (`TimelineTable`):
+/// each column its width, each row its height, so the row the collection view
+/// reserved is exactly what paints. A cell too wide for its column WRAPS; a line
+/// runs under the header and between rows; only a table wider than the page
+/// scrolls sideways, with its indicator showing. (Before 2026-10-27 every cell was
+/// one unwrapped line and only the header had a rule, so a long cell ran off the
+/// right edge and the rows of a list-per-cell table ran together.)
 private struct TimelineTableView: View {
-    let header: [AttributedString]
-    let rows: [[AttributedString]]
+    let table: TimelineTable
 
     var body: some View {
-        let columns = max(header.count, rows.map(\.count).max() ?? 0)
-        ScrollView(.horizontal, showsIndicators: false) {
-            Grid(alignment: .leading,
+        let columns = table.columnWidths.count
+        ScrollView(.horizontal, showsIndicators: table.overflows) {
+            Grid(alignment: .topLeading,
                  horizontalSpacing: TimelineMetrics.tableColSpacing,
                  verticalSpacing: TimelineMetrics.tableRowSpacing) {
-                GridRow {
-                    ForEach(0..<columns, id: \.self) { c in
-                        Text(c < header.count ? header[c] : AttributedString(""))
-                            .font(.subheadline.weight(.semibold))
-                            .fixedSize()
-                    }
+                cells(table.header, height: table.rowHeights[0], font: .subheadline.weight(.semibold))
+                MarkdownTableRule()
+                ForEach(Array(table.rows.enumerated()), id: \.offset) { index, row in
+                    if index > 0 { MarkdownTableRule() }
+                    cells(row, height: table.rowHeights[index + 1], font: .subheadline)
                 }
-                Divider()
-                ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+                if table.omitted > 0 {
+                    MarkdownTableRule()
                     GridRow {
-                        ForEach(0..<columns, id: \.self) { c in
-                            Text(c < row.count ? row[c] : AttributedString(""))
-                                .font(.subheadline)
-                                .fixedSize()
-                        }
+                        Text("\u{2026} \(table.omitted) more row\(table.omitted == 1 ? "" : "s")")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .frame(height: table.omittedHeight, alignment: .topLeading)
+                            .gridCellColumns(max(1, columns))
                     }
                 }
             }
             .padding(TimelineMetrics.tablePadding)
         }
+        .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
+        // A table wider than the page says so when it appears: nothing else hints
+        // that the cut-off column scrolls into view.
+        .scrollIndicatorsFlash(onAppear: true)
         .background(Color(.secondarySystemBackground).opacity(0.6),
                     in: RoundedRectangle(cornerRadius: 10, style: .continuous))
         .padding(.horizontal, TimelineMetrics.hMargin)
         .padding(.vertical, TimelineMetrics.codeVMargin)
+    }
+
+    private func cells(_ row: [AttributedString], height: CGFloat, font: Font) -> some View {
+        GridRow {
+            ForEach(0..<table.columnWidths.count, id: \.self) { c in
+                Text(c < row.count ? row[c] : AttributedString(""))
+                    .font(font)
+                    .frame(width: table.columnWidths[c], height: height, alignment: .topLeading)
+            }
+        }
     }
 }

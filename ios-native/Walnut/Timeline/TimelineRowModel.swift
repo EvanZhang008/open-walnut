@@ -155,8 +155,9 @@ enum TimelineRowContent {
     /// A file the user attached (a video, a PDF): the sent message's own, or
     /// one still uploading (`TimelineFileChip`).
     case fileAttachment(TimelineFileChip)
-    /// Markdown table — hosted grid (rare; bounded by maxRenderedTableRows).
-    case table(header: [AttributedString], rows: [[AttributedString]])
+    /// Markdown table — hosted grid (rare; bounded by maxRenderedTableRows), laid
+    /// out for the page width: column widths and row heights (`TimelineTable`).
+    case table(TimelineTable)
     /// Tool call chip. ONE line, always: tapping it opens the shared activity
     /// drawer (`TimelineActivityDetail`) with the full Input and Result, rather
     /// than growing the row in place.
@@ -332,9 +333,8 @@ extension TimelineRowContent {
             hasher.combine(dimmed)
         case .fileAttachment(let chip):
             hasher.combine(chip)
-        case .table(let header, let rows):
-            hasher.combine(header)
-            hasher.combine(rows)
+        case .table(let table):
+            hasher.combine(table)
         case .toolChip(let name, let detail, let inputPreview, let resultPreview,
                        let agent, let phase, let detailRef, let stacked):
             hasher.combine(name)
