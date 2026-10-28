@@ -1,9 +1,6 @@
 # Open Walnut
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![CI](https://github.com/EvanZhang008/open-walnut/actions/workflows/ci.yml/badge.svg)](https://github.com/EvanZhang008/open-walnut/actions)
-[![Bun](https://img.shields.io/badge/Bun-%3E%3D1.4.4-green.svg)](https://bun.sh/)
-[![TypeScript](https://img.shields.io/badge/TypeScript-5.8-blue.svg)](https://www.typescriptlang.org/)
 [![GitHub stars](https://img.shields.io/github/stars/EvanZhang008/open-walnut?style=social)](https://github.com/EvanZhang008/open-walnut)
 
 **Replace Notion and your Claude Code terminals with one open-source app where AI agents
