@@ -16,7 +16,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
-import { semanticLaneDecision, type SemanticLaneInputs } from '../../src/core/search/semantic-default.js'
+import { passwdHome, semanticLaneDecision, type SemanticLaneInputs } from '../../src/core/search/semantic-default.js'
 
 const REPO = path.join(import.meta.dirname, '..', '..')
 const TMP = ['/tmp', '/private/tmp', '/var/folders/xy/T']
@@ -136,5 +136,21 @@ describe('no index in src/ gets an embedder around the decision', () => {
     const body = /function buildEmbedderConfig\(\)[^{]*\{([\s\S]*?)\n\}/.exec(wiring)?.[1] ?? ''
     const first = body.split('\n').map((l) => l.trim()).find((l) => l && !l.startsWith('//'))
     expect(first).toBe('const lane = currentSemanticLaneDecision();')
+  })
+})
+
+// The account home must come from the user database: Bun's os.userInfo().homedir
+// returns $HOME, so a fake HOME would pass for the account's own.
+describe('passwd home field', () => {
+  it('reads the macOS id -P form (field 9)', () => {
+    expect(passwdHome('evan:********:503:20::0:0:Zhang, Evan:/Users/evan:/bin/zsh\n', 'darwin')).toBe('/Users/evan')
+  })
+  it('reads the getent form (field 6)', () => {
+    expect(passwdHome('evan:x:1000:1000:Evan:/home/evan:/bin/bash\n', 'linux')).toBe('/home/evan')
+  })
+  it('rejects empty, short or relative entries', () => {
+    expect(passwdHome('', 'darwin')).toBeNull()
+    expect(passwdHome('evan:x:1000', 'linux')).toBeNull()
+    expect(passwdHome('evan:x:1000:1000:Evan:home/evan:/bin/bash', 'linux')).toBeNull()
   })
 })

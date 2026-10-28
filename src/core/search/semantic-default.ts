@@ -22,6 +22,7 @@
  * one started with HOME inside a slice clone downloaded a 2.3 GB speech model
  * into that fake HOME.
  */
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -70,8 +71,39 @@ export function defaultTmpRoots(): string[] {
   return [...roots];
 }
 
+/**
+ * Home directory field of a passwd entry (`name:pw:uid:gid:...`): field 6 in the
+ * getent form, field 9 in the macOS `id -P` form (class, change, expire added).
+ */
+export function passwdHome(line: string, platform: NodeJS.Platform): string | null {
+  const f = line.trim().split(':');
+  const home = platform === 'darwin' ? f[8] : f[5];
+  return home && path.isAbsolute(home) ? home : null;
+}
+
+let accountHomeCache: string | null | undefined;
+/**
+ * The account's home from the user database, never from $HOME. Bun's
+ * os.userInfo().homedir returns $HOME (Node reads the passwd entry), so in the
+ * Bun-built release a fake HOME looked like the account's own and the voice
+ * model was downloaded into it (2026-10-27, release rehearsal).
+ */
 function accountHomeDir(): string | null {
-  try { return os.userInfo().homedir || null; } catch { return null; }
+  if (accountHomeCache !== undefined) return accountHomeCache;
+  let home: string | null = null;
+  try {
+    const out = process.platform === 'darwin'
+      ? execFileSync('/usr/bin/id', ['-P'], { encoding: 'utf8', timeout: 3000, stdio: ['ignore', 'pipe', 'ignore'] })
+      : process.platform === 'linux'
+        ? execFileSync('getent', ['passwd', String(os.userInfo().uid)], { encoding: 'utf8', timeout: 3000, stdio: ['ignore', 'pipe', 'ignore'] })
+        : '';
+    home = passwdHome(out, process.platform);
+  } catch { /* fall back below */ }
+  if (!home) {
+    try { home = os.userInfo().homedir || null; } catch { home = null; }
+  }
+  accountHomeCache = home;
+  return home;
 }
 
 /** The task-dir root for this env and for the account home, plus this session's own task dir. */
