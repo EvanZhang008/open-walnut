@@ -281,6 +281,15 @@ describe('meeting context (Mac-local answers and history)', () => {
     expect(raw).not.toMatch(/title/)
   })
 
+  // 2026-10-28 CI: three answers in one millisecond kept the rewritten one first.
+  it('a rewrite in the same millisecond is still the newest answer', async () => {
+    const at = new Date('2026-10-28T15:00:00.000Z')
+    await setMeetingAnswer('E1', false, at)
+    await setMeetingAnswer('E2', true, at)
+    await setMeetingAnswer('E1', true, at)
+    expect([...await readMeetingAnswers()]).toEqual([['E2', true], ['E1', true]])
+  })
+
   it('finds a recurring series never on a call from the calendar history inside coverage', async () => {
     await appendCallLines([
       ...coverageLines([t(1, 0), t(9, 0)], 'log'),

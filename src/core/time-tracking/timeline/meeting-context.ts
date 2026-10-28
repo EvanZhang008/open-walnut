@@ -49,8 +49,10 @@ let writing: Promise<unknown> = Promise.resolve()
 export function setMeetingAnswer(eventId: string, attended: boolean | null, now = new Date()): Promise<{ eventId: string; attended: boolean | null; answers: number }> {
   const run = writing.then(async () => {
     const file = await readAnswerFile()
-    if (attended === null) delete file.answers[eventId]
-    else file.answers[eventId] = { attended, at: now.toISOString() }
+    // Removed first, so a rewrite is also the newest by key order: two writes in the
+    // same millisecond tie on `at`, and the stable sort below then keeps write order.
+    delete file.answers[eventId]
+    if (attended !== null) file.answers[eventId] = { attended, at: now.toISOString() }
     // Oldest first out, so the file stays small forever.
     const entries = Object.entries(file.answers).sort((a, b) => a[1].at.localeCompare(b[1].at)).slice(-MAX_ANSWERS)
     const next: AnswerFile = { answers: Object.fromEntries(entries) }
