@@ -34,8 +34,19 @@ export function resolvePluginSourceTree(
   for (const root of candidates) {
     const srcIntegrationsDir = path.join(root, 'src', 'integrations');
     try {
-      if (fs.statSync(srcIntegrationsDir).isDirectory()) return { srcIntegrationsDir, nodeModulesRoot: packageRoot };
+      if (fs.statSync(srcIntegrationsDir).isDirectory()) {
+        // The bundle's npm imports resolve from where it is written. A compiled file's
+        // runtime tree carries only the few packages its own code loads at runtime (no
+        // chalk, no express), so a checkout's bundle goes next to that checkout's
+        // node_modules: the same tree its rebased source imports come from.
+        const nodeModulesRoot = root !== packageRoot && hasNodeModules(root) ? root : packageRoot;
+        return { srcIntegrationsDir, nodeModulesRoot };
+      }
     } catch { /* candidate has no source tree, try the next */ }
   }
   return { srcIntegrationsDir: null, nodeModulesRoot: packageRoot };
+}
+
+function hasNodeModules(root: string): boolean {
+  try { return fs.statSync(path.join(root, 'node_modules')).isDirectory() } catch { return false }
 }
