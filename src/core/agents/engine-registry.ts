@@ -73,6 +73,12 @@ export interface EngineCapabilities {
    * ACP providers have no AskUserQuestion tool, so answers are dropped.
    */
   readonly permissionAnswers: boolean;
+  /**
+   * Whether a task session's Walnut session context (session-context.ts) reaches the model:
+   * the native engine's system prompt, Codex's developer instructions. The other ACP engines
+   * take none, so what it carries (USER.md, user-profile-context.ts) rides an ask's prefix there.
+   */
+  readonly walnutSessionContext: boolean;
   /** Mid-session model switch path: live flag push vs ACP config option. */
   readonly modelSwitch: 'live-flag' | 'config-option';
   /** Turn rewind support — claude only today. 'native' = the CLI understands
@@ -126,6 +132,7 @@ const CLAUDE: EngineCapabilities = {
   idProvisioning: 'preassigned',
   modeControl: 'claude-modes',
   permissionAnswers: true,
+  walnutSessionContext: true,
   modelSwitch: 'live-flag',
   rewind: 'native',
   fork: true,
@@ -147,6 +154,7 @@ const ACP_BASE: Omit<EngineCapabilities, 'id' | 'displayName'> = {
   idProvisioning: 'provider-issued',
   modeControl: 'config-options',
   permissionAnswers: false,
+  walnutSessionContext: false,
   modelSwitch: 'config-option',
   rewind: 'unsupported',
   fork: false,
@@ -163,6 +171,7 @@ const CODEX: EngineCapabilities = {
   ...ACP_BASE,
   id: 'codex',
   displayName: 'Codex',
+  walnutSessionContext: true,
   settings: CODEX_SETTINGS,
 };
 

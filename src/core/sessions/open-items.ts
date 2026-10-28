@@ -137,6 +137,7 @@ export async function collectOpenItems(
       if (memory) items.text = [items.text, memory].filter(Boolean).join('\n\n');
       // Every default-instruction line that changed since spawn: the summary may have dropped the notices.
       const { instructionNoticeFor, noteInstructionNoticeStatedByHook } = await import('./instruction-notice.js');
+      await (await import('./user-profile-context.js')).refreshUserProfile();
       const changed = instructionNoticeFor(caller.record, task, { ignoreTold: true });
       if (changed) {
         items.text = [changed, items.text].filter(Boolean).join('\n\n');

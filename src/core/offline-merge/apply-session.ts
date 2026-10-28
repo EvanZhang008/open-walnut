@@ -89,7 +89,8 @@ export async function applySession(ctx: V2Context, record: V2Record): Promise<vo
     const [{ buildLaneProfile }, { getConfig }] = await Promise.all([
       import('../sessions/personal-ai-lane.js'), import('../config-manager.js'),
     ]);
-    const built = (await buildLaneProfile(await getConfig(), agentId)).profile;
+    // Its session context (below) carries USER.md.
+    const built = (await buildLaneProfile(await getConfig(), agentId, { userInSessionContext: true })).profile;
     const { mcpServers: _mac, ...rest } = built;
     profile = rest;
   } catch (err) {

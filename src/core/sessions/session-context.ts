@@ -78,6 +78,11 @@
  *      see or a hard-to-reverse choice no rule covers; a message is sent only
  *      when the receiver must act, conclusion first. Every step had been going
  *      up for approval, and messages had become code names and progress notes.
+ *   9. The user's profile and standing rules (memory/USER.md, user-profile-context.ts,
+ *      2026-10-28): rules Main recorded there reached only the Personal AI's persona,
+ *      so the user repeated them to every other session. Every task session reads
+ *      them, last and under their own heading, versioned so a running one hears an
+ *      edit through the instruction notice.
  *
  * Keep it SHORT — the size guard in tests/core/sessions/session-context.test.ts fails
  * first if this creeps back toward a blanket preamble. Anything longer belongs
@@ -92,12 +97,16 @@ import { createHash } from 'node:crypto'
 import { ORG_INSTRUCTIONS_MAX } from '../org/org-tree.js'
 import { defaultOrgInstructions } from '../org/core-instructions.js'
 import { orgInstructionsAuthor } from '../org/instructions-author.js'
+import { currentUserProfile, refreshUserProfile, userProfileLine } from './user-profile-context.js'
 
 import { TASK_ROUTING_CONTRACT } from '../task-routing-contract.js'
 
 export interface SessionContext {
   systemPrompt: string
 }
+
+/** Every Walnut session prompt opens with this (composePrompt); a prompt without it is the caller's own. */
+export const WALNUT_PROMPT_MARK = 'You are a coding session opened by Walnut'
 
 /**
  * 2e. Main never parks (org/main-stays-active.ts, 2026-10-25): the generic
@@ -319,6 +328,8 @@ export async function buildSessionContext(
     } catch { /* unknown task — identity + tooling lines still apply */ }
   }
   const taskDir = taskId ? taskDirLine(await taskDirForHost(taskId, host).catch(() => null)) : ''
+  // The copy composePrompt reads: as on disk now, not as at the last read.
+  await refreshUserProfile()
   return { systemPrompt: composePrompt(found, { taskLine, taskDir }) }
 }
 
@@ -414,7 +425,7 @@ function composePrompt(task: InstructionTask | undefined, state: { taskLine: str
       + 'with a fresh session, even in an area a teammate already owns. It '
       + 'lands beside yours: same project, folder and board tier, same host and '
       + 'directory. Omit project; naming another needs project_reason.\n\n'
-  return 'You are a coding session opened by Walnut, the user\'s personal AI. '
+  return `${WALNUT_PROMPT_MARK}, the user's personal AI. `
     + 'Walnut is the layer above you: it keeps the user\'s board of tasks and '
     + 'projects, runs the work on those tasks, and holds their memory, notes, '
     + 'and the history of that work.\n\n'
@@ -470,5 +481,10 @@ function composePrompt(task: InstructionTask | undefined, state: { taskLine: str
     + WORK_PLACE_RULE + '\n\n'
     // The team charter (see 8 above).
     + TEAM_CHARTER
+    // The user's profile and standing rules (see 9 above), for a session of a task: last, under
+    // its own heading, so the instruction notice shows its lines there.
+    + (task ? userBlock(userProfileLine(currentUserProfile())) : '')
 }
+
+const userBlock = (block: string) => (block ? `\n\n${block.trimEnd()}` : '')
 

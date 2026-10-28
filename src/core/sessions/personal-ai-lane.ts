@@ -328,13 +328,13 @@ export const LANE_MEMORY_HEADER = '## Standing memory (injected by Walnut)';
  *
  * Never throws — a missing file contributes nothing.
  */
-export async function buildLaneMemoryContext(homeDir: string = WALNUT_HOME): Promise<string> {
+export async function buildLaneMemoryContext(homeDir: string = WALNUT_HOME, opts?: { omitUser?: boolean }): Promise<string> {
   const readOr = async (rel: string): Promise<string> => {
     try { return (await fs.readFile(path.join(homeDir, rel), 'utf-8')).trim(); } catch { return ''; }
   };
   const [memoryMd, userMd] = await Promise.all([
     readOr('memory/MEMORY.md'),
-    readOr('memory/USER.md'),
+    opts?.omitUser ? '' : readOr('memory/USER.md'),
   ]);
   return laneMemoryContextOf(memoryMd, userMd);
 }
@@ -425,6 +425,12 @@ export async function buildLaneProfile(
     skillsIndex?: string;
     memoryContext?: string;
     seedSource?: import('../chat-history.js').SeedSource;
+    /**
+     * A task session on the native engine: its Walnut session context carries USER.md
+     * (user-profile-context.ts), versioned so a running session hears an edit, so the
+     * persona leaves it out rather than carry a second copy frozen at spawn.
+     */
+    userInSessionContext?: boolean;
   },
 ): Promise<{
   profile: import('../types.js').SessionProfile;
@@ -440,7 +446,8 @@ export async function buildLaneProfile(
   const skillsIndex = persona ? '' : opts?.skillsIndex ?? await buildSessionSkillsPrompt().catch(() => '');
   // Standing memory — Walnut-owned injection, engine-neutral (see
   // buildLaneMemoryContext). Rides the SAME profile as the persona.
-  const memoryContext = persona ? '' : opts?.memoryContext ?? await buildLaneMemoryContext().catch(() => '');
+  const memoryContext = persona ? '' : opts?.memoryContext
+    ?? await buildLaneMemoryContext(WALNUT_HOME, { omitUser: opts?.userInSessionContext }).catch(() => '');
   // general = the Personal AI persona; any other agent gets ITS persona plus the
   // same two work modes — one engine, one consistent chat feel, per-agent
   // identity. Any REGISTRY agent, not only a console one: the console flag
@@ -605,7 +612,10 @@ export async function refreshWalnutSessionProfile(sessionId: string): Promise<vo
     if (!task?.walnut_agent) return;
     // Rebuild the persona the task was launched with: an "Ask Mentor" must not
     // be repaired into the Personal AI.
-    let { profile } = await buildLaneProfile(await getConfig(), task.agent_id || 'general');
+    // USER.md rides the session context when this session has Walnut's (an adopted AI search has none).
+    const { WALNUT_PROMPT_MARK } = await import('./session-context.js');
+    const userInSessionContext = (record.appliedAppendSystemPrompt ?? '').includes(WALNUT_PROMPT_MARK);
+    let { profile } = await buildLaneProfile(await getConfig(), task.agent_id || 'general', { userInSessionContext });
     // An ask on another host (WP12: started there while the Mac was away) takes no walnut
     // MCP mount, as no session this Mac runs on a remote host does: its walnut tools are
     // the `walnut` CLI there, which the host's daemon points at its gateway socket. This
@@ -762,7 +772,10 @@ async function resolveLane(
     // live CLI process keeps the old prompt until then, which is acceptable.
     // claude engine only — ACP has no profile channel (no system-prompt param).
     if (!isAcpEngine(existingEngine)) {
-      const { profile, effort } = await buildLaneProfile(config, agentId);
+      // A lane of a task with Walnut's session context reads USER.md there (user-profile-context.ts).
+      const { WALNUT_PROMPT_MARK } = await import('./session-context.js');
+      const userInSessionContext = !!existing.taskId && (existing.appliedAppendSystemPrompt ?? '').includes(WALNUT_PROMPT_MARK);
+      const { profile, effort } = await buildLaneProfile(config, agentId, { userInSessionContext });
       // PERSONA halves only. The record's prompt also carries the mint-time
       // conversation seed, which is a frozen snapshot: comparing whole prompts
       // would differ on every turn (the conversation grew) and rewrite the
@@ -872,7 +885,8 @@ async function resolveLane(
   // The seed rides the profile, so it lands on BOTH the record and the spawn —
   // deliberately the same string, because a cold --resume re-emits the record's
   // prompt and the cache prefix has to match the original spawn byte for byte.
-  const { profile, effort, seed } = await buildLaneProfile(config, agentId, { conversationId });
+  // A lane minted for an ask task spawns with that task's session context, which carries USER.md.
+  const { profile, effort, seed } = await buildLaneProfile(config, agentId, { conversationId, userInSessionContext: !!askTaskId });
   const sessionId = crypto.randomUUID();
 
   // Did the seed actually ride the spawn profile? Empty text with turns available

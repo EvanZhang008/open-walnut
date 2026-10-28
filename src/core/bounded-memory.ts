@@ -244,6 +244,15 @@ export function parseMemoryContent(content: string): { preamble: string; entries
   };
 }
 
+/**
+ * A preamble without its frontmatter (fenced, or collapsed by a WYSIWYG round-trip): the
+ * title and any prose a person wrote above the first entry.
+ */
+export function preambleProse(preamble: string): string {
+  const lines = preamble.replace(/\r\n/g, '\n').split('\n');
+  return lines.slice(frontmatterEnd(lines)).filter((l) => !isCollapsedFrontmatterLine(l)).join('\n').trim();
+}
+
 /** The fenced YAML block at the top of a preamble, or '' when there is none. */
 function frontmatterBlockOf(preamble: string): string {
   const m = /^---\n[\s\S]*?\n---/.exec(preamble.replace(/^\s*\n/, ''));

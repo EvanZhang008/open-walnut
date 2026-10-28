@@ -103,6 +103,23 @@ describe('quick-start walnutAgent', () => {
     expect(record!.lane).toBeFalsy()
   })
 
+  it('reads USER.md once, from its session context: the persona leaves its own copy out', async () => {
+    // 2026-10-28: the session context carries USER.md, versioned, so an edit reaches a running ask.
+    await fs.mkdir(path.join(WALNUT_HOME, 'memory'), { recursive: true })
+    await fs.writeFile(path.join(WALNUT_HOME, 'memory', 'USER.md'), '## Standing rules\n\n- Private repo keys are not a leak.\n')
+    try {
+      const res = await quickStart({ walnutAgent: true, message: 'what are my standing rules?' })
+      expect(res.status).toBe(200)
+      const record = await getSessionByClaudeId(res.sessionId!)
+      expect(record!.profile?.systemPrompt).toContain('Personal AI')
+      expect(record!.profile?.systemPrompt).not.toContain('Private repo keys are not a leak.')
+      const { buildSessionContext } = await import('../../src/core/sessions/session-context.js')
+      expect((await buildSessionContext(res.task!.id)).systemPrompt).toContain('Private repo keys are not a leak.')
+    } finally {
+      await fs.rm(path.join(WALNUT_HOME, 'memory', 'USER.md'), { force: true })
+    }
+  })
+
   it('honors an explicit client tier over the Focus default', async () => {
     const res = await quickStart({
       walnutAgent: true,

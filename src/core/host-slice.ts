@@ -245,6 +245,8 @@ export async function buildHostSlice(hostKey: string, now = Date.now()): Promise
   const { boards, boardOf } = await teamBoards(sessionTaskIds);
   // What the queue would append to a turn nobody typed; the host appends it to what it delivers itself.
   const config = await (await import('./config-manager.js')).getConfig().catch(() => null);
+  // The instruction notice below compares against the user's profile as on disk now.
+  await (await import('./sessions/user-profile-context.js')).refreshUserProfile();
 
   const body = {
     home: WALNUT_HOME,

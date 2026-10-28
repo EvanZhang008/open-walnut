@@ -23,7 +23,8 @@
 import { createHash } from 'node:crypto';
 import { createEnvelopeKit } from '../peers/envelope-kit.js';
 import { isAcpEngine, resolveEngine } from '../agents/engine-registry.js';
-import { defaultInstructions, type InstructionTask } from './session-context.js';
+import { WALNUT_PROMPT_MARK, defaultInstructions, type InstructionTask } from './session-context.js';
+import { refreshUserProfile } from './user-profile-context.js';
 import { log } from '../../logging/index.js';
 import type { SessionRecord } from '../types.js';
 
@@ -38,8 +39,6 @@ const hash = (text: string) => createHash('sha256').update(text).digest('hex').s
 const OUTCOME = 'task-routing-policy';
 const NOTICE_ATTRS = { from: 'Walnut', outcome: OUTCOME, note: 'current default instructions, not a work request' };
 const NOTICE_OPENING = `<walnut-message kind="notification" from="Walnut" outcome="${OUTCOME}"`;
-/** Every Walnut session prompt opens with this (session-context.ts); a prompt without it is the caller's own. */
-const WALNUT_PROMPT_MARK = 'You are a coding session opened by Walnut';
 
 type NoticeRecord = Pick<SessionRecord, 'appliedAppendSystemPrompt' | 'engine' | 'lastCompactUuid' | 'taskRoutingNoted'>;
 type Noted = NonNullable<SessionRecord['taskRoutingNoted']>;
@@ -183,6 +182,8 @@ async function lookup(sessionId: string): Promise<{ record: SessionRecord; lines
   const { listTasksByIds } = await import('../task-manager.js');
   const [task] = await listTasksByIds([record.taskId]);
   if (!task) return null;
+  // The user's profile rides the default instructions: compare against it as on disk now.
+  await refreshUserProfile();
   const lines = dueLines(record, task);
   return lines ? { record, lines, text: render(lines) } : null;
 }
