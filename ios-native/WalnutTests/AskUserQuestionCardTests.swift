@@ -304,4 +304,64 @@ final class PendingPermissionStackCapTests: XCTestCase {
     func testUnmeasuredPageDoesNotCapYet() {
         XCTAssertEqual(PendingPermissionStack.maxHeight(pageHeight: 0), .infinity)
     }
+
+    /// The reveal scrolls by exactly what is cut, keeping room for the
+    /// recording outline below the row (v6 gate: the Stop's lower half and the
+    /// outline's bottom edge fell under the box's edge).
+    func testRevealScrollsARowCutAtTheBottomByWhatIsCutPlusTheMargin() {
+        XCTAssertEqual(PendingPermissionStack.revealDelta(rowMinY: 250, rowMaxY: 367, boxHeight: 345, margin: 8), 30)
+    }
+
+    func testRevealLeavesARowThatFitsAlone() {
+        XCTAssertEqual(PendingPermissionStack.revealDelta(rowMinY: 100, rowMaxY: 300, boxHeight: 345, margin: 8), 0)
+        XCTAssertEqual(PendingPermissionStack.revealDelta(rowMinY: 8, rowMaxY: 337, boxHeight: 345, margin: 8), 0)
+    }
+
+    func testRevealBringsARowAboveTheBoxDown() {
+        XCTAssertEqual(PendingPermissionStack.revealDelta(rowMinY: -40, rowMaxY: 20, boxHeight: 345, margin: 8), -48)
+    }
+
+    func testRevealOfARowTallerThanTheBoxKeepsItsBottom() {
+        // The cursor and the mic are at the bottom, so the bottom wins.
+        XCTAssertEqual(PendingPermissionStack.revealDelta(rowMinY: -100, rowMaxY: 400, boxHeight: 345, margin: 8), 63)
+    }
+
+    /// The row is measured in the content, so the target is where the row is
+    /// and the same however often it is asked: the v10 gate's card swung between
+    /// two places every frame when each scroll re-asked against a stale offset.
+    /// The box runs under a 91pt navigation bar: at rest the raw offset is -91,
+    /// so the band's top is content y 0.
+    func testRevealTargetIsWhereTheRowIsInTheContent() {
+        let band: CGFloat = 345  // a 436pt box under the 91pt bar
+        let cut = CGRect(x: 0, y: 309, width: 390, height: 48)  // bottom 357 + 8 past 345
+        XCTAssertEqual(PendingPermissionStack.revealTarget(row: cut, visibleTop: -91 + 91, bandHeight: band, margin: 8), 20)
+        // Asked again before the scroll's offset caught up: the same target, never back.
+        XCTAssertEqual(PendingPermissionStack.revealTarget(row: cut, visibleTop: 0, bandHeight: band, margin: 8), 20)
+        // Asked once the scroll got there: nothing more to do.
+        XCTAssertNil(PendingPermissionStack.revealTarget(row: cut, visibleTop: 20, bandHeight: band, margin: 8))
+        // A row above the band (scrolled 200pt down) is brought down to it.
+        let above = CGRect(x: 0, y: 150, width: 390, height: 40)
+        XCTAssertEqual(PendingPermissionStack.revealTarget(row: above, visibleTop: 200, bandHeight: band, margin: 8), 142)
+        // A row inside the band does not move.
+        XCTAssertNil(PendingPermissionStack.revealTarget(row: CGRect(x: 0, y: 100, width: 390, height: 48), visibleTop: 0, bandHeight: band, margin: 8))
+        // A bottom inset shrinks the band from below.
+        let nearBottom = CGRect(x: 0, y: 289, width: 390, height: 40)
+        XCTAssertEqual(PendingPermissionStack.revealTarget(row: nearBottom, visibleTop: 0, bandHeight: band - 20, margin: 8), 12)
+        // Never above the content's top.
+        XCTAssertNil(PendingPermissionStack.revealTarget(row: cut, visibleTop: 0, bandHeight: 0, margin: 8))
+        XCTAssertEqual(PendingPermissionStack.revealTarget(row: CGRect(x: 0, y: 2, width: 390, height: 40), visibleTop: 30, bandHeight: band, margin: 8), 0)
+    }
+
+    /// `scrollTo(y:)` aligns y with the box's top, which is under the bar: the
+    /// band's top goes in one inset short. The v11 gate's card scrolled 140pt too
+    /// far on every reveal (a focused one-line field took its question under the
+    /// bar), because the band's top went in as is.
+    func testScrollYPutsTheBandTopUnderTheBar() {
+        // At rest under a 140pt bar the raw offset is -140 and the band shows content y 0.
+        XCTAssertEqual(PendingPermissionStack.scrollY(bandTop: 0, insetTop: 140), -140)
+        // A row cut 20pt at the bottom: the band's top goes to 20, so the call takes -120.
+        XCTAssertEqual(PendingPermissionStack.scrollY(bandTop: 20, insetTop: 140), -120)
+        // No bar, no shift.
+        XCTAssertEqual(PendingPermissionStack.scrollY(bandTop: 20, insetTop: 0), 20)
+    }
 }

@@ -89,13 +89,15 @@ struct TaskDetailExtras: View {
         .sheet(isPresented: $editingDescription) {
             fieldEditor(
                 title: "Description", text: $descriptionDraft,
-                identifier: "task.descriptionEditor"
+                identifier: "task.descriptionEditor", voiceBox: "task-description"
             ) { content in
                 controller.saveDescription(content)
             }
         }
         .sheet(isPresented: $editingNote) {
-            fieldEditor(title: "Note", text: $noteDraft, identifier: "task.noteEditor") { content in
+            fieldEditor(
+                title: "Note", text: $noteDraft, identifier: "task.noteEditor", voiceBox: "task-note"
+            ) { content in
                 controller.saveNote(content)
             }
         }
@@ -290,33 +292,40 @@ struct TaskDetailExtras: View {
     /// shows the new content, and a failure reverts it + shows the error line
     /// (never a blocked Save button).
     private func fieldEditor(
-        title: String, text: Binding<String>, identifier: String,
+        title: String, text: Binding<String>, identifier: String, voiceBox: String,
         onSave: @escaping (String) -> Void
     ) -> some View {
         NavigationStack {
-            TextEditor(text: text)
-                .font(.body)
-                .padding(8)
-                .accessibilityIdentifier(identifier)
-                .navigationTitle(title)
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .topBarLeading) {
-                        Button("Cancel") {
-                            editingDescription = false
-                            editingNote = false
-                        }
-                    }
-                    ToolbarItem(placement: .topBarTrailing) {
-                        Button("Save") {
-                            onSave(text.wrappedValue)
-                            editingDescription = false
-                            editingNote = false
-                        }
-                        .fontWeight(.semibold)
-                        .accessibilityIdentifier("\(identifier).save")
+            // Walnut's mic under the editor: the text stays readable while the
+            // person speaks, and the words land at its end, never saved by
+            // themselves.
+            VoiceDictationField(
+                text: text, surface: "\(voiceBox):\(controller.taskId)", box: voiceBox, placement: .below
+            ) {
+                TextEditor(text: text)
+                    .font(.body)
+                    .accessibilityIdentifier(identifier)
+            }
+            .padding(8)
+            .navigationTitle(title)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Cancel") {
+                        editingDescription = false
+                        editingNote = false
                     }
                 }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Save") {
+                        onSave(text.wrappedValue)
+                        editingDescription = false
+                        editingNote = false
+                    }
+                    .fontWeight(.semibold)
+                    .accessibilityIdentifier("\(identifier).save")
+                }
+            }
         }
         .presentationDetents([.large])
         .interactiveDismissDisabled()

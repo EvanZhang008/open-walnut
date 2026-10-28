@@ -26,9 +26,13 @@ struct SessionForkSheet: View {
                     }
                 }
                 Section {
-                    TextField("Optional first message for the fork", text: $message, axis: .vertical)
-                        .lineLimit(2...6)
-                        .accessibilityIdentifier("session.forkMessage")
+                    VoiceDictationField(
+                        text: $message, surface: "fork:\(session.id)", box: "fork-message", blocked: forking
+                    ) {
+                        TextField("Optional first message for the fork", text: $message, axis: .vertical)
+                            .lineLimit(2...6)
+                            .accessibilityIdentifier("session.forkMessage")
+                    }
                 } footer: {
                     Text("Creates a sibling task with a copy of this conversation. The original keeps running untouched.")
                 }
@@ -132,9 +136,13 @@ struct SessionNoteSheet: View {
                         Button("Try again") { Task { await load() } }
                             .accessibilityIdentifier("session.noteRetry")
                     } else {
-                        TextField("A note for yourself about this session", text: $note, axis: .vertical)
-                            .lineLimit(4...16)
-                            .accessibilityIdentifier("session.noteField")
+                        VoiceDictationField(
+                            text: $note, surface: "session-note:\(sessionId)", box: "session-note", blocked: saving
+                        ) {
+                            TextField("A note for yourself about this session", text: $note, axis: .vertical)
+                                .lineLimit(4...16)
+                                .accessibilityIdentifier("session.noteField")
+                        }
                     }
                 } footer: {
                     Text("Only you see this note. The agent does not.")

@@ -207,6 +207,13 @@ struct SideQuestionsSheet: View {
     @State private var draft = ""
     @State private var asking = false
     @State private var askError: String?
+    /// The question box's recorder, held here so the sheet can wait for a take
+    /// still being transcribed: closed under it, the words had no box to land
+    /// in and were never offered back (v6 gate).
+    @State private var draftVoice = VoiceRecorder()
+
+    /// Asking, or a take's words still on their way into the box.
+    private var holdsOpen: Bool { asking || draftVoice.state == .transcribing }
 
     var body: some View {
         NavigationStack {
@@ -237,20 +244,25 @@ struct SideQuestionsSheet: View {
             .navigationTitle("Side Questions")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() }.disabled(asking) }
+                ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() }.disabled(holdsOpen) }
             }
             .accessibilityIdentifier("session.sideQuestions")
             .task { await load() }
-            .interactiveDismissDisabled(asking)
+            .interactiveDismissDisabled(holdsOpen)
         }
     }
 
     private var askSection: some View {
         Section {
-            TextField("Ask without interrupting the work…", text: $draft, axis: .vertical)
-                .lineLimit(2...4)
-                .disabled(asking)
-                .accessibilityIdentifier("session.sideQuestion.field")
+            VoiceDictationField(
+                text: $draft, surface: "side-question:\(sessionId)", box: "side-question", blocked: asking,
+                recorder: draftVoice
+            ) {
+                TextField("Ask without interrupting the work…", text: $draft, axis: .vertical)
+                    .lineLimit(2...4)
+                    .disabled(asking)
+                    .accessibilityIdentifier("session.sideQuestion.field")
+            }
             Button {
                 Task { await ask() }
             } label: {

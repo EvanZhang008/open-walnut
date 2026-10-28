@@ -21,6 +21,9 @@ struct InboxItemConfirmation: View {
     @Environment(\.colorScheme) private var colorScheme
     @State private var openedTask: InboxTaskDestination?
     @FocusState private var goalFocused: Bool
+    /// The work goal's recorder, held here so the footer can wait for a take:
+    /// a plan reviewed or confirmed mid-take would go without the spoken words.
+    @State private var goalVoice = VoiceRecorder()
     private let goalAnchor = "work-goal-editor"
     private var retry: Bool { store.draft(key).input.retryStart == true }
     private var needsRecovery: Bool { retry && store.latest(key, lane: "task")?.canReviewStartRecovery == true }
@@ -28,7 +31,7 @@ struct InboxItemConfirmation: View {
     private func footer(_ state: InboxItemStore.State) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             if let plan = state.plan, !state.submittedPlans.contains(plan.id), !plan.isExpired() {
-                let enabled = !state.busy.contains("task") && state.preparedInput == store.draft(key).input && !state.submittedPlans.contains(plan.id)
+                let enabled = !state.busy.contains("task") && state.preparedInput == store.draft(key).input && !state.submittedPlans.contains(plan.id) && goalVoice.state == .idle
                 Button(state.busy.contains("task") ? (action.intent == "create_task" && !retry ? "Creating…" : "Attaching…") : action.intent == "create_task" || retry ? "Confirm and start" : "Confirm attachment") {
                     confirm(plan)
                 }.buttonStyle(InboxItemPrimaryButtonStyle()).frame(maxWidth: .infinity, minHeight: 44)
@@ -41,7 +44,7 @@ struct InboxItemConfirmation: View {
                 Button("Check status") { Task { await store.query(key) } }.frame(minHeight: 44)
             } else {
                 if state.plan?.isExpired() == true { Text("This plan expired. Review the action again.").font(.caption).foregroundStyle(Theme.warning) }
-                let enabled = !state.busy.contains("prepare") && canReview(state)
+                let enabled = !state.busy.contains("prepare") && canReview(state) && goalVoice.state == .idle
                 Button("Review action") { Task { await prepare() } }
                     .buttonStyle(InboxItemPrimaryButtonStyle()).frame(maxWidth: .infinity, minHeight: 44)
                     .disabled(!enabled)
@@ -128,12 +131,19 @@ struct InboxItemConfirmation: View {
                                 Text(field(\.goal).wrappedValue).font(.body).textSelection(.enabled)
                                     .accessibilityIdentifier("inbox.item.confirm.goal")
                             } else {
-                                TextEditor(text: field(\.goal))
-                                    .frame(height: min(160, max(0, viewport.size.height - 32)))
-                                    .focused($goalFocused).id(goalAnchor)
-                                    .accessibilityLabel("Work goal for \(item.subject)")
-                                    .overlay { RoundedRectangle(cornerRadius: 8).strokeBorder(Color(.separator)) }
-                                    .accessibilityIdentifier("inbox.item.confirm.goal")
+                                VoiceDictationField(
+                                    text: field(\.goal), surface: "inbox-goal:\(key.letter):\(key.item)",
+                                    box: "inbox-goal", placement: .below, recorder: goalVoice,
+                                    refocus: { goalFocused = true }
+                                ) {
+                                    TextEditor(text: field(\.goal))
+                                        .frame(height: min(160, max(0, viewport.size.height - 32)))
+                                        .focused($goalFocused)
+                                        .accessibilityLabel("Work goal for \(item.subject)")
+                                        .overlay { RoundedRectangle(cornerRadius: 8).strokeBorder(Color(.separator)) }
+                                        .accessibilityIdentifier("inbox.item.confirm.goal")
+                                }
+                                .id(goalAnchor)
                             }
                             if field(\.goal).wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                                 Text("Add a work goal before continuing.").font(.caption)
@@ -155,6 +165,11 @@ struct InboxItemConfirmation: View {
                     }.scrollDismissesKeyboard(.interactively)
                     .onChange(of: goalFocused) { _, focused in
                         if focused { proxy.scrollTo(goalAnchor, anchor: .bottom) }
+                    }
+                    // The recording row is taller than the mic it replaces (much
+                    // taller at large text sizes): keep its Stop above the footer.
+                    .onChange(of: goalVoice.state) { _, state in
+                        if state == .recording { withAnimation { proxy.scrollTo(goalAnchor, anchor: .bottom) } }
                     }
                     .task(id: viewport.size.height) {
                         await Task.yield()

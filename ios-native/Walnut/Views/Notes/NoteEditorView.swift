@@ -56,6 +56,10 @@ struct NoteDetailView: View {
     @State private var showDeleteConfirm = false
     @State private var showRawEditor = false
     @State private var rawContent = ""
+    /// Walnut's mic: in the keyboard's accessory bar, its recording row and
+    /// notices under the note, the words inserted at the caret.
+    @State private var voice = VoiceRecorder()
+    @State private var dictation = EditorDictationBridge()
 
     private var title: String {
         (path.split(separator: "/").last.map(String.init) ?? path)
@@ -103,7 +107,7 @@ struct NoteDetailView: View {
             }
         }
         .sheet(isPresented: $showRawEditor, onDismiss: adoptRawEdits) {
-            RawMarkdownSheet(text: $rawContent)
+            RawMarkdownSheet(path: path, text: $rawContent)
         }
         .confirmationDialog("Delete this note?", isPresented: $showDeleteConfirm, titleVisibility: .visible) {
             Button("Delete", role: .destructive) {
@@ -187,9 +191,45 @@ struct NoteDetailView: View {
                     saveTask?.cancel()
                     // Same in-flight protection as scheduleAutosave.
                     saveTask = Task { await Task { await flushSave() }.value }
-                }
+                },
+                dictation: dictation
             )
             .accessibilityIdentifier("note.editor")
+            voiceRows
+        }
+        .voiceDictation(voice, surface: noteVoiceSurface) { dictation.insert($0) }
+        .onAppear {
+            dictation.onMicTap = { Task { _ = await voice.start() } }
+        }
+    }
+
+    private var noteVoiceSurface: String { "note-body:\(path)" }
+
+    /// The recorder's notices, then the recording row while a take runs, then
+    /// a working line while it is transcribed (the bar's mic is gone with the
+    /// keyboard, so it cannot show the spinner itself).
+    @ViewBuilder
+    private var voiceRows: some View {
+        VoiceDictationNotices(voice: voice, surface: noteVoiceSurface, idPrefix: "voice.note-body") {
+            dictation.insert($0)
+        }
+        if voice.state == .recording {
+            VoiceRecordingBar(
+                voice: voice, idPrefix: "voice.note-body",
+                onCancel: { voice.cancel() },
+                onStop: {
+                    Task { if let words = await voice.stopAndTranscribe() { dictation.insert(words) } }
+                }
+            )
+            .background(.bar)
+        } else if voice.state == .transcribing {
+            HStack(spacing: 8) {
+                ProgressView().controlSize(.small)
+                Text("Transcribing…").font(.callout).foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, minHeight: voiceControlTarget)
+            .background(.bar)
+            .accessibilityIdentifier("voice.note-body.transcribing")
         }
     }
 
@@ -386,21 +426,28 @@ struct NoteDetailView: View {
 
 /// Plain-markdown fallback editor, reached via ••• → "View Markdown Source".
 private struct RawMarkdownSheet: View {
+    let path: String
     @Binding var text: String
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         NavigationStack {
-            TextEditor(text: $text)
-                .font(.system(.subheadline, design: .monospaced))
-                .padding(.horizontal, 10)
-                .navigationTitle("Markdown Source")
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .confirmationAction) {
-                        Button("Done") { dismiss() }
-                    }
+            // Walnut's mic under the source, as in the other long editors.
+            VoiceDictationField(
+                text: $text, surface: "note-source:\(path)", box: "note-source", placement: .below
+            ) {
+                TextEditor(text: $text)
+                    .font(.system(.subheadline, design: .monospaced))
+                    .accessibilityIdentifier("note.rawEditor")
+            }
+            .padding(.horizontal, 10)
+            .navigationTitle("Markdown Source")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
                 }
+            }
         }
     }
 }

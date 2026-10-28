@@ -130,28 +130,44 @@ final class AskQuestionCardUITests: XCTestCase {
         add(shot)
     }
 
-    /// Gate finding 2026-10-26: an answer that wrapped grew its field below the
+    /// Gate findings 2026-10-26: an answer that wrapped grew its field below the
     /// box's edge, so the line being typed and the cursor went out of sight; and
     /// dragging the cards to put the keyboard away left it stuck halfway (the box's
     /// height follows the keyboard, so an interactive dismiss resized it under the
-    /// finger).
+    /// finger). v6: typed line by line, the field's mic (the Stop's seat while a
+    /// take runs) fell below the box now and then, so a tap on the Stop's lower
+    /// half reached the transcript, and the recording outline 4pt below the field
+    /// was cut. Checked after EVERY line, the whole row and that outline's room.
     func testTypingAWrappingAnswerKeepsItInViewAndADragPutsTheKeyboardAway() {
         let app = launch()
         let stack = id("session.permissionStack", in: app)
         XCTAssertTrue(stack.waitForExistence(timeout: 30))
         let firstOther = app.descendants(matching: .any)
             .matching(NSPredicate(format: "identifier == %@", "session.askQuestion.other")).element(boundBy: 0)
+        let firstMic = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier == %@", "voice-mic.ask-question")).element(boundBy: 0)
         XCTAssertTrue(scrollTo(firstOther, in: app))
         firstOther.tap()
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
         let startHeight = firstOther.frame.height
-        firstOther.typeText("First line of a long answer that keeps going well past one row,\nsecond line,\nthird line,\nfourth line where the cursor is")
-        let grown = expectation(for: NSPredicate { _, _ in firstOther.frame.height > startHeight * 2 }, evaluatedWith: nil)
-        wait(for: [grown], timeout: 5)
-        let inView = expectation(for: NSPredicate { _, _ in
-            firstOther.frame.maxY <= stack.frame.maxY + 1
-        }, evaluatedWith: nil)
-        wait(for: [inView], timeout: 5)
+        // The outline sits this far outside the field (`voiceDictationOutlineOutset`).
+        let outline: CGFloat = 4
+        let lines = [
+            "First line of a long answer that keeps going well past one row,",
+            "\nsecond line,", "\nthird line,", "\nfourth line,", "\nfifth line where the cursor is",
+        ]
+        for (index, line) in lines.enumerated() {
+            firstOther.typeText(line)
+            let rowInside = expectation(for: NSPredicate { _, _ in
+                let box = stack.frame
+                let field = firstOther.frame
+                let mic = firstMic.frame
+                return field.maxY + outline <= box.maxY + 1 && mic.isInside(box)
+            }, evaluatedWith: nil)
+            wait(for: [rowInside], timeout: 5)
+            XCTAssertTrue(firstMic.isHittable, "after line \(index + 1) the mic seat is inside the box")
+        }
+        XCTAssertGreaterThan(firstOther.frame.height, startHeight * 2, "the answer grew to several lines")
         let typed = XCTAttachment(screenshot: app.screenshot())
         typed.name = "wrapped-answer-in-view"
         typed.lifetime = .keepAlways
@@ -261,5 +277,12 @@ final class AskQuestionCardUITests: XCTestCase {
             ).firstMatch.waitForExistence(timeout: 10),
             "multi-select answers should join with a comma"
         )
+    }
+}
+
+private extension CGRect {
+    /// Wholly inside `box` vertically, with a point of slack for rounding.
+    func isInside(_ box: CGRect) -> Bool {
+        !isEmpty && minY >= box.minY - 1 && maxY <= box.maxY + 1
     }
 }

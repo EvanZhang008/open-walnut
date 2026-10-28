@@ -38,6 +38,15 @@ struct LetterReaderView: View {
     @State private var committingSend = false
     /// Walnut's own speech-to-text, the one the chat composer uses.
     @State private var voice = VoiceRecorder()
+    /// The decision note's own recorder, a separate box from the reply: its
+    /// takes are stamped with their own surface, so neither box's words ever
+    /// land in the other.
+    @State private var decisionVoice = VoiceRecorder()
+    /// The decision note has the keyboard: the document scroll keeps the note's
+    /// whole box above the reply bar while it does (`DecisionNoteReveal`).
+    @FocusState private var decisionNoteFocused: Bool
+    /// The note box's bottom and the document's visible bottom, on screen.
+    @State private var decisionGeometry = DecisionNoteGeometry()
     /// The session a status line opened.
     @State private var openedSession: WalnutSession?
     @State private var openedTask: InboxTaskDestination?
@@ -49,6 +58,9 @@ struct LetterReaderView: View {
     /// Bumped by each Send (and a Retry of the newest reply): the letter scrolls
     /// that reply into view wherever the reader was.
     @State private var followTick = 0
+    /// A take's words landed in the reply: the box comes into view again (the
+    /// field kept its focus, so `replyFocused` does not change and say so).
+    @State private var insertTick = 0
     /// From a Send at the accessibility sizes until its keyboard is asked to
     /// leave (see `handOver`); the letter's scroll for that Send waits for it.
     @State private var keyboardLeavesAfterSend = false
@@ -192,12 +204,26 @@ struct LetterReaderView: View {
             // Dragging the letter down puts the keyboard away, as in a chat.
             .scrollDismissesKeyboard(.interactively)
             .refreshable { await refresh() }
+            // Where the document's visible part ends: above the reply bar
+            // and the keyboard.
+            .onGeometryChange(for: CGFloat.self) { proxy in
+                proxy.frame(in: .global).maxY - proxy.safeAreaInsets.bottom
+            } action: { decisionGeometry.visibleBottom = $0 }
+            .modifier(DecisionNoteReveal(
+                proxy: page, revealID: Self.decisionNoteRevealId,
+                focused: decisionNoteFocused, recording: decisionVoice.state == .recording,
+                note: decisionNote, typeSize: dynamicTypeSize,
+                geometry: decisionGeometry
+            ))
             .accessibilityIdentifier("inbox.letter.document")
             // Writing a reply or sending one brings the whole box into view.
             .onChange(of: replyFocused) { _, focused in
                 if focused, boxed { showBox(page) }
             }
             .onChange(of: followTick) { _, _ in
+                if boxed { showBox(page) }
+            }
+            .onChange(of: insertTick) { _, _ in
                 if boxed { showBox(page) }
             }
         }
@@ -399,14 +425,29 @@ struct LetterReaderView: View {
                     .background(Theme.tintSoft, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                 }
                 .buttonStyle(.plain)
-                .disabled(busyActionId != nil)
+                // While the note is being spoken, a choice would go without its words.
+                .disabled(busyActionId != nil || decisionVoice.state != .idle)
                 .accessibilityIdentifier("inbox.letter.action.\(action.id)")
             }
-            TextField("Add a note with your choice (optional)", text: $decisionNote, axis: .vertical)
-                .lineLimit(1...3)
-                .font(.callout)
-                .textFieldStyle(.roundedBorder)
-                .accessibilityIdentifier("inbox.letter.decisionNote")
+            // One microphone at a time on this screen: the reply's mic is off
+            // while this one records, and this one while the reply's records.
+            VoiceDictationField(
+                text: $decisionNote, surface: "letter-decision:\(letterId)", box: "letter-decision",
+                blocked: voice.state != .idle || busyActionId != nil, recorder: decisionVoice,
+                refocus: { decisionNoteFocused = true },
+                revealID: Self.decisionNoteRevealId
+            ) {
+                TextField("Add a note with your choice (optional)", text: $decisionNote, axis: .vertical)
+                    .lineLimit(1...3)
+                    .font(.callout)
+                    .textFieldStyle(.roundedBorder)
+                    .focused($decisionNoteFocused)
+                    .accessibilityIdentifier("inbox.letter.decisionNote")
+            }
+            .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).maxY } action: {
+                decisionGeometry.boxBottom = $0
+                decisionGeometry.boxMoved?()
+            }
         }
         .padding(12)
         .background(Theme.warning.opacity(0.12), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
@@ -570,6 +611,7 @@ struct LetterReaderView: View {
 
     private func openTask(_ id: String, title: String?) {
         if voice.state == .recording { voice.preserveAndStop(reason: "task-opened") }
+        if decisionVoice.state == .recording { decisionVoice.preserveAndStop(reason: "task-opened") }
         replyField.endEditing()
         openedTask = InboxTaskDestination(id: id, title: title)
     }
@@ -617,6 +659,7 @@ struct LetterReaderView: View {
     }
 
     static let contentId = "letter.content"
+    static let decisionNoteRevealId = "letter.decisionNote.reveal"
     static let boxId = "letter.conversationBox"
 
     /// The thread's newest reply (recorded or pending), in the order it renders.
@@ -864,6 +907,7 @@ struct LetterReaderView: View {
                         in: RoundedRectangle(cornerRadius: 18, style: .continuous)
                     )
                     VoiceMicButton(voice: voice, identifier: "inbox.letter.mic")
+                        .disabled(decisionVoice.state != .idle)
                     LetterSendButton(enabled: canSend, action: sendTapped)
                 }
                 .padding(.leading, 12)
@@ -1088,6 +1132,7 @@ struct LetterReaderView: View {
         replyField.endEditing()
         replies.appendToDraft(text, for: letterId)
         replyFocused = true
+        insertTick &+= 1
     }
 
     /// Voice wiring, once per appearance. The recorder speaks for THIS letter's
@@ -1121,6 +1166,103 @@ struct LetterReaderView: View {
 
 /// The reply box's send button: a round glyph that grows with the text size up
 /// to 44pt, inside a 44pt target.
+/// Where the decision note's box and the document's visible part end, on
+/// screen. A plain class written from layout callbacks: as state, every
+/// scrolled frame (the box moves with the letter) re-rendered the whole letter.
+@MainActor
+final class DecisionNoteGeometry {
+    var boxBottom: CGFloat = 0
+    var visibleBottom: CGFloat = .infinity
+    /// Set by `DecisionNoteReveal`, called after the box moved.
+    var boxMoved: (() -> Void)?
+    var active = false
+    /// A finger is on the letter, or it still glides from a flick.
+    var scrolling = false
+}
+
+/// Keeps the decision note's whole box (the field, its mic and the recording
+/// outline) above the reply bar and the keyboard after it takes the keyboard,
+/// starts recording, grows a line, or the text size changes. The system
+/// scrolls a focused field only until its caret shows, which left a grown
+/// note's last line and the outline's bottom edge under the reply bar, and at
+/// the largest sizes the whole note (2026-10-26 gate).
+///
+/// Never during a drag and never on the visible edge moving: an interactive
+/// keyboard dismissal moves that edge under the finger, and a reveal there
+/// left the keyboard stuck halfway with the reply bar over the letter (v6
+/// gate, 7 of 7). Focus, a take and a text size change wait for the keyboard
+/// to settle before reading the edge: read mid-animation, a fully visible note
+/// looked cut and the letter jumped 124pt.
+private struct DecisionNoteReveal: ViewModifier {
+    let proxy: ScrollViewProxy
+    let revealID: String
+    let focused: Bool
+    let recording: Bool
+    let note: String
+    let typeSize: DynamicTypeSize
+    let geometry: DecisionNoteGeometry
+
+    /// When the note last changed: the box growing right after it is that
+    /// change being laid out, which the scroll follows at once.
+    @State private var noteChangedAt: Date?
+    @State private var settling: Task<Void, Never>?
+
+    /// When a settled check reads the edge, after the event: past the keyboard's
+    /// animation, then once more for a slow one.
+    static let settleDelays: [Duration] = [.milliseconds(450), .milliseconds(450)]
+
+    private var active: Bool { focused || recording }
+
+    func body(content: Content) -> some View {
+        content
+            .onChange(of: active, initial: true) { geometry.active = active }
+            .onScrollPhaseChange { _, phase in
+                let scrolling = phase != .idle && phase != .animating
+                geometry.scrolling = scrolling
+                if scrolling {
+                    settling?.cancel()
+                    noteChangedAt = nil
+                }
+            }
+            .onChange(of: focused) { _, now in if now { checkWhenSettled() } }
+            .onChange(of: recording) { _, now in if now { checkWhenSettled() } }
+            .onChange(of: typeSize) { if active { checkWhenSettled() } }
+            .onChange(of: note) {
+                guard active else { return }
+                noteChangedAt = .now
+                check()
+            }
+            .onAppear {
+                geometry.boxMoved = {
+                    if let noteChangedAt, Date.now.timeIntervalSince(noteChangedAt) < 1 { check() }
+                }
+            }
+            .onDisappear {
+                settling?.cancel()
+                geometry.boxMoved = nil
+            }
+    }
+
+    private func checkWhenSettled() {
+        settling?.cancel()
+        settling = Task { @MainActor in
+            for delay in Self.settleDelays {
+                try? await Task.sleep(for: delay)
+                if Task.isCancelled { return }
+                check()
+            }
+        }
+    }
+
+    private func check() {
+        guard geometry.active, !geometry.scrolling else { return }
+        guard geometry.boxBottom + voiceDictationRevealMargin > geometry.visibleBottom else { return }
+        // Animated: the reveal runs after the keyboard settles, and a jump of
+        // up to ~90pt in one frame read as the letter lurching (v7 gate).
+        withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo(revealID, anchor: .bottom) }
+    }
+}
+
 private struct LetterSendButton: View {
     let enabled: Bool
     let action: () -> Void

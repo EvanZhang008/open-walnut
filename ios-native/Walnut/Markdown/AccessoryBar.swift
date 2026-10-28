@@ -88,6 +88,13 @@ final class AccessoryBar: UIView {
         let tableButton = iconButton("tablecells", action: #selector(insertTable))
         let photoButton = makePhotoMenuButton()
         [aaButton, taskButton, tableButton, photoButton].forEach { stack.addArrangedSubview($0) }
+        // Walnut's own speech-to-text, when the editor's host offers it.
+        if coordinator.parent.dictation != nil {
+            let micButton = iconButton("mic", action: #selector(startDictation))
+            micButton.accessibilityIdentifier = "voice-mic.note-body"
+            micButton.accessibilityLabel = "Voice input"
+            stack.addArrangedSubview(micButton)
+        }
 
         let doneButton = UIButton(type: .system)
         doneButton.setImage(UIImage(systemName: "keyboard.chevron.compact.down"), for: .normal)
@@ -133,6 +140,11 @@ final class AccessoryBar: UIView {
         formatDrawer = nil
         hostTextView.inputView = nil
         hostTextView.reloadInputViews()
+    }
+
+    @objc private func startDictation() {
+        dismissFormatDrawer()
+        coordinator.parent.dictation?.micTapped()
     }
 
     @objc private func insertTask() {

@@ -14,6 +14,9 @@ struct WysiwygEditor: UIViewRepresentable {
     var autoFocus: Bool = false
     var onChange: () -> Void
     var onCheckboxToggle: () -> Void
+    /// Walnut's mic in the accessory bar, and a way in for its transcript at the
+    /// caret. nil = no mic.
+    var dictation: EditorDictationBridge? = nil
 
     func makeUIView(context: Context) -> WalnutTextView {
         let textView = WalnutTextView()
@@ -38,6 +41,7 @@ struct WysiwygEditor: UIViewRepresentable {
         textView.typingAttributes = MarkdownAttributed.typingAttributes(for: .body)
         textView.coordinator = context.coordinator
         textView.inputAccessoryView = context.coordinator.makeAccessoryBar(for: textView)
+        dictation?.attach(textView)
         // The accessory bar lives in the system keyboard window. If the app
         // backgrounds while editing, that window can survive and float over
         // the wallpaper — resign focus so it tears down with the keyboard.
@@ -196,14 +200,17 @@ struct WysiwygEditor: UIViewRepresentable {
         /// e.g. typing right after a heading doesn't inherit heading styling
         /// forever, and continuing a bullet keeps list attributes.
         private func updateTypingAttributes(_ textView: UITextView) {
-            let loc = textView.selectedRange.location
-            guard loc > 0, textView.textStorage.length > 0 else {
-                textView.typingAttributes = MarkdownAttributed.typingAttributes(for: .body)
-                return
+            textView.typingAttributes = Self.typingAttributes(at: textView.selectedRange.location, in: textView.textStorage)
+        }
+
+        /// What text typed at `loc` would carry: the run before it, minus
+        /// attachment and delimiter marks, with a visible colour.
+        static func typingAttributes(at loc: Int, in storage: NSTextStorage) -> [NSAttributedString.Key: Any] {
+            guard loc > 0, storage.length > 0 else {
+                return MarkdownAttributed.typingAttributes(for: .body)
             }
-            let probe = min(loc - 1, textView.textStorage.length - 1)
-            let attrs = textView.textStorage.attributes(at: probe, effectiveRange: nil)
-            var typing = attrs
+            let probe = min(loc - 1, storage.length - 1)
+            var typing = storage.attributes(at: probe, effectiveRange: nil)
             typing.removeValue(forKey: .attachment)
             typing.removeValue(forKey: .walnutDelimOpen)
             typing.removeValue(forKey: .walnutDelimClose)
@@ -211,7 +218,7 @@ struct WysiwygEditor: UIViewRepresentable {
                 let kind = (typing[.walnutBlock] as? WalnutBlockKind) ?? .body
                 typing[.foregroundColor] = MarkdownAttributed.color(for: kind)
             }
-            textView.typingAttributes = typing
+            return typing
         }
 
         func textView(_ textView: UITextView, shouldChangeTextIn range: NSRange, replacementText text: String) -> Bool {

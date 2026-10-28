@@ -214,9 +214,14 @@ struct NewSessionSheet: View {
 
     private var messageSection: some View {
         Section {
-            TextField("Optional. Leave empty to start idle", text: $message, axis: .vertical)
-                .lineLimit(3...6)
-                .accessibilityIdentifier("newSession.message")
+            VoiceDictationField(
+                text: $message, surface: "new-session:\(task?.id ?? "standalone")", box: "new-session-message",
+                blocked: creating
+            ) {
+                TextField("Optional. Leave empty to start idle", text: $message, axis: .vertical)
+                    .lineLimit(3...6)
+                    .accessibilityIdentifier("newSession.message")
+            }
         } header: {
             Text("First Message")
         } footer: {

@@ -38,29 +38,36 @@ struct VoiceMicButton: View {
 
     var body: some View {
         let size = VoiceGlyphSeat(scaled: seat)
-        Button {
-            Task { _ = await voice.start() }
-        } label: {
-            Group {
-                if voice.state == .transcribing {
-                    ProgressView()
-                        .controlSize(.small)
-                        .frame(width: size.diameter, height: size.diameter)
-                } else {
-                    Image(systemName: "mic.fill")
-                        .font(.system(size: size.glyphSize, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                        .frame(width: size.diameter, height: size.diameter)
-                        .background(Color(.tertiarySystemFill), in: Circle())
-                }
+        if voice.state == .transcribing {
+            // Not inside the disabled button: a disabled plain button draws its
+            // label at about 45% opacity, which faded the tinted spinner to
+            // 1.9:1 (2026-10-27 v7 gate). The app's tint at full strength:
+            // 5.84:1 light, 5.3:1 on dark grey.
+            ProgressView()
+                .controlSize(.small)
+                .tint(Theme.tint)
+                .frame(width: size.diameter, height: size.diameter)
+                .frame(width: size.target, height: size.target)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("Transcribing")
+                .accessibilityIdentifier(identifier)
+        } else {
+            Button {
+                Task { _ = await voice.start() }
+            } label: {
+                Image(systemName: "mic.fill")
+                    .font(.system(size: size.glyphSize, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: size.diameter, height: size.diameter)
+                    .background(Color(.tertiarySystemFill), in: Circle())
+                    .frame(width: size.target, height: size.target)
+                    .contentShape(Rectangle())
             }
-            .frame(width: size.target, height: size.target)
-            .contentShape(Rectangle())
+            .buttonStyle(.plain)
+            .disabled(voice.state != .idle)
+            .accessibilityLabel("Voice input")
+            .accessibilityIdentifier(identifier)
         }
-        .buttonStyle(.plain)
-        .disabled(voice.state != .idle)
-        .accessibilityLabel(voice.state == .transcribing ? "Transcribing" : "Voice input")
-        .accessibilityIdentifier(identifier)
     }
 }
 
