@@ -234,8 +234,11 @@ describe('proactive app state starts a turn', () => {
   it('debounced, and spaced a minute apart; a burst sends its latest state once', async () => {
     const { task, sid } = await spawned()
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+    // Bounded by real time, not by a count of ticks: a module the send path imports on first use
+    // takes a varying number of them (Date is faked here; performance.now is not).
     const settle = async (want: number) => {
-      for (let i = 0; i < 400 && (await rows(sid)).length < want; i++) await new Promise((r) => setImmediate(r))
+      const until = performance.now() + 10_000
+      while ((await rows(sid)).length < want && performance.now() < until) await new Promise((r) => setImmediate(r))
     }
     await publish(task.id, { run: 1 }, { mode: 'proactive' })
     await publish(task.id, { run: 2 }, { mode: 'proactive' })

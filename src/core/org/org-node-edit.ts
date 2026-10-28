@@ -26,7 +26,8 @@ import { log } from '../../logging/index.js';
 import { bus, EventNames } from '../event-bus.js';
 import { OrgError, ensureLeadNow, leadDescription, orgTasks, withOrgLock } from './org-store.js';
 import { ORG_INSTRUCTIONS_MAX, isOrgMember, pickLead, pickOwnLead, projectKey } from './org-tree.js';
-import type { OrgInstructionsWriter } from './instructions-author.js';
+import { defaultOrgInstructions, isDefaultOrgInstructions } from './core-instructions.js';
+import { orgInstructionsAuthor, type OrgInstructionsWriter } from './instructions-author.js';
 
 /** Who writes: the user, or an agent (its task, and its name as the user reads it). */
 export interface OrgWriter {
@@ -36,11 +37,17 @@ export interface OrgWriter {
 
 const USER: OrgWriter = { by: 'human' };
 
-/** A stamp of `text` by `writer`, now. A row the user wrote carries no name. */
-function stamp(text: string, writer: OrgWriter): NonNullable<Task['org_instructions']> {
+/**
+ * A stamp of `text` by `writer`, now. A row the user wrote carries no name. An agent's words written
+ * on the user's word (`forUser`: it passed override_user) count as the user's: they replace Walnut's
+ * default in the prompt, as the user's own would.
+ */
+function stamp(text: string, writer: OrgWriter, forUser?: boolean): NonNullable<Task['org_instructions']> {
+  const agent = writer.by !== 'human';
   return {
     text, at: new Date().toISOString(), by: writer.by,
-    ...(writer.by !== 'human' && writer.byName ? { by_name: writer.byName } : {}),
+    ...(agent && writer.byName ? { by_name: writer.byName } : {}),
+    ...(agent && forUser ? { for_user: true } : {}),
   };
 }
 
@@ -83,6 +90,22 @@ function cleanInstructions(raw: unknown): string {
     throw new OrgError('bad_instructions', 400, `Instructions are at most ${ORG_INSTRUCTIONS_MAX} characters (these are ${text.length}).`);
   }
   return text;
+}
+
+/**
+ * An agent's own lines are read after Walnut's default for the role (core-instructions.ts), and
+ * every editor opens on the two together, so together they keep within the limit: a box that
+ * opened past it could not be saved as it stood. Words the user asked for replace the default.
+ */
+function refuseLongAgentLines(role: string | undefined, text: string, writer: OrgWriter, forUser?: boolean): void {
+  const def = writer.by === 'human' || forUser ? '' : defaultOrgInstructions(role);
+  if (!def || !text) return;
+  const max = ORG_INSTRUCTIONS_MAX - def.length - 2;
+  if (text.length > max) {
+    throw new OrgError('bad_instructions', 400,
+      `An agent's instructions are read after Walnut's default for the role (${def.length} characters), so they are at most ${max} characters (these are ${text.length}). `
+      + 'Shorten them, or pass override_user when the user asked for words that replace the default.');
+  }
 }
 
 /**
@@ -131,7 +154,7 @@ function cleanSlate(task: Task | undefined, writer: OrgWriter): Partial<Task> {
  * clearing them, directly or by bringing a closed VP back, passes `override_user`.
  */
 function refuseUserWords(prior: Task['org_instructions'], writer: OrgWriter, override: boolean | undefined): void {
-  const userWrote = !!prior?.text.trim() && (!prior.by || prior.by === 'human');
+  const userWrote = !!prior?.text.trim() && orgInstructionsAuthor(prior).usersWords;
   if (writer.by !== 'human' && userWrote && !override) {
     throw new OrgError('user_wrote', 409, 'The user wrote these instructions. Replace or clear them only when the user asked for it, and then pass override_user: true.');
   }
@@ -155,7 +178,10 @@ export interface NewOrgNodeInput {
 export async function createOrgNode(input: NewOrgNodeInput, vpOnly: boolean, opts: { human?: boolean; writer?: OrgWriter } = {}): Promise<Task> {
   const name = vpOnly ? cleanVpName(input.name) : oneLine(input.name, 'The project\'s name');
   const vpName = !vpOnly && typeof input.vpName === 'string' && input.vpName.trim() ? cleanVpName(input.vpName) : '';
-  const instructions = input.instructions === undefined ? '' : cleanInstructions(input.instructions);
+  const given = input.instructions === undefined ? '' : cleanInstructions(input.instructions);
+  // A new VP saved with the default's own words follows the default.
+  const instructions = isDefaultOrgInstructions('lead', given) ? '' : given;
+  refuseLongAgentLines('lead', instructions, opts.writer ?? USER, input.overrideUser === true);
   return withOrgLock(async () => {
     const tm = await import('../task-manager.js');
     const tasks = await orgTasks();
@@ -206,7 +232,7 @@ export async function createOrgNode(input: NewOrgNodeInput, vpOnly: boolean, opt
     const fields: Partial<Task> = { ...cleanSlate(own, opts.writer ?? USER) };
     if (vpOnly) fields.org_vp_only = true;
     if (vpName && projectKey(vpName) !== key) fields.org_name = vpName;
-    if (instructions) fields.org_instructions = stamp(instructions, opts.writer ?? USER);
+    if (instructions) fields.org_instructions = stamp(instructions, opts.writer ?? USER, input.overrideUser === true);
     // A new lead is announced whole once it is written; a reopened one by its own updates.
     await tm.updateTaskRaw(id, fields, { emitEvent: !!own, source: 'api' });
     log.task.info('org: node made on the Org page', { taskId: id, project: made.name, vpOnly, named: !!vpName, reopened: !!own, instructions: instructions.length });
@@ -251,11 +277,15 @@ async function editNow(task: Task, edit: CleanEdit, writer: OrgWriter): Promise<
     }
   }
   if (edit.instructions !== undefined) {
-    const text = edit.instructions;
-    // Nothing set and nothing asked writes nothing; a clear of set words is a new version.
-    if (text !== (task.org_instructions?.text ?? '') && (text || task.org_instructions)) {
+    // The default's own words are no words of the user's: the role keeps following the default.
+    const text = isDefaultOrgInstructions(task.org_role, edit.instructions) ? '' : edit.instructions;
+    // Nothing set and nothing asked writes nothing; a clear of set words is a new version, and so
+    // is an agent's own words made the user's on the user's word.
+    const madeUsers = !!text && writer.by !== 'human' && edit.overrideUser === true && !orgInstructionsAuthor(task.org_instructions).usersWords;
+    if ((text !== (task.org_instructions?.text ?? '') || madeUsers) && (text || task.org_instructions)) {
       refuseUserWords(task.org_instructions, writer, edit.overrideUser);
-      patch.org_instructions = stamp(text, writer);
+      refuseLongAgentLines(task.org_role, text, writer, edit.overrideUser);
+      patch.org_instructions = stamp(text, writer, edit.overrideUser);
     }
   }
   if (Object.keys(patch).length) {

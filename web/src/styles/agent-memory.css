@@ -15,6 +15,7 @@
 .am-sub { margin-top: 2px; font-size: 12px; color: var(--fg-muted); }
 .am-field { display: flex; flex-direction: column; gap: 4px; margin-top: 14px; }
 .am-label { font-size: 13px; font-weight: 600; color: var(--fg); }
+.am-source { margin-left: 6px; font-style: normal; font-weight: 400; color: var(--fg-muted); }
 .am-hint { margin: 0; font-size: 12px; line-height: 1.45; color: var(--fg-muted); }
 .am-error { color: var(--error, #e5484d); }
 .am-instructions.app-modal-input { margin-top: 4px; min-height: 120px; resize: vertical; font-size: 13px; line-height: 1.5; font-family: inherit; }
@@ -38,3 +39,4 @@
 .am-link { border: none; background: none; padding: 0; font-size: 12px; color: var(--accent); cursor: pointer; }
 .am-link:hover:not(:disabled) { text-decoration: underline; }
 .am-link:disabled { color: var(--fg-muted); cursor: default; }
+.am-restore { display: block; margin-top: 6px; }

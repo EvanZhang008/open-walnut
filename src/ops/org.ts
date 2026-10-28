@@ -116,15 +116,16 @@ defineOp({
   description:
     'Makes a new project with its own VP (kind "project"), or a VP with no project of its own yet (kind "vp"), '
     + 'which projects are then put under with org_vp_set. `instructions` are the VP\'s standing instructions: its '
-    + 'session prompt carries them, and the Org page shows that you wrote them. A name another VP or project uses is refused. '
-    + 'A closed VP of that project comes back with a clean slate; when the user wrote its instructions, pass `override_user: true` '
-    + '(else 409 user_wrote), only when the user asked for it.',
+    + 'session prompt carries Walnut\'s default for a VP and then them (write only what to add), and the Org page shows '
+    + 'that you wrote them. A name another VP or project uses is refused. A closed VP of that project comes back with a '
+    + 'clean slate; when the user wrote its instructions, pass `override_user: true` (else 409 user_wrote), only when the '
+    + 'user asked for it.',
   input: {
     kind: z.enum(['project', 'vp']).describe('"project": a project with its own VP; "vp": a VP to put projects under'),
     name: z.string().min(1).describe('The project\'s name, or the VP\'s'),
     vp_name: z.string().optional().describe('kind "project" only: its VP\'s name, when not the project\'s'),
-    instructions: z.string().optional().describe('The VP\'s standing instructions (at most 4000 characters)'),
-    override_user: z.boolean().optional().describe('Bring back a closed VP whose instructions the user wrote; only when the user asked for it'),
+    instructions: z.string().optional().describe('The VP\'s standing instructions (at most 4000 characters, Walnut\'s default included for an agent\'s own lines)'),
+    override_user: z.boolean().optional().describe('The user asked for this: bring back a closed VP whose instructions the user wrote, and your words count as the user\'s (they replace Walnut\'s default)'),
   },
   handler: async ({ kind, name, vp_name, instructions, override_user }, call) => {
     const body = await call('POST', kind === 'vp' ? '/org/vps' : '/org/projects', {
@@ -144,16 +145,17 @@ defineOp({
   description:
     'Renames a VP or writes the standing instructions of the CEO or a VP, as the user does on the org chart. '
     + 'Name the node by `task_id` (the CEO\'s or a VP\'s task), or by `project` for that project\'s VP (made first '
-    + 'when the project has none). `instructions` replace the earlier ones whole; "" clears them. The node\'s '
-    + 'session reads them with its next message, and the Org page shows who wrote them and when. Words the user '
-    + 'wrote are replaced or cleared only with `override_user: true` (else 409 user_wrote): pass it only when the '
-    + 'user asked for the change.',
+    + 'when the project has none). `instructions` replace the earlier ones whole; "" clears them. Walnut\'s default '
+    + 'for the role always comes first and your words are added after it, below it: write only what to add. The node\'s '
+    + 'session reads them with its next message, and the Org page shows who wrote them and when. With '
+    + '`override_user: true`, passed only when the user asked for the change, your words count as the user\'s: they '
+    + 'replace Walnut\'s default, and they may replace or clear words the user wrote (else 409 user_wrote).',
   input: {
     task_id: z.string().optional().describe('The CEO\'s or a VP\'s task id'),
     project: z.string().optional().describe('Or: the project whose VP this is'),
     name: z.string().optional().describe('A VP\'s new name; its project\'s name or "" gives it back'),
-    instructions: z.string().optional().describe('The new standing instructions, whole; "" clears them (at most 4000 characters)'),
-    override_user: z.boolean().optional().describe('Replace or clear instructions the user wrote; only when the user asked for it'),
+    instructions: z.string().optional().describe('The new standing instructions, whole; "" clears them (at most 4000 characters, Walnut\'s default included for an agent\'s own lines)'),
+    override_user: z.boolean().optional().describe('The user asked for this change: your words count as the user\'s (they replace Walnut\'s default), and may replace or clear words the user wrote'),
   },
   handler: async ({ task_id, project, name, instructions, override_user }, call) => {
     if (!task_id === !project) throw new Error('Name the node by task_id or by project, one of them.');

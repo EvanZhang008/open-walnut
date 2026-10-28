@@ -14,8 +14,11 @@
  *     in the "+" of Main's own composer, where a click sends Main the action (the draft in the
  *     box stays) and Main answers; a project's ⋮ on the Tasks page asks about that project, and a
  *     failed send says so; a Main waiting on the user's answer is not sent to
- *   - Main's ⋮ "Memory & instructions" (web/src/components/org/AgentMemoryPanel.tsx): its
- *     instructions save for its next message; its own MEMORY.md and Walnut's read folded
+ *   - Main's ⋮ "Memory & instructions" (web/src/components/org/AgentMemoryPanel.tsx): its core
+ *     instructions open on Walnut's default, save for its next message, and Restore brings the
+ *     default back; its own MEMORY.md and Walnut's read folded
+ *   - the org chart's CEO form (web/src/components/org/OrgNodeEditor.tsx) opens on the same
+ *     default, and saving the default's own words writes nothing
  * The fixture is shared, so this file makes its own projects and removes what it made, Main
  * included. Main is one per install, so every test that needs it lives here, in order (a
  * second file would run beside this one's removal of Main). The mock CLI answers each message
@@ -26,6 +29,7 @@ import { expect, test, type APIRequestContext, type Locator, type Page } from '@
 import { loadHome, openAskWalnutDrawer } from './draft-helpers'
 import { isolateUiPrefs, presetPanelView } from './todo-panel-helpers'
 import { openSessionFromPlus, pinToTier } from './draft-surface-helpers'
+import { DEFAULT_ORG_INSTRUCTIONS } from '../../../src/core/org/core-instructions'
 
 // Both browser projects load this file in their own worker at about the same moment: the pid
 // keeps their projects apart (a shared one let one worker's lead answer the other's chat).
@@ -34,6 +38,8 @@ const PROJECT = `Org spec ${STAMP}`
 const MAIN_PROMPT = `org spec hello ${STAMP}`
 const QA_PROJECT = `Tidy scope ${STAMP}`
 const SENDS = 'one Main serves both browser projects: only WebKit sends to it'
+/** The one browser that writes Main's instructions: WebKit when it runs (PW_WEBKIT=1), else Chromium (CI). */
+const writesMain = (browserName: string) => (process.env.PW_WEBKIT ? browserName === 'webkit' : browserName === 'chromium')
 const made: string[] = []
 /** Tasks a test made only to draw a board header; removed with the rest. */
 const anchors: string[] = []
@@ -44,7 +50,7 @@ test.setTimeout(180_000)
 interface OrgTree { main?: { id: string }; projects: { project: string; lead?: { id: string; title: string } }[] }
 const orgTree = async (request: APIRequestContext): Promise<OrgTree> =>
   (await (await request.get('/api/v1/org')).json()).tree as OrgTree
-const taskOf = async (request: APIRequestContext, id: string): Promise<{ parent_task_id?: string; session_id?: string } | undefined> =>
+const taskOf = async (request: APIRequestContext, id: string): Promise<{ parent_task_id?: string; session_id?: string; org_instructions?: { text: string; at?: string } } | undefined> =>
   (await (await request.get(`/api/tasks/${id}`)).json()).task
 
 async function removeTask(request: APIRequestContext, id: string): Promise<void> {
@@ -315,9 +321,9 @@ test('Main\'s quick actions sit in its composer\'s "+", not in a bar of their ow
 test('Main\'s ⋮ opens its memory and instructions: the words save for its next message, its own MEMORY.md and Walnut\'s read folded', async ({ page, request, browserName }) => {
   const main = (await orgTree(request)).main
   expect(main, 'Main is made by the send test above').toBeTruthy()
-  // One Main serves both browser projects, which run this file side by side: only WebKit writes.
+  // One Main serves both browser projects, which run this file side by side: only one writes.
   // Main writes its own MEMORY.md; a person may too, as this does to give the fold something to show.
-  const writes = browserName === 'webkit'
+  const writes = writesMain(browserName)
   const note = `Remember the garden plan. ${STAMP}`
   if (writes) expect((await request.put(`/api/v1/tasks/${main!.id}/agent-memory`, { data: { content: note, mode: 'replace' } })).ok()).toBe(true)
   await openOrgMain(page)
@@ -334,6 +340,15 @@ test('Main\'s ⋮ opens its memory and instructions: the words save for its next
   const box = panel.getByTestId('am-instructions')
   await expect(box).toBeFocused()
   await expect(panel.getByTestId('am-save')).toBeDisabled()
+  const source = panel.getByTestId('am-instructions-source')
+  const restore = panel.getByTestId('am-restore-default')
+  // 2026-10-27, the user: "inject the core instruction for each agent ... main, u don't do task
+  // yourself". A Main with no words of the user's opens on what it reads: Walnut's default.
+  if (writes) {
+    await expect(box).toHaveValue(DEFAULT_ORG_INSTRUCTIONS.main)
+    await expect(source).toHaveText('Walnut\'s default')
+    await expect(restore).toHaveCount(0)
+  }
   const own = panel.getByTestId('am-own-memory')
   await expect(own.locator('summary')).toHaveText(writes ? `Its own MEMORY.md · ${note.length} of 12k` : /^Its own MEMORY\.md · \S+ of 12k$/)
   await expect(own.locator('.am-fold-body')).toBeHidden()
@@ -348,8 +363,13 @@ test('Main\'s ⋮ opens its memory and instructions: the words save for its next
   await expect(walnut.getByTestId('am-edit-user')).toBeVisible()
 
   if (writes) {
+    // An emptied box is the default too: nothing to save.
+    await box.fill('')
+    await expect(panel.getByTestId('am-default-hint')).toHaveText('Empty: Walnut\'s default applies.')
+    await expect(panel.getByTestId('am-save')).toBeDisabled()
     const words = `Keep the weekly plan short. ${STAMP}`
     await box.fill(words)
+    await expect(source).toHaveText('yours')
     // Unsaved words hold the panel: Escape keeps them, and the Memory page link waits for a save.
     await page.keyboard.press('Escape')
     await expect(panel).toBeVisible()
@@ -366,12 +386,20 @@ test('Main\'s ⋮ opens its memory and instructions: the words save for its next
     await chat.locator('.session-panel-header .task-kebab-btn').first().click()
     await page.locator('.task-kebab-menu').getByTestId('kebab-memory-instructions').click()
     await expect(panel.getByTestId('am-instructions')).toHaveValue(words)
-    expect((await request.put(`/api/v1/org/nodes/${main!.id}`, { data: { instructions: null } })).ok()).toBe(true)
+    // Restore puts the default back in the box; saved, the user's words are cleared.
+    await restore.click()
+    await expect(box).toHaveValue(DEFAULT_ORG_INSTRUCTIONS.main)
+    await expect(source).toHaveText('Walnut\'s default')
+    await expect(restore).toHaveCount(0)
+    await panel.getByTestId('am-save').click()
+    await expect(panel.getByTestId('am-note')).toHaveText('Saved. It reads them with its next message.')
+    expect((await taskOf(request, main!.id))?.org_instructions?.text).toBe('')
   }
   await panel.getByRole('button', { name: 'Close', exact: true }).first().click()
   await expect(panel).toHaveCount(0)
 
-  if (!writes) {
+  // The other browser, or the only one: this writes nothing to Main.
+  if (!writes || !process.env.PW_WEBKIT) {
     // Stored words it could not read are never offered for an edit: the box stays read-only
     // and Save off until a retry reads them.
     let failed = 0
@@ -391,6 +419,55 @@ test('Main\'s ⋮ opens its memory and instructions: the words save for its next
     await page.keyboard.press('Escape')
     await expect(panel).toHaveCount(0)
   }
+})
+
+test('the org chart\'s CEO form opens on Walnut\'s default core instructions; Restore brings them back, and the user\'s own words save', async ({ page, request, browserName }) => {
+  test.skip(!writesMain(browserName), 'one Main serves both browser projects: only one writes its instructions')
+  const main = (await orgTree(request)).main
+  expect(main, 'Main is made by the send test above').toBeTruthy()
+  // From the default: the CEO has no words of the user's (the test above restored it).
+  expect((await request.put(`/api/v1/org/nodes/${main!.id}`, { data: { instructions: null } })).ok()).toBe(true)
+  await isolateUiPrefs(page)
+  await loadHome(page)
+  await sidebarOrg(page).click()
+  await page.getByTestId('org-open-chart').click()
+  await expect(page.getByTestId('org-chart')).toBeVisible()
+  const openForm = async () => {
+    await page.getByTestId('org-chart-ceo-menu').click()
+    await page.getByTestId('org-chart-node-menu').getByText('Edit instructions…').click()
+    const form = page.getByTestId('org-node-editor')
+    await expect(form).toContainText('The CEO\'s instructions')
+    await expect(form.getByTestId('org-node-name')).toHaveCount(0)
+    return form
+  }
+  let form = await openForm()
+  const area = form.getByTestId('org-node-instructions')
+  await expect(area).toHaveValue(DEFAULT_ORG_INSTRUCTIONS.main)
+  await expect(form.getByTestId('org-node-instructions-source')).toHaveText('Walnut\'s default')
+  await expect(form.getByTestId('org-node-restore-default')).toHaveCount(0)
+  await area.fill(`Delegate everything. ${STAMP}`)
+  await expect(form.getByTestId('org-node-instructions-source')).toHaveText('yours')
+  await form.getByTestId('org-node-restore-default').click()
+  await expect(area).toHaveValue(DEFAULT_ORG_INSTRUCTIONS.main)
+  await expect(form.getByTestId('org-node-restore-default')).toHaveCount(0)
+  // An emptied box says what applies.
+  await area.fill('')
+  await expect(form.getByTestId('org-node-default-hint')).toHaveText('Empty: Walnut\'s default applies.')
+  await expect(form.getByTestId('org-node-restore-default')).toHaveCount(0)
+  // Saving the default's own words writes nothing.
+  await area.fill(DEFAULT_ORG_INSTRUCTIONS.main)
+  const at = (await taskOf(request, main!.id))?.org_instructions
+  await form.getByTestId('org-node-save').click()
+  await expect(form).toHaveCount(0)
+  expect((await taskOf(request, main!.id))?.org_instructions).toEqual(at)
+  // The user's own words save, and the CEO reads them with its next message.
+  form = await openForm()
+  const words = `Keep the weekly plan short. ${STAMP}`
+  await form.getByTestId('org-node-instructions').fill(words)
+  await form.getByTestId('org-node-save').click()
+  await expect(page.getByTestId('org-chart-done')).toHaveText('Saved. The CEO reads the new instructions with its next message.')
+  expect((await taskOf(request, main!.id))?.org_instructions?.text).toBe(words)
+  expect((await request.put(`/api/v1/org/nodes/${main!.id}`, { data: { instructions: null } })).ok()).toBe(true)
 })
 
 test('a quick action from Main\'s "+" sends it, keeps the draft, and Main answers; a second one reaches it again', async ({ page, browserName }) => {

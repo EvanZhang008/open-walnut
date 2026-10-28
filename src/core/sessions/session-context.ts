@@ -90,6 +90,8 @@ import { taskDirForHost } from './task-dir-place.js'
 import { isAskTask } from './caller-placement.js'
 import { createHash } from 'node:crypto'
 import { ORG_INSTRUCTIONS_MAX } from '../org/org-tree.js'
+import { defaultOrgInstructions } from '../org/core-instructions.js'
+import { orgInstructionsAuthor } from '../org/instructions-author.js'
 
 import { TASK_ROUTING_CONTRACT } from '../task-routing-contract.js'
 
@@ -323,44 +325,54 @@ export async function buildSessionContext(
 /** The task fields the default instructions depend on (role, project, ask, its standing instructions). */
 export type InstructionTask = {
   id?: string; org_role?: string; project?: string; org_leads?: readonly string[]; walnut_agent?: boolean;
-  org_instructions?: { text: string; at?: string; by?: string; by_name?: string }; org_vp_only?: boolean; org_name?: string;
+  org_instructions?: { text: string; at?: string; by?: string; by_name?: string; for_user?: boolean }; org_vp_only?: boolean; org_name?: string;
 }
 
 /**
- * The standing instructions for Main or a lead, after its role line: written by the user (the Org
- * page) or by an agent (the org ops), and the line names which (2026-10-27, the user: "all human
- * action can be done by agent also").
+ * The core instructions for Main or a lead, after its role line: Walnut's default for the role
+ * (org/core-instructions.ts; 2026-10-27, the user: "inject the core instruction for each agent ...
+ * main, u don't do task yourself"), unless the user wrote their own (the Org page, the session
+ * menu), which replace it. Words an agent wrote (the org ops; 2026-10-27, the user: "all human
+ * action can be done by agent also") never replace it: they follow the default, rank below
+ * Walnut's rules, the charter and the user, and the line names who wrote them. So no agent, Main
+ * included, can write its way out of the default.
  * The instruction notice tells a running session only the prompt lines it lacks, so every line
- * carries the version (a hash of the words and when they were set): an edit makes every line new,
- * and the session reads the whole new set, never a removed line as still in force, nor a kept
- * one as dropped. The tag also keeps a user's "# heading" from reading as a prompt heading.
+ * carries a version (a hash of the words, when they were set, and the default): any change makes
+ * every line new, and the session reads the whole new set, never a removed line as still in force,
+ * nor a kept one as dropped. A change to the default reaches a running session the same way. The
+ * tag also keeps a user's "# heading" from reading as a prompt heading.
  */
 function orgInstructionsLine(task: InstructionTask): string {
   if (task.org_role !== 'main' && task.org_role !== 'lead') return ''
+  const fallback = defaultOrgInstructions(task.org_role)
+  const tag = (v: string, text: string) => text.split('\n').map((l) => l.trimEnd()).filter((l) => l.trim()).map((l) => `[${v}] ${l}`).join('\n')
+  const hash = (...parts: string[]) => `v${createHash('sha1').update(parts.join('\n')).digest('hex').slice(0, 8)}`
   const own = task.org_instructions
-  if (!own?.at) return ''
-  const text = own.text.trim().slice(0, ORG_INSTRUCTIONS_MAX)
-  const version = `v${createHash('sha1').update(`${own.at}\n${text}`).digest('hex').slice(0, 8)}`
-  const when = `${own.at.slice(0, 16).replace('T', ' ')} UTC`
-  // Who wrote them: the user (no `by` on older rows), this node itself, or another agent.
-  const byUser = !own.by || own.by === 'human'
-  const self = !!task.id && own.by === `task:${task.id}`
-  const agent = own.by_name?.trim() || 'an agent'
-  if (!text) {
-    const cleared = byUser ? 'Your user cleared their own instructions for your role'
-      : self ? 'You cleared the instructions for your role'
-        : `${agent.charAt(0).toUpperCase()}${agent.slice(1)} cleared the instructions for your role`
-    return `${cleared} (${version}, ${when}): drop every earlier version.\n\n`
+  const text = (own?.text ?? '').trim().slice(0, ORG_INSTRUCTIONS_MAX)
+  const { byUser, usersWords, who } = orgInstructionsAuthor(own)
+  const self = !byUser && !!task.id && own?.by === `task:${task.id}`
+  const agent = self ? 'you' : who
+  const asked = !byUser && usersWords ? ', at your user\'s request' : ''
+  if (!own?.at || !text) {
+    const version = hash('default', fallback, own?.at ?? '')
+    const head = !own?.at ? 'Your core instructions, Walnut\'s default for your role'
+      : `${byUser ? 'Your user' : self ? 'You' : who.replace(/^./, (c) => c.toUpperCase())} cleared the instructions for your role at ${own.at.slice(0, 16).replace('T', ' ')} UTC${asked}; Walnut's default for your role applies`
+    return `${head} (${version}; your user may rewrite them). They replace every earlier version. Each line of this version starts with [${version}]:\n`
+      + tag(version, fallback) + '\n\n'
   }
-  const lines = text.split('\n').map((l) => l.trimEnd()).filter((l) => l.trim()).map((l) => `[${version}] ${l}`)
-  const source = byUser ? 'Your user\'s own instructions' : self ? 'The instructions you wrote' : `The instructions ${agent} wrote`
-  // Only the user's own words outrank the rest of the prompt; an agent's rank below Walnut's rules,
-  // the team charter and the user, and never grant a step that needs the user's approval.
-  const rank = byUser ? 'and where any other part of these instructions says otherwise, they win'
-    : 'and they rank below Walnut\'s rules, the team charter and anything your user tells you; they never permit a step that needs your user\'s approval'
-  return `${source} for your role (${version}, set ${when}${byUser ? '' : '; your user may change them'}). They replace every earlier version, `
-    + `${rank}. Each line of this version starts with [${version}]:\n`
-    + lines.join('\n') + '\n\n'
+  const version = hash(own.at, text, usersWords ? '' : fallback, asked)
+  const when = `${own.at.slice(0, 16).replace('T', ' ')} UTC`
+  if (usersWords) {
+    const whose = byUser ? 'your user\'s own instructions for your role' : `the instructions ${agent} wrote for your role at your user's request`
+    return `Your core instructions: ${whose} (${version}, set ${when}). They replace every earlier version `
+      + `and Walnut's default, and where any other part of these instructions says otherwise, they win. Each line of this version starts with [${version}]:\n`
+      + tag(version, text) + '\n\n'
+  }
+  return `Your core instructions: Walnut's default for your role, which still applies, then the instructions ${agent} wrote for your role `
+    + `(${version}, set ${when}; your user may change them). The added instructions add to Walnut's default and never override it: where the two `
+    + `disagree, the default wins. They rank below Walnut's rules, the team charter and anything your user tells you, and never permit a step `
+    + `that needs your user's approval. They replace every earlier version. Each line of this version starts with [${version}]:\n`
+    + tag(version, fallback) + `\n[${version}] Added by ${agent}:\n` + tag(version, text) + '\n\n'
 }
 
 /**

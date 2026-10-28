@@ -875,11 +875,12 @@ export interface Task {
   org_leads?: string[];
   /** Main or a lead only: its standing instructions as written on the Org page or through the org
    *  ops (src/core/org/org-node-edit.ts), by the user or an agent (`by`: 'human' | 'agent' |
-   *  `task:<id>`, with `by_name` as the user reads it; no `by` = the user). Its session prompt
+   *  `task:<id>`, with `by_name` as the user reads it; no `by` = the user; `for_user`: an agent wrote
+   *  them at the user's request, so they count as the user's). Its session prompt
    *  carries them after its role line (session-context.ts), and a running session hears an edit
    *  through the instruction notice. `text` '' = cleared. Payload blob, local-only, never pushed to
    *  sync backends; an older Walnut ignores it and its extra fields. */
-  org_instructions?: { text: string; at: string; by?: 'human' | 'agent' | `task:${string}`; by_name?: string };
+  org_instructions?: { text: string; at: string; by?: 'human' | 'agent' | `task:${string}`; by_name?: string; for_user?: boolean };
   /** A lead the user made as a VP to put projects under (the org chart's "New VP"): its own
    *  project is only its home, so the chart lists that project only while it has open work.
    *  Payload blob, local-only; an older Walnut ignores it. */

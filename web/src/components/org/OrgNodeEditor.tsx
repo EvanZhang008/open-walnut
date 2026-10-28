@@ -8,6 +8,10 @@
  * prompt, so a running session is told an edit with its next message (the instruction notice).
  * Its own words are shown when the server refuses, and nothing typed is lost: the form is a draft
  * (hooks/useDraft.ts) until it is saved or cancelled.
+ *
+ * The instructions are the node's core instructions: Walnut's default for the role
+ * (org/core-instructions.ts) until the user writes their own, so the box opens on the words the
+ * agent reads now. Saved unchanged, or emptied, the role keeps following the default.
  */
 import { useState, type FormEvent, type KeyboardEvent } from 'react';
 import { useDraftValue } from '@/hooks/useDraft';
@@ -15,7 +19,7 @@ import { draftKey } from '@/utils/drafts';
 import type { Task } from '@open-walnut/core';
 import { createOrgNode, editOrgNode, editProjectVp } from '@/api/org';
 import { log } from '@/utils/log';
-import { ORG_INSTRUCTIONS_MAX as INSTRUCTIONS_MAX } from '@open-walnut/org-tree';
+import { ORG_INSTRUCTIONS_MAX as INSTRUCTIONS_MAX, defaultOrgInstructions, isDefaultOrgInstructions, orgInstructionsShown } from '@open-walnut/org-tree';
 import { theVp } from './org-chart-model';
 import { instructionsSource } from './instructions-source';
 
@@ -42,7 +46,12 @@ interface Props {
 export function OrgNodeEditor({ mode, onClose, onBusy, onDone }: Props) {
   const editing = mode.kind === 'edit' ? mode : null;
   const isCeo = editing?.task?.org_role === 'main';
-  const before = editing?.task?.org_instructions?.text ?? '';
+  const role = isCeo ? 'main' : 'lead';
+  const fallback = defaultOrgInstructions(role);
+  const stored = editing?.task?.org_instructions;
+  const own = stored?.text ?? '';
+  // What the agent reads now: the user's own words, else Walnut's default (then an agent's lines).
+  const before = orgInstructionsShown(role, stored);
   // The form is a draft of this node (or of the new one) until it is saved or
   // cancelled: Escape, a click outside and a reload keep what was typed.
   const formKey = mode.kind === 'edit'
@@ -55,6 +64,7 @@ export function OrgNodeEditor({ mode, onClose, onBusy, onDone }: Props) {
   const setInstructions = (v: string) => form.setValue((f) => ({ ...f, instructions: v }));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const followsDefault = !instructions.trim() || isDefaultOrgInstructions(role, instructions);
 
   const title = mode.kind === 'new-vp' ? 'New VP'
     : mode.kind === 'new-project' ? 'New project'
@@ -73,9 +83,11 @@ export function OrgNodeEditor({ mode, onClose, onBusy, onDone }: Props) {
       if (mode.kind === 'edit') {
         // Only what changed is sent: an untouched name never renames, an untouched text never re-dates.
         const renamed = !isCeo && name.trim() !== (mode.name ?? '').trim();
-        const changed = words !== before.trim();
+        // Following the default either way is no change: the server would write nothing.
+        const changed = followsDefault ? !!own.trim() : words !== before.trim();
         if (!renamed && !changed) { form.clear(formKey); onClose(); return; }
-        const edit = { ...(renamed ? { name: name.trim() } : {}), ...(changed ? { instructions: words } : {}) };
+        // Following the default is sent as none: words that matched an older default would pin it.
+        const edit = { ...(renamed ? { name: name.trim() } : {}), ...(changed ? { instructions: followsDefault ? '' : words } : {}) };
         const t = mode.task ? await editOrgNode(mode.task.id, edit) : await editProjectVp(mode.project ?? '', edit);
         log.info('org-chart', 'org node edited', { taskId: t.id, role: t.org_role, renamed, instructions: changed ? words.length : undefined });
         const who = isCeo ? 'The CEO' : theVp(t.org_name ?? t.project).replace(/^the /, 'The ');
@@ -85,7 +97,7 @@ export function OrgNodeEditor({ mode, onClose, onBusy, onDone }: Props) {
         const t = await createOrgNode(mode.kind === 'new-vp' ? 'vp' : 'project', {
           name: name.trim(),
           ...(mode.kind === 'new-project' && vpName.trim() ? { vpName: vpName.trim() } : {}),
-          ...(words ? { instructions: words } : {}),
+          ...(words && !followsDefault ? { instructions: words } : {}),
         });
         log.info('org-chart', 'org node made', { taskId: t.id, kind: mode.kind, project: t.project });
         form.clear(formKey);
@@ -151,7 +163,7 @@ export function OrgNodeEditor({ mode, onClose, onBusy, onDone }: Props) {
           </label>
         )}
         <label className="oc-field">
-          <span>Instructions <em data-testid="org-node-instructions-source">{instructionsSource({ edited: instructions.trim() !== before.trim(), stored: editing?.task?.org_instructions, typed: instructions }) || 'optional'}</em></span>
+          <span>Core instructions <em data-testid="org-node-instructions-source">{instructionsSource({ followsDefault, edited: instructions.trim() !== before.trim(), stored })}</em></span>
           <textarea
             value={instructions}
             onChange={(e) => setInstructions(e.target.value)}
@@ -166,6 +178,12 @@ export function OrgNodeEditor({ mode, onClose, onBusy, onDone }: Props) {
           />
           <span className="oc-field-count" aria-hidden="true">{instructions.length} / {INSTRUCTIONS_MAX}</span>
         </label>
+        {!instructions.trim() && <p className="oc-form-hint" data-testid="org-node-default-hint">Empty: Walnut's default applies.</p>}
+        {!followsDefault && (
+          <button type="button" className="oc-link" data-testid="org-node-restore-default" disabled={busy} onClick={() => setInstructions(fallback)}>
+            Restore Walnut's default
+          </button>
+        )}
         {error && <p className="oc-confirm-error" role="alert" data-testid="org-node-error">Not saved. {error}</p>}
         <div className="oc-confirm-actions">
           <button type="button" className="btn btn-sm" onClick={() => { form.clear(formKey); onClose(); }} disabled={busy}>Cancel</button>

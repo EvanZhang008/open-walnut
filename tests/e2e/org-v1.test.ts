@@ -632,17 +632,26 @@ describe('/api/v1/org', () => {
       expect([refused.status, refused.json.code]).toEqual([409, 'user_wrote'])
       expect((await getTask(vp.json.task.id)).org_instructions).toMatchObject({ text: 'Own the harvest.', by: 'human' })
       expect((await as('PUT', `/org/nodes/${vp.json.task.id}`, { instructions: 'Reap on dry days.', override_user: true })).status).toBe(200)
-      expect((await getTask(vp.json.task.id)).org_instructions).toMatchObject({ text: 'Reap on dry days.', by: `task:${caller.id}`, by_name: 'the task "Sort the barn"' })
+      expect((await getTask(vp.json.task.id)).org_instructions).toMatchObject({ text: 'Reap on dry days.', by: `task:${caller.id}`, by_name: 'the task "Sort the barn"', for_user: true })
       const silo = await as('POST', '/org/vps', { name: 'Silo', instructions: 'Keep the grain dry.' })
       expect(silo.status).toBe(201)
-      expect((await getTask((silo.json as { task: { id: string } }).task.id)).org_instructions).toMatchObject({ text: 'Keep the grain dry.', by: `task:${caller.id}` })
+      const siloId = (silo.json as { task: { id: string } }).task.id
+      expect((await getTask(siloId)).org_instructions).toMatchObject({ text: 'Keep the grain dry.', by: `task:${caller.id}` })
+      expect((await getTask(siloId)).org_instructions?.for_user).toBeUndefined()
       expect((await as('PUT', `/org/nodes/${vp.json.task.id}`, { name: 'Reaping' })).status).toBe(200)
-      // The VP's prompt names the writer, and that the user may change them.
+      // The VP's prompt names the writer. Words written at the user's request are the user's: they replace the default.
       const { defaultInstructions } = await import('../../src/core/sessions/session-context.js')
-      expect(defaultInstructions(await getTask(vp.json.task.id))).toContain('The instructions the task "Sort the barn" wrote for your role (v')
-      expect(defaultInstructions(await getTask(vp.json.task.id))).toMatch(/UTC; your user may change them\)/)
-      // An agent's words never outrank the charter or the user.
-      expect(defaultInstructions(await getTask(vp.json.task.id))).toContain('they rank below Walnut\'s rules, the team charter and anything your user tells you')
+      const { DEFAULT_ORG_INSTRUCTIONS } = await import('../../src/core/org/core-instructions.js')
+      const firstLead = DEFAULT_ORG_INSTRUCTIONS.lead.split('\n')[0]!
+      expect(defaultInstructions(await getTask(vp.json.task.id))).toContain('the instructions the task "Sort the barn" wrote for your role at your user\'s request (v')
+      expect(defaultInstructions(await getTask(vp.json.task.id))).not.toContain(firstLead)
+      // An agent's own words follow Walnut's default and never outrank it, the charter or the user.
+      const siloPrompt = defaultInstructions(await getTask(siloId))
+      expect(siloPrompt).toContain('then the instructions the task "Sort the barn" wrote for your role (v')
+      expect(siloPrompt).toMatch(/UTC; your user may change them\)/)
+      expect(siloPrompt).toContain(firstLead)
+      expect(siloPrompt).toContain('where the two disagree, the default wins')
+      expect(siloPrompt).toContain('rank below Walnut\'s rules, the team charter and anything your user tells you')
       // The CEO writes its own too, and its prompt says it wrote them.
       const main = (await api<{ task: { id: string } }>('POST', '/org/main', {})).json.task
       // Main's own session (an earlier test gave it one; a task has exactly one).
@@ -653,32 +662,32 @@ describe('/api/v1/org', () => {
       })
       expect(res.status).toBe(200)
       expect(((await res.json()) as { task: { org_instructions?: unknown } }).task.org_instructions).toMatchObject({ by: `task:${main.id}`, by_name: 'the CEO' })
-      expect(defaultInstructions(await getTask(main.id))).toContain('The instructions you wrote for your role (v')
+      expect(defaultInstructions(await getTask(main.id))).toContain('then the instructions you wrote for your role (v')
       // The user writes again: back to the user's words.
       expect((await api('PUT', `/org/nodes/${main.id}`, { instructions: null })).status).toBe(200)
       expect((await getTask(main.id)).org_instructions).toMatchObject({ text: '', by: 'human' })
-      expect(defaultInstructions(await getTask(main.id))).toContain('Your user cleared their own instructions for your role')
+      expect(defaultInstructions(await getTask(main.id))).toContain('Your user cleared the instructions for your role')
       expect((await api('PUT', '/org/nodes/nope', { name: 'x' })).status).toBe(404)
     })
   })
 
   describe('the org\'s own names', () => {
     it('reads the defaults, saves a name and a role to config.yaml, and a blank goes back to the default', async () => {
-      expect((await api('GET', '/org/settings')).json).toEqual({ name: 'Org', founderTitle: 'Founder' })
+      expect((await api('GET', '/org/settings')).json).toMatchObject({ name: 'Org', founderTitle: 'Founder', defaultInstructions: { main: expect.stringMatching(/^Do not do task work yourself/), lead: expect.any(String) } })
       const saved = await api('PUT', '/org/settings', { name: '  Walnut  Labs ', founderTitle: 'Chair' })
-      expect(saved).toEqual({ status: 200, json: { name: 'Walnut Labs', founderTitle: 'Chair' } })
+      expect(saved).toMatchObject({ status: 200, json: { name: 'Walnut Labs', founderTitle: 'Chair' } })
       const { getConfig } = await import('../../src/core/config-manager.js')
       expect((await getConfig()).org).toEqual({ name: 'Walnut Labs', founder_title: 'Chair' })
       // One field at a time keeps the other.
-      expect((await api('PUT', '/org/settings', { founderTitle: '' })).json).toEqual({ name: 'Walnut Labs', founderTitle: 'Founder' })
+      expect((await api('PUT', '/org/settings', { founderTitle: '' })).json).toMatchObject({ name: 'Walnut Labs', founderTitle: 'Founder' })
       expect((await getConfig()).org).toEqual({ name: 'Walnut Labs' })
-      expect((await api('GET', '/org/settings')).json).toEqual({ name: 'Walnut Labs', founderTitle: 'Founder' })
+      expect((await api('GET', '/org/settings')).json).toMatchObject({ name: 'Walnut Labs', founderTitle: 'Founder' })
       expect((await api('PUT', '/org/settings', { name: 7 })).status).toBe(400)
       await api('PUT', '/org/settings', { name: '' })
-      expect((await api('GET', '/org/settings')).json).toEqual({ name: 'Org', founderTitle: 'Founder' })
+      expect((await api('GET', '/org/settings')).json).toMatchObject({ name: 'Org', founderTitle: 'Founder', defaultInstructions: { main: expect.stringMatching(/^Do not do task work yourself/), lead: expect.any(String) } })
       // Two windows renaming at once: each change lands, neither undoes the other.
       await Promise.all([api('PUT', '/org/settings', { name: 'Seaside Labs' }), api('PUT', '/org/settings', { founderTitle: 'Chair' })])
-      expect((await api('GET', '/org/settings')).json).toEqual({ name: 'Seaside Labs', founderTitle: 'Chair' })
+      expect((await api('GET', '/org/settings')).json).toMatchObject({ name: 'Seaside Labs', founderTitle: 'Chair' })
       await api('PUT', '/org/settings', { name: '', founderTitle: '' })
       expect((await getConfig()).org).toBeUndefined()
     })

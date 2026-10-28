@@ -14,7 +14,7 @@
  *                                                     put a project under another project's VP
  *                                                     (its lead), or back under its own (vp '');
  *                                                     no task changes project
- *   GET  /org/settings        → { name, founderTitle }  the org's name and the user's role
+ *   GET  /org/settings        → { name, founderTitle, defaultInstructions }  the org's name, the user's role, Walnut's default core instructions
  *   PUT  /org/settings { name?, founderTitle? } → the same, after the change (blank = default)
  *
  * Reads work anywhere; the writes make or change org tasks, so they run on the primary

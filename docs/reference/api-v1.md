@@ -1343,9 +1343,12 @@ team is talked to through that task; the Inbox never gets a lead.
   session (`handover`), and on a take-over Walnut closes it once the turn that
   read the notice ends, or at once when it has no session (`closed`).
   `400 no_vp_for_inbox | bad_vp`, `404 unknown_project`.
-- `GET /api/v1/org/settings` → `200 { name, founderTitle }`: the org's name (the
+- `GET /api/v1/org/settings` → `200 { name, founderTitle, defaultInstructions }`: the org's name (the
   Org page's title, default `"Org"`) and the user's role at the top of the org
-  chart (default `"Founder"`), kept in config.yaml under `org`.
+  chart (default `"Founder"`), kept in config.yaml under `org`. `defaultInstructions
+  { main, lead }` (additive, 2026-10-27, read-only) is Walnut's default core instructions
+  for the CEO and a VP: their session prompts carry it while the user has set none of
+  their own, and an editor shows it in their place.
   `PUT /api/v1/org/settings { name?, founderTitle? }` → the same after the change;
   a blank value goes back to the default; `400 bad_name` for a non-string.
 - `POST /api/v1/org/projects { name, vpName?, instructions?, override_user? }` → `201 { task }`: a
@@ -1362,9 +1365,12 @@ team is talked to through that task; the Inbox never gets a lead.
   `PUT .../vp` that reopens such a lead.
 - `PUT /api/v1/org/nodes/:id { name?, instructions?, override_user? }` → `200 { task }`: renames a
   VP (`org_name`; its project's name or `""` gives it back) or sets the CEO's or a
-  VP's standing instructions (`org_instructions { text, at, by?, by_name? }`, at most 4000 characters;
+  VP's standing instructions (`org_instructions { text, at, by?, by_name?, for_user? }`, at most 4000 characters, and an agent's own
+  lines at most 4000 together with the role's default they are read after, else `400 bad_instructions`;
   `""` or `null` clears them; once set they are cleared, never removed, so a session
-  spawned on older words is told to drop them). The instructions ride the node's
+  spawned on older words is told to drop them). Words equal to the role's default
+  (`defaultInstructions`, whitespace aside) are no words of the user's: nothing is
+  stored, or set words are cleared, and the role keeps following the default. The instructions ride the node's
   session prompt, so a running session is told an edit with its next message.
   Unchanged fields write nothing. `PUT /api/v1/org/projects/:project/vp` does the
   same for a project's VP, making its lead first when it has none (after every
@@ -1379,7 +1385,10 @@ team is talked to through that task; the Inbox never gets a lead.
   `by` is `"human"`, `"task:<id>"` for an agent's task (with `by_name` as the user reads
   it: `"the CEO"`, `"the Growth VP"`, `the task "…"`), or `"agent"` for a session Walnut
   could not place; a row without `by` was written by the user. The node's prompt and the
-  Org page name the writer, and the user may change the words back at any time. `task`
+  Org page name the writer, and the user may change the words back at any time. The user's
+  own words replace the role's default in the prompt; an agent's words are added after the
+  default, below it, unless the agent passed `override_user: true` (the user asked for them),
+  which stores `for_user: true` and makes them count as the user's. `task`
   in every answer carries `org_instructions` (additive).
 - Every POST and PUT answers `501` on a replica.
 

@@ -6,16 +6,19 @@
  * or creation, I can define VP name, some Instruction"):
  *   - "+ New VP" makes a VP with no project: its card says so, and a project dragged onto it is its one
  *   - "+ New project" makes a project with its own VP card
- *   - a VP card's ⋯ (or a right-click) edits its name and instructions; the CEO's sets the CEO's
+ *   - a VP card's ⋯ (or a right-click) edits its name and instructions; a new VP's form opens on
+ *     Walnut's default core instructions for a VP
  *   - a refused name keeps what was typed and says why; Escape closes the form before the sheet
  *   - an agent writes a VP's instructions as the user does (2026-10-27, the user: "all human action
  *     can be done by agent also"); the form says who wrote them and when, and the user writes back
+ * The CEO's form lives in org-main-and-chart.spec.ts, the one file that may touch Main.
  * The fixture is shared, so this file makes its own names and removes what it made.
  */
 import { expect, test, type APIRequestContext, type Locator, type Page } from '@playwright/test'
 import { loadHome } from './draft-helpers'
 import { isolateUiPrefs } from './todo-panel-helpers'
 import { discoverBrowserFixture } from './codex-test-audit'
+import { DEFAULT_ORG_INSTRUCTIONS } from '../../../src/core/org/core-instructions'
 
 const STAMP = `${Date.now().toString(36)}${process.pid.toString(36)}`
 const VP = `Growth ${STAMP}`
@@ -72,6 +75,8 @@ test('+ New VP makes a VP with no project, named and instructed as typed', async
   await expect(form).toContainText('New VP')
   await expect(form.getByTestId('org-node-name')).toBeFocused()
   await expect(form.getByTestId('org-node-save')).toBeDisabled()
+  await expect(form.getByTestId('org-node-instructions')).toHaveValue(DEFAULT_ORG_INSTRUCTIONS.lead)
+  await expect(form.getByTestId('org-node-instructions-source')).toHaveText('Walnut\'s default')
   await form.getByTestId('org-node-name').fill(VP)
   await form.getByTestId('org-node-instructions').fill('Own the launch plan.\nAsk before spending money.')
   await form.getByTestId('org-node-save').click()
@@ -123,14 +128,17 @@ test('an agent writes a VP\'s instructions; the form says who and when, and the 
   const form = page.getByTestId('org-node-editor')
   const box = form.getByTestId('org-node-instructions')
   const source = form.getByTestId('org-node-instructions-source')
-  await expect(box).toHaveValue(words)
-  await expect(source).toHaveText(`by the task "${writer}", just now`)
-  // The user's own words replace the agent's.
-  await box.fill(`${words} Then the rest.`)
+  // An agent's lines follow Walnut's default, and the box shows both: that is what the VP reads.
+  const shown = `${DEFAULT_ORG_INSTRUCTIONS.lead}\n\n${words}`
+  await expect(box).toHaveValue(shown)
+  await expect(source).toHaveText(`Walnut's default and lines by the task "${writer}", just now`)
+  // The user fixes the agent's line: their own words now, the default still in them.
+  await box.evaluate((el: HTMLTextAreaElement) => { el.focus(); el.setSelectionRange(el.value.length, el.value.length) })
+  await box.pressSequentially(' Then the rest.')
   await expect(source).toHaveText('yours')
   await form.getByTestId('org-node-save').click()
   await expect(form).toHaveCount(0)
-  expect((await leadOf(request, GATE))?.org_instructions).toMatchObject({ text: `${words} Then the rest.`, by: 'human' })
+  expect((await leadOf(request, GATE))?.org_instructions).toMatchObject({ text: `${shown} Then the rest.`, by: 'human' })
   await vp(page, GATE).getByTestId('org-chart-vp-menu').click()
   await page.getByTestId('org-chart-node-menu').getByText('Edit name and instructions…').click()
   await expect(source).toHaveText('by you, just now')
@@ -194,21 +202,3 @@ test('a VP card edits its name and instructions; a project dragged onto a new VP
   expect((await leadOf(request, VP))?.org_leads).toEqual([OTHER])
 })
 
-test('the CEO\'s ⋯ sets the CEO\'s own instructions', async ({ page, request }) => {
-  // The CEO is made on first use; the fixture may not have one yet.
-  expect((await request.post('/api/v1/org/main')).ok()).toBe(true)
-  await openChart(page)
-  await page.getByTestId('org-chart-ceo-menu').click()
-  await page.getByTestId('org-chart-node-menu').getByText('Edit instructions…').click()
-  const form = page.getByTestId('org-node-editor')
-  await expect(form).toContainText('The CEO\'s instructions')
-  await expect(form.getByTestId('org-node-name')).toHaveCount(0)
-  const main = (await allTasks(request)).find((t) => t.org_role === 'main')!
-  const before = main.org_instructions?.text
-  await form.getByTestId('org-node-instructions').fill(`Keep the weekly plan short. ${STAMP}`)
-  await form.getByTestId('org-node-save').click()
-  await expect(page.getByTestId('org-chart-done')).toHaveText('Saved. The CEO reads the new instructions with its next message.')
-  // Put back what the shared fixture had.
-  const res = await request.put(`/api/v1/org/nodes/${main.id}`, { data: { instructions: before ?? null } })
-  expect(res.ok(), await res.text()).toBe(true)
-})

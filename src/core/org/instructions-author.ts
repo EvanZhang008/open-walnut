@@ -14,10 +14,16 @@ export interface OrgInstructionsStamp {
   by?: OrgInstructionsWriter;
   /** The writer as a person reads it when it wrote ("the CEO", "the Growth VP", `the task "…"`). */
   by_name?: string;
+  /** An agent wrote them because the user asked (it passed override_user): they count as the user's. */
+  for_user?: boolean;
 }
 
-/** The writer of `ins` as the user reads it: "you", or the agent's name when it wrote. */
-export function orgInstructionsAuthor(ins: { by?: string; by_name?: string } | null | undefined): { byUser: boolean; who: string } {
-  if (!ins?.by || ins.by === 'human') return { byUser: true, who: 'you' };
-  return { byUser: false, who: ins.by_name?.trim() || 'an agent' };
+/**
+ * The writer of `ins` as the user reads it: "you", or the agent's name when it wrote. `usersWords`:
+ * the words count as the user's (the user wrote them, or asked the agent for them), so they replace
+ * Walnut's default and no other agent replaces them without the user's word.
+ */
+export function orgInstructionsAuthor(ins: { by?: string; by_name?: string; for_user?: boolean } | null | undefined): { byUser: boolean; usersWords: boolean; who: string } {
+  if (!ins?.by || ins.by === 'human') return { byUser: true, usersWords: true, who: 'you' };
+  return { byUser: false, usersWords: ins.for_user === true, who: ins.by_name?.trim() || 'an agent' };
 }

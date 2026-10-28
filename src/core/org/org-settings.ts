@@ -12,6 +12,7 @@
 import { getConfig } from '../config-manager.js';
 import { modifyConfigDoc } from '../config-store.js';
 import type { Config } from '../types.js';
+import { DEFAULT_ORG_INSTRUCTIONS } from './core-instructions.js';
 
 export const ORG_NAME_DEFAULT = 'Org';
 export const FOUNDER_TITLE_DEFAULT = 'Founder';
@@ -21,6 +22,9 @@ export const ORG_NAME_MAX = 60;
 export interface OrgSettings {
   name: string;
   founderTitle: string;
+  /** Walnut's default core instructions for the CEO and a VP (core-instructions.ts), read-only:
+   *  what an editor shows while the user has set none of their own. */
+  defaultInstructions: { main: string; lead: string };
 }
 
 const clean = (v: unknown, max = ORG_NAME_MAX): string =>
@@ -31,6 +35,7 @@ export function orgSettingsOf(config: Pick<Config, 'org'>): OrgSettings {
   return {
     name: clean(config.org?.name) || ORG_NAME_DEFAULT,
     founderTitle: clean(config.org?.founder_title) || FOUNDER_TITLE_DEFAULT,
+    defaultInstructions: { ...DEFAULT_ORG_INSTRUCTIONS },
   };
 }
 

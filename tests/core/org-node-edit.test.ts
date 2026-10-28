@@ -13,10 +13,11 @@ import { WALNUT_HOME } from '../../src/constants.js';
 import { addTask, deleteProject, getTask, listTasks, updateTask, updateTaskRaw } from '../../src/core/task-manager.js';
 import { createSessionRecord, updateSessionRecord } from '../../src/core/session-tracker.js';
 import { buildSessionContext, defaultInstructions } from '../../src/core/sessions/session-context.js';
-import { instructionNoticeForSession } from '../../src/core/sessions/instruction-notice.js';
+import { instructionNoticeForSession, noteInstructionNoticeDelivered } from '../../src/core/sessions/instruction-notice.js';
 import { createOrgNode, editOrgNode, editProjectVp } from '../../src/core/org/org-node-edit.js';
 import { resolveOrgContact } from '../../src/core/org/org-store.js';
-import { buildOrgTree, orgDisplayTitle } from '../../src/core/org/org-tree.js';
+import { ORG_INSTRUCTIONS_MAX, buildOrgTree, orgDisplayTitle } from '../../src/core/org/org-tree.js';
+import { DEFAULT_ORG_INSTRUCTIONS, orgInstructionsShown } from '../../src/core/org/core-instructions.js';
 import { resetCache } from '../../src/core/session-message-queue.js';
 import { bus, EventNames } from '../../src/core/event-bus.js';
 
@@ -85,7 +86,7 @@ describe('making a VP or a project on the Org page', () => {
     expect(again.org_name).toBeUndefined();
     // Cleared, not dropped: its old session's prompt still holds the old words.
     expect(again.org_instructions?.text).toBe('');
-    expect(defaultInstructions(again)).toContain('Your user cleared their own instructions for your role');
+    expect(defaultInstructions(again)).toContain('Your user cleared the instructions for your role');
   });
 
   it('a project whose own lead is open is refused, even with no work left', async () => {
@@ -209,14 +210,14 @@ describe('the user\'s own instructions for the CEO or a VP', () => {
     expect((await editOrgNode(lead.id, { instructions: 'Water before nine.\nShip on Fridays only.' })).org_instructions?.at).toBe(edited.org_instructions?.at);
     await new Promise((r) => setTimeout(r, 5));
     const cleared = await editOrgNode(lead.id, { instructions: '' });
-    expect(defaultInstructions(cleared)).toContain('Your user cleared their own instructions for your role');
+    expect(defaultInstructions(cleared)).toContain('Your user cleared the instructions for your role');
     expect(defaultInstructions(cleared)).not.toContain('Water before nine.');
-    expect((await instructionNoticeForSession(told))?.text ?? '').toContain('Your user cleared their own instructions for your role');
+    expect((await instructionNoticeForSession(told))?.text ?? '').toContain('Your user cleared the instructions for your role');
     await editOrgNode(lead.id, { instructions: 'Back again.' });
     await new Promise((r) => setTimeout(r, 5));
     const removed = await editOrgNode(lead.id, { instructions: null });
     expect(removed.org_instructions?.text).toBe('');
-    expect(defaultInstructions(removed)).toContain('Your user cleared their own instructions for your role');
+    expect(defaultInstructions(removed)).toContain('Your user cleared the instructions for your role');
   });
 
   it('a VP\'s name: its project\'s name gives the name back, a taken one is refused', async () => {
@@ -282,5 +283,128 @@ describe('the user\'s own instructions for the CEO or a VP', () => {
     await expect(editOrgNode(worker.id, { instructions: 'x' })).rejects.toMatchObject({ code: 'not_org_node', status: 404 });
     expect(defaultInstructions({ ...worker, org_instructions: { text: 'Never shown', at: new Date().toISOString() } })).not.toContain('Never shown');
     await expect(editOrgNode(main.id, { instructions: 'y'.repeat(4001) })).rejects.toMatchObject({ code: 'bad_instructions' });
+  });
+});
+
+describe('Walnut\'s default core instructions for the CEO and a VP', () => {
+  // 2026-10-27, the user: "inject the core instruction for each agent ... main, u don't do task
+  // yourself, u delegate to other VP or task directly".
+  const first = (role: 'main' | 'lead') => DEFAULT_ORG_INSTRUCTIONS[role].split('\n')[0]!;
+
+  it('ride the prompt of a node that has none of its own; a task with no org role gets none', async () => {
+    const main = (await addTask({ title: 'Main agent', project: 'Ask Walnut', source: 'local' })).task;
+    await updateTaskRaw(main.id, { org_role: 'main' });
+    const lead = await createOrgNode({ name: 'Hazel Grove' }, false);
+    const plain = (await addTask({ title: 'Prune the hazels', project: 'Hazel Grove' })).task;
+    const mainPrompt = defaultInstructions(await getTask(main.id));
+    const v = /Walnut's default for your role \((v[0-9a-f]{8}); your user may rewrite them\)/.exec(mainPrompt)?.[1];
+    expect(v).toBeTruthy();
+    for (const line of DEFAULT_ORG_INSTRUCTIONS.main.split('\n')) expect(mainPrompt).toContain(`[${v}] ${line}`);
+    expect(first('main')).toMatch(/^Do not do task work yourself\. Hand each piece of work on: task_send to the task that owns its deliverable/);
+    for (const line of DEFAULT_ORG_INSTRUCTIONS.lead.split('\n')) expect(defaultInstructions(lead)).toContain(line);
+    expect(defaultInstructions(lead)).not.toContain(first('main'));
+    expect(defaultInstructions(plain)).not.toContain('Your core instructions');
+  });
+
+  it('a session spawned before the default existed is told it with its next message', async () => {
+    const lead = await createOrgNode({ name: 'Bramble' }, false);
+    const sid = randomUUID();
+    await createSessionRecord(sid, lead.id, 'Bramble', WALNUT_HOME);
+    // The prompt as it was before the default: no core instructions line at all.
+    const isDefaultLine = (l: string) => l.startsWith('Your core instructions') || DEFAULT_ORG_INSTRUCTIONS.lead.split('\n').some((d) => l.endsWith(d));
+    const before = (await buildSessionContext(lead.id)).systemPrompt.split('\n').filter((l) => !isDefaultLine(l)).join('\n');
+    await updateSessionRecord(sid, { appliedAppendSystemPrompt: before });
+    expect((await instructionNoticeForSession(sid))?.text ?? '').toContain(first('lead'));
+  });
+
+  it('the user\'s own words replace it; the default\'s own words, or a clear, bring it back', async () => {
+    const lead = await createOrgNode({ name: 'Sorrel', instructions: DEFAULT_ORG_INSTRUCTIONS.lead }, false);
+    // Saved equal to the default: no words of the user's, the default rides on.
+    expect(lead.org_instructions).toBeUndefined();
+    const own = await editOrgNode(lead.id, { instructions: 'Ship on Fridays only.' });
+    expect(defaultInstructions(own)).toContain('Ship on Fridays only.');
+    expect(defaultInstructions(own)).not.toContain(first('lead'));
+    // A session running on the user's words.
+    const sid = randomUUID();
+    await createSessionRecord(sid, lead.id, 'Sorrel', WALNUT_HOME);
+    await updateSessionRecord(sid, { appliedAppendSystemPrompt: (await buildSessionContext(lead.id)).systemPrompt });
+    expect(await instructionNoticeForSession(sid)).toBeNull();
+    await new Promise((r) => setTimeout(r, 5));
+    const back = await editOrgNode(lead.id, { instructions: `  ${DEFAULT_ORG_INSTRUCTIONS.lead.replace(/\n/g, '\n\n')}  ` });
+    expect(back.org_instructions?.text).toBe('');
+    expect(defaultInstructions(back)).toContain('Your user cleared the instructions for your role');
+    expect(defaultInstructions(back)).toMatch(/\[(v[0-9a-f]{8})\] Your teams do the work;[^\n]*\n\[\1\] /);
+    expect(defaultInstructions(back)).not.toContain('Ship on Fridays only.');
+    // That session is told the default applies, every line of it.
+    const told = (await instructionNoticeForSession(sid))?.text ?? '';
+    expect(told).toContain('Walnut\'s default for your role applies');
+    for (const line of DEFAULT_ORG_INSTRUCTIONS.lead.split('\n')) expect(told).toContain(line);
+    // Once a line led by it reaches the CLI, it is told: the next message carries nothing.
+    await noteInstructionNoticeDelivered(sid, [`${told}\n\nNext step?`]);
+    expect(await instructionNoticeForSession(sid)).toBeNull();
+  });
+
+  it('an agent\'s words never replace the default, and the user\'s are cleared by an agent only on the user\'s word', async () => {
+    // Main writing itself out of "Do not do task work yourself" is what the default exists to stop.
+    const main = (await addTask({ title: 'Main agent', project: 'Ask Walnut', source: 'local' })).task;
+    await updateTaskRaw(main.id, { org_role: 'main' });
+    const self = { by: `task:${main.id}` as const, byName: 'the CEO' };
+    const wrote = await editOrgNode(main.id, { instructions: 'Quick device checks are fine to run yourself.' }, self);
+    const prompt = defaultInstructions(wrote);
+    expect(prompt).toContain('Walnut\'s default for your role, which still applies, then the instructions you wrote');
+    expect(prompt).toContain(first('main'));
+    expect(prompt).toMatch(/\[(v[0-9a-f]{8})\] Added by you:\n\[\1\] Quick device checks are fine to run yourself\./);
+    expect(prompt).toContain('never permit a step that needs your user\'s approval');
+    expect(prompt).toContain('add to Walnut\'s default and never override it: where the two disagree, the default wins');
+    // Main clears its own words: the prompt says it did.
+    const selfCleared = await editOrgNode(main.id, { instructions: '' }, self);
+    expect(defaultInstructions(selfCleared)).toContain('You cleared the instructions for your role at ');
+    expect(defaultInstructions(selfCleared)).toContain(first('main'));
+    // The user's own words replace it; an agent saving the default's words over them is a clear of
+    // the user's words, refused without override_user.
+    const agent = { by: 'task:t-other' as const, byName: 'the Growth VP' };
+    await editOrgNode(main.id, { instructions: 'Ask me before any device test.' });
+    expect(defaultInstructions(await getTask(main.id))).not.toContain(first('main'));
+    await expect(editOrgNode(main.id, { instructions: DEFAULT_ORG_INSTRUCTIONS.main }, agent)).rejects.toMatchObject({ code: 'user_wrote', status: 409 });
+    const back = await editOrgNode(main.id, { instructions: DEFAULT_ORG_INSTRUCTIONS.main, overrideUser: true }, agent);
+    expect(back.org_instructions).toMatchObject({ text: '', by: 'task:t-other', by_name: 'the Growth VP' });
+    expect(defaultInstructions(back)).toMatch(/The Growth VP cleared the instructions for your role at [0-9-]+ [0-9:]+ UTC, at your user's request; Walnut's default/);
+    expect(defaultInstructions(back)).toContain(first('main'));
+  });
+
+  it('an agent\'s lines and the default fit the limit together, so an editor never opens past it', async () => {
+    const lead = await createOrgNode({ name: 'Rowan' }, false);
+    const vp = { by: 'task:t-vp' as const, byName: 'the Growth VP' };
+    const room = ORG_INSTRUCTIONS_MAX - DEFAULT_ORG_INSTRUCTIONS.lead.length - 2;
+    await expect(editOrgNode(lead.id, { instructions: 'x'.repeat(room + 1) }, vp)).rejects.toMatchObject({ code: 'bad_instructions', status: 400 });
+    const fits = await editOrgNode(lead.id, { instructions: 'x'.repeat(room) }, vp);
+    expect(orgInstructionsShown('lead', fits.org_instructions).length).toBe(ORG_INSTRUCTIONS_MAX);
+    await expect(createOrgNode({ name: 'Rowan Two', instructions: 'y'.repeat(room + 1) }, false, { writer: vp })).rejects.toMatchObject({ code: 'bad_instructions' });
+    // Words the user asked for replace the default, and so does the user's own: the whole limit.
+    await editOrgNode(lead.id, { instructions: 'z'.repeat(ORG_INSTRUCTIONS_MAX), overrideUser: true }, vp);
+    await editOrgNode(lead.id, { instructions: 'w'.repeat(ORG_INSTRUCTIONS_MAX) });
+    expect((await getTask(lead.id)).org_instructions?.text).toHaveLength(ORG_INSTRUCTIONS_MAX);
+  });
+
+  it('an agent\'s words written at the user\'s request are the user\'s: they replace the default, and another agent needs the user\'s word', async () => {
+    const lead = await createOrgNode({ name: 'Quince' }, false);
+    const vp = { by: 'task:t-vp' as const, byName: 'the Growth VP' };
+    // Its own words first: below the default.
+    const own = await editOrgNode(lead.id, { instructions: 'Test on a device yourself.' }, vp);
+    expect(own.org_instructions?.for_user).toBeUndefined();
+    expect(defaultInstructions(own)).toContain(first('lead'));
+    // The same words on the user's word: a new version, the user's, and the default steps aside.
+    await new Promise((r) => setTimeout(r, 5));
+    const asked = await editOrgNode(lead.id, { instructions: 'Test on a device yourself.', overrideUser: true }, vp);
+    expect(asked.org_instructions).toMatchObject({ text: 'Test on a device yourself.', by: 'task:t-vp', by_name: 'the Growth VP', for_user: true });
+    expect(asked.org_instructions?.at).not.toBe(own.org_instructions?.at);
+    const prompt = defaultInstructions(asked);
+    expect(prompt).toContain('the instructions the Growth VP wrote for your role at your user\'s request (v');
+    expect(prompt).not.toContain(first('lead'));
+    // Another agent replaces them only on the user's word too.
+    await expect(editOrgNode(lead.id, { instructions: 'Never test.' }, { by: 'task:t-x' as const, byName: 'the task "X"' })).rejects.toMatchObject({ code: 'user_wrote', status: 409 });
+    // The user's own edit is the user's, with no agent name.
+    const mine = await editOrgNode(lead.id, { instructions: 'Ask me before testing.' });
+    expect(mine.org_instructions).toEqual({ text: 'Ask me before testing.', at: expect.any(String), by: 'human' });
   });
 });

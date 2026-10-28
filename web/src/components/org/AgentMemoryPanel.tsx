@@ -2,9 +2,11 @@
  * "Memory & instructions" for Main, a lead or a VP, opened from the session header's ⋮
  * (2026-10-26: the user sees and edits what each org agent remembers and is told).
  *
- *  - Instructions: the user's own standing words (Task.org_instructions), edited here as on the
- *    org chart. They ride the agent's session prompt, so it reads an edit with its next message
- *    (src/core/sessions/instruction-notice.ts); nothing is woken for it.
+ *  - Core instructions: the user's own (Task.org_instructions), edited here as on the org chart,
+ *    else Walnut's default for the role (org/core-instructions.ts), which the box opens on. They
+ *    ride the agent's session prompt, so it reads an edit with its next message
+ *    (src/core/sessions/instruction-notice.ts); nothing is woken for it. Saved unchanged, emptied,
+ *    or restored, the role follows the default again.
  *  - Its own MEMORY.md: the working memory the agent writes for itself (Task.agent_memory). Folded
  *    and read-only: the agent owns it.
  *  - Main also reads Walnut's memory (MEMORY.md / USER.md), edited on the Memory page, which keeps
@@ -14,13 +16,14 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import type { Task } from '@open-walnut/core';
-import { ORG_INSTRUCTIONS_MAX, orgDisplayTitle } from '@open-walnut/org-tree';
+import { ORG_INSTRUCTIONS_MAX, defaultOrgInstructions, isDefaultOrgInstructions, orgDisplayTitle, orgInstructionsShown } from '@open-walnut/org-tree';
 import { editOrgNode } from '@/api/org';
 import { fetchTask } from '@/api/tasks';
 import { fetchAgentMemory, type AgentMemory } from '@/api/agent-memory';
 import { fetchGlobalMemory, fetchUserMemory } from '@/api/memory';
 import { useModalOverlay } from '@/hooks/useModalOverlay';
 import { log } from '@/utils/log';
+import { instructionsSource } from './instructions-source';
 import '@/styles/agent-memory.css';
 
 /** Org agents have instructions and a memory of their own; other tasks have neither. */
@@ -105,14 +108,23 @@ function WalnutMemory({ onOpen, held }: { onOpen: (path: string) => void; held: 
 
 export function AgentMemoryPanel({ task, onClose }: { task: Task; onClose: () => void }) {
   const navigate = useNavigate();
-  const [saved, setSaved] = useState(task.org_instructions?.text ?? '');
+  const isMain = task.org_role === 'main';
+  const role = isMain ? 'main' : 'lead';
+  const fallback = defaultOrgInstructions(role);
+  // An empty box is the default. The box opens on what the agent reads now: the user's own words,
+  // else Walnut's default (followed by an agent's lines, so a fix to one of them keeps the default).
+  const reads = (words: string) => (words.trim() ? words.trim() : fallback);
+  const [saved, setSaved] = useState(orgInstructionsShown(role, task.org_instructions));
+  // The stored words' stamp: who wrote them (the user or an agent) and when.
+  const [stored, setStored] = useState(task.org_instructions);
   const [text, setText] = useState(saved);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<{ ok: boolean; text: string } | null>(null);
   const [own, setOwn] = useState<Load<AgentMemory>>({ state: 'loading' });
-  const isMain = task.org_role === 'main';
   const name = orgDisplayTitle(task);
-  const dirty = text.trim() !== saved.trim();
+  const followsDefault = !text.trim() || isDefaultOrgInstructions(role, text);
+  // Following the default before and after (a respaced copy of it, say) is no change.
+  const dirty = !(followsDefault && isDefaultOrgInstructions(role, saved)) && reads(text) !== saved;
   // Escape mid-save waits for the answer, and never drops typed words (Cancel does that).
   useModalOverlay(() => { if (!busy && !dirty) onClose(); });
 
@@ -127,9 +139,10 @@ export function AgentMemoryPanel({ task, onClose }: { task: Task; onClose: () =>
     setReadError('');
     fetchTask(task.id).then((t) => {
       if (!live) return;
-      const stored = t.org_instructions?.text ?? '';
-      setSaved(stored);
-      setText(stored);
+      const words = orgInstructionsShown(role, t.org_instructions);
+      setStored(t.org_instructions);
+      setSaved(words);
+      setText(words);
       setFresh(true);
     }).catch((err) => {
       if (!live) return;
@@ -154,9 +167,12 @@ export function AgentMemoryPanel({ task, onClose }: { task: Task; onClose: () =>
     setBusy(true);
     setNote(null);
     try {
-      const t = await editOrgNode(task.id, { instructions: text.trim() });
-      log.info('agent-memory', 'org instructions saved', { taskId: t.id, role: task.org_role, chars: text.trim().length });
-      setSaved(text.trim());
+      // Words equal to the default are stored as none (the server says so too): the role keeps following it.
+      const t = await editOrgNode(task.id, { instructions: followsDefault ? '' : text.trim() });
+      log.info('agent-memory', 'org instructions saved', { taskId: t.id, role: task.org_role, chars: text.trim().length, followsDefault });
+      setSaved(reads(text));
+      setStored(t.org_instructions);
+      if (!text.trim()) setText(fallback);
       setNote({ ok: true, text: 'Saved. It reads them with its next message.' });
     } catch (err) {
       log.warn('agent-memory', 'org instructions not saved', { taskId: task.id, error: errText(err) });
@@ -195,8 +211,8 @@ export function AgentMemoryPanel({ task, onClose }: { task: Task; onClose: () =>
         <div className="am-sub">{name}</div>
 
         <label className="am-field">
-          <span className="am-label">Instructions</span>
-          <span className="am-hint">Your own standing words for {isMain ? 'the CEO' : 'this VP'}: what it owns, how it works, what to watch for. It reads them with its next message.</span>
+          <span className="am-label">Core instructions {fresh && <em className="am-source" data-testid="am-instructions-source">{instructionsSource({ followsDefault, edited: reads(text) !== saved, stored })}</em>}</span>
+          <span className="am-hint">What {isMain ? 'the CEO' : 'this VP'} is told in every session: Walnut's default until you write your own. It reads an edit with its next message.</span>
           <textarea
             className="app-modal-input am-instructions"
             value={text}
@@ -213,6 +229,12 @@ export function AgentMemoryPanel({ task, onClose }: { task: Task; onClose: () =>
           />
           <span className="am-count am-right" aria-hidden="true">{text.length} / {ORG_INSTRUCTIONS_MAX}</span>
         </label>
+        {fresh && !text.trim() && <p className="am-note" data-testid="am-default-hint">Empty: Walnut's default applies.</p>}
+        {fresh && !followsDefault && (
+          <button type="button" className="am-link am-restore" disabled={busy} onClick={() => { setText(fallback); setNote(null); area.current?.focus(); }} data-testid="am-restore-default">
+            Restore Walnut's default
+          </button>
+        )}
         {readError && (
           <p className="am-note am-error" role="alert" data-testid="am-read-error">
             Could not read the stored instructions. {readError}{' '}
