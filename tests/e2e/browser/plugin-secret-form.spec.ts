@@ -5,6 +5,7 @@ import net from 'node:net'
 import yaml from 'js-yaml'
 import { expect, test, type Locator, type Page, type Response } from '@playwright/test'
 import { openWay } from './devices-ways-helpers'
+import { openPluginDetail } from './apps-store-helpers'
 
 /**
  * Editing hidden secrets in Settings, through real clicks, and what lands on disk.
@@ -148,12 +149,17 @@ async function selectLine(box: Locator, n: number): Promise<void> {
   }, n)
 }
 
-/** Away to Settings and back to the Apps page through its Apps link, so the list mounts again. */
-async function reopenPlugins(page: Page): Promise<void> {
+/**
+ * Away to Settings and back to the Apps page through its Apps link, so the page mounts
+ * again, then the plugin's card again: its detail page reads the stored settings afresh.
+ */
+async function reopenPluginForm(page: Page): Promise<Locator> {
   await page.locator('.sidebar-nav a[href^="/settings"]').click()
   await expect(page.locator('.settings-nav')).toBeVisible({ timeout: 60_000 })
   await page.getByTestId('settings-nav-plugin-store').click()
   await expect(page.getByTestId('apps-page')).toBeVisible({ timeout: 60_000 })
+  await openPluginDetail(page, fixture!.pluginId)
+  return page.getByTestId(`plugin-config-${fixture!.pluginId}`)
 }
 
 /** The app's entry page once; every step after it is a click. */
@@ -166,11 +172,14 @@ async function openSettings(page: Page, pane: string): Promise<void> {
   await page.getByTestId(pane).click()
 }
 
-/** The plugin list lives on the Apps page; Settings' Apps entry links there. */
+/**
+ * Plugins live on the Apps page; Settings' Apps entry links there. The settings form is on
+ * the plugin's detail page, always shown, so opening its card is all it takes.
+ */
 async function openPluginForm(page: Page): Promise<Locator> {
   await openSettings(page, 'settings-nav-plugin-store')
   await expect(page.getByTestId('apps-page')).toBeVisible({ timeout: 60_000 })
-  await page.getByTestId(`plugin-configure-${fixture!.pluginId}`).click({ timeout: 60_000 })
+  await openPluginDetail(page, fixture!.pluginId)
   const form = page.getByTestId(`plugin-config-${fixture!.pluginId}`)
   await expect(form.locator(`#plugin-${fixture!.pluginId}-api_keys`)).toBeVisible({ timeout: 60_000 })
   return form
@@ -202,10 +211,9 @@ test('deleting one of two hidden keys saves the one left, and the form shows it'
   await expect(form.locator('.settings-row-error')).toHaveCount(0)
   await form.screenshot({ path: `${SCREENSHOT_DIR}/${info.project.name}-1-one-key-left.png` })
 
-  // Opened again from the list, the form reads the stored list: one key.
-  await reopenPlugins(page)
-  await page.getByTestId(`plugin-configure-${fixture!.pluginId}`).click({ timeout: 60_000 })
-  await expect(page.getByTestId(`plugin-config-${fixture!.pluginId}`).locator(`#plugin-${fixture!.pluginId}-api_keys`)).toHaveValue(tail(second))
+  // Opened again from its card, the form reads the stored list: one key.
+  const reopened = await reopenPluginForm(page)
+  await expect(reopened.locator(`#plugin-${fixture!.pluginId}-api_keys`)).toHaveValue(tail(second))
 })
 
 test('list entries no tail tells apart show bullets only; a delete among them is refused, and saves once the named entry is typed in full', async ({ page }, info) => {
@@ -256,11 +264,10 @@ test('list entries no tail tells apart show bullets only; a delete among them is
   expect(await diskText()).not.toContain(B)
   await expect(keys).toHaveValue([dupB, tail(comma), tail(solo), typed].join('\n'))
 
-  // Opened again from the list, the form reads the stored list: four lines, each with its own tail
+  // Opened again from its card, the form reads the stored list: four lines, each with its own tail
   // (the one left of the two that ended alike now ends like no other).
-  await reopenPlugins(page)
-  await page.getByTestId(`plugin-configure-${id}`).click({ timeout: 60_000 })
-  await expect(page.getByTestId(`plugin-config-${id}`).locator(`#plugin-${id}-backup_keys`))
+  const reopened = await reopenPluginForm(page)
+  await expect(reopened.locator(`#plugin-${id}-backup_keys`))
     .toHaveValue([tail(dupB), tail(comma), tail(solo), tail(typed)].join('\n'))
 })
 
@@ -320,10 +327,9 @@ test('a secret with a comma in it, typed in full as a refusal asks, is saved as 
   await expect(pair).toHaveValue(withComma)
   await form.screenshot({ path: `${SCREENSHOT_DIR}/${info.project.name}-1c-comma-typed-in-full.png` })
 
-  // Opened again from the list, the form reads the stored list: one line.
-  await reopenPlugins(page)
-  await page.getByTestId(`plugin-configure-${id}`).click({ timeout: 60_000 })
-  await expect(page.getByTestId(`plugin-config-${id}`).locator(`#plugin-${id}-pair_keys`)).toHaveValue(tail(withComma))
+  // Opened again from its card, the form reads the stored list: one line.
+  const reopened = await reopenPluginForm(page)
+  await expect(reopened.locator(`#plugin-${id}-pair_keys`)).toHaveValue(tail(withComma))
 })
 
 /** Every PUT /api/config the page sends from now on. */
@@ -413,10 +419,9 @@ test('typed next to a hidden line: a stray space is trimmed away, anything else 
   await expect.poll(async () => (await stored()).ring_keys, { timeout: 15_000 }).toEqual([...ring, 'rk-form-golf-7777'])
   expect(await diskText()).not.toContain(B)
   await expect(form.locator('.settings-row-error')).toHaveCount(0)
-  // Opened again from the list: four lines, each with its own tail.
-  await reopenPlugins(page)
-  await page.getByTestId(`plugin-configure-${id}`).click({ timeout: 60_000 })
-  await expect(page.getByTestId(`plugin-config-${id}`).locator(`#plugin-${id}-ring_keys`))
+  // Opened again from its card: four lines, each with its own tail.
+  const reopened = await reopenPluginForm(page)
+  await expect(reopened.locator(`#plugin-${id}-ring_keys`))
     .toHaveValue([...shown, tail('rk-form-golf-7777')].join('\n'))
 })
 

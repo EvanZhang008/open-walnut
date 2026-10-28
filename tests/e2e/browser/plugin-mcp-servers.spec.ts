@@ -1,5 +1,6 @@
 /**
- * Settings, Plugins: the MCP servers a plugin runs, as rows under that plugin (PluginMcpControls).
+ * The Apps page, a plugin's detail page: the MCP servers the plugin runs, as rows on its page
+ * (PluginMcpControls).
  * The fixture plugin `acme-tools` (test-server.ts) registers a real stdio MCP server and one whose
  * command does not exist. Pinned, in both engines:
  *
@@ -14,6 +15,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { expect, test, type Page } from '@playwright/test'
 import { openPlugins, startPluginFixture, type PluginFixture } from './plugin-update-fixture'
+import { openPluginDetail } from './apps-store-helpers'
 
 const SHOT_DIR = '/tmp/plugin-mcp-servers'
 let fixture: PluginFixture
@@ -48,8 +50,10 @@ async function open(page: Page) {
   page.on('pageerror', (error) => errors.push(error.message))
   await page.goto(`${base()}/`)
   await openPlugins(page)
+  await openPluginDetail(page, 'acme-tools')
   await expect(page.getByTestId('plugin-row-acme-tools')).toBeVisible({ timeout: 30_000 })
-  // The server rows sit under the plugin's row (siblings of its line, not inside it).
+  // The server rows sit on the plugin's page, under its header (not inside it).
+  await expect(page.getByTestId('plugin-row-acme-tools').getByTestId('plugin-mcp-acme-tools')).toHaveCount(0)
   const block = page.getByTestId('plugin-mcp-acme-tools')
   await expect(block).toBeVisible({ timeout: 30_000 })
   return { block, errors }
@@ -64,7 +68,7 @@ test('a plugin\'s MCP servers: state, Start, a live crash, recovery, a server th
   const broken = block.getByTestId('plugin-mcp-row-acme-tools-broken')
   const engine = info.project.name
 
-  // Registered, lazy: nothing started it just because Settings looked.
+  // Registered, lazy: nothing started it just because its page looked.
   await expect(tools).toHaveAttribute('data-state', 'idle')
   await expect(tools).toContainText('MCP server: Acme Tools')
   await expect(tools).toContainText('Not running')
@@ -109,9 +113,10 @@ test('a plugin\'s MCP servers: state, Start, a live crash, recovery, a server th
   await expect(brokenButton).toBeEnabled()
 
   // A reload shows the same rows from one fetch.
-  // The reload lands back on the Apps page (/apps is the URL).
+  // The reload lands back on the plugin's page (/apps?plugin=acme-tools is the URL).
+  await expect(page).toHaveURL(/\/apps\?plugin=acme-tools$/)
   await page.reload()
-  await expect(page.getByTestId('plugin-store-installed')).toBeVisible({ timeout: 60_000 })
+  await expect(page.getByTestId('plugin-detail')).toHaveAttribute('data-plugin-id', 'acme-tools', { timeout: 60_000 })
   await expect(page.getByTestId('plugin-mcp-row-acme-tools')).toHaveAttribute('data-state', 'ready', { timeout: 30_000 })
   await expect(page.getByTestId('plugin-mcp-row-acme-tools-broken')).toHaveAttribute('data-state', 'failed')
   await page.getByTestId('plugin-mcp-acme-tools').screenshot({ path: path.join(SHOT_DIR, `after-reload-${engine}.png`) })

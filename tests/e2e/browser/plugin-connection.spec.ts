@@ -3,22 +3,25 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import fs from 'node:fs/promises'
 import net from 'node:net'
 import { expect, test, type Page } from '@playwright/test'
+import { openPluginDetail } from './apps-store-helpers'
 
 /**
  * A plugin's account link, end to end: the sync loop finds a dead credential,
- * the bell gets ONE card with a Sign in button, the button lands on the plugin's
- * row on the Apps page (/apps), Sign in there shows a device code, and when the
- * flow completes the row turns "signed in", sync succeeds, and the card retires.
+ * the bell gets ONE card with a Sign in button, the button lands on the Apps page
+ * (/apps), where the plugin's card says Sign in needed and its page holds the account
+ * panel; Sign in there shows a device code, and when the flow completes the page turns
+ * "signed in", sync succeeds, and the card retires.
  *
  * What it pins:
  *   1. The notification is immediate (first failing tick, not the fifth), says
  *      what to do, and carries a labelled Sign in button.
- *   2. The Apps page shows the link's state on the row (badge) AND in a panel under
- *      it, together with what the sync loop saw (N failures, last error).
+ *   2. The Apps page shows the link's state on the plugin's card, on its page's header
+ *      (badge) AND in a panel on that page, together with what the sync loop saw (N
+ *      failures, last error).
  *   3. Signing in never needs the terminal: device code + link + copy, and the
  *      panel updates by itself.
  *   4. Recovery is automatic: no dismiss, no reload. The card goes quiet, the
- *      badge leaves the row, the panel says signed in as whom.
+ *      badge leaves the header, the panel says signed in as whom.
  *
  * Runs against tests/e2e/browser/plugin-connection-server.ts (its own throwaway
  * home), because the real Microsoft plugin needs a real human at a real
@@ -114,7 +117,7 @@ test.afterAll(async () => {
   if (child.exitCode === null) child.kill('SIGKILL')
 })
 
-test('dead credential → one Sign in card → Settings row → device code → signed in, card retires', async ({ page }) => {
+test('dead credential → one Sign in card → the plugin\'s Apps page → device code → signed in, card retires', async ({ page }) => {
   const pageErrors: string[] = []
   page.on('pageerror', (error) => pageErrors.push(error.message))
   const failedRequests: string[] = []
@@ -155,13 +158,18 @@ test('dead credential → one Sign in card → Settings row → device code → 
   await expect(signInButton).toHaveText(/Sign in/)
   await panel.screenshot({ path: `${SCREENSHOT_DIR}/1-sign-in-card.png` })
 
-  // ── 2. The button lands on the plugin's row on the Apps page ──
+  // ── 2. The button lands on the Apps page; the plugin's card says what is wrong ──
   await signInButton.click()
   await expect(page.getByTestId('apps-page')).toBeVisible({ timeout: 60_000 })
   await expect(page).toHaveURL(/\/apps$/)
+  await expect(page.getByTestId(`plugin-card-${pluginId}-status`)).toHaveText('Sign in needed', { timeout: 30_000 })
+  await expect(page.getByTestId(`plugin-card-${pluginId}`)).toHaveAttribute('data-card-tone', 'warn')
+  await page.locator('#plugin-store').screenshot({ path: `${SCREENSHOT_DIR}/2-apps-card-sign-in-needed.png` })
+  // Its page holds the switch, the badge and the account panel.
+  await openPluginDetail(page, pluginId)
   const row = page.getByTestId(`plugin-row-${pluginId}`)
   await expect(row).toBeVisible({ timeout: 30_000 })
-  // The switch says the plugin is on (no On tag); the title line carries the link state.
+  // The switch says the plugin is on (no On tag); the header carries the link state.
   await expect(page.locator(`#plugin-toggle-${pluginId}`)).toHaveAttribute('aria-checked', 'true')
   await expect(row.getByTestId(`plugin-row-connection-${pluginId}`)).toHaveText('Sign in needed')
 
@@ -172,9 +180,9 @@ test('dead credential → one Sign in card → Settings row → device code → 
   // The plugin's own sentence AND what Walnut's loop saw, side by side.
   await expect(connection.getByTestId(`plugin-connection-detail-${pluginId}`)).toContainText('invalid_grant')
   await expect(connection.getByTestId(`plugin-connection-sync-${pluginId}`)).toContainText(/Sync has failed \d+ times? in a row/)
-  await page.locator('#plugin-store').screenshot({ path: `${SCREENSHOT_DIR}/2-settings-sign-in-needed.png` })
+  await page.getByTestId('plugin-detail').screenshot({ path: `${SCREENSHOT_DIR}/2-settings-sign-in-needed.png` })
 
-  // ── 3. Sign in from the row: device code, link, copy ──
+  // ── 3. Sign in from the plugin's page: device code, link, copy ──
   await connection.getByTestId(`plugin-sign-in-${pluginId}`).click()
   const prompt = connection.getByTestId(`plugin-signin-prompt-${pluginId}`)
   await expect(prompt).toBeVisible({ timeout: 15_000 })
@@ -183,7 +191,7 @@ test('dead credential → one Sign in card → Settings row → device code → 
   await expect(prompt.getByRole('link')).toHaveAttribute('href', 'https://example.invalid/devicelogin')
   await expect(prompt).toContainText('this updates by itself once you finish.')
   await expect(row.getByTestId(`plugin-row-connection-${pluginId}`)).toHaveText('Signing in...')
-  await page.locator('#plugin-store').screenshot({ path: `${SCREENSHOT_DIR}/3-device-code.png` })
+  await page.getByTestId('plugin-detail').screenshot({ path: `${SCREENSHOT_DIR}/3-device-code.png` })
 
   // ── 4. The flow completes on its own: connected, no reload ──
   await expect(connection).toHaveAttribute('data-connection-state', 'connected', { timeout: 30_000 })
@@ -192,12 +200,12 @@ test('dead credential → one Sign in card → Settings row → device code → 
   await expect(connection).toContainText('Renews automatically')
   await expect(prompt).toHaveCount(0)
   await expect(connection.getByTestId(`plugin-sign-in-${pluginId}`)).toHaveCount(0)
-  // A healthy link is not a badge on the title line.
+  // A healthy link is not a badge on the header.
   await expect(row.getByTestId(`plugin-row-connection-${pluginId}`)).toHaveCount(0)
   // The next good tick clears the failure streak on the panel.
   await expect(connection.getByTestId(`plugin-connection-sync-${pluginId}`)).toHaveCount(0, { timeout: 30_000 })
   await expect(connection).toContainText('last synced')
-  await page.locator('#plugin-store').screenshot({ path: `${SCREENSHOT_DIR}/4-signed-in.png` })
+  await page.getByTestId('plugin-detail').screenshot({ path: `${SCREENSHOT_DIR}/4-signed-in.png` })
 
   // ── 5. The card retired by itself ──
   await page.getByRole('button', { name: 'Notifications' }).click()

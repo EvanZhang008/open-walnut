@@ -2,6 +2,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { test, expect } from '@playwright/test'
 import { startPluginFixture, openPlugins, ensureSourceInstalled, expandSidebar, git, commitAll, type PluginFixture } from './plugin-update-fixture'
+import { openPluginDetail } from './apps-store-helpers'
 
 let fixture: PluginFixture
 const evidence = '/tmp/walnut-plugin-hot-reload'
@@ -83,6 +84,8 @@ test('reloads real plugin generations and recovers without a page reload', async
     await fs.writeFile(serverFile, originalServer)
     await fs.writeFile(webFile, originalWeb)
     await openPlugins(page)
+    // Update lives on the plugin's page.
+    await openPluginDetail(page, 'walnut-demo')
     const publisher = path.join(fixture.home, 'native-plugin-repo')
     const publishedServer = path.join(publisher, 'dist/server.mjs')
     const goodServer = await fs.readFile(publishedServer, 'utf8')
@@ -103,10 +106,13 @@ test('reloads real plugin generations and recovers without a page reload', async
       const feedback = page.getByTestId('plugin-update-feedback-walnut-demo')
       await expect(feedback).toHaveClass(/--error/)
       await expect(feedback).toContainText('new code is not running')
-      await expect(page.getByTestId('plugin-row-walnut-demo')).toContainText('update not active')
+      // The new files are on disk but the old code still runs: the header says so (the badge
+      // read "update not active" before it became the Restart to activate tag).
+      await expect(page.getByTestId('plugin-row-walnut-demo').locator('.settings-tag').filter({ hasText: /^restart to activate$/i })).toBeVisible()
       await page.getByTestId('sidebar-app-walnut-demo:main').click()
       await expect(page.getByTestId('plugin-demo-app')).toBeVisible()
       await openPlugins(page)
+      await openPluginDetail(page, 'walnut-demo')
       await expect(page.getByTestId('plugin-update-walnut-demo')).toBeVisible()
       const retried = await update()
       expect(retried.updated).toBe(false)
@@ -120,9 +126,9 @@ test('reloads real plugin generations and recovers without a page reload', async
       await expect(feedback).toHaveClass(/--ok/)
       await expect(feedback).toContainText('reloaded Walnut Plugin Demo')
       await expect(page.getByTestId('plugin-row-walnut-demo')).toHaveAttribute('data-plugin-status', 'active')
-      const pluginRow = page.getByTestId('plugin-row-walnut-demo')
-      await pluginRow.scrollIntoViewIfNeeded()
-      await pluginRow.locator('..').screenshot({ path: path.join(evidence, `${info.project.name}-source-row-recovered.png`), scale: 'css' })
+      const versionSection = page.getByTestId('plugin-version-walnut-demo')
+      await versionSection.scrollIntoViewIfNeeded()
+      await versionSection.screenshot({ path: path.join(evidence, `${info.project.name}-source-row-recovered.png`), scale: 'css' })
       await page.getByTestId('sidebar-app-walnut-demo:main').click()
       await expect(page.getByTestId('plugin-demo-app')).toBeVisible()
     } finally {

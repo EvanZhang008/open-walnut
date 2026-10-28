@@ -1,5 +1,5 @@
 /**
- * Fixture server for Settings → Plugins (the registry store).
+ * Fixture server for the Apps page's plugin store (the registry store).
  *
  * Its own server, not the shared :3457 fixture, for the documented reason: that
  * fixture installs no plugins on purpose (a spec there asserts a stock install has
@@ -26,6 +26,9 @@
  *     an install link to install for real.
  *   - `sigma`, whose App draws its own settings (`settingsIn: 'app'`), and `tau`, which
  *     asks for the same but whose web entry fails, so its App never registers.
+ *   - `kappa` and `kappa-tools`: an id that extends another installed plugin's id makes
+ *     a PART, so the Apps page draws one card for `kappa` and lists `kappa-tools` on its
+ *     page. The part has a settings field, so its own page has a form to show.
  *   - a bundled store folder holding `omega` (registers nothing), pointed at through
  *     WALNUT_BUNDLED_STORE_DIR, so the store has a plugin that ships with Walnut, is NOT
  *     loaded, and installs with one click. Without the override this source-run server
@@ -118,7 +121,7 @@ await fs.writeFile(path.join(tmpBase, 'plugin-registry.json'), JSON.stringify({
     },
     {
       // What `epsilon` is waiting for. It is in the catalog and NOT on this machine, so
-      // epsilon's blocked row can offer an install — through the consent list.
+      // epsilon's blocked row can offer an install, through the consent list.
       id: 'zeta',
       name: 'Zeta',
       description: 'A catalog entry another plugin depends on.',
@@ -159,7 +162,7 @@ await writeFixturePlugin('delta', { name: 'Delta', dependencies: { alpha: '^1' }
  * `POST /api/plugin-sources` leaves behind) and waits on a dependency only the catalog
  * can supply. That combination is what puts an "Install Zeta…" button on a blocked row,
  * and the button opens the consent list rather than cloning: a catalog file naming a URL
- * is not the user agreeing to run its code. Nothing is ever fetched — the test stops at
+ * is not the user agreeing to run its code. Nothing is ever fetched: the test stops at
  * the consent panel, which is the whole point of it existing.
  */
 await writeFixturePlugin(
@@ -167,6 +170,24 @@ await writeFixturePlugin(
   { name: 'Epsilon', dependencies: { zeta: '^1' } },
   path.join(tmpBase, 'plugin-stores', dependencySourceSlug),
 )
+
+/**
+ * A plugin and its part (`kappa-tools` extends `kappa`). They register nothing; the part
+ * has one optional field (with a default, so it starts without setup), which is what puts
+ * a form on its own page and none on its parent's.
+ */
+const partParentId = 'kappa'
+const partId = 'kappa-tools'
+await writeFixturePlugin(partParentId, { name: 'Kappa', description: 'A plugin with a part, shown on its page.' })
+await writeFixturePlugin(partId, {
+  name: 'Kappa Tools',
+  description: 'The part of Kappa that holds its tools.',
+  configSchema: {
+    type: 'object',
+    properties: { interval_minutes: { type: 'number', default: 30, minimum: 5, maximum: 240 } },
+  },
+  uiHints: { interval_minutes: { label: 'Interval (minutes)', help: 'Optional. How often it runs.' } },
+})
 
 /**
  * A plugin that ships in the bundled store: on disk from the start, but with no
@@ -272,6 +293,8 @@ const fixture = {
   dependencySourceSlug,
   dependencySourceUrl,
   bundledEntryId,
+  partParentId,
+  partId,
   packUrl,
 }
 await fs.writeFile(path.join(tmpBase, 'fixture.json'), JSON.stringify(fixture, null, 2))

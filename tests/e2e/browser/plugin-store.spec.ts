@@ -4,45 +4,52 @@ import fs from 'node:fs/promises'
 import net from 'node:net'
 import { expect, test } from './shortcut-test-fixture'
 import { type Page } from '@playwright/test'
+import { backToApps, openPartDetail, openPluginDetail } from './apps-store-helpers'
 
 /**
- * The plugin store on the Apps page (/apps), reached from the sidebar's Apps entry.
+ * The plugin store on the Apps page (/apps), reached from the sidebar's Apps entry. The
+ * page is a store: one card per plugin, and each card opens a detail page that holds the
+ * switch, the settings, the parts, where the code comes from and Remove.
  *
  * What it pins:
  *
  *   1. The store lists what is actually on this machine (walnut-time, linked) AND
- *      catalog entries that are not (the fixture's git overlay entry) — one surface,
- *      two lists.
- *   2. The ON/OFF switch is real: turning walnut-time off takes its Apps page tile,
- *      its Settings nav row and its App away LIVE, and turning it back on brings them back. Before this
- *      section there was no UI that could do it at all (the old spec next door had to
- *      POST the disable route by hand, and said so).
+ *      catalog entries that are not (the fixture's git overlay entry): one surface,
+ *      two lists. The grid holds cards only: no rows, no switches, no inline forms.
+ *   2. The ON/OFF switch is real: turning walnut-time off takes its App off its detail
+ *      page, its card's Open and the sidebar LIVE, and turning it back on brings them
+ *      back. Before this section there was no UI that could do it at all (the old spec
+ *      next door had to POST the disable route by hand, and said so).
  *   3. OFF PERSISTS. The switch writes `plugins.walnut-time.enabled: false` to
- *      config.yaml, so a plugin cannot come back by itself after a restart — asserted
+ *      config.yaml, so a plugin cannot come back by itself after a restart: asserted
  *      against the file, because that is where the promise lives.
- *   4. Installing still requires the explicit trust acknowledgement. Prefilling from
- *      the catalog fills the URL and NOTHING else: Add stays disabled until the box is
- *      ticked. A curated listing is not consent.
+ *   4. Installing still requires the explicit trust acknowledgement. The free-form form
+ *      opens from "Add from a git or npm link" and its Add stays disabled until the box
+ *      is ticked; a catalog entry's own Install stays disabled until its own trust switch
+ *      is on, and that trust is never sticky. A curated listing is not consent.
  *   5. Dependencies are visible and reversible. `beta` and `delta` both run on `alpha`:
  *      turning alpha off is REFUSED until a confirmation names them, cancel changes
  *      nothing, and the cascade parks both ("needs another plugin") without ever writing
- *      an off-switch for them — asserted against config.yaml, because that is the
+ *      an off-switch for them: asserted against config.yaml, because that is the
  *      difference between "waiting for alpha" and "the user turned it off". Each blocked
- *      row carries its OWN action (test ids are keyed by row and dependency, so two rows
- *      waiting on the same plugin stay separately clickable), and using one of them
+ *      plugin carries its OWN action (test ids are keyed by row and dependency, so two
+ *      plugins waiting on the same one stay separately clickable), and using one of them
  *      brings both dependents back with no page reload.
  *   6. Installing a dependency ASKS. `epsilon` (from a source clone) waits on `zeta`,
  *      which only the catalog can supply: its button opens a consent list naming the exact
  *      source URL, and nothing is installed until a second, explicit yes. A curated
  *      catalog file is a suggestion, not permission to run someone's code.
- *   7. A bundled plugin (in the store folder that ships with Walnut) lists as Available
+ *   7. A bundled plugin (in the store folder that ships with Walnut) lists under Get more
  *      and is NOT loaded; one Install loads it live and writes `enabled: true`; Remove
- *      takes it back to Available and deletes its whole config key. Twice, because the
- *      second Install is the one that proves Remove really forgot it.
+ *      takes it back to Get more, returns to the grid and deletes its whole config key.
+ *      Twice, because the second Install is the one that proves Remove really forgot it.
  *   8. A plugin whose App draws its own settings (`settingsIn: 'app'`) has one home for
- *      them: its row's Configure goes to the App, which lives under Settings because it
+ *      them: its detail page sends you to the App, which lives under Settings because it
  *      asked for no placement, and a save there lands in config.yaml. When the App never
- *      registered, the same row falls back to the inline form.
+ *      registered, the same page falls back to the form.
+ *   9. A part (`kappa-tools`, whose id extends `kappa`) has no card: its parent's card
+ *      names it, its parent's page lists it with its own switch, and its settings live on
+ *      its own page, which says whose part it is. Back goes where you came from.
  *
  * Runs against its own server (tests/e2e/browser/plugin-store-server.ts) because the
  * shared :3457 fixture installs no plugins by design.
@@ -58,6 +65,8 @@ interface Fixture {
   dependencySourceSlug: string
   dependencySourceUrl: string
   bundledEntryId: string
+  partParentId: string
+  partId: string
 }
 
 let child: ChildProcessWithoutNullStreams | null = null
@@ -105,8 +114,11 @@ function waitForReady(): Promise<Fixture> {
   })
 }
 
+/** Shoots what is on screen: the open detail page, else the card grid (hidden under a detail page). */
 async function shoot(page: Page, name: string): Promise<void> {
-  await page.locator('#plugin-store').screenshot({ path: `${SCREENSHOT_DIR}/${name}.png` })
+  const detail = page.getByTestId('plugin-detail')
+  const target = (await detail.count()) > 0 ? detail : page.locator('#plugin-store')
+  await target.screenshot({ path: `${SCREENSHOT_DIR}/${name}.png` })
 }
 
 async function expandSidebar(page: Page): Promise<void> {
@@ -127,7 +139,7 @@ async function openPlugins(page: Page): Promise<void> {
   await expect(page.locator('#plugin-store')).toBeVisible({ timeout: 30_000 })
 }
 
-/** What config.yaml says about a plugin — the durable half of the switch. */
+/** What config.yaml says about a plugin: the durable half of the switch. */
 async function configPlugins(): Promise<Record<string, { enabled?: unknown }>> {
   const raw = await fs.readFile(`${fixture!.home}/config.yaml`, 'utf-8')
   // The fixture writes JSON (valid YAML) and the server rewrites it as YAML, so read
@@ -185,48 +197,69 @@ test('lists what is installed and what the catalog offers, in one section', asyn
   page.on('pageerror', (error) => pageErrors.push(error.message))
 
   await openPlugins(page)
+  const grid = page.locator('#plugin-store')
 
-  // Installed: the linked plugin, on, with what it adds. The switch says "on" (no On
-  // tag), and what it adds rides the row's title sentence.
-  const timeRow = page.getByTestId('plugin-row-walnut-time')
-  await expect(timeRow).toBeVisible({ timeout: 30_000 })
-  await expect(timeRow).toHaveAttribute('data-plugin-status', 'active')
+  // Installed: the linked plugin, on. The switch lives on its page, not on the card.
+  const timeCard = page.getByTestId('plugin-card-walnut-time')
+  await expect(timeCard).toBeVisible({ timeout: 30_000 })
+  await expect(timeCard).toHaveAttribute('data-plugin-status', 'active')
+  await expect(page.getByTestId('plugin-store-installed').getByTestId('plugin-card-walnut-time')).toHaveCount(1)
+
+  // The grid is cards only: no rows, no switches, no Configure, no inline form, no App tiles.
+  await expect(grid.locator('[data-testid^="plugin-row-"]')).toHaveCount(0)
+  await expect(grid.locator('[data-testid^="plugin-configure-"]')).toHaveCount(0)
+  await expect(grid.locator('[data-testid^="plugin-config-"]')).toHaveCount(0)
+  await expect(grid.locator('[id^="plugin-toggle-"]')).toHaveCount(0)
+  await expect(page.getByTestId('apps-plugin-app-tiles')).toHaveCount(0)
+
+  // Its page: the switch says "on" (no On tag), and what it adds is listed under About.
+  await openPluginDetail(page, 'walnut-time')
   await expect(page.locator('#plugin-toggle-walnut-time')).toHaveAttribute('aria-checked', 'true')
-  await expect(timeRow).toHaveAttribute('title', /Adds app/i)
-  await expect(page.getByTestId('plugin-store-installed').getByTestId('plugin-row-walnut-time')).toHaveCount(1)
+  await expect(page.getByTestId('plugin-about-walnut-time').locator('.apps-about-adds')).toContainText(/app/i)
+  await backToApps(page)
 
   // Available: a catalog entry that is NOT on this machine.
   const available = page.getByTestId('plugin-store-available')
   await expect(available).toBeVisible()
-  const fixtureRow = page.getByTestId(`plugin-row-${fixture!.overlayEntryId}`)
-  await expect(fixtureRow).toHaveAttribute('data-plugin-status', 'available')
-  // Not installed is said by the group it sits in, not by a word on the row.
-  await expect(available.getByTestId(`plugin-row-${fixture!.overlayEntryId}`)).toHaveCount(1)
-  await expect(page.getByTestId(`plugin-install-${fixture!.overlayEntryId}`)).toHaveText('Install...')
+  const fixtureCard = page.getByTestId(`plugin-card-${fixture!.overlayEntryId}`)
+  await expect(fixtureCard).toHaveAttribute('data-plugin-status', 'available')
+  // Not installed is said by the group it sits in, and by Get on the card.
+  await expect(available.getByTestId(`plugin-card-${fixture!.overlayEntryId}`)).toHaveCount(1)
+  await expect(page.getByTestId(`plugin-card-${fixture!.overlayEntryId}-status`)).toHaveText('Get')
+  await openPluginDetail(page, fixture!.overlayEntryId)
+  await expect(page.getByTestId(`plugin-install-${fixture!.overlayEntryId}`)).toHaveText('Install')
+  await backToApps(page)
 
   // Builtin sync plugins ship with Walnut and need credentials, so they are honest
   // about it rather than showing a switch that would refuse to flip.
-  const jira = page.getByTestId('plugin-row-jira')
+  const jira = page.getByTestId('plugin-card-jira')
   if (await jira.count()) {
     await expect(jira).toHaveAttribute('data-plugin-status', 'needs-config')
-    await expect(jira.locator('[role="switch"]')).toHaveCount(0)
-    // And it offers the thing that CAN help. A needs-config plugin is not in the
-    // registry, so its schema has to come from the loader's set-aside list; without
-    // that the plugins most in need of configuring had no Configure button at all.
-    await expect(page.getByTestId('plugin-configure-jira')).toBeVisible()
-    await expect(jira).toContainText('Needs setup')
-    await expect(jira).toContainText(/Needs setup: base URL/)
-
-    // Configure opens the plugin's own form UNDER its row — configured where it is
-    // turned on. It must not be open on mount: an eight-field form expanded by default
-    // buries every row below it.
+    await expect(page.getByTestId('plugin-card-jira-status')).toHaveText('Needs setup')
+    // The grid never carries its form, open or closed.
     await expect(page.getByTestId('plugin-config-jira')).toHaveCount(0)
-    await page.getByTestId('plugin-configure-jira').click()
+    await expect(page.getByTestId('plugin-configure-jira')).toHaveCount(0)
+
+    await openPluginDetail(page, 'jira')
+    const head = page.getByTestId('plugin-row-jira')
+    await expect(head).toHaveAttribute('data-plugin-status', 'needs-config')
+    await expect(head.locator('[role="switch"]')).toHaveCount(0)
+    await expect(head).toContainText('Needs setup')
+    await expect(head).toContainText(/Needs setup: base URL/)
+
+    // Its page offers the thing that CAN help. A needs-config plugin is not in the
+    // registry, so its schema has to come from the loader's set-aside list; without
+    // that the plugins most in need of configuring had no form at all. On its own page
+    // the form is simply there (no Configure, no Done), and it leads, before About.
+    await expect(page.getByTestId('plugin-configure-jira')).toHaveCount(0)
     const form = page.getByTestId('plugin-config-jira')
     await expect(form).toBeVisible({ timeout: 30_000 })
     await expect(form.locator('#plugin-jira-base_url')).toBeVisible()
-    await shoot(page, 'store-1680-configure-inline')
-    await page.getByTestId('plugin-configure-jira').click()
+    const settingsTop = (await page.getByTestId('plugin-settings-jira').boundingBox())!.y
+    const aboutTop = (await page.getByTestId('plugin-about-jira').boundingBox())!.y
+    expect(settingsTop, 'a plugin that needs setup leads with its settings').toBeLessThan(aboutTop)
+    await shoot(page, 'store-1680-configure-detail')
+    await backToApps(page)
     await expect(page.getByTestId('plugin-config-jira')).toHaveCount(0)
   }
 
@@ -234,21 +267,26 @@ test('lists what is installed and what the catalog offers, in one section', asyn
   expect(pageErrors, 'rendering the store must not throw').toEqual([])
 })
 
-test('installing still requires the trust acknowledgement, prefill included', async ({ page }) => {
+test('installing still requires the trust acknowledgement, catalog entries included', async ({ page }) => {
   await openPlugins(page)
 
   const store = page.locator('#plugin-store')
+  const urlField = store.locator('#plugin-source-url')
   const addButton = store.getByRole('button', { name: 'Add', exact: true })
   const trust = store.getByTestId('plugin-trust-confirm')
 
+  // The free-form install is folded away until asked for.
+  await expect(urlField).toHaveCount(0)
+  await expect(trust).toHaveCount(0)
+  await page.getByTestId('apps-add-from-link').click()
+  await expect(urlField).toBeVisible({ timeout: 30_000 })
+
   // Nothing typed: nothing to add.
+  await expect(urlField).toHaveValue('')
   await expect(addButton).toBeDisabled()
 
-  // Prefill from the catalog fills the URL and NOTHING else.
-  await page.getByTestId(`plugin-install-${fixture!.overlayEntryId}`).click()
-  await expect(store.locator('#plugin-source-url')).toHaveValue(
-    'https://example.invalid/store-fixture-plugin.git',
-  )
+  // A source typed in fills the URL and NOTHING else.
+  await urlField.fill('https://example.invalid/store-fixture-plugin.git')
   await expect(trust).not.toBeChecked()
   await expect(addButton).toBeDisabled()
 
@@ -264,15 +302,41 @@ test('installing still requires the trust acknowledgement, prefill included', as
   // And unticking takes the ability away again.
   await trust.uncheck()
   await expect(addButton).toBeDisabled()
+  // The url is a draft the server keeps; leave none behind for the next test.
+  await urlField.fill('')
+  await expect(urlField).toHaveValue('')
+
+  // A catalog entry's own Install is gated the same way, on its page.
+  const id = fixture!.overlayEntryId
+  await openPluginDetail(page, id)
+  const install = page.getByTestId(`plugin-install-${id}`)
+  const entryTrust = page.getByTestId(`plugin-trust-${id}`)
+  await expect(entryTrust).toHaveAttribute('aria-checked', 'false')
+  await expect(install).toBeDisabled()
+  await entryTrust.click()
+  await expect(entryTrust).toHaveAttribute('aria-checked', 'true')
+  await expect(install).toBeEnabled()
+  await entryTrust.click()
+  await expect(install).toBeDisabled()
+
+  // Trust is granted per visit, never sticky: on, leave, come back, and it is off.
+  await entryTrust.click()
+  await expect(install).toBeEnabled()
+  await backToApps(page)
+  await openPluginDetail(page, id)
+  await expect(page.getByTestId(`plugin-trust-${id}`)).toHaveAttribute('aria-checked', 'false')
+  await expect(page.getByTestId(`plugin-install-${id}`)).toBeDisabled()
+  await backToApps(page)
 })
 
-test('settings that live in the App: Configure goes there, the save lands, and a missing App falls back', async ({ page }) => {
+test('settings that live in the App: its page goes there, the save lands, and a missing App falls back', async ({ page }) => {
   const pageErrors: string[] = []
   page.on('pageerror', (error) => pageErrors.push(error.message))
   await openPlugins(page)
 
   // The App asked for no placement, so it is off the Sidebar and lives on the Apps page,
   // and Settings lists no Apps at all.
+  await openPluginDetail(page, 'sigma')
   await expect(page.getByTestId('apps-app-sigma:main')).toHaveAttribute('data-shown', 'false', { timeout: 30_000 })
   await expect(page.getByTestId('sidebar-app-sigma:main')).toHaveCount(0)
   await page.getByTestId('sidebar-core-app-settings').click()
@@ -281,12 +345,12 @@ test('settings that live in the App: Configure goes there, the save lands, and a
   await page.getByTestId('sidebar-core-app-apps').click()
   await expect(page.getByTestId('apps-page')).toBeVisible({ timeout: 30_000 })
 
-  // One home for the form: Configure navigates instead of expanding a copy here.
-  const sigmaRow = page.getByTestId('plugin-row-sigma')
-  await expect(sigmaRow).toBeVisible({ timeout: 30_000 })
+  // One home for the form: its page sends you to the App instead of drawing a copy here.
+  await openPluginDetail(page, 'sigma')
   await expect(page.getByTestId('plugin-configure-sigma')).toHaveCount(0)
-  const toApp = page.getByTestId('plugin-open-settings-sigma')
-  await expect(toApp).toHaveText('Configure')
+  await expect(page.getByTestId('plugin-config-sigma')).toHaveCount(0)
+  const toApp = page.getByTestId('plugin-settings-sigma').getByTestId('plugin-open-settings-sigma')
+  await expect(toApp).toHaveText('Open Sigma settings')
   await toApp.click()
   await expect(page).toHaveURL(/\/apps\/sigma~main$/)
   await expect(page.getByTestId('sigma-app')).toBeVisible({ timeout: 30_000 })
@@ -306,17 +370,17 @@ test('settings that live in the App: Configure goes there, the save lands, and a
   await page.screenshot({ path: `${SCREENSHOT_DIR}/store-1680-settings-in-app.png` })
 
   // tau asks for the same, but its web entry failed, so there is no App to send it to:
-  // the row keeps the inline form rather than leaving the settings unreachable.
+  // its page keeps the form rather than leaving the settings unreachable.
   await page.getByTestId('sidebar-core-app-apps').click()
-  await expect(page.getByTestId('plugin-row-tau')).toBeVisible({ timeout: 30_000 })
+  await openPluginDetail(page, 'tau')
   await expect(page.getByTestId('plugin-open-settings-tau')).toHaveCount(0)
-  await page.getByTestId('plugin-configure-tau').click()
+  await expect(page.getByTestId('plugin-configure-tau')).toHaveCount(0)
   await expect(page.getByTestId('plugin-config-tau').locator('#plugin-tau-interval_minutes')).toBeVisible({ timeout: 30_000 })
 
   expect(pageErrors, 'the settings-in-app path must not throw').toEqual([])
 })
 
-test('a bundled plugin installs in one click, and Remove takes it back to Available', async ({ page }) => {
+test('a bundled plugin installs in one click, and Remove takes it back to Get more', async ({ page }) => {
   const pageErrors: string[] = []
   page.on('pageerror', (error) => pageErrors.push(error.message))
   const id = fixture!.bundledEntryId
@@ -324,54 +388,134 @@ test('a bundled plugin installs in one click, and Remove takes it back to Availa
   await openPlugins(page)
   const available = page.getByTestId('plugin-store-available')
   const installed = page.getByTestId('plugin-store-installed')
-  const row = page.getByTestId(`plugin-row-${id}`)
+  const card = page.getByTestId(`plugin-card-${id}`)
+  const head = page.getByTestId(`plugin-row-${id}`)
 
   for (const round of [1, 2]) {
     // ── Available: shipped, not loaded, and nothing in config says otherwise ──
-    await expect(available.getByTestId(`plugin-row-${id}`)).toHaveCount(1, { timeout: 30_000 })
-    await expect(row).toHaveAttribute('data-plugin-status', 'available')
-    await expect(row).toHaveAttribute('title', 'Ships with Walnut; not loaded until installed.')
-    await expect(page.getByTestId(`plugin-install-${id}`)).toHaveText('Install')
-    await expect(page.locator(`#plugin-toggle-${id}`)).toHaveCount(0)
+    await expect(available.getByTestId(`plugin-card-${id}`)).toHaveCount(1, { timeout: 30_000 })
+    await expect(card).toHaveAttribute('data-plugin-status', 'available')
+    await expect(page.getByTestId(`plugin-card-${id}-status`)).toHaveText('Get')
+    await expect(card).toContainText('Comes with Walnut')
     expect(await configPluginKeys()).not.toContain(id)
     // The section is taller than the viewport, so shoot the group under test, not the page.
     if (round === 1) await available.screenshot({ path: `${SCREENSHOT_DIR}/store-1680-bundled-available.png` })
 
+    await openPluginDetail(page, id)
+    await expect(head).toHaveAttribute('data-plugin-status', 'available')
+    const install = page.getByTestId(`plugin-install-${id}`)
+    await expect(install).toHaveText('Install')
+    await expect(install).toHaveAttribute('title', 'Ships with Walnut; not loaded until installed.')
+    await expect(page.locator(`#plugin-toggle-${id}`)).toHaveCount(0)
+
     // ── Install: one click, loaded live, installed on disk ──
-    await page.getByTestId(`plugin-install-${id}`).click()
-    await expect(installed.getByTestId(`plugin-row-${id}`)).toHaveCount(1, { timeout: 60_000 })
-    await expect(row).toHaveAttribute('data-plugin-status', 'active')
-    await expect(row).toHaveAttribute('title', /^Bundled\. Adds agent tools\.$/)
+    await install.click()
+    await expect(head).toHaveAttribute('data-plugin-status', 'active', { timeout: 60_000 })
+    await expect(head).toContainText('Comes with Walnut')
+    await expect(page.getByTestId(`plugin-about-${id}`).locator('.apps-about-adds')).toHaveText('Agent tools')
     await expect(page.locator(`#plugin-toggle-${id}`)).toHaveAttribute('aria-checked', 'true')
-    await expect(available.getByTestId(`plugin-row-${id}`)).toHaveCount(0)
-    await expect(page.locator('#plugin-store')).toContainText('Installed Omega.')
+    await expect(page.getByTestId('plugin-detail')).toContainText('Installed Omega.')
     await expect.poll(() => configEnabled(id), { timeout: 15_000 }).toBe(true)
+    if (round === 1) await shoot(page, 'store-1680-bundled-installed')
+
+    // The grid agrees: the card moved from Get more to the installed list.
+    await backToApps(page)
+    await expect(installed.getByTestId(`plugin-card-${id}`)).toHaveCount(1, { timeout: 30_000 })
+    await expect(available.getByTestId(`plugin-card-${id}`)).toHaveCount(0)
+    await expect(card).toHaveAttribute('data-plugin-status', 'active')
+    await openPluginDetail(page, id)
+
     if (round === 1) {
-      await page.locator('.plugin-store-entry', { has: row }).screenshot({ path: `${SCREENSHOT_DIR}/store-1680-bundled-installed.png` })
       // The switch is an ordinary switch: off persists, and Remove still works from off.
       await page.locator(`#plugin-toggle-${id}`).click()
-      await expect(row).toHaveAttribute('data-plugin-status', 'disabled', { timeout: 60_000 })
+      await expect(head).toHaveAttribute('data-plugin-status', 'disabled', { timeout: 60_000 })
       await expect.poll(() => configEnabled(id), { timeout: 15_000 }).toBe(false)
     }
 
-    // ── Remove: two-step, back to Available, config key gone ──
+    // ── Remove: two-step, back to the grid and to Get more, config key gone ──
     const remove = page.getByTestId(`plugin-remove-${id}`)
     await expect(remove).toHaveText('Remove')
     await remove.click()
     await expect(remove).toHaveText('Confirm remove')
     await remove.click()
-    await expect(available.getByTestId(`plugin-row-${id}`)).toHaveCount(1, { timeout: 60_000 })
-    await expect(installed.getByTestId(`plugin-row-${id}`)).toHaveCount(0)
-    await expect(row).toHaveAttribute('data-plugin-status', 'available')
-    await expect(page.locator('#plugin-store')).toContainText('Removed Omega; it is back under Available.')
+    await expect(page.getByTestId('plugin-detail')).toHaveCount(0, { timeout: 60_000 })
+    await expect(available.getByTestId(`plugin-card-${id}`)).toHaveCount(1, { timeout: 60_000 })
+    await expect(installed.getByTestId(`plugin-card-${id}`)).toHaveCount(0)
+    await expect(card).toHaveAttribute('data-plugin-status', 'available')
+    await expect(page.locator('#plugin-store')).toContainText('Removed Omega; it is back under Get more.')
     await expect.poll(() => configPluginKeys(), { timeout: 15_000 }).not.toContain(id)
     if (round === 1) await available.screenshot({ path: `${SCREENSHOT_DIR}/store-1680-bundled-removed.png` })
   }
 
   // And a fresh page load agrees with what the store just said.
   await openPlugins(page)
-  await expect(available.getByTestId(`plugin-row-${id}`)).toHaveCount(1, { timeout: 30_000 })
+  await expect(available.getByTestId(`plugin-card-${id}`)).toHaveCount(1, { timeout: 30_000 })
   expect(pageErrors, 'installing and removing a bundled plugin must not throw').toEqual([])
+})
+
+test('a part has no card: its parent names it, lists it with its switch, and its own page holds its settings', async ({ page }) => {
+  const pageErrors: string[] = []
+  page.on('pageerror', (error) => pageErrors.push(error.message))
+  const parent = fixture!.partParentId
+  const part = fixture!.partId
+
+  await openPlugins(page)
+
+  // ── The grid: one card for the parent, none for the part ──
+  const parentCard = page.getByTestId(`plugin-card-${parent}`)
+  await expect(parentCard).toBeVisible({ timeout: 30_000 })
+  await expect(parentCard).toContainText('Includes Kappa Tools')
+  await expect(page.getByTestId(`plugin-card-${part}`)).toHaveCount(0)
+  // A search finds the parent by its part's name, and still draws no card for the part.
+  const search = page.getByTestId('apps-search')
+  await search.fill('Kappa Tools')
+  await expect(parentCard).toBeVisible()
+  await expect(page.getByTestId(`plugin-card-${part}`)).toHaveCount(0)
+  await search.fill('')
+
+  // ── The parent's page lists the part, with its own switch ──
+  await openPluginDetail(page, parent)
+  const parts = page.getByTestId(`plugin-parts-${parent}`)
+  await expect(parts).toBeVisible()
+  const partRow = parts.getByTestId(`plugin-part-${part}`)
+  await expect(partRow).toHaveAttribute('data-plugin-status', 'active')
+  await expect(partRow).toContainText('Kappa Tools')
+  // Its settings have one home, its own page, so the parent's page draws no copy.
+  await expect(page.getByTestId(`plugin-config-${part}`)).toHaveCount(0)
+  await expect(page.getByTestId(`plugin-part-open-${part}`)).toHaveText('Settings')
+
+  // The part's switch works from here, and off persists like any other switch.
+  const partToggle = page.locator(`#plugin-toggle-${part}`)
+  await expect(partToggle).toHaveAttribute('aria-checked', 'true')
+  await partToggle.click()
+  await expect(partRow).toHaveAttribute('data-plugin-status', 'disabled', { timeout: 60_000 })
+  await expect(partToggle).toHaveAttribute('aria-checked', 'false')
+  await expect.poll(() => configEnabled(part), { timeout: 15_000 }).toBe(false)
+  await partToggle.click()
+  await expect(partRow).toHaveAttribute('data-plugin-status', 'active', { timeout: 60_000 })
+  await expect.poll(() => configEnabled(part), { timeout: 15_000 }).toBe(true)
+  await shoot(page, 'store-1680-parts')
+
+  // ── The part's own page: whose part it is, and its settings ──
+  await openPartDetail(page, part)
+  await expect(page.getByTestId('plugin-detail-parent')).toHaveText('Part of Kappa')
+  await expect(page.getByTestId(`plugin-config-${part}`).locator(`#plugin-${part}-interval_minutes`)).toBeVisible({ timeout: 30_000 })
+
+  // Back goes where you came from: the parent's page, then the grid.
+  await page.getByTestId('plugin-detail-back').click()
+  await expect(page.getByTestId('plugin-detail')).toHaveAttribute('data-plugin-id', parent, { timeout: 30_000 })
+  await backToApps(page)
+  await expect(parentCard).toBeVisible()
+  await expect(page.getByTestId(`plugin-card-${part}`)).toHaveCount(0)
+
+  // "Part of Kappa" leads to the parent's page.
+  await openPluginDetail(page, parent)
+  await openPartDetail(page, part)
+  await page.getByTestId('plugin-detail-parent').click()
+  await expect(page.getByTestId('plugin-detail')).toHaveAttribute('data-plugin-id', parent, { timeout: 30_000 })
+  await expect(page.getByTestId(`plugin-parts-${parent}`)).toBeVisible()
+
+  expect(pageErrors, 'the parts path must not throw').toEqual([])
 })
 
 /*
@@ -383,6 +527,9 @@ test('the switch turns a plugin off and on, and off survives a restart', async (
   page.on('pageerror', (error) => pageErrors.push(error.message))
 
   await openPlugins(page)
+  // Its App is registered, so its card opens it directly.
+  await expect(page.getByTestId('plugin-card-open-walnut-time')).toBeVisible({ timeout: 60_000 })
+  await openPluginDetail(page, 'walnut-time')
   await expect(page.getByTestId('apps-app-walnut-time:main')).toBeVisible({ timeout: 60_000 })
 
   // ── OFF ──
@@ -390,8 +537,9 @@ test('the switch turns a plugin off and on, and off survives a restart', async (
   await expect(toggle).toHaveAttribute('aria-checked', 'true')
   await toggle.click()
 
-  // The row is owner-scoped, so the App's tile on this page goes away live.
+  // The App is owner-scoped, so it leaves this page (and the sidebar) live.
   await expect(page.getByTestId('apps-app-walnut-time:main')).toHaveCount(0, { timeout: 60_000 })
+  await expect(page.getByTestId('plugin-open-app-walnut-time')).toHaveCount(0)
   await expect(page.getByTestId('sidebar-app-walnut-time:main')).toHaveCount(0)
   await expect(page.getByTestId('plugin-row-walnut-time')).toHaveAttribute('data-plugin-status', 'disabled')
   await expect(page.locator('#plugin-toggle-walnut-time')).toHaveAttribute('aria-checked', 'false')
@@ -400,12 +548,19 @@ test('the switch turns a plugin off and on, and off survives a restart', async (
   // The promise the switch makes is durability, and that lives in config.yaml.
   await expect.poll(() => configEnabled('walnut-time'), { timeout: 15_000 }).toBe(false)
 
+  // The card agrees: Off, and no Open for an App that is gone.
+  await backToApps(page)
+  await expect(page.getByTestId('plugin-card-walnut-time')).toHaveAttribute('data-plugin-status', 'disabled')
+  await expect(page.getByTestId('plugin-card-walnut-time-status')).toHaveText('Off')
+  await expect(page.getByTestId('plugin-card-open-walnut-time')).toHaveCount(0)
+
   await page.getByTestId('sidebar-core-app-settings').click()
   await expect(page.getByTestId('settings-nav-plugin-store')).toBeVisible({ timeout: 30_000 })
 
   // ── ON ── (back through the Settings nav's Apps link)
   await page.getByTestId('settings-nav-plugin-store').click()
   await expect(page.getByTestId('apps-page')).toBeVisible({ timeout: 30_000 })
+  await openPluginDetail(page, 'walnut-time')
   const toggleAgain = page.locator('#plugin-toggle-walnut-time')
   await expect(toggleAgain).toHaveAttribute('aria-checked', 'false')
   await toggleAgain.click()
@@ -414,6 +569,12 @@ test('the switch turns a plugin off and on, and off survives a restart', async (
   await expect(page.getByTestId('apps-app-walnut-time:main')).toBeVisible({ timeout: 60_000 })
   await expect.poll(() => configEnabled('walnut-time'), { timeout: 15_000 }).toBe(true)
   await shoot(page, 'store-1680-toggled-on')
+
+  // The card is back on (On, or a newer word such as Update available for a checkout behind its remote).
+  await backToApps(page)
+  await expect(page.getByTestId('plugin-card-walnut-time')).toHaveAttribute('data-plugin-status', 'active')
+  await expect(page.getByTestId('plugin-card-walnut-time-status')).not.toHaveText('Off')
+  await expect(page.getByTestId('plugin-card-open-walnut-time')).toBeVisible({ timeout: 60_000 })
 
   expect(pageErrors, 'toggling a plugin must not throw in the browser').toEqual([])
 })
@@ -426,19 +587,24 @@ test('a plugin that runs on another comes up with it, and the catalog stays quie
   // beta and delta declare `dependencies: { alpha: '^1' }` and are on, which means the
   // load order put alpha first and the gate let both through.
   for (const id of ['beta', 'delta']) {
-    const row = page.getByTestId(`plugin-row-${id}`)
-    await expect(row).toBeVisible({ timeout: 30_000 })
-    await expect(row).toHaveAttribute('data-plugin-status', 'active')
+    const card = page.getByTestId(`plugin-card-${id}`)
+    await expect(card).toBeVisible({ timeout: 30_000 })
+    await expect(card).toHaveAttribute('data-plugin-status', 'active')
+    await openPluginDetail(page, id)
     await expect(page.locator(`#plugin-toggle-${id}`)).toHaveAttribute('aria-checked', 'true')
+    await backToApps(page)
   }
-  await expect(page.getByTestId('plugin-row-alpha')).toHaveAttribute('data-plugin-status', 'active')
+  await expect(page.getByTestId('plugin-card-alpha')).toHaveAttribute('data-plugin-status', 'active')
 
   // The catalog entry that `requires` alpha says nothing while alpha is running: there is
   // nothing extra to install, and a permanent "also needs" line would be noise.
-  const gamma = page.getByTestId(`plugin-row-${fixture!.requiresEntryId}`)
+  const gamma = page.getByTestId(`plugin-card-${fixture!.requiresEntryId}`)
   await expect(gamma).toHaveAttribute('data-plugin-status', 'available')
   await expect(gamma).not.toContainText('Also needs')
+  await openPluginDetail(page, fixture!.requiresEntryId)
+  await expect(page.getByTestId(`plugin-row-${fixture!.requiresEntryId}`)).not.toContainText('Also needs')
   await expect(page.getByTestId(`plugin-also-needs-${fixture!.requiresEntryId}`)).toHaveCount(0)
+  await backToApps(page)
 })
 
 test('installing a dependency asks before it clones anything', async ({ page }) => {
@@ -448,12 +614,17 @@ test('installing a dependency asks before it clones anything', async ({ page }) 
   await openPlugins(page)
 
   // epsilon came from a source and waits on zeta, which is only in the catalog.
+  const epsilonCard = page.getByTestId('plugin-card-epsilon')
+  await expect(epsilonCard).toBeVisible({ timeout: 30_000 })
+  await expect(epsilonCard).toHaveAttribute('data-plugin-status', 'needs-dependency')
+  await expect(page.getByTestId('plugin-card-epsilon-status')).toHaveText('Needs another plugin')
+
+  await openPluginDetail(page, 'epsilon')
   const epsilon = page.getByTestId('plugin-row-epsilon')
-  await expect(epsilon).toBeVisible({ timeout: 30_000 })
   await expect(epsilon).toHaveAttribute('data-plugin-status', 'needs-dependency')
   await expect(page.getByTestId('plugin-dependency-needs-epsilon')).toContainText('Needs Zeta ^1')
 
-  // The action on a blocked row is an ASK, not an install.
+  // The action on a blocked plugin is an ASK, not an install.
   const install = page.getByTestId('plugin-dependency-install-epsilon-zeta')
   await expect(install).toHaveText('Install Zeta...')
   await expect(page.getByTestId('plugin-pending-dependencies')).toHaveCount(0)
@@ -483,6 +654,7 @@ test('turning off a plugin others run on asks first, and never writes them off',
   page.on('pageerror', (error) => pageErrors.push(error.message))
 
   await openPlugins(page)
+  await openPluginDetail(page, 'alpha')
   const alphaToggle = page.locator('#plugin-toggle-alpha')
   await expect(alphaToggle).toHaveAttribute('aria-checked', 'true')
 
@@ -499,31 +671,36 @@ test('turning off a plugin others run on asks first, and never writes them off',
   await page.getByTestId('plugin-cascade-cancel').click()
   await expect(confirm).toHaveCount(0)
   await expect(page.getByTestId('plugin-row-alpha')).toHaveAttribute('data-plugin-status', 'active')
-  await expect(page.getByTestId('plugin-row-beta')).toHaveAttribute('data-plugin-status', 'active')
-  await expect(page.getByTestId('plugin-row-delta')).toHaveAttribute('data-plugin-status', 'active')
+  await backToApps(page)
+  await expect(page.getByTestId('plugin-card-alpha')).toHaveAttribute('data-plugin-status', 'active')
+  await expect(page.getByTestId('plugin-card-beta')).toHaveAttribute('data-plugin-status', 'active')
+  await expect(page.getByTestId('plugin-card-delta')).toHaveAttribute('data-plugin-status', 'active')
   expect(await configPluginKeys()).not.toContain('alpha')
 
   // ── Agree, and the cascade parks the dependent instead of switching it off ──
+  await openPluginDetail(page, 'alpha')
   await alphaToggle.click()
   await expect(page.getByTestId('plugin-cascade-confirm')).toBeVisible({ timeout: 30_000 })
   await page.getByTestId('plugin-cascade-confirm').click()
 
   await expect(page.getByTestId('plugin-row-alpha')).toHaveAttribute('data-plugin-status', 'disabled', { timeout: 60_000 })
   await expect(alphaToggle).toHaveAttribute('aria-checked', 'false')
-  const beta = page.getByTestId('plugin-row-beta')
-  const delta = page.getByTestId('plugin-row-delta')
-  for (const row of [beta, delta]) {
-    await expect(row).toHaveAttribute('data-plugin-status', 'needs-dependency', { timeout: 60_000 })
-    await expect(row).toContainText('Needs another plugin')
+  await backToApps(page)
+  for (const id of ['beta', 'delta']) {
+    await expect(page.getByTestId(`plugin-card-${id}`)).toHaveAttribute('data-plugin-status', 'needs-dependency', { timeout: 60_000 })
+    await expect(page.getByTestId(`plugin-card-${id}-status`)).toHaveText('Needs another plugin')
   }
-  // Each row names what IT waits for, by display name, in the server's own words — and
+  // Each plugin names what IT waits for, by display name, in the server's own words, and
   // owns its own action, keyed by row + dependency so neither shadows the other.
   for (const id of ['beta', 'delta']) {
+    await openPluginDetail(page, id)
+    await expect(page.getByTestId(`plugin-row-${id}`)).toContainText('Needs another plugin')
     await expect(page.getByTestId(`plugin-dependency-needs-${id}`)).toContainText('Needs Alpha ^1')
     await expect(page.getByTestId(`plugin-dependency-needs-${id}`)).toContainText('was turned off')
     await expect(page.getByTestId(`plugin-dependency-turn-on-${id}-alpha`)).toHaveText('Turn on Alpha')
+    if (id === 'beta') await shoot(page, 'store-1680-needs-dependency')
+    await backToApps(page)
   }
-  await shoot(page, 'store-1680-needs-dependency')
 
   // Only the target got an off-switch. A dependent with `enabled: false` on disk would
   // stay down after alpha came back, which is the whole point of blocking instead.
@@ -531,22 +708,28 @@ test('turning off a plugin others run on asks first, and never writes them off',
   expect(await configPluginKeys()).not.toContain('beta')
   expect(await configPluginKeys()).not.toContain('delta')
 
-  // And the catalog row that needs alpha now says so, since alpha is not running.
+  // And the catalog entry that needs alpha now says so, since alpha is not running.
+  await openPluginDetail(page, fixture!.requiresEntryId)
   await expect(page.getByTestId(`plugin-also-needs-${fixture!.requiresEntryId}`)).toContainText('Also needs: Alpha')
-  await page.getByTestId('plugin-store-available').screenshot({ path: `${SCREENSHOT_DIR}/store-1680-also-needs.png` })
+  await shoot(page, 'store-1680-also-needs')
+  await backToApps(page)
 
-  // ── Back on, from ONE blocked row, with no page reload ──
+  // ── Back on, from ONE blocked plugin, with no page reload ──
+  await openPluginDetail(page, 'beta')
   await page.getByTestId('plugin-dependency-turn-on-beta-alpha').click()
-  await expect(page.getByTestId('plugin-row-alpha')).toHaveAttribute('data-plugin-status', 'active', { timeout: 60_000 })
+  await expect(page.getByTestId('plugin-row-beta')).toHaveAttribute('data-plugin-status', 'active', { timeout: 60_000 })
+  await expect(page.locator('#plugin-toggle-beta')).toHaveAttribute('aria-checked', 'true')
+  await backToApps(page)
+  await expect(page.getByTestId('plugin-card-alpha')).toHaveAttribute('data-plugin-status', 'active', { timeout: 60_000 })
   // Both dependents return, because neither was ever written off.
-  for (const row of [beta, delta]) {
-    await expect(row).toHaveAttribute('data-plugin-status', 'active', { timeout: 60_000 })
-  }
   for (const id of ['beta', 'delta']) {
-    await expect(page.locator(`#plugin-toggle-${id}`)).toHaveAttribute('aria-checked', 'true')
+    await expect(page.getByTestId(`plugin-card-${id}`)).toHaveAttribute('data-plugin-status', 'active', { timeout: 60_000 })
   }
+  await openPluginDetail(page, 'delta')
+  await expect(page.locator('#plugin-toggle-delta')).toHaveAttribute('aria-checked', 'true')
   await expect.poll(() => configEnabled('alpha'), { timeout: 15_000 }).toBe(true)
   await shoot(page, 'store-1680-dependency-restored')
+  await backToApps(page)
 
   expect(pageErrors, 'the dependency flow must not throw in the browser').toEqual([])
 })

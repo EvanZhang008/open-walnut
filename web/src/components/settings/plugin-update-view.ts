@@ -167,7 +167,7 @@ export interface ChipViewOptions {
    * stale marking, since none of them can be confirmed until the network is back.
    */
   offline?: boolean
-  /** This chip sits on a Sources card whose Update verb lives on the Installed row (N3-11). */
+  /** This chip sits on a Sources card whose Update verb lives on its plugin page (N3-11). */
   updateElsewhere?: boolean
 }
 
@@ -272,8 +272,8 @@ export function chipView(state: UpdateState | undefined, opts: ChipViewOptions):
   return view
 }
 
-/** The Installed row owns Update (spec 6.2): the Sources chip must not promise a button it lacks (N3-11). */
-const UPDATE_ELSEWHERE = 'Update from its Installed row'
+/** The plugin's own page owns Update (spec 6.2): the Sources chip must not promise a button it lacks (N3-11). */
+const UPDATE_ELSEWHERE = 'Update on its plugin page'
 
 function chipViewFor(state: UpdateState, opts: ChipViewOptions): ChipView {
   const { checkedAt, now } = opts

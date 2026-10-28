@@ -1,6 +1,6 @@
 /**
- * Fixture server for a plugin's ACCOUNT LINK in Settings → Plugins and the
- * "sign in again" notification the sync loop raises for it.
+ * Fixture server for a plugin's ACCOUNT LINK on its page on Apps (/apps, the plugin's
+ * detail page) and the "sign in again" notification the sync loop raises for it.
  *
  * One fixture plugin, `linkfix`, written into a throwaway home's plugins/ dir. It
  * registers a sync adapter and a PluginConnection with a scripted credential:
@@ -12,7 +12,7 @@
  *   - from then on syncPoll succeeds and status() is 'connected'.
  * The real Microsoft plugin needs a real Azure app and a real human at
  * microsoft.com/devicelogin, so it cannot be driven from a spec; the scripted
- * link exercises the same Walnut halves (loop → card → Settings → sign-in →
+ * link exercises the same Walnut halves (loop → card → Apps page → sign-in →
  * poll → recovery) against the same contract.
  *
  * Sync ticks are made fast (WALNUT_SYNC_FIRST_TICK_MS, sync_interval_ms) so the

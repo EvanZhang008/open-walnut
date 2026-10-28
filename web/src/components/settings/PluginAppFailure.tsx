@@ -1,8 +1,8 @@
 /**
- * The one App line under a plugin's row on the Apps page: "App didn't load", when the
- * plugin's web build failed in this window. The App tiles themselves (open, on the
- * Sidebar or only in Apps) are apps-page/PluginAppTiles; a build that failed registered
- * nothing, so no tile can say so.
+ * The one App line on a plugin's detail page: "App didn't load", when the plugin's web
+ * build failed in this window. The App rows themselves (Open, on the Sidebar or only in
+ * Apps) are in apps-page/PluginDetail; a build that failed registered nothing, so no App
+ * row can say so.
  */
 import { useAppCatalog } from '@/apps/hooks'
 import { useWebPluginRuntime } from '@/plugins/runtime-store'

@@ -1,6 +1,6 @@
 /*
- * The Apps page (/apps): a gallery of tiles for the apps, the settings rows the
- * Plugins section always had for the plugins, and a hero card to make a new one.
+ * The Apps page (/apps): one card shape for every app and plugin, a detail page per
+ * card, and a hero card to make a new one.
  * Colours are theme tokens (globals.css + settings-shell.css), so dark mode follows.
  */
 
@@ -146,87 +146,7 @@
   grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
   gap: 12px;
 }
-.apps-grid-plugin-apps { margin-bottom: 12px; }
-.apps-tile {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  min-width: 0;
-  padding: 14px;
-  border-radius: 14px;
-  background: var(--settings-group-bg);
-  border: 1px solid var(--settings-group-border);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
-  transition: box-shadow 0.2s, transform 0.2s, opacity 0.2s;
-}
-.apps-tile:hover {
-  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.08);
-  transform: translateY(-1px);
-}
-@media (prefers-reduced-motion: reduce) {
-  .apps-tile, .apps-tile:hover { transition: none; transform: none; }
-}
-.apps-tile-top {
-  display: flex;
-  gap: 10px;
-  align-items: flex-start;
-  min-width: 0;
-}
-.apps-tile-icon {
-  width: 36px;
-  height: 36px;
-  flex: none;
-  border: 0;
-  border-radius: 9px;
-  display: grid;
-  place-items: center;
-  color: #fff;
-  cursor: pointer;
-  padding: 0;
-}
-.apps-tile-icon svg { stroke: currentColor; }
-.apps-tile-icon:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.apps-tile-img { width: 20px; height: 20px; }
-.apps-tile-text { min-width: 0; }
-.apps-tile-name {
-  font-weight: 600;
-  font-size: 14px;
-  line-height: 18px;
-  color: var(--fg);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.apps-tile-name .apps-tile-badge {
-  position: static;
-  display: inline-flex;
-  margin-left: 6px;
-  vertical-align: 1px;
-  border: none;
-}
-.apps-tile-line {
-  margin-top: 1px;
-  font-size: 12px;
-  line-height: 16px;
-  color: var(--fg-muted);
-}
-.apps-tile-foot {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: auto;
-  padding-top: 9px;
-  border-top: 1px solid var(--settings-hairline);
-  font-size: 12px;
-  color: var(--fg-muted);
-  min-height: 32px;
-}
-.apps-tile-status {
-  flex: 1;
-  min-width: 0;
-}
-.apps-tile-off .apps-tile-icon { filter: grayscale(1); opacity: 0.55; }
-.apps-tile-off .apps-tile-name { color: var(--fg-muted); }
+.apps-card-img { width: 20px; height: 20px; }
 .apps-lock {
   display: inline-grid;
   place-items: center;
@@ -237,7 +157,245 @@
   color: var(--fg-muted);
 }
 
-/* ── Plugin groups (the old Plugins section's rows) ── */
+/* ── Store cards (StoreCard.tsx): one shape for every app and plugin ── */
+.apps-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  min-height: 128px;
+  padding: 14px;
+  border-radius: 14px;
+  background: var(--settings-group-bg);
+  border: 1px solid var(--settings-group-border);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+  transition: box-shadow 0.2s, transform 0.2s, border-color 0.2s;
+}
+.apps-card:hover {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--settings-group-border));
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.08);
+  transform: translateY(-1px);
+}
+.apps-card:focus-within { border-color: var(--accent); }
+@media (prefers-reduced-motion: reduce) {
+  .apps-card, .apps-card:hover { transition: none; transform: none; }
+}
+.apps-card-top { display: flex; gap: 11px; align-items: flex-start; min-width: 0; }
+.apps-card-icon { flex: none; display: inline-flex; }
+.apps-card-text { min-width: 0; flex: 1; }
+/* The name's button covers the whole card, so a click anywhere opens the detail page;
+   Open sits above it (z-index) and stays its own button. */
+.apps-card-main {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  max-width: 100%;
+}
+.apps-card-main::after { content: ''; position: absolute; inset: 0; border-radius: inherit; }
+.apps-card-main:focus-visible { outline: none; }
+.apps-card-main:focus-visible::after { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 14px; }
+.apps-card-name {
+  display: block;
+  font-weight: 600;
+  font-size: 14px;
+  line-height: 18px;
+  color: var(--fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.apps-card-text > .apps-card-badge {
+  position: relative;
+  pointer-events: none;
+  display: inline-flex;
+  vertical-align: 1px;
+  border: none;
+  margin-left: 4px;
+}
+.apps-card-main + .apps-card-badge { margin-left: 6px; }
+.apps-card-text:has(> .apps-card-badge) > .apps-card-main { display: inline-block; max-width: calc(100% - 34px); vertical-align: top; }
+.apps-card-line {
+  margin-top: 2px;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--fg-muted);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.apps-card-note {
+  margin-top: 4px;
+  font-size: 11.5px;
+  line-height: 15px;
+  color: var(--fg-muted);
+}
+.apps-card-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: auto;
+  font-size: 12px;
+  color: var(--fg-muted);
+  min-height: 24px;
+}
+.apps-card-status { display: inline-flex; align-items: center; gap: 6px; min-width: 0; color: var(--fg); }
+.apps-card-status i { width: 7px; height: 7px; border-radius: 50%; flex: none; background: #34c759; }
+.apps-card-status--off { color: var(--fg-muted); }
+.apps-card-status--off i { background: var(--fg-muted); opacity: 0.6; }
+.apps-card-status--warn { color: color-mix(in srgb, var(--warning) 75%, var(--fg)); }
+.apps-card-status--warn i { background: #ff9500; }
+.apps-card-status--bad { color: color-mix(in srgb, var(--error) 80%, var(--fg)); }
+.apps-card-status--bad i { background: #ff3b30; }
+.apps-card-status--update { color: var(--accent); }
+.apps-card-status--update i { background: var(--accent); }
+.apps-card-status--get { color: var(--accent); font-weight: 600; }
+.apps-card-status--get i { background: transparent; box-shadow: inset 0 0 0 1.5px var(--accent); }
+.apps-card-kind { white-space: nowrap; }
+.apps-card-open {
+  position: relative;
+  z-index: 1;
+  border: 0;
+  border-radius: 12px;
+  padding: 3px 12px;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent);
+  font: inherit;
+  font-weight: 600;
+  font-size: 12px;
+  cursor: pointer;
+}
+.apps-card-open:hover { background: color-mix(in srgb, var(--accent) 20%, transparent); }
+.apps-card-open:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.apps-card-dim .apps-card-icon { filter: grayscale(1); opacity: 0.55; }
+.apps-card-dim .apps-card-name { color: var(--fg-muted); }
+.apps-card-add {
+  align-items: center;
+  justify-content: center;
+  color: var(--accent);
+  font: inherit;
+  font-weight: 600;
+  background: transparent;
+  border: 1.5px dashed var(--border);
+  box-shadow: none;
+  cursor: pointer;
+}
+.apps-card-add[aria-expanded='true'] { border-color: var(--accent); }
+.apps-add-form { margin-top: 14px; }
+.apps-builtin-icon { display: inline-grid; place-items: center; color: #fff; flex: none; }
+.apps-builtin-icon svg { stroke: currentColor; }
+.plugin-icon.plugin-icon--lg { width: 40px; height: 40px; border-radius: 10px; }
+.plugin-icon.plugin-icon--lg .plugin-icon-image { width: 22px; height: 22px; }
+.plugin-icon.plugin-icon--lg .plugin-icon-monogram::before { font-size: 18px; }
+.plugin-icon.plugin-icon--xl { width: 72px; height: 72px; border-radius: 18px; }
+.plugin-icon.plugin-icon--xl .plugin-icon-image { width: 40px; height: 40px; }
+.plugin-icon.plugin-icon--xl .plugin-icon-monogram::before { font-size: 32px; }
+
+/* ── Detail page (PluginDetail.tsx, BuiltinAppsGrid's BuiltinDetail) ── */
+.apps-page-inner--detail { position: relative; }
+.apps-detail-saved { position: absolute; top: 28px; right: 32px; }
+.apps-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin: 0 0 14px -4px;
+  padding: 2px 4px;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  cursor: pointer;
+}
+.apps-back:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 6px; }
+.apps-detail-head { display: flex; gap: 18px; align-items: flex-start; margin: 0 0 20px; }
+.apps-detail-title { min-width: 0; flex: 1; }
+.apps-detail-title h1 { margin: 0; font-size: 24px; line-height: 30px; letter-spacing: -0.02em; color: var(--fg); }
+.apps-detail-parent {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  color: var(--accent);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.apps-detail-line { margin: 3px 0 10px; color: var(--fg-muted); font-size: 14px; }
+.apps-detail-warning { margin: 8px 0 0; color: color-mix(in srgb, var(--warning) 75%, var(--fg)); }
+.apps-detail-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.apps-detail-title h1 + .apps-detail-actions { margin-top: 10px; }
+.apps-onoff {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 6px 3px 10px;
+  border-radius: 9px;
+  border: 1px solid var(--settings-group-border);
+  background: var(--settings-group-bg);
+  color: var(--fg);
+  cursor: pointer;
+}
+.apps-trust { display: inline-flex; align-items: center; gap: 8px; color: var(--fg); }
+.apps-detail-group { margin-bottom: 14px; }
+.apps-detail-box:empty { display: none; }
+.apps-about { padding: 12px 16px; }
+.apps-about p { margin: 0; line-height: 1.55; color: var(--fg); }
+.apps-about-adds { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.apps-about-links { margin-top: 10px; }
+.apps-fact-value {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  max-width: min(560px, 100%);
+  color: var(--fg);
+  text-align: right;
+}
+.apps-fact-value code {
+  font: 12px/1.5 ui-monospace, 'SF Mono', Menlo, monospace;
+  padding: 1px 6px;
+  border-radius: 5px;
+  background: var(--bg-tertiary);
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+.apps-fact-copy {
+  flex: none;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  color: var(--accent);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.apps-note {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 4px 16px 14px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--bg-tertiary);
+  color: var(--fg);
+  line-height: 1.5;
+}
+.apps-note--warn { background: color-mix(in srgb, #ff9500 12%, var(--settings-group-bg)); }
+.apps-note--info { background: color-mix(in srgb, var(--accent) 10%, var(--settings-group-bg)); }
+.apps-app-glyph { display: inline-grid; place-items: center; width: 26px; height: 26px; border-radius: 7px; color: #fff; flex: none; }
+.apps-app-glyph svg { stroke: currentColor; }
+.apps-app-switch-label { color: var(--fg-muted); font-size: 12.5px; }
+.apps-app-row .apps-card-badge { position: static; display: inline-flex; border: none; }
+.apps-part + .apps-part { border-top: 1px solid var(--settings-hairline); }
+.apps-part-account { white-space: normal; }
+
+/* ── Plugin groups ── */
 .apps-plugins-bar {
   display: flex;
   align-items: center;
@@ -353,6 +511,22 @@
   .apps-hero { flex-wrap: wrap; }
   .apps-search { width: 100%; margin-left: 0; }
   .apps-grid { grid-template-columns: 1fr; }
+  .apps-card { min-height: 0; }
+  .apps-detail-head { gap: 14px; }
+  .apps-detail-head .plugin-icon--xl, .apps-detail-head .apps-builtin-icon { width: 56px !important; height: 56px !important; }
+  .apps-app-switch-label { display: none; }
+  .apps-fact-value { text-align: left; max-width: 100%; }
   .apps-make { padding: 18px; }
   .apps-make-ask { flex-direction: column; align-items: stretch; padding: 8px; }
 }
+
+/* The update chip is the same 18px pill as the tags in the page header (N3-7): its own
+   line height, since the Version row it sits in sets a taller one. */
+.apps-detail .plugin-update-chip { line-height: 14px; }
+
+/* "Check now" beside the update status: the text-safe accent, as on the chip (N3-9). */
+.plugin-store-updates-head .settings-addons-link { color: var(--accent-text, var(--accent)); }
+
+/* An Update's result line under the Version row: top-aligned, so opening Details grows it
+   downward and the toggle the user pressed stays put (N3-6). */
+.apps-detail .plugin-store-feedback-row { align-items: flex-start; }

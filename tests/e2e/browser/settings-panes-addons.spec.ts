@@ -11,6 +11,7 @@
  * WKWebView) with `PW_WEBKIT=1 ... --project=webkit`.
  */
 import { test, expect, type Page, type Route } from '@playwright/test'
+import { backToApps, openPluginDetail } from './apps-store-helpers'
 
 if (process.env.PW_WEBKIT) test.use({ browserName: 'webkit' })
 test.setTimeout(120_000)
@@ -527,57 +528,97 @@ test('C65 C83: every account state has its tag, providers sit under their base, 
   await mockPlugins(page)
   await openSettings(page)
   await openApps(page)
-  await expect(page.getByTestId('plugin-row-north-sync')).toBeVisible({ timeout: 30_000 })
+  await expect(page.getByTestId('plugin-card-north-sync')).toBeVisible({ timeout: 30_000 })
 
-  const expected: Array<[string, string, string]> = [
-    ['north-sync', 'connected', 'Signed in'],
-    ['east-sync', 'signing-in', 'Signing in...'],
-    ['south-sync', 'sign-in-required', 'Sign in needed'],
-    ['west-sync', 'unreachable', "Can't reach the provider"],
-    ['center-sync', 'not-configured', 'Not set up'],
+  // The card names an account that needs the human; signed in or mid sign-in, it just reads On.
+  for (const [id, text] of [
+    ['north-sync', 'On'],
+    ['east-sync', 'On'],
+    ['south-sync', 'Sign in needed'],
+    ['west-sync', "Can't reach the provider"],
+    ['center-sync', 'Not set up'],
+  ] as const) {
+    await expect(page.getByTestId(`plugin-card-${id}-status`), id).toHaveText(text)
+  }
+
+  // Each account lives on its plugin's page: state, tag, and the one thing that helps.
+  const expected: Array<[string, string, string, () => Promise<void>]> = [
+    ['north-sync', 'connected', 'Signed in', async () => {
+      // Connected: absolute time, never "ago" (C83).
+      const northHelp = accountRow(page, 'north-sync').locator('.settings-row-help')
+      await expect(northHelp).toHaveText(/^Renews automatically, last synced \d{1,2}:\d{2}\s?(AM|PM)$/)
+      await expect(page.getByTestId('plugin-detail')).not.toContainText(' ago')
+      // No ON tag on the page: the switch says it.
+      await expect(page.getByTestId('plugin-detail').locator('.settings-tag', { hasText: /^(ON|On)$/ })).toHaveCount(0)
+      await expect(page.locator('#plugin-toggle-north-sync')).toHaveAttribute('aria-checked', 'true')
+      await shot(page, 'plugins-accounts')
+    }],
+    ['east-sync', 'signing-in', 'Signing in...', async () => {
+      // Signing in: the device code in mono with Copy, and Open sign-in page.
+      const prompt = page.getByTestId('plugin-signin-prompt-east-sync')
+      const code = page.getByTestId('plugin-signin-code-east-sync')
+      await expect(code).toHaveText('WXYZ-2468')
+      expect(await code.evaluate((el) => getComputedStyle(el).fontFamily)).toMatch(/mono|Menlo|Courier|SF Mono|ui-monospace/i)
+      await expect(prompt.getByRole('button', { name: 'Copy' })).toBeVisible()
+      await expect(prompt.getByRole('link', { name: 'Open sign-in page' })).toHaveAttribute('href', 'https://example.invalid/device')
+      await expect(accountRow(page, 'east-sync')).toContainText('Waiting for you to finish signing in.')
+    }],
+    ['south-sync', 'sign-in-required', 'Sign in needed', async () => {
+      await expect(accountRow(page, 'south-sync')).toContainText('Sign in again to keep syncing.')
+      await expect(accountRow(page, 'south-sync').getByTestId('plugin-sign-in-south-sync')).toHaveText('Sign in')
+    }],
+    ['west-sync', 'unreachable', "Can't reach the provider", async () => {
+      await expect(accountRow(page, 'west-sync')).toContainText("Can't reach the provider right now.")
+      await expect(page.getByTestId('plugin-connection-retry-west-sync')).toHaveText('Retry')
+    }],
+    ['center-sync', 'not-configured', 'Not set up', async () => {
+      await expect(accountRow(page, 'center-sync')).toContainText('Add the missing settings under Configure.')
+    }],
   ]
-  for (const [id, state, tag] of expected) {
+  for (const [id, state, tag, more] of expected) {
+    await openPluginDetail(page, id)
     await expect(page.getByTestId(`plugin-connection-${id}`)).toHaveAttribute('data-connection-state', state)
     await expect(page.getByTestId(`plugin-connection-badge-${id}`)).toHaveText(tag)
+    // The header repeats the tag only while the account needs the human.
+    if (state === 'connected') await expect(page.getByTestId(`plugin-row-connection-${id}`)).toHaveCount(0)
+    else await expect(page.getByTestId(`plugin-row-connection-${id}`)).toHaveText(tag)
+    await more()
+    await backToApps(page)
   }
-  await expect(accountRow(page, 'south-sync')).toContainText('Sign in again to keep syncing.')
-  await expect(accountRow(page, 'south-sync').getByTestId('plugin-sign-in-south-sync')).toHaveText('Sign in')
-  await expect(accountRow(page, 'west-sync')).toContainText("Can't reach the provider right now.")
-  await expect(page.getByTestId('plugin-connection-retry-west-sync')).toHaveText('Retry')
-  await expect(accountRow(page, 'center-sync')).toContainText('Add the missing settings under Configure.')
 
-  // Signing in: the device code in mono with Copy, and Open sign-in page.
-  const prompt = page.getByTestId('plugin-signin-prompt-east-sync')
-  const code = page.getByTestId('plugin-signin-code-east-sync')
-  await expect(code).toHaveText('WXYZ-2468')
-  expect(await code.evaluate((el) => getComputedStyle(el).fontFamily)).toMatch(/mono|Menlo|Courier|SF Mono|ui-monospace/i)
-  await expect(prompt.getByRole('button', { name: 'Copy' })).toBeVisible()
-  await expect(prompt.getByRole('link', { name: 'Open sign-in page' })).toHaveAttribute('href', 'https://example.invalid/device')
-  await expect(accountRow(page, 'east-sync')).toContainText('Waiting for you to finish signing in.')
-
-  // Connected: absolute time, never "ago" (C83).
-  const northHelp = accountRow(page, 'north-sync').locator('.settings-row-help')
-  await expect(northHelp).toHaveText(/^Renews automatically, last synced \d{1,2}:\d{2}\s?(AM|PM)$/)
-  await expect(page.locator('#plugin-store')).not.toContainText(' ago')
-
-  // The base plugin has no account row of its own: one provider row each.
+  // The providers are parts of their base: no card of their own, named on the base's card.
+  await expect(page.getByTestId('plugin-card-acme-mail-imap')).toHaveCount(0)
+  await expect(page.getByTestId('plugin-card-acme-mail-cloud')).toHaveCount(0)
+  await expect(page.getByTestId('plugin-card-acme-mail').locator('.apps-card-note')).toHaveText('Includes Acme IMAP, Acme Cloud Mail')
+  await openPluginDetail(page, 'acme-mail')
+  // The base plugin has no account row of its own: its providers sit under it, each with its own.
   await expect(page.getByTestId('plugin-connection-acme-mail')).toHaveCount(0)
-  // F16: no invented credential line on a provider without a connection report.
-  await expect(page.getByTestId('plugin-provider-acme-mail-imap')).not.toContainText('system sign-in')
-  await expect(page.getByTestId('plugin-provider-acme-mail-cloud')).toContainText('Signed in')
+  const parts = page.getByTestId('plugin-parts-acme-mail')
+  const imap = parts.getByTestId('plugin-part-acme-mail-imap')
+  const cloud = parts.getByTestId('plugin-part-acme-mail-cloud')
+  await expect(imap).toBeVisible()
+  await expect(cloud).toBeVisible()
+  // F16: no invented credential line on a provider without a connection report; on and set up, it says nothing more.
+  await expect(imap).not.toContainText('system sign-in')
+  await expect(imap.getByTestId('plugin-connection-acme-mail-imap')).toHaveCount(0)
+  await expect(page.getByTestId('plugin-provider-acme-mail-imap')).toHaveCount(0)
+  await expect(cloud.getByTestId('plugin-connection-badge-acme-mail-cloud')).toHaveText('Signed in')
+  await expect(cloud).toContainText('Signed in')
+  await backToApps(page)
 
-  // No ON tag anywhere: the switch says it. Help is the first sentence only.
+  // No ON tag anywhere: the card's status and the page's switch say it. The card's line is the
+  // first sentence only, and its corner says where the code comes from.
+  await expect(page.locator('#plugin-store')).not.toContainText(' ago')
   await expect(page.locator('#plugin-store .settings-tag', { hasText: /^(ON|On)$/ })).toHaveCount(0)
-  await expect(page.getByTestId('plugin-row-north-sync').locator('.settings-row-help')).toHaveText('North Sync keeps things in step.')
-  await expect(page.getByTestId('plugin-row-north-sync')).toHaveAttribute('title', 'Built in.')
-  await page.getByTestId('plugin-row-north-sync').scrollIntoViewIfNeeded()
-  await shot(page, 'plugins-accounts')
+  await expect(page.getByTestId('plugin-card-north-sync').locator('.apps-card-line')).toHaveText('North Sync keeps things in step.')
+  await expect(page.getByTestId('plugin-card-north-sync').locator('.apps-card-kind')).toHaveText('Built in')
 })
 
-test('C65 C36: cascade asks before writing, quarantine offers Try again, Configure opens rows in place', async ({ page }) => {
+test('C65 C36: cascade asks before writing, quarantine offers Try again, setup rows lead the plugin page', async ({ page }) => {
   const { calls } = await mockPlugins(page)
   await openSettings(page)
   await openApps(page)
+  await openPluginDetail(page, 'core-lib')
   const coreSwitch = page.locator('#plugin-toggle-core-lib')
   await expect(coreSwitch).toHaveAttribute('aria-checked', 'true', { timeout: 30_000 })
 
@@ -596,30 +637,47 @@ test('C65 C36: cascade asks before writing, quarantine offers Try again, Configu
   await page.getByTestId('plugin-cascade-confirm').click()
   await expect.poll(() => calls).toContain('disable core-lib cascade')
   await expect(coreSwitch).toHaveAttribute('aria-checked', 'false', { timeout: 10_000 })
+  await backToApps(page)
 
-  // Quarantined: Failed tag, first sentence of the reason, Try again clears it.
+  // Quarantined: Failed on its card and its page, first sentence of the reason, Try again clears it.
+  await expect(page.getByTestId('plugin-card-broken-tool-status')).toHaveText('Failed')
+  await openPluginDetail(page, 'broken-tool')
   const broken = page.getByTestId('plugin-row-broken-tool')
   await expect(broken.locator('.settings-tag', { hasText: 'Failed' })).toBeVisible()
-  await expect(broken.locator('.settings-row-help')).toHaveText('Crashed twice while loading.')
+  await expect(broken.locator('.apps-detail-warning')).toHaveText('Crashed twice while loading.')
   await page.getByTestId('plugin-try-again-broken-tool').click()
   await expect.poll(() => calls).toContain('clear-quarantine broken-tool')
+  await backToApps(page)
 
-  // Needs setup: warning help with human field names, primary Configure, rows in the same group.
+  // Needs setup: a warning card, then a page whose warning names the fields in human words and
+  // whose settings come first, open, rows in the same group. There is no Configure to press.
+  const trackerCard = page.getByTestId('plugin-card-tracker-sync')
+  await expect(trackerCard).toHaveAttribute('data-card-tone', 'warn')
+  await expect(page.getByTestId('plugin-card-tracker-sync-status')).toHaveText('Needs setup')
+  await openPluginDetail(page, 'tracker-sync')
   const tracker = page.getByTestId('plugin-row-tracker-sync')
-  await expect(tracker).toHaveAttribute('data-state', 'warning')
-  await expect(tracker.locator('.settings-row-help')).toHaveText('Needs setup: base URL and API key.')
-  const configure = page.getByTestId('plugin-configure-tracker-sync')
-  await expect(configure).toHaveClass(/settings-button-primary/)
-  await configure.click()
+  await expect(tracker.locator('.settings-tag', { hasText: 'Needs setup' })).toBeVisible()
+  await expect(tracker.locator('.apps-detail-warning')).toHaveText('Needs setup: base URL and API key.')
+  await expect(page.getByTestId('plugin-configure-tracker-sync')).toHaveCount(0)
+  const settings = page.getByTestId('plugin-settings-tracker-sync')
   const form = page.getByTestId('plugin-config-tracker-sync')
   await expect(form.locator('#plugin-tracker-sync-base_url')).toBeVisible()
   await expect(form.locator('.settings-row.settings-row-indent').first()).toBeVisible()
-  expect(await form.evaluate((el) => !!el.closest('[data-testid="plugin-store-installed"]'))).toBe(true)
+  expect(await form.evaluate((el) => !!el.closest('[data-testid="plugin-settings-tracker-sync"]'))).toBe(true)
+  // Settings lead the page: before About.
+  expect(await settings.evaluate((el) => {
+    const about = document.querySelector('[data-testid="plugin-about-tracker-sync"]')
+    return !!about && (el.compareDocumentPosition(about) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0
+  })).toBe(true)
   await form.scrollIntoViewIfNeeded()
   await shot(page, 'plugins-configure')
-  await expect(page.locator('#plugin-store .settings-group .settings-group')).toHaveCount(0)
+  // The form sits bare in the Settings card: no card nested inside it.
+  await expect(form.locator('.settings-group')).toHaveCount(0)
+  // The form has one home and is always open there: Escape does not fold it away.
   await form.locator('#plugin-tracker-sync-base_url').press('Escape')
-  await expect(form).toHaveCount(0)
+  await expect(form.locator('#plugin-tracker-sync-base_url')).toBeVisible()
+  await expect(page.getByTestId('plugin-detail').locator('input[type="checkbox"]:visible')).toHaveCount(0)
+  await backToApps(page)
   await expect(page.locator('#plugin-store input[type="checkbox"]:visible')).toHaveCount(0)
 })
 
@@ -665,7 +723,7 @@ function auditPane(root: Element, provided: string[]): PaneAudit {
 }
 
 test('C8 C10 C14 C19 C20 C80: owned panes are sentence case, glyph free, switches only', async ({ page }) => {
-  test.setTimeout(120_000)
+  test.setTimeout(180_000)
   await mockCalendar(page)
   const { rows } = await mockPlugins(page)
   const provided = rows.flatMap((r) => [String(r.name), String(r.description)])
@@ -679,9 +737,18 @@ test('C8 C10 C14 C19 C20 C80: owned panes are sentence case, glyph free, switche
     const audit = await page.locator('.settings-pane').evaluate(auditPane, provided)
     expect(audit, `pane ${id}`).toEqual({ transformed: [], upper: [], glyphs: [], emoji: [], checkboxes: 0, legacy: 0 })
   }
-  // The plugin list, where Settings' Plugins row now leads.
+  // The plugin cards, where Settings' Plugins row now leads.
   await openApps(page)
   await page.waitForTimeout(300)
   const audit = await page.locator('#plugin-store').evaluate(auditPane, provided)
-  expect(audit, 'Apps page plugin list').toEqual({ transformed: [], upper: [], glyphs: [], emoji: [], checkboxes: 0, legacy: 0 })
+  expect(audit, 'Apps page plugin cards').toEqual({ transformed: [], upper: [], glyphs: [], emoji: [], checkboxes: 0, legacy: 0 })
+  // What the list rows used to hold lives on each plugin's page now: an account in every
+  // state, parts, a failure, a settings form, a plugin others run on.
+  for (const id of ['north-sync', 'east-sync', 'south-sync', 'acme-mail', 'broken-tool', 'tracker-sync', 'core-lib']) {
+    await openPluginDetail(page, id)
+    await page.waitForTimeout(300)
+    const detail = await page.getByTestId('plugin-detail').evaluate(auditPane, provided)
+    expect(detail, `${id} plugin page`).toEqual({ transformed: [], upper: [], glyphs: [], emoji: [], checkboxes: 0, legacy: 0 })
+    await backToApps(page)
+  }
 })

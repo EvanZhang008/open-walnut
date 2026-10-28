@@ -5,6 +5,7 @@
  * intercepted so the fixture config never changes under another spec.
  */
 import { test, expect, type Page, type Request } from '@playwright/test'
+import { backToApps, openPluginDetail } from './apps-store-helpers'
 
 if (process.env.PW_WEBKIT) test.use({ browserName: 'webkit' })
 test.setTimeout(120_000)
@@ -33,6 +34,14 @@ async function openApps(page: Page) {
   await page.getByTestId(NAV('plugin-store')).click()
   await expect(page.getByTestId('apps-page')).toBeVisible({ timeout: 20_000 })
   await expect(page.locator('#plugin-store')).toBeVisible({ timeout: 20_000 })
+}
+
+/** Ids of the installed plugins that have a card, in page order. */
+async function installedCardIds(page: Page): Promise<string[]> {
+  await expect(page.locator('[data-testid="plugin-store-installed"] .apps-card').first()).toBeVisible({ timeout: 20_000 })
+  return page.locator('[data-testid="plugin-store-installed"] .apps-card').evaluateAll((cards) => cards
+    .map((c) => (c.getAttribute('data-testid') ?? '').replace(/^plugin-card-/, ''))
+    .filter(Boolean))
 }
 
 async function recordWrites(page: Page): Promise<string[]> {
@@ -112,38 +121,57 @@ test('N02 N07: a disabled row is dimmed once, to 45%, inside disclosures too', a
   for (const r of dimmed) expect(r.op, r.text).toBeCloseTo(0.45, 2)
 })
 
-// A plugin's Apps are tiles on the Apps page now; the sub-rows left under a plugin row are its
-// providers (and an App that failed to load).
-test('N05 N06: plugin provider sub-rows are plain indented rows that say their state', async ({ page }) => {
+// A plugin's parts (a mail account of Mail, an MCP server of its app) have no card of their
+// own: they are rows on their parent's page, in its Parts section.
+test('N05 N06: a plugin\'s parts are plain rows on its page that say their state', async ({ page }) => {
   await recordWrites(page)
   await openSettings(page)
   await openApps(page)
-  await expect(page.locator('[data-testid^="plugin-row-"]').first()).toBeVisible({ timeout: 20_000 })
-  const subRows = await page.evaluate(() => Array.from(document.querySelectorAll<HTMLElement>(
-    '#plugin-store [data-testid^="plugin-app-failed-"], #plugin-store [data-testid^="plugin-provider-"]'))
-    .map((row) => {
-      const group = row.closest('.settings-group')!
-      const boxes: string[] = []
-      for (let n = row.parentElement; n && n !== group; n = n.parentElement) {
-        const cs = getComputedStyle(n)
-        if (cs.backgroundColor !== 'rgba(0, 0, 0, 0)' || parseFloat(cs.borderTopWidth) > 0 || parseFloat(cs.borderRadius) > 0) boxes.push(n.className)
-      }
-      const indented = document.querySelector<HTMLElement>('#plugin-store .settings-row.settings-row-indent:not([data-testid^="plugin-app-failed-"])')
-      return {
-        id: row.dataset.testid,
-        boxes,
-        pad: getComputedStyle(row).paddingLeft,
-        refPad: indented ? getComputedStyle(indented).paddingLeft : null,
-        help: (row.querySelector('.settings-row-help')?.textContent ?? '').trim(),
-        tag: (row.querySelector('.settings-tag')?.textContent ?? '').trim(),
-      }
-    }))
-  expect(subRows.length, 'fixture has a provider sub-row').toBeGreaterThan(0)
-  for (const r of subRows) {
-    expect(r.boxes, r.id).toEqual([])
-    if (r.refPad) expect(r.pad, r.id).toBe(r.refPad)
-    if (r.id?.startsWith('plugin-provider-')) expect(r.help || r.tag, `${r.id} says its state`).not.toBe('')
+  await installedCardIds(page)
+  // A parent's card names its parts.
+  const parents = await page.locator('[data-testid="plugin-store-installed"] .apps-card:has(.apps-card-note)').evaluateAll((cards) => cards
+    .filter((c) => /^Includes /.test(c.querySelector('.apps-card-note')?.textContent ?? ''))
+    .map((c) => (c.getAttribute('data-testid') ?? '').replace(/^plugin-card-/, '')))
+  expect(parents.length, 'fixture has a plugin with parts').toBeGreaterThan(0)
+  let seen = 0
+  for (const id of parents) {
+    await openPluginDetail(page, id)
+    const subRows = await page.evaluate((parentId) => Array.from(document.querySelectorAll<HTMLElement>(
+      `[data-testid="plugin-parts-${parentId}"] [data-testid^="plugin-part-"]:not([data-testid^="plugin-part-open-"]), [data-testid="plugin-detail"] [data-testid^="plugin-app-failed-"]`))
+      .map((row) => {
+        const group = row.closest('.settings-group')!
+        const boxes: string[] = []
+        // The part itself and everything up to its group: no card inside the card. A hairline
+        // between two parts is a separator, not a box.
+        for (let n: HTMLElement | null = row; n && n !== group; n = n.parentElement) {
+          const cs = getComputedStyle(n)
+          if (cs.backgroundColor !== 'rgba(0, 0, 0, 0)' || parseFloat(cs.borderRadius) > 0
+            || parseFloat(cs.borderLeftWidth) > 0 || parseFloat(cs.borderRightWidth) > 0) boxes.push(n.className)
+        }
+        const line = row.matches('.settings-row') ? row : row.querySelector<HTMLElement>(':scope > .settings-row')
+        // The page's other rows: the parts start where every row of the page starts.
+        const ref = document.querySelector<HTMLElement>(`[data-testid="plugin-source-${parentId}"] .settings-row`)
+        const toggle = row.querySelector<HTMLElement>('[role="switch"]')
+        return {
+          id: row.dataset.testid,
+          boxes,
+          pad: line ? getComputedStyle(line).paddingLeft : null,
+          refPad: ref ? getComputedStyle(ref).paddingLeft : null,
+          help: (line?.querySelector('.settings-row-help')?.textContent ?? '').trim(),
+          tag: (row.querySelector('[data-testid^="plugin-provider-"] .settings-tag, .settings-tag')?.textContent ?? '').trim(),
+          switchState: toggle?.getAttribute('aria-checked') ?? null,
+        }
+      }), id)
+    for (const r of subRows) {
+      seen += 1
+      expect(r.boxes, r.id).toEqual([])
+      if (r.refPad && r.id?.startsWith('plugin-part-')) expect(r.pad, r.id).toBe(r.refPad)
+      // Its state: its switch, or a tag (Not set up, Failed) where it cannot be switched.
+      if (r.id?.startsWith('plugin-part-')) expect(r.switchState ?? (r.help || r.tag), `${r.id} says its state`).toBeTruthy()
+    }
+    await backToApps(page)
   }
+  expect(seen, 'fixture has a part row').toBeGreaterThan(0)
 })
 
 test('N08 N26: accuracy chips stay on one line, the list is capped, Refresh sits in the pane header', async ({ page }) => {
@@ -191,21 +219,27 @@ test('N10: an off host keeps its controls at full strength', async ({ page }) =>
   // N11 (the Engines Reset slot's edge) went with the Engines pane on 2026-10-27.
 })
 
-test('N13: plugin row controls are centred on the row like every pane', async ({ page }) => {
+test('N13: plugin page controls are centred on the row like every pane', async ({ page }) => {
   await recordWrites(page)
   await openSettings(page)
   await openApps(page)
-  await expect(page.locator('[data-testid^="plugin-row-"]').first()).toBeVisible({ timeout: 20_000 })
-  const off = await page.locator('#plugin-store [data-testid^="plugin-row-"]').evaluateAll((rows) => rows
-    .filter((r) => r.getBoundingClientRect().height > 50)
-    .map((r) => {
-      const a = r.querySelector<HTMLElement>(':scope > .settings-row-actions')
-      const id = r.getAttribute('data-testid')
-      if (!a) return { id, d: 0, h: 0 }
-      const rr = r.getBoundingClientRect(); const ar = a.getBoundingClientRect()
-      return { id, d: Math.round(Math.abs((ar.top + ar.bottom) / 2 - (rr.top + rr.bottom) / 2)), h: Math.round(rr.height) }
-    }))
-  for (const { id, d, h } of off) expect(d, `${id} (row ${h}px)`).toBeLessThanOrEqual(2)
+  const ids = await installedCardIds(page)
+  expect(ids.length).toBeGreaterThan(0)
+  // Each plugin's page, where its switch, settings, parts and versions live now.
+  for (const id of ids) {
+    await openPluginDetail(page, id)
+    const off = await page.locator('[data-testid="plugin-detail"] .settings-row:not(.settings-row-stacked):not([data-wide])').evaluateAll((rows) => rows
+      .filter((r) => r.getBoundingClientRect().height > 50)
+      .map((r) => {
+        const a = r.querySelector<HTMLElement>(':scope > .settings-row-actions')
+        const label = r.querySelector('.settings-row-label')?.textContent?.trim().slice(0, 30) ?? ''
+        if (!a) return { label, d: 0, h: 0 }
+        const rr = r.getBoundingClientRect(); const ar = a.getBoundingClientRect()
+        return { label, d: Math.round(Math.abs((ar.top + ar.bottom) / 2 - (rr.top + rr.bottom) / 2)), h: Math.round(rr.height) }
+      }))
+    for (const { label, d, h } of off) expect(d, `${id}: ${label} (row ${h}px)`).toBeLessThanOrEqual(2)
+    await backToApps(page)
+  }
 })
 
 test('N25 N14 N18: one single-line row height, flat primary buttons, no fade on the nav highlight', async ({ page }) => {
@@ -221,8 +255,17 @@ test('N25 N14 N18: one single-line row height, flat primary buttons, no fade on 
   const nav = await page.getByTestId(NAV('advanced')).evaluate((el) => getComputedStyle(el).transitionDuration)
   expect(nav.split(',').every((d) => parseFloat(d) === 0)).toBe(true)
   await openApps(page)
-  const primaries = await page.locator('#plugin-store .settings-button-primary').evaluateAll((els) =>
+  const flat = (sel: string) => page.locator(sel).evaluateAll((els) =>
     els.map((b) => ({ ap: getComputedStyle(b).appearance, border: getComputedStyle(b).borderTopColor, bg: getComputedStyle(b).backgroundColor })))
+  // The grid's own primary (Add, in the install form), then every plugin page's (Save, Open App, Install).
+  await page.getByTestId('apps-add-from-link').click()
+  const primaries = await flat('#plugin-store .settings-button-primary')
+  for (const id of await installedCardIds(page)) {
+    await openPluginDetail(page, id)
+    primaries.push(...await flat('[data-testid="plugin-detail"] .settings-button-primary'))
+    await backToApps(page)
+  }
+  expect(primaries.length).toBeGreaterThan(1)
   for (const p of primaries) expect(p.ap).toBe('none')
 })
 

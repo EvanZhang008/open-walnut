@@ -54,15 +54,17 @@ interface PluginIconProps {
   name: string
   tint: string
   iconUrl?: string
+  /** `lg` is the Apps page card's 40px tile, `xl` the detail page's 72px one. */
+  size?: 'md' | 'lg' | 'xl'
 }
 
-export function PluginIcon({ name, tint, iconUrl }: PluginIconProps) {
+export function PluginIcon({ name, tint, iconUrl, size = 'md' }: PluginIconProps) {
   const [failedUrl, setFailedUrl] = useState<string | null>(null)
   const icon = useIconSrc(iconUrl)
   const showImage = Boolean(icon.src) && !icon.failed && failedUrl !== iconUrl
   return (
     <span
-      className="plugin-icon"
+      className={size === 'md' ? 'plugin-icon' : `plugin-icon plugin-icon--${size}`}
       style={{ background: tint }}
       data-plugin-icon={showImage ? 'image' : 'monogram'}
       aria-hidden="true"

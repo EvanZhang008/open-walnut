@@ -1,26 +1,30 @@
 /**
- * /apps: everything Walnut can do, in one place the sidebar points at.
+ * /apps: everything Walnut can do, as a store the sidebar points at.
  *
- * Top to bottom: the built-in apps (each with the switch that keeps it on the rail
- * or takes it off), then the plugins grouped by category, each group led by the Apps
- * its plugins add, then Get more (the catalog, a git or npm link, the sources), then
- * Make your own. The chips filter the page to one of those; the search box narrows
- * every part at once.
+ * Every built-in app and every plugin is one card of the same shape, in its section: the
+ * built-in apps, the plugins by category, then Get more (what you can add, a git or npm
+ * link, the sources), then Make your own. The chips filter the page to one of those; the
+ * search box narrows every part at once. A card opens its detail page (`?plugin=<id>` or
+ * `?app=<key>`), which holds the switch, the settings, the parts, where the code comes
+ * from and Update. The grid stays mounted under it, so going back keeps its place.
  *
  * Plugins used to live in Settings (`#plugin-store`), which still forwards here.
  */
-import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useAppCatalog } from '@/apps/hooks'
 import { AppsIcon } from '@/apps/icons'
 import { getAppPreferences, subscribeAppPreferences } from '@/apps/store'
 import { useSettingsConfig } from '@/hooks/useSettingsConfig'
 import { usePhoneLayout } from '@/hooks/usePhoneLayout'
 import { peekPendingInstall, subscribeOpenLinks } from '@/utils/open-link'
-import { BuiltinAppsGrid } from '@/components/apps-page/BuiltinAppsGrid'
+import { BuiltinAppsGrid, BuiltinDetail } from '@/components/apps-page/BuiltinAppsGrid'
 import { MakeAppCard } from '@/components/apps-page/MakeAppCard'
 import { builtinEntries, builtinMatches } from '@/components/apps-page/builtin-apps'
 import { PLUGIN_CATEGORY_LABELS, type AppsFilter } from '@/components/apps-page/categories'
-import { PluginStoreSection, type PluginStoreSummary } from '@/components/settings/sections/PluginStoreSection'
+import { PluginStoreGrid, type PluginStoreSummary } from '@/components/apps-page/PluginStoreGrid'
+import { PluginDetail } from '@/components/apps-page/PluginDetail'
+import { usePluginStore } from '@/components/apps-page/usePluginStore'
 import { SettingsLoadingRow } from '@/components/settings/SettingsSection'
 import {
   SettingsPaneProvider,
@@ -66,11 +70,37 @@ function AppsPageBody() {
   // An install link lands here (App.tsx); its card lives in the plugin part, so a
   // filter or a search that hides that part gives way.
   useEffect(() => {
-    const show = () => { if (peekPendingInstall()) { setFilter('all'); setQuery('') } }
+    const show = () => { if (peekPendingInstall()) { setFilter('all'); setQuery(''); setParams({}, { replace: true }) } }
     show()
     return subscribeOpenLinks(show)
   }, [])
   const phone = usePhoneLayout()
+  const store = usePluginStore()
+  const navigate = useNavigate()
+  const [params, setParams] = useSearchParams()
+  const pluginId = params.get('plugin')
+  const appKey = params.get('app')
+  const detailOpen = Boolean(pluginId || appKey)
+  // The grid's scroll position, kept while a detail page is open and put back on return.
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const gridScroll = useRef(0)
+  const openDetail = useCallback((key: 'plugin' | 'app', value: string) => {
+    if (!detailOpen) gridScroll.current = scrollRef.current?.scrollTop ?? 0
+    setParams({ [key]: value }, { state: { fromApps: true } })
+  }, [detailOpen, setParams])
+  const openPlugin = useCallback((id: string) => openDetail('plugin', id), [openDetail])
+  const openApp = useCallback((key: string) => openDetail('app', key), [openDetail])
+  // Back goes back when the grid is what came before (so the browser's Back agrees), and
+  // to the grid otherwise (a deep link, a reload).
+  const closeDetail = useCallback(() => {
+    if ((window.history.state?.usr as { fromApps?: boolean } | undefined)?.fromApps) navigate(-1)
+    else setParams({}, { replace: true })
+  }, [navigate, setParams])
+  useLayoutEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    el.scrollTop = detailOpen ? 0 : gridScroll.current
+  }, [detailOpen, pluginId, appKey])
 
   const builtins = useMemo(
     () => builtinEntries(apps.all.filter((app) => app.kind === 'core'), preferences, { phone }),
@@ -92,15 +122,28 @@ function AppsPageBody() {
   ]
 
   return (
-    <div className="apps-page" data-testid="apps-page">
-      <div className="apps-page-inner">
+    <div className="apps-page" data-testid="apps-page" ref={scrollRef}>
+      {detailOpen && (
+        <div className="apps-page-inner apps-page-inner--detail">
+          <div className="apps-detail-saved"><SettingsSavedIndicator placement="header" /></div>
+          {pluginId && config ? (
+            <PluginDetail store={store} pluginId={pluginId} config={config} onSave={paneSave} onBack={closeDetail} onOpen={openPlugin} />
+          ) : pluginId ? (
+            <SettingsLoadingRow>Loading plugin...</SettingsLoadingRow>
+          ) : (
+            <BuiltinDetail entryKey={appKey!} onBack={closeDetail} />
+          )}
+        </div>
+      )}
+      <div className="apps-page-inner" hidden={detailOpen}>
         <header className="apps-hero">
           <span className="apps-hero-icon" aria-hidden="true"><AppsIcon size={26} /></span>
           <div className="apps-hero-text">
             <h1>Apps</h1>
-            <p>What Walnut can do, what sits in your sidebar, and where to get more.</p>
+            <p>What Walnut can do. Open one to set it up and see where it comes from.</p>
           </div>
-          <SettingsSavedIndicator placement="header" />
+          {/* One indicator, in whichever view is showing (the grid stays mounted, hidden). */}
+          {!detailOpen && <SettingsSavedIndicator placement="header" />}
           <label className="apps-search">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7" /><path d="M20 20l-4-4" /></svg>
             <input data-no-draft="search"
@@ -143,19 +186,11 @@ function AppsPageBody() {
               Built in
               <span className="apps-section-count">{`${onRail} of ${builtins.length} on the sidebar`}</span>
             </h2>
-            <p className="apps-section-sub">
-              Switch one off to take its icon off the sidebar. It keeps working from links and
-              the Command Palette, and you can switch it back on here.
-            </p>
-            <BuiltinAppsGrid query={query} />
+            <BuiltinAppsGrid query={query} onOpen={openApp} />
           </section>
         )}
 
-        {showPlugins && (config ? (
-          <PluginStoreSection config={config} onSave={paneSave} filter={filter} query={query} onSummary={onSummary} />
-        ) : (
-          <SettingsLoadingRow>Loading plugins...</SettingsLoadingRow>
-        ))}
+        {showPlugins && <PluginStoreGrid store={store} filter={filter} query={query} onSummary={onSummary} onOpen={openPlugin} />}
 
         {showMake && !searching && (
           <section className="apps-section" data-testid="apps-make" aria-labelledby="apps-make-title">

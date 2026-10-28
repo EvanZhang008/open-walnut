@@ -171,6 +171,8 @@ export interface InstalledPluginFacts {
   linked?: LinkedCheckoutInfo
   /** The linked scan ran out of budget before it reached this plugin: "not scanned", not "not linked". */
   linkedScanSkipped?: boolean
+  /** The folder its code loads from on this host. Unset on a replica, which reads the Mac's list. */
+  dir?: string
 }
 
 export interface PluginRegistryRow {
@@ -211,6 +213,9 @@ export interface PluginRegistryRow {
   toggleable: boolean
   /** Only when true: the linked scan never reached this row, so its chip reads "not checked". */
   linkedScanSkipped?: boolean
+  /** Installed only: the folder its code loads from on the server's host (the Apps detail page
+   *  says where a plugin runs from). Absent on a replica. */
+  dir?: string
   /** `/api/plugin-runtime/<id>/icon?v=…`, present only when the manifest's icon exists on this
    *  machine. Added by the registry route (plugin-icon-route.ts), never by the pure merge. */
   iconUrl?: string
@@ -465,6 +470,7 @@ export function mergePluginRegistry(
       ...(plugin.sourceSlug ? { sourceSlug: plugin.sourceSlug } : {}),
       toggleable: isToggleable(status),
       ...(plugin.linkedScanSkipped ? { linkedScanSkipped: true } : {}),
+      ...(plugin.dir ? { dir: plugin.dir } : {}),
     })
   }
 

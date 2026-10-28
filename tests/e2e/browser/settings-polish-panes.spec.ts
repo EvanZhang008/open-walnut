@@ -6,6 +6,7 @@
  * Screenshots go to /tmp/settings-redesign/shots/r3fix/ (never committed).
  */
 import { test, expect, type Page, type Request } from '@playwright/test'
+import { backToApps, openPluginDetail } from './apps-store-helpers'
 
 if (process.env.PW_WEBKIT) test.use({ browserName: 'webkit' })
 test.setTimeout(120_000)
@@ -119,14 +120,15 @@ test('N3-03: the placeholder-shaped name "Test phone" pairs as Test-phone, no ru
   await expect(section).not.toContainText('Invalid device name')
 })
 
-test('N3-04: Calendar plugin Configure links to Calendar Accounts instead of a second id editor', async ({ page }) => {
+test('N3-04: Calendar plugin settings link to Calendar Accounts instead of a second id editor', async ({ page }) => {
   await recordWrites(page)
   await openSettings(page)
   await openApps(page)
-  const configure = page.getByTestId('plugin-configure-calendar')
-  await expect(configure).toBeVisible({ timeout: 30_000 })
-  await configure.click()
+  // Its settings are on its own page, always shown: no Configure to press.
+  await openPluginDetail(page, 'calendar')
+  await expect(page.getByTestId('plugin-configure-calendar')).toHaveCount(0)
   const form = page.getByTestId('plugin-config-calendar')
+  await expect(form).toBeVisible({ timeout: 30_000 })
   await expect(form.getByTestId('plugin-config-owned-calendar')).toBeVisible()
   await expect(form.locator('#plugin-calendar-hidden_calendar_ids, #plugin-calendar-visible_calendar_ids, textarea')).toHaveCount(0)
   await form.scrollIntoViewIfNeeded()
@@ -262,6 +264,8 @@ test('N3-18: a stacked control starts at the label and spans the row', async ({ 
   await page.setViewportSize({ width: 1280, height: 800 })
   await openSettings(page)
   await openApps(page)
+  // The free-form install opens from Get more's "Add from a git or npm link" card.
+  await page.getByTestId('apps-add-from-link').click()
   const row = page.locator('.settings-row', { has: page.locator('#plugin-source-url') })
   await expect(row).toBeVisible({ timeout: 30_000 })
   const label = (await row.locator('.settings-row-label').boundingBox())!
@@ -270,7 +274,7 @@ test('N3-18: a stacked control starts at the label and spans the row', async ({ 
   const box = (await row.boundingBox())!
   expect(Math.abs(input.x - label.x)).toBeLessThanOrEqual(1)
   expect(box.x + box.width - (actions.x + actions.width)).toBeLessThanOrEqual(20)
-  await expect(page.locator('#plugin-store')).toContainText('full access to your tasks, notes, credentials and this Mac.')
+  await expect(page.locator('#plugin-store')).toContainText('full access to your tasks, notes, credentials and this computer.')
   await expect(page.locator('#plugin-store')).not.toContainText('On, with no sign-in state to report.')
 })
 
@@ -415,4 +419,31 @@ test('evidence: 660px panes keep controls inside their groups with no horizontal
     expect(bad, id).toEqual({ hscroll: false, out: [] })
     await page.screenshot({ path: `${SHOTS}/${ENGINE}-660-${id}.png` })
   }
+  // The plugin cards and the plugin pages hold what the list rows used to: the same rule there.
+  // Calendar has a settings form; a parent (its card says "Includes ...") has its parts.
+  const parent = await page.locator('[data-testid="plugin-store-installed"] .apps-card:has(.apps-card-note)').first().getAttribute('data-testid')
+  const pages = ['calendar', ...(parent ? [parent.replace(/^plugin-card-/, '')] : [])]
+  for (const pluginId of pages) {
+    await openPluginDetail(page, pluginId)
+    await page.waitForTimeout(600)
+    const bad = await page.evaluate(() => {
+      const pane = document.querySelector<HTMLElement>('.apps-page')!
+      const out = Array.from(document.querySelectorAll<HTMLElement>('[data-testid="plugin-detail"] .settings-row-actions'))
+        .filter((a) => a.getBoundingClientRect().height > 0)
+        .filter((a) => {
+          const g = a.closest('.settings-group')!.getBoundingClientRect()
+          const r = a.getBoundingClientRect()
+          return r.right > g.right + 1 || r.left < g.left - 1
+        }).map((a) => a.closest('.settings-row')?.textContent?.slice(0, 30))
+      return { hscroll: pane.scrollWidth > pane.clientWidth + 1, out }
+    })
+    expect(bad, `${pluginId} plugin page`).toEqual({ hscroll: false, out: [] })
+    await page.screenshot({ path: `${SHOTS}/${ENGINE}-660-plugin-${pluginId}.png` })
+    await backToApps(page)
+  }
+  // No card runs past its grid.
+  const cardsOut = await page.locator('#plugin-store .apps-card').evaluateAll((cards) => cards
+    .filter((c) => c.getBoundingClientRect().right > c.closest('.apps-grid')!.getBoundingClientRect().right + 1)
+    .map((c) => c.getAttribute('data-testid')))
+  expect(cardsOut).toEqual([])
 })

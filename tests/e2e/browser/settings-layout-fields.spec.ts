@@ -135,6 +135,8 @@ test('F17 F18 F28: plugin slots line up, install rows stack', async ({ page }) =
   // Plugins live on the Apps page; the Settings nav's Plugins row links there.
   await page.getByTestId(NAV('plugin-store')).click()
   await expect(page.getByTestId('apps-page')).toBeVisible({ timeout: 20_000 })
+  // The free-form install opens from Get more's "Add from a git or npm link" card.
+  await page.getByTestId('apps-add-from-link').click()
   const install = page.locator('.settings-row:has(#plugin-source-url)')
   await expect(install).toBeVisible()
   const lines = await install.evaluate((row) => {
@@ -143,9 +145,19 @@ test('F17 F18 F28: plugin slots line up, install rows stack', async ({ page }) =
     return { labelLines: Math.round(label.getBoundingClientRect().height / 19), inputBelow: input.getBoundingClientRect().top > label.getBoundingClientRect().bottom }
   })
   expect(lines).toEqual({ labelLines: 1, inputBelow: true })
-  const configureRights = await page.locator('[data-testid^="plugin-configure-"]').evaluateAll((els) =>
-    els.filter((e) => e.getBoundingClientRect().width > 0 && !e.closest('[data-indent]')).map((e) => Math.round(e.getBoundingClientRect().right)))
-  if (configureRights.length > 1) expect(new Set(configureRights).size, JSON.stringify(configureRights)).toBe(1)
+  // The slots line up on the card grid: cards side by side share one height, so their
+  // footers (status, Open, where it comes from) sit on one line.
+  const footRows = await page.locator('[data-testid="plugin-store-installed"] .apps-grid').evaluateAll((grids) => grids.map((grid) => {
+    const byTop = new Map<number, number[]>()
+    for (const card of Array.from(grid.querySelectorAll<HTMLElement>(':scope > .apps-card'))) {
+      const top = Math.round(card.getBoundingClientRect().top)
+      const foot = card.querySelector('.apps-card-foot')!.getBoundingClientRect()
+      byTop.set(top, [...(byTop.get(top) ?? []), Math.round(foot.bottom)])
+    }
+    return Array.from(byTop.values())
+  }).flat())
+  expect(footRows.length).toBeGreaterThan(0)
+  for (const bottoms of footRows) expect(new Set(bottoms).size, JSON.stringify(bottoms)).toBe(1)
   // Back to Settings from the sidebar for the panes after it.
   await page.getByTestId('sidebar-core-app-settings').click()
   await expect(page.locator('.settings-nav')).toBeVisible({ timeout: 20_000 })

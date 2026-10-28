@@ -4,6 +4,7 @@ import fs from 'node:fs/promises'
 import net from 'node:net'
 import { expect, test } from './shortcut-test-fixture'
 import { type Page } from '@playwright/test'
+import { openPluginDetail } from './apps-store-helpers'
 
 /**
  * The Mail console is a CORE app gated on the mail PLUGIN being active.
@@ -13,11 +14,12 @@ import { type Page } from '@playwright/test'
  *   1. The sidebar carries a Mail row, and it opens the console's empty state. Slice 0 has
  *      no accounts, so the empty state is the whole screen: it must say so and say what
  *      would change it, not render a blank pane.
- *   2. Turning the mail plugin off in Settings takes the sidebar row away LIVE, with no page
+ *   2. Turning the mail plugin off on its Apps page takes the sidebar row away LIVE, with no page
  *      reload. That is the whole reason `requiresPlugin` exists: the console is core code,
  *      but it is useless without the plugin's routes, so it must not be reachable while the
  *      plugin is off. A stock install ships the IMAP provider, which DEPENDS on the base, so
- *      the switch goes through the cascade ask on the way.
+ *      the switch goes through the cascade ask on the way. The provider (`mail-imap`) is a
+ *      part of Mail: it has no card of its own and is listed on Mail's page.
  *   3. Turning it back on brings the row back and revives the dependent, also live.
  *
  * Runs against its OWN server (tests/e2e/browser/mail-app-server.ts), not the shared :3457
@@ -84,7 +86,7 @@ async function expandSidebar(page: Page): Promise<void> {
   }
 }
 
-/** The plugin list on the Apps page, from the sidebar's Apps entry. */
+/** The plugin cards on the Apps page, from the sidebar's Apps entry. */
 async function openPlugins(page: Page): Promise<void> {
   await page.getByTestId('sidebar-core-app-apps').click()
   await expect(page.getByTestId('apps-page')).toBeVisible({ timeout: 60_000 })
@@ -154,8 +156,12 @@ test('the Mail row opens an empty console, and the plugin switch takes it away a
 
   // 2. Off, and the row goes away without a reload.
   await openPlugins(page)
+  // The part has no card: Mail's card names it, and Mail's page holds it.
+  await expect(page.getByTestId('plugin-card-mail')).toContainText('IMAP Mail', { timeout: 30_000 })
+  await expect(page.getByTestId('plugin-card-mail-imap')).toHaveCount(0)
+  await openPluginDetail(page, 'mail')
   const row = page.getByTestId('plugin-row-mail')
-  const imapRow = page.getByTestId('plugin-row-mail-imap')
+  const imapRow = page.getByTestId('plugin-part-mail-imap')
   await expect(row).toBeVisible({ timeout: 30_000 })
   await expect(row).toHaveAttribute('data-plugin-status', 'active')
   await expect(imapRow).toHaveAttribute('data-plugin-status', 'active')

@@ -454,9 +454,9 @@ describe('round three: N3-2, N3-4, N3-11, N3-12, N3-13, N3-16', () => {
   it('a Sources chip whose Update lives on the Installed row says so instead of promising a button (N3-11)', () => {
     const state: UpdateState = { kind: 'available', behind: 2 }
     expect(view(state, { toRef: '2951707abcdef' }).title).toBe(`Update moves this plugin to 2951707.${CLICK_TO_CHECK_SUFFIX}`)
-    expect(view(state, { toRef: '2951707abcdef', updateElsewhere: true }).title).toBe(`Update from its Installed row moves this plugin to 2951707.${CLICK_TO_CHECK_SUFFIX}`)
-    expect(view(state, { updateElsewhere: true }).title).toBe(`Update from its Installed row moves this plugin to the newest commit on the remote.${CLICK_TO_CHECK_SUFFIX}`)
-    expect(view({ kind: 'available', toVersion: '@acme/plugin@1.3.0' }, { updateElsewhere: true }).title).toContain('Update from its Installed row moves this plugin to v1.3.0.')
+    expect(view(state, { toRef: '2951707abcdef', updateElsewhere: true }).title).toBe(`Update on its plugin page moves this plugin to 2951707.${CLICK_TO_CHECK_SUFFIX}`)
+    expect(view(state, { updateElsewhere: true }).title).toBe(`Update on its plugin page moves this plugin to the newest commit on the remote.${CLICK_TO_CHECK_SUFFIX}`)
+    expect(view({ kind: 'available', toVersion: '@acme/plugin@1.3.0' }, { updateElsewhere: true }).title).toContain('Update on its plugin page moves this plugin to v1.3.0.')
     // Other kinds do not mention the button at all, so nothing changes.
     expect(view(FIXTURES.current, { updateElsewhere: true }).title).toBe(view(FIXTURES.current).title)
   })

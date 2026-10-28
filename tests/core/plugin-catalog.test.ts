@@ -127,6 +127,15 @@ describe('mergePluginRegistry', () => {
     expect(row.status).toBe('active')
   })
 
+  it('says where an installed plugin runs from, and nothing for a catalog entry', () => {
+    const { rows } = mergePluginRegistry(
+      [gitEntry],
+      [installed({ id: 'home-grown', name: 'Home Grown', state: 'active', dir: '/home/me/.open-walnut/plugins/home-grown' })],
+    )
+    expect(rows.find((r) => r.id === 'home-grown')!.dir).toBe('/home/me/.open-walnut/plugins/home-grown')
+    expect(rows.find((r) => !r.installed)!.dir).toBeUndefined()
+  })
+
   it('hides the local fallback from both lists', () => {
     const { rows } = mergePluginRegistry(
       [{ id: 'local', name: 'Local', source: { kind: 'builtin' } }],

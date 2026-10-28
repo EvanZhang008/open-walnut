@@ -1,14 +1,15 @@
 /**
- * Apps page → a plugin's Configure: the config form's rows keep the generic settings
- * row layout inside the installed plugin list.
+ * Apps page → a plugin's detail page: the config form's rows keep the generic settings
+ * row layout in its Settings section.
  *
- * The form's rows are rendered INSIDE `.plugin-store-installed`, whose own row rules
- * (plugin-updates.css, settings-sections-addons.css) once reached them through a
+ * The form's rows used to be rendered INSIDE `.plugin-store-installed`, whose own row
+ * rules (plugin-updates.css, settings-sections-addons.css) once reached them through a
  * descendant combinator. A stacked list field then rendered its label and help
  * centred, a 320px gap under them (a row-direction basis applied to a column), and a
  * small textarea near the bottom; a wide text field dropped under its label and sat
- * flush right. This spec measures both rows in a wide group (600px or more) and,
- * after a live resize, in a narrow one.
+ * flush right. The form now lives on the plugin's own page, always shown; this spec
+ * measures both rows there in a wide group (600px or more) and, after a live resize,
+ * in a narrow one.
  *
  * Every plugin endpoint is a page.route fixture with neutral names, and nothing is
  * saved, so the shared fixture's config is never touched.
@@ -17,6 +18,7 @@
  * with `PW_WEBKIT=1 ... --project=webkit`.
  */
 import { test, expect, type Page, type Route } from '@playwright/test'
+import { backToApps, openPluginDetail } from './apps-store-helpers'
 
 if (process.env.PW_WEBKIT) test.use({ browserName: 'webkit' })
 test.use({ viewport: { width: 1280, height: 900 } })
@@ -107,13 +109,15 @@ function expectStackedList(g: RowGeometry) {
 
 async function openConfig(page: Page) {
   await page.goto('/')
-  // The plugin list lives on the Apps page, reached from the sidebar's Apps entry.
+  // Plugins live on the Apps page, reached from the sidebar's Apps entry; the form is on
+  // the plugin's own page, opened from its card, with no Configure to press.
   const apps = page.getByTestId('sidebar-core-app-apps')
   await expect(apps).toBeVisible({ timeout: 30_000 })
   await apps.click()
   await expect(page.getByTestId('apps-page')).toBeVisible({ timeout: 30_000 })
   await expect(apps).toHaveClass(/\bactive\b/)
-  await page.getByTestId(`plugin-configure-${PLUGIN}`).click()
+  await openPluginDetail(page, PLUGIN)
+  await expect(page.getByTestId(`plugin-configure-${PLUGIN}`)).toHaveCount(0)
   const form = page.getByTestId(`plugin-config-${PLUGIN}`)
   await expect(form.locator(`#${LIST_FIELD}`)).toBeVisible({ timeout: 30_000 })
   await expect(form.locator(`#${TEXT_FIELD}`)).toBeVisible()
@@ -128,7 +132,7 @@ async function shot(page: Page, name: string) {
   })
 }
 
-test('config form rows keep the generic row layout inside the plugin list, wide and narrow', async ({ page }) => {
+test('config form rows keep the generic row layout on the plugin page, wide and narrow', async ({ page }) => {
   await mockPlugins(page)
   await openConfig(page)
 
@@ -142,10 +146,21 @@ test('config form rows keep the generic row layout inside the plugin list, wide 
   expect(t.control.top < t.help.bottom && t.control.bottom > t.label.top, 'text field shares the copy line').toBe(true)
   await shot(page, 'wide')
 
-  // The list's own rows still get the list layout: the fix scopes those rules, it does not drop them.
-  const listRow = page.getByTestId('plugin-row-quiet-helper')
-  expect(await listRow.evaluate((el) => getComputedStyle(el).flexWrap)).toBe('wrap')
-  expect(await listRow.locator('.settings-row-copy').evaluate((el) => getComputedStyle(el).flexBasis)).toBe('320px')
+  // The form sits in the page's own Settings section, never inside the installed grid,
+  // so no rule written for that grid can reach its rows.
+  const form = page.getByTestId(`plugin-config-${PLUGIN}`)
+  expect(await form.evaluate((el, id) => !!el.closest(`[data-testid="plugin-settings-${id}"]`), PLUGIN)).toBe(true)
+  expect(await form.evaluate((el) => !!el.closest('.plugin-store-installed'))).toBe(false)
+  // A plugin with nothing to set has a card and a page with no Settings section at all.
+  await backToApps(page)
+  await expect(page.getByTestId('plugin-card-quiet-helper')).toBeVisible()
+  await openPluginDetail(page, 'quiet-helper')
+  await expect(page.getByTestId('plugin-settings-quiet-helper')).toHaveCount(0)
+  await expect(page.getByTestId('plugin-config-quiet-helper')).toHaveCount(0)
+  await backToApps(page)
+  await openPluginDetail(page, PLUGIN)
+  await expect(form.locator(`#${LIST_FIELD}`)).toBeVisible({ timeout: 30_000 })
+  await form.scrollIntoViewIfNeeded()
 
   // Narrow group (under 600px), after a live resize: the text field drops under its
   // copy, from the copy's left edge, across the row. The Apps page is wider than the old

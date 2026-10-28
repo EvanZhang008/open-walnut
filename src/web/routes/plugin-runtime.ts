@@ -286,6 +286,13 @@ export function createPluginRuntimeRouter(deps: PluginRuntimeRouterDeps): Router
           sourcesUnavailable = true
         }
       }
+      // Where each plugin's code loads from, for the Apps detail page. Only this host knows;
+      // a replica's lifecycle list is the Mac's, so it says nothing rather than a wrong path.
+      const dirs = cloudMode
+        ? new Map<string, string>()
+        : new Map((await Promise.all(lifecycle.map(async (record) => {
+          try { return [record.id, await iconDirs.installed(record.id)] as const } catch { return [record.id, undefined] as const }
+        }))).filter((entry): entry is readonly [string, string] => typeof entry[1] === 'string' && entry[1] !== ''))
       const installed: InstalledPluginFacts[] = lifecycle.map((record) => {
         const live = deps.registry.get(record.id)
         const tombstone = deps.registry.getTombstone(record.id)
@@ -326,6 +333,7 @@ export function createPluginRuntimeRouter(deps: PluginRuntimeRouterDeps): Router
           ...(linkedScanSkipped && !record.builtin && !record.bundled && !owner && !linkedCheckouts.has(record.id)
             ? { linkedScanSkipped: true }
             : {}),
+          ...(dirs.has(record.id) ? { dir: dirs.get(record.id) } : {}),
         }
       })
       const merged: PluginRegistryResult = mergePluginRegistry(catalog, installed)

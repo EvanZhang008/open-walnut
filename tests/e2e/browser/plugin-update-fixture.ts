@@ -10,8 +10,9 @@ import net from 'node:net'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { promisify } from 'node:util'
-import { expect, type Page } from '@playwright/test'
+import { expect, type Locator, type Page } from '@playwright/test'
 import { discoverBrowserFixture } from './codex-test-audit'
+import { backToApps, openPluginDetail } from './apps-store-helpers'
 
 const execFileAsync = promisify(execFile)
 
@@ -79,10 +80,12 @@ export async function openPlugins(page: Page): Promise<void> {
 
 /** The fixture git source, installed through the UI unless already present. */
 export async function ensureSourceInstalled(page: Page, home: string): Promise<void> {
-  // The Sources group renders with the registry: wait for rows before deciding it is absent.
-  await expect(page.locator('[data-testid^="plugin-row-"]').first()).toBeVisible({ timeout: 30_000 })
+  // The Sources group renders with the registry: wait for the plugin cards before deciding it is absent.
+  await expect(page.locator('[data-testid="plugin-store-installed"] .apps-card').first()).toBeVisible({ timeout: 30_000 })
   if (await page.getByTestId('plugin-source-native-plugin-repo').count()) return
   const store = page.locator('#plugin-store')
+  // The free-form install form opens from Get more's "Add from a git or npm link" card.
+  if (!(await store.locator('#plugin-source-url').count())) await store.getByTestId('apps-add-from-link').click()
   await store.locator('#plugin-source-url').fill(pathToFileURL(path.join(home, 'native-plugin-repo')).href)
   await store.getByTestId('plugin-trust-confirm').check()
   await store.getByRole('button', { name: 'Add', exact: true }).click()
@@ -108,4 +111,25 @@ export async function pickTheme(page: Page, label: 'Light' | 'Dark'): Promise<vo
   await expect(page.locator('html')).toHaveAttribute('data-theme', label.toLowerCase(), { timeout: 15_000 })
   await page.getByTestId('sidebar-core-app-apps').click()
   await expect(page.getByTestId('plugin-store-installed')).toBeVisible({ timeout: 30_000 })
+}
+
+/**
+ * A plugin's update chip, Check again, Update button and feedback live in the Version
+ * section of its detail page. Opens that page from its card (the Apps page must be on the
+ * grid) and returns the section.
+ */
+export async function openVersion(page: Page, pluginId: string): Promise<Locator> {
+  await openPluginDetail(page, pluginId)
+  const version = page.getByTestId(`plugin-version-${pluginId}`)
+  await expect(version).toBeVisible({ timeout: 30_000 })
+  return version
+}
+
+/** Each plugin's chip, read on its own page, until it carries `kind`; back on the grid after. */
+export async function expectChipKinds(page: Page, ids: readonly string[], kind: string): Promise<void> {
+  for (const id of ids) {
+    await openVersion(page, id)
+    await expect(page.getByTestId(`update-chip-${id}`), id).toHaveAttribute('data-update-kind', kind, { timeout: 30_000 })
+    await backToApps(page)
+  }
 }

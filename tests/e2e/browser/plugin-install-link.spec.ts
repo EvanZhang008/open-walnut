@@ -9,7 +9,7 @@ import { expect, test, type Page } from '@playwright/test'
  * by each way it arrives (web/src/utils/open-link.ts), and installing for real:
  *
  *   1. Opened as an address (`/#open-link=<link>`, what the Mac app loads for a
- *      link when no page is open): the Plugin Store opens on an "Install from a
+ *      link when no page is open): the Apps page opens on an "Install from a
  *      link" card, in view without scrolling, trust off, Install disabled, and the
  *      fragment is gone from the address bar. Cancel installs nothing.
  *   2. Handed to a page that is already open, the way the Mac app does
@@ -153,11 +153,13 @@ test('2. the app hands a link to an open page in place; Install brings in the wh
   await page.getByTestId('plugin-link-install').click()
   await expect(page.getByTestId('plugin-link-request')).toHaveCount(0, { timeout: 60_000 })
   await expect(page.locator('#plugin-store')).toContainText('found 2 plugins')
+  // Each plugin of the pack is its own card in the installed list, and on.
   for (const id of ['pack-notes', 'pack-board']) {
-    await expect(page.getByTestId(`plugin-row-${id}`)).toHaveAttribute('data-plugin-status', 'active', { timeout: 30_000 })
+    const card = page.getByTestId('plugin-store-installed').getByTestId(`plugin-card-${id}`)
+    await expect(card).toHaveAttribute('data-plugin-status', 'active', { timeout: 30_000 })
   }
   expect(await configSources()).toContain(fixture!.packUrl)
-  await page.getByTestId('plugin-row-pack-notes').scrollIntoViewIfNeeded()
+  await page.getByTestId('plugin-card-pack-notes').scrollIntoViewIfNeeded()
   await pause(page, 2000)
   await page.screenshot({ path: `/tmp/plugin-install-link/${test.info().project.name}-2-installed.png` })
 })

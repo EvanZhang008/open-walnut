@@ -2,19 +2,23 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import net from 'node:net'
 import { expect, test, type Page } from '@playwright/test'
 import { bunRuntime } from '../../helpers/bun-runtime.js'
+import { backToApps, openBuiltinDetail, openPluginDetail } from './apps-store-helpers'
 
 /**
  * The Apps page (/apps): every built-in app, every plugin and its Apps, and where to
- * get or make more, in one place the sidebar points at.
+ * get or make more, in one place the sidebar points at. It is a store: one card each,
+ * and a card opens a detail page that holds the switch.
  *
  * What it pins, through real clicks from the sidebar:
  *
  *   1. The sidebar's Apps entry opens it and is the active entry there, but NOT on a
  *      plugin App's own page (/apps/<plugin>~<app>), which lives under the same prefix.
- *   2. A built-in's switch takes it off the rail and puts it back: Tasks off removes the
- *      sidebar's Tasks entry, a reload keeps it off, on brings it back. Org is a rail item
- *      rather than a registry app, and its switch works the same way.
- *   3. Home, Apps and Settings can never leave the rail, so their tiles have no switch.
+ *   2. A built-in's switch (on its detail page) takes it off the rail and puts it back:
+ *      Tasks off removes the sidebar's Tasks entry, a reload keeps it off, on brings it
+ *      back. Org is a rail item rather than a registry app, and its switch works the same
+ *      way. The cards carry no switch; they say whether each is on the sidebar.
+ *   3. Home, Apps and Settings can never leave the rail, so their pages show a lock
+ *      where the others have a switch.
  *   4. A category chip narrows the page to that one group of plugins; the search box
  *      says when nothing matches, and Clear search brings everything back.
  *   5. The old Settings deep link (`/settings#plugin-store`) forwards here.
@@ -108,7 +112,7 @@ async function openApps(page: Page): Promise<void> {
   await expect(page).toHaveURL(/\/apps$/)
   await expect(page.getByTestId('apps-page')).toBeVisible({ timeout: 60_000 })
   // The plugin list has answered (its chips and counts come from the registry).
-  await expect(page.locator('[data-testid^="plugin-row-"]').first()).toBeVisible({ timeout: 60_000 })
+  await expect(page.locator('[data-testid^="plugin-card-"]').first()).toBeVisible({ timeout: 60_000 })
 }
 
 test('the sidebar opens Apps, and its entry is active there but not on a plugin App page', async ({ page }) => {
@@ -125,10 +129,11 @@ test('the sidebar opens Apps, and its entry is active there but not on a plugin 
   await expect(appsEntry).toHaveClass(/\bactive\b/)
   await expect(page.getByRole('heading', { level: 1, name: 'Apps' })).toBeVisible()
 
-  // A plugin App's page lives under /apps/ too, and is not the Apps page.
-  const tile = page.getByTestId(`apps-app-${TIME_APP}`)
-  await expect(tile).toBeVisible({ timeout: 30_000 })
-  await page.getByTestId(`apps-app-open-${TIME_APP}`).click()
+  // A plugin App's page lives under /apps/ too, and is not the Apps page. The card's
+  // Open goes straight there.
+  const open = page.getByTestId('plugin-card-open-walnut-time')
+  await expect(open).toBeVisible({ timeout: 30_000 })
+  await open.click()
   await expect(page).toHaveURL(/\/apps\/walnut-time~main/)
   await expect(page.getByTestId('apps-page')).toHaveCount(0)
   await expect(appsEntry).not.toHaveClass(/\bactive\b/)
@@ -136,25 +141,39 @@ test('the sidebar opens Apps, and its entry is active there but not on a plugin 
   // And back to Apps from the same entry.
   await openApps(page)
   await expect(appsEntry).toHaveClass(/\bactive\b/)
+
+  // The plugin's own page lists its App, with Open, and is still the Apps page.
+  await openPluginDetail(page, 'walnut-time')
+  await expect(appsEntry).toHaveClass(/\bactive\b/)
+  await expect(page.getByTestId(`apps-app-${TIME_APP}`)).toBeVisible({ timeout: 30_000 })
+  await page.getByTestId(`apps-app-open-${TIME_APP}`).click()
+  await expect(page).toHaveURL(/\/apps\/walnut-time~main/)
+  await expect(page.getByTestId('apps-page')).toHaveCount(0)
+  await expect(appsEntry).not.toHaveClass(/\bactive\b/)
   expect(pageErrors).toEqual([])
 })
 
 test('a built-in switch takes it off the sidebar, a reload keeps it off, and on brings it back', async ({ page }) => {
   await home(page)
   await openApps(page)
-  const tasksTile = page.getByTestId('apps-builtin-tasks')
+  const tasksCard = page.getByTestId('apps-builtin-tasks')
   const tasksSwitch = page.getByTestId('apps-builtin-toggle-tasks')
   const tasksEntry = page.getByTestId('sidebar-core-app-tasks')
-  await expect(tasksTile).toHaveAttribute('data-shown', 'true')
-  await expect(tasksSwitch).toHaveAttribute('aria-checked', 'true')
+  await expect(tasksCard).toHaveAttribute('data-shown', 'true')
+  await expect(page.getByTestId('apps-builtin-tasks-status')).toHaveText('On the sidebar')
   await expect(tasksEntry).toBeVisible()
+  // The card has no switch of its own: it lives on the page the card opens.
+  await expect(tasksCard.locator('[role="switch"]')).toHaveCount(0)
+  await openBuiltinDetail(page, 'tasks')
+  await expect(tasksSwitch).toHaveAttribute('aria-checked', 'true')
 
   // Off: gone from the sidebar at once.
   await tasksSwitch.click()
-  await expect(tasksTile).toHaveAttribute('data-shown', 'false')
   await expect(tasksSwitch).toHaveAttribute('aria-checked', 'false')
   await expect(tasksEntry).toHaveCount(0)
-  await expect(tasksTile).toContainText('Hidden from the sidebar')
+  await backToApps(page)
+  await expect(tasksCard).toHaveAttribute('data-shown', 'false')
+  await expect(page.getByTestId('apps-builtin-tasks-status')).toHaveText('Only in Apps')
 
   // A reload keeps the choice.
   await page.reload()
@@ -164,34 +183,51 @@ test('a built-in switch takes it off the sidebar, a reload keeps it off, and on 
   await expect(tasksEntry).toHaveCount(0)
 
   // On: back on the sidebar.
-  await page.getByTestId('apps-builtin-toggle-tasks').click()
-  await expect(page.getByTestId('apps-builtin-tasks')).toHaveAttribute('data-shown', 'true')
+  await openBuiltinDetail(page, 'tasks')
+  await expect(tasksSwitch).toHaveAttribute('aria-checked', 'false')
+  await tasksSwitch.click()
+  await expect(tasksSwitch).toHaveAttribute('aria-checked', 'true')
   await expect(tasksEntry).toBeVisible({ timeout: 15_000 })
+  await backToApps(page)
+  await expect(page.getByTestId('apps-builtin-tasks')).toHaveAttribute('data-shown', 'true')
 
   // Org is a rail item, not a registry app; its switch does the same.
   const orgEntry = page.getByTestId('sidebar-org')
   await expect(orgEntry).toBeVisible()
+  await openBuiltinDetail(page, 'org')
   await page.getByTestId('apps-builtin-toggle-org').click()
-  await expect(page.getByTestId('apps-builtin-org')).toHaveAttribute('data-shown', 'false')
   await expect(orgEntry).toHaveCount(0)
+  await backToApps(page)
+  await expect(page.getByTestId('apps-builtin-org')).toHaveAttribute('data-shown', 'false')
+  await openBuiltinDetail(page, 'org')
   await page.getByTestId('apps-builtin-toggle-org').click()
-  await expect(page.getByTestId('apps-builtin-org')).toHaveAttribute('data-shown', 'true')
   await expect(orgEntry).toBeVisible({ timeout: 15_000 })
+  await backToApps(page)
+  await expect(page.getByTestId('apps-builtin-org')).toHaveAttribute('data-shown', 'true')
 })
 
-test('Home, Apps and Settings always stay on the sidebar: their tiles have no switch', async ({ page }) => {
+test('Home, Apps and Settings always stay on the sidebar: their pages show a lock, not a switch', async ({ page }) => {
   await home(page)
   await openApps(page)
   for (const id of ['home', 'apps', 'settings']) {
-    const tile = page.getByTestId(`apps-builtin-${id}`)
-    await expect(tile, id).toBeVisible()
-    await expect(tile, id).toHaveAttribute('data-shown', 'true')
+    const card = page.getByTestId(`apps-builtin-${id}`)
+    await expect(card, id).toBeVisible()
+    await expect(card, id).toHaveAttribute('data-shown', 'true')
+    await expect(page.getByTestId(`apps-builtin-${id}-status`), id).toHaveText('Always on the sidebar')
+    await expect(card.locator('[role="switch"]'), id).toHaveCount(0)
+    await openBuiltinDetail(page, id)
+    const detail = page.getByTestId('builtin-detail')
     await expect(page.getByTestId(`apps-builtin-toggle-${id}`), id).toHaveCount(0)
-    await expect(tile.locator('[role="switch"]'), id).toHaveCount(0)
+    await expect(detail.locator('[role="switch"]'), id).toHaveCount(0)
+    await expect(detail.getByRole('img', { name: /always stays on the sidebar/ }), id).toBeVisible()
+    await backToApps(page)
   }
-  // Every other built-in has one.
+  // Every other built-in has one, on its page and never on its card.
   for (const id of ['tasks', 'routines', 'notes', 'org']) {
+    await expect(page.getByTestId(`apps-builtin-${id}`).locator('[role="switch"]'), id).toHaveCount(0)
+    await openBuiltinDetail(page, id)
     await expect(page.getByTestId(`apps-builtin-toggle-${id}`), id).toHaveCount(1)
+    await backToApps(page)
   }
 })
 

@@ -51,7 +51,7 @@ export async function runBundledAction(
   row: { id: string; name: string },
   action: 'install' | 'remove',
   hooks: BundledActionHooks,
-): Promise<void> {
+): Promise<boolean> {
   hooks.setBusy(hooks.busyKey);
   hooks.setError(null);
   hooks.setNotice(null);
@@ -59,12 +59,14 @@ export async function runBundledAction(
     const result = action === 'install' ? await installBundledPlugin(row.id) : await removeBundledPlugin(row.id);
     if (!result.ok) {
       hooks.setError(result.dependents ? removeRefusedMessage(row.name, result.dependents, hooks.nameOf) : result.error);
-      return;
+      return false;
     }
-    hooks.setNotice(action === 'install' ? installedNotice(row.name, result.state) : `Removed ${row.name}; it is back under Available.`);
+    hooks.setNotice(action === 'install' ? installedNotice(row.name, result.state) : `Removed ${row.name}; it is back under Get more.`);
     await hooks.onChanged();
+    return true;
   } catch (err) {
     hooks.setError(err instanceof Error ? err.message : String(err));
+    return false;
   } finally {
     hooks.setBusy(null);
   }
@@ -73,8 +75,8 @@ export async function runBundledAction(
 /** The notice after an Install: honest about a plugin that loaded but is not running yet. */
 export function installedNotice(name: string, state: string | undefined): string {
   if (!state || state === 'active' || state === 'activating') return `Installed ${name}.`;
-  if (state === 'needs-config') return `Installed ${name}; use Configure on its row to finish setting it up.`;
-  return `Installed ${name}; it is not running yet, its row says why.`;
+  if (state === 'needs-config') return `Installed ${name}; open it to finish setting it up.`;
+  return `Installed ${name}; it is not running yet, its page says why.`;
 }
 
 /** The sentence for a Remove refused because other plugins run on this one. */

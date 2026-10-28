@@ -6,9 +6,9 @@
  *   - `PluginSourcesGroup`: the Sources list under the plugins. A source is not a plugin
  *     (one repo can carry several), and it is the source that gets updated or removed, so
  *     it keeps its own cards. Same chip, same row key and ONE Update per slug page-wide as
- *     the Installed rows, so scrolling down never lands on an older design.
+ *     the plugin pages, so scrolling down never lands on an older design.
  *
- * Split out of PluginStoreSection.tsx to keep that file about the plugin rows.
+ * Rendered under Get more on the Apps page (apps-page/PluginStoreGrid.tsx).
  */
 import { useEffect, useState } from 'react';
 import type { UsePluginUpdates } from '@/hooks/usePluginUpdates';
@@ -155,7 +155,7 @@ export function UpdatesHead({ updates, slowLoad, onCheckAll }: {
 
 export interface PluginSourcesGroupProps {
   sources: PluginSource[];
-  /** Slugs an Installed row already carries: that row owns the Update verb, the card does not. */
+  /** Slugs an installed plugin already carries: its page owns the Update verb, the card does not. */
   ownedSlugs: ReadonlySet<string>;
   updates: UsePluginUpdates;
   /** The section's busy key ('add' | plugin id | source slug). */
@@ -179,7 +179,7 @@ export function PluginSourcesGroup(props: PluginSourcesGroupProps) {
       data-testid="plugin-store-sources"
     >
       {sources.map((source) => {
-        // The Installed row owns the verbs (Update AND Remove, N3-17) while a plugin from
+        // The plugin page owns the verbs (Update AND Remove, N3-17) while a plugin from
         // this source is loaded; the row here offers Restore / Update / Remove only when no
         // plugin row does (missing, failed load). Copy install link is its own verb.
         const rowId = `source-${source.slug}`;

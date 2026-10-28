@@ -144,3 +144,14 @@ describe('GET /api/plugin-runtime/registry: iconUrl', () => {
     }
   })
 })
+
+describe('GET /api/plugin-runtime/registry: dir', () => {
+  it('names the folder each installed plugin runs from, and none for a row not on this machine', async () => {
+    const response = await request(setup()).get('/api/plugin-runtime/registry').expect(200)
+    const byId = new Map((response.body.rows as Array<{ id: string; dir?: string }>).map((row) => [row.id, row]))
+    expect(byId.get('acme-plugin')?.dir).toBe(path.join(base, 'plugins', 'acme-plugin'))
+    expect(byId.get('plain-plugin')?.dir).toBe(path.join(base, 'plugins', 'plain-plugin'))
+    expect(byId.get('remote-plugin')?.dir).toBeUndefined()
+    expect(byId.get('store-plugin')?.dir).toBeUndefined()
+  })
+})
