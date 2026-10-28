@@ -294,6 +294,23 @@ describe('host server manager', () => {
     expect(ids()).toEqual(['+devbox', '-devbox', '+devbox'])
   })
 
+  // 2026-10-28 CI: the release threw (the expose runtime was still loading) and nothing caught it.
+  it('a disconnect whose tunnel release fails leaves no unhandled rejection', async () => {
+    const unhandled: unknown[] = []
+    const onUnhandled = (reason: unknown): void => { unhandled.push(reason) }
+    process.on('unhandledRejection', onUnhandled)
+    try {
+      const m = createHostServerManager(deps({ releaseTunnelPort: async () => { throw new ReferenceError('the expose runtime is still loading') } }))
+      await m.connected(fakeHost())
+      m.disconnected('devbox')
+      await new Promise((r) => setTimeout(r, 20))
+      expect(unhandled).toEqual([])
+      expect(m.view('devbox').phase).toBe('waiting-for-host')
+    } finally {
+      process.off('unhandledRejection', onUnhandled)
+    }
+  })
+
   it('sends the tunnel as a provider definition the host can run', async () => {
     registerExposeProvider('plugin-x', {
       id: 'mytunnel', title: 'My tunnel', command: '~/bin/tunnel', args: ['{port}', '{name}'],

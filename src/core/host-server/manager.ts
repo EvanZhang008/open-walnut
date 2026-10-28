@@ -707,7 +707,10 @@ export function createHostServerManager(deps: ManagerDeps) {
     disconnected(hostKey: string): void {
       stopPoll(hostKey)
       dropLink(hostKey)
-      void deps.releaseTunnelPort(`host-server:${hostKey}`)
+      // Not awaited, so its failure is caught here: uncaught, it was an unhandled rejection (2026-10-28 CI).
+      void deps.releaseTunnelPort(`host-server:${hostKey}`).catch((err: unknown) => {
+        log.session.warn('host server: the tunnel port was not released on disconnect', { host: hostKey, error: err instanceof Error ? err.message : String(err) })
+      })
       if (view(hostKey).enabled) set(hostKey, { phase: 'waiting-for-host', message: 'The host is not connected right now.' })
     },
     reconcile,

@@ -649,10 +649,14 @@ if the resolved pair is invalid, the Mac's pair is kept and the other is in the 
   the other into the conflict log and the letter.
 - Requests: status only moves forward; a settle the Mac already has is a no-op.
 
-The letter: at most ONE inbox letter per drain of one host, sent only when the drain has a real conflict
-(a hunk or field both sides changed differently, a delete that beat an edit, a refused or failed write).
-Clean merges, fast-forwards and replays send nothing (inbox rule, CLAUDE.md "The inbox is for what needs
-the user"). The letter lists each item with a link (note, conflict copy, task) and what was kept.
+The letter: at most ONE inbox letter per drain of one host, sent only when the drain has a conflict
+that needs the user (words one side wrote that were not kept: a hunk, a title, tags; a move the Mac
+would not take; a delete that beat an edit; a refused or failed write). Clean merges, fast-forwards,
+replays and task settings both sides changed (a phase, a priority, a date, a place, a link: the newer
+change wins, a tie keeps the Mac's) send nothing; those stay in the conflict log, and a letter that is
+sent says how many were settled (inbox rule, CLAUDE.md "The inbox is for what needs the user";
+2026-10-28: two letters for phase conflicts the merge had already settled). The letter lists each item
+with a link (note, conflict copy, task) and what was kept.
 
 ## 8. Ask Walnut and sessions while the Mac is away
 

@@ -1,9 +1,10 @@
 /**
  * The conflict letter of one host drain (docs/plan/walnut-replica-servers-impl.md
  * section 7, "The letter"): at most ONE inbox letter per drain of one host, sent only
- * when the drain has a real conflict (a field both sides changed differently, a delete
- * that beat an edit, a refused or failed write, a dropped device). Clean merges,
- * fast-forwards and replays send nothing (the inbox is for what needs the user).
+ * when the drain has a conflict that needs the user (conflictNeedsUser: words one side
+ * wrote that were not kept, a delete that beat an edit, a refused or failed write, a
+ * dropped device). Clean merges, fast-forwards, replays and settings both sides changed
+ * (settled by the newer change) send nothing (the inbox is for what needs the user).
  *
  * Built from the conflict log (conflict-log.ts), never from memory, so the letter a boot
  * resends is the same one. The body is capped at 16 KB; every item links to its task
@@ -13,6 +14,7 @@
 import { log } from '../../logging/index.js';
 import { conflictLetterMark, conflictLogFrom, removeConflictLog, unsentConflictLogs, type ConflictEntry, type ConflictLog, type ConflictLogFile } from './conflict-log.js';
 import { LEDGER_TTL_MS } from './ledger.js';
+import { TEXT_TASK_FIELDS } from './task-fields.js';
 
 /** Largest letter body; the full values stay in the conflict log the letter links to. */
 export const LETTER_BODY_MAX = 16 * 1024;
@@ -24,6 +26,10 @@ export interface ConflictLetter {
   taskRefs: string[];
   /** Every link the body holds, for tests and the log line. */
   links: string[];
+  /** Entries that need the user, the ones the body lists (the cap may cut it short), and those settled by their own rule (in the log only). */
+  needed: number;
+  listed: number;
+  settled: number;
 }
 
 /** Where the full entry `n` of a drain's log is served. */
@@ -95,35 +101,61 @@ export function noteLink(rel: string): string {
   return `/notes?path=${encodeURIComponent(rel)}`;
 }
 
+/** Task fields that hold words someone wrote: the merged texts, the title, the tags. */
+const WORD_TASK_FIELDS = new Set([...TEXT_TASK_FIELDS, 'title', 'tags']);
+
+/**
+ * Does this conflict need the user? A setting both sides changed (a phase, a priority, a
+ * date, a pin) is settled by the merge's own rule, the newer change wins, and stays in the
+ * log with no letter (2026-10-28: two letters for phase conflicts the merge had already
+ * settled). Words one side wrote that were not kept, a move the Mac would not take, and
+ * every other kind (a refusal, a drop, a delete that beat an edit, a note, a memory, a
+ * chat name) still need the user.
+ */
+export function conflictNeedsUser(e: ConflictEntry): boolean {
+  if (e.kind !== 'task-field') return true;
+  if (e.why === 'invalid-pair') return true;
+  return e.field === undefined || WORD_TASK_FIELDS.has(e.field);
+}
+
 /** The letter for a log, or null when the log holds nothing that needs the user. */
 export function buildConflictLetter(file: ConflictLogFile): ConflictLetter | null {
-  if (file.entries.length === 0) return null;
-  const n = file.entries.length;
+  // The index in the log, for the entry links: settled entries stay in the log, unlisted.
+  const needed = file.entries.flatMap((e, i) => (conflictNeedsUser(e) ? [i] : []));
+  if (needed.length === 0) return null;
+  const n = needed.length;
+  const settled = file.entries.length - n;
   const subject = `${n} change${n === 1 ? '' : 's'} made while your Mac was away did not merge cleanly`;
   const who = file.hostKey === 'companion' ? 'your cloud companion' : `host ${file.hostKey}`;
   const head = `While your Mac was away, ${who} saved changes. When they were applied, these needed a choice. Each item says what was kept; the other side is kept in full in the linked entry.\n\n`;
+  const all = `/api/v1/offline-conflicts/${encodeURIComponent(file.drainId)}`;
   const links: string[] = [];
   const taskRefs: string[] = [];
+  const one = settled === 1;
+  const settledLine = settled > 0
+    ? `\n${settled} other change${one ? '' : 's'} to task settings (a phase, a priority, a date, a place, a link) ${one ? 'was' : 'were'} settled automatically: the newer change was kept (on a tie, the Mac's). ${one ? 'It needs' : 'They need'} nothing from you and ${one ? 'is' : 'are'} in [the full list](${all}).\n`
+    : '';
+  const moreLine = (more: number): string => `\n${more} more are in [the full list](${all}).\n`;
+  // Room for the tail: the settled line and the longest "more" line it may need.
+  const budget = LETTER_BODY_MAX - Buffer.byteLength(settledLine) - Buffer.byteLength(moreLine(n));
   let body = head;
   let shown = 0;
-  for (let i = 0; i < n; i++) {
+  for (const i of needed) {
     const e = file.entries[i];
     const entryLink = conflictEntryLink(file.drainId, i);
     const target = e.taskId ? `[task ${e.taskId}](${taskLink(e.taskId)})` : e.boardTaskId ? `[Board of ${e.boardTaskId}](${taskLink(e.boardTaskId)})`
       : e.notePath ? `[note ${e.notePath}](${noteLink(e.notePath)})` : memoryDocName(e) ?? (e.recordKind === 'conversation-edit' ? 'a chat' : e.recordKind === 'letter' ? 'a letter to you' : 'a change');
     const line = `- ${target}: ${itemLine(e)} [Full entry](${entryLink})\n`;
-    if (Buffer.byteLength(body) + Buffer.byteLength(line) > LETTER_BODY_MAX - 200) break;
+    if (Buffer.byteLength(body) + Buffer.byteLength(line) > budget) break;
     body += line;
     links.push(entryLink);
     if (e.taskId) { links.push(taskLink(e.taskId)); if (!taskRefs.includes(e.taskId)) taskRefs.push(e.taskId); }
     shown++;
   }
-  if (shown < n) {
-    const all = `/api/v1/offline-conflicts/${encodeURIComponent(file.drainId)}`;
-    body += `\n${n - shown} more are in [the full list](${all}).\n`;
-    links.push(all);
-  }
-  return { subject, markdown: body, taskRefs: taskRefs.slice(0, 20), links };
+  if (shown < n) body += moreLine(n - shown);
+  body += settledLine;
+  if (shown < n || settled > 0) links.push(all);
+  return { subject, markdown: body, taskRefs: taskRefs.slice(0, 20), links, needed: n, listed: shown, settled };
 }
 
 /** Letters being sent now, by drain id: a second send of the same log joins the first. */
@@ -153,7 +185,16 @@ async function sendOnce(logRef: ConflictLog): Promise<boolean> {
   const onDisk = conflictLetterMark(logRef.drainId);
   if (onDisk) { logRef.data.letter = onDisk; knownSent.add(logRef.drainId); return true; }
   const letter = buildConflictLetter(logRef.data);
-  if (!letter) return true;
+  if (!letter) {
+    // Every entry was settled by its own rule: the log keeps them, and the mark keeps a later
+    // drain (or an older Walnut, which letters every entry) from lettering them.
+    if (logRef.data.entries.length > 0) {
+      logRef.markSent(undefined, { none: true });
+      knownSent.add(logRef.drainId);
+      log.session.info('offline drain: conflicts settled by their own rules, no letter', { drainId: logRef.drainId, host: logRef.data.hostKey, settled: logRef.data.entries.length });
+    }
+    return true;
+  }
   try {
     const { sendLetter } = await import('../human-inbox/store.js');
     const sent = await sendLetter({
@@ -165,7 +206,7 @@ async function sendOnce(logRef: ConflictLog): Promise<boolean> {
     });
     logRef.markSent((sent as { id?: string }).id);
     knownSent.add(logRef.drainId);
-    log.session.info('offline drain: conflict letter sent', { drainId: logRef.drainId, host: logRef.data.hostKey, items: logRef.data.entries.length });
+    log.session.info('offline drain: conflict letter sent', { drainId: logRef.drainId, host: logRef.data.hostKey, needed: letter.needed, listed: letter.listed, settled: letter.settled });
     return true;
   } catch (err) {
     log.session.warn('offline drain: conflict letter not sent; the next drain sends it', { drainId: logRef.drainId, error: err instanceof Error ? err.message : String(err) });
@@ -176,7 +217,8 @@ async function sendOnce(logRef: ConflictLog): Promise<boolean> {
 /**
  * At the start of every drain: a log whose letter was never marked sent (a drain that
  * threw after a conflict was durable, a letter that failed, a crash) is lettered now,
- * once. A log whose drain still runs is left to that drain.
+ * once, or marked none when nothing in it needs the user. A log whose drain still runs is
+ * left to that drain. Returns how many logs it settled either way.
  */
 export async function resendUnsentConflictLetters(now = Date.now()): Promise<number> {
   let sent = 0;

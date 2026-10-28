@@ -104,11 +104,13 @@ describe('offline handover letter', () => {
     const letters = (await listLetters()).letters
     expect(letters.length).toBe(before + 1)
     const letter = letters.find((l) => /did not merge cleanly/.test(l.subject))!
-    expect(letter.subject).toContain('80 changes')
+    // The 40 priorities were settled by the newer change: in the log, not listed in the letter.
+    expect(letter.subject).toContain('40 changes')
     const detail = await getLetter(letter.id)
     const markdown = String((detail as unknown as { body?: string | null }).body ?? '')
     expect(markdown.length).toBeGreaterThan(0)
     expect(Buffer.byteLength(markdown)).toBeLessThanOrEqual(LETTER_BODY_MAX)
+    expect(markdown).toContain('40 other changes to task settings (a phase, a priority, a date, a place, a link) were settled automatically: the newer change was kept (on a tie, the Mac\'s). They need nothing from you')
     const links = [...markdown.matchAll(/\]\((\/[^)\s"]+)\)/g)].map((m) => m[1])
     expect(links.length).toBeGreaterThan(0)
     const app = express()
@@ -128,7 +130,7 @@ describe('offline handover letter', () => {
         const res = await fetch(`${base}${p}`)
         expect(res.status).toBe(200)
         const json = (await res.json()) as { entries: unknown[] }
-        if (frag !== undefined) expect(json.entries[Number(frag)]).toBeTruthy()
+        if (frag !== undefined) expect((json.entries[Number(frag)] as { field?: string }).field).toBe('title')
         else expect(json.entries).toHaveLength(80)
       }
     } finally {

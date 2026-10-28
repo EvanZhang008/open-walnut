@@ -31,17 +31,29 @@ vi.mock('../../../src/core/human-inbox/store.js', () => ({
 import { runOfflineHandover, _resetOfflineHandoverForTesting, _setHandoverBackoffForTesting } from '../../../src/core/offline-handover.js'
 import { addTask, updateTask } from '../../../src/core/task-manager.js'
 import { closeDb } from '../../../src/core/task-db.js'
-import { ConflictLog, conflictDir, readConflictLog, unsentConflictLogs, type ConflictEntry } from '../../../src/core/offline-merge/conflict-log.js'
+import { ConflictLog, conflictDir, newDrainId, readConflictLog, unsentConflictLogs, type ConflictEntry } from '../../../src/core/offline-merge/conflict-log.js'
 import { WALNUT_HOME } from '../../../src/constants.js'
 
 const SID = 'ffffffff-6666-4666-8666-666666666666'
 let seq = 0
 
+/** A title both sides changed: words one side wrote are not kept, so it is lettered. */
 async function conflictingRecord(): Promise<Record<string, unknown> & { seq: number }> {
   const id = (await addTask({ title: 'Contested', project: 'Acme' })).task.id
   const queuedAt = Date.now() - 60_000
-  await updateTask(id, { priority: 'backlog' })
-  return { v: 2, seq: ++seq, at: queuedAt, kind: 'task-fields', opId: `op-conflict-${seq}`, rev: 1, actor: { kind: 'session', sid: SID }, op: 'task_update', taskId: id, fields: { priority: { base: 'none', value: 'immediate' } } }
+  await updateTask(id, { title: 'Contested on the Mac' })
+  return { v: 2, seq: ++seq, at: queuedAt, kind: 'task-fields', opId: `op-conflict-${seq}`, rev: 1, actor: { kind: 'session', sid: SID }, op: 'task_update', taskId: id, fields: { title: { base: 'Contested', value: 'Contested while away' } } }
+}
+
+/** A priority and a phase both sides changed: settled by the newer change, never lettered. */
+async function settingsRecord(): Promise<Record<string, unknown> & { seq: number }> {
+  const id = (await addTask({ title: 'Settled', project: 'Acme' })).task.id
+  const queuedAt = Date.now() - 60_000
+  await updateTask(id, { priority: 'backlog', phase: 'NEED_ACTION' })
+  return {
+    v: 2, seq: ++seq, at: queuedAt, kind: 'task-fields', opId: `op-settled-${seq}`, rev: 1, actor: { kind: 'session', sid: SID }, op: 'task_update', taskId: id,
+    fields: { priority: { base: 'none', value: 'immediate' }, phase: { base: 'TODO', value: 'COMPLETE' } },
+  }
 }
 
 function logFiles(): string[] {
@@ -82,9 +94,43 @@ describe('conflict log', () => {
     await drain([r], () => {
       onDiskAtAck = logFiles().flatMap((f) => readConflictLog(f.slice(0, -5))?.entries ?? [])
     })
-    expect(onDiskAtAck).toMatchObject([{ kind: 'task-field', seq: r.seq, opId: r.opId, field: 'priority', mac: 'backlog', replica: 'immediate', kept: 'mac', base: 'none' }])
+    expect(onDiskAtAck).toMatchObject([{ kind: 'task-field', seq: r.seq, opId: r.opId, field: 'title', mac: 'Contested on the Mac', replica: 'Contested while away', kept: 'mac', base: 'Contested' }])
     expect(inbox.letters).toHaveLength(1)
     expect(unsentConflictLogs()).toEqual([])
+  })
+
+  // 2026-10-28: two letters for phase conflicts the merge had already settled by its own rule.
+  it('settings both sides changed stay in the log with no letter, and a later drain sends none', async () => {
+    const r = await settingsRecord()
+    await drain([r])
+    expect(inbox.letters).toEqual([])
+    const [file] = logFiles()
+    const back = readConflictLog(file.slice(0, -5))!
+    expect(back.entries.map((e) => e.field).sort()).toEqual(['phase', 'priority'])
+    expect(back.letter).toMatchObject({ none: true })
+    expect(back.letter?.letterId).toBeUndefined()
+    expect(unsentConflictLogs()).toEqual([])
+    _resetOfflineHandoverForTesting()
+    await drain([])
+    expect(inbox.letters).toEqual([])
+  })
+
+  it('a drain with a title and a setting in conflict letters the title alone and says the setting was settled', async () => {
+    // The setting first (lower seq), so the title's entry is not the first in the log.
+    const setting = await settingsRecord()
+    const words = await conflictingRecord()
+    await drain([setting, words])
+    expect(inbox.letters).toHaveLength(1)
+    const [letter] = inbox.letters
+    expect(letter.subject).toBe('1 change made while your Mac was away did not merge cleanly')
+    expect(letter.markdown).toContain('title: kept the Mac\'s value')
+    expect(letter.markdown).not.toMatch(/priority:|phase:/)
+    expect(letter.markdown).toContain('2 other changes to task settings (a phase, a priority, a date, a place, a link) were settled automatically: the newer change was kept (on a tie, the Mac\'s). They need nothing from you')
+    // The title's link names its own place in the full log, after the two settled entries.
+    const back = readConflictLog(logFiles()[0].slice(0, -5))!
+    const at = back.entries.findIndex((e) => e.field === 'title')
+    expect(at).toBe(2)
+    expect(letter.markdown).toContain(`#${at})`)
   })
 
   it('a crash after the ack and before the letter resends the letter at boot, once', async () => {
@@ -175,5 +221,69 @@ describe('lettered logs at the start of every drain (WP9 re-review round 2)', ()
     old.markSent('letter-old')
     await resendUnsentConflictLetters(Date.now() + LEDGER_TTL_MS + 60_000)
     expect(fs.readdirSync(conflictDir()).filter((f) => f.startsWith(old.drainId))).toEqual([])
+  })
+
+  const settledEntry = (n: number): ConflictEntry => ({ kind: 'task-field', seq: n, opId: `op-settled-${n}`, recordKind: 'task-fields', taskId: `t-${n}`, field: 'phase', base: 'TODO', mac: 'NEED_ACTION', replica: 'COMPLETE', kept: 'mac', why: 'both-changed' })
+
+  it('a log of settled settings an older drain left unmarked is marked none at the next scan, with no letter', async () => {
+    const { resendUnsentConflictLetters } = await import('../../../src/core/offline-merge/letter.js')
+    const left = new ConflictLog('marina', WALNUT_HOME)
+    left.addDurable([settledEntry(51), { ...settledEntry(52), field: 'priority', mac: 'backlog', replica: 'immediate', base: 'none' }])
+    expect(unsentConflictLogs().map((l) => l.drainId)).toContain(left.drainId)
+    await resendUnsentConflictLetters()
+    expect(inbox.letters).toEqual([])
+    expect(readConflictLog(left.drainId)).toMatchObject({ letter: { none: true }, entries: [{ seq: 51 }, { seq: 52 }] })
+    expect(unsentConflictLogs()).toEqual([])
+    await resendUnsentConflictLetters()
+    expect(inbox.letters).toEqual([])
+  })
+
+  it('a log marked none ages out like a lettered one', async () => {
+    const { resendUnsentConflictLetters } = await import('../../../src/core/offline-merge/letter.js')
+    const { LEDGER_TTL_MS } = await import('../../../src/core/offline-merge/ledger.js')
+    // Marked by another process, so this one has not seen it yet.
+    const quiet = new ConflictLog('acme-box', WALNUT_HOME)
+    quiet.addDurable([settledEntry(61)])
+    quiet.markSent(undefined, { none: true })
+    await resendUnsentConflictLetters(Date.now() + LEDGER_TTL_MS + 60_000)
+    expect(fs.readdirSync(conflictDir()).filter((f) => f.startsWith(quiet.drainId))).toEqual([])
+    expect(inbox.letters).toEqual([])
+  })
+})
+
+describe('the letter body', () => {
+  const words = (n: number): ConflictEntry => ({ kind: 'task-field', seq: n, opId: `op-words-${n}`, recordKind: 'task-fields', taskId: `task-${n}`, field: 'title', base: 'a', mac: `Mac ${'m'.repeat(300)} ${n}`, replica: `away ${'r'.repeat(300)} ${n}`, kept: 'mac', why: 'both-changed' })
+  const setting = (n: number): ConflictEntry => ({ kind: 'task-field', seq: n, opId: `op-set-${n}`, recordKind: 'task-fields', taskId: `task-${n}`, field: 'due_date', base: '', mac: '2026-11-01', replica: '2026-11-02', kept: 'replica', why: 'both-changed' })
+
+  it('a log too large for one letter lists what fits, counts the rest and the settled ones, and stays under the cap', async () => {
+    const { buildConflictLetter, LETTER_BODY_MAX } = await import('../../../src/core/offline-merge/letter.js')
+    const entries = Array.from({ length: 300 }, (_, i) => (i % 3 === 0 ? setting(i) : words(i)))
+    // The longest drain id a host name makes (newDrainId keeps 40 characters of it).
+    const drainId = newDrainId('h'.repeat(64))
+    const letter = buildConflictLetter({ v: 2, drainId, hostKey: 'marina', home: WALNUT_HOME, startedAt: new Date().toISOString(), entries })!
+    expect(Buffer.byteLength(letter.markdown)).toBeLessThanOrEqual(LETTER_BODY_MAX)
+    expect(letter.subject).toBe('200 changes made while your Mac was away did not merge cleanly')
+    expect(letter).toMatchObject({ needed: 200, settled: 100 })
+    expect(letter.listed).toBeGreaterThan(0)
+    expect(letter.listed).toBeLessThan(200)
+    expect(letter.markdown).toContain(`${200 - letter.listed} more are in [the full list](/api/v1/offline-conflicts/${drainId})`)
+    expect(letter.markdown).toContain('100 other changes to task settings')
+    expect(letter.markdown).not.toContain('due_date:')
+    // Every listed entry links to its own place in the full log.
+    expect(letter.markdown).toContain('#1)')
+    expect(letter.markdown).not.toContain('#0)')
+  })
+
+  it('thousands of entries on the longest host name still fit the cap', async () => {
+    const { buildConflictLetter, LETTER_BODY_MAX } = await import('../../../src/core/offline-merge/letter.js')
+    const entries = Array.from({ length: 12_000 }, (_, i) => (i % 2 === 0 ? setting(i) : words(i)))
+    const letter = buildConflictLetter({ v: 2, drainId: newDrainId('h'.repeat(64)), hostKey: 'marina', home: WALNUT_HOME, startedAt: new Date().toISOString(), entries })!
+    expect(Buffer.byteLength(letter.markdown)).toBeLessThanOrEqual(LETTER_BODY_MAX)
+    expect(letter.markdown).toContain('6000 other changes to task settings')
+  })
+
+  it('a log of settings alone has no letter', async () => {
+    const { buildConflictLetter } = await import('../../../src/core/offline-merge/letter.js')
+    expect(buildConflictLetter({ v: 2, drainId: 'd-none', hostKey: 'marina', home: WALNUT_HOME, startedAt: new Date().toISOString(), entries: [setting(0), setting(1)] })).toBeNull()
   })
 })

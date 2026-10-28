@@ -194,7 +194,7 @@ export function getHostServerManager(): HostServerManager | null {
       const id = `host:${hostKey}`
       const targets = import('../replication/replica-targets.js')
       let unregister: () => void = () => {}
-      void targets.then(({ registerReplicaTarget }) => {
+      void quietly(targets.then(({ registerReplicaTarget }) => {
         unregister = registerReplicaTarget({
           id,
           kind: 'host',
@@ -217,26 +217,33 @@ export function getHostServerManager(): HostServerManager | null {
             }
           },
         })
-      })
+      }), 'registering the copy target', hostKey)
       return {
         unregister: () => unregister(),
         // Registered first (the same promise, its callbacks in order), so the ready finds it.
-        ready: (restarted) => { void targets.then(({ replicaTargetAvailable }) => replicaTargetAvailable(id, { restarted })) },
+        ready: (restarted) => { void quietly(targets.then(({ replicaTargetAvailable }) => replicaTargetAvailable(id, { restarted })), 'marking the copy target ready', hostKey) },
       }
     },
   })
   // A provider that arrives (a plugin loading after the hosts connected) may place the tunnel on a host.
-  const offProviders = onExposeProvidersChanged(() => { void reconcileAllHostServers() })
+  const offProviders = onExposeProvidersChanged(() => { void quietly(reconcileAllHostServers(), 'reconciling the hosts') })
   const name = 'host-server-settings'
   let offBus: (() => void) | null = null
   let stopped = false
-  void import('../event-bus.js').then(({ bus, EventNames }) => {
+  void quietly(import('../event-bus.js').then(({ bus, EventNames }) => {
     if (stopped) return
-    bus.subscribe(name, () => { void reconcileAllHostServers() }, { global: true, interest: [EventNames.CONFIG_CHANGED] })
+    bus.subscribe(name, () => { void quietly(reconcileAllHostServers(), 'reconciling the hosts') }, { global: true, interest: [EventNames.CONFIG_CHANGED] })
     offBus = () => bus.unsubscribe(name)
-  })
+  }), 'watching the config')
   unsubscribe = () => { stopped = true; offProviders(); offBus?.() }
   return manager
+}
+
+/** A promise nothing awaits: its failure is logged, never an unhandled rejection. */
+function quietly(p: Promise<unknown>, what: string, host?: string): Promise<void> {
+  return p.then(() => undefined, (err: unknown) => {
+    log.session.warn(`host server: ${what} failed`, { ...(host ? { host } : {}), error: err instanceof Error ? err.message : String(err) })
+  })
 }
 
 /**

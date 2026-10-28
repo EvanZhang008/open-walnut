@@ -185,13 +185,13 @@ describe('the Mac drains the companion\'s journal', () => {
 
   it('a field the Mac changed meanwhile is a conflict, lettered as the companion\'s', async () => {
     const id = (await mac.tm.addTask({ title: 'Acme delta', project: 'Acme' } as never)).task.id
-    await mac.tm.updateTask(id, { priority: 'backlog' } as never)
+    await mac.tm.updateTask(id, { title: 'Acme delta, the Mac\'s name' } as never)
     const op = opId()
-    companion.journal.journalTaskFields({ opId: op, taskId: id, fields: { priority: { base: 'none', value: 'important', at: Date.now() - 600_000 } } })
+    companion.journal.journalTaskFields({ opId: op, taskId: id, fields: { title: { base: 'Acme delta', value: 'Acme delta, named on the phone', at: Date.now() - 600_000 } } })
     await mac.drain.drainCompanionJournalNow()
     expect(companion.journal.companionJournalRecords()).toEqual([])
-    // The Mac's later write is kept; the phone's is in the letter.
-    expect((await mac.tm.getTask(id)).priority).toBe('backlog')
+    // The Mac's later write is kept; the phone's words are in the letter.
+    expect((await mac.tm.getTask(id)).title).toBe('Acme delta, the Mac\'s name')
     const dir = mac.conflicts.conflictDir()
     const logs = fs.readdirSync(dir).filter((n) => n.endsWith('.json')).map((n) => mac.conflicts.readConflictLog(n.slice(0, -5))).filter(Boolean)
     const mine = logs.find((l) => l!.entries.some((e) => e.opId === op))
@@ -200,6 +200,7 @@ describe('the Mac drains the companion\'s journal', () => {
     const letter = mac.letter.buildConflictLetter(mine!)
     expect(letter?.markdown ?? '').toContain('your cloud companion')
     expect(letter?.markdown ?? '').not.toContain('host companion')
+    expect(letter?.markdown ?? '').toContain('Acme delta, named on the phone')
   })
 
   it('a session change lands through the online patch; one it refuses is lettered by the session\'s title', async () => {

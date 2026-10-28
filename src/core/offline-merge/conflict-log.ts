@@ -70,7 +70,8 @@ export interface ConflictLogFile {
   home: string;
   startedAt: string;
   entries: ConflictEntry[];
-  letter?: { sentAt: string; letterId?: string };
+  /** The letter decision: sent (with its id), or `none` when nothing needed the user (letter.ts). */
+  letter?: { sentAt: string; letterId?: string; none?: true };
 }
 
 /** The directory the logs live in (WALNUT_HOME, never tmp). */
@@ -252,9 +253,13 @@ export class ConflictLog {
     this.nextLine += todo.length;
   }
 
-  /** Record that the letter went out (so no later drain sends it again): the header only. */
-  markSent(letterId?: string): void {
-    this.data.letter = { sentAt: new Date().toISOString(), ...(letterId ? { letterId } : {}) };
+  /**
+   * Record that the letter went out (so no later drain sends it again): the header only.
+   * `none`: no letter was needed (every entry settled by its own rule); the log keeps them
+   * all, and no later drain, nor an older Walnut, letters it.
+   */
+  markSent(letterId?: string, opts: { none?: boolean } = {}): void {
+    this.data.letter = { sentAt: new Date().toISOString(), ...(letterId ? { letterId } : {}), ...(opts.none ? { none: true as const } : {}) };
     try {
       writeDurable(headerOf(this.drainId), headerText(this.data));
       this.headerOnDisk = true;
