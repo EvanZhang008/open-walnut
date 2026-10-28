@@ -7,6 +7,7 @@ import { unlink, stat, readFile, appendFile, rm, mkdir } from 'node:fs/promises'
 import { dirname, join, relative } from 'node:path';
 import { WALNUT_HOME, STT_VOCAB_FILE } from '../../constants.js';
 import { getConfig, updateConfig } from '../../core/config-manager.js';
+import { correctTranscript } from '../../core/stt/corrections.js';
 import { transcribeAudio, runShadowTranscription, createEngine, getOrCreateEngine, ensureSttVocabMigrated, prewarmSttEngines, type SttEngine, type SttResult } from '../../core/stt/index.js';
 import { saveRecordingAudio, writeRecordingResult, listRecordings, readRecordingAudio } from '../../core/stt/recordings.js';
 import { createWhisperCppEngine } from '../../core/stt/engine-whisper-cpp.js';
@@ -99,6 +100,7 @@ sttRouter.post('/transcribe', express.json({ limit: '35mb' }), async (req: Reque
       }
       log.stt.info(`Retry transcription with model: ${model} (via whisper-cli)`);
       result = await engine.transcribe(sttReq);
+      result.text = correctTranscript(config, result.text);
     } else {
       try {
         result = await transcribeAudio(config, sttReq);

@@ -77,6 +77,7 @@ export function fullConfigFixture(): Record<string, unknown> {
     link_tags: { cr: String.raw`https://reviews\.example\.com/r/\d+` },
     audio: { retention_days: 7 },
     stt: { engine: 'openai', language: 'en', openai_api_key: sttKey, openai_model: 'acme-stt' },
+    stt_corrections: { clouddev: ['Cloud Deep'], token: ['toe ken'] },
     jev: { api_key: jevKey },
     api_keys: [{ name: 'phone', key: pairKey, created_at: '2026-10-01T00:00:00.000Z' }],
     push_tokens: [{ token: pushToken, platform: 'ios' }],

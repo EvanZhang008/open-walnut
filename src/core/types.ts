@@ -1639,6 +1639,12 @@ export interface Config {
     /** Auto-delete recordings older than N days. 0 = keep forever. Default: 7 */
     retention_days?: number;
   };
+  /**
+   * Known speech mishearings, by the term the user said: `{ clouddev: ['Cloud Deep'] }`.
+   * Applied to every transcription after the engine (src/core/stt/corrections.ts). Its
+   * own key, not under `stt`, so a replica older than it still takes the `stt` row.
+   */
+  stt_corrections?: Record<string, string[]>;
   /** Speech-to-text configuration for voice input */
   stt?: {
     /**

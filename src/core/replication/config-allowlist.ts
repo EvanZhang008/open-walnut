@@ -72,6 +72,8 @@ const ALLOW: Record<string, AllowSpec> = {
   },
   audio: { exclude_apps: true, refresh_interval_sec: true, delete_after_transcription: true, retention_days: true },
   stt: { engine: true, secondary_engine: true, language: true },
+  // Terms are the user's words ("token" is one), so the names are not read as field names.
+  stt_corrections: { '*': true },
   keep_awake: { enabled: true, battery_floor_pct: true, offline_grace_minutes: true, linger_minutes: true },
   updates: { auto: true },
 }
@@ -150,7 +152,7 @@ export const CONFIG_COPY_DROPPED_FIELDS: Readonly<Record<string, Readonly<Record
 })
 
 /** Maps keyed by a name someone chose (a host alias, a tag, a path): the name is not judged, what is inside it is. */
-const NAME_KEYED = new Set(['hosts', 'session_limits', 'tag_display', 'tag_links', 'link_tags', 'external_session_import.excluded_cwds'])
+const NAME_KEYED = new Set(['hosts', 'session_limits', 'tag_display', 'tag_links', 'link_tags', 'external_session_import.excluded_cwds', 'stt_corrections'])
 
 /** Field names that hold a credential and that the shape rule does not name. */
 const EXTRA_SECRET_KEYS = new Set(['credential_process', 'credentials', 'authorization', 'cookie', 'cookies'])

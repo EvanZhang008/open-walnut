@@ -377,6 +377,26 @@ describe('POST /api/v1/stt/recordings/:id/live, then the archive', () => {
     await expect(voiceArchive.get(id)).rejects.toMatchObject({ status: 404 })
   })
 
+  it('corrects a heard form a quiet cut split across two pieces', async () => {
+    await updateConfig({ stt_corrections: { clouddev: ['Cloud Deep'] } })
+    try {
+      let n = 0
+      engine.mockImplementation(async () => ({ text: ++n === 1 ? '在 Cloud' : n === 2 ? 'Deep 上面' : 'x', durationMs: 1 }))
+      const pcm = talk(30)
+      const live = caf(pcm, false)
+      const id = randomUUID()
+      for (let from = 0; from < live.length; from += PIECE) {
+        await runVoiceArchiveAction({ operation: 'live', id, body: { from, audio: live.subarray(from, from + PIECE).toString('base64') } })
+      }
+      await vi.waitFor(() => expect(n).toBeGreaterThanOrEqual(2))
+      const final = wavPcm(cafToWav(caf(pcm, true))!)
+      const done = await runVoiceArchiveAction({ operation: 'live-finish', id, body: { pcmBytes: final.byteLength, pcmSha256: pcmSha(final) } })
+      expect((done.body as { text: string }).text).toMatch(/^在 clouddev 上面( x)*$/)
+    } finally {
+      await updateConfig({ stt_corrections: {} })
+    }
+  })
+
   it('the Mac forgets handed-over pieces when the take is cancelled or its text arrives', async () => {
     const { fn } = fakeEngine()
     engine.mockResolvedValue({ text: 'x', durationMs: 1 })
