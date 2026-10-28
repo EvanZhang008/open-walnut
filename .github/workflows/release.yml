@@ -457,6 +457,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
+          # Repository variable, an ISO time: automatic runs release nothing before
+          # it (docs/reference/releasing.md). A run by hand is not held.
+          STABLE_HOLD_UNTIL: ${{ github.event_name != 'workflow_dispatch' && vars.STABLE_HOLD_UNTIL || '' }}
         # By hand means now: no one-a-day gap. A dry run takes the newest nightly, soaked
         # or not, so the build, the matrix and the smoke can be tried on demand; it
         # never reaches job `promote`.

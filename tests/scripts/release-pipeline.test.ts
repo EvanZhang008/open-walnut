@@ -637,8 +637,11 @@ describe('release.yml', () => {
     expect(due).toBeGreaterThan(-1)
     expect(due).toBeLessThan(pick.indexOf('bun scripts/ci-gate.mjs last-green main'))
     expect(pick.slice(0, due)).toContain('"${{ github.event_name }}" != "workflow_dispatch"')
-    const plan = doc.jobs['promote-plan']!.steps.find((s) => s.id === 'plan')!.run!
+    const planStep = doc.jobs['promote-plan']!.steps.find((s) => s.id === 'plan')!
+    const plan = planStep.run!
     expect(plan).toContain("github.event_name == 'workflow_dispatch' && '--min-gap-hours 0'")
+    // The hold (repository variable STABLE_HOLD_UNTIL) reaches automatic runs only.
+    expect(planStep.env!.STABLE_HOLD_UNTIL).toBe("${{ github.event_name != 'workflow_dispatch' && vars.STABLE_HOLD_UNTIL || '' }}")
   })
 
   it('the nightly publishes the newest commit CI passed, without rerunning the tests', () => {

@@ -97,8 +97,24 @@ export function generatedNotes(commits) {
   return parts.join('\n\n')
 }
 
+/**
+ * A hold on automatic stable releases: the repository variable STABLE_HOLD_UNTIL,
+ * an ISO time, keeps every automatic plan at "nothing to release" until then, and
+ * the first check after it promotes as usual (the workflow passes it to automatic
+ * runs only, so a run by hand is not held). A value that is not a time holds too
+ * and says so: whoever set it meant a hold.
+ */
+export function holdReason(holdUntil, now) {
+  if (!holdUntil) return null
+  const at = Date.parse(holdUntil)
+  if (Number.isNaN(at)) return `STABLE_HOLD_UNTIL is ${JSON.stringify(holdUntil)}, not a time; automatic stable releases wait until it is one`
+  return now.getTime() < at ? `automatic stable releases are held until ${new Date(at).toISOString()} (STABLE_HOLD_UNTIL)` : null
+}
+
 /** Everything the plan needs, gathered by the caller (the CLI asks git, npm and GitHub). */
-export function planRelease({ packument, now, soakHours = SOAK_HOURS, minGapHours = MIN_GAP_HOURS, lastStableSha, isAncestor, commitsSince, changelogAt, ciVerdict }) {
+export function planRelease({ packument, now, soakHours = SOAK_HOURS, minGapHours = MIN_GAP_HOURS, holdUntil = null, lastStableSha, isAncestor, commitsSince, changelogAt, ciVerdict }) {
+  const held = holdReason(holdUntil, now)
+  if (held) return { publish: false, reason: held }
   const latest = packument['dist-tags']?.latest
   if (!latest) return { publish: false, reason: 'npm has no latest release to promote from' }
   const sinceLatest = (now.getTime() - Date.parse(packument.time?.[latest] ?? '')) / 3_600_000
@@ -198,6 +214,7 @@ async function main() {
       now: arg('now') ? new Date(arg('now')) : new Date(),
       soakHours: arg('soak-hours') ? Number(arg('soak-hours')) : SOAK_HOURS,
       minGapHours: arg('min-gap-hours') !== undefined ? Number(arg('min-gap-hours')) : MIN_GAP_HOURS,
+      holdUntil: process.env.STABLE_HOLD_UNTIL?.trim() || null,
       lastStableSha,
       isAncestor: (a, b) => { try { git(root, ['merge-base', '--is-ancestor', a, b]); return true } catch { return false } },
       commitsSince: (a, b) => git(root, ['log', '--no-merges', '--format=%s%x1f%b%x1e', `${a}..${b}`])

@@ -103,8 +103,14 @@ five times.
 To promote now instead of waiting for the schedule: Actions, Release, Run workflow, channel
 `stable` (the same plan and smoke run). With `dry_run` ticked the plan takes the newest
 nightly without the 24 hour soak, the build and the binary matrix run, and the smoke installs
-and starts it, but nothing is published (`gh workflow run release.yml -f channel=stable -f dry_run=true`). To pause automatic releases, disable the Release
-workflow's schedule or the workflow itself in the Actions tab; nightlies stop with it.
+and starts it, but nothing is published (`gh workflow run release.yml -f channel=stable -f dry_run=true`).
+
+To hold automatic stable releases while nightlies go on, set the repository variable
+`STABLE_HOLD_UNTIL` to an ISO time (`gh variable set STABLE_HOLD_UNTIL -b 2026-10-30T00:00:00Z`).
+Every automatic plan before that time says "held until" and releases nothing; the first check
+after it promotes as usual, so the hold ends by itself, and `gh variable delete STABLE_HOLD_UNTIL`
+ends it early. A value that is not a time holds until it is fixed, and a run by hand is not
+held. To stop nightlies too, disable the Release workflow in the Actions tab.
 
 ## What CI proves before anything ships
 

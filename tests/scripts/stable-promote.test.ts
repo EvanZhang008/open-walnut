@@ -6,7 +6,7 @@ import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
-import { MIN_GAP_HOURS, allowedScripts, bumpFor, generatedNotes, planRelease, rollReleased, soakedNightly } from '../../scripts/stable-promote.mjs'
+import { MIN_GAP_HOURS, allowedScripts, bumpFor, generatedNotes, holdReason, planRelease, rollReleased, soakedNightly } from '../../scripts/stable-promote.mjs'
 import { releaseNotes } from '../../scripts/release-notes.mjs'
 import { managerArgv } from '../../src/core/self-update/install-kind.js'
 
@@ -98,6 +98,22 @@ describe('generatedNotes', () => {
 })
 
 describe('planRelease', () => {
+  it('releases nothing before STABLE_HOLD_UNTIL and promotes as usual from that moment on', () => {
+    const ciVerdict = vi.fn(() => 'green')
+    const before = new Date(NOW.getTime() + 60_000).toISOString()
+    const held = planRelease(deps({ holdUntil: before, ciVerdict }))
+    expect(held).toEqual({ publish: false, reason: `automatic stable releases are held until ${before} (STABLE_HOLD_UNTIL)` })
+    expect(ciVerdict).not.toHaveBeenCalled()
+    expect(planRelease(deps({ holdUntil: NOW.toISOString() })).publish).toBe(true)
+    expect(planRelease(deps({ holdUntil: null })).publish).toBe(true)
+  })
+
+  it('a hold that is not a time holds, and says why', () => {
+    expect(holdReason('next friday', NOW)).toMatch(/^STABLE_HOLD_UNTIL is "next friday", not a time/)
+    expect(planRelease(deps({ holdUntil: 'next friday' })).publish).toBe(false)
+    expect(holdReason('', NOW)).toBeNull()
+  })
+
   it('promotes the soaked nightly as a patch for fixes, with notes from the commits when nobody wrote any', () => {
     const ciVerdict = vi.fn(() => 'green')
     const commitsSince = vi.fn(() => ['fix(release): published builds are no longer stamped dirty', 'docs: a note'])
