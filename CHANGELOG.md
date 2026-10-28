@@ -6,6 +6,13 @@ breaking changes).
 
 ## [Unreleased]
 
+### Added
+
+- Run Walnut on your own models: with Ollama (or LM Studio/vLLM) as the AI provider and
+  OpenCode, Goose, Codex or a custom ACP agent as the engine, nothing asks for Claude Code;
+  watchers and AI task search run on your model, and every engine gets Walnut's session
+  instructions ([Getting Started](GETTING_STARTED.md#path-d-models-on-your-own-machine-ollama-lm-studio-vllm)).
+
 ### Changed
 
 - Walnut installs as one compiled file with everything inside, for macOS and for Linux with
