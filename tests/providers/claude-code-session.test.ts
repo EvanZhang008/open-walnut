@@ -1917,7 +1917,8 @@ describe('ClaudeCodeSession.askSideQuestion', () => {
 
   it('sends a side_question control_request with a unique request_id', async () => {
     const { session, writes } = makeSessionWithStubTransport();
-    void session.askSideQuestion('what did I ask?');
+    // Nobody answers it: its 60s timer must not reject unhandled while later tests run (2026-10-28 CI).
+    session.askSideQuestion('what did I ask?').catch(() => {});
     // Give the microtask that calls writeRaw a tick to run.
     await new Promise((r) => setTimeout(r, 5));
 
@@ -4174,8 +4175,18 @@ describe('handleProcessDeath — init failure vs ordinary shutdown', () => {
       process_status: 'running' as const, mode: 'default' as const,
       startedAt: new Date().toISOString(), lastActiveAt: new Date().toISOString(),
     };
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const session = await ClaudeCodeSession.attachToExisting(record as any, MOCK_CLI, daemonUrl());
+    // On Linux CI this attach has hung past the test timeout (2026-10-28, twice; never on a
+    // Mac). Fail sooner, with the log lines this block's spies took, so the run says where.
+    let stall: ReturnType<typeof setTimeout> | undefined;
+    const session = await Promise.race([
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ClaudeCodeSession.attachToExisting(record as any, MOCK_CLI, daemonUrl()),
+      new Promise<never>((_, reject) => {
+        stall = setTimeout(() => reject(new Error(`attachToExisting did not return in 45s; logged so far: ${JSON.stringify({
+          infos: infos.slice(-20), warns: warns.slice(-12), errors: errors.slice(-6).map((e) => e.msg),
+        })}`)), 45_000);
+      }),
+    ]).finally(() => clearTimeout(stall));
     /* eslint-disable @typescript-eslint/no-explicit-any */
     (session as any).pid = 4242;
     (session as any)._transport = {
