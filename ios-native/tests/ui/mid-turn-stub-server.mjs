@@ -1151,11 +1151,24 @@ function addInboxLetter(type) {
   return letter
 }
 
+/** Delays (ms) for the next letter detail and inbox list answers, one per GET
+ *  (`/__stub/letter-reply-detail-delay?ms=a,b&list=c`). */
+let letterDetailDelays = []
+let inboxListDelays = []
+
 /** Routes for /api/v1/human-inbox/*. Returns true when it answered. */
 function answerInbox(p, req, res, raw, url) {
   if (p === '/api/v1/human-inbox' && req.method === 'GET') {
     const archived = url.searchParams.get('archived') === '1' || url.searchParams.get('archived') === 'true'
-    json(res, 200, inboxList(archived))
+    // The list as it is NOW, sent after the next queued delay.
+    const payload = inboxList(archived)
+    const delay = inboxListDelays.shift() ?? 0
+    if (delay > 0) {
+      console.log(`[stub] inbox list (${payload.letters.length} letters) held ${delay}ms`)
+      setTimeout(() => { if (!res.writableEnded) json(res, 200, payload) }, delay)
+    } else {
+      json(res, 200, payload)
+    }
     return true
   }
   const one = p.match(/^\/api\/v1\/human-inbox\/([^/]+)$/)
@@ -1163,9 +1176,18 @@ function answerInbox(p, req, res, raw, url) {
     const letter = inboxLetters.find((l) => l.id === decodeURIComponent(one[1]))
     if (!letter) { notFound(res, 'no such letter'); return true }
     const { longBody, ...envelope } = letter
-    json(res, 200, {
-      letter: { ...envelope, body: longBody ?? `# ${letter.subject}\n\nThis is the body of ${letter.id}.` },
-    })
+    // The letter as it is NOW, sent after the next queued delay: a slow answer
+    // carries what the server read when it was asked, as a real one does.
+    const payload = {
+      letter: { ...envelope, thread: [...(letter.thread || [])], body: longBody ?? `# ${letter.subject}\n\nThis is the body of ${letter.id}.` },
+    }
+    const delay = letterDetailDelays.shift() ?? 0
+    if (delay > 0) {
+      console.log(`[stub] letter detail ${letter.id} (${payload.letter.thread.length} turns) held ${delay}ms`)
+      setTimeout(() => { if (!res.writableEnded) json(res, 200, payload) }, delay)
+    } else {
+      json(res, 200, payload)
+    }
     return true
   }
   const write = p.match(/^\/api\/v1\/human-inbox\/([^/]+)\/(read|pin|archive)$/)
@@ -1255,6 +1277,9 @@ function answerInbox(p, req, res, raw, url) {
 //        becomes a daily-digest-sized html document (S sections, default 60)
 //        with N exchanges under it (as letter-reply-thread) and one rich agent
 //        turn: the long-thread case.
+//   POST /__stub/letter-reply-detail-delay?ms=A,B[&list=C] → the next letter detail
+//        answers come A, B ms late (the next inbox list answers C ms late), each
+//        carrying the letter as it was when asked: a slow pull under load.
 //   POST /__stub/letter-reply-agent?id=I&text=T → the agent answers in letter I's
 //        thread now (seen by the reader on its next re-read, e.g. a pull).
 //   GET  /__stub/letter-reply-state → every human-reply POST this generation
@@ -1290,6 +1315,8 @@ function freshLetterReply() {
 }
 
 function resetLetterReply() {
+  letterDetailDelays = []
+  inboxListDelays = []
   for (const res of heldReplyResponses) { try { res.destroy() } catch { /* already gone */ } }
   heldReplyResponses.clear()
   for (const t of settleTimers) clearTimeout(t)
@@ -1350,6 +1377,13 @@ function answerLetterReplyControl(p, req, res, url) {
     letterReply.settleMs = Math.min(120_000, Math.max(0, Number(url.searchParams.get('settleMs') || 20_000)))
     console.log(`[stub] letter replies → delivery=${delivery} fail=${fail} x${letterReply.failCount} delay=${letterReply.delayMs}ms`)
     return json(res, 200, { ok: true, delivery, fail, count: letterReply.failCount, delayMs: letterReply.delayMs })
+  }
+  if (p === '/__stub/letter-reply-detail-delay' && req.method === 'POST') {
+    const parse = (v) => (v || '').split(',').filter(Boolean).map((x) => Math.min(60_000, Math.max(0, Number(x) || 0)))
+    letterDetailDelays = parse(url.searchParams.get('ms'))
+    inboxListDelays = parse(url.searchParams.get('list'))
+    console.log(`[stub] letter detail delays → ${letterDetailDelays.join(',') || 'none'}, inbox list → ${inboxListDelays.join(',') || 'none'}`)
+    return json(res, 200, { ok: true, delays: letterDetailDelays, list: inboxListDelays })
   }
   if (p === '/__stub/letter-reply-mark' && req.method === 'POST') {
     // A UI test's timestamp in the stub log (epoch seconds), so a screen
@@ -1779,7 +1813,7 @@ function printComposerLogLines(req, body) {
     const parsed = JSON.parse(raw.toString('utf8'))
     for (const line of parsed.lines || []) {
       const entry = typeof line === 'string' ? JSON.parse(line) : line
-      if (/^composer (model|effort)/.test(entry.message || '')) {
+      if (/^composer (model|effort)|^letter read |^open letter re-read/.test(entry.message || '')) {
         const meta = Object.entries(entry).filter(([k]) => k.startsWith('m_')).map(([k, v]) => `${k.slice(2)}=${v}`)
         console.log(`[stub] app-log ${entry.ts} ${entry.message} ${meta.join(' ')}`)
       }

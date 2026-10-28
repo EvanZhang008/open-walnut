@@ -676,6 +676,54 @@ final class LetterReplyUITests: XCTestCase {
         XCTAssertFalse(button.exists, "the button stayed after the tap")
     }
 
+    /// A pull whose answer is slow (a loaded server or machine) still shows the
+    /// new reply. SwiftUI cancelled the pull's task when the reader redrew at
+    /// the start of its read, and the cancelled read was dropped: with the answer
+    /// held 8 s the read was cancelled after 16 ms and nothing new showed.
+    @MainActor
+    func testASlowPullStillShowsTheNewReply() async throws {
+        let stub = try await prepared()
+        try await stub.call("POST", "__stub/letter-reply-long?id=\(Self.letterB)&n=6&sections=3")
+        let app = try launchPaired()
+        openLetter(app, Self.letterB)
+        XCTAssertTrue(element(app, "inbox.letter.subject").waitForExistence(timeout: 15))
+        try await Task.sleep(for: .seconds(2))
+        try await stub.call("POST", "__stub/letter-reply-agent?id=\(Self.letterB)&text=Fresh%20agent%20note")
+        try await stub.call("POST", "__stub/letter-reply-detail-delay?ms=8000")
+        pullToRefresh(app)
+        let fresh = turn(app, "inbox.letter.agentTurn", containing: "Fresh agent note")
+        let shown = fresh.waitForExistence(timeout: 25)
+        try await stub.screenshot(app, "slow-pull-shows-the-reply")
+        XCTAssertTrue(shown, "a slow pull never showed the reply")
+    }
+
+    /// The inbox list's pull, slow in the same way, still shows a new letter.
+    /// (It did before the reader's fix too: this guards the list against the
+    /// same failure.)
+    @MainActor
+    func testASlowPullOnTheInboxStillShowsTheNewLetter() async throws {
+        let stub = try await prepared()
+        let app = try launchPaired()
+        let tab = app.tabBars.buttons["Inbox"]
+        XCTAssertTrue(tab.waitForExistence(timeout: 60))
+        tab.tap()
+        let all = element(app, "inbox.filter.all")
+        if all.waitForExistence(timeout: 20), !all.isSelected { all.tap() }
+        XCTAssertTrue(element(app, "inbox.row.\(Self.letterB)").waitForExistence(timeout: 30))
+        struct Added: Decodable { let id: String }
+        let added = try JSONDecoder().decode(Added.self, from: try await stub.call("POST", "__stub/inbox-add?type=review")).id
+        try await stub.call("POST", "__stub/letter-reply-detail-delay?list=8000")
+        // A pull from the first row: above it is the title and the filter bar.
+        let first = element(app, "inbox.row.\(Self.letterA)")
+        let start = first.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.3))
+        start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: 0, dy: 420)),
+                    withVelocity: .slow, thenHoldForDuration: 0.3)
+        let row = element(app, "inbox.row.\(added)")
+        let shown = row.waitForExistence(timeout: 25)
+        try await stub.screenshot(app, "slow-inbox-pull-shows-the-letter")
+        XCTAssertTrue(shown, "a slow pull on the inbox never showed the new letter")
+    }
+
     /// Reading the letter while the box follows its newest turn, a new reply
     /// lands in the box and leaves the page where the reader is: the box's own
     /// scroll to its end must not drag the page along.

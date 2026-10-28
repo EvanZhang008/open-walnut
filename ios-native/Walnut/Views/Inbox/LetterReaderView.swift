@@ -65,6 +65,8 @@ struct LetterReaderView: View {
     @State private var deferredBodyError: String?
     /// The one re-read a thread signal started; a newer signal replaces it.
     @State private var threadReread: Task<Void, Never>?
+    /// Which of the overlapping reads (open, pull, thread signals) is newest.
+    @State private var reads = ReadOrder()
     /// Read only to state the navigation bar's appearance (`toolbarColorScheme`).
     @Environment(\.colorScheme) private var colorScheme
 
@@ -289,8 +291,10 @@ struct LetterReaderView: View {
     }
 
     private func refresh() async {
-        await load(markingRead: false)
-        await InboxItemStore.shared.refreshVisible()
+        await refreshOnItsOwn {
+            await load(markingRead: false)
+            await InboxItemStore.shared.refreshVisible()
+        }
     }
 
     // MARK: - Header
@@ -887,11 +891,22 @@ struct LetterReaderView: View {
         if letter == nil { letter = inbox.letter(id: letterId) }
         // Only the open reads the letter: a re-read must not undo the menu's Mark Unread.
         if markingRead { inbox.markReadOnOpen(id: letterId) }
-        loading = true
-        defer { loading = false }
+        // Only a letter not yet on screen shows its progress: a re-read writes no
+        // view state before its answer, since a redraw cancels a pull's task.
+        let showsProgress = letter == nil || letter?.body == nil
+        if showsProgress { loading = true }
+        defer { if showsProgress { loading = false } }
         let started = Date()
+        let read = reads.begin()
         do {
             let loaded = try await inbox.detail(id: letterId)
+            // A slower read started earlier must not put back an older thread.
+            guard reads.accept(read) else {
+                AppLog.info("inbox", "letter read answered after a newer one, dropped", [
+                    "letterId": letterId, "turns": String(loaded.threadEntries.count),
+                ])
+                return
+            }
             // A reply whose response was lost but which the server recorded shows
             // once, as the recorded turn; one it does not hold gets Edit back.
             replies.reconcile(letterId: letterId, with: loaded, readStartedAt: started)
@@ -900,6 +915,10 @@ struct LetterReaderView: View {
             letter = loaded
             loadError = nil
         } catch {
+            AppLog.info("inbox", "letter read failed", [
+                "letterId": letterId, "error": String(describing: error),
+                "ms": String(Int(Date().timeIntervalSince(started) * 1000)),
+            ])
             if let apiError = error as? APIError, apiError.isCancelled { return }
             // The letter is gone from the server: so are its saved words.
             if let apiError = error as? APIError, case .server(404, _, _, _, _) = apiError {
