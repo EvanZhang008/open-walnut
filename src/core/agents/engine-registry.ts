@@ -75,8 +75,10 @@ export interface EngineCapabilities {
   readonly permissionAnswers: boolean;
   /**
    * Whether a task session's Walnut session context (session-context.ts) reaches the model:
-   * the native engine's system prompt, Codex's developer instructions. The other ACP engines
-   * take none, so what it carries (USER.md, user-profile-context.ts) rides an ask's prefix there.
+   * the native engine's system prompt, Codex's developer instructions, and for the other ACP
+   * engines (no instructions channel) the first prompt of each new provider thread
+   * (AcpSession.sessionContextPrefix). So what it carries (USER.md, user-profile-context.ts)
+   * never needs to ride an ask's prefix too.
    */
   readonly walnutSessionContext: boolean;
   /** Mid-session model switch path: live flag push vs ACP config option. */
@@ -154,7 +156,7 @@ const ACP_BASE: Omit<EngineCapabilities, 'id' | 'displayName'> = {
   idProvisioning: 'provider-issued',
   modeControl: 'config-options',
   permissionAnswers: false,
-  walnutSessionContext: false,
+  walnutSessionContext: true,
   modelSwitch: 'config-option',
   rewind: 'unsupported',
   fork: false,
@@ -171,7 +173,6 @@ const CODEX: EngineCapabilities = {
   ...ACP_BASE,
   id: 'codex',
   displayName: 'Codex',
-  walnutSessionContext: true,
   settings: CODEX_SETTINGS,
 };
 

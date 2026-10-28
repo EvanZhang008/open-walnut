@@ -122,6 +122,27 @@ async function refuseStartOfRetiredLead(task: Task, callerSid: string | undefine
   if (refusal) throw new QuickStartError(refusal.message, 409, { code: 'lead_handed_over', ...refusal.detail });
 }
 
+/**
+ * The engine a start that named none runs on: the ONE default engine
+ * (Settings > Engines), as every other Walnut launch inherits it
+ * (default-engine.ts). A task_start once always ran Claude here, so a Main on a
+ * local model started leads that needed Claude Code. The host matters (an ACP
+ * engine runs locally only), so the launch place is read first, but only when
+ * the default is not Claude; a place that does not resolve leaves the default
+ * engine and prepareLaunch reports the real error.
+ */
+async function inheritedEngine(task: Task, params: SessionStartParams): Promise<SessionEngine | undefined> {
+  const { getConfig } = await import('../config-manager.js');
+  const { resolveDefaultEngine } = await import('../agents/default-engine.js');
+  // Effort and a model are Claude choices (validateLaunchChoices takes only Claude
+  // model ids): a start that names either asked for Claude.
+  if (params.effort || (params.model && params.model !== 'default')) return undefined;
+  const config = await getConfig();
+  if (normalizeEngine(resolveDefaultEngine(config)) === undefined) return undefined;
+  const host = await resolveTaskLaunchReadOnly(task, params).then((l) => l.host, () => undefined);
+  return normalizeEngine(resolveDefaultEngine(config, { host }));
+}
+
 export async function startSessionForTask(params: SessionStartParams): Promise<SessionStartResult> {
   let task: Task;
   try {
@@ -142,6 +163,9 @@ export async function startSessionForTask(params: SessionStartParams): Promise<S
       throw new QuickStartError('This task changed. Review the action again.', 409);
     }
   }
+  // Resolved before the duplicate check: on the normal path nothing awaits between
+  // that check and taking the slot below, or two concurrent starts both get through.
+  const engine = params.engine !== undefined ? normalizeEngine(params.engine) : await inheritedEngine(task, params);
   const pending = pendingStarts.get(task.id);
   if (pending !== undefined) throw alreadyStarted(task, pending);
   // A frozen human plan cannot authorize a later workspace launch with different settings.
@@ -158,7 +182,6 @@ export async function startSessionForTask(params: SessionStartParams): Promise<S
     const deferred = await deferTaskStart(task, params);
     if (deferred) return { ...deferred, applied: pendingApplied(params) };
   }
-  const engine = normalizeEngine(params.engine);
   const sid = engineCaps(engine).idProvisioning === 'provider-issued' ? undefined : randomUUID();
   const runtimeId = sid ?? `acp-${randomUUID()}`;
   // Take the slot as soon as the task id is normalized; waiting on the disk or the runner must not allow a duplicate start.

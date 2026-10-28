@@ -30,6 +30,7 @@ import { bus, EventNames } from '../../src/core/event-bus.js'
 import { addTask } from '../../src/core/task-manager.js'
 import { getSessionByClaudeId, getSessionsForTask, updateSessionRecord } from '../../src/core/session-tracker.js'
 import { sendMessageToSession } from '../../src/core/session-message-queue.js'
+import { parseHinted } from '../../src/core/hints/hint-format.js'
 import { TEAM_CHARTER } from '../../src/core/team-charter.js'
 import { ensureMainTask } from '../../src/core/org/org-store.js'
 import type { OrgRole } from '../../src/core/types.js'
@@ -178,6 +179,7 @@ describe('the prompt each role is spawned with (Claude Code)', () => {
 })
 
 describe('ACP engines', () => {
+  let lastStartSid = ''
   async function acpStartFor(engine: string): Promise<Record<string, string>> {
     const before = daemon.getCommandHistoryFor('acpStart').length
     const res = await fetch(`http://localhost:${port}/api/sessions/quick-start`, {
@@ -186,6 +188,7 @@ describe('ACP engines', () => {
     })
     expect(res.status).toBe(200)
     const cmd = await waitFor(() => daemon.getCommandHistoryFor('acpStart')[before], `${engine} acpStart`)
+    lastStartSid = String(cmd.payload.sid ?? '')
     return (cmd.payload.env ?? {}) as Record<string, string>
   }
 
@@ -196,10 +199,18 @@ describe('ACP engines', () => {
     keep('codex-worker-developer-instructions.txt', config.developer_instructions!)
   }, 60_000)
 
-  it('another ACP engine gets no Walnut prompt (unchanged)', async () => {
+  it('another ACP engine reads the session context, charter included, on its first prompt', async () => {
     const env = await acpStartFor('opencode')
+    // No instructions channel: nothing rides the adapter env...
     expect(env.CODEX_CONFIG).toBeUndefined()
     expect(JSON.stringify(env)).not.toContain('How we work')
     keep('opencode-adapter-env-keys.txt', Object.keys(env).sort().join('\n') + '\n')
+    // ...so the first prompt carries it, as a Walnut hint block ahead of the message.
+    const send = await waitFor(() => daemon.getCommandHistoryFor('acpSend').find((c) => c.payload.sid === lastStartSid), 'opencode acpSend')
+    const text = String((send.payload as { text?: unknown }).text ?? '')
+    expect(text).toMatch(/^<system-reminder>\nWalnut \(session-context\): /)
+    expect(text).toContain(TEAM_CHARTER)
+    expect(parseHinted(text).text).toBe('hello')
+    keep('opencode-first-prompt.txt', text)
   }, 60_000)
 })

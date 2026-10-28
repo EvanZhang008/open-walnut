@@ -227,6 +227,36 @@ providers:
     base_url: https://api.example.com  # Custom endpoint (optional)
 ```
 
+### Path D: Models on your own machine (Ollama, LM Studio, vLLM)
+
+Walnut can run with no cloud model and no Claude Code. Two settings decide it:
+
+1. **Walnut's own model calls** (titles, summaries, routine watchers, AI task search) go to the main provider. For Ollama:
+
+   ```yaml
+   agent:
+     main_provider: ollama
+     main_model: qwen2.5:7b          # any model you pulled with `ollama pull`
+     fast_model: qwen2.5:3b          # optional: a smaller one for quick background calls
+   providers:
+     ollama:
+       api: ollama
+       base_url: http://localhost:11434   # the default; set it for another machine
+   ```
+
+   An OpenAI-compatible server (LM Studio, vLLM, llama.cpp) works the same way as `api: openai-chat` with its `base_url` (for example `http://localhost:1234/v1`) and no key.
+
+2. **Coding sessions, Main and leads** run on the default engine. Pick one that talks to your model server in Settings › Engines, or in `config.yaml`:
+
+   ```yaml
+   defaults:
+     engine: opencode   # or goose, codex, or custom (engines.custom.adapter_cmd)
+   ```
+
+   The engine's own config names the model (for OpenCode, a provider entry pointing at `http://localhost:11434/v1`). Walnut gives every engine its session instructions (role, team rules, task directory): Codex as developer instructions, the others on the first message of each conversation.
+
+With both set, the home page no longer asks you to install Claude Code. If your model server stops answering, it says so instead and clears by itself once the server is back. Search and voice input already run on your machine by default.
+
 ### Verify Your Setup
 
 After starting the server (`bun run start` in a checkout, `open-walnut web` otherwise), open [http://localhost:3456](http://localhost:3456) and go to Settings → Ask Walnut Provider, then press Test Connection on the provider you configured. A green result means the key, region, and model are all usable. The home page chat is not the test for this: it runs on Claude Code either way.

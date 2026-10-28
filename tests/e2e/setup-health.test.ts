@@ -4,7 +4,9 @@
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
 import fs from 'node:fs/promises'
+import http from 'node:http'
 import path from 'node:path'
+import type { AddressInfo } from 'node:net'
 import type { Server as HttpServer } from 'node:http'
 
 import { createMockConstants } from '../helpers/mock-constants.js'
@@ -13,6 +15,8 @@ vi.mock('../../src/constants.js', () => createMockConstants('walnut-e2e-setup-he
 import { WALNUT_HOME } from '../../src/constants.js'
 import { refreshSystemHealth, startServer, stopServer } from '../../src/web/server.js'
 import { setLocalClaudeIo } from '../../src/core/hosts/local-readiness.js'
+import { getConfig, updateConfig } from '../../src/core/config-manager.js'
+import type { Config } from '../../src/core/types.js'
 import type { HostPreflightResult } from '../../src/providers/host-runtime-core.js'
 
 let server: HttpServer
@@ -180,5 +184,62 @@ describe('local Claude Code: /api/system/local-claude/* and health.localClaude',
     const res = await post('/api/system/local-claude/check', {})
     expect((await res.json()).localClaude.problems).toEqual([])
     expect(asked).toBe(2)
+  })
+})
+
+// A setup on local models: Walnut's own calls on Ollama (a real HTTP server
+// standing in for it on a random port) and sessions on another engine. Nothing
+// needs Claude Code, and Ollama is ready exactly while it answers.
+describe('local models: Ollama readiness and claudeCodeNeeded', () => {
+  let ollama: http.Server
+  let base = ''
+  let before: Partial<Config>
+  const health = async () => (await (await fetch(apiUrl('/api/system/health'))).json()) as Record<string, unknown>
+
+  beforeAll(async () => {
+    const cfg = await getConfig()
+    before = { agent: cfg.agent, providers: cfg.providers, defaults: cfg.defaults }
+    ollama = http.createServer((req, res) => {
+      res.writeHead(req.url === '/api/tags' ? 200 : 404, { 'content-type': 'application/json' })
+      res.end('{"models":[{"name":"qwen2.5:3b"}]}')
+    })
+    await new Promise<void>((r) => ollama.listen(0, '127.0.0.1', r))
+    base = `http://127.0.0.1:${(ollama.address() as AddressInfo).port}`
+    await updateConfig({
+      agent: { ...(cfg.agent ?? {}), main_provider: 'ollama', main_model: 'qwen2.5:3b' },
+      providers: { ollama: { api: 'ollama', base_url: base } },
+      defaults: { ...(cfg.defaults ?? {}), engine: 'opencode' },
+    } as Partial<Config>)
+  })
+
+  afterAll(async () => {
+    await new Promise<void>((r) => ollama.close(() => r()))
+    await updateConfig(before)
+    await refreshSystemHealth()
+  })
+
+  it('a running Ollama is a ready provider, and Claude Code is not needed', async () => {
+    await refreshSystemHealth()
+    const body = await health()
+    expect(body).toMatchObject({
+      mainProvider: 'ollama', mainProviderLocal: true, hasReadyProvider: true, claudeCodeNeeded: false,
+      credentialSource: 'config', credentialDetail: `ollama (${base})`,
+    })
+  })
+
+  it('Ollama not answering: not ready, and the detail names its address', async () => {
+    await new Promise<void>((r) => ollama.close(() => r()))
+    await refreshSystemHealth()
+    expect(await health()).toMatchObject({ hasReadyProvider: false, credentialSource: 'none', credentialDetail: base, claudeCodeNeeded: false })
+    await new Promise<void>((r) => ollama.listen(Number(new URL(base).port), '127.0.0.1', r))
+    await refreshSystemHealth()
+    expect((await health()).hasReadyProvider).toBe(true)
+  })
+
+  it('sessions still on Claude: Claude Code is needed even with Ollama for Walnut\'s calls', async () => {
+    const cfg = await getConfig()
+    await updateConfig({ defaults: { ...(cfg.defaults ?? {}), engine: 'claude' } } as Partial<Config>)
+    await refreshSystemHealth()
+    expect(await health()).toMatchObject({ hasReadyProvider: true, claudeCodeNeeded: true })
   })
 })

@@ -60,10 +60,12 @@ describe('engine registry', () => {
     expect(codex.sidLivenessProbe).toBe(false);
     expect(codex.snapshotPull).toBe(false);
     expect(codex.permissionAnswers).toBe(false);
-    // Codex takes Walnut's session context as developer instructions; the other ACP engines take none.
+    // Codex takes Walnut's session context as developer instructions; the other ACP
+    // engines on the first prompt of each new provider thread.
     expect(codex.walnutSessionContext).toBe(true);
     expect(claude.walnutSessionContext).toBe(true);
-    expect(engineCaps('gemini').walnutSessionContext).toBe(false);
+    expect(engineCaps('gemini').walnutSessionContext).toBe(true);
+    expect(engineCaps('opencode').walnutSessionContext).toBe(true);
     expect(codex.modeControl).toBe('config-options');
   });
 

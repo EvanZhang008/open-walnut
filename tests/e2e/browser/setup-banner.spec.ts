@@ -123,3 +123,41 @@ test('a failed health request does not invent a setup warning', async ({ page, b
   await expect(page.getByTestId('ask-walnut-slot')).toBeVisible()
   await expect(page.locator('.setup-banner')).toHaveCount(0)
 })
+
+// Local models: Walnut's calls on Ollama, sessions on another engine. Claude Code is
+// missing and nothing needs it, so no card asks for it; Ollama down shows its own card.
+const localModels = {
+  hasReadyProvider: true, claudeCliAvailable: false, claudeCodeNeeded: false,
+  mainProvider: 'ollama', mainProviderLocal: true, credentialSource: 'config',
+  credentialDetail: 'ollama (http://localhost:11434)',
+}
+
+test('local models: no Claude Code card while Ollama answers, a provider card when it stops', async ({ page, baseURL }, testInfo) => {
+  test.setTimeout(120_000)
+  const errors: string[] = []
+  page.on('pageerror', error => errors.push(error.message))
+  let health: Record<string, unknown> = localModels
+  await page.route('**/api/system/health', route => route.fulfill({ json: health }))
+  await openHome(page, baseURL!)
+  await expect(page.getByTestId('setup-banner-install')).toHaveCount(0)
+  await expect(page.getByTestId('setup-banner-provider')).toHaveCount(0)
+  await screenshot(page, testInfo, 'local-models-ready')
+
+  health = { ...localModels, hasReadyProvider: false, credentialSource: 'none', credentialDetail: 'http://localhost:11434' }
+  const reloaded = page.waitForResponse('**/api/system/health')
+  await page.reload()
+  await (await reloaded).finished()
+  await settleHealth(page)
+  const toggle = page.locator('.system-attention-toggle')
+  if (await toggle.count() && await toggle.getAttribute('aria-expanded') === 'false') await toggle.click()
+  const card = page.getByTestId('setup-banner-provider')
+  await expect(card).toBeVisible()
+  await expect(card).toContainText('Walnut runs on Ollama, and it is not answering at http://localhost:11434.')
+  await expect(card).not.toContainText('Claude Code')
+  await expect(page.getByTestId('setup-banner-install')).toHaveCount(0)
+  await screenshot(page, testInfo, 'local-models-ollama-down')
+
+  await card.getByRole('button', { name: 'Dismiss AI provider notice' }).click()
+  await expect(page.getByTestId('setup-banner-provider')).toHaveCount(0)
+  expect(errors).toEqual([])
+})

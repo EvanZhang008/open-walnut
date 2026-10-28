@@ -16,7 +16,7 @@
 import { useState, useCallback, useEffect, useRef, type ReactNode } from 'react';
 import type { SystemHealth } from '@/hooks/useSystemHealth';
 import { checkLocalClaude, fixLocalClaude } from '@/api/local-claude';
-import { claudeBannerView, localNoticeShows, type ClaudeBannerView } from '@/utils/local-claude-banner';
+import { claudeBannerView, localNoticeShows, providerDismissKey, providerLabel, type ClaudeBannerView, type LocalNoticeKind } from '@/utils/local-claude-banner';
 import { clearLocalDismissed, dismissLocal, useLocalDismissed } from '@/utils/host-banner-dismiss';
 import { recheckLocalClaudeNow } from '@/utils/local-claude-recheck';
 import { log } from '@/utils/log';
@@ -38,6 +38,7 @@ export const SETUP_SKILL_PASTE =
   'https://github.com/EvanZhang008/open-walnut/blob/main/skills/setup-walnut/SKILL.md';
 
 export const LOCAL_DISMISS_LABEL = 'Dismiss Claude Code notice';
+export const PROVIDER_DISMISS_LABEL = 'Dismiss AI provider notice';
 
 interface SetupBannerProps {
   health: SystemHealth;
@@ -62,7 +63,7 @@ export interface LocalClaudeNotice {
   /** The section, without a card frame. */
   node: ReactNode;
   /** Which notice renders (null: none). */
-  kind: 'install' | 'sign-in' | null;
+  kind: LocalNoticeKind | null;
 }
 
 const TITLES: Record<ClaudeBannerView['kind'], string> = {
@@ -81,8 +82,8 @@ export function useLocalClaudeNotice({ health, loading, onNavigateSettings, onDi
 
   // The one rule the card and the bell dot share: install or sign-in, never outdated.
   const kind = localNoticeShows(health, dismissedList, loading);
-  const view = kind ? claudeBannerView(health) : null;
-  const dismissKey = view?.dismissKey ?? 'install:';
+  const view = kind && kind !== 'provider' ? claudeBannerView(health) : null;
+  const dismissKey = kind === 'provider' ? providerDismissKey(health) : view?.dismissKey ?? 'install:';
 
   const onDismiss = useCallback(() => {
     dismissLocal(dismissKey);
@@ -119,7 +120,7 @@ export function useLocalClaudeNotice({ health, loading, onNavigateSettings, onDi
   // resolves hasReadyProvider is undefined, and treating that as "not ready" is
   // what made the onboarding flash on every refresh.
   if (!kind) return NONE;
-  const title = TITLES[kind];
+  const title = kind === 'provider' ? TITLES.install : TITLES[kind];
   const header = (
     <div className="setup-banner-header">
       <span className="setup-banner-title">{title}</span>
@@ -127,10 +128,17 @@ export function useLocalClaudeNotice({ health, loading, onNavigateSettings, onDi
   );
   // LAST in the section (Tab order: the actions, then this x; spec G20), at the end of
   // the section's last line: never in the card's top-right corner (spec 5.1, C53).
+  const dismissLabel = kind === 'provider' ? PROVIDER_DISMISS_LABEL : LOCAL_DISMISS_LABEL;
   const dismiss = (
     <button type="button" tabIndex={0} className="setup-banner-dismiss ab-local-x" onClick={onDismiss}
-      aria-label={LOCAL_DISMISS_LABEL} title={LOCAL_DISMISS_LABEL}>&times;</button>
+      aria-label={dismissLabel} title={dismissLabel}>&times;</button>
   );
+  if (kind === 'provider') {
+    return {
+      present: true, title, kind,
+      node: <ProviderSection header={header} dismiss={dismiss} health={health} onNavigateSettings={onNavigateSettings} />,
+    };
+  }
   if (kind !== 'install' && view) {
     return {
       present: true, title, kind,
@@ -204,6 +212,37 @@ function InstallSection({ header, dismiss, view, pending, error, onFix, onNaviga
       )}
       <div className="setup-alt ab-local-alt">
         <span className="text-sm text-muted">Prefer an API key or Bedrock credentials instead?</span>
+        <button type="button" tabIndex={0} className="setup-step-btn" onClick={() => onNavigateSettings('#providers')}>
+          Open API settings
+        </button>
+        {dismiss}
+      </div>
+    </section>
+  );
+}
+
+// ── Not ready, nothing needs Claude Code: the provider Walnut's own calls go to does not answer. ──
+function ProviderSection({ header, dismiss, health, onNavigateSettings }: {
+  header: ReactNode; dismiss: ReactNode; health: SystemHealth; onNavigateSettings: (hash?: string) => void;
+}) {
+  const name = providerLabel(health.mainProvider);
+  // credentialDetail is the server's address for a provider on the user's own machine.
+  const address = health.mainProviderLocal && health.credentialDetail ? health.credentialDetail : '';
+  return (
+    <section className="ab-local" data-testid="setup-banner-provider">
+      {header}
+      {health.mainProviderLocal ? (
+        <p className="setup-lead">
+          Walnut runs on <strong>{name}</strong>, and it is not answering{address ? <> at <code>{address}</code></> : null}.
+          {' '}{health.mainProvider === 'ollama' ? <>Start it (<code>ollama serve</code>) and</> : 'Start it and'} this notice goes away by itself.
+        </p>
+      ) : (
+        <p className="setup-lead">
+          Walnut runs on <strong>{name}</strong>, and it has no key or sign-in it can use yet. Add one in API settings.
+        </p>
+      )}
+      <div className="setup-alt ab-local-alt">
+        <span className="text-sm text-muted">Use another provider instead?</span>
         <button type="button" tabIndex={0} className="setup-step-btn" onClick={() => onNavigateSettings('#providers')}>
           Open API settings
         </button>

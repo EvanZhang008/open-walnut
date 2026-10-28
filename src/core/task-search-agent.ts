@@ -9,6 +9,12 @@
  * prompt, and its stream translated into live progress events. The seam stays
  * injectable so a test can script an answer without a child process.
  *
+ * Without Claude Code, or when the user runs Walnut's own model calls on a
+ * server of their own (Ollama, an OpenAI-compatible local server), the search
+ * runs IN PROCESS on that provider instead (pickAgentSearchEngine): one native
+ * `search` tool through runMicroAgent, the same seed and progress lines. That
+ * run is not a session, so "open this search as a session" starts a fresh one.
+ *
  * Because that child is a REAL Claude Code session, each run is ADOPTABLE: the
  * session it ran in is remembered here (see `runs` / resolveAgentSearchRun) so
  * "open this search as a session" can hand the user the finished conversation
@@ -23,6 +29,7 @@ import { randomUUID } from 'node:crypto';
 import { bus, EventNames } from './event-bus.js';
 import { backgroundAiDisabled } from './cheap-model.js';
 import { resolveClaudeCliExecutable } from './claude-cli-detect.js';
+import { CLAUDE_CLI_PROVIDER, resolveMainProviderName } from '../model/providers/default-provider.js';
 import { listTasks } from './task-manager.js';
 import { usageTracker } from './usage/index.js';
 import { count, observe } from './observability/metrics.js';
@@ -30,6 +37,7 @@ import { log } from '../logging/index.js';
 import {
   AGENT_SEARCH_PROMPT_V,
   SYSTEM_PROMPT,
+  SYSTEM_PROMPT_TOOL_LOOP,
   buildUserPrompt,
   normalizeQueryKey,
   parseAgentAnswer,
@@ -92,6 +100,15 @@ const CLI_ENGINE_EFFORT = 'medium';
 // 50s (502). A completed slow answer beats a timeout. Route wall 90s,
 // client wall 95s keep the ordering.
 const CLI_ENGINE_TIMEOUT_MS = 80_000;
+
+// The in-process engine: the seed is pre-run, then at most two rounds that may
+// search (the contract in SYSTEM_PROMPT_TOOL_LOOP), and an answer round with no
+// tools if the model is still searching (finalAnswerPrompt). Same 80s wall as the
+// child: a model on the user's own machine can be slow.
+const IN_PROCESS_MAX_ROUNDS = 2;
+const IN_PROCESS_TIMEOUT_MS = CLI_ENGINE_TIMEOUT_MS;
+const IN_PROCESS_MAX_TOKENS = 2000;
+const IN_PROCESS_TIER = 'sonnet';
 
 /** Matches MACHINE_SEMANTIC_WAIT_MS in src/web/routes/search.ts. */
 const SEED_SEMANTIC_WAIT_MS = 2000;
@@ -219,6 +236,118 @@ async function claudeCliEngine(
     ...(run.sessionId ? { sessionId: run.sessionId } : {}),
     ...(run.cwd ? { cwd: run.cwd } : {}),
   };
+}
+
+async function inProcessEngine(
+  userPrompt: string,
+  options: AgentSearchEngineOptions,
+): Promise<{ response: string; model?: string }> {
+  const { runMicroAgent } = await import('../model/micro-agent.js');
+  const { search } = await import('./search.js');
+  const progress = makeProgress(options.progressId);
+
+  const searchTool = {
+    name: 'search',
+    // Read-only, so a batch of variant searches runs concurrently (one search
+    // latency instead of N; the prompt asks for the variants in one reply).
+    parallelSafe: true,
+    description: 'Search the user\'s Walnut tasks and session transcripts. Returns JSON rows with phase + updated date; a row with type "session" carries taskId = the task that OWNS that transcript. Batch query variants as parallel calls in one reply.',
+    input_schema: {
+      type: 'object' as const,
+      properties: { q: { type: 'string', description: 'Search terms, one query per call' } },
+      required: ['q'],
+    },
+    execute: async (params: Record<string, unknown>) => {
+      const q = String(params.q ?? '').trim();
+      if (!q) return 'Error: empty query';
+      return serializeRows(await search(q, { types: ['task', 'session'], limit: SEARCH_ROW_LIMIT }));
+    },
+  };
+
+  const prompt = await appendSeedResults(userPrompt, options.query, progress);
+  const qByToolUse = new Map<string, string>();
+  let answering = false;
+  const run = (tools: boolean) => runMicroAgent({
+    system: options.system,
+    userMessage: tools ? prompt : `${prompt}\n\n${NO_TOOLS_LINE}`,
+    ...(tools ? { tools: [searchTool] } : {}),
+    tier: IN_PROCESS_TIER,
+    maxTokens: IN_PROCESS_MAX_TOKENS,
+    maxToolRounds: IN_PROCESS_MAX_ROUNDS,
+    timeoutMs: options.timeoutMs,
+    usageSource: 'task-search-agent',
+    finalAnswerPrompt: FINAL_ANSWER_LINE,
+    callbacks: {
+      onToolCall: (toolName, input, toolUseId) => {
+        if (toolName !== 'search') return;
+        answering = false; // text before a tool call was preamble, not the answer
+        const q = String((input as { q?: unknown }).q ?? '');
+        qByToolUse.set(toolUseId, q);
+        progress({ kind: 'search', q });
+      },
+      onToolResult: (toolName, result, toolUseId) => {
+        if (toolName !== 'search') return;
+        let count: number | undefined;
+        try { count = (JSON.parse(result) as unknown[]).length; } catch { /* row count is decoration */ }
+        progress({ kind: 'search_done', q: qByToolUse.get(toolUseId), ...(count !== undefined ? { count } : {}) });
+      },
+      onText: () => {
+        if (answering) return;
+        answering = true;
+        progress({ kind: 'answering' });
+      },
+    },
+  });
+  let result;
+  try {
+    result = await run(true);
+  } catch (err) {
+    // A local model without tool support (Ollama answers 400 "does not support
+    // tools"): it still judges the seed rows, which hold the common answer.
+    if (!/support(s)? tools|tools? (is|are) not supported|tool[_ ]?(use|calling)? (is )?not supported/i.test(err instanceof Error ? err.message : String(err))) throw err;
+    log.web.info('task-search-agent: the model takes no tools, answering from the seed', { error: err instanceof Error ? err.message : String(err) });
+    result = await run(false);
+  }
+  if (result.aborted) throw new Error(`AI search timed out after ${options.timeoutMs}ms`);
+  return { response: result.response, model: result.model };
+}
+
+const FINAL_ANSWER_LINE = 'Your search rounds are used up. Print the JSON answer NOW from the rows you have seen (lower confidence, or {"results":[]}), with no tool calls.';
+const NO_TOOLS_LINE = 'No search tool is available in this run: answer from the SEED RESULTS above only.';
+
+export type AgentSearchEngineKind = 'cli' | 'in-process' | 'none';
+
+/**
+ * Which engine answers. The slim claude child whenever Claude Code is here,
+ * unless the user sent Walnut's own model calls to a server of their own: then
+ * that provider, in process (a local-model setup must not reach a cloud model
+ * behind the user's back). Without Claude Code, the configured provider in
+ * process; 'none' only when that provider IS Claude Code.
+ */
+export function pickAgentSearchEngine(input: {
+  cliInstalled: boolean;
+  mainProvider: string;
+  mainProviderIsLocal: boolean;
+}): AgentSearchEngineKind {
+  if (input.mainProviderIsLocal) return 'in-process';
+  if (input.cliInstalled) return 'cli';
+  return input.mainProvider === CLAUDE_CLI_PROVIDER ? 'none' : 'in-process';
+}
+
+async function resolveEngineKind(): Promise<AgentSearchEngineKind> {
+  cliAvailable ??= resolveClaudeCliExecutable() !== null;
+  try {
+    const { getConfig } = await import('./config-manager.js');
+    const { buildProviderMap } = await import('../model/providers/registry.js');
+    const { isLocalModelProvider } = await import('../model/providers/local-provider.js');
+    const config = await getConfig();
+    const mainProvider = resolveMainProviderName(config, cliAvailable);
+    const prov = buildProviderMap(config.providers, config)[mainProvider];
+    return pickAgentSearchEngine({ cliInstalled: cliAvailable, mainProvider, mainProviderIsLocal: isLocalModelProvider(prov) });
+  } catch {
+    // An unreadable config: the child is the one engine that needs none.
+    return cliAvailable ? 'cli' : 'none';
+  }
 }
 
 // Every input token is round-trip latency in the answer turn (profiled: a
@@ -447,25 +576,23 @@ async function inner(
   if (backgroundAiDisabled()) {
     throw new AgentSearchError('AI search is disabled in this environment', 503, { code: 'ai_disabled' });
   }
-  // Only the real child needs the claude binary; an injected engine (tests)
-  // must not be blocked by a CLI-less machine.
-  const cliEngine = !opts.engine;
-  if (cliEngine) {
-    cliAvailable ??= resolveClaudeCliExecutable() !== null;
-    if (!cliAvailable) {
-      throw new AgentSearchError('claude CLI not available on this host', 503, { code: 'ai_disabled' });
-    }
+  // An injected engine (tests) runs as given; otherwise the child, or the
+  // configured provider in process (pickAgentSearchEngine).
+  const kind = opts.engine ? undefined : await resolveEngineKind();
+  if (kind === 'none') {
+    throw new AgentSearchError('claude CLI not available on this host', 503, { code: 'ai_disabled' });
   }
+  const cliEngine = kind === 'cli';
 
   await acquireCallSlot();
   const t0 = Date.now();
   let answer: Awaited<ReturnType<AgentSearchEngine>>;
   try {
-    const engine = opts.engine ?? claudeCliEngine;
+    const engine = opts.engine ?? (cliEngine ? claudeCliEngine : inProcessEngine);
     // The child searches via curl on the RUNNING server's own address (tens
     // of ms) instead of spawning a walnut CLI process per query; falls back
     // to the walnut-CLI prompt when the address isn't known yet (tests).
-    let cliSystem = SYSTEM_PROMPT;
+    let cliSystem = kind === 'in-process' ? SYSTEM_PROMPT_TOOL_LOOP : SYSTEM_PROMPT;
     if (cliEngine) {
       try {
         const { getPluginApiBase } = await import('./plugins/server-api.js');
@@ -476,7 +603,7 @@ async function inner(
     answer = await engine(buildUserPrompt(trimmed), {
       system: cliSystem,
       model: CLI_ENGINE_MODEL,
-      timeoutMs: opts.timeoutMs ?? CLI_ENGINE_TIMEOUT_MS,
+      timeoutMs: opts.timeoutMs ?? (kind === 'in-process' ? IN_PROCESS_TIMEOUT_MS : CLI_ENGINE_TIMEOUT_MS),
       query: trimmed,
       ...(opts.progressId ? { progressId: opts.progressId } : {}),
     });
@@ -558,6 +685,8 @@ export function prewarmAgentSearchChild(): void {
   if (!cliAvailable) return;
   void (async () => {
     try {
+      // A search that will run in process has no child to warm.
+      if (await resolveEngineKind() !== 'cli') return;
       const { getPluginApiBase } = await import('./plugins/server-api.js');
       const { buildCliSystemPrompt } = await import('./task-search-agent-contract.js');
       const { prewarmMicroClaude } = await import('../providers/micro-claude-warm.js');

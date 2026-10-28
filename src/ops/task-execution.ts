@@ -12,7 +12,7 @@ export const TASK_START_INPUT = {
   host: z.string().optional().describe('Execution host alias; omit to inherit task/project defaults'),
   model: z.string().optional().describe('Model id or provider model value'),
   mode: z.enum(SESSION_MODE_IDS).optional().describe('Permission mode. Leave it out for a new coding task: never plan except when the user asks for plan; the owner writes its own plan and carries on.'),
-  engine: z.enum(SESSION_ENGINE_IDS).optional().describe('Coding engine; default claude'),
+  engine: z.enum(SESSION_ENGINE_IDS).optional().describe('Coding engine; default: the default engine (Settings > Engines), claude when none is set'),
   effort: z.enum(SESSION_EFFORT_IDS as [typeof SESSION_EFFORT_IDS[number], ...typeof SESSION_EFFORT_IDS[number][]]).optional().describe('Reasoning effort, the draft picker\'s Effort row (claude engine only; xhigh and max only on models that offer them). Omit for the model default'),
   user_request: z.string().trim().min(10).optional().describe('The user\'s own words asking for this start now, quoted. Only when the user asked: it lets the start past the 8-running-subtask brake (up to 16). Never for work you decided on yourself'),
   create_cwd: z.boolean().optional().describe('Create cwd on its host first, the folder picker\'s "Create folder & start". Default false: a missing folder fails the start'),

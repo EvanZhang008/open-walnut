@@ -43,6 +43,7 @@ systemRouter.get('/health', async (req, res) => {
       status: 'ok',
       claudeCliAvailable: health.claudeCliAvailable,
       hasReadyProvider: health.hasReadyProvider,
+      ...(health.claudeCodeNeeded !== undefined ? { claudeCodeNeeded: health.claudeCodeNeeded } : {}),
     })
     return
   }

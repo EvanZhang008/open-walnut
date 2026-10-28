@@ -154,6 +154,24 @@ describe('runMicroAgent — the round loop', () => {
     expect(result.response).toContain('[Tool limit reached (2 rounds)');
   });
 
+  it('finalAnswerPrompt: rounds used up, one more call WITHOUT tools, the line after the tool results', async () => {
+    const tool = stubTool('look', 'still nothing');
+    replies = [
+      toolReply({ id: 'a', name: 'look' }),
+      toolReply({ id: 'b', name: 'look' }),
+      textReply('{"results":[]}'),
+    ];
+    const result = await runMicroAgent(opts({ tools: [tool], maxToolRounds: 2, finalAnswerPrompt: 'Answer now.' }));
+    expect(calls).toHaveLength(3);
+    expect(calls[2].tools).toBeUndefined();
+    const last = calls[2].messages[calls[2].messages.length - 1] as { role: string; content: Array<{ type: string; text?: string }> };
+    expect(last.role).toBe('user');
+    expect(last.content.map((b) => b.type)).toEqual(['tool_result', 'text']);
+    expect(last.content[1].text).toBe('Answer now.');
+    expect(result.response).toBe('{"results":[]}');
+    expect(result.response).not.toContain('Tool limit');
+  });
+
   it('accounts every round under the caller\'s usage source', async () => {
     replies = [
       { ...toolReply({ id: 'a', name: 'look' }), usage: { input_tokens: 10, output_tokens: 5 } as never },

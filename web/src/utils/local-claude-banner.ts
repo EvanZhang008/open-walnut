@@ -71,6 +71,20 @@ export function claudeBannerView(health: SystemHealth): ClaudeBannerView | null 
   return null;
 }
 
+/** What the local section can show: a Claude Code state, or (nothing needing Claude Code) the main provider not answering. */
+export type LocalNoticeKind = 'install' | 'sign-in' | 'provider';
+
+/** A dismissed "provider is not answering" stays dismissed for that provider and address only. */
+export function providerDismissKey(health: Pick<SystemHealth, 'mainProvider' | 'credentialDetail'>): string {
+  return `provider:${health.mainProvider ?? ''}:${health.credentialDetail ?? ''}`;
+}
+
+/** The provider line: "Ollama" for the built-in name, the configured name otherwise. */
+export function providerLabel(name: string | undefined): string {
+  if (!name) return 'Your AI provider';
+  return name === 'ollama' ? 'Ollama' : name;
+}
+
 /**
  * Does the local Claude Code section render right now, and as what? The one
  * rule the card and the bell dot share (so they never drift): the twin of
@@ -78,11 +92,22 @@ export function claudeBannerView(health: SystemHealth): ClaudeBannerView | null 
  * provider or no CLI reads as install. 'outdated' (a model's version floor)
  * never takes a banner section, the same rule as a remote host's.
  */
-export function localNoticeShows(health: SystemHealth | undefined, dismissedList: readonly string[], loading = false): 'install' | 'sign-in' | null {
+export function localNoticeShows(health: SystemHealth | undefined, dismissedList: readonly string[], loading = false): LocalNoticeKind | null {
   if (!health || loading || health.hasReadyProvider === undefined) return null;
+  // Nothing here runs on Claude Code (local models): its state says nothing, and
+  // the one thing that can be wrong is the provider Walnut's own calls go to.
+  if (health.claudeCodeNeeded === false) {
+    if (health.hasReadyProvider) return null;
+    return dismissedList.includes(providerDismissKey(health)) ? null : 'provider';
+  }
   const view = claudeBannerView(health);
   const providerOk = health.hasReadyProvider ?? false;
   const cliOk = health.claudeCliAvailable ?? true;
+  // Claude Code is fine and the model server Walnut's own calls go to is down:
+  // say that, never "install Claude Code" to a machine that has it.
+  if (!view && cliOk && !providerOk && health.mainProviderLocal) {
+    return dismissedList.includes(providerDismissKey(health)) ? null : 'provider';
+  }
   const kind = view?.kind ?? (!providerOk || !cliOk ? 'install' : null);
   if (!kind || kind === 'outdated') return null;
   return isLocalDismissed(view?.dismissKey ?? 'install:', kind, dismissedList) ? null : kind;

@@ -249,3 +249,67 @@ describe('the local section mounted', () => {
     expect(host.querySelector('[data-testid="setup-banner-sign-in"]')).not.toBeNull()
   })
 })
+
+// ── Local models: nothing needs Claude Code (another default engine, another provider) ──
+
+describe('setup banner when nothing needs Claude Code', () => {
+  const MISSING_LOCAL = { claude: { found: false }, problems: [MISSING] } as unknown as Partial<LocalClaudeStatus>
+  const ollamaUp: SystemHealth = {
+    hasReadyProvider: true, claudeCliAvailable: false, claudeCodeNeeded: false,
+    mainProvider: 'ollama', mainProviderLocal: true, credentialDetail: 'ollama (http://localhost:11434)',
+    localClaude: local(MISSING_LOCAL),
+  }
+  const ollamaDown: SystemHealth = { ...ollamaUp, hasReadyProvider: false, credentialDetail: 'http://localhost:11434' }
+
+  it('Ollama answering: no section, though Claude Code is missing and its problem is listed', () => {
+    expect(render(ollamaUp)).toBe('')
+    expect(localNoticeShows(ollamaUp, [])).toBeNull()
+  })
+
+  it('Ollama not answering: the provider section, naming Ollama, its address and `ollama serve`, never Claude Code', () => {
+    expect(localNoticeShows(ollamaDown, [])).toBe('provider')
+    const html = render(ollamaDown)
+    expect(html).toContain('data-testid="setup-banner-provider"')
+    expect(text(html)).toContain('Walnut runs on Ollama, and it is not answering at http://localhost:11434.')
+    expect(text(html)).toContain('ollama serve')
+    expect(html).toContain('Open API settings')
+    expect(html).toContain('Dismiss AI provider notice')
+    expect(html).not.toContain('Claude Code')
+    expect(html).not.toContain(INSTALL)
+  })
+
+  it('another local server (no address known): a generic line', () => {
+    const html = render({ hasReadyProvider: false, claudeCodeNeeded: false, mainProvider: 'lmstudio', mainProviderLocal: true })
+    expect(text(html)).toContain('Walnut runs on lmstudio, and it is not answering.')
+    expect(html).not.toContain('ollama serve')
+  })
+
+  it('a cloud provider with no key (nothing needs Claude Code): asks for a key, never "start it"', () => {
+    const html = render({ hasReadyProvider: false, claudeCodeNeeded: false, mainProvider: 'bedrock', credentialSource: 'none' })
+    expect(text(html)).toContain('Walnut runs on bedrock, and it has no key or sign-in it can use yet.')
+    expect(text(html)).not.toContain('not answering')
+  })
+
+  it('Claude Code installed and fine, sessions on Claude, Ollama down: the provider card, not "install Claude Code"', () => {
+    const health: SystemHealth = { ...ollamaDown, claudeCliAvailable: true, claudeCodeNeeded: true, localClaude: local({}) }
+    expect(localNoticeShows(health, [])).toBe('provider')
+    const html = render(health)
+    expect(html).toContain('data-testid="setup-banner-provider"')
+    expect(html).not.toContain(INSTALL)
+  })
+
+  it('Claude Code missing, sessions on Claude, Ollama down: the install card first (it blocks sessions)', () => {
+    expect(localNoticeShows({ ...ollamaDown, claudeCodeNeeded: true }, [])).toBe('install')
+  })
+
+  it('a dismissal holds for that provider and address only', () => {
+    expect(localNoticeShows(ollamaDown, ['provider:ollama:http://localhost:11434'])).toBeNull()
+    expect(localNoticeShows({ ...ollamaDown, credentialDetail: 'http://gpu-box:11434' }, ['provider:ollama:http://localhost:11434'])).toBe('provider')
+  })
+
+  it('an older server (no claudeCodeNeeded) and a Claude setup keep the install card', () => {
+    const older = { hasReadyProvider: true, claudeCliAvailable: false } as SystemHealth
+    expect(localNoticeShows(older, [])).toBe('install')
+    expect(localNoticeShows({ ...ollamaUp, claudeCodeNeeded: true }, [])).toBe('install')
+  })
+})

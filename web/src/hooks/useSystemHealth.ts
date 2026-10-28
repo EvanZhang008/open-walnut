@@ -44,6 +44,11 @@ export interface SystemHealth {
   claudeCliAuth?: string;
   /** This machine's Claude Code: installed, signed in, new enough for the configured model. */
   localClaude?: LocalClaudeStatus;
+  /** False when nothing here runs on Claude Code (another default engine, another
+   *  provider for Walnut's own calls). Absent from older servers: read as needed. */
+  claudeCodeNeeded?: boolean;
+  /** The main provider is a model server the user hosts (Ollama, a local OpenAI-compatible one). */
+  mainProviderLocal?: boolean;
 }
 
 const defaultHealth: SystemHealth = {};
@@ -102,10 +107,12 @@ export function useSystemHealth() {
   const gitSyncFailing = !gitSync.protected || gitSync.consecutiveFailures >= 3;
   const hasIssues = gitSyncFailing;
 
-  // Setup is "complete" once the Personal AI has a provider AND the CLI is present.
+  // Setup is "complete" once the Personal AI has a provider AND the CLI is present,
+  // or nothing needs the CLI (a setup on local models).
   // Fields are optional on the wire; treat undefined as "not yet known" → not complete,
   // so the banner can appear on first load rather than flashing complete-then-incomplete.
-  const setupComplete = health.claudeCliAvailable === true && health.hasReadyProvider === true;
+  const setupComplete = health.hasReadyProvider === true
+    && (health.claudeCliAvailable === true || health.claudeCodeNeeded === false);
 
   return { health, gitSync, hasIssues, loading, setupComplete };
 }

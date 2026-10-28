@@ -30,6 +30,7 @@ import { log } from '../logging/index.js'
 import { WALNUT_HOME } from '../constants.js'
 import { bus, EventNames } from '../core/event-bus.js'
 import { renderSelfKnowledgeContract } from '../core/self-knowledge-contract.js'
+import { renderHintBlock } from '../core/hints/hint-format.js'
 import type { SessionEngine, SessionMode } from '../core/types.js'
 import {
   engineCaps,
@@ -95,6 +96,10 @@ export interface ResolveAcpArtifactsOptions {
   /** Executable-probe DI (tests); production reads process.env / process.cwd(). */
   executable?: EngineExecutableProbeOptions
 }
+
+/** The hint kind that carries a task session's Walnut context on an engine with no instructions channel. */
+export const SESSION_CONTEXT_HINT_KIND = 'session-context'
+const SESSION_CONTEXT_LEAD = 'Your standing instructions for this whole session. This engine has no system prompt, so Walnut sends them here once; they are configuration, not a message from the user, so do not reply to them.'
 
 /**
  * Locate the worker bundle + this engine's adapter command within this walnut
@@ -661,6 +666,10 @@ export class AcpSession {
   private conn: DaemonConnection | null = null
   private offEvent: (() => void) | null = null
   private _providerSessionId: string | null
+  /** A provider thread this instance minted that has not read Walnut's session
+   *  context yet. Only engines with no instructions channel owe it (every ACP
+   *  engine but Codex): their first prompt carries it (sessionContextPrefix). */
+  private _contextOwed = false
   private _mode: SessionMode
   private _active = false
   private _turnActive = false
@@ -1233,6 +1242,39 @@ export class AcpSession {
     return { ...overlay, ...(managed ?? {}) }
   }
 
+  /**
+   * Codex takes Walnut's session context as developer instructions at spawn
+   * (buildAdapterEnv). Every other ACP engine has no instructions channel, so a
+   * task session there used to run with no Walnut prompt at all: a Main or a lead
+   * on OpenCode or Goose did not know its role, the charter or its task directory.
+   * Their first prompt carries it instead, the one carrier every engine has (as
+   * an ask's persona does, ask-profile-prefix.ts). A lane is the Personal AI and
+   * gets its persona that way already.
+   */
+  private contextRidesFirstPrompt(): boolean {
+    return this.engineId !== 'codex' && !this.cfg.lane && !!this.taskId
+  }
+
+  /**
+   * The session context as one Walnut hint block (hints/hint-format.ts), so every
+   * display takes it off the person's bubble by structure and lists it under the
+   * message instead. '' when there is none to send; never throws.
+   */
+  private async sessionContextPrefix(): Promise<string> {
+    let context = this.cfg.developerInstructions?.trim() ?? ''
+    if (!context) {
+      try {
+        const { buildSessionContext } = await import('../core/sessions/session-context.js')
+        context = (await buildSessionContext(this.taskId, this.cfg.cwd)).systemPrompt?.trim() ?? ''
+      } catch (error) {
+        log.session.warn('acp: session context unavailable for the first prompt', {
+          runtimeId: this.runtimeId, engine: this.engineId, error: error instanceof Error ? error.message : String(error),
+        })
+      }
+    }
+    return context ? renderHintBlock(SESSION_CONTEXT_HINT_KIND, `${SESSION_CONTEXT_LEAD}\n\n${context}`) : ''
+  }
+
   /** Operator env overlay from `engines.<id>.env` (see engineEnvOverlayFromConfig). */
   private async resolveConfiguredEngineEnv(): Promise<Record<string, string> | undefined> {
     try {
@@ -1262,6 +1304,7 @@ export class AcpSession {
   }
 
   private async establishProviderSession(): Promise<string> {
+    const threadBefore = this._providerSessionId
     await this.seedReplayCursor()
     const { workerCmd, adapterCmd } = await this.resolveArtifacts()
     // Fail closed BEFORE touching the daemon: a missing provider executable is
@@ -1366,6 +1409,15 @@ export class AcpSession {
     }
     await this.replayPersistedConfig(conn)
     this.persistPendingPermission()
+    // A new thread (the first one, or a fresh one after a load failure) has never
+    // read the session context; a loaded or warm one has, once any prompt of it was
+    // accepted. The record's count is the durable half: a server restart, or the
+    // attach path's new instance, between establish and the first prompt still owes it.
+    if (this.contextRidesFirstPrompt()) {
+      const neverPrompted = this._providerSessionId === threadBefore
+        && (await getSessionByClaudeId(this.trackingId()).catch(() => undefined))?.messageCount === 0
+      if (this._providerSessionId !== threadBefore || neverPrompted) this._contextOwed = true
+    }
     this._active = true
     return this._providerSessionId
   }
@@ -1447,11 +1499,13 @@ export class AcpSession {
     const conn = await this.ensureConn()
 
     const commandId = `acp-prompt:${walnutMessageId}`
+    const owed = this._contextOwed
+    const prefix = owed ? await this.sessionContextPrefix() : ''
     const sendResp = await conn.send('acpSend', {
       sid: this.runtimeId,
       commandId,
       walnutMessageId,
-      text: message,
+      text: prefix ? `${prefix}\n\n${message}` : message,
       ...this.budgetTarget(),
     })
     if (!sendResp.ok) {
@@ -1466,6 +1520,7 @@ export class AcpSession {
       }
       throw new Error('acpSend failed: ' + sendResp.error)
     }
+    if (owed) this._contextOwed = false
     // Journal delivery can beat this RPC response, including a complete fast
     // turn. Acceptance and terminal persistence share one ordered commit chain;
     // never reopen local state after a terminal fact has already arrived.

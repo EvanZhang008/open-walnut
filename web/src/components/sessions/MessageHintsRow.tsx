@@ -14,6 +14,8 @@ const LABELS: Record<string, string> = {
   'rich-output': 'Rich output',
   'reply-language': 'Reply language',
   'voice-reply': 'Voice reply',
+  // An ACP engine with no system prompt reads its session instructions here (acp-session.ts).
+  'session-context': 'Session instructions',
 };
 
 export function hintLabel(h: Pick<CarriedHint, 'kind' | 'arg'>): string {

@@ -692,6 +692,7 @@ let localDaemonLaneOwner = 0
 let unsubscribeSendPathAnnounce: (() => void) | null = null
 /** Daily error-notification reconcile (expiry + settled-receipt prune). */
 let notificationReconcileTimer: ReturnType<typeof setInterval> | null = null
+let localProviderTimer: ReturnType<typeof setInterval> | null = null
 // Pending deferred-markDone timers from the session:status-changed handler.
 // Hoisted to module scope so stopServer() can cancel them before teardown,
 // otherwise a late-firing timer could mutate sessionStreamBuffer after the
@@ -886,7 +887,16 @@ export interface SystemHealthState {
   claudeCliAuth?: string;
   /** This machine's Claude Code: installed, signed in, new enough (the setup banner's three states). */
   localClaude?: import('../core/hosts/local-readiness.js').LocalClaudeStatus;
+  /** False when nothing here runs on Claude Code: the default engine is another
+   *  one and Walnut's own calls go to another provider. The banner then stops
+   *  asking for Claude Code. Absent on older servers (read as needed). */
+  claudeCodeNeeded?: boolean;
+  /** The main provider is a model server the user hosts (Ollama, a local OpenAI-compatible one). */
+  mainProviderLocal?: boolean;
 }
+
+/** How often a main provider on the user's own server is re-asked whether it answers. */
+const LOCAL_PROVIDER_RECHECK_MS = 30_000
 
 const systemHealth: SystemHealthState = {
   claudeCliAvailable: false,
@@ -920,6 +930,8 @@ function applyCredentialHealth(cred: Awaited<ReturnType<typeof resolveCredential
   systemHealth.mainProvider = cred.mainProvider
   systemHealth.mainProviderImplicit = cred.mainProviderImplicit
   systemHealth.claudeCliAuth = cred.claudeCliAuth
+  systemHealth.claudeCodeNeeded = cred.claudeCodeNeeded
+  systemHealth.mainProviderLocal = cred.mainProviderLocal
 }
 
 /** Check if Claude Code CLI is available to Walnut. */
@@ -931,7 +943,10 @@ function checkClaudeCliAvailable(): boolean {
  *  Bedrock detection delegates to the unified credential resolver (config →
  *  ~/.claude/settings.json env → process.env → ~/.aws) so the Settings page,
  *  the Personal AI, and onboarding all agree on one priority chain. Non-Bedrock
- *  providers count as ready when they carry an explicit key. */
+ *  providers count as ready when they carry an explicit key. A main provider on
+ *  the user's own server (Ollama, a local OpenAI-compatible one) has no key: it
+ *  is ready when that server answers, and it alone decides, since it is where
+ *  Walnut's own calls go. */
 async function resolveCredentialHealth(): Promise<{
   hasReadyProvider: boolean
   source?: import('../core/credential-resolver.js').CredentialSource
@@ -939,6 +954,8 @@ async function resolveCredentialHealth(): Promise<{
   mainProvider?: string
   mainProviderImplicit?: boolean
   claudeCliAuth?: string
+  claudeCodeNeeded?: boolean
+  mainProviderLocal?: boolean
 }> {
   try {
     const { getConfig } = await import('../core/config-manager.js')
@@ -946,13 +963,29 @@ async function resolveCredentialHealth(): Promise<{
     const { buildProviderMap } = await import('../model/providers/registry.js')
     const { resolveMainProviderName, mainProviderIsImplicit } = await import('../model/providers/default-provider.js')
     const { detectClaudeCliAsync } = await import('../core/claude-cli-detect.js')
+    const { isLocalModelProvider, probeLocalProvider, localProviderBaseUrl } = await import('../model/providers/local-provider.js')
+    const { resolveDefaultEngine } = await import('../core/agents/default-engine.js')
     const config = await getConfig()
     const cli = await detectClaudeCliAsync()
     const mainProvider = resolveMainProviderName(config, cli.installed)
+    const providers = buildProviderMap(config.providers, config)
+    const mainProv = providers[mainProvider]
+    const mainProviderLocal = isLocalModelProvider(mainProv)
     const base = {
       mainProvider,
       mainProviderImplicit: mainProviderIsImplicit(config),
       claudeCliAuth: cli.installed ? cli.auth.label : undefined,
+      // Sessions run on the default engine (Main, asks, routines, task_start), and
+      // Walnut's own calls on the main provider: neither on Claude, nothing needs it.
+      claudeCodeNeeded: mainProvider === 'claude_cli' || resolveDefaultEngine(config) === 'claude',
+      mainProviderLocal,
+    }
+
+    if (mainProviderLocal && mainProv) {
+      const probe = await probeLocalProvider(mainProv)
+      return probe.ok
+        ? { ...base, hasReadyProvider: true, source: 'config', detail: `${mainProvider} (${localProviderBaseUrl(mainProv)})` }
+        : { ...base, hasReadyProvider: false, source: 'none', detail: localProviderBaseUrl(mainProv) }
     }
 
     // Claude Code is the provider (by default when installed, or by choice): it is
@@ -971,7 +1004,6 @@ async function resolveCredentialHealth(): Promise<{
     }
 
     // Other providers (Anthropic direct, OpenAI, Google) — ready if they have a key.
-    const providers = buildProviderMap(config.providers, config)
     for (const [, prov] of Object.entries(providers)) {
       if (prov.api === 'bedrock' || prov.api === 'ollama') continue
       if (prov.api === 'claude-cli') {
@@ -4112,14 +4144,40 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       const prevSource = systemHealth.credentialSource
       const cred = await resolveCredentialHealth()
       const prevProvider = systemHealth.mainProvider
+      const prevNeeded = systemHealth.claudeCodeNeeded
       applyCredentialHealth(cred)
-      if (cred.hasReadyProvider !== prev || cred.source !== prevSource || cred.mainProvider !== prevProvider) {
+      if (cred.hasReadyProvider !== prev || cred.source !== prevSource || cred.mainProvider !== prevProvider
+        || cred.claudeCodeNeeded !== prevNeeded) {
         broadcastEvent('system:health', systemHealth)
       }
       // A different model may need a newer Claude Code (claude-version-floor.ts).
       if (bootPolicy('local-claude-probe')) void import('../core/hosts/local-readiness.js').then((m) => m.localClaudeConfigChanged()).catch(() => {})
     } catch { /* non-critical */ }
   })
+
+  // A model server the user hosts comes and goes on its own (Ollama started
+  // after Walnut, or quit): re-ask it every 30s while it is the main provider,
+  // and tell the banner when the answer changes. A cloud provider never changes
+  // without a config change, which the subscription above already covers.
+  if (localProviderTimer) clearInterval(localProviderTimer)
+  // Only the probe runs on the clock; the full re-read (the CLI detection spawns a
+  // child on a Mac) runs only when the answer changed.
+  localProviderTimer = setInterval(() => {
+    if (!systemHealth.mainProviderLocal || !systemHealth.mainProvider) return
+    void (async () => {
+      const { getConfig } = await import('../core/config-manager.js')
+      const { buildProviderMap } = await import('../model/providers/registry.js')
+      const { isLocalModelProvider, probeLocalProvider } = await import('../model/providers/local-provider.js')
+      const config = await getConfig()
+      const prov = buildProviderMap(config.providers, config)[systemHealth.mainProvider!]
+      if (!prov || !isLocalModelProvider(prov)) return
+      if ((await probeLocalProvider(prov)).ok === systemHealth.hasReadyProvider) return
+      const cred = await resolveCredentialHealth()
+      applyCredentialHealth(cred)
+      broadcastEvent('system:health', systemHealth)
+    })().catch(() => { /* non-critical */ })
+  }, LOCAL_PROVIDER_RECHECK_MS)
+  localProviderTimer.unref?.()
 
   // Last-markStreaming timestamp per sessionId — used to suppress stale
   // session:status-changed{idle|stopped|error} events from old transports that
@@ -6266,6 +6324,10 @@ export async function stopServer(): Promise<void> {
   registry.beginClosing()
   try { (await import('../core/turn-snapshots/settings-push.js')).stopTurnSnapshotSettingsSync() } catch { /* never started */ }
   try { (await import('../core/stt/voice-archive-replication.js')).stopVoiceArchiveReplication() } catch { /* never started */ }
+  if (localProviderTimer) {
+    clearInterval(localProviderTimer)
+    localProviderTimer = null
+  }
   if (notificationReconcileTimer) {
     clearInterval(notificationReconcileTimer)
     notificationReconcileTimer = null

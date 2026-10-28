@@ -34,6 +34,9 @@
 import { sendMessage, type MessageParam, type Tool, type UsageStats } from './model.js';
 import type { ToolDefinition, ToolExecuteMeta, ToolResultContent } from './tools.js';
 import { resolveMainProviderName } from './providers/default-provider.js';
+import { MODEL_CATALOG } from './providers/model-catalog.js';
+import { DEFAULT_MODEL } from './providers/defaults.js';
+import type { Config } from '../core/types.js';
 import type { UsageSource } from '../core/usage/types.js';
 import { log } from '../logging/index.js';
 
@@ -70,6 +73,10 @@ export interface MicroAgentOptions {
   usageSource: UsageSource;
   /** Progress callbacks; onUsage composes with the built-in recorder. */
   callbacks?: MicroAgentCallbacks;
+  /** When the tool rounds run out with the model still calling tools, ask once
+   *  more WITHOUT tools, with this line after the last tool results, and return
+   *  that answer instead of the tool-limit marker. */
+  finalAnswerPrompt?: string;
 }
 
 export interface MicroAgentResult {
@@ -101,18 +108,28 @@ export function isToolResultError(result: ToolResultContent): boolean {
   return /^Error[:\s]/i.test(text);
 }
 
-/** First catalog entry for the configured provider matching the tier,
- *  skipping -1M variants (a micro agent never needs a 1M window). */
-export async function resolveTierModel(tier: string): Promise<{ model: string; provider: string }> {
-  const { getConfig } = await import('../core/config-manager.js');
-  const config = await getConfig();
-  const provider = resolveMainProviderName(config);
-  const { MODEL_CATALOG } = await import('./providers/model-catalog.js');
+/** First catalog entry for the provider matching the tier, skipping -1M
+ *  variants (a micro agent never needs a 1M window). A provider whose catalog
+ *  has no such entry (Ollama, an OpenAI-compatible local server: their models
+ *  are whatever the user installed) gets the user's own model instead, the way
+ *  fastModelFor does: agent.fast_model for the haiku tier, else
+ *  agent.main_model. Sending the tier word itself made Ollama answer
+ *  "model 'sonnet' not found" on every routine watcher tick. */
+export function tierModelFor(config: Config, tier: string, provider: string): string {
   const entry = MODEL_CATALOG[provider]?.find((m) => {
     const id = m.id.toLowerCase();
     return id.includes(tier) && !id.includes('1m');
   });
-  return { model: entry?.id ?? tier, provider };
+  if (entry) return entry.id;
+  const own = (tier === 'haiku' ? config.agent?.fast_model : undefined) ?? config.agent?.main_model;
+  return own ?? DEFAULT_MODEL;
+}
+
+export async function resolveTierModel(tier: string): Promise<{ model: string; provider: string }> {
+  const { getConfig } = await import('../core/config-manager.js');
+  const config = await getConfig();
+  const provider = resolveMainProviderName(config);
+  return { model: tierModelFor(config, tier, provider), provider };
 }
 
 export async function runMicroAgent(opts: MicroAgentOptions): Promise<MicroAgentResult> {
@@ -251,6 +268,32 @@ export async function runMicroAgent(opts: MicroAgentOptions): Promise<MicroAgent
     log.agent.warn('micro agent exhausted its tool rounds', {
       source: opts.usageSource, maxToolRounds, model,
     });
+    if (opts.finalAnswerPrompt && !signal.aborted) {
+      // The last message is the user turn holding the tool results: the line
+      // joins it, so the conversation still alternates.
+      const last = messages[messages.length - 1] as { content: unknown[] };
+      last.content = [...last.content, { type: 'text', text: opts.finalAnswerPrompt }];
+      const final = await sendMessage({
+        system: opts.system, messages,
+        config: { model, provider, maxTokens: opts.maxTokens ?? DEFAULT_MAX_TOKENS },
+        signal,
+      });
+      if (final.usage) {
+        try {
+          usageTracker.record({
+            source: opts.usageSource, model: final.usage.model ?? model,
+            input_tokens: final.usage.input_tokens, output_tokens: final.usage.output_tokens,
+            cache_creation_input_tokens: final.usage.cache_creation_input_tokens,
+            cache_read_input_tokens: final.usage.cache_read_input_tokens,
+          });
+        } catch { /* accounting must never fail the run */ }
+        opts.callbacks?.onUsage?.(final.usage);
+      }
+      messages.push({ role: 'assistant', content: final.content } as MessageParam);
+      const text = final.content.filter((b) => b.type === 'text').map((b) => (b as { text: string }).text).join('\n');
+      if (text) opts.callbacks?.onText?.(text);
+      return { response: text, model, aborted: !!final.aborted, messages };
+    }
     response += `${response ? '\n\n' : ''}[Tool limit reached (${maxToolRounds} rounds) before a final answer.]`;
     return { response, model, aborted: false, messages };
   } finally {

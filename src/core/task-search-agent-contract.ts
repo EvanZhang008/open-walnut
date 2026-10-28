@@ -98,6 +98,22 @@ Stop as soon as you are confident. Never repeat a query. Do not narrate between 
 ${PROMPT_FOOTER}`;
 }
 
+/**
+ * System prompt for the in-process engine (the configured provider, used when
+ * Claude Code is not installed or the provider runs on the user's own machine):
+ * the model has ONE native tool, `search`, and a batch of calls in one reply runs
+ * concurrently. Latency is model round-trips, so it pushes hard on batching.
+ */
+export const SYSTEM_PROMPT_TOOL_LOOP = `${PROMPT_HEADER}
+
+## Method: every model round costs the user seconds. Fewest rounds wins.
+0. The user message already contains SEED RESULTS: the raw query was searched for you. If they already show the plausible matches, answer IMMEDIATELY with ALL of them, no tool calls at all.
+1. Otherwise issue SEVERAL search calls AT ONCE (parallel tool calls in one reply), AT MOST 4: variants with DIFFERENT vocabulary (the literal strings a transcript would contain: package names, file extensions, commands, API names) plus an English <-> Chinese translation when the query could be phrased in the other language.
+2. At most ONE more such batch if nothing was convincing. Never repeat a query (the seed query counts as used). Then print the JSON answer from what you have seen: lower confidence or {"results":[]} both beat another round.
+Do not narrate between rounds. A reply without the JSON object is a total failure.
+
+${PROMPT_FOOTER}`;
+
 /** apiBase-less fallback shape (what injected-engine tests pin). */
 export const SYSTEM_PROMPT = buildCliSystemPrompt();
 
