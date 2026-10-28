@@ -1,6 +1,9 @@
 import SwiftUI
 
-/// The Chat tab's left-edge drawer: the wordmark, the agent list (only when
+/// The Chat tab's left-edge drawer: the wordmark, New chat, and one of two
+/// views the user switches between (the pick is kept): the ORG, the default
+/// (the CEO and each VP with its live status, `ChatDrawerOrgList`; a tap opens
+/// that node's chat), or CHATS: the agent list (only when
 /// there is more than one agent to be on), the active agent's asks (the SAME
 /// list the Mac's Ask drawer shows: every chat with a session is one, and so is
 /// every ask started on the Mac), the chats that list does not hold under
@@ -38,6 +41,27 @@ struct ChatDrawer: View {
     /// back at its top, where New chat and the agents are: a drawer reopened
     /// where it was last scrolled hides both under a long list.
     var isOpen = false
+    /// Open an org node's chat (the CEO or a VP). The drawer closes first.
+    var openOrgNode: (ChatOrgModel.Row) -> Void = { _ in }
+
+    /// Org (the default) or Chats; the user's pick is kept.
+    @AppStorage(ChatDrawerView.storageKey) private var viewPick = ChatDrawerView.org.rawValue
+    /// The org as last read (`GET /org`), reloaded each time the drawer comes out.
+    @State private var orgTree: OrgTreeWire?
+    /// false: this server has no org (an older one), so the drawer is only its list.
+    @State private var orgAvailable = true
+    @State private var orgLoading = false
+    @State private var orgError: String?
+    /// Bumped by every load: only the newest one writes, so a load the drawer's opening cancelled
+    /// can neither block the next one nor leave its error behind.
+    @State private var orgLoadGen = 0
+    /// The rows' order, taken while the drawer is shut (and at the first load). A load while it is
+    /// out recolors rows in place and never moves one under a finger that is about to tap it.
+    @State private var orgOrder: [String] = []
+    /// Until when after the drawer comes out the order may still follow the data: the read
+    /// the opening starts (and a status that moved just before) lands within it, before the
+    /// user reaches for a row. After that the order holds still under the finger.
+    @State private var orgSettleUntil = Date.distantPast
 
     @State private var renameTarget: ConversationSummary?
     @State private var renameDraft = ""
@@ -170,14 +194,26 @@ struct ChatDrawer: View {
             VStack(alignment: .leading, spacing: 0) {
                 header
                     .id(Self.topID)
-                // Only when there is a choice: on a server with one agent an
-                // "Agents" section is a heading over a single fact.
-                if chat.agents.count > 1 { agentsSection }
-                if chat.asksListed {
-                    asksSection
-                    earlierSection
+                if orgAvailable { viewSwitch }
+                if showsOrg {
+                    ChatDrawerOrgList(
+                        rows: orgRows, loadError: orgError, loading: orgLoading,
+                        retry: { Task { await loadOrg() } },
+                        open: { row in
+                            guard !suppressTaps else { return }
+                            openOrgNode(row)
+                        }
+                    )
                 } else {
-                    recentsSection
+                    // Only when there is a choice: on a server with one agent an
+                    // "Agents" section is a heading over a single fact.
+                    if chat.agents.count > 1 { agentsSection }
+                    if chat.asksListed {
+                        asksSection
+                        earlierSection
+                    } else {
+                        recentsSection
+                    }
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -199,7 +235,87 @@ struct ChatDrawer: View {
                 .frame(height: 0)
                 .background(.bar, ignoresSafeAreaEdges: .top)
         }
-        .refreshable { await chat.refreshConversations() }
+        .refreshable {
+            if showsOrg { await loadOrg() } else { await chat.refreshConversations() }
+        }
+        // Read at launch (the drawer is built shut), then again each time it comes out, so
+        // the statuses are current when the user looks.
+        .task(id: isOpen) {
+            if isOpen { orgSettleUntil = Date().addingTimeInterval(Self.orgSettleSeconds) }
+            else { orgOrder = currentOrgOrder() }
+            if isOpen || orgTree == nil { await loadOrg() }
+        }
+        // While shut (and for a moment after it comes out), the order follows the data: the task
+        // list often lands after the org, and a status may move just before the drawer opens.
+        .onChange(of: currentOrgOrder()) { _, order in
+            if orgOrderFollowsData { withAnimation(.easeInOut(duration: 0.2)) { orgOrder = order } }
+        }
+    }
+
+    // MARK: - Org
+
+    private var showsOrg: Bool { orgAvailable && viewPick != ChatDrawerView.chats.rawValue }
+
+    private var viewSwitch: some View {
+        Picker("View", selection: Binding(
+            get: { viewPick == ChatDrawerView.chats.rawValue ? ChatDrawerView.chats : .org },
+            set: { viewPick = $0.rawValue }
+        )) {
+            ForEach(ChatDrawerView.allCases) { Text($0.label).tag($0) }
+        }
+        .pickerStyle(.segmented)
+        .padding(.horizontal, Self.inset)
+        .padding(.bottom, 14)
+        .accessibilityIdentifier("chat.drawer.viewSwitch")
+    }
+
+    /// The rows in the order of the last load; a row new since then goes last.
+    private var orgRows: [ChatOrgModel.Row] {
+        guard let orgTree else { return [] }
+        let rows = ChatOrgModel.rows(tree: orgTree, tasks: tasks?.tasks ?? [])
+        let rank = Dictionary(orgOrder.enumerated().map { ($1, $0) }, uniquingKeysWith: { a, _ in a })
+        return rows.enumerated()
+            .sorted { (rank[$0.element.id] ?? Int.max, $0.offset) < (rank[$1.element.id] ?? Int.max, $1.offset) }
+            .map(\.element)
+    }
+
+    static let orgSettleSeconds: TimeInterval = 1.2
+
+    private var orgOrderFollowsData: Bool { !isOpen || Date() < orgSettleUntil }
+
+    private func currentOrgOrder() -> [String] {
+        guard let orgTree else { return [] }
+        return ChatOrgModel.rows(tree: orgTree, tasks: tasks?.tasks ?? []).map(\.id)
+    }
+
+    private func loadOrg() async {
+        orgLoadGen &+= 1
+        let gen = orgLoadGen
+        orgLoading = true
+        defer { if gen == orgLoadGen { orgLoading = false } }
+        do {
+            let tree = try await WalnutAPI().orgTree()
+            guard gen == orgLoadGen else { return }
+            guard let tree else {
+                orgAvailable = false
+                return
+            }
+            orgAvailable = true
+            orgTree = tree
+            orgError = nil
+            if orgOrderFollowsData || orgOrder.isEmpty { orgOrder = currentOrgOrder() }
+        } catch {
+            guard gen == orgLoadGen, !Self.isCancellation(error) else { return }
+            // A failed reload keeps what was shown; only an empty view says so.
+            if orgTree == nil { orgError = error.localizedDescription }
+            AppLog.info("chat", "org load failed", ["error": error.localizedDescription])
+        }
+    }
+
+    static func isCancellation(_ error: Error) -> Bool {
+        if error is CancellationError { return true }
+        if case APIError.cancelled = error { return true }
+        return false
     }
 
     // MARK: - Sections

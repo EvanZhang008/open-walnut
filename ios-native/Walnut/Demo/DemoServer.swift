@@ -257,6 +257,8 @@ final class DemoServer: @unchecked Sendable {
         if match(r, "POST", s, "time", "heartbeats") != nil { return .noContent }
         if match(r, "POST", s, "stt", "transcribe") != nil { return .object(["text": DemoFixtures.transcriptionSentence(clockNow)]) }
         if match(r, "GET", s, "asks") != nil { return asks(r) }
+        // The demo has no org (no CEO or VPs): the Chat drawer then shows its chats only.
+        if match(r, "GET", s, "org") != nil { return .error(404, "not_found", "The demo has no org.") }
         if match(r, "GET", s, "search") != nil { return globalSearch(r) }
         if match(r, "GET", s, "media") != nil { return media(r) }
         if match(r, "GET", s, "favorites") != nil { return .encoded(FavoritesResponse(notes: withState { $0.favorites })) }

@@ -476,6 +476,10 @@ final class ProvenanceAndInboxUITests: XCTestCase {
         let menu = element(app, "chat.menu")
         XCTAssertTrue(menu.waitForExistence(timeout: 30), "no drawer button")
         menu.tap()
+        // The drawer opens on the org view when the server has an org; the chats are the
+        // other view.
+        let chats = app.buttons["Chats"]
+        if chats.waitForExistence(timeout: 3) { chats.tap() }
         let row = element(app, "chat.drawer.conversation.\(id)")
         XCTAssertTrue(row.waitForExistence(timeout: 20), "the conversation is not in the drawer")
         row.tap()

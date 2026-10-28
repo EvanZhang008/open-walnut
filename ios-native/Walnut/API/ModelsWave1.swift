@@ -377,6 +377,19 @@ struct TaskDetail: Codable {
     var orgRole: String? = nil
     /// The user's own standing instructions for the CEO or a VP (additive, 2026-10).
     var orgInstructions: OrgInstructions? = nil
+    /// The task's current sessions by slot, when it has one (the web's `resolveTaskSessionId`
+    /// reads these before `session_ids`). Absent from an older server and on a task without one.
+    var sessionId: String? = nil
+    var execSessionId: String? = nil
+    var planSessionId: String? = nil
+
+    /// The session the web opens for this task: its own slot first, else the newest linked one.
+    var currentSessionId: String? {
+        for id in [sessionId, execSessionId, planSessionId] {
+            if let id = id?.trimmingCharacters(in: .whitespacesAndNewlines), !id.isEmpty { return id }
+        }
+        return BoardModel.newestSessionId(sessionIds)
+    }
 
     private enum CodingKeys: String, CodingKey {
         case id, title, status, phase, priority, project, unread, links
@@ -396,6 +409,9 @@ struct TaskDetail: Codable {
         case resolvedDependencies = "resolved_dependencies"
         case dependents, children, parent
         case sessionIds = "session_ids"
+        case sessionId = "session_id"
+        case execSessionId = "exec_session_id"
+        case planSessionId = "plan_session_id"
     }
 }
 

@@ -136,6 +136,11 @@ final class ChatDrawerRowsTests: XCTestCase {
             return bytes
         }
 
+        // The conversation rows live in the Chats view; the org view is the default.
+        let defaults = UserDefaults.standard
+        let pick = defaults.object(forKey: ChatDrawerView.storageKey)
+        defaults.set(ChatDrawerView.chats.rawValue, forKey: ChatDrawerView.storageKey)
+        defer { defaults.set(pick, forKey: ChatDrawerView.storageKey) }
         let one = render(rows: 1)
         let many = render(rows: 24)
         guard one.count == width * height * 4, many.count == width * height * 4 else {

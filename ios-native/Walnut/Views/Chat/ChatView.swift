@@ -23,6 +23,11 @@ struct ChatView: View {
     @State private var openedAskSession: WalnutSession?
     /// An ask with no session yet: its first message here starts one.
     @State private var sessionlessAsk: AskSummary?
+    /// An org node (the CEO or a VP) with no session yet: its first message here starts one.
+    @State private var sessionlessOrgNode: OrgNodeStart?
+    @State private var orgFirstMessageDraft = ""
+    /// The org node a tap is opening (shown while its lookups run); a newer tap replaces it.
+    @State private var orgOpening: (token: UUID, name: String)?
     @State private var firstMessageDraft = ""
 
     /// How far the drawer is out: 0 shut, 1 open. A fraction rather than a Bool
@@ -114,6 +119,21 @@ struct ChatView: View {
                 if let error = chat.errorMessage {
                     ErrorBanner(text: error) { chat.errorMessage = nil }
                 }
+                if let opening = orgOpening {
+                    // The drawer shut on the tap; this says the chat is on its way.
+                    HStack(spacing: 8) {
+                        ProgressView()
+                        Text(verbatim: "Opening \(opening.name)\u{2026}")
+                            .font(.footnote)
+                            .lineLimit(1)
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 6)
+                    .background(Theme.tintSoft)
+                    .accessibilityElement(children: .combine)
+                    .accessibilityIdentifier("chat.orgOpening")
+                }
                 if chat.pendingQuestion {
                     questionBanner
                 }
@@ -192,6 +212,27 @@ struct ChatView: View {
         } message: {
             Text("This conversation has not started yet. Its first message starts it.")
         }
+        .alert(sessionlessOrgNode?.name ?? "Start this conversation", isPresented: Binding(
+            get: { sessionlessOrgNode != nil },
+            set: { if !$0 { sessionlessOrgNode = nil } }
+        )) {
+            TextField("First message", text: $orgFirstMessageDraft)
+            Button("Cancel", role: .cancel) {
+                sessionlessOrgNode = nil
+                orgFirstMessageDraft = ""
+            }
+            Button("Send") {
+                let node = sessionlessOrgNode
+                let text = orgFirstMessageDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+                sessionlessOrgNode = nil
+                orgFirstMessageDraft = ""
+                guard let node, !text.isEmpty else { return }
+                Task { await startOrgNode(node, message: text) }
+            }
+            .disabled(orgFirstMessageDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        } message: {
+            Text("No chat with \(sessionlessOrgNode?.name ?? "it") yet. Its first message starts one.")
+        }
     }
 
     /// Start a sessionless ask with its first message and open it, the way a
@@ -213,6 +254,109 @@ struct ChatView: View {
         } catch {
             chat.errorMessage = "Couldn't start \"\(ask.title)\": \(error.localizedDescription)"
         }
+    }
+
+    /// Open an org node's chat: its current session, pushed over the chat like an ask from the
+    /// Mac. The task's own detail names its sessions (the slim list does not), so it is asked each
+    /// time: a session the node started since the last look is the one to open. A node not made
+    /// yet (no Main, a project still without its VP) is asked for first, the way the web Org page
+    /// reaches it; one with no session at all takes its first message here.
+    private func openOrgNode(_ row: ChatOrgModel.Row) {
+        var instant = Transaction()
+        instant.disablesAnimations = true
+        withTransaction(instant) { drawer = 0 }
+        let token = UUID()
+        orgOpening = (token, row.name)
+        Task {
+            defer { if orgOpening?.token == token { orgOpening = nil } }
+            let api = WalnutAPI()
+            do {
+                let taskId: String
+                if let known = row.contactId {
+                    taskId = known
+                } else if row.kind == .ceo {
+                    taskId = try await api.orgMain()
+                } else {
+                    taskId = try await api.orgContact(project: row.project)
+                }
+                let detail = try await api.taskDetail(id: taskId)
+                tasks?.noteSessionIds(taskId: taskId, ids: detail.sessionIds ?? [])
+                // The user moved on (another tap, another chat) while this was asked: drop it.
+                guard orgOpening?.token == token, openedAskSession == nil else { return }
+                guard let sessionId = detail.currentSessionId else {
+                    orgFirstMessageDraft = ""
+                    sessionlessOrgNode = OrgNodeStart(id: taskId, name: row.name, isCEO: row.kind == .ceo)
+                    return
+                }
+                await openOrgSession(sessionId, taskId: taskId, name: row.name, token: token)
+            } catch {
+                guard orgOpening?.token == token else { return }
+                chat.errorMessage = Self.orgFailure(row.name, error)
+            }
+        }
+    }
+
+    private func openOrgSession(_ sessionId: String, taskId: String, name: String, token: UUID?) async {
+        if let known = tasks?.sessions.first(where: { $0.id == sessionId }) {
+            openedAskSession = known
+            return
+        }
+        let task = tasks?.tasks.first { $0.id == taskId }
+        let session = await tasks?.resolveSession(id: sessionId, task: task)
+        if let token, orgOpening?.token != token { return }
+        if let session {
+            openedAskSession = session
+        } else {
+            chat.errorMessage = "Couldn't open \(name). Try again in a moment."
+        }
+    }
+
+    /// Start an org node that has no session with its first message, then open it. The CEO
+    /// starts the way the web starts it (`POST /sessions` with `walnutAgent`, its persona and the
+    /// server's own folder); a VP through `POST /tasks/:id/start`, which finds the VP's folder.
+    private func startOrgNode(_ node: OrgNodeStart, message: String) async {
+        do {
+            let started: TaskStartReply
+            if node.isCEO {
+                let created = try await WalnutAPI().launchAsk(taskId: node.id, message: message)
+                started = TaskStartReply(taskId: created.taskId, title: created.title, sessionId: created.sessionId)
+            } else {
+                started = try await WalnutAPI().startTask(taskId: node.id, message: message)
+            }
+            let title = started.title, taskId = started.taskId
+            guard let sessionId = started.sessionId, !sessionId.isEmpty else {
+                // An engine that names its own session: the next open finds it.
+                chat.errorMessage = "\(node.name) is starting. Open it again in a moment."
+                return
+            }
+            SessionLaunchContext.stash(sessionId: sessionId, message: message)
+            let now = ISO8601DateFormatter().string(from: Date())
+            openedAskSession = WalnutSession(
+                id: sessionId, title: title, taskId: taskId,
+                taskTitle: title, project: nil, host: "",
+                processStatus: "idle", model: nil, mode: nil,
+                startedAt: now, lastActiveAt: now, messageCount: 0,
+                cwd: nil, pinned: nil, focusTier: nil, description: nil
+            )
+            if let tasks { Task { await tasks.loadSessions() } }
+        } catch let APIError.server(status, code, _, _, _) where status == 409 && code == "session_exists" {
+            // A session started meanwhile (on the Mac, or by the node itself): open that one.
+            if let detail = try? await WalnutAPI().taskDetail(id: node.id), let sessionId = detail.currentSessionId {
+                await openOrgSession(sessionId, taskId: node.id, name: node.name, token: nil)
+            } else {
+                chat.errorMessage = "\(node.name) already has a chat. Open it again in a moment."
+            }
+        } catch {
+            chat.errorMessage = Self.orgFailure(node.name, error)
+        }
+    }
+
+    /// A companion cannot make an org node or start one (`501`): those run on the Mac.
+    static func orgFailure(_ name: String, _ error: Error) -> String {
+        if case APIError.server(let status, _, _, _, _) = error, status == 501 {
+            return "\(name) can be started only while your Mac is online."
+        }
+        return "Couldn't reach \(name): \(error.localizedDescription)"
     }
 
     /// Open an ask that has no chat here as its session: the one the tasks store
@@ -247,7 +391,7 @@ struct ChatView: View {
 
     private var drawerLayer: some View {
         ChatDrawer(suppressTaps: $suppressDrawerTaps, close: { setDrawer(open: false) }, openAsk: openAsk,
-                   isOpen: drawer > 0)
+                   isOpen: drawer > 0, openOrgNode: openOrgNode)
             .frame(width: drawerWidth)
             .frame(maxHeight: .infinity, alignment: .top)
             .background {
@@ -572,4 +716,11 @@ struct ThinkingRow: View {
         .accessibilityLabel(label)
         .accessibilityAddTraits(.updatesFrequently)
     }
+}
+
+/// An org node that has no session yet, waiting for its first message.
+struct OrgNodeStart: Equatable {
+    let id: String
+    let name: String
+    let isCEO: Bool
 }
