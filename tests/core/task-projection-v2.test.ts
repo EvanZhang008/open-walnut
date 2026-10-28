@@ -112,6 +112,16 @@ describe('projection envelope (write side)', () => {
     expect(child.parent_task_id).toBe('p1');
     expect(top).not.toHaveProperty('parent_task_id');
   });
+
+  it('projectTask carries org_role for the CEO and a VP, and omits it on other tasks', () => {
+    const base = {
+      title: 'Row', status: 'todo', phase: 'TODO', priority: 'none', project: 'Marina',
+      created_at: '2026-01-01T00:00:00.000Z', updated_at: '2026-01-01T00:00:00.000Z',
+    };
+    expect(projectTask({ ...base, id: 'm1', org_role: 'main' } as unknown as Task).org_role).toBe('main');
+    expect(projectTask({ ...base, id: 'l1', org_role: 'lead' } as unknown as Task).org_role).toBe('lead');
+    expect(projectTask({ ...base, id: 'w1' } as unknown as Task)).not.toHaveProperty('org_role');
+  });
 });
 
 describe('done-retention scope', () => {

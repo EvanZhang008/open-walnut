@@ -1,0 +1,40 @@
+/* "Memory & instructions" (components/org/AgentMemoryPanel.tsx). */
+.app-modal.am-modal {
+  width: min(560px, calc(100vw - 48px));
+  max-height: calc(100vh - 64px);
+  overflow-y: auto;
+  /* Some themes make --card-bg translucent; text over a busy chat must stay readable. */
+  background: var(--bg-elevated, var(--bg, #1c1f26));
+}
+.am-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.am-close {
+  border: none; background: none; color: var(--fg-muted); font-size: 18px; line-height: 1;
+  width: 28px; height: 28px; border-radius: 6px; cursor: pointer;
+}
+.am-close:hover { background: var(--bg-hover, rgba(127, 127, 127, 0.15)); color: var(--fg); }
+.am-sub { margin-top: 2px; font-size: 12px; color: var(--fg-muted); }
+.am-field { display: flex; flex-direction: column; gap: 4px; margin-top: 14px; }
+.am-label { font-size: 13px; font-weight: 600; color: var(--fg); }
+.am-hint { margin: 0; font-size: 12px; line-height: 1.45; color: var(--fg-muted); }
+.am-error { color: var(--error, #e5484d); }
+.am-instructions.app-modal-input { margin-top: 4px; min-height: 120px; resize: vertical; font-size: 13px; line-height: 1.5; font-family: inherit; }
+.am-count { font-size: 11px; color: var(--fg-muted); font-weight: 400; font-variant-numeric: tabular-nums; }
+.am-right { align-self: flex-end; }
+.am-note { margin: 6px 0 0; font-size: 12px; color: var(--fg-muted); }
+.am-fold { margin-top: 14px; border: 1px solid var(--border); border-radius: 8px; }
+.am-fold > summary {
+  cursor: pointer; padding: 8px 12px; font-size: 13px; font-weight: 600; color: var(--fg);
+  list-style-position: inside;
+}
+.am-fold[open] > summary { border-bottom: 1px solid var(--border); }
+.am-fold-body { padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
+.am-text {
+  margin: 0; max-height: 260px; overflow: auto; white-space: pre-wrap; word-break: break-word;
+  font-family: var(--font-mono, ui-monospace, monospace); font-size: 12px; line-height: 1.5;
+  color: var(--fg); background: var(--bg-secondary); border-radius: 6px; padding: 8px 10px;
+}
+.am-doc { display: flex; flex-direction: column; gap: 4px; }
+.am-doc-head { display: flex; align-items: center; justify-content: space-between; font-size: 12px; font-weight: 600; color: var(--fg); }
+.am-link { border: none; background: none; padding: 0; font-size: 12px; color: var(--accent); cursor: pointer; }
+.am-link:hover:not(:disabled) { text-decoration: underline; }
+.am-link:disabled { color: var(--fg-muted); cursor: default; }

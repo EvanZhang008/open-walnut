@@ -822,7 +822,8 @@ final class TasksStore {
             // nil = read, the projection's own encoding (it omits a false marker).
             unread: edit.unread.map { $0 ? true : nil } ?? task.unread,
             parentTaskId: task.parentTaskId,
-            userStatus: task.userStatus
+            userStatus: task.userStatus,
+            orgRole: task.orgRole
         )
     }
 
@@ -911,7 +912,8 @@ final class TasksStore {
             pinned: value, tags: t.tags, summary: t.summary,
             startDate: t.startDate, endDate: t.endDate, unread: t.unread,
             parentTaskId: t.parentTaskId,
-            userStatus: t.userStatus
+            userStatus: t.userStatus,
+            orgRole: t.orgRole
         )
     }
 

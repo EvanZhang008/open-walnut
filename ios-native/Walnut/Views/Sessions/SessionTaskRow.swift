@@ -195,7 +195,8 @@ extension WalnutTask {
             starred: detail.starred, pinned: detail.pinned,
             tags: detail.tags, summary: detail.summary,
             startDate: detail.startDate, endDate: detail.endDate, unread: detail.unread,
-            parentTaskId: detail.parentTaskId, userStatus: detail.userStatus
+            parentTaskId: detail.parentTaskId, userStatus: detail.userStatus,
+            orgRole: detail.orgRole
         )
     }
 }

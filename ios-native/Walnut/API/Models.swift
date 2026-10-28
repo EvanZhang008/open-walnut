@@ -346,6 +346,9 @@ struct WalnutTask: Codable, Identifiable, Equatable {
     /// the task list. nil from a server that predates it: the phase rule is the fallback.
     /// Every copy of a row (`applyEdit`, `withPinned`) carries it.
     var userStatus: WalnutUserStatus? = nil
+    /// "main" (the CEO) or "lead" (a VP): the session menu offers its memory and
+    /// instructions. Absent on other tasks and from an older server (additive, 2026-10).
+    var orgRole: String? = nil
 
     private enum CodingKeys: String, CodingKey {
         case id, title, status, phase, priority, project
@@ -359,6 +362,7 @@ struct WalnutTask: Codable, Identifiable, Equatable {
         case unread
         case parentTaskId = "parent_task_id"
         case userStatus = "user_status"
+        case orgRole = "org_role"
     }
 }
 
@@ -865,6 +869,12 @@ struct APIErrorEnvelope: Codable {
     // Note-conflict extras ride at the top level of the envelope.
     let serverHash: String?
     let serverContent: String?
+}
+
+/// The flat error body some routes answer: `{ "error": "<message>", "code": "<code>" }`.
+struct FlatAPIErrorBody: Decodable {
+    let error: String
+    let code: String?
 }
 
 enum APIError: Error, LocalizedError {

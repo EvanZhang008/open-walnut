@@ -24,6 +24,7 @@ import { TeamMenuItems } from '@/components/tasks/TeamMenuItems';
 import { TransferMenuItem } from '@/components/transfer/TransferMenuItem';
 import { WorkspaceMenuSection } from '@/components/workspaces/WorkspaceMenuSection';
 import { SnoozeUntilEvent, TaskStatusMenuSection } from '@/components/tasks/TaskStatusControl';
+import { AgentMemoryPanel, hasMemoryAndInstructions } from '@/components/org/AgentMemoryPanel';
 
 /* ── Phase constants ─────────────────────────────────────────────── */
 
@@ -110,6 +111,8 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
   // The phase menu's own writes (no shared store): the latest pick per task wins.
   const [writePhase] = useState(() => createPhaseWriter());
   const [kebabOpen, setKebabOpen] = useState(false);
+  // Main's, a lead's or a VP's "Memory & instructions" (opened from the row below Task detail).
+  const [memoryOpen, setMemoryOpen] = useState(false);
   /** Set only by the right-click path, which anchors the menu at the cursor. */
   const [cursorAnchor, setCursorAnchor] = useState<{ x: number; y: number } | null>(null);
   const kebabBtnRef = useRef<HTMLButtonElement>(null);
@@ -391,6 +394,16 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
               </button>
             </>
           )}
+          {hasMemoryAndInstructions(task) && (
+            <button
+              className="task-kebab-item"
+              data-testid="kebab-memory-instructions"
+              onClick={(e) => { e.stopPropagation(); closeKebab(); setMemoryOpen(true); }}
+            >
+              <span className="task-kebab-icon">{ICONS.ICON_NOTE}</span>
+              <span>Memory &amp; instructions</span>
+            </button>
+          )}
 
           {/* Status: the same collapsed row as the board's task kebab. */}
           <TaskStatusMenuSection
@@ -510,6 +523,7 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
         </div>,
         document.body,
       )}
+      {memoryOpen && task && <AgentMemoryPanel task={task} onClose={() => setMemoryOpen(false)} />}
     </div>
   );
 }

@@ -373,11 +373,17 @@ struct TaskDetail: Codable {
     /// The one user status (additive, 2026-10; see `WalnutUserStatus`).
     var userStatus: WalnutUserStatus? = nil
     var parentTaskId: String? = nil
+    /// "main" (the CEO) or "lead" (a VP); absent on other tasks (additive, 2026-10).
+    var orgRole: String? = nil
+    /// The user's own standing instructions for the CEO or a VP (additive, 2026-10).
+    var orgInstructions: OrgInstructions? = nil
 
     private enum CodingKeys: String, CodingKey {
         case id, title, status, phase, priority, project, unread, links
         case userStatus = "user_status"
         case parentTaskId = "parent_task_id"
+        case orgRole = "org_role"
+        case orgInstructions = "org_instructions"
         case createdAt = "created_at"
         case updatedAt = "updated_at"
         case completedAt = "completed_at"
@@ -406,6 +412,12 @@ struct LinkTagView: Codable, Equatable {
     let file: Bool?
     /// The file is no longer there (absent when nobody knows).
     let gone: Bool?
+}
+
+/// The user's own words for the CEO or a VP (`Task.org_instructions`), and when they were set.
+struct OrgInstructions: Codable, Equatable {
+    let text: String
+    let at: String?
 }
 
 /// Envelope for the endpoints answering { task: <full row> }.

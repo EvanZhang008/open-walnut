@@ -818,7 +818,7 @@ reconcile, `NOTES_UPDATED` events) with the web UI's `/api/notes-v2`.
   `{ "tasks": [ProjectedTask], "syncedAt": "<ISO>" }`
 - `ProjectedTask`: `{ id, title, status, phase, priority, project,
   parent_task_id?, due_date?, start_date?, wait_until?, created_at, updated_at,
-  completed_at?, pinned?, unread?, tags?, summary?, user_status? }` — `summary` is truncated to
+  completed_at?, pinned?, unread?, tags?, summary?, user_status?, org_role? }` — `summary` is truncated to
   ~500 chars.
   `phase` is one of `TODO`, `WAITING`, `IN_PROGRESS`, `NEED_ACTION`, `COMPLETE`.
   `WAITING` was added in 0.5.2 (a task parked until something happens; its
@@ -845,6 +845,10 @@ reconcile, `NOTES_UPDATED` events) with the web UI's `/api/notes-v2`.
   `start_date` of its own takes its nearest ancestor's for the Now view, as the
   web does; a client reading an older server sees no field and treats the task
   as having no parent. Additive and optional, so older clients ignore it.
+  `org_role` (added 2026-10) is `"main"` on the CEO's task and `"lead"` on a VP's,
+  omitted on every other task: the phone's session menu then offers the agent's
+  memory and instructions (`GET /tasks/:id/agent-memory`, `PUT /org/nodes/:id`).
+  Additive and optional, so older clients ignore it.
   `user_status` (added 2026-10) is the ONE status the user sees, present on open
   tasks: `{ state, kind?, ask?, source?, waitingOn?, until?, now?, next?, at?, stale? }`.
   `state` is `needs` (only what the user alone can decide, approve or do; `ask`

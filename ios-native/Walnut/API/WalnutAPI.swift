@@ -762,6 +762,17 @@ struct WalnutAPI {
                     serverContent: envelope.serverContent
                 )
             }
+            // A route answering the flat `{ error: "<message>", code }` (the org routes):
+            // its words reach the user rather than a bare status.
+            if let flat = try? JSONDecoder().decode(FlatAPIErrorBody.self, from: data) {
+                throw APIError.server(
+                    status: http.statusCode,
+                    code: flat.code ?? "http_error",
+                    message: flat.error,
+                    serverHash: nil,
+                    serverContent: nil
+                )
+            }
             // Non-JSON error body (proxy 502 page etc.)
             throw APIError.server(
                 status: http.statusCode,

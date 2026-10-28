@@ -38,6 +38,8 @@ struct SessionConversationView: View {
     @State private var showControls = false
     /// Full task detail for the linked task — every task capability in place.
     @State private var showTask = false
+    /// The CEO's or a VP's memory and instructions (the row after Task Details).
+    @State private var showMemory = false
     // Wave-2 extras — presented from the session menu.
     @State private var showQueue = false
     @State private var showPlan = false
@@ -224,6 +226,13 @@ struct SessionConversationView: View {
         .sheet(isPresented: $showTask) {
             if let taskId = session.taskId, tasksStore != nil {
                 TaskDetailSheet(task: linkedTask ?? SessionTaskRow.placeholder(id: taskId, title: session.taskTitle))
+                    .presentationDetents([.medium, .large])
+                    .presentationDragIndicator(.visible)
+            }
+        }
+        .sheet(isPresented: $showMemory) {
+            if let taskId = session.taskId {
+                AgentMemorySheet(taskId: taskId, isMain: linkedTask?.orgRole == "main")
                     .presentationDetents([.medium, .large])
                     .presentationDragIndicator(.visible)
             }
@@ -441,6 +450,14 @@ struct SessionConversationView: View {
                     Label("Task Details", systemImage: "checklist")
                 }
                 .accessibilityIdentifier("session.taskDetails")
+                if let role = linkedTask?.orgRole, role == "main" || role == "lead" {
+                    Button {
+                        showMemory = true
+                    } label: {
+                        Label("Memory & Instructions", systemImage: "brain")
+                    }
+                    .accessibilityIdentifier("session.memoryInstructions")
+                }
             }
             Divider()
             Button {

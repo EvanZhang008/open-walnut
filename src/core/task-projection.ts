@@ -101,6 +101,9 @@ export interface ProjectedTask {
   /** Kept to a plugin's own view (Task.plugin_only; additive, 2026-10): the v1 lists and the
    *  events feed leave such rows out, so a phone never shows them. */
   plugin_only?: string
+  /** The CEO ("main") or a VP ("lead"): the phone's session menu offers its memory and
+   *  instructions (additive, 2026-10; omitted on other tasks). */
+  org_role?: string
 }
 
 /**
@@ -186,6 +189,7 @@ export function projectTask(t: Task): ProjectedTask {
     ...(summary ? { summary: summary.length > SUMMARY_MAX ? summary.slice(0, SUMMARY_MAX) + '…' : summary } : {}),
     ...(t.user_status && t.status !== 'done' && t.phase !== 'COMPLETE' ? { user_status: t.user_status } : {}),
     ...(t.plugin_only ? { plugin_only: t.plugin_only } : {}),
+    ...(t.org_role ? { org_role: t.org_role } : {}),
   }
 }
 

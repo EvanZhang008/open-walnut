@@ -14,6 +14,8 @@
  *     in the "+" of Main's own composer, where a click sends Main the action (the draft in the
  *     box stays) and Main answers; a project's ⋮ on the Tasks page asks about that project, and a
  *     failed send says so; a Main waiting on the user's answer is not sent to
+ *   - Main's ⋮ "Memory & instructions" (web/src/components/org/AgentMemoryPanel.tsx): its
+ *     instructions save for its next message; its own MEMORY.md and Walnut's read folded
  * The fixture is shared, so this file makes its own projects and removes what it made, Main
  * included. Main is one per install, so every test that needs it lives here, in order (a
  * second file would run beside this one's removal of Main). The mock CLI answers each message
@@ -308,6 +310,87 @@ test('Main\'s quick actions sit in its composer\'s "+", not in a bar of their ow
   await expect(quickRows(menu).first()).not.toHaveAttribute('aria-disabled', 'true')
   await mainChat(page).locator('.session-panel-input .chat-plus-btn').click()
   await expect(menu).toHaveCount(0)
+})
+
+test('Main\'s ⋮ opens its memory and instructions: the words save for its next message, its own MEMORY.md and Walnut\'s read folded', async ({ page, request, browserName }) => {
+  const main = (await orgTree(request)).main
+  expect(main, 'Main is made by the send test above').toBeTruthy()
+  // One Main serves both browser projects, which run this file side by side: only WebKit writes.
+  // Main writes its own MEMORY.md; a person may too, as this does to give the fold something to show.
+  const writes = browserName === 'webkit'
+  const note = `Remember the garden plan. ${STAMP}`
+  if (writes) expect((await request.put(`/api/v1/tasks/${main!.id}/agent-memory`, { data: { content: note, mode: 'replace' } })).ok()).toBe(true)
+  await openOrgMain(page)
+  await page.getByTestId('org-tab-chat').click()
+  const chat = mainChat(page)
+  await expect(chat).toBeVisible({ timeout: 60_000 })
+  await chat.locator('.session-panel-header .task-kebab-btn').first().click()
+  const menu = page.locator('.task-kebab-menu')
+  await menu.getByTestId('kebab-memory-instructions').click()
+  await expect(menu).toHaveCount(0)
+
+  const panel = page.getByTestId('agent-memory-panel')
+  await expect(panel).toBeVisible()
+  const box = panel.getByTestId('am-instructions')
+  await expect(box).toBeFocused()
+  await expect(panel.getByTestId('am-save')).toBeDisabled()
+  const own = panel.getByTestId('am-own-memory')
+  await expect(own.locator('summary')).toHaveText(writes ? `Its own MEMORY.md · ${note.length} of 12k` : /^Its own MEMORY\.md · \S+ of 12k$/)
+  await expect(own.locator('.am-fold-body')).toBeHidden()
+  await own.locator('summary').click()
+  if (writes) await expect(own.getByTestId('am-own-memory-text')).toHaveText(note)
+  await expect(own).toContainText('read-only here')
+  await expect(own).not.toContainText('Edit')
+  // Main also reads Walnut's memory, edited on the Memory page.
+  const walnut = panel.getByTestId('am-walnut-memory')
+  await walnut.locator('summary').click()
+  await expect(walnut.getByTestId('am-edit-memory')).toBeVisible()
+  await expect(walnut.getByTestId('am-edit-user')).toBeVisible()
+
+  if (writes) {
+    const words = `Keep the weekly plan short. ${STAMP}`
+    await box.fill(words)
+    // Unsaved words hold the panel: Escape keeps them, and the Memory page link waits for a save.
+    await page.keyboard.press('Escape')
+    await expect(panel).toBeVisible()
+    await expect(box).toHaveValue(words)
+    await expect(walnut.getByTestId('am-edit-memory')).toBeDisabled()
+    await panel.getByTestId('am-save').click()
+    await expect(panel.getByTestId('am-note')).toHaveText('Saved. It reads them with its next message.')
+    await expect(panel.getByTestId('am-save')).toBeDisabled()
+    const stored = (await (await request.get(`/api/tasks/${main!.id}`)).json()).task as { org_instructions?: { text: string } }
+    expect(stored.org_instructions?.text).toBe(words)
+    await page.keyboard.press('Escape')
+    await expect(panel).toHaveCount(0)
+    // Opened again, it reads what was stored.
+    await chat.locator('.session-panel-header .task-kebab-btn').first().click()
+    await page.locator('.task-kebab-menu').getByTestId('kebab-memory-instructions').click()
+    await expect(panel.getByTestId('am-instructions')).toHaveValue(words)
+    expect((await request.put(`/api/v1/org/nodes/${main!.id}`, { data: { instructions: null } })).ok()).toBe(true)
+  }
+  await panel.getByRole('button', { name: 'Close', exact: true }).first().click()
+  await expect(panel).toHaveCount(0)
+
+  if (!writes) {
+    // Stored words it could not read are never offered for an edit: the box stays read-only
+    // and Save off until a retry reads them.
+    let failed = 0
+    const url = new RegExp(`/api/tasks/${main!.id}$`)
+    await page.route(url, (route) => { failed++; return route.fulfill({ status: 503, contentType: 'application/json', body: '{"error":"down for the test"}' }) })
+    await chat.locator('.session-panel-header .task-kebab-btn').first().click()
+    await page.locator('.task-kebab-menu').getByTestId('kebab-memory-instructions').click()
+    await expect(panel.getByTestId('am-read-error')).toContainText('Could not read the stored instructions.')
+    expect(failed).toBeGreaterThan(0)
+    await expect(box).toHaveAttribute('readonly', '')
+    await expect(panel.getByTestId('am-save')).toBeDisabled()
+    await page.unroute(url)
+    await panel.getByTestId('am-read-error').getByRole('button', { name: 'Try again' }).click()
+    await expect(panel.getByTestId('am-read-error')).toHaveCount(0)
+    await expect(box).not.toHaveAttribute('readonly', '')
+    await expect(box).toBeFocused()
+    await page.keyboard.press('Escape')
+    await expect(panel).toHaveCount(0)
+  }
 })
 
 test('a quick action from Main\'s "+" sends it, keeps the draft, and Main answers; a second one reaches it again', async ({ page, browserName }) => {
