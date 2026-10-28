@@ -56,7 +56,15 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.4
+      # bun's package store, shared by every job's install (tests/scripts/ci-bun-store.test.ts).
+      - uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/bun-store
+          key: bun-store-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('bun.lock', 'web/bun.lock') }}
+          restore-keys: bun-store-${{ runner.os }}-${{ runner.arch }}-
       - run: bun install --frozen-lockfile
+        env:
+          BUN_INSTALL_CACHE_DIR: ${{ runner.temp }}/bun-store
       # Every target from one machine: bun cross-compiles.
       - run: bun scripts/build-binary.mjs --all
       - name: sizes

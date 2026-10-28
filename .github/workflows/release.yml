@@ -154,7 +154,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: bun scripts/ci-gate.mjs release HEAD
+      # bun's package store, shared by every job's install (tests/scripts/ci-bun-store.test.ts).
+      - uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/bun-store
+          key: bun-store-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('bun.lock', 'web/bun.lock') }}
+          restore-keys: bun-store-${{ runner.os }}-${{ runner.arch }}-
       - run: bun install --frozen-lockfile
+        env:
+          BUN_INSTALL_CACHE_DIR: ${{ runner.temp }}/bun-store
       - run: bun run lint
       - name: Build the compiled files and their release assets
         run: bun scripts/release-build.mjs --version "${GITHUB_REF_NAME#v}" --out "$RUNNER_TEMP/release"
@@ -323,8 +331,17 @@ jobs:
             echo "publish=true" >> "$GITHUB_OUTPUT"
             echo "sha=$green" >> "$GITHUB_OUTPUT"
           fi
+      # bun's package store, shared by every job's install (tests/scripts/ci-bun-store.test.ts).
+      - uses: actions/cache@v4
+        if: steps.pick.outputs.publish == 'true'
+        with:
+          path: ${{ runner.temp }}/bun-store
+          key: bun-store-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('bun.lock', 'web/bun.lock') }}
+          restore-keys: bun-store-${{ runner.os }}-${{ runner.arch }}-
       - if: steps.pick.outputs.publish == 'true'
         run: bun install --frozen-lockfile
+        env:
+          BUN_INSTALL_CACHE_DIR: ${{ runner.temp }}/bun-store
       - name: Version this nightly and build it
         if: steps.pick.outputs.publish == 'true'
         id: build
@@ -509,7 +526,15 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.4
+      # bun's package store, shared by every job's install (tests/scripts/ci-bun-store.test.ts).
+      - uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/bun-store
+          key: bun-store-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('bun.lock', 'web/bun.lock') }}
+          restore-keys: bun-store-${{ runner.os }}-${{ runner.arch }}-
       - run: bun install --frozen-lockfile
+        env:
+          BUN_INSTALL_CACHE_DIR: ${{ runner.temp }}/bun-store
       - name: Build the compiled files at this version
         env:
           VERSION: ${{ needs.promote-plan.outputs.version }}

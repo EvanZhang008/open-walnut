@@ -41,7 +41,15 @@ jobs:
         with:
           bun-version: 1.4.4
       - run: bash scripts/ci-remove-node.sh
+      # bun's package store, shared by every job's install (tests/scripts/ci-bun-store.test.ts).
+      - uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/bun-store
+          key: bun-store-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('bun.lock', 'web/bun.lock') }}
+          restore-keys: bun-store-${{ runner.os }}-${{ runner.arch }}-
       - run: bun install --frozen-lockfile
+        env:
+          BUN_INSTALL_CACHE_DIR: ${{ runner.temp }}/bun-store
       - run: bun run lint
       - run: bun run build
 
@@ -68,7 +76,15 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.4
+      # bun's package store, shared by every job's install (tests/scripts/ci-bun-store.test.ts).
+      - uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/bun-store
+          key: bun-store-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('bun.lock', 'web/bun.lock') }}
+          restore-keys: bun-store-${{ runner.os }}-${{ runner.arch }}-
       - run: bun install --frozen-lockfile
+        env:
+          BUN_INSTALL_CACHE_DIR: ${{ runner.temp }}/bun-store
       - name: browser specs load
         run: bun x playwright test --list --project=chromium > /dev/null
       - run: bun run test:plugin-packages
@@ -130,7 +146,15 @@ jobs:
         with:
           bun-version: 1.4.4
       - run: bash scripts/ci-remove-node.sh
+      # bun's package store, shared by every job's install (tests/scripts/ci-bun-store.test.ts).
+      - uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/bun-store
+          key: bun-store-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('bun.lock', 'web/bun.lock') }}
+          restore-keys: bun-store-${{ runner.os }}-${{ runner.arch }}-
       - run: bun install --frozen-lockfile
+        env:
+          BUN_INSTALL_CACHE_DIR: ${{ runner.temp }}/bun-store
       # Workspace packages are consumed from their dist/ (demo-plugin-lifecycle loads
       # @open-walnut/plugin-api/dist/react.js); a fresh clone has not built them.
       - run: bun run build:plugins
@@ -152,7 +176,15 @@ jobs:
         with:
           bun-version: 1.4.4
       - run: bash scripts/ci-remove-node.sh
+      # bun's package store, shared by every job's install (tests/scripts/ci-bun-store.test.ts).
+      - uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/bun-store
+          key: bun-store-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('bun.lock', 'web/bun.lock') }}
+          restore-keys: bun-store-${{ runner.os }}-${{ runner.arch }}-
       - run: bun install --frozen-lockfile
+        env:
+          BUN_INSTALL_CACHE_DIR: ${{ runner.temp }}/bun-store
       - run: bun run build
       - name: slow tests
         env:
@@ -184,7 +216,15 @@ jobs:
         with:
           bun-version: 1.4.4
       - run: bash scripts/ci-remove-node.sh
+      # bun's package store, shared by every job's install (tests/scripts/ci-bun-store.test.ts).
+      - uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/bun-store
+          key: bun-store-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('bun.lock', 'web/bun.lock') }}
+          restore-keys: bun-store-${{ runner.os }}-${{ runner.arch }}-
       - run: bun install --frozen-lockfile
+        env:
+          BUN_INSTALL_CACHE_DIR: ${{ runner.temp }}/bun-store
       # The tier spawns the session daemon, which the build produces.
       - run: bun run build
       - name: e2e tests
@@ -357,7 +397,15 @@ jobs:
         with:
           bun-version: 1.4.4
       - run: bash scripts/ci-remove-node.sh
+      # bun's package store, shared by every job's install (tests/scripts/ci-bun-store.test.ts).
+      - uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/bun-store
+          key: bun-store-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('bun.lock', 'web/bun.lock') }}
+          restore-keys: bun-store-${{ runner.os }}-${{ runner.arch }}-
       - run: bun install --frozen-lockfile
+        env:
+          BUN_INSTALL_CACHE_DIR: ${{ runner.temp }}/bun-store
       - run: bun run build:daemon
         env:
           WALNUT_REQUIRE_BUN: '1'
@@ -433,7 +481,15 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.4
+      # bun's package store, shared by every job's install (tests/scripts/ci-bun-store.test.ts).
+      - uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/bun-store
+          key: bun-store-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('bun.lock', 'web/bun.lock') }}
+          restore-keys: bun-store-${{ runner.os }}-${{ runner.arch }}-
       - run: bun install --frozen-lockfile
+        env:
+          BUN_INSTALL_CACHE_DIR: ${{ runner.temp }}/bun-store
       - name: Build as prepublishOnly does
         run: WALNUT_REQUIRE_BUN=1 bun run build && (cd web && bun x vite build) && bun scripts/check-publish.mjs
       - name: Pack this commit as the next patch, and an older build of it
@@ -496,7 +552,15 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.4
+      # bun's package store, shared by every job's install (tests/scripts/ci-bun-store.test.ts).
+      - uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/bun-store
+          key: bun-store-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('bun.lock', 'web/bun.lock') }}
+          restore-keys: bun-store-${{ runner.os }}-${{ runner.arch }}-
       - run: bun install --frozen-lockfile
+        env:
+          BUN_INSTALL_CACHE_DIR: ${{ runner.temp }}/bun-store
       - name: Compile this commit for this runner at two versions above npm's, and pack them as a release does
         run: bun scripts/release-rehearsal/field-packs.mjs build --out "$RUNNER_TEMP/field"
       # What the user runs; the updater inside the installed package calls it too.
@@ -536,7 +600,15 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.4
+      # bun's package store, shared by every job's install (tests/scripts/ci-bun-store.test.ts).
+      - uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/bun-store
+          key: bun-store-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('bun.lock', 'web/bun.lock') }}
+          restore-keys: bun-store-${{ runner.os }}-${{ runner.arch }}-
       - run: bun install --frozen-lockfile
+        env:
+          BUN_INSTALL_CACHE_DIR: ${{ runner.temp }}/bun-store
       - name: Fetch Node ${{ matrix.node }}, checked against its SHASUMS256.txt
         run: |
           dist="https://nodejs.org/dist/v${{ matrix.node }}"
@@ -578,7 +650,15 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.4
+      # bun's package store, shared by every job's install (tests/scripts/ci-bun-store.test.ts).
+      - uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/bun-store
+          key: bun-store-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('bun.lock', 'web/bun.lock') }}
+          restore-keys: bun-store-${{ runner.os }}-${{ runner.arch }}-
       - run: bun install --frozen-lockfile
+        env:
+          BUN_INSTALL_CACHE_DIR: ${{ runner.temp }}/bun-store
       - name: Build as prepublishOnly does
         run: WALNUT_REQUIRE_BUN=1 bun run build && (cd web && bun x vite build) && bun scripts/check-publish.mjs
       # The archive as release-archives.yml builds it: from open-walnut@<version> on the
@@ -624,7 +704,15 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.4
+      # bun's package store, shared by every job's install (tests/scripts/ci-bun-store.test.ts).
+      - uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/bun-store
+          key: bun-store-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('bun.lock', 'web/bun.lock') }}
+          restore-keys: bun-store-${{ runner.os }}-${{ runner.arch }}-
       - run: bun install --frozen-lockfile
+        env:
+          BUN_INSTALL_CACHE_DIR: ${{ runner.temp }}/bun-store
       - run: bun run build && (cd web && bun x vite build)
       # WebKit too: the *.webkit.spec.ts specs launch it themselves (the Mac app
       # is WebKit), and without it each one failed at launch (98 tests, 2026-10-23).

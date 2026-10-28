@@ -67,7 +67,15 @@ jobs:
         with:
           bun-version: 1.4.4
       - run: bash scripts/ci-remove-node.sh
+      # bun's package store, shared by every job's install (tests/scripts/ci-bun-store.test.ts).
+      - uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/bun-store
+          key: bun-store-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('bun.lock', 'web/bun.lock') }}
+          restore-keys: bun-store-${{ runner.os }}-${{ runner.arch }}-
       - run: bun install --frozen-lockfile
+        env:
+          BUN_INSTALL_CACHE_DIR: ${{ runner.temp }}/bun-store
       - if: matrix.build == 'plugins'
         run: bun run build:plugins
       - if: matrix.build == 'all'
