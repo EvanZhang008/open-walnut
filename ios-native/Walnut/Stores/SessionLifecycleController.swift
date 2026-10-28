@@ -38,6 +38,14 @@ final class SessionLifecycleController {
     var confirmation: String?
     /// Server truth from the last detail fetch (title/archived prefill).
     private(set) var detail: SessionDetail?
+    /// The two facts the page's toolbar and `+` menu read, kept apart from `detail` and
+    /// written only when they change: anything the page body reads re-renders the
+    /// toolbar, and a re-render closes an open submenu of the session menu, which
+    /// then put Terminate under the finger reaching for Rename (2026-10-28 iOS gate).
+    private(set) var hasLatestUpdate = false
+    /// The working directory from the record: a session opened from an ask arrives
+    /// without one, and the copy rows need it.
+    private(set) var recordCwd: String?
 
     @ObservationIgnored private var pollTask: Task<Void, Never>?
     private static let pollSeconds: Double = 12
@@ -74,7 +82,14 @@ final class SessionLifecycleController {
         let streamStatusCount = statusSink?.streamStatusCount
         do {
             let next = try await fetchDetail(sessionId)
-            detail = next
+            // Equality-gated like pendingPermissions below: an unchanged record must
+            // not invalidate a reader.
+            if next != detail { detail = next }
+            let hasUpdate = next.session.latestUpdate != nil
+            if hasUpdate != hasLatestUpdate { hasLatestUpdate = hasUpdate }
+            let cwd = next.session.cwd?.trimmingCharacters(in: .whitespaces)
+            let knownCwd = (cwd?.isEmpty ?? true) ? nil : cwd
+            if knownCwd != recordCwd { recordCwd = knownCwd }
             if let streamStatusCount {
                 statusSink?.adoptRecordStatus(
                     next.session.processStatus, degraded: next.degraded == true,

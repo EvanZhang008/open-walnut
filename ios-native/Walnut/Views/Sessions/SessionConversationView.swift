@@ -53,6 +53,8 @@ struct SessionConversationView: View {
     @State private var renameDraft = ""
     /// Non-nil = terminate hit 409 cron_owner; confirm to force.
     @State private var forceTerminateMessage: String?
+    /// Terminate asks first: it stops the process at once and sits last in the menu.
+    @State private var confirmTerminate = false
     /// Non-nil pushes the forked session's conversation onto the enclosing stack.
     @State private var forkedSession: WalnutSession?
     @State private var keyboardGeometryFrozen = false
@@ -259,29 +261,12 @@ struct SessionConversationView: View {
         .navigationDestination(item: $forkedSession) { forked in
             SessionConversationView(session: forked)
         }
-        // Rename prompt (PATCH title) — a plain alert keeps this lightweight.
-        .alert("Rename Session", isPresented: $showRename) {
-            TextField("Title", text: $renameDraft)
-            Button("Cancel", role: .cancel) {}
-            Button("Rename") {
-                let title = renameDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !title.isEmpty else { return }
-                Task { await lifecycle.rename(title) }
-            }
-        }
-        // 409 cron_owner ladder: confirm, then force-terminate.
-        .alert("Session owns scheduled routines", isPresented: Binding(
-            get: { forceTerminateMessage != nil },
-            set: { if !$0 { forceTerminateMessage = nil } }
-        )) {
-            Button("Cancel", role: .cancel) { forceTerminateMessage = nil }
-            Button("Force Terminate", role: .destructive) {
-                forceTerminateMessage = nil
-                Task { _ = await lifecycle.terminate(force: true) }
-            }
-        } message: {
-            Text(forceTerminateMessage ?? "")
-        }
+        // Rename, Terminate's confirmation and the cron_owner force ladder, in their own
+        // modifier: one more modifier on this chain is past what the type checker solves.
+        .modifier(SessionLifecycleDialogs(
+            lifecycle: lifecycle, showRename: $showRename, renameDraft: $renameDraft,
+            confirmTerminate: $confirmTerminate, forceTerminateMessage: $forceTerminateMessage
+        ))
         // Freeze reports name THIS session (8-char prefix of the uuid) so a
         // field freeze can be tied back to a specific giant transcript.
         .freezeScreen("session:\(session.id.prefix(8))")
@@ -404,7 +389,7 @@ struct SessionConversationView: View {
     /// then fork. They used to hide in the session menu and the Controls sheet
     /// (user, 2026-10-04: "in the plus, keep it simple").
     private var plusActions: [ComposerPlusAction] {
-        let latest: [ComposerPlusAction] = lifecycle.detail?.session.latestUpdate == nil ? [] : [
+        let latest: [ComposerPlusAction] = !lifecycle.hasLatestUpdate ? [] : [
             ComposerPlusAction(
                 id: "session.latestUpdate", title: "Latest update", systemImage: "text.alignleft"
             ) { showLatestUpdate = true },
@@ -430,6 +415,13 @@ struct SessionConversationView: View {
     /// The web menu's Debug group has no phone item. Side questions, the note and
     /// fork are in the composer's `+`. Retry only shows for error/stopped sessions
     /// (the server 400s otherwise).
+    /// The folder the copy rows use: the page's session's, else the record's (an ask
+    /// opened from Chat or voice arrives without one; a list row may carry "").
+    private var copyCwd: String? {
+        let own = session.cwd?.trimmingCharacters(in: .whitespaces) ?? ""
+        return own.isEmpty ? lifecycle.recordCwd : own
+    }
+
     private var sessionMenu: some View {
         Menu {
             if session.taskId != nil {
@@ -516,7 +508,7 @@ struct SessionConversationView: View {
                     Label("Session Info", systemImage: "info.circle")
                 }
                 .accessibilityIdentifier("session.info")
-                ForEach(SessionCopyItem.items(sessionId: session.id, cwd: session.cwd)) { item in
+                ForEach(SessionCopyItem.items(sessionId: session.id, cwd: copyCwd)) { item in
                     Button {
                         UIPasteboard.general.string = item.value
                         UINotificationFeedbackGenerator().notificationOccurred(.success)
@@ -531,11 +523,7 @@ struct SessionConversationView: View {
             .accessibilityIdentifier("session.copyOpenMenu")
             Divider()
             Button(role: .destructive) {
-                Task {
-                    if case .needsForce(let message) = await lifecycle.terminate() {
-                        forceTerminateMessage = message
-                    }
-                }
+                confirmTerminate = true
             } label: {
                 Label("Terminate", systemImage: "stop.circle")
             }

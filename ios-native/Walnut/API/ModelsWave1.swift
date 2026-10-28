@@ -234,8 +234,8 @@ enum AskUserQuestion {
 /// companion answers this route from a DEGRADED path when its bridge to the primary is
 /// down, and that reply carries only `claudeSessionId` / `process_status` / `title` /
 /// `mode`. A required field would turn "the Mac is asleep" into a decode failure.
-struct SessionDetail: Codable {
-    struct Record: Codable {
+struct SessionDetail: Codable, Equatable {
+    struct Record: Codable, Equatable {
         let claudeSessionId: String
         let processStatus: String?
         let title: String?
