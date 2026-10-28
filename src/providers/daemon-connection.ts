@@ -983,7 +983,9 @@ export class DaemonConnection {
         const cfg = await getBridgeConfigForHost(this.hostKey)
         // Push disabled too — an operator turning the bridge off must reach
         // daemons that already hold a persisted bridge.json.
-        const reply = await this.send('bridge.configure', cfg as unknown as Record<string, unknown>)
+        const payload = this.hostKey === '__local__' && this.hasCapability('feature-relay-v1')
+          ? { ...cfg, home: WALNUT_HOME } : cfg
+        const reply = await this.send('bridge.configure', payload as unknown as Record<string, unknown>)
         if (reply.ok !== true) {
           // Rejected configure — the daemon refused/errored the command. That
           // says nothing about bridge liveness, so don't record `false`; keep

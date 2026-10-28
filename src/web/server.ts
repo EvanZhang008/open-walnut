@@ -91,7 +91,7 @@ import * as chatHistory from '../core/chat-history.js'
 import { gitPullWalnut, ensureRepo, commitIfDirty, autoSync, isGitAvailable, isLockContention, checkRepoSize, getSyncGuardState, REPO_SIZE_RECOVERY_KEY } from '../integrations/git-sync.js'
 import { registry } from '../core/integration-registry.js'
 import { clearPluginQuarantine, disableLoadedPlugin, disposeLoadedPlugins, forgetBundledPlugin, getPluginLifecycleRecords, getPluginReloadIds, isPluginCatalogueLoading, loadNewPlugins, loadPlugins, migrateConfigToPlugins, pluginsKeepingTasks, reloadLoadedPlugin, reloadLoadedPlugins, runPluginMigrations, getUnconfiguredPlugins, pluginStarting } from '../core/integration-loader.js'
-import { disposeCoreServices, publishCalendarSource } from '../core/platform-services.js'
+import { disposeCoreServices, publishCalendarSource, publishFeatureNodes } from '../core/platform-services.js'
 import type { SyncPollContext } from '../core/integration-types.js'
 import { recordSyncSuccess, recordSyncFailure, decideSyncFailureNotice, decideConnectionNotice, getSyncHealth, reconcileCardWanted, type ConnectionWatch } from '../core/plugin-sync-health.js'
 import { syncReconciler, type ReconcileTickOutcome } from '../core/sync-reconciler.js'
@@ -5268,6 +5268,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // after this line would fail its activation. The forwarder keeps the legacy
   // `calendar:updated` name alive for the web stores that still listen for it.
   publishCalendarSource()
+  publishFeatureNodes()
   installCalendarEventForwarder()
 
   // -- Load integration plugins --

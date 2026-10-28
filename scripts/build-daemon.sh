@@ -139,6 +139,7 @@ SOURCES=(
   src/providers/follower-reads-core.ts
   src/providers/host-server-core.ts
   src/providers/stream-relay-core.ts
+  src/providers/feature-relay-core.ts
   src/providers/host-resume-core.ts
   src/providers/cli-owner-core.ts
   src/providers/host-start-core.ts

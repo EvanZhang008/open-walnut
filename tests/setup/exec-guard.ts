@@ -99,6 +99,11 @@ function install(): ExecGuardState {
 
 export const execGuardState = install()
 
+export function childExecGuardEnv(): NodeJS.ProcessEnv {
+  return Object.fromEntries(Object.entries(process.env)
+    .filter(([key, value]) => key.startsWith('WALNUT_TEST_EXEC_GUARD') && value !== undefined))
+}
+
 // What a test file runs while it is imported (a probe at module scope) carries its name too.
 process.env.WALNUT_TEST_EXEC_GUARD_TAG = `${testFile() || 'a test file'} (import)`
 

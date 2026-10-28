@@ -25,6 +25,7 @@ import {
   type ServiceApi,
 } from './plugins/service-registry.js'
 import type { Disposable } from './plugins/disposable.js'
+import { createFeatureNodesService } from './feature-nodes/feature-service.js'
 import {
   calendarAuthStatus,
   calendarHelperFallback,
@@ -44,8 +45,24 @@ export function publishCoreService(name: string, api: ServiceApi): Disposable {
   return publishOwnedService(CORE_SERVICE_OWNER, name, api)
 }
 
+let featureService: ReturnType<typeof createFeatureNodesService> | undefined
+
+export function publishFeatureNodes(): Disposable {
+  featureService?.dispose()
+  const service = createFeatureNodesService()
+  featureService = service
+  const published = publishCoreService('feature-nodes', { createClient: () => service.api.createClient() })
+  return { dispose: () => {
+    published.dispose()
+    service.dispose()
+    if (featureService === service) featureService = undefined
+  } }
+}
+
 /** Withdraw every `core:` service. Server shutdown only; plugins keep their own. */
 export function disposeCoreServices(): number {
+  featureService?.dispose()
+  featureService = undefined
   return removeOwnedServices(CORE_SERVICE_OWNER)
 }
 

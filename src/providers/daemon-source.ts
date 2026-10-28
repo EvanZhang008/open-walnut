@@ -1,3 +1,4 @@
+import { createFeatureRelay } from './feature-relay-core.js'
 /**
  * walnut-daemon.js — Embedded source code for the remote daemon server.
  *
@@ -264,6 +265,7 @@ export function getDaemonSource(): string {
     ['__CREATE_ATTACHMENT_COPY__', createAttachmentCopy.toString()],
     ['__CREATE_FOLLOWER_READS__', createFollowerReads.toString()],
     ['__CREATE_HOST_SERVER__', createHostServerSupervisor.toString()],
+    ['__CREATE_FEATURE_RELAY__', createFeatureRelay.toString()],
     ['__CREATE_STREAM_RELAY__', createStreamRelay.toString()],
     ['__CREATE_HOST_RESUME__', createHostResume.toString()],
     ['__CREATE_CLI_OWNER__', createCliOwner.toString()],
@@ -3438,7 +3440,7 @@ var BRIDGE_ALLOWED_COMMANDS = new Set([
   'session.message',
   // The backup leader (leader-core.ts): each checks for itself what the bridge
   // may do (twin of daemon-standalone.ts).
-  'leader.witness', 'leader.claim', 'leader.deliver', 'gateway-result',
+  'leader.witness', 'leader.claim', 'leader.deliver', 'gateway-result', 'feature.result',
   // Twin of daemon-standalone.ts: a model or effort change while the companion leads.
   'leader.settings',
   // Twin of daemon-standalone.ts: a permission answer, a mode or a user stop ('leader-control-v1').
@@ -3464,7 +3466,7 @@ var BRIDGE_ALLOWED_COMMANDS = new Set([
 // daemon-standalone.ts BRIDGE_CAPABILITIES (WALNUT_BRIDGE_HIDE_CAPS, tests: an older daemon;
 // refused for the prod daemon dir).
 var BRIDGE_HIDDEN_CAPS = IS_PROD_DAEMON_DIR ? [] : (process.env.WALNUT_BRIDGE_HIDE_CAPS || '').split(',').map(function (x) { return x.trim(); });
-var BRIDGE_CAPABILITIES = ['bridge-stream-v1', 'send-dedupe-v1', 'send-lost-line-v1', 'session-permission-v1'].filter(function (c) {
+var BRIDGE_CAPABILITIES = ['bridge-stream-v1', 'send-dedupe-v1', 'send-lost-line-v1', 'session-permission-v1', 'feature-relay-v1'].filter(function (c) {
   return BRIDGE_HIDDEN_CAPS.indexOf(c) === -1;
 });
 
@@ -3496,6 +3498,17 @@ var LANE_ALLOWED_COMMANDS = new Set([
 // A Walnut server socket that may be the leader: not the bridge, a follower or a lane.
 function isServerClient(client) {
   return client.origin !== 'bridge' && client.origin !== 'follower' && client.origin !== 'lane';
+}
+
+var featureRelay = (__CREATE_FEATURE_RELAY__)(crypto.randomUUID())
+var featureSockets = new WeakMap()
+function featureSocket(ws) {
+  let socket = featureSockets.get(ws)
+  if (!socket) {
+    socket = { send: (text) => { if (ws.readyState !== undefined && ws.readyState !== 1) return false; try { ws.send(text); return true } catch { return false } } }
+    featureSockets.set(ws, socket)
+  }
+  return socket
 }
 
 function handleCommand(ws, msg) {
@@ -3815,6 +3828,18 @@ function dispatchCommand(ws, id, cmd) {
     // NOT in BRIDGE_ALLOWED_COMMANDS: reverse direction — the trusted walnut
     // server pushes slim mobile feed events DOWN, the daemon relays them to
     // the cloud bridge (see cmdMobileEvent).
+    case 'feature.request': {
+      if (!isServerClient(ws) || bridgeConfig?.hostAlias !== '__local__' || !bridgeConfig.home
+        || gatewayClientHomes.get(ws) !== bridgeConfig.home) return sendError(ws, id, 'Feature request refused')
+      const home = bridgeConfig.home
+      return featureRelay.request(featureSocket(ws), id, bridgeAdapter ? featureSocket(bridgeAdapter) : null, cmd.frame,
+        () => isServerClient(ws) && gatewayClientHomes.get(ws) === home && bridgeConfig?.home === home)
+    }
+    case 'feature.result': {
+      if (ws !== bridgeAdapter) return sendError(ws, id, 'Feature result refused')
+      const accepted = featureRelay.result(featureSocket(ws), cmd.requestId, cmd.result)
+      return sendOk(ws, id, { accepted })
+    }
     case 'mobile-event': return cmdMobileEvent(ws, id, cmd);
     // ACP worker commands. A local daemon runs them through the acp-daemon-core.cjs
     // sidecar (the same acp-daemon.ts the binary twin compiles in); a daemon without
@@ -4457,6 +4482,10 @@ function resolveCallerSid(sid) {
 // daemon-standalone.ts block: host.slice tags the socket with its home, the
 // journal is drained with offline.drain / offline.ack.
 var gatewayClientHomes = new WeakMap();
+function bindGatewayClientHome(ws, home) {
+  if (gatewayClientHomes.get(ws) !== home) featureRelay.disconnect(featureSocket(ws));
+  gatewayClientHomes.set(ws, home);
+}
 
 // This host's copy of each Walnut's notes, memory and skills (host-replica-core.ts,
 // inlined), kept across reboots in the trigger state's home. WALNUT_REPLICA_DIR is
@@ -4708,7 +4737,7 @@ function cmdLeaderConfigure(ws, id, cmd) {
   if (ws.origin === 'bridge') return sendError(ws, id, 'leader.configure: trusted clients only');
   try {
     var rec = leaderBook.configure({ home: cmd.home, walnutId: cmd.walnutId, backup: cmd.backup === true, drains: cmd.drains });
-    gatewayClientHomes.set(ws, rec.home);
+    bindGatewayClientHome(ws, rec.home);
     sendOk(ws, id, { epoch: rec.epoch, holder: rec.holder, since: rec.since, takeoverMs: LEADER_TAKEOVER_MS });
   } catch (err) {
     sendError(ws, id, err.message);
@@ -5010,7 +5039,7 @@ function cmdLeaderClaim(ws, id, cmd) {
   if (typeof cmd.home !== 'string' || !cmd.home) return sendError(ws, id, 'leader.claim: missing home');
   var rec = leaderBook.primaryClaim(cmd.home);
   if (!rec) return sendError(ws, id, 'leader.claim: send leader.configure first');
-  gatewayClientHomes.set(ws, rec.home);
+  bindGatewayClientHome(ws, rec.home);
   sendOk(ws, id, { epoch: rec.epoch, holder: rec.holder });
 }
 
@@ -5447,7 +5476,7 @@ function cmdOfflineBlob(ws, id, cmd) {
 function cmdHostSlice(ws, id, cmd) {
   try {
     var r = offlineHost.configure(cmd.slice);
-    gatewayClientHomes.set(ws, cmd.slice.home);
+    bindGatewayClientHome(ws, cmd.slice.home);
     sendOk(ws, id, { changed: r.changed, pendingHandover: offlineHost.hasRecords(cmd.slice.home) });
   } catch (err) {
     sendError(ws, id, 'host.slice: ' + err.message);
@@ -12807,6 +12836,7 @@ function cmdBridgeConfigure(ws, id, cmd) {
     url: url != null ? url : (bridgeConfig ? bridgeConfig.url : ''),
     token: token != null ? token : (bridgeConfig ? bridgeConfig.token : ''),
     hostAlias: hostAlias != null ? hostAlias : (bridgeConfig ? bridgeConfig.hostAlias : ''),
+    ...(typeof cmd.home === 'string' && cmd.home.length > 0 ? { home: cmd.home } : {}),
   };
   const changed = JSON.stringify(next) !== JSON.stringify(bridgeConfig);
   bridgeConfig = next;
@@ -12844,7 +12874,7 @@ function stopBridge() {
   if (bridgeDialTimer) { clearTimeout(bridgeDialTimer); bridgeDialTimer = null; }
   bridgeDialStartedAt = null;
   if (bridgeAdapter) {
-    wsClients.delete(bridgeAdapter);
+    featureRelay.disconnect(featureSocket(bridgeAdapter)); wsClients.delete(bridgeAdapter);
     for (const [, session] of sessions) session.subscribers.delete(bridgeAdapter);
     streamRelay.dropLink(bridgeAdapter);
     for (const [key, sub] of agentSubs) {
@@ -13093,7 +13123,7 @@ function dialBridge(gen) {
         ? { code: a, reason: b ? String(b) : '', wasClean: null }
         : { code: a && typeof a.code === 'number' ? a.code : null, reason: a && a.reason ? a.reason : '', wasClean: a && typeof a.wasClean === 'boolean' ? a.wasClean : null };
       logBridgeConnClose(closeInfo);
-      wsClients.delete(bridgeAdapter);
+      featureRelay.disconnect(featureSocket(bridgeAdapter)); wsClients.delete(bridgeAdapter);
       for (const [, session] of sessions) session.subscribers.delete(bridgeAdapter);
       streamRelay.dropLink(bridgeAdapter);
       bridgeAdapter = null;
@@ -13803,7 +13833,7 @@ async function startDaemon() {
     });
 
     ws.on('close', () => {
-      wsClients.delete(ws);
+      featureRelay.disconnect(featureSocket(ws)); wsClients.delete(ws);
       clearInterval(pingTimer);
       if (acp) acp.removeSubscriber(ws);
       streamRelay.dropLink(ws);

@@ -198,6 +198,7 @@ const DAEMON_SOURCE_FILES = [
   'src/providers/host-server-core.ts',
   // Streams between servers through the daemon (stream-relay-v1): same rule.
   'src/providers/stream-relay-core.ts',
+  'src/providers/feature-relay-core.ts',
   // A stopped session resumed on its host for a trigger fire (trigger-host-resume-v1): same rule.
   'src/providers/host-resume-core.ts',
   'src/providers/cli-owner-core.ts',

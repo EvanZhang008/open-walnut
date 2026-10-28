@@ -22,10 +22,12 @@ vi.mock('../../../src/constants.js', () => createMockConstants('walnut-apiv1-ses
 
 // Bridge seam: the route talks to the daemon exclusively through
 // bridgeRequest(). Keep the real BridgeOfflineError shape (instanceof check).
-const bridgeRequestMock = vi.fn()
-class BridgeOfflineError extends Error {
-  constructor(hostAlias: string) { super(`No live bridge for host: ${hostAlias}`) }
-}
+const { bridgeRequestMock, BridgeOfflineError } = vi.hoisted(() => ({
+  bridgeRequestMock: vi.fn(),
+  BridgeOfflineError: class extends Error {
+    constructor(hostAlias: string) { super(`No live bridge for host: ${hostAlias}`) }
+  },
+}))
 vi.mock('../../../src/web/ws/bridge-registry.js', () => ({
   bridgeRequest: bridgeRequestMock,
   BridgeOfflineError,
@@ -37,6 +39,7 @@ vi.mock('../../../src/web/ws/bridge-registry.js', () => ({
   closeAllBridges: () => {},
   // The backup leader's gateway (server.ts, cloud mode).
   setGatewayRequestHandler: () => {},
+  setFeatureRequestHandler: () => {},
 }))
 
 import { WALNUT_HOME } from '../../../src/constants.js'

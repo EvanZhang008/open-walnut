@@ -18,6 +18,7 @@ import { DAEMON_TUNNEL_PATH } from '../../core/hosts/cloud-box-host.js'
 import { configChangedForClients } from '../../core/config-broadcast.js'
 import { selectWsProtocol } from '../../lib/ws-bearer-protocol.js'
 import { upgradeCredential } from './upgrade-credential.js'
+import { authenticateFeatureNode, upgradeFeatureNode, startFeatureNodes, closeFeatureNodes } from './feature-node-runtime.js'
 import { BRIDGE_SESSION_STREAM_PATH, closeAllBridgeSessionStreams, handleBridgeSessionStreamUpgrade } from './bridge-session-stream.js'
 
 export type RpcHandler = (payload: unknown, client: WebSocket) => unknown | Promise<unknown>
@@ -408,6 +409,7 @@ async function verifyPrimaryUpgrade(url: URL, request: IncomingMessage): Promise
  * Attach the WebSocket server to an existing HTTP server via upgrade.
  */
 export function attachWss(server: HttpServer): WebSocketServer {
+  startFeatureNodes()
   // maxPayload caps a single WS frame. The `ws` default is 100MB — any
   // authenticated /ws client or /bridge daemon could push that and force the
   // server to buffer it whole before JSON.parse (memory-exhaustion lever).
@@ -461,6 +463,35 @@ export function attachWss(server: HttpServer): WebSocketServer {
       // Import BEFORE handleUpgrade: the daemon sends its hello immediately on
       // open, and message listeners must be attached synchronously in the
       // upgrade callback or the first frame is lost (first-connection race).
+      const presented = upgradeCredential(request, url)
+      if (presented.kind === 'token' && presented.token.startsWith('fn.')) {
+        if (url.searchParams.has('token')) {
+          socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n')
+          socket.destroy()
+          return
+        }
+        void (async () => {
+          const { rateLimitClientIp } = await import('../middleware/local-trust.js')
+          const { isAuthRateLimited, recordAuthFailure } = await import('../middleware/auth-rate-limit.js')
+          const ip = rateLimitClientIp(request)
+          if (isAuthRateLimited(ip)) {
+            if (!socket.destroyed) socket.write('HTTP/1.1 429 Too Many Requests\r\nConnection: close\r\n\r\n')
+            socket.destroy()
+            return
+          }
+          const verified = await authenticateFeatureNode(presented.token)
+          if (!verified.success || socket.destroyed) {
+            if (!verified.success && verified.code === 'denied') recordAuthFailure(ip, presented.token)
+            if (!socket.destroyed) socket.write(!verified.success && verified.code === 'unavailable'
+              ? 'HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n'
+              : 'HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n')
+            socket.destroy()
+            return
+          }
+          upgradeFeatureNode(request, socket, head, verified.identity)
+        })().catch(() => socket.destroy())
+        return
+      }
       Promise.all([verifyCloudUpgrade(url, request), import('./bridge-registry.js'), import('./bridge-wire.js')]).then(([cred, { attachBridge }, { bridgeClientIp }]) => {
         if (!cred || cred.kind !== 'machine') {
           socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n')
@@ -590,6 +621,7 @@ export function attachWss(server: HttpServer): WebSocketServer {
  * Close all connections and stop the WebSocket server.
  */
 export function closeWss(): void {
+  closeFeatureNodes()
   closeAllBridgeSessionStreams()
   if (pingTimer) {
     clearInterval(pingTimer)

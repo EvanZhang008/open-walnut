@@ -278,6 +278,7 @@ export const REQUIRED_DAEMON_CAPABILITIES = [
  * (reason 'daemon_needs_upgrade') until the next auto-deploy.
  */
 export const ADVERTISED_DAEMON_CAPABILITIES = [
+  'feature-relay-v1',
   ...REQUIRED_DAEMON_CAPABILITIES,
   'desktop-update-v1',
   'snapshot-v1',

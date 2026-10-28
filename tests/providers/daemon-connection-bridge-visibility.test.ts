@@ -11,6 +11,7 @@ import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest'
 import { MockDaemon } from '../helpers/mock-daemon.js'
 import { DaemonConnection, getDaemonPoolStatus } from '../../src/providers/daemon-connection.js'
 import { log } from '../../src/logging/index.js'
+import { WALNUT_HOME } from '../../src/constants.js'
 
 // Bridge provisioning normally requires a cloud git remote + a token mint
 // round-trip; stub the derivation so pushBridgeConfig() exercises only the
@@ -181,6 +182,22 @@ describe('DaemonConnection bridge visibility', () => {
     // Give the reply-processing microtask a beat.
     await new Promise((r) => setTimeout(r, 100))
     expect(conn.lastBridgeConnected).toBeNull()
+  })
+
+  it.each([
+    { host: '__local__', featureRelay: true, hasHome: true },
+    { host: '__local__', featureRelay: false, hasHome: false },
+    { host: 'fixture-remote', featureRelay: true, hasHome: false },
+  ])('binds the bridge owner only on a capable local daemon: $host/$featureRelay', async ({ host, featureRelay, hasHome }) => {
+    bridgeConfigMock.payload = { enabled: false }
+    conn = new DaemonConnection(host, null)
+    const hasCapability = conn.hasCapability.bind(conn)
+    vi.spyOn(conn, 'hasCapability').mockImplementation((name) => name === 'feature-relay-v1' ? featureRelay : hasCapability(name))
+    await conn.connectDirect(`ws://127.0.0.1:${daemon.port}`)
+    await waitFor(() => daemon.getCommandHistory().some((c) => c.cmd === 'bridge.configure'))
+    const command = daemon.getCommandHistory().find((c) => c.cmd === 'bridge.configure')!
+    if (hasHome) expect(command.payload.home).toBe(WALNUT_HOME)
+    else expect(command.payload).not.toHaveProperty('home')
   })
 
   it('getDaemonPoolStatus surfaces bridgeConnected per host', async () => {

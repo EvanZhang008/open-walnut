@@ -11,7 +11,7 @@ import { execFileSync, spawn, spawnSync, type ChildProcess } from 'node:child_pr
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { EXEC_GUARD_BIN, failOnExecGuardHits, guardedPath, takeExecGuardHits, type ExecGuardHit } from './exec-guard.js'
+import { EXEC_GUARD_BIN, childExecGuardEnv, failOnExecGuardHits, guardedPath, takeExecGuardHits, type ExecGuardHit } from './exec-guard.js'
 import {
   EXEC_GUARD_HOME_PREFIX, EXEC_GUARD_LOG, EXEC_GUARD_OFFSET_FILE, EXEC_GUARD_RUN_FILE, EXEC_GUARD_TOOLS, parseHit,
   unattributedHitsSince, unreadHitsOfRun,
@@ -38,6 +38,15 @@ async function waitForHits(pred: (h: ExecGuardHit) => boolean, ms = 20_000): Pro
 }
 
 describe('the worker env', () => {
+  it('copies only guard variables into an isolated child environment', () => {
+    const env = childExecGuardEnv()
+    expect(env.WALNUT_TEST_EXEC_GUARD).toBe(EXEC_GUARD_BIN)
+    expect(env.WALNUT_TEST_EXEC_GUARD_LOG).toBe(process.env.WALNUT_TEST_EXEC_GUARD_LOG)
+    expect(env.WALNUT_TEST_EXEC_GUARD_TAG).toBe(process.env.WALNUT_TEST_EXEC_GUARD_TAG)
+    expect(Object.keys(env).every((key) => key.startsWith('WALNUT_TEST_EXEC_GUARD'))).toBe(true)
+    expect(env).not.toBe(process.env)
+  })
+
   it('runs under a fake HOME with no real hosts, rc or agent', () => {
     const home = os.homedir()
     expect(path.basename(home)).toBe(`${EXEC_GUARD_HOME_PREFIX}${process.pid}`)

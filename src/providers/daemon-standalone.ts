@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { createFeatureRelay } from './feature-relay-core.js'
 'use strict'
 
 /**
@@ -810,7 +811,7 @@ const BRIDGE_ALLOWED_COMMANDS = new Set([
   // primary for the takeover window; deliver writes into a session (no more
   // than `send` already can) only for the current epoch; gateway-result only
   // answers a relay this host sent to the bridge.
-  'leader.witness', 'leader.claim', 'leader.deliver', 'gateway-result',
+  'leader.witness', 'leader.claim', 'leader.deliver', 'gateway-result', 'feature.result',
   // A model or effort change on a live session here, while the companion leads
   // (current epoch only, a session of that Walnut): the same line the server
   // writes, its value checked (live-settings-core.ts).
@@ -842,7 +843,7 @@ const BRIDGE_ALLOWED_COMMANDS = new Set([
  * prod daemon dir, as every test knob that changes what a daemon does (section 10).
  */
 const BRIDGE_HIDDEN_CAPS = IS_PROD_DAEMON_DIR ? [] : (process.env.WALNUT_BRIDGE_HIDE_CAPS ?? '').split(',').map((x) => x.trim())
-const BRIDGE_CAPABILITIES = ['bridge-stream-v1', 'send-dedupe-v1', 'send-lost-line-v1', 'session-permission-v1'].filter((c) => !BRIDGE_HIDDEN_CAPS.includes(c))
+const BRIDGE_CAPABILITIES = ['bridge-stream-v1', 'send-dedupe-v1', 'send-lost-line-v1', 'session-permission-v1', 'feature-relay-v1'].filter((c) => !BRIDGE_HIDDEN_CAPS.includes(c))
 
 /**
  * What a follower socket (the host server) may ask ('follower-v1'): who leads,
@@ -2258,6 +2259,17 @@ const acp = createAcpDaemon<ServerWebSocket<WsData>>({
 
 // ── Session management commands ──
 
+const featureRelay = createFeatureRelay(crypto.randomUUID())
+const featureSockets = new WeakMap<object, { send(text: string): boolean }>()
+function featureSocket(ws: ServerWebSocket<WsData>) {
+  let socket = featureSockets.get(ws)
+  if (!socket) {
+    socket = { send: (text: string) => { if (ws.readyState !== 1) return false; safeSend(ws, text); return true } }
+    featureSockets.set(ws, socket)
+  }
+  return socket
+}
+
 function handleCommand(ws: ServerWebSocket<WsData>, msg: string) {
   let cmd: Record<string, unknown>
   try { cmd = JSON.parse(msg) } catch { return sendError(ws, null, 'invalid JSON') }
@@ -2487,6 +2499,18 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     // NOT in BRIDGE_ALLOWED_COMMANDS: reverse direction — the trusted walnut
     // server pushes slim mobile feed events DOWN, the daemon relays them to
     // the cloud bridge (see cmdMobileEvent).
+    case 'feature.request': {
+      if (!isServerClient(ws) || bridgeConfig?.hostAlias !== '__local__' || !bridgeConfig.home
+        || gatewayClientHomes.get(ws) !== bridgeConfig.home) return sendError(ws, id, 'Feature request refused')
+      const home = bridgeConfig.home
+      return featureRelay.request(featureSocket(ws), id, bridgeAdapter ? featureSocket(bridgeAdapter) : null, cmd.frame,
+        () => isServerClient(ws) && gatewayClientHomes.get(ws) === home && bridgeConfig?.home === home)
+    }
+    case 'feature.result': {
+      if (ws !== bridgeAdapter) return sendError(ws, id, 'Feature result refused')
+      const accepted = featureRelay.result(featureSocket(ws), cmd.requestId, cmd.result)
+      return sendOk(ws, id, { accepted })
+    }
     case 'mobile-event': return cmdMobileEvent(ws, id as number, cmd)
     // A relay is answered by whom it went to (see the gateway section).
     case 'gateway-result': return cmdGatewayResult(ws, id as number, cmd)
@@ -3438,6 +3462,10 @@ function gatewayError(code: GatewayErrorCode, message: string): GatewayResponse 
 
 /** Trusted socket → the Walnut data dir it pushed a copy for. */
 const gatewayClientHomes = new WeakMap<ServerWebSocket<WsData>, string>()
+function bindGatewayClientHome(ws: ServerWebSocket<WsData>, home: string): void {
+  if (gatewayClientHomes.get(ws) !== home) featureRelay.disconnect(featureSocket(ws))
+  gatewayClientHomes.set(ws, home)
+}
 
 // This host's copy of each Walnut's notes, memory and skills (host-replica-core.ts),
 // pushed by the primary with replica.sync / replica.put, removed with replica.drop.
@@ -3712,7 +3740,7 @@ function cmdLeaderConfigure(ws: ServerWebSocket<WsData>, id: number, cmd: Record
   if (ws.data?.origin === 'bridge') return sendError(ws, id, 'leader.configure: trusted clients only')
   try {
     const rec = leaderBook.configure({ home: cmd.home as string, walnutId: cmd.walnutId as string, backup: cmd.backup === true, drains: cmd.drains })
-    gatewayClientHomes.set(ws, rec.home)
+    bindGatewayClientHome(ws, rec.home)
     sendOk(ws, id, { epoch: rec.epoch, holder: rec.holder, since: rec.since, takeoverMs: LEADER_TAKEOVER_MS })
   } catch (err) {
     sendError(ws, id, (err as Error).message)
@@ -4025,7 +4053,7 @@ function cmdLeaderClaim(ws: ServerWebSocket<WsData>, id: number, cmd: Record<str
   if (typeof cmd.home !== 'string' || !cmd.home) return sendError(ws, id, 'leader.claim: missing home')
   const rec = leaderBook.primaryClaim(cmd.home)
   if (!rec) return sendError(ws, id, 'leader.claim: send leader.configure first')
-  gatewayClientHomes.set(ws, rec.home)
+  bindGatewayClientHome(ws, rec.home)
   sendOk(ws, id, { epoch: rec.epoch, holder: rec.holder })
 }
 
@@ -4474,7 +4502,7 @@ function cmdHostSlice(ws: ServerWebSocket<WsData>, id: number, cmd: Record<strin
   try {
     const slice = cmd.slice as HostSlice
     const r = offlineHost.configure(slice)
-    gatewayClientHomes.set(ws, slice.home)
+    bindGatewayClientHome(ws, slice.home)
     sendOk(ws, id, { changed: r.changed, pendingHandover: offlineHost.hasRecords(slice.home) })
   } catch (err) {
     sendError(ws, id, 'host.slice: ' + (err as Error).message)
@@ -10917,6 +10945,7 @@ function cleanup() {
 
 // ── Handle disconnect for a WebSocket client ──
 function handleDisconnect(ws: ServerWebSocket<WsData>) {
+  featureRelay.disconnect(featureSocket(ws))
   wsClients.delete(ws)
   acp.removeSubscriber(ws)
   streamRelay.dropLink(ws)
@@ -10977,7 +11006,7 @@ function handleDisconnect(ws: ServerWebSocket<WsData>) {
 
 const BRIDGE_FILE = path.join(DAEMON_DIR, 'bridge.json')
 
-interface BridgeConfig { enabled: boolean; url: string; token: string; hostAlias: string }
+interface BridgeConfig { enabled: boolean; url: string; token: string; hostAlias: string; home?: string }
 
 let bridgeConfig: BridgeConfig | null = null
 let bridgeClient: WebSocket | null = null
@@ -11060,6 +11089,7 @@ function cmdBridgeConfigure(ws: ServerWebSocket<WsData>, id: number, cmd: Record
     url: url ?? bridgeConfig?.url ?? '',
     token: token ?? bridgeConfig?.token ?? '',
     hostAlias: hostAlias ?? bridgeConfig?.hostAlias ?? '',
+    ...(typeof cmd.home === 'string' && cmd.home.length > 0 ? { home: cmd.home } : {}),
   }
   const changed = JSON.stringify(next) !== JSON.stringify(bridgeConfig)
   bridgeConfig = next

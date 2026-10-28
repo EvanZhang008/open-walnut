@@ -25,10 +25,12 @@ import { createMockConstants } from '../../helpers/mock-constants.js'
 
 vi.mock('../../../src/constants.js', () => createMockConstants('walnut-launch-seed-cloud', { CLOUD_MODE: true }))
 
-const bridgeRequestMock = vi.fn()
-class BridgeOfflineError extends Error {
-  constructor(hostAlias: string) { super(`No live bridge for host: ${hostAlias}`) }
-}
+const { bridgeRequestMock, BridgeOfflineError } = vi.hoisted(() => ({
+  bridgeRequestMock: vi.fn(),
+  BridgeOfflineError: class extends Error {
+    constructor(hostAlias: string) { super(`No live bridge for host: ${hostAlias}`) }
+  },
+}))
 vi.mock('../../../src/web/ws/bridge-registry.js', () => ({
   bridgeRequest: bridgeRequestMock,
   BridgeOfflineError,
@@ -42,6 +44,7 @@ vi.mock('../../../src/web/ws/bridge-registry.js', () => ({
   closeAllBridges: () => {},
   // The backup leader's gateway (server.ts, cloud mode).
   setGatewayRequestHandler: () => {},
+  setFeatureRequestHandler: () => {},
 }))
 
 import { WALNUT_HOME } from '../../../src/constants.js'

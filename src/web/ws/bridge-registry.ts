@@ -460,6 +460,16 @@ function handleFrame(conn: BridgeConn, raw: string): void {
     return
   }
 
+  if (ev === 'feature-request') {
+    if (conn.hostAlias !== PRIMARY_ALIAS || !featureRequestHandler) return
+    const source = conn
+    void featureRequestHandler(msg.frame).then((result) => {
+      if (bridges.get(PRIMARY_ALIAS) !== source) return
+      return bridgeRequest(PRIMARY_ALIAS, 'feature.result', { requestId: msg.requestId, result })
+    }).catch(() => {})
+    return
+  }
+
   if (ev === 'gateway-request') {
     // A host's daemon hands the companion a call its own copy cannot answer,
     // while the companion leads that host (core/leader/backup-gateway.ts). The
@@ -486,6 +496,9 @@ function handleFrame(conn: BridgeConn, raw: string): void {
  * startup). Kept as a callback so this transport module never imports the
  * route layer.
  */
+let featureRequestHandler: ((frame: unknown) => Promise<unknown>) | null = null
+export function setFeatureRequestHandler(handler: typeof featureRequestHandler): void { featureRequestHandler = handler }
+
 let mobileEventHandler: ((kind: unknown, data: unknown) => void) | null = null
 
 export function setMobileEventHandler(handler: ((kind: unknown, data: unknown) => void) | null): void {

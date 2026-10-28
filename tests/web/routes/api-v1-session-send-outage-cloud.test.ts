@@ -30,13 +30,14 @@ import { createMockConstants } from '../../helpers/mock-constants.js'
 
 vi.mock('../../../src/constants.js', () => createMockConstants('walnut-apiv1-send-outage', { CLOUD_MODE: true }))
 
-const bridgeRequestMock = vi.fn()
+const { bridgeRequestMock, primaryConnectedHandlers, BridgeOfflineError } = vi.hoisted(() => ({
+  bridgeRequestMock: vi.fn(),
+  primaryConnectedHandlers: new Set<() => void>(),
+  BridgeOfflineError: class extends Error {
+    constructor(hostAlias: string) { super(`No live bridge for host: ${hostAlias}`) }
+  },
+}))
 let bridgeConnected = true
-/** Handlers registered by core/send-queue.ts via addPrimaryBridgeConnectedHandler. */
-const primaryConnectedHandlers = new Set<() => void>()
-class BridgeOfflineError extends Error {
-  constructor(hostAlias: string) { super(`No live bridge for host: ${hostAlias}`) }
-}
 vi.mock('../../../src/web/ws/bridge-registry.js', () => ({
   bridgeRequest: bridgeRequestMock,
   BridgeOfflineError,
@@ -48,6 +49,7 @@ vi.mock('../../../src/web/ws/bridge-registry.js', () => ({
   closeAllBridges: () => {},
   // The backup leader's gateway (server.ts, cloud mode).
   setGatewayRequestHandler: () => {},
+  setFeatureRequestHandler: () => {},
   setMobileEventHandler: () => {},
   setPrimaryBridgeConnectedHandler: () => {},
   addPrimaryBridgeConnectedHandler: (h: () => void) => {

@@ -317,14 +317,15 @@ describe('leader protocol: both twins', () => {
     'stream.data', 'stream.end', 'stt',
   ]
   for (const [name, src] of Object.entries(twins)) {
-    it(`${name}: the bridge adds only stream.open and the narrow session.permission and upload.part commands`, () => {
+    it(`${name}: the bridge adds only stream.open, session.permission, upload.part and feature result replies`, () => {
       const set = [...new Set(allowlist(src).match(/'[\w.-]+'/g)!.map((x) => x.slice(1, -1)))].sort()
       // upload.part writes only <uploads root>/<uploadId>/<name> (transfer-core.ts uploadPart).
-      expect(set).toEqual([...BRIDGE_SET_BEFORE_WP13, 'stream.open', 'session.permission', 'upload.part'].sort())
+      expect(set).toEqual([...BRIDGE_SET_BEFORE_WP13, 'stream.open', 'session.permission', 'upload.part', 'feature.result'].sort())
+      expect(set).not.toContain('feature.request')
     })
 
     it(`${name}: the bridge hello says what the daemon does for the companion, and a test can hide it`, () => {
-      expect(src).toMatch(/BRIDGE_CAPABILITIES = \['bridge-stream-v1', 'send-dedupe-v1', 'send-lost-line-v1', 'session-permission-v1'\]\.filter\(/)
+      expect(src).toMatch(/BRIDGE_CAPABILITIES = \['bridge-stream-v1', 'send-dedupe-v1', 'send-lost-line-v1', 'session-permission-v1', 'feature-relay-v1'\]\.filter\(/)
       expect(src).toMatch(/WALNUT_BRIDGE_HIDE_CAPS/)
       // The knob is refused for the prod daemon dir (section 10): it is read only off it.
       expect(src).toMatch(/BRIDGE_HIDDEN_CAPS = IS_PROD_DAEMON_DIR \? \[\] : \(process\.env\.WALNUT_BRIDGE_HIDE_CAPS/)
@@ -341,7 +342,7 @@ describe('leader protocol: both twins', () => {
   it('both cores are part of the daemon version hash, in the build script', () => {
     const versionSrc = read('src/providers/daemon-version-check.ts')
     const buildSrc = read('scripts/build-daemon.sh')
-    for (const f of ['src/providers/leader-core.ts', 'src/providers/offline-journal-core.ts', 'src/providers/offline-board-core.ts', 'src/providers/live-settings-core.ts', 'src/providers/offline-search-core.ts', 'src/providers/host-server-core.ts', 'src/providers/stream-relay-core.ts']) {
+    for (const f of ['src/providers/leader-core.ts', 'src/providers/offline-journal-core.ts', 'src/providers/offline-board-core.ts', 'src/providers/live-settings-core.ts', 'src/providers/offline-search-core.ts', 'src/providers/host-server-core.ts', 'src/providers/stream-relay-core.ts', 'src/providers/feature-relay-core.ts']) {
       expect(versionSrc).toContain(`'${f}'`)
       expect(buildSrc).toContain(f)
     }

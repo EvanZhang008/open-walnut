@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { Server } from 'node:http';
-import { WebSocket } from 'ws';
+import { WebSocket } from '#ws';
 import { z } from 'zod';
 import { createMockConstants } from '../helpers/mock-constants.js';
 

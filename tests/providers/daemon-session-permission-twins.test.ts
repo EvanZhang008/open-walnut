@@ -282,7 +282,7 @@ describe('bridge permission literal parity', () => {
       expect(allowed.filter((c) => c === 'bridgeResume')).toHaveLength(1)
       for (const cmd of ['sendRaw', 'start', 'stop']) expect(allowed).not.toContain(cmd)
       expect(literals(src, 'BRIDGE_CAPABILITIES')).toEqual([
-        'bridge-stream-v1', 'send-dedupe-v1', 'send-lost-line-v1', 'session-permission-v1',
+        'bridge-stream-v1', 'send-dedupe-v1', 'send-lost-line-v1', 'session-permission-v1', 'feature-relay-v1',
       ])
       expect(functionText(src, 'cmdSessionPermission')).toContain("'session.permission: the cloud bridge only'")
       expect(functionText(src, 'cmdSessionPermission')).toContain('if (!isJournalSid(cmd.sid))')
