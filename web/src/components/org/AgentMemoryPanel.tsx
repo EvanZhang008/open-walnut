@@ -215,6 +215,7 @@ export function AgentMemoryPanel({ task, onClose }: { task: Task; onClose: () =>
           <span className="am-hint">What {isMain ? 'the CEO' : 'this VP'} is told in every session: Walnut's default until you write your own. It reads an edit with its next message.</span>
           <textarea
             className="app-modal-input am-instructions"
+            data-no-draft="document"
             value={text}
             onChange={(e) => { setText(e.target.value); setNote(null); }}
             onKeyDown={(e) => {

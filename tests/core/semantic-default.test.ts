@@ -139,8 +139,8 @@ describe('no index in src/ gets an embedder around the decision', () => {
   })
 })
 
-// The account home must come from the user database: Bun's os.userInfo().homedir
-// returns $HOME, so a fake HOME would pass for the account's own.
+// The account home must come from the user database: the homedir Bun's
+// os.userInfo() reports is $HOME, so a fake HOME would pass for the account's own.
 describe('passwd home field', () => {
   it('reads the macOS id -P form (field 9)', () => {
     expect(passwdHome('evan:********:503:20::0:0:Zhang, Evan:/Users/evan:/bin/zsh\n', 'darwin')).toBe('/Users/evan')

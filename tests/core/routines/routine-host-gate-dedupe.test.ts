@@ -28,6 +28,17 @@ vi.mock('../../../src/core/config-manager.js', async (orig) => ({
 }))
 
 const { createClaudeCodeExecutor, resetRoutineGateNotices } = await import('../../../src/core/routines/executors/claude-code.js')
+const { RoutineRunStarter } = await import('../../../src/core/routines/run-start.js')
+const { defaultRunStartDeps } = await import('../../../src/core/routines/run-start-deps.js')
+
+// The real launch wiring (so the gate's refusal comes from quickStartSession above);
+// the session reads as confirmed at once, so a run that starts never waits on the
+// start deadline (ce1bf9896), and the task write is a no-op.
+const starter = async () => new RoutineRunStarter({
+  ...defaultRunStartDeps(),
+  getSession: async (sid) => ({ claudeSessionId: sid, pid: 4242, process_status: 'running' }) as never,
+  writeStart: async () => {},
+})
 
 const job = { id: 'routine-1', name: 'Nightly build' } as never
 const executor = { kind: 'claude-code', config: { cwd: '/home/alice/work', host: 'buildbox', instructions: 'go' } } as never
@@ -37,7 +48,7 @@ beforeEach(() => { resetRoutineGateNotices(); qs.fail = true })
 describe('routine runs refused by the host gate', () => {
   it('fail with the gate sentence and notify once for the same problem, again after it clears and recurs', async () => {
     const notify = vi.fn(async () => {})
-    const ex = createClaudeCodeExecutor({ notify })
+    const ex = createClaudeCodeExecutor({ notify, starter })
     for (let i = 0; i < 3; i++) {
       const r = await ex.run(job, executor, 'go')
       expect(r).toEqual({ status: 'error', error: 'Claude Code on Build box is 2.1.220, but Opus 5.5 needs 2.1.280 or newer.' })

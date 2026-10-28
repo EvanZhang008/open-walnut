@@ -41,7 +41,7 @@ const ROUTES: Array<[string, number]> = [
   ['src/web/routes/devices.ts', 16], ['src/web/routes/diagnostics.ts', 2], ['src/web/routes/events-v1.ts', 6], ['src/web/routes/expose.ts', 1],
   ['src/web/routes/file-content.ts', 1], ['src/web/routes/file-history.ts', 1], ['src/web/routes/file-ops.ts', 1], ['src/web/routes/file-raw.ts', 1],
   ['src/web/routes/files-v1.ts', 5], ['src/web/routes/files.ts', 1], ['src/web/routes/health-v1.ts', 1], ['src/web/routes/health.ts', 1],
-  ['src/web/routes/host-servers.ts', 1], ['src/web/routes/hosts.ts', 3], ['src/web/routes/human-inbox-body.ts', 2], ['src/web/routes/human-inbox-v1.ts', 10],
+  ['src/web/routes/hints-v1.ts', 2], ['src/web/routes/host-servers.ts', 1], ['src/web/routes/hosts.ts', 3], ['src/web/routes/human-inbox-body.ts', 2], ['src/web/routes/human-inbox-v1.ts', 10],
   ['src/web/routes/instance-routes-v1.ts', 1], ['src/web/routes/leader.ts', 1], ['src/web/routes/library-v1.ts', 1], ['src/web/routes/media-v1.ts', 5],
   ['src/web/routes/messages-v1.ts', 1], ['src/web/routes/notes-v2.ts', 1], ['src/web/routes/notifications.ts', 1], ['src/web/routes/personal-ai-v1.ts', 1],
   ['src/web/routes/places-v1.ts', 1], ['src/web/routes/places.ts', 2], ['src/web/routes/plugin-runtime.ts', 1], ['src/web/routes/plugin-updates.ts', 1],

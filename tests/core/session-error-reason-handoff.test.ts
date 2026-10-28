@@ -148,8 +148,9 @@ describe('the projection adopts the stashed diagnosis', () => {
 
     const rec = await getSessionByClaudeId(SID)
     expect(rec?.process_status).toBe('error')
-    // The status_reason still records WHO wrote the status (the projection)...
-    expect(rec?.status_reason).toBe('snapshot_projection')
+    // The status_reason says the daemon saw the CLI die: an error projection of
+    // a dead CLI is a confirmed death, which later reconnects must not undo (58d8547a7)...
+    expect(rec?.status_reason).toBe('daemon_reported_exit')
     // ...while the human-readable cause and the machine-readable class survive.
     expect(rec?.errorMessage).toContain('Connection lost')
     expect(rec?.errorKind).toBe('infra')

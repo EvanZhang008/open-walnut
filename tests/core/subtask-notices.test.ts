@@ -68,7 +68,9 @@ import { buildWalnutMessage, parseWalnutMessage } from '../../src/core/peers/wal
 import { parseSessionEnvelopes } from '@open-walnut/history-session-envelope';
 import type { SessionRecord, Task } from '../../src/core/types.js';
 // Loaded before the clock is faked: a module first imported under fake timers never resolves.
+// The send core loads hint-format lazily on its queue path (a parked parent), so it goes too.
 import '../../src/core/sessions/session-send-core.js';
+import '../../src/core/hints/hint-format.js';
 
 const NOW = new Date().toISOString();
 const PARENT_SID = 'parent-sid-0001';

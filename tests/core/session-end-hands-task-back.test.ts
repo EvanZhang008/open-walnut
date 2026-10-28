@@ -419,7 +419,11 @@ describe('startup reconciler hands the task back', () => {
       const { taken } = await recoverAfterBoot(result.dead, new Map([['zombie-recover', before!]]))
       expect(taken).toBe(1)
       await vi.waitFor(() => expect(send).toHaveBeenCalledOnce(), { timeout: 5_000 })
-      expect(send).toHaveBeenCalledWith('zombie-recover', RESUME_MESSAGE, { source: 'auto-recover', taskId })
+      // The resume rides its own message id, so a retry after a host that could
+      // not take it is the same message, never a second one (ce1bf9896).
+      expect(send).toHaveBeenCalledWith('zombie-recover', RESUME_MESSAGE, {
+        source: 'auto-recover', taskId, messageId: expect.stringMatching(/^qm-recover-/),
+      })
       expect((await getTask(taskId)).phase).toBe('IN_PROGRESS')
       expect((await getSessionByClaudeId('zombie-recover'))?.restartLoss).toMatchObject({ verdict: 'resume', lost: ['turn'] })
     } finally {

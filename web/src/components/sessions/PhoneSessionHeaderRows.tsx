@@ -43,7 +43,7 @@ function Row({ label, active, disabled, why, onClick, testId }: {
 
 export function PhoneSessionHeaderRows(p: PhoneSessionHeaderRowsProps) {
   const view = (v: SessionSplitView) => () => { p.close(); p.onToggleView(v); };
-  // The desktop ⋮ menu's "Background tasks" row: the phone's menu does not draw that
+  // The desktop session menu's "Background tasks" row: the phone's menu does not draw that
   // section, and a background command has no chat chip to reach its list from.
   const { tasks: background, running: { total: running } } = useBackgroundRunning(p.sessionId);
   return (
