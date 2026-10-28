@@ -18,6 +18,7 @@ import {
   scanForConflictMarkers,
 } from '../utils/json-conflict-recovery.js';
 import { SECRET_IGNORE_PATTERNS, holdStagedSecrets, setAsideHeldTouchedBy } from './git-sync-secrets.js';
+import { carryLocalCommits, type CarryResult, type GitStatusRunner } from './git-sync-rewrite-carry.js';
 
 export interface SyncStatus {
   initialized: boolean;
@@ -350,7 +351,21 @@ export async function execGitArgsGroup(
   args: string[],
   opts: { cwd: string; timeout: number; env?: NodeJS.ProcessEnv; /** Written to git's stdin, which is closed otherwise. */ input?: string },
 ): Promise<string> {
-  return new Promise<string>((resolve, reject) => {
+  const { code, stdout, stderr } = await execGitArgsStatus(args, opts);
+  if (code === 0) return stdout.trim();
+  throw new Error(`git exited ${code}: ${stderr.trim() || stdout.trim()}`);
+}
+
+/**
+ * The same spawn, answering with the exit code instead of throwing on a non-zero
+ * one (stdout untrimmed), for commands whose exit code is a result: `merge-tree`
+ * exits 1 when the merge conflicts. A timeout or a spawn failure still rejects.
+ */
+export async function execGitArgsStatus(
+  args: string[],
+  opts: { cwd: string; timeout: number; env?: NodeJS.ProcessEnv; input?: string },
+): Promise<{ code: number; stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
     const childEnv = gitChildEnv(opts.env);
     const [cmd, cmdArgs] = withUtilityQosClamp('git', args, { searchPath: childEnv.PATH ?? '' });
     const child = spawn(cmd, cmdArgs, {
@@ -389,8 +404,7 @@ export async function execGitArgsGroup(
     child.on('close', (code) => {
       clearTimeout(timer);
       if (timedOut) reject(new Error(`git timed out after ${opts.timeout}ms (process group killed)`));
-      else if (code === 0) resolve(stdout.trim());
-      else reject(new Error(`git exited ${code}: ${stderr.trim() || stdout.trim()}`));
+      else resolve({ code: code ?? -1, stdout, stderr });
     });
   });
 }
@@ -1072,6 +1086,17 @@ export function stageAllArgs(cloudMode: boolean): string {
 
 function gitRunnerAt(root: string): (args: string[], input?: string) => Promise<string> {
   return (args, input) => execGitArgsGroup(args, { cwd: root, timeout: LOCAL_TIMEOUT, ...(input === undefined ? {} : { input }) });
+}
+
+/** Replay HEAD's commits made after an upstream rewrite's cut onto the new chain (refs untouched). */
+async function carryLocalCommitsAcrossRewrite(localHead: string, remoteRef: string, published: string | null): Promise<CarryResult> {
+  const indexFile = path.join(WALNUT_HOME, '.git', 'walnut-rewrite-carry.index');
+  const run: GitStatusRunner = (args, opts) => execGitArgsStatus(args, { cwd: WALNUT_HOME, timeout: LOCAL_TIMEOUT, ...opts });
+  try {
+    return await carryLocalCommits(run, localHead, remoteRef, indexFile, published);
+  } finally {
+    await fs.promises.rm(indexFile, { force: true }).catch(() => undefined);
+  }
 }
 
 /**
@@ -2614,8 +2639,10 @@ async function lwwMerge(branch: string, remoteBefore: string | null = null): Pro
   // one — resurrecting the entire pre-rewrite history into the hub and undoing
   // the rewrite. Adopt the new chain instead: park the old head on a
   // self-replacing backup ref (any local-only commits stay recoverable from it
-  // until the next rewrite), then hard-reset. Safe against dirty-file loss:
-  // syncInner() commits everything before pull.
+  // until the next rewrite), carry the local commits made after the point the
+  // rewrite was cut from onto the new chain (git-sync-rewrite-carry.ts), then
+  // hard-reset to the result. Safe against dirty-file loss: syncInner() commits
+  // everything before pull.
   //
   // Two signals, because one is not enough. "No common ancestor" catches a
   // compaction that rebuilds from a new root. A path-scrubbing rewrite
@@ -2631,9 +2658,20 @@ async function lwwMerge(branch: string, remoteBefore: string | null = null): Pro
   if (noMergeBase || forceMoved) {
     const localOnly = remoteBefore ? Number(await gitSafeAsync(`rev-list --count ${remoteBefore}..HEAD`) || '0') : null;
     await gitSafeAsync('branch -f pre-rewrite-backup HEAD');
+    let carried: CarryResult | null = null;
+    try {
+      carried = await carryLocalCommitsAcrossRewrite(localHead, remoteRef, remoteBefore);
+    } catch (error) {
+      // The local commits stay on pre-rewrite-backup; say so loudly, because
+      // the adoption below leaves them out of the working tree.
+      log.git.error('git-sync: could not carry local commits across the upstream rewrite; they stay on pre-rewrite-backup', {
+        localHead, remoteHead, error: error instanceof Error ? error.message : String(error), recoveryKey: 'git',
+      });
+    }
+    const target = carried?.head ?? remoteRef;
     // reset --hard discards a held file's local copy: it goes aside first.
-    await setAsideHeldTouchedBy(gitRunnerAt(WALNUT_HOME), WALNUT_HOME, remoteRef, 'replace').catch(() => undefined);
-    if (await gitSafeAsync(`reset --hard ${remoteRef}`) === null) {
+    await setAsideHeldTouchedBy(gitRunnerAt(WALNUT_HOME), WALNUT_HOME, target, 'replace').catch(() => undefined);
+    if (await gitSafeAsync(`reset --hard ${target}`) === null) {
       log.git.error('git-sync: upstream history rewritten but reset --hard failed — will retry next cycle', { localHead, remoteHead });
       return { merged: false, conflicts: 0 };
     }
@@ -2641,9 +2679,18 @@ async function lwwMerge(branch: string, remoteBefore: string | null = null): Pro
       previousHead: localHead, newHead: remoteHead,
       reason: noMergeBase ? 'no-merge-base' : 'upstream-force-moved',
       localOnlyCommitsParked: localOnly,
+      carriedHead: carried?.head ?? null,
+      carriedCommits: carried?.replayed ?? 0,
+      anchor: carried?.anchor ?? null,
+      keptLocal: carried?.keptLocal.slice(0, 50) ?? [],
+      keptRemote: carried?.keptRemote.slice(0, 50) ?? [],
+      keptRemoved: carried?.keptRemoved.slice(0, 50) ?? [],
+      squashed: carried?.squashed ?? false,
     });
     try { rewriteAdoptedListener?.(); } catch { /* the listener only schedules */ }
-    return { merged: true, conflicts: 0 };
+    // Carried onto a commit the upstream has already built on: merge the rest
+    // of the new chain like any divergence. Otherwise the adoption is the pull.
+    if (!carried?.head || carried.anchor?.remote === remoteHead) return { merged: true, conflicts: 0 };
   }
 
   // True merge WITHOUT -X: non-overlapping edits auto-merge; overlapping

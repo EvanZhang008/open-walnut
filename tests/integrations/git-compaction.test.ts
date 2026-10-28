@@ -21,6 +21,7 @@ import {
   recoverFromCrashedCompaction,
   runScheduledCompaction,
   isCompactionDue,
+  COMPACTION_RETRY_HOURS,
   markCompactionDone,
 } from '../../src/integrations/git-compaction.js';
 import {
@@ -459,6 +460,65 @@ describe('git-compaction', () => {
       expect(getFileContent(repoDir, 'data.txt')).toBe('important data');
     });
 
+    // 2026-10-28: a deploy killed the worker between the local swap and the hub
+    // push; the next boot kept the rewritten main, new auto-saves landed on it,
+    // and the next sync took the hub's (old) chain without them.
+    it('swapped but not pushed: main goes back to the pre-compaction chain, working tree untouched', () => {
+      commitAt(repoDir, 3, 'one');
+      commitAt(repoDir, 1, 'two');
+      const original = execSync('git rev-parse main', { cwd: repoDir, encoding: 'utf-8' }).trim();
+      execSync('git branch backup-20261028 main', { cwd: repoDir, stdio: 'pipe' });
+      const rewritten = execSync('git commit-tree main^{tree} -m compacted', { cwd: repoDir, encoding: 'utf-8' }).trim();
+      execSync(`git update-ref refs/heads/main ${rewritten}`, { cwd: repoDir, stdio: 'pipe' });
+      fs.writeFileSync(path.join(repoDir, 'dirty.txt'), 'uncommitted\n', 'utf-8');
+      fs.writeFileSync(
+        path.join(repoDir, '.git', 'compaction-state.json'),
+        JSON.stringify({ phase: 'swapped', backup: 'backup-20261028', startedAt: new Date().toISOString() }),
+      );
+
+      recoverFromCrashedCompaction(repoDir);
+
+      expect(execSync('git rev-parse main', { cwd: repoDir, encoding: 'utf-8' }).trim()).toBe(original);
+      expect(getFileContent(repoDir, 'data.txt')).toBe('two');
+      expect(fs.readFileSync(path.join(repoDir, 'dirty.txt'), 'utf-8')).toBe('uncommitted\n');
+      expect(execSync('git status --porcelain', { cwd: repoDir, encoding: 'utf-8' }).trim()).toBe('?? dirty.txt');
+      expect(fs.existsSync(path.join(repoDir, '.git', 'compaction-state.json'))).toBe(false);
+      // Not marked done: a later run compacts again.
+      expect(fs.existsSync(path.join(repoDir, '.last-compaction'))).toBe(false);
+    });
+
+    it('swapped, and main moved on the rewrite since: left as it is', () => {
+      commitAt(repoDir, 2, 'one');
+      execSync('git branch backup-20261028 main', { cwd: repoDir, stdio: 'pipe' });
+      const rewritten = execSync('git commit-tree main^{tree} -m compacted', { cwd: repoDir, encoding: 'utf-8' }).trim();
+      execSync(`git update-ref refs/heads/main ${rewritten} && git reset -q --mixed HEAD`, { cwd: repoDir, stdio: 'pipe' });
+      commitAt(repoDir, 0, 'newer');
+      const head = execSync('git rev-parse main', { cwd: repoDir, encoding: 'utf-8' }).trim();
+      fs.writeFileSync(
+        path.join(repoDir, '.git', 'compaction-state.json'),
+        JSON.stringify({ phase: 'swapped', backup: 'backup-20261028', startedAt: new Date().toISOString() }),
+      );
+
+      recoverFromCrashedCompaction(repoDir);
+
+      expect(execSync('git rev-parse main', { cwd: repoDir, encoding: 'utf-8' }).trim()).toBe(head);
+      expect(getFileContent(repoDir, 'data.txt')).toBe('newer');
+    });
+
+    it('cleaning (the hub took the rewrite): counts as done, so the next boot does not rerun it', () => {
+      commitAt(repoDir, 1, 'data');
+      fs.writeFileSync(
+        path.join(repoDir, '.git', 'compaction-state.json'),
+        JSON.stringify({ phase: 'cleaning', backup: 'backup-20261027', startedAt: new Date().toISOString() }),
+      );
+      expect(isCompactionDue(repoDir)).toBe(true);
+
+      recoverFromCrashedCompaction(repoDir);
+
+      expect(isCompactionDue(repoDir)).toBe(false);
+      expect(fs.existsSync(path.join(repoDir, '.git', 'compaction-state.json'))).toBe(false);
+    });
+
     it('does nothing when no state file exists', () => {
       commitAt(repoDir, 5, 'data');
       const beforeCount = getCommitCount(repoDir);
@@ -587,6 +647,15 @@ describe('git-compaction', () => {
       const sixDaysAgo = new Date(Date.now() - 6 * 86_400_000).toISOString();
       fs.writeFileSync(path.join(repoDir, '.last-compaction'), sixDaysAgo, 'utf-8');
       expect(isCompactionDue(repoDir)).toBe(false);
+    });
+
+    it('a rewrite started within COMPACTION_RETRY_HOURS is not due again, even with an old .last-compaction', () => {
+      fs.writeFileSync(path.join(repoDir, '.last-compaction'), new Date(Date.now() - 8 * 86_400_000).toISOString(), 'utf-8');
+      const attempt = path.join(repoDir, '.git', 'walnut-compaction-attempt');
+      fs.writeFileSync(attempt, new Date(Date.now() - 3_600_000).toISOString(), 'utf-8');
+      expect(isCompactionDue(repoDir)).toBe(false);
+      fs.writeFileSync(attempt, new Date(Date.now() - (COMPACTION_RETRY_HOURS + 1) * 3_600_000).toISOString(), 'utf-8');
+      expect(isCompactionDue(repoDir)).toBe(true);
     });
 
     it('markCompactionDone writes a parseable ISO date', () => {

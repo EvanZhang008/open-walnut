@@ -243,6 +243,8 @@ export async function compactGitHistory(repoDir = WALNUT_HOME): Promise<Compacti
   gitSafe(`branch -D ${backupName}`, opts); // remove old backup with same name
   git(`branch ${backupName}`, opts);
   writeState(repoDir, { phase: 'building', backup: backupName, startedAt: new Date().toISOString() });
+  // A rewrite starts here: one a deploy cuts short waits COMPACTION_RETRY_HOURS, not the next boot.
+  fs.writeFileSync(path.join(repoDir, LAST_ATTEMPT_FILE), new Date().toISOString(), 'utf-8');
 
   try {
     // 4. Build the compacted chain with `commit-tree` — NO working-tree I/O.
@@ -441,13 +443,39 @@ export function recoverFromCrashedCompaction(repoDir = WALNUT_HOME): void {
         gitSafe('checkout main', opts);
         gitSafe('branch -D compaction-wip', opts);
         break;
-      case 'swapped':
-      case 'cleaning':
-        // swap succeeded — just need gc cleanup
+      case 'swapped': {
+        // The swap landed here but the push to the hub (step 7, after this phase
+        // is written) was never confirmed. Keeping the rewritten main forks this
+        // box from a hub that still holds the old chain: 2026-10-28, a deploy
+        // killed the worker mid-push twice, the next boot kept the rewrite, new
+        // auto-saves went on top of it, and the next sync took the hub's chain
+        // and left them out of the working tree. Put main back on the
+        // pre-compaction chain it was built from (same tree, so the working
+        // tree is untouched); a later run compacts again.
         gitSafe('checkout main', opts);
         gitSafe('branch -D compaction-wip', opts);
-        gitSafe('reflog expire --expire=now --all', opts);
-        gitSafe('gc --prune=now', opts);
+        const backupHead = gitSafe(`rev-parse --verify -q ${state.backup}`, opts);
+        const sameTree = backupHead !== null
+          && gitSafe(`rev-parse ${state.backup}^{tree}`, opts) === gitSafe('rev-parse main^{tree}', opts);
+        if (sameTree) {
+          git(`update-ref refs/heads/main ${backupHead}`, opts);
+          gitSafe('reset --mixed HEAD', opts);
+          log.git.warn('compaction: a run stopped before the hub took its rewrite; main is back on the pre-compaction chain', { backup: state.backup, backupHead });
+        } else {
+          // Something was committed on the rewrite since: leave it, git-sync
+          // carries those commits across when it meets the hub's chain.
+          log.git.error('compaction: a run stopped before the hub took its rewrite, and main moved since; left as is', { backup: state.backup, backupHead });
+        }
+        break;
+      }
+      case 'cleaning':
+        // The hub took the rewrite (this phase is written after the push). The
+        // run counts as done even though its cleanup never ran: before, an
+        // unmarked run was due again at every boot (2026-10-27/28, a fresh 3GB
+        // rewrite after each deploy). git-maintenance does the gc.
+        gitSafe('checkout main', opts);
+        gitSafe('branch -D compaction-wip', opts);
+        markCompactionDone(repoDir);
         break;
     }
   } catch {
@@ -464,7 +492,17 @@ export function recoverFromCrashedCompaction(repoDir = WALNUT_HOME): void {
 const LAST_COMPACTION_FILE = '.last-compaction';
 const COMPACTION_INTERVAL_DAYS = 7;
 
+/** In .git, never synced: when a rewrite last started, so an interrupted one waits instead of rerunning at every boot. */
+const LAST_ATTEMPT_FILE = path.join('.git', 'walnut-compaction-attempt');
+export const COMPACTION_RETRY_HOURS = 20;
+
 export function isCompactionDue(repoDir = WALNUT_HOME): boolean {
+  try {
+    const attemptAt = Date.parse(fs.readFileSync(path.join(repoDir, LAST_ATTEMPT_FILE), 'utf-8').trim());
+    if (Number.isFinite(attemptAt) && Date.now() - attemptAt < COMPACTION_RETRY_HOURS * 3_600_000) return false;
+  } catch {
+    // no attempt recorded
+  }
   const filePath = path.join(repoDir, LAST_COMPACTION_FILE);
   try {
     const content = fs.readFileSync(filePath, 'utf-8').trim();
@@ -475,6 +513,10 @@ export function isCompactionDue(repoDir = WALNUT_HOME): boolean {
     // File doesn't exist — never compacted
     return true;
   }
+}
+
+function clearAttempt(repoDir: string): void {
+  try { fs.rmSync(path.join(repoDir, LAST_ATTEMPT_FILE), { force: true }); } catch { /* best effort */ }
 }
 
 export function markCompactionDone(repoDir = WALNUT_HOME): void {
@@ -494,9 +536,12 @@ export async function runScheduledCompaction(repoDir = WALNUT_HOME): Promise<Com
   setCompactionInProgress(true);
   try {
     await clearStaleLock();
-    const result = await compactGitHistory(repoDir);
+    const result = await compactGitHistory(repoDir).catch((err: unknown) => { clearAttempt(repoDir); throw err; });
     if (!result.skipped && !result.error) {
       markCompactionDone(repoDir);
+    } else {
+      // A run that came back with an error was not cut short: the usual retries apply.
+      clearAttempt(repoDir);
     }
     return result;
   } finally {
