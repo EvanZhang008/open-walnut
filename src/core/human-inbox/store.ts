@@ -42,6 +42,7 @@ import {
   LETTER_INLINE_BODY_MAX_BYTES,
   letterFieldMaxBytes,
   type AgentReplyInput,
+  type LetterAnsweredBy,
   type LetterArchiveReason,
   type LetterDetail,
   type LetterList,
@@ -60,7 +61,7 @@ const BODIES_DIR = path.join(INBOX_DIR, 'bodies');
 export class LetterError extends Error {
   constructor(
     message: string,
-    readonly code: 'invalid' | 'not_found' | 'already_answered',
+    readonly code: 'invalid' | 'not_found' | 'already_answered' | 'human_approval',
     readonly status: number,
   ) {
     super(message);
@@ -975,7 +976,7 @@ export async function archiveLettersWhere(
  */
 export async function answerLetter(
   id: string,
-  input: { actionId: string; freeText?: string },
+  input: { actionId: string; freeText?: string; by?: LetterAnsweredBy },
 ): Promise<LetterRecord> {
   requireValidId(id);
   const actionId = str(input?.actionId).trim();
@@ -985,7 +986,9 @@ export async function answerLetter(
 
   const record = await withWriteLock(() => withStore((store) => {
     const letter = find(store, id);
-    if (letter.answered) {
+    // The user may answer over a task's answer for them (they can change it back); nothing else
+    // answers twice.
+    if (letter.answered && !(letter.answered.by && !input.by)) {
       throw new LetterError(
         `Letter ${id} was already answered (${letter.answered.actionId})`,
         'already_answered',
@@ -999,20 +1002,23 @@ export async function answerLetter(
     // human's full text, if it was ever that long, is what they typed; the cap
     // matches every other thread turn).
     const note = boundThreadText(freeText);
-    letter.answered = { actionId: action.id, label: action.label, at, ...(note ? { freeText: note } : {}) };
+    const by = input.by;
+    letter.answered = { actionId: action.id, label: action.label, at, ...(note ? { freeText: note } : {}), ...(by ? { by } : {}) };
     letter.thread.push({
       from: 'human',
       text: note ? `${action.label}: ${note}` : action.label,
       at,
+      ...(by ? { by } : {}),
       // Recorded with the answer, so a reader never sees an answer with no
       // delivery state while the attempt runs (answerLetterAndDeliver replaces it).
       delivery: { status: 'pending', at },
     });
-    setReadFlag(letter, true);
+    // A task answering in the user's place leaves the letter unread: the user has not seen it.
+    if (!by) setReadFlag(letter, true);
     setArchivedFlag(letter, false);
     return { ...letter };
   }));
-  void mirrorLetterReadState(record.id, true);
+  if (!input.by) void mirrorLetterReadState(record.id, true);
   return record;
 }
 
@@ -1091,7 +1097,7 @@ export interface HumanReplyTurn {
  */
 export async function humanReplyTurn(
   id: string,
-  input: { text: string; clientId?: string },
+  input: { text: string; clientId?: string; by?: LetterAnsweredBy },
 ): Promise<HumanReplyTurn> {
   requireValidId(id);
   const text = str(input?.text).trim();
@@ -1113,16 +1119,17 @@ export async function humanReplyTurn(
       text: boundThreadText(text),
       at,
       ...(clientId !== undefined ? { clientId } : {}),
+      ...(input.by ? { by: input.by } : {}),
       // In the same write as the words: a reader that sees this turn before the
       // attempt ends knows its outcome is still to come (humanReplyAndDeliver
       // replaces it), instead of seeing a turn with no delivery at all.
       delivery: { status: 'pending', at },
     });
-    setReadFlag(letter, true);
+    if (!input.by) setReadFlag(letter, true);
     setArchivedFlag(letter, false);
     return { record: { ...letter }, turn: letter.thread.length - 1, duplicate: false };
   }));
-  if (!out.duplicate) void mirrorLetterReadState(out.record.id, true);
+  if (!out.duplicate && !input.by) void mirrorLetterReadState(out.record.id, true);
   return out;
 }
 

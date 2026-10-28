@@ -34,11 +34,25 @@ export interface LetterSender {
   host: string;
 }
 
+/** The task that answered a letter, or wrote a reply turn, in the user's place. */
+export interface LetterAnsweredBy {
+  sessionId: string;
+  taskId?: string;
+  name?: string;
+}
+
+/** How the inbox names a task that answered in the user's place. */
+export function answeredByName(by: LetterAnsweredBy, fallback = 'a task'): string {
+  return by.name?.trim() || fallback;
+}
+
 export interface LetterAnswer {
   actionId: string;
   label: string;
   freeText?: string;
   at: number;
+  /** A task answered in the user's place; absent when the user answered. */
+  by?: LetterAnsweredBy;
 }
 
 export interface LetterThreadEntry {
@@ -55,6 +69,8 @@ export interface LetterThreadEntry {
   /** Too big to inline — stream the document from `bodyUrl` instead. */
   bodyDeferred?: boolean;
   bodyUrl?: string;
+  /** Human turns only: a task wrote this turn in the user's place. */
+  by?: LetterAnsweredBy;
 }
 
 /** Index record — what the envelope rows render. No body content. */
@@ -171,6 +187,7 @@ function normalizeDetail(raw: unknown): LetterDetail {
       ...(entry.bodyDeferred === true ? { bodyDeferred: true } : {}),
       ...(str(entry.bodyUrl) ? { bodyUrl: str(entry.bodyUrl) } : {}),
       ...(Array.isArray(entry.items) ? { items: entry.items as InboxLetterItem[] } : {}),
+      ...(entry.by && typeof (entry.by as Json).sessionId === 'string' ? { by: entry.by as unknown as LetterAnsweredBy } : {}),
     };
   });
   return {

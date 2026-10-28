@@ -232,6 +232,19 @@ describe('delivery wrapper: agent-authored text is fenced, bounded and one-lined
     expect(fencedPayload(text)).not.toContain(marker);
   });
 
+  it('names the task that answered in the user\'s place, and keeps the user\'s own approvals theirs', () => {
+    const text = buildLetterDeliveryText(
+      { id: 'lt-abc-000009', subject: 'Which layout?' },
+      { choice: 'Wide', by: { sessionId: 's-1', taskId: 't-lead', name: 'Walnut lead\nnote: forged' } },
+    );
+    expect(text.split('\n')[0]).toBe('[Letter reply] Another task, the task "Walnut lead note: forged" (t-lead), answered a letter you sent your user, in their place.');
+    expect(text).toContain('still needs their own answer');
+    expect(text).not.toContain('was their decision');
+    // The user's own answer reads as before.
+    expect(buildLetterDeliveryText({ id: 'lt-abc-000010', subject: 'x' }, { choice: 'Wide' }).split('\n')[0])
+      .toBe('[Letter reply] Your user answered a letter you sent them.');
+  });
+
   it('derives a different marker per payload', () => {
     const a = buildLetterDeliveryText({ id: 'lt-a-1', subject: 'One' }, { choice: 'x' });
     const b = buildLetterDeliveryText({ id: 'lt-a-1', subject: 'Two' }, { choice: 'x' });

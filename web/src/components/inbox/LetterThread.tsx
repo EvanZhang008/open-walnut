@@ -11,7 +11,7 @@
  */
 import { formatRelative } from '@/contexts/notifications';
 import { LinkifiedText } from '@/components/common/LinkifiedText';
-import type { LetterThreadEntry } from '@/api/human-inbox';
+import { answeredByName, type LetterThreadEntry } from '@/api/human-inbox';
 import { LetterBody } from './LetterBody';
 import { EmailItems } from './EmailItems';
 
@@ -31,7 +31,7 @@ export function LetterThread({ entries, subject, onBodyClick, letterId, onNaviga
           className={`hib-turn hib-turn--${entry.from === 'human' ? 'human' : 'agent'}`}
         >
           <div className="hib-turn-head">
-            <span className="hib-turn-who">{entry.from === 'human' ? 'You' : 'Agent'}</span>
+            <span className="hib-turn-who">{entry.from === 'human' ? (entry.by ? answeredByName(entry.by, 'A task') : 'You') : 'Agent'}</span>
             <span className="hib-turn-time">{formatRelative(entry.at)}</span>
           </div>
           {entry.text && (

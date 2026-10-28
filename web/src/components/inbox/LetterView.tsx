@@ -29,6 +29,7 @@ import { log } from '@/utils/log';
 import {
   answerLetter, deliveryText, getLetter, humanReplyToLetter, isDecisionWithoutOptions,
   LETTER_TYPE_LABEL, type LetterDetail, type LetterEnvelope,
+  answeredByName,
 } from '@/api/human-inbox';
 import { LetterBody } from './LetterBody';
 import { LetterThread } from './LetterThread';
@@ -262,7 +263,8 @@ export function LetterView({
 
   const answered = shown?.answered;
   const actions = shown?.actions ?? [];
-  const canDecide = shown?.type === 'action_required' && actions.length > 0 && !answered;
+  // A task's answer for the user stays theirs to change.
+  const canDecide = shown?.type === 'action_required' && actions.length > 0 && (!answered || !!answered.by);
   // A letter that says it needs a decision but carries no options. The store now
   // rejects that at send time, so this is only ever a letter ALREADY on disk —
   // and for those, hiding everything (which is what canDecide alone did) left an
@@ -372,6 +374,7 @@ export function LetterView({
         {answered && (
           <div className="hib-answered">
             Answered: <strong>{answered.label || answered.actionId}</strong>
+            {answered.by && <> by {answeredByName(answered.by)}</>}
             {' · '}{formatRelative(answered.at)}
             {answered.freeText && <div className="hib-answered-note">{answered.freeText}</div>}
           </div>

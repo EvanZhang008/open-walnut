@@ -43,6 +43,7 @@ const APPROVAL_RULES: Record<string, { markers: number; rule: string }> = {
   'src/integrations/calendar/service.ts': { markers: 3, rule: 'outward: the same protected calendar write, refused when it cannot be confirmed' },
   'src/core/calendar/sources/eventkit.ts': { markers: 2, rule: 'outward: the macOS confirmation dialog for that write' },
   'src/ops/task-lifecycle.ts': { markers: 2, rule: 'permissions: a session changing its own permission mode' },
+  'src/web/routes/human-inbox-v1.ts': { markers: 1, rule: 'outward: a plugin\'s letter asks the user to approve a step outside Walnut (a mail send, an unsubscribe), and its answer runs that step (checked in core/human-inbox/letter-ops.ts, so the replica\'s relay meets it too)' },
   'src/web/routes/tasks.ts': { markers: 1, rule: 'deleting data: a session on another host merges only its own work (a merge deletes rows and their synced twins)' },
   'src/core/sessions/session-control-guard.ts': { markers: 2, rule: 'brake: a session stopping or restarting itself would cut off its own turn' },
 };
@@ -83,6 +84,19 @@ describe('no door only a person has', () => {
       return hits.length === RETIRED_ELSEWHERE[rel]?.uses ? [] : hits.map((hit) => `${rel}: ${hit}`);
     });
     expect(back).toEqual([]);
+  });
+
+  // 2026-10-27: Main could not read a letter by id to pass its options on; the routes were there,
+  // with no op to name them. What a person does in the inbox has an op an agent finds in the catalog.
+  it('every inbox action a person takes has an op', async () => {
+    const { listOps } = await import('../../src/ops/index.js');
+    const served = new Set(listOps().flatMap((op) => [...(op.bind ? [op.bind] : []), ...(op.routes ?? [])].map((r) => `${r.method} ${r.path.replace(/:[a-z_]+/g, ':id')}`)));
+    const person = [
+      'GET /human-inbox', 'GET /human-inbox/:id', 'POST /human-inbox/:id/read', 'POST /human-inbox/:id/pin',
+      'POST /human-inbox/:id/archive', 'POST /human-inbox', 'POST /human-inbox/:id/reply',
+      'POST /human-inbox/:id/answer', 'POST /human-inbox/:id/human-reply',
+    ];
+    expect(person.filter((route) => !served.has(route))).toEqual([]);
   });
 
   it('the rule rides the repo rules', () => {

@@ -92,6 +92,9 @@ const ERROR_CODES: Record<string, string> = {
   invalid: 'bad_request',
   not_found: 'not_found',
   already_answered: 'conflict',
+  // A task answering a plugin's letter (an approval of a step outside Walnut) in the user's place:
+  // the charter's approval rule, enforced in letter-ops.ts so the replica's relay meets it too.
+  human_approval: 'human-approval-required',
 }
 
 interface LetterErrorLike { code: string; status: number; message: string }
@@ -419,14 +422,18 @@ humanInboxV1Router.post('/human-inbox/:id/answer', async (req: Request, res: Res
   await guard(res, next, 'POST /human-inbox/:id/answer', async () => {
     const b = body(req)
     const id = letterId(req)
+    const sid = callerSid(req)
     if (CLOUD_MODE) {
-      await relayDelivering(res, 'server.human-inbox.answer', { ...b, id })
+      // The primary resolves the caller and checks the letter: it holds the letter for sure.
+      await relayDelivering(res, 'server.human-inbox.answer', { ...b, id, ...(sid ? { callerSid: sid } : {}) })
       return
     }
-    const { answerLetterAndDeliver } = await import('../../core/human-inbox/letter-ops.js')
+    const { answerLetterAndDeliver, answeredByCaller } = await import('../../core/human-inbox/letter-ops.js')
+    const by = await answeredByCaller(sid)
     const result = await answerLetterAndDeliver(id, {
       actionId: typeof b.actionId === 'string' ? b.actionId : '',
       ...(typeof b.freeText === 'string' ? { freeText: b.freeText } : {}),
+      ...(by ? { by } : {}),
       // A request that presented a device token came from a paired device (the phone); the
       // console reaches this over the LAN bypass and has no device name. That is the only
       // device signal this route has, so it is the one the event reports.
@@ -448,14 +455,17 @@ humanInboxV1Router.post('/human-inbox/:id/human-reply', async (req: Request, res
       sendError(res, 413, 'too_large', `text is over the ${over.max}-byte cap`)
       return
     }
+    const sid = callerSid(req)
     if (CLOUD_MODE) {
-      await relayDelivering(res, 'server.human-inbox.human-reply', { ...b, id })
+      await relayDelivering(res, 'server.human-inbox.human-reply', { ...b, id, ...(sid ? { callerSid: sid } : {}) })
       return
     }
-    const { humanReplyAndDeliver } = await import('../../core/human-inbox/letter-ops.js')
+    const { humanReplyAndDeliver, answeredByCaller } = await import('../../core/human-inbox/letter-ops.js')
+    const by = await answeredByCaller(sid)
     // `clientId` (optional) makes a retry of the same reply idempotent; see humanReplyAndDeliver.
     const result = await humanReplyAndDeliver(id, {
       text: typeof b.text === 'string' ? b.text : '',
+      ...(by ? { by } : {}),
       ...(b.clientId !== undefined ? { clientId: typeof b.clientId === 'string' ? b.clientId : '' } : {}),
     }, { answerBy })
     res.status(deliveringStatus(result)).json(result)

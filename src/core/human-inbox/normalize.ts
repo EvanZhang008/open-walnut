@@ -16,6 +16,7 @@ import {
   type LetterSender,
   type LetterType,
   type ThreadEntry,
+  type LetterAnsweredBy,
   type ThreadEntryDelivery,
 } from './types.js';
 import { truncatePreview } from './preview.js';
@@ -84,10 +85,25 @@ function normalizeThread(raw: unknown): ThreadEntry[] {
       ...(from === 'human' && typeof e.clientId === 'string' && CLIENT_ID_RE.test(e.clientId)
         ? { clientId: e.clientId } : {}),
       ...(from === 'human' ? normalizeDelivery(e.delivery) : {}),
+      ...(from === 'human' ? normalizeBy(e.by) : {}),
       ...(from === 'agent' && e.items !== undefined ? { items: normalizeItems(e.items) } : {}),
     });
   }
   return out;
+}
+
+/** Which task answered in the user's place (LetterAnsweredBy); absent = the user. */
+function normalizeBy(raw: unknown): { by?: LetterAnsweredBy } {
+  if (!raw || typeof raw !== 'object') return {};
+  const b = raw as Record<string, unknown>;
+  if (typeof b.sessionId !== 'string' || !b.sessionId) return {};
+  return {
+    by: {
+      sessionId: b.sessionId,
+      ...(typeof b.taskId === 'string' && b.taskId ? { taskId: b.taskId } : {}),
+      ...(typeof b.name === 'string' && b.name ? { name: b.name.slice(0, 200) } : {}),
+    },
+  };
 }
 
 function normalizeDelivery(raw: unknown): { delivery?: ThreadEntryDelivery } {
@@ -161,6 +177,7 @@ function normalizeRecord(raw: unknown): LetterRecord | null {
           label: str(answered.label, answered.actionId),
           at: typeof answered.at === 'number' ? answered.at : 0,
           ...(typeof answered.freeText === 'string' ? { freeText: answered.freeText } : {}),
+          ...normalizeBy(answered.by),
         },
       }
       : {}),

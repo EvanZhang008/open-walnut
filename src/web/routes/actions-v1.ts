@@ -54,7 +54,11 @@ function body(req: Request): Record<string, unknown> {
   return b && typeof b === 'object' && !Array.isArray(b) ? b as Record<string, unknown> : {}
 }
 
-/** The caller's session id, forwarded as provenance (never as authorization). */
+/**
+ * The caller's session id. A call that carries one is a session's, never a person's click: the op
+ * runs as that session, so every rule a session meets applies (the charter's approval rules among
+ * them). 2026-10-27: every call ran as the user, so a session could run an op here as the user.
+ */
 function callerSid(req: Request): string | undefined {
   const raw = req.headers['x-walnut-caller-sid']
   const sid = (Array.isArray(raw) ? raw[0] : raw ?? '').trim()
@@ -146,7 +150,7 @@ actionsV1Router.post('/actions/invoke', async (req: Request, res: Response, next
     const startedAt = Date.now()
     const outcome = await executeOp(tool, parsed.args, {
       apiBase: apiBaseFor(req),
-      callerMode: 'human',
+      ...(sid ? { callerMode: 'session' as const, callerSid: sid } : { callerMode: 'human' as const }),
       origin,
     })
     const ms = Date.now() - startedAt

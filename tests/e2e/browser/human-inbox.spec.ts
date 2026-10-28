@@ -40,6 +40,7 @@ const UNREAD_SUBJECT = `PW LTR quiet ${NONCE}`
 const GRACE_SUBJECT = `PW LTR seen ${NONCE}`
 const FILTER_READ_SUBJECT = `PW LTR filter-read ${NONCE}`
 const FILTER_UNREAD_SUBJECT = `PW LTR filter-unread ${NONCE}`
+const BY_TASK_SUBJECT = `PW LTR by-task ${NONCE}`
 /** DECISION_SEEN_GRACE_MS in web/src/api/human-inbox.ts (the spec cannot import the aliased module). */
 const DECISION_GRACE_MS = 5 * 60 * 1000
 
@@ -315,6 +316,46 @@ test('an action_required letter arrives, reads in the reader, and one click answ
   await reopened.locator('.hib-turn--agent').last().scrollIntoViewIfNeeded()
   await shot(page, 'e2e-05-agent-reply-threaded')
 
+  expect(pageErrors, `uncaught page errors: ${pageErrors.join(' | ')}`).toEqual([])
+})
+
+// ── 1b. A task answers in the user's place: the inbox names it, and the letter stays unread ──
+
+test('a task\'s answer for the user reads as that task\'s, never as "You"', async ({ page, request }) => {
+  test.setTimeout(180_000)
+  const pageErrors: string[] = []
+  page.on('pageerror', (err) => pageErrors.push(err.message))
+  if (!originSid) originSid = await startOriginSession(request)
+  const answeringSid = await startOriginSession(request)
+  const letterId = await sendLetter(request, {
+    subject: BY_TASK_SUBJECT, type: 'action_required', markdown: `Which layout ships? (${NONCE})`,
+    actions: [{ id: 'wide', label: 'Wide' }, { id: 'tall', label: 'Tall' }],
+  }, originSid)
+  // What human_inbox_answer sends: the answer route, with the answering session's caller id.
+  const res = await request.post(`/api/v1/human-inbox/${letterId}/answer`, {
+    data: { actionId: 'wide', freeText: `the user said wide in chat (${NONCE})` },
+    headers: { [CALLER_SID_HEADER]: answeringSid },
+  })
+  expect(res.status(), await res.text()).toBeLessThan(300)
+  const answered = (await res.json() as { letter: { answered: { by?: { name?: string; taskId?: string } } } }).letter.answered
+  const name = answered.by?.name || answered.by?.taskId || 'a task'
+  expect(answered.by, 'the answer records the task').toBeTruthy()
+
+  await loadHome(page)
+  const panel = await openCenter(page)
+  await openInbox(panel)
+  const row = envelope(panel, BY_TASK_SUBJECT)
+  await expect(row).toBeVisible({ timeout: 15_000 })
+  // Unread: the user has not seen what was answered for them.
+  await expect(row).toHaveClass(/hib-unread/)
+  await expect(row.locator('.hib-answered-chip')).toContainText(`Answered: Wide by ${name}`)
+  await row.click()
+  const reader = page.locator('.hib-reader')
+  await expect(reader.locator('.hib-answered')).toContainText(`Answered: Wide by ${name}`, { timeout: 15_000 })
+  const turn = reader.locator('.hib-turn--human').last()
+  await expect(turn.locator('.hib-turn-who')).toHaveText(name)
+  await expect(turn).toContainText(`the user said wide in chat (${NONCE})`)
+  await shot(page, 'e2e-06-answered-by-task')
   expect(pageErrors, `uncaught page errors: ${pageErrors.join(' | ')}`).toEqual([])
 })
 

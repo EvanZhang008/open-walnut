@@ -52,6 +52,20 @@ export interface LetterAnswer {
   label: string;
   freeText?: string;
   at: number;
+  /** A task's session answered in the user's place; absent when the user answered. */
+  by?: LetterAnsweredBy;
+}
+
+/**
+ * Which task answered a letter or wrote a reply turn in the user's place (2026-10-27: whatever a
+ * person does in the inbox an agent may do too, recorded as theirs). The origin session is told the
+ * answer came from that task, not from its user.
+ */
+export interface LetterAnsweredBy {
+  sessionId: string;
+  taskId?: string;
+  /** The task's title when the answer was recorded. */
+  name?: string;
 }
 
 /**
@@ -77,6 +91,8 @@ export interface ThreadEntry {
    * that is what makes a retry after a lost response, or a double tap, safe.
    */
   clientId?: string;
+  /** HUMAN turns only: a task's session wrote this turn in the user's place (see LetterAnsweredBy). */
+  by?: LetterAnsweredBy;
   /**
    * HUMAN turns only: how far this turn got toward the origin session. Written
    * as `pending` in the same write that records the turn, then replaced by the

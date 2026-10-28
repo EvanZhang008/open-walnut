@@ -4,10 +4,14 @@
  * The default is NOT to send (2026-10-05, the user: "only the most important
  * information"; notifications go to the inbox only when the user asked).
  *
- * Two ops only: send a letter, reply in an existing letter's thread. The
- * envelope (which session, task, project, host) is stamped server-side from the
- * caller's session id, so the descriptions below spend their words on the thing
- * the model actually has to get right: writing a letter worth reading.
+ * Send a letter, reply in an existing letter's thread; and read the inbox the way
+ * the user does (list, one letter by id, read / pin / archive), since whatever a
+ * person can do in Walnut an agent can do too (2026-10-27: Main could not read a
+ * letter it wanted to pass on). The envelope (which session, task, project, host)
+ * is stamped server-side from the caller's session id, so the descriptions below
+ * spend their words on the thing the model actually has to get right: writing a
+ * letter worth reading. A task may answer a letter in the user's place, recorded as
+ * its answer; a plugin's letter (an approval of a step outside Walnut) refuses it.
  *
  * WHERE THE REFUSALS LIVE. Nothing here validates: this module only DECLARES the
  * op, and `bind` is executed by src/ops/executor.ts as an HTTP call from the
@@ -20,10 +24,12 @@
  * do instead, and the clause below is what stops that refusal being a surprise.
  */
 
+import { createHash } from 'node:crypto'
 import { z } from 'zod'
 import { defineOp } from './registry.js'
 import { inboxItemsSchema } from '../core/human-inbox/item-schema.js'
 import { MESSAGE_TEXT_HINT } from '../core/team-charter.js'
+import { withOutcome } from './outcome.js'
 
 const LETTER_TYPE = z.enum(['completion', 'action_required', 'review', 'info'])
 
@@ -99,5 +105,223 @@ defineOp({
     items: inboxItemsSchema.optional().describe('New independent email items for this reply only. Item and action ids must be unique across the whole letter and thread.'),
   },
   bind: { method: 'POST', path: '/human-inbox/:letter/reply' },
+  tags: { readonly: false, remote: 'allow' },
+})
+
+// ─── Reading the inbox, as the user does ─────────────────────────────────────
+
+/** At most this much of a letter's document reaches the agent; the rest is named, not pasted. */
+const BODY_CHARS = 20_000
+const TURN_CHARS = 4_000
+/** The newest turns a read returns; the count of the earlier ones rides beside them. */
+const THREAD_TURNS = 20
+/** The biggest deferred body a read fetches to make text of. */
+const DEFERRED_READ_BYTES = 10 * 1024 * 1024
+
+/** The named entities mail html uses most; the rest of the decoding is numeric. */
+const ENTITIES: Record<string, string> = {
+  nbsp: ' ', lt: '<', gt: '>', quot: '"', apos: "'", amp: '&', rsquo: '\u2019', lsquo: '\u2018',
+  rdquo: '\u201d', ldquo: '\u201c', mdash: '\u2014', ndash: '\u2013', hellip: '\u2026', bull: '\u2022',
+  middot: '\u00b7', copy: '\u00a9', reg: '\u00ae', trade: '\u2122', zwnj: '', zwj: '', shy: '',
+}
+
+function decodeEntities(text: string): string {
+  return text.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (whole, name: string) => {
+    if (name[0] === '#') {
+      const code = name[1] === 'x' || name[1] === 'X' ? parseInt(name.slice(2), 16) : parseInt(name.slice(1), 10)
+      return Number.isFinite(code) && code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : whole
+    }
+    return ENTITIES[name.toLowerCase()] ?? whole
+  })
+}
+
+/** Markup an html turn's plain `text` may hold too (a plugin's reply with html and no text). */
+const LOOKS_HTML = /<\/?[a-z][^>]*>/i
+
+/** A document as readable text: an html body loses its markup, styles, scripts and inline media. */
+function readable(body: string, format: unknown): string {
+  if (format !== 'html') return body
+  const text = body
+    .replace(/<!--[\s\S]*?(?:-->|$)/g, ' ')
+    .replace(/<(style|script|head|template)\b[^>]*>[\s\S]*?(?:<\/\1\s*>|$)/gi, ' ')
+    .replace(/<(br|\/p|\/div|\/li|\/h[1-6]|\/tr)\b(?:[^>"']|"[^"]*"|'[^']*')*>/gi, '\n')
+    // A tag, quoted attribute values and all: a `>` inside a value does not end it.
+    .replace(/<\/?[a-z!?](?:[^>"']|"[^"]*"|'[^']*')*>/gi, ' ')
+  return decodeEntities(text).replace(/[ \t]+/g, ' ').replace(/\n\s*\n\s*/g, '\n\n').trim()
+}
+
+function capped(text: string, max: number): { text: string; truncated?: true; chars?: number } {
+  return text.length > max ? { text: `${text.slice(0, max)}…`, truncated: true, chars: text.length } : { text }
+}
+
+type LetterRow = Record<string, unknown> & {
+  id: string; createdAt?: number; sender?: { taskId?: string; taskTitle?: string; sessionTitle?: string; project?: string; host?: string; pluginId?: string }
+  taskRefs?: string[]; thread?: unknown[]; read?: boolean
+}
+
+/** A list row: the envelope the user's inbox shows, no documents. */
+function envelope(l: LetterRow) {
+  return {
+    id: l.id, subject: l.subject, type: l.type, preview: l.textPreview,
+    from: l.sender ? { taskId: l.sender.taskId, task: l.sender.taskTitle, session: l.sender.sessionTitle, project: l.sender.project, plugin: l.sender.pluginId } : undefined,
+    at: typeof l.createdAt === 'number' ? new Date(l.createdAt).toISOString() : undefined,
+    read: l.read, pinned: l.pinned, archived: l.archived,
+    ...(l.actions ? { actions: l.actions } : {}), ...(l.answered ? { answered: l.answered } : {}),
+    ...(l.taskRefs?.length ? { taskRefs: l.taskRefs } : {}),
+    turns: Array.isArray(l.thread) ? l.thread.length : 0,
+  }
+}
+
+defineOp({
+  name: 'human_inbox_list',
+  title: 'List the letters in the user\'s inbox',
+  description:
+    'The letters in your user\'s inbox, newest first, as the inbox lists them (subject, type, sender, '
+    + 'read, pinned, answered; no documents). `task_id` keeps the letters that task sent or that name it. '
+    + 'Read one with human_inbox_get.',
+  input: {
+    task_id: z.string().optional().describe('Only letters this task sent, or that name it in their task pills'),
+    archived: z.boolean().optional().describe('The archive instead of the inbox'),
+    unread: z.boolean().optional().describe('Only letters the user has not read'),
+    limit: z.number().int().min(1).max(200).optional().describe('At most this many (default 30)'),
+  },
+  handler: async ({ task_id, archived, unread, limit }, call) => {
+    const body = await call('GET', `/human-inbox${archived ? '?archived=1' : ''}`) as { letters?: LetterRow[]; unreadCount?: number }
+    const all = Array.isArray(body?.letters) ? body.letters : []
+    const task = typeof task_id === 'string' ? task_id.trim() : ''
+    const kept = all
+      .filter((l) => !task || l.sender?.taskId === task || (l.taskRefs ?? []).includes(task))
+      .filter((l) => !unread || !l.read)
+    const letters = kept.slice(0, typeof limit === 'number' ? limit : 30).map(envelope)
+    return withOutcome(
+      { letters, total: kept.length, unreadCount: body?.unreadCount ?? 0 },
+      letters.length ? `${kept.length} letter${kept.length === 1 ? '' : 's'}${kept.length > letters.length ? `, the newest ${letters.length} shown` : ''}.` : 'No letters match.',
+      'Read one with human_inbox_get; mark it with human_inbox_mark.',
+    )
+  },
+  routes: [{ method: 'GET', path: '/human-inbox' }],
+  tags: { readonly: true, remote: 'allow' },
+})
+
+defineOp({
+  name: 'human_inbox_get',
+  title: 'Read one letter in the user\'s inbox',
+  description:
+    'One letter by id (lt-...), as the user reads it: the envelope, its options and the user\'s answer, '
+    + 'the document as readable text (an html letter loses its markup; a long one is cut, with its length), '
+    + 'and the thread. Reading it here does not mark it read for the user.',
+  input: {
+    id: z.string().min(1).describe('Letter id (lt-...)'),
+  },
+  handler: async ({ id }, call) => {
+    const path = `/human-inbox/${encodeURIComponent(String(id))}`
+    const body = await call('GET', path) as { letter?: LetterRow & { body?: string; bodyFormat?: string; bodyDeferred?: boolean; bodyBytes?: number; thread?: Array<Record<string, unknown>> } }
+    const l = body?.letter
+    if (!l) throw new Error(`Letter not found: ${id}`)
+    // A body over the inline cap (a digest with media) is read whole from its own route, up to
+    // DEFERRED_READ_BYTES: its media goes with the markup, and the text left is what the user reads.
+    let raw = typeof l.body === 'string' ? l.body : undefined
+    if (raw === undefined && l.bodyDeferred && (l.bodyBytes ?? 0) <= DEFERRED_READ_BYTES) {
+      const fetched = await call('GET', `${path}/body`).catch(() => undefined)
+      if (typeof fetched === 'string') raw = fetched
+    }
+    const doc = raw !== undefined ? capped(readable(raw, l.bodyFormat), BODY_CHARS)
+      : l.bodyDeferred ? { text: '', deferred: true as const, bytes: l.bodyBytes } : null
+    const turns = (l.thread ?? []) as Array<Record<string, unknown>>
+    const shown = turns.slice(-THREAD_TURNS)
+    const thread = shown.map((t) => {
+      const text = typeof t.text === 'string' ? t.text : ''
+      return {
+        from: t.from, at: typeof t.at === 'number' ? new Date(t.at).toISOString() : t.at,
+        ...(t.by ? { by: t.by } : {}),
+        // A rich turn's plain line can be its html (a plugin's reply with no text); a person's words never are.
+        ...capped(readable(text, t.from === 'agent' && t.bodyFormat === 'html' && LOOKS_HTML.test(text) ? 'html' : 'text'), TURN_CHARS),
+        ...(typeof t.body === 'string' ? { body: capped(readable(t.body, t.bodyFormat), TURN_CHARS) } : t.bodyDeferred ? { body: { text: '', deferred: true } } : {}),
+        ...(t.items ? { items: t.items } : {}),
+      }
+    })
+    const letter = {
+      ...envelope(l),
+      format: l.bodyFormat,
+      ...(doc ? { document: doc } : {}),
+      ...(l.items ? { items: l.items } : {}),
+      thread,
+      ...(turns.length > shown.length ? { earlierTurns: turns.length - shown.length } : {}),
+    }
+    return withOutcome({ letter }, `Letter ${l.id}: "${String(l.subject ?? '')}".`, 'Mark it with human_inbox_mark; answer it for the user with human_inbox_answer; reply in a letter you sent with human_inbox_reply.')
+  },
+  routes: [{ method: 'GET', path: '/human-inbox/:id' }, { method: 'GET', path: '/human-inbox/:id/body' }],
+  tags: { readonly: true, remote: 'allow' },
+})
+
+defineOp({
+  name: 'human_inbox_mark',
+  title: 'Mark a letter read, pinned or archived',
+  description:
+    'Sets a letter\'s read, pinned or archived flag, as the user does in the inbox (any of the three, '
+    + 'true or false). Archive only what the user no longer needs to see: a letter you sent that is '
+    + 'settled, or one the user asked you to clear; an unread decision letter stays for the user.',
+  input: {
+    id: z.string().min(1).describe('Letter id (lt-...)'),
+    read: z.boolean().optional().describe('Read (true) or unread (false)'),
+    pinned: z.boolean().optional().describe('Pinned to the top (true) or not (false)'),
+    archived: z.boolean().optional().describe('Archived (true) or back in the inbox (false)'),
+  },
+  handler: async ({ id, read, pinned, archived }, call) => {
+    const sets = ([['read', read], ['pin', pinned], ['archive', archived]] as const).filter(([, v]) => typeof v === 'boolean')
+    if (!sets.length) throw new Error('Name at least one of read, pinned, archived.')
+    let letter: unknown
+    for (const [what, v] of sets) {
+      const key = what === 'read' ? 'read' : what === 'pin' ? 'pinned' : 'archived'
+      const body = await call('POST', `/human-inbox/${encodeURIComponent(String(id))}/${what}`, { [key]: v }) as { letter?: LetterRow }
+      letter = body?.letter ? envelope(body.letter) : letter
+    }
+    return withOutcome({ letter }, `Letter ${id} updated.`, 'human_inbox_list shows the inbox as the user sees it.')
+  },
+  routes: [
+    { method: 'POST', path: '/human-inbox/:id/read' },
+    { method: 'POST', path: '/human-inbox/:id/pin' },
+    { method: 'POST', path: '/human-inbox/:id/archive' },
+  ],
+  tags: { readonly: false, remote: 'allow' },
+})
+
+defineOp({
+  name: 'human_inbox_answer',
+  title: 'Answer a letter in the user\'s place',
+  description:
+    'Answers a letter in your user\'s inbox for them, as they would there: pick one of its options '
+    + '(`action_id`, with an optional `note`) or write a reply (`text`). Only when your user asked you to, '
+    + 'or the answer is plainly theirs already (they said it to you); the letter, its sender and the inbox '
+    + 'record that your task answered, not the user, and the letter stays unread for them. A plugin\'s '
+    + 'letter (an approval of a step outside Walnut, such as a mail send) is the user\'s alone: refused '
+    + '(human-approval-required); tell the user what you would answer.',
+  input: {
+    id: z.string().min(1).describe('Letter id (lt-...)'),
+    action_id: z.string().optional().describe('The option to pick (its id, from human_inbox_get actions)'),
+    note: z.string().optional().describe('With action_id: a note beside the choice'),
+    text: z.string().optional().describe('Without action_id: a reply in the thread, in the user\'s place'),
+  },
+  handler: async ({ id, action_id, note, text }, call) => {
+    const path = `/human-inbox/${encodeURIComponent(String(id))}`
+    const pick = typeof action_id === 'string' ? action_id.trim() : ''
+    const words = typeof text === 'string' ? text.trim() : ''
+    if (!pick && !words) throw new Error('Name action_id (an option) or text (a reply).')
+    const out = pick
+      ? await call('POST', `${path}/answer`, { actionId: pick, ...(typeof note === 'string' && note.trim() ? { freeText: note.trim() } : {}) })
+      // The same words to the same letter are the same reply: a retry is never a second turn.
+      : await call('POST', `${path}/human-reply`, { text: words, clientId: `op-${createHash('sha256').update(`${id}\n${words}`).digest('hex').slice(0, 32)}` })
+    const r = out as { letter?: LetterRow; delivery?: { status?: string; reason?: string } }
+    const status = r?.delivery?.status
+    return withOutcome(
+      { ...(r?.letter ? { letter: envelope(r.letter) } : {}), ...(r?.delivery ? { delivery: r.delivery } : {}) },
+      `Letter ${id} answered for the user${status ? `; to its sender: ${status}${r.delivery?.reason ? ` (${r.delivery.reason})` : ''}` : ''}.`,
+      'Tell the user what you answered when they asked you to.',
+    )
+  },
+  routes: [
+    { method: 'POST', path: '/human-inbox/:id/answer' },
+    { method: 'POST', path: '/human-inbox/:id/human-reply' },
+  ],
   tags: { readonly: false, remote: 'allow' },
 })

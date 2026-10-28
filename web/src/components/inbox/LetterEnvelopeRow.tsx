@@ -8,7 +8,7 @@
  */
 import { memo } from 'react';
 import { formatRelative } from '@/contexts/notifications';
-import { LETTER_TYPE_LABEL, type LetterEnvelope } from '@/api/human-inbox';
+import { LETTER_TYPE_LABEL, answeredByName, type LetterEnvelope } from '@/api/human-inbox';
 import { ContextMenu, useContextMenu, type ContextMenuItem } from '@/components/common/ContextMenu';
 import { copyTextRobust } from '@/utils/clipboard';
 import '@/styles/human-inbox.css';
@@ -106,7 +106,7 @@ export const LetterEnvelopeRow = memo(function LetterEnvelopeRow({
 
       {answered && (
         <div className="hib-answered-chip">
-          Answered: {answered.label || answered.actionId} · {formatRelative(answered.at)}
+          Answered: {answered.label || answered.actionId}{answered.by ? ` by ${answeredByName(answered.by)}` : ''} · {formatRelative(answered.at)}
         </div>
       )}
 

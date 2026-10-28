@@ -26,6 +26,7 @@ import {
 import { HUMAN_INBOX_CHUNK_BYTES } from './types.js';
 import {
   answerLetterAndDeliver,
+  answeredByCaller,
   humanReplyAndDeliver,
   sendLetterAsCaller,
 } from './letter-ops.js';
@@ -149,18 +150,26 @@ export async function handleHumanInboxRelayAction(
       return stateWrite(await setLetterState(requireId(p), 'pinned', requireBool(p, 'pinned'), sinceOf(p)));
     case 'archive':
       return stateWrite(await setLetterState(requireId(p), 'archived', requireBool(p, 'archived'), sinceOf(p)));
-    case 'answer':
       // `'relay'`: this ran on the PRIMARY on behalf of a replica, so neither the console nor
       // the phone touched this box directly and claiming either would be a guess.
+    case 'answer': {
+      // A session's call through the replica names its caller, so the primary records the task
+      // that answered and refuses it a plugin's letter (letter-ops.ts), as on this box.
+      const by = await answeredByCaller(typeof p.callerSid === 'string' ? p.callerSid : undefined);
       return await answerLetterAndDeliver(requireId(p), {
         actionId: str(p.actionId),
         ...(typeof p.freeText === 'string' ? { freeText: p.freeText } : {}),
+        ...(by ? { by } : {}),
       }, 'relay', { answerBy: Date.now() + RELAY_DELIVERY_WAIT_MS }) as unknown as Record<string, unknown>;
-    case 'human-reply':
+    }
+    case 'human-reply': {
+      const by = await answeredByCaller(typeof p.callerSid === 'string' ? p.callerSid : undefined);
       return await humanReplyAndDeliver(requireId(p), {
         text: str(p.text),
         ...(p.clientId !== undefined ? { clientId: str(p.clientId) } : {}),
+        ...(by ? { by } : {}),
       }, { answerBy: Date.now() + RELAY_DELIVERY_WAIT_MS }) as unknown as Record<string, unknown>;
+    }
     default:
       throw new LetterError(`unknown human-inbox action: ${sub}`, 'invalid', 400);
   }
