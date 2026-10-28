@@ -87,12 +87,14 @@ One command on macOS or Linux. It needs nothing installed first, not even Node:
 
 ```bash
 curl -fsSL https://github.com/EvanZhang008/open-walnut/releases/latest/download/install.sh | sh
-walnut web
+~/.local/bin/walnut web
 ```
 
-If your shell says `walnut: command not found`, `~/.local/bin` is not on your PATH yet (it
-is not by default on macOS): run `~/.local/bin/walnut web`, and add
-`export PATH="$HOME/.local/bin:$PATH"` to your `~/.zshrc` or `~/.bashrc` for next time.
+When `~/.local/bin` is not on your PATH yet (it is not by default on macOS), the script adds
+it in your shell's rc file (`~/.zshrc`, `~/.bash_profile` or `~/.bashrc`, fish's `conf.d`,
+else `~/.profile`) and says so, so a new terminal runs plain `walnut web`. The terminal you
+installed from keeps its old PATH, which is why the command above names the full path.
+`OPEN_WALNUT_MODIFY_PATH=0` leaves your rc files alone.
 
 It downloads the newest release's archive for your machine, checks it against the release's
 `SHA256SUMS`, unpacks it into `~/.local/share/open-walnut/app` (0.6.19 carries its own Node

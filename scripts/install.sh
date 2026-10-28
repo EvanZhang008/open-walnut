@@ -27,7 +27,9 @@
 # file to install, default this machine's), OPEN_WALNUT_RELEASE_BASE_URL and
 # OPEN_WALNUT_RELEASES_API (mirrors, tests; a file:// base is a directory laid out
 # like the releases, by path, not percent-encoded: the release Walnut.app carries),
-# OPEN_WALNUT_PROGRESS=1 (the download's progress bar without a terminal).
+# OPEN_WALNUT_PROGRESS=1 (the download's progress bar without a terminal),
+# OPEN_WALNUT_MODIFY_PATH (0: never add the bin dir to a shell rc file, 1: always; default
+# only when run from a terminal).
 #
 # Nothing runs until the last line calls main: a download cut short is a script
 # that does nothing, never half of one.
@@ -210,6 +212,64 @@ in_use() {
   esac
 }
 
+# The rc file a new terminal of the user's login shell reads ($SHELL, not the sh running this).
+rc_file() {
+  login_shell="${SHELL:-}"
+  case "${login_shell##*/}" in
+    zsh) echo "${ZDOTDIR:-$HOME}/.zshrc" ;;
+    # Terminal on macOS opens a login shell: the first of .bash_profile, .bash_login, .profile
+    # it finds (a new .bash_profile would hide an existing .profile).
+    bash)
+      if [ "$(uname -s)" != Darwin ]; then echo "$HOME/.bashrc"
+      elif [ -f "$HOME/.bash_profile" ] || { [ ! -f "$HOME/.bash_login" ] && [ ! -f "$HOME/.profile" ]; }; then echo "$HOME/.bash_profile"
+      elif [ -f "$HOME/.bash_login" ]; then echo "$HOME/.bash_login"
+      else echo "$HOME/.profile"
+      fi ;;
+    fish) echo "${XDG_CONFIG_HOME:-$HOME/.config}/fish/conf.d/open-walnut.fish" ;;
+    *) echo "$HOME/.profile" ;;
+  esac
+}
+
+# How to start Walnut now. When $bin_dir is not on PATH, put it there for the next terminal the
+# way rustup and Bun's installers do: one line in the shell's rc file, written once, and say so.
+# Only for a person at a terminal (curl ... | sh keeps stderr on it); the Mac app, which runs this
+# script with no terminal, never edits a dotfile. OPEN_WALNUT_MODIFY_PATH=0 never edits one, =1
+# always does. This terminal keeps its PATH whatever happens, so the full path is printed too.
+path_hint() {
+  case ":${PATH}:" in
+    *":${bin_dir}:"*) printf '  Start it with:  walnut web\n' >&2; return 0 ;;
+  esac
+  shown="$bin_dir"
+  case "$bin_dir" in "$HOME"/*) shown="\$HOME${bin_dir#"$HOME"}" ;; esac
+  modify="${OPEN_WALNUT_MODIFY_PATH:-}"
+  if [ -z "$modify" ]; then
+    if [ -t 2 ]; then modify=1; else modify=0; fi
+  fi
+  rc=""
+  state=""
+  if [ "$modify" = 1 ]; then
+    rc="$(rc_file)"
+    if [ -f "$rc" ] && { grep -qF "$bin_dir" "$rc" || grep -qF "$shown" "$rc"; } 2>/dev/null; then
+      state=had
+    else
+      case "$rc" in
+        *.fish) line="contains \"$bin_dir\" \$PATH; or set -gx PATH \"$bin_dir\" \$PATH" ;;
+        *) line="export PATH=\"$shown:\$PATH\"" ;;
+      esac
+      if mkdir -p "$(dirname "$rc")" 2>/dev/null &&
+        printf '\n# Added by the Open Walnut installer\n%s\n' "$line" >> "$rc" 2>/dev/null; then
+        state=added
+      fi
+    fi
+  fi
+  case "$state" in
+    added) printf '  Added %s to your PATH in %s, so a new terminal has walnut.\n' "$bin_dir" "$rc" >&2 ;;
+    had) printf '  %s already puts %s on your PATH, so a new terminal has walnut.\n' "$rc" "$bin_dir" >&2 ;;
+    *) printf '  Add %s to your PATH to start it as walnut.\n' "$bin_dir" >&2 ;;
+  esac
+  printf '  Start it now with:  %s/walnut web\n' "$bin_dir" >&2
+}
+
 # The PATH links, and the marker the updater recognizes this install by.
 finish() {
   mkdir -p "$bin_dir"
@@ -218,10 +278,7 @@ finish() {
   printf '{"layout":"versions","target":"%s"}\n' "$target" > "$staging/marker"
   mv -f "$staging/marker" "$install_dir/open-walnut-install.json"
   printf '\n  Installed Open Walnut %s\n\n' "$version" >&2
-  case ":${PATH}:" in
-    *":${bin_dir}:"*) printf '  Start it with:  walnut web\n' >&2 ;;
-    *) printf '  Add %s to your PATH, then start it with:  walnut web\n' "$bin_dir" >&2 ;;
-  esac
+  path_hint
   if ! command -v claude >/dev/null 2>&1 && [ ! -x "$HOME/.local/bin/claude" ]; then
     printf '  Walnut runs its sessions with Claude Code: https://claude.com/product/claude-code\n' >&2
   fi

@@ -154,6 +154,64 @@ describe.each(SHELLS)('install.sh under %s', (sh) => {
     expect(r.out).toContain(`Add ${path.join(r.home, '.local/bin')} to your PATH`)
   })
 
+  // Plain `walnut` after `curl ... | sh`: one PATH line in the login shell's rc file, written once,
+  // only for a person at a terminal (forced here with OPEN_WALNUT_MODIFY_PATH=1; no tty in tests).
+  it('puts ~/.local/bin on PATH in the login shell\'s rc file once, and prints the full path to start now', async () => {
+    releaseFile('0.8.0')
+    const bin = (home: string) => path.join(home, '.local/bin')
+    const zsh = freshHome()
+    const first = await install(zsh, { OPEN_WALNUT_MODIFY_PATH: '1', SHELL: '/bin/zsh' })
+    expect(first.code, first.out).toBe(0)
+    expect(first.out).toContain(`Added ${bin(zsh)} to your PATH in ${path.join(zsh, '.zshrc')}`)
+    expect(first.out).toContain(`Start it now with:  ${bin(zsh)}/walnut web`)
+    expect(fs.readFileSync(path.join(zsh, '.zshrc'), 'utf8')).toBe('\n# Added by the Open Walnut installer\nexport PATH="$HOME/.local/bin:$PATH"\n')
+    // The rc line works: a login of that shell finds walnut.
+    const found = spawnSync('/bin/sh', ['-c', `. "${path.join(zsh, '.zshrc')}" && command -v walnut`], { env: { HOME: zsh, PATH: '/usr/bin:/bin' }, encoding: 'utf8' })
+    expect(found.stdout.trim()).toBe(path.join(bin(zsh), 'walnut'))
+    // Again: nothing added twice.
+    const again = await install(zsh, { OPEN_WALNUT_MODIFY_PATH: '1', SHELL: '/bin/zsh' })
+    expect(again.out).toContain(`${path.join(zsh, '.zshrc')} already puts ${bin(zsh)} on your PATH`)
+    expect(fs.readFileSync(path.join(zsh, '.zshrc'), 'utf8').match(/Open Walnut installer/g)).toHaveLength(1)
+
+    // A line another installer wrote (Claude Code's) counts as there.
+    const claude = freshHome()
+    fs.writeFileSync(path.join(claude, '.zshrc'), 'export PATH="$HOME/.local/bin:$PATH"\n')
+    const had = await install(claude, { OPEN_WALNUT_MODIFY_PATH: '1', SHELL: '/bin/zsh' })
+    expect(had.out).toContain('already puts')
+    expect(fs.readFileSync(path.join(claude, '.zshrc'), 'utf8')).toBe('export PATH="$HOME/.local/bin:$PATH"\n')
+
+    const fish = freshHome()
+    await install(fish, { OPEN_WALNUT_MODIFY_PATH: '1', SHELL: '/usr/bin/fish' })
+    expect(fs.readFileSync(path.join(fish, '.config/fish/conf.d/open-walnut.fish'), 'utf8')).toContain(`contains "${bin(fish)}" $PATH; or set -gx PATH "${bin(fish)}" $PATH`)
+
+    // Any other shell (bash run as sh fills in an unset SHELL itself, so name one) gets ~/.profile.
+    const none = freshHome()
+    const plain = await install(none, { OPEN_WALNUT_MODIFY_PATH: '1', SHELL: '/bin/ksh' })
+    expect(plain.code, plain.out).toBe(0)
+    expect(fs.readFileSync(path.join(none, '.profile'), 'utf8')).toContain('export PATH="$HOME/.local/bin:$PATH"')
+  })
+
+  it('never edits a dotfile with no terminal or with OPEN_WALNUT_MODIFY_PATH=0, and says what to do', async () => {
+    releaseFile('0.8.0')
+    for (const env of [{ SHELL: '/bin/zsh' }, { SHELL: '/bin/zsh', OPEN_WALNUT_MODIFY_PATH: '0' }]) {
+      const home = freshHome()
+      const r = await install(home, env)
+      expect(r.code, r.out).toBe(0)
+      expect(r.out).toContain(`Add ${path.join(home, '.local/bin')} to your PATH`)
+      expect(r.out).toContain(`Start it now with:  ${path.join(home, '.local/bin')}/walnut web`)
+      expect(fs.readdirSync(home).filter((f) => f.startsWith('.') && f !== '.local')).toEqual([])
+    }
+  })
+
+  // On PATH already: the short command, and nothing written.
+  it('says walnut web when ~/.local/bin is already on PATH', async () => {
+    releaseFile('0.8.0')
+    const home = freshHome()
+    const r = await install(home, { OPEN_WALNUT_MODIFY_PATH: '1', SHELL: '/bin/zsh' }, [path.join(home, '.local/bin')])
+    expect(r.out).toContain('Start it with:  walnut web')
+    expect(fs.existsSync(path.join(home, '.zshrc'))).toBe(false)
+  })
+
   // The Mac app reads the percentage off the bar to fill its own (BundledRuntime.swift).
   it('prints the download\'s progress bar to a reader that is not a terminal only when asked', async () => {
     releaseFile('0.8.0')

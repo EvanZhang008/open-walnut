@@ -20,14 +20,15 @@ claude                                # run it once and sign in
 # 2. Install Walnut (nothing to build)
 curl -fsSL https://github.com/EvanZhang008/open-walnut/releases/latest/download/install.sh | sh
 
-# 3. Start
-walnut web                            # starts on port 3456
+# 3. Start (a new terminal can run plain `walnut web`)
+~/.local/bin/walnut web               # starts on port 3456
 ```
 
-If the shell says `walnut: command not found`, `~/.local/bin` is not on your PATH yet (it is
-not by default on macOS): run `~/.local/bin/walnut web`, and add
-`export PATH="$HOME/.local/bin:$PATH"` to your `~/.zshrc` or `~/.bashrc` for next time. No API
-key is needed: Walnut runs every AI turn through the Claude Code you signed in to in step 1.
+When `~/.local/bin` is not on your PATH yet (it is not by default on macOS), the script adds it
+in your shell's rc file and says which one, so the next terminal you open finds `walnut`; the
+one you installed from keeps its old PATH. `OPEN_WALNUT_MODIFY_PATH=0` leaves your rc files
+alone. No API key is needed: Walnut runs every AI turn through the Claude Code you signed in to
+in step 1.
 
 Homebrew works too (`brew install evanzhang008/tap/open-walnut`), and so does npm for people
 who use it: `npm install -g open-walnut` (Node 22 or newer), then `open-walnut web`.
