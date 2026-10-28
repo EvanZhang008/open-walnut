@@ -947,6 +947,16 @@ Two consequences worth knowing. Because moving the row cannot change what the Ap
 
 A user can also **Hide** your App from the Sidebar's own menu, which also drops its Command Palette entry while keeping the deep link and its tile on the Apps page. An unknown placement value is refused at the call rather than accepted, because an App that matches no surface would register successfully and then appear nowhere.
 
+### Where an App draws: its own box
+
+An App (and a plugin page) draws only inside the box Walnut gives it. The sidebar, the header and Walnut's own popups stay visible and usable whatever the App does: an App's pause screen once covered the whole window, sidebar included, and the person had to click it away to find Walnut again. Walnut holds the line itself (`web/src/plugins/plugin-bounds.ts`), so an App cannot cross it by accident:
+
+- **CSS stays inside.** The box is clipped and isolated (`clip-path: inset(0)`, `isolation: isolate`): `z-index` stacks only inside it, and nothing paints or takes a click past its edges, `position: fixed` included. Fixed still means fixed to the window, so place a full-screen overlay as `position: absolute; inset: 0` in your own root (made `position: relative`): it then covers your App exactly, centred on it, and stops at its edges.
+- **The top layer is moved in.** A popover or a modal `<dialog>` the App opens is drawn in the browser's top layer, above everything. Walnut sizes and slides each one into the box, on top of any `translate` of your own, and its `::backdrop` shows nothing over the rest of Walnut. A menu by the box's edge slides in only as far as it must.
+- **Fullscreen is refused**, except for a video or audio player: the whole screen is never an App's.
+
+Two things stay your choice. A modal `<dialog>` still makes the whole page inert while it is open (the browser's rule): fine for a short confirmation, wrong for a screen that stays up, such as a pause screen, which belongs in your own tree as an overlay with the rest of your App made `inert`. And render everything inside your App's root: a portal to `document.body`, or `walnut.unsafe.dom`, leaves the box on purpose, so do not.
+
 ### Settings, CSS, and pages
 
 `walnut.ui.settings` adds a section to the Settings page. `walnut.ui.injectCss` adds an owner-tagged stylesheet that Walnut removes when the plugin unloads. Scope your selectors to a class you own, because the stylesheet is global while it is mounted.

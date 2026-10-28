@@ -1,0 +1,39 @@
+/*
+ * A plugin's App or page draws only inside its own box (web/src/plugins/plugin-bounds.ts):
+ * z-index stacks inside it, and nothing paints or takes a click outside it, `position: fixed`
+ * included. Walnut's sidebar, header and popups stay visible and usable.
+ *
+ * A clip, not `contain`: containment would make the box the frame of every fixed element in
+ * it, so Walnut's own menus and popovers inside an App, placed at the pointer in window
+ * coordinates, would land off by the box's offset and scroll away with it. A clip leaves them
+ * where they are and only cuts what reaches past the edge.
+ */
+.plugin-bounds {
+  isolation: isolate;
+}
+
+/* An App's box is its own scroller: cut at its edges, which do not move when it scrolls. */
+.plugin-native-app.plugin-bounds {
+  clip-path: inset(0);
+}
+
+/* A page scrolls with the content area: cut there, so a wide page still scrolls sideways and a
+   scrolled one cannot reach above the area. */
+.app-content-area:has(> .plugin-native-page) {
+  isolation: isolate;
+  clip-path: inset(0);
+}
+
+/* A modal dialog or popover a plugin opens keeps to the box (moved there by plugin-bounds.ts);
+   its backdrop, which the browser always spreads over the whole window, shows nothing. One rule
+   each: an engine that does not know one selector drops only its rule. */
+.plugin-bounds dialog::backdrop {
+  background: none !important;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+.plugin-bounds [popover]::backdrop {
+  background: none !important;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}

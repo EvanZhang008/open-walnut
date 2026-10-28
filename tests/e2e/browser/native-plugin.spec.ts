@@ -24,6 +24,132 @@ let output = ''
 test.setTimeout(240_000)
 test.describe.configure({ mode: 'serial' })
 
+/**
+ * An App draws only inside its own box (web/src/plugins/plugin-bounds.ts): a fixed overlay, a
+ * modal dialog and a popover it opens never cover the sidebar, and fullscreen is refused. The
+ * report: an App's pause screen covered the whole window, the sidebar included. A menu placed in
+ * window coordinates (how Walnut's own context menus inside an App are placed) stays where it was
+ * put, the box scrolled or not.
+ */
+async function expectAppStaysInItsBox(page: Page): Promise<void> {
+  const seen = await page.getByTestId('app-host-native').evaluate(async (box) => {
+    const frame = () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))
+    const rect = (el: Element) => {
+      const r = el.getBoundingClientRect()
+      return { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) }
+    }
+    const b = box.getBoundingClientRect()
+    const outside = { x: Math.round(b.left / 2), y: Math.round(b.top + b.height / 2) }
+    const inside = { x: Math.round(b.left + b.width / 2), y: Math.round(b.top + b.height / 2) }
+
+    // A full-window overlay at the top z-index: drawn and clicked only inside the box.
+    const fixed = document.createElement('div')
+    Object.assign(fixed.style, { position: 'fixed', inset: '0', zIndex: '2147483647', background: 'rgba(255,0,0,0.2)' })
+    box.appendChild(fixed)
+    await frame()
+    const outsideHit = document.elementFromPoint(outside.x, outside.y)
+    const overlay = { sidebarHit: !!outsideHit && !box.contains(outsideHit), boxHit: document.elementFromPoint(inside.x, inside.y) === fixed }
+    fixed.remove()
+
+    // A menu at a point in the window, the way Walnut places its own at the pointer: still there
+    // once the box has scrolled.
+    const spacer = document.createElement('div')
+    spacer.style.height = `${Math.round(b.height * 3)}px`
+    box.appendChild(spacer)
+    const at = { x: Math.round(b.left + 40), y: Math.round(b.top + 40) }
+    const pinned = document.createElement('div')
+    Object.assign(pinned.style, { position: 'fixed', left: `${at.x}px`, top: `${at.y}px`, width: '120px', height: '60px', zIndex: '10' })
+    box.appendChild(pinned)
+    box.scrollTop = Math.round(b.height)
+    await frame()
+    const scrolled = box.scrollTop > 0
+    const pinnedAt = rect(pinned)
+    pinned.remove()
+    spacer.remove()
+    box.scrollTop = 0
+
+    const dialog = document.createElement('dialog')
+    Object.assign(dialog.style, { position: 'fixed', inset: '0', width: '100vw', height: '100vh', maxWidth: 'none', maxHeight: 'none', margin: '0' })
+    box.appendChild(dialog)
+    dialog.showModal()
+    await frame()
+    const modal = { rect: rect(dialog), backdrop: getComputedStyle(dialog, '::backdrop').backgroundColor }
+    dialog.close()
+    await frame()
+    const released = dialog.style.translate
+    dialog.remove()
+
+    // A small dialog the plugin centres itself with translate, already inside the box: left as it is.
+    const centred = document.createElement('dialog')
+    Object.assign(centred.style, { position: 'fixed', inset: 'auto', left: `${Math.round(b.left + b.width / 2)}px`, top: '50%', translate: '-50% -50%', width: '200px', height: '100px', margin: '0' })
+    box.appendChild(centred)
+    const centredOwn = centred.style.translate
+    centred.showModal()
+    await frame()
+    const centredSeen = { rect: rect(centred), translate: centred.style.translate, own: centredOwn }
+    centred.close()
+    centred.remove()
+
+    const pop = document.createElement('div')
+    pop.setAttribute('popover', 'manual')
+    Object.assign(pop.style, { position: 'fixed', inset: 'auto', left: `${Math.round(b.left - 100)}px`, top: '100px', width: '200px', height: '120px', margin: '0' })
+    box.appendChild(pop)
+    pop.showPopover()
+    await frame()
+    const menu = rect(pop)
+    pop.hidePopover()
+    pop.remove()
+
+    // One the plugin centres on a point by the edge: moved in on top of its own translate.
+    const tip = document.createElement('div')
+    tip.setAttribute('popover', 'manual')
+    Object.assign(tip.style, { position: 'fixed', inset: 'auto', left: `${Math.round(b.left)}px`, top: '100px', translate: '-50% 0', width: '160px', height: '40px', margin: '0' })
+    box.appendChild(tip)
+    const tipOwn = tip.style.translate
+    tip.showPopover()
+    await frame()
+    const tipAt = rect(tip)
+    tip.hidePopover()
+    await frame()
+    const tipReleased = tip.style.translate === tipOwn
+    tip.remove()
+
+    let fullscreen = 'refused'
+    const target = document.createElement('div')
+    box.appendChild(target)
+    try {
+      await target.requestFullscreen()
+      await frame()
+      await new Promise((resolve) => setTimeout(resolve, 300))
+      if (document.fullscreenElement) fullscreen = 'kept'
+    } catch {
+      // A headless browser may not offer fullscreen at all: nothing left the box either way.
+    }
+    target.remove()
+    return { box: rect(box), at, scrolled, pinnedAt, overlay, modal, released, centred: centredSeen, menu, tipAt, tipReleased, fullscreen }
+  })
+  expect(seen.box.x, 'the App starts right of the sidebar').toBeGreaterThan(20)
+  expect(seen.overlay.sidebarHit, 'a fixed overlay at the top z-index leaves the sidebar clickable').toBe(true)
+  expect(seen.overlay.boxHit, 'and still covers the App').toBe(true)
+  expect(seen.scrolled, 'the App box scrolled').toBe(true)
+  expect([seen.pinnedAt.x, seen.pinnedAt.y], 'a menu at a window point stays at that point').toEqual([seen.at.x, seen.at.y])
+  // Inside the box, and all of it but a scrollbar the box may show (WebKit draws one in its padding box).
+  const r = seen.modal.rect
+  expect([r.x, r.y], 'a full-window modal dialog: top left').toEqual([seen.box.x, seen.box.y])
+  expect(r.w).toBeLessThanOrEqual(seen.box.w)
+  expect(r.w).toBeGreaterThanOrEqual(seen.box.w - 20)
+  expect(r.h).toBeLessThanOrEqual(seen.box.h)
+  expect(r.h).toBeGreaterThanOrEqual(seen.box.h - 20)
+  expect(seen.modal.backdrop).toBe('rgba(0, 0, 0, 0)')
+  expect(seen.released, 'closed: the dialog is the plugin\'s own again').toBe('')
+  expect(seen.centred.translate, 'a centred dialog inside the box keeps its own translate').toBe(seen.centred.own)
+  expect(Math.abs(seen.centred.rect.x + seen.centred.rect.w / 2 - (seen.box.x + seen.box.w / 2)), 'and its place').toBeLessThanOrEqual(1)
+  expect(seen.menu.x, 'a menu half over the sidebar slides into the App').toBe(seen.box.x)
+  expect(seen.tipAt.x, 'a centred tip by the edge slides in on top of its own translate').toBe(seen.box.x)
+  expect(seen.tipReleased, 'closed: its own translate is back').toBe(true)
+  expect(seen.fullscreen).toBe('refused')
+}
+
 async function reservePort(): Promise<number> {
   const server = net.createServer()
   await new Promise<void>((resolve, reject) => {
@@ -247,6 +373,10 @@ test('installs a first-class Plugin App and exercises its real capabilities', as
   if (!skillsResponse.ok()) throw new Error(`Skills catalogue failed: ${await skillsResponse.text()}`)
   const skills = await skillsResponse.json() as { skills: Array<{ dirName: string }> }
   expect(skills.skills.some((skill) => skill.dirName === 'walnut-demo')).toBe(true)
+
+  await page.goto(`http://127.0.0.1:${fixturePort}/apps/walnut-demo~main`)
+  await expect(page.getByTestId('plugin-demo-app')).toBeVisible({ timeout: 30_000 })
+  await expectAppStaysInItsBox(page)
 
   await expandSidebar(page)
   await page.getByTestId('sidebar-core-app-home').click()

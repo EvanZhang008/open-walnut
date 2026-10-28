@@ -2,6 +2,7 @@ import { Navigate, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { LoadingSpinner } from '@/components/common/LoadingSpinner'
 import { PluginBoundary } from '@/components/common/PluginBoundary'
 import { PluginAppPage } from '@/pages/PluginAppPage'
+import { PluginBounds } from '@/plugins/PluginBounds'
 import { useWebPluginRuntime } from '@/plugins/hooks'
 import { useAppCatalog } from './hooks'
 
@@ -32,7 +33,7 @@ export function AppHostPage() {
       pluginName={app.pluginName ?? app.title}
       resetKey={app.generation}
     >
-      <div
+      <PluginBounds
         className="plugin-native-app"
         data-testid="app-host-native"
         data-app-key={app.key}
@@ -49,7 +50,7 @@ export function AppHostPage() {
             navigate(path, options)
           }}
         />
-      </div>
+      </PluginBounds>
     </PluginBoundary>
   )
 }

@@ -15,6 +15,7 @@ import { StaleBuildPill } from './components/common/StaleBuildPill';
 import { PageFind } from './components/common/PageFind';
 import { UnpairedNotice } from './components/common/UnpairedNotice';
 import { PluginBoundary } from './components/common/PluginBoundary';
+import { PluginBounds } from './plugins/PluginBounds';
 import { LoadingSpinner } from './components/common/LoadingSpinner';
 import { usePluginUi, useWebPluginRuntime } from './plugins/hooks';
 import { LinkCaptureHost } from './plugins/LinkCaptureHost';
@@ -168,9 +169,9 @@ export function App() {
                   pluginName={page.pluginName}
                   resetKey={page.generation}
                 >
-                  <div className="plugin-native-page" data-plugin-id={page.pluginId}>
+                  <PluginBounds className="plugin-native-page" data-plugin-id={page.pluginId}>
                     <PluginPage />
-                  </div>
+                  </PluginBounds>
                 </PluginBoundary>
               )}
             />
