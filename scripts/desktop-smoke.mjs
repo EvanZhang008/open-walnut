@@ -32,7 +32,6 @@ import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { accountInfo } from '../src/lib/account.ts'
 import { carryRelease } from './desktop-carry-release.mjs'
 import { stopOwnDaemon } from './release-rehearsal/own-daemon.mjs'
 import { serveReleases } from './release-rehearsal/runtime.mjs'
@@ -194,6 +193,9 @@ export async function smokeDesktopApp({ app: given, work: made, version, release
   if (!version) throw new Error('the app carries no release for this Mac: name the one it installs (--version)')
   const home = path.join(work, 'home')
   fs.mkdirSync(home, { recursive: true })
+  // Loaded here, not at the top: the release rehearsal imports this file, and the
+  // binary matrix gives it scripts/ without src/ (scripts/binary-matrix.sh).
+  const { accountInfo } = await import('../src/lib/account.ts')
   const support = path.join(home, 'Library', 'Application Support', 'Walnut')
   const port = await freePort()
   const env = {
