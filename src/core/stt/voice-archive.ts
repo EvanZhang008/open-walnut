@@ -248,7 +248,9 @@ export class VoiceArchiveStore {
         return this.save(id, stored)
       }
       stored.record = { ...stored.record, text, via, state: 'transcribed', primarySaved: !this.cloud, ...(asr ? { asr } : {}) }
-      return this.save(id, stored)
+      const saved = await this.save(id, stored)
+      void import('./learn-from-sends.js').then((m) => m.noteDictation(text), () => {})
+      return saved
     })
   }
   async markPrimarySaved(id: string, expectedText?: string): Promise<VoiceRecord> {

@@ -260,7 +260,7 @@ export async function loadVocabPrompt(): Promise<string> {
  * no acoustic evidence and sometimes copies words straight out of that
  * context, so dictations come back ending in "... Kubernetes, DynamoDB,
  * Walnut" (observed live 2026-08-28). An echo is a comma-separated run of vocab
- * words, so: peel trailing vocab words off the end and drop them only if
+ * words, so: peel trailing comma-separated vocab words off the end and drop them only if
  * TWO OR MORE were peeled — a single vocab word at the end ("我们管它叫
  * Walnut") is almost always real speech and is kept.
  */
@@ -273,6 +273,9 @@ export function stripVocabEcho(text: string, vocabPrompt: string): string {
   let peeled = 0;
   for (;;) {
     const base = t.replace(/[\s,，、.。!！?？]+$/u, '');
+    // An echo is a LIST: the words it peels are comma-separated. "这个 UI bug" with
+    // UI and bug in the context is speech (the context holds common words now).
+    if (peeled > 0 && !/[,，、]/u.test(t.slice(base.length))) break;
     const hit = sorted.find(w => base.toLowerCase().endsWith(w.toLowerCase()));
     if (!hit) break;
     const cut = base.slice(0, base.length - hit.length);
@@ -287,6 +290,9 @@ export function stripVocabEcho(text: string, vocabPrompt: string): string {
   return cleaned;
 }
 
+/** Engines that run Qwen3-ASR, whose context is the vocabulary prompt. */
+const QWEN_ENGINES = new Set(['qwen', 'mlx']);
+
 /** Transcribe audio using the configured engine. */
 export async function transcribeAudio(config: Config, req: SttRequest): Promise<SttResult> {
   const engine = getOrCreateEngine(config);
@@ -299,10 +305,14 @@ export async function transcribeAudio(config: Config, req: SttRequest): Promise<
     throw new Error(`STT engine "${engine.name}" is not available: ${error}`);
   }
 
-  // Load vocab file as prompt (per-request, no restart needed)
+  // Load vocab file as prompt (per-request, no restart needed); Qwen3-ASR also
+  // hears the user's own terms (user-terms.ts), which other engines' prompts are not tuned for.
   if (!req.prompt) {
     const vocab = await loadVocabPrompt();
-    if (vocab) req = { ...req, prompt: vocab };
+    const prompt = QWEN_ENGINES.has(engine.name)
+      ? (await import('./user-terms.js')).speechContext(config, vocab ? vocab.split(', ') : [])
+      : vocab;
+    if (prompt) req = { ...req, prompt };
   }
 
   log.stt.info(`Transcribing with ${engine.name} (format=${req.format}, lang=${req.language ?? 'auto'}, prompt=${req.prompt ? req.prompt.length + ' chars' : 'none'})`);

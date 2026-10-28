@@ -2831,6 +2831,10 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // -- Audio transcription + capture (macOS ScreenCaptureKit — not on cloud) --
   // -- Voice recordings: bring what an older run kept within stt.keep_recordings --
   void import('../core/stt/voice-retention.js').then((m) => m.scheduleVoiceRetention(), () => {})
+  // The correction list learns from dictations the user fixed by hand before sending.
+  void import('../core/stt/learn-from-sends.js').then((m) => m.startLearningFromSends(), () => {})
+  // The speech context's title words, read once now so the first take has them.
+  void import('../core/stt/user-terms.js').then((m) => m.cachedTitleTerms(), () => {})
   if (!bootPolicy('audio')) {
     log.web.info(`${offByPolicy()}: skipping audio transcriber + capture resume`)
   } else {

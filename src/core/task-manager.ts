@@ -3089,6 +3089,13 @@ function slimSelectSql(minimal: boolean): string {
   return sqlCols;
 }
 
+/** Every task's title and nothing else: one column, no row decoding (speech context, stt/user-terms.ts). */
+export async function listTaskTitles(): Promise<string[]> {
+  await ensureInit();
+  const rows = getDb()!.prepare('SELECT title FROM tasks').all() as { title: string | null }[];
+  return rows.map((r) => r.title ?? '');
+}
+
 /**
  * Slim list — omits `note` and `conversation_log` at the storage layer so we
  * don't materialize their strings in memory when the caller only needs

@@ -97,7 +97,10 @@ async function finishLiveHere(raw: string, body: Record<string, unknown> | undef
   ])
   const text = await finishLiveFromSamples(id, pcmBytes as number, pcmSha256, localTranscribe, language as string | undefined)
   if (text === null) throw new VoiceArchiveError(409, 'live_unusable', 'The live pieces do not match the finished recording')
-  return { text: await correctedTake(text), asr: await localAsr(id, language as string | undefined, since) }
+  const fixed = await correctedTake(text)
+  // The Mac answers the take before the companion's copy of it arrives: the user may send it on now.
+  void import('../../core/stt/learn-from-sends.js').then((m) => m.noteDictation(fixed), () => {})
+  return { text: fixed, asr: await localAsr(id, language as string | undefined, since) }
 }
 
 function archiveError(err: unknown, res: Response, next: NextFunction): void {

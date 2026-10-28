@@ -92,6 +92,7 @@ export async function writeRecordingResult(
   const stamped = { timestamp: new Date().toISOString(), ...meta };
   await writeFile(join(dir(), `${id}.json`), JSON.stringify(stamped, null, 2));
   void import('./voice-retention.js').then((m) => m.scheduleVoiceRetention(), () => {});
+  if (meta.result?.text) void import('./learn-from-sends.js').then((m) => m.noteDictation(meta.result!.text), () => {});
   return stamped.timestamp;
 }
 

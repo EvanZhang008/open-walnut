@@ -1671,6 +1671,12 @@ export interface Config {
      * removed. Default 1000 recordings and 1024 MB (voice-retention.ts).
      */
     keep_recordings?: { max_count?: number; max_mb?: number };
+    /**
+     * Qwen3-ASR hears the English words the user mixes into Chinese task titles
+     * as context (user-terms.ts). Default on; false keeps only the vocab file and
+     * the correction list's terms.
+     */
+    auto_context?: boolean;
     // sherpa-onnx — local (SenseVoice / Whisper / Paraformer / other ONNX models)
     sherpa_model_dir?: string;
     sherpa_model_type?: 'sense_voice' | 'whisper' | 'paraformer';

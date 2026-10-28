@@ -236,6 +236,12 @@ describe('stripVocabEcho', () => {
     expect(stripVocabEcho(t, VOCAB)).toBe(t);
   });
 
+  it('keeps context words that end a sentence without commas between them', () => {
+    const t = '我们先修一下这个 UI bug';
+    expect(stripVocabEcho(t, 'typo, UI, bug, Walnut')).toBe(t);
+    expect(stripVocabEcho('我们先修一下 typo, UI, bug', 'typo, UI, bug, Walnut')).toBe('我们先修一下');
+  });
+
   it('keeps vocab words mid-sentence', () => {
     const t = 'Walnut 和 Claude 都部署好了吗';
     expect(stripVocabEcho(t, VOCAB)).toBe(t);
