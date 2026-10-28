@@ -42,7 +42,8 @@ const BIG = path.join(DATA_DIR, 'big.jsonl')       // ~6MB — HOL payload
 const MED = path.join(DATA_DIR, 'medium.jsonl')    // ~2MB — stress payload
 const SMALL = path.join(DATA_DIR, 'small.jsonl')
 
-const hasBinary = fs.existsSync(BINARY)
+// A darwin-arm64 binary runs only there: a Linux build compiles it too (bun cross-compiles).
+const hasBinary = process.platform === 'darwin' && process.arch === 'arm64' && fs.existsSync(BINARY)
 const d = hasBinary ? describe : describe.skip
 
 const TARGET = { hostname: '127.0.0.1', user: undefined, port: undefined }
