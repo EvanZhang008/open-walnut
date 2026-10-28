@@ -10,7 +10,7 @@
 import { describe, expect, it } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
-import { capped, movedBy, overlap, shiftInto } from '../../web/src/plugins/plugin-bounds'
+import { capped, clipTo, movedBy, overlap, shiftInto } from '../../web/src/plugins/plugin-bounds'
 
 const ROOT = path.resolve(__dirname, '..', '..')
 const read = (file: string) => fs.readFileSync(path.join(ROOT, file), 'utf8')
@@ -68,6 +68,14 @@ describe('overlap: where the box shows', () => {
   })
 })
 
+describe('clipTo: what an open dialog draws stops at the box', () => {
+  it('reaches out to the box edges, and cuts where the dialog passes them', () => {
+    const box = { left: 260, top: 0, width: 1000, height: 800 }
+    expect(clipTo({ left: 400, top: 100, width: 200, height: 300 }, box)).toBe('inset(-100px -660px -400px -140px)')
+    expect(clipTo({ left: 260, top: 0, width: 1000, height: 800 }, box)).toBe('inset(0px 0px 0px 0px)')
+  })
+})
+
 describe('every plugin App and page renders in a bounded box', () => {
   it('the box is clipped and isolated, never contained, and top-layer backdrops show nothing', () => {
     const css = read('web/src/styles/plugin-bounds.css')
@@ -78,10 +86,13 @@ describe('every plugin App and page renders in a bounded box', () => {
     expect(rule('.app-content-area:has(> .plugin-native-page)')).toMatch(/clip-path:\s*inset\(0\)/)
     // Containment would make the box the frame of Walnut's own fixed menus inside an App.
     expect(css).not.toMatch(/^\s*contain:/m)
+    // A backdrop covers the box alone, and has no size where the box's insets do not reach it.
     for (const selector of ['.plugin-bounds dialog::backdrop', '.plugin-bounds [popover]::backdrop']) {
-      expect(rule(selector)).toMatch(/background:\s*none !important/)
-      expect(rule(selector)).toMatch(/backdrop-filter:\s*none !important/)
+      expect(rule(selector)).toMatch(/inset: var\(--plugin-box-top, 50vh\) var\(--plugin-box-right, 50vw\) var\(--plugin-box-bottom, 50vh\) var\(--plugin-box-left, 50vw\) !important/)
     }
+    // Walnut's own full-screen sheets inside a box cover the box.
+    expect(rule('html .plugin-bounds .open-walnut-fullscreen.is-changed-open')).toMatch(/left: calc\(var\(--plugin-box-left, 0px\)/)
+    expect(rule('html .plugin-bounds .file-content-view.fv-fullscreen')).toMatch(/inset: var\(--plugin-box-top, 0px\)/)
   })
 
   it('the App host and the plugin page route both use it', () => {
@@ -93,13 +104,20 @@ describe('every plugin App and page renders in a bounded box', () => {
     expect(app).not.toMatch(/<div className="plugin-native-page"/)
   })
 
+  it('a full-screen sheet of Walnut\'s inside a box keeps its backdrop beside it, not on the body', () => {
+    const hook = read('web/src/hooks/useFullscreen.tsx')
+    expect(hook).toMatch(/useContext\(PluginBoxContext\)/)
+    expect(hook).toMatch(/backdrop && !inPluginBox \? createPortal\(backdrop, document\.body\) : backdrop/)
+    expect(read('web/src/plugins/PluginBounds.tsx')).toMatch(/<PluginBoxContext\.Provider value=\{true\}>/)
+  })
+
   it('the box keeps what the plugin opens in the top layer, and refuses fullscreen but a player\'s', () => {
     const src = read('web/src/plugins/plugin-bounds.ts')
     expect(src).toMatch(/addEventListener\('beforetoggle', onToggle, true\)/)
     expect(src).toMatch(/addEventListener\('toggle', onToggle, true\)/)
     expect(src).toMatch(/attributeFilter: \['open'\]/)
     expect(src).toMatch(/exitFullscreen\(\)/)
-    expect(src).toMatch(/el instanceof HTMLMediaElement \|\| el\.querySelector\('video, audio'\)/)
+    expect(src).toMatch(/el instanceof HTMLMediaElement \|\| el instanceof HTMLIFrameElement \|\| el\.querySelector\('video, audio, iframe'\)/)
     expect(read('web/src/plugins/PluginBounds.tsx')).toMatch(/useLayoutEffect\(\(\) => \(ref\.current \? keepInBox\(ref\.current\)/)
   })
 })

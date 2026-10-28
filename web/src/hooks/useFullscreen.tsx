@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import type { ReactNode } from 'react';
 import { useLocation } from 'react-router-dom';
 import { RouteShownContext } from '@/contexts/RouteShownContext';
+import { PluginBoxContext } from '@/contexts/PluginBoxContext';
 import { hasActiveModalOverlay, lockScroll, unlockScroll } from './useModalOverlay';
 import { traceInteraction } from '@/utils/interaction-timer';
 import { keyTargetClaimsEscape } from './usePanelKeyRouter';
@@ -85,6 +86,7 @@ export function useFullscreen(options: UseFullscreenOptions = {}) {
   const { pathname } = useLocation();
   // Off its page (the hidden home page, RouteShownContext) the sheet is away.
   const shown = useContext(RouteShownContext);
+  const inPluginBox = useContext(PluginBoxContext);
   const away = isFullscreen && keepAcrossRoutes && !shown;
   const active = isFullscreen && !away;
 
@@ -155,17 +157,18 @@ export function useFullscreen(options: UseFullscreenOptions = {}) {
     return () => window.removeEventListener(FULLSCREEN_YIELD_EVENT, handleYield);
   }, [isFullscreen]);
 
-  // Backdrop portal — rendered by the consumer in their JSX
-  const FullscreenBackdrop: ReactNode = active
-    ? createPortal(
-        <div
-          className="open-walnut-fullscreen-backdrop"
-          onClick={exitFullscreen}
-          aria-hidden="true"
-        />,
-        document.body,
-      )
-    : null;
+  // Backdrop portal — rendered by the consumer in their JSX. Inside a plugin App's box the sheet
+  // stacks inside the box (plugin-bounds.css isolates and clips it), so a backdrop on the body would
+  // lie over it and every click would only leave full screen: there the backdrop renders where the
+  // consumer puts it, beside the sheet, and both cover the box alone.
+  const backdrop = active ? (
+    <div
+      className="open-walnut-fullscreen-backdrop"
+      onClick={exitFullscreen}
+      aria-hidden="true"
+    />
+  ) : null;
+  const FullscreenBackdrop: ReactNode = backdrop && !inPluginBox ? createPortal(backdrop, document.body) : backdrop;
 
   // Away, the sheet is hidden outright (fullscreen-tab.css): it is position:fixed,
   // so the hidden home page's overflow does not clip it, and a descendant that

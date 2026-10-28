@@ -24,16 +24,28 @@
   clip-path: inset(0);
 }
 
-/* A modal dialog or popover a plugin opens keeps to the box (moved there by plugin-bounds.ts);
-   its backdrop, which the browser always spreads over the whole window, shows nothing. One rule
-   each: an engine that does not know one selector drops only its rule. */
+/* A modal dialog or popover a plugin opens keeps to the box (moved there by plugin-bounds.ts), and
+   so does its backdrop, which the browser spreads over the whole window: it covers the box alone,
+   placed by the box's insets. An engine whose backdrop does not inherit them gets none at all (the
+   50vh / 50vw fallbacks leave it no size). One rule each: an engine that does not know one
+   selector drops only its rule. */
 .plugin-bounds dialog::backdrop {
-  background: none !important;
-  -webkit-backdrop-filter: none !important;
-  backdrop-filter: none !important;
+  inset: var(--plugin-box-top, 50vh) var(--plugin-box-right, 50vw) var(--plugin-box-bottom, 50vh) var(--plugin-box-left, 50vw) !important;
 }
 .plugin-bounds [popover]::backdrop {
-  background: none !important;
-  -webkit-backdrop-filter: none !important;
-  backdrop-filter: none !important;
+  inset: var(--plugin-box-top, 50vh) var(--plugin-box-right, 50vw) var(--plugin-box-bottom, 50vh) var(--plugin-box-left, 50vw) !important;
+}
+
+/* Walnut's own sheets a plugin embeds (a session panel in full screen, a file preview) cover the
+   box, its gutter kept, instead of the window: the box's clip would cut them at its edges, the
+   composer at the bottom first. Their backdrop renders inside the box (hooks/useFullscreen.tsx). */
+html .plugin-bounds .open-walnut-fullscreen,
+html .plugin-bounds .open-walnut-fullscreen.is-changed-open {
+  top: calc(var(--plugin-box-top, 0px) + var(--fullscreen-gutter, 12px));
+  right: calc(var(--plugin-box-right, 0px) + var(--fullscreen-gutter, 12px));
+  bottom: calc(var(--plugin-box-bottom, 0px) + var(--fullscreen-gutter, 12px));
+  left: calc(var(--plugin-box-left, 0px) + var(--fullscreen-gutter, 12px));
+}
+html .plugin-bounds .file-content-view.fv-fullscreen {
+  inset: var(--plugin-box-top, 0px) var(--plugin-box-right, 0px) var(--plugin-box-bottom, 0px) var(--plugin-box-left, 0px);
 }
