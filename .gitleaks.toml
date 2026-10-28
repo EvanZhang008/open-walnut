@@ -14,3 +14,9 @@ useDefault = true
   paths = [
     '''tests/logging/redact\.test\.ts''',
   ]
+  # Made-up values in tests that are not credentials: the draft merge's
+  # credential detector fixture, and a fake setup claim token.
+  regexes = [
+    '''^abcdef123456$''',
+    '''^devtok-abc123$''',
+  ]
