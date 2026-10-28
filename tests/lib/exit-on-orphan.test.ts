@@ -5,9 +5,9 @@ afterEach(() => { vi.useRealTimers() })
 
 describe('OPEN_WALNUT_EXIT_ON_ORPHAN (the Mac app)', () => {
   it('the request is read once and leaves the environment, so no child inherits it', () => {
-    const env: NodeJS.ProcessEnv = { OPEN_WALNUT_EXIT_ON_ORPHAN: '1', PATH: '/bin' }
+    const env: NodeJS.ProcessEnv = { OPEN_WALNUT_EXIT_ON_ORPHAN: '1', LANG: 'C' }
     expect(takeExitOnOrphanRequest(env, () => 4242)).toBe(4242)
-    expect(env).toEqual({ PATH: '/bin' })
+    expect(env).toEqual({ LANG: 'C' })
     expect(takeExitOnOrphanRequest(env, () => 4242)).toBeNull()
     expect(takeExitOnOrphanRequest({ OPEN_WALNUT_EXIT_ON_ORPHAN: '0' }, () => 4242)).toBeNull()
   })

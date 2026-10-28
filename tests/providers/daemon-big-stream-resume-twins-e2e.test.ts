@@ -328,25 +328,46 @@ describe.each(TWINS)('big stream resume: $name', (twin) => {
     const dirs = makeDirs()
     await boot(twin, dirs)
     fs.mkdirSync(dirs.streams, { recursive: true })
-    const jsonl = path.join(dirs.streams, 'stop-1.jsonl')
-    const size = writeBigStream(jsonl, BIG_MB)
-    const started = rpc({
-      cmd: 'start', sid: 'stop-1', cwd: root, message: '', mode: 'default', resume: true,
-      args: ['/bin/sh', '-c', 'sleep 30', 'sh'],
-    })
-    await new Promise((r) => setTimeout(r, 100))
-    const t0 = Date.now()
-    const stopped = rpc({ cmd: 'stop', sid: 'stop-1', reason: 'user' })
-    const [start, stop] = await Promise.all([started, stopped])
-    const stopMs = Date.now() - t0
-    expect(start.reason, JSON.stringify(start)).toBe('session_stopped')
-    expect(stop.id).toBeDefined()
-    // A partial fold's checkpoint is still a valid prefix; the next resume continues it.
-    const ck = JSON.parse(fs.readFileSync(jsonl + '.fold', 'utf8'))
-    expect(ck.boundary).toBeLessThan(size)
-    expect(daemonLog(dirs)).toMatch(/"stream folded"[^\n]*"aborted":true/)
-    console.log(`[big-stream] ${twin.name}: stop answered after ${stopMs} ms, fold stopped at ${ck.boundary} of ${size}`)
-    expect(fs.existsSync(path.join(dirs.streams, 'stop-1.pgid'))).toBe(false)
+    // A cut fold keeps a checkpoint only past fold-checkpoint-core's 8 MB floor. Where the
+    // fold stands when the stop lands depends on the machine (2026-10-28 CI: a stop at
+    // 100 ms found it under the floor), so a stop that came too early tries again later.
+    const CHECKPOINT_FLOOR = 8 * 1024 * 1024
+    for (let attempt = 1, delayMs = 100; ; attempt++, delayMs *= 2) {
+      const sid = `stop-${attempt}`
+      const jsonl = path.join(dirs.streams, `${sid}.jsonl`)
+      const size = writeBigStream(jsonl, BIG_MB)
+      const started = rpc({
+        cmd: 'start', sid, cwd: root, message: '', mode: 'default', resume: true,
+        args: ['/bin/sh', '-c', 'sleep 30', 'sh'],
+      })
+      await new Promise((r) => setTimeout(r, delayMs))
+      const t0 = Date.now()
+      const stopped = rpc({ cmd: 'stop', sid, reason: 'user' })
+      const [start, stop] = await Promise.all([started, stopped])
+      const stopMs = Date.now() - t0
+      expect(start.reason, JSON.stringify(start)).toBe('session_stopped')
+      expect(stop.id).toBeDefined()
+      expect(fs.existsSync(path.join(dirs.streams, `${sid}.pgid`))).toBe(false)
+      const folded = daemonLog(dirs).split('\n').filter((l) => l.includes('"stream folded"') && l.includes(JSON.stringify(jsonl)))
+        .map((l) => JSON.parse(l) as { boundary: number; aborted: boolean }).at(-1)
+      if (!fs.existsSync(jsonl + '.fold')) {
+        // Too early: the start had not folded past the floor (or not begun), so nothing is
+        // kept. A cut past the floor that kept nothing would be the bug this test is for.
+        // (The log's boundary may run one line past the fold's own.)
+        expect(folded?.boundary ?? 0, 'a fold cut past the checkpoint floor kept no checkpoint').toBeLessThan(CHECKPOINT_FLOOR + 1024 * 1024)
+        console.log(`[big-stream] ${twin.name}: a stop after ${delayMs} ms came before the fold reached the checkpoint floor (${folded ? folded.boundary : 'not begun'})`)
+        if (attempt < 4) continue
+        throw new Error(`no stop in four tries landed after the fold reached ${CHECKPOINT_FLOOR} bytes`)
+      }
+      expect(folded?.aborted).toBe(true)
+      // A partial fold's checkpoint is still a valid prefix; the next resume continues it.
+      const ck = JSON.parse(fs.readFileSync(jsonl + '.fold', 'utf8'))
+      expect(ck.boundary).toBeGreaterThanOrEqual(CHECKPOINT_FLOOR)
+      expect(ck.boundary).toBeLessThanOrEqual(folded!.boundary)
+      expect(ck.boundary).toBeLessThan(size)
+      console.log(`[big-stream] ${twin.name}: stop answered after ${stopMs} ms, fold stopped at ${ck.boundary} of ${size}`)
+      break
+    }
   }, 900_000)
 
   it('a big file is kept while its fold holds an armed cron', async () => {

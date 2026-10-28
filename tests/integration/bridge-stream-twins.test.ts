@@ -127,8 +127,8 @@ afterAll(async () => {
 
 const closeOf = (frames: Array<Record<string, any>>, sid: string) => frames.find((f) => f.ev === 'stream-close' && f.sid === sid)
 // What both twins tell the companion in the bridge hello (BRIDGE_CAPABILITIES; the send
-// and permission relays joined bridge-stream-v1 in 5408d5875).
-const BRIDGE_CAPS = ['bridge-stream-v1', 'send-dedupe-v1', 'send-lost-line-v1', 'session-permission-v1']
+// and permission relays joined bridge-stream-v1 in 5408d5875, the feature-node relay in d4c4e3a63).
+const BRIDGE_CAPS = ['bridge-stream-v1', 'send-dedupe-v1', 'send-lost-line-v1', 'session-permission-v1', 'feature-relay-v1']
 
 for (const twin of ['source', 'standalone'] as const) {
   describe.skipIf(twin === 'standalone' && !BUN)(`${twin} twin: the companion's forward stream through the bridge`, () => {

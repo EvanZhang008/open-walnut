@@ -452,6 +452,8 @@ describe('ClaudeCodeSession', () => {
     // start RPC reply. (This used to be a direct local spawn.)
     await waitForResult(collected);
     expect(session.processPid).toBeGreaterThan(0);
+    // The live process would outlast the test in the file's shared daemon.
+    session.kill();
   });
 
   it('generates unique session ID per send (from response)', async () => {

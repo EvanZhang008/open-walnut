@@ -95,6 +95,7 @@ const LITERAL_PATH_BUDGET: Record<string, number> = {
   'tests/scripts/cloud-ensure-harness.test.ts': 4,
   'tests/scripts/dev-prod-launchd-domain.test.ts': 1,
   'tests/scripts/dev-prod-launchd-priority.test.ts': 3,
+  'tests/scripts/install-sh.test.ts': 1,
   'tests/scripts/release-archives.test.ts': 1,
   'tests/setup/live-tier-only.test.ts': 2,
   'tests/unit/ephemeral-snapshot.test.ts': 1,

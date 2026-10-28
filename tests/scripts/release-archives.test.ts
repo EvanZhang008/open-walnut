@@ -24,7 +24,7 @@ import { BUNDLE_ID, DMG_ARCHES, cask, dmgName } from '../../scripts/homebrew/cas
 import { carriedFor, installedRuntime, installedVersion, markInstalledOlder, readsAutosetupKnob } from '../../scripts/desktop-smoke.mjs'
 import { carryRelease, fileTarget, isMachOHeader, machOArch } from '../../scripts/desktop-carry-release.mjs'
 import zlib from 'node:zlib'
-import { archiveVersion, serveReleases, systemPathWithoutNode } from '../../scripts/release-rehearsal/runtime.mjs'
+import { archiveVersion, carriedFileOf, serveReleases, systemPathWithoutNode } from '../../scripts/release-rehearsal/runtime.mjs'
 import { RUNTIME_MARKER as UPDATER_MARKER } from '../../src/core/self-update/install-kind.js'
 import { npmEnv, npmOnPath } from '../helpers/npm-on-path.js'
 
@@ -585,6 +585,34 @@ describe('the Mac app', () => {
       expect(fileTarget('walnut-0.9.1-darwin-x64')).toEqual({ version: '0.9.1', arch: 'x64', gz: false })
       expect(fileTarget('open-walnut-0.9.1-darwin-x64.tar.gz')).toBeNull()
       expect(machOArch(Buffer.from('#!/bin/sh\necho hi\n'))).toBeNull()
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  // The release rehearsal publishes only the archive; its carried-app smoke hands the app the
+  // compiled file that archive's launcher starts (2026-10-28: it still passed the archive, so the
+  // carried smoke died on `file` undefined once the Bun app reached it).
+  it('the rehearsal carries the compiled file its installed archive starts, under the name a release gives it', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'carry-archive-'))
+    try {
+      const runtimeDir = path.join(dir, 'share', 'open-walnut')
+      const pkg = path.join(runtimeDir, 'app', 'runtime', 'lib', 'node_modules', 'open-walnut')
+      touch(path.join(runtimeDir, 'app', 'runtime', 'bin', 'node'), '#!/bin/sh\n')
+      touch(path.join(pkg, 'package.json'), JSON.stringify({ name: 'open-walnut', version: '0.9.1' }))
+      const inside = machO('arm64', 'walnut 0.9.1 arm64')
+      touch(path.join(pkg, 'node_modules', '@open-walnut', 'darwin-arm64', 'walnut'))
+      fs.writeFileSync(path.join(pkg, 'node_modules', '@open-walnut', 'darwin-arm64', 'walnut'), inside)
+      const carry = carriedFileOf({ runtimeDir, version: '0.9.1', out: path.join(dir, 'carried-release'), arch: 'arm64' })
+      expect(path.basename(carry.file)).toBe('walnut-0.9.1-darwin-arm64')
+      expect(fs.readFileSync(carry.sums, 'utf8')).toBe(`${sha256Of(inside)}  walnut-0.9.1-darwin-arm64\n`)
+      const app = path.join(dir, 'Walnut.app')
+      fs.mkdirSync(path.join(app, 'Contents', 'Resources'), { recursive: true })
+      expect(carryRelease({ app, ...carry })).toMatchObject({ version: '0.9.1', arch: 'arm64' })
+      expect(carriedFor(app, 'arm64')).toMatchObject({ version: '0.9.1' })
+      // Nothing for this Mac in the archive, or no archive at all: said, not carried.
+      expect(() => carriedFileOf({ runtimeDir, version: '0.9.1', out: path.join(dir, 'none'), arch: 'x64' })).toThrow('holds no compiled file for darwin-x64')
+      expect(() => carriedFileOf({ runtimeDir: path.join(dir, 'empty'), version: '0.9.1', out: path.join(dir, 'none') })).toThrow('no installed archive')
     } finally {
       fs.rmSync(dir, { recursive: true, force: true })
     }

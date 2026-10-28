@@ -31,9 +31,10 @@ import { execFileSync, spawn } from 'node:child_process'
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import http from 'node:http'
+import { createRequire } from 'node:module'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { smokeDesktopApp } from '../desktop-smoke.mjs'
+import { installedRuntime, machineArch, smokeDesktopApp } from '../desktop-smoke.mjs'
 import { formula } from '../homebrew/formula.mjs'
 import { startRegistry } from './registry.mjs'
 import { IsolatedWalnut, runLogged } from './walnut.mjs'
@@ -43,6 +44,7 @@ export const INSTALL_SH = path.join(repo, 'scripts/install.sh')
 const BUILD = path.join(repo, 'scripts/runtime-bundle/build.mjs')
 /** The system's own tool directories: nothing in them may be a node or an npm. */
 const SYSTEM_DIRS = ['/usr/bin', '/bin', '/usr/sbin', '/sbin']
+const npmLauncher = createRequire(import.meta.url)('../npm-launcher/launch.js')
 const NODE_TOOLS = new Set(['node', 'nodejs', 'npm', 'npx', 'corepack', 'pnpm', 'yarn', 'bun'])
 
 /** `open-walnut-<version>-<platform>-<arch>.tar.gz` → its version. */
@@ -102,6 +104,29 @@ export function publishLocally(root, version, archive, { latest = true } = {}) {
   const sha = crypto.createHash('sha256').update(fs.readFileSync(archive)).digest('hex')
   fs.appendFileSync(path.join(dir, 'SHA256SUMS'), `${sha}  ${name}\n`)
   if (latest) fs.writeFileSync(path.join(root, 'latest'), `${version}\n`)
+}
+
+/**
+ * The release file a Mac app carries (scripts/desktop-carry-release.mjs takes
+ * walnut-<version>-darwin-<arch> and the SHA256SUMS that lists it), for a
+ * rehearsal whose release holds only the archive: the compiled file that the
+ * archive installed in `runtimeDir` starts, found the way its npm launcher finds
+ * it. Written under `out`, not into the served releases, so install.sh there
+ * keeps installing the archive.
+ */
+export function carriedFileOf({ runtimeDir, version, out, arch = machineArch() }) {
+  const rt = installedRuntime(runtimeDir)
+  if (rt?.kind !== 'archive') throw new Error(`no installed archive in ${runtimeDir}`)
+  const found = npmLauncher.findFile(npmLauncher.candidateTargets('darwin', arch), path.dirname(rt.packageJson))
+  if (!found?.file) throw new Error(`the archive in ${runtimeDir} holds no compiled file for darwin-${arch}`)
+  const dir = path.join(out, `v${version}`)
+  fs.mkdirSync(dir, { recursive: true })
+  const name = `walnut-${version}-darwin-${arch}`
+  const file = path.join(dir, name)
+  fs.copyFileSync(found.file, file)
+  const sums = path.join(dir, 'SHA256SUMS')
+  fs.writeFileSync(sums, `${crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex')}  ${name}\n`)
+  return { file, sums }
 }
 
 /** One Walnut installed by install.sh: the launcher in ~/.local/bin, no Node on PATH. */
@@ -280,10 +305,12 @@ export async function rehearseRuntime({ work, archive = null, launcher = null, s
       ran++
       await scenario('archive-app', async () => {
         const download = await smokeDesktopApp({ app, work: path.join(work, 'desktop-app'), version: installed.version, releaseUrl: server.url })
-        const carried = await smokeDesktopApp({
-          app, work: path.join(work, 'desktop-app-carried'), version: installed.version,
-          carry: { archive: installed.archive, sums: path.join(releases, `v${installed.version}`, 'SHA256SUMS') },
+        // Since the Bun migration a release's app carries the compiled file, not the archive.
+        const carry = carriedFileOf({
+          runtimeDir: path.join(installed.w.home, '.local', 'share', 'open-walnut'),
+          version: installed.version, out: path.join(work, 'carried-release'),
         })
+        const carried = await smokeDesktopApp({ app, work: path.join(work, 'desktop-app-carried'), version: installed.version, carry })
         return [...download, ...carried].map((s) => `${s.name} (${Math.round(s.secs)}s)`).join('; ')
       })
     }

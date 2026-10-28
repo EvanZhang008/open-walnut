@@ -19,6 +19,9 @@ import { publishLocally, serveReleases } from '../../scripts/release-rehearsal/r
 import { guardedPath } from '../setup/exec-guard.js'
 import { processStart } from '../../src/core/self-update/install-lock.js'
 
+// The line the installer writes into a POSIX shell's rc file (file content, not a child's PATH).
+const RC_LINE = 'export PATH="$HOME/.local/bin:$PATH"'
+
 const ROOT = path.resolve(__dirname, '../..')
 const SCRIPT = path.join(ROOT, 'scripts/install.sh')
 const HOST = `${process.platform}-${process.arch}`
@@ -164,9 +167,9 @@ describe.each(SHELLS)('install.sh under %s', (sh) => {
     expect(first.code, first.out).toBe(0)
     expect(first.out).toContain(`Added ${bin(zsh)} to your PATH in ${path.join(zsh, '.zshrc')}`)
     expect(first.out).toContain(`Start it now with:  ${bin(zsh)}/walnut web`)
-    expect(fs.readFileSync(path.join(zsh, '.zshrc'), 'utf8')).toBe('\n# Added by the Open Walnut installer\nexport PATH="$HOME/.local/bin:$PATH"\n')
+    expect(fs.readFileSync(path.join(zsh, '.zshrc'), 'utf8')).toBe(`\n# Added by the Open Walnut installer\n${RC_LINE}\n`)
     // The rc line works: a login of that shell finds walnut.
-    const found = spawnSync('/bin/sh', ['-c', `. "${path.join(zsh, '.zshrc')}" && command -v walnut`], { env: { HOME: zsh, PATH: '/usr/bin:/bin' }, encoding: 'utf8' })
+    const found = spawnSync('/bin/sh', ['-c', `. "${path.join(zsh, '.zshrc')}" && command -v walnut`], { env: { HOME: zsh, PATH: guardedPath([], '/usr/bin:/bin') }, encoding: 'utf8' })
     expect(found.stdout.trim()).toBe(path.join(bin(zsh), 'walnut'))
     // Again: nothing added twice.
     const again = await install(zsh, { OPEN_WALNUT_MODIFY_PATH: '1', SHELL: '/bin/zsh' })
@@ -175,10 +178,10 @@ describe.each(SHELLS)('install.sh under %s', (sh) => {
 
     // A line another installer wrote (Claude Code's) counts as there.
     const claude = freshHome()
-    fs.writeFileSync(path.join(claude, '.zshrc'), 'export PATH="$HOME/.local/bin:$PATH"\n')
+    fs.writeFileSync(path.join(claude, '.zshrc'), `${RC_LINE}\n`)
     const had = await install(claude, { OPEN_WALNUT_MODIFY_PATH: '1', SHELL: '/bin/zsh' })
     expect(had.out).toContain('already puts')
-    expect(fs.readFileSync(path.join(claude, '.zshrc'), 'utf8')).toBe('export PATH="$HOME/.local/bin:$PATH"\n')
+    expect(fs.readFileSync(path.join(claude, '.zshrc'), 'utf8')).toBe(`${RC_LINE}\n`)
 
     const fish = freshHome()
     await install(fish, { OPEN_WALNUT_MODIFY_PATH: '1', SHELL: '/usr/bin/fish' })
@@ -188,7 +191,7 @@ describe.each(SHELLS)('install.sh under %s', (sh) => {
     const none = freshHome()
     const plain = await install(none, { OPEN_WALNUT_MODIFY_PATH: '1', SHELL: '/bin/ksh' })
     expect(plain.code, plain.out).toBe(0)
-    expect(fs.readFileSync(path.join(none, '.profile'), 'utf8')).toContain('export PATH="$HOME/.local/bin:$PATH"')
+    expect(fs.readFileSync(path.join(none, '.profile'), 'utf8')).toContain(RC_LINE)
   })
 
   it('never edits a dotfile with no terminal or with OPEN_WALNUT_MODIFY_PATH=0, and says what to do', async () => {

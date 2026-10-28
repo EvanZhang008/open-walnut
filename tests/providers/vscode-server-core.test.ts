@@ -32,11 +32,22 @@ const srv = http.createServer((req, res) => {
 srv.listen(Number(port), host)
 `
 
+// The Node a code-server release ships in lib/node, the runtime the core tries
+// first. A stand-in that answers the core's probe as node and runs the fake entry
+// on this test's own bun: CI's runners have no Node at all (scripts/ci-remove-node.sh).
+const fakeBundledNode = () => `#!/bin/sh
+case "$1" in -e) printf ok; exit 0;; esac
+exec '${process.execPath}' "$@"
+`
+
 async function plantFakeCodeServer(version: string): Promise<string> {
-  const dir = path.join(tempHome, '.local', 'lib', `code-server-${version}`, 'out', 'node')
+  const install = path.join(tempHome, '.local', 'lib', `code-server-${version}`)
+  const dir = path.join(install, 'out', 'node')
   await fs.mkdir(dir, { recursive: true })
   const entry = path.join(dir, 'entry.js')
   await fs.writeFile(entry, FAKE_ENTRY)
+  await fs.mkdir(path.join(install, 'lib'), { recursive: true })
+  await fs.writeFile(path.join(install, 'lib', 'node'), fakeBundledNode(), { mode: 0o755 })
   return entry
 }
 
