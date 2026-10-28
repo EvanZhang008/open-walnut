@@ -15,7 +15,7 @@ import path from 'node:path'
 import zlib from 'node:zlib'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { TARGETS, assetName, builtName, fileName, filesIn, writeAssets } from '../../scripts/release-files.mjs'
-import { INSTALL_ACCEPT, LAUNCHER, LAUNCHER_LIB, buildPackages, installerSees, launcherManifest, platformManifest, probeRegistry, publishOrder, publishPackages, waitUntilVisible } from '../../scripts/npm-packages.mjs'
+import { INSTALL_ACCEPT, LAUNCHER, LAUNCHER_LIB, buildPackages, installerSees, launcherManifest, npmNeedsAuth, platformManifest, probeRegistry, publishOrder, publishPackages, waitUntilVisible } from '../../scripts/npm-packages.mjs'
 import { createRequire } from 'node:module'
 import { formula } from '../../scripts/homebrew/formula.mjs'
 import { hostTarget } from '../../scripts/release-build.mjs'
@@ -172,6 +172,24 @@ describe('npm-packages.mjs', () => {
     expect(seen).toHaveLength(1)
     expect(seen).not.toContain(LAUNCHER)
     expect(() => publishPackages({ dir: out, tag: '', dryRun: true, run: broken })).toThrow(/needs --tag/)
+  })
+
+  it('a package npm has never held says it needs its owner\'s setup; a login refusal for one that exists stays as npm said it', () => {
+    // 2026-10-28: the first nightly with the platform packages stopped on a bare ENEEDAUTH.
+    const needsAuth = (() => ({ status: 1, stdout: '', stderr: 'npm error code ENEEDAUTH\nnpm error need auth This command requires you to be logged in' })) as never
+    const quiet = { dir: out, tag: 'nightly', run: needsAuth, has: () => false, log: () => {}, waitVisible: (() => {}) as never }
+    expect(() => publishPackages({ ...quiet, exists: () => false })).toThrow(/has never been published.*releasing\.md, "npm packages".*re-runs this job\. The launcher was not published/s)
+    let thrown: unknown
+    try { publishPackages({ ...quiet, exists: () => true }) } catch (err) { thrown = err }
+    expect(String(thrown)).toMatch(/exited 1:[\s\S]*ENEEDAUTH/)
+    expect(String(thrown)).not.toMatch(/never been published/)
+  })
+
+  it('reads a login refusal from npm\'s words, not from any 4xx', () => {
+    expect(npmNeedsAuth('npm error code ENEEDAUTH')).toBe(true)
+    expect(npmNeedsAuth('npm error code E401\nnpm error 401 Unauthorized')).toBe(true)
+    expect(npmNeedsAuth(`npm error 403 You cannot publish over the previously published versions: ${VERSION}.`)).toBe(false)
+    expect(npmNeedsAuth('npm error 500 Internal Server Error')).toBe(false)
   })
 
   it('publishes the launcher only once installers see every platform package', () => {

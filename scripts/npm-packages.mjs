@@ -192,6 +192,17 @@ function onRegistry(name, version, extra) {
   return r.status === 0 && r.stdout.trim() === version
 }
 
+/** False only when npm answers that the package has no version at all (E404). */
+function packageExists(name, extra) {
+  const r = spawnSync('npm', ['view', name, 'name', ...extra], { encoding: 'utf8', timeout: 120_000 })
+  return !(r.status !== 0 && /\bE404\b/.test(`${r.stdout ?? ''}${r.stderr ?? ''}`))
+}
+
+/** npm refused the publish for want of a login, as trusted publishing does for a package it cannot match. */
+export function npmNeedsAuth(output) {
+  return /\bENEEDAUTH\b|\bE401\b/.test(output)
+}
+
 const sleepSync = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
 
 /** The registry installers read: --registry, else npm's own environment setting, else npm's default. */
@@ -250,7 +261,7 @@ export function waitUntilVisible(pkgs, { sees = installerSees, registry = probeR
   }
 }
 
-export function publishPackages({ dir, tag, provenance = false, dryRun = false, registry = null, run = spawnSync, log = (l) => process.stdout.write(`${l}\n`), waitVisible = waitUntilVisible, has = onRegistry }) {
+export function publishPackages({ dir, tag, provenance = false, dryRun = false, registry = null, run = spawnSync, log = (l) => process.stdout.write(`${l}\n`), waitVisible = waitUntilVisible, has = onRegistry, exists = packageExists }) {
   if (!tag) throw new Error('publish needs --tag (latest or nightly)')
   const extra = registry ? ['--registry', registry] : []
   const platforms = []
@@ -266,6 +277,12 @@ export function publishPackages({ dir, tag, provenance = false, dryRun = false, 
     const output = npmOut(r)
     if (r.status !== 0) {
       if (npmHoldsVersion(output, version)) { log(`npm already holds ${name}@${version} (published, or still being processed); not publishing it again`); continue }
+      // Trusted publishing only works for a package that exists and names this workflow:
+      // a package npm has never held needs its owner's one-time setup first (2026-10-28,
+      // the first nightly with the platform packages failed on a bare ENEEDAUTH).
+      if (npmNeedsAuth(output) && !exists(name, extra)) {
+        throw new Error(`npm publish ${name}@${version} needs a login: ${name} has never been published, and npm trusted publishing only works for a package that exists and names this workflow. Its owner sets it up once (docs/reference/releasing.md, "npm packages": create the npm organization, publish the package by hand with 2FA, set its trusted publisher), then re-runs this job. The launcher was not published, so no install changes.`)
+      }
       throw new Error(`npm publish ${name}@${version} exited ${r.status}:\n${output.slice(-2000)}`)
     }
     log(`${dryRun ? 'would publish' : 'published'} ${name}@${version} (${tag})`)
