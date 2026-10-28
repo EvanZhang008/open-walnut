@@ -106,10 +106,10 @@ describe('Inbox native item parity and execution boundaries', () => {
     expect(confirmation).toContain('GeometryReader { viewport in')
     expect(confirmation).toContain('ScrollViewReader { proxy in')
     expect(confirmation).toContain('.frame(height: min(160, max(0, viewport.size.height - 32)))')
-    // The scroll anchor is the voice field wrapped around the focused editor (2026-10-28, the
-    // mic on every box): its content is the TextEditor whose modifiers focus it, and the id
-    // goes on the field right after that content closes.
-    expect(confirmation).toMatch(/VoiceDictationField\((?:(?!VoiceDictationField)[\s\S])*?\)\s*\{\s*TextEditor\([^\n]*\n(?:\s*\.[^\n]*\n)*?\s*\.focused\(\$goalFocused\)\n(?:\s*\.[^\n]*\n)*\s*\}\n\s*\.id\(goalAnchor\)/)
+    // The editor takes focus; the anchor sits on its voice wrapper, so a scroll
+    // to it keeps the mic row in view with the box.
+    expect(confirmation).toContain('.focused($goalFocused)')
+    expect(confirmation).toMatch(/VoiceDictationField\([\s\S]*?TextEditor\(text: field\(\\\.goal\)\)[\s\S]*?\.focused\(\$goalFocused\)[\s\S]*?\n\s*\}\n\s*\.id\(goalAnchor\)/)
     expect(confirmation).toContain('.task(id: viewport.size.height)')
     expect(confirmation).toContain('guard !Task.isCancelled else { return }')
     expect(confirmation).toContain('if goalFocused { proxy.scrollTo(goalAnchor, anchor: .bottom) }')
