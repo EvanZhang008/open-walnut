@@ -669,6 +669,7 @@ describe('every free-form map in the Config type is accounted for', () => {
     proxy_log_dirs: 'usage.proxy_log_dirs: a log directory path per host',
     prices: 'usage.prices: per-model rates in USD per million tokens',
     hints: 'session.hints: keyed by hint kind; each value is typed MessageHintSettings (switch, triggers, placement, audience, text a person writes to the model)',
+    stt_corrections: 'a term the user says to the forms speech mishears it as (src/core/stt/corrections.ts)',
   }
 
   it('each map the types declare is masked or explained', () => {

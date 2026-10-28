@@ -21,6 +21,11 @@ env:
   # tests/setup/worker-budget.ts defaults CI jobs to 4 workers. Resource-heavy
   # tiers override that per command where parallelism causes timeout flakes.
   CI: 'true'
+  # onnxruntime-node's install script fetches its CUDA provider (about 240 MB from
+  # api.nuget.org) on every Linux x64 `bun install`; the CPU library ships in the
+  # package and Walnut embeds on the CPU (scripts/runtime-bundle/build.mjs skips it
+  # the same way). 2026-10-28: a nuget timeout failed a job before any test ran.
+  ONNXRUNTIME_NODE_INSTALL: skip
 
 jobs:
   # ── Gate 1: type-check + build. Everything else is moot if this fails. ───────

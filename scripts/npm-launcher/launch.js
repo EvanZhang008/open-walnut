@@ -234,6 +234,30 @@ function startDir(packageRoot, cwd, exists) {
   return os.homedir()
 }
 
+/**
+ * The Mac app sets OPEN_WALNUT_EXIT_ON_ORPHAN for the server it starts: when the
+ * app dies without stopping it (a crash, a force quit), the server must go too,
+ * or it holds the port with no app to show it. The app's child here is this
+ * launcher, so it watches for that: once its parent is gone (it was handed to
+ * launchd, or to a subreaper), `onOrphan` runs once. Returns the timer, or null
+ * when nothing asked for it.
+ */
+function watchForOrphan(onOrphan, env, ppid, everyMs) {
+  if (env === undefined) env = process.env
+  if (ppid === undefined) ppid = () => process.ppid
+  if (env.OPEN_WALNUT_EXIT_ON_ORPHAN !== '1') return null
+  const parent = ppid()
+  // Already launchd's (or no parent to read): nothing to outlive.
+  if (!(parent > 1)) return null
+  const timer = setInterval(() => {
+    if (ppid() === parent) return
+    clearInterval(timer)
+    onOrphan()
+  }, everyMs || 1000)
+  if (timer.unref) timer.unref()
+  return timer
+}
+
 function run(found, packageRoot) {
   const env = Object.assign({}, process.env, {
     OPEN_WALNUT_PACKAGE_ROOT: packageRoot,
@@ -251,7 +275,12 @@ function run(found, packageRoot) {
       forward[signal] = () => { if (!fromTerminal && child.exitCode === null && child.signalCode === null) child.kill(signal) }
       process.on(signal, forward[signal])
     }
-    const detach = () => { for (const signal of Object.keys(forward)) process.removeListener(signal, forward[signal]) }
+    // The app that started this died without stopping the file: stop it the way the app would have.
+    const orphanWatch = watchForOrphan(() => forward.SIGTERM())
+    const detach = () => {
+      for (const signal of Object.keys(forward)) process.removeListener(signal, forward[signal])
+      if (orphanWatch) clearInterval(orphanWatch)
+    }
     child.on('error', (err) => {
       detach()
       // A package manager that dropped the mode bit: give it back once.
@@ -276,4 +305,4 @@ function run(found, packageRoot) {
   start(false)
 }
 
-module.exports = { SCOPE, INSTALL_SH, isMusl, lddLibc, candidateTargets, hasMuslCxxRuntime, findFile, unreadableLine, installWritable, fetchWritable, archivePrefixOf, reinstallCommand, ownVersion, startDir, launch }
+module.exports = { SCOPE, INSTALL_SH, isMusl, lddLibc, candidateTargets, hasMuslCxxRuntime, findFile, unreadableLine, installWritable, fetchWritable, archivePrefixOf, reinstallCommand, ownVersion, startDir, watchForOrphan, launch }

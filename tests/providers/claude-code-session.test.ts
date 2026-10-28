@@ -441,7 +441,11 @@ describe('ClaudeCodeSession', () => {
   it('stores PID of spawned process', async () => {
     const collected = collectEvents('task-pid');
     const session = useDaemon(new ClaudeCodeSession('task-pid', 'proj', MOCK_CLI));
-    session.send('pid test');
+    // A turn that leaves the process alive, as the real FIFO-mode CLI does: the
+    // mock's default mode exits at its result, and the pid goes with that exit,
+    // so reading it after the result raced the exit (2026-10-28 CI, null after
+    // two retries).
+    session.send('snapshot-clean-turn');
 
     // The pid arrives when the DAEMON's spawn resolves, not synchronously inside
     // send() — the daemon owns the process now, so walnut learns the pid from the

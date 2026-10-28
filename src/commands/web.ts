@@ -25,6 +25,7 @@ import {
   removeEphemeralRuntimeDirs,
   EPHEMERAL_SERVER_PID_FILE,
 } from './ephemeral-registry.js'
+import { watchForOrphan } from '../lib/exit-on-orphan.js'
 import { copyDataSnapshot, dropSnapshotQueuedMessages, ephemeralChildEnv, pauseSnapshotCronJobs, stopSnapshotTriage, stopSnapshotTunnels, stripSnapshotPushTokens } from './ephemeral-snapshot.js'
 
 /** Auto-shutdown after 10 minutes of no HTTP requests. */
@@ -191,6 +192,11 @@ export async function runWeb(options: {
   process.on('SIGTERM', shutdown)
   process.on('SIGHUP', shutdown)
   armGracefulSignalExit()
+  // The Mac app that started this died without stopping it: stop as it would have.
+  watchForOrphan(() => {
+    try { fs.appendFileSync('/tmp/open-walnut-exit.log', `[${new Date().toISOString()}] SERVER EXIT: the app that started it is gone pid=${process.pid}\n`) } catch { /* best-effort */ }
+    void shutdown()
+  })
 
   await startServer({ port, dev: !!options.dev })
   if (readyFile) {

@@ -88,6 +88,53 @@ describe('the npm launcher exits as its file did', () => {
     expect(res.stdout.trim()).toBe(fs.realpathSync(path.dirname(path.dirname(bin))))
   })
 
+  // The Mac app sets OPEN_WALNUT_EXIT_ON_ORPHAN and starts the launcher; a crash or a
+  // force quit leaves the launcher to launchd, and the file it runs held the port
+  // forever (2026-10-28 rehearsal: "the server goes when the app does" timed out).
+  // Here a shell stands in for the app: it starts the launcher, waits until the file
+  // runs, and exits without a word to either.
+  function orphaned(withEnv: boolean): { pid: number; term: () => boolean; stop: () => void } {
+    const dir = fs.mkdtempSync(path.join(tmp, 'orphan-'))
+    const started = path.join(dir, 'started')
+    const term = path.join(dir, 'term')
+    const bin = layout(`trap 'echo term > "${term}"; exit 0' TERM; echo $$ > "${started}.tmp" && mv "${started}.tmp" "${started}"; while :; do sleep 0.1; done`)
+    const res = spawnSync('/bin/sh', ['-c',
+      `${withEnv ? 'OPEN_WALNUT_EXIT_ON_ORPHAN=1 ' : ''}"$1" "$2" </dev/null >/dev/null 2>&1 &
+       n=0; while [ ! -f "$3" ] && [ $n -lt 100 ]; do sleep 0.1; n=$((n+1)); done; exit 0`,
+      'sh', node, bin, started], { encoding: 'utf8', timeout: 20_000 })
+    expect(res.status, res.stderr).toBe(0)
+    const pid = Number(fs.readFileSync(started, 'utf8').trim())
+    expect(pid).toBeGreaterThan(1)
+    const alive = () => { try { process.kill(pid, 0); return true } catch { return false } }
+    return {
+      pid,
+      term: () => fs.existsSync(term),
+      // Only the file this test started, by the pid it wrote itself.
+      stop: () => { if (alive()) process.kill(pid, 'SIGKILL') },
+    }
+  }
+
+  it('asked to (the Mac app), it stops the file once the process that started it is gone', async () => {
+    const file = orphaned(true)
+    try {
+      const deadline = Date.now() + 10_000
+      while (!file.term() && Date.now() < deadline) await new Promise((r) => setTimeout(r, 100))
+      expect(file.term(), 'the file got no SIGTERM after the app was gone').toBe(true)
+    } finally {
+      file.stop()
+    }
+  })
+
+  it('not asked to (a terminal, a service), the file outlives the shell that started it', async () => {
+    const file = orphaned(false)
+    try {
+      await new Promise((r) => setTimeout(r, 2_500))
+      expect(file.term()).toBe(false)
+    } finally {
+      file.stop()
+    }
+  })
+
   it('startDir: this directory while it exists, else PWD, else the package root, else home', () => {
     const gone = () => { throw Object.assign(new Error('ENOENT: process.cwd failed'), { code: 'ENOENT' }) }
     expect(startDir('/pkg', () => '/here', () => true)).toBe('/here')
