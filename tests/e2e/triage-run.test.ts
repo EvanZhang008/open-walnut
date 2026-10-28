@@ -211,10 +211,10 @@ describe('Inbox Triage runs, end to end', () => {
     expect(fire.outcome).toBe('fired');
     expect(fire.items).toBe(22);
     const injected: string = fire.injected?.preview ?? '';
-    // The preview is what the run DISPATCHED, which still carries the count hint
-    // line (the executor strips it on the way into the session). Honest either way
-    // — what matters is that the audit shows one envelope and its counts.
-    expect(injected).toContain('WALNUT_TRIAGE_COUNT: 22');
+    // The preview is what the session received (delivered.text): the executor
+    // consumed the count hint line on the way in, so it is gone here. The count
+    // itself is proven by fire.items above and by the envelope's note below.
+    expect(injected).not.toContain('WALNUT_TRIAGE_COUNT');
     expect(injected).toContain('<walnut-message kind="trigger" from="Inbox Triage"');
     expect(injected).toContain('16 new mails in 2 accounts · 6 Slack items');
     expect(injected).toContain('Mail — 16 new messages across 2 accounts');

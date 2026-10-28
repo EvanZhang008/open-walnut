@@ -10,13 +10,14 @@
  * Tests 1-3 go through POST /api/v1/tasks/:id/start (the route behind the
  * session_start op) on a real server; test 4 calls session-tracker directly.
  *
- * They deliberately post a RELATIVE cwd, which the route refuses with 400 —
- * AFTER the slot check. So 409 means "the slot was taken" and 400 means "the
- * slot was free", and no session is ever spawned: a spawned session would still
- * be settling its process_status while test 4 counts running sessions, which
- * made that count flap by one. A start that would continue a conversation in
- * another directory is refused (409) before anything is sent, so the continue
- * case spawns nothing either.
+ * They deliberately name an UNKNOWN host, which the route refuses with 400
+ * AFTER the slot check (a relative cwd no longer works as the probe: the launch
+ * choices are checked before the slot now). So 409 means "the slot was taken"
+ * and 400 means "the slot was free", and no session is ever spawned: a spawned
+ * session would still be settling its process_status while test 4 counts
+ * running sessions, which made that count flap by one. A start that would
+ * continue a conversation in another place (here, another host) is refused
+ * (409) before anything is sent, so the continue case spawns nothing either.
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import fs from 'node:fs/promises';
@@ -42,12 +43,12 @@ function apiUrl(p: string): string {
   return `http://localhost:${port}${p}`;
 }
 
-/** Ask the start route for a session, with a cwd it will refuse (see header). */
+/** Ask the start route for a session, on a host it will refuse (see header). */
 async function startSession(taskId: string): Promise<{ status: number; body: Record<string, unknown> }> {
   const res = await fetch(apiUrl(`/api/v1/tasks/${taskId}/start`), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ message: 'Continue working', cwd: 'not/absolute' }),
+    body: JSON.stringify({ message: 'Continue working', host: 'no-such-host' }),
   });
   return { status: res.status, body: await res.json() as Record<string, unknown> };
 }
@@ -94,8 +95,8 @@ describe('POST /tasks/:id/start — the slot rule', () => {
 
     const { status, body } = await startSession(taskId);
     // The start found the task's one conversation and would continue it, but in
-    // another directory than the conversation's, so it is refused (a new place is
-    // a new task: task_transfer). It never reached the cwd check (400).
+    // another place (host) than the conversation's, so it is refused (a new place is
+    // a new task: task_transfer). It never reached the host check (400).
     expect(status).toBe(409);
     expect(JSON.stringify(body)).toContain('already has its one session');
     // The stopped session is still the task's session.
@@ -127,9 +128,9 @@ describe('POST /tasks/:id/start — the slot rule', () => {
     await linkSessionSlot(taskId, 'failed-start-sess-001', 'exec');
 
     const { status, body } = await startSession(taskId);
-    // Past the slot check, refused only on the deliberately relative cwd.
+    // Past the slot check, refused only on the deliberately unknown host.
     expect(status).toBe(400);
-    expect(JSON.stringify(body)).toContain('absolute');
+    expect(JSON.stringify(body)).toContain('Unknown host');
     // The failed start was detached as history, not deleted.
     const { getSessionByClaudeId } = await import('../../src/core/session-tracker.js');
     const row = await getSessionByClaudeId('failed-start-sess-001');
