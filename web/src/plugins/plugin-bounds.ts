@@ -91,6 +91,8 @@ interface Placed {
   written: string | null
   /** The plugin's translate under ours while we move it. */
   baseTranslate: string
+  /** The limits and the clip we wrote last. */
+  caps: string
   clip: string
   resize: ResizeObserver
 }
@@ -159,6 +161,7 @@ export function keepInBox(box: HTMLElement): () => void {
         shift: { x: 0, y: 0 },
         written: null,
         baseTranslate: 'none',
+        caps: '',
         clip: '',
         resize: new ResizeObserver(() => now(el)),
       }
@@ -175,7 +178,8 @@ export function keepInBox(box: HTMLElement): () => void {
     const e = entry
     const maxWidth = capped(e.own.maxWidth, shown.width)
     const maxHeight = capped(e.own.maxHeight, shown.height)
-    if (el.style.getPropertyValue('max-width') !== maxWidth || el.style.getPropertyValue('max-height') !== maxHeight) {
+    if (`${maxWidth} ${maxHeight}` !== e.caps) {
+      e.caps = `${maxWidth} ${maxHeight}`
       quietly(el, () => {
         el.style.setProperty('max-width', maxWidth, 'important')
         el.style.setProperty('max-height', maxHeight, 'important')
@@ -192,8 +196,9 @@ export function keepInBox(box: HTMLElement): () => void {
           // Its translate as the plugin has it now, unless ours is on it already.
           const base = e.written === null ? getComputedStyle(el).translate || 'none' : e.baseTranslate
           e.baseTranslate = base
-          e.written = movedBy(base, shift.x, shift.y)
-          el.style.setProperty('translate', e.written, 'important')
+          el.style.setProperty('translate', movedBy(base, shift.x, shift.y), 'important')
+          // As the browser writes it back ('56px 0px' reads '56px'): what tells ours from the plugin's.
+          e.written = el.style.getPropertyValue('translate')
         } else {
           restore(el, e, 'translate')
           e.written = null
