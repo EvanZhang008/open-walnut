@@ -1,8 +1,8 @@
 import SwiftUI
 
 /// The letter's conversation: the human's answers and replies, and whatever the
-/// origin agent wrote back, oldest first. The reader gives it its own scroll
-/// under the document, opening at the newest turn (`LetterPaneSplit`).
+/// origin agent wrote back, oldest first. The reader shows it in a box with its
+/// own scroll under the letter, opening at the newest turn (`LetterConversationBox`).
 ///
 /// A turn can be plain text or carry a rich body of its own (an agent replying
 /// with `wn tools call human_inbox_reply --markdown`), and the rich body goes

@@ -585,9 +585,9 @@ final class LetterReplyUITests: XCTestCase {
     }
 
     /// The report (2026-10-25): with a long document and a long thread, the
-    /// newest reply was out of reach. Now the thread has its own scroll under the
-    /// document and opens at its newest turn, which stays put while the letter
-    /// lays out.
+    /// newest reply was out of reach. Now the letter is read first, and at the
+    /// end of the page the conversation box fills the screen, opened at its
+    /// newest turn, which stays put.
     @MainActor
     func testALongThreadOpensAtItsNewestTurnUnderALongDocument() async throws {
         let stub = try await prepared()
@@ -596,18 +596,27 @@ final class LetterReplyUITests: XCTestCase {
         openLetter(app, Self.letterB)
         let newest = turn(app, "inbox.letter.agentTurn", containing: "Newest agent note")
         XCTAssertTrue(newest.waitForExistence(timeout: 15), "the newest turn never showed")
+        try await Task.sleep(for: .seconds(1))
+        try await stub.screenshot(app, "long-thread-open")
+        XCTAssertTrue(element(app, "inbox.letter.subject").isHittable, "the letter does not open at its top")
+        scrollPageToTheBox(app)
+        try await Task.sleep(for: .seconds(1))
+        let bar = element(app, "inbox.letter.threadBar")
+        try await stub.screenshot(app, "long-thread-page-end-check")
+        XCTAssertEqual(bar.frame.minY, app.navigationBars.firstMatch.frame.maxY, accuracy: 24,
+                       "at the end of the page the box does not fill the screen")
         let first = newest.frame.minY
         var drift: CGFloat = 0
         for _ in 0..<12 {
             try await Task.sleep(for: .milliseconds(250))
             drift = max(drift, abs(newest.frame.minY - first))
         }
-        try await stub.screenshot(app, "long-thread-open")
+        try await stub.screenshot(app, "long-thread-page-end")
         XCTAssertLessThanOrEqual(drift, 1, "the thread moved by \(drift) after it opened")
         XCTAssertTrue(newest.isHittable, "the newest turn is not in view")
-        XCTAssertLessThanOrEqual(newest.frame.maxY, element(app, "inbox.letter.composer").frame.minY + 0.5)
-        XCTAssertTrue(element(app, "inbox.letter.subject").isHittable, "the document is not on top")
-        XCTAssertTrue(element(app, "inbox.letter.threadBar").exists, "no bar between the two scrolls")
+        let composerTop = element(app, "inbox.letter.composer").frame.minY
+        XCTAssertLessThanOrEqual(newest.frame.maxY, composerTop + 0.5)
+        XCTAssertLessThanOrEqual(composerTop - newest.frame.maxY, 80, "the newest turn sits far above the box's end")
         XCTAssertTrue(replyField(app).isHittable)
     }
 
@@ -616,15 +625,16 @@ final class LetterReplyUITests: XCTestCase {
     @MainActor
     func testANewReplyWhileReadingUpTheThreadShowsAButtonAndMovesNothing() async throws {
         let stub = try await prepared()
-        try await stub.call("POST", "__stub/letter-reply-long?id=\(Self.letterB)&n=14")
+        try await stub.call("POST", "__stub/letter-reply-long?id=\(Self.letterB)&n=14&sections=3")
         let app = try launchPaired()
         openLetter(app, Self.letterB)
         XCTAssertTrue(turn(app, "inbox.letter.agentTurn", containing: "Newest agent note").waitForExistence(timeout: 15))
         let conversation = app.scrollViews["inbox.letter.conversation"]
         XCTAssertTrue(conversation.waitForExistence(timeout: 5))
+        scrollPageToTheBox(app)
         let newest = turn(app, "inbox.letter.agentTurn", containing: "Newest agent note")
         for _ in 0..<6 where newest.isHittable {
-            conversation.swipeDown()
+            swipeDownInView(conversation, app)
             try await Task.sleep(for: .milliseconds(500))
         }
         try await Task.sleep(for: .seconds(1.5))
@@ -633,28 +643,27 @@ final class LetterReplyUITests: XCTestCase {
             .map { self.turn(app, "inbox.letter.humanTurn", containing: "Reply \($0):") }
             .first { $0.exists && $0.isHittable }
         guard let marker else { return XCTFail("no reply in view after scrolling up the thread") }
-        let before = marker.frame.minY
+        let bar = element(app, "inbox.letter.threadBar")
+        // Where the reply sits in the box: the page moves for the pull, the box must not.
+        let before = marker.frame.minY - bar.frame.minY
 
         try await stub.call("POST", "__stub/letter-reply-agent?id=\(Self.letterB)&text=Fresh%20agent%20note")
-        // Nothing pushes letter changes to the app; a pull on the document re-reads it.
-        // A long, slow drag: a swipe across the short document pane is too short a pull.
-        // The pane's frame starts under the navigation bar: the pull starts below it.
-        let document = app.scrollViews["inbox.letter.document"]
-        let below = app.navigationBars.firstMatch.frame.maxY + 16 - document.frame.minY
-        let start = document.coordinate(withNormalizedOffset: .zero)
-            .withOffset(CGVector(dx: document.frame.width / 2, dy: below))
-        start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: 0, dy: 420)),
-                    withVelocity: .slow, thenHoldForDuration: 0.3)
+        // Nothing pushes letter changes to the app; a pull on the letter re-reads it.
+        // Back to the top of the page by the box's title (a drag in the box scrolls
+        // the box), then a long, slow pull from under the navigation bar.
+        scrollPageToTheTop(app)
+        let fresh = turn(app, "inbox.letter.agentTurn", containing: "Fresh agent note")
+        pullUntil(fresh, app)
+        XCTAssertTrue(fresh.exists, "the pull never re-read the letter")
+        scrollPageToTheBox(app)
         let button = element(app, "inbox.letter.newReply")
-        if !button.waitForExistence(timeout: 15) { try await stub.screenshot(app, "new-reply-missing") }
+        if !button.waitForExistence(timeout: 10) { try await stub.screenshot(app, "new-reply-missing") }
         XCTAssertTrue(button.exists, "no New reply button")
         try await Task.sleep(for: .seconds(1))
         try await stub.screenshot(app, "new-reply-button")
-        XCTAssertEqual(marker.frame.minY, before, accuracy: 1, "the new reply moved the thread")
+        XCTAssertEqual(marker.frame.minY - bar.frame.minY, before, accuracy: 1, "the new reply moved the thread")
 
         button.tap()
-        let fresh = turn(app, "inbox.letter.agentTurn", containing: "Fresh agent note")
-        XCTAssertTrue(fresh.waitForExistence(timeout: 10))
         try await Task.sleep(for: .seconds(1))
         try await stub.screenshot(app, "new-reply-after-tap")
         XCTAssertTrue(fresh.isHittable, "the tap did not bring the new reply into view")
@@ -662,9 +671,38 @@ final class LetterReplyUITests: XCTestCase {
         XCTAssertFalse(button.exists, "the button stayed after the tap")
     }
 
-    /// A swipe down inside the part of the conversation pane that shows, between
-    /// the bar over it and the reply box. The pane's frame runs on under the reply
-    /// box and the keyboard, so `swipeDown()` from its centre lands on the keyboard.
+    /// Reading the letter while the box follows its newest turn, a new reply
+    /// lands in the box and leaves the page where the reader is: the box's own
+    /// scroll to its end must not drag the page along.
+    @MainActor
+    func testANewReplyWhileReadingTheLetterLeavesThePageWhereItIs() async throws {
+        let stub = try await prepared()
+        try await stub.call("POST", "__stub/letter-reply-long?id=\(Self.letterB)&n=6&sections=8")
+        let app = try launchPaired()
+        openLetter(app, Self.letterB)
+        let subject = element(app, "inbox.letter.subject")
+        XCTAssertTrue(subject.waitForExistence(timeout: 15))
+        try await Task.sleep(for: .seconds(1))
+        XCTAssertTrue(subject.isHittable, "the letter does not open at its top")
+        let before = subject.frame.minY
+
+        try await stub.call("POST", "__stub/letter-reply-agent?id=\(Self.letterB)&text=Fresh%20agent%20note")
+        let fresh = turn(app, "inbox.letter.agentTurn", containing: "Fresh agent note")
+        pullUntil(fresh, app)
+        XCTAssertTrue(fresh.exists, "the re-read never brought the reply")
+        try await Task.sleep(for: .seconds(1.5))
+        try await stub.screenshot(app, "new-reply-while-reading-the-letter")
+        XCTAssertEqual(subject.frame.minY, before, accuracy: 2, "the new reply moved the page off the letter")
+
+        scrollPageToTheBox(app)
+        try await Task.sleep(for: .seconds(1))
+        try await stub.screenshot(app, "new-reply-while-reading-the-letter-box")
+        XCTAssertTrue(fresh.isHittable, "the box did not follow to the new reply")
+    }
+
+    /// A swipe down inside the part of the conversation box that shows, between
+    /// its title and the reply box. `swipeDown()` starts at the frame's centre,
+    /// which can be off screen or under the keyboard.
     @MainActor
     func swipeDownInView(_ pane: XCUIElement, _ app: XCUIApplication) {
         let top = element(app, "inbox.letter.threadBar").frame.maxY
@@ -674,6 +712,82 @@ final class LetterReplyUITests: XCTestCase {
         let start = origin.withOffset(CGVector(dx: x, dy: top + 12 - pane.frame.minY))
         let end = origin.withOffset(CGVector(dx: x, dy: bottom - 12 - pane.frame.minY))
         start.press(forDuration: 0.02, thenDragTo: end, withVelocity: .fast, thenHoldForDuration: 0)
+    }
+
+    /// Scroll the page to its end, where the conversation box fills the screen:
+    /// drag the letter up until the box shows, then drag the box's title (outside
+    /// the box's own scroll) up under the navigation bar, as a reader would.
+    @MainActor
+    func scrollPageToTheBox(_ app: XCUIApplication) {
+        let bar = element(app, "inbox.letter.threadBar")
+        guard bar.waitForExistence(timeout: 5) else { return XCTFail("no conversation box") }
+        let window = app.windows.firstMatch
+        let origin = window.coordinate(withNormalizedOffset: .zero)
+        let x = window.frame.width / 2
+        // A long letter (the stub's is about 9,000pt) takes many flings.
+        var still = 0
+        for _ in 0..<40 {
+            let navBottom = app.navigationBars.firstMatch.frame.maxY
+            let composerTop = element(app, "inbox.letter.composer").frame.minY
+            let top = bar.frame.minY
+            if top <= navBottom + 2 { return }
+            let onScreen = top < composerTop - 30
+            let startY = onScreen ? top + 10 : composerTop - 20
+            origin.withOffset(CGVector(dx: x, dy: startY))
+                .press(forDuration: 0.02, thenDragTo: origin.withOffset(CGVector(dx: x, dy: navBottom + 4)),
+                       withVelocity: .fast, thenHoldForDuration: 0)
+            // Let the fling settle before the next read.
+            Thread.sleep(forTimeInterval: 0.6)
+            // The page's end: the title, on screen, no longer moves.
+            still = onScreen && abs(bar.frame.minY - top) < 1 ? still + 1 : 0
+            if still >= 2 { return }
+        }
+        XCTFail("the page never reached the conversation box")
+    }
+
+    /// Scroll the page back to the letter's top by dragging the box's title down.
+    @MainActor
+    func scrollPageToTheTop(_ app: XCUIApplication) {
+        let subject = element(app, "inbox.letter.subject")
+        let bar = element(app, "inbox.letter.threadBar")
+        let window = app.windows.firstMatch
+        let origin = window.coordinate(withNormalizedOffset: .zero)
+        let x = window.frame.width / 2
+        for _ in 0..<40 {
+            let navBottom = app.navigationBars.firstMatch.frame.maxY
+            if subject.frame.minY >= navBottom { return }
+            let composerTop = element(app, "inbox.letter.composer").frame.minY
+            // On the box's title while it shows, else anywhere on the letter.
+            let top = bar.frame.minY
+            let startY = top > navBottom && top < composerTop - 40 ? top + 10 : navBottom + 10
+            origin.withOffset(CGVector(dx: x, dy: startY))
+                .press(forDuration: 0.02, thenDragTo: origin.withOffset(CGVector(dx: x, dy: composerTop - 10)),
+                       withVelocity: .fast, thenHoldForDuration: 0)
+            Thread.sleep(forTimeInterval: 0.6)
+        }
+        XCTFail("the page never got back to the letter's top")
+    }
+
+    /// Pull until `element` shows: a pull that ends before the spinner shows
+    /// re-reads nothing, so up to three.
+    @MainActor
+    func pullUntil(_ element: XCUIElement, _ app: XCUIApplication) {
+        for _ in 0..<3 where !element.exists {
+            pullToRefresh(app)
+            _ = element.waitForExistence(timeout: 10)
+        }
+    }
+
+    /// A long, slow pull from just under the navigation bar: re-reads the letter
+    /// (nothing pushes letter changes to the app). The page must be at its top.
+    @MainActor
+    func pullToRefresh(_ app: XCUIApplication) {
+        let document = app.scrollViews["inbox.letter.document"]
+        let below = app.navigationBars.firstMatch.frame.maxY + 16 - document.frame.minY
+        let start = document.coordinate(withNormalizedOffset: .zero)
+            .withOffset(CGVector(dx: document.frame.width / 2, dy: below))
+        start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: 0, dy: 420)),
+                    withVelocity: .slow, thenHoldForDuration: 0.3)
     }
 
     @MainActor

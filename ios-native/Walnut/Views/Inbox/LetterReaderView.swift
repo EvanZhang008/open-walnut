@@ -52,18 +52,10 @@ struct LetterReaderView: View {
     /// From a Send at the accessibility sizes until its keyboard is asked to
     /// leave (see `handOver`); the letter's scroll for that Send waits for it.
     @State private var keyboardLeavesAfterSend = false
-    /// The two scrolls' measurements (`LetterPaneSplit`): what both panes share,
-    /// the bar between them, and each pane's content.
-    @State private var paneSpace: CGFloat = 0
-    /// How far the panes run up under the navigation bar. The page runs up
-    /// behind the bar, so the document pane starts under it: without this the
-    /// bar hid about 100pt of the document's share, and a swipe in its upper
-    /// half landed on the bar (the pane could not be scrolled back to the top
-    /// or pulled to refresh).
-    @State private var paneTopInset: CGFloat = 0
-    @State private var paneBarHeight: CGFloat = 0
+    /// The page's visible height (between the navigation bar and the reply box)
+    /// and the letter's own height: together they size the conversation box.
+    @State private var pageVisibleHeight: CGFloat = 0
     @State private var documentContentHeight: CGFloat = 0
-    @State private var conversationContentHeight: CGFloat = 0
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     /// A DEFERRED document (over the server's inline threshold) is streamed to a
     /// local file and rendered from there — never held as a String, so a 100MB
@@ -143,89 +135,135 @@ struct LetterReaderView: View {
         }
     }
 
-    // MARK: - The two scrolls
+    // MARK: - The page and its conversation box
 
-    /// One scroll until the letter has a thread. Then two: the document on top
-    /// and the conversation under it (`LetterPaneSplit`), each scrolling on its
-    /// own, the conversation opening at its newest turn. A long document no
-    /// longer stands between the reader and the newest reply.
+    /// One page scroll: the letter, and once it has a thread, the conversation
+    /// in a box under it (`LetterConversationBox`). The box scrolls on its own
+    /// and opens at its newest turn; scrolled to the end of the page, it fills
+    /// the screen between the navigation bar and the reply box. A short letter
+    /// and its box share one screen, so nothing needs scrolling.
+    ///
+    /// Two panes split by a bar used to share the screen (2026-10-26, the user:
+    /// "so ugly"), and before that one scroll held both, which put a long
+    /// document between the reader and the newest reply (2026-10-25).
     @ViewBuilder
     private var panes: some View {
-        let split = letter.map(hasThread) ?? false
-        VStack(spacing: 0) {
-            // One structure either way, so the document is never rebuilt (its
-            // place and its rendered body kept) when the first reply splits it.
+        let boxed = letter.map(hasThread) ?? false
+        ScrollViewReader { page in
             ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
-                    if let letter {
-                        documentContent(letter)
-                        if !split, let note = deliveryNote { deliveryLine(note) }
-                    } else if loading {
-                        ProgressView("Opening…").controlSize(.large)
-                            .frame(maxWidth: .infinity, minHeight: 200)
-                    } else if let loadError {
-                        ContentUnavailableView {
-                            Label("Could not open this letter", systemImage: "envelope.badge.shield.half.filled")
-                        } description: {
-                            Text(loadError)
-                        } actions: {
-                            Button("Try again") { Task { await load() } }
+                // One structure either way, so the document is never rebuilt (its
+                // place and its rendered body kept) when the first reply adds the box.
+                VStack(spacing: 0) {
+                    VStack(alignment: .leading, spacing: 14) {
+                        if let letter {
+                            documentContent(letter)
+                            if !boxed, let note = deliveryNote { deliveryLine(note) }
+                        } else if loading {
+                            ProgressView("Opening…").controlSize(.large)
+                                .frame(maxWidth: .infinity, minHeight: 200)
+                        } else if let loadError {
+                            ContentUnavailableView {
+                                Label("Could not open this letter", systemImage: "envelope.badge.shield.half.filled")
+                            } description: {
+                                Text(loadError)
+                            } actions: {
+                                Button("Try again") { Task { await load() } }
+                            }
                         }
                     }
+                    .padding(.horizontal, 16)
+                    .padding(.top, 8)
+                    .padding(.bottom, boxed ? 16 : 24)
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { documentContentHeight = $0 }
+                    if let letter, boxed {
+                        conversationBox(letter)
+                            .id(Self.boxId)
+                    }
                 }
-                .padding(.horizontal, 16)
-                .padding(.top, 8)
-                .padding(.bottom, split ? 14 : 24)
-                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { documentContentHeight = $0 }
             }
-            .frame(height: split ? LetterPaneSplit.documentHeight(
-                space: paneSpace, bar: paneBarHeight,
-                document: documentContentHeight, conversation: conversationContentHeight
-            ).map { $0 + paneTopInset } : nil)
+            // The page's frame is what shows: it starts under the navigation bar
+            // and ends at the reply box (and the keyboard). Its safe-area insets,
+            // and the scroll geometry's content insets, still report the bar and
+            // the reply box: taking them off again made the box half the screen
+            // (611pt of page, a 348pt box).
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { pageVisibleHeight = $0 }
             // Dragging the letter down puts the keyboard away, as in a chat.
             .scrollDismissesKeyboard(.interactively)
             .refreshable { await refresh() }
             .accessibilityIdentifier("inbox.letter.document")
-            if let letter, split {
-                conversationBar(letter)
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 14) {
-                        thread(letter)
-                        if let note = deliveryNote { deliveryLine(note) }
-                    }
-                    .padding(.horizontal, 16)
-                    .padding(.top, 10)
-                    .padding(.bottom, 24)
-                    .id(Self.contentId)
-                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { conversationContentHeight = $0 }
-                }
-                .scrollDismissesKeyboard(.interactively)
-                // On the scroll view itself: put after the modifier, the name
-                // would also cover its "New reply" button.
-                .accessibilityIdentifier("inbox.letter.conversation")
-                // Opens at the newest turn and follows it while the reader is at
-                // the end; a sent reply and its status line come into view above
-                // the reply box.
-                .modifier(LetterFollowsNewestStatus(
-                    key: newestStatusKey, target: nil, contentId: Self.contentId, sendTick: followTick,
-                    keyboardLeaving: keyboardLeavesAfterSend, turnCount: threadItemCount(letter)
-                ))
+            // Writing a reply or sending one brings the whole box into view.
+            .onChange(of: replyFocused) { _, focused in
+                if focused, boxed { showBox(page) }
             }
-        }
-        .onGeometryChange(for: PaneGeometry.self) { proxy in
-            PaneGeometry(
-                topInset: proxy.safeAreaInsets.top,
-                space: proxy.size.height - proxy.safeAreaInsets.top - proxy.safeAreaInsets.bottom
-            )
-        } action: { geometry in
-            paneTopInset = geometry.topInset
-            paneSpace = geometry.space
+            .onChange(of: followTick) { _, _ in
+                if boxed { showBox(page) }
+            }
         }
     }
 
-    private struct PaneGeometry: Equatable {
-        var topInset: CGFloat
-        var space: CGFloat
+    /// Scroll the page so the conversation box ends at the bottom of the screen.
+    private func showBox(_ page: ScrollViewProxy) {
+        Task { @MainActor in
+            // After the keyboard's own layout pass, so the box's new height counts.
+            try? await Task.sleep(for: .milliseconds(350))
+            withAnimation(.easeOut(duration: 0.25)) { page.scrollTo(Self.boxId, anchor: .bottom) }
+        }
+    }
+
+    /// The conversation: a titled box with its own scroll, lifted off the page.
+    private func conversationBox(_ letter: Letter) -> some View {
+        let shape = UnevenRoundedRectangle(topLeadingRadius: 20, topTrailingRadius: 20, style: .continuous)
+        return VStack(spacing: 0) {
+            conversationHeader(letter)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    thread(letter)
+                    if let note = deliveryNote { deliveryLine(note) }
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 4)
+                .padding(.bottom, 16)
+                .id(Self.contentId)
+            }
+            .scrollDismissesKeyboard(.interactively)
+            // The page already keeps the box above the reply box and the
+            // keyboard (the box shrinks with them): inset again here, the
+            // newest turn ended well above the box's bottom edge.
+            .ignoresSafeArea(edges: .bottom)
+            // On the scroll view itself: put after the modifier, the name
+            // would also cover its "New reply" button.
+            .accessibilityIdentifier("inbox.letter.conversation")
+            // Opens at the newest turn and follows it while the reader is at
+            // the end; a sent reply and its status line come into view.
+            .modifier(LetterFollowsNewestStatus(
+                key: newestStatusKey, target: nil, contentId: Self.contentId, sendTick: followTick,
+                keyboardLeaving: keyboardLeavesAfterSend, turnCount: threadItemCount(letter)
+            ))
+        }
+        .frame(height: LetterConversationBox.height(visible: pageVisibleHeight, document: documentContentHeight))
+        .background(Color(.systemBackground), in: shape)
+        .clipShape(shape)
+        .overlay { shape.strokeBorder(Color(.separator).opacity(0.6), lineWidth: 0.5) }
+        .shadow(color: .black.opacity(0.10), radius: 10, y: -2)
+    }
+
+    /// The box's title row. Outside the box's own scroll, so a drag on it moves
+    /// the page: a box that fills the screen never traps the reader in it.
+    private func conversationHeader(_ letter: Letter) -> some View {
+        let count = threadItemCount(letter)
+        return HStack(alignment: .firstTextBaseline) {
+            Text("Conversation").font(.subheadline.weight(.semibold))
+            Spacer()
+            Text(count == 1 ? "1 reply" : "\(count) replies")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 12)
+        .padding(.bottom, 8)
+        .contentShape(Rectangle())
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("inbox.letter.threadBar")
     }
 
     /// The letter itself: everything above its conversation.
@@ -248,21 +286,6 @@ struct LetterReaderView: View {
 
     private func threadItemCount(_ letter: Letter) -> Int {
         letter.threadEntries.count + replies.pendingReplies(for: letterId).count
-    }
-
-    /// The bar between the two scrolls, naming the conversation under it.
-    private func conversationBar(_ letter: Letter) -> some View {
-        Text("Thread \u{00B7} \(threadItemCount(letter))")
-            .font(.caption.weight(.semibold))
-            .foregroundStyle(.secondary)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 16)
-            .padding(.vertical, 7)
-            .background(Color(.secondarySystemBackground))
-            .overlay(alignment: .top) { Divider() }
-            .overlay(alignment: .bottom) { Divider() }
-            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { paneBarHeight = $0 }
-            .accessibilityIdentifier("inbox.letter.threadBar")
     }
 
     private func refresh() async {
@@ -581,6 +604,7 @@ struct LetterReaderView: View {
     }
 
     static let contentId = "letter.content"
+    static let boxId = "letter.conversationBox"
 
     /// The thread's newest reply (recorded or pending), in the order it renders.
     private var newestReplyItem: LetterThreadItem? {

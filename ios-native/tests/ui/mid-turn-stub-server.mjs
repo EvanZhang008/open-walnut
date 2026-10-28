@@ -1251,9 +1251,10 @@ function answerInbox(p, req, res, raw, url) {
 //        agent/human exchanges, each human turn recorded with a clientId and a
 //        queued delivery: a letter taller than the screen whose newest reply
 //        already has a status line.
-//   POST /__stub/letter-reply-long?id=I&n=N → letter I (default b) becomes a
-//        daily-digest-sized html document with N exchanges under it (as
-//        letter-reply-thread) and one rich agent turn: the long-thread case.
+//   POST /__stub/letter-reply-long?id=I&n=N[&sections=S] → letter I (default b)
+//        becomes a daily-digest-sized html document (S sections, default 60)
+//        with N exchanges under it (as letter-reply-thread) and one rich agent
+//        turn: the long-thread case.
 //   POST /__stub/letter-reply-agent?id=I&text=T → the agent answers in letter I's
 //        thread now (seen by the reader on its next re-read, e.g. a pull).
 //   GET  /__stub/letter-reply-state → every human-reply POST this generation
@@ -1371,7 +1372,8 @@ function answerLetterReplyControl(p, req, res, url) {
     const id = url.searchParams.get('id') || 'lt-stub-reply-b'
     const letter = inboxLetters.find((l) => l.id === id)
     if (!letter) return json(res, 404, { ok: false, message: `no letter ${id}` })
-    const sections = Array.from({ length: 60 }, (_, i) =>
+    const count = Math.max(1, Math.min(60, Number(url.searchParams.get('sections') || 60)))
+    const sections = Array.from({ length: count }, (_, i) =>
       `<h3>Section ${i + 1}</h3><p>${'A long digest paragraph that goes on for a while. '.repeat(12)}</p>`).join('')
     letter.bodyFormat = 'html'
     letter.longBody = `<h1>${letter.subject}</h1>${sections}`

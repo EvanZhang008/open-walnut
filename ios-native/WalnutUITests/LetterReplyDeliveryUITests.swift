@@ -162,16 +162,19 @@ extension LetterReplyUITests {
             self.statusLabels(app).filter { $0.hasPrefix("Sending to ") }.isEmpty
         }, "the newer replies never settled: \(statusLabels(app))")
 
-        // Back up to the refused reply, as the human would, to reach its Retry:
-        // short drags with no fling, so no drag carries it past the button (a
-        // swipe on the thread itself pressed its centre, which is off screen
-        // once the thread is taller than the screen).
+        // Back up the conversation box to the refused reply, as the human would,
+        // to reach its Retry: short drags with no fling inside the box, just
+        // under its title, so no drag carries it past the button (a swipe on
+        // the box itself presses its centre, which can be under the keyboard).
         let retry = app.buttons["inbox.letter.replyRetry"]
-        let scroll = letterScroll(app)
-        for _ in 0..<16 where !retry.isHittable {
-            let from = scroll.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.25))
-            let to = scroll.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.45))
-            from.press(forDuration: 0.05, thenDragTo: to, withVelocity: .slow, thenHoldForDuration: 0.2)
+        scrollPageToTheBox(app)
+        let origin = app.windows.firstMatch.coordinate(withNormalizedOffset: .zero)
+        let x = app.windows.firstMatch.frame.width / 2
+        for _ in 0..<24 where !retry.isHittable {
+            let top = element(app, "inbox.letter.threadBar").frame.maxY + 12
+            origin.withOffset(CGVector(dx: x, dy: top))
+                .press(forDuration: 0.05, thenDragTo: origin.withOffset(CGVector(dx: x, dy: top + 90)),
+                       withVelocity: .slow, thenHoldForDuration: 0.2)
         }
         XCTAssertTrue(retry.isHittable, "the refused reply's Retry is out of reach")
         try await stub.screenshot(app, "retry-old-1-before")
