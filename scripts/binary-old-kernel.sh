@@ -83,7 +83,7 @@ until ssh $ssh_opts walnut@127.0.0.1 true 2>/dev/null; do
   sleep 10
 done
 
-tar -C "$repo" -cf "$dir/rehearsal.tar" package.json scripts tests/providers/mock-claude.mjs
+tar -C "$repo" -cf "$dir/rehearsal.tar" package.json scripts tests/providers/mock-claude.mjs tests/providers/mock-claude-flags.mjs
 cp "$bin" "$dir/walnut"
 # shellcheck disable=SC2086
 scp -q -P "$port" -i "$dir/key" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \

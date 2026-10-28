@@ -20,7 +20,7 @@ shift
 repo="$(cd "$(dirname "$0")/.." && pwd)"
 work="$(mktemp -d "${TMPDIR:-/tmp}/walnut-matrix.XXXXXX")"
 trap 'rm -rf "$work"' EXIT INT TERM
-tar -C "$repo" -cf - package.json scripts tests/providers/mock-claude.mjs | tar -C "$work" -xf -
+tar -C "$repo" -cf - package.json scripts tests/providers/mock-claude.mjs tests/providers/mock-claude-flags.mjs | tar -C "$work" -xf -
 chmod -R a+rX "$work"
 
 # bun's musl build links the C++ runtime dynamically: on Alpine it needs the

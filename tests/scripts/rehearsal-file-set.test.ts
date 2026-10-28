@@ -6,9 +6,12 @@ import { describe, expect, it } from 'vitest'
 // the files scripts/binary-matrix.sh and scripts/binary-old-kernel.sh copy in:
 // package.json, scripts/ and the mock CLI. No src/, no node_modules. A static
 // import outside that set fails every image before the rehearsal starts
-// (2026-10-28: scripts/desktop-smoke.mjs imported ../src/lib/account.ts).
+// (2026-10-28: scripts/desktop-smoke.mjs imported ../src/lib/account.ts). The mock
+// CLI runs as its own process, so its imports count too (2026-10-28: it began
+// importing ./mock-claude-flags.mjs, and every session in every image failed).
 const ROOT = path.resolve(__dirname, '../..')
-const SHIPPED = ['package.json', 'scripts', 'tests/providers/mock-claude.mjs']
+const MOCK = ['tests/providers/mock-claude.mjs', 'tests/providers/mock-claude-flags.mjs']
+const SHIPPED = ['package.json', 'scripts', ...MOCK]
 const IMPORT = /^\s*(?:import|export)\s[^'"]*?from\s+['"]([^'"]+)['"]|^\s*import\s+['"]([^'"]+)['"]/gm
 
 function staticImports(entry: string): { files: string[]; bare: string[] } {
@@ -30,15 +33,20 @@ function staticImports(entry: string): { files: string[]; bare: string[] } {
 describe('the release rehearsal runs from the files the binary matrix ships', () => {
   it('both matrix scripts copy package.json, scripts/ and the mock CLI', () => {
     for (const script of ['scripts/binary-matrix.sh', 'scripts/binary-old-kernel.sh']) {
-      expect(fs.readFileSync(path.join(ROOT, script), 'utf8'), script).toContain(`package.json scripts tests/providers/mock-claude.mjs`)
+      expect(fs.readFileSync(path.join(ROOT, script), 'utf8'), script).toContain(SHIPPED.join(' '))
     }
   })
 
-  it('every module the rehearsal loads at start is one of them, or a runtime builtin', () => {
-    const { files, bare } = staticImports(path.join(ROOT, 'scripts/release-rehearsal/run.mjs'))
-    expect(files.length).toBeGreaterThan(5)
-    const outside = files.filter((f) => !SHIPPED.some((s) => f === s || f.startsWith(`${s}/`)))
-    expect(outside).toEqual([])
-    expect(bare.filter((s) => !s.startsWith('node:') && !s.startsWith('bun:'))).toEqual([])
-  })
+  for (const [what, entry, min] of [
+    ['the rehearsal', 'scripts/release-rehearsal/run.mjs', 5],
+    ['the mock CLI', MOCK[0], 1],
+  ] as const) {
+    it(`every module ${what} loads at start is one of them, or a runtime builtin`, () => {
+      const { files, bare } = staticImports(path.join(ROOT, entry))
+      expect(files.length).toBeGreaterThan(min)
+      const outside = files.filter((f) => !SHIPPED.some((s) => f === s || f.startsWith(`${s}/`)))
+      expect(outside).toEqual([])
+      expect(bare.filter((s) => !s.startsWith('node:') && !s.startsWith('bun:'))).toEqual([])
+    })
+  }
 })
