@@ -33,12 +33,14 @@ function rows(): Array<Record<string, unknown>> {
     { role: 'user', text: '<walnut-message kind="notification" from="Walnut" about="Team lead [1a2b3c4d]" about-session="1a2b3c4d-0000-4000-8000-000000000001" outcome="completed">\nIts turn ended without a reply.\n</walnut-message>', timestamp: at(5), msgId: 'qf-u3' },
     { role: 'assistant', text: '', tools: [{ name: 'mcp__walnut__task_send', input: { task_id: 't-lead', title: 'QF_SENT_TITLE', text: 'Noted.' }, result: 'sent' }], timestamp: at(6), msgId: 'qf-a3' },
     { role: 'assistant', text: ACK, timestamp: at(7), msgId: 'qf-a4' },
-    { role: 'user', text: '<walnut-message kind="reply" from="Login script [7c7c7c7c]" from-session="7c7c7c7c-0000-4000-8000-000000000002" title="Fixed and verified">\nQF_REPLY_BODY the key works.\n</walnut-message>', timestamp: at(8), msgId: 'qf-u4' },
+    { role: 'user', text: '<walnut-message kind="reply" from="Login script [7c7c7c7c]" from-session="7c7c7c7c-0000-4000-8000-000000000002" from-task="pw-task-001" title="Fixed and verified">\nQF_REPLY_BODY the key works.\n</walnut-message>', timestamp: at(8), msgId: 'qf-u4' },
     { role: 'assistant', text: 'QF_ANSWER_TWO the login works now.', thinking: 'QF_THINK_TWO checking the reply.', timestamp: at(9), msgId: 'qf-a5' },
   ];
 }
 
-const LINE = /^From Team lead: Migration is top priority, acknowledged, notice about Team lead: Its turn ended without a reply, sent a message, acknowledged, reply from Login script: Fixed and verified, thought$/;
+// The reply names its sender as its card does: by the sending task's title
+// (pw-task-001), not the session title the envelope printed.
+const LINE = /^From Team lead: Migration is top priority, acknowledged, notice about Team lead: Its turn ended without a reply, sent a message, acknowledged, reply from Playwright test task: Fixed and verified, thought$/;
 
 /** The timeline's own rows (not the rows inside an opened fold), as kind + text. */
 async function topRows(page: Page) {
@@ -79,6 +81,7 @@ async function checkMerged(page: Page, tag: string) {
   const body = fold.locator('.process-fold-body');
   await expect(body).toContainText('Migration is top priority');
   await expect(body).toContainText('Fixed and verified');
+  await expect(body.locator('.provenance-card', { hasText: 'Fixed and verified' })).toContainText('Playwright test task');
   // Both no-action turns read "Acknowledged"; the one with reasoning draws no empty footer.
   await expect(body.locator('[data-testid="no-action-mark"]')).toHaveCount(2);
   await expect(body.locator('[data-message-id="qf-a2"] .session-msg')).toHaveCount(0);

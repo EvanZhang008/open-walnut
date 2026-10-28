@@ -52,7 +52,8 @@ export function envelopeSteps(
     const from = e.kind === 'peer-note' || e.kind === 'reply' || e.kind === 'notification' || e.kind === 'trigger' ? e.kind : 'other';
     // A notice's outcome sentence is its title; a trigger's note is only its clock.
     const title = e.kind === 'notification' ? noticeTitle(e.statusLine) : e.kind === 'trigger' ? undefined : e.title;
-    const name = nameOf(e.peer);
+    // A trigger and an App are named by what they print, as their cards are.
+    const name = e.kind === 'trigger' || e.kind === 'app-state' ? e.peer.title : nameOf(e.peer);
     out.push({ kind: 'received', from, ...(name ? { name } : {}), ...(title ? { title } : {}) });
   }
   return out.length > 0 ? out : [{ kind: 'received', from: 'other' }];
