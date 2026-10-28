@@ -2,14 +2,14 @@
  * E2E: the task panel's Display menu shows how many session columns sit side by side,
  * and changes it.
  *
- * The count is ONE app-wide setting (`ui.session_panels`, also in Settings, General and
- * the session kebab's Panels row); the Display menu is a third surface for it because
- * the task panel is where the user is when the strip needs more or fewer panels
- * (2026-09-23: "this should show the number of session panels we can adjust"). So the
+ * The count is ONE app-wide setting (`ui.session_panels`, also in Settings, General);
+ * the Display menu is its in-context surface because the task panel is where the user
+ * is when the strip needs more or fewer panels (2026-09-23: "this should show the
+ * number of session panels we can adjust"). The session ⋮ menu's Panels row is gone
+ * (2026-10-27): the count is the whole strip's setting, not one session's. So the
  * assertions are about the shared setting, not a local copy: the menu reads the current
- * value, a pick moves the strip at once and reaches config, the session kebab agrees
- * (both ways, the same "Auto (N)" words), and under Auto the row names the count Auto
- * means in this window.
+ * value, a pick moves the strip at once and reaches config, Settings agrees (both ways),
+ * and under Auto the row names the count Auto means in this window.
  */
 import { test, expect, type Page } from '@playwright/test'
 import { isolateUiPrefs } from './todo-panel-helpers'
@@ -51,14 +51,28 @@ const columns = (page: Page) => page.locator('.main-page-sessions-area > .main-p
 const panelsRow = (page: Page) => page.locator('.fb-menu [data-view-option="session-panels"]')
 const choice = (page: Page, key: string) => panelsRow(page).locator(`[data-choice="${key}"]`)
 const checked = (page: Page) => panelsRow(page).locator('button[aria-pressed="true"]')
-/** The session panel's own kebab and its Panels row (the other in-context surface of the setting). */
-async function kebabPanels(page: Page) {
+/** The session panel's own kebab, open. */
+async function openSessionKebab(page: Page) {
   const kebab = page.locator('.main-page-session-column .session-panel').first().getByRole('button', { name: 'More actions' })
   await expect(kebab).toBeVisible({ timeout: 20_000 })
   await kebab.click()
   const menu = page.locator('.task-kebab-menu:visible').first()
   await expect(menu).toBeVisible()
-  return menu.locator('.task-kebab-tier').filter({ has: page.getByText('Panels', { exact: true }) })
+  return menu
+}
+/** Settings, General's picker for the same setting. */
+const settingsChoice = (page: Page, label: string) =>
+  page.locator('#settings-session-panels .settings-segment').filter({ hasText: new RegExp(`^${label}$`) })
+/** Pick a count in Settings (sidebar click), wait for config, and come back home. */
+async function pickInSettings(page: Page, label: string) {
+  await page.locator('.sidebar a[href^="/settings"]').click()
+  const btn = settingsChoice(page, label)
+  await expect(btn).toBeVisible({ timeout: 20_000 })
+  await btn.click()
+  await expect(btn).toHaveAttribute('aria-checked', 'true')
+  await expect.poll(() => readMode(page), { timeout: 45_000, intervals: [500, 1000, 2000] }).toBe(label === 'Auto' ? 'auto' : label)
+  await page.locator('.sidebar a[href="/"]').first().click()
+  await expect(page.locator('#home-task-navigation .todo-panel-toolbar button[aria-label="Display"]')).toBeVisible({ timeout: 30_000 })
 }
 /** The Display menu shows whole, its Session columns row included, with nothing to scroll (the body is what scrolls). */
 const viewFits = (page: Page) => page.locator('.fb-menu').evaluate((el) => {
@@ -112,32 +126,34 @@ test('the Display menu shows the column count and a pick moves the strip at once
   expect(writes).toEqual([])
   await closeViewMenu(page)
 
-  // Reopened, it is still a readout of the setting, and the session kebab agrees.
+  // Reopened, it is still a readout of the setting.
   await openViewMenu(page)
   await expect(checked(page)).toHaveText(['2'])
   await closeViewMenu(page)
-  await expect((await kebabPanels(page)).locator('.task-kebab-tier-btn.active')).toHaveText(['2'])
+  // The session kebab no longer carries the count: the Display menu is its home.
+  const kebab = await openSessionKebab(page)
+  await expect(kebab.getByText('Panels', { exact: true })).toHaveCount(0)
   await page.keyboard.press('Escape')
 
-  // C58: Panels 1 from the session kebab: the strip drops to one column and Display shows 1.
-  await (await kebabPanels(page)).locator('.task-kebab-tier-btn').filter({ hasText: /^1$/ }).click()
-  await expect(columns(page)).toHaveCount(1, { timeout: 5000 })
-  await expect.poll(() => readMode(page), { timeout: 45_000, intervals: [500, 1000, 2000] }).toBe('1')
+  // C58: 1 from Settings: the strip drops to one column and Display shows 1.
+  await pickInSettings(page, '1')
+  // Home re-reads the setting on the way back (the same budget Settings round trips get
+  // in session-panel-count.spec.ts); the immediate path is the Display pick above.
+  await expect(columns(page)).toHaveCount(1, { timeout: 25_000 })
   await openViewMenu(page)
   await expect(checked(page)).toHaveText(['1'])
   await closeViewMenu(page)
   expect(errors).toEqual([])
 })
 
-test('a change made in the session kebab shows in the Display menu, and Auto names its count in both', async ({ page, baseURL }) => {
+test('a change made in Settings shows in the Display menu, and Auto names its count', async ({ page, baseURL }) => {
   await page.setViewportSize({ width: 1280, height: 840 })
   await writeMode(page, '2')
   await bootWithColumns(page, baseURL!, SIDS.slice(0, 1))
   await expect(columns(page)).toHaveCount(1, { timeout: 30_000 })
 
-  // 4 from the session kebab: the Display menu shows 4.
-  await (await kebabPanels(page)).locator('.task-kebab-tier-btn').filter({ hasText: /^4$/ }).click()
-  await expect.poll(() => readMode(page), { timeout: 45_000, intervals: [500, 1000, 2000] }).toBe('4')
+  // 4 from Settings: the Display menu shows 4.
+  await pickInSettings(page, '4')
   await openViewMenu(page)
   await expect(checked(page)).toHaveText(['4'])
   expect(await viewFits(page)).toBe(true)
@@ -165,9 +181,10 @@ test('a change made in the session kebab shows in the Display menu, and Auto nam
   await expect(checked(page)).toHaveText([`Auto (${wide})`])
   await closeViewMenu(page)
 
-  // The session kebab's Panels row holds the same state (its Auto carries no count).
-  await expect((await kebabPanels(page)).locator('.task-kebab-tier-btn.active')).toHaveText(['Auto'])
-  await page.keyboard.press('Escape')
+  // Settings holds the same state (its Auto carries no count).
+  await page.locator('.sidebar a[href^="/settings"]').click()
+  await expect(settingsChoice(page, 'Auto')).toHaveAttribute('aria-checked', 'true', { timeout: 20_000 })
+  await page.locator('.sidebar a[href="/"]').first().click()
 
   // The choice survives a reload.
   await page.reload()

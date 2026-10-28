@@ -7,7 +7,7 @@ import { useOptimisticSetting } from '../inputs/useOptimisticSetting';
 import { useCommitField } from '../inputs/useCommitField';
 import { useTheme, type ThemePreference } from '@/hooks/useTheme';
 import { useFocusBarContext } from '@/contexts/FocusBarContext';
-import { useSessionPanelMode, type SessionPanelMode } from '@/hooks/useSessionPanelMode';
+import { announceSessionPanelMode, useSessionPanelMode, type SessionPanelMode } from '@/hooks/useSessionPanelMode';
 import { useUpdateStatus } from '@/hooks/useUpdateStatus';
 import { AppUpdateRow } from '../AppUpdateRow';
 import '@/styles/settings-sections-configure.css';
@@ -144,7 +144,8 @@ export function GeneralSection({ config, onSave }: Props) {
   const configuredPanels = config.ui?.session_panels;
   const panels = useOptimisticSetting<SessionPanelMode>(
     isPanelMode(configuredPanels) ? configuredPanels : panelMode,
-    (m) => save((c) => ({ ui: { ...(c.ui ?? {}), session_panels: m } }), { rowKey: 'general.session-panels' }),
+    (m) => save((c) => ({ ui: { ...(c.ui ?? {}), session_panels: m } }), { rowKey: 'general.session-panels' })
+      .then(() => announceSessionPanelMode(m)),
     { rowKey: 'general.session-panels' },
   );
 

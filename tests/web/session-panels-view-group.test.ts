@@ -34,8 +34,8 @@ describe('sessionPanelsViewGroup', () => {
   });
 });
 
-describe('sessionPanelsViewGroup as the Display menu and session kebab row', () => {
-  it('is titled Session columns and keeps the session-panels option key both surfaces locate', () => {
+describe('sessionPanelsViewGroup as the Display menu row', () => {
+  it('is titled Session columns and keeps the session-panels option key the Display menu locates', () => {
     const group = sessionPanelsViewGroup('auto', 2, vi.fn());
     expect(group.label).toBe('Session columns');
     expect(row(group).key).toBe('session-panels');

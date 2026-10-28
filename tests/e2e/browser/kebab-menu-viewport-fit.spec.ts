@@ -26,6 +26,7 @@
  */
 import { expect, test, type APIRequestContext, type Page, type Locator } from '@playwright/test'
 import { isolateUiPrefs, presetPanelView } from './todo-panel-helpers'
+import { openKebabGroup, type KebabGroupId } from './kebab-group-helpers'
 
 const SESSION_ID = 'pw-vscode-session'
 const TASK_ID = 'pw-task-vscode'
@@ -114,6 +115,13 @@ async function assertFitsViewport(page: Page, menu: Locator, label: string) {
   }))
 }
 
+/** The session menu's groups (KebabGroup), top to bottom; each starts closed. */
+const SESSION_MENU_GROUPS: KebabGroupId[] = ['kebab-group-dates', 'kebab-group-move', 'session-kebab-views', 'session-kebab-copy-open', 'session-kebab-debug']
+
+async function openAllGroups(menu: Locator) {
+  for (const id of SESSION_MENU_GROUPS) await openKebabGroup(menu, id)
+}
+
 test('the session kebab fits the viewport and scrolls when the window is short', async ({ page, request }) => {
   await ensureTaskInProgress(request)
   // A deliberately short window — the reported condition.
@@ -126,7 +134,7 @@ test('the session kebab fits the viewport and scrolls when the window is short',
   const menu = page.locator('.task-kebab-menu:visible')
   await expect(menu).toBeVisible()
 
-  const m = await assertFitsViewport(page, menu, 'short window')
+  await assertFitsViewport(page, menu, 'short window')
   // Sized right AND actually on top — the composer used to draw over its lower half.
   await assertMenuOnTop(page, menu, 'short window')
 
@@ -134,8 +142,14 @@ test('the session kebab fits the viewport and scrolls when the window is short',
   //    a short single-section menu rendered instead).
   await expect(menu.getByText('Task detail', { exact: true })).toHaveCount(1)
   // Priority is hidden by default (Settings → Tasks → Show task priority), so the
-  // marker for the task half of the menu is its two collapsed date rows.
+  // marker for the task half of the menu is its Dates group.
+  await expect(menu.getByTestId('kebab-group-dates')).toBeVisible()
+
+  // 2. Every group open: the tallest this menu gets. It must still fit and scroll.
+  await openAllGroups(menu)
   await expect(menu.locator('.task-kebab-date-toggle')).toHaveCount(2)
+  const m = await assertFitsViewport(page, menu, 'short window, every group open')
+  await assertMenuOnTop(page, menu, 'short window, every group open')
 
   // Always reserve the scrollbar so height caps cannot change intrinsic width.
   expect(m.overflowY).toBe('scroll')

@@ -1,6 +1,7 @@
 import { expect, test, type Page } from '@playwright/test'
 import fs from 'node:fs/promises'
 import path from 'node:path'
+import { openKebabGroup } from './kebab-group-helpers'
 
 const SESSION_ID = 'pw-workflow-session'
 const TASK_ID = 'pw-task-workflow'
@@ -283,9 +284,11 @@ function backgroundNote(panel: ReturnType<Page['locator']>) {
   return panel.locator('[data-testid="session-background-note"]')
 }
 
-/** The session's ⋮ menu, opened from the panel header the way a user opens it. */
+/** The session's ⋮ menu, opened from the panel header the way a user opens it, with its
+ *  Views group open (the Background tasks row lives there). */
 async function openSessionMenu(page: Page, panel: ReturnType<Page['locator']>) {
   await panel.locator('.session-panel-header').getByRole('button', { name: 'More actions' }).click()
+  await openKebabGroup(page.locator('.task-kebab-menu:visible'), 'session-kebab-views')
   const row = page.locator('.task-kebab-menu:visible [data-testid="session-kebab-background"]')
   return row
 }

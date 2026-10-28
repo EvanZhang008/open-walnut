@@ -36,6 +36,7 @@
  *      streaming chip is replaced by the history chip, and the open panel stays
  */
 import { test, expect, type Page } from '@playwright/test';
+import { openKebabGroup } from './kebab-group-helpers';
 
 const SESSION_ID = 'pw-normal-session';
 const PARENT = 'toolu_pw_agent_parent';
@@ -414,6 +415,8 @@ test.describe('Inline-subagent interleave (main text integrity)', () => {
     // Nothing runs, so the note goes; the session's ⋮ menu keeps the way in, with no count.
     await expect(note).toHaveCount(0);
     await page.locator(`.session-panel[data-session-id="${SESSION_ID}"] .session-panel-header`).getByRole('button', { name: 'More actions' }).click();
+    // The row lives in the menu's Views group.
+    await openKebabGroup(page.locator('.task-kebab-menu:visible'), 'session-kebab-views');
     const menuRow = page.locator('.task-kebab-menu:visible [data-testid="session-kebab-background"]');
     await expect(menuRow).toHaveText('Background tasks');
     await expect(menuRow.locator('.session-action-chip-count')).toHaveCount(0);

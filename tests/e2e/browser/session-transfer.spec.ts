@@ -20,6 +20,7 @@
 import { mkdirSync } from 'node:fs'
 import { expect, test, type Page, type Route } from '@playwright/test'
 import { isolateUiPrefs } from './todo-panel-helpers'
+import { openKebabGroup } from './kebab-group-helpers'
 
 const SESSION_ID = 'pw-vscode-session'
 const TASK_ID = 'pw-task-vscode'
@@ -76,6 +77,8 @@ async function openSourcePanel(page: Page) {
 async function openTransferFromPanel(page: Page) {
   const panel = await openSourcePanel(page)
   await panel.locator('.session-panel-title-meta .task-kebab-btn').click()
+  // Transfer is a row of the session menu's Move & team group.
+  await openKebabGroup(page.locator('.task-kebab-menu:visible'), 'kebab-group-move')
   const item = page.locator('.task-kebab-menu:visible [data-testid="task-kebab-transfer"]')
   await expect(item).toHaveText('Transfer harness/host…')
   await item.click()

@@ -23,6 +23,7 @@ import { expect, test, type Locator, type Page } from '@playwright/test'
 import { discoverBrowserFixture } from './codex-test-audit'
 import { REAL_PANEL, draftComposer, draftPanel, draftTaskMenu, openDraft, openDraftOnCwd, openDraftSettings, pickDraftFolder } from './draft-helpers'
 import { selectSection } from './todo-panel-helpers'
+import { openKebabGroup } from './kebab-group-helpers'
 
 const PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 const SHOTS = process.env.PW_SCREENSHOT_DIR ?? '/tmp/task-workspaces'
@@ -127,9 +128,10 @@ async function taskCard(page: Page, taskId: string): Promise<Locator> {
   return card
 }
 
-/** The session panel's kebab → Workspace row → its flyout. */
+/** The session panel's kebab → Move & team → Workspace row → its flyout. */
 async function openPanelWorkspaceFlyout(page: Page, panel: Locator): Promise<Locator> {
   await panel.locator('.session-panel-header .task-kebab-btn').first().click()
+  await openKebabGroup(page.locator('.task-kebab-menu'), 'kebab-group-move')
   await page.locator('.task-kebab-menu').getByTestId('workspace-menu-row').click()
   const flyout = page.getByTestId('workspace-flyout')
   await expect(flyout).toBeVisible()
@@ -263,6 +265,7 @@ test('git worktree: each task gets its own, the session runs in it, a clean one 
   // A done card leaves the board after its fade; the session column stays, and its
   // task kebab says what happened to the workspace and why.
   await panel2.locator('.session-panel-header .task-kebab-btn').first().click()
+  await openKebabGroup(page.locator('.task-kebab-menu'), 'kebab-group-move')
   await expect(page.locator('.task-kebab-menu').getByTestId('workspace-menu-row')).toContainText('Kept')
   await page.locator('.task-kebab-menu').getByTestId('workspace-menu-row').click()
   const flyout2 = page.getByTestId('workspace-flyout')

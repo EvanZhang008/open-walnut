@@ -19,6 +19,7 @@
  */
 import fs from 'node:fs/promises';
 import { test, expect, type Locator, type Page } from '@playwright/test';
+import { openKebabGroup } from './kebab-group-helpers';
 
 const PORT = Number(process.env.PW_TEST_PORT ?? 3457);
 const SHOTS = '/tmp/background-placement';
@@ -109,6 +110,9 @@ async function openMenu(page: Page, panel: Locator) {
   return menu;
 }
 
+/** The Background tasks row lives in the menu's Views group, closed each time the menu opens. */
+const openViews = (menu: Locator) => openKebabGroup(menu, 'session-kebab-views');
+
 /** Plain background work leaves nothing at the top of the session: no card, no bar words. */
 async function expectNoBarAtTop(panel: Locator) {
   await expect(panel.locator('.wf-card')).toHaveCount(0);
@@ -195,17 +199,23 @@ test.describe('Session background work placement', () => {
     });
     expect(fit).toEqual({ cut: false, inside: true });
     await shoot(page, note, '2-after-turn-line');
-    // The ⋮ menu counts what still runs.
+    // The ⋮ menu counts what still runs, on the closed Views row too.
     let menu = await openMenu(page, panel);
+    const viewsToggle = menu.getByTestId('session-kebab-views').locator('.task-kebab-group-toggle');
+    await expect(viewsToggle.locator('.session-action-chip-count')).toHaveText('2');
+    await expect(viewsToggle.locator('.session-action-chip-count')).toHaveAttribute('title', '1 agent, 1 command running');
+    const views = await openViews(menu);
     const menuRow = menu.locator('[data-testid="session-kebab-background"]');
     await expect(menuRow).toContainText('Background tasks');
     await expect(menuRow.locator('.session-action-chip-count')).toHaveText('2');
     await expect(menuRow.locator('.session-action-chip-count')).toHaveAttribute('title', '1 agent, 1 command running');
-    // It sits right after "Msgs".
-    const order = await menu.locator('.task-kebab-item').evaluateAll(els => els.map(el => (el as HTMLElement).innerText.replace(/\s+/g, ' ').trim()));
+    // It is a row of Views, after "Msgs" (the group's last row).
+    const order = await views.locator('.task-kebab-item').evaluateAll(els => els.map(el => (el as HTMLElement).innerText.replace(/\s+/g, ' ').trim()));
     const msgsAt = order.findIndex(t => /^Msgs\b/.test(t));
-    expect(msgsAt, `menu rows: ${order.join(' | ')}`).toBeGreaterThanOrEqual(0);
-    expect(order[msgsAt + 1]).toMatch(/^Background tasks/);
+    const bgAt = order.findIndex(t => /^Background tasks/.test(t));
+    expect(msgsAt, `Views rows: ${order.join(' | ')}`).toBeGreaterThanOrEqual(0);
+    expect(bgAt, `Views rows: ${order.join(' | ')}`).toBeGreaterThan(msgsAt);
+    expect(bgAt, `Views rows: ${order.join(' | ')}`).toBe(order.length - 1);
     await page.keyboard.press('Escape');
     await expect(menu).toHaveCount(0);
     await note.click();
@@ -224,6 +234,8 @@ test.describe('Session background work placement', () => {
     await expect(panel.locator('.session-background-working')).toHaveCount(0);
     await expectNoBarAtTop(panel);
     menu = await openMenu(page, panel);
+    await expect(viewsToggle.locator('.session-action-chip-count')).toHaveCount(0);
+    await openViews(menu);
     await expect(menuRow).toHaveText('Background tasks');
     await expect(menuRow.locator('.session-action-chip-count')).toHaveCount(0);
     // Let the menu finish fading in before the picture is taken.
@@ -268,6 +280,7 @@ test.describe('Session background work placement', () => {
     await expect(note).toHaveCount(0);
     await expectNoBarAtTop(panel);
     const menu = await openMenu(page, panel);
+    await openViews(menu);
     await expect(menu.locator('.task-kebab-item', { hasText: /^Msgs/ })).toHaveCount(1);
     await expect(menu.locator('[data-testid="session-kebab-background"]')).toHaveCount(0);
     await page.keyboard.press('Escape');
@@ -299,6 +312,7 @@ test.describe('Session background work placement', () => {
     await inject(page, SID_STOP, 'session:status-changed', { taskId: null, process_status: 'stopped', activity: null, mode: 'bypass', planCompleted: false, archived: false, errorMessage: null, provider: 'cli', engine: 'claude', pendingPermissionTool: null, statusRevision: 5, statusUpdatedAt: new Date().toISOString() });
     await expect(note).toHaveCount(0);
     const menu = await openMenu(page, panel);
+    await openViews(menu);
     const menuRow = menu.locator('[data-testid="session-kebab-background"]');
     await expect(menuRow).toHaveText('Background tasks');
     await expect(menuRow.locator('.session-action-chip-count')).toHaveCount(0);

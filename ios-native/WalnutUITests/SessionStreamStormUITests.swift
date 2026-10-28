@@ -298,6 +298,10 @@ final class SessionStreamStormUITests: XCTestCase {
             try await stub.call("POST", "__stub/session-lifecycle?mode=hold")
             let before = try await stub.lifecycleState().requests.count
             app.buttons["session.menu"].tap()
+            // Retry lives in the menu's "Session" submenu.
+            let lifecycleMenu = app.buttons["session.lifecycleMenu"]
+            XCTAssertTrue(lifecycleMenu.waitForExistence(timeout: 10), "the Session submenu is missing")
+            lifecycleMenu.tap()
             let retry = app.buttons["session.retry"]
             XCTAssertTrue(retry.waitForExistence(timeout: 15), "the stopped session has no Retry action")
             retry.tap()
@@ -343,6 +347,10 @@ final class SessionStreamStormUITests: XCTestCase {
         let menu = app.buttons["session.menu"]
         XCTAssertTrue(menu.waitForExistence(timeout: 15), "the session menu is missing")
         menu.tap()
+        // Restart lives in the menu's "Session" submenu.
+        let lifecycleMenu = app.buttons["session.lifecycleMenu"]
+        XCTAssertTrue(lifecycleMenu.waitForExistence(timeout: 10), "the Session submenu is missing")
+        lifecycleMenu.tap()
         let restart = app.buttons["session.restart"]
         XCTAssertTrue(restart.waitForExistence(timeout: 10), "Restart is missing from the menu")
         restart.tap()

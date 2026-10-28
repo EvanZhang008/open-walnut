@@ -49,7 +49,8 @@ describe('task kebab menus stay lean and shared', () => {
 
   it('priority in the shared block is gated on the show-priority setting', () => {
     expect(KEBAB).toContain("from '@/hooks/useShowPriority'");
-    expect(KEBAB).toMatch(/\{onSetPriority && showPriority && \(/);
+    // The session menu's `part` may gate the row too; the setting gate must stay.
+    expect(KEBAB).toMatch(/onSetPriority && showPriority && \(/);
   });
 
   it('the draft menu differences are opt-in props the board kebab never passes', () => {

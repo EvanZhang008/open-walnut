@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { isolateUiPrefs } from './todo-panel-helpers';
+import { openKebabGroup } from './kebab-group-helpers';
 
 test.setTimeout(180_000);
 test('session budget keeps dirty edits, conflicts, pauses and recovery honest', async ({ page }, testInfo) => {
@@ -70,7 +71,9 @@ test('session budget keeps dirty edits, conflicts, pauses and recovery honest', 
   const panel = page.locator(`.main-page-session-column .session-panel[data-session-id="${sessionId}"]`);
   await expect(panel).toBeVisible();
   await panel.getByRole('button', { name: 'More actions', exact: true }).click();
-  await page.locator('.task-kebab-menu:visible').getByRole('button', { name: 'Usage & Budget', exact: true }).click();
+  // Usage & Budget is a row of the menu's Views group.
+  const views = await openKebabGroup(page.locator('.task-kebab-menu:visible'), 'session-kebab-views');
+  await views.getByRole('button', { name: 'Usage & Budget', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: 'Usage & Budget' });
   await expect(dialog).toBeVisible(); await expect(dialog.locator('.session-usage-total strong')).toHaveText('$5.99');
   await expect(dialog.getByText('Checked after each response and every 2 s, subagents included.', { exact: false })).toBeVisible();

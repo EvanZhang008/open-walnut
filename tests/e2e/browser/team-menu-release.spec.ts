@@ -24,6 +24,7 @@
 import { test, expect, type Locator, type Page, type Response } from '@playwright/test'
 import fs from 'node:fs/promises'
 import { homeColumns, loadHome, seedColumns, setPanelMode } from './draft-helpers'
+import { openKebabGroup } from './kebab-group-helpers'
 
 const KEYS = ['a', 'b', 'c'] as const
 type Key = (typeof KEYS)[number]
@@ -107,6 +108,8 @@ async function openHomeWithColumns(page: Page, k: Key): Promise<void> {
 async function openKebab(page: Page, k: Key): Promise<Locator> {
   await col(page, k).locator('.session-panel-header .task-kebab-btn').click()
   await expect(menu(page)).toBeVisible()
+  // The Team row lives in the session menu's Move & team group.
+  await openKebabGroup(menu(page), 'kebab-group-move')
   return menu(page)
 }
 

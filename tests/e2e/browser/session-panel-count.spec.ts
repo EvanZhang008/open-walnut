@@ -512,94 +512,9 @@ for (const [label, count, viewport, expectCols] of [
   })
 }
 
-/**
- * The SECOND surface: the same setting inside each session's kebab (⋮) menu.
- *
- * It is a "change it constantly while working" control, so Settings-only was the wrong
- * home for it. Two things have to hold that a Settings-only test cannot cover:
- *   1. Changing it from a session menu re-lays out the columns IMMEDIATELY. The hook is
- *      mounted per component, so the menu's instance and MainPage's (which owns the
- *      column budget) are different objects; without an in-tab fan-out MainPage would
- *      only learn via the `config:changed` WS echo — measured ~2s behind a
- *      read-modify-write under a file lock, which reads as a dead button.
- *   2. Both surfaces stay in agreement — it is ONE app-wide setting, not a per-session
- *      one, so Settings must show what the session menu just picked.
- */
-async function openSessionKebab(page: Page) {
-  // The session panel's own kebab (its header), not a todo row's.
-  const kebab = page
-    .locator('.main-page-session-column .session-panel')
-    .first()
-    .getByRole('button', { name: 'More actions' })
-  await expect(kebab).toBeVisible({ timeout: 20_000 })
-  await kebab.click()
-  const menu = page.locator('.task-kebab-menu:visible').first()
-  await expect(menu).toBeVisible()
-  return menu
-}
-
-const panelsRow = (menu: ReturnType<Page['locator']>) =>
-  menu.locator('.task-kebab-tier').filter({ has: menu.page().getByText('Panels', { exact: true }) })
-
-test('the session kebab exposes the panel count and applies it immediately', async ({ page }) => {
-  await page.setViewportSize({ width: 2560, height: 1200 })
-  await setPanelMode(page, '5')
-  await openColumnsOnHome(page, ALL_SIDS)
-
-  const columns = page.locator('.main-page-sessions-area > .main-page-session-column')
-  await expect(columns).toHaveCount(5, { timeout: 25_000 })
-
-  const menu = await openSessionKebab(page)
-  const row = panelsRow(menu)
-  await expect(row).toBeVisible()
-  // FIRST row of the menu, above Task detail: the strip's own control, found before
-  // any task or session action (it used to sit between the view toggles, unseen).
-  await expect(menu.locator(':scope > *').first()).toHaveClass(/task-kebab-tier/)
-  // Same options as Settings, plus Auto — one control, one vocabulary.
-  await expect(row.locator('.task-kebab-tier-btn')).toHaveText(['1', '2', '3', '4', '5', 'Auto'])
-  // It reflects the CURRENT value, so the menu is a readout as well as a control.
-  await expect(row.locator('.task-kebab-tier-btn.active')).toHaveText(['5'])
-  await page.screenshot({ path: `${SCREENSHOT_DIR}/kebab-panels-row.png`, fullPage: false })
-
-  // Pick 2 from the session menu → the strip must react WITHOUT waiting on config.
-  // A 3s budget is far below the ~2s+ WS/file-lock round-trip plus render, so this
-  // fails if the in-tab fan-out regresses to relying on the echo.
-  await row.locator('.task-kebab-tier-btn').filter({ hasText: /^2$/ }).click()
-  await expect(columns).toHaveCount(2, { timeout: 3000 })
-  assertColumnsFitStrip(await measureStrip(page), 80)
-
-  // ...and it still persists, so it survives a reload like any other setting.
-  await expect
-    .poll(async () => {
-      const res = await page.request.get('/api/config')
-      return (await res.json())?.config?.ui?.session_panels
-    }, { timeout: 45_000, intervals: [500, 1000, 2000] })
-    .toBe('2')
-
-  // Both surfaces agree: Settings shows what the session menu picked.
-  await page.locator('.sidebar a[href^="/settings"]').click()
-  await expect(panelBtn(page, '2')).toHaveAttribute('aria-checked', 'true', { timeout: 20_000 })
-  await expect(panelPicker(page).locator('.settings-segment[aria-checked="true"]')).toHaveText(['2'])
-})
-
-test('a change made in Settings shows up in the session kebab', async ({ page }) => {
-  // The reverse direction — the menu must be a live readout, not a stale snapshot
-  // captured when the session panel first mounted.
-  await page.setViewportSize({ width: 2560, height: 1200 })
-  await setPanelMode(page, '3')
-  await openColumnsOnHome(page, ALL_SIDS)
-
-  const columns = page.locator('.main-page-sessions-area > .main-page-session-column')
-  await expect(columns).toHaveCount(3, { timeout: 25_000 })
-
-  // Change it in Settings, come back, and read the menu.
-  await setPanelMode(page, '1')
-  await page.locator('.sidebar a[href="/"]').first().click()
-  await expect(columns).toHaveCount(1, { timeout: 25_000 })
-
-  const row = panelsRow(await openSessionKebab(page))
-  await expect(row.locator('.task-kebab-tier-btn.active')).toHaveText(['1'])
-})
+// The panel count left the session ⋮ menu (2026-10-27): it is the whole strip's
+// setting, so it lives in Settings (above) and the Display menu
+// (view-menu-session-panels.spec.ts covers that surface, immediate re-layout included).
 
 /**
  * EVICTION ORDER on a shrink — only the RIGHTMOST UNLOCKED column may go, and every

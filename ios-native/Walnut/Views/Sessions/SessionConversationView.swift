@@ -422,27 +422,16 @@ struct SessionConversationView: View {
         ]
     }
 
-    /// THE toolbar entry — one ellipsis menu unifying what used to be three
-    /// buttons (controls sliders / info / lifecycle menu). Sections top→down:
-    /// frequent (Controls, Info, linked Task), lifecycle
-    /// (Restart/Retry/Rename/Archive), tools (Queue/Plan/Files), destructive
-    /// (Terminate). Side questions, the note and fork are in the composer's `+`.
-    /// Retry only shows for error/stopped sessions (the server 400s otherwise).
+    /// THE toolbar entry: one ellipsis menu, grouped like the web session menu
+    /// (2026-10-27, the user's pick, "group by object"). First level: the linked
+    /// task, the controls, the queue, the plan and the files; then two groups that
+    /// open as submenus, "Session" (Restart, Retry, Rename, Archive) and "Copy &
+    /// Open" (the facts and what copies the session elsewhere); Terminate last.
+    /// The web menu's Debug group has no phone item. Side questions, the note and
+    /// fork are in the composer's `+`. Retry only shows for error/stopped sessions
+    /// (the server 400s otherwise).
     private var sessionMenu: some View {
         Menu {
-            // Frequent: the controls sheet (model / effort / mode).
-            Button {
-                showControls = true
-            } label: {
-                Label("Session Controls", systemImage: "slider.horizontal.3")
-            }
-            .accessibilityIdentifier("session.controls")
-            Button {
-                showInfo = true
-            } label: {
-                Label("Session Info", systemImage: "info.circle")
-            }
-            .accessibilityIdentifier("session.info")
             if session.taskId != nil {
                 Button {
                     showTask = true
@@ -459,37 +448,15 @@ struct SessionConversationView: View {
                     .accessibilityIdentifier("session.memoryInstructions")
                 }
             }
+            Button {
+                showControls = true
+            } label: {
+                Label("Session Controls", systemImage: "slider.horizontal.3")
+            }
+            .accessibilityIdentifier("session.controls")
             Divider()
-            Button {
-                pageOperations.start { await lifecycle.restart() }
-            } label: {
-                Label("Restart", systemImage: "arrow.clockwise")
-            }
-            .accessibilityIdentifier("session.restart")
-            if SessionStatus(store.processStatus) == .error || SessionStatus(store.processStatus) == .stopped {
-                Button {
-                    pageOperations.start { await lifecycle.retry() }
-                } label: {
-                    Label("Retry", systemImage: "arrow.uturn.forward")
-                }
-                .accessibilityIdentifier("session.retry")
-            }
-            Button {
-                renameDraft = session.title ?? session.rowTitle
-                showRename = true
-            } label: {
-                Label("Rename", systemImage: "pencil")
-            }
-            .accessibilityIdentifier("session.rename")
-            Button {
-                Task { await lifecycle.setArchived(true) }
-            } label: {
-                Label("Archive", systemImage: "archivebox")
-            }
-            .accessibilityIdentifier("session.archive")
-            Divider()
-            // Wave-2 extras — read/withdraw the send queue, view the plan,
-            // ask side questions, browse the working directory.
+            // Wave-2 extras: read/withdraw the send queue, view the plan, browse
+            // the working directory.
             Button {
                 showQueue = true
             } label: {
@@ -508,6 +475,59 @@ struct SessionConversationView: View {
                 Label("Browse Files", systemImage: "folder")
             }
             .accessibilityIdentifier("session.files")
+            Divider()
+            Menu {
+                Button {
+                    pageOperations.start { await lifecycle.restart() }
+                } label: {
+                    Label("Restart", systemImage: "arrow.clockwise")
+                }
+                .accessibilityIdentifier("session.restart")
+                if SessionStatus(store.processStatus) == .error || SessionStatus(store.processStatus) == .stopped {
+                    Button {
+                        pageOperations.start { await lifecycle.retry() }
+                    } label: {
+                        Label("Retry", systemImage: "arrow.uturn.forward")
+                    }
+                    .accessibilityIdentifier("session.retry")
+                }
+                Button {
+                    renameDraft = session.title ?? session.rowTitle
+                    showRename = true
+                } label: {
+                    Label("Rename", systemImage: "pencil")
+                }
+                .accessibilityIdentifier("session.rename")
+                Button {
+                    Task { await lifecycle.setArchived(true) }
+                } label: {
+                    Label("Archive", systemImage: "archivebox")
+                }
+                .accessibilityIdentifier("session.archive")
+            } label: {
+                Label("Session", systemImage: "rectangle.stack")
+            }
+            .accessibilityIdentifier("session.lifecycleMenu")
+            Menu {
+                Button {
+                    showInfo = true
+                } label: {
+                    Label("Session Info", systemImage: "info.circle")
+                }
+                .accessibilityIdentifier("session.info")
+                ForEach(SessionCopyItem.items(sessionId: session.id, cwd: session.cwd)) { item in
+                    Button {
+                        UIPasteboard.general.string = item.value
+                        UINotificationFeedbackGenerator().notificationOccurred(.success)
+                    } label: {
+                        Label(item.title, systemImage: item.systemImage)
+                    }
+                    .accessibilityIdentifier(item.id)
+                }
+            } label: {
+                Label("Copy & Open", systemImage: "doc.on.doc")
+            }
+            .accessibilityIdentifier("session.copyOpenMenu")
             Divider()
             Button(role: .destructive) {
                 Task {

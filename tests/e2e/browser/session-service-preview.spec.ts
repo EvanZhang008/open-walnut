@@ -15,6 +15,7 @@
 import http from 'node:http'
 import fs from 'node:fs'
 import { test, expect, type Locator, type Page } from '@playwright/test'
+import { openKebabGroup } from './kebab-group-helpers'
 
 const SESSION_ID = 'pw-service-session'
 const TASK_ID = 'pw-task-service'
@@ -196,7 +197,9 @@ test('the kebab opens an empty Web view to type an address, and toggles it close
     await panel.getByRole('button', { name: 'More actions' }).click()
     const menu = page.locator('.task-kebab-menu:visible')
     await expect(menu).toBeVisible({ timeout: 15_000 })
-    return menu.locator('.task-kebab-item').filter({ hasText: 'Web preview' })
+    // Web preview is a row of the Views group, closed every time the menu opens.
+    const views = await openKebabGroup(menu, 'session-kebab-views')
+    return views.locator('.task-kebab-item').filter({ hasText: 'Web preview' })
   }
 
   await (await openMenu()).click()

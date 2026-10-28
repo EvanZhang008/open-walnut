@@ -100,6 +100,32 @@ describe('TaskActionMenuItems without the draft props (board kebab)', () => {
   });
 });
 
+// The session ⋮ menu draws Pin (and Priority) on its first level and the dates inside
+// its Dates group; with no `part` (the board kebab) both halves render as before.
+describe('TaskActionMenuItems part', () => {
+  const base = () => ({ task: TASK, isPinned: true, pinnedTier: 'focus', isDone: false, ...spies() });
+  const shape = (host: HTMLElement) => ({
+    tier: host.querySelectorAll('.task-kebab-tier').length,
+    priority: host.querySelectorAll('.task-kebab-priority').length,
+    dates: host.querySelectorAll('.task-kebab-date-toggle').length,
+  });
+
+  it('absent renders every row', async () => {
+    expect(shape(await mount(base()))).toEqual({ tier: 1, priority: 1, dates: 2 });
+  });
+
+  it('"pin" renders pin and priority only', async () => {
+    expect(shape(await mount({ ...base(), part: 'pin' }))).toEqual({ tier: 1, priority: 1, dates: 0 });
+  });
+
+  it('"dates" renders Start and Due only', async () => {
+    const host = await mount({ ...base(), part: 'dates' });
+    expect(shape(host)).toEqual({ tier: 0, priority: 0, dates: 2 });
+    expect([...host.querySelectorAll('.task-kebab-date-label')].map((e) => e.textContent))
+      .toEqual(['Start / Snooze until', `Due: ${formatDateDisplay('2026-09-26')}`]);
+  });
+});
+
 describe('TaskActionMenuItems with the draft props', () => {
   const draftProps = { showPriorityLabels: true, litClickAccepts: true };
 

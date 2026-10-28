@@ -52,3 +52,8 @@ export function sessionKebabMetaRows(session: SessionMeta, now: number = Date.no
     { key: 'host' as const, label: 'Host', value: host, title: (!local && session.hostname) || host },
   ].filter((row): row is KebabMetaRow => row !== null);
 }
+
+/** A path as one shell word: bare when it is plain, single-quoted otherwise. */
+export function shellWord(path: string): string {
+  return /^[\w@%+=:,./~-]+$/.test(path) ? path : `'${path.replace(/'/g, `'\\''`)}'`;
+}

@@ -80,7 +80,7 @@ import { headerTaskPresence, recordGateReason, TASK_SLOT_IDS, TASK_SLOT_SPACER }
 import { useTaskControlSlot } from './useTaskControlSlot';
 import { useBoardTab } from './useBoardTab';
 import { panelTaskCopy } from './panel-task-copy';
-import { PanelCountRow, SessionKebabSection } from './SessionKebabSection';
+import { SessionKebabSection } from './SessionKebabSection';
 import { PinnedSessionFacts, SessionMetaFacts } from './SessionMetaFacts';
 import { ComposerModelPill } from './ComposerModelPill';
 import { ComposerControlsBar, type ComposerControl, type ComposerControlsBarHandle } from '@/components/chat/ComposerControlsBar';
@@ -1913,14 +1913,14 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
       // cursor: the header is the session's object, so its actions
       // belong to the gesture people already try there.
       contextMenuScope=".session-panel-header"
-      // The strip's own control leads the menu (PanelCountRow explains).
+      // The header's pills that did not fit and the time lead the menu. The panel
+      // count is not here: it is the whole strip's setting (Display menu, Settings).
       // A phone gets the short list (N12): its own rows, Task detail and status.
       // Panel columns, new tabs, editors and directory copies mean nothing there.
       phoneMenu={!!phoneRows}
       leadingSection={(close) => phoneRows ? phoneRows(close) : (
         <>
           <HiddenPillRows metaRef={titleMetaRef} kinds={[...metaFit.hidden]} pin={metaFit.pin} onAfterAction={close} />
-          <PanelCountRow onAfterAction={close} />
           <SessionMetaFacts sessionId={sessionId} taskId={session?.taskId} onAfterAction={close} />
         </>
       )}

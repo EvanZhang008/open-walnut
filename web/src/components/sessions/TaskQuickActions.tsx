@@ -6,7 +6,7 @@
  * Settings shows it) are consolidated into the kebab dropdown.
  */
 
-import { useState, useEffect, useRef, useCallback, type ReactNode } from 'react';
+import { useState, useEffect, useRef, useCallback, type ReactNode, type CSSProperties } from 'react';
 import { createPortal } from 'react-dom';
 import type { Task, TaskPhase, TaskPriority } from '@open-walnut/core';
 import { fetchTask, updateTask } from '@/api/tasks';
@@ -25,6 +25,8 @@ import { TransferMenuItem } from '@/components/transfer/TransferMenuItem';
 import { WorkspaceMenuSection } from '@/components/workspaces/WorkspaceMenuSection';
 import { SnoozeUntilEvent, TaskStatusMenuSection } from '@/components/tasks/TaskStatusControl';
 import { AgentMemoryPanel, hasMemoryAndInstructions } from '@/components/org/AgentMemoryPanel';
+import { datesHint } from './kebab-dates-hint';
+import { KebabGroup } from './KebabGroup';
 
 /* ── Phase constants ─────────────────────────────────────────────── */
 
@@ -414,10 +416,12 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
           />
 
           {!phoneMenu && (<>
-          {/* Pin / Tier · Priority · Start / Due: the SAME rows as the board's
-              task kebab (one definition, TaskKebabMenu.TaskActionMenuItems). */}
+          {/* Pin / Tier · Priority: the SAME rows as the board's task kebab (one
+              definition, TaskKebabMenu.TaskActionMenuItems). The dates, the task's
+              place and its team are grouped below (the menu's groups, KebabGroup). */}
           <TaskActionMenuItems
             task={task}
+            part="pin"
             isPinned={Boolean(isPinned)}
             pinnedTier={pinnedTier}
             isDone={isDone}
@@ -425,90 +429,37 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
             onPinTask={onPinTask ? () => onPinTask(task.id) : undefined}
             onUnpinTask={onUnpinTask ? () => onUnpinTask(task.id) : undefined}
             onSetTier={onSetTier ? (t) => onSetTier(task.id, t) : undefined}
-            onSetDate={handleSetDate}
-            onSetStartDate={handleSetStartDate}
             afterAction={closeKebab}
-            snoozeEvent={{ body: <SnoozeUntilEvent task={task} afterAction={closeKebab} /> }}
           />
 
-          {/* Move to project — same section as the TodoPanel kebab */}
-          <MoveToProjectSection current={task.project || ''} onMove={handleMoveToProject} afterAction={closeKebab} />
+          <div className="task-kebab-divider" />
+          <KebabGroup label="Dates" hint={datesHint(task)} icon={ICONS.ICON_CALENDAR} testId="kebab-group-dates">
+            <TaskActionMenuItems
+              task={task}
+              part="dates"
+              isPinned={Boolean(isPinned)}
+              pinnedTier={pinnedTier}
+              isDone={isDone}
+              onSetDate={handleSetDate}
+              onSetStartDate={handleSetStartDate}
+              afterAction={closeKebab}
+              snoozeEvent={{ body: <SnoozeUntilEvent task={task} afterAction={closeKebab} /> }}
+            />
+          </KebabGroup>
 
-          {/* Transfer to another engine or host — the same row as the board's task kebab. */}
-          <TransferMenuItem task={task} afterAction={closeKebab} />
+          {/* Where the task lives: project, engine and host, team, workspace, and the
+              synced item it mirrors. */}
+          <KebabGroup label="Move & team" hint="project · host · team" icon={ICONS.ICON_FOLDER_OUTLINE} testId="kebab-group-move">
+            <MoveToProjectSection current={task.project || ''} onMove={handleMoveToProject} afterAction={closeKebab} />
+            <TransferMenuItem task={task} afterAction={closeKebab} />
+            <TeamMenuItems task={task} afterAction={closeKebab} />
+            <WorkspaceMenuSection task={task} afterAction={closeKebab} />
+            <TaskSourceRow task={task} integrations={integrations} afterAction={closeKebab} />
+          </KebabGroup>
 
-          {/* Adopt a worker / Leave leader — the same rows as the board's task kebab. */}
-          <TeamMenuItems task={task} afterAction={closeKebab} />
-
-          {/* The task's isolated workspace: the same row as the board's task kebab. */}
-          <WorkspaceMenuSection task={task} afterAction={closeKebab} />
-
-          {/* Source badge — combined with external link if available */}
-          {(() => {
-            if (!task.source) {
-              // External link without source
-              if (task.external_url) {
-                const label = 'external';
-                return (
-                  <>
-                    <div className="task-kebab-divider" />
-                    <a
-                      className="task-kebab-item"
-                      href={task.external_url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      onClick={(e) => { e.stopPropagation(); closeKebab(); }}
-                    >
-                      <span className="task-kebab-icon">↗</span>
-                      <span>Open in {label}</span>
-                    </a>
-                  </>
-                );
-              }
-              return null;
-            }
-            const sourceMeta = getIntegrationMeta(integrations, task.source);
-            const badge = task.source === 'local' ? 'L' : (sourceMeta?.badge ?? task.source?.charAt(0).toUpperCase());
-            const integrationName = task.source === 'local' ? 'Local' : (sourceMeta?.name ?? task.source);
-            const badgeColor = sourceMeta?.badgeColor;
-            const synced = task.source !== 'local' && (!!task.ext?.[task.source] || !!((task as unknown as Record<string, unknown>)[({ 'ms-todo': 'ms_todo_id' } as Record<string, string>)[task.source] ?? '']));
-            const statusText = task.sync_error ? ' (sync error)' : synced ? '' : task.source !== 'local' ? ' (unsynced)' : '';
-            const badgeEl = (
-              <span
-                className="task-source-badge"
-                style={!task.sync_error && badgeColor ? { background: badgeColor, color: 'white' } : task.source === 'local' ? { background: '#8E8E93', color: 'white' } : undefined}
-              >
-                {task.sync_error ? '!' : badge}
-              </span>
-            );
-            if (task.external_url) {
-              return (
-                <>
-                  <div className="task-kebab-divider" />
-                  <a
-                    className="task-kebab-item task-kebab-info"
-                    href={task.external_url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    onClick={(e) => { e.stopPropagation(); closeKebab(); }}
-                  >
-                    {badgeEl}
-                    <span>{integrationName}{statusText}</span>
-                    <span className="task-kebab-external-arrow">↗</span>
-                  </a>
-                </>
-              );
-            }
-            return (
-              <>
-                <div className="task-kebab-divider" />
-                <div className="task-kebab-item task-kebab-info">
-                  {badgeEl}
-                  <span>{integrationName}{statusText}</span>
-                </div>
-              </>
-            );
-          })()}
+          {/* A sync that failed or has not happened yet needs to be seen, so it stays out
+              of the group. A local task, or one in sync, says nothing here. */}
+          <TaskSyncWarning task={task} integrations={integrations} />
           </>)}
           </>)}
 
@@ -524,6 +475,62 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
         document.body,
       )}
       {memoryOpen && task && <AgentMemoryPanel task={task} onClose={() => setMemoryOpen(false)} />}
+    </div>
+  );
+}
+
+type IntegrationList = ReturnType<typeof useIntegrations>;
+
+function sourceFacts(task: Task, integrations: IntegrationList) {
+  const sourceMeta = task.source ? getIntegrationMeta(integrations, task.source) : undefined;
+  const local = task.source === 'local';
+  const synced = !!task.source && !local && (!!task.ext?.[task.source] || !!((task as unknown as Record<string, unknown>)[({ 'ms-todo': 'ms_todo_id' } as Record<string, string>)[task.source] ?? '']));
+  return {
+    local,
+    badge: local ? 'L' : (sourceMeta?.badge ?? task.source?.charAt(0).toUpperCase()),
+    name: local ? 'Local' : (sourceMeta?.name ?? task.source ?? 'external'),
+    badgeColor: sourceMeta?.badgeColor,
+    status: task.sync_error ? 'sync error' : synced || local || !task.source ? '' : 'unsynced',
+  };
+}
+
+/** The source badge's colours: the integration's own, grey for a local task, none on a sync error. */
+function badgeStyle(task: Task, badgeColor: string | undefined): CSSProperties | undefined {
+  if (task.sync_error) return undefined;
+  if (badgeColor) return { background: badgeColor, color: 'white' };
+  return task.source === 'local' ? { background: '#8E8E93', color: 'white' } : undefined;
+}
+
+/** "Open in <service> ↗": the synced item this task mirrors, inside Move & team. */
+function TaskSourceRow({ task, integrations, afterAction }: { task: Task; integrations: IntegrationList; afterAction: () => void }) {
+  if (!task.external_url) return null;
+  const f = sourceFacts(task, integrations);
+  return (
+    <a
+      className="task-kebab-item task-kebab-info"
+      href={task.external_url}
+      target="_blank"
+      rel="noopener noreferrer"
+      data-testid="kebab-source-link"
+      onClick={(e) => { e.stopPropagation(); afterAction(); }}
+    >
+      {task.source && (
+        <span className="task-source-badge" style={badgeStyle(task, f.badgeColor)}>{f.badge}</span>
+      )}
+      <span>Open in {f.name}</span>
+      <span className="task-kebab-external-arrow">↗</span>
+    </a>
+  );
+}
+
+/** The one source fact that earns a first-level row: the sync is broken or pending. */
+function TaskSyncWarning({ task, integrations }: { task: Task; integrations: IntegrationList }) {
+  const f = sourceFacts(task, integrations);
+  if (!f.status) return null;
+  return (
+    <div className="task-kebab-item task-kebab-info" data-testid="kebab-sync-warning">
+      <span className="task-source-badge" style={badgeStyle(task, f.badgeColor)}>{task.sync_error ? '!' : f.badge}</span>
+      <span>{f.name} ({f.status})</span>
     </div>
   );
 }

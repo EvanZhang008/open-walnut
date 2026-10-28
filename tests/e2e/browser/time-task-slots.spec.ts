@@ -210,7 +210,7 @@ test('a session\'s time is a fact in its menu, and no chip on the header row by 
   const fact = menu.getByTestId('time-session-fact')
   await expect(cell(fact, 'you-total')).toHaveText('50m', { timeout: 30_000 })
   await expect(cell(fact, 'agent-total')).toHaveText('3h 02m')
-  // A labelled row at the top of the menu, right under Panels, seen without scrolling;
+  // A labelled row at the top of the menu, above Task detail, seen without scrolling;
   // its "Header" toggle at the end, off.
   const row = menu.locator('.task-kebab-fact')
   await expect(row.locator('.task-kebab-fact-label')).toHaveText('Time')
@@ -219,13 +219,15 @@ test('a session\'s time is a fact in its menu, and no chip on the header row by 
   await expect(row.getByTestId('session-fact-pin')).toHaveAttribute('aria-pressed', 'false')
   await expect(fact).toHaveAttribute('title', /You: 50m total, 20m today, 50m in 7 days/)
   await expect(fact).toHaveAttribute('title', /Agent: 3h 02m total, 1h 02m today, 3h 02m in 7 days/)
-  const [rowBox, menuBox, panelsBox] = await Promise.all([
+  const [rowBox, menuBox, detailBox] = await Promise.all([
     row.boundingBox(), menu.boundingBox(),
-    menu.locator('.task-kebab-tier').filter({ hasText: 'Panels' }).boundingBox(),
+    menu.locator('.task-kebab-item').filter({ hasText: /^Task detail$/ }).boundingBox(),
   ])
-  expect(rowBox!.y).toBeGreaterThan(panelsBox!.y)
+  expect(rowBox!.y).toBeLessThan(detailBox!.y)
   expect(rowBox!.y - menuBox!.y).toBeLessThan(120)
-  expect(rowBox!.height).toBeLessThanOrEqual(panelsBox!.height + 1)
+  // One line (its Header toggle makes it a little taller than a plain row), never a
+  // stacked block. It used to be measured against the Panels row, gone from this menu.
+  expect(rowBox!.height).toBeLessThan(detailBox!.height * 1.5)
   await page.screenshot({ path: `${SHOTS}/session-menu-fact.png`, clip: { x: menuBox!.x, y: menuBox!.y, width: menuBox!.width, height: 220 } })
 
   await fact.click()
@@ -473,7 +475,8 @@ test('disabling the plugin takes both facts away without a reload', async ({ pag
   await page.keyboard.press('Escape')
   await expect(page.locator('.task-detail-modal')).toHaveCount(0)
   const menu = await openMenu(page, col)
-  await expect(menu.locator('.task-kebab-tier').filter({ hasText: 'Panels' })).toBeVisible()
+  // The menu has rendered (its session half), so the absences below are real ones.
+  await expect(menu.locator('.task-kebab-item').filter({ hasText: /^Inbox/ })).toBeVisible()
   await expect(menu.getByTestId('time-session-fact')).toHaveCount(0)
   await expect(menu.locator('.task-kebab-fact')).toHaveCount(0)
   // The pin outlives the plugin (it is the user's choice), but there is nothing to draw.

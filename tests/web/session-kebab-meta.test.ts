@@ -1,5 +1,6 @@
 /**
- * The Created / Updated / Host rows at the foot of the session panel's ⋮ menu.
+ * The Created / Updated / Host parts of the one metadata line at the foot of the
+ * session panel's ⋮ menu (its Copy & open group).
  * Times read as "how long ago" with the exact time on hover. Dates are built
  * with the local-time Date constructor so the hover text holds in any timezone.
  */

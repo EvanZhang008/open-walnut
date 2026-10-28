@@ -58,11 +58,12 @@ let cachedMode: SessionPanelMode | null = null;
  * Every mounted instance of this hook, so a change made through ONE of them updates
  * the others in the same tick.
  *
- * Required now that the setting has two surfaces (Settings → General AND every session's
- * kebab menu). `setMode` writes the module cache, but a cache write notifies nobody —
+ * Required because the setting has two surfaces (Settings → General AND the task panel's
+ * Display menu). `setMode` writes the module cache, but a cache write notifies nobody —
  * sibling instances (e.g. MainPage's, which owns the actual column budget) would only
  * catch up via the `config:changed` WS round-trip, measured at ~2s behind a
- * read-modify-write under a file lock. Picking "4" from a session menu and watching the
+ * read-modify-write under a file lock, and skipped outright within an instance's own
+ * SELF_CHANGE_COOLDOWN. Picking "4" from a menu and watching the
  * columns sit still for two seconds reads as a broken control, so the fan-out is what
  * makes an in-context switcher feel immediate. Config is still written; this is purely
  * the local echo.
@@ -79,6 +80,17 @@ const modeListeners = new Set<(m: SessionPanelMode) => void>();
 function broadcastMode(m: SessionPanelMode) {
   cachedMode = m;
   for (const listener of modeListeners) listener(m);
+}
+
+/**
+ * The local echo for a surface that persists the setting itself (Settings → General
+ * saves through its own queue): every mounted instance, the home strip's included,
+ * takes the value without waiting for a `config:changed` round trip. A Settings pick
+ * made within 3 s of a Display pick was otherwise dropped by the home page's cooldown,
+ * and the strip kept its old count (seen in WebKit, 2026-10-27).
+ */
+export function announceSessionPanelMode(m: SessionPanelMode) {
+  if (isValidMode(m)) broadcastMode(m);
 }
 
 /**

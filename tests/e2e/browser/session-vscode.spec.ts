@@ -1,5 +1,7 @@
 import fs from 'node:fs/promises'
 import { expect, test, type Page } from '@playwright/test'
+import { openKebabGroup } from './kebab-group-helpers'
+import { selectSection } from './todo-panel-helpers'
 
 const SESSION_ID = 'pw-vscode-session'
 const TASK_ID = 'pw-task-vscode'
@@ -56,7 +58,8 @@ async function openHome(page: Page): Promise<void> {
   await page.getByRole('link', { name: 'Open Walnut' }).click()
   await preferences
   await expect(page.locator('.main-page')).toBeVisible()
-  await page.getByRole('tab', { name: 'All', exact: true }).click()
+  // The tab bar may not show an All tab any more; the helper falls back to Display.
+  await selectSection(page, 'All')
 }
 
 test('Code and Inbox are menu actions, never persistent header chips', async ({ page }, testInfo) => {
@@ -70,8 +73,12 @@ test('Code and Inbox are menu actions, never persistent header chips', async ({ 
   }
   await panel.getByRole('button', { name: 'More actions' }).click()
   const menu = page.locator('.task-kebab-menu:visible')
-  await expect(menu.getByRole('button', { name: 'Code', exact: true })).toBeVisible()
+  // Inbox is a first-level row; Code sits in Views, Open in VS Code in Copy & open.
   await expect(menu.locator('.task-kebab-item').filter({ hasText: /^Inbox/ })).toBeVisible()
+  await expect(menu.getByRole('button', { name: 'Code', exact: true })).toHaveCount(0)
+  await openKebabGroup(menu, 'session-kebab-views')
+  await expect(menu.getByRole('button', { name: 'Code', exact: true })).toBeVisible()
+  await openKebabGroup(menu, 'session-kebab-copy-open')
   await expect(menu.getByRole('button', { name: 'Open in VS Code', exact: true })).toBeVisible()
   await fs.mkdir('/tmp/session-tools-menu', { recursive: true })
   await page.screenshot({ animations: 'disabled', scale: 'css', path: `/tmp/session-tools-menu/${testInfo.project.name}-menu.png` })
@@ -109,6 +116,8 @@ for (const width of [1280, 820]) {
       expect(box.y).toBeGreaterThanOrEqual(0)
       expect(box.x + box.width).toBeLessThanOrEqual(width)
       expect(box.y + box.height).toBeLessThanOrEqual(800)
+      // Code is a row of the Views group, closed every time the menu opens.
+      await openKebabGroup(menu, 'session-kebab-views')
     }
     await openMenu()
     const code = menu.getByRole('button', { name: 'Code', exact: true })
@@ -180,12 +189,14 @@ test('Code prefetch is cancelled with the menu and a failed open can retry', asy
   const panel = await openHomepageSession(page)
   await panel.getByRole('button', { name: 'More actions' }).click()
   const menu = page.locator('.task-kebab-menu:visible')
+  await openKebabGroup(menu, 'session-kebab-views')
   await menu.getByRole('button', { name: 'Code', exact: true }).hover()
   await page.keyboard.press('Escape')
   await expect(menu).toHaveCount(0)
   await page.waitForTimeout(600)
   expect(requests).toBe(0)
   await panel.getByRole('button', { name: 'More actions' }).click()
+  await openKebabGroup(menu, 'session-kebab-views')
   await menu.getByRole('button', { name: 'Code', exact: true }).click()
   const codePanel = panel.locator('.session-code-panel')
   await expect(codePanel.locator('.session-code-error-body')).toHaveText('Editor unavailable')
@@ -203,7 +214,9 @@ test('Open in VS Code is available from the session kebab, not the header', asyn
   await expect(panel.locator('.session-panel-vscode')).toHaveCount(0)
 
   await panel.getByRole('button', { name: 'More actions' }).click()
-  const menuItem = page.locator('.task-kebab-menu:visible').getByText('Open in VS Code', { exact: true })
+  const menu = page.locator('.task-kebab-menu:visible')
+  await openKebabGroup(menu, 'session-kebab-copy-open')
+  const menuItem = menu.getByText('Open in VS Code', { exact: true })
   await expect(menuItem).toBeVisible()
   await menuItem.click()
   await expectCapturedUri(page)

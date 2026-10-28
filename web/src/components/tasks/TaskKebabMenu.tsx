@@ -171,7 +171,7 @@ function WalnutPickRow({ pick, afterAction }: {
 export function TaskActionMenuItems({
   task, isPinned, pinnedTier, isDone, batchMode,
   onSetPriority, onPinTask, onPinWithTier, onUnpinTask, onSetTier, onSetDate, onSetStartDate, afterAction,
-  formatDate, showPriorityLabels, litClickAccepts, tierHeading, walnutPick, snoozeEvent,
+  formatDate, showPriorityLabels, litClickAccepts, tierHeading, walnutPick, snoozeEvent, part,
 }: {
   /** Single task (kebab) — null in batch mode. Only the fields the rows READ are
    *  required, so a draft column can hand in its launch meta (the task that
@@ -214,6 +214,9 @@ export function TaskActionMenuItems({
    *  `body` is the row under the times (TaskStatusControl.SnoozeUntilEvent).
    *  What a Waiting task waits for is its status now, so the Status row says it. */
   snoozeEvent?: { body: ReactNode };
+  /** One half only: the session ⋮ menu draws Pin (and Priority) on its first level
+   *  and the dates inside its Dates group. Absent, both halves (the board kebab). */
+  part?: 'pin' | 'dates';
 }) {
   // Custom tiers append after the built-ins. Safe hook: kebabs also render on
   // isolated surfaces (tests, popouts) that may sit outside the FocusBarProvider.
@@ -226,7 +229,7 @@ export function TaskActionMenuItems({
   return (
     <>
       {/* Pin / Tier */}
-      {(batchMode ? !!onSetTier : !isDone && (onPinTask || onPinWithTier || isPinned)) && (
+      {part !== 'dates' && (batchMode ? !!onSetTier : !isDone && (onPinTask || onPinWithTier || isPinned)) && (
         <>
           <div className="task-kebab-divider" />
           <div className="task-kebab-tier">
@@ -277,7 +280,7 @@ export function TaskActionMenuItems({
       )}
 
       {/* Priority (hidden unless Settings → Tasks → Show task priority) */}
-      {onSetPriority && showPriority && (
+      {part !== 'dates' && onSetPriority && showPriority && (
         <>
           <div className="task-kebab-divider" />
           <div className="task-kebab-priority">
@@ -306,6 +309,7 @@ export function TaskActionMenuItems({
 
       {/* Start (when to begin; drives the Now view's deferral) and Due (the
           deadline): collapsed rows, calendar on click. */}
+      {part !== 'pin' && (<>
       {(onSetStartDate || onSetDate) && <div className="task-kebab-divider" />}
       {onSetStartDate && (
         <KebabDateRow
@@ -330,6 +334,7 @@ export function TaskActionMenuItems({
         />
       )}
       {onSetDate && <WalnutPickRow pick={walnutPick?.dueDate} afterAction={afterAction} />}
+      </>)}
     </>
   );
 }

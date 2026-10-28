@@ -28,6 +28,7 @@ import {
 } from './draft-helpers'
 import { expectTaskInTier, pinnedTierOf } from './draft-outcome-helpers'
 import { presetPanelView } from './todo-panel-helpers'
+import { openKebabGroup } from './kebab-group-helpers'
 
 const SCREENSHOT_DIR = process.env.DRAFT_SHOT_DIR ?? '/tmp/task-start-fork'
 
@@ -209,6 +210,8 @@ test('a bound draft\'s header ⋮ pins the REAL task without launching anything'
   // was seeded once at ▶; it must follow the task, not keep promising Walnut.
   await expect(draftProjectPill(panel)).toHaveText('Project: Walnut')
   await kebab.click()
+  // The project picker is a row of the menu's Move & team group.
+  await openKebabGroup(page.locator('.task-kebab-menu'), 'kebab-group-move')
   await page.locator('.task-kebab-menu .task-kebab-project-current').click()
   await page.locator('.task-kebab-project-flyout .task-kebab-project-opt').filter({ hasText: /^\s*Ideas\s*$/ }).click()
   await expect.poll(async () => (await fetchTask(page, taskId)).project, { timeout: 10_000 }).toBe('Ideas')

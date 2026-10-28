@@ -10,6 +10,7 @@
  * The custom hint is limited to this spec's session, so parallel specs never see it.
  */
 import { test, expect, type Locator, type Page } from '@playwright/test'
+import { openKebabGroup } from './kebab-group-helpers'
 
 const SID = 'pw-hints-session'
 const SHOTS = process.env.MESSAGE_HINTS_SHOTS ?? '/tmp/message-hints'
@@ -123,7 +124,9 @@ test('a hinted message shows as typed, names its hints, and the raw view shows w
   await bubble.screenshot({ path: `${SHOTS}/bubble-hints.png` })
 
   await panel.locator('.session-panel-header .task-kebab-btn').click()
-  await page.getByTestId('session-kebab-raw-view').click()
+  // The row lives in the menu's Debug group.
+  const debug = await openKebabGroup(page.locator('.task-kebab-menu'), 'session-kebab-debug')
+  await debug.getByTestId('session-kebab-raw-view').click()
   const raw = page.getByTestId('session-raw-view')
   await expect(raw).toBeVisible()
   const input = raw.getByTestId('raw-turn-input').filter({ hasText: `Typed ${stamp}` })
