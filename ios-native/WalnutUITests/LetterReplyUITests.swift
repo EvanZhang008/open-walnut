@@ -654,6 +654,11 @@ final class LetterReplyUITests: XCTestCase {
         scrollPageToTheTop(app)
         let fresh = turn(app, "inbox.letter.agentTurn", containing: "Fresh agent note")
         pullUntil(fresh, app)
+        if !fresh.exists {
+            try await stub.screenshot(app, "pull-never-reread")
+            let turns = app.descendants(matching: .any).matching(identifier: "inbox.letter.agentTurn").allElementsBoundByIndex.map(\.label)
+            print("pull re-read nothing: \(turns.count) agent turns, last \(turns.suffix(2))")
+        }
         XCTAssertTrue(fresh.exists, "the pull never re-read the letter")
         scrollPageToTheBox(app)
         let button = element(app, "inbox.letter.newReply")
