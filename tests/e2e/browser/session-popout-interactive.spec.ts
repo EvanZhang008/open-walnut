@@ -3,6 +3,7 @@ import { test, expect, type Page, type Locator } from '@playwright/test'
 import { loadApp } from './host-problems-fixture-helpers'
 import { isolatePrefs } from './host-problems-helpers'
 import { discoverBrowserFixture } from './codex-test-audit'
+import { openKebabGroup } from './kebab-group-helpers'
 
 const PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 const SHOTS = '/tmp/mac-popout-full'
@@ -22,7 +23,8 @@ async function openPopout(page: Page, sessionId: string): Promise<{ child: Page;
 
 async function showInbox(child: Page): Promise<void> {
   await child.getByRole('button', { name: 'More actions', exact: true }).click()
-  await child.locator('.task-kebab-menu:visible .task-kebab-item').filter({ hasText: 'Inbox' }).click()
+  const views = await openKebabGroup(child.locator('.task-kebab-menu:visible'), 'session-kebab-views')
+  await views.locator('.task-kebab-item').filter({ hasText: /^Inbox/ }).click()
   await expect(child.locator('.session-inbox-pane')).toBeVisible()
 }
 

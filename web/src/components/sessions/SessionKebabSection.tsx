@@ -3,7 +3,7 @@
  *
  * Rendered as the `extraSection` of <TaskQuickActions slot="kebab">, below a
  * divider, so a single dropdown holds Task actions (top) + Session actions
- * (bottom): Inbox, then three groups (KebabGroup) that open in place: Views, Copy &
+ * (bottom): three groups (KebabGroup) that open in place: Views (Inbox first), Copy &
  * open, Debug, and Restart / Terminate last. Presentational only: both session panels own the actual handlers
  * (restart / investigate / open-notes …) and pass them down.
  */
@@ -110,40 +110,49 @@ export function SessionKebabSection({
   const { tasks: backgroundTasks, running: bgRunning } = useBackgroundRunning(sessionId);
   const cdPrefix = cwd ? `cd ${shellWord(cwd)} && ` : '';
   const cwdLabel = cwd ? (cwd.split('/').filter(Boolean).pop() || 'CWD') : null;
+  const inboxCount = attentionCount > 0 ? (
+    <span className={`session-action-chip-count${decisionCount > 0 ? ' session-action-chip-count-warn' : ''}`}
+      title={inboxChipTitle(attentionCount, unreadCount, decisionCount)}>
+      {attentionCount > 99 ? '99+' : attentionCount}
+    </span>
+  ) : null;
+  const viewsBadge = attentionCount > 0 || bgRunning.total > 0 ? (
+    <>
+      {inboxCount}
+      {bgRunning.total > 0 && <span className="session-action-chip-count" title={`${backgroundRunningLabel(bgRunning)} running`}>{bgRunning.total}</span>}
+    </>
+  ) : undefined;
 
   return (
     <div className="task-kebab-section">
       <div className="task-kebab-section-label">Session</div>
 
-      <button
-        className={`task-kebab-item${activeView === 'inbox' ? ' task-kebab-item-active' : ''}`}
-        aria-pressed={activeView === 'inbox'}
-        onClick={(e) => { e.stopPropagation(); onToggleView('inbox'); onAfterAction?.(); }}
-        title={inboxChipTitle(attentionCount, unreadCount, decisionCount)}
-      >
-        <span className="task-kebab-icon">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M4 4h16l2 10v6H2v-6L4 4Z" />
-            <path d="M2 14h6l2 3h4l2-3h6" />
-          </svg>
-        </span>
-        <span>Inbox</span>
-        {attentionCount > 0 && (
-          <span className={`session-action-chip-count${decisionCount > 0 ? ' session-action-chip-count-warn' : ''}`}>
-            {attentionCount > 99 ? '99+' : attentionCount}
-          </span>
-        )}
-      </button>
-
-      {/* Views: what opens beside or over the chat. Work still running in the background
-          shows its count on the closed row. */}
+      {/* Views: what opens beside or over the chat, the Inbox tab first. Letters that
+          need the user and work still running in the background show their counts on
+          the closed row. */}
       <KebabGroup
         label="Views"
-        hint="code · web · notes · msgs"
+        hint="inbox · code · web · notes"
         icon={VIEWS_ICON}
         testId="session-kebab-views"
-        badge={bgRunning.total > 0 ? <span className="session-action-chip-count" title={`${backgroundRunningLabel(bgRunning)} running`}>{bgRunning.total}</span> : undefined}
+        badge={viewsBadge}
       >
+        <button
+          className={`task-kebab-item${activeView === 'inbox' ? ' task-kebab-item-active' : ''}`}
+          aria-pressed={activeView === 'inbox'}
+          onClick={(e) => { e.stopPropagation(); onToggleView('inbox'); onAfterAction?.(); }}
+          title={inboxChipTitle(attentionCount, unreadCount, decisionCount)}
+        >
+          <span className="task-kebab-icon">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M4 4h16l2 10v6H2v-6L4 4Z" />
+              <path d="M2 14h6l2 3h4l2-3h6" />
+            </svg>
+          </span>
+          <span>Inbox</span>
+          {inboxCount}
+        </button>
+
         <button
           className={`task-kebab-item${activeView === 'code' ? ' task-kebab-item-active' : ''}`}
           aria-pressed={activeView === 'code'}

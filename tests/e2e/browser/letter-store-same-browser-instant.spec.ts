@@ -29,6 +29,7 @@
 import fs from 'node:fs/promises'
 import { expect, test, type APIRequestContext, type Locator, type Page } from '@playwright/test'
 import { discoverBrowserFixture } from './codex-test-audit'
+import { openKebabGroup } from './kebab-group-helpers'
 
 const SCREENSHOT_DIR = '/tmp/letter-store-sync'
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
@@ -145,6 +146,8 @@ async function openMoreActions(panel: Locator): Promise<Locator> {
   await panel.getByRole('button', { name: 'More actions' }).click()
   const menu = moreMenu(panel.page())
   await expect(menu).toBeVisible({ timeout: 15_000 })
+  // Inbox is the first row of the menu's Views group.
+  await openKebabGroup(menu, 'session-kebab-views')
   return menu
 }
 
@@ -154,7 +157,7 @@ async function closeMoreActions(panel: Locator): Promise<void> {
 }
 
 const inboxItem = (menu: Locator): Locator =>
-  menu.locator('.task-kebab-item').filter({ hasText: 'Inbox' })
+  menu.locator('.task-kebab-item').filter({ hasText: /^Inbox/ })
 
 // ── 1. Two surfaces mounted at once: the reader over the rail list ──
 
