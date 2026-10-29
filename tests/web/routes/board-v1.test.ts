@@ -29,6 +29,7 @@ import { createSessionRecord } from '../../../src/core/session-tracker.js'
 import { bus, EventNames, type BusEvent } from '../../../src/core/event-bus.js'
 import { SendError } from '../../../src/core/sessions/session-send-core.js'
 import { getBoard, _boardFilePath } from '../../../src/core/boards/board-store.js'
+import { settleUserStatusSync } from '../../../src/core/user-status-sync.js'
 import { executeOp } from '../../../src/ops/executor.js'
 import { LOCAL_ORIGIN } from '../../../src/lib/caller-origin.js'
 import '../../../src/ops/index.js'
@@ -160,11 +161,14 @@ describe('writing the html', () => {
     expect(byHuman.status).toBe(200)
     expect(byHuman.json.board).toMatchObject({ version: 4, updated_by: 'human' })
 
+    // A ref carries the user status the sync stores, on a 1.5 s debounce: read once that pass ran,
+    // or the chip has it or not by timing (CI run 40814499605 read it there).
+    await settleUserStatusSync()
     const got = await call('GET', boardPath(team.leader))
     expect(got.json.board.html).toContain('Status: fixing')
     expect(got.json.board.html).toContain('owner: me')
     // refs carry the worker's LIVE title and state.
-    expect(got.json.refs).toEqual([{ ref: team.worker, id: team.worker, title: 'Fix the cache', phase: 'TODO', status: 'todo' }])
+    expect(got.json.refs).toEqual([{ ref: team.worker, id: team.worker, title: 'Fix the cache', phase: 'TODO', status: 'todo', user: 'waiting' }])
 
     const html = events.filter((e) => e.name === EventNames.BOARD_CHANGED).map((e) => e.data)
     expect(html).toEqual([1, 2, 3, 4].map((version) => ({ taskId: team.leader, kind: 'html', version })))
