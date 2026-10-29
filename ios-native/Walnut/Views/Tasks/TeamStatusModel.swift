@@ -183,8 +183,11 @@ enum TeamStatusModel {
         guard let s, s.state == "needs", s.source == "session",
               let iso = s.checkedAt, let at = WalnutTask.parseISO(iso) else { return nil }
         let ago = RelativeTime.short(date: at, relativeTo: now)
-        if s.unverified == true { return ("Not verified: last checked \(ago), may be done already", true) }
-        return ("Checked \(ago)\(s.checkedBy == "check" ? " by its check" : "")", false)
+        // A trigger watches the task, not necessarily this ask: shown, never a check.
+        let ran = s.watchedAt.flatMap { WalnutTask.parseISO($0) }
+        let watched = ran.map { "; its trigger ran \(RelativeTime.short(date: $0, relativeTo: now))" } ?? ""
+        if s.unverified == true { return ("Not verified: last checked \(ago), may be done already\(watched)", true) }
+        return ("Checked \(ago)\(watched)", false)
     }
 
     /// A waiting row's line: "Waiting on another task: …", "Stuck. …", "Not started yet".

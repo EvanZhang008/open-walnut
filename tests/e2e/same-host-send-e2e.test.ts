@@ -339,7 +339,7 @@ describe('a request the lead hands on waits for that answer (real server, real d
     }, 30_000, 'the three startup turns to end')
   }, 120_000)
 
-  it('the lead hands the request to its worker mid-turn: the asker hears once, after the worker, and is told where it went', async () => {
+  it('the lead hands the request to its worker mid-turn: no turn end closes it, only a real reply or its deadline', async () => {
     const before = inboxOf(lead).length
     const r = await gateway(asker, 'task_send', { to: leadTask, text: 'Ship the login fix.', title: 'Login fix' })
     expect(r.ok, JSON.stringify(r)).toBe(true)
@@ -362,14 +362,16 @@ describe('a request the lead hands on waits for that answer (real server, real d
     expect(notices(asker, owed)).toEqual([])
     expect(requestRow(owed)?.status).toBe('pending')
 
-    // The worker finishes without an answer; the lead is told, and its turn ends saying nothing to the asker.
+    // The worker finishes without an answer; the lead is told, and its turn ends saying nothing to
+    // the asker. That turn end does not close the asker's request either (2026-10-28: it used to,
+    // and the worker's own answer later met a closed request): it stays open, its deadline back to
+    // its own now that the work is back, and only a real reply or that deadline settles it.
     await waitFor(() => requestRow(handed)?.status === 'notified', 45_000, 'the worker\'s request to settle')
-    await waitFor(() => notices(asker, owed).length > 0, 45_000, 'the asker\'s notice')
+    await waitFor(async () => ((await api('GET', `/api/tasks/${leadTask}`)).task as { phase?: string }).phase !== 'IN_PROGRESS', 45_000, 'the lead\'s turn on the worker\'s notice to end')
     await new Promise((r) => setTimeout(r, 5_000))
-    const said = notices(asker, owed)
-    expect(said, said.join('\n----\n')).toHaveLength(1)
-    expect(said[0]).toContain(`It handed your request on to "Worker: fix login timeout" (${workerTask}), which finished without an explicit answer.`)
-    expect(said[0]).toContain(`about-task="${leadTask}"`)
-    expect(requestRow(owed)).toMatchObject({ status: 'notified', carriedBy: [{ id: handed, taskId: workerTask }] })
+    expect(notices(asker, owed)).toEqual([])
+    const row = requestRow(owed)
+    expect(row).toMatchObject({ status: 'pending', carriedBy: [{ id: handed, taskId: workerTask }] })
+    expect(row?.deadlineAt).toBe(row?.ownDeadlineAt)
   }, 120_000)
 })

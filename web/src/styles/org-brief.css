@@ -139,6 +139,8 @@
   color: var(--fg);
 }
 /* The program-made "still open" footer (BriefStillOpen.tsx). */
+.org-brief-open-checked { color: var(--fg-muted); font-size: 11px; }
+.org-brief-open-checked.is-unverified { color: color-mix(in srgb, var(--warning, #FF9500) 70%, var(--fg)); font-weight: 600; }
 .org-brief-open {
   margin-top: 8px;
   padding-top: 6px;

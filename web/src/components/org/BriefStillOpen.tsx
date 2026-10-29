@@ -5,7 +5,7 @@
  * result, overdue requests, work past or near its due date, and work on the user or its lead for
  * more than a few hours.
  */
-import { USER_STATE_LABELS, type BriefStillOpen, type UserState } from '@open-walnut/user-status';
+import { USER_STATE_LABELS, checkedLine, type BriefStillOpen, type UserState } from '@open-walnut/user-status';
 import type { Task } from '@open-walnut/core';
 
 interface Props {
@@ -41,7 +41,7 @@ export function BriefStillOpenList({ open, tasks, states, now, onOpenTask }: Pro
     : <span className="org-muted">{fallback ?? 'a task'}</span>;
   return (
     <div className="org-brief-open" data-testid="org-brief-still-open">
-      <div className="org-brief-open-head">Still open <span className="org-muted">(from the tasks, not the letter)</span></div>
+      <div className="org-brief-open-head">Still open <span className="org-muted">(Walnut's live record, not the letter)</span></div>
       {partial.map(({ task, notDone }) => (
         <div key={`p-${task.id}`} className="org-brief-open-row" data-kind="partial" data-task-id={task.id}>
           <span className="org-brief-partial">Partial</span>{chip(task)}
@@ -71,12 +71,19 @@ export function BriefStillOpenList({ open, tasks, states, now, onOpenTask }: Pro
           <span className="org-brief-open-why" title={words}>"{words}", checks back {timeAgoish(Date.parse(at) - now)}</span>
         </div>
       ))}
-      {waitingLong.map(({ task, on, since }) => (
-        <div key={`w-${task.id}`} className="org-brief-open-row" data-kind="waiting-long" data-task-id={task.id}>
-          {chip(task)}
-          <span className="org-brief-open-why">on {on === 'you' ? 'you' : 'its lead'} for {span(now - since)}</span>
-        </div>
-      ))}
+      {waitingLong.map(({ task, on, since }) => {
+        // On the user: when its session last confirmed it, so an old ask never reads as fact.
+        const checked = on === 'you' ? checkedLine(task.user_status, now) : null;
+        return (
+          <div key={`w-${task.id}`} className="org-brief-open-row" data-kind="waiting-long" data-task-id={task.id}>
+            {chip(task)}
+            <span className="org-brief-open-why">on {on === 'you' ? 'you' : 'its lead'} for {span(now - since)}</span>
+            {checked && (
+              <span className={`org-brief-open-checked${checked.unverified ? ' is-unverified' : ''}`} data-testid="org-brief-open-checked" data-unverified={checked.unverified ? '1' : '0'}>{checked.text}</span>
+            )}
+          </div>
+        );
+      })}
       {unmentioned.length > 0 && (
         <div className="org-brief-open-row" data-kind="unmentioned">
           <span className="org-muted">Not in the letter:</span>

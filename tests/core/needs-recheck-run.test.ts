@@ -1,7 +1,7 @@
 /**
  * One pass of the re-check clock (src/core/sessions/needs-recheck.ts): a session's "needs you"
  * unconfirmed for NEEDS_RECHECK_MS gets ONE trigger note in its own session, recorded on the task
- * first; a task a check script watches, a fresh ask and a task with no session are left alone.
+ * first; a fresh ask and a task with no session are left alone.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import type { SessionRecord, Task } from '../../src/core/types.js'
@@ -9,7 +9,6 @@ import type { SessionRecord, Task } from '../../src/core/types.js'
 const tasks = new Map<string, Task>()
 const writes: { id: string; patch: Record<string, unknown> }[] = []
 const sends: { sid: string; text: string; source?: string }[] = []
-let armed = new Set<string>()
 
 vi.mock('../../src/core/task-manager.js', () => ({
   listTasks: async () => [...tasks.values()],
@@ -20,7 +19,6 @@ vi.mock('../../src/core/task-manager.js', () => ({
   },
 }))
 vi.mock('../../src/core/task-wait-until.js', () => ({
-  triggersWatching: async (id: string) => (armed.has(id) ? [{ id: 'j', name: 'login check', state: 'armed', fires: 0 }] : []),
   WAIT_UNTIL_SEND_SOURCE: 'wait-until',
 }))
 vi.mock('../../src/core/session-tracker.js', () => ({
@@ -43,13 +41,12 @@ const needs = (id: string, checkedAt: string): Task => ({
 }) as Task
 
 beforeEach(() => {
-  tasks.clear(); writes.length = 0; sends.length = 0; armed = new Set()
-  for (const t of [needs('old', ago(NEEDS_RECHECK_MS + 60_000)), needs('fresh', ago(60_000)), needs('watched', ago(10 * NEEDS_RECHECK_MS)), needs('nosess', ago(10 * NEEDS_RECHECK_MS))]) tasks.set(t.id, t)
-  armed.add('watched')
+  tasks.clear(); writes.length = 0; sends.length = 0
+  for (const t of [needs('old', ago(NEEDS_RECHECK_MS + 60_000)), needs('fresh', ago(60_000)), needs('nosess', ago(10 * NEEDS_RECHECK_MS))]) tasks.set(t.id, t)
 })
 
 describe('a re-check pass', () => {
-  it('wakes only the stale, unwatched ask with a session, recorded before the send', async () => {
+  it('wakes only the stale ask with a session, recorded before the send', async () => {
     expect(await runNeedsRecheck(NOW)).toEqual(['old'])
     expect(writes).toEqual([{ id: 'old', patch: { needs_recheck: { at: new Date(NOW).toISOString(), count: 1, ask: 'Sign in on the Mac' } } }])
     expect(sends).toHaveLength(1)

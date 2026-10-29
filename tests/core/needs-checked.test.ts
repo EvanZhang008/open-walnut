@@ -10,7 +10,7 @@ import {
   NEEDS_RECHECK_MS, UNVERIFIED_AFTER_MS, checkedLine, deriveUserStatus, type StatusReport,
 } from '../../src/core/user-status.js'
 import { MAX_RECHECKS, recheckBody, recheckDue } from '../../src/core/sessions/needs-recheck.js'
-import { briefNeedsLines, briefPrompt } from '../../src/core/sessions/brief.js'
+import { briefNeedsLines, briefPrompt, briefStillOpenLines } from '../../src/core/sessions/brief.js'
 import type { Task } from '../../src/core/types.js'
 
 const NOW = Date.parse('2026-10-28T18:00:00Z')
@@ -35,10 +35,10 @@ describe('the stamp', () => {
     expect(old.checkedAt).toBeUndefined()
   })
 
-  it('an armed check that ran later is the check, and a watched ask is never unverified', () => {
+  it("a trigger's run is shown beside the ask, never counted as its check (it watches the task, maybe not this ask)", () => {
     const s = deriveUserStatus({ phase: 'NEED_ACTION', hasSession: true, processStatus: 'idle', report: asks(ago(20 * H)), phaseChangedAt: ago(20 * H), checkRanAt: ago(10 * 60_000) }, NOW)
-    expect(s).toMatchObject({ checkedAt: ago(10 * 60_000), checkedBy: 'check' })
-    expect(s.unverified).toBeUndefined()
+    expect(s).toMatchObject({ checkedAt: ago(20 * H), checkedBy: 'session', watchedAt: ago(10 * 60_000), unverified: true })
+    expect(checkedLine(s, NOW)!.text).toBe('Not verified: last checked 20 hours ago, may be done already; its trigger ran 10 minutes ago')
   })
 
   it("Walnut's own hand-back words and the moment before a report carry no stamp", () => {
@@ -48,11 +48,6 @@ describe('the stamp', () => {
     expect(back.unverified).toBeUndefined()
     const pending = deriveUserStatus({ phase: 'NEED_ACTION', hasSession: true, processStatus: 'idle', reportPending: true, phaseChangedAt: ago(60_000) }, NOW)
     expect(pending).toMatchObject({ state: 'waiting', transient: true })
-  })
-
-  it('a check whose last run is old is not fresh either', () => {
-    const s = deriveUserStatus({ phase: 'NEED_ACTION', hasSession: true, processStatus: 'idle', report: asks(ago(30 * H)), phaseChangedAt: ago(30 * H), checkRanAt: ago(20 * H) }, NOW)
-    expect(s).toMatchObject({ checkedBy: 'check', unverified: true })
   })
 
   it("Walnut's own records (a letter, a prompt) carry no stamp: they are live", () => {
@@ -83,7 +78,7 @@ describe('a stopped team', () => {
 describe('the words every surface prints', () => {
   it('checked a while ago, by its check, or not verified', () => {
     expect(checkedLine({ state: 'needs', source: 'session', checkedAt: ago(2 * H), checkedBy: 'session' }, NOW)).toEqual({ text: 'Checked 2 hours ago', unverified: false })
-    expect(checkedLine({ state: 'needs', source: 'session', checkedAt: ago(5 * 60_000), checkedBy: 'check' }, NOW)).toEqual({ text: 'Checked 5 minutes ago by its check', unverified: false })
+    expect(checkedLine({ state: 'needs', source: 'session', checkedAt: ago(H), watchedAt: ago(5 * 60_000) }, NOW)).toEqual({ text: 'Checked 1 hour ago; its trigger ran 5 minutes ago', unverified: false })
     expect(checkedLine({ state: 'needs', source: 'session', checkedAt: ago(9 * H), unverified: true }, NOW))
       .toEqual({ text: 'Not verified: last checked 9 hours ago, may be done already', unverified: true })
     expect(checkedLine({ state: 'working' }, NOW)).toBeNull()
@@ -97,27 +92,26 @@ describe('the re-check clock', () => {
     ...extra,
   }) as Task
 
-  it('is due once the ask went NEEDS_RECHECK_MS unchecked, not before, and not while a check watches it', () => {
-    expect(recheckDue(needsTask(ago(NEEDS_RECHECK_MS - 60_000)), { nowMs: NOW, armedCheck: false })).toBe(false)
-    expect(recheckDue(needsTask(ago(NEEDS_RECHECK_MS + 60_000)), { nowMs: NOW, armedCheck: false })).toBe(true)
-    expect(recheckDue(needsTask(ago(NEEDS_RECHECK_MS + 60_000)), { nowMs: NOW, armedCheck: true })).toBe(false)
+  it('is due once the ask went NEEDS_RECHECK_MS unchecked, not before', () => {
+    expect(recheckDue(needsTask(ago(NEEDS_RECHECK_MS - 60_000)), { nowMs: NOW })).toBe(false)
+    expect(recheckDue(needsTask(ago(NEEDS_RECHECK_MS + 60_000)), { nowMs: NOW })).toBe(true)
   })
 
   it('asks at most MAX_RECHECKS times in a row, one per period, however the session rewords its ask', () => {
     const t = needsTask(ago(30 * H), { needs_recheck: { at: ago(NEEDS_RECHECK_MS + 60_000), count: 2, ask: 'Sign in on the Mac' } })
-    expect(recheckDue(t, { nowMs: NOW, armedCheck: false })).toBe(true)
-    expect(recheckDue({ ...t, needs_recheck: { at: ago(H), count: 2, ask: 'Sign in on the Mac' } }, { nowMs: NOW, armedCheck: false })).toBe(false)
-    expect(recheckDue({ ...t, needs_recheck: { at: ago(30 * H), count: MAX_RECHECKS, ask: 'Sign in on the Mac' } }, { nowMs: NOW, armedCheck: false })).toBe(false)
-    expect(recheckDue({ ...t, needs_recheck: { at: ago(30 * H), count: MAX_RECHECKS, ask: 'Sign in on the Mac, then tell me' } }, { nowMs: NOW, armedCheck: false })).toBe(false)
+    expect(recheckDue(t, { nowMs: NOW })).toBe(true)
+    expect(recheckDue({ ...t, needs_recheck: { at: ago(H), count: 2, ask: 'Sign in on the Mac' } }, { nowMs: NOW })).toBe(false)
+    expect(recheckDue({ ...t, needs_recheck: { at: ago(30 * H), count: MAX_RECHECKS, ask: 'Sign in on the Mac' } }, { nowMs: NOW })).toBe(false)
+    expect(recheckDue({ ...t, needs_recheck: { at: ago(30 * H), count: MAX_RECHECKS, ask: 'Sign in on the Mac, then tell me' } }, { nowMs: NOW })).toBe(false)
   })
 
   it('an ephemeral server never asks about a status it copied (checked before it started)', () => {
-    expect(recheckDue(needsTask(ago(10 * H)), { nowMs: NOW, armedCheck: false, notBefore: NOW - H })).toBe(false)
+    expect(recheckDue(needsTask(ago(10 * H)), { nowMs: NOW, notBefore: NOW - H })).toBe(false)
   })
 
   it('a done task, a letter, a prompt are never re-checked', () => {
-    expect(recheckDue({ ...needsTask(ago(10 * H)), phase: 'COMPLETE' } as Task, { nowMs: NOW, armedCheck: false })).toBe(false)
-    expect(recheckDue({ ...needsTask(ago(10 * H)), user_status: { state: 'needs', source: 'letter', ask: 'x', checkedAt: ago(10 * H) } } as Task, { nowMs: NOW, armedCheck: false })).toBe(false)
+    expect(recheckDue({ ...needsTask(ago(10 * H)), phase: 'COMPLETE' } as Task, { nowMs: NOW })).toBe(false)
+    expect(recheckDue({ ...needsTask(ago(10 * H)), user_status: { state: 'needs', source: 'letter', ask: 'x', checkedAt: ago(10 * H) } } as Task, { nowMs: NOW })).toBe(false)
   })
 
   it('the note names the ask, how long ago, and asks for a check script', () => {
@@ -145,6 +139,10 @@ describe("the Brief's live list of what needs the user", () => {
     expect(lines[0]).toContain('"Sign in on the Mac" (NOT VERIFIED: last checked 9 hours ago, the user may have done it already)')
     expect(lines[1]).toContain('"Pick a &lt;name&gt;" (checked 2 hours ago by its session)')
     expect(lines[2]).toContain("(Walnut's live record)")
+    // The still-open footer's "waiting on the user for N hours" carries the same stamp.
+    const old = { ...tasks[1], phase_changed_at: ago(9 * H) } as Task
+    const footer = briefStillOpenLines(lead, [lead, old], [], NOW)
+    expect(footer.find((l) => l.includes('waiting on the user'))).toContain('(NOT VERIFIED: last checked 9 hours ago, may be done already)')
     const prompt = briefPrompt({ hadBrief: true, moves: [], needs: lines })
     expect(prompt).toContain('never as a step the user still owes')
     expect(prompt).toContain(lines[0])

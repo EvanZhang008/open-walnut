@@ -107,7 +107,7 @@ export interface UserStatusInput {
   dueDate?: string | null;
   /** When its team was stopped in one step, not resumed since (Task.team_stop on its team's root). */
   teamStoppedAt?: string | null;
-  /** When an armed trigger of the task last ran its check (ISO): a script watches the ask. */
+  /** When an armed trigger of the task last ran its check (ISO): shown, never counted as a check. */
   checkRanAt?: string | null;
 }
 
@@ -141,12 +141,15 @@ export interface UserStatus {
   /** Its due date has passed (`overdue`) or comes within a day (`soon`); absent otherwise
    *  (2026-10-28, the Grok Bot study: deadlines in the status). `at` is the due date as set. */
   due?: { at: string; state: 'overdue' | 'soon' };
-  /** needs from its own session: when the ask was last confirmed (ISO), by the session's own
-   *  turn-end report or by an armed trigger's check script (`checkedBy`). Every other needs is
-   *  Walnut's live record (a prompt, a letter, a choice, an error) and carries neither. */
+  /** needs from its own session: when the session last confirmed the ask (ISO), at a turn end.
+   *  Every other needs is Walnut's live record (a prompt, a letter, a choice, an error) and
+   *  carries none. `checkedBy` is always `session` (kept for a client that reads it). */
   checkedAt?: string;
   checkedBy?: 'session' | 'check';
-  /** needs from its session, confirmed longer ago than UNVERIFIED_AFTER_MS and watched by no check:
+  /** When an armed trigger of the task last ran (ISO, to 10 minutes): it watches the task, which
+   *  is not proof this ask still holds, so it never counts as a check. */
+  watchedAt?: string;
+  /** needs from its session, confirmed by the session longer ago than UNVERIFIED_AFTER_MS:
    *  the user may have done it outside Walnut, so it reads "not verified", never as fact
    *  (2026-10-28, the user: "I've already resolved some of these. You should at least verify"). */
   unverified?: boolean;
@@ -165,12 +168,14 @@ export function agoWords(ms: number): string {
 
 /** The words every surface prints under a session's "needs you": when it was last checked, or
  *  that it is not verified. Null for Walnut's own live records (a prompt, a letter, a choice). */
-export function checkedLine(s: Pick<UserStatus, 'state' | 'source' | 'checkedAt' | 'checkedBy' | 'unverified'> | null | undefined, nowMs: number = Date.now()): { text: string; unverified: boolean } | null {
+export function checkedLine(s: Pick<UserStatus, 'state' | 'source' | 'checkedAt' | 'watchedAt' | 'unverified'> | null | undefined, nowMs: number = Date.now()): { text: string; unverified: boolean } | null {
   if (s?.state !== 'needs' || s.source !== 'session') return null;
   const at = Date.parse(s.checkedAt ?? '');
   if (!Number.isFinite(at)) return null;
-  if (s.unverified) return { text: `Not verified: last checked ${agoWords(nowMs - at)}, may be done already`, unverified: true };
-  return { text: `Checked ${agoWords(nowMs - at)}${s.checkedBy === 'check' ? ' by its check' : ''}`, unverified: false };
+  const ran = Date.parse(s.watchedAt ?? '');
+  const watched = Number.isFinite(ran) ? `; its trigger ran ${agoWords(nowMs - ran)}` : '';
+  if (s.unverified) return { text: `Not verified: last checked ${agoWords(nowMs - at)}, may be done already${watched}`, unverified: true };
+  return { text: `Checked ${agoWords(nowMs - at)}${watched}`, unverified: false };
 }
 
 /** A session's "needs you" is asked again after this (sessions/needs-recheck.ts). A test server
@@ -309,14 +314,14 @@ function reportAsk(report: StatusReport | null | undefined): string | undefined 
 /** When a session's ask was last confirmed, by whom, and whether that is too long ago to be fact. */
 function stampChecked(out: UserStatus, input: UserStatusInput, nowMs: number): void {
   // Its last word on it: the newest of its report and its last phase move (a turn's end).
-  const said = Math.max(...[input.report?.at, input.phaseChangedAt].map((v) => Date.parse(v ?? '')).filter(Number.isFinite));
-  const ran = Date.parse(input.checkRanAt ?? '');
-  const byCheck = Number.isFinite(ran) && (!Number.isFinite(said) || ran > said);
-  const at = byCheck ? ran : said;
+  const at = Math.max(...[input.report?.at, input.phaseChangedAt].map((v) => Date.parse(v ?? '')).filter(Number.isFinite));
   if (!Number.isFinite(at)) return;
   out.checkedAt = new Date(at).toISOString();
-  out.checkedBy = byCheck ? 'check' : 'session';
-  // A script that watches it keeps it fresh; one whose host went away for a day does not.
+  out.checkedBy = 'session';
+  // A trigger of the task watches the task, not necessarily this ask (2026-10-28: a reminder to
+  // call someone carried a mail trigger): shown beside it, never a check of its own.
+  const ran = Date.parse(input.checkRanAt ?? '');
+  if (Number.isFinite(ran)) out.watchedAt = new Date(ran).toISOString();
   if (nowMs - at > UNVERIFIED_AFTER_MS) out.unverified = true;
 }
 

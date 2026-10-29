@@ -432,11 +432,13 @@ struct WalnutUserStatus: Codable, Equatable {
     /// Past its due date (`overdue`) or due within a day (`soon`); nil otherwise or from an
     /// older server (additive, 2026-10-28).
     var due: WalnutDue? = nil
-    /// needs from its own session: when the ask was last confirmed (ISO), by `session` or by an
-    /// armed trigger's `check`; `unverified` once that is too old to be fact (additive, 2026-10-28).
+    /// needs from its own session: when the session last confirmed the ask (ISO); `unverified`
+    /// once that is too old to be fact; `watchedAt` when a trigger of the task last ran, shown
+    /// beside it but never a check (additive, 2026-10-28).
     var checkedAt: String? = nil
     var checkedBy: String? = nil
     var unverified: Bool? = nil
+    var watchedAt: String? = nil
 }
 
 /// `user_status.due`: the due date as set (a bare date or an ISO time) and how near it is.

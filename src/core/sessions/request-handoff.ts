@@ -4,12 +4,13 @@
  * reflection: a lead handed Main's request to a worker and ended its turn, and Main heard
  * "WAITING without an explicit reply" every time, though the work had only moved.
  *
- *  - The turn-end fallback holds such a request while an answer is still owed to its target
- *    (holdHandedOn): a turn that parked, waiting for the worker, is not "no reply". It speaks
- *    once the work is back and the target still said nothing (a task it went to that closed
- *    or is gone counts as back), when the target is blocked, errs or closes its task, and at
- *    the deadline, which the link moved past the worker's and the work coming back pulls in
- *    again (session-requests.ts pullInBack).
+ *  - A plain turn end never settles such a request (holdHandedOn). 2026-10-28, Main's reflection:
+ *    a lead's turn end after its worker answered settled Main's request with a notice, so the
+ *    worker's own answer to Main, later, met a closed request. It settles when the target or
+ *    the task that took it over really replies (session-send-core.ts performReply), and at its
+ *    deadline, which the link moved past the worker's and the work coming back pulls in again
+ *    (session-requests.ts pullInBack), it turns OVERDUE and stays open, its asker told so. A
+ *    target that is blocked, errs or closes its task still speaks at once.
  *  - Whenever it speaks, it names the tasks the work went to and whether each answered
  *    (handedOnFor), so the asker knows where to look.
  * A reply from the target settles the request as before; nothing here speaks for it then.
@@ -26,27 +27,10 @@ export async function holdHandedOn(
   if (!pending.some((r) => r.carriedBy?.length)) return [...pending];
   // Blocked, failed or closed: the asker hears now, with who still has the work.
   if (edge.outcome !== 'completed' || edge.phase === 'COMPLETE') return [...pending];
-  const { listAllSessionRequests, carriedState } = await import('../session-requests.js');
-  // An unreadable ledger holds nothing: the notice as before is better than none.
-  const rows = await listAllSessionRequests().catch(() => null);
-  if (!rows) return [...pending];
-  const byId = new Map(rows.map((r) => [r.id, r] as const));
-  // The asks still out, and whether the task each went to is still there to answer it.
-  const out = pending.flatMap((r) => (r.carriedBy ?? []).filter((c) => byId.get(c.id)?.status === 'pending'));
-  const taskIds = [...new Set(out.map((c) => c.taskId).filter((id): id is string => !!id))];
-  let open: Set<string> | null = null;
-  if (taskIds.length) {
-    try {
-      const { listTasksByIds } = await import('../task-manager.js');
-      open = new Set((await listTasksByIds(taskIds)).filter((t) => t.phase !== 'COMPLETE').map((t) => t.id));
-    } catch { open = null; /* unknown: the asks count as out, the deadline still speaks */ }
-  }
-  // A task that closed without answering, or is gone, never will: its work is back.
-  const stillOut = (c: { taskId?: string }) => !c.taskId || !open || open.has(c.taskId);
+  // A plain turn end: only a real reply, or the deadline, settles a request handed on.
   return pending.filter((request) => {
-    if (carriedState(request, rows) !== 'out') return true;
-    if (!(request.carriedBy ?? []).some((c) => byId.get(c.id)?.status === 'pending' && stillOut(c))) return true;
-    log.session.info('request fallback held: handed on, and that answer is still owed', {
+    if (!request.carriedBy?.length) return true;
+    log.session.info('request fallback held: handed on, only a real reply or its deadline settles it', {
       requestId: request.id, fromSessionId: request.fromSessionId, toTaskId: request.toTaskId,
       carriedBy: request.carriedBy?.map((c) => c.id), phase: edge.phase,
     });

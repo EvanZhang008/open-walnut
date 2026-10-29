@@ -711,6 +711,20 @@ describe('performSessionSend — in_reply_to', () => {
     expect(row?.lateFrom).toBeUndefined();
   });
 
+  it('the task a request was handed on to answers it directly; a bystander still may not', async () => {
+    const rq = await armRequest({ toTaskId: 'task-target' });
+    // The target hands it on to the bystander's task with its own ask (session-requests.ts linkHandoffs).
+    const { createSessionRequest } = await import('../../src/core/session-requests.js');
+    await createSessionRequest({ fromSessionId: TARGET, fromTaskId: 'task-target', toSessionId: 'sess-bystander', toTaskId: 'task-bystander', text: 'count them', handsOn: [rq.id] });
+    expect((await getSessionRequest(rq.id))?.carriedBy?.[0]?.taskId).toBe('task-bystander');
+    const result = await performSessionSend({ text: 'Done: 412 rows.', inReplyTo: rq.id, callerSid: 'sess-bystander' });
+    expect(result.repliedTo).toBe(rq.id);
+    expect((await getSessionRequest(rq.id))?.status).toBe('replied');
+    sessions.push(rec('sess-other', { title: 'Other', taskId: 'task-other' }));
+    const rq2 = await armRequest();
+    await expectSendError(performSessionSend({ text: 'x', inReplyTo: rq2.id, callerSid: 'sess-other' }), 'not_request_target', 403);
+  });
+
   it('410s when the asking session is gone', async () => {
     const rq = await armRequest();
     sessions = sessions.filter((s) => s.claudeSessionId !== ASKER);

@@ -640,8 +640,10 @@ async function performReply(
   if (caller.kind !== 'session') {
     throw new SendError('not_request_target', 'replies must come from the session the request was sent to', 403);
   }
+  // The task it was handed on to (request-handoff.ts) answers it as well as its target.
   const isTarget = caller.record.claudeSessionId === request.toSessionId
-    || (!!request.toTaskId && caller.record.taskId === request.toTaskId);
+    || (!!request.toTaskId && caller.record.taskId === request.toTaskId)
+    || (!!caller.record.taskId && (request.carriedBy ?? []).some((c) => c.taskId === caller.record.taskId));
   if (!isTarget) {
     throw new SendError('not_request_target',
       `request ${id} was not addressed to this session`, 403);

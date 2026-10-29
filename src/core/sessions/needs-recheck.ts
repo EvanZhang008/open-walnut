@@ -1,17 +1,17 @@
 /**
- * A "needs you" nobody can check by script is checked again on a timer (2026-10-28, the user:
- * "I've already resolved some of these. You should at least verify ... either report it up when
- * it is resolved, or verify it again after a while"; a sign-in he had finished in a terminal stayed
- * on his list, and Main read it to him as fact).
+ * A "needs you" is checked again on a timer (2026-10-28, the user: "I've already resolved some of
+ * these. You should at least verify ... either report it up when it is resolved, or verify it
+ * again after a while"; a sign-in he had finished in a terminal stayed on his list, and Main read
+ * it to him as fact).
  *
  * A task whose status asks the user something in its own words (user_status `needs`, source
- * `session`) records when that was last checked (`checkedAt`: its session said it at a turn end,
- * or an armed trigger of the task ran its check). When that is older than NEEDS_RECHECK_MS and no
- * trigger of its own watches it, its session gets ONE note: check whether the user did it outside
+ * `session`) records when its session last said so (`checkedAt`, at a turn end). When that is
+ * older than NEEDS_RECHECK_MS, its session gets ONE note: check whether the user did it outside
  * Walnut, carry on if so, and arm a check if one can be scripted. Its turn-end report then states
- * the ask again (checked now) or moves on. At most MAX_RECHECKS in a row while it keeps asking the
- * user (reworded or not); after that it shows as not verified until someone looks. Primary only; an ephemeral server never wakes
- * a task for a status it copied from the real Walnut.
+ * the ask again (checked now) or moves on. A trigger of the task does not exempt it: it watches
+ * the task, maybe not this ask. At most MAX_RECHECKS in a row while it keeps asking the user
+ * (reworded or not); after that it shows as not verified until someone looks. Primary only; an
+ * ephemeral server never wakes a task for a status it copied from the real Walnut.
  */
 import { log } from '../../logging/index.js';
 import type { Task } from '../types.js';
@@ -45,11 +45,11 @@ export function recheckBody(ask: string, checkedAt: string | undefined, nowMs: n
 
 /** Whether a task is due a re-check now. Pure; exported for tests. */
 export function recheckDue(task: Pick<Task, 'phase' | 'status' | 'user_status' | 'needs_recheck'>, opts: {
-  nowMs: number; armedCheck: boolean; notBefore?: number;
+  nowMs: number; notBefore?: number;
 }): boolean {
   const s = task.user_status;
   if (!s || s.state !== 'needs' || s.source !== 'session' || !s.ask) return false;
-  if (task.phase === 'COMPLETE' || task.status === 'done' || opts.armedCheck) return false;
+  if (task.phase === 'COMPLETE' || task.status === 'done') return false;
   // Stamped only on an ask the session wrote itself (user-status.ts stampChecked).
   const checked = Date.parse(s.checkedAt ?? '');
   if (!Number.isFinite(checked) || opts.nowMs - checked < NEEDS_RECHECK_MS) return false;
@@ -71,7 +71,6 @@ export async function runNeedsRecheck(nowMs = Date.now()): Promise<string[]> {
   const woken: string[] = [];
   try {
     const { listTasks, updateTaskRaw } = await import('../task-manager.js');
-    const { triggersWatching } = await import('../task-wait-until.js');
     for (const task of await listTasks()) {
       // It no longer asks the user (it waits on something else, or is done): the next ask starts a
       // fresh count. Working is not that: a re-check turn runs as Working.
@@ -81,8 +80,8 @@ export async function runNeedsRecheck(nowMs = Date.now()): Promise<string[]> {
         continue;
       }
       if (task.plugin_only || task.user_status?.state !== 'needs' || task.user_status.source !== 'session') continue;
-      const armedCheck = (await triggersWatching(task.id)).some((t) => t.state === 'armed');
-      if (!recheckDue(task, { nowMs, armedCheck, ...(ephemeral ? { notBefore: startedAt } : {}) })) continue;
+      // A trigger of the task does not exempt it: it watches the task, maybe not this ask.
+      if (!recheckDue(task, { nowMs, ...(ephemeral ? { notBefore: startedAt } : {}) })) continue;
       const ask = task.user_status!.ask!;
       const { getSessionsForTask } = await import('../session-tracker.js');
       const { pickDeliverySession } = await import('../routines/session-target.js');

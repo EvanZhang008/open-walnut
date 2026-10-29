@@ -12,7 +12,7 @@
  *     written (briefMoves in src/core/user-status.ts), so an idle owner's Brief never reads stale.
  */
 import {
-  BRIEF_MAX_CHARS, COMPLETE_IS_VERIFIED, USER_STATE_LABELS, briefMentions, briefMoves, agoWords, briefStillOpen, briefTeam, fallbackUserState,
+  BRIEF_MAX_CHARS, COMPLETE_IS_VERIFIED, USER_STATE_LABELS, briefMentions, briefMoves, agoWords, briefStillOpen, briefTeam, checkedLine, fallbackUserState,
   type StillOpenAsk, type TaskBrief,
 } from '../user-status.js';
 import type { Task } from '../types.js';
@@ -83,7 +83,7 @@ export function briefNeedsLines(owner: Task, tasks: readonly Task[], now = Date.
     const when = s.source !== 'session' ? 'Walnut\'s live record'
       : !Number.isFinite(checked) ? 'never checked'
         : s.unverified ? `NOT VERIFIED: last checked ${agoWords(now - checked)}, the user may have done it already`
-          : `checked ${agoWords(now - checked)}${s.checkedBy === 'check' ? ' by its check script' : ' by its session'}`;
+          : `checked ${agoWords(now - checked)} by its session`;
     const vp = owner.org_role === 'main' ? briefVpOf(t, tasks) : undefined;
     const vpRef = vp ? ` (VP <task-ref id="${vp.id}" label="${flat(vp.title).replace(/"/g, '&quot;')}"/>)` : '';
     lines.push(`- <task-ref id="${t.id}" label="${flat(t.title).replace(/"/g, '&quot;')}"/>${vpRef}: "${flat(s.ask).slice(0, 200)}" (${when})`);
@@ -117,7 +117,9 @@ export function briefStillOpenLines(owner: Task, tasks: readonly Task[], overdue
   for (const d of open.due) lines.push(`- ${ref(d.task)}: ${d.state === 'overdue' ? 'past its due date' : 'due within a day'} (${d.at})`);
   for (const pr of open.promises) lines.push(`- ${ref(pr.task)}: said it waits on or will follow up on "${flat(pr.words).slice(0, 120)}"; Walnut's follow-up is ${pr.at}`);
   for (const w of open.waitingLong) {
-    lines.push(`- ${ref(w.task)}: waiting on ${w.on === 'you' ? 'the user' : 'its lead'} for ${span(now - w.since)}`);
+    // On the user: when it was last confirmed, so an old ask is never passed on as fact.
+    const c = w.on === 'you' ? checkedLine(w.task.user_status, now) : null;
+    lines.push(`- ${ref(w.task)}: waiting on ${w.on === 'you' ? 'the user' : 'its lead'} for ${span(now - w.since)}${c ? ` (${c.unverified ? c.text.replace(/^Not verified/, 'NOT VERIFIED') : c.text.charAt(0).toLowerCase() + c.text.slice(1)})` : ''}`);
   }
   return lines;
 }

@@ -152,6 +152,7 @@ path on the companion".
 | POST | `/api/v1/tasks/:id/start` | Start a NEW session for an existing task (cwd resolved server-side; 409 when one is already live; 501 on REPLICA) |
 | POST | `/api/v1/messages` | Send a message to any session by session/task/title handle (501 on REPLICA) |
 | GET | `/api/v1/requests/:id` | Status of one `expect_reply` request (`rq-…`) |
+| POST | `/api/v1/messages/:id/send-now` | Send a queued message now (`rq-…` or `qm-…`), the bubble's Send now |
 | POST | `/api/v1/tasks/:id/star` | Toggle star |
 | POST | `/api/v1/tasks/:id/notes` | Append a timestamped note entry |
 | PUT | `/api/v1/tasks/:id/note` | Replace the whole note |
@@ -878,10 +879,10 @@ reconcile, `NOTES_UPDATED` events) with the web UI's `/api/notes-v2`.
   machine stopped (a lost host, a restart, a dead process): Walnut resumes it and its
   lead restarts it, so it reads `waiting` (`machine`, or `lead` once Walnut gave up or a
   day passed), not `needs`. A `needs` from its own session (`source: 'session'`) carries
-  `checkedAt` (when the ask was last confirmed, ISO) and `checkedBy` (`session`: its turn-end
-  report; `check`: an armed trigger's check script), and `unverified: true` once that is more
-  than 4.5 hours ago with no check watching it: show it as not verified, never as fact (added
-  2026-10-28). The server derives it (src/core/user-status.ts) and
+  `checkedAt` (when its session last confirmed the ask at a turn end, ISO; `checkedBy` is
+  `session`), `watchedAt` (when a trigger of the task last ran: shown beside it, never a check,
+  since it watches the task and maybe not this ask), and `unverified: true` once `checkedAt` is
+  more than 4.5 hours old: show it as not verified, never as fact (added 2026-10-28). The server derives it (src/core/user-status.ts) and
   every surface shows it instead of the phase, so a `NEED_ACTION` phase alone is
   not "needs you". A client reading an older server sees no field and falls back
   to the phase. Additive and optional.
@@ -2271,6 +2272,21 @@ ledger. Both end up in the same persistent message queue.
   `404 not_found`. This is a status read for `walnut wait rq-…`, not something
   a client should poll: replies and the fallback notification are pushed into
   the asking session on their own.
+  Additive (2026-10-29): the request keeps `messageId`, the queue row its
+  message went out as, and while that row is still queued the answer adds
+  `"delivery": { "state": "queued" | "waiting", "messageId", "sessionId",
+  "reason"?, "retryAt"? }`: `waiting` means the target's host did not take it in
+  time, `reason` is the text the user's bubble shows and `retryAt` when Walnut
+  sends it again by itself. Absent once the message went in.
+- `POST /api/v1/messages` adds `"waiting": { "reason", "retryAt"? }` (additive,
+  2026-10-29) when the target's host did not take the last message in time; the
+  send itself still tries again at once.
+- `POST /api/v1/messages/:id/send-now` (additive, 2026-10-29), `id` = `rq-…` or
+  `qm-…` → `200 { "sent": true, "messageId", "sessionId", "delivery"? }`: sends
+  the queued row again now, the same row, never a copy (the web bubble's Send now
+  takes the same path). `409 not_queued` when it already went in or was deleted
+  (or the request predates `messageId`), `404 not_found` for an unknown request,
+  `501` on the cloud companion.
 
 ### Session launch (additive) — create a session from mobile
 
