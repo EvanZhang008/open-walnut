@@ -3588,6 +3588,13 @@ describe('SessionRunner.currentTurn — live daemon round-trip', () => {
     // (init arrives before result). Wait for its result before starting a fresh,
     // independently-observable second turn on the same session.
     await waitForResult(collected);
+    // The mock CLI is single-turn: it exits right after that result. Wait until
+    // the session has seen the exit, so the second send takes the --resume path
+    // inside ONE ledger turn. Sent before the exit lands, the write finds the
+    // process dead, the line goes back to the queue and is delivered in a second
+    // ledger turn that opens after this one settles (about 1 run in 9 under load).
+    for (let i = 0; i < 500 && liveSession!.processEndCount === 0; i++) await new Promise((r) => setTimeout(r, 10));
+    expect(liveSession!.processEndCount).toBeGreaterThan(0);
 
     // Re-drive a second turn on the SAME session and observe currentTurn
     // transition open → settled live, through the real daemon round-trip.
