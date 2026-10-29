@@ -199,8 +199,8 @@ final class SessionMidTurnOrderUITests: XCTestCase {
         waitUntil(timeout: timeout) { !self.matches(app, needle).isEmpty }
     }
 
-    /// The answered turn's fold row: its phrase names the read before the answer.
-    private static let foldPhrase = "Read a file"
+    /// The answered turn's fold row: its phrase counts the read before the answer.
+    private static let foldPhrase = "Ran 1 tool"
 
     /// Folded: C1 is inside the fold row, and fold < C2 < the bubble < the answer.
     @MainActor

@@ -260,9 +260,9 @@ final class ReviewSurfaceTests: XCTestCase {
     /// still opens with no folder picked.
     func testTheDraftKeepsItsPageAtTheAccessibilitySizes() throws {
         let draft = try source("Walnut/Views/Sessions/NewSessionChatView.swift")
-        XCTAssertTrue(draft.contains("disabledNotice: canLaunch || dynamicTypeSize.isAccessibilitySize ? nil : Self.folderNotice"))
+        XCTAssertTrue(draft.contains("disabledNotice: launchingMessage != nil || canLaunch || dynamicTypeSize.isAccessibilitySize ? nil : Self.folderNotice"))
         // The pills also move up whenever Save as todo shares the composer's row.
-        XCTAssertTrue(draft.contains("controlsAccessory: launchPillsInPillRow ? nil : AnyView(launchPills)"))
+        XCTAssertTrue(draft.contains("controlsAccessory: launchingMessage != nil || launchPillsInPillRow ? nil : AnyView(launchPills)"))
         XCTAssertTrue(draft.contains(
             "private var launchPillsInPillRow: Bool {\n        dynamicTypeSize.isAccessibilitySize || "
         ))

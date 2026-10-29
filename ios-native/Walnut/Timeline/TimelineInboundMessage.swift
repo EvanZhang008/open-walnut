@@ -1,8 +1,8 @@
 import Foundation
 
 /// A message the session RECEIVED (a peer's note, a reply, Walnut's notice, a
-/// trigger), read just far enough to draw it as what it is: a received card,
-/// never the user's bubble, never raw XML.
+/// trigger), read just far enough to take Walnut's riders off a person's row.
+/// What a received row reads as is `PeerMessagePresentation`'s one line.
 ///
 /// The current wire format is one tag per delivered message:
 ///
@@ -14,8 +14,7 @@ import Foundation
 /// (the server escapes them), so "from the open tag to the FIRST
 /// `\n</walnut-message>`" is the body. The web console's parser
 /// (`lib/history-session-envelope.ts`) also reads four legacy prose shapes; the
-/// phone does not need to: WHO sent a row is the server's word (`sentBy`), and a
-/// row this reader cannot take apart is shown as its text, inside a fold.
+/// phone does not need to: WHO sent a row is the server's word (`sentBy`).
 enum TimelineInboundMessage {
     struct Envelope: Equatable {
         let attributes: [String: String]
@@ -88,27 +87,6 @@ enum TimelineInboundMessage {
             .replacingOccurrences(of: "&gt;", with: ">")
             .replacingOccurrences(of: "&amp;", with: "&")
     }
-
-    /// Who it is from, as a reader names it: the sender's title without the short
-    /// id Walnut appends ("Docs lead [1a2b3c4d]" → "Docs lead").
-    static func sender(_ envelope: Envelope) -> String {
-        let from = (envelope.attributes["from"] ?? "").trimmingCharacters(in: .whitespaces)
-        if from.isEmpty { return envelope.attributes["kind"] == "trigger" ? "a trigger" : "Walnut" }
-        if let open = from.lastIndex(of: "["), from.hasSuffix("]"), open > from.startIndex {
-            return from[..<open].trimmingCharacters(in: .whitespaces)
-        }
-        return from
-    }
-
-    /// The card a received row draws as, inside a fold: a notification card under
-    /// the row's own id (so its expansion is remembered like any card's).
-    static func card(_ message: ChatMessage) -> ChatMessage {
-        ChatMessage(id: message.id, role: message.role, text: displayText(message.text),
-                    createdAt: message.createdAt, kind: .notification, source: inboundSource)
-    }
-
-    /// `ChatMessage.source` of a received card (see `NotificationStyling`).
-    static let inboundSource = "inbound"
 
     // MARK: - Riders
 

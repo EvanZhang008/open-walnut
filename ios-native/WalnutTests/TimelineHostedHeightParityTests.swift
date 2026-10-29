@@ -241,18 +241,19 @@ final class TimelineHostedHeightParityTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(checked, 10, "gate checked nothing (n=\(checked))")
     }
 
-    /// An expanded long received card is held to a TIGHT bound as well: its body
-    /// used to be a TextKit height with the paragraph style's 3pt line spacing on
-    /// every line, which SwiftUI's `Text` never draws, so a 2,300-character card
-    /// left about 185pt of blank card under its last line.
-    func testExpandedLongReceivedCardReservesNoBlankBand() async {
+    /// An expanded long notice is held to a TIGHT bound as well: its body used to
+    /// be a TextKit height with the paragraph style's 3pt line spacing on every
+    /// line, which SwiftUI's `Text` never draws, so a 2,300-character card left
+    /// about 185pt of blank card under its last line. (A one-line badge: a longer
+    /// one wraps at the largest sizes, which the fixed header height does not pay.)
+    func testExpandedLongNoticeReservesNoBlankBand() async {
         let paragraph = "The review found two places where the cache key ignores the locale, "
             + "so a reader switching languages keeps the old page until it expires. "
         let body = "**From Docs lead**: Review of the cache change\n\n"
             + (0..<8).map { _ in String(repeating: paragraph, count: 2) }.joined(separator: "\n\n")
             + "\n\nSee https://example.com/a/very/long/path/that/cannot/break/nicely/index.html too."
         XCTAssertGreaterThan(body.count, 2000)
-        let msg = message("in-1", text: body, kind: .notification, source: TimelineInboundMessage.inboundSource)
+        let msg = message("in-1", text: body, kind: .notification, source: "subagent")
         for category in [UIContentSizeCategory.unspecified, .extraSmall, .accessibilityExtraExtraExtraLarge] {
             let built = await rows([msg], expanded: ["in-1#0"], category: category)
             guard let row = built.first(where: { $0.content.reuseKind == "notification" }) else {
@@ -284,42 +285,6 @@ final class TimelineHostedHeightParityTests: XCTestCase {
                                          "\(category.rawValue) expanded=\(expanded): card clips \(rendered - row.height)pt of ink")
             }
         }
-    }
-
-    /// A folded received card is as tall as its heading: one line when the heading
-    /// fits one line (it used to reserve a second preview line for every card, an
-    /// empty band under each one-line title), and every line when a long title wraps
-    /// at a large text size. Held to the same tight bound as the expanded card.
-    func testFoldedReceivedCardIsAsTallAsItsHeading() async {
-        let short = "<walnut-message kind=\"peer-note\" from=\"Docs lead\">\nCache cleared.\n</walnut-message>"
-        let long = "<walnut-message kind=\"notification\" from=\"Walnut\" about=\"Update screenshots\">\n"
-            + "Your subtask \"Update screenshots\" (t-1) completed its task after redrawing every onboarding "
-            + "screen in both colour schemes and checking each one against the guide.\n</walnut-message>"
-        var heights: [String: CGFloat] = [:]
-        for category in [UIContentSizeCategory.unspecified, .extraSmall, .accessibilityExtraExtraExtraLarge] {
-            for (name, raw) in [("short", short), ("long", long)] {
-                let card = TimelineInboundMessage.card(message("in-\(name)", text: raw))
-                let built = await rows([card], category: category)
-                guard let row = built.first(where: { $0.content.reuseKind == "notification" }) else {
-                    return XCTFail("no card row")
-                }
-                guard case .notification(_, _, _, _, let line, _, let collapsible, let expanded) = row.content else {
-                    return XCTFail("not a card")
-                }
-                XCTAssertTrue(collapsible && !expanded, "\(name): a received card opens folded")
-                if name == "short" { XCTAssertEqual(line, "**From Docs lead**: Cache cleared.") }
-                let rendered = renderedHeight(row, category: category)
-                XCTAssertLessThanOrEqual(ceil(rendered), ceil(row.height) + 1,
-                                         "\(category.rawValue) \(name): folded card clips \(rendered - row.height)pt")
-                XCTAssertLessThanOrEqual(row.height, rendered + 3,
-                                         "\(category.rawValue) \(name): folded card reserves \(row.height)pt for \(rendered)pt")
-                heights["\(category.rawValue) \(name)"] = row.height
-            }
-        }
-        // The one-line heading reserves one line: the long one, wrapping, is taller.
-        let base = UIContentSizeCategory.unspecified.rawValue
-        XCTAssertGreaterThan(heights["\(base) long"] ?? 0,
-                             (heights["\(base) short"] ?? 0) + TimelineTextStyler.subheadlineFont.lineHeight * 0.9)
     }
 
     func testToolChipsFitCollapsedAndExpanded() async {

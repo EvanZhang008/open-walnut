@@ -238,40 +238,52 @@ final class TimelineRowBuilder {
                 height: TimelineFileChip.height(uploading: chip.progress != nil)
             ))
         }
-        let sent = MessageRow.attachmentSendParts(message.text)
-        if let sent {
-            // A file that is a picture shows as one, like the photos above it.
-            let pictures = sent.imagePaths + sent.filePaths.filter { MarkdownParser.isImagePath($0) }
-            for path in pictures {
+        // A message this phone composed is the user's own words, never an envelope.
+        let locallyComposed = message.failed == true || message.pending == true || queued != nil
+            || message.clientMessageId != nil || message.messageId != nil
+        let segments = locallyComposed ? [.text(message.text)]
+            : PeerMessagePresentation.segments(message.text, received: message.sentBy == "agent")
+                ?? [.text(message.text)]
+        for segment in segments {
+            switch segment {
+            case .message(let description):
+                rows.append(peerMessageRow(id: nextID(), description: description, width: width))
+            case .text(let rawText):
+                let sent = MessageRow.attachmentSendParts(rawText)
+                if let sent {
+                    // A file that is a picture shows as one, like the photos above it.
+                    let pictures = sent.imagePaths + sent.filePaths.filter { MarkdownParser.isImagePath($0) }
+                    for path in pictures {
+                        rows.append(TimelineRow(
+                            id: nextID(), revision: 0,
+                            content: .image(raw: path, alt: (path as NSString).lastPathComponent,
+                                            spoken: Self.sentPhotosLabel(count: 1), mine: true),
+                            height: TimelineMetrics.imageSlotHeight
+                        ))
+                    }
+                    for path in sent.filePaths where !MarkdownParser.isImagePath(path) {
+                        rows.append(TimelineRow(
+                            id: nextID(), revision: 0, content: .fileAttachment(.sent(path: path)),
+                            height: TimelineFileChip.height(uploading: false)
+                        ))
+                    }
+                }
+                let displayText = sent?.text ?? rawText
+                guard !displayText.isEmpty else { continue }
+                let failed = message.failed == true
+                let text = TimelineTextStyler.inlineText(displayText)
+                let size = measurer.measure(text, width: TimelineMetrics.bubbleTextWidth(width))
+                let height = size.height + TimelineMetrics.bubbleVPad * 2 + TimelineMetrics.textVPad * 2
                 rows.append(TimelineRow(
-                    id: nextID(), revision: 0,
-                    content: .image(raw: path, alt: (path as NSString).lastPathComponent,
-                                    spoken: Self.sentPhotosLabel(count: 1), mine: true),
-                    height: TimelineMetrics.imageSlotHeight
+                    id: nextID(),
+                    // Flags mutate on the same optimistic id — carry them in the
+                    // revision so the cell reloads when pending settles / fails.
+                    revision: (failed ? 2 : 0) + (message.pending == true ? 1 : 0),
+                    content: .userBubble(text: text, textSize: size, failed: failed,
+                                         pending: message.pending == true),
+                    height: height
                 ))
             }
-            for path in sent.filePaths where !MarkdownParser.isImagePath(path) {
-                rows.append(TimelineRow(
-                    id: nextID(), revision: 0, content: .fileAttachment(.sent(path: path)),
-                    height: TimelineFileChip.height(uploading: false)
-                ))
-            }
-        }
-        let displayText = sent?.text ?? message.text
-        if !displayText.isEmpty {
-            let failed = message.failed == true
-            let text = TimelineTextStyler.inlineText(displayText)
-            let size = measurer.measure(text, width: TimelineMetrics.bubbleTextWidth(width))
-            let height = size.height + TimelineMetrics.bubbleVPad * 2 + TimelineMetrics.textVPad * 2
-            rows.append(TimelineRow(
-                id: nextID(),
-                // Flags mutate on the same optimistic id — carry them in the
-                // revision so the cell reloads when pending settles / fails.
-                revision: (failed ? 2 : 0) + (message.pending == true ? 1 : 0),
-                content: .userBubble(text: text, textSize: size, failed: failed,
-                                     pending: message.pending == true),
-                height: height
-            ))
         }
         if message.failed == true {
             // Revision distinguishes the waiting copy from the terminal one so
@@ -300,6 +312,26 @@ final class TimelineRowBuilder {
             ))
         }
         return rows
+    }
+
+    /// A received row this build cannot take apart still reads as one line, never
+    /// as its raw markup or an expandable card.
+    func peerMessageRow(id: String, description: PeerMessageDescription, width: CGFloat) -> TimelineRow {
+        TimelineRow(id: id, revision: 0, content: .peerMessage(description),
+                    height: peerMessageHeight(description, width: width))
+    }
+
+    private func peerMessageHeight(_ description: PeerMessageDescription, width: CGFloat) -> CGFloat {
+        let contentWidth = max(40, width - TimelineMetrics.hMargin * 2 - TimelineMetrics.chipHPad * 2)
+        let wrappedLines = wrappedLineCount(description.title, font: TimelineTextStyler.subheadlineFont,
+                                             width: contentWidth)
+        let accessible = TimelineTextStyler.adoptedCategory.isAccessibilityCategory
+        let titleLines = accessible ? wrappedLines : min(2, wrappedLines)
+        let senderLines = accessible
+            ? wrappedLineCount(description.sender, font: TimelineTextStyler.caption2Font, width: contentWidth) : 1
+        return TimelineMetrics.hostedTextHeight(lines: senderLines, font: TimelineTextStyler.caption2Font)
+            + 2 + TimelineMetrics.hostedTextHeight(lines: titleLines, font: TimelineTextStyler.subheadlineFont)
+            + TimelineMetrics.chipVPad * 2 + TimelineMetrics.chipRowVMargin * 2
     }
 
     // MARK: - Assistant markdown
@@ -1195,7 +1227,7 @@ final class TimelineRowBuilder {
         } else {
             // The folded line at the lines it wraps into, never a reserved second
             // line: a one-line heading over a two-line slot left an empty band under
-            // every folded received card. Counted as the expanded body is (fonts
+            // every folded card. Counted as the expanded body is (fonts
             // kept, spacing dropped, SwiftUI's line height per line).
             let folded = NSMutableAttributedString(attributedString: TimelineTextStyler.inlineText(
                 styled.collapsedLine, font: TimelineTextStyler.subheadlineFont))
@@ -1245,12 +1277,7 @@ struct NotificationStyling {
     let message: ChatMessage
     private static let collapseThreshold = 280
 
-    /// A received card always opens folded to its heading (who it is from and its
-    /// title), however short, as the web's provenance card does; other notices
-    /// fold only when long.
-    var isCollapsible: Bool {
-        message.source == TimelineInboundMessage.inboundSource || message.text.count > Self.collapseThreshold
-    }
+    var isCollapsible: Bool { message.text.count > Self.collapseThreshold }
 
     var isError: Bool {
         message.source == "session-error" || message.source == "agent-error"
@@ -1265,7 +1292,6 @@ struct NotificationStyling {
         case "compaction": return "arrow.down.right.and.arrow.up.left"
         case "session": return "checkmark.seal"
         case "interrupt": return "stop.circle"
-        case TimelineInboundMessage.inboundSource: return "envelope"
         default: return isError ? "exclamationmark.triangle.fill" : "bell"
         }
     }
@@ -1279,7 +1305,6 @@ struct NotificationStyling {
         case "session": return "Session result"
         case "subagent": return "Subagent"
         case "interrupt": return "Interrupted"
-        case TimelineInboundMessage.inboundSource: return "Received"
         default: return "Notification"
         }
     }
@@ -1311,8 +1336,6 @@ struct NotificationStyling {
 
     var collapsedLine: String { NotificationCard.firstMeaningfulLine(displayText) }
 
-    /// How many lines the folded line may wrap into: a received card's heading
-    /// (who, then a title of at most 140 characters) wraps whole, so a large text
-    /// size never cuts it; any other notice keeps its two-line preview.
-    var collapsedLimit: Int? { message.source == TimelineInboundMessage.inboundSource ? nil : 2 }
+    /// How many lines the folded line may wrap into: a notice keeps its two-line preview.
+    var collapsedLimit: Int? { 2 }
 }

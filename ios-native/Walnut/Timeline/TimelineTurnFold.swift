@@ -13,18 +13,18 @@ import Foundation
 ///    alone. Its line counts what came in, went out and ran ("Received 12
 ///    messages · Sent 3 · Ran 8 tools ›", `TimelineFoldSteps`);
 ///  · a person's own message is always the user's bubble, and Walnut's notes that
-///    ride in front of it in the same row are one "Received 1 message ›" row
+///    ride in front of it in the same row each read as their one-line description
 ///    above it, the bubble holding only the person's words;
-///  · a received message is never drawn outside a fold.
-/// Every fold starts closed and opens to its members, which keep their own rows.
+///  · received messages with no step or send beside them are each their one-line
+///    description, with nothing to open.
+/// Every fold starts closed and opens to its members, which keep their own rows;
+/// a received member is its one-line description there too.
 enum TimelineTurnFold {
     /// What a fold stands for. The row reads differently per kind.
     enum Kind: Equatable {
         /// A stretch of quiet steps: everything before a turn's answer, turns that
         /// needed nothing, received messages and finished steps between answers.
         case turn
-        /// Walnut's notes in front of a person's words.
-        case rider
     }
 
     struct Fold: Equatable {
@@ -42,7 +42,7 @@ enum TimelineTurnFold {
         case message(ChatMessage)
         /// A folded tool run (`TimelineToolRunFold`), unchanged.
         case run(key: String, members: [ChatMessage])
-        /// A received message, drawn as a received card (only ever inside a fold).
+        /// A received message, drawn as its one-line description.
         case inbound(ChatMessage)
         /// An answer that was the ack line alone, inside an opened fold.
         case ack(ChatMessage)
@@ -170,6 +170,12 @@ private final class Planner {
         func flushQuiet() {
             defer { quiet = [] }
             guard let first = quiet.first else { return }
+            // Received messages with nothing beside them are not steps to count:
+            // each reads as its one-line description, with nothing to open.
+            if Self.onlyReceived(quiet) {
+                out += quiet.map { member($0) }
+                return
+            }
             if quiet.count == 1 {
                 // One run or one reasoning row already is one row; a message received
                 // or sent folds, also a send inside a run (the web's `sends(part)`).
@@ -248,7 +254,7 @@ private final class Planner {
     }
 
     /// A row the person reads, as itself; a person's row with Walnut's riders
-    /// splits into a "Received 1 message" row and the bubble.
+    /// splits into each rider's one-line description and the bubble.
     private func defaultParts(_ items: [TimelineToolRunFold.Part]) -> [Part] {
         var out: [Part] = []
         for item in items {
@@ -259,16 +265,21 @@ private final class Planner {
                     Part.inbound(ChatMessage(id: "rider|\(m.createdAt)|\(n)", role: "user", text: rider,
                                              createdAt: m.createdAt, kind: nil))
                 }
-                let count = riders.count
-                out.append(.fold(fold(.rider, first: item,
-                                      phrase: TimelineFoldSteps.phrase(Array(repeating: .received, count: count)),
-                                      members: riders, failCount: 0)))
+                out += riders
                 out.append(.message(m.replacingText(split.body)))
             } else {
                 out.append(member(item))
             }
         }
         return out
+    }
+
+    /// Parts that are all received messages: no step and no send to merge them with.
+    private static func onlyReceived(_ parts: [TimelineToolRunFold.Part]) -> Bool {
+        !parts.isEmpty && parts.allSatisfy {
+            if case .message(let m) = $0 { return TimelineTurnShape.isInbound(m) }
+            return false
+        }
     }
 
     /// A step a quiet row may fold: not a failure (a routed question is an
@@ -292,7 +303,6 @@ private final class Planner {
         let prefix: String
         switch kind {
         case .turn: prefix = "turn"
-        case .rider: prefix = "rider"
         }
         let base = "\(prefix)|\(TimelineTurnFold.locationKey(head))"
         let n = keyCounts[base, default: 0]

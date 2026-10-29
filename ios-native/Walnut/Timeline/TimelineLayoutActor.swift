@@ -192,7 +192,15 @@ actor TimelineLayoutActor {
                 case .run(let key, let members):
                     appendRun(key: key, members: members)
                 case .inbound(let message):
-                    rows.append(contentsOf: memoizedRows(for: TimelineInboundMessage.card(message), queued: nil))
+                    // A received message shows only who sent it and its title: no card to
+                    // open, no body (the stored row and its payload stay as they are).
+                    if PeerMessagePresentation.segments(message.text, received: true) != nil {
+                        rows.append(contentsOf: memoizedRows(for: message.receivedFromAgent, queued: nil))
+                    } else {
+                        rows.append(builder.peerMessageRow(
+                            id: "\(TimelineScope.namespace(input.scope, message.id))#0",
+                            description: PeerMessagePresentation.unreadableReceived, width: input.width))
+                    }
                 case .ack(let message):
                     rows.append(builder.ackRow(id: "\(TimelineScope.namespace(input.scope, message.id))#ack"))
                 case .fold(let fold):

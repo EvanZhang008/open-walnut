@@ -96,6 +96,7 @@ final class TurnFoldTests: XCTestCase {
             case .text(let s): return s.string
             case .userBubble(let s, _, _, _): return s.string
             case .notification(_, _, _, let body, _, _, _, _): return body.string
+            case .peerMessage(let description): return description.accessibilityLabel
             case .chip(_, let text): return text
             default: return ""
             }
@@ -142,11 +143,11 @@ final class TurnFoldTests: XCTestCase {
                        ["bubble:Can you check the build?", "run:2", "text"])
     }
 
-    func testWalnutsNotesInFrontOfAPersonsWordsAreOneRowAboveTheBubble() {
+    func testWalnutsNotesInFrontOfAPersonsWordsReadAsTheirLinesAboveTheBubble() {
         let rider = "<walnut-message kind=\"notification\" from=\"Walnut\" outcome=\"moved\">\nThis task moved.\n</walnut-message>"
         let parts = plan([person("\(rider)\n\nPlease draft the notes."), said("Drafted.")])
         XCTAssertEqual(outline(parts), [
-            "fold:rider:Received 1 message[\"inbound\"]", "bubble:Please draft the notes.", "text",
+            "inbound", "bubble:Please draft the notes.", "text",
         ])
     }
 
@@ -154,12 +155,14 @@ final class TurnFoldTests: XCTestCase {
         XCTAssertEqual(outline(plan([peer(), tool("Bash", "status"), tool("mcp__walnut__task_send")])),
                        ["fold:turn:Received 1 message \u{00B7} Sent 1 \u{00B7} Ran 1 tool"
                         + "[\"inbound\", \"run:1\", \"tool:mcp__walnut__task_send\"]"])
-        // A failed call is never folded away unread: it stays a row of its own.
+        // A failed call is never folded away unread: it stays a row of its own, and
+        // the message with nothing left to merge with reads as its one line.
         XCTAssertEqual(outline(plan([peer(), tool("Bash", "rebuild", isError: true)])),
-                       ["fold:turn:Received 1 message[\"inbound\"]", "run:1"])
-        // Even alone, a received message is a fold, never a bubble.
-        XCTAssertEqual(outline(plan([said("Earlier."), peer()])),
-                       ["text", "fold:turn:Received 1 message[\"inbound\"]"])
+                       ["inbound", "run:1"])
+        // Alone, a received message is its one line, never a bubble and never a fold.
+        XCTAssertEqual(outline(plan([said("Earlier."), peer()])), ["text", "inbound"])
+        XCTAssertEqual(outline(plan([said("Earlier."), peer(), peer("Second note.")])),
+                       ["text", "inbound", "inbound"])
     }
 
     func testTheAnswersOwnReasoningIsTheLastQuietStepOrStaysWithTheAnswer() {
@@ -182,9 +185,6 @@ final class TurnFoldTests: XCTestCase {
                         .envelopes.first?.body, "")
         // An empty rider still splits whole: nothing of the person's words is lost.
         XCTAssertEqual(TimelineInboundMessage.splitRiders("<walnut-message kind=\"notification\" from=\"Walnut\" outcome=\"moved\">\n</walnut-message>\n\nHi.")?.body, "Hi.")
-        // A clipped row lost its close tag: the head line still never prints.
-        let cut = TimelineInboundMessage.displayText("<walnut-message kind=\"peer-note\" from=\"Docs lead [1a2b3c4d]\">\nA long note that was cl\u{2026}")
-        XCTAssertEqual(cut, "**From Docs lead**: A long note that was cl\u{2026}")
     }
 
     func testFoldKeysNameTheRowsPlaceNotItsPayload() {
@@ -207,11 +207,15 @@ final class TurnFoldTests: XCTestCase {
         XCTAssertFalse(texts(closed).contains("walnut-"))
         // The hidden turn and the next turn's work before its answer: one row.
         XCTAssertEqual(phrases(closed), ["Received 2 messages"])
-        // Open both folds by their row ids: the members appear, as received cards.
+        XCTAssertFalse(texts(closed).contains("Docs lead: Review"))
+        // Open it by its row id: the members appear, each as its one-line description.
         let ids = closed.filter { if case .toolRun = $0.content { return true }; return false }.map(\.id)
         let open = await rows(messages, expanded: Set(ids))
         XCTAssertEqual(phrases(open), ["Received 2 messages"])
-        XCTAssertTrue(texts(open).contains("From Docs lead: Review"))
+        XCTAssertTrue(texts(open).contains("Docs lead: Review"))
+        XCTAssertEqual(open.filter { if case .peerMessage = $0.content { return true }; return false }.count, 2)
+        XCTAssertFalse(open.contains { if case .notification = $0.content { return true }; return false })
+        XCTAssertFalse(texts(open).contains("The review is done."))
         XCTAssertTrue(texts(open).contains(TimelineRowBuilder.acknowledgedCaption))
         XCTAssertFalse(texts(open).contains("walnut-"))
         XCTAssertEqual(open.filter { if case .userBubble = $0.content { return true }; return false }.count, 1)
@@ -229,8 +233,10 @@ final class TurnFoldTests: XCTestCase {
         let peerRow = user(peer().text, nil)
         let messages = [user("Go.", nil), said("Answer."), peerRow, said("Noted.")]
         let drawn = await rows(messages)
-        // Today's rendering: the delivery is a bubble, nothing folds.
-        XCTAssertEqual(drawn.filter { if case .userBubble = $0.content { return true }; return false }.count, 2)
+        // Nothing folds; the person's row is a bubble and the delivery its one-line description.
+        XCTAssertEqual(drawn.filter { if case .userBubble = $0.content { return true }; return false }.count, 1)
+        XCTAssertEqual(drawn.filter { if case .peerMessage = $0.content { return true }; return false }.count, 1)
+        XCTAssertFalse(texts(drawn).contains("The review is done."))
         XCTAssertTrue(phrases(drawn).isEmpty)
         // The ack line never prints on any server.
         let acked = await rows([user("Go.", nil), said("Done.\n\n\(tag)")])
@@ -252,9 +258,11 @@ final class TurnFoldTests: XCTestCase {
         // One row for the message and the calls, breathing while a call runs; no second run row.
         XCTAssertEqual(live.map(\.phrase), ["Received 1 message \u{00B7} Ran 2 tools"])
         XCTAssertEqual(live.map(\.running), [true])
-        // Opened, it holds the received card and the live calls.
+        // Opened, it holds the received message's one line (no body) and the live calls.
         let opened = await rows(history, expanded: [live[0].id], streaming: true, liveTools: running, actor: actor)
-        XCTAssertTrue(texts(opened).contains("From Docs lead: Review"))
+        XCTAssertTrue(texts(opened).contains("Docs lead: Review"))
+        XCTAssertFalse(texts(opened).contains("The review is done."))
+        XCTAssertFalse(opened.contains { if case .notification = $0.content { return true }; return false })
         XCTAssertEqual(opened.filter { if case .toolChip = $0.content { return true }; return false }.count, 2)
         // The turn ends: history holds the calls and the answer, the row keeps its id (and so its open state).
         let ended = history + [tool("Bash", "status"), tool("Read", "a.md"), said("All set.")]
@@ -387,65 +395,90 @@ final class TurnFoldTests: XCTestCase {
         XCTAssertEqual(opened.filter { if case .toolChip = $0.content { return true }; return false }.count, 1)
     }
 
-    func testAShortReceivedCardOpensFoldedToItsHeadingInsideAnOpenedFold() async {
+    func testAReceivedMessageInsideAnOpenedFoldShowsOnlyItsDescription() async {
         let history = [person(), said("Answer."), peer("Short."), said(tag)]
         let closed = await rows(history)
         guard let fold = closed.first(where: { if case .toolRun = $0.content { return true }; return false }) else {
             return XCTFail("no fold row")
         }
         let opened = await rows(history, expanded: [fold.id])
-        let cards = opened.compactMap { row -> (collapsible: Bool, expanded: Bool, line: String)? in
-            if case .notification(_, _, _, _, let line, _, let collapsible, let expanded) = row.content {
-                return (collapsible, expanded, line)
-            }
+        let descriptions = opened.compactMap { row -> PeerMessageDescription? in
+            if case .peerMessage(let description) = row.content { return description }
             return nil
         }
-        XCTAssertEqual(cards.count, 1)
-        XCTAssertEqual(cards.first?.collapsible, true)
-        XCTAssertEqual(cards.first?.expanded, false)
-        XCTAssertEqual(cards.first?.line.contains("Docs lead"), true)
+        XCTAssertEqual(descriptions, [PeerMessageDescription(sender: "Docs lead", title: "Review")])
+        // No card to open and no body.
+        XCTAssertFalse(opened.contains { if case .notification = $0.content { return true }; return false })
+        XCTAssertFalse(texts(opened).contains("Short."))
     }
 
-    func testAReceivedCardIsFoldedTheMomentItArrivesEvenWhileTheTurnRuns() async {
+    func testAReceivedShapeThisBuildCannotReadStillShowsOneSafeLine() async {
+        let odd = user("<walnut-message kind=\"Odd_Kind\" from=\"Docs lead\">\n<b>raw</b>\n</walnut-message>", "agent")
+        let drawn = await rows([person(), said("Answer."), odd])
+        let descriptions = drawn.compactMap { row -> PeerMessageDescription? in
+            if case .peerMessage(let description) = row.content { return description }
+            return nil
+        }
+        XCTAssertEqual(descriptions, [PeerMessagePresentation.unreadableReceived])
+        XCTAssertFalse(texts(drawn).contains("raw"))
+        XCTAssertFalse(texts(drawn).contains("walnut-message"))
+    }
+
+    func testAReceivedNoticeIsItsOneLineOnArrivalAndMergesOnlyWithSteps() async {
         let notice = user("<walnut-message kind=\"notification\" from=\"Walnut\" about=\"Docs lead [1a2b3c4d]\" "
-                              + "outcome=\"completed\" note=\"automated Walnut status notice\">\nIt completed.\n</walnut-message>",
-                          "agent")
+                              + "about-session=\"s-docs\" outcome=\"completed\" note=\"automated Walnut status notice\">"
+                              + "\nIt completed.\n</walnut-message>", "agent")
+        let expected = [PeerMessageDescription(sender: "Docs lead", title: "Completed")]
+        func descriptions(_ rows: [TimelineRow]) -> [PeerMessageDescription] {
+            rows.compactMap { if case .peerMessage(let d) = $0.content { return d }; return nil }
+        }
         func cards(_ rows: [TimelineRow]) -> Int {
             rows.filter { if case .notification = $0.content { return true }; return false }.count
         }
         func bubbles(_ rows: [TimelineRow]) -> Int {
             rows.filter { if case .userBubble = $0.content { return true }; return false }.count
         }
-        // The notice just landed and its turn has called nothing yet: one folded row.
+        // The notice just landed and its turn has called nothing yet: its one line, nothing to open.
         let arrived = await rows([person(), said("Answer."), notice], streaming: true)
-        XCTAssertEqual(phrases(arrived), ["Received 1 message"])
+        XCTAssertEqual(descriptions(arrived), expected)
+        XCTAssertTrue(phrases(arrived).isEmpty)
         XCTAssertEqual(cards(arrived), 0)
         XCTAssertEqual(bubbles(arrived), 1)
-        // A notice delivered into a person's running turn: the person's words stay, the notice folds.
-        let midTurn = await rows([person("Ship it?"), tool("Bash", "build"), notice], streaming: true)
-        XCTAssertEqual(bubbles(midTurn), 1)
-        XCTAssertEqual(cards(midTurn), 0)
-        XCTAssertTrue(phrases(midTurn).contains { $0.hasPrefix("Received 1 message") })
-        XCTAssertFalse(texts(midTurn).contains("walnut-message"))
-        // Quiet, open turn (nothing answered yet): still folded.
+        // Delivered beside a person's finished step: they merge into one row, as on the web,
+        // and the opened row holds the notice's one line, never its body.
+        let midTurn = [person("Ship it?"), tool("Bash", "build"), notice]
+        let closed = await rows(midTurn, streaming: true)
+        XCTAssertEqual(bubbles(closed), 1)
+        XCTAssertEqual(cards(closed), 0)
+        let merged = runRows(closed).first { $0.phrase.hasPrefix("Received 1 message") }
+        XCTAssertNotNil(merged)
+        let opened = await rows(midTurn, expanded: Set([merged?.id].compactMap { $0 }), streaming: true)
+        XCTAssertEqual(descriptions(opened), expected)
+        XCTAssertEqual(cards(opened), 0)
+        XCTAssertFalse(texts(opened).contains("walnut-message"))
+        XCTAssertFalse(texts(opened).contains("It completed."))
+        // Quiet, open turn (nothing answered yet): the same one line.
         let quiet = await rows([person(), said("Answer."), notice])
+        XCTAssertEqual(descriptions(quiet), expected)
         XCTAssertEqual(cards(quiet), 0)
     }
 
     // MARK: - Received messages
 
-    func testAReceivedMessageReadsAsWhoItIsFromAndWhatItSays() {
-        let text = "<walnut-message kind=\"peer-note\" from=\"Docs &amp; site [1a2b3c4d]\" title=\"Done\">\n"
+    func testTheEnvelopeReaderTakesBatchedRowsApartAndRefusesAnOpenTag() {
+        let text = "<walnut-message kind=\"peer-note\" from=\"Docs &amp; site [1a2b3c4d]\" title=\"Done\" request=\"rq-1\">\n"
             + "Line one.\nLine two.\n</walnut-message>\nReply when done: walnut tools call task_send"
-        XCTAssertEqual(TimelineInboundMessage.displayText(text),
-                       "**From Docs & site**: Done\n\nLine one.\nLine two.\n\nReply when done: walnut tools call task_send")
+        let one = TimelineInboundMessage.parse(text)
+        XCTAssertEqual(one?.envelopes.first?.attributes["from"], "Docs & site [1a2b3c4d]")
+        XCTAssertEqual(one?.envelopes.first?.body, "Line one.\nLine two.")
+        XCTAssertEqual(one?.envelopes.first?.replyRequested, true)
+        XCTAssertEqual(one?.rest, "")
         // Two envelopes in one row (a batched delivery).
         let two = "<walnut-message kind=\"notification\" from=\"Walnut\">\nA.\n</walnut-message>\n"
             + "<walnut-message kind=\"trigger\">\nB.\n</walnut-message>"
-        XCTAssertEqual(TimelineInboundMessage.parse(two)?.envelopes.count, 2)
-        XCTAssertEqual(TimelineInboundMessage.displayText(two), "**From Walnut**: A.\n\n**From a trigger**: B.")
-        // A shape this reader does not know is shown as it is.
-        XCTAssertEqual(TimelineInboundMessage.displayText("[Walnut notification] legacy"), "[Walnut notification] legacy")
+        XCTAssertEqual(TimelineInboundMessage.parse(two)?.envelopes.map(\.body), ["A.", "B."])
+        // A shape this reader does not know is no envelope.
+        XCTAssertNil(TimelineInboundMessage.parse("[Walnut notification] legacy"))
         // A tag that never closes is not an envelope.
         XCTAssertNil(TimelineInboundMessage.parse("<walnut-message kind=\"reply\">\ncut off"))
     }

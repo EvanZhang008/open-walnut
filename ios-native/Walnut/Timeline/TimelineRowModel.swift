@@ -132,6 +132,7 @@ enum TimelineRowContent {
     /// Right-aligned user bubble. `width` is the measured text width so the
     /// bubble hugs its content like the SwiftUI original.
     case userBubble(text: NSAttributedString, textSize: CGSize, failed: Bool, pending: Bool)
+    case peerMessage(PeerMessageDescription)
     /// Undelivered-send row under a failed bubble. `notice` non-nil = an
     /// automatic retry is still pending ("Waiting for Mac… retrying"); nil =
     /// the terminal "Not sent — tap to retry". Either way tapping retries now.
@@ -232,7 +233,7 @@ enum TimelineRowContent {
     case chip(icon: String, text: String)
     /// Notification card (session error / cron / …). Collapse mirrors the
     /// SwiftUI card; both heights pre-measured. `collapsedLimit` caps the folded
-    /// line's wrap (nil: it wraps whole, as a received card's heading does).
+    /// line's wrap (nil: it wraps whole).
     case notification(badge: String, icon: String, isError: Bool,
                       body: NSAttributedString, collapsedLine: String, collapsedLimit: Int?,
                       collapsible: Bool, expanded: Bool)
@@ -281,6 +282,7 @@ extension TimelineRowContent {
         switch self {
         case .text: return "text"
         case .userBubble: return "bubble"
+        case .peerMessage: return "peerMessage"
         case .failedNotice: return "failedNotice"
         case .queuedNotice: return "queuedNotice"
         case .code: return "code"
@@ -320,6 +322,9 @@ extension TimelineRowContent {
             hasher.combine(text.string)
             hasher.combine(failed)
             hasher.combine(pending)
+        case .peerMessage(let description):
+            hasher.combine(description.sender)
+            hasher.combine(description.title)
         case .failedNotice(let notice):
             hasher.combine(notice)
         case .queuedNotice(let delivering, let stacked):

@@ -115,6 +115,8 @@ enum TimelineHostedCell {
                 badgeStacked: badgeStacked,
                 onToggle: { delegate?.timelineCell(didRequest: .toggleExpanded(rowID: row.id)) }
             )
+        case .peerMessage(let description):
+            PeerMessageDescriptionView(description: description)
         case .chip(let icon, let text):
             HStack(spacing: 5) {
                 Image(systemName: icon).font(.caption2)
