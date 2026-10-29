@@ -265,6 +265,9 @@ export function LetterView({
   const actions = shown?.actions ?? [];
   // A task's answer for the user stays theirs to change.
   const canDecide = shown?.type === 'action_required' && actions.length > 0 && (!answered || !!answered.by);
+  // A decision nobody needs to answer any more (its task completed, or its sender said why). The
+  // user may still answer it, which brings it back.
+  const settledNote = shown?.archived && shown.archivedReason === 'settled' ? shown.settled : undefined;
   // A letter that says it needs a decision but carries no options. The store now
   // rejects that at send time, so this is only ever a letter ALREADY on disk —
   // and for those, hiding everything (which is what canDecide alone did) left an
@@ -287,11 +290,13 @@ export function LetterView({
         {headLeading}
         <div className="hib-reader-title">
           <span className="hib-reader-subject">{shown?.subject || 'Letter'}</span>
-          {shown && (
+          {shown && (settledNote ? (
+            <span className="hib-type hib-type--info">Settled</span>
+          ) : (
             <span className={`hib-type hib-type--${shown.type}`}>
               {LETTER_TYPE_LABEL[shown.type] ?? shown.type}
             </span>
-          )}
+          ))}
         </div>
         <div className="hib-reader-tools">
           {shown && (
@@ -324,6 +329,7 @@ export function LetterView({
           {shown.archived && shown.archivedReason === 'task_completed' && (
             <span className="hib-chip" data-testid="letter-archived-reason">Archived: its task was completed</span>
           )}
+
           {showOpenSession && openSessionHref && (
             <button className="hib-row-btn" onClick={() => onNavigate(openSessionHref)}>
               Open session ↗
@@ -371,12 +377,19 @@ export function LetterView({
             Read the letter and answer in the reply box below.
           </div>
         )}
+        {settledNote && (
+          <div className="hib-answered" data-testid="letter-settled">
+            Settled{settledNote.by ? <> by {answeredByName(settledNote.by)}</> : null}{' · '}{formatRelative(settledNote.at)}
+            <div className="hib-answered-note">{settledNote.reason}</div>
+          </div>
+        )}
         {answered && (
           <div className="hib-answered">
             Answered: <strong>{answered.label || answered.actionId}</strong>
             {answered.by && <> by {answeredByName(answered.by)}</>}
             {' · '}{formatRelative(answered.at)}
             {answered.freeText && <div className="hib-answered-note">{answered.freeText}</div>}
+            {answered.by?.userWords && <div className="hib-answered-note" data-testid="letter-answer-user-words">On your words: “{answered.by.userWords}”</div>}
           </div>
         )}
 

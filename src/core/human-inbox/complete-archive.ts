@@ -18,6 +18,10 @@
  * The boot pass covers tasks completed since the last pass (all of them the first
  * time): it cannot tell who completed them, so it takes read letters only, and only
  * ones sent before the completion.
+ *
+ * A DECISION letter (`action_required`) of the completed task is settled instead, whoever
+ * completed it, with a one-line reason (decision-settle.ts, settleOnCompletion): a completed task
+ * waits on no answer. The re-check clock catches completions this missed (sessions/letter-recheck.ts).
  */
 
 import { bus, EventNames, type BusEvent } from '../event-bus.js';
@@ -79,6 +83,20 @@ export function onTaskCompleted(task: Pick<Task, 'id'>, ctx: CompletionContext):
   return archiveFor([{ id: task.id, ctx }]);
 }
 
+/**
+ * Settle the open decision letters of a task that has just completed, whoever completed it
+ * (decision-settle.ts): a completed task waits on no answer.
+ */
+export async function settleOnCompletion(task: Pick<Task, 'id' | 'title' | 'completed_at' | 'agent_id'>): Promise<string[]> {
+  const { listLetters, settleLettersWhere } = await import('./store.js');
+  const { completionSettleReason } = await import('./decision-settle.js');
+  const { letters } = await listLetters({ archived: false });
+  if (!letters.some((l) => completionSettleReason(l, task))) return [];
+  const done = await settleLettersWhere((l) => completionSettleReason(l, task));
+  if (done.length) log.notif.info('human-inbox: settled decision letters of a completed task', { taskId: task.id, letters: done });
+  return done.map((d) => d.id);
+}
+
 /** Where the boot pass keeps when it last ran (beside the letters). */
 async function stampFile(): Promise<string> {
   const { humanInboxPaths } = await import('./store.js');
@@ -115,6 +133,8 @@ function onEvent(event: BusEvent): void {
   if (!data?.task || data.newPhase !== 'COMPLETE' || data.oldPhase === 'COMPLETE') return;
   void onTaskCompleted(data.task, { byPerson: completedByPerson(data) })
     .catch((err) => log.notif.warn('human-inbox: archiving a completed task\'s letters failed', { taskId: data.task!.id, error: String(err) }));
+  void settleOnCompletion(data.task)
+    .catch((err) => log.notif.warn('human-inbox: settling a completed task\'s decision letters failed', { taskId: data.task!.id, error: String(err) }));
 }
 
 let live = false;

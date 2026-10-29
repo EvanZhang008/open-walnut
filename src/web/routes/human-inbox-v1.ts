@@ -95,6 +95,10 @@ const ERROR_CODES: Record<string, string> = {
   // A task answering a plugin's letter (an approval of a step outside Walnut) in the user's place:
   // the charter's approval rule, enforced in letter-ops.ts so the replica's relay meets it too.
   human_approval: 'human-approval-required',
+  // A report letter from a task that answers another task's request: the asker tells the user.
+  reply_instead: 'conflict',
+  // A task answering for the user without quoting the user's words.
+  user_words: 'bad_request',
 }
 
 interface LetterErrorLike { code: string; status: number; message: string }
@@ -411,6 +415,27 @@ humanInboxV1Router.post('/human-inbox/:id/archive', async (req: Request, res: Re
   })
 })
 
+// POST /api/v1/human-inbox/:id/settle { reason }
+// A decision letter nobody needs to answer any more leaves the inbox with its one-line reason
+// (core/human-inbox/store.ts settleLetter). Recorded as the calling task's, like an answer.
+humanInboxV1Router.post('/human-inbox/:id/settle', async (req: Request, res: Response, next: NextFunction) => {
+  await guard(res, next, 'POST /human-inbox/:id/settle', async () => {
+    const b = body(req)
+    const id = letterId(req)
+    const sid = callerSid(req)
+    // The companion relays to the Mac; a host replica's front forwards the route there itself.
+    const { isCompanion } = await import('../../core/server-role.js')
+    if (isCompanion()) {
+      await relayControlAction(res, 'server.human-inbox.settle', SERVER_RELAY_SID, { ...b, id, ...(sid ? { callerSid: sid } : {}) }, 200)
+      return
+    }
+    const { answeredByCaller } = await import('../../core/human-inbox/letter-ops.js')
+    const { settleLetter } = await import('../../core/human-inbox/store.js')
+    const by = await answeredByCaller(sid)
+    res.json({ letter: await settleLetter(id, { reason: typeof b.reason === 'string' ? b.reason : '', ...(by ? { by } : {}) }) })
+  })
+})
+
 // ─── Human answers (delivered to the origin session) ─────────────────────────
 
 // POST /api/v1/human-inbox/:id/answer { actionId, freeText? }
@@ -428,8 +453,8 @@ humanInboxV1Router.post('/human-inbox/:id/answer', async (req: Request, res: Res
       await relayDelivering(res, 'server.human-inbox.answer', { ...b, id, ...(sid ? { callerSid: sid } : {}) })
       return
     }
-    const { answerLetterAndDeliver, answeredByCaller } = await import('../../core/human-inbox/letter-ops.js')
-    const by = await answeredByCaller(sid)
+    const { answerLetterAndDeliver, answeredByCaller, withUserWords } = await import('../../core/human-inbox/letter-ops.js')
+    const by = withUserWords(await answeredByCaller(sid), b)
     const result = await answerLetterAndDeliver(id, {
       actionId: typeof b.actionId === 'string' ? b.actionId : '',
       ...(typeof b.freeText === 'string' ? { freeText: b.freeText } : {}),
@@ -460,8 +485,8 @@ humanInboxV1Router.post('/human-inbox/:id/human-reply', async (req: Request, res
       await relayDelivering(res, 'server.human-inbox.human-reply', { ...b, id, ...(sid ? { callerSid: sid } : {}) })
       return
     }
-    const { humanReplyAndDeliver, answeredByCaller } = await import('../../core/human-inbox/letter-ops.js')
-    const by = await answeredByCaller(sid)
+    const { humanReplyAndDeliver, answeredByCaller, withUserWords } = await import('../../core/human-inbox/letter-ops.js')
+    const by = withUserWords(await answeredByCaller(sid), b)
     // `clientId` (optional) makes a retry of the same reply idempotent; see humanReplyAndDeliver.
     const result = await humanReplyAndDeliver(id, {
       text: typeof b.text === 'string' ? b.text : '',

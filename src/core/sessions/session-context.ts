@@ -55,6 +55,10 @@
  *      the review; the user wanted that done unasked).
  *   6b. The inbox is for what needs the user (2026-10-05: parks, progress and
  *      FYIs filled it; a letter only when the user is needed or asked for one).
+ *      An answer to another task's request goes to that task alone (2026-10-29:
+ *      three finished pieces of work reached the user twice, as a worker's letter
+ *      and in Main's chat); human_inbox_send refuses the duplicate letter too
+ *      (human-inbox/letter-ops.ts, `user_asked` overrides).
  *   6c. A message from another agent that needs nothing the user should hear
  *      about is answered with one fixed line alone, and the panel hides that turn
  *      (2026-10-24: the user read every report at the weight of one that waited
@@ -192,6 +196,16 @@ export const BRIEF_LINE =
   + 'global MEMORY.md (memory_read).\n\n'
 
 /**
+ * Main's and every lead's chat is read by the user (the Org page, the phone) whoever started the
+ * turn (2026-10-29: leads answered Walnut notices in English there). The reply-language hint rides
+ * those turns too (hints/hint-registry.ts agentTurnRoles).
+ */
+export const ORG_REPLY_LANGUAGE_LINE =
+  'The user reads your chat (the Org page, the phone), so every reply you write here is to them, whoever started '
+  + 'the turn (the user, a Walnut notice, a worker\'s message, a trigger): write it in the language they asked replies '
+  + 'in (their reply-language note and standing rules). What you send to other tasks (task_send, org_send) stays in English.\n\n'
+
+/**
  * 2d. The org above the work (src/core/org/): the main agent talks to one
  * contact per project (its lead, or its one team), never to every task, so its
  * chat stays short. Roles follow the team charter (team-charter.ts): Main sets
@@ -213,6 +227,7 @@ export function orgRoleLine(task: { org_role?: string; project?: string; org_lea
       + 'first, without detail that would not change what they do. Walnut puts a folded org update before a message '
       + 'when work moved: background, mention it only when it matters to what the user says.\n\n'
       + DECISION_CONTEXT_LINE + MAIN_DECISION_LINE
+      + ORG_REPLY_LANGUAGE_LINE
       + BRIEF_LINE
       + MAIN_DELEGATES_LINE
       + MAIN_TRACKING_LINE
@@ -250,6 +265,7 @@ export function orgRoleLine(task: { org_role?: string; project?: string; org_lea
       + 'another team) before a message when something moved; it is background. A task that waits on you is yours: '
       + 'Walnut wakes you with it under "Waiting on you"; read it and answer or close it.\n\n'
       + DECISION_CONTEXT_LINE + LEAD_DECISION_LINE
+      + ORG_REPLY_LANGUAGE_LINE
       + BRIEF_LINE
       + TASK_ROUTING_CONTRACT + '\n\n'
   }
@@ -458,7 +474,9 @@ function composePrompt(task: InstructionTask | undefined, state: { taskLine: str
     + 'The user\'s inbox is only for what needs them: send a letter (human_inbox_send) '
     + 'when you are blocked on their decision, something needs their review, or they asked '
     + 'for one (a digest, a report, "tell me when"). Never for progress, a finished step, a '
-    + 'park or an FYI: your task and this session already show those.\n\n'
+    + 'park or an FYI: your task and this session already show those. Answering another task\'s '
+    + 'request (Main, a lead): your result goes only to it, in your reply, and it tells the user; '
+    + 'letter the user about that work only if the user themself asked this task for a letter or report.\n\n'
     // The agent acknowledgement line (see 6c above), for every session, Main and
     // the asks included: the panel never hides a turn the user started. 2026-10-25:
     // the old wording ("a turn that only reports work") put the line under answers

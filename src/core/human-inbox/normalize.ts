@@ -17,6 +17,7 @@ import {
   type LetterType,
   type ThreadEntry,
   type LetterAnsweredBy,
+  type LetterSettled,
   type ThreadEntryDelivery,
 } from './types.js';
 import { truncatePreview } from './preview.js';
@@ -102,6 +103,21 @@ function normalizeBy(raw: unknown): { by?: LetterAnsweredBy } {
       sessionId: b.sessionId,
       ...(typeof b.taskId === 'string' && b.taskId ? { taskId: b.taskId } : {}),
       ...(typeof b.name === 'string' && b.name ? { name: b.name.slice(0, 200) } : {}),
+      ...(typeof b.userWords === 'string' && b.userWords ? { userWords: b.userWords.slice(0, 4_000) } : {}),
+    },
+  };
+}
+
+/** A decision letter's settle record (LetterSettled), kept through a rewrite. */
+function normalizeSettled(raw: unknown): { settled?: LetterSettled } {
+  if (!raw || typeof raw !== 'object') return {};
+  const s = raw as Record<string, unknown>;
+  if (typeof s.reason !== 'string' || !s.reason) return {};
+  return {
+    settled: {
+      reason: s.reason.slice(0, 400),
+      at: typeof s.at === 'number' ? s.at : 0,
+      ...normalizeBy(s.by),
     },
   };
 }
@@ -166,7 +182,8 @@ function normalizeRecord(raw: unknown): LetterRecord | null {
     // Same reason as readAt: a rewrite must not erase when the flag moved.
     ...(typeof r.pinnedAt === 'number' && r.pinnedAt > 0 ? { pinnedAt: r.pinnedAt } : {}),
     ...(typeof r.archivedAt === 'number' && r.archivedAt > 0 ? { archivedAt: r.archivedAt } : {}),
-    ...(r.archived === true && r.archivedReason === 'task_completed' ? { archivedReason: 'task_completed' as const } : {}),
+    ...(r.archived === true && (r.archivedReason === 'task_completed' || r.archivedReason === 'settled') ? { archivedReason: r.archivedReason } : {}),
+    ...normalizeSettled(r.settled),
     thread: normalizeThread(r.thread),
     ...(actions ? { actions } : {}),
     ...(r.items !== undefined ? { items: normalizeItems(r.items) } : {}),

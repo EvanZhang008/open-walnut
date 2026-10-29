@@ -20,6 +20,7 @@ import {
   listLetters,
   readLetterBodyRange,
   setLetterState,
+  settleLetter,
   LetterError,
   type LetterStateWrite,
 } from './store.js';
@@ -27,6 +28,7 @@ import { HUMAN_INBOX_CHUNK_BYTES } from './types.js';
 import {
   answerLetterAndDeliver,
   answeredByCaller,
+  withUserWords,
   humanReplyAndDeliver,
   sendLetterAsCaller,
 } from './letter-ops.js';
@@ -155,15 +157,19 @@ export async function handleHumanInboxRelayAction(
     case 'answer': {
       // A session's call through the replica names its caller, so the primary records the task
       // that answered and refuses it a plugin's letter (letter-ops.ts), as on this box.
-      const by = await answeredByCaller(typeof p.callerSid === 'string' ? p.callerSid : undefined);
+      const by = withUserWords(await answeredByCaller(typeof p.callerSid === 'string' ? p.callerSid : undefined), p);
       return await answerLetterAndDeliver(requireId(p), {
         actionId: str(p.actionId),
         ...(typeof p.freeText === 'string' ? { freeText: p.freeText } : {}),
         ...(by ? { by } : {}),
       }, 'relay', { answerBy: Date.now() + RELAY_DELIVERY_WAIT_MS }) as unknown as Record<string, unknown>;
     }
-    case 'human-reply': {
+    case 'settle': {
       const by = await answeredByCaller(typeof p.callerSid === 'string' ? p.callerSid : undefined);
+      return { letter: await settleLetter(requireId(p), { reason: str(p.reason), ...(by ? { by } : {}) }) };
+    }
+    case 'human-reply': {
+      const by = withUserWords(await answeredByCaller(typeof p.callerSid === 'string' ? p.callerSid : undefined), p);
       return await humanReplyAndDeliver(requireId(p), {
         text: str(p.text),
         ...(p.clientId !== undefined ? { clientId: str(p.clientId) } : {}),

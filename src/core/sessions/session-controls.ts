@@ -975,7 +975,7 @@ export type SessionControlAction =
   // primary can do — a replica relays every route here.
   | 'server.human-inbox' | 'server.human-inbox.get' | 'server.human-inbox.body' | 'server.human-inbox.send'
   | 'server.human-inbox.reply' | 'server.human-inbox.read' | 'server.human-inbox.pin'
-  | 'server.human-inbox.archive' | 'server.human-inbox.answer' | 'server.human-inbox.human-reply'
+  | 'server.human-inbox.archive' | 'server.human-inbox.answer' | 'server.human-inbox.settle' | 'server.human-inbox.human-reply'
   | 'server.human-inbox.item-prepare' | 'server.human-inbox.item-execute' | 'server.human-inbox.item-execution'
   | 'server.human-inbox.item-tasks' | 'server.human-inbox.item-task'
   // Push registration. Box-level, and the reason is the same one that makes the
@@ -1731,6 +1731,7 @@ export async function handleSessionControlRelay(
       case 'server.human-inbox.pin':
       case 'server.human-inbox.archive':
       case 'server.human-inbox.answer':
+      case 'server.human-inbox.settle':
       case 'server.human-inbox.item-prepare':
       case 'server.human-inbox.item-execute':
       case 'server.human-inbox.item-execution':

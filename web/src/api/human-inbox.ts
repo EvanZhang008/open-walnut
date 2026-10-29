@@ -39,6 +39,8 @@ export interface LetterAnsweredBy {
   sessionId: string;
   taskId?: string;
   name?: string;
+  /** The user's own words the task answered on, as it quoted them. */
+  userWords?: string;
 }
 
 /** How the inbox names a task that answered in the user's place. */
@@ -92,8 +94,12 @@ export interface LetterEnvelope {
   readAt?: number;
   pinned: boolean;
   archived: boolean;
-  /** Set when Walnut archived it on its own: `task_completed` = its task was completed. */
-  archivedReason?: 'task_completed';
+  /**
+   * Set when it left the inbox without a person archiving it: `task_completed` = its task was
+   * completed; `settled` = a decision nobody needs to answer any more (`settled.reason` says why).
+   */
+  archivedReason?: 'task_completed' | 'settled';
+  settled?: { reason: string; at: number; by?: LetterAnsweredBy };
   actions?: LetterAction[];
   items?: InboxLetterItem[];
   answered?: LetterAnswer;

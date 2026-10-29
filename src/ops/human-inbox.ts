@@ -48,6 +48,9 @@ defineOp({
     + 'decision, when something must have their review, or when they asked for it (a digest or report they '
     + 'set up, "tell me when X"). Never for a notification they did not ask for: progress, a finished step, '
     + 'a parked task, an FYI. Your task and its session already show those. When unsure, do not send. '
+    + 'A task answering another task\'s request (Main, a lead) sends its result in its reply to that task, '
+    + 'which tells the user; a report letter (info, completion, review) about that work is refused (409, '
+    + 'the request named) unless the user themself asked this task for a letter or report (user_asked:true). '
     + 'Writing standard: one phone screen, background in 1-2 sentences, then the point; '
     + 'self-contained (never "see the session"); link long artifacts by path instead of pasting them. '
     + 'Body is markdown (usual choice) or self-contained html with inline styles, exactly one of the two. '
@@ -78,6 +81,9 @@ defineOp({
     items: inboxItemsSchema.optional().describe('Independent email items. Supply exact account/message, safe display data and typed actions for every email in a summary. Fixed intents only; no tool, args, label or target on op actions. These do not answer the whole letter.'),
     task_refs: z.array(z.string()).optional().describe('Task ids this letter is about; rendered as clickable pills'),
     pin: z.boolean().optional().describe('Pin it to the top of the inbox (digests, standing reports)'),
+    user_asked: z.boolean().optional().describe(
+      'The user themself asked this task for this letter or report. Only then does a report letter go out '
+      + 'while this task answers another task\'s request'),
   },
   bind: { method: 'POST', path: '/human-inbox' },
   mapResult: ({ body }) => ({
@@ -167,6 +173,7 @@ function envelope(l: LetterRow) {
     at: typeof l.createdAt === 'number' ? new Date(l.createdAt).toISOString() : undefined,
     read: l.read, pinned: l.pinned, archived: l.archived,
     ...(l.actions ? { actions: l.actions } : {}), ...(l.answered ? { answered: l.answered } : {}),
+    ...(l.settled ? { settled: l.settled } : {}),
     ...(l.taskRefs?.length ? { taskRefs: l.taskRefs } : {}),
     turns: Array.isArray(l.thread) ? l.thread.length : 0,
   }
@@ -260,17 +267,27 @@ defineOp({
   description:
     'Sets a letter\'s read, pinned or archived flag, as the user does in the inbox (any of the three, '
     + 'true or false). Archive only what the user no longer needs to see: a letter you sent that is '
-    + 'settled, or one the user asked you to clear; an unread decision letter stays for the user.',
+    + 'settled, or one the user asked you to clear; an unread decision letter stays for the user. '
+    + '`settled` closes a decision letter nobody needs to answer any more (the thing it asked was done '
+    + 'outside Walnut, the blocker cleared, the question is moot): it leaves the inbox with your one-line '
+    + 'reason, which the user reads. Settle your own decision letter the moment its ask is moot.',
   input: {
     id: z.string().min(1).describe('Letter id (lt-...)'),
     read: z.boolean().optional().describe('Read (true) or unread (false)'),
     pinned: z.boolean().optional().describe('Pinned to the top (true) or not (false)'),
     archived: z.boolean().optional().describe('Archived (true) or back in the inbox (false)'),
+    settled: z.string().min(3).max(200).optional().describe(
+      'Settle an unanswered decision letter: one line saying why nobody needs to answer it now (e.g. "The agreement was accepted; build 140 uploaded")'),
   },
-  handler: async ({ id, read, pinned, archived }, call) => {
+  handler: async ({ id, read, pinned, archived, settled }, call) => {
     const sets = ([['read', read], ['pin', pinned], ['archive', archived]] as const).filter(([, v]) => typeof v === 'boolean')
-    if (!sets.length) throw new Error('Name at least one of read, pinned, archived.')
+    const reason = typeof settled === 'string' ? settled.trim() : ''
+    if (!sets.length && !reason) throw new Error('Name at least one of read, pinned, archived, settled.')
     let letter: unknown
+    if (reason) {
+      const body = await call('POST', `/human-inbox/${encodeURIComponent(String(id))}/settle`, { reason }) as { letter?: LetterRow }
+      letter = body?.letter ? envelope(body.letter) : letter
+    }
     for (const [what, v] of sets) {
       const key = what === 'read' ? 'read' : what === 'pin' ? 'pinned' : 'archived'
       const body = await call('POST', `/human-inbox/${encodeURIComponent(String(id))}/${what}`, { [key]: v }) as { letter?: LetterRow }
@@ -282,6 +299,7 @@ defineOp({
     { method: 'POST', path: '/human-inbox/:id/read' },
     { method: 'POST', path: '/human-inbox/:id/pin' },
     { method: 'POST', path: '/human-inbox/:id/archive' },
+    { method: 'POST', path: '/human-inbox/:id/settle' },
   ],
   tags: { readonly: false, remote: 'allow' },
 })
@@ -292,25 +310,34 @@ defineOp({
   description:
     'Answers a letter in your user\'s inbox for them, as they would there: pick one of its options '
     + '(`action_id`, with an optional `note`) or write a reply (`text`). Only when your user asked you to, '
-    + 'or the answer is plainly theirs already (they said it to you); the letter, its sender and the inbox '
-    + 'record that your task answered, not the user, and the letter stays unread for them. A plugin\'s '
-    + 'letter (an approval of a step outside Walnut, such as a mail send) is the user\'s alone: refused '
-    + '(human-approval-required); tell the user what you would answer.',
+    + 'or the answer is plainly theirs already (they said it to you), and always with `user_words`: exactly what '
+    + 'they said, quoted in their language, naming the option or the step you answer with. The letter, its sender '
+    + 'and the inbox record that your task answered on those words, not the user, and the letter stays unread for '
+    + 'them. An answer that approves a step that is hard to undo or leaves Walnut (rewriting git history, '
+    + 'unpublishing a release, deleting, publishing or sending outward, spending, credentials or permissions) is '
+    + 'refused (human-approval-required) unless `user_words` name that step (or the picked option itself): one '
+    + 'vague line such as "clear everything" approves none of them; ask the user about that step by name. A '
+    + 'plugin\'s letter (an approval of a step outside Walnut, such as a mail send) is the user\'s alone: refused '
+    + 'too; tell the user what you would answer.',
   input: {
     id: z.string().min(1).describe('Letter id (lt-...)'),
     action_id: z.string().optional().describe('The option to pick (its id, from human_inbox_get actions)'),
     note: z.string().optional().describe('With action_id: a note beside the choice'),
     text: z.string().optional().describe('Without action_id: a reply in the thread, in the user\'s place'),
+    user_words: z.string().optional().describe(
+      'REQUIRED: the user\'s own words this answer rests on, quoted exactly (their language), naming the option or the step'),
   },
-  handler: async ({ id, action_id, note, text }, call) => {
+  handler: async ({ id, action_id, note, text, user_words }, call) => {
     const path = `/human-inbox/${encodeURIComponent(String(id))}`
     const pick = typeof action_id === 'string' ? action_id.trim() : ''
     const words = typeof text === 'string' ? text.trim() : ''
     if (!pick && !words) throw new Error('Name action_id (an option) or text (a reply).')
+    // Checked where the op is served (core/human-inbox/answer-approval.ts); passed through as given.
+    const quoted = typeof user_words === 'string' ? { userWords: user_words } : {}
     const out = pick
-      ? await call('POST', `${path}/answer`, { actionId: pick, ...(typeof note === 'string' && note.trim() ? { freeText: note.trim() } : {}) })
+      ? await call('POST', `${path}/answer`, { actionId: pick, ...(typeof note === 'string' && note.trim() ? { freeText: note.trim() } : {}), ...quoted })
       // The same words to the same letter are the same reply: a retry is never a second turn.
-      : await call('POST', `${path}/human-reply`, { text: words, clientId: `op-${createHash('sha256').update(`${id}\n${words}`).digest('hex').slice(0, 32)}` })
+      : await call('POST', `${path}/human-reply`, { text: words, clientId: `op-${createHash('sha256').update(`${id}\n${words}`).digest('hex').slice(0, 32)}`, ...quoted })
     const r = out as { letter?: LetterRow; delivery?: { status?: string; reason?: string } }
     const status = r?.delivery?.status
     return withOutcome(

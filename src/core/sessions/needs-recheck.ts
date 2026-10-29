@@ -11,7 +11,8 @@
  * the ask again (checked now) or moves on. A trigger of the task does not exempt it: it watches
  * the task, maybe not this ask. At most MAX_RECHECKS in a row while it keeps asking the user
  * (reworded or not); after that it shows as not verified until someone looks. Primary only; an
- * ephemeral server never wakes a task for a status it copied from the real Walnut.
+ * ephemeral server never wakes a task for a status it copied from the real Walnut. The task's open
+ * decision letters to the user ride the same clock (letter-recheck.ts).
  */
 import { log } from '../../logging/index.js';
 import type { Task } from '../types.js';
@@ -39,7 +40,7 @@ export function recheckBody(ask: string, checkedAt: string | undefined, nowMs: n
   return [
     `Your status asks the user: "${ask}"${Number.isFinite(at) ? `, last checked ${agoWords(nowMs - at)}` : ''}.`,
     'The user may have done it outside Walnut (a sign-in in a terminal, a tap on the phone, a review), and nothing told you. Check it now yourself: run the command, look for the file, read the letter, the review or the state it needed.',
-    'Done: carry on with the work, and your report no longer asks it. Still needed: say so in your report (that counts as checked now). If a script can tell when it is done, arm a trigger on it (trigger_create, wait:false) so you hear the moment it is, and no timer has to ask again.',
+    'Done: carry on with the work, and your report no longer asks it; if a letter of yours asked it, settle that letter (human_inbox_mark with "settled": one line saying why). Still needed: say so in your report (that counts as checked now). If a script can tell when it is done, arm a trigger on it (trigger_create, wait:false) so you hear the moment it is, and no timer has to ask again.',
   ].join('\n');
 }
 
@@ -116,7 +117,13 @@ export function startNeedsRecheck(opts: { ephemeral?: boolean } = {}): void {
   ephemeral = !!opts.ephemeral;
   startedAt = Date.now();
   if (timer) return;
-  timer = setInterval(() => { void runNeedsRecheck(); }, SCAN_MS);
+  timer = setInterval(() => {
+    void runNeedsRecheck();
+    // The task's decision letters to the user, on the same clock (letter-recheck.ts).
+    void import('./letter-recheck.js')
+      .then((m) => m.runLetterRecheck(Date.now(), ephemeral ? { notBefore: startedAt } : {}))
+      .catch((err) => log.task.warn('letter re-check not loaded', { error: err instanceof Error ? err.message : String(err) }));
+  }, SCAN_MS);
   timer.unref?.();
 }
 

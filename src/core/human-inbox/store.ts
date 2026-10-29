@@ -61,7 +61,7 @@ const BODIES_DIR = path.join(INBOX_DIR, 'bodies');
 export class LetterError extends Error {
   constructor(
     message: string,
-    readonly code: 'invalid' | 'not_found' | 'already_answered' | 'human_approval',
+    readonly code: 'invalid' | 'not_found' | 'already_answered' | 'human_approval' | 'reply_instead' | 'user_words',
     readonly status: number,
   ) {
     super(message);
@@ -736,9 +736,11 @@ function setArchivedFlag(letter: LetterRecord, archived: boolean, reason?: Lette
   if (letter.archived === archived) return;
   letter.archived = archived;
   letter.archivedAt = Date.now();
-  // The reason belongs to this one archive: any other move of the flag drops it.
+  // The reason belongs to this one archive: any other move of the flag drops it, and a settled
+  // letter brought back to the inbox asks again.
   if (archived && reason) letter.archivedReason = reason;
   else delete letter.archivedReason;
+  if (!archived) delete letter.settled;
 }
 
 /**
@@ -964,6 +966,70 @@ export async function archiveLettersWhere(
     bus.emit('human-inbox:state', { letterId: id, field: 'archived', value: true }, [], { source: 'human-inbox' });
   }
   return ids;
+}
+
+/** The most a settle reason keeps: one line the user reads. */
+export const SETTLE_REASON_MAX_CHARS = 200;
+
+function settleReason(reason: string): string {
+  const flat = str(reason).replace(/\s+/g, ' ').trim();
+  if (!flat) throw invalid('a settle needs its reason: one line saying why nobody needs to answer');
+  return flat.length > SETTLE_REASON_MAX_CHARS ? `${flat.slice(0, SETTLE_REASON_MAX_CHARS)}…` : flat;
+}
+
+function settleOne(letter: LetterRecord, reason: string, by?: LetterAnsweredBy): void {
+  letter.settled = { reason, at: Date.now(), ...(by ? { by } : {}) };
+  setArchivedFlag(letter, true, 'settled');
+  // Already in the archive: it keeps its place, and now says why it is closed.
+  letter.archivedReason = 'settled';
+}
+
+function announceSettled(ids: readonly string[]): void {
+  for (const id of ids) {
+    void mirrorLetterReadState(id, true);
+    bus.emit('human-inbox:state', { letterId: id, field: 'archived', value: true }, [], { source: 'human-inbox' });
+  }
+}
+
+/**
+ * Settle a letter nobody needs to answer any more: it leaves the inbox (archived, reason
+ * `settled`) and keeps the one-line reason the user reads. Its sender, or any task, says why.
+ * An answered letter is not settled: the answer is its record.
+ */
+export async function settleLetter(id: string, input: { reason: string; by?: LetterAnsweredBy }): Promise<LetterRecord> {
+  requireValidId(id);
+  const reason = settleReason(input.reason);
+  const record = await withWriteLock(() => withStore((store) => {
+    const letter = find(store, id);
+    if (letter.answered) throw new LetterError('This letter was answered; its answer is the record. Archive it instead.', 'already_answered', 409);
+    settleOne(letter, reason, input.by);
+    return { ...letter };
+  }));
+  announceSettled([record.id]);
+  return record;
+}
+
+/**
+ * Settle, in one write, the open letters `pick` gives a reason for (null = leave it). Same signals
+ * as archiveLettersWhere. Returns what it settled.
+ */
+export async function settleLettersWhere(
+  pick: (letter: LetterRecord) => string | null,
+): Promise<Array<{ id: string; reason: string }>> {
+  const done = await withWriteLock(() => withStore((store) => {
+    const moved: Array<{ id: string; reason: string }> = [];
+    for (const letter of store.letters) {
+      if (letter.archived || letter.answered) continue;
+      const why = pick(letter);
+      if (!why) continue;
+      const reason = settleReason(why);
+      settleOne(letter, reason);
+      moved.push({ id: letter.id, reason });
+    }
+    return moved;
+  }));
+  announceSettled(done.map((d) => d.id));
+  return done;
 }
 
 /**

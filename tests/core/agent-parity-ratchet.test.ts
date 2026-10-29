@@ -43,7 +43,7 @@ const APPROVAL_RULES: Record<string, { markers: number; rule: string }> = {
   'src/integrations/calendar/service.ts': { markers: 3, rule: 'outward: the same protected calendar write, refused when it cannot be confirmed' },
   'src/core/calendar/sources/eventkit.ts': { markers: 2, rule: 'outward: the macOS confirmation dialog for that write' },
   'src/ops/task-lifecycle.ts': { markers: 2, rule: 'permissions: a session changing its own permission mode' },
-  'src/web/routes/human-inbox-v1.ts': { markers: 1, rule: 'outward: a plugin\'s letter asks the user to approve a step outside Walnut (a mail send, an unsubscribe), and its answer runs that step (checked in core/human-inbox/letter-ops.ts, so the replica\'s relay meets it too)' },
+  'src/web/routes/human-inbox-v1.ts': { markers: 1, rule: 'outward: a plugin\'s letter asks the user to approve a step outside Walnut (a mail send, an unsubscribe), and its answer runs that step; and outward or irreversible: a task\'s answer for the user that approves rewriting history, unpublishing, deleting, publishing or sending, spending, credentials or permissions needs the user\'s quoted words naming that step (core/human-inbox/answer-approval.ts; 2026-10-29, "clear everything" became a history rewrite). Both checked in core/human-inbox/letter-ops.ts, so the replica\'s relay meets them too; any other answer goes through on the user\'s quoted words, recorded as the task\'s' },
   'src/web/routes/tasks.ts': { markers: 1, rule: 'deleting data: a session on another host merges only its own work (a merge deletes rows and their synced twins)' },
   'src/core/sessions/session-control-guard.ts': { markers: 2, rule: 'brake: a session stopping or restarting itself would cut off its own turn' },
 };

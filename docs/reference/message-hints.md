@@ -95,7 +95,11 @@ rest. Every message counts toward `every_n_turns`, hint or not.
 
 Defaults: `question` and `voice-reply` on request; `rich-output` at session
 start, after a compaction, on a change, and its short reminder every 5 messages;
-`reply-language` at session start, after a compaction, on a change, and on drift.
+`reply-language` at session start, after a compaction, on a change, and on drift,
+and for Main and the leads on every message a person did not write (a notice, a
+worker's reply, a trigger), because the user reads their chat whoever started the
+turn (2026-10-29; dropped once the triggers are set by hand). A lead's reply to
+such a turn is judged for drift like Main's.
 
 After a compaction the CLI's SessionStart hook (`open_items`) states every hint
 with `after_compaction` right away and records it, so the rest of an interrupted

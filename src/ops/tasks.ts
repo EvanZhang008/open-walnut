@@ -864,7 +864,9 @@ defineOp({
     'until someone takes the items up or drops them. A session completing ANOTHER task the user may still be using ' +
     '(a person wrote in it this week, its session was open in a terminal, it holds an org role or an armed trigger), ' +
     'or whose work is unfinished (a Partial result nobody settled, a request to it still unanswered, a turn running now), ' +
-    'gets 409 task_in_use with the reasons: leave it open, or pass force:true with a reason. Open subtasks never block it.',
+    'gets 409 task_in_use with the reasons: leave it open, or pass force:true with a reason. Open subtasks never block it. ' +
+    'Its unanswered decision letters to the user are settled as no longer needed (they leave the inbox with that reason); ' +
+    'one that must still reach the user goes back with human_inbox_mark archived:false.',
   input: {
     id: z.string().min(1).describe('Task id or a unique id prefix'),
     result: z.string().min(1).max(2000).optional().describe('One sentence: what came of the work'),

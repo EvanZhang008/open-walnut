@@ -1,7 +1,8 @@
 /**
  * A completed task's own "please check this" letters are archived
  * (src/core/human-inbox/complete-archive.ts): review / completion letters the
- * task sent, with the reason `task_completed`; decisions, reports, mail items,
+ * task sent, with the reason `task_completed`; its decisions are settled (reason `settled`,
+ * decision-settle.ts); reports, mail items,
  * pinned letters and other tasks' letters stay; a reopen brings nothing back;
  * a letter someone un-archived is never archived again; a session's completion
  * keeps the letters the user has not read yet.
@@ -125,8 +126,12 @@ describe('completing a task', () => {
       expect(l.archived).toBe(true)
       expect(l.archivedReason).toBe('task_completed')
     }
+    // Its decision letter is settled (2026-10-29): a completed task waits on no answer.
+    const dec = await settled(decision, true)
+    expect(dec.archivedReason).toBe('settled')
+    expect(dec.settled?.reason).toMatch(/"Phone video fix" was completed/)
     await quiet()
-    for (const id of [decision, report, pinned, otherTask]) {
+    for (const id of [report, pinned, otherTask]) {
       const l = await getLetter(id)
       expect(l?.archived, id).toBe(false)
       expect(l?.archivedReason).toBeUndefined()

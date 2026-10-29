@@ -321,7 +321,10 @@ describe('buildSessionContext (identity note)', () => {
     // 6850 → 7050 (2026-10-27) for the charter's relay rule: quote the user's own
     // words and screenshots first, a summary after; Main's summary had narrowed a
     // request and a worker shipped the narrowed version. 6,888.
-    expect(systemPrompt.length).toBeLessThan(7050)
+    // 7050 → 7150 (2026-10-29) for answering a request: the result goes to the
+    // asker alone, a letter only when the user asked; finished work had reached the
+    // user twice, a worker's letter and Main's chat a minute apart. 7,102.
+    expect(systemPrompt.length).toBeLessThan(7150)
   })
 
   it('asks for the agent acknowledgement line alone, only for agent messages, never after words', async () => {

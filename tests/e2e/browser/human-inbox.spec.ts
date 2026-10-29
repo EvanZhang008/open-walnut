@@ -333,7 +333,7 @@ test('a task\'s answer for the user reads as that task\'s, never as "You"', asyn
   }, originSid)
   // What human_inbox_answer sends: the answer route, with the answering session's caller id.
   const res = await request.post(`/api/v1/human-inbox/${letterId}/answer`, {
-    data: { actionId: 'wide', freeText: `the user said wide in chat (${NONCE})` },
+    data: { actionId: 'wide', freeText: `the user said wide in chat (${NONCE})`, userWords: `wide is fine (${NONCE})` },
     headers: { [CALLER_SID_HEADER]: answeringSid },
   })
   expect(res.status(), await res.text()).toBeLessThan(300)
@@ -355,6 +355,8 @@ test('a task\'s answer for the user reads as that task\'s, never as "You"', asyn
   const turn = reader.locator('.hib-turn--human').last()
   await expect(turn.locator('.hib-turn-who')).toHaveText(name)
   await expect(turn).toContainText(`the user said wide in chat (${NONCE})`)
+  // The user's words the task answered on (required since 2026-10-29) show with the answer.
+  await expect(reader.locator('[data-testid="letter-answer-user-words"]')).toContainText(`wide is fine (${NONCE})`)
   await shot(page, 'e2e-06-answered-by-task')
   expect(pageErrors, `uncaught page errors: ${pageErrors.join(' | ')}`).toEqual([])
 })

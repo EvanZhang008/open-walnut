@@ -929,6 +929,9 @@ export interface Task {
   /** The last re-check Walnut asked of a "needs you" nobody checks by script
    *  (sessions/needs-recheck.ts); null clears it. */
   needs_recheck?: import('./sessions/needs-recheck.js').NeedsRecheck | null;
+  /** The last re-check Walnut asked of this task's open decision letters to the user
+   *  (sessions/letter-recheck.ts); null clears it. */
+  letter_recheck?: import('./sessions/letter-recheck.js').LetterRecheck | null;
   /** The agent's own MEMORY.md (Main, a lead, a leader): its working memory, not shown to the
    *  user by default and not Walnut's global MEMORY.md (src/core/sessions/agent-memory.ts).
    *  `by` / `by_name` / `by_at`: the latest write by someone other than the task's own session (the

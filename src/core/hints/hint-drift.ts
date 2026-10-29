@@ -5,9 +5,9 @@
  * the hint again (hint-schedule.ts), so the rule comes back exactly when it was
  * lost instead of riding every message.
  *
- * Only a reply the user reads is judged: Main's and an ask's always, anyone else's
- * when a person sent the message (a worker answering its lead in English is not
- * talking to the user).
+ * Only a reply the user reads is judged: Main's, a lead's (its chat is on the Org
+ * page) and an ask's always, anyone else's when a person sent the message (a
+ * worker answering its lead in English is not talking to the user).
  */
 
 import type { OnTurnCompletePayload, SessionHookDefinition } from '../session-hooks/types.js';
@@ -35,9 +35,9 @@ export const hintDriftHook: SessionHookDefinition = {
     const drifted = checks.filter((h) => h.drifted!(config, reply)).map((h) => h.kind);
     if (!drifted.length) return;
     const at = new Date().toISOString();
-    // Main and an ask talk to the user whoever started the turn; anyone else only answers a person.
+    // Main, a lead and an ask talk to the user whoever started the turn; anyone else only answers a person.
     const role = hintTargetOf(p.sessionId, p.task).role;
-    const userFacing = role === 'main' || role === 'ask';
+    const userFacing = role === 'main' || role === 'lead' || role === 'ask';
     await writeHintState(p.sessionId, (cur) => {
       const state = cur.hintState;
       if (!state || (!userFacing && state.lastSendBy !== 'person')) return null;

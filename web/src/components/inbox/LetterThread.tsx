@@ -37,6 +37,9 @@ export function LetterThread({ entries, subject, onBodyClick, letterId, onNaviga
           {entry.text && (
             <div className="hib-turn-text"><LinkifiedText text={entry.text} /></div>
           )}
+          {entry.by?.userWords && (
+            <div className="hib-turn-text hib-turn-quote" data-testid="letter-turn-user-words">On your words: “{entry.by.userWords}”</div>
+          )}
           {/* A deferred turn body has no `body` string — it streams from bodyUrl,
               same lane as the letter's own document. */}
           {(entry.body || (entry.bodyDeferred && entry.bodyUrl)) && entry.bodyFormat && (

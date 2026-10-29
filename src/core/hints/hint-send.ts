@@ -79,6 +79,8 @@ export function planHints(input: {
   skip?: ReadonlySet<string>;
   /** The post-compaction hook: every hint with `after_compaction` is due, whatever was told. */
   afterCompaction?: boolean;
+  /** Who wrote this message; absent = not a person (a host's peer note). */
+  sentBy?: 'person' | 'agent';
 }): HintPlan {
   const state = seededState(input.record);
   const send = state.sends + 1;
@@ -96,6 +98,9 @@ export function planHints(input: {
         triggers: hint.triggers, everyTurns: hint.everyTurns, told, send, identity,
         compactUuid: input.record?.lastCompactUuid, driftAt: state.drift?.[hint.kind], requested: !!request,
       });
+    // A role whose chat the user reads gets it on every turn a person did not start.
+    if (!input.afterCompaction && input.sentBy !== 'person' && input.target.role && hint.agentTurnRoles.includes(input.target.role)
+      && !reasons.includes('every_turn')) reasons = [...reasons, 'every_turn'];
     if (input.only) reasons = reasons.filter((r) => input.only!.has(r));
     if (!reasons.length) continue;
     const rendered = hint.render(content, new Set(reasons));
@@ -238,6 +243,7 @@ export async function prepareHintedSend(
       hints, target, record, config,
       ...(opts.requested ? { requested: opts.requested } : {}),
       ...(upstream ? { skip: new Set(upstream.kinds) } : {}),
+      ...(opts.sentBy ? { sentBy: opts.sentBy } : {}),
     });
     const carriesHints = plan.before.length + plan.after.length + (upstream ? upstream.before.length + upstream.after.length : 0) > 0;
     const body = carriesHints && !words.trim() ? (opts.emptyBodyLine ?? EMPTY_BODY_LINE) : words;

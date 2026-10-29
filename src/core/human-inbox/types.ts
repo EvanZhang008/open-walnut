@@ -16,8 +16,24 @@ export type * from '../../../packages/plugin-api/src/inbox-items.js';
 /** WHY the letter exists. Drives how the UI treats it (badges, Needs Action). */
 export type LetterType = 'completion' | 'action_required' | 'review' | 'info';
 
-/** Why Walnut archived a letter on its own: `task_completed` = its task was completed. */
-export type LetterArchiveReason = 'task_completed';
+/**
+ * Why a letter left the inbox without a person archiving it: `task_completed` = its task was
+ * completed (a review or completion letter); `settled` = a decision letter nobody needs to answer
+ * any more (its task completed, or its sender said the ask is moot), see `LetterRecord.settled`.
+ */
+export type LetterArchiveReason = 'task_completed' | 'settled';
+
+/**
+ * A decision letter closed without an answer, and why (2026-10-29: a "TestFlight upload blocked,
+ * accept the agreement" letter still asked the user hours after its task had shipped three builds).
+ */
+export interface LetterSettled {
+  /** One line the user reads: why nobody needs to answer it. */
+  reason: string;
+  at: number;
+  /** The task that settled it; absent when Walnut did (its task completed). */
+  by?: LetterAnsweredBy;
+}
 
 /** Body is either ready-made HTML or markdown the reader renders. */
 export type LetterBodyFormat = 'html' | 'markdown';
@@ -66,6 +82,11 @@ export interface LetterAnsweredBy {
   taskId?: string;
   /** The task's title when the answer was recorded. */
   name?: string;
+  /**
+   * The user's own words the task answered on, as it quoted them (answer-approval.ts). Required of
+   * a task's answer since 2026-10-29; absent on older records.
+   */
+  userWords?: string;
 }
 
 /**
@@ -162,6 +183,8 @@ export interface LetterRecord {
    * archived letter; any later move of the flag drops it.
    */
   archivedReason?: LetterArchiveReason;
+  /** Set when a decision letter was settled without an answer (see LetterSettled). */
+  settled?: LetterSettled;
   /**
    * Size of the body document as the SENDER wrote it. Stamped at send time, so
    * it travels with the index — which is what lets a box holding only a COPY of
@@ -207,6 +230,12 @@ export interface NewLetter {
   taskRefs?: string[];
   task_refs?: string[];
   pin?: boolean;
+  /**
+   * The user themself asked this task for a letter or a report: send it even though the task
+   * answers another task's request (human-inbox/reply-instead.ts). Either spelling; never stored.
+   */
+  userAsked?: boolean;
+  user_asked?: boolean;
   /** Stamped by the route from the caller's sid, not by the agent. */
   sender: LetterSender;
 }

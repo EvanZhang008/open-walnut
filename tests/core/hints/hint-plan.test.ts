@@ -120,6 +120,36 @@ describe('user and agent settings', () => {
     expect(sx).toEqual([['other']]);
   });
 
+  it('Main and the leads hear the reply language on every turn a person did not write', () => {
+    // 2026-10-29: leads answered Walnut notices in English in the chats the user reads.
+    const config = cfg({ reply_language: 'Talk to the user in Chinese.' });
+    const plan = (role: 'main' | 'lead' | 'worker', rec: Rec, sentBy?: 'person' | 'agent') => {
+      const p = planHints({ hints: effectiveHints(config), target: { sessionId: rec.claudeSessionId, role }, record: rec, config, ...(sentBy ? { sentBy } : {}) });
+      rec.hintState = advanceHintState(rec.hintState, rec, p.told, { now: Date.now(), ...(sentBy ? { sentBy } : {}) });
+      return p.carried.map((h) => h.kind);
+    };
+    for (const role of ['main', 'lead'] as const) {
+      const rec: Rec = { claudeSessionId: `org-${role}`, output_mode: 'markdown' };
+      expect(plan(role, rec, 'person')).toEqual(['reply-language']);
+      expect(plan(role, rec, 'person')).toEqual([]);
+      expect(plan(role, rec, 'agent')).toEqual(['reply-language']);
+      expect(plan(role, rec, 'agent')).toEqual(['reply-language']);
+      // A host's peer note says nobody wrote it: not a person.
+      expect(plan(role, rec)).toEqual(['reply-language']);
+    }
+    const worker: Rec = { claudeSessionId: 'w-1', output_mode: 'markdown' };
+    plan('worker', worker, 'agent');
+    expect(plan('worker', worker, 'agent')).toEqual([]);
+    // Set triggers decide alone; the host tail carries it for a lead.
+    const set = cfg({ reply_language: 'Talk to the user in Chinese.', hints: { 'reply-language': { triggers: ['session_start'] } } });
+    const lead: Rec = { claudeSessionId: 'l-2', output_mode: 'markdown' };
+    planHints({ hints: effectiveHints(set), target: { sessionId: 'l-2', role: 'lead' }, record: lead, config: set, sentBy: 'agent' });
+    lead.hintState = { sends: 1, told: { 'reply-language': { send: 1, hash: 'Talk to the user in Chinese.', at: '2026-11-01T00:00:00Z' } } };
+    expect(planHints({ hints: effectiveHints(set), target: { sessionId: 'l-2', role: 'lead' }, record: lead, config: set, sentBy: 'agent' }).carried).toEqual([]);
+    expect(hostReplyTail({ ...lead }, config, { org_role: 'lead' } as never)).toContain('Walnut (reply-language)');
+    expect(hostReplyTail({ ...lead }, config, { parent_task_id: 'p' } as never)).toBeNull();
+  });
+
   it('roles come from the task', () => {
     expect(hintTargetOf('a', { org_role: 'main' } as never).role).toBe('main');
     expect(hintTargetOf('a', { org_role: 'lead' } as never).role).toBe('lead');

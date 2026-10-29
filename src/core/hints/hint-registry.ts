@@ -64,6 +64,11 @@ interface HintSpec {
   render(input: HintContentInput, reasons: ReadonlySet<MessageHintTrigger>): HintRender | null;
   /** Did this reply break the hint's rule? (`on_drift`) */
   drifted?(config: Pick<Config, 'session'> | null, reply: string): boolean;
+  /**
+   * Roles that get it on every message a person did not write, while its triggers are the
+   * default: the user reads their chat whoever started the turn.
+   */
+  agentTurnRoles?: readonly MessageHintRole[];
 }
 
 const SCHEDULED: readonly MessageHintTrigger[] = HINT_TRIGGERS.filter((t) => t !== 'on_request');
@@ -106,9 +111,11 @@ const BUILT_IN: readonly HintSpec[] = [
   {
     kind: 'reply-language',
     label: 'Reply language',
-    description: 'The language to answer the user in (Settings, Reply language).',
+    description: 'The language to answer the user in (Settings, Reply language). Main and the leads get it on every message a person did not write (a notice, a worker\'s reply, a trigger), because the user reads their chat whoever started the turn.',
     allowed: SCHEDULED,
     defaults: { enabled: true, triggers: ['session_start', 'after_compaction', 'on_change', 'on_drift'], placement: 'after' },
+    // 2026-10-29: leads answered Walnut notices in English in the chats the user reads on the Org page.
+    agentTurnRoles: ['main', 'lead'],
     identity: (i) => replyLanguageText(i.config),
     render: (i) => {
       const text = replyLanguageText(i.config);
@@ -157,6 +164,8 @@ export interface EffectiveHint {
   identity(input: HintContentInput): string | null;
   render(input: HintContentInput, reasons: ReadonlySet<MessageHintTrigger>): HintRender | null;
   drifted?(config: Pick<Config, 'session'> | null, reply: string): boolean;
+  /** Roles that get it on every message a person did not write (empty once its triggers are overridden). */
+  agentTurnRoles: MessageHintRole[];
 }
 
 /** The strings of a list from config.yaml, which a person may have hand-edited into any shape. */
@@ -224,6 +233,8 @@ export function effectiveHints(config: Pick<Config, 'session'> | null | undefine
       identity: spec.identity,
       render: spec.render,
       ...(spec.drifted ? { drifted: spec.drifted } : {}),
+      // A person who set the triggers decides when it goes out.
+      agentTurnRoles: o?.triggers === undefined && spec.allowed.includes('every_turn') ? [...(spec.agentTurnRoles ?? [])] : [],
     };
   });
 }
@@ -249,7 +260,7 @@ export function hintApplies(hint: EffectiveHint, target: HintTarget): boolean {
 
 /** Does any enabled hint restrict by role or agent (so the send must read the task)? */
 export function needsTaskForAudience(hints: readonly EffectiveHint[]): boolean {
-  return hints.some((h) => h.enabled && (h.audience.roles.length > 0 || h.audience.agents.length > 0));
+  return hints.some((h) => h.enabled && (h.audience.roles.length > 0 || h.audience.agents.length > 0 || h.agentTurnRoles.length > 0));
 }
 
 export class HintSettingsError extends Error {
