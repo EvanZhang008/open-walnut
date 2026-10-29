@@ -18,6 +18,7 @@
 import { createHash } from 'node:crypto';
 import { log } from '../../logging/index.js';
 import { bus } from '../event-bus.js';
+import { createEnvelopeKit } from '../peers/envelope-kit.js';
 import {
   answerLetter,
   findLetterByOp,
@@ -229,7 +230,7 @@ export function buildLetterDeliveryText(
   const marker = `---letter-answer-${createHash('sha1').update(fields).digest('hex').slice(0, 12)}---`;
   const by = human.by;
   const taskName = (b: LetterAnsweredBy) => `the task "${oneLine(b.name || b.taskId || 'unnamed', WRAPPER_FIELD_MAX_CHARS)}"${b.taskId ? ` (${b.taskId})` : ''}`;
-  return [
+  const text = [
     by
       ? `[Letter reply] Another task, ${taskName(by)}, answered a letter you sent your user, in their place.`
       : human.replaces
@@ -255,6 +256,23 @@ export function buildLetterDeliveryText(
     + 'session) so the answer reaches them wherever they are:',
     `walnut tools call human_inbox_reply '{"letter":"${letter.id}","text":"..."}'`,
   ].join('\n');
+  if (!by) return text;
+  // Another task's answer is a delivery from that task, like any peer note: in
+  // the walnut-message envelope its sender is read from, so every timeline folds
+  // it with the other messages the session received instead of drawing it as the
+  // person's own words (2026-10-29: Main's chat split one quiet stretch in three).
+  const kit = createEnvelopeKit();
+  return kit.buildWalnutMessage({
+    kind: 'peer-note',
+    attrs: {
+      from: kit.sessionHandle(oneLine(by.name || by.taskId || '', WRAPPER_FIELD_MAX_CHARS), by.sessionId),
+      'from-session': by.sessionId,
+      'from-task': by.taskId,
+      title: kit.messageTitle(`Answered your letter: ${oneLine(letter.subject ?? '', WRAPPER_FIELD_MAX_CHARS)}`),
+      note: 'another of your user\'s tasks answered your letter in their place',
+    },
+    body: text,
+  });
 }
 
 /**
@@ -286,6 +304,9 @@ export async function deliverLetterToOrigin(
     const { getSessionByClaudeId } = await import('../session-tracker.js');
     const record = await getSessionByClaudeId(sid);
     if (!record) return { status: 'skipped', reason: 'origin_session_gone', sessionId: sid };
+    // The origin answered its own letter: it already knows the answer, and the
+    // delivery would only echo its own words back as a new message.
+    if (human.by?.sessionId === sid) return { status: 'skipped', reason: 'answered_by_origin', sessionId: sid };
 
     const text = buildLetterDeliveryText(letter, human);
     if (record.pendingPermission) {

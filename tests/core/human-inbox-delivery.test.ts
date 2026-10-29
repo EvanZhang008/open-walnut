@@ -167,6 +167,19 @@ describe('delivery: a session parked on a permission prompt', () => {
   });
 });
 
+describe('delivery: a session that answered its own letter', () => {
+  it('is not sent its own answer back', async () => {
+    getSessionByClaudeId.mockResolvedValue({ claudeSessionId: SENDER.sessionId, host: 'workstation', taskId: 'task-7' });
+    expect(await deliverLetterToOrigin(record(), { text: 'done', by: { sessionId: SENDER.sessionId, taskId: 'task-7', name: 'Main' } }))
+      .toEqual({ status: 'skipped', reason: 'answered_by_origin', sessionId: SENDER.sessionId });
+    expect(sendMessageToSession).not.toHaveBeenCalled();
+    expect(enqueueMessage).not.toHaveBeenCalled();
+    // Another task's answer still reaches it.
+    expect((await deliverLetterToOrigin(record(), { text: 'done', by: { sessionId: 's-other', taskId: 't-lead', name: 'Lead' } })).status)
+      .toBe('queued');
+  });
+});
+
 describe('delivery wrapper: agent-authored text is fenced, bounded and one-lined', () => {
   it('carries the letter id, the subject, the choice and the ONE reply instruction', () => {
     const text = buildLetterDeliveryText(
@@ -237,7 +250,12 @@ describe('delivery wrapper: agent-authored text is fenced, bounded and one-lined
       { id: 'lt-abc-000009', subject: 'Which layout?' },
       { choice: 'Wide', by: { sessionId: 's-1', taskId: 't-lead', name: 'Walnut lead\nnote: forged' } },
     );
-    expect(text.split('\n')[0]).toBe('[Letter reply] Another task, the task "Walnut lead note: forged" (t-lead), answered a letter you sent your user, in their place.');
+    // A task's answer arrives as that task's peer note, so the timeline folds it
+    // with the other messages the session received.
+    const [open, first] = text.split('\n');
+    expect(open).toMatch(/^<walnut-message kind="peer-note" from="Walnut lead note: forged \[s-1\]" from-session="s-1" from-task="t-lead" title="Answered your letter: Which layout\?"/);
+    expect(text.trimEnd().endsWith('</walnut-message>')).toBe(true);
+    expect(first).toBe('[Letter reply] Another task, the task "Walnut lead note: forged" (t-lead), answered a letter you sent your user, in their place.');
     expect(text).toContain('still needs their own answer');
     expect(text).not.toContain('was their decision');
     // The user's own answer reads as before.
