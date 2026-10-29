@@ -14,6 +14,7 @@ import { splitLeadingRiders, withoutLeadingRiders } from '@open-walnut/history-w
 import { typedUserText } from '@open-walnut/history-injected-banner';
 import { buildDigestText } from '../../src/core/org/org-store';
 import { buildPlaceNoticeText } from '../../src/core/sessions/place-notice';
+import { statusText } from '../../src/core/sessions/status-push';
 import { createEnvelopeKit } from '../../src/core/peers/envelope-kit';
 import { CATCH_UP_BANNER_CLOSE, CATCH_UP_BANNER_OPEN } from '../../src/core/chat-history';
 import { IMAGES_ATTACHED_LINE } from '../../src/core/sessions/cloud-images';
@@ -49,6 +50,14 @@ describe('splitLeadingRiders: the rows Walnut writes', () => {
     expect(split?.body).toBe(words);
     expect(split?.riders.map((r) => r.kind)).toEqual(['notification']);
     expect(split?.riders[0].raw).toBe(org);
+  });
+
+  it('splits a status change of a followed task off the words (2026-10-29: the words were drawn inside its card)', () => {
+    const status = statusText(['- "Sample lead" (task-b): Working \u2192 Waiting (on another task) at 21:05 UTC.']);
+    const words = 'Yes, I think that works.\n\nGo for it.';
+    const split = splitLeadingRiders(row([status], words));
+    expect(split?.riders.map((r) => r.raw)).toEqual([status]);
+    expect(split?.body).toBe(words);
   });
 
   it('keeps an image block, a quote and several paragraphs in the body', () => {

@@ -1,5 +1,5 @@
 /**
- * Walnut's own notices that ride IN FRONT OF a message — pure, render-agnostic.
+ * Walnut's own notices that ride IN FRONT OF a message: pure, render-agnostic.
  *
  * When Walnut has something the session should know in passing (its task moved,
  * the org changed, its default instructions changed, an App's state), it does not spend a turn
@@ -12,12 +12,16 @@
  * This splits those riders off the front, so the rest of the row goes back to
  * whatever path it takes without them. The stored text is never changed.
  *
- * A rider is recognized by a CLOSED list, the four notes Walnut has ever put in
- * front of a message: a `notification` from Walnut whose outcome is `moved`,
- * `org-update` or `task-routing-policy` (changed default instructions; the name
- * is from when they were only the routing rules), or an `app-state`. It is a display
- * grouping, not an authorization: a person who pastes one gets a card, exactly
- * as with every other envelope (see history-session-envelope.ts).
+ * A rider is recognized by a CLOSED list, the notes Walnut puts in front of a
+ * message: a `notification` from Walnut whose outcome is in RIDER_NOTICE_OUTCOMES,
+ * or an `app-state`. The list is closed because text after an arbitrary envelope
+ * is not the person's (a trigger's own instructions, an older delivery's footer),
+ * and it is pinned to the notes session-message-queue.ts actually prepends by
+ * tests/web/walnut-riders-producers.test.ts, which also checks the iOS copy: a
+ * note added there without its outcome here drew the person's words inside the
+ * note's card (2026-10-29, the status push). It is a display grouping, not an
+ * authorization: a person who pastes one gets a card, exactly as with every other
+ * envelope (see history-session-envelope.ts).
  *
  * The split happens only when it can lose nothing, and returns `null` (render
  * the row exactly as before) otherwise:
@@ -41,7 +45,18 @@ export interface RiderSplit {
 
 const TAG_HEAD = '<walnut-message ';
 const TAG_CLOSE = '\n</walnut-message>';
-const RIDER_OUTCOMES = new Set(['moved', 'org-update', 'task-routing-policy']);
+/**
+ * The outcomes of Walnut's notes that ride in front of a message, one per note
+ * session-message-queue.ts prepends: place (`moved`), restart (`restarted`), org
+ * digest (`org-update`), status push (`status`), wait note (`waiting`), retired
+ * lead (`handed-over`), plus the changed default instructions the queue's drain
+ * puts first (`task-routing-policy`). iOS keeps the same list
+ * (TimelineInboundMessage.riderOutcomes).
+ */
+export const RIDER_NOTICE_OUTCOMES: readonly string[] = [
+  'moved', 'restarted', 'org-update', 'status', 'waiting', 'handed-over', 'task-routing-policy',
+];
+const RIDER_OUTCOMES = new Set(RIDER_NOTICE_OUTCOMES);
 /** `name="value"`, first occurrence wins (same rule as the envelope parser). */
 const ATTR = /([a-z][a-z0-9-]*)="([^"]*)"/g;
 

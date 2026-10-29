@@ -2907,7 +2907,9 @@ const codepathValidationGo = path.join(codepathFixtureRoot, 'k8s-src', 'objectme
     const { buildPlaceNoticeText } = await import('../../../src/core/sessions/place-notice.js')
     const { createEnvelopeKit } = await import('../../../src/core/peers/envelope-kit.js')
     const { IMAGES_ATTACHED_LINE } = await import('../../../src/core/sessions/cloud-images.js')
+    const { statusText } = await import('../../../src/core/sessions/status-push.js')
     const kit = createEnvelopeKit()
+    const status = statusText(['- "Fixture lead" (pw-task-rider-main): Working \u2192 Waiting (on another task) at 21:05 UTC. RIDER_STATUS_MARKER'])
     const org = buildDigestText({ id: 'pw-task-rider-main', title: 'Main' },
       ['Fixture lead: RIDER_ORG_MARKER finished the sample review'], 0,
       new Date(sessionFixtureNow - 14 * 60_000).toISOString(), sessionFixtureNow)
@@ -2955,6 +2957,9 @@ const codepathValidationGo = path.join(codepathFixtureRoot, 'k8s-src', 'objectme
       org,
       // ⑨ a rider ahead of a trigger delivery: still machine text, no bubble
       `${org}\n\n${trigger}`,
+      // ⑩ 2026-10-29: a status change of a followed task ahead of the human's words,
+      // with the message hint the CLI line carries after them
+      `${status}\n\nRIDER_TYPED_STATUS yes, go for it.\n\n<system-reminder>\nWalnut (rich-output): rich output mode is still on.\n</system-reminder>`,
     ]
     await fs.writeFile(
       path.join(jsonlDir, 'pw-rider-session.jsonl'),

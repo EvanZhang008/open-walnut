@@ -119,7 +119,7 @@ test('the projection keeps every rider row a user row', async ({ request }) => {
   const res = await request.get(`/api/sessions/${SESSION_ID}/history`)
   expect(res.ok()).toBe(true)
   const { messages } = await res.json() as { messages: Array<{ role: string; text?: string }> }
-  for (const marker of ['RIDER_TYPED_ONE', 'RIDER_TYPED_IMG', 'RIDER_TYPED_STACK', 'RIDER_TYPED_FORGED', 'RIDER_TYPED_TRUNC', 'RIDER_TYPED_TAIL']) {
+  for (const marker of ['RIDER_TYPED_ONE', 'RIDER_TYPED_IMG', 'RIDER_TYPED_STACK', 'RIDER_TYPED_FORGED', 'RIDER_TYPED_TRUNC', 'RIDER_TYPED_TAIL', 'RIDER_TYPED_STATUS']) {
     const rows = messages.filter((m) => (m.text ?? '').includes(marker))
     expect(rows.map((m) => m.role), marker).toEqual(['user'])
   }
@@ -158,6 +158,34 @@ test('the words after an org digest are a user bubble; the digest is a card abov
   await b.getByRole('button', { name: 'Copy as Markdown' }).click()
   const copied = await page.evaluate(() => (window as unknown as { __copied: string[] }).__copied)
   expect(copied.at(-1)).toBe('RIDER_TYPED_ONE first paragraph.\n\nSecond paragraph of the same message.')
+})
+
+test('the words after a status change of a followed task are a user bubble; the status note folds above it', async ({ page }) => {
+  // 2026-10-29, Main's chat: the status note's outcome was missing from the rider
+  // list, so the whole line was drawn as the note's card with the words inside it.
+  test.setTimeout(90_000)
+  const panel = await openRiderSession(page)
+  const b = await bubble(panel, 'RIDER_TYPED_STATUS')
+  const shown = await b.innerText()
+  expect(shown).toContain('RIDER_TYPED_STATUS yes, go for it.')
+  expect(shown).not.toContain('RIDER_STATUS_MARKER')
+  expect(shown).not.toContain('changed its status')
+  // The message hint stays the bubble's own row, as on any message.
+  await expect(b.getByText(/Walnut hints: Rich output/)).toHaveCount(1)
+  // No card row holds the words.
+  await expect(panel.locator('.session-history .session-msg-envelope', { hasText: 'RIDER_TYPED_STATUS' })).toHaveCount(0)
+  const rider = riderAbove(b)
+  const fold = rider.locator('[data-testid="rider-fold"]')
+  await expect(fold).toHaveAttribute('data-open', 'false')
+  await expect(fold.locator('.tool-run-toggle')).toHaveText(/^Received 1 message›?$/)
+  await reveal(page, panel, b)
+  await shot(page, b.locator('xpath=..'), 'status-note-folded')
+  await reveal(page, panel, fold)
+  await fold.locator('.tool-run-toggle').click()
+  await expect(rider.locator('.provenance-card')).toHaveCount(1)
+  await expect(rider).toContainText('changed its status')
+  await reveal(page, panel, b)
+  await shot(page, rider, 'status-note-open')
 })
 
 test('an image block, a quote and several paragraphs all stay in the bubble', async ({ page }) => {
@@ -224,11 +252,12 @@ test('a notice alone, or ahead of a trigger delivery, is still no bubble', async
   await expect(trigger).not.toHaveClass(/session-msg-user/)
   await expect(trigger).toHaveClass(/session-msg-envelope/)
   expect(await previousRowClass(trigger)).toContain('session-msg-riders')
-  // Shapes 8 and 9 put no user bubble anywhere: only the fixture's six worded turns have one.
+  // Shapes 8 and 9 put no user bubble anywhere: only the fixture's worded turns have one.
   const bubbles = panel.locator('.session-history .session-msg-user')
   // (plain, digest + words, digest + image, four notices, the cut-off notice
-  // drawn whole as before; never the forged, the tail-notice or these two).
-  await expect(bubbles).toHaveCount(5)
+  // drawn whole as before, status note + words; never the forged, the
+  // tail-notice or these two).
+  await expect(bubbles).toHaveCount(6)
 })
 
 test('a quote pinned in a bubble under a notice paints in the bubble, not the card', async ({ page }) => {

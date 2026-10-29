@@ -91,11 +91,12 @@ enum TimelineInboundMessage {
     // MARK: - Riders
 
     /// The notes Walnut puts IN FRONT OF a message in the same stored row (its
-    /// task moved, the org changed, the routing rules, an App's state), so that a
-    /// person's words arrive behind them. Port of `splitLeadingRiders`
-    /// (`lib/history-walnut-riders.ts`): a CLOSED list, each rider a complete tag
-    /// followed by exactly one blank line, and a non-blank body after them, or no
-    /// split at all.
+    /// task moved, a restart, the org changed, a status change of a task it
+    /// follows, its wait, a handed-over project, the routing rules, an App's
+    /// state), so that a person's words arrive behind them. Port of
+    /// `splitLeadingRiders` (`lib/history-walnut-riders.ts`): a CLOSED list, each
+    /// rider a complete tag followed by exactly one blank line, and a non-blank
+    /// body after them, or no split at all.
     static func splitRiders(_ text: String) -> (riders: [String], body: String)? {
         guard text.hasPrefix(head) else { return nil }
         var riders: [String] = []
@@ -111,7 +112,10 @@ enum TimelineInboundMessage {
         return (riders, body)
     }
 
-    private static let riderOutcomes: Set<String> = ["moved", "org-update", "task-routing-policy"]
+    /// The web's `RIDER_NOTICE_OUTCOMES`, kept equal by tests/web/walnut-riders-producers.test.ts.
+    static let riderOutcomes: Set<String> = [
+        "moved", "restarted", "org-update", "status", "waiting", "handed-over", "task-routing-policy",
+    ]
 
     private static func isRider(_ attributes: [String: String]) -> Bool {
         if attributes["kind"] == "app-state" { return true }

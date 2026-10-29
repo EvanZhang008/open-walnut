@@ -151,6 +151,27 @@ final class TurnFoldTests: XCTestCase {
         ])
     }
 
+    /// 2026-10-29: a status change of a followed task rode in front of the person's
+    /// words, and its outcome was missing from the closed list, so the whole row
+    /// read as one notice with the words inside it. Every note the queue puts in
+    /// front of a message splits off the same way.
+    func testEveryNoteWalnutPutsInFrontOfAMessageLeavesThePersonsWordsTheirBubble() {
+        let status = "<walnut-message kind=\"notification\" from=\"Walnut\" outcome=\"status\" "
+            + "note=\"status changes of tasks you follow, not a work request\">\n"
+            + "A task you follow changed its status (Walnut's record, not a report):\n"
+            + "- \"Sample lead\" (task-a): Working \u{2192} Waiting at 21:05 UTC.\n</walnut-message>"
+        XCTAssertEqual(outline(plan([person("\(status)\n\nYes, go for it."), said("Started.")])), [
+            "inbound", "bubble:Yes, go for it.", "text",
+        ])
+        for outcome in ["moved", "restarted", "org-update", "status", "waiting", "handed-over", "task-routing-policy"] {
+            let note = "<walnut-message kind=\"notification\" from=\"Walnut\" outcome=\"\(outcome)\">\nA note.\n</walnut-message>"
+            XCTAssertEqual(TimelineInboundMessage.splitRiders("\(note)\n\nThe words.")?.body, "The words.", outcome)
+        }
+        // A notice the queue never puts in front (a subtask's completion) stays the whole row.
+        let completed = "<walnut-message kind=\"notification\" from=\"Walnut\" outcome=\"completed\">\nDone.\n</walnut-message>"
+        XCTAssertNil(TimelineInboundMessage.splitRiders("\(completed)\n\nThe words."))
+    }
+
     func testAReceivedMessageInAnOpenTurnFoldsWithTheStepsAroundIt() {
         XCTAssertEqual(outline(plan([peer(), tool("Bash", "status"), tool("mcp__walnut__task_send")])),
                        ["fold:turn:Received 1 message \u{00B7} Sent 1 \u{00B7} Ran 1 tool"

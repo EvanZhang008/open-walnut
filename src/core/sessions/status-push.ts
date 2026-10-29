@@ -216,7 +216,8 @@ export async function flushStatusPush(now = Date.now()): Promise<number> {
   }
 }
 
-function statusText(lines: readonly string[]): string {
+/** The note that carries status lines (exported for the rider tests: it rides in front of a message). */
+export function statusText(lines: readonly string[]): string {
   return buildMessage({
     kind: 'notification',
     attrs: { from: 'Walnut', outcome: 'status', note: 'status changes of tasks you follow, not a work request' },
