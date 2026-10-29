@@ -815,51 +815,25 @@ describe('task-db: phase/status derivation in updateTaskRaw', () => {
 // ── 8. Backup-on-empty guard ───────────────────────────────────────────────
 
 describe('task-db: backup-on-empty guard', () => {
-  it('exercises the writeStoreSqlite backup branch: backup file appears and is readable', async () => {
-    // Seed 3 tasks via the bulk path (goes through the live add + transaction).
-    const seeded = await addTasksBulk(
-      Array.from({ length: 3 }, (_, i) => ({
-        title: `Seed ${i}`,
-        project: 'Local',
-        source: 'local' as const,
-        status: 'todo' as const,
-        phase: 'TODO' as const,
-        priority: 'none' as const,
-        session_ids: [],
-        description: '',
-        summary: '',
-        note: '',
-        created_at: '2026-01-01T00:00:00Z',
-        updated_at: '2026-01-01T00:00:00Z',
-      })),
-    );
-    expect(seeded).toHaveLength(3);
-
+  it('a backup that throws falls back to a file copy that holds the row still in the WAL', async () => {
+    const { task } = await addTask({ title: 'Kept by the copy', project: 'Local', source: 'local' });
     const expectedBackup = TASK_DB_PATH.replace(/\.sqlite$/, '.backup.sqlite');
     if (fs.existsSync(expectedBackup)) fs.unlinkSync(expectedBackup);
 
-    // Reproduce the guard branch directly: the live db has 3 rows, so an
-    // empty-store write would trigger the backup-then-wipe path. We emulate
-    // the backup half (the half that matters for this regression test) by
-    // invoking the same copyFileSync fallback writeStoreSqlite uses when
-    // db.backup isn't available. Closing the handle first makes the file
-    // copy safe across all sqlite backends. The rows are still in the WAL, and a
-    // close merges it only when it is the last connection, which on Linux it was
-    // not every time (CI runs 40843747762, 40861406390: 0 rows), so merge it first.
-    getDb()!.pragma('wal_checkpoint(TRUNCATE)');
-    closeDb();
-    fs.copyFileSync(TASK_DB_PATH, expectedBackup);
+    // The row is in the WAL (the open checkpointed, nothing since). The copy
+    // fallback once took the main file alone and saved an empty table; a test
+    // that copied after closeDb() read 0 rows on Linux whenever the close did not
+    // merge the WAL (CI run 40843747762).
+    vi.spyOn(getDb()!, 'backup').mockRejectedValue(new Error('backup unavailable'));
+    // Deleting the last task empties the store: the guard's branch.
+    await deleteTask(task.id);
+    expect(await listTasks()).toEqual([]);
 
-    expect(fs.existsSync(expectedBackup)).toBe(true);
-
-    // Verify the backup is a valid SQLite file containing the 3 seeded rows.
-    const BetterSqlite = (await import('../../src/lib/sqlite.js')).default;
-    const backupDb = new BetterSqlite(expectedBackup, { readonly: true });
+    const saved = new Database(expectedBackup, { readonly: true });
     try {
-      const row = backupDb.prepare('SELECT COUNT(*) AS n FROM tasks').get() as { n: number };
-      expect(row.n).toBe(3);
+      expect(saved.prepare('SELECT id, title FROM tasks').all()).toEqual([{ id: task.id, title: 'Kept by the copy' }]);
     } finally {
-      backupDb.close();
+      saved.close();
     }
   });
 });

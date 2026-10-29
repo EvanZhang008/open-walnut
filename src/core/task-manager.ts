@@ -849,6 +849,8 @@ async function writeStore(store: TaskStore): Promise<void> {
           await db.backup(backupPath);
         } catch {
           try {
+            // The rows may still sit in the WAL: a copy of the main file alone misses them.
+            db.pragma('wal_checkpoint(TRUNCATE)');
             fsSync.copyFileSync(TASK_DB_PATH, backupPath);
           } catch (err) {
             log.task.warn('backup-on-empty (sqlite) copy failed', {
