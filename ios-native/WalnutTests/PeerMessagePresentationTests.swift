@@ -52,7 +52,7 @@ final class PeerMessagePresentationTests: XCTestCase {
         for (outcome, title) in [("completed", "Completed"), ("error", "Hit an error"), ("stopped", "Stopped"),
                                  ("blocked", "Waiting for an answer"), ("awaiting_human", "Waiting for an answer"),
                                  ("waiting", "Waiting"), ("timeout", "No reply yet"), ("moved", "Task moved"),
-                                 ("org-update", "Team changed"), ("task-routing-policy", "Instructions changed"),
+                                 ("org-update", "Team changed"), ("status", "Status changed"), ("task-routing-policy", "Instructions changed"),
                                  ("handed_over", "Handed over")] {
             let text = "<walnut-message kind=\"notification\" from=\"Walnut\" about=\"Docs lead [1a2b3c4d]\" about-session=\"fixture-session-4000\" outcome=\"\(outcome)\">\nINTERNAL_BODY\n</walnut-message>"
             XCTAssertEqual(try descriptions(text)[0], PeerMessageDescription(sender: "Docs lead", title: title), outcome)

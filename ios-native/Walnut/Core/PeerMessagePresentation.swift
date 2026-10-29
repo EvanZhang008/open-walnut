@@ -164,6 +164,7 @@ enum PeerMessagePresentation {
         case "timeout": return "No reply yet"
         case "moved": return "Task moved"
         case "org-update": return "Team changed"
+        case "status": return "Status changed"
         case "task-routing-policy": return "Instructions changed"
         default:
             let words = outcome.replacingOccurrences(of: "_", with: " ").replacingOccurrences(of: "-", with: " ")
