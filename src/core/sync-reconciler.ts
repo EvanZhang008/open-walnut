@@ -1255,7 +1255,7 @@ export class SyncReconciler {
    * True when reconciler-driven removal must NOT touch this task because it
    * carries session history. Checks ALL session link fields — session_ids
    * included (1,641 tasks hold their ONLY session link there; the old
-   * slot-only check let the reconciler delete them, which is how the H-1B RFE
+   * slot-only check let the reconciler delete them, which is how one real
    * task's session became unreachable). And ANY linked session blocks removal,
    * not just a running one: a remote item disappearing from a pull is not
    * authority to destroy local session history. Session-less tasks still

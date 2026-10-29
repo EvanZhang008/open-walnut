@@ -392,7 +392,7 @@ describe('SyncReconciler', () => {
     it('does not remove tasks with a stopped session either — session history blocks removal', async () => {
       // 2026-08-20 contract flip: a remote item vanishing from a pull is not
       // authority to destroy local session history. The old "stopped sessions
-      // don't block" rule is exactly how the H-1B RFE task (whose only session
+      // don't block" rule is exactly how one real task (whose only session
       // had finished) was deleted and its session orphaned.
       mockSessions.length = 0;
       mockSessions.push({ claudeSessionId: 'sess-done', process_status: 'stopped' });

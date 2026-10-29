@@ -15,7 +15,7 @@ describe('normalizeLedgerDesc', () => {
 
 describe('titleNeedsDesc', () => {
   it('short/cryptic titles need a generated one-liner', () => {
-    expect(titleNeedsDesc('H1b')).toBe(true);
+    expect(titleNeedsDesc('Q3b')).toBe(true);
     expect(titleNeedsDesc('看一看agent sdk')).toBe(true);
     expect(titleNeedsDesc('Nr4')).toBe(true);
   });

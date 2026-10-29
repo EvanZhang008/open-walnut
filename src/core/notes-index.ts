@@ -1570,7 +1570,7 @@ export function stringSearch(q: string, limit: number, options: StringSearchOpti
   // Per-token AND-LIKE for CJK/mixed multi-word queries. FTS5's unicode61
   // treats a contiguous CJK run as ONE token (so "律师"* cannot match inside
   // "给律师发邮件") and the whole-phrase LIKE above requires the query's exact
-  // spacing — "h1b 律师 邮件" with all three somewhere in one note matched
+  // spacing — "q3 律师 邮件" with all three somewhere in one note matched
   // nothing. Every content token must appear (title or body); CJK body floor.
   if (cjkQuery) {
     const likeToks = contentTokens(q).slice(0, 4)

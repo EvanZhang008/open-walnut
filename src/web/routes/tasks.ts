@@ -1514,7 +1514,7 @@ tasksRouter.post('/:id/complete', async (req: Request, res: Response, next: Next
 // Session links are the point: victims' session_ids/slots union into the
 // survivor and sessions.task_id rows are re-pointed BEFORE the victim rows
 // disappear. This is the sanctioned dedup path — a bare DELETE on a duplicate
-// drops whichever links that copy held (the H-1B RFE incident).
+// drops whichever links that copy held (the 2026-08 orphaned-sessions incident).
 tasksRouter.post('/:id/merge', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const survivorPrefix = param(req.params.id)

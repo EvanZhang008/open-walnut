@@ -11097,7 +11097,7 @@ export class SessionRunner {
                 `No working directory found for remote session on host "${data.host}" ` +
                 `(task: "${task.id}", project: "${projectLabel}"). ` +
                 `Set a cwd on the task, or set default_cwd in project "${projectLabel}" metadata ` +
-                `(e.g. /workplace/... on the remote host).`
+                `(e.g. /home/you/... on the remote host).`
               )
             }
             const { PROJECTS_MEMORY_DIR } = await import('../constants.js')

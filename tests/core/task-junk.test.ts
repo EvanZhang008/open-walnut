@@ -44,7 +44,7 @@ describe('isLedgerJunk', () => {
 
   it('keeps real Inbox tasks', () => {
     expect(isLedgerJunk({ project: '', title: '打开并试用最新编辑器代码' })).toBe(false);
-    expect(isLedgerJunk({ project: '', title: 'H1b' })).toBe(false);
+    expect(isLedgerJunk({ project: '', title: 'Q3b' })).toBe(false);
     expect(isLedgerJunk({ project: 'Walnut', title: 'Fix test:quick pipeline' })).toBe(false);
   });
 });

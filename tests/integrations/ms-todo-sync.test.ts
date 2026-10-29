@@ -266,7 +266,7 @@ describe('reconcilePulledTasks — [Moved] marker gate', () => {
     // used to re-import it as a brand-new local task — the duplicate loop.
     const msTask = createMsTask({
       id: 'ms-task-moved',
-      title: '[Moved] H-1B RFE follow-up [open-walnut:mszf18jd-f69a]',
+      title: '[Moved] Budget review follow-up [open-walnut:mszf18jd-f69a]',
       status: 'completed' as const,
       lastModifiedDateTime: '2026-02-25T18:00:00Z',
     });

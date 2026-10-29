@@ -5463,7 +5463,7 @@ function taskRowExists(id: string): boolean {
  * victim, and every sessions.task_id row pointing at the victim is re-pointed
  * at the survivor BEFORE the victim row disappears. Dedup cleanups that simply
  * deleted "the extra copy" destroyed whichever links that copy held (the
- * H-1B RFE incident) — this is the sanctioned replacement.
+ * 2026-08 orphaned-sessions incident) — this is the sanctioned replacement.
  *
  * The victim's remote id is ledgered as deleted (via the normal delete path's
  * recordDeletedRemoteIds), so the surviving remote twin can never re-import.

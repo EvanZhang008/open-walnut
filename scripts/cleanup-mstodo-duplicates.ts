@@ -5,7 +5,7 @@
  * The old version of this script grouped REMOTE tasks by title, deleted the
  * "extras" remotely, and rewrote local ext ids — transferring nothing. When
  * duplicate LOCAL tasks existed, whichever copy held the session links could
- * be deleted, orphaning its sessions (the H-1B RFE incident, 2026-08).
+ * be deleted, orphaning its sessions (the 2026-08 orphaned-sessions incident).
  *
  * This version works on the LOCAL store through task-manager:
  *   1. Groups local ms-todo tasks by (project, normalized title).
