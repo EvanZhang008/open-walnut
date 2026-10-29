@@ -224,7 +224,10 @@ enum TimelineRowContent {
     /// `failCount` is the "N failed" badge; `running` pulses the line while a
     /// member is still receiving tokens. The phrase is the web console's, word for
     /// word (`TimelineToolRunPhrase`), so a turn reads the same on both.
-    case toolRun(phrase: String, failCount: Int, running: Bool, expanded: Bool)
+    /// `badgeStacked`: the badge takes its own line under the phrase (an
+    /// accessibility text size), decided with the height and carried here so the
+    /// cell draws the shape that was measured.
+    case toolRun(phrase: String, failCount: Int, running: Bool, expanded: Bool, badgeStacked: Bool)
     /// Small grey capsule (generic one-line status capsules).
     case chip(icon: String, text: String)
     /// Notification card (session error / cron / …). Collapse mirrors the
@@ -363,10 +366,11 @@ extension TimelineRowContent {
             hasher.combine(maxLines)
             hasher.combine(detailRef)
             hasher.combine(stacked)
-        case .toolRun(let phrase, let failCount, let running, let expanded):
+        case .toolRun(let phrase, let failCount, let running, let expanded, let badgeStacked):
             hasher.combine(phrase)
             hasher.combine(failCount)
             hasher.combine(running)
+            hasher.combine(badgeStacked)
             // Drawn (the chevron turns) under a stable id and an unchanged height:
             // without it the toggle would never reach the cell.
             hasher.combine(expanded)

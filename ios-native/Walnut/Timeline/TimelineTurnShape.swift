@@ -99,7 +99,8 @@ enum TimelineTurnMarker {
 /// the few answers that are for the person ("the user only gets the information
 /// they need most"). So every finished turn takes one of three shapes:
 ///  · hidden: a turn something else started that ended cleanly with the ack line
-///    alone: none of it shows, a "Show N hidden turns" row stands in its place;
+///    alone: it joins the quiet steps around it in one folded row
+///    (`TimelineTurnFold`), whose line says what happened;
 ///  · answered: everything before the answer (the message that started it unless a
 ///    person wrote it, tools, sends, narration) is one folded row, the answer shows;
 ///  · open: anything else (it ended in a tool call, an error, nothing, or it is the

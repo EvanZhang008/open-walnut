@@ -912,15 +912,15 @@ final class TimelineRowBuilder {
         return TimelineRow(
             id: id, revision: hasher.finalize(),
             content: .toolRun(phrase: phrase, failCount: failCount, running: running,
-                              expanded: expanded),
+                              expanded: expanded, badgeStacked: Self.stacksRunBadge(failCount: failCount)),
             height: runRowHeight(phrase: phrase, failCount: failCount, width: width)
         )
     }
 
     /// A run or fold row's height: the one-line capsule, or every line the phrase
     /// wraps into beside its failure badge and chevron. The row wraps rather than
-    /// truncating, so "Show 2 hidden turns" stays readable at accessibility sizes
-    /// (it read "Show 2 hidden… ›"). The text's width is what the cell's `HStack`
+    /// truncating, so a fold's line stays readable at accessibility sizes (it read
+    /// "Show 2 hidden… ›"). The text's width is what the cell's `HStack`
     /// leaves it: the badge and the chevron keep their own widths (spacing 5).
     private func runRowHeight(phrase: String, failCount: Int, width: CGFloat) -> CGFloat {
         let oneLine = Self.capsuleRowHeight(badged: false)
@@ -931,20 +931,34 @@ final class TimelineRowBuilder {
                               withConfiguration: UIImage.SymbolConfiguration(pointSize: chevronSize, weight: .semibold))?
             .size.width ?? chevronSize * 0.7
         var textWidth = width - TimelineMetrics.hMargin * 2 - TimelineMetrics.chipHPad * 2 - 5 - ceil(chevron)
-        if failCount > 0 {
+        // At an accessibility size the failure badge takes its own line under the
+        // phrase (`TimelineToolRunView`), as a chip's detail does: beside it, it left
+        // the phrase ~170pt, where TextKit and SwiftUI wrapped a line apart and the
+        // row clipped (573.81pt reserved, 623pt drawn).
+        let badgeStacked = Self.stacksRunBadge(failCount: failCount)
+        if failCount > 0, !badgeStacked {
             let badgeFont = UIFont.systemFont(ofSize: caption.pointSize, weight: .semibold)
             let badge = (TimelineChipAccessibility.failedBadge(failCount) as NSString)
                 .size(withAttributes: [.font: badgeFont]).width
             textWidth -= 5 + ceil(badge)
         }
         let font = UIFont.systemFont(ofSize: caption.pointSize, weight: .medium)
-        let lines = measurer.lineCount(NSAttributedString(string: phrase, attributes: [.font: font]),
+        let lines = measurer.lineCount(NSAttributedString(string: TimelineFoldSteps.wrapping(phrase), attributes: [.font: font]),
                                        width: max(40, textWidth))
-        guard lines > 1 else { return oneLine }
+        guard lines > 1 || badgeStacked else { return oneLine }
         // The one-line capsule's cushion (`hostedLineHeight` over a tight line) kept.
         let cushion = TimelineMetrics.hostedLineHeight(caption) - TimelineMetrics.hostedTextHeight(lines: 1, font: caption)
-        return TimelineMetrics.hostedTextHeight(lines: lines, font: caption) + cushion
+        let badgeLine = badgeStacked
+            ? TimelineMetrics.hostedTextHeight(lines: 1, font: caption) + TimelineMetrics.chipStackSpacing : 0
+        return TimelineMetrics.hostedTextHeight(lines: lines, font: caption) + cushion + badgeLine
             + TimelineMetrics.chipVPad * 2 + TimelineMetrics.chipRowVMargin * 2
+    }
+
+    /// Does a run or fold row's failure badge take its own line? Asked of the
+    /// category the actor adopted for this build, and carried in the row's content
+    /// so the cell draws that shape even after the next build adopts another.
+    static func stacksRunBadge(failCount: Int) -> Bool {
+        failCount > 0 && TimelineChipLayout.stacksDetail(TimelineTextStyler.adoptedCategory)
     }
 
     /// A turn fold's own row (`TimelineTurnFold`): the run row's capsule, reading
@@ -959,12 +973,13 @@ final class TimelineRowBuilder {
         hasher.combine(running)
         return TimelineRow(
             id: id, revision: hasher.finalize(),
-            content: .toolRun(phrase: phrase, failCount: failCount, running: running, expanded: expanded),
+            content: .toolRun(phrase: phrase, failCount: failCount, running: running, expanded: expanded,
+                              badgeStacked: Self.stacksRunBadge(failCount: failCount)),
             height: runRowHeight(phrase: phrase, failCount: failCount, width: width)
         )
     }
 
-    /// Where an opened hidden turn ended with the acknowledgement line alone.
+    /// Where a turn inside an opened fold ended with the acknowledgement line alone.
     func ackRow(id: String) -> TimelineRow {
         chipRow(id: id, icon: "checkmark", text: Self.acknowledgedCaption, width: 0)
     }
@@ -1155,7 +1170,9 @@ final class TimelineRowBuilder {
         let expanded = !collapsible || expandedRowIDs.contains(id)
         let bodyWidth = width - TimelineMetrics.hMargin * 2
             - TimelineMetrics.notificationPadding * 2 - 3 - 10 // accent bar + gap
-        let headerHeight = TimelineMetrics.hostedLineHeight(TimelineTextStyler.caption2Font) + 6
+        // The header is one caption2 line (glyphs inside its Text) and one term of
+        // a sum: the tight line, not the capsule's cushion (3pt of blank per card).
+        let headerHeight = TimelineMetrics.hostedTightLine(TimelineTextStyler.caption2Font) + 6
         let body = TimelineTextStyler.inlineText(styled.displayText,
                                                  font: TimelineTextStyler.subheadlineFont)
         let bodyHeight: CGFloat
@@ -1168,8 +1185,13 @@ final class TimelineRowBuilder {
             let unspaced = NSMutableAttributedString(attributedString: body)
             unspaced.removeAttribute(.paragraphStyle, range: NSRange(location: 0, length: unspaced.length))
             let lines = measurer.lineCount(unspaced, width: max(40, bodyWidth))
+            // A blank line between paragraphs lays out a little taller in SwiftUI
+            // than TextKit counts it: ten of them clipped 3.8pt off a long card at
+            // AX-XXXL once the header no longer carried a cushion.
+            let breaks = styled.displayText.components(separatedBy: "\n\n").count - 1
             bodyHeight = TimelineMetrics.hostedTextHeight(lines: max(1, lines),
                                                           font: TimelineTextStyler.subheadlineFont)
+                + CGFloat(breaks) * TimelineTextStyler.scaled(0.25, relativeTo: .subheadline)
         } else {
             // The folded line at the lines it wraps into, never a reserved second
             // line: a one-line heading over a two-line slot left an empty band under

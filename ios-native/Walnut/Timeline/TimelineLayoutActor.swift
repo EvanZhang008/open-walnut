@@ -66,6 +66,9 @@ actor TimelineLayoutActor {
     /// own delivery never reached history (it lands with the refetch) must not
     /// lend its calls to the turn before it.
     private var liveTailKey: String?
+    /// The id of the last history row while the turn streamed: at its end, the
+    /// rows after it are the reply the store painted, and nothing before them is.
+    private var liveLastRowID: String?
 
     /// Submit the newest input. `onSnapshot` is invoked (on the actor) for
     /// every COMPLETED build — the caller hops to the main queue itself.
@@ -108,6 +111,7 @@ actor TimelineLayoutActor {
             headCache = nil
             settledTurnKinds = [:]
             liveTailKey = nil
+            liveLastRowID = nil
             cacheScope = input.scope
         }
         applyRichHeightChanges()
@@ -194,7 +198,7 @@ actor TimelineLayoutActor {
                 case .fold(let fold):
                     let id = TimelineTurnFold.rowID(scope: input.scope, key: fold.key)
                     let expanded = input.expandedRowIDs.contains(id)
-                    rows.append(builder.foldRow(id: id, phrase: TimelineTurnFold.label(fold, expanded: expanded),
+                    rows.append(builder.foldRow(id: id, phrase: fold.phrase,
                                                 failCount: fold.failCount, expanded: expanded,
                                                 width: input.width))
                     if expanded { appendPlan(fold.members) }
@@ -203,28 +207,37 @@ actor TimelineLayoutActor {
         }
         /// The merged row of a received message's live turn: history's part of it
         /// and the live calls, each call counted once.
-        func appendLiveTail(_ tail: TimelineTurnFold.LiveTail, liveCalls: [LiveToolCall]) {
+        func appendLiveTail(_ tail: TimelineTurnFold.LiveTail, liveCalls: [LiveToolCall],
+                            after: [TimelineFoldSteps.Step] = []) {
             let id = TimelineTurnFold.rowID(scope: input.scope, key: tail.key)
             let expanded = input.expandedRowIDs.contains(id)
-            let live = liveCalls.map { ChatMessage(id: "", role: "assistant", text: $0.name,
-                                                   createdAt: "", kind: .tool, detail: $0.detail) }
             let historyTools = tail.rows.filter { $0.kind == .tool }
+            // Only this turn's rows can be a live call's history twin: the row may
+            // span earlier quiet turns, each ended by its no-action line, and one of
+            // them may have run the very same call.
+            let turnFrom = tail.rows.lastIndex(where: TimelineTurnFold.isAckOnly).map { $0 + 1 } ?? 0
+            let thisTurn = tail.rows[turnFrom...].filter { $0.kind == .tool }
             // A mid-turn refetch can already hold some of this turn's calls,
             // which the live list still carries: count each call once, and draw a
             // matched one from its history row (indexes into `input.liveTools`).
             var unmatched = input.liveTools.indices.filter { TimelineRowBuilder.liveCallFolds(input.liveTools[$0]) }
             var drawnFromHistory: Set<Int> = []
-            let earlier = historyTools.filter { m in
+            for m in thisTurn {
                 guard let at = unmatched.firstIndex(where: {
                     input.liveTools[$0].name == m.text && (input.liveTools[$0].detail ?? "") == (m.detail ?? "")
-                }) else { return true }
+                }) else { continue }
                 drawnFromHistory.insert(unmatched.remove(at: at))
-                return false
             }
+            // What the steps did, in order: history's rows where they stand (a call
+            // the live list also carries is read from there), then the live calls
+            // history does not hold yet, so the line reads the same after the refetch.
+            let pending = unmatched.map { ChatMessage(id: "", role: "assistant", text: input.liveTools[$0].name,
+                                                      createdAt: "", kind: .tool, detail: input.liveTools[$0].detail,
+                                                      inputPreview: input.liveTools[$0].inputPreview) }
+            let steps = tail.rows.flatMap(TimelineFoldSteps.steps) + pending.flatMap(TimelineFoldSteps.steps) + after
             rows.append(builder.foldRow(
                 id: id,
-                phrase: TimelineTurnFold.phrase(tools: earlier + live,
-                                                received: tail.rows.filter(TimelineTurnShape.isInbound).count),
+                phrase: TimelineFoldSteps.phrase(steps),
                 failCount: historyTools.filter(TimelineTurnShape.isFailure).count,
                 expanded: expanded, running: input.streaming && liveCalls.contains { !$0.finished },
                 width: input.width))
@@ -246,17 +259,26 @@ actor TimelineLayoutActor {
             // landed: the store keeps the calls until it does (it clears them in
             // the block that installs the fetched rows), and so does this row, the
             // way the web keeps stream blocks until history absorbs them. Without
-            // it the row read "Received a message" and lost its calls for the
+            // it the row read "Received 1 message" and lost its calls for the
             // length of the refetch, then grew back.
             let turnEnded = !input.streaming && !liveCalls.isEmpty
             // The reply the store painted at turn end sits after the calls it came
             // from, so it waits outside the tail, as the live text did.
             var head = inline
             var reply: [ChatMessage] = []
-            if turnEnded {
-                while let last = head.last, last.role == "assistant", last.kind == nil || last.kind == .thinking {
-                    reply.insert(head.removeLast(), at: 0)
-                }
+            /// Rows after the reply: a message the phone sent during the turn,
+            /// delivered at its end, and whatever follows it. They draw after the row.
+            var later: [ChatMessage] = []
+            if input.streaming { liveLastRowID = inline.last?.id }
+            if turnEnded, let last = liveLastRowID, let at = inline.lastIndex(where: { $0.id == last }) {
+                // The painted rows are the ones history gained since the turn
+                // streamed; an earlier turn's ack or reasoning never counts (the
+                // refetch that brings this turn's first row has not landed).
+                let painted = inline[(at + 1)...]
+                let cut = painted.firstIndex { $0.role != "assistant" } ?? painted.endIndex
+                reply = Array(painted[..<cut])
+                later = Array(painted[cut...])
+                head = Array(inline[...at])
             }
             let planned: (parts: [TimelineTurnFold.Part], tail: TimelineTurnFold.LiveTail?)? =
                 liveCalls.isEmpty ? nil
@@ -270,10 +292,16 @@ actor TimelineLayoutActor {
                 appendPlan(planned.parts)
                 if let tail = planned.tail {
                     runFoldedElsewhere = true
-                    appendLiveTail(tail, liveCalls: liveCalls)
+                    // A painted ack is the turn's last step: it reads after the calls,
+                    // as it will once the refetch puts it after them in history.
+                    appendLiveTail(tail, liveCalls: liveCalls,
+                                   after: reply.filter(TimelineTurnFold.isAckOnly).flatMap(TimelineFoldSteps.steps))
                 }
                 for message in reply where !TimelineTurnFold.isAckOnly(message) {
                     rows.append(contentsOf: memoizedRows(for: message, queued: input.queuedMessageStates[message.id]))
+                }
+                if !later.isEmpty {
+                    appendPlan(TimelineTurnFold.plan(later, turns: TimelineTurnShape.shape(later, streaming: false)))
                 }
             } else {
                 appendPlan(TimelineTurnFold.plan(inline, turns: turns))

@@ -2,9 +2,10 @@
 import Foundation
 
 /// A session transcript in every turn shape (`TimelineTurnShape`), for the DEBUG
-/// timeline harness: the device pass that looks at hidden turns, an answered turn's
-/// fold, Walnut's notes folded above a person's words, and no tag printing. Rows
-/// carry `sentBy` the way a current server sends it. Neutral, invented content.
+/// timeline harness: the device pass that looks at the quiet steps between answers
+/// as one row that says what they were, Walnut's notes folded above a person's
+/// words, and no tag printing. Rows carry `sentBy` the way a current server sends
+/// it. Neutral, invented content.
 enum TimelineTurnFixtures {
     static func messages() -> [ChatMessage] {
         var rows: [ChatMessage] = []
@@ -25,9 +26,10 @@ enum TimelineTurnFixtures {
         // A person's question, answered after two calls (one run, left as it is).
         add("user", "Can you check why the nightly build failed?", sentBy: "person")
         add("assistant", "Read", kind: .tool, detail: "logs/nightly.log", result: "timeout in net test")
-        add("assistant", "Bash", kind: .tool, detail: "Re-run the network tests", result: "12 passed")
+        add("assistant", "Bash", kind: .tool, detail: "Re-run the network tests",
+            result: "12 passed", input: "command: bun test tests/network\ndescription: Re-run the network tests")
         add("assistant", "It failed on a flaky network test. I re-ran it and it passed, so nothing is blocked.")
-        // Two turns that needed nothing: hidden as one row.
+        // Two turns that needed nothing: one row with the next turn's work, its line in order.
         // A long note that asks for a reply, with the routing note and the reply
         // command the model reads: the card shows the note's words, nothing else.
         add("user", envelope("kind=\"peer-note\" from=\"Docs lead [1a2b3c4d]\" title=\"Review done\" "
@@ -50,7 +52,8 @@ enum TimelineTurnFixtures {
         // A trigger whose turn drew an answer: its work is one folded row.
         add("user", envelope("kind=\"trigger\" from=\"Trigger: release branch\" note=\"fired, 1 new item\"",
                              "The release branch build finished."), sentBy: "agent")
-        add("assistant", "Bash", kind: .tool, detail: "Check the build status", result: "green")
+        add("assistant", "Bash", kind: .tool, detail: "Check the build status",
+            result: "green", input: "command: gh run list --limit 1\ndescription: Check the build status")
         add("assistant", "mcp__walnut__task_send", kind: .tool, detail: "Docs lead", result: "sent")
         add("assistant", "The release branch is green. You can tag 1.4 when you are ready.")
         // Walnut's note in front of a person's words: one row above the bubble.
@@ -62,7 +65,8 @@ enum TimelineTurnFixtures {
         // A reply whose turn ended in a failed call: open, the received message folded.
         add("user", envelope("kind=\"reply\" from=\"Build helper [5e6f7a8b]\" title=\"Cache cleared\"",
                              "I cleared the build cache."), sentBy: "agent")
-        add("assistant", "Bash", kind: .tool, detail: "Rebuild the docs site", result: "exit 1", isError: true)
+        add("assistant", "Bash", kind: .tool, detail: "Rebuild the docs site",
+            result: "exit 1", input: "command: bun run docs:build\ndescription: Rebuild the docs site", isError: true)
         return rows
     }
 
@@ -92,7 +96,8 @@ enum TimelineTurnFixtures {
     /// still making calls for it (one finished, one running).
     static func liveTurn() -> (messages: [ChatMessage], tools: [LiveToolCall]) {
         (Array(messages().prefix(10)),
-         [LiveToolCall(id: "live-1", name: "Bash", detail: "Check the build status", finished: true),
+         [LiveToolCall(id: "live-1", name: "Bash", detail: "Check the build status", finished: true,
+                       inputPreview: "command: gh run list --limit 1\ndescription: Check the build status"),
           LiveToolCall(id: "live-2", name: "Read", detail: "docs/release.md", finished: false)])
     }
 }

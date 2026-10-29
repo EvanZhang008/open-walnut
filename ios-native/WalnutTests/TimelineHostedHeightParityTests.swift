@@ -266,6 +266,26 @@ final class TimelineHostedHeightParityTests: XCTestCase {
         }
     }
 
+    /// A notice whose badge is long (SESSION RESULT) keeps its header on one line at
+    /// every text size, the line its row pays for: at AX-XXXL the badge used to wrap
+    /// to two lines and the card clipped about 49pt of its body.
+    func testALongBadgeKeepsTheHeaderTheRowPaysFor() async {
+        let body = "**Session Result**: " + String(repeating: "the deploy finished and the dist was staged. ", count: 50)
+        XCTAssertGreaterThan(body.count, 2000)
+        let msg = message("lb-1", text: body, kind: .notification, source: "session")
+        for category in [UIContentSizeCategory.unspecified, .accessibilityExtraExtraExtraLarge] {
+            for expanded in [false, true] {
+                let built = await rows([msg], expanded: expanded ? ["lb-1#0"] : [], category: category)
+                guard let row = built.first(where: { $0.content.reuseKind == "notification" }) else {
+                    return XCTFail("no card row")
+                }
+                let rendered = renderedHeight(row, category: category)
+                XCTAssertLessThanOrEqual(ceil(rendered), ceil(row.height) + 1,
+                                         "\(category.rawValue) expanded=\(expanded): card clips \(rendered - row.height)pt of ink")
+            }
+        }
+    }
+
     /// A folded received card is as tall as its heading: one line when the heading
     /// fits one line (it used to reserve a second preview line for every card, an
     /// empty band under each one-line title), and every line when a long title wraps
@@ -490,7 +510,7 @@ final class TimelineHostedHeightParityTests: XCTestCase {
                                       category: category)
                 TimelineTextStyler.adopt(category)
                 let builder = TimelineRowBuilder()
-                let folds = ["Show 2 hidden turns", "Received a message, ran 2 commands, sent a message"].map {
+                let folds = ["Received 1 message", "Received 12 messages \u{00B7} Sent 3 \u{00B7} Ran 8 tools"].map {
                     builder.foldRow(id: "f-\($0.count)", phrase: $0, failCount: failing ? 1 : 0,
                                     expanded: false, width: pageWidth)
                 }

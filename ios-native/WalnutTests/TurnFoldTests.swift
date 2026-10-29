@@ -42,8 +42,11 @@ final class TurnFoldTests: XCTestCase {
         ChatMessage(id: "a\(clock)", role: "assistant", text: text, createdAt: at(), kind: nil)
     }
     private func tool(_ name: String, _ detail: String? = nil, isError: Bool? = nil) -> ChatMessage {
+        // A Bash row carries its input as the server sends it: the command is in
+        // the input render, and `detail` may be the call's description instead.
         ChatMessage(id: "t\(clock)", role: "assistant", text: name, createdAt: at(), kind: .tool,
-                    detail: detail, resultPreview: "ok", isError: isError)
+                    detail: detail, resultPreview: "ok",
+                    inputPreview: name == "Bash" ? detail.map { "command: \($0)" } : nil, isError: isError)
     }
     private var line: ChatMessage { said(tag) }
 
@@ -75,14 +78,14 @@ final class TurnFoldTests: XCTestCase {
 
     private func runRows(_ rows: [TimelineRow]) -> [(id: String, phrase: String, running: Bool)] {
         rows.compactMap { row in
-            if case .toolRun(let phrase, _, let running, _) = row.content { return (row.id, phrase, running) }
+            if case .toolRun(let phrase, _, let running, _, _) = row.content { return (row.id, phrase, running) }
             return nil
         }
     }
 
     private func phrases(_ rows: [TimelineRow]) -> [String] {
         rows.compactMap { row in
-            if case .toolRun(let phrase, _, _, _) = row.content { return phrase }
+            if case .toolRun(let phrase, _, _, _, _) = row.content { return phrase }
             return nil
         }
     }
@@ -101,22 +104,34 @@ final class TurnFoldTests: XCTestCase {
 
     // MARK: - The plan
 
-    func testConsecutiveHiddenTurnsAreOneRowThatOpensToThem() {
+    func testQuietTurnsAreOneRowThatSaysWhatHappenedInOrder() {
+        // Two turns that needed nothing: one row, never "Show 2 hidden turns".
         let parts = plan([person(), said("Answer."), peer(), line, peer("Second note."), tool("Read"), line])
         XCTAssertEqual(outline(parts), [
             "bubble:Can you check the build?", "text",
-            "fold:hidden:2 hidden turns[\"inbound\", \"ack\", \"inbound\", \"run:1\", \"ack\"]",
+            "fold:turn:Received 2 messages \u{00B7} Ran 1 tool"
+                + "[\"inbound\", \"ack\", \"inbound\", \"run:1\", \"ack\"]",
         ])
-        guard case .fold(let fold) = parts[2] else { return XCTFail("no fold") }
-        XCTAssertEqual(TimelineTurnFold.label(fold, expanded: false), "Show 2 hidden turns")
-        XCTAssertEqual(TimelineTurnFold.label(fold, expanded: true), "Hide 2 hidden turns")
+    }
+
+    func testQuietStepsAcrossTurnsBetweenTwoAnswersAreOneRow() {
+        // The report's shape: after an answer, a note answered with the line, then a
+        // note whose turn sent a message and was answered: one row, then the answer.
+        let parts = plan([person(), said("Answer."), peer(), line,
+                          peer("Ping."), tool("mcp__walnut__task_send"), said("Passed it on.")])
+        XCTAssertEqual(outline(parts), [
+            "bubble:Can you check the build?", "text",
+            "fold:turn:Received 2 messages \u{00B7} Sent 1"
+                + "[\"inbound\", \"ack\", \"inbound\", \"tool:mcp__walnut__task_send\"]",
+            "text",
+        ])
     }
 
     func testAnAnsweredTurnFoldsEverythingBeforeItsAnswer() {
         let parts = plan([peer(), tool("Bash", "build"), tool("mcp__walnut__task_send"), said("Narration."),
                           tool("Read", "a.md"), said("The answer.")])
         XCTAssertEqual(outline(parts), [
-            "fold:turn:Received a message, ran a command, read a file, sent a message, an update"
+            "fold:turn:Received 1 message \u{00B7} Sent 1 \u{00B7} Ran 2 tools"
                 + "[\"inbound\", \"run:1\", \"tool:mcp__walnut__task_send\", \"text\", \"run:1\"]",
             "text",
         ])
@@ -131,30 +146,35 @@ final class TurnFoldTests: XCTestCase {
         let rider = "<walnut-message kind=\"notification\" from=\"Walnut\" outcome=\"moved\">\nThis task moved.\n</walnut-message>"
         let parts = plan([person("\(rider)\n\nPlease draft the notes."), said("Drafted.")])
         XCTAssertEqual(outline(parts), [
-            "fold:rider:Received a message[\"inbound\"]", "bubble:Please draft the notes.", "text",
+            "fold:rider:Received 1 message[\"inbound\"]", "bubble:Please draft the notes.", "text",
         ])
     }
 
     func testAReceivedMessageInAnOpenTurnFoldsWithTheStepsAroundIt() {
         XCTAssertEqual(outline(plan([peer(), tool("Bash", "status"), tool("mcp__walnut__task_send")])),
-                       ["fold:process:Received a message, ran a command, sent a message"
+                       ["fold:turn:Received 1 message \u{00B7} Sent 1 \u{00B7} Ran 1 tool"
                         + "[\"inbound\", \"run:1\", \"tool:mcp__walnut__task_send\"]"])
         // A failed call is never folded away unread: it stays a row of its own.
         XCTAssertEqual(outline(plan([peer(), tool("Bash", "rebuild", isError: true)])),
-                       ["fold:process:Received a message[\"inbound\"]", "run:1"])
+                       ["fold:turn:Received 1 message[\"inbound\"]", "run:1"])
         // Even alone, a received message is a fold, never a bubble.
         XCTAssertEqual(outline(plan([said("Earlier."), peer()])),
-                       ["text", "fold:process:Received a message[\"inbound\"]"])
+                       ["text", "fold:turn:Received 1 message[\"inbound\"]"])
     }
 
-    func testTheAnswersOwnReasoningStaysWithTheAnswer() {
+    func testTheAnswersOwnReasoningIsTheLastQuietStepOrStaysWithTheAnswer() {
         let thinking = ChatMessage(id: "th", role: "assistant", text: "Weighing it", createdAt: "2026-10-25T00:09:00Z",
                                    kind: .thinking)
         let answer = ChatMessage(id: "an", role: "assistant", text: "The answer.", createdAt: thinking.createdAt, kind: nil)
-        // (Reasoning right after a run rides that run, as everywhere on the phone.)
+        // After quiet steps, the answer's reasoning is their last one: one row, then the answer.
         XCTAssertEqual(outline(plan([peer(), tool("Bash", "b"), said("Narration."), thinking, answer])),
-                       ["fold:turn:Received a message, ran a command, an update[\"inbound\", \"run:1\", \"text\"]",
-                        "text", "text"])
+                       ["fold:turn:Received 1 message \u{00B7} Ran 1 tool"
+                            + "[\"inbound\", \"run:1\", \"text\", \"text\"]",
+                        "text"])
+        XCTAssertEqual(outline(plan([peer(), thinking, answer])),
+                       ["fold:turn:Received 1 message[\"inbound\", \"text\"]", "text"])
+        // Nothing quiet before it (a person asked): it stays with the answer.
+        XCTAssertEqual(outline(plan([person(), thinking, answer])), ["bubble:Can you check the build?", "text", "text"])
     }
 
     func testAnEnvelopeWithAnEmptyBodyOrACutOffTailNeverCrashesOrPrintsTheTag() {
@@ -185,11 +205,12 @@ final class TurnFoldTests: XCTestCase {
         let closed = await rows(messages)
         XCTAssertEqual(closed.filter { if case .userBubble = $0.content { return true }; return false }.count, 1)
         XCTAssertFalse(texts(closed).contains("walnut-"))
-        XCTAssertEqual(phrases(closed), ["Show 1 hidden turn", "Received a message"])
+        // The hidden turn and the next turn's work before its answer: one row.
+        XCTAssertEqual(phrases(closed), ["Received 2 messages"])
         // Open both folds by their row ids: the members appear, as received cards.
         let ids = closed.filter { if case .toolRun = $0.content { return true }; return false }.map(\.id)
         let open = await rows(messages, expanded: Set(ids))
-        XCTAssertEqual(phrases(open), ["Hide 1 hidden turn", "Received a message"])
+        XCTAssertEqual(phrases(open), ["Received 2 messages"])
         XCTAssertTrue(texts(open).contains("From Docs lead: Review"))
         XCTAssertTrue(texts(open).contains(TimelineRowBuilder.acknowledgedCaption))
         XCTAssertFalse(texts(open).contains("walnut-"))
@@ -201,7 +222,7 @@ final class TurnFoldTests: XCTestCase {
             return copy
         }
         let again = await rows(refetched, expanded: Set(ids))
-        XCTAssertEqual(phrases(again), ["Hide 1 hidden turn", "Received a message"])
+        XCTAssertEqual(phrases(again), ["Received 2 messages"])
     }
 
     func testAListWithoutSendersIsDrawnAsBefore() async {
@@ -229,7 +250,7 @@ final class TurnFoldTests: XCTestCase {
         let actor = TimelineLayoutActor()
         let live = runRows(await rows(history, streaming: true, liveTools: running, actor: actor))
         // One row for the message and the calls, breathing while a call runs; no second run row.
-        XCTAssertEqual(live.map(\.phrase), ["Received a message, ran a command, read a file"])
+        XCTAssertEqual(live.map(\.phrase), ["Received 1 message \u{00B7} Ran 2 tools"])
         XCTAssertEqual(live.map(\.running), [true])
         // Opened, it holds the received card and the live calls.
         let opened = await rows(history, expanded: [live[0].id], streaming: true, liveTools: running, actor: actor)
@@ -239,7 +260,7 @@ final class TurnFoldTests: XCTestCase {
         let ended = history + [tool("Bash", "status"), tool("Read", "a.md"), said("All set.")]
         let after = runRows(await rows(ended, expanded: [live[0].id], actor: actor))
         XCTAssertEqual(after.first?.id, live[0].id)
-        XCTAssertEqual(after.first?.phrase, "Received a message, ran a command, read a file")
+        XCTAssertEqual(after.first?.phrase, "Received 1 message \u{00B7} Ran 2 tools")
         // A person's live turn is untouched: its run stays the live run.
         let own = runRows(await rows([person()], streaming: true, liveTools: running))
         XCTAssertEqual(own.map(\.phrase), ["Ran a command, read a file"])
@@ -256,19 +277,20 @@ final class TurnFoldTests: XCTestCase {
         let gap = history + [said("All set.")]
         let during = await rows(gap, expanded: [live[0].id], liveTools: calls, actor: actor)
         XCTAssertEqual(runRows(during).map(\.id), [live[0].id])
-        XCTAssertEqual(runRows(during).map(\.phrase), ["Received a message, ran a command, read a file"])
+        XCTAssertEqual(runRows(during).map(\.phrase), ["Received 1 message \u{00B7} Ran 2 tools"])
         XCTAssertEqual(runRows(during).map(\.running), [false])
         XCTAssertEqual(during.filter { if case .toolChip = $0.content { return true }; return false }.count, 2)
         XCTAssertTrue(texts(during).contains("All set."))
-        // An ack-only reply prints nothing while it waits, as it did streaming.
+        // An ack-only reply prints nothing while it waits; the row reads it last,
+        // after the calls, as it will once the refetch puts it there.
         let acked = await rows(history + [said(tag)], liveTools: calls, actor: actor)
-        XCTAssertEqual(runRows(acked).map(\.phrase), ["Received a message, ran a command, read a file"])
+        XCTAssertEqual(runRows(acked).map(\.phrase), ["Received 1 message \u{00B7} Ran 2 tools"])
         XCTAssertFalse(texts(acked).contains("walnut-turn"))
         // The refetch lands (the store clears the calls with it): same id, same words.
         let fetched = history + [tool("Bash", "status"), tool("Read", "a.md"), said("All set.")]
         let after = runRows(await rows(fetched, expanded: [live[0].id], actor: actor))
         XCTAssertEqual(after.first?.id, live[0].id)
-        XCTAssertEqual(after.first?.phrase, "Received a message, ran a command, read a file")
+        XCTAssertEqual(after.first?.phrase, "Received 1 message \u{00B7} Ran 2 tools")
         // A person's turn that ended is drawn as before: no merged row.
         let own = runRows(await rows([person(), said("Done.")], liveTools: calls))
         XCTAssertTrue(own.isEmpty)
@@ -290,16 +312,78 @@ final class TurnFoldTests: XCTestCase {
         XCTAssertFalse(gap.contains { $0.phrase.contains("read a file") })
     }
 
+    func testCountsMatchTheWebForABoardPostAndASendInsideARun() {
+        // A Board post is a tool on the web, never a sent message.
+        XCTAssertTrue(outline(plan([peer(), tool("mcp__walnut__board_post")]))[0]
+            .hasPrefix("fold:turn:Received 1 message \u{00B7} Ran 1 tool["))
+        // A lone run that holds a send still folds, as the web's `sends(part)` does.
+        let parts = outline(plan([person(), tool("Bash", "b"), tool("mcp__walnut__org_send"), said("Done.")]))
+        XCTAssertEqual(parts.count, 3)
+        XCTAssertTrue(parts[1].hasPrefix("fold:turn:Sent 1 \u{00B7} Ran 1 tool["), parts[1])
+    }
+
+    func testALiveCallIsNeverMatchedToTheSameCallOfAnEarlierTurn() async {
+        // The row spans an earlier quiet turn that ran the same command.
+        let history = [person(), said("Answer."), peer(), tool("Bash", "git status"), line, peer("Second note.")]
+        let calls = [LiveToolCall(id: "1", name: "Bash", detail: "git status", finished: true)]
+        let actor = TimelineLayoutActor()
+        let live = runRows(await rows(history, streaming: true, liveTools: calls, actor: actor))
+        XCTAssertEqual(live.map(\.phrase), ["Received 2 messages \u{00B7} Ran 2 tools"])
+        // A mid-turn refetch brings this turn's call: it is counted once.
+        let fetched = runRows(await rows(history + [tool("Bash", "git status")], streaming: true,
+                                         liveTools: calls, actor: actor))
+        XCTAssertEqual(fetched.map(\.phrase), ["Received 2 messages \u{00B7} Ran 2 tools"])
+        XCTAssertEqual(fetched.map(\.id), live.map(\.id))
+    }
+
+    func testAnAnsweredTurnLendsItsRowToNoLaterCalls() async {
+        // Turn A ended on an ack with its reasoning before it. Turn B was started
+        // by a row history does not hold yet (the person's message sent from
+        // another device), so B's calls are not A's: A's row keeps its words and
+        // id while B streams and after it ends, and its reasoning stays inside it.
+        let think = ChatMessage(id: "k\(clock)", role: "assistant", text: "Nothing to change.",
+                                createdAt: at(), kind: .thinking)
+        let turnA = [person(), said("Answer."), peer(), think, line]
+        let calls = [LiveToolCall(id: "1", name: "Read", detail: "b.md", finished: true)]
+        let actor = TimelineLayoutActor()
+        let before = await rows(turnA, actor: actor)
+        let foldA = runRows(before)
+        XCTAssertEqual(foldA.map(\.phrase), ["Received 1 message"])
+        let live = await rows(turnA, streaming: true, liveTools: calls, actor: actor)
+        let after = await rows(turnA, liveTools: calls, actor: actor)
+        for snapshot in [live, after] {
+            XCTAssertEqual(Array(snapshot.map(\.id).prefix(before.count)), before.map(\.id))
+            XCTAssertEqual(runRows(snapshot).first?.phrase, foldA.first?.phrase)
+        }
+    }
+
+    func testAMessageDeliveredAtTurnEndDrawsAfterTheRowThatKeepsItsCalls() async {
+        // The phone's own message, queued during the turn, lands with the reply.
+        let history = [person(), said("Answer."), peer()]
+        let calls = [LiveToolCall(id: "1", name: "Bash", detail: "status", finished: true)]
+        let actor = TimelineLayoutActor()
+        let live = runRows(await rows(history, streaming: true, liveTools: calls, actor: actor))
+        let gap = history + [said("All set."), person("One more thing.")]
+        let during = await rows(gap, liveTools: calls, actor: actor)
+        XCTAssertEqual(runRows(during).map(\.id), live.map(\.id))
+        XCTAssertEqual(runRows(during).map(\.phrase), ["Received 1 message \u{00B7} Ran 1 tool"])
+        let rowAt = during.firstIndex { $0.id == live.first?.id }
+        let replyAt = during.firstIndex { texts([$0]).contains("All set.") }
+        let sentAt = during.firstIndex { texts([$0]).contains("One more thing.") }
+        XCTAssertNotNil(rowAt); XCTAssertNotNil(replyAt); XCTAssertNotNil(sentAt)
+        if let rowAt, let replyAt, let sentAt { XCTAssertTrue(rowAt < replyAt && replyAt < sentAt) }
+    }
+
     func testAnOpenLiveRowDrawsACallOnceWhenAMidTurnRefetchAlreadyHasIt() async {
         let calls = [LiveToolCall(id: "1", name: "Bash", detail: "status", finished: true),
                      LiveToolCall(id: "2", name: "Read", detail: "a.md", finished: false)]
         let history = [person(), said("Answer."), peer(), tool("Bash", "status")]
         let actor = TimelineLayoutActor()
         let live = runRows(await rows(history, streaming: true, liveTools: calls, actor: actor))
-        XCTAssertEqual(live.map(\.phrase), ["Received a message, ran a command, read a file"])
+        XCTAssertEqual(live.map(\.phrase), ["Received 1 message \u{00B7} Ran 2 tools"])
         let opened = await rows(history, expanded: [live[0].id], streaming: true, liveTools: calls, actor: actor)
         // The history call is its own folded run; only the call history lacks is a live chip.
-        XCTAssertEqual(runRows(opened).map(\.phrase), ["Received a message, ran a command, read a file", "Ran a command"])
+        XCTAssertEqual(runRows(opened).map(\.phrase), ["Received 1 message \u{00B7} Ran 2 tools", "Ran a command"])
         XCTAssertEqual(opened.filter { if case .toolChip = $0.content { return true }; return false }.count, 1)
     }
 
@@ -307,7 +391,7 @@ final class TurnFoldTests: XCTestCase {
         let history = [person(), said("Answer."), peer("Short."), said(tag)]
         let closed = await rows(history)
         guard let fold = closed.first(where: { if case .toolRun = $0.content { return true }; return false }) else {
-            return XCTFail("no hidden-turn row")
+            return XCTFail("no fold row")
         }
         let opened = await rows(history, expanded: [fold.id])
         let cards = opened.compactMap { row -> (collapsible: Bool, expanded: Bool, line: String)? in
@@ -334,14 +418,14 @@ final class TurnFoldTests: XCTestCase {
         }
         // The notice just landed and its turn has called nothing yet: one folded row.
         let arrived = await rows([person(), said("Answer."), notice], streaming: true)
-        XCTAssertEqual(phrases(arrived), ["Received a message"])
+        XCTAssertEqual(phrases(arrived), ["Received 1 message"])
         XCTAssertEqual(cards(arrived), 0)
         XCTAssertEqual(bubbles(arrived), 1)
         // A notice delivered into a person's running turn: the person's words stay, the notice folds.
         let midTurn = await rows([person("Ship it?"), tool("Bash", "build"), notice], streaming: true)
         XCTAssertEqual(bubbles(midTurn), 1)
         XCTAssertEqual(cards(midTurn), 0)
-        XCTAssertTrue(phrases(midTurn).contains { $0.hasPrefix("Received a message") })
+        XCTAssertTrue(phrases(midTurn).contains { $0.hasPrefix("Received 1 message") })
         XCTAssertFalse(texts(midTurn).contains("walnut-message"))
         // Quiet, open turn (nothing answered yet): still folded.
         let quiet = await rows([person(), said("Answer."), notice])

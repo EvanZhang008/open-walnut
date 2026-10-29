@@ -2,29 +2,27 @@ import Foundation
 
 /// The session timeline after turn shaping (`TimelineTurnShape`): the plan the
 /// layout actor lays rows out from. Port of the web console's linear timeline
-/// (`SessionChatHistory` turnShapes / pushTurnFold / flushHidden, and
-/// `process-fold.ts`), over the phone's rows. Pure, so the whole rule is testable
+/// (`SessionChatHistory` turnShapes and its quiet folds, `fold-steps.ts`), over
+/// the phone's rows. Pure, so the whole rule is testable
 /// without measuring a row (`TurnFoldTests`).
 ///
 /// What the reader gets:
-///  · consecutive hidden turns are ONE "Show N hidden turns" row;
-///  · an answered turn is one folded row for everything before its answer
-///    ("Received a message, used 2 tools ›"), then the answer;
+///  · every stretch of quiet steps between two rows the person reads is ONE
+///    folded row whatever turns it spans: turns that needed nothing, everything
+///    before an answer, received and sent messages, finished steps, reasoning
+///    alone. Its line counts what came in, went out and ran ("Received 12
+///    messages · Sent 3 · Ran 8 tools ›", `TimelineFoldSteps`);
 ///  · a person's own message is always the user's bubble, and Walnut's notes that
-///    ride in front of it in the same row are one "Received a message ›" row
+///    ride in front of it in the same row are one "Received 1 message ›" row
 ///    above it, the bubble holding only the person's words;
-///  · in an open turn, received messages and the finished steps around them fold
-///    into one muted row; a received message is never drawn outside a fold.
+///  · a received message is never drawn outside a fold.
 /// Every fold starts closed and opens to its members, which keep their own rows.
 enum TimelineTurnFold {
     /// What a fold stands for. The row reads differently per kind.
     enum Kind: Equatable {
-        /// Everything before a turn's answer.
+        /// A stretch of quiet steps: everything before a turn's answer, turns that
+        /// needed nothing, received messages and finished steps between answers.
         case turn
-        /// Received messages and finished steps in a turn that did not fold whole.
-        case process
-        /// Turns that needed nothing from the person.
-        case hidden
         /// Walnut's notes in front of a person's words.
         case rider
     }
@@ -33,7 +31,7 @@ enum TimelineTurnFold {
         let kind: Kind
         /// Where the fold starts (see `locationKey`), unique in the plan.
         let key: String
-        /// The closed row's words; for `hidden`, the word after "Show"/"Hide".
+        /// The closed row's words: counts of what the steps did (`TimelineFoldSteps`).
         let phrase: String
         let failCount: Int
         let members: [Part]
@@ -46,7 +44,7 @@ enum TimelineTurnFold {
         case run(key: String, members: [ChatMessage])
         /// A received message, drawn as a received card (only ever inside a fold).
         case inbound(ChatMessage)
-        /// An answer that was the ack line alone, inside opened hidden turns.
+        /// An answer that was the ack line alone, inside an opened fold.
         case ack(ChatMessage)
         case fold(Fold)
     }
@@ -56,19 +54,13 @@ enum TimelineTurnFold {
         "\(TimelineScope.namespace(scope, key))#fold"
     }
 
-    /// The closed row's text.
-    static func label(_ fold: Fold, expanded: Bool) -> String {
-        guard fold.kind == .hidden else { return fold.phrase }
-        return "\(expanded ? "Hide" : "Show") \(fold.phrase)"
-    }
-
     static func plan(_ messages: [ChatMessage], turns: [TimelineTurnShape.Turn]) -> [Part] {
         Planner(messages: messages).run(turns, liveTail: false).parts
     }
 
     /// The live turn a received message started, while it runs: that message (and
     /// any finished steps history already holds after it) and the calls the
-    /// session is making for it are ONE row, "Received a message, ran a command ›",
+    /// session is making for it are ONE row, "Received 1 message · Ran 1 tool ›",
     /// keyed exactly like the turn fold it becomes once answered, so the row and
     /// its open state carry over when the turn ends (`liveTailStart` on the web).
     struct LiveTail: Equatable {
@@ -100,8 +92,9 @@ enum TimelineTurnFold {
             && m.text != "ExitPlanMode" && m.text != "Write"
     }
 
+    /// The web's sends (`detectOutboundSend` + `MESSAGE_OPS`); a Board post is a tool there.
     private static let outboundOps = ["task_send", "session_send", "org_send", "human_inbox_send",
-                                      "human_inbox_reply", "board_post"]
+                                      "human_inbox_reply"]
 
     /// What a tool chip calls a Walnut send: the web's words for it, never the MCP
     /// name (`mcp__walnut__task_send` read as raw code on an opened trigger turn).
@@ -116,19 +109,6 @@ enum TimelineTurnFold {
         case "board_post": return "Posted on the Board"
         default: return name
         }
-    }
-
-    /// "Received a message, ran 2 commands, sent a message": the web's process line.
-    static func phrase(tools: [ChatMessage], received: Int) -> String {
-        let sent = tools.filter(isOutbound).count
-        let calls = tools.filter { !isOutbound($0) }
-            .map { TimelineToolRunPhrase.Member(name: $0.text, detail: $0.detail) }
-        var pieces: [String] = []
-        if received > 0 { pieces.append(received == 1 ? "received a message" : "received \(received) messages") }
-        let callPhrase = TimelineToolRunPhrase.phrase(calls)
-        if let first = callPhrase.first { pieces.append(first.lowercased() + callPhrase.dropFirst()) }
-        if sent > 0 { pieces.append(sent == 1 ? "sent a message" : "sent \(sent) messages") }
-        return capitalized(pieces.joined(separator: ", "))
     }
 
     static func capitalized(_ s: String) -> String {
@@ -164,71 +144,99 @@ private final class Planner {
     }
 
     func run(_ turns: [TimelineTurnShape.Turn], liveTail: Bool) -> (parts: [Part], tail: TimelineTurnFold.LiveTail?) {
-        // Where the live tail starts: back over received messages and runs, at least one received.
+        // Where the live tail starts: back over quiet rows, at least one received.
         var end = parts.count
-        if liveTail {
+        // A stretch that ends on an ack is a turn already answered: the live turn
+        // was started by a row history does not hold yet (the person's message
+        // from another device, say), so its calls ride no earlier row.
+        let answered: Bool = {
+            if case .message(let m)? = parts.last?.part { return TimelineTurnFold.isAckOnly(m) }
+            return false
+        }()
+        if liveTail, !answered {
             var s = parts.count
             var inbound = false
-            while s > 0 {
-                let part = parts[s - 1].part
-                if case .message(let m) = part, TimelineTurnShape.isInbound(m) { inbound = true }
-                else if case .run = part {} else { break }
+            while s > 0, Self.isQuiet(parts[s - 1].part) {
+                if case .message(let m) = parts[s - 1].part, TimelineTurnShape.isInbound(m) { inbound = true }
                 s -= 1
             }
             if inbound { end = s }
         }
         var out: [Part] = []
-        var hidden: [TimelineToolRunFold.Part] = []
-        var hiddenTurns = 0
-        var p = 0
-        func flushHidden() {
-            guard let first = hidden.first else { return }
-            let count = hiddenTurns
-            out.append(.fold(fold(.hidden, first: first,
-                                  phrase: count == 1 ? "1 hidden turn" : "\(count) hidden turns",
-                                  members: hidden.map { member($0, acks: true) }, failCount: 0)))
-            hidden = []
-            hiddenTurns = 0
+        // The quiet steps since the last row the person reads: ONE row whatever
+        // turns they span (2026-10-27, the user: "if it is collapsed near collapsed,
+        // need to combine").
+        var quiet: [TimelineToolRunFold.Part] = []
+        func flushQuiet() {
+            defer { quiet = [] }
+            guard let first = quiet.first else { return }
+            if quiet.count == 1 {
+                // One run or one reasoning row already is one row; a message received
+                // or sent folds, also a send inside a run (the web's `sends(part)`).
+                let folds = Self.rows(first).contains { TimelineTurnShape.isInbound($0) || TimelineTurnFold.isOutbound($0) }
+                if !folds {
+                    out.append(member(first))
+                    return
+                }
+            }
+            let rows = quiet.flatMap(Self.rows)
+            out.append(.fold(fold(.turn, first: first, phrase: TimelineFoldSteps.phrase(rows.flatMap(TimelineFoldSteps.steps)),
+                                  members: quiet.map { member($0, acks: true) },
+                                  failCount: rows.filter(TimelineTurnShape.isFailure).count)))
         }
+        func place(_ item: TimelineToolRunFold.Part) {
+            if Self.isQuiet(item) { quiet.append(item); return }
+            flushQuiet()
+            out += defaultParts([item])
+        }
+        var p = 0
         for turn in turns {
             var mine: [(start: Int, part: TimelineToolRunFold.Part)] = []
             while p < end, parts[p].start < turn.end { mine.append(parts[p]); p += 1 }
             guard !mine.isEmpty else { continue }
-            if turn.kind == .hidden {
-                hidden += mine.map(\.part)
-                hiddenTurns += 1
-                continue
-            }
-            flushHidden()
+            if turn.kind == .hidden { quiet += mine.map(\.part); continue }
             let answer = turn.kind == .answered ? mine.firstIndex(where: { $0.start == turn.answer }) : nil
-            guard var ans = answer else { out += defaultParts(mine.map(\.part)); continue }
+            guard var ans = answer else { mine.forEach { place($0.part) }; continue }
             // The person's own message always shows.
             let lead = turn.byPerson && mine[0].start == turn.start ? 1 : 0
+            if lead == 1 { flushQuiet(); out += defaultParts([mine[0].part]) }
             // The answer's own reasoning (the same message, split into its own row on
-            // the phone) stays with the answer, as one message does on the web.
-            if ans - 1 >= lead, case .message(let prev) = mine[ans - 1].part, prev.kind == .thinking,
+            // the phone) stays with the answer when nothing quiet comes before it;
+            // after quiet steps it is their last one.
+            if ans - 1 == lead, quiet.isEmpty, case .message(let prev) = mine[ans - 1].part, prev.kind == .thinking,
                prev.createdAt == messages[turn.answer].createdAt { ans -= 1 }
-            if lead == 1 { out += defaultParts([mine[0].part]) }
-            let before = mine[lead..<ans].map(\.part)
-            if before.count == 1, case .run = before[0] {
-                out += before.map { member($0) } // already one folded row
-            } else if !before.isEmpty {
-                out.append(.fold(turnFold(before)))
-            }
+            quiet += mine[lead..<ans].map(\.part)
+            flushQuiet()
             out += defaultParts(mine[ans...].map(\.part))
         }
-        flushHidden()
-        if p < end { out += defaultParts(parts[p..<end].map(\.part)) }
+        if p < end { parts[p..<end].forEach { place($0.part) } }
+        // Quiet steps right before the live turn (a hidden turn's narration, which
+        // the walk back stops at) open its row, as they will once the turn ends, so
+        // the row keeps its key and open state across the turn's end.
+        let lead = end < parts.count ? quiet : []
+        if !lead.isEmpty { quiet = [] }
+        flushQuiet()
         guard end < parts.count else { return (out, nil) }
-        let tail = parts[end...].map(\.part)
+        let tail = lead + parts[end...].map(\.part)
         let key = fold(.turn, first: tail[0], phrase: "", members: [], failCount: 0).key
         return (out, TimelineTurnFold.LiveTail(key: key, rows: tail.flatMap(Self.rows),
-                                               members: tail.map { member($0) }))
+                                               members: tail.map { member($0, acks: true) }))
+    }
+
+    /// A quiet row: a finished step, a message received or sent, reasoning alone,
+    /// the no-action line. A failed call or a question is never folded away unread.
+    private static func isQuiet(_ part: TimelineToolRunFold.Part) -> Bool {
+        switch part {
+        case .run(_, let members): return members.allSatisfy(isFinishedStep)
+        case .message(let m):
+            return TimelineTurnShape.isInbound(m) || (TimelineTurnFold.isOutbound(m) && isFinishedStep(m))
+                || m.kind == .thinking || TimelineTurnFold.isAckOnly(m)
+        }
     }
 
     /// A part drawn as itself, not regrouped: what an opened fold holds. The ack
-    /// line alone reads "Acknowledged" only inside hidden turns, where the turn rule
-    /// agreed; anywhere else it has nothing to draw (its row strips to nothing).
+    /// line alone reads "Acknowledged" only inside a fold; anywhere else it has
+    /// nothing to draw (its row strips to nothing).
     private func member(_ part: TimelineToolRunFold.Part, acks: Bool = false) -> Part {
         switch part {
         case .run(let key, let members): return .run(key: key, members: members)
@@ -239,76 +247,31 @@ private final class Planner {
         }
     }
 
-    /// Everything before an answer, as one row. Opened, the rows show as they are.
-    private func turnFold(_ before: [TimelineToolRunFold.Part]) -> TimelineTurnFold.Fold {
-        let rows = before.flatMap(Self.rows)
-        let tools = rows.filter { $0.kind == .tool }
-        var pieces = [TimelineTurnFold.phrase(tools: tools, received: rows.filter(TimelineTurnShape.isInbound).count)]
-        let notes = rows.filter {
-            !$0.isUser && $0.kind == nil
-                && !TimelineTurnMarker.strip($0.text).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        }.count
-        if notes > 0 { pieces.append(notes == 1 ? "an update" : "\(notes) updates") }
-        let phrase = TimelineTurnFold.capitalized(pieces.filter { !$0.isEmpty }.joined(separator: ", "))
-        return fold(.turn, first: before[0], phrase: phrase.isEmpty ? "Thinking" : phrase,
-                    members: before.map { member($0) }, failCount: rows.filter(TimelineTurnShape.isFailure).count)
-    }
-
-    /// The default rendering: a person's row with riders splits, and received
-    /// messages with the finished steps around them group into one process row.
+    /// A row the person reads, as itself; a person's row with Walnut's riders
+    /// splits into a "Received 1 message" row and the bubble.
     private func defaultParts(_ items: [TimelineToolRunFold.Part]) -> [Part] {
         var out: [Part] = []
-        var group: [TimelineToolRunFold.Part] = []
-        var carries = false // a received or sent message is in the group
-        func flush() {
-            if group.count >= 2 || (group.count == 1 && carries) {
-                let rows = group.flatMap(Self.rows)
-                let tools = rows.filter { $0.kind == .tool }
-                let phrase = TimelineTurnFold.phrase(tools: tools, received: rows.filter(TimelineTurnShape.isInbound).count)
-                out.append(.fold(fold(.process, first: group[0], phrase: phrase, members: group.map { member($0) },
-                                      failCount: rows.filter(TimelineTurnShape.isFailure).count)))
-            } else {
-                out += group.map { member($0) }
-            }
-            group = []
-            carries = false
-        }
         for item in items {
-            switch item {
-            case .run(_, let members) where members.allSatisfy(Self.isFinishedStep):
-                group.append(item)
-                if members.contains(where: TimelineTurnFold.isOutbound) { carries = true }
-            case .run:
-                // A failed call or a question is never folded away unread.
-                flush()
-                out.append(member(item))
-            case .message(let m) where TimelineTurnShape.isInbound(m) || TimelineTurnFold.isOutbound(m):
-                group.append(item)
-                carries = true
-            case .message(let m):
-                flush()
-                if TimelineTurnShape.isPerson(m), m.sentBy != nil,
-                   let split = TimelineInboundMessage.splitRiders(m.text) {
-                    let riders = split.riders.enumerated().map { n, rider in
-                        // Named by place: the row's own id hashes its text, which a rich read replaces.
-                        Part.inbound(ChatMessage(id: "rider|\(m.createdAt)|\(n)", role: "user", text: rider,
-                                                 createdAt: m.createdAt, kind: nil))
-                    }
-                    let count = riders.count
-                    out.append(.fold(fold(.rider, first: item,
-                                          phrase: count == 1 ? "Received a message" : "Received \(count) messages",
-                                          members: riders, failCount: 0)))
-                    out.append(.message(m.replacingText(split.body)))
-                } else {
-                    out.append(member(item))
+            if case .message(let m) = item, TimelineTurnShape.isPerson(m), m.sentBy != nil,
+               let split = TimelineInboundMessage.splitRiders(m.text) {
+                let riders = split.riders.enumerated().map { n, rider in
+                    // Named by place: the row's own id hashes its text, which a rich read replaces.
+                    Part.inbound(ChatMessage(id: "rider|\(m.createdAt)|\(n)", role: "user", text: rider,
+                                             createdAt: m.createdAt, kind: nil))
                 }
+                let count = riders.count
+                out.append(.fold(fold(.rider, first: item,
+                                      phrase: TimelineFoldSteps.phrase(Array(repeating: .received, count: count)),
+                                      members: riders, failCount: 0)))
+                out.append(.message(m.replacingText(split.body)))
+            } else {
+                out.append(member(item))
             }
         }
-        flush()
         return out
     }
 
-    /// A step a process row may fold: not a failure (a routed question is an
+    /// A step a quiet row may fold: not a failure (a routed question is an
     /// answer), not a question to the person (`processToolsOf` on the web).
     private static func isFinishedStep(_ m: ChatMessage) -> Bool {
         guard m.kind == .tool else { return true }
@@ -329,8 +292,6 @@ private final class Planner {
         let prefix: String
         switch kind {
         case .turn: prefix = "turn"
-        case .process: prefix = "proc"
-        case .hidden: prefix = "hidden"
         case .rider: prefix = "rider"
         }
         let base = "\(prefix)|\(TimelineTurnFold.locationKey(head))"

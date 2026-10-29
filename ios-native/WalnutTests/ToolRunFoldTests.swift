@@ -68,7 +68,7 @@ final class ToolRunFoldTests: XCTestCase {
     private func runPayload(
         _ row: TimelineRow?, _ file: StaticString = #filePath, _ line: UInt = #line
     ) throws -> (phrase: String, failCount: Int, running: Bool, expanded: Bool) {
-        guard case .toolRun(let phrase, let failCount, let running, let expanded)
+        guard case .toolRun(let phrase, let failCount, let running, let expanded, _)
                 = try XCTUnwrap(row, "no run row", file: file, line: line).content else {
             XCTFail("expected the .toolRun case", file: file, line: line)
             throw XCTSkip("not a run row")

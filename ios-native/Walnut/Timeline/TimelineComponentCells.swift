@@ -109,9 +109,10 @@ enum TimelineHostedCell {
                         .thinking(id: row.id, text: fullText, detailRef: detailRef)))
                 }
             )
-        case .toolRun(let phrase, let failCount, let running, let expanded):
+        case .toolRun(let phrase, let failCount, let running, let expanded, let badgeStacked):
             TimelineToolRunView(
                 phrase: phrase, failCount: failCount, running: running, expanded: expanded,
+                badgeStacked: badgeStacked,
                 onToggle: { delegate?.timelineCell(didRequest: .toggleExpanded(rowID: row.id)) }
             )
         case .chip(let icon, let text):
@@ -1044,6 +1045,8 @@ private struct TimelineToolRunView: View {
     let failCount: Int
     let running: Bool
     let expanded: Bool
+    /// The shape the row's height was measured for (`TimelineRowBuilder.runRowHeight`).
+    let badgeStacked: Bool
     let onToggle: () -> Void
 
     @Environment(\.scenePhase) private var scenePhase
@@ -1063,29 +1066,44 @@ private struct TimelineToolRunView: View {
             // The phrase is the row's whole content; the badge is short and keeps
             // its width, and the phrase WRAPS beside it (the builder measured every
             // line), so an accessibility size never cuts it to "Show 2 hidden…".
-            Text(phrase)
-                .font(.caption.weight(.medium))
-                .fixedSize(horizontal: false, vertical: true)
+            // At an accessibility size the badge takes its own line under the
+            // phrase, the shape the builder measured and put in the row.
+            if badgeStacked {
+                VStack(alignment: .leading, spacing: TimelineMetrics.chipStackSpacing) {
+                    phraseText
+                    badgeText
+                }
                 .layoutPriority(1)
-                .opacity(breathing ? ReadableText.shimmerFloor : 1)
-                .animation(
-                    animates
-                        ? .easeInOut(duration: 0.9).repeatForever(autoreverses: true)
-                        : nil,
-                    value: breathing
-                )
-                .onAppear { breathing = animates }
-                .onChange(of: animates) { _, on in breathing = on }
-            if failCount > 0 {
-                Text(TimelineChipAccessibility.failedBadge(failCount))
-                    .font(.caption.weight(.semibold))
-                    .lineLimit(1)
-                    .foregroundStyle(Theme.danger)
-                    .layoutPriority(2)
+            } else {
+                phraseText
+                if failCount > 0 { badgeText.layoutPriority(2) }
             }
             TimelineChipChevron()
                 .rotationEffect(.degrees(expanded ? 90 : 0))
         }
+    }
+
+    private var phraseText: some View {
+        Text(TimelineFoldSteps.wrapping(phrase))
+            .font(.caption.weight(.medium))
+            .fixedSize(horizontal: false, vertical: true)
+            .layoutPriority(1)
+            .opacity(breathing ? ReadableText.shimmerFloor : 1)
+            .animation(
+                animates
+                    ? .easeInOut(duration: 0.9).repeatForever(autoreverses: true)
+                    : nil,
+                value: breathing
+            )
+            .onAppear { breathing = animates }
+            .onChange(of: animates) { _, on in breathing = on }
+    }
+
+    private var badgeText: some View {
+        Text(TimelineChipAccessibility.failedBadge(failCount))
+            .font(.caption.weight(.semibold))
+            .lineLimit(1)
+            .foregroundStyle(Theme.danger)
     }
 }
 
@@ -1635,14 +1653,25 @@ private struct TimelineNotificationView: View {
                 .frame(width: 3)
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 6) {
-                    Image(systemName: icon).font(.caption2.weight(.semibold))
-                    Text(badge).font(.caption2.weight(.semibold)).textCase(.uppercase)
+                    // One caption2 line at every text size, the line the row reserves
+                    // for this header: a long badge (SESSION RESULT) wrapped to two at
+                    // AX-XXXL and clipped ~49pt off the card's body, and a glyph laid
+                    // out as its own Image stood ~2pt taller than the line. Inside the
+                    // Text the glyphs ride the line.
+                    Text("\(Image(systemName: icon)) \(badge.uppercased())")
+                        .font(.caption2.weight(.semibold))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.6)
                     Spacer(minLength: 0)
                     if collapsible {
-                        Image(systemName: expanded ? "chevron.up" : "chevron.down")
+                        Text(Image(systemName: expanded ? "chevron.up" : "chevron.down"))
                             .font(.caption2)
                     }
                 }
+                // Exactly the line the builder reserves (`notificationRow`): at AX-XXXL
+                // the caption2 line laid out ~3.5pt taller than UIKit's line height and
+                // clipped the card's last line; the badge scales to fit instead.
+                .frame(height: TimelineMetrics.hostedTightLine(TimelineTextStyler.caption2Font))
                 .foregroundStyle(accent)
                 .contentShape(Rectangle())
                 .onTapGesture {
