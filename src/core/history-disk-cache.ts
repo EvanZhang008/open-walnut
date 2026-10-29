@@ -40,8 +40,12 @@ import type { SessionHistoryMessage } from './session-history.js';
  * 3 (2026-10-08): `sourceUuid` on a mid-turn `queue-…` user row. Without it a
  * question sent while a turn ran has no anchor, number or title, and an idle
  * session kept serving its version-2 parse after the deploy that added it.
+ *
+ * 5 (2026-10-29): Claude Code's `api-request-blob` lines are no longer rows. A
+ * version-4 parse holds them as user rows (a session's MEMORY.md, CLAUDE.md and
+ * old hint text, stamped with the parse time) and kept serving them after the fix.
  */
-export const HISTORY_CACHE_SCHEMA = 4;
+export const HISTORY_CACHE_SCHEMA = 5;
 
 let dirEnsured = false;
 
