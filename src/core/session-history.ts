@@ -40,6 +40,7 @@ import { findImagePaths, findRelativeImageNames } from '../providers/session-io.
 import { REMOTE_IMAGES_DIR } from '../constants.js';
 import { backfillMirrorSidecar, resolveSessionMirrorPath, looksAlreadyMirrored, startMirrorDownload } from './remote-image-mirror.js';
 import { isCacheWarmupText } from './sessions/side-thread-warmup.js';
+import { noteMessageBlockTypes, noteTranscriptLineType } from './transcript-line-types.js';
 import {
   SIDE_THREAD_DIGEST_TAG, stripSideThreadDigestRequest,
 } from './sessions/side-thread-digest.js';
@@ -679,6 +680,8 @@ export interface PaginationMeta {
 interface RawJsonlLine {
   type: string;
   subtype?: string;
+  /** Claude Code version that wrote the line (canonical transcript lines). */
+  version?: string;
   uuid?: string;
   timestamp?: string;
   /** parentUuid chain edge (tree lines only). Not consumed here — the rewind
@@ -933,6 +936,16 @@ export function parseSessionMessages(content: string, opts?: ParseSessionMessage
         error: err instanceof Error ? err.message : String(err),
       });
     }
+  }
+  // Format canary (transcript-line-types.ts): warn once per process about a
+  // line kind this parser does not know. Output is unaffected. The CLI version
+  // comes from any line that carries one (api-request-blob lines carry none).
+  let cliVersion: string | undefined;
+  for (const raw of rawMessages) {
+    if (typeof raw?.version === 'string') { cliVersion = raw.version; break; }
+  }
+  for (const raw of rawMessages) {
+    if (raw && typeof raw === 'object') noteTranscriptLineType(raw, cliVersion);
   }
 
   // ── In-place rewind filter (see transcript-chain.ts computeRewindDeadSet) ──
@@ -1379,6 +1392,7 @@ export function parseSessionMessages(content: string, opts?: ParseSessionMessage
     // the conversation, stamped "now" (2026-10-29). A line with no type is an
     // older capture and stays a message.
     if (raw.type !== undefined && raw.type !== 'user' && raw.type !== 'assistant') continue;
+    noteMessageBlockTypes(raw.message.content, raw, cliVersion);
 
     const msgId = raw.message.id ?? raw.uuid ?? `${raw.timestamp}-${rawMessages.indexOf(raw)}`;
     const existing = messageMap.get(msgId);
