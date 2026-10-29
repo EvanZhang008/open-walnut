@@ -79,6 +79,7 @@ import { engineCaps, isAcpEngine, resolveEngine } from '../core/agents/engine-re
 import { extractImageFilePathFromInput } from '../core/session-history.js'
 import { launchNamingPlainText } from '../core/sessions/launch-naming.js'
 import { noteSessionProgress } from '../core/sessions/session-progress.js'
+import { classifyInjectedLine, interruptingLine, noteInjectedLine, strongerLine, type InjectedLineClass } from '../core/task-wait-resume.js'
 import { LiveActivityTracker, toolTarget, type LiveActivity } from '../core/live-activity.js'
 import { reportLiveActivity } from '../core/sessions/live-activity-registry.js'
 import { noteRateLimitEvent } from '../core/sessions/subscription-limits.js'
@@ -833,6 +834,14 @@ export class ClaudeCodeSession {
   private _turnGen = 0
   /** When the current turn began (see turnStartedAt). */
   private _turnEdgeAt: number | undefined
+  /** What the stream's copy of a line delivered between turns is (task-wait-resume.ts
+   *  classifyInjectedLine): the next turn-start edge takes it as its turn's opener. */
+  private _pendingOpenLine: InjectedLineClass | undefined
+  /** The line that opened the current turn, for a turn the server did not send itself
+   *  (a host's own delivery): its turn-start edges tell the phase machine what it is. */
+  private _turnOpenLine: InjectedLineClass | undefined
+  /** Turns of this session seen so far (one per turn, not per edge): the turn a delivered line came in. */
+  private _turnSeq = 0
   /** What the running turn does now, for the Board and the Org page (core/live-activity.ts). */
   private _live = new LiveActivityTracker()
   /** `origin.kind` of the last result the CLI emitted (see lastResultOrigin). */
@@ -1477,6 +1486,9 @@ export class ClaudeCodeSession {
     if (source !== 'state-running' || this._turnResultEmitted || this._turnEdgeAt === undefined) {
       this._turnEdgeAt = Date.now()
       this._live.turnStart(this._turnEdgeAt)
+      this._turnOpenLine = this._pendingOpenLine
+      this._pendingOpenLine = undefined
+      this._turnSeq++
     }
     // A turn walnut did not deliver itself (a message injected straight into
     // the daemon's FIFO, a queued mid-turn message the CLI picks up after the
@@ -1524,9 +1536,11 @@ export class ClaudeCodeSession {
     if (!this.taskId) return
     const turnStartTaskId = this.taskId
     const turnGen = this._turnGen
+    const lineSource = this._turnOpenLine
+    const waitTurn = this._turnSeq
     import('../core/phase.js').then(({ applySessionPhase }) =>
       applySessionPhase(turnStartTaskId, 'session:turn-start', `session-runner:${source}`, {
-        sessionId: sid, turnGen,
+        sessionId: sid, turnGen, waitTurn, ...(lineSource !== undefined ? { lineSource } : {}),
       }),
     ).catch((err) => {
       log.session.warn('turn-start phase pullback failed', {
@@ -1570,6 +1584,7 @@ export class ClaudeCodeSession {
     if (!outcome && this._settledCommandFailure) {
       this._processStatus = detachedBgActive || wakeupPending ? 'running' : 'error'
       this._turnResultEmitted = true
+      this._clearTurnOpenLine()
       this._emittedAssistantText = false
       this._advanceConsumedOffset()
       this.finalizeTurnSpeed({})
@@ -1583,6 +1598,7 @@ export class ClaudeCodeSession {
     this._settledCommandFailure = this._failedLocalCommandThisTurn && isError
     this._processStatus = detachedBgActive || wakeupPending ? 'running' : isError ? 'error' : 'idle'
     this._turnResultEmitted = true
+    this._clearTurnOpenLine()
     // Idle is the CLI's authoritative turn-over signal, and this lane completes a
     // turn whose `result` was withheld — nothing here will run the result case's
     // clear. Close the delivery stretch so this turn's streamed text can't
@@ -2639,6 +2655,8 @@ export class ClaudeCodeSession {
     this._turnStartTs = initOnly ? undefined : Date.now()
     // A spawn that carries a message starts a turn (see turnStartedAt).
     if (!initOnly) this._turnEdgeAt = this._turnStartTs
+    this._pendingOpenLine = this._turnOpenLine = undefined
+    this._turnSeq++
     this._firstThinkingTs = undefined
     this._firstTextTs = undefined
     this._firstToolTs = undefined
@@ -3801,6 +3819,9 @@ export class ClaudeCodeSession {
       // they join the SAME turn and must not bump.
       this._turnGen++
       this._turnEdgeAt = Date.now()
+      // Walnut's own send opens this turn: the server's send source judges it, not a line.
+      this._pendingOpenLine = this._turnOpenLine = undefined
+      this._turnSeq++
       // #870 hand-off: the user moving on outranks a still-pending hold. A stale
       // withheld outcome must not settle the NEW turn (a withheld turn that reached
       // this reset already completed via idle/followup/reconcile, or its process
@@ -4395,6 +4416,7 @@ export class ClaudeCodeSession {
     this._processStatus = 'idle'
     this._activity = undefined
     this._turnResultEmitted = true
+    this._clearTurnOpenLine()
     this.clearStallDiagTimer()
     this.finalizeTurnSpeed({ interrupted: true })
     this.emitStatusChanged('NEED_ACTION')
@@ -4871,6 +4893,8 @@ export class ClaudeCodeSession {
 
     this._active = false
     this._processStatus = 'stopped'
+    // A line delivered to the dead process opens no later turn (a cold resume starts its own).
+    this._clearTurnOpenLine(true)
     this.stopLivenessMonitor()
     // Before the turn events below, so the runner's next delivery already sees
     // them; with no turn event to follow (died between turns), it is told directly.
@@ -4934,6 +4958,7 @@ export class ClaudeCodeSession {
 
       this.resultEmitted = true
       this._turnResultEmitted = true
+      this._clearTurnOpenLine(true)
       // Process death ends the turn without running the result case — close the
       // delivery stretch so partial streamed text can't suppress the next turn's
       // result-text fallback (#858). Every branch below is terminal for this turn.
@@ -5119,6 +5144,8 @@ export class ClaudeCodeSession {
     // CLI we spawned, and the managed-settings advisory it printed at startup was
     // reported as "Session Error" on a turn that had already succeeded).
     const cleanStderr = stderr ? stripCliStartupNoise(stderr) : ''
+    // A line delivered to the exited process opens no later turn (a cold resume starts its own).
+    this._clearTurnOpenLine(true)
 
     // Whatever the exit means below, a turn still being measured ended without its
     // result; freeze the readout instead of leaving it ticking on every open panel.
@@ -5404,6 +5431,30 @@ export class ClaudeCodeSession {
   /** Track whether we've received any JSONL line yet (for first-line timing). */
   private _firstLineSeen = false
 
+  /**
+   * A line the daemon delivered, as its walnut-injected marker recorded it. A host
+   * delivers a same-host peer's note itself (offline-host-core.ts localSend), so
+   * this copy is all the server hears of that send: between turns it is the next
+   * turn's opener, inside a turn it tells a remembered wait what came in.
+   */
+  private _noteInjectedLine(event: StreamEvent): void {
+    const content = (event as unknown as { message?: { content?: unknown } }).message?.content
+    const line = typeof content === 'string' ? classifyInjectedLine(content) : null
+    // Lines delivered between turns run as one turn: what the wait waited for, or a person's, stays.
+    if (this._turnResultEmitted || this._processStatus !== 'running') this._pendingOpenLine = strongerLine(this._pendingOpenLine, line)
+    else if (this.taskId) {
+      noteInjectedLine(this.taskId, line, {
+        sessionId: this.claudeSessionId ?? undefined, turn: this._turnSeq, openedByLine: interruptingLine(this._turnOpenLine),
+      })
+    }
+  }
+
+  /** The turn is over (or its process is gone): no line opens the next one until it is delivered. */
+  private _clearTurnOpenLine(pendingToo = false): void {
+    this._turnOpenLine = undefined
+    if (pendingToo) this._pendingOpenLine = undefined
+  }
+
   private handleStreamLine(line: string, v?: number): void {
     // L1 versioned-event position of THIS line (byte offset at end-of-line in the
     // daemon stream file). Held for the duration of this synchronous call so the
@@ -5446,6 +5497,8 @@ export class ClaudeCodeSession {
     // walnut-injected events are written by Walnut to the JSONL file — they refresh
     // _lastJsonlEventTs (file mtime) but should NOT reset the "Claude is responsive" timer.
     const isWalnutInjected = event.type === 'user' && (event as unknown as Record<string, unknown>).subtype === 'walnut-injected'
+    // Before the ordered marker below opens its turn: what the line is decides whose turn it is.
+    if (isWalnutInjected && this._isReplayedByOffset() !== true) this._noteInjectedLine(event)
     if (!isWalnutInjected) {
       this._lastClaudeOutputTs = Date.now()
     } else if ((event as unknown as { walnutDelivery?: string }).walnutDelivery === 'ordered'
@@ -7262,6 +7315,7 @@ export class ClaudeCodeSession {
         }
 
         this._turnResultEmitted = true
+        this._clearTurnOpenLine()
         // This result was processed to completion — advance the consumed watermark
         // to its position so any future replay of it is positionally suppressed.
         // (Withheld intermediate results broke out earlier and never reach here.)

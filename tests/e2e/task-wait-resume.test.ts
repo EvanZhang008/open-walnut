@@ -17,6 +17,7 @@
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
 import fs from 'node:fs/promises'
+import fsSync from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import type { Server as HttpServer } from 'node:http'
@@ -37,6 +38,7 @@ import { sweepWaitUntil, trackedWaitUntil } from '../../src/core/task-wait-until
 import { interruptedWaits, noteInterruptedWait } from '../../src/core/task-wait-resume.js'
 import { sendMessageToSession } from '../../src/core/session-message-queue.js'
 import { settleUserStatusSync } from '../../src/core/user-status-sync.js'
+import { createEnvelopeKit } from '../../src/core/peers/envelope-kit.js'
 
 const MOCK_CLI = path.resolve(import.meta.dirname, '../providers/mock-claude.mjs')
 const HOUR = 3_600_000
@@ -553,6 +555,85 @@ describe('what the task waited for, arriving inside an interrupting turn or as t
   })
 })
 
+describe('a line its host delivered straight into the CLI (no send on the server)', () => {
+  // 2026-10-29: a same-host peer note went through the host's own delivery
+  // (offline-host-core.ts localSend), so the server saw no send, only the
+  // daemon's ordered walnut-injected marker and then the CLI's turn. That turn
+  // read as the CLI's own ('self'), and its clean end handed the parked task to
+  // the user. The stream's copy of the line is what says whose turn it is.
+  const kit = createEnvelopeKit()
+  let h: Worker
+  let lead: Worker
+
+  /**
+   * What the host's daemon does for it, and nothing on the server: the ordered marker
+   * (daemon-core appendUserMarkerLine), then the FIFO write. The mock CLI answers at
+   * once where a real one takes seconds, so the line reaches it only once the marker
+   * opened the turn: the order a real turn has.
+   */
+  async function hostDelivers(w: Worker, content: string): Promise<void> {
+    const stream = daemon.streamFilePath(w.sid)
+    fsSync.appendFileSync(stream, JSON.stringify({
+      type: 'user', subtype: 'walnut-injected', message: { role: 'user', content },
+      walnutMessageId: `qm-host-${Math.random().toString(16).slice(2, 18)}`, walnutDelivery: 'ordered',
+      timestamp: new Date().toISOString(),
+    }) + '\n')
+    await until('turn start', () => task(w.taskId), (t) => t.phase === 'IN_PROGRESS')
+    const fd = fsSync.openSync(stream.replace(/\.jsonl$/, '.pipe'), fsSync.constants.O_WRONLY | fsSync.constants.O_NONBLOCK)
+    try { fsSync.writeSync(fd, JSON.stringify({ type: 'user', message: { role: 'user', content } }) + '\n') } finally { fsSync.closeSync(fd) }
+  }
+  /** A live CLI waiting on its FIFO (the mock's multi-turn mode), then the park. */
+  async function liveAndParked(w: Worker, waitUntil: string): Promise<void> {
+    await getOp('task_update')!.handler!({ id: w.taskId, phase: 'IN_PROGRESS' }, opCall(w.sid))
+    await peer(w, 'snapshot-clean-turn')
+    await until('clean turn over', () => task(w.taskId), (t) => t.phase === 'NEED_ACTION', 30_000)
+    await until('session idle', () => sessionStatus(w.sid), (s) => s !== 'running')
+    await park(w, waitUntil)
+  }
+  /** The host-delivered turn, from its start to its end. */
+  const hostTurn = (w: Worker, content: string) => phasesDuring(w.taskId, () => hostDelivers(w, content), ended, 30_000)
+  const peerNote = (text: string) => kit.buildPeerWrapper(text, {
+    title: 'Lead', shortId: lead.sid.slice(0, 8), sessionId: lead.sid, taskId: lead.taskId, host: 'local',
+  }, { title: 'A note from the leader' })
+
+  beforeAll(async () => {
+    lead = await startWorker('lead the host team')
+    h = await startWorker('watch the host build')
+    await createTrigger(h, 'host-build')
+  }, 60_000)
+
+  it('a peer\'s note: the turn ends back in Waiting with the same clock', async () => {
+    const until2h = new Date(Date.now() + 2 * HOUR).toISOString()
+    await liveAndParked(h, until2h)
+    expect(await hostTurn(h, peerNote('Hold your build: the store export is blocked until the license is accepted.'))).toEqual(['IN_PROGRESS', 'WAITING'])
+    expect(await task(h.taskId)).toMatchObject({ phase: 'WAITING', wait_until: until2h })
+  }, 60_000)
+
+  it('Walnut status notices led by the instruction notice: Waiting again', async () => {
+    const until1h = new Date(Date.now() + HOUR).toISOString()
+    await liveAndParked(h, until1h)
+    const policy = kit.buildWalnutMessage({ kind: 'notification', attrs: { from: 'Walnut', outcome: 'task-routing-policy' }, body: 'Your default instructions changed.' })
+    const notice = kit.buildWalnutMessage({ kind: 'notification', attrs: { from: 'Walnut', outcome: 'status' }, body: 'A task you follow moved.' })
+    expect(await hostTurn(h, `${policy}\n\n${notice}`)).toEqual(['IN_PROGRESS', 'WAITING'])
+    expect((await task(h.taskId)).wait_until).toBe(until1h)
+  }, 60_000)
+
+  it('a reply to its request: Need Action (it is what it waited for)', async () => {
+    await liveAndParked(h, new Date(Date.now() + HOUR).toISOString())
+    const reply = kit.buildReplyDeliveryText({ id: 'rq-abc123', preview: 'is the build fine?' } as never, {
+      title: 'Lead', shortId: lead.sid.slice(0, 8), host: 'local', sessionId: lead.sid, taskId: lead.taskId,
+    }, 'yes, all green')
+    expect(await hostTurn(h, reply)).toEqual(['IN_PROGRESS', 'NEED_ACTION'])
+  }, 60_000)
+
+  it('a person\'s words, even behind the instruction notice: Need Action', async () => {
+    const policy = kit.buildWalnutMessage({ kind: 'notification', attrs: { from: 'Walnut', outcome: 'task-routing-policy' }, body: 'Your default instructions changed.' })
+    for (const words of ['how is the build going?', `${policy}\n\nhow is the build going?`]) {
+      await liveAndParked(h, new Date(Date.now() + HOUR).toISOString())
+      expect(await hostTurn(h, words), words.slice(0, 30)).toEqual(['IN_PROGRESS', 'NEED_ACTION'])
+    }
+  }, 90_000)
+})
 describe('a prompt for the human, and the way back to work', () => {
   it('a permission prompt in an interrupting turn: Need Action now, and still after the answer', async () => {
     const b = await startWorker('watch the deploy', 'default')

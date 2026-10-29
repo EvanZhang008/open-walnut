@@ -102,6 +102,7 @@ import { isMainAgentTask } from './org/main-stays-active.js'
 import {
   consumeInterruptedWait, dropInterruptedWait, hasInterruptedWait, interruptedWaitLeftAt, markInterruptedByMessage,
   dropFireTurn, noteInterruptedWait, noteTurnSend, resumableWait, takeFireTurn, triggersStanding, waitExitCause,
+  type InjectedLineClass,
 } from './task-wait-resume.js'
 
 // ── Phase → Status (5 → 3) ──
@@ -457,6 +458,13 @@ interface ApplySessionPhaseOpts {
   /** For 'session:input': the send is what a waiting task waited for (a reply,
    *  a finished subtask), so it ends the wait whatever its source. */
   sendEndsWait?: boolean
+  /** For 'session:turn-start': what the stream's copy of the line that opened the turn is
+   *  (task-wait-resume.ts classifyInjectedLine), for a turn the server did not send itself:
+   *  a host's own delivery of a peer's note is an interruption, not the CLI's own turn. */
+  lineSource?: InjectedLineClass
+  /** For 'session:turn-start': the runner's count of the session's turns, the one this edge opens
+   *  (a line that ended the wait inside it may have come in before the wait is noted). */
+  waitTurn?: number
   /** For 'reconciler': this hand-back is a clean turn end (a settled snapshot,
    *  an ACP turn that ended), so an interrupted wait may come back instead, as
    *  on 'session:result'. Never for a process that died mid-turn. */
@@ -662,12 +670,15 @@ export async function applySessionPhase(
 
       if (resume) consumeInterruptedWait(taskId, updated.task?.phase_changed_at)
       else if (leftWait && newPhase === 'IN_PROGRESS') {
-        const cause = waitExitCause(trigger, opts?.sendSource, opts?.sendEndsWait === true)
+        const cause = waitExitCause(trigger, opts?.sendSource, opts?.sendEndsWait === true, opts?.lineSource)
         const leftAt = updated.task?.phase_changed_at
         if (cause && leftAt) {
+          const byLine = trigger === 'session:turn-start' && cause === 'message'
           noteInterruptedWait(taskId, {
-            waitUntil: leftWait.waitUntil, leftAt, sessionId: opts?.sessionId, cause, source: opts?.sendSource ?? source,
-          })
+            waitUntil: leftWait.waitUntil, leftAt, sessionId: opts?.sessionId, cause,
+            source: opts?.sendSource ?? (byLine ? `stream:${opts?.lineSource}` : source),
+            ...(byLine ? { byLine } : {}),
+          }, trigger === 'session:turn-start' ? opts?.waitTurn : undefined)
         }
       }
       log.session.info('phase transition', {

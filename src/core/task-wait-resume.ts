@@ -25,6 +25,12 @@
  *   - a turn nobody sent ('self') was the CLI's own follow-up for background
  *     work that came back (its result says origin task-notification), never a
  *     ScheduleWakeup or loop turn, which hands back by the 2026-09-01 rule.
+ * A turn the server did not send itself is still judged by what opened it: the
+ * daemon writes every line it delivers into the session's stream (a
+ * walnut-injected marker, its host's own same-host deliveries included), and
+ * that copy's envelopes say whose it is (classifyInjectedLine). 2026-10-29: a
+ * peer's note the host delivered straight into the CLI read as 'self', and its
+ * clean end handed a parked task to the user.
  * A wait with only a clock is not brought back: the turn that ends it may well
  * be the reply or the result it waited for, and a hidden result costs the user
  * more than one extra red row. The clock stays exactly what it was; one that
@@ -39,6 +45,7 @@
 import { log } from '../logging/index.js';
 import type { Task } from './types.js';
 import type { WatchingTrigger } from './task-wait-wake.js';
+import { parseWalnutMessage } from './peers/walnut-message-tag.js';
 
 /** Why the wait was left: a message that is not the awaited event, or a turn the CLI started itself. */
 export type WaitExitCause = 'message' | 'self';
@@ -51,6 +58,8 @@ interface InterruptedWait {
   sessionId?: string;
   cause: WaitExitCause;
   source: string;
+  /** The cause came from the stream's copy of a line, not from a send this server made. */
+  byLine?: boolean;
   /** Each trigger's fire count when the wait was left (filled in shortly after). */
   fires?: Record<string, number>;
   notedAtMs: number;
@@ -58,6 +67,8 @@ interface InterruptedWait {
 
 const interrupted = new Map<string, InterruptedWait>();
 const MAX_AGE_MS = 7 * 86_400_000;
+/** Task → the session turn in which a line that ends the wait came in before the wait was remembered. */
+const endsSeen = new Map<string, { sessionId?: string; turn: number }>();
 
 /** Send sources whose turn is an interruption, not the event the task waits on.
  *  An allowlist: a source missing here ends the wait as before. Never in it: a
@@ -73,14 +84,131 @@ const INTERRUPTING_SEND_SOURCES: ReadonlySet<string> = new Set([
   'auto-recover',  // sessions/auto-recover-env.ts AUTO_RECOVER_SOURCE
 ]);
 
-/** The cause a WAITING → IN_PROGRESS edge records, or null when its turn ends the wait for good. */
-export function waitExitCause(trigger: string, sendSource: string | undefined, endsWait = false): WaitExitCause | null {
-  if (trigger === 'session:turn-start') return 'self';
+/**
+ * The cause a WAITING → IN_PROGRESS edge records, or null when its turn ends the wait for good.
+ * `lineSource`: what the lines that opened a turn the server did not send are (classifyInjectedLine,
+ * merged by strongerLine); undefined = no line opened it (the CLI's own turn). What the wait
+ * waited for ('ends') or a person's words (null) opening it end the wait, as their sends do.
+ */
+export function waitExitCause(trigger: string, sendSource: string | undefined, endsWait = false, lineSource?: InjectedLineClass): WaitExitCause | null {
+  if (trigger === 'session:turn-start') {
+    if (lineSource === undefined) return 'self';
+    return interruptingLine(lineSource) ? 'message' : null;
+  }
   if (trigger !== 'session:input' || !sendSource || endsWait) return null;
   return INTERRUPTING_SEND_SOURCES.has(sendSource) ? 'message' : null;
 }
 
-export function noteInterruptedWait(taskId: string, entry: Omit<InterruptedWait, 'notedAtMs' | 'fires'>): void {
+/**
+ * What a delivered line is, read from the stream's copy of it (the daemon's
+ * walnut-injected marker), the same way the server's send source says it:
+ *   - 'peer': another task's note (a peer-note envelope), an interruption;
+ *   - 'walnut-notify': only Walnut status notices, an interruption;
+ *   - 'ends': what a wait waits for (a reply, a trigger's fire, a request's
+ *     settlement, a subtask that completed or failed, a plugin App's state);
+ *   - null: anything else, a person's words first among them (no envelope leads).
+ * Only the envelopes the line opens with count (hint blocks between them are
+ * skipped). Words after a peer's note are Walnut's tail on it (the reply
+ * trailer); words after notices alone are someone's message that Walnut put a
+ * note in front of (the place or instruction notice rides any line), so null.
+ * An envelope body can never hold a tag (walnut-message-tag.ts), so a sender's
+ * words cannot make a line read as anything but its own envelope.
+ */
+export type InjectedLineClass = 'peer' | 'walnut-notify' | 'ends' | null;
+
+/** Notice outcomes a send carries with endsWait (subtask-notices.ts, session-request-notify.ts). */
+const WAIT_ENDING_OUTCOMES: ReadonlySet<string> = new Set(['completed', 'error', 'timeout', 'awaiting_human']);
+const HINT_OPEN = '<system-reminder>';
+const HINT_CLOSE = '</system-reminder>';
+
+export function interruptingLine(line: InjectedLineClass | undefined): line is 'peer' | 'walnut-notify' {
+  return line === 'peer' || line === 'walnut-notify';
+}
+
+/**
+ * Two lines delivered between turns run as ONE turn of the CLI: the turn is what
+ * the stronger says. What the wait waited for, or a person's words, wins over an
+ * interruption, whichever came last (a reply then a peer's note must not read
+ * as the note's turn and hide the reply).
+ */
+export function strongerLine(prev: InjectedLineClass | undefined, next: InjectedLineClass): InjectedLineClass {
+  if (prev === undefined) return next;
+  return interruptingLine(prev) ? next : prev;
+}
+
+export function classifyInjectedLine(content: string): InjectedLineClass {
+  let rest = content.trimStart();
+  let peer = false;
+  let notice = false;
+  for (;;) {
+    if (rest.startsWith(HINT_OPEN)) {
+      const end = rest.indexOf(HINT_CLOSE);
+      if (end < 0) break;
+      rest = rest.slice(end + HINT_CLOSE.length).trimStart();
+      continue;
+    }
+    if (!rest.startsWith('<walnut-message ')) {
+      if (rest && !peer) return null;
+      break;
+    }
+    const envelope = parseWalnutMessage(rest);
+    if (!envelope || !rest.startsWith(envelope.raw)) return peer ? 'peer' : null;
+    if (envelope.kind === 'peer-note') peer = true;
+    else if (envelope.kind === 'notification' && !envelope.attrs.request && !WAIT_ENDING_OUTCOMES.has(envelope.attrs.outcome ?? '')) notice = true;
+    else return 'ends';
+    rest = rest.slice(envelope.raw.length).trimStart();
+  }
+  return peer ? 'peer' : notice ? 'walnut-notify' : null;
+}
+
+/**
+ * A delivered line, as the session's stream recorded it, inside the turn a
+ * remembered wait belongs to: the server hears of a host's own delivery only
+ * here. An interruption makes a turn the CLI seemed to start itself the
+ * message's; what the wait waited for ends it, as a send of it does; and once
+ * the stream said whose turn it is, any other line (a person's) ends it too.
+ *
+ * `turn`: the session's turn the line came in (the runner's turn count), and
+ * whether a line opened that turn. The turn-start edge writes its entry only
+ * after its own task read and write, so a line that ends the wait can come in
+ * first: it leaves a mark for that turn, and noteInterruptedWait keeps no wait
+ * for a turn so marked.
+ */
+export function noteInjectedLine(
+  taskId: string,
+  line: InjectedLineClass,
+  turn?: { sessionId?: string; turn: number; openedByLine?: boolean },
+): void {
+  const entry = interrupted.get(taskId);
+  if (!entry) {
+    if (turn && (line === 'ends' || (line === null && turn.openedByLine))) {
+      if (endsSeen.size > 1000) endsSeen.clear();
+      endsSeen.set(taskId, { sessionId: turn.sessionId, turn: turn.turn });
+    }
+    return;
+  }
+  if (interruptingLine(line)) {
+    if (entry.cause === 'self') {
+      entry.cause = 'message';
+      entry.source = `stream:${line}`;
+      entry.byLine = true;
+    }
+  } else if (line === 'ends') dropInterruptedWait(taskId, 'stream:what-it-waited-for', entry.leftAt);
+  else if (entry.byLine) dropInterruptedWait(taskId, 'stream:not-an-interruption', entry.leftAt);
+}
+
+/** `turn`: the session turn the edge belongs to (the runner's count), for the marks noteInjectedLine leaves. */
+export function noteInterruptedWait(taskId: string, entry: Omit<InterruptedWait, 'notedAtMs' | 'fires'>, turn?: number): void {
+  const seen = endsSeen.get(taskId);
+  if (seen && turn !== undefined) {
+    endsSeen.delete(taskId);
+    if (seen.turn === turn && seen.sessionId === entry.sessionId) {
+      log.session.info('wait not kept: what it waited for came in this turn before the wait was noted', {
+        taskId, sessionId: entry.sessionId, cause: entry.cause, source: entry.source, turn,
+      });
+      return;
+    }
+  }
   const now = Date.now();
   for (const [id, e] of interrupted) if (now - e.notedAtMs > MAX_AGE_MS) interrupted.delete(id);
   const noted: InterruptedWait = { ...entry, notedAtMs: now };
@@ -226,6 +354,7 @@ export function interruptedWaits(): ReadonlyMap<string, Readonly<InterruptedWait
 
 export function resetInterruptedWaitsForTest(): void {
   interrupted.clear();
+  endsSeen.clear();
   restored.clear();
 }
 
