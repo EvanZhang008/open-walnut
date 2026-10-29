@@ -24,6 +24,8 @@ import { buildWalnutMessage, sessionHandle } from './peers/walnut-message-tag.js
 import { createEnvelopeKit, type EnvelopeHandedOn } from './peers/envelope-kit.js';
 import { isHeldElsewhereReason } from './sessions/undelivered-requests.js';
 import { log } from '../logging/index.js';
+// The cap and the retention prune keeps live beside how a copy reads them.
+import { MAX_REQUESTS, SETTLED_RETENTION_MS } from './session-request-retention.js';
 
 const REQUESTS_FILE = path.join(WALNUT_HOME, 'session-requests.json');
 
@@ -31,10 +33,6 @@ const REQUESTS_FILE = path.join(WALNUT_HOME, 'session-requests.json');
 // server is away builds the same previews and envelopes, byte for byte.
 const kit = createEnvelopeKit();
 
-/** Most-recent-N cap; settled rows past the cap drop off the tail. */
-const MAX_REQUESTS = 500;
-/** Settled rows older than this are pruned on write. */
-const SETTLED_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 /** Default reply deadline when the sender EXPLICITLY asked for a reply and
  *  named no timeout. An explicit ask is an ask: an hour of silence is worth
  *  hearing about. */

@@ -34,6 +34,11 @@ export interface LeaderKind<Row> {
    * went away since the manifest, skip it (the next round asks again).
    */
   loadRow?(row: Row): Promise<Row | undefined>
+  /**
+   * What the leader's own retention dropped (kind.ts `window`), worked out from
+   * the same rows as the manifest. Undefined: the sync names none.
+   */
+  window?(rows: readonly Row[]): Record<string, unknown> | undefined
 }
 
 /** The row a put sends for `k` (kind.loadRow when the kind has one). */
@@ -51,6 +56,8 @@ export interface KindManifest<Row> {
   keys?: string
   /** Keys the leader could not read this round: the sync names them, the follower keeps its copy (kind.ts keepOf). */
   keep?: string[]
+  /** The leader's retention window over these rows (kind.ts `window`), when the kind names one. */
+  window?: Record<string, unknown>
 }
 
 function keysOf(manifest: KindManifest<unknown>): string {
@@ -68,7 +75,8 @@ export async function buildKindManifest<Row>(kind: LeaderKind<Row>, rows: readon
     byKey.set(k, rows[i])
     if (i % HASH_SLICE === HASH_SLICE - 1) await pause()
   }
-  return { entries, hash: manifestHashOf(entries), byKey }
+  const window = kind.window?.(rows)
+  return { entries, hash: manifestHashOf(entries), byKey, ...(window ? { window } : {}) }
 }
 
 function immediate(): Promise<void> {
@@ -137,6 +145,7 @@ export async function runKindRound<Row>(
     reply = await step(target, {
       op: 'sync', kind: kind.kind, schemaVersion: kind.schemaVersion, entries: manifest.entries, asOf, ...(confirm ? { confirm: true, confirmFor: confirm } : {}),
       ...(manifest.keep?.length ? { keep: manifest.keep } : {}),
+      ...(manifest.window ? { window: manifest.window } : {}),
     })
   } catch (err) {
     // A confirm is used up only by an answer (an older follower refusing it anyway);

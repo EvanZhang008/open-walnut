@@ -19,6 +19,7 @@ import { REQUESTS_KIND, forwardRequest, _resetRequestsCopyForTesting } from '../
 import { buildKindManifest } from '../../../../src/core/replication/kind-leader.js'
 import { _resetReplicaStatusForTesting, forgetKindManifests } from '../../../../src/core/replication/replica-status.js'
 import type { SessionRequest } from '../../../../src/core/session-requests.js'
+import { MAX_REQUESTS, prunedByLeader, requestsWindowOf } from '../../../../src/core/session-request-retention.js'
 
 const T0 = '2026-10-15T08:00:00.000Z'
 const ENV = ['WALNUT_ROLE', 'WALNUT_PLACEMENT', 'WALNUT_HOST_SERVER'] as const
@@ -130,6 +131,110 @@ describe('a host replica keeps the requests copy', () => {
     leader = leader.slice(0, 10)
     await expect(round()).rejects.toThrow(/manifest_removes_most_rows/)
     expect((await copy()).length).toBe(50)
+  })
+})
+
+// 2026-10-26 to 10-28: clouddev's server was down for a day and a half while the Mac kept
+// writing requests at its cap. Back up, its copy held 413 settled rows from 10-17..10-24, the
+// Mac's manifest named 501 rows from the last 2.5 days and none of those, and every round (about
+// 340 a day) was refused: 413 of 413 removed. The Mac's window moved every few minutes, so the
+// Settings confirm (3 refusals of the same key set) never came up either.
+describe('a copy that missed rounds while the Mac pruned past it', () => {
+  const DAY = 86_400_000
+  const iso = (msAgo: number) => new Date(Date.now() - msAgo).toISOString()
+  /** `n` rows from `fromAgo` back to `toAgo`, settled (replied) unless `pending`. */
+  function span(prefix: string, n: number, fromAgo: number, toAgo: number, pending = 0): SessionRequest[] {
+    return Array.from({ length: n }, (_, i) => {
+      const at = iso(fromAgo - ((fromAgo - toAgo) * i) / Math.max(1, n - 1))
+      const open = i >= n - pending
+      return rq(i, { id: `rq-${prefix}-${String(i).padStart(6, '0')}`, createdAt: at, ...(open ? {} : { status: 'replied' as const, settledAt: at }) })
+    })
+  }
+
+  it('catches up: every row it removes is one the Mac pruned by its cap', async () => {
+    // The copy took the Mac's 413 rows (4 to 11 days old, 4 still pending) when it last ran.
+    leader = span('old', 413, 11 * DAY, 4 * DAY, 4)
+    expect(await round()).toMatchObject({ action: 'synced', sent: 413 })
+    // The Mac now holds 501 rows from the last 2.5 days (10 pending): the cap pushed the rest out.
+    leader = span('new', 501, 2.5 * DAY, 0, 10)
+    expect(requestsWindowOf(leader)).toEqual({ from: Date.parse(leader[0].createdAt) })
+    expect(await round()).toMatchObject({ action: 'synced', entries: 501, sent: 501, removed: 413 })
+    const ids = new Set((await copy()).map((r) => r.id))
+    expect(ids.size).toBe(501)
+    expect([...ids].every((id) => id.startsWith('rq-new-'))).toBe(true)
+    forgetKindManifests(['requests'])
+    const from = h.calls.length
+    await round()
+    expect(stepsSince(h.calls, from)).toEqual(['sync:requests']) // converged
+  })
+
+  it('still refuses a leader that lost its store: recent rows it no longer names count', async () => {
+    leader = span('old', 120, 3 * DAY, 0)
+    await round()
+    // A store that opened nearly empty: 10 rows, under the cap, so no window.
+    leader = span('fresh', 10, 60_000, 0)
+    await expect(round()).rejects.toThrow(/manifest_removes_most_rows/)
+    expect((await copy()).length).toBe(120)
+  })
+
+  it('still refuses a store lost after a quiet week: rows explained by age never lift the brake', async () => {
+    // The Mac wrote no request for a week (prune runs on write), so both sides hold 100 settled
+    // rows 8 to 12 days old, plus 20 recent ones, 5 of them pending.
+    leader = [...span('quiet', 100, 12 * DAY, 8 * DAY), ...span('recent', 20, DAY, 0, 5)]
+    await round()
+    // The Mac's store is lost: an empty manifest, no window. The 100 are past the retention,
+    // but the 20 recent rows (pending ones included) must not go with them.
+    leader = []
+    await expect(round()).rejects.toThrow(/manifest_removes_most_rows/)
+    expect((await copy()).length).toBe(120)
+  })
+
+  it('still refuses a full leader missing rows newer than its window', async () => {
+    // The copy holds 120 settled rows from the last 2 days.
+    leader = span('mid', 120, 2 * DAY, 1 * DAY)
+    await round()
+    // A leader at its cap whose oldest settled row is 3 days old, yet names none of them:
+    // those rows are inside its window, so their loss is not its cap's doing.
+    leader = span('full', 500, 3 * DAY, 0)
+    await expect(round()).rejects.toThrow(/manifest_removes_most_rows/)
+    expect((await copy()).length).toBe(120)
+  })
+})
+
+describe('prunedByLeader', () => {
+  const now = Date.parse('2026-10-29T06:00:00.000Z')
+  const at = (iso: string) => ({ status: 'replied', createdAt: iso, settledAt: iso })
+  const window = { from: Date.parse('2026-10-26T19:35:00.000Z') }
+
+  it('explains a settled row past the 7-day retention, on this side\'s clock', () => {
+    expect(prunedByLeader(at('2026-10-21T00:00:00.000Z'), { now, window: null, entries: 3 })).toBe(true)
+    expect(prunedByLeader(at('2026-10-23T00:00:00.000Z'), { now, window: null, entries: 3 })).toBe(false)
+    // A leader clock a week ahead does not age rows here.
+    expect(prunedByLeader(at('2026-10-23T00:00:00.000Z'), { now, asOf: now + 7 * 86_400_000, window: null, entries: 3 })).toBe(false)
+  })
+
+  it('explains a settled row older than a full window only', () => {
+    const row = at('2026-10-24T10:00:00.000Z')
+    expect(prunedByLeader(row, { now, window, entries: MAX_REQUESTS + 1 })).toBe(true)
+    expect(prunedByLeader(row, { now, window, entries: MAX_REQUESTS - 1 })).toBe(false)
+    expect(prunedByLeader(at('2026-10-27T00:00:00.000Z'), { now, window, entries: MAX_REQUESTS })).toBe(false)
+  })
+
+  it('explains a pending row only by a full window, never by age', () => {
+    const pending = { status: 'pending', createdAt: '2026-10-01T00:00:00.000Z' }
+    expect(prunedByLeader(pending, { now, window: null, entries: 3 })).toBe(false)
+    expect(prunedByLeader(pending, { now, window, entries: MAX_REQUESTS - 1 })).toBe(false)
+    // Gone from a full store older than its window: settled there (a settle this copy missed) and evicted.
+    expect(prunedByLeader(pending, { now, window, entries: MAX_REQUESTS })).toBe(true)
+    expect(prunedByLeader({ status: 'pending', createdAt: '2026-10-27T00:00:00.000Z' }, { now, window, entries: MAX_REQUESTS })).toBe(false)
+  })
+
+  it('takes the window from where the cap stopped evicting, in store order', () => {
+    const rows = Array.from({ length: MAX_REQUESTS }, (_, i) => at(new Date(Date.parse('2026-10-26T19:35:00.000Z') + i * 60_000).toISOString()))
+    // A row a host's journal appended late, with an early createdAt, does not pull the window back.
+    rows.push(at('2026-10-20T00:00:00.000Z'))
+    expect(requestsWindowOf(rows)).toEqual({ from: Date.parse('2026-10-26T19:35:00.000Z') })
+    expect(requestsWindowOf(rows.slice(0, MAX_REQUESTS - 1))).toBeUndefined()
   })
 })
 

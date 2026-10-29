@@ -5,7 +5,7 @@
  * POST /bridge/replica. The protocol is the task copy's:
  *
  *   status  digest kinds only (WP4): count + 48-bit sum, ends an equal round
- *   sync    {kind, schemaVersion, entries:[{k,h}], asOf, confirm?, confirmFor?, keep?} -> {need, held, removed}
+ *   sync    {kind, schemaVersion, entries:[{k,h}], asOf, confirm?, confirmFor?, keep?, window?} -> {need, held, removed}
  *   put     {kind, schemaVersion, rows, last?}                    -> {stored, held}
  *
  * The leader side runs per target (kind-leader.ts), the follower side behind
@@ -27,6 +27,13 @@
  *     manifest it came with. A follower that refuses a matching confirm runs a
  *     build older than the confirm (one without it names no `local`/`removing`
  *     either): the leader stops offering it there until a refusal names them;
+ *   - `window` (kind-specific, optional): what the leader's own retention
+ *     dropped (requests: the oldest settled row a full store keeps,
+ *     session-request-retention.ts). A row the follower would remove that the
+ *     window explains goes without counting toward the half rule; the rest
+ *     still count, so a leader that lost its store still cannot empty a copy.
+ *     It is worked out from the rows, so the manifest hash covers it. An older
+ *     follower ignores it (and refuses as before);
  *   - `keep` (WP4): keys the leader has but could not read this round (a board
  *     file it failed to open or parse). The follower neither asks for them nor
  *     removes them, so a read error on the Mac never deletes the copy. The

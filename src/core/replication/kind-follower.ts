@@ -180,6 +180,13 @@ export interface RowSetSpec<Row> {
    * without one answers `purge` with `400 unknown_op`.
    */
   purge?(): Promise<{ removed: number }>
+  /**
+   * Of the local rows a manifest would remove, the ones the leader's own
+   * retention explains (kind.ts `window`; the sync's `window`, `asOf` and entry
+   * count are passed on). They are removed without counting toward the half
+   * rule. None by default: every removal counts.
+   */
+  pruned?(removeIds: readonly string[], at: { window: unknown; asOf: number; entries: number }): Promise<ReadonlySet<string>>
 }
 
 /**
@@ -293,11 +300,21 @@ export function createRowSetFollower<Row>(spec: RowSetSpec<Row>): RowSetFollower
     // confirm a real prune after three refused rounds (the Settings row). A
     // confirm names the manifest it was given for (`confirmFor`, kind.ts): one
     // with no binding, or bound to another manifest, is refused like none.
-    if (removesMost(local.length, removeIds.length, spec.removalFloor)) {
+    // Rows the leader's own retention dropped (a copy that missed rounds while the
+    // leader pruned) are not a loss: they go, and only the rest count. The floor
+    // stays on the whole copy: explained rows never turn the brake off for the
+    // rest (a lost store after a quiet week would otherwise take the recent rows).
+    let pruned = 0
+    if (removeIds.length > 0 && spec.pruned) {
+      const explained = await spec.pruned(removeIds, { window: body.window, asOf: Number(body.asOf) || 0, entries: entries.length })
+      pruned = removeIds.filter((id) => explained.has(id)).length
+    }
+    if (local.length >= spec.removalFloor && removesMost(local.length - pruned, removeIds.length - pruned, 0)) {
       const confirmed = body.confirm === true && confirmMatches(body.confirmFor, entries)
       if (!confirmed) {
         spec.log.warn(`${spec.label}: refused a manifest that removes most rows`, {
-          kind: spec.kind, entries: entries.length, local: local.length, removing: removeIds.length, ...(body.confirm === true ? { confirmUnbound: true } : {}),
+          kind: spec.kind, entries: entries.length, local: local.length, removing: removeIds.length,
+          ...(pruned > 0 ? { pruned } : {}), ...(body.confirm === true ? { confirmUnbound: true } : {}),
         })
         // The size of the removal goes back with the refusal: the user confirms knowing it.
         return { ok: false, status: 400, error: REFUSAL_ERROR, local: local.length, removing: removeIds.length }
@@ -327,7 +344,7 @@ export function createRowSetFollower<Row>(spec: RowSetSpec<Row>): RowSetFollower
       : !kept.has(k)), s.asOf)
     if (removeIds.length > 0 || need.length > 0 || keptCount > 0) {
       spec.log.info(`${spec.label}: manifest`, {
-        kind: spec.kind, entries: entries.length, need: need.length, held: heldCount, removed: removeIds.length, reordered: reorder, ...(keptCount > 0 ? { kept: keptCount } : {}),
+        kind: spec.kind, entries: entries.length, need: need.length, held: heldCount, removed: removeIds.length, reordered: reorder, ...(keptCount > 0 ? { kept: keptCount } : {}), ...(pruned > 0 ? { pruned } : {}),
       })
     }
     return { ok: true, need, held: heldCount, removed: removeIds.length }

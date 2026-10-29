@@ -11,7 +11,12 @@
  * journal, WP10). `withdrawn` is not final: the Mac restores a withdrawn ask
  * to pending when its task reopens (session-requests.ts restoreRequest).
  *
- * Unordered, half rule from 50 rows, no digest (at most 500 rows).
+ * Unordered, half rule from 50 rows, no digest (at most 500 rows). The Mac
+ * prunes settled rows by age and by that cap; the manifest carries its
+ * window and the copy removes what that retention explains without counting
+ * it toward the half rule (session-request-retention.ts), so a copy that
+ * missed rounds while the Mac pruned past it catches up instead of refusing
+ * every round.
  */
 
 import fsp from 'node:fs/promises'
@@ -19,6 +24,7 @@ import path from 'node:path'
 import { WALNUT_HOME } from '../../../constants.js'
 import { log } from '../../../logging/index.js'
 import type { SessionRequest, SessionRequestStatus } from '../../session-requests.js'
+import { prunedByLeader, requestsWindowOf, windowOf } from '../../session-request-retention.js'
 import { sha12 } from '../kind.js'
 import { createRowSetFollower, serialChain, writeCopyFile, type RowSetFollower, type RowSetState } from '../kind-follower.js'
 import type { CopyKind } from './copy-kind.js'
@@ -60,6 +66,7 @@ export const REQUESTS_KIND: CopyKind<SessionRequest> = {
   digest: false,
   choice: 'requests',
   rows: async () => (await import('../../session-requests.js')).listAllSessionRequests(),
+  window: requestsWindowOf,
   watch: (soon) => {
     let stop: (() => void) | null = null
     let stopped = false
@@ -139,6 +146,16 @@ export function requestsFollower(): RowSetFollower {
       return { skipped: [] }
     },
     held: async () => (await import('../../../replica/journal-overlay.js')).journalHeld('requests'),
+    pruned: async (removeIds, at) => {
+      const ids = new Set(removeIds)
+      const window = windowOf(at.window)
+      const now = Date.now()
+      const out = new Set<string>()
+      for (const r of await readStore()) {
+        if (ids.has(r.id) && prunedByLeader(r, { now, asOf: at.asOf, window, entries: at.entries })) out.add(r.id)
+      }
+      return out
+    },
     changed: () => {},
     purge: async () => {
       const removed = (await readStore()).length
