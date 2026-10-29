@@ -27,7 +27,7 @@
  * Isolation as in cloud-box-tunnel-e2e.test.ts: one temp base, fresh auth.json,
  * no pid in any fixture, only the CLI is a mock.
  */
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import net from 'node:net'
@@ -88,15 +88,19 @@ function rpc(method: string, payload: unknown): Promise<Record<string, unknown>>
 }
 
 /** Dial /daemon-tunnel with a token; `probe` asks only whether the token is valid. */
-function dialTunnel(token: string, probe = false): Promise<{ status: number; refusal?: string; ws?: WebSocket }> {
+function dialTunnel(token: string, probe = false): Promise<{ status: number; refusal?: string; message?: string; ws?: WebSocket }> {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(`ws://${companion}/daemon-tunnel`, { headers: { Authorization: `Bearer ${token}`, ...(probe ? { [TUNNEL_PROBE_HEADER]: 'credential' } : {}) } })
     const t = setTimeout(() => { ws.terminate(); reject(new Error('tunnel dial hung')) }, 60_000)
     ws.on('unexpected-response', (_q, res) => {
       clearTimeout(t)
       const h = res.headers[TUNNEL_REFUSAL_HEADER]
-      res.resume()
-      resolve({ status: res.statusCode ?? 0, refusal: typeof h === 'string' ? h : undefined })
+      // The refusal's body says why (a 503 names the daemon start that failed).
+      let body = ''
+      res.on('data', (b: Buffer) => { body += b.toString() })
+      const done = () => resolve({ status: res.statusCode ?? 0, refusal: typeof h === 'string' ? h : undefined, message: body || undefined })
+      res.on('end', done)
+      res.on('close', done)
     })
     ws.on('open', () => { clearTimeout(t); resolve({ status: 101, ws }) })
     ws.on('error', () => { /* unexpected-response answers */ })
@@ -105,6 +109,11 @@ function dialTunnel(token: string, probe = false): Promise<{ status: number; ref
 
 const cachedToken = () => (JSON.parse(fs.readFileSync(path.join(WALNUT_HOME, 'sync', 'bridge-tokens.json'), 'utf-8')) as Record<string, string>)['bridge-local']
 const alive = (pid: number) => { try { process.kill(pid, 0); return true } catch { return false } }
+
+// A failure prints the box's side (its log, each tunnel daemon's stderr): CI has no DEBUG_BOX,
+// and a flake hunt once saw 503 on every retry with nothing to say why.
+let failed = false
+beforeEach(({ onTestFailed }) => { onTestFailed(() => { failed = true }) })
 
 beforeAll(async () => {
   base = await fsp.mkdtemp(path.join(os.tmpdir(), 'walnut-cloudbox-e2e-'))
@@ -132,7 +141,7 @@ afterAll(async () => {
   try { await stopServer() } catch { /* already down */ }
   await replica?.stop()
   isolation?.restore()
-  if (process.env.DEBUG_BOX) process.stderr.write(replica?.log().slice(-8000) ?? '')
+  if (failed || process.env.DEBUG_BOX) process.stderr.write(replica?.diagnostics() ?? '')
 }, 60_000)
 
 describe('a companion belongs to one Mac', () => {
@@ -202,7 +211,7 @@ describe('a companion belongs to one Mac', () => {
   it('the first Mac unpairing itself leaves no owner; this Mac connects first, is recorded the owner, and gets a daemon of its own', async () => {
     // The first Mac is on its daemon (its own dir, keyed by its device id).
     const first = await dialTunnel(replica.tokens.primaryMachine)
-    expect(first.status).toBe(101)
+    expect(first.status, `${first.refusal}: ${first.message}`).toBe(101)
     const firstDaemon = replica.tunnelDaemon('mac-primary')
     expect(firstDaemon.pid).toBeGreaterThan(1)
     expect(fs.existsSync(path.join(`${replica.box.tunnelDir}.by-device`, replica.ids['mac-primary'], 'daemon', 'daemon.pid'))).toBe(true)

@@ -81,6 +81,11 @@ export interface CloudBoxReplica {
   box: { home: string; data: string; daemonDir: string; tunnelDir: string; projects: string }
   log: () => string
   /**
+   * What to print when a test fails: the replica's log tail and, for every tunnel
+   * daemon dir, its files and the daemon's own stderr (why a start failed lives there).
+   */
+  diagnostics: () => string
+  /**
    * A session's stream file, in the unkeyed dir or in the keyed dir of `owner`:
    * a seeded device name (its seeded id) or a device id.
    */
@@ -272,6 +277,17 @@ armGracefulSignalExit()
     get port() { return current.port },
     tokens, ids, box,
     log: () => log,
+    diagnostics: () => {
+      const parts = [`--- replica log (tail) ---\n${log.slice(-8000)}`]
+      for (const dir of allTunnelDirs()) {
+        let files = '(no dir)'
+        try { files = fs.readdirSync(dir).join(' ') } catch { /* not made */ }
+        let stderr = '(none)'
+        try { stderr = fs.readFileSync(path.join(dir, 'daemon-stderr.log'), 'utf-8').slice(-4000) || '(empty)' } catch { /* none */ }
+        parts.push(`--- tunnel daemon dir ${dir}: ${files} ---\n${stderr}`)
+      }
+      return `${parts.join('\n')}\n`
+    },
     streamFile: (sid, owner) => path.join(streamsDirOf(owner), `${sid}.jsonl`),
     daemonDirOf,
     tunnelDaemon: (owner) => {
