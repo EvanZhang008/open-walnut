@@ -120,6 +120,65 @@ describe('host copy pacing', () => {
     expect(slicePushes(send)).toBe(2)
   })
 
+  describe('a fresh link names the copy before sending it (host-slice-probe-v1)', () => {
+    const fullPushes = (send: ReturnType<typeof vi.fn>) =>
+      send.mock.calls.filter((c) => c[0] === 'host.slice' && (c[1] as Record<string, unknown>).slice !== undefined).length
+    const probes = (send: ReturnType<typeof vi.fn>) =>
+      send.mock.calls.filter((c) => c[0] === 'host.slice' && (c[1] as Record<string, unknown>).slice === undefined)
+
+    function probing(have: boolean) {
+      const { conn, send } = connected('devbox')
+      ;(conn as unknown as { _capabilities: string[] })._capabilities = ['offline-host-v1', 'host-slice-probe-v1']
+      send.mockImplementation(async (_cmd: string, params: Record<string, unknown>) =>
+        params.slice === undefined ? { ok: true, have, ...(have ? { changed: false, pendingHandover: false } : {}) } : { ok: true, changed: true })
+      return { conn, send }
+    }
+
+    it('a daemon that still holds it gets no copy, and the next change is paced behind it', async () => {
+      const { conn, send } = probing(true)
+      const first = copyOf(1_500_000)
+      slices.next = () => first
+      conn.pushHostSlice()
+      await settle()
+      expect(probes(send)).toHaveLength(1)
+      expect(probes(send)[0][1]).toEqual({ home: '/home', hash: first.hash, asOf: first.asOf })
+      expect(fullPushes(send)).toBe(0)
+      expect(conn.hostSliceNames('sid-a')).toBe(true)
+      // The same copy again: nothing at all goes.
+      conn.pushHostSlice()
+      await settle()
+      expect(send.mock.calls.filter((c) => c[0] === 'host.slice')).toHaveLength(1)
+      // A changed copy right after waits behind the one the daemon holds.
+      slices.next = () => copyOf(1_500_000)
+      await vi.advanceTimersByTimeAsync(3_000)
+      conn.pushHostSlice()
+      await settle()
+      expect(fullPushes(send)).toBe(0)
+      await vi.advanceTimersByTimeAsync(HOST_SLICE_MAX_GAP_MS)
+      await settle()
+      expect(fullPushes(send)).toBe(1)
+      expect(probes(send)).toHaveLength(1)
+    })
+
+    it('a daemon that does not hold it gets the whole copy at once', async () => {
+      const { conn, send } = probing(false)
+      slices.next = () => copyOf(1_500_000)
+      conn.pushHostSlice()
+      await settle()
+      expect(probes(send)).toHaveLength(1)
+      expect(fullPushes(send)).toBe(1)
+    })
+
+    it('a daemon without the capability is never probed', async () => {
+      const { conn, send } = connected('devbox')
+      slices.next = () => copyOf(1_500_000)
+      conn.pushHostSlice()
+      await settle()
+      expect(probes(send)).toHaveLength(0)
+      expect(fullPushes(send)).toBe(1)
+    })
+  })
+
   it('the wait: none for a first copy, in proportion to size, capped at a minute', () => {
     expect(hostSliceWaitMs({ lastSentAt: 0, lastBytes: 2_000_000, now: 10, namesNewSession: false })).toBe(0)
     expect(hostSliceWaitMs({ lastSentAt: 1_000, lastBytes: 250_000, now: 4_000, namesNewSession: false })).toBe(7_000)

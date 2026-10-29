@@ -311,6 +311,13 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // it is NOT sidecar-gated. Not bridge-reachable. Optional: without it the
   // server pushes nothing and the gateway answers as before.
   'offline-host-v1',
+  // 'host-slice-probe-v1' (offline-host-core.ts holdsSlice): `host.slice {home, hash}`
+  // with no slice asks whether the daemon still holds that exact copy; holding it, the
+  // daemon binds the socket as a pushed copy would and answers `have: true`. A reconnect
+  // to the same daemon then sends no copy (about 1.5 MB on a busy host, and uploads are
+  // what a relay drops the SSH link on). Both twins. Optional: without it every
+  // reconnect pushes the whole copy.
+  'host-slice-probe-v1',
   // 'leader-epoch-v1' (leader-core.ts, docs/plan/walnut-control-plane.md): the
   // primary describes its Walnut with `leader.configure` ({home, walnutId,
   // backup}) and takes the lead back with `leader.claim` (trusted socket). The

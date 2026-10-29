@@ -620,6 +620,17 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     return { changed }
   }
 
+  /**
+   * This daemon holds exactly the copy `hash` for `home` (a probe, host-slice-probe-v1).
+   * Holding it, the copy is as fresh as the Mac's probe: `asOf` moves to its time.
+   */
+  function holdsSlice(home: string, hash: string, asOf?: unknown): boolean {
+    const held = home && hash ? slices.get(home) : undefined
+    if (!held || held.hash !== hash) return false
+    if (typeof asOf === 'number' && Number.isFinite(asOf) && asOf > Number(held.asOf ?? 0)) held.asOf = asOf
+    return true
+  }
+
   function hasHome(home: string | undefined): boolean {
     return !!home && slices.has(home)
   }
@@ -2667,7 +2678,7 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
   return {
     /** The slices on disk again (the boot migration copied some here). */
     reloadSlices: load,
-    configure, hasHome, ownerOf, pendingHandover, hasRecords, drain, ack, noteSettings, noteStop, handle, handleLocal, handleFollower,
+    configure, holdsSlice, hasHome, ownerOf, pendingHandover, hasRecords, drain, ack, noteSettings, noteStop, handle, handleLocal, handleFollower,
     /** handleFollower, waiting out another process's journal lock (whenUnlocked): the twins' follower.op. */
     handleFollowerWaiting: (home: string, req: Parameters<typeof handleFollower>[1]) => whenUnlocked(home, String(req.op ?? ''), () => handleFollower(home, req)),
     /** noteSession, waiting out another process's journal lock (whenUnlocked): the twins' host ask. */

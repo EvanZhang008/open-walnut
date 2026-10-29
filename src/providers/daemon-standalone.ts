@@ -4506,6 +4506,13 @@ function gatewayOwnerHome(callerSid: string): string | undefined {
 
 function cmdHostSlice(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
   try {
+    // A probe (host-slice-probe-v1): the Mac names the copy it would send. Holding it,
+    // this daemon binds the socket as if it had come, so a reconnect sends no copy.
+    if (cmd.slice === undefined && typeof cmd.home === 'string' && typeof cmd.hash === 'string') {
+      const have = offlineHost.holdsSlice(cmd.home, cmd.hash, cmd.asOf)
+      if (have) bindGatewayClientHome(ws, cmd.home)
+      return sendOk(ws, id, have ? { have: true, changed: false, pendingHandover: offlineHost.hasRecords(cmd.home) } : { have: false })
+    }
     const slice = cmd.slice as HostSlice
     const r = offlineHost.configure(slice)
     bindGatewayClientHome(ws, slice.home)

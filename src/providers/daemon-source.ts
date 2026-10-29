@@ -5483,6 +5483,13 @@ function cmdOfflineBlob(ws, id, cmd) {
 
 function cmdHostSlice(ws, id, cmd) {
   try {
+    // A probe (host-slice-probe-v1): the Mac names the copy it would send. Holding it,
+    // this daemon binds the socket as if it had come, so a reconnect sends no copy.
+    if (cmd.slice === undefined && typeof cmd.home === 'string' && typeof cmd.hash === 'string') {
+      var have = offlineHost.holdsSlice(cmd.home, cmd.hash, cmd.asOf);
+      if (have) bindGatewayClientHome(ws, cmd.home);
+      return sendOk(ws, id, have ? { have: true, changed: false, pendingHandover: offlineHost.hasRecords(cmd.home) } : { have: false });
+    }
     var r = offlineHost.configure(cmd.slice);
     bindGatewayClientHome(ws, cmd.slice.home);
     sendOk(ws, id, { changed: r.changed, pendingHandover: offlineHost.hasRecords(cmd.slice.home) });

@@ -1287,6 +1287,23 @@ export class DaemonConnection {
           }
           const slice = await buildHostSlice(this.hostKey)
           if (slice.hash === this.lastHostSlicePushHash) continue
+          // A fresh link to a daemon that still holds this very copy (the link dropped,
+          // the daemon did not): name it instead of sending it (host-slice-probe-v1).
+          // The whole copy on every reconnect was what dropped the new link again
+          // within a second, five times in a row (2026-10-29).
+          if (this.lastHostSlicePushHash === null && this.hostKey !== '__local__' && this.hasCapability('host-slice-probe-v1')) {
+            const probe = await this.send('host.slice', { home: slice.home, hash: slice.hash, asOf: slice.asOf }) as Record<string, unknown>
+            if (probe.ok === true && probe.have === true) {
+              this.lastHostSlicePushHash = slice.hash
+              this.hostSliceSids = new Set(slice.sessions.map((s) => s.sid))
+              // Paced like a copy sent now: the next change waits behind it.
+              this.hostSliceSentAt = Date.now()
+              this.hostSliceSentBytes = JSON.stringify(slice).length
+              log.session.info('DaemonConnection: host slice already held, not sent', { host: this.hostKey, hash: slice.hash })
+              if (probe.pendingHandover === true) { this.offlineDrainDue = true; this.hostSlicePushRerun = true }
+              continue
+            }
+          }
           // A remote host's copy waits in proportion to the last one's size: whole
           // copies after every debounce were the upload bursts a relay drops the
           // shared SSH connection on (host-slice-pace.ts). This machine's never waits.
