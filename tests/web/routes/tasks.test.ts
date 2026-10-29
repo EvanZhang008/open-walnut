@@ -899,8 +899,8 @@ describe('POST /api/tasks/:id/merge', () => {
   it('merges victims into the survivor: it keeps its one session and lists the victim\'s as history', async () => {
     const { linkSession } = await import('../../../src/core/task-manager.js');
     const { getSessionByClaudeId } = await import('../../../src/core/session-tracker.js');
-    const { task: survivor } = await addTask({ title: 'H-1B RFE follow-up' });
-    const { task: victim } = await addTask({ title: 'H-1B RFE follow-up (copy)' });
+    const { task: survivor } = await addTask({ title: 'Quarterly report follow-up' });
+    const { task: victim } = await addTask({ title: 'Quarterly report follow-up (copy)' });
     await createSessionRecord('sess-a', survivor.id, 'P', '/tmp');
     await createSessionRecord('sess-b', victim.id, 'P', '/tmp');
     await linkSession(survivor.id, 'sess-a');
