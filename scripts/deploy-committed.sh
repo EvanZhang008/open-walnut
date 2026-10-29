@@ -45,6 +45,28 @@ if (( ${#JS_RUN[@]} == 0 )); then
   exit 1
 fi
 
+# Nothing new to serve: production already runs this commit, or a later one that
+# contains it (a peer deployed after it landed), from a clean build. Each deploy
+# restarts the server, which costs every open window a few seconds of timeouts,
+# and on 2026-10-28 prod restarted up to 76 times a day. WALNUT_DEVPROD_FORCE=1
+# deploys anyway; a dry run, a rehearsal or a server that does not answer always
+# goes on. WALNUT_DEPLOY_CONFIG_URL: the config to read (tests).
+if [[ "${WALNUT_DEVPROD_FORCE:-0}" != "1" && "${WALNUT_DEVPROD_DRY_RUN:-0}" != "1" && "${WALNUT_DEVPROD_REHEARSAL:-0}" != "1" ]]; then
+  served_json="$(curl -s -m 3 "${WALNUT_DEPLOY_CONFIG_URL:-http://127.0.0.1:3456/api/config}" 2>/dev/null || true)"
+  served="$("${JS_RUN[@]}" "$served_json" <<'JS' 2>/dev/null || true
+try {
+  const b = JSON.parse(process.argv[2] || '{}').build || {}
+  if (b.dirty === false && /^[0-9a-f]{7,40}$/.test(b.commit || '')) console.log(b.commit)
+} catch {}
+JS
+)"
+  if [[ -n "$served" ]] && served_sha="$(git -C "$SERVE_ROOT" rev-parse --verify --quiet "$served^{commit}")" \
+    && git -C "$SERVE_ROOT" merge-base --is-ancestor "$SHA" "$served_sha"; then
+    echo "Deploy skipped: production already serves ${served_sha:0:12}, which contains ${SHA:0:12} (WALNUT_DEVPROD_FORCE=1 deploys anyway)."
+    exit 0
+  fi
+fi
+
 BUILD="${TMPDIR:-/tmp}"
 # A rehearsal (scripts/dev-prod.sh) writes everything into the dir it is given,
 # its clone included. A dir it would refuse is left to it to refuse.

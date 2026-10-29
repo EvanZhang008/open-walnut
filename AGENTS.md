@@ -31,7 +31,10 @@ it as this checkout: the compiled walnut file for this Mac (plus the Linux files
 take, from the same build), run directly with no node. Once it serves, the dist of that build is
 copied into this checkout's `dist/`, because the local `walnut` CLI runs the op registry
 (descriptions, schemas, outcomes) from there (`scripts/publish-serve-root-dist.mjs`; 2026-10-05:
-sessions read op text two deploys old). Never wait for the tree to be clean, and never stash, revert or commit
+sessions read op text two deploys old). It skips the deploy (exit 0, no restart) when production
+already serves that commit or a later one containing it from a clean build, because every restart
+costs open windows seconds of timeouts (2026-10-28: up to 76 a day); `WALNUT_DEVPROD_FORCE=1`
+deploys anyway. Never wait for the tree to be clean, and never stash, revert or commit
 their files to get there. If a deploy guard refuses (type-check, smoke boot, cooldown), fix
 what it names or report it as the blocker. Never end with "committed, not deployed, say
 deploy". Scope the commit to your own changes only (never sweep up other agents'

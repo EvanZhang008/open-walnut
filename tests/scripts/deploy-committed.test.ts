@@ -77,7 +77,8 @@ function run(f: ReturnType<typeof fixture>, env: Record<string, string> = {}, ar
   const r = spawnSync('bash', [path.join(f.repo, 'scripts', 'deploy-committed.sh'), ...args], {
     cwd: f.repo,
     encoding: 'utf-8',
-    env: { ...gitChildEnv(), TMPDIR: f.tmp, WALNUT_TEST_REPORT: f.report, ...env },
+    // Never read the real production server: a config file stands in for it.
+    env: { ...gitChildEnv(), TMPDIR: f.tmp, WALNUT_TEST_REPORT: f.report, WALNUT_DEPLOY_CONFIG_URL: `file://${f.tmp}/no-config.json`, ...env },
   })
   const report = fs.existsSync(f.report)
     ? Object.fromEntries(fs.readFileSync(f.report, 'utf-8').trim().split('\n').map((l) => [l.slice(0, l.indexOf('=')), l.slice(l.indexOf('=') + 1)]))
@@ -195,6 +196,41 @@ describe('deploy-committed.sh', () => {
     for (const env of [{ WALNUT_DEVPROD_REHEARSAL_DIR: dir }, { WALNUT_DEVPROD_REHEARSAL: '1', WALNUT_DEVPROD_REHEARSAL_DIR: 'relative' }]) {
       const other = run(f, env)
       expect(other.report!.here.startsWith(`${f.tmp}/open-walnut-build.`)).toBe(true)
+    }
+  })
+
+  it('skips a commit production already serves, or one a later served commit contains', () => {
+    const f = fixture()
+    const first = git(f.repo, 'rev-parse', 'HEAD')
+    fs.writeFileSync(path.join(f.repo, 'more.txt'), 'second\n')
+    git(f.repo, 'add', 'more.txt')
+    git(f.repo, '-c', 'user.email=t@example.com', '-c', 'user.name=t', 'commit', '-q', '-m', 'second')
+    const second = git(f.repo, 'rev-parse', 'HEAD')
+    const config = path.join(path.dirname(f.repo), 'config.json')
+    const serving = (commit: string, dirty = false) =>
+      fs.writeFileSync(config, JSON.stringify({ build: { version: '0.0.0', commit: commit.slice(0, 9), dirty } }))
+    const url = { WALNUT_DEPLOY_CONFIG_URL: `file://${config}` }
+
+    serving(second)
+    for (const ref of [[], [first]]) {
+      const r = run(f, url, ref)
+      expect(r.status).toBe(0)
+      expect(r.stdout).toMatch(/Deploy skipped: production already serves [0-9a-f]{9}/)
+      expect(r.report).toBeNull()
+      expect(fs.readdirSync(f.tmp)).toEqual([])
+    }
+    // Forced, or a dry run: it goes on.
+    expect(run(f, { ...url, WALNUT_DEVPROD_FORCE: '1' }).report).not.toBeNull()
+    fs.rmSync(f.report)
+    expect(run(f, { ...url, WALNUT_DEVPROD_DRY_RUN: '1' }).report).not.toBeNull()
+    fs.rmSync(f.report)
+    // An older served commit, a dirty build, an unknown commit, no answer: it deploys.
+    for (const write of [() => serving(first), () => serving(second, true), () => serving('abcdef1234'), () => fs.writeFileSync(config, 'not json')]) {
+      write()
+      const r = run(f, url)
+      expect(r.status).toBe(0)
+      expect(r.report).not.toBeNull()
+      fs.rmSync(f.report)
     }
   })
 
