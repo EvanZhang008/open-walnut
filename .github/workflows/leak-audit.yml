@@ -1,0 +1,174 @@
+name: Leak audit
+
+# Scans what Walnut has made public outside the git diff for private words and shapes
+# (scripts/leak-scan/README.md): every finished run's logs and artifacts; the assets of
+# every release that changed in the last day, after each release workflow and daily (the
+# release workflows publish with GITHUB_TOKEN, whose events start no workflow, so a
+# `release` trigger alone would fire only for a release made by hand); and daily the npm
+# packages at each dist-tag, the live site, the source tree (a term added to the rules
+# later is checked against what is already public) and three days of issue and pull
+# request text. The rules come from the LEAK_SCAN_RULES secret, terms hashed. Output is
+# redacted; for text anyone can write (run logs, issues) it is a bare count, so a hit
+# tells nobody which of their words is on the list. A hit fails the run, which mails the
+# owner. It never blocks a release.
+
+on:
+  workflow_run:
+    workflows: [CI, Release, Components, Mac app, Release archives, Binary matrix, Speech runtime, Flake hunt, Update star history]
+    types: [completed]
+  release:
+    types: [published, prereleased]
+  schedule:
+    - cron: '23 7 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+  issues: read
+  pull-requests: read
+
+concurrency:
+  group: leak-audit-${{ github.event_name }}-${{ github.event.workflow_run.id || github.ref }}
+  cancel-in-progress: false
+
+env:
+  GH_TOKEN: ${{ github.token }}
+  REPO: ${{ github.repository }}
+
+jobs:
+  run-logs:
+    name: The logs and artifacts of run ${{ github.event.workflow_run.id }}
+    if: github.event_name == 'workflow_run' && github.repository == 'EvanZhang008/open-walnut'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          sparse-checkout: scripts/leak-scan
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+      - name: Download the run's logs and its artifacts under 1 GB
+        env:
+          RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          set -euo pipefail
+          d="$RUNNER_TEMP/run"; mkdir -p "$d/artifacts"
+          curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -o "$d/logs.zip" "https://api.github.com/repos/$REPO/actions/runs/$RUN_ID/logs"
+          gh api --paginate "repos/$REPO/actions/runs/$RUN_ID/artifacts?per_page=100" \
+            --jq '.artifacts[] | select(.expired | not) | select(.size_in_bytes < 1073741824) | "\(.id) \(.name)"' |
+          while read -r id name; do
+            curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -o "$d/artifacts/$id.zip" "https://api.github.com/repos/$REPO/actions/artifacts/$id/zip"
+          done
+          ls -la "$d" "$d/artifacts"
+      - name: Scan them (a count only)
+        env:
+          LEAK_SCAN_RULES: ${{ secrets.LEAK_SCAN_RULES }}
+        # an artifact .dmg cannot be mounted on Linux; the release-assets job mounts the released one
+        run: bun scripts/leak-scan/leak-scan.mjs --rules-env LEAK_SCAN_RULES --count-only --skip-ok "$RUNNER_TEMP/run"
+
+  release-assets:
+    name: The assets of releases that changed in the last day
+    if: >-
+      github.repository == 'EvanZhang008/open-walnut' && (
+        github.event_name == 'release' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' ||
+        (github.event_name == 'workflow_run' && contains(fromJSON('["Release", "Release archives", "Mac app", "Components", "Speech runtime"]'), github.event.workflow_run.name)))
+    # macOS, so the scan can mount the Mac app's .dmg
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          sparse-checkout: scripts/leak-scan
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+      - name: Download them, with their text
+        run: |
+          set -euo pipefail
+          d="$RUNNER_TEMP/release"; mkdir -p "$d"
+          since=$(date -u -v-26H +%Y-%m-%dT%H:%M:%SZ)
+          gh api "repos/$REPO/releases?per_page=40" > "$RUNNER_TEMP/releases.json"
+          jq -r --arg since "$since" '.[] | select(.draft | not)
+            | select(.published_at >= $since or ([.assets[].updated_at] | any(. >= $since))) | .tag_name' "$RUNNER_TEMP/releases.json" > "$RUNNER_TEMP/tags.txt"
+          echo "releases changed since $since:"; cat "$RUNNER_TEMP/tags.txt"
+          while read -r tag; do
+            mkdir -p "$d/$tag"
+            jq --arg t "$tag" '.[] | select(.tag_name == $t) | {name, body}' "$RUNNER_TEMP/releases.json" > "$d/$tag/release-text.json"
+            if [ "$(jq --arg t "$tag" '[.[] | select(.tag_name == $t) | .assets[]] | length' "$RUNNER_TEMP/releases.json")" -gt 0 ]; then
+              gh release download "$tag" -R "$REPO" -D "$d/$tag"
+            fi
+          done < "$RUNNER_TEMP/tags.txt"
+          du -sh "$d"
+      - name: Scan them
+        env:
+          LEAK_SCAN_RULES: ${{ secrets.LEAK_SCAN_RULES }}
+        run: |
+          if [ -z "$(ls -A "$RUNNER_TEMP/release")" ]; then echo "No release changed in the last day."; exit 0; fi
+          bun scripts/leak-scan/leak-scan.mjs --rules-env LEAK_SCAN_RULES --redact "$RUNNER_TEMP/release"
+
+  daily:
+    name: npm packages, the site, the source tree, issue and PR text
+    if: (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && github.repository == 'EvanZhang008/open-walnut'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+      - name: The rules are set
+        env:
+          LEAK_SCAN_RULES: ${{ secrets.LEAK_SCAN_RULES }}
+        run: test -n "$LEAK_SCAN_RULES" || { echo "::error::The LEAK_SCAN_RULES secret is not set (scripts/leak-scan/README.md)"; exit 1; }
+      - name: The source tree
+        if: ${{ !cancelled() }}
+        env:
+          LEAK_SCAN_RULES: ${{ secrets.LEAK_SCAN_RULES }}
+        run: bun scripts/leak-scan/leak-scan.mjs --rules-env LEAK_SCAN_RULES --redact --min-files 1000 --exclude .git .
+      - name: Download the npm packages at each dist-tag (open-walnut and its own @open-walnut/ platform packages)
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          d="$RUNNER_TEMP/npm"; mkdir -p "$d"
+          npm view open-walnut dist-tags --json > "$RUNNER_TEMP/tags.json"
+          for v in $(jq -r 'to_entries[] | select(.key != "reserved") | .value' "$RUNNER_TEMP/tags.json" | sort -u); do
+            npm pack "open-walnut@$v" --pack-destination "$d" --silent >/dev/null
+            npm view "open-walnut@$v" optionalDependencies --json > "$RUNNER_TEMP/deps.json" || echo '{}' > "$RUNNER_TEMP/deps.json"
+            for dep in $(jq -r 'to_entries[]? | select(.key | startswith("@open-walnut/")) | "\(.key)@\(.value)"' "$RUNNER_TEMP/deps.json"); do
+              npm pack "$dep" --pack-destination "$d" --silent >/dev/null
+            done
+          done
+          ls -la "$d"
+          test "$(ls "$d"/*.tgz | wc -l)" -ge 2
+      - name: Scan the npm packages
+        if: ${{ !cancelled() }}
+        env:
+          LEAK_SCAN_RULES: ${{ secrets.LEAK_SCAN_RULES }}
+        run: bun scripts/leak-scan/leak-scan.mjs --rules-env LEAK_SCAN_RULES --redact --min-files 2 "$RUNNER_TEMP/npm"
+      - name: Download the live site
+        if: ${{ !cancelled() }}
+        run: |
+          d="$RUNNER_TEMP/site"; mkdir -p "$d"
+          # recursive wget exits 8 on any 404 link; the page itself must have come down
+          wget -q -r -l 3 -p -e robots=off -P "$d" https://openwalnut.dev/ || test -s "$d/openwalnut.dev/index.html"
+      - name: Scan the site
+        if: ${{ !cancelled() }}
+        env:
+          LEAK_SCAN_RULES: ${{ secrets.LEAK_SCAN_RULES }}
+        run: bun scripts/leak-scan/leak-scan.mjs --rules-env LEAK_SCAN_RULES --redact --min-files 2 "$RUNNER_TEMP/site"
+      - name: Download issue and pull request text of the last three days
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          d="$RUNNER_TEMP/talk"; mkdir -p "$d"
+          since=$(date -u -d '3 days ago' +%Y-%m-%dT%H:%M:%SZ)
+          gh api --paginate "repos/$REPO/issues?state=all&since=$since&per_page=100" > "$d/issues.json"
+          gh api --paginate "repos/$REPO/issues/comments?since=$since&per_page=100" > "$d/issue-comments.json"
+          gh api --paginate "repos/$REPO/pulls/comments?since=$since&per_page=100" > "$d/review-comments.json"
+      - name: Scan the issue and pull request text (a count only)
+        if: ${{ !cancelled() }}
+        env:
+          LEAK_SCAN_RULES: ${{ secrets.LEAK_SCAN_RULES }}
+        run: bun scripts/leak-scan/leak-scan.mjs --rules-env LEAK_SCAN_RULES --count-only "$RUNNER_TEMP/talk"
