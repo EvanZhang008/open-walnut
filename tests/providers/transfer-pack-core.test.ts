@@ -24,13 +24,17 @@ fs.writeFileSync(gitconfig, '[user]\n\tname = Packer\n\temail = packer@example.c
 const env = { PATH: process.env.PATH ?? '/usr/bin:/bin', HOME: tmp, TMPDIR: tmp, GIT_CONFIG_GLOBAL: gitconfig, GIT_CONFIG_NOSYSTEM: '1', LANG: 'C' }
 const gitEnv = gitChildEnv(env)
 
-const packer = createTransferPack({
+const packerDeps = {
   fs, path, crypto, env, home: tmp,
   spawn: ((cmd: string, args: string[], o: Record<string, unknown>) => {
-    if (!String(o.cwd).startsWith(tmp)) throw new Error('spawn outside the temp dir: ' + String(o.cwd))
+    // The one read outside it: the identity git uses outside any repository (HOME and the
+    // global config are the temp ones above).
+    const hostIdentity = o.cwd === '/' && cmd === 'git' && args[0] === 'config' && args[1] === '--get' && /^user\.(name|email)$/.test(args[2] ?? '')
+    if (!String(o.cwd).startsWith(tmp) && !hostIdentity) throw new Error('spawn outside the temp dir: ' + String(o.cwd))
     return spawn(cmd, args, o)
   }) as unknown as TransferPackDeps['spawn'],
-})
+}
+const packer = createTransferPack(packerDeps)
 
 let n = 0
 function dir(name: string): string {
@@ -95,6 +99,25 @@ describe('transfer.pack: git repos', () => {
     })
     expect(JSON.parse(fs.readFileSync(path.join(out, 'meta.json'), 'utf8'))).toEqual(r.meta)
     expect(r.files[0].sha256).toBe(sha(path.join(out, 'meta.json')))
+    // This repo commits as the machine does: no identity of its own travels.
+    expect(r.meta.identity).toBeUndefined()
+  })
+
+  it('carries the identity the repository itself sets, its own config or an includeIf for its directory', async () => {
+    const { root, work } = pushedRepo('identity')
+    git(work, ['config', 'user.email', 'own@example.com'])
+    const r = await packer.pack({ cwd: work, outDir: path.join(root, 'out') })
+    // Only what it sets for itself: the target keeps its own name.
+    expect(r.meta.identity).toEqual({ email: 'own@example.com' })
+
+    const inc = pushedRepo('included')
+    const extra = path.join(inc.root, 'personal.gitconfig')
+    fs.writeFileSync(extra, '[user]\n\tname = Included\n\temail = included@example.com\n')
+    const scoped = path.join(inc.root, 'scoped.gitconfig')
+    fs.writeFileSync(scoped, fs.readFileSync(gitconfig, 'utf8') + `[includeIf "gitdir:${fs.realpathSync(inc.work)}/"]\n\tpath = ${extra}\n`)
+    const viaInclude = createTransferPack({ ...packerDeps, env: { ...env, GIT_CONFIG_GLOBAL: scoped } })
+    const r2 = await viaInclude.pack({ cwd: inc.work, outDir: path.join(inc.root, 'out') })
+    expect(r2.meta.identity).toEqual({ name: 'Included', email: 'included@example.com' })
   })
 
   it('a dirty repo (staged, unstaged, deleted, untracked, binary) rebuilds exactly on a fresh clone', async () => {

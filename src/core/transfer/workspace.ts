@@ -146,6 +146,22 @@ export function chooseTargetCwd(meta: PackMeta | null, sourceCwd: string, profil
   return { cwd: rel && knownPath ? `${repoRoot}/${rel}` : repoRoot, repoRoot, known: !!knownPath, key };
 }
 
+/** One shell word: single-quoted unless it is plain. */
+function shWord(v: string): string {
+  return /^[A-Za-z0-9@._+-]+$/.test(v) ? v : `'${v.replace(/'/g, `'\\''`)}'`;
+}
+
+/** The `git config` line that gives a new clone the source repository's commit identity. */
+function identityCommand(identity: PackMeta['identity']): { who: string; command: string } | null {
+  const name = identity?.name?.trim();
+  const email = identity?.email?.trim();
+  if (!name && !email) return null;
+  const parts: string[] = [];
+  if (name) parts.push(`git config user.name ${shWord(name)}`);
+  if (email) parts.push(`git config user.email ${shWord(email)}`);
+  return { who: [name, email && `<${email}>`].filter(Boolean).join(' '), command: parts.join(' && ') };
+}
+
 /** Steps for the new session to set the workspace up from the pack. */
 export function workspaceInstructions(moved: MovedWorkspace, target: { repoRoot: string; known: boolean }): string {
   const m = moved.meta;
@@ -159,6 +175,12 @@ export function workspaceInstructions(moved: MovedWorkspace, target: { repoRoot:
       lines.push(`This host already has it at ${target.repoRoot}. Keep any local changes there: fetch, then check out the branch above (create it at the commit if needed).`);
     } else {
       lines.push(`Set it up at ${target.repoRoot}${remote ? `: clone ${remote.url} into it (it exists and is empty: \`git clone ${remote.url} .\`), then check out ${m.branch ?? m.head}` : ' (`git init` there first)'}.`);
+    }
+    const id = identityCommand(m.identity);
+    if (id) {
+      lines.push(target.known
+        ? `The old host's repository commits as ${id.who}, an identity of its own. If this checkout commits as the machine does (\`git config user.email\` here prints the same as \`git -C / config user.email\`), set it the same way: \`${id.command}\`.`
+        : `A clone copies no git config, so give it the identity the old host's repository sets for itself (${id.who}): \`${id.command}\`.`);
     }
     if (has('repo.bundle')) lines.push(`The commits that are not on the remote are in repo.bundle${m.bundle?.base ? ` (based on ${m.bundle.base})` : ' (a full bundle)'}: \`git fetch <bundle> ${m.branch ?? 'HEAD'}\` and move the branch to it.`);
     if (has('changes.patch')) lines.push('Then apply the uncommitted changes, leaving them uncommitted and unstaged as they were: `git apply changes.patch` (use --3way if it does not apply cleanly).');

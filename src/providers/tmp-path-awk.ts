@@ -10,22 +10,29 @@
  * WALNUT_TASK_DIR, trailing slashes stripped) before calling volatile().
  */
 export const TMP_PATH_AWK = String.raw`
-function jstr(s, key,   i, c, out, n) {
+# The string field key of the JSON s, unescaped, in linear time: a per-character
+# loop is quadratic on some awks, and a payload can carry a long command. ""
+# when it is missing or its JSON form is over 100,000 characters.
+function jstr(s, key,   raw, parts, n, i, p, c, out) {
   if (!match(s, "\"" key "\"[ \t]*:[ \t]*\"")) return ""
-  s = substr(s, RSTART + RLENGTH); out = ""; n = length(s)
-  for (i = 1; i <= n; i++) {
-    c = substr(s, i, 1)
-    if (c == "\\") {
-      i++; c = substr(s, i, 1)
-      if (c == "n") c = "\n"
-      else if (c == "t" || c == "r") c = " "
-      else if (c == "u") { i += 4; c = " " }
-      out = out c; continue
-    }
-    if (c == "\"") break
-    out = out c
+  s = substr(s, RSTART + RLENGTH)
+  match(s, /^([^"\\]|\\.)*/)
+  if (RLENGTH > 100000) return ""
+  raw = substr(s, 1, RLENGTH)
+  # Escaped backslashes first, so every backslash left starts an escape.
+  gsub(/\\\\/, "\001", raw)
+  n = split(raw, parts, /\\/); out = parts[1]
+  for (i = 2; i <= n; i++) {
+    p = parts[i]; c = substr(p, 1, 1); p = substr(p, 2)
+    if (c == "n") c = "\n"
+    else if (c == "t" || c == "r") c = " "
+    else if (c == "u") { c = " "; p = substr(p, 5) }
+    out = out c p
   }
-  return out
+  # Not split(): one awk also cuts at every newline when the separator is one character.
+  p = ""
+  while ((i = index(out, "\001")) > 0) { p = p substr(out, 1, i - 1) "\\"; out = substr(out, i + 1) }
+  return p out
 }
 function strip(p) { while (length(p) > 1 && substr(p, length(p)) == "/") p = substr(p, 1, length(p) - 1); return p }
 function norm(p,   parts, n, i, out, k, stack) {

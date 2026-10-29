@@ -27,6 +27,7 @@ import { createMockDaemon, type MockDaemon } from '../helpers/mock-daemon.js'
 import { setSelfApiRoot } from '../../src/lib/self-api-root.js'
 import { GIT_TMP_GUARD_COMMAND } from '../../src/providers/git-tmp-guard-hook.js'
 import { TMP_WRITE_NOTE_COMMAND } from '../../src/providers/tmp-write-note-hook.js'
+import { CLONE_IDENTITY_COMMAND } from '../../src/providers/clone-identity-hook.js'
 
 const MOCK_CLI = path.resolve(import.meta.dirname, 'mock-claude.mjs')
 const tmpBase = WALNUT_HOME
@@ -71,23 +72,15 @@ const COMPACT_HOOK = {
   }],
 }
 
-// The /tmp git guard rides the same settings arg (0b1a6017e, git-tmp-guard-hook.ts).
-const GIT_GUARD_HOOK = {
-  PreToolUse: [{
-    matcher: 'Bash',
-    hooks: [{ type: 'command', command: GIT_TMP_GUARD_COMMAND, timeout: 10 }],
-  }],
-}
+// The /tmp git guard rides the same settings arg (0b1a6017e, git-tmp-guard-hook.ts), then
+// the note after a Write of a draft or plan into /tmp (tmp-write-note-hook.ts), then the clone
+// identity hook before and after every Bash command (clone-identity-hook.ts).
+const GUARD = { matcher: 'Bash', hooks: [{ type: 'command', command: GIT_TMP_GUARD_COMMAND, timeout: 10 }] }
+const WRITE_NOTE = { matcher: 'Write', hooks: [{ type: 'command', command: TMP_WRITE_NOTE_COMMAND, timeout: 10 }] }
+const CLONE_IDENTITY = { matcher: 'Bash', hooks: [{ type: 'command', command: CLONE_IDENTITY_COMMAND, timeout: 10 }] }
+const TOOL_HOOKS = { PreToolUse: [GUARD, CLONE_IDENTITY], PostToolUse: [WRITE_NOTE, CLONE_IDENTITY] }
 
-// And the note after a Write of a draft or plan into /tmp (tmp-write-note-hook.ts).
-const WRITE_NOTE_HOOK = {
-  PostToolUse: [{
-    matcher: 'Write',
-    hooks: [{ type: 'command', command: TMP_WRITE_NOTE_COMMAND, timeout: 10 }],
-  }],
-}
-
-const SESSION_HOOKS = { ...COMPACT_HOOK, ...GIT_GUARD_HOOK, ...WRITE_NOTE_HOOK }
+const SESSION_HOOKS = { ...COMPACT_HOOK, ...TOOL_HOOKS }
 
 beforeAll(async () => { daemon = await createMockDaemon() })
 afterAll(async () => { await daemon.stop() })
@@ -131,7 +124,7 @@ describe('local session spawn → launching server URL', () => {
     process.env.WALNUT_COMPACT_OPEN_ITEMS = '0'
     try {
       const args = await spawnArgs('t-hook-off')
-      expect(settingsOf(args)).toEqual({ hooks: { ...GIT_GUARD_HOOK, ...WRITE_NOTE_HOOK } })
+      expect(settingsOf(args)).toEqual({ hooks: TOOL_HOOKS })
     } finally {
       delete process.env.WALNUT_COMPACT_OPEN_ITEMS
     }
@@ -141,6 +134,7 @@ describe('local session spawn → launching server URL', () => {
     process.env.WALNUT_COMPACT_OPEN_ITEMS = '0'
     process.env.WALNUT_TMP_GIT_GUARD = '0'
     process.env.WALNUT_TMP_WRITE_NOTE = '0'
+    process.env.WALNUT_CLONE_IDENTITY = '0'
     try {
       const args = await spawnArgs('t-hooks-off')
       expect(args).not.toContain('--settings')
@@ -148,6 +142,7 @@ describe('local session spawn → launching server URL', () => {
       delete process.env.WALNUT_COMPACT_OPEN_ITEMS
       delete process.env.WALNUT_TMP_GIT_GUARD
       delete process.env.WALNUT_TMP_WRITE_NOTE
+      delete process.env.WALNUT_CLONE_IDENTITY
     }
   })
 })

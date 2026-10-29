@@ -62,6 +62,9 @@ export interface PackMeta {
   noCommits?: boolean
   remotes?: Array<{ name: string; url: string }>
   upstream?: string | null
+  /** The commit identity this repository sets for itself (not the machine's), so the target's
+   *  fresh clone, which copies no config, commits under the same one. */
+  identity?: { name?: string; email?: string }
   headOnRemote?: boolean
   dirty?: boolean
   untracked?: PackUntracked
@@ -289,6 +292,16 @@ export function createTransferPack(deps: TransferPackDeps) {
       untracked: { count: 0, bytes: 0, skipped: [] }, bundle: null, createdAt: '',
     }
     if (!head) meta.noCommits = true
+    // Only an identity the repository itself sets (its own config, or an includeIf
+    // for its directory): the identity git uses outside any repository belongs to
+    // this machine, and the target machine has its own.
+    var idName = text(await git(root, ['config', '--get', 'user.name']))
+    var idEmail = text(await git(root, ['config', '--get', 'user.email']))
+    var hostName = text(await git('/', ['config', '--get', 'user.name']))
+    var hostEmail = text(await git('/', ['config', '--get', 'user.email']))
+    // Field by field: a repository that sets only its email keeps the target's own name.
+    if (idName && idName !== hostName) meta.identity = { name: idName }
+    if (idEmail && idEmail !== hostEmail) meta.identity = Object.assign(meta.identity || {}, { email: idEmail })
 
     if (head) {
       var patchPath = deps.path.join(outDir, 'changes.patch')

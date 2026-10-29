@@ -52,6 +52,7 @@ afterEach(() => {
   if (savedEnv.compact === undefined) delete process.env.WALNUT_COMPACT_OPEN_ITEMS; else process.env.WALNUT_COMPACT_OPEN_ITEMS = savedEnv.compact
   delete process.env.WALNUT_TMP_GIT_GUARD
   delete process.env.WALNUT_TMP_WRITE_NOTE
+  delete process.env.WALNUT_CLONE_IDENTITY
   fs.rmSync(dir, { recursive: true, force: true })
 })
 
@@ -61,7 +62,7 @@ interface Case {
   mode?: string
   model?: string
   effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max'
-  env: { WALNUT_CLAUDE_DEBUG?: string; WALNUT_COMPACT_OPEN_ITEMS?: string; WALNUT_TMP_GIT_GUARD?: string; WALNUT_TMP_WRITE_NOTE?: string }
+  env: { WALNUT_CLAUDE_DEBUG?: string; WALNUT_COMPACT_OPEN_ITEMS?: string; WALNUT_TMP_GIT_GUARD?: string; WALNUT_TMP_WRITE_NOTE?: string; WALNUT_CLONE_IDENTITY?: string }
   streamPartial?: boolean
   permissionPrompt?: boolean
   bypassAllowed?: boolean
@@ -73,7 +74,7 @@ const CASES: Case[] = [
   { name: 'defaults: Auto model, the host default mode, debug and the compact hook on', sid: '11111111-2222-4333-8444-555555555551', env: {} },
   { name: 'plan, opus, low effort', sid: '11111111-2222-4333-8444-555555555552', mode: 'plan', model: 'opus', effort: 'low', env: {} },
   { name: 'haiku with an effort', sid: '11111111-2222-4333-8444-555555555553', model: 'haiku', effort: 'high', env: {} },
-  { name: 'debug off, compact hook, /tmp git guard and /tmp write note off (no --settings at all)', sid: '11111111-2222-4333-8444-555555555554', model: 'sonnet-1m', env: { WALNUT_CLAUDE_DEBUG: '0', WALNUT_COMPACT_OPEN_ITEMS: '0', WALNUT_TMP_GIT_GUARD: '0', WALNUT_TMP_WRITE_NOTE: '0' } },
+  { name: 'debug off, compact hook, /tmp git guard, /tmp write note and clone identity off (no --settings at all)', sid: '11111111-2222-4333-8444-555555555554', model: 'sonnet-1m', env: { WALNUT_CLAUDE_DEBUG: '0', WALNUT_COMPACT_OPEN_ITEMS: '0', WALNUT_TMP_GIT_GUARD: '0', WALNUT_TMP_WRITE_NOTE: '0', WALNUT_CLONE_IDENTITY: '0' } },
   { name: 'the /tmp write note alone (compact hook and git guard off)', sid: '11111111-2222-4333-8444-55555555555b', env: { WALNUT_COMPACT_OPEN_ITEMS: '0', WALNUT_TMP_GIT_GUARD: '0' } },
   { name: 'the /tmp git guard alone (compact hook off)', sid: '11111111-2222-4333-8444-55555555555a', env: { WALNUT_COMPACT_OPEN_ITEMS: '0' } },
   { name: 'no partial messages, no permission prompt tool', sid: '11111111-2222-4333-8444-555555555555', env: {}, streamPartial: false, permissionPrompt: false },
@@ -101,6 +102,7 @@ describe('a filled template equals what claude-code-session.ts builds', () => {
       if (!('WALNUT_COMPACT_OPEN_ITEMS' in c.env)) delete process.env.WALNUT_COMPACT_OPEN_ITEMS
       if (!('WALNUT_TMP_GIT_GUARD' in c.env)) delete process.env.WALNUT_TMP_GIT_GUARD
       if (!('WALNUT_TMP_WRITE_NOTE' in c.env)) delete process.env.WALNUT_TMP_WRITE_NOTE
+      if (!('WALNUT_CLONE_IDENTITY' in c.env)) delete process.env.WALNUT_CLONE_IDENTITY
       const hs = createHostStart({ fs, path, dir, keyOf: () => 'k', now: () => 1, log: () => {}, busy: () => 0 })
       hs.setTemplate(HOME, buildHostSpawnTemplate({
         home: HOME, hostKey: 'marina', cwd: dir, env: { ...process.env },
@@ -132,13 +134,17 @@ describe('a filled template equals what claude-code-session.ts builds', () => {
       expect(payload.mode).toBe(filled.plan.mode)
 
       const settingsAt = built.indexOf('--settings')
-      if (c.env.WALNUT_COMPACT_OPEN_ITEMS === '0' && c.env.WALNUT_TMP_GIT_GUARD === '0' && c.env.WALNUT_TMP_WRITE_NOTE === '0') {
+      if (c.env.WALNUT_COMPACT_OPEN_ITEMS === '0' && c.env.WALNUT_TMP_GIT_GUARD === '0' && c.env.WALNUT_TMP_WRITE_NOTE === '0' && c.env.WALNUT_CLONE_IDENTITY === '0') {
         expect(settingsAt).toBe(-1)
       } else {
         const settings = JSON.parse(built[settingsAt + 1]) as { env?: unknown; hooks?: { SessionStart?: Array<{ matcher: string }>; PreToolUse?: Array<{ matcher: string }>; PostToolUse?: Array<{ matcher: string }> } }
         expect(settings.hooks?.SessionStart?.[0]?.matcher).toBe(c.env.WALNUT_COMPACT_OPEN_ITEMS === '0' ? undefined : 'compact')
-        expect(settings.hooks?.PreToolUse?.[0]?.matcher).toBe(c.env.WALNUT_TMP_GIT_GUARD === '0' ? undefined : 'Bash')
-        expect(settings.hooks?.PostToolUse?.[0]?.matcher).toBe(c.env.WALNUT_TMP_WRITE_NOTE === '0' ? undefined : 'Write')
+        expect(settings.hooks?.PreToolUse?.map((g) => g.matcher)).toEqual([
+          ...(c.env.WALNUT_TMP_GIT_GUARD === '0' ? [] : ['Bash']), ...(c.env.WALNUT_CLONE_IDENTITY === '0' ? [] : ['Bash']),
+        ])
+        expect(settings.hooks?.PostToolUse?.map((g) => g.matcher)).toEqual([
+          ...(c.env.WALNUT_TMP_WRITE_NOTE === '0' ? [] : ['Write']), ...(c.env.WALNUT_CLONE_IDENTITY === '0' ? [] : ['Bash']),
+        ])
         // A remote host's session never carries the Mac's API root.
         expect(settings.env).toBeUndefined()
       }
