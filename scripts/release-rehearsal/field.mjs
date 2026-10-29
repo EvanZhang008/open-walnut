@@ -342,17 +342,49 @@ async function expectWorkKept(w, work, version, n) {
   await w.waitForAnswer(work.sessionId, next.answer)
 }
 
-/** The old daemon is gone, the release's runs, and none of the old daemon's CLIs is left beside the new one's. */
-function expectDaemonReplaced(w, work) {
-  const now = daemonOf(w)
-  if (!now.pid || now.pid === work.daemon.pid) throw new Error(`the daemon is still pid ${work.daemon.pid} (${work.daemon.version}) after the update`)
-  if (alive(work.daemon.pid)) throw new Error(`the old daemon (pid ${work.daemon.pid}, ${work.daemon.version}) still runs beside ${now.version} (pid ${now.pid})`)
-  if (now.version === work.daemon.version) throw new Error(`the new daemon reports the old version ${work.daemon.version}`)
-  const clis = cliGroups(w)
-  const same = clis.join(',') === work.clis.join(',')
-  const stray = same ? [] : work.clis.filter((g) => !clis.includes(g) && groupAlive(g))
+/** The daemon version a release's file runs (`<file> __daemon --version`), or null. */
+function fileDaemonVersion(file, env) {
+  const r = spawnSync(file, ['__daemon', '--version'], { env, encoding: 'utf8', timeout: 60_000 })
+  const v = (r.stdout ?? '').trim().split('\n').pop()
+  return r.status === 0 && v ? v : null
+}
+
+/**
+ * The daemon after the update, judged from what the rehearsal read: `before` (the start
+ * point's daemon and CLI process groups), `now` (the same after the update), `expected`
+ * (the daemon version the release's file runs, null when unknown). A release whose daemon
+ * code changed replaces the old daemon, and none of its CLIs is left beside the new one's.
+ * A release that runs the very daemon the start point runs keeps it, CLIs included: the
+ * server reuses a daemon of the version it expects (local-daemon.ts), so a restart would
+ * only cost every session its process. 2026-10-28: the first compiled nightly updating to
+ * the next commit kept its daemon, and the check, written while every start point was the
+ * Node package and so had another daemon, read that as a failure.
+ */
+export function judgeDaemon({ before, now, expected, alive: isAlive = alive, groupAlive: isGroupAlive = groupAlive }) {
+  if (expected && expected === before.version) {
+    if (now.pid !== before.pid || !isAlive(before.pid)) throw new Error(`the release runs the same daemon (${expected}), yet pid ${before.pid} became ${now.pid ?? 'none'}: a daemon of the version the server expects is kept`)
+    if (now.version !== expected) throw new Error(`the kept daemon (pid ${now.pid}) reports ${now.version}, the release runs ${expected}`)
+    const gone = before.clis.filter((g) => !now.clis.includes(g))
+    if (gone.length) throw new Error(`the kept daemon lost the CLI process groups ${gone.join(', ')}`)
+    return `daemon ${expected} (pid ${now.pid}) kept with its CLI: the release runs the same daemon`
+  }
+  if (!now.pid || now.pid === before.pid) throw new Error(`the daemon is still pid ${before.pid} (${before.version}) after the update`)
+  if (isAlive(before.pid)) throw new Error(`the old daemon (pid ${before.pid}, ${before.version}) still runs beside ${now.version} (pid ${now.pid})`)
+  if (now.version === before.version) throw new Error(`the new daemon reports the old version ${before.version}`)
+  if (expected && now.version !== expected) throw new Error(`the new daemon reports ${now.version}, the release runs ${expected}`)
+  const same = now.clis.join(',') === before.clis.join(',')
+  const stray = same ? [] : before.clis.filter((g) => !now.clis.includes(g) && isGroupAlive(g))
   if (stray.length) throw new Error(`the old daemon's CLI process groups ${stray.join(', ')} still run beside the new one's`)
-  return `daemon ${work.daemon.version} (pid ${work.daemon.pid}) -> ${now.version} (pid ${now.pid}), ${same ? 'the same CLI process' : 'a new CLI process'}`
+  return `daemon ${before.version} (pid ${before.pid}) -> ${now.version} (pid ${now.pid}), ${same ? 'the same CLI process' : 'a new CLI process'}`
+}
+
+/** The daemon after the update of `work`'s install to the release whose file is `file`. */
+function expectDaemonUpdated(w, work, file) {
+  return judgeDaemon({
+    before: { ...work.daemon, clis: work.clis },
+    now: { ...daemonOf(w), clis: cliGroups(w) },
+    expected: fileDaemonVersion(file, w.env),
+  })
 }
 
 /**
@@ -371,7 +403,7 @@ async function updateInUse(w, from, field, registry, upstream) {
   expectStartupUpdate(w, from.version, field.release.version)
   const { file } = await expectServing(w, field.release.version)
   await expectWorkKept(w, done, field.release.version, 3)
-  const daemon = expectDaemonReplaced(w, done)
+  const daemon = expectDaemonUpdated(w, done, file)
   const title = `rehearsal task ${nonce()} (written by ${field.release.version})`
   const made = await w.api('POST', '/api/v1/tasks', { title })
   if (made.status !== 201 || !made.json?.task?.id) throw new Error(`POST /api/v1/tasks under ${field.release.version} answered ${made.status} ${made.text.slice(0, 300)}`)
@@ -636,7 +668,7 @@ async function archived({ from, field, work, walnuts, opts }) {
       registry.setDistTags(tags(field.release.version))
       await w.start({ timeoutMs: 900_000 })
       expectStartupUpdate(w, from.version, field.release.version)
-      const { root } = await expectServing(w, field.release.version, { archive: true })
+      const { root, file } = await expectServing(w, field.release.version, { archive: true })
       // What starts it: the archive's own entry, and a 0.6.x Mac app's `node <package>/dist/cli.js`.
       const node = path.join(archiveRuntime(w), 'bin/node')
       for (const entry of ['bin/open-walnut.js', 'dist/cli.js']) {
@@ -644,7 +676,7 @@ async function archived({ from, field, work, walnuts, opts }) {
         if (!reports((r.stdout ?? '').trim(), field.release.version)) throw new Error(`the archive's node ${entry} --version says ${(r.stdout ?? '').trim()} ${(r.stderr ?? '').trim().slice(0, 300)}`)
       }
       await expectWorkKept(w, done, field.release.version, 3)
-      const daemon = expectDaemonReplaced(w, done)
+      const daemon = expectDaemonUpdated(w, done, file)
       let after = ''
       if (field.next) {
         // Keep working afterwards: the release's `walnut update`, through the archive's own npm.

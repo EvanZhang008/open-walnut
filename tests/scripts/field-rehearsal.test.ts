@@ -16,7 +16,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
 import { fieldDistBin, fieldVersions, packVersion, readFieldJson, writeFieldJson } from '../../scripts/release-rehearsal/field-packs.mjs'
-import { nodeForm, pruneToLogs, releaseArchive, startPointsOf } from '../../scripts/release-rehearsal/field.mjs'
+import { judgeDaemon, nodeForm, pruneToLogs, releaseArchive, startPointsOf } from '../../scripts/release-rehearsal/field.mjs'
 import { buildPackument, startRegistry } from '../../scripts/release-rehearsal/registry.mjs'
 import { compareVersions } from '../../scripts/release-rehearsal/version-order.mjs'
 import { TARGETS, builtName } from '../../scripts/release-files.mjs'
@@ -66,6 +66,33 @@ describe('startPointsOf', () => {
   it('tells the forms apart by the platform packages a launcher names', () => {
     expect(nodeForm({ dependencies: { express: '5' } })).toBe(true)
     expect(nodeForm(launcher)).toBe(false)
+  })
+})
+
+describe('judgeDaemon: the daemon after an update in use', () => {
+  const OLD = 'walnut-daemon-aaaaaaaaaaaa'
+  const NEW = 'walnut-daemon-bbbbbbbbbbbb'
+  const before = { version: OLD, pid: 100, clis: [500] }
+  const alive = (pids: number[]) => (pid: number) => pids.includes(pid)
+
+  it('a release with new daemon code replaces the daemon, and the old one is gone', () => {
+    const now = { version: NEW, pid: 200, clis: [600] }
+    expect(judgeDaemon({ before, now, expected: NEW, alive: alive([200]), groupAlive: () => false })).toMatch(/-> walnut-daemon-bbbb.* \(pid 200\), a new CLI process/)
+    expect(() => judgeDaemon({ before, now: { ...now, pid: 100 }, expected: NEW, alive: alive([100]) })).toThrow(/still pid 100/)
+    expect(() => judgeDaemon({ before, now, expected: NEW, alive: alive([100, 200]) })).toThrow(/old daemon \(pid 100.*still runs/)
+    expect(() => judgeDaemon({ before, now, expected: 'walnut-daemon-cccccccccccc', alive: alive([200]) })).toThrow(/release runs walnut-daemon-cccc/)
+    expect(() => judgeDaemon({ before, now, expected: NEW, alive: alive([200]), groupAlive: (g) => g === 500 })).toThrow(/CLI process groups 500 still run/)
+  })
+
+  it('a release running the same daemon code keeps the daemon and its CLI', () => {
+    const now = { ...before }
+    expect(judgeDaemon({ before, now, expected: OLD, alive: alive([100]) })).toMatch(/kept with its CLI/)
+    expect(() => judgeDaemon({ before, now: { version: OLD, pid: 300, clis: [500] }, expected: OLD, alive: alive([300]) })).toThrow(/same daemon .*pid 100 became 300/)
+    expect(() => judgeDaemon({ before, now: { ...before, clis: [] }, expected: OLD, alive: alive([100]) })).toThrow(/lost the CLI process groups 500/)
+  })
+
+  it('with the release\'s daemon version unknown, it still requires a replacement', () => {
+    expect(() => judgeDaemon({ before, now: { ...before }, expected: null, alive: alive([100]) })).toThrow(/still pid 100/)
   })
 })
 
