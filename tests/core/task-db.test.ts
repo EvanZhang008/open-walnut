@@ -843,7 +843,10 @@ describe('task-db: backup-on-empty guard', () => {
     // the backup half (the half that matters for this regression test) by
     // invoking the same copyFileSync fallback writeStoreSqlite uses when
     // db.backup isn't available. Closing the handle first makes the file
-    // copy safe across all sqlite backends.
+    // copy safe across all sqlite backends. The rows are still in the WAL, and a
+    // close merges it only when it is the last connection, which on Linux it was
+    // not every time (CI runs 40843747762, 40861406390: 0 rows), so merge it first.
+    getDb()!.pragma('wal_checkpoint(TRUNCATE)');
     closeDb();
     fs.copyFileSync(TASK_DB_PATH, expectedBackup);
 
