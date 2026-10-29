@@ -1220,8 +1220,9 @@ function SessionMessageBubble({ message, assistantLabel = 'Claude Code', session
       },
       { divider: true },
       {
-        key: 'copy-id', label: 'Copy message ID', when: !!msgId, title: msgId,
-        onSelect: () => { void copyTextRobust(msgId!); },
+        // A part of a reply split at its question tags (`<id>~1`) copies the transcript's id.
+        key: 'copy-id', label: 'Copy message ID', when: !!msgId, title: msgId?.replace(/~\d+$/, ''),
+        onSelect: () => { void copyTextRobust(msgId!.replace(/~\d+$/, '')); },
       },
     ];
   };

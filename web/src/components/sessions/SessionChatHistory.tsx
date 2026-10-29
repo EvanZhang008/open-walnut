@@ -73,6 +73,7 @@ import { ThreadStackMenu } from './ThreadStackMenu';
 import { useThreadCardPlace } from '@/hooks/useThreadCardPlace';
 import { allPassageMarks, cardTurnsOf, hasWords } from '@/utils/thread-card';
 import { blockTagKeys, headsBySeq, keysBySeq, questionNumbers, tagKeyAtBlock, tagKeysOfBlocks, withTagAnchors } from '@/utils/question-tag';
+import { splitTaggedReplies } from '@/utils/tagged-reply-split';
 import { ThreadResolvedStrip } from './ThreadResolvedStrip';
 import { useThreadToast } from './ThreadPanelToast';
 import { useThreadLanding } from '@/hooks/useThreadLanding';
@@ -611,7 +612,20 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     }
   }, [openLightbox]);
 
-  const { messages, loading, phase2Pending, error, stale, loadingFrom, forkBoundaryIndex, olderHidden, olderWindowed, olderUnavailable, olderUnavailableWhy, olderPageSeq, loadFullHistory, gaps, gapStatus, fillHistoryGap } = useSessionHistory(sessionId, historyVersion);
+  const { messages: loadedMessages, loading, phase2Pending, error, stale, loadingFrom, forkBoundaryIndex: loadedForkBoundary, olderHidden, olderWindowed, olderUnavailable, olderUnavailableWhy, olderPageSeq, loadFullHistory, gaps, gapStatus, fillHistoryGap } = useSessionHistory(sessionId, historyVersion);
+  // Questions answered inside the running turn's reply are cut out of it and
+  // filed under their own rows (tagged-reply-split.ts). Only display and the
+  // thread tree read the split rows: the turn watermark, stream absorption,
+  // history evidence and optimistic dedup match the transcript's own rows
+  // (`loadedMessages`), so a streamed reply is absorbed by its whole persisted
+  // twin. The fork boundary is an index, so it follows its row.
+  const messages = useMemo(() => splitTaggedReplies(loadedMessages), [loadedMessages]);
+  const forkBoundaryIndex = useMemo(() => {
+    if (loadedForkBoundary == null || messages === loadedMessages) return loadedForkBoundary;
+    if (loadedForkBoundary >= loadedMessages.length) return messages.length;
+    const at = messages.indexOf(loadedMessages[loadedForkBoundary]);
+    return at >= 0 ? at : loadedForkBoundary;
+  }, [loadedForkBoundary, loadedMessages, messages]);
   // Where each gap inside the loaded rows sits: the index of the row after it.
   const gapAt = useMemo(() => {
     const at = new Map<number, HistoryGap>();
@@ -627,8 +641,8 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   const foregroundActive = useForegroundActive(sessionId);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  const messagesRef = useRef(messages);
-  messagesRef.current = messages;
+  const messagesRef = useRef(loadedMessages);
+  messagesRef.current = loadedMessages;
 
   // ── Turn watermark maintenance ──
   // First history load seeds the watermark at the full length (content
@@ -637,11 +651,11 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // than a new block being claimed by an old twin). Each turn start
   // (isStreaming false→true) advances it to the current length.
   useLayoutEffect(() => {
-    if (!watermarkInitialized.current && messages.length > 0) {
+    if (!watermarkInitialized.current && loadedMessages.length > 0) {
       watermarkInitialized.current = true;
-      turnWatermark.current = messages.length;
+      turnWatermark.current = loadedMessages.length;
     }
-  }, [messages]);
+  }, [loadedMessages]);
   // Front-insertion guard (lazy "Load N earlier" backfill): when older rows are
   // inserted BEFORE the current head, every index shifts by the growth — shift
   // the watermark too. Without this the content window suddenly spans thousands
@@ -651,12 +665,12 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // match and shifts nothing — too-big watermarks already degrade safely.
   const prevFirstMsgId = useRef<string | undefined>(undefined);
   useLayoutEffect(() => {
-    const first = messages[0]?.msgId;
+    const first = loadedMessages[0]?.msgId;
     const prev = prevFirstMsgId.current;
     if (prev && first !== prev) {
-      const k = messages.findIndex((m) => m.msgId === prev);
+      const k = loadedMessages.findIndex((m) => m.msgId === prev);
       if (k > 0) {
-        turnWatermark.current = Math.min(messages.length, turnWatermark.current + k);
+        turnWatermark.current = Math.min(loadedMessages.length, turnWatermark.current + k);
       }
       // The render window is an index too, but it is NOT shifted here: an
       // effect runs after the frame it should have corrected is already on
@@ -666,7 +680,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       // (computeRenderWindow), which covers all four cases.
     }
     prevFirstMsgId.current = first;
-  }, [messages]);
+  }, [loadedMessages]);
   // Turn-start prompt refetch state (see the effect below the isStreaming edge).
   const promptRefetchFired = useRef(false);
   const promptRefetchTimers = useRef<ReturnType<typeof setTimeout>[]>([]);
@@ -722,14 +736,14 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // the predicate: turn-prompt-refetch.ts.
   useEffect(() => {
     if (!shouldRefetchForTurnPrompt({
-      blocks, completedLen, messages,
+      blocks, completedLen, messages: loadedMessages,
       watermark: turnWatermark.current,
       optimisticCount: optimisticMessages?.length ?? 0,
       alreadyFiredThisTurn: promptRefetchFired.current,
     })) return;
     promptRefetchFired.current = true;
     log.info('session-history', 'turn prompt missing at first model output — refetching history', {
-      sessionId, messages: messages.length, blocks: blocks.length, completedLen,
+      sessionId, messages: loadedMessages.length, blocks: blocks.length, completedLen,
     });
     setHistoryVersion((v) => v + 1);
     // Bounded safety net: if the refetch still shows no prompt (remote stat
@@ -743,7 +757,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
         setHistoryVersion((v) => v + 1);
       }, delay));
     }
-  }, [blocks, completedLen, messages, optimisticMessages, sessionId, clearPromptRefetchRetries]);
+  }, [blocks, completedLen, loadedMessages, optimisticMessages, sessionId, clearPromptRefetchRetries]);
   useEffect(() => () => clearPromptRefetchRetries(), [clearPromptRefetchRetries]);
 
   // ── Non-destructive absorption (the single-timeline core) ──
@@ -752,7 +766,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // double-render that collapses when evidence lands; never a vanish.
   // Evidence walks the FULL history — memoized by messages ref so whale
   // sessions (5000+ msgs) don't re-walk on every streaming frame.
-  const historyEvidence = useMemo(() => buildHistoryEvidence(messages), [messages]);
+  const historyEvidence = useMemo(() => buildHistoryEvidence(loadedMessages), [loadedMessages]);
   // Server-transported orphan finished-agent ids (nested agents whose tool_use
   // row never reaches the canonical JSONL — inc-1786496042099). Store-backed:
   // the proving notification lines are hidden from chat, so a delta can grow
@@ -772,8 +786,8 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // vanish). If you ever write the watermark on an independent trigger, this
   // memo will keep serving a stale filter until some dep happens to change.
   const { hidden: liveHiddenBlocks, unmatched: unmatchedBlocks } = useMemo(
-    () => computeRenderFilter({ blocks, messages, watermark: turnWatermark.current, isStreaming, completedLen, historyEvidence, finishedAgentIds }),
-    [blocks, messages, isStreaming, completedLen, historyEvidence, finishedAgentIds],
+    () => computeRenderFilter({ blocks, messages: loadedMessages, watermark: turnWatermark.current, isStreaming, completedLen, historyEvidence, finishedAgentIds }),
+    [blocks, loadedMessages, isStreaming, completedLen, historyEvidence, finishedAgentIds],
   );
   // Freeze the hidden set while a selection lives in the container: absorption
   // hides a streaming block and mounts its persisted twin — brand-new DOM — so
@@ -2542,7 +2556,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // render after the watermark advances past the twin. Remember consumed
   // queueIds for the lifetime of this session view (cleared on session switch).
   const visibleOptimistic = allOptimistic.filter(m => !consumedQueueIds.current.has(m.queueId));
-  const deduped = dedupeOptimisticMessages(visibleOptimistic, messages, turnWatermark.current,
+  const deduped = dedupeOptimisticMessages(visibleOptimistic, loadedMessages, turnWatermark.current,
     { historyFromStart: olderHidden === 0 && !olderWindowed, gaps });
   if (deduped.length !== visibleOptimistic.length) {
     const keptIds = new Set(deduped.map(m => m.queueId));
@@ -4192,7 +4206,9 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     }
   }
   const cardLastReply = cardTurns[cardTurns.length - 1]?.replies[0];
-  const cardReplySuperseded = !!cardLive && !!cardLastReply && messages.indexOf(cardLastReply) >= turnWatermark.current;
+  // The watermark counts the transcript's own rows; a split part stands for the row it came from.
+  const cardReplySuperseded = !!cardLive && !!cardLastReply
+    && loadedMessages.findIndex((m) => m === cardLastReply || (!!m.msgId && m.msgId === cardLastReply.msgId?.split('~')[0])) >= turnWatermark.current;
   // Sent, not yet in the transcript: the question as typed, then the answer as it arrives.
   const cardOptimistic = cardKey
     ? deduped.filter((m) => m.role === 'user' && m.status !== 'failed' && optimisticThreadKey(m) === cardKey) : [];

@@ -1045,6 +1045,8 @@ export function parseSessionMessages(content: string, opts?: ParseSessionMessage
     }
   }
   const skipEnqueueIndices = new Set<number>();
+  /** Enqueue index to the user line it claimed as its twin (Pattern A). */
+  const twinOfEnqueue = new Map<number, number>();
   // ── Removed pass (runs first) ──
   // `remove` means a message left the CLI's queue, for one of two reasons (CLI
   // query.ts): it ran mid-turn, handed to the model as a `queued_command`
@@ -1114,6 +1116,28 @@ export function parseSessionMessages(content: string, opts?: ParseSessionMessage
     if (twin) {
       twin.claimed = true;
       skipEnqueueIndices.add(i);
+      twinOfEnqueue.set(i, twin.index);
+    }
+  }
+  // ── Resent enqueues ──
+  // The CLI's queue lives in its process. A line queued in a process that then ended
+  // (a stop, a crash) is never taken, and Walnut writes it again to the next process:
+  // two identical enqueues, then ONE user line, which the pass above gave to the
+  // FIRST, leaving the resend to render as a second copy (2026-10-29 acceptance run).
+  // Inside one process two identical lines queued before either runs are drained
+  // together (the joined line below) or run mid-turn (remove), never as one line, so
+  // a later identical enqueue sitting between an enqueue and its twin, with no dequeue
+  // before it, is the same message sent again: it shares that twin. A dequeue in
+  // between means the first was taken (its line may still be on its way, behind the
+  // prompt hooks), so a second identical send after it is the user's own and stays.
+  for (const [i, t] of twinOfEnqueue) {
+    const text = rawMessages[i].content?.trim();
+    for (let j = i + 1; j < t; j++) {
+      const e = rawMessages[j];
+      if (e.type !== 'queue-operation') continue;
+      if (e.operation === 'dequeue') break;
+      if (e.operation === 'enqueue' && e.content?.trim() === text
+        && !skipEnqueueIndices.has(j) && !ranMidTurn.has(j)) skipEnqueueIndices.add(j);
     }
   }
 

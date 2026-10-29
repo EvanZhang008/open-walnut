@@ -593,10 +593,68 @@ export function buildQueuedSession(): ThreadsFixtureSession & { ids: Record<stri
   };
 }
 
+export const MERGED_SESSION = 'pw-threads-merged-session';
+export const MERGED_TASK = 'pw-task-threads-merged';
+export const MERGED_READY = 'Sketch the release checklist.';
+export const MERGED_PASSAGES = {
+  Q1: 'Freeze the branch two days before the cut.',
+  Q2: 'Tag the build only after the smoke run passes.',
+} as const;
+export const MERGED_TITLES = { Q1: 'Freeze timing', Q2: 'Tag gate' } as const;
+export const MERGED_ANSWERS = {
+  ROOT: 'ROOT-DONE: the checklist is in place.',
+  Q1: 'Two days gives reviewers one full working day after the last merge.',
+  Q2: 'A tag before the smoke run would point at a build nobody checked.',
+} as const;
+
+/**
+ * The 2026-10-29 real-CLI acceptance run, neutral text: two questions sent while a
+ * turn ran a command reach the model mid-turn, and the turn's one final reply
+ * answers the turn and both questions, each under its `[Qn]` line. Before the
+ * split the whole reply was filed under question 2: question 1 read No answer and
+ * the main conversation lost its own reply.
+ */
+export function buildMergedSession(): ThreadsFixtureSession & { ids: Record<string, { u: string; a: string }>; sent: { Q1: string; Q2: string } } {
+  const P = 'd7e8f9';
+  const t = (k: number) => ({ u: fxUuid(P, k, 'u'), a: fxUuid(P, k, 'a') });
+  const ids = { R1: t(1), ROOT: t(2), Q1: t(3), Q2: t(4), DONE: t(5) };
+  const sent = { Q1: fxUuid(P, 8, 'u'), Q2: fxUuid(P, 9, 'u') };
+  const P1 = MERGED_PASSAGES.Q1;
+  const P2 = MERGED_PASSAGES.Q2;
+  const banner = (n: number) => `[Question Q${n}]\nThis message is question ${n} of this conversation. Begin your reply with the line "[Q${n}]" (nothing else on that line) so the reply is filed under question ${n}.\n[/Question Q${n}]`;
+  const rows: FixtureRow[] = [
+    { role: 'user', uuid: ids.R1.u, text: MERGED_READY },
+    { role: 'assistant', uuid: ids.R1.a, text: `${filler(401, 40)}\n\n${P1} ${filler(402, 30)}\n\n${P2} ${filler(403, 30)}` },
+    { role: 'user', uuid: ids.ROOT.u, text: 'Run the checklist script, then reply ROOT-DONE.' },
+    {
+      role: 'assistant', uuid: ids.ROOT.a, text: '', content: [
+        { type: 'tool_use', id: 'toolu_fx_merged_1', name: 'Bash', input: { command: 'sleep 30' } },
+      ],
+    },
+    { role: 'user', uuid: ids.Q1.u, text: `${banner(1)}\n\n> ${P1}\n\nWhy two days?`, queuedAs: sent.Q1 },
+    { role: 'user', uuid: ids.Q2.u, text: `${banner(2)}\n\n> ${P2}\n\nWhy wait for the smoke run?`, queuedAs: sent.Q2 },
+    { role: 'user', uuid: ids.DONE.u, text: '', content: [{ type: 'tool_result', tool_use_id: 'toolu_fx_merged_1', content: '' }] },
+    { role: 'assistant', uuid: ids.DONE.a, text: `${MERGED_ANSWERS.ROOT}\n\n[Q1]\n${MERGED_ANSWERS.Q1}\n\n[Q2]\n${MERGED_ANSWERS.Q2}` },
+  ];
+  const at = '2026-10-29T00:20:00.000Z';
+  return {
+    sessionId: MERGED_SESSION, taskId: MERGED_TASK, title: 'Threads merged fixture session',
+    rows, parked: [], pinnedMessages: [], ids, sent,
+    threadAnchors: [
+      { msgId: sent.Q1, parent: ids.R1.a, quote: { exact: P1 }, source: 'selection', at },
+      { msgId: sent.Q2, parent: ids.R1.a, quote: { exact: P2 }, source: 'selection', at },
+    ],
+    threadMeta: [
+      { headId: sent.Q1, status: 'open', title: MERGED_TITLES.Q1, titleSource: 'ai', titleState: 'done', question: 'Why two days?', seq: 1, updatedAt: at },
+      { headId: sent.Q2, status: 'open', title: MERGED_TITLES.Q2, titleSource: 'ai', titleState: 'done', question: 'Why wait for the smoke run?', seq: 2, updatedAt: at },
+    ],
+  };
+}
+
 export function allThreadsFixtures(nowMs: number): ThreadsFixtureSession[] {
   return [
     buildDenseSession(nowMs), buildAiSession(), buildFailedSession(nowMs), buildRewrittenSession(nowMs), buildReloadSession(),
-    buildMapSession(nowMs), buildPinsOnlySession(nowMs), buildTaggedSession(nowMs), buildQueuedSession(),
+    buildMapSession(nowMs), buildPinsOnlySession(nowMs), buildTaggedSession(nowMs), buildQueuedSession(), buildMergedSession(),
     buildReviewSession(nowMs),
   ];
 }
