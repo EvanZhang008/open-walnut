@@ -148,6 +148,9 @@ export function unescapeForWords(text) {
   return text.includes('\\') || text.includes('%') ? text.replace(ESCAPES, (m) => ' '.repeat(m.length)) : text
 }
 
+/** What printableRuns() joins its runs with: the unit separator, never inside a run. */
+export const RUN_BREAK = '\x1f'
+
 /** camelCase and letter-digit parts of one word: `fooBarClient2` -> foo, Bar, Client, 2. */
 const PARTS = /[A-Z]{2,}(?=[A-Z][a-z]|[0-9]|$)|[A-Z]?[a-z]+|[A-Z]+|[0-9]+/g
 
@@ -219,6 +222,9 @@ export function scanText(rules, text, base = 0) {
         let key = info.first
         for (let n = 2; n <= md.max && k + 2 * (n - 1) < toks.length; n++) {
           const j = k + 2 * (n - 1)
+          // a phrase ends at a run break: the words before and after it were never one string
+          const gapFrom = toks[j - 2] + toks[j - 1]
+          if (plain.slice(gapFrom, toks[j]).includes(RUN_BREAK)) break
           key = `${key} ${norm(plain.substr(toks[j], toks[j + 1]))}`
           const label = md.byLen.get(n)?.get(hashNum(key, rules.seed))
           if (label) found.push([label, start, toks[j] + toks[j + 1]])
@@ -241,7 +247,10 @@ export function scanText(rules, text, base = 0) {
  * `min`+ bytes are kept, as `strings -n <min>` keeps them; the default of 8 drops the short
  * runs compressed data is full of, where a 4-letter word turns up by chance. A shorter run
  * (4+) is kept only when NUL bytes stand on both sides of it: a C string, which random
- * bytes rarely make. Returns the text and a map back to byte offsets.
+ * bytes rarely make. Returns the text and a map back to byte offsets. The runs are joined
+ * by RUN_BREAK, a byte no run holds, so a phrase is never read across two runs: in
+ * compressed data one run ending in a letter and the next starting with a word made a
+ * two-word term out of bytes no string ever held.
  */
 export function printableRuns(buf, min = 8) {
   const parts = []
@@ -268,7 +277,7 @@ export function printableRuns(buf, min = 8) {
     i++
   }
   if (start >= 0) close(buf.length)
-  return { text: parts.join('\n'), parts, starts }
+  return { text: parts.join(RUN_BREAK), parts, starts }
 }
 
 /** Maps an offset in printableRuns().text back to a byte offset of the file. */

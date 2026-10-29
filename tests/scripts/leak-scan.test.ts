@@ -126,6 +126,18 @@ describe('leak-scan rules', () => {
     expect(scanText(rules(), runs.text).map((h) => h.label)).toEqual(['tool', 'tool'])
   })
 
+  it('never reads a phrase across two printable runs of a binary', () => {
+    // A nightly's compressed bytes held a run ending in one word of a two-word term and the
+    // next run starting with the other: a hit in all six files from bytes no string held.
+    const split = Buffer.concat([Buffer.from([0]), Buffer.from('xxx Quanta'), Buffer.from([0x01, 0x9f]), Buffer.from('Fizzle yyy'), Buffer.from([0])])
+    const runs = printableRuns(split)
+    expect(runs.parts).toEqual(['xxx Quanta', 'Fizzle yyy'])
+    expect(scanText(rules(), runs.text)).toEqual([])
+    // the same phrase inside one run is still a hit, and a single word still is across runs
+    const whole = printableRuns(Buffer.concat([Buffer.from([0]), Buffer.from('a Quanta-Fizzle b'), Buffer.from([0x01]), Buffer.from('zorblax!'), Buffer.from([0])]))
+    expect(scanText(rules(), whole.text).map((h) => h.label)).toEqual(['tool', 'tool'])
+  })
+
   it('refuses a term rule with a malformed hash', () => {
     const json = compileRules(parseSource(SOURCE))
     expect(() => loadRules({ ...json, terms: [{ label: 'x', h: 'zz', n: 1 }] })).toThrow(/malformed term rule/)
