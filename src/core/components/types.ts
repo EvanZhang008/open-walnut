@@ -85,14 +85,16 @@ export class ComponentError extends Error {
 }
 
 /**
- * A failure that trying again cannot fix: the release does not have the asset
- * (an HTTP 4xx other than 408 and 429), it is not the archive this Walnut pins
+ * A failure that trying again cannot fix: the server refuses the asset (an HTTP
+ * 4xx other than 404, 408 and 429), it is not the archive this Walnut pins
  * (checksum, size), or there is no build for this system. Only a person retries
- * those; an automatic trigger never does.
+ * those; an automatic trigger never does. A 404 is retried after the backoff: a
+ * release whose assets are not published yet answers 404 and has them minutes
+ * later (2026-10-28: "Search by meaning" stayed off until a manual Try again).
  */
 export function isPermanentFailure(code: string | undefined, status?: number): boolean {
   if (code === 'checksum' || code === 'size' || code === 'unsupported') return true;
-  return code === 'http' && status !== undefined && status >= 400 && status < 500 && status !== 408 && status !== 429;
+  return code === 'http' && status !== undefined && status >= 400 && status < 500 && status !== 404 && status !== 408 && status !== 429;
 }
 
 export function componentErrorCode(err: unknown): string {

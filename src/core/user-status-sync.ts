@@ -21,7 +21,7 @@
 import { bus, EventNames } from './event-bus.js';
 import { log } from '../logging/index.js';
 import { bootPolicy } from './boot-policy.js';
-import { deriveUserStatus, type UserStatus, type UserStatusInput } from './user-status.js';
+import { deriveUserStatus, HANDED_BACK_ASK, type UserStatus, type UserStatusInput } from './user-status.js';
 import { isReportPending, onReportPendingChange } from './sessions/report-pending.js';
 import type { Task } from './types.js';
 
@@ -354,6 +354,42 @@ export function statusInputOf(task: Task, facts: StatusFacts): UserStatusInput {
 const sameStatus = (a: UserStatus | undefined, b: UserStatus): boolean => JSON.stringify(a ?? null) === JSON.stringify(b);
 
 /**
+ * How long a hand-back with nothing asked waits before it reads Needs you. The phase moves at
+ * once; the stored status the surfaces read keeps its last value meanwhile. On 2026-10-28, 134
+ * of 519 moves into NEED_ACTION were undone by a new turn within 30 s (112 within 20 s): a turn
+ * end right before the CLI's follow-up turn, or a message that woke the task at once. Each one
+ * turned the task red for a few seconds on the Org page, the Board and the phone, and moved the
+ * counts ("the ORG webpage is really flaky, flashing").
+ */
+export const HANDBACK_SETTLE_MS = 20_000;
+
+/**
+ * When a derived hand-back may be written (ms), or null when it may be written now. Only a task
+ * with a session that read Working or Waiting is held: that is a turn end. A person or a lead
+ * setting NEED_ACTION on a task that has not started, or has no session, reads Needs you at once.
+ */
+export function handBackSettlesAt(
+  task: Pick<Task, 'phase_changed_at' | 'user_status'>, next: UserStatus, nowMs: number, hasSession: boolean,
+): number | null {
+  if (next.state !== 'needs' || next.source !== 'session' || next.ask !== HANDED_BACK_ASK) return null;
+  const was = task.user_status;
+  if (!hasSession || !was || (was.state !== 'working' && was.state !== 'waiting') || was.kind === 'not-started') return null;
+  const movedAt = Date.parse(task.phase_changed_at ?? '');
+  if (!Number.isFinite(movedAt)) return null;
+  const at = movedAt + HANDBACK_SETTLE_MS;
+  return at > nowMs ? at : null;
+}
+
+/** Task id -> the timer that derives it again once its hand-back has settled. */
+const settleTimers = new Map<string, ReturnType<typeof setTimeout>>();
+function recheckAt(taskId: string, atMs: number): void {
+  if (!live || settleTimers.has(taskId)) return;
+  const t = setTimeout(() => { settleTimers.delete(taskId); mark(taskId); }, Math.max(0, atMs - Date.now()) + 50);
+  t.unref?.();
+  settleTimers.set(taskId, t);
+}
+
+/**
  * Derive and store the status of the given open tasks (all of them when `ids` is null).
  * Returns how many changed. A finished task is never written: every reader reads COMPLETE
  * as Done first, and a write to a COMPLETE row would announce it as completed again
@@ -384,8 +420,11 @@ export async function syncUserStatuses(ids: ReadonlySet<string> | null, nowMs = 
   }
   let changed = 0;
   for (const task of targets) {
-    const next = deriveUserStatus(statusInputOf(task, facts), nowMs);
+    const input = statusInputOf(task, facts);
+    const next = deriveUserStatus(input, nowMs);
     if (sameStatus(task.user_status, next)) continue;
+    const settlesAt = handBackSettlesAt(task, next, nowMs, !!input.hasSession);
+    if (settlesAt !== null) { recheckAt(task.id, settlesAt); continue; }
     const res = await updateTaskRaw(task.id, { user_status: next }, {
       emitEvent: true, source: OWN_SOURCE,
       // Completed while its facts were read: it reads Done, and the write would announce it again.
@@ -537,5 +576,7 @@ export function stopUserStatusSync(): void {
   sweep = null;
   dirty = new Set();
   all = false;
+  for (const t of settleTimers.values()) clearTimeout(t);
+  settleTimers.clear();
   dropSlow();
 }

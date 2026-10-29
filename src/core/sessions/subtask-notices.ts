@@ -81,6 +81,8 @@ export interface SubtaskNotice {
   remaining?: string;
   /** completed: what the child's result left not done (peers/structured-reply.ts), when Partial. */
   partial?: string;
+  /** When it was queued (ms): a stop is undone only by a turn that started after it. */
+  queuedAt?: number;
 }
 
 /** A stopped / completed notice names the child's card when the parent has a Board (plain text, no wakeup). */
@@ -318,6 +320,7 @@ export async function queueSubtaskNotice(n: SubtaskNotice): Promise<void> {
       return;
     }
     n = await attachCardLine(n);
+    if (n.queuedAt === undefined) n = { ...n, queuedAt: Date.now() };
     const sid = dest.claudeSessionId;
     const slot = pending.get(sid);
     if (slot) {
@@ -378,6 +381,8 @@ async function flush(parentSid: string): Promise<void> {
       });
       return;
     }
+    notices = await withoutUndoneStops(notices, getSessionByClaudeId);
+    if (notices.length === 0) return;
     const batch = await import('./subtask-batch.js');
     // Not mid-turn: wake it once, when its team settles (see subtask-batch.ts and the header).
     if (target.process_status !== 'running') {
@@ -428,6 +433,33 @@ async function flush(parentSid: string): Promise<void> {
       error: err instanceof Error ? err.message : String(err),
     });
   }
+}
+
+/**
+ * A `stopped` whose child started a new turn after it was queued is no news: the CLI's own
+ * follow-up turn after a background command, or a message that woke it at once. Its leader read
+ * "stopped" while the child worked (2026-10-06: 29 of 166 hand-backs were undone within 1.5 s;
+ * 2026-10-28: 134 of 519 within 30 s). A child still in the turn that moved its own phase (its
+ * status unchanged since before the notice) is a real stop: that turn's end says nothing more.
+ */
+export async function withoutUndoneStops(
+  notices: SubtaskNotice[],
+  sessionOf: (sid: string) => Promise<SessionRecord | null | undefined>,
+): Promise<SubtaskNotice[]> {
+  const out: SubtaskNotice[] = [];
+  for (const n of notices) {
+    const sid = n.kind === 'stopped' ? n.child.sessionId : undefined;
+    const rec = sid ? await sessionOf(sid).catch(() => null) : null;
+    const since = Date.parse(rec?.statusUpdatedAt ?? '');
+    if (rec?.process_status === 'running' && n.queuedAt !== undefined && Number.isFinite(since) && since > n.queuedAt) {
+      log.session.info('subtask notice not sent: a new turn of the child already started', {
+        parentTaskId: n.parentTaskId, childTaskId: n.child.id, childSid: sid,
+      });
+      continue;
+    }
+    out.push(n);
+  }
+  return out;
 }
 
 /**

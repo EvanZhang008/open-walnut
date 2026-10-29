@@ -22,6 +22,38 @@ export function decorateBriefHtml(
   });
 }
 
+/** The part of a DOM element applyBriefDecorations touches (a node test passes a stand-in). */
+export interface BriefPill {
+  getAttribute(name: string): string | null;
+  setAttribute(name: string, value: string): void;
+  removeAttribute(name: string): void;
+}
+
+/**
+ * The same marks decorateBriefHtml writes, set on the rendered letter in place. A status change
+ * then moves one attribute on one pill, instead of a new innerHTML that rebuilt the whole letter
+ * every time any task it names changed state (2026-10-28, the user: the Org page "is flashing").
+ * Returns how many attributes changed.
+ */
+export function applyBriefDecorations(
+  root: { querySelectorAll(selector: string): Iterable<BriefPill> | ArrayLike<BriefPill> },
+  states: ReadonlyMap<string, UserState>, partial?: ReadonlySet<string>, unverified?: ReadonlySet<string>,
+): number {
+  let changed = 0;
+  const put = (el: BriefPill, name: string, value: string | null) => {
+    if (el.getAttribute(name) === value) return;
+    if (value === null) el.removeAttribute(name); else el.setAttribute(name, value);
+    changed += 1;
+  };
+  for (const el of Array.from(root.querySelectorAll('a[data-task-id]'))) {
+    const id = el.getAttribute('data-task-id') ?? '';
+    put(el, 'data-user-state', states.get(id) ?? null);
+    put(el, 'data-partial', partial?.has(id) ? '1' : null);
+    put(el, 'data-unverified', unverified?.has(id) ? '1' : null);
+  }
+  return changed;
+}
+
 export type OrgTopView = 'status' | 'brief';
 const VIEW_KEY = 'walnut.org.topView';
 const FOLDED_KEY = 'walnut.org.briefFolded';

@@ -113,6 +113,9 @@ export interface UserStatusInput {
 
 /** 2026-10-27, the user: "If the task is closed, mostly close by me means I already verified ...
  *  this is generic rules". Every agent-facing text that lists or reports tasks says it. */
+/** The ask of a task handed back only because its turn ended, with nothing asked of its own
+ *  (user-status-sync.ts holds it a moment: the next turn often starts within seconds). */
+export const HANDED_BACK_ASK = 'Its turn ended and handed the task back to you: read it and reply.';
 export const COMPLETE_IS_VERIFIED = 'A COMPLETE task counts as verified by the user: write it as done, never as waiting on their check or test, and never remind them of it.';
 
 export interface UserStatus {
@@ -325,6 +328,21 @@ function stampChecked(out: UserStatus, input: UserStatusInput, nowMs: number): v
   if (nowMs - at > UNVERIFIED_AFTER_MS) out.unverified = true;
 }
 
+/**
+ * What will wake a task whose turn is over: an armed trigger of its own (a fire resumes a stopped
+ * session), else, with `schedules`, a scheduled routine that runs in its session. Null when
+ * nothing will. 2026-10-29: a task parked on two armed triggers read "stuck, nothing will wake
+ * it" in the seconds between its turn's end and the phase write, and was pushed to Main so.
+ */
+function wakeSource(input: UserStatusInput, w: ReturnType<typeof words>, nowMs: number, schedules: boolean): UserStatus | null {
+  const triggers = (input.triggers ?? []).map(clean).filter(Boolean);
+  if (triggers.length) return strip<UserStatus>({ state: 'waiting', kind: 'other', waitingOn: `A watch: ${triggers.join(', ')}`, ...w });
+  const runs = schedules ? (input.schedules ?? []).filter((r) => clean(r.name)) : [];
+  if (!runs.length) return null;
+  const next = runs.map((r) => r.nextAt).filter((t): t is string => !!t && Date.parse(t) > nowMs).sort()[0];
+  return strip<UserStatus>({ state: 'waiting', kind: 'time', waitingOn: `Its next scheduled run (${runs.map((r) => clean(r.name)).join(', ')})`, ...(next ? { until: next } : {}), ...w });
+}
+
 function derive(input: UserStatusInput, nowMs: number): UserStatus {
   const anyReport = input.report ?? null;
   if (input.phase === 'COMPLETE' || input.status === 'done') return { state: 'done' };
@@ -392,17 +410,22 @@ function derive(input: UserStatusInput, nowMs: number): UserStatus {
         ...w,
       });
     }
+    // Its own armed trigger wakes it (a fire resumes a stopped session): with no ask of its own and no
+    // turn running (a NEED_ACTION set inside a turn waits for that turn's report), it waits on the watch.
+    // Not Main or a lead: they are never closed, and their NEED_ACTION is the user's turn to talk.
+    const watch = running || input.isMain || input.isLead ? null : wakeSource(input, w, nowMs, false);
     // A worker whose session stopped (Walnut's idle reap, a stop) with no report of its own saying it
     // needs the user: its lead is the one to look (2026-10-27: a worker reaped while its tests ran read
     // Needs you everywhere). The reap still hands it back, so a reply its lead waits for is settled.
-    if (input.hasLeader && !input.isLead && !input.isMain && input.processStatus === 'stopped') {
+    if (!watch && input.hasLeader && !input.isLead && !input.isMain && input.processStatus === 'stopped') {
       return strip({ state: 'waiting', kind: 'lead', waitingOn: 'Its lead, to look at it: its session stopped before it said it needs anything', ...w });
     }
     // Its turn just ended and its report is on the way: only that report can say it asks anything.
     if (input.reportPending) {
       return strip({ state: 'waiting', kind: 'other', waitingOn: 'Its report on the turn that just ended', ...w, transient: true });
     }
-    return strip({ state: 'needs', source: 'session', ask: 'Its turn ended and handed the task back to you: read it and reply.', ...w });
+    if (watch) return watch;
+    return strip({ state: 'needs', source: 'session', ask: HANDED_BACK_ASK, ...w });
   }
 
   if (input.phase === 'IN_PROGRESS') {
@@ -416,6 +439,10 @@ function derive(input: UserStatusInput, nowMs: number): UserStatus {
       const n = input.openWorkers!;
       return strip({ state: 'waiting', kind: 'task', waitingOn: n === 1 ? 'Its worker (1 open)' : `Its workers (${n} open)`, ...w });
     }
+    // Not stuck while its own armed trigger or scheduled routine will wake it; a failed session
+    // is still read as stuck, a watch never hides it.
+    const wake = input.processStatus === 'error' ? null : wakeSource(input, w, nowMs, true);
+    if (wake) return wake;
     return strip({ state: 'waiting', kind: 'stuck', waitingOn: 'It stopped, and nothing will wake it', ...w });
   }
 
@@ -423,8 +450,6 @@ function derive(input: UserStatusInput, nowMs: number): UserStatus {
 
   // WAITING (and any phase an older writer left): on what, from the facts first, then its words.
   const tasks = (input.waitingOnTasks ?? []).map(clean).filter(Boolean);
-  const triggers = (input.triggers ?? []).map(clean).filter(Boolean);
-  const schedules = (input.schedules ?? []).filter((r) => clean(r.name));
   const until = input.waitUntil && Date.parse(input.waitUntil) > nowMs ? input.waitUntil : null;
   const reported = report?.state === 'waiting' && !none(report.waiting_on) ? clean(report.waiting_on) : '';
   const reportedKind = report?.state === 'waiting' ? report.waiting_kind : undefined;
@@ -432,11 +457,8 @@ function derive(input: UserStatusInput, nowMs: number): UserStatus {
   if (tasks.length) return strip({ state: 'waiting', kind: 'task', waitingOn: reported || `A reply from ${tasks.join(', ')}`, ...w });
   if (reported && reportedKind && reportedKind !== 'stuck') return strip({ state: 'waiting', kind: reportedKind, waitingOn: reported, ...(until ? { until } : {}), ...w });
   // A standing routine: between fires it waits on the next one.
-  if (triggers.length) return strip({ state: 'waiting', kind: 'other', waitingOn: `A watch: ${triggers.join(', ')}`, ...w });
-  if (schedules.length) {
-    const next = schedules.map((r) => r.nextAt).filter((t): t is string => !!t && Date.parse(t) > nowMs).sort()[0];
-    return strip({ state: 'waiting', kind: 'time', waitingOn: `Its next scheduled run (${schedules.map((r) => clean(r.name)).join(', ')})`, ...(next ? { until: next } : {}), ...w });
-  }
+  const wake = wakeSource(input, w, nowMs, true);
+  if (wake) return wake;
   if (report?.state === 'done') {
     return strip({
       state: 'waiting', kind: input.hasLeader ? 'lead' : 'you',

@@ -105,14 +105,23 @@ describe('component status', () => {
   it('a failure is the status, with its reason; one no retry fixes is never retried automatically, a person can retry at once', async () => {
     const c = useFake();
     resetComponentsForTests({ backoffMs: 20, lock: { pollMs: 20 }, retryBaseMs: 30 });
-    srv.fault(c.entry.asset, { status: 404 });
-    expect(await ensureComponent('images', 'feature')).toMatchObject({ state: 'failed', code: 'http', error: expect.stringMatching(/404/) });
+    srv.fault(c.entry.asset, { status: 403 });
+    expect(await ensureComponent('images', 'feature')).toMatchObject({ state: 'failed', code: 'http', error: expect.stringMatching(/403/) });
     expect(await whenComponentReady('images', 100)).toBe(false);
     srv.requests.length = 0;
     await new Promise((r) => setTimeout(r, 100)); // past any backoff: still never
     expect((await ensureComponent('images', 'feature')).state).toBe('failed');
     expect(srv.requests).toEqual([]);
     expect((await ensureComponent('images', 'user')).state).toBe('ready');
+  });
+
+  it('a 404 is retried after the backoff: assets published after the release answer 404 first (2026-10-28)', async () => {
+    const c = useFake();
+    resetComponentsForTests({ backoffMs: 5, retries: 0, lock: { pollMs: 20 }, retryBaseMs: 100 });
+    srv.fault(c.entry.asset, { status: 404 });
+    expect(await ensureComponent('images', 'feature')).toMatchObject({ state: 'failed', code: 'http', error: expect.stringMatching(/404/) });
+    await new Promise((r) => setTimeout(r, 200)); // past the backoff; the asset is published now
+    expect((await ensureComponent('images', 'feature')).state).toBe('ready');
   });
 
   it('a failure a retry may fix is retried automatically, after a backoff that doubles', async () => {

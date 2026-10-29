@@ -4,7 +4,7 @@
  * not read here yet.
  */
 import { describe, it, expect, beforeEach } from 'vitest'
-import { briefUnread, decorateBriefHtml, markBriefSeen, readBriefFolded, readTopView, writeBriefFolded, writeTopView } from '../../web/src/components/org/org-brief-model'
+import { applyBriefDecorations, briefUnread, decorateBriefHtml, markBriefSeen, readBriefFolded, readTopView, writeBriefFolded, writeTopView } from '../../web/src/components/org/org-brief-model'
 
 const store = new Map<string, string>()
 beforeEach(() => {
@@ -24,6 +24,46 @@ describe('decorateBriefHtml', () => {
     expect(out).toContain('<a href="/tasks/t1" class="task-link" data-user-state="needs" data-task-id="t1" title="x">Parser</a>')
     expect(out).toContain('<a href="/tasks/t2" class="task-link" data-task-id="t2">Review</a>')
     expect(out).toContain('<a href="https://example.com">a link</a>')
+  })
+})
+
+describe('applyBriefDecorations', () => {
+  // A stand-in for the rendered letter's pills: the attributes, and every write counted.
+  const pill = (id: string, attrs: Record<string, string> = {}) => {
+    const a = new Map(Object.entries({ 'data-task-id': id, ...attrs }))
+    return {
+      writes: 0,
+      getAttribute(n: string) { return a.get(n) ?? null },
+      setAttribute(n: string, v: string) { a.set(n, v); this.writes++ },
+      removeAttribute(n: string) { a.delete(n); this.writes++ },
+    }
+  }
+  const root = (pills: ReturnType<typeof pill>[]) => ({ querySelectorAll: (sel: string) => (sel === 'a[data-task-id]' ? pills : []) })
+
+  it('moves only the attribute of the pill whose task changed, and nothing when none did', () => {
+    const t1 = pill('t1'); const t2 = pill('t2')
+    const letter = root([t1, t2])
+    expect(applyBriefDecorations(letter, new Map([['t1', 'working'], ['t2', 'needs']]))).toBe(2)
+    expect(t1.getAttribute('data-user-state')).toBe('working')
+    // The same statuses again (a re-render for another task's change): no write at all.
+    expect(applyBriefDecorations(letter, new Map([['t1', 'working'], ['t2', 'needs']]))).toBe(0)
+    // One task moves: one write, on its pill.
+    const before = t2.writes
+    expect(applyBriefDecorations(letter, new Map([['t1', 'needs'], ['t2', 'needs']]))).toBe(1)
+    expect(t1.getAttribute('data-user-state')).toBe('needs')
+    expect(t2.writes).toBe(before)
+  })
+
+  it('sets and clears the partial and unverified marks, and drops a status no longer known', () => {
+    const t1 = pill('t1', { 'data-user-state': 'needs' })
+    const letter = root([t1])
+    applyBriefDecorations(letter, new Map([['t1', 'needs']]), new Set(['t1']), new Set(['t1']))
+    expect(t1.getAttribute('data-partial')).toBe('1')
+    expect(t1.getAttribute('data-unverified')).toBe('1')
+    applyBriefDecorations(letter, new Map())
+    expect(t1.getAttribute('data-user-state')).toBeNull()
+    expect(t1.getAttribute('data-partial')).toBeNull()
+    expect(t1.getAttribute('data-unverified')).toBeNull()
   })
 })
 

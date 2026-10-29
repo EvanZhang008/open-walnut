@@ -5,7 +5,7 @@
  * the rest current: every task it names shows its live status, and what moved in the team since
  * it was written is listed under it. The user answers in the chat.
  */
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { Task } from '@open-walnut/core';
 import {
   briefMentions, briefMoves, briefStillOpen, resultIsPartial, USER_STATE_LABELS,
@@ -16,7 +16,7 @@ import { userStateOf } from '@open-walnut/org-tree';
 import { renderMarkdownWithRefs } from '@/utils/markdown';
 import { useEntityLabelsVersion } from '@/hooks/useEntityLabels';
 import { timeAgo } from '@/utils/time';
-import { decorateBriefHtml } from './org-brief-model';
+import { applyBriefDecorations } from './org-brief-model';
 import { BriefStillOpenList } from './BriefStillOpen';
 import '@/styles/org-brief.css';
 
@@ -39,14 +39,21 @@ export function OrgBrief({ owner, tasks, name, onOpenTask, now, folded }: Props)
   // The server flips `unverified` (user-status.ts), so the markup changes only when one does.
   const unverifiedKey = tasks.filter((t) => t.phase !== 'COMPLETE' && t.user_status?.state === 'needs' && t.user_status.unverified).map((t) => t.id).join('|');
   const unverified = useMemo(() => new Set(unverifiedKey ? unverifiedKey.split('|') : []), [unverifiedKey]);
+  // The letter's markup comes from its text alone; each pill's live status is set on it in place
+  // below, so a task changing state never rebuilds the letter (that redrew it on every status move).
   const markup = useMemo(
-    () => (brief?.text ? decorateBriefHtml(renderMarkdownWithRefs(brief.text), states, partial, unverified) : ''),
+    () => (brief?.text ? renderMarkdownWithRefs(brief.text) : ''),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [brief?.text, states, partial, unverified, labels],
+    [brief?.text, labels],
   );
   // React 19 resets innerHTML for every new {__html} object, even with the same string, which
   // drops a selection in the letter on any task update: keep one object per string.
   const html = useMemo(() => (markup ? { __html: markup } : null), [markup]);
+  const bodyRef = useRef<HTMLDivElement>(null);
+  // Before paint, so a new letter never shows a frame without its pills' status.
+  useLayoutEffect(() => {
+    if (bodyRef.current) applyBriefDecorations(bodyRef.current, states, partial, unverified);
+  }, [html, states, partial, unverified]);
   const moves = useMemo(
     () => (owner && brief?.at ? briefMoves(owner, tasks, Date.parse(brief.at)) : []),
     [owner, tasks, brief?.at],
@@ -73,7 +80,7 @@ export function OrgBrief({ owner, tasks, name, onOpenTask, now, folded }: Props)
   }
   return (
     <div className={`org-brief${folded ? ' is-folded' : ''}`} data-testid="org-brief">
-      <div className="org-brief-body markdown-body" data-testid="org-brief-body" onClick={onClick} dangerouslySetInnerHTML={html} />
+      <div ref={bodyRef} className="org-brief-body markdown-body" data-testid="org-brief-body" onClick={onClick} dangerouslySetInnerHTML={html} />
       <div className="org-brief-foot" data-testid="org-brief-foot">
         <span className="org-muted">Written {timeAgo(brief.at, { now })}</span>
         {issues.length > 0 && (

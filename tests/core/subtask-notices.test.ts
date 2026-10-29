@@ -267,6 +267,32 @@ describe('delivery to the parent', () => {
     expect(text).toContain('(child-b) completed its task');
   });
 
+  it('a stop the child already undid with a new turn is not sent; a completion still is', async () => {
+    await queueSubtaskNotice(notice({ child: { id: 'child-a', title: 'A', sessionId: 'child-sid-a' } }))
+    // The CLI's follow-up turn after a background command started inside the coalesce window.
+    sessions.push(rec('child-sid-a', { taskId: 'child-a', process_status: 'running', statusUpdatedAt: new Date(Date.now() + 1_000).toISOString() }))
+    await vi.advanceTimersByTimeAsync(COALESCE_MS + 10)
+    expect(sendMessageToSession).not.toHaveBeenCalled()
+
+    // Still stopped at the flush: sent as before.
+    sessions.push(rec('child-sid-b', { taskId: 'child-b', process_status: 'idle' }))
+    await queueSubtaskNotice(notice({ child: { id: 'child-b', title: 'B', sessionId: 'child-sid-b' } }))
+    await queueSubtaskNotice(notice({ child: { id: 'child-a', title: 'A', sessionId: 'child-sid-a' }, kind: 'completed' }))
+    await vi.advanceTimersByTimeAsync(COALESCE_MS + 10)
+    expect(sendMessageToSession).toHaveBeenCalledTimes(1)
+    expect(delivered().text).toContain('(child-b)')
+    expect(delivered().text).toContain('(child-a) completed its task')
+  });
+
+  it('a stop set inside the turn still running (its status unchanged since) is sent', async () => {
+    // The child set NEED_ACTION itself mid-turn: its session has been running since before the notice.
+    sessions.push(rec('child-sid-c', { taskId: 'child-c', process_status: 'running', statusUpdatedAt: new Date(Date.now() - 60_000).toISOString() }))
+    await queueSubtaskNotice(notice({ child: { id: 'child-c', title: 'C', sessionId: 'child-sid-c' } }))
+    await vi.advanceTimersByTimeAsync(COALESCE_MS + 10)
+    expect(sendMessageToSession).toHaveBeenCalledTimes(1)
+    expect(delivered().text).toContain('(child-c)')
+  });
+
   it('each new replaceable notice has its own delivery id; a terminal one uses the default id', async () => {
     await queueSubtaskNotice(notice());
     await vi.advanceTimersByTimeAsync(COALESCE_MS + 10);
