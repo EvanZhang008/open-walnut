@@ -8,7 +8,7 @@
  * Host frames and local health are routed client-side; the Settings checks
  * (BP-C20, BP-C66) use the server's host fixture so Settings lists the hosts.
  *
- * Run: PW_TEST_PORT=35994 PW_IGNORE_LOAD=1 npx playwright test banner-placement-actions --project=chromium --workers=1
+ * Run: PW_TEST_PORT=35994 PW_IGNORE_LOAD=1 npx playwright test banner-placement-actions --project=chromium-host-fixture --workers=1
  *      PW_WEBKIT=1 PW_TEST_PORT=35994 PW_IGNORE_LOAD=1 npx playwright test banner-placement-actions --project=webkit --workers=1
  */
 import fs from 'node:fs'

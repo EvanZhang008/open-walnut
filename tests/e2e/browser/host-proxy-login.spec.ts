@@ -10,7 +10,7 @@
  * waiting on that login, and Retry all reconnecting once the login is renewed
  * (a click before that fails the same way and the countdown starts over).
  *
- * Run: PW_TEST_PORT=35994 npx playwright test host-proxy-login --project=chromium --workers=1
+ * Run: PW_TEST_PORT=35994 npx playwright test host-proxy-login --project=chromium-host-fixture --workers=1
  *      PW_WEBKIT=1 PW_TEST_PORT=35994 npx playwright test host-proxy-login --project=webkit --workers=1
  */
 import fs from 'node:fs'

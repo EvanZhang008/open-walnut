@@ -12,7 +12,7 @@
  * the headline, hint and toggle words are the real shared model's.
  * page.goto only loads the app; everything after is a real click.
  *
- * Run: PW_TEST_PORT=35993 ./node_modules/.bin/playwright test host-card-details-toggle --project=chromium --workers=1
+ * Run: PW_TEST_PORT=35993 ./node_modules/.bin/playwright test host-card-details-toggle --project=chromium-host-fixture --workers=1
  *      PW_WEBKIT=1 PW_TEST_PORT=35993 ./node_modules/.bin/playwright test host-card-details-toggle --project=webkit --workers=1
  */
 import fs from 'node:fs'

@@ -19,7 +19,7 @@
  * Run with --workers=1 next to the banner specs (every describe loads its own
  * server fixture). page.goto only loads the app.
  *
- * Run: PW_TEST_PORT=35993 npx playwright test host-problems-draft-2 --project=chromium --workers=1
+ * Run: PW_TEST_PORT=35993 npx playwright test host-problems-draft-2 --project=chromium-host-fixture --workers=1
  *      PW_WEBKIT=1 PW_TEST_PORT=35993 npx playwright test host-problems-draft-2 --project=webkit --workers=1
  */
 import fs from 'node:fs'

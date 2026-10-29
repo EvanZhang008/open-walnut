@@ -24,7 +24,7 @@
  * The last describe runs against the SERVER's host fixture instead (no routing),
  * so /api/hosts/status is the real server answer.
  *
- * Run: PW_TEST_PORT=35991 npx playwright test host-problems-banner --project=chromium --workers=1
+ * Run: PW_TEST_PORT=35991 npx playwright test host-problems-banner --project=chromium-host-fixture --workers=1
  *      PW_WEBKIT=1 PW_TEST_PORT=35991 npx playwright test host-problems-banner --project=webkit --workers=1
  */
 import { test, expect, type Locator } from '@playwright/test'

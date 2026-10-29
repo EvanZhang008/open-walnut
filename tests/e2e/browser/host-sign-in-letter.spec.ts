@@ -14,7 +14,7 @@
  *
  * Like every host fixture spec it shares the server's ONE fixture, so it runs with --workers=1.
  *
- * Run: PW_TEST_PORT=35993 npx playwright test host-sign-in-letter --project=chromium --workers=1 --retries=0
+ * Run: PW_TEST_PORT=35993 npx playwright test host-sign-in-letter --project=chromium-host-fixture --workers=1 --retries=0
  */
 import fs from 'node:fs'
 import { test, expect, type APIRequestContext, type Page } from '@playwright/test'

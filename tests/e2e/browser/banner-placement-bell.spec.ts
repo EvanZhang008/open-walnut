@@ -9,7 +9,7 @@
  * Host frames and local health are routed client-side; BP-C58 uses the
  * server's host fixture (the panel lists the server's hosts).
  *
- * Run: PW_TEST_PORT=35994 PW_IGNORE_LOAD=1 npx playwright test banner-placement-bell --project=chromium --workers=1
+ * Run: PW_TEST_PORT=35994 PW_IGNORE_LOAD=1 npx playwright test banner-placement-bell --project=chromium-host-fixture --workers=1
  *      PW_WEBKIT=1 PW_TEST_PORT=35994 PW_IGNORE_LOAD=1 npx playwright test banner-placement-bell --project=webkit --workers=1
  */
 import fs from 'node:fs'

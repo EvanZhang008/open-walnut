@@ -11,7 +11,7 @@
  * WebKit-only checks (BP-C2, BP-C56) skip themselves outside WebKit: run the
  * file with PW_WEBKIT=1 --project=webkit as well.
  *
- * Run: PW_TEST_PORT=35994 PW_IGNORE_LOAD=1 npx playwright test banner-placement-mounts --project=chromium --workers=1
+ * Run: PW_TEST_PORT=35994 PW_IGNORE_LOAD=1 npx playwright test banner-placement-mounts --project=chromium-host-fixture --workers=1
  *      PW_WEBKIT=1 PW_TEST_PORT=35994 PW_IGNORE_LOAD=1 npx playwright test banner-placement-mounts --project=webkit --workers=1
  */
 import fs from 'node:fs'

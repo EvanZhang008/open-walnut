@@ -86,7 +86,7 @@ jobs:
         env:
           BUN_INSTALL_CACHE_DIR: ${{ runner.temp }}/bun-store
       - name: browser specs load
-        run: bun x playwright test --list --project=chromium > /dev/null
+        run: bun x playwright test --list --project=chromium --project=chromium-host-fixture > /dev/null
       - run: bun run test:plugin-packages
       - run: bun run test:npm-channel
       - run: bun run test:source-twin-node
@@ -734,7 +734,7 @@ jobs:
           budget=$(( left < 2700 ? left : 2700 ))
           [ "$budget" -ge 60 ] || budget=60
           echo "test budget: ${budget}s"
-          bun x playwright test --project=chromium --shard=${{ matrix.shard }}/8 --retries=1 --global-timeout=$(( budget * 1000 )) --reporter=line,json
+          bun x playwright test --project=chromium --project=chromium-host-fixture --shard=${{ matrix.shard }}/8 --retries=1 --global-timeout=$(( budget * 1000 )) --reporter=line,json
       - name: Summarize
         if: always()
         run: |

@@ -16,7 +16,7 @@
  * same aliases client-side, and a loaded server fixture would push real frames
  * for them. page.goto only loads the app; everything else is a real click.
  *
- * Run: PW_TEST_PORT=35991 npx playwright test host-problems-draft --project=chromium --workers=1
+ * Run: PW_TEST_PORT=35991 npx playwright test host-problems-draft --project=chromium-host-fixture --workers=1
  *      PW_WEBKIT=1 PW_TEST_PORT=35991 npx playwright test host-problems-draft --project=webkit --workers=1
  */
 import { test, expect, type APIRequestContext, type Locator, type Page } from '@playwright/test'

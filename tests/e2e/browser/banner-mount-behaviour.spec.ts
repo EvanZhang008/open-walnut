@@ -11,7 +11,7 @@
  * Host frames and local health are routed client-side; page.goto only loads
  * the app, every other step is a real click, key or pointer move.
  *
- * Run: PW_TEST_PORT=35961 PW_IGNORE_LOAD=1 npx playwright test banner-mount-behaviour --project=chromium --workers=1
+ * Run: PW_TEST_PORT=35961 PW_IGNORE_LOAD=1 npx playwright test banner-mount-behaviour --project=chromium-host-fixture --workers=1
  *      PW_WEBKIT=1 PW_TEST_PORT=35961 PW_IGNORE_LOAD=1 npx playwright test banner-mount-behaviour --project=webkit --workers=1
  */
 import fs from 'node:fs'

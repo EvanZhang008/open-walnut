@@ -8,7 +8,7 @@
  * one verb for re-checking, and a Retry settles on its own answer only (C23, C48).
  * Host frames and local health are routed client-side (host-problems-helpers.ts).
  *
- * Run: PW_TEST_PORT=35987 PW_IGNORE_LOAD=1 npx playwright test banner-placement-round3 --project=chromium --workers=1
+ * Run: PW_TEST_PORT=35987 PW_IGNORE_LOAD=1 npx playwright test banner-placement-round3 --project=chromium-host-fixture --workers=1
  *      PW_WEBKIT=1 PW_TEST_PORT=35987 PW_IGNORE_LOAD=1 npx playwright test banner-placement-round3 --project=webkit --workers=1
  */
 import fs from 'node:fs'

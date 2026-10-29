@@ -12,7 +12,7 @@
  * NSH-a (server) and NSH-d use the server's host fixture, so the health and
  * Settings list the hosts from the server's own config.
  *
- * Run: PW_TEST_PORT=3495 PW_IGNORE_LOAD=1 npx playwright test notification-system-hosts --project=chromium --workers=1
+ * Run: PW_TEST_PORT=3495 PW_IGNORE_LOAD=1 npx playwright test notification-system-hosts --project=chromium-host-fixture --workers=1
  *      PW_WEBKIT=1 PW_TEST_PORT=3495 PW_IGNORE_LOAD=1 npx playwright test notification-system-hosts --project=webkit --workers=1
  */
 import fs from 'node:fs'

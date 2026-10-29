@@ -20,7 +20,7 @@
  * and every describe loads its own server fixture).
  * page.goto only loads the app; everything else is a real click or key.
  *
- * Run: PW_TEST_PORT=35993 npx playwright test host-problems-settings --project=chromium --workers=1
+ * Run: PW_TEST_PORT=35993 npx playwright test host-problems-settings --project=chromium-host-fixture --workers=1
  *      PW_WEBKIT=1 PW_TEST_PORT=35993 npx playwright test host-problems-settings --project=webkit --workers=1
  */
 import { test, expect, type Locator, type Page } from '@playwright/test'

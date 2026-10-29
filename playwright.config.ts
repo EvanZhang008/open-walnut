@@ -1,3 +1,5 @@
+import fs from 'node:fs'
+import path from 'node:path'
 import { defineConfig, devices } from '@playwright/test'
 import { perRunWorkers } from './tests/e2e/browser/pw-concurrency.js'
 import { engageGate } from './tests/e2e/browser/pw-gate.js'
@@ -10,6 +12,17 @@ const testPort = Number(process.env.PW_TEST_PORT ?? 3457)
 // to queue behind a concurrent run and to reap an orphaned fixture server before
 // `reuseExistingServer` silently attaches to it. See tests/e2e/browser/pw-gate.ts.
 engageGate(testPort)
+
+// Specs that swap the fixture server's one host fixture (POST /api/test/host-fixture)
+// race each other when two workers run them at once: one loads its hosts while the
+// other's test reads them (2026-10-29: banner-placement-round4 N3-2 failed 2 of 3 runs
+// beside system-attention :267). They run in their own project, one at a time, while
+// every other spec stays parallel. Found by what they call, so a new one joins itself.
+const HOST_FIXTURE_CALL = /\b(?:loadFixture|hostFixture|resetServerHostFixture)\(/
+const browserDir = path.join(import.meta.dirname, 'tests/e2e/browser')
+const hostFixtureSpecs = fs.readdirSync(browserDir)
+  .filter((f) => f.endsWith('.spec.ts') && HOST_FIXTURE_CALL.test(fs.readFileSync(path.join(browserDir, f), 'utf8')))
+  .map((f) => `**/${f}`)
 
 export default defineConfig({
   testDir: 'tests/e2e/browser',
@@ -39,6 +52,13 @@ export default defineConfig({
     {
       name: 'chromium',
       use: { ...devices['Desktop Chrome'] },
+      testIgnore: hostFixtureSpecs,
+    },
+    {
+      name: 'chromium-host-fixture',
+      use: { ...devices['Desktop Chrome'] },
+      testMatch: hostFixtureSpecs,
+      workers: 1,
     },
     // The desktop app is a WKWebView, so a desktop-only scroll/paint bug needs a
     // WebKit run to count as verified. Opt in: PW_WEBKIT=1 … --project webkit

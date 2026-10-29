@@ -3,7 +3,7 @@
  * verifier's C22 / C42 items). Host frames and local health are routed
  * client-side (host-problems-helpers.ts); nothing dials a real host.
  *
- * Run: PW_TEST_PORT=35962 PW_IGNORE_LOAD=1 ./node_modules/.bin/playwright test banner-placement-round4 --project=chromium --workers=1
+ * Run: PW_TEST_PORT=35962 PW_IGNORE_LOAD=1 ./node_modules/.bin/playwright test banner-placement-round4 --project=chromium-host-fixture --workers=1
  *      PW_WEBKIT=1 PW_TEST_PORT=35962 PW_IGNORE_LOAD=1 ./node_modules/.bin/playwright test banner-placement-round4 --project=webkit --workers=1
  */
 import fs from 'node:fs'

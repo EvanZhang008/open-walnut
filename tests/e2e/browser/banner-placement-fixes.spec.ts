@@ -9,7 +9,7 @@
  * (each host once: a problem host is its card row, every other a status line).
  * Host frames and local health are routed client-side (host-problems-helpers.ts).
  *
- * Run: PW_TEST_PORT=35981 PW_IGNORE_LOAD=1 npx playwright test banner-placement-fixes --project=chromium --workers=1
+ * Run: PW_TEST_PORT=35981 PW_IGNORE_LOAD=1 npx playwright test banner-placement-fixes --project=chromium-host-fixture --workers=1
  *      PW_WEBKIT=1 PW_TEST_PORT=35981 PW_IGNORE_LOAD=1 npx playwright test banner-placement-fixes --project=webkit --workers=1
  */
 import fs from 'node:fs'

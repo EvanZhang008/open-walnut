@@ -19,7 +19,7 @@
  * In file order with --workers=1, next to the other host-problems specs (they
  * share the server fixture). page.goto only loads the app; everything after is a real click.
  *
- * Run: PW_TEST_PORT=35995 npx playwright test host-problems-picker --project=chromium --workers=1
+ * Run: PW_TEST_PORT=35995 npx playwright test host-problems-picker --project=chromium-host-fixture --workers=1
  *      PW_WEBKIT=1 PW_TEST_PORT=35995 npx playwright test host-problems-picker --project=webkit --workers=1
  */
 import { readFileSync } from 'node:fs'
