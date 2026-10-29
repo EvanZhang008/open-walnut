@@ -212,9 +212,10 @@ export function registerCommands(program: Command): void {
     .command('add <name>')
     .description('Pair a new device — prints its Bearer token ONCE')
     .option('--owner', 'On a cloud companion: it is the Mac this companion belongs to')
-    .action(async (name: string, options: { owner?: boolean }, cmd: Command) => {
+    .option('--production', 'From a Walnut session: the user asked to pair this device with their real Walnut')
+    .action(async (name: string, options: { owner?: boolean; production?: boolean }, cmd: Command) => {
       const { runDeviceAdd } = await import('./device.js');
-      await runDeviceAdd(name, cmd.optsWithGlobals(), { owner: options.owner === true });
+      await runDeviceAdd(name, cmd.optsWithGlobals(), { owner: options.owner === true, production: options.production === true });
     });
 
   deviceCmd

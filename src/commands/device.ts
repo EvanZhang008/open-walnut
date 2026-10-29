@@ -16,6 +16,8 @@ import { createDevice, revokePairing, listDevices, readDeviceRegistry, setCompan
 import { companionOwnerRecord } from '../core/device-actor.js';
 import { detectLanAddress, detectTailnetAddress } from '../core/pairing-targets.js';
 import { outputJson } from '../utils/json-output.js';
+import { WALNUT_HOME } from '../constants.js';
+import { deviceAddRefusal } from '../core/device-add-guard.js';
 import type { GlobalOptions } from '../core/types.js';
 
 /** Matches the `--port` default in src/commands/index.ts. */
@@ -30,7 +32,13 @@ function shownOwner(reg: DeviceRegistry): string | undefined {
   return companionOwnerRecord(reg)?.name;
 }
 
-export async function runDeviceAdd(name: string, globals: GlobalOptions, opts: { owner?: boolean } = {}): Promise<void> {
+export async function runDeviceAdd(name: string, globals: GlobalOptions, opts: { owner?: boolean; production?: boolean } = {}): Promise<void> {
+  const refused = deviceAddRefusal({ env: process.env, home: WALNUT_HOME, production: opts.production === true });
+  if (refused) {
+    console.error(chalk.red(refused));
+    process.exitCode = 1;
+    return;
+  }
   try {
     const { token, createdAt } = await createDevice(name, opts.owner ? { owner: true } : undefined);
     if (globals.json) {
