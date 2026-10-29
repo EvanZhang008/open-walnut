@@ -5,17 +5,24 @@ import SwiftUI
 /// line with its time. The same words the web Board shows (`src/core/user-status.ts`).
 struct TaskStatusCard: View {
     let task: WalnutTask
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
         let state = TeamStatusModel.state(of: task)
         let s = state == .done ? nil : task.userStatus
+        // The checked line already says when the session last said it: one time, not two.
+        let checked = state == .needs && TeamStatusModel.checkedLine(s) != nil
         VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 8) {
+            // Stacked at the largest sizes, so "Updated" is never broken into syllables.
+            let header = typeSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading, spacing: 4)) : AnyLayout(HStackLayout(spacing: 8))
+            header {
                 UserStatePill(state: state, stuck: s?.kind == "stuck")
-                if let at = s?.at, !at.isEmpty {
-                    Text("Updated \(RelativeTime.short(at))")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                if let at = s?.at, !at.isEmpty, !checked {
+                    TimelineView(.periodic(from: .now, by: 30)) { ctx in
+                        Text("Updated \(WalnutTask.parseISO(at).map { RelativeTime.short(date: $0, relativeTo: ctx.date.addingTimeInterval(AppClock.demoOffset)) } ?? "")")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
                 if s?.stale == true {
                     Text("No update for a day")
@@ -28,12 +35,7 @@ struct TaskStatusCard: View {
             if state == .needs, let ask = s?.ask, !ask.isEmpty {
                 (Text("You decide: ").bold().foregroundColor(UserStatePill.textColor(.needs)) + Text(ask))
                     .font(.subheadline)
-                if let line = TeamStatusModel.checkedLine(s) {
-                    Text(line.text)
-                        .font(.caption.weight(line.unverified ? .semibold : .regular))
-                        .foregroundStyle(line.unverified ? UserStatePill.textColor(.needs) : .secondary)
-                        .accessibilityIdentifier("task.userStatus.checked")
-                }
+                CheckedCaption(status: s, font: .caption, id: "task.userStatus.checked")
             }
             if state == .waiting {
                 Text(TeamStatusModel.waitingLine(s))
@@ -47,10 +49,37 @@ struct TaskStatusCard: View {
                 (Text("Next: ").foregroundColor(.secondary) + Text(next))
                     .font(.subheadline)
             }
+            if let report = task.resultReport, report.isPartial {
+                // Its latest result left things not done: the whole list, here where it is read.
+                (Text("Partial. Not done: ").bold() + Text((report.notDone ?? []).joined(separator: "; ")))
+                    .font(.subheadline)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier("task.userStatus")
+    }
+}
+
+/// Under a session's own "needs you": when it was last checked, or that it is not verified.
+/// Ticks by itself, so "Checked 2m ago" never stays "now" (user-status.ts checkedLine).
+struct CheckedCaption: View {
+    let status: WalnutUserStatus?
+    let font: Font
+    let id: String
+
+    var body: some View {
+        // Whether there is a line does not depend on the time: decided outside, so no empty slot.
+        if TeamStatusModel.checkedLine(status) != nil {
+            TimelineView(.periodic(from: .now, by: 30)) { ctx in
+                if let line = TeamStatusModel.checkedLine(status, now: ctx.date.addingTimeInterval(AppClock.demoOffset)) {
+                    Text(line.text)
+                        .font(font.weight(line.unverified ? .semibold : .regular))
+                        .foregroundStyle(line.unverified ? UserStatePill.textColor(.needs) : .secondary)
+                        .accessibilityIdentifier(id)
+                }
+            }
+        }
     }
 }
 
@@ -320,12 +349,7 @@ struct TeamStatusRowView: View {
             if row.state == .needs, let ask = s?.ask, !ask.isEmpty {
                 (Text("You: ").bold().foregroundColor(UserStatePill.textColor(.needs)) + Text(ask))
                     .font(.footnote)
-                if let checked = TeamStatusModel.checkedLine(s) {
-                    Text(checked.text)
-                        .font(.caption.weight(checked.unverified ? .semibold : .regular))
-                        .foregroundStyle(checked.unverified ? UserStatePill.textColor(.needs) : .secondary)
-                        .accessibilityIdentifier("task.team.checked")
-                }
+                CheckedCaption(status: s, font: .caption, id: "task.team.checked")
             } else if row.state == .waiting {
                 Text(TeamStatusModel.waitingLine(s))
                     .font(.footnote.weight(.medium))
@@ -350,7 +374,8 @@ struct TeamStatusRowView: View {
                         .background(Capsule().fill(Color.orange.opacity(0.2)))
                     Text("Not done: \((report.notDone ?? []).joined(separator: "; "))")
                         .font(.footnote)
-                        .lineLimit(6)
+                        // The whole list at the largest sizes; the task's own card shows it too.
+                        .lineLimit(typeSize.isAccessibilitySize ? nil : 6)
                 }
                 .accessibilityElement(children: .combine)
                 .accessibilityIdentifier("task.team.partial")
@@ -358,7 +383,7 @@ struct TeamStatusRowView: View {
             if row.state == .working, let live = row.task.liveActivity {
                 // Read from its session by the server, never the model's words; the spans tick here.
                 TimelineView(.periodic(from: .now, by: 15)) { ctx in
-                    let line = LiveActivityFormat.line(live, now: ctx.date)
+                    let line = LiveActivityFormat.line(live, now: ctx.date.addingTimeInterval(AppClock.demoOffset))
                     HStack(alignment: .firstTextBaseline, spacing: 5) {
                         // A glyph, so it grows with the text size and sits on the first line.
                         Image(systemName: "circle.fill")
@@ -384,6 +409,8 @@ struct TeamStatusRowView: View {
         .padding(.vertical, 8)
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
+        // `.contain` keeps the ids inside (task.team.checked, .due, .live, .partial) reachable.
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("task.team.row")
     }
 }

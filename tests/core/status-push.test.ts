@@ -129,6 +129,15 @@ describe('who hears it', () => {
     expect(_pendingStatusPush()).toHaveLength(0);
   });
 
+  it('a wait only reworded is no news; a new kind of wait is', async () => {
+    tasks.set('r', task('r', { parent_task_id: 'lead', phase: 'WAITING', user_status: { state: 'waiting', kind: 'task', waitingOn: 'The review' } }));
+    emit(tasks.get('r')!);
+    emit(task('r', { parent_task_id: 'lead', phase: 'WAITING', user_status: { state: 'waiting', kind: 'task', waitingOn: 'The review of the second draft' } }));
+    expect(await flushStatusPush(Date.now() + SETTLE_MS + 1)).toBe(0);
+    emit(task('r', { parent_task_id: 'lead', phase: 'WAITING', user_status: { state: 'waiting', kind: 'time', waitingOn: 'Tomorrow 9 AM' } }));
+    expect(await flushStatusPush(Date.now() + 2 * SETTLE_MS + 2)).toBe(2);
+  });
+
   it('a turn that only started is no news; its end is', async () => {
     tasks.set('q', task('q', { parent_task_id: 'lead', phase: 'WAITING', user_status: { state: 'waiting', kind: 'task', waitingOn: 'The review' } }));
     emit(tasks.get('q')!);

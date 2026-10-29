@@ -3,9 +3,10 @@
  * user: "how can we programmatically let everyone know a task's latest status as early as
  * possible"; Main listed to the user, as fact, asks he had already done outside Walnut).
  *
- * When a task's settled status moves (the one user status, src/core/user-status.ts: its state,
- * what it asks the user, on whom it waits), one line of fact goes out: who, from what to what,
- * when. Never a model-written report. Who hears it:
+ * When a task's settled status moves (the one user status, src/core/user-status.ts: its state, or
+ * the kind of thing it waits on), one line of fact goes out: who, from what to what (with its ask
+ * or what it waits on), when. New words alone are no move: a session rewords its ask and its wait
+ * at every turn end. Never a model-written report. Who hears it:
  *
  *   - a session holding an unanswered request to the task: always (mid-turn when it runs, else
  *     the line rides its next message, in memory like the place note, never a queue row of its
@@ -137,9 +138,11 @@ export async function flushStatusPush(now = Date.now()): Promise<number> {
   }
   const due = [...pending.values()].filter((c) => (now - c.at >= SETTLE_MS && !(c.holdUntil && now < c.holdUntil)) || !live);
   for (const c of due) pending.delete(c.taskId);
-  // Settled where it began (a re-check turn), a "needs you" only reworded, or a turn that only
-  // started (its end says where it went): no news. Working after Needs you is: the user did it.
-  const news = due.filter((c) => c.from.key !== c.to.key && !(c.from.state === 'needs' && c.to.state === 'needs')
+  // News is a move of the state or of the kind of wait. Settled where it began (a re-check
+  // turn), only reworded (a session words its ask or its wait anew every turn: 2026-10-29 on
+  // prod, "Waiting → Waiting" lines every few minutes), or a turn that only started (its end
+  // says where it went): no news. Working after Needs you is: the user did it.
+  const news = due.filter((c) => c.from.label !== c.to.label
     && !(c.to.state === 'working' && c.from.state !== 'needs'));
   if (pending.size && live && !timer) {
     timer = setTimeout(() => { timer = null; void flushStatusPush(); }, SETTLE_MS);
