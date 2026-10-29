@@ -49,6 +49,13 @@ const HEALTH_CHECK_BUDGET_MS = 20_000
 const ORPHAN_SWEEP_EVERY_TICKS = 120
 /** Idle stops in flight at once per tick (each waits on its daemon, up to ~15s). */
 const IDLE_REAP_CONCURRENCY = 4
+/**
+ * After the owner refuses an idle stop, the same process is not asked again for
+ * this long (an unreachable host or a lost answer is asked again next tick). A refusal is the daemon's answer, not
+ * a blip: 2026-10-28 one session whose start time the daemon never recorded was
+ * asked every 30 s for over a day (1500+ refusals a day in its log).
+ */
+export const IDLE_REAP_RETRY_BACKOFF_MS = 30 * 60_000
 
 /** What an idle reap calls. Loaded once per tick, before the reap workers start. */
 interface IdleReapTools {
@@ -190,6 +197,8 @@ export class SessionHealthMonitor {
    * forward) re-arms the warning, while a session sitting still stays silent.
    */
   private willReapWarnedBase = new Map<string, number>()
+  /** Idle stops the owner refused: sid → the pid asked about and when (IDLE_REAP_RETRY_BACKOFF_MS). */
+  private idleReapDeclined = new Map<string, { pid: number; at: number }>()
   /** Transcript activity of local sessions the server has heard nothing from
    *  since it started: { at: read time, ms: newest entry or null }. */
   private transcriptActivity = new Map<string, { at: number; ms: number | null }>()
@@ -1092,6 +1101,12 @@ export class SessionHealthMonitor {
         }
       }
 
+      // The owner declined this process's idle stop a moment ago: its answer stands
+      // until the backoff ends or the session runs another process.
+      const declined = this.idleReapDeclined.get(session.claudeSessionId)
+      if (declined && typeof session.pid === 'number' && declined.pid === session.pid
+        && now - declined.at < IDLE_REAP_RETRY_BACKOFF_MS) continue
+
       const idleMinutes = Math.round(idleDurationMs / 60_000)
       log.session.info('health monitor: idle timeout — killing session', {
         sessionId: session.claudeSessionId,
@@ -1139,6 +1154,9 @@ export class SessionHealthMonitor {
         if (!liveIds.has(sid)) this.willReapWarnedBase.delete(sid)
       }
     }
+    for (const [sid, d] of this.idleReapDeclined) {
+      if (now - d.at >= IDLE_REAP_RETRY_BACKOFF_MS) this.idleReapDeclined.delete(sid)
+    }
 
     return killedIds
   }
@@ -1150,7 +1168,7 @@ export class SessionHealthMonitor {
    */
   private async reapIdleSession(
     session: SessionRecord,
-    mgr: { stopForIdle?(): Promise<boolean>; kill(reason?: 'user' | 'maintenance' | 'idle'): void } | undefined,
+    mgr: { stopForIdle?(): Promise<import('./sessions/owner-stop.js').OwnerStopOutcome>; kill(reason?: 'user' | 'maintenance' | 'idle'): void } | undefined,
     idleMinutes: number,
     updateSessionRecord: (id: string, update: Record<string, unknown>) => Promise<SessionRecord>,
     tools: IdleReapTools,
@@ -1170,13 +1188,25 @@ export class SessionHealthMonitor {
     // fallback any more: the one that lived here sent SIGINT, SIGTERM and finally
     // SIGKILL to whatever pid the record named, and a record's pid proves nothing
     // about who owns that process (core/sessions/owner-stop.ts).
-    let stopped = false
+    let outcome: import('./sessions/owner-stop.js').OwnerStopOutcome = 'unknown'
     try {
-      if (mgr?.stopForIdle) stopped = await mgr.stopForIdle()
-      else if (mgr) { mgr.kill('idle'); stopped = true }
-      else stopped = (await tools.stopThroughOwner(session, 'idle', 'idle_timeout')) === 'stopped'
-    } finally { if (!stopped) undoTeardown?.() }
-    if (!stopped) return null
+      if (mgr?.stopForIdle) outcome = await mgr.stopForIdle()
+      else if (mgr) { mgr.kill('idle'); outcome = 'stopped' }
+      else outcome = await tools.stopThroughOwner(session, 'idle', 'idle_timeout')
+    } finally { if (outcome !== 'stopped') undoTeardown?.() }
+    if (outcome !== 'stopped') {
+      // Only the owner's answer stands: an unreachable host or a lost reply is
+      // asked again next tick, and a record without a pid has no process to key on.
+      if (outcome === 'refused' && typeof session.pid === 'number') {
+        this.idleReapDeclined.set(session.claudeSessionId, { pid: session.pid, at: Date.now() })
+        log.session.info('health monitor: owner refused the idle stop, asking again later', {
+          sessionId: session.claudeSessionId, taskId: session.taskId, pid: session.pid, host: session.host,
+          retryInMinutes: Math.round(IDLE_REAP_RETRY_BACKOFF_MS / 60_000),
+        })
+      }
+      return null
+    }
+    this.idleReapDeclined.delete(session.claudeSessionId)
 
     const updateNow = new Date().toISOString()
     const updated = await updateSessionRecord(session.claudeSessionId, {
@@ -1941,7 +1971,15 @@ export class SessionHealthMonitor {
       if (!primarySessionIds.has(session.claudeSessionId)) continue
       const task = taskMap.get(session.taskId)
       if (!task || TERMINAL_PHASES.has(task.phase)) continue
-      const updatedMs = Date.parse(task.updated_at ?? '')
+      // The newest of the task's own write, its phase move and its last session
+      // activity: a session's phase write (updateTaskRaw) and a send's touch never
+      // bump updated_at, so that alone let the tick flip a task sent to 16 s earlier
+      // back to NEED_ACTION while its CLI resumed (2026-10-28, twice in one day).
+      const updatedMs = Math.max(
+        ...[task.updated_at, task.phase_changed_at, task.last_session_update]
+          .map((at) => Date.parse(at ?? '')).filter(Number.isFinite),
+        Number.NEGATIVE_INFINITY,
+      )
       if (Number.isFinite(updatedMs) && graceNow - updatedMs < RECONCILE_GRACE_MS) continue
 
       if (!taskSessions.has(session.taskId)) {

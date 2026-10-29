@@ -61,7 +61,7 @@ import { createHostServerSupervisor } from './host-server-core.js'
 import { createStreamRelay } from './stream-relay-core.js'
 import { createHostResume } from './host-resume-core.js'
 import { createCliOwner } from './cli-owner-core.js'
-import { boundedExecFile } from './daemon-core.js'
+import { argvNamesSession, boundedExecFile } from './daemon-core.js'
 import { createStreamCompact } from './stream-compact-core.js'
 import { createStreamFold } from './stream-fold-core.js'
 import { createHostStart } from './host-start-core.js'
@@ -307,6 +307,7 @@ export function getDaemonSource(): string {
     ['__LINE_WRITE_CUT__', lineWriteCut.toString()],
     ['__CREATE_REPLICA_LOGS__', createReplicaLogs.toString()],
     ['__BOUNDED_EXEC_FILE__', boundedExecFile.toString()],
+    ['__ARGV_NAMES_SESSION__', argvNamesSession.toString()],
   ]
   // The tracker is constructed before the cron sidecar loads, so its prompt
   // limit is stamped as a literal (like the version), not read from the sidecar.
@@ -2806,8 +2807,10 @@ const streamFold = (__CREATE_STREAM_FOLD__)({
   log: function (level, msg, meta) { logMsg(level, msg, meta); },
   rotateBytes: Number.isFinite(streamRotateEnv) ? streamRotateEnv : undefined,
 });
+/** The CLI's config dir, as every CLI this daemon spawns inherits it (host-local transcript readers). */
+const CLAUDE_CONFIG_HOME = process.env.CLAUDE_CONFIG_DIR || path.join(HOME_DIR, '.claude');
 const CLAUDE_PROJECTS_DIRS = Array.from(new Set([
-  path.join(process.env.CLAUDE_CONFIG_DIR || path.join(HOME_DIR, '.claude'), 'projects'),
+  path.join(CLAUDE_CONFIG_HOME, 'projects'),
   path.join(HOME_DIR, '.claude', 'projects'),
 ]));
 function pidAlive(pid) { try { process.kill(pid, 0); return true; } catch (e) { return !!e && e.code === 'EPERM'; } }
@@ -9597,6 +9600,31 @@ function orphanStopRefusal(sid, expectPid, home) {
   return null;
 }
 
+// A session whose spawn could not read its process's start time (a ps that timed
+// out under load) gets one now, when the live process's own command line names
+// this session (argvNamesSession, daemon-core.ts). Without it every stop of the
+// process was refused for good. Keep in sync with daemon-standalone.ts.
+const argvNamesSession = (__ARGV_NAMES_SESSION__);
+function recordMissingStartTime(sid, session) {
+  const pid = session.pid;
+  if (session.startTime || !Number.isSafeInteger(pid) || pid <= 1) return false;
+  if (SERVICE_MODE && session.bootId !== daemonBootId) return false;
+  const startTime = readStartTime(pid);
+  const argv = startTime ? commandLineOf(pid) : null;
+  if (!startTime || !argv || !argvNamesSession(argv, sid, session.args)) {
+    logMsg('warn', 'process identity: no start time recorded, and the process does not prove it runs this session', {
+      sid, pid, startTimeRead: !!startTime, commandLineRead: argv !== null && argv !== '',
+    });
+    return false;
+  }
+  session.startTime = startTime;
+  try { persistRegistry(); } catch (error) {
+    logMsg('warn', 'process identity: start time recorded in memory, registry not persisted', { sid, pid, error: String(error) });
+  }
+  logMsg('info', 'process identity: recorded the missing start time (its command line names the session)', { sid, pid, startTime });
+  return true;
+}
+
 function stopSessionProcess(ws, id, sid) {
   const session = sessions.get(sid);
   if (!session || !session.pid) {
@@ -9627,6 +9655,7 @@ function stopSessionProcess(ws, id, sid) {
     try { persistRegistry(); } catch (failure) { return sendError(ws, id, 'stop: registry persistence failed: ' + String(failure)); }
     return sendOk(ws, id, { stopped: true, noop: true, reason: 'already_exited' });
   }
+  if (!session.startTime) recordMissingStartTime(sid, session);
   const originalStartTime = session.startTime;
   const sameProcess = function () {
     return sessions.get(sid) === session && pid > 1
@@ -9634,7 +9663,12 @@ function stopSessionProcess(ws, id, sid) {
       // A pid+startTime pair only identifies a process within one boot.
       && (!SERVICE_MODE || session.bootId === daemonBootId);
   };
-  if (!sameProcess()) return sendError(ws, id, 'stop: process identity is unknown; refusing to signal');
+  if (!sameProcess()) {
+    logMsg('warn', 'cmdStop: process identity is unknown; refusing to signal', {
+      sid, pid, recordedStartTime: originalStartTime || null,
+    });
+    return sendError(ws, id, 'stop: process identity is unknown; refusing to signal');
+  }
   logMsg('info', 'cmdStop: stopping session (process group kill)', { sid, pid });
 
   // Nobody sends stop by accident, so record the intent BEFORE the first signal:
@@ -10895,9 +10929,20 @@ async function cmdFsFind(ws, id, cmd) {
   const maxDepth = cmd.maxDepth || 3;
   if (!name) return sendError(ws, id, 'fs.find: missing name');
 
+  // The default root names the CLI's transcripts dir: walk this daemon's own
+  // CLAUDE_CONFIG_DIR one too, since every CLI it spawns inherits that env and
+  // writes there, while a server knows only ~/.claude. One root per real dir.
+  // Keep in sync with daemon-standalone.ts.
+  const candidates = basePath === '~/.claude/projects' ? CLAUDE_PROJECTS_DIRS : null;
   // Expand ~ to home directory
   if (basePath === '~' || basePath.startsWith('~/')) {
     basePath = HOME_DIR + basePath.slice(1);
+  }
+  const roots = [];
+  const seenRoots = new Set();
+  for (const root of candidates || [basePath]) {
+    const key = await fs.promises.realpath(root).catch(function () { return root; });
+    if (!seenRoots.has(key)) { seenRoots.add(key); roots.push(root); }
   }
 
   try {
@@ -10921,7 +10966,7 @@ async function cmdFsFind(ws, id, cmd) {
         }
       }
     }
-    await walk(basePath, 0);
+    for (const root of roots) await walk(root, 0);
     sendOk(ws, id, { files: found });
   } catch (err) {
     sendError(ws, id, 'fs.find failed: ' + err.message);
@@ -11823,7 +11868,7 @@ async function cmdFsResolvePath(ws, id, cmd) {
       ref: ref,
       cwd: typeof cmd.cwd === 'string' && cmd.cwd ? cmd.cwd : undefined,
       sessionId: typeof cmd.sessionId === 'string' && cmd.sessionId ? cmd.sessionId : undefined,
-      claudeHome: path.join(HOME_DIR, '.claude'),
+      claudeHome: CLAUDE_CONFIG_HOME,
       homeDir: HOME_DIR,
       budgetMs: typeof cmd.budgetMs === 'number' ? cmd.budgetMs : undefined,
     });
@@ -11994,7 +12039,7 @@ async function computeChangesCached(sid, cwd, refresh) {
       const output = await changesCore.computeHostLocalChanges({
         sessionId: sid,
         cwd: cwd,
-        claudeHome: path.join(HOME_DIR, '.claude'),
+        claudeHome: CLAUDE_CONFIG_HOME,
         subCache: memo.subCache,
         gitRootByDir: memo.gitRootByDir,
         mainParse: memo.mainParse,
@@ -12200,7 +12245,7 @@ async function cmdTranscriptRewindProbe(ws, id, cmd) {
     }
   }
   try {
-    const input = { sessionId: sid, cwd: cwd, claudeHome: path.join(HOME_DIR, '.claude') };
+    const input = { sessionId: sid, cwd: cwd, claudeHome: CLAUDE_CONFIG_HOME };
     if (uuid) input.uuid = uuid;
     if (cuts) input.cuts = cuts;
     const output = await probeTranscriptRewindGated(input);

@@ -39,7 +39,7 @@ async function reap(): Promise<void> {
   const monitor = new SessionHealthMonitor()
   const session = { claudeSessionId: 'sid-watch', taskId: 'task-watch', process_status: 'idle' } as SessionRecord
   const run = (monitor as unknown as { reapIdleSession: Reap }).reapIdleSession.bind(monitor)
-  const killed = await run(session, { stopForIdle: async () => true, kill: () => {} }, 329,
+  const killed = await run(session, { stopForIdle: async () => 'stopped' as const, kill: () => {} }, 329,
     async (id, u) => ({ claudeSessionId: id, ...u }) as SessionRecord, { markExpectedTeardown: () => () => {} })
   expect(killed).toBe('sid-watch')
 }

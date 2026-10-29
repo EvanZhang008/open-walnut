@@ -162,7 +162,7 @@ describe('an ephemeral server and a daemon without owner-home-v1: no path sends 
     await expect(mgr.stop('user')).rejects.toThrow(STOP_NOT_SENT_NO_OWNERSHIP_CHECK)
     mgr.kill('maintenance')
     expect(mgr.hasPipe).toBe(true)
-    expect(await mgr.stopForIdle()).toBe(false)
+    expect(await mgr.stopForIdle()).toBe('refused')
     expect(conn.calls).toEqual([])
   })
 

@@ -2363,6 +2363,39 @@ export function defaultReadStartTime(fs: typeof import('node:fs'), pid: number):
   return null
 }
 
+/**
+ * Whether `argv` (a command line as ps prints it) is the CLI this daemon spawned
+ * for `sid`: print mode (`-p`/`--print`, which every CLI Walnut starts carries,
+ * so a person's interactive `claude -r <sid>` in a terminal never passes), a
+ * `--resume`/`-r`/`--session-id` of `sid`, not a fork, and, when the daemon
+ * holds the args it spawned with (`spawnArgs`, the program first), ending in
+ * exactly those args (the program itself may differ: a resolved path, a node
+ * shim). This is what proves a session's process when its start time was never
+ * recorded: a spawn whose `ps` timed out under load stored none, and every stop
+ * of that process was then refused for good (2026-10-28: one CLI, 1500+
+ * refusals a day). Self-contained: daemon-source.ts injects it as text
+ * (__ARGV_NAMES_SESSION__).
+ */
+export function argvNamesSession(argv: string, sid: string, spawnArgs?: unknown): boolean {
+  if (typeof argv !== 'string' || typeof sid !== 'string' || !sid || !argv.includes(sid)) return false
+  const t = argv.split(/\s+/).filter(Boolean)
+  if (t.includes('--fork-session')) return false
+  if (!t.includes('-p') && !t.includes('--print')) return false
+  let names = false
+  for (let i = 0; i < t.length && !names; i++) {
+    if ((t[i] === '--resume' || t[i] === '-r' || t[i] === '--session-id') && t[i + 1] === sid) names = true
+    if (t[i] === '--resume=' + sid || t[i] === '--session-id=' + sid) names = true
+  }
+  if (!names) return false
+  if (Array.isArray(spawnArgs) && spawnArgs.length > 1) {
+    const expected = spawnArgs.slice(1).map(String).join(' ').split(/\s+/).filter(Boolean)
+    if (expected.length > t.length) return false
+    const tail = t.slice(t.length - expected.length)
+    for (let i = 0; i < expected.length; i++) if (tail[i] !== expected[i]) return false
+  }
+  return true
+}
+
 /** Whether this host has a Linux /proc (every pid answers there, ps is never needed). */
 export function hasProcFs(fs: typeof import('node:fs')): boolean {
   try { return fs.existsSync('/proc/self/stat') } catch { return false }

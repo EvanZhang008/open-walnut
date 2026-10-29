@@ -35,6 +35,7 @@ import {
   defaultReadStartTimes,
   createAsyncStartTimeReader,
   boundedExecFile,
+  argvNamesSession,
   shouldAutoRespond,
   buildControlResponse,
   decideBridgeRestart,
@@ -1826,9 +1827,11 @@ const streamFold = createStreamFold<FoldState, TaskState>({
   log: (level, msg, meta) => logMsg(level, msg, meta),
   rotateBytes: Number.isFinite(streamRotateEnv) ? streamRotateEnv : undefined,
 })
+/** The CLI's config dir, as every CLI this daemon spawns inherits it (host-local transcript readers). */
+const CLAUDE_CONFIG_HOME = process.env.CLAUDE_CONFIG_DIR || path.join(HOME_DIR, '.claude')
 /** Where the CLI keeps transcripts; a rotation needs the session's to exist. */
 const CLAUDE_PROJECTS_DIRS = Array.from(new Set([
-  path.join(process.env.CLAUDE_CONFIG_DIR || path.join(HOME_DIR, '.claude'), 'projects'),
+  path.join(CLAUDE_CONFIG_HOME, 'projects'),
   path.join(HOME_DIR, '.claude', 'projects'),
 ]))
 const pidAlive = (pid: number): boolean => { try { process.kill(pid, 0); return true } catch (e) { return (e as NodeJS.ErrnoException).code === 'EPERM' } }
@@ -8079,6 +8082,35 @@ function orphanStopRefusal(sid: string, expectPid: unknown, home: unknown): { re
   return null
 }
 
+/**
+ * A session whose spawn could not read its process's start time (a `ps` that
+ * timed out under load) gets one now, when the live process's own command line
+ * names this session (argvNamesSession). Without it the record stayed empty for
+ * good, adopted that way again by every restart, and every stop of the process
+ * was refused: 2026-10-28, one CLI, a refusal every 30 s for over a day. The
+ * stop's own check then compares a second reading against this one.
+ * Keep in sync with daemon-source.ts.
+ */
+function recordMissingStartTime(sid: string, session: SessionData): boolean {
+  const pid = session.pid
+  if (session.startTime || typeof pid !== 'number' || !Number.isSafeInteger(pid) || pid <= 1) return false
+  if (SERVICE_MODE && session.bootId !== daemonBootId) return false
+  const startTime = readStartTime(pid)
+  const argv = startTime ? commandLineOf(pid) : null
+  if (!startTime || !argv || !argvNamesSession(argv, sid, session.args)) {
+    logMsg('warn', 'process identity: no start time recorded, and the process does not prove it runs this session', {
+      sid, pid, startTimeRead: !!startTime, commandLineRead: argv !== null && argv !== '',
+    })
+    return false
+  }
+  session.startTime = startTime
+  try { persistRegistry() } catch (error) {
+    logMsg('warn', 'process identity: start time recorded in memory, registry not persisted', { sid, pid, error: String(error) })
+  }
+  logMsg('info', 'process identity: recorded the missing start time (its command line names the session)', { sid, pid, startTime })
+  return true
+}
+
 function stopSessionProcess(ws: ServerWebSocket<WsData>, id: number, sid: string) {
   const session = sessions.get(sid)
   if (!session || !session.pid) {
@@ -8109,11 +8141,17 @@ function stopSessionProcess(ws: ServerWebSocket<WsData>, id: number, sid: string
     try { persistRegistry() } catch (failure) { return sendError(ws, id, `stop: registry persistence failed: ${String(failure)}`) }
     return sendOk(ws, id, { stopped: true, noop: true, reason: 'already_exited' })
   }
+  if (!session.startTime) recordMissingStartTime(sid, session)
   const originalStartTime = session.startTime
   const sameProcess = () => sessions.get(sid) === session && pid > 1
     && (!SERVICE_MODE || session.bootId === daemonBootId)
     && !!originalStartTime && readStartTime(pid) === originalStartTime
-  if (!sameProcess()) return sendError(ws, id, 'stop: process identity is unknown; refusing to signal')
+  if (!sameProcess()) {
+    logMsg('warn', 'cmdStop: process identity is unknown; refusing to signal', {
+      sid, pid, wsId: wsId(ws), recordedStartTime: originalStartTime ?? null,
+    })
+    return sendError(ws, id, 'stop: process identity is unknown; refusing to signal')
+  }
   logMsg('info', 'cmdStop: stopping session (process group kill)', { sid, pid })
 
   // Nobody sends `stop` by accident, so record the intent BEFORE the first
@@ -9364,9 +9402,20 @@ async function cmdFsFind(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
   const maxDepth = (cmd.maxDepth as number) || 3
   if (!name) return sendError(ws, id, 'fs.find: missing name')
 
+  // The default root names the CLI's transcripts dir: walk this daemon's own
+  // CLAUDE_CONFIG_DIR one too, since every CLI it spawns inherits that env and
+  // writes there, while a server knows only ~/.claude. One root per real dir.
+  // Keep in sync with daemon-source.ts.
+  const candidates = basePath === '~/.claude/projects' ? CLAUDE_PROJECTS_DIRS : null
   // Expand ~ to home directory
   if (basePath === '~' || basePath.startsWith('~/')) {
     basePath = HOME_DIR + basePath.slice(1)
+  }
+  const roots: string[] = []
+  const seenRoots = new Set<string>()
+  for (const root of candidates ?? [basePath]) {
+    const key = await fs.promises.realpath(root).catch(() => root)
+    if (!seenRoots.has(key)) { seenRoots.add(key); roots.push(root) }
   }
 
   try {
@@ -9390,7 +9439,7 @@ async function cmdFsFind(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
         }
       }
     }
-    await walk(basePath, 0)
+    for (const root of roots) await walk(root, 0)
     sendOk(ws, id, { files: found })
   } catch (err: unknown) {
     sendError(ws, id, 'fs.find failed: ' + (err as Error).message)
@@ -9445,7 +9494,7 @@ async function cmdFsResolvePath(ws: ServerWebSocket<WsData>, id: number, cmd: Re
       ref,
       cwd: typeof cmd.cwd === 'string' && cmd.cwd ? cmd.cwd : undefined,
       sessionId: typeof cmd.sessionId === 'string' && cmd.sessionId ? cmd.sessionId : undefined,
-      claudeHome: path.join(HOME_DIR, '.claude'),
+      claudeHome: CLAUDE_CONFIG_HOME,
       homeDir: HOME_DIR,
       budgetMs: typeof cmd.budgetMs === 'number' ? cmd.budgetMs : undefined,
     })
@@ -9839,7 +9888,7 @@ async function computeChangesCached(sid: string, cwd: string | undefined, refres
       const output = await computeHostLocalChanges({
         sessionId: sid,
         cwd,
-        claudeHome: path.join(HOME_DIR, '.claude'),
+        claudeHome: CLAUDE_CONFIG_HOME,
         subCache: memo.subCache,
         gitRootByDir: memo.gitRootByDir,
         mainParse: memo.mainParse,
@@ -10217,7 +10266,7 @@ async function cmdTranscriptRewindProbe(ws: ServerWebSocket<WsData>, id: number,
     const output = await probeTranscriptRewindGated({
       sessionId: sid,
       cwd,
-      claudeHome: path.join(HOME_DIR, '.claude'),
+      claudeHome: CLAUDE_CONFIG_HOME,
       ...(uuid ? { uuid } : {}),
       ...(cuts ? { cuts } : {}),
     })

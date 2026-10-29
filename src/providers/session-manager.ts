@@ -269,7 +269,8 @@ export interface SessionManager {
    * Marks resultEmitted so no spurious events fire.
    */
   kill(reason?: 'user' | 'maintenance' | 'idle'): void
-  stopForIdle?(): Promise<boolean>
+  /** The idle reaper's stop: 'refused' is the daemon's answer, 'unreachable'/'unknown' are not (owner-stop.ts OwnerStopOutcome). */
+  stopForIdle?(): Promise<import('../core/sessions/owner-stop.js').OwnerStopOutcome>
 
   /**
    * Process-level stop: close pipe, gracefully stop, wait for flush.

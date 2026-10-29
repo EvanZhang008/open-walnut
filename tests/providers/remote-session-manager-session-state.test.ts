@@ -62,7 +62,7 @@ describe('L2.1 RemoteSessionManager session_state wire-level contract', () => {
       // Every stop names this Walnut to a daemon that checks ownership (owner-home-v1).
       expect(send.mock.calls[0]).toEqual(['stop', { sid: 'sid-test', reason: 'maintenance', home: WALNUT_HOME, initiator: 'human' }, 10_000])
       send.mockResolvedValueOnce({ ok: true, stopped: false, reason: 'cron_supervised' })
-      expect(await mgr.stopForIdle()).toBe(false)
+      expect(await mgr.stopForIdle()).toBe('refused')
       expect(mgr.hasPipe).toBe(true)
       await mgr.stop('user')
       expect(send.mock.calls[2]).toEqual(['stop', { sid: 'sid-test', reason: 'user', home: WALNUT_HOME, initiator: 'human' }, 10_000])

@@ -1143,16 +1143,22 @@ export class RemoteSessionManager implements SessionManager {
     this._hasPipe = false
   }
 
-  async stopForIdle(): Promise<boolean> {
-    if (!this.conn?.connected || !this._sid) return false
+  /** Same outcomes as stopThroughOwner: a daemon's answer other than stopped is 'refused'. */
+  async stopForIdle(): Promise<import('../core/sessions/owner-stop.js').OwnerStopOutcome> {
+    if (!this.conn?.connected || !this._sid) return 'unreachable'
     const provenance = stopProvenance(this.conn, 'automatic')
-    if (!provenance) return false
+    if (!provenance) return 'refused'
     try {
       const result = await this.conn.send('stop', { sid: this._sid, reason: 'idle', ...provenance }, 10_000)
-      if (result.ok !== true || result.stopped !== true) return false
+      if (result.ok !== true || result.stopped !== true) {
+        log.session.info('RemoteSessionManager.stopForIdle: daemon declined', {
+          host: this.hostKey, sid: this._sid, why: describeStopRefusal(result),
+        })
+        return 'refused'
+      }
       this._hasPipe = false
-      return true
-    } catch { return false }
+      return 'stopped'
+    } catch { return 'unknown' }
   }
 
   async interrupt(): Promise<void> {
