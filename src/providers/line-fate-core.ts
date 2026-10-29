@@ -25,6 +25,14 @@
  *   after it is a write that died part way (the daemon was killed inside it), so
  *   the pipe may hold a cut copy of the line (lineWriteBegun, lineWriteCut).
  *
+ * - Never proof of anything about the line, only how long the process has been
+ *   still: a waiting answer from a write record carries when that write went in
+ *   (`writtenAt`) and, while the line's marker is in view, whether the CLI has
+ *   printed nothing since it (`quiet`). A CLI that runs a turn prints (text, tool
+ *   calls, a tool_progress beat every 30 s), so a quiet process is one that has
+ *   not read its input. The server bounds how long it trusts "waiting" for such a
+ *   process (ClaudeCodeSession.LINE_UNREAD_PARK_MS); the daemon decides nothing.
+ *
  * A marker alone proves nothing: it is written before the newline, so a write
  * cut short by the daemon's death leaves a marker for a line the CLI never got.
  * A marker from an older daemon carries no pid and is never counted either way.
@@ -34,7 +42,14 @@
 
 export type LineFateKind = 'ran' | 'cancelled' | 'dropped' | 'waiting'
 
-export interface LineFate { fate: LineFateKind; state?: string }
+export interface LineFate {
+  fate: LineFateKind
+  state?: string
+  /** waiting, from a write record: when that whole write went into the process (ms). */
+  writtenAt?: number
+  /** waiting, from a write record: the line's marker is in view and the CLI printed nothing after it. */
+  quiet?: true
+}
 
 export interface LineFateQuery {
   uuid: string
@@ -60,6 +75,12 @@ export interface LineFateScan {
   queuedAfterMarker: boolean
   /** When the newest such marker was written (ms), or null (none, or none with a time). */
   markerAt?: number | null
+  /**
+   * The CLI printed a line after the newest such marker. Walnut's own lines do
+   * not count: markers (walnut-injected) and the daemon's system notes
+   * (turn_retry, turn_retry_stopped, scheduled_task_fire).
+   */
+  outputAfterMarker?: boolean
 }
 
 /**
@@ -77,6 +98,7 @@ export function lineFateScan(text: string, q: LineFateQuery, prev: LineFateScan 
   let markerSeen = prev ? prev.markerSeen : false
   let queuedAfterMarker = prev ? prev.queuedAfterMarker : false
   let markerAt = prev && typeof prev.markerAt === 'number' ? prev.markerAt : null
+  let outputAfterMarker = prev ? prev.outputAfterMarker === true : false
   const body = text || ''
   let start = 0
   while (start < body.length) {
@@ -96,12 +118,18 @@ export function lineFateScan(text: string, q: LineFateQuery, prev: LineFateScan 
       if (mk && mk.subtype === 'walnut-injected' && mk.walnutPid === pid && typeof mk.walnutMessageId === 'string'
         && ids.indexOf(mk.walnutMessageId) !== -1) {
         markerSeen = true
+        outputAfterMarker = false
         const at = typeof mk.timestamp === 'string' ? Date.parse(mk.timestamp) : NaN
         if (Number.isFinite(at) && (markerAt === null || at > markerAt)) markerAt = at
       }
+    } else if (markerSeen && line && line.indexOf('walnut-injected') === -1
+      && !(line.indexOf('"type":"system"') !== -1 && (line.indexOf('"subtype":"turn_retry') !== -1
+        || line.indexOf('"subtype":"scheduled_task_fire"') !== -1))) {
+      // Anything else after the marker is the CLI's own output: it was not still.
+      outputAfterMarker = true
     }
   }
-  return { best: best, markerSeen: markerSeen, queuedAfterMarker: queuedAfterMarker, markerAt: markerAt }
+  return { best: best, markerSeen: markerSeen, queuedAfterMarker: queuedAfterMarker, markerAt: markerAt, outputAfterMarker: outputAfterMarker }
 }
 
 /** The fate a finished scan and the daemon's write records prove, or null. */
@@ -122,12 +150,18 @@ export function lineFateVerdict(scan: LineFateScan | null, writesText: string, q
     const records = writesText.split('\n')
     for (let i = records.length - 1; i >= 0; i--) {
       if (!records[i]) continue
-      let rec: { pid?: number; uuid?: string; ids?: unknown } | null = null
+      let rec: { pid?: number; uuid?: string; ids?: unknown; at?: unknown } | null = null
       try { rec = JSON.parse(records[i]) } catch { rec = null }
       if (!rec || rec.pid !== pid || !Array.isArray(rec.ids)) continue
       if (q.uuid && rec.uuid && rec.uuid !== q.uuid) continue
       const got = rec.ids as unknown[]
-      if (ids.every((id) => got.indexOf(id) !== -1)) return { fate: 'waiting' }
+      if (ids.every((id) => got.indexOf(id) !== -1)) {
+        // How long the process has been still, for the server's bound (see the header).
+        const waiting: LineFate = { fate: 'waiting' }
+        if (typeof rec.at === 'number' && Number.isFinite(rec.at)) waiting.writtenAt = rec.at
+        if (scan && scan.markerSeen && !scan.outputAfterMarker && !scan.queuedAfterMarker) waiting.quiet = true
+        return waiting
+      }
     }
   }
   if (scan && scan.markerSeen && scan.queuedAfterMarker) return { fate: 'waiting', state: 'queued' }
@@ -206,6 +240,25 @@ export function lineWriteCut(verdict: LineFate | null, q: LineFateQuery, scan: L
   if (!q.uuid || verdict !== null || begunAt === null) return false
   const markerAt = scan && typeof scan.markerAt === 'number' ? scan.markerAt : null
   return !(markerAt !== null && markerAt >= begunAt)
+}
+
+/** How much of one FIFO write of a line went into the pipe before the write ended. */
+export type LineWritten = 'none' | 'prefix' | 'body' | 'line'
+
+/**
+ * Classify a FIFO write that ended (well or not) from how far it got: `offset`
+ * bytes of a `length`-byte buffer whose first `lead` bytes are newlines put
+ * ahead of the line (a torn end, a rewrite). Those newlines alone leave nothing
+ * a CLI can run: 'none'. Every byte but the last newline: 'body' (a whole line
+ * the next newline would complete). Anything between: 'prefix'. All of it:
+ * 'line'. A write that failed after anything past the newlines went in may have
+ * left the line, or part of it, with the CLI, so it is not a "nothing was sent".
+ */
+export function lineWrittenPart(offset: number, length: number, lead: number): LineWritten {
+  if (length > 0 && offset >= length) return 'line'
+  if (offset <= lead) return 'none'
+  if (offset >= length - 1) return 'body'
+  return 'prefix'
 }
 
 /** The whole stream text at once (tests and smoke checks; the daemons scan piece by piece). */

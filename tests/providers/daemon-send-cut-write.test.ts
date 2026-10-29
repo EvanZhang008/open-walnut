@@ -177,7 +177,7 @@ describe('a resend after a write the daemon stopped inside (r4c F1)', () => {
       const core = createDaemonCore(ctx.deps)
       expect(await core.handleSendCommand('sid', text, 'u-1', batch)).toEqual({ ok: true })
       now += 5_000
-      expect(await core.handleSendCommand('sid', text, 'u-1', batch, { dedupe: true })).toEqual({ ok: true, duplicate: true, fate: 'waiting' })
+      expect(await core.handleSendCommand('sid', text, 'u-1', batch, { dedupe: true })).toEqual({ ok: true, duplicate: true, fate: 'waiting', writtenAt: expect.any(Number), quiet: true })
       expect(cliReads(s.readerFd).lines).toEqual([lineOf('u-1')])
     } finally { fs.closeSync(s.readerFd) }
   })

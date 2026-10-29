@@ -90,6 +90,12 @@ export function takeLine(sessionId: string | null | undefined, uuid: string): Qu
   return line.rows
 }
 
+/** The rows of a line still waiting for the CLI's word, left registered (empty: none). */
+export function lineRows(sessionId: string | null | undefined, uuid: string): QueuedMessage[] {
+  const line = sessionId ? bySession.get(sessionId)?.get(uuid) : undefined
+  return line ? [...line.rows] : []
+}
+
 /** The write failed: the caller's failure path owns the rows again. */
 export function dropLine(sessionId: string | null | undefined, uuid: string): void {
   takeLine(sessionId, uuid)

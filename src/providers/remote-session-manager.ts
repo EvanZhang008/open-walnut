@@ -816,7 +816,12 @@ export class RemoteSessionManager implements SessionManager {
         }
       }
       if (result.ok && result.duplicate === true) {
-        opts?.onFate?.({ fate: String(result.fate ?? 'waiting'), ...(typeof result.state === 'string' ? { state: result.state } : {}) })
+        opts?.onFate?.({
+          fate: String(result.fate ?? 'waiting'), ...(typeof result.state === 'string' ? { state: result.state } : {}),
+          // How long the process has been still (line-fate-core.ts); older daemons send neither.
+          ...(typeof result.writtenAt === 'number' ? { writtenAt: result.writtenAt } : {}),
+          ...(result.quiet === true ? { quiet: true as const } : {}),
+        })
       }
       // Written, but behind a cut copy of the line that the CLI will exit on: the
       // write is no proof of delivery, so the caller keeps the line (onCut).

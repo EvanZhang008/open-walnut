@@ -239,7 +239,7 @@ describe.each(TWINS)('send-dedupe-v1: $name', (twin) => {
     const markers = fs.readFileSync(cli.outputFile, 'utf8').split('\n').filter((l) => l.includes('walnut-injected')).map((l) => JSON.parse(l))
     expect(markers).toMatchObject([{ walnutMessageId: 'qm-1', walnutPid: cli.pid }])
     const again = body(await send('dd-same', 'hello', 'aaaaaaaa-0000-4000-8000-000000000001', ['qm-1'], true))
-    expect(again).toEqual({ ok: true, duplicate: true, fate: 'waiting' })
+    expect(again).toEqual({ ok: true, duplicate: true, fate: 'waiting', writtenAt: expect.any(Number), quiet: true })
     await new Promise((r) => setTimeout(r, 300))
     expect(received(dirs)).toHaveLength(1)
   }, 60_000)
@@ -332,6 +332,20 @@ describe.each(TWINS)('send-dedupe-v1: $name', (twin) => {
       .toEqual(['begin', 'unbegun', 'begin', 'ids'])
   }, 90_000)
 
+  // A write that put part of the line in and then failed must not answer like one
+  // that put nothing in (2026-10-24): the companion's direct send cleared its intent
+  // on that answer and could deliver the message twice.
+  it('a write that stalls with a prefix in the pipe answers session_dead with written prefix', async () => {
+    const dirs = makeDirs()
+    await boot(twin, dirs)
+    // The CLI never reads before this test ends, so the line's first 64 KB fill the pipe and the rest waits.
+    await start(dirs, 'dd-prefix', [`--read-after=${path.join(root, 'never')}`])
+    const big = 'x'.repeat(200 * 1024)
+    const res = body(await rpc({ cmd: 'send', sid: 'dd-prefix', message: big, uuid: 'aaaaaaaa-0000-4000-8000-00000000000f',
+      markers: [{ message: big, messageId: 'qm-prefix' }] }, 45_000))
+    expect(res).toMatchObject({ ok: false, reason: 'session_dead', written: 'prefix' })
+  }, 90_000)
+
   it('the CLI\'s lifecycle word and the write record settle a resend, also after a daemon restart', async () => {
     const dirs = makeDirs()
     await boot(twin, dirs)
@@ -358,7 +372,7 @@ describe.each(TWINS)('send-dedupe-v1: $name', (twin) => {
       return reply
     }
     expect(await resend('dd-word', 'run me', wordUuid, 'qm-4')).toEqual({ ok: true, duplicate: true, fate: 'ran', state: 'completed' })
-    expect(await resend('dd-rec', 'hold me', recUuid, 'qm-5')).toEqual({ ok: true, duplicate: true, fate: 'waiting' })
+    expect(await resend('dd-rec', 'hold me', recUuid, 'qm-5')).toEqual({ ok: true, duplicate: true, fate: 'waiting', writtenAt: expect.any(Number), quiet: true })
     await new Promise((r) => setTimeout(r, 300))
     expect(received(dirs).map((r) => r.content).sort()).toEqual(['hold me', 'run me'])
   }, 90_000)
@@ -375,7 +389,7 @@ describe.each(TWINS)('send-dedupe-v1: $name', (twin) => {
     const lostUuid = 'aaaaaaaa-0000-4000-8000-000000000006'
     expect(body(await send('dd-lost', 'lost once', lostUuid, ['qm-6']))).toMatchObject({ ok: true })
     // The record says waiting; without lostPid nothing changes.
-    expect(body(await send('dd-lost', 'lost once', lostUuid, ['qm-6'], true))).toEqual({ ok: true, duplicate: true, fate: 'waiting' })
+    expect(body(await send('dd-lost', 'lost once', lostUuid, ['qm-6'], true))).toEqual({ ok: true, duplicate: true, fate: 'waiting', writtenAt: expect.any(Number), quiet: true })
     expect(body(await send('dd-lost', 'lost once', lostUuid, ['qm-6'], true, cli.pid))).toEqual({ ok: true })
     expect(await waitFor(() => received(dirs).length === 1)).toBe(true)
     expect(received(dirs)).toMatchObject([{ uuid: lostUuid, content: 'lost once', pid: cli.pid }])

@@ -173,8 +173,12 @@ export interface LineWriteOptions {
   lostPid?: number
   /** Existing read-past proof count for this pid/uuid; transport-local, never sent to the daemon. */
   lostGeneration?: number
-  /** The daemon answered without writing, with what became of the line (send-dedupe-v1). */
-  onFate?: (fate: { fate: string; state?: string }) => void
+  /**
+   * The daemon answered without writing, with what became of the line (send-dedupe-v1).
+   * A waiting answer may carry when the line went in (`writtenAt`) and that the CLI
+   * printed nothing since (`quiet`), line-fate-core.ts.
+   */
+  onFate?: (fate: { fate: string; state?: string; writtenAt?: number; quiet?: true }) => void
   /** This line waits behind one whose answer is still being asked for. */
   onHeld?: () => void
   /** True once the user stopped the session: stop asking about this line. */

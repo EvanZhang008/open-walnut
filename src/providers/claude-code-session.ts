@@ -57,7 +57,7 @@ import {
 import type { QueuedMessage } from '../core/session-message-queue.js'
 import { lineUuidFor, noteTurnUserUuid, pickBatchUuid, turnUserUuid } from './batch-uuid.js'
 import {
-  announceReclaimed, awaitLine, awaitedLines, dropLine, heldRows, isLineAwaited, markUnconfirmed, noteHeld, noteLineState, onLinesReclaimed, releaseHeld, PROMPT_HOLD_REASON,
+  announceReclaimed, awaitLine, awaitedLines, dropLine, heldRows, isLineAwaited, lineRows, markUnconfirmed, noteHeld, noteLineState, onLinesReclaimed, releaseHeld, PROMPT_HOLD_REASON,
   takeLine, takeUntold, untakenLines, type LineState, type ReclaimReason, type UntakenLine,
 } from './line-consumption.js'
 import { registerEchoClaims, revokeEchoClaims } from '../core/echo-claims.js'
@@ -780,12 +780,28 @@ export class ClaudeCodeSession {
   static LINE_PROBE_MAX_INTERVAL_MS = 5 * 60_000
   /** How often one line the CLI read past is written again before it is shown as failed. */
   static MAX_LOST_REWRITES = 2
+  /**
+   * How long a still-unnamed line may wait in a process that answers nothing and
+   * prints nothing before its rows are parked as not read (checkLineAck). A turn
+   * that runs prints (text, tool calls, a tool_progress beat every 30 s), so only
+   * a process that has stopped reading its input stays this quiet.
+   */
+  static LINE_UNREAD_PARK_MS = 30 * 60_000
   /** The watch on each unnamed line, by uuid: the process it went into and the next question's timer.
    *  An entry is replaced or deleted whenever the line is named or written again, so a question in
    *  flight compares identity before it acts. */
   private _lineAcks = new Map<string, { pid: number; timer: ReturnType<typeof setTimeout> | null }>()
   /** Lines a process read past without taking them: that pid, and how often each was written again. */
   private _lostLines = new Map<string, { pid: number; rewrites: number }>()
+  /**
+   * How long each unnamed line has waited in a still process, by uuid (checkLineAck):
+   * the process, when the line went in, and since when that process has printed
+   * nothing. `seenAt`: output this object saw at or before it is already counted
+   * (a restarted server replays old lines, which say nothing about now).
+   */
+  private _lineQuiet = new Map<string, { pid: number; writtenAt: number; quietFrom: number; seenAt: number }>()
+  /** Lines parked as not read, by uuid, with the still process they wait in: no more questions about them. */
+  private _unreadParked = new Map<string, number>()
   /** The process that named each recent line `queued` (it holds the line). */
   private _lineQueuedIn = new Map<string, number | null>()
   /** The CLI process seen naming a line `queued` as it took it. Only for such a process does a
@@ -3910,7 +3926,7 @@ export class ClaudeCodeSession {
     // process, so the daemon writes the line again instead of trusting its record.
     const lost = uuid && opts?.dedupe ? this._lostLines.get(uuid) : undefined
     const lostPid = lost && lost.pid === this.pid ? lost.pid : undefined
-    let known: { fate: string; state?: string } | undefined
+    let known: { fate: string; state?: string; writtenAt?: number; quiet?: true } | undefined
     const cut = this.cutLineHold(uuid, rows, lineSid, opts?.markers ?? [], undefined, callerOnCut)
     let ownCut = false
     // The line waited behind one whose answer was still being asked for.
@@ -3961,9 +3977,14 @@ export class ClaudeCodeSession {
       this._lostLines.delete(uuid!)
     }
     // In the CLI's pipe and not yet named by it (a write, or the daemon's record
-    // alone): ask about it if it stays unnamed (send-lost-line-v1).
+    // alone): ask about it if it stays unnamed (send-lost-line-v1), and note how long
+    // its process has been still (a Retry of a line parked as not read asks again).
     if (lineSid && !unjudged && this._queuedFramesFrom != null && this._queuedFramesFrom === this.pid
-      && (!known || (known.fate === 'waiting' && !known.state))) this.armLineAck(uuid!, this.pid)
+      && (!known || (known.fate === 'waiting' && !known.state))) {
+      this._unreadParked.delete(uuid!)
+      this.noteLineQuiet(uuid!, this.pid, known)
+      this.armLineAck(uuid!, this.pid)
+    }
     if (known) {
       // The daemon wrote nothing: it told us what became of the line.
       log.session.info('line not written again: the daemon knows its fate', { sessionId: this.claudeSessionId, uuid, ...known, messageIds: rows.map((r) => r.id) })
@@ -4573,6 +4594,9 @@ export class ClaudeCodeSession {
   /** Watch a line just written (or reported waiting) into process `pid`. */
   private armLineAck(uuid: string, pid: number | null, attempt = 0): void {
     if (!uuid || pid == null || !this.claudeSessionId) return
+    if (this._unreadParked.get(uuid) === pid) return
+    // How long the process has been still counts from the first watch on it (noteLineQuiet).
+    this.noteLineQuiet(uuid, pid)
     this.clearLineAck(uuid)
     const entry: { pid: number; timer: ReturnType<typeof setTimeout> | null } = { pid, timer: null }
     const delay = Math.min(ClaudeCodeSession.LINE_ACK_GRACE_MS * 2 ** attempt, Math.max(ClaudeCodeSession.LINE_ACK_GRACE_MS, ClaudeCodeSession.LINE_PROBE_MAX_INTERVAL_MS))
@@ -4637,7 +4661,12 @@ export class ClaudeCodeSession {
       return
     }
     if (!answer) {
-      // Not read yet (or the CLI is stuck): proof of nothing. Ask again later.
+      // Not read yet (or the CLI is stuck): proof of nothing about the line. Ask
+      // again later, unless the process has been still past the bound.
+      if (this.parkUnreadLine(uuid, entry.pid)) {
+        this._lineAcks.delete(uuid)
+        return
+      }
       log.session.info('the CLI did not answer behind an unnamed line: it may not have read it yet', { sessionId: sid, uuid, pid: entry.pid, attempt })
       this.armLineAck(uuid, entry.pid, attempt + 1)
       return
@@ -4687,6 +4716,62 @@ export class ClaudeCodeSession {
     })
     this._lineReclaimDone = reverted
     void reverted.then(() => announceReclaimed(sid, 'lost'))
+  }
+
+  /**
+   * Note how long `pid` has been still around this line (checkLineAck's bound). A
+   * plain write: from now. The daemon's waiting answer (line-fate-core.ts): from
+   * when the write went in when it says the CLI printed nothing since (`quiet`),
+   * else from now. A watch already kept for this process keeps its own count:
+   * this object saw everything the process printed since.
+   */
+  private noteLineQuiet(uuid: string, pid: number | null, known?: { writtenAt?: number; quiet?: true }): void {
+    if (pid == null) return
+    const had = this._lineQuiet.get(uuid)
+    if (had?.pid === pid) return
+    const now = Date.now()
+    const writtenAt = typeof known?.writtenAt === 'number' && known.writtenAt <= now ? known.writtenAt : now
+    this._lineQuiet.delete(uuid)
+    this._lineQuiet.set(uuid, { pid, writtenAt, quietFrom: known?.quiet === true ? writtenAt : now, seenAt: now })
+    if (this._lineQuiet.size > 128) this._lineQuiet.delete(this._lineQuiet.keys().next().value!)
+  }
+
+  /**
+   * The process did not answer a question written after this unnamed line. That
+   * proves nothing about the line, so it is still trusted to be waiting, but not
+   * forever (2026-10-06: a trigger line waited in a CLI that read nothing for four
+   * days, then reached the next process as news): once the process has also
+   * printed nothing for LINE_UNREAD_PARK_MS, the line's rows are parked and the
+   * user is told it was not read. A turn that runs prints, so it is never parked.
+   *
+   * It can never run twice. The line stays registered: if the process reads it
+   * after all, its own word takes the parked rows out of the queue as delivered.
+   * A Retry goes out under the same uuid, so the daemon writes no second copy into
+   * this process (its write record answers "waiting") and Claude Code skips the
+   * uuid it already holds; a new process gets it only when the stream shows no run.
+   * Nothing goes out on its own: a parked row waits for the user. True: parked.
+   */
+  private parkUnreadLine(uuid: string, pid: number): boolean {
+    const sid = this.claudeSessionId
+    const quiet = this._lineQuiet.get(uuid)
+    if (!sid || !quiet || quiet.pid !== pid) return false
+    const lastOutput = this._lastClaudeOutputTs > quiet.seenAt ? this._lastClaudeOutputTs : 0
+    const stillSince = Math.max(quiet.quietFrom, lastOutput)
+    const stillMs = Date.now() - stillSince
+    if (stillMs < ClaudeCodeSession.LINE_UNREAD_PARK_MS) return false
+    const rows = lineRows(sid, uuid)
+    if (rows.length === 0) return false
+    this._unreadParked.delete(uuid)
+    this._unreadParked.set(uuid, pid)
+    if (this._unreadParked.size > 128) this._unreadParked.delete(this._unreadParked.keys().next().value!)
+    log.session.warn('a line waited in a process that reads nothing and prints nothing: its rows are parked', {
+      sessionId: sid, uuid, pid, writtenAt: new Date(quiet.writtenAt).toISOString(), stillMs, messageIds: rows.map((r) => r.id),
+    })
+    const minutes = Math.max(1, Math.round(stillMs / 60_000))
+    this.parkLineRows(rows, `Not read yet: this message reached Claude Code at ${new Date(quiet.writtenAt).toISOString()}, `
+      + `and Claude Code has not read its input or printed anything for ${minutes} minute${minutes === 1 ? '' : 's'}. The message is kept: `
+      + 'if Claude Code reads it later, it runs then. Retry sends it again without making a second copy.')
+    return true
   }
 
   /** Queued lines the CLI dropped go back to the composer, like Esc in Claude Code.
@@ -7740,6 +7825,8 @@ export class ClaudeCodeSession {
         noteLineState(this.claudeSessionId, lc.command_uuid, lc.state as LineState)
         // The CLI named the line: no question about it is needed (send-lost-line-v1).
         this.clearLineAck(lc.command_uuid)
+        this._lineQuiet.delete(lc.command_uuid)
+        this._unreadParked.delete(lc.command_uuid)
         if (lc.state === 'queued') {
           if (this.pid != null) this.noteLineQueued(lc.command_uuid, this.pid)
           break

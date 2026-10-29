@@ -95,7 +95,7 @@ describe('daemon send with dedupe (send-dedupe-v1)', () => {
     try {
       expect(await core.handleSendCommand('sid', 'hello', 'u-1', batch)).toEqual({ ok: true })
       expect(await core.handleSendCommand('sid', 'hello', 'u-1', batch, { dedupe: true }))
-        .toEqual({ ok: true, duplicate: true, fate: 'waiting' })
+        .toEqual({ ok: true, duplicate: true, fate: 'waiting', writtenAt: expect.any(Number), quiet: true })
       expect(drain(s.readerFd)).toHaveLength(1)
       expect(markers(s.jsonlPath)).toHaveLength(1)
     } finally { fs.closeSync(s.readerFd) }
@@ -108,7 +108,7 @@ describe('daemon send with dedupe (send-dedupe-v1)', () => {
       const first = core.handleSendCommand('sid', 'hello', 'u-1', batch)
       const again = core.handleSendCommand('sid', 'hello', 'u-1', batch, { dedupe: true })
       expect(await first).toEqual({ ok: true })
-      expect(await again).toEqual({ ok: true, duplicate: true, fate: 'waiting' })
+      expect(await again).toEqual({ ok: true, duplicate: true, fate: 'waiting', writtenAt: expect.any(Number), quiet: true })
       expect(drain(s.readerFd)).toHaveLength(1)
     } finally { fs.closeSync(s.readerFd) }
   })
@@ -353,7 +353,7 @@ describe('daemon send with dedupe (send-dedupe-v1)', () => {
       // Something else read the pipe: the CLI never got the line, the record stays.
       drainRaw(s.readerFd)
       expect(await core.handleSendCommand('sid', 'hello', 'u-1', batch, { dedupe: true }))
-        .toEqual({ ok: true, duplicate: true, fate: 'waiting' })
+        .toEqual({ ok: true, duplicate: true, fate: 'waiting', writtenAt: expect.any(Number), quiet: true })
       expect(drainRaw(s.readerFd)).toBe('')
 
       expect(await core.handleSendCommand('sid', 'hello', 'u-1', batch, { dedupe: true, lostPid: 915 })).toEqual({ ok: true })
@@ -396,7 +396,7 @@ describe('daemon send with dedupe (send-dedupe-v1)', () => {
       expect(await core.handleSendCommand('sid', 'hello', 'u-1', batch)).toEqual({ ok: true })
       drainRaw(s.readerFd)
       expect(await core.handleSendCommand('sid', 'hello', 'u-1', batch, { dedupe: true, lostPid: 900 }))
-        .toEqual({ ok: true, duplicate: true, fate: 'waiting' })
+        .toEqual({ ok: true, duplicate: true, fate: 'waiting', writtenAt: expect.any(Number), quiet: true })
       expect(drainRaw(s.readerFd)).toBe('')
     } finally { fs.closeSync(s.readerFd) }
     // A first write into a new process puts nothing ahead of its line (no fragment can

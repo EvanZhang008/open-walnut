@@ -7888,7 +7888,8 @@ async function sendSessionMessage(ws: ServerWebSocket<WsData>, id: number, cmd: 
   // dedupe (send-dedupe-v1): a resend after an unanswered send; core writes it only if this CLI lacks it.
   // lostPid (send-lost-line-v1): the server proved this CLI read past the line; core writes it again.
   const result = await core.handleSendCommand(sid, message, typeof uuid === 'string' ? uuid : undefined, markers, { dedupe: cmd.dedupe === true, lostPid: typeof cmd.lostPid === 'number' ? cmd.lostPid : null })
-  if ('error' in result) return sendError(ws, id, result.error)
+  // `written`: how much of the line went in before the write failed (daemon-core.ts SendResult).
+  if ('error' in result) return sendError(ws, id, result.error, result.written ? { written: result.written } : undefined)
   sendOk(ws, id, result as unknown as Record<string, unknown>)
 }
 

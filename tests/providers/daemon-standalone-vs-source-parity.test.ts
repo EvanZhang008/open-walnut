@@ -290,13 +290,16 @@ describe('L1.6 daemon-core vs daemon-source template parity', () => {
     const session = { pid: 4242, state: 'running', exitCode: null, ttftSendTs: null as number | null }
     const reap = vi.fn()
     const fifo = vi.fn(async (_sid: string, _session: unknown, _buf: Buffer) => outcome)
-    const run = new Function('sessions', 'process', 'normalizeMarkers', 'reapSession', 'chainFifoWrite', 'Buffer',
+    const { lineWrittenPart } = await import('../../src/providers/line-fate-core.js')
+    const run = new Function('sessions', 'process', 'normalizeMarkers', 'reapSession', 'chainFifoWrite', 'Buffer', 'lineWrittenPart',
       source.slice(start, end) + '\nreturn handleSendCommand')(
-      new Map([['sid', session]]), { kill: vi.fn() }, () => ({ list: [] }), reap, fifo, Buffer,
+      new Map([['sid', session]]), { kill: vi.fn() }, () => ({ list: [] }), reap, fifo, Buffer, lineWrittenPart,
     )
     const result = await run('sid', 'message', 'user-uuid')
     expect(result.ok).toBe(outcome === 'ok')
     if (outcome === 'EAGAIN') expect(result).toEqual({ ok: false, reason: 'EAGAIN', retriable: true })
+    // A failed write says how far it got; this stub wrote nothing (daemon-core.ts SendResult `written`).
+    if (outcome === 'ENXIO' || outcome === 'partial') expect(result.written).toBe('none')
     expect(reap.mock.calls).toEqual(outcome === 'ENXIO' ? [['sid', -1, 'send-enxio']]
       : outcome === 'partial' ? [['sid', -1, 'send-partial-write']] : [])
     expect(session.ttftSendTs !== null).toBe(outcome === 'ok')

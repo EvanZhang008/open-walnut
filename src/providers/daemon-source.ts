@@ -85,7 +85,7 @@ import { createTurnGuard } from './turn-guard-core.js'
 import { createClaudeCheck } from './claude-check-core.js'
 import { createBridgeUplink, createLoopDriftProbe } from './bridge-uplink-core.js'
 import { createWorkspaceCore } from './workspace-core.js'
-import { lineFateScan, lineFateVerdict, lineTornEnd, lineWriteBegun, lineWriteCut } from './line-fate-core.js'
+import { lineFateScan, lineFateVerdict, lineTornEnd, lineWriteBegun, lineWriteCut, lineWrittenPart } from './line-fate-core.js'
 import { createBudgetPersistence } from './usage-budget-persistence.js'
 
 /**
@@ -305,6 +305,7 @@ export function getDaemonSource(): string {
     ['__LINE_TORN_END__', lineTornEnd.toString()],
     ['__LINE_WRITE_BEGUN__', lineWriteBegun.toString()],
     ['__LINE_WRITE_CUT__', lineWriteCut.toString()],
+    ['__LINE_WRITTEN_PART__', lineWrittenPart.toString()],
     ['__CREATE_REPLICA_LOGS__', createReplicaLogs.toString()],
     ['__BOUNDED_EXEC_FILE__', boundedExecFile.toString()],
     ['__ARGV_NAMES_SESSION__', argvNamesSession.toString()],
@@ -6803,7 +6804,8 @@ function writeFifoQuick(pipePath, buf) {
 // (prefix written but unfinished at deadline — caller MUST reap: the pipe now
 // holds half a JSON line).
 const FIFO_WRITE_DEADLINE_MS = 20000;
-async function writeFifoFullyAsync(pipePath, buf, deadline, isAbandoned, beforeNewline) {
+// progress (optional): kept up to date with the bytes in so far, also when the write fails or throws.
+async function writeFifoFullyAsync(pipePath, buf, deadline, isAbandoned, beforeNewline, progress) {
   const RETRY_INTERVAL_MS = 25;
   let fd;
   try {
@@ -6828,7 +6830,7 @@ async function writeFifoFullyAsync(pipePath, buf, deadline, isAbandoned, beforeN
       const limit = barrierDone ? buf.length : barrier;
       try {
         const n = fs.writeSync(fd, buf, offset, limit - offset);
-        if (n > 0) { offset += n; continue; }
+        if (n > 0) { offset += n; if (progress) progress.sent = offset; continue; }
       } catch (err) {
         if (err && err.code === 'EPIPE') return 'ENXIO';
         if (!err || err.code !== 'EAGAIN') throw err;
@@ -6885,8 +6887,16 @@ async function chainFifoWrite(sid, session, buf, beforeNewline, line, raw) {
     const tornEnd = !!(line && line.tornEnd && line.tornEnd());
     if (tornEnd) logMsg('info', 'send: resending a line; a newline first ends what a dead write may have left', { sid: sid, pid: session.pid });
     const out = tornEnd ? Buffer.concat([Buffer.from('\\n'), buf]) : buf;
+    // How far the write gets, for a failure's answer (lineWrittenPart): its length and leading newlines.
+    const progress = line && line.progress;
+    if (progress) {
+      progress.length = out.length;
+      let lead = 0;
+      while (lead < out.length && out[lead] === 10) lead++;
+      progress.lead = lead;
+    }
     if (line && line.begin) line.begin(true);
-    const written = await writeFifoFullyAsync(session.pipePath, out, deadline, () => session.state === 'dead', beforeNewline);
+    const written = await writeFifoFullyAsync(session.pipePath, out, deadline, () => session.state === 'dead', beforeNewline, progress);
     if (written === 'ok' && line && line.written) line.written();
     // Not one byte went in: the write left nothing, so a resend must not be told of a cut.
     else if (written === 'EAGAIN' && line && line.begin) line.begin(false);
@@ -9163,7 +9173,8 @@ async function sendSessionMessage(ws, id, cmd) {
   // dedupe (send-dedupe-v1): a resend after an unanswered send; written only if this CLI lacks it.
   // lostPid (send-lost-line-v1): the server proved this CLI read past the line; it is written again.
   const result = await handleSendCommand(sid, message, uuid, cmd.markers, { dedupe: cmd.dedupe === true, lostPid: typeof cmd.lostPid === 'number' ? cmd.lostPid : null });
-  if (result.error) return sendError(ws, id, result.error);
+  // written: how much of the line went in before the write failed (daemon-core.ts SendResult).
+  if (result.error) return sendError(ws, id, result.error, result.written ? { written: result.written } : undefined);
   return sendOk(ws, id, result);
 }
 
@@ -9184,6 +9195,9 @@ async function handleSendCommand(sid, message, uuid, inputMarkers, opts) {
   }
   const envelope = { type: 'user', message: { role: 'user', content: message } };
   if (typeof uuid === 'string' && uuid) envelope.uuid = uuid;
+  // How far the write got, for a failure's answer (twin of daemon-core.ts).
+  const progress = { sent: 0, length: 0, lead: 0 };
+  const written = function () { return lineWrittenPart(progress.sent, progress.length, progress.lead); };
   try {
     // send-lost-line-v1: into the process that read past this line, a lone
     // newline first, so a fragment it holds is ended on its own (daemon-core.ts).
@@ -9200,12 +9214,16 @@ async function handleSendCommand(sid, message, uuid, inputMarkers, opts) {
       written: ids.length > 0 ? function () { recordLineWritten(session, uuid, ids); } : undefined,
       // A rewrite already starts with its newline: one is enough.
       tornEnd: function () { return torn.end && !rewrite; },
+      progress: progress,
     });
     if (result === 'budget_paused' || result === 'budget_checking') return { ok: false, reason: result };
     if (result && typeof result === 'object') {
-      logMsg('info', 'send: the line was not written again', { sid: sid, pid: session.pid, messageIds: ids, fate: result.fate, state: result.state || null });
+      logMsg('info', 'send: the line was not written again', { sid: sid, pid: session.pid, messageIds: ids, fate: result.fate, state: result.state || null, writtenAt: typeof result.writtenAt === 'number' ? result.writtenAt : null, quiet: result.quiet === true });
       const out = { ok: true, duplicate: true, fate: result.fate };
       if (result.state) out.state = result.state;
+      // A waiting line's write time, and that the CLI printed nothing since (line-fate-core.ts).
+      if (typeof result.writtenAt === 'number') out.writtenAt = result.writtenAt;
+      if (result.quiet === true) out.quiet = true;
       return out;
     }
     if (result === 'ok') {
@@ -9223,13 +9241,15 @@ async function handleSendCommand(sid, message, uuid, inputMarkers, opts) {
     if (result === 'dead') return { ok: false, reason: 'session_dead', exitCode: session.exitCode };
     if (result === 'ENXIO') {
       reapSession(sid, -1, 'send-enxio');
-      return { ok: false, reason: 'ENXIO', exitCode: session.exitCode };
+      // EPIPE mid-write lands here too, with part or all of the line in the pipe.
+      return { ok: false, reason: 'ENXIO', exitCode: session.exitCode, written: written() };
     }
     if (result === 'EAGAIN') return { ok: false, reason: 'EAGAIN', retriable: true };
     reapSession(sid, -1, 'send-partial-write');
-    return { ok: false, reason: 'session_dead', exitCode: session.exitCode };
+    // Same shape as a session that died before the write, so say how far it got.
+    return { ok: false, reason: 'session_dead', exitCode: session.exitCode, written: written() };
   } catch (err) {
-    return { error: 'send failed: ' + err.message };
+    return { error: 'send failed: ' + err.message, written: written() };
   }
 }
 
@@ -9367,6 +9387,7 @@ const lineFateVerdict = (__LINE_FATE_VERDICT__);
 const lineTornEnd = (__LINE_TORN_END__);
 const lineWriteBegun = (__LINE_WRITE_BEGUN__);
 const lineWriteCut = (__LINE_WRITE_CUT__);
+const lineWrittenPart = (__LINE_WRITTEN_PART__);
 async function scanTail(filePath, max, onText) {
   let fh;
   try { fh = await fs.promises.open(filePath, 'r'); } catch { return; }

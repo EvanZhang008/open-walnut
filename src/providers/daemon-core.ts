@@ -17,7 +17,7 @@
 
 import { execFileSync, execSync } from 'node:child_process'
 import { dirname, join as pathJoin } from 'node:path'
-import { lineFateScan, lineFateVerdict, lineTornEnd, lineWriteBegun, lineWriteCut, type LineFate, type LineFateKind, type LineFateScan } from './line-fate-core.js'
+import { lineFateScan, lineFateVerdict, lineTornEnd, lineWriteBegun, lineWriteCut, lineWrittenPart, type LineFate, type LineFateKind, type LineFateScan, type LineWritten } from './line-fate-core.js'
 
 // ── Shared types ──
 
@@ -270,14 +270,18 @@ export function budgetControlExempt(raw: string): boolean {
 export type SendResult =
   // cut: an earlier write of this line into this process died inside it (lineWriteCut):
   // the line is written, but the CLI may exit on what that write left without running it.
-  | { ok: true; duplicate?: true; fate?: LineFateKind; state?: string; cut?: true }
+  // writtenAt / quiet: a waiting line's write time, and that the CLI printed nothing since (line-fate-core.ts).
+  | { ok: true; duplicate?: true; fate?: LineFateKind; state?: string; writtenAt?: number; quiet?: true; cut?: true }
   | { ok: false; reason: 'not_found' }
   | { ok: false; reason: 'budget_paused' | 'budget_checking' }
-  | { ok: false; reason: 'session_dead'; exitCode: number | null }
-  | { ok: false; reason: 'ENXIO'; exitCode: number | null }
+  // written (on a user line's failed write): how much of it went into the pipe
+  // (lineWrittenPart). 'prefix' / 'body': the CLI may hold part or all of it, so the
+  // failure is no proof that nothing was sent. Absent from an older daemon.
+  | { ok: false; reason: 'session_dead'; exitCode: number | null; written?: LineWritten }
+  | { ok: false; reason: 'ENXIO'; exitCode: number | null; written?: LineWritten }
   | { ok: false; reason: 'EAGAIN'; retriable: true }
   | { ok: false; reason: 'partial_write' }
-  | { error: string }  // missing sid/message or non-classified write failure
+  | { error: string; written?: LineWritten }  // missing sid/message or non-classified write failure
 
 export interface DaemonCore<S extends CoreSessionData = CoreSessionData> {
   readRegistry: () => Record<string, RegistryEntry>
@@ -907,6 +911,9 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
       }
     }
 
+    // How far the write got, for a failure's answer (lineWrittenPart).
+    const progress = { sent: 0, length: 0, lead: 0 }
+    const written = (): LineWritten => lineWrittenPart(progress.sent, progress.length, progress.lead)
     try {
       // `uuid` is spread, never written as an explicit `undefined`: JSON.stringify
       // would drop it either way, but keeping the key conditional makes the
@@ -932,13 +939,19 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
         written: ids.length > 0 ? () => recordLineWritten(session, uuid, ids) : undefined,
         // A rewrite already starts with its newline: one is enough.
         tornEnd: () => torn.end && !rewrite,
+        progress,
       })
       if (result === 'budget_paused' || result === 'budget_checking') return { ok: false, reason: result }
       if (typeof result === 'object') {
         logger('info', 'send: the line was not written again', {
           sid, pid: session.pid, messageIds: ids, fate: result.fate, state: result.state ?? null,
+          writtenAt: result.writtenAt ?? null, quiet: result.quiet === true,
         })
-        return { ok: true, duplicate: true, fate: result.fate, ...(result.state ? { state: result.state } : {}) }
+        return {
+          ok: true, duplicate: true, fate: result.fate, ...(result.state ? { state: result.state } : {}),
+          ...(typeof result.writtenAt === 'number' ? { writtenAt: result.writtenAt } : {}),
+          ...(result.quiet === true ? { quiet: true as const } : {}),
+        }
       }
       if (result === 'ok') {
         if (rewrite) {
@@ -965,7 +978,8 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
       }
       if (result === 'ENXIO') {
         reapSession(sid, -1, 'send-enxio')
-        return { ok: false, reason: 'ENXIO', exitCode: session.exitCode }
+        // EPIPE mid-write lands here too, with part or all of the line in the pipe.
+        return { ok: false, reason: 'ENXIO', exitCode: session.exitCode, written: written() }
       }
       // ZERO bytes accepted within the deadline: the pipe is full but intact
       // (no truncated line entered it), so this is retriable — do NOT reap. A
@@ -976,9 +990,10 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
       // deadline — the FIFO now holds half a JSON line and the CLI's stdin
       // parser will choke on it. Terminal: reap so the caller sees session_dead.
       reapSession(sid, -1, 'send-partial-write')
-      return { ok: false, reason: 'session_dead', exitCode: session.exitCode }
+      // Same shape as a session that died before the write, so say how far it got.
+      return { ok: false, reason: 'session_dead', exitCode: session.exitCode, written: written() }
     } catch (err) {
-      return { error: 'send failed: ' + (err as Error).message }
+      return { error: 'send failed: ' + (err as Error).message, written: written() }
     }
   }
 
@@ -1230,7 +1245,11 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
      *  in (recordLineBegun), `written` right after
      *  a whole line went in (before the next write may ask), `tornEnd` (asked after
      *  `fate`): a newline goes in before the line (lineTornEnd). */
-    line?: { fate?: () => Promise<LineFate | null>; begin?: (on: boolean) => void; written?: () => void; tornEnd?: () => boolean },
+    line?: {
+      fate?: () => Promise<LineFate | null>; begin?: (on: boolean) => void; written?: () => void; tornEnd?: () => boolean
+      /** Filled in as the write goes: bytes in, the buffer's length, its leading newlines. */
+      progress?: { sent: number; length: number; lead: number }
+    },
     raw?: string,
   ): Promise<'ok' | 'ENXIO' | 'EAGAIN' | 'partial' | 'dead' | 'budget_paused' | 'budget_checking' | LineFate> {
     // Absolute deadline fixed BEFORE queuing behind the chain: chain wait +
@@ -1255,9 +1274,16 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
       const tornEnd = line?.tornEnd?.() === true
       if (tornEnd) logger('info', 'send: resending a line; a newline first ends what a dead write may have left', { sid, pid: session.pid })
       const out = tornEnd ? Buffer.concat([Buffer.from('\n'), buf]) : buf
+      const progress = line?.progress
+      if (progress) {
+        progress.length = out.length
+        let lead = 0
+        while (lead < out.length && out[lead] === 10) lead++
+        progress.lead = lead
+      }
       // Noted before the first byte: a daemon killed inside the write leaves it as the line's newest record.
       line?.begin?.(true)
-      const written = await writeFifoFullyAsync(session.pipePath, out, deadline, () => session.state === 'dead', beforeNewline)
+      const written = await writeFifoFullyAsync(session.pipePath, out, deadline, () => session.state === 'dead', beforeNewline, progress)
       if (written === 'ok') line?.written?.()
       // Not one byte went in: the write left nothing, so a resend must not be told of a cut.
       else if (written === 'EAGAIN') line?.begin?.(false)
@@ -1301,6 +1327,8 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
     deadline: number,
     isAbandoned?: () => boolean,
     beforeNewline?: () => void,
+    /** Kept up to date with the bytes in so far, also when the write fails or throws. */
+    progress?: { sent: number },
   ): Promise<'ok' | 'ENXIO' | 'EAGAIN' | 'partial'> {
     const RETRY_INTERVAL_MS = 25
     let fd: number
@@ -1334,6 +1362,7 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
           const n = fs.writeSync(fd, buf, offset, limit - offset)
           if (n > 0) {
             offset += n
+            if (progress) progress.sent = offset
             continue
           }
         } catch (err) {

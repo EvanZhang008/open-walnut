@@ -155,6 +155,18 @@ async function deliverOnce(input: DirectSendInput): Promise<DirectSendOutcome> {
         if (reason === 'session_stopped') {
           return notStarted({ ok: false, kind: 'refused', status: 409, code: 'session_stopped', message: 'Message predates the latest stop; send a new message to continue' });
         }
+        // The write failed after part or all of the line went into the CLI's pipe
+        // (`written`, daemon-core.ts SendResult): the CLI may hold it, so this is no
+        // proof that nothing was sent. The intent stays and a client retry is told
+        // the fate is unknown, never that it may send again. An older daemon sends
+        // no `written` and keeps the answers below.
+        const written = sent.written;
+        if (written === 'prefix' || written === 'body' || written === 'line') {
+          log.web.warn('direct send failed after part of the line went in: its fate is unknown', {
+            sessionId, host, messageId, reason, written,
+          });
+          return { ok: false, kind: 'transport', offline: false, ambiguous: true, message: `Send failed part way (${written} written): ${reason}` };
+        }
         if (reason === 'ENXIO' || reason === 'session_dead' || reason === 'not_found') {
           return notStarted({ ok: false, kind: 'refused', status: 409, code: 'session_dead', message: 'Session process died mid-send' });
         }
