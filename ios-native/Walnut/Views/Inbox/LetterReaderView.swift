@@ -68,6 +68,9 @@ struct LetterReaderView: View {
     /// and the letter's own height: together they size the conversation box.
     @State private var pageVisibleHeight: CGFloat = 0
     @State private var documentContentHeight: CGFloat = 0
+    /// The reply box's height: with the page's, the height the reply field's cap is taken from.
+    @State private var composerHeight: CGFloat = 0
+    @State private var draftGrowth = DraftGrowthFollow()
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     /// A DEFERRED document (over the server's inline threshold) is streamed to a
     /// local file and rendered from there — never held as a String, so a 100MB
@@ -124,7 +127,10 @@ struct LetterReaderView: View {
         .barPage(Color(uiColor: .systemBackground))
         .toolbarColorScheme(colorScheme, for: .navigationBar)
         .toolbar { toolbarButtons }
-        .safeAreaInset(edge: .bottom) { composer }
+        .safeAreaInset(edge: .bottom) {
+            composer
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { composerHeight = $0 }
+        }
         .navigationDestination(item: $openedSession) { session in
             SessionConversationView(session: session)
         }
@@ -226,6 +232,15 @@ struct LetterReaderView: View {
             .onChange(of: insertTick) { _, _ in
                 if boxed { showBox(page) }
             }
+            // A draft growing a line takes that height from the page: keep the
+            // box where the writer sees it, not slid under the reply box. Only
+            // for an edit (a keyboard being dragged away also resizes the reply
+            // box, every frame, and the page must not fight the finger), and
+            // once per burst of lines.
+            .onChange(of: composerHeight) { old, new in
+                guard new > old + 0.5, replyFocused, boxed, draftGrowth.editedRecently() else { return }
+                draftGrowth.once { showBox(page) }
+            }
         }
     }
 
@@ -277,15 +292,24 @@ struct LetterReaderView: View {
 
     /// The box's title row. Outside the box's own scroll, so a drag on it moves
     /// the page: a box that fills the screen never traps the reader in it.
+    ///
+    /// One line, its type capped at the first accessibility size as a bar's
+    /// title is: at the largest size it wrapped to two lines and took 128pt of
+    /// the 266 the box had with the keyboard up (2026-10-28). The thread itself
+    /// keeps the full size.
     private func conversationHeader(_ letter: Letter) -> some View {
         let count = threadItemCount(letter)
         return HStack(alignment: .firstTextBaseline) {
             Text("Conversation").font(.subheadline.weight(.semibold))
-            Spacer()
+                .lineLimit(1)
+                .layoutPriority(1)
+            Spacer(minLength: 8)
             Text(count == 1 ? "1 reply" : "\(count) replies")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+                .lineLimit(1)
         }
+        .dynamicTypeSize(...DynamicTypeSize.accessibility1)
         .padding(.horizontal, 16)
         .padding(.top, 12)
         .padding(.bottom, 8)
@@ -875,7 +899,10 @@ struct LetterReaderView: View {
             } else {
                 HStack(alignment: .bottom, spacing: 4) {
                     LetterReplyField(
-                        text: replyDraft, isFocused: $replyFocused, controller: replyField
+                        text: replyDraft, isFocused: $replyFocused, controller: replyField,
+                        // The page and the reply box share this height; the box
+                        // growing takes it from the page, so the sum holds still.
+                        maxHeight: LetterConversationBox.replyFieldCap(shared: pageVisibleHeight + composerHeight)
                     )
                     // A UIKit view has no width of its own to offer the row: take
                     // what is left beside the mic and send.
@@ -926,7 +953,10 @@ struct LetterReaderView: View {
     private var replyDraft: Binding<String> {
         Binding(
             get: { replies.draft(for: letterId) },
-            set: { replies.setDraft($0, for: letterId) }
+            set: {
+                draftGrowth.edited()
+                replies.setDraft($0, for: letterId)
+            }
         )
     }
 

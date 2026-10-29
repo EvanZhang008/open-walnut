@@ -29,8 +29,9 @@ extension LetterReplyUITests {
     func testADeadlineAnswerForARecordedReplyShowsSendingThenSentWithoutReopening() async throws {
         let stub = try await prepared()
         // An older server: it records the turn with no delivery, answers 504 at
-        // its deadline (1.5s here), and writes the delivery 5s after recording.
-        try await stub.call("POST", "__stub/letter-reply-mode?fail=504&count=1&delayMs=1500&settleMs=5000")
+        // its deadline (1.5s here), and writes the delivery when the test
+        // releases it, once it has seen "Sending" after that answer.
+        try await stub.call("POST", "__stub/letter-reply-mode?fail=504&count=1&delayMs=1500&hold=settle")
         let app = try launchPaired()
         openLetter(app, Self.letterA)
         let text = "Recorded before the deadline."
@@ -46,8 +47,8 @@ extension LetterReplyUITests {
     func testAPendingDeliveryAnsweredWith202ShowsSendingThenSentWithoutReopening() async throws {
         let stub = try await prepared()
         // The current server: 202 with the turn on record as pending, the
-        // outcome written 4s later.
-        try await stub.call("POST", "__stub/letter-reply-mode?fail=202&count=1&settleMs=4000")
+        // outcome written when the test releases it.
+        try await stub.call("POST", "__stub/letter-reply-mode?fail=202&count=1&hold=settle")
         let app = try launchPaired()
         openLetter(app, Self.letterA)
         let text = "On record, still being delivered."
@@ -94,7 +95,8 @@ extension LetterReplyUITests {
     @MainActor
     func testALateOutcomeAfterTheGiveUpStillTurnsTheLineToSent() async throws {
         let stub = try await prepared()
-        try await stub.call("POST", "__stub/letter-reply-mode?fail=202&count=1&settleMs=7000")
+        // The outcome is held until the phone has given up, so it lands after.
+        try await stub.call("POST", "__stub/letter-reply-mode?fail=202&count=1&hold=settle")
         // Backoff 3s in all, then a slow re-read every 3s.
         let app = try launchPaired(["-walnut.deliveryRecheckScale", "0.05"])
         openLetter(app, Self.letterA)
@@ -103,6 +105,7 @@ extension LetterReplyUITests {
         let unsure = statusLine(app, prefix: "Not confirmed. ")
         XCTAssertTrue(unsure.waitForExistence(timeout: 30), "never gave up: \(statusLabels(app))")
         try await stub.screenshot(app, "late-1-not-confirmed")
+        try await releaseHeld(stub)
         let sent = statusLine(app, prefix: "Sent to \(Self.storeTitle) · ")
         XCTAssertTrue(sent.waitForExistence(timeout: 30), "the late outcome never showed: \(statusLabels(app))")
         XCTAssertFalse(unsure.exists, "Not confirmed stayed next to Sent")
@@ -116,13 +119,15 @@ extension LetterReplyUITests {
     @MainActor
     func testALateOutcomeShowsWhenTheAppComesBackToTheForeground() async throws {
         let stub = try await prepared()
-        try await stub.call("POST", "__stub/letter-reply-mode?fail=202&count=1&settleMs=5000")
+        // The outcome is held until the phone has given up, so it lands after.
+        try await stub.call("POST", "__stub/letter-reply-mode?fail=202&count=1&hold=settle")
         let app = try launchPaired(["-walnut.deliveryRecheckScale", "0.05", "-walnut.deliveryLateSeconds", "600"])
         openLetter(app, Self.letterA)
         enter("Settles while the app is away.", app)
         app.buttons["inbox.letter.send"].tap()
         let unsure = statusLine(app, prefix: "Not confirmed. ")
         XCTAssertTrue(unsure.waitForExistence(timeout: 30), "never gave up: \(statusLabels(app))")
+        try await releaseHeld(stub)
         // Past the settle, and nothing has read the letter since the give-up.
         var settled = false
         for _ in 0..<40 where !settled {
@@ -179,8 +184,9 @@ extension LetterReplyUITests {
         XCTAssertTrue(retry.isHittable, "the refused reply's Retry is out of reach")
         try await stub.screenshot(app, "retry-old-1-before")
 
-        // 6s: long enough to look at the "Sending" state on a loaded machine.
-        try await stub.call("POST", "__stub/letter-reply-mode?delayMs=6000")
+        // The Retry's answer is held until the "Sending" state has been looked
+        // at: a 6s answer came and went before the checks on a loaded machine.
+        try await stub.call("POST", "__stub/letter-reply-mode?hold=answer")
         _ = try? await stub.call("POST", "__stub/letter-reply-mark?name=retry-old-tap")
         retry.tap()
         let moved = app.descendants(matching: .any).matching(
@@ -188,12 +194,11 @@ extension LetterReplyUITests {
                         "inbox.letter.humanTurn", "inbox.letter.pendingReply", oldest)
         ).firstMatch
         // On its way: last in the thread, reading "Sending", in view.
-        XCTAssertTrue(waitUntil(timeout: 5) { self.statusLabels(app).last?.hasPrefix("Sending to ") == true },
+        XCTAssertTrue(waitUntil(timeout: 20) { self.statusLabels(app).last?.hasPrefix("Sending to ") == true },
                       "the retried reply is not last and on its way: \(statusLabels(app))")
-        try await Task.sleep(for: .seconds(1))
         if let line = statusLine(under: moved, app) {
             let label = line.label
-            let frame = line.frame
+            let frame = try await settledFrame(line)
             let composer = element(app, "inbox.letter.composer").frame
             let top = app.navigationBars.firstMatch.frame.maxY
             XCTAssertTrue(label.hasPrefix("Sending to "), "its line reads \(label) while the Retry is on its way")
@@ -203,6 +208,7 @@ extension LetterReplyUITests {
             XCTFail("no status line under the retried reply while it is on its way: \(statusLabels(app))")
         }
         try await stub.screenshot(app, "retry-old-2-sending-last")
+        try await releaseHeld(stub)
         let sent = statusLine(app, prefix: "Sent to \(Self.storeTitle) · ")
         XCTAssertTrue(waitUntil(timeout: 20) {
             self.statusLabels(app).filter { $0.hasPrefix("Sending to ") }.isEmpty && sent.exists
@@ -269,17 +275,16 @@ extension LetterReplyUITests {
         XCTAssertTrue(line.waitForExistence(timeout: 20), "\(statusLabels(app))")
         let retry = app.buttons["inbox.letter.replyRetry"]
         XCTAssertTrue(retry.waitForExistence(timeout: 5))
-        try await Task.sleep(for: .seconds(1.5))
-        let before = (line: line.frame, label: line.label, row: retry.frame)
+        let before = (line: try await settledFrame(line), label: line.label, row: try await settledFrame(retry))
         try await stub.screenshot(app, "retry-size-1-failed")
 
-        // A slow Retry that fails again. 6s, so the busy row is still there for
-        // the queries below on a loaded machine (at load 160 one XCUITest query
-        // took 29s, and a 2.5s answer had come and gone before the first one).
-        try await stub.call("POST", "__stub/letter-reply-mode?delivery=failed&delayMs=6000")
+        // A Retry that fails again, its answer held until the busy row has been
+        // measured: on a loaded machine one XCUITest query took 29s (load 160),
+        // and a timed answer (2.5s, then 6s) came and went before the checks.
+        try await stub.call("POST", "__stub/letter-reply-mode?delivery=failed&hold=answer")
         retry.tap()
         let busy = element(app, "inbox.letter.replyRetrying")
-        XCTAssertTrue(busy.waitForExistence(timeout: 5), "no progress in the button row: \(statusLabels(app))")
+        XCTAssertTrue(busy.waitForExistence(timeout: 20), "no progress in the button row: \(statusLabels(app))")
         let during = statusLine(app, prefix: "Sending to \(Self.storeTitle)")
         XCTAssertTrue(during.exists, "the line does not say the Retry is on its way: \(statusLabels(app))")
         XCTAssertFalse(statusLine(app, prefix: "Not sent").exists, "the failure is still shown during the Retry: \(statusLabels(app))")
@@ -289,16 +294,45 @@ extension LetterReplyUITests {
         XCTAssertFalse(app.buttons["inbox.letter.replyRetry"].exists, "Retry can be tapped twice")
         try await stub.screenshot(app, "retry-size-2-busy")
 
-        XCTAssertTrue(retry.waitForExistence(timeout: 20), "the Retry never settled: \(statusLabels(app))")
-        try await Task.sleep(for: .seconds(1))
+        try await releaseHeld(stub)
+        XCTAssertTrue(retry.waitForExistence(timeout: 30), "the Retry never settled: \(statusLabels(app))")
         let after = statusLine(app, prefix: "Not sent to \(Self.storeTitle) · ")
+        XCTAssertTrue(after.waitForExistence(timeout: 10), "no failure line after the Retry: \(statusLabels(app))")
         XCTAssertEqual(after.label, before.label, "the failure line changed its words")
-        XCTAssertEqual(after.frame.height, before.line.height, accuracy: 0.5, "the failure line grew")
-        XCTAssertEqual(retry.frame.minY, before.row.minY, accuracy: 1, "the button row moved")
+        let afterLine = try await settledFrame(after)
+        let afterRow = try await settledFrame(retry)
+        XCTAssertEqual(afterLine.height, before.line.height, accuracy: 0.5, "the failure line grew")
+        XCTAssertEqual(afterRow.minY, before.row.minY, accuracy: 1, "the button row moved")
         try await stub.screenshot(app, "retry-size-3-failed-again")
     }
 
     // MARK: - Helpers
+
+    /// Lets the stub's held answers go (`hold=`), failing when nothing was held:
+    /// a release before the request arrived, or after the stub's own 40s guard
+    /// let it go, would prove nothing about the state in between.
+    @MainActor
+    func releaseHeld(_ stub: LetterStub, file: StaticString = #filePath, line: UInt = #line) async throws {
+        struct Released: Decodable { let released: Int }
+        let data = try await stub.call("POST", "__stub/letter-reply-release")
+        let released = try JSONDecoder().decode(Released.self, from: data).released
+        XCTAssertGreaterThanOrEqual(released, 1, "nothing was held to release", file: file, line: line)
+    }
+
+    /// The element's frame once two reads 300ms apart agree, so a measure is
+    /// taken after the layout settles however slow the machine is.
+    @MainActor
+    func settledFrame(_ element: XCUIElement) async throws -> CGRect {
+        var last = element.frame
+        for _ in 0..<40 {
+            try await Task.sleep(for: .milliseconds(300))
+            let now = element.frame
+            if now == last, !now.isEmpty { return now }
+            last = now
+        }
+        XCTFail("\(element.identifier) never stopped moving: \(last)")
+        return last
+    }
 
     /// From the Send until "Sent to": every line under the reply reads "Sending
     /// to ...", there is always one, and it ends with the reply and its line in
@@ -314,8 +348,12 @@ extension LetterReplyUITests {
         XCTAssertTrue(bubble.waitForExistence(timeout: 10), "the reply never showed")
         var seen: [String] = []
         var lineless = 0
-        var tookShot = false
-        let deadline = Date().addingTimeInterval(40)
+        // The stub holds the outcome (`hold=settle`): first the route's answer
+        // with the line still "Sending", then the release, then "Sent". Each
+        // phase ends on what the app shows, never on a clock, so a slow machine
+        // cannot skip a state between two samples.
+        var released = false
+        let deadline = Date().addingTimeInterval(90)
         while Date() < deadline {
             if let line = statusLine(under: bubble, app) {
                 // ONE read per sample: every `.label` asks the app again, and a
@@ -324,15 +362,17 @@ extension LetterReplyUITests {
                 let label = line.label
                 if seen.last != label { seen.append(label) }
                 if label.hasPrefix("Sent to ") { break }
-                if !tookShot, label.hasPrefix("Sending to "), try await stub.state().posts.first?.answeredAt != nil {
+                if !released, label.hasPrefix("Sending to "), try await stub.state().posts.first?.answeredAt != nil {
                     try await stub.screenshot(app, "\(shot)-1-sending-after-the-answer")
-                    tookShot = true
+                    try await releaseHeld(stub)
+                    released = true
                 }
             } else {
                 lineless += 1
             }
             try await Task.sleep(for: .milliseconds(150))
         }
+        XCTAssertTrue(released, "the route never answered while the line said Sending: \(seen)")
         XCTAssertEqual(seen.last.map { $0.hasPrefix("Sent to \(Self.storeTitle) · ") }, true,
                        "never Sent without a reopen: \(seen)")
         XCTAssertTrue(seen.dropLast().allSatisfy { $0.hasPrefix("Sending to ") }, "before Sent the line read \(seen)")

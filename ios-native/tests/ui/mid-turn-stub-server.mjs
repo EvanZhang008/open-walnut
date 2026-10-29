@@ -1260,6 +1260,15 @@ function answerInbox(p, req, res, raw, url) {
 //          delayMs   answer every later reply this long after recording it (a
 //                    slow relay), so the phone waits with the words in flight.
 //          settleMs  504 / 202 only: when the delivery outcome is written.
+//          hold      settle | answer: the outcome (504 / 202) or the answer to
+//                    the next replies waits for /__stub/letter-reply-release
+//                    instead of a clock, so a test sees the in-between state
+//                    however slow the machine is. A guard lets one go by itself
+//                    after 40s, under the app's 45s request timeout, and logs it.
+//   POST /__stub/letter-reply-release → writes every held outcome and sends every
+//        held answer (`hold` above), waiting up to 15s for one to arrive (the
+//        app's "Sending" shows before its request reaches the stub), and ends
+//        the hold. Answers `{released: N}`.
 //   POST /__stub/letter-reply-mark?name=N → logs `[mark] N <epoch seconds>`, to cut a screen
 //        recording of a run at the moment a test acted.
 //   POST /__stub/letter-reply-skew?ms=M → the server's clock for recorded human
@@ -1304,12 +1313,31 @@ const STT_DEFAULT_TEXT = 'and please rerun the tests \u7136\u540e\u628a\u7ed3\u6
 let letterReply = freshLetterReply()
 /** Responses held open by `fail=timeout|hang`, ended on reset so nothing leaks. */
 const heldReplyResponses = new Set()
+/** What `hold` keeps waiting for /__stub/letter-reply-release. */
+let heldReleases = []
+/** The longest a held answer waits: under the app's 45s request timeout. */
+const HOLD_GUARD_MS = 40_000
+
+/** Hold `run` for the release, or for the guard if the release never comes. */
+function holdForRelease(run, what) {
+  let done = false
+  const once = () => { if (!done) { done = true; run() } }
+  heldReleases.push(once)
+  const timer = setTimeout(() => {
+    settleTimers.delete(timer)
+    if (done) return
+    console.log(`[stub] HOLD GUARD: ${what} released after ${HOLD_GUARD_MS}ms without /__stub/letter-reply-release`)
+    heldReleases = heldReleases.filter((r) => r !== once)
+    once()
+  }, HOLD_GUARD_MS)
+  settleTimers.add(timer)
+}
 /** Delivery outcomes still to be written (`fail=504|202`), cleared on reset. */
 const settleTimers = new Set()
 
 function freshLetterReply() {
   return {
-    delivery: 'queued', fail: 'none', failCount: 0, delayMs: 0, settleMs: 20_000, skewMs: 0, posts: [],
+    delivery: 'queued', fail: 'none', failCount: 0, delayMs: 0, settleMs: 20_000, skewMs: 0, posts: [], hold: 'none',
     sttMode: 'ok', sttText: STT_DEFAULT_TEXT, sttCalls: 0, readFailCount: 0, reads: 0, answers: [],
   }
 }
@@ -1321,6 +1349,7 @@ function resetLetterReply() {
   heldReplyResponses.clear()
   for (const t of settleTimers) clearTimeout(t)
   settleTimers.clear()
+  heldReleases = []
   letterReply = freshLetterReply()
 }
 
@@ -1365,6 +1394,20 @@ function answerLetterReplyControl(p, req, res, url) {
     console.log('[stub] letter-reply letters seeded')
     return json(res, 200, { ok: true, ids: ['lt-stub-reply-a', 'lt-stub-reply-b', 'lt-stub-reply-c'] })
   }
+  if (p === '/__stub/letter-reply-release' && req.method === 'POST') {
+    const started = Date.now()
+    const release = () => {
+      if (heldReleases.length === 0 && Date.now() - started < 15_000) return setTimeout(release, 100)
+      const released = heldReleases
+      heldReleases = []
+      letterReply.hold = 'none'
+      for (const run of released) run()
+      console.log(`[stub] letter replies released ${released.length} after ${Date.now() - started}ms`)
+      json(res, 200, { ok: true, released: released.length })
+    }
+    release()
+    return
+  }
   if (p === '/__stub/letter-reply-mode' && req.method === 'POST') {
     const delivery = url.searchParams.get('delivery') || 'queued'
     const fail = url.searchParams.get('fail') || 'none'
@@ -1375,6 +1418,9 @@ function answerLetterReplyControl(p, req, res, url) {
     letterReply.failCount = fail === 'none' ? 0 : Math.max(1, Number(url.searchParams.get('count') || 1))
     letterReply.delayMs = Math.min(30_000, Math.max(0, Number(url.searchParams.get('delayMs') || 0)))
     letterReply.settleMs = Math.min(120_000, Math.max(0, Number(url.searchParams.get('settleMs') || 20_000)))
+    const hold = url.searchParams.get('hold') || 'none'
+    if (!['none', 'settle', 'answer'].includes(hold)) return json(res, 400, { ok: false, message: `unknown hold ${hold}` })
+    letterReply.hold = hold
     console.log(`[stub] letter replies → delivery=${delivery} fail=${fail} x${letterReply.failCount} delay=${letterReply.delayMs}ms`)
     return json(res, 200, { ok: true, delivery, fail, count: letterReply.failCount, delayMs: letterReply.delayMs })
   }
@@ -1616,16 +1662,18 @@ function answerLetterReply(p, req, res, raw) {
     letter: { ...letter, body: `# ${letter.subject}\n\nThis is the body of ${letter.id}.` },
     delivery,
   })
-  if (letterReply.delayMs > 0) {
+  if (letterReply.delayMs > 0 || letterReply.hold === 'answer') {
     // Held like the failure modes, so a reset ends it rather than answering late.
     heldReplyResponses.add(res)
     res.on('close', () => heldReplyResponses.delete(res))
-    setTimeout(() => {
+    const release = () => {
       if (res.destroyed || res.writableEnded) return
       heldReplyResponses.delete(res)
       post.answeredAt = nowISO()
       answer()
-    }, letterReply.delayMs)
+    }
+    if (letterReply.hold === 'answer') holdForRelease(release, `answer to ${clientId}`)
+    else setTimeout(release, letterReply.delayMs)
     return true
   }
   answer()
@@ -1654,12 +1702,15 @@ function answerSlowDelivery(res, letter, text, clientId, post, mode) {
     letter.readAt = at
     post.outcome = mode === '202' ? 'recorded:pending:202' : 'recorded:no-delivery:504'
     const settled = turn
-    const timer = setTimeout(() => {
-      settleTimers.delete(timer)
+    const settle = () => {
       settled.delivery = { ...deliveryFor(letterReply.delivery, sessionId), at: Date.now() }
       console.log(`[stub] human-reply delivery settled clientId=${clientId} → ${settled.delivery.status}`)
-    }, letterReply.settleMs)
-    settleTimers.add(timer)
+    }
+    if (letterReply.hold === 'settle') holdForRelease(settle, `outcome of ${clientId}`)
+    else {
+      const timer = setTimeout(() => { settleTimers.delete(timer); settle() }, letterReply.settleMs)
+      settleTimers.add(timer)
+    }
   }
   console.log(`[stub] human-reply ${post.outcome} clientId=${clientId} text=${JSON.stringify(text)}`)
   const final = turn.delivery && turn.delivery.status !== 'pending'

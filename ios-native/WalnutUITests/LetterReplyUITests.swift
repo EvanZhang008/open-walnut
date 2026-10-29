@@ -466,7 +466,9 @@ final class LetterReplyUITests: XCTestCase {
             app.buttons["inbox.letter.send"].tap()
             XCTAssertTrue(humanTurn(app, filler).waitForExistence(timeout: 20), "filler \(n) never landed")
         }
-        try await stub.call("POST", "__stub/letter-reply-mode?delayMs=8000")
+        // The answer is held until the reader has scrolled up and been measured:
+        // an 8s answer could land mid-swipe on a loaded machine.
+        try await stub.call("POST", "__stub/letter-reply-mode?hold=answer")
         let text = "The one whose answer is slow."
         enter(text, app)
         app.buttons["inbox.letter.send"].tap()
@@ -486,6 +488,7 @@ final class LetterReplyUITests: XCTestCase {
         XCTAssertTrue(subject.isHittable, "the swipe did not reach the first reply")
         let before = subject.frame.minY
         try await stub.screenshot(app, "follow-3-scrolled-up-while-sending")
+        try await releaseHeld(stub)
 
         var answered = false
         for _ in 0..<60 where !answered {
@@ -1027,6 +1030,63 @@ final class LetterReplyUITests: XCTestCase {
         XCTAssertEqual(state.posts.map(\.text), [lines.joined(separator: "\n")])
         XCTAssertEqual(fieldText(field), "")
         try await stub.screenshot(app, "long-2-sent")
+    }
+
+    /// At the largest text size a draft of three lines or more squeezed the
+    /// conversation to 43pt, or to nothing, with the keyboard up (2026-10-28):
+    /// five lines of that size are 340pt of the 430 above the keyboard. The
+    /// field now stops at a third of that height and scrolls inside it, and the
+    /// conversation keeps a readable height with the keyboard up and down.
+    @MainActor
+    func testALongDraftAtTheLargestSizeScrollsInTheFieldAndKeepsTheConversation() async throws {
+        let stub = try await prepared()
+        // Letter A: the first row, in view at this size without scrolling the list.
+        try await stub.call("POST", "__stub/letter-reply-long?id=\(Self.letterA)&n=14&sections=1")
+        let app = try launchPaired(["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"])
+        openLetter(app, Self.letterA)
+        XCTAssertTrue(element(app, "inbox.letter.subject").waitForExistence(timeout: 15))
+        scrollPageToTheBox(app)
+        let field = replyField(app)
+        let oneLine = try await settledFrame(field).height
+
+        let lines = (1...5).map { "Draft line \($0) \u{8349}\u{7A3F}" }
+        enter(lines.joined(separator: "\n"), app)
+        XCTAssertTrue(app.keyboards.element.exists, "the keyboard should be up for this case")
+        let fiveLines = try await settledFrame(field).height
+        try await stub.screenshot(app, "ax-draft-1-five-lines-keyboard-up")
+        let up = visibleConversation(app)
+        diagnoseValue(app, "ax-draft-up", "oneLine=\(oneLine) field=\(fiveLines) conversation=\(up)")
+        XCTAssertGreaterThan(fiveLines, oneLine * 1.4, "the field did not grow (\(oneLine) → \(fiveLines))")
+        XCTAssertGreaterThanOrEqual(up, 200, "the draft squeezed the conversation to \(up)pt")
+
+        typeMore("\nDraft line 6\nDraft line 7", app)
+        let sevenLines = try await settledFrame(field).height
+        XCTAssertEqual(sevenLines, fiveLines, accuracy: 2, "the field kept growing instead of scrolling")
+        XCTAssertGreaterThanOrEqual(visibleConversation(app), 200, "more lines squeezed the conversation")
+        XCTAssertEqual(fieldText(field), (lines + ["Draft line 6", "Draft line 7"]).joined(separator: "\n"), "the draft lost words")
+
+        dismissKeyboard(app)
+        XCTAssertFalse(app.keyboards.element.exists, "the keyboard did not go")
+        _ = try await settledFrame(field)
+        let down = visibleConversation(app)
+        try await stub.screenshot(app, "ax-draft-2-keyboard-down")
+        diagnoseValue(app, "ax-draft-down", "field=\(field.frame.height) conversation=\(down)")
+        XCTAssertGreaterThanOrEqual(down, 300, "with the keyboard down the conversation got \(down)pt")
+
+        app.buttons["inbox.letter.send"].tap()
+        XCTAssertTrue(statusLine(app, prefix: "Sent to ").waitForExistence(timeout: 20), "\(statusLabels(app))")
+        XCTAssertEqual(fieldText(field), "")
+        try await stub.screenshot(app, "ax-draft-3-sent")
+    }
+
+    /// How much of the conversation box shows between the navigation bar and
+    /// the reply box.
+    @MainActor
+    func visibleConversation(_ app: XCUIApplication) -> CGFloat {
+        let box = app.scrollViews["inbox.letter.conversation"].frame
+        let top = max(box.minY, app.navigationBars.firstMatch.frame.maxY)
+        let bottom = min(box.maxY, element(app, "inbox.letter.composer").frame.minY)
+        return max(0, bottom - top)
     }
 
     // MARK: - Voice

@@ -132,19 +132,12 @@ struct LetterThreadView: View {
         let when = date.map { Text($0.formatted(date: .abbreviated, time: .shortened)).font(.caption2) }
         // Name and date side by side while both fit whole; else the date goes under the name, so a
         // task's long name or a large text size never pushes the turn past the screen.
-        ViewThatFits(in: .horizontal) {
-            HStack(spacing: 5) {
+        LetterTurnHeaderLayout {
+            HStack(alignment: .firstTextBaseline, spacing: 5) {
                 icon
-                name.lineLimit(1)
-                if let when { when.foregroundStyle(.tertiary) }
+                name.lineLimit(2).truncationMode(.tail)
             }
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(alignment: .firstTextBaseline, spacing: 5) {
-                    icon
-                    name.lineLimit(2).truncationMode(.tail)
-                }
-                if let when { when.foregroundStyle(.tertiary) }
-            }
+            if let when { when.foregroundStyle(.tertiary) }
         }
         .foregroundStyle(.secondary)
     }

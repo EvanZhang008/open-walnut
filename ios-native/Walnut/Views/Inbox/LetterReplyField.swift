@@ -28,12 +28,15 @@ import UIKit
 ///     human did not send are never dropped.
 ///
 /// Growth matches the `TextField(axis: .vertical).lineLimit(1...5)` it replaces:
-/// one line tall when empty, up to five, then it scrolls.
+/// one line tall when empty, up to five, then it scrolls. `maxHeight` caps it
+/// lower when five lines would not leave the page room (the largest text sizes),
+/// never under one line.
 struct LetterReplyField: UIViewRepresentable {
     @Binding var text: String
     @Binding var isFocused: Bool
     let controller: LetterReplyFieldController
     var maxLines: Int = 5
+    var maxHeight: CGFloat?
     var identifier: String = "inbox.letter.replyField"
     var accessibilityLabel: String = "Reply to the agent"
 
@@ -92,9 +95,10 @@ struct LetterReplyField: UIViewRepresentable {
         let font = uiView.font ?? UIFont.preferredFont(forTextStyle: .body)
         let inset = uiView.textContainerInset.top + uiView.textContainerInset.bottom
         let minHeight = font.lineHeight.rounded(.up) + inset
-        let maxHeight = (font.lineHeight * CGFloat(maxLines)).rounded(.up) + inset
+        let linesHeight = (font.lineHeight * CGFloat(maxLines)).rounded(.up) + inset
+        let cap = maxHeight.map { max(minHeight, min(linesHeight, $0.rounded(.down))) } ?? linesHeight
         let fitting = uiView.sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude)).height
-        return CGSize(width: width, height: min(max(fitting, minHeight), maxHeight))
+        return CGSize(width: width, height: min(max(fitting, minHeight), cap))
     }
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }

@@ -31,6 +31,41 @@ final class LetterConversationBoxTests: XCTestCase {
         XCTAssertEqual(Box.height(visible: 150, document: 400), 150)
     }
 
+    /// At the largest text size five lines of draft took 340pt of the 430
+    /// above the keyboard and the box got 43pt (2026-10-28). The field takes at
+    /// most a third of the height it shares with the page.
+    func testTheReplyFieldTakesAtMostAThirdOfTheSharedHeight() {
+        XCTAssertNil(Box.replyFieldCap(shared: 0), "before the first measure the field keeps its lines")
+        let cap = try! XCTUnwrap(Box.replyFieldCap(shared: 430))
+        XCTAssertEqual(cap, 430.0 / 3, accuracy: 0.01)
+        // What is left for the page still gives the box more than its floor.
+        XCTAssertGreaterThanOrEqual(430 - cap, Box.floor)
+        XCTAssertEqual(Box.replyFieldCap(shared: 900)!, 300, accuracy: 0.01)
+    }
+
+    /// The page follows a growing draft only right after an edit: a keyboard
+    /// dragged away resizes the reply box too, and must not move the page.
+    @MainActor
+    func testTheDraftIsFollowedOnlyRightAfterAnEdit() {
+        let follow = DraftGrowthFollow()
+        let t = Date(timeIntervalSince1970: 1_000)
+        XCTAssertFalse(follow.editedRecently(now: t), "nothing was typed yet")
+        follow.edited(at: t)
+        XCTAssertTrue(follow.editedRecently(now: t.addingTimeInterval(0.2)))
+        XCTAssertFalse(follow.editedRecently(now: t.addingTimeInterval(0.6)), "a later resize is not the edit's")
+    }
+
+    /// One fit rule for both passes of the turn header, with room for rounding.
+    func testATurnHeaderThatMeasuresAsOneLineIsPlacedAsOne() {
+        let line = LetterTurnHeaderLayout.oneLine(
+            name: CGSize(width: 120, height: 16), date: CGSize(width: 90.3, height: 15), spacing: 5
+        )
+        XCTAssertEqual(line, CGSize(width: 215.3, height: 16))
+        XCTAssertTrue(LetterTurnHeaderLayout.fits(line, in: 215.3))
+        XCTAssertTrue(LetterTurnHeaderLayout.fits(line, in: 215), "bounds rounded down to the pixel grid")
+        XCTAssertFalse(LetterTurnHeaderLayout.fits(line, in: 214))
+    }
+
     func testBeforeTheFirstMeasureTheBoxHasItsFloor() {
         XCTAssertEqual(Box.height(visible: 0, document: 0), Box.floor)
     }
