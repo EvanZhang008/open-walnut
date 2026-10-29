@@ -196,7 +196,17 @@ extension WalnutTask {
             tags: detail.tags, summary: detail.summary,
             startDate: detail.startDate, endDate: detail.endDate, unread: detail.unread,
             parentTaskId: detail.parentTaskId, userStatus: detail.userStatus,
-            orgRole: detail.orgRole
+            orgRole: detail.orgRole, resultReport: detail.resultReport
         )
+    }
+
+    /// The detail row, keeping what only the list projection carries (what its session does now,
+    /// a stopped team), so opening a task never drops them.
+    func keepingListFields(of row: WalnutTask?) -> WalnutTask {
+        guard let row else { return self }
+        var t = self
+        if t.liveActivity == nil { t.liveActivity = row.liveActivity }
+        if t.teamStop == nil { t.teamStop = row.teamStop }
+        return t
     }
 }

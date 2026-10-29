@@ -382,6 +382,8 @@ struct TaskDetail: Codable {
     var sessionId: String? = nil
     var execSessionId: String? = nil
     var planSessionId: String? = nil
+    /// The latest result as stored (additive, 2026-10; may carry `settled`).
+    var resultReport: WalnutResultReport? = nil
 
     /// The session the web opens for this task: its own slot first, else the newest linked one.
     var currentSessionId: String? {
@@ -412,6 +414,7 @@ struct TaskDetail: Codable {
         case sessionId = "session_id"
         case execSessionId = "exec_session_id"
         case planSessionId = "plan_session_id"
+        case resultReport = "result_report"
     }
 }
 

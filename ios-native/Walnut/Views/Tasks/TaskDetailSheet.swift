@@ -96,7 +96,7 @@ struct TaskDetailSheet: View {
                 usedInitialDetail = true
                 if let detail = detailController.detail {
                     if !saving {
-                        fallback = WalnutTask(detail: detail)
+                        fallback = WalnutTask(detail: detail).keepingListFields(of: tasks.tasks.first { $0.id == task.id } ?? task)
                         confirmed = fallback
                     }
                     tasks.noteSessionIds(taskId: task.id, ids: detail.sessionIds ?? [])

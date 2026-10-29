@@ -174,6 +174,10 @@ struct TeamStatusSection: View {
                         ForEach(rows) { row in
                             Button { opened = row.task } label: { TeamStatusRowView(row: row) }
                                 .buttonStyle(.plain)
+                                // On the button, not its label: the row keeps its own id, and
+                                // `.contain` keeps the ids inside (.checked, .due, .live, .partial).
+                                .accessibilityElement(children: .contain)
+                                .accessibilityIdentifier("task.team.row")
                             Divider()
                         }
                     }
@@ -308,14 +312,10 @@ struct TeamStatusSection: View {
 struct TeamStatusRowView: View {
     let row: TeamStatusRow
     @Environment(\.dynamicTypeSize) private var typeSize
-    /// The live line's dot, grown with the text size.
-    @ScaledMetric(relativeTo: .footnote) private var liveDot: CGFloat = 6
 
     var body: some View {
         let s = row.status
-        let time = Text(RelativeTime.short(date: TeamStatusModel.rowTime(row)))
-            .font(.caption2)
-            .foregroundStyle(.secondary)
+        let time = RowTime(date: TeamStatusModel.rowTime(row))
         VStack(alignment: .leading, spacing: 3) {
             if typeSize.isAccessibilitySize {
                 // No room for three things on one line at these sizes: the title gets its own.
@@ -385,9 +385,11 @@ struct TeamStatusRowView: View {
                 TimelineView(.periodic(from: .now, by: 15)) { ctx in
                     let line = LiveActivityFormat.line(live, now: ctx.date.addingTimeInterval(AppClock.demoOffset))
                     HStack(alignment: .firstTextBaseline, spacing: 5) {
-                        // A glyph, so it grows with the text size and sits on the first line.
+                        // A symbol in the text's own font: it grows with it and is centred on the
+                        // first line the way a letter is (a fixed-size glyph sat on the baseline).
                         Image(systemName: "circle.fill")
-                            .font(.system(size: liveDot))
+                            .font(.footnote.weight(.medium))
+                            .imageScale(.small)
                             .foregroundStyle(line.quiet ? Color.orange : UserStatePill.textColor(.working))
                             .accessibilityHidden(true)
                         Text(line.text)
@@ -409,8 +411,18 @@ struct TeamStatusRowView: View {
         .padding(.vertical, 8)
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
-        // `.contain` keeps the ids inside (task.team.checked, .due, .live, .partial) reachable.
-        .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("task.team.row")
+    }
+}
+
+/// A row's time, ticking (30 s), on the AppClock.
+private struct RowTime: View {
+    let date: Date
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 30)) { ctx in
+            Text(RelativeTime.short(date: date, relativeTo: ctx.date.addingTimeInterval(AppClock.demoOffset)))
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
     }
 }

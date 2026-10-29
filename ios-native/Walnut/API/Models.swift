@@ -390,14 +390,21 @@ struct WalnutResultReport: Codable, Equatable {
     var at: String? = nil
     var notDone: [String]? = nil
     var result: String? = nil
+    /// Set once the not-done items were taken up or dropped. The list projection leaves a settled
+    /// report out; the full row (GET /v1/tasks/:id) keeps it with this mark.
+    var settled: Settled? = nil
+
+    struct Settled: Codable, Equatable {
+        var at: String? = nil
+    }
 
     private enum CodingKeys: String, CodingKey {
-        case at, result
+        case at, result, settled
         case notDone = "not_done"
     }
 
-    /// Partial: the server sends the field only then, but an empty list is never Partial.
-    var isPartial: Bool { !(notDone ?? []).isEmpty }
+    /// Partial: a non-empty not-done list nobody settled (the server's `isPartial`).
+    var isPartial: Bool { !(notDone ?? []).isEmpty && settled == nil }
 }
 
 /// `live_activity` on a task row: what its running session does now, read by the server from

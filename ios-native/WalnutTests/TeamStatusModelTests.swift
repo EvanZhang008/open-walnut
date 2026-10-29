@@ -86,6 +86,28 @@ final class TeamStatusModelTests: XCTestCase {
         XCTAssertEqual(TeamStatusModel.rowTime(row), WalnutTask.parseISO("2026-10-26T01:00:00Z"))
     }
 
+    func testAWorkingRowsTimeIsItsTurnStart() {
+        var t = task("w", phase: "IN_PROGRESS", user: .init(state: "working", at: "2026-10-26T01:00:00Z"))
+        t.liveActivity = WalnutLiveActivity(kind: "tool", since: "2026-10-26T09:05:00Z", turnStartedAt: "2026-10-26T09:00:00Z")
+        let row = TeamStatusModel.build(ownerId: "lead", tasks: [task("lead", parent: nil, phase: "IN_PROGRESS"), t]).open.first { $0.task.id == "w" }!
+        XCTAssertEqual(TeamStatusModel.rowTime(row), WalnutTask.parseISO("2026-10-26T09:00:00Z"))
+    }
+
+    func testTheDetailRowKeepsItsPartialResultAndASettledOneIsNotPartial() throws {
+        let json = #"{"id":"p","title":"P","phase":"COMPLETE","result_report":{"at":"2026-10-26T01:00:00Z","not_done":["a","b"]}}"#
+        let detail = try JSONDecoder().decode(TaskDetail.self, from: Data(json.utf8))
+        let t = WalnutTask(detail: detail)
+        XCTAssertEqual(t.resultReport?.notDone, ["a", "b"])
+        XCTAssertTrue(t.resultReport?.isPartial == true)
+        let settled = #"{"id":"p","title":"P","result_report":{"at":"x","not_done":["a"],"settled":{"at":"y","how":"taken"}}}"#
+        let s = try JSONDecoder().decode(TaskDetail.self, from: Data(settled.utf8))
+        XCTAssertFalse(WalnutTask(detail: s).resultReport?.isPartial ?? true)
+        // What only the list carries survives opening the task.
+        var row = t
+        row.liveActivity = WalnutLiveActivity(kind: "tool", since: "2026-10-26T09:05:00Z")
+        XCTAssertNotNil(WalnutTask(detail: detail).keepingListFields(of: row).liveActivity)
+    }
+
     func testAnAskReadsAsAClauseInTheBrief() {
         XCTAssertEqual(TeamStatusModel.clause("Pick a residency."), "Pick a residency")
         XCTAssertEqual(TeamStatusModel.clause("  Send it by Friday;  "), "Send it by Friday")

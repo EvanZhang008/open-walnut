@@ -88,6 +88,8 @@ enum TeamStatusModel {
     static func rowTime(_ row: TeamStatusRow) -> Date {
         let t = row.task
         if row.state == .done { return WalnutTask.parseISO(t.completedAt ?? t.updatedAt) ?? .distantPast }
+        // Working now: since its turn began, not since its last report ("Working · 1h ago").
+        if row.state == .working, let began = WalnutTask.parseISO(t.liveActivity?.turnStartedAt) { return began }
         // The status's own time: any other edit (a pin, a rename) is not news about the work.
         return WalnutTask.parseISO(row.status?.at) ?? WalnutTask.parseISO(t.updatedAt) ?? .distantPast
     }
