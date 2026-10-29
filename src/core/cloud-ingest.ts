@@ -7,7 +7,9 @@
  * 5xx is 'failed', and the caller must NOT retry the same bytes on the bridge:
  * the field failure this lane exists for damages upload bytes in transit, and
  * the bridge is the one connection whose loss costs the phone everything at
- * once. The self-heal sweep retries on the next tick. Only a replica that does
+ * once. A request whose connection broke under it (that damage, seen as a TLS
+ * error or a reset) goes again on this lane, on a fresh connection, at most
+ * twice more; anything else waits for the self-heal sweep. Only a replica that does
  * not have the route (404/405, older code) or refuses the credential (401/403)
  * answers 'unsupported', which sends the payload down the legacy bridge lane and
  * rests this lane for UNSUPPORTED_BACKOFF_MS.
@@ -126,7 +128,10 @@ export async function postToCloudIngest(
   try {
     if (cloudIngestResting()) return 'unsupported' // refused while this one waited for a slot
     const body = await gzip(Buffer.from(`{"kind":${JSON.stringify(kind)},"data":${dataJson}}`, 'utf8'))
-    const res = await fetch(ep.url, {
+    // An upsert is idempotent, so one whose connection broke under it goes again
+    // on a fresh one (brokenInTransit): never after a refused connection, a DNS
+    // miss or the deadline, which a retry seconds later would only repeat.
+    const res = await sendStep(() => fetch(ep.url, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${ep.token}`,
@@ -135,7 +140,7 @@ export async function postToCloudIngest(
       },
       body,
       signal: AbortSignal.timeout(timeoutMs),
-    })
+    }), brokenInTransit)
     status = res.status
     // Read whole (it also releases the socket): a few bytes of JSON.
     const answer = await res.text().catch(() => '')
@@ -173,7 +178,23 @@ function staleSocketReset(err: unknown): boolean {
   return code === 'ECONNRESET' || code === 'EPIPE' || code === 'UND_ERR_SOCKET'
 }
 
-/** The waits before a replica or journal step goes once more after its connection broke. */
+/**
+ * The connection broke while a request was on it, so the request never reached
+ * the companion whole: a reset socket (staleSocketReset), or a TLS error. The
+ * TLS one is the field failure (2026-10-29): some network paths damage upload
+ * bytes, the far side's TLS layer fails the record's integrity check, sends a
+ * `bad_record_mac` alert and closes, and bun's fetch reports that as EPROTO "The
+ * TLS handshake failed" (Node: an ERR_SSL_* cause). From one Mac 3 to 10 in 100
+ * requests with a 1 MB body broke this way against three unrelated TLS servers,
+ * and none of 60 from another network. A fresh connection almost always gets through.
+ */
+function brokenInTransit(err: unknown): boolean {
+  if (!(err instanceof Error) || isFetchAbort(err)) return false
+  const code = fetchErrorCode(err)
+  return code === 'EPROTO' || code.startsWith('ERR_SSL_') || staleSocketReset(err)
+}
+
+/** The waits before a step goes once more after its connection broke. */
 const STEP_RETRY_MS = [2_000, 5_000]
 let stepRetryMs = STEP_RETRY_MS
 
@@ -183,14 +204,18 @@ let stepRetryMs = STEP_RETRY_MS
  * reset, else after 2 s; the second after 5 s (a 4 MB letter body sent across the
  * internet lost its connection on the first inbox copy round, 2026-10-21, as the
  * build upload's chunks did). A deadline is never sent again: the companion may
- * still be working on it.
+ * still be working on it. `retryable` narrows which errors go again (the ingest
+ * lane: only a connection that broke, see brokenInTransit).
  */
-async function sendStep(send: () => Promise<globalThis.Response>): Promise<globalThis.Response> {
+async function sendStep(
+  send: () => Promise<globalThis.Response>,
+  retryable: (err: unknown) => boolean = (err) => err instanceof Error && !isFetchAbort(err),
+): Promise<globalThis.Response> {
   for (let attempt = 0; ; attempt++) {
     try {
       return await send()
     } catch (err) {
-      if (!(err instanceof Error) || err.name === 'TimeoutError' || err.name === 'AbortError' || attempt >= stepRetryMs.length) throw err
+      if (!(err instanceof Error) || isFetchAbort(err) || !retryable(err) || attempt >= stepRetryMs.length) throw err
       const wait = attempt === 0 && staleSocketReset(err) ? 0 : stepRetryMs[attempt]
       if (wait > 0) await new Promise((r) => setTimeout(r, wait))
     }

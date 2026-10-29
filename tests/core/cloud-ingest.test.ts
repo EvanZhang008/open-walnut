@@ -8,6 +8,9 @@
  *     upload bytes damaged in transit, and the bridge must not carry them);
  *   - the body is gzip'd `{kind, data}`, with the bearer machine token;
  *   - latest-wins serialization per key;
+ *   - an ingest whose connection broke under it (a reset, or a TLS error: what
+ *     damaged upload bytes look like) goes again on a fresh one, at most twice
+ *     more; a refused connection or a deadline does not;
  *   - the replica lane's retries when a connection breaks before any answer
  *     (a pooled keep-alive socket closed under the next step, a big body lost
  *     on the way): at most two more, never after a deadline;
@@ -18,6 +21,7 @@
  * Only the endpoint lookup (the bridge's own config: URL + machine token) is stubbed.
  */
 import http from 'node:http'
+import net from 'node:net'
 import zlib from 'node:zlib'
 import type { AddressInfo } from 'node:net'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
@@ -208,6 +212,51 @@ describe('postToCloudIngest', () => {
     bridgeCfg = { enabled: true, url: `ws://127.0.0.1:${deadPort}/bridge`, token: 'machine-token-local' }
     expect(await postToCloudIngest('projection-upsert', '{"which":"sessions","data":{}}')).toBe('failed')
     expect(cloudIngestResting()).toBe(false)
+  })
+
+  it('a connection that breaks under the upload goes again on a fresh one, with the same bytes', async () => {
+    _resetCloudIngestForTesting({ stepRetryMs: [20, 40] })
+    point()
+    resets = 1
+    expect(await postToCloudIngest('transcript-upsert', tail('broken-once'))).toBe('sent')
+    expect(seen).toHaveLength(2)
+    expect(seen[1]?.body).toEqual(seen[0]?.body)
+  })
+
+  it('a TLS failure (what damaged upload bytes look like) is tried at most twice more, then failed', async () => {
+    // A server that answers a TLS ClientHello with plain bytes: bun's fetch says
+    // EPROTO "The TLS handshake failed", the error a companion's bad_record_mac
+    // alert produces in the field; Node's names an ERR_SSL_* cause.
+    _resetCloudIngestForTesting({ stepRetryMs: [20, 40] })
+    let conns = 0
+    const notTls = net.createServer((c) => { conns++; c.once('data', () => c.end('HTTP/1.1 400 Bad Request\r\n\r\n')) })
+    await new Promise<void>((r) => notTls.listen(0, '127.0.0.1', r))
+    try {
+      bridgeCfg = { enabled: true, url: `wss://127.0.0.1:${(notTls.address() as AddressInfo).port}/bridge`, token: 'machine-token-local' }
+      expect(await postToCloudIngest('projection-upsert', '{"which":"sessions","data":{}}')).toBe('failed')
+      expect(conns).toBe(3)
+      expect(cloudIngestResting()).toBe(false)
+    } finally {
+      await new Promise<void>((r) => notTls.close(() => r()))
+    }
+  })
+
+  it('a refused connection and a deadline are not tried again on this lane (the sweep retries)', async () => {
+    _resetCloudIngestForTesting({ stepRetryMs: [5_000, 5_000] })
+    const dead = http.createServer()
+    await new Promise<void>((r) => dead.listen(0, '127.0.0.1', r))
+    const deadPort = (dead.address() as AddressInfo).port
+    await new Promise<void>((r) => dead.close(() => r()))
+    bridgeCfg = { enabled: true, url: `ws://127.0.0.1:${deadPort}/bridge`, token: 'machine-token-local' }
+    const t0 = Date.now()
+    expect(await postToCloudIngest('projection-upsert', '{"which":"sessions","data":{}}')).toBe('failed')
+    expect(Date.now() - t0).toBeLessThan(3_000) // never the 5 s retry wait
+
+    _resetCloudIngestForTesting({ timeoutMs: 300, stepRetryMs: [20, 40] })
+    point()
+    answerMode = 'hang'
+    expect(await postToCloudIngest('projection-upsert', '{"which":"sessions","data":{}}')).toBe('failed')
+    expect(seen).toHaveLength(1)
   })
 
   it('no companion configured (or the bridge turned off): unsupported without a request', async () => {
