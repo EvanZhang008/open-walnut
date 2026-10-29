@@ -10,6 +10,7 @@ import { log } from '../logging/index.js'
 import { getDaemonConnection } from '../providers/daemon-connection.js'
 import { isSelfHost } from '../replica/self-host.js'
 import { getConfig } from './config-manager.js'
+import { claudeProjectsSearchRoots } from './claude-config-dir.js'
 import type { SshTarget } from '../providers/session-io.js'
 import type { SessionFileReader } from './session-file-reader.js'
 import type { FileGitCommit } from './file-history-git.js'
@@ -611,24 +612,29 @@ export class DaemonFileReader implements SessionFileReader {
 
   /**
    * Locate a session JSONL's absolute path via fs.find WITHOUT reading it.
-   * One RPC — used by callers that want to stat/range-read afterwards (e.g.
-   * the session-changes incremental cache for hashed-cwd sessions, where a
-   * full read just to learn the path would defeat the point).
+   * One RPC per search root (claude-config-dir.ts) — used by callers that want
+   * to stat/range-read afterwards (e.g. the session-changes incremental cache
+   * for hashed-cwd sessions, where a full read just to learn the path would
+   * defeat the point).
    */
   async findSessionPath(sessionId: string, timeoutMs?: number): Promise<string | null> {
     await this.resolve()
     const conn = await getDaemonConnection(this.host, this.sshTarget!)
-    const result = await conn.send('fs.find', {
-      path: '~/.claude/projects',
-      name: sessionId + '.jsonl',
-      maxDepth: 3,
-    }, timeoutMs)
-    if (!result.ok || !(result.files as string[])?.length) return null
-    return (result.files as string[])[0]
+    // The resolved transcripts root first (the local CLAUDE_CONFIG_DIR), then the
+    // default one, which a daemon walks together with its own CLAUDE_CONFIG_DIR.
+    for (const root of claudeProjectsSearchRoots(this.host)) {
+      const result = await conn.send('fs.find', {
+        path: root,
+        name: sessionId + '.jsonl',
+        maxDepth: 3,
+      }, timeoutMs)
+      if (result.ok && (result.files as string[])?.length) return (result.files as string[])[0]
+    }
+    return null
   }
 
   /**
-   * Search for a session JSONL file under ~/.claude/projects using fs.find.
+   * Search for a session JSONL file under the Claude projects dir using fs.find.
    * Returns { content, path } if found, null otherwise. Path is the full
    * remote path where the file was located (useful for caching so we don't
    * have to search again next time).

@@ -10,7 +10,7 @@
 
 import fsp from 'node:fs/promises';
 import path from 'node:path';
-import { CLAUDE_HOME } from '../constants.js';
+import { claudeProjectsDir, localClaudeProjectsDir } from './claude-config-dir.js';
 import { log } from '../logging/index.js';
 import { sortedNames } from '../lib/dir-order.js';
 
@@ -44,22 +44,24 @@ export function isSafeForProjectEncoding(cwd: string): boolean {
 /** Build the canonical JSONL path for a session (local absolute path). */
 export function canonicalJsonlPath(sessionId: string, cwd: string): string {
   const encoded = encodeProjectPath(cwd);
-  return path.join(CLAUDE_HOME, 'projects', encoded, `${sessionId}.jsonl`);
+  return path.join(localClaudeProjectsDir(), encoded, `${sessionId}.jsonl`);
 }
 
-/** Build the remote JSONL path (tilde-based, for SSH commands). */
-export function remoteJsonlPath(sessionId: string, cwd?: string): string {
+/** Build the JSONL path in the form `host`'s daemon reads (see claude-config-dir.ts:
+ *  the local CLAUDE_CONFIG_DIR when set, else tilde-based). */
+export function remoteJsonlPath(sessionId: string, cwd?: string, host?: string): string {
+  const root = claudeProjectsDir(host);
   if (cwd) {
     const encoded = encodeProjectPath(cwd);
-    return `~/.claude/projects/${encoded}/${sessionId}.jsonl`;
+    return `${root}/${encoded}/${sessionId}.jsonl`;
   }
-  return `~/.claude/projects/*/${sessionId}.jsonl`;
+  return `${root}/*/${sessionId}.jsonl`;
 }
 
 /** Build the subagents directory path (local absolute). */
 export function subagentDirPath(sessionId: string, cwd: string): string {
   const encoded = encodeProjectPath(cwd);
-  return path.join(CLAUDE_HOME, 'projects', encoded, sessionId, 'subagents');
+  return path.join(localClaudeProjectsDir(), encoded, sessionId, 'subagents');
 }
 
 /** Build the dynamic-workflow run-manifest directory (local absolute).
@@ -67,7 +69,7 @@ export function subagentDirPath(sessionId: string, cwd: string): string {
  *  `subagents/workflows/wf_<runId>/` dir holding per-agent transcripts. */
 export function workflowManifestDirPath(sessionId: string, cwd: string): string {
   const encoded = encodeProjectPath(cwd);
-  return path.join(CLAUDE_HOME, 'projects', encoded, sessionId, 'workflows');
+  return path.join(localClaudeProjectsDir(), encoded, sessionId, 'workflows');
 }
 
 // ── Async file-existence check ──
@@ -146,7 +148,7 @@ export async function createFileReader(host?: string): Promise<SessionFileReader
  * Fallback: search all project dirs for the session ID.
  */
 export async function findLocalJsonlPath(sessionId: string, cwd?: string): Promise<string | null> {
-  const projectsDir = path.join(CLAUDE_HOME, 'projects');
+  const projectsDir = localClaudeProjectsDir();
 
   if (cwd) {
     const filePath = canonicalJsonlPath(sessionId, cwd);
@@ -293,9 +295,9 @@ export async function readSessionJsonlContent(
   //    daemon (DaemonFileReader → localDaemon for __local__, SSH daemon for remote).
   //    There is no separate "local fs" bypass — one code path, one place to add
   //    incremental byte reads, trivially decoupled. See src/core/AGENTS.md
-  //    "Daemon-uniform file access". The daemon uses tilde paths (~/.claude/...),
-  //    expanded server-side via $HOME (localDaemon runs as the same user, so ~
-  //    resolves to the same ~/.claude the old local path used).
+  //    "Daemon-uniform file access". Paths come from claude-config-dir.ts: tilde
+  //    paths (~/.claude/...) the daemon expands via its own $HOME, or the local
+  //    CLAUDE_CONFIG_DIR the local daemon and its CLIs inherit from this server.
   if (!skipDaemonRead) {
     const daemonHost = host ?? '__local__';
     // Timeout: covers cold-start daemon connect (ControlMaster ~15s + tunnel + WS) + file reads.
@@ -320,7 +322,7 @@ export async function readSessionJsonlContent(
     // path and only a remembered path spares the fs.find over every project dir.
     // No `projects/*/` glob: the reader expands a `*` only in the file name.
     const cwdSafeForExactPath = cwd ? isSafeForProjectEncoding(cwd) : false;
-    const exactPath = cwdSafeForExactPath ? remoteJsonlPath(sessionId, cwd!) : null;
+    const exactPath = cwdSafeForExactPath ? remoteJsonlPath(sessionId, cwd!, daemonHost) : null;
     const directPaths = [...new Set([opts?.knownPath, exactPath].filter((p): p is string => !!p))];
     // Truthful source label: the transport is always the daemon now, but 'local'
     // vs 'remote' still tells diagnostics which machine the file lived on.
@@ -469,7 +471,7 @@ export async function sessionDataDirCandidates(
 ): Promise<string[]> {
   const dirs: string[] = [];
   if (jsonl?.path) dirs.push(jsonl.path.replace(/\.jsonl$/, ''));
-  if (cwd && isSafeForProjectEncoding(cwd)) dirs.push(`~/.claude/projects/${encodeProjectPath(cwd)}/${sessionId}`);
+  if (cwd && isSafeForProjectEncoding(cwd)) dirs.push(`${claudeProjectsDir(host)}/${encodeProjectPath(cwd)}/${sessionId}`);
   if (dirs.length > 0) return [...new Set(dirs)];
   const reader = await createFileReader(host);
   try {

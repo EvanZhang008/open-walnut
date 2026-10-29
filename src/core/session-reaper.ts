@@ -13,7 +13,8 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { log } from '../logging/index.js'
-import { SESSION_STREAMS_DIR, CLAUDE_HOME, WALNUT_HOME } from '../constants.js'
+import { SESSION_STREAMS_DIR, WALNUT_HOME } from '../constants.js'
+import { localClaudeProjectsDir } from './claude-config-dir.js'
 import type { SessionRecord } from './types.js'
 import { isEnvironmentSession } from './session-tracker.js'
 import { sweepRecoverableStreamFiles } from './stream-retention.js'
@@ -110,7 +111,7 @@ export class SessionReaper {
     // ephemeral server (WALNUT_HOME = a temp snapshot) must not sweep the live
     // data dir's streams.
     const walnutTmp = path.join(WALNUT_HOME, 'tmp')
-    const claudeProjectsDir = path.join(CLAUDE_HOME, 'projects')
+    const claudeProjectsDir = localClaudeProjectsDir()
     const spawnJournal = spawnJournalPath(os.homedir())
     for (const streamsDir of [path.join(walnutTmp, 'streams'), SESSION_STREAMS_DIR]) {
       await sweepRecoverableStreamFiles({ streamsDir, claudeProjectsDir, activeIds, spawnJournal })

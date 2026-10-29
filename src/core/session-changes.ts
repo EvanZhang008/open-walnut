@@ -598,7 +598,7 @@ export async function computeSessionChangesSwr(
     // current (same check as the compute's fast-path), so don't mark it stale.
     try {
       const jsonlPath = entry.resolvedPath
-        ?? (cwd && isSafeForProjectEncoding(cwd) ? remoteJsonlPath(sessionId, cwd) : null);
+        ?? (cwd && isSafeForProjectEncoding(cwd) ? remoteJsonlPath(sessionId, cwd, host) : null);
       if (jsonlPath) {
         const { DaemonFileReader } = await import('./daemon-file-reader.js');
         const st = await new DaemonFileReader(host ?? '__local__').stat(jsonlPath);
@@ -827,7 +827,7 @@ async function computeSessionChangesInner(
   // our computed path would be wrong) resolve the ABSOLUTE path once via
   // fs.find and keep it in the cache — without this, such sessions can never
   // stat → never cache → full multi-MB re-read on every request.
-  let jsonlPath = cwd && isSafeForProjectEncoding(cwd) ? remoteJsonlPath(sessionId, cwd) : null;
+  let jsonlPath = cwd && isSafeForProjectEncoding(cwd) ? remoteJsonlPath(sessionId, cwd, host) : null;
   let resolvedPath = cachedEntry?.resolvedPath;
   if (!jsonlPath) {
     if (!resolvedPath) {

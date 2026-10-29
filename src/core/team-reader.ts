@@ -42,6 +42,7 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { CLAUDE_HOME } from '../constants.js';
+import { claudeProjectsDir, localClaudeProjectsDir } from './claude-config-dir.js';
 import { encodeProjectPath } from './session-file-reader.js';
 import { log } from '../logging/index.js';
 import { sortedNames } from '../lib/dir-order.js';
@@ -153,7 +154,7 @@ function findTmuxTeammateJsonl(
   if (!cwd) return null;
 
   const encoded = encodeProjectPath(cwd);
-  const projectDir = path.join(CLAUDE_HOME, 'projects', encoded);
+  const projectDir = path.join(localClaudeProjectsDir(), encoded);
 
   try {
     if (!fs.existsSync(projectDir)) return null;
@@ -215,7 +216,7 @@ function findInProcessTeammateJsonl(
   if (!leadCwd) return null;
 
   const encoded = encodeProjectPath(leadCwd);
-  const subagentDir = path.join(CLAUDE_HOME, 'projects', encoded, leadSessionId, 'subagents');
+  const subagentDir = path.join(localClaudeProjectsDir(), encoded, leadSessionId, 'subagents');
 
   try {
     if (!fs.existsSync(subagentDir)) return null;
@@ -469,7 +470,7 @@ function buildSubagentIndex(
   leadCwd: string,
 ): Array<{ filePath: string; firstMessage: string; size: number }> {
   const encoded = encodeProjectPath(leadCwd);
-  const subagentDir = path.join(CLAUDE_HOME, 'projects', encoded, leadSessionId, 'subagents');
+  const subagentDir = path.join(localClaudeProjectsDir(), encoded, leadSessionId, 'subagents');
 
   const result: Array<{ filePath: string; firstMessage: string; size: number }> = [];
 
@@ -593,7 +594,7 @@ export function findAllSubagentJsonlsForAgent(
   mainJsonlPath?: string | null,
 ): string[] {
   const encoded = encodeProjectPath(leadCwd);
-  const subagentDir = path.join(CLAUDE_HOME, 'projects', encoded, leadSessionId, 'subagents');
+  const subagentDir = path.join(localClaudeProjectsDir(), encoded, leadSessionId, 'subagents');
 
   const result: Array<{ filePath: string; mtime: number }> = [];
   const includedPaths = new Set<string>();
@@ -688,7 +689,7 @@ export function findAllSubagentJsonlsForAgent(
  */
 export function getLeadSessionJsonlPath(sessionId: string, cwd: string): string {
   const encoded = encodeProjectPath(cwd);
-  return path.join(CLAUDE_HOME, 'projects', encoded, `${sessionId}.jsonl`);
+  return path.join(localClaudeProjectsDir(), encoded, `${sessionId}.jsonl`);
 }
 
 // ── Helpers ──
@@ -779,7 +780,7 @@ export async function readRemoteSubagentJsonls(
     const reader = new DaemonFileReader(host);
 
     const encoded = encode(cwd);
-    const subagentDir = `~/.claude/projects/${encoded}/${sessionId}/subagents`;
+    const subagentDir = `${claudeProjectsDir(host)}/${encoded}/${sessionId}/subagents`;
     const allFiles = await reader.batchReadSubagents(subagentDir);
     result.all = allFiles;
 

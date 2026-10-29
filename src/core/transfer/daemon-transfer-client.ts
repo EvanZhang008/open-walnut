@@ -167,8 +167,8 @@ export async function assertPrivateStage(host: string): Promise<void> {
 /**
  * Where a session's Claude transcript is on `host`, told apart honestly: the host
  * did not answer, it has none, it has exactly one, or it has several (then no
- * file is "the" transcript). Searches the default root only, like the shared
- * DaemonFileReader.findSessionPath; a CLAUDE_CONFIG_DIR root is not searched.
+ * file is "the" transcript). Searches the default root, which a daemon walks
+ * together with its own CLAUDE_CONFIG_DIR one (an older daemon: the default only).
  */
 export type TranscriptLookup =
   | { kind: 'unreachable'; error: string }

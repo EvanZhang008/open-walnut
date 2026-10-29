@@ -2153,7 +2153,7 @@ export async function resolveHistoryWindowPath(
   reader: { findSessionPath(sessionId: string): Promise<string | null> },
 ): Promise<string | undefined> {
   const known = cwd && isSafeForProjectEncoding(cwd)
-    ? remoteJsonlPath(sessionId, cwd)
+    ? remoteJsonlPath(sessionId, cwd, daemonHost)
     : getResolvedRemotePath(sessionId, daemonHost);
   if (known) return known;
   const found = (await reader.findSessionPath(sessionId)) ?? undefined;
@@ -2281,7 +2281,7 @@ export async function readSessionHistoryRange(
   if (await getInPlaceRewinds(sessionId)) return null;
   const daemonHost = host ?? '__local__';
   const statPath = cwd && isSafeForProjectEncoding(cwd)
-    ? remoteJsonlPath(sessionId, cwd)
+    ? remoteJsonlPath(sessionId, cwd, daemonHost)
     : getResolvedRemotePath(sessionId, daemonHost);
   if (!statPath) return null;
   const { DaemonFileReader } = await import('./daemon-file-reader.js');
@@ -2365,7 +2365,7 @@ export async function readSessionHistoryTail(
   const daemonHost = host ?? '__local__';
   let statPath: string | undefined;
   if (cwd && isSafeForProjectEncoding(cwd)) {
-    statPath = remoteJsonlPath(sessionId, cwd);
+    statPath = remoteJsonlPath(sessionId, cwd, daemonHost);
   } else {
     statPath = getResolvedRemotePath(sessionId, daemonHost);
   }
@@ -2460,7 +2460,7 @@ async function readSessionHistoryInner(sessionId: string, cwd?: string, host?: s
   {
     const daemonHost = host ?? '__local__';
     if (cwd && isSafeForProjectEncoding(cwd)) {
-      statPath = remoteJsonlPath(sessionId, cwd);
+      statPath = remoteJsonlPath(sessionId, cwd, daemonHost);
     } else {
       statPath = getResolvedRemotePath(sessionId, daemonHost);
     }
@@ -2949,7 +2949,7 @@ async function statTranscriptForRangeRead(
 ): Promise<{ path: string; size: number } | null> {
   const direct = [
     getResolvedRemotePath(sessionId, daemonHost),
-    cwd && isSafeForProjectEncoding(cwd) ? remoteJsonlPath(sessionId, cwd) : undefined,
+    cwd && isSafeForProjectEncoding(cwd) ? remoteJsonlPath(sessionId, cwd, daemonHost) : undefined,
   ].filter((p): p is string => !!p);
   for (const p of new Set(direct)) {
     const st = await reader.stat(p);
