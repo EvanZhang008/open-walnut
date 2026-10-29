@@ -255,6 +255,11 @@ async function emojiProneText(page: Page, root = 'body'): Promise<string[]> {
 }
 
 test('C73, N13: home rows, the session menu and the center draw no emoji-prone glyph', async ({ page }) => {
+  // The longest walk in this file (home, a session and its menu, Back, the center's
+  // four sections): 17 s on a warm fixture. As a worker's first test its first load
+  // compiles the SPA on the dev server while three other workers do the same, and
+  // page.goto alone took 24 s of the default 30 (clouddev, 4 workers).
+  test.setTimeout(60_000)
   const errors = await bootHome(page)
   await openHomeRow(page, 'Walnut', 'Quarterly invoice reconciliation')
   await expect(page.locator('.phone-topbar').getByRole('button', { name: 'Back' })).toBeVisible({ timeout: 15_000 })

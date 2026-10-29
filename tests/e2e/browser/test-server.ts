@@ -122,6 +122,23 @@ const tasksDir = path.join(tmpBase, 'tasks')
 await fs.mkdir(tasksDir, { recursive: true })
 writeOwnerPid(tmpBase)
 
+// A `claude` on PATH on every machine: the repo's mock CLI behind a shim. The setup
+// health (claudeCliAvailable, the provider's readiness) and the local daemon's spawn
+// preflight look the binary up on PATH, so without one a machine with no Claude Code
+// (Linux CI, a clouddev container) booted every spec under an "install Claude Code"
+// notice and a "claude CLI cannot be resolved" system error, and a Mac booted them
+// clean: the phone home small-target specs (C18, C19) only ever passed where a real
+// claude was installed. The notice's own states are covered by
+// tests/web/setup-banner.test.ts and the specs that stub /api/system/health.
+{
+  const binDir = path.join(tmpBase, 'bin')
+  const mockCli = path.resolve(path.dirname(new URL(import.meta.url).pathname), '../../providers/mock-claude.mjs')
+  await fs.mkdir(binDir, { recursive: true })
+  const quote = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`
+  await fs.writeFile(path.join(binDir, 'claude'), `#!/bin/sh\nexec ${quote(process.execPath)} ${quote(mockCli)} "$@"\n`, { mode: 0o755 })
+  process.env.PATH = `${binDir}${path.delimiter}${process.env.PATH ?? ''}`
+}
+
 // The main agent still gets messages from other flows (chat, notifications).
 // Keep that process local and deterministic; session/ACP processes are mocked
 // separately below.

@@ -944,9 +944,15 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
   // the list is read again over HTTP at once, one round trip after the phone
   // is back, not after the ping deadline and the new socket's connect. The
   // connect still refetches once more (what the gap between them missed).
+  // A pull to refresh or a Retry is the user asking for the list again, so it
+  // is read even when the socket was live (C90): before, a socket that had
+  // said anything in the last 25 s took the no-ping path, which re-read the
+  // notification feed but never the list or its statuses.
   useEvent('_ws:reconnected', (data) => {
-    if ((data as { early?: boolean } | undefined)?.early !== true) return;
-    log.info('tasks', 'resync → refetching tasks before the socket answers');
+    const d = data as { early?: boolean; resync?: string } | undefined;
+    const asked = d?.resync === 'pull' || d?.resync === 'retry';
+    if (d?.early !== true && !asked) return;
+    log.info('tasks', d?.early === true ? 'resync → refetching tasks before the socket answers' : 'resync → refetching tasks on request', { reason: d?.resync });
     refetch();
   });
 

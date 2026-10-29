@@ -5,7 +5,9 @@ import { WebSocketServer } from 'ws'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 const { run } = vi.hoisted(() => ({ run: vi.fn() }))
-vi.mock('node:child_process', () => ({ execFile: run }))
+// Only the service commands are stubbed: the account lookup (src/lib/account.ts) runs its real
+// spawnSync (`id -P` on macOS under bun), so the isolated-home guard compares against the real entry.
+vi.mock('node:child_process', async (importOriginal) => ({ ...await importOriginal<typeof import('node:child_process')>(), execFile: run }))
 
 import { daemonReady, runDaemonServiceArgs, runDaemonServiceCli, runDaemonServiceCommand } from '../../src/providers/daemon-service-cli.js'
 import { EventEmitter } from 'node:events'

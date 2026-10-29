@@ -65,6 +65,10 @@ for (const size of SIZES) {
       const root = '[data-testid="attention-banner"][data-mount="tasks"]'
       expect(await findSmallTargets(page, root), 'card targets').toEqual([])
       expect(await findSmallText(page, 12, root), 'card text').toEqual([])
+      // The footer toggle that folds the card away takes a finger too.
+      const section = '[data-testid="system-attention"]'
+      expect(await findSmallTargets(page, section), 'system attention toggle').toEqual([])
+      expect(await findSmallText(page, 12, section), 'system attention text').toEqual([])
       // Open a row's details: its own controls take a finger too.
       const show = card.getByRole('button', { name: /Show details|Show SSH output/ }).first()
       if (await show.count()) {

@@ -27,6 +27,12 @@
 .system-attention-count { font-variant-numeric: tabular-nums; color: var(--warning); }
 .system-attention-feedback { margin-left: auto; font-size: 11px; }
 .system-attention-body[hidden] { display: none; }
+/* On a phone (the phone-layout.css query) the footer toggle takes a finger and
+   its words read at 12 px, like the rest of the home (C18, C19). */
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  .system-attention-toggle { min-height: 44px; }
+  .system-attention-feedback { font-size: 12px; }
+}
 .system-attention-body .attention-banner { margin-top: 0; margin-bottom: 0; max-height: var(--ab-cap, 240px); overflow-y: auto; }
 
 .nfc-cat-title {
