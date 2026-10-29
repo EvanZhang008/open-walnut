@@ -28,6 +28,12 @@ struct TaskStatusCard: View {
             if state == .needs, let ask = s?.ask, !ask.isEmpty {
                 (Text("You decide: ").bold().foregroundColor(UserStatePill.textColor(.needs)) + Text(ask))
                     .font(.subheadline)
+                if let line = TeamStatusModel.checkedLine(s) {
+                    Text(line.text)
+                        .font(.caption.weight(line.unverified ? .semibold : .regular))
+                        .foregroundStyle(line.unverified ? UserStatePill.textColor(.needs) : .secondary)
+                        .accessibilityIdentifier("task.userStatus.checked")
+                }
             }
             if state == .waiting {
                 Text(TeamStatusModel.waitingLine(s))
@@ -102,6 +108,7 @@ struct TeamStatusSection: View {
     @State private var opened: WalnutTask?
     @State private var teamBusy = false
     @State private var teamError: String?
+    @State private var confirmStop = false
 
     var body: some View {
         let board = TeamStatusModel.build(ownerId: ownerId, tasks: tasks.tasks)
@@ -143,7 +150,17 @@ struct TeamStatusSection: View {
                     }
                 }
             }
+            // `.contain` keeps the ids inside (task.team.menu, .due, .live, .partial) reachable.
+            .accessibilityElement(children: .contain)
             .accessibilityIdentifier("task.team")
+            // A stop or a resume from anywhere settles what the last failure said.
+            .onChange(of: stopped?.at) { teamError = nil }
+            .confirmationDialog("Stop the whole team?", isPresented: $confirmStop, titleVisibility: .visible) {
+                Button("Stop the team", role: .destructive) { run(stop: true) }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Every working task in it stops, and its triggers and wake clocks go off until you resume it.")
+            }
             .sheet(item: $opened) { t in
                 TaskDetailSheet(task: t)
                     .presentationDetents([.medium, .large])
@@ -157,7 +174,7 @@ struct TeamStatusSection: View {
             if stopped {
                 Button { run(stop: false) } label: { Label("Resume the team", systemImage: "play.fill") }
             } else {
-                Button(role: .destructive) { run(stop: true) } label: { Label("Stop the team", systemImage: "stop.fill") }
+                Button(role: .destructive) { confirmStop = true } label: { Label("Stop the team", systemImage: "stop.fill") }
             }
         } label: {
             Image(systemName: stopped ? "pause.circle.fill" : "ellipsis.circle")
@@ -262,6 +279,8 @@ struct TeamStatusSection: View {
 struct TeamStatusRowView: View {
     let row: TeamStatusRow
     @Environment(\.dynamicTypeSize) private var typeSize
+    /// The live line's dot, grown with the text size.
+    @ScaledMetric(relativeTo: .footnote) private var liveDot: CGFloat = 6
 
     var body: some View {
         let s = row.status
@@ -301,6 +320,12 @@ struct TeamStatusRowView: View {
             if row.state == .needs, let ask = s?.ask, !ask.isEmpty {
                 (Text("You: ").bold().foregroundColor(UserStatePill.textColor(.needs)) + Text(ask))
                     .font(.footnote)
+                if let checked = TeamStatusModel.checkedLine(s) {
+                    Text(checked.text)
+                        .font(.caption.weight(checked.unverified ? .semibold : .regular))
+                        .foregroundStyle(checked.unverified ? UserStatePill.textColor(.needs) : .secondary)
+                        .accessibilityIdentifier("task.team.checked")
+                }
             } else if row.state == .waiting {
                 Text(TeamStatusModel.waitingLine(s))
                     .font(.footnote.weight(.medium))
@@ -316,7 +341,8 @@ struct TeamStatusRowView: View {
             }
             if let report = row.task.resultReport, report.isPartial {
                 // Its latest result left things not done: "Done" alone would overstate it.
-                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                // Stacked, so a large text size never squeezes the list into a few words.
+                VStack(alignment: .leading, spacing: 2) {
                     Text("Partial")
                         .font(.caption2.weight(.semibold))
                         .padding(.horizontal, 6)
@@ -324,7 +350,7 @@ struct TeamStatusRowView: View {
                         .background(Capsule().fill(Color.orange.opacity(0.2)))
                     Text("Not done: \((report.notDone ?? []).joined(separator: "; "))")
                         .font(.footnote)
-                        .lineLimit(3)
+                        .lineLimit(6)
                 }
                 .accessibilityElement(children: .combine)
                 .accessibilityIdentifier("task.team.partial")
@@ -333,14 +359,16 @@ struct TeamStatusRowView: View {
                 // Read from its session by the server, never the model's words; the spans tick here.
                 TimelineView(.periodic(from: .now, by: 15)) { ctx in
                     let line = LiveActivityFormat.line(live, now: ctx.date)
-                    HStack(spacing: 5) {
-                        Circle()
-                            .fill(line.quiet ? Color.orange : UserStatePill.textColor(.working))
-                            .frame(width: 6, height: 6)
+                    HStack(alignment: .firstTextBaseline, spacing: 5) {
+                        // A glyph, so it grows with the text size and sits on the first line.
+                        Image(systemName: "circle.fill")
+                            .font(.system(size: liveDot))
+                            .foregroundStyle(line.quiet ? Color.orange : UserStatePill.textColor(.working))
+                            .accessibilityHidden(true)
                         Text(line.text)
                             .font(.footnote.weight(.medium).monospacedDigit())
                             .foregroundStyle(line.quiet ? Color.orange : Color.primary)
-                            .lineLimit(2)
+                            .lineLimit(4)
                     }
                     .accessibilityElement(children: .combine)
                     .accessibilityIdentifier("task.team.live")

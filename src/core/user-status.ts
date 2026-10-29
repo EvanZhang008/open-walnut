@@ -105,6 +105,10 @@ export interface UserStatusInput {
   reportPending?: boolean;
   /** Task.due_date: a date (YYYY-MM-DD, the end of that day here) or a full ISO time. */
   dueDate?: string | null;
+  /** When its team was stopped in one step, not resumed since (Task.team_stop on its team's root). */
+  teamStoppedAt?: string | null;
+  /** When an armed trigger of the task last ran its check (ISO): a script watches the ask. */
+  checkRanAt?: string | null;
 }
 
 /** 2026-10-27, the user: "If the task is closed, mostly close by me means I already verified ...
@@ -137,7 +141,44 @@ export interface UserStatus {
   /** Its due date has passed (`overdue`) or comes within a day (`soon`); absent otherwise
    *  (2026-10-28, the Grok Bot study: deadlines in the status). `at` is the due date as set. */
   due?: { at: string; state: 'overdue' | 'soon' };
+  /** needs from its own session: when the ask was last confirmed (ISO), by the session's own
+   *  turn-end report or by an armed trigger's check script (`checkedBy`). Every other needs is
+   *  Walnut's live record (a prompt, a letter, a choice, an error) and carries neither. */
+  checkedAt?: string;
+  checkedBy?: 'session' | 'check';
+  /** needs from its session, confirmed longer ago than UNVERIFIED_AFTER_MS and watched by no check:
+   *  the user may have done it outside Walnut, so it reads "not verified", never as fact
+   *  (2026-10-28, the user: "I've already resolved some of these. You should at least verify"). */
+  unverified?: boolean;
+  /** Between a turn's end and its report (sessions/report-pending.ts): the report decides the
+   *  status in a moment, so a change into this is no news (sessions/status-push.ts). */
+  transient?: boolean;
 }
+
+/** "2 hours ago", "3 days ago". */
+export function agoWords(ms: number): string {
+  const m = Math.max(1, Math.round(ms / 60_000));
+  if (m < 60) return `${m} minute${m === 1 ? '' : 's'} ago`;
+  const h = Math.round(m / 60);
+  return h < 48 ? `${h} hour${h === 1 ? '' : 's'} ago` : `${Math.round(h / 24)} days ago`;
+}
+
+/** The words every surface prints under a session's "needs you": when it was last checked, or
+ *  that it is not verified. Null for Walnut's own live records (a prompt, a letter, a choice). */
+export function checkedLine(s: Pick<UserStatus, 'state' | 'source' | 'checkedAt' | 'checkedBy' | 'unverified'> | null | undefined, nowMs: number = Date.now()): { text: string; unverified: boolean } | null {
+  if (s?.state !== 'needs' || s.source !== 'session') return null;
+  const at = Date.parse(s.checkedAt ?? '');
+  if (!Number.isFinite(at)) return null;
+  if (s.unverified) return { text: `Not verified: last checked ${agoWords(nowMs - at)}, may be done already`, unverified: true };
+  return { text: `Checked ${agoWords(nowMs - at)}${s.checkedBy === 'check' ? ' by its check' : ''}`, unverified: false };
+}
+
+/** A session's "needs you" is asked again after this (sessions/needs-recheck.ts). A test server
+ *  shortens it with WALNUT_NEEDS_RECHECK_MS (a minute at least); the browser reads none. */
+const recheckEnv = typeof process !== 'undefined' ? Number(process.env?.WALNUT_NEEDS_RECHECK_MS) : NaN;
+export const NEEDS_RECHECK_MS = Number.isFinite(recheckEnv) && recheckEnv >= 60_000 ? recheckEnv : 4 * 60 * 60_000;
+/** ...and reads as not verified once it went this long unconfirmed (the re-check had its turn). */
+export const UNVERIFIED_AFTER_MS = NEEDS_RECHECK_MS + Math.min(30 * 60_000, NEEDS_RECHECK_MS / 8);
 
 /** A due date's deadline in ms: a bare date means the end of that day, in this process's zone. */
 export function dueAtMs(due: string | null | undefined): number {
@@ -252,7 +293,31 @@ export function deriveUserStatus(input: UserStatusInput, nowMs: number = Date.no
   }
   // A waiting task names when it checks again by itself, whatever it waits on.
   if (out.state === 'waiting' && !out.until && input.waitUntil && Date.parse(input.waitUntil) > nowMs) out.until = input.waitUntil;
+  // Only an ask the session itself wrote can be checked again; Walnut's own "its turn ended and
+  // handed it back" is no claim about the world.
+  if (out.state === 'needs' && out.source === 'session' && out.ask && out.ask === reportAsk(input.report)) stampChecked(out, input, nowMs);
   return out;
+}
+
+/** The ask a report makes of the user, in the words derive() shows. */
+function reportAsk(report: StatusReport | null | undefined): string | undefined {
+  if (report?.state === 'needs' && !none(report.ask)) return clean(report.ask);
+  if (report?.state === 'waiting' && report.waiting_kind === 'you' && !none(report.waiting_on)) return clean(report.waiting_on);
+  return undefined;
+}
+
+/** When a session's ask was last confirmed, by whom, and whether that is too long ago to be fact. */
+function stampChecked(out: UserStatus, input: UserStatusInput, nowMs: number): void {
+  // Its last word on it: the newest of its report and its last phase move (a turn's end).
+  const said = Math.max(...[input.report?.at, input.phaseChangedAt].map((v) => Date.parse(v ?? '')).filter(Number.isFinite));
+  const ran = Date.parse(input.checkRanAt ?? '');
+  const byCheck = Number.isFinite(ran) && (!Number.isFinite(said) || ran > said);
+  const at = byCheck ? ran : said;
+  if (!Number.isFinite(at)) return;
+  out.checkedAt = new Date(at).toISOString();
+  out.checkedBy = byCheck ? 'check' : 'session';
+  // A script that watches it keeps it fresh; one whose host went away for a day does not.
+  if (nowMs - at > UNVERIFIED_AFTER_MS) out.unverified = true;
 }
 
 function derive(input: UserStatusInput, nowMs: number): UserStatus {
@@ -298,6 +363,13 @@ function derive(input: UserStatusInput, nowMs: number): UserStatus {
     const why = clean(input.errorMessage);
     return strip({ state: 'needs', source: 'error', ask: why ? `Its session failed (${why.slice(0, 140)}). Retry it or open it.` : 'Its session failed. Retry it or open it.', ...w });
   }
+    // Its team was stopped in one step (sessions/team-stop.ts) and it ran no turn since: it waits
+    // for the resume or a message, and says so, rather than reading as a session that stopped for
+    // no reason. A report written after the stop is a turn of its own and speaks for itself.
+    const stoppedAt = Date.parse(input.teamStoppedAt ?? '');
+    if (Number.isFinite(stoppedAt) && !running && !asksUser && !(anyReport && Date.parse(anyReport.at) > stoppedAt)) {
+      return strip({ state: 'waiting', kind: input.hasLeader ? 'lead' : 'you', waitingOn: 'Its team was stopped: Resume the team, or a message to it, starts it again', ...w });
+    }
     if (report?.state === 'needs' && !none(report.ask)) return strip({ state: 'needs', source: 'session', ask: clean(report.ask), ...w });
     if (report?.state === 'waiting' && report.waiting_kind === 'you' && !none(report.waiting_on)) {
       return strip({ state: 'needs', source: 'session', ask: clean(report.waiting_on), ...w });
@@ -323,7 +395,7 @@ function derive(input: UserStatusInput, nowMs: number): UserStatus {
     }
     // Its turn just ended and its report is on the way: only that report can say it asks anything.
     if (input.reportPending) {
-      return strip({ state: 'waiting', kind: 'other', waitingOn: 'Its report on the turn that just ended', ...w });
+      return strip({ state: 'waiting', kind: 'other', waitingOn: 'Its report on the turn that just ended', ...w, transient: true });
     }
     return strip({ state: 'needs', source: 'session', ask: 'Its turn ended and handed the task back to you: read it and reply.', ...w });
   }

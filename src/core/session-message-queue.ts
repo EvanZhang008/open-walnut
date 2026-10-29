@@ -214,6 +214,9 @@ export async function sendMessageToSession(
   // The main agent's org update rides the same way: one folded note, never a turn (org/org-store.ts).
   const { pendingOrgDigest } = await import('./org/org-store.js');
   const digest = await pendingOrgDigest(sessionId);
+  // A status change of a task it asked something rides the same way (sessions/status-push.ts).
+  const { pendingStatusNote } = await import('./sessions/status-push.js');
+  const statusNote = pendingStatusNote(sessionId);
   // Every message is escaped, and a turn nobody typed still carries the message
   // hints a human send would (hints/hint-send.ts), unless its sender composed them.
   const { prepareQueuedHintedSend } = await import('./hints/hint-send.js');
@@ -230,7 +233,7 @@ export async function sendMessageToSession(
   const retiredNote = await pendingRetiredLeadNote(sessionId, rawBody);
   const outputMode = opts?.hinted ? null : await prepareQueuedHintedSend(sessionId, opts?.source, rawBody);
   const body = outputMode?.enqueueText ?? rawBody;
-  const notes = [place?.text, restart?.text, digest?.text, appState?.text, waitNote, retiredNote].filter(Boolean).join('\n\n');
+  const notes = [place?.text, restart?.text, digest?.text, statusNote?.text, appState?.text, waitNote, retiredNote].filter(Boolean).join('\n\n');
   const enqueueText = notes ? `${notes}\n\n${body}` : body;
   let msg: QueuedMessage;
   try {
@@ -255,6 +258,7 @@ export async function sendMessageToSession(
   if (place && msg.message.startsWith(place.text)) await place.markTold();
   if (digest && msg.message.includes(digest.text)) await digest.markTold();
   if (restart && msg.message.includes(restart.text)) await restart.markTold();
+  if (statusNote && msg.message.includes(statusNote.text)) statusNote.markTold();
   if (outputMode && msg.message.includes(outputMode.enqueueText)) await outputMode.commit();
   if (appState) {
     if (msg.message.includes(appState.text)) appState.markTold();

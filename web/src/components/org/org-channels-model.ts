@@ -18,7 +18,7 @@
 import type { Task } from '@open-walnut/core';
 import type { OrgCounts, OrgProjectNode, OrgTaskNode, OrgTree } from '@open-walnut/org-tree';
 import { CEO_LABEL, VP_LABEL, newsItem, newsLine, newsSubject, orgDisplayTitle, projectKey, teamNews, userStateOf, type TeamNewsTask } from '@open-walnut/org-tree';
-import { USER_STATE_LABELS, type UserState, type UserStatus } from '@open-walnut/user-status';
+import { USER_STATE_LABELS, checkedLine, type UserState, type UserStatus } from '@open-walnut/user-status';
 
 export type ChannelState = 'alert' | 'working' | 'quiet' | 'parked';
 
@@ -33,6 +33,8 @@ export interface OrgAlertView {
   ask?: string;
   /** `needs`: where the ask is (its prompt, a letter, a Board choice, its failure, its own words). */
   source?: UserStatus['source'];
+  /** `needs` from its session: when the ask was last checked, or that it is not verified. */
+  checked?: { text: string; unverified: boolean };
 }
 
 /** What waits on the user in one task's session right now, or null. */
@@ -113,7 +115,8 @@ function collectAlerts(ids: readonly string[], byId: ReadonlyMap<string, Task>, 
       out.push({ taskId: id, title: orgDisplayTitle(task), kind: hit.kind, ...(hit.tool ? { tool: hit.tool } : {}) });
     } else if (userStateOf(task) === 'needs') {
       const ask = status?.ask?.trim();
-      out.push({ taskId: id, title: orgDisplayTitle(task), kind: 'needs', ...(ask ? { ask } : {}), ...(status?.source ? { source: status.source } : {}) });
+      const checked = checkedLine(status);
+      out.push({ taskId: id, title: orgDisplayTitle(task), kind: 'needs', ...(ask ? { ask } : {}), ...(status?.source ? { source: status.source } : {}), ...(checked ? { checked } : {}) });
     }
   }
   return out;

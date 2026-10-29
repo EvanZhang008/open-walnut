@@ -12,7 +12,7 @@
  *     written (briefMoves in src/core/user-status.ts), so an idle owner's Brief never reads stale.
  */
 import {
-  BRIEF_MAX_CHARS, COMPLETE_IS_VERIFIED, USER_STATE_LABELS, briefMentions, briefMoves, briefStillOpen, fallbackUserState,
+  BRIEF_MAX_CHARS, COMPLETE_IS_VERIFIED, USER_STATE_LABELS, briefMentions, briefMoves, agoWords, briefStillOpen, briefTeam, fallbackUserState,
   type StillOpenAsk, type TaskBrief,
 } from '../user-status.js';
 import type { Task } from '../types.js';
@@ -69,6 +69,28 @@ export async function overdueAsks(now = Date.now()): Promise<StillOpenAsk[]> {
   return out;
 }
 
+/** What the team asks of the user right now, from the live statuses, each with when it was last
+ *  checked (2026-10-28, the user: asks he had already done read to him as fact). */
+export function briefNeedsLines(owner: Task, tasks: readonly Task[], now = Date.now()): string[] {
+  const flat = (v: string) => v.replace(/\s+/g, ' ').trim().replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const lines: string[] = [];
+  // Main answers for the whole org: what any task asks the user, with its VP beside it.
+  const team = owner.org_role === 'main' ? tasks.filter((t) => !t.plugin_only) : briefTeam(owner, tasks);
+  for (const t of team) {
+    const s = t.user_status;
+    if (t.id === owner.id || t.phase === 'COMPLETE' || t.status === 'done' || s?.state !== 'needs' || !s.ask) continue;
+    const checked = s.checkedAt ? Date.parse(s.checkedAt) : NaN;
+    const when = s.source !== 'session' ? 'Walnut\'s live record'
+      : !Number.isFinite(checked) ? 'never checked'
+        : s.unverified ? `NOT VERIFIED: last checked ${agoWords(now - checked)}, the user may have done it already`
+          : `checked ${agoWords(now - checked)}${s.checkedBy === 'check' ? ' by its check script' : ' by its session'}`;
+    const vp = owner.org_role === 'main' ? briefVpOf(t, tasks) : undefined;
+    const vpRef = vp ? ` (VP <task-ref id="${vp.id}" label="${flat(vp.title).replace(/"/g, '&quot;')}"/>)` : '';
+    lines.push(`- <task-ref id="${t.id}" label="${flat(t.title).replace(/"/g, '&quot;')}"/>${vpRef}: "${flat(s.ask).slice(0, 200)}" (${when})`);
+  }
+  return lines.slice(0, 12);
+}
+
 /** What is still open in the team (briefStillOpen), as lines for the self-report prompt. */
 export function briefStillOpenLines(owner: Task, tasks: readonly Task[], overdue: readonly StillOpenAsk[], now = Date.now()): string[] {
   // Titles and agent words are data inside the prompt: one line each, no markup of their own.
@@ -105,6 +127,8 @@ export function briefStillOpenLines(owner: Task, tasks: readonly Task[], overdue
 export function briefPrompt(opts: {
   hadBrief: boolean; moves: readonly string[]; language?: string; ownId?: string;
   main?: boolean; vps?: readonly string[]; issues?: readonly string[]; stillOpen?: readonly string[];
+  /** briefNeedsLines: what the team asks of the user now, with when each was checked. */
+  needs?: readonly string[];
 }): string {
   const moved = opts.moves.length
     ? `\nSince your last Brief, these moved in your team (Walnut's list; each must be right in the new one):\n${opts.moves.join('\n')}`
@@ -116,11 +140,14 @@ export function briefPrompt(opts: {
   const still = opts.stillOpen?.length
     ? `\nStill open in your team (Walnut's list, from the tasks and requests, not from your memory); cover what needs the user or is at risk, and Walnut shows the rest under your Brief:\n${opts.stillOpen.join('\n')}`
     : '';
+  const needs = opts.needs?.length
+    ? `\nWhat your team asks of the user now (Walnut's live list, with when each was last checked). Only these need the user; one NOT VERIFIED may be done already: write it as "may be done, being checked", never as a step the user still owes:\n${opts.needs.join('\n')}`
+    : '';
   const broke = opts.issues?.length
     ? `\nWalnut found these lines of your last Brief breaking the rules; the new one must not:\n${opts.issues.join('\n')}`
     : '';
   return `
-Then your BRIEF, the short letter the user reads at the top of your chat instead of scrolling it. ${opts.hadBrief ? 'Rewrite it whole' : 'Write it'} every time (never "unchanged"): Markdown, at most 12 lines, plain words${opts.language ? `, in ${opts.language}` : ''}. First what needs the user (the decision or action), then one line per piece of work: what is done, what it waits on now and on whom. One thing per line: several asks are several lines, each with its task. ${refs}Each line says enough to act on without the chat: which document, repo or release, and exactly what the user must decide or do. Walnut shows each named task's live status beside it, so name tasks with <task-ref/>, never a bare id, and Walnut checks these rules. ${COMPLETE_IS_VERIFIED} Only what needs the user now or changes their picture of the work: a deadline days away, a reminder or a thing for later goes into your own MEMORY.md (asked below), not here. Plain Markdown with no bold labels around the field name. No codenames, hashes or file names.${moved}${still}${broke}
+Then your BRIEF, the short letter the user reads at the top of your chat instead of scrolling it. ${opts.hadBrief ? 'Rewrite it whole' : 'Write it'} every time (never "unchanged"): Markdown, at most 12 lines, plain words${opts.language ? `, in ${opts.language}` : ''}. First what needs the user (the decision or action), then one line per piece of work: what is done, what it waits on now and on whom. One thing per line: several asks are several lines, each with its task. ${refs}Each line says enough to act on without the chat: which document, repo or release, and exactly what the user must decide or do. Walnut shows each named task's live status beside it, so name tasks with <task-ref/>, never a bare id, and Walnut checks these rules. ${COMPLETE_IS_VERIFIED} Only what needs the user now or changes their picture of the work: a deadline days away, a reminder or a thing for later goes into your own MEMORY.md (asked below), not here. Plain Markdown with no bold labels around the field name. No codenames, hashes or file names.${needs}${moved}${still}${broke}
 FOR_USER_BRIEF:
 <the letter>`;
 }

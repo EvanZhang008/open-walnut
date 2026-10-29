@@ -27,7 +27,7 @@ import { engineCaps, isAcpEngine } from '../agents/engine-registry.js';
 import { hintDriftHook } from '../hints/hint-drift.js';
 import { toDisplayedUserText } from '../sessions/reference-cards.js';
 import { isAwaitingTurnEnd } from '../sessions/self-complete-stop.js';
-import { briefMoveLines, briefPrompt, briefStillOpenLines, keepsBrief, overdueAsks, readBrief } from '../sessions/brief.js';
+import { briefMoveLines, briefNeedsLines, briefPrompt, briefStillOpenLines, keepsBrief, overdueAsks, readBrief } from '../sessions/brief.js';
 import { briefFixPrompt, briefIssues, briefNeedsRewrite, briefVpLines, completeBriefRefs, formatBriefIssues, type BriefIssue } from '../sessions/brief-rules.js';
 import { agentMemoryPrompt, applyAgentMemoryAnswer, keepsAgentMemory, readAgentMemoryField, splitAgentMemory } from '../sessions/agent-memory.js';
 import { withoutLeadingRiders } from '../../lib/history-walnut-riders.js';
@@ -372,7 +372,7 @@ ${FOR_USER_PROMPT}${opts?.brief ? briefPrompt({ ...opts.brief, ...(uiLang ? { la
  *  them on the Board, the Org page and the phone, so the plain-words rule is the point. */
 export const FOR_USER_PROMPT = `Then four lines on how this task stands FOR THE USER, who reads them on their board without opening the session. Plain words a non-engineer understands: no codenames, abbreviations, ticket or test-run labels, commit hashes, file names or internal ids; one short sentence each.
 FOR_USER_STATE: one of needs-you | working | waiting | done. needs-you ONLY when you are stopped on something only the user can give (a decision, an approval, a login, an action on their device); a question for your lead or another task is waiting, not needs-you; so is a failure of the machine (a full disk, a Walnut restart, a lost connection to a host): that is waiting on machine, which Walnut and your lead retry once it clears. working when you will carry on by yourself right now (a background job you started will wake you). waiting when the next move belongs to someone or something else. done when what the task asked for is finished.
-FOR_USER_ASK: needs-you only: the one thing the user must decide or do, as a question or an instruction ("Approve testing on your real iPhone?"). Otherwise none.
+FOR_USER_ASK: needs-you only: the one thing the user must decide or do, as a question or an instruction ("Approve testing on your real iPhone?"). Otherwise none. Check first that it is still needed: the user may have done it outside Walnut (a sign-in in a terminal, a tap on the phone), and a stale ask is read to them as fact. When a script can tell it is done (a login works, a file appears, a review lands), arm a trigger on it (trigger_create, wait:false) so the ask clears the moment it is; without one, Walnut asks you to check again every few hours.
 FOR_USER_WAITING_ON: waiting only: <task | time | machine | you | lead | other>: on whom or what exactly ("task: the Bun migration lead's commit", "machine: 20 GB of free disk", "you: a real-device test whenever you have time"). Otherwise none.
 FOR_USER_NOW: where the work stands now.
 FOR_USER_NEXT: who does what next ("You decide, then I run the tests", "I deploy once the tests pass").`;
@@ -924,6 +924,7 @@ export async function runTriage(p: OnTurnCompletePayload, opts: { final?: boolea
           brief = {
             hadBrief: !!taskRow.brief?.text, moves: briefMoveLines(taskRow, all), ownId: taskRow.id,
             stillOpen: briefStillOpenLines(taskRow, all, await overdueAsks().catch(() => [])),
+            needs: briefNeedsLines(taskRow, all),
             main: taskRow.org_role === 'main', vps: briefVpLines(taskRow, all),
             ...(taskRow.brief?.issues?.length ? { issues: formatBriefIssues(taskRow.brief.issues) } : {}),
           };

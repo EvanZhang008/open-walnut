@@ -131,6 +131,9 @@
 .board-status .bs-on-stuck { color: var(--bs-stuck); }
 .board-status .bs-muted { color: var(--fg-muted); }
 .board-status .bs-you b { color: var(--bs-needs); }
+/* When a session's ask was last checked; amber once it is too old to be fact. */
+.board-status .bs-checked { color: var(--fg-muted); font-size: 11.5px; }
+.board-status .bs-checked.is-unverified, .board-status .bs-unverified { color: color-mix(in srgb, var(--warning, #FF9500) 70%, var(--fg)); font-weight: 600; }
 
 .board-status .bs-stale {
   display: inline-block !important;

@@ -176,6 +176,17 @@ enum TeamStatusModel {
         return bare ? day : "\(day) \(time)"
     }
 
+    /// Under a session's own "needs you": when it was last checked, or that it is not verified and
+    /// may be done already. Nil for Walnut's live records (a prompt, a letter, a choice). Mirrors
+    /// `checkedLine` in src/core/user-status.ts.
+    static func checkedLine(_ s: WalnutUserStatus?, now: Date = AppClock.now()) -> (text: String, unverified: Bool)? {
+        guard let s, s.state == "needs", s.source == "session",
+              let iso = s.checkedAt, let at = WalnutTask.parseISO(iso) else { return nil }
+        let ago = RelativeTime.short(date: at, relativeTo: now)
+        if s.unverified == true { return ("Not verified: last checked \(ago), may be done already", true) }
+        return ("Checked \(ago)\(s.checkedBy == "check" ? " by its check" : "")", false)
+    }
+
     /// A waiting row's line: "Waiting on another task: …", "Stuck. …", "Not started yet".
     static func waitingLine(_ s: WalnutUserStatus?) -> String {
         let on = (s?.waitingOn ?? "").trimmingCharacters(in: .whitespaces)

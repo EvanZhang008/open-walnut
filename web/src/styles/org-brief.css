@@ -127,6 +127,17 @@
   background: color-mix(in srgb, var(--warning, #ff9f0a) 18%, var(--bg));
   color: var(--fg);
 }
+/* A "needs you" its session confirmed too long ago to be fact (user-status.ts checkedLine). */
+.org-brief-body a.task-link[data-unverified]::after {
+  content: 'Not verified';
+  margin-left: 4px;
+  padding: 0 5px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  vertical-align: 1px;
+  background: color-mix(in srgb, var(--warning, #ff9f0a) 18%, var(--bg));
+  color: var(--fg);
+}
 /* The program-made "still open" footer (BriefStillOpen.tsx). */
 .org-brief-open {
   margin-top: 8px;

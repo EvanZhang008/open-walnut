@@ -36,10 +36,13 @@ export function OrgBrief({ owner, tasks, name, onOpenTask, now, folded }: Props)
   const labels = useEntityLabelsVersion();
   const states = useMemo(() => new Map(tasks.map((t) => [t.id, userStateOf(t)] as const)), [tasks]);
   const partial = useMemo(() => new Set(tasks.filter((t) => resultIsPartial(t.result_report)).map((t) => t.id)), [tasks]);
+  // The server flips `unverified` (user-status.ts), so the markup changes only when one does.
+  const unverifiedKey = tasks.filter((t) => t.phase !== 'COMPLETE' && t.user_status?.state === 'needs' && t.user_status.unverified).map((t) => t.id).join('|');
+  const unverified = useMemo(() => new Set(unverifiedKey ? unverifiedKey.split('|') : []), [unverifiedKey]);
   const markup = useMemo(
-    () => (brief?.text ? decorateBriefHtml(renderMarkdownWithRefs(brief.text), states, partial) : ''),
+    () => (brief?.text ? decorateBriefHtml(renderMarkdownWithRefs(brief.text), states, partial, unverified) : ''),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [brief?.text, states, partial, labels],
+    [brief?.text, states, partial, unverified, labels],
   );
   // React 19 resets innerHTML for every new {__html} object, even with the same string, which
   // drops a selection in the letter on any task update: keep one object per string.

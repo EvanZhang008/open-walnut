@@ -115,7 +115,7 @@ export function waitingLine(status: UserStatus, formatUntil: (iso: string) => st
 
 /** The brief above the table: what needs the user, then one line of counts. */
 export interface StatusBrief {
-  needs: { id: string; title: string; ask: string }[];
+  needs: { id: string; title: string; ask: string; unverified?: boolean }[];
   counts: UserStatusCounts;
   stuck: number;
   notStarted: number;
@@ -124,7 +124,7 @@ export interface StatusBrief {
 
 export function statusBrief(board: StatusBoard): StatusBrief {
   return {
-    needs: board.groups.needs.map((r) => ({ id: r.task.id, title: r.task.title, ask: r.status.ask ?? '' })),
+    needs: board.groups.needs.map((r) => ({ id: r.task.id, title: r.task.title, ask: r.status.ask ?? '', ...(r.status.unverified ? { unverified: true } : {}) })),
     counts: board.counts,
     stuck: board.groups.waiting.filter((r) => r.status.kind === 'stuck').length,
     notStarted: board.groups.waiting.filter((r) => r.status.kind === 'not-started').length,

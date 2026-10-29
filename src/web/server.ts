@@ -1901,6 +1901,9 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     // Main's and the leads' promised follow-ups (src/core/sessions/promise-alarm.ts), same clock policy.
     const { startPromiseAlarms } = await import('../core/sessions/promise-alarm.js')
     startPromiseAlarms({ ephemeral: IS_EPHEMERAL })
+    // A "needs you" nobody checks by script is checked again every few hours (src/core/sessions/needs-recheck.ts).
+    const { startNeedsRecheck } = await import('../core/sessions/needs-recheck.js')
+    startNeedsRecheck({ ephemeral: IS_EPHEMERAL })
   }
 
   // ── The one status the user sees per task (src/core/user-status-sync.ts).
@@ -1910,6 +1913,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     // What waits on a lead (its status says so) reaches that lead (src/core/org/lead-waits.ts).
     const { startLeadWaits } = await import('../core/org/lead-waits.js')
     startLeadWaits()
+    // A settled status change, told to the askers, the leader, the VP and Main (src/core/sessions/status-push.ts).
+    void import('../core/sessions/status-push.js').then((m) => m.startStatusPush()).catch(() => {})
     // A completed task's own "please check this" letters leave the inbox (src/core/human-inbox/complete-archive.ts).
     const { startCompleteArchive } = await import('../core/human-inbox/complete-archive.js')
     startCompleteArchive()
@@ -6435,6 +6440,8 @@ export async function stopServer(): Promise<void> {
   bus.unsubscribe('task-wait-until') // WAIT_UNTIL_SUBSCRIBER, core/task-wait-until.ts
   bus.unsubscribe('user-status-sync') // core/user-status-sync.ts; its timers stop below
   void import('../core/user-status-sync.js').then((m) => m.stopUserStatusSync()).catch(() => { /* never started */ })
+  void import('../core/sessions/status-push.js').then((m) => m.stopStatusPush()).catch(() => { /* never started */ })
+  void import('../core/sessions/needs-recheck.js').then((m) => m.stopNeedsRecheck()).catch(() => { /* never started */ })
   void import('../core/human-inbox/complete-archive.js').then((m) => m.stopCompleteArchive()).catch(() => { /* never started */ })
   void import('../core/org/lead-waits.js').then((m) => m.stopLeadWaits()).catch(() => { /* never started */ })
   bus.unsubscribe('board-store') // BOARD_SUBSCRIBER, core/boards/board-store.ts

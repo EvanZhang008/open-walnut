@@ -58,6 +58,21 @@ final class TeamStatusModelTests: XCTestCase {
         XCTAssertEqual(TeamStatusModel.waitingLine(.init(state: "waiting", kind: "time", waitingOn: "")), "Waiting for a set time")
     }
 
+    func testANeedsYouSaysWhenItWasCheckedAndWhenItIsNotVerified() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let iso = { (d: Date) in ISO8601DateFormatter().string(from: d) }
+        let fresh = WalnutUserStatus(state: "needs", ask: "Sign in", source: "session", checkedAt: iso(now.addingTimeInterval(-2 * 3600)), checkedBy: "session")
+        let line = TeamStatusModel.checkedLine(fresh, now: now)
+        XCTAssertEqual(line?.unverified, false)
+        XCTAssertTrue(line?.text.hasPrefix("Checked ") == true)
+        let old = WalnutUserStatus(state: "needs", ask: "Sign in", source: "session", checkedAt: iso(now.addingTimeInterval(-9 * 3600)), checkedBy: "session", unverified: true)
+        XCTAssertEqual(TeamStatusModel.checkedLine(old, now: now)?.unverified, true)
+        XCTAssertTrue(TeamStatusModel.checkedLine(old, now: now)?.text.hasPrefix("Not verified") == true)
+        // Walnut's own live records (a letter) and an older server's status carry no line.
+        XCTAssertNil(TeamStatusModel.checkedLine(.init(state: "needs", ask: "Answer the letter", source: "letter"), now: now))
+        XCTAssertNil(TeamStatusModel.checkedLine(.init(state: "needs", ask: "Sign in", source: "session"), now: now))
+    }
+
     func testADoneTaskNeverReadsStuck() {
         // The server keeps a COMPLETE task's last report, so its kind can still say stuck.
         let stuck = WalnutUserStatus(state: "waiting", kind: "stuck")

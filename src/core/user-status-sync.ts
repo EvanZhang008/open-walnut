@@ -62,12 +62,17 @@ export interface StatusFacts {
   triggers: Map<string, string[]>;
   /** Task id -> enabled scheduled routines that run in its session, with their next run. */
   schedules: Map<string, { name: string; nextAt?: string }[]>;
+  /** Task id -> when an armed trigger of it last ran its check (ISO, to CHECK_STAMP_MS), absent
+   *  while none has. Optional: an older caller's facts carry none. */
+  checks?: Map<string, string>;
   /** Task id -> title, for naming the tasks a reply is awaited from. */
   titles: Map<string, string>;
   /** Task id -> the ids of the sessions linked to it (its slot, its history, records naming it). */
   sessionsOf: Map<string, string[]>;
   /** Task id -> how many of its direct subtasks are open (filled by syncUserStatuses). */
   openWorkers?: Map<string, number>;
+  /** Task id -> when the team stop that holds it was made (Task.team_stop members, filled by syncUserStatuses). */
+  teamStopped?: Map<string, string>;
   /** Project keys (trimmed, lower case) that have an open lead (filled by syncUserStatuses). */
   projectLeads?: Set<string>;
   /** Session id -> its newest parked message (never delivered): why, and when it was parked. */
@@ -83,7 +88,7 @@ async function safely<T>(what: string, fn: () => Promise<T>, fallback: T): Promi
   }
 }
 
-type SlowSource = 'letters' | 'choices' | 'triggers' | 'schedules';
+type SlowSource = 'letters' | 'choices' | 'triggers' | 'schedules' | 'checks';
 
 /**
  * The sources that cost a lock or a parse of every Board (the inbox index, the Boards, the
@@ -93,21 +98,21 @@ type SlowSource = 'letters' | 'choices' | 'triggers' | 'schedules';
 const slow: Partial<Record<SlowSource, Map<string, any>>> = {};
 
 function dropSlow(...kinds: SlowSource[]): void {
-  for (const k of kinds.length ? kinds : (['letters', 'choices', 'triggers', 'schedules'] as const)) delete slow[k];
+  for (const k of kinds.length ? kinds : (['letters', 'choices', 'triggers', 'schedules', 'checks'] as const)) delete slow[k];
   if (!kinds.length) boardChoices.clear();
 }
 
 /** Per Board owner: its unanswered choices, so one Board's write re-reads that Board alone. */
 const boardChoices = new Map<string, { ref?: string; title: string }[]>();
 
-async function cachedSlow<K extends SlowSource>(kind: K, allIds: readonly string[]): Promise<StatusFacts[K]> {
+async function cachedSlow<K extends SlowSource>(kind: K, allIds: readonly string[]): Promise<NonNullable<StatusFacts[K]>> {
   const hit = slow[kind];
-  if (hit) return hit as StatusFacts[K];
+  if (hit) return hit as NonNullable<StatusFacts[K]>;
   const built = kind === 'letters' ? await readLetters()
     : kind === 'choices' ? await readChoices(allIds)
-    : await readRoutines(kind === 'schedules');
+    : await readRoutines(kind as 'triggers' | 'schedules' | 'checks');
   slow[kind] = built;
-  return built as StatusFacts[K];
+  return built as NonNullable<StatusFacts[K]>;
 }
 
 async function readLetters(): Promise<StatusFacts['letters']> {
@@ -156,9 +161,15 @@ async function readChoices(allIds: readonly string[]): Promise<StatusFacts['choi
   return out;
 }
 
-/** The routines that run in a task's session: armed triggers (a check), or plain scheduled runs. */
-async function readRoutines(schedules: boolean): Promise<Map<string, any>> {
-  const out = new Map<string, any[]>();
+/** A check's time is kept to this step, so a trigger checking every minute rewrites no status
+ *  every minute: "checked 10 minutes ago" is all a reader needs. */
+const CHECK_STAMP_MS = 10 * 60_000;
+
+/** The routines that run in a task's session: armed triggers (a check), or plain scheduled runs;
+ *  `checks`: when an armed trigger of the task last ran its check. */
+async function readRoutines(kind: 'triggers' | 'schedules' | 'checks'): Promise<Map<string, any>> {
+  const schedules = kind === 'schedules';
+  const out = new Map<string, any>();
   await safely('triggers', async () => {
     const { listRoutines } = await import('./routines/routines-core.js');
     const { triggerRunState } = await import('./cron/trigger-run-state.js');
@@ -166,6 +177,13 @@ async function readRoutines(schedules: boolean): Promise<Map<string, any>> {
     for (const job of jobs as import('./cron/types.js').CronJob[]) {
       const target = (job.executor?.config as { target?: unknown } | undefined)?.target;
       if (job.executor?.type !== 'session' || typeof target !== 'string' || !job.enabled) continue;
+      if (kind === 'checks') {
+        const ran = job.state?.lastCheck?.atMs;
+        if (!job.check || triggerRunState(job) !== 'armed' || typeof ran !== 'number') continue;
+        const at = new Date(Math.floor(ran / CHECK_STAMP_MS) * CHECK_STAMP_MS).toISOString();
+        if (!out.has(target) || out.get(target) < at) out.set(target, at);
+        continue;
+      }
       const list = out.get(target) ?? [];
       if (schedules && !job.check) {
         const next = job.state?.nextRunAtMs;
@@ -258,6 +276,7 @@ export async function readStatusFacts(tasks: readonly Task[], allIds: readonly s
 
   const triggers = await cachedSlow('triggers', allIds);
   const schedules = await cachedSlow('schedules', allIds);
+  const checks = await cachedSlow('checks', allIds);
 
   const titles = new Map(tasks.map((t) => [t.id, t.title] as const));
   const sessionsOf: StatusFacts['sessionsOf'] = new Map();
@@ -271,7 +290,7 @@ export async function readStatusFacts(tasks: readonly Task[], allIds: readonly s
     for (const sid of t.session_ids ?? []) link(t.id, sid);
   }
   for (const [sid, s] of sessions) if (s.taskId && taskIds.has(s.taskId)) link(s.taskId, sid);
-  return { sessions, letters, choices, requestsFrom, triggers, schedules, titles, sessionsOf, undelivered };
+  return { sessions, letters, choices, requestsFrom, triggers, schedules, checks, titles, sessionsOf, undelivered };
 }
 
 /** A park lands just before the hand-back it causes; the two clocks are the same process's. */
@@ -327,6 +346,8 @@ export function statusInputOf(task: Task, facts: StatusFacts): UserStatusInput {
     reportPending: task.session_id ? isReportPending(task.session_id) : own.some(([sid]) => isReportPending(sid)),
     isLead: task.org_role === 'lead',
     dueDate: task.due_date ?? null,
+    checkRanAt: facts.checks?.get(task.id) ?? null,
+    teamStoppedAt: facts.teamStopped?.get(task.id) ?? null,
   };
 }
 
@@ -351,6 +372,8 @@ export async function syncUserStatuses(ids: ReadonlySet<string> | null, nowMs = 
     if (!t.parent_task_id || t.phase === 'COMPLETE' || t.status === 'done') continue;
     facts.openWorkers.set(t.parent_task_id, (facts.openWorkers.get(t.parent_task_id) ?? 0) + 1);
   }
+  facts.teamStopped = new Map();
+  for (const t of everything) for (const m of t.team_stop?.members ?? []) facts.teamStopped.set(m.id, t.team_stop!.at);
   facts.projectLeads = new Set();
   for (const t of everything) {
     if (t.org_role !== 'lead' || t.phase === 'COMPLETE' || t.status === 'done') continue;
@@ -453,7 +476,7 @@ function onEvent(event: { name: string; data: unknown; source?: string }): void 
     case EventNames.CRON_JOB_ADDED:
     case EventNames.CRON_JOB_UPDATED:
     case EventNames.CRON_JOB_REMOVED:
-      dropSlow('triggers', 'schedules');
+      dropSlow('triggers', 'schedules', 'checks');
       markAll();
       return;
   }

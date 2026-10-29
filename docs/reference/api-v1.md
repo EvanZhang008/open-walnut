@@ -877,7 +877,11 @@ reconcile, `NOTES_UPDATED` events) with the web UI's `/api/notes-v2`.
   task that is not running. `stoppedBy: 'machine'` (added 2026-10-28) marks a task the
   machine stopped (a lost host, a restart, a dead process): Walnut resumes it and its
   lead restarts it, so it reads `waiting` (`machine`, or `lead` once Walnut gave up or a
-  day passed), not `needs`. The server derives it (src/core/user-status.ts) and
+  day passed), not `needs`. A `needs` from its own session (`source: 'session'`) carries
+  `checkedAt` (when the ask was last confirmed, ISO) and `checkedBy` (`session`: its turn-end
+  report; `check`: an armed trigger's check script), and `unverified: true` once that is more
+  than 4.5 hours ago with no check watching it: show it as not verified, never as fact (added
+  2026-10-28). The server derives it (src/core/user-status.ts) and
   every surface shows it instead of the phase, so a `NEED_ACTION` phase alone is
   not "needs you". A client reading an older server sees no field and falls back
   to the phase. Additive and optional.

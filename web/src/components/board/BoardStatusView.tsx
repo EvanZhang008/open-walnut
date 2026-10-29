@@ -11,7 +11,7 @@
  */
 import { memo, useMemo, useState, type ReactNode } from 'react';
 import type { Task } from '@open-walnut/core';
-import { USER_STATE_LABELS, USER_STATES, dueAtMs, resultIsPartial, type UserState } from '@open-walnut/user-status';
+import { USER_STATE_LABELS, USER_STATES, checkedLine, dueAtMs, resultIsPartial, type UserState } from '@open-walnut/user-status';
 import { CEO_LABEL, VP_LABEL, orgDisplayTitle } from '@open-walnut/org-tree';
 import { RECENT_COMPLETED_DAYS } from '@/api/tasks';
 import { formatWaitUntil } from '@/components/tasks/TaskStatusControl';
@@ -103,10 +103,14 @@ function compactDays(at: string | undefined): string {
 
 function NextCell({ row, onOpenPage }: { row: StatusRow; onOpenPage?: () => void }) {
   const s = row.status;
+  const checked = checkedLine(s);
   if (s.state === 'needs') {
     return (
       <>
         <span className="bs-you"><b>You:</b> {s.ask}</span>
+        {checked && (
+          <span className={`bs-checked${checked.unverified ? ' is-unverified' : ''}`} data-testid="board-checked" data-unverified={checked.unverified ? '1' : '0'}>{checked.text}</span>
+        )}
         {s.source === 'choice' && onOpenPage && (
           <button type="button" className="bs-act" onClick={(e) => { e.stopPropagation(); onOpenPage(); }} data-testid="board-status-answer">Answer on the Page</button>
         )}
@@ -246,6 +250,7 @@ export function BoardStatusView({ ownerId, ownerTitle, tasks, loading, onOpenTas
                   {i > 0 && '; '}
                   <button type="button" className="bs-link" onClick={() => onOpenTask(n.id)}>{n.title}</button>
                   {n.ask && <> ({n.ask.replace(/\.$/, '')})</>}
+                  {n.unverified && <span className="bs-unverified" data-testid="board-brief-unverified"> not verified</span>}
                 </span>
               ))}.
             </>

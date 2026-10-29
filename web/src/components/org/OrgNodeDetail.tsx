@@ -132,6 +132,9 @@ function AlertList({ alerts, tasks, onOpen, onQuote, canQuote, answers, compact 
               onClick={(e) => { e.preventDefault(); onOpen(a); }}
             >{a.title}</a>
             <span className="org-alert-ask" title={askLine(a)}>{askLine(a)}</span>
+            {a.checked && (
+              <span className={`org-alert-checked${a.checked.unverified ? ' is-unverified' : ''}`} data-testid="org-alert-checked" data-unverified={a.checked.unverified ? '1' : '0'}>{a.checked.text}</span>
+            )}
           </span>
           <span className="org-alert-actions">
             <button

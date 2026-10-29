@@ -248,7 +248,7 @@
 
 .org-alerts { display: flex; flex-direction: column; gap: 6px; padding: 10px 18px 0; }
 /* Above the chat: about three rows, the rest a scroll away, so the chat keeps its room. */
-.org-alerts.is-compact { flex-shrink: 0; max-height: 128px; overflow-y: auto; }
+.org-alerts.is-compact { flex-shrink: 0; max-height: 156px; overflow-y: auto; }
 .org-alert {
   display: flex;
   align-items: center;
@@ -264,6 +264,9 @@
 .org-alert-main, .org-alert-ask { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* A status that needs the user: what to do, in the session's words. */
 .org-alert-ask { font-size: 11.5px; color: var(--fg-muted); }
+/* When that ask was last checked; amber once it is too old to be fact. */
+.org-alert-checked { font-size: 11px; color: var(--fg-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.org-alert-checked.is-unverified { color: color-mix(in srgb, var(--warning, #FF9500) 70%, var(--fg)); font-weight: 600; }
 /* The task's name: a link to it. */
 .org-alert-link { color: var(--fg); text-decoration: none; font-weight: 500; }
 .org-alert-link:hover { color: var(--accent); text-decoration: underline; }

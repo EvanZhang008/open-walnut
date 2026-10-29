@@ -8,12 +8,17 @@ const TASK_ANCHOR_RE = /<a ([^>]*?)data-task-id="([^"]+)"/g;
 
 /** Every task pill in the rendered Brief carries its task's live status (CSS draws the dot), so a
  *  line the session wrote an hour ago still shows where each task stands now. */
-export function decorateBriefHtml(html: string, states: ReadonlyMap<string, UserState>, partial?: ReadonlySet<string>): string {
+export function decorateBriefHtml(
+  html: string, states: ReadonlyMap<string, UserState>, partial?: ReadonlySet<string>,
+  unverified?: ReadonlySet<string>,
+): string {
   return html.replace(TASK_ANCHOR_RE, (m, pre: string, id: string) => {
     const state = states.get(id);
     // A task whose latest result left things not done says so on its pill (structured-reply.ts).
     const part = partial?.has(id) ? 'data-partial="1" ' : '';
-    return state || part ? `<a ${pre}${state ? `data-user-state="${state}" ` : ''}${part}data-task-id="${id}"` : m;
+    // A "needs you" its session confirmed long ago says it may be done already (user-status.ts checkedLine).
+    const check = unverified?.has(id) ? 'data-unverified="1" ' : '';
+    return state || part || check ? `<a ${pre}${state ? `data-user-state="${state}" ` : ''}${part}${check}data-task-id="${id}"` : m;
   });
 }
 
