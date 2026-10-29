@@ -18,6 +18,7 @@ import { WebSocket } from 'ws'
 
 import { WALNUT_HOME } from '../../src/constants.js'
 import { startServer, stopServer } from '../../src/web/server.js'
+import { settleUserStatusSync } from '../../src/core/user-status-sync.js'
 
 let server: HttpServer
 let port: number
@@ -163,6 +164,9 @@ describe('tasks a plugin keeps to its own view', () => {
     for (const id of [kept, direct, plain]) {
       expect((await api('PATCH', `/api/tasks/${id}`, { phase: 'NEED_ACTION' })).status).toBe(200)
     }
+    // The Org counts the status the sync stores, on a 1.5 s debounce: read it once that pass ran,
+    // not the 'waiting' it stored for the tasks' TODO (a flake hunt read needsYou 0, run 40806104026).
+    await settleUserStatusSync()
     const tree = (await api('GET', '/api/v1/org')).data.tree
     const room = tree.projects.find((p: { project: string }) => p.project === PROJECT)
     expect(room.teams.map((t: { id: string }) => t.id)).toEqual([plain])
