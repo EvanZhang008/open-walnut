@@ -292,6 +292,16 @@ phone ── tunnel (on the host) ── host server ── stream via the host'
      and removes the older builds on the host, keeping the one that ran before
      it (`pruneScript`). A new build that does not report in time gives the host
      back the program that worked, and is not tried again until Retry.
+  7. a newer build of this Mac waits while the program that works there reports:
+     it goes once this server has served it 30 minutes with no newer deploy, and
+     at most 6 hours after the host first fell behind (the state file keeps that
+     time across deploys; `WALNUT_HOST_SERVER_UPDATE_QUIET_MIN`,
+     `WALNUT_HOST_SERVER_UPDATE_MAX_BEHIND_MIN`); the 30 s report poll sends it
+     then. It goes at once on Retry, when nothing works there, when the settings
+     ask for another program, and when the program there answers this Mac's
+     copies as too old (`schema_newer`, `unknown_kind`)
+     (`src/core/host-server/update-hold.ts`). Every deploy used to send the file
+     (2026-10-29: 27 to 76 a day, 61 MB through a relay that cuts upload bursts).
 
 ### One kind of link
 

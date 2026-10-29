@@ -155,6 +155,8 @@ function deps(over: Partial<ManagerDeps> = {}): ManagerDeps {
     },
     installPollMs: 1,
     pollMs: 60_000,
+    // This build has served for long: a newer build is never held back (update-hold.ts) unless a test says so.
+    servingSince: 0,
     ...over,
   }
 }
@@ -846,5 +848,158 @@ describe('host server manager, a compiled Mac whose file is already the host\'s 
       ])
       fs.rmSync(path.join(dir, 'host-servers.json'), { force: true })
     }
+  })
+})
+
+// 2026-10-29: every deploy here (27 to 76 a day) sent the host a 61 MB file through a relay
+// that cuts upload bursts; the host's links dropped all through each 10+ minute install.
+describe('host server manager: a newer build waits for a quiet window (update-hold.ts)', () => {
+  const MIN = 60_000
+  const T0 = new Date(2026, 9, 29, 9, 0).getTime()
+  const oldFile = '/home/me/.open-walnut-host/app/0.6.6-aaa1111/walnut'
+  const newFile = '/home/me/.open-walnut-host/app/0.6.7-abc1234/walnut'
+  const NOTICE = /^It runs Walnut 0\.6\.6-aaa1111; this computer's 0\.6\.7-abc1234 goes out after 30 quiet minutes with no newer deploy here \(at the latest by 15:00\)\. Retry sends it now\.$/
+  let clock = T0
+  const managers: Array<ReturnType<typeof createHostServerManager>> = []
+  const record = () => JSON.parse(fs.readFileSync(path.join(dir, 'host-servers.json'), 'utf8')).devbox
+
+  beforeEach(() => { clock = T0 })
+  afterEach(() => { for (const m of managers.splice(0)) m.stop() })
+
+  /** 0.6.6 installed and reporting; this Mac now runs 0.6.7, whose file is not on the host yet. */
+  async function hostOn066(): Promise<FakeHost> {
+    const host = fakeHost()
+    host.reportBuild = { version: '0.6.6', commit: 'aaa1111' }
+    const m0 = createHostServerManager(deps({ hostFile: fakeFiles({ buildId: async () => ({ id: '0.6.6-aaa1111', version: '0.6.6', commit: 'aaa1111' }) }) }))
+    await m0.connected(host)
+    m0.stop()
+    expect(host.specs.at(-1)!.command).toBe(oldFile)
+    expect(record().working.id).toBe('0.6.6-aaa1111')
+    host.installState = 'absent'
+    host.pollsUntilReady = 1
+    host.calls = []
+    host.uploads = []
+    fileAsks = []
+    return host
+  }
+
+  /** A server of this Mac that started serving 0.6.7 at `clock`. */
+  function mac(over: Partial<ManagerDeps> = {}) {
+    const m = createHostServerManager(deps({ now: () => clock, servingSince: clock, updateQuietMs: 30 * MIN, updateMaxBehindMs: 360 * MIN, ...over }))
+    managers.push(m)
+    return m
+  }
+
+  it('is held while the host runs the working one, and goes by itself once the window passed', async () => {
+    const host = await hostOn066()
+    const m = mac({ pollMs: 5 })
+    await m.connected(host)
+    // Nothing built, probed or sent: the daemon is told to run the same program, so nothing restarts.
+    expect(fileAsks).toEqual([])
+    expect(host.uploads).toEqual([])
+    expect(host.calls).toEqual(['send server.status', 'send server.configure', 'send server.status'])
+    expect(host.specs.at(-1)).toEqual(host.specs.at(-2))
+    expect(m.view('devbox')).toMatchObject({ phase: 'running', build: '0.6.7-abc1234' })
+    expect(m.view('devbox').notice).toMatch(NOTICE)
+    expect(record()).toMatchObject({ working: { id: '0.6.6-aaa1111' }, behindSince: T0 })
+    // The report poll keeps it while the window lasts.
+    clock = T0 + 29 * MIN
+    await new Promise((r) => setTimeout(r, 40))
+    expect(host.uploads).toEqual([])
+    // Then the poll sends it, and it becomes the working one.
+    clock = T0 + 30 * MIN
+    await expect.poll(() => record().working.id, { timeout: 5_000, interval: 5 }).toBe('0.6.7-abc1234')
+    expect(host.uploads.map((u) => path.basename(u.path))).toEqual(['0.6.7-abc1234.gz', '0.6.7-abc1234.install.sh'])
+    expect(host.specs.at(-1)!.command).toBe(newFile)
+    expect(record().behindSince).toBeUndefined()
+    await expect.poll(() => m.view('devbox').notice, { timeout: 5_000, interval: 5 }).toBeUndefined()
+  })
+
+  it('goes at once when nothing works there: no record, or a server that does not report now', async () => {
+    const fresh = fakeHost()
+    await mac().connected(fresh)
+    expect(fresh.uploads.map((u) => path.basename(u.path))).toEqual(['0.6.7-abc1234.gz', '0.6.7-abc1234.install.sh'])
+    fs.rmSync(path.join(dir, 'host-servers.json'), { force: true })
+    // Turned off and on again: the record says 0.6.6 worked, but nothing runs there now.
+    const host = await hostOn066()
+    host.daemonState = 'off'
+    await mac().connected(host)
+    expect(host.uploads.map((u) => path.basename(u.path))).toEqual(['0.6.7-abc1234.gz', '0.6.7-abc1234.install.sh'])
+    expect(record().working.id).toBe('0.6.7-abc1234')
+    // The daemon's own fallback runs (the replica crash-looped): not the program that works either.
+    fs.rmSync(path.join(dir, 'host-servers.json'), { force: true })
+    const fallback = await hostOn066()
+    fallback.statusExtra = { program: 'fallback' }
+    await mac().connected(fallback)
+    expect(fallback.uploads.length).toBe(2)
+  })
+
+  it('goes at once on Retry', async () => {
+    const host = await hostOn066()
+    const m = mac()
+    await m.connected(host)
+    expect(host.uploads).toEqual([])
+    await m.reconcile('devbox', { retry: true })
+    expect(host.uploads.map((u) => path.basename(u.path))).toEqual(['0.6.7-abc1234.gz', '0.6.7-abc1234.install.sh'])
+    expect(record().working.id).toBe('0.6.7-abc1234')
+    expect(m.view('devbox').notice).toBeUndefined()
+  })
+
+  it('goes at once when the settings ask for another program', async () => {
+    const host = await hostOn066()
+    // The working one is the plain host server; now the host's daemon can run the replica (the default).
+    host.caps.add('replica-host-v1')
+    await mac().connected(host)
+    expect(host.uploads.length).toBe(2)
+    expect(host.specs.at(-1)).toMatchObject({ command: newFile, args: ['web', '--replica'] })
+  })
+
+  it('goes at once when the program there is too old for this Mac\'s copies, also while held', async () => {
+    const host = await hostOn066()
+    await mac({ copiesNeedNewer: async () => 'sessions: schema_newer' }).connected(host)
+    expect(host.uploads.length).toBe(2)
+    fs.rmSync(path.join(dir, 'host-servers.json'), { force: true })
+    const later = await hostOn066()
+    let tooOld: string | null = null
+    const m = mac({ pollMs: 5, copiesNeedNewer: async () => tooOld })
+    await m.connected(later)
+    expect(later.uploads).toEqual([])
+    tooOld = 'boards: unknown_kind'
+    await expect.poll(() => record().working.id, { timeout: 5_000, interval: 5 }).toBe('0.6.7-abc1234')
+  })
+
+  it('goes at the cap even under constant deploys, which never restart the 6 hours', async () => {
+    const host = await hostOn066()
+    // A deploy every 20 minutes: each new server holds again, with the same latest time.
+    for (let k = 0; k * 20 < 340; k++) {
+      clock = T0 + k * 20 * MIN
+      const m = mac()
+      await m.connected(host)
+      expect(host.uploads).toEqual([])
+      expect(m.view('devbox').notice).toMatch(NOTICE)
+      m.stop()
+    }
+    expect(record().behindSince).toBe(T0)
+    // The last one before the cap: its window would end after it, so the poll sends it at the cap.
+    clock = T0 + 340 * MIN
+    const m = mac({ pollMs: 5 })
+    await m.connected(host)
+    expect(host.uploads).toEqual([])
+    clock = T0 + 359 * MIN
+    await new Promise((r) => setTimeout(r, 40))
+    expect(host.uploads).toEqual([])
+    clock = T0 + 360 * MIN
+    await expect.poll(() => record().working.id, { timeout: 5_000, interval: 5 }).toBe('0.6.7-abc1234')
+    expect(host.uploads.length).toBe(2)
+    // A deploy after the cap (one already behind for 6 h) sends at once.
+    fs.rmSync(path.join(dir, 'host-servers.json'), { force: true })
+    const again = await hostOn066()
+    clock = T0 + 400 * MIN
+    // As a server would have left it: held since T0.
+    const all = JSON.parse(fs.readFileSync(path.join(dir, 'host-servers.json'), 'utf8'))
+    all.devbox.behindSince = T0
+    fs.writeFileSync(path.join(dir, 'host-servers.json'), JSON.stringify(all))
+    await mac().connected(again)
+    expect(again.uploads.length).toBe(2)
   })
 })

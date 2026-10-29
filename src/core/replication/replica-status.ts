@@ -109,6 +109,21 @@ export function peekKindState(targetId: string, kind: string): KindState | null 
   return targets.get(targetId)?.kinds.get(kind) ?? null
 }
 
+/** A follower's answers that say its build is older than this Mac's (kind-follower.ts, kinds/index.ts). */
+const OLDER_FOLLOWER = new Set(['unknown_kind', 'schema_newer', 'unknown_op'])
+
+/**
+ * Why `targetId` takes a kind of this Mac's copies no more because its build is
+ * older (`<kind>: <code>`), while that rest lasts; else null. A host keeping an
+ * older build on purpose (host-server/update-hold.ts) updates at once on it.
+ */
+export function restedAsOlder(targetId: string, now = Date.now()): string | null {
+  for (const s of targets.get(targetId)?.kinds.values() ?? []) {
+    if (s.restUntil > now && s.restWhy && OLDER_FOLLOWER.has(s.restWhy)) return `${s.kind}: ${s.restWhy}`
+  }
+  return null
+}
+
 /** Send these kinds' manifests again on every target (the sweep). */
 export function forgetKindManifests(kinds: readonly string[]): void {
   const want = new Set(kinds)

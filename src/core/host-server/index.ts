@@ -10,6 +10,7 @@ import { log } from '../../logging/index.js'
 import type { CloudReplicaReply } from '../cloud-ingest.js'
 import { createHostServerManager, type HostServerHost, type HostServerManager, type HostServerSettings, type HostServerView } from './manager.js'
 import { createHostFileSource, type HostFileSource } from './host-file.js'
+import { DEFAULT_UPDATE_MAX_BEHIND_MS, DEFAULT_UPDATE_QUIET_MS, minutesFromEnv } from './update-hold.js'
 import { getExposeProvider, onExposeProvidersChanged, type CommandProviderConfig } from '../expose/registry.js'
 import { exposePlacement, tunnelKey, type PlacementHost } from '../expose/placement.js'
 import { COMMAND_PROVIDER_ID, type ExposeProviderDefinition } from '../expose/types.js'
@@ -185,6 +186,12 @@ export function getHostServerManager(): HostServerManager | null {
     changed: noteHostViewForTunnel,
     // Stopping: the plugins are disposed before the hosts' links close, and a host must keep its tunnel.
     frozen: async () => (await import('../integration-registry.js')).registry.isClosing(),
+    // A newer build waits for a quiet window before it goes to a host that works (update-hold.ts).
+    // A newer deploy replaces this process, so the window counts from when it started.
+    servingSince: Date.now() - Math.round(process.uptime() * 1000),
+    updateQuietMs: minutesFromEnv(process.env.WALNUT_HOST_SERVER_UPDATE_QUIET_MIN, DEFAULT_UPDATE_QUIET_MS),
+    updateMaxBehindMs: minutesFromEnv(process.env.WALNUT_HOST_SERVER_UPDATE_MAX_BEHIND_MIN, DEFAULT_UPDATE_MAX_BEHIND_MS),
+    copiesNeedNewer: async (hostKey) => (await import('../replication/replica-status.js')).restedAsOlder(`host:${hostKey}`),
     // Test and safety knobs (docs/plan/walnut-replica-servers-impl.md, WP2): another root
     // on the host, and (tests only) a local tree run in place of an installed build.
     ...(hostServerRootSpec() ? { hostRoot: hostServerRootSpec() } : {}),
