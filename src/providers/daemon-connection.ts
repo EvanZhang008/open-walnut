@@ -73,6 +73,7 @@ import {
   parseBunInstall, parseBunProbe, type RemoteRuntime,
 } from './remote-runtime.js'
 import { runRemoteFoldPrewarm } from './remote-fold-prewarm.js'
+import { hostSliceWaitMs } from './host-slice-pace.js'
 import { FOLD_CHECKPOINT_FORMAT } from './fold-checkpoint-core.js'
 import { annotateCredentialFailure, SSH_EVIDENCE_PREFIX } from './ssh-credential-evidence.js'
 import { cancelRecordedForwards, controlSocketPath, exitControlMaster, planControlMaster, recordForward, startControlMaster } from './ssh-control-master.js'
@@ -530,6 +531,11 @@ export class DaemonConnection {
   private offlineDrainDue = true
   /** One pending retry after a failed push (a starved daemon timed out the drain). */
   private hostSliceRetryTimer: ReturnType<typeof setTimeout> | null = null
+  /** When and how big the last copy on this connection was: the next waits in proportion (host-slice-pace.ts). */
+  private hostSliceSentAt = 0
+  private hostSliceSentBytes = 0
+  /** The push a changed copy waits for behind the last one. */
+  private hostSlicePaceTimer: ReturnType<typeof setTimeout> | null = null
   /** The Walnut was described to this daemon (leader.configure) on this connection. */
   private leaderConfigured = false
   /** The routine spawn template this daemon holds from this connection (clock-host-start-v1), by hash. */
@@ -934,6 +940,9 @@ export class DaemonConnection {
     // were away, then hand it a fresh read copy (docs/plan/daemon-first-hosts.md).
     if (changed) {
       this.lastHostSlicePushHash = null; this.hostSliceSids = new Set(); this.offlineDrainDue = true; this.leaderConfigured = false; this.replicaPushed = false
+      // A new link's first copy goes at once (it tells the daemon which socket is ours).
+      this.hostSliceSentAt = 0; this.hostSliceSentBytes = 0
+      if (this.hostSlicePaceTimer) { clearTimeout(this.hostSlicePaceTimer); this.hostSlicePaceTimer = null }
       this.routineTemplateHash = null
       void import('../core/host-replica.js').then((m) => m.forgetHostReplica(this.hostKey)).catch(() => {})
     }
@@ -1278,7 +1287,27 @@ export class DaemonConnection {
           }
           const slice = await buildHostSlice(this.hostKey)
           if (slice.hash === this.lastHostSlicePushHash) continue
+          // A remote host's copy waits in proportion to the last one's size: whole
+          // copies after every debounce were the upload bursts a relay drops the
+          // shared SSH connection on (host-slice-pace.ts). This machine's never waits.
+          const wait = this.hostKey === '__local__' ? 0 : hostSliceWaitMs({
+            lastSentAt: this.hostSliceSentAt, lastBytes: this.hostSliceSentBytes, now: Date.now(),
+            namesNewSession: slice.sessions.some((s) => !this.hostSliceSids.has(s.sid)),
+          })
+          if (wait > 0) {
+            if (!this.hostSlicePaceTimer && !this._destroyed) {
+              this.hostSlicePaceTimer = setTimeout(() => {
+                this.hostSlicePaceTimer = null
+                if (this._connected && !this._destroyed) this.pushHostSlice()
+              }, wait)
+              this.hostSlicePaceTimer.unref?.()
+            }
+            break
+          }
+          const bytes = JSON.stringify(slice).length
           const reply = await this.send('host.slice', { slice: slice as unknown as Record<string, unknown> })
+          this.hostSliceSentAt = Date.now()
+          this.hostSliceSentBytes = bytes
           if (reply.ok !== true) {
             log.session.warn('DaemonConnection: host slice push rejected', {
               host: this.hostKey, error: typeof reply.error === 'string' ? reply.error : undefined,
@@ -4364,14 +4393,17 @@ export class DaemonConnection {
     this.tunnel.unref()
     // What ssh said while setting the tunnel up ("Port forwarding is disabled
     // to avoid man-in-the-middle attacks" after a host key change): the error
-    // below quotes it so the failure can be classified. Bounded, then ignored.
+    // below quotes it so the failure can be classified. Kept as a bounded tail:
+    // ssh's last words at a death say who ended it (a relay's "Broken pipe", a
+    // keepalive "Timeout, server not responding"), and the death log quotes them.
     let tunnelStderr = ''
-    this.tunnel.stderr?.on('data', (d: Buffer) => { if (tunnelStderr.length < 4096) tunnelStderr += d.toString() })
+    this.tunnel.stderr?.on('data', (d: Buffer) => { tunnelStderr = (tunnelStderr + d.toString()).slice(-4096) })
 
     // Monitor tunnel death for auto-reconnect
     this.tunnel.on('exit', (code) => {
       log.session.warn('DaemonConnection: SSH tunnel died', {
         host: this.hostKey, code, localPort, remotePort,
+        ...(tunnelStderr.trim() ? { stderr: tunnelStderr.trim().slice(-300) } : {}),
       })
       this.tunnel = null
       this.handleConnectionLost()
