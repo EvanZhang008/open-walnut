@@ -1657,6 +1657,35 @@ async function readPluginEntry(dir: string, isBuiltin: boolean): Promise<PluginE
   return manifest ? { dir, isBuiltin, manifest } : null;
 }
 
+/**
+ * Load one external plugin's code WITHOUT activating it, for the deploy's pre-kill
+ * check (src/core/plugins/plugin-load-check.ts): the manifest, the Walnut version
+ * range, the server entry bundled and evaluated the way loadPlugin does, and the
+ * activation export. Activation is what starts a plugin (sync, mail, posting), so
+ * nothing here runs it; the evaluated module is dropped at once.
+ */
+export async function checkExternalPluginLoad(dir: string): Promise<{ id?: string; error?: string; webError?: string }> {
+  const entry = await readPluginEntry(dir, false);
+  if (!entry) return { error: 'manifest.json is missing or invalid' };
+  const { manifest } = entry;
+  try {
+    if (manifest.apiVersion !== undefined && manifest.apiVersion !== 1) {
+      throw new Error(`Unsupported Plugin API version ${manifest.apiVersion}`);
+    }
+    if (manifest.apiVersion === 1) {
+      const range = manifest.engines?.walnut;
+      if (!range || !isVersionKnown() || !satisfiesSemVer(getVersion(), range)) {
+        throw new Error(`Requires Walnut ${range ?? '(unspecified)'}; this build is ${getVersion()}`);
+      }
+    }
+    const generation = await prepareGeneration(dir, false, manifest, {});
+    await generation.module.dispose?.();
+    return { id: manifest.id, ...(generation.webError ? { webError: generation.webError } : {}) };
+  } catch (err) {
+    return { id: manifest.id, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
 async function loadPlugin(
   pluginDir: string,
   isBuiltin: boolean,

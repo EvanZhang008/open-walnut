@@ -190,6 +190,16 @@ failure re-launches that snapshot instead of leaving :3456 dark. Knobs:
 `WALNUT_DEVPROD_SMOKE_SECS` (default 120), `WALNUT_DEVPROD_SKIP_SMOKE=1`,
 `WALNUT_DEVPROD_LKG_DIR`. Ratchets: `tests/scripts/dev-prod-smoke-rollback.test.ts`.
 
+**Deploys also load the installed plugins before the kill.** The smoke boot's data home is
+empty, so it never loads an external plugin (2026-10-25: every one failed to bundle for almost
+two hours after a deploy). After it, `<new file> __plugin-check` (`src/core/plugins/plugin-load-check.ts`)
+loads each plugin in the server's `plugins/` dir that `:$PORT/api/plugin-runtime` reports
+`active`, with a temp data home, and never activates it, so nothing syncs, sends or posts. One
+that loads there and fails here aborts the deploy; one broken there too, no answer from the
+running server, or a check that runs out of time only warns. Knobs:
+`WALNUT_DEVPROD_SKIP_PLUGIN_CHECK=1`, `WALNUT_DEVPROD_PLUGIN_CHECK_SECS` (120),
+`WALNUT_DEVPROD_PLUGIN_STRICT=1`. Ratchet: `tests/scripts/dev-prod-plugin-check.test.ts`.
+
 **What a deploy runs: the compiled file, and nothing else.** After `bun run web:build` (the dist: the
 CLI publish above needs it, and the file reuses its web assets, so the asset mirror sees one
 build either way), `bun scripts/build-binary.mjs --reuse-web` builds this machine's file and the

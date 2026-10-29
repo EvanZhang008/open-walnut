@@ -982,6 +982,88 @@ if [[ "${WALNUT_DEVPROD_SKIP_SMOKE:-0}" != "1" ]]; then
   fi
 fi
 
+# ── Pre-kill plugin load check ──────────────────────────────────────────────
+# 2026-10-25: a deploy came up with every external plugin failing to bundle
+# ("build2 is not a function") for almost two hours; the smoke boot above runs on
+# an empty data home, so it never loads one. Here the new file loads each plugin
+# the running server has active, from the installed plugins dir, WITHOUT
+# activating it (nothing syncs, sends or posts: src/core/plugins/plugin-load-check.ts),
+# with its own temp data home, daemon dir and runtime tree; it reads plugin code
+# in place and none of the user's data. A plugin active on :$PORT that fails here
+# aborts the deploy; one that fails there too, or no answer from :$PORT, only
+# warns. "Could not tell" (its deadline) proceeds unless WALNUT_DEVPROD_PLUGIN_STRICT=1.
+PLUGIN_CHECK_TMP=""
+PLUGIN_CHECK_PID=""
+plugin_check_cleanup() {
+  if [[ -n "$PLUGIN_CHECK_PID" ]] && kill -0 "$PLUGIN_CHECK_PID" 2>/dev/null; then
+    kill -9 "$PLUGIN_CHECK_PID" 2>/dev/null || true
+  fi
+  PLUGIN_CHECK_PID=""
+  if [[ -n "$PLUGIN_CHECK_TMP" ]]; then
+    rm -rf "$PLUGIN_CHECK_TMP" 2>/dev/null || true
+  fi
+  PLUGIN_CHECK_TMP=""
+}
+trap 'plugin_check_cleanup; smoke_cleanup; scratch_cleanup; stage_cleanup; release_lock' EXIT
+
+# The server's data home: a rehearsal's own, else the default the launch leaves
+# (OPEN_WALNUT_HOME is unset for it, so os.homedir()/.open-walnut).
+PLUGINS_DIR="${REHEARSAL_HOME:-$HOME/.open-walnut}/plugins"
+if [[ "${WALNUT_DEVPROD_SKIP_PLUGIN_CHECK:-0}" != "1" && -d "$PLUGINS_DIR" ]]; then
+  PLUGIN_CHECK_SECS="${WALNUT_DEVPROD_PLUGIN_CHECK_SECS:-120}"
+  PLUGIN_CHECK_TMP="$(mktemp -d "${TMPDIR:-/tmp}/walnut-plugincheck.XXXXXX")"
+  mkdir -p "$PLUGIN_CHECK_TMP/home" "$PLUGIN_CHECK_TMP/daemon"
+  # Plugins import Walnut's own modules from the checkout the server is served as
+  # (src/core/plugins/plugin-source-tree.ts); the stage's marker names it, so this
+  # dir carries the same one (the file's walk up from its runtime tree finds it).
+  printf '%s\n' "$SERVE_ROOT" > "$PLUGIN_CHECK_TMP/.walnut-source-root"
+  plugin_prod_args=()
+  if curl --connect-timeout 2 --max-time 10 -sf "http://localhost:$PORT/api/plugin-runtime" \
+    -o "$PLUGIN_CHECK_TMP/prod-plugins.json" 2>/dev/null; then
+    plugin_prod_args=(--prod "$PLUGIN_CHECK_TMP/prod-plugins.json")
+  else
+    echo "Plugin check: no answer from :$PORT/api/plugin-runtime, so a plugin that fails here only warns." >&2
+  fi
+  echo "Plugin check: loading the plugins in $PLUGINS_DIR with the new build (load only, nothing activated)."
+  env -u VITEST -u OPEN_WALNUT_EPHEMERAL -u WALNUT_STREAMS_DIR -u WALNUT_RUNTIME_DIR -u BUN_BE_BUN \
+    OPEN_WALNUT_HOME="$PLUGIN_CHECK_TMP/home" \
+    WALNUT_DAEMON_DIR="$PLUGIN_CHECK_TMP/daemon" \
+    WALNUT_RUNTIME_DIR="$PLUGIN_CHECK_TMP/runtime" \
+    WALNUT_DISABLE_SEARCH=1 \
+    "$SERVER_FILE" __plugin-check --dir "$PLUGINS_DIR" ${plugin_prod_args[@]+"${plugin_prod_args[@]}"} \
+    --deadline-ms "$(( PLUGIN_CHECK_SECS * 1000 ))" \
+    >"$PLUGIN_CHECK_TMP/out.log" 2>&1 &
+  PLUGIN_CHECK_PID=$!
+  # Its own deadline answers 2; this bound (15 s past it) only catches a process
+  # that never got as far as setting one.
+  plugin_rc=124
+  for _ in $(seq 1 $(( (PLUGIN_CHECK_SECS + 15) * 2 ))); do
+    if ! kill -0 "$PLUGIN_CHECK_PID" 2>/dev/null; then
+      plugin_rc=0
+      wait "$PLUGIN_CHECK_PID" || plugin_rc=$?
+      break
+    fi
+    sleep 0.5
+  done
+  grep '^Plugin check' "$PLUGIN_CHECK_TMP/out.log" || true
+  if [[ "$plugin_rc" == "3" ]]; then
+    echo "Plugin check FAILED: a plugin the running server loads does not load on the new build." >&2
+    echo "Production server on :$PORT was NOT touched. The loader's own log:" >&2
+    { grep -v '^Plugin check' "$PLUGIN_CHECK_TMP/out.log" || true; } | tail -n 25 >&2
+    echo "(WALNUT_DEVPROD_SKIP_PLUGIN_CHECK=1 skips this check for emergencies)" >&2
+    exit 1
+  elif [[ "$plugin_rc" != "0" ]]; then
+    echo "Plugin check UNDETERMINED (exit $plugin_rc). The loader's own log:" >&2
+    { grep -v '^Plugin check' "$PLUGIN_CHECK_TMP/out.log" || true; } | tail -n 15 >&2
+    if [[ "${WALNUT_DEVPROD_PLUGIN_STRICT:-0}" == "1" ]]; then
+      echo "WALNUT_DEVPROD_PLUGIN_STRICT=1: deploy aborted, :$PORT NOT touched." >&2
+      exit 1
+    fi
+    echo "Proceeding (WALNUT_DEVPROD_PLUGIN_STRICT=1 fails closed here)." >&2
+  fi
+  plugin_check_cleanup
+fi
+
 # Said before the kill, while it can still change someone's mind: with no file to
 # roll back to (the first file deploy after a Node one), a failure from here on
 # leaves :$PORT unserved until a deploy succeeds.
