@@ -456,16 +456,25 @@ function withWriteLock<T>(fn: () => Promise<T>): Promise<T> {
       try { return await fn(); } finally { writeLockDepth -= 1; }
     }))
     .finally(() => {
-      if (taskStoreCacheSeeded === seededAtStart && totalChanges() !== changesAtStart) invalidateTaskStoreCache();
-      resolve!();
+      // The next section waits on this resolve, so nothing before it may skip it:
+      // a throw here once left every later task read and write waiting forever.
+      try {
+        if (taskStoreCacheSeeded === seededAtStart && totalChanges() !== changesAtStart) invalidateTaskStoreCache();
+      } finally {
+        resolve!();
+      }
     });
 }
 
-/** Rows this connection has changed since it opened (SQLite's counter); -1 without a connection. */
+/**
+ * Rows this connection has changed since it opened (SQLite's counter); -1 without a
+ * connection. Never throws: getDb() rethrows a failed open, and this runs where the
+ * write lock is taken and released (2026-10-28: one failed open hung every later write).
+ */
 function totalChanges(): number {
-  const db = getDb();
-  if (!db) return -1;
   try {
+    const db = getDb();
+    if (!db) return -1;
     return db.prepare('SELECT total_changes() AS n').pluck().get() as number;
   } catch {
     return -1;
