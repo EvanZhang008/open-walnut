@@ -315,8 +315,9 @@ defineOp({
     + 'and the inbox record that your task answered on those words, not the user, and the letter stays unread for '
     + 'them. An answer that approves a step that is hard to undo or leaves Walnut (rewriting git history, '
     + 'unpublishing a release, deleting, publishing or sending outward, spending, credentials or permissions) is '
-    + 'refused (human-approval-required) unless `user_words` name that step (or the picked option itself): one '
-    + 'vague line such as "clear everything" approves none of them; ask the user about that step by name. A '
+    + 'refused (human-approval-required) unless `user_words` ask for that step by name; naming the option ("all as '
+    + 'recommended", "yes", "A") is not enough, and one vague line such as "clear everything" approves none of them: '
+    + 'ask the user about that step by name. A '
     + 'plugin\'s letter (an approval of a step outside Walnut, such as a mail send) is the user\'s alone: refused '
     + 'too; tell the user what you would answer.',
   input: {
@@ -325,7 +326,7 @@ defineOp({
     note: z.string().optional().describe('With action_id: a note beside the choice'),
     text: z.string().optional().describe('Without action_id: a reply in the thread, in the user\'s place'),
     user_words: z.string().optional().describe(
-      'REQUIRED: the user\'s own words this answer rests on, quoted exactly (their language), naming the option or the step'),
+      'REQUIRED: the user\'s own words this answer rests on, quoted exactly (their language), naming each step that is hard to undo or leaves Walnut'),
   },
   handler: async ({ id, action_id, note, text, user_words }, call) => {
     const path = `/human-inbox/${encodeURIComponent(String(id))}`
