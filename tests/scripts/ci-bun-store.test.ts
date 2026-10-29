@@ -66,6 +66,23 @@ describe('CI installs from a shared bun package store', () => {
     expect(cold.map((s) => s.where).sort()).toEqual([...COLD.keys()].sort())
   })
 
+  it('no install downloads onnxruntime-node\'s CUDA provider', () => {
+    // It is about 240 MB from api.nuget.org on every Linux x64 install, outside the store,
+    // and Walnut never uses it; a nuget timeout failed a job before its tests (2026-10-28).
+    const bad: string[] = []
+    for (const file of fs.readdirSync(WORKFLOWS).filter((f) => f.endsWith('.yml'))) {
+      const wf = parseYaml(fs.readFileSync(path.join(WORKFLOWS, file), 'utf8'))
+      for (const [job, def] of Object.entries<{ env?: Record<string, string>; steps?: Step[] }>(wf.jobs ?? {})) {
+        for (const step of def.steps ?? []) {
+          if (!/^bun install\b/m.test(step.run ?? '')) continue
+          const skip = step.env?.ONNXRUNTIME_NODE_INSTALL ?? def.env?.ONNXRUNTIME_NODE_INSTALL ?? wf.env?.ONNXRUNTIME_NODE_INSTALL
+          if (skip !== 'skip') bad.push(`${file}:${job}`)
+        }
+      }
+    }
+    expect(bad, 'set ONNXRUNTIME_NODE_INSTALL: skip in the workflow env').toEqual([])
+  })
+
   it('no workflow sets the store for a whole job or workflow', () => {
     for (const file of fs.readdirSync(WORKFLOWS).filter((f) => f.endsWith('.yml'))) {
       const wf = parseYaml(fs.readFileSync(path.join(WORKFLOWS, file), 'utf8'))
