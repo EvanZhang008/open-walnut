@@ -23,6 +23,7 @@
  */
 
 import { useEffect, useRef, useState } from 'react';
+import { stableHtml } from '@/hooks/useStableHtml';
 import { createPortal } from 'react-dom';
 import { useModalOverlay } from '@/hooks/useModalOverlay';
 import { fetchSubagentHistory } from '@/api/sessions';
@@ -178,7 +179,7 @@ export function TranscriptBody({ target, sessionId }: { target: TranscriptTarget
       ) : target.fallbackResult ? (
         <div className="task-group-result">
           <div className="task-group-result-label">Result</div>
-          <div className="markdown-body" dangerouslySetInnerHTML={{ __html: renderMarkdownWithRefs(target.fallbackResult.slice(0, 3000)) }} />
+          <div className="markdown-body" dangerouslySetInnerHTML={stableHtml(renderMarkdownWithRefs(target.fallbackResult.slice(0, 3000)))} />
         </div>
       ) : (
         <div className="wf-modal-loading">{live ? 'Waiting for the agent\u2019s first output…' : 'No transcript available'}</div>

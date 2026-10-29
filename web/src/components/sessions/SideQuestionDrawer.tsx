@@ -30,6 +30,7 @@
  *    the heaviest subtree in the app.
  */
 import { ArrowUpRightIcon } from '@/components/common/PhoneIcons';
+import { stableHtml } from '@/hooks/useStableHtml';
 import { useCallback, useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { SESSION_MODE_LABELS } from '@open-walnut/core';
 import type { SessionEffort, SessionOutputMode } from '@open-walnut/core';
@@ -1008,7 +1009,7 @@ export function SideQuestionDrawer({
                       <div className="side-question-card-q">{q.question}</div>
                       <div
                         className="markdown-body side-question-card-a"
-                        dangerouslySetInnerHTML={{ __html: renderMarkdown(q.answer ?? '') }}
+                        dangerouslySetInnerHTML={stableHtml(renderMarkdown(q.answer ?? ''))}
                       />
                       <div className="side-question-card-actions">
                         {q.promotedTaskId === PENDING_PROMOTE ? (

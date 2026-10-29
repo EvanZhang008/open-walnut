@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useMemo, Component, type ReactNode, type ErrorInfo, type MouseEvent as ReactMouseEvent, memo } from 'react';
+import { stableHtml } from '@/hooks/useStableHtml';
 import { PauseGlyphIcon, PlayGlyphIcon, WarningTriangleIcon } from '@/components/common/PhoneIcons';
 import { useNavigate } from 'react-router-dom';
 import { copyTextDeferred } from '@/utils/clipboard';
@@ -224,7 +225,7 @@ function PlanPopoverContent({ content, cwd }: { content: string; cwd?: string })
   return (
     <div
       className="markdown-body"
-      dangerouslySetInnerHTML={{ __html: html }}
+      dangerouslySetInnerHTML={stableHtml(html)}
     />
   );
 }

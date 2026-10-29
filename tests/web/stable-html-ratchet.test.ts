@@ -14,7 +14,7 @@
  * tests/e2e/browser/session-stream-selection.spec.ts.
  */
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 
 /**
@@ -61,6 +61,28 @@ describe('message bodies use a stable innerHTML prop', () => {
       expect(src).toContain('useStableHtml');
     });
   }
+
+  // 2026-10-29: the list above missed the provenance card, whose plain segment
+  // rewrote the user's message (and reloaded its screenshot) on every status
+  // push to the Org page's CEO chat. Any element can re-render, so no file in
+  // the web app may pass the literal: useStableHtml, or stableHtml where a hook
+  // cannot go.
+  it('no file in web/src passes an inline dangerouslySetInnerHTML literal', () => {
+    const offenders: string[] = [];
+    const walk = (dir: string) => {
+      for (const ent of readdirSync(dir, { withFileTypes: true })) {
+        const p = path.join(dir, ent.name);
+        if (ent.isDirectory()) { if (ent.name !== 'node_modules') walk(p); continue; }
+        if (!/\.(tsx|ts|jsx)$/.test(ent.name) || /\.test\./.test(ent.name)) continue;
+        const src = readFileSync(p, 'utf8');
+        src.split('\n').forEach((line, i) => {
+          if (/dangerouslySetInnerHTML=\{\{/.test(line)) offenders.push(`${path.relative(root, p)}:${i + 1}`);
+        });
+      }
+    };
+    walk(path.join(root, 'web/src'));
+    expect(offenders).toEqual([]);
+  });
 
   it('useStableHtml holds one object per html string, without relying on useMemo', () => {
     const src = readFileSync(path.join(root, 'web/src/hooks/useStableHtml.ts'), 'utf8');

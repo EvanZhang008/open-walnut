@@ -31,6 +31,7 @@
  * stops propagation on a chip hit so the two paths can never both fire.
  */
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
+import { stableHtml } from '@/hooks/useStableHtml';
 import {
   outboundDirectionGlyph,
   outboundDirectionLabel,
@@ -201,7 +202,7 @@ function TargetChips({ resolved }: { resolved: ResolvedTarget }) {
 function OutboundBody({ body, sessionCwd }: { body: string; sessionCwd?: string }) {
   const html = useRenderedMarkdown(body, sessionCwd);
   return (
-    <blockquote className="provenance-body markdown-body" dangerouslySetInnerHTML={{ __html: html }} />
+    <blockquote className="provenance-body markdown-body" dangerouslySetInnerHTML={stableHtml(html)} />
   );
 }
 

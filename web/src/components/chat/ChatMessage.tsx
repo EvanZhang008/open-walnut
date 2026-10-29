@@ -13,7 +13,7 @@ import { useEntityLabelsVersion } from '@/hooks/useEntityLabels';
 import { useShowPriority } from '@/hooks/useShowPriority';
 import { lookupTaskLabel } from '@/stores/entity-label-store';
 import { useSelectionFrozen } from '@/utils/selection-guard';
-import { useStableHtml } from '@/hooks/useStableHtml';
+import { useStableHtml, stableHtml } from '@/hooks/useStableHtml';
 import { SubagentBlock } from './SubagentBlock';
 import { SuggestSegments, useSuggestSegments } from './SuggestSegments';
 import { RichMarkdown } from './RichBlocks';
@@ -134,7 +134,7 @@ function CompactionDetails({ details }: { details: string }) {
       {open && (
         <div
           className="chat-compaction-details-content markdown-body"
-          dangerouslySetInnerHTML={{ __html: renderMarkdown(details) }}
+          dangerouslySetInnerHTML={stableHtml(renderMarkdown(details))}
         />
       )}
     </div>
@@ -720,7 +720,7 @@ export function ToolCallSection({ block, taskLookup, onTaskClick, onSessionClick
                 <div key={f.key} className="chat-tool-block-field-markdown">
                   <div className="chat-tool-block-field-label">{f.key}</div>
                   <div className="chat-tool-block-result markdown-body" onClick={handleResultClick}
-                       dangerouslySetInnerHTML={{ __html: f.html }} />
+                       dangerouslySetInnerHTML={stableHtml(f.html)} />
                 </div>
               ))}
             </div>
@@ -728,7 +728,7 @@ export function ToolCallSection({ block, taskLookup, onTaskClick, onSessionClick
           {resultHtml && (
             <div className="chat-tool-block-section">
               <div className="chat-tool-block-section-label">Result</div>
-              <div className="chat-tool-block-result markdown-body" onClick={handleResultClick} dangerouslySetInnerHTML={{ __html: resultHtml }} />
+              <div className="chat-tool-block-result markdown-body" onClick={handleResultClick} dangerouslySetInnerHTML={stableHtml(resultHtml)} />
             </div>
           )}
         </div>
@@ -1110,7 +1110,7 @@ function ChatMessageBubble({ role, content, blocks, images, taskContext, routeIn
           <span
             className="chat-collapsed-summary"
             onClick={handleContentClick}
-            dangerouslySetInnerHTML={{ __html: renderInlineMarkdown(collapsedSummary) }}
+            dangerouslySetInnerHTML={stableHtml(renderInlineMarkdown(collapsedSummary))}
           />
         )}
         {time && <div className="chat-message-time">{time}</div>}
@@ -1372,7 +1372,7 @@ function specialChatRow({ role, content, timestamp, source, notification }: Chat
           <span className="chat-compaction-divider-line" />
           <span
             className="chat-compaction-divider-text"
-            dangerouslySetInnerHTML={{ __html: renderMarkdown(header) }}
+            dangerouslySetInnerHTML={stableHtml(renderMarkdown(header))}
           />
           <span className="chat-compaction-divider-line" />
         </div>

@@ -33,6 +33,7 @@
  * nothing to fold.
  */
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { stableHtml } from '@/hooks/useStableHtml';
 import {
   envelopeDirectionGlyph,
   envelopeDirectionLabel,
@@ -243,7 +244,7 @@ function NoticeQuote({ section, sessionCwd }: { section: NoticeQuoteSection; ses
 function EnvelopeBody({ body, sessionCwd }: { body: string; sessionCwd?: string }) {
   const html = useRenderedMarkdown(body, sessionCwd);
   return (
-    <blockquote className="provenance-body markdown-body" dangerouslySetInnerHTML={{ __html: html }} />
+    <blockquote className="provenance-body markdown-body" dangerouslySetInnerHTML={stableHtml(html)} />
   );
 }
 
@@ -435,5 +436,5 @@ export function SessionEnvelopeSegments({ segments, sessionCwd }: {
 
 function PlainSegment({ text, sessionCwd }: { text: string; sessionCwd?: string }) {
   const html = useRenderedMarkdown(text, sessionCwd);
-  return <div className="markdown-body" dangerouslySetInnerHTML={{ __html: html }} />;
+  return <div className="markdown-body" dangerouslySetInnerHTML={stableHtml(html)} />;
 }

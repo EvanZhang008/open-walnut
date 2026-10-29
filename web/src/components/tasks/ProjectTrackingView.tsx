@@ -18,6 +18,7 @@
  * The fifth state — no `tracking_note` key at all — is the ABSENCE of this whole
  * section (ProjectTrackingBlock returns null), never an empty box.
  */
+import { stableHtml } from '@/hooks/useStableHtml';
 
 export type TrackingNoteState =
   | { status: 'loading' }
@@ -91,7 +92,7 @@ export function ProjectTrackingView({ notePath, state, onOpenInNotes }: ProjectT
       {state.status === 'present' && (
         <div
           className="todo-detail-note markdown-body project-tracking-note"
-          dangerouslySetInnerHTML={{ __html: state.sanitizedHtml }}
+          dangerouslySetInnerHTML={stableHtml(state.sanitizedHtml)}
         />
       )}
     </div>

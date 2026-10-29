@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { stableHtml } from '@/hooks/useStableHtml';
 import { fetchTriageHistory, type ChatEntry } from '@/api/chat';
 import { fetchSessionHistory, type SessionHistoryMessage } from '@/api/sessions';
 import { useEvent } from '@/hooks/useWebSocket';
@@ -115,7 +116,7 @@ function TriageSessionSection({
           <span
             className="triage-session-task-ref"
             onClick={handleTaskRefClick}
-            dangerouslySetInnerHTML={{ __html: taskRefHtml }}
+            dangerouslySetInnerHTML={stableHtml(taskRefHtml)}
           />
         )}
       </button>
@@ -150,7 +151,7 @@ function TriageSessionSection({
           {/* Fallback: render summary as markdown when no session history available */}
           {!loadingHistory && !historyError && !hasHistory && (loaded || !hasSessionId) && (
             <div className="triage-session-summary-full markdown-body"
-                 dangerouslySetInnerHTML={{ __html: renderMarkdownWithRefs(summary) }} />
+                 dangerouslySetInnerHTML={stableHtml(renderMarkdownWithRefs(summary))} />
           )}
         </div>
       )}

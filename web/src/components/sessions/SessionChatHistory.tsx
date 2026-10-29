@@ -3,6 +3,7 @@ import { useDraft } from '@/hooks/useDraft';
 import { draftHash, draftKey, writeDraft } from '@/utils/drafts';
 import { staleBannerText } from './stale-banner-text';
 import { scrollDebugEnabled } from '@/utils/scroll-debug';
+import { startFlashProbe } from '@/utils/flash-probe';
 import { NO_AUTOFILL_PROPS } from '@/utils/no-autofill';
 import { BoxMic, type BoxMicHandle } from '@/components/common/BoxMic';
 import { useSessionHistory } from '@/hooks/useSessionHistory';
@@ -2440,6 +2441,12 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     el.addEventListener('load', onLoad, true); // capture phase — img load doesn't bubble
     return () => el.removeEventListener('load', onLoad, true);
   }, [sid8, selectionActive, noteSuppressedScroll]);
+
+  // Temporary recorder of body rewrites, scroll jumps and resizes (utils/flash-probe.ts).
+  useEffect(() => {
+    const el = containerRef.current;
+    return el ? startFlashProbe(el, sessionId) : undefined;
+  }, [sessionId]);
 
   // Path B-2: Container resize (sibling components loading) — debounced
   useEffect(() => {

@@ -7,7 +7,7 @@ import {
 } from '@/utils/markdown';
 import { useEntityClickHandler } from '@/hooks/useEntityClickHandler';
 import { useEntityLabelsVersion, useRenderedMarkdown } from '@/hooks/useEntityLabels';
-import { useStableHtml } from '@/hooks/useStableHtml';
+import { useStableHtml, stableHtml } from '@/hooks/useStableHtml';
 import { useLivePlanContent } from '@/contexts/PlanContentContext';
 import { BackgroundTasksChip, type KnownAgent } from './BackgroundTasksPanel';
 import { agentResultText } from './background-ledger';
@@ -305,7 +305,7 @@ export function PlanCard({ content }: { content: string }) {
         <div className="session-plan-card-body">
           <div
             className="markdown-body"
-            dangerouslySetInnerHTML={{ __html: html }}
+            dangerouslySetInnerHTML={stableHtml(html)}
           />
         </div>
       )}
@@ -349,7 +349,7 @@ function InjectedContextRow({ text }: { text: string }) {
       {open && (
         <div className="tool-run-body">
           <div className="chat-tool-block-result markdown-body"
-               dangerouslySetInnerHTML={{ __html: html }} />
+               dangerouslySetInnerHTML={stableHtml(html)} />
         </div>
       )}
     </div>
@@ -854,12 +854,12 @@ function GenericToolCallInner({ tool, status: statusProp = 'done', result: resul
         <div className="chat-tool-block-body">
           <div className="chat-tool-block-section">
             <div className="chat-tool-block-section-label">Input</div>
-            <pre className="chat-tool-block-pre" onClick={handlePreClick} dangerouslySetInnerHTML={{ __html: expandedJsonHtml }} />
+            <pre className="chat-tool-block-pre" onClick={handlePreClick} dangerouslySetInnerHTML={stableHtml(expandedJsonHtml)} />
             {markdownFields.map(f => (
               <div key={f.key} className="chat-tool-block-field-markdown">
                 <div className="chat-tool-block-field-label">{f.key}</div>
                 <div className="chat-tool-block-result markdown-body"
-                     dangerouslySetInnerHTML={{ __html: f.html }} />
+                     dangerouslySetInnerHTML={stableHtml(f.html)} />
               </div>
             ))}
             {inputImageSrc && (
@@ -883,7 +883,7 @@ function GenericToolCallInner({ tool, status: statusProp = 'done', result: resul
               )}
               {resultTextHtml && (
                 <div className="chat-tool-block-result markdown-body"
-                     dangerouslySetInnerHTML={{ __html: resultTextHtml }} />
+                     dangerouslySetInnerHTML={stableHtml(resultTextHtml)} />
               )}
             </div>
           )}

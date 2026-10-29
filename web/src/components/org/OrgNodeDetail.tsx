@@ -28,6 +28,8 @@ import { recentMainStart } from './ask-main';
 import { OrgAvatar } from './OrgChannelList';
 import { useHasBoard } from './useBoardOwner';
 import { OrgBrief } from './OrgBrief';
+import { flashProbeEnabled } from '@/utils/flash-probe';
+import { log } from '@/utils/log';
 import { briefUnread, markBriefSeen, readBriefFolded, readTopView, writeBriefFolded, writeTopView, type OrgTopView } from './org-brief-model';
 import {
   mainTeamColumns, teamColumns, type ChannelRow, type OrgAlertView, type TeamColumn,
@@ -202,6 +204,8 @@ function TeamBoard({ columns, onPick, emptyText }: {
 
 export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabChange, onSelect, onOpenTask, onOpenSession, answers, onStartChat, onBack, now }: Props) {
   const contact = useMemo(() => (row.contactId ? tasks.find((t) => t.id === row.contactId) : undefined), [tasks, row.contactId]);
+  // Temporary (utils/flash-probe.ts): a remount of the node's detail is one cause of a flash.
+  useEffect(() => { if (flashProbeEnabled()) log.info('flash-probe', 'org detail mounted', { node: row.key }); }, [row.key]);
   // A Main started a moment ago by a quick action: its session before the store has it.
   const launch = row.kind === 'main' ? recentMainStart(row.contactId) : null;
   const sessionId = (contact ? resolveTaskSessionId(contact) : null) ?? launch?.sessionId ?? null;

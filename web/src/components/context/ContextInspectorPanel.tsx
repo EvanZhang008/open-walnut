@@ -1,4 +1,5 @@
 import { useMemo } from 'react';
+import { stableHtml } from '@/hooks/useStableHtml';
 import type { ContextInspectorResponse } from '@/api/context';
 import { useRenderedMarkdown } from '@/hooks/useEntityLabels';
 import { ContextSection } from './ContextSection';
@@ -18,7 +19,7 @@ function ContextMarkdown({ content, fallback }: { content: string; fallback?: st
   return (
     <div
       className="context-markdown markdown-body"
-      dangerouslySetInnerHTML={{ __html: html }}
+      dangerouslySetInnerHTML={stableHtml(html)}
     />
   );
 }

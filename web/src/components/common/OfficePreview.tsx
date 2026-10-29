@@ -19,6 +19,7 @@
  * user explicitly opened on their own machine; no untrusted-upload surface).
  */
 import { useEffect, useRef, useState } from 'react';
+import { stableHtml } from '@/hooks/useStableHtml';
 import DOMPurify from 'dompurify';
 import { rawFileContentUrl } from '@/api/files';
 import { formatSize } from '@/utils/format';
@@ -300,7 +301,7 @@ export function OfficePreview({ path, host, kind, reloadToken = 0 }: OfficePrevi
             className="fv-sheet-table"
             // Sanitized above with SHEET_SANITIZE. Load-bearing, not cosmetic:
             // SheetJS emits rich-text cells as raw markup (see that comment).
-            dangerouslySetInnerHTML={{ __html: sheetDoc.tableHtml(activeSheet) }}
+            dangerouslySetInnerHTML={stableHtml(sheetDoc.tableHtml(activeSheet))}
           />
         </>
       )}

@@ -18,6 +18,7 @@
  * task's phase on every session and printed session ids).
  */
 import { useEffect, useMemo, useState, type CSSProperties } from 'react';
+import { stableHtml } from '@/hooks/useStableHtml';
 import { useNavigate } from 'react-router-dom';
 import type { Task as CoreTask, SessionRecord } from '@open-walnut/core';
 import { fetchSessionsForTask } from '@/api/sessions';
@@ -234,7 +235,7 @@ export function TaskDetailPane({ task, allTasks, onClose, onOpenSession, onOpenT
           {hasDescription && (
             <Section label="Description" className="tdp-doc">
               {descriptionContent
-                ? <div className="todo-detail-note markdown-body" dangerouslySetInnerHTML={{ __html: renderNoteMarkdown(descriptionContent) }} />
+                ? <div className="todo-detail-note markdown-body" dangerouslySetInnerHTML={stableHtml(renderNoteMarkdown(descriptionContent))} />
                 : <div className="tdp-muted">Loading…</div>}
             </Section>
           )}
@@ -242,7 +243,7 @@ export function TaskDetailPane({ task, allTasks, onClose, onOpenSession, onOpenT
           {hasNote && (
             <Section label="Note" className="tdp-doc">
               {noteContent
-                ? <div className="todo-detail-note markdown-body" dangerouslySetInnerHTML={{ __html: renderNoteMarkdown(noteContent) }} />
+                ? <div className="todo-detail-note markdown-body" dangerouslySetInnerHTML={stableHtml(renderNoteMarkdown(noteContent))} />
                 : <div className="tdp-muted">Loading…</div>}
             </Section>
           )}

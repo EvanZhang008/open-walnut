@@ -38,3 +38,39 @@ export function useStableHtml(html: string): { __html: string } {
   if (ref.current.__html !== html) ref.current = { __html: html };
   return ref.current;
 }
+
+/**
+ * The same guarantee where a hook cannot go (inside a `.map`, a JSX branch): one
+ * prop object per html STRING, from a small recently-used cache. An evicted
+ * string costs one extra innerHTML write, never a wrong one.
+ *
+ * 2026-10-29: the provenance card's plain segment passed an inline literal, so
+ * every status push to the Org page's CEO chat (dozens a minute) rewrote the
+ * user's message under the card and reloaded its screenshot: the image went to
+ * 0px, the timeline shrank by ~400px and the image-load corrector pinned it
+ * back, which read as the chat flashing (WKWebView, the Mac app).
+ */
+const STABLE_MAX_ENTRIES = 1000;
+const STABLE_MAX_CHARS = 4_000_000;
+const stableCache = new Map<string, { __html: string }>();
+let stableChars = 0;
+
+export function stableHtml(html: string): { __html: string } {
+  const hit = stableCache.get(html);
+  if (hit) {
+    // Most recently used goes last; eviction takes from the front.
+    stableCache.delete(html);
+    stableCache.set(html, hit);
+    return hit;
+  }
+  const prop = { __html: html };
+  stableCache.set(html, prop);
+  stableChars += html.length;
+  while (stableCache.size > STABLE_MAX_ENTRIES || stableChars > STABLE_MAX_CHARS) {
+    const oldest = stableCache.keys().next().value as string;
+    if (oldest === html) break;
+    stableCache.delete(oldest);
+    stableChars -= oldest.length;
+  }
+  return prop;
+}

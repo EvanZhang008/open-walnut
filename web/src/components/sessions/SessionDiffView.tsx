@@ -1,4 +1,5 @@
 import { memo, useEffect, useMemo, useRef, useState, useCallback, type ReactNode, type ReactElement, type MouseEvent as ReactMouseEvent } from 'react';
+import { stableHtml } from '@/hooks/useStableHtml';
 import { useDraft } from '@/hooks/useDraft';
 import { draftHash, draftKey } from '@/utils/drafts';
 import { usePhoneLayout } from '@/hooks/usePhoneLayout';
@@ -505,7 +506,7 @@ function SegmentDiff({ seg, diffType, relPath, widgets, gutterEvents, selectedCh
  *  keyed on the html string — see RenderedMarkdown's note on why this prevents
  *  the "selection collapses on re-render" bug. */
 const MarkdownBlockBody = memo(function MarkdownBlockBody({ html }: { html: string }) {
-  return <div className="markdown-body session-diff-rendered-block" dangerouslySetInnerHTML={{ __html: html }} />;
+  return <div className="markdown-body session-diff-rendered-block" dangerouslySetInnerHTML={stableHtml(html)} />;
 });
 
 /** One rendered markdown block with a DRAGGABLE source line number on its left
@@ -693,7 +694,7 @@ function AiFileSummary({ sessionId, change }: { sessionId: string; change: Sessi
         <span
           className="session-diff-ai-text"
           title={result.cached ? `AI summary (cached) · ${result.model}` : `AI summary · ${result.model}`}
-          dangerouslySetInnerHTML={{ __html: html }}
+          dangerouslySetInnerHTML={stableHtml(html)}
         />
       )}
       {state === 'error' && (

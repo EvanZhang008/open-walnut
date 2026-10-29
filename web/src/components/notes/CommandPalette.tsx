@@ -20,6 +20,7 @@
  */
 
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { stableHtml } from '@/hooks/useStableHtml';
 import { createPortal } from 'react-dom';
 import { fetchNotesList, searchNotesHybrid } from '@/api/notes-v2';
 import type { NoteListItem, SearchResult, MatchType } from '@/api/notes-v2';
@@ -394,7 +395,7 @@ export function CommandPalette({ onNavigate, onCreate, onPreviewAttachment }: Co
                         className="notes-cmdk-item-snippet"
                         // Snippet HTML is BE-emitted (matched span in <mark>) and
                         // sanitized by renderNoteSnippet before reaching the DOM.
-                        dangerouslySetInnerHTML={{ __html: row.snippetHtml }}
+                        dangerouslySetInnerHTML={stableHtml(row.snippetHtml)}
                       />
                     )}
                   </>

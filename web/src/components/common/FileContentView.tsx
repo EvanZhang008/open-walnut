@@ -22,6 +22,7 @@
  *    editor the same action lives in the selection bubble menu ("Ask").
  */
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import { stableHtml } from '@/hooks/useStableHtml';
 import { useNavigate } from 'react-router-dom';
 import {
   fetchFileContentConditional, rawFileContentUrl, downloadFileUrl, saveFileContent,
@@ -2420,7 +2421,7 @@ export function FileContentView({
           (MDX, truncated markdown). Plain editable markdown never lands here —
           its Preview IS the WYSIWYG editor below. */}
       {!loading && showPreview && isMarkdown && (
-        <div className="fv-md-preview markdown-body" dangerouslySetInnerHTML={{ __html: markdownHtml }} />
+        <div className="fv-md-preview markdown-body" dangerouslySetInnerHTML={stableHtml(markdownHtml)} />
       )}
       {/* THE EDITORS — the default body for every editable file. Keyed on
           path + baseHash + seedNonce so a fresh READ (Refresh / external
@@ -2473,7 +2474,7 @@ export function FileContentView({
       )}
       {/* Read-only source (non-editable text: truncated reads etc.). */}
       {!loading && !editing && !showPreview && data?.content != null && data.content !== '' && (
-        <pre className="file-viewer-code" dangerouslySetInnerHTML={{ __html: lineNumberedHtml }} />
+        <pre className="file-viewer-code" dangerouslySetInnerHTML={stableHtml(lineNumberedHtml)} />
       )}
       {!loading && !editing && data && !data.error && !data.binary && data.content === '' && (
         <div className="file-viewer-loading">Empty file</div>

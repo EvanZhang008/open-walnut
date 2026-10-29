@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { stableHtml } from '@/hooks/useStableHtml';
 import { useRenderedMarkdown } from '@/hooks/useEntityLabels';
 import type { InjectedBanner } from '@open-walnut/history-injected-banner';
 import '@/styles/injected-banner.css';
@@ -38,7 +39,7 @@ export function InjectedBannerRow({ banner, sessionCwd }: {
         <div className="tool-run-body" data-testid="injected-banner-body">
           <div
             className="chat-tool-block-result markdown-body"
-            dangerouslySetInnerHTML={{ __html: html }}
+            dangerouslySetInnerHTML={stableHtml(html)}
           />
         </div>
       )}
