@@ -20,6 +20,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { SOURCE_TWIN } from '../helpers/source-twin.js'
+import { guardedPath } from '../setup/exec-guard.js'
 
 const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-find-cfgdir-')))
 const scriptPath = path.join(root, 'daemon.cjs')
@@ -40,7 +41,7 @@ async function boot(command: [string, string[]], name: string, home: string, con
   const env: Record<string, string | undefined> = {
     ...process.env,
     SHELL: '/bin/sh',
-    PATH: '/usr/bin:/bin',
+    PATH: guardedPath([], '/usr/bin:/bin'),
     HOME: home,
     WALNUT_HOME_OVERRIDE: home,
     CLAUDE_CONFIG_DIR: configDir,

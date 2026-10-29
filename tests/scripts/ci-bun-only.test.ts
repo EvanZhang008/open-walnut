@@ -378,9 +378,11 @@ describe('the daemon\'s JS twin is checked on Node where CI has it', () => {
     const suites = [...testSources()].filter(([, text]) => text.includes('SOURCE_TWIN.file') || viaHelper(text)).map(([f]) => f)
     expect(suites.length).toBeGreaterThan(60)
     const listed = TWIN_SCRIPTS.map((n) => SCRIPTS[n]!).join(' ')
+    // Every missing file in one failure: one at a time hid a second behind the first (2026-10-29).
+    const unlisted = suites.filter((f) => !TWIN_ELSEWHERE[f] && !listed.includes(f))
+    expect(unlisted, `these start the JS twin: list them in ${TWIN_SCRIPTS.join(' or ')}, which node-side runs`).toEqual([])
     for (const f of suites) {
-      if (TWIN_ELSEWHERE[f]) { expect(listed, `${f} is left out: ${TWIN_ELSEWHERE[f]}`).not.toContain(f); continue }
-      expect(listed, `${f} starts the JS twin: list it in ${TWIN_SCRIPTS.join(' or ')}, which node-side runs`).toContain(f)
+      if (TWIN_ELSEWHERE[f]) expect(listed, `${f} is left out: ${TWIN_ELSEWHERE[f]}`).not.toContain(f)
     }
     for (const f of Object.keys(TWIN_ELSEWHERE)) expect(suites, `${f} no longer starts the JS twin: drop it from TWIN_ELSEWHERE`).toContain(f)
   })

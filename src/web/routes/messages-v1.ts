@@ -19,6 +19,7 @@
 
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { CLOUD_MODE } from '../../constants.js'
+import { isCompanion } from '../../core/server-role.js'
 import { sendV1Error as sendError } from './v1-control-relay.js'
 import { CALLER_KIND_HEADER, SENDER_LABEL_HEADER, senderLabel } from '../../lib/cli-sender.js'
 
@@ -115,7 +116,7 @@ messagesV1Router.get('/requests/:id', async (req: Request, res: Response, next: 
     }
     // Still to go in: where the asked message stands in the target's queue.
     let delivery: Awaited<ReturnType<typeof import('../../core/sessions/send-now.js')['deliveryWaitOf']>> = null
-    if (!CLOUD_MODE && request.messageId && (request.status === 'pending' || request.status === 'expired')) {
+    if (!isCompanion() && request.messageId && (request.status === 'pending' || request.status === 'expired')) {
       const { deliveryWaitOf } = await import('../../core/sessions/send-now.js')
       delivery = await deliveryWaitOf(request.messageId).catch(() => null)
     }
@@ -128,7 +129,7 @@ messagesV1Router.get('/requests/:id', async (req: Request, res: Response, next: 
 /** Send a queued message now: a `qm-…` row, or the row an `rq-…` request went out as. */
 messagesV1Router.post('/messages/:id/send-now', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    if (CLOUD_MODE) {
+    if (isCompanion()) {
       sendError(res, 501, 'not_supported_cloud', 'Session sends run on the primary box')
       return
     }

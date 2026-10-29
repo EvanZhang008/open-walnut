@@ -27,6 +27,7 @@ import path from 'node:path'
 import os from 'node:os'
 import { transformSync } from 'esbuild'
 import { testBun } from '../helpers/bun-runtime.js'
+import { guardedPath } from '../setup/exec-guard.js'
 
 const BUN = testBun()
 const STANDALONE = path.resolve(__dirname, '../../src/providers/daemon-standalone.ts')
@@ -47,7 +48,7 @@ async function spawnDaemon(home: string, shell: string | undefined): Promise<voi
   for (const k of ['CLAUDE_CONFIG_DIR', 'XDG_STATE_HOME', 'XDG_DATA_HOME', 'XDG_CONFIG_HOME', 'XDG_CACHE_HOME', 'NVM_DIR', 'FNM_DIR', 'VOLTA_HOME', 'ASDF_DATA_DIR']) delete env[k]
   Object.assign(env, {
     HOME: home,
-    PATH: '/usr/bin:/bin',
+    PATH: guardedPath([], '/usr/bin:/bin'),
     XDG_STATE_HOME: path.join(root, 'state'),
     WALNUT_DAEMON_DIR: path.join(root, 'daemon'),
     WALNUT_STREAMS_DIR: path.join(root, 'streams'),

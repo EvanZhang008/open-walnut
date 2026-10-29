@@ -1037,37 +1037,33 @@ describe('sessionRequestWatchHook — a request handed on waits for that answer'
     listTasksByIds.mockImplementation(async (ids: string[]) => titles.filter((t) => ids.includes(t.id)));
   });
 
-  it('a worker task that closed (or is gone) without answering never will: the asker hears now', async () => {
+  it('a worker task that closed (or is gone) without answering: a plain turn end still holds, the deadline names it', async () => {
     const { owed } = await handOff();
     listTasksByIds.mockImplementation(async (ids: string[]) => [{ id: 'task-88', title: 'Fix login timeout', phase: 'COMPLETE' }].filter((t) => ids.includes(t.id)));
     await fire();
-    expect(notifySpy).toHaveBeenCalledTimes(1);
+    expect(notifySpy).not.toHaveBeenCalled();
+    expect((await getSessionRequest(owed.id))?.status).toBe('pending');
+    backdateDeadline(owed.id);
+    expect(await sweepSessionRequests()).toBe(1);
     expect(deliveredText()).toContain('"Fix login timeout" (task-88), which finished without an explicit answer.');
-    expect((await getSessionRequest(owed.id))?.status).toBe('notified');
-    // Gone altogether: the same.
-    sendMessageToSession.mockClear(); notifySpy.mockClear();
-    listTasksByIds.mockResolvedValue([]);
-    await handOff();
-    await fire();
-    expect(notifySpy).toHaveBeenCalledTimes(1);
   });
 
-  it('a turn that parks while the worker owes its answer says nothing; once it answered, the notice names it', async () => {
+  it('a turn that parks says nothing, and so does one after the worker answered: only a real reply or the deadline settles it', async () => {
     const { owed, onward } = await handOff();
     await fire();
     expect(notifySpy).not.toHaveBeenCalled();
     expect(sendMessageToSession).not.toHaveBeenCalled();
     expect((await getSessionRequest(owed.id))?.status).toBe('pending');
 
-    // The worker answered; the target's next turn ended with no reply of its own.
+    // The worker answered; the target's next turn ended with no reply of its own. The
+    // request stays open, so the worker may still answer it directly.
     await settleReplied(onward.id);
     await fire();
-    expect(notifySpy).toHaveBeenCalledTimes(1);
-    const text = deliveredText();
-    expect(text).toContain('It handed your request on to "Fix login timeout" (task-88), which answered it.');
-    expect(text).toContain('WITHOUT an explicit reply to your request');
-    expect(text).toContain(`task_get '{"id":"task-88"}'`);
-    expect((await getSessionRequest(owed.id))?.status).toBe('notified');
+    expect(notifySpy).not.toHaveBeenCalled();
+    expect((await getSessionRequest(owed.id))?.status).toBe('pending');
+    backdateDeadline(owed.id);
+    expect(await sweepSessionRequests()).toBe(1);
+    expect(deliveredText()).toContain('It handed your request on to "Fix login timeout" (task-88), which answered it.');
   });
 
   it('a target that answers itself is the one voice', async () => {
@@ -1078,10 +1074,13 @@ describe('sessionRequestWatchHook — a request handed on waits for that answer'
     expect(notifySpy).not.toHaveBeenCalled();
   });
 
-  it('a worker that stopped without answering is named so', async () => {
-    const { onward } = await handOff();
+  it('a worker that stopped without answering: the target\'s plain turn end holds, the deadline names it', async () => {
+    const { owed, onward } = await handOff();
     await settleNotified(onward.id, 'completed');
     await fire(phasePayload({ newPhase: 'NEED_ACTION' }));
+    expect(notifySpy).not.toHaveBeenCalled();
+    backdateDeadline(owed.id);
+    expect(await sweepSessionRequests()).toBe(1);
     expect(deliveredText()).toContain('"Fix login timeout" (task-88), which finished without an explicit answer.');
   });
 
