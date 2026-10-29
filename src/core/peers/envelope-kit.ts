@@ -26,6 +26,8 @@ export interface EnvelopeSender {
   host: string;
   /** No tracked session behind the send: some process on that host. */
   anonymous?: boolean;
+  /** An anonymous sender that named itself (a script or scheduled job, `WALNUT_SENDER`). */
+  automation?: string;
   /** Full claude session id → `from-session`. */
   sessionId?: string;
   /** Owning task id → `from-task`. */
@@ -152,6 +154,7 @@ export function createEnvelopeKit(): EnvelopeKit {
    *  that cleared its own Walnut env), so it must never name a session. */
   const NOTE_ANONYMOUS = 'from a process on that host that is not one of your user\'s Walnut sessions';
   const ANONYMOUS_FROM = 'unidentified process';
+  const NOTE_AUTOMATION = 'from a script or scheduled job on that host: not your user, and not one of their Walnut sessions';
   const NOTE_REPLY = "your user's other session answering your request";
   const NOTE_NOTIFICATION = 'automated Walnut status notice';
   /** How much of the target's last message a notice quotes. */
@@ -236,7 +239,9 @@ export function createEnvelopeKit(): EnvelopeKit {
     if (sender.anonymous) {
       return buildWalnutMessage({
         kind: 'peer-note',
-        attrs: { from: ANONYMOUS_FROM, host: sender.host, title, anonymous: 'true', note: NOTE_ANONYMOUS },
+        attrs: sender.automation
+          ? { from: `automation: ${sender.automation}`, host: sender.host, title, anonymous: 'true', note: NOTE_AUTOMATION }
+          : { from: ANONYMOUS_FROM, host: sender.host, title, anonymous: 'true', note: NOTE_ANONYMOUS },
         body: originalText,
       });
     }

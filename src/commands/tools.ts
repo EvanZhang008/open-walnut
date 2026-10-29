@@ -250,7 +250,10 @@ export async function runTools(args: string[], globals: GlobalOptions): Promise<
     }
     // A separate process: the server re-judges its socket, and can only lower this.
     const { LOCAL_ORIGIN } = await import('../lib/caller-origin.js')
-    const r = await executeOp(name, parsed, { origin: LOCAL_ORIGIN })
+    // Outside every session and with no terminal, the call is a script's, never the user's.
+    const { cliAutomationSender } = await import('../lib/cli-sender.js')
+    const sender = cliAutomationSender()
+    const r = await executeOp(name, parsed, { origin: LOCAL_ORIGIN, ...(sender ? { sender } : {}) })
     if (!r.ok && r.unreachable) {
       const { callThroughHostDaemon } = await import('./tools-daemon-fallback.js')
       const code = await callThroughHostDaemon(name, parsed)

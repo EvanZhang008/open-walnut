@@ -17,6 +17,7 @@
  */
 
 import { z } from 'zod'
+import { CALLER_KIND_HEADER, SENDER_LABEL_HEADER } from '../lib/cli-sender.js'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { TEST_RUN_HEADER, ambientTestRun, parseTestRunLabel } from '../core/test-run.js'
 const humanCallerScope = new AsyncLocalStorage<boolean>()
@@ -61,7 +62,7 @@ export const CALLER_HOST_HEADER = 'x-walnut-caller-host'
  * trust class the self-call carries (src/lib/caller-origin.ts): the receiving
  * route may LOWER trust on it, never raise it.
  */
-interface CallerProvenance { sid?: string; host?: string; origin: string; beforeMutation?: () => Promise<void> }
+interface CallerProvenance { sid?: string; host?: string; origin: string; beforeMutation?: () => Promise<void>; sender?: string }
 
 /**
  * Who is calling, for ops whose server side stamps provenance (the human inbox
@@ -134,6 +135,8 @@ async function rawRequest(
         ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
         ...(prov.sid ? { [CALLER_SID_HEADER]: prov.sid } : {}),
         ...(prov.host ? { [CALLER_HOST_HEADER]: prov.host } : {}),
+        // No session and no person behind it: a script or a scheduled job (src/lib/cli-sender.ts).
+        ...(!prov.sid && prov.sender ? { [CALLER_KIND_HEADER]: 'automation', [SENDER_LABEL_HEADER]: prov.sender } : {}),
         ...(selfToken ? { Authorization: `Bearer ${selfToken}` } : {}),
         ...testRunHeader(),
         // Always sent, so no self-call can reach a loopback-trusting route unlabelled.
@@ -226,6 +229,8 @@ export interface ExecuteOpOptions {
   callerSid?: string
   /** Human clicks never inherit a session id from headers or the process environment. */
   callerMode?: 'session' | 'human'
+  /** The CLI's automation label when no session and no person stands behind the call (cli-sender.ts). */
+  sender?: string
   /** Recheck a frozen human plan immediately before each mutation self-call. */
   beforeMutation?: () => Promise<void>
   callerHost?: string
@@ -330,6 +335,7 @@ export async function executeOp(
     host: options.callerHost?.trim() || undefined,
     beforeMutation: options.beforeMutation,
     origin,
+    ...(options.sender ? { sender: options.sender } : {}),
   }))
 }
 

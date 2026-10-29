@@ -107,6 +107,9 @@ export interface SessionRequest {
   /** When this server's deadline sweep made it overdue (ISO). Only such a row is reminded:
    *  rows an older Walnut expired never are, so an upgrade does not send a burst of them. */
   overdueAt?: string;
+  /** The target queue row (`qm-…`) the asked message went out as, so a read of the request can
+   *  say whether it still waits to go in and a sender can send it now (additive, 2026-10). */
+  messageId?: string;
 }
 
 /** After the work a request was handed on to comes back, the asker's wait lasts this much longer. */
@@ -491,6 +494,17 @@ export async function settleNotified(
  */
 export async function withdrawRequest(id: string): Promise<SessionRequest | null> {
   return settle(id, 'withdrawn');
+}
+
+/** Record the queue row the asked message went out as (POST /messages, after delivery queued it). */
+export async function noteRequestMessage(id: string, messageId: string): Promise<void> {
+  await updateRequests((store) => {
+    const requests = [...(store.requests ?? [])];
+    const idx = requests.findIndex((r) => r.id === id);
+    if (idx === -1 || requests[idx].messageId === messageId) return undefined;
+    requests[idx] = { ...requests[idx], messageId };
+    return { requests };
+  });
 }
 
 /** Put a withdrawn request back to pending (its asker's task was reopened). Null when it is not withdrawn. */

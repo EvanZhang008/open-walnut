@@ -13060,6 +13060,28 @@ export class SessionRunner {
     return entry.at
   }
 
+  /**
+   * What a session's queued line waits on when the host did not take it in time, for
+   * the one who sent it (an agent's task_send, request_get): the reason the bubble shows
+   * and when Walnut sends it again by itself. `messageId` omitted: the session's own
+   * clock, which every row queued now waits behind. Null when nothing is held that way.
+   */
+  deliveryWait(sessionId: string, messageId?: string): { reason: string; retryAt?: string } | null {
+    const slow = this.slowHostRetries.get(sessionId)
+    const at = (ms: number | undefined) => (ms && ms > 0 ? new Date(ms).toISOString() : undefined)
+    if (messageId === undefined) {
+      return slow?.timer ? { reason: slowHostReason(slow.why), retryAt: at(slow.at) } : null
+    }
+    // Only a host that did not answer in time: a row held behind a permission prompt
+    // or another line waits for that, and sending it now changes nothing.
+    const reason = heldRows(sessionId)?.get(messageId)
+    if (reason !== slowHostReason('start') && reason !== slowHostReason('send')) return null
+    const held = this.heldSendRetries.get(sessionId)
+    const retryAt = slow?.timer && reason === slowHostReason(slow.why) ? at(slow.at)
+      : held?.timer && held.ids.has(messageId) ? at(held.at) : undefined
+    return { reason, ...(retryAt ? { retryAt } : {}) }
+  }
+
   private async slowHostLookAgain(sessionId: string, entry: { timer?: ReturnType<typeof setTimeout>; why: 'start' | 'send' }): Promise<void> {
     if (this.acpDestroyed || this.slowHostRetries.get(sessionId) !== entry || entry.timer || this.activeProcessing.has(sessionId)) return
     const held = heldRows(sessionId)

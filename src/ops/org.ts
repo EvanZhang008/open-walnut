@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { defineOp } from './registry.js';
 import { startTask } from './task-execution.js';
-import { NO_REPLY_ASKED, REPLY_ARRIVES_HINT, withOutcome } from './outcome.js';
+import { NO_REPLY_ASKED, sendBehindSlowHostLine, REPLY_ARRIVES_HINT, withOutcome } from './outcome.js';
 import { MESSAGE_TEXT_HINT } from '../core/team-charter.js';
 
 defineOp({
@@ -65,19 +65,30 @@ defineOp({
       + (contact.via && contact.via.id !== id
         ? `, in the team of ${contact.via.title ?? contact.via.id}${contact.via.org_role === 'lead' ? ', which reads it in its next update' : ''}` : '')
       + (contact.handedOverBy ? `, which took ${contact.project ?? 'the project'} over from "${contact.handedOverBy.title}" (${contact.handedOverBy.id})` : '');
-    if (!contact.started) {
+    const send = async () => {
+      const sent = await call('POST', '/messages', {
+        to: id, text, ...(title ? { title } : {}), ...(expect_reply !== undefined ? { expect_reply } : {}),
+      }) as Record<string, unknown>;
+      const asked = typeof sent?.requestId === 'string' && sent.requestId;
+      // The contact's host did not take its last message in time: this one waits behind it.
+      const waiting = sendBehindSlowHostLine(sent?.waiting, sent?.requestId, sent?.messageId);
+      return withOutcome({ ...(sent ?? {}), contact }, `Message queued for ${who}. Do NOT resend.${waiting ? ` ${waiting}` : ''}`,
+        asked ? `You asked for a reply (${sent.requestId}). ${REPLY_ARRIVES_HINT}` : NO_REPLY_ASKED);
+    };
+    if (contact.started) return send();
+    try {
       const started = await startTask(id, {
         message: title ? `${String(title)}\n\n${String(text)}` : String(text),
         ...(expect_reply !== undefined ? { expect_reply } : {}),
       }, call);
       const askedStart = typeof (started as { requestId?: unknown })?.requestId === 'string'
       return withOutcome({ ...started, contact }, `Started ${who} with your message.`, askedStart ? REPLY_ARRIVES_HINT : NO_REPLY_ASKED);
+    } catch (err) {
+      // It has a session after all (one the contact read did not see, or a start that
+      // won the race): a running task gets the message the way task_send gives it.
+      if (err instanceof Error && /\(session_exists\)/.test(err.message)) return send();
+      throw err;
     }
-    const sent = await call('POST', '/messages', {
-      to: id, text, ...(title ? { title } : {}), ...(expect_reply !== undefined ? { expect_reply } : {}),
-    }) as Record<string, unknown>;
-    const asked = typeof sent?.requestId === 'string' && sent.requestId
-    return withOutcome({ ...(sent ?? {}), contact }, `Message queued for ${who}. Do NOT resend.`, asked ? `You asked for a reply (${sent.requestId}). ${REPLY_ARRIVES_HINT}` : NO_REPLY_ASKED);
   },
   routes: [
     { method: 'POST', path: '/org/contact' },

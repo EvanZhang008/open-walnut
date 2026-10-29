@@ -60,8 +60,18 @@ function primaryOnly(what: string): void {
   if (role() !== 'leader') throw new OrgError('not_supported_cloud', 501, `${what} on the primary box`)
 }
 
-function hasSession(task: Task): boolean {
-  return !!(task.session_id || task.exec_session_id)
+/**
+ * The contact already has a conversation: a message goes into it, never a start. The task's
+ * own slot can lag its session records (a slot link that lost a lock race leaves the record
+ * naming the task while the task names nothing; the task routes repair this the same way,
+ * tasks.ts enrichTasksWithSessionStatus), and a start of a task whose session runs answers
+ * 409 session_exists (2026-10-29: org_send to a running task did, the way task_send never would).
+ */
+async function hasSession(task: Task): Promise<boolean> {
+  if (task.session_id || task.exec_session_id) return true
+  // The start's own test of a conversation (rows that never held one do not count).
+  const { taskConversation } = await import('../../core/sessions/task-session-claim.js')
+  return !!(await taskConversation(task.id))
 }
 
 orgV1Router.get('/org', async (_req: Request, res: Response, next: NextFunction) => {
@@ -119,13 +129,13 @@ orgV1Router.post('/org/contact', async (req: Request, res: Response, next: NextF
     if (named) {
       const target = await teamTaskOf(contact, named)
       res.json({
-        task: brief(target), kind: 'task', project: contact.project, started: hasSession(target),
+        task: brief(target), kind: 'task', project: contact.project, started: await hasSession(target),
         via: { ...brief(contact.task), kind: contact.kind },
         ...(contact.handedOverBy ? { handedOverBy: contact.handedOverBy } : {}),
       })
       return
     }
-    const started = hasSession(contact.task)
+    const started = await hasSession(contact.task)
     const launch = contact.kind === 'lead' && !started ? await contactLaunch(contact.task) : undefined
     res.json({
       task: brief(contact.task), kind: contact.kind, project: contact.project, started,

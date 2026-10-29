@@ -144,6 +144,8 @@ walnut tools call request_get '{"id":"rq-4f2a91b30c7d"}'   # single status read:
 
 `walnut wait` polls client-side, defaults to a 1800 second budget, and exits 7 when the thing is still pending. Exit 7 means "not settled yet", not "failed". `walnut wait <task-id>` is the same idea for a task: it returns once the task reaches NEED_ACTION or COMPLETE.
 
+A message to a task whose computer did not take it in time is kept and sent again by itself. Your `task_send` outcome then says so, and `request_get` says "has not reached that session yet" with the reason and the next try. If it cannot wait, `walnut tools call message_send_now '{"id":"rq-…"}'` sends that same message now (the user's Send now button does the same). Never send the text a second time.
+
 The answer follows YOU, not the process that asked. Walnut resolves the destination when the reply arrives: your own run if it is still live, otherwise your task's current run, otherwise the newest live work forked from yours. A reply you asked for before a fork, a restart, or an idle reap therefore still lands where you are now, and the envelope's `request` attribute tells you which of your open asks it answers.
 
 ## Answering a request someone sent you

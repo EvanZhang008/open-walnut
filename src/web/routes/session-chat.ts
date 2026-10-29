@@ -13,7 +13,7 @@ import type { SessionEffort, SessionMode } from '../../core/types.js'
 import { normalizeEngine } from '../../core/agents/engine-registry.js'
 import { getSessionByClaudeId, updateSessionRecord } from '../../core/session-tracker.js'
 import { getSessionPendingPermissions } from '../../core/sessions/session-lifecycle.js'
-import { sendMessageToSession, editMessage, deleteMessage, getQueue, isMessageQueued, unparkMessage, settledLineUuid } from '../../core/session-message-queue.js'
+import { sendMessageToSession, editMessage, deleteMessage, getQueue, settledLineUuid } from '../../core/session-message-queue.js'
 import { heldRows, PROMPT_HOLD_REASON } from '../../providers/line-consumption.js'
 import { sessionStreamBuffer } from '../session-stream-buffer.js'
 import { prepareHintedSend } from '../../core/hints/hint-send.js'
@@ -246,24 +246,15 @@ export function registerSessionChatRpc(): void {
     // (already drained / deleted), so a retry can never silently do nothing.
     let retryLine: string | undefined
     if (typeof data.retryOf === 'string' && data.retryOf) {
-      const stillQueued = await isMessageQueued(data.sessionId, data.retryOf)
-      if (stillQueued) {
-        // A PARKED row is invisible to markProcessing, so the re-drain below would
-        // do nothing at all. An explicit user Retry is the only thing allowed to
-        // put a dead-lettered row back in line — un-park it first.
-        const unparked = await unparkMessage(data.sessionId, data.retryOf)
-        log.web.info('session:send retry — re-draining the queued row (no duplicate enqueue)', {
-          sessionId: data.sessionId, messageId: data.retryOf, unparked,
-        })
-        // Re-trigger delivery only. SESSION_SEND → session-runner → handleSend →
-        // processNext, which markProcessing()es whatever is pending and drains it.
-        // No SESSION_MESSAGE_QUEUED: the bubble already exists in the UI under
-        // this very id, and a second queued event would mint a second bubble.
-        bus.emit(EventNames.SESSION_SEND, {
-          sessionId: data.sessionId,
-          taskId: record?.taskId,
-          message: data.message as string,
-        }, ['session-runner'], { source: 'web-ui-retry' })
+      // A PARKED row is invisible to markProcessing, so a re-drain alone would do
+      // nothing: an explicit Retry or Send now un-parks it first. Re-trigger
+      // delivery only, never a second enqueue: the bubble already exists under
+      // this very id (core/sessions/send-now.ts, shared with message_send_now).
+      const { sendQueuedNow } = await import('../../core/sessions/send-now.js')
+      if ((await sendQueuedNow({
+        sessionId: data.sessionId, messageId: data.retryOf, taskId: record?.taskId,
+        message: data.message as string, source: 'web-ui-retry', unpark: true,
+      })).sent) {
         return { messageId: data.retryOf }
       }
       retryLine = await settledLineUuid(data.retryOf)

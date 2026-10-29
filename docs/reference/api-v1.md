@@ -2285,8 +2285,17 @@ ledger. Both end up in the same persistent message queue.
   `qm-…` → `200 { "sent": true, "messageId", "sessionId", "delivery"? }`: sends
   the queued row again now, the same row, never a copy (the web bubble's Send now
   takes the same path). `409 not_queued` when it already went in or was deleted
-  (or the request predates `messageId`), `404 not_found` for an unknown request,
-  `501` on the cloud companion.
+  (or the request predates `messageId`), `409 parked` (with `parkedReason`) when
+  it was set aside, for example by the user's Stop: a session caller never puts
+  that back in line, only the user's Retry does. `404 not_found` for an unknown
+  request, `501` on the cloud companion.
+- A send with no caller session that carries `x-walnut-caller-kind: automation`
+  and `x-walnut-sender: <label>` (additive, 2026-10-29) is a script or scheduled
+  job, never the user: it is delivered as an anonymous peer note from
+  `automation: <label>`. The `walnut` CLI sends these when it runs outside every
+  session with no terminal on stdin, stdout or stderr (a LaunchAgent, cron), or
+  when `WALNUT_SENDER` names it; `WALNUT_SENDER=person` keeps a person's own
+  pipeline theirs. A call without the headers reads as before.
 
 ### Session launch (additive) — create a session from mobile
 

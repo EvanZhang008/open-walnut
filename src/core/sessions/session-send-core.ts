@@ -97,6 +97,8 @@ export interface SessionSendInput {
   /** Transport-stamped host the calling CLI runs on — labels an ANONYMOUS
    *  sender's envelope honestly (a session caller's host comes from its record). */
   callerHost?: string;
+  /** An anonymous caller that named itself: a script or scheduled job (the CLI's `x-walnut-sender`). */
+  callerLabel?: string;
 }
 
 export interface SessionSendResult {
@@ -569,6 +571,7 @@ export async function performSessionSend(input: SessionSendInput): Promise<Sessi
           ? displayHost(input.callerHost.trim().slice(0, 64))
           : 'unknown',
         anonymous: true,
+        ...(input.callerLabel ? { automation: input.callerLabel } : {}),
       }, { title: input.title });
   }
   // One `\n`, one line, and only when a request exists to answer.

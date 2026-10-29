@@ -60,3 +60,36 @@ export function withOutcome<T extends Record<string, unknown>>(
 ): T & { outcome: string; next: string } {
   return { ...result, outcome, next }
 }
+
+/**
+ * What a message still waits on, for the agent that sent it: the words the user's bubble
+ * shows, the next try Walnut makes by itself, and how to send it now. '' when nothing holds it.
+ * (request_get and message_send_now; a fresh send says it in sendBehindSlowHostLine.)
+ */
+export function deliveryWaitLine(wait: unknown, sendNowId: unknown): string {
+  const w = (wait ?? {}) as { reason?: unknown; retryAt?: unknown };
+  if (typeof w.reason !== 'string' || !w.reason) return '';
+  const at = typeof w.retryAt === 'string' ? Date.parse(w.retryAt) : NaN;
+  const next = Number.isFinite(at)
+    ? ` Walnut sends it again by itself at ${new Date(at).toISOString()} (in ${Math.max(0, Math.round((at - Date.now()) / 1000))} s).`
+    : '';
+  const now = typeof sendNowId === 'string' && sendNowId
+    ? ` To send it now: message_send_now {"id":"${sendNowId}"}; never send the text again.` : '';
+  return `${w.reason}${next}${now}`;
+}
+
+/**
+ * A send to a session whose host did not take the last message in time. The send itself
+ * tries again at once (every new message does), so there is no clock to quote yet: say what
+ * happened last time and where to read how this one went.
+ */
+export function sendBehindSlowHostLine(wait: unknown, requestId: unknown, messageId: unknown): string {
+  const w = (wait ?? {}) as { reason?: unknown };
+  if (typeof w.reason !== 'string' || !w.reason) return '';
+  const rq = typeof requestId === 'string' && requestId ? requestId : '';
+  const id = rq || (typeof messageId === 'string' ? messageId : '');
+  return `The host of that session did not answer the last message in time ("${w.reason}"). This send tries again now;`
+    + ' if the host is still slow, it waits and goes out by itself.'
+    + (rq ? ` request_get {"id":"${rq}"} says whether it went in and when the next try is.` : '')
+    + (id ? ` message_send_now {"id":"${id}"} sends it at once. Never send the text again.` : '');
+}

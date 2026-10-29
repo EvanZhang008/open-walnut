@@ -4,7 +4,7 @@ import { z } from 'zod';
 import type { OpCall } from './core.js';
 import { defineOp, getOp } from './registry.js';
 import { startTask, TASK_START_INPUT } from './task-execution.js';
-import { NO_REPLY_ASKED, REPLY_ARRIVES_HINT, withOutcome } from './outcome.js';
+import { deliveryWaitLine, NO_REPLY_ASKED, sendBehindSlowHostLine, REPLY_ARRIVES_HINT, withOutcome } from './outcome.js';
 import { MESSAGE_TEXT_HINT } from '../core/team-charter.js';
 import { WORK_PLACE_RULE } from '../core/work-place.js';
 
@@ -78,11 +78,14 @@ defineOp({
     const target = typeof b.targetSessionId === 'string' && b.targetSessionId
       ? b.targetSessionId
       : String(args.to ?? args.in_reply_to ?? 'the session');
+    // The target's host did not take its last message in time: this one waits behind it.
+    const waiting = sendBehindSlowHostLine(b.waiting, b.requestId, b.messageId);
     return withOutcome(
       { ...b },
       delivery === 'deferred'
         ? `Message queued for ${target}: it is parked on a human permission prompt, so the text lands after the human answers. Do NOT resend.`
-        : `Message queued for ${b.targetTaskId || b.taskId || target}${args.force === true ? ' (forced: if it was complete, this reopens it)' : ''}. Accepted for delivery, not a completed reply. Do NOT resend.`,
+        : `Message queued for ${b.targetTaskId || b.taskId || target}${args.force === true ? ' (forced: if it was complete, this reopens it)' : ''}. Accepted for delivery, not a completed reply. Do NOT resend.`
+          + (waiting ? ` ${waiting}` : ''),
       (args.in_reply_to && (Array.isArray(args.not_done) ? args.not_done.length > 0 : typeof args.not_done === 'string' && args.not_done.trim() !== '')
         ? 'Marked Partial: the Board and the Brief list what is not done. ' : '')
       + (typeof b.requestId === 'string' && b.requestId
@@ -151,21 +154,54 @@ defineOp({
   bind: { method: 'GET', path: '/requests/:id' },
   mapResult: ({ body }) => {
     const request = ((body as { request?: unknown } | undefined)?.request ?? body ?? {}) as
-      { status?: unknown };
+      { status?: unknown; id?: unknown };
+    const delivery = (body as { delivery?: { state?: unknown } } | undefined)?.delivery;
     const status = typeof request.status === 'string' ? request.status : 'unknown';
     const pending = status === 'pending';
+    // The asked message has not gone in yet (a host that did not take it in time).
+    const waiting = delivery?.state === 'waiting' ? deliveryWaitLine(delivery, request.id) : '';
+    const parked = delivery?.state === 'parked'
+      ? `Your message was set aside before it reached that session (${String((delivery as { reason?: unknown }).reason ?? 'parked')}); it goes only if the user retries it there.` : '';
+    // An overdue request is still open until a reply settles it.
+    const open = pending || status === 'expired';
     return withOutcome(
       { ...(body as Record<string, unknown> ?? {}) },
-      pending
-        ? 'Still pending: the other session has not answered yet. Pending means "not settled", never "failed".'
+      waiting
+        ? `${pending ? 'Still pending' : 'Overdue, still open'}, and your message has not reached that session yet. ${waiting}`
+        : parked ? `${pending ? 'Still pending' : 'Overdue, still open'}. ${parked}`
+        : pending
+        ? `Still pending: the other session has not answered yet${delivery?.state === 'queued' ? ' (your message is queued for it)' : ''}. Pending means "not settled", never "failed".`
         : `This request is ${status}; nothing is waiting on it any more.`,
-      pending
+      open
         ? 'Do not poll this. Carry on with your own work: the answer arrives in your session on its own, '
           + 'and `walnut wait <rq-id>` blocks for you if you truly cannot continue.'
         : 'Nothing else is required.',
     );
   },
   tags: { readonly: true, remote: 'allow' },
+});
+
+defineOp({
+  name: 'message_send_now',
+  title: 'Send a queued message now',
+  description:
+    'A message you sent whose target\'s host did not take it in time (task_send says so; request_get says it has '
+    + 'not reached that session yet, with the next try) waits in that queue, and Walnut sends it again by itself. '
+    + 'This sends it now, the way the Send now button on the user\'s bubble does: the same queued message, never a '
+    + 'second copy. Pass the request id (rq-…) or the message id (qm-…). A message that already went in is not sent '
+    + 'again, and one set aside (the user stopped that session) stays for the user\'s Retry.',
+  input: {
+    id: z.string().regex(/^(rq-[a-f0-9]{6,}|qm-[A-Za-z0-9-]{1,64})$/).describe('The request id (rq-…) or the queued message id (qm-…)'),
+  },
+  bind: { method: 'POST', path: '/messages/:id/send-now' },
+  mapResult: ({ body }) => {
+    return withOutcome(
+      { ...(body as Record<string, unknown> ?? {}) },
+      'Sent again now: the queued message goes to its session. If its host is still slow, request_get shows the next try.',
+      'Do not send the text again. The reply, if you asked for one, arrives in your session.',
+    );
+  },
+  tags: { readonly: false, remote: 'allow', primaryOnly: true },
 });
 
 defineOp({

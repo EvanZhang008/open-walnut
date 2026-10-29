@@ -3,7 +3,10 @@
  *
  *   POST /messages        { to?, text, title?, expect_reply?, reply_timeout?, in_reply_to?, hands_on?, force?, reason?, messageId? }
  *                         → 202 SessionSendResult (session-send-core.ts)
- *   GET  /requests/:id    → { request } — status read for `walnut wait rq-…`
+ *   GET  /requests/:id    → { request, delivery? } — status read for `walnut wait rq-…`;
+ *                         `delivery` while the asked message still waits to go in
+ *   POST /messages/:id/send-now  (id = qm-… or rq-…) → { sent, messageId, sessionId }:
+ *                         send a queued message now (the bubble's Send now, for agents)
  *
  * The caller is stamped from `x-walnut-caller-sid` (provenance, never
  * authorization): a session caller's words are peer-fenced and throttled; the
@@ -17,6 +20,7 @@
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { CLOUD_MODE } from '../../constants.js'
 import { sendV1Error as sendError } from './v1-control-relay.js'
+import { CALLER_KIND_HEADER, SENDER_LABEL_HEADER, senderLabel } from '../../lib/cli-sender.js'
 
 export const messagesV1Router = Router()
 
@@ -55,10 +59,23 @@ messagesV1Router.post('/messages', async (req: Request, res: Response, next: Nex
         // A reply's structured fields (core/peers/structured-reply.ts); absent on a plain send.
         ...(b.result !== undefined || b.evidence !== undefined || b.not_done !== undefined
           ? { reply: { result: b.result, evidence: b.evidence, not_done: b.not_done } } : {}),
-        callerSid: header(req, 'x-walnut-caller-sid'),
+        // No session and no person behind it (a script, a LaunchAgent, cron: the CLI's rule,
+        // src/lib/cli-sender.ts): an anonymous sender that names itself, never the user.
+        ...(!header(req, 'x-walnut-caller-sid') && header(req, CALLER_KIND_HEADER) === 'automation'
+          ? { callerSid: 'external', callerLabel: senderLabel(header(req, SENDER_LABEL_HEADER)) }
+          : { callerSid: header(req, 'x-walnut-caller-sid') }),
         callerHost: header(req, 'x-walnut-caller-host'),
       })
-      res.status(202).json(result)
+      // The sender reads what its message waits on the way the bubble does
+      // (core/sessions/send-now.ts): the request keeps the row it went out as, and a
+      // target whose host did not answer in time says so with its next try.
+      const { sessionDeliveryWait } = await import('../../core/sessions/send-now.js')
+      if (result.requestId && result.messageId) {
+        const { noteRequestMessage } = await import('../../core/session-requests.js')
+        await noteRequestMessage(result.requestId, result.messageId).catch(() => {})
+      }
+      const waiting = result.messageId && result.targetSessionId ? await sessionDeliveryWait(result.targetSessionId) : null
+      res.status(202).json(waiting ? { ...result, waiting } : result)
     } catch (err) {
       if (err instanceof SendError) {
         sendError(res, err.statusCode, err.code, err.message, err.detail)
@@ -96,7 +113,54 @@ messagesV1Router.get('/requests/:id', async (req: Request, res: Response, next: 
       sendError(res, 404, 'not_found', `No such request: ${id}`)
       return
     }
-    res.json({ request })
+    // Still to go in: where the asked message stands in the target's queue.
+    let delivery: Awaited<ReturnType<typeof import('../../core/sessions/send-now.js')['deliveryWaitOf']>> = null
+    if (!CLOUD_MODE && request.messageId && (request.status === 'pending' || request.status === 'expired')) {
+      const { deliveryWaitOf } = await import('../../core/sessions/send-now.js')
+      delivery = await deliveryWaitOf(request.messageId).catch(() => null)
+    }
+    res.json(delivery ? { request, delivery } : { request })
+  } catch (err) {
+    next(err)
+  }
+})
+
+/** Send a queued message now: a `qm-…` row, or the row an `rq-…` request went out as. */
+messagesV1Router.post('/messages/:id/send-now', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    if (CLOUD_MODE) {
+      sendError(res, 501, 'not_supported_cloud', 'Session sends run on the primary box')
+      return
+    }
+    const id = String(req.params.id ?? '')
+    let messageId: string | undefined = id
+    if (/^rq-[a-f0-9]{6,}$/.test(id)) {
+      const { getSessionRequest } = await import('../../core/session-requests.js')
+      const request = await getSessionRequest(id)
+      if (!request) { sendError(res, 404, 'not_found', `No such request: ${id}`); return }
+      messageId = request.messageId
+      if (!messageId) {
+        sendError(res, 409, 'not_queued', `${id} has no queued message to send (it was sent by an older Walnut, or started its task): read it with request_get.`)
+        return
+      }
+    } else if (!/^qm-[A-Za-z0-9-]{1,64}$/.test(id)) {
+      sendError(res, 400, 'bad_request', 'Pass a request id (rq-…) or a queued message id (qm-…)')
+      return
+    }
+    // A session caller's send now is a peer's nudge (its turn interrupts a wait, as a
+    // task_send's does); with no caller it is the person's, the bubble's Send now.
+    const callerSid = header(req, 'x-walnut-caller-sid')
+    const { sendQueuedNow } = await import('../../core/sessions/send-now.js')
+    const out = await sendQueuedNow({ messageId, source: callerSid ? 'peer' : 'web-ui-retry', unpark: !callerSid })
+    if (!out.sent) {
+      if (out.why === 'parked') {
+        sendError(res, 409, 'parked', `That message was set aside${out.reason ? ` (${out.reason})` : ''}, so it is not sent again from here: the user's Retry on it decides.`, { parkedReason: out.reason })
+      } else {
+        sendError(res, 409, 'not_queued', 'That message is no longer queued: it went in, or was deleted. Nothing was sent again.')
+      }
+      return
+    }
+    res.json({ sent: true, messageId, sessionId: out.sessionId })
   } catch (err) {
     next(err)
   }
