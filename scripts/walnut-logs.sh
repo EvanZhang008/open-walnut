@@ -165,7 +165,7 @@ for f in files:
             if cand:
                 last=max(cand,key=lambda k:msgs[k].get('enq',0))
                 msgs[last]['routed']=True
-                for k in ('path','hasPipe','activeProcessing','pid'):
+                for k in ('path','hasPipe','activeProcessing','pid','processStatus'):
                     if k in d: msgs[last][k]=d[k]
         elif 'cannot inject' in m:   # Bug D fingerprint (only emitted pre-fix)
             cand=[k for k,v in msgs.items() if v.get('sid')==s and not v.get('stall')]
@@ -222,6 +222,11 @@ for mid,v in msgs.items():
         label='BUG D: mid-turn stall (cannot-inject on stale hasPipe=False)'
     elif deleg and not by_fate and e2d is not None and e2d>3000:
         label='Bug D path (delegated to processNext) but still slow — investigate'
+    elif path=='injectMidTurn' and str(hp)=='False' and not by_fate and e2d is not None and e2d>3000 \
+            and v.get('processStatus') not in (None, 'running'):
+        # The routing line names the process state (2026-10-29): a send while a start or an
+        # attach is still under way waits for it in injectMidTurn, so the wait is the start.
+        label=f'SEND DURING START (process {v.get("processStatus")}; the wait is the start, not Bug D)'
     elif path=='injectMidTurn' and str(hp)=='False' and not by_fate and e2d is not None and e2d>3000:
         label='BUG D: mid-turn stall (injectMidTurn, stale hasPipe=False)'
     elif e2d is not None and e2d>3000 and v.get('held'):

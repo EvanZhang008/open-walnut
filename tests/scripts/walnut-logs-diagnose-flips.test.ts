@@ -93,6 +93,24 @@ describe('walnut-logs.sh diagnose: a row is read by its fate', () => {
     expect(out).not.toContain('BUG D')
   })
 
+  it('a mid-turn send on hasPipe=False while the process starts is a send during a start, not Bug D', async () => {
+    const routed = (secs: number, processStatus?: string) => ({
+      time: at(secs), level: 'info', subsystem: 'session', message: 'handleSend: routing send', sessionId: SID,
+      path: 'injectMidTurn', hasPipe: false, ...(processStatus ? { processStatus } : {}),
+    })
+    const delivered = (secs: number, id: string) => ({ time: at(secs), level: 'info', subsystem: 'session', message: 'message delivered', sessionId: SID, messageId: id, path: 'mid-turn', deliveryMs: 20_000 })
+    await writeLog([
+      enq(0, 'qm-starting'), routed(0.01, 'starting'), delivered(20, 'qm-starting'),
+      enq(30, 'qm-running'), routed(30.01, 'running'), delivered(55, 'qm-running'),
+      enq(60, 'qm-old-log'), routed(60.01), delivered(85, 'qm-old-log'),
+    ])
+    const out = await run('diagnose', '', '30')
+    expect(out).toContain('SEND DURING START (process starting; the wait is the start, not Bug D)')
+    // A running process on a stale pipe, and a routing line from before the field, stay Bug D.
+    expect(out).toMatch(/2×\s+BUG D: mid-turn stall \(injectMidTurn, stale hasPipe=False\)/)
+    expect(out).toMatch(/1×\s+SEND DURING START/)
+  })
+
   it('a fate whose enqueue is before the window is not a message of its own', async () => {
     await writeLog([
       { time: at(0), level: 'info', subsystem: 'session', message: 'queued line settled by the CLI, rows leave the queue', sessionId: SID, why: 'started', messageIds: ['qm-old'] },
