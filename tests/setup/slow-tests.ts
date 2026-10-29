@@ -79,6 +79,8 @@ export const SLOW_TEST_FILES = [
 
   // ── Real git subprocesses (repo creation, history rewrite, packing) ─────────
   'tests/integrations/git-compaction.test.ts', // 67s
+  // ~21s: a fake slow git on PATH (1s per step) and a step cut at its deadline.
+  'tests/integrations/git-compaction-recovery-async.test.ts',
   // 13-19s per test at idle load: 5 real repos + a bare hub, ~480 real commits,
   // a force-with-lease push, and `git gc --prune=now`. It sat in the quick tier
   // straddling that tier's 15s timeout, so which of its tests failed shifted run
@@ -94,6 +96,7 @@ export const SLOW_TEST_FILES = [
   'tests/providers/turn-snapshot-core.test.ts', // ~24s: 32 tests, each on its own temp repo with real snapshot refs
   'tests/providers/workspace-core.test.ts', // 10-19s: real git worktrees and provider processes in temp dirs
   'tests/providers/daemon-workspace-twins-e2e.test.ts', // 6-15s: boots both daemon twins and makes real worktrees
+  'tests/providers/daemon-standalone-no-bash.test.ts', // ~2.5s: boots the standalone daemon twin twice and starts a shim CLI under it
   'tests/providers/daemon-source-fallback-loaders-e2e.test.ts', // ~7s: three loaders (two esbuild bundles, tsx) each write and boot the source-fallback daemon
 
   // ── Real HTTP server + session plumbing ────────────────────────────────────

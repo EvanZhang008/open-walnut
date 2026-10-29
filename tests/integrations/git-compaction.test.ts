@@ -423,7 +423,7 @@ describe('git-compaction', () => {
   // -------------------------------------------------------------------------
 
   describe('recoverFromCrashedCompaction', () => {
-    it('recovers from crash during building phase', () => {
+    it('recovers from crash during building phase', async () => {
       commitAt(repoDir, 10, 'some data');
 
       // Simulate crash: leave compaction-wip branch and state file
@@ -434,7 +434,7 @@ describe('git-compaction', () => {
       );
       execSync('git checkout -b backup-20260407 main', { cwd: repoDir, stdio: 'pipe' });
 
-      recoverFromCrashedCompaction(repoDir);
+      await recoverFromCrashedCompaction(repoDir);
 
       // Should be back on main
       expect(getCurrentBranch(repoDir)).toBe('main');
@@ -444,7 +444,7 @@ describe('git-compaction', () => {
       expect(getFileContent(repoDir, 'data.txt')).toBe('some data');
     });
 
-    it('recovers from crash during swapped phase', () => {
+    it('recovers from crash during swapped phase', async () => {
       commitAt(repoDir, 10, 'important data');
 
       // Simulate: swap already happened, just needs gc
@@ -453,7 +453,7 @@ describe('git-compaction', () => {
         JSON.stringify({ phase: 'swapped', backup: 'backup-20260407', startedAt: new Date().toISOString() }),
       );
 
-      recoverFromCrashedCompaction(repoDir);
+      await recoverFromCrashedCompaction(repoDir);
 
       expect(getCurrentBranch(repoDir)).toBe('main');
       expect(fs.existsSync(path.join(repoDir, '.git', 'compaction-state.json'))).toBe(false);
@@ -463,7 +463,7 @@ describe('git-compaction', () => {
     // 2026-10-28: a deploy killed the worker between the local swap and the hub
     // push; the next boot kept the rewritten main, new auto-saves landed on it,
     // and the next sync took the hub's (old) chain without them.
-    it('swapped but not pushed: main goes back to the pre-compaction chain, working tree untouched', () => {
+    it('swapped but not pushed: main goes back to the pre-compaction chain, working tree untouched', async () => {
       commitAt(repoDir, 3, 'one');
       commitAt(repoDir, 1, 'two');
       const original = execSync('git rev-parse main', { cwd: repoDir, encoding: 'utf-8' }).trim();
@@ -476,7 +476,7 @@ describe('git-compaction', () => {
         JSON.stringify({ phase: 'swapped', backup: 'backup-20261028', startedAt: new Date().toISOString() }),
       );
 
-      recoverFromCrashedCompaction(repoDir);
+      await recoverFromCrashedCompaction(repoDir);
 
       expect(execSync('git rev-parse main', { cwd: repoDir, encoding: 'utf-8' }).trim()).toBe(original);
       expect(getFileContent(repoDir, 'data.txt')).toBe('two');
@@ -487,7 +487,7 @@ describe('git-compaction', () => {
       expect(fs.existsSync(path.join(repoDir, '.last-compaction'))).toBe(false);
     });
 
-    it('swapped, and main moved on the rewrite since: left as it is', () => {
+    it('swapped, and main moved on the rewrite since: left as it is', async () => {
       commitAt(repoDir, 2, 'one');
       execSync('git branch backup-20261028 main', { cwd: repoDir, stdio: 'pipe' });
       const rewritten = execSync('git commit-tree main^{tree} -m compacted', { cwd: repoDir, encoding: 'utf-8' }).trim();
@@ -499,13 +499,13 @@ describe('git-compaction', () => {
         JSON.stringify({ phase: 'swapped', backup: 'backup-20261028', startedAt: new Date().toISOString() }),
       );
 
-      recoverFromCrashedCompaction(repoDir);
+      await recoverFromCrashedCompaction(repoDir);
 
       expect(execSync('git rev-parse main', { cwd: repoDir, encoding: 'utf-8' }).trim()).toBe(head);
       expect(getFileContent(repoDir, 'data.txt')).toBe('newer');
     });
 
-    it('cleaning (the hub took the rewrite): counts as done, so the next boot does not rerun it', () => {
+    it('cleaning (the hub took the rewrite): counts as done, so the next boot does not rerun it', async () => {
       commitAt(repoDir, 1, 'data');
       fs.writeFileSync(
         path.join(repoDir, '.git', 'compaction-state.json'),
@@ -513,17 +513,17 @@ describe('git-compaction', () => {
       );
       expect(isCompactionDue(repoDir)).toBe(true);
 
-      recoverFromCrashedCompaction(repoDir);
+      await recoverFromCrashedCompaction(repoDir);
 
       expect(isCompactionDue(repoDir)).toBe(false);
       expect(fs.existsSync(path.join(repoDir, '.git', 'compaction-state.json'))).toBe(false);
     });
 
-    it('does nothing when no state file exists', () => {
+    it('does nothing when no state file exists', async () => {
       commitAt(repoDir, 5, 'data');
       const beforeCount = getCommitCount(repoDir);
 
-      recoverFromCrashedCompaction(repoDir);
+      await recoverFromCrashedCompaction(repoDir);
 
       expect(getCommitCount(repoDir)).toBe(beforeCount);
       expect(getFileContent(repoDir, 'data.txt')).toBe('data');

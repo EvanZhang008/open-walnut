@@ -90,7 +90,9 @@ vi.mock('node:child_process', async (importOriginal) => {
   };
 });
 
-import { gitPullWalnut, resetSyncProbeCacheForTest } from '../../src/integrations/git-sync.js';
+import {
+  gitPullWalnut, resetSyncProbeCacheForTest, setCompactionInProgress, waitForSyncSettled,
+} from '../../src/integrations/git-sync.js';
 
 beforeEach(() => {
   h.asyncCalls.length = 0;
@@ -148,5 +150,40 @@ describe('gitPullWalnut single-flight', () => {
     expect(h.detachedFlags[0]).toBe(true);
     h.resolvers.shift()!();
     await p;
+  });
+});
+
+// Compaction, its boot-time crash recovery and git maintenance set the flag and
+// then wait here: a pull that passed its check just before must be waited for,
+// and one that starts after must not run beside them.
+describe('gitPullWalnut and the compaction flag', () => {
+  it('waitForSyncSettled waits for a pull already in flight', async () => {
+    const p = gitPullWalnut();
+    await vi.waitFor(() => expect(h.asyncCalls).toHaveLength(1));
+
+    let settled = false;
+    const w = waitForSyncSettled().then(() => { settled = true; });
+    await new Promise((r) => setTimeout(r, 50));
+    const settledWhilePulling = settled;
+
+    // Let the pull finish before asserting, so a failure here can't leave it
+    // in flight for the next test.
+    h.resolvers.shift()!();
+    await Promise.all([p, w]);
+    expect(settledWhilePulling).toBe(false);
+    expect(settled).toBe(true);
+  });
+
+  it('a pull started while the compaction flag is held stands aside', async () => {
+    setCompactionInProgress(true);
+    try {
+      const p = gitPullWalnut();
+      await new Promise((r) => setTimeout(r, 50));
+      h.resolvers.splice(0).forEach((resolve) => resolve()); // never leave a pull hanging
+      await p;
+    } finally {
+      setCompactionInProgress(false);
+    }
+    expect(h.asyncCalls).toHaveLength(0);
   });
 });

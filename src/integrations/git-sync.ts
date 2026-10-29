@@ -160,12 +160,14 @@ export function isSyncPaused(): boolean {
 }
 
 /**
- * Resolves when no sync() is in flight. The parent calls this before forking
- * the compaction worker so a mid-flight pull/push can't interleave with the
- * history rewrite (the flag only stops NEW ticks, not one already running).
+ * Resolves when no sync() and no gitPullWalnut() is in flight. Callers set the
+ * compaction flag first, then wait here, so a mid-flight pull/push can't
+ * interleave with a history rewrite, a gc or the boot-time crash recovery (the
+ * flag only stops NEW ticks and pulls, not one already past its check).
  */
 export async function waitForSyncSettled(): Promise<void> {
   try { await syncInflight; } catch { /* a failed sync is still settled */ }
+  try { await pullInflight; } catch { /* a failed pull is still settled */ }
 }
 
 // Network git subcommands that may authenticate against a remote. Only these
@@ -2882,6 +2884,13 @@ export async function gitPullWalnut(): Promise<void> {
       // so a pull here would be one more kill and one more corpse per turn end.
       if (syncInflight) {
         log.git.debug('gitPullWalnut skipped — a sync is in flight');
+        return;
+      }
+      // Same for compaction, its boot-time crash recovery and git maintenance:
+      // they hold this flag while they move main or repack, and a pull beside
+      // them races them for index.lock and the refs.
+      if (compactionInProgress) {
+        log.git.debug('gitPullWalnut skipped — compaction or maintenance holds the repo');
         return;
       }
       if (guard.consecutiveNetworkFailures > 0) {

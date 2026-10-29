@@ -15,7 +15,9 @@ import { execSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { WALNUT_HOME } from '../constants.js';
-import { git, gitSafe, setCompactionInProgress, clearStaleLock } from './git-sync.js';
+import {
+  git, gitSafe, gitAsync, setCompactionInProgress, compactionInProgress, clearStaleLock, waitForSyncSettled,
+} from './git-sync.js';
 import { pushViaBundle } from './git-bundle-client.js';
 import { log } from '../logging/index.js';
 
@@ -429,19 +431,82 @@ function deleteOldBackups(repoDir: string, keepCount: number): void {
 // Crash recovery — call on startup
 // ---------------------------------------------------------------------------
 
-export function recoverFromCrashedCompaction(repoDir = WALNUT_HOME): void {
+/**
+ * Budget for each git step of crash recovery. Every step is a local ref or
+ * index operation that takes milliseconds; one that runs this long is stuck,
+ * and recovery logs it and goes on (its group is killed).
+ */
+export const RECOVERY_GIT_TIMEOUT_MS = 15_000;
+
+/**
+ * Past its deadline a step is killed, but its promise settles only when the
+ * child's pipes close; a grandchild that keeps them open would hold recovery,
+ * and with it every git-sync start, forever. So each wait settles on its own.
+ */
+const RECOVERY_SETTLE_GRACE_MS = 5_000;
+/** How long recovery waits for a sync or pull already in flight before it goes ahead. */
+export const RECOVERY_SYNC_WAIT_MS = 120_000;
+
+function settleBy<T>(work: Promise<T>, ms: number, what: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${what} timed out after ${ms}ms (not settled)`)), ms);
+    timer.unref?.();
+  });
+  return Promise.race([work, deadline]).finally(() => clearTimeout(timer));
+}
+
+/**
+ * Runs in the SERVER at boot, so every git step is an async child with a
+ * deadline, never execSync: 2026-10-27/28 the old synchronous recovery froze the
+ * whole event loop for 30s at three boots (a step ran to the 30s execSync
+ * timeout while the startup commit held index.lock), and every route waited.
+ *
+ * While it works it holds the compaction flag, so the auto-commit tick, sync()
+ * and gitPullWalnut() stand aside until main is where recovery leaves it. The
+ * synchronous version got that ordering for free by blocking the loop; the
+ * caller should still start git-sync only after this resolves.
+ */
+export async function recoverFromCrashedCompaction(
+  repoDir = WALNUT_HOME,
+  options: { timeoutMs?: number } = {},
+): Promise<void> {
   const state = readState(repoDir);
   if (!state) return;
 
-  const opts = { cwd: repoDir };
+  // Never take the flag from another holder (git maintenance): whichever
+  // finished first would clear it and resume sync under the other.
+  const holdsFlag = !compactionInProgress;
+  if (holdsFlag) setCompactionInProgress(true);
+  const opts = { cwd: repoDir, timeout: options.timeoutMs ?? RECOVERY_GIT_TIMEOUT_MS };
+  // gitSafe semantics (null on failure), plus a log line: a step that timed
+  // out or hit a lock is the thing to look for when recovery leaves main odd.
+  const run = (args: string): Promise<string> =>
+    settleBy(gitAsync(args, opts), opts.timeout + RECOVERY_SETTLE_GRACE_MS, `git ${args}`);
+  const gitStep = async (args: string): Promise<string | null> => {
+    try {
+      return await run(args);
+    } catch (err) {
+      const error = err instanceof Error ? err.message : String(err);
+      if (/timed out|index\.lock|\.lock'/.test(error)) {
+        log.git.warn('compaction recovery: git step failed, continuing', { args, error: error.slice(0, 300) });
+      }
+      return null;
+    }
+  };
 
   try {
+    // A tick or pull already in flight still moves main. Bounded: a stuck one
+    // must not hold recovery, and every git-sync start behind it, for good.
+    await settleBy(waitForSyncSettled(), RECOVERY_SYNC_WAIT_MS, 'waiting for an in-flight sync').catch((err) => {
+      log.git.warn('compaction recovery: going ahead beside a sync that did not settle', { error: String(err) });
+    });
     switch (state.phase) {
       case 'building':
       case 'verified':
         // main is untouched — just clean up temp branch
-        gitSafe('checkout main', opts);
-        gitSafe('branch -D compaction-wip', opts);
+        await gitStep('checkout main');
+        await gitStep('branch -D compaction-wip');
         break;
       case 'swapped': {
         // The swap landed here but the push to the hub (step 7, after this phase
@@ -452,14 +517,16 @@ export function recoverFromCrashedCompaction(repoDir = WALNUT_HOME): void {
         // and left them out of the working tree. Put main back on the
         // pre-compaction chain it was built from (same tree, so the working
         // tree is untouched); a later run compacts again.
-        gitSafe('checkout main', opts);
-        gitSafe('branch -D compaction-wip', opts);
-        const backupHead = gitSafe(`rev-parse --verify -q ${state.backup}`, opts);
-        const sameTree = backupHead !== null
-          && gitSafe(`rev-parse ${state.backup}^{tree}`, opts) === gitSafe('rev-parse main^{tree}', opts);
+        await gitStep('checkout main');
+        await gitStep('branch -D compaction-wip');
+        const backupHead = await gitStep(`rev-parse --verify -q ${state.backup}`);
+        // A tree that could not be read is not the same tree: two failed reads
+        // (a lock, a timeout) must not move main.
+        const backupTree = backupHead !== null ? await gitStep(`rev-parse ${state.backup}^{tree}`) : null;
+        const sameTree = backupTree !== null && backupTree === await gitStep('rev-parse main^{tree}');
         if (sameTree) {
-          git(`update-ref refs/heads/main ${backupHead}`, opts);
-          gitSafe('reset --mixed HEAD', opts);
+          await run(`update-ref refs/heads/main ${backupHead}`);
+          await gitStep('reset --mixed HEAD');
           log.git.warn('compaction: a run stopped before the hub took its rewrite; main is back on the pre-compaction chain', { backup: state.backup, backupHead });
         } else {
           // Something was committed on the rewrite since: leave it, git-sync
@@ -473,16 +540,17 @@ export function recoverFromCrashedCompaction(repoDir = WALNUT_HOME): void {
         // run counts as done even though its cleanup never ran: before, an
         // unmarked run was due again at every boot (2026-10-27/28, a fresh 3GB
         // rewrite after each deploy). git-maintenance does the gc.
-        gitSafe('checkout main', opts);
-        gitSafe('branch -D compaction-wip', opts);
+        await gitStep('checkout main');
+        await gitStep('branch -D compaction-wip');
         markCompactionDone(repoDir);
         break;
     }
   } catch {
     // Recovery itself should never throw
+  } finally {
+    removeState(repoDir);
+    if (holdsFlag) setCompactionInProgress(false);
   }
-
-  removeState(repoDir);
 }
 
 // ---------------------------------------------------------------------------

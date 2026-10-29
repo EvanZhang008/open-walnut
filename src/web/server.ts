@@ -2938,11 +2938,37 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     log.web.info(`startup: ${name}`, { elapsedSinceListenMs: elapsed })
   }
 
+  // Crash recovery of a history compaction a restart cut short (only where
+  // compaction runs: the Mac is the sole compactor). It moves main, so every
+  // git-sync start below waits for it: this boot pull, the startup commit and
+  // the first sync tick. Async, a deadline per git step: the synchronous one it
+  // replaces froze the event loop for 30s at three boots (2026-10-27/28).
+  // Every step inside settles on its own deadline; this outer one is the last
+  // guard, so git-sync (the user's backups) always starts.
+  // (Its own worst case: 7 steps of 20s plus a 2 min wait for an in-flight sync.)
+  const COMPACTION_RECOVERY_DEADLINE_MS = 5 * 60_000
+  const compactionRecovered: Promise<void> = !isEphemeral && bootPolicy('git-compaction')
+    ? new Promise<void>((resolve) => {
+      const deadline = setTimeout(() => {
+        log.git.warn('compaction crash recovery still running after its deadline; starting git-sync anyway', { deadlineMs: COMPACTION_RECOVERY_DEADLINE_MS })
+        resolve()
+      }, COMPACTION_RECOVERY_DEADLINE_MS)
+      deadline.unref?.()
+      void import('../integrations/git-compaction.js')
+        .then(({ recoverFromCrashedCompaction }) => recoverFromCrashedCompaction())
+        .catch((err) => {
+          log.git.warn('compaction crash recovery failed', { error: err instanceof Error ? err.message : String(err) })
+        })
+        .finally(() => { clearTimeout(deadline); resolve() })
+    })
+    : Promise.resolve()
+
   // Pull after listen without gating HTTP. Once any remote outbox/projection is
   // reconciled, broadcast the existing bulk task signal so early clients fetch
   // the post-pull source of truth.
   if (!isEphemeral && bootPolicy('git-pull')) {
-    void gitPullWalnut()
+    void compactionRecovered
+      .then(() => gitPullWalnut())
       .then(async () => {
         startupPhase('background git pull done')
         const { reconcileAfterPull } = await import('../core/task-outbox.js')
@@ -3162,7 +3188,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // -- Git auto-commit polling (30s interval) --
   // Skip for ephemeral servers — they use a temp copy of data, no need to backup
   if (!isEphemeral) {
-    if (bootPolicy('git-auto-commit')) gitAutoCommitHandle = startGitAutoCommit()
+    if (bootPolicy('git-auto-commit')) gitAutoCommitHandle = startGitAutoCommit(compactionRecovered)
 
     // Disk watermark monitor: warn at 80% used, block writes (507) + git
     // pull-only at 90% (see src/core/disk-watermark.ts). Runs on every
@@ -3398,9 +3424,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     if (!bootPolicy('git-compaction')) {
       log.git.info(`${offByPolicy()}: skipping git history compaction (Mac is the sole compactor)`)
     } else {
-      // Recover from any crashed compaction, then schedule if due
-      const { recoverFromCrashedCompaction } = await import('../integrations/git-compaction.js')
-      recoverFromCrashedCompaction()
+      // Crash recovery already started right after listen (compactionRecovered);
+      // a run waits for it below.
       // Compaction runs in a FORKED WORKER (dist/workers/git-compaction-worker.js):
       // it is execSync-based and took 303s on the real 89k-commit repo — inline
       // that would freeze the event loop for minutes. The worker self-gates on
@@ -3445,6 +3470,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         })
       }
       const attemptCompaction = async (retriesLeft = 2, deferralsLeft = 6): Promise<void> => {
+        await compactionRecovered
         if (!workerPath) {
           reportCompactionFailure('compaction worker build is missing from dist/workers', 'missing-worker')
           return
@@ -5594,7 +5620,10 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
 
 const GIT_POLL_INTERVAL_MS = 30_000
 
-function startGitAutoCommit(): { stop: () => void; health: GitAutoCommitHealth } {
+function startGitAutoCommit(
+  // Compaction crash recovery: it moves main, so nothing here touches git before it settles.
+  recovered: Promise<unknown> = Promise.resolve(),
+): { stop: () => void; health: GitAutoCommitHealth } {
   const health: GitAutoCommitHealth = { protected: false, consecutiveFailures: 0 }
   let notifiedForEpisode = false // only send one feed notification per failure episode
   let lockContentionCount = 0
@@ -5629,7 +5658,8 @@ function startGitAutoCommit(): { stop: () => void; health: GitAutoCommitHealth }
   //
   // Still non-blocking: this is a detached promise chain, so server listen and
   // the rest of startup are not gated on git.
-  void commitIfDirty()
+  void recovered
+    .then(() => commitIfDirty())
     .then((committed) => {
       if (committed) {
         health.lastCommitAt = new Date().toISOString()
@@ -5788,8 +5818,11 @@ function startGitAutoCommit(): { stop: () => void; health: GitAutoCommitHealth }
       }
     }
   }
-  gitTickTimer = setTimeout(() => { void gitTick() }, GIT_POLL_INTERVAL_MS)
-  gitTickTimer.unref?.()
+  void recovered.then(() => {
+    if (gitTickStopped) return
+    gitTickTimer = setTimeout(() => { void gitTick() }, GIT_POLL_INTERVAL_MS)
+    gitTickTimer.unref?.()
+  })
 
   log.git.info('git auto-commit started', { intervalMs: GIT_POLL_INTERVAL_MS })
   emitStatus()
