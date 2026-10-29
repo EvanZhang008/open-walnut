@@ -376,7 +376,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
   const [loading, setLoading] = useState(true);
   // Set once the ~15s retry window closes on a 404 — the id resolves to nothing.
   const [missing, setMissing] = useState(false);
-  const { optimisticMsgs, sendError, send, interruptSend, stopTurn, retryFailed, dismissFailed, handleMessagesDelivered, handleBatchCompleted, handleBatchFailed, handleEditQueued, handleDeleteQueued, addExternalQueued } = useSessionSend(sessionId);
+  const { optimisticMsgs, sendError, send, interruptSend, stopTurn, retryFailed, dismissFailed, handleMessagesDelivered, handleBatchCompleted, handleBatchFailed, handleDeliveryWaiting, handleEditQueued, handleDeleteQueued, addExternalQueued } = useSessionSend(sessionId);
   // isStreaming is bubbled up from the single useSessionStream instance that lives
   // inside SessionChatHistory (via onStreamingChange). We used to mount a second
   // hook instance here, which doubled stream-subscribe RPCs and produced two
@@ -2798,6 +2798,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
             onMessagesDelivered={handleMessagesDelivered}
             onBatchCompleted={handleBatchCompleted}
             onBatchFailed={handleBatchFailed}
+            onDeliveryWaiting={handleDeliveryWaiting}
             onEditQueued={handleEdit}
             onDeleteQueued={handleDelete}
             onAgentQueued={addExternalQueued}

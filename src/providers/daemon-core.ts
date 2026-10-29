@@ -2422,6 +2422,62 @@ export function defaultReadStartTimes(fs: typeof import('node:fs'), pids: number
   }
 }
 
+/** What boundedExecFile settles with. A timeout reads like execFile's own: `killed`, no exit code. */
+export interface BoundedExecResult {
+  error: (Error & { code?: unknown; killed?: boolean; signal?: unknown }) | null
+  stdout: string
+  timedOut: boolean
+}
+
+/**
+ * execFile that settles at its deadline whether or not the child has exited.
+ * execFile's own `timeout` only sends a signal and calls back when the child is
+ * gone, so a `ps` blocked in the kernel held every daemon start for 17 minutes
+ * (2026-10-29, load 500+). At the deadline this answers a timeout, SIGKILLs the
+ * child and drops its late callback. Settles once, never rejects or throws.
+ * Self-contained: daemon-source.ts injects it as text (__BOUNDED_EXEC_FILE__).
+ */
+export function boundedExecFile<O extends { timeout: number }>(
+  execFileFn: (file: string, args: string[], options: O, callback: (error: Error | null, stdout: string) => void) => unknown,
+  file: string,
+  args: string[],
+  options: O,
+): Promise<BoundedExecResult> {
+  return new Promise((resolve) => {
+    let done = false
+    let timer: ReturnType<typeof setTimeout> | null = null
+    let child: unknown = null
+    const settle = (result: BoundedExecResult): void => {
+      if (done) return
+      done = true
+      if (timer) clearTimeout(timer)
+      resolve(result)
+    }
+    try {
+      child = execFileFn(file, args, options, (error, stdout) => settle({
+        error: error || null,
+        stdout: typeof stdout === 'string' ? stdout : String(stdout == null ? '' : stdout),
+        timedOut: false,
+      }))
+    } catch (err) {
+      settle({ error: err instanceof Error ? err : new Error(String(err)), stdout: '', timedOut: false })
+      return
+    }
+    const ms = options.timeout
+    if (done || !(ms > 0)) return
+    timer = setTimeout(() => {
+      timer = null
+      if (done) return
+      const kill = child ? (child as { kill?: unknown }).kill : undefined
+      if (typeof kill === 'function') {
+        try { kill.call(child, 'SIGKILL') } catch { /* already gone */ }
+      }
+      const error = Object.assign(new Error(file + ' did not exit within ' + ms + 'ms'), { code: 'ETIMEDOUT', killed: true, signal: 'SIGKILL' })
+      settle({ error, stdout: '', timedOut: true })
+    }, ms)
+  })
+}
+
 type ExecFileLike = (
   file: string,
   args: string[],
@@ -2449,13 +2505,10 @@ export function createAsyncStartTimeReader(opts: {
     const settleAll = (found: Map<number, string>): void => {
       for (const [pid, waiters] of batch) for (const w of waiters) w(found.get(pid) ?? null)
     }
-    try {
-      opts.execFileFn('ps', PS_START_TIME_ARGS([...batch.keys()]), {
-        encoding: 'utf-8', timeout: 5000, env: { ...process.env, LANG: 'C' },
-      }, (_error, stdout) => settleAll(parsePsStartTimes(typeof stdout === 'string' ? stdout : '')))
-    } catch {
-      settleAll(new Map())
-    }
+    // Bounded: a ps stuck in the kernel answers nothing at the deadline instead of holding every waiter.
+    void boundedExecFile(opts.execFileFn, 'ps', PS_START_TIME_ARGS([...batch.keys()]), {
+      encoding: 'utf-8', timeout: 5000, env: { ...process.env, LANG: 'C' },
+    }).then((result) => settleAll(parsePsStartTimes(result.stdout)))
   }
   return (pid: number): Promise<string | null> => {
     if (!Number.isSafeInteger(pid) || pid <= 1) return Promise.resolve(null)

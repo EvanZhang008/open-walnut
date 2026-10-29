@@ -793,8 +793,11 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
 
   // Handle session error (streaming done with error)
   useEvent('session:error', (data) => {
-    const { sessionId: sid, error } = data as { sessionId: string; error?: string };
+    const { sessionId: sid, error, retryAt } = data as { sessionId: string; error?: string; retryAt?: string };
     if (!sessionId || sid !== sessionId) return;
+    // A send the host did not answer in time waits on a clock: no turn ran or ended,
+    // and its bubble says why it waits (session:delivery-held), not an error row.
+    if (retryAt) return;
 
     flushPendingTextRaf();
     flushPendingThinking();

@@ -61,6 +61,7 @@ import { createHostServerSupervisor } from './host-server-core.js'
 import { createStreamRelay } from './stream-relay-core.js'
 import { createHostResume } from './host-resume-core.js'
 import { createCliOwner } from './cli-owner-core.js'
+import { boundedExecFile } from './daemon-core.js'
 import { createStreamCompact } from './stream-compact-core.js'
 import { createStreamFold } from './stream-fold-core.js'
 import { createHostStart } from './host-start-core.js'
@@ -305,6 +306,7 @@ export function getDaemonSource(): string {
     ['__LINE_WRITE_BEGUN__', lineWriteBegun.toString()],
     ['__LINE_WRITE_CUT__', lineWriteCut.toString()],
     ['__CREATE_REPLICA_LOGS__', createReplicaLogs.toString()],
+    ['__BOUNDED_EXEC_FILE__', boundedExecFile.toString()],
   ]
   // The tracker is constructed before the cron sidecar loads, so its prompt
   // limit is stamped as a literal (like the version), not read from the sidecar.
@@ -1831,6 +1833,9 @@ function readStartTimes(pids) {
     return err && typeof err.stdout === 'string' ? parsePsStartTimes(err.stdout) : out;
   }
 }
+// execFile that settles at its deadline even when the child never exits
+// (daemon-core.ts boundedExecFile, injected as text).
+const boundedExecFile = (__BOUNDED_EXEC_FILE__);
 let startTimeBatch = null;
 function readStartTimeAsync(pid) {
   if (!Number.isSafeInteger(pid) || pid <= 1) return Promise.resolve(null);
@@ -1844,11 +1849,10 @@ function readStartTimeAsync(pid) {
         const settleAll = function (found) {
           batch.forEach(function (waiters, p) { for (const w of waiters) w(found.get(p) || null); });
         };
-        try {
-          const env = Object.assign({}, process.env, { LANG: 'C' });
-          execFile('ps', psStartTimeArgs(Array.from(batch.keys())), { encoding: 'utf-8', timeout: 5000, env: env },
-            function (_err, stdout) { settleAll(parsePsStartTimes(stdout)); });
-        } catch { settleAll(new Map()); }
+        // Bounded: a ps stuck in the kernel answers nothing at the deadline instead of holding every waiter.
+        const env = Object.assign({}, process.env, { LANG: 'C' });
+        boundedExecFile(execFile, 'ps', psStartTimeArgs(Array.from(batch.keys())), { encoding: 'utf-8', timeout: 5000, env: env })
+          .then(function (result) { settleAll(parsePsStartTimes(result.stdout)); });
       }, 50);
     }
     const waiters = startTimeBatch.get(pid);
@@ -6641,12 +6645,11 @@ var cliOwner = (__CREATE_CLI_OWNER__)({
     try { process.kill(pid, 0); return true; } catch (error) { return !!error && error.code === 'EPERM'; }
   },
   startTimeOf: function (pid) { return readStartTimeAsync(pid); },
+  // Bounded: answers at the deadline even when ps is stuck in the kernel (2026-10-29).
   exec: function (file, args, timeoutMs) {
-    return new Promise(function (resolve) {
-      execFile(file, args, { encoding: 'utf-8', timeout: timeoutMs, maxBuffer: 64 * 1024 * 1024, env: Object.assign({}, process.env, { LANG: 'C' }) },
-        // Exit 1 is ps naming a pid that is gone; a timeout or a kill is a cut-short table: null.
-        function (error, stdout) { resolve(!error || (error.code === 1 && !error.killed && !error.signal) ? String(stdout || '') : null); });
-    });
+    return boundedExecFile(execFile, file, args, { encoding: 'utf-8', timeout: timeoutMs, maxBuffer: 64 * 1024 * 1024, env: Object.assign({}, process.env, { LANG: 'C' }) })
+      // Exit 1 is ps naming a pid that is gone; a timeout or a kill is a cut-short table: null.
+      .then(function (r) { return !r.error || (r.error.code === 1 && !r.error.killed && !r.error.signal) ? r.stdout : null; });
   },
   nonce: function () { return crypto.randomBytes(8).toString('hex'); },
 });

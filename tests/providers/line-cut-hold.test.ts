@@ -327,6 +327,7 @@ describe('delivered exactly once', () => {
       const ids = [...((event.data as { messageIds?: string[] }).messageIds ?? [])]
       if (event.name === EventNames.SESSION_MESSAGES_DELIVERED) seen.push(['delivered', ids])
       if (event.name === EventNames.SESSION_BATCH_FAILED) seen.push(['failed', ids])
+      if (event.name === EventNames.SESSION_DELIVERY_HELD) seen.push(['held', ids])
     })
     const h = harness({ reportsLifecycle: true })
     await enqueueMessage(SID, 'tracked message')
@@ -338,9 +339,10 @@ describe('delivered exactly once', () => {
     h.respawn(12346)
     h.daemonNext({ throws: new SendOutcomeUnknownError('no answer') })
     await h.internals.processNext(SID)
-    await vi.waitFor(() => expect(seen.map(([kind]) => kind)).toEqual(['delivered', 'failed']))
+    // Unanswered: told it waits (not a failed send), then delivered once the CLI names it.
+    await vi.waitFor(() => expect(seen.map(([kind]) => kind)).toEqual(['delivered', 'held']))
     h.lifecycle(h.writes[0].uuid!, 'started')
     await vi.waitFor(async () => expect(await rows()).toEqual([]))
-    expect(seen).toEqual([['delivered', [row.id]], ['failed', [row.id]], ['delivered', [row.id]]])
+    expect(seen).toEqual([['delivered', [row.id]], ['held', [row.id]], ['delivered', [row.id]]])
   })
 })

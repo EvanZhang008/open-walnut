@@ -42,6 +42,7 @@ interface UseSessionSendReturn {
   handleMessagesDelivered: (count: number, messageIds?: string[]) => void;
   handleBatchCompleted: (count: number, messageIds?: string[]) => void;
   handleBatchFailed: (messageIds: string[], error: string) => void;
+  handleDeliveryWaiting: (messageIds: string[]) => void;
   handleEditQueued: (sessionId: string, queueId: string, newText: string) => void;
   handleDeleteQueued: (sessionId: string, queueId: string) => void;
   addExternalQueued: (msg: { queueId: string; text: string; enqueuedAt?: string; sentBy?: 'person' | 'agent'; queuedText?: string }) => void;
@@ -414,15 +415,18 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
    *  row is already gone server-side, the server falls back to a fresh enqueue
    *  and answers with a new messageId, which is adopted below. */
   const retryFailed = useCallback((queueId: string, sessionId: string) => {
-    const failedMsg = msgsRef.current.find(m => m.queueId === queueId && m.status === 'failed');
+    // A waiting row (the host did not take it in time) is sent now the same way:
+    // the server re-drains that row; the bubble keeps its Queued state meanwhile.
+    const waiting = msgsRef.current.find(m => m.queueId === queueId && (m.status === 'pending' || m.status === 'received'));
+    const failedMsg = waiting ?? msgsRef.current.find(m => m.queueId === queueId && m.status === 'failed');
     if (!failedMsg) return;
 
     setSendError(null);
-    log.info('send', 'retrying', { sessionId, queueId });
+    log.info('send', waiting ? 'sending a waiting message now' : 'retrying', { sessionId, queueId });
 
     // Clear `parked` too: the server un-parks the row on this explicit retry, so
     // a second failure must render as an ordinary "Send failed", not a stale park.
-    setOptimisticMsgs((prev) => prev.map((m) =>
+    if (!waiting) setOptimisticMsgs((prev) => prev.map((m) =>
       m.queueId === queueId ? { ...m, status: 'pending' as const, failedError: undefined, parked: undefined } : m
     ));
 
@@ -489,6 +493,14 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
   // Backend processNext failed to deliver the batch (e.g. SSH/daemon down). Mark the
   // matching optimistic messages 'failed' (keep text + show Retry) instead of removing
   // them. The messages stay in the server-side pending queue, so Retry can re-send.
+  /** The server holds these rows on a clock: a bubble already shown delivered reads waiting again. */
+  const handleDeliveryWaiting = useCallback((messageIds: string[]) => {
+    const ids = new Set(messageIds);
+    setOptimisticMsgs((prev) => prev.some((m) => ids.has(m.queueId) && m.status === 'delivered')
+      ? prev.map((m) => (ids.has(m.queueId) && m.status === 'delivered' ? { ...m, status: 'received' as const } : m))
+      : prev);
+  }, []);
+
   const handleBatchFailed = useCallback((messageIds: string[], error: string) => {
     log.warn('send', 'batch failed', { count: messageIds.length, error });
     setSendError(error);
@@ -565,6 +577,7 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
     handleMessagesDelivered,
     handleBatchCompleted,
     handleBatchFailed,
+    handleDeliveryWaiting,
     handleEditQueued,
     handleDeleteQueued,
     addExternalQueued,

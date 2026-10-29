@@ -72,7 +72,7 @@ import type { DaemonTaskState } from './daemon-connection.js'
 import { checkCwdExists, CwdMissingError } from './cwd-check.js'
 import { isWakeupArmed } from './daemon-fold.js'
 import { noteSuppressedErrorReason } from '../core/session-snapshot-gate.js'
-import { BudgetCheckingError, BudgetPausedError, classifyDeliveryFailure, isDaemonCommandOutcomeUnknown, SendHeldError, SendOutcomeUnknownError, SessionHeldElsewhereError } from './delivery-failure.js'
+import { BudgetCheckingError, BudgetPausedError, classifyDeliveryFailure, isDaemonCommandOutcomeUnknown, isSlowHostFailure, SendHeldError, SendOutcomeUnknownError, SessionHeldElsewhereError } from './delivery-failure.js'
 import { describeClaudeLaunchFailure } from './host-runtime-core.js'
 import { AcpSession, emitAcpIdentityBoundary, sessionMcpServerToAcp, splitAcpModelId } from './acp-session.js'
 import { engineCaps, isAcpEngine, resolveEngine } from '../core/agents/engine-registry.js'
@@ -9265,7 +9265,8 @@ type HeldSendRetry = {
 export function slowHostReason(why: 'start' | 'send'): string {
   return why === 'start'
     ? 'Not sent yet: the computer running this session did not start it in time (it may be very busy). Your message is kept and Walnut tries again by itself.'
-    : 'Not sent yet: the computer running this session did not confirm it got your message in time (it may be very busy). Your message is kept and Walnut tries again by itself.'
+    // The line may already be in the CLI: the next try asks the host first, never sends it twice.
+    : 'Not confirmed yet: the computer running this session did not say in time whether it got your message (it may be very busy). Your message is kept and Walnut asks again by itself.'
 }
 
 export class SessionRunner {
@@ -9296,7 +9297,7 @@ export class SessionRunner {
   /** Sends the host's budget had not decided yet ('checking'), sent again on a clock (armBudgetRetry). */
   private budgetRetries = new Map<string, { timer?: ReturnType<typeof setTimeout>; tries: number }>()
   /** Sends the host did not answer in time, sent again on a clock (armSlowHostRetry). */
-  private slowHostRetries = new Map<string, { timer?: ReturnType<typeof setTimeout>; tries: number; at: number }>()
+  private slowHostRetries = new Map<string, { timer?: ReturnType<typeof setTimeout>; tries: number; at: number; why: 'start' | 'send' }>()
   /** Unregisters this runner from reclaimed-line announcements (line-consumption.ts). */
   private stopReclaimListener?: () => void
   /** Explicit ACP interrupt barrier. A cancelled turn may emit its terminal
@@ -12272,7 +12273,7 @@ export class SessionRunner {
   private settleResumeFailure(sessionId: string, msgs: QueuedMessage[], err: Error): void {
     const verdict = classifyDeliveryFailure(err)
     // The host did not answer in time: the rows wait for a clock, not for a Retry.
-    const slow = verdict.kind === 'transient' && !(err instanceof BudgetCheckingError) && isDaemonCommandOutcomeUnknown(err)
+    const slow = verdict.kind === 'transient' && !(err instanceof BudgetCheckingError) && isSlowHostFailure(err)
     this.clearActiveProcessing(sessionId, { kind: 'error', message: slow ? slowHostReason('start') : err.message })
     log.session.warn(`resume spawn failed — ${verdict.kind === 'permanent' ? 'parking batch' : 'reverting batch to pending'}`, {
       sessionId, error: err.message, failureCode: verdict.code,
@@ -12974,7 +12975,7 @@ export class SessionRunner {
       return
     }
     const at = this.armHeldSendRetry(sessionId, left)
-    if (!isDaemonCommandOutcomeUnknown(err)) {
+    if (!isSlowHostFailure(err)) {
       reportBatchFailed(sessionId, left.map((m) => m.id), err.message)
       return
     }
@@ -12982,6 +12983,7 @@ export class SessionRunner {
     // the pipe lives, else the slow-host one. Said as a wait, never "Send failed".
     if (at === null) { this.armSlowHostRetry(sessionId, left.map((m) => m.id), 'send'); return }
     const reason = slowHostReason('send')
+    markUnconfirmed(sessionId, left.map((m) => m.id))
     noteHeld(sessionId, left.map((m) => m.id), reason)
     bus.emit(EventNames.SESSION_DELIVERY_HELD, {
       sessionId, messageIds: left.map((m) => m.id), reason, retryAt: new Date(at).toISOString(),
@@ -13025,7 +13027,8 @@ export class SessionRunner {
    * the next try is, with Send now beside it. Returns the next try's time.
    */
   private armSlowHostRetry(sessionId: string, ids: readonly string[], why: 'start' | 'send'): number {
-    const entry = this.slowHostRetries.get(sessionId) ?? { tries: 0, at: 0 }
+    const entry = this.slowHostRetries.get(sessionId) ?? { tries: 0, at: 0, why }
+    entry.why = why
     if (!entry.timer && !this.acpDestroyed) {
       const delay = Math.min(300_000, 15_000 * 2 ** Math.min(entry.tries, 5))
       entry.tries += 1
@@ -13035,18 +13038,35 @@ export class SessionRunner {
         if (this.acpDestroyed || this.slowHostRetries.get(sessionId) !== entry) return
         log.session.info('sending again after the host did not answer in time', { sessionId, attempt: entry.tries })
         this.deliverRest(sessionId)
+        // A delivery that returned early (a stop request, a spawn still in flight)
+        // arms nothing and says nothing: look again, so the rows never sit under a
+        // "next try" that already passed. A row now waiting for something else
+        // (a permission prompt) is left to that wait.
+        const look = setTimeout(() => { void this.slowHostLookAgain(sessionId, entry) }, 2_000)
+        look.unref?.()
       }, delay)
       entry.timer.unref?.()
       this.slowHostRetries.set(sessionId, entry)
     }
     if (ids.length > 0) {
       const reason = slowHostReason(why)
+      // Told it is not delivered: the next proof that the CLI has it reports it again.
+      markUnconfirmed(sessionId, [...ids])
       noteHeld(sessionId, [...ids], reason)
       bus.emit(EventNames.SESSION_DELIVERY_HELD, {
         sessionId, messageIds: [...ids], reason, retryAt: new Date(entry.at).toISOString(),
       }, ['main-ai'], { source: 'session-runner' })
     }
     return entry.at
+  }
+
+  private async slowHostLookAgain(sessionId: string, entry: { timer?: ReturnType<typeof setTimeout>; why: 'start' | 'send' }): Promise<void> {
+    if (this.acpDestroyed || this.slowHostRetries.get(sessionId) !== entry || entry.timer || this.activeProcessing.has(sessionId)) return
+    const held = heldRows(sessionId)
+    const reason = slowHostReason(entry.why)
+    const ids = (await getQueue(sessionId)).filter((m) => m.status === 'pending' && held?.get(m.id) === reason).map((m) => m.id)
+    if (this.slowHostRetries.get(sessionId) !== entry || entry.timer || this.activeProcessing.has(sessionId)) return
+    if (ids.length > 0) this.armSlowHostRetry(sessionId, ids, entry.why)
   }
 
   private cancelBudgetRetry(sessionId: string): void {

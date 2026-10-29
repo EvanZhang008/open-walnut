@@ -242,6 +242,8 @@ interface SessionChatHistoryProps {
   onMessagesDelivered?: (count: number, messageIds?: string[]) => void;
   onBatchCompleted?: (count: number, messageIds?: string[]) => void;
   onBatchFailed?: (messageIds: string[], error: string) => void;
+  /** The server holds these rows on a clock (the host did not take them in time): not delivered. */
+  onDeliveryWaiting?: (messageIds: string[]) => void;
   onEditQueued?: (queueId: string, newText: string) => void;
   onDeleteQueued?: (queueId: string) => void;
   onAgentQueued?: (msg: { queueId: string; text: string; enqueuedAt?: string; sentBy?: 'person' | 'agent'; queuedText?: string }) => void;
@@ -437,6 +439,15 @@ function buildTimeline(
 const NEAR_BOTTOM_PX = 80;  // px from bottom to consider "at bottom"
 /** The note a held queued message shows when its hold named no reason. */
 const HELD_DEFAULT_REASON = 'Waiting to confirm the previous message';
+/** The server's words for a message the host did not take in time (slowHostReason). */
+const isSlowHostReason = (reason: string): boolean => reason.startsWith('Not sent yet:') || reason.startsWith('Not confirmed yet:');
+/** "Next try at 5:41 PM." (or "in a moment" once that time has passed). */
+function nextTryLabel(iso: string): string {
+  const at = Date.parse(iso);
+  if (!Number.isFinite(at)) return '';
+  if (at <= Date.now()) return 'Trying again now.';
+  return `Next try at ${new Date(at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: at - Date.now() < 60_000 ? '2-digit' : undefined })}.`;
+}
 /** How long after real input inside the transcript its growth still counts as the
  *  reader's own doing (see the follower below). A click's layout lands within a
  *  frame or two, so this only has to cover a gesture, not a thought. */
@@ -486,7 +497,7 @@ function ownRowsOf(queuedSig: string, tree: ThreadTree): { sentKeys: Set<string>
   return { sentKeys, queuedKeys, unsentKeys };
 }
 
-export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, engine, phase, initialPrompt, sessionCwd, sessionHost, optimisticMessages, onMessagesDelivered, onBatchCompleted, onBatchFailed, onEditQueued, onDeleteQueued, onAgentQueued, onRetryFailed, onDismissFailed, onTaskClick, onSessionClick, onFileOpen, onStreamingChange, scrollToBottomNonce, onRequestComposerFocus, onQuoteInChat, chatLane }: SessionChatHistoryProps) {
+export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, engine, phase, initialPrompt, sessionCwd, sessionHost, optimisticMessages, onMessagesDelivered, onBatchCompleted, onBatchFailed, onDeliveryWaiting, onEditQueued, onDeleteQueued, onAgentQueued, onRetryFailed, onDismissFailed, onTaskClick, onSessionClick, onFileOpen, onStreamingChange, scrollToBottomNonce, onRequestComposerFocus, onQuoteInChat, chatLane }: SessionChatHistoryProps) {
   // Dev-only render counter per session: lets a browser test prove a hot
   // interaction (the pointer over a question mark) never re-renders this tree.
   if (import.meta.env.DEV && typeof window !== 'undefined') {
@@ -536,6 +547,11 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // why (id → reason). Cleared when they deliver or fail; a reloaded panel reads
   // the hold back from the queue (OptimisticMessage.heldReason).
   const [heldIds, setHeldIds] = useState<ReadonlyMap<string, string>>(() => new Map());
+  /** Held rows Walnut sends again by itself: when (session:delivery-held retryAt). */
+  const [heldRetryAt, setHeldRetryAt] = useState<ReadonlyMap<string, string>>(() => new Map());
+  /** Rows Send now went out for: no second press until the server says more (a second
+   *  press after the first delivered would enqueue the words again). */
+  const [sentNow, setSentNow] = useState<ReadonlySet<string>>(() => new Set());
   // The pinned Initial Prompt renders through the same markdown path as every
   // other user bubble, so its task pills and file links need the same delegate.
   const handleInitialPromptClick = useEntityClickHandler(onTaskClick, onSessionClick, onFileOpen, sessionHost, sessionId);
@@ -905,26 +921,38 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // 3. Turn completes → 'session:batch-completed' → removed (id-first), refresh history
 
   const releaseHeld = useCallback((ids?: readonly string[]) => {
-    setHeldIds((prev) => {
+    const drop = (prev: ReadonlyMap<string, string>): ReadonlyMap<string, string> => {
       if (prev.size === 0) return prev;
       if (!ids) return new Map();
       const next = new Map(prev);
       for (const id of ids) next.delete(id);
       return next.size === prev.size ? prev : next;
-    });
+    };
+    setHeldIds(drop);
+    setHeldRetryAt(drop);
   }, []);
 
   // A queued message waits for the host to confirm the one before it.
   useEvent('session:delivery-held', (data) => {
-    const d = data as { sessionId?: string; messageIds?: string[]; reason?: string };
+    const d = data as { sessionId?: string; messageIds?: string[]; reason?: string; retryAt?: string };
     if (d.sessionId !== sessionId || !Array.isArray(d.messageIds) || d.messageIds.length === 0) return;
-    log.info('stream', `delivery held ids=${d.messageIds.join(',')} reason=${d.reason ?? ''}`, { sessionId });
+    log.info('stream', `delivery held ids=${d.messageIds.join(',')} reason=${d.reason ?? ''} retryAt=${d.retryAt ?? ''}`, { sessionId });
     const reason = d.reason || HELD_DEFAULT_REASON;
     setHeldIds((prev) => {
       const next = new Map(prev);
       for (const id of d.messageIds!) next.set(id, reason);
       return next;
     });
+    setHeldRetryAt((prev) => {
+      const next = new Map(prev);
+      for (const id of d.messageIds!) {
+        if (d.retryAt) next.set(id, d.retryAt);
+        else next.delete(id);
+      }
+      return next;
+    });
+    if (d.retryAt) onDeliveryWaiting?.(d.messageIds);
+    setSentNow((prev) => (d.messageIds!.some((id) => prev.has(id)) ? new Set([...prev].filter((id) => !d.messageIds!.includes(id))) : prev));
   });
 
   // Messages delivered to CLI: transition from grey (pending) to normal (delivered).
@@ -4283,9 +4311,25 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
         {queuedBehind && (
           <div className="thread-queue-note" role="status">Waits for “{answeringTitle}” to finish.</div>
         )}
-        {(heldIds.has(m.queueId) || !!m.heldReason) && (m.status === 'pending' || m.status === 'received') && (
-          <div className="thread-queue-note session-msg-held-note" role="status">{heldIds.get(m.queueId) ?? m.heldReason ?? HELD_DEFAULT_REASON}</div>
-        )}
+        {(heldIds.has(m.queueId) || !!m.heldReason) && (m.status === 'pending' || m.status === 'received') && (() => {
+          const reason = heldIds.get(m.queueId) ?? m.heldReason ?? HELD_DEFAULT_REASON;
+          const retryAt = heldRetryAt.get(m.queueId);
+          // A message the host did not take in time: Walnut sends it again by
+          // itself, and Send now does it at once (the same row, no copy).
+          const clocked = !!retryAt || isSlowHostReason(reason);
+          return (
+            <div className="thread-queue-note session-msg-held-note" role="status">
+              {reason}{retryAt ? ` ${nextTryLabel(retryAt)}` : ''}
+              {clocked && !sentNow.has(m.queueId) && (
+                <button type="button" className="session-msg-send-now-btn" onClick={() => {
+                  setSentNow((prev) => new Set(prev).add(m.queueId));
+                  onRetryFailed?.(m.queueId);
+                }}>Send now</button>
+              )}
+              {clocked && sentNow.has(m.queueId) && <span className="session-msg-send-now-sent"> Sending…</span>}
+            </div>
+          );
+        })()}
         <OptimisticImagePreviews images={m.images} />
         <DeliveryMetaLine status={m.status} timestamp={m.timestamp} turnRunning={isStreaming} onRetry={() => onRetryFailed?.(m.queueId)} />
         {m.status === 'received' && (

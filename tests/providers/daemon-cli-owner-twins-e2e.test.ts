@@ -83,12 +83,12 @@ const received = (): Array<{ pid: number; content: string }> => {
   return fs.existsSync(f) ? fs.readFileSync(f, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)) : []
 }
 
-async function boot(twin: Twin, name: string): Promise<Daemon> {
+async function boot(twin: Twin, name: string, binDirs: string[] = []): Promise<Daemon> {
   const { daemonDir, streams } = dirsFor(name)
   const env: Record<string, string | undefined> = {
     ...process.env,
     SHELL: '/bin/sh',
-    PATH: guardedPath([], '/usr/bin:/bin'),
+    PATH: guardedPath(binDirs, '/usr/bin:/bin'),
     HOME: path.join(root, 'home'),
     CLAUDE_CONFIG_DIR: undefined,
     WALNUT_DAEMON_DIR: daemonDir,
@@ -341,5 +341,48 @@ describe.each(PAIRS)('cli-owner-v1: $name', ({ a: twinA, b: twinB }) => {
     await sampler
     expect(second.pid).not.toBe(first.pid)
     expect(most).toBe(1)
+  }, 180_000)
+})
+
+/**
+ * 2026-10-29: at load 500+ every `ps` on the Mac hung for about 17 minutes, and
+ * execFile's timeout only signals and waits for the exit, so each start waited
+ * on the owner scan that long (the server gave up at 30 s). The stand-in `ps`
+ * below ignores SIGTERM and sleeps for the scan's arguments only; the start must
+ * answer once the scan's own deadline (8 s) has passed, skipping the scan.
+ */
+const HUNG_PS = `#!/bin/sh
+if [ "$1" = "-A" ] && [ "$2" = "-ww" ] && [ "$4" = "pid=,pgid=,args=" ]; then
+  echo "$$" >> "$WALNUT_TEST_HUNG_PS_LOG"
+  trap '' TERM
+  exec /bin/sleep 90
+fi
+exec /bin/ps "$@"
+`
+
+describe.each([SOURCE, ...(STANDALONE_TWIN ? [STANDALONE_TWIN] : [])])('cli-owner-v1 with a ps that never exits: $name', (twin) => {
+  it('start answers within the scan deadline and the stuck ps is killed', async () => {
+    newRoot()
+    const bin = path.join(root, 'hung-bin')
+    fs.mkdirSync(bin)
+    fs.writeFileSync(path.join(bin, 'ps'), HUNG_PS, { mode: 0o755 })
+    const log = path.join(root, 'hung-ps.log')
+    process.env.WALNUT_TEST_HUNG_PS_LOG = log
+    let a: Daemon
+    try { a = await boot(twin, 'a', [bin]) } finally { delete process.env.WALNUT_TEST_HUNG_PS_LOG }
+    const sid = 'abababab-0000-4000-8000-00000000000a'
+    const began = Date.now()
+    const reply = await start(a, sid, '', {})
+    track(reply)
+    const took = Date.now() - began
+    expect(reply).toMatchObject({ ok: true })
+    // Without the bound this waits for the 90 s sleep (and the rpc gives up at 40 s).
+    expect(took).toBeLessThan(30_000)
+    const hung = fs.existsSync(log) ? fs.readFileSync(log, 'utf8').split('\n').filter(Boolean).map(Number) : []
+    expect(hung.length).toBeGreaterThan(0)
+    for (const pid of hung) {
+      expect(pid).toBeGreaterThan(1)
+      expect(await waitFor(() => { try { process.kill(pid, 0); return false } catch { return true } }, 5000)).toBe(true)
+    }
   }, 180_000)
 })

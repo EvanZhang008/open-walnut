@@ -34,6 +34,7 @@ import {
   defaultReadStartTime,
   defaultReadStartTimes,
   createAsyncStartTimeReader,
+  boundedExecFile,
   shouldAutoRespond,
   buildControlResponse,
   decideBridgeRestart,
@@ -2717,11 +2718,13 @@ const cliOwner = createCliOwner({
     try { process.kill(pid, 0); return true } catch (error) { return (error as NodeJS.ErrnoException).code === 'EPERM' }
   },
   startTimeOf: (pid) => cliOwnerStartTime(pid),
-  exec: (file, args, timeoutMs) => new Promise((resolve) => {
-    execFile(file, args, { encoding: 'utf-8', timeout: timeoutMs, maxBuffer: 64 * 1024 * 1024, env: { ...process.env, LANG: 'C' } },
-      // Exit 1 is ps naming a pid that is gone; a timeout or a kill is a cut-short table: null.
-      (error, stdout) => resolve(!error || ((error as { code?: unknown }).code === 1 && !error.killed && !error.signal) ? String(stdout ?? '') : null))
-  }),
+  // Bounded: answers at the deadline even when ps is stuck in the kernel (2026-10-29).
+  exec: (file, args, timeoutMs) => boundedExecFile(
+    (f, a, options, callback) => execFile(f, a, options, (error, stdout) => callback(error, String(stdout ?? ''))),
+    file, args, { encoding: 'utf-8' as const, timeout: timeoutMs, maxBuffer: 64 * 1024 * 1024, env: { ...process.env, LANG: 'C' } },
+  ).then(({ error, stdout }) =>
+    // Exit 1 is ps naming a pid that is gone; a timeout or a kill is a cut-short table: null.
+    !error || (error.code === 1 && !error.killed && !error.signal) ? stdout : null),
   nonce: () => crypto.randomBytes(8).toString('hex'),
 })
 

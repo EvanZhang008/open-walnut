@@ -5035,10 +5035,13 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     // Route session errors to Notifications. Session panels retain their own
     // contextual error/retry state; the general chat must remain conversational.
     if (event.name === 'session:error') {
-      const { error, taskId, sessionId, errorKind, parked } = eventData<'session:error'>(event)
+      const { error, taskId, sessionId, errorKind, parked, retryAt } = eventData<'session:error'>(event)
       const isDeliveryFailure = errorKind === 'delivery_failed'
       const { inboxOwnsStartFailure } = await import('../core/human-inbox/item-start-notification.js')
       let shouldPublish = !(taskId && !isDeliveryFailure && await inboxOwnsStartFailure(taskId, sessionId).catch(() => false))
+      // A send the host did not answer in time goes out again by itself, and its
+      // bubble says so: nothing for the user to do, so no card.
+      if (isDeliveryFailure && retryAt) shouldPublish = false
 
       // delivery_failed = connectivity status, not a turn outcome. The session is
       // still valid and the message batch is safely back in 'pending'. Avoid

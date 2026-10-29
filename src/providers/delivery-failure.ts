@@ -92,6 +92,18 @@ export function isPermanentDeliveryFailure(err: unknown): boolean {
  */
 const CONN_OUTCOME_UNKNOWN = /daemon command timeout|daemon command lost|not connected|connection to .+ failed \d+s ago/i;
 
+/**
+ * The host is up but did not answer in time: a daemon command that timed out or
+ * lost its socket, or a send whose answer never came. Not a host that is down or
+ * refused the login ("not connected", "Connection to … failed"): those keep their
+ * own words and their Retry. The runner sends such rows again on a clock.
+ */
+const HOST_SLOW = /daemon command timeout|daemon command lost/i;
+export function isSlowHostFailure(err: unknown): boolean {
+  if (err instanceof SendOutcomeUnknownError) return true;
+  return err instanceof Error && HOST_SLOW.test(err.message);
+}
+
 export function isDaemonCommandOutcomeUnknown(err: unknown): boolean {
   if (err instanceof SendOutcomeUnknownError) return true;
   if (!(err instanceof Error)) return false;

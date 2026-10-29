@@ -424,11 +424,14 @@ function registerGlobalListeners(): void {
 
   // ── error (streaming done with error) ──
   onSessionEvent('session:error', (data: unknown) => {
-    const { sessionId: sid, error } = data as {
+    const { sessionId: sid, error, retryAt } = data as {
       sessionId: string;
       error?: string;
+      retryAt?: string;
     };
     if (!sid || !trackedSessions.has(sid)) return;
+    // Waiting on a clock (the host did not answer in time): no turn ran, no error row.
+    if (retryAt) return;
     const state = ensureState(sid);
     flushText(state);
     state.isStreaming = false;

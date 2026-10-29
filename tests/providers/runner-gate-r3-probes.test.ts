@@ -145,7 +145,9 @@ describe('Q4: an unconfirmed mid-turn line that the CLI later starts', () => {
     const [row] = await getQueue(SID)
     await h.internals.injectMidTurn(SID)
     await settle(200)
-    expect(named(h, EventNames.SESSION_BATCH_FAILED, row.id)).toHaveLength(1)
+    // Unanswered is a wait the user is told about, not a failed send (slow-host-delivery.test.ts).
+    expect(named(h, EventNames.SESSION_DELIVERY_HELD, row.id)).toHaveLength(1)
+    expect(named(h, EventNames.SESSION_BATCH_FAILED, row.id)).toHaveLength(0)
     h.lifecycle(h.writes[0].uuid!, 'started')
     await settle(200)
     const late = named(h, EventNames.SESSION_MESSAGES_DELIVERED, row.id).map((e) => e.data)
