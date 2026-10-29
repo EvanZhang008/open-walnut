@@ -192,6 +192,135 @@ export function definePageFindCases(engine: string): void {
     await expect.poll(async () => (await paint(page)).sel).toBe(0);
   });
 
+  // Reported 2026-10-29: "I select a word, it lights up; I deselect it, and the
+  // highlight is still there." A re-render that rewrites the text under a
+  // selection (React 19 writes innerHTML whenever the prop object changes) makes
+  // both engines drop the selection WITHOUT a selectionchange event, so an echo
+  // that trusts the last event outlives the selection.
+  test(`${engine}: every way a selection ends clears its echo, and a new one moves it`, async ({ page }) => {
+    const errors: string[] = [];
+    page.on('pageerror', (e) => errors.push(e.message));
+    await openSession(page);
+    await readerScrollUp(page, 600);
+    const exact = (w: string) => page.locator(historySelector).evaluate((el, w) => {
+      const t = (el as HTMLElement).innerText;
+      let n = 0;
+      for (let i = t.indexOf(w); i !== -1; i = t.indexOf(w, i + w.length)) n++;
+      return n;
+    }, w);
+    const selected = () => page.evaluate(() => getSelection()?.toString() ?? '');
+    // A word on screen, by coordinates, so the gesture is a real mouse one.
+    const wordAt = (w: string) => page.locator(historySelector).evaluate((el, w) => {
+      const box = el.getBoundingClientRect();
+      const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+      for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+        if (!n.parentElement?.closest('.markdown-body p')) continue;
+        const at = (n as Text).data.indexOf(w);
+        if (at < 0) continue;
+        const r = document.createRange();
+        r.setStart(n, at);
+        r.setEnd(n, at + w.length);
+        const b = r.getBoundingClientRect();
+        if (b.top < box.top + 120 || b.bottom > box.bottom - 60 || !b.width) continue;
+        // Blank space: right of the paragraph's last line, with no text under it.
+        const whole = document.createRange();
+        whole.selectNodeContents(n.parentElement!);
+        const rects = whole.getClientRects();
+        const last = rects[rects.length - 1]!;
+        const blank = { x: last.right + 40, y: last.top + last.height / 2 };
+        if (blank.x > box.right - 20 || document.elementFromPoint(blank.x, blank.y) !== n.parentElement) continue;
+        return { x: b.left + b.width / 2, y: b.top + b.height / 2, blank };
+      }
+      throw new Error(`no visible ${w}`);
+    }, w);
+    const selectWord = async (w: string) => {
+      const p = await wordAt(w);
+      await page.mouse.dblclick(p.x, p.y);
+      await expect.poll(selected).toBe(w);
+      // Paint and text read in one turn: a stream between two reads would skew it.
+      await expect.poll(() => page.locator(historySelector).evaluate((el, w) => {
+        const t = (el as HTMLElement).innerText;
+        let n = 0;
+        for (let i = t.indexOf(w); i !== -1; i = t.indexOf(w, i + w.length)) n++;
+        const reg = (window as unknown as { CSS: { highlights: Map<string, { size: number }> } }).CSS.highlights;
+        return (reg.get('walnut-page-selmatch')?.size ?? 0) - n;
+      }, w)).toBe(0);
+      expect((await paint(page)).sel).toBeGreaterThan(1);
+      return p;
+    };
+    const cleared = async () => {
+      await expect.poll(selected).toBe('');
+      await expect.poll(async () => (await paint(page)).sel).toBe(0);
+    };
+
+    // A click on blank space beside the text.
+    let p = await selectWord(WORD);
+    await page.mouse.click(p.blank.x, p.blank.y);
+    await cleared();
+
+    // A single click inside the selected word itself (the browser collapses it on mouseup).
+    p = await selectWord(WORD);
+    await page.mouse.click(p.x, p.y);
+    await cleared();
+
+    // Esc leaves the selection alone (no engine clears one on Esc), so the echo
+    // stays exactly as long as the selection does.
+    await selectWord(WORD);
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(300);
+    expect(await selected()).toBe(WORD);
+    expect((await paint(page)).sel).toBe(await exact(WORD));
+
+    // Selecting another word moves the echo onto that word's copies.
+    await selectWord('crossed');
+    expect(await paint(page)).toMatchObject({ sel: await exact('crossed') });
+    const pill = page.locator('.quote-pin-pill');
+    await expect(pill).toBeVisible();
+
+    // A re-render rewrites the text under the selection: the engine drops the
+    // selection with no event, and the echo (and the quote pill over the
+    // passage) must go with it, and stay gone while more text arrives.
+    await page.locator(historySelector).evaluate(() => {
+      const body = getSelection()!.anchorNode!.parentElement!.closest('.markdown-body')!;
+      body.innerHTML = body.innerHTML;
+    });
+    await cleared();
+    await expect(pill).toHaveCount(0);
+    await page.locator(historySelector).evaluate((el) => {
+      const p = document.createElement('p');
+      p.textContent = 'crossed again, crossed twice';
+      el.querySelector('.markdown-body')!.appendChild(p);
+    });
+    await page.waitForTimeout(300);
+    expect((await paint(page)).sel).toBe(0);
+
+    // While a reply streams (its message re-rendered every 50 ms): a held
+    // selection keeps its echo, a new one still gets its own within the
+    // debounce, and a click on blank space clears it.
+    await page.locator(historySelector).evaluate((el, w) => {
+      const bodies = el.querySelectorAll('.markdown-body');
+      const box = document.createElement('div');
+      bodies[bodies.length - 1]!.appendChild(box);
+      let i = 0;
+      (window as unknown as { __pfStream: number }).__pfStream = window.setInterval(() => {
+        i++;
+        box.innerHTML = Array.from({ length: i % 40 }, (_, k) => `<p>streamed ${w} delta ${k}</p>`).join('');
+      }, 50);
+    }, WORD);
+    p = await selectWord(WORD);
+    await page.waitForTimeout(800);
+    expect(await selected()).toBe(WORD);
+    expect((await paint(page)).sel).toBeGreaterThan(1);
+    await selectWord('crossed');
+    p = await wordAt('crossed');
+    await page.mouse.click(p.blank.x, p.blank.y);
+    await cleared();
+    await page.waitForTimeout(500);
+    expect((await paint(page)).sel).toBe(0);
+    await page.evaluate(() => window.clearInterval((window as unknown as { __pfStream: number }).__pfStream));
+    expect(errors).toEqual([]);
+  });
+
   test(`${engine}: off a session the chord searches the page, and a second chord switches scope`, async ({ page }) => {
     await openSession(page);
     // Last click on the task panel's toolbar (not a session): the page is the scope.

@@ -395,6 +395,26 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk, on
     };
   }, [evaluate, hold, dismiss, held, reanchor, containerRef]);
 
+  // A re-render that rewrites the text under the selection (React 19 writes
+  // innerHTML whenever the prop object changes) makes Chromium and WebKit drop the
+  // selection with NO selectionchange, which left the pill floating over a passage
+  // nothing selected any more (2026-10-29, with the page's selection echo). That
+  // rewrite is a mutation in the timeline, so while an unheld pill is up a
+  // mutation re-checks the live selection; a held passage has its own repair.
+  const pillUp = !!state;
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!pillUp || !container || typeof MutationObserver === 'undefined') return;
+    const mo = new MutationObserver(() => {
+      if (pressedPill.current || held.heldRef.current) return;
+      const sel = window.getSelection();
+      if (sel && !sel.isCollapsed && sel.rangeCount) return;
+      setState(null);
+    });
+    mo.observe(container, { childList: true, subtree: true, characterData: true });
+    return () => mo.disconnect();
+  }, [pillUp, containerRef, held]);
+
   const pin = useCallback(() => {
     if (!state?.msgId) return;
     log.info('session', 'pinning a quoted passage', {

@@ -236,6 +236,13 @@ export function PageFind() {
  * that chat, elsewhere across the page. The walk is kept while nothing changes;
  * while a selection is held, mutations under its scope (a streaming reply)
  * repaint it (makeRepaintScheduler), and nothing is observed without one.
+ *
+ * The live selection is the only truth, never the last selectionchange: a
+ * re-render that rewrites the text under a selection (React 19 writes innerHTML
+ * whenever the prop object changes) makes Chromium and WebKit drop the selection
+ * with no event at all, and an echo painted from the remembered word then stayed
+ * on screen with nothing selected (reported 2026-10-29). That rewrite is itself a
+ * mutation under the scope, so the observer re-reads the selection first.
  */
 function useSelectionMatches(): void {
   useEffect(() => {
@@ -244,19 +251,53 @@ function useSelectionMatches(): void {
     let needle = '';
     let undo: (() => void) | null = null;
     let timer = 0;
+    /** The selection's boundaries when `needle` was read from it. */
+    let held: { an: Node | null; ao: number; fn: Node | null; fo: number } = { an: null, ao: 0, fn: null, fo: 0 };
+    const remember = (sel: Selection | null) => {
+      held = { an: sel?.anchorNode ?? null, ao: sel?.anchorOffset ?? 0, fn: sel?.focusNode ?? null, fo: sel?.focusOffset ?? 0 };
+    };
     const clear = () => { undo?.(); undo = null; };
     const repaint = makeRepaintScheduler(() => paint());
-    const obs = new MutationObserver(() => {
+    const obs = new MutationObserver((records) => {
       index = null;
-      if (needle) repaint.kick();
+      if (!needle) return;
+      // Cheap, so it runs on every batch, ahead of the throttled repaint: a
+      // selection the mutation dropped clears now. Text rewritten inside a
+      // boundary node keeps its offsets, so that one is read in full.
+      const rewrote = records.some((r) => r.type === 'characterData' && (r.target === held.an || r.target === held.fn));
+      if (!resync(rewrote)) repaint.kick();
     });
+    const setRoot = (next: Element | null) => {
+      if (next === root) return;
+      obs.disconnect();
+      index = null;
+      root = next;
+      if (root) obs.observe(root, { subtree: true, childList: true, characterData: true });
+    };
+    /** Does the live selection still say `needle`? If not, take the tint off now:
+     *  nothing selected stops the echo, another word waits for the pending (or a
+     *  new) debounce, which a stream of mutations must not keep pushing back. */
+    const resync = (full = false): boolean => {
+      const sel = window.getSelection();
+      // Same boundary nodes and offsets, still in the page: the same selection.
+      // Checked first because Selection.toString lays the page out, and this
+      // runs on every mutation batch of a streaming reply.
+      if (!full && sel && !sel.isCollapsed && sel.anchorNode === held.an && sel.anchorOffset === held.ao
+        && sel.focusNode === held.fn && sel.focusOffset === held.fo && held.an?.isConnected && held.fn?.isConnected) return false;
+      const live = selectionNeedle(sel);
+      if (live === needle) { remember(sel); return false; }
+      clear();
+      if (!live) { needle = ''; setRoot(null); }
+      else if (!timer) onSelectionChange();
+      return true;
+    };
     const paint = () => {
       clear();
-      if (!needle || !root) return;
+      if (!needle || !root || resync()) return;
       index ??= buildFindIndex(root);
       undo = paintSelectionMatches(index, needle);
     };
-    const onSelectionChange = () => {
+    function onSelectionChange() {
       // Drop the old tint at once (a click that clears the selection clears it
       // now); recompute only once a drag settles.
       clear();
@@ -265,18 +306,13 @@ function useSelectionMatches(): void {
         timer = 0;
         const sel = window.getSelection();
         needle = selectionNeedle(sel);
+        remember(sel);
         const anchor = sel?.anchorNode;
         const at = anchor instanceof Element ? anchor : anchor?.parentElement;
-        const next = needle ? (at?.closest('.session-history') ?? document.body) : null;
-        if (next !== root) {
-          obs.disconnect();
-          index = null;
-          root = next;
-          if (root) obs.observe(root, { subtree: true, childList: true, characterData: true });
-        }
+        setRoot(needle ? (at?.closest('.session-history') ?? document.body) : null);
         paint();
       }, 120);
-    };
+    }
     document.addEventListener('selectionchange', onSelectionChange);
     return () => {
       document.removeEventListener('selectionchange', onSelectionChange);
