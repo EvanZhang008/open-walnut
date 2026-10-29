@@ -577,7 +577,9 @@ const RULES: Rule[] = [
     id: 'plugin-push-failed',
     category: (i) => pluginNameOf(i),
     match: (i) => !!pluginNameOf(i)
-      && (/^failed to push task\b/i.test(i.title) || /^pushtask failed/i.test(i.title)),
+      && (/^failed to push task\b/i.test(i.title) || /^pushtask failed/i.test(i.title)
+        // The route funnels' line for a TaskSyncError (route-error-log.ts).
+        || /^task sync push failed/i.test(i.title)),
     render: (i) => ({
       title: `${pluginNameOf(i)} couldn't save a task change`,
       message: firstSentence(metaError(i.meta)) || 'The change stays local until the next sync succeeds.',

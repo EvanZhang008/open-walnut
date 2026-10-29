@@ -371,6 +371,18 @@ describe('plugin sync families', () => {
     expect(out.message).toBe('API error (HTTP 400) during UpdateTask.');
   });
 
+  it("the source's task-sync line (task-manager.ts, core `task` subsystem) reads as a plugin push failure", () => {
+    const out = humanizeErrorNotification({
+      title: 'task sync push failed',
+      subsystem: 'task',
+      recoveryKey: 'plugin:plugin-a:push',
+      meta: { pluginId: 'plugin-a', error: 'Sync to plugin-a failed: sign-in expired (HTTP 302 redirect)' },
+    });
+    expect(out.category).toBe('Plugin A');
+    expect(out.title).toBe("Plugin A couldn't save a task change");
+    expect(out.message).toContain('Sync to plugin-a failed');
+  });
+
   it('a refused remote list shows the REMEDY, not the reason code', () => {
     // The live card read "other-provider." (the unmatched path's first meta
     // string) while the producer had written the sentence the human needed.

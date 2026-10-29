@@ -836,6 +836,67 @@ describe('Notification feed API', () => {
       .toBe('recovered');
   });
 
+  it('ROUTE + PLUGIN: a sync push that fails inside a route is ONE card keyed to the plugin, retired by its next good sync', async () => {
+    // The real path the user's screenshot came from (2026-10-28): a task change whose
+    // plugin push fails throws out of the route handler. Two routes (two funnels)
+    // plus the request logger used to be THREE keyless/route cards for one cause,
+    // red for 48h after the sign-in was fixed. Now the source cards it once, keyed
+    // to the plugin; every route answers 500 as a handled failure.
+    const { registry } = await import('../../src/core/integration-registry.js');
+    const { createNoopSync, createMockPlugin } = await import('../core/plugin-test-utils.js');
+    const { addTask, updateTaskRaw } = await import('../../src/core/task-manager.js');
+    const PLUGIN_ID = 'marina-tracker';
+    const sync = createNoopSync();
+    sync.createTask = async () => ({ remoteId: 'r-1' });
+    sync.pushTask = async () => { throw new Error('sign-in expired (HTTP 302 redirect)'); };
+    registry.register(PLUGIN_ID, createMockPlugin({ id: PLUGIN_ID, sync }));
+    const before = new Set((await getFeed()).feed.map((n) => n.dedupKey));
+    try {
+      const { task } = await addTask({ title: 'route sync probe', project: 'marina-external', source: PLUGIN_ID, _skipPluginOps: true });
+      await updateTaskRaw(task.id, { ext: { remoteId: 'r-1' } });
+      const { task: other } = await addTask({ title: 'route sync probe 2', project: 'marina-external', source: PLUGIN_ID, _skipPluginOps: true });
+      await updateTaskRaw(other.id, { ext: { remoteId: 'r-2' } });
+
+      // Three entry points, two tasks, one failing plugin: the task router's funnel,
+      // the api-v1 router's funnel, and the console's /api/tasks path.
+      const json = { 'Content-Type': 'application/json' };
+      const r1 = await fetch(apiUrl(`/api/v1/tasks/${task.id}/complete`), { method: 'POST', headers: json, body: '{}' });
+      const r2 = await fetch(apiUrl(`/api/v1/tasks/${other.id}`), { method: 'PATCH', headers: json, body: JSON.stringify({ title: 'renamed' }) });
+      const r3 = await fetch(apiUrl(`/api/tasks/${other.id}`), { method: 'PATCH', headers: json, body: JSON.stringify({ title: 'renamed again' }) });
+      // complete awaits the push: a 500, marked handled so the request logger
+      // writes no route card. A route that pushes in the background (PATCH) answers
+      // 200 and the same source card lands from the background push; one that
+      // awaits answers a handled 500. Either way, never a route card.
+      expect(r1.status).toBe(500);
+      for (const r of [r1, r2, r3]) {
+        if (r.status >= 500) expect(r.headers.get('x-walnut-handled-failure')).toBe('1');
+      }
+
+      const seen = await pollFeed((f) => f.feed.some((n) => n.recoveryKey === `plugin:${PLUGIN_ID}:push`));
+      await delay(300); // let any second card land before counting
+      const fresh = (await getFeed()).feed.filter((n) => !before.has(n.dedupKey) && n.kind === 'operation-error' && !n.resolved);
+      expect(fresh.map((n) => n.title)).toEqual(["Marina Tracker couldn't save a task change"]);
+      const card = fresh[0];
+      expect(card.recoveryKey).toBe(`plugin:${PLUGIN_ID}:push`);
+      expect(card.category).toBe('Marina Tracker');
+      // The plugin's own reason, not the throw's `Sync to … failed:` wrapper: the title already names the plugin.
+      expect(card.body).toContain('sign-in expired (HTTP 302 redirect)');
+      expect(seen.feed.some((n) => /^Api-v1/.test(n.title))).toBe(false);
+
+      // The user signs in again; the next push that succeeds is the recovery edge
+      // (no pull tick involved): the card retires by itself.
+      sync.pushTask = async () => ({ serverTimestamp: new Date().toISOString() });
+      const r4 = await fetch(apiUrl(`/api/v1/tasks/${task.id}/complete`), { method: 'POST', headers: json, body: '{}' });
+      expect(r4.status).toBe(200);
+      const after = await pollFeed((f) => f.feed.some((n) => n.dedupKey === card.dedupKey && n.resolved === 'recovered'));
+      const settled = after.feed.find((n) => n.dedupKey === card.dedupKey)!;
+      expect(settled.resolved).toBe('recovered');
+      expect(settled.severity).toBe('info');
+    } finally {
+      registry.unregister(PLUGIN_ID);
+    }
+  });
+
   it('marks all read, clearing the unread count', async () => {
     const res = await fetch(apiUrl('/api/notifications/mark-read'), {
       method: 'POST',

@@ -855,3 +855,132 @@ describe('a host outage folds into one plain card', () => {
     expect(feed[0].causeKey).toBe('host:devbox');
   });
 });
+
+/**
+ * A task change whose sync push failed. The card is minted ONCE, at the source
+ * (task-manager.ts logs `task sync push failed` with the plugin named), whatever
+ * route or op made the change; the HTTP funnels log the TaskSyncError they get at
+ * warn and mark the 500 handled. Before: two funnel titles + a route 5xx card for
+ * one expired sign-in, all keyless, red for 48h after the fix (2026-10-28).
+ */
+describe('task sync push failure: ONE card at the source, keyed to its plugin, retired by its recovery', () => {
+  beforeEach(async () => {
+    await dismissNotifications();
+    installLogErrorNotifications();
+  });
+  afterEach(() => { uninstallLogErrorNotifications(); });
+
+  const sourceLine = (pluginId: string, taskId: string, error: string) =>
+    createSubsystemLogger('task').error('task sync push failed', {
+      pluginId, taskId, method: 'pushTask', error, recoveryKey: `plugin:${pluginId}:push`,
+    });
+
+  it('the source line is one record with the plugin key and the plugin copy; recovery retires it', async () => {
+    sourceLine('plugin-a', 't-1', 'Sync to plugin-a failed: sign-in expired (HTTP 302 redirect)');
+    const feed = await feedAfterFlush();
+    expect(feed).toHaveLength(1);
+    const card = feed[0];
+    // Its OWN key, below the plugin's: a push success retires this card and not
+    // the plugin-wide sign-in card; the plugin's pull recovery publishes both.
+    expect(card.recoveryKey).toBe('plugin:plugin-a:push');
+    expect(card.category).toBe('Plugin A');
+    expect(card.title).toBe("Plugin A couldn't save a task change");
+    expect(card.body).toContain('Sync to plugin-a failed');
+    expect(card.resolved).toBeUndefined();
+    expect((await recoverNotifications(['plugin:plugin-a'])).recovered).toHaveLength(0);
+
+    const { recovered } = await recoverNotifications(['plugin:plugin-a:push']);
+    expect(recovered).toHaveLength(1);
+    const { feed: after } = await listNotifications();
+    expect(after[0].resolved).toBe('recovered');
+    expect(after[0].severity).toBe('info');
+  });
+
+  it('two tasks failing on one plugin for one reason are ONE card (the task is context, not identity)', async () => {
+    sourceLine('plugin-a', 't-1', 'sign-in expired');
+    sourceLine('plugin-a', 't-2', 'sign-in expired');
+    const feed = await feedAfterFlush();
+    expect(feed).toHaveLength(1);
+    expect(feed[0].recoveryKey).toBe('plugin:plugin-a:push');
+  });
+
+  it('a different plugin or a different reason is its own card', async () => {
+    sourceLine('plugin-a', 't-1', 'sign-in expired');
+    sourceLine('plugin-b', 't-1', 'sign-in expired');
+    sourceLine('plugin-a', 't-1', 'rate limited');
+    const feed = await feedAfterCount(3);
+    expect(feed).toHaveLength(3);
+    expect(feed.filter(f => f.recoveryKey === 'plugin:plugin-a:push')).toHaveLength(2);
+  });
+
+  it('the route funnels do NOT card a TaskSyncError, and mark the response handled', async () => {
+    const { logRouteError } = await import('../../../src/web/routes/route-error-log.js');
+    const { TaskSyncError } = await import('../../../src/core/task-sync-error.js');
+    const headers = new Map<string, string>();
+    const res = { headersSent: false, setHeader: (k: string, v: string) => { headers.set(k, v); }, getHeader: (k: string) => headers.get(k) } as never;
+    const err = new TaskSyncError('plugin-a', 'sign-in expired');
+    logRouteError(err, 'api-v1 task route error', res);
+    logRouteError(err, 'api-v1 unhandled error', res);
+    expect(headers.get('x-walnut-handled-failure')).toBe('1');
+    await new Promise(r => setTimeout(r, 200));
+    expect((await listNotifications()).feed).toHaveLength(0);
+  });
+
+  it('a non-sync throw keeps the funnel title, is carded, and is not marked handled', async () => {
+    const { logRouteError } = await import('../../../src/web/routes/route-error-log.js');
+    const headers = new Map<string, string>();
+    const res = { headersSent: false, setHeader: (k: string, v: string) => { headers.set(k, v); } } as never;
+    logRouteError(new Error('boom'), 'api-v1 unhandled error', res);
+    const feed = await feedAfterFlush();
+    expect(feed).toHaveLength(1);
+    expect(feed[0].recoveryKey).toBeUndefined();
+    expect(feed[0].title).toBe('Api-v1 unhandled error');
+    expect(headers.size).toBe(0);
+  });
+});
+
+describe('adoptKeylessTaskSyncCards (cards an older build wrote without the plugin key)', () => {
+  beforeEach(async () => { await dismissNotifications(); });
+
+  it('keys a keyless sync card to its plugin, leaves everything else alone, and recovery then retires it', async () => {
+    const { upsertNotification, adoptKeylessTaskSyncCards } =
+      await import('../../../src/core/notifications/store.js');
+    const now = Date.now();
+    await upsertNotification({
+      kind: 'operation-error', severity: 'error', title: 'Api-v1 task route error',
+      body: 'Sync to plugin-a failed: sign-in expired (HTTP 302 redirect).',
+      timestamp: now, dedupKey: 'logerr:web:legacy-1', category: 'API',
+    });
+    await upsertNotification({
+      kind: 'operation-error', severity: 'error', title: 'Api-v1 unhandled error',
+      body: 'Something else broke', detail: '[web] {"error":"Sync to plugin-a failed: sign-in expired"}',
+      timestamp: now, dedupKey: 'logerr:web:legacy-2', category: 'API',
+    });
+    await upsertNotification({
+      kind: 'operation-error', severity: 'error', title: 'Unrelated',
+      body: 'disk full', timestamp: now, dedupKey: 'logerr:web:other', category: 'API',
+    });
+    await upsertNotification({
+      kind: 'operation-error', severity: 'error', title: 'Already keyed',
+      body: 'Sync to plugin-b failed: x', timestamp: now, dedupKey: 'logerr:web:keyed',
+      recoveryKey: 'route:GET /x',
+    });
+
+    const { adopted } = await adoptKeylessTaskSyncCards();
+    expect(adopted.map(r => r.dedupKey).sort()).toEqual(['logerr:web:legacy-1', 'logerr:web:legacy-2']);
+    expect(adopted.every(r => r.recoveryKey === 'plugin:plugin-a')).toBe(true);
+
+    const { feed } = await listNotifications();
+    expect(feed.find(f => f.dedupKey === 'logerr:web:other')!.recoveryKey).toBeUndefined();
+    expect(feed.find(f => f.dedupKey === 'logerr:web:keyed')!.recoveryKey).toBe('route:GET /x');
+
+    // Second run: nothing left to adopt.
+    expect((await adoptKeylessTaskSyncCards()).adopted).toEqual([]);
+
+    // The plugin's next good sync retires both legacy cards at once.
+    expect((await recoverNotifications(['plugin:plugin-a'])).recovered).toHaveLength(2);
+    const { feed: after } = await listNotifications();
+    expect(after.filter(f => f.resolved === 'recovered').map(f => f.dedupKey).sort())
+      .toEqual(['logerr:web:legacy-1', 'logerr:web:legacy-2']);
+  });
+});

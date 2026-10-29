@@ -11,6 +11,7 @@ import { bus, EventNames } from './event-bus.js';
 import { VALID_PRIORITIES as VALID_PRIORITIES_ARRAY, READ_MARKER_KEYS, PIN_TIER_POLICY, RETIRED_PIN_TIERS, migrateFocusTier, defaultWaitUntil, type Task, type TaskStore, type TaskStatus, type TaskPhase, type TaskPriority, type TaskSource, type DashboardData, type ProjectRecord, type TaskGroupRecord, type CustomTierRecord } from './types.js';
 import { applyPhase, deriveStatusFromPhase, phaseFromStatus, VALID_PHASES, TERMINAL_PHASES, HELD_PHASES } from './phase.js';
 import { isMainAgentTask } from './org/main-stays-active.js';
+import { TaskSyncError, TASK_SYNC_PUSH_FAILED_LOG, taskSyncPushRecoveryKey } from './task-sync-error.js';
 import { TEST_RUN_OWNER, TEST_RUN_PROJECT_KEY, ambientTestRun, isTestRunProject, isTestRunTask, testRunProjectMetadata, unmarkForTestViewer } from './test-run.js';
 import {
   COMPLETION_TO_PHASES,
@@ -2353,10 +2354,22 @@ async function pushToPlugin(
       if (changed && cleared) bus.emit(EventNames.TASK_UPDATED, { task: cleared }, ['web-ui'], { source: 'sync' });
     }
 
+    if (!NO_REMOTE_SYNC_METHODS.has(method)) notePushSucceeded(task.source);
     return { success: true };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    log.task.warn('plugin sync failed', { taskId: task.id, source: task.source, method, error: message });
+    // ERROR with the plugin named: the ONE card for this failure, wherever the
+    // write came from (a v1 route, the console's /api/tasks, an op, a background
+    // push). The HTTP funnels log the TaskSyncError they get at warn (route-error-log.ts),
+    // so a route is never a second card for the same push.
+    // A remote delete is the exception: the remote item may already be gone (a
+    // 404 the confirm loop treats as done), so it stays a warn, never a card.
+    if (method === 'deleteTask') {
+      log.task.warn('plugin sync failed', { taskId: task.id, source: task.source, method, error: message });
+    } else {
+      notePushFailed(task.source);
+      log.task.error(TASK_SYNC_PUSH_FAILED_LOG, { pluginId: task.source, taskId: task.id, method, error: message, recoveryKey: taskSyncPushRecoveryKey(task.source) });
+    }
 
     // Set sync_error
     const { changed, task: stamped } = await updateTaskRaw(task.id, { sync_error: message });
@@ -2391,6 +2404,31 @@ export function markPushInflightForTesting(taskId: string): () => void {
 
 /** Pushes nobody awaits (asyncPush, trailing re-pushes, raw-update pushes), until they settle. */
 const backgroundPushes = new Set<Promise<unknown>>();
+
+/**
+ * Push failure → push success is the recovery edge for the "couldn't save a task
+ * change" card. The card is minted at the two catch sites below, keyed
+ * `plugin:<id>`; the sync loop only publishes that key on a PULL failure→success
+ * edge, so a push that failed once (a 429, a network blip) while pulls stayed
+ * healthy would stay red until the next restart. The next push that succeeds
+ * for a plugin whose push failed publishes the key instead. The publisher is
+ * injected by the server (this module must not import it): no publisher, no-op.
+ */
+const pushFailingPlugins = new Set<string>();
+let pushRecoveryPublisher: ((keys: string[]) => void) | null = null;
+export function setPushRecoveryPublisher(fn: ((keys: string[]) => void) | null): void {
+  pushRecoveryPublisher = fn;
+}
+function notePushFailed(pluginId: string): void {
+  pushFailingPlugins.add(pluginId);
+}
+function notePushSucceeded(pluginId: string): void {
+  if (!pushFailingPlugins.delete(pluginId)) return;
+  pushRecoveryPublisher?.([taskSyncPushRecoveryKey(pluginId)]);
+}
+/** Sync methods that are local bookkeeping in every shipped plugin (no remote
+ *  call), so their success proves nothing about the plugin's health. */
+const NO_REMOTE_SYNC_METHODS = new Set<string>(['associateSubtask', 'disassociateSubtask']);
 
 /**
  * Run a push nobody awaits; settleBackgroundPushes can still wait for it. A failure is logged
@@ -2556,10 +2594,12 @@ async function autoPushIfConfiguredImpl(task: Task): Promise<SyncResult> {
       if (changed) bus.emit(EventNames.TASK_UPDATED, { task: found }, ['web-ui'], { source: 'sync' });
     }
 
+    notePushSucceeded(task.source);
     return { success: true };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    log.task.warn('pushTask failed', { taskId: task.id, source: task.source, error: message });
+    notePushFailed(task.source);
+    log.task.error(TASK_SYNC_PUSH_FAILED_LOG, { pluginId: task.source, taskId: task.id, method: 'pushTask', error: message, recoveryKey: taskSyncPushRecoveryKey(task.source) });
 
     // Set sync_error
     const { changed, task: stamped } = await updateTaskRaw(task.id, { sync_error: message });
@@ -3844,7 +3884,7 @@ export async function completeTask(
   // round-trip to the remote store, so a silent failure is worse than blocking.
   const syncResult = await autoPushIfConfigured(task);
   if (!syncResult.success) {
-    throw new Error(`Sync to ${task.source} failed: ${syncResult.error ?? 'unknown error'}`);
+    throw new TaskSyncError(task.source, syncResult.error);
   }
   autoCompleteTaskSessions(task, opts?.actorSid);
   emitPhaseChanged(task, oldPhase, opts?.source ?? 'api', opts?.actorSid);
@@ -3890,7 +3930,7 @@ export async function toggleComplete(idPrefix: string): Promise<{ task: Task }> 
   // silently desync.
   const syncResult = await autoPushIfConfigured(task);
   if (!syncResult.success) {
-    throw new Error(`Sync to ${task.source} failed: ${syncResult.error ?? 'unknown error'}`);
+    throw new TaskSyncError(task.source, syncResult.error);
   }
   if (task.phase === 'COMPLETE') autoCompleteTaskSessions(task);
 
@@ -4652,7 +4692,7 @@ export async function updateTask(
       //    fire-and-forget that reports success while the push actually failed.
       const migSync = await autoPushIfConfigured(m.task);
       if (!migSync.success) {
-        throw new Error(`Sync to ${m.task.source} failed: ${migSync.error ?? 'unknown error'}`);
+        throw new TaskSyncError(m.task.source, migSync.error);
       }
 
       // 4. Notify UI for each migrated task (primary task gets a second emit from the centralized
@@ -4674,7 +4714,7 @@ export async function updateTask(
     // remote rejection, network) so callers see "task didn't actually sync."
     const syncResult = await autoPushIfConfigured(task);
     if (!syncResult.success) {
-      throw new Error(`Sync to ${task.source} failed: ${syncResult.error ?? 'unknown error'}`);
+      throw new TaskSyncError(task.source, syncResult.error);
     }
   }
   if (parentChangeAction) parentChangeAction();
@@ -4775,7 +4815,7 @@ export async function addNote(idPrefix: string, content: string): Promise<{ task
   // Sync push (outside lock). Failure propagates to caller.
   const syncResult = await autoPushIfConfigured(task);
   if (!syncResult.success) {
-    throw new Error(`Sync to ${task.source} failed: ${syncResult.error ?? 'unknown error'}`);
+    throw new TaskSyncError(task.source, syncResult.error);
   }
 
   // fields/appendNote (additive): on a REPLICA the outbox subscriber scopes the
@@ -4836,7 +4876,7 @@ export async function appendConversationLog(idPrefix: string, entry: string): Pr
   // Sync push (outside lock). Failure propagates to caller.
   const syncResult = await autoPushIfConfigured(task);
   if (!syncResult.success) {
-    throw new Error(`Sync to ${task.source} failed: ${syncResult.error ?? 'unknown error'}`);
+    throw new TaskSyncError(task.source, syncResult.error);
   }
 
   bus.emit(EventNames.TASK_UPDATED, { task }, ['web-ui'], { source: 'internal' });
@@ -4860,7 +4900,7 @@ export async function updateNote(idPrefix: string, content: string): Promise<{ t
 
   const syncResult = await autoPushIfConfigured(task);
   if (!syncResult.success) {
-    throw new Error(`Sync to ${task.source} failed: ${syncResult.error ?? 'unknown error'}`);
+    throw new TaskSyncError(task.source, syncResult.error);
   }
   bus.emit(EventNames.TASK_UPDATED, { task, fields: ['note'] }, ['web-ui'], { source: 'internal' });
   return { task };
@@ -4898,7 +4938,7 @@ export async function compareAndSetNote(
   const result: CompareAndSetNoteResult = { updated: true, task: written };
   const syncResult = await autoPushIfConfigured(result.task);
   if (!syncResult.success) {
-    throw new Error(`Sync to ${result.task.source} failed: ${syncResult.error ?? 'unknown error'}`);
+    throw new TaskSyncError(result.task.source, syncResult.error);
   }
   bus.emit(EventNames.TASK_UPDATED, { task: result.task, fields: ['note'] }, ['web-ui'], { source: 'internal' });
   return result;
@@ -4933,7 +4973,7 @@ export async function updateDescription(idPrefix: string, content: string): Prom
 
   const syncResult = await autoPushIfConfigured(task);
   if (!syncResult.success) {
-    throw new Error(`Sync to ${task.source} failed: ${syncResult.error ?? 'unknown error'}`);
+    throw new TaskSyncError(task.source, syncResult.error);
   }
   bus.emit(EventNames.TASK_UPDATED, { task, fields: ['description'] }, ['web-ui'], { source: 'internal' });
   return { task };
@@ -4968,7 +5008,7 @@ export async function updateSummary(idPrefix: string, content: string): Promise<
 
   const syncResult = await autoPushIfConfigured(task);
   if (!syncResult.success) {
-    throw new Error(`Sync to ${task.source} failed: ${syncResult.error ?? 'unknown error'}`);
+    throw new TaskSyncError(task.source, syncResult.error);
   }
   bus.emit(EventNames.TASK_UPDATED, { task, fields: ['summary'] }, ['web-ui'], { source: 'internal' });
   return { task };

@@ -163,6 +163,7 @@ import { createRecoveryTransitionTracker } from '../core/notifications/recovery-
 import { humanizeErrorNotification } from '../core/notifications/humanize.js'
 import { withOriginNote } from '../core/notifications/origin.js'
 import { causeKeyForError, hostCauseKey } from '../core/notifications/error-cause.js'
+import { taskSyncPushRecoveryKey } from '../core/task-sync-error.js'
 import { releaseAbsorbedKeys } from '../core/notifications/log-error-bridge.js'
 import { compactPermissionInput, summarizePermissionRequest } from '../core/notifications/permission-detail.js'
 import { redactSensitiveText } from '../logging/redact.js'
@@ -1286,6 +1287,10 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     // way round: they hold an injected publisher, default no-op, and only ever
     // call it on a failing→healthy EDGE for a key that actually failed.
     setRouteRecoveryPublisher((keys) => { void publishRecovery(keys) })
+    // A task push that failed is carded at its source (task-manager.ts); the next
+    // push that succeeds for that plugin is its recovery edge.
+    const { setPushRecoveryPublisher } = await import('../core/task-manager.js')
+    setPushRecoveryPublisher((keys) => { void publishRecovery(keys) })
     const { setBusRecoveryPublisher } = await import('../core/event-bus.js')
     setBusRecoveryPublisher((keys) => { void publishRecovery(keys) })
 
@@ -3815,6 +3820,16 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       })
       .then(() => import('../core/notifications/permission-expiry.js'))
       .then(async ({ expireOrphanedPermissionNotifications, expireStaleErrorNotifications, unresolvedErrorRecoveryKeys }) => {
+        // A task-sync card an older build logged without its plugin key gets it now,
+        // so the sync loop's next good tick retires it like the rest. First in the
+        // chain: the first tick is 60s out, and the per-card checks below can be slow.
+        const { adoptKeylessTaskSyncCards } = await import('../core/notifications/store.js')
+        const { adopted } = await adoptKeylessTaskSyncCards()
+        if (adopted.length > 0) {
+          log.web.info('startup: keyed legacy task-sync error cards to their plugin', {
+            count: adopted.length, keys: [...new Set(adopted.map((r) => r.recoveryKey))],
+          })
+        }
         const expired = await expireOrphanedPermissionNotifications()
         if (expired > 0) log.web.info('startup: expired orphaned permission notifications', { expired })
         // -- …and the ERROR half of the same lifecycle problem --
@@ -6162,7 +6177,8 @@ function startPluginSyncPolling(): void {
         recoveredOnce = true
         recordSyncSuccess(plugin.id)
         if (recovered) {
-          void publishRecovery([`plugin:${plugin.id}`])
+          // The pull proves the whole plugin healthy: its push card retires with it.
+          void publishRecovery([`plugin:${plugin.id}`, taskSyncPushRecoveryKey(plugin.id)])
           // A recovery retired every card under this key, the sign-in one included.
           connectionWatch.noticed = false
         }
@@ -6186,7 +6202,7 @@ function startPluginSyncPolling(): void {
             })
             log.web.warn(`${plugin.id} sync: sign-in`, { pluginId: plugin.id, detail: status?.detail })
           } else if (decision.recovered) {
-            void publishRecovery([`plugin:${plugin.id}`])
+            void publishRecovery([`plugin:${plugin.id}`, taskSyncPushRecoveryKey(plugin.id)])
           }
         }
         const syncElapsed = Date.now() - syncT0

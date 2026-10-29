@@ -964,6 +964,41 @@ export async function expireKeylessErrorNotifications(
   }));
 }
 
+/** Walnut's own wording for a task change whose sync push failed (TaskSyncError);
+ *  the source is the plugin id by construction (task.source). */
+const TASK_SYNC_FAILED_RE = /\bSync to ([A-Za-z0-9][\w.-]*) failed:/;
+
+/**
+ * Give a keyless task-sync card the plugin key it was written without.
+ *
+ * Records the route funnels logged before route-error-log.ts carry
+ * `Sync to <plugin> failed: …` in body/detail but no recoveryKey, so the sync
+ * loop's recovery never reached them and they sat red for 48h after the user
+ * had signed in again (2026-10-28). The id is read from Walnut's own sentence,
+ * never from the plugin's text after the colon. Run once at boot; a no-op store
+ * is left untouched (lock-free pre-check).
+ */
+export async function adoptKeylessTaskSyncCards(): Promise<{ adopted: NotificationRecord[] }> {
+  const pre = await readStoreOrNull();
+  const wants = (rec: NotificationRecord): string | null => {
+    if (rec.kind !== 'operation-error' || rec.resolved || rec.recoveryKey) return null;
+    const m = TASK_SYNC_FAILED_RE.exec(`${rec.body ?? ''}\n${rec.detail ?? ''}`);
+    const id = m?.[1]?.toLowerCase();
+    return id && id !== 'local' ? `plugin:${id}` : null;
+  };
+  if (pre && !pre.notifications.some((rec) => wants(rec) !== null)) return { adopted: [] };
+  return withWriteLock(() => withStore((store) => {
+    const adopted: NotificationRecord[] = [];
+    for (const rec of store.notifications) {
+      const key = wants(rec);
+      if (!key) continue;
+      rec.recoveryKey = key;
+      adopted.push({ ...rec });
+    }
+    return { adopted };
+  }));
+}
+
 /**
  * Stamp `expired` on unresolved error records whose key matches `keyPrefix` and
  * whose LATEST occurrence is older than `olderThanMs`.

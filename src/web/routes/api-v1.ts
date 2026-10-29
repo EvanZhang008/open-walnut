@@ -23,6 +23,7 @@ import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { NeedsLeaderError, isNeedsLeaderError } from '../../core/replication/needs-leader.js'
+import { logRouteError } from './route-error-log.js'
 import { replicaNotesReads } from '../../replica/notes-routes.js'
 import { companionNoteWrites } from '../../replica/companion-note-writes.js'
 import type { MessageParam } from '../../model/model.js'
@@ -4472,7 +4473,7 @@ apiV1Router.use((err: unknown, _req: Request, res: Response, _next: NextFunction
   // handler answers it 503 needs_leader with its why, never a 500 card.
   if (isNeedsLeaderError(err) && !res.headersSent) { _next(err); return }
   const message = err instanceof Error ? err.message : String(err)
-  log.web.error('api-v1 unhandled error', { error: message })
+  logRouteError(err, 'api-v1 unhandled error', res)
   if (res.headersSent) { res.end(); return }
   sendError(res, 500, 'internal', message)
 })

@@ -6,6 +6,8 @@ import type { Request, Response, NextFunction } from 'express'
 import { log } from '../../logging/index.js'
 import { routeLogMessage, routeRecoveryKey } from '../../core/notifications/route-condition.js'
 import { NEEDS_LEADER_HEADERS, isNeedsLeaderError, needsLeaderBody, shouldLogNeedsLeader } from '../../core/replication/needs-leader.js'
+import { isTaskSyncError } from '../../core/task-sync-error.js'
+import { markHandledFailure } from './handled-failure.js'
 
 /**
  * 404 handler for unknown API routes.
@@ -68,9 +70,14 @@ export function errorHandler(err: Error, req: Request, res: Response, _next: Nex
     ...(status >= 500 ? { stack: err.stack, recoveryKey: routeRecoveryKey(req.method, req.originalUrl) } : {}),
   }
   const line = routeLogMessage(req.method, req.originalUrl, status)
-  if (status >= 500) log.web.error(line, meta)
+  // A task change whose sync push failed is already carded at the source, keyed
+  // to its plugin (task-manager.ts, route-error-log.ts): this 500 is a handled
+  // failure, logged at warn, never a `route:` card.
+  const syncFailure = isTaskSyncError(err)
+  if (syncFailure && !res.headersSent) markHandledFailure(res)
+  if (status >= 500 && !syncFailure) log.web.error(line, meta)
   else if (aborted) log.web.debug(line, meta)
-  else log.web.warn(line, meta)
+  else log.web.warn(line, syncFailure ? { reqId: meta.reqId, detail: meta.detail, url: meta.url, pluginId: err.pluginId } : meta)
 
   res.status(status).json({
     error: message,
