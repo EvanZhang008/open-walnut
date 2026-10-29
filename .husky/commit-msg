@@ -1,0 +1,17 @@
+# Commit-message gate (committed). Runs an OPTIONAL local review: the file that
+# `git config walnut.haikuReview` names, which this repo's maintainer uses to have a
+# model read each commit (the staged change, the message, the author and committer)
+# for private or employer-internal content before it can reach this public repo.
+# Unset for everyone else, so this hook is a no-op for them. A named review that is
+# missing blocks the commit instead of skipping it.
+#
+# Bypass with `git commit --no-verify`.
+
+review=$(git config --path --get walnut.haikuReview || true)
+if [ -n "$review" ]; then
+  if [ ! -x "$review" ]; then
+    echo "Commit blocked: walnut.haikuReview names $review, which is not there."
+    exit 1
+  fi
+  "$review" commit "$1" || exit 1
+fi

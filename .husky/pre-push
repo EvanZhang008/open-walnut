@@ -29,10 +29,11 @@ echo "✓ Type-check passed."
 
 bash scripts/check-committed-bundle.sh || exit 1
 
-# Optional local sensitive-content scanner — forward stdin (the pre-push refs).
-# scripts/local/ is gitignored, so a clone or a worktree has none: there the scanner
-# is the file git config walnut.prepushScanner names, and a named scanner that is
-# missing blocks the push instead of skipping the scan.
+# Optional local sensitive-content scanner: forward stdin (the pre-push refs) and the
+# hook's arguments (the remote's name and url: the scanner checks only what is about
+# to become public). scripts/local/ is gitignored, so a clone or a worktree has none:
+# there the scanner is the file git config walnut.prepushScanner names, and a named
+# scanner that is missing blocks the push instead of skipping the scan.
 scanner=scripts/local/scan-sensitive.sh
 [ -x "$scanner" ] || scanner=$(git config --path --get walnut.prepushScanner || true)
 if [ -n "$scanner" ]; then
@@ -40,5 +41,5 @@ if [ -n "$scanner" ]; then
     echo "Push blocked: walnut.prepushScanner names $scanner, which is not there."
     exit 1
   fi
-  "$scanner" || exit 1
+  "$scanner" "$@" || exit 1
 fi
