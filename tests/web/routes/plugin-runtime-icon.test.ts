@@ -36,12 +36,16 @@ beforeEach(async () => {
   installedDirs = new Map()
   // Installed from a folder of its own, with an icon.
   await writePlugin(path.join(base, 'plugins', 'acme-plugin'), 'acme-plugin', { icon: 'icon.svg' }, { 'icon.svg': SVG })
+  // A sandboxed webview is a screen too.
+  await writePlugin(path.join(base, 'plugins', 'view-plugin'), 'view-plugin', { webview: { title: 'View', entry: 'index.html' } })
+  installedDirs.set('view-plugin', path.join(base, 'plugins', 'view-plugin'))
   installedDirs.set('acme-plugin', path.join(base, 'plugins', 'acme-plugin'))
-  // Installed, no icon: the row keeps its monogram.
-  await writePlugin(path.join(base, 'plugins', 'plain-plugin'), 'plain-plugin', {})
+  // Installed, no icon: the row keeps its monogram. It ships a web entry (an App).
+  await writePlugin(path.join(base, 'plugins', 'plain-plugin'), 'plain-plugin', { web: 'dist/web.mjs' })
   installedDirs.set('plain-plugin', path.join(base, 'plugins', 'plain-plugin'))
-  // Installed, but its manifest tries to point outside the folder.
-  await writePlugin(path.join(base, 'plugins', 'sneaky-plugin'), 'sneaky-plugin', { icon: '../secret.svg' })
+  // Installed, but its manifest tries to point outside the folder. Its web entry is on an
+  // apiVersion the loader never loads a web module for, so it has no screen.
+  await writePlugin(path.join(base, 'plugins', 'sneaky-plugin'), 'sneaky-plugin', { icon: '../secret.svg', apiVersion: 2, web: 'dist/web.mjs' })
   await fsp.writeFile(path.join(base, 'plugins', 'secret.svg'), SVG)
   installedDirs.set('sneaky-plugin', path.join(base, 'plugins', 'sneaky-plugin'))
   // Not installed: a bundled store row and an example row, both with icons.
@@ -70,7 +74,7 @@ function record(id: string): PluginLifecycleRecord {
 function setup() {
   const deps = {
     registry: new IntegrationRegistry(),
-    list: () => ['acme-plugin', 'plain-plugin', 'sneaky-plugin'].map(record),
+    list: () => ['acme-plugin', 'plain-plugin', 'sneaky-plugin', 'view-plugin'].map(record),
     reload: vi.fn(),
     disable: vi.fn(),
     clearQuarantine: vi.fn(),
@@ -153,5 +157,16 @@ describe('GET /api/plugin-runtime/registry: dir', () => {
     expect(byId.get('plain-plugin')?.dir).toBe(path.join(base, 'plugins', 'plain-plugin'))
     expect(byId.get('remote-plugin')?.dir).toBeUndefined()
     expect(byId.get('store-plugin')?.dir).toBeUndefined()
+  })
+
+  it('marks a plugin with a web entry as having a screen, read from its manifest, so one that is off keeps it', async () => {
+    const response = await request(setup()).get('/api/plugin-runtime/registry').expect(200)
+    const byId = new Map((response.body.rows as Array<{ id: string; hasUi?: boolean }>).map((row) => [row.id, row]))
+    // The test registry has no live definitions at all, as for a plugin that is off.
+    expect(byId.get('plain-plugin')?.hasUi).toBe(true)
+    expect(byId.get('view-plugin')?.hasUi).toBe(true)
+    expect(byId.get('acme-plugin')?.hasUi).toBeUndefined()
+    expect(byId.get('sneaky-plugin')?.hasUi).toBeUndefined()
+    expect(byId.get('store-plugin')?.hasUi).toBeUndefined()
   })
 })

@@ -120,7 +120,7 @@
   margin: 0 0 12px;
   color: var(--fg-muted);
 }
-.apps-category .apps-section-title { margin-bottom: 10px; }
+.apps-kind .apps-section-title { margin-bottom: 10px; }
 .apps-empty {
   margin-top: 26px;
   padding: 18px;
@@ -259,6 +259,10 @@
 .apps-card-status--get { color: var(--accent); font-weight: 600; }
 .apps-card-status--get i { background: transparent; box-shadow: inset 0 0 0 1.5px var(--accent); }
 .apps-card-kind { white-space: nowrap; }
+.apps-card-actions { position: relative; z-index: 1; display: inline-flex; align-items: center; gap: 8px; flex: none; }
+/* Cannot change (Home, Apps, Settings): a lock and quiet text, nothing that looks pressable. */
+.apps-card-status--fixed { color: var(--fg-muted); }
+.apps-card-lock { flex: none; opacity: 0.8; }
 .apps-card-open {
   position: relative;
   z-index: 1;
@@ -408,7 +412,7 @@
 .apps-plugins-bar:empty { display: none; }
 .apps-plugins .settings-notice { margin-top: 16px; }
 .apps-plugins .plugin-link-request { margin-top: 16px; }
-.apps-plugins .apps-category { margin-top: 14px; }
+.apps-plugins .apps-kind { margin-top: 14px; }
 .apps-get-more .settings-group + .settings-group { margin-top: 14px; }
 
 /* ── Make your own ── */

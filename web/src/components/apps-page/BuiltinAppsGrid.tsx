@@ -1,7 +1,8 @@
 /**
  * The Built in cards: one per built-in rail entry, drawn like every other card on the
- * Apps page, and its detail page, which holds the switch that puts it on or takes it off
- * the rail (builtin-apps.ts has the rules). Taking a Home panel's toggle off the rail
+ * Apps page, and its detail page. A card that can leave the sidebar carries that switch
+ * itself, so the one thing a built-in offers is in plain sight; one that must stay (Home,
+ * Apps, Settings) shows a lock and no control at all (builtin-apps.ts has the rules). Taking a Home panel's toggle off the rail
  * also closes that panel when it is open, or it would be stuck open with no button to
  * close it.
  */
@@ -64,8 +65,14 @@ function EntryIcon({ entry, size }: { entry: BuiltinEntry; size: number }) {
 }
 
 const statusOf = (entry: BuiltinEntry) => entry.lock
-  ? { text: 'Always on the sidebar', tone: 'on' as const }
+  ? { text: 'Always on the sidebar', tone: 'fixed' as const }
   : entry.shown ? { text: 'On the sidebar', tone: 'on' as const } : { text: 'Only in Apps', tone: 'off' as const }
+
+const LockGlyph = () => (
+  <svg className="apps-card-lock" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden="true">
+    <rect x="5" y="11" width="14" height="10" rx="2" /><path d="M8 11V8a4 4 0 0 1 8 0v3" />
+  </svg>
+)
 
 export function BuiltinAppsGrid({ query, onOpen }: { query: string; onOpen: (key: string) => void }) {
   const navigate = useNavigate()
@@ -82,9 +89,19 @@ export function BuiltinAppsGrid({ query, onOpen }: { query: string; onOpen: (key
           name={entry.title}
           line={entry.homePanel ? `Home panel · ${entry.line}` : entry.line}
           status={statusOf(entry)}
+          statusGlyph={entry.lock ? <LockGlyph /> : undefined}
+          control={entry.lock ? undefined : (
+            <ToggleSwitch
+              checked={entry.shown}
+              onChange={(next) => setOnRail(entry, next)}
+              aria-label={`Show ${entry.title} on the sidebar`}
+              data-testid={`apps-builtin-card-toggle-${entry.id}`}
+            />
+          )}
           dim={!entry.shown}
           onSelect={() => onOpen(entry.key)}
-          open={{ label: 'Open', onClick: () => navigate(openPath(entry)), testId: `apps-builtin-card-open-${entry.id}` }}
+          // On the sidebar it opens from there; off it, the card is the way in.
+          open={entry.shown ? undefined : { label: 'Open', onClick: () => navigate(openPath(entry)), testId: `apps-builtin-card-open-${entry.id}` }}
         />
       ))}
     </div>

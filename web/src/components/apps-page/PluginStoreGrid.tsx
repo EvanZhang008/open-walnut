@@ -1,6 +1,8 @@
 /**
- * The plugin half of the Apps page, as a store: one card per plugin in its category,
- * then Get more (what you can add, a git or npm link, the installed sources). A card says
+ * The plugin half of the Apps page, as a store: one card per plugin, in two groups, the
+ * plugins with a screen of their own (an App, a page, a panel) and the ones that only run
+ * in the background (a sync, tools for the AI, a connection); a category chip narrows
+ * both. Then Get more (what you can add, a git or npm link, the installed sources). A card says
  * what it is and its one status; everything else (settings, the switch, where it comes
  * from, Update) lives on its detail page. A plugin that is a part of another (`slack-mcp`
  * of Slack, a mail account of Mail) has no card of its own: its parent's card names it,
@@ -23,7 +25,7 @@ import { buildInstallLink, INSTALL_LINK_SCHEME, type InstallLinkTarget } from '.
 import { peekPendingInstall, settlePendingInstall, subscribeOpenLinks } from '@/utils/open-link'
 import { useDraft } from '@/hooks/useDraft'
 import { draftKey } from '@/utils/drafts'
-import { PLUGIN_CATEGORY_LABELS, PLUGIN_CATEGORY_ORDER, categoryOf, pluginMatches, type AppsFilter, type PluginCategoryId } from './categories'
+import { PLUGIN_CATEGORY_ORDER, categoryOf, pluginMatches, type AppsFilter, type PluginCategoryId } from './categories'
 import { AppBadge } from './app-bits'
 import { StoreCard } from './StoreCard'
 import { cardStatus, originKind, partParents, type RegistryRow } from './plugin-store-model'
@@ -35,6 +37,12 @@ export interface PluginStoreSummary {
   categories: PluginCategoryId[]
   matches: number
 }
+
+/** The two groups of installed plugins, in page order. */
+const PLUGIN_KINDS = [
+  { id: 'ui', title: 'With a screen', sub: 'Each adds a page, a panel or a sidebar entry you open.' },
+  { id: 'background', title: 'In the background', sub: 'No screen of their own: they sync tasks, give the AI tools or keep a connection. Open one to set it up.' },
+] as const
 
 /** A git remote the local git can clone; anything else is treated as an npm spec. */
 function looksLikeGitUrl(value: string): boolean {
@@ -165,9 +173,18 @@ export function PluginStoreGrid({ store, filter, query, onSummary, onOpen }: {
 
   const showGroups = filter === 'all' || (PLUGIN_CATEGORY_ORDER as readonly string[]).includes(filter)
   const showGetMore = filter === 'all' || filter === 'get'
-  const groups = PLUGIN_CATEGORY_ORDER
-    .filter((category) => filter === 'all' || filter === category)
-    .map((category) => ({ category, rows: topLevel.filter((row) => matches(row) && categoryOf(row) === category) }))
+  // A plugin is in the screen group when it ships a web entry (the registry says so, on or
+  // off) or, on an older server or a replica, when one of its Apps is registered now.
+  const hasUi = (row: RegistryRow) => row.hasUi === true || appsOfPlugin(catalog.all, row.id).length > 0
+    || partsOf(row.id).some((part) => part.hasUi === true)
+  const categoryRank = (row: RegistryRow) => PLUGIN_CATEGORY_ORDER.indexOf(categoryOf(row))
+  const shown = topLevel
+    .filter((row) => matches(row) && (filter === 'all' || categoryOf(row) === filter))
+    .map((row, index) => ({ row, index }))
+    .sort((a, b) => categoryRank(a.row) - categoryRank(b.row) || a.index - b.index)
+    .map(({ row }) => row)
+  const groups = PLUGIN_KINDS
+    .map((kind) => ({ ...kind, rows: shown.filter((row) => hasUi(row) === (kind.id === 'ui')) }))
     .filter((group) => group.rows.length > 0)
   const matchingAvailable = available.filter((row) => pluginMatches(row, query))
   const searching = query.trim() !== ''
@@ -272,11 +289,12 @@ export function PluginStoreGrid({ store, filter, query, onSummary, onOpen }: {
             searching ? null : <SettingsGroup className="plugin-store-group"><SettingsRow label="No plugins in this group yet." /></SettingsGroup>
           ) : (
             groups.map((group) => (
-              <section key={group.category} className="apps-section apps-category" data-testid={`apps-category-${group.category}`} aria-labelledby={`apps-category-${group.category}-title`}>
-                <h2 className="apps-section-title" id={`apps-category-${group.category}-title`}>
-                  {PLUGIN_CATEGORY_LABELS[group.category]}
+              <section key={group.id} className="apps-section apps-kind" data-testid={`apps-kind-${group.id}`} aria-labelledby={`apps-kind-${group.id}-title`}>
+                <h2 className="apps-section-title" id={`apps-kind-${group.id}-title`}>
+                  {group.title}
                   <span className="apps-section-count">{group.rows.length}</span>
                 </h2>
+                <p className="apps-section-sub">{group.sub}</p>
                 <div className="apps-grid">{group.rows.map(card)}</div>
               </section>
             ))

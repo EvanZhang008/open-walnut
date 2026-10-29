@@ -13,14 +13,15 @@ import { backToApps, openBuiltinDetail, openPluginDetail } from './apps-store-he
  *
  *   1. The sidebar's Apps entry opens it and is the active entry there, but NOT on a
  *      plugin App's own page (/apps/<plugin>~<app>), which lives under the same prefix.
- *   2. A built-in's switch (on its detail page) takes it off the rail and puts it back:
- *      Tasks off removes the sidebar's Tasks entry, a reload keeps it off, on brings it
- *      back. Org is a rail item rather than a registry app, and its switch works the same
- *      way. The cards carry no switch; they say whether each is on the sidebar.
- *   3. Home, Apps and Settings can never leave the rail, so their pages show a lock
- *      where the others have a switch.
- *   4. A category chip narrows the page to that one group of plugins; the search box
- *      says when nothing matches, and Clear search brings everything back.
+ *   2. A built-in card's switch (and the same one on its detail page) takes it off the
+ *      rail and puts it back: Tasks off removes the sidebar's Tasks entry, a reload keeps
+ *      it off, on brings it back. Org is a rail item rather than a registry app, and its
+ *      switch works the same way.
+ *   3. Home, Apps and Settings can never leave the rail, so their cards and pages show a
+ *      lock and no control.
+ *   4. The page opens on the plugins, those with a screen first, then those that run in
+ *      the background; Built in comes last. A category chip narrows the plugins; the search
+ *      box says when nothing matches, and Clear search brings everything back.
  *   5. The old Settings deep link (`/settings#plugin-store`) forwards here.
  *   6. Make your own: Build it waits for a description, and the by-hand route shows the
  *      command that works today (from a clone; the plugin tools are not on npm yet).
@@ -153,36 +154,38 @@ test('the sidebar opens Apps, and its entry is active there but not on a plugin 
   expect(pageErrors).toEqual([])
 })
 
-test('a built-in switch takes it off the sidebar, a reload keeps it off, and on brings it back', async ({ page }) => {
+test('a built-in card switch takes it off the sidebar, a reload keeps it off, and on brings it back', async ({ page }) => {
   await home(page)
   await openApps(page)
   const tasksCard = page.getByTestId('apps-builtin-tasks')
+  const cardSwitch = page.getByTestId('apps-builtin-card-toggle-tasks')
   const tasksSwitch = page.getByTestId('apps-builtin-toggle-tasks')
   const tasksEntry = page.getByTestId('sidebar-core-app-tasks')
   await expect(tasksCard).toHaveAttribute('data-shown', 'true')
   await expect(page.getByTestId('apps-builtin-tasks-status')).toHaveText('On the sidebar')
   await expect(tasksEntry).toBeVisible()
-  // The card has no switch of its own: it lives on the page the card opens.
-  await expect(tasksCard.locator('[role="switch"]')).toHaveCount(0)
-  await openBuiltinDetail(page, 'tasks')
-  await expect(tasksSwitch).toHaveAttribute('aria-checked', 'true')
+  // The switch is on the card itself; on the sidebar there is no Open (the sidebar opens it).
+  await expect(cardSwitch).toHaveAttribute('aria-checked', 'true')
+  await expect(page.getByTestId('apps-builtin-card-open-tasks')).toHaveCount(0)
 
-  // Off: gone from the sidebar at once.
-  await tasksSwitch.click()
-  await expect(tasksSwitch).toHaveAttribute('aria-checked', 'false')
+  // Off from the card: gone from the sidebar at once, the card stays on the grid (no detail page).
+  await cardSwitch.click()
+  await expect(cardSwitch).toHaveAttribute('aria-checked', 'false')
   await expect(tasksEntry).toHaveCount(0)
-  await backToApps(page)
+  await expect(page.getByTestId('builtin-detail')).toHaveCount(0)
   await expect(tasksCard).toHaveAttribute('data-shown', 'false')
   await expect(page.getByTestId('apps-builtin-tasks-status')).toHaveText('Only in Apps')
+  // Off the sidebar, the card is the way in: it gets Open.
+  await expect(page.getByTestId('apps-builtin-card-open-tasks')).toBeVisible()
 
-  // A reload keeps the choice.
+  // A reload keeps the choice, and the card's detail page agrees.
   await page.reload()
   await expect(page.getByTestId('apps-page')).toBeVisible({ timeout: 60_000 })
   await expect(page.getByTestId('apps-builtin-tasks')).toHaveAttribute('data-shown', 'false', { timeout: 30_000 })
   await expect(page.getByTestId('sidebar-core-app-apps')).toBeVisible()
   await expect(tasksEntry).toHaveCount(0)
 
-  // On: back on the sidebar.
+  // On, from its page this time: back on the sidebar, and the card follows.
   await openBuiltinDetail(page, 'tasks')
   await expect(tasksSwitch).toHaveAttribute('aria-checked', 'false')
   await tasksSwitch.click()
@@ -190,23 +193,23 @@ test('a built-in switch takes it off the sidebar, a reload keeps it off, and on 
   await expect(tasksEntry).toBeVisible({ timeout: 15_000 })
   await backToApps(page)
   await expect(page.getByTestId('apps-builtin-tasks')).toHaveAttribute('data-shown', 'true')
+  await expect(cardSwitch).toHaveAttribute('aria-checked', 'true')
 
-  // Org is a rail item, not a registry app; its switch does the same.
+  // Org is a rail item, not a registry app; its card switch does the same, twice over.
   const orgEntry = page.getByTestId('sidebar-org')
+  const orgSwitch = page.getByTestId('apps-builtin-card-toggle-org')
   await expect(orgEntry).toBeVisible()
-  await openBuiltinDetail(page, 'org')
-  await page.getByTestId('apps-builtin-toggle-org').click()
-  await expect(orgEntry).toHaveCount(0)
-  await backToApps(page)
-  await expect(page.getByTestId('apps-builtin-org')).toHaveAttribute('data-shown', 'false')
-  await openBuiltinDetail(page, 'org')
-  await page.getByTestId('apps-builtin-toggle-org').click()
-  await expect(orgEntry).toBeVisible({ timeout: 15_000 })
-  await backToApps(page)
-  await expect(page.getByTestId('apps-builtin-org')).toHaveAttribute('data-shown', 'true')
+  for (let round = 0; round < 2; round += 1) {
+    await orgSwitch.click()
+    await expect(orgEntry).toHaveCount(0)
+    await expect(page.getByTestId('apps-builtin-org')).toHaveAttribute('data-shown', 'false')
+    await orgSwitch.click()
+    await expect(orgEntry).toBeVisible({ timeout: 15_000 })
+    await expect(page.getByTestId('apps-builtin-org')).toHaveAttribute('data-shown', 'true')
+  }
 })
 
-test('Home, Apps and Settings always stay on the sidebar: their pages show a lock, not a switch', async ({ page }) => {
+test('Home, Apps and Settings always stay on the sidebar: a lock, never a switch', async ({ page }) => {
   await home(page)
   await openApps(page)
   for (const id of ['home', 'apps', 'settings']) {
@@ -214,7 +217,10 @@ test('Home, Apps and Settings always stay on the sidebar: their pages show a loc
     await expect(card, id).toBeVisible()
     await expect(card, id).toHaveAttribute('data-shown', 'true')
     await expect(page.getByTestId(`apps-builtin-${id}-status`), id).toHaveText('Always on the sidebar')
+    await expect(card.locator('.apps-card-lock'), id).toHaveCount(1)
+    // Nothing on the card that looks pressable: no switch, no Open.
     await expect(card.locator('[role="switch"]'), id).toHaveCount(0)
+    await expect(card.locator('.apps-card-open'), id).toHaveCount(0)
     await openBuiltinDetail(page, id)
     const detail = page.getByTestId('builtin-detail')
     await expect(page.getByTestId(`apps-builtin-toggle-${id}`), id).toHaveCount(0)
@@ -222,31 +228,74 @@ test('Home, Apps and Settings always stay on the sidebar: their pages show a loc
     await expect(detail.getByRole('img', { name: /always stays on the sidebar/ }), id).toBeVisible()
     await backToApps(page)
   }
-  // Every other built-in has one, on its page and never on its card.
+  // Every other built-in has one on its card and one on its page.
   for (const id of ['tasks', 'routines', 'notes', 'org']) {
-    await expect(page.getByTestId(`apps-builtin-${id}`).locator('[role="switch"]'), id).toHaveCount(0)
+    await expect(page.getByTestId(`apps-builtin-${id}`).locator('[role="switch"]'), id).toHaveCount(1)
+    await expect(page.getByTestId(`apps-builtin-card-toggle-${id}`), id).toHaveAttribute('aria-label', /^Show .+ on the sidebar$/)
     await openBuiltinDetail(page, id)
     await expect(page.getByTestId(`apps-builtin-toggle-${id}`), id).toHaveCount(1)
     await backToApps(page)
   }
 })
 
-test('a category chip narrows the page to that group; a search with no match says so and Clear restores', async ({ page }) => {
+test('the page opens on the plugins: with a screen, then in the background, and Built in last', async ({ page }) => {
   await home(page)
   await openApps(page)
-  const groups = page.locator('[data-testid^="apps-category-"]')
-  // The fixture's plugins fall into more than one group, so narrowing is visible.
-  await expect.poll(() => groups.count(), { timeout: 30_000 }).toBeGreaterThan(1)
-  const groupIds = await groups.evaluateAll((els) => els.map((el) => el.getAttribute('data-testid')!.slice('apps-category-'.length)))
-  const target = groupIds[groupIds.length - 1]!
-  // Each group has its heading.
-  await expect(page.getByTestId(`apps-category-${target}`).locator('h2')).toBeVisible()
+  const ui = page.getByTestId('apps-kind-ui')
+  const background = page.getByTestId('apps-kind-background')
+  await expect(ui).toBeVisible({ timeout: 30_000 })
+  await expect(background).toBeVisible()
+  // A plugin with a web entry has a screen; one with none runs in the background.
+  for (const id of ['walnut-time', 'sigma']) await expect(ui.getByTestId(`plugin-card-${id}`), id).toBeVisible()
+  // tau's web entry fails to load, so no App of it is ever registered: only the server's
+  // word (its manifest declares a web entry) puts it here.
+  await expect(ui.getByTestId('plugin-card-tau')).toBeVisible()
+  await expect(page.getByTestId('plugin-card-open-tau')).toHaveCount(0)
+  for (const id of ['alpha', 'kappa']) await expect(background.getByTestId(`plugin-card-${id}`), id).toBeVisible()
+  await expect(ui.getByTestId('plugin-card-alpha')).toHaveCount(0)
+  await expect(background.getByTestId('plugin-card-walnut-time')).toHaveCount(0)
+  // In document order: screen, background, Get more, Make your own, then Built in.
+  const order = await page.evaluate(() => Array.from(document.querySelectorAll('[data-testid="apps-page"] .apps-section'))
+    .map((el) => el.getAttribute('data-testid')))
+  expect(order).toEqual(['apps-kind-ui', 'apps-kind-background', 'apps-get-more', 'apps-make', 'apps-builtin'])
+  // Chips read All, the plugin groups, Get more, then Built in.
+  const chips = await page.locator('.apps-chips button').evaluateAll((els) => els.map((el) => el.getAttribute('data-testid')))
+  expect(chips[0]).toBe('apps-chip-all')
+  expect(chips.slice(-2)).toEqual(['apps-chip-get', 'apps-chip-builtin'])
 
-  const chip = page.getByTestId(`apps-chip-${target}`)
+  // Turning a plugin with a screen off keeps its card in that group (it reads Off there).
+  await openPluginDetail(page, 'sigma')
+  const sigmaSwitch = page.locator('#plugin-toggle-sigma')
+  await sigmaSwitch.click()
+  await expect(page.getByTestId('plugin-row-sigma')).toHaveAttribute('data-plugin-status', 'disabled', { timeout: 30_000 })
+  await backToApps(page)
+  // Its App is gone (no Open), so the group comes from the server, not from a live App.
+  await expect(page.getByTestId('plugin-card-open-sigma')).toHaveCount(0, { timeout: 30_000 })
+  await expect(ui.getByTestId('plugin-card-sigma')).toBeVisible()
+  await expect(page.getByTestId('plugin-card-sigma-status')).toHaveText('Off')
+  await openPluginDetail(page, 'sigma')
+  await sigmaSwitch.click()
+  await expect(page.getByTestId('plugin-row-sigma')).not.toHaveAttribute('data-plugin-status', 'disabled', { timeout: 30_000 })
+  await backToApps(page)
+  await expect(ui.getByTestId('plugin-card-sigma')).toBeVisible()
+})
+
+test('a category chip narrows the plugins; a search with no match says so and Clear restores', async ({ page }) => {
+  await home(page)
+  await openApps(page)
+  const kinds = page.locator('[data-testid^="apps-kind-"]')
+  const cards = page.locator('[data-testid^="apps-kind-"] .apps-card')
+  await expect.poll(() => cards.count(), { timeout: 30_000 }).toBeGreaterThan(1)
+  const total = await cards.count()
+  // The fixture's plugins fall into more than one category, so narrowing is visible.
+  const categoryChips = page.locator('.apps-chips button:not([data-testid="apps-chip-all"]):not([data-testid="apps-chip-builtin"]):not([data-testid="apps-chip-get"])')
+  await expect.poll(() => categoryChips.count()).toBeGreaterThan(1)
+
+  const chip = categoryChips.last()
   await chip.click()
   await expect(chip).toHaveAttribute('aria-pressed', 'true')
-  await expect(groups).toHaveCount(1)
-  await expect(page.getByTestId(`apps-category-${target}`)).toBeVisible()
+  await expect.poll(() => cards.count()).toBeGreaterThan(0)
+  expect(await cards.count()).toBeLessThan(total)
   await expect(page.getByTestId('apps-builtin')).toHaveCount(0)
   await expect(page.getByTestId('apps-get-more')).toHaveCount(0)
   await expect(page.getByTestId('apps-make')).toHaveCount(0)
@@ -254,10 +303,10 @@ test('a category chip narrows the page to that group; a search with no match say
   // Built in shows only the built-ins; All brings everything back.
   await page.getByTestId('apps-chip-builtin').click()
   await expect(page.getByTestId('apps-builtin')).toBeVisible()
-  await expect(groups).toHaveCount(0)
+  await expect(kinds).toHaveCount(0)
   await page.getByTestId('apps-chip-all').click()
   await expect(page.getByTestId('apps-chip-all')).toHaveAttribute('aria-pressed', 'true')
-  await expect.poll(() => groups.count()).toBe(groupIds.length)
+  await expect.poll(() => cards.count()).toBe(total)
   await expect(page.getByTestId('apps-get-more')).toBeVisible()
 
   // Search: nothing matches, the page says so with a way back.
@@ -267,12 +316,12 @@ test('a category chip narrows the page to that group; a search with no match say
   await expect(empty).toBeVisible()
   await expect(empty).toContainText('Nothing matches')
   await expect(page.getByTestId('apps-builtin')).toHaveCount(0)
-  await expect(groups).toHaveCount(0)
+  await expect(kinds).toHaveCount(0)
   await empty.getByRole('button', { name: 'Clear search' }).click()
   await expect(search).toHaveValue('')
   await expect(empty).toHaveCount(0)
   await expect(page.getByTestId('apps-builtin')).toBeVisible()
-  await expect.poll(() => groups.count()).toBe(groupIds.length)
+  await expect.poll(() => cards.count()).toBe(total)
   await expect(page.getByTestId('apps-make')).toBeVisible()
 })
 

@@ -136,6 +136,18 @@ describe('mergePluginRegistry', () => {
     expect(rows.find((r) => !r.installed)!.dir).toBeUndefined()
   })
 
+  it('passes on whether an installed plugin has a screen, and says nothing when it has none', () => {
+    const { rows } = mergePluginRegistry(
+      [gitEntry],
+      [
+        installed({ id: 'home-grown', name: 'Home Grown', state: 'disabled', hasUi: true }),
+        installed({ id: 'quiet', name: 'Quiet', state: 'active' }),
+      ],
+    )
+    expect(rows.find((r) => r.id === 'home-grown')!.hasUi).toBe(true)
+    expect('hasUi' in rows.find((r) => r.id === 'quiet')!).toBe(false)
+  })
+
   it('hides the local fallback from both lists', () => {
     const { rows } = mergePluginRegistry(
       [{ id: 'local', name: 'Local', source: { kind: 'builtin' } }],

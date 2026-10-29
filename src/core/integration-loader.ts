@@ -2307,6 +2307,19 @@ export function loadNewPlugins(registry: IntegrationRegistry): Promise<void> {
 // Read the registry LIVE on every call so the plugin-store soft reload is picked
 // up without a restart — nothing here is cached.
 
+/**
+ * Whether a plugin ships a screen of its own (a native web entry, a webview, or a
+ * `capabilities.ui.app` block), read from the validated manifest the walk kept. A plugin
+ * that is off keeps its manifest here while its live definition is gone, so the answer does
+ * not change when it is turned off. Undefined when this registry never read the manifest.
+ */
+export function pluginManifestHasUi(registry: IntegrationRegistry, pluginId: string): boolean | undefined {
+  const manifest = pluginManifests.get(registry)?.get(pluginId);
+  if (!manifest) return undefined;
+  const uiApp = (manifest.capabilities?.ui as { app?: unknown } | undefined)?.app;
+  return Boolean((manifest.apiVersion === 1 && manifest.web) || manifest.webview || uiApp);
+}
+
 /** Plugins with a validated ui app, in registration order. */
 export function getPluginApps(registry: IntegrationRegistry): Array<{
   id: string; pluginId: string; title: string; entry: string; icon?: string; pluginDir: string;

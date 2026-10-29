@@ -98,6 +98,21 @@ describe('plugin runtime routes', () => {
     expect((await request(noFlag).get('/api/plugin-runtime').expect(200)).body).not.toHaveProperty('loading')
   })
 
+  it('a replica groups its Apps page by the Mac: hasUi rides the lifecycle list, off or on', async () => {
+    const listPrimaryModules = vi.fn(async () => ({
+      plugins: [
+        { ...record({ id: 'with-screen', state: 'disabled' }), hasUi: true },
+        record({ id: 'quiet' }),
+      ],
+      tombstones: [], modules: [], errors: [],
+    }))
+    const { app } = setup({ cloudMode: true, listPrimaryModules })
+    const response = await request(app).get('/api/plugin-runtime/registry').expect(200)
+    const byId = new Map((response.body.rows as Array<{ id: string; hasUi?: boolean }>).map((row) => [row.id, row]))
+    expect(byId.get('with-screen')?.hasUi).toBe(true)
+    expect(byId.get('quiet')?.hasUi).toBeUndefined()
+  })
+
   it('relays the primary saying its list is still partial', async () => {
     const listPrimaryModules = vi.fn(async () => ({
       plugins: [record()], tombstones: [], modules: [], errors: [], loading: true,

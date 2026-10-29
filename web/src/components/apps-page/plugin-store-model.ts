@@ -63,6 +63,8 @@ export interface RegistryRow {
   iconUrl?: string
   /** Installed only: the folder its code loads from on the server's host. An older server sends none. */
   dir?: string
+  /** Installed only: it ships a web entry (an App, a page, a panel), on or off. */
+  hasUi?: boolean
 }
 
 export interface RegistryResponse {
@@ -116,7 +118,7 @@ export function partParents(installed: readonly Pick<RegistryRow, 'id'>[]): Map<
   return parentOf
 }
 
-export type CardTone = 'on' | 'off' | 'warn' | 'bad' | 'update' | 'get'
+export type CardTone = 'on' | 'off' | 'warn' | 'bad' | 'update' | 'get' | 'fixed'
 
 /** The one status a card shows: what most needs the user first, then on or off. */
 export function cardStatus(

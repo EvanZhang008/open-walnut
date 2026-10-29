@@ -116,9 +116,9 @@ function AppsPageBody() {
 
   const chips: { id: AppsFilter; label: string }[] = [
     { id: 'all', label: 'All' },
-    { id: 'builtin', label: 'Built in' },
     ...summary.categories.map((category) => ({ id: category, label: PLUGIN_CATEGORY_LABELS[category] })),
     { id: 'get', label: 'Get more' },
+    { id: 'builtin', label: 'Built in' },
   ]
 
   return (
@@ -180,6 +180,17 @@ function AppsPageBody() {
           </div>
         )}
 
+        {showPlugins && <PluginStoreGrid store={store} filter={filter} query={query} onSummary={onSummary} onOpen={openPlugin} />}
+
+        {showMake && !searching && (
+          <section className="apps-section" data-testid="apps-make" aria-labelledby="apps-make-title">
+            <h2 className="apps-section-title" id="apps-make-title">Make your own</h2>
+            <MakeAppCard />
+          </section>
+        )}
+
+        {/* Last: the built-ins are already on the sidebar, so the page opens on what you can
+            add, set up or turn off, and the built-ins sit below for hiding one. */}
         {showBuiltin && builtinHits > 0 && (
           <section className="apps-section" data-testid="apps-builtin" aria-labelledby="apps-builtin-title">
             <h2 className="apps-section-title" id="apps-builtin-title">
@@ -187,15 +198,6 @@ function AppsPageBody() {
               <span className="apps-section-count">{`${onRail} of ${builtins.length} on the sidebar`}</span>
             </h2>
             <BuiltinAppsGrid query={query} onOpen={openApp} />
-          </section>
-        )}
-
-        {showPlugins && <PluginStoreGrid store={store} filter={filter} query={query} onSummary={onSummary} onOpen={openPlugin} />}
-
-        {showMake && !searching && (
-          <section className="apps-section" data-testid="apps-make" aria-labelledby="apps-make-title">
-            <h2 className="apps-section-title" id="apps-make-title">Make your own</h2>
-            <MakeAppCard />
           </section>
         )}
       </div>

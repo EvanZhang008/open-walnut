@@ -173,6 +173,8 @@ export interface InstalledPluginFacts {
   linkedScanSkipped?: boolean
   /** The folder its code loads from on this host. Unset on a replica, which reads the Mac's list. */
   dir?: string
+  /** It ships a web entry: an App, a page or a panel of its own, whether it is on or off. */
+  hasUi?: boolean
 }
 
 export interface PluginRegistryRow {
@@ -216,6 +218,9 @@ export interface PluginRegistryRow {
   /** Installed only: the folder its code loads from on the server's host (the Apps detail page
    *  says where a plugin runs from). Absent on a replica. */
   dir?: string
+  /** Installed only: it ships a web entry (an App, a page, a panel), on or off. The Apps page
+   *  groups by it. Absent on a replica and from an older server. */
+  hasUi?: boolean
   /** `/api/plugin-runtime/<id>/icon?v=…`, present only when the manifest's icon exists on this
    *  machine. Added by the registry route (plugin-icon-route.ts), never by the pure merge. */
   iconUrl?: string
@@ -471,6 +476,7 @@ export function mergePluginRegistry(
       toggleable: isToggleable(status),
       ...(plugin.linkedScanSkipped ? { linkedScanSkipped: true } : {}),
       ...(plugin.dir ? { dir: plugin.dir } : {}),
+      ...(plugin.hasUi ? { hasUi: true } : {}),
     })
   }
 

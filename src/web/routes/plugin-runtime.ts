@@ -33,6 +33,7 @@ import {
 import { markHandledFailure } from '../middleware/handled-failure.js'
 import { mountBundledPluginRoutes, type BundledPluginConfigWriter } from './plugin-bundled-routes.js'
 import { mountPluginIconRoute, withPluginIconUrls, type PluginIconDirs } from './plugin-icon-route.js'
+import { pluginManifestHasUi } from '../../core/integration-loader.js'
 import { resolveBundledStoreDir } from '../../core/plugins/bundled-store.js'
 import {
   loadPluginCatalog,
@@ -66,6 +67,23 @@ import {
  * or a CLI that has this second to rsync a directory.
  */
 const ALREADY_LOADED_NOTE = 'already loaded; use POST /api/plugin-runtime/<id>/reload to pick up changed files'
+
+/**
+ * A manifest the loader never read (a test registry, a plugin it skipped): the same rule
+ * as `pluginManifestHasUi`, from the file. Async, so the route never blocks.
+ */
+async function manifestDeclaresUi(dir: string): Promise<boolean> {
+  try {
+    const manifest = JSON.parse(await fsp.readFile(path.join(dir, 'manifest.json'), 'utf8')) as {
+      apiVersion?: unknown; web?: unknown; webview?: unknown; capabilities?: { ui?: { app?: unknown } }
+    }
+    const isObject = (value: unknown) => typeof value === 'object' && value !== null && !Array.isArray(value)
+    return (manifest.apiVersion === 1 && typeof manifest.web === 'string' && manifest.web !== '')
+      || isObject(manifest.webview) || isObject(manifest.capabilities?.ui?.app)
+  } catch {
+    return false
+  }
+}
 
 // Re-exported so existing importers (server.ts, tests) keep one import path.
 export {
@@ -228,7 +246,10 @@ export function createPluginRuntimeRouter(deps: PluginRuntimeRouterDeps): Router
         url: `/api/plugin-runtime/${encodeURIComponent(module.id)}/web-module?v=${module.hash}`,
       }))
       res.json({
-        plugins: catalogue.plugins,
+        // A replica's Apps page groups by `hasUi` and has no manifests of its own to read.
+        plugins: cloudMode ? catalogue.plugins : catalogue.plugins.map((plugin) => (
+          pluginManifestHasUi(deps.registry, plugin.id) ? { ...plugin, hasUi: true } : plugin
+        )),
         tombstones: catalogue.tombstones,
         modules,
         moduleErrors: catalogue.errors,
@@ -293,6 +314,16 @@ export function createPluginRuntimeRouter(deps: PluginRuntimeRouterDeps): Router
         : new Map((await Promise.all(lifecycle.map(async (record) => {
           try { return [record.id, await iconDirs.installed(record.id)] as const } catch { return [record.id, undefined] as const }
         }))).filter((entry): entry is readonly [string, string] => typeof entry[1] === 'string' && entry[1] !== ''))
+      // Which plugins have a screen of their own (the Apps page groups by it): the validated
+      // manifest the loader kept, which a plugin that is off keeps too, so turning one off
+      // never moves its card. A replica reads the Mac's answer off the lifecycle list.
+      const withUi = new Set((await Promise.all(lifecycle.map(async (record) => {
+        if (cloudMode) return (record as { hasUi?: boolean }).hasUi === true ? record.id : undefined
+        const known = pluginManifestHasUi(deps.registry, record.id)
+        if (known !== undefined) return known ? record.id : undefined
+        const dir = dirs.get(record.id)
+        return dir && await manifestDeclaresUi(dir) ? record.id : undefined
+      }))).filter((id): id is string => id !== undefined))
       const installed: InstalledPluginFacts[] = lifecycle.map((record) => {
         const live = deps.registry.get(record.id)
         const tombstone = deps.registry.getTombstone(record.id)
@@ -334,6 +365,7 @@ export function createPluginRuntimeRouter(deps: PluginRuntimeRouterDeps): Router
             ? { linkedScanSkipped: true }
             : {}),
           ...(dirs.has(record.id) ? { dir: dirs.get(record.id) } : {}),
+          ...(withUi.has(record.id) ? { hasUi: true } : {}),
         }
       })
       const merged: PluginRegistryResult = mergePluginRegistry(catalog, installed)
