@@ -73,7 +73,7 @@ import {
   parseBunInstall, parseBunProbe, type RemoteRuntime,
 } from './remote-runtime.js'
 import { runRemoteFoldPrewarm } from './remote-fold-prewarm.js'
-import { hostSliceWaitMs } from './host-slice-pace.js'
+import { freshLinkWaitMs, hostSliceWaitMs } from './host-slice-pace.js'
 import { FOLD_CHECKPOINT_FORMAT } from './fold-checkpoint-core.js'
 import { annotateCredentialFailure, SSH_EVIDENCE_PREFIX } from './ssh-credential-evidence.js'
 import { cancelRecordedForwards, controlSocketPath, exitControlMaster, planControlMaster, recordForward, startControlMaster } from './ssh-control-master.js'
@@ -538,10 +538,29 @@ export class DaemonConnection {
   private hostSlicePaceTimer: ReturnType<typeof setTimeout> | null = null
   /** The Walnut was described to this daemon (leader.configure) on this connection. */
   private leaderConfigured = false
-  /** The routine spawn template this daemon holds from this connection (clock-host-start-v1), by hash. */
+  /** The routine spawn template this daemon process holds (clock-host-start-v1), by hash. */
   private routineTemplateHash: string | null = null
   /** This connection's first host-replica round was started. */
   private replicaPushed = false
+  /** The first host-replica round of a new link, held for the link's first seconds. */
+  private hostReplicaTimer: ReturnType<typeof setTimeout> | null = null
+  /** When this link came up (setConnected(true)); 0 before the first. */
+  private linkUpAt = 0
+  /**
+   * The daemon process (hello instanceId) the per-daemon memos were taken on: the
+   * skills it was given, the routine template, the host-replica manifests. A
+   * reconnect to the SAME process keeps them, since it still holds what it was
+   * sent; a new process, or one that names no instance, starts them over.
+   */
+  private memoInstanceId: string | null = null
+  /**
+   * The daemon process that took a whole copy of ours (or held it at a probe). Only a
+   * link back to it waits out its first seconds before the copy and the replica rounds:
+   * a daemon that never had one gets them at once, so it can answer if the Mac goes.
+   */
+  private copyAckedInstance: string | null = null
+  /** This link reached a daemon process that already held a copy of ours (set as it comes up). */
+  private linkHadOurCopy = false
 
   /**
    * Bulk data channel — a SECOND WebSocket to the same daemon (same tunnel
@@ -940,11 +959,25 @@ export class DaemonConnection {
     // were away, then hand it a fresh read copy (docs/plan/daemon-first-hosts.md).
     if (changed) {
       this.lastHostSlicePushHash = null; this.hostSliceSids = new Set(); this.offlineDrainDue = true; this.leaderConfigured = false; this.replicaPushed = false
-      // A new link's first copy goes at once (it tells the daemon which socket is ours).
+      // A new link's first copy is probed first; back at a daemon process that held ours, one it lacks waits out the link's first seconds.
       this.hostSliceSentAt = 0; this.hostSliceSentBytes = 0
       if (this.hostSlicePaceTimer) { clearTimeout(this.hostSlicePaceTimer); this.hostSlicePaceTimer = null }
-      this.routineTemplateHash = null
-      void import('../core/host-replica.js').then((m) => m.forgetHostReplica(this.hostKey)).catch(() => {})
+      if (this.hostReplicaTimer) { clearTimeout(this.hostReplicaTimer); this.hostReplicaTimer = null }
+    }
+    if (changed && value) {
+      this.linkUpAt = Date.now()
+      // What a daemon process was sent it still holds when the link comes back to
+      // it: the skills (228 KB), the routine template (60 KB) and the host-replica
+      // manifests (about 630 KB) went again on every reconnect, in the link's first
+      // second, where a relay drops it (host-slice-pace.ts).
+      const sameDaemon = this._daemonInstanceId !== null && this._daemonInstanceId === this.memoInstanceId
+      if (!sameDaemon) {
+        this.lastSkillSyncHash = null
+        this.routineTemplateHash = null
+        void import('../core/host-replica.js').then((m) => m.forgetHostReplica(this.hostKey)).catch(() => {})
+      }
+      this.memoInstanceId = this._daemonInstanceId
+      this.linkHadOurCopy = this.hostKey !== '__local__' && this._daemonInstanceId !== null && this.copyAckedInstance === this._daemonInstanceId
     }
     if (changed && value) this.pushHostSlice()
     // A server this Mac keeps on the host loses its streams with the link
@@ -956,9 +989,8 @@ export class DaemonConnection {
     // host server is set up on the next one (after its leader.configure).
     if (changed && !value) this.closeLane()
     // Distribute the walnut skill to this host's engine-native discovery
-    // surfaces (claude skill store / codex AGENTS.md) on every (re)connect —
-    // same freshness mechanism as the shims, hash-skipped daemon-side.
-    if (changed) this.lastSkillSyncHash = null
+    // surfaces (claude skill store / codex AGENTS.md) on every (re)connect to a
+    // new daemon process (the memo above), hash-skipped daemon-side too.
     if (changed && value) this.pushSkillSync()
     // Keep bridge health fresh while connected: without a periodic re-push,
     // _lastBridgeConnected only updates on (re)connect and rots for days.
@@ -1268,6 +1300,8 @@ export class DaemonConnection {
     if (this.hostSlicePushInFlight) { this.hostSlicePushRerun = true; return }
     this.hostSlicePushInFlight = true
     void (async () => {
+      // This link's first copy waits out the link's first seconds (below); the replica rounds go after it.
+      let firstCopyHeld = false
       try {
         do {
           this.hostSlicePushRerun = false
@@ -1291,10 +1325,12 @@ export class DaemonConnection {
           // the daemon did not): name it instead of sending it (host-slice-probe-v1).
           // The whole copy on every reconnect was what dropped the new link again
           // within a second, five times in a row (2026-10-29).
-          if (this.lastHostSlicePushHash === null && this.hostKey !== '__local__' && this.hasCapability('host-slice-probe-v1')) {
+          const firstOnLink = this.lastHostSlicePushHash === null
+          if (firstOnLink && this.hostKey !== '__local__' && this.hasCapability('host-slice-probe-v1')) {
             const probe = await this.send('host.slice', { home: slice.home, hash: slice.hash, asOf: slice.asOf }) as Record<string, unknown>
             if (probe.ok === true && probe.have === true) {
               this.lastHostSlicePushHash = slice.hash
+              this.copyAckedInstance = this._daemonInstanceId
               this.hostSliceSids = new Set(slice.sessions.map((s) => s.sid))
               // Paced like a copy sent now: the next change waits behind it.
               this.hostSliceSentAt = Date.now()
@@ -1307,7 +1343,13 @@ export class DaemonConnection {
           // A remote host's copy waits in proportion to the last one's size: whole
           // copies after every debounce were the upload bursts a relay drops the
           // shared SSH connection on (host-slice-pace.ts). This machine's never waits.
-          const wait = this.hostKey === '__local__' ? 0 : hostSliceWaitMs({
+          // A probed daemon that holds an older copy of ours gets this one once the link
+          // is past its first seconds (host-slice-pace.ts): leader.configure below binds
+          // the socket meanwhile. Needs both: an older daemon binds only on a copy.
+          const settle = firstOnLink && this.linkHadOurCopy && this.hasCapability('host-slice-probe-v1')
+            && this.hasCapability('leader-epoch-v1') ? freshLinkWaitMs(this.linkUpAt, Date.now()) : 0
+          if (settle > 0) firstCopyHeld = true
+          const wait = this.hostKey === '__local__' ? 0 : settle > 0 ? settle : hostSliceWaitMs({
             lastSentAt: this.hostSliceSentAt, lastBytes: this.hostSliceSentBytes, now: Date.now(),
             namesNewSession: slice.sessions.some((s) => !this.hostSliceSids.has(s.sid)),
           })
@@ -1333,6 +1375,7 @@ export class DaemonConnection {
           }
           this.lastHostSlicePushHash = slice.hash
           this.hostSliceSids = new Set(slice.sessions.map((s) => s.sid))
+          this.copyAckedInstance = this._daemonInstanceId
           log.session.info('DaemonConnection: host slice pushed', {
             host: this.hostKey, hash: slice.hash, sessions: slice.sessions.length, tasks: slice.tasks.length,
             requests: slice.requests.length, changed: (reply as Record<string, unknown>).changed === true,
@@ -1358,8 +1401,19 @@ export class DaemonConnection {
           }
         }
         // Then, once per connection, the host's read copy of the notes, memory and
-        // skills (their own changes push it from then on: core/host-replica-sync.ts).
-        if (!this.replicaPushed) { this.replicaPushed = true; this.pushHostReplica() }
+        // skills (their own changes push it from then on: core/host-replica-sync.ts):
+        // after this link's first copy, and, back at a daemon process that held ours,
+        // never in the link's first seconds, where its manifests (notes 345 KB,
+        // pictures 242 KB) were what the relay dropped. A new process gets them at once.
+        if (!this.replicaPushed && !firstCopyHeld) {
+          this.replicaPushed = true
+          const settle = this.linkHadOurCopy ? freshLinkWaitMs(this.linkUpAt, Date.now()) : 0
+          if (settle <= 0) this.pushHostReplica()
+          else if (!this._destroyed) {
+            this.hostReplicaTimer = setTimeout(() => { this.hostReplicaTimer = null; if (!this._destroyed) this.pushHostReplica() }, settle)
+            this.hostReplicaTimer.unref?.()
+          }
+        }
       } catch (err) {
         log.session.warn('DaemonConnection: host slice push failed', {
           host: this.hostKey, error: err instanceof Error ? err.message : String(err),
@@ -2348,6 +2402,7 @@ export class DaemonConnection {
     return {
       hostKey: this.hostKey,
       get connected() { return conn.connected },
+      get daemonInstanceId() { return conn.daemonInstanceId },
       hasCapability: (cap: string) => conn.hasCapability(cap),
       send: (cmd: string, params?: Record<string, unknown>, timeoutMs?: number) => conn.send(cmd, params, timeoutMs),
       runRemoteScript: (script: string, timeoutMs?: number) => conn.runRemoteScript(script, timeoutMs),

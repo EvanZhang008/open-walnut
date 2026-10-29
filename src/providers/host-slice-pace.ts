@@ -39,3 +39,24 @@ export function hostSliceWaitMs(p: HostSlicePaceInput): number {
   const gap = Math.min(HOST_SLICE_MAX_GAP_MS, (p.lastBytes / HOST_SLICE_UPLOAD_BYTES_PER_SEC) * 1000)
   return Math.max(0, Math.ceil(p.lastSentAt + gap - p.now))
 }
+
+/**
+ * A link back to a daemon process that took a copy of ours before: its first
+ * whole copy, when the probe said it does not hold this one, waits until the
+ * link has been up this long. 2026-10-28/29: 139 of 289 drops of one host's
+ * session link came within 3 s of a reconnect (median 0.27 s), each with the
+ * connect's uploads in flight, the 0.9 MB copy most of all. A copy that never got through left the next probe missing too, so every
+ * reconnect sent it again and dropped again, 5 to 13 times in a few minutes.
+ * Meanwhile the Mac answers the host's calls (it is connected), the daemon
+ * keeps the older copy for a drop, and leader.configure, which does not wait,
+ * binds the socket as the copy would have. The host replica rounds follow the
+ * copy, so they stay out of those seconds too. A daemon process that never had
+ * a copy of ours gets it at once: it has nothing to answer from if the Mac goes.
+ */
+export const HOST_SLICE_FRESH_LINK_SETTLE_MS = 15_000
+
+/** How long a send kept out of a new link's first seconds still waits (0: the link is old enough, or its age is unknown). */
+export function freshLinkWaitMs(linkUpAt: number, now: number, settleMs = HOST_SLICE_FRESH_LINK_SETTLE_MS): number {
+  if (linkUpAt <= 0) return 0
+  return Math.max(0, Math.ceil(linkUpAt + settleMs - now))
+}

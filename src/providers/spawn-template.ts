@@ -182,21 +182,26 @@ export async function pushRoutineSpawnTemplate(
  * Push this Mac's template to a host's daemon (`leader.spawnTemplate`, trusted socket,
  * after leader.configure), so a new ask can start there while the Mac is away. Called by
  * the host-server manager when it configures the replica program (it knows the replica's
- * data dir, where asks run). A daemon without 'replica-start-v1' is never asked.
+ * data dir, where asks run). A daemon without 'replica-start-v1' is never asked (false).
+ * Answers the template's hash (its content without the build time) and whether it went:
+ * nothing is sent when that is `unlessHash` (the daemon process holds it already).
  */
 export async function pushHostSpawnTemplate(
   host: { hasCapability(cap: string): boolean; send(cmd: string, params?: Record<string, unknown>, timeoutMs?: number): Promise<Record<string, unknown>> },
-  o: { home: string; hostKey: string; cwd: string; bypassAllowed?: boolean },
-): Promise<boolean> {
+  o: { home: string; hostKey: string; cwd: string; bypassAllowed?: boolean; unlessHash?: string | null },
+): Promise<false | { hash: string; sent: boolean }> {
   if (!host.hasCapability('replica-start-v1')) return false
-  const { getConfig } = await import('../core/config-manager.js')
+  const [{ getConfig }, { createHash }] = await Promise.all([import('../core/config-manager.js'), import('node:crypto')])
   const config = await getConfig()
   const template = buildHostSpawnTemplate({
     home: o.home, hostKey: o.hostKey, cwd: o.cwd, bypassAllowed: o.bypassAllowed,
     streamPartialMessages: config.session?.stream_partial_messages, permissionPrompt: config.session?.permission_prompt,
     agents: await hostAgentTools(),
   })
+  const { builtAt: _at, ...content } = template
+  const hash = createHash('sha256').update(JSON.stringify(content)).digest('hex').slice(0, 16)
+  if (hash === o.unlessHash) return { hash, sent: false }
   const reply = await host.send('leader.spawnTemplate', { home: o.home, template }, 15_000)
   if (reply.ok !== true) throw new Error(String(reply.error ?? 'leader.spawnTemplate refused'))
-  return true
+  return { hash, sent: true }
 }

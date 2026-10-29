@@ -82,6 +82,8 @@ export interface HostServerHost {
   openStream(to: 'follower', purpose?: string): Promise<Duplex>
   /** Carry those streams on a link of their own while the server runs (providers/stream-lane.ts). */
   keepStreamLane?(on: boolean): void
+  /** The daemon process this link reached (its hello instanceId): what it was sent before, it still holds. */
+  readonly daemonInstanceId?: string | null
 }
 
 export interface HostServerSettings {
@@ -292,6 +294,8 @@ export function createHostServerManager(deps: ManagerDeps) {
   const configured = new Map<string, { command: string; args: string[] }>()
   /** Per host running an older build than this Mac's: why (the view's `notice`). */
   const notices = new Map<string, string>()
+  /** The spawn template each host's daemon process holds, by hash (kept across a reconnect to the same process). */
+  const templateSent = new Map<string, { instance: string; hash: string }>()
   /** Per host whose newer build is held (update-hold.ts): when it goes; the poll sends it then. */
   const heldUntil = new Map<string, number>()
   const servingSince = deps.servingSince ?? deps.now()
@@ -728,9 +732,17 @@ export function createHostServerManager(deps: ManagerDeps) {
     if (replica && dataDir) {
       try {
         const { pushHostSpawnTemplate } = await import('../../providers/spawn-template.js')
-        const pushed = await pushHostSpawnTemplate(host, { home: deps.home, hostKey, cwd: dataDir, bypassAllowed: settings?.askBypass === true })
-        if (pushed) log.session.info('host server: spawn template pushed', { host: hostKey, cwd: dataDir, bypass: settings?.askBypass === true })
+        // The same daemon process holds the template it was sent on an earlier link: a
+        // reconnect sent its 60 KB again in the link's first second (host-slice-pace.ts).
+        const instance = host.daemonInstanceId ?? null
+        const memo = templateSent.get(hostKey)
+        const unlessHash = instance && memo?.instance === instance ? memo.hash : null
+        const pushed = await pushHostSpawnTemplate(host, { home: deps.home, hostKey, cwd: dataDir, bypassAllowed: settings?.askBypass === true, unlessHash })
+        if (pushed && instance) templateSent.set(hostKey, { instance, hash: pushed.hash })
+        else templateSent.delete(hostKey)
+        if (pushed && pushed.sent) log.session.info('host server: spawn template pushed', { host: hostKey, cwd: dataDir, bypass: settings?.askBypass === true })
       } catch (err) {
+        templateSent.delete(hostKey)
         log.session.warn('host server: the spawn template was not pushed; a new ask there needs this Mac', { host: hostKey, error: err instanceof Error ? err.message : String(err) })
       }
     }
