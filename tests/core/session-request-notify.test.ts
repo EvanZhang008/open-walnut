@@ -131,7 +131,7 @@ function backdateDeadline(id: string): void {
 }
 
 /** The phase-edge payload the hook dispatcher hands the handler. */
-function phasePayload(over: { sessionId?: string; taskId?: string; newPhase?: string; actorSid?: string } = {}): SessionHookContext {
+function phasePayload(over: { sessionId?: string; taskId?: string; newPhase?: string; actorSid?: string; at?: string } = {}): SessionHookContext {
   return {
     domain: 'task',
     taskId: over.taskId ?? 'task-77',
@@ -140,7 +140,8 @@ function phasePayload(over: { sessionId?: string; taskId?: string; newPhase?: st
     newPhase: over.newPhase ?? 'NEED_ACTION',
     ...(over.actorSid ? { actorSid: over.actorSid } : {}),
     eventSource: 'api',
-    timestamp: NOW,
+    // The bus stamps an edge when it happens, which is when a test makes it.
+    timestamp: over.at ?? new Date().toISOString(),
     traceId: 'trace-1',
     event: 'task:phase-changed',
   } as unknown as SessionHookContext;
@@ -460,6 +461,17 @@ describe('sessionRequestWatchHook — outcome selection at the turn-end edge', (
 
     expect(notifySpy.mock.calls[0][1]).toBe('error');
     expect(deliveredText()).toContain('It hit an ERROR before replying');
+  });
+
+  it('an edge from before the request was asked leaves it alone: it ended an earlier turn', async () => {
+    const before = new Date(Date.now() - 1000).toISOString();
+    const rq = await arm();
+    await fire(phasePayload({ at: before }));
+    expect(notifySpy).not.toHaveBeenCalled();
+    expect((await getSessionRequest(rq.id))?.status).toBe('pending');
+    // The turn that ends after it was asked still speaks.
+    await fire();
+    expect(notifySpy).toHaveBeenCalledTimes(1);
   });
 
   it('reports completed otherwise', async () => {

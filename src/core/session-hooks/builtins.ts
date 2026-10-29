@@ -2315,7 +2315,12 @@ export const sessionRequestWatchHook: SessionHookDefinition = {
     // take that journal in before asking what is owed and who answered. Free
     // when no host has said it journaled anything.
     await (await import('../offline-handover.js')).waitForOfflineHandovers();
-    const allPending = await pendingRequestsForTarget({ sessionId, taskId });
+    // A request asked after this edge belongs to a later turn: the edge (an earlier turn's
+    // end) says nothing of it. Hooks run after the edge, so a slow box let the hand-back of
+    // the turn before settle a message still on its way (2026-10-29, CI only).
+    const edgeAt = isPhaseEdge ? Date.parse(ctx.timestamp) : NaN;
+    const allPending = (await pendingRequestsForTarget({ sessionId, taskId }))
+      .filter((r) => !(Date.parse(r.createdAt) > edgeAt));
     const pending = actorSid ? allPending.filter((r) => r.fromSessionId !== actorSid) : allPending;
     const parentTaskId = task?.parent_task_id ?? undefined;
     if (allPending.length === 0 && !parentTaskId) return;

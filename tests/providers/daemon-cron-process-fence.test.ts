@@ -976,7 +976,7 @@ function buildProcessStopTwin(kind: 'standalone' | 'template') {
     killProcessGroup: groupSignal,
     isProcessGroupAlive: groupAlive,
     reapSession: reaped, persistRegistry: persist,
-    cancelTurnRetry: vi.fn(), clearTurnRetryStreak: vi.fn(), logMsg: vi.fn(),
+    cancelTurnRetry: vi.fn(), clearTurnRetryStreak: vi.fn(), logMsg: vi.fn(), wsId: () => 1,
     setTimeout,
     sendOk: (_ws: unknown, id: number, data: Record<string, unknown>) => { replies.push({ id, ok: true, data }) },
     sendError: (_ws: unknown, id: number, error: string) => { replies.push({ id, ok: false, error }) },

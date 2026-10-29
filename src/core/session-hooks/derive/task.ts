@@ -51,7 +51,8 @@ export function buildTaskContext(event: BusEvent, traceId: string): TaskHookCont
     sessionId: (data.sessionId as string | undefined) ?? task.session_id ?? undefined,
     ...(typeof data.actorSid === 'string' && data.actorSid ? { actorSid: data.actorSid } : {}),
     eventSource: event.source,
-    timestamp: new Date().toISOString(),
+    // When the edge happened (the bus stamps it at emit), not when a hook got to it.
+    timestamp: new Date(event.timestamp || Date.now()).toISOString(),
     traceId,
     event: event.name,
   };
