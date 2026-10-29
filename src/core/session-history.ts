@@ -1372,6 +1372,13 @@ export function parseSessionMessages(content: string, opts?: ParseSessionMessage
     }
 
     if (!raw.message?.role || !['user', 'assistant'].includes(raw.message.role)) continue;
+    // Only the transcript's own message lines are messages. Claude Code 2.1.284
+    // also writes `api-request-blob` lines: a copy of each request message as the
+    // model received it (instruction files, MEMORY.md, hints merged in), with a
+    // role but no uuid or timestamp. Read as rows they showed that context as
+    // the conversation, stamped "now" (2026-10-29). A line with no type is an
+    // older capture and stays a message.
+    if (raw.type !== undefined && raw.type !== 'user' && raw.type !== 'assistant') continue;
 
     const msgId = raw.message.id ?? raw.uuid ?? `${raw.timestamp}-${rawMessages.indexOf(raw)}`;
     const existing = messageMap.get(msgId);

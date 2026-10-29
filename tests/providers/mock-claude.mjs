@@ -115,7 +115,20 @@ function persistPlainTurn(sid, prompt, assistantEvent) {
     ].map((row) => JSON.stringify(row)).join('\n') + '\n');
     parent = resultId;
   }
-  fs.appendFileSync(file, JSON.stringify({ ...shared, ...(heavy ? { timestamp: at(2 * Number(heavy[1]) + 1) } : {}), type: 'assistant', uuid: randomUUID(), parentUuid: parent, message: assistantEvent.message }) + '\n');
+  // MOCK_CLAUDE_REQUEST_BLOBS=1: also the `api-request-blob` lines Claude Code
+  // 2.1.284+ writes, a copy of each request message as the model received it
+  // (instruction files and MEMORY.md merged in), with a role, no uuid, no timestamp.
+  if (process.env.MOCK_CLAUDE_REQUEST_BLOBS === '1') {
+    const blob = (role, content) => JSON.stringify({ type: 'api-request-blob', sessionId: sid, hash: randomUUID().replace(/-/g, ''), message: { role, content } });
+    const reread = '<system-reminder>\nInstruction files were re-read when this session started; these differ from their earlier copies:\n\n'
+      + 'Contents of /home/mock/.claude/projects/acme/memory/MEMORY.md (user\'s auto-memory, persists across conversations):\n\n# Acme Memory\n- MOCK_MEMORY_LESSON\n</system-reminder>';
+    fs.appendFileSync(file, [
+      blob('system', [{ type: 'text', text: 'You are an interactive agent.' }]),
+      blob('user', [{ type: 'text', text: reread }, { type: 'text', text: prompt ?? '' }]),
+      blob('assistant', assistantEvent.message.content),
+    ].join('\n') + '\n');
+  }
+  fs.appendFileSync(file, JSON.stringify({ ...shared, ...(heavy ?{ timestamp: at(2 * Number(heavy[1]) + 1) } : {}), type: 'assistant', uuid: randomUUID(), parentUuid: parent, message: assistantEvent.message }) + '\n');
 }
 
 // Parse flags

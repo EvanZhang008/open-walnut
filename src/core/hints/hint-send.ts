@@ -192,8 +192,18 @@ export interface HintSendOptions {
    * is escaped like the rest. Default: none, so a person's text is never trusted.
    */
   upstreamBlocks?: readonly string[];
+  /** The plain line a message with no words of its own carries in front of its hints. */
+  emptyBodyLine?: string;
   now?: () => number;
 }
+
+/**
+ * A turn must hold something to answer besides Walnut's notes: a message that is
+ * only hints leaves the model nothing but the notes to answer. Such a message
+ * carries one plain line of its own in front of them.
+ */
+export const EMPTY_BODY_LINE = 'Walnut started this turn with no message of its own: the notes below are context, not a request.';
+export const WAIT_WAKE_EMPTY_LINE = 'The time you were waiting for has passed: check the thing you are waiting on.';
 
 /**
  * The message with no hint and nothing recorded, still escaped so the structural
@@ -223,12 +233,14 @@ export async function prepareHintedSend(
     const target = await targetFor(sessionId, record, hints);
     // A message composed upstream (the companion's voice hint) keeps those blocks.
     const upstream = opts.upstreamBlocks?.length ? splitHinted(message, opts.upstreamBlocks) : null;
-    const body = upstream ? upstream.text : message;
+    const words = upstream ? upstream.text : message;
     const plan = planHints({
       hints, target, record, config,
       ...(opts.requested ? { requested: opts.requested } : {}),
       ...(upstream ? { skip: new Set(upstream.kinds) } : {}),
     });
+    const carriesHints = plan.before.length + plan.after.length + (upstream ? upstream.before.length + upstream.after.length : 0) > 0;
+    const body = carriesHints && !words.trim() ? (opts.emptyBodyLine ?? EMPTY_BODY_LINE) : words;
     const enqueueText = composeHinted(body, {
       before: [...(upstream?.before ?? []), ...plan.before],
       after: [...plan.after, ...(upstream?.after ?? [])],
@@ -288,7 +300,10 @@ export async function prepareQueuedHintedSend(
     const record = await getSessionByClaudeId(sessionId);
     if (!record) return escapedOnly(message);
     const { queueSentBy } = await import('../sessions/send-sent-by.js');
-    return await prepareHintedSend(sessionId, record, message, { sentBy: queueSentBy(source) ?? 'agent' });
+    return await prepareHintedSend(sessionId, record, message, {
+      sentBy: queueSentBy(source) ?? 'agent',
+      ...(source === 'wait-until' ? { emptyBodyLine: WAIT_WAKE_EMPTY_LINE } : {}),
+    });
   } catch {
     return escapedOnly(message);
   }
