@@ -102,8 +102,8 @@ describe('searchResultCacheKey', () => {
   });
 
   it('collapses whitespace but PRESERVES case', () => {
-    expect(searchResultCacheKey('  helm   crd  ', ['task'], 20))
-      .toBe(searchResultCacheKey('helm crd', ['task'], 20));
+    expect(searchResultCacheKey('  photo   album  ', ['task'], 20))
+      .toBe(searchResultCacheKey('photo album', ['task'], 20));
     // Case reaches FTS tokenization and snippet extraction — not provably the
     // same request, so it must not collapse into one entry.
     expect(searchResultCacheKey('CDK', ['task'], 20))
@@ -141,8 +141,8 @@ describe('search() memo (wired)', () => {
       {
         kind: 'memory',
         ref: '/m/a.md',
-        title: 'Helm CRD update behavior',
-        text: 'body about helm',
+        title: 'Photo album sync behavior',
+        text: 'body about photos',
         score: 0.9,
         components: { coverage: 1, cosine: 0 },
         semantic: 'off',
@@ -155,8 +155,8 @@ describe('search() memo (wired)', () => {
   it('serves a repeated identical query without touching the lane again', async () => {
     const lane = mockLane();
     const { search } = await import('../../src/core/search.js');
-    const first = await search('helm crd', { types: ['memory'] });
-    const second = await search('helm crd', { types: ['memory'] });
+    const first = await search('photo album', { types: ['memory'] });
+    const second = await search('photo album', { types: ['memory'] });
     expect(lane).toHaveBeenCalledTimes(1);
     expect(second).toEqual(first);
   });
@@ -164,14 +164,14 @@ describe('search() memo (wired)', () => {
   it('hands out a defensive copy — a caller decorating a row cannot poison the memo', async () => {
     mockLane();
     const { search } = await import('../../src/core/search.js');
-    const first = await search('helm crd', { types: ['memory'] });
+    const first = await search('photo album', { types: ['memory'] });
     first[0].title = 'MUTATED BY CALLER';
     first[0].score = -999;
     first.push({ type: 'memory', title: 'injected', snippet: '', score: 1, matchField: 'memory' });
 
-    const second = await search('helm crd', { types: ['memory'] });
+    const second = await search('photo album', { types: ['memory'] });
     expect(second).toHaveLength(1);
-    expect(second[0].title).toBe('Helm CRD update behavior');
+    expect(second[0].title).toBe('Photo album sync behavior');
     expect(second[0].score).toBeCloseTo(0.9, 5);
     // Rows are distinct objects, not the same references handed out twice.
     expect(second[0]).not.toBe(first[0]);
@@ -180,10 +180,10 @@ describe('search() memo (wired)', () => {
   it('a different limit or type set is a different entry', async () => {
     const lane = mockLane();
     const { search } = await import('../../src/core/search.js');
-    await search('helm crd', { types: ['memory'] });
-    await search('helm crd', { types: ['memory'], limit: 5 });
+    await search('photo album', { types: ['memory'] });
+    await search('photo album', { types: ['memory'], limit: 5 });
     expect(lane).toHaveBeenCalledTimes(2);
-    await search('helm crd', { types: ['memory'], limit: 5 });
+    await search('photo album', { types: ['memory'], limit: 5 });
     expect(lane).toHaveBeenCalledTimes(2);
   });
 
@@ -194,13 +194,13 @@ describe('search() memo (wired)', () => {
     lane.mockImplementation(async (_q: string, opts: { onSemantic?: (s: string) => void }) => {
       opts.onSemantic?.('timeout');
       return [{
-        kind: 'memory', ref: '/m/a.md', title: 'Helm CRD update behavior', text: 'body about helm',
+        kind: 'memory', ref: '/m/a.md', title: 'Photo album sync behavior', text: 'body about photos',
         score: 0.9, components: { coverage: 1 }, semantic: 'timeout',
       }];
     });
     const { search } = await import('../../src/core/search.js');
-    await search('helm crd', { types: ['memory'] });
-    await search('helm crd', { types: ['memory'] });
+    await search('photo album', { types: ['memory'] });
+    await search('photo album', { types: ['memory'] });
     expect(lane).toHaveBeenCalledTimes(2);
   });
 
@@ -214,8 +214,8 @@ describe('search() memo (wired)', () => {
       return [];
     });
     const { search } = await import('../../src/core/search.js');
-    expect(await search('helm crd', { types: ['memory'] })).toEqual([]);
-    expect(await search('helm crd', { types: ['memory'] })).toEqual([]);
+    expect(await search('photo album', { types: ['memory'] })).toEqual([]);
+    expect(await search('photo album', { types: ['memory'] })).toEqual([]);
     expect(lane).toHaveBeenCalledTimes(2);
   });
 
@@ -226,8 +226,8 @@ describe('search() memo (wired)', () => {
       return [];
     });
     const { search } = await import('../../src/core/search.js');
-    await search('helm crd', { types: ['memory'] });
-    await search('helm crd', { types: ['memory'] });
+    await search('photo album', { types: ['memory'] });
+    await search('photo album', { types: ['memory'] });
     expect(lane).toHaveBeenCalledTimes(1);
   });
 
@@ -240,29 +240,29 @@ describe('search() memo (wired)', () => {
       return [];
     });
     const { search } = await import('../../src/core/search.js');
-    await search('helm crd', { types: ['memory'], semanticDeadlineMs: 0 });
-    await search('helm crd', { types: ['memory'] });
+    await search('photo album', { types: ['memory'], semanticDeadlineMs: 0 });
+    await search('photo album', { types: ['memory'] });
     expect(lane).toHaveBeenCalledTimes(2);
     // A complete answer still serves the no-wait caller.
-    await search('helm crd', { types: ['memory'], semanticDeadlineMs: 0 });
+    await search('photo album', { types: ['memory'], semanticDeadlineMs: 0 });
     expect(lane).toHaveBeenCalledTimes(2);
   });
 
   it('passes the caller\'s semantic deadline to every hybrid lane', async () => {
     const lane = mockLane();
     const { search } = await import('../../src/core/search.js');
-    await search('helm crd', { types: ['memory'], semanticDeadlineMs: 2_000 });
-    expect(lane).toHaveBeenCalledWith('helm crd', expect.objectContaining({ semanticDeadlineMs: 2_000 }));
+    await search('photo album', { types: ['memory'], semanticDeadlineMs: 2_000 });
+    expect(lane).toHaveBeenCalledWith('photo album', expect.objectContaining({ semanticDeadlineMs: 2_000 }));
   });
 
   it('clearSearchResultCache() forces the next query back to the lane', async () => {
     const lane = mockLane();
     const { search, clearSearchResultCache } = await import('../../src/core/search.js');
-    await search('helm crd', { types: ['memory'] });
-    await search('helm crd', { types: ['memory'] });
+    await search('photo album', { types: ['memory'] });
+    await search('photo album', { types: ['memory'] });
     expect(lane).toHaveBeenCalledTimes(1);
     clearSearchResultCache();
-    await search('helm crd', { types: ['memory'] });
+    await search('photo album', { types: ['memory'] });
     expect(lane).toHaveBeenCalledTimes(2);
   });
 
@@ -280,8 +280,8 @@ describe('search() memo (wired)', () => {
     const lane = vi.fn().mockRejectedValue(new Error('store down'));
     vi.doMock('../../src/core/search/wiring.js', () => ({ searchV2Lane: lane }));
     const { search } = await import('../../src/core/search.js');
-    await expect(search('helm crd', { types: ['memory'] })).rejects.toThrow('store down');
-    await expect(search('helm crd', { types: ['memory'] })).rejects.toThrow('store down');
+    await expect(search('photo album', { types: ['memory'] })).rejects.toThrow('store down');
+    await expect(search('photo album', { types: ['memory'] })).rejects.toThrow('store down');
     expect(lane).toHaveBeenCalledTimes(2);
   });
 
@@ -294,22 +294,22 @@ describe('search() memo (wired)', () => {
     const lane = mockLane();
     const { search } = await import('../../src/core/search.js');
     const { bus, EventNames } = await import('../../src/core/event-bus.js');
-    await search('helm crd', { types: ['memory'] });
-    await search('helm crd', { types: ['memory'] });
+    await search('photo album', { types: ['memory'] });
+    await search('photo album', { types: ['memory'] });
     expect(lane).toHaveBeenCalledTimes(1);
 
     bus.emit(EventNames.TASK_CREATED, { taskId: 't-new' } as never, ['*']);
-    await search('helm crd', { types: ['memory'] });
+    await search('photo album', { types: ['memory'] });
     expect(lane).toHaveBeenCalledTimes(2);
 
     // Session content changes the session lane's answers too.
     bus.emit(EventNames.SESSION_CONTENT_UPDATED, { sessionId: 's-1' } as never, ['*']);
-    await search('helm crd', { types: ['memory'] });
+    await search('photo album', { types: ['memory'] });
     expect(lane).toHaveBeenCalledTimes(3);
 
     // An unrelated high-frequency event must NOT throw the memo away.
     bus.emit('session:text-delta', { sessionId: 's-1' } as never, ['*']);
-    await search('helm crd', { types: ['memory'] });
+    await search('photo album', { types: ['memory'] });
     expect(lane).toHaveBeenCalledTimes(3);
     bus.unsubscribe('search-result-cache');
   });
@@ -318,8 +318,8 @@ describe('search() memo (wired)', () => {
     process.env.WALNUT_SEARCH_RESULT_CACHE = '0';
     const lane = mockLane();
     const { search } = await import('../../src/core/search.js');
-    await search('helm crd', { types: ['memory'] });
-    await search('helm crd', { types: ['memory'] });
+    await search('photo album', { types: ['memory'] });
+    await search('photo album', { types: ['memory'] });
     expect(lane).toHaveBeenCalledTimes(2);
   });
 });

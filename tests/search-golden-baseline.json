@@ -31,7 +31,7 @@
       "rank": null,
       "ms": 2
     },
-    "camel-gvr-reconciler": {
+    "camel-kind-reconciler": {
       "pass": true,
       "rank": 1,
       "ms": 2
@@ -271,7 +271,7 @@
       "rank": null,
       "ms": 10
     },
-    "hv-nvda-earnings": {
+    "hv-quarter-call": {
       "pass": true,
       "rank": 7,
       "ms": 1

@@ -303,29 +303,29 @@ final class BoardSearchHitDedupTests: XCTestCase {
     /// the whole snippet counted as residue, and the duplicate line shipped. The rule is
     /// a subset test now.
     func testAWindowedCopyOfTheTitleIsSuppressed() {
-        let title = "Watch NVDA Q2 earnings call and write up the delta vs guidance"
+        let title = "Watch the Q2 garden club call and write up the minutes vs the agenda"
         // Both cut ends — the case the residue rule kept.
         XCTAssertNil(GlobalSearchSection.snippetWorthShowing(
-            title: title, snippet: "...Q2 earnings call and write up the delta..."),
+            title: title, snippet: "...Q2 garden club call and write up the minutes..."),
             "a window cut out of the middle of the title is still the title")
         // Cut at the tail only (the hit was near the start).
         XCTAssertNil(GlobalSearchSection.snippetWorthShowing(
-            title: title, snippet: "Watch NVDA Q2 earnings call and write up the..."))
+            title: title, snippet: "Watch the Q2 garden club call and write up the..."))
         // The single-character ellipsis other lanes use.
         XCTAssertNil(GlobalSearchSection.snippetWorthShowing(
-            title: title, snippet: "…Q2 earnings call and write up…"))
+            title: title, snippet: "…Q2 garden club call and write up…"))
         // And the plain repeats.
         XCTAssertNil(GlobalSearchSection.snippetWorthShowing(title: title, snippet: title))
         XCTAssertNil(GlobalSearchSection.snippetWorthShowing(
             title: title, snippet: "  \(title)  "), "trimming is not a difference")
         XCTAssertNil(GlobalSearchSection.snippetWorthShowing(
-            title: title, snippet: "watch NVDA q2 EARNINGS call and write up the delta vs guidance"),
+            title: title, snippet: "watch the q2 GARDEN club call and write up the minutes vs the agenda"),
             "case is not a difference")
         XCTAssertNil(GlobalSearchSection.snippetWorthShowing(
             title: title, snippet: "\"\(title).\""), "quotes around the title are not content")
         // A window whose whitespace the server collapsed (`\n` → ' ') is the same text.
         XCTAssertNil(GlobalSearchSection.snippetWorthShowing(
-            title: "Watch NVDA Q2\n earnings call", snippet: "...Watch NVDA Q2 earnings call..."))
+            title: "Watch the Q2\n garden club call", snippet: "...Watch the Q2 garden club call..."))
     }
 
     /// The other real shape, and the one the rule must NOT swing round and eat: a memory
@@ -366,13 +366,13 @@ final class BoardSearchHitDedupTests: XCTestCase {
     /// title does not contain, so the row printed its own name twice with a dangling mark
     /// under it. The rule now strips the title out and judges the REMAINDER.
     func testATitlePlusNothingButPunctuationIsStillTheTitleTwice() {
-        let title = "Watch NVDA Q2 earnings call"
+        let title = "Watch the Q2 garden club call"
         for snippet in [
-            "...Watch NVDA Q2 earnings call — ...",   // an em dash, which no edge set lists
-            "Watch NVDA Q2 earnings call!",
-            "Watch NVDA Q2 earnings call?!",
-            "…Watch NVDA Q2 earnings call | …",
-            "\"Watch NVDA Q2 earnings call\" - ...",
+            "...Watch the Q2 garden club call — ...",   // an em dash, which no edge set lists
+            "Watch the Q2 garden club call!",
+            "Watch the Q2 garden club call?!",
+            "…Watch the Q2 garden club call | …",
+            "\"Watch the Q2 garden club call\" - ...",
         ] {
             XCTAssertNil(
                 GlobalSearchSection.snippetWorthShowing(title: title, snippet: snippet),

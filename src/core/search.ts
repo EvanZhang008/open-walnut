@@ -150,8 +150,8 @@ export function extractSnippet(
 /**
  * Title-paraphrase lane: a deterministic score for "the query is a reworded
  * title". Humans and agents overwhelmingly query by paraphrasing what they
- * remember of the title, one or two synonyms off ("Helm chart CRD *upgrade
- * handling* in CDK" for the title "Helm CRD *update behavior* in CDK") — and
+ * remember of the title, one or two synonyms off ("Photo gallery album *upload
+ * handling* in iCloud" for the title "Photo album *sync behavior* in iCloud") — and
  * a pure keyword lane loses exactly this shape: a strict AND annihilates on
  * the synonym, and the relaxed lane ranks the true hit behind longer documents
  * that happen to repeat one common word (2026-08-20 eval: A08-A10 all MISS

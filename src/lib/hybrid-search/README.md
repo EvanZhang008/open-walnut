@@ -43,8 +43,8 @@ const index = createSearchIndex({
 index.upsert({
   kind: 'task',
   ref: 't-42',
-  title: 'Reconciler duplicate kind across GVRs check',
-  note: 'The AcmeEventOperator watch cache keys by kind alone…',
+  title: 'Calendar reconciler drops the second event of a kind',
+  note: 'The AcmeEventOperator cache keys by kind alone…',
   updatedAt: Date.now(),
   identifiers: ['t-42', 'CR-291543784'],
 });

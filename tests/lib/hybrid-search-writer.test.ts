@@ -13,8 +13,8 @@ function doc(overrides: Partial<Doc> = {}): Doc {
   return {
     kind: 'task',
     ref: 't1',
-    title: 'Reconciler duplicate kind across GVRs check',
-    note: 'The AcmeEventOperator watch cache keys by kind alone.',
+    title: 'Calendar reconciler drops the second event of a kind',
+    note: 'The AcmeEventOperator cache keys by kind alone.',
     updatedAt: 1_700_000_000_000,
     ...overrides,
   };

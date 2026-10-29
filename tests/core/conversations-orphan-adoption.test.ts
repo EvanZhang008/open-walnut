@@ -165,11 +165,11 @@ describe('ensureConversationRow (primary-side row materialization for relayed tu
   it('creates a missing row with a title derived from the seed text', async () => {
     await migrateIfNeeded(AGENT);
     const id = 'conv-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
-    await ensureConversationRow(AGENT, id, 'Research NVDA Q2 earnings for me');
+    await ensureConversationRow(AGENT, id, 'Research hiking trails near the lake for me');
     const list = await listConversations(AGENT);
     const row = list.find((c) => c.id === id);
     expect(row).toBeDefined();
-    expect(row!.title).toContain('Research NVDA');
+    expect(row!.title).toContain('Research hiking');
     expect(row!.isMain).toBeFalsy();
   });
 

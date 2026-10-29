@@ -5,9 +5,9 @@ import XCTest
 /// (`<task-ref id="…" label="…"/>`) rendered as raw XML in chat bubbles.
 final class MarkdownEntityRefTests: XCTestCase {
     func testTaskRefBecomesBoldLabel() {
-        let input = #"已创建: <task-ref id="mt5zagj8-3621" label="Watch NVDA Q2 FY2027 earnings"/>(Stock Analyzer 项目)。"#
+        let input = #"已创建: <task-ref id="mt5zagj8-3621" label="Watch the Q2 garden club call"/>(Garden 项目)。"#
         let out = MarkdownParser.replaceEntityRefs(input)
-        XCTAssertEqual(out, "已创建: **Watch NVDA Q2 FY2027 earnings**(Stock Analyzer 项目)。")
+        XCTAssertEqual(out, "已创建: **Watch the Q2 garden club call**(Garden 项目)。")
     }
 
     func testSessionRefAndMissingLabelFallsBackToId() {

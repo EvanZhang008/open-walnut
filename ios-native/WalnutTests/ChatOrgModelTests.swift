@@ -18,7 +18,7 @@ final class ChatOrgModelTests: XCTestCase {
       "needsLead":true,"contactId":"lead-m","vp":"Marina","counts":{"open":9,"running":0,"needsYou":3,"waiting":6},"teams":[]},
      {"project":"Personal","lead":{"id":"lead-p","title":"Personal lead","phase":"NEED_ACTION","hasSession":true},
       "needsLead":true,"contactId":"lead-p","vp":null,"counts":{"open":3,"running":0,"needsYou":1,"waiting":2},"teams":[]},
-     {"project":"Tax","lead":{"id":"lead-p","title":"Personal lead","phase":"NEED_ACTION","hasSession":true},
+     {"project":"Garden","lead":{"id":"lead-p","title":"Personal lead","phase":"NEED_ACTION","hasSession":true},
       "needsLead":true,"contactId":"lead-p","vp":"Personal","counts":{"open":2,"running":0,"needsYou":0,"waiting":2},"teams":[]},
      {"project":"Marina","lead":{"id":"lead-m","title":"Marina lead","phase":"NEED_ACTION","hasSession":true},
       "needsLead":false,"contactId":"lead-m","vp":null,"counts":{"open":1,"running":0,"needsYou":0,"waiting":1},"teams":[]},
@@ -61,7 +61,7 @@ final class ChatOrgModelTests: XCTestCase {
         XCTAssertEqual(marina.open, 10)
         XCTAssertEqual(marina.contactId, "lead-m")
         let personal = try XCTUnwrap(rows.first { $0.name == "Personal" })
-        XCTAssertEqual(personal.ledProjects, ["Tax"])
+        XCTAssertEqual(personal.ledProjects, ["Garden"])
         XCTAssertEqual(personal.open, 5)
         XCTAssertFalse(rows.contains { $0.project.isEmpty && $0.kind == .vp })
     }
@@ -188,7 +188,7 @@ final class ChatOrgModelTests: XCTestCase {
         XCTAssertEqual(ChatDrawerView.allCases.first, .org)
         XCTAssertEqual(ChatDrawerOrgList.accessibilityText(ChatOrgModel.Row(
             id: "project:marina", kind: .vp, name: "Marina", contactId: "x", project: "Marina",
-            state: .needs, needs: 2, working: 0, open: 5, ledProjects: ["Tax"], line: "Needs you · 5 open"
-        )), "Marina, VP, also leads Tax, Needs you · 5 open, 2 need you")
+            state: .needs, needs: 2, working: 0, open: 5, ledProjects: ["Garden"], line: "Needs you · 5 open"
+        )), "Marina, VP, also leads Garden, Needs you · 5 open, 2 need you")
     }
 }

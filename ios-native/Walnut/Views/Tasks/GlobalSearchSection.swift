@@ -340,7 +340,7 @@ struct GlobalSearchSection: View {
     ///
     /// When the match is on the TITLE, the server windows the title into the snippet
     /// (`extractSnippet(task.title, query)`), so the client is handed an ellipsised COPY
-    /// of the line it is already drawing: "Watch NVDA Q2 earnings call and write …".
+    /// of the line it is already drawing: "Watch the Q2 garden club call and write …".
     /// The row then said its name twice, in two type sizes, and the second line read as
     /// a detail the user was missing.
     ///

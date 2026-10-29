@@ -61,17 +61,17 @@ describe('global search B-relay on a REPLICA', () => {
   it('GET /search relays server.search to the primary and returns its results', async () => {
     bridgeRequestMock.mockResolvedValue({
       ok: true,
-      result: { results: [{ type: 'task', id: 't1', title: 'NVDA research' }] },
+      result: { results: [{ type: 'task', id: 't1', title: 'Garden research' }] },
     })
-    const res = await request(createApp()).get('/api/v1/search?q=NVDA&types=task&limit=5')
+    const res = await request(createApp()).get('/api/v1/search?q=garden&types=task&limit=5')
     expect(res.status).toBe(200)
     expect(res.body.results).toHaveLength(1)
-    expect(res.body.results[0].title).toBe('NVDA research')
+    expect(res.body.results[0].title).toBe('Garden research')
     expect(bridgeRequestMock).toHaveBeenCalledWith(
       '__local__', 'session.control',
       expect.objectContaining({
         action: 'server.search', sessionId: '__server__',
-        params: { q: 'NVDA', types: ['task'], limit: 5 },
+        params: { q: 'garden', types: ['task'], limit: 5 },
       }),
       expect.any(Number),
     )

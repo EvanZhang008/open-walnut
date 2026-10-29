@@ -523,9 +523,9 @@ describe('default search lanes (2026-08-15 star incident)', () => {
 describe('titleMatchScore — title-paraphrase lane (2026-08-20 eval)', () => {
   it('scores a synonym-swapped title paraphrase', async () => {
     const { titleMatchScore } = await import('../../src/core/search.js');
-    // "update behavior" remembered as "upgrade handling" — 4 of 6 content
+    // "sync behavior" remembered as "upload handling" — 4 of 6 content
     // terms still hit the title.
-    const s = titleMatchScore('Helm CRD update behavior in CDK', 'Helm chart CRD upgrade handling in CDK');
+    const s = titleMatchScore('Photo album sync behavior in iCloud', 'Photo gallery album upload handling in iCloud');
     expect(s).toBeGreaterThan(0.7);
   });
 

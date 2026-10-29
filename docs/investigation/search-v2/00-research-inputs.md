@@ -4,7 +4,7 @@ Digest of three deep-research passes (2026-08-18): a dependency/requirements inv
 
 ## The failure that started this
 
-Query `kind event operator reconciler` could not find task "Reconciler duplicate kind across GVRs check" (its note is full of `XYZEventOperator`, a camelCase component name). Three confirmed root causes, all in the QMD layer:
+Query `kind event operator reconciler` could not find task "Calendar reconciler drops the second event of a kind" (its note is full of `XYZEventOperator`, a camelCase component name). Three confirmed root causes, all in the QMD layer:
 
 1. Tokenizer: FTS5 `tokenize='porter unicode61'` (node_modules/@tobilu/qmd/dist/store.js:659). `XYZEventOperator` indexes as the single porter-stemmed token `xyzeventoper`; a contiguous CJK run indexes as one token. Query token `operator` compiles to prefix match `"operator"*` and can never hit either.
 2. AND annihilation: query terms are AND-joined prefix matches (store.js:2201-2216). One missing term returns 0 rows for the whole keyword lane, and ranking silently degrades to vector-only.
@@ -89,7 +89,7 @@ Known tuning item: a few long transcripts still scored high with cov=0 in the pr
 
 ## Eval harness (build FIRST, week 1)
 
-tests/search-golden.yaml, ~30 real queries with assertions: must_include (recall), top1_any/top1_kind (precision), must_rank_above (relative order), must_exclude (junk regression), min_coverage, max_latency_ms. Seed from real history: this GVR case, the star-system case (search.ts:349-357 comments), timeout 自动重试 case (memory-search.ts:98-123), identifier/CJK/mixed/paraphrase families. Runner `npm run search:eval`: build index from live DBs into temp (~15 s), run queries, report recall@10 / MRR / top1 / latency, write baseline JSON, fail CI on regression, `--explain <query>` prints term expansion and every score component.
+tests/search-golden.yaml, ~30 real queries with assertions: must_include (recall), top1_any/top1_kind (precision), must_rank_above (relative order), must_exclude (junk regression), min_coverage, max_latency_ms. Seed from real history: this calendar reconciler case, the star-system case (search.ts:349-357 comments), timeout 自动重试 case (memory-search.ts:98-123), identifier/CJK/mixed/paraphrase families. Runner `npm run search:eval`: build index from live DBs into temp (~15 s), run queries, report recall@10 / MRR / top1 / latency, write baseline JSON, fail CI on regression, `--explain <query>` prints term expansion and every score component.
 
 ## Open design questions for the plan session
 

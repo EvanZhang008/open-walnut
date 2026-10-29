@@ -21,12 +21,12 @@
 corpus:
   # -- camelCase / identifier docs --
   - kind: task
-    ref: t-gvr-check
-    title: "Reconciler duplicate kind across GVRs check"
+    ref: t-kind-check
+    title: "Calendar reconciler drops the second event of a kind"
     note: >
-      Verify the AcmeEventOperator reconciler handles a duplicate kind that
-      appears across two GVRs. The AcmeEventOperator watch cache keys by kind
-      alone, so events for the second GVR are dropped silently.
+      Verify the AcmeEventOperator reconciler in the sample calendar app keeps
+      both events when two calendars share a kind. The AcmeEventOperator cache
+      keys by kind alone, so events for the second calendar are dropped silently.
     meta: "project:platform"
     updated_at: 2026-08-01
   - kind: task
@@ -304,8 +304,8 @@ queries:
   # ── family: identifier (exact reference lane) ──
   - id: ident-task-ref
     family: identifier
-    query: "t-gvr-check"
-    top1: task:t-gvr-check
+    query: "t-kind-check"
+    top1: task:t-kind-check
     max_latency_ms: 50
   - id: ident-cr-number
     family: identifier
@@ -324,19 +324,19 @@ queries:
     max_latency_ms: 50
 
   # ── family: camel-subword ──
-  - id: camel-gvr-reconciler
+  - id: camel-kind-reconciler
     family: camel-subword
     query: "kind event operator reconciler"
-    must_include: [task:t-gvr-check]
-    top1: task:t-gvr-check
+    must_include: [task:t-kind-check]
+    top1: task:t-kind-check
     must_exclude: [task:t-junk-echo]
     min_coverage: 0.5
     max_latency_ms: 200
   - id: camel-exact-component
     family: camel-subword
     query: "AcmeEventOperator"
-    must_include: [task:t-gvr-check]
-    top1: task:t-gvr-check
+    must_include: [task:t-kind-check]
+    top1: task:t-kind-check
     max_latency_ms: 200
   - id: camel-kebab-channel
     family: camel-subword
@@ -396,7 +396,7 @@ queries:
   - id: para-dropped-events
     family: paraphrase
     query: "watch events silently dropped for second resource"
-    must_include: [task:t-gvr-check]
+    must_include: [task:t-kind-check]
     max_latency_ms: 200
   - id: para-key-rotation
     family: paraphrase
@@ -410,7 +410,7 @@ queries:
     query: "kind event operator reconciler"
     # the long transcript spams 'operator' but never covers the other terms:
     # coverage must beat term-frequency
-    must_rank_above: [[task:t-gvr-check, session:s-long-transcript]]
+    must_rank_above: [[task:t-kind-check, session:s-long-transcript]]
     max_latency_ms: 200
   - id: trap-recency-tiebreak
     family: trap
