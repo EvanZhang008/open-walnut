@@ -121,17 +121,17 @@ describe('org channels', () => {
 
   it('says the team\'s newest news in its own words with its time, not only a title', () => {
     // 2026-10-26: a task passed a check and asked the user to sign; its row read "Waiting: <title>".
-    const news = t('i9', 'Immigration', 'NEED_ACTION', {
-      title: 'Follow up on the visa case', updated_at: at(48), last_session_update: at(53),
+    const news = t('i9', 'Insurance', 'NEED_ACTION', {
+      title: 'Follow up on the claim', updated_at: at(48), last_session_update: at(53),
       user_status: { state: 'waiting', kind: 'you', waitingOn: 'You, to read the latest turn (no rush)', now: 'The identity check passed; only your signature is left.', at: at(30) },
     })
-    const older = t('i2', 'Immigration', 'IN_PROGRESS', { updated_at: at(55), user_status: { state: 'working', now: 'Reading the update', at: at(12) } })
+    const older = t('i2', 'Insurance', 'IN_PROGRESS', { updated_at: at(55), user_status: { state: 'working', now: 'Reading the update', at: at(12) } })
     const list = [...tasks, news, older]
-    const row = buildChannels(buildOrgTree(list), list, noAlerts).rows.find((r) => r.name === 'Immigration')!
+    const row = buildChannels(buildOrgTree(list), list, noAlerts).rows.find((r) => r.name === 'Insurance')!
     expect(row.latest).toBe('The identity check passed; only your signature is left.')
-    expect(row.latestTask).toBe('Follow up on the visa case')
+    expect(row.latestTask).toBe('Follow up on the claim')
     // Search finds the row by the task the line is about.
-    expect(filterChannels(buildChannels(buildOrgTree(list), list, noAlerts).rows, 'visa case').map((r) => r.name)).toEqual(['Immigration'])
+    expect(filterChannels(buildChannels(buildOrgTree(list), list, noAlerts).rows, 'the claim').map((r) => r.name)).toEqual(['Insurance'])
     expect(row.latestAt).toBe(Date.parse(at(30)))
     expect(row.lastAt).toBe(Date.parse(at(55)))
   })

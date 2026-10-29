@@ -28,6 +28,21 @@ boundaries whatever joins its words (`a b` matches `a-b`, `a_b`, `a.b`); a case-
 term never matches inside an `UPPER_SNAKE` identifier. An allow pattern drops a regex hit
 whose surrounding text matches it (a documented placeholder, say).
 
+A regex must not open with a repeated character class (`[a-z0-9.]+@example\.com`): the
+engine retries it from every position of a long run of that class, so one base64 blob in a
+bundle takes seconds and a release takes hours (a 60 minute job timed out on one). Start it
+at the literal and put the class in a lookbehind: `(?<=[a-z0-9.])@example\.com`. The build
+and the scan both refuse such a rule.
+
+A file whose bytes were already scanned in the same run is counted as a copy and not scanned
+again: a release's platform archives and the archive inside the Mac app share most of their
+dependency tree.
+
+`--skip-deps` leaves out the dependencies a package carries (a `node_modules` directory
+beside a `package.json`), never the package itself. The release job uses it: the runtime in a
+release holds Walnut's own dist and its whole third-party tree, whose docs and test fixtures
+name real companies, sample account ids and test keys that are not Walnut's words.
+
 ```bash
 bun scripts/leak-scan/build-rules.mjs rules.tsv --names names.txt internal-name --out rules.json
 bun scripts/leak-scan/leak-scan.mjs --rules rules.json --redact some-package.tgz site/

@@ -770,7 +770,7 @@ export function contentTokens(q: string): string[] {
     .filter((t) => (t.length >= 3 || (t.length >= 2 && hasCjk(t))) && !QUERY_STOPWORDS.has(t))
 }
 
-/** Folder names use '-'/'_' as word separators ("canada-immigration"). One
+/** Folder names use '-'/'_' as word separators ("home-renovation"). One
  *  normal form so a spaced query can match a hyphenated segment and back. */
 function normalizeSeparators(s: string): string {
   return s.replace(/[-_]+/g, ' ')
@@ -916,8 +916,8 @@ function escapeRegExp(s: string): string {
 function folderScore(segments: string[], q: string): number | null {
   const ql = q.toLowerCase().trim()
   if (!ql) return null
-  // Separator-normalized forms so "canada immigration" matches the segment
-  // "canada-immigration" (and a hyphenated query matches a spaced folder).
+  // Separator-normalized forms so "home renovation" matches the segment
+  // "home-renovation" (and a hyphenated query matches a spaced folder).
   const qn = normalizeSeparators(ql)
   let best: number | null = null
   for (const seg of segments) {

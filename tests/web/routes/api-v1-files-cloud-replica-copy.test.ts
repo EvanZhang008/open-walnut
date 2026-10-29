@@ -50,7 +50,7 @@ function createApp() {
 
 /** The path as the phone names it: the primary's home, not this box's. */
 const MAC = '/Users/someone/.open-walnut'
-const PDF_REL = 'notes/immigration/_attachment/official-documents/Approval-Notice-2026-10-14.pdf'
+const PDF_REL = 'notes/travel/_attachment/documents/Boarding-Pass-2026-10-14.pdf'
 const PDF_BYTES = Buffer.concat([Buffer.from('%PDF-1.7\n'), Buffer.alloc(4096, 7), Buffer.from('\n%%EOF\n')])
 
 function binaryParser(res: NodeJS.ReadableStream & { setEncoding?: unknown }, cb: (err: Error | null, body: Buffer) => void) {

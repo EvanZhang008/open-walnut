@@ -403,7 +403,7 @@ describe('search: short-query substring noise stays below real matches', () => {
   it('a SECTION HEADING match outranks body-only mentions and substring noise', async () => {
     // Grab-bag note: title says nothing, but an author-written `## SIN` section
     // holds the payload (the Gov document.md shape).
-    await writeNote('Gov document.md', '# Gov document\n\n## US Visa\n\nphoto\n\n## SIN\n\nold 000000001\nNew 000000002');
+    await writeNote('Gov document.md', '# Gov document\n\n## Library card\n\nphoto\n\n## SIN\n\nold 000000001\nNew 000000002');
     await writeNote('Business Idea.md', '# Business Idea\n\nStartup thoughts.');
     await syncIndex();
 
@@ -435,16 +435,16 @@ describe('search: short-query substring noise stays below real matches', () => {
   });
 
   it('a TAG match surfaces notes the query never appears in as text', async () => {
-    await writeNote('immigration-log.md', '---\ntags: [perm, immigration]\n---\n# Timeline\n\nFiled I-140.');
+    await writeNote('garden-log.md', '---\ntags: [compost, garden]\n---\n# Timeline\n\nTurned the pile.');
     await syncIndex();
 
     const app = createApp();
-    const res = await request(app).get('/api/notes-v2/search?q=perm&mode=string');
+    const res = await request(app).get('/api/notes-v2/search?q=compost&mode=string');
 
     expect(res.status).toBe(200);
-    const row = res.body.results.find((r: any) => r.path === 'immigration-log.md');
+    const row = res.body.results.find((r: any) => r.path === 'garden-log.md');
     expect(row).toBeDefined();
-    expect(row.matchedTags).toEqual(['perm']);
+    expect(row.matchedTags).toEqual(['compost']);
   });
 });
 

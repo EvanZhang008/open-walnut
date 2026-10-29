@@ -19,7 +19,7 @@ describe('isJunkProject', () => {
   it('keeps real projects (bilingual) and Inbox', () => {
     for (const p of [
       'Walnut', 'Marina', 'Acme Website', '任务', 'Personal', 'Life',
-      'Tax', 'Immigration', 'Career', '', undefined, null,
+      'Tax', 'Travel', 'Career', '', undefined, null,
       // "test"/"verify" as an interior substring without a word/case boundary
       'Attestation', 'Contest Prep',
     ]) {

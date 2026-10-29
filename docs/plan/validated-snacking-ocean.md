@@ -116,7 +116,7 @@ Memory (AI's world) = what's in your brain (recall)
   ✦ Access pattern: "I remember..."
 
 Notes (User's world) = what's in your filing cabinet (reference)
-  "my visa records" "savings account" "investment runbook"
+  "my passport records" "savings account" "investment runbook"
   ✦ Primarily written by user, AI assists occasionally
   ✦ PARA structure (Projects/Areas/Resources/Archive)
   ✦ Mostly permanent, some expire
@@ -753,7 +753,7 @@ const GROUND_TRUTH = [
   { query: "walnut architecture",    expectedFile: "projects/passion/walnut/", expectedSnippet: "..." },
   { query: "API design decision",    expectedFile: "daily/...",                expectedSnippet: "..." },
   { query: "savings account",        expectedFile: "notes/Areas/Finance/",     expectedSnippet: "savings" },
-  { query: "visa records",           expectedFile: "notes/Areas/Records/",     expectedSnippet: "visa" },
+  { query: "passport records",       expectedFile: "notes/Areas/Records/",     expectedSnippet: "passport" },
 ];
 
 // 2. Run current search() for each query, record results to baseline.json

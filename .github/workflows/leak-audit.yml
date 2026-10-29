@@ -106,7 +106,8 @@ jobs:
           LEAK_SCAN_RULES: ${{ secrets.LEAK_SCAN_RULES }}
         run: |
           if [ -z "$(ls -A "$RUNNER_TEMP/release")" ]; then echo "No release changed in the last day."; exit 0; fi
-          bun scripts/leak-scan/leak-scan.mjs --rules-env LEAK_SCAN_RULES --redact "$RUNNER_TEMP/release"
+          # --skip-deps: the runtime's third-party dependency tree is not ours (its docs name sample accounts and test keys)
+          bun scripts/leak-scan/leak-scan.mjs --rules-env LEAK_SCAN_RULES --redact --skip-deps "$RUNNER_TEMP/release"
 
   daily:
     name: npm packages, the site, the source tree, issue and PR text

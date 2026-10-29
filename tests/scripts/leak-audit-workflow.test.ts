@@ -64,6 +64,9 @@ describe('leak-audit.yml', () => {
       expect(names).toContain(n)
     }
     expect(cond).toContain("github.event_name == 'schedule'")
+    // Walnut's own dist in the runtime is scanned; only the packages it carries are left out
+    const scan = audit.jobs['release-assets']!.steps!.find((s) => (s.run ?? '').includes('leak-scan.mjs'))!
+    expect(scan.run).toContain('--skip-deps')
   })
 
   it('runs only in the upstream repository, where the secret exists', () => {

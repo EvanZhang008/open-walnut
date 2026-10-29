@@ -15,6 +15,9 @@
 export const RULES_VERSION = 1
 const MAX_TERM_WORDS = 6
 const HEX = /^[0-9a-f]{14}$/
+// words remembered per scan before the memo starts over (bounds its memory)
+const MEMO_MAX = 1 << 20
+const MEMO_WORD_MAX = 64
 
 /** Words of a text: runs of ASCII letters and digits. */
 export function words(text) {
@@ -62,6 +65,7 @@ export function compileRules(entries, { seed = 0 } = {}) {
     if (e.kind === 'regex' || e.kind === 'regex-cs') {
       // throw here, at build time, never in CI where the error could quote the pattern
       new RegExp(e.value, e.kind === 'regex' ? 'i' : '')
+      if (slowStart(e.value) || slowOnLongRuns(new RegExp(e.value, e.kind === 'regex' ? 'gi' : 'g'))) throw new Error(`${SLOW_START} (label ${e.label})`)
       for (const a of e.allow ?? []) new RegExp(a, 'i')
       regex.push({ label: e.label, source: e.value, flags: e.kind === 'regex' ? 'i' : '', allow: e.allow ?? [] })
     } else if (e.kind === 'term' || e.kind === 'term-cs') {
@@ -85,11 +89,13 @@ export function loadRules(json) {
     throw new Error(`not a leak-scan rule set (version ${RULES_VERSION} with regex and terms lists)`)
   }
   if (json.regex.length + json.terms.length === 0) throw new Error('the rule set is empty')
+  for (const r of json.regex) if (slowStart(r.source ?? '')) throw new Error(`${SLOW_START} (label ${r.label})`)
   const regex = json.regex.map((r) => ({
     label: r.label,
     re: new RegExp(r.source, `g${r.flags ?? ''}`),
     allow: (r.allow ?? []).map((a) => new RegExp(a, 'i')),
   }))
+  for (const r of regex) if (slowOnLongRuns(r.re)) throw new Error(`${SLOW_START} (label ${r.label})`)
   // per case mode: word count -> (hash -> label), and the first-word hashes of multi-word terms
   const modes = { i: { byLen: new Map(), firsts: new Set(), max: 0 }, s: { byLen: new Map(), firsts: new Set(), max: 0 } }
   for (const t of json.terms) {
@@ -104,8 +110,36 @@ export function loadRules(json) {
     if (n > 1) m.firsts.add(parseInt(t.f, 16))
     m.max = Math.max(m.max, n)
   }
-  return { seed: json.seed ?? 0, regex, modes, count: json.regex.length + json.terms.length }
+  return { seed: json.seed ?? 0, regex, modes, count: json.regex.length + json.terms.length, memo: { i: new Map(), s: new Map() } }
 }
+
+/**
+ * A pattern that opens with a repeated character class (`[a-z0-9.]+@x`, `\\w+\\.x`) is
+ * retried from every position of a long run of that class, so one 200 KB run of letters
+ * (a base64 blob in a bundle) takes 30 s and a release asset hours. A lookbehind keeps the
+ * same meaning and starts at the literal: `(?<=[a-z0-9.])@x`.
+ */
+export function slowStart(source) {
+  return /^(?:\((?:\?:)?)?(?:\[(?:\\.|[^\]])*\]|\\[wWdDsS]|\.)(?:[+*]|\{\d+,\})/.test(source)
+}
+
+/**
+ * The same trap in any other form (`[a-z][a-z0-9]*\\.x`, `\\b\\w+@`): the regex is timed on
+ * long runs of the characters that make it backtrack. A linear one takes well under 1 ms.
+ */
+const PROBES = ['a', '0', 'a.', 'a-', 'a_', 'a ', 'A'].map((u) => u.repeat(Math.ceil(32768 / u.length)))
+const PROBE_MS = 100
+export function slowOnLongRuns(re) {
+  const slow = (text) => {
+    const t0 = performance.now()
+    re.lastIndex = 0
+    re.test(text)
+    return performance.now() - t0 > PROBE_MS
+  }
+  // twice, so a process paused by the machine for a moment is not taken for a slow regex
+  return PROBES.some((text) => slow(text) && slow(text))
+}
+const SLOW_START = 'a regex rule starts with a repeated character class, which is quadratic on long runs: start it at a literal, with the class in a lookbehind'
 
 const ESCAPES = /\\u[0-9a-fA-F]{4}|\\x[0-9a-fA-F]{2}|\\[nrtfvb0]|%[0-9a-fA-F]{2}/g
 
@@ -142,24 +176,16 @@ export function scanText(rules, text, base = 0) {
   for (const [mode, md] of active) {
     const ones = md.byLen.get(1)
     const norm = (w) => (mode === 'i' ? w.toLowerCase() : w)
-    for (let k = 0; k < toks.length; k += 2) {
-      const raw = plain.substr(toks[k], toks[k + 1])
+    // what one word alone gives, by its text: the same identifiers recur all through a
+    // bundle, so most words are looked up, not hashed (a 3x faster scan of a dist tree)
+    const memo = rules.memo?.[mode] ?? new Map()
+    const wordInfo = (raw) => {
       const first = norm(raw)
       const h0 = hashNum(first, rules.seed)
-      const found = [] // [label, start, end]
-      const start = toks[k]
-      if (ones?.has(h0)) found.push([ones.get(h0), start, start + raw.length])
-      if (md.firsts.has(h0)) {
-        let key = first
-        for (let n = 2; n <= md.max && k + 2 * (n - 1) < toks.length; n++) {
-          const j = k + 2 * (n - 1)
-          key = `${key} ${norm(plain.substr(toks[j], toks[j + 1]))}`
-          const label = md.byLen.get(n)?.get(hashNum(key, rules.seed))
-          if (label) found.push([label, start, toks[j] + toks[j + 1]])
-        }
-      }
-      // one part of an identifier: fooClient, foo2, HTTPFoo
-      if (ones && !found.length && raw.length > 3) {
+      const whole = ones?.get(h0)
+      // one part of an identifier: fooClient, foo2, HTTPFoo (looked at only when nothing else matched)
+      let parts = null
+      if (ones && !whole && raw.length > 3) {
         PARTS.lastIndex = 0
         const subs = []
         let p
@@ -167,10 +193,38 @@ export function scanText(rules, text, base = 0) {
         if (subs.length > 1) {
           for (const [w, at] of subs) {
             const label = ones.get(hashNum(norm(w), rules.seed))
-            if (label) found.push([label, start + at, start + at + w.length])
+            if (label) (parts ??= []).push([label, at, at + w.length])
           }
         }
       }
+      const starts = md.firsts.has(h0)
+      return whole || parts || starts ? { whole, parts, starts, first } : null
+    }
+    for (let k = 0; k < toks.length; k += 2) {
+      const raw = plain.substr(toks[k], toks[k + 1])
+      let info = memo.get(raw)
+      if (info === undefined) {
+        info = wordInfo(raw)
+        // a long word (a base64 run) seldom comes back, and would hold its chunk in memory
+        if (raw.length <= MEMO_WORD_MAX) {
+          if (memo.size >= MEMO_MAX) memo.clear()
+          memo.set(raw, info)
+        }
+      }
+      if (info === null) continue
+      const found = [] // [label, start, end]
+      const start = toks[k]
+      if (info.whole) found.push([info.whole, start, start + raw.length])
+      if (info.starts) {
+        let key = info.first
+        for (let n = 2; n <= md.max && k + 2 * (n - 1) < toks.length; n++) {
+          const j = k + 2 * (n - 1)
+          key = `${key} ${norm(plain.substr(toks[j], toks[j + 1]))}`
+          const label = md.byLen.get(n)?.get(hashNum(key, rules.seed))
+          if (label) found.push([label, start, toks[j] + toks[j + 1]])
+        }
+      }
+      if (!found.length && info.parts) for (const [label, s, e] of info.parts) found.push([label, start + s, start + e])
       for (const [label, s, e] of found) {
         // a case-sensitive term is an acronym; one that ends an UPPER_SNAKE name (MAX_BARS) is a word of it
         if (mode === 's' && plain[s - 1] === '_') continue

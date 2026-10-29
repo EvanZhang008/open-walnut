@@ -9,6 +9,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { execFileSync, spawnSync } from 'node:child_process'
 import { compileRules, loadRules, scanText, printableRuns, runOffset, termKey } from '../../scripts/leak-scan/core.mjs'
+import { reapStale } from '../../scripts/leak-scan/leak-scan.mjs'
 import { parseSource } from '../../scripts/leak-scan/build-rules.mjs'
 
 const REPO = path.join(import.meta.dirname, '..', '..')
@@ -17,7 +18,7 @@ const BUILD = path.join(REPO, 'scripts', 'leak-scan', 'build-rules.mjs')
 
 const SOURCE = [
   '# invented rules',
-  'corp-email\tregex\t[a-z0-9._-]+@acmecorp\\.example\\b',
+  'corp-email\tregex\t(?<=[a-z0-9._-])@acmecorp\\.example\\b',
   'host-scheme\tregex\t\\bbox-qz-[a-z0-9]',
   'demo-key\tregex-cs\t\\bQK_[A-Z0-9]{20}\\b\tPLACEHOLDER',
   'tool\tterm\tzorblax',
@@ -131,6 +132,38 @@ describe('leak-scan rules', () => {
     expect(() => loadRules({ ...json, terms: [{ label: 'x', h: '00000000000000', n: 2 }] })).toThrow(/malformed term rule/)
   })
 
+  it('refuses a regex that opens with a repeated class, which is quadratic on a long run', () => {
+    // the last one opens with a single class, so only timing it on a long run finds it
+    for (const bad of ['[a-z0-9.]+@acmecorp\\.example', '\\w+\\.acmecorp', '([a-z]+)@x', '.*zorblax', '[a-z][a-z0-9]*\\.acmecorp']) {
+      expect(() => compileRules([{ label: 'x', kind: 'regex', value: bad }])).toThrow(/repeated character class/)
+      expect(() => loadRules({ version: 1, regex: [{ label: 'x', source: bad }], terms: [] })).toThrow(/repeated character class/)
+    }
+    // the same rule written from its literal, with the class in a lookbehind
+    const r = loadRules(compileRules([{ label: 'corp-email', kind: 'regex', value: '(?<=[a-z0-9._-])@acmecorp\\.example\\b' }]))
+    expect(scanText(r, 'mail jo.doe@acmecorp.example now').map((h) => h.label)).toEqual(['corp-email'])
+    expect(scanText(r, 'mail @acmecorp.example now')).toEqual([])
+    const t0 = Date.now()
+    expect(scanText(r, 'a'.repeat(400_000))).toEqual([])
+    expect(Date.now() - t0).toBeLessThan(5_000)
+  })
+
+  it('gives the same hits for a word it has seen before, in any case and inside identifiers', () => {
+    const r = rules()
+    const text = 'zorblax x ZORBLAX zorblaxClient unzorblax Quanta Fizzle quanta zorblax the QXZ build QXZ'
+    const first = scanText(r, text)
+    expect(first.map((h) => h.label)).toEqual(['tool', 'tool', 'tool', 'tool', 'tool', 'acronym', 'acronym'])
+    expect(scanText(r, text)).toEqual(first)
+    expect(scanText(r, 'Quanta zorblax').map((h) => h.label)).toEqual(['tool'])
+    // a remembered case-sensitive word still skips the end of an UPPER_SNAKE name
+    const cs = 'QXZ MAX_QXZ QXZ MAX_QXZ'
+    expect(scanText(r, cs).map((h) => h.offset)).toEqual([0, 12])
+    expect(scanText(r, cs).map((h) => h.offset)).toEqual([0, 12])
+    // a long word is not remembered, and still found
+    const long = `a${'b'.repeat(80)}Zorblax`
+    expect(scanText(r, long)).toEqual(scanText(r, long))
+    expect(scanText(r, long).map((h) => [h.offset, h.length])).toEqual([[81, 7]])
+  })
+
   it('scans a 40 MB text in reasonable time', () => {
     const big = `${'lorem ipsum dolor sit amet, consectetur 12345 '.repeat(900_000)}zorblax`
     const t0 = Date.now()
@@ -234,6 +267,66 @@ describe('leak-scan CLI', () => {
       expect(empty.code).toBe(2)
       expect(empty.out).toMatch(/fewer than --min-files 1/)
       expect(run(['--rules', r, '--min-files', '0', path.join(dir, 'empty')]).code).toBe(0)
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('scans a file once when other archives carry the same bytes, and names the copies', () => {
+    const dir = tmp()
+    try {
+      const r = writeRules(dir)
+      const tree = path.join(dir, 'pkg')
+      fs.mkdirSync(path.join(tree, 'package'), { recursive: true })
+      fs.writeFileSync(path.join(tree, 'package', 'dep.js'), 'const zorblax = 1\n')
+      fs.writeFileSync(path.join(tree, 'package', 'own.js'), 'export {}\n')
+      execFileSync('tar', ['-czf', path.join(dir, 'a-linux.tgz'), '-C', tree, 'package'])
+      fs.writeFileSync(path.join(tree, 'package', 'own.js'), 'export const host = "box-qz-9"\n')
+      execFileSync('tar', ['-czf', path.join(dir, 'a-mac.tgz'), '-C', tree, 'package'])
+      const res = run(['--rules', r, '--redact', path.join(dir, 'a-linux.tgz'), path.join(dir, 'a-mac.tgz')])
+      expect(res.code).toBe(1)
+      expect(res.out.match(/HIT tool/g)).toHaveLength(1)
+      expect(res.out).toMatch(/HIT host-scheme \S*a-mac\.tgz!\/package\/own\.js/)
+      expect(res.out).toMatch(/: 6 files \(1 copies of a file already scanned\), \d+ bytes, 7 rules: 2 hits/)
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('with --skip-deps leaves out the dependencies a package carries, never the package itself', () => {
+    const dir = tmp()
+    try {
+      const r = writeRules(dir)
+      const own = path.join(dir, 'rt', 'lib', 'node_modules', 'open-walnut')
+      fs.mkdirSync(path.join(own, 'dist'), { recursive: true })
+      fs.mkdirSync(path.join(own, 'node_modules', 'some-sdk'), { recursive: true })
+      fs.writeFileSync(path.join(own, 'package.json'), '{"name":"open-walnut"}')
+      fs.writeFileSync(path.join(own, 'dist', 'cli.js'), '// see box-qz-4\n')
+      fs.writeFileSync(path.join(own, 'node_modules', 'some-sdk', 'README.md'), 'mail jo@acmecorp.example\n')
+      const all = run(['--rules', r, '--redact', path.join(dir, 'rt')])
+      expect(all.out).toMatch(/HIT corp-email/)
+      const own1 = run(['--rules', r, '--redact', '--skip-deps', path.join(dir, 'rt')])
+      expect(own1.code).toBe(1)
+      expect(own1.out).toMatch(/HIT host-scheme \S*open-walnut\/dist\/cli\.js/)
+      expect(own1.out).not.toMatch(/corp-email/)
+      expect(own1.out).toMatch(/skipped the dependencies of 1 packages/)
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('removes the temp dirs of a scan that was killed, and only those', () => {
+    const dir = tmp()
+    try {
+      const mk = (name: string) => { fs.mkdirSync(path.join(dir, name, 'x'), { recursive: true }); return name }
+      const dead = mk('leak-scan-999999-AbC123')
+      const live = mk('leak-scan-424242-QwErTy')
+      const own = mk(`leak-scan-${process.pid}-ZzZzZz`)
+      const other = [mk('leak-scan-test-abcdef'), mk('leak-scan-Xy12Zq'), mk('unrelated')]
+      expect(reapStale(dir, (pid: number) => pid === 424242)).toBe(1)
+      const left = fs.readdirSync(dir).sort()
+      expect(left).not.toContain(dead)
+      expect(left).toEqual([live, own, ...other].sort())
     } finally {
       fs.rmSync(dir, { recursive: true, force: true })
     }

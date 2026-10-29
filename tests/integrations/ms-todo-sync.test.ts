@@ -277,7 +277,7 @@ describe('reconcilePulledTasks — [Moved] marker gate', () => {
 
     const count = await reconcilePulledTasks(
       [msTask],
-      { id: 'list-mybot', displayName: 'Immigration' },
+      { id: 'list-mybot', displayName: 'Errands' },
       updateSpy,
       addSpy,
     );
@@ -303,7 +303,7 @@ describe('reconcilePulledTasks — [Moved] marker gate', () => {
 
     const count = await reconcilePulledTasks(
       [msTask],
-      { id: 'list-mybot', displayName: 'Immigration' },
+      { id: 'list-mybot', displayName: 'Errands' },
       updateSpy,
       addSpy,
     );
@@ -324,7 +324,7 @@ describe('reconcilePulledTasks — [Moved] marker gate', () => {
 
     const count = await reconcilePulledTasks(
       [msTask],
-      { id: 'list-mybot', displayName: 'Immigration' },
+      { id: 'list-mybot', displayName: 'Errands' },
       vi.fn(),
       addSpy,
     );
