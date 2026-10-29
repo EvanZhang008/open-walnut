@@ -1,9 +1,9 @@
 /**
  * The fold the session timeline draws around finished work: ProcessFoldRow, one
- * "Received a message from X, ran 2 commands ›" row for every stretch of quiet
+ * "Received 3 messages · Ran 2 tools ›" row for every stretch of quiet
  * steps between two things the person reads (finished steps, messages sent and
  * received, a turn's work before its answer, whole turns that needed nothing;
- * turn-shape.ts), its line saying what the steps did, in order (fold-steps.ts).
+ * turn-shape.ts), its line counting what came in, went out and ran (fold-steps.ts).
  * It starts folded and remembers an open state for the page, so a fold the
  * reader opened stays open when its rows remount: when the turn ends, when
  * history is fetched again, after a reconnect.

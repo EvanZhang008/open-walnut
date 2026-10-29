@@ -314,8 +314,9 @@ test.describe('Reasoning folds into the tool run around it', () => {
 
     await expect(panel.locator('.session-streaming-panel .tool-run-row')).toHaveCount(0)
     // The answer's own reasoning (msg_b) rides the run before it, as it did live.
+    // In history the steps before the answer are its turn fold, whose line counts them.
     const historyRows = panel.locator('.session-history .tool-run-row')
-    await expect(historyRows.locator(':scope > .tool-run-toggle > .tool-run-label')).toHaveText(['Read a file'])
+    await expect(historyRows.locator(':scope > .tool-run-toggle > .tool-run-label')).toHaveText(['Ran 1 tool'])
     await expect(panel.locator('.session-history')).toContainText('The file has it.')
     await historyRows.locator(':scope > .tool-run-toggle').click()
     const innerThinking = historyRows.locator('.tool-run-body .tool-run-row')

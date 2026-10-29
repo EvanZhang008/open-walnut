@@ -4,9 +4,9 @@
  * the user: "still why this is not merged"): "Received a message › / Thinking › /
  * Received a message › / Ran 31 commands › / Received a message › / Ran a command ›"
  * under "Claude Code is working…". Now it is one row while the turn runs, its line
- * saying what happened in order ("A notice: …, thought, a notice: …, ran 3 commands,
- * …", fold-steps.ts), and opening it shows every step and card in order. Words, or a
- * person's message, still split it.
+ * counting what happened ("Received 3 messages · Ran 4 tools", fold-steps.ts), and
+ * opening it shows every step and card in order. Words, or a person's message, still
+ * split it.
  *
  * History and the WS are mocked (mock-session-harness.ts); stream and queue events
  * are pushed one by one while the turn really runs.
@@ -32,12 +32,12 @@ async function card(page: Page, id: string, n: number) {
   });
 }
 /** A card, then wait until the panel shows it: a row is placed where the stream
- *  stood when it arrived, so the next event must not race it. */
+ *  stood when it arrived, so the next event must not race it. The fold's line
+ *  counts cards, so it shows once the line reads `total` received. */
 async function cardShown(page: Page, hist: Locator, id: string, n: number, total: number) {
   await card(page, id, n);
-  void total;
   await expect.poll(() => hist.locator('.tool-run-label').allTextContents(), { timeout: 10000 })
-    .toContainEqual(expect.stringContaining(`SG_NOTICE_${n}`));
+    .toContainEqual(expect.stringMatching(new RegExp(`^Received ${total} messages?\\b`)));
 }
 async function think(page: Page, msgId: string, text: string) {
   await injectEvent(page, 'session:thinking-delta', { sessionId: SESSION_ID, delta: text, msgId });
@@ -69,9 +69,9 @@ test('cards, reasoning and commands in one stretch are one row while the turn ru
   await page.screenshot({ path: `${SHOTS}/${test.info().project.name}-arriving.png`, clip: (await hist.boundingBox())! }).catch(() => {});
   await streamTools(page, [['sg-4', 'git push']]);
 
-  const NOTE = (n: number) => `a notice: SG_NOTICE_${n} Its turn ended`;
+  // Counts only: three cards, four commands (the reasoning is not counted).
   await expect.poll(() => labelsAfter(hist, 'SG_ASK')).toEqual([
-    `A notice: SG_NOTICE_1 Its turn ended, thought, ${NOTE(2)}, ran 3 commands, ${NOTE(3)}, ran git push`,
+    'Received 3 messages \u00b7 Ran 4 tools',
   ]);
   await expect(hist.locator('.provenance-card')).toHaveCount(0);
   await expect(hist.locator('.session-working-indicator')).toBeVisible();
@@ -98,7 +98,7 @@ test('cards, reasoning and commands in one stretch are one row while the turn ru
 
   // More arrives while it is open: it joins the same row, which stays open.
   await cardShown(page, hist, 'qm-sg-4', 4, 4);
-  await expect(fold.locator(':scope > .tool-run-toggle')).toHaveText(new RegExp(`ran git push, ${NOTE(4)}`));
+  await expect(fold.locator(':scope > .tool-run-toggle')).toHaveText(/^Received 4 messages \u00b7 Ran 4 tools/);
   await expect(fold).toHaveAttribute('data-open', 'true');
   await page.waitForTimeout(600);
 });
@@ -126,10 +126,11 @@ test('words or a person\'s message split the stretch, and stay on screen', async
 
   await expect(hist.getByText('SG_WORDS the checks pass, now the deploy.')).toBeVisible();
   await expect(hist.locator('.session-msg', { hasText: 'SG_PERSON' })).toBeVisible();
+  // Three rows, each a card and a command.
   await expect.poll(() => labelsAfter(hist, 'SG_ASK2')).toEqual([
-    'A notice: SG_NOTICE_1 Its turn ended, ran make check',
-    'Ran make deploy, a notice: SG_NOTICE_2 Its turn ended',
-    'A notice: SG_NOTICE_3 Its turn ended, ran tail log',
+    'Received 1 message \u00b7 Ran 1 tool',
+    'Received 1 message \u00b7 Ran 1 tool',
+    'Received 1 message \u00b7 Ran 1 tool',
   ]);
 });
 
@@ -149,8 +150,9 @@ test('a turn a notice started: the notice in history and the live steps are one 
   await page.waitForTimeout(400);
   await streamTools(page, [['st-1', 'make check']]);
 
+  // The notice in history, the live card and the command.
   await expect.poll(() => labelsAfter(hist, 'SG_ANSWER3')).toEqual([
-    'A notice: SG_NOTICE_7 Its turn ended, thought, a notice: SG_NOTICE_8 Its turn ended, ran make check',
+    'Received 2 messages \u00b7 Ran 1 tool',
   ]);
   const fold = hist.locator('[data-testid="turn-fold"]').last();
   await fold.locator(':scope > .tool-run-toggle').click();

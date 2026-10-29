@@ -178,10 +178,10 @@ test('bottom content stays above the fog through tool and composer resizing', as
 
   await checkBottom('collapsed');
   for (let i = 0; i < 2; i++) {
-    await panel.locator('.tool-run-toggle').filter({ hasText: 'Ran 4 commands' }).click();
+    await panel.locator('.tool-run-toggle').filter({ hasText: 'Ran 4 tools' }).click();
     await expect(panel.locator('.tool-run-body')).toBeVisible();
     await checkBottom(`tools-open-${i}`);
-    await panel.locator('.tool-run-toggle').filter({ hasText: 'Ran 4 commands' }).click();
+    await panel.locator('.tool-run-toggle').filter({ hasText: 'Ran 4 tools' }).click();
     await expect(panel.locator('.tool-run-body')).toHaveCount(0);
     await checkBottom(`tools-closed-${i}`);
   }

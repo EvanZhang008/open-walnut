@@ -3,9 +3,9 @@
  * injected after it (a skill's re-invocation note, the skill's text) used to be
  * five rows in a row, "Ran 5 commands, launched 2 skills ›", "Injected context ›",
  * "Loaded skill … ›", "Injected context ›", "Loaded skill … ›" (2026-10-26, the
- * user: "we want all these combine into one if they are neighbor"). Now they read
- * "Ran 3 commands, launched 2 skills, loaded 2 skills, injected context 2× ›",
- * and opening it shows each step. Words in between, or a person's message, still
+ * user: "we want all these combine into one if they are neighbor"). Now they are
+ * one row whose line counts the tools ("Ran 5 tools ›"; injected context is not
+ * counted), and opening it shows each step. Words in between, or a person's message, still
  * split them; one context row alone stays its own row.
  *
  * History and the WS are mocked (session-live-turn-fold.spec.ts harness), so the
@@ -55,7 +55,7 @@ test('a tool run and the injected context after it are one fold row', async ({ p
   const ask1 = hist.locator('.session-msg', { hasText: 'NB_ASK1' });
   await ask1.scrollIntoViewIfNeeded();
   const fold1 = hist.locator('[data-testid="turn-fold"]').first();
-  await expect(fold1.locator(':scope > .tool-run-toggle')).toHaveText(/^Ran 3 commands, launched 2 skills, loaded 2 skills, injected context 2×/);
+  await expect(fold1.locator(':scope > .tool-run-toggle')).toHaveText(/^Ran 5 tools/);
   // No context row of its own anywhere outside a fold before the person's next message.
   const looseContext = await hist.evaluate((el) => [...el.querySelectorAll('.tool-run-label')]
     .filter((n) => /^(Injected context|Loaded skill)/.test(n.textContent ?? '') && !n.closest('[data-testid="process-fold"],[data-testid="turn-fold"]'))
@@ -75,8 +75,8 @@ test('a tool run and the injected context after it are one fold row', async ({ p
   ]);
   await page.screenshot({ path: `${SHOTS}/${test.info().project.name}-opened.png`, clip: (await hist.boundingBox())! }).catch(() => {});
 
-  // Turn 2 (answered): the steps before the answer are the turn fold, named with the skill.
-  const fold2 = hist.locator('[data-testid="turn-fold"]', { has: page.locator('text=/^Ran a command, launched a skill, loaded a skill/') });
+  // Turn 2 (answered): the steps before the answer are the turn fold (a command and a skill).
+  const fold2 = hist.locator('[data-testid="turn-fold"]', { has: page.locator('text=/^Ran 2 tools/') });
   await expect(fold2).toHaveCount(1);
   await expect(hist.locator('.session-msg', { hasText: 'NB_ANSWER2' })).toBeVisible();
 });
@@ -92,10 +92,11 @@ test('a skill loaded in a live turn joins the turn fold with its stream tools, a
   await waitForWs(page);
   await expect(hist).toContainText('NB_LIVE_ASK', { timeout: 15000 });
   await streamTools(page, [['t-live-1', 'make check'], ['t-live-2', 'make test']]);
-  // The person's message shows; after it, one row: the loaded skill, then both calls.
+  // The person's message shows; after it, one row: the loaded skill, then both calls
+  // (the line counts the two calls; the loaded skill is context, not counted).
   await expect(hist.locator('.session-msg', { hasText: 'NB_LIVE_ASK' })).toBeVisible();
   const last = hist.locator('[data-testid="turn-fold"]').last();
-  await expect(last.locator(':scope > .tool-run-toggle')).toHaveText(/^Loaded a skill, ran 2 commands/, { timeout: 10000 });
+  await expect(last.locator(':scope > .tool-run-toggle')).toHaveText(/^Ran 2 tools/, { timeout: 10000 });
   // Every row after the person's message (the fold is closed, so its steps are not drawn).
   const rowsAfterAsk = () => hist.evaluate((el) => {
     const ask = [...el.querySelectorAll('.session-msg')].find((n) => n.textContent?.includes('NB_LIVE_ASK'))!;
@@ -103,7 +104,7 @@ test('a skill loaded in a live turn joins the turn fold with its stream tools, a
       .filter((n) => ask.compareDocumentPosition(n) & Node.DOCUMENT_POSITION_FOLLOWING)
       .map((n) => n.textContent);
   });
-  expect(await rowsAfterAsk()).toEqual([expect.stringMatching(/^Loaded a skill, ran 2 commands/)]);
+  expect(await rowsAfterAsk()).toEqual([expect.stringMatching(/^Ran 2 tools/)]);
   await page.screenshot({ path: `${SHOTS}/${test.info().project.name}-live.png`, clip: (await hist.boundingBox())! }).catch(() => {});
   await last.locator(':scope > .tool-run-toggle').click();
   await expect(last).toContainText('Loaded skill sample-plan');
@@ -120,7 +121,7 @@ test('a skill loaded in a live turn joins the turn fold with its stream tools, a
   await injectEvent(page, 'session:result', { sessionId: SESSION_ID, result: 'done', isError: false });
   await expect(hist).toContainText('NB_LIVE_ANSWER all green.', { timeout: 10000 });
   const after = hist.locator('[data-testid="turn-fold"]').last();
-  await expect(after.locator(':scope > .tool-run-toggle')).toHaveText(/^Loaded a skill, ran 2 commands/);
+  await expect(after.locator(':scope > .tool-run-toggle')).toHaveText(/^Ran 2 tools/);
   await expect(after).toHaveAttribute('data-open', 'true');
   await expect(after).toContainText('Loaded skill sample-plan');
   await expect(hist.locator('.session-streaming-panel .tool-run-row')).toHaveCount(0);
@@ -140,7 +141,8 @@ test('a failed command in history that the live fold takes in is counted in its 
   await expect(hist).toContainText('NB_FAIL_ASK', { timeout: 15000 });
   await streamTools(page, [['f3', 'make test']]);
   const fold = hist.locator('[data-testid="turn-fold"]').last();
-  await expect(fold.locator(':scope > .tool-run-toggle')).toHaveText(/^Ran a command, launched a skill, loaded a skill, ran make test/, { timeout: 10000 });
+  // Two commands (one from history, one streamed) and a skill.
+  await expect(fold.locator(':scope > .tool-run-toggle')).toHaveText(/^Ran 3 tools/, { timeout: 10000 });
   await expect(fold.locator('.tool-run-fail')).toHaveText('1 failed');
 });
 
@@ -166,7 +168,7 @@ test('a skill loaded after words mid-turn stays its own row while the turn runs'
 // turn), another notice, then the answer with its own reasoning. That was three
 // rows above the answer, "Show 1 hidden turn", "Received a message ›",
 // "Thinking ›" (2026-10-26, the user: "why it is 2 3, just collapse into one
-// message no?"). Now it is one, saying what happened in order; a person's
+// message no?"). Now it is one, counting what happened; a person's
 // message still keeps the quiet turns on either side of it apart.
 test('hidden turns, a notice and the answer\'s reasoning before an answer are one row', async ({ page }) => {
   const { createEnvelopeKit } = await import('../../../src/core/peers/envelope-kit');
@@ -197,16 +199,19 @@ test('hidden turns, a notice and the answer\'s reasoning before an answer are on
     return all.filter((n) => (a1.compareDocumentPosition(n) & Node.DOCUMENT_POSITION_FOLLOWING) && (a2.compareDocumentPosition(n) & Node.DOCUMENT_POSITION_PRECEDING) && !a2.contains(n))
       .map((n) => n.textContent?.trim());
   });
-  expect(between).toEqual(['A notice: NB_NOTICE_1 Its turn ended, acknowledged, a notice: NB_NOTICE_2 Its turn ended, thought']);
+  expect(between).toEqual(['Received 2 messages']);
   // The answer shows its words alone; its reasoning is in the row.
   await expect(answer2).not.toContainText('Thinking');
-  const fold = hist.locator('[data-testid="turn-fold"]', { hasText: 'NB_NOTICE_1' });
+  const fold = hist.locator('[data-testid="turn-fold"]', { hasText: 'Received 2 messages' });
   await page.screenshot({ path: `${SHOTS}/${test.info().project.name}-hidden-merged.png`, clip: (await hist.boundingBox())! }).catch(() => {});
   await fold.locator(':scope > .tool-run-toggle').click();
+  // Opened, both notices are there with the steps between them.
+  await expect(fold).toContainText('NB_NOTICE_1');
+  await expect(fold).toContainText('NB_NOTICE_2');
   await expect(fold).toContainText('Acknowledged');
   await expect(fold).toContainText('Thinking');
   // The quiet turn before the person's next message keeps its own row.
-  await expect(hist.locator('[data-testid="turn-fold"] > .tool-run-toggle .tool-run-label', { hasText: 'NB_NOTICE_3' }))
-    .toHaveText('A notice: NB_NOTICE_3 Its turn ended, acknowledged');
+  await expect(hist.locator('[data-testid="turn-fold"] > .tool-run-toggle .tool-run-label', { hasText: /^Received 1 message$/ }))
+    .toHaveCount(1);
   await page.waitForTimeout(600);
 });

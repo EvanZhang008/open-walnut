@@ -4,8 +4,8 @@
  * History holds the message (a peer's note) once the turn starts; the tool calls
  * the session makes for it are still stream blocks. Drawn apart, that was two
  * rows, "Received a message ›" and "Used 2 tools ›" (2026-10-26, the user: "this
- * 2 can be collapsed"). Now it is one, "From <sender>: <title>, ran a command, read a
- * file ›", the shape the turn keeps once it is answered.
+ * 2 can be collapsed"). Now it is one, "Received 1 message · Ran 2 tools ›", the
+ * shape the turn keeps once it is answered.
  *
  * History and the WS are mocked (composer-stop-and-indicator.spec.ts harness):
  * the stream is injected event by event, so the turn is really live.
@@ -112,7 +112,7 @@ test('a received message and the tools the live turn runs for it are one fold ro
   const folds = history.locator('[data-testid="turn-fold"]');
   await expect(folds).toHaveCount(1, { timeout: 10000 });
   const fold = folds.first();
-  await expect(fold.locator('.tool-run-toggle')).toHaveText(/^From Sample lead: LIVE_PEER_TITLE check the build, ran a command, read a file/);
+  await expect(fold.locator('.tool-run-toggle')).toHaveText(/^Received 1 message \u00b7 Ran 2 tools/);
   // No second row for the same turn: no tool run, no card outside the fold.
   await expect(history.locator('.tool-run-toggle')).toHaveCount(1);
   await expect(history.locator('.provenance-card')).toHaveCount(0);
@@ -121,12 +121,13 @@ test('a received message and the tools the live turn runs for it are one fold ro
   // Opened: the message and both calls, in order.
   await fold.locator('.tool-run-toggle').click();
   await expect(fold.locator('.provenance-card')).toHaveCount(1);
+  await expect(fold.locator('.provenance-card')).toContainText('LIVE_PEER_TITLE check the build');
   await expect(fold).toContainText('make check');
   await expect(fold).toContainText('/tmp/live/a.ts');
 
   // A third call joins the same row.
   await injectEvent(page, 'session:tool-use', { sessionId: SESSION_ID, toolName: 'Bash', toolUseId: 'tool-live-3', input: { command: 'make test' } });
   await injectEvent(page, 'session:tool-result', { sessionId: SESSION_ID, toolUseId: 'tool-live-3', result: 'ok' });
-  await expect(fold.locator('.tool-run-toggle')).toHaveText(/^From Sample lead: LIVE_PEER_TITLE check the build, ran 2 commands, read a file/);
+  await expect(fold.locator('.tool-run-toggle')).toHaveText(/^Received 1 message \u00b7 Ran 3 tools/);
   await expect(history.locator('[data-testid="turn-fold"]')).toHaveCount(1);
 });

@@ -6,8 +6,8 @@
  *    edits, a message to the lead; notices, sends and replies) is ONE folded
  *    row and only the answer shows; a failure inside says so in the header;
  *  · quiet turns: a turn a peer's message started that ended with the
- *    no-action line is one folded row that says what happened ("From Sample
- *    lead: …, acknowledged"), never a count of hidden turns;
+ *    no-action line is one folded row that counts what happened ("Received 1
+ *    message"), never a count of hidden turns;
  *  · no-action fold: a clean finished turn whose answer ends with the no-action
  *    line is one "No action needed" row; opened, the whole answer is there and
  *    copies without the line; a turn with a failure keeps its answer open (the
@@ -86,8 +86,8 @@ test('everything before a turn\'s answer is one row; the answer shows', async ({
   const history = panel.locator('.session-history')
   await expect(history).toContainText('FOLD_FINAL_A here is the answer.')
   const fold = history.locator('[data-testid="turn-fold"]').first()
-  // What the steps did, in the order they happened.
-  await expect(fold.locator(':scope > .tool-run-toggle .tool-run-label')).toHaveText('An update, read 2 files, edited 2 files, sent a message')
+  // Counts only: two reads and two edits are four tools, the task_send one sent.
+  await expect(fold.locator(':scope > .tool-run-toggle .tool-run-label')).toHaveText('Sent 1 \u00b7 Ran 4 tools')
   await expect(fold).toHaveAttribute('data-open', 'false')
   // Folded, the narration, the steps and the sent card are off screen.
   expect(await history.innerText()).not.toContain('FOLD_NARRATION_A')
@@ -109,7 +109,8 @@ test('sends, replies and messaging ops fold with the steps, reasoning included; 
   const panel = await openFoldSession(page)
   const history = panel.locator('.session-history')
   await expect(history).toContainText('FOLD_FINAL_I passed it on.')
-  const fold = history.locator('[data-testid="turn-fold"]').filter({ hasText: 'Sent a message, used task_update, sent a message, wrote to your inbox, sent a message' })
+  // Two task_sends, an org_send and an inbox reply are four sent; task_update is the one tool.
+  const fold = history.locator('[data-testid="turn-fold"]').filter({ hasText: 'Sent 4 \u00b7 Ran 1 tool' })
   await expect(fold).toHaveCount(1)
   expect(await history.innerText()).not.toContain('FOLD_SENT_NINE')
   expect(await history.innerText()).not.toContain('FOLD_REPLY_NINE')
@@ -158,17 +159,18 @@ test('an answer to the person shows in full even with the line under it; nothing
   expect(copied.at(-1)).toBe('FOLD_NOACTION_B all handled, nothing for you.\n\nSecond paragraph of it.')
 })
 
-test('a turn a peer started that needed nothing is one row saying what happened; it opens to the card', async ({ page }) => {
+test('a turn a peer started that needed nothing is one row counting what happened; it opens to the card', async ({ page }) => {
   test.setTimeout(90_000)
   const panel = await openFoldSession(page)
   const history = panel.locator('.session-history')
   // Both peer FYIs (after turn five's answer, and after G's; the second on the line's first name).
-  const hidden = history.locator('[data-testid="turn-fold"]').filter({ hasText: 'FOLD_PEER_FYI' })
+  const hidden = history.locator('[data-testid="turn-fold"]').filter({ hasText: 'Received 1 message' })
   await expect(hidden).toHaveCount(2)
-  await expect(hidden.last().locator(':scope > .tool-run-toggle .tool-run-label')).toHaveText('From Sample lead: FOLD_PEER_FYI_TWO status only, acknowledged')
+  await expect(hidden.last().locator(':scope > .tool-run-toggle .tool-run-label')).toHaveText('Received 1 message')
   await expect(history).not.toContainText(/hidden turn/)
-  // Folded, the note's words are off screen; only its title is on the line.
+  // Folded, the note is off screen: its words and its title.
   expect(await history.innerText()).not.toContain('Second status, nothing to do.')
+  expect(await history.innerText()).not.toContain('FOLD_PEER_FYI')
   await expect(history.locator('[data-testid="no-action-mark"]')).toHaveCount(0)
   // The raw line prints nowhere but in turn four, which quotes it in code.
   await expect(history.locator('.session-msg', { hasText: '<walnut-turn' })).toHaveCount(1)

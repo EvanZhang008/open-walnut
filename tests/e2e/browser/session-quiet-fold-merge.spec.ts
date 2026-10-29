@@ -1,6 +1,7 @@
 /**
- * Quiet steps between two answers are ONE row, and the row says what they were,
- * in order. The reported shapes (2026-10-27): after an answer, a lead's note the
+ * Quiet steps between two answers are ONE row, and the row counts them
+ * (messages received, sent, tools run); opened, it shows each step in order.
+ * The reported shapes (2026-10-27): after an answer, a lead's note the
  * session acknowledged, a notice it answered with a send and the line, and a reply
  * it answered drew as "Show 2 hidden turns" and "Received a message ›" one above
  * the other; elsewhere "Received a message ›", "Thinking ›", an empty footer, a
@@ -38,9 +39,10 @@ function rows(): Array<Record<string, unknown>> {
   ];
 }
 
-// The reply names its sender as its card does: by the sending task's title
-// (pw-task-001), not the session title the envelope printed.
-const LINE = /^From Team lead: Migration is top priority, acknowledged, notice about Team lead: Its turn ended without a reply, sent a message, acknowledged, reply from Playwright test task: Fixed and verified, thought$/;
+// The line is counts only (2026-10-28): the lead's note, the notice and the reply
+// are three messages received, the task_send one sent. What each step was is
+// inside the fold, checked below once it is opened.
+const LINE = /^Received 3 messages \u00b7 Sent 1$/;
 
 /** The timeline's own rows (not the rows inside an opened fold), as kind + text. */
 async function topRows(page: Page) {
@@ -63,7 +65,7 @@ async function checkMerged(page: Page, tag: string) {
     return one < 0 || two < 0 ? top : top.slice(one + 1, two).map((r) => r.fold);
   };
   await expect.poll(between, { timeout: 10_000 }).toEqual([true]);
-  const fold = hist.locator('[data-testid="turn-fold"]').filter({ hasText: 'Migration is top priority' });
+  const fold = hist.locator('[data-testid="turn-fold"]').filter({ hasText: 'Received 3 messages' });
   await expect(fold).toHaveCount(1);
   await expect(fold.locator(':scope > .tool-run-toggle .tool-run-label')).toHaveText(LINE);
   // A count of turns is never the line, open or closed.
@@ -92,7 +94,7 @@ async function checkMerged(page: Page, tag: string) {
   await page.waitForTimeout(600);
 }
 
-test('quiet turns between two answers are one row that says what happened, in order', async ({ page }) => {
+test('quiet turns between two answers are one row that counts what happened', async ({ page }) => {
   await mockSession(page, rows(), 'idle');
   await open(page);
   await checkMerged(page, 'linear');
