@@ -1251,7 +1251,7 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     const slice = slices.get(home)!
     const wrapped = kit.buildReplyDeliveryText(row, {
       title: me.title, shortId: callerSid.slice(0, 8), host: slice.host, sessionId: callerSid, taskId: me.taskId,
-    }, admitted.text, { title: typeof args.title === 'string' ? args.title : undefined })
+    }, escapeSenderWords(admitted.text), { title: typeof args.title === 'string' ? args.title : undefined })
     const mid = messageId(args.messageId)
     const delivered = remoteHost
       ? await deps.relay!(home, { toHost: remoteHost, toSid: row.fromSessionId, text: wrapped, messageId: mid, requestId: id, reply: true, fromSessionId: callerSid })
