@@ -100,11 +100,40 @@ async function settleOneShot(count: () => number, quietMs = 600): Promise<void> 
   await new Promise((r) => setTimeout(r, quietMs));
 }
 
+// '__local__' is the shared mock for the whole file, or the block's own mock while a
+// block runs on one (localDaemonIs). Before, a read through DaemonFileReader('__local__')
+// (an attach's cost state, its stream evidence) could make localDaemon spawn the real
+// daemon binary mid-file, and the one pooled '__local__' connection then flipped between
+// daemons on its reconnects (2026-10-28): a reconnect inside a block that runs on its
+// own daemon landed on the shared one, which knows none of the block's sessions.
+type LocalDaemonSeam = { _wsUrl: string | null; _port: number | null; ensureRunning: () => Promise<number> };
+let localDaemonSeam: LocalDaemonSeam | null = null;
+let localTarget: MockDaemon | null = null;
+
+async function pointLocalDaemon(): Promise<number> {
+  const target = localTarget ?? sharedDaemon;
+  localDaemonSeam!._wsUrl = `ws://127.0.0.1:${target.port}`;
+  localDaemonSeam!._port = target.port;
+  return target.port;
+}
+
+/** Make '__local__' mean `daemon` (null: the shared one) for every dial from now on. */
+async function localDaemonIs(daemon: MockDaemon | null): Promise<void> {
+  localTarget = daemon;
+  await pointLocalDaemon();
+}
+
 beforeAll(async () => {
   sharedDaemon = await createMockDaemon();
+  const { localDaemon } = await import('../../src/providers/local-daemon.js');
+  localDaemonSeam = localDaemon as unknown as LocalDaemonSeam;
+  // An own property, so restoreAllMocks and a test's own spy (which restores to it) keep it.
+  localDaemonSeam.ensureRunning = pointLocalDaemon;
+  await pointLocalDaemon();
 });
 
 afterAll(async () => {
+  if (localDaemonSeam) delete (localDaemonSeam as Partial<LocalDaemonSeam>).ensureRunning;
   await sharedDaemon.stop();
 });
 
@@ -1675,49 +1704,9 @@ describe('SessionRunner.isSessionStillAlive', () => {
     }
   });
 
-  it('routes remote records through probeDaemonSession', async () => {
-    vi.resetModules();
-    const probeMock = vi.fn().mockResolvedValue({ alive: true });
-    vi.doMock('../../src/providers/daemon-connection.js', () => ({
-      probeDaemonSession: probeMock,
-      isDaemonConnected: () => false,
-      getDaemonDisconnectedSince: () => null,
-      getDaemonConnection: vi.fn(),
-      DaemonConnection: class {},
-    }));
-
-    const { SessionRunner: FreshRunner } = await import('../../src/providers/claude-code-session.js');
-    const runner = new FreshRunner(MOCK_CLI);
-    try {
-      const record = {
-        claudeSessionId: 'remote-test',
-        taskId: 't',
-        project: 'p',
-        process_status: 'running',
-        mode: 'default',
-        startedAt: new Date().toISOString(),
-        lastActiveAt: new Date().toISOString(),
-        messageCount: 0,
-        host: 'clouddev',
-        pid: 12345,
-      } as any;
-      const result = await (runner as any).isSessionStillAlive(record);
-      expect(result).toBe(true);
-      expect(probeMock).toHaveBeenCalledWith('clouddev', 'remote-test');
-
-      probeMock.mockResolvedValueOnce({ alive: false });
-      const result2 = await (runner as any).isSessionStillAlive(record);
-      expect(result2).toBe(false);
-
-      probeMock.mockResolvedValueOnce(null); // daemon unreachable
-      const result3 = await (runner as any).isSessionStillAlive(record);
-      expect(result3).toBe(false);
-    } finally {
-      runner.destroy();
-      vi.doUnmock('../../src/providers/daemon-connection.js');
-      vi.resetModules();
-    }
-  });
+  // 'routes remote records through probeDaemonSession' lives in
+  // session-runner-remote-probe.test.ts: it reset the module registry, which split this
+  // file's module graph for every test after it (see the beforeAll above).
 });
 
 // ══════════════════════════════════════════════════════════════════
@@ -1808,10 +1797,12 @@ describe('Category C: Streaming event dedup regression', () => {
   beforeEach(async () => {
     replayDaemon = await createMockDaemon();
     replayDaemon.setCliCommand(MOCK_REPLAY_CLI);
+    await localDaemonIs(replayDaemon);
   });
 
   afterEach(async () => {
     delete process.env.MOCK_REPLAY_COUNT;
+    await localDaemonIs(null);
     await replayDaemon.stop();
   });
 
@@ -3559,6 +3550,7 @@ describe('SessionRunner.currentTurn — live daemon round-trip', () => {
 
   beforeEach(async () => {
     daemon = await createMockDaemon();
+    await localDaemonIs(daemon);
     runner = useDaemon(new SessionRunner(MOCK_CLI));
     runner.setTestDaemonUrl(`ws://127.0.0.1:${daemon.port}`);
     runner.init();
@@ -3566,6 +3558,7 @@ describe('SessionRunner.currentTurn — live daemon round-trip', () => {
 
   afterEach(async () => {
     runner.destroyAndKill();
+    await localDaemonIs(null);
     await daemon.stop();
   });
 
@@ -4175,8 +4168,10 @@ describe('handleProcessDeath — init failure vs ordinary shutdown', () => {
       process_status: 'running' as const, mode: 'default' as const,
       startedAt: new Date().toISOString(), lastActiveAt: new Date().toISOString(),
     };
-    // On Linux CI this attach has hung past the test timeout (2026-10-28, twice; never on a
-    // Mac). Fail sooner, with the log lines this block's spies took, so the run says where.
+    // On Linux CI this attach hung past the test timeout (2026-10-28): a task store open that
+    // failed under an earlier test's teardown had wedged task-manager's write lock, so the
+    // attach's first task read waited forever (tests/core/task-manager-db-open-failure.test.ts).
+    // Should it stall again, fail sooner, with the log lines this block's spies took.
     let stall: ReturnType<typeof setTimeout> | undefined;
     const session = await Promise.race([
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
