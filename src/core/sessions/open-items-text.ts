@@ -6,7 +6,8 @@
  * so the factory body references NOTHING at module scope (types are erased).
  */
 
-export interface OpenSubtask { id: string; title: string; phase: string }
+/** `partial`: what its latest result says is not done (peers/structured-reply.ts). */
+export interface OpenSubtask { id: string; title: string; phase: string; partial?: string[] }
 export interface OpenWait { id: string; to: string; preview: string; createdAt: string }
 /** `handedTo`: the tasks this ask was handed on to, whose answer it waits for (request-handoff.ts). */
 export interface OpenAsk { id: string; from: string; preview: string; createdAt: string; handedTo?: string[] }
@@ -30,6 +31,11 @@ export interface OpenItemsInput {
    * may have dropped the note that said it moved.
    */
   place?: OpenPlace;
+  /** Requests past their deadline with no reply, still open (session-requests.ts `expired`): sent, received. */
+  overdueOut?: OpenWait[];
+  overdueIn?: OpenAsk[];
+  /** Finished subtasks whose result was Partial and nobody took up the rest. */
+  partialDone?: OpenSubtask[];
 }
 
 export interface OpenPlace { project: string; folder?: string; leaderId?: string; leader?: string }
@@ -66,7 +72,11 @@ export function createOpenItemsText() {
   function format(items: OpenItemsInput, now: number): string {
     if (!items.task) return '';
     const total = items.subtasks.length + items.moreSubtasks;
-    const open = total > 0 || items.waitingOn.length > 0 || items.askedOfYou.length > 0 || !!items.board;
+    const overdueOut = items.overdueOut ?? [];
+    const overdueIn = items.overdueIn ?? [];
+    const partialDone = items.partialDone ?? [];
+    const open = total > 0 || items.waitingOn.length > 0 || items.askedOfYou.length > 0 || !!items.board
+      || overdueOut.length > 0 || overdueIn.length > 0 || partialDone.length > 0;
     if (!open && !items.place) return '';
     const title = oneLine(items.task.title, TITLE_MAX);
     const lines = [
@@ -86,7 +96,10 @@ export function createOpenItemsText() {
     if (!open) return lines.join('\n');
     if (total > 0) {
       lines.push(`Unfinished subtasks of your task (${total}):`);
-      for (const t of items.subtasks) lines.push(`- ${t.id} [${t.phase}] ${oneLine(t.title, TITLE_MAX)}`);
+      for (const t of items.subtasks) {
+        const part = t.partial?.length ? ` (Partial, not done: ${oneLine(t.partial.join('; '), PREVIEW_MAX)})` : '';
+        lines.push(`- ${t.id} [${t.phase}] ${oneLine(t.title, TITLE_MAX)}${part}`);
+      }
       if (items.moreSubtasks > 0) lines.push(`- and ${items.moreSubtasks} more: task_list with parent_task_id ${items.task.id}`);
     }
     if (items.waitingOn.length > 0) {
@@ -102,6 +115,24 @@ export function createOpenItemsText() {
         const when = ago(r.createdAt, now);
         const handed = r.handedTo?.length ? ` (handed on to ${r.handedTo.join(', ')}: answer once that is back)` : '';
         lines.push(`- ${r.id} from ${r.from}${when ? `, ${when}` : ''}: "${oneLine(r.preview, PREVIEW_MAX)}"${handed}`);
+      }
+    }
+    if (partialDone.length > 0) {
+      lines.push(`Finished subtasks whose result was Partial (${partialDone.length}); take up the rest or settle it with task_not_done_settle:`);
+      for (const t of partialDone) lines.push(`- ${t.id} ${oneLine(t.title, TITLE_MAX)}: not done: ${oneLine((t.partial ?? []).join('; '), PREVIEW_MAX)}`);
+    }
+    if (overdueOut.length > 0) {
+      lines.push(`Overdue and still open: replies you asked for that missed their deadline (${overdueOut.length}); a reply still settles one:`);
+      for (const r of overdueOut) {
+        const when = ago(r.createdAt, now);
+        lines.push(`- ${r.id} to ${r.to}${when ? `, asked ${when}` : ''}: "${oneLine(r.preview, PREVIEW_MAX)}"`);
+      }
+    }
+    if (overdueIn.length > 0) {
+      lines.push(`Asked of you, overdue and still open (${overdueIn.length}); answer with task_send in_reply_to:`);
+      for (const r of overdueIn) {
+        const when = ago(r.createdAt, now);
+        lines.push(`- ${r.id} from ${r.from}${when ? `, ${when}` : ''}: "${oneLine(r.preview, PREVIEW_MAX)}"`);
       }
     }
     if (items.board) {

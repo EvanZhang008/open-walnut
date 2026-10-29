@@ -52,6 +52,9 @@ messagesV1Router.post('/messages', async (req: Request, res: Response, next: Nex
         force: b.force === true,
         reason: str(b.reason),
         messageId: str(b.messageId),
+        // A reply's structured fields (core/peers/structured-reply.ts); absent on a plain send.
+        ...(b.result !== undefined || b.evidence !== undefined || b.not_done !== undefined
+          ? { reply: { result: b.result, evidence: b.evidence, not_done: b.not_done } } : {}),
         callerSid: header(req, 'x-walnut-caller-sid'),
         callerHost: header(req, 'x-walnut-caller-host'),
       })

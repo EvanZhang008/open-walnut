@@ -697,6 +697,8 @@ defineOp({
     title: z.string().optional().describe('New title: a few words (under 60 characters from a session, the server cuts a longer one; <= 500)'),
     description: z.string().optional().describe('Replaces the description (write-only)'),
     tags: z.array(z.string()).optional().describe('FULL replacement of the task tags, each key:value (e.g. team:marina, sev:2; a plain word is stored as label:<word>)'),
+    force: z.boolean().optional().describe('With phase=COMPLETE on another task still in use or unfinished (409 task_in_use, the same check as task_complete): close it anyway. Needs `reason`'),
+    reason: z.string().min(10).max(500).optional().describe('With force: who asked for the close and why it is right'),
     parent_task_id: z.string().optional().describe('Adopt or release: set to your own task id to make an existing task a worker of yours (it keeps its project and folder; its stops, completions, errors and waits then reach you), or "" to release it.'),
   },
   // The old park receipt's text (removed 2026-10-05). A session started before
@@ -856,9 +858,20 @@ defineOp({
   title: 'Complete a Walnut task',
   description:
     'Mark a task done. The id accepts a unique prefix. The result carries a ' +
-    '`ref` tag — paste it verbatim in your reply so the user gets a clickable task pill.',
+    '`ref` tag — paste it verbatim in your reply so the user gets a clickable task pill. ' +
+    'Say what came of it with `result` (one sentence), `evidence` (paths or links) and `not_done` (what is not done or not ' +
+    'verified): a non-empty not_done shows the task as Partial on the Board, in the Brief and in its parent\'s open items, ' +
+    'until someone takes the items up or drops them. A session completing ANOTHER task the user may still be using ' +
+    '(a person wrote in it this week, its session was open in a terminal, it holds an org role or an armed trigger), ' +
+    'or whose work is unfinished (a Partial result nobody settled, a request to it still unanswered, a turn running now), ' +
+    'gets 409 task_in_use with the reasons: leave it open, or pass force:true with a reason. Open subtasks never block it.',
   input: {
     id: z.string().min(1).describe('Task id or a unique id prefix'),
+    result: z.string().min(1).max(2000).optional().describe('One sentence: what came of the work'),
+    evidence: z.union([z.string(), z.array(z.string())]).optional().describe('Paths or links that show the result (a list, or one per line)'),
+    not_done: z.union([z.string(), z.array(z.string())]).optional().describe('What is NOT done or not verified (a list, or one per line). Non-empty = Partial'),
+    force: z.boolean().optional().describe('Complete another task even though it is still in use (409 task_in_use). Needs `reason`'),
+    reason: z.string().min(10).max(500).optional().describe('With force: who asked for the close and why it is right although the task is in use'),
   },
   // POST /complete, NOT PATCH {status:'done'}: only completeTask() semantics
   // surface a sync-push failure (the v1 PATCH swallows it via asyncPush).
@@ -875,12 +888,14 @@ defineOp({
         + `${open.slice(0, 5).map((t) => `"${t.title}" (${t.id}, ${t.phase})`).join('; ')}${total > 5 ? '; …' : ''}. `
         + 'This task hears nothing more from them until it is reopened.'
       : ''
+    const notDone = (task as { result_report?: { not_done?: string[] } } | undefined)?.result_report?.not_done ?? []
+    const partialLine = notDone.length > 0 ? ` Marked Partial (not done: ${notDone.join('; ')}); it stays on its leader's open items until taken up or dropped.` : ''
     return withOutcome(
       withRef(task && typeof task === 'object' ? taskView(task as Record<string, unknown>) : task, {
         completed: true,
         ...(open.length > 0 ? { open_subtasks: open } : {}),
       }),
-      COMPLETED_OUTCOME + openLine,
+      COMPLETED_OUTCOME + openLine + partialLine,
       'No further action is required.',
     )
   },
@@ -888,6 +903,23 @@ defineOp({
   // briefly 'deny' as the gateway half of the human-only completion gate; that
   // whole distinction is gone, and a peer session finishing a task it was asked
   // to finish is the point of the gateway.
+  tags: { readonly: false, remote: 'allow', destructive: false },
+})
+
+defineOp({
+  name: 'task_not_done_settle',
+  title: 'Take up or drop what a task left not done',
+  description:
+    'A task whose last result (a reply or task_complete) listed `not_done` reads as Partial on the Board, in the Brief ' +
+    'and in its leader\'s open items. Once someone takes those items up (a new task, a follow-up) or decides they are not ' +
+    'needed, call this so it stops reading Partial: how="taken" or "dropped", with a short note (where it went, or why not).',
+  input: {
+    id: z.string().min(1).describe('The Partial task (id or unique prefix)'),
+    how: z.enum(['taken', 'dropped']).describe('"taken": the items are someone\'s work now; "dropped": they are not needed'),
+    note: z.string().min(1).max(500).optional().describe('Where they went (a task id) or why they are dropped'),
+  },
+  bind: { method: 'POST', path: '/tasks/:id/not-done' },
+  mapResult: ({ body }) => withOutcome((body ?? {}) as Record<string, unknown>, 'The not-done items are settled: the task no longer reads as Partial.', 'No further action is required.'),
   tags: { readonly: false, remote: 'allow', destructive: false },
 })
 

@@ -165,7 +165,8 @@ export function createEnvelopeKit(): EnvelopeKit {
       'It is now WAITING ON A HUMAN (a permission prompt or a question). A message to it waits until '
       + 'the prompt is answered, unless you lead it: then your message closes a question and reaches it at once.',
     timeout:
-      'It has not replied by your deadline and is possibly still working (or stuck). Check its progress.',
+      'It has not replied by your deadline and is possibly still working (or stuck). Check its progress. '
+      + 'The request stays open as OVERDUE: a reply still settles it, and you get one reminder at twice the deadline.',
   };
   /** A task the target closed itself: said instead of "its turn ended", because
    *  COMPLETE is terminal and no later turn-end edge will ever speak for it. */

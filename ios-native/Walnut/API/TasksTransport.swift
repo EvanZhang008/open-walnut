@@ -189,3 +189,23 @@ extension WalnutAPI {
 }
 
 extension WalnutAPI: WalnutTaskTransport {}
+
+/// POST /api/v1/tasks/:id/team-stop | team-resume (server `src/core/sessions/team-stop.ts`): stop a
+/// task and every open task under it (sessions, triggers, wake clocks), or turn those back on.
+struct TeamStopAnswer: Decodable {
+    var stopped: [TeamStopRef]? = nil
+    var atTurnEnd: [TeamStopRef]? = nil
+    var resumedTriggers: Int? = nil
+    struct TeamStopRef: Decodable { var taskId: String? = nil; var sessionId: String? = nil }
+}
+
+extension WalnutAPI {
+    func teamStop(id: String) async throws -> TeamStopAnswer {
+        // A stop waits on each host's confirmation.
+        try await send("POST", "/tasks/\(escape(id))/team-stop", body: [String: String](), timeout: 120)
+    }
+
+    func teamResume(id: String) async throws -> TeamStopAnswer {
+        try await send("POST", "/tasks/\(escape(id))/team-resume", body: [String: String](), timeout: 60)
+    }
+}

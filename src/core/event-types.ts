@@ -325,6 +325,8 @@ export interface SessionErrorEvent {
   errorKind?: 'conversation_lost' | 'delivery_failed';
   /** delivery_failed only: the batch was parked (it waits for a Retry), not put back to be re-sent. */
   parked?: boolean;
+  /** delivery_failed only: the host did not answer in time and the batch is sent again then (ISO). */
+  retryAt?: string;
 }
 
 // ── Session streaming events ──
@@ -481,6 +483,8 @@ export interface SessionDeliveryHeldEvent {
   messageIds: string[];
   /** One sentence for the user, shown on the waiting bubbles. */
   reason: string;
+  /** When Walnut sends them again by itself (ISO): the bubble shows the time and a Send now. */
+  retryAt?: string;
 }
 
 export interface SessionMessageQueuedEvent {
@@ -760,6 +764,16 @@ export interface SessionTurnSpeedEvent {
   sessionId: string;
   taskId?: string;
   speed: SessionTurnSpeed;
+}
+
+/** A running session's live action changed (core/live-activity.ts): throttled per session
+ *  (sessions/live-activity-registry.ts), `activity: null` when no turn runs any more. */
+export interface SessionLiveActivityEvent {
+  sessionId: string;
+  taskId: string | null;
+  activity: import('./live-activity.js').LiveActivity | null;
+  /** The task's own line (its newest running session's), so one session's end never clears another's. */
+  taskActivity?: import('./live-activity.js').LiveActivity | null;
 }
 
 /** Applied-settings read-back push: emitted whenever refreshAppliedSettings()
@@ -1340,6 +1354,7 @@ export interface EventPayloadMap {
   'session:background-tasks': SessionBackgroundTasksPayload;
   'session:usage-update': SessionUsageUpdateEvent;
   'session:turn-speed': SessionTurnSpeedEvent;
+  'session:live-activity': SessionLiveActivityEvent;
   'session:settings-applied': SessionSettingsAppliedEvent;
   'session:model-catalog': SessionModelCatalogEvent;
   'session:side-question-done': SessionSideQuestionDoneEvent;

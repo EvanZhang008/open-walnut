@@ -93,6 +93,20 @@ export interface SessionRequest {
   carries?: string[];
   /** The deadline the asker set, before a hand-off moved it (unlinkHandoff puts it back). */
   ownDeadlineAt?: number;
+  /** The structured fields of the reply that settled it (peers/structured-reply.ts; additive, 2026-10). */
+  reply?: import('./peers/structured-reply.js').StructuredReply;
+  /**
+   * An expired request is OVERDUE, STILL OPEN (2026-10-28, the tracking research: 34 lead
+   * timeouts in 3 days, 19 never answered later, and each read as closed): it stays on
+   * open_items and the Brief until a reply settles it (`lateFrom: 'expired'`), its asker's or
+   * target's task completes, or it ages out with the settled rows. `remindedAt`: the one
+   * reminder its asker got at twice the deadline.
+   */
+  remindedAt?: string;
+  lateFrom?: 'expired';
+  /** When this server's deadline sweep made it overdue (ISO). Only such a row is reminded:
+   *  rows an older Walnut expired never are, so an upgrade does not send a burst of them. */
+  overdueAt?: string;
 }
 
 /** After the work a request was handed on to comes back, the asker's wait lasts this much longer. */
@@ -377,6 +391,7 @@ async function settle(
   id: string,
   status: Exclude<SessionRequestStatus, 'pending'>,
   outcome?: SessionRequestOutcome,
+  reply?: SessionRequest['reply'],
 ): Promise<SessionRequest | null> {
   let settled: SessionRequest | null = null;
   await updateRequests((store) => {
@@ -388,6 +403,8 @@ async function settle(
       status,
       settledAt: new Date().toISOString(),
       ...(outcome ? { outcome } : {}),
+      ...(reply ? { reply } : {}),
+      ...(status === 'expired' ? { overdueAt: new Date().toISOString() } : {}),
     };
     requests[idx] = settled;
     // A request this one carried has its work back: its wait shrinks to its target's own answer.
@@ -397,8 +414,67 @@ async function settle(
   return settled;
 }
 
-export async function settleReplied(id: string): Promise<SessionRequest | null> {
-  return settle(id, 'replied');
+export async function settleReplied(id: string, reply?: SessionRequest['reply'] | null): Promise<SessionRequest | null> {
+  return settle(id, 'replied', undefined, reply ?? undefined);
+}
+
+/**
+ * A reply to an OVERDUE request (status 'expired'): it is answered now, so it leaves every
+ * "overdue, still open" list. Exactly once, like settle: null when it was not overdue.
+ */
+export async function settleLateReply(id: string, reply?: SessionRequest['reply'] | null): Promise<SessionRequest | null> {
+  let settled: SessionRequest | null = null;
+  await updateRequests((store) => {
+    const requests = [...(store.requests ?? [])];
+    const idx = requests.findIndex((r) => r.id === id);
+    if (idx === -1 || requests[idx].status !== 'expired') return undefined;
+    settled = { ...requests[idx], status: 'replied', settledAt: new Date().toISOString(), lateFrom: 'expired', ...(reply ? { reply } : {}) };
+    requests[idx] = settled;
+    return { requests };
+  });
+  return settled;
+}
+
+/** How long an overdue request stays open: as long as a settled row is kept at all. */
+export const OVERDUE_OPEN_MS = SETTLED_RETENTION_MS;
+
+/** Every overdue request still open: expired, unanswered, younger than OVERDUE_OPEN_MS. */
+export async function overdueOpenRequests(now = Date.now()): Promise<SessionRequest[]> {
+  const store = await readJsonFile<RequestStore>(REQUESTS_FILE, EMPTY);
+  return (store.requests ?? []).filter((r) => r.status === 'expired' && now - Date.parse(r.createdAt) <= OVERDUE_OPEN_MS);
+}
+
+/** When an overdue request's one reminder is due: twice its own wait, counted from the ask. */
+export function reminderDueAt(r: SessionRequest): number {
+  const asked = Date.parse(r.createdAt);
+  const wait = (r.ownDeadlineAt ?? r.deadlineAt) - asked;
+  return asked + 2 * Math.max(wait, MIN_REPLY_TIMEOUT_SECS * 1000);
+}
+
+/** Claim an overdue request's reminder (exactly once). Null when it was answered or already reminded. */
+export async function claimReminder(id: string, now = Date.now()): Promise<SessionRequest | null> {
+  let claimed: SessionRequest | null = null;
+  await updateRequests((store) => {
+    const requests = [...(store.requests ?? [])];
+    const idx = requests.findIndex((r) => r.id === id);
+    if (idx === -1 || requests[idx].status !== 'expired' || requests[idx].remindedAt) return undefined;
+    claimed = { ...requests[idx], remindedAt: new Date(now).toISOString() };
+    requests[idx] = claimed;
+    return { requests };
+  });
+  return claimed;
+}
+
+/** Undo a claim whose reminder could not be delivered, so the next sweep tries again. */
+export async function releaseReminder(id: string): Promise<void> {
+  await updateRequests((store) => {
+    const requests = [...(store.requests ?? [])];
+    const idx = requests.findIndex((r) => r.id === id);
+    if (idx === -1 || !requests[idx].remindedAt) return undefined;
+    const { remindedAt: _remindedAt, ...rest } = requests[idx];
+    requests[idx] = rest;
+    return { requests };
+  });
 }
 
 export async function settleNotified(
@@ -614,6 +690,49 @@ export function buildRequestNotification(
   target: { title?: string; sessionId?: string; taskId?: string; phase?: string; lastMessage?: NoticeLastMessage; handedOn?: EnvelopeHandedOn[] },
 ): string {
   return kit.buildRequestNotification(request, outcome, target);
+}
+
+/**
+ * The one reminder an asker gets for its OVERDUE requests, at twice each one's deadline: still
+ * unanswered, still open, and the asker decides what to do. Several due at once share ONE
+ * message (one turn for the asker, not one per request).
+ */
+export function buildOverdueReminder(
+  due: readonly { request: SessionRequest; target: { title?: string; sessionId?: string; taskId?: string; phase?: string } }[],
+  now = Date.now(),
+): string {
+  const ago = (r: SessionRequest) => {
+    const hours = Math.max(1, Math.round((now - Date.parse(r.createdAt)) / 3_600_000));
+    return hours === 1 ? 'about an hour' : `about ${hours} hours`;
+  };
+  const one = due.length === 1 ? due[0] : undefined;
+  const lines = due.map(({ request: r, target: t }) =>
+    `- ${r.id} to ${sessionHandle(t.title, t.sessionId)}${t.taskId ? ` (${t.taskId}${t.phase ? `, ${t.phase} now` : ''})` : ''}, asked ${ago(r)} ago: "${r.preview}"`);
+  const next = due.filter((d) => d.target.taskId).slice(0, 3)
+    .map((d) => `  walnut tools call task_get '{"id":"${d.target.taskId}"}'          # its task state`);
+  return buildWalnutMessage({
+    kind: 'notification',
+    attrs: {
+      from: 'Walnut',
+      ...(one ? {
+        about: sessionHandle(one.target.title, one.target.sessionId),
+        'about-session': one.target.sessionId,
+        'about-task': one.target.taskId,
+        request: one.request.id,
+        asked: one.request.preview,
+      } : {}),
+      outcome: 'timeout',
+      note: NOTE_NOTIFICATION,
+    },
+    body: [
+      due.length === 1
+        ? 'Reminder: your request is still OVERDUE and open, twice its deadline after you asked, with no reply:'
+        : `Reminder: ${due.length} of your requests are still OVERDUE and open, twice their deadline after you asked, with no reply:`,
+      ...lines,
+      'A reply still settles one. If the answer came another way, or the work is no longer needed, carry on without it: this is the only reminder.',
+      ...(next.length ? ['', 'Next:', ...next] : []),
+    ].join('\n'),
+  });
 }
 
 /**

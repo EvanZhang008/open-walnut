@@ -54,6 +54,18 @@ describe('TurnSpeedMeter', () => {
       }), 12);
     });
 
+    it('prices a message that wrote the cache: the 5m/1h split rides to the price (it is unpriced without it)', () => {
+      const m = new TurnSpeedMeter();
+      m.startTurn(1000);
+      const usage = { input_tokens: 2, cache_creation_input_tokens: 25_219, cache_read_input_tokens: 10_877, cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 25_219 } };
+      m.messageStart(1100, 'claude-opus-5-5', usage as never);
+      m.messageUsage({ ...usage, output_tokens: 112 } as never);
+      m.messageStop(1500);
+      const snap = m.snapshot(1600);
+      expect(snap.costUsd).toBeCloseTo(computeCost({ model: 'claude-opus-5-5', input_tokens: 2, output_tokens: 112, cache_creation_input_tokens: 25_219, cache_read_input_tokens: 10_877, cache_creation: usage.cache_creation }), 12);
+      expect(snap.costUsd).toBeGreaterThan(0);
+    });
+
     it('finish adopts the CLI cost, duration and turn tokens, with no costEstimated flag', () => {
       const m = runSingleMessage();
       const final = m.finish(2900, { turnOutputTokens: 40, durationMs: 1900, costUsd: 0.5 });

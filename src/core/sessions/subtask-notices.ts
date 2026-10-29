@@ -77,13 +77,32 @@ export interface SubtaskNotice {
   repliedRecently?: boolean;
   /** G19: where the child's card sits on its parent's Board (stopped / completed, only when the parent has one). */
   cardLine?: string;
+  /** A completion: how many of the parent's subtasks are still open, and which (subtask-batch.ts). */
+  remaining?: string;
+  /** completed: what the child's result left not done (peers/structured-reply.ts), when Partial. */
+  partial?: string;
 }
 
 /** A stopped / completed notice names the child's card when the parent has a Board (plain text, no wakeup). */
 export async function attachCardLine(n: SubtaskNotice): Promise<SubtaskNotice> {
+  if (n.kind === 'completed' && n.partial === undefined) n = { ...n, partial: await partialOf(n.child.id) };
   if (!CARD_KINDS.has(n.kind) || n.cardLine !== undefined) return n;
   const cardLine = await boardCardLine(n.parentTaskId, n.child.id);
   return cardLine ? { ...n, cardLine } : n;
+}
+
+/** "PARTIAL: it says these are not done: …" when the child's latest result left things not done. */
+async function partialOf(childId: string): Promise<string> {
+  try {
+    const { getTask } = await import('../task-manager.js');
+    const { isPartial } = await import('../peers/structured-reply.js');
+    const r = (await getTask(childId))?.result_report;
+    if (!isPartial(r)) return '';
+    return `PARTIAL: its result says these are not done:\n${r!.not_done!.map((x) => `- ${x}`).join('\n')}\n`
+      + `Take them up or settle them: task_not_done_settle {"id":"${childId}","how":"taken"|"dropped"}.`;
+  } catch {
+    return '';
+  }
 }
 
 /** The kinds whose notice names the child's kanban card. */
@@ -128,10 +147,11 @@ export function buildSubtaskNoticeText(n: SubtaskNotice): string {
     waitUntil: n.waitUntil,
     repliedRecently: n.repliedRecently,
   });
-  if (!n.cardLine) return text;
+  const extra = [n.partial, n.remaining, n.cardLine].filter(Boolean).join('\n\n');
+  if (!extra) return text;
   // Inside the envelope, before its closing "Next:" list (the last one: a quote may hold the word).
   const at = text.lastIndexOf('\n\nNext:\n');
-  return at === -1 ? text : `${text.slice(0, at)}\n\n${n.cardLine}${text.slice(at)}`;
+  return at === -1 ? text : `${text.slice(0, at)}\n\n${extra}${text.slice(at)}`;
 }
 
 /**
@@ -212,8 +232,10 @@ export async function quietCompletedParent(parentTaskId: string): Promise<{ with
   const none = { withdrawn: 0, dropped: 0 };
   try {
     const { getSessionsForTask } = await import('../session-tracker.js');
+    // Completions held for its team's end (subtask-batch.ts) go too: a closed leader hears nothing.
+    const heldDropped = await (await import('./subtask-batch.js')).dropHeld(parentTaskId);
     const sids = (await getSessionsForTask(parentTaskId).catch(() => [])).map((s) => s.claudeSessionId);
-    if (sids.length === 0) return none;
+    if (sids.length === 0) return { withdrawn: 0, dropped: heldDropped };
     const requests = await import('../session-requests.js');
     const queue = await import('../session-message-queue.js');
     const asks = (await Promise.all(sids.map((sid) => requests.pendingRequestsFromSession(sid)))).flat();
@@ -221,12 +243,12 @@ export async function quietCompletedParent(parentTaskId: string): Promise<{ with
       .filter((m) => m.status === 'pending')
       .map((m) => ({ sid, id: m.id, about: noticeSubjects(m.message) })))))
       .flat().filter((q) => q.about.length > 0);
-    if (asks.length === 0 && queued.length === 0) return none;
+    if (asks.length === 0 && queued.length === 0) return { withdrawn: 0, dropped: heldDropped };
     const children = await subtasksAmong(parentTaskId, [
       ...asks.flatMap((r) => (r.toTaskId ? [r.toTaskId] : [])), ...queued.flatMap((q) => q.about),
     ]);
     let withdrawn = 0;
-    let dropped = 0;
+    let dropped = heldDropped;
     for (const r of asks) {
       if (r.toTaskId && children.has(r.toTaskId) && await requests.withdrawRequest(r.id)) withdrawn++;
     }
@@ -318,6 +340,23 @@ export async function queueSubtaskNotice(n: SubtaskNotice): Promise<void> {
 /** The edges worth a new turn for a parent whose own turn is over. */
 const WAKES_AN_IDLE_PARENT: ReadonlySet<SubtaskNoticeKind> = new Set<SubtaskNoticeKind>(['completed', 'error']);
 
+/**
+ * The completions in `notices` learn what is left of the team: the last one carries the
+ * "Still open" line (subtask-batch.ts), counted once for the whole message.
+ */
+async function withRemaining(parentTaskId: string, notices: SubtaskNotice[]): Promise<SubtaskNotice[]> {
+  const last = notices.map((n) => n.kind).lastIndexOf('completed');
+  if (last === -1) return notices;
+  const { openSiblings, remainingLine } = await import('./subtask-batch.js');
+  const done = new Set(notices.filter((n) => n.kind === 'completed').map((n) => n.child.id));
+  const line = remainingLine(await openSiblings(parentTaskId, done));
+  // The PARTIAL line as it stands now: a held completion's items may have been settled since.
+  // One at a time: a few reads, and concurrent first imports of one module can stall under bun.
+  const fresh: SubtaskNotice[] = [];
+  for (const n of notices) fresh.push(n.kind === 'completed' ? { ...n, partial: await partialOf(n.child.id) } : n);
+  return fresh.map((n, i) => (i === last ? { ...n, remaining: line } : n.kind === 'completed' ? { ...n, remaining: undefined } : n));
+}
+
 /** Deliver one parent's buffered notices as one message. */
 async function flush(parentSid: string): Promise<void> {
   const slot = pending.get(parentSid);
@@ -330,56 +369,208 @@ async function flush(parentSid: string): Promise<void> {
     if (!target || target.archived) return;
     // Completed inside the coalesce window: a COMPLETE parent hears nothing.
     const { getTask } = await import('../task-manager.js');
-    const parent = await getTask(notices[0].parentTaskId).catch(() => null);
+    const parentTaskId = notices[0].parentTaskId;
+    const parent = await getTask(parentTaskId).catch(() => null);
     if (parent?.phase === 'COMPLETE') {
       log.session.info('subtask notice not sent: the parent completed meanwhile', {
-        parentSid, parentTaskId: notices[0].parentTaskId,
+        parentSid, parentTaskId,
         children: notices.map((n) => ({ id: n.child.id, kind: n.kind })),
       });
       return;
     }
-    // Not mid-turn: wake it only for an edge it can act on (see the header).
+    const batch = await import('./subtask-batch.js');
+    // Not mid-turn: wake it once, when its team settles (see subtask-batch.ts and the header).
     if (target.process_status !== 'running') {
-      const dropped = notices.filter((n) => !WAKES_AN_IDLE_PARENT.has(n.kind));
-      notices = notices.filter((n) => WAKES_AN_IDLE_PARENT.has(n.kind));
-      if (dropped.length > 0) {
-        log.session.info('subtask notice not sent: the parent is not mid-turn', {
-          parentSid, parentTaskId: target.taskId, status: target.process_status,
-          children: dropped.map((n) => ({ id: n.child.id, kind: n.kind })),
-        });
-      }
-      if (notices.length === 0) return;
-    }
-    const text = notices.map(buildSubtaskNoticeText).join('\n\n');
-    const key = notices.length === 1 ? noticeQueueId(notices[0]) : undefined;
-    const deliveryId = key ? `${key}-${randomUUID()}` : undefined;
-    if (key) {
-      const { getQueue, editMessage } = await import('../session-message-queue.js');
-      const row = [...await getQueue(parentSid)].reverse().find((m) =>
-        (m.id === key || m.id.startsWith(`${key}-`)) && m.status === 'pending'
-        && !m.lineUuid && !m.lineTries && !m.lineInDoubt);
-      if (row && await editMessage(parentSid, row.id, text, { onlyUnsent: true })) {
-        log.session.info('subtask notice replaced a pending one', { parentSid, messageId: row.id, kind: notices[0].kind });
+      const edgeIds = new Set(notices.map((n) => n.child.id));
+      const others = (await batch.openSiblings(parentTaskId, edgeIds));
+      const settled = batch.teamSettled(others);
+      const held = settled || notices.some((n) => n.kind === 'error') ? await batch.takeHeld<SubtaskNotice>(parentTaskId) : [];
+      if (!settled && !notices.some((n) => n.kind === 'error')) {
+        const completions = notices.filter((n) => n.kind === 'completed');
+        if (completions.length > 0) {
+          await batch.holdNotices(parentTaskId, completions);
+          armHeldWatch();
+          log.session.info('subtask completion held: the parent is idle and its team still works', {
+            parentSid, parentTaskId, children: completions.map((n) => n.child.id),
+            working: (others ?? []).filter((o) => o.state === 'working').map((o) => o.id),
+          });
+        }
+        const dropped = notices.filter((n) => n.kind !== 'completed');
+        if (dropped.length > 0) {
+          log.session.info('subtask notice not sent: the parent is not mid-turn', {
+            parentSid, parentTaskId: target.taskId, status: target.process_status,
+            children: dropped.map((n) => ({ id: n.child.id, kind: n.kind })),
+          });
+        }
         return;
       }
+      // Settled (or an error): what it held goes out with this edge. A stop, a block or a
+      // park is still never sent to an idle parent (the "Still open" line says where each
+      // stands); it only lets the held completions go when it leaves nothing working.
+      const quiet = notices.filter((n) => !WAKES_AN_IDLE_PARENT.has(n.kind));
+      if (quiet.length > 0) {
+        log.session.info('subtask notice not sent: the parent is not mid-turn', {
+          parentSid, parentTaskId: target.taskId, status: target.process_status,
+          children: quiet.map((n) => ({ id: n.child.id, kind: n.kind })),
+        });
+      }
+      notices = [...held, ...notices.filter((n) => WAKES_AN_IDLE_PARENT.has(n.kind))];
+      if (notices.length === 0) return;
+    } else {
+      // Mid-turn: anything held rides this message (the parent is reading now).
+      const held = await batch.takeHeld<SubtaskNotice>(parentTaskId);
+      if (held.length > 0) notices = [...held, ...notices];
     }
-    const { deliverToSession } = await import('./session-send-core.js');
-    const { delivery, messageId } = await deliverToSession(target, {
-      busText: text, enqueueText: text, source: NOTICE_SOURCE, taskId: target.taskId,
-      ...(deliveryId ? { messageId: deliveryId } : {}),
-      // A subtask that finished or failed is what a waiting parent waits for.
-      ...(notices.some((n) => n.kind === 'completed' || n.kind === 'error') ? { endsWait: true } : {}),
-    });
-    log.session.info('subtask notice delivered', {
-      parentSid, parentTaskId: target.taskId, delivery, messageId,
-      children: notices.map((n) => ({ id: n.child.id, kind: n.kind })),
-    });
+    await deliverOrHold(target, coalesce(notices));
   } catch (err) {
     log.session.warn('subtask notice delivery failed', {
       parentSid, children: notices.map((n) => ({ id: n.child.id, kind: n.kind })),
       error: err instanceof Error ? err.message : String(err),
     });
   }
+}
+
+/**
+ * Deliver; when that fails, the completions go back to the hold, so a daemon hiccup never loses a
+ * whole batch (the next edge, turn or sweep sends them).
+ */
+async function deliverOrHold(target: SessionRecord, notices: SubtaskNotice[]): Promise<void> {
+  try {
+    await deliverNotices(target, notices);
+  } catch (err) {
+    const completions = notices.filter((n) => n.kind === 'completed');
+    if (completions.length > 0) {
+      const batch = await import('./subtask-batch.js');
+      await batch.holdNotices(completions[0].parentTaskId, completions);
+      armHeldWatch();
+    }
+    throw err;
+  }
+}
+
+/** Send notices into the parent's session as one message (a lone replaceable one edits its pending row). */
+async function deliverNotices(target: SessionRecord, raw: SubtaskNotice[]): Promise<void> {
+  const parentSid = target.claudeSessionId;
+  const notices = await withRemaining(raw[0].parentTaskId, raw);
+  const text = notices.map(buildSubtaskNoticeText).join('\n\n');
+  const key = notices.length === 1 ? noticeQueueId(notices[0]) : undefined;
+  const deliveryId = key ? `${key}-${randomUUID()}` : undefined;
+  if (key) {
+    const { getQueue, editMessage } = await import('../session-message-queue.js');
+    const row = [...await getQueue(parentSid)].reverse().find((m) =>
+      (m.id === key || m.id.startsWith(`${key}-`)) && m.status === 'pending'
+      && !m.lineUuid && !m.lineTries && !m.lineInDoubt);
+    if (row && await editMessage(parentSid, row.id, text, { onlyUnsent: true })) {
+      log.session.info('subtask notice replaced a pending one', { parentSid, messageId: row.id, kind: notices[0].kind });
+      return;
+    }
+  }
+  const { deliverToSession } = await import('./session-send-core.js');
+  const { delivery, messageId } = await deliverToSession(target, {
+    busText: text, enqueueText: text, source: NOTICE_SOURCE, taskId: target.taskId,
+    ...(deliveryId ? { messageId: deliveryId } : {}),
+    // A subtask that finished or failed is what a waiting parent waits for.
+    ...(notices.some((n) => n.kind === 'completed' || n.kind === 'error') ? { endsWait: true } : {}),
+  });
+  log.session.info('subtask notice delivered', {
+    parentSid, parentTaskId: target.taskId, delivery, messageId,
+    children: notices.map((n) => ({ id: n.child.id, kind: n.kind })),
+  });
+}
+
+// ── Held completions going out (subtask-batch.ts) ──
+
+const HELD_SWEEP_MS = 60_000;
+let heldTimer: ReturnType<typeof setInterval> | null = null;
+let heldListening = false;
+
+/**
+ * Held completions leave by three doors besides a settling edge: the parent's next turn
+ * (whatever starts it, they ride it mid-turn), a sweep that finds the team settled without
+ * an edge reaching here (a session that died, a status the sync moved) or the hold a day
+ * old, and the parent completing (dropped: a closed leader hears nothing).
+ */
+function armHeldWatch(): void {
+  if (!heldListening) {
+    heldListening = true;
+    void import('../event-bus.js').then(({ bus, EventNames }) => {
+      bus.subscribe('subtask-held', (event) => {
+        const d = event.data as { sessionId?: string; taskId?: string | null; process_status?: string } | undefined;
+        if (d?.process_status !== 'running' || !d.taskId) return;
+        void releaseHeld(d.taskId, 'parent-turn').catch(() => {});
+      }, { global: true, interest: [EventNames.SESSION_STATUS_CHANGED] });
+    }).catch(() => {});
+  }
+  if (heldTimer) return;
+  heldTimer = setInterval(() => { void sweepHeld().catch(() => {}); }, HELD_SWEEP_MS);
+  heldTimer.unref?.();
+}
+
+/** Deliver what is held for a parent now, if it can hear. */
+async function releaseHeld(parentTaskId: string, why: 'parent-turn' | 'settled' | 'too-old' | 'before-reap' | 'gone'): Promise<number> {
+  const batch = await import('./subtask-batch.js');
+  if (!(await batch.hasHeld(parentTaskId))) return 0;
+  const { getTask } = await import('../task-manager.js');
+  const parent = await getTask(parentTaskId).catch(() => null);
+  if (!parent || parent.phase === 'COMPLETE') {
+    await batch.dropHeld(parentTaskId);
+    return 0;
+  }
+  const dest = await resolveParentDestination(parent);
+  if (!dest) {
+    // Its session went away (Walnut's idle reap, a stop): nothing will hear them now, and a stopped
+    // parent is never woken for a notice. It reads what is open when it next runs (open_items).
+    if (why !== 'parent-turn') {
+      const n = await batch.dropHeld(parentTaskId);
+      if (n) log.session.info('held subtask completions dropped: the parent can no longer hear', { parentTaskId, why, count: n });
+    }
+    return 0;
+  }
+  // A turn already running hears them mid-turn; otherwise only a settled team (or an old hold) wakes it.
+  if (why === 'parent-turn' && dest.process_status !== 'running') return 0;
+  const held = await batch.takeHeld<SubtaskNotice>(parentTaskId);
+  if (held.length === 0) return 0;
+  log.session.info('held subtask completions released', { parentTaskId, why, children: held.map((n) => n.child.id) });
+  await deliverOrHold(dest, coalesce(held));
+  return held.length;
+}
+
+async function sweepHeld(now = Date.now()): Promise<void> {
+  const batch = await import('./subtask-batch.js');
+  const list = await batch.heldParents();
+  if (list.length === 0) {
+    if (heldTimer) { clearInterval(heldTimer); heldTimer = null; }
+    return;
+  }
+  for (const h of list) {
+    try {
+      const old = now - Date.parse(h.since) >= batch.HOLD_MAX_MS;
+      // An idle parent session is reaped after SESSION_IDLE_KILL_MS: wake it with what it holds
+      // before that, while it can still hear (and a parent already gone drops them).
+      const { getTask } = await import('../task-manager.js');
+      const parent = await getTask(h.parentTaskId).catch(() => null);
+      const dest = parent && parent.phase !== 'COMPLETE' ? await resolveParentDestination(parent) : null;
+      if (!dest) { await releaseHeld(h.parentTaskId, 'gone'); continue; }
+      const idleSince = Date.parse(dest.last_status_change ?? dest.lastActiveAt ?? '');
+      const nearReap = dest.process_status !== 'running' && Number.isFinite(idleSince) && now - idleSince >= batch.RELEASE_BEFORE_REAP_MS;
+      if (old || nearReap || batch.teamSettled(await batch.openSiblings(h.parentTaskId))) {
+        await releaseHeld(h.parentTaskId, old ? 'too-old' : nearReap ? 'before-reap' : 'settled');
+      }
+    } catch (err) {
+      log.session.warn('held subtask notices: sweep failed', { parentTaskId: h.parentTaskId, error: err instanceof Error ? err.message : String(err) });
+    }
+  }
+}
+
+/** Boot: a restart keeps what was held; start watching it again. */
+export async function resumeHeldSubtaskNotices(): Promise<void> {
+  const batch = await import('./subtask-batch.js');
+  if ((await batch.heldParents()).length > 0) armHeldWatch();
+}
+
+/** Test seam: run the held sweep now. */
+export async function sweepHeldSubtaskNotices(now?: number): Promise<void> {
+  await sweepHeld(now);
 }
 
 /** Test seam: deliver everything buffered now. */

@@ -8,10 +8,12 @@ const TASK_ANCHOR_RE = /<a ([^>]*?)data-task-id="([^"]+)"/g;
 
 /** Every task pill in the rendered Brief carries its task's live status (CSS draws the dot), so a
  *  line the session wrote an hour ago still shows where each task stands now. */
-export function decorateBriefHtml(html: string, states: ReadonlyMap<string, UserState>): string {
+export function decorateBriefHtml(html: string, states: ReadonlyMap<string, UserState>, partial?: ReadonlySet<string>): string {
   return html.replace(TASK_ANCHOR_RE, (m, pre: string, id: string) => {
     const state = states.get(id);
-    return state ? `<a ${pre}data-user-state="${state}" data-task-id="${id}"` : m;
+    // A task whose latest result left things not done says so on its pill (structured-reply.ts).
+    const part = partial?.has(id) ? 'data-partial="1" ' : '';
+    return state || part ? `<a ${pre}${state ? `data-user-state="${state}" ` : ''}${part}data-task-id="${id}"` : m;
   });
 }
 

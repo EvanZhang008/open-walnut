@@ -61,7 +61,32 @@ const FEED_INTEREST = [
   // before the CLI goes away.
   'session:will-reap',
   'task:created', 'task:updated', 'task:completed', 'task:deleted',
+  // A running task's live action (core/live-activity.ts): already throttled per session at
+  // the source, and again per task below (PHONE_ACTIVITY_MS), so it is never per token.
+  'session:live-activity',
 ]
+
+/** The phone hears a task's live action at most this often (a turn's end goes at once). */
+const PHONE_ACTIVITY_MS = 15_000
+const phoneActivity = new Map<string, { at: number; timer?: NodeJS.Timeout; latest: unknown }>()
+
+/** `task-activity` {task_id, activity | null}: an additive frame an older phone skips. */
+function emitTaskActivity(taskId: string, activity: unknown): void {
+  const now = Date.now()
+  const slot = phoneActivity.get(taskId) ?? { at: 0, latest: null }
+  slot.latest = activity
+  phoneActivity.set(taskId, slot)
+  const send = () => {
+    if (slot.timer) { clearTimeout(slot.timer); slot.timer = undefined }
+    slot.at = Date.now()
+    emitFeedEvent('task-activity', { task_id: taskId, activity: slot.latest ?? null })
+    if (slot.latest == null) phoneActivity.delete(taskId)
+  }
+  if (activity == null || now - slot.at >= PHONE_ACTIVITY_MS) { send(); return }
+  if (slot.timer) return
+  slot.timer = setTimeout(send, slot.at + PHONE_ACTIVITY_MS - now)
+  slot.timer.unref?.()
+}
 
 // ── Slim-row mapping (authoritative reads, best-effort) ─────────────────────
 
@@ -132,7 +157,19 @@ export async function forwardMobileEventToBridge(kind: string, data: unknown): P
 
 function emitFeedEvent(event: string, data: unknown): void {
   fanOut(event, data)
-  if (!CLOUD_MODE) forwardToBridge(event, data)
+  if (!CLOUD_MODE) forwardToBridge(event, bridgeCopy(event, data))
+}
+
+/**
+ * A row's live action (`live_activity`) stays off the bridge: a companion older than
+ * `task-activity` would fan the row out but drop every later frame, so its phones would show
+ * a frozen first state (and, five minutes on, a false "No tool call"). A companion that knows
+ * the frame gets the line from the frames alone.
+ */
+function bridgeCopy(event: string, data: unknown): unknown {
+  if (event !== 'task-upsert' || !data || typeof data !== 'object' || !('live_activity' in data)) return data
+  const { live_activity: _live, ...rest } = data as Record<string, unknown>
+  return rest
 }
 
 /**
@@ -194,6 +231,12 @@ function clearPendingSessionUpserts(): void {
 // ── Bus subscription (primary box) ──────────────────────────────────────────
 
 async function handleBusEvent(name: string, data: unknown): Promise<void> {
+  if (name === EventNames.SESSION_LIVE_ACTIVITY) {
+    const d = (data ?? {}) as { taskId?: string | null; activity?: unknown; taskActivity?: unknown }
+    // The task's own line (its newest running session's), so one session's end never clears another's.
+    if (d.taskId) emitTaskActivity(d.taskId, ('taskActivity' in d ? d.taskActivity : d.activity) ?? null)
+    return
+  }
   if (name.startsWith('task:')) {
     const d = (data ?? {}) as { task?: Task | null; id?: string }
     if (name === EventNames.TASK_DELETED) {
@@ -206,7 +249,8 @@ async function handleBusEvent(name: string, data: unknown): Promise<void> {
     // A plugin's own task leaves the phone, also when it became one after the phone saw it.
     if (d.task.plugin_only) { emitFeedEvent('task-delete', { id: d.task.id }); return }
     const { projectTask } = await import('../../core/task-projection.js')
-    emitFeedEvent('task-upsert', projectTask(d.task))
+    const { withLiveActivity } = await import('../../core/sessions/live-activity-registry.js')
+    emitFeedEvent('task-upsert', withLiveActivity(projectTask(d.task)))
     return
   }
   // session:* — re-read the authoritative record (event payloads vary by
@@ -302,7 +346,7 @@ export function handleBridgeMobileEvent(kind: unknown, data: unknown): void {
   }
   // Only the three known event kinds — a compromised/buggy sender must not
   // inject arbitrary SSE event names into phones.
-  if (kind !== 'session-upsert' && kind !== 'task-upsert' && kind !== 'task-delete') return
+  if (kind !== 'session-upsert' && kind !== 'task-upsert' && kind !== 'task-delete' && kind !== 'task-activity') return
   fanOut(kind, data)
   // Echo the authoritative status onto the session's OWN conversation channel
   // (same `status` frame the primary's stream route emits). This is the only
@@ -398,7 +442,8 @@ async function buildSnapshot(): Promise<{ sessions: unknown[]; tasks: unknown[] 
   try {
     // Tasks: both boxes have a real local task store.
     const { buildTaskProjection } = await import('../../core/task-projection.js')
-    tasks = (await buildTaskProjection()).tasks.filter((t) => !t.plugin_only)
+    const { withLiveActivityAll } = await import('../../core/sessions/live-activity-registry.js')
+    tasks = withLiveActivityAll((await buildTaskProjection()).tasks.filter((t) => !t.plugin_only))
   } catch (err) {
     log.web.warn('mobile-events: task snapshot failed', {
       error: err instanceof Error ? err.message : String(err),

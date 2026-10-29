@@ -100,14 +100,30 @@ struct TeamStatusSection: View {
     @Environment(TasksStore.self) private var tasks
     @State private var filter: UserState? = nil
     @State private var opened: WalnutTask?
+    @State private var teamBusy = false
+    @State private var teamError: String?
 
     var body: some View {
         let board = TeamStatusModel.build(ownerId: ownerId, tasks: tasks.tasks)
         if board.hasTeam {
+            let stopped = tasks.tasks.first(where: { $0.id == ownerId })?.teamStop
             VStack(alignment: .leading, spacing: 10) {
-                Text("Team")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.secondary)
+                HStack {
+                    Text("Team")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    teamMenu(stopped: stopped != nil)
+                }
+                if stopped != nil {
+                    Text("Team stopped: its triggers and wake clocks are off; a task resumes on its next message.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .accessibilityIdentifier("task.team.stopped")
+                }
+                if let teamError {
+                    Text(teamError).font(.caption).foregroundStyle(.red)
+                }
                 brief(board)
                 chips(board)
                     // A thumb that lands just below a chip filters, it does not open the first row.
@@ -133,6 +149,47 @@ struct TeamStatusSection: View {
                     .presentationDetents([.medium, .large])
             }
         }
+    }
+
+    /// Stop the whole team in one step, or resume it (server `src/core/sessions/team-stop.ts`).
+    private func teamMenu(stopped: Bool) -> some View {
+        Menu {
+            if stopped {
+                Button { run(stop: false) } label: { Label("Resume the team", systemImage: "play.fill") }
+            } else {
+                Button(role: .destructive) { run(stop: true) } label: { Label("Stop the team", systemImage: "stop.fill") }
+            }
+        } label: {
+            Image(systemName: stopped ? "pause.circle.fill" : "ellipsis.circle")
+                .font(.body)
+                .frame(minWidth: 44, minHeight: 44)
+                .contentShape(Rectangle())
+        }
+        .disabled(teamBusy)
+        .accessibilityLabel(stopped ? "Team stopped, resume" : "Team actions")
+        .accessibilityIdentifier("task.team.menu")
+    }
+
+    private func run(stop: Bool) {
+        teamBusy = true
+        teamError = nil
+        let id = ownerId
+        Task {
+            do {
+                _ = stop ? try await tasks.api.teamStop(id: id) : try await tasks.api.teamResume(id: id)
+            } catch {
+                teamError = Self.teamErrorText(error, stop: stop)
+            }
+            teamBusy = false
+        }
+    }
+
+    /// A companion answers 501: a team stop runs on the Mac, which the phone reaches only directly.
+    static func teamErrorText(_ error: Error, stop: Bool) -> String {
+        if case .server(let status, _, _, _, _)? = error as? APIError, status == 501 {
+            return "A team stop runs on your Mac: connect to it directly (same network or Tailscale) and try again."
+        }
+        return (stop ? "Could not stop the team: " : "Could not resume the team: ") + error.localizedDescription
     }
 
     static func emptyText(_ filter: UserState?) -> String {
@@ -248,6 +305,46 @@ struct TeamStatusRowView: View {
                 Text(TeamStatusModel.waitingLine(s))
                     .font(.footnote.weight(.medium))
                     .foregroundStyle(row.isStuck ? UserStatePill.stuckText : .primary)
+            }
+            if let due = s?.due {
+                Text(due.state == "overdue" ? "Overdue: was due \(TeamStatusModel.dueText(due.at))" : "Due \(TeamStatusModel.dueText(due.at))")
+                    .font(.caption.weight(.semibold))
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 1)
+                    .background(Capsule().fill((due.state == "overdue" ? Color.red : Color.orange).opacity(0.18)))
+                    .accessibilityIdentifier("task.team.due")
+            }
+            if let report = row.task.resultReport, report.isPartial {
+                // Its latest result left things not done: "Done" alone would overstate it.
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text("Partial")
+                        .font(.caption2.weight(.semibold))
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 1)
+                        .background(Capsule().fill(Color.orange.opacity(0.2)))
+                    Text("Not done: \((report.notDone ?? []).joined(separator: "; "))")
+                        .font(.footnote)
+                        .lineLimit(3)
+                }
+                .accessibilityElement(children: .combine)
+                .accessibilityIdentifier("task.team.partial")
+            }
+            if row.state == .working, let live = row.task.liveActivity {
+                // Read from its session by the server, never the model's words; the spans tick here.
+                TimelineView(.periodic(from: .now, by: 15)) { ctx in
+                    let line = LiveActivityFormat.line(live, now: ctx.date)
+                    HStack(spacing: 5) {
+                        Circle()
+                            .fill(line.quiet ? Color.orange : UserStatePill.textColor(.working))
+                            .frame(width: 6, height: 6)
+                        Text(line.text)
+                            .font(.footnote.weight(.medium).monospacedDigit())
+                            .foregroundStyle(line.quiet ? Color.orange : Color.primary)
+                            .lineLimit(2)
+                    }
+                    .accessibilityElement(children: .combine)
+                    .accessibilityIdentifier("task.team.live")
+                }
             }
             if let now = s?.now, !now.isEmpty {
                 Text(now).font(.footnote).foregroundStyle(.secondary)

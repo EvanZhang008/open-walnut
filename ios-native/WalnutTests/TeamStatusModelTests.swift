@@ -88,4 +88,56 @@ final class TeamStatusModelTests: XCTestCase {
         let quiet = try JSONDecoder().decode(WalnutTask.self, from: Data(json.replacingOccurrences(of: #""state":"needs""#, with: #""state":"waiting""#).utf8))
         XCTAssertFalse(BoardModel.needsHuman(quiet))
     }
+
+    @MainActor func testDecodesAPartialResult() throws {
+        let json = #"{"id":"t1","title":"T","status":"done","phase":"COMPLETE","priority":"none","project":"","result_report":{"at":"2026-10-28T05:00:00Z","not_done":["iOS not tested","docs"],"result":"Live on the web"}}"#
+        let t = try JSONDecoder().decode(WalnutTask.self, from: Data(json.utf8))
+        XCTAssertEqual(t.resultReport?.notDone, ["iOS not tested", "docs"])
+        XCTAssertEqual(t.resultReport?.result, "Live on the web")
+        XCTAssertTrue(t.resultReport?.isPartial ?? false)
+        // An older server sends nothing: no Partial.
+        let plain = try JSONDecoder().decode(WalnutTask.self, from: Data(#"{"id":"t2","title":"T","status":"done","phase":"COMPLETE","priority":"none","project":""}"#.utf8))
+        XCTAssertNil(plain.resultReport)
+        XCTAssertFalse(WalnutResultReport(notDone: []).isPartial)
+        // A copy of the row keeps it (the pin toggle).
+        XCTAssertEqual(TasksStore.withPinned(t, true).resultReport, t.resultReport)
+    }
+
+    func testDecodesADueDateAndSaysItInAFewWords() throws {
+        let json = #"{"id":"t1","title":"T","status":"in_progress","phase":"TODO","priority":"none","project":"","user_status":{"state":"waiting","kind":"not-started","due":{"at":"2026-10-27","state":"overdue"}}}"#
+        let t = try JSONDecoder().decode(WalnutTask.self, from: Data(json.utf8))
+        XCTAssertEqual(t.userStatus?.due, WalnutDue(at: "2026-10-27", state: "overdue"))
+        var cal = DateComponents(); cal.year = 2026; cal.month = 10; cal.day = 27; cal.hour = 9
+        let morning = Calendar.current.date(from: cal)!
+        XCTAssertEqual(TeamStatusModel.dueText("2026-10-27", now: morning), "today")
+        XCTAssertEqual(TeamStatusModel.dueText("not a date", now: morning), "not a date")
+        XCTAssertFalse(TeamStatusModel.dueText("2026-10-30", now: morning).isEmpty)
+    }
+
+    // MARK: - Live action (twin of tests/core/live-activity.test.ts)
+
+    func testLiveActivityLineNamesTheToolItsSpanTheTurnAndTheCost() {
+        let a = WalnutLiveActivity(
+            kind: "tool", tool: "Bash", target: "bun run test:quick", since: "2026-10-26T05:32:00Z",
+            turnStartedAt: "2026-10-26T04:54:00Z", lastToolAt: "2026-10-26T05:32:00Z", costUsd: 2.1
+        )
+        let line = LiveActivityFormat.line(a, now: Self.now)
+        XCTAssertEqual(line.text, "Bash: bun run test:quick · 3 min · turn 41 min · $2.10")
+        XCTAssertFalse(line.quiet)
+    }
+
+    func testLiveActivityLineSaysWhenItWentQuiet() {
+        let a = WalnutLiveActivity(
+            kind: "thinking", since: "2026-10-26T05:30:00Z",
+            turnStartedAt: "2026-10-26T04:40:00Z", lastToolAt: "2026-10-26T05:23:00Z", costUsd: 3.4
+        )
+        let line = LiveActivityFormat.line(a, now: Self.now)
+        XCTAssertTrue(line.quiet)
+        XCTAssertEqual(line.text, "No tool call for 12 min · turn 55 min · $3.40")
+    }
+
+    func testLiveActivityLineForAnMcpToolAndALongTurn() {
+        let a = WalnutLiveActivity(kind: "tool", tool: "mcp__slack__post", since: "2026-10-26T05:34:20Z", turnStartedAt: "2026-10-26T03:30:00Z")
+        XCTAssertEqual(LiveActivityFormat.line(a, now: Self.now).text, "slack: post · 40 s · turn 2 h 5 min")
+    }
 }

@@ -2590,7 +2590,9 @@ apiV1Router.get('/tasks', async (req: Request, res: Response, next: NextFunction
       return
     }
     // A plugin's own tasks (Task.plugin_only) are in no list the phone shows.
-    let tasks = projection.tasks.filter((t) => !t.plugin_only)
+    // A running task's live action rides the row (core/live-activity.ts; additive, in memory).
+    const { withLiveActivityAll } = await import('../../core/sessions/live-activity-registry.js')
+    let tasks = withLiveActivityAll(projection.tasks.filter((t) => !t.plugin_only))
     const status = typeof req.query.status === 'string' ? req.query.status : undefined
     if (status) tasks = tasks.filter((t) => t.status === status)
     // Additive filters (Wave 1): project ('' = Inbox, case-insensitive like the
@@ -3299,6 +3301,30 @@ apiV1Router.patch('/tasks/:id', async (req: Request, res: Response, next: NextFu
           titleShortenedFrom = patchTitle
           patchTitle = heuristicShortTitle(patchTitle)
         }
+      }
+    }
+    // A phase write to COMPLETE closes the task as surely as POST /complete does: a session closing
+    // ANOTHER task meets the same in-use and unfinished-work check (core/sessions/complete-in-use.ts).
+    if (phase === 'COMPLETE' || status === 'done') {
+      const rawSid = req.headers['x-walnut-caller-sid']
+      const actor = (Array.isArray(rawSid) ? rawSid[0] : rawSid)?.trim() || undefined
+      if (actor) {
+        const b = (req.body ?? {}) as Record<string, unknown>
+        const { admitCompleteOfOther } = await import('../../core/sessions/complete-in-use.js')
+        const admit = await admitCompleteOfOther(id, actor, { force: b.force === true, reason: typeof b.reason === 'string' ? b.reason : undefined })
+        if (!admit.ok) { sendError(res, 409, 'task_in_use', admit.message, { reasons: admit.reasons }); return }
+      }
+      // COMPLETE is verified: a standing Partial ends with it, as on POST /complete.
+      const { isPartial } = await import('../../core/peers/structured-reply.js')
+      const before = await tm.getTask(id).catch(() => null)
+      if (before && before.phase !== 'COMPLETE' && isPartial(before.result_report)) {
+        const { noteResultReport } = await import('../../core/sessions/session-send-core.js')
+        const raw = req.headers['x-walnut-caller-sid']
+        const actorSid = (Array.isArray(raw) ? raw[0] : raw)?.trim() || undefined
+        const { resolveCaller } = await import('../../core/sessions/session-send-core.js')
+        const caller = actorSid ? await resolveCaller(actorSid).catch(() => null) : null
+        const by = caller?.kind === 'session' && caller.record.taskId ? `task:${caller.record.taskId}` : 'human'
+        await noteResultReport(before.id, { via: 'complete', by }, null, { emit: false })
       }
     }
     try {

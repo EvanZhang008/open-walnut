@@ -15,6 +15,8 @@ import { readOrgPlace, writeOrgPlace } from './org-place';
 import type { Task } from '@open-walnut/core';
 import { SessionPanel } from '@/components/sessions/SessionPanel';
 import { TaskBoardPane } from '@/components/board/TaskBoardPane';
+import { LiveActivityLine } from '@/components/board/LiveActivityLine';
+import { useFirstLiveTask } from '@/stores/live-activity-store';
 import { useSessionSend } from '@/hooks/useSessionSend';
 import { resolveTaskSessionId } from '@/utils/session-status';
 import { timeAgo } from '@/utils/time';
@@ -154,6 +156,15 @@ function AlertList({ alerts, tasks, onOpen, onQuote, canQuote, answers, compact 
   );
 }
 
+/** The live action of the team's first running task (core/live-activity.ts), named when it is a worker. */
+function TeamLiveLine({ live }: { live: NonNullable<TeamColumn['items'][number]['live']> }) {
+  const ids = useMemo(() => live.map((l) => l.id), [live]);
+  const id = useFirstLiveTask(ids);
+  if (!id) return null;
+  const prefix = live.find((l) => l.id === id)?.title;
+  return <LiveActivityLine taskId={id} className="org-team-live" {...(prefix ? { prefix } : {})} />;
+}
+
 function TeamBoard({ columns, onPick, emptyText }: {
   columns: TeamColumn[];
   onPick: (item: TeamColumn['items'][number]) => void;
@@ -172,6 +183,7 @@ function TeamBoard({ columns, onPick, emptyText }: {
                   <span className="org-team-ring" style={{ borderColor: COLUMN_DOT[c.key] }} aria-hidden="true" />
                   <span className="org-team-text">
                     <span className="org-team-title">{it.title}</span>
+                    {it.live && <TeamLiveLine live={it.live} />}
                     {it.note && <span className="org-team-note" data-testid="org-team-note">{it.note}</span>}
                   </span>
                   {it.workers > 0 && <span className="org-team-meta" title={`${it.workers} more under it`}>{it.workers}</span>}

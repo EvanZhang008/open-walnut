@@ -349,6 +349,16 @@ struct WalnutTask: Codable, Identifiable, Equatable {
     /// "main" (the CEO) or "lead" (a VP): the session menu offers its memory and
     /// instructions. Absent on other tasks and from an older server (additive, 2026-10).
     var orgRole: String? = nil
+    /// What its running session does now (additive, 2026-10; server `src/core/live-activity.ts`):
+    /// the tool, since when, the turn's length and cost. Running rows only; nil from an older
+    /// server. The feed's `task-activity` frame keeps it current (TasksStore).
+    var liveActivity: WalnutLiveActivity? = nil
+    /// Its latest result left things not done (additive, 2026-10; server
+    /// `src/core/peers/structured-reply.ts`): sent only while that is so, nil otherwise.
+    var resultReport: WalnutResultReport? = nil
+    /// A team stop is in force under it (additive, 2026-10; server `src/core/sessions/team-stop.ts`):
+    /// the Team section offers Resume. nil otherwise and from an older server.
+    var teamStop: WalnutTeamStop? = nil
 
     private enum CodingKeys: String, CodingKey {
         case id, title, status, phase, priority, project
@@ -363,7 +373,45 @@ struct WalnutTask: Codable, Identifiable, Equatable {
         case parentTaskId = "parent_task_id"
         case userStatus = "user_status"
         case orgRole = "org_role"
+        case liveActivity = "live_activity"
+        case resultReport = "result_report"
+        case teamStop = "team_stop"
     }
+}
+
+/// `team_stop` on a task row: when its team was stopped, and by whom ("human" or "task:<id>").
+struct WalnutTeamStop: Codable, Equatable {
+    var at: String? = nil
+    var by: String? = nil
+}
+
+/// `result_report` on a task row: the not-done list of a Partial result, and its one-line result.
+struct WalnutResultReport: Codable, Equatable {
+    var at: String? = nil
+    var notDone: [String]? = nil
+    var result: String? = nil
+
+    private enum CodingKeys: String, CodingKey {
+        case at, result
+        case notDone = "not_done"
+    }
+
+    /// Partial: the server sends the field only then, but an empty list is never Partial.
+    var isPartial: Bool { !(notDone ?? []).isEmpty }
+}
+
+/// `live_activity` on a task row: what its running session does now, read by the server from
+/// the session's stream (never the model's words). Timestamps only; the phone computes the spans.
+struct WalnutLiveActivity: Codable, Equatable {
+    /// tool | thinking | writing
+    let kind: String
+    var tool: String? = nil
+    var target: String? = nil
+    let since: String
+    var turnStartedAt: String? = nil
+    var lastToolAt: String? = nil
+    var costUsd: Double? = nil
+    var sessionId: String? = nil
 }
 
 /// `user_status` on a task row: needs | working | waiting | done, with what the user must do
@@ -381,6 +429,16 @@ struct WalnutUserStatus: Codable, Equatable {
     var until: String? = nil
     var at: String? = nil
     var stale: Bool? = nil
+    /// Past its due date (`overdue`) or due within a day (`soon`); nil otherwise or from an
+    /// older server (additive, 2026-10-28).
+    var due: WalnutDue? = nil
+}
+
+/// `user_status.due`: the due date as set (a bare date or an ISO time) and how near it is.
+struct WalnutDue: Codable, Equatable {
+    let at: String
+    /// overdue | soon
+    let state: String
 }
 
 struct TasksResponse: Codable {

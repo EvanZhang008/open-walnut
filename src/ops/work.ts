@@ -43,6 +43,9 @@ defineOp({
     'without a reply, and is told where the work went; answer it yourself once the work is back. ' +
     'To ANSWER such a request, call this op with ' +
     'in_reply_to=rq-… (omit `to` — the answer routes to the asker automatically). ' +
+    'An answer may carry `result` (one sentence: what came of it), `evidence` (paths or links) and `not_done` ' +
+    '(what is not done or not checked); a non-empty not_done shows the reply as Partial on the Board and in the Brief, ' +
+    'so list there anything left over instead of burying it in the text. ' +
     'Give every message a `title`: the one-line TL;DR the reader sees first. ' +
     'Address the task id. A task not started yet returns 409: use task_start. ' +
     'A COMPLETE task returns 409 target_complete: its work is done and a message would reopen it. ' +
@@ -54,7 +57,7 @@ defineOp({
       'Task id or unique prefix. Omit only with in_reply_to. Legacy conversation ids and printed handles are accepted for compatibility.'),
     title: z.string().min(1).max(200).optional().describe(
       'One-line TL;DR of the message (about 10 words): the reader sees only this line until they open the message. Always give one; put the detail in `text`.'),
-    text: z.string().min(1).describe(`Message text: the detail behind the title. ${MESSAGE_TEXT_HINT}`),
+    text: z.string().min(1).optional().describe(`Message text: the detail behind the title. Required, except on an answer (in_reply_to) that gives \`result\`. ${MESSAGE_TEXT_HINT}`),
     expect_reply: z.boolean().optional().describe('Ask the receiver to reply; Walnut notifies you if it finishes without replying. DEFAULT true when a session sends down or across; false when it reports up (to its own leader, its VP, or Main). Pass true to ask a question up, false for fire-and-forget'),
     reply_timeout: z.number().int().min(60).max(86_400).optional().describe('Seconds before the no-reply notification (default 3600)'),
     in_reply_to: z.string().regex(/^rq-[a-f0-9]{6,}$/).optional().describe('Request id you are answering — routes to the asker'),
@@ -62,6 +65,9 @@ defineOp({
     force: z.boolean().optional().describe('Send to (or answer) a task that is COMPLETE, which reopens it. Needs `reason`'),
     reason: z.string().min(1).max(500).optional().describe('With force: what changed and why the complete task must act again. Shown to that task and the user'),
     messageId: z.string().regex(/^qm-[A-Za-z0-9-]{1,64}$/).optional().describe('Stable id for retry deduplication'),
+    result: z.string().min(1).max(2000).optional().describe('With in_reply_to: one sentence saying what came of the work'),
+    evidence: z.union([z.string(), z.array(z.string())]).optional().describe('With in_reply_to: paths or links that show the result (a list, or one per line)'),
+    not_done: z.union([z.string(), z.array(z.string())]).optional().describe('With in_reply_to: what is NOT done or not verified (a list, or one per line). Non-empty = the reply reads as Partial'),
   },
   bind: { method: 'POST', path: '/messages' },
   mapResult: ({ body, args }) => {
@@ -77,7 +83,9 @@ defineOp({
       delivery === 'deferred'
         ? `Message queued for ${target}: it is parked on a human permission prompt, so the text lands after the human answers. Do NOT resend.`
         : `Message queued for ${b.targetTaskId || b.taskId || target}${args.force === true ? ' (forced: if it was complete, this reopens it)' : ''}. Accepted for delivery, not a completed reply. Do NOT resend.`,
-      (typeof b.requestId === 'string' && b.requestId
+      (args.in_reply_to && (Array.isArray(args.not_done) ? args.not_done.length > 0 : typeof args.not_done === 'string' && args.not_done.trim() !== '')
+        ? 'Marked Partial: the Board and the Brief list what is not done. ' : '')
+      + (typeof b.requestId === 'string' && b.requestId
         ? `You asked for a reply (${b.requestId}). ${REPLY_ARRIVES_HINT}`
         : args.in_reply_to ? REPLY_ARRIVES_HINT : NO_REPLY_ASKED)
         + (Array.isArray(b.handedOn) && b.handedOn.length ? ` Handed on: ${b.handedOn.join(', ')} now wait for this answer; answer them once it is back.` : '')

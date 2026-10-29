@@ -201,6 +201,24 @@ sessionsRouter.get('/working-dirs', async (_req: Request, res: Response, next: N
   }
 })
 
+/** Every running task's live action (core/live-activity.ts), for a Board or Org page's first
+ *  load; `session:live-activity` keeps it current. In memory, never blocks. */
+sessionsRouter.get('/live-activity', async (_req: Request, res: Response) => {
+  const { liveActivityByTask } = await import('../../core/sessions/live-activity-registry.js')
+  res.json({ byTask: liveActivityByTask(), at: new Date().toISOString() })
+})
+
+/** Every overdue request still open (session-requests.ts), by the tasks of its two sides: the
+ *  Brief's "still open" footer reads it. A small file read, never blocks on a host. */
+sessionsRouter.get('/overdue-requests', async (_req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { overdueAsks } = await import('../../core/sessions/brief.js')
+    res.json({ requests: await overdueAsks(), at: new Date().toISOString() })
+  } catch (err) {
+    next(err)
+  }
+})
+
 // GET /api/sessions/ask-walnut-launch — the model/effort the user last picked
 // for an Ask Walnut session. The draft's walnut tab seeds its model pill from
 // this so the pill shows what the launch will actually carry (a folder draft

@@ -27,8 +27,12 @@ import type { EnvelopeHandedOn } from '../peers/envelope-kit.js';
 import {
   buildRequestNotification,
   buildUndeliveredNotification,
+  buildOverdueReminder,
+  claimReminder,
   clipNoticeMessage,
+  overdueOpenRequests,
   overdueRequests,
+  reminderDueAt,
   settleNotified,
   withdrawRequest,
   type NoticeLastMessage,
@@ -335,10 +339,78 @@ export function sweepSessionRequests(): Promise<number> {
       for (const request of overdue) {
         if (await notifyRequesterFallback(request, 'timeout')) notified++;
       }
+      await remindOverdue().catch((err) => log.session.warn('overdue reminders failed', {
+        error: err instanceof Error ? err.message : String(err),
+      }));
       return notified;
     } finally {
       sweeping = undefined;
     }
   })();
   return sweeping;
+}
+
+/** An ephemeral server's copy of the ledger came with the process: only rows it made overdue are its own. */
+const PROCESS_STARTED_AT = Date.now();
+
+/**
+ * The one reminder of an OVERDUE request (status 'expired', still open), at twice its
+ * deadline, to its asker: one message per asker for all of its requests due at once. Only rows
+ * this Walnut made overdue (`overdueAt`), so an upgrade never reminds the old ones. None when
+ * the request is closed in another way: the asker's task completed (nothing there waits) or the
+ * target's did (its completion spoke for it).
+ */
+export async function remindOverdue(now = Date.now()): Promise<number> {
+  // An ephemeral server's copy of the ledger is the real Walnut's: it reminds only what it made overdue itself.
+  const { IS_EPHEMERAL } = await import('../../constants.js');
+  const due = (await overdueOpenRequests(now)).filter((r) => r.overdueAt && !r.remindedAt && reminderDueAt(r) <= now
+    && (!IS_EPHEMERAL || Date.parse(r.overdueAt) >= PROCESS_STARTED_AT));
+  const byAsker = new Map<string, SessionRequest[]>();
+  for (const r of due) byAsker.set(r.fromSessionId, [...(byAsker.get(r.fromSessionId) ?? []), r]);
+  let sent = 0;
+  for (const [askerSid, rows] of byAsker) {
+    if (await askerTaskIsComplete(askerSid)) continue;
+    // Where it would land, before anything is claimed: a stopped asker is never woken for a
+    // reminder, and its rows stay unclaimed until it runs again (or the 7-day retention ends them).
+    const { resolveReplyDestination, isLive } = await import('./reply-routing.js');
+    const destination = await resolveReplyDestination(askerSid).catch(() => null);
+    if (!destination || !isLive(destination.session)) continue;
+    const items: Parameters<typeof buildOverdueReminder>[0][number][] = [];
+    for (const request of rows) {
+      let target: { title?: string; phase?: string; session_id?: string | null } | undefined;
+      if (request.toTaskId) {
+        try {
+          const { listTasksByIds } = await import('../task-manager.js');
+          target = (await listTasksByIds([request.toTaskId]))[0];
+        } catch { /* named generically */ }
+      }
+      if (target?.phase === 'COMPLETE') continue;
+      const claimed = await claimReminder(request.id, now);
+      if (!claimed) continue;
+      items.push({ request: claimed, target: {
+        title: target?.title, sessionId: request.toSessionId ?? target?.session_id ?? undefined,
+        taskId: request.toTaskId, phase: target?.phase,
+      } });
+    }
+    if (items.length === 0) continue;
+    try {
+      const text = buildOverdueReminder(items, now);
+      const { deliverToSession } = await import('./session-send-core.js');
+      const { delivery } = await deliverToSession(destination.session, {
+        busText: text, enqueueText: text, source: 'walnut-notify', taskId: destination.session.taskId,
+      });
+      sent++;
+      log.session.info('overdue request reminder delivered', {
+        fromSessionId: askerSid, requestIds: items.map((i) => i.request.id), delivery,
+      });
+    } catch (err) {
+      // Not delivered: the claim goes, so the next sweep tries again.
+      const { releaseReminder } = await import('../session-requests.js');
+      for (const i of items) await releaseReminder(i.request.id).catch(() => {});
+      log.session.warn('overdue request reminder failed after claim', {
+        fromSessionId: askerSid, requestIds: items.map((i) => i.request.id), error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+  return sent;
 }

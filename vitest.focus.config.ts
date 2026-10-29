@@ -32,6 +32,7 @@ const config = mergeConfig(
         '@open-walnut/ask-list': path.resolve(import.meta.dirname, 'src/core/sessions/ask-list.ts'),
         '@open-walnut/org-tree': path.resolve(import.meta.dirname, 'src/core/org/org-tree.ts'),
         '@open-walnut/user-status': path.resolve(import.meta.dirname, 'src/core/user-status.ts'),
+        '@open-walnut/live-activity': path.resolve(import.meta.dirname, 'src/core/live-activity.ts'),
         '@open-walnut/companion-keep': path.resolve(import.meta.dirname, 'src/core/replication/companion-keep.ts'),
         '@open-walnut/three-way-merge': path.resolve(import.meta.dirname, 'src/lib/three-way-merge.ts'),
       },

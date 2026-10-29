@@ -1,4 +1,5 @@
 import type { StatusReport, TaskBrief, UserStatus } from './user-status.js';
+import type { TaskResultReport } from './peers/structured-reply.js';
 export type TaskStatus = 'todo' | 'in_progress' | 'done';
 /**
  * The one state field. WAITING (added 0.5.2) is a task set aside until something
@@ -914,6 +915,17 @@ export interface Task {
   /** Main's or a lead's Brief: the short letter to the user it rewrites at every turn end
    *  (FOR_USER_BRIEF), shown above its chat on the Org page. Local-only, payload blob. */
   brief?: TaskBrief;
+  /** Its latest result (src/core/peers/structured-reply.ts): from its session's reply to a request
+   *  (`task_send` with `in_reply_to`) or from the call that completed it, with `result` / `evidence`
+   *  / `not_done`. A non-empty `not_done` not yet taken up or dropped reads as Partial on the Board,
+   *  in the Brief and in its parent's open items. Local-only, payload blob. */
+  result_report?: TaskResultReport;
+  /** Main's or a lead's follow-up Walnut set because its turn said it waits on someone or will
+   *  follow up, with nothing set to bring it back (src/core/sessions/promise-alarm.ts). null once
+   *  cleared or fired. Local-only, payload blob. */
+  promise_alarm?: import('./sessions/promise-alarm.js').PromiseAlarm | null;
+  /** What a team stop turned off under this task (sessions/team-stop.ts); team_resume turns it back on. */
+  team_stop?: import('./sessions/team-stop.js').TeamStopRecord | null;
   /** The agent's own MEMORY.md (Main, a lead, a leader): its working memory, not shown to the
    *  user by default and not Walnut's global MEMORY.md (src/core/sessions/agent-memory.ts).
    *  `by` / `by_name` / `by_at`: the latest write by someone other than the task's own session (the

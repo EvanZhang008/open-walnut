@@ -59,8 +59,11 @@ import {
   quietCompletedParent,
   resolveParentDestination,
   restoreWithdrawnAsks,
+  sweepHeldSubtaskNotices,
   type SubtaskNotice,
 } from '../../src/core/sessions/subtask-notices.js';
+import { heldParents, resetHeld } from '../../src/core/sessions/subtask-batch.js';
+import { bus, EventNames } from '../../src/core/event-bus.js';
 import { REQUESTS_FILE, createSessionRequest, getSessionRequest } from '../../src/core/session-requests.js';
 import fs from 'node:fs';
 import { lastTurnOf, turnStarterOf } from '../../src/core/sessions/session-request-notify.js';
@@ -96,7 +99,8 @@ function notice(over: Partial<SubtaskNotice> = {}): SubtaskNotice {
 let sessions: SessionRecord[];
 let parent: Partial<Task>;
 
-beforeEach(() => {
+beforeEach(async () => {
+  await resetHeld();
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
   // Mid-turn by default: every kind reaches a parent whose turn is running.
   sessions = [rec(PARENT_SID, { title: 'Ship the dashboard', process_status: 'running' })];
@@ -118,6 +122,7 @@ beforeEach(() => {
   enqueueMessage.mockResolvedValue({ id: 'qm-parked' });
   editMessage.mockResolvedValue(false);
   getQueue.mockResolvedValue([]);
+  getChildTasks.mockResolvedValue([]);
 });
 
 afterEach(async () => {
@@ -519,3 +524,208 @@ describe('a parent that completes hears nothing more from its subtasks (2026-10-
     expect(await restoreWithdrawnAsks('parent-1')).toBe(0);
   });
 });
+
+describe('what is left of the team (2026-10-28: count what is open, wake an idle leader once)', () => {
+  const child = (id: string, phase: Task['phase'], user_status?: Task['user_status']): Task =>
+    ({ id, title: id.toUpperCase(), phase, status: phase === 'COMPLETE' ? 'done' : 'in_progress', parent_task_id: 'parent-1', ...(user_status ? { user_status } : {}) }) as Task;
+  const completed = (id: string) => notice({ child: { id, title: id.toUpperCase() }, kind: 'completed', lastWords: { text: `${id} is done.` } });
+  // The flush reads each completion's result as it stands (a few awaits per notice): let them run.
+  const flushNow = async () => {
+    await vi.advanceTimersByTimeAsync(COALESCE_MS + 10);
+    for (let i = 0; i < 20; i++) await new Promise<void>((r) => setImmediate(r));
+  };
+
+  it('a completion names the subtasks still open, what needs the user first, inside the envelope', async () => {
+    getChildTasks.mockResolvedValue([
+      child('a', 'COMPLETE'),
+      child('b', 'IN_PROGRESS', { state: 'working', now: 'Running the tests' }),
+      child('c', 'NEED_ACTION', { state: 'needs', ask: 'Approve the TestFlight build.', source: 'session' }),
+      child('d', 'WAITING', { state: 'waiting', kind: 'time', waitingOn: 'A set time: 6 PM' }),
+    ]);
+    await queueSubtaskNotice(completed('a'));
+    await flushNow();
+    const { text } = delivered();
+    expect(text).toContain('Still open: 3 of your subtasks: "C" (Needs you: Approve the TestFlight build), "B" (Working), "D" (Waiting: A set time: 6 PM).');
+    // Before the closing Next: list, inside the one envelope.
+    expect(text.indexOf('Still open:')).toBeLessThan(text.lastIndexOf('\n\nNext:\n'));
+    expect(parseSessionEnvelopes(text)).toHaveLength(1);
+  });
+
+  it('a completion whose result left things not done says PARTIAL and lists them', async () => {
+    getTask.mockImplementation(async (id: string) => (id === parent.id ? parent
+      : id === 'a' ? { id: 'a', title: 'A', phase: 'COMPLETE', result_report: { via: 'complete', at: new Date().toISOString(), not_done: ['iOS not tested'] } }
+        : null));
+    getChildTasks.mockResolvedValue([child('a', 'COMPLETE')]);
+    await queueSubtaskNotice(completed('a'));
+    await flushNow();
+    const { text } = delivered();
+    expect(text).toContain('PARTIAL: its result says these are not done:\n- iOS not tested');
+    expect(text).toContain('task_not_done_settle {"id":"a"');
+    expect(parseSessionEnvelopes(text)).toHaveLength(1);
+  });
+
+  it('the last one says so, and a burst of completions counts once, on the last envelope', async () => {
+    getChildTasks.mockResolvedValue([child('a', 'COMPLETE'), child('b', 'COMPLETE')]);
+    await queueSubtaskNotice(completed('a'));
+    await queueSubtaskNotice(completed('b'));
+    await flushNow();
+    const { text } = delivered();
+    expect(text.match(/None of your subtasks is still open: this was the last one\./g)).toHaveLength(1);
+    expect(text.lastIndexOf('None of your subtasks')).toBeGreaterThan(text.indexOf('(b) completed'));
+  });
+
+  it('names at most eight and counts the rest', async () => {
+    getChildTasks.mockResolvedValue(Array.from({ length: 11 }, (_, i) => child(`w${i}`, 'IN_PROGRESS', { state: 'working' })));
+    await queueSubtaskNotice(completed('a'));
+    await flushNow();
+    expect(delivered().text).toMatch(/Still open: 11 of your subtasks: .*"W7" \(Working\), and 3 more\./);
+  });
+
+  it('an idle parent is woken once, when the last working subtask completes, with every completion', async () => {
+    sessions = [rec(PARENT_SID, { process_status: 'idle' })];
+    getChildTasks.mockResolvedValue([child('a', 'COMPLETE'), child('b', 'IN_PROGRESS', { state: 'working' })]);
+    await queueSubtaskNotice(completed('a'));
+    await flushNow();
+    expect(sendMessageToSession).not.toHaveBeenCalled();
+    expect(await heldParents()).toEqual([expect.objectContaining({ parentTaskId: 'parent-1', count: 1 })]);
+    getChildTasks.mockResolvedValue([child('a', 'COMPLETE'), child('b', 'COMPLETE')]);
+    await queueSubtaskNotice(completed('b'));
+    await flushNow();
+    expect(sendMessageToSession).toHaveBeenCalledTimes(1);
+    const { text, opts } = delivered();
+    expect(text).toContain('(a) completed its task');
+    expect(text).toContain('(b) completed its task');
+    expect(text).toContain('a is done.');
+    expect(text).toContain('None of your subtasks is still open: this was the last one.');
+    expect(opts.endsWait).toBe(true);
+    expect(await heldParents()).toEqual([]);
+  });
+
+  it('a stop of the last working subtask lets the held completions go, and is itself not sent', async () => {
+    sessions = [rec(PARENT_SID, { process_status: 'idle' })];
+    getChildTasks.mockResolvedValue([child('a', 'COMPLETE'), child('b', 'IN_PROGRESS', { state: 'working' })]);
+    await queueSubtaskNotice(completed('a'));
+    await flushNow();
+    getChildTasks.mockResolvedValue([child('a', 'COMPLETE'), child('b', 'NEED_ACTION', { state: 'waiting', kind: 'lead', waitingOn: 'Its lead, to read the latest turn.' })]);
+    await queueSubtaskNotice(notice({ child: { id: 'b', title: 'B' }, kind: 'stopped' }));
+    await flushNow();
+    expect(sendMessageToSession).toHaveBeenCalledTimes(1);
+    const { text } = delivered();
+    expect(text).toContain('(a) completed its task');
+    expect(text).not.toContain('(b) stopped');
+    expect(text).toContain('Still open: 1 of your subtasks: "B" (Waiting: Its lead, to read the latest turn).');
+  });
+
+  it('a subtask parked for good (a standing routine) never keeps its leader from hearing', async () => {
+    sessions = [rec(PARENT_SID, { process_status: 'idle' })];
+    getChildTasks.mockResolvedValue([child('a', 'COMPLETE'), child('daily', 'WAITING', { state: 'waiting', kind: 'task', waitingOn: 'Its trigger' })]);
+    await queueSubtaskNotice(completed('a'));
+    await flushNow();
+    expect(sendMessageToSession).toHaveBeenCalledTimes(1);
+  });
+
+  it('an error wakes at once and carries what was held', async () => {
+    sessions = [rec(PARENT_SID, { process_status: 'idle' })];
+    getChildTasks.mockResolvedValue([child('a', 'COMPLETE'), child('b', 'IN_PROGRESS', { state: 'working' }), child('c', 'IN_PROGRESS', { state: 'working' })]);
+    await queueSubtaskNotice(completed('a'));
+    await flushNow();
+    await queueSubtaskNotice(notice({ child: { id: 'c', title: 'C' }, kind: 'error', error: 'boom' }));
+    await flushNow();
+    expect(sendMessageToSession).toHaveBeenCalledTimes(1);
+    const { text } = delivered();
+    expect(text).toContain('(a) completed its task');
+    expect(text).toContain('ERROR: boom');
+    expect(text).toContain('"B" (Working)');
+  });
+
+  it('held completions ride the parent\'s next turn, whatever starts it', async () => {
+    sessions = [rec(PARENT_SID, { process_status: 'idle' })];
+    getChildTasks.mockResolvedValue([child('a', 'COMPLETE'), child('b', 'IN_PROGRESS', { state: 'working' })]);
+    await queueSubtaskNotice(completed('a'));
+    await flushNow();
+    expect(sendMessageToSession).not.toHaveBeenCalled();
+    // The user writes to the parent: its turn starts, and the held news goes in mid-turn.
+    sessions = [rec(PARENT_SID, { process_status: 'running' })];
+    bus.emit(EventNames.SESSION_STATUS_CHANGED, { sessionId: PARENT_SID, taskId: 'parent-1', process_status: 'running' }, ['*']);
+    await vi.waitFor(() => expect(sendMessageToSession).toHaveBeenCalledTimes(1));
+    expect(delivered().text).toContain('(a) completed its task');
+    expect(delivered().text).toContain('"B" (Working)');
+    expect(await heldParents()).toEqual([]);
+  });
+
+  it('the sweep lets them go when the team settled with no edge reaching here; a completed parent drops them', async () => {
+    sessions = [rec(PARENT_SID, { process_status: 'idle' })];
+    getChildTasks.mockResolvedValue([child('a', 'COMPLETE'), child('b', 'IN_PROGRESS', { state: 'working' })]);
+    await queueSubtaskNotice(completed('a'));
+    await flushNow();
+    await sweepHeldSubtaskNotices();
+    expect(sendMessageToSession).not.toHaveBeenCalled();
+    // b's process died: the status sync moved it to Waiting, no notice edge came.
+    getChildTasks.mockResolvedValue([child('a', 'COMPLETE'), child('b', 'IN_PROGRESS', { state: 'waiting', kind: 'stuck' })]);
+    await sweepHeldSubtaskNotices();
+    expect(sendMessageToSession).toHaveBeenCalledTimes(1);
+
+    sendMessageToSession.mockClear();
+    getChildTasks.mockResolvedValue([child('x', 'COMPLETE'), child('y', 'IN_PROGRESS', { state: 'working' })]);
+    await queueSubtaskNotice(completed('x'));
+    await flushNow();
+    expect((await quietCompletedParent('parent-1')).dropped).toBeGreaterThanOrEqual(1);
+    getChildTasks.mockResolvedValue([child('x', 'COMPLETE'), child('y', 'COMPLETE')]);
+    await sweepHeldSubtaskNotices();
+    expect(sendMessageToSession).not.toHaveBeenCalled();
+    expect(await heldParents()).toEqual([]);
+  });
+
+  it('an idle parent close to its idle reap is woken with what it holds; one already gone drops them', async () => {
+    const longAgo = new Date(Date.now() - 101 * 60_000).toISOString();
+    sessions = [rec(PARENT_SID, { process_status: 'idle', last_status_change: longAgo, lastActiveAt: longAgo })];
+    getChildTasks.mockResolvedValue([child('a', 'COMPLETE'), child('b', 'IN_PROGRESS', { state: 'working' })]);
+    await queueSubtaskNotice(completed('a'));
+    await flushNow();
+    expect(sendMessageToSession).not.toHaveBeenCalled();
+    await sweepHeldSubtaskNotices();
+    expect(sendMessageToSession).toHaveBeenCalledTimes(1);
+    expect(delivered().text).toContain('(a) completed its task');
+    expect(await heldParents()).toEqual([]);
+
+    // Reaped before the sweep came: nothing can hear them, and a stopped parent is never woken.
+    sendMessageToSession.mockClear();
+    sessions = [rec(PARENT_SID, { process_status: 'idle' })];
+    await queueSubtaskNotice(completed('a'));
+    await flushNow();
+    expect(await heldParents()).toHaveLength(1);
+    sessions = [rec(PARENT_SID, { process_status: 'stopped' })];
+    await sweepHeldSubtaskNotices();
+    expect(sendMessageToSession).not.toHaveBeenCalled();
+    expect(await heldParents()).toEqual([]);
+  });
+
+  it('a delivery that fails puts the completions back on hold', async () => {
+    sessions = [rec(PARENT_SID, { process_status: 'idle' })];
+    getChildTasks.mockResolvedValue([child('a', 'COMPLETE'), child('b', 'IN_PROGRESS', { state: 'working' })]);
+    await queueSubtaskNotice(completed('a'));
+    await flushNow();
+    getChildTasks.mockResolvedValue([child('a', 'COMPLETE'), child('b', 'COMPLETE')]);
+    sendMessageToSession.mockRejectedValueOnce(new Error('daemon unreachable'));
+    await queueSubtaskNotice(completed('b'));
+    await flushNow();
+    expect(sendMessageToSession).toHaveBeenCalledTimes(1);
+    expect(await heldParents()).toEqual([expect.objectContaining({ parentTaskId: 'parent-1', count: 2 })]);
+    // The next sweep sends them.
+    await sweepHeldSubtaskNotices();
+    expect(sendMessageToSession).toHaveBeenCalledTimes(2);
+    expect(delivered(1).text).toContain('(a) completed its task');
+    expect(delivered(1).text).toContain('(b) completed its task');
+    expect(await heldParents()).toEqual([]);
+  });
+
+  it('a hold a day old goes out whatever the team does', async () => {
+    sessions = [rec(PARENT_SID, { process_status: 'idle' })];
+    getChildTasks.mockResolvedValue([child('a', 'COMPLETE'), child('b', 'IN_PROGRESS', { state: 'working' })]);
+    await queueSubtaskNotice(completed('a'));
+    await flushNow();
+    await sweepHeldSubtaskNotices(Date.now() + 25 * 60 * 60_000);
+    expect(sendMessageToSession).toHaveBeenCalledTimes(1);
+  });
+});
+

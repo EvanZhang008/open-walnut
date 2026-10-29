@@ -84,6 +84,63 @@ defineOp({
 })
 
 defineOp({
+  name: 'team_stop',
+  title: 'Stop a task and everything it handed out',
+  description:
+    'Stop a task\'s whole team in one step, the same as "Stop the team" on the board: every open task under it (every level, ' +
+    'and the task itself unless include_self is false) has its live sessions stopped (the host\'s graceful stop, never a kill; ' +
+    'never your own session), its armed triggers paused and its wake clocks (wait_until, a follow-up) taken off, so nothing ' +
+    'starts it again by itself. when:"turn_end" lets a turn that is running finish first. team_resume turns those triggers and ' +
+    'clocks back on; a stopped session resumes on its next message. Only when the user asked, or the work needs it (a team ' +
+    'going the wrong way, work that must not go on).',
+  input: {
+    id: z.string().min(1).describe('Task id or unique prefix: the top of the team'),
+    when: z.enum(['now', 'turn_end']).optional().describe('now (default): stop at once; turn_end: a running turn finishes first'),
+    include_self: z.boolean().optional().describe('Stop the task itself too (default true); false stops only what it handed out'),
+  },
+  handler: async ({ id, when, include_self: includeSelf }, call) => {
+    const out = await call('POST', `/tasks/${encodeURIComponent(String(id))}/team-stop`, {
+      ...(when ? { when } : {}), ...(includeSelf === false ? { include_self: false } : {}),
+    }) as { root?: { id: string; title: string }; stopped?: unknown[]; atTurnEnd?: unknown[]; kept?: { taskId: string; why: string }[]; pausedTriggers?: number; clocksOff?: number; tasks?: number } | undefined
+    const kept = out?.kept ?? []
+    return withOutcome(
+      out ?? {},
+      `Team of ${out?.root?.id ?? id} stopped: ${out?.stopped?.length ?? 0} session(s) stopped now`
+        + `${out?.atTurnEnd?.length ? `, ${out.atTurnEnd.length} at the end of their running turn` : ''}, `
+        + `${out?.pausedTriggers ?? 0} trigger(s) paused, ${out?.clocksOff ?? 0} clock(s) off, across ${out?.tasks ?? 0} open task(s).`
+        + (kept.length ? ` Kept running: ${kept.map((k) => `${k.taskId} (${k.why})`).join('; ')}.` : ''),
+      `team_resume ${out?.root?.id ?? id} turns the triggers and clocks back on; task_send resumes a session.`,
+    )
+  },
+  routes: [{ method: 'POST', path: '/tasks/:id/team-stop' }],
+  timeoutMs: 120_000,
+  tags: { readonly: false, remote: 'allow' },
+})
+
+defineOp({
+  name: 'team_resume',
+  title: 'Resume a team that was stopped',
+  description:
+    'Undo team_stop on a task: the triggers it paused and the clocks it took off are turned back on (a closed task is left ' +
+    'alone). Sessions are not started: each resumes on its next message, so tell the team what to do next with task_send.',
+  input: {
+    id: z.string().min(1).describe('Task id or unique prefix: the task team_stop was called on'),
+  },
+  handler: async ({ id }, call) => {
+    const out = await call('POST', `/tasks/${encodeURIComponent(String(id))}/team-resume`, {}) as { root?: { id: string }; resumedTriggers?: number; clocksOn?: number; skipped?: number } | undefined
+    return withOutcome(
+      out ?? {},
+      `Team of ${out?.root?.id ?? id} resumed: ${out?.resumedTriggers ?? 0} trigger(s) back on, ${out?.clocksOn ?? 0} clock(s) back`
+        + `${out?.skipped ? `; ${out.skipped} closed task(s) left alone` : ''}. No session was started.`,
+      'task_send to a task gives it its next step.',
+    )
+  },
+  routes: [{ method: 'POST', path: '/tasks/:id/team-resume' }],
+  timeoutMs: 60_000,
+  tags: { readonly: false, remote: 'allow' },
+})
+
+defineOp({
   name: 'task_restart',
   title: 'Restart a task\'s session',
   description:

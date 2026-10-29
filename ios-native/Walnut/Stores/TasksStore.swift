@@ -381,6 +381,7 @@ final class TasksStore {
         var nextSessions = sessions
         var tasksChanged = false
         var sessionsChanged = false
+        var activityChanged = false
         for mutation in batch {
             switch mutation {
             case .snapshot(let snapTasks, let snapSessions):
@@ -418,6 +419,11 @@ final class TasksStore {
                 let result = EventsFeedReducer.upsertSession(nextSessions, row)
                 nextSessions = result.rows
                 sessionsChanged = sessionsChanged || result.changed
+            case .taskActivity(let id, let activity):
+                // Live state only: never saved as a sync, so the footer's clock stays honest.
+                let result = EventsFeedReducer.setActivity(nextTasks, id: id, activity)
+                nextTasks = result.rows
+                activityChanged = activityChanged || result.changed
             }
         }
         // The shown clock: the board footer says "Synced <relative>" against it.
@@ -426,6 +432,8 @@ final class TasksStore {
             tasks = nextTasks
             syncedAt = now
             DiskCache.save(tasks, key: "tasks-list")
+        } else if activityChanged {
+            tasks = nextTasks
         }
         if sessionsChanged {
             sessions = nextSessions
@@ -823,7 +831,10 @@ final class TasksStore {
             unread: edit.unread.map { $0 ? true : nil } ?? task.unread,
             parentTaskId: task.parentTaskId,
             userStatus: task.userStatus,
-            orgRole: task.orgRole
+            orgRole: task.orgRole,
+            liveActivity: task.liveActivity,
+            resultReport: task.resultReport,
+            teamStop: task.teamStop
         )
     }
 
@@ -913,7 +924,10 @@ final class TasksStore {
             startDate: t.startDate, endDate: t.endDate, unread: t.unread,
             parentTaskId: t.parentTaskId,
             userStatus: t.userStatus,
-            orgRole: t.orgRole
+            orgRole: t.orgRole,
+            liveActivity: t.liveActivity,
+            resultReport: t.resultReport,
+            teamStop: t.teamStop
         )
     }
 

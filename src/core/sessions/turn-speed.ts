@@ -48,6 +48,9 @@ interface MessageUsage {
   cache_creation_input_tokens?: number;
   cache_read_input_tokens?: number;
   output_tokens?: number;
+  /** The cache write split by lifetime: pricing needs it (a 1h write costs more), and prices
+   *  nothing without it once a write happened. */
+  cache_creation?: { ephemeral_5m_input_tokens?: number; ephemeral_1h_input_tokens?: number };
 }
 
 interface OpenMessage {
@@ -199,6 +202,7 @@ export class TurnSpeedMeter {
         output_tokens: open.outputTokens ?? Math.round(open.chars / CHARS_PER_TOKEN),
         cache_creation_input_tokens: open.usage.cache_creation_input_tokens ?? 0,
         cache_read_input_tokens: open.usage.cache_read_input_tokens ?? 0,
+        ...(open.usage.cache_creation && typeof open.usage.cache_creation === 'object' ? { cache_creation: open.usage.cache_creation } : {}),
       });
     }
   }

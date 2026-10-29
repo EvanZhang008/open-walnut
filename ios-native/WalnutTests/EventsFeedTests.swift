@@ -312,4 +312,29 @@ final class EventsFeedTests: XCTestCase {
                                        message: "effort not supported", serverHash: nil, serverContent: nil)
         XCTAssertEqual(SessionControlsSheet.friendlyControlError(conflict), "effort not supported")
     }
+
+    // MARK: - task-activity (a running task's live action)
+
+    func testTaskActivitySetsAndClearsTheRowsLiveAction() {
+        let rows = [makeTask("a"), makeTask("b")]
+        let live = WalnutLiveActivity(kind: "tool", tool: "Bash", target: "make", since: "2026-08-07T00:00:00Z")
+        let set = EventsFeedReducer.setActivity(rows, id: "b", live)
+        XCTAssertTrue(set.changed)
+        XCTAssertEqual(set.rows[1].liveActivity, live)
+        XCTAssertNil(set.rows[0].liveActivity)
+        XCTAssertFalse(EventsFeedReducer.setActivity(set.rows, id: "b", live).changed)
+        XCTAssertFalse(EventsFeedReducer.setActivity(set.rows, id: "missing", live).changed)
+        let cleared = EventsFeedReducer.setActivity(set.rows, id: "b", nil)
+        XCTAssertTrue(cleared.changed)
+        XCTAssertNil(cleared.rows[1].liveActivity)
+    }
+
+    func testTaskRowDecodesItsLiveActionAndAnOlderRowDecodesWithout() throws {
+        let json = #"{"id":"t1","title":"x","status":"in_progress","phase":"IN_PROGRESS","priority":"none","project":"","live_activity":{"kind":"tool","tool":"Edit","target":"core/x.ts","since":"2026-10-28T10:00:00.123Z","costUsd":0.5,"extraField":1}}"#
+        let t = try JSONDecoder().decode(WalnutTask.self, from: Data(json.utf8))
+        XCTAssertEqual(t.liveActivity?.tool, "Edit")
+        XCTAssertEqual(t.liveActivity?.costUsd, 0.5)
+        let old = #"{"id":"t2","title":"x","status":"todo","phase":"TODO","priority":"none","project":""}"#
+        XCTAssertNil(try JSONDecoder().decode(WalnutTask.self, from: Data(old.utf8)).liveActivity)
+    }
 }

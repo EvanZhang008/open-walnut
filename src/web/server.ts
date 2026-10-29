@@ -1893,6 +1893,9 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   if (bootPolicy('wait-until')) {
     const { startWaitUntilWatch } = await import('../core/task-wait-until.js')
     startWaitUntilWatch()
+    // Main's and the leads' promised follow-ups (src/core/sessions/promise-alarm.ts), same clock policy.
+    const { startPromiseAlarms } = await import('../core/sessions/promise-alarm.js')
+    startPromiseAlarms({ ephemeral: IS_EPHEMERAL })
   }
 
   // ── The one status the user sees per task (src/core/user-status-sync.ts).
@@ -1905,6 +1908,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     // A completed task's own "please check this" letters leave the inbox (src/core/human-inbox/complete-archive.ts).
     const { startCompleteArchive } = await import('../core/human-inbox/complete-archive.js')
     startCompleteArchive()
+    // Subtask completions held for an idle leader until its team settles (src/core/sessions/subtask-batch.ts).
+    void import('../core/sessions/subtask-notices.js').then((m) => m.resumeHeldSubtaskNotices()).catch(() => {})
   }
 
   // ── Task workspaces: cleanup on complete/delete + resume interrupted jobs (src/core/workspaces/).

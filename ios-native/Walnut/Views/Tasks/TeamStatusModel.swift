@@ -155,6 +155,27 @@ enum TeamStatusModel {
         state(of: task) == .waiting && task.userStatus?.kind == "stuck"
     }
 
+    /// A due date in a few words: "today", "Oct 30", "today 6:00 PM" (twin of the web Board's formatDue).
+    static func dueText(_ at: String, now: Date = Date()) -> String {
+        let raw = at.trimmingCharacters(in: .whitespaces)
+        let bare = raw.range(of: #"^\d{4}-\d{2}-\d{2}$"#, options: .regularExpression) != nil
+        let date: Date?
+        if bare {
+            let f = DateFormatter()
+            f.calendar = Calendar(identifier: .gregorian)
+            f.locale = Locale(identifier: "en_US_POSIX")
+            f.dateFormat = "yyyy-MM-dd"
+            date = f.date(from: raw)
+        } else {
+            date = WalnutTask.parseISO(raw)
+        }
+        guard let d = date else { return raw }
+        let time = d.formatted(date: .omitted, time: .shortened)
+        if Calendar.current.isDate(d, inSameDayAs: now) { return bare ? "today" : "today \(time)" }
+        let day = d.formatted(.dateTime.month(.abbreviated).day())
+        return bare ? day : "\(day) \(time)"
+    }
+
     /// A waiting row's line: "Waiting on another task: …", "Stuck. …", "Not started yet".
     static func waitingLine(_ s: WalnutUserStatus?) -> String {
         let on = (s?.waitingOn ?? "").trimmingCharacters(in: .whitespaces)
@@ -173,3 +194,60 @@ enum TeamStatusModel {
         }
     }
 }
+
+/// The phone's twin of `formatLiveActivity` (`src/core/live-activity.ts`): a running task's
+/// live action in one line, against the phone's clock. Pinned in `TeamStatusModelTests`.
+enum LiveActivityFormat {
+    /// No tool call for this long (and none running) reads as gone quiet (LIVE_QUIET_MS).
+    static let quietAfter: TimeInterval = 5 * 60
+
+    struct Line: Equatable {
+        let action: String
+        let quiet: Bool
+        let text: String
+    }
+
+    /// "40 s", "12 min", "1 h 5 min".
+    static func span(_ seconds: TimeInterval) -> String {
+        let s = max(0, Int(seconds.isFinite ? seconds : 0))
+        if s < 60 { return "\(s) s" }
+        let min = s / 60
+        if min < 60 { return "\(min) min" }
+        let rest = min % 60
+        return rest == 0 ? "\(min / 60) h" : "\(min / 60) h \(rest) min"
+    }
+
+    static func cost(_ usd: Double?) -> String? {
+        guard let usd, usd.isFinite, usd > 0 else { return nil }
+        return usd < 0.01 ? "<$0.01" : String(format: "$%.2f", usd)
+    }
+
+    /// An MCP tool loses its `mcp__server__` prefix.
+    static func toolLabel(_ name: String) -> String {
+        guard name.hasPrefix("mcp__") else { return name }
+        let rest = name.dropFirst(5)
+        guard let sep = rest.range(of: "__") else { return name }
+        return "\(rest[..<sep.lowerBound]): \(rest[sep.upperBound...])"
+    }
+
+    static func line(_ a: WalnutLiveActivity, now: Date = AppClock.now()) -> Line {
+        let since = WalnutTask.parseISO(a.since)
+        let turn = WalnutTask.parseISO(a.turnStartedAt)
+        let quietFrom = WalnutTask.parseISO(a.lastToolAt) ?? turn ?? since
+        let quiet = a.kind != "tool" && quietFrom.map { now.timeIntervalSince($0) >= quietAfter } == true
+        let spanText = since.map { span(now.timeIntervalSince($0)) }
+        let action: String
+        if quiet, let from = quietFrom {
+            action = "No tool call for " + span(now.timeIntervalSince(from))
+        } else if a.kind == "tool" {
+            let label = toolLabel(a.tool ?? "a tool")
+            let head = (a.target?.isEmpty == false) ? "\(label): \(a.target!)" : label
+            action = head + (spanText.map { " · \($0)" } ?? "")
+        } else {
+            action = (a.kind == "writing" ? "Writing" : "Thinking") + (spanText.map { " · \($0)" } ?? "")
+        }
+        let parts = [action, turn.map { "turn " + span(now.timeIntervalSince($0)) }, cost(a.costUsd)].compactMap { $0 }
+        return Line(action: action, quiet: quiet, text: parts.joined(separator: " · "))
+    }
+}
+

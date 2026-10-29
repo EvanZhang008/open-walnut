@@ -326,6 +326,7 @@ export function statusInputOf(task: Task, facts: StatusFacts): UserStatusInput {
     // The task's own session when it has one: an older session's pending report says nothing of this turn.
     reportPending: task.session_id ? isReportPending(task.session_id) : own.some(([sid]) => isReportPending(sid)),
     isLead: task.org_role === 'lead',
+    dueDate: task.due_date ?? null,
   };
 }
 

@@ -100,6 +100,19 @@ describe('mergeFetchedTasks', () => {
     expect(listRowEqual(b, { ...b, brief } as Task)).toBe(false);
   });
 
+  it('detects a Partial result, its settle, and a team stop or resume, whose writes leave updated_at alone', () => {
+    const a = task({ id: 'a' });
+    const partial = { via: 'complete', at: '2026-10-28T10:00:00Z', not_done: ['iOS'] } as Task['result_report'];
+    expect(listRowEqual(a, { ...a, result_report: partial } as Task)).toBe(false);
+    const p = { ...a, result_report: partial } as Task;
+    expect(listRowEqual(p, { ...p, result_report: { ...partial!, not_done: ['iOS'] } } as Task)).toBe(true);
+    expect(listRowEqual(p, { ...p, result_report: { ...partial!, settled: { at: '2026-10-28T11:00:00Z', by: 'human', how: 'taken' } } } as Task)).toBe(false);
+    const stop = { at: '2026-10-28T12:00:00Z', by: 'human', when: 'now', members: [] } as Task['team_stop'];
+    expect(listRowEqual(a, { ...a, team_stop: stop } as Task)).toBe(false);
+    const st = { ...a, team_stop: stop } as Task;
+    expect(listRowEqual(st, { ...st, team_stop: null } as Task)).toBe(false);
+  });
+
   it('detects a VP renamed, instructed or given a project on the Org page, whose writes leave updated_at alone', () => {
     const lead = task({ id: 'l', org_role: 'lead', project: 'Garden' } as Partial<Task>);
     const same = { ...lead } as Task;

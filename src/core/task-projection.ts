@@ -36,6 +36,7 @@ import {
   writeProjectionCache,
 } from './projection-cache.js'
 import type { Task } from './types.js'
+import { isPartial } from './peers/structured-reply.js'
 
 /** LEGACY git-synced path — dual-written while `sync.legacy_projection_files`
  *  is on (see projection-cache.ts); cache/projections/tasks.json is the live copy. */
@@ -98,6 +99,12 @@ export interface ProjectedTask {
    *  2026-10): state needs | working | waiting | done, plus ask / kind / waitingOn / now /
    *  next / at / stale. Older clients ignore it. */
   user_status?: UserStatus
+  /** Its latest result left things not done and nobody took them up (peers/structured-reply.ts;
+   *  additive, 2026-10): the phone shows Partial and the list. Omitted otherwise. */
+  result_report?: { at: string; not_done: string[]; result?: string }
+  /** A team stop is in force under it (core/sessions/team-stop.ts; additive, 2026-10): the phone
+   *  offers Resume the team. Omitted otherwise. */
+  team_stop?: { at: string; by: string }
   /** Kept to a plugin's own view (Task.plugin_only; additive, 2026-10): the v1 lists and the
    *  events feed leave such rows out, so a phone never shows them. */
   plugin_only?: string
@@ -190,6 +197,11 @@ export function projectTask(t: Task): ProjectedTask {
     ...(t.user_status && t.status !== 'done' && t.phase !== 'COMPLETE' ? { user_status: t.user_status } : {}),
     ...(t.plugin_only ? { plugin_only: t.plugin_only } : {}),
     ...(t.org_role ? { org_role: t.org_role } : {}),
+    ...(isPartial(t.result_report) ? { result_report: {
+      at: t.result_report!.at, not_done: t.result_report!.not_done!,
+      ...(t.result_report!.result ? { result: t.result_report!.result } : {}),
+    } } : {}),
+    ...(t.team_stop ? { team_stop: { at: t.team_stop.at, by: t.team_stop.by } } : {}),
   }
 }
 

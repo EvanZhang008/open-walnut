@@ -87,6 +87,7 @@ export const EventNames = {
   SESSION_BACKGROUND_TASKS: 'session:background-tasks',
   SESSION_USAGE_UPDATE: 'session:usage-update',
   SESSION_TURN_SPEED: 'session:turn-speed',
+  SESSION_LIVE_ACTIVITY: 'session:live-activity',
   SESSION_SETTINGS_APPLIED: 'session:settings-applied',
   SESSION_RECAP_UPDATED: 'session:recap-updated',
   SESSION_TURN_SETTLED: 'session:turn-settled',

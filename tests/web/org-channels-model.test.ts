@@ -242,4 +242,22 @@ describe('org channels', () => {
     expect(channels.main.latest).toMatch(/^2 VPs/)
     expect(mainTeamColumns(channels.rows).flatMap((c) => c.items.map((i) => i.title)).sort()).toEqual(['Marina', 'Other'])
   })
+
+  it('a team names its running tasks for the live action line, itself first, a worker by title', () => {
+    const list = tasks.map((x) => (x.id === 'w3' ? { ...x, phase: 'IN_PROGRESS' as const, user_status: { state: 'working' as const } } : x))
+    const walnut = buildChannels(buildOrgTree(list), list, noAlerts).rows.find((r) => r.name === 'Walnut')!
+    const working = teamColumns(walnut, list).find((c) => c.key === 'working')!
+    expect(working.items.map((i) => [i.id, i.live])).toEqual([
+      ['w2', [{ id: 'w3', title: 'w3 title' }]],
+      ['w1', [{ id: 'w1' }]],
+    ])
+    // A team with nothing running carries no live line; one that needs the user still shows what runs.
+    const asking = list.map((x) => (x.id === 'w2' ? { ...x, user_status: { state: 'needs' as const, ask: 'Pick one' } } : x))
+    const askRow = buildChannels(buildOrgTree(asking), asking, noAlerts).rows.find((r) => r.name === 'Walnut')!
+    const needs = teamColumns(askRow, asking).find((c) => c.key === 'needs')!
+    expect(needs.items.find((i) => i.id === 'w2')?.live).toEqual([{ id: 'w3', title: 'w3 title' }])
+    const plain = buildChannels(buildOrgTree(tasks), tasks, noAlerts).rows.find((r) => r.name === 'Walnut')!
+    expect(teamColumns(plain, tasks).flatMap((c) => c.items).filter((i) => i.live).map((i) => i.id)).toEqual(['w1'])
+  })
 })
+

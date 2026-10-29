@@ -23,6 +23,7 @@ export default defineConfig({
       '@open-walnut/ask-list': path.resolve(import.meta.dirname, 'src/core/sessions/ask-list.ts'),
       '@open-walnut/org-tree': path.resolve(import.meta.dirname, 'src/core/org/org-tree.ts'),
       '@open-walnut/user-status': path.resolve(import.meta.dirname, 'src/core/user-status.ts'),
+      '@open-walnut/live-activity': path.resolve(import.meta.dirname, 'src/core/live-activity.ts'),
       '@open-walnut/companion-keep': path.resolve(import.meta.dirname, 'src/core/replication/companion-keep.ts'),
       '@open-walnut/history-turn-window': path.resolve(import.meta.dirname, 'src/lib/history-turn-window.ts'),
       '@open-walnut/history-injected-banner': path.resolve(import.meta.dirname, 'src/lib/history-injected-banner.ts'),

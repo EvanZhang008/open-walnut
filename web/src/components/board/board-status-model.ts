@@ -10,7 +10,7 @@
  */
 import type { Task } from '@open-walnut/core';
 import {
-  USER_STATES, countUserStates, fallbackUserState,
+  USER_STATES, countUserStates, dueAtMs, fallbackUserState,
   type UserState, type UserStatus, type UserStatusCounts, type WaitKind,
 } from '@open-walnut/user-status';
 import { teamChildren, walkTeam } from './board-overview-model';
@@ -80,14 +80,25 @@ export function buildStatusBoard(input: {
     });
   }
   const newest = (a: StatusRow, b: StatusRow) => rowTime(b) - rowTime(a);
-  groups.needs.sort(newest);
-  groups.working.sort(newest);
+  // Past or near its due date goes first in its group, the earliest deadline first (user-status.ts `due`).
+  const byDue = (order: (a: StatusRow, b: StatusRow) => number) => (a: StatusRow, b: StatusRow) => {
+    const da = a.status.due ? dueAtMs(a.status.due.at) : NaN;
+    const db = b.status.due ? dueAtMs(b.status.due.at) : NaN;
+    if (Number.isFinite(da) || Number.isFinite(db)) {
+      if (!Number.isFinite(db)) return -1;
+      if (!Number.isFinite(da)) return 1;
+      if (da !== db) return da - db;
+    }
+    return order(a, b);
+  };
+  groups.needs.sort(byDue(newest));
+  groups.working.sort(byDue(newest));
   groups.done.sort(newest);
-  groups.waiting.sort((a, b) => {
+  groups.waiting.sort(byDue((a, b) => {
     const ka = WAIT_ORDER[a.status.kind ?? 'other'] ?? 6;
     const kb = WAIT_ORDER[b.status.kind ?? 'other'] ?? 6;
     return ka !== kb ? ka - kb : newest(a, b);
-  });
+  }));
   const counts = countUserStates(USER_STATES.flatMap((s) => groups[s].map((r) => r.status)));
   return { counts, groups, doneWindowDays: input.doneWindowDays };
 }

@@ -694,10 +694,21 @@ describe('performSessionSend — in_reply_to', () => {
 
     expect(result.repliedTo).toBe(rq.id);
     expect(sendMessageToSession).toHaveBeenCalledTimes(1);
-    // The earlier settle stands — a late answer does not rewrite history.
+    // An expired request was still open (overdue): the late answer closes it, and the
+    // timeout it had stays on the row as history.
     const row = await getSessionRequest(rq.id);
-    expect(row?.status).toBe('expired');
+    expect(row?.status).toBe('replied');
+    expect(row?.lateFrom).toBe('expired');
     expect(row?.outcome).toBe('timeout');
+  });
+
+  it('a late reply after a turn-end notice leaves that notice\'s verdict alone', async () => {
+    const rq = await armRequest();
+    await settleNotified(rq.id, 'completed');
+    await performSessionSend({ text: 'here it is', inReplyTo: rq.id, callerSid: TARGET });
+    const row = await getSessionRequest(rq.id);
+    expect(row?.status).toBe('notified');
+    expect(row?.lateFrom).toBeUndefined();
   });
 
   it('410s when the asking session is gone', async () => {

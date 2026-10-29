@@ -40,6 +40,7 @@ import { Router, type Request, type Response, type NextFunction } from 'express'
 import { log } from '../../logging/index.js'
 import { bus, EventNames } from '../../core/event-bus.js'
 import { CLOUD_MODE } from '../../constants.js'
+import { role } from '../../core/server-role.js'
 import type { SessionEffort, Task, TaskPhase } from '../../core/types.js'
 import { isKnownEngine } from '../../core/agents/engine-registry.js'
 import { PIN_TIER_POLICY, SESSION_ENGINE_IDS, migrateFocusTier } from '../../core/types.js'
@@ -240,13 +241,35 @@ taskV1Router.post('/tasks/:id/complete', async (req: Request, res: Response, nex
       // worker is not told what it just did, 2026-10-02).
       const rawActor = req.headers['x-walnut-caller-sid']
       const actorSid = (Array.isArray(rawActor) ? rawActor[0] : rawActor)?.trim() || undefined
+      const b = (req.body ?? {}) as Record<string, unknown>
+      const { readStructuredReply } = await import('../../core/peers/structured-reply.js')
+      const fields = readStructuredReply(b)
+      // A session closing ANOTHER task the user may still be using (2026-10-28: a lead completed
+      // the task the user had open in a terminal) is refused with the reasons, unless it says why.
+      const { admitCompleteOfOther } = await import('../../core/sessions/complete-in-use.js')
+      const admit = await admitCompleteOfOther(id, actorSid, { force: b.force === true, reason: typeof b.reason === 'string' ? b.reason : undefined, fields })
+      if (!admit.ok) {
+        sendError(res, 409, 'task_in_use', admit.message, { reasons: admit.reasons })
+        return
+      }
+      // What came of it, and what is not done (core/peers/structured-reply.ts): the Board, the
+      // Brief and its parent's open items read Partial from a non-empty not_done. Written BEFORE
+      // the completion, so the parent's completed notice and the completion event carry it; a
+      // completion that says nothing more still ends an earlier Partial (COMPLETE is verified).
+      const { isPartial } = await import('../../core/peers/structured-reply.js')
+      const before = await tm.getTask(id).catch(() => null)
+      let wroteReport = false
+      if (before && before.phase !== 'COMPLETE' && (fields || isPartial(before.result_report))) {
+        const { noteResultReport } = await import('../../core/sessions/session-send-core.js')
+        wroteReport = !!(await noteResultReport(before.id, { via: 'complete', by: admit.callerTaskId ? `task:${admit.callerTaskId}` : 'human' }, fields, { emit: false }))
+      }
       const result = await tm.completeTask(id, actorSid ? { actorSid } : undefined)
       log.web.info('task completed via api-v1', { taskId: result.task.id, ...(actorSid ? { actorSid } : {}) })
       // fields (additive): scopes the replica outbox op to what completion
       // actually changes (auto-unpin was removed 2026-08-26 — pins persist).
       bus.emit(EventNames.TASK_COMPLETED, {
         task: result.task,
-        fields: ['status', 'phase', 'completed_at'],
+        fields: ['status', 'phase', 'completed_at', ...(wroteReport ? ['result_report'] : [])],
       }, ['web-ui'], { source: 'api-v1' })
       // Open subtasks never block a completion; the caller is told which ones
       // keep running without it (additive, present only when there are any).
@@ -273,6 +296,96 @@ taskV1Router.post('/tasks/:id/complete', async (req: Request, res: Response, nex
 // session-runner resolve cwd from the task/project chain. A live session →
 // 409 with existing_session_id (use session_send). Core:
 // core/sessions/task-start.ts (shared with the CLI's direct escape hatch).
+// POST /api/v1/tasks/:id/not-done { how: 'taken' | 'dropped', note? } → { task }: the not-done items
+// of its last result are taken up or dropped, so it stops reading Partial (core/peers/structured-reply.ts).
+taskV1Router.post('/tasks/:id/not-done', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const id = paramStr(req.params.id)
+    const b = (req.body ?? {}) as Record<string, unknown>
+    if (b.how !== 'taken' && b.how !== 'dropped') {
+      sendError(res, 400, 'bad_request', 'how must be "taken" or "dropped"')
+      return
+    }
+    const note = typeof b.note === 'string' && b.note.trim() ? b.note.trim().slice(0, 500) : undefined
+    const rawActor = req.headers['x-walnut-caller-sid']
+    const actorSid = (Array.isArray(rawActor) ? rawActor[0] : rawActor)?.trim() || undefined
+    let by = 'human'
+    if (actorSid) {
+      const { resolveCaller } = await import('../../core/sessions/session-send-core.js')
+      const caller = await resolveCaller(actorSid).catch(() => null)
+      if (caller?.kind === 'session' && caller.record.taskId) by = `task:${caller.record.taskId}`
+    }
+    const tm = await import('../../core/task-manager.js')
+    try {
+      const task = await tm.getTask(id)
+      const report = task.result_report
+      if (!report?.not_done?.length) {
+        sendError(res, 409, 'not_partial', `"${task.title}" (${task.id}) has no not-done items to settle`)
+        return
+      }
+      const settled = { at: new Date().toISOString(), by, how: b.how as 'taken' | 'dropped', ...(note ? { note } : {}) }
+      // Against the stored row: a new result written meanwhile is not overwritten with the old one.
+      const updated = await tm.updateTaskRaw(task.id, (cur) => (cur.result_report?.at === report.at ? { result_report: { ...cur.result_report, settled } } : null), { source: 'result-report', push: false })
+      log.web.info('not-done items settled', { taskId: task.id, how: b.how, by })
+      if (updated?.task) bus.emit(EventNames.TASK_UPDATED, { task: updated.task }, ['web-ui'], { source: 'result-report' })
+      res.json({ task: updated?.task ?? { ...task, result_report: { ...report, settled } } })
+    } catch (err) {
+      if (sendTaskManagerError(res, err)) return
+      throw err
+    }
+  } catch (err) {
+    next(err)
+  }
+})
+
+// POST /api/v1/tasks/:id/team-stop { when?: 'now' | 'turn_end', include_self? } → TeamStopResult:
+// stop every open task under it (its own session too unless include_self is false; never the
+// caller's own), pause their armed triggers and take off their wake clocks (core/sessions/team-stop.ts).
+// POST /api/v1/tasks/:id/team-resume → TeamResumeResult: turn those triggers and clocks back on.
+async function callerBy(req: Request): Promise<{ by: string; callerSid?: string }> {
+  const raw = req.headers['x-walnut-caller-sid']
+  const callerSid = (Array.isArray(raw) ? raw[0] : raw)?.trim() || undefined
+  if (!callerSid) return { by: 'human' }
+  const { resolveCaller } = await import('../../core/sessions/session-send-core.js')
+  const caller = await resolveCaller(callerSid).catch(() => null)
+  return { by: caller?.kind === 'session' && caller.record.taskId ? `task:${caller.record.taskId}` : 'human', callerSid }
+}
+
+taskV1Router.post('/tasks/:id/team-stop', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    if (role() === 'replica') { sendError(res, 501, 'not_supported_cloud', 'A team stop runs on the primary box'); return }
+    const b = (req.body ?? {}) as Record<string, unknown>
+    if (b.when !== undefined && b.when !== 'now' && b.when !== 'turn_end') { sendError(res, 400, 'bad_request', "when must be 'now' or 'turn_end'"); return }
+    const { stopTeam } = await import('../../core/sessions/team-stop.js')
+    try {
+      const out = await stopTeam(paramStr(req.params.id), {
+        ...(await callerBy(req)), when: b.when as 'now' | 'turn_end' | undefined, includeRoot: b.include_self !== false,
+      })
+      res.json(out)
+    } catch (err) {
+      if (sendTaskManagerError(res, err)) return
+      throw err
+    }
+  } catch (err) {
+    next(err)
+  }
+})
+
+taskV1Router.post('/tasks/:id/team-resume', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    if (role() === 'replica') { sendError(res, 501, 'not_supported_cloud', 'A team resume runs on the primary box'); return }
+    const { resumeTeam } = await import('../../core/sessions/team-stop.js')
+    try {
+      res.json(await resumeTeam(paramStr(req.params.id), { by: (await callerBy(req)).by }))
+    } catch (err) {
+      if (sendTaskManagerError(res, err)) return
+      throw err
+    }
+  } catch (err) {
+    next(err)
+  }
+})
+
 taskV1Router.post('/tasks/:id/start', async (req: Request, res: Response, next: NextFunction) => {
   try {
     // Class C on a REPLICA: the cloud box has no session-runner/daemon, so the

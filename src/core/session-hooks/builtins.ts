@@ -27,7 +27,7 @@ import { engineCaps, isAcpEngine } from '../agents/engine-registry.js';
 import { hintDriftHook } from '../hints/hint-drift.js';
 import { toDisplayedUserText } from '../sessions/reference-cards.js';
 import { isAwaitingTurnEnd } from '../sessions/self-complete-stop.js';
-import { briefMoveLines, briefPrompt, keepsBrief, readBrief } from '../sessions/brief.js';
+import { briefMoveLines, briefPrompt, briefStillOpenLines, keepsBrief, overdueAsks, readBrief } from '../sessions/brief.js';
 import { briefFixPrompt, briefIssues, briefNeedsRewrite, briefVpLines, completeBriefRefs, formatBriefIssues, type BriefIssue } from '../sessions/brief-rules.js';
 import { agentMemoryPrompt, applyAgentMemoryAnswer, keepsAgentMemory, readAgentMemoryField, splitAgentMemory } from '../sessions/agent-memory.js';
 import { withoutLeadingRiders } from '../../lib/history-walnut-riders.js';
@@ -923,6 +923,7 @@ export async function runTriage(p: OnTurnCompletePayload, opts: { final?: boolea
           briefTasks = all;
           brief = {
             hadBrief: !!taskRow.brief?.text, moves: briefMoveLines(taskRow, all), ownId: taskRow.id,
+            stillOpen: briefStillOpenLines(taskRow, all, await overdueAsks().catch(() => [])),
             main: taskRow.org_role === 'main', vps: briefVpLines(taskRow, all),
             ...(taskRow.brief?.issues?.length ? { issues: formatBriefIssues(taskRow.brief.issues) } : {}),
           };
@@ -1178,6 +1179,9 @@ export async function runTriage(p: OnTurnCompletePayload, opts: { final?: boolea
           // what every surface counts (sessions/report-phase.ts).
           const { applyReportPhase } = await import('../sessions/report-phase.js');
           await applyReportPhase(taskId, p.sessionId, statusReport, turnEnded);
+          // A lead's or Main's promise with nothing to bring it back gets a follow-up (promise-alarm.ts).
+          const { notePromise } = await import('../sessions/promise-alarm.js');
+          await notePromise(taskId, statusReport);
         }
       } catch (err) {
         log.session.debug('turn-complete-summary: status report persist skipped', {
@@ -2378,8 +2382,11 @@ export const sessionRequestWatchHook: SessionHookDefinition = {
       const { repliedRecently } = await import('../session-requests.js');
       const notices = await import('../sessions/subtask-notices.js');
       const answeredLately = await repliedRecently(parentSids, task.id, notices.RECENT_REPLY_MS).catch(() => false);
+      const { stoppedByTeam } = await import('../sessions/team-stop.js');
       const parentHears = !pending.some((r) => parentSids.has(r.fromSessionId))
         && !(actorSid && parentSids.has(actorSid))
+        // A team stop just stopped it: whoever stopped the team knows.
+        && !(kind !== 'completed' && kind !== 'error' && stoppedByTeam(task.id))
         && !(kind === 'stopped' && answeredLately)
         // The parent sent the message itself (it heard at the park), or the user has the
         // session open in a terminal: the task is in use, not failed, and the parent has

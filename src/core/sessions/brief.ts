@@ -11,7 +11,10 @@
  *   - the page shows every task it names with its live status, and lists what moved after it was
  *     written (briefMoves in src/core/user-status.ts), so an idle owner's Brief never reads stale.
  */
-import { BRIEF_MAX_CHARS, COMPLETE_IS_VERIFIED, USER_STATE_LABELS, briefMoves, fallbackUserState, type TaskBrief } from '../user-status.js';
+import {
+  BRIEF_MAX_CHARS, COMPLETE_IS_VERIFIED, USER_STATE_LABELS, briefMentions, briefMoves, briefStillOpen, fallbackUserState,
+  type StillOpenAsk, type TaskBrief,
+} from '../user-status.js';
 import type { Task } from '../types.js';
 import { briefVpOf } from './brief-rules.js';
 
@@ -36,11 +39,72 @@ export function briefMoveLines(owner: Task, tasks: readonly Task[]): string[] {
   });
 }
 
+/** Every overdue request still open (session-requests.ts), by the tasks of its two sides. */
+export async function overdueAsks(now = Date.now()): Promise<StillOpenAsk[]> {
+  const { overdueOpenRequests } = await import('../session-requests.js');
+  const rows = await overdueOpenRequests(now).catch(() => []);
+  if (rows.length === 0) return [];
+  const { getSessionByClaudeId } = await import('../session-tracker.js');
+  const taskOf = new Map<string, string | undefined>();
+  for (const r of rows) {
+    if (!taskOf.has(r.fromSessionId)) taskOf.set(r.fromSessionId, (await getSessionByClaudeId(r.fromSessionId).catch(() => undefined))?.taskId);
+  }
+  // A request whose asker or target task has since closed waits for nothing any more.
+  const { getTask } = await import('../task-manager.js');
+  const closed = new Map<string, boolean>();
+  const isClosed = async (id: string | undefined): Promise<boolean> => {
+    if (!id) return false;
+    if (!closed.has(id)) {
+      const t = await getTask(id).catch(() => null);
+      closed.set(id, !!t && (t.phase === 'COMPLETE' || t.status === 'done'));
+    }
+    return closed.get(id)!;
+  };
+  const out: StillOpenAsk[] = [];
+  for (const r of rows) {
+    const fromTaskId = taskOf.get(r.fromSessionId);
+    if (await isClosed(fromTaskId) || await isClosed(r.toTaskId)) continue;
+    out.push({ id: r.id, ...(fromTaskId ? { fromTaskId } : {}), ...(r.toTaskId ? { toTaskId: r.toTaskId } : {}), preview: r.preview, createdAt: r.createdAt });
+  }
+  return out;
+}
+
+/** What is still open in the team (briefStillOpen), as lines for the self-report prompt. */
+export function briefStillOpenLines(owner: Task, tasks: readonly Task[], overdue: readonly StillOpenAsk[], now = Date.now()): string[] {
+  // Titles and agent words are data inside the prompt: one line each, no markup of their own.
+  const flat = (v: string) => v.replace(/\s+/g, ' ').trim().replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const ref = (t: Task) => `<task-ref id="${t.id}" label="${flat(t.title).replace(/"/g, '&quot;')}"/>`;
+  const open = briefStillOpen(owner, tasks, { mentioned: briefMentions(owner.brief?.text ?? ''), overdue, now });
+  const byId = new Map(tasks.map((t) => [t.id, t] as const));
+  const span = (ms: number) => {
+    const h = Math.max(1, Math.round(ms / 3_600_000));
+    return h < 48 ? `${h} hour${h === 1 ? '' : 's'}` : `${Math.round(h / 24)} days`;
+  };
+  const lines: string[] = [];
+  for (const t of open.unmentioned) {
+    const state = USER_STATE_LABELS[t.user_status?.state ?? fallbackUserState(t.phase, t.status)];
+    lines.push(`- ${ref(t)}: ${state}, not in your last Brief`);
+  }
+  if (open.moreUnmentioned > 0) lines.push(`- and ${open.moreUnmentioned} more open tasks not in your last Brief`);
+  for (const p of open.partial) lines.push(`- ${ref(p.task)}: Partial, not done: ${flat(p.notDone.join('; ')).slice(0, 300)}`);
+  for (const r of open.overdue) {
+    const from = r.fromTaskId ? byId.get(r.fromTaskId) : undefined;
+    const to = r.toTaskId ? byId.get(r.toTaskId) : undefined;
+    lines.push(`- a request${from ? ` from ${ref(from)}` : ''}${to ? ` to ${ref(to)}` : ''} is overdue with no reply: "${flat(r.preview).slice(0, 120)}"`);
+  }
+  for (const d of open.due) lines.push(`- ${ref(d.task)}: ${d.state === 'overdue' ? 'past its due date' : 'due within a day'} (${d.at})`);
+  for (const pr of open.promises) lines.push(`- ${ref(pr.task)}: said it waits on or will follow up on "${flat(pr.words).slice(0, 120)}"; Walnut's follow-up is ${pr.at}`);
+  for (const w of open.waitingLong) {
+    lines.push(`- ${ref(w.task)}: waiting on ${w.on === 'you' ? 'the user' : 'its lead'} for ${span(now - w.since)}`);
+  }
+  return lines;
+}
+
 /** The self-report's Brief section (after the FOR_USER lines), for Main and leads only. `vps`
  *  (Main's) are the refs it names beside each worker; `issues` what broke the rules last time. */
 export function briefPrompt(opts: {
   hadBrief: boolean; moves: readonly string[]; language?: string; ownId?: string;
-  main?: boolean; vps?: readonly string[]; issues?: readonly string[];
+  main?: boolean; vps?: readonly string[]; issues?: readonly string[]; stillOpen?: readonly string[];
 }): string {
   const moved = opts.moves.length
     ? `\nSince your last Brief, these moved in your team (Walnut's list; each must be right in the new one):\n${opts.moves.join('\n')}`
@@ -49,11 +113,14 @@ export function briefPrompt(opts: {
   const refs = opts.main
     ? `EVERY line, the ones that need the user too, names two tasks: first the <task-ref id="..." label="..."/> of the task doing the work, then the <task-ref/> of the VP who leads it (${own} alone for your own work, the VP alone for the VP's own work).${opts.vps?.length ? `\nYour VPs:\n${opts.vps.join('\n')}` : ''}\n`
     : `EVERY line, the ones that need the user too, starts with the <task-ref id="..." label="..."/> of the task it is about (the worker that owns it; ${own} for your own work). `;
+  const still = opts.stillOpen?.length
+    ? `\nStill open in your team (Walnut's list, from the tasks and requests, not from your memory); cover what needs the user or is at risk, and Walnut shows the rest under your Brief:\n${opts.stillOpen.join('\n')}`
+    : '';
   const broke = opts.issues?.length
     ? `\nWalnut found these lines of your last Brief breaking the rules; the new one must not:\n${opts.issues.join('\n')}`
     : '';
   return `
-Then your BRIEF, the short letter the user reads at the top of your chat instead of scrolling it. ${opts.hadBrief ? 'Rewrite it whole' : 'Write it'} every time (never "unchanged"): Markdown, at most 12 lines, plain words${opts.language ? `, in ${opts.language}` : ''}. First what needs the user (the decision or action), then one line per piece of work: what is done, what it waits on now and on whom. One thing per line: several asks are several lines, each with its task. ${refs}Each line says enough to act on without the chat: which document, repo or release, and exactly what the user must decide or do. Walnut shows each named task's live status beside it, so name tasks with <task-ref/>, never a bare id, and Walnut checks these rules. ${COMPLETE_IS_VERIFIED} Only what needs the user now or changes their picture of the work: a deadline days away, a reminder or a thing for later goes into your own MEMORY.md (asked below), not here. Plain Markdown with no bold labels around the field name. No codenames, hashes or file names.${moved}${broke}
+Then your BRIEF, the short letter the user reads at the top of your chat instead of scrolling it. ${opts.hadBrief ? 'Rewrite it whole' : 'Write it'} every time (never "unchanged"): Markdown, at most 12 lines, plain words${opts.language ? `, in ${opts.language}` : ''}. First what needs the user (the decision or action), then one line per piece of work: what is done, what it waits on now and on whom. One thing per line: several asks are several lines, each with its task. ${refs}Each line says enough to act on without the chat: which document, repo or release, and exactly what the user must decide or do. Walnut shows each named task's live status beside it, so name tasks with <task-ref/>, never a bare id, and Walnut checks these rules. ${COMPLETE_IS_VERIFIED} Only what needs the user now or changes their picture of the work: a deadline days away, a reminder or a thing for later goes into your own MEMORY.md (asked below), not here. Plain Markdown with no bold labels around the field name. No codenames, hashes or file names.${moved}${still}${broke}
 FOR_USER_BRIEF:
 <the letter>`;
 }

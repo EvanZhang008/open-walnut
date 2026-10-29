@@ -5,14 +5,19 @@
  * the rest current: every task it names shows its live status, and what moved in the team since
  * it was written is listed under it. The user answers in the chat.
  */
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { Task } from '@open-walnut/core';
-import { briefMoves, USER_STATE_LABELS, type TaskBrief, type UserState } from '@open-walnut/user-status';
+import {
+  briefMentions, briefMoves, briefStillOpen, resultIsPartial, USER_STATE_LABELS,
+  type StillOpenAsk, type TaskBrief, type UserState,
+} from '@open-walnut/user-status';
+import { apiGet } from '@/api/client';
 import { userStateOf } from '@open-walnut/org-tree';
 import { renderMarkdownWithRefs } from '@/utils/markdown';
 import { useEntityLabelsVersion } from '@/hooks/useEntityLabels';
 import { timeAgo } from '@/utils/time';
 import { decorateBriefHtml } from './org-brief-model';
+import { BriefStillOpenList } from './BriefStillOpen';
 import '@/styles/org-brief.css';
 
 interface Props {
@@ -30,10 +35,11 @@ export function OrgBrief({ owner, tasks, name, onOpenTask, now, folded }: Props)
   const brief = owner?.brief;
   const labels = useEntityLabelsVersion();
   const states = useMemo(() => new Map(tasks.map((t) => [t.id, userStateOf(t)] as const)), [tasks]);
+  const partial = useMemo(() => new Set(tasks.filter((t) => resultIsPartial(t.result_report)).map((t) => t.id)), [tasks]);
   const markup = useMemo(
-    () => (brief?.text ? decorateBriefHtml(renderMarkdownWithRefs(brief.text), states) : ''),
+    () => (brief?.text ? decorateBriefHtml(renderMarkdownWithRefs(brief.text), states, partial) : ''),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [brief?.text, states, labels],
+    [brief?.text, states, partial, labels],
   );
   // React 19 resets innerHTML for every new {__html} object, even with the same string, which
   // drops a selection in the letter on any task update: keep one object per string.
@@ -41,6 +47,11 @@ export function OrgBrief({ owner, tasks, name, onOpenTask, now, folded }: Props)
   const moves = useMemo(
     () => (owner && brief?.at ? briefMoves(owner, tasks, Date.parse(brief.at)) : []),
     [owner, tasks, brief?.at],
+  );
+  const overdue = useOverdueAsks(!!owner);
+  const stillOpen = useMemo(
+    () => (owner && brief?.text ? briefStillOpen(owner, tasks, { mentioned: briefMentions(brief.text), overdue, now }) : null),
+    [owner, tasks, brief?.text, overdue, now],
   );
   const issues = brief?.issues ?? [];
   const onClick = (e: React.MouseEvent) => {
@@ -86,8 +97,27 @@ export function OrgBrief({ owner, tasks, name, onOpenTask, now, folded }: Props)
           </span>
         )}
       </div>
+      {stillOpen && <BriefStillOpenList open={stillOpen} tasks={tasks} states={states} now={now} onOpenTask={onOpenTask} />}
     </div>
   );
+}
+
+/** The overdue requests still open (GET /api/sessions/overdue-requests), refreshed every two minutes. */
+function useOverdueAsks(on: boolean): StillOpenAsk[] {
+  const [rows, setRows] = useState<StillOpenAsk[]>([]);
+  useEffect(() => {
+    if (!on) return;
+    let live = true;
+    const load = () => {
+      apiGet<{ requests?: StillOpenAsk[] }>('/api/sessions/overdue-requests', undefined, { timeoutMs: 8_000, priority: 'low' })
+        .then((r) => { if (live) setRows(Array.isArray(r?.requests) ? r.requests : []); })
+        .catch(() => { /* an older server has no list: nothing overdue is shown */ });
+    };
+    load();
+    const t = setInterval(load, 120_000);
+    return () => { live = false; clearInterval(t); };
+  }, [on]);
+  return rows;
 }
 
 /** What the broken lines miss, in a few words: "no task, no VP". */

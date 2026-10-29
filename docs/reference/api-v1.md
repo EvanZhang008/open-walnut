@@ -849,6 +849,23 @@ reconcile, `NOTES_UPDATED` events) with the web UI's `/api/notes-v2`.
   omitted on every other task: the phone's session menu then offers the agent's
   memory and instructions (`GET /tasks/:id/agent-memory`, `PUT /org/nodes/:id`).
   Additive and optional, so older clients ignore it.
+  `live_activity` (added 2026-10-28) is what a running task's session does now, read by
+  the server from the session's stream (never the model's words), on running rows only:
+  `{ kind: 'tool' | 'thinking' | 'writing', tool?, target?, since, turnStartedAt?,
+  lastToolAt?, costUsd?, sessionId? }`, timestamps ISO; the client computes the spans
+  and shows "No tool call for N min" after five quiet minutes. In memory, never stored,
+  and never sent over the bridge (a phone on the companion gets it from `task-activity`).
+  `result_report` (added 2026-10-28) is present only while the task's latest result
+  (a reply's or a completion's `not_done`) left things not done and nobody settled them:
+  `{ at, not_done: [string], result? }`; show it as Partial. Both additive and optional.
+  `team_stop` (added 2026-10-28) is present while a team stop is in force under the task:
+  `{ at, by }` (`by` is `human` or `task:<id>`); offer Resume the team. Additive and optional.
+  `POST /tasks/:id/team-stop { when?: 'now' | 'turn_end', include_self? }` stops the task
+  and every open task under it (live sessions, never the caller's own; armed triggers
+  paused; `wait_until` and follow-up clocks taken off) and answers `{ root, stopped,
+  atTurnEnd, kept: [{ taskId, sessionId, why }], pausedTriggers, clocksOff, tasks }`;
+  `POST /tasks/:id/team-resume` turns those triggers and clocks back on and answers
+  `{ root, resumedTriggers, clocksOn, skipped }`. Sessions resume on their next message.
   `user_status` (added 2026-10) is the ONE status the user sees, present on open
   tasks: `{ state, kind?, ask?, source?, waitingOn?, until?, now?, next?, at?, stale? }`.
   `state` is `needs` (only what the user alone can decide, approve or do; `ask`
@@ -3402,6 +3419,9 @@ One long-lived SSE stream that pushes slim updates so the app can keep its task 
    - `event: session-upsert` — `data:` one `ProjectedSession` row (`id`, `title`?, `task_id`?, `task_title`?, `project`?, `group_id`?, `group_label`?, `host`, `process_status`, `model`?, `mode`?, `started_at`, `last_active_at`, `message_count`, `cwd`?, `pinned`?, `focus_tier`?, `description`?; absent fields are omitted, not null). Merge by `id` (insert when new).
    - `event: task-upsert` — `data:` one `ProjectedTask` row (same shape as `GET /tasks` rows). Merge by `id`.
    - `event: task-delete` — `data: { "id" }`. Remove the row.
+   - `event: task-activity` (added 2026-10-28) — `data: { "task_id", "activity" }`: the row's
+     `live_activity` changed (`null`: no turn runs). At most one per task every 15 s, a clear at
+     once. Set it on the row by `task_id`; an older client ignores the frame.
 3. `: ping` comment every ~25s (heartbeat; ignore).
 
 **Client contract:** on (re)connect, apply the snapshot as a full replace, then apply live events incrementally. This feed keeps **no replay ring** and ignores `Last-Event-ID` — replaying pre-snapshot history would regress the fresh snapshot (a completed task flipping back to todo). Clients need no replay logic; every gap heals on the next snapshot.

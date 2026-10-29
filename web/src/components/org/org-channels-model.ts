@@ -338,6 +338,9 @@ export interface TeamItem {
   note?: string;
   /** Main's Team: the project row this item selects. */
   rowKey?: string;
+  /** The team's running tasks (itself first, then its workers, with their titles), whose
+   *  live action the row shows (core/live-activity.ts). */
+  live?: { id: string; title?: string }[];
 }
 
 export interface TeamColumn {
@@ -387,10 +390,13 @@ export function teamColumns(row: ChannelRow, tasks: readonly Task[]): TeamColumn
     const column: TeamColumnKey = all.some((x) => alerted.has(x.id) || x.userState === 'needs') ? 'needs'
       : all.some((x) => x.userState === 'working') ? 'working' : 'waiting';
     const note = teamNote(all, byId, column);
+    // Every running task of the team, also under Needs you (its ask leads; what runs shows below).
+    const live = all.flatMap((x, i) => (x.userState === 'working' ? [i === 0 ? { id: x.id } : { id: x.id, title: x.title }] : []));
     return {
       id: n.id, title: n.title, workers: all.length - 1,
       lastAt: Math.max(...all.map((x) => taskTime(byId.get(x.id)))),
       ...(note ? { note } : {}),
+      ...(live.length ? { live } : {}),
       column,
     };
   });

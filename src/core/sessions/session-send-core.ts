@@ -33,6 +33,7 @@ import {
   deletePendingRequest,
   getSessionRequest,
   settleReplied,
+  settleLateReply,
   withdrawRequest,
   type SessionRequest,
 } from '../session-requests.js';
@@ -88,6 +89,9 @@ export interface SessionSendInput {
   reason?: string;
   /** Idempotency id (qm-…) forwarded to the durable queue. */
   messageId?: string;
+  /** A reply's structured fields (peers/structured-reply.ts): `inReplyTo` sends only. The asker
+   *  reads them as sections of the text; a non-empty `not_done` marks the reply Partial. */
+  reply?: { result?: unknown; evidence?: unknown; not_done?: unknown };
   /** Transport-stamped caller session id; undefined = the human's own CLI. */
   callerSid?: string;
   /** Transport-stamped host the calling CLI runs on — labels an ANONYMOUS
@@ -303,6 +307,46 @@ export async function deliverToSession(
   return { delivery: 'queued', messageId: (queued as { id?: string }).id };
 }
 
+/**
+ * A task's latest result (Task.result_report), from a reply or a completion. A reply with fields,
+ * or any completion, replaces it, so a full answer after a partial one clears the Partial mark; a
+ * plain reply writes only to end a Partial of the same request (a quick answer elsewhere settles
+ * nothing, and erases no result).
+ * Best effort: a failed write never fails the reply or the completion.
+ */
+export async function noteResultReport(
+  taskId: string,
+  head: Omit<import('../peers/structured-reply.js').TaskResultReport, 'at' | 'result' | 'evidence' | 'not_done' | 'settled'>,
+  fields: import('../peers/structured-reply.js').StructuredReply | null,
+  opts: { emit?: boolean } = {},
+): Promise<import('../peers/structured-reply.js').TaskResultReport | undefined> {
+  try {
+    const { updateTaskRaw } = await import('../task-manager.js');
+    const report = { ...head, at: new Date().toISOString(), ...(fields ?? {}) };
+    const { isPartial } = await import('../peers/structured-reply.js');
+    // One read-modify-write under the row lock: a settle racing this write is never lost to it.
+    const { task, changed } = await updateTaskRaw(taskId, (cur) => {
+      const was = cur.result_report;
+      // A plain reply carries no result: it only ends a Partial it answers itself (the same
+      // request), and never erases a result written before (a completion's, another reply's).
+      if (!fields && head.via === 'reply' && !(isPartial(was) && was?.request_id === head.request_id)) return null;
+      return { result_report: report };
+    }, { source: 'result-report', push: false });
+    if (!changed) return undefined;
+    // Surfaces learn of it (the Board's Partial); a completion's own event carries it instead.
+    if (opts.emit !== false && task) {
+      const { bus, EventNames } = await import('../event-bus.js');
+      bus.emit(EventNames.TASK_UPDATED, { task }, ['web-ui'], { source: 'result-report' });
+    }
+    return report;
+  } catch (err) {
+    log.session.warn('result not recorded on the task', {
+      taskId, via: head.via, error: err instanceof Error ? err.message : String(err),
+    });
+    return undefined;
+  }
+}
+
 function withTimeout<T>(p: Promise<T>, ms: number): Promise<T | null> {
   let timer: NodeJS.Timeout | undefined;
   const onTimeout = new Promise<null>((resolve) => {
@@ -402,11 +446,16 @@ async function callerLeads(caller: CallerIdentity, taskId: string | undefined): 
 
 /** The one send entry point (route + gateway both land here). */
 export async function performSessionSend(input: SessionSendInput): Promise<SessionSendResult> {
-  const text = (input.text ?? '').trim();
-  if (!text) throw new SendError('bad_request', 'text must be a non-empty string');
+  const { readStructuredReply, composeReplyText } = await import('../peers/structured-reply.js');
+  const fields = input.reply ? readStructuredReply(input.reply) : null;
+  if (fields && !input.inReplyTo) {
+    throw new SendError('bad_request', 'result, evidence and not_done answer a request: pass in_reply_to (rq-…)');
+  }
+  const text = composeReplyText(input.text, fields).trim();
+  if (!text) throw new SendError('bad_request', 'text must be a non-empty string (or, answering a request, give result)');
   const caller = await resolveCaller(input.callerSid);
 
-  if (input.inReplyTo) return performReply(input, caller, text);
+  if (input.inReplyTo) return performReply(input, caller, text, fields);
 
   if (!input.to) throw new SendError('bad_request', '`to` is required (or pass in_reply_to)');
   if (input.handsOn !== undefined && !/^rq-[a-f0-9]{6,}$/.test(input.handsOn)) throw new SendError('bad_request', 'hands_on must be an rq-… id');
@@ -582,6 +631,7 @@ async function performReply(
   input: SessionSendInput,
   caller: CallerIdentity,
   text: string,
+  fields: import('../peers/structured-reply.js').StructuredReply | null = null,
 ): Promise<SessionSendResult> {
   const id = String(input.inReplyTo);
   const request = await getSessionRequest(id);
@@ -633,11 +683,19 @@ async function performReply(
     // Late but honest: the asker was already notified (turn end / timeout), yet
     // a real answer beats a status notice — deliver it anyway, marked late.
     log.session.info('session reply after settle — delivering late', { requestId: id, status: request.status });
+    // An overdue request was still open: this answer closes it.
+    if (request.status === 'expired') await settleLateReply(id, fields).catch(() => null);
   } else {
-    const settled = await settleReplied(id);
+    const settled = await settleReplied(id, fields);
     if (!settled) {
       log.session.info('session reply lost the settle race — delivering late', { requestId: id });
     }
+  }
+  // The replier's latest result, kept on its task: the Board and the Brief read Partial from it.
+  if (caller.record.taskId) {
+    await noteResultReport(caller.record.taskId, {
+      via: 'reply', request_id: id, ...(origin.taskId ? { to_task_id: origin.taskId } : {}), by: `task:${caller.record.taskId}`,
+    }, fields);
   }
 
   const wrapped = buildReplyDeliveryText(request, {

@@ -44,6 +44,10 @@ export function tasksShallowEqual(a: Task, b: Task): boolean {
   if (a.org_role !== b.org_role || a.org_name !== b.org_name || a.org_vp_only !== b.org_vp_only
     || a.org_instructions?.at !== b.org_instructions?.at || a.org_instructions?.text !== b.org_instructions?.text
     || (a.org_leads ?? []).join('\n') !== (b.org_leads ?? []).join('\n')) return false;
+  // Written raw, leaving updated_at alone: the Board's Partial (a result's not-done list and its
+  // settle) and a team stop (Stop / Resume the team, core/sessions/team-stop.ts).
+  if (JSON.stringify(a.result_report ?? null) !== JSON.stringify(b.result_report ?? null)) return false;
+  if ((a.team_stop?.at ?? null) !== (b.team_stop?.at ?? null)) return false;
   const arrKeys: (keyof Task)[] = ['tags', 'depends_on'];
   for (const k of arrKeys) {
     const av = (a[k] as string[] | undefined) ?? [];

@@ -1,0 +1,28 @@
+/* A running task's live action (components/board/LiveActivityLine.tsx). */
+.live-activity {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--fg-muted);
+  font-variant-numeric: tabular-nums;
+}
+.live-activity-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 5px;
+  border-radius: 50%;
+  vertical-align: 1px;
+  background: var(--bs-working, #2f7de1);
+  animation: live-activity-pulse 1.6s ease-in-out infinite;
+}
+.live-activity-action { color: var(--fg); font-weight: 550; }
+.live-activity-who { color: var(--fg-muted); }
+.live-activity.is-quiet .live-activity-dot { background: var(--warning, #ff9500); animation: none; }
+.live-activity.is-quiet .live-activity-action { color: var(--warning-text, #b45309); }
+@keyframes live-activity-pulse { 50% { opacity: 0.35; } }
+@media (prefers-reduced-motion: reduce) { .live-activity-dot { animation: none; } }
+.org-team-live { font-size: 11px; }

@@ -60,6 +60,19 @@ describe('buildStatusBoard', () => {
     expect(filteredRows(b, 'done').map((r) => r.task.id)).toEqual(['done1']);
   });
 
+  it('past or near its due date goes first in its group, the earliest deadline first', () => {
+    const tasks = [
+      ...team(),
+      task('due-later', { us: { state: 'needs', ask: 'b', at: ago(1), due: { at: '2026-10-26T20:00:00.000Z', state: 'soon' } } }),
+      task('due-past', { us: { state: 'needs', ask: 'a', at: ago(900), due: { at: '2026-10-25', state: 'overdue' } } }),
+      task('wait-due', { phase: 'TODO', us: { state: 'waiting', kind: 'not-started', waitingOn: 'Not started yet', due: { at: '2026-10-26', state: 'soon' } } }),
+    ];
+    const b = buildStatusBoard({ ownerId: 'lead', tasks, now: NOW, doneWindowDays: 7 });
+    expect(b.groups.needs.map((r) => r.task.id)).toEqual(['due-past', 'due-later', 'vm', 'stt']);
+    // A not-started task with a deadline comes ahead of a stuck one without.
+    expect(b.groups.waiting[0].task.id).toBe('wait-due');
+  });
+
   it('a task not derived yet: the phase alone, as an older server meant it', () => {
     expect(userStatusOf(task('x', { phase: 'NEED_ACTION' }))).toMatchObject({ state: 'needs', ask: expect.stringContaining('handed the task back') });
     expect(userStatusOf(task('x', { phase: 'WAITING' })).state).toBe('waiting');

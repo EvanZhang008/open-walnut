@@ -79,6 +79,8 @@ import { engineCaps, isAcpEngine, resolveEngine } from '../core/agents/engine-re
 import { extractImageFilePathFromInput } from '../core/session-history.js'
 import { launchNamingPlainText } from '../core/sessions/launch-naming.js'
 import { noteSessionProgress } from '../core/sessions/session-progress.js'
+import { LiveActivityTracker, toolTarget, type LiveActivity } from '../core/live-activity.js'
+import { reportLiveActivity } from '../core/sessions/live-activity-registry.js'
 import { noteRateLimitEvent } from '../core/sessions/subscription-limits.js'
 import { processActionsRefused, refuseProcessAction } from '../core/sessions/replica-process-guard.js'
 import { walnutApiEnvForSession } from '../lib/self-api-root.js'
@@ -831,6 +833,8 @@ export class ClaudeCodeSession {
   private _turnGen = 0
   /** When the current turn began (see turnStartedAt). */
   private _turnEdgeAt: number | undefined
+  /** What the running turn does now, for the Board and the Org page (core/live-activity.ts). */
+  private _live = new LiveActivityTracker()
   /** `origin.kind` of the last result the CLI emitted (see lastResultOrigin). */
   private _lastResultOrigin: string | undefined
   /** Did any MAIN-lane assistant text reach the UI stream during this turn?
@@ -961,6 +965,41 @@ export class ClaudeCodeSession {
     if (innerType === 'message_stop') {
       this._speed.messageStop(now)
       this.emitTurnSpeed(false)
+      // A finished message moves the turn's cost: the live line carries it (throttled).
+      if (this._live.active) this._publishLive()
+    }
+  }
+
+  /** Report the running turn's live action (core/live-activity.ts): called only when it
+   *  changed; the registry throttles what goes out. A replayed line is history, not now. */
+  private _publishLive(): void {
+    if (this._processStatus !== 'running' || !this.claudeSessionId) return
+    if (this._isReplayedByOffset() === true) return
+    const now = Date.now()
+    if (!this._live.active) this._live.turnStart(this._turnEdgeAt ?? now)
+    reportLiveActivity(this.claudeSessionId, this.taskId, this._live.snapshot({
+      turnStartedAt: this._turnEdgeAt,
+      costUsd: this._speed.snapshot(now).costUsd,
+      sessionId: this.claudeSessionId,
+    }))
+  }
+
+  /** After its turn, the newest background command still running (null: none, or a wakeup). */
+  private _backgroundLive(): LiveActivity | null {
+    let pick: { description?: string; startedAt?: number; subagentType?: string; workflowName?: string; taskType?: string } | undefined
+    for (const t of this._bgTasks.values()) {
+      if (!t.isBackgrounded || t.endedPerLevel || t.ownedBySubagent || ClaudeCodeSession._BG_TERMINAL_STATUSES.has(t.status)) continue
+      if (!pick || (t.startedAt ?? 0) >= (pick.startedAt ?? 0)) pick = t
+    }
+    if (!pick) return null
+    const since = pick.startedAt ?? Date.now()
+    const agent = !!pick.subagentType || !!pick.workflowName || /agent|workflow/.test(pick.taskType ?? '')
+    return {
+      kind: 'tool', tool: agent ? 'Background agent' : 'Background command',
+      ...(pick.description ? { target: toolTarget('Bash', { command: pick.description }) } : {}),
+      since: new Date(since).toISOString(),
+      lastToolAt: new Date(since).toISOString(),
+      ...(this.claudeSessionId ? { sessionId: this.claudeSessionId } : {}),
     }
   }
 
@@ -1437,6 +1476,7 @@ export class ClaudeCodeSession {
     // started) is that same turn: it keeps the turn's start (see turnStartedAt).
     if (source !== 'state-running' || this._turnResultEmitted || this._turnEdgeAt === undefined) {
       this._turnEdgeAt = Date.now()
+      this._live.turnStart(this._turnEdgeAt)
     }
     // A turn walnut did not deliver itself (a message injected straight into
     // the daemon's FIFO, a queued mid-turn message the CLI picks up after the
@@ -1471,6 +1511,7 @@ export class ClaudeCodeSession {
         }).catch(() => {})
       }
     }
+    this._publishLive()
     // ── Turn-start phase pullback (incidents 46f42871 + 1f11596b + ed347bde) ──
     // session:input only fires at SEND time — for a queued/mid-turn send the phase was
     // already IN_PROGRESS then (no-op), after which the PREVIOUS turn's result flipped
@@ -1749,6 +1790,10 @@ export class ClaudeCodeSession {
 
   /** Broadcast the current background-task set so the UI can render workflow progress. */
   private _emitBackgroundTasksUpdate(sessionId: string): void {
+    // Between turns the live line is the newest background command: one ending moves it on.
+    if (this._processStatus === 'running' && this._turnResultEmitted && !this._live.active) {
+      reportLiveActivity(sessionId, this.taskId, this._backgroundLive())
+    }
     bus.emit(EventNames.SESSION_BACKGROUND_TASKS, {
       sessionId,
       taskId: this.taskId,
@@ -6412,6 +6457,7 @@ export class ClaudeCodeSession {
             if (!parentToolUseId) {
               this._emittedAssistantText = true
               this._stampFirstEmit('text')
+              if (this._live.writing(Date.now())) this._publishLive()
             }
             log.session.debug('JSONL event: text-delta', { sessionId: this.claudeSessionId, taskId: this.taskId, parentToolUseId })
             bus.emit(EventNames.SESSION_TEXT_DELTA, {
@@ -6450,6 +6496,7 @@ export class ClaudeCodeSession {
               this._emittedStreamKeys.add(toolDedupKey)
             }
             this._activity = `Using ${block.name}`
+            if (this._live.toolUse(block.id, block.name ?? '', block.input, Date.now(), !!parentToolUseId)) this._publishLive()
 
             // Cache image file paths from tool inputs (e.g. Read tool's file_path).
             // When the tool_result comes back with base64 image content blocks,
@@ -6718,6 +6765,7 @@ export class ClaudeCodeSession {
         const userParentToolUseId = msg.parent_tool_use_id ?? undefined
         for (const block of msg.message.content) {
           if (block.type === 'tool_result') {
+            if (!userParentToolUseId && this._live.toolResult(block.tool_use_id, Date.now())) this._publishLive()
             // Resolve a pending CronCreate: adopt the CLI's job id (what
             // CronDelete takes) on success; on an error result drop the
             // optimistic arm so a rejected create doesn't extend thresholds.
@@ -7759,6 +7807,7 @@ export class ClaudeCodeSession {
             // across the local corpus), so every delta here is main-lane.
             this._emittedAssistantText = true
             this._stampFirstEmit('text')
+            if (this._live.writing(Date.now())) this._publishLive()
             bus.emit(EventNames.SESSION_TEXT_DELTA, {
               sessionId: this.claudeSessionId,
               taskId: this.taskId,
@@ -7772,6 +7821,7 @@ export class ClaudeCodeSession {
             // (empty-looking) thinking block in the UI stream.
             if (!text.trim()) break
             this._stampFirstEmit('thinking')
+            if (this._live.thinking(Date.now())) this._publishLive()
             bus.emit(EventNames.SESSION_THINKING_DELTA, {
               sessionId: this.claudeSessionId,
               taskId: this.taskId,
@@ -7847,6 +7897,16 @@ export class ClaudeCodeSession {
     // A caller passes `stamp` only when the write IS a classification verdict
     // the recovery loops must be able to read structurally (e.g. the spawn-catch
     // 'spawn_outcome_unknown'); stamped-but-unlisted pairs pass the gate.
+    // No turn runs any more: the live action goes now, before the record write (whose event
+    // could otherwise land after the next turn's first report and wipe it).
+    if (this._processStatus !== 'running') {
+      this._live.end()
+      reportLiveActivity(sessionId, this.taskId, null)
+    } else if (this._turnResultEmitted) {
+      // The turn is over but its background command runs on: that command is what it does now.
+      this._live.end()
+      reportLiveActivity(sessionId, this.taskId, this._backgroundLive())
+    }
     const updates = {
       process_status: this._processStatus,
       activity: this._activity,
@@ -9193,6 +9253,19 @@ export class ClaudeCodeSession {
 type HeldSendRetry = {
   timer?: ReturnType<typeof setTimeout>; delay: number; target: ClaudeCodeSession;
   stopEpoch: number; fence: string | null; ids: Set<string>;
+  /** When the armed timer fires (epoch ms). */
+  at?: number;
+}
+
+/**
+ * What a message waiting on a host that did not answer in time says (the bubble's
+ * note, the session's error line). Plain words: the message is kept and goes out by
+ * itself; the bubble adds when the next try is and a Send now.
+ */
+export function slowHostReason(why: 'start' | 'send'): string {
+  return why === 'start'
+    ? 'Not sent yet: the computer running this session did not start it in time (it may be very busy). Your message is kept and Walnut tries again by itself.'
+    : 'Not sent yet: the computer running this session did not confirm it got your message in time (it may be very busy). Your message is kept and Walnut tries again by itself.'
 }
 
 export class SessionRunner {
@@ -9222,6 +9295,8 @@ export class SessionRunner {
   private heldSendRetries = new Map<string, HeldSendRetry>()
   /** Sends the host's budget had not decided yet ('checking'), sent again on a clock (armBudgetRetry). */
   private budgetRetries = new Map<string, { timer?: ReturnType<typeof setTimeout>; tries: number }>()
+  /** Sends the host did not answer in time, sent again on a clock (armSlowHostRetry). */
+  private slowHostRetries = new Map<string, { timer?: ReturnType<typeof setTimeout>; tries: number; at: number }>()
   /** Unregisters this runner from reclaimed-line announcements (line-consumption.ts). */
   private stopReclaimListener?: () => void
   /** Explicit ACP interrupt barrier. A cancelled turn may emit its terminal
@@ -12195,8 +12270,10 @@ export class SessionRunner {
    * reconnect, and the outcome cannot change. See providers/delivery-failure.ts.
    */
   private settleResumeFailure(sessionId: string, msgs: QueuedMessage[], err: Error): void {
-    this.clearActiveProcessing(sessionId, { kind: 'error', message: err.message })
     const verdict = classifyDeliveryFailure(err)
+    // The host did not answer in time: the rows wait for a clock, not for a Retry.
+    const slow = verdict.kind === 'transient' && !(err instanceof BudgetCheckingError) && isDaemonCommandOutcomeUnknown(err)
+    this.clearActiveProcessing(sessionId, { kind: 'error', message: slow ? slowHostReason('start') : err.message })
     log.session.warn(`resume spawn failed — ${verdict.kind === 'permanent' ? 'parking batch' : 'reverting batch to pending'}`, {
       sessionId, error: err.message, failureCode: verdict.code,
     })
@@ -12220,7 +12297,9 @@ export class SessionRunner {
       const failed = unanswered
         ? (await getQueue(sessionId)).filter((m) => ids.has(m.id)).map((m) => m.id)
         : msgs.map((m) => m.id)
-      if (failed.length > 0) reportBatchFailed(sessionId, failed, err.message)
+      let retryAt: string | undefined
+      if (slow) retryAt = new Date(this.armSlowHostRetry(sessionId, failed, 'start')).toISOString()
+      else if (failed.length > 0) reportBatchFailed(sessionId, failed, err.message)
       if (err instanceof BudgetCheckingError) this.armBudgetRetry(sessionId)
       // errorKind 'delivery_failed' = connectivity status, NOT a turn outcome.
       // Consumers (server.ts chat persist, hook dispatcher, push notify, and the
@@ -12230,9 +12309,11 @@ export class SessionRunner {
       // retry loop + 150 red boxes on 2026-06-10.
       bus.emit(EventNames.SESSION_ERROR, {
         sessionId,
-        error: err.message,
+        error: slow ? slowHostReason('start') : err.message,
         errorKind: 'delivery_failed' as const,
         ...(verdict.kind === 'permanent' ? { parked: true } : {}),
+        // The message waits on a clock: the panel shows the bubble's note, not an error row.
+        ...(retryAt ? { retryAt } : {}),
       }, ['main-ai'], { source: 'session-runner' })
     })
   }
@@ -12762,9 +12843,10 @@ export class SessionRunner {
     this.heldSendRetries.delete(sessionId)
   }
 
-  private armHeldSendRetry(sessionId: string, msgs: QueuedMessage[]): void {
+  /** Returns when the retry fires, or null when none was armed (no live pipe). */
+  private armHeldSendRetry(sessionId: string, msgs: QueuedMessage[]): number | null {
     const target = this.findSessionByClaudeId(sessionId)
-    if (this.acpDestroyed || !target?.active || !target.hasPipe || msgs.length === 0) return
+    if (this.acpDestroyed || !target?.active || !target.hasPipe || msgs.length === 0) return null
     const fence = msgs[0].stopFence ?? null
     let held = this.heldSendRetries.get(sessionId)
     if (held && (held.target !== target || held.stopEpoch !== target.stopEpoch || held.fence !== fence)) {
@@ -12776,8 +12858,9 @@ export class SessionRunner {
       this.heldSendRetries.set(sessionId, held)
     }
     for (const msg of msgs) held.ids.add(msg.id)
-    if (held.timer) return
+    if (held.timer) return held.at ?? null
     const current = held
+    current.at = Date.now() + current.delay
     current.timer = setTimeout(() => {
       current.timer = undefined
       current.delay = Math.min(30_000, current.delay * 2)
@@ -12787,6 +12870,7 @@ export class SessionRunner {
       })
     }, current.delay)
     current.timer.unref?.()
+    return current.at
   }
 
   private async retryHeldSend(sessionId: string, held: HeldSendRetry): Promise<void> {
@@ -12882,11 +12966,26 @@ export class SessionRunner {
     const ids = new Set(msgs.map((m) => m.id))
     const left = (await getQueue(sessionId)).filter((m) => ids.has(m.id) && m.status === 'pending')
     if (left.length === 0) { this.cancelHeldSendRetry(sessionId); this.cancelBudgetRetry(sessionId); return }
-    reportBatchFailed(sessionId, left.map((m) => m.id), err.message)
     // A budget still being checked holds the line on a clock of its own: the held-send
     // retry needs a live pipe, and a cold resume refused this way has none.
-    if (err instanceof BudgetCheckingError) this.armBudgetRetry(sessionId)
-    else this.armHeldSendRetry(sessionId, left)
+    if (err instanceof BudgetCheckingError) {
+      reportBatchFailed(sessionId, left.map((m) => m.id), err.message)
+      this.armBudgetRetry(sessionId)
+      return
+    }
+    const at = this.armHeldSendRetry(sessionId, left)
+    if (!isDaemonCommandOutcomeUnknown(err)) {
+      reportBatchFailed(sessionId, left.map((m) => m.id), err.message)
+      return
+    }
+    // The host did not answer: the rows wait on a clock, the held-send retry's while
+    // the pipe lives, else the slow-host one. Said as a wait, never "Send failed".
+    if (at === null) { this.armSlowHostRetry(sessionId, left.map((m) => m.id), 'send'); return }
+    const reason = slowHostReason('send')
+    noteHeld(sessionId, left.map((m) => m.id), reason)
+    bus.emit(EventNames.SESSION_DELIVERY_HELD, {
+      sessionId, messageIds: left.map((m) => m.id), reason, retryAt: new Date(at).toISOString(),
+    }, ['main-ai'], { source: 'session-runner' })
   }
 
   /**
@@ -12916,7 +13015,46 @@ export class SessionRunner {
     this.budgetRetries.set(sessionId, entry)
   }
 
+  /**
+   * Send the queue again after the host did not answer in time (a daemon command
+   * timeout). 2026-10-29: every `ps` on the Mac hung for 17 minutes, each session
+   * start waited on one, and a message to a stopped task read "Send failed" while it
+   * sat in the queue with nothing to send it again but the next message. The rows are
+   * pending; this clock sends them (15 s, doubling to 5 min, until one goes in or
+   * the queue empties), and the bubble says in plain words why it waits and when
+   * the next try is, with Send now beside it. Returns the next try's time.
+   */
+  private armSlowHostRetry(sessionId: string, ids: readonly string[], why: 'start' | 'send'): number {
+    const entry = this.slowHostRetries.get(sessionId) ?? { tries: 0, at: 0 }
+    if (!entry.timer && !this.acpDestroyed) {
+      const delay = Math.min(300_000, 15_000 * 2 ** Math.min(entry.tries, 5))
+      entry.tries += 1
+      entry.at = Date.now() + delay
+      entry.timer = setTimeout(() => {
+        entry.timer = undefined
+        if (this.acpDestroyed || this.slowHostRetries.get(sessionId) !== entry) return
+        log.session.info('sending again after the host did not answer in time', { sessionId, attempt: entry.tries })
+        this.deliverRest(sessionId)
+      }, delay)
+      entry.timer.unref?.()
+      this.slowHostRetries.set(sessionId, entry)
+    }
+    if (ids.length > 0) {
+      const reason = slowHostReason(why)
+      noteHeld(sessionId, [...ids], reason)
+      bus.emit(EventNames.SESSION_DELIVERY_HELD, {
+        sessionId, messageIds: [...ids], reason, retryAt: new Date(entry.at).toISOString(),
+      }, ['main-ai'], { source: 'session-runner' })
+    }
+    return entry.at
+  }
+
   private cancelBudgetRetry(sessionId: string): void {
+    // Every place that settles a budget retry (delivered, nothing pending, parked,
+    // stopped, shut down) settles the slow-host clock too.
+    const slow = this.slowHostRetries.get(sessionId)
+    if (slow?.timer) clearTimeout(slow.timer)
+    this.slowHostRetries.delete(sessionId)
     const entry = this.budgetRetries.get(sessionId)
     if (entry?.timer) clearTimeout(entry.timer)
     this.budgetRetries.delete(sessionId)

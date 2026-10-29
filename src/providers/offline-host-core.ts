@@ -1306,7 +1306,17 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
   }
 
   async function opTaskSend(home: string, callerSid: string, args: Record<string, unknown>): Promise<GatewayResult> {
-    const text = typeof args.text === 'string' ? args.text.trim() : ''
+    // A structured reply answered offline keeps its fields as sections of the text
+    // (the server's composeReplyText, peers/structured-reply.ts): nothing of it is lost.
+    const list = (v: unknown): string[] => (typeof v === 'string' ? v.split('\n') : Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [])
+      .map((x) => x.replace(/^\s*(?:[-*]|\d+[.)])\s+/, '').trim()).filter(Boolean)
+    const own = typeof args.text === 'string' ? args.text.trim() : ''
+    const result = args.in_reply_to !== undefined && typeof args.result === 'string' ? args.result.trim() : ''
+    const evidence = args.in_reply_to !== undefined ? list(args.evidence) : []
+    const notDone = args.in_reply_to !== undefined ? list(args.not_done) : []
+    const text = [own, result && result !== own ? `Result: ${result}` : '',
+      evidence.length ? `Evidence:\n${evidence.map((e) => `- ${e}`).join('\n')}` : '',
+      notDone.length ? `Not done (partial reply):\n${notDone.map((e) => `- ${e}`).join('\n')}` : ''].filter(Boolean).join('\n\n')
     if (!text) return fail('bad_request', 'text must be a non-empty string')
     if (args.in_reply_to !== undefined) {
       if (typeof args.in_reply_to !== 'string' || !/^rq-[a-f0-9]{6,}$/.test(args.in_reply_to)) return fail('bad_request', 'in_reply_to must be an rq-… id')
@@ -1578,6 +1588,9 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     if (!text) return null
     // A hand-off links requests in the server's ledger: the server delivers it.
     if (args.hands_on !== undefined) return null
+    // So does a structured reply (result / evidence / not_done): the server keeps its fields
+    // on the request and the replier's task, where the Board reads Partial.
+    if (args.result !== undefined || args.evidence !== undefined || args.not_done !== undefined) return null
     if (typeof args.messageId !== 'string' || !/^qm-[A-Za-z0-9-]{1,64}$/.test(args.messageId)) {
       payload.args = { ...args, messageId: `qm-host-${deps.randomHex(8)}` }
     }

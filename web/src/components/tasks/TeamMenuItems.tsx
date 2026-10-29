@@ -3,6 +3,7 @@ import type { Task } from '@open-walnut/core';
 import { CHEVRON_GLYPH } from '@/components/common/Icons';
 import { useTasksContextSafe } from '@/contexts/TasksContext';
 import { log } from '@/utils/log';
+import { apiPost } from '@/api/client';
 import { AdoptWorkerFlyout } from './AdoptWorkerFlyout';
 import { ReleaseWorkerFlyout } from './ReleaseWorkerFlyout';
 import { resolveParent } from './adopt-candidates';
@@ -31,7 +32,9 @@ const ICON_TEAM = (
  *   - "Adopt a worker…" on every task (a portalled picker, AdoptWorkerFlyout);
  *   - "Release a worker…" on a leader (ReleaseWorkerFlyout: one of its workers
  *     leaves the team and keeps running on its own);
- *   - "Leave leader “X”" on a worker.
+ *   - "Leave leader “X”" on a worker;
+ *   - "Stop the team" on a leader: every open task under it stops (its sessions, triggers and
+ *     wake clocks, core/sessions/team-stop.ts), and "Resume the team" turns those back on.
  *
  * All three write through the store's `reparentTask`, so the Worker and Leader
  * pills follow at once. Rendered only inside a TasksProvider (a pop-out window
@@ -58,6 +61,14 @@ export function TeamMenuItems({ task, afterAction }: {
   if (!store) return null;
   const leader = task.parent_task_id ? resolveParent(store.tasks, NO_INDEX, task.parent_task_id) : null;
   const summary = teamRowSummary(store.tasks, task, leader ? orgDisplayTitle(leader) : null);
+  const teamStopped = !!store.tasks.find((t) => t.id === task.id)?.team_stop;
+  const teamAction = (action: 'team-stop' | 'team-resume') => {
+    log.info('tasks', action === 'team-stop' ? 'team stop requested' : 'team resume requested', { taskId: task.id });
+    apiPost(`/api/v1/tasks/${encodeURIComponent(task.id)}/${action}`, {}, { timeoutMs: 120_000 })
+      .then((out) => log.info('tasks', `${action} done`, { taskId: task.id, result: out as Record<string, unknown> }))
+      .catch((err) => log.warn('tasks', `${action} failed`, { taskId: task.id, error: err instanceof Error ? err.message : String(err) }));
+    afterAction();
+  };
   const toggle = (which: 'adopt' | 'release') => setPicker((p) => (p === which ? null : which));
   return (
     <>
@@ -107,6 +118,32 @@ export function TeamMenuItems({ task, afterAction }: {
               >
                 <span className="task-kebab-icon" aria-hidden="true">−</span>
                 <span>Release a worker…</span>
+              </button>
+            )}
+            {hasWorkers && !teamStopped && (
+              <button
+                type="button"
+                className="task-kebab-item"
+                data-testid="kebab-team-stop"
+                title="Stop this task and every open task under it: their sessions, triggers and wake clocks"
+                onClick={(e) => { e.stopPropagation(); teamAction('team-stop'); }}
+              >
+                <span className="task-kebab-icon" aria-hidden="true">■</span>
+                <span>Stop the team</span>
+              </button>
+            )}
+            {teamStopped && (
+              <button
+                type="button"
+                className="task-kebab-item"
+                data-testid="kebab-team-resume"
+                title="Turn back on the triggers and clocks the team stop paused; sessions resume on their next message"
+                onClick={(e) => { e.stopPropagation(); teamAction('team-resume'); }}
+              >
+                <span className="task-kebab-icon" aria-hidden="true">
+                  <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor" aria-hidden="true"><path d="M2 1.2v7.6L8.6 5z" /></svg>
+                </span>
+                <span>Resume the team</span>
               </button>
             )}
             {task.parent_task_id && (

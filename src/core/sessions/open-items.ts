@@ -54,8 +54,52 @@ export async function listOpenSubtasks(
   const children = (await tm.getChildTasks(parentId).catch(() => []))
     .filter((t) => t.phase !== 'COMPLETE' && t.id !== opts.exclude)
     .sort((a, b) => (b.updated_at ?? '').localeCompare(a.updated_at ?? ''));
-  const subtasks = children.slice(0, opts.max ?? MAX_SUBTASKS).map((t) => ({ id: t.id, title: t.title, phase: t.phase }));
+  const { isPartial } = await import('../peers/structured-reply.js');
+  const subtasks = children.slice(0, opts.max ?? MAX_SUBTASKS).map((t) => ({
+    id: t.id, title: t.title, phase: t.phase,
+    ...(isPartial(t.result_report) ? { partial: t.result_report!.not_done } : {}),
+  }));
   return { subtasks, more: children.length - subtasks.length };
+}
+
+/** How far back a finished Partial subtask is still listed. */
+const PARTIAL_DONE_DAYS = 7;
+
+/** A task's finished subtasks whose last result was Partial and still unsettled. */
+export async function listPartialDoneSubtasks(parentId: string, now = Date.now()): Promise<OpenSubtask[]> {
+  const tm = await import('../task-manager.js');
+  const { isPartial } = await import('../peers/structured-reply.js');
+  const cutoff = now - PARTIAL_DONE_DAYS * 86_400_000;
+  return (await tm.getChildTasks(parentId).catch(() => []))
+    .filter((t) => t.phase === 'COMPLETE' && isPartial(t.result_report) && Date.parse(t.result_report!.at) >= cutoff)
+    .slice(0, MAX_SUBTASKS)
+    .map((t) => ({ id: t.id, title: t.title, phase: t.phase, partial: t.result_report!.not_done }));
+}
+
+/**
+ * The OVERDUE requests of a session, both ways (session-requests.ts: expired, unanswered,
+ * still open). One closed another way is left out: a sent one whose target task completed,
+ * a received one whose asker's task did.
+ */
+export async function overdueFor(sid: string, taskId: string, now = Date.now()): Promise<{ out: SessionRequest[]; in: SessionRequest[] }> {
+  const requests = await import('../session-requests.js');
+  const rows = await requests.overdueOpenRequests(now).catch(() => [] as SessionRequest[]);
+  const out = rows.filter((r) => r.fromSessionId === sid);
+  const inbound = rows.filter((r) => r.toSessionId === sid || r.toTaskId === taskId);
+  if (out.length === 0 && inbound.length === 0) return { out, in: inbound };
+  const tm = await import('../task-manager.js');
+  const { getSessionByClaudeId } = await import('../session-tracker.js');
+  const askerTask = new Map<string, string | undefined>();
+  for (const r of inbound) {
+    if (!askerTask.has(r.fromSessionId)) askerTask.set(r.fromSessionId, (await getSessionByClaudeId(r.fromSessionId).catch(() => undefined))?.taskId);
+  }
+  const ids = [...new Set([...out.map((r) => r.toTaskId), ...askerTask.values()].filter((id): id is string => !!id))];
+  const done = new Set((await tm.listTasksByIds(ids).catch(() => [])).filter((t) => t.phase === 'COMPLETE').map((t) => t.id));
+  const newest = (a: SessionRequest, b: SessionRequest) => b.createdAt.localeCompare(a.createdAt);
+  return {
+    out: out.filter((r) => !r.toTaskId || !done.has(r.toTaskId)).sort(newest).slice(0, MAX_REQUESTS),
+    in: inbound.filter((r) => { const t = askerTask.get(r.fromSessionId); return !t || !done.has(t); }).sort(newest).slice(0, MAX_REQUESTS),
+  };
 }
 
 /** Everything still open for the calling session. Never throws: a reminder is best effort. */
@@ -93,9 +137,19 @@ export async function collectOpenItems(
       askedOfYou.push({ id: r.id, from: await partyOf(r.fromSessionId), preview: r.preview, createdAt: r.createdAt, ...(handedTo.length ? { handedTo } : {}) });
     }
 
+    const overdue = await overdueFor(sid, task.id, now);
+    const overdueIn: OpenAsk[] = [];
+    for (const r of overdue.in) overdueIn.push({ id: r.id, from: await partyOf(r.fromSessionId), preview: r.preview, createdAt: r.createdAt });
+    const partialDone = await listPartialDoneSubtasks(task.id, now);
+
     const items: OpenItems = {
       task: { id: task.id, title: task.title },
       subtasks, moreSubtasks, waitingOn, askedOfYou, text: '',
+      ...(overdue.out.length ? { overdueOut: overdue.out.map((r) => ({
+        id: r.id, to: r.toTaskId ?? (r.toSessionId ? `session ${r.toSessionId.slice(0, 8)}` : 'unknown'), preview: r.preview, createdAt: r.createdAt,
+      })) } : {}),
+      ...(overdueIn.length ? { overdueIn } : {}),
+      ...(partialDone.length ? { partialDone } : {}),
     };
     const board = await (await import('../boards/board-store.js')).getBoard(task.id).catch(() => null);
     if (board) {

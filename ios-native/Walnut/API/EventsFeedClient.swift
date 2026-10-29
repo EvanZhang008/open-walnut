@@ -7,6 +7,8 @@ enum EventsFeedMutation: Equatable {
     case taskUpsert(WalnutTask)
     case taskDelete(id: String)
     case sessionUpsert(WalnutSession)
+    /// `task-activity`: one task's live action changed (nil: its turn ended).
+    case taskActivity(id: String, activity: WalnutLiveActivity?)
 }
 
 /// Pure list-merge logic for the events feed — kept out of the store so the
@@ -22,6 +24,13 @@ enum EventsFeedReducer {
             return (next, true)
         }
         return ([row] + rows, true)
+    }
+
+    static func setActivity(_ rows: [WalnutTask], id: String, _ activity: WalnutLiveActivity?) -> (rows: [WalnutTask], changed: Bool) {
+        guard let idx = rows.firstIndex(where: { $0.id == id }), rows[idx].liveActivity != activity else { return (rows, false) }
+        var next = rows
+        next[idx].liveActivity = activity
+        return (next, true)
     }
 
     static func deleteTask(_ rows: [WalnutTask], id: String) -> (rows: [WalnutTask], changed: Bool) {
@@ -310,6 +319,11 @@ final class EventsFeedClient: @unchecked Sendable {
         let sessions: [WalnutSession]
     }
     private struct DeleteFrame: Decodable { let id: String }
+    private struct ActivityFrame: Decodable {
+        let taskId: String
+        let activity: WalnutLiveActivity?
+        enum CodingKeys: String, CodingKey { case taskId = "task_id", activity }
+    }
 
     private func handleFrame(event: String, data: String, generation gen: UInt64) {
         let decoder = JSONDecoder()
@@ -331,6 +345,8 @@ final class EventsFeedClient: @unchecked Sendable {
             mutation = (try? decoder.decode(DeleteFrame.self, from: payload)).map { .taskDelete(id: $0.id) }
         case "session-upsert":
             mutation = (try? decoder.decode(WalnutSession.self, from: payload)).map { .sessionUpsert($0) }
+        case "task-activity":
+            mutation = (try? decoder.decode(ActivityFrame.self, from: payload)).map { .taskActivity(id: $0.taskId, activity: $0.activity) }
         default:
             mutation = nil
         }
