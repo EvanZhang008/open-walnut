@@ -280,6 +280,40 @@ export function printableRuns(buf, min = 8) {
   return { text: parts.join(RUN_BREAK), parts, starts }
 }
 
+/** A matched word this short turns up by chance in compressed bytes. */
+const CHANCE_WORD_MAX = 5
+/** A run at least this long and this much plain text is a string, not noise. */
+const TEXT_RUN_MIN = 16
+const TEXT_SHARE_MIN = 0.7
+
+/** The run of printableRuns() an offset of its text falls in, or null. */
+export function runAt(runs, offset) {
+  let pos = 0
+  for (const part of runs.parts) {
+    if (offset < pos + part.length) return part
+    pos += part.length + 1
+  }
+  return null
+}
+
+/**
+ * The hits of a binary file's printable runs, without the chance ones: a short word
+ * (CHANCE_WORD_MAX letters or fewer) in a run that is not text. Compressed data is full
+ * of short runs, and every file of a build carries the same compressed blobs, so a
+ * three-letter term in one 9-byte run of noise failed all six files of a build
+ * (2026-10-29). A real string holding the word sits in a long run of plain text (a
+ * bundle's source, a message), and a longer term is no chance at all.
+ */
+export function binaryHits(rules, runs) {
+  return scanText(rules, runs.text).filter((h) => {
+    if (h.length > CHANCE_WORD_MAX) return true
+    const run = runAt(runs, h.offset)
+    if (!run || run.length < TEXT_RUN_MIN) return false
+    const plain = run.match(/[A-Za-z0-9 \t._,:;/'"()-]/g)?.length ?? 0
+    return plain / run.length >= TEXT_SHARE_MIN
+  })
+}
+
 /** Maps an offset in printableRuns().text back to a byte offset of the file. */
 export function runOffset(runs, offset) {
   let pos = 0

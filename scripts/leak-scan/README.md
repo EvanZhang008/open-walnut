@@ -34,6 +34,11 @@ bundle takes seconds and a release takes hours (a 60 minute job timed out on one
 at the literal and put the class in a lookbehind: `(?<=[a-z0-9.])@example\.com`. The build
 and the scan both refuse such a rule.
 
+A binary is read through its printable runs, and a phrase never spans two of them. A word
+of five letters or fewer counts there only in a run of plain text (16 bytes or more, mostly
+letters, digits and punctuation): compressed data makes such a word by chance, and every
+file of a build carries the same compressed blobs.
+
 A file whose bytes were already scanned in the same run is counted as a copy and not scanned
 again: a release's platform archives and the archive inside the Mac app share most of their
 dependency tree.

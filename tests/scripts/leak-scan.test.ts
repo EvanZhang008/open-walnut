@@ -8,7 +8,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { execFileSync, spawnSync } from 'node:child_process'
-import { compileRules, loadRules, scanText, printableRuns, runOffset, termKey } from '../../scripts/leak-scan/core.mjs'
+import { binaryHits, compileRules, loadRules, scanText, printableRuns, runOffset, termKey } from '../../scripts/leak-scan/core.mjs'
 import { reapStale } from '../../scripts/leak-scan/leak-scan.mjs'
 import { parseSource } from '../../scripts/leak-scan/build-rules.mjs'
 
@@ -136,6 +136,19 @@ describe('leak-scan rules', () => {
     // the same phrase inside one run is still a hit, and a single word still is across runs
     const whole = printableRuns(Buffer.concat([Buffer.from([0]), Buffer.from('a Quanta-Fizzle b'), Buffer.from([0x01]), Buffer.from('zorblax!'), Buffer.from([0])]))
     expect(scanText(rules(), whole.text).map((h) => h.label)).toEqual(['tool', 'tool'])
+  })
+
+  it('counts a short word in a binary only inside a run of plain text', () => {
+    // A three-letter term once stood in a 9-byte run of compressed noise in all six files of a build.
+    const noise = Buffer.from([0x60, 0x09, 0x51, 0x58, 0x5a, 0xe2, 0x80, 0x94, 0x62])
+    const buf = Buffer.concat([Buffer.from([0]), noise, Buffer.from([0x01])])
+    const runs = printableRuns(buf)
+    expect(runs.parts).toEqual([noise.toString('latin1')])
+    expect(scanText(rules(), runs.text).map((h) => h.label)).toEqual(['acronym'])
+    expect(binaryHits(rules(), runs)).toEqual([])
+    // the same word in a string, and a longer term in a short run, still count
+    const text = printableRuns(Buffer.concat([Buffer.from([0]), Buffer.from('the QXZ client failed to start'), Buffer.from([0]), Buffer.from('zorblax'), Buffer.from([0])]))
+    expect(binaryHits(rules(), text).map((h) => h.label)).toEqual(['tool', 'acronym'])
   })
 
   it('refuses a term rule with a malformed hash', () => {

@@ -29,7 +29,7 @@ import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { loadRules, printableRuns, runOffset, scanText } from './core.mjs'
+import { binaryHits, loadRules, printableRuns, runOffset, scanText } from './core.mjs'
 
 const CHUNK = 32 * 1024 * 1024
 const OVERLAP = 4096
@@ -120,7 +120,7 @@ function scanFile(rules, file, shown, report, seen) {
       if (binary) {
         const runs = printableRuns(buf)
         text = runs.text
-        hits = scanText(rules, text).map((h) => ({ ...h, at: pos + runOffset(runs, h.offset) }))
+        hits = binaryHits(rules, runs).map((h) => ({ ...h, at: pos + runOffset(runs, h.offset) }))
       } else {
         text = buf.toString('latin1')
         hits = scanText(rules, text).map((h) => ({ ...h, at: pos + h.offset }))
