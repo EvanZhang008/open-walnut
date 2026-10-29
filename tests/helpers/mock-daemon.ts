@@ -205,7 +205,9 @@ export class MockDaemon {
     // Kill all session processes
     for (const [, session] of this.sessions) {
       if (session.pollTimer) clearInterval(session.pollTimer)
-      if (session.proc && session.exitCode === null) {
+      // The process itself, not session.exitCode: simulateDeath() marks a session
+      // dead while its CLI still runs, and that CLI must not outlive the test.
+      if (session.proc && session.proc.exitCode === null && session.proc.signalCode === null) {
         try { session.proc.kill('SIGTERM') } catch { /* already dead */ }
       }
     }

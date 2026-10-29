@@ -1087,14 +1087,20 @@ describe('End-to-end session flow', () => {
     const result = await waitForResult(collected);
     const resultSid = (result.data as { sessionId?: string }).sessionId;
 
-    // Give fire-and-forget persistence (dynamic import + file write) time to complete
-    await new Promise((r) => setTimeout(r, 500));
-
+    // Poll, never a fixed sleep: the turn-end write is fire-and-forget (dynamic
+    // import + write), and so is the clear of the pid when the mock CLI's exit
+    // lands. The record is settled once both are in: the session runner's verdict
+    // and no pid. A 500ms sleep read it before that on a busy box.
     const { listSessions } = await import('../../src/core/session-tracker.js');
-    const sessions = await listSessions();
     // THIS turn's record: earlier tests in this block start sessions for the same
     // task, and the one afterEach killed is persisted as an error.
-    const ours = sessions.find((s) => s.taskId === 'e2e-task-001' && (!resultSid || s.claudeSessionId === resultSid));
+    const ours = await vi.waitFor(async () => {
+      const found = (await listSessions())
+        .find((s) => s.taskId === 'e2e-task-001' && (!resultSid || s.claudeSessionId === resultSid));
+      expect(found?.status_changed_by).toBe('session-runner');
+      expect(found?.pid ?? null).toBeNull();
+      return found;
+    }, { timeout: 15_000, interval: 50 });
     expect(ours).toBeDefined();
     expect(ours!.project).toBe('Walnut');
     expect(ours!.claudeSessionId).toBeTruthy();
@@ -1115,9 +1121,19 @@ describe('End-to-end session flow', () => {
     // Assert the real contract instead: the turn reached a terminal state via normal
     // completion, never an error. This still catches the failure this test exists to
     // catch (record persisted with a bogus/error status, or not persisted at all).
+    //
+    // Which of the two the record holds is a race this test cannot pin: the mock
+    // exits right after its result, and a result that still finds it running takes
+    // the FIFO-alive branch ('idle', 'turn_completed'); its clean exit after that
+    // leaves the record idle, as for any daemon session whose CLI is gone. Either
+    // way the status and its reason must agree: 'idle' with 'normal_completion' is
+    // a stopped session that a later write described as live again. The reason is
+    // the record's own field, not status_history[0]: an unstamped status write can
+    // land before the stamped one and owns the transition entry ('unknown').
     expect(['stopped', 'idle']).toContain(ours!.process_status);
+    expect(ours!.status_reason).toBe(ours!.process_status === 'stopped' ? 'normal_completion' : 'turn_completed');
     expect(ours!.errorMessage).toBeFalsy();
-    expect(ours!.status_history?.[0]?.reason).toBe('normal_completion');
+    expect(ours!.status_history?.some((t) => t.process_status === 'error')).toBe(false);
 
     // outputFile must survive: it is threaded into readSessionHistory,
     // computeSessionChanges and the health monitor. Daemon-backed sessions carry the

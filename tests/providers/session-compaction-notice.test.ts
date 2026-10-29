@@ -384,6 +384,21 @@ describe('ClaudeCodeSession: failed local commands', () => {
     expect(session.processPid).toBeNull()
   })
 
+  it('a quiet exit after a result that already saw the CLI gone keeps the session stopped', () => {
+    // A local CLI that exits right after its result: the result handler finds no
+    // live process and says 'stopped'; the exit that lands next must not turn it
+    // back to 'idle', or the next status write describes a dead CLI as live.
+    const session = runningSession()
+    const inner = session as unknown as { handleQuietProcessExit(): void; reclaimUntakenLines(): void; _transport: Record<string, unknown> }
+    vi.spyOn(inner, 'reclaimUntakenLines').mockImplementation(() => {})
+    Object.assign(inner._transport, { isRemote: false, hasPipe: false, stopTail: vi.fn() })
+    feed(session, commandResult({ result: 'done', num_turns: 1 }))
+    expect(session.processStatus).toBe('stopped')
+    inner.handleQuietProcessExit()
+    expect(session.processStatus).toBe('stopped')
+    expect(session.processPid).toBeNull()
+  })
+
   it('a notification turn with its own init hands the failed task back without a second result', async () => {
     const session = runningSession()
     const { results } = captureCommandEvents()

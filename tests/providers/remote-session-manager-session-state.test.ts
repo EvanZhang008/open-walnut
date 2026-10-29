@@ -38,16 +38,31 @@ describe('L2.1 RemoteSessionManager session_state wire-level contract', () => {
       TEST_TARGET,
       `ws://127.0.0.1:${daemon.port}`,
     )
+    // The CLI must stay alive for the whole test, as Walnut's long-running
+    // stream-json CLI does: these tests count onExit calls, and a CLI that exits
+    // on its own makes the daemon send a real `exit` on top of the injected ones.
+    // With no flags and a message the mock CLI ran one json turn and exited, and
+    // its `exit` (about 100ms later, on a busy box inside the test) was the flake.
+    // An init-only FIFO spawn idles on stdin until the daemon stops it.
     await mgr.start({
-      args: [],
-      message: 'hello',
+      args: ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose'],
+      message: '',
       cwd: '/tmp',
       onOutput,
       onExit,
     })
-    // Wait for initial connection & `cmd:start` round-trip
-    await new Promise((r) => setTimeout(r, 60))
   })
+
+  // Every frame of a test crosses one socket in order, and the manager handles
+  // exit/session_state synchronously, so once a sentinel line emitted after them
+  // reaches onOutput every earlier frame has been handled. Never a fixed sleep:
+  // a busy event loop runs an expired timer before it reads the frame.
+  let barrierSeq = 0
+  async function framesHandled(sid = 'sid-test'): Promise<void> {
+    const line = `BARRIER:${++barrierSeq}`
+    daemon.emitEvent('jsonl', { sid, line })
+    await vi.waitFor(() => expect(onOutput.mock.calls.some((c) => c[0]?.line === line)).toBe(true))
+  }
 
   afterEach(async () => {
     try { await mgr.cleanup() } catch { /* best effort */ }
@@ -87,9 +102,8 @@ describe('L2.1 RemoteSessionManager session_state wire-level contract', () => {
   // M2 — two session_state=dead in a row → _onExit only called once (dedup via _hasPipe)
   it('M2: repeated session_state=dead fires _onExit only once (dedup)', async () => {
     daemon.emitSessionState('sid-test', 'dead', { exitCode: 7 })
-    await new Promise((r) => setTimeout(r, 20))
     daemon.emitSessionState('sid-test', 'dead', { exitCode: 99 })
-    await new Promise((r) => setTimeout(r, 20))
+    await framesHandled()
     expect(onExit).toHaveBeenCalledTimes(1)
     expect(onExit).toHaveBeenCalledWith(7)
   })
@@ -97,7 +111,7 @@ describe('L2.1 RemoteSessionManager session_state wire-level contract', () => {
   // M3 — sid mismatch → event ignored
   it('M3: session_state for unrelated sid is ignored', async () => {
     daemon.emitSessionState('OTHER-SID', 'dead', { exitCode: 1 })
-    await new Promise((r) => setTimeout(r, 30))
+    await framesHandled()
     expect(onExit).not.toHaveBeenCalled()
     expect(mgr.hasPipe).toBe(true)
   })
@@ -106,16 +120,15 @@ describe('L2.1 RemoteSessionManager session_state wire-level contract', () => {
   it('M4: session_state tagged with _prevSid also matches', async () => {
     // Simulate mid-rename: tmpId was 'sid-test', server now knows new 'sid-real'
     mgr.renameForSession('sid-real')
-    await new Promise((r) => setTimeout(r, 30))
     daemon.emitSessionState('sid-test', 'dead', { exitCode: 5 })
-    await new Promise((r) => setTimeout(r, 30))
+    await framesHandled()
     expect(onExit).toHaveBeenCalledWith(5)
   })
 
   // M5 — session_state=running {adopted:true} does NOT fire _onExit
   it('M5: session_state=running with adopted:true does NOT fire onExit', async () => {
     daemon.emitSessionState('sid-test', 'running', { adopted: true })
-    await new Promise((r) => setTimeout(r, 30))
+    await framesHandled()
     expect(onExit).not.toHaveBeenCalled()
     expect(mgr.hasPipe).toBe(true)
   })
@@ -131,7 +144,7 @@ describe('L2.1 RemoteSessionManager session_state wire-level contract', () => {
     const onExit2 = vi.fn()
     // Do NOT call start — just attach event listener path by touching conn
     daemon.emitSessionState('never-started', 'dead', { exitCode: 1 })
-    await new Promise((r) => setTimeout(r, 30))
+    await framesHandled()
     expect(onExit2).not.toHaveBeenCalled()
     try { await mgr2.cleanup() } catch { /* no-op */ }
   })
@@ -139,7 +152,7 @@ describe('L2.1 RemoteSessionManager session_state wire-level contract', () => {
   // M7 — session_state=dead without exitCode → onExit called with default 1
   it('M7: session_state=dead without exitCode falls back to 1', async () => {
     daemon.emitSessionState('sid-test', 'dead')
-    await new Promise((r) => setTimeout(r, 30))
+    await framesHandled()
     expect(onExit).toHaveBeenCalledWith(1)
   })
 
@@ -147,9 +160,8 @@ describe('L2.1 RemoteSessionManager session_state wire-level contract', () => {
   it('M8: legacy exit + session_state=dead fires onExit only once', async () => {
     // Legacy exit first
     daemon.emitEvent('exit', { sid: 'sid-test', code: 11 })
-    await new Promise((r) => setTimeout(r, 20))
     daemon.emitSessionState('sid-test', 'dead', { exitCode: 22 })
-    await new Promise((r) => setTimeout(r, 30))
+    await framesHandled()
     expect(onExit).toHaveBeenCalledTimes(1)
     // legacy exit path passes (code, stderr); we only assert on the first arg.
     expect(onExit.mock.calls[0][0]).toBe(11)
@@ -272,44 +284,46 @@ describe('L2.1 RemoteSessionManager session_state wire-level contract', () => {
   // replaces the uuid-Set dedup for daemons that send `v`, and uniquely also catches out-of-order
   // (which uuid dedup never did) and uuid-less lines (which uuid dedup let through).
   //
-  // Count ONLY our own marker lines (the mock daemon's start() also tails a real `result` line
-  // from the seeded jsonl, which is unrelated background noise carrying no `v`).
+  // Count ONLY our own marker lines. The live CLI's own init line also arrives, stamped with its
+  // small real offset at any moment, so every `v` here sits far above it (V0): whichever comes
+  // first, neither makes the other look stale.
+  const V0 = 1_000_000_000
   const countDelivered = (prefix: string) =>
     onOutput.mock.calls.filter((c) => typeof c[0]?.line === 'string' && (c[0].line as string).startsWith(prefix)).length
 
   it('L1-1: forwards lines with strictly increasing v (no false skip)', async () => {
-    daemon.emitEvent('jsonl', { sid: 'sid-test', line: 'L1A:x1', v: 100 })
-    daemon.emitEvent('jsonl', { sid: 'sid-test', line: 'L1A:x2', v: 200 })
-    await new Promise((r) => setTimeout(r, 30))
+    daemon.emitEvent('jsonl', { sid: 'sid-test', line: 'L1A:x1', v: V0 + 100 })
+    daemon.emitEvent('jsonl', { sid: 'sid-test', line: 'L1A:x2', v: V0 + 200 })
+    await framesHandled()
     expect(countDelivered('L1A:')).toBe(2)
   })
 
   it('L1-2: skips a duplicate replay (same v) even with NO uuid', async () => {
     const line = 'L1B:no-uuid' // uuid-less: uuid dedup would NOT catch this; only version-skip does
-    daemon.emitEvent('jsonl', { sid: 'sid-test', line, v: 300 })
-    daemon.emitEvent('jsonl', { sid: 'sid-test', line, v: 300 }) // replay at same v → must skip
-    await new Promise((r) => setTimeout(r, 30))
+    daemon.emitEvent('jsonl', { sid: 'sid-test', line, v: V0 + 300 })
+    daemon.emitEvent('jsonl', { sid: 'sid-test', line, v: V0 + 300 }) // replay at same v → must skip
+    await framesHandled()
     expect(countDelivered('L1B:')).toBe(1)
   })
 
   it('L1-3: skips an OUT-OF-ORDER stale line (v < last seen) — uuid dedup never did this', async () => {
-    daemon.emitEvent('jsonl', { sid: 'sid-test', line: 'L1C:newer', v: 500 })
-    daemon.emitEvent('jsonl', { sid: 'sid-test', line: 'L1C:older', v: 400 }) // stale → skip
-    await new Promise((r) => setTimeout(r, 30))
+    daemon.emitEvent('jsonl', { sid: 'sid-test', line: 'L1C:newer', v: V0 + 500 })
+    daemon.emitEvent('jsonl', { sid: 'sid-test', line: 'L1C:older', v: V0 + 400 }) // stale → skip
+    await framesHandled()
     expect(countDelivered('L1C:')).toBe(1)
   })
 
   it('L1-4: a replay window [from,current) after live delivery is fully skipped', async () => {
     // Live delivery advances the watermark to 800.
-    daemon.emitEvent('jsonl', { sid: 'sid-test', line: 'L1D:a', v: 600 })
-    daemon.emitEvent('jsonl', { sid: 'sid-test', line: 'L1D:b', v: 700 })
-    daemon.emitEvent('jsonl', { sid: 'sid-test', line: 'L1D:c', v: 800 })
-    await new Promise((r) => setTimeout(r, 20))
+    daemon.emitEvent('jsonl', { sid: 'sid-test', line: 'L1D:a', v: V0 + 600 })
+    daemon.emitEvent('jsonl', { sid: 'sid-test', line: 'L1D:b', v: V0 + 700 })
+    daemon.emitEvent('jsonl', { sid: 'sid-test', line: 'L1D:c', v: V0 + 800 })
+    await framesHandled()
     // Reconnect replays [600, 800] — all <= 800 → every one skipped.
-    daemon.emitEvent('jsonl', { sid: 'sid-test', line: 'L1D:a', v: 600 })
-    daemon.emitEvent('jsonl', { sid: 'sid-test', line: 'L1D:b', v: 700 })
-    daemon.emitEvent('jsonl', { sid: 'sid-test', line: 'L1D:c', v: 800 })
-    await new Promise((r) => setTimeout(r, 30))
+    daemon.emitEvent('jsonl', { sid: 'sid-test', line: 'L1D:a', v: V0 + 600 })
+    daemon.emitEvent('jsonl', { sid: 'sid-test', line: 'L1D:b', v: V0 + 700 })
+    daemon.emitEvent('jsonl', { sid: 'sid-test', line: 'L1D:c', v: V0 + 800 })
+    await framesHandled()
     expect(countDelivered('L1D:')).toBe(3) // only the 3 live ones
   })
 })

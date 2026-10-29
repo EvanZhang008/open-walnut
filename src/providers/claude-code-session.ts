@@ -5199,7 +5199,11 @@ export class ClaudeCodeSession {
     this.pid = null
     this._active = false
     // Only detached work kept a settled failure 'running'; with the process gone the failure is what remains.
-    if (this._processStatus !== 'error' && !this._expectedTeardown) this._processStatus = this._settledCommandFailure ? 'error' : 'idle'
+    // A session already 'stopped' stays stopped: its result saw the CLI gone and said so, and
+    // turning it back to 'idle' here made the next status write describe a dead CLI as live.
+    if (this._processStatus !== 'error' && this._processStatus !== 'stopped' && !this._expectedTeardown) {
+      this._processStatus = this._settledCommandFailure ? 'error' : 'idle'
+    }
     this._activity = undefined
     const sid = this.claudeSessionId
     if (sid) void import('../core/session-tracker.js').then(({ updateSessionRecord }) =>
