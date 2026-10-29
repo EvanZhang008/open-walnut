@@ -62,6 +62,15 @@ enum TimelineTurnFixtures {
             sentBy: "person")
         add("assistant", "Listing the merged changes first", kind: .thinking)
         add("assistant", "The draft is ready in docs/release-notes.md.\n\n\(TimelineTurnMarker.tag)")
+        // A status change of a followed task in front of a person's words (2026-10-29):
+        // one row above the bubble, never the words inside the note's card.
+        add("user", envelope("kind=\"notification\" from=\"Walnut\" outcome=\"status\" "
+                                + "note=\"status changes of tasks you follow, not a work request\"",
+                             "A task you follow changed its status (Walnut's record, not a report):\n"
+                                + "- \"Docs lead\" (tf-0002): Working \u{2192} Waiting (on another task) at 21:05 UTC.")
+                + "\n\nYes, that plan works. Go for it.", sentBy: "person")
+        add("assistant", "mcp__walnut__task_send", kind: .tool, detail: "Docs lead", result: "sent")
+        add("assistant", "Started. The docs lead has the plan.")
         // A reply whose turn ended in a failed call: open, the received message folded.
         add("user", envelope("kind=\"reply\" from=\"Build helper [5e6f7a8b]\" title=\"Cache cleared\"",
                              "I cleared the build cache."), sentBy: "agent")
