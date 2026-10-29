@@ -10,10 +10,11 @@
 #    is broken (the fix for a cross-file dangling import sits uncommitted in
 #    the worktree). Bundling HEAD's import graph catches that in <1s.
 #
-# 3. An OPTIONAL local-only scanner (scripts/local/scan-sensitive.sh, gitignored)
-#    runs afterwards if present — used by this repo's maintainer to scan for
-#    private content before pushing to the public mirror. Absent for everyone
-#    else, so this hook degrades to just the type-check.
+# 3. An OPTIONAL local-only scanner (scripts/local/scan-sensitive.sh, gitignored,
+#    or the file `git config walnut.prepushScanner` names) runs afterwards if
+#    present — used by this repo's maintainer to scan for private content before
+#    pushing to the public mirror. Absent for everyone else, so this hook
+#    degrades to just the type-check.
 #
 # Bypass everything with `git push --no-verify` (not recommended).
 
@@ -29,6 +30,15 @@ echo "✓ Type-check passed."
 bash scripts/check-committed-bundle.sh || exit 1
 
 # Optional local sensitive-content scanner — forward stdin (the pre-push refs).
-if [ -x scripts/local/scan-sensitive.sh ]; then
-  scripts/local/scan-sensitive.sh || exit 1
+# scripts/local/ is gitignored, so a clone or a worktree has none: there the scanner
+# is the file git config walnut.prepushScanner names, and a named scanner that is
+# missing blocks the push instead of skipping the scan.
+scanner=scripts/local/scan-sensitive.sh
+[ -x "$scanner" ] || scanner=$(git config --path --get walnut.prepushScanner || true)
+if [ -n "$scanner" ]; then
+  if [ ! -x "$scanner" ]; then
+    echo "Push blocked: walnut.prepushScanner names $scanner, which is not there."
+    exit 1
+  fi
+  "$scanner" || exit 1
 fi
