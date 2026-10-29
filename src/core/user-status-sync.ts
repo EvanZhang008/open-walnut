@@ -424,7 +424,11 @@ export async function syncUserStatuses(ids: ReadonlySet<string> | null, nowMs = 
     const next = deriveUserStatus(input, nowMs);
     if (sameStatus(task.user_status, next)) continue;
     const settlesAt = handBackSettlesAt(task, next, nowMs, !!input.hasSession);
-    if (settlesAt !== null) { recheckAt(task.id, settlesAt); continue; }
+    if (settlesAt !== null) {
+      if (!settleTimers.has(task.id)) log.task.info('user-status: hand-back held', { taskId: task.id, untilMs: settlesAt });
+      recheckAt(task.id, settlesAt);
+      continue;
+    }
     const res = await updateTaskRaw(task.id, { user_status: next }, {
       emitEvent: true, source: OWN_SOURCE,
       // Completed while its facts were read: it reads Done, and the write would announce it again.
@@ -433,7 +437,13 @@ export async function syncUserStatuses(ids: ReadonlySet<string> | null, nowMs = 
       log.task.debug('user-status: write skipped', { taskId: task.id, error: errText(err) });
       return { changed: false };
     });
-    if (res.changed) changed += 1;
+    if (res.changed) {
+      changed += 1;
+      // Into Needs you: the line `walnut-logs.sh flips` pairs with the phase moves.
+      if (next.state === 'needs' && task.user_status?.state !== 'needs') {
+        log.task.info('user-status: now needs you', { taskId: task.id, source: next.source });
+      }
+    }
   }
   return changed;
 }

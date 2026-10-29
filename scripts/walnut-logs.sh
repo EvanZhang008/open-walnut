@@ -11,7 +11,8 @@
 #   <sid>.jsonl / .jsonl.err / .pipe / .pgid   per-session CLI output (source of truth)
 #
 # Usage:
-#   scripts/walnut-logs.sh diagnose [sid]       ⭐⭐ AUTO-CLASSIFY each send's slowness → names the bug (event-loop / Bug D mid-turn stall / slow resume) + p50/p90 summary
+#   scripts/walnut-logs.sh diagnose [sid] [mins] ⭐⭐ AUTO-CLASSIFY each send's slowness → names the bug (event-loop / Bug D mid-turn stall / slow resume) + p50/p90 summary; a row with no delivery line reads by its fate: CLI-settled (= delivered), PARKED (reason), HELD (prompt), else STUCK
+#   scripts/walnut-logs.sh flips [mins]         NEED_ACTION moves a new turn undid within 30s (<=5/20/30s), by who moved in/back: the monitor for the 20s hand-back hold (default 30min, 0=all)
 #   scripts/walnut-logs.sh busstorm [sid]       ⭐ quantify high-freq streaming fan-out per global subscriber (verify interest-set; spot a new storm source)
 #   scripts/walnut-logs.sh trace <sid>          per-message timeline: dispatch→RPC→enqueue→route→delivered, w/ deltas + hasPipe/path
 #   scripts/walnut-logs.sh pipe <sid>           hasPipe/lifecycle transitions (start vs attach, exit, reap) — why a send was queued
@@ -111,6 +112,12 @@ case "$cmd" in
     # have to eyeball the raw trace every time.
     # Usage: diagnose [sid] [mins]  — mins defaults to 30 (recent window so old
     # historical stalls don't pollute "is it happening NOW?"); pass 0 for all-time.
+    # A row with no 'message delivered' line still has a fate, and only a row with
+    # none is STUCK: the CLI settling the line ('queued line settled by the CLI')
+    # IS its delivery, at that time; a parked row is PARKED with its reason
+    # (session_live: open in a terminal elsewhere); a row behind a permission
+    # prompt or an unconfirmed line is HELD. (2026-10-29: all 20 "STUCK" rows of a
+    # log study had one of these fates.)
     sid="${1:-}"; mins="${2:-30}"
     echo "── send-latency diagnosis${sid:+ for $sid} (last ${mins}min; 0=all) — auto-labelled cause ──"
     # shellcheck disable=SC2046
@@ -128,7 +135,20 @@ def ms(t):
 # not-yet-routed enqueue for that sid. Once a message is tagged with a routing
 # decision (path/hasPipe) or a stall, those fields are LOCKED so a later
 # processNext routing-send for the same message can't overwrite the mid-turn path.
-msgs={}   # messageId -> {enq, deliv, sid, path, hasPipe, stall, locked, ...}
+msgs={}   # messageId -> {enq, deliv, settled, parked, held, sid, path, hasPipe, stall, ...}
+# Exact message names (src/providers/claude-code-session.ts, src/core/session-queue-park.ts).
+SETTLED='queued line settled by the CLI, rows leave the queue'
+PARKED='message parked: permanent delivery failure'
+UNPARKED='parked message un-parked by user action'
+HELD={'messages wait behind a pending permission prompt':'prompt',
+      'line waits for the previous one to be confirmed':'previous line unconfirmed'}
+import re
+def park_reason(r):
+    r=str(r or '?')
+    # session_live: another process (a terminal) holds the session; the row waits for a Retry.
+    h=re.search(r'open in a terminal.*?\((Claude Code )?(pid \d+[^)]*)\)',r)
+    if h: return 'session_live, held elsewhere: '+h.group(2)
+    return r.split('. ')[0][:90]
 for f in files:
     for l in open(f,errors='ignore'):
         if sid and sid[:8] not in l: continue
@@ -159,25 +179,57 @@ for f in files:
             msgs.setdefault(mid,{})['deliv']=tm
             # delivery path is the FINAL path; keep the earlier routing path separately
             msgs[mid]['dpath']=d.get('path'); msgs[mid]['deliveryMs']=d.get('deliveryMs')
+        # ---- the other fates a queued row can have (no 'message delivered' line) ----
+        elif m==SETTLED and isinstance(d.get('messageIds'),list):
+            # The CLI took the line itself (it named the line's uuid); the rows leave the
+            # queue here, so this IS the delivery and its time is the latency's end.
+            for i in d['messageIds']:
+                v=msgs.setdefault(i,{})
+                if 'settled' not in v: v['settled']=tm; v['settleWhy']=d.get('why')
+        elif m==PARKED and mid:
+            v=msgs.setdefault(mid,{}); v['parked']=tm; v['parkReason']=park_reason(d.get('reason'))
+        elif m==UNPARKED and mid:
+            msgs.setdefault(mid,{})['unparked']=tm
+        elif m in HELD and isinstance(d.get('messageIds'),list):
+            why=HELD[m]
+            if d.get('permissions'): why+=': '+','.join(map(str,d['permissions']))
+            for i in d['messageIds']: msgs.setdefault(i,{})['held']=why
 rows=[]
 for mid,v in msgs.items():
-    enq=v.get('enq'); deliv=v.get('deliv')
+    if 'enq' not in v: continue   # enqueued before the window: its fate alone is not a message to judge
+    enq=v.get('enq')
+    # Delivered = the first of a 'message delivered' line and the CLI settling the line.
+    ends=[x for x in (v.get('deliv'),v.get('settled')) if x is not None]
+    deliv=min(ends) if ends else None
+    if deliv is not None and v.get('deliv') is None: v['dpath']='cli-settled'
     e2d = (deliv-enq) if (enq and deliv) else None     # enqueue→delivered (the felt wait)
     path=v.get('path'); hp=v.get('hasPipe'); stall=v.get('stall'); deleg=v.get('delegated')
+    # A row whose fate says why it waited (the CLI settled it, or it was HELD) is
+    # labelled by that fate; the Bug D routing fingerprint is only a detail then.
+    by_fate = (v.get('deliv') is None and v.get('settled') is not None) or bool(v.get('held'))
+    route = '; routed injectMidTurn, hasPipe=False' if path=='injectMidTurn' and str(hp)=='False' else ''
     # ---- classify (most specific first) ----
     label='ok'
-    if e2d is None and 'deliv' not in v:
-        label='STUCK (enqueued, not delivered in window)'
-    elif stall:
+    if e2d is None and v.get('parked') and not (v.get('unparked',0)>v['parked']):
+        label=f'PARKED ({v.get("parkReason")})'
+    elif e2d is None and v.get('held'):
+        label=f'HELD ({v.get("held")})'
+    elif e2d is None and v.get('unparked'):
+        label='STUCK (un-parked by the user, no delivery since)'
+    elif e2d is None:
+        label='STUCK (enqueued, no fate in window: not delivered, settled, parked or held)'
+    elif stall and not by_fate:
         label='BUG D: mid-turn stall (cannot-inject on stale hasPipe=False)'
-    elif deleg and e2d is not None and e2d>3000:
+    elif deleg and not by_fate and e2d is not None and e2d>3000:
         label='Bug D path (delegated to processNext) but still slow — investigate'
-    elif path=='injectMidTurn' and str(hp)=='False' and e2d is not None and e2d>3000:
+    elif path=='injectMidTurn' and str(hp)=='False' and not by_fate and e2d is not None and e2d>3000:
         label='BUG D: mid-turn stall (injectMidTurn, stale hasPipe=False)'
+    elif e2d is not None and e2d>3000 and v.get('held'):
+        label=f'HELD then delivered ({v.get("held")}{route})'
     elif e2d is not None and e2d>3000 and v.get('dpath')=='resume':
         label='SLOW RESUME (CLI dead → --resume cold path)'
     elif e2d is not None and e2d>3000:
-        label=f'SLOW DELIVER (enqueue→delivered, path={v.get("dpath") or path})'
+        label=f'SLOW DELIVER (enqueue→delivered, path={v.get("dpath") or path}{route})'
     rows.append((enq or 0,mid,e2d,(path or v.get('dpath')),hp,v.get('deliveryMs'),label))
 rows.sort()
 def fmt(x): return f'{x:8.0f}ms' if isinstance(x,(int,float)) else '        ?'
@@ -200,6 +252,85 @@ else:
     print("  ✅ no slow sends in window")
 if not rows: print("  (no messages found — check sid / log window)")
 PY
+    ;;
+
+  flips)
+    # flips [mins] — moves into NEED_ACTION that a new turn undid within 30 s, from
+    # the 'phase transition' lines (taskId, oldPhase, newPhase, trigger, source).
+    # The monitor for the hand-back hold (src/core/user-status-sync.ts
+    # HANDBACK_SETTLE_MS = 20 s, commit 0d4df963f): flips still happen in the PHASE,
+    # but one undone within the hold must never reach the stored user status. So the
+    # number to watch is "undone after the hold" (20-30 s): those could reach it.
+    # With a build that logs 'user-status: hand-back held' / 'now needs you', each
+    # flip is checked: REACHED = a 'now needs you' for the task between its move in
+    # and its move back. Older logs (neither line) print the column as skipped.
+    # Split by who moved the task in (trigger/source) and who moved it back.
+    # mins defaults to 30 like diagnose; 0 = all of the two most recent logs.
+    mins="${1:-30}"
+    if [[ "$mins" == "0" ]]; then since="1970-01-01T00:00:00"; else
+      since=$(date -u -v "-${mins}M" '+%Y-%m-%dT%H:%M:%S' 2>/dev/null || date -u -d "-${mins} minutes" '+%Y-%m-%dT%H:%M:%S')
+    fi
+    logs=$(recent_logs); [[ -n "$logs" ]] || die "no JSON log found in $LOG_DIR"
+    echo "── NEED_ACTION flips: moves into NEED_ACTION a new turn undid within 30s (last ${mins}min; 0=all; since ${since}Z) ──"
+    # shellcheck disable=SC2086
+    # Three line kinds, in time order: the phase moves, and the user-status writer's
+    # own lines (src/core/user-status-sync.ts): 'hand-back held' when it holds a
+    # hand-back, 'now needs you' when the stored status really moves into needs.
+    cat $logs | grep -aE '"message":"(phase transition|user-status: hand-back held|user-status: now needs you)"' | jq -R -r --arg since "$since" '
+      fromjson? | select(.time >= $since and (.taskId // "") != "") |
+      [ ((.time[0:19] + "Z" | fromdateiso8601) + (((.time[20:23] | tonumber?) // 0) / 1000)),
+        .time, .taskId, (.newPhase // "-"),
+        (((.trigger // "") + "/" + ((.source // "") | tostring))[0:60]),
+        (if .message == "phase transition" then "phase" elif .message == "user-status: hand-back held" then "held" else "needs" end) ] | @tsv' |
+      awk -F'\t' -v hold=20 '
+        function top(arr, title,   k, cmd) {
+          print title; fflush()
+          cmd = "sort -rn | head -8"
+          for (k in arr) printf "    %5d  %s\n", arr[k], k | cmd
+          close(cmd)
+        }
+        $6 == "held" { held++; if (!($3 in heldTask)) { heldTask[$3] = 1; heldTasks++ }; next }
+        $6 == "needs" { needs++; needsAt[$3] = $1 + 0; next }
+        {
+          t = $1 + 0; tid = $3; np = $4; who = $5
+          if ((tid in lastP) && lastP[tid] == "NEED_ACTION" && (np == "IN_PROGRESS" || np == "WAITING")) {
+            d = t - lastT[tid]
+            if (d >= 0 && d <= 30) {
+              n++
+              if (d <= 5) n5++
+              if (d <= hold) n20++
+              # Reached Needs you: the stored status moved into needs between the two moves.
+              r = ((tid in needsAt) && needsAt[tid] >= lastT[tid] && needsAt[tid] <= t)
+              if (r) { reached++; if (d <= hold) reachedIn++; reachedBy[lastW[tid]]++ }
+              rs = r ? "  REACHED Needs you" : ""
+              inBy[lastW[tid]]++; backBy[who]++; pair[lastW[tid] "  ->  " who]++
+              if (d > hold) late[++nl] = sprintf("    %s  %s  %.1fs  in=%s back=%s%s", $2, tid, d, lastW[tid], who, rs)
+              ex[n % 5] = sprintf("    %s  %s  %.1fs  in=%s back=%s%s", $2, tid, d, lastW[tid], who, rs)
+            }
+          }
+          if (np == "NEED_ACTION") entries++
+          lastP[tid] = np; lastT[tid] = t; lastW[tid] = who
+        }
+        END {
+          printf "  NEED_ACTION entries=%d  undone within 30s=%d  (<=5s %d, <=%ds %d, %d-30s %d)\n", entries, n, n5, hold, n20, hold, n - n20
+          if (n == 0) { print "  (no flips in the window)"; exit }
+          printf "  undone within the %ds hold (the hold should keep these off the user status): %d\n", hold, n20
+          printf "  undone AFTER the hold (could reach the user status): %d\n", n - n20
+          if (held + needs > 0) {
+            printf "  user-status lines in the window: hand-back held=%d (tasks %d)  now needs you=%d\n", held, heldTasks, needs
+            printf "  flips that REACHED Needs you: %d of %d  (undone within the hold: %d, after it: %d)\n", reached, n, reachedIn, reached - reachedIn
+            if (reachedIn > 0) print "  !! a flip undone within the hold reached Needs you: the hold is not holding"
+            if (reached > 0) top(reachedBy, "  ── flips that reached Needs you, by who moved them in ──")
+          } else {
+            print "  reached Needs you: column skipped (no user-status hand-back held / now needs you lines in the window: a build older than those lines)"
+          }
+          top(inBy, "  ── moved into NEED_ACTION by (trigger/source) ──")
+          top(backBy, "  ── moved back by (trigger/source) ──")
+          top(pair, "  ── in -> back pairs ──")
+          if (nl > 0) { print "  ── undone after the hold (newest 5) ──"; for (i = (nl > 5 ? nl - 4 : 1); i <= nl; i++) print late[i] }
+          print "  ── newest flips ──"
+          for (i = n - 4; i <= n; i++) if (i >= 1) print ex[i % 5]
+        }'
     ;;
 
   busstorm)
