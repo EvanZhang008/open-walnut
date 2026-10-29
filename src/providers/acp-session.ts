@@ -1888,7 +1888,7 @@ export class AcpSession {
       // Amendment options (accept_execpolicy_amendment, apply_network_policy_
       // amendment:*) also carry kind allow_always but mean "change durable
       // policy", not "approve this call" — a kind-based picker must never
-      // select one implicitly (reference study 2026-08-12; KiRoom has this
+      // select one implicitly (reference study 2026-08-12; one ACP client has this
       // hole and is saved only by codex's option ordering).
       const isAmendment = (o: { optionId?: string }) =>
         typeof o.optionId === 'string' && o.optionId.includes('amendment')

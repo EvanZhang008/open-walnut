@@ -80,7 +80,7 @@ describe('typos', () => {
               : i < 130 ? `the loop loops ${i}`
                 : i < 160 ? `who loses here ${i}`
                   : `a loose cable ${i}`), 161);
-    index.upsert({ kind: 'task', ref: 'target', title: 'ES ddb ticket, loose the alarm', updatedAt: DAY });
+    index.upsert({ kind: 'task', ref: 'target', title: 'QA ddb ticket, loose the alarm', updatedAt: DAY });
     const hits = index.search('ddb looes alarm', { limit: 40 });
     expect(hits[0]?.ref).toBe('target');
     expect(hits[0]?.components.coverage).toBe(1);

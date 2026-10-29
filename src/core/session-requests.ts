@@ -11,8 +11,8 @@
  * permission prompts too; the sweeper is the guarantee of last resort).
  *
  * Design lineage (see docs/plan): Claude Code's task-notification (`notified`
- * atomic mark, status settles BEFORE notification embellishment), MeshClaw's
- * "failure is also a completion event", KiRoom's phase gating. Storage follows
+ * atomic mark, status settles BEFORE notification embellishment), one reference
+ * client's "failure is also a completion event", another's phase gating. Storage follows
  * the notifications.json pattern: one bounded JSON file under WALNUT_HOME.
  */
 

@@ -469,11 +469,11 @@ describe('adoptAgentSearchSession', () => {
 
 describe('searchAskTitle', () => {
   it('labels the query and keeps it verbatim', () => {
-    expect(searchAskTitle('aihub cos')).toBe('Search query: aihub cos');
+    expect(searchAskTitle('acme cos')).toBe('Search query: acme cos');
   });
 
   it('flattens what the user typed onto one line', () => {
-    expect(searchAskTitle('  aihub \n\t cos  ')).toBe('Search query: aihub cos');
+    expect(searchAskTitle('  acme \n\t cos  ')).toBe('Search query: acme cos');
   });
 
   it('spends the 80-char budget on the query, never on the label', () => {

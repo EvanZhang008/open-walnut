@@ -70,11 +70,11 @@ describe('org-tree', () => {
   })
 
   it('a project with one team: Main talks to that team, no lead needed', () => {
-    const only = t({ project: 'Fertility', phase: 'IN_PROGRESS' })
+    const only = t({ project: 'Gardening', phase: 'IN_PROGRESS' })
     const tree = buildOrgTree([only])
     expect(tree.projects).toHaveLength(1)
     const p = tree.projects[0]!
-    expect(p).toMatchObject({ project: 'Fertility', needsLead: false, contactId: only.id })
+    expect(p).toMatchObject({ project: 'Gardening', needsLead: false, contactId: only.id })
     expect(p.lead).toBeUndefined()
   })
 

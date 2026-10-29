@@ -21,7 +21,7 @@ function isGitServerHost(h: DiscoveredHost): boolean {
 }
 
 /** Auto-generate a short display label for a raw FQDN entry.
- *  'dev-dsk-jdoe-2b-2f7e54b8.us-west-2.example.com' → 'dev-dsk…2f7e54b8'
+ *  'build-box-jdoe-2b-2f7e54b8.us-west-2.example.com' → 'build-box…2f7e54b8'
  *  Keeps the first name segment's prefix + its trailing uniqueness token so
  *  near-identical machine names stay distinguishable at a glance. */
 export function shortLabelForFqdn(hostname: string): string {
@@ -56,7 +56,7 @@ export function _resetScanCacheForTest(): void {
  * Customer-experience filters applied before returning:
  *  - git/code servers dropped (you can't run a Claude Code session on github)
  *  - one entry per machine: entries deduped by hostname, preferring a
- *    human-made short alias (Host olddev → HostName dev-dsk-…) over the raw FQDN
+ *    human-made short alias (Host olddev → HostName build-box-…) over the raw FQDN
  *
  * Handles basic Host directives. Doesn't support all SSH config features
  * (includes, wildcards, Match blocks) — this is intentionally minimal for

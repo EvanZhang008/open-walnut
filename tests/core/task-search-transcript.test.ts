@@ -142,7 +142,7 @@ describe('splitSearchAnswerMessage — words stay words, the object becomes rows
   // and left the JSON on screen under a card-less wall of text.
   it('keeps the model’s reasoning AND cards the object it ends with', () => {
     const prose = [
-      'Looking at the seed results, I can see strong matches for "aihub cos":',
+      'Looking at the seed results, I can see strong matches for "acme cos":',
       '',
       '1. **Task mu4z2h5r-aa82** (session hit, updated today): "Hub answers now describe the current flow"',
       '2. **Task mt0m52lh-c252**: mentions the hub in context',

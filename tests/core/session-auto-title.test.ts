@@ -272,14 +272,14 @@ describe('sessionAutoTitleHook', () => {
       const sid = nextSid();
       const task = await makeTaskAndSession(sid);
       const fake = registerFakeSession(sid, async () => null, async (question) => {
-        expect(question).toContain('trace the fertility invoice emails');
-        return 'Fertility invoice email trace';
+        expect(question).toContain('trace the garden supply invoice emails');
+        return 'Garden supply invoice email trace';
       });
 
-      await autoTitleFromObservedMessage(sid, task.id, 'trace the fertility invoice emails');
+      await autoTitleFromObservedMessage(sid, task.id, 'trace the garden supply invoice emails');
 
       expect(fake.askSideQuestion).toHaveBeenCalledTimes(1);
-      expect((await getTask(task.id)).title).toBe('Fertility invoice email trace');
+      expect((await getTask(task.id)).title).toBe('Garden supply invoice email trace');
     });
 
     it('strips the images-attached prefix and skips image-only messages', async () => {

@@ -119,7 +119,7 @@ export function PendingSessionPanel({ cwd, host, hostLabel, label, message, real
   const errorHint = isClientTimeout
     ? 'The request timed out before a response arrived — the session may still have started. Check the session list before retrying (Retry may create a duplicate).'
     : isRemote
-      ? 'Check your SSH credentials (e.g. run mwinit) and verify the host is reachable.'
+      ? 'Check your SSH credentials (refresh them if they expired) and verify the host is reachable.'
       : 'Verify that the Claude CLI is installed and accessible.';
 
   if (hasError) {

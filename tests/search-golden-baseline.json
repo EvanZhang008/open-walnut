@@ -306,7 +306,7 @@
       "rank": null,
       "ms": 0
     },
-    "hp-visa-letter-issues": {
+    "hp-letter-issues": {
       "pass": false,
       "rank": null,
       "ms": 14
@@ -316,7 +316,7 @@
       "rank": 7,
       "ms": 3
     },
-    "hp-lab-followup": {
+    "hp-results-followup": {
       "pass": true,
       "rank": 1,
       "ms": 8
@@ -356,7 +356,7 @@
       "rank": 6,
       "ms": 9
     },
-    "ht-cluster-insights": {
+    "ht-project-name-typo": {
       "pass": false,
       "rank": null,
       "ms": 16

@@ -228,7 +228,7 @@ export function registerSessionChatRpc(): void {
     }
 
     // User-initiated send to a remote session = a deliberate retry. Forget any
-    // cached connection failure (e.g. after the user ran mwinit) so processNext
+    // cached connection failure (e.g. after the user refreshed their SSH credentials) so processNext
     // reconnects fresh instead of fast-failing against the 60s failure cache.
     if (record?.host) {
       const { clearDaemonFailureCache } = await import('../../providers/daemon-connection.js')

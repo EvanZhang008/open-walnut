@@ -601,7 +601,7 @@ export class DaemonConnection {
   /**
    * Backoff cap when the failure is a standing condition no amount of retrying
    * fixes — expired SSH cert (`Permission denied (publickey)` until the user
-   * runs mwinit) or a hostname that no longer resolves (host recycled). At the
+   * refreshes their SSH credentials) or a hostname that no longer resolves (host recycled). At the
    * normal 30s cap those hammered 2 hosts × ~19h on 2026-08-01 (each attempt
    * spawning several ssh processes, amplified by endpoint-security agents) and
    * read as "Walnut is frozen". Recovery after the user fixes auth is bounded
@@ -6511,7 +6511,7 @@ export function isPooledConnection(conn: DaemonConnection): boolean {
 /**
  * Forget a cached connection failure so the next getDaemonConnection() retries
  * immediately instead of fast-failing for up to 60s. Call this on a user-initiated
- * retry (e.g. after they run mwinit) — the 60s cache is meant to throttle automatic
+ * retry (e.g. after they refresh their SSH credentials) — the 60s cache is meant to throttle automatic
  * reconnects, not to block a deliberate human retry.
  */
 export function clearDaemonFailureCache(hostKey?: string): void {

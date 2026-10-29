@@ -131,18 +131,18 @@ describe('sendMessageToSession carries the note (real store and queue)', () => {
   it('the incident: moved to another project and folder, the next message carries the place, once', async () => {
     const { task, sid, systemPrompt } = await spawned('old-repo')
     expect(systemPrompt).toContain('project "old-repo")')
-    const folder = await createFolder('Rearchitecture', 'Cluster Insights')
-    await updateTask(task.id, { project: 'Cluster Insights' })
+    const folder = await createFolder('Rearchitecture', 'Signal Lab')
+    await updateTask(task.id, { project: 'Signal Lab' })
     await addToGroup(folder.group_id, [task.id], { move: true })
     expect((await getTask(task.id)).group_id).toBe(folder.group_id)
 
     await sendMessageToSession(sid, 'next step please', { source: 'ui' })
     const [first] = await rows(sid)
     expect(first).toMatch(/^<walnut-message kind="notification"/)
-    expect(first).toContain('now stands in project "Cluster Insights", folder "Rearchitecture".')
-    expect(first).toContain('project "old-repo" became project "Cluster Insights"')
+    expect(first).toContain('now stands in project "Signal Lab", folder "Rearchitecture".')
+    expect(first).toContain('project "old-repo" became project "Signal Lab"')
     expect(first.endsWith('\n\nnext step please')).toBe(true)
-    expect((await getSessionByClaudeId(sid))?.placeNoted).toMatchObject({ project: 'Cluster Insights', folderId: folder.group_id })
+    expect((await getSessionByClaudeId(sid))?.placeNoted).toMatchObject({ project: 'Signal Lab', folderId: folder.group_id })
 
     // Told: the next message, a peer's, goes as written.
     await sendMessageToSession(sid, 'peer says hi', { source: 'peer' })
@@ -211,8 +211,8 @@ describe('sendMessageToSession carries the note (real store and queue)', () => {
   describe('compaction', () => {
     async function moved() {
       const s = await spawned('old-repo')
-      const folder = await createFolder('Rearchitecture', 'Cluster Insights')
-      await updateTask(s.task.id, { project: 'Cluster Insights' })
+      const folder = await createFolder('Rearchitecture', 'Signal Lab')
+      await updateTask(s.task.id, { project: 'Signal Lab' })
       await addToGroup(folder.group_id, [s.task.id], { move: true })
       return s
     }
@@ -224,8 +224,8 @@ describe('sendMessageToSession carries the note (real store and queue)', () => {
       await sendMessageToSession(sid, 'two', { source: 'ui' })
       const [one, two] = await rows(sid)
       expect(one).toContain('outcome="moved"')
-      expect(two).toContain('now stands in project "Cluster Insights", folder "Rearchitecture".')
-      expect(two).toContain('project "old-repo" became project "Cluster Insights"')
+      expect(two).toContain('now stands in project "Signal Lab", folder "Rearchitecture".')
+      expect(two).toContain('project "old-repo" became project "Signal Lab"')
     })
 
     it('a replayed boundary (same uuid) does not void the note given after it', async () => {
@@ -243,14 +243,14 @@ describe('sendMessageToSession carries the note (real store and queue)', () => {
       await notePlaceCompaction(sid, 'boundary-1')
       const open = await collectOpenItems(sid)
       expect(open.text).toContain('your context was just compacted')
-      expect(open.text).toContain(`Your task "Sync worker" (${task.id}) stands in project "Cluster Insights", folder "Rearchitecture".`)
+      expect(open.text).toContain(`Your task "Sync worker" (${task.id}) stands in project "Signal Lab", folder "Rearchitecture".`)
       expect(open.text).toContain('Trust this over your prompt')
       await sendMessageToSession(sid, 'two', { source: 'ui' })
       expect((await rows(sid))[1]).toBe('two')
       // A move after the compaction is a new change: told again.
       await updateTask(task.id, { project: 'lighthouse' })
       await sendMessageToSession(sid, 'three', { source: 'ui' })
-      expect((await rows(sid))[2]).toContain('project "Cluster Insights" became project "lighthouse"')
+      expect((await rows(sid))[2]).toContain('project "Signal Lab" became project "lighthouse"')
     })
 
     it('the hook stays silent when the prompt still names the place (nothing to restate)', async () => {
