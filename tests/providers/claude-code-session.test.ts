@@ -3622,6 +3622,51 @@ describe('SessionRunner.currentTurn — live daemon round-trip', () => {
     expect(runner.currentTurn(claudeSessionId)).toBeUndefined();
   });
 
+  // The activeProcessing safety timer re-arms while the session under the id runs a
+  // turn that has not ended (inTurn, active-processing-live-turn.test.ts). This
+  // pins that on a real session through the daemon: it holds from the resume spawn
+  // to the result, and the result ends it.
+  it('a running turn reads inTurn from its resume spawn until its result', async () => {
+    const collected = collectEvents();
+    const sessionId = 'ledger-live-watermark-task';
+    bus.emit(EventNames.SESSION_START, { taskId: sessionId, message: 'hello', project: 'test-proj' }, ['session-runner'], { source: 'test' });
+    let liveSession: ClaudeCodeSession | undefined;
+    for (let i = 0; i < 200 && !liveSession; i++) {
+      liveSession = runner.getByTaskId(sessionId);
+      if (!liveSession) await new Promise((r) => setTimeout(r, 10));
+    }
+    const claudeSessionId = await liveSession!.sessionReady;
+    await waitForResult(collected);
+    for (let i = 0; i < 500 && liveSession!.processEndCount === 0; i++) await new Promise((r) => setTimeout(r, 10));
+
+    const collected2 = collectEvents();
+    await enqueueMessage(claudeSessionId, 'slow:2500 second turn');
+    bus.emit(EventNames.SESSION_SEND, { sessionId: claudeSessionId, message: 'slow:2500 second turn' }, ['session-runner'], { source: 'test' });
+    let openPromise: Promise<unknown> | undefined;
+    const pollStart = Date.now();
+    while (!openPromise && Date.now() - pollStart < 5000) {
+      openPromise = runner.currentTurn(claudeSessionId);
+      if (!openPromise) await new Promise((r) => setTimeout(r, 10));
+    }
+    expect(openPromise).toBeDefined();
+    const live = () => runner.findSessionByClaudeId(claudeSessionId)!;
+    // Sampled until the result. The entry opens just before the spawn, so the first
+    // samples may still read the old process's idle; from the spawn on, in flight.
+    const samples: boolean[] = [];
+    while (collected2.results.length === 0 && Date.now() - pollStart < 20_000) {
+      samples.push(live().inTurn);
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    const fromSpawn = samples.slice(samples.indexOf(true), -2);
+    expect(samples.indexOf(true)).toBeGreaterThanOrEqual(0);
+    // A cold resume under load may take a few seconds to read running.
+    expect(samples.indexOf(true)).toBeLessThan(80);
+    expect(fromSpawn.length).toBeGreaterThan(5);
+    expect(fromSpawn.every(Boolean), JSON.stringify(samples)).toBe(true);
+    await openPromise;
+    expect(live().inTurn).toBe(false);
+  });
+
   it('currentTurn rejects with a stopped outcome when the turn is interrupted', async () => {
     const collected = collectEvents();
     const sessionId = 'ledger-live-interrupt-task';

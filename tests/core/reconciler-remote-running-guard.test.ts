@@ -151,3 +151,36 @@ describe('reconciler freshness grace + registry see-through (incident 0dc8352f, 
     }
   })
 })
+
+describe('reconciler grace reads every write a send makes (2026-10-28)', () => {
+  // A session's phase write goes through updateTaskRaw and a send's touch writes
+  // last_session_update; neither bumps updated_at. Twice on 2026-10-28 a message
+  // moved a task IN_PROGRESS and started a cold resume, and the tick 9 to 16 s
+  // later handed it back as NEED_ACTION because updated_at was hours old.
+  const stale = () => new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString()
+  const stopped = (sid: string, taskId: string) =>
+    makeRemoteSession(sid, taskId, { host: undefined, process_status: 'stopped' } as Partial<SessionRecord>)
+
+  it('INCIDENT SHAPE: a phase move seconds ago holds the flip, whatever updated_at says', async () => {
+    await runReconcile(stopped('sid-9', 'task-9'),
+      makeTask('task-9', 'sid-9', { updated_at: stale(), phase_changed_at: new Date(Date.now() - 16_000).toISOString() }))
+    expect(applySessionPhaseCalls).toHaveLength(0)
+  })
+
+  it('a send seconds ago to a task already in progress holds the flip', async () => {
+    await runReconcile(stopped('sid-10', 'task-10'),
+      makeTask('task-10', 'sid-10', { updated_at: stale(), phase_changed_at: stale(), last_session_update: new Date().toISOString() }))
+    expect(applySessionPhaseCalls).toHaveLength(0)
+  })
+
+  it('every clock old: still handed back', async () => {
+    await runReconcile(stopped('sid-11', 'task-11'),
+      makeTask('task-11', 'sid-11', { updated_at: stale(), phase_changed_at: stale(), last_session_update: stale() }))
+    expect(applySessionPhaseCalls).toEqual([{ taskId: 'task-11', newPhase: 'NEED_ACTION' }])
+  })
+
+  it('no clock at all: still handed back (a missing time never reads as fresh)', async () => {
+    await runReconcile(stopped('sid-12', 'task-12'), makeTask('task-12', 'sid-12', { updated_at: '' }))
+    expect(applySessionPhaseCalls).toEqual([{ taskId: 'task-12', newPhase: 'NEED_ACTION' }])
+  })
+})

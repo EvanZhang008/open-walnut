@@ -9323,6 +9323,10 @@ export function slowHostReason(why: 'start' | 'send'): string {
     : 'Not confirmed yet: the computer running this session did not say in time whether it got your message (it may be very busy). Your message is kept and Walnut asks again by itself.'
 }
 
+/** The longest a running turn keeps its activeProcessing entry past the 60s check
+ *  (setActiveProcessing). Past it the entry is cleared as a stuck one. */
+export const ACTIVE_PROCESSING_MAX_HOLD_MS = 30 * 60_000
+
 export class SessionRunner {
   private sessions = new Map<string, ClaudeCodeSession>()
   /** ACP-backed sessions (any ACP engine), keyed by trackingId (providerSessionId or runtimeId). */
@@ -9470,9 +9474,10 @@ export class SessionRunner {
 
   /**
    * Add a session to activeProcessing with a safety timeout, and open a
-   * turn-ledger promissory note for it. The timeout auto-clears the entry
-   * (default 60s) to prevent permanent stuck state (e.g., if SESSION_RESULT
-   * arrives with a mismatched session ID) — that timeout used to be a bare
+   * turn-ledger promissory note for it. The timeout clears the entry (checked
+   * every 60s by default, waiting on while the session's turn still runs, up to
+   * ACTIVE_PROCESSING_MAX_HOLD_MS) to prevent permanent stuck state (e.g., if
+   * SESSION_RESULT arrives with a mismatched session ID) — that timeout used to be a bare
    * guess with no distinguishable cause; it now rejects the ledger promise
    * with 'no_result' via `abortTurn`, so any caller awaiting this turn gets a
    * precise failure instead of silently having activeProcessing cleared.
@@ -9518,17 +9523,40 @@ export class SessionRunner {
     // (SessionChatHistory's `session:batch-completed` handler only bumps historyVersion;
     // bubbles are hidden from HISTORY evidence — see optimistic-dedup.ts). Under-reporting
     // costs only a status-badge fallback, so leave the overwrite alone.
-    const timer = setTimeout(() => {
-      if (this.activeProcessing.has(sessionId)) {
-        log.session.warn(`activeProcessing safety timeout (${Math.round(safetyTimeoutMs / 1000)}s): force-clearing stuck entry (batch ids retained)`, { sessionId })
-        this.activeProcessing.delete(sessionId)
-        this.batchCounts.delete(sessionId)
-        this.activeProcessingTimers.delete(sessionId)
-        abortTurn(sessionId, 'activeProcessing-safety-timeout')
-        // Try to process next messages if any accumulated while stuck
-        this.processNext(sessionId).catch(() => {})
+    //
+    // A turn that is plainly still running is not stuck: the timer waits on while
+    // the session under this exact id still runs a turn that has not ended
+    // (inTurn). Clearing a live turn's entry sent its later
+    // messages down processNext instead of the mid-turn path, and it fired on every
+    // turn longer than 60s (about 300 a day on 2026-10-28). A missed result shows as
+    // a turn that ended with the entry still set, or a session no longer running; a
+    // renamed session no longer answers to the old id. Those are cleared as before,
+    // and so is a turn held past ACTIVE_PROCESSING_MAX_HOLD_MS: rows that wait on a
+    // drain (a reconnect's redelivery, a slow host's look again) skip a session
+    // whose entry is set, and a turn stuck reading as running must not hold them.
+    const startedAt = Date.now()
+    const fire = (): void => {
+      if (!this.activeProcessing.has(sessionId)) return
+      const live = this.findSessionByClaudeId(sessionId)
+      if (live?.inTurn && Date.now() - startedAt < ACTIVE_PROCESSING_MAX_HOLD_MS) {
+        const next = setTimeout(fire, safetyTimeoutMs)
+        next.unref()
+        this.activeProcessingTimers.set(sessionId, next)
+        return
       }
-    }, safetyTimeoutMs)
+      log.session.warn(`activeProcessing safety timeout (${Math.round(safetyTimeoutMs / 1000)}s): force-clearing stuck entry (batch ids retained)`, {
+        sessionId, heldMs: Date.now() - startedAt,
+        why: !live ? 'no-session' : live.processStatus !== 'running' ? `status-${live.processStatus}`
+          : live.inTurn ? 'held-too-long' : 'turn-ended',
+      })
+      this.activeProcessing.delete(sessionId)
+      this.batchCounts.delete(sessionId)
+      this.activeProcessingTimers.delete(sessionId)
+      abortTurn(sessionId, 'activeProcessing-safety-timeout')
+      // Try to process next messages if any accumulated while stuck
+      this.processNext(sessionId).catch(() => {})
+    }
+    const timer = setTimeout(fire, safetyTimeoutMs)
     timer.unref()
     this.activeProcessingTimers.set(sessionId, timer)
   }
@@ -11946,6 +11974,9 @@ export class SessionRunner {
       hasPipe: dbgTarget?.hasPipe ?? false,
       pid: dbgTarget?.processPid ?? null,
       host: dbgTarget?.host ?? null,
+      // hasPipe=false on the mid-turn path is a send behind a start or attach still in
+      // flight (injectMidTurn waits for it), not the old stranded mid-turn stall.
+      processStatus: dbgTarget?.processStatus ?? null,
       path: restartPending || !this.activeProcessing.has(sessionId) ? 'processNext' : 'injectMidTurn',
     })
     if (restartPending || !this.activeProcessing.has(sessionId)) {
@@ -13192,8 +13223,8 @@ export class SessionRunner {
     // went out. Rows that may already be in a CLI (lineTries > 1) go out alone,
     // and the daemon is asked before anything is written for them.
     // A CLI this server already knows reports its queue: its rows say so on disk.
-    // The CLI may still be inside a turn here (the safety timeout re-enters
-    // processNext); the line still goes now and the CLI queues it.
+    // The CLI may still be inside a turn here (a safety timeout that cleared a held
+    // entry re-enters processNext); the line still goes now and the CLI queues it.
     let tracked = false
     let inTurn = false
     let live: ClaudeCodeSession | undefined
