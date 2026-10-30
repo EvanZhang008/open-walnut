@@ -33,7 +33,8 @@ import { computeRenderWindow, type RenderWindowAnchor } from './render-window';
 import { historyTurnWindowLimit, INITIAL_HISTORY_TURNS, EARLIER_HISTORY_TURNS, isHistorySentRow, isHistoryUserTurn } from '@open-walnut/history-turn-window';
 import { parseHistoryUnavailable, visibleHistoryUnavailable } from './history-unavailable';
 import { shouldRefetchForTurnPrompt, turnPromptMissing, PROMPT_REFETCH_RETRY_DELAYS_MS } from './turn-prompt-refetch';
-import { computeRenderFilter, allBlocksAbsorbed, buildHistoryEvidence, withFirstCheckHold, turnQuestionShown } from '@/stream/render-filter';
+import { computeRenderFilter, allBlocksAbsorbed, buildHistoryEvidence, withFirstCheckHold, turnQuestionShown, firstCheckHeldBelow } from '@/stream/render-filter';
+import { isPendingPermissionBlock } from '@/stream/stream-reducer';
 import { getFinishedAgentIds, subscribeFinishedAgentIds } from '@/cache/finished-agents-store';
 import { groupStreamingBlocks, collectLanes, isLaneChild, isRunMemberBlock, trailingThinkingStart, type GroupedStreamItem } from '@/stream/group-blocks';
 import { TeamCard } from './TeamCard';
@@ -480,10 +481,14 @@ const TRIPWIRE_SETTLE_MS = (typeof window !== 'undefined'
 const THREAD_BAR_HIT_PX = 11;
 /** How long an Ask from Tree Mode holds its passage still while Conversation Mode settles. */
 const ASK_HOLD_MS = 700;
-/** The longest the stream stays off screen while this session's history waits
- *  for its first server answer (see `shownHiddenBlocks`): a local answer takes
- *  0.1 to 1 s, a remote one 1 to 3 s; past this it shows anyway. */
+/** The longest a LIVE turn's stream stays off screen while this session's
+ *  history waits for its first server answer (see `shownHiddenBlocks`): a local
+ *  answer takes 0.1 to 1 s, a remote one 1 to 3 s; past this live output shows. */
 const FIRST_CHECK_HOLD_MS = 3_000;
+/** The longest a FINISHED turn's stream waits for that answer: its rows are on
+ *  their way, so it waits for them unless the read hangs (a busy server or a slow
+ *  host answered in 8 to 12 s, 2026-10-30). */
+const FIRST_CHECK_HOLD_MAX_MS = 15_000;
 
 /** Stable empty mark list for a page (or view) without question marks. */
 const NO_MARKS: MarkSpec[] = [];
@@ -812,29 +817,43 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // turn before with its question missing until the rows land (every reload
   // within a second or two of a reply, longer on a remote host). So while the
   // rows shown lack the stream turn's question (turnQuestionShown), the stream is
-  // not drawn before that answer, for at most FIRST_CHECK_HOLD_MS per session.
-  // Rows that end with the question (a cache written mid-turn) hold nothing, so
-  // a live turn's output shows as it comes. Once a stream block has been shown
-  // the hold is over for the session: what was on screen never leaves it.
+  // not drawn before that first answer: a finished turn waits for it (at most
+  // FIRST_CHECK_HOLD_MAX_MS, if the read hangs), a live turn's own blocks at most
+  // FIRST_CHECK_HOLD_MS, a pending permission card not at all
+  // (firstCheckHeldBelow). Rows that end with the question (a cache written
+  // mid-turn) hold nothing, so a live turn's output shows as it comes. A drawn
+  // block stays drawn: the held part only shrinks (`firstCheckShown`).
   // Every render site reads `shownHiddenBlocks`; the reset gate, the tripwire and
   // the forensics keep `hiddenBlocks` (what history absorbed), so a held block is
   // never dropped (tests/web/stream/first-check-hold.test.ts).
-  const [firstCheckHoldOverFor, setFirstCheckHoldOverFor] = useState<string | null>(null);
+  const [firstCheckShown, setFirstCheckShown] = useState<{ sid: string | null; from: number } | null>(null);
+  const [liveHoldOverFor, setLiveHoldOverFor] = useState<string | null>(null);
   useEffect(() => {
     if (!firstCheckPending) return undefined;
-    const timer = setTimeout(() => setFirstCheckHoldOverFor(sessionId), FIRST_CHECK_HOLD_MS);
-    return () => clearTimeout(timer);
+    const live = setTimeout(() => setLiveHoldOverFor(sessionId), FIRST_CHECK_HOLD_MS);
+    const all = setTimeout(() => setFirstCheckShown({ sid: sessionId, from: 0 }), FIRST_CHECK_HOLD_MAX_MS);
+    return () => { clearTimeout(live); clearTimeout(all); };
   }, [firstCheckPending, sessionId]);
-  const holdForFirstCheck = firstCheckPending && firstCheckHoldOverFor !== sessionId
-    && !turnQuestionShown(loadedMessages, optimisticMessages?.length ?? 0);
+  const firstCheckShownFrom = firstCheckShown?.sid === sessionId ? firstCheckShown.from : null;
+  const firstCheckHeld = firstCheckHeldBelow({
+    pending: firstCheckPending,
+    questionShown: turnQuestionShown(loadedMessages, optimisticMessages?.length ?? 0),
+    blockCount: blocks.length,
+    streaming: isStreaming,
+    liveOver: liveHoldOverFor === sessionId,
+    completedLen,
+    actionAt: firstCheckPending ? blocks.findIndex(isPendingPermissionBlock) : -1,
+    shownFrom: firstCheckShownFrom,
+  });
   useLayoutEffect(() => {
-    if (!holdForFirstCheck && firstCheckPending && blocks.length > 0 && firstCheckHoldOverFor !== sessionId) {
-      setFirstCheckHoldOverFor(sessionId);
+    if (firstCheckPending && firstCheckHeld < blocks.length
+      && (firstCheckShownFrom === null || firstCheckHeld < firstCheckShownFrom)) {
+      setFirstCheckShown({ sid: sessionId, from: firstCheckHeld });
     }
-  }, [holdForFirstCheck, firstCheckPending, blocks.length, firstCheckHoldOverFor, sessionId]);
+  }, [firstCheckPending, firstCheckHeld, blocks.length, firstCheckShownFrom, sessionId]);
   const shownHiddenBlocks = useMemo(
-    () => withFirstCheckHold(blocks.length, hiddenBlocks, holdForFirstCheck),
-    [blocks.length, hiddenBlocks, holdForFirstCheck],
+    () => withFirstCheckHold(blocks.length, hiddenBlocks, firstCheckHeld),
+    [blocks.length, hiddenBlocks, firstCheckHeld],
   );
 
   // Divergence tripwire: a FINISHED block with no history twin is kept visible

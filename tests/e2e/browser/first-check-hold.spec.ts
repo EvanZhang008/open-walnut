@@ -7,13 +7,18 @@
  * question missing until the history answer landed: 0.3 to 3 s, seen 2026-10-30
  * on every reload within a second or two of a reply. While the rows shown lack
  * the stream turn's question, the chat now draws no stream block before the
- * history's first server answer, for at most 3 s; rows that end with the
- * question hold nothing, so a live turn shows as it comes.
+ * history's first server answer: a finished turn waits for it (at most 15 s, if
+ * the read hangs), a live turn at most 3 s; rows that end with the question hold
+ * nothing, so a live turn shows as it comes.
  *
  *   A. no cache: every history read held 1.5 s, the snapshot holds the reply.
  *   B. a stale cached copy (an earlier visit), then a reload whose history is held.
- *   C. a host slower than the 3 s limit: the reply shows anyway, then one copy.
+ *   C. a finished turn on a host slower than 3 s: the reply waits for its question.
  *   D. a live turn whose question the cached rows hold: its output shows before the history answers.
+ *   E. a live turn on a host slower than 3 s: held at first, then its output shows, then one copy.
+ *   F. a history server that answers nothing for 17 s: the finished reply shows after the longest wait.
+ *   G. live output shown after 3 s stays on screen when its turn ends before history answers.
+ *   H. a pending permission card shows at once; the reply before it still waits for its question.
  */
 import { test, expect, type Page } from '@playwright/test'
 
@@ -50,6 +55,14 @@ async function mockSessionDetail(page: Page) {
       },
     })
   })
+}
+
+async function injectEvent(page: Page, name: string, data: unknown) {
+  await page.evaluate(({ name, data }) => {
+    const ws = (window as any).__capturedWs as WebSocket | undefined
+    if (!ws) throw new Error('no captured WebSocket')
+    ws.dispatchEvent(new MessageEvent('message', { data: JSON.stringify({ type: 'event', name, data, seq: Date.now() }) }))
+  }, { name, data })
 }
 
 /** The stream snapshot each page load gets: `window.__snapshotBlocks`, set before load. */
@@ -89,12 +102,15 @@ async function captureWs(page: Page, snapshotBlocks: unknown[]) {
   }, snapshotBlocks)
 }
 
-/** Serve `rows()` for every history read, each answer held `holdMs()` first. Returns the count of answers sent. */
-async function routeHistory(page: Page, rows: () => unknown[], holdMs: () => number): Promise<() => number> {
+/** Serve `rows()` for every history read, each answer held `holdMs()` first and
+ *  then until `downUntil()` (read again every 100 ms: the server is down until
+ *  then). Returns the count of answers sent. */
+async function routeHistory(page: Page, rows: () => unknown[], holdMs: () => number, downUntil: () => number = () => 0): Promise<() => number> {
   let answered = 0
   await page.route(`**/api/sessions/${SESSION_ID}/history**`, async (route) => {
     const wait = holdMs()
     if (wait > 0) await new Promise((r) => setTimeout(r, wait))
+    while (Date.now() < downUntil()) await new Promise((r) => setTimeout(r, 100))
     answered++
     const all = rows()
     const since = new URL(route.request().url()).searchParams.get('since')
@@ -163,18 +179,14 @@ test.describe('A reply never shows without its question while a session opens', 
     await expectSettled(page)
   })
 
-  test('C: a host slower than the hold limit: the reply shows anyway, then one copy', async ({ page }) => {
-    // History answers 8 s after it is asked; the hold gives up at 3 s from the panel's mount.
-    let hold = 8000
+  test('C: a finished turn on a host slower than the live limit waits for its question', async ({ page }) => {
+    // History answers 8 s after it is asked (a busy server answered in 8 to 12 s, 2026-10-30).
     await captureWs(page, replyBlock)
     await mockSessionDetail(page)
-    await routeHistory(page, () => full, () => hold)
+    await routeHistory(page, () => full, () => 8000)
     await page.goto(`/sessions?id=${SESSION_ID}`)
     await page.locator('.session-history').first().waitFor({ timeout: 30_000 })
-    const mounted = Date.now()
-    await expect(page.locator('.session-history').first()).toContainText(REPLY, { timeout: 5000 })
-    expect(Date.now() - mounted, 'the stream stayed off screen past the hold limit').toBeLessThan(5000)
-    hold = 0
+    await neverReplyWithoutQuestion(page, 9000)
     await expectSettled(page, 15_000)
   })
 
@@ -196,5 +208,85 @@ test.describe('A reply never shows without its question while a session opens', 
     await page.reload()
     await expect(page.locator('.session-history').first()).toContainText('Still checking the second region', { timeout: 15_000 })
     expect(answered(), 'the live output waited for the history answer').toBe(before)
+  })
+
+  test('E: a live turn on a host slower than the live limit shows anyway, then one copy', async ({ page }) => {
+    let hold = 8000
+    await page.addInitScript(() => { (window as any).__snapshotStreaming = true })
+    await captureWs(page, replyBlock)
+    await mockSessionDetail(page)
+    await routeHistory(page, () => full, () => hold)
+    // Timed in the page (its own clock, every 20 ms), so a slow test runner
+    // noticing the panel late cannot move the numbers.
+    await page.addInitScript((reply) => {
+      const t: { panel?: number; reply?: number } = {}
+      ;(window as any).__firstCheckTimes = t
+      const tick = () => {
+        const el = document.querySelector('.session-history')
+        if (el && t.panel === undefined) t.panel = performance.now()
+        if (el && t.reply === undefined && (el.textContent ?? '').includes(reply)) t.reply = performance.now()
+        if (t.reply === undefined) setTimeout(tick, 20)
+      }
+      tick()
+    }, REPLY)
+    await page.goto(`/sessions?id=${SESSION_ID}`)
+    await expect(page.locator('.session-history').first()).toContainText(REPLY, { timeout: 20_000 })
+    const t = await page.evaluate(() => (window as any).__firstCheckTimes as { panel: number; reply: number })
+    const shownAfter = t.reply - t.panel
+    expect(shownAfter, 'live output showed before its short wait was over').toBeGreaterThan(2000)
+    expect(shownAfter, 'live output stayed off screen past the live limit').toBeLessThan(5000)
+    hold = 0
+    await expectSettled(page, 15_000)
+  })
+
+  test('F: a history server that answers nothing for 17 s: the finished reply shows after the longest wait', async ({ page }) => {
+    test.setTimeout(60_000)
+    let downUntil = Number.MAX_SAFE_INTEGER
+    await captureWs(page, replyBlock)
+    await mockSessionDetail(page)
+    await routeHistory(page, () => full, () => 0, () => downUntil)
+    await page.goto(`/sessions?id=${SESSION_ID}`)
+    await page.locator('.session-history').first().waitFor({ timeout: 30_000 })
+    const mounted = Date.now()
+    downUntil = mounted + 17_000
+    await expect(page.locator('.session-history').first()).toContainText(REPLY, { timeout: 20_000 })
+    expect(Date.now() - mounted, 'the finished reply showed before the longest wait').toBeGreaterThan(12_000)
+    await expectSettled(page, 20_000)
+  })
+
+  test('G: live output shown after the short wait stays when its turn ends before history answers', async ({ page }) => {
+    let downUntil = Number.MAX_SAFE_INTEGER
+    await page.addInitScript(() => { (window as any).__snapshotStreaming = true })
+    await captureWs(page, replyBlock)
+    await mockSessionDetail(page)
+    await routeHistory(page, () => full, () => 0, () => downUntil)
+    await page.goto(`/sessions?id=${SESSION_ID}`)
+    await page.locator('.session-history').first().waitFor({ timeout: 30_000 })
+    downUntil = Date.now() + 9000
+    await expect(page.locator('.session-history').first()).toContainText(REPLY, { timeout: 5000 })
+    await injectEvent(page, 'session:result', { sessionId: SESSION_ID })
+    // Until history answers (about 4 s from now) the reply never leaves the screen.
+    const until = downUntil - 300
+    while (Date.now() < until) {
+      expect(await historyText(page), 'the shown reply left the screen when its turn ended').toContain(REPLY)
+      await page.waitForTimeout(100)
+    }
+    await expectSettled(page, 15_000)
+  })
+
+  test('H: a pending permission card shows at once; the reply before it still waits for its question', async ({ page }) => {
+    let downUntil = Number.MAX_SAFE_INTEGER
+    const permission = { type: 'permission', requestId: 'pw-first-check-perm', toolName: 'Bash', input: { command: 'echo first-check-permission' } }
+    await captureWs(page, [...replyBlock, permission])
+    await mockSessionDetail(page)
+    await routeHistory(page, () => full, () => 0, () => downUntil)
+    await page.goto(`/sessions?id=${SESSION_ID}`)
+    await page.locator('.session-history').first().waitFor({ timeout: 30_000 })
+    const mounted = Date.now()
+    downUntil = mounted + 8000
+    await expect(page.locator('.permission-request-card').first()).toBeVisible({ timeout: 2500 })
+    expect(Date.now() - mounted, 'the permission card waited for the history answer').toBeLessThan(2500)
+    await neverReplyWithoutQuestion(page, 6000)
+    await expectSettled(page, 15_000)
   })
 })

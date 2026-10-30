@@ -287,7 +287,7 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
     // publish the delta so the consumer promotes matching streaming blocks by
     // evidence. Skip Phase 1 (already have content). Offscreen columns skip entirely.
     if (version > 0) {
-      if (!enabled) return () => { cancelled = true; controller.abort(); };
+      if (!enabled) { setFirstCheckPending(false); return () => { cancelled = true; controller.abort(); }; }
       setLoading(true);
       setPhase2Pending(true);
       const endP2 = perf.start(`session:delta:${sid}`);
@@ -303,7 +303,10 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
       const reviseIds = collectUnsettledIds(messagesRef.current);
       // A full read replaces what we hold (tail-sliced, never shorter). It joins a
       // read the host is still sending (fetchJoiningLoad), which a delta cannot.
+      // Its answer, not the delta's, is the first check (`firstCheckPending`).
+      let rebuilding = false;
       const rebuildFull = () => {
+        rebuilding = true;
         fetchJoiningLoad(sessionId, { tail: refreshTail(messagesRef.current.length), signal: controller.signal },
           (from) => { if (!cancelled) setLoadingFrom(from); }, () => cancelled)
           .then((full) => {
@@ -331,7 +334,8 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
               gaps: folded.gaps,
             });
           })
-          .catch(() => { if (!cancelled) setLoadingFrom(null); /* keep current view; next turn retries */ });
+          .catch(() => { if (!cancelled) setLoadingFrom(null); /* keep current view; next turn retries */ })
+          .finally(() => { if (!cancelled) setFirstCheckPending(false); });
       };
       fetchSessionHistory(sessionId, {
         since,
@@ -420,7 +424,7 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
           } else setError(e.message);
         })
         .finally(() => {
-          if (!cancelled) { setLoading(false); setPhase2Pending(false); setFirstCheckPending(false); }
+          if (!cancelled) { setLoading(false); setPhase2Pending(false); if (!rebuilding) setFirstCheckPending(false); }
         });
       return () => { cancelled = true; controller.abort(); };
     }

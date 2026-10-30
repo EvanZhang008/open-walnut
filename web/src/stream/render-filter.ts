@@ -188,16 +188,40 @@ export function turnQuestionShown(messages: readonly SessionHistoryMessage[], bu
   return false;
 }
 
-/** The blocks to keep off screen: the absorbed ones, and every block while
- *  `holding` (this session's history has had no server answer yet and the rows
- *  shown lack the stream turn's question, see turnQuestionShown). Rendering
- *  only: the reset gate keeps reading the absorbed set, so a held block is never
- *  dropped. */
-export function withFirstCheckHold(blockCount: number, hidden: Set<number>, holding: boolean): Set<number> {
-  if (!holding || hidden.size >= blockCount) return hidden;
-  const all = new Set<number>();
-  for (let i = 0; i < blockCount; i++) all.add(i);
-  return all;
+/** How many leading stream blocks stay off screen until this session's first
+ *  history answer. None once that answer came (`pending` false) or when the rows
+ *  shown hold the stream turn's question; else every block, except:
+ *  - a live turn's own blocks (from `completedLen` on) once its short wait is
+ *    over (`liveOver`), so live output is never hidden for long, while the
+ *    finished turn before it still waits for its question;
+ *  - a pending permission card and what follows it (`actionAt`, -1 for none):
+ *    it waits on the user;
+ *  - never more than before: `shownFrom` is the lowest index already drawn, and
+ *    a drawn block stays drawn. The longest wait sets it to 0. */
+export function firstCheckHeldBelow(s: {
+  pending: boolean; questionShown: boolean; blockCount: number;
+  streaming: boolean; liveOver: boolean; completedLen: number;
+  actionAt: number; shownFrom: number | null;
+}): number {
+  if (!s.pending || s.questionShown) return 0;
+  let below = s.blockCount;
+  if (s.streaming && s.liveOver) below = Math.min(below, s.completedLen);
+  if (s.actionAt >= 0) below = Math.min(below, s.actionAt);
+  if (s.shownFrom !== null) below = Math.min(below, s.shownFrom);
+  return Math.max(0, below);
+}
+
+/** The blocks to keep off screen: the absorbed ones, and the first `heldBelow`
+ *  (see firstCheckHeldBelow). Rendering only: the reset gate keeps reading the
+ *  absorbed set, so a held block is never dropped. */
+export function withFirstCheckHold(blockCount: number, hidden: Set<number>, heldBelow: number): Set<number> {
+  const end = Math.min(heldBelow, blockCount);
+  let missing = false;
+  for (let i = 0; i < end && !missing; i++) missing = !hidden.has(i);
+  if (!missing) return hidden;
+  const out = new Set(hidden);
+  for (let i = 0; i < end; i++) out.add(i);
+  return out;
 }
 
 /** True when every block is absorbed — the safe moment for the OPTIONAL
