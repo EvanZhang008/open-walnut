@@ -352,10 +352,18 @@ test('Waiting tasks are out of the list and the tiers by default; Status Waiting
   await setStatusSectionOpen(page, 'waiting', false)
   await expect(anyParked).toHaveCount(0)
 
-  // The Status filter is the other way in: Open + Waiting draws it in its own tier,
-  // and with a Status the user picked there are no sections. Removing the chip hides it again.
+  // Open + Waiting holds every open phase, so it keeps the sections: the parked task
+  // stays in the folded Waiting / snoozed section, not in the list or its tier.
   await setStatus(page, ['To Do', 'In Progress', 'Need Action', 'Waiting'])
   await expect(filterChip(page, 'status')).toContainText('Open, Waiting')
+  await expect(waitingHeading).toBeVisible()
+  await expect(statusSectionToggle(page, 'waiting')).toHaveAttribute('aria-expanded', 'false')
+  await expect(anyParked).toHaveCount(0)
+
+  // The Status filter is the other way in: Waiting alone (narrower than Open) draws it
+  // in its own tier, with no sections. Removing the chip hides it again.
+  await setStatus(page, ['Waiting'])
+  await expect(filterChip(page, 'status')).toHaveText(/Waiting/)
   await expect(anyParked).toHaveCount(1, { timeout: 15_000 })
   await expect(anyParked).toBeVisible()
   await expect(anyParked.getByTitle('Waiting: click to complete')).toBeVisible()

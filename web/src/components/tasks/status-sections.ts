@@ -148,6 +148,9 @@ export interface StatusSectionsModel {
   workingCount: number;
   /** Completed tasks not loaded yet that belong in the Completed count (the archive). */
   doneUnloaded: number;
+  /** Completed tasks not loaded yet that a chip may or may not keep (not counted): the
+   *  Completed section offers to load them, so older ones stay reachable. */
+  archiveLeft: boolean;
 }
 
 export interface StatusSectionsInput {
@@ -164,6 +167,9 @@ export interface StatusSectionsInput {
   archiveHidden?: number;
   /** True when the scope is the whole board and no chip narrows the archive. */
   archiveCounts?: boolean;
+  /** True when the scope is the whole board but a chip narrows it: the archive is
+   *  offered (not counted), since some of it may pass the chip. */
+  archiveOffered?: boolean;
   /** A place that wins over the task's state: a row in its exit grace stays where it
    *  was drawn (completed from Needs you, it fades out there, not in the list). */
   placeOf?: (task: Task) => StateSectionKey | undefined;
@@ -196,6 +202,7 @@ export function buildStatusSections(input: StatusSectionsInput): StatusSectionsM
     done: sortSectionTasks('done', done),
     workingCount,
     doneUnloaded: input.archiveCounts ? input.archiveHidden ?? 0 : 0,
+    archiveLeft: !input.archiveCounts && !!input.archiveOffered && (input.archiveHidden ?? 0) > 0,
   };
 }
 

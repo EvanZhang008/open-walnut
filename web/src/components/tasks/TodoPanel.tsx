@@ -116,9 +116,9 @@ import {
 import { FilterBar } from './FilterBar';
 import { DisplayButton } from './DisplayMenu';
 import type { DisplayMenuProps, FilterBarController, FilterDim, FilterState } from './filter-bar-types';
-import { isDefaultStatus } from './filter-bar-model';
+import { OPEN_PHASES, hasAllOpen, isDefaultStatus } from './filter-bar-model';
 import { markTierUsed, readTierUsed } from './filter-bar-persist';
-import { dimPasses, hiddenByReasons, passesChips } from './filter-predicate';
+import { buildFilterEvalContext, dimPasses, hiddenByReasons, passesChips } from './filter-predicate';
 import { useHomeFilters, useArchiveFetch, useCreatedOutsideToast } from './useHomeFilters';
 import { archiveNarrowed, footerScope } from './TodoFilterFooter';
 import { ProjectStatusCounts, StatusSectionGroup, StatusSectionHeading, sectionRowsOf, type SectionRowHandlers } from './StatusSections';
@@ -2471,10 +2471,21 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     tasks, loading, projectOrder: ordering?.projectOrder, externalProject, onProjectChange, clearFocusOverride,
     timeTick: _tick,
   });
-  const { showCompleted } = homeFilters;
   const filterState = homeFilters.state;
+  // A Status pick holding every open phase (the default, or Open plus Waiting or
+  // Complete) is drawn as status sections (status-sections.ts): the list keeps the
+  // open phases and the sections hold the rest, so the board reads Open only. A pick
+  // narrower than Open shows exactly what it names. A search reads the pick as it is.
+  const statusOnSections = hasAllOpen(filterState.status);
+  const showCompleted = homeFilters.showCompleted && !statusOnSections;
   const filterEvalCtx = homeFilters.evalCtx;
-  const waitingRevealed = filterState.status.includes('WAITING');
+  const statusWidened = statusOnSections && !isDefaultStatus(filterState.status);
+  const boardEvalCtx = useMemo(
+    () => (statusWidened ? buildFilterEvalContext(tasks, { ...filterState, status: [...OPEN_PHASES] }) : filterEvalCtx),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- filterEvalCtx carries the time window's tick
+    [statusWidened, filterEvalCtx],
+  );
+  const waitingRevealed = !statusOnSections && filterState.status.includes('WAITING');
   /** The list's hiding rule for a task on hold; pins and Recent read it too. */
   const hiddenAsWaiting = useCallback(
     (t: Task): boolean => t.phase === 'WAITING' && !waitingRevealed,
@@ -4823,13 +4834,13 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // local is the completion / parking grace: a row just completed or set to
   // Waiting stays for its exit animation before the Status rule takes it out.
   // ── Status sections (status-sections.ts) ──
-  // With the Status rule at its default, the view draws its tasks under status
+  // With the Status rule covering every open phase, the view draws its tasks under status
   // headings: Watching and Needs you on top (drawn by StatusSections, so the list
   // below leaves them out), the list itself as Working, Waiting and Completed
-  // folded under it. A Status chip the user picked shows exactly what it names,
+  // folded under it. A Status pick narrower than Open shows exactly what it names,
   // with no sections; a watched task stays on top either way. A search ranks
   // everything in one list.
-  const sectionsActive = !isSearchMode && isDefaultStatus(filterState.status);
+  const sectionsActive = !isSearchMode && statusOnSections;
   // Which of the layouts on trial organizes the panel (panel-design.ts).
   const [panelDesign, setPanelDesign] = usePanelDesign();
   /** By status pulls Needs you out of the list into its own section; the others keep it in place. */
@@ -4874,10 +4885,10 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
 
   const passesBoard = useCallback((t: Task): boolean => {
     if (inTopSection(t)) return false;
-    if (passesChips(t, filterEvalCtx)) return true;
-    return (keepWhileCompleting(t) || keepWhileParking(t)) && passesChips(t, filterEvalCtx, { except: 'status' });
+    if (passesChips(t, boardEvalCtx)) return true;
+    return (keepWhileCompleting(t) || keepWhileParking(t)) && passesChips(t, boardEvalCtx, { except: 'status' });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- recentTick re-runs the grace check
-  }, [filterEvalCtx, keepWhileCompleting, keepWhileParking, recentTick, inTopSection]);
+  }, [boardEvalCtx, keepWhileCompleting, keepWhileParking, recentTick, inTopSection]);
 
   // Publish the predicate for the focus-override effect OUTSIDE render. A layout
   // effect, NOT useEffect: the consumer is a passive effect declared EARLIER in
@@ -4924,7 +4935,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // first view that shows completed rows loads the rest of the archive once.
   const tasksStore = useTasksContextSafe();
   // An open Completed section shows the archive too (its count already includes it).
-  const wantsCompletedArchive = showCompleted || isSearchMode || filterState.status.includes('COMPLETE')
+  const wantsCompletedArchive = showCompleted || isSearchMode
+    || (!sectionsActive && filterState.status.includes('COMPLETE'))
     || (sectionsActive && archiveAsked);
   const archiveLoading = useArchiveFetch(wantsCompletedArchive, tasksStore);
 
@@ -4934,10 +4946,10 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     if (!overrideReasonTaskId) return undefined;
     const task = tasks.find((t) => t.id === overrideReasonTaskId);
     if (!task) return undefined;
-    const reasons = hiddenByReasons(task, filterEvalCtx, homeFilters.lists);
+    const reasons = hiddenByReasons(task, boardEvalCtx, homeFilters.lists);
     if (reasons.length === 0) return undefined;
     return { task, reasons };
-  }, [overrideReasonTaskId, tasks, filterEvalCtx, homeFilters.lists]);
+  }, [overrideReasonTaskId, tasks, boardEvalCtx, homeFilters.lists]);
   // A locate of a task someone else just made shows the reasons; only a creation here gets the pill.
   const overrideCreated = !!filterOverrideReasons && createdOverrideRef.current === filterOverrideReasons.task.id
     && isJustCreated(filterOverrideReasons.task.created_at);
@@ -7410,14 +7422,14 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     let total = 0;
     if (isSearchMode) return { byTier, total };
     for (const t of tasks) {
-      if (!inTopSection(t) || !passesChips(t, filterEvalCtx)) continue;
+      if (!inTopSection(t) || !passesChips(t, boardEvalCtx)) continue;
       total += 1;
       if (!pinnedTaskIds?.has(t.id) || (t.group_id && hiddenGroups?.has(t.group_id))) continue;
       const tier = getTier(t.id);
       if (tier) byTier.set(tier, (byTier.get(tier) ?? 0) + 1);
     }
     return { byTier, total };
-  }, [isSearchMode, tasks, inTopSection, filterEvalCtx, pinnedTaskIds, hiddenGroups, getTier]);
+  }, [isSearchMode, tasks, inTopSection, boardEvalCtx, pinnedTaskIds, hiddenGroups, getTier]);
   const tierHits = (tier: string, list: readonly Task[]) => hits(list) + (topSectionHits.byTier.get(tier) ?? 0);
   const sectionCounts: Partial<Record<TodoSection, number>> = {
     focus: tierHits('focus', focusTasksDisplay),
@@ -7508,6 +7520,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       // The archive belongs in the count only on the whole board, with no chip that
       // the unloaded rows could fail (the old footer's rule, TodoFilterFooter.footerCounts).
       archiveCounts: footerTasks === tasks && !archiveNarrowed(filterEvalCtx),
+      // Under a chip (a project, a priority) some of it may still belong: offered, not counted.
+      archiveOffered: footerTasks === tasks && archiveNarrowed(filterEvalCtx),
       // A row in its exit grace stays where it was drawn. Needs you is a section only in
       // By status; elsewhere those rows stay in the list unless parked or snoozed.
       placeOf: (t) => (heldInGrace(t) ? (lastPlace.get(t.id) ?? 'working')

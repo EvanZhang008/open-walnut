@@ -142,6 +142,15 @@ describe('buildStatusSections', () => {
     expect(buildStatusSections({ scope: [t.done], all: [], passes: () => true, archiveHidden: 40, archiveCounts: false }).doneUnloaded).toBe(0);
   });
 
+  it('an archive a chip keeps out of the count is still offered (archiveLeft)', () => {
+    const t = all();
+    expect(buildStatusSections({ scope: [t.done], all: [], passes: () => true, archiveHidden: 40, archiveOffered: true }).archiveLeft).toBe(true);
+    // A tier view (not the whole board) is not offered the archive.
+    expect(buildStatusSections({ scope: [t.done], all: [], passes: () => true, archiveHidden: 40, archiveCounts: false }).archiveLeft).toBe(false);
+    expect(buildStatusSections({ scope: [t.done], all: [], passes: () => true, archiveHidden: 40, archiveCounts: true }).archiveLeft).toBe(false);
+    expect(buildStatusSections({ scope: [t.done], all: [], passes: () => true, archiveHidden: 0, archiveOffered: true }).archiveLeft).toBe(false);
+  });
+
   it('a row in its exit grace stays where it was drawn', () => {
     // Completed from Needs you: still under Needs you while it fades out.
     const justDone = task({ status: 'done', phase: 'COMPLETE', completed_at: new Date().toISOString() });

@@ -7,7 +7,7 @@
  * server and parsed by the browser for 77 rendered rows. Now the list request
  * carries `completedWithinDays`, the server answers with the open tasks plus the
  * recent completions and a `completedHidden` count, and the first view that
- * shows completed rows (Status with Complete here, spec 5.8) loads the rest once.
+ * shows completed rows (Status Complete here, spec 5.8) loads the rest once.
  *
  * The window is rewritten to 0 days on the wire so a task completed a moment ago
  * counts as "old"; the client cannot be asked to backdate a completion.
@@ -63,14 +63,18 @@ function watchListRequests(page: Page): { windowed: () => number; whole: () => n
   return { windowed: () => windowed, whole: () => whole }
 }
 
-/** Status open + Complete (the old Show completed), or back to the default open set. */
+/**
+ * Status Complete alone (a pick narrower than Open, so the list draws the completed
+ * rows itself), or back to the default open set. Open + Complete keeps the status
+ * sections and leaves completed rows in the Completed section.
+ */
 async function setShowCompleted(page: Page, on: boolean): Promise<void> {
-  await setStatus(page, on ? ['To Do', 'In Progress', 'Need Action', 'Complete'] : ['To Do', 'In Progress', 'Need Action'])
-  if (on) await expect(filterChip(page, 'status')).toContainText('Open, Complete')
+  await setStatus(page, on ? ['Complete'] : ['To Do', 'In Progress', 'Need Action'])
+  if (on) await expect(filterChip(page, 'status')).toHaveText(/Complete/)
   else await expect(filterChip(page, 'status')).toHaveCount(0)
 }
 
-test('a board load leaves old completions on the server; Status with Complete loads them once', async ({ page }) => {
+test('a board load leaves old completions on the server; Status Complete loads them once', async ({ page }) => {
   await isolateUiPrefs(page)
   const open = await createTaskViaApi('Archive open')
   const done = await createTaskViaApi('Archive done')
@@ -116,14 +120,23 @@ test('a board load leaves old completions on the server; Status with Complete lo
   expect(requests.whole()).toBe(0)
   await page.screenshot({ path: `${SCREENSHOT_DIR}/recent-window-${test.info().project.name}.png` })
 
-  // Showing completed rows asks for the archive: one whole-list read, and the
-  // completed task appears as a done row.
+  // Open + Complete holds every open phase, so it keeps the sections: the completed
+  // task stays out of the list and the folded Completed section reads nothing yet.
+  await setStatus(page, ['To Do', 'In Progress', 'Need Action', 'Complete'])
+  await expect(filterChip(page, 'status')).toContainText('Open, Complete')
+  await expect(statusSectionToggle(page, 'done')).toHaveAttribute('aria-expanded', 'false')
+  await expect(rowFor(done.title)).toHaveCount(0)
+  await page.waitForTimeout(1_500)
+  expect(requests.whole()).toBe(0)
+
+  // Showing completed rows in the list asks for the archive: one whole-list read,
+  // and the completed task appears as a done row.
   await setShowCompleted(page, true)
   await expect.poll(() => requests.whole(), { timeout: 10_000 }).toBe(1)
   const doneRow = rowFor(done.title).first()
   await expect(doneRow).toBeVisible({ timeout: 10_000 })
   await expect(doneRow).toHaveClass(/-done\b/)
-  // A Status the user picked shows its rows in the list, with no status sections (C8).
+  // A Status narrower than Open shows its rows in the list, with no status sections.
   await expect(statusSection(page, 'done')).toHaveCount(0)
   await page.screenshot({ path: `${SCREENSHOT_DIR}/archive-loaded-${test.info().project.name}.png` })
 

@@ -46,9 +46,11 @@ export const SECTION_ICONS: Record<StatusSectionKey, ReactNode> = {
   done: ICONS.ICON_PHASE_COMPLETE,
 };
 
-export function StatusSectionHeading({ sectionKey, count, open, onToggle }: {
+export function StatusSectionHeading({ sectionKey, count, open, onToggle, more }: {
   sectionKey: StatusSectionKey;
   count: number;
+  /** More not counted yet (the unloaded archive under a chip): the count reads "N+". */
+  more?: boolean;
   open: boolean;
   onToggle: (key: StatusSectionKey) => void;
 }) {
@@ -64,7 +66,7 @@ export function StatusSectionHeading({ sectionKey, count, open, onToggle }: {
       >
         <span className="navigation-icon status-section-icon" aria-hidden="true">{SECTION_ICONS[sectionKey]}</span>
         <span className="navigation-label">{label}</span>
-        <span className="status-section-count" data-testid={`status-section-${sectionKey}-count`}>{count}</span>
+        <span className="status-section-count" data-testid={`status-section-${sectionKey}-count`}>{count}{more ? '+' : ''}</span>
         <NavigationChevron collapsed={!open} />
       </button>
     </div>
@@ -195,13 +197,16 @@ const SectionCard = memo(function SectionCard({ task, sectionKey, handlers }: { 
 });
 
 /** One section's rows: project labels when it spans two or more projects, then a "Show more" row. */
-export function SectionRows({ sectionKey, tasks, total, handlers }: {
+export function SectionRows({ sectionKey, tasks, total, handlers, archiveLeft }: {
   sectionKey: StatusSectionKey;
   tasks: readonly Task[];
   /** The section's full count (Completed includes tasks not loaded yet). */
   total: number;
   handlers: SectionRowHandlers;
+  /** Completed only: older tasks not loaded and not counted (a chip narrows the view). */
+  archiveLeft?: boolean;
 }) {
+  const [asked, setAsked] = useState(false);
   const [shown, setShown] = useState(STATUS_SECTION_BATCH);
   const head = tasks.slice(0, shown);
   const runs = projectRuns(head);
@@ -233,6 +238,17 @@ export function SectionRows({ sectionKey, tasks, total, handlers }: {
           {`Show ${Math.min(more, STATUS_SECTION_BATCH)} more`}
         </button>
       )}
+      {archiveLeft && handlers.onLoadMore && (
+        <button
+          type="button"
+          className="status-section-more"
+          data-testid={`status-section-${sectionKey}-older`}
+          disabled={asked}
+          onClick={() => { setAsked(true); handlers.onLoadMore?.(); }}
+        >
+          {asked ? 'Loading older completed tasks…' : 'Show older completed tasks'}
+        </button>
+      )}
     </div>
   );
 }
@@ -260,11 +276,13 @@ export function StatusSectionGroup({ keys, model, open, onToggle, handlers }: {
     <>
       {keys.map((key) => {
         const { tasks, count } = sectionRowsOf(model, key);
-        if (count === 0) return null;
+        // Completed with older tasks still unloaded stays reachable, even at 0 loaded.
+        const archiveLeft = key === 'done' && model.archiveLeft;
+        if (count === 0 && !archiveLeft) return null;
         return (
           <section key={key} className={`status-section status-section-block-${key}`} aria-label={STATUS_SECTION_LABELS[key]}>
-            <StatusSectionHeading sectionKey={key} count={count} open={open[key]} onToggle={onToggle} />
-            {open[key] && <SectionRows sectionKey={key} tasks={tasks} total={count} handlers={handlers} />}
+            <StatusSectionHeading sectionKey={key} count={count} open={open[key]} onToggle={onToggle} more={archiveLeft} />
+            {open[key] && <SectionRows sectionKey={key} tasks={tasks} total={count} handlers={handlers} archiveLeft={archiveLeft} />}
           </section>
         );
       })}
