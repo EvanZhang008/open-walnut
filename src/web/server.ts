@@ -1044,6 +1044,20 @@ async function isWalnutAnsweringOn(port: number): Promise<boolean> {
   }
 }
 
+/** The sentence a busy port gets: Walnut already serving there, or another program. */
+async function portInUseError(port: number): Promise<Error> {
+  const already = await isWalnutAnsweringOn(port)
+  return new Error(
+    already
+      ? `Walnut is already running at http://localhost:${port} (EADDRINUSE). Open that address; there is nothing to start.`
+      : `Port ${port} is in use by another program (EADDRINUSE). Start Walnut on a free one instead, for example:\n`
+        + `    open-walnut web --port ${port + 1}`,
+  )
+}
+
+/** The server's port, held from before the local daemon starts until listen (port-hold.ts). */
+let serverPortHold: import('./port-hold.js').PortHold | null = null
+
 /**
  * Create and start the server.
  * Returns the running HTTP server instance.
@@ -1437,6 +1451,18 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       }
     })()
     : null
+  // Take the port before the local daemon starts: the OS picks the daemon's port, and
+  // must never hand it this one (port-hold.ts). Released right before the real listen.
+  await serverPortHold?.release()
+  serverPortHold = null
+  try {
+    const { holdPort } = await import('./port-hold.js')
+    serverPortHold = await holdPort(port, isHostReplica() ? '127.0.0.1' : options.bindAddress)
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException)?.code !== 'EADDRINUSE') throw err
+    throw await portInUseError(port)
+  }
+
   if (!bootPolicy('local-daemon')) {
     log.web.info(isHostReplica()
       ? 'host replica: no local session daemon (it never starts or reaches one)'
@@ -2655,6 +2681,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // kill -9 whatever sits on 3457/3458. So the answer is a plain sentence, not a
   // stack trace and not a silent move. The usual cause is simply "Walnut is already
   // running", which we can check and say outright.
+  await serverPortHold?.release()
+  serverPortHold = null
   try {
     await new Promise<void>((resolve, reject) => {
       httpServer!.once('error', reject)
@@ -2665,13 +2693,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     })
   } catch (err) {
     if ((err as NodeJS.ErrnoException)?.code !== 'EADDRINUSE') throw err
-    const already = await isWalnutAnsweringOn(port)
-    throw new Error(
-      already
-        ? `Walnut is already running at http://localhost:${port} (EADDRINUSE). Open that address; there is nothing to start.`
-        : `Port ${port} is in use by another program (EADDRINUSE). Start Walnut on a free one instead, for example:\n`
-          + `    open-walnut web --port ${port + 1}`,
-    )
+    throw await portInUseError(port)
   }
   // Once serving, an accept error (EMFILE under load, for one) is emitted on the
   // server; with no listener it becomes an uncaught exception and ends the process.
@@ -6357,6 +6379,9 @@ function startPluginSyncPolling(): void {
 export async function stopServer(): Promise<void> {
   // At the entry, before any await: no boot owns the lane any more, and it stops now.
   localDaemonLaneOwner++
+  // A boot stopped before it listened leaves its port held.
+  void serverPortHold?.release()
+  serverPortHold = null
   localDaemonLane?.stop()
   localDaemonLane = null
   // Tell the companion this is a restart, not the Mac going away, so a deploy
