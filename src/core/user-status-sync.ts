@@ -58,8 +58,8 @@ export interface StatusFacts {
   choices: Map<string, string>;
   /** Session id -> target task ids it waits on for a reply. */
   requestsFrom: Map<string, string[]>;
-  /** Task id -> names of armed triggers that deliver into it. */
-  triggers: Map<string, string[]>;
+  /** Task id -> armed triggers that deliver into it. */
+  triggers: Map<string, { id: string; name: string }[]>;
   /** Task id -> enabled scheduled routines that run in its session, with their next run. */
   schedules: Map<string, { name: string; nextAt?: string }[]>;
   /** Task id -> when an armed trigger of it last ran its check (ISO, to CHECK_STAMP_MS), absent
@@ -189,7 +189,7 @@ async function readRoutines(kind: 'triggers' | 'schedules' | 'checks'): Promise<
         const next = job.state?.nextRunAtMs;
         list.push({ name: job.name, ...(typeof next === 'number' ? { nextAt: new Date(next).toISOString() } : {}) });
       } else if (!schedules && job.check && triggerRunState(job) === 'armed') {
-        list.push(job.name);
+        list.push({ id: job.id, name: job.name });
       } else continue;
       out.set(target, list);
     }
@@ -334,7 +334,10 @@ export function statusInputOf(task: Task, facts: StatusFacts): UserStatusInput {
     openLetter: facts.letters.get(task.id) ?? null,
     openChoice: facts.choices.get(task.id) ?? null,
     waitingOnTasks: [...new Set(waitingOnTasks)],
-    triggers: facts.triggers.get(task.id) ?? [],
+    // A trigger on the user's own ask or letter (trigger_create `watches`) is no outside watch:
+    // the task still needs the user (sessions/outside-wait.ts, 2026-10-30).
+    triggers: (facts.triggers.get(task.id) ?? [])
+      .filter((t) => !(task.recheck_watch ?? []).some((w) => w.trigger === t.id)).map((t) => t.name),
     schedules: facts.schedules.get(task.id) ?? [],
     waitUntil: task.wait_until ?? null,
     hasLeader: !!task.parent_task_id,

@@ -81,10 +81,31 @@ describe('an armed trigger of its own wakes the task', () => {
     const { statusInputOf } = await import('../../src/core/user-status-sync.js')
     const facts = {
       sessions: new Map([['sid-a', { processStatus: 'idle', taskId: 't1' }]]), letters: new Map(), choices: new Map(),
-      requestsFrom: new Map(), triggers: new Map([['t1', [...base.triggers!]]]), schedules: new Map(), titles: new Map(),
+      requestsFrom: new Map(), triggers: new Map([['t1', base.triggers!.map((name, i) => ({ id: `job-${i}`, name }))]]), schedules: new Map(), titles: new Map(),
       sessionsOf: new Map([['t1', ['sid-a']]]),
     } as unknown as import('../../src/core/user-status-sync.js').StatusFacts
     const task = { id: 't1', title: 'x', phase: 'IN_PROGRESS', session_id: 'sid-a', parent_task_id: 'lead', phase_changed_at: ago(16_000) } as unknown as import('../../src/core/types.js').Task
     expect(deriveUserStatus(statusInputOf(task, facts), NOW)).toMatchObject({ state: 'waiting', kind: 'other', waitingOn: WATCH })
+  })
+
+  // 2026-10-30, the user: waiting on the user is Needs you. A trigger armed to watch the task's own
+  // ask of the user (trigger_create `watches`) is no outside watch, so a handed-back task stays on him.
+  it('a trigger that watches the user\'s ask is no waker for the status', async () => {
+    const { statusInputOf } = await import('../../src/core/user-status-sync.js')
+    const facts = {
+      sessions: new Map([['sid-a', { processStatus: 'idle', taskId: 't1' }]]), letters: new Map(), choices: new Map(),
+      requestsFrom: new Map(), triggers: new Map([['t1', [{ id: 'job-ask', name: 'Sign-in watch' }]]]), schedules: new Map(), titles: new Map(),
+      sessionsOf: new Map([['t1', ['sid-a']]]),
+    } as unknown as import('../../src/core/user-status-sync.js').StatusFacts
+    const task = {
+      id: 't1', title: 'x', phase: 'NEED_ACTION', session_id: 'sid-a', phase_changed_at: ago(16_000),
+      recheck_watch: [{ trigger: 'job-ask', watches: 'ask', at: ago(20_000) }],
+    } as unknown as import('../../src/core/types.js').Task
+    const input = statusInputOf(task, facts)
+    expect(input.triggers).toEqual([])
+    expect(deriveUserStatus(input, NOW).state).toBe('needs')
+    // The same trigger with no `watches` record is an outside watch.
+    const outside = statusInputOf({ ...task, recheck_watch: [] } as never, facts)
+    expect(deriveUserStatus(outside, NOW)).toMatchObject({ state: 'waiting', waitingOn: 'A watch: Sign-in watch' })
   })
 })
