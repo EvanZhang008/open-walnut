@@ -28,8 +28,8 @@
  */
 import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const SDK = '@anthropic-ai/claude-agent-sdk';
@@ -134,6 +134,55 @@ export function applySdkPatch(root, { warn = (m) => console.warn(`open-walnut po
 }
 
 /**
+ * A clone whose node_modules is a symlink to another checkout's: bun links the
+ * CLONE's workspace packages into that shared directory before any script runs,
+ * so the other checkout then loads this clone's packages (2026-10-29: a clone
+ * for a push ran `bun install` and the main checkout's @open-walnut/plugin-api
+ * pointed at the clone's unbuilt copy for 15 hours; every plugin build there
+ * failed). Points each workspace link back at the owner's own package and says
+ * so. Returns the owner checkout it repaired, or null when node_modules is this
+ * checkout's own.
+ */
+export function restoreBorrowedWorkspaceLinks(root, { warn = (m) => console.error(`open-walnut postinstall: ${m}`) } = {}) {
+  const nm = join(root, 'node_modules');
+  let owner;
+  try {
+    if (!lstatSync(nm).isSymbolicLink()) return null;
+    owner = dirname(realpathSync(nm));
+  } catch {
+    return null;
+  }
+  if (owner === realpathSync(root)) return null;
+  let workspaces;
+  try {
+    workspaces = JSON.parse(readFileSync(join(owner, 'package.json'), 'utf8')).workspaces ?? [];
+  } catch {
+    return null;
+  }
+  for (const dir of Array.isArray(workspaces) ? workspaces : []) {
+    let name;
+    try { name = JSON.parse(readFileSync(join(owner, dir, 'package.json'), 'utf8')).name; } catch { continue; }
+    if (!name) continue;
+    const link = join(owner, 'node_modules', name);
+    const target = relative(dirname(link), join(owner, dir));
+    try {
+      const st = lstatSync(link, { throwIfNoEntry: false });
+      if (st && !st.isSymbolicLink()) continue; // a real directory: not a workspace link, leave it
+      mkdirSync(dirname(link), { recursive: true });
+      rmSync(link, { force: true });
+      symlinkSync(target, link);
+    } catch (err) {
+      warn(`could not point ${link} back at ${target}: ${err instanceof Error ? err.message : err}`);
+    }
+  }
+  warn(`node_modules here is ${owner}'s, and this install linked this checkout's workspace packages into it. `
+    + `Pointed them back at ${owner}'s own packages. Give this checkout its own node_modules `
+    + `(as scripts/deploy-committed.sh does: a directory of links, workspaces to this checkout), `
+    + `or run \`bun install\` in ${owner} if its dependencies changed.`);
+  return owner;
+}
+
+/**
  * Build the upstream SQLite macOS bun loads (src/lib/sqlite.ts). Returns
  * 'skipped' off macOS, 'ok', or 'failed' after a warning; never throws.
  */
@@ -169,6 +218,7 @@ function main() {
       console.error(refusal);
       process.exit(1);
     }
+    if (restoreBorrowedWorkspaceLinks(root)) process.exit(1);
     buildSqliteDylib(root);
     const { cmd, args } = webInstallCommand();
     const res = spawnSync(cmd, args, { stdio: 'inherit', cwd: join(root, 'web') });

@@ -324,7 +324,7 @@ const readPid = (file: string): number => {
 /** Processes whose command line STARTS with `prefix` (an interpreter and a script of this cluster's own). */
 function pidsRunning(prefix: string): number[] {
   let out = ''
-  try { out = execFileSync('ps', ['-A', '-o', 'pid=,command='], { encoding: 'utf8' }) } catch { return [] }
+  try { out = execFileSync('ps', ['-A', '-o', 'pid=,command='], { encoding: 'utf8', maxBuffer: 64 << 20 }) } catch { return [] }
   return out.split('\n').map((l) => l.trim()).map((l) => {
     const sp = l.indexOf(' ')
     return { pid: Number(l.slice(0, sp)), command: l.slice(sp + 1).trim() }

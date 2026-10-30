@@ -78,7 +78,26 @@ export function stripGitRedirectEnv(env: NodeJS.ProcessEnv = process.env): strin
   return removed;
 }
 
+/**
+ * A test's git leaves no process behind. Since git 2.47 every `git commit` starts
+ * `git maintenance run --auto --detach`, which outlives the command and writes
+ * into `.git`. A test that removes or replaces `.git` right after a commit then
+ * races it: on 2026-10-30 (git 2.55) the removal left a `.git` with HEAD and refs
+ * but no config or commit objects, git took the directory for a repository,
+ * `initSync` made none, and `git log` answered "bad object HEAD"
+ * (tests/integrations/git-sync-plugin-files.test.ts, red on every macOS run).
+ * Applied as a `-c` pair through the environment, so it reaches every git a test
+ * spawns, the code under test's included; a test that sets GIT_CONFIG_COUNT
+ * itself replaces it.
+ */
+export const NO_AUTO_MAINTENANCE_ENV = {
+  GIT_CONFIG_COUNT: '1',
+  GIT_CONFIG_KEY_0: 'maintenance.auto',
+  GIT_CONFIG_VALUE_0: 'false',
+} as const;
+
 const removed = stripGitRedirectEnv();
+Object.assign(process.env, NO_AUTO_MAINTENANCE_ENV);
 if (removed.length > 0) {
   // Loud on purpose: a run that inherited these was addressing another repo, and
   // whoever launched it needs to fix their launcher, not just enjoy the rescue.

@@ -131,7 +131,7 @@ async function waitFor(pred: () => boolean, timeoutMs = 120_000, what = 'conditi
 }
 
 function descendantCommands(rootPid: number): string[] {
-  const output = execFileSync('/bin/ps', ['-axo', 'pid=,ppid=,command='], { encoding: 'utf-8' })
+  const output = execFileSync('/bin/ps', ['-axo', 'pid=,ppid=,command='], { encoding: 'utf-8', maxBuffer: 64 << 20 })
   const children = new Map<number, Array<{ pid: number; command: string }>>()
   for (const line of output.split('\n')) {
     const match = /^\s*(\d+)\s+(\d+)\s+(.*)$/.exec(line)

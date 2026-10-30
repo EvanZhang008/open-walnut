@@ -146,7 +146,7 @@ const authCore = () => (JSON.parse(fs.readFileSync(path.join(WALNUT_HOME, 'auth.
 
 /** The local daemon's process, or any whose command line names this file's runtime dir, by `ps`. */
 function leftoverProcesses(pid: number | null): string[] {
-  return execFileSync('ps', ['-axo', 'pid=,command='], { encoding: 'utf-8' }).split('\n')
+  return execFileSync('ps', ['-axo', 'pid=,command='], { encoding: 'utf-8', maxBuffer: 64 << 20 }).split('\n')
     .filter((l) => l.includes(runtime.dir) || (pid !== null && Number(l.trim().split(/\s+/)[0]) === pid))
 }
 

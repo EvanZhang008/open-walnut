@@ -106,7 +106,7 @@ describe.skipIf(!!missing)('the fleet: the companion stays old while its Mac mov
     lines.push(...companion.logLines(/answers itself|bridge|primary|suspect/i).slice(-25).map((l) => `box: ${l.slice(0, 400)}`))
     lines.push(...mac.logLines(/daemon|bridge|mismatch|prewarm/i).slice(-40).map((l) => `mac: ${l.slice(0, 400)}`))
     try {
-      const ps = execFileSync('ps', ['-eo', 'pid,ppid,command'], { encoding: 'utf8' }).split('\n')
+      const ps = execFileSync('ps', ['-eo', 'pid,ppid,command'], { encoding: 'utf8', maxBuffer: 64 << 20 }).split('\n')
       lines.push(...ps.filter((l) => l.includes(base) || l.includes(NEW) || l.includes(OLD)).map((l) => `ps: ${l.slice(0, 300)}`))
     } catch { /* evidence only */ }
     return lines.join('\n')

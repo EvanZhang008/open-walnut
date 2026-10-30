@@ -17,6 +17,7 @@
  * the line. The list is that of the tree with the bun-only runtime, dev and
  * docs changes in.
  */
+import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -49,13 +50,19 @@ const JS_SPAWN = /\b(?:spawn|spawnSync|execFile|execFileSync|fork|exec|execSync)
 const SHEBANG_NODE = /^#!.*\b(?:node|tsx)\b/
 
 const rel = (abs: string) => path.relative(ROOT, abs).split(path.sep).join('/')
+/**
+ * The files of the repo: tracked, and new ones not yet added. A gitignored file
+ * (scripts/local/, a one-off migration script) never ships, and read here it made
+ * the ratchet red in the one checkout that holds it and green everywhere else.
+ */
+const REPO_FILES = new Set(execFileSync('git', ['ls-files', '--cached', '--others', '--exclude-standard'], { cwd: ROOT, encoding: 'utf8', maxBuffer: 64 << 20 }).split('\n').filter(Boolean))
 function walk(dir: string, keep: (name: string) => boolean): string[] {
   const abs = path.join(ROOT, dir)
   if (!fs.existsSync(abs)) return []
   return fs.readdirSync(abs, { withFileTypes: true }).flatMap((e) => {
     if (e.name === 'node_modules' || e.name.startsWith('.')) return []
     const p = path.join(dir, e.name)
-    return e.isDirectory() ? walk(p, keep) : keep(e.name) ? [p] : []
+    return e.isDirectory() ? walk(p, keep) : keep(e.name) && REPO_FILES.has(rel(path.join(ROOT, p))) ? [p] : []
   })
 }
 

@@ -219,7 +219,7 @@ describe('orphan sweep: signal only what the collector provably spawned', () => 
   })
 
   it("this Mac's real ps output, every group leader's pid 'reused' with its exact start time, kills nothing", () => {
-    const rows = parsePsRows(execFileSync('/bin/ps', ['-A', '-o', 'pid=,pgid=,lstart=,command='], { encoding: 'utf-8', env: { ...process.env, LC_ALL: 'C' } }))
+    const rows = parsePsRows(execFileSync('/bin/ps', ['-A', '-o', 'pid=,pgid=,lstart=,command='], { encoding: 'utf-8', maxBuffer: 64 << 20, env: { ...process.env, LC_ALL: 'C' } }))
     const leaders = [...rows.values()].filter((p) => p.pid === p.pgid && p.pid > 1)
     expect(leaders.length).toBeGreaterThan(10)
     // What the old rule matched on: the tracked binaries alone.

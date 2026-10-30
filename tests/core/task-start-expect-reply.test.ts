@@ -113,10 +113,18 @@ describe('task start confirmation and reply contract', () => {
     let release!: (rows: unknown[]) => void;
     mocks.getSessionsForTask.mockImplementationOnce(() => new Promise((r) => { release = r; }));
     const first = startSessionForTask(params);
-    await Promise.resolve();
-    await expect(startSessionForTask(params)).rejects.toBeInstanceOf(SessionExistsError);
-    release([]);
-    await first;
+    // Wait until the first start is held in the record lookup (its guard is set by
+    // then), not one microtask: several awaits come before the guard, and under load
+    // a cold dynamic import among them outlasts a microtask. A second start sent too
+    // early was not refused, and the never-released first one then held the guard
+    // and failed every later test in the file (2026-10-30 quick tier: 13 red).
+    await vi.waitFor(() => expect(mocks.getSessionsForTask).toHaveBeenCalledTimes(1));
+    try {
+      await expect(startSessionForTask(params)).rejects.toBeInstanceOf(SessionExistsError);
+    } finally {
+      release([]);
+      await first;
+    }
     expect(mocks.startSession).toHaveBeenCalledTimes(1);
   });
 

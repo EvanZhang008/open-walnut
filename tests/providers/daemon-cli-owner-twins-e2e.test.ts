@@ -156,7 +156,7 @@ async function waitFor(check: () => boolean, ms = 15_000): Promise<boolean> {
 
 /** Every live stand-in CLI that runs `sid`, from the real process table. */
 function liveClis(sid: string): number[] {
-  const out = spawnSync('ps', ['-A', '-ww', '-o', 'pid=,args='], { encoding: 'utf8' }).stdout
+  const out = spawnSync('ps', ['-A', '-ww', '-o', 'pid=,args='], { encoding: 'utf8', maxBuffer: 64 << 20 }).stdout
   return out.split('\n').map((l) => /^\s*(\d+)\s+(.*)$/.exec(l)).filter((m): m is RegExpExecArray => !!m)
     .filter((m) => m[2].includes(cliPath) && (m[2].includes(`--resume ${sid}`) || m[2].includes(`--session-id ${sid}`))).map((m) => Number(m[1]))
 }

@@ -24,7 +24,7 @@ let fixture: ChildProcess | null = null
 /** Processes whose command line names this run's dir (the fixture's cluster), with their start times. */
 function ours(): Array<{ pid: number; command: string }> {
   let out = ''
-  try { out = execFileSync('ps', ['-A', '-o', 'pid=,command='], { encoding: 'utf8' }) } catch { return [] }
+  try { out = execFileSync('ps', ['-A', '-o', 'pid=,command='], { encoding: 'utf8', maxBuffer: 64 << 20 }) } catch { return [] }
   const real = fs.realpathSync(tmp)
   return out.split('\n').map((l) => l.trim()).filter(Boolean).map((l) => {
     const sp = l.indexOf(' ')

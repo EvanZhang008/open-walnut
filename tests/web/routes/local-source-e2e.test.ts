@@ -73,7 +73,9 @@ describe('Local source task — full E2E lifecycle', () => {
       .post('/api/tasks')
       .send({ title: 'Inbox capture', source: 'local' });
 
-    expect(res.status).toBe(201);
+    // The body says why: one full quick-tier run (2026-10-30) got a 404 here that
+    // five runs alone never did.
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
     expect(res.body.task.project).toBe('');
     expect(res.body.task.source).toBe('local');
 
