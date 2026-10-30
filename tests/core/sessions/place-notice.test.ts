@@ -30,6 +30,7 @@ import { updateConfig } from '../../../src/core/config-manager.js'
 import { createOpenItemsText } from '../../../src/core/sessions/open-items-text.js'
 import { RICH_OUTPUT_MODE_ON_INSTRUCTION, RICH_OUTPUT_MODE_REMINDER } from '../../../src/core/sessions/output-mode.js'
 import { renderHintBlock } from '../../../src/core/hints/hint-format.js'
+import { REPLY_LANGUAGE_SCOPE } from '../../../src/core/hints/hint-registry.js'
 
 describe('placeFromPrompt (reads back the lines session-context.ts writes)', () => {
   it('a project, a folder and a leader', () => {
@@ -357,7 +358,7 @@ describe('sendMessageToSession carries the note (real store and queue)', () => {
     it('restates the reply language after a compaction only when one is set', async () => {
       const md = await spawned('acme')
       await updateConfig({ session: { reply_language: 'Answer in French; code stays English.' } })
-      expect((await hook(md.sid)).text).toBe(renderHintBlock('reply-language', 'Answer in French; code stays English.'))
+      expect((await hook(md.sid)).text).toBe(renderHintBlock('reply-language', `Answer in French; code stays English. ${REPLY_LANGUAGE_SCOPE}`))
       expect((await collectOpenItems(md.sid)).text).toBe('')
       await updateConfig({ session: {} })
       expect((await hook(md.sid)).text).toBe('')

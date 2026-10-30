@@ -192,6 +192,7 @@ describe('sendBlocked: the editor stays, the send controls go', () => {
   it('the session panel keeps ChatInput mounted while the Mac is away (no swap for the notice)', () => {
     const src = readFileSync(new URL('../../web/src/components/sessions/SessionPanel.tsx', import.meta.url), 'utf8')
     expect(src).not.toMatch(/macSessionAway\s*\?\s*<MacAwayComposer/)
-    expect(src).toMatch(/\{macSessionAway && <MacAwayComposer \/>\}\s*<ChatInput\s+sendBlocked=\{macSessionAway\}/)
+    // sendBlocked starts with the Mac being away (another reason may follow it, after `||`).
+    expect(src).toMatch(/\{macSessionAway && <MacAwayComposer \/>\}\s*<ChatInput\s+(?:\/\/[^\n]*\n\s*)*sendBlocked=\{macSessionAway(?:\}| \|\|)/)
   })
 })

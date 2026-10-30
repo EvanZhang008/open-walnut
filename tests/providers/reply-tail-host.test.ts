@@ -35,6 +35,7 @@ import { createOpenItemsText } from '../../src/core/sessions/open-items-text.js'
 import { RICH_OUTPUT_MODE_OFF_INSTRUCTION, RICH_OUTPUT_MODE_ON_INSTRUCTION, RICH_OUTPUT_MODE_REMINDER } from '../../src/core/sessions/output-mode.js'
 import { hostReplyTail } from '../../src/core/hints/hint-send.js'
 import { escapeHintTags, renderHintBlock } from '../../src/core/hints/hint-format.js'
+import { REPLY_LANGUAGE_SCOPE } from '../../src/core/hints/hint-registry.js'
 import { addTask } from '../../src/core/task-manager.js'
 import { createSessionRecord, updateSessionRecord } from '../../src/core/session-tracker.js'
 import { updateConfig } from '../../src/core/config-manager.js'
@@ -48,7 +49,8 @@ const LANG = 'Talk to the user in Chinese; code stays English.'
 const LINE = `[Reply language: ${LANG}]`
 const TAIL = `${RICH_OUTPUT_MODE_REMINDER}\n\n${LINE}`
 // The tail this server ships: owed hint blocks.
-const LANG_BLOCK = renderHintBlock('reply-language', LANG)
+// What the session reads: the configured sentence, then Walnut's clause on what it covers.
+const LANG_BLOCK = renderHintBlock('reply-language', `${LANG} ${REPLY_LANGUAGE_SCOPE}`)
 const RICH_BLOCK = renderHintBlock('rich-output', RICH_OUTPUT_MODE_ON_INSTRUCTION)
 const dirs: string[] = []
 

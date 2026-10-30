@@ -788,18 +788,22 @@ describe('task_history resolves the task, then its transcript', () => {
   /** The task read comes from the v1 route, whose raw row keeps archived sessions. */
   const TASK_READ = `GET /tasks/${TASK.id}`
 
-  /** Stub: the task row first, then the transcript (or whatever the test wants). */
+  /** Stub: the task row, its session list (one session: no earlier engines), then the transcript. */
   function historyRunner(task: Record<string, unknown>, transcript: () => Promise<unknown>): ReturnType<typeof runner> {
     return runner('task_history', async (_method, path) => (
-      path.startsWith('/sessions') ? await transcript() : { task }
+      path.startsWith('/sessions') ? await transcript()
+        : path.endsWith('/sessions') ? { sessions: [] }
+          : { task }
     ))
   }
+  /** The task's session list, read so a task that switched engines names its earlier sessions. */
+  const SESSIONS_READ = `GET /tasks/${TASK.id}/sessions`
 
   it('reads the task, then that session transcript', async () => {
     const r = historyRunner({ id: TASK.id, session_id: '7f0aa681', session_ids: ['7f0aa681'] },
       async () => ({ messages: [{ role: 'user', text: 'Reproduce, then fix.' }] }))
     const history = rec(await r.invoke({ id: TASK.id }))
-    expect(r.paths()).toEqual([TASK_READ, 'GET /sessions/7f0aa681/transcript'])
+    expect(r.paths()).toEqual([TASK_READ, SESSIONS_READ, 'GET /sessions/7f0aa681/transcript'])
     expect(history.taskId).toBe(TASK.id)
     expect((history.messages as unknown[]).length).toBe(1)
   })
@@ -815,14 +819,14 @@ describe('task_history resolves the task, then its transcript', () => {
     for (const { task, sid } of cases) {
       const r = historyRunner(task, async () => ({ messages: [] }))
       await r.invoke({ id: TASK.id })
-      expect(r.paths(), JSON.stringify(task)).toEqual([TASK_READ, `GET /sessions/${sid}/transcript`])
+      expect(r.paths(), JSON.stringify(task)).toEqual([TASK_READ, SESSIONS_READ, `GET /sessions/${sid}/transcript`])
     }
   })
 
   it('fresh=true forces the live read on the primary box', async () => {
     const r = historyRunner({ id: TASK.id, exec_session_id: '7f0aa681' }, async () => ({ messages: [] }))
     await r.invoke({ id: TASK.id, fresh: true })
-    expect(r.paths()[1]).toBe('GET /sessions/7f0aa681/transcript?fresh=1')
+    expect(r.paths().at(-1)).toBe('GET /sessions/7f0aa681/transcript?fresh=1')
   })
 
   it('a placeholder answers not_started and no messages, with no transcript read', async () => {

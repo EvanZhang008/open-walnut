@@ -35,6 +35,7 @@ export function FileSearchBar({
       <input
         ref={inputRef}
         className="fv-search-input"
+        data-no-draft="search"
         value={query}
         placeholder={placeholder}
         aria-label={placeholder}

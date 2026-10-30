@@ -48,7 +48,7 @@ function walk(dir: string, out: string[] = []): string[] {
   return out;
 }
 
-/** The opening tag starting at `start` (`<name …>`), braces and strings respected. */
+/** The opening tag starting at `start` (`<name …>`), braces, strings and comments respected. */
 function openingTag(src: string, start: number): string {
   let depth = 0;
   let quote: string | null = null;
@@ -59,6 +59,10 @@ function openingTag(src: string, start: number): string {
       if (c === quote) quote = null;
       continue;
     }
+    // A comment between attributes holds prose: its apostrophe opens no string, its `>` ends
+    // no tag (2026-10-30: "the move's confirm" hid a ChatInput's draftKey from this scan).
+    if (c === '/' && src[i + 1] === '/') { const nl = src.indexOf('\n', i); if (nl < 0) break; i = nl; continue; }
+    if (c === '/' && src[i + 1] === '*') { const end = src.indexOf('*/', i + 2); if (end < 0) break; i = end + 1; continue; }
     if (depth > 0 && (c === '"' || c === "'" || c === '`')) { quote = c; continue; }
     if (depth === 0 && (c === '"' || c === "'")) { quote = c; continue; }
     if (c === '{') depth++;
@@ -112,6 +116,11 @@ function verdict(site: BoxSite): string | null {
 
 describe('every input box keeps its unsent draft', () => {
   const sites = boxSites();
+
+  it('reads a tag past comments between its attributes', () => {
+    const src = `<ChatInput\n  // the move's confirm, and a > in prose\n  sendBlocked={a > b}\n  /* it's > */ draftKey={k}\n/>`;
+    expect(openingTag(src, 0)).toBe(src);
+  });
 
   it('finds the boxes (the scanner still works)', () => {
     expect(sites.length).toBeGreaterThan(50);

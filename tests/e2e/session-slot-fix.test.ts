@@ -98,7 +98,7 @@ describe('POST /tasks/:id/start — the slot rule', () => {
     // another place (host) than the conversation's, so it is refused (a new place is
     // a new task: task_transfer). It never reached the host check (400).
     expect(status).toBe(409);
-    expect(JSON.stringify(body)).toContain('already has its one session');
+    expect(JSON.stringify(body)).toContain('already has its active session');
     // The stopped session is still the task's session.
     const { getSessionByClaudeId } = await import('../../src/core/session-tracker.js');
     expect((await getSessionByClaudeId('stopped-sess-001'))?.taskId).toBe(taskId);
@@ -115,7 +115,7 @@ describe('POST /tasks/:id/start — the slot rule', () => {
 
     const { status, body } = await startSession(taskId);
     expect(status).toBe(409);
-    expect(JSON.stringify(body)).toContain('already has its one session');
+    expect(JSON.stringify(body)).toContain('already has its active session');
   });
 
   it('an error session whose start failed before a turn does not occupy the slot', async () => {

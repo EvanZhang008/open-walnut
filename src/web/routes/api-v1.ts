@@ -35,7 +35,7 @@ import { VALID_PHASES } from '../../core/phase.js'
 import { CLOUD_MODE, LOG_DIR, NOTES_DIR } from '../../constants.js'
 import * as chatHistory from '../../core/chat-history.js'
 import { listConversations, createConversation } from '../../core/conversations.js'
-import { followerKind } from '../../core/server-role.js'
+import { followerKind, isCompanion } from '../../core/server-role.js'
 import { enqueueAgentTurn, getQueueStatus } from '../agent-turn-queue.js'
 import { broadcastEvent } from '../ws/handler.js'
 import { bus, EventNames } from '../../core/event-bus.js'
@@ -2952,7 +2952,7 @@ apiV1Router.post('/tasks', async (req: Request, res: Response, next: NextFunctio
       })
       // On the companion (no folders) a worker's subtask in its own project names the session,
       // so the Mac files it beside the parent's folder when it takes the create.
-      const fromWorker = CLOUD_MODE && decision.placeBesideCaller && caller.kind === 'worker'
+      const fromWorker = isCompanion() && decision.placeBesideCaller && caller.kind === 'worker'
         && task.parent_task_id === caller.task.id
         ? { callerSid: caller.session.id }
         : {}

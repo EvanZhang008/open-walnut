@@ -56,6 +56,7 @@ import {
   replyLanguageText,
 } from '../../../src/core/sessions/output-mode.js'
 import { composeHinted, parseHinted, renderHintBlock } from '../../../src/core/hints/hint-format.js'
+import { REPLY_LANGUAGE_SCOPE } from '../../../src/core/hints/hint-registry.js'
 import { parseSessionMessages } from '../../../src/core/session-history.js'
 import { notePlaceCompaction } from '../../../src/core/sessions/place-notice.js'
 import { getSessionByClaudeId } from '../../../src/core/session-tracker.js'
@@ -63,7 +64,8 @@ import { stripOutputModeWrappers as stripOutputModeWrappersClient } from '../../
 
 const TEXT = 'why did the deploy guard refuse?'
 const RULE = 'Talk to the user in Chinese; code, commits, UI strings and repo docs stay English.'
-const LANG = renderHintBlock('reply-language', RULE)
+// The hint is the user's sentence, then Walnut's own clause on what it covers.
+const LANG = renderHintBlock('reply-language', `${RULE} ${REPLY_LANGUAGE_SCOPE}`)
 const ON = renderHintBlock('rich-output', RICH_OUTPUT_MODE_ON_INSTRUCTION)
 const REMIND = renderHintBlock('rich-output', RICH_OUTPUT_MODE_REMINDER)
 /** The pre-registry line old transcripts still hold. */
@@ -156,7 +158,7 @@ describe('session:send', () => {
     await drain(sid)
     await setSession({ output_mode: 'markdown', reply_language: 'Answer in French.' })
     await callSend({ sessionId: sid, message: 'two' })
-    expect(await drain(sid)).toBe(after('two', renderHintBlock('reply-language', 'Answer in French.')))
+    expect(await drain(sid)).toBe(after('two', renderHintBlock('reply-language', `Answer in French. ${REPLY_LANGUAGE_SCOPE}`)))
     await callSend({ sessionId: sid, message: 'three' })
     expect(await drain(sid)).toBe('three')
   })

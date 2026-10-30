@@ -410,6 +410,7 @@ export const FileMentionPopup = forwardRef<FileMentionHandle, FileMentionPopupPr
           {editingPath ? (
             <input
               className="fmp-breadcrumb-input"
+              data-no-draft="picker"
               defaultValue={browseDir}
               autoFocus
               spellCheck={false}

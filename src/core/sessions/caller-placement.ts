@@ -59,6 +59,7 @@
 import path from 'node:path';
 import { CLOUD_MODE, PROJECTS_MEMORY_DIR } from '../../constants.js';
 import { bus, EventNames } from '../event-bus.js';
+import { isCompanion } from '../server-role.js';
 import { log } from '../../logging/index.js';
 
 /** The caller's task, as placement needs it. */
@@ -333,7 +334,7 @@ export function projectElsewhereRefusal(
 async function taskPlace(id: string): Promise<{
   id: string; title: string; project?: string; parent_task_id?: string; org_role?: string; org_leads?: string[]; walnut_agent?: boolean;
 } | undefined> {
-  if (CLOUD_MODE) {
+  if (isCompanion()) {
     const { readTaskProjection } = await import('../task-projection.js');
     return (await readTaskProjection().catch(() => null))?.tasks.find((t) => t.id === id);
   }
@@ -363,7 +364,7 @@ export async function workerMoveRefusal(input: {
   if (sameProject(input.project, input.task.project)) return null;
   const parentId = input.parentTaskId !== undefined
     ? input.parentTaskId
-    : input.task.parent_task_id || (CLOUD_MODE ? (await taskPlace(input.task.id))?.parent_task_id : undefined);
+    : input.task.parent_task_id || (isCompanion() ? (await taskPlace(input.task.id))?.parent_task_id : undefined);
   if (!parentId) return null;
   // Only the lead's own worker, moved by the lead or by the worker itself. Tidying other
   // teams' work stays an agent's call (Main's reorg moves tasks between projects).

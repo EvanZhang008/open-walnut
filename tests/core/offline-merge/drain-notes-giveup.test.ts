@@ -274,7 +274,12 @@ describe('note records the Mac does not apply keep their text', () => {
     mac(rel, BASE)
     const blobs = new Map<string, Buffer>()
     const ours = note('n-plan', 'title\n\none\ntwo\nthree full\nfour\nfive\n')
-    const r = noteRec(blobs, rel, BASE, ours)
+    // A person's note (a paired phone): its refusal is lettered. A session's refusal goes back to
+    // the session alone (letter.ts refusedBySession).
+    const { createDevice, listDeviceRecords } = await import('../../../src/core/device-auth.js')
+    await createDevice('full-disk-phone')
+    const deviceId = (await listDeviceRecords()).find((d) => d.name === 'full-disk-phone')!.id
+    const r = noteRec(blobs, rel, BASE, ours, { actor: { kind: 'device', deviceId, name: 'full-disk-phone' } })
     recordApplied({ hostKey: HOST, home: WALNUT_HOME, opId: r.opId, rev: 1 }, { outcome: 'refused', status: 409, detail: 'conflict', source: 'http' })
     const j = journal([r], blobs)
     const full = vi.spyOn(fs, 'fdatasyncSync').mockImplementation(() => { throw Object.assign(new Error('ENOSPC (injected)'), { code: 'ENOSPC' }) })
@@ -297,5 +302,6 @@ describe('note records the Mac does not apply keep their text', () => {
     expect(j.pending).toHaveLength(0)
     expect(entriesOnDisk()).toMatchObject([{ kind: 'refused', seq: r.seq, notePath: rel, base: BASE, replica: ours }])
     expect(inbox.letters).toHaveLength(1)
+    expect(inbox.letters[0].markdown).toContain(`[note ${rel}]`)
   })
 })

@@ -119,8 +119,8 @@ export async function placeBesideCaller(
 ): Promise<Awaited<ReturnType<typeof import('./caller-placement.js').joinOrCreateSiblingFolder>> | null> {
   if (!decision.placeBesideCaller || caller.kind !== 'worker') return null;
   // The companion holds no folders: the Mac files it beside its parent when it takes the create.
-  const { CLOUD_MODE } = await import('../../constants.js');
-  if (CLOUD_MODE) return null;
+  const { isCompanion } = await import('../server-role.js');
+  if (isCompanion()) return null;
   const { joinOrCreateSiblingFolder } = await import('./caller-placement.js');
   return joinOrCreateSiblingFolder(caller.task, created.id, {
     eventSource, refineTitles: [caller.task.title, created.title], nest: true,

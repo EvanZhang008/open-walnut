@@ -1057,7 +1057,8 @@ describe('sessionRequestWatchHook — a request handed on waits for that answer'
     expect((await getSessionRequest(owed.id))?.status).toBe('pending');
     backdateDeadline(owed.id);
     expect(await sweepSessionRequests()).toBe(1);
-    expect(deliveredText()).toContain('"Fix login timeout" (task-88), which finished without an explicit answer.');
+    expect(deliveredText()).toContain('The task you asked handed your request on, so the work is here:');
+    expect(deliveredText()).toContain('- "Fix login timeout" (task-88): finished without an explicit answer; its task is COMPLETE now');
   });
 
   it('a turn that parks says nothing, and so does one after the worker answered: only a real reply or the deadline settles it', async () => {
@@ -1075,7 +1076,8 @@ describe('sessionRequestWatchHook — a request handed on waits for that answer'
     expect((await getSessionRequest(owed.id))?.status).toBe('pending');
     backdateDeadline(owed.id);
     expect(await sweepSessionRequests()).toBe(1);
-    expect(deliveredText()).toContain('It handed your request on to "Fix login timeout" (task-88), which answered it.');
+    expect(deliveredText()).toContain('The task you asked handed your request on, so the work is here:');
+    expect(deliveredText()).toContain('- "Fix login timeout" (task-88): answered it');
   });
 
   it('a target that answers itself is the one voice', async () => {
@@ -1093,7 +1095,8 @@ describe('sessionRequestWatchHook — a request handed on waits for that answer'
     expect(notifySpy).not.toHaveBeenCalled();
     backdateDeadline(owed.id);
     expect(await sweepSessionRequests()).toBe(1);
-    expect(deliveredText()).toContain('"Fix login timeout" (task-88), which finished without an explicit answer.');
+    expect(deliveredText()).toContain('The task you asked handed your request on, so the work is here:');
+    expect(deliveredText()).toContain('- "Fix login timeout" (task-88): finished without an explicit answer');
   });
 
   it('blocked, failed or closed: the asker hears now, with who still has the work', async () => {
@@ -1117,7 +1120,8 @@ describe('sessionRequestWatchHook — a request handed on waits for that answer'
     const { owed } = await handOff();
     backdateDeadline(owed.id);
     expect(await sweepSessionRequests()).toBe(1);
-    expect(deliveredText()).toContain('It handed your request on to "Fix login timeout" (task-88), which is still working on it.');
+    expect(deliveredText()).toContain('The task you asked handed your request on, so the work is here:');
+    expect(deliveredText()).toContain('- "Fix login timeout" (task-88): still has it, no answer yet');
   });
 });
 

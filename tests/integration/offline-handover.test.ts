@@ -493,10 +493,17 @@ describe('runOfflineHandover over journal v2', () => {
     const t = await newTask('Refused v2')
     const { listLetters } = await import('../../src/core/human-inbox/store.js')
     const lettersBefore = (await listLetters()).letters.length
+    // A person's write (a paired phone) the Mac refuses is the user's to see; the same refusal of
+    // a session's write goes back to that session alone (letter.ts refusedBySession), no letter.
+    const { createDevice, listDeviceRecords } = await import('../../src/core/device-auth.js')
+    await createDevice('refused-v2-phone')
+    const deviceId = (await listDeviceRecords()).find((d) => d.name === 'refused-v2-phone')!.id
+    const phone = { actor: { kind: 'device', deviceId, name: 'refused-v2-phone' } }
     const d = v2Daemon([
-      v2(1, t, { title: { base: 'Refused v2', value: 'x' }, cwd: { base: '', value: '/srv/marina' } }),
+      v2(1, t, { title: { base: 'Refused v2', value: 'x' }, cwd: { base: '', value: '/srv/marina' } }, phone),
       { seq: 2, at: Date.now(), kind: 'session-from-the-future', opId: 'op-future-0000001' },
       v2(3, t, { priority: { base: 'none', value: 'important' } }),
+      v2(4, t, { cwd: { base: '', value: '/srv/other' } }),
     ])
     await runOfflineHandover(d.conn)
     expect([...d.pending.keys()]).toEqual([2])
@@ -504,6 +511,8 @@ describe('runOfflineHandover over journal v2', () => {
     const letters = (await listLetters()).letters
     expect(letters.length).toBe(lettersBefore + 1)
     expect(JSON.stringify(letters)).toContain('cwd')
+    // The session's refused cwd (seq 4) is in no letter.
+    expect(JSON.stringify(letters)).not.toContain('/srv/other')
   })
 
   it('a record this Mac applied whose ack never reached the host (killed after apply, R14) is drained again on the next connect and lands once, by the applied-ops ledger', async () => {
