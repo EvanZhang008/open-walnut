@@ -6599,7 +6599,8 @@ async function startSessionProcess(cmd, isCurrent, canStart) {
   broadcastSessionState(sid, 'running', { pid });
   ensureWatcher(sid);
   if (message) {
-    const sent = await handleSendCommand(sid, message, initialUuid);
+    // bootWait (send-boot-wait-v1): the client waits long enough for a CLI still booting.
+    const sent = await handleSendCommand(sid, message, initialUuid, undefined, { bootWait: cmd.bootWait === true });
     if (sent.reason === 'budget_paused' || sent.reason === 'budget_checking') throw budgetRefusal(sent.reason);
     if (!sent.ok) throw new Error('start: initial message not delivered (' + (sent.reason || sent.error) + ')');
   }
@@ -6816,6 +6817,17 @@ function writeFifoQuick(pipePath, buf) {
 // (prefix written but unfinished at deadline — caller MUST reap: the pipe now
 // holds half a JSON line).
 const FIFO_WRITE_DEADLINE_MS = 20000;
+// send-boot-wait-v1 (twin of daemon-core.ts bootWriteDeadline): a boot-wait send
+// into a CLI that has not taken its first line since this daemon spawned it waits
+// until FIFO_BOOT_WRITE_DEADLINE_MS after the spawn. A line bigger than the pipe
+// buffer goes in part way and waits for the CLI to read; a fixed 20s reaped a
+// healthy CLI still loading a huge transcript (2026-10-30).
+const FIFO_BOOT_WRITE_DEADLINE_MS = 120000;
+function bootWriteDeadline(session) {
+  if (session.sawInit !== false || typeof session.spawnTs !== 'number') return undefined;
+  const until = session.spawnTs + FIFO_BOOT_WRITE_DEADLINE_MS;
+  return until > Date.now() + FIFO_WRITE_DEADLINE_MS ? until : undefined;
+}
 // progress (optional): kept up to date with the bytes in so far, also when the write fails or throws.
 async function writeFifoFullyAsync(pipePath, buf, deadline, isAbandoned, beforeNewline, progress) {
   const RETRY_INTERVAL_MS = 25;
@@ -6873,9 +6885,15 @@ function budgetControlExempt(raw) {
 }
 
 async function chainFifoWrite(sid, session, buf, beforeNewline, line, raw) {
-  const deadline = Date.now() + FIFO_WRITE_DEADLINE_MS;
+  const bootDeadline = line && typeof line.deadlineAt === 'number' ? line.deadlineAt : undefined;
+  let deadline = bootDeadline !== undefined ? bootDeadline : Date.now() + FIFO_WRITE_DEADLINE_MS;
+  // Behind a boot-wait write the chain wait can outlast this write's budget; past
+  // it, one full pipe would reap the CLI that just booted (twin of daemon-core.ts).
+  const behindBoot = (session.fifoBootWaitUntil || 0) > Date.now();
+  if (bootDeadline !== undefined) session.fifoBootWaitUntil = Math.max(session.fifoBootWaitUntil || 0, bootDeadline);
   const prev = session.fifoWriteChain || Promise.resolve();
   const run = prev.catch(() => {}).then(async () => {
+    if (behindBoot) deadline = Math.max(deadline, Date.now() + FIFO_WRITE_DEADLINE_MS);
     // The session, not its key (twin of daemon-core.ts): a rename while this write
     // waited re-keys the same process, whose pipe still takes it.
     const keyNow = function () {
@@ -6915,7 +6933,13 @@ async function chainFifoWrite(sid, session, buf, beforeNewline, line, raw) {
     return written;
   });
   session.fifoWriteChain = run;
-  const result = await run;
+  let result;
+  try {
+    result = await run;
+  } finally {
+    // Settled: only writes queued while it waited count as behind it.
+    if (bootDeadline !== undefined && session.fifoBootWaitUntil === bootDeadline) session.fifoBootWaitUntil = undefined;
+  }
   if (session.fifoWriteChain === run) session.fifoWriteChain = undefined;
   return result;
 }
@@ -9184,7 +9208,8 @@ async function sendSessionMessage(ws, id, cmd) {
   cancelTurnRetry(sid, 'superseded-by-send');
   // dedupe (send-dedupe-v1): a resend after an unanswered send; written only if this CLI lacks it.
   // lostPid (send-lost-line-v1): the server proved this CLI read past the line; it is written again.
-  const result = await handleSendCommand(sid, message, uuid, cmd.markers, { dedupe: cmd.dedupe === true, lostPid: typeof cmd.lostPid === 'number' ? cmd.lostPid : null });
+  // bootWait (send-boot-wait-v1): the first line after a start; a CLI still booting gets until its boot deadline.
+  const result = await handleSendCommand(sid, message, uuid, cmd.markers, { dedupe: cmd.dedupe === true, lostPid: typeof cmd.lostPid === 'number' ? cmd.lostPid : null, bootWait: cmd.bootWait === true });
   // written: how much of the line went in before the write failed (daemon-core.ts SendResult).
   if (result.error) return sendError(ws, id, result.error, result.written ? { written: result.written } : undefined);
   return sendOk(ws, id, result);
@@ -9220,7 +9245,9 @@ async function handleSendCommand(sid, message, uuid, inputMarkers, opts) {
       : undefined;
     const ids = markers.list.map(function (m) { return m.messageId; });
     const torn = { end: false, cut: false };
+    const deadlineAt = opts && opts.bootWait === true ? bootWriteDeadline(session) : undefined;
     const result = await chainFifoWrite(sid, session, buf, beforeNewline, {
+      deadlineAt: deadlineAt,
       fate: dedupe ? function () { return lineFateInProcess(session, uuid, ids, lostPid, torn); } : undefined,
       begin: ids.length > 0 ? function (on) { recordLineBegun(session, uuid, ids, on); } : undefined,
       written: ids.length > 0 ? function () { recordLineWritten(session, uuid, ids); } : undefined,
@@ -9240,6 +9267,9 @@ async function handleSendCommand(sid, message, uuid, inputMarkers, opts) {
     }
     if (result === 'ok') {
       if (rewrite) logMsg('warn', 'send: wrote a line again that the CLI read past without taking', { sid: sid, pid: session.pid, messageIds: ids });
+      if (deadlineAt !== undefined && typeof session.spawnTs === 'number') {
+        logMsg('info', 'send: a booting CLI took the line', { sid: sid, pid: session.pid, bytes: buf.length, spawnToWrittenMs: Date.now() - session.spawnTs });
+      }
       session.ttftSendTs = Date.now();
       session.ttftSawFirstLine = false;
       // An earlier write of this line into this process died inside it: the CLI may
@@ -9257,6 +9287,10 @@ async function handleSendCommand(sid, message, uuid, inputMarkers, opts) {
       return { ok: false, reason: 'ENXIO', exitCode: session.exitCode, written: written() };
     }
     if (result === 'EAGAIN') return { ok: false, reason: 'EAGAIN', retriable: true };
+    logMsg('warn', 'send: the CLI did not read the line in time', {
+      sid: sid, pid: session.pid, bytes: buf.length, sent: progress.sent, bootWait: deadlineAt !== undefined,
+      sinceSpawnMs: typeof session.spawnTs === 'number' ? Date.now() - session.spawnTs : null, sawInit: session.sawInit === undefined ? null : session.sawInit,
+    });
     reapSession(sid, -1, 'send-partial-write');
     // Same shape as a session that died before the write, so say how far it got.
     return { ok: false, reason: 'session_dead', exitCode: session.exitCode, written: written() };

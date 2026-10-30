@@ -191,6 +191,12 @@ export interface LineWriteOptions {
    * it to the next process when this one exits without a word on it.
    */
   onCut?: () => void
+  /**
+   * The first line after this transport started its process (send-boot-wait-v1):
+   * a CLI still booting (a resume of a huge transcript) gets until its boot
+   * deadline to read the line, and the client waits as long for the answer.
+   */
+  bootWait?: boolean
 }
 
 /**

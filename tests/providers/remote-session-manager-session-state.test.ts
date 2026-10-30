@@ -239,6 +239,62 @@ describe('L2.1 RemoteSessionManager session_state wire-level contract', () => {
     }
   })
 
+  // send-boot-wait-v1 (2026-10-30): the first line after a start may wait through a
+  // long CLI boot, so it carries bootWait and the client waits past the daemon's
+  // 120s boot deadline. Only that first ask; never to a daemon without the capability.
+  it.each([true, false])('the first line after a start waits through the boot when the daemon can (boot-wait=%s)', async (bootWait) => {
+    const conn = (mgr as unknown as { conn: { hasCapability: (cap: string) => boolean; send: (...args: unknown[]) => Promise<unknown> } }).conn
+    const capability = vi.spyOn(conn, 'hasCapability').mockImplementation((cap: string) => cap !== 'send-boot-wait-v1' || bootWait)
+    const connect = vi.spyOn(mgr as unknown as { ensureConnected(): Promise<unknown> }, 'ensureConnected').mockResolvedValue(conn)
+    const send = vi.spyOn(conn, 'send').mockResolvedValue({ ok: true, pid: 4242, offset: 100 })
+    const prepare = vi.spyOn(mgr, 'prepareOutbound').mockResolvedValue('prepared resume')
+    const markers = [{ message: 'resume text', messageId: 'qm-boot' }]
+    try {
+      await mgr.start({ args: [], cwd: '/tmp', message: 'resume text', resume: true, markers, onOutput, onExit })
+      expect(send.mock.calls.map(([command]) => command)).toEqual(['start', 'send'])
+      // The start itself carries no message here (deferred), so it waits as before.
+      expect(send.mock.calls[0][1]).not.toHaveProperty('bootWait')
+      expect(send.mock.calls[0][2]).toBeUndefined()
+      if (bootWait) {
+        expect(send.mock.calls[1][1]).toMatchObject({ message: 'prepared resume', bootWait: true })
+        expect(send.mock.calls[1][2]).toBe(150_000)
+      } else {
+        expect(send.mock.calls[1][1]).not.toHaveProperty('bootWait')
+        expect(send.mock.calls[1][2]).toBeUndefined()
+      }
+      // A later line is a plain send.
+      send.mockClear()
+      expect(await mgr.writeMessage('next', { markers: [{ message: 'next', messageId: 'qm-next' }] })).toBe(true)
+      expect(send.mock.calls[0][1]).not.toHaveProperty('bootWait')
+      expect(send.mock.calls[0][2]).toBeUndefined()
+    } finally {
+      connect.mockRestore()
+      capability.mockRestore()
+      send.mockRestore()
+      prepare.mockRestore()
+    }
+  })
+
+  it('a start that carries its own message waits through the boot when the daemon can', async () => {
+    const conn = (mgr as unknown as { conn: { hasCapability: (cap: string) => boolean; send: (...args: unknown[]) => Promise<unknown> } }).conn
+    // No send-markers-v1: the message rides the start.
+    const capability = vi.spyOn(conn, 'hasCapability').mockImplementation((cap: string) => cap !== 'send-markers-v1')
+    const connect = vi.spyOn(mgr as unknown as { ensureConnected(): Promise<unknown> }, 'ensureConnected').mockResolvedValue(conn)
+    const send = vi.spyOn(conn, 'send').mockResolvedValue({ ok: true, pid: 4242, offset: 100 })
+    const prepare = vi.spyOn(mgr, 'prepareOutbound').mockResolvedValue('prepared first')
+    try {
+      await mgr.start({ args: [], cwd: '/tmp', message: 'first', resume: true, onOutput, onExit })
+      expect(send.mock.calls[0][0]).toBe('start')
+      expect(send.mock.calls[0][1]).toMatchObject({ message: 'prepared first', bootWait: true })
+      expect(send.mock.calls[0][2]).toBe(150_000)
+    } finally {
+      connect.mockRestore()
+      capability.mockRestore()
+      send.mockRestore()
+      prepare.mockRestore()
+    }
+  })
+
   it('rejects resume success when its first message was not delivered', async () => {
     const conn = (mgr as unknown as { conn: { hasCapability: (cap: string) => boolean; send: (...args: unknown[]) => Promise<unknown> } }).conn
     const capability = vi.spyOn(conn, 'hasCapability').mockReturnValue(true)

@@ -5793,7 +5793,8 @@ async function startSessionProcess(cmd: Record<string, unknown>, isCurrent?: () 
   broadcastSessionState(sid, 'running', { pid })
   ensureWatcher(sid)
   if (message) {
-    const sent = await core.handleSendCommand(sid, message, initialUuid)
+    // bootWait (send-boot-wait-v1): the client waits long enough for a CLI still booting.
+    const sent = await core.handleSendCommand(sid, message, initialUuid, undefined, { bootWait: cmd.bootWait === true })
     if (sent.reason === 'budget_paused' || sent.reason === 'budget_checking') throw budgetRefusal(sent.reason)
     if (!sent.ok) throw new Error(`start: initial message not delivered (${sent.reason ?? sent.error})`)
   }
@@ -7899,7 +7900,8 @@ async function sendSessionMessage(ws: ServerWebSocket<WsData>, id: number, cmd: 
   cancelTurnRetry(sid, 'superseded-by-send')
   // dedupe (send-dedupe-v1): a resend after an unanswered send; core writes it only if this CLI lacks it.
   // lostPid (send-lost-line-v1): the server proved this CLI read past the line; core writes it again.
-  const result = await core.handleSendCommand(sid, message, typeof uuid === 'string' ? uuid : undefined, markers, { dedupe: cmd.dedupe === true, lostPid: typeof cmd.lostPid === 'number' ? cmd.lostPid : null })
+  // bootWait (send-boot-wait-v1): the first line after a start; a CLI still booting gets until its boot deadline.
+  const result = await core.handleSendCommand(sid, message, typeof uuid === 'string' ? uuid : undefined, markers, { dedupe: cmd.dedupe === true, lostPid: typeof cmd.lostPid === 'number' ? cmd.lostPid : null, bootWait: cmd.bootWait === true })
   // `written`: how much of the line went in before the write failed (daemon-core.ts SendResult).
   if ('error' in result) return sendError(ws, id, result.error, result.written ? { written: result.written } : undefined)
   sendOk(ws, id, result as unknown as Record<string, unknown>)

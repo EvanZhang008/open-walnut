@@ -58,6 +58,8 @@ let __rsmIdCounter = 0
 const SEND_DEDUPE_CAPABILITY = 'send-dedupe-v1'
 /** A dedupe `send` carrying `lostPid` writes the line again into the process that read past it. */
 const SEND_LOST_LINE_CAPABILITY = 'send-lost-line-v1'
+/** A `send` or `start` carrying `bootWait` waits through the boot of the CLI it starts. */
+const SEND_BOOT_WAIT_CAPABILITY = 'send-boot-wait-v1'
 
 export class RemoteSessionManager implements SessionManager {
   /**
@@ -68,6 +70,8 @@ export class RemoteSessionManager implements SessionManager {
   static SEND_CONFIRM_DEADLINE_MS = 60_000
   /** One ask's own timeout: shorter than a send's, so a stuck answer is asked again soon. */
   static SEND_CONFIRM_ATTEMPT_MS = 10_000
+  /** The answer to a boot-wait line: past the daemon's 120s boot deadline (FIFO_BOOT_WRITE_DEADLINE_MS). */
+  static BOOT_WAIT_SEND_TIMEOUT_MS = 150_000
 
   private readonly _rsmId: number = ++__rsmIdCounter
   private conn: DaemonConnection | null = null
@@ -331,6 +335,8 @@ export class RemoteSessionManager implements SessionManager {
     const sendAfterStart = Boolean(opts.markers?.length && this.conn!.hasCapability('send-markers-v1'))
     const preparedMessage = sendAfterStart ? '' : await this.prepareOutbound(opts.message)
     this._lastPreparedOutbound = preparedMessage
+    // The start's own first line waits through the CLI's boot (send-boot-wait-v1).
+    const startBootWait = !!preparedMessage && this.conn!.hasCapability(SEND_BOOT_WAIT_CAPABILITY)
     const startPayload = {
       sid: this.tmpId,
       ...(this.conn!.hasCapability('cron-supervision-v1') ? { stopFence: opts.stopFence ?? null } : {}),
@@ -338,6 +344,7 @@ export class RemoteSessionManager implements SessionManager {
       cwd: opts.cwd,
       message: preparedMessage,
       ...(sendAfterStart ? { deferMessage: true } : {}),
+      ...(startBootWait ? { bootWait: true } : {}),
       resume: opts.resume ?? false,
       mode: opts.mode,
       // Pre-assigned user-line uuid for the INITIAL message (cold --resume with a
@@ -354,7 +361,9 @@ export class RemoteSessionManager implements SessionManager {
 
     let result: Record<string, unknown>
     try {
-      result = await this.dispatch(this.tmpId, opts.stopFence, () => this.conn!.send('start', startPayload))
+      result = await this.dispatch(this.tmpId, opts.stopFence, () => startBootWait
+        ? this.conn!.send('start', startPayload, RemoteSessionManager.BOOT_WAIT_SEND_TIMEOUT_MS)
+        : this.conn!.send('start', startPayload))
     } catch (err) {
       // Stale/dead connection — reconnect and retry with idempotent probe
       if (isDaemonConnError(err)) {
@@ -419,8 +428,10 @@ export class RemoteSessionManager implements SessionManager {
     let cut = false
     let fate: { fate: string; state?: string } | undefined
     if (sendAfterStart) {
+      // bootWait: a CLI resuming a huge transcript reads stdin only after 20s or more
+      // (2026-10-30, 136MB: killed twice mid-boot by the plain write deadline).
       const written = await this.writeMessage(opts.message, {
-        uuid: opts.uuid, markers: opts.markers, stopFence: opts.stopFence, dedupe: true,
+        uuid: opts.uuid, markers: opts.markers, stopFence: opts.stopFence, dedupe: true, bootWait: true,
         onCut: () => { cut = true },
         onFate: (f) => { fate = f },
       })
@@ -495,7 +506,10 @@ export class RemoteSessionManager implements SessionManager {
     log.session.info('RemoteSessionManager: retrying start after reconnect', {
       host: this.hostKey, sid,
     })
-    return this.dispatch(sid, stopFence, () => this.conn!.send('start', startPayload))
+    // A boot-wait start answers only once the CLI took its line (send-boot-wait-v1).
+    return this.dispatch(sid, stopFence, () => startPayload.bootWait === true
+      ? this.conn!.send('start', startPayload, RemoteSessionManager.BOOT_WAIT_SEND_TIMEOUT_MS)
+      : this.conn!.send('start', startPayload))
   }
 
   // ── Attach ──
@@ -757,9 +771,14 @@ export class RemoteSessionManager implements SessionManager {
           && !this.rewriteAlreadyAttempted(sid, opts) ? { lostPid: opts.lostPid } : {}),
       })
       const sendNative = async (): Promise<Record<string, unknown>> => {
+        // send-boot-wait-v1: only the first ask of the first line after a start waits through the boot.
+        const bootWait = opts?.bootWait === true && conn!.hasCapability(SEND_BOOT_WAIT_CAPABILITY)
         let reply = await this.dispatch(sid, opts?.stopFence, () => {
           opts?.onDispatch?.()
-          return conn!.send('send', payload(conn!, confirmable && opts?.dedupe === true))
+          const body = payload(conn!, confirmable && opts?.dedupe === true)
+          return bootWait
+            ? conn!.send('send', { ...body, bootWait: true }, RemoteSessionManager.BOOT_WAIT_SEND_TIMEOUT_MS)
+            : conn!.send('send', body)
         })
         const reason = String(reply.reason || reply.error || '')
         if (reply.ok || (reason !== 'not_found' && reason !== 'not found')) return reply

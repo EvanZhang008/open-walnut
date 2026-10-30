@@ -125,6 +125,15 @@ export interface CoreSessionData {
    *  not interleave — two concurrent partial writes would splice their bytes
    *  into one corrupted line. Each send chains behind the previous one. */
   fifoWriteChain?: Promise<unknown>
+  /** Epoch ms this daemon spawned the CLI, and whether its first init line has
+   *  been seen since. Together they say the CLI is still booting (it has not
+   *  taken its first line yet), which is what a boot-wait send waits through.
+   *  Optional: an adopted process has neither, and never gets the longer wait. */
+  spawnTs?: number
+  sawInit?: boolean
+  /** The deadline of the latest boot-wait write queued on this session: a write
+   *  queued behind it gets its own plain window once its turn comes. */
+  fifoBootWaitUntil?: number
   bootId?: string
   cliVersion?: string
   cronMetadataOrigin?: import('./daemon-cron-metadata.js').CronMetadataOrigin
@@ -159,6 +168,11 @@ export interface DaemonCoreDeps<S extends CoreSessionData = CoreSessionData> {
    *  the walnut client's 30s RPC timeout so the strict-ack always settles.
    *  Default 20s — covers CLI boot (measured 2–7s before it reads stdin). */
   fifoWriteDeadlineMs?: number
+  /** How long after its spawn a booting CLI may take to start reading a
+   *  boot-wait send (`bootWait`), ms. Default 120s: `claude --resume` of a
+   *  transcript over 100MB took 18 to 22s on a loaded Mac just after a wake
+   *  (2026-10-30), past the 20s above, and was killed twice mid-boot. */
+  fifoBootWriteDeadlineMs?: number
   /** Checked inside the final FIFO serializer, before any cost-producing line. */
   allowBudgetFn?: (sid: string) => Promise<BudgetGate>
   logger: (level: string, msg: string, meta?: Record<string, unknown>) => void
@@ -241,6 +255,10 @@ export function lineRecordPath(jsonlPath: string): string {
  * adopts its session. Keep in sync with daemon-source.ts.
  */
 export const LIVE_FIFO_MODE = 0o200
+
+/** send-boot-wait-v1: how long after its spawn a booting CLI may take to start
+ *  reading a boot-wait send. Keep in sync with daemon-source.ts. */
+export const FIFO_BOOT_WRITE_DEADLINE_MS = 120_000
 
 /** Lock a live stdin FIFO against readers (LIVE_FIFO_MODE). False when the chmod failed. */
 export function lockLiveFifo(fs: typeof import('node:fs'), pipePath: string): boolean {
@@ -382,6 +400,18 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
   const readStartTimeAsync = deps.readStartTimeAsyncFn
     ?? ((pid: number) => Promise.resolve(readStartTimeFn(pid)))
   const fifoWriteDeadlineMs = deps.fifoWriteDeadlineMs ?? 20_000
+  const fifoBootWriteDeadlineMs = deps.fifoBootWriteDeadlineMs ?? FIFO_BOOT_WRITE_DEADLINE_MS
+
+  /** send-boot-wait-v1: the deadline of a boot-wait send into a CLI that has not
+   *  taken its first line since this daemon spawned it, else none (the plain
+   *  budget). A line bigger than the pipe buffer goes in part way and waits for
+   *  the CLI to read; a fixed 20s reaped a healthy CLI still loading a huge
+   *  transcript. Death still ends the wait at once (the write's abandon check). */
+  function bootWriteDeadline(session: S): number | undefined {
+    if (session.sawInit !== false || typeof session.spawnTs !== 'number') return undefined
+    const until = session.spawnTs + fifoBootWriteDeadlineMs
+    return until > clock() + fifoWriteDeadlineMs ? until : undefined
+  }
 
   /**
    * Read the last line of the JSONL output and decide whether the CLI
@@ -884,7 +914,7 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
     message: string | undefined,
     uuid?: string,
     markers?: UserMarkerInput[],
-    opts?: { dedupe?: boolean; lostPid?: number | null },
+    opts?: { dedupe?: boolean; lostPid?: number | null; bootWait?: boolean },
   ): Promise<SendResult> {
     if (!sid || !message) return { error: 'send: missing sid or message' }
     const normalized = normalizeMarkers(markers)
@@ -933,7 +963,9 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
         : undefined
       const ids = pending.map((m) => m.messageId)
       const torn = { end: false, cut: false }
+      const deadlineAt = opts?.bootWait === true ? bootWriteDeadline(session) : undefined
       const result = await chainFifoWrite(sid, session, buf, beforeNewline, {
+        deadlineAt,
         fate: dedupe ? () => lineFateInProcess(session, uuid, ids, lostPid, torn) : undefined,
         begin: ids.length > 0 ? (on: boolean) => recordLineBegun(session, uuid, ids, on) : undefined,
         written: ids.length > 0 ? () => recordLineWritten(session, uuid, ids) : undefined,
@@ -958,6 +990,9 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
           logger('warn', 'send: wrote a line again that the CLI read past without taking', {
             sid, pid: session.pid, messageIds: ids,
           })
+        }
+        if (deadlineAt !== undefined && typeof session.spawnTs === 'number') {
+          logger('info', 'send: a booting CLI took the line', { sid, pid: session.pid, bytes: buf.length, spawnToWrittenMs: clock() - session.spawnTs })
         }
         // TTFT anchor: the tailer logs send→first-line / send→first-text
         // latencies against this (CLI-side half of the text-latency attribution).
@@ -989,6 +1024,10 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
       // partial: a prefix entered the pipe but couldn't finish within the
       // deadline — the FIFO now holds half a JSON line and the CLI's stdin
       // parser will choke on it. Terminal: reap so the caller sees session_dead.
+      logger('warn', 'send: the CLI did not read the line in time', {
+        sid, pid: session.pid, bytes: buf.length, sent: progress.sent, bootWait: deadlineAt !== undefined,
+        sinceSpawnMs: typeof session.spawnTs === 'number' ? clock() - session.spawnTs : null, sawInit: session.sawInit ?? null,
+      })
       reapSession(sid, -1, 'send-partial-write')
       // Same shape as a session that died before the write, so say how far it got.
       return { ok: false, reason: 'session_dead', exitCode: session.exitCode, written: written() }
@@ -1246,6 +1285,8 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
      *  a whole line went in (before the next write may ask), `tornEnd` (asked after
      *  `fate`): a newline goes in before the line (lineTornEnd). */
     line?: {
+      /** An absolute deadline in place of the plain budget (send-boot-wait-v1). */
+      deadlineAt?: number
       fate?: () => Promise<LineFate | null>; begin?: (on: boolean) => void; written?: () => void; tornEnd?: () => boolean
       /** Filled in as the write goes: bytes in, the buffer's length, its leading newlines. */
       progress?: { sent: number; length: number; lead: number }
@@ -1255,9 +1296,14 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
     // Absolute deadline fixed BEFORE queuing behind the chain: chain wait +
     // own write share ONE budget, so the strict-ack always settles inside the
     // walnut client's 30s RPC timeout even when writes stack up.
-    const deadline = clock() + fifoWriteDeadlineMs
+    let deadline = line?.deadlineAt ?? clock() + fifoWriteDeadlineMs
+    // Behind a boot-wait write the chain wait can outlast this write's budget; past
+    // it, one full pipe would reap the CLI that just booted (send-boot-wait-v1).
+    const behindBoot = (session.fifoBootWaitUntil ?? 0) > clock()
+    if (line?.deadlineAt !== undefined) session.fifoBootWaitUntil = Math.max(session.fifoBootWaitUntil ?? 0, line.deadlineAt)
     const prev = session.fifoWriteChain ?? Promise.resolve()
     const run = prev.catch(() => {}).then(async () => {
+      if (behindBoot) deadline = Math.max(deadline, clock() + fifoWriteDeadlineMs)
       // Re-check state after waiting in the chain — a predecessor's failure
       // (or the orphan poll) may have reaped the session meanwhile.
       // The session, not its key: a rename while this write waited (the budget
@@ -1290,7 +1336,13 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
       return written
     })
     session.fifoWriteChain = run
-    const result = await run
+    let result: Awaited<typeof run>
+    try {
+      result = await run
+    } finally {
+      // Settled: only writes queued while it waited count as behind it.
+      if (line?.deadlineAt !== undefined && session.fifoBootWaitUntil === line.deadlineAt) session.fifoBootWaitUntil = undefined
+    }
     // Drop the chain pointer once the tail settles so it doesn't grow unbounded.
     if (session.fifoWriteChain === run) session.fifoWriteChain = undefined
     return result

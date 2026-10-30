@@ -423,8 +423,8 @@ describe('send-dedupe-v1 twins', () => {
   const template = fs.readFileSync(path.join(ROOT, 'src/providers/daemon-source.ts'), 'utf-8')
   const standalone = fs.readFileSync(path.join(ROOT, 'src/providers/daemon-standalone.ts'), 'utf-8')
 
-  it('both daemons pass the dedupe flag and lostPid from the wire into the send', () => {
-    const wire = /handleSendCommand\([^)]*\{ dedupe: cmd\.dedupe === true, lostPid: typeof cmd\.lostPid === 'number' \? cmd\.lostPid : null \}\)/
+  it('both daemons pass the dedupe flag, lostPid and bootWait from the wire into the send', () => {
+    const wire = /handleSendCommand\([^)]*\{ dedupe: cmd\.dedupe === true, lostPid: typeof cmd\.lostPid === 'number' \? cmd\.lostPid : null, bootWait: cmd\.bootWait === true \}\)/
     expect(standalone).toMatch(wire)
     expect(template).toMatch(wire)
   })

@@ -533,6 +533,15 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // the CLI holds is ended on its own (line-fate-core.ts). Optional: without it
   // the server cannot rewrite such a line and shows it as failed instead.
   'send-lost-line-v1',
+  // 'send-boot-wait-v1': `send` and `start` accept `bootWait:true` (the first line
+  // after a start, and the client waits up to two and a half minutes for the answer).
+  // While the CLI this daemon spawned has not shown its first init line, a line
+  // bigger than the pipe buffer may wait until FIFO_BOOT_WRITE_DEADLINE_MS after the
+  // spawn for the CLI to read it, instead of the plain 20s after which a part-written
+  // line reaps the process (daemon-core.ts bootWriteDeadline; 2026-10-30: a resume of
+  // a 136MB transcript took 18 to 22s to read stdin and was killed twice). Optional:
+  // without it the server sends neither the flag nor the longer wait.
+  'send-boot-wait-v1',
   // 'marker-find-v1': markers.find answers which of a session's phone message
   // ids have a delivery marker in its stream, searched host-side newest first
   // (marker-find-core.ts; both twins inline, not sidecar-gated). Bridge-
