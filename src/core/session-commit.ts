@@ -146,12 +146,14 @@ const realDeps: SessionCommitDeps = {
   async askModel(system, prompt, ids) {
     const { sendMessage } = await import('../model/model.js')
     const { getConfig } = await import('./config-manager.js')
-    const { fastModelFor } = await import('./cheap-model.js')
+    const { fastModelFor, CLI_FAST_CALL_BUDGET_MS } = await import('./cheap-model.js')
     const { titleBudgetMs } = await import('./session-title-backend.js')
     const config = await getConfig()
     const model = fastModelFor(config)
     const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), await titleBudgetMs(config))
+    // Someone clicked and waits: a busy local model server does not get the
+    // background helpers' long budget (LOCAL_FAST_CALL_BUDGET_MS).
+    const timer = setTimeout(() => controller.abort(), Math.min(await titleBudgetMs(config), CLI_FAST_CALL_BUDGET_MS))
     try {
       const result = await sendMessage({
         system,

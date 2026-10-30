@@ -22,6 +22,7 @@ import {
 } from '../working-memory.js';
 import { estimateTokens } from '../daily-log.js';
 import { log } from '../../logging/index.js';
+import { fastCallText } from '../cheap-model.js';
 
 // Thresholds borrowed from Claude Code's sessionMemory.ts. 10K initial ensures enough
 // conversation context before first extraction. 5K growth + 3 tool calls ensures
@@ -273,9 +274,7 @@ export const runWorkingMemoryUpdate: WorkingMemoryRunner = async (prompt) => {
       purpose: 'background',
       usage: { source: 'memory', agentId: 'working-memory' },
     });
-    return (result.content ?? [])
-      .map((b) => (b.type === 'text' && 'text' in b ? (b as { text: string }).text : ''))
-      .join('');
+    return fastCallText(result);
   } finally {
     clearTimeout(timer);
   }

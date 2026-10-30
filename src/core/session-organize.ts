@@ -19,7 +19,7 @@
 
 import { sendMessage } from '../model/model.js';
 import { log } from '../logging/index.js';
-import { fastCallBudgetMs, fastModelFor } from './cheap-model.js';
+import { fastCallBudgetMs, fastCallText, fastModelFor } from './cheap-model.js';
 import { getJevClient, readChoice, type JevClient } from './decision/jev-client.js';
 import type { Config } from './types.js';
 
@@ -188,10 +188,7 @@ export async function suggestSessionPlacement(
       clearTimeout(timer);
     }
 
-    const responseText = (result.content ?? [])
-      .map((block) => (block.type === 'text' && 'text' in block ? (block as { text: string }).text : ''))
-      .join('')
-      .trim();
+    const responseText = fastCallText(result);
     const parsedValue: unknown = JSON.parse(stripJsonFence(responseText));
     const parsed = parsedValue && typeof parsedValue === 'object' && !Array.isArray(parsedValue)
       ? parsedValue as Record<string, unknown>

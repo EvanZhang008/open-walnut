@@ -15,7 +15,7 @@
  */
 
 import { log } from '../logging/index.js';
-import { backgroundAiDisabled, fastModelFor } from './cheap-model.js';
+import { backgroundAiDisabled, fastCallBudgetMs, fastModelFor } from './cheap-model.js';
 import type { Config } from './types.js';
 
 /** The shared "hidden main-model prompt" question. One prompt for every
@@ -80,9 +80,9 @@ export function backendTitleAvailable(): boolean {
  * their truncated label roughly half the time (observed on prod, 2026-09-04).
  */
 export async function titleBudgetMs(config: Config): Promise<number> {
-  const { resolveMainProviderName, CLAUDE_CLI_PROVIDER } =
-    await import('../model/providers/default-provider.js');
-  return resolveMainProviderName(config) === CLAUDE_CLI_PROVIDER ? 60_000 : 15_000;
+  // 60 s on the CLI, LOCAL_FAST_CALL_BUDGET_MS on a model server the user hosts
+  // (it answers the session's own turn first), 15 s on a direct API.
+  return fastCallBudgetMs(config, 15_000);
 }
 
 /** Pause before the single in-call retry. Mutable so tests don't sleep. */

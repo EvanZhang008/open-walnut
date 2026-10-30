@@ -20,7 +20,7 @@
 
 import { sendMessage } from '../model/model.js';
 import { log } from '../logging/index.js';
-import { fastCallBudgetMs, fastModelFor } from './cheap-model.js';
+import { fastCallBudgetMs, fastModelFor, fastCallText } from './cheap-model.js';
 
 const MAX_WORDS = 4;
 const MAX_LABEL_LEN = 40; // keep the prefix short; the full title also carries "- fork of <parent>"
@@ -106,10 +106,7 @@ export async function summarizeForkPrompt(prompt: string, timeoutMs?: number): P
       clearTimeout(timer);
     }
 
-    const text = (result.content ?? [])
-      .map((b) => (b.type === 'text' && 'text' in b ? (b as { text: string }).text : ''))
-      .join('')
-      .trim();
+    const text = fastCallText(result);
 
     const label = normalizeLabel(text);
     if (label) return label;
@@ -171,10 +168,7 @@ export async function summarizeGroupLabel(titles: string[], timeoutMs?: number):
       clearTimeout(timer);
     }
 
-    const text = (result.content ?? [])
-      .map((b) => (b.type === 'text' && 'text' in b ? (b as { text: string }).text : ''))
-      .join('')
-      .trim();
+    const text = fastCallText(result);
 
     const label = normalizeLabel(text);
     if (label) return label;

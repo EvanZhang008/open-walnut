@@ -121,6 +121,22 @@ describe('maybeLearnHost', () => {
     expect((await readHostProfile('devbox')).learned).toBeUndefined();
   });
 
+  it('a call cut off by its deadline (a busy local model) is a quiet skip, not a parse failure', async () => {
+    // 2026-10-30: "JSON Parse error: Unexpected EOF" on every run while Ollama was busy.
+    const { log } = await import('../../../src/logging/index.js');
+    const warn = vi.spyOn(log.session, 'warn');
+    const info = vi.spyOn(log.session, 'info');
+    await session(1, 'devbox');
+    sendMessageMock.mockResolvedValueOnce({ content: [], stopReason: null, aborted: true });
+    expect(await maybeLearnHost('devbox')).toBe(false);
+    expect(warn.mock.calls.map((c) => c[0])).not.toContain('host-learning: generation failed');
+    expect(info.mock.calls.map((c) => c[0])).toContain('host-learning: skipped, the model was busy');
+    expect((await readHostProfile('devbox')).learned).toBeUndefined();
+    // The next pass gets its answer and stores it.
+    expect(await maybeLearnHost('devbox')).toBe(true);
+    warn.mockRestore(); info.mockRestore();
+  });
+
   it('the catch-up pass learns every host that has sessions', async () => {
     await sessions([1, 'devbox'], [2, undefined], [3, 'other', '']);
     expect(await runHostLearningCatchUp()).toBe(2);

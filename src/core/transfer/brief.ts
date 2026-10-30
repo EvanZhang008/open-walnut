@@ -7,6 +7,7 @@
 import type { SessionHistoryMessage } from '../session-history.js';
 import { renderTranscriptSeed } from './transcript.js';
 import { log } from '../../logging/index.js';
+import { fastCallText } from '../cheap-model.js';
 
 const BRIEF_INPUT_CHARS = 160_000;
 const BRIEF_TIMEOUT_MS = 120_000;
@@ -52,10 +53,7 @@ export async function writeHandoffBrief(
           ...(meta.sessionId ? { sessionId: meta.sessionId } : {}),
         },
       });
-      const text = (result.content ?? [])
-        .map((b) => (b.type === 'text' && 'text' in b ? (b as { text: string }).text : ''))
-        .join('')
-        .trim();
+      const text = fastCallText(result);
       if (text) return { text, byModel: true };
     } finally {
       clearTimeout(timer);

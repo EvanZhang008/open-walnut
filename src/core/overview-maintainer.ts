@@ -40,6 +40,7 @@ import { bus, EventNames, type BusEvent } from './event-bus.js';
 import { addNotification as addFeedNotification } from './notifications/store.js';
 import type { UsageSource } from './usage/index.js';
 import { log } from '../logging/index.js';
+import { fastCallText } from './cheap-model.js';
 
 const SUBSCRIBER = 'overview-maintainer';
 /** Sources that bulk-import tasks — a hook storm, not real lifecycle events. */
@@ -233,9 +234,7 @@ async function defaultRunner(userMessage: string, options: MaintainerRunOptions)
   } finally {
     clearTimeout(timer);
   }
-  const response = (result.content ?? [])
-    .map((b) => (b.type === 'text' && 'text' in b ? (b as { text: string }).text : ''))
-    .join('');
+  const response = fastCallText(result);
   return { response };
 }
 

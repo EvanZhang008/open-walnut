@@ -21,6 +21,7 @@ import { bus, EventNames, type BusEvent } from '../event-bus.js';
 import { log } from '../../logging/index.js';
 import {
   fastModelFor, fastModelRidesCli, directFastRoute, backgroundAiDisabled, fastCallBudgetMs,
+  fastCallText, FastCallTimeoutError,
 } from '../cheap-model.js';
 import { hasCrossedThreshold } from '../project-summary.js';
 import { readHostProfile, updateHostProfile, type HostProfile } from './host-profile.js';
@@ -104,16 +105,18 @@ export async function generateHostSummary(
       if (!direct || opts.signal?.aborted) throw err;
       result = await attempt(undefined, fastModelFor(config));
     }
-    const text = (result.content ?? [])
-      .map((b) => (b.type === 'text' && 'text' in b ? (b as { text: string }).text : ''))
-      .join('').trim();
+    const text = fastCallText(result, fastCallBudgetMs(config, DIRECT_ATTEMPT_MS));
     const fence = text.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
     const parsed: unknown = JSON.parse((fence?.[1] ?? text).trim());
     const summary = parsed && typeof parsed === 'object' && typeof (parsed as { summary?: unknown }).summary === 'string'
       ? (parsed as { summary: string }).summary.trim().slice(0, 800) : '';
     return summary || null;
   } catch (err) {
-    log.session.warn('host-learning: generation failed', { host, error: err instanceof Error ? err.message : String(err) });
+    // A busy model (a local server serving a session turn) is no failure: the
+    // next threshold or the boot catch-up tries again.
+    const busy = err instanceof FastCallTimeoutError && !opts.signal?.aborted;
+    log.session[busy ? 'info' : 'warn'](busy ? 'host-learning: skipped, the model was busy' : 'host-learning: generation failed',
+      { host, error: err instanceof Error ? err.message : String(err) });
     return null;
   }
 }

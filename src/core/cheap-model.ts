@@ -1,5 +1,7 @@
 import { MODEL_CATALOG } from '../model/providers/model-catalog.js';
 import { CLAUDE_CLI_PROVIDER, LEGACY_DEFAULT_PROVIDER, resolveMainProviderName } from '../model/providers/default-provider.js';
+import { isLocalModelProvider } from '../model/providers/local-provider.js';
+import type { ProviderConfig } from '../model/providers/types.js';
 import type { Config } from './types.js';
 
 /**
@@ -47,9 +49,46 @@ export const CLI_FAST_CALL_BUDGET_MS = 60_000;
  * (titleBudgetMs, 2026-09-04).
  */
 export function fastCallBudgetMs(config: Config, directMs: number, provider?: string): number {
-  return (provider ?? resolveMainProviderName(config)) === CLAUDE_CLI_PROVIDER
-    ? Math.max(directMs, CLI_FAST_CALL_BUDGET_MS)
-    : directMs;
+  const name = provider ?? resolveMainProviderName(config);
+  if (name === CLAUDE_CLI_PROVIDER) return Math.max(directMs, CLI_FAST_CALL_BUDGET_MS);
+  if (isLocalModelProvider(config.providers?.[name] as ProviderConfig | undefined)) {
+    return Math.max(directMs, LOCAL_FAST_CALL_BUDGET_MS);
+  }
+  return directMs;
+}
+
+/**
+ * A fast-model call to a model server the user hosts (Ollama, LM Studio, vLLM)
+ * gets at least this long. Such a server answers one request at a time by
+ * default, so a background call waits behind the session turn it is serving:
+ * on a 30B coding model those turns took 99 to 190 s. 2026-10-30: host-learning
+ * failed on every run on a local model, cut off at 15 s while Ollama was busy.
+ */
+export const LOCAL_FAST_CALL_BUDGET_MS = 180_000;
+
+/** A fast-model call cut off by its own deadline (see fastCallText). */
+export class FastCallTimeoutError extends Error {
+  constructor(budgetMs?: number) {
+    super(budgetMs ? `the model did not answer within ${Math.round(budgetMs / 1000)} s` : 'the model did not answer in time');
+    this.name = 'FastCallTimeoutError';
+  }
+}
+
+/**
+ * The text of a fast-model answer. An aborted sendMessage returns
+ * `{ content: [], aborted: true }` instead of throwing, so a caller that parses
+ * the text read a timeout as an empty answer ("JSON Parse error: Unexpected
+ * EOF"); this names it. Every background caller that parses its answer reads it
+ * through here (ratchet: tests/core/cheap-model-local-budget.test.ts).
+ */
+export function fastCallText(
+  result: { content?: ReadonlyArray<{ type: string }>; aborted?: boolean }, budgetMs?: number,
+): string {
+  if (result.aborted) throw new FastCallTimeoutError(budgetMs);
+  return (result.content ?? [])
+    .map((b) => (b.type === 'text' && 'text' in b ? (b as { text: string }).text : ''))
+    .join('')
+    .trim();
 }
 
 /**

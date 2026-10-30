@@ -19,7 +19,7 @@
 
 import { sendMessage } from '../model/model.js';
 import { log } from '../logging/index.js';
-import { fastCallBudgetMs, fastModelFor } from './cheap-model.js';
+import { fastCallBudgetMs, fastModelFor, fastCallText } from './cheap-model.js';
 import { listConversations, renameConversation } from './conversations.js';
 import { bus, EventNames } from './event-bus.js';
 import * as chatHistory from './chat-history.js';
@@ -147,10 +147,7 @@ export async function generateConversationTitle(
       clearTimeout(timer);
     }
 
-    const text = (result.content ?? [])
-      .map((b) => (b.type === 'text' && 'text' in b ? (b as { text: string }).text : ''))
-      .join('')
-      .trim();
+    const text = fastCallText(result);
     const title = normalizeTitle(text);
     if (!title) return null;
 

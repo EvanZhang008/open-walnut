@@ -1,6 +1,6 @@
 import { sendMessage } from '../model/model.js';
 import { log } from '../logging/index.js';
-import { fastModelFor, fastModelRidesCli } from './cheap-model.js';
+import { fastModelFor, fastModelRidesCli, fastCallText } from './cheap-model.js';
 import { getJevClient, readChoice, type JevClient } from './decision/jev-client.js';
 import { PIN_TIER_NONE_GUIDANCE, PIN_TIER_POLICY, migrateFocusTier } from './types.js';
 import type { Config, CustomTierRecord, LegStatus, QuickTaskParse, QuickTaskParseLegs } from './types.js';
@@ -466,10 +466,7 @@ export async function parseQuickTask(
       clearTimeout(timer);
     }
 
-    const responseText = (result.content ?? [])
-      .map((block) => (block.type === 'text' && 'text' in block ? (block as { text: string }).text : ''))
-      .join('')
-      .trim();
+    const responseText = fastCallText(result);
     const parsedValue: unknown = JSON.parse(stripJsonFence(responseText));
     const parsed = parsedValue && typeof parsedValue === 'object' && !Array.isArray(parsedValue)
       ? parsedValue as Record<string, unknown>

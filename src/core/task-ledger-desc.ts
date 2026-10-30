@@ -16,7 +16,7 @@ import { MODEL_CATALOG } from '../model/providers/model-catalog.js';
 import { resolveMainProviderName } from '../model/providers/default-provider.js';
 import { log } from '../logging/index.js';
 import { updateTaskRaw, getTask } from './task-manager.js';
-import { backgroundAiDisabled, fastCallBudgetMs } from './cheap-model.js';
+import { backgroundAiDisabled, fastCallBudgetMs, fastCallText } from './cheap-model.js';
 import type { Task } from './types.js';
 
 const MAX_DESC_LEN = 120;
@@ -97,10 +97,7 @@ export async function generateLedgerDesc(
       clearTimeout(timer);
     }
 
-    const text = (result.content ?? [])
-      .map((b) => (b.type === 'text' && 'text' in b ? (b as { text: string }).text : ''))
-      .join('')
-      .trim();
+    const text = fastCallText(result);
     return normalizeLedgerDesc(text);
   } catch (err) {
     log.task.debug('ledger-desc: generation failed (falling back to title)', {

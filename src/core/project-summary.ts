@@ -34,7 +34,7 @@ import { sendMessage } from '../model/model.js';
 import { bus, EventNames, type BusEvent } from './event-bus.js';
 import { log } from '../logging/index.js';
 import {
-  fastModelFor, fastModelRidesCli, directFastRoute, backgroundAiDisabled, fastCallBudgetMs, CLI_FAST_CALL_BUDGET_MS,
+  fastModelFor, fastModelRidesCli, directFastRoute, backgroundAiDisabled, fastCallBudgetMs, fastCallText, CLI_FAST_CALL_BUDGET_MS,
 } from './cheap-model.js';
 import type { CallPurpose } from '../model/providers/types.js';
 import type { Task } from './types.js';
@@ -241,10 +241,7 @@ export async function generateProjectSummary(
       result = await attempt(undefined, cliFallbackModel);
     }
 
-    const text = (result.content ?? [])
-      .map((b) => (b.type === 'text' && 'text' in b ? (b as { text: string }).text : ''))
-      .join('')
-      .trim();
+    const text = fastCallText(result);
     const fence = text.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
     const parsed: unknown = JSON.parse((fence?.[1] ?? text).trim());
     const summary = parsed && typeof parsed === 'object' && typeof (parsed as { summary?: unknown }).summary === 'string'

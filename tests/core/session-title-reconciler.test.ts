@@ -56,7 +56,8 @@ vi.mock('../../src/model/model.js', async (importOriginal) => ({
 
 // Unprompted-model-call gate — flipped by the durability test.
 const backendEnabled = { value: true };
-vi.mock('../../src/core/cheap-model.js', () => ({
+vi.mock('../../src/core/cheap-model.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
   backgroundAiDisabled: () => !backendEnabled.value,
   fastModelFor: () => 'test-fast-model',
 }));

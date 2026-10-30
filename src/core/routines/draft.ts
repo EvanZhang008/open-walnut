@@ -14,6 +14,7 @@ import { normalizeCronJobCreate } from '../cron/normalize.js';
 import type { CronJobCreate } from '../cron/types.js';
 import { getExecutor, listExecutors } from './registry.js';
 import { log } from '../../logging/index.js';
+import { fastCallText } from '../cheap-model.js';
 
 const DRAFT_TIMEOUT_MS = 30_000;
 
@@ -118,10 +119,7 @@ export async function draftRoutine(
       config: { maxTokens: 4096 },
       usage: { source: 'routine-draft' },
     });
-    raw = result.content
-      .filter((b) => b.type === 'text')
-      .map((b) => (b as { text: string }).text)
-      .join('');
+    raw = fastCallText(result, DRAFT_TIMEOUT_MS);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     log.cron.warn('routine draft LLM call failed', { error: msg });
