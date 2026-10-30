@@ -501,10 +501,19 @@ function badgeStyle(task: Task, badgeColor: string | undefined): CSSProperties |
   return task.source === 'local' ? { background: '#8E8E93', color: 'white' } : undefined;
 }
 
-/** "Open in <service> ↗": the synced item this task mirrors, inside Move & team. */
+/** Where the task comes from, inside Move & team: "Open in <service> ↗" when it mirrors
+ *  a synced item with a link, else the source's name ("Local", the integration's). */
 function TaskSourceRow({ task, integrations, afterAction }: { task: Task; integrations: IntegrationList; afterAction: () => void }) {
-  if (!task.external_url) return null;
+  if (!task.source && !task.external_url) return null;
   const f = sourceFacts(task, integrations);
+  if (!task.external_url) {
+    return (
+      <div className="task-kebab-item task-kebab-info" data-testid="kebab-source-row">
+        <span className="task-source-badge" style={badgeStyle(task, f.badgeColor)}>{task.sync_error ? '!' : f.badge}</span>
+        <span>{f.name}{f.status ? ` (${f.status})` : ''}</span>
+      </div>
+    );
+  }
   return (
     <a
       className="task-kebab-item task-kebab-info"

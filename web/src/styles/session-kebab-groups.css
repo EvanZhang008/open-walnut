@@ -23,15 +23,3 @@
 }
 /* The rows inside bring their own section dividers; inside a group they are noise. */
 .task-kebab-group-body .task-kebab-divider { display: none; }
-
-/* Created · Updated · Host as one quiet line at the foot of Copy & open. */
-.task-kebab-meta-line {
-  max-width: 280px;
-  padding: 4px 12px 2px;
-  font-size: 11px;
-  color: var(--fg-muted);
-  cursor: default;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}

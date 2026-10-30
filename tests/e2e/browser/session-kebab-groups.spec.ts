@@ -1,12 +1,13 @@
 /**
  * The session ⋮ menu, grouped by object (2026-10-27, the user's pick of three
  * designs; it had grown to 27 rows). First level: the task's frequent rows (Task
- * detail, Status, Pin to), two task groups (Dates, Move & team), three session groups
- * (Views, with the Inbox tab first; Copy & open; Debug: Raw input & output and the debug
- * snapshot), then Restart and Terminate. Each
- * group opens its rows in place, like Status. The panel count left the menu (it is the
- * whole strip's setting, in the Display menu and Settings), and so did the "Local"
- * source row (a sync that failed or is pending still shows).
+ * detail, Status, Pin to, with the strip's Panels row on top), two task groups (Dates,
+ * Move & team), three session groups (Views, with the Inbox tab first; Copy & open;
+ * Debug: Raw input & output and the debug snapshot), Restart and Terminate, then
+ * Details (Created, Updated, Host). Each group opens its rows in place, like Status.
+ * 2026-10-30, the user: "why it is missing so many things": the Panels row, the task's
+ * source row (now in Move & team) and the Created / Updated / Host rows (the Details
+ * group) came back.
  */
 import fs from 'node:fs/promises'
 import { test, expect, type APIRequestContext, type Locator, type Page } from '@playwright/test'
@@ -84,25 +85,29 @@ async function shoot(page: Page, menu: Locator, name: string) {
 
 test.use({ viewport: { width: 1280, height: 900 }, deviceScaleFactor: 1 })
 
-test('the first level holds the frequent rows and five groups; nothing else', async ({ page, browserName }) => {
+test('the first level holds the frequent rows and six groups; nothing else', async ({ page, browserName }) => {
   const errors: string[] = []
   page.on('pageerror', (e) => errors.push(e.message))
   const panel = await openColumn(page, sidFor(browserName))
   const menu = await openMenu(page, panel)
   const rows = await firstLevel(menu)
   const at = (re: RegExp) => rows.findIndex((r) => re.test(r))
-  const order = [/^Task detail$/, /^Status: /, /^(Pin to|Pinned)/, /^Dates/, /^Move & team/, /^Session$/i, /^Views/, /^Copy & open/, /^Debug/, /^Restart/, /^Terminate/]
+  const order = [/^Panels/, /^Task detail$/, /^Status: /, /^(Pin to|Pinned)/, /^Dates/, /^Move & team/, /^Session$/i, /^Views/, /^Copy & open/, /^Debug/, /^Restart/, /^Terminate/, /^Details/]
   const seen = order.map(at)
   expect(seen.every((i) => i >= 0), `first level: ${rows.join(' | ')}`).toBe(true)
   expect([...seen].sort((a, b) => a - b), `order: ${rows.join(' | ')}`).toEqual(seen)
-  // Gone from the first level: the strip's panel count, the "Local" source row, the
-  // copy rows, the views and the read-only times.
-  for (const gone of [/^Panels/, /^Inbox/, /^Local$/, /^Copy session ID/, /^Copy resume/, /^Copy folder/, /^Open in VS Code/, /^Code$/, /^Notes$/, /^Msgs/, /^Usage/, /^Created/, /^Capture debug/, /^Raw input/]) {
+  // Inside a group, not on the first level: the "Local" source row, the copy rows, the
+  // views and the read-only times.
+  for (const gone of [/^Inbox/, /^Local$/, /^Copy session ID/, /^Copy resume/, /^Copy folder/, /^Open in VS Code/, /^Code$/, /^Notes$/, /^Msgs/, /^Usage/, /^Created/, /^Capture debug/, /^Raw input/]) {
     expect(rows.some((r) => gone.test(r)), `${gone} is not on the first level: ${rows.join(' | ')}`).toBe(false)
   }
   // The closed rows say what they hold.
   await expect(group(menu, 'kebab-group-dates').locator('.task-kebab-group-hint')).toHaveText(/start|due/)
   await expect(group(menu, 'session-kebab-views').locator('.task-kebab-group-hint')).toHaveText('inbox · code · web · notes')
+  await expect(group(menu, 'session-kebab-details').locator('.task-kebab-group-hint')).toHaveText('created · updated · host')
+  // The strip's panel count is back on top (it left the menu in the regroup; the user
+  // missed it): the same choices as Settings.
+  await expect(menu.locator('.task-kebab-tier').filter({ hasText: /^Panels/ }).locator('.task-kebab-tier-btn')).toHaveText(['1', '2', '3', '4', '5', 'Auto'])
   await shoot(page, menu, '1-first-level')
   expect(errors).toEqual([])
 })
@@ -115,16 +120,20 @@ test('each group opens its rows in place, and the menu reopens with every group 
   await expect(views.locator('.task-kebab-item')).toContainText(['Inbox', 'Code', 'Web preview', 'Notes', 'Msgs', 'Usage & Budget'])
   const copy = await openGroup(menu, 'session-kebab-copy-open')
   await expect(copy.locator('.task-kebab-item')).toContainText(['Open in VS Code', 'Copy folder path', 'Copy session ID', 'Copy resume command'])
-  const meta = copy.getByTestId('session-kebab-meta')
-  await expect(meta).toHaveText(/^Created .+ · Updated .+ · \S+/)
+  await expect(copy.getByTestId('session-kebab-meta')).toHaveCount(0)
+  const details = await openGroup(menu, 'session-kebab-details')
+  await expect(details.locator('.task-kebab-meta-label')).toHaveText(['Created', 'Updated', 'Host'])
+  await expect(details.locator('.task-kebab-meta-value').first()).toHaveText(/^(just now|\d+(m|h|d|w|mo|y) ago)$/)
   const debug = await openGroup(menu, 'session-kebab-debug')
   await expect(debug.locator('.task-kebab-item')).toHaveText(['Raw input & output', 'Capture debug snapshot'])
   const dates = await openGroup(menu, 'kebab-group-dates')
   await expect(dates.locator('.task-kebab-date-toggle')).toContainText(['Start / Snooze until', 'Due'])
   const move = await openGroup(menu, 'kebab-group-move')
   await expect(move.locator('.task-kebab-project-label')).toHaveText('Project')
+  // Where the task comes from is back: a local task says Local, a synced one names its service.
+  await expect(move.locator('[data-testid="kebab-source-row"], [data-testid="kebab-source-link"]')).toHaveCount(1)
   // A group's rows carry no section dividers of their own.
-  for (const body of [views, copy, debug, dates, move]) {
+  for (const body of [views, copy, details, debug, dates, move]) {
     await expect(body.locator('.task-kebab-divider:visible')).toHaveCount(0)
   }
   // Every group open still fits the window: the menu scrolls instead of running off

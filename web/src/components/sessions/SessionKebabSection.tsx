@@ -4,7 +4,7 @@
  * Rendered as the `extraSection` of <TaskQuickActions slot="kebab">, below a
  * divider, so a single dropdown holds Task actions (top) + Session actions
  * (bottom): three groups (KebabGroup) that open in place: Views (Inbox first), Copy &
- * open, Debug, and Restart / Terminate last. Presentational only: both session panels own the actual handlers
+ * open, Debug; then Restart / Terminate, and the Details group (Created, Updated, Host) last. Presentational only: both session panels own the actual handlers
  * (restart / investigate / open-notes …) and pass them down.
  */
 import { useState, useRef, useEffect } from 'react';
@@ -20,10 +20,21 @@ import { openBackgroundPanel } from '@/stores/background-panel-store';
 import { openSessionRawView } from './SessionRawView';
 import { backgroundRunningLabel } from './background-ledger';
 import { KebabGroup } from './KebabGroup';
+import {
+  useSessionPanelMode,
+  MIN_PANELS,
+  MAX_PANELS,
+  type SessionPanelMode,
+} from '@/hooks/useSessionPanelMode';
 
 const VIEWS_ICON = (
   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
     <rect x="3" y="4" width="18" height="16" rx="2.5" /><path d="M12 4v16" />
+  </svg>
+);
+const DETAILS_ICON = (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" />
   </svg>
 );
 const DEBUG_ICON = (
@@ -31,6 +42,57 @@ const DEBUG_ICON = (
     <rect x="7" y="8" width="10" height="12" rx="5" /><path d="M12 8V5m-3 1 1.5 2m5-2L14 8M4 13h3m10 0h3M5 19l2.5-1.5M19 19l-2.5-1.5" />
   </svg>
 );
+
+/** 1..MAX_PANELS then Auto — same options, same order as Settings → General. */
+const PANEL_CHOICES: SessionPanelMode[] = [
+  ...Array.from({ length: MAX_PANELS - MIN_PANELS + 1 }, (_, i) => String(MIN_PANELS + i) as SessionPanelMode),
+  'auto',
+];
+
+/**
+ * How many session columns sit side by side — the same app-wide setting as
+ * Settings → General → Session Panels, surfaced here because it is a
+ * "change it constantly while working" control, not a configure-once one.
+ *
+ * It is deliberately NOT per-session (there is one strip, so a per-session count
+ * would be meaningless), hence the "all sessions" hint in the title: switching it
+ * from any session's menu changes the layout everywhere. Kept as its own component
+ * so the hook's config fetch only runs when a menu is actually open.
+ *
+ * Rendered in the kebab's `leadingSection`, at the top of the menu, above the
+ * task rows: everything else in the menu is about this task or this session, the
+ * panel count is about the strip itself, and it is the control people could not
+ * find when it sat between the view toggles (2026-10-01). Being first also keeps
+ * it far from Restart / Terminate at the bottom.
+ */
+export function PanelCountRow({ onAfterAction }: { onAfterAction?: () => void }) {
+  const { mode, setMode } = useSessionPanelMode();
+  return (
+    <div className="task-kebab-tier">
+      <span className="task-kebab-tier-label" title="How many session panels sit side by side (applies to all sessions)">
+        Panels
+      </span>
+      <div className="task-kebab-tier-options">
+        {PANEL_CHOICES.map((value) => (
+          <button
+            key={value}
+            className={`task-kebab-tier-btn${mode === value ? ' active' : ''}`}
+            title={value === 'auto' ? 'Adjust automatically to the window width' : `Show ${value} side by side`}
+            onClick={(e) => {
+              e.stopPropagation();
+              // Re-picking the current value is a no-op beyond closing, so we don't
+              // write config (and don't re-trigger column eviction) for nothing.
+              if (value !== mode) setMode(value);
+              onAfterAction?.();
+            }}
+          >
+            {value === 'auto' ? 'Auto' : value}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 interface SessionKebabSectionProps {
   sessionId: string;
@@ -249,14 +311,6 @@ export function SessionKebabSection({
         {cwdLabel && <CopyItem label={`Copy folder path (${cwdLabel})`} value={cwd!} onAfter={onAfterAction} />}
         <CopyItem label="Copy session ID" value={sessionId} onAfter={onAfterAction} />
         <CopyItem label="Copy resume command" value={`${cdPrefix}claude -r ${sessionId}`} onAfter={onAfterAction} />
-        {/* Read-only: the session's created / updated time and its host, one quiet line. */}
-        <div className="task-kebab-meta-line" data-testid="session-kebab-meta" title={metaRows.map((row) => `${row.label}: ${row.title}`).join('\n')}>
-          {metaRows.map((row, i) => (
-            <span key={row.key} data-meta={row.key} title={row.title}>
-              {i > 0 ? ' · ' : ''}{row.key === 'host' ? row.value : `${row.label} ${row.value}`}
-            </span>
-          ))}
-        </div>
       </KebabGroup>
 
       {/* Debug: only what is for finding out what went wrong. */}
@@ -321,6 +375,19 @@ export function SessionKebabSection({
         </>
       )}
 
+      {/* Details: the session's created / updated time and its host, read-only, at the
+          foot of the menu where they always were; closed, the row says what it holds. */}
+      <div className="task-kebab-divider" />
+      <KebabGroup label="Details" hint="created · updated · host" icon={DETAILS_ICON} testId="session-kebab-details">
+        <div className="task-kebab-meta" data-testid="session-kebab-meta">
+          {metaRows.map((row) => (
+            <div key={row.key} className="task-kebab-meta-row" data-meta={row.key} title={row.title}>
+              <span className="task-kebab-meta-label">{row.label}</span>
+              <span className="task-kebab-meta-value">{row.value}</span>
+            </div>
+          ))}
+        </div>
+      </KebabGroup>
     </div>
   );
 }

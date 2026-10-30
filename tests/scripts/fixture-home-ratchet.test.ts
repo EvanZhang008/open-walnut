@@ -61,4 +61,30 @@ describe('fixture servers own their home', () => {
     // A parent that is some other program is never the fixture's wrapper.
     expect(orphanRoot(20, ppid({ 20: 10, 10: 1 }), cmd({ 20: server, 10: 'node runner.js' }))).toBeNull()
   })
+
+  it('no function with injectable defaults is handed point-free to an array method', async () => {
+    // 2026-10-30: `listeners(port).map(orphanRoot)` passed the array INDEX as
+    // orphanRoot's injectable `ppid`, so every run that met a leftover listener on
+    // :3457 died at config load with "ppid is not a function". Any harness function
+    // whose later parameters have defaults must be called through an arrow.
+    const fs = await import('node:fs')
+    const path = await import('node:path')
+    const dir = path.join(__dirname, '../e2e/browser')
+    const files = fs.readdirSync(dir).filter((f) => f.endsWith('.ts')).map((f) => fs.readFileSync(path.join(dir, f), 'utf8'))
+    const defaulted = new Set<string>()
+    for (const src of files) {
+      for (const m of src.matchAll(/function\s+(\w+)\s*\(([^)]*)\)/g)) {
+        const params = m[2].split(',').slice(1)
+        if (params.some((p) => p.includes('='))) defaulted.add(m[1])
+      }
+    }
+    expect(defaulted.has('orphanRoot')).toBe(true)
+    const pointFree: string[] = []
+    for (const src of files) {
+      for (const m of src.matchAll(/\.(map|filter|forEach|flatMap|some|every|find)\((\w+)\)/g)) {
+        if (defaulted.has(m[2])) pointFree.push(`.${m[1]}(${m[2]})`)
+      }
+    }
+    expect(pointFree).toEqual([])
+  })
 })

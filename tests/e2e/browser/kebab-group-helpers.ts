@@ -1,6 +1,6 @@
 /**
  * The session ⋮ menu groups its rows (KebabGroup): Dates, Move & team on the task
- * half, Views, Copy & open, Debug on the session half. Every group starts closed each
+ * half, Views, Copy & open, Debug and Details on the session half. Every group starts closed each
  * time the menu opens, so a spec reaching a row inside one opens its group first.
  */
 import { expect, type Locator } from '@playwright/test'
@@ -11,6 +11,7 @@ export type KebabGroupId =
   | 'session-kebab-views'
   | 'session-kebab-copy-open'
   | 'session-kebab-debug'
+  | 'session-kebab-details'
 
 /** Open one group of an open session menu (idempotent); returns the group's rows. */
 export async function openKebabGroup(menu: Locator, id: KebabGroupId): Promise<Locator> {

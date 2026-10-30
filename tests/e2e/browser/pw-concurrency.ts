@@ -306,7 +306,7 @@ export function orphanRoot(pid: number, ppid = ppidOf, command = commandOf): num
  * support: that one still has its shell as parent.
  */
 export function reapOrphanFixtureServer(port: number): void {
-  for (const pid of listeners(port).map(orphanRoot).filter((p): p is number => p !== null)) {
+  for (const pid of listeners(port).map((pid) => orphanRoot(pid)).filter((p): p is number => p !== null)) {
     console.log(`[pw-concurrency] reaping orphaned fixture server on :${port} (pid ${pid}) left by a killed run`)
     try {
       // SIGTERM only: test-server.ts's handler reaps its isolated daemon and

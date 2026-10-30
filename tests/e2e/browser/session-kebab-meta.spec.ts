@@ -1,11 +1,11 @@
 /**
- * The session panel's ⋮ menu carries the session's metadata: Created and
+ * The session panel's ⋮ menu ends with the session's metadata: Created and
  * Updated (the session's own times, as "how long ago", the exact time on
  * hover) and Host (which machine it runs on). 2026-09-28: the user could not
  * find a created or updated time anywhere in the session panel, then asked
  * for exactly two times plus the host, relative only. Since the menu was grouped
- * (2026-10-27) they are one quiet line, "Created X · Updated Y · Host", at the foot
- * of the Copy & open group.
+ * (2026-10-27) the rows sit in the closed Details group at the foot of the menu
+ * (2026-10-30, the user: "have the create and update detail in a collapse").
  *
  * Checked against the API, not just for presence: each hover time must be
  * the record's own time, and a message sent from the composer must move
@@ -52,19 +52,15 @@ async function openColumn(page: Page, sid: string): Promise<Locator> {
   return panel
 }
 
-/** Open the menu and its Copy & open group, where the metadata line lives. */
 async function openMenu(page: Page, panel: Locator): Promise<Locator> {
   const kebab = panel.locator('.session-panel-header .task-kebab-btn')
   await expect(kebab).toBeVisible({ timeout: 15_000 })
   await kebab.click()
   const menu = page.locator('.task-kebab-menu')
   await expect(menu).toBeVisible()
-  await openKebabGroup(menu, 'session-kebab-copy-open')
+  await openKebabGroup(menu, 'session-kebab-details')
   return menu
 }
-
-/** The keys of the metadata line's parts, in order. */
-const metaKeys = (meta: Locator) => meta.locator('[data-meta]').evaluateAll((els) => els.map((el) => el.getAttribute('data-meta')))
 
 async function closeMenu(page: Page): Promise<void> {
   await page.keyboard.press('Escape')
@@ -89,36 +85,30 @@ async function readSession(request: APIRequestContext, sid: string) {
   return (await res.json() as { session: { taskId: string; startedAt: string; lastActiveAt: string } }).session
 }
 
-const AGO = String.raw`(just now|\d+(m|h|d|w|mo|y) ago)`
-/** One part of the line: "Created 2h ago", " · Updated just now" (the separator rides the later part). */
-const part = (label: string) => new RegExp(String.raw`^\s*(·\s*)?${label} ${AGO}$`)
+const RELATIVE = /^(just now|\d+(m|h|d|w|mo|y) ago)$/
 
-test('Copy & open ends with Created, Updated and Host from the session record', async ({ page, request }) => {
+test('the menu ends with Created, Updated and Host from the session record', async ({ page, request }) => {
   const panel = await openColumn(page, FIXTURE_SID)
   const session = await readSession(request, FIXTURE_SID)
 
   const menu = await openMenu(page, panel)
-  const copyOpen = menu.getByTestId('session-kebab-copy-open').locator('.task-kebab-group-body')
-  const meta = copyOpen.getByTestId('session-kebab-meta')
+  const meta = menu.getByTestId('session-kebab-meta')
   await expect(meta).toBeVisible()
-  // One line, the group's last.
-  await expect(meta).toHaveText(new RegExp(String.raw`^Created ${AGO} · Updated ${AGO} · Local$`))
-  expect(await metaKeys(meta)).toEqual(['created', 'updated', 'host'])
-  expect(await copyOpen.evaluate((el) => el.lastElementChild?.getAttribute('data-testid'))).toBe('session-kebab-meta')
+  await expect(meta.locator('.task-kebab-meta-label')).toHaveText(['Created', 'Updated', 'Host'])
 
-  for (const [key, label, iso] of [['created', 'Created', session.startedAt], ['updated', 'Updated', session.lastActiveAt]] as const) {
+  for (const [key, iso] of [['created', session.startedAt], ['updated', session.lastActiveAt]] as const) {
     const row = meta.locator(`[data-meta="${key}"]`)
     // Relative only on screen; the exact time is the hover.
-    await expect(row, `${key} value`).toHaveText(part(label))
+    await expect(row.locator('.task-kebab-meta-value'), `${key} value`).toHaveText(RELATIVE)
     await expect(row, `${key} hover`).toHaveAttribute('title', await exactOf(page, iso))
   }
-  await expect(meta.locator('[data-meta="host"]')).toHaveText(/^\s*(·\s*)?Local$/)
-  await expect(meta.locator('[data-meta="host"]')).toHaveAttribute('title', 'Local')
-  // The host lives in the metadata line now: no separate SSH line.
+  await expect(meta.locator('[data-meta="host"] .task-kebab-meta-value')).toHaveText('Local')
+  // The host lives in the metadata rows now: no separate SSH line.
   await expect(menu.getByText(/^SSH: /)).toHaveCount(0)
 
   // Every Session row draws an SVG icon, never an emoji or text glyph (every group open).
   await openKebabGroup(menu, 'session-kebab-views')
+  const copyOpen = await openKebabGroup(menu, 'session-kebab-copy-open')
   await openKebabGroup(menu, 'session-kebab-debug')
   const icons = await menu.locator('.task-kebab-section').last().locator('.task-kebab-icon').evaluateAll((els) =>
     els.map((el) => ({ row: (el.parentElement?.textContent ?? '').trim(), svg: !!el.querySelector('svg'), text: (el.textContent ?? '').trim() })))
@@ -142,13 +132,15 @@ test('Copy & open ends with Created, Updated and Host from the session record', 
   await menu.screenshot({ path: shot('01-menu') })
   await meta.screenshot({ path: shot('02-meta-rows') })
 
-  // The same menu opened by right-clicking the header carries the line too.
+  // The same menu opened by right-clicking the header carries the rows too.
   await closeMenu(page)
   await panel.locator('.session-panel-header').click({ button: 'right', position: { x: 40, y: 12 } })
-  const rightClicked = page.locator('.task-kebab-menu')
-  await expect(rightClicked.getByTestId('session-kebab-meta')).toHaveCount(0)
-  await openKebabGroup(rightClicked, 'session-kebab-copy-open')
-  await expect(rightClicked.getByTestId('session-kebab-meta')).toBeVisible()
+  const ctxMenu = page.locator('.task-kebab-menu')
+  // Closed by default, the Details row says what it holds; open, the rows are there.
+  await expect(ctxMenu.getByTestId('session-kebab-details').locator('.task-kebab-group-hint')).toHaveText('created · updated · host')
+  await expect(ctxMenu.getByTestId('session-kebab-meta')).toHaveCount(0)
+  await openKebabGroup(ctxMenu, 'session-kebab-details')
+  await expect(ctxMenu.getByTestId('session-kebab-meta')).toBeVisible()
   await closeMenu(page)
 })
 
@@ -164,18 +156,17 @@ test('a remote session shows its host alias, the full hostname on hover', async 
   const panel = await openColumn(page, FIXTURE_SID)
   const menu = await openMenu(page, panel)
   const host = menu.locator('[data-meta="host"]')
-  await expect(host).toHaveText(/^\s*(·\s*)?devbox$/, { timeout: 15_000 })
+  await expect(host.locator('.task-kebab-meta-value')).toHaveText('devbox', { timeout: 15_000 })
   await expect(host).toHaveAttribute('title', 'devbox.example.test')
   await expect(menu.getByText(/^SSH: /)).toHaveCount(0)
 
-  // The metadata line closes Copy & open; the menu itself still ends with Terminate.
-  const groupTail = await menu.getByTestId('session-kebab-copy-open').locator('.task-kebab-group-body').evaluate((el) =>
-    Array.from(el.children).slice(-2).map((c) =>
-      c.getAttribute('data-testid') === 'session-kebab-meta' ? 'meta' : (c.textContent ?? '').trim()))
-  expect(groupTail).toEqual(['Copy resume command', 'meta'])
-  const menuTail = await menu.locator('.task-kebab-section').last().evaluate((el) =>
-    (el.lastElementChild?.textContent ?? '').trim())
-  expect(menuTail).toBe('Terminate')
+  // One divider after the last action, then the Details group, then nothing.
+  const tail = await menu.locator('.task-kebab-section').last().evaluate((el) =>
+    Array.from(el.children).slice(-3).map((c) =>
+      c.classList.contains('task-kebab-divider') ? 'divider'
+        : c.getAttribute('data-testid') === 'session-kebab-details' ? 'details'
+          : (c.textContent ?? '').trim()))
+  expect(tail).toEqual(['Terminate', 'divider', 'details'])
   await host.evaluate((el) => el.scrollIntoView({ block: 'end' }))
   await expect(host).toBeInViewport()
   await menu.screenshot({ path: shot('03-remote') })
@@ -227,7 +218,7 @@ test('sending a message moves Updated; Created stays; every reopening agrees', a
     const s = await expectMatchesServer(`round ${round}: Updated follows the send`)
     expect(s.startedAt, `round ${round}: Created unchanged`).toBe(before.startedAt)
     menu = await openMenu(page, panel)
-    await expect(menu.locator('[data-meta="updated"]')).toHaveText(/^\s*(·\s*)?Updated (just now|1m ago)$/)
+    await expect(menu.locator('[data-meta="updated"] .task-kebab-meta-value')).toHaveText(/^(just now|1m ago)$/)
     if (round === 3) {
       const meta = menu.getByTestId('session-kebab-meta')
       await meta.evaluate((el) => el.scrollIntoView({ block: 'end' }))
@@ -256,10 +247,10 @@ test('a live session shows no memory or CPU anywhere, and nothing samples it', a
   const panel = await openColumn(page, sessionId)
   const menu = await openMenu(page, panel)
   const meta = menu.getByTestId('session-kebab-meta')
-  await expect.poll(() => metaKeys(meta)).toEqual(['created', 'updated', 'host'])
+  await expect(meta.locator('.task-kebab-meta-label')).toHaveText(['Created', 'Updated', 'Host'])
   // The old rows landed within a few seconds of the menu opening; give them that long.
   await page.waitForTimeout(3_000)
-  expect(await metaKeys(meta)).toEqual(['created', 'updated', 'host'])
+  await expect(meta.locator('.task-kebab-meta-label')).toHaveText(['Created', 'Updated', 'Host'])
   await expect(menu.locator('[data-meta="memory"], [data-meta="cpu"]')).toHaveCount(0)
   await meta.evaluate((el) => el.scrollIntoView({ block: 'end' }))
   await menu.screenshot({ path: shot('05-live-no-readout') })

@@ -1,7 +1,7 @@
 /**
  * KebabGroup — one collapsed row of the session ⋮ menu that opens its rows in place
  * (2026-10-27, the user's pick of the menu redesign, "group by object"): Dates, Move &
- * team, Views, Copy & open, Debug. The menu had grown to 27 rows; each group keeps its
+ * team, Views, Copy & open, Debug, Details. The menu had grown to 27 rows; each group keeps its
  * rows one click away, the way the Status and Start / Due rows already open.
  *
  * Every group's content is a short, fixed list (no async rows), so it expands inline;
