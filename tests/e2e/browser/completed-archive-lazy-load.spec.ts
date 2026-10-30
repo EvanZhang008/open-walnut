@@ -15,6 +15,7 @@
 import { test, expect, type Page } from '@playwright/test'
 import { isolateUiPrefs } from './todo-panel-helpers'
 import { filterChip, setStatus } from './filter-bar-helpers'
+import { setStatusSectionOpen, showSectionCard, statusSection, statusSectionCountOf, statusSectionToggle } from './status-section-helpers'
 
 const API = `http://localhost:${process.env.PW_TEST_PORT ?? 3457}`
 const SCREENSHOT_DIR = process.env.PW_SCREENSHOT_DIR ?? '/tmp/completed-archive-lazy-load'
@@ -109,6 +110,10 @@ test('a board load leaves old completions on the server; Status with Complete lo
   expect(requests.windowed()).toBeGreaterThan(0)
   expect(requests.whole()).toBe(0)
   expect(hiddenReported).toBeGreaterThanOrEqual(1)
+  // The folded Completed section counts the archive it has not loaded yet.
+  await expect(statusSectionToggle(page, 'done')).toHaveAttribute('aria-expanded', 'false')
+  expect(await statusSectionCountOf(page, 'done')).toBeGreaterThanOrEqual(hiddenReported)
+  expect(requests.whole()).toBe(0)
   await page.screenshot({ path: `${SCREENSHOT_DIR}/recent-window-${test.info().project.name}.png` })
 
   // Showing completed rows asks for the archive: one whole-list read, and the
@@ -118,8 +123,8 @@ test('a board load leaves old completions on the server; Status with Complete lo
   const doneRow = rowFor(done.title).first()
   await expect(doneRow).toBeVisible({ timeout: 10_000 })
   await expect(doneRow).toHaveClass(/-done\b/)
-  // The footer names the same set in the Status word (C8).
-  await expect(page.getByTestId('todo-filter-footer-completed')).toContainText('Complete shown')
+  // A Status the user picked shows its rows in the list, with no status sections (C8).
+  await expect(statusSection(page, 'done')).toHaveCount(0)
   await page.screenshot({ path: `${SCREENSHOT_DIR}/archive-loaded-${test.info().project.name}.png` })
 
   // Toggling again does not re-read the archive: it is loaded for this page.
@@ -129,8 +134,52 @@ test('a board load leaves old completions on the server; Status with Complete lo
   await expect(doneRow).toBeVisible({ timeout: 10_000 })
   expect(requests.whole()).toBe(1)
 
-  // isolateUiPrefs keeps the filter record out of the shared prefs; reset anyway.
+  // The other way in: opening the Completed section draws the archived task there,
+  // from the archive already loaded for this page (no second read).
   await setShowCompleted(page, false)
+  await expect(rowFor(done.title)).toHaveCount(0)
+  await setStatusSectionOpen(page, 'done', true)
+  const sectionCard = await showSectionCard(page, 'done', done.id)
+  await expect(sectionCard).toHaveClass(/todo-pinned-card-done/)
+  expect(requests.whole()).toBe(1)
+  await setStatusSectionOpen(page, 'done', false)
+  await expect(rowFor(done.title)).toHaveCount(0)
+})
+
+test('the Completed section reads the archive only when its Show more runs past the loaded rows, once, without a Status chip', async ({ page }) => {
+  await isolateUiPrefs(page)
+  const done = await createTaskViaApi('Archive section done')
+  await unpinViaApi(done.id)
+  await completeViaApi(done.id)
+  await page.route('**/api/tasks?*', async (route) => {
+    const url = new URL(route.request().url())
+    if (!url.searchParams.has('completedWithinDays')) return route.continue()
+    url.searchParams.set('completedWithinDays', '0')
+    await route.continue({ url: url.toString() })
+  })
+  await page.addInitScript(() => {
+    localStorage.setItem('walnut-todo-active-section', 'all')
+    localStorage.setItem('walnut-todo-active-tab', '')
+    localStorage.setItem('walnut-todo-list-opened', JSON.stringify(['']))
+  })
+  const requests = watchListRequests(page)
+  await page.goto('/')
+  await page.waitForLoadState('networkidle')
+  await expect(statusSection(page, 'done')).toBeVisible({ timeout: 15_000 })
+  expect(requests.whole()).toBe(0)
+  // Opening the section draws the completions already loaded; it reads nothing more.
+  await setStatusSectionOpen(page, 'done', true)
+  await page.waitForTimeout(1_500)
+  expect(requests.whole()).toBe(0)
+  await expect(filterChip(page, 'status')).toHaveCount(0)
+  // "Show more" past the loaded rows reads the archive, once, and the archived task appears.
+  await showSectionCard(page, 'done', done.id)
+  await expect.poll(() => requests.whole(), { timeout: 30_000 }).toBe(1)
+  // Folding and opening again does not re-read it.
+  await setStatusSectionOpen(page, 'done', false)
+  await setStatusSectionOpen(page, 'done', true)
+  await showSectionCard(page, 'done', done.id)
+  expect(requests.whole()).toBe(1)
 })
 
 test('the list answers completedWithinDays with the count it left out', async () => {

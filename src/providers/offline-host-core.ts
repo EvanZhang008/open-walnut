@@ -226,7 +226,7 @@ export type OfflineJournalRecord = (OfflineRecord | (OfflineRecordV2 & { seq: nu
 /** The v1 field names a gateway task_update overlays (unchanged), and the queueable set of journal v2. */
 const QUEUEABLE_TASK_FIELDS = [
   'title', 'status', 'phase', 'priority', 'project', 'group_id', 'due_date', 'start_date', 'end_date', 'pinned', 'tags',
-  'summary', 'description', 'note', 'sprint', 'unread', 'focus_tier', 'pin_order', 'depends_on', 'wait_until', 'parent_task_id',
+  'summary', 'description', 'note', 'sprint', 'unread', 'focus_tier', 'pin_order', 'depends_on', 'wait_until', 'parent_task_id', 'watched_at',
 ]
 export { QUEUEABLE_TASK_FIELDS }
 
@@ -408,7 +408,7 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
   /** The fields a task write may queue (task-outbox whitelist plus phase, parent, pinned, focus tier). */
   const QUEUEABLE = [
     'title', 'status', 'phase', 'priority', 'project', 'group_id', 'due_date', 'start_date', 'end_date', 'pinned', 'tags',
-    'summary', 'description', 'note', 'sprint', 'unread', 'focus_tier', 'pin_order', 'depends_on', 'wait_until', 'parent_task_id',
+    'summary', 'description', 'note', 'sprint', 'unread', 'focus_tier', 'pin_order', 'depends_on', 'wait_until', 'parent_task_id', 'watched_at',
   ]
   const OFFLINE_OPS: Array<{ name: string; title: string; description: string; readonly: boolean; signature: string }> = [
     { name: 'task_get', title: 'Get one task (offline copy)', description: 'A task of a session on this host, from the copy the Walnut server last pushed.', readonly: true, signature: 'id' },

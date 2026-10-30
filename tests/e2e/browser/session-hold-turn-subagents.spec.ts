@@ -25,6 +25,7 @@ import { expect, test, type Page } from '@playwright/test'
 import { discoverBrowserFixture } from './codex-test-audit'
 import { REAL_PANEL, draftComposer, openDraftOnCwd } from './draft-helpers'
 import { selectSection } from './todo-panel-helpers'
+import { isolateUiPrefsContext, presetPanelDesign } from './status-section-helpers'
 import { sessionResultPhase } from '../../../src/core/phase'
 
 const SCREENSHOT_DIR = process.env.PW_SCREENSHOT_DIR ?? '/tmp/session-hold-turn-subagents'
@@ -40,6 +41,14 @@ const densityProject = `Status checks ${Date.now()}`
 
 // The tests share one set of tasks and one server; fullyParallel is forbidden because it would create the data twice and cross-edit it.
 test.describe.configure({ mode: 'serial' })
+
+// These checks follow a tier card's needs-action class as the task moves; List +
+// shelf keeps that card in its tier (By status, the default, would move a task that
+// needs you into the Needs you section above the tiers).
+test.beforeEach(async ({ context }) => {
+  await isolateUiPrefsContext(context)
+  await presetPanelDesign(context, 'shelf')
+})
 test.use({ viewport: { width: 1200, height: 800 }, deviceScaleFactor: 1 })
 
 test.beforeAll(async ({ request }) => {

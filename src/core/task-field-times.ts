@@ -19,7 +19,7 @@ import type { Task } from './types.js';
 /** The fields a host may queue while the Mac is away; their change times are kept. */
 export const TIMED_TASK_FIELDS = [
   'title', 'phase', 'priority', 'project', 'group_id', 'due_date', 'start_date', 'end_date', 'pinned', 'tags',
-  'summary', 'description', 'note', 'sprint', 'unread', 'focus_tier', 'pin_order', 'depends_on', 'wait_until', 'parent_task_id',
+  'summary', 'description', 'note', 'sprint', 'unread', 'focus_tier', 'pin_order', 'depends_on', 'wait_until', 'parent_task_id', 'watched_at',
 ] as const;
 
 /** The time one replayed row write stamps: `at`, or `fields[f]` for a field named there. */

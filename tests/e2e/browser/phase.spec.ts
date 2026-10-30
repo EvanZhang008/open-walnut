@@ -9,7 +9,17 @@
  * 5. New tasks created via quick-add get phase=TODO
  */
 import { test, expect } from '@playwright/test'
-import { showEverything } from './todo-panel-helpers'
+import { isolateUiPrefs, presetPanelView, showEverything } from './todo-panel-helpers'
+import { presetPanelDesign } from './status-section-helpers'
+
+// The seeded NEED_ACTION row is checked in its project list; List + shelf keeps it
+// there (By status, the default, draws it in the Needs you section above the list).
+// Isolated prefs start every project folded, so presetPanelView opens them first.
+test.beforeEach(async ({ page }) => {
+  await isolateUiPrefs(page)
+  await presetPanelView(page, { section: 'all' })
+  await presetPanelDesign(page, 'shelf')
+})
 
 const API = 'http://localhost:3457'
 

@@ -28,10 +28,11 @@ test('bottom disclosure defaults collapsed, stays live and does not count feedba
     const section = panel.querySelector('.ab-mount')!;
     const list = panel.querySelector('.home-navigation-scroll')!;
     return { outside: !list.contains(section), after: !!(list.compareDocumentPosition(section) & Node.DOCUMENT_POSITION_FOLLOWING),
-      footer: section.nextElementSibling ? section.nextElementSibling.classList.contains('todo-filter-footer') : section === panel.lastElementChild,
+      // The panel's last element: the filter footer that used to follow it is gone.
+      last: section === panel.lastElementChild,
       toolbarNext: !!panel.querySelector('.todo-panel-toolbar')?.nextElementSibling?.classList.contains('ab-mount') };
   });
-  expect(order).toEqual({ outside: true, after: true, footer: true, toolbarNext: false });
+  expect(order).toEqual({ outside: true, after: true, last: true, toolbarNext: false });
   await page.screenshot({ path: `${SHOTS}/${browserName}-collapsed.png` });
   const beforeKeys = await storedKeys(page);
   await toggle(page).focus();

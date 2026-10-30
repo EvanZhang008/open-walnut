@@ -36,6 +36,7 @@ import { CopyableId } from '../common/CopyableId';
 import { DatePicker } from '../common/DatePicker';
 import { PluginFieldPills } from './PluginFieldPicker';
 import { TagEditor } from './TagEditor';
+import { WatchButton } from './WatchToggle';
 import { TaskStatusBadge, formatWaitUntil } from './TaskStatusControl';
 import { Fact, Section, SessionRow, TaskRow } from './TaskDetailRows';
 import { EarlierSessions, taskSessionLayout } from './TaskSessionHistory';
@@ -168,6 +169,8 @@ export function TaskDetailPane({ task, allTasks, onClose, onOpenSession, onOpenT
       <header className="tdp-head todo-detail-meta">
         <div className="tdp-head-top">
           <span className="todo-detail-project">{task.project || 'Inbox'}</span>
+          {/* Watch: keep it at the top of the task panel whatever its state. */}
+          <WatchButton task={task} className="tdp-watch" />
           {onClose && (
             <button className="todo-detail-close" onClick={onClose} aria-label="Close detail panel" title="Close">&times;</button>
           )}

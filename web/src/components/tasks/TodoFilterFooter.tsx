@@ -42,8 +42,12 @@ export function footerCounts(tasks: readonly Task[], ctx: FilterEvalContext, arc
     }
     if (datePending && passesChips(t, ctx, { except: 'date' }) && !passesChips(t, ctx)) notAvailable += 1;
   }
-  const narrowed = NARROWING_DIMS.some((d) => !ctx.defaults.has(d));
-  return { waiting, complete: complete + (narrowed ? 0 : archiveHidden), notAvailable };
+  return { waiting, complete: complete + (archiveNarrowed(ctx) ? 0 : archiveHidden), notAvailable };
+}
+
+/** A chip the archive's unloaded rows cannot be checked against narrows the view. */
+export function archiveNarrowed(ctx: FilterEvalContext): boolean {
+  return NARROWING_DIMS.some((d) => !ctx.defaults.has(d));
 }
 
 /** Add `phase` to the Status set, or take it out (never leaving it empty). */

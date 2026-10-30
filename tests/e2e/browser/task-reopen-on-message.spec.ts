@@ -20,6 +20,7 @@ import { expect, test, type Locator, type Page } from '@playwright/test'
 import { discoverBrowserFixture } from './codex-test-audit'
 import { REAL_PANEL, draftComposer, openDraftOnCwd } from './draft-helpers'
 import { selectSection } from './todo-panel-helpers'
+import { isolateUiPrefsContext, presetPanelDesign } from './status-section-helpers'
 import { sessionResultPhase } from '../../../src/core/phase'
 
 const SCREENSHOT_DIR = process.env.PW_SCREENSHOT_DIR ?? '/tmp/task-reopen'
@@ -30,6 +31,14 @@ let fixtureRoot = ''
 
 test.describe.configure({ mode: 'serial' })
 test.use({ viewport: { width: 1280, height: 800 }, deviceScaleFactor: 1 })
+
+// These checks follow a tier card's needs-action class as the task moves; List +
+// shelf keeps that card in its tier (By status, the default, would move a task that
+// needs you into the Needs you section above the tiers).
+test.beforeEach(async ({ context }) => {
+  await isolateUiPrefsContext(context)
+  await presetPanelDesign(context, 'shelf')
+})
 
 test.beforeAll(async () => {
   ;({ fixtureRoot } = await discoverBrowserFixture(TEST_PORT))

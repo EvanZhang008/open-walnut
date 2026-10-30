@@ -16,6 +16,13 @@ export const ICON_PHASE_NEED_ACTION = <svg width="14" height="14" viewBox="0 0 1
 /** double check: Complete */
 export const ICON_PHASE_COMPLETE = <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M1 8l3 3.5L10.5 4"/><path d="M5.5 8l3 3.5L15 4"/></svg>;
 
+/** Exclamation in a circle: Needs you (the task waits on the user). */
+export const ICON_ATTENTION = <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><circle cx="8" cy="8" r="6"/><path d="M8 4.8v3.7"/><circle cx="8" cy="11" r=".5" fill="currentColor"/></svg>;
+/** Eye: Watch (keep this task on top of the task panel, whatever its state). */
+export const ICON_EYE = <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M1.5 8S4 3.5 8 3.5 14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8z"/><circle cx="8" cy="8" r="2"/></svg>;
+/** Crossed eye: Stop watching. */
+export const ICON_EYE_OFF = <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M1.5 8S4 3.5 8 3.5 14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8z"/><circle cx="8" cy="8" r="2"/><path d="M2.5 13.5l11-11"/></svg>;
+
 // ── Action / UI icons ──
 /** folder outline: FOLDER rows (a project's local sub-folders) */
 export const ICON_FOLDER = <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"><path d="M1.5 4a1 1 0 011-1h3.6l1.6 1.8h5.8a1 1 0 011 1V12a1 1 0 01-1 1h-11a1 1 0 01-1-1z"/></svg>;

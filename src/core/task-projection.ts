@@ -92,6 +92,10 @@ export interface ProjectedTask {
   /** Read/unread marker — true = agent output the human hasn't opened. Additive
    *  (omitted when false), so an older iOS build that doesn't decode it is fine. */
   unread?: boolean
+  /** Watch (Task.watched_at, additive, 2026-10): when the user started watching the task,
+   *  which keeps it in the Watching section on top of the task list whatever its phase.
+   *  Omitted when not watched; older clients ignore it. */
+  watched_at?: string
   tags?: string[]
   /** First 500 chars — enough for a detail preview without the full blob. */
   summary?: string
@@ -192,6 +196,7 @@ export function projectTask(t: Task): ProjectedTask {
     ...(t.pinned && typeof t.pin_order === 'number' ? { pin_order: t.pin_order } : {}),
     ...(t.pinned && t.focus_tier ? { focus_tier: t.focus_tier } : {}),
     ...(t.unread ? { unread: true } : {}),
+    ...(t.watched_at ? { watched_at: t.watched_at } : {}),
     ...(t.tags && t.tags.length > 0 ? { tags: t.tags } : {}),
     ...(summary ? { summary: summary.length > SUMMARY_MAX ? summary.slice(0, SUMMARY_MAX) + '…' : summary } : {}),
     ...(t.user_status && t.status !== 'done' && t.phase !== 'COMPLETE' ? { user_status: t.user_status } : {}),
@@ -236,8 +241,10 @@ export async function buildTaskProjection(): Promise<TaskProjection> {
   // an exemption here makes the projection (git-synced + pushed over the
   // bridge on every task change) converge on "every task ever". The phone's
   // working-set view shows open pins plus the last 14 days of finished ones.
+  // A WATCHED task is the exception: the user keeps it in front of them whatever
+  // its phase, and the watch list is a handful the user curates by hand.
   const eligible = all.filter((t) => {
-    if (t.status !== 'done') return true
+    if (t.status !== 'done' || t.watched_at) return true
     const doneAt = Date.parse(t.completed_at ?? t.updated_at)
     return Number.isFinite(doneAt) && doneAt >= cutoff
   })

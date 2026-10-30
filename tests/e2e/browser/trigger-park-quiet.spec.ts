@@ -9,7 +9,7 @@
  * caller-sid header the ops executor adds. Everything after that is the console:
  *
  *  1. The task leaves the default task list on its own (no reload), and the
- *     footer says a Waiting task is hidden; one click shows it with the hourglass.
+ *     folded Waiting / snoozed section counts it; opening it shows it with the hourglass.
  *  2. The Inbox has no letter about it: no "Waiting: <title>" envelope, and the
  *     inbox's count of letters for this task stays at zero.
  *
@@ -19,6 +19,7 @@ import fs from 'node:fs/promises'
 import { test, expect, type APIRequestContext, type Locator, type Page } from '@playwright/test'
 import { discoverBrowserFixture } from './codex-test-audit'
 import { isolateUiPrefs, presetPanelView } from './todo-panel-helpers'
+import { setStatusSectionOpen, showSectionCard, statusSectionCountOf, statusSectionToggle } from './status-section-helpers'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 const API = `http://localhost:${TEST_PORT}`
@@ -95,29 +96,31 @@ test('a session\'s trigger parks its task off the list, and no letter reaches th
   expect(out.wait.parked).toBe(true)
   expect(out.wait.letter_id).toBeUndefined()
 
-  // 1. It leaves the list live, and the footer says so.
+  // 1. It leaves the list live, and the folded Waiting / snoozed section under the
+  // list counts it (the footer that said "N Waiting hidden" became that section).
   await expect(anyRow).toHaveCount(0, { timeout: 15_000 })
-  const footer = page.getByTestId('todo-filter-footer')
-  const waitingChip = footer.getByTestId('todo-filter-footer-waiting')
-  await expect(waitingChip).toHaveText(/^\d+ Waiting hidden$/)
-  // Revealing adds a Status chip, so the filter row appears above the list. A
-  // list at its top stays there: the revealed card is drawn, not slid under the
-  // Pinned heading (toBeVisible alone passes for a covered card).
+  await expect(statusSectionToggle(page, 'waiting')).toHaveAttribute('aria-expanded', 'false')
+  expect(await statusSectionCountOf(page, 'waiting')).toBeGreaterThanOrEqual(1)
+  // Opening the section never moves the list: a list at its top stays there, and the
+  // revealed card, once scrolled to, is drawn, not covered by a sticky heading
+  // (toBeVisible alone passes for a covered card).
   const scrollTop = () => page.evaluate(() => document.querySelector('.home-navigation-scroll')?.scrollTop ?? 0)
   expect(await scrollTop()).toBe(0)
   // A DOM click: Playwright's own click scrolls its target into view first.
-  await waitingChip.evaluate((el) => (el as HTMLElement).click())
-  await expect(anyRow.first()).toBeVisible({ timeout: 15_000 })
-  await expect(anyRow.first().getByTitle('Waiting: click to complete')).toBeVisible()
+  await statusSectionToggle(page, 'waiting').evaluate((el) => (el as HTMLElement).click())
+  await expect(statusSectionToggle(page, 'waiting')).toHaveAttribute('aria-expanded', 'true')
   await page.waitForTimeout(500)
   expect(await scrollTop()).toBe(0)
-  const onTop = await anyRow.first().evaluate((card) => {
-    const r = card.getBoundingClientRect()
-    return card.contains(document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2))
+  const card = await showSectionCard(page, 'waiting', taskId)
+  await expect(card.getByTitle('Waiting: click to complete')).toBeVisible()
+  await card.scrollIntoViewIfNeeded()
+  const onTop = await card.evaluate((el) => {
+    const r = el.getBoundingClientRect()
+    return el.contains(document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2))
   })
   expect(onTop, 'the revealed card is covered by something').toBe(true)
   await shot(page.locator('.todo-panel'), 'list-waiting-shown', browserName)
-  await waitingChip.click()
+  await setStatusSectionOpen(page, 'waiting', false)
   await expect(anyRow).toHaveCount(0)
 
   // 2. The inbox has nothing about it. A letter the session sends on purpose

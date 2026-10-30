@@ -119,6 +119,9 @@ const UPDATE_WHITELIST: (keyof Task)[] = [
   // WAITING's optional end (0.5.2): the primary's export sets it; a replica row
   // without it keeps whatever it had, and the raw path drops it on leaving WAITING.
   'wait_until',
+  // Watch (2026-10): the user keeps the task on the Watching list; an older primary
+  // drops the key (not in its list), so the watch stays on the replica alone.
+  'watched_at',
 ];
 
 /**
@@ -714,6 +717,7 @@ export async function importProjectionOnCloud(): Promise<number> {
         ...(p.pin_order !== undefined ? { pin_order: p.pin_order } : {}),
         ...(p.focus_tier ? { focus_tier: p.focus_tier } : {}),
         ...(p.unread ? { unread: true } : {}),
+        ...(p.watched_at ? { watched_at: p.watched_at } : {}),
         ...(p.tags?.length ? { tags: p.tags } : {}),
       } as Task);
     } else if (Date.parse(p.updated_at) > Date.parse(row.updated_at)) {
@@ -741,6 +745,7 @@ export async function importProjectionOnCloud(): Promise<number> {
           pin_order: (p.pin_order ?? null) as Task['pin_order'],
           focus_tier: (p.focus_tier ?? null) as Task['focus_tier'],
           unread: !!p.unread,
+          watched_at: (p.watched_at ?? null) as Task['watched_at'],
           tags: p.tags,
           summary: p.summary,
           updated_at: p.updated_at,

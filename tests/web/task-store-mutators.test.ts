@@ -385,3 +385,17 @@ describe('the optimistic Waiting clock', () => {
     expect(rows()[0]).toMatchObject({ phase: 'IN_PROGRESS', wait_until: undefined })
   })
 })
+
+// Watch (Task.watched_at) mirrors task-manager.updateTask: '' stops watching and
+// the row holds no key at all, never an empty string.
+describe('the optimistic Watch', () => {
+  it('update({watched_at}) shows the watch at once and "" removes the key', () => {
+    const store = mount([task({ phase: 'COMPLETE', status: 'done' })])
+    store.update('task-1', { watched_at: '2026-10-29T08:30:00.000Z' })
+    expect(rows()[0]).toMatchObject({ watched_at: '2026-10-29T08:30:00.000Z', phase: 'COMPLETE', status: 'done' })
+    expect(api.updateTask).toHaveBeenCalledWith('task-1', { watched_at: '2026-10-29T08:30:00.000Z' }, { opId: OP_ID })
+    store.update('task-1', { watched_at: '' })
+    expect('watched_at' in rows()[0]).toBe(false)
+    expect(rows()[0].phase).toBe('COMPLETE')
+  })
+})

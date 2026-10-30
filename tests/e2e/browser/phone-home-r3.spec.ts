@@ -10,6 +10,7 @@ import { PHONE, PHONE_LANDSCAPE, findSmallTargets, findSmallText } from './phone
 import { banner, failed } from './host-problems-helpers'
 import { bpSetup } from './banner-placement-helpers'
 import { isolateUiPrefs } from './todo-panel-helpers'
+import { presetPanelDesign } from './status-section-helpers'
 
 const SHOTS = '/tmp/mobile-web/phone-home-r3'
 test.beforeAll(async () => { await fs.mkdir(SHOTS, { recursive: true }) })
@@ -27,6 +28,9 @@ async function phoneLayout(page: Page): Promise<void> {
   await page.addInitScript(() => {
     try { localStorage.setItem('open-walnut-home-chat-visible', 'false') } catch { /* storage off */ }
   })
+  // The phone's needs-you strip is drawn by List + shelf (and By project); By status,
+  // the default, shows those tasks in its Needs you section instead.
+  await presetPanelDesign(page, 'shelf')
 }
 
 /** Needs-you rows wholly on the first screen, a tap at their center reaching them. */
@@ -127,6 +131,9 @@ test.describe('task rows', () => {
 
   test('N2-14: a leader and its worker show whole words, a readable title, and no small targets', async ({ page }, info) => {
     await isolateUiPrefs(page)
+    // The worker that needs you is checked under its leader in the project tree; List +
+    // shelf keeps it there (By status, the default, draws it in the Needs you section).
+    await presetPanelDesign(page, 'shelf')
     await page.addInitScript(() => { try { localStorage.setItem('open-walnut-home-chat-visible', 'false') } catch { /* storage off */ } })
     const tag = info.project.name
     const project = `Phone pills ${tag}`
@@ -196,6 +203,8 @@ test.describe('opening from the needs-you rows', () => {
 
   test('N2-01: a needs-you row opens its task, and Back finds the list as the thumb left it', async ({ page }) => {
     await isolateUiPrefs(page)
+    // The needs-you strip is a List + shelf part (By status has its Needs you section instead).
+    await presetPanelDesign(page, 'shelf')
     await page.addInitScript(() => { try { localStorage.setItem('open-walnut-home-chat-visible', 'false') } catch { /* storage off */ } })
     const tabWrites: string[] = []
     page.on('request', (r) => {

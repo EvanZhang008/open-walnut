@@ -54,7 +54,7 @@ import { RefusedWrite, checkResolvedPatch } from '../core/offline-merge/patch-ch
  */
 export const QUEUEABLE_TASK_FIELDS: readonly string[] = [
   'title', 'status', 'phase', 'priority', 'project', 'group_id', 'due_date', 'start_date', 'end_date', 'pinned', 'tags',
-  'summary', 'description', 'note', 'sprint', 'unread', 'focus_tier', 'pin_order', 'depends_on', 'wait_until', 'parent_task_id',
+  'summary', 'description', 'note', 'sprint', 'unread', 'focus_tier', 'pin_order', 'depends_on', 'wait_until', 'parent_task_id', 'watched_at',
 ]
 /** A create's placement keys: they place the new task and are no field write of their own. */
 export const CREATE_PLACEMENT_KEYS: readonly string[] = ['parent_task_id', 'project', 'group_id', 'focus_tier', 'order', 'id']

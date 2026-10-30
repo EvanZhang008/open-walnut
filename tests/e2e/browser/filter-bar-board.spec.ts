@@ -4,7 +4,7 @@
  * C46, C48, C49, C51, C54, C59, C62, C65, C67, C69, C70). One predicate decides
  * every surface: a Project chip scopes the pin area, Pinned, tier views and the
  * list alike, the filter row count equals the tab badge and the hit rows, the
- * footer counts follow the chips, and the chips survive a reload.
+ * status section counts follow the chips, and the chips survive a reload.
  *
  * The fixture board is shared, so every test seeds its own projects with a run
  * stamp (`Garden <stamp>`) and filters to them; prefs are isolated per test.
@@ -14,7 +14,8 @@ import { openListProject } from './todo-panel-helpers'
 import { MIA, MIA_PINS, stubBoard } from './filter-bar-fixtures'
 import { openHome } from './home-navigation-helpers'
 import { addFilter, chooseDisplayOption, displayButton, displayMenu, filterChip, filterRow, removeFilterChip, setStatus } from './filter-bar-helpers'
-import { SHOTS, runStamp, boot, seed, cleanup, row, card, anyRow, tab, tabCount, footer, hitIds, selectTab, filterProjects, panelClip } from './filter-bar-board-helpers'
+import { SHOTS, runStamp, boot, seed, cleanup, row, card, anyRow, tab, tabCount, hitIds, selectTab, filterProjects, panelClip } from './filter-bar-board-helpers'
+import { setStatusSectionOpen, statusSection, statusSectionCard, statusSectionCount, statusSectionToggle } from './status-section-helpers'
 
 test.setTimeout(150_000)
 
@@ -72,8 +73,8 @@ test.describe('one predicate for every view', () => {
   })
 })
 
-test.describe('Status, footer and persistence', () => {
-  test('Complete, Waiting and Need Action really show their rows; footer is a second door (C8, C9, C10, C49)', async ({ page, baseURL }) => {
+test.describe('Status, sections and persistence', () => {
+  test('Complete, Waiting and Need Action really show their rows; the status sections are a second door (C8, C9, C10, C49)', async ({ page, baseURL }) => {
     const stamp = runStamp()
     const garden = `Garden ${stamp}`
     const home = `Home ${stamp}`
@@ -89,29 +90,35 @@ test.describe('Status, footer and persistence', () => {
       await expect(row(page, open)).toBeVisible()
       await expect(row(page, done)).toHaveCount(0)
       await expect(row(page, waiting)).toHaveCount(0)
-      // C49: the footer counts follow the Project chip (Home's done and waiting do not count).
-      await expect(page.getByTestId('todo-filter-footer-completed')).toHaveText('1 Complete hidden')
-      await expect(page.getByTestId('todo-filter-footer-waiting')).toHaveText('1 Waiting hidden')
-      const text = (await footer(page).textContent()) ?? ''
-      expect(text).not.toMatch(/\u00D7|deferred| \u00B7 /)
-      await expect(page.getByTestId('todo-filter-footer-phase')).toHaveCount(0)
+      // C49: the section counts follow the Project chip (Home's done and waiting do not
+      // count). By status (the default design) draws the task that needs you in its own
+      // section above the list.
+      await expect(statusSectionCount(page, 'done')).toHaveText('1')
+      await expect(statusSectionCount(page, 'waiting')).toHaveText('1')
+      await expect(statusSectionCount(page, 'needs')).toHaveText('1')
+      await expect(statusSectionCard(page, 'needs', need)).toBeVisible()
+      await expect(row(page, need)).toHaveCount(0)
+      await expect(statusSectionToggle(page, 'waiting')).toHaveAttribute('aria-expanded', 'false')
+      await expect(statusSectionToggle(page, 'done')).toHaveAttribute('aria-expanded', 'false')
 
-      // C9: the footer door and the Status door give the same chip and list.
-      await page.getByTestId('todo-filter-footer-waiting').click()
-      await expect(filterChip(page, 'status')).toContainText('Open, Waiting')
-      await expect(row(page, waiting)).toBeVisible()
-      await expect(page.getByTestId('todo-filter-footer-waiting')).toHaveText('1 Waiting shown')
-      await removeFilterChip(page, 'status')
-      await expect(row(page, waiting)).toHaveCount(0)
+      // C9: the section door shows the row with no chip; the Status door gives the chip
+      // and draws it in the list, with no sections.
+      await setStatusSectionOpen(page, 'waiting', true)
+      await expect(statusSectionCard(page, 'waiting', waiting)).toBeVisible()
+      await expect(statusSectionCard(page, 'waiting', homeIds[1])).toHaveCount(0)
+      await expect(filterChip(page, 'status')).toHaveCount(0)
+      await setStatusSectionOpen(page, 'waiting', false)
+      await expect(statusSectionCard(page, 'waiting', waiting)).toHaveCount(0)
       await setStatus(page, ['To Do', 'In Progress', 'Need Action', 'Waiting'])
       await expect(filterChip(page, 'status')).toContainText('Open, Waiting')
       await expect(row(page, waiting)).toBeVisible()
+      await expect(statusSection(page, 'waiting')).toHaveCount(0)
 
-      // C8: Open + Complete shows the done row; the footer says shown.
+      // C8: Open + Complete shows the done row in the list; no Completed section then.
       await setStatus(page, ['To Do', 'In Progress', 'Need Action', 'Complete'])
       await expect(filterChip(page, 'status')).toContainText('Open, Complete')
       await expect(row(page, done)).toBeVisible()
-      await expect(page.getByTestId('todo-filter-footer-completed')).toHaveText('1 Complete shown')
+      await expect(statusSection(page, 'done')).toHaveCount(0)
 
       // C10: Complete alone shows only completed rows; Need Action alone only those.
       await setStatus(page, ['Complete'])
@@ -129,7 +136,7 @@ test.describe('Status, footer and persistence', () => {
     }
   })
 
-  test('the footer offers not-available tasks only under the default Date (C39)', async ({ page, baseURL }) => {
+  test('a task not available yet sleeps under Waiting / snoozed only under the default Date (C39)', async ({ page, baseURL }) => {
     const stamp = runStamp()
     const garden = `Garden ${stamp}`
     const ids = await seed(page, garden, [{ title: `g now ${stamp}` }, { title: `g later ${stamp}`, start: '2099-01-01' }])
@@ -137,17 +144,26 @@ test.describe('Status, footer and persistence', () => {
     try {
       await filterProjects(page, [garden])
       await openListProject(page, garden)
-      const item = page.getByTestId('todo-filter-footer-date')
-      await expect(item).toHaveText('1 not available yet: show')
-      await item.click()
+      // The old footer offered "1 not available yet: show"; the snoozed task now
+      // counts under the folded Waiting / snoozed section, with its start date.
+      await expect(statusSectionCount(page, 'waiting')).toHaveText('1')
+      await expect(row(page, ids[1])).toHaveCount(0)
+      await setStatusSectionOpen(page, 'waiting', true)
+      const snoozed = statusSectionCard(page, 'waiting', ids[1])
+      await expect(snoozed).toBeVisible()
+      await expect(snoozed.locator('.todo-item-start-pill')).toBeVisible()
+      await setStatusSectionOpen(page, 'waiting', false)
+      // Any date draws it in the list, so the section has nothing left to hold.
+      await addFilter(page, 'date', 'Any date')
       await expect(filterChip(page, 'date')).toContainText('Any date')
       await expect(row(page, ids[1])).toBeVisible()
-      await expect(item).toHaveCount(0)
+      await expect(statusSection(page, 'waiting')).toHaveCount(0)
       await removeFilterChip(page, 'date')
       await expect(row(page, ids[1])).toHaveCount(0)
-      await expect(item).toHaveText('1 not available yet: show')
+      await expect(statusSectionCount(page, 'waiting')).toHaveText('1')
+      // Any other Date is the user's chip and narrows every section: nothing waits here.
       await addFilter(page, 'date', 'overdue')
-      await expect(page.getByTestId('todo-filter-footer-date')).toHaveCount(0)
+      await expect(statusSection(page, 'waiting')).toHaveCount(0)
     } finally {
       await cleanup(page, ids)
     }

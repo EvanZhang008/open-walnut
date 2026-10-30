@@ -16,6 +16,7 @@
  */
 import { test, expect, type Page } from '@playwright/test'
 import { isolateUiPrefs } from './todo-panel-helpers'
+import { openTierInlineAdd } from './status-section-helpers'
 import { arrange, chooseViewOption, openHome } from './home-navigation-helpers'
 import { orderPinnedTier } from '../../../web/src/utils/pinned-tier-order'
 
@@ -182,9 +183,11 @@ test('a pinned tier draws the order orderPinnedTier computes, By project and Fla
   // FOOT of the tier in Custom order, and the foot of its project's run By project.
   const title = `Fresh from the add row ${stamp}`
   addRowTitle = title
-  // The add row is the drop zone's sibling, at the foot of the tier's list.
+  // The add row is the drop zone's sibling, at the foot of the tier's list. A tier
+  // that holds tasks draws it only once its "+" → New task opens it.
   const list = zone.locator('xpath=..')
-  await list.locator(`.focus-inline-add-trigger[title="Add to ${tier.label}\u2026"]`).click()
+  await expect(list.locator('.focus-inline-add-trigger')).toHaveCount(0)
+  await openTierInlineAdd(page, page.getByTestId('tier-view-bar'))
   const input = list.locator('.focus-inline-add input')
   await input.fill(title)
   await input.press('Enter')

@@ -819,7 +819,7 @@ reconcile, `NOTES_UPDATED` events) with the web UI's `/api/notes-v2`.
   `{ "tasks": [ProjectedTask], "syncedAt": "<ISO>" }`
 - `ProjectedTask`: `{ id, title, status, phase, priority, project,
   parent_task_id?, due_date?, start_date?, wait_until?, created_at, updated_at,
-  completed_at?, pinned?, unread?, tags?, summary?, user_status?, org_role? }` — `summary` is truncated to
+  completed_at?, pinned?, unread?, watched_at?, tags?, summary?, user_status?, org_role? }` — `summary` is truncated to
   ~500 chars.
   `phase` is one of `TODO`, `WAITING`, `IN_PROGRESS`, `NEED_ACTION`, `COMPLETE`.
   `WAITING` was added in 0.5.2 (a task parked until something happens; its
@@ -841,6 +841,12 @@ reconcile, `NOTES_UPDATED` events) with the web UI's `/api/notes-v2`.
   when the agent produced output the human hasn't opened; omitted otherwise.
   Additive and optional. `PATCH /api/v1/tasks/:id` accepts `unread` to mark a
   task read from the phone.
+  `watched_at` (added 2026-10) is when the user started watching the task (ISO
+  datetime), present only on a watched task. A watched task stays in a Watching
+  section at the top of the home task panel whatever its phase; watching changes
+  nothing else (not the phase, the board tier, the pin or `unread`). A watched
+  task that is done stays in the list past the done-retention window. Additive
+  and optional, so older clients ignore it.
   `parent_task_id` (added 2026-10) is the parent task's id (older rows may hold
   a short prefix of it), present only on a subtask. A subtask with no
   `start_date` of its own takes its nearest ancestor's for the Now view, as the
@@ -3704,7 +3710,7 @@ Per-family matrix:
 | Mutation family | Replica behavior | Mac offline | Convergence |
 |---|---|---|---|
 | Task create (`POST /tasks`) | Class A: 201 with the created row from the local store | accepted; op queued | insert-by-same-id on the primary; project registry row auto-minted; primary recomputes `source` |
-| Task PATCH (title/description/status/phase/wait_until/priority/due_date/start_date/end_date/project/tags/unread) | Class A: 200 with the updated row | accepted; op queued | LWW + `touched` scoping; project move mints the registry row; status→phase derivation runs on the primary too. Both calendar dates are in the op update whitelist, and a `touched` date absent from the snapshot is the explicit clear, so a phone-side reschedule or "off the calendar" reaches the primary intact |
+| Task PATCH (title/description/status/phase/wait_until/priority/due_date/start_date/end_date/project/tags/unread/watched_at) | Class A: 200 with the updated row | accepted; op queued | LWW + `touched` scoping; project move mints the registry row; status→phase derivation runs on the primary too. Both calendar dates are in the op update whitelist, and a `touched` date absent from the snapshot is the explicit clear, so a phone-side reschedule or "off the calendar" reaches the primary intact |
 | Quick-parse (`POST /tasks/quick-parse`) | stateless LLM call on the replica's own credentials | works (no primary involved) | n/a |
 | Task delete (single + batch) | Class A: 204 / per-task result | accepted; op queued | tombstone prevents projection resurrection; delete blocked by a live session is consumed (row comes back via projection) |
 | Batch phase (`POST /tasks/batch/phase`) | Class A: 200 partial-success shape | accepted; one op per changed task | same as PATCH; COMPLETE additionally clears the pin fields |

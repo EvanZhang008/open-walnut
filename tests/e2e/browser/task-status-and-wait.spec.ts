@@ -30,6 +30,7 @@ import { test, expect, type Locator, type Page } from '@playwright/test'
 import { isolateUiPrefs, presetPanelView } from './todo-panel-helpers'
 import { filterChip, removeFilterChip, setStatus } from './filter-bar-helpers'
 import { DRAFT_PANEL } from './draft-helpers'
+import { setStatusSectionOpen, showSectionCard, statusSection, statusSectionCountOf, statusSectionToggle } from './status-section-helpers'
 import { composerTextarea, openPanels, openPlusMenu } from './engine-settings-popover-helpers'
 
 const API = `http://localhost:${process.env.PW_TEST_PORT ?? 3457}`
@@ -331,34 +332,46 @@ test('Waiting tasks are out of the list and the tiers by default; Status Waiting
   await expect(anyParked).toHaveCount(0)
   await shot(page.locator('.todo-panel'), 'show-waiting-off', browserName)
 
-  // The footer under the list says what the view hides; one click reveals it,
-  // in its own tier, with the hourglass. (The Focus tier draws rows, Satellite
-  // draws cards: match on the task id alone.)
-  const footer = page.getByTestId('todo-filter-footer')
-  const waitingChip = footer.getByTestId('todo-filter-footer-waiting')
-  await expect(waitingChip).toHaveText(/^\d+ Waiting hidden$/)
-  await expect(footer.getByTestId('todo-filter-footer-completed')).toHaveText(/^\d+ Complete hidden$/)
-  await shot(footer, 'filter-footer', browserName)
-  await waitingChip.click()
-  await expect(waitingChip).toHaveText(/^\d+ Waiting shown$/)
-  await expect(waitingChip).toHaveClass(/\bon\b/)
+  // The folded "Waiting / snoozed" section under the list says what the view holds
+  // back; opening it draws the parked task there, with the hourglass. (The footer
+  // that used to say "N Waiting hidden" became these sections.)
+  const waitingHeading = statusSection(page, 'waiting')
+  await expect(waitingHeading).toBeVisible({ timeout: 15_000 })
+  await expect(statusSectionToggle(page, 'waiting')).toHaveAttribute('aria-expanded', 'false')
+  expect(await statusSectionCountOf(page, 'waiting')).toBeGreaterThanOrEqual(1)
+  await expect(statusSection(page, 'done')).toBeVisible()
+  await expect(statusSectionToggle(page, 'done')).toHaveAttribute('aria-expanded', 'false')
+  await shot(waitingHeading, 'waiting-section-folded', browserName)
+  await setStatusSectionOpen(page, 'waiting', true)
+  // Opening a section is not a filter: no Status chip appears.
+  await expect(filterChip(page, 'status')).toHaveCount(0)
+  const sectionCard = await showSectionCard(page, 'waiting', parked.id)
+  await expect(anyParked).toHaveCount(1)
+  await expect(sectionCard.getByTitle('Waiting: click to complete')).toBeVisible()
+  await shot(page.locator('.todo-panel'), 'show-waiting-on', browserName)
+  await setStatusSectionOpen(page, 'waiting', false)
+  await expect(anyParked).toHaveCount(0)
+
+  // The Status filter is the other way in: Open + Waiting draws it in its own tier,
+  // and with a Status the user picked there are no sections. Removing the chip hides it again.
+  await setStatus(page, ['To Do', 'In Progress', 'Need Action', 'Waiting'])
   await expect(filterChip(page, 'status')).toContainText('Open, Waiting')
   await expect(anyParked).toHaveCount(1, { timeout: 15_000 })
   await expect(anyParked).toBeVisible()
   await expect(anyParked.getByTitle('Waiting: click to complete')).toBeVisible()
-  await shot(page.locator('.todo-panel'), 'show-waiting-on', browserName)
-  // The Status chip is the same switch: removing it hides them again.
+  await expect(statusSection(page, 'waiting')).toHaveCount(0)
   await removeFilterChip(page, 'status')
   await expect(anyParked).toHaveCount(0)
-  await expect(waitingChip).toHaveText(/^\d+ Waiting hidden$/)
+  await expect(waitingHeading).toBeVisible()
 
-  // Search finds it: the default Status is bypassed while searching (5.7).
+  // Search finds it: the default Status is bypassed while searching (5.7), and a
+  // search is one ranked list with no sections.
   await page.locator('.todo-search-input').fill(`Hidewait ${stamp}`)
   await expect(page.locator(`.todo-panel-item[data-task-id="${parked.id}"]`)).toBeVisible({ timeout: 15_000 })
-  await expect(footer).toHaveCount(0)
+  await expect(statusSection(page, 'waiting')).toHaveCount(0)
   await page.locator('.todo-search-input').fill('')
   await expect(anyParked).toHaveCount(0)
-  await expect(footer).toBeVisible()
+  await expect(waitingHeading).toBeVisible()
 
   // Parking a visible card from its menu: it holds for the grace, fades, then leaves.
   await plainCard.getByRole('button', { name: 'More actions' }).click()
@@ -373,12 +386,16 @@ test('Waiting tasks are out of the list and the tiers by default; Status Waiting
   await page.waitForTimeout(1_200)
   await expect(plainCard).toBeVisible()
   await expect(plainCard).toHaveCount(0, { timeout: 8_000 })
+  // It went to the folded Waiting / snoozed section.
+  await setStatusSectionOpen(page, 'waiting', true)
+  await showSectionCard(page, 'waiting', plain.id)
+  await setStatusSectionOpen(page, 'waiting', false)
   // A message-free way back: the status by hand.
   await api('PATCH', `/api/tasks/${plain.id}`, { phase: 'TODO' })
   await expect(plainCard).toBeVisible({ timeout: 15_000 })
 })
 
-test('the footer counts the current view: a tier tab counts its own tier, and "Show completed" reveals a tier\'s done pin in place', async ({ page, browserName }) => {
+test('the status sections count the current view: a tier tab counts its own tier, and Completed shows a tier\'s done pin', async ({ page, browserName }) => {
   // Every tier tab on the bar, so the view can be switched by clicking. "Hide empty
   // tabs" stays at its default (on): a tier whose only tasks are parked is not empty.
   await page.addInitScript(() => {
@@ -399,56 +416,49 @@ test('the footer counts the current view: a tier tab counts its own tier, and "S
   await page.waitForLoadState('networkidle')
 
   const tab = (name: string) => page.locator('.todo-section-tabs [role="tab"]', { hasText: name }).first()
-  const footer = page.getByTestId('todo-filter-footer')
-  const waitingChip = footer.getByTestId('todo-filter-footer-waiting')
-  const completedChip = footer.getByTestId('todo-filter-footer-completed')
-  const countOf = async (chip: Locator): Promise<number> => {
-    await expect(chip).toBeVisible({ timeout: 15_000 })
-    return Number((await chip.textContent())!.trim().split(' ')[0])
-  }
   // The board shares the fixture with other specs, so the assertions are relative:
   // All counts both parked tasks, the tiers count only their own.
-  const allWaiting = await countOf(waitingChip)
+  const allWaiting = await statusSectionCountOf(page, 'waiting')
   expect(allWaiting).toBeGreaterThanOrEqual(2)
 
   await tab('Focus').click()
   await expect(tab('Focus')).toHaveAttribute('aria-selected', 'true')
-  const focusWaiting = await countOf(waitingChip)
+  await expect.poll(() => statusSectionCountOf(page, 'waiting')).toBeLessThanOrEqual(allWaiting - 1)
+  const focusWaiting = await statusSectionCountOf(page, 'waiting')
   expect(focusWaiting).toBeGreaterThanOrEqual(1)
-  expect(focusWaiting).toBeLessThanOrEqual(allWaiting - 1)
-  await shot(page.locator('.todo-panel'), 'footer-scope-focus', browserName)
-  // Reveal: the Focus pin appears, the Satellite pin does not (it is not in this view).
-  await waitingChip.click()
-  await expect(page.locator(`[data-task-id="${parkedFocus.id}"]`)).toBeVisible({ timeout: 15_000 })
+  await shot(page.locator('.todo-panel'), 'sections-scope-focus', browserName)
+  // Open: the Focus pin is there, the Satellite pin is not (it is not in this view).
+  await setStatusSectionOpen(page, 'waiting', true)
+  await showSectionCard(page, 'waiting', parkedFocus.id)
   await expect(page.locator(`[data-task-id="${parkedSat.id}"]`)).toHaveCount(0)
-  await waitingChip.click()
+  await setStatusSectionOpen(page, 'waiting', false)
   await expect(page.locator(`[data-task-id="${parkedFocus.id}"]`)).toHaveCount(0)
-  // The done Focus pin: counted here, and "Show completed" draws it in the tier itself.
+  // The done Focus pin: counted here, and the Completed section draws it.
   const doneCard = page.locator(`[data-task-id="${doneFocus.id}"]`)
   await expect(doneCard).toHaveCount(0)
-  expect(await countOf(completedChip)).toBeGreaterThanOrEqual(1)
-  await completedChip.click()
-  await expect(completedChip).toHaveText(/^\d+ Complete shown$/)
-  await expect(doneCard).toBeVisible({ timeout: 15_000 })
-  await shot(page.locator('.todo-panel'), 'footer-scope-focus-completed', browserName)
-  await completedChip.click()
+  expect(await statusSectionCountOf(page, 'done')).toBeGreaterThanOrEqual(1)
+  await setStatusSectionOpen(page, 'done', true)
+  const doneInSection = await showSectionCard(page, 'done', doneFocus.id)
+  await expect(doneInSection).toHaveClass(/todo-pinned-card-done/)
+  await shot(page.locator('.todo-panel'), 'sections-scope-focus-completed', browserName)
+  await setStatusSectionOpen(page, 'done', false)
   await expect(doneCard).toHaveCount(0)
 
   await tab('Satellite').click()
   await expect(tab('Satellite')).toHaveAttribute('aria-selected', 'true')
-  const satWaiting = await countOf(waitingChip)
+  await expect.poll(() => statusSectionCountOf(page, 'waiting')).toBeLessThanOrEqual(allWaiting - 1)
+  const satWaiting = await statusSectionCountOf(page, 'waiting')
   expect(satWaiting).toBeGreaterThanOrEqual(1)
-  expect(satWaiting).toBeLessThanOrEqual(allWaiting - 1)
   expect(focusWaiting + satWaiting).toBeLessThanOrEqual(allWaiting)
-  await waitingChip.click()
-  await expect(page.locator(`[data-task-id="${parkedSat.id}"]`)).toBeVisible({ timeout: 15_000 })
+  await setStatusSectionOpen(page, 'waiting', true)
+  await showSectionCard(page, 'waiting', parkedSat.id)
   await expect(page.locator(`[data-task-id="${parkedFocus.id}"]`)).toHaveCount(0)
-  await waitingChip.click()
+  await setStatusSectionOpen(page, 'waiting', false)
 
   // Back on All the whole board is counted again.
   await tab('All').click()
   await expect(tab('All')).toHaveAttribute('aria-selected', 'true')
-  expect(await countOf(waitingChip)).toBe(allWaiting)
+  await expect.poll(() => statusSectionCountOf(page, 'waiting')).toBe(allWaiting)
 })
 
 test('the Projects view keeps only Running and Collapse; Waiting comes back through Status', async ({ page, browserName }) => {

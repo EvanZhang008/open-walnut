@@ -12,7 +12,8 @@
  *   npx playwright test          (runs these tests)
  */
 import { test, expect, type Page } from '@playwright/test'
-import { isolateUiPrefs, selectProject, showEverything } from './todo-panel-helpers'
+import { isolateUiPrefs, selectProject, selectSection, showEverything } from './todo-panel-helpers'
+import { openTierInlineAdd } from './status-section-helpers'
 import { addFilter } from './filter-bar-helpers'
 
 const API = `http://localhost:${process.env.PW_TEST_PORT ?? 3457}`
@@ -261,9 +262,14 @@ test('create task via quick-add form', async ({ page }) => {
   await showAllTasks(page)
 
   // The old always-visible quick-add input was retired; adding is now the
-  // InlineAdd row ("+ Add to Focus…" trigger → title input → Enter).
-  await page.locator('.focus-inline-add-trigger').first().click()
-  const input = page.locator('.focus-inline-add input')
+  // InlineAdd row (title input → Enter). A tier that holds tasks draws no standing
+  // "+ Add to Focus…" row: the Focus tier's "+" → New task opens it. In All that is
+  // the Focus sub-heading; a lone tier draws no heading, so use the Focus view then.
+  const focusHeading = page.locator('.todo-pinned-subgroup-heading').filter({ has: page.locator('[data-navigation-id="focus"]') })
+  const heading = (await focusHeading.count()) > 0
+    ? focusHeading.first()
+    : (await selectSection(page, 'Focus'), page.getByTestId('tier-view-bar'))
+  const input = await openTierInlineAdd(page, heading)
   await input.fill(uniqueTitle)
   await input.press('Enter')
 

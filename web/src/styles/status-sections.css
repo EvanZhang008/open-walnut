@@ -1,0 +1,67 @@
+/* Status sections of the home task panel (StatusSections.tsx): Watching, Needs you,
+   Working, Waiting, Completed. The headings are the section level (13px/600, like
+   Pinned and Projects); the count trails the label the way a project label's does. */
+.status-section { display: block; }
+.status-section + .status-section,
+.status-section + .status-section-working,
+.status-section-working + .status-section { margin-top: 18px; }
+.navigation-heading.status-section-heading { margin: 8px 0 2px; }
+.navigation-heading.status-section-heading .navigation-heading-open { color: var(--fg); font-size: 13px; font-weight: 600; }
+.status-section-icon { color: var(--fg-muted); }
+.status-section-needs .status-section-icon { color: var(--red, #e5484d); }
+.status-section-watching .status-section-icon { color: var(--accent); }
+.status-section-count { font-size: 11px; font-weight: 500; color: var(--fg-muted, #8a8f98); }
+/* Under Working, the view's own headings (Pinned, a tier, Projects) stay a level below. */
+.status-section-working > .status-section-working-body { display: block; }
+.status-section-list { display: flex; flex-direction: column; }
+.status-section-run + .status-section-run { margin-top: 6px; }
+.home-navigation-scroll .status-section-project { margin-top: 6px; }
+.home-navigation-scroll .status-section-run:first-child .status-section-project { margin-top: 2px; }
+.status-section-more {
+  align-self: flex-start; margin: 2px 0 0 22px; padding: 2px 6px; border: 0; border-radius: 6px;
+  background: transparent; color: var(--fg-muted); font: inherit; font-size: 12px; cursor: pointer;
+}
+.status-section-more:hover:not(:disabled) { background: var(--bg-hover); color: var(--fg); }
+.status-section-more:disabled { cursor: default; opacity: .7; }
+
+/* A project heading's status counts (ProjectStatusCounts): glyph + number, muted, the
+   Needs you one red, after the heading's own number. */
+.project-status-counts { display: inline-flex; align-items: center; gap: 6px; margin-left: 6px; font-size: 10px; font-weight: 500; color: var(--fg-muted, #8a8f98); white-space: nowrap; }
+.project-status-count { display: inline-flex; align-items: center; gap: 2px; }
+.project-status-count-icon { display: inline-flex; }
+.project-status-count-icon svg { width: 10px; height: 10px; display: block; }
+.project-status-count-needs { color: var(--red, #e5484d); }
+
+/* The layout switch on trial (panel-design.ts). */
+.panel-design-switch { display: flex; align-items: center; gap: 2px; margin: 4px 0 6px; padding: 2px; border: 1px solid var(--border); border-radius: 8px; font-size: 11px; }
+.panel-design-switch-label { color: var(--fg-muted); padding: 0 6px 0 4px; }
+.panel-design-option { flex: 1; min-width: 0; padding: 3px 6px; border: 0; border-radius: 6px; background: transparent; color: var(--fg-secondary); font: inherit; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.panel-design-option:hover { background: var(--bg-hover); }
+.panel-design-option.on { background: var(--bg-secondary); color: var(--fg); font-weight: 600; box-shadow: 0 0 0 1px var(--border); }
+
+/* By project: a project's folded Waiting / snoozed and Completed lines. */
+.project-status-folds { margin: 2px 0 4px; }
+.project-status-fold-row { display: flex; flex-wrap: wrap; gap: 4px; padding-left: 18px; }
+.project-status-fold { display: inline-flex; align-items: center; gap: 4px; padding: 2px 6px; border: 0; border-radius: 6px; background: transparent; color: var(--fg-muted); font: inherit; font-size: 11.5px; cursor: pointer; }
+.project-status-fold:hover, .project-status-fold.open { background: var(--bg-hover); color: var(--fg-secondary); }
+.project-status-fold .project-status-count-icon svg { width: 11px; height: 11px; }
+.home-navigation-scroll .project-status-folds-project { margin-top: 12px; }
+
+/* The Inbox's per-project strip (InboxProjectStrip.tsx). */
+.inbox-project-strip { margin: 4px 8px 8px; padding: 6px 4px; border: 1px solid var(--border); border-radius: 8px; font-size: 12px; }
+.inbox-project-strip-head { display: flex; justify-content: space-between; padding: 0 6px 4px; color: var(--fg-muted); font-size: 11px; font-weight: 600; }
+.inbox-project-strip-sum { font-weight: 500; }
+.inbox-project-line-btn { display: flex; align-items: center; width: 100%; gap: 6px; padding: 3px 6px; border: 0; border-radius: 6px; background: transparent; color: var(--fg-secondary); font: inherit; cursor: pointer; text-align: left; }
+.inbox-project-line-btn:hover { background: var(--bg-hover); }
+.inbox-project-line.has-needs .inbox-project-name { color: var(--fg); font-weight: 600; }
+.inbox-project-name { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.inbox-project-line .project-status-counts { margin-left: 0; font-size: 11px; }
+.inbox-project-tasks { list-style: none; margin: 0 0 4px; padding: 0 0 0 12px; }
+.inbox-project-task { display: flex; align-items: center; gap: 6px; width: 100%; padding: 2px 6px; border: 0; border-radius: 6px; background: transparent; color: var(--fg); font: inherit; cursor: pointer; text-align: left; }
+.inbox-project-task:hover { background: var(--bg-hover); }
+.inbox-project-task-title { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.inbox-project-more { padding: 2px 6px; color: var(--fg-muted); font-size: 11px; }
+.inbox-project-more-btn { margin: 2px 0 0 6px; padding: 2px 6px; border: 0; border-radius: 6px; background: transparent; color: var(--fg-muted); font: inherit; font-size: 11px; cursor: pointer; }
+.inbox-project-more-btn:hover { background: var(--bg-hover); color: var(--fg); }
+/* The open-session chevron sits at the right edge: the time yields room for it. */
+.status-section-card.todo-pinned-card-session-open .todo-recent-ago { margin-right: 8px; }

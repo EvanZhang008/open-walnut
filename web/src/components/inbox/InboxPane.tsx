@@ -7,6 +7,7 @@
  * the mutations in.
  */
 import { LetterEnvelopeRow } from './LetterEnvelopeRow';
+import { InboxProjectStrip } from './InboxProjectStrip';
 import type { LetterEnvelope } from '@/api/human-inbox';
 import '@/styles/human-inbox.css';
 
@@ -51,6 +52,8 @@ export function InboxPane({
         </button>
       </div>
       {error && <div className="hib-note hib-note-error">{error}</div>}
+      {/* Where the user acts: each project's pending work at a glance. */}
+      {!showArchived && <InboxProjectStrip />}
       {letters.length === 0 ? (
         <div className="notification-feed-empty">{emptyText}</div>
       ) : (

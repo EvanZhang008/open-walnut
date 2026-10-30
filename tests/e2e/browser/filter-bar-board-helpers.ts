@@ -1,7 +1,8 @@
 /**
  * Shared helpers for the filter-bar board specs (filter-bar-board.spec.ts and
  * filter-bar-board-entry.spec.ts): boot with isolated prefs and the tab bar on,
- * seed run-stamped tasks through the API, and read hit rows, tabs and the footer.
+ * seed run-stamped tasks through the API, and read hit rows and tabs (the status
+ * sections that replaced the footer have their own helpers, status-section-helpers.ts).
  */
 import { expect, type Page } from '@playwright/test'
 import { isolateUiPrefs } from './todo-panel-helpers'
@@ -64,7 +65,6 @@ export const card = (page: Page, id: string) => page.locator(`.todo-focus-card[d
 export const anyRow = (page: Page, id: string) => page.locator(`.todo-panel-item[data-task-id="${id}"], .todo-focus-card[data-task-id="${id}"], .todo-pinned-card[data-task-id="${id}"]`)
 export const tab = (page: Page, name: string) => page.locator('.todo-section-tabs [role="tab"]', { hasText: name }).first()
 export const tabCount = async (page: Page, name: string) => Number((await tab(page, name).locator('.todo-section-tab-count').textContent()) ?? 'NaN')
-export const footer = (page: Page) => page.getByTestId('todo-filter-footer')
 
 /** Every task id drawn as a real row (list rows and tier cards, override rows excluded). */
 export async function hitIds(page: Page): Promise<string[]> {

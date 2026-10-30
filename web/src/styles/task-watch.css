@@ -1,0 +1,12 @@
+/* Watch (WatchToggle.tsx): the eye in a task's header, lit while the task is watched. */
+.task-watch-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 24px; height: 24px; padding: 0; border: 0; border-radius: 6px;
+  background: transparent; color: var(--fg-muted); cursor: pointer; opacity: .7;
+  transition: opacity .15s, background .15s, color .15s;
+}
+.task-watch-btn:hover { opacity: 1; background: var(--bg-hover); }
+.task-watch-btn.is-watched { color: var(--accent); opacity: 1; }
+/* In the detail header it sits at the right, just before the close button. */
+.tdp-head-top .tdp-watch { margin-left: auto; }
+.tdp-head-top .tdp-watch + .todo-detail-close { margin-left: 0; }

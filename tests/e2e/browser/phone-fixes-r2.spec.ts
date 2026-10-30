@@ -313,12 +313,18 @@ test('N2-35: the sign-in page sends nothing but the sign-in probe, and writes no
   expect(calls.filter((c) => !c.startsWith('GET ') && !c.includes('/api/browser-logs'))).toEqual([])
 })
 
-test('N2-28: the task panel footer draws no comma at a line end: each count is its own tap', async ({ page }) => {
+test('N2-28: the task panel\'s status sections draw no comma at a line end: each count is its own tap', async ({ page }) => {
+  // The filter footer ("2 Waiting hidden, 3 Complete hidden") is gone; its counts now
+  // head the folded Waiting / snoozed and Completed sections, one heading button each.
   const errors = await bootHome(page)
-  const footer = page.getByTestId('todo-filter-footer').first()
-  if (await footer.count() === 0) { test.info().annotations.push({ type: 'note', description: 'no footer on this fixture view' }); return }
-  const seps = await footer.locator('.todo-filter-footer-sep').evaluateAll((els) => els.filter((e) => getComputedStyle(e).display !== 'none').length)
-  expect(seps).toBe(0)
+  const headings = page.locator('.todo-panel .status-section-heading')
+  if (await headings.count() === 0) { test.info().annotations.push({ type: 'note', description: 'no status sections on this fixture view' }); return }
+  for (const heading of await headings.all()) {
+    await expect(heading.locator('button')).toHaveCount(1)
+    const text = (await heading.innerText()).trim()
+    expect(text, 'one count per heading, no separator').not.toMatch(/[,\u00B7]/)
+    await expect(heading.locator('.status-section-count')).toHaveText(/^\d+$/)
+  }
   expect(errors).toEqual([])
 })
 

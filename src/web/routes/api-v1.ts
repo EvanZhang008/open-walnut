@@ -3034,7 +3034,7 @@ apiV1Router.patch('/tasks/:id', async (req: Request, res: Response, next: NextFu
     if (id === 'reorder') { next(); return }
     const { status, phase, wait_until: waitUntilRaw, priority, due_date: dueDate, start_date: startDate, end_date: endDateRaw,
       project, title, description, tags,
-      unread, parent_task_id: parentTaskId } = (req.body ?? {}) as {
+      unread, parent_task_id: parentTaskId, watched_at: watchedAt } = (req.body ?? {}) as {
       status?: unknown
       phase?: unknown
       wait_until?: unknown
@@ -3048,6 +3048,7 @@ apiV1Router.patch('/tasks/:id', async (req: Request, res: Response, next: NextFu
       tags?: unknown
       unread?: unknown
       parent_task_id?: unknown
+      watched_at?: unknown
     }
     // Reassignable: clearing start_date cascades an end_date clear (below).
     let endDate = endDateRaw
@@ -3135,6 +3136,11 @@ apiV1Router.patch('/tasks/:id', async (req: Request, res: Response, next: NextFu
       sendError(res, 400, 'bad_request', 'unread must be a boolean')
       return
     }
+    // Watch (additive, 2026-10): when the user started watching; "" / null stops.
+    if (watchedAt !== undefined && !isDateFieldValid(watchedAt)) {
+      sendError(res, 400, 'bad_request', 'watched_at must be an ISO-8601 datetime (when the user started watching), or "" / null to stop watching')
+      return
+    }
     // Adopt / release (additive, 2026-10): the leader's task id makes this task
     // its worker (subtask); "" releases it. Checked against the board below.
     if (parentTaskId !== undefined && typeof parentTaskId !== 'string') {
@@ -3158,8 +3164,9 @@ apiV1Router.patch('/tasks/:id', async (req: Request, res: Response, next: NextFu
     const pinPatch = pinParse.patch
     if (status === undefined && phase === undefined && waitUntil === undefined && priority === undefined && dueDate === undefined
         && startDate === undefined && endDate === undefined && project === undefined && title === undefined
-        && description === undefined && tags === undefined && unread === undefined && parentTaskId === undefined && !pinPatch) {
-      sendError(res, 400, 'bad_request', 'at least one updatable field is required (status/phase/wait_until/priority/due_date/start_date/end_date/project/title/description/tags/unread/parent_task_id/pinned/focus_tier)')
+        && description === undefined && tags === undefined && unread === undefined && parentTaskId === undefined
+        && watchedAt === undefined && !pinPatch) {
+      sendError(res, 400, 'bad_request', 'at least one updatable field is required (status/phase/wait_until/priority/due_date/start_date/end_date/project/title/description/tags/unread/watched_at/parent_task_id/pinned/focus_tier)')
       return
     }
     if (waitUntil !== undefined && normalizeDateField(waitUntil) && phase === undefined) {
@@ -3343,6 +3350,7 @@ apiV1Router.patch('/tasks/:id', async (req: Request, res: Response, next: NextFu
         ...(patchTitle !== undefined ? { title: patchTitle } : {}),
         ...(tags !== undefined ? { set_tags: tags as string[] } : {}),
         ...(unread !== undefined ? { unread: unread as boolean } : {}),
+        ...(watchedAt !== undefined ? { watched_at: normalizeDateField(watchedAt) } : {}),
         // '' = release (updateTask's clear); otherwise the resolved full id.
         ...(parentChanged ? { parent_task_id: parentLink?.leader?.id ?? '' } : {}),
       }

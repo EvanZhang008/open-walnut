@@ -131,7 +131,7 @@ const DEFAULT_TASK_LIST_LIMIT = 50
 const TASK_LIST_ALWAYS = ['id', 'title', 'phase', 'project', 'updated_at'] as const
 const TASK_LIST_WHEN_SET = [
   'due_date', 'start_date', 'completed_at', 'focus_tier', 'pin_order',
-  'parent_task_id', 'group_id', 'sprint', 'tags', 'is_blocked',
+  'parent_task_id', 'group_id', 'sprint', 'tags', 'is_blocked', 'watched_at',
 ] as const
 
 /** Project ONE REST row onto the lean agent-facing shape. */
@@ -663,6 +663,10 @@ function leaderSentence(task: unknown, id: string, p: LeaderPlacement | undefine
     + 'its stops, completions, errors and waits no longer reach that task.'
 }
 
+/** The Watch field, as the user sets it from the task panel (Task.watched_at). */
+const WATCHED_AT_DESCRIPTION = 'ISO time to keep the task on the user\'s Watching list at the top of the task panel, "" to stop watching. '
+  + 'Changes nothing else (phase, board tier, pin)'
+
 defineOp({
   name: 'task_update',
   title: 'Update a Walnut task',
@@ -700,6 +704,7 @@ defineOp({
     force: z.boolean().optional().describe('With phase=COMPLETE on another task still in use or unfinished (409 task_in_use, the same check as task_complete): close it anyway. Needs `reason`'),
     reason: z.string().min(10).max(500).optional().describe('With force: who asked for the close and why it is right'),
     parent_task_id: z.string().optional().describe('Adopt or release: set to your own task id to make an existing task a worker of yours (it keeps its project and folder; its stops, completions, errors and waits then reach you), or "" to release it.'),
+    watched_at: z.string().nullable().optional().describe(WATCHED_AT_DESCRIPTION),
   },
   // The old park receipt's text (removed 2026-10-05). A session started before
   // then still sends it, and a host replays the writes it queued offline: a park
@@ -981,6 +986,7 @@ defineOp({
       description: z.string().optional(),
       tags: z.array(z.string()).optional(),
       parent_task_id: z.string().optional(),
+      watched_at: z.string().nullable().optional().describe(WATCHED_AT_DESCRIPTION),
     }).strict()).min(1).max(MAX_BULK_WRITE)
       .describe(`1 to ${MAX_BULK_WRITE} patches, each { id, ...fields } with at least one field besides id`),
   },

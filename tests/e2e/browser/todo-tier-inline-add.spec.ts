@@ -20,11 +20,16 @@
  *
  * The assertions are geometric + behavioral, not stylistic: the add row must sit
  * BELOW every card, and a typed title must end up as a real task in the tier.
+ *
+ * A tier that holds tasks no longer draws a standing "+ Add to <Tier>…" row
+ * (2026-10-29); the tier's "+" → New task opens the same row in place, so every
+ * test here opens it that way (an empty tier still shows the row; the "+" works there too).
  */
 
 import { test, expect } from './shortcut-test-fixture'
 import { type Page } from '@playwright/test'
 import { selectSection, selectProject } from './todo-panel-helpers'
+import { openTierInlineAdd } from './status-section-helpers'
 
 // Pin membership is GLOBAL server state on one shared fixture dataset: the geometry
 // test seeds 40 cards into Satellite while the per-tier tests add and then look for
@@ -33,10 +38,13 @@ import { selectSection, selectProject } from './todo-panel-helpers'
 test.describe.configure({ mode: 'serial' })
 
 const TIERS = [
-  { tab: 'Focus' as const, label: 'Add to Focus…', zone: 'focus-drop-zone' },
-  { tab: 'Satellite' as const, label: 'Add to Satellite…', zone: 'satellite-drop-zone' },
-  { tab: 'Parked' as const, label: 'Add to Parked…', zone: 'wait-drop-zone' },
+  { tab: 'Focus' as const, zone: 'focus-drop-zone' },
+  { tab: 'Satellite' as const, zone: 'satellite-drop-zone' },
+  { tab: 'Parked' as const, zone: 'wait-drop-zone' },
 ]
+
+/** The solo tier view's heading, which carries the tier's "+". */
+const tierBar = (page: Page) => page.getByTestId('tier-view-bar')
 
 /** Seed enough pinned cards in `tier` to overflow the panel — the overlap only
  *  appeared once the card stack was taller than the scroller.
@@ -84,14 +92,17 @@ test.describe('tier inline add', () => {
     await selectSection(page, 'Satellite')
     const zone = page.locator('[data-drop-zone="satellite-drop-zone"]')
     await expect(zone).toBeVisible()
-    const addRow = page.locator('.focus-inline-add-trigger', { hasText: 'Add to Satellite…' })
+    // A full tier draws no standing add row; its "+" → New task opens it in place.
+    await expect(page.locator('.focus-inline-add-trigger', { hasText: 'Add to Satellite…' })).toHaveCount(0)
+    await openTierInlineAdd(page, tierBar(page))
+    const addRow = page.locator('.focus-inline-add')
     await expect(addRow).toBeVisible()
 
     // The contract: the add row starts at or below the bottom of the LAST card, and
     // overlaps no card at all. Before the fix the row cut across the last card.
     const geometry = await page.evaluate(() => {
       const z = document.querySelector('[data-drop-zone="satellite-drop-zone"]')!
-      const add = document.querySelector('.focus-inline-add-trigger')!
+      const add = document.querySelector('.focus-inline-add')!
       const a = add.getBoundingClientRect()
       const cards = [...z.querySelectorAll('[data-task-id]')]
       const lastBottom = Math.max(...cards.map((c) => c.getBoundingClientRect().bottom))
@@ -107,7 +118,7 @@ test.describe('tier inline add', () => {
     expect(geometry.addTop).toBeGreaterThanOrEqual(geometry.lastBottom - 1)
   })
 
-  for (const { tab, label } of TIERS) {
+  for (const { tab } of TIERS) {
     test(`adding a task to ${tab} keeps it (no silent 409 rollback)`, async ({ page }) => {
       const title = `inline add ${tab} ${Date.now()}`
       await page.goto('/')
@@ -115,9 +126,7 @@ test.describe('tier inline add', () => {
       await selectProject(page, 'All')
       await selectSection(page, tab)
 
-      await page.locator('.focus-inline-add-trigger', { hasText: label }).click()
-      const input = page.locator('.focus-inline-add input')
-      await expect(input).toBeVisible()
+      const input = await openTierInlineAdd(page, tierBar(page))
       await input.fill(title)
       await input.press('Enter')
 
@@ -159,8 +168,7 @@ test.describe('tier inline add', () => {
     await selectProject(page, 'All')
     await selectSection(page, 'Focus')
 
-    await page.locator('.focus-inline-add-trigger', { hasText: 'Add to Focus…' }).click()
-    const input = page.locator('.focus-inline-add input')
+    const input = await openTierInlineAdd(page, tierBar(page))
     await input.fill(title)
     await input.press('Enter')
     await expect(page.locator('.todo-pinned-wrapper [data-task-id]', { hasText: title }))

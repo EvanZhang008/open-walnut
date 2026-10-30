@@ -6,6 +6,7 @@
 import fs from 'node:fs/promises'
 import { expect, test, type Page } from '@playwright/test'
 import { isolateUiPrefs } from './todo-panel-helpers'
+import { presetPanelDesign } from './status-section-helpers'
 import { PHONE, findSmallTargets, findSmallText, injectSafeArea, menuButton, openDrawer, openHomeRow } from './phone-helpers'
 void openHomeRow
 
@@ -24,6 +25,9 @@ test.beforeAll(async () => { await fs.mkdir(SHOTS, { recursive: true }) })
 
 async function bootHome(page: Page): Promise<string[]> {
   await isolateUiPrefs(page)
+  // List + shelf keeps a task that needs you in its tier or project (N5 is about that
+  // row); By status, the default, would draw it in the Needs you section instead.
+  await presetPanelDesign(page, 'shelf')
   await page.addInitScript(() => {
     try {
       if (sessionStorage.getItem('phone-fixes-seeded')) return
@@ -133,8 +137,11 @@ test('N14: a stuck project header sits below the stuck section heading, never un
   const boxes = await page.evaluate(() => {
     const r = (el: Element | null) => el ? el.getBoundingClientRect() : null
     const section = r(document.querySelector('.todo-panel .todo-tasks-section > .todo-tasks-header'))
+    // Only a header the list shows: one scrolled out above the list can still end below
+    // the page top (under the app bar), which says nothing about the stuck pair.
+    const listTop = r(document.querySelector('.todo-panel .home-navigation-scroll'))?.top ?? 0
     const project = Array.from(document.querySelectorAll('.todo-panel .todo-group-project-header')).map((el) => el.getBoundingClientRect())
-      .filter((b) => b.height > 0 && b.bottom > 0).sort((a, b) => a.top - b.top)[0] ?? null
+      .filter((b) => b.height > 0 && b.bottom > listTop).sort((a, b) => a.top - b.top)[0] ?? null
     return { section: section && { top: section.top, bottom: section.bottom }, project: project && { top: project.top, bottom: project.bottom } }
   })
   expect(boxes.section && boxes.project).toBeTruthy()
@@ -144,16 +151,17 @@ test('N14: a stuck project header sits below the stuck section heading, never un
   expect(errors).toEqual([])
 })
 
-test('N17: the task panel footer keeps its words above the home indicator', async ({ page }) => {
+test('N17: the task panel\'s last status section keeps its words above the home indicator', async ({ page }) => {
   const errors = await bootHome(page)
   await injectSafeArea(page, { top: 47, bottom: 34 })
-  const footer = page.getByTestId('todo-filter-footer').first()
-  await expect(footer).toBeVisible({ timeout: 15_000 })
-  // R3-03: the footer is the list's last line on a phone; scroll to the end of the list.
+  // The filter footer is gone; the folded Waiting / snoozed and Completed sections
+  // close the list now (R3-03: the list's last lines on a phone).
+  const last = page.locator('.main-page-todo .home-navigation-scroll .status-section-heading').last()
+  await expect(last).toBeVisible({ timeout: 15_000 })
   await page.locator('.main-page-todo .home-navigation-scroll').evaluate((el) => { el.scrollTop = el.scrollHeight })
   await page.waitForTimeout(300)
   const vh = page.viewportSize()!.height
-  const words = await footer.evaluate((el) => {
+  const words = await last.evaluate((el) => {
     let bottom = 0
     const w = document.createTreeWalker(el, NodeFilter.SHOW_TEXT)
     for (let n = w.nextNode(); n; n = w.nextNode()) {
@@ -165,7 +173,7 @@ test('N17: the task panel footer keeps its words above the home indicator', asyn
   })
   expect(words).toBeGreaterThan(0)
   expect(words).toBeLessThanOrEqual(vh - 34 + 0.5)
-  await shot(page, 'n17-footer-safe')
+  await shot(page, 'n17-sections-safe')
   expect(errors).toEqual([])
 })
 

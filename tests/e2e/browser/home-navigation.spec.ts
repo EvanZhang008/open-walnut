@@ -1,5 +1,6 @@
 import { test, expect, type Locator, type Page } from '@playwright/test';
 import { isolateUiPrefs, openListProject } from './todo-panel-helpers';
+import { presetPanelDesign } from './status-section-helpers';
 import { openChatOnLoad } from './draft-helpers';
 import { activeView, chooseViewOption, closeViewMenu, homeToolbar, openHome, openViewMenu } from './home-navigation-helpers';
 import { addFilter, chooseDisplayOption, closeFilterMenu, displayButton, filterChip, openViewsPage, removeFilterChip } from './filter-bar-helpers';
@@ -11,12 +12,17 @@ test.setTimeout(120_000);
 
 async function boot(page: Page, baseURL: string) {
   await isolateUiPrefs(page);
+  // The grid checks place a task that needs you in its tier and project; List + shelf
+  // keeps it there (By status, the default, draws it in the Needs you section).
+  await presetPanelDesign(page, 'shelf');
   // These tests are about tier headings. A user who never picked a tier sees none while one
   // tier holds cards (spec 5.10, pinned in filter-bar-board.spec.ts), so mark one picked.
   await page.addInitScript(() => localStorage.setItem('walnut-todo-tier-used', '1'));
   await openHome(page, baseURL);
 }
 const navigation = (page: Page) => page.locator('#home-task-navigation');
+/** A navigation region's heading; the status sections' headings share the class but not the role. */
+const NAV_HEADING = '.navigation-heading:not(.status-section-heading)';
 const heading = (page: Page, id: string) => navigation(page).locator(`[data-navigation-id="${id}"]`);
 const railApp = (page: Page, id: string) => page.getByTestId(`sidebar-core-app-${id}`);
 /** The home session columns' sessions, left to right. */
@@ -103,7 +109,9 @@ test('rail, toolbar, menu-only filters, trailing chevrons and responsive layouts
 
   // No Panels section: the list opens on Pinned, and Notes / Calendar are reached from the rail.
   for (const id of ['panels', 'notes', 'calendar']) await expect(heading(page, id)).toHaveCount(0);
-  expect(await navigation(page).locator('.navigation-heading').first().getAttribute('data-navigation-id')).toBe('pinned');
+  // The status sections' headings (Watching, Waiting / snoozed, Completed) share the
+  // heading style but are not navigation regions; NAV_HEADING leaves them out.
+  expect(await navigation(page).locator(NAV_HEADING).first().getAttribute('data-navigation-id')).toBe('pinned');
 
   // Chevrons trail the name, on section headings and on project headers.
   expect(await right(page, '#home-task-navigation [data-navigation-id="pinned"] .navigation-chevron'))
@@ -498,7 +506,7 @@ test('empty tiers stay hidden, heading menus organize and fold, and the panel hi
   await expect(heading(page, 'pinned')).toBeVisible();
   await expect(navigation(page).getByTestId('todo-pinned-empty')).toHaveText(/Nothing pinned yet/);
   await expect(navigation(page).locator('.todo-pinned-subgroup-heading')).toHaveCount(0);
-  expect(await navigation(page).locator('.navigation-heading').evaluateAll(els => els.map(el => el.getAttribute('data-navigation-id'))))
+  expect(await navigation(page).locator(NAV_HEADING).evaluateAll(els => els.map(el => el.getAttribute('data-navigation-id'))))
     .toEqual(['pinned', 'tasks']);
   await page.screenshot({ path: `${SHOTS}/${test.info().project.name}-empty-tiers.png`, clip: { x: 0, y: 0, width: 640, height: 480 } });
   expect(errors).toEqual([]);
@@ -1222,6 +1230,9 @@ test('the Scratchpad is a Home panel in the rail, sharing the side column with t
 test('a fold keeps the clicked row where it was, and a tier folds only its own project run', async ({ page, baseURL }) => {
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
+  // The panel's layout switch (panel-design.ts) takes a row above the list, so the
+  // labels under test need a taller window to start in view with 40px to spare.
+  await page.setViewportSize({ width: 1280, height: 900 });
   // First boot only: an older build's fold record (one set shared by every tier) with
   // Meadowlark folded, and every tier open so the panel has room to scroll. A reload
   // keeps whatever the test saved.

@@ -21,6 +21,7 @@ import { PluginFieldsSection } from './PluginFieldPicker';
 import { WorkspaceMenuSection } from '@/components/workspaces/WorkspaceMenuSection';
 import { QuoteInSessionItem } from './QuoteInSessionItem';
 import { TeamMenuItems } from './TeamMenuItems';
+import { WatchMenuItem } from './WatchToggle';
 import { TransferMenuItem } from '@/components/transfer/TransferMenuItem';
 import { SnoozeUntilEvent, TaskStatusMenuSection } from './TaskStatusControl';
 import type { DraftTaskField } from '@/components/sessions/draft-column';
@@ -648,6 +649,9 @@ export function TaskKebabMenu({ task, isFocused, isDetailOpen, isPinned, pinnedT
             <span className="task-kebab-icon">{ICONS.ICON_INFO}</span>
             <span>{isDetailOpen ? 'Close details' : 'Details'}</span>
           </button>
+
+          {/* Watch — keep it on top of the task panel whatever its state (WatchToggle.tsx). */}
+          <WatchMenuItem task={task} afterAction={closeMenu} />
 
           {/* Quote in session — hand this task to the current session's composer as a
               reference pill (never sends). Sits next to Details: both are "look at

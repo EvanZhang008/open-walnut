@@ -907,6 +907,13 @@ export interface Task {
    *  waits until something else happens. Cleared by every move out of WAITING.
    *  Local-only, payload blob; never pushed to sync backends. */
   wait_until?: string;
+  /** WATCH: when the user started watching the task (ISO datetime); absent = not watched.
+   *  A watched task stays in front of the user in a Watching section at the top of the
+   *  home task panel whatever its phase (an open, waiting or completed task alike). It
+   *  changes nothing else: not the phase, the board tier, the pin or the read marker.
+   *  Set by the user or an agent (`task_update`), '' clears it. Local-only, payload blob,
+   *  never pushed to sync backends; an older Walnut keeps it in the payload and ignores it. */
+  watched_at?: string;
   /** The session's own plain-words report of its last turn for the user (the self-report's
    *  FOR_USER_* lines): state, ask, what it waits on, now, next, when. Local-only, payload blob. */
   status_report?: StatusReport;

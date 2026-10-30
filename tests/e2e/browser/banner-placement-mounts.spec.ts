@@ -36,33 +36,30 @@ test.beforeAll(async ({ request }) => {
 })
 
 test.describe('the task panel is the Home mount', () => {
-  test('BP-C1: default Home: exactly one card, in the bottom section after the list and tabs, next to the footer; none in the slot', async ({ page }) => {
+  test('BP-C1: default Home: exactly one card, in the bottom section after the list, its status sections and the tabs, the panel\'s last element; none in the slot', async ({ page }) => {
     // The slot is shown, so "none in the slot" is a claim about a mounted slot.
     await bpSetup(page, { before: chatShownLayout })
     await expandSystemAttention(page)
     await expectTasksCard(page)
     await expect(page.locator('.main-page-chat [data-testid="attention-banner"]')).toHaveCount(0)
+    // The filter footer that used to follow the card is gone; the folded Waiting /
+    // snoozed and Completed sections now close the list, inside its scroller, so
+    // the card is the panel's last element and comes after them.
     const order = await banner(page).evaluate((card) => {
       const panel = card.closest('.todo-panel')!
       const toolbar = panel.querySelector('.todo-panel-toolbar')!
       const list = panel.querySelector('.todo-panel-list')
       const tabs = panel.querySelector('.todo-section-tabs-list')
+      const sections = [...panel.querySelectorAll('.status-section')]
       const section = card.closest('.system-attention')!
       const mount = section.closest('.ab-mount')!
-      const footer = panel.querySelector('.todo-filter-footer')
       const after = (a: Element | null, b: Element) => !a || !!(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING)
       return {
         afterToolbar: after(toolbar, section), afterList: after(list, section), afterTabs: after(tabs, section), hasList: !!list,
-        bottom: footer ? mount.nextElementSibling === footer : mount === panel.lastElementChild,
+        afterSections: sections.every((s) => after(s, section)), bottom: mount === panel.lastElementChild,
       }
     })
-    expect(order).toEqual({ afterToolbar: true, afterList: true, afterTabs: true, hasList: true, bottom: true })
-    const sectionBox = (await page.locator('.todo-panel .system-attention').boundingBox())!
-    const footer = page.getByTestId('todo-filter-footer')
-    if (await footer.count()) {
-      const footerBox = (await footer.boundingBox())!
-      expect(Math.abs(footerBox.y - sectionBox.y - sectionBox.height)).toBeLessThanOrEqual(1)
-    }
+    expect(order).toEqual({ afterToolbar: true, afterList: true, afterTabs: true, hasList: true, afterSections: true, bottom: true })
     await banner(page).screenshot({ path: `${BP_SHOTS}/c1-tasks-card.png` })
   })
 
@@ -78,11 +75,10 @@ test.describe('the task panel is the Home mount', () => {
       const section = (await page.locator('.todo-panel .system-attention').boundingBox())!
       return section.y - list.y - list.height;
     }).toBeGreaterThanOrEqual(-1)
+    // No footer below it any more: the card ends at the panel's bottom edge.
     const section = (await page.locator('.todo-panel .system-attention').boundingBox())!
     const panel = (await page.locator('.todo-panel').boundingBox())!
-    const footer = page.getByTestId('todo-filter-footer')
-    const nextY = await footer.count() ? (await footer.boundingBox())!.y : panel.y + panel.height
-    expect(Math.abs(section.y + section.height - nextY)).toBeLessThanOrEqual(2)
+    expect(Math.abs(section.y + section.height - (panel.y + panel.height))).toBeLessThanOrEqual(2)
     await expect(banner(page)).toBeInViewport()
     await page.screenshot({ path: `${BP_SHOTS}/c2-webkit-980x800.png` })
   })

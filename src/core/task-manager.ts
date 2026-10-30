@@ -4075,6 +4075,9 @@ export interface UpdateTaskInput {
    *  only while the task is WAITING after this update; applyPhase clears it on
    *  every move out. */
   wait_until?: string;
+  /** Watch the task (Task.watched_at): an ISO datetime starts watching, '' stops.
+   *  Touches no phase, tier, pin or read marker. */
+  watched_at?: string;
 }
 
 // ── Cross-source migration ──
@@ -4480,6 +4483,9 @@ export async function updateTask(
   if (updates.start_date !== undefined) task.start_date = updates.start_date || undefined;
   if (updates.end_date !== undefined) task.end_date = updates.end_date || undefined;
   if (updates.unread !== undefined) task.unread = updates.unread;
+  // '' stops watching: the key goes, so the row holds no watch at all.
+  if (updates.watched_at) task.watched_at = updates.watched_at;
+  else if (updates.watched_at !== undefined) delete task.watched_at;
   // Stored as presence-only (true or absent), mirroring addTask.
   if (updates.walnut_agent !== undefined) task.walnut_agent = updates.walnut_agent || undefined;
   // Track parent change for plugin notification (fired after writeStore)

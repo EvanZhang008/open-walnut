@@ -1,13 +1,14 @@
 /**
  * Phone home, review round 4 (R3-02 .. R3-04): rows hold still from their first
- * paint, a single-tier tab scrolls with the page and runs down to a one-line
- * footer, and a row's title keeps most of the row however many pills it has.
+ * paint, a single-tier tab scrolls with the page and runs down to its one-line
+ * status sections, and a row's title keeps most of the row however many pills it has.
  * WebKit with devices['iPhone 15'] first, chromium too.
  */
 import fs from 'node:fs/promises'
 import { expect, test, type Page } from '@playwright/test'
 import { PHONE, findSmallTargets } from './phone-helpers'
 import { isolateUiPrefs } from './todo-panel-helpers'
+import { presetPanelDesign } from './status-section-helpers'
 import { bpSetup } from './banner-placement-helpers'
 import { banner, failed, resetServerHostFixture } from './host-problems-helpers'
 
@@ -27,6 +28,10 @@ test.use({
 
 async function phoneHome(page: Page): Promise<void> {
   await isolateUiPrefs(page)
+  // List + shelf: the phone's Needs-you strip (R3-02) and a task that needs you as its
+  // full card in the list (R3-04) are its parts; By status, the default, shows those
+  // tasks in its Needs you section instead.
+  await presetPanelDesign(page, 'shelf')
   await page.addInitScript(() => {
     try { localStorage.setItem('open-walnut-home-chat-visible', 'false') } catch { /* storage off */ }
   })
@@ -104,7 +109,7 @@ const TAB_SIZES = [
 ] as const
 
 for (const size of TAB_SIZES) {
-  test(`R3-03: a single-tier tab scrolls with the page, runs to a one-line footer, three rows on the first screen (${size.name})`, async ({ page }) => {
+  test(`R3-03: a single-tier tab scrolls with the page, runs to one-line status sections, three rows on the first screen (${size.name})`, async ({ page }) => {
     await phoneHome(page)
     await page.addInitScript(() => {
       try {
@@ -138,20 +143,25 @@ for (const size of TAB_SIZES) {
     })
     expect(geo.scrollers, 'one scroller, like Mail').toEqual(['home-navigation-scroll'])
     expect(geo.full).toBeGreaterThanOrEqual(3)
-    // At the end of the list: the footer is the last line, one line high, right under the last row.
+    // At the end of the list: the folded status sections (which replaced the footer)
+    // are its last lines, each one line high, the first right under the last row.
     const end = await page.evaluate(async () => {
       const sc = document.querySelector<HTMLElement>('.main-page-todo .home-navigation-scroll')!
       sc.scrollTop = sc.scrollHeight
       await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))
-      const foot = sc.querySelector<HTMLElement>('.todo-filter-footer')
-      const cards = [...sc.querySelectorAll('.todo-pinned-card')]
-      const last = cards[cards.length - 1]!.getBoundingClientRect()
+      const heads = [...sc.querySelectorAll<HTMLElement>('.status-section-block-waiting > .status-section-heading, .status-section-block-done > .status-section-heading')]
+      const cards = [...sc.querySelectorAll('.todo-pinned-card:not(.status-section-card)')]
       const b = sc.getBoundingClientRect()
-      if (!foot) return { foot: false, gap: 0, height: 0, inView: false }
-      const f = foot.getBoundingClientRect()
-      return { foot: true, gap: f.top - last.bottom, height: f.height, inView: f.bottom <= b.bottom + 1 && f.top >= b.top }
+      if (!heads.length || !cards.length) return { heads: false, gap: 0, height: 0, inView: false }
+      const last = cards[cards.length - 1]!.getBoundingClientRect()
+      const first = heads[0]!.getBoundingClientRect()
+      const lastHead = heads[heads.length - 1]!.getBoundingClientRect()
+      return {
+        heads: true, gap: first.top - last.bottom, height: Math.max(...heads.map((h) => h.getBoundingClientRect().height)),
+        inView: lastHead.bottom <= b.bottom + 1 && lastHead.top >= b.top,
+      }
     })
-    if (end.foot) {
+    if (end.heads) {
       expect(end.inView).toBe(true)
       expect(end.height).toBeLessThanOrEqual(52)
       expect(end.gap).toBeLessThanOrEqual(80)

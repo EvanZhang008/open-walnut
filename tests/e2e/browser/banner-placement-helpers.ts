@@ -208,18 +208,16 @@ export async function bpSetup(page: Page, opts: BpOptions = {}): Promise<Hosts> 
   return h
 }
 
-/** After the bottom card's final stop, focus continues to the footer or the next visible control. */
+/** After the bottom card's final stop, focus continues to the next visible control. */
 export async function expectFocusAfterSystemAttention(page: Page): Promise<void> {
   const state = await page.locator('.todo-panel > .ab-mount').evaluate((mount) => {
     const active = document.activeElement as HTMLElement | null
-    const footer = mount.nextElementSibling
-    const footerButton = footer?.matches('.todo-filter-footer')
-      ? footer.querySelector<HTMLElement>('button:not([disabled])') : null
     const stops = Array.from(document.querySelectorAll<HTMLElement>('button:not([disabled]), [href], input, select, textarea, [tabindex]'))
       .filter((el) => el.tabIndex >= 0 && !el.matches(':disabled') && !el.closest('[hidden], [inert]')
         && el.getBoundingClientRect().width > 0 && el.getBoundingClientRect().height > 0 && getComputedStyle(el).visibility !== 'hidden')
-    // Without a footer, Tab may continue to another panel or wrap to the first page control.
-    const next = footerButton ?? stops.find((el) => !mount.contains(el)
+    // The card is the panel's last element (the filter footer that followed it is gone):
+    // Tab continues to another panel or wraps to the first page control.
+    const next = stops.find((el) => !mount.contains(el)
       && !!(mount.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING)) ?? stops[0]
     return {
       body: active === document.body,

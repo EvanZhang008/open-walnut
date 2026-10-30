@@ -233,6 +233,9 @@ export interface UpdateTaskInput {
   unread?: boolean;
   /** WAITING only: when the server wakes the task by itself (ISO datetime), '' to clear. */
   wait_until?: string;
+  /** Watch: when the user started watching (ISO datetime), '' to stop. Keeps the task in the
+   *  Watching section on top of the home task panel whatever its phase. */
+  watched_at?: string;
   parent_task_id?: string;  // Set parent (task ID) or '' to remove parent
   sprint?: string;  // Set sprint name or '' to clear
   add_tags?: string[];
