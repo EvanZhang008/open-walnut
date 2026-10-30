@@ -54,8 +54,11 @@ export function buildReviewSession(nowMs: number): ThreadsFixtureSession & { ids
         ? `Two cases:\n\n- **Before the seal**: the page is dropped.\n- **After the seal**: the index keeps the old copy.\n\n${filler(400 + r, 30)}`
         : i === 0 && r === 2
           ? `The guard is one line:\n\n\`\`\`ts\n${REVIEW_ROUND_CODE}\n\`\`\`\n\nAn older copy never wins.`
-          // Live replies start with their question's tag line (question-tag.ts).
-          : `[Q${i + 1}]\n${filler(500 + i * 3 + r, 50)}`
+          // A table: the card grows wide when it opens (review sidebar spec).
+          : i === 6
+            ? `[Q${i + 1}]\nThe order:\n\n| Step | Holds |\n|---|---|\n| Seal | the slot |\n| Flush | the page |\n\n${filler(500 + i * 3 + r, 50)}`
+            // Live replies start with their question's tag line (question-tag.ts).
+            : `[Q${i + 1}]\n${filler(500 + i * 3 + r, 50)}`
       const t = turn(r === 0 ? `> ${passage}\n\n${q}` : q, answer)
       if (r === 0) heads.push(t.u)
       anchors.push({ msgId: t.u, parent: root.a, quote: { exact: passage }, source: r === 0 ? 'selection' : 'sticky', at: at(n) })

@@ -332,13 +332,44 @@ test.describe('the fullscreen review sidebar', () => {
     await expect(box).toHaveValue('half a thought')
     await box.fill('')
 
+    // Every scroll into view a card asks for: its scroll margin moves the box
+    // even when the card is on screen (2026-10-29: 40px on prod).
+    await page.evaluate(() => {
+      const w = window as unknown as { __cardScrolls: string[] }
+      w.__cardScrolls = []
+      const siv = Element.prototype.scrollIntoView
+      Element.prototype.scrollIntoView = function (this: Element, ...args: Parameters<Element['scrollIntoView']>) {
+        if (this.classList.contains('thread-card')) w.__cardScrolls.push(this.className)
+        return siv.apply(this, args)
+      }
+    })
+    const cardScrolls = () => page.evaluate(() => (window as unknown as { __cardScrolls: string[] }).__cardScrolls.splice(0))
+    const openByMenu = async (i: number) => {
+      await centreInHistory(page, panel, reviewPassage(i).slice(0, 30), { at: 0.3 })
+      const r = (await passageRects(panel, reviewPassage(i).slice(0, 30), '[data-message-id][data-msg-role="assistant"]'))[0]
+      await page.mouse.click(r.left + 20, r.top + r.height / 2, { button: 'right' })
+      await cardScrolls()
+      const at = await history.evaluate((el) => el.scrollTop)
+      await page.getByTestId('thread-mark-menu').getByText('Open question').click()
+      await expect(card.locator('.thread-card-title')).toHaveText(REVIEW_TITLES[i])
+      return at
+    }
+    // A question whose answer holds a table opens grown, over its row, and
+    // nothing scrolls the timeline (it is on screen by placement).
+    const atTable = await openByMenu(6)
+    await expect(card, 'its table grew it').toHaveClass(/is-expanded/)
+    await page.waitForTimeout(700)
+    expect(Math.abs((await history.evaluate((el) => el.scrollTop)) - atTable), 'the timeline stays put').toBeLessThan(2)
+    expect(await cardScrolls(), 'no scroll into view over its row').toEqual([])
+    await page.keyboard.press('Escape')
+    await expect(card).toHaveCount(0)
+
     // The question of three rounds, opened from its mark's right-click menu:
     // every round, the code block in full.
-    await centreInHistory(page, panel, reviewPassage(0).slice(0, 30), { at: 0.3 })
-    const r0 = (await passageRects(panel, reviewPassage(0).slice(0, 30), '[data-message-id][data-msg-role="assistant"]'))[0]
-    await page.mouse.click(r0.left + 20, r0.top + r0.height / 2, { button: 'right' })
-    await page.getByTestId('thread-mark-menu').getByText('Open question').click()
-    await expect(card.locator('.thread-card-title')).toHaveText(REVIEW_TITLES[0])
+    const atOpen = await openByMenu(0)
+    await page.waitForTimeout(400)
+    expect(Math.abs((await history.evaluate((el) => el.scrollTop)) - atOpen), 'the timeline stays put').toBeLessThan(2)
+    expect(await cardScrolls(), 'no scroll into view over its row').toEqual([])
     await expect(card.locator('.thread-card-q')).toHaveCount(REVIEW_ROUNDS.length)
     await expect(card.locator('.thread-card-body pre')).toContainText(REVIEW_ROUND_CODE)
     const first = sidebarCards(panel).filter({ hasText: REVIEW_TITLES[0] })

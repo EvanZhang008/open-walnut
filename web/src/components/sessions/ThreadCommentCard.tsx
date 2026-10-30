@@ -175,6 +175,8 @@ export const ThreadCommentCard = memo(function ThreadCommentCard(p: ThreadCommen
   // Full screen (⤢ with a `fillRef`): left when the card stops lying over a
   // review card, and for every new question.
   const canFill = !!p.fillRef;
+  const canFillRef = useRef(canFill);
+  canFillRef.current = canFill;
   const [full, setFull] = useState(false);
   useEffect(() => { if (!canFill) setFull(false); }, [canFill]);
   const fill = useFillBox(full && canFill, p.fillRef);
@@ -219,7 +221,8 @@ export const ThreadCommentCard = memo(function ThreadCommentCard(p: ThreadCommen
     const t = window.setTimeout(() => {
       setSizing(false);
       const card = cardRef.current;
-      if (!expanded || !card) return;
+      // Over its review row the card is placed on screen already (useThreadCardPlace).
+      if (!expanded || !card || canFillRef.current) return;
       const boxes = scrollBoxesOf(card);
       const before = boxes.map((el) => el.scrollTop);
       card.scrollIntoView({ block: 'nearest', inline: 'nearest' });
@@ -231,8 +234,10 @@ export const ThreadCommentCard = memo(function ThreadCommentCard(p: ThreadCommen
 
   // Placed below a passage near the bottom of the box, the card would hang
   // under the fold: the smallest scroll that shows it whole (none when it is).
+  // Not over a review row: placed on screen there, and its scroll margin would
+  // still move the timeline (2026-10-29, 40px on prod).
   useLayoutEffect(() => {
-    cardRef.current?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    if (!canFillRef.current) cardRef.current?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   }, [p.threadKey]);
 
   // The answer grows: follow it while the reader has not scrolled up.
