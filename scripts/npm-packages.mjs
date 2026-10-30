@@ -214,6 +214,19 @@ export function npmNeedsAuth(output) {
 
 const sleepSync = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
 
+/**
+ * A failure outside Walnut that a later try can pass: the signing service's transparency log
+ * (2026-10-30: npm's own retry of a provenance upload met "409 an equivalent entry already
+ * exists", TLOG_CREATE_ENTRY_ERROR, and stopped the stable promotion), a registry 5xx, or the
+ * network. A refusal of the package itself is not one.
+ */
+export function npmTransient(output) {
+  return /\bTLOG_CREATE_ENTRY_ERROR\b|\bE5\d\d\b|npm error (?:code )?5\d\d\b|\b(?:ETIMEDOUT|ECONNRESET|ECONNREFUSED|EAI_AGAIN)\b/.test(output)
+}
+
+/** How often a transient publish failure is tried again, and the wait before each try (times the try). */
+export const PUBLISH_RETRY = { tries: 3, delayMs: 30_000 }
+
 /** The registry installers read: --registry, else npm's own environment setting, else npm's default. */
 export function probeRegistry(registry = null, env = process.env) {
   return (registry || env.npm_config_registry || env.NPM_CONFIG_REGISTRY || 'https://registry.npmjs.org').replace(/\/+$/, '')
@@ -270,7 +283,7 @@ export function waitUntilVisible(pkgs, { sees = installerSees, registry = probeR
   }
 }
 
-export function publishPackages({ dir, tag, provenance = false, dryRun = false, registry = null, run = spawnSync, log = (l) => process.stdout.write(`${l}\n`), waitVisible = waitUntilVisible, has = onRegistry, exists = packageExists }) {
+export function publishPackages({ dir, tag, provenance = false, dryRun = false, registry = null, run = spawnSync, log = (l) => process.stdout.write(`${l}\n`), waitVisible = waitUntilVisible, has = onRegistry, exists = packageExists, retry = PUBLISH_RETRY, sleep = sleepSync }) {
   if (!tag) throw new Error('publish needs --tag (latest or nightly)')
   const extra = registry ? ['--registry', registry] : []
   const platforms = []
@@ -282,8 +295,19 @@ export function publishPackages({ dir, tag, provenance = false, dryRun = false, 
     if (name !== LAUNCHER) platforms.push([name, version])
     if (!dryRun && has(name, version, extra)) { log(`${name}@${version} is already on npm; not publishing it again`); continue }
     const args = ['publish', pkg, '--tag', tag, '--access', 'public', ...(provenance ? ['--provenance'] : []), ...(dryRun ? ['--dry-run'] : []), ...extra]
-    const r = run('npm', args, { encoding: 'utf8', timeout: 20 * 60_000, maxBuffer: 64 << 20 })
-    const output = npmOut(r)
+    let r
+    let output = ''
+    let landed = false
+    for (let attempt = 1; ; attempt++) {
+      r = run('npm', args, { encoding: 'utf8', timeout: 20 * 60_000, maxBuffer: 64 << 20 })
+      output = npmOut(r)
+      if (r.status === 0 || attempt >= retry.tries || !npmTransient(output) || npmHoldsVersion(output, version)) break
+      log(`npm publish ${name}@${version} failed outside Walnut (try ${attempt} of ${retry.tries}); trying again`)
+      sleep(retry.delayMs * attempt)
+      // The failed try may have been published after all.
+      if (!dryRun && has(name, version, extra)) { landed = true; break }
+    }
+    if (landed) { log(`${name}@${version} reached npm on a failed try; not publishing it again`); continue }
     if (r.status !== 0) {
       if (npmHoldsVersion(output, version)) { log(`npm already holds ${name}@${version} (published, or still being processed); not publishing it again`); continue }
       // Trusted publishing only works for a package that exists and names this workflow:

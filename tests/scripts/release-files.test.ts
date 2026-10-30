@@ -15,7 +15,7 @@ import path from 'node:path'
 import zlib from 'node:zlib'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { TARGETS, assetName, builtName, fileName, filesIn, writeAssets } from '../../scripts/release-files.mjs'
-import { INSTALL_ACCEPT, LAUNCHER, LAUNCHER_LIB, buildPackages, installerSees, launcherManifest, npmNeedsAuth, NPM_RESERVED, platformManifest, probeRegistry, publishOrder, publishPackages, waitUntilVisible } from '../../scripts/npm-packages.mjs'
+import { INSTALL_ACCEPT, LAUNCHER, LAUNCHER_LIB, buildPackages, installerSees, launcherManifest, npmNeedsAuth, npmTransient, NPM_RESERVED, platformManifest, probeRegistry, publishOrder, publishPackages, waitUntilVisible } from '../../scripts/npm-packages.mjs'
 import { createRequire } from 'node:module'
 import { formula } from '../../scripts/homebrew/formula.mjs'
 import { hostTarget } from '../../scripts/release-build.mjs'
@@ -167,11 +167,47 @@ describe('npm-packages.mjs', () => {
     expect(() => publishPackages({ dir: out, tag: 'latest', dryRun: true, run: taken, log: () => {} })).not.toThrow()
     expect(seen).toHaveLength(TARGETS.length + 1)
     seen.length = 0
-    const broken = ((_cmd: string, args: string[]) => { seen.push(path.basename(args[1])); return { status: 1, stdout: '', stderr: 'npm error 500 Internal Server Error' } }) as never
+    const broken = ((_cmd: string, args: string[]) => { seen.push(path.basename(args[1])); return { status: 1, stdout: '', stderr: 'npm error 400 Bad Request - invalid package' } }) as never
     expect(() => publishPackages({ dir: out, tag: 'latest', dryRun: true, run: broken, log: () => {} })).toThrow(/exited 1/)
     expect(seen).toHaveLength(1)
     expect(seen).not.toContain(LAUNCHER)
     expect(() => publishPackages({ dir: out, tag: '', dryRun: true, run: broken })).toThrow(/needs --tag/)
+  })
+
+  it('a failure outside Walnut is tried again, a version that landed on a failed try is not published twice, and the tries run out', () => {
+    // 2026-10-30: the stable promotion stopped on the signing log's "equivalent entry already exists".
+    const tlog = { status: 1, stdout: '', stderr: 'npm error code TLOG_CREATE_ENTRY_ERROR\nnpm error error creating tlog entry - (409) an equivalent entry already exists in the transparency log' }
+    const quiet = { dir: out, tag: 'latest', has: () => false, log: () => {}, waitVisible: (() => {}) as never, retry: { tries: 3, delayMs: 1 }, sleep: () => {} }
+    const tries = new Map<string, number>()
+    const flaky = ((_cmd: string, args: string[]) => {
+      const n = (tries.get(args[1]) ?? 0) + 1
+      tries.set(args[1], n)
+      return n === 1 ? tlog : { status: 0, stdout: '', stderr: '' }
+    }) as never
+    const lines: string[] = []
+    publishPackages({ ...quiet, run: flaky, log: (l) => lines.push(l) })
+    expect([...tries.values()]).toEqual(Array(TARGETS.length + 1).fill(2))
+    expect(lines.at(-1)).toBe(`published open-walnut@${VERSION} (latest)`)
+
+    // The failed try reached npm after all: checked before trying again, not published twice.
+    const calls: string[] = []
+    const landed = new Set<string>()
+    const once = ((_cmd: string, args: string[]) => {
+      calls.push(path.basename(args[1]))
+      landed.add(JSON.parse(fs.readFileSync(path.join(args[1], 'package.json'), 'utf8')).name)
+      return tlog
+    }) as never
+    publishPackages({ ...quiet, run: once, has: (name: string) => landed.has(name) })
+    expect(calls).toHaveLength(TARGETS.length + 1)
+
+    // Still failing after every try: it stops there, before the launcher.
+    calls.length = 0
+    const down = ((_cmd: string, args: string[]) => { calls.push(path.basename(args[1])); return { status: 1, stdout: '', stderr: 'npm error 503 Service Unavailable' } }) as never
+    expect(() => publishPackages({ ...quiet, run: down })).toThrow(/exited 1:[\s\S]*503/)
+    expect(calls).toHaveLength(3)
+    expect(calls).not.toContain(LAUNCHER)
+    expect(npmTransient('npm error 400 Bad Request')).toBe(false)
+    expect(npmTransient('npm error code ECONNRESET')).toBe(true)
   })
 
   it('a package npm has never held says it needs its owner\'s setup; a login refusal for one that exists stays as npm said it', () => {
