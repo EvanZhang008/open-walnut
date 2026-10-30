@@ -53,6 +53,28 @@ export function localProviderBaseUrl(prov: Pick<ProviderConfig, 'api' | 'base_ur
 export const LOCAL_PROBE_TIMEOUT_MS = 1500;
 
 /**
+ * The model ids the server lists (Ollama's `/api/tags` names, the OpenAI-style
+ * `/models` ids), or null when it did not answer with a list. Never throws.
+ */
+export async function listLocalModelIds(
+  prov: Pick<ProviderConfig, 'api' | 'base_url' | 'api_key'>,
+  timeoutMs = 3000,
+): Promise<string[] | null> {
+  try {
+    // A server started with a key (vLLM --api-key) lists its models only with it.
+    const headers: Record<string, string> = prov.api_key ? { authorization: `Bearer ${prov.api_key}` } : {};
+    const res = await fetch(localProviderProbeUrl(prov), { headers, signal: AbortSignal.timeout(timeoutMs) });
+    if (!res.ok) { await res.body?.cancel().catch(() => {}); return null; }
+    const body = await res.json() as { models?: Array<{ name?: unknown }>; data?: Array<{ id?: unknown }> };
+    const rows = prov.api === 'ollama' ? body.models?.map((m) => m?.name) : body.data?.map((m) => m?.id);
+    if (!Array.isArray(rows)) return null;
+    return rows.filter((id): id is string => typeof id === 'string' && id.length > 0);
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Does the server answer? Any HTTP response counts (a 401 from a server that
  * wants a key still proves it is up; the call itself will say what is wrong).
  * Only a refused connection, a timeout or a bad URL reads as down. Never throws.

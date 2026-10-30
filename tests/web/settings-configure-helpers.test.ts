@@ -62,6 +62,8 @@ describe('summaries and result lines are plain words', () => {
     expect(providersSummary('custom', 'OpenRouter')).toBe('On, OpenRouter')
     expect(providersSummary(undefined, undefined)).toBe('')
     expect(testResultText({ kind: 'ok', ms: 42 })).toBe('Connected in 42 ms')
+    // A local server is tested on the model Walnut calls there: the line names it.
+    expect(testResultText({ kind: 'ok', ms: 2310, model: 'qwen3-coder:30b' })).toBe('Connected to qwen3-coder:30b in 2310 ms')
     expect(testResultText({ kind: 'fail', error: 'timeout' })).toBe("Couldn't connect: timeout")
     expect(testResultText({ kind: 'idle' })).toBeNull()
     expect(jevTestText({ kind: 'ok', ms: 12.6, model: 'x' })).toBe('Connected in 13 ms')

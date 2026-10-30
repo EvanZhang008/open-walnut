@@ -43,8 +43,10 @@ export function watchClaudeSettings(onChange: () => void): () => void {
       log.session.warn('claude settings watch error', { error: err.message });
     });
   } catch (err) {
-    // Missing ~/.claude or unsupported fs — degrade to no watching.
-    log.session.warn('cannot watch claude settings', {
+    // Missing ~/.claude or unsupported fs — degrade to no watching. No ~/.claude is
+    // a machine without Claude Code (local models): nothing to say at warn level.
+    const missing = (err as NodeJS.ErrnoException)?.code === 'ENOENT';
+    log.session[missing ? 'info' : 'warn']('cannot watch claude settings', {
       error: err instanceof Error ? err.message : String(err),
     });
     return () => {};

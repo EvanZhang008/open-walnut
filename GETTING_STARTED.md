@@ -101,7 +101,7 @@ Open Walnut uses AI in three places, and by default all three run on the Claude 
 
 Claude Code brings its own login, whatever kind it is: an Anthropic account, Bedrock (`CLAUDE_CODE_USE_BEDROCK=1` in `~/.claude/settings.json`), or Vertex. Walnut inherits it as-is and never asks for a key of its own. The first-run banner names what it found ("Walnut runs on your Claude Code, signed in with Bedrock (us-west-2)").
 
-Settings → Ask Walnut Provider is the one place this is chosen, and it means exactly one thing: where the background single calls go. Ask Walnut and every other session run on Claude Code no matter what you pick, so choosing a provider here never changes who answers you in the chat: it changes which model writes your session titles, the compaction summaries, the voice transcript cleanup, and the small parses behind the draft forms. The paths below set up such a provider.
+Settings › Advanced › API provider is the one place this is chosen, and it means exactly one thing: where the background single calls go. Ask Walnut and every other session run on the default engine (Claude Code unless you pick another, see Path D) no matter what you pick here, so choosing a provider never changes who answers you in the chat: it changes which model writes your session titles, the compaction summaries, the voice transcript cleanup, and the small parses behind the draft forms. The paths below set up such a provider.
 
 ---
 
@@ -177,7 +177,7 @@ remove it again when you want updates (install.sh says so).
 
 ## Provider Configuration (optional)
 
-With Claude Code installed there is nothing to configure: it is the default provider for the background single calls too. The paths below are for sending those calls to a provider directly instead (Settings → Ask Walnut Provider, or `agent.main_provider` in `~/.open-walnut/config.yaml`). Choose **one**.
+With Claude Code installed there is nothing to configure: it is the default provider for the background single calls too. The paths below are for sending those calls to a provider directly instead (Settings › Advanced › API provider, or `agent.main_provider` in `~/.open-walnut/config.yaml`). Choose **one**.
 
 ### Path A: Anthropic API key
 
@@ -229,15 +229,21 @@ providers:
 
 ### Path D: Models on your own machine (Ollama, LM Studio, vLLM)
 
-Walnut can run with no cloud model and no Claude Code. Two settings decide it:
+Walnut can run with no cloud model and no Claude Code. Two settings decide it.
 
-1. **Walnut's own model calls** (titles, summaries, routine watchers, AI task search) go to the main provider. For Ollama:
+**Pick a model that can code.** Sessions edit files and run commands through tool calls, and a 7B or 8B model is too small for that: in our test `qwen3:8b` failed an edit and then reported success. A 30B-class coding model works: `qwen3-coder:30b` finished 2 of 2 coding tasks with passing tests (1.5 to 3 minutes each on an Apple M4 Pro with 48 GB). It needs about 20 GB of free memory.
+
+```bash
+ollama pull qwen3-coder:30b
+```
+
+1. **Walnut's own model calls** (titles, summaries, routine watchers, AI task search) go to the main provider. For Ollama, in `~/.open-walnut/config.yaml`:
 
    ```yaml
    agent:
      main_provider: ollama
-     main_model: qwen2.5:7b          # any model you pulled with `ollama pull`
-     fast_model: qwen2.5:3b          # optional: a smaller one for quick background calls
+     main_model: qwen3-coder:30b     # any model you pulled with `ollama pull`
+     fast_model: qwen3:8b            # optional: a smaller one for quick background calls
    providers:
      ollama:
        api: ollama
@@ -253,13 +259,32 @@ Walnut can run with no cloud model and no Claude Code. Two settings decide it:
      engine: opencode   # or goose, codex, or custom (engines.custom.adapter_cmd)
    ```
 
-   The engine's own config names the model (for OpenCode, a provider entry pointing at `http://localhost:11434/v1`). Walnut gives every engine its session instructions (role, team rules, task directory): Codex as developer instructions, the others on the first message of each conversation.
+   The engine's own config names the model. For OpenCode, put this in `~/.config/opencode/opencode.json` (the model id after `ollama/` is the name `ollama list` shows):
 
-With both set, the home page no longer asks you to install Claude Code. If your model server stops answering, it says so instead and clears by itself once the server is back. Search and voice input already run on your machine by default.
+   ```json
+   {
+     "$schema": "https://opencode.ai/config.json",
+     "provider": {
+       "ollama": {
+         "npm": "@ai-sdk/openai-compatible",
+         "name": "Ollama",
+         "options": { "baseURL": "http://localhost:11434/v1" },
+         "models": {
+           "qwen3-coder:30b": { "name": "Qwen3 Coder 30B" }
+         }
+       }
+     },
+     "model": "ollama/qwen3-coder:30b"
+   }
+   ```
+
+   Check it once with `opencode run "say hi"` before you start Walnut. A session sends the model a long system prompt and tool list, so give it room: if replies stop short or ignore the tools, start Ollama with a larger context (`OLLAMA_CONTEXT_LENGTH=32768 ollama serve`). Walnut gives every engine its session instructions (role, team rules, task directory): Codex as developer instructions, the others on the first message of each conversation.
+
+With both set, nothing asks you to install Claude Code: not the installer, not the home page, not the server log. If your model server stops answering, the home page says so instead and clears by itself once the server is back. Search and voice input already run on your machine by default.
 
 ### Verify Your Setup
 
-After starting the server (`bun run start` in a checkout, `open-walnut web` otherwise), open [http://localhost:3456](http://localhost:3456) and go to Settings → Ask Walnut Provider, then press Test Connection on the provider you configured. A green result means the key, region, and model are all usable. The home page chat is not the test for this: it runs on Claude Code either way.
+After starting the server (`bun run start` in a checkout, `open-walnut web` otherwise), open [http://localhost:3456](http://localhost:3456) and go to Settings › Advanced › API provider, then press Test connection on the provider you configured. A green result means the key, region, and model are all usable. For Ollama it sends one short request to your `main_model` (the first call may take a while as Ollama loads the model) and says when the server is not running or does not have that model. The home page chat is not the test for this: it runs on the default engine.
 
 ---
 
@@ -729,7 +754,7 @@ the command still reports this machine and says so.
 1. Verify Claude Code CLI: `claude --version`, then run `claude` once and check it answers
 2. Check session logs: `walnut logs -s session` for the spawn and the error it reported
 3. Check the session panel's own status pill: a red one names the failure (bad cwd, host unreachable, session limit reached)
-4. Only if titles and summaries are also failing, check the provider behind the background single calls: `~/.open-walnut/config.yaml`, and Settings → Ask Walnut Provider → Test Connection
+4. Only if titles and summaries are also failing, check the provider behind the background single calls: `~/.open-walnut/config.yaml`, and Settings › Advanced › API provider › Test connection
 
 ### Session fails to start
 

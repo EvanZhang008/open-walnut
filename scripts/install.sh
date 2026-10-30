@@ -279,10 +279,39 @@ finish() {
   mv -f "$staging/marker" "$install_dir/open-walnut-install.json"
   printf '\n  Installed Open Walnut %s\n\n' "$version" >&2
   path_hint
-  if ! command -v claude >/dev/null 2>&1 && [ ! -x "$HOME/.local/bin/claude" ]; then
-    printf '  Walnut runs its sessions with Claude Code: https://claude.com/product/claude-code\n' >&2
+  if ! command -v claude >/dev/null 2>&1 && [ ! -x "$HOME/.local/bin/claude" ] && ! runs_without_claude; then
+    printf '  Sessions run on Claude Code by default: https://claude.com/product/claude-code\n' >&2
+    printf '  To run them on your own models instead (Ollama with OpenCode), see\n' >&2
+    printf '  https://github.com/EvanZhang008/open-walnut/blob/main/GETTING_STARTED.md#path-d-models-on-your-own-machine-ollama-lm-studio-vllm\n' >&2
   fi
   printf '\n' >&2
+}
+
+# Does the user's config.yaml already run sessions on another engine, with Walnut's
+# own calls on a provider other than Claude Code (GETTING_STARTED Path D)? Then
+# Claude Code is not needed and the installer does not ask for it. The same rule
+# as the server's (src/core/agents/claude-code-needed.ts), read off the text.
+runs_without_claude() {
+  cfg="${OPEN_WALNUT_HOME:-$HOME/.open-walnut}/config.yaml"
+  [ -f "$cfg" ] || return 1
+  case "$(config_value "$cfg" defaults engine)" in
+    codex | gemini | opencode | goose | pi | dsh | custom) ;;
+    *) return 1 ;;
+  esac
+  [ "$(config_value "$cfg" agent main_provider)" != claude_cli ]
+}
+
+# One `key:` value under a top-level `section:` of a YAML file, unquoted, or nothing.
+config_value() {
+  awk -v want="$2:" -v key="$3" '
+    /^[^[:space:]#]/ { sec = $1; ind = -1; next }
+    sec != want || /^[[:space:]]*(#|$)/ { next }
+    {
+      match($0, /^[[:space:]]*/)
+      if (ind < 0) ind = RLENGTH
+      # Only the section own keys, never one of a nested map under it.
+      if (RLENGTH == ind && $1 == key ":") { v = $2; gsub(/["\047\r]/, "", v); print v; exit }
+    }' "$1" 2>/dev/null || true
 }
 
 # Does a process with this pid exist? kill -0 alone says no for another user's.

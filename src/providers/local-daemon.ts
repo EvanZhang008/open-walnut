@@ -50,6 +50,17 @@ import { registryNeedsFoldPrewarm, runFoldPrewarm } from './fold-prewarm.js'
 import { execFileReplaced, singleFile } from '../lib/single-file.js'
 import { isProductionDaemonDir, localDaemonDirChoice, localProductionDaemonDir } from '../lib/daemon-dir.js'
 
+/** True only when the config says nothing runs on Claude Code (core/agents/claude-code-needed.ts); a read that fails says it may. */
+async function claudeCodeNotNeeded(): Promise<boolean> {
+  try {
+    const { getConfig } = await import('../core/config-manager.js')
+    const { claudeCodeNeeded } = await import('../core/agents/claude-code-needed.js')
+    return !claudeCodeNeeded(await getConfig(), false)
+  } catch {
+    return false
+  }
+}
+
 // Env-aware default so the singleton (exported below) isolates a demo server's
 // daemon when WALNUT_DAEMON_DIR is set. Tests pass `daemonDir` explicitly and are
 // unaffected. Production sets nothing → /tmp/open-walnut, or ~/.cache/open-walnut
@@ -841,7 +852,7 @@ export class LocalDaemon {
     // put claude on PATH, so a miss is a strong warning rather than a verdict.
     // Under vitest, sessions run the harness's stand-in instead (test-claude-guard.ts).
     this._spawnClaudeCli = testRunnerClaude() ?? resolveClaudeCliExecutable(env)
-    if (!this._spawnClaudeCli) {
+    if (!this._spawnClaudeCli && !(await claudeCodeNotNeeded())) {
       log.session.error(
         'spawning the local daemon with an environment where the claude CLI cannot be resolved: '
         + 'sessions will fail with exit 127 unless your shell rc adds it to PATH',

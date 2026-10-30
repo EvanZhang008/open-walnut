@@ -74,9 +74,13 @@ function truncateError(msg: string, max = 80): string {
 }
 
 /** The `Connection` row's result (pure, unit tested). */
-export type TestState = { kind: 'idle' | 'testing' } | { kind: 'ok'; ms?: number } | { kind: 'fail'; error: string };
+export type TestState = { kind: 'idle' | 'testing' } | { kind: 'ok'; ms?: number; model?: string } | { kind: 'fail'; error: string };
 export function testResultText(t: TestState): string | null {
-  if (t.kind === 'ok') return t.ms !== undefined ? `Connected in ${t.ms} ms` : 'Connected';
+  if (t.kind === 'ok') {
+    // A local server is tested on the model Walnut calls there, so name it.
+    const to = t.model ? ` to ${t.model}` : '';
+    return t.ms !== undefined ? `Connected${to} in ${t.ms} ms` : `Connected${to}`;
+  }
   if (t.kind === 'fail') return `Couldn't connect: ${t.error}`;
   return null;
 }
@@ -463,11 +467,11 @@ function ActiveProviderRows({ def, serverInfo, config, onSave, onAfterSave }: {
   const isEnv = !!(serverInfo?.auto_detected && serverInfo?.status === 'ready');
   const envKeyName = `${def.name.toUpperCase().replace(/-/g, '_')}_API_KEY`;
 
-  const runTest = async (fn: () => Promise<{ ok: boolean; latencyMs?: number; error?: string }>) => {
+  const runTest = async (fn: () => Promise<{ ok: boolean; latencyMs?: number; error?: string; model?: string }>) => {
     setTestState({ kind: 'testing' });
     try {
       const r = await fn();
-      setTestState(r.ok ? { kind: 'ok', ms: r.latencyMs } : { kind: 'fail', error: truncateError(r.error ?? 'Connection failed') });
+      setTestState(r.ok ? { kind: 'ok', ms: r.latencyMs, ...(def.api === 'ollama' && r.model ? { model: r.model } : {}) } : { kind: 'fail', error: truncateError(r.error ?? 'Connection failed', def.api === 'ollama' ? 240 : 80) });
     } catch (err) {
       setTestState({ kind: 'fail', error: truncateError((err as Error).message) });
     }

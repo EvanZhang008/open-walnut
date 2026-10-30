@@ -15,6 +15,7 @@ import { autoDetectApiKey } from '../../model/providers/secret.js'
 import { getModelsForProvider } from '../../model/providers/model-catalog.js'
 import { KNOWN_PROVIDERS, DEFAULT_BASE_URLS } from '../../model/providers/defaults.js'
 import type { ModelEntry } from '../../model/providers/types.js'
+import { pickTestModel } from '../../model/providers/test-model.js'
 import { isPersonAtThisMachine } from './expose.js'
 
 export const configRouter = Router()
@@ -504,11 +505,13 @@ configRouter.get('/providers', async (_req: Request, res: Response, next: NextFu
 })
 
 // POST /api/config/test-provider — test a specific provider connection
+const TEST_PROVIDER_TIMEOUT_MS = 180_000
 configRouter.post('/test-provider', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { provider_name, provider_config } = req.body as {
+    const { provider_name, provider_config, model } = req.body as {
       provider_name: string
       provider_config?: ProviderConfig
+      model?: string
     }
 
     if (!provider_name) {
@@ -530,41 +533,44 @@ configRouter.post('/test-provider', async (req: Request, res: Response, next: Ne
 
     const { adapter, config: resolvedConfig } = resolveProvider(provider_name, providers)
 
-    // Build a minimal test request — pick a cheap model per protocol/provider
-    const protocol = resolvedConfig.api
-    let testModel: string
-    const TEST_MODELS: Record<string, Record<string, string>> = {
-      'bedrock': { '*': 'global.anthropic.claude-haiku-5-5' },
-      'anthropic-messages': { '*': 'claude-haiku-5-5' },
-      'openai-chat': {
-        'openai': 'gpt-4o-mini',
-        'openrouter': 'nvidia/nemotron-3-nano-30b-a3b:free', // Uses :free model to test connectivity without requiring paid credits
-        'deepseek': 'deepseek-chat',
-        '*': 'gpt-4o-mini',
-      },
-      'google-generative-ai': { '*': 'gemini-3-flash-preview' },
-      // claude-cli spawns the local `claude -p`; a short alias resolves to the
-      // subscription's model. maxTokens is ignored by the CLI (it runs its own turn).
-      'claude-cli': { '*': 'haiku' },
-    }
-    const protocolModels = TEST_MODELS[protocol]
-    if (!protocolModels) {
-      res.json({ ok: false, error: `Testing not yet supported for protocol "${protocol}"` })
+    // A cheap fixed model for a cloud catalog; the configured (or first listed)
+    // model for a server the user hosts (src/model/providers/test-model.ts).
+    const pick = await pickTestModel({ providerName: provider_name, prov: resolvedConfig, agent: config.agent, requested: model })
+    if (!pick.ok) {
+      res.json({ ok: false, error: pick.error })
       return
     }
-    testModel = protocolModels[provider_name] ?? protocolModels['*']
 
     const start = Date.now()
-    await adapter.sendMessage({
-      providerConfig: resolvedConfig,
-      model: testModel,
-      maxTokens: 1,
-      system: 'Respond with OK.',
-      messages: [{ role: 'user', content: 'test' }],
+    // A local model server may load the model from disk first (tens of seconds
+    // for a 30B model), so the deadline is generous. The race holds it even for an
+    // adapter that takes no signal; a client that went away stops the call.
+    const abort = new AbortController()
+    const onClose = () => abort.abort()
+    res.on('close', onClose)
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const deadline = new Promise<{ aborted: true }>((resolve) => {
+      timer = setTimeout(() => { abort.abort(); resolve({ aborted: true }) }, TEST_PROVIDER_TIMEOUT_MS)
     })
+    const result = await Promise.race([
+      adapter.sendMessage({
+        providerConfig: resolvedConfig,
+        model: pick.model,
+        maxTokens: 1,
+        system: 'Respond with OK.',
+        messages: [{ role: 'user', content: 'test' }],
+        signal: abort.signal,
+      }),
+      deadline,
+    ]).finally(() => { clearTimeout(timer); res.off('close', onClose) })
     const latencyMs = Date.now() - start
+    if (res.writableEnded || res.destroyed) return
+    if ((result as { aborted?: boolean }).aborted) {
+      res.json({ ok: false, error: `No answer from ${pick.model} within ${Math.round(TEST_PROVIDER_TIMEOUT_MS / 1000)} s.`, model: pick.model })
+      return
+    }
 
-    res.json({ ok: true, latencyMs })
+    res.json({ ok: true, latencyMs, model: pick.model })
   } catch (err) {
     log.web.warn('test-provider failed', { error: (err as Error).message })
     res.json({ ok: false, error: (err as Error).message })

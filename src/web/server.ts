@@ -971,7 +971,7 @@ async function resolveCredentialHealth(): Promise<{
     const { resolveMainProviderName, mainProviderIsImplicit } = await import('../model/providers/default-provider.js')
     const { detectClaudeCliAsync } = await import('../core/claude-cli-detect.js')
     const { isLocalModelProvider, probeLocalProvider, localProviderBaseUrl } = await import('../model/providers/local-provider.js')
-    const { resolveDefaultEngine } = await import('../core/agents/default-engine.js')
+    const { claudeCodeNeeded } = await import('../core/agents/claude-code-needed.js')
     const config = await getConfig()
     const cli = await detectClaudeCliAsync()
     const mainProvider = resolveMainProviderName(config, cli.installed)
@@ -984,7 +984,7 @@ async function resolveCredentialHealth(): Promise<{
       claudeCliAuth: cli.installed ? cli.auth.label : undefined,
       // Sessions run on the default engine (Main, asks, routines, task_start), and
       // Walnut's own calls on the main provider: neither on Claude, nothing needs it.
-      claudeCodeNeeded: mainProvider === 'claude_cli' || resolveDefaultEngine(config) === 'claude',
+      claudeCodeNeeded: claudeCodeNeeded(config, cli.installed),
       mainProviderLocal,
     }
 
@@ -1314,9 +1314,6 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
 
   // ── Setup health checks: Claude CLI + provider readiness ──
   systemHealth.claudeCliAvailable = checkClaudeCliAvailable()
-  if (!systemHealth.claudeCliAvailable) {
-    log.web.warn('Claude Code CLI not found — sessions will not work')
-  }
   {
     // macOS bun on the Apple system SQLite: databases misbehave (src/lib/sqlite.ts).
     const { sqliteLibraryProblem } = await import('../lib/sqlite.js')
@@ -1326,6 +1323,12 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   {
     const cred = await resolveCredentialHealth()
     applyCredentialHealth(cred)
+    // Only a setup that runs on Claude Code needs it (core/agents/claude-code-needed.ts):
+    // on another engine and provider (local models) its absence is no news.
+    if (!systemHealth.claudeCliAvailable) {
+      if (cred.claudeCodeNeeded !== false) log.web.warn('Claude Code CLI not found — sessions will not work')
+      else log.web.info('Claude Code CLI not installed; this setup does not use it')
+    }
     if (!systemHealth.hasReadyProvider) {
       log.web.warn('No AI provider configured — configure one in Settings')
     } else if (cred.mainProvider === 'claude_cli') {

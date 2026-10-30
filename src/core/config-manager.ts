@@ -7,6 +7,7 @@ import {
   type TaskPriority,
 } from './types.js';
 import { MODEL_CATALOG } from '../model/providers/model-catalog.js';
+import { KNOWN_PROVIDERS } from '../model/providers/defaults.js';
 import { scanSshConfig } from './ssh-config-scanner.js';
 import { realSshReachAllowed } from '../lib/real-ssh-guard.js';
 import { injectCloudBoxHost, withoutCloudBoxHost } from './hosts/cloud-box-host.js';
@@ -513,6 +514,23 @@ export async function migrateConfigFileToProjectOnly(): Promise<boolean> {
 }
 
 /**
+ * Does the seed below belong in this stored config? Only when Walnut's own calls run
+ * on a Claude provider: none named (the default is Claude Code, else Bedrock), or one
+ * whose protocol serves the Claude catalog. Exported for the ratchet.
+ */
+export function seedsClaudeDefaults(doc: Record<string, unknown>): boolean {
+  const agent = doc.agent as { main_provider?: unknown } | undefined;
+  const name = typeof agent?.main_provider === 'string' ? agent.main_provider.trim() : '';
+  if (!name) return true;
+  const providers = doc.providers as Record<string, { api?: unknown }> | undefined;
+  const api = providers?.[name]?.api ?? KNOWN_PROVIDERS[name]?.api;
+  return CLAUDE_CATALOG_PROTOCOLS.has(String(api));
+}
+
+/** Protocols whose models are the Claude catalog the seed lists. */
+export const CLAUDE_CATALOG_PROTOCOLS: ReadonlySet<string> = new Set(['bedrock', 'anthropic-messages', 'claude-cli']);
+
+/**
  * One-time migration: seed `agent.available_models` into config.yaml if missing.
  * Called at startup from init.ts.
  */
@@ -524,6 +542,10 @@ export async function seedConfigDefaults(): Promise<void> {
       // available_models must be ON DISK (getConfig fills it in memory either way).
       const agent = existing.agent as { available_models?: unknown } | undefined;
       if (agent && typeof agent === 'object' && agent.available_models !== undefined) return { write: false, result: undefined };
+      // The seed is the Claude default set (a Claude model list, `provider: claude-code`).
+      // A file that picked another main provider (Ollama, OpenAI, a local server) keeps
+      // only what its user wrote (2026-10-30: a Path D config grew 13 Claude ids).
+      if (!seedsClaudeDefaults(existing)) return { write: false, result: undefined };
       // Seeded from the stored file itself, inside the lock, so a save that landed
       // after boot began is what gets the defaults, not an older read of it.
       const config = normalizeReadConfig({ ...DEFAULT_CONFIG, ...structuredClone(existing) } as Config);

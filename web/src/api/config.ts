@@ -173,6 +173,8 @@ export interface TestConnectionResult {
   error?: string;
   latencyMs?: number;
   authMethod?: string;
+  /** test-provider: the model the call went to. */
+  model?: string;
 }
 
 export async function testConnection(
@@ -267,8 +269,10 @@ export async function testProvider(
   providerName: string,
   providerConfig?: { api: string; api_key?: string; base_url?: string; region?: string; bearer_token?: string },
 ): Promise<TestConnectionResult> {
+  // A local model server may load the model from disk first (tens of seconds for a
+  // 30B model): wait past the server's own 180 s deadline, never the 15 s default.
   return apiPost<TestConnectionResult>('/api/config/test-provider', {
     provider_name: providerName,
     provider_config: providerConfig,
-  });
+  }, { timeoutMs: 190_000 });
 }
