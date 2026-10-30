@@ -239,16 +239,24 @@ function main() {
   }
   reapStale()
   const show = (p) => (opts.mode === 'plain' ? p : maskPath(rules, p))
-  const stats = scanPaths(rules, opts.paths, {
-    exclude: opts.exclude,
-    skipDeps: opts.skipDeps,
-    onHit: (h) => {
-      if (opts.mode === 'count') return
-      const where = h.inName ? `${show(h.file)} (its name)` : `${show(h.file)} @${h.offset}`
-      console.log(opts.mode === 'redact' ? `leak-scan: HIT ${h.label} ${where}` : `leak-scan: HIT ${h.label} ${where} ${JSON.stringify(h.snippet)}`)
-    },
-    onSkip: (s) => { if (opts.mode !== 'count') console.log(`leak-scan: SKIPPED ${show(s.file)} (${s.why})`) },
-  })
+  let stats
+  try {
+    stats = scanPaths(rules, opts.paths, {
+      exclude: opts.exclude,
+      skipDeps: opts.skipDeps,
+      onHit: (h) => {
+        if (opts.mode === 'count') return
+        const where = h.inName ? `${show(h.file)} (its name)` : `${show(h.file)} @${h.offset}`
+        console.log(opts.mode === 'redact' ? `leak-scan: HIT ${h.label} ${where}` : `leak-scan: HIT ${h.label} ${where} ${JSON.stringify(h.snippet)}`)
+      },
+      onSkip: (s) => { if (opts.mode !== 'count') console.log(`leak-scan: SKIPPED ${show(s.file)} (${s.why})`) },
+    })
+  } catch (e) {
+    // A scan that stopped part way is an error (2), never a hit (1): the gate and the
+    // audit say "could not check", and a hit already printed above still shows.
+    console.error(`leak-scan: the scan stopped: ${opts.mode === 'plain' ? e.message : maskPath(rules, String(e.message))}`)
+    process.exit(2)
+  }
   const labels = opts.mode === 'count' ? '' : [...stats.labels].map(([l, n]) => `${l}=${n}`).join(' ')
   const copies = stats.copies ? ` (${stats.copies} copies of a file already scanned)` : ''
   if (stats.deps) console.log(`leak-scan: skipped the dependencies of ${stats.deps} packages (--skip-deps)`)

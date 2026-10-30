@@ -145,6 +145,20 @@ installs run through `scripts/npm-registry-lag.mjs`, which runs one again after 
 minutes while npm names a version it does not serve yet; any other failure ends at once.
 Ratchet: `tests/scripts/npm-registry-lag.test.ts`.
 
+### The leak gate
+
+Right before a job publishes, `scripts/release-leak-gate.sh` leak scans exactly what it is
+about to send: the npm packages, the files, notes and `install.sh` of the GitHub Release, and
+later the archives, the Homebrew formula, the Mac app and the cask. A job that checks out an
+older commit (a nightly, a promotion) runs the gate of the workflow's own commit, checked out
+in `harness/`, since the release's commit may predate it. It uses the rules and flags of the
+daily leak audit (`leak-audit.yml`, rules in the `LEAK_SCAN_RULES` secret). A hit, missing
+rules, or nothing to scan fails the step, so neither npm nor the GitHub Release gets the
+release. Fix the source and publish again: every publish step skips what is already out. The
+third-party runtime releases (`components.yml`, `stt-runtime.yml`) are left to the daily
+audit. Ratchet: `tests/scripts/release-leak-gate.test.ts` (a planted hit stops a dry-run
+publish, and every publishing step of the release workflows runs the gate first).
+
 ### The release rehearsal
 
 `scripts/release-rehearsal/` installs the package exactly as a user does, on a machine that

@@ -45,6 +45,7 @@ let tmp = ''
 let state = ''
 let runner = ''
 let bin = ''
+let workspace = ''
 let released: { sums: string; assets: Record<string, Buffer> }
 
 beforeEach(async () => {
@@ -54,6 +55,14 @@ beforeEach(async () => {
   bin = path.join(tmp, 'bin')
   for (const d of [state, runner]) fs.mkdirSync(d, { recursive: true })
   installFakeGh(bin)
+  // The checkout, with the leak gate (tests/scripts/release-leak-gate.test.ts runs the
+  // real one) as a stand-in that records what it was asked to scan and answers FAKE_GATE_EXIT.
+  workspace = path.join(tmp, 'workspace')
+  fs.mkdirSync(path.join(workspace, 'scripts'), { recursive: true })
+  for (const f of fs.readdirSync(path.join(ROOT, 'scripts'))) {
+    if (f !== 'release-leak-gate.sh') fs.symlinkSync(path.join(ROOT, 'scripts', f), path.join(workspace, 'scripts', f))
+  }
+  fs.writeFileSync(path.join(workspace, 'scripts/release-leak-gate.sh'), 'echo "$*" >> "$FAKE_STATE/gate.log"\nexit "${FAKE_GATE_EXIT:-0}"\n')
   // What release.yml attached: every target's .gz, install.sh and SHA256SUMS.
   const files = path.join(tmp, 'dist-bin')
   fs.mkdirSync(files)
@@ -95,7 +104,7 @@ function runStep(s: Step, extra: Record<string, string> = {}): Promise<{ code: n
         ...process.env,
         PATH: guardedPath([bin], process.env.PATH),
         VERSION, GH_TOKEN: 'test-token', GH_REPO: 'example/open-walnut',
-        RUNNER_TEMP: runner, GITHUB_WORKSPACE: ROOT, GITHUB_OUTPUT: output, FAKE_STATE: state,
+        RUNNER_TEMP: runner, GITHUB_WORKSPACE: workspace, GITHUB_OUTPUT: output, FAKE_STATE: state,
         ...extra,
       },
     }, (err, stdout, stderr) => {
@@ -130,6 +139,21 @@ describe('release-archives.yml: the archives join the release\'s SHA256SUMS', { 
     expect(up).toHaveLength(2)
     expect(fs.readFileSync(path.join(state, 'releases', TAG, 'install.sh'))).toEqual(released.assets['install.sh'])
     for (const name of Object.keys(shas)) expect(releaseAssets(state, TAG)).toContain(name)
+  })
+
+  it('the leak gate scans the archives, the SHA256SUMS and install.sh first; when it refuses, nothing goes up', async () => {
+    makeRelease(state, TAG, { assets: released.assets })
+    archives('first build')
+    const ok = await runStep(MERGE)
+    expect(ok.code, ok.out).toBe(0)
+    expect(fs.readFileSync(path.join(state, 'gate.log'), 'utf8').trim()).toBe(`. ${path.join(runner, 'SHA256SUMS')} ${path.join(workspace, 'scripts/install.sh')}`)
+
+    fs.rmSync(path.join(state, 'gate.log'))
+    const before = uploads().length
+    const refused = await runStep(MERGE, { FAKE_GATE_EXIT: '1' })
+    expect(refused.code, refused.out).not.toBe(0)
+    expect(fs.existsSync(path.join(state, 'gate.log'))).toBe(true)
+    expect(uploads()).toHaveLength(before)
   })
 
   it('a re-run replaces this version\'s archive lines, never adding a second set', async () => {

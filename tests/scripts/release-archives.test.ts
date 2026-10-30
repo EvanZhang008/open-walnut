@@ -493,8 +493,15 @@ describe('the Mac app', () => {
     expect(caskRun).toContain('--pattern Walnut-arm64.dmg --pattern Walnut-x64.dmg')
     expect(caskRun.indexOf('brew install --cask')).toBeLessThan(caskRun.indexOf('source=Notarized Developer ID'))
     expect(caskRun.indexOf('source=Notarized Developer ID')).toBeLessThan(caskRun.indexOf('gh release upload "v$VERSION" "$RUNNER_TEMP/walnut.rb"'))
-    // The secrets reach one step, as environment variables.
-    const withSecrets = [...job.steps, ...caskJob.steps].filter((s) => JSON.stringify(s).includes('secrets.'))
+    // The signing secrets reach one step, as environment variables; the leak rules only
+    // the release gate's steps (tests/scripts/release-leak-gate.test.ts).
+    const LEAK_RULES = '${{ secrets.LEAK_SCAN_RULES }}'
+    const steps = [...job.steps, ...caskJob.steps]
+    const withSecrets = steps.filter((s) => JSON.stringify(s).replaceAll(LEAK_RULES, '').includes('secrets.'))
+    for (const s of steps.filter((x) => JSON.stringify(x).includes(LEAK_RULES))) {
+      expect(s.env?.LEAK_SCAN_RULES, s.name).toBe(LEAK_RULES)
+      expect(s.run, s.name).toContain('release-leak-gate.sh')
+    }
     expect(withSecrets.map((s) => s.name)).toEqual(['Signing identity and notary key, from the release environment'])
     expect(withSecrets[0].run).not.toContain('secrets.')
     // The release's own app: built from its tag. A trial of another commit's app

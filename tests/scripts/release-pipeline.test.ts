@@ -688,7 +688,9 @@ describe('release.yml', () => {
   it('the GitHub Release notes come from the tested script, after the publish', () => {
     expect(runs('stable')).toContain('bun scripts/release-notes.mjs "$VERSION" > release-notes.md')
     expect(text).not.toContain('node -e')
-    expect(stepIndex('stable', 'release-notes.mjs')).toBeGreaterThan(stepIndex('stable', 'npm-packages.mjs publish'))
+    // The leak gate reads the same notes before the publish; the Release's own come after it.
+    expect(stepIndex('stable', 'release-notes.mjs "$VERSION" > release-notes.md')).toBeGreaterThan(stepIndex('stable', 'npm-packages.mjs publish'))
+    expect(stepIndex('stable', 'release-notes.mjs "$VERSION" > "$RUNNER_TEMP/gate-notes.md"')).toBeLessThan(stepIndex('stable', 'npm-packages.mjs publish'))
   })
 
   it('a nightly after a stable release builds on that release', () => {

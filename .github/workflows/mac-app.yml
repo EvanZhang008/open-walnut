@@ -206,6 +206,13 @@ jobs:
           path: desktop/Walnut-${{ matrix.arch }}.dmg
           if-no-files-found: ignore
           retention-days: 14
+      # The release gate (scripts/release-leak-gate.sh), from harness: the app's own
+      # checkout is the release tag, which may predate it.
+      - name: No leak in Walnut-${{ matrix.arch }}.dmg
+        if: steps.signing.outputs.signed == 'true' && env.ATTACH == 'true'
+        env:
+          LEAK_SCAN_RULES: ${{ secrets.LEAK_SCAN_RULES }}
+        run: sh harness/scripts/release-leak-gate.sh "desktop/Walnut-$ARCH.dmg"
       - name: Attach Walnut-${{ matrix.arch }}.dmg to v${{ inputs.version }}
         if: steps.signing.outputs.signed == 'true' && env.ATTACH == 'true'
         run: gh release upload "v$VERSION" "desktop/Walnut-$ARCH.dmg" --clobber
@@ -244,6 +251,8 @@ jobs:
         with:
           bun-version: 1.4.4
       - name: Write walnut.rb from the attached DMGs, install it with brew, and attach it
+        env:
+          LEAK_SCAN_RULES: ${{ secrets.LEAK_SCAN_RULES }}
         run: |
           gh release download "v$VERSION" --dir "$RUNNER_TEMP/attached" --clobber \
             --pattern Walnut-arm64.dmg --pattern Walnut-x64.dmg
@@ -263,4 +272,5 @@ jobs:
           ls "$RUNNER_TEMP/brew-apps/Walnut.app/Contents/Resources/release/v$VERSION/walnut-$VERSION-darwin-arm64" \
             || ls "$RUNNER_TEMP/brew-apps/Walnut.app/Contents/Resources/release/v$VERSION/open-walnut-$VERSION-darwin-arm64.tar.gz"
           brew uninstall --cask walnut-release/cask/walnut
+          sh harness/scripts/release-leak-gate.sh "$RUNNER_TEMP/walnut.rb"
           gh release upload "v$VERSION" "$RUNNER_TEMP/walnut.rb" --clobber
