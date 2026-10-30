@@ -16,12 +16,18 @@
  *    never eat the human's text on malformed input;
  *  · an ordinary message is unchanged.
  *
+ * A banner in a bubble that holds the person's words is hidden by default
+ * (ui.show_walnut_additions off) until the reader opens the bubble footer's
+ * "Walnut added N" (walnut-added-helpers.ts); a banner-only row is always drawn.
+ *
  * Fixture: `pw-banner-session` (test-server.ts) — five user turns, one per shape,
  * with the markers taken from the PRODUCTION constants.
  */
 import fs from 'node:fs/promises'
 import { expect, test, type Locator, type Page } from '@playwright/test'
+import { openKebabGroup } from './kebab-group-helpers'
 import { openAllTurnFolds } from './turn-fold-helpers'
+import { revealWalnutAdded } from './walnut-added-helpers'
 
 const SESSION_ID = 'pw-banner-session'
 const TASK_ID = 'pw-task-banner'
@@ -92,6 +98,13 @@ test('the typed words are the bubble; the injected recap is folded away', async 
   expect(shown).not.toContain('BANNER_RECAP_MARKER')
   expect(shown).not.toContain('[Conversation context]')
   expect(shown).not.toContain('injected by Walnut')
+  // By default the fold itself is not drawn either: the bubble is the words alone,
+  // and its footer offers what Walnut added.
+  await expect(bubble).toHaveClass(/session-msg-user/)
+  await expect(bubble.locator('[data-testid="injected-banner"]')).toHaveCount(0)
+  await expect(bubble.getByTestId('walnut-added-toggle')).toHaveText(/^Walnut added 1›?$/)
+  await revealWalnutAdded(bubble)
+  expect(await bubble.innerText()).not.toContain('BANNER_RECAP_MARKER')
 
   // The fold names its author rather than pretending nothing was added.
   const fold = bubble.locator('[data-testid="injected-banner"]')
@@ -110,6 +123,8 @@ test('the fold expands to the recap and collapses again', async ({ page }) => {
   const panel = await openSession(page)
 
   const bubble = row(panel, 'BANNER_TYPED_ONE')
+  await expect(bubble.locator('[data-testid="injected-banner"]')).toHaveCount(0)
+  await revealWalnutAdded(bubble)
   const fold = bubble.locator('[data-testid="injected-banner"]')
   const toggle = fold.locator('.tool-run-toggle')
   await expect(toggle).toHaveAttribute('aria-expanded', 'false')
@@ -137,6 +152,9 @@ test('two stacked banner kinds fold into two rows above one message', async ({ p
 
   const bubble = row(panel, 'BANNER_TYPED_TWO')
   const folds = bubble.locator('[data-testid="injected-banner"]')
+  await expect(folds).toHaveCount(0)
+  await expect(bubble.getByTestId('walnut-added-toggle')).toHaveText(/^Walnut added 2›?$/)
+  await revealWalnutAdded(bubble)
   await expect(folds).toHaveCount(2)
   await expect(folds.nth(0).locator('.tool-run-label')).toHaveText('Task context Walnut added')
   await expect(folds.nth(1).locator('.tool-run-label')).toHaveText('Context Walnut added')
@@ -184,6 +202,11 @@ test('a banner-only turn gets no empty chat bubble, and an ordinary turn is unto
   await expect(bare).toHaveCount(1)
   await expect(bare).not.toHaveClass(/session-msg-user/)
 
+  // By default only the banner-only row draws its fold: the bubbles' banners wait
+  // behind their "Walnut added" button.
+  await expect(panel.locator('[data-testid="injected-banner"]')).toHaveCount(1)
+  await revealWalnutAdded(row(panel, 'BANNER_TYPED_ONE'))
+  await revealWalnutAdded(row(panel, 'BANNER_TYPED_TWO'))
   // Four folds in total: 1 (typed) + 1 (banner-only) + 2 (stacked). The plain and
   // truncated turns contribute none.
   await expect(panel.locator('[data-testid="injected-banner"]')).toHaveCount(4)
@@ -200,7 +223,9 @@ test('the Msgs list previews the typed words, and its count agrees', async ({ pa
   // Open the panel's own "Msgs" view through its kebab — a one-line preview has no
   // room to fold anything, so it has to already hold the typed text.
   await panel.locator('.session-panel-header').getByRole('button', { name: 'More actions' }).click()
-  const msgsItem = page.locator('.task-kebab-menu:visible .task-kebab-item')
+  // The row lives in the menu's Views group (kebab-group-helpers.ts).
+  const views = await openKebabGroup(page.locator('.task-kebab-menu:visible'), 'session-kebab-views')
+  const msgsItem = views.locator('.task-kebab-item')
     .filter({ hasText: /Msgs \(/ })
   await expect(msgsItem).toHaveCount(1)
   // Four typed messages: the banner-only turn is not one of "my messages", so the

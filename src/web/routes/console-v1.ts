@@ -81,6 +81,8 @@ async function buildConfigProjection(res?: Response): Promise<Record<string, unk
       ...(config.session?.idle_timeout_minutes !== undefined ? { idle_timeout_minutes: config.session.idle_timeout_minutes } : {}),
       ...(config.session?.enabled_modes ? { enabled_modes: config.session.enabled_modes } : {}),
     },
+    // Whether the chat always shows what Walnut added to a message (additive, 2026-10-29).
+    ui: { show_walnut_additions: config.ui?.show_walnut_additions === true },
   }
   return projection
 }

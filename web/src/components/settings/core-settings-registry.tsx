@@ -143,6 +143,7 @@ export const CORE_SETTINGS_CONTRIBUTIONS: readonly CoreSettingsContribution[] = 
       { word: 'reply language', rowLabel: 'Reply language', anchor: 'session-reply-language' },
       'language', 'chinese', 'english',
       { word: 'message hints', rowLabel: 'Message hints', anchor: 'message-hints' },
+      { word: 'walnut added', rowLabel: 'Always show what Walnut added to a message', anchor: 'settings-show-walnut-additions' },
       'hint', 'reminder', 'system-reminder',
     ],
     render: ({ config, saveSection }) => <SessionsSection config={config} onSave={saveSection} />,

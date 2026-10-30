@@ -34,6 +34,7 @@ import { envelopeSteps, foldStepsPhrase } from './fold-steps';
 import { usePeerNameOf } from './peer-name';
 import { QUESTION_BANNER_RE, stripQuestionTag } from '@/utils/question-tag';
 import { MessageHintsRow } from './MessageHintsRow';
+import { useShowWalnutAdditions } from '@/hooks/useShowWalnutAdditions';
 import { showHintTagsAsTyped } from '@/utils/hint-display';
 import { stripTurnMarker } from '@/utils/turn-end-marker';
 import { shortenFileAboutLine } from '@/utils/thread-tree';
@@ -327,6 +328,9 @@ function injectedContextLabel(text: string): string {
   }
   if (text.startsWith('This session is being continued')) return 'Continuation summary';
   if (text.startsWith('[Image:')) return 'Image metadata';
+  // A hook's added context (session-history.ts hookContextText).
+  const hook = text.match(/^Hook context \((\w+) hook\):/);
+  if (hook) return hook[1] === 'a' ? 'Added by a hook' : `Added by the ${hook[1]} hook`;
   return 'Injected context';
 }
 
@@ -1164,6 +1168,25 @@ function SessionMessageBubble({ message, assistantLabel = 'Claude Code', session
     [isUser, bodyText],
   );
 
+  // What Walnut added to a person's message (its notes in front, the context it
+  // prepended, its message hints) stays out of the chat unless the person asked
+  // to always see it (ui.show_walnut_additions); the footer's "Walnut added N"
+  // shows it for this one message (2026-10-29, the user: hidden by default behind
+  // a "more", always visible for me). A row that is only Walnut's (no words of
+  // the person) is drawn as it always was: it IS the message there.
+  const personWords = !(envelopeSegments || (bannerSplit && !bodyText));
+  const alwaysShowAdded = useShowWalnutAdditions();
+  const [addedOpen, setAddedOpen] = useState(false);
+  const showAdded = alwaysShowAdded || addedOpen;
+  const addedCount = !isUser ? 0
+    : (personWords ? (riderSplit?.riders.length ?? 0) + (bannerSplit && bodyText ? bannerSplit.banners.length : 0) : 0)
+      + (message.hints?.length ?? 0);
+  const toggleAdded = useCallback(() => setAddedOpen((o) => !o), []);
+  const walnutAdded = useMemo(
+    () => (!alwaysShowAdded && addedCount > 0 ? { count: addedCount, open: addedOpen, onToggle: toggleAdded } : undefined),
+    [alwaysShowAdded, addedCount, addedOpen, toggleAdded],
+  );
+
   // `<suggest>` action cards in a session's own answer: a session's prose can
   // carry a card just like the Personal AI's — same parser, same invoke endpoint,
   // same persisted receipts. Rendering never depends on how the author learned
@@ -1206,6 +1229,10 @@ function SessionMessageBubble({ message, assistantLabel = 'Claude Code', session
         title: 'Keeps formatting when pasted into a doc or email',
         onSelect: () => { void copyRichText(markdownToRichHtml(bodyText), bodyText); },
       },
+      {
+        key: 'walnut-added', label: addedOpen ? 'Hide what Walnut added' : `Show what Walnut added (${addedCount})`,
+        when: !!walnutAdded, onSelect: toggleAdded,
+      },
       { divider: true },
       {
         key: 'pin', label: pins.isPinned(msgId) ? 'Unpin from outline' : 'Pin to outline', when: !!msgId,
@@ -1244,7 +1271,7 @@ function SessionMessageBubble({ message, assistantLabel = 'Claude Code', session
             stays the dominant part of the bubble. A turn that was ONLY banners
             drops the bubble chrome entirely (session-msg-envelope above): there is
             no human message there to attribute one to. */}
-        {bannerSplit?.banners.map((banner, i) => (
+        {(showAdded || !bodyText) && bannerSplit?.banners.map((banner, i) => (
           <InjectedBannerRow key={`${banner.name}-${i}`} banner={banner} sessionCwd={sessionCwd} />
         ))}
         {bodyText && envelopeSegments ? (
@@ -1269,7 +1296,7 @@ function SessionMessageBubble({ message, assistantLabel = 'Claude Code', session
         ) : (
           <RichMarkdown text={bodyText} cwd={sessionCwd} scope={message.msgId} />
         ))}
-        {isUser && message.hints && message.hints.length > 0 && <MessageHintsRow hints={message.hints} />}
+        {isUser && showAdded && message.hints && message.hints.length > 0 && <MessageHintsRow hints={message.hints} />}
         {tools && tools.length > 0 && (() => {
           // CLI content order is prose first, tool_use blocks after — render
           // in that order. Merge consecutive generic tools into one "Ran 3
@@ -1346,6 +1373,7 @@ function SessionMessageBubble({ message, assistantLabel = 'Claude Code', session
             text={bodyText}
             timestamp={timestamp}
             alwaysVisible={showCopyActions}
+            walnutAdded={walnutAdded}
           />
         )}
       </div>
@@ -1360,7 +1388,7 @@ function SessionMessageBubble({ message, assistantLabel = 'Claude Code', session
       )}
     </div>
   );
-  if (!riderSegments) return row;
+  if (!riderSegments || (personWords && !showAdded)) return row;
   // Not `.session-msg-content`: that class marks THE message body, which quote
   // pins and passage selection find as the row's first match.
   const cards = (
@@ -1372,7 +1400,6 @@ function SessionMessageBubble({ message, assistantLabel = 'Claude Code', session
   // "Received a message ›" line, the cards one click away, never a card row of
   // their own (2026-10-25, the user: "the user doesn't care"). Ahead of another
   // envelope the row already sits in a turn's fold, so the cards show as they are.
-  const personWords = !(envelopeSegments || (bannerSplit && !bodyText));
   return (
     <>
       <div className="session-msg session-msg-envelope session-msg-riders" data-testid="session-rider-row">

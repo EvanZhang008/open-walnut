@@ -62,7 +62,7 @@ const ALLOW: Record<string, AllowSpec> = {
   tag_display: { '*': true },
   tag_links: { '*': true },
   link_tags: { '*': true },
-  ui: { session_panels: true, show_priority: true },
+  ui: { session_panels: true, show_priority: true, show_walnut_additions: true },
   time: {
     outside: { enabled: true },
     screentime: { enabled: true, include_this_mac: true },

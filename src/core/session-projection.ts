@@ -86,6 +86,7 @@ import { engineCaps, normalizeEngine } from './agents/engine-registry.js'
 // the cut is made where it cannot leave half a tag behind.
 import { clipTranscriptText } from './sessions/transcript-clip.js'
 import { transcriptSentBy, type TranscriptSentBy } from './sessions/transcript-sent-by.js'
+import { walnutAddedOf, type WalnutAddedItem } from '../lib/walnut-added.js'
 import { cutEnd } from './text-cut.js'
 
 /** LEGACY git-synced paths — dual-written while `sync.legacy_projection_files`
@@ -507,6 +508,28 @@ export interface ProjectedTranscriptMessage {
    *  with (lib/history-turn-window.ts), so a client never guesses it from a
    *  clipped preview. Absent on an older server. */
   sentBy?: TranscriptSentBy
+  /** User text rows only (additive, 2026-10-29): what Walnut added to the row besides
+   *  its notes in front (which a client splits from `text` itself): the message hints
+   *  taken off the text, and the context blocks Walnut put first. A client shows them
+   *  folded, or only on request (`ui.show_walnut_additions`). Absent when none. */
+  added?: WalnutAddedItem[]
+  /** With `added` context blocks: `text` without them (its notes in front kept), the
+   *  person's words to draw. `text` stays whole for an older client. */
+  textWithoutContext?: string
+}
+
+/** A user row's `added` / `textWithoutContext`, clipped like `text` unless the read is `full`. */
+function projectWalnutAdded(
+  text: string,
+  hints: import('./session-history.js').SessionHistoryMessage['hints'],
+  clip: 'live' | 'tail' | null,
+): Pick<ProjectedTranscriptMessage, 'added' | 'textWithoutContext'> {
+  const { items, textWithoutContext } = walnutAddedOf(text, hints)
+  const cut = (t: string) => (clip ? clipTranscriptText(t, clip) : t)
+  return {
+    ...(items.length ? { added: items.map((i) => ({ ...i, text: cut(i.text) })) } : {}),
+    ...(textWithoutContext !== undefined ? { textWithoutContext: cut(textWithoutContext.trim()) } : {}),
+  }
 }
 
 export interface SessionTranscript {
@@ -769,6 +792,7 @@ export async function buildSessionTranscript(
         timestamp: m.timestamp,
         // From the whole text, before the clip: an envelope cut short reads as prose.
         ...(m.role === 'user' ? { sentBy: transcriptSentBy(m) } : {}),
+        ...(m.role === 'user' ? projectWalnutAdded(text, m.hints, opts?.full ? null : (opts?.live || wantRich ? 'live' : 'tail')) : {}),
       })
     }
     // Indexed: the tool's position in ITS OWN message is what makes a row

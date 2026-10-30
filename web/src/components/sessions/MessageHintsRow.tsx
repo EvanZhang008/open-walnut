@@ -6,21 +6,19 @@
  * the raw view (SessionRawView) shows the whole input as the model received it.
  */
 import { useState } from 'react';
+import { Link } from 'react-router-dom';
 import type { CarriedHint } from '@open-walnut/hint-format';
+import { hintLabel } from '@open-walnut/walnut-added';
 import '@/styles/injected-banner.css';
 
-const LABELS: Record<string, string> = {
-  question: 'Question',
-  'rich-output': 'Rich output',
-  'reply-language': 'Reply language',
-  'voice-reply': 'Voice reply',
-  // An ACP engine with no system prompt reads its session instructions here (acp-session.ts).
-  'session-context': 'Session instructions',
-};
+export { hintLabel };
 
-export function hintLabel(h: Pick<CarriedHint, 'kind' | 'arg'>): string {
-  const base = LABELS[h.kind] ?? h.kind;
-  return h.arg ? `${base} ${h.kind === 'question' ? `Q${h.arg}` : h.arg}` : base;
+/** Kinds Walnut adds outside the hint registry, so Settings has no switch for them. */
+const NOT_IN_REGISTRY = new Set(['session-context', 'engine-switch']);
+
+/** The Settings row of one hint's on/off switch (settings-routing.ts resolves the prefix). */
+export function hintSettingsHash(kind: string): string {
+  return `#message-hint-${encodeURIComponent(kind)}`;
 }
 
 export function MessageHintsRow({ hints }: { hints: readonly CarriedHint[] }) {
@@ -44,6 +42,19 @@ export function MessageHintsRow({ hints }: { hints: readonly CarriedHint[] }) {
             {hints.map((h, i) => (
               <p key={`${h.kind}-${i}`} className="message-hint-item" data-hint-kind={h.kind}>
                 <strong>{hintLabel(h)}:</strong> {h.text}
+                {!NOT_IN_REGISTRY.has(h.kind) && (
+                  <>
+                    {' '}
+                    <Link
+                      className="message-hint-settings-link"
+                      to={`/settings${hintSettingsHash(h.kind)}`}
+                      onClick={(e) => e.stopPropagation()}
+                      data-testid="message-hint-settings-link"
+                    >
+                      Turn off in Settings
+                    </Link>
+                  </>
+                )}
               </p>
             ))}
           </div>

@@ -127,7 +127,23 @@ People: Settings, Sessions, Message hints. Agents: `hint_list`, `hint_set`,
 
 ## Seeing what a message carried
 
-The user bubble shows a folded "Walnut hints: …" row. The session menu's
-"Raw input & output" shows every turn's input exactly as the model received it
-and its output as it came back. History rows carry `hints` and `rawText` for
-every client, the phone included.
+Everything Walnut added to a person's message (its notes in front of the words,
+the context blocks it put first, its hints) is hidden in the chat by default.
+The message footer's "Walnut added N" button (on a phone, the message menu)
+shows it for that message: the notes as one folded line above the bubble, each
+context block as a folded row, and a folded "Walnut hints: …" row whose items
+open to their text with a "Turn off in Settings" link to that hint's switch
+(`/settings#message-hint-<kind>`). Settings, Sessions, Message hints, "Always
+show what Walnut added to a message" (`ui.show_walnut_additions`) shows them on
+every message. A row that holds no words of the person (a notice, a trigger, a
+context-only turn) is drawn as it always was.
+
+A hook's added context (a Claude Code `hook_additional_context` line: Walnut's
+post-compaction open items, its temp-write and clone-identity notes, the user's
+own hooks) is an injected context row at its place, "Added by the <event> hook".
+
+The session menu's "Raw input & output" shows every turn's input exactly as the
+model received it and its output as it came back. History rows carry `hints` and
+`rawText`; the phone's transcript rows carry `added` (each hint and context block
+with its label and text) and `textWithoutContext`, and `/api/v1/config` carries
+`ui.show_walnut_additions`.

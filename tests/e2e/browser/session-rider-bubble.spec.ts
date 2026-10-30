@@ -23,9 +23,13 @@
  *  · copy yields the words only;
  *  · the live send: the optimistic bubble turns into ONE history bubble, before
  *    and after a reload.
+ * The notices above a person's words are hidden by default (ui.show_walnut_additions
+ * off): each test that checks them opens them the reader's way, with the bubble
+ * footer's "Walnut added N" button (walnut-added-helpers.ts).
  */
 import { expect, test, type Locator, type Page } from '@playwright/test'
 import { REAL_PANEL } from './draft-helpers'
+import { revealWalnutAdded } from './walnut-added-helpers'
 
 const SESSION_ID = 'pw-rider-session'
 const TASK_ID = 'pw-task-rider'
@@ -83,6 +87,12 @@ async function previousRowClass(row: Locator): Promise<string> {
   })
 }
 
+/** Show the notices above bubble `b`: scroll it in the reader's way, then its "Walnut added" button. */
+async function showAdded(page: Page, panel: Locator, b: Locator): Promise<void> {
+  await reveal(page, panel, b)
+  await revealWalnutAdded(b)
+}
+
 /** The rider row right above a bubble: its muted fold line and the cards inside. */
 function riderAbove(b: Locator): Locator {
   return b.locator('xpath=preceding-sibling::div[contains(concat(" ", @class, " "), " session-msg-riders ")][1]')
@@ -134,6 +144,14 @@ test('the words after an org digest are a user bubble; the digest is a card abov
   expect(shown).toContain('Second paragraph of the same message.')
   expect(shown).not.toContain('RIDER_ORG_MARKER')
   expect(shown).not.toContain('walnut-message')
+  // By default the digest is not drawn at all: no rider row above the words, which
+  // stay the bubble, and the footer offers what Walnut added.
+  await expect(riderAbove(b)).toHaveCount(0)
+  expect(await previousRowClass(b)).not.toContain('session-msg-riders')
+  await expect(b.getByTestId('walnut-added-toggle')).toHaveText(/^Walnut added 1›?$/)
+  await expect(b.getByTestId('walnut-added-toggle')).toHaveAttribute('aria-expanded', 'false')
+  await showAdded(page, panel, b)
+  expect(await b.innerText()).toContain('RIDER_TYPED_ONE first paragraph.')
   // The card is its own row right above the bubble, never inside it.
   expect(await previousRowClass(b)).toContain('session-msg-envelope')
   await expect(b.locator('.provenance-chip, .session-provenance-card')).toHaveCount(0)
@@ -170,6 +188,10 @@ test('the words after a status change of a followed task are a user bubble; the 
   expect(shown).toContain('RIDER_TYPED_STATUS yes, go for it.')
   expect(shown).not.toContain('RIDER_STATUS_MARKER')
   expect(shown).not.toContain('changed its status')
+  // Hidden by default: neither the note nor the hint is drawn, the words are.
+  await expect(riderAbove(b)).toHaveCount(0)
+  await expect(b.getByTestId('message-hints')).toHaveCount(0)
+  await showAdded(page, panel, b)
   // The message hint stays the bubble's own row, as on any message.
   await expect(b.getByText(/Walnut hints: Rich output/)).toHaveCount(1)
   // No card row holds the words.
@@ -196,6 +218,8 @@ test('an image block, a quote and several paragraphs all stay in the bubble', as
   expect(shown).toContain('RIDER_QUOTE_LINE quoted back')
   expect(shown).toContain('Last paragraph.')
   expect(shown).not.toContain('RIDER_ORG_MARKER')
+  await expect(riderAbove(b)).toHaveCount(0)
+  await showAdded(page, panel, b)
   expect(await previousRowClass(b)).toContain('session-msg-envelope')
   await reveal(page, panel, b)
   await shot(page, b, 'org-digest-image')
@@ -207,6 +231,9 @@ test('four stacked notices fold into cards above one bubble', async ({ page }) =
   const b = await bubble(panel, 'RIDER_TYPED_STACK')
   const shown = await b.innerText()
   for (const m of ['RIDER_ROUTING_MARKER', 'RIDER_ORG_MARKER', 'RIDER_APP_MARKER', 'now stands in']) expect(shown).not.toContain(m)
+  await expect(riderAbove(b)).toHaveCount(0)
+  await expect(b.getByTestId('walnut-added-toggle')).toHaveText(/^Walnut added 4›?$/)
+  await showAdded(page, panel, b)
   expect(await previousRowClass(b)).toContain('session-msg-envelope')
   // All four behind one muted line that counts them.
   await expect(riderAbove(b).locator('[data-testid="rider-fold"] .tool-run-toggle')).toHaveText(/^Received 4 messages›?$/)

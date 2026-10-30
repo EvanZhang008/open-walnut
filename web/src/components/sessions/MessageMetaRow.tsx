@@ -40,6 +40,9 @@ export interface MessageMetaRowProps {
   timestamp?: string;
   /** Keep the row visible instead of hover-only (the live tail's last reply). */
   alwaysVisible?: boolean;
+  /** What Walnut added to this message while the chat hides it (ui.show_walnut_additions
+   *  off): a "Walnut added" control that shows it for this message. */
+  walnutAdded?: { count: number; open: boolean; onToggle: () => void };
 }
 
 /**
@@ -52,7 +55,7 @@ export interface MessageMetaRowProps {
  * until hover so a long transcript stays a conversation, not a log file.
  */
 export const MessageMetaRow = memo(function MessageMetaRow({
-  msgId, role, text, timestamp, alwaysVisible,
+  msgId, role, text, timestamp, alwaysVisible, walnutAdded,
 }: MessageMetaRowProps) {
   const { isPinned, toggle } = useSessionPinsApi();
   const rewind = useSessionRewindApi();
@@ -75,10 +78,10 @@ export const MessageMetaRow = memo(function MessageMetaRow({
 
   // Nothing to offer (no id to pin, no text to copy, no timestamp) — render
   // nothing rather than an empty strip that still reserves a hover target.
-  if (!msgId && !hasText && !timestamp) return null;
+  if (!msgId && !hasText && !timestamp && !walnutAdded) return null;
 
   return (
-    <div className={`session-msg-actions${alwaysVisible ? ' session-msg-actions--sticky' : ''}`}>
+    <div className={`session-msg-actions${alwaysVisible || walnutAdded?.open ? ' session-msg-actions--sticky' : ''}`}>
       {hasText && <CopyMessageButtons markdown={text!} />}
       {msgId && (
         <button
@@ -105,6 +108,19 @@ export const MessageMetaRow = memo(function MessageMetaRow({
       )}
       {rel && (
         <span className="msg-time" data-tip={abs} title={abs}>{rel}</span>
+      )}
+      {walnutAdded && walnutAdded.count > 0 && (
+        <button
+          type="button"
+          className={`msg-copy-btn msg-walnut-added-btn${walnutAdded.open ? ' is-open' : ''}`}
+          data-testid="walnut-added-toggle"
+          onClick={(e) => { e.stopPropagation(); walnutAdded.onToggle(); }}
+          aria-expanded={walnutAdded.open}
+          title={walnutAdded.open ? 'Hide what Walnut added to this message' : 'Show what Walnut added to this message'}
+        >
+          Walnut added {walnutAdded.count}
+          <span className={`tool-run-chevron${walnutAdded.open ? ' tool-run-chevron--open' : ''}`} aria-hidden="true">{'›'}</span>
+        </button>
       )}
     </div>
   );

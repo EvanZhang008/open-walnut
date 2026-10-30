@@ -13,6 +13,7 @@ import { SettingsGroup, SettingsRow } from '../SettingsSection';
 import { ToggleSwitch } from '../inputs/ToggleSwitch';
 import { SegmentedControl } from '../inputs/SegmentedControl';
 import { SettingsCheckbox } from '../inputs/SettingsCheckbox';
+import { setShowWalnutAdditions, useShowWalnutAdditions } from '@/hooks/useShowWalnutAdditions';
 
 type Trigger = 'every_turn' | 'every_n_turns' | 'session_start' | 'after_compaction' | 'on_change' | 'on_drift' | 'on_request';
 type Role = 'main' | 'lead' | 'worker' | 'ask' | 'other';
@@ -166,6 +167,7 @@ function HintEditor({ hint, onSave, onReset }: {
 }
 
 export function MessageHintsGroup() {
+  const alwaysShowAdded = useShowWalnutAdditions();
   const [hints, setHints] = useState<HintRow[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [open, setOpen] = useState<string | null>(null);
@@ -214,10 +216,23 @@ export function MessageHintsGroup() {
       data-testid="message-hints"
       footer="Short Walnut text sent with a message to the model, kept out of the bubble. Agents can change these too (hint_set)."
     >
+      <SettingsRow
+        anchor="settings-show-walnut-additions"
+        label="Always show what Walnut added to a message"
+        htmlFor="show-walnut-additions"
+        help="Its hints, its notes in front of a message, the context it put first. Off: each message's Walnut added button shows them."
+        control={(
+          <ToggleSwitch
+            id="show-walnut-additions"
+            checked={alwaysShowAdded}
+            onChange={(on) => setShowWalnutAdditions(on)}
+          />
+        )}
+      />
       {error && <p className="settings-row-error" role="alert">{error}</p>}
       {!hints && !error && <SettingsRow label="Loading…" />}
       {hints?.map((h) => (
-        <div key={h.kind} data-testid={`message-hint-${h.kind}`}>
+        <div key={h.kind} id={`message-hint-${h.kind}`} data-testid={`message-hint-${h.kind}`}>
           <SettingsRow
             label={(
               <button type="button" className="message-hint-name" onClick={() => setOpen((o) => (o === h.kind ? null : h.kind))} aria-expanded={open === h.kind}>

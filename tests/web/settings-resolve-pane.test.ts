@@ -16,6 +16,11 @@ describe('resolvePane', () => {
     expect(resolvePane('#', [])).toEqual({ paneId: 'general', targetId: null, known: true })
   })
 
+  it('opens Sessions at one message hint\'s row (the chat\'s hint chip links there)', () => {
+    expect(resolvePane('#message-hint-rich-output', [])).toEqual({ paneId: 'sessions', targetId: 'message-hint-rich-output', known: true, row: true })
+    expect(resolvePane('#message-hint-', [])).toMatchObject({ known: false })
+  })
+
   it('opens a lead pane with no scroll target', () => {
     expect(resolvePane('#sessions', [])).toMatchObject({ paneId: 'sessions', targetId: null })
     expect(resolvePane('#hooks', [])).toMatchObject({ paneId: 'hooks', targetId: null })

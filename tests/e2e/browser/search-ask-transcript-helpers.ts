@@ -14,6 +14,7 @@
  */
 import { expect, type Locator, type Page } from '@playwright/test';
 import { REAL_PANEL, loadHome, seedColumns } from './draft-helpers';
+import { revealWalnutAdded } from './walnut-added-helpers';
 
 export const SCREENSHOT_DIR = process.env.SEARCH_ASK_SHOT_DIR ?? '/tmp/search-ask-transcript';
 export const SESSION_ID = 'pw-search-ask-session';
@@ -38,17 +39,33 @@ export async function openSearchAsk(page: Page): Promise<Locator> {
   return panel;
 }
 
-/**
- * The first turn reads as the QUESTION: the seeded prompt is folded into one
- * disclosure row, and no part of the row dump is on screen.
- */
-export async function expectPromptFolded(panel: Locator): Promise<void> {
-  const bubble = panel.locator('.session-msg-user').first();
-  await expect(bubble.locator(PROMPT_BANNER)).toBeVisible();
+/** The query bubble: the first user turn, the one Walnut's prompt rides with. */
+function queryBubble(panel: Locator): Locator {
+  return panel.locator('.session-msg-user').first();
+}
+
+/** Assert the query bubble shows no part of the seeded prompt, only the question. */
+async function expectOnlyQuestion(bubble: Locator): Promise<void> {
   const text = await bubble.innerText();
   expect(text).toContain('unit test');
   expect(text).not.toContain('SEED RESULTS');
   expect(text).not.toContain('Find the Walnut task matching');
+}
+
+/**
+ * The first turn reads as the QUESTION. By default (ui.show_walnut_additions off)
+ * the seeded prompt is not drawn at all and the bubble's footer offers it as
+ * "Walnut added"; opened, it is one folded disclosure row, and no part of the
+ * row dump is on screen either way.
+ */
+export async function expectPromptFolded(panel: Locator): Promise<void> {
+  const bubble = queryBubble(panel);
+  await expect(bubble.locator(PROMPT_BANNER)).toHaveCount(0);
+  await expect(bubble.getByTestId('walnut-added-toggle')).toHaveAttribute('aria-expanded', 'false');
+  await expectOnlyQuestion(bubble);
+  await revealWalnutAdded(bubble);
+  await expect(bubble.locator(PROMPT_BANNER)).toBeVisible();
+  await expectOnlyQuestion(bubble);
 }
 
 /**
@@ -86,6 +103,7 @@ function luminance(color: string): number {
  *  The disclosure sits in a user bubble (white-ish text on `--accent`), where a
  *  code block that only sets its own light background renders grey-on-grey. */
 export async function expectSeedDisclosed(panel: Locator): Promise<void> {
+  await revealWalnutAdded(queryBubble(panel));
   const banner = panel.locator(PROMPT_BANNER);
   await banner.locator('.tool-run-toggle').click();
   const body = banner.locator('[data-testid="injected-banner-body"]');

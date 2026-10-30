@@ -709,7 +709,7 @@ interface RawJsonlLine {
   content?: string;
   /** type='attachment' lines; `queued_command` carries a mid-turn send as the model saw it,
    *  and `source_uuid` is the uuid the line was sent under (the CLI writes no user line). */
-  attachment?: { type?: string; prompt?: unknown; source_uuid?: unknown };
+  attachment?: { type?: string; prompt?: unknown; source_uuid?: unknown; content?: unknown; hookEvent?: unknown };
   message?: {
     id?: string;
     role?: string;
@@ -795,6 +795,18 @@ function queuedCommandText(prompt: unknown): string | undefined {
   const tb = prompt.find((b): b is { type: 'text'; text: string } =>
     (b as { type?: string })?.type === 'text' && typeof (b as { text?: unknown }).text === 'string');
   return tb?.text;
+}
+
+/** Opens the text of a hook's added context row; the web labels the row by it. */
+export const HOOK_CONTEXT_PREFIX = 'Hook context';
+
+/** A `hook_additional_context` attachment as one row's text, or null when it added nothing. */
+export function hookContextText(content: unknown, hookEvent: unknown): string | null {
+  const parts = (Array.isArray(content) ? content : [content])
+    .filter((c): c is string => typeof c === 'string' && c.trim() !== '');
+  if (!parts.length) return null;
+  const event = typeof hookEvent === 'string' && /^[A-Za-z]+$/.test(hookEvent) ? hookEvent : 'a';
+  return `${HOOK_CONTEXT_PREFIX} (${event} hook):\n\n${parts.join('\n\n')}`;
 }
 
 /** CLI-flagged injected user line (not typed by the human). Canonical JSONL:
@@ -1379,6 +1391,23 @@ export function parseSessionMessages(content: string, opts?: ParseSessionMessage
           ...(sourceUuid ? { sourceUuid } : {}),
           ...(stillQueued.has(i) ? { unsettled: true } : {}),
           contentBlocks: [{ type: 'text' as const, text: raw.content }],
+        });
+      }
+      continue;
+    }
+
+    // A hook's added context (`hook_additional_context`: Walnut's post-compaction
+    // open items, its temp-write and clone-identity notes, the user's own hooks)
+    // reaches the model and was in no row (2026-10-29, the user: nothing added to
+    // a turn may stay invisible). It reads as an injected context row.
+    if (raw.type === 'attachment' && raw.attachment?.type === 'hook_additional_context') {
+      const added = hookContextText(raw.attachment.content, raw.attachment.hookEvent);
+      if (added) {
+        messageMap.set(raw.uuid ?? `hook-${raw.timestamp ?? i}`, {
+          role: 'user',
+          timestamp: raw.timestamp ?? new Date().toISOString(),
+          injected: true,
+          contentBlocks: [{ type: 'text' as const, text: added }],
         });
       }
       continue;

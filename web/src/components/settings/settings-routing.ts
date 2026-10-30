@@ -13,6 +13,8 @@ import type { FilterEntry } from './settings-filter'
 export const DEFAULT_PANE_ID = 'general'
 /** Mirrors HOST_ROW_ID_PREFIX in utils/host-settings-nav.ts (kept local: this file stays import-light). */
 const HOST_ROW_PREFIX = 'rh-host-'
+/** One message hint's row in Sessions, Message hints (MessageHintsGroup), linked from a chat's hint chip. */
+const HINT_ROW_PREFIX = 'message-hint-'
 
 /** Section id -> the visible entry it renders under (itself when visible). */
 export const NAV_OWNER: Readonly<Record<string, string>> = (() => {
@@ -104,6 +106,9 @@ export function resolvePane(
   // open the pane that section renders under and scroll to that row.
   if (id.startsWith(HOST_ROW_PREFIX)) {
     return { paneId: NAV_OWNER['remote-hosts'] ?? 'remote-hosts', targetId: id, known: true }
+  }
+  if (id.startsWith(HINT_ROW_PREFIX) && id.length > HINT_ROW_PREFIX.length) {
+    return { paneId: NAV_OWNER.sessions ?? 'sessions', targetId: id, known: true, row: true }
   }
   if (pluginKeys.includes(id)) return { paneId: id, targetId: null, known: true }
   if (!opts.silent) log.warn('settings', 'unknown settings hash', { hash })

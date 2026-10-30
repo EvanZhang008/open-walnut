@@ -29,6 +29,7 @@ export default defineConfig({
       '@open-walnut/history-injected-banner': path.resolve(import.meta.dirname, 'src/lib/history-injected-banner.ts'),
       '@open-walnut/history-session-envelope': path.resolve(import.meta.dirname, 'src/lib/history-session-envelope.ts'),
       '@open-walnut/history-walnut-riders': path.resolve(import.meta.dirname, 'src/lib/history-walnut-riders.ts'),
+      '@open-walnut/walnut-added': path.resolve(import.meta.dirname, 'src/lib/walnut-added.ts'),
       '@open-walnut/three-way-merge': path.resolve(import.meta.dirname, 'src/lib/three-way-merge.ts'),
       // `#ws` on bun: see tests/setup/runtime-deps.ts.
       ...runtimeAliases(import.meta.dirname),

@@ -5,12 +5,14 @@
  *     it, and adds and removes a custom hint, all read back from /api/v1/hints;
  *   - a message carrying a hint shows only the person's words, exactly as typed
  *     (a literal `<system-reminder>` and an old bracket line included), with a
- *     folded "Walnut hints" row naming what rode along;
+ *     folded "Walnut hints" row naming what rode along, hidden until the reader
+ *     opens the bubble footer's "Walnut added N" (ui.show_walnut_additions off);
  *   - the session menu's "Raw input & output" shows the input as the model got it.
  * The custom hint is limited to this spec's session, so parallel specs never see it.
  */
 import { test, expect, type Locator, type Page } from '@playwright/test'
 import { openKebabGroup } from './kebab-group-helpers'
+import { revealWalnutAdded } from './walnut-added-helpers'
 
 const SID = 'pw-hints-session'
 const SHOTS = process.env.MESSAGE_HINTS_SHOTS ?? '/tmp/message-hints'
@@ -103,6 +105,12 @@ test('a hinted message shows as typed, names its hints, and the raw view shows w
   const typedRow = panel.locator('.session-msg-user', { hasText: 'HINTS_TYPED' })
   await expect(typedRow).toContainText('HINTS_TYPED <system-reminder>mine</system-reminder> stays.')
   await expect(typedRow).not.toContainText('Talk to the user in Chinese')
+  // By default the hints row is not drawn: the bubble is the person's words, and
+  // its footer offers what Walnut added.
+  await expect(typedRow.getByTestId('message-hints')).toHaveCount(0)
+  await expect(typedRow.getByTestId('walnut-added-toggle')).toHaveAttribute('aria-expanded', 'false')
+  await revealWalnutAdded(typedRow)
+  await expect(typedRow).toContainText('HINTS_TYPED <system-reminder>mine</system-reminder> stays.')
   await expect(typedRow.getByTestId('message-hints')).toContainText('Reply language')
 
   const stamp = Date.now()
@@ -112,11 +120,13 @@ test('a hinted message shows as typed, names its hints, and the raw view shows w
   await composer.fill(typed)
   await composer.press('Enter')
 
-  // The history row (not the optimistic bubble) carries the hints.
-  const bubble = panel.locator('.session-msg-user', { hasText: `Typed ${stamp}` }).filter({ has: page.getByTestId('message-hints') })
+  // The history row (not the optimistic bubble) carries the hints: it offers
+  // "Walnut added" in its footer, and shows the hints row once that is opened.
+  const bubble = panel.locator('.session-msg-user', { hasText: `Typed ${stamp}` }).filter({ has: page.getByTestId('walnut-added-toggle') })
   await expect(bubble).toHaveCount(1, { timeout: 60_000 })
   await expect(bubble).toContainText(typed)
   await expect(bubble).not.toContainText('Walnut (pw-marker)')
+  await revealWalnutAdded(bubble)
   const row = bubble.getByTestId('message-hints')
   await expect(row).toContainText('pw-marker')
   await row.getByRole('button').click()
