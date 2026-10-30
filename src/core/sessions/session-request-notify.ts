@@ -205,9 +205,17 @@ export async function notifyRequesterFallback(
   let undelivered: { why: string; stillQueued: boolean } | undefined = context.notDelivered
     ? { why: context.notDelivered, stillQueued: false } : undefined;
   if (!undelivered) {
-    const { undeliveredRowFor, parkMeansNeverRan, parkByStop } = await import('./undelivered-requests.js');
+    const { undeliveredRowFor, parkMeansNeverRan, parkByStop, requestDelivering } = await import('./undelivered-requests.js');
     const row = await undeliveredRowFor(request.toSessionId, request.id).catch(() => undefined);
-    if (row?.status === 'parked') {
+    if (!row && requestDelivering(request.id)) {
+      // Asked, and its message not queued yet: the same as a row still waiting.
+      if (context.phase !== 'COMPLETE' && outcome !== 'timeout') {
+        log.session.info('request fallback: the message is still being queued, edge ignored', {
+          requestId: request.id, toSessionId: request.toSessionId, outcome,
+        });
+        return false;
+      }
+    } else if (row?.status === 'parked') {
       // A park that cannot say whether the line ran (the CLI never acknowledged it) is no proof.
       if (parkMeansNeverRan(row.parkedReason) || parkByStop(row.parkedReason)) {
         undelivered = { why: row.parkedReason || 'the message could not be delivered', stillQueued: false };

@@ -38,6 +38,7 @@ import {
   type SessionRequest,
 } from '../session-requests.js';
 import { queueSentBy } from './send-sent-by.js';
+import { noteRequestDelivering } from './undelivered-requests.js';
 import { isSupersededSession } from './engine-switch-marker.js';
 
 const kit = createEnvelopeKit();
@@ -569,6 +570,8 @@ export async function performSessionSend(input: SessionSendInput): Promise<Sessi
       });
     }
   }
+  // Until its message is queued, no edge of the target speaks for this request.
+  const delivered = request ? noteRequestDelivering(request.id) : undefined;
 
   let enqueueText = body;
   if (fenced) {
@@ -601,8 +604,8 @@ export async function performSessionSend(input: SessionSendInput): Promise<Sessi
   const taskId = target.taskId ?? target.session.taskId;
   let delivery: 'queued' | 'deferred';
   let messageId: string | undefined;
-  const fromLeader = await callerLeads(caller, taskId);
   try {
+    const fromLeader = await callerLeads(caller, taskId);
     ({ delivery, messageId } = await deliverToSession(target.session, {
       busText: body, enqueueText, source, taskId, messageId: input.messageId, fromLeader,
     }));
@@ -622,6 +625,8 @@ export async function performSessionSend(input: SessionSendInput): Promise<Sessi
       });
     }
     throw err;
+  } finally {
+    delivered?.();
   }
 
   log.session.info('session_send delivered', {

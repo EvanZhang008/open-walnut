@@ -82,6 +82,33 @@ export function parkByStop(reason: string | undefined): boolean {
     || reason === 'The session ended before Claude Code ran this message';
 }
 
+/**
+ * Requests whose asked message is on its way into the target right now: the row is
+ * created first (the message names its id) and queued after, so between the two
+ * there is no row to find, and a phase edge of the target's earlier turn landing
+ * there settled the request as answered (agent-send-wait.test.ts on CI, 2026-10-30).
+ * The creator marks it until its message is queued or started; the mark also lapses
+ * after DELIVERING_MAX_MS, so one a crash never cleared holds nothing for long.
+ */
+const delivering = new Map<string, number>();
+export const DELIVERING_MAX_MS = 2 * 60_000;
+
+/** Mark request `id` as on its way; call the returned function once its message is in. */
+export function noteRequestDelivering(id: string): () => void {
+  const at = Date.now();
+  delivering.set(id, at);
+  return () => { if (delivering.get(id) === at) delivering.delete(id); };
+}
+
+/** Whether request `id`'s message is still on its way into its target. */
+export function requestDelivering(id: string): boolean {
+  const at = delivering.get(id);
+  if (at === undefined) return false;
+  if (Date.now() - at <= DELIVERING_MAX_MS) return true;
+  delivering.delete(id);
+  return false;
+}
+
 /** The row of `requestId` still in `sessionId`'s queue (not delivered), if any. */
 export async function undeliveredRowFor(sessionId: string | undefined, requestId: string): Promise<QueuedMessage | undefined> {
   if (!sessionId) return undefined;

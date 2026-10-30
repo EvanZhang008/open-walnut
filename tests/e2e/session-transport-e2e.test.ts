@@ -981,7 +981,8 @@ describe('Session error handling', () => {
 
     expect(ed.taskId).toBe('transport-error-001')
     expect(ed.sessionId).toBeTruthy()
-    expect(ed.error).toContain('exited with code 1')
+    // It exits 1 before its init line with a message: a startup failure.
+    expect(ed.error).toBe('Claude Code could not start (exit code 1) — Mock error output')
 
     // The record carries the error state
     await pollUntil(async () => {

@@ -55,11 +55,11 @@ jobs:
         run: |
           set -euo pipefail
           d="$RUNNER_TEMP/run"; mkdir -p "$d/artifacts"
-          curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -o "$d/logs.zip" "https://api.github.com/repos/$REPO/actions/runs/$RUN_ID/logs"
+          curl -fsSL --retry 5 --retry-all-errors --retry-delay 10 -H "Authorization: Bearer $GH_TOKEN" -o "$d/logs.zip" "https://api.github.com/repos/$REPO/actions/runs/$RUN_ID/logs"
           gh api --paginate "repos/$REPO/actions/runs/$RUN_ID/artifacts?per_page=100" \
             --jq '.artifacts[] | select(.expired | not) | select(.size_in_bytes < 1073741824) | "\(.id) \(.name)"' |
           while read -r id name; do
-            curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -o "$d/artifacts/$id.zip" "https://api.github.com/repos/$REPO/actions/artifacts/$id/zip"
+            curl -fsSL --retry 5 --retry-all-errors --retry-delay 10 -H "Authorization: Bearer $GH_TOKEN" -o "$d/artifacts/$id.zip" "https://api.github.com/repos/$REPO/actions/artifacts/$id/zip"
           done
           ls -la "$d" "$d/artifacts"
       - name: Scan them (a count only)

@@ -292,6 +292,8 @@ export async function startSessionForTask(params: SessionStartParams): Promise<S
       }
     };
     let seeded = false;
+    // Until the session starts on the message, no edge of the task speaks for its request.
+    let delivered: (() => void) | undefined;
     const result: SessionStartResult = { taskId: task.id, title: task.title, sessionId: sid, requestId, started: false,
       applied: appliedLaunchFields(task, params, launch) };
     const work = (async (): Promise<SessionStartResult> => {
@@ -308,6 +310,8 @@ export async function startSessionForTask(params: SessionStartParams): Promise<S
             implicit: params.expectReply === undefined,
             ...(params.handsOn ? { handsOn: [params.handsOn] } : {}),
           });
+          const { noteRequestDelivering } = await import('./undelivered-requests.js');
+          delivered = noteRequestDelivering(request.id);
           if (request.carries?.length) result.handedOn = request.carries;
           if (request.handOnRefused?.length) result.handOnRefused = request.handOnRefused;
           requestId = request.id;
@@ -348,8 +352,10 @@ export async function startSessionForTask(params: SessionStartParams): Promise<S
           })]);
         } finally {
           if (deadline) clearTimeout(deadline);
+          delivered?.();
         }
       } catch (err) {
+        delivered?.();
         const message = err instanceof Error ? err.message : String(err);
         // A timeout does not prove the process never started; keep the start record and let the normal state reconciliation path confirm it.
         const uncertain = isDaemonCommandOutcomeUnknown(err);
@@ -370,6 +376,7 @@ export async function startSessionForTask(params: SessionStartParams): Promise<S
         if (uncertain) return result;
         throw new QuickStartError(`Task ${task.id} could not start: ${message}. Fix the cause and retry task_start with the same id.`, 502);
       } finally {
+        delivered?.();
         pendingStarts.delete(task.id);
         releaseAdmission();
       }

@@ -17,6 +17,14 @@ const { LIVE_OPT_IN, stripLiveOptIns } = await import('./live-tier-only.js')
 
 const REPO = path.resolve(import.meta.dirname, '..', '..')
 
+/** Does this source read an env name the mock tiers strip? Judged by
+ *  LIVE_OPT_IN itself, so the check and the strip cannot disagree on a name. */
+function readsLiveOptIn(src: string): boolean {
+  if (/\bisLiveTest\(/.test(src)) return true
+  for (const m of src.matchAll(/process\.env(?:\.|\[['"])(\w+)/g)) if (LIVE_OPT_IN.test(m[1])) return true
+  return false
+}
+
 function testFiles(dir: string): string[] {
   const out: string[] = []
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -45,12 +53,22 @@ describe('live opt-ins in a mock tier', () => {
 
 describe('the tier boundary', () => {
   it('every test that reads a live opt-in is a live-tier file', () => {
-    const reads = new RegExp(String.raw`process\.env(\.|\[['"])(WALNUT_LIVE_\w+|LIVE\b|WALNUT_TEST_REAL_CLAUDE)|\bisLiveTest\(`)
     const self = path.relative(REPO, import.meta.filename)
     const offenders = testFiles(path.join(REPO, 'tests'))
       .filter((f) => f !== self && !f.endsWith('.live.test.ts'))
-      .filter((f) => reads.test(fs.readFileSync(path.join(REPO, f), 'utf8')))
+      .filter((f) => readsLiveOptIn(fs.readFileSync(path.join(REPO, f), 'utf8')))
     expect(offenders, 'rename these to *.live.test.ts so only vitest.live.config.ts runs them').toEqual([])
+  })
+
+  it('counts a read by the names the strip removes, whole names only', () => {
+    expect(readsLiveOptIn('process.env.WALNUT_TEST_REAL_CLAUDE')).toBe(true)
+    expect(readsLiveOptIn("process.env['WALNUT_LIVE_HOST']")).toBe(true)
+    expect(readsLiveOptIn('process.env.LIVE === "1"')).toBe(true)
+    expect(readsLiveOptIn('if (isLiveTest()) {')).toBe(true)
+    // Names the strip keeps: a mock tier sees them, so a mock-tier file may read them.
+    expect(readsLiveOptIn('process.env.WALNUT_TEST_REAL_CLAUDE_BIN')).toBe(false)
+    expect(readsLiveOptIn('process.env.LIVENESS')).toBe(false)
+    expect(readsLiveOptIn('process.env.WALNUT_LIVE')).toBe(false)
   })
 
   it('the mock tiers strip opt-ins before anything else, and the live tier does not', () => {

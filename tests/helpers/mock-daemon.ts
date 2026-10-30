@@ -443,6 +443,12 @@ export class MockDaemon {
       try { startOffset = fs.statSync(jsonlPath).size } catch { startOffset = 0 }
     }
     const outputFd = fs.openSync(jsonlPath, 'a')
+    // Like the real daemon's stderrStartOffset: a resume appends to the previous
+    // process's `.err`, and only what THIS process wrote rides its exit.
+    let stderrStart = 0
+    if (resume) {
+      try { stderrStart = fs.statSync(jsonlPath + '.err').size } catch { stderrStart = 0 }
+    }
     const stderrFd = fs.openSync(jsonlPath + '.err', resume ? 'a' : 'w')
 
     // Build CLI args (mimic real daemon)
@@ -510,7 +516,7 @@ export class MockDaemon {
           // A failed CLI's stderr rides its exit, as the real daemon replays its `.err`.
           let stderr: string | undefined
           if (session.exitCode !== 0) {
-            try { stderr = fs.readFileSync(jsonlPath + '.err', 'utf8').slice(-2000) || undefined } catch { /* none */ }
+            try { stderr = fs.readFileSync(jsonlPath + '.err').subarray(stderrStart).toString('utf8').slice(-2000) || undefined } catch { /* none */ }
           }
           this.sendEvent(ws, 'exit', { sid: session.sid, code: session.exitCode!, ...(stderr ? { stderr } : {}) })
         }

@@ -86,6 +86,7 @@ import {
   type SessionRequest,
 } from '../../src/core/session-requests.js';
 import { sessionRequestWatchHook } from '../../src/core/session-hooks/builtins.js';
+import { DELIVERING_MAX_MS, noteRequestDelivering, requestDelivering } from '../../src/core/sessions/undelivered-requests.js';
 import type { HookContext, SessionHookContext } from '../../src/core/session-hooks/types.js';
 import { parseWalnutMessage } from '../../src/core/peers/walnut-message-tag.js';
 import type { SessionRecord } from '../../src/core/types.js';
@@ -461,6 +462,21 @@ describe('sessionRequestWatchHook — outcome selection at the turn-end edge', (
 
     expect(notifySpy.mock.calls[0][1]).toBe('error');
     expect(deliveredText()).toContain('It hit an ERROR before replying');
+  });
+
+  it('an edge after the request was asked but before its message was queued leaves it alone', async () => {
+    // session-send-core creates the request, then queues the message that names it: an
+    // earlier turn's hand-back landing between the two found no row (CI, 2026-10-30).
+    const rq = await arm();
+    const queued = noteRequestDelivering(rq.id);
+    await fire();
+    expect(notifySpy).toHaveBeenCalledTimes(1);
+    expect((await getSessionRequest(rq.id))?.status).toBe('pending');
+    expect(sendMessageToSession).not.toHaveBeenCalled();
+    // Once the message is in (and delivered), the turn that ran on it speaks.
+    queued();
+    await fire();
+    expect((await getSessionRequest(rq.id))?.status).toBe('notified');
   });
 
   it('an edge from before the request was asked leaves it alone: it ended an earlier turn', async () => {
@@ -1135,6 +1151,34 @@ describe('notifyRequesterFallback — a message that has not reached its target'
       ...over,
     };
   }
+
+  it('a message still being queued counts as one waiting: no edge settles it, a completion still does', async () => {
+    const request = await arm();
+    const queued = noteRequestDelivering(request.id);
+    try {
+      buildSessionTranscript.mockResolvedValue(transcriptOf('an answer from an earlier turn'));
+      expect(await notifyRequesterFallback(request, 'completed', { phase: 'NEED_ACTION' })).toBe(false);
+      expect(await notifyRequesterFallback(request, 'error', { phase: 'NEED_ACTION' })).toBe(false);
+      expect((await getSessionRequest(request.id))?.status).toBe('pending');
+      expect(sendMessageToSession).not.toHaveBeenCalled();
+      expect(await notifyRequesterFallback(request, 'completed', { phase: 'COMPLETE' })).toBe(true);
+    } finally {
+      queued();
+    }
+    expect(requestDelivering(request.id)).toBe(false);
+  });
+
+  it('a mark nobody cleared lapses', () => {
+    vi.useFakeTimers();
+    try {
+      noteRequestDelivering('rq-lost');
+      expect(requestDelivering('rq-lost')).toBe(true);
+      vi.advanceTimersByTime(DELIVERING_MAX_MS + 1);
+      expect(requestDelivering('rq-lost')).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 
   it('a turn end while the message still waits in the queue does not settle the request', async () => {
     const request = await arm();
