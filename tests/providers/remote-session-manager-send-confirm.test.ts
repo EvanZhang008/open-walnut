@@ -587,7 +587,7 @@ describe('RemoteSessionManager: a send whose answer never came', () => {
   it('a live scoped cloud stream overrides an old native disconnect without changing the process identity', async () => {
     const { conn } = fakeConn([{ ok: true, alive: true }])
     conn.connected = false
-    Object.assign(conn, { disconnectedSince: Date.now() - 10 * 60_000 })
+    Object.assign(conn, { disconnectedSince: Date.now() - 10 * 60_000, disconnectedAwakeMs: () => 10 * 60_000 })
     const mgr = new RemoteSessionManager('sid-1', 'remote-box', null)
     Object.assign(mgr, { conn, _sid: 'sid-1', _pid: 77 })
     fallback.connect.mockResolvedValueOnce({ ok: true, alive: true, pid: 77 })

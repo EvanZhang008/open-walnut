@@ -20,12 +20,12 @@ vi.mock('../../src/constants.js', () => createMockConstants())
 const daemonMock = {
   connected: false,
   probeResult: null as { alive: boolean } | null,
-  disconnectedSince: null as number | null,
+  disconnectedAwakeMs: 0,
   probeCalls: 0,
 }
 vi.mock('../../src/providers/daemon-connection.js', () => ({
   isDaemonConnected: () => daemonMock.connected,
-  getDaemonDisconnectedSince: () => daemonMock.disconnectedSince,
+  getDaemonDisconnectedAwakeMs: () => daemonMock.disconnectedAwakeMs,
   probeDaemonSession: async () => { daemonMock.probeCalls++; return daemonMock.probeResult },
 }))
 
@@ -153,7 +153,7 @@ describe('isSessionProcessAlive — remote fallback probes the daemon', () => {
   beforeEach(() => {
     daemonMock.connected = false
     daemonMock.probeResult = null
-    daemonMock.disconnectedSince = null
+    daemonMock.disconnectedAwakeMs = 0
     daemonMock.probeCalls = 0
   })
 
@@ -180,14 +180,14 @@ describe('isSessionProcessAlive — remote fallback probes the daemon', () => {
 
   it('daemon disconnected beyond the 5min grace → NOT alive', async () => {
     daemonMock.connected = false
-    daemonMock.disconnectedSince = Date.now() - 6 * 60 * 1000
+    daemonMock.disconnectedAwakeMs = 6 * 60 * 1000
     expect(await isSessionProcessAlive(remoteSession())).toBe(false)
     expect(daemonMock.probeCalls).toBe(0) // no probe without a connection
   })
 
   it('daemon disconnected within the grace window → assume alive', async () => {
     daemonMock.connected = false
-    daemonMock.disconnectedSince = Date.now() - 60 * 1000
+    daemonMock.disconnectedAwakeMs = 60 * 1000
     expect(await isSessionProcessAlive(remoteSession())).toBe(true)
   })
 })

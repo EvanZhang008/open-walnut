@@ -363,7 +363,7 @@ describe('a letter is never sent twice', () => {
   })
 })
 
-describe('a letter that cannot be sent is refused, lettered and told, then acked', () => {
+describe('a letter that cannot be sent is refused, told to its session, then acked', () => {
   it('its body is gone from the host', async () => {
     const h = hostWithLetters()
     const { letterId } = await h.write(ASK)
@@ -377,10 +377,10 @@ describe('a letter that cannot be sent is refused, lettered and told, then acked
     expect(told.texts).toHaveLength(1)
     expect(told.texts[0].sid).toBe(SID)
     expect(told.texts[0].text).toContain(`- human_inbox_send: the letter "${ASK.subject}" (${letterId}) was not sent: its text is gone from the host`)
-    // The drain's own letter names it as a letter to the user.
+    // The session that wrote it is told and can send it again; the user gets no drain letter
+    // for a session's refused write (letter.ts refusedBySession).
     const own = (await listLetters()).letters.filter((l) => l.sender.sessionId === 'external')
-    expect(own).toHaveLength(1)
-    expect((await getLetter(own[0].id))?.body).toContain('a letter to you')
+    expect(own).toEqual([])
   })
 
   it.each([

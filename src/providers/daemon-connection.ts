@@ -74,6 +74,7 @@ import {
 } from './remote-runtime.js'
 import { runRemoteFoldPrewarm } from './remote-fold-prewarm.js'
 import { freshLinkWaitMs, hostSliceWaitMs } from './host-slice-pace.js'
+import { AwakeDownClock } from './awake-down-clock.js'
 import { FOLD_CHECKPOINT_FORMAT } from './fold-checkpoint-core.js'
 import { annotateCredentialFailure, SSH_EVIDENCE_PREFIX } from './ssh-credential-evidence.js'
 import { cancelRecordedForwards, controlSocketPath, exitControlMaster, planControlMaster, recordForward, startControlMaster } from './ssh-control-master.js'
@@ -423,6 +424,8 @@ export class DaemonConnection {
   /** Dialled straight to a daemon's URL (connectDirect): no ssh path to fall back on. */
   private _dialledDirect = false
   private _disconnectedSince: number | null = null
+  /** The same outage in awake time, which is what a session is given up on (awake-down-clock.ts). */
+  private _awakeDown = new AwakeDownClock()
   private _phase: DaemonConnectPhase = 'idle'
   private _phaseSince = Date.now()
   /** When the current connect() attempt began (null = no attempt yet). Phase
@@ -808,6 +811,12 @@ export class DaemonConnection {
   lastHeardAt(): number { return Math.max(this._lastFrameAt, this.lastPongAt) }
   private _lastFrameAt = 0
   get disconnectedSince(): number | null { return this._disconnectedSince }
+  /** How long the link has been down while this machine was awake (0 while up). A sleep
+   *  with the link down counts one short step, never its length: give up on a session
+   *  by this, never by `disconnectedSince` (awake-down-clock.ts). */
+  disconnectedAwakeMs(now = Date.now()): number {
+    return this._connected ? 0 : this._awakeDown.sample(now)
+  }
   /** Host key this connection serves ('__local__' for the local daemon). */
   get host(): string { return this.hostKey }
   /** True when the last `hello` advertised the capability (false pre-handshake). */
@@ -901,12 +910,14 @@ export class DaemonConnection {
     if (changed) this._connectionEpoch++
     if (value) {
       this._disconnectedSince = null
+      this._awakeDown.reset()
       this._reconnectAttempts = 0
       this._credentialReconnects = 0
       clearReconnectCause(this.hostKey)
       this.setPhase('connected')
     } else if (changed) {
       this._disconnectedSince = Date.now()
+      this._awakeDown.start(this._disconnectedSince)
       this.setPhase('reconnecting')
     }
     if (!value) {
@@ -6877,6 +6888,11 @@ export function isDaemonConnected(hostKey: string): boolean {
 
 export function getDaemonDisconnectedSince(hostKey: string): number | null {
   return connectionPool.get(hostKey)?.disconnectedSince ?? null
+}
+
+/** Awake time the host's link has been down (0 while up or unknown): DaemonConnection.disconnectedAwakeMs. */
+export function getDaemonDisconnectedAwakeMs(hostKey: string): number {
+  return connectionPool.get(hostKey)?.disconnectedAwakeMs() ?? 0
 }
 
 /**

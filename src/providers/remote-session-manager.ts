@@ -1183,10 +1183,12 @@ export class RemoteSessionManager implements SessionManager {
     }
 
     // Disconnected ≠ dead. Short disconnects (< 5min) → assume alive, wait for reconnect.
-    // Long disconnects (> 5min) → let health monitor mark error.
+    // Long disconnects (> 5min) → let health monitor mark error. Counted in AWAKE time:
+    // a Mac that slept with the link down is not 5 minutes into an outage on waking
+    // (awake-down-clock.ts; 2026-10-30, nine live sessions declared dead at a wake).
     if (!this.conn?.connected) {
-      const since = this.conn?.disconnectedSince
-      if (since && (Date.now() - since) > 5 * 60 * 1000) {
+      const downMs = this.conn?.disconnectedAwakeMs?.() ?? 0
+      if (downMs > 5 * 60 * 1000) {
         return false // exceeded grace period
       }
       return true // short disconnect — assume process is still alive

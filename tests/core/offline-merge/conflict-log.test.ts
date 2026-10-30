@@ -282,6 +282,33 @@ describe('the letter body', () => {
     expect(letter.markdown).toContain('6000 other changes to task settings')
   })
 
+  // 2026-10-30, lt-mvum3i5x-c4f0bf: an agent's task_update with a field the op does not
+  // take, refused at the drain. The drain tells that session (tellCallers); the user's inbox
+  // got a letter they could do nothing with.
+  it("a session's own refused write is no letter; a person's refused write and a content conflict still are", async () => {
+    const { buildConflictLetter, conflictNeedsUser } = await import('../../../src/core/offline-merge/letter.js')
+    const sessionActor = { kind: 'session', sid: '1538f1be-333a-46a0-b72d-d3dfc95b0779' }
+    const refusedV2: ConflictEntry = {
+      kind: 'refused', seq: 1024, opId: 'op-a88c3343d748b168', recordKind: 'task-fields', taskId: 'task-1',
+      reason: 'task_update does not take note; nothing of this write was applied',
+      record: { v: 2, kind: 'task-fields', op: 'task_update', actor: sessionActor, fields: { note: { base: 'unknown', value: 'x' } } },
+      actor: sessionActor,
+    }
+    const refusedOp: ConflictEntry = { kind: 'refused', seq: 5, recordKind: 'op', reason: 'refused', record: { kind: 'op', op: 'board_edit', callerSid: 'sid-board' } }
+    const refusedPerson: ConflictEntry = { kind: 'refused', seq: 6, recordKind: 'task-fields', taskId: 'task-2', reason: 'refused', actor: { kind: 'device', deviceId: 'phone-1' } }
+    expect(conflictNeedsUser(refusedV2)).toBe(false)
+    expect(conflictNeedsUser(refusedOp)).toBe(false)
+    expect(conflictNeedsUser(refusedPerson)).toBe(true)
+    const file = (entries: ConflictEntry[]) => ({ v: 2 as const, drainId: 'd-refused', hostKey: 'clouddev', home: WALNUT_HOME, startedAt: new Date().toISOString(), entries })
+    expect(buildConflictLetter(file([refusedV2, refusedOp]))).toBeNull()
+    // With a real conflict beside it, the letter lists the conflict and never counts the
+    // session's refusal as a settled setting.
+    const letter = buildConflictLetter(file([refusedV2, words(1)]))!
+    expect(letter).toMatchObject({ needed: 1, settled: 0 })
+    expect(letter.markdown).not.toContain('does not take note')
+    expect(letter.markdown).not.toContain('other change')
+  })
+
   it('a log of settings alone has no letter', async () => {
     const { buildConflictLetter } = await import('../../../src/core/offline-merge/letter.js')
     expect(buildConflictLetter({ v: 2, drainId: 'd-none', hostKey: 'marina', home: WALNUT_HOME, startedAt: new Date().toISOString(), entries: [setting(0), setting(1)] })).toBeNull()

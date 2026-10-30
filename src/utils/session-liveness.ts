@@ -124,7 +124,7 @@ export async function isSessionProcessAlive(session: SessionRecord): Promise<boo
   // Remote daemon sessions: the PID lives on the remote host.
   // Short disconnects (< 5min) → assume alive (tunnel may be reconnecting).
   if (session.host) {
-    const { isDaemonConnected, getDaemonDisconnectedSince, probeDaemonSession } = await import('../providers/daemon-connection.js')
+    const { isDaemonConnected, getDaemonDisconnectedAwakeMs, probeDaemonSession } = await import('../providers/daemon-connection.js')
     if (isDaemonConnected(session.host)) {
       // Connection up ≠ session alive. The daemon holds per-session truth (its
       // status RPC checks the actual OS process), so ask it. Returning `true`
@@ -135,9 +135,8 @@ export async function isSessionProcessAlive(session: SessionRecord): Promise<boo
       const probe = await probeDaemonSession(session.host, session.claudeSessionId)
       if (probe !== null) return probe.alive
     }
-    // Disconnected — check grace period
-    const since = getDaemonDisconnectedSince(session.host)
-    if (since && (Date.now() - since) > 5 * 60 * 1000) return false // > 5min
+    // Disconnected — check grace period, in awake time (providers/awake-down-clock.ts)
+    if (getDaemonDisconnectedAwakeMs(session.host) > 5 * 60 * 1000) return false // > 5min
     return true // short disconnect — assume alive
   }
 
