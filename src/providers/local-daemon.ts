@@ -30,12 +30,11 @@ import { createHash } from 'node:crypto'
 import { WebSocket } from '#ws'
 import { log } from '../logging/index.js'
 import { DAEMON_BINARIES_DIR } from '../constants.js'
-import { DAEMON_SERVICE_PLIST_NAME, DAEMON_SERVICE_UNIT_NAME } from './daemon-service-config.js'
+import { daemonServiceConfigFiles, serviceConfigGovernsDir } from './daemon-service-config.js'
 import { resolveClaudeCliExecutable } from '../core/claude-cli-detect.js'
 import { testRunnerClaude } from '../core/test-claude-guard.js'
 import {
   DAEMON_OWNER_FILE,
-  PROD_DAEMON_DIR,
   classifyAdoptedDaemonOwner,
   currentProdClaimPosture,
   ownerAuditKey,
@@ -49,11 +48,13 @@ import { QOS_CLAMP_ENV, withUtilityQosClamp } from '../lib/background-qos.js'
 import { isHostReplica } from '../core/server-role.js'
 import { registryNeedsFoldPrewarm, runFoldPrewarm } from './fold-prewarm.js'
 import { execFileReplaced, singleFile } from '../lib/single-file.js'
+import { isProductionDaemonDir, localDaemonDirChoice, localProductionDaemonDir } from '../lib/daemon-dir.js'
 
 // Env-aware default so the singleton (exported below) isolates a demo server's
 // daemon when WALNUT_DAEMON_DIR is set. Tests pass `daemonDir` explicitly and are
-// unaffected. Production sets nothing → /tmp/open-walnut.
-const DEFAULT_DAEMON_DIR = process.env.WALNUT_DAEMON_DIR || PROD_DAEMON_DIR
+// unaffected. Production sets nothing → /tmp/open-walnut, or ~/.cache/open-walnut
+// when another user on this machine owns that one (src/lib/daemon-dir.ts).
+const DEFAULT_DAEMON_DIR = localDaemonDirChoice().dir
 
 /** Patience for a daemon whose pid is alive but whose first hello timed out. */
 const BUSY_DAEMON_HELLO_MS = 15_000
@@ -109,7 +110,7 @@ export function pickDaemonBinary(
  * server restarts is its whole point (CLI sessions live across deploys).
  */
 export function parentWatchdogEnv(daemonDir: string): { WALNUT_DAEMON_PARENT_PID?: string } {
-  if (path.resolve(daemonDir) === PROD_DAEMON_DIR) return {}
+  if (isProductionDaemonDir(daemonDir)) return {}
   return { WALNUT_DAEMON_PARENT_PID: String(process.pid) }
 }
 
@@ -140,16 +141,13 @@ export function daemonServiceConfigPaths(
   platform: string = process.platform,
   home: string = os.homedir(),
 ): string[] {
-  if (platform === 'darwin') {
-    return [path.join(home, 'Library', 'LaunchAgents', DAEMON_SERVICE_PLIST_NAME)]
-  }
-  if (platform === 'linux') {
-    return [
-      path.join(home, '.config', 'systemd', 'user', DAEMON_SERVICE_UNIT_NAME),
-      path.join('/etc', 'systemd', 'system', DAEMON_SERVICE_UNIT_NAME),
-    ]
-  }
-  return []
+  return daemonServiceConfigFiles(platform, home)
+}
+
+function serviceAccount(): { name: string | null; uid: number | null } {
+  let name: string | null = null
+  try { name = os.userInfo().username } catch { /* no passwd entry */ }
+  return { name, uid: typeof process.getuid === 'function' ? process.getuid() : null }
 }
 
 /** How soon a local upgrade deferred for open ACP turns is tried again. */
@@ -291,8 +289,8 @@ export class LocalDaemon {
     // via WALNUT_DAEMON_DIR or an explicit `daemonDir`. startServer() catches
     // this throw and logs "local sessions will fail", which is the right outcome
     // for a process that should not have local sessions in the first place.
-    if (path.resolve(this.daemonDir) === PROD_DAEMON_DIR) {
-      const refusal = prodDaemonClaimRefusal(currentProdClaimPosture())
+    if (isProductionDaemonDir(this.daemonDir)) {
+      const refusal = prodDaemonClaimRefusal(currentProdClaimPosture(), this.daemonDir)
       if (refusal) throw new Error(refusal)
     }
     // In-flight guard: server startup, session-manager lazy init, and
@@ -520,7 +518,7 @@ export class LocalDaemon {
   }
 
   private async updateManagedDaemon(binaryPath: string, expected: string): Promise<number | null> {
-    if (path.resolve(this.daemonDir) !== PROD_DAEMON_DIR || binaryPath.endsWith('.cjs')) return null
+    if (!isProductionDaemonDir(this.daemonDir) || binaryPath.endsWith('.cjs')) return null
     const takeover = this.detectServiceTakeover()
     const configs = daemonServiceConfigPaths()
     if (takeover.unknown.length || !configs[0] || !takeover.present.includes(configs[0])
@@ -672,26 +670,43 @@ export class LocalDaemon {
   /**
    * Does an OS service manager own the daemon for THIS runtime dir?
    *
-   * Scope matters: the installer hardcodes the production runtime dir
-   * (/tmp/open-walnut), so an isolated dir (tests, sandbox, ephemeral demo) is
+   * Scope matters: the installer pins this user's production runtime dir
+   * (/tmp/open-walnut, or ~/.cache/open-walnut for a second user on the
+   * machine), so an isolated dir (tests, sandbox, ephemeral demo) is
    * never governed by a persistent config — only by a `daemon.service` marker
    * inside its own dir, which exists exactly when a `--service` daemon claimed
    * it. Without that scoping, one installed LaunchAgent would make every test
    * server on the machine refuse to spawn its own throwaway daemon.
    */
   private detectServiceTakeover(): ServiceTakeover {
-    const files = [path.join(this.daemonDir, 'daemon.service')]
-    if (path.resolve(this.daemonDir) === PROD_DAEMON_DIR) files.push(...daemonServiceConfigPaths())
-    return classifyServiceTakeover(files.map((file) => ({ path: file, state: this.probeServiceConfig(file) })))
+    const marker = path.join(this.daemonDir, 'daemon.service')
+    const probes = [{ path: marker, state: this.probeServiceConfig(marker) }]
+    if (isProductionDaemonDir(this.daemonDir)) {
+      for (const file of daemonServiceConfigPaths()) probes.push({ path: file, state: this.probeServiceConfig(file, true) })
+    }
+    return classifyServiceTakeover(probes)
   }
 
-  private probeServiceConfig(file: string): ServiceProbeState {
+  /**
+   * `persistent`: an installed config, read to see whether it runs THIS daemon.
+   * Two users on one machine each have their own production dir, so a config
+   * that pins the other one, or another account's system unit, governs nothing
+   * here. A config that cannot be read stays unknown (managed).
+   */
+  private probeServiceConfig(file: string, persistent = false): ServiceProbeState {
     try {
       fs.lstatSync(file)
-      return 'present'
     } catch (err) {
       return classifyServiceConfigError(err)
     }
+    if (!persistent) return 'present'
+    let text: string
+    try {
+      text = fs.readFileSync(file, 'utf-8')
+    } catch {
+      return 'unknown'
+    }
+    return serviceConfigGovernsDir(process.platform, text, this.daemonDir, serviceAccount()) ? 'present' : 'absent'
   }
 
   /**
@@ -773,7 +788,7 @@ export class LocalDaemon {
    * "kill the daemon on shutdown" path has caused a session-loss incident.
    */
   async stopIfIsolated(): Promise<void> {
-    if (path.resolve(this.daemonDir) === PROD_DAEMON_DIR) return
+    if (isProductionDaemonDir(this.daemonDir)) return
     if (this._upgradeRecheck) clearTimeout(this._upgradeRecheck)
     this._upgradeRecheck = null
     await this.stopDaemon()
@@ -953,7 +968,7 @@ export class LocalDaemon {
       program: cmd,
       args,
       daemonDir: this.daemonDir,
-      prodDaemonDir: PROD_DAEMON_DIR,
+      prodDaemonDir: isProductionDaemonDir(this.daemonDir) ? this.daemonDir : localProductionDaemonDir(),
     }).catch((error: unknown): { available: false; reason: 'unsupported_app'; detail: string } => ({
       // Belt to the braces of the degradation rule: NOTHING about the identity
       // layer may turn into a thrown error that leaves the machine without local

@@ -186,6 +186,65 @@ export function readDaemonServiceExecutable(platform: DaemonServicePlatform, tex
   return checkAbsolutePath('executable', decoded)
 }
 
+function readServiceEnv(platform: DaemonServicePlatform, text: string, key: string): string | null {
+  if (platform === 'linux') {
+    for (const m of text.matchAll(/^Environment=(?:"((?:\\.|[^"\\\n])*)"|(\S+))$/gm)) {
+      const decoded = m[1] !== undefined ? m[1].replace(/\\([\\"])|%%/g, (match, escaped) => escaped ?? '%') : m[2].replace(/%%/g, '%')
+      if (decoded.startsWith(`${key}=`)) return decoded.slice(key.length + 1)
+    }
+    return null
+  }
+  const m = new RegExp(`<key>${key}</key>\\s*<string>([^<]*)</string>`).exec(text)
+  return m ? m[1].replace(/&(amp|lt|gt|quot|apos);/g, (_, entity: string) => ({ amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" })[entity]!) : null
+}
+
+/** The daemon dir an installed service config pins (its WALNUT_DAEMON_DIR), or null when it names none. */
+export function readDaemonServiceDir(platform: DaemonServicePlatform, text: string): string | null {
+  const dir = readServiceEnv(platform, text, 'WALNUT_DAEMON_DIR')
+  return dir && dir.startsWith('/') ? dir : null
+}
+
+/** The account a system-scope unit runs the daemon as (`User=`), or null for a user unit. */
+export function readDaemonServiceUser(text: string): string | null {
+  return /^User=(\S+)$/m.exec(text)?.[1] ?? null
+}
+
+/**
+ * The service configs an install may leave for this user on this platform: the
+ * LaunchAgent on macOS; the user unit, then the system unit, on Linux.
+ */
+export function daemonServiceConfigFiles(platform: string, home: string): string[] {
+  if (platform === 'darwin') return [path.join(home, 'Library', 'LaunchAgents', DAEMON_SERVICE_PLIST_NAME)]
+  if (platform === 'linux') {
+    return [
+      path.join(home, '.config', 'systemd', 'user', DAEMON_SERVICE_UNIT_NAME),
+      path.join('/etc', 'systemd', 'system', DAEMON_SERVICE_UNIT_NAME),
+    ]
+  }
+  return []
+}
+
+export interface ServiceAccount { name: string | null; uid: number | null }
+
+/** The config runs its daemon as `me`: a user unit or LaunchAgent always does, a system unit by `User=`. */
+export function serviceConfigRunsAs(platform: string, text: string, me: ServiceAccount): boolean {
+  const user = platform === 'linux' ? readDaemonServiceUser(text) : null
+  return user === null || user === me.name || user === String(me.uid)
+}
+
+/**
+ * Does this config run the daemon of `dir`? One that pins a daemon dir governs
+ * that dir only, whichever account it runs as (a daemon of another account in
+ * this dir is no less a reason not to start one). One that pins none (a config
+ * Walnut did not write) governs when it runs as `me`, to stay on the safe side.
+ */
+export function serviceConfigGovernsDir(platform: string, text: string, dir: string, me: ServiceAccount): boolean {
+  if (platform !== 'linux' && platform !== 'darwin') return true
+  const pinned = readDaemonServiceDir(platform, text)
+  if (pinned) return path.resolve(pinned) === path.resolve(dir)
+  return serviceConfigRunsAs(platform, text, me)
+}
+
 export function replaceDaemonServiceExecutable(platform: DaemonServicePlatform, text: string, executable: string): string {
   checkAbsolutePath('executable', executable)
   readDaemonServiceExecutable(platform, text)

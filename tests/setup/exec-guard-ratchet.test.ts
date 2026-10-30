@@ -114,6 +114,8 @@ const ACCOUNT_HOME_READERS = new Set([
   'tests/helpers/live-isolation.ts',
   // docker reads its login from the account's ~/.docker, which a faked HOME hides.
   'tests/e2e/companion-old-box-e2e.test.ts',
+  // Keeps tests off a second user's real ~/.cache/open-walnut, which a faked HOME hides.
+  'tests/setup/prod-server-guard.ts',
 ])
 
 function walk(dir: string, out: string[] = []): string[] {

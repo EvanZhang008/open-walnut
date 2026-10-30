@@ -72,16 +72,16 @@ export function samePath(a: string, b: string): boolean {
  * registry is a difference of opinion about tasks; a different HOME is a broken
  * toolchain, and only the second one can never be legitimate.
  */
-export function prodDaemonClaimRefusal(p: ProdClaimPosture): string | null {
+export function prodDaemonClaimRefusal(p: ProdClaimPosture, dir: string = PROD_DAEMON_DIR): string | null {
   const suffix =
     ` Set WALNUT_DAEMON_DIR to an isolated temp dir (or pass daemonDir explicitly)` +
     ` so this instance gets its own daemon.`
   if (p.isTestEnv) {
-    return `Refusing to touch the production daemon dir ${PROD_DAEMON_DIR} from a test process.` + suffix
+    return `Refusing to touch the production daemon dir ${dir} from a test process.` + suffix
   }
   if (p.envHome && p.realHome && !samePath(p.envHome, p.realHome)) {
     return (
-      `Refusing to touch the production daemon dir ${PROD_DAEMON_DIR}: HOME is ${p.envHome} but this` +
+      `Refusing to touch the production daemon dir ${dir}: HOME is ${p.envHome} but this` +
       ` user's home is ${p.realHome}. The daemon inherits this env, so every session it spawns would` +
       ` look for the claude CLI, shell rc files and ~/.claude under the wrong home (exit 127).` + suffix
     )

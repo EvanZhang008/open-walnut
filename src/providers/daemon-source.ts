@@ -1492,6 +1492,11 @@ function migrateLegacyStreams() {
   // daemons opt in explicitly with their own temp legacy/streams dirs.
   if (STREAMS_DIR !== PROD_STREAMS_DIR && !process.env.WALNUT_FORCE_STREAMS_MIGRATION) return;
   let names = [];
+  // Another user on this machine may own the legacy dir: its files are theirs, not ours to move.
+  try {
+    const legacyDir = fs.lstatSync(LEGACY_STREAMS_DIR);
+    if (!legacyDir.isDirectory() || (typeof process.getuid === 'function' && legacyDir.uid !== process.getuid())) return;
+  } catch { return; }
   try { names = fs.readdirSync(LEGACY_STREAMS_DIR); } catch { return; }
   if (names.length === 0) return;
   const liveSids = new Set();

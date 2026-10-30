@@ -73,6 +73,7 @@ import { timelineRouter } from './routes/timeline.js'
 import { CronService } from '../core/cron/index.js'
 import os from 'node:os'
 import { CRON_FILE, IS_EPHEMERAL, LOG_DIR, PLUGIN_STORES_DIR, WALNUT_HOME } from '../constants.js'
+import { exitTraceFileFor, localDaemonDirChoice, localProductionDaemonDir } from '../lib/daemon-dir.js'
 import { isCompanion, isFollower, isHostReplica, placement, role } from '../core/server-role.js'
 import { capabilityFacts, capabilityList } from '../core/capabilities.js'
 import { bootPolicy } from '../core/boot-policy.js'
@@ -819,11 +820,15 @@ function installExitDiagnostics(): void {
   })
 }
 
-/** Where the exit trace goes: a host replica or a test server keeps it in its own run dir, never in a shared /tmp file. */
-function exitTraceFile(): string {
+/**
+ * Where the exit trace goes: a host replica or a test server keeps it in its own run dir, never in a shared /tmp file.
+ * Any other server writes /tmp/open-walnut-exit.log, or the exit.log in its own ~/.cache/open-walnut when another
+ * user on this machine owns /tmp/open-walnut (src/lib/daemon-dir.ts).
+ */
+export function exitTraceFile(): string {
   if (IS_EPHEMERAL) return path.join(LOG_DIR, 'exit.log')
   try { if (isHostReplica()) return path.join(LOG_DIR, 'exit.log') } catch { /* undecidable role: the default */ }
-  return '/tmp/open-walnut-exit.log'
+  return exitTraceFileFor(localProductionDaemonDir())
 }
 
 // False while startServer() is booting (rejections are fatal), true once the
@@ -1358,6 +1363,12 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     }
   } catch (err) {
     log.web.warn('memory pressure monitor failed to start', { error: err instanceof Error ? err.message : String(err) })
+  }
+
+  // Where the logs and the local daemon are, when it is not the usual place.
+  const daemonDirChoice = localDaemonDirChoice()
+  if (daemonDirChoice.fallback) {
+    log.web.info(`runtime files (logs, the local session daemon) are in ${daemonDirChoice.dir} because ${daemonDirChoice.reason}`, { dir: daemonDirChoice.dir })
   }
 
   // Ops guardrails: a niced server process (inherited from launching dev:prod

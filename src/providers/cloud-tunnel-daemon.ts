@@ -24,7 +24,7 @@
 import os from 'node:os'
 import path from 'node:path'
 import { LocalDaemon } from './local-daemon.js'
-import { PROD_DAEMON_DIR } from './daemon-ownership.js'
+import { isProductionDaemonDir, localDaemonDirChoice } from '../lib/daemon-dir.js'
 
 /**
  * Where it lives. `WALNUT_TUNNEL_DAEMON_DIR` is for tests (a throwaway dir).
@@ -59,7 +59,7 @@ export function tunnelStreamsDir(dir: string): string {
  */
 export function tunnelDaemonDirRefusal(dir: string, replicaDaemonDir: string): string | null {
   const resolved = path.resolve(dir)
-  if (resolved === path.resolve(PROD_DAEMON_DIR)) return `the tunnel daemon dir ${dir} is the default daemon dir`
+  if (isProductionDaemonDir(resolved)) return `the tunnel daemon dir ${dir} is the default daemon dir`
   if (resolved === path.resolve(replicaDaemonDir)) return `the tunnel daemon dir ${dir} is this companion's own daemon dir`
   return null
 }
@@ -84,7 +84,7 @@ export function getTunnelDaemon(owner?: string): LocalDaemon {
   const dir = tunnelDaemonDir(process.env, os.homedir(), owner)
   const existing = instances.get(dir)
   if (existing) return existing
-  const refusal = tunnelDaemonDirRefusal(dir, process.env.WALNUT_DAEMON_DIR || PROD_DAEMON_DIR)
+  const refusal = tunnelDaemonDirRefusal(dir, localDaemonDirChoice().dir)
   if (refusal) throw new Error(refusal)
   const daemon = new LocalDaemon({
     daemonDir: dir,

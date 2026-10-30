@@ -59,7 +59,11 @@ export const PROD_SERVER_PORT = 3456
 const realSetImmediate = setImmediate
 
 /** The production runtime dir, both spellings (macOS /tmp is /private/tmp). */
-const PROD_RUNTIME_DIRS = ['/tmp/open-walnut', '/private/tmp/open-walnut'] // safe: comparison only
+/** The account's own runtime dir of a second user on the machine, by the passwd home (a test may fake HOME). */
+function accountRuntimeDir(): string[] {
+  try { return [path.join(os.userInfo().homedir, '.cache', 'open-walnut')] } catch { return [] }
+}
+const PROD_RUNTIME_DIRS = ['/tmp/open-walnut', '/private/tmp/open-walnut', ...accountRuntimeDir()] // safe: comparison only
 
 export interface ConnectTarget { host?: string; port?: number; path?: string }
 

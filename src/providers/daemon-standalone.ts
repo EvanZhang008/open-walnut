@@ -477,6 +477,11 @@ function migrateLegacyStreams(): void {
   // daemons opt in explicitly with their own temp legacy/streams dirs.
   if (STREAMS_DIR !== PROD_STREAMS_DIR && !process.env.WALNUT_FORCE_STREAMS_MIGRATION) return
   let names: string[] = []
+  // Another user on this machine may own the legacy dir: its files are theirs, not ours to move.
+  try {
+    const dir = fs.lstatSync(LEGACY_STREAMS_DIR)
+    if (!dir.isDirectory() || (typeof process.getuid === 'function' && dir.uid !== process.getuid())) return
+  } catch { return }
   try { names = fs.readdirSync(LEGACY_STREAMS_DIR) } catch { return } // no legacy dir — done
   if (names.length === 0) return
 

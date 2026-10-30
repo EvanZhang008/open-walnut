@@ -718,6 +718,15 @@ Use the structured logger (`log.info('subsystem', 'message', { sessionId, taskId
 | Daemon logs | `/tmp/open-walnut/daemon-d-*.log` |
 | Server exit trace | `/tmp/open-walnut-exit.log` |
 
+`/tmp/open-walnut` belongs to the first Unix user who starts Walnut on a machine. Anyone else's
+Walnut uses `~/.cache/open-walnut` for all of these (the exit trace is `exit.log` inside it), the
+dir remote hosts already fall back to; a daemon running in either keeps its dir, and so does a
+login service that pins the home one (`src/lib/daemon-dir.ts`; `scripts/lib/daemon-dir.sh`, which
+`walnut-logs.sh` sources, is its sh twin). The server always names the dir to its daemon
+(`WALNUT_DAEMON_DIR`); both daemon builds treat either dir as production. A second user's remote terminal
+sockets go to `/tmp/open-walnut/term-<local uid>` on the remote host. 2026-10-30: a second user's server exited at
+boot with `EACCES: permission denied, mkdir '/tmp/open-walnut/streams'`.
+
 **"Blank page" triage:** grep the local-date AND previous-day files (UTC timestamps vs local filename!) for `error-boundary`, `\[react\]`, `\[uncaught\]`, and `JSON parse failed`. A repeated crash self-heals via `web/src/utils/crash-recovery.ts` (clears sessionStorage → then walnut localStorage keys + skips one prefs merge); the heals also log `[crash-recovery]`.
 
 ## Log investigation toolkit: `scripts/walnut-logs.sh`

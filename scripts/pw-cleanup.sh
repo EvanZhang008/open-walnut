@@ -78,13 +78,14 @@ fixture_listeners() {
 }
 
 isolated_daemons() {
-  # Session daemons whose WALNUT_DAEMON_DIR is NOT prod (/tmp/open-walnut).
+  # Session daemons whose WALNUT_DAEMON_DIR is NOT prod (/tmp/open-walnut, or
+  # ~/.cache/open-walnut for a second user on this machine).
   # Prod daemons intentionally survive restarts — never touch them.
   local pid
   for pid in $(pgrep -f 'daemon-darwin-arm64 --start' 2>/dev/null); do
     local dir
     dir="$(ps eww "$pid" 2>/dev/null | tr ' ' '\n' | grep '^WALNUT_DAEMON_DIR=' | head -1 | cut -d= -f2-)"
-    [[ -z "$dir" || "$dir" == "/tmp/open-walnut" ]] && continue
+    [[ -z "$dir" || "$dir" == "/tmp/open-walnut" || "$dir" == */.cache/open-walnut ]] && continue
     echo "$pid $dir"
   done
 }

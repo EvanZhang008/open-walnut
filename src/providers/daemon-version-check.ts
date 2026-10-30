@@ -155,6 +155,8 @@ const DAEMON_SOURCE_FILES = [
   'src/providers/daemon-service-cli.ts',
   // The account lookup daemon-service-cli.ts refuses a faked home with, bundled into its .cjs.
   'src/lib/account.ts',
+  // The runtime dir rule `walnut daemon install` pins (~/.cache/open-walnut for a second user).
+  'src/lib/daemon-dir.ts',
   'src/providers/daemon-service-files.ts',
   // The store lock daemon-service-files.ts takes, bundled into daemon-service-cli.cjs: a lock
   // change must redeploy every host, or old and new lock code share the service files.

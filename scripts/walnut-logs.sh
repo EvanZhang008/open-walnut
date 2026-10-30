@@ -2,7 +2,8 @@
 #
 # walnut-logs.sh — investigation toolkit for Walnut logs & sessions.
 #
-# Log layout (all under $LOG_DIR, default /tmp/open-walnut):
+# Log layout (all under $LOG_DIR, default /tmp/open-walnut, or ~/.cache/open-walnut
+# when another user on this machine owns /tmp/open-walnut):
 #   open-walnut-<YYYY-MM-DD>.log   structured JSON, one obj per line (PRIMARY — has time/traceId/reqId)
 #   server.log                     human-readable mirror (HH:MM:SS LVL [subsystem] msg {json})
 #   daemon-d-<pid>-<id>.log        per-daemon-instance JSON logs (remote/local session spawns)
@@ -40,7 +41,10 @@
 # abort the whole script and print nothing for a valid-but-empty query.
 set -uo pipefail
 
-LOG_DIR="${WALNUT_LOG_DIR:-/tmp/open-walnut}"
+# The dir the server and its daemon use: /tmp/open-walnut, or ~/.cache/open-walnut
+# when another user on this machine owns that one (scripts/lib/daemon-dir.sh).
+. "$(dirname "${BASH_SOURCE[0]}")/lib/daemon-dir.sh"
+LOG_DIR="${WALNUT_LOG_DIR:-$(walnut_daemon_dir)}"
 # Prod streams moved to ~/.open-walnut/tmp/streams (2026-08, reboot-surviving);
 # fall back to the legacy /tmp dir for pre-move sessions still writing there.
 if [[ -n "${WALNUT_STREAMS_DIR:-}" ]]; then
@@ -498,7 +502,7 @@ PY
     # observability module is inlined into the big cli.js/server.js bundles —
     # there's no standalone dist/core/observability/bundle.js to import.
     sid="${1:?usage: bundle <sid> [mins]}"; mins="${2:-60}"
-    # Bundles live under LOG_DIR (/tmp/open-walnut/incidents), next to the source
+    # Bundles live under LOG_DIR ($LOG_DIR/incidents), next to the source
     # logs — NOT under OPEN_WALNUT_HOME, which git-sync commits. Matches bundle.ts.
     ts="$(date +%s)000"   # epoch ms (matches Date.now() in the in-process version)
     dir="$LOG_DIR/incidents/$sid-$ts"

@@ -9,6 +9,11 @@ import {
   renderDaemonSystemdUnit,
   replaceDaemonServiceExecutable,
   readDaemonServiceExecutable,
+  daemonServiceConfigFiles,
+  readDaemonServiceDir,
+  readDaemonServiceUser,
+  serviceConfigGovernsDir,
+  serviceConfigRunsAs,
   type DaemonServiceConfig,
   type DaemonServicePlatform,
 } from '../../src/providers/daemon-service-config.js'
@@ -493,5 +498,61 @@ describe('the two renderers agree on the environment they hand the daemon', () =
     expect(pairs).toEqual(unitEnv)
     expect(pairs.map((pair) => pair.split('=')[0]))
       .toEqual(['HOME', 'PATH', 'WALNUT_DAEMON_DIR', 'WALNUT_DAEMON_STATE_DIR'])
+  })
+})
+
+describe('which daemon an installed config runs (two users on one machine)', () => {
+  const ME = { name: 'walnut', uid: 1001 }
+  const render = (platform: DaemonServicePlatform, runtimeDir: string, scope: 'user' | 'system' = 'user', user = 'walnut') => platform === 'linux'
+    ? renderDaemonSystemdUnit(linux({ runtimeDir, user }), scope)
+    : renderDaemonLaunchAgent(darwin({ runtimeDir }))
+
+  it.each(['linux', 'darwin'] as const)('reads back the dir it pinned, escaping included (%s)', (platform) => {
+    expect(readDaemonServiceDir(platform, render(platform, '/tmp/open-walnut'))).toBe('/tmp/open-walnut')
+    const odd = '/home/a "b" 100% & <c>/.cache/open-walnut'
+    expect(readDaemonServiceDir(platform, render(platform, odd))).toBe(odd)
+  })
+
+  it('reads an unquoted Environment= line too, and none from a config that names no dir', () => {
+    expect(readDaemonServiceDir('linux', '[Service]\nEnvironment=WALNUT_DAEMON_DIR=/srv/x\n')).toBe('/srv/x')
+    expect(readDaemonServiceDir('linux', '[Service]\nExecStart=/x\n')).toBeNull()
+    expect(readDaemonServiceDir('darwin', '<plist><dict></dict></plist>')).toBeNull()
+  })
+
+  it.each(['linux', 'darwin'] as const)('a config governs the dir it pins and no other (%s)', (platform) => {
+    const text = render(platform, '/home/walnut/.cache/open-walnut')
+    expect(serviceConfigGovernsDir(platform, text, '/home/walnut/.cache/open-walnut', ME)).toBe(true)
+    expect(serviceConfigGovernsDir(platform, text, '/tmp/open-walnut', ME)).toBe(false)
+  })
+
+  it('a system unit runs one account: ours by name or uid', () => {
+    const unit = render('linux', '/tmp/open-walnut', 'system', 'alice')
+    expect(readDaemonServiceUser(unit)).toBe('alice')
+    expect(serviceConfigRunsAs('linux', unit, ME)).toBe(false)
+    expect(serviceConfigRunsAs('linux', unit, { name: 'alice', uid: 1002 })).toBe(true)
+    expect(serviceConfigRunsAs('linux', render('linux', '/tmp/open-walnut', 'system', '1001'), ME)).toBe(true)
+    expect(serviceConfigRunsAs('linux', render('linux', '/tmp/open-walnut'), ME)).toBe(true)
+    expect(serviceConfigRunsAs('darwin', render('darwin', '/tmp/open-walnut'), ME)).toBe(true)
+  })
+
+  it('another account\'s unit governs the dir it pins too, and no other', () => {
+    const unit = render('linux', '/tmp/open-walnut', 'system', 'alice')
+    // A root server on /tmp/open-walnut must not start a daemon where alice's service runs one.
+    expect(serviceConfigGovernsDir('linux', unit, '/tmp/open-walnut', ME)).toBe(true)
+    expect(serviceConfigGovernsDir('linux', unit, '/home/walnut/.cache/open-walnut', ME)).toBe(false)
+  })
+
+  it('a config Walnut did not write (no dir) counts when it runs as us, to stay safe', () => {
+    expect(serviceConfigGovernsDir('linux', '', '/tmp/open-walnut', ME)).toBe(true)
+    expect(serviceConfigGovernsDir('darwin', '', '/tmp/open-walnut', ME)).toBe(true)
+    expect(serviceConfigGovernsDir('linux', '[Service]\nUser=alice\n', '/tmp/open-walnut', ME)).toBe(false)
+  })
+
+  it('lists the LaunchAgent on macOS, the user then the system unit on Linux', () => {
+    expect(daemonServiceConfigFiles('darwin', '/Users/a')).toEqual([`/Users/a/Library/LaunchAgents/${DAEMON_SERVICE_PLIST_NAME}`])
+    expect(daemonServiceConfigFiles('linux', '/home/a')).toEqual([
+      `/home/a/.config/systemd/user/${DAEMON_SERVICE_UNIT_NAME}`, `/etc/systemd/system/${DAEMON_SERVICE_UNIT_NAME}`,
+    ])
+    expect(daemonServiceConfigFiles('win32', '/x')).toEqual([])
   })
 })

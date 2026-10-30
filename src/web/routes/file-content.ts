@@ -72,6 +72,8 @@ export function cloudLocalReadAllowed(absPath: string): boolean {
     path.join(os.tmpdir(), 'open-walnut-streams'),
     '/tmp/open-walnut',
     '/tmp/open-walnut-streams',
+    // The daemon dir when another user on this machine owns /tmp/open-walnut (src/lib/daemon-dir.ts).
+    path.join(os.homedir(), '.cache', 'open-walnut'),
     path.join(os.homedir(), '.open-walnut', 'tmp'), // daemon stream files (2026-08 move)
   ]
   return roots.some((r) => resolved === r || resolved.startsWith(r + path.sep))

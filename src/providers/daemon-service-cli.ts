@@ -10,6 +10,7 @@ import { createDaemonServiceManager, DaemonServiceHandoverPendingError, DaemonSe
 import { stageDaemonServiceArtifact } from './daemon-service-artifact.js'
 import { openDaemonServiceFiles, withDaemonServiceFiles, type DaemonServiceFiles } from './daemon-service-files.js'
 import { createSystemServiceAccess } from './daemon-service-system.js'
+import { localProductionDaemonDir } from '../lib/daemon-dir.js'
 
 export interface DaemonServiceCliOptions {
   scope?: DaemonServiceScope
@@ -237,7 +238,9 @@ export async function runDaemonServiceCli(action: string, options: DaemonService
       throw new Error('Daemon service directory is not private')
     }
   } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
-  const runtimeDir = '/tmp/open-walnut'
+  // The production daemon dir of this account: /tmp/open-walnut, or ~/.cache/open-walnut
+  // when another user on this machine owns that one (src/lib/daemon-dir.ts).
+  const runtimeDir = localProductionDaemonDir()
   const platform = process.platform
   const system = systemScope ? createSystemServiceAccess(runDaemonServiceCommand) : null
   if (system && action !== 'status') await system.preflight()

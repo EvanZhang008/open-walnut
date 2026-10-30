@@ -19,7 +19,7 @@
 
 import { execFile } from 'node:child_process'
 import type { SessionRecord } from '../../core/types.js'
-import { resolveSshTarget, dtachSocketPath, dtachOwnerMarkerPath, DTACH_SOCKET_DIR, sshControlMasterArgs } from './spawn.js'
+import { resolveSshTarget, dtachSocketPath, dtachOwnerMarkerPath, DTACH_SOCKET_DIR, REMOTE_DTACH_SOCKET_DIR, sshControlMasterArgs } from './spawn.js'
 import { WALNUT_HOME } from '../../constants.js'
 import { listSessions } from '../../core/session-tracker.js'
 import { getConfig } from '../../core/config-manager.js'
@@ -86,7 +86,7 @@ async function runShell(host: string | undefined, script: string): Promise<{ cod
  * GNU ps, so we get the same table on both and resolve the leaf ourselves.
  */
 export async function hasForegroundProcess(record: Pick<SessionRecord, 'claudeSessionId' | 'host'>): Promise<boolean> {
-  const sock = dtachSocketPath(record.claudeSessionId)
+  const sock = dtachSocketPath(record.claudeSessionId, !!record.host)
   // One round-trip: print the master pid line, then the full process table.
   const script =
     `echo "MASTERPID:$(pgrep -f ${shellQuote(sock)} | head -1)"; ` +
@@ -130,7 +130,7 @@ export async function hasForegroundProcess(record: Pick<SessionRecord, 'claudeSe
 
 /** Explicitly destroy a session's dtach session (kill master + remove socket). */
 export async function killDtachSession(record: Pick<SessionRecord, 'claudeSessionId' | 'host'>): Promise<void> {
-  const sock = dtachSocketPath(record.claudeSessionId)
+  const sock = dtachSocketPath(record.claudeSessionId, !!record.host)
   // Kill the dtach master process(es) bound to this socket, then unlink it.
   const script = `pkill -f ${shellQuote(sock)} 2>/dev/null; rm -f ${shellQuote(sock)} 2>/dev/null; echo DONE`
   const res = await runShell(record.host, script)
@@ -182,8 +182,8 @@ export async function conditionalReap(record: Pick<SessionRecord, 'claudeSession
  */
 async function listWalnutDtach(host: string | undefined): Promise<{ owner: string | null; ids: string[] }> {
   const script =
-    `echo "OWNER:$(cat ${shellQuote(dtachOwnerMarkerPath())} 2>/dev/null)"; ` +
-    `ls -1 ${shellQuote(DTACH_SOCKET_DIR)}/walnut-*.dsock 2>/dev/null || true`
+    `echo "OWNER:$(cat ${shellQuote(dtachOwnerMarkerPath(!!host))} 2>/dev/null)"; ` +
+    `ls -1 ${shellQuote(host ? REMOTE_DTACH_SOCKET_DIR : DTACH_SOCKET_DIR)}/walnut-*.dsock 2>/dev/null || true`
   const res = await runShell(host, script)
   const lines = res.stdout.split('\n')
   const ownerLine = lines.find((l) => l.startsWith('OWNER:'))

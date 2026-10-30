@@ -75,8 +75,18 @@ function spyDeadProcessKill() {
   }) as typeof process.kill)
 }
 
-/** Only the listed paths exist; every other stat falls through to the real fs. */
-function stubServiceFiles(present: string[], unknown: string[] = []): void {
+const realReadFileSync = fs.readFileSync
+
+/**
+ * Only the listed paths exist; every other stat falls through to the real fs.
+ * A present config reads as `texts[path]` (empty: one Walnut did not write).
+ */
+function stubServiceFiles(present: string[], unknown: string[] = [], texts: Record<string, string> = {}): void {
+  vi.spyOn(fs, 'readFileSync').mockImplementation(((target: fs.PathOrFileDescriptor, ...rest: unknown[]) => {
+    const file = String(target)
+    if (present.includes(file)) return texts[file] ?? ''
+    return (realReadFileSync as unknown as (...a: unknown[]) => unknown)(target, ...rest)
+  }) as typeof fs.readFileSync)
   vi.spyOn(fs, 'lstatSync').mockImplementation(((target: fs.PathLike, ...rest: unknown[]) => {
     const file = String(target)
     if (present.includes(file)) return { isFile: () => true } as fs.Stats
@@ -193,6 +203,21 @@ describe('LocalDaemon — OS-managed daemons are left alone', () => {
     const takeover = priv(daemonIn(PROD_DAEMON_DIR)).detectServiceTakeover()
     expect(takeover.managed).toBe(true)
     expect(takeover.present).toContain(config)
+  })
+
+  it('a config that pins the other production dir governs nothing here (a second user on the machine)', () => {
+    const config = daemonServiceConfigPaths()[0]
+    if (!config) return
+    const pins = (dir: string) => process.platform === 'darwin'
+      ? `<key>WALNUT_DAEMON_DIR</key>\n<string>${dir}</string>`
+      : `Environment="WALNUT_DAEMON_DIR=${dir}"`
+    stubServiceFiles([config], [], { [config]: pins(path.join(os.homedir(), '.cache', 'open-walnut')) })
+    const takeover = priv(daemonIn(PROD_DAEMON_DIR)).detectServiceTakeover()
+    expect(takeover.managed).toBe(false)
+    vi.restoreAllMocks()
+    killSpy = spyDeadProcessKill()
+    stubServiceFiles([config], [], { [config]: pins(PROD_DAEMON_DIR) })
+    expect(priv(daemonIn(PROD_DAEMON_DIR)).detectServiceTakeover().present).toContain(config)
   })
 
   it('an unreadable config path is managed, not "not installed"', () => {

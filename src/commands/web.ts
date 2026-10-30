@@ -148,7 +148,7 @@ export async function runWeb(options: {
     )
   }
 
-  const { startServer, stopServer, armGracefulSignalExit } = await import('../web/server.js')
+  const { startServer, stopServer, armGracefulSignalExit, exitTraceFile } = await import('../web/server.js')
 
   const port = options.port ? parseInt(options.port, 10) : undefined
 
@@ -177,7 +177,7 @@ export async function runWeb(options: {
     // bail, so a code=1 exit is not mistaken for a crash.
     const bail = setTimeout(() => {
       const msg = `[${new Date().toISOString()}] SERVER EXIT: shutdown bail after ${SHUTDOWN_BAIL_MS}ms pid=${process.pid}`
-      try { fs.appendFileSync('/tmp/open-walnut-exit.log', msg + '\n') } catch { /* best-effort */ }
+      try { fs.appendFileSync(exitTraceFile(), msg + '\n') } catch { /* best-effort */ }
       process.exit(1)
     }, SHUTDOWN_BAIL_MS)
     try {
@@ -196,7 +196,7 @@ export async function runWeb(options: {
   armGracefulSignalExit()
   // The Mac app that started this died without stopping it: stop as it would have.
   watchForOrphan(orphanParent, () => {
-    try { fs.appendFileSync('/tmp/open-walnut-exit.log', `[${new Date().toISOString()}] SERVER EXIT: the app that started it is gone pid=${process.pid}\n`) } catch { /* best-effort */ }
+    try { fs.appendFileSync(exitTraceFile(), `[${new Date().toISOString()}] SERVER EXIT: the app that started it is gone pid=${process.pid}\n`) } catch { /* best-effort */ }
     void shutdown()
   })
 

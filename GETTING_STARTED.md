@@ -750,6 +750,20 @@ the command still reports this machine and says so.
 2. Find what's using port 3456: `lsof -i :3456`
 3. If it's an old Walnut process, stop it and restart
 
+### Two people on one computer
+
+Each Unix user runs their own Walnut, with their own data in `~/.open-walnut`. The first one
+keeps its logs and session daemon in `/tmp/open-walnut`; anyone else's Walnut uses
+`~/.cache/open-walnut` instead (`walnut logs` reads the right one). Give the second one its own
+port: `walnut web --port 3460`, and point that user's terminal at it, because `walnut` in a
+terminal talks to port 3456 unless told otherwise: add
+`export OPEN_WALNUT_API_URL=http://127.0.0.1:3460` to their shell profile. Sessions Walnut starts
+already talk to their own server. Walnut trusts requests from this computer itself, so the other
+accounts on it can reach your Walnut's port: share a computer only with people you trust.
+
+Walnut 0.6.20 and older could not start for a second user at all: the server stopped with
+`EACCES: permission denied, mkdir '/tmp/open-walnut/streams'`.
+
 ### Install fails
 
 **Symptoms**: `install.sh` stops with an `open-walnut install:` error, or `bun install` fails in a checkout.

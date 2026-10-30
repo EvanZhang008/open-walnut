@@ -44,6 +44,8 @@ describe('host replica boot guard', () => {
     ['a run dir that holds the shared run dir (/tmp)', { ...good, WALNUT_DAEMON_DIR: '/tmp' }, /inside or holds \/tmp\/open-walnut/],
     ['a run dir that holds the shared run dir (/)', { ...good, WALNUT_DAEMON_DIR: '/' }, /inside or holds \/tmp\/open-walnut/],
     ['a run dir inside the host daemon dir', { ...good, WALNUT_DAEMON_DIR: path.join(hostd, 'run') }, /inside or holds WALNUT_HOST_DAEMON_DIR/],
+    ['the account\'s own run dir (a second user on the machine)', { ...good, WALNUT_DAEMON_DIR: path.join(acct, '.cache', 'open-walnut') }, /the run dir of this account's own Walnut/],
+    ['a run dir inside the account\'s own run dir', { ...good, WALNUT_DAEMON_DIR: path.join(acct, '.cache', 'open-walnut', 'replica') }, /the run dir of this account's own Walnut/],
     ['a run dir that holds the host daemon dir', { ...good, WALNUT_DAEMON_DIR: tmp, OPEN_WALNUT_HOME: '/srv/marina-data' }, /inside or holds WALNUT_HOST_DAEMON_DIR/],
   ])('refuses %s', (_name, env, why) => {
     expect(check(env)).toMatch(why)

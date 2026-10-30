@@ -62,6 +62,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { log } from '../logging/index.js'
 import type { SessionRecord, ProcessStatus } from './types.js'
+import { isProductionDaemonDir } from '../lib/daemon-dir.js'
 
 // ── Stream-file tail fold (pure) ──
 
@@ -564,7 +565,7 @@ export function daemonStreamPathCandidates(sessionId: string, host?: string | nu
     return [`${process.env.WALNUT_STREAMS_DIR}/${sessionId}.jsonl`]
   }
   const daemonDir = process.env.WALNUT_DAEMON_DIR
-  if (daemonDir && daemonDir !== '/tmp/open-walnut') {
+  if (daemonDir && !isProductionDaemonDir(daemonDir)) {
     return [`${daemonDir}-streams/${sessionId}.jsonl`]
   }
   return [

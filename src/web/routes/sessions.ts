@@ -69,7 +69,7 @@ import {
   getSubagentHistoryPayload, executeCompactSession,
 } from '../../core/sessions/session-extras.js'
 import { filterSessionsByQuery } from '../../core/session-search.js'
-import { CLOUD_MODE, QUICK_START_MESSAGE_HARD_LIMIT } from '../../constants.js'
+import { CLOUD_MODE, LOG_DIR, QUICK_START_MESSAGE_HARD_LIMIT } from '../../constants.js'
 import { ensureWalnutSource, isWalnutCheckout, WalnutSourceError } from '../../core/self-repair/walnut-source.js'
 import { engineCaps, isAcpEngine, isKnownEngine, normalizeEngine } from '../../core/agents/engine-registry.js'
 import { resolveDefaultEngine } from '../../core/agents/default-engine.js'
@@ -336,7 +336,7 @@ function buildFixWalnutMessage(userReport: string): string {
     `"""`,
     ``,
     `Fix it end to end:`,
-    `1. Reproduce/diagnose first — structured logs live in /tmp/open-walnut/ (start with \`scripts/walnut-logs.sh diagnose\`, see CLAUDE.md for the toolkit). If a screenshot is attached, read it.`,
+    `1. Reproduce/diagnose first — structured logs live in ${LOG_DIR}/ (start with \`scripts/walnut-logs.sh diagnose\`, see CLAUDE.md for the toolkit). If a screenshot is attached, read it.`,
     `2. Find the root cause — fix causes, not symptoms.`,
     `3. Implement the fix, then build and verify per the repo's CLAUDE.md workflow.`,
     `4. Summarize root cause and what changed.`,

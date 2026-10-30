@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { accountInfo } from './lib/account.js';
+import { localDaemonDirChoice } from './lib/daemon-dir.js';
 
 export const WALNUT_HOME = resolveOpenWalnutHome();
 
@@ -300,8 +301,10 @@ export const USAGE_DB_FILE = path.join(WALNUT_HOME, 'usage.sqlite');
 // Env-aware so an isolated demo server (WALNUT_DAEMON_DIR=/tmp/open-walnut-demo)
 // keeps its logs/streams/images separate from production. Read at import time —
 // the env must be set by the launching shell (see dev:demo) before node starts,
-// same constraint as IS_EPHEMERAL above. Production sets nothing → /tmp/open-walnut.
-export const LOG_DIR = process.env.WALNUT_DAEMON_DIR || '/tmp/open-walnut';
+// same constraint as IS_EPHEMERAL above. Production sets nothing → /tmp/open-walnut,
+// or ~/.cache/open-walnut when another user on this machine owns that one
+// (src/lib/daemon-dir.ts).
+export const LOG_DIR = localDaemonDirChoice().dir;
 export const SESSION_STREAMS_DIR = path.join(LOG_DIR, 'streams');
 /**
  * Per-session dtach unix sockets for the embedded terminal (one per terminal:

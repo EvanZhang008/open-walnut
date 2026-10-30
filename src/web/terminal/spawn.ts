@@ -47,6 +47,7 @@ import { shellQuote } from '../../providers/session-io.js'
 import { getConfig } from '../../core/config-manager.js'
 import { hostOffersTerminal } from '../../core/hosts/host-status.js'
 import { DTACH_SOCKET_DIR, WALNUT_HOME } from '../../constants.js'
+import { SHARED_DAEMON_DIR, localDaemonDirChoice } from '../../lib/daemon-dir.js'
 import { log } from '../../logging/index.js'
 import { remoteDtachPath, localDtachPath } from './dtach-provision.js'
 
@@ -95,8 +96,24 @@ export interface SpawnResult {
  * today (only local test/demo instances override LOG_DIR, and a test instance is
  * now gated out of reaping anyway); revisit if remote-specific dirs are ever
  * needed.
+ *
+ * One exception: a second user on this machine keeps their LOG_DIR under their
+ * own home (src/lib/daemon-dir.ts), a path that means nothing on a remote host.
+ * Their remote terminals use /tmp/open-walnut/term-<local uid> there
+ * (REMOTE_DTACH_SOCKET_DIR): beside the first user's /tmp/open-walnut/term, not
+ * in it, because both may reach the same remote account, and the orphan sweep of
+ * whichever Walnut owns a dir ends every socket its own registry does not know.
  */
 export { DTACH_SOCKET_DIR }
+
+/** The socket dir on a remote host: the local one, except for a home-dir fallback. */
+export const REMOTE_DTACH_SOCKET_DIR = localDaemonDirChoice().fallback
+  ? `${SHARED_DAEMON_DIR}/term-${typeof process.getuid === 'function' ? process.getuid() : 'user'}`
+  : DTACH_SOCKET_DIR
+
+function socketDir(remote: boolean): string {
+  return remote ? REMOTE_DTACH_SOCKET_DIR : DTACH_SOCKET_DIR
+}
 
 /**
  * Stable dtach socket path derived from the Claude session ID.
@@ -106,11 +123,11 @@ export { DTACH_SOCKET_DIR }
  * Claude session IDs are UUIDs (hex + dashes); we fail fast on anything outside
  * `[A-Za-z0-9_-]` rather than silently building an injectable command.
  */
-export function dtachSocketPath(sessionId: string): string {
+export function dtachSocketPath(sessionId: string, remote = false): string {
   if (!/^[A-Za-z0-9_-]+$/.test(sessionId)) {
     throw new Error(`Unsafe session id for dtach socket: ${JSON.stringify(sessionId)}`)
   }
-  return `${DTACH_SOCKET_DIR}/walnut-${sessionId}.dsock`
+  return `${socketDir(remote)}/walnut-${sessionId}.dsock`
 }
 
 /**
@@ -132,8 +149,8 @@ export function dtachSocketPath(sessionId: string): string {
  */
 export const DTACH_OWNER_MARKER = '.owner'
 
-export function dtachOwnerMarkerPath(): string {
-  return `${DTACH_SOCKET_DIR}/${DTACH_OWNER_MARKER}`
+export function dtachOwnerMarkerPath(remote = false): string {
+  return `${socketDir(remote)}/${DTACH_OWNER_MARKER}`
 }
 
 /**
@@ -144,9 +161,9 @@ export function dtachOwnerMarkerPath(): string {
  * (the remote socket dir is chosen by the LOCAL env — see DTACH_SOCKET_DIR
  * comment — so the remote dir's owner is this instance's WALNUT_HOME too).
  */
-export function dtachOwnerClaimScript(): string {
-  const marker = dtachOwnerMarkerPath()
-  return `mkdir -p ${shellQuote(DTACH_SOCKET_DIR)}; [ -e ${shellQuote(marker)} ] || printf '%s\\n' ${shellQuote(WALNUT_HOME)} > ${shellQuote(marker)}`
+export function dtachOwnerClaimScript(remote = false): string {
+  const marker = dtachOwnerMarkerPath(remote)
+  return `mkdir -p ${shellQuote(socketDir(remote))}; [ -e ${shellQuote(marker)} ] || printf '%s\\n' ${shellQuote(WALNUT_HOME)} > ${shellQuote(marker)}`
 }
 
 /**
@@ -244,10 +261,10 @@ export function remoteCdTarget(cwd: string): string {
  * explicit shell token (already shell-safe) to override.
  */
 export function buildRemoteDtachCommand(dtachBin: string, sessionId: string, shell: string = REMOTE_DEFAULT_SHELL, cwd?: string): string {
-  const sock = dtachSocketPath(sessionId)
+  const sock = dtachSocketPath(sessionId, true)
   // mkdir + claim the socket dir for this instance's registry (never overwrites
   // an existing claim) — the orphan sweep refuses to reap an unowned dir.
-  const mkdir = dtachOwnerClaimScript()
+  const mkdir = dtachOwnerClaimScript(true)
   // `-l` → login shell. `shell` is either our unquoted REMOTE_DEFAULT_SHELL
   // (must expand remotely) or an explicit safe token, so it is NOT re-quoted.
   const dtach = `exec ${shellQuote(dtachBin)} -A ${shellQuote(sock)} -z -E -r winch ${shell} -l`

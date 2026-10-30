@@ -4,7 +4,8 @@
 //   bun scripts/stall-profile-summary.mjs <file.cpuprofile | dir> [--top N] [--all]
 //
 // With a directory, the newest profile in it is used (default dir:
-// $WALNUT_DAEMON_DIR/stall-profiles, else /tmp/open-walnut/stall-profiles).
+// stall-profiles in the server's runtime dir: $WALNUT_DAEMON_DIR, else /tmp/open-walnut,
+// or ~/.cache/open-walnut for a second user on the machine, src/lib/daemon-dir.ts).
 // The sibling .json (written with the profile) names each stall's hold window;
 // the summary covers only the samples inside the holds unless --all is given.
 // Time is weighted by each sample's real duration, so a starved sampler that
@@ -18,6 +19,7 @@
 // heaviest stacks.
 import fs from 'node:fs'
 import path from 'node:path'
+import { localDaemonDirChoice } from '../src/lib/daemon-dir.ts'
 
 const args = process.argv.slice(2)
 const flag = (name) => args.includes(name)
@@ -27,7 +29,7 @@ const opt = (name, fallback) => {
 }
 const top = Number(opt('--top', 20))
 let target = args.find((a, i) => !a.startsWith('--') && args[i - 1] !== '--top')
-  ?? path.join(process.env.WALNUT_DAEMON_DIR || '/tmp/open-walnut', 'stall-profiles')
+  ?? path.join(localDaemonDirChoice().dir, 'stall-profiles')
 
 if (fs.existsSync(target) && fs.statSync(target).isDirectory()) {
   const files = fs.readdirSync(target).filter((f) => f.endsWith('.cpuprofile'))

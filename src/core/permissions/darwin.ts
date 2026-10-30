@@ -121,13 +121,14 @@ export function warmLauncherDetection(): void {
  */
 async function probeSessionIdentity(): Promise<{ app: string | null; detail?: string }> {
   try {
-    const [{ inspectSessionHost }, { PROD_DAEMON_DIR }] = await Promise.all([
+    const [{ inspectSessionHost }, { isProductionDaemonDir, localDaemonDirChoice, localProductionDaemonDir }] = await Promise.all([
       import('../../providers/session-host.js'),
-      import('../../providers/daemon-ownership.js'),
+      import('../../lib/daemon-dir.js'),
     ]);
+    const daemonDir = localDaemonDirChoice().dir;
     const seen = await inspectSessionHost({
-      daemonDir: process.env.WALNUT_DAEMON_DIR || PROD_DAEMON_DIR,
-      prodDaemonDir: PROD_DAEMON_DIR,
+      daemonDir,
+      prodDaemonDir: isProductionDaemonDir(daemonDir) ? daemonDir : localProductionDaemonDir(),
     });
     return { app: seen.app, ...(seen.detail ? { detail: seen.detail } : {}) };
   } catch (err) {

@@ -6,6 +6,7 @@ import type { SessionHistoryMessage } from '../core/session-history.js'
 import type { SessionRecord } from '../core/types.js'
 import { AcpHistoryFold, projectAcpJournalHistory } from './acp-journal-projector.js'
 import type { JournalRecord } from './acp-worker/protocol.js'
+import { isProductionDaemonDir } from '../lib/daemon-dir.js'
 
 interface JournalReader {
   readFile(filePath: string): Promise<string | null>
@@ -81,10 +82,10 @@ export function getAcpJournalPathCandidates(record: AcpHistoryRecord): string[] 
   push(record.acpJournalPath)
   if (record.acpRuntimeId) {
     const file = `${record.acpRuntimeId}.acp.jsonl`
-    const daemonDir = process.env.WALNUT_DAEMON_DIR || '/tmp/open-walnut'
+    const daemonDir = process.env.WALNUT_DAEMON_DIR
     if (process.env.WALNUT_STREAMS_DIR) {
       push(path.join(process.env.WALNUT_STREAMS_DIR, file))
-    } else if (process.env.WALNUT_DAEMON_DIR) {
+    } else if (daemonDir && !isProductionDaemonDir(daemonDir)) {
       // Isolated daemon (tests/sandbox): streams live in the sibling dir.
       push(path.join(`${daemonDir}-streams`, file))
     }
