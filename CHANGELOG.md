@@ -6,6 +6,8 @@ breaking changes).
 
 ## [Unreleased]
 
+## [0.6.20] - 2026-10-30
+
 ### Added
 
 - Run Walnut on your own models: with Ollama (or LM Studio/vLLM) as the AI provider and
