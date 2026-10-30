@@ -132,8 +132,9 @@ export interface CardGrown {
   maxHeight: number;
 }
 
-/** An enlarged card's width over a review card; ⤢ reaches CARD_GROWN_WIDTH. */
-export const CARD_ENLARGED_WIDTH = 680;
+/** An open card's width over its review card: a comment's width, reaching over
+ *  the text a little; a table or a diagram in it grows to CARD_GROWN_WIDTH. */
+export const CARD_ENLARGED_WIDTH = 480;
 
 /** The least an enlarged card is given before it moves up to have it. */
 export const ENLARGED_MIN_HEIGHT = 360;

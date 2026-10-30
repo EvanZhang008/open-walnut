@@ -3596,14 +3596,6 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on the signature
   const reviewLiveText = useMemo(() => new Map(reviewLive), [reviewLiveSig]);
   const quoteInChatApi = threadsApi.quoteInChat;
-  // A review card's own box: the follow-up goes into its question, and the
-  // timeline stays where the reader is (like a send from the comment card).
-  const sendToQuestionApi = threadsApi.sendToQuestion;
-  const sendFromReview = useCallback(async (key: string, text: string) => {
-    cardSendHold.current = true;
-    try { return await sendToQuestionApi(key, text); } finally { cardSendHold.current = false; }
-  }, [sendToQuestionApi]);
-  const reviewDraftKey = useCallback((key: string) => composerDraftKey(sessionId, key, threadTree), [sessionId, threadTree]);
   const enlargedKey = cardKey && cardKey === cardOverKey ? cardKey : null;
   // A follow-up just sent shows on its review card before history has its row.
   const reviewSent: Array<[string, string]> = [];
@@ -3619,9 +3611,8 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   const reviewSentText = useMemo(() => new Map(reviewSent), [reviewSentSig]);
   const review = useThreadReviewPane({
     sessionId, containerRef, conversationMode: convMode, hasQuestions, tree: threadTree, metaIndex: threadsApi.metaIndex,
-    numbers: questionNumber, messages, liveText: reviewLiveText, markStates, passageOf, jumpToPlace, openCard,
-    quoteInChat: quoteInChatApi, markViewed: threadsApi.markViewed,
-    canAsk: threadsApi.canAsk, sendToQuestion: sendFromReview, draftKeyOf: reviewDraftKey, enlargedKey, sentText: reviewSentText,
+    numbers: questionNumber, messages, liveText: reviewLiveText, markStates, openCard,
+    quoteInChat: quoteInChatApi, markViewed: threadsApi.markViewed, enlargedKey, sentText: reviewSentText,
   });
   reviewShownRef.current = review.on;
   const markTips = useThreadMarks({
@@ -4579,6 +4570,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
                 onClose={closeCard}
                 onQuote={quoteCardInChat}
                 style={cardPlace}
+                {...(enlargedKey && reviewOn ? { fillRef: containerRef } : {})}
               >
                 {cardBody}
               </ThreadCommentCard>

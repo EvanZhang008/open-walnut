@@ -3,13 +3,14 @@
  * SessionChatHistory: the fullscreen sidebar (ThreadReviewSidebar) with its
  * selection, what a mark click does while it shows (selects the card instead
  * of opening the popover), and the menu's "Open question" / "Quote in chat".
- * While the sidebar shows, opening a question ENLARGES its review card: the
- * question's full card opens over it, where the reader is looking.
+ * While the sidebar shows, opening a question (its row, its passage, the menu)
+ * opens the question's full card over its review card, where the reader is
+ * looking; the timeline stays put.
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { ContextMenu, type ContextMenuItem } from '@/components/common/ContextMenu';
 import { useReviewSidebar } from '@/hooks/useReviewSidebar';
-import type { SessionHistoryMessage, SessionPinnedQuote } from '@/types/session';
+import type { SessionHistoryMessage } from '@/types/session';
 import type { ThreadMark } from '@/utils/thread-mark-hit';
 import type { ThreadMarkState } from '@/utils/thread-mark-state';
 import type { ThreadMetaIndex } from '@/utils/thread-meta';
@@ -30,17 +31,9 @@ export interface ThreadReviewPaneArgs {
    *  sidebar is not shown: the caller reads `on` back, see SessionChatHistory). */
   liveText: ReadonlyMap<string, string>;
   markStates: ReadonlyMap<string, ThreadMarkState>;
-  passageOf: (key: string) => { msgId: string; quote?: SessionPinnedQuote } | null;
-  jumpToPlace: (msgId: string, quote: SessionPinnedQuote | undefined, via: string, opts?: { armBack?: boolean }) => void;
   openCard: (key: string, via: string) => void;
   quoteInChat: (key: string, via: string) => void;
   markViewed: (key: string) => void;
-  /** The session takes questions (the review card's box is live). */
-  canAsk: boolean;
-  /** Send a follow-up into one question (the review card's box). */
-  sendToQuestion: (key: string, text: string) => Promise<boolean>;
-  /** Where a question's unsent words live (the same key as its card's box). */
-  draftKeyOf: (key: string) => string;
   /** The question whose full card is open over its review card. */
   enlargedKey: string | null;
   /** Question key to its newest question sent and not in history yet. */
@@ -56,7 +49,7 @@ export interface ThreadReviewPane {
   onMarks: (marks: readonly ThreadMark[]) => void;
   sidebar: ReactNode;
   menu: ReactNode;
-  /** A question's review card on screen now (an enlarged card is placed over it). */
+  /** A question's review card on screen now (its open card is placed over it). */
   cardElement: (key: string) => HTMLElement | null;
 }
 
@@ -74,25 +67,20 @@ export function useThreadReviewPane(a: ThreadReviewPaneArgs): ThreadReviewPane {
   }) : []), [turns, keys, a.tree, a.metaIndex, a.numbers, a.markStates]);
   const entries = useMemo(() => withLiveAnswers(withSentQuestions(base, a.sentText), a.liveText), [base, a.sentText, a.liveText]);
 
-  const { markViewed, passageOf, jumpToPlace, openCard, quoteInChat, sessionId } = a;
+  const { markViewed, openCard, quoteInChat, sessionId } = a;
   const select = useCallback((key: string, via: string) => {
     setSelected(key);
     // Picked on purpose: its answer has been looked at (the card shows it).
     markViewed(key);
     log.info('threads', 'review card selected', { sessionId, key, via });
   }, [markViewed, sessionId]);
-  const activate = useCallback((key: string) => {
-    select(key, 'card');
-    const p = passageOf(key);
-    if (p) jumpToPlace(p.msgId, p.quote, 'review', { armBack: false });
-  }, [select, passageOf, jumpToPlace]);
   const cardsRef = useRef(new Map<string, HTMLDivElement>());
   const cardElement = useCallback((key: string) => cardsRef.current.get(key) ?? null, []);
-  const enlarge = useCallback((key: string) => {
-    select(key, 'enlarge');
+  const open = useCallback((key: string, via: string) => {
+    select(key, via);
     openCard(key, 'review-enlarge');
   }, [select, openCard]);
-  const quote = useCallback((key: string) => quoteInChat(key, 'review'), [quoteInChat]);
+  const openFromCard = useCallback((key: string) => open(key, 'card'), [open]);
 
   // The picked card shows its answer: one that lands while it is picked has
   // been seen (no red "New answer" on the card being read).
@@ -118,21 +106,23 @@ export function useThreadReviewPane(a: ThreadReviewPaneArgs): ThreadReviewPane {
     ? entries.map((e) => (e.key === selected ? { ...e, state: 'read' as const } : e))
     : entries), [readNow, selected, entries]);
 
-  // Back from an enlarged card: its review card's box takes the focus again.
-  const [focusKey, setFocusKey] = useState<string | null>(null);
-  const lastEnlarged = useRef<string | null>(null);
+  // Closed: the keyboard goes back to its row when nothing else took it (the
+  // row hid itself while the card lay over it).
+  const lastOpen = useRef<string | null>(null);
   useEffect(() => {
-    const was = lastEnlarged.current;
-    lastEnlarged.current = a.enlargedKey;
-    if (was && !a.enlargedKey && was === selected) setFocusKey(was);
-    else if (a.enlargedKey) setFocusKey(null);
-  }, [a.enlargedKey, selected]);
+    const was = lastOpen.current;
+    lastOpen.current = a.enlargedKey;
+    if (!was || a.enlargedKey) return;
+    const active = typeof document !== 'undefined' ? document.activeElement : null;
+    if (active && active !== document.body) return;
+    cardsRef.current.get(was)?.querySelector<HTMLElement>('button.thread-review-head')?.focus({ preventScroll: true });
+  }, [a.enlargedKey]);
 
   const takeMarkClick = useCallback((key: string) => {
     if (!review.on || !review.anchors.has(key)) return false;
-    select(key, 'mark');
+    open(key, 'mark');
     return true;
-  }, [review.on, review.anchors, select]);
+  }, [review.on, review.anchors, open]);
 
   const [menuAt, setMenuAt] = useState<{ key: string; point: { x: number; y: number } } | null>(null);
   const onMarkMenu = useCallback((key: string, at: { x: number; y: number }) => setMenuAt({ key, point: at }), []);
@@ -141,19 +131,15 @@ export function useThreadReviewPane(a: ThreadReviewPaneArgs): ThreadReviewPane {
     const key = menuAt.key;
     const inReview = review.on && review.anchors.has(key);
     return [
-      inReview
-        ? { key: 'open', label: 'Enlarge question', onSelect: () => enlarge(key) }
-        : { key: 'open', label: 'Open question', onSelect: () => openCard(key, 'mark-menu') },
+      { key: 'open', label: 'Open question', onSelect: () => (inReview ? open(key, 'mark-menu') : openCard(key, 'mark-menu')) },
       { key: 'quote', label: 'Quote in chat', onSelect: () => quoteInChat(key, 'mark-menu') },
     ];
-  }, [menuAt, openCard, quoteInChat, review.on, review.anchors, enlarge]);
+  }, [menuAt, openCard, quoteInChat, review.on, review.anchors, open]);
 
   const sidebar = review.on ? (
     <ThreadReviewSidebar
       layerRef={review.layerRef} entries={shown} anchors={review.anchors} selected={selected}
-      onActivate={activate} onEnlarge={enlarge} onQuote={quote}
-      enlarged={a.enlargedKey} canAsk={a.canAsk} sendToQuestion={a.sendToQuestion} draftKeyOf={a.draftKeyOf}
-      cardsRef={cardsRef} focusKey={focusKey}
+      onOpen={openFromCard} enlarged={a.enlargedKey} cardsRef={cardsRef}
     />
   ) : null;
   const menu = menuAt ? (

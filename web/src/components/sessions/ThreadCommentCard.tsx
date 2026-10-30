@@ -17,8 +17,13 @@
  * model-drawn HTML box) opens expanded by itself, also when it arrives while the
  * card is open; once the reader sizes the card themselves, that choice holds for
  * this question.
+ *
+ * Opened over a fullscreen review card (`fillRef`), ⤢ is a full-screen button
+ * instead: the card fills the timeline's visible box, where it is, and the same
+ * button (or Esc) brings it back (2026-10-29, the user: Enlarge should be "像正常
+ * 的一个 full screen 在右上角", full screen in place).
  */
-import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from 'react';
 import type { CardGrown } from '@/utils/thread-card';
 import type { ThreadViewStatus } from '@/utils/thread-meta';
 import { ICON_COLLAPSE, ICON_EXPAND } from '@/components/common/Icons';
@@ -30,6 +35,9 @@ import '@/styles/thread-card.css';
 
 /** The grow animation (`.thread-card.is-sizing` in thread-card.css). */
 const GROW_MS = 160;
+
+/** A full-screen card's margin inside the timeline's visible box. */
+const FILL_INSET = 12;
 
 /** Content that does not read at the card's resting width. */
 const WIDE_CONTENT = '.markdown-body table, .markdown-body svg, .markdown-body iframe, iframe.rich-island, .markdown-body [style]';
@@ -90,6 +98,44 @@ export interface ThreadCommentCardProps {
   /** Where the card sits (content coordinates of its layer) and how tall it may
    *  grow; `grown`, how far it reaches expanded (no ⤢ without it). */
   style: { top: number; left: number; width: number; maxHeight: number; grown?: CardGrown };
+  /** The scroll box whose visible area the card fills in full screen (⤢). Given,
+   *  ⤢ toggles full screen; without it, ⤢ grows the card where it is. */
+  fillRef?: RefObject<HTMLElement | null>;
+}
+
+interface FillBox { top: number; left: number; width: number; height: number }
+
+/** The visible part of the box below what its top padding leaves for the panel's
+ *  glass header, inset on every side, in viewport px (the card is fixed there). */
+function fillBoxOf(host: HTMLElement): FillBox {
+  const r = host.getBoundingClientRect();
+  const covered = parseFloat(getComputedStyle(host).paddingTop) || 0;
+  return {
+    top: Math.round(r.top + covered + FILL_INSET),
+    left: Math.round(r.left + FILL_INSET),
+    width: Math.max(0, Math.round(r.width - 2 * FILL_INSET)),
+    height: Math.max(0, Math.round(r.height - covered - 2 * FILL_INSET)),
+  };
+}
+
+/** Full screen over `fillRef`'s box: the box, kept current while the window or
+ *  the panel resizes; null while not full. */
+function useFillBox(full: boolean, fillRef: RefObject<HTMLElement | null> | undefined): FillBox | null {
+  const [box, setBox] = useState<FillBox | null>(null);
+  useLayoutEffect(() => {
+    const host = fillRef?.current;
+    if (!full || !host) { setBox(null); return; }
+    const measure = () => {
+      const next = fillBoxOf(host);
+      setBox((prev) => (prev && prev.top === next.top && prev.left === next.left && prev.width === next.width && prev.height === next.height ? prev : next));
+    };
+    measure();
+    const ro = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(measure);
+    ro?.observe(host);
+    window.addEventListener('resize', measure);
+    return () => { ro?.disconnect(); window.removeEventListener('resize', measure); };
+  }, [full, fillRef]);
+  return full ? box : null;
 }
 
 /** The scroll boxes around `el`, nearest first: the ones a scrollIntoView can move. */
@@ -126,6 +172,12 @@ export const ThreadCommentCard = memo(function ThreadCommentCard(p: ThreadCommen
   const autoGrowRef = useRef<(glide: boolean) => void>(() => {});
   /** The reader pressed ⤢ or Esc on this question: no more automatic sizing. */
   const userSized = useRef(false);
+  // Full screen (⤢ with a `fillRef`): left when the card stops lying over a
+  // review card, and for every new question.
+  const canFill = !!p.fillRef;
+  const [full, setFull] = useState(false);
+  useEffect(() => { if (!canFill) setFull(false); }, [canFill]);
+  const fill = useFillBox(full && canFill, p.fillRef);
 
   // A new question (or a draft) opens with the composer ready; the body starts
   // at its newest turn, where the answer is.
@@ -139,10 +191,13 @@ export const ThreadCommentCard = memo(function ThreadCommentCard(p: ThreadCommen
     // A kept box (draftKey) loads its own words for the new key.
     if (!p.draftKey) setText(p.draft ? initialRef.current ?? '' : '');
     setExpanded(false);
+    setFull(false);
     userSized.current = false;
     const body = bodyRef.current;
     if (body) body.scrollTop = body.scrollHeight;
+    // A card that takes no questions holds the keyboard itself (its Esc).
     if (p.draft || p.canAsk) boxRef.current?.focus({ preventScroll: true });
+    else cardRef.current?.focus({ preventScroll: true });
     autoGrowRef.current(false);
   }, [p.threadKey, p.draft, p.canAsk]);
 
@@ -252,7 +307,17 @@ export const ThreadCommentCard = memo(function ThreadCommentCard(p: ThreadCommen
     return () => { cancelAnimationFrame(raf); mo.disconnect(); };
   }, [p.threadKey, p.draft, autoGrow]);
 
-  const onEscape = () => { if (grown) { userSized.current = true; setExpanded(false); } else p.onClose(); };
+  const toggleFull = useCallback(() => {
+    setFull((v) => !v);
+    if (p.canAsk) boxRef.current?.focus({ preventScroll: true });
+  }, [p.canAsk]);
+  // Full screen first; over a review card there is no shrink step (its ⤢ is
+  // the full-screen button), so the next Esc closes it.
+  const onEscape = () => {
+    if (full) setFull(false);
+    else if (grown && !canFill) { userSized.current = true; setExpanded(false); }
+    else p.onClose();
+  };
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); onEscape(); return; }
     // keyCode 229: WebKit's Enter that picks an IME candidate reports isComposing false.
@@ -269,18 +334,25 @@ export const ThreadCommentCard = memo(function ThreadCommentCard(p: ThreadCommen
   const box = grown
     ? { left: grown.left, width: grown.width, maxHeight: grown.maxHeight }
     : { left: p.style.left, width: p.style.width, maxHeight: p.style.maxHeight };
+  const place = fill
+    ? { position: 'fixed' as const, top: fill.top, left: fill.left, width: fill.width, height: fill.height, ['--thread-card-maxh' as string]: `${fill.height}px` }
+    : { top: p.style.top, left: box.left, width: box.width, ['--thread-card-maxh' as string]: `${box.maxHeight}px` };
   return (
     <div
       ref={cardRef}
-      className={`thread-card${grown ? ' is-expanded' : ''}${sizing ? ' is-sizing' : ''}`}
+      className={`thread-card${grown ? ' is-expanded' : ''}${fill ? ' is-full' : ''}${sizing ? ' is-sizing' : ''}`}
       role="dialog"
+      // Focusable, so a click on its text keeps the keyboard here: Esc then
+      // answers the card, never the panel's fullscreen under it.
+      tabIndex={-1}
       aria-label={p.draft ? 'New question' : `Question ${p.number ?? ''}: ${p.title}`.trim()}
       data-thread-key={p.threadKey}
       data-draft={p.draft ? 'true' : undefined}
       data-answering={p.answering ? 'true' : undefined}
       data-waiting={p.waiting ? 'true' : undefined}
       data-expanded={grown ? 'true' : undefined}
-      style={{ top: p.style.top, left: box.left, width: box.width, ['--thread-card-maxh' as string]: `${box.maxHeight}px` }}
+      data-full={fill ? 'true' : undefined}
+      style={place}
       onKeyDown={onCardKeyDown}
     >
       <div className="thread-card-head">
@@ -306,7 +378,18 @@ export const ThreadCommentCard = memo(function ThreadCommentCard(p: ThreadCommen
             </button>
           )}
           {p.menu}
-          {canGrow && (
+          {canFill ? (
+            <button
+              type="button"
+              className="thread-card-expand"
+              aria-label={full ? 'Exit question full screen' : 'Question full screen'}
+              aria-pressed={full}
+              title={full ? 'Exit full screen (Esc)' : 'Full screen'}
+              onClick={toggleFull}
+            >
+              {full ? ICON_COLLAPSE : ICON_EXPAND}
+            </button>
+          ) : canGrow && (
             <button
               type="button"
               className="thread-card-expand"

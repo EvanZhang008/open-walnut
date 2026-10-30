@@ -21,38 +21,35 @@
   left: calc(100% + var(--thread-review-gap, 20px));
   width: var(--thread-review-w, 300px);
   box-sizing: border-box;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 8px 10px 8px 12px;
+  /* One compact row until opened (2026-10-29: the cards took too much room
+     before a click); the open question is its full card, over this row. */
+  padding: 0;
   border: 1px solid var(--border-strong);
   border-left: 3px solid var(--review-edge, var(--border-strong));
-  border-radius: 10px;
+  border-radius: 8px;
   background: var(--bg-elevated);
   color: var(--fg);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06), 0 4px 14px rgba(0, 0, 0, 0.06);
-  font-size: 12.5px;
-  line-height: 1.45;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+  font-size: 12px;
+  line-height: 16px;
   pointer-events: auto;
-  cursor: pointer;
   transition: box-shadow 120ms ease;
 }
-.thread-review-card:hover { box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08), 0 8px 22px rgba(0, 0, 0, 0.1); }
+.thread-review-card:hover { box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08), 0 6px 16px rgba(0, 0, 0, 0.08); }
 .thread-review-card[data-selected="true"] {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1), 0 10px 26px rgba(0, 0, 0, 0.12);
 }
-[data-theme="dark"] .thread-review-card { border-color: rgba(255, 255, 255, 0.14); box-shadow: 0 2px 10px rgba(0, 0, 0, 0.5); }
+[data-theme="dark"] .thread-review-card { border-color: rgba(255, 255, 255, 0.14); box-shadow: 0 1px 4px rgba(0, 0, 0, 0.5); }
 @media (prefers-color-scheme: dark) {
-  :root:not([data-theme]) .thread-review-card { border-color: rgba(255, 255, 255, 0.14); box-shadow: 0 2px 10px rgba(0, 0, 0, 0.5); }
+  :root:not([data-theme]) .thread-review-card { border-color: rgba(255, 255, 255, 0.14); box-shadow: 0 1px 4px rgba(0, 0, 0, 0.5); }
 }
 
 .thread-review-head {
   display: flex; align-items: center; gap: 6px; min-width: 0; width: 100%; font-size: 12px;
-  /* A button that reads as the card's title row. */
-  margin: 0; padding: 0; border: 0; background: none; color: inherit; font-family: inherit;
-  text-align: left; cursor: pointer; border-radius: 4px;
+  /* The whole row is the button. */
+  margin: 0; padding: 5px 8px 5px 7px; border: 0; background: none; color: inherit; font-family: inherit;
+  line-height: 16px; text-align: left; cursor: pointer; border-radius: 0 7px 7px 0;
 }
 .thread-review-head:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .thread-review-head .thread-map-num { flex: none; background: var(--fg); color: var(--bg-elevated); }
@@ -64,71 +61,24 @@
   white-space: nowrap;
   font-weight: 600;
 }
-.thread-review-state { flex: none; font-size: 11px; font-weight: 600; color: var(--review-word, var(--fg-muted)); }
-/* The question: the chat's blue bubble, compact. */
-.thread-review-card .thread-review-q {
-  margin: 0 0 0 auto;
-  padding: 5px 10px;
-  max-width: 92%;
-  font-size: 12px;
-  line-height: 1.4;
-  overflow-wrap: anywhere;
-}
-/* Clamped inside the bubble: a clamp on the padded bubble itself shows the
-   next line's top through the bottom padding. */
-.thread-review-q-text {
-  display: -webkit-box;
-  -webkit-line-clamp: 1;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
-.thread-review-a {
-  color: var(--fg);
-  overflow-wrap: anywhere;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
-/* Compact until picked, so a dense reply keeps each card level with its line;
-   the picked one opens up: more of both, and its actions. */
-.thread-review-card[data-selected="true"] .thread-review-q-text { -webkit-line-clamp: 4; }
-.thread-review-card[data-selected="true"] .thread-review-a { -webkit-line-clamp: 8; }
-.thread-review-actions { display: none; align-items: center; gap: 4px; justify-content: flex-end; }
-.thread-review-card[data-selected="true"] .thread-review-actions,
-.thread-review-card:focus-within .thread-review-actions { display: flex; }
-.thread-review-rounds { margin-right: auto; color: var(--fg-muted); font-size: 11px; }
-.thread-review-btn {
-  padding: 2px 8px;
-  border: 1px solid var(--border-strong);
-  border-radius: 6px;
-  background: transparent;
-  color: var(--fg-secondary);
-  font: inherit;
-  font-size: 11.5px;
-  cursor: pointer;
-}
-.thread-review-btn:hover { background: var(--bg-tertiary); color: var(--fg); }
-.thread-review-enlarge { display: inline-flex; align-items: center; gap: 4px; }
-.thread-review-enlarge svg { width: 11px; height: 11px; }
-/* The picked card's follow-up box: the comment card's composer, inset in the card. */
-.thread-review-card .thread-review-composer {
-  margin: 2px -4px 0 -6px;
-  padding: 4px 4px 4px 8px;
-  border: 1px solid var(--border-strong);
+/* How many rounds the question has, when more than one. */
+.thread-review-rounds {
+  flex: none;
+  min-width: 16px;
+  padding: 0 4px;
   border-radius: 8px;
-  background: var(--bg);
-  cursor: text;
+  background: var(--bg-tertiary);
+  color: var(--fg-muted);
+  font-size: 10.5px;
+  line-height: 15px;
+  text-align: center;
 }
-.thread-review-card .thread-review-composer:focus-within { border-color: var(--accent); }
-.thread-review-composer .thread-card-input { font-size: 12.5px; min-height: 24px; padding: 3px 0; }
-/* Enlarged: its question's full card lies over it (same top, same right edge). */
+.thread-review-state { flex: none; font-size: 11px; font-weight: 600; color: var(--review-word, var(--fg-muted)); }
+/* Open: its question's full card lies over it (same top, same right edge). */
 .thread-review-card[data-enlarged="true"] { visibility: hidden; }
-.thread-review-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
 /* State colors follow the passage marks (thread-stack-page.css). */
 .thread-review-card[data-state="waiting"] { --review-edge: hsl(42 95% 52%); --review-word: hsl(38 90% 38%); border-left-style: dashed; }
-.thread-review-card[data-state="waiting"] .thread-review-a { color: var(--fg-secondary); }
 .thread-review-card[data-state="answering"] { --review-edge: hsl(140 60% 42%); --review-word: hsl(140 60% 32%); }
 .thread-review-card[data-state="unread"] { --review-edge: hsl(0 80% 55%); --review-word: hsl(0 75% 45%); background: color-mix(in srgb, hsl(0 90% 60%) 6%, var(--bg-elevated)); }
 .thread-review-card[data-state="failed"] { --review-edge: hsl(345 65% 55%); --review-word: hsl(345 60% 45%); border-left-style: dotted; }
@@ -150,7 +100,7 @@
   top: -1px;
   bottom: -1px;
   width: 3px;
-  border-radius: 10px 0 0 10px;
+  border-radius: 8px 0 0 8px;
   pointer-events: none;
 }
 .thread-review-card[data-state="waiting"]::before { background: hsl(42 95% 52%); animation: thread-review-breathe 2s ease-in-out infinite; }

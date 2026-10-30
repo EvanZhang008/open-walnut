@@ -17,6 +17,7 @@
 }
 .thread-card {
   position: absolute;
+  outline: none;
   display: flex;
   flex-direction: column;
   max-height: var(--thread-card-maxh, 60vh);
@@ -109,6 +110,8 @@
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
+  /* Its end never scrolls the timeline under it. */
+  overscroll-behavior: contain;
   overflow-x: hidden;
   padding: 6px 10px 4px;
   display: flex;
@@ -243,3 +246,18 @@
 @media (prefers-reduced-motion: reduce) { .thread-card.is-sizing { transition: none; } }
 .thread-card.is-expanded .thread-card-body { padding: 10px 18px 8px; }
 .thread-card-expand svg { width: 12px; height: 12px; }
+/* Full screen (⤢ over a review card): the card fills the timeline's visible
+   box where it is (ThreadCommentCard places it, fixed); the answer reads at
+   the chat's own size. */
+.thread-card.is-full {
+  animation: none;
+  z-index: 1;
+  /* The margin around it is covered too: the timeline does not show at its
+     edges, and a click there is the card's, not an outside click. */
+  box-shadow: 0 0 0 12px var(--card-bg, var(--bg));
+}
+.thread-card.is-full::before { content: ''; position: absolute; inset: -12px; z-index: -1; }
+.thread-card.is-full .thread-card-body { padding: 14px 24px 10px; }
+.thread-card.is-full .thread-card-body .session-msg-assistant,
+.thread-card.is-full .thread-card-body .session-msg-user { font-size: 14px; }
+.thread-card.is-full .thread-card-body .session-msg-user { max-width: 72%; }

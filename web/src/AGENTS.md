@@ -446,12 +446,17 @@ show inline after the open ones, other completed hits that show the query fold i
   `Waiting`), `Answering…` only once words arrive. **Fullscreen shows a review sidebar**
   (`ThreadReviewSidebar`, `useThreadReviewPane`, `hooks/useReviewSidebar.ts`, rules in
   `utils/review-sidebar.ts`): with the panel `open-walnut-fullscreen`, Conversation Mode and a
-  history box at least `REVIEW_MIN_BOX` (880px) wide, one compact card per asked passage sits in a
+  history box at least `REVIEW_MIN_BOX` (880px) wide, one card per asked passage sits in a
   right gutter (`data-review-sidebar` on `.session-history`), level with its passage in content
   coordinates (measured from the marks' ranges at each re-derive and resize, never per frame) and
-  pushed down so none overlap (`stackReviewCards`; the picked card sits at its passage). A card
-  click scrolls to the passage and flashes it; a mark click selects the card instead of opening
-  the popover; the picked card shows Open and Quote in chat. **The card expands in place**: its ⤢
+  pushed down so none overlap (`stackReviewCards`; the picked card sits at its passage). A review
+  card is ONE row (number, title, rounds, state; the answer's start is its tooltip) until opened
+  (2026-10-29, the user: the cards were too big before a click and cut to a few lines after). Its
+  click, Enter, its passage's click or the mark menu's Open opens the question's full card OVER it
+  (`placeCardOver`, `CARD_ENLARGED_WIDTH`), every round in full and scrollable, the timeline staying
+  put; there ⤢ is full screen in place (`fillRef`: the card is fixed over the history box's
+  visible area below the glass header), the same button or Esc exits it. **Elsewhere the card
+  expands in place**: its ⤢
   keeps the card's top below its passage and grows it to the owner's `place.grown` (left, width up
   to `CARD_GROWN_WIDTH`, max height; `useThreadCardPlace` and `placeFileCard` compute it), gliding
   only while `is-sizing`; Esc brings it back to its size, × closes. A first version lifted it over
