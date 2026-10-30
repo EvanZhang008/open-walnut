@@ -220,6 +220,12 @@ test('the picker picks a folder and a host; tier and engine are in More and the 
   await expect(p.locator('.pin-tier-options, .provider-rail-item, .draft-more-btn')).toHaveCount(0)
   await expect(p.getByRole('button', { name: /^(More|Claude|Codex|Focus|Satellite|Parked)$/ })).toHaveCount(0)
   await page.screenshot({ path: `${SHOTS}/${info.project.name}-picker.png`, clip: await p.boundingBox() ?? undefined })
+  // A chip click hands the keys back to the search box (WebKit never focuses a
+  // clicked button), so typing and Escape still reach the picker.
+  const chip = await p.locator('.sps-host-tab[data-host="bigbox"]').boundingBox()
+  if (chip) await page.mouse.click(chip.x + chip.width / 2, chip.y + chip.height / 2)
+  await expect(p.locator('.sps-search-input')).toBeFocused()
+  await p.locator('.sps-search-input').fill('')
   await page.keyboard.press('Escape')
   await expect(p).toHaveCount(0)
 

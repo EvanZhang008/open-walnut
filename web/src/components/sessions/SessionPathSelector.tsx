@@ -861,8 +861,13 @@ export function SessionPathSelector({
         )}
       </div>
 
+      {/* A host pick hands the keys back to the search box: WebKit never focuses a
+          clicked button, so focus fell to <body> and typing or Escape did nothing. */}
       {hostTabs.length > 2 && (
-        <HostTabBar tabs={hostTabs} selected={hostFilter} dots={hostView.dots} onSelect={setHostFilter} />
+        <HostTabBar tabs={hostTabs} selected={hostFilter} dots={hostView.dots} onSelect={(key) => {
+          setHostFilter(key);
+          searchRef.current?.focus({ preventScroll: true });
+        }} />
       )}
 
       {/* Nudge shown ONLY while a raw auto-discovered host tab is selected — zero
