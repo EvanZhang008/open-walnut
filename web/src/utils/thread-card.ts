@@ -138,14 +138,19 @@ export const CARD_ENLARGED_WIDTH = 480;
 
 /** The least an enlarged card is given before it moves up to have it. */
 export const ENLARGED_MIN_HEIGHT = 360;
+/** ...and the least share of the visible box: an open question reads as a
+ *  page, not a strip under its row (2026-10-29: a row low on screen opened a
+ *  card half the box tall over a five-round thread). */
+export const ENLARGED_MIN_SHARE = 0.7;
 /**
  * A card enlarged over `anchor` (a fullscreen review card, in the card layer's
  * coordinates): its top, its right edge, wider to the left down to 8px from the
  * layer's left. The review card sits past the layer's own width (in the
  * history's right gutter), so nothing clamps to the layer's width. Its height
  * is what is on screen below that top (`visible`, the part of the box the panel
- * header leaves), at most `maxRoom`; when less than ENLARGED_MIN_HEIGHT is left
- * there, the card moves up just enough to have it.
+ * header leaves), at most `maxRoom`; when less than ENLARGED_MIN_HEIGHT (or
+ * ENLARGED_MIN_SHARE of the visible box) is left there, the card moves up just
+ * enough to have it.
  */
 export function placeCardOver(
   anchor: CardAnchorRect, visible: { top: number; bottom: number }, maxRoom: number,
@@ -154,7 +159,7 @@ export function placeCardOver(
   const span = Math.max(CARD_MIN_WIDTH, right - 8);
   const width = Math.min(CARD_ENLARGED_WIDTH, span);
   const wide = Math.min(CARD_GROWN_WIDTH, span);
-  const want = Math.min(maxRoom, ENLARGED_MIN_HEIGHT);
+  const want = Math.min(maxRoom, Math.max(ENLARGED_MIN_HEIGHT, Math.round((visible.bottom - visible.top) * ENLARGED_MIN_SHARE)));
   let top = anchor.top;
   if (visible.bottom - 12 - top < want) top = Math.max(visible.top + 8, visible.bottom - 12 - want);
   const maxHeight = Math.round(Math.max(want, Math.min(maxRoom, visible.bottom - 12 - top)));

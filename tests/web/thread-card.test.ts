@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { buildThreadTree, quoteBlockOf, type ThreadTreeMessage } from '@/utils/thread-tree';
-import { allPassageMarks, cardTurnsOf, hasWords, placeCard, placeCardOver, questionBodyOf, CARD_ENLARGED_WIDTH, CARD_GAP, CARD_GROWN_WIDTH, CARD_MIN_WIDTH, CARD_WIDTH, ENLARGED_MIN_HEIGHT } from '@/utils/thread-card';
+import { allPassageMarks, cardTurnsOf, hasWords, placeCard, placeCardOver, questionBodyOf, CARD_ENLARGED_WIDTH, CARD_GAP, CARD_GROWN_WIDTH, CARD_MIN_WIDTH, CARD_WIDTH, ENLARGED_MIN_HEIGHT, ENLARGED_MIN_SHARE } from '@/utils/thread-card';
 import type { SessionThreadAnchor } from '@/types/session';
 
 const quote = { exact: 'the flush order', prefix: '', suffix: '' };
@@ -111,9 +111,18 @@ describe('placeCardOver (a review card enlarged in place)', () => {
     expect(placeCardOver({ ...review, top: 100 }, visible, 500).maxHeight).toBe(500);
   });
   it('moves up just enough when little of the screen is left below the review card', () => {
+    const want = Math.round(900 * ENLARGED_MIN_SHARE);
+    expect(want).toBeGreaterThan(ENLARGED_MIN_HEIGHT);
     const p = placeCardOver({ ...review, top: 900 }, visible, 760);
-    expect(p.top).toBe(980 - 12 - ENLARGED_MIN_HEIGHT);
-    expect(p.maxHeight).toBe(ENLARGED_MIN_HEIGHT);
+    expect(p.top).toBe(980 - 12 - want);
+    expect(p.maxHeight).toBe(want);
+  });
+  it('a row low on a short box still opens a card most of the box tall (and the least height on a tiny one)', () => {
+    // The prod shape: a 680px box, the row 300px above its bottom.
+    const p = placeCardOver({ ...review, top: 480 }, { top: 97, bottom: 778 }, 585);
+    expect(p.maxHeight).toBe(Math.round(681 * ENLARGED_MIN_SHARE));
+    expect(p.top).toBe(778 - 12 - p.maxHeight);
+    expect(placeCardOver({ ...review, top: 380 }, { top: 80, bottom: 480 }, 600).maxHeight).toBe(ENLARGED_MIN_HEIGHT);
   });
   it('stays below the header on a short box, and narrows to what is left of the right edge', () => {
     const p = placeCardOver({ top: 200, bottom: 260, left: 300, right: 420 }, { top: 80, bottom: 400 }, 300);

@@ -347,6 +347,9 @@ test.describe('the fullscreen review sidebar', () => {
     // Its body scrolls inside the card, and its ends never scroll the timeline under it.
     const body = card.locator('.thread-card-body')
     expect(await body.evaluate((el) => el.scrollHeight > el.clientHeight + 40), 'three rounds overflow the card').toBe(true)
+    // A thread longer than the card reads as a page: most of the visible box tall.
+    const seen = await history.evaluate((el) => el.clientHeight - (parseFloat(getComputedStyle(el).paddingTop) || 0))
+    expect((await card.boundingBox())!.height, 'the open card is most of the box tall').toBeGreaterThan(seen * 0.65)
     const bb = (await body.boundingBox())!
     const atWheel = await history.evaluate((el) => el.scrollTop)
     await page.mouse.move(bb.x + bb.width / 2, bb.y + bb.height / 2)
