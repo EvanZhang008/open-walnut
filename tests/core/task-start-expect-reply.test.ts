@@ -156,7 +156,7 @@ describe('task start confirmation and reply contract', () => {
     const pending = startSessionForTask({ ...params, expectReply: false });
     await vi.waitFor(() => expect(finish).toBeTypeOf('function'));
     await vi.advanceTimersByTimeAsync(5_000);
-    expect(await pending).toMatchObject({ started: false, taskId: task.id });
+    expect(await pending).toMatchObject({ started: false, starting: true, taskId: task.id });
     await expect(startSessionForTask(params)).rejects.toBeInstanceOf(SessionExistsError);
     finish({ claudeSessionId: 'eventual-1' });
     await vi.waitFor(() => expect(isTaskStarting(task.id)).toBe(false));

@@ -253,6 +253,15 @@ describe('task_create starts the work by default', () => {
     expect(created.next).toContain(TASK.id)
   })
 
+  it('a start still spawning past the response budget says so, and has not failed', async () => {
+    // 2026-10-30: an OpenCode start answered a bare started:false while its session ran.
+    const r = createRunner({ start: async () => ({ ...ACCEPTED, starting: true }) })
+    const created = await r.speak({ title: TASK.title })
+    expect(rec(created.execution).state).toBe('starting')
+    expect(created.outcome).toContain('still starting')
+    expect(created.outcome).toContain('has not failed')
+  })
+
   it('a reply request id rides into next with the anti-polling line', async () => {
     const r = createRunner({ start: async () => ({ ...RUNNING, requestId: 'rq-a1b2c3' }) })
     const created = await r.speak({ title: TASK.title, message: 'Reproduce, then fix.', expect_reply: true })

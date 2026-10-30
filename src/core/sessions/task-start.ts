@@ -51,6 +51,14 @@ export interface SessionStartResult {
   handedOn?: string[];
   handOnRefused?: { id: string; reason: string }[];
   started: boolean;
+  /**
+   * The start was accepted and its session is still spawning when this answer
+   * went out (an ACP engine's provider takes longer than the response budget):
+   * not a failure. `started` stays false until the process is up; read the task
+   * again to see it. 2026-10-30: a bare `started: false` on an OpenCode start
+   * read as "did not start" while the session was running.
+   */
+  starting?: boolean;
   /** The task's isolated workspace is being made; the session starts in it once it is ready. */
   preparing?: boolean;
   /** The task already had its one session: the message continued it (one-session-per-task.ts). */
@@ -373,7 +381,7 @@ export async function startSessionForTask(params: SessionStartParams): Promise<S
       return await Promise.race([
         work,
         new Promise<SessionStartResult>((resolve) => {
-          timer = setTimeout(() => resolve(result), START_RESPONSE_BUDGET_MS);
+          timer = setTimeout(() => resolve({ ...result, starting: true }), START_RESPONSE_BUDGET_MS);
         }),
       ]);
     } finally {

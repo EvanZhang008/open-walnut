@@ -1469,7 +1469,7 @@ prefix → `400 bad_request`, unknown → `404 not_found`.
 - `POST /api/v1/tasks/:id/start` (additive, 2026-08) body
   `{ "message"?, "cwd"?, "host"?, "model"?, "mode"?, "engine"?,
   "expect_reply"?: bool, "reply_timeout"?: number }` →
-  `202 { "taskId", "title", "sessionId"?, "requestId"? }`: start a NEW
+  `202 { "taskId", "title", "sessionId"?, "requestId"?, "started", "starting"? }`: start a NEW
   session for an EXISTING task and send it the first message (the
   `session_start` op). Distinct from `POST /api/v1/sessions`, whose body
   requires an absolute `cwd`: this one names only a task and lets the
@@ -1477,7 +1477,11 @@ prefix → `400 bad_request`, unknown → `404 not_found`.
   chain → project `default_cwd` → project memory dir). `sessionId` is
   preassigned for the `claude` engine, so it comes back in this response;
   `codex` sessions derive their own id from the ACP adapter and answer without
-  one. A task that already has a live (`running`/`idle`) session answers
+  one. `started` is true once the session process is up; a start still
+  spawning when the answer goes out (about 5 s; an ACP engine often takes
+  longer) answers `started: false` with `starting: true` (additive,
+  2026-10-30): accepted and on its way, not a failure; read the task again to
+  see the session. A task that already has a live (`running`/`idle`) session answers
   `409 session_exists` with `existing_session_id` as a TOP-LEVEL sibling of
   `error` (`{ "error": {...}, "existing_session_id": "..." }`): talk to it with
   `POST /api/v1/messages` instead of opening a second one. `expect_reply: true`
