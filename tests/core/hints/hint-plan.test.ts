@@ -10,7 +10,7 @@ import {
   advanceHintState, hintStateAtBoundary, hintTargetOf, hostReplyTail, planHints, type RequestedHints,
 } from '../../../src/core/hints/hint-send.js';
 
-type Rec = { claudeSessionId: string; output_mode?: SessionOutputMode; output_mode_injected?: SessionOutputMode; hintState?: SessionHintState; lastCompactUuid?: string };
+type Rec = { claudeSessionId: string; output_mode?: SessionOutputMode; output_mode_injected?: SessionOutputMode; hintState?: SessionHintState; lastCompactUuid?: string; lastCompactAt?: string };
 
 function cfg(session: NonNullable<Config['session']> = {}): Pick<Config, 'session'> {
   return { session } as Pick<Config, 'session'>;
@@ -196,7 +196,9 @@ describe('compaction hook and host tail', () => {
     const moved = hintStateAtBoundary(rec.hintState, 'c1', (ms) => ms === at);
     expect(moved?.told['rich-output'].compact).toBe('c1');
     rec.hintState = moved;
+    // notePlaceCompaction writes both, in the same guarded write.
     rec.lastCompactUuid = 'c1';
+    rec.lastCompactAt = new Date(at + 2000).toISOString();
     expect(run(rec, config, 1)).toEqual([[]]);
   });
 

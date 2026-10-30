@@ -32,6 +32,7 @@ import { log } from '../../logging/index.js';
 import type { SessionRecord, Task } from '../types.js';
 import { createEnvelopeKit } from '../peers/envelope-kit.js';
 import { isAskTask, sameProject } from './caller-placement.js';
+import { HOOK_BOUNDARY_MS, hookStatementVoid } from './hook-statement.js';
 
 const kit = createEnvelopeKit();
 
@@ -63,8 +64,6 @@ export interface PlaceNoted extends SessionPlace {
   byHookAt?: string;
 }
 
-/** A hook statement this fresh belongs to the next boundary the server reads. */
-const HOOK_BOUNDARY_MS = 5 * 60_000;
 
 export function promptHash(prompt: string | undefined): string {
   return createHash('sha1').update(prompt ?? '').digest('hex').slice(0, 16);
@@ -142,11 +141,13 @@ export async function livePlaceOf(task: Task): Promise<SessionPlace> {
 }
 
 export function toldPlaceOf(
-  record: Pick<SessionRecord, 'appliedAppendSystemPrompt' | 'project' | 'placeNoted' | 'lastCompactUuid'>, taskId: string,
+  record: Pick<SessionRecord, 'appliedAppendSystemPrompt' | 'project' | 'placeNoted' | 'lastCompactUuid' | 'lastCompactAt'>, taskId: string,
 ): ToldPlace {
   const hash = promptHash(record.appliedAppendSystemPrompt);
   const noted = record.placeNoted;
-  if (noted && noted.promptHash === hash && (noted.compactUuid ?? '') === (record.lastCompactUuid ?? '')) {
+  // A fork's hook statement (a side question compacted) never reached this conversation: hook-statement.ts.
+  if (noted && noted.promptHash === hash && (noted.compactUuid ?? '') === (record.lastCompactUuid ?? '')
+    && !hookStatementVoid(noted.byHookAt, record)) {
     return { project: noted.project, folderId: noted.folderId ?? '', folder: noted.folder ?? null, leaderId: noted.leaderId ?? null };
   }
   return placeFromPrompt(record.appliedAppendSystemPrompt, taskId) ?? { project: record.project ?? '' };
@@ -226,14 +227,15 @@ export async function notePlaceCompaction(sessionId: string, boundaryUuid: strin
  * there is nothing to state: no task, an ask, a replica, or the prompt is still
  * right. Never throws.
  */
-export async function statePlaceAfterCompaction(record: SessionRecord, task: Task): Promise<SessionPlace | null> {
+export async function statePlaceAfterCompaction(record: SessionRecord, task: Task, opts: { byHook?: boolean } = { byHook: true }): Promise<SessionPlace | null> {
   try {
     const { role } = await import('../server-role.js');
     if (role() !== 'leader' || isAskTask(task)) return null;
     const live = await livePlaceOf(task);
     const prompt = placeFromPrompt(record.appliedAppendSystemPrompt, task.id) ?? { project: record.project ?? '' };
     if (placeChanges(prompt, live).length === 0) return null;
-    await recordTold(record.claudeSessionId, { ...notedFor(record, live), byHookAt: new Date().toISOString() });
+    // Only the post-compaction hook's statement waits for a boundary; a plain open_items read is told now.
+    await recordTold(record.claudeSessionId, { ...notedFor(record, live), ...(opts.byHook ? { byHookAt: new Date().toISOString() } : {}) });
     return live;
   } catch {
     return null;

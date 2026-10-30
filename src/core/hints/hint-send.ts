@@ -21,8 +21,9 @@ import { log } from '../../logging/index.js';
 import { composeHinted, parseHinted, renderHintBlock, splitHinted, type CarriedHint } from './hint-format.js';
 import { effectiveHints, hintApplies, needsTaskForAudience, type EffectiveHint, type HintTarget } from './hint-registry.js';
 import { dueReasons } from './hint-schedule.js';
+import { hookStatementVoid } from '../sessions/hook-statement.js';
 
-type HintRecord = Pick<SessionRecord, 'output_mode' | 'output_mode_injected' | 'hintState' | 'lastCompactUuid'>
+type HintRecord = Pick<SessionRecord, 'output_mode' | 'output_mode_injected' | 'hintState' | 'lastCompactUuid' | 'lastCompactAt'>
   & Partial<Pick<SessionRecord, 'claudeSessionId' | 'taskId'>>;
 type HintConfig = Pick<Config, 'session'> | null;
 
@@ -46,6 +47,22 @@ export function hintTargetOf(sessionId: string, task: Pick<Task, 'org_role' | 'a
   else if (task.walnut_agent || /^Ask /.test(task.project ?? '')) role = 'ask';
   else if (task.parent_task_id) role = 'worker';
   return { sessionId, role, ...(task.agent_id ? { agentId: task.agent_id } : {}) };
+}
+
+/**
+ * A hint the post-compaction hook stated on the current boundary that no boundary of this
+ * session's own came near was told to a fork (a side question that compacted), not to this
+ * conversation (sessions/hook-statement.ts). What this conversation was told is then unknown:
+ * a hint that starts with the session reads it as never told, any other as told something
+ * else, before any boundary (so `on_change`, `after_compaction` and `every_n_turns` all see it
+ * owed). Pure.
+ */
+type ToldEntry = SessionHintState['told'][string];
+function toldHere(hint: EffectiveHint, t: ToldEntry | undefined, record: HintRecord | null | undefined): ToldEntry | undefined {
+  if (!t?.byHookAt || (t.compact ?? '') !== (record?.lastCompactUuid ?? '') || !hookStatementVoid(t.byHookAt, record ?? {})) return t;
+  if (hint.triggers.includes('session_start')) return undefined;
+  const { byHookAt: _fork, compact: _boundary, ...rest } = t;
+  return { ...rest, send: 0, hash: '' };
 }
 
 /** The state a record had before the registry: the rich instruction it was told. */
@@ -88,7 +105,7 @@ export function planHints(input: {
   for (const hint of input.hints) {
     if (!hint.enabled || input.skip?.has(hint.kind) || !hintApplies(hint, input.target)) continue;
     const request = input.requested?.[hint.kind];
-    const told = input.afterCompaction ? undefined : state.told[hint.kind];
+    const told = input.afterCompaction ? undefined : toldHere(hint, state.told[hint.kind], input.record);
     const content = { config: input.config, record: input.record ?? null, ...(request ? { request } : {}), ...(told ? { toldHash: told.hash } : {}) };
     const identity = hint.identity(content);
     if (identity === null) continue;

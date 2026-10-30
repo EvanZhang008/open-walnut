@@ -161,7 +161,7 @@ export async function collectOpenItems(
     }
     // Where the task stands, read back after a compaction (place-notice.ts).
     const { statePlaceAfterCompaction } = await import('./place-notice.js');
-    const place = await statePlaceAfterCompaction(caller.record, task);
+    const place = await statePlaceAfterCompaction(caller.record, task, { byHook: !!opts.afterCompaction });
     if (place) {
       items.place = {
         project: place.project,

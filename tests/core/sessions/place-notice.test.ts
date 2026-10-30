@@ -263,7 +263,7 @@ describe('sendMessageToSession carries the note (real store and queue)', () => {
     // boundary line, and the next message repeated the note.
     it('a hook that runs before the server reads the boundary still counts for that boundary', async () => {
       const { sid } = await moved()
-      await collectOpenItems(sid)                  // the hook answers first...
+      await collectOpenItems(sid, Date.now(), { afterCompaction: true }) // the hook answers first...
       await notePlaceCompaction(sid, 'boundary-2') // ...then the boundary is read from the stream
       await sendMessageToSession(sid, 'after', { source: 'ui' })
       expect((await rows(sid))[0]).toBe('after')
@@ -271,8 +271,26 @@ describe('sendMessageToSession carries the note (real store and queue)', () => {
 
     it('a stale hook statement does not cover a later compaction', async () => {
       const { sid } = await moved()
-      await collectOpenItems(sid)
+      await collectOpenItems(sid, Date.now(), { afterCompaction: true })
       await notePlaceCompaction(sid, 'boundary-3', Date.now() + 10 * 60_000)
+      await sendMessageToSession(sid, 'after', { source: 'ui' })
+      expect((await rows(sid))[0]).toContain('outcome="moved"')
+    })
+
+    it('a session that reads open_items itself is told its place there and then (no boundary to wait for)', async () => {
+      const { sid } = await moved()
+      await collectOpenItems(sid)
+      await sendMessageToSession(sid, 'after', { source: 'ui' })
+      expect((await rows(sid))[0]).toBe('after')
+    })
+
+    // 2026-10-30: a side question (the turn-end report) compacted; no boundary came to this stream.
+    it('a fork\'s compaction hook does not count as told to the main conversation', async () => {
+      const { sid } = await moved()
+      await collectOpenItems(sid, Date.now() - 10 * 60_000, { afterCompaction: true })
+      const { getSessionByClaudeId, updateSessionRecord } = await import('../../../src/core/session-tracker.js')
+      const rec = await getSessionByClaudeId(sid)
+      await updateSessionRecord(sid, { placeNoted: { ...rec!.placeNoted!, byHookAt: new Date(Date.now() - 10 * 60_000).toISOString() } })
       await sendMessageToSession(sid, 'after', { source: 'ui' })
       expect((await rows(sid))[0]).toContain('outcome="moved"')
     })
@@ -281,7 +299,7 @@ describe('sendMessageToSession carries the note (real store and queue)', () => {
       const { sid } = await moved()
       await notePlaceCompaction(sid, 'boundary-1')
       await new Promise((r) => setTimeout(r, 5))
-      await collectOpenItems(sid)
+      await collectOpenItems(sid, Date.now(), { afterCompaction: true })
       await notePlaceCompaction(sid, 'boundary-1') // a replay: nothing changes
       await sendMessageToSession(sid, 'one', { source: 'ui' })
       expect((await rows(sid))[0]).toBe('one')
@@ -289,7 +307,7 @@ describe('sendMessageToSession carries the note (real store and queue)', () => {
       // compact twice: the first boundary read takes the hook, the second does not.
       await notePlaceCompaction(sid, 'boundary-2')
       await new Promise((r) => setTimeout(r, 5))
-      await collectOpenItems(sid)
+      await collectOpenItems(sid, Date.now(), { afterCompaction: true })
       await new Promise((r) => setTimeout(r, 5))
       await notePlaceCompaction(sid, 'boundary-3')
       await new Promise((r) => setTimeout(r, 5))

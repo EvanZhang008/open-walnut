@@ -26,6 +26,7 @@ import { isAcpEngine, resolveEngine } from '../agents/engine-registry.js';
 import { WALNUT_PROMPT_MARK, defaultInstructions, type InstructionTask } from './session-context.js';
 import { refreshUserProfile } from './user-profile-context.js';
 import { log } from '../../logging/index.js';
+import { hookStatementVoid } from './hook-statement.js';
 import type { SessionRecord } from '../types.js';
 
 const kit = createEnvelopeKit();
@@ -40,7 +41,7 @@ const OUTCOME = 'task-routing-policy';
 const NOTICE_ATTRS = { from: 'Walnut', outcome: OUTCOME, note: 'current default instructions, not a work request' };
 const NOTICE_OPENING = `<walnut-message kind="notification" from="Walnut" outcome="${OUTCOME}"`;
 
-type NoticeRecord = Pick<SessionRecord, 'appliedAppendSystemPrompt' | 'engine' | 'lastCompactUuid' | 'taskRoutingNoted'>;
+type NoticeRecord = Pick<SessionRecord, 'appliedAppendSystemPrompt' | 'engine' | 'lastCompactUuid' | 'lastCompactAt' | 'taskRoutingNoted'>;
 type Noted = NonNullable<SessionRecord['taskRoutingNoted']>;
 
 /** A changed line and the heading it sits under (the charter's "## How we work"), shown with it. */
@@ -72,10 +73,11 @@ function changedLines(prompt: string, task: InstructionTask): Changed[] {
   return out;
 }
 
-/** Same prompt and same compaction boundary as when the lines were told. */
+/** Same prompt and same compaction boundary as when the lines were told; never a fork's hook statement (hook-statement.ts). */
 function sameBase(noted: Noted | undefined, record: NoticeRecord): noted is Noted {
   return !!noted && noted.promptHash === hash(record.appliedAppendSystemPrompt ?? '')
-    && (noted.compactUuid ?? '') === (record.lastCompactUuid ?? '');
+    && (noted.compactUuid ?? '') === (record.lastCompactUuid ?? '')
+    && !hookStatementVoid(noted.byHookAt, record);
 }
 
 /** The changed lines still to tell (all of them when `ignoreTold`), or null when this session gets none. */
