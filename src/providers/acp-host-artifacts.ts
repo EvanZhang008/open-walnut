@@ -39,9 +39,14 @@ export interface AcpHostAdapterSpec {
   versionArgs?: string[]
 }
 
-/** The files a remote deploy puts beside the daemon for ACP engines (name on the host → name in dist/daemon-binaries). */
+/**
+ * The files a remote deploy puts beside the daemon for ACP engines (name on the host →
+ * name in dist/daemon-binaries). Never a path the compiled walnut file keeps only as a
+ * placeholder (src/binary/bundled-modules.ts: acp-worker.js is one), so the worker is
+ * read from its .mjs copy.
+ */
 export const ACP_HOST_FILES: Readonly<Record<string, string>> = {
-  'acp-worker.mjs': 'acp-worker.js',
+  'acp-worker.mjs': 'acp-worker.mjs',
   'codex-acp.mjs': 'codex-acp.mjs',
   'pi-acp.mjs': 'pi-acp.js',
 }

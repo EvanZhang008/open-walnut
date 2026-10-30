@@ -2882,8 +2882,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
               so a presence flip never takes what is being typed. */}
           {macSessionAway && <MacAwayComposer />}
           <ChatInput
-            // A switch to an engine that moves the work waits for the move's confirm.
-            sendBlocked={macSessionAway || (!!engineSwitch.pick && !engineSwitch.armed)}
+            sendBlocked={macSessionAway}
             focusNonce={composerFocusNonce}
             // Dictating into this box takes focus and so collapses the page's
             // selection: let the quote pill hold the passage first (holdDictationSelection).

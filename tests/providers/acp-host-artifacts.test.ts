@@ -9,10 +9,14 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { ACP_HOST_FILES, ACP_HOST_WORKER, createHostEngineProbe, findHostBinary, resolveHostAcpArtifacts } from '../../src/providers/acp-host-artifacts.js'
 import { hostAdapterSpec } from '../../src/core/agents/host-adapter-spec.js'
 import { guardedPath } from '../setup/exec-guard.js'
+import { BUNDLED_MODULES, MODULE_PLACEHOLDER } from '../../src/binary/bundled-modules.js'
 import { ENGINE_REGISTRY, isAcpEngine } from '../../src/core/agents/engine-registry.js'
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
 let root: string
 let artifactDir: string
@@ -108,6 +112,23 @@ describe('a spec the primary sends is checked before anything runs', () => {
 
   it('never searches a relative PATH entry (it would resolve against the daemon\'s own dir)', () => {
     expect(findHostBinary({ binary: 'codex' }, { env: { PATH: guardedPath(['.'], '') }, home, extraDirs: [] }).path).toBeUndefined()
+  })
+})
+
+describe('what a remote deploy uploads', () => {
+  // 2026-10-30: the worker was read from acp-worker.js, which the compiled walnut file
+  // keeps as a placeholder, so every host got a file that only throws.
+  it('never names a dist file the compiled walnut file keeps as a placeholder', () => {
+    for (const dist of Object.values(ACP_HOST_FILES)) {
+      expect(Object.keys(BUNDLED_MODULES), dist).not.toContain(`dist/daemon-binaries/${dist}`)
+    }
+  })
+
+  it('the upload refuses a placeholder, by the words the placeholder really has', () => {
+    const src = fs.readFileSync(path.join(__dirname, '../../src/providers/daemon-connection.ts'), 'utf8')
+    const words = src.match(/sidecar\.includes\('([^']+)'\)/)?.[1]
+    expect(words).toBeTruthy()
+    expect(MODULE_PLACEHOLDER).toContain(words)
   })
 })
 

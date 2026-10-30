@@ -4301,6 +4301,11 @@ export class DaemonConnection {
       for (const [sidecarFile, distFile] of sidecars) {
         try {
           const sidecar = fs.readFileSync(path.join(DAEMON_BINARIES_DIR, distFile), 'utf-8')
+          // The compiled walnut file keeps some dist files only as placeholders that throw
+          // (src/binary/bundled-modules.ts MODULE_PLACEHOLDER): never one onto a host.
+          if (sidecar.length < 512 && sidecar.includes('stands for a module inside the compiled walnut file')) {
+            throw new Error(`${distFile} is a placeholder of the compiled walnut file, not the file itself`)
+          }
           const upload = (args: string[]) => runSshBounded([...args, this.sshHostString, markedUploadCommand(`${dir}/${sidecarFile}`, Buffer.byteLength(sidecar))], { input: sidecar, timeoutMs: SOURCE_UPLOAD_TIMEOUT_MS })
           let sc = await upload(sshArgs)
           // One ssh in a burst of uploads fails now and then (exit 255 on the shared
