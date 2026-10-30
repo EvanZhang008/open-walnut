@@ -27,10 +27,33 @@ export interface NormalizedEvent {
 }
 
 export class AcpStreamNormalizer {
+  /** The answer so far: the turn's text after its last tool call. */
+  private answer = ''
+
   constructor(private readonly projector: AcpJournalProjector) {}
 
   normalize(record: JournalRecord): NormalizedEvent[] {
-    return this.projector.project(record).flatMap(normalizeProjectedEvent)
+    // A resume replays the whole past conversation: none of it is this turn's answer.
+    const replay = record.kind === 'acp' && record.source === 'provider-replay'
+    return this.projector.project(record).flatMap((event) => {
+      if (replay) return normalizeProjectedEvent(event)
+      // `session:result` carries the turn's final answer, as Claude Code's own
+      // result does: the text the agent wrote after its last tool call. An ACP
+      // turn end names no text, so it is collected here. 2026-10-30: every lane
+      // turn on OpenCode (Ask Walnut, routines) stored an empty reply, because
+      // lane-turn.ts reads its answer from this field.
+      if (event.type === 'user') this.answer = ''
+      else if (event.type === 'text') this.answer += event.text
+      else if (event.type === 'tool-use') this.answer = ''
+      // A provider retry replaces what it had written and streams the answer again.
+      else if (event.type === 'system' && event.replacesMsgId) this.answer = ''
+      else if (event.type === 'result') {
+        const result = this.answer.trim()
+        this.answer = ''
+        return normalizeProjectedEvent(event).map((e) => ({ ...e, payload: { ...e.payload, result } }))
+      }
+      return normalizeProjectedEvent(event)
+    })
   }
 }
 

@@ -578,6 +578,9 @@ export { shellQuote } from './session-io.js'
 // Exported for testing
 export { outputFileCheckResult, stripCliStartupNoise, isBenignSshStderr }
 
+/** The post-death drain respawns a session's worker at most this many times per window. */
+const ACP_DRAIN_MAX_DEATHS = 3
+const ACP_DRAIN_DEATH_WINDOW_MS = 2 * 60_000
 
 /**
  * Immediate fail-closed contract for ACP providers that do not advertise
@@ -9432,6 +9435,8 @@ export class SessionRunner {
   /** Fences async reattach work that completes after runner destruction. */
   private acpLifecycleEpoch = 0
   private acpDestroyed = false
+  /** Recent worker deaths per session, for the post-death drain's brake. */
+  private acpRecentDeaths = new Map<string, number[]>()
   private cliCommand: string
   private activeProcessing = new Set<string>()
   private batchCounts = new Map<string, number>()
@@ -10767,6 +10772,19 @@ export class SessionRunner {
   private scheduleAcpDrainAfterDeath(session: AcpSession): void {
     const sid = session.sessionId ?? session.runtimeId
     if (this.acpAbortInProgress.has(sid) || this.acpAbortInProgress.has(session.runtimeId)) return
+    // A worker now exits when its adapter dies, so an adapter that crashes on
+    // every load would otherwise respawn here forever while a message waits.
+    // Past the brake the message stays queued for the next send or Retry.
+    const now = Date.now()
+    const deaths = (this.acpRecentDeaths.get(sid) ?? []).filter((t) => now - t < ACP_DRAIN_DEATH_WINDOW_MS)
+    deaths.push(now)
+    this.acpRecentDeaths.set(sid, deaths)
+    if (deaths.length > ACP_DRAIN_MAX_DEATHS) {
+      log.session.warn('acp: worker keeps dying; not respawning it for the queued message', {
+        sessionId: sid, deaths: deaths.length, windowMs: ACP_DRAIN_DEATH_WINDOW_MS,
+      })
+      return
+    }
     setTimeout(() => {
       if (this.acpDestroyed) return
       if (this.acpAbortInProgress.has(sid) || this.acpAbortInProgress.has(session.runtimeId)) return

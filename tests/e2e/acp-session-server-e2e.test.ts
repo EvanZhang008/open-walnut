@@ -49,7 +49,7 @@ import { sessionRunner } from '../../src/providers/claude-code-session.js'
 import { getDirectDaemonConnection } from '../../src/providers/daemon-connection.js'
 import { localDaemon } from '../../src/providers/local-daemon.js'
 import { getConfig, updateConfig } from '../../src/core/config-manager.js'
-import { resetEngineModelCatalogCache } from '../../src/providers/engine-model-probe.js'
+import { _seedEngineModelCatalogCache, resetEngineModelCatalogCache } from '../../src/providers/engine-model-probe.js'
 import { bus, EventNames } from '../../src/core/event-bus.js'
 import { getSessionsForTask } from '../../src/core/session-tracker.js'
 import { addTask, getTask, listTasks } from '../../src/core/task-manager.js'
@@ -1059,6 +1059,63 @@ rl.on('line', line => {
     expect(catalog.status).toBe(200)
     expect((await catalog.json() as { currentModelId?: string }).currentModelId).toBe('mock-gpt-fast')
   }, 30_000)
+
+  // 2026-10-30: a loaded OpenCode thread kept the model it was made with, so a
+  // lane ran on the old model after the user changed their default.
+  it('a cold load follows the engine default model unless someone picked one', async () => {
+    const resp = await fetch(apiUrl('/api/sessions/quick-start'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cwd: os.tmpdir(), message: 'hello on the default model', engine: 'codex' }),
+    })
+    expect(resp.status).toBe(200)
+    const { taskId: defTaskId } = await resp.json() as { taskId: string }
+    const defSessionId = await sessionIdForTask(defTaskId, 'codex')
+    await waitFor(() => eventsFor(defSessionId, EventNames.SESSION_RESULT).length > 0, 15_000, 'default-model first turn')
+    const before = (await getSessionsForTask(defTaskId)).find((r) => r.claudeSessionId === defSessionId)!
+    expect(before.acpModel).toBe('mock-gpt-best')
+    expect(before.acpConfig?.model).toBeUndefined()
+
+    // The user's default moved (what a NEW session would now get).
+    _seedEngineModelCatalogCache('codex', os.tmpdir(), { result: {
+      engine: 'codex', currentModelId: 'mock-gpt-fast', fetchedAt: Date.now(), source: 'probe',
+      models: [{ modelId: 'mock-gpt-best', name: 'Mock GPT Best' }, { modelId: 'mock-gpt-fast', name: 'Mock GPT Fast' }],
+    } })
+    onTestFinished(() => resetEngineModelCatalogCache())
+    const pids = JSON.parse(fs.readFileSync(path.join(daemonDir, 'acp-workers.json'), 'utf-8')) as Record<string, number | { pid: number }>
+    const entry = pids[before.acpRuntimeId!]
+    process.kill(typeof entry === 'number' ? entry : entry.pid, 'SIGKILL')
+    await new Promise((r) => setTimeout(r, 500))
+
+    await sendMessageToSession(defSessionId, 'after the default moved', { source: 'ui', taskId: defTaskId })
+    await waitFor(() => textFor(defSessionId).includes('you said: after the default moved'), 20_000, 'post-resume reply')
+    const after = (await getSessionsForTask(defTaskId)).find((r) => r.claudeSessionId === defSessionId)!
+    expect(after.acpModel).toBe('mock-gpt-fast')
+    expect(after.acpConfig?.model).toBeUndefined()
+    const catalog = await fetch(apiUrl(`/api/sessions/${defSessionId}/model-catalog`))
+    expect((await catalog.json() as { currentModelId?: string }).currentModelId).toBe('mock-gpt-fast')
+
+    // A session someone picked a model for keeps it across a cold load.
+    const picked = await fetch(apiUrl('/api/sessions/quick-start'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cwd: os.tmpdir(), message: 'hello on a picked model', engine: 'codex', model: 'mock-gpt-best' }),
+    })
+    expect(picked.status).toBe(200)
+    const { taskId: pickTaskId } = await picked.json() as { taskId: string }
+    const pickSessionId = await sessionIdForTask(pickTaskId, 'codex')
+    await waitFor(() => eventsFor(pickSessionId, EventNames.SESSION_RESULT).length > 0, 15_000, 'picked-model first turn')
+    const pickBefore = (await getSessionsForTask(pickTaskId)).find((r) => r.claudeSessionId === pickSessionId)!
+    expect(pickBefore.acpConfig?.model).toBe('mock-gpt-best')
+    const pids2 = JSON.parse(fs.readFileSync(path.join(daemonDir, 'acp-workers.json'), 'utf-8')) as Record<string, number | { pid: number }>
+    const entry2 = pids2[pickBefore.acpRuntimeId!]
+    process.kill(typeof entry2 === 'number' ? entry2 : entry2.pid, 'SIGKILL')
+    await new Promise((r) => setTimeout(r, 500))
+    await sendMessageToSession(pickSessionId, 'after the kill', { source: 'ui', taskId: pickTaskId })
+    await waitFor(() => textFor(pickSessionId).includes('you said: after the kill'), 20_000, 'picked post-resume reply')
+    const pickAfter = (await getSessionsForTask(pickTaskId)).find((r) => r.claudeSessionId === pickSessionId)!
+    expect(pickAfter.acpModel).toBe('mock-gpt-best')
+  }, 75_000)
 
   it('launches with an EFFORT-qualified pick: base model applies, unknown effort is dropped without failing the launch', async () => {
     // Codex dialect: "base[effort]" splits into acpConfig

@@ -1043,3 +1043,30 @@ describe('mid-turn steering', () => {
     expect(streamed.match(/steered:once only/g)).toHaveLength(1)
   })
 })
+
+// 2026-10-30: an OpenCode lane's provider died while the worker lived on, so
+// every later op failed as "protocol" and the daemon never cold-resumed it.
+describe('the worker goes away with its adapter', () => {
+  it('an adapter that dies while idle calls onAdapterGone once', async () => {
+    let gone = 0
+    const w = new AcpWorker(journalPath(), () => {}, () => {}, () => { gone++ })
+    worker = w
+    expect((await op(w, 'initialize', { adapterCommand: [process.execPath, MOCK_AGENT], cwd: tmpDir })).ok).toBe(true)
+    expect((await op(w, 'newSession', { cwd: tmpDir })).ok).toBe(true)
+    const adapter = (w as unknown as { adapter: import('node:child_process').ChildProcess }).adapter
+    adapter.kill('SIGKILL')
+    const deadline = Date.now() + 5000
+    while (gone === 0 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 20))
+    expect(gone).toBe(1)
+    worker = null
+  })
+
+  it('a shutdown never reads as the adapter going away', async () => {
+    let gone = 0
+    const w = new AcpWorker(journalPath(), () => {}, () => {}, () => { gone++ })
+    expect((await op(w, 'initialize', { adapterCommand: [process.execPath, MOCK_AGENT], cwd: tmpDir })).ok).toBe(true)
+    expect((await op(w, 'shutdown')).ok).toBe(true)
+    await new Promise((r) => setTimeout(r, 100))
+    expect(gone).toBe(0)
+  })
+})

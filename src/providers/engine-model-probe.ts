@@ -286,12 +286,13 @@ async function probeEngine(engine: SessionEngine, cwd?: string): Promise<EngineM
  * `refresh` skips the cache READ (both halves — a cached failure must not
  * outlive an operator's "Retry" click after they fixed credentials/config);
  * the fresh answer still lands in the cache, and in-flight dedupe still holds.
+ * `maxAgeMs` reads a cached answer only while it is younger than that.
  * `options.env` swaps ONLY the fixture-switch read (WALNUT_ENGINE_PROBE_ALL)
  * for tests — the adapter spawn always builds its env from real config.
  */
 export async function getEngineModelCatalog(
   engine: SessionEngine,
-  options: { env?: NodeJS.ProcessEnv; cwd?: string; refresh?: boolean } = {},
+  options: { env?: NodeJS.ProcessEnv; cwd?: string; refresh?: boolean; maxAgeMs?: number } = {},
 ): Promise<EngineModelCatalog> {
   if (!isAcpEngine(engine)) {
     throw new Error(`engine '${engine}' does not advertise a provider model catalog`)
@@ -302,7 +303,7 @@ export async function getEngineModelCatalog(
   const cached = options.refresh ? undefined : cache.get(key)
   if (cached) {
     const age = Date.now() - cached.at
-    if (cached.result && age < SUCCESS_TTL_MS) return cached.result
+    if (cached.result && age < Math.min(SUCCESS_TTL_MS, options.maxAgeMs ?? SUCCESS_TTL_MS)) return cached.result
     if (cached.error && age < FAILURE_TTL_MS) throw new Error(cached.error)
   }
   const running = inflight.get(key)

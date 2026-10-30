@@ -659,6 +659,11 @@ export interface AcpSessionConfig {
  */
 const ACP_COLD_RESUME_TIMEOUT_MS = 5 * 60_000
 
+/** How long a cold load waits for the engine's default model before going on without it. */
+const FOLLOW_DEFAULT_MODEL_WAIT_MS = 5_000
+/** A cached engine default model older than this may predate the user's change. */
+const FOLLOW_DEFAULT_MODEL_CACHE_MS = 60_000
+
 /**
  * Split an ACP catalog model id into its base id and reasoning effort.
  * The catalog advertises effort-qualified ids ("base[effort]") while the
@@ -736,6 +741,8 @@ export class AcpSession {
   private _pendingPermissionCommit: Promise<void> = Promise.resolve()
   private _selfReport: PendingSelfReport | null = null
   private readonly normalizer: AcpStreamNormalizer
+  /** establish loaded an existing thread into a new worker (followEngineDefaultModel). */
+  private _coldLoaded = false
   /** The composer's turn speed readout, measured from the journal (see acp-turn-speed.ts). */
   private readonly _speed = new AcpTurnSpeedMeter()
   private _speedEmitAt = 0
@@ -1359,6 +1366,7 @@ export class AcpSession {
 
   private async establishProviderSession(): Promise<string> {
     const threadBefore = this._providerSessionId
+    this._coldLoaded = false
     await this.seedReplayCursor()
     const artifacts = await this.resolveArtifacts()
     // Fail closed BEFORE touching the daemon: a missing provider executable is
@@ -1452,6 +1460,8 @@ export class AcpSession {
           journalPath?: string
         }
         if (result.journalPath) this._journalPath = result.journalPath
+        // A new worker that loaded the thread (not a warm attach, not a fresh one).
+        this._coldLoaded = !result.alive && !!threadBefore && !preemptFreshSession
         const state = result.state as WorkerStateSnapshot | undefined
         if (state?.capabilities) this._capabilities = state.capabilities
         if (result.session) await this.publishSessionResponse(result.session)
@@ -1471,6 +1481,10 @@ export class AcpSession {
       throw new Error('ACP session established without a provider session ID')
     }
     await this.replayPersistedConfig(conn)
+    if (this._coldLoaded) {
+      this._coldLoaded = false
+      await this.followEngineDefaultModel(conn)
+    }
     this.persistPendingPermission()
     // A new thread (the first one, or a fresh one after a load failure) has never
     // read the session context; a loaded or warm one has, once any prompt of it was
@@ -1483,6 +1497,57 @@ export class AcpSession {
     }
     this._active = true
     return this._providerSessionId
+  }
+
+  /**
+   * A loaded thread keeps the model it was made with: OpenCode stores it per
+   * session, so a lane made before the user changed their default model ran on
+   * the old one after every restart (2026-10-30: ollama/qwen3:8b after the user
+   * moved to qwen3-coder:30b). Unless someone picked a model for this session
+   * (acpConfig.model), a cold load moves it to the engine's current default:
+   * the model a new session gets, read from a catalog probe at most a minute old
+   * (the cache keeps one for 10 minutes, which may predate the user's change).
+   * The probe is bounded so a slow engine never holds the send; a miss leaves
+   * the model as it was.
+   */
+  private async followEngineDefaultModel(conn: DaemonConnection): Promise<void> {
+    const record = await getSessionByClaudeId(this.trackingId()).catch(() => undefined)
+    if ((record?.acpConfig ?? this.cfg.acpConfig)?.model !== undefined) return
+    const current = this._models.currentModelId
+    const control = this._configOptions.find((c) => c.id === 'model')
+    if (!current || !control) return
+    let wanted: string | undefined
+    try {
+      const { getEngineModelCatalog } = await import('./engine-model-probe.js')
+      const catalog = await Promise.race([
+        getEngineModelCatalog(this.engineId, { cwd: this.cfg.cwd, maxAgeMs: FOLLOW_DEFAULT_MODEL_CACHE_MS }),
+        new Promise<undefined>((resolve) => { (setTimeout(resolve, FOLLOW_DEFAULT_MODEL_WAIT_MS) as { unref?: () => void }).unref?.() }),
+      ])
+      wanted = catalog?.currentModelId
+    } catch { return }
+    if (!wanted || wanted === current) return
+    const { base } = splitAcpModelId(wanted)
+    if (base === splitAcpModelId(current).base || !control.options.some((o) => o.value === base)) return
+    const resp = await conn.send('acpSetConfigOption', {
+      sid: this.runtimeId,
+      commandId: `acp-default-model-${crypto.randomBytes(8).toString('hex')}`,
+      configId: 'model',
+      value: base,
+    }).catch((error) => ({ ok: false, error: error instanceof Error ? error.message : String(error) }))
+    if (!resp.ok) {
+      log.session.warn('acp: could not move a loaded session to the default model', {
+        sessionId: this.trackingId(), from: current, to: base, error: (resp as { error?: string }).error,
+      })
+      return
+    }
+    const result = (resp as { result?: { configOptions?: AcpConfigOption[]; models?: AcpModelCatalog } }).result
+    this._configOptions = result?.configOptions ?? this._configOptions.map((c) => (c.id === 'model' ? { ...c, currentValue: base } : c))
+    this._models = result?.models ?? { ...this._models, currentModelId: base }
+    const now = this._models.currentModelId ?? base
+    await updateSessionRecord(this.trackingId(), { acpModel: now, ...this.acpModelNamePatch(now) }).catch(() => {})
+    log.session.info('acp: loaded session moved to the engine default model', {
+      sessionId: this.trackingId(), engine: this.engineId, from: current, to: now,
+    })
   }
 
   /**

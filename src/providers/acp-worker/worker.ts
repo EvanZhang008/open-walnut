@@ -99,15 +99,20 @@ export class AcpWorker {
   private lastAcceptedCommands = new Map<string, string>()
   private onJournalAppend: (offset: number) => void
   private onAdapterStderr: (bytes: number) => void
+  private onAdapterGone: () => void
+  /** Set by shutdown: the adapter's exit is then the one asked for. */
+  private shuttingDown = false
 
   constructor(
     journalPath: string,
     onJournalAppend: (offset: number) => void = () => {},
     onAdapterStderr: (bytes: number) => void = () => {},
+    onAdapterGone: () => void = () => {},
   ) {
     this.journal = new AcpJournal(journalPath)
     this.onJournalAppend = onJournalAppend
     this.onAdapterStderr = onAdapterStderr
+    this.onAdapterGone = onAdapterGone
     this.rebuildAcceptedCommands(journalPath)
   }
 
@@ -199,6 +204,13 @@ export class AcpWorker {
       }
       this.failAllPendingPermissions()
       void code
+      // A worker is one adapter: without it every later op fails as "protocol"
+      // while the worker still reads as alive, so the daemon never cold-resumes
+      // it (2026-10-30: an OpenCode lane whose provider died answered every
+      // later message with an instant failure). Going away hands it to the
+      // daemon's reap, and the next send starts a fresh worker that loads the
+      // session again.
+      if (!this.shuttingDown) this.onAdapterGone()
     })
     // Adapter stderr may contain credentials or auth diagnostics. Drain it so
     // the child cannot block, but expose only a byte count to the daemon.
@@ -628,6 +640,7 @@ export class AcpWorker {
   }
 
   private async opShutdown(): Promise<unknown> {
+    this.shuttingDown = true
     if (this.turnActive) {
       this.journal.appendMeta({
         type: 'turn-interrupted',
@@ -991,6 +1004,8 @@ export function runWorkerMain(): void {
     journalPath,
     (offset) => writeLine({ ev: 'journal', offset }),
     (bytes) => writeLine({ ev: 'adapter_stderr', bytes }),
+    // Exit once stdout has drained, so the lines already written reach the daemon.
+    () => { process.stdout.write('', () => process.exit(3)) },
   )
 
   const rl = readline.createInterface({ input: process.stdin, terminal: false })
