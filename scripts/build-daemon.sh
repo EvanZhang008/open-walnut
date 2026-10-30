@@ -61,6 +61,8 @@ SOURCES=(
   src/ops/op-help.ts
   src/providers/mcp-cli-args.ts
   src/providers/acp-daemon.ts
+  src/providers/acp-host-artifacts.ts
+  node_modules/@agentclientprotocol/codex-acp/package.json
   src/providers/codex-model-probe.ts
   src/providers/agent-command-map.ts
   src/providers/acp-worker/worker.ts
@@ -217,14 +219,20 @@ echo "$VERSION" > "$OUTDIR/daemon-darwin-arm64.version"
 fi
 
 # ACP worker artifact — a plain JS bundle (NOT bun-compiled): the daemon spawns
-# it with the system `node`, and one bundle serves every platform. The ACP SDK
-# and codex-acp adapter resolve from the walnut install's node_modules at
-# runtime on the LOCAL host (MVP scope); the remote deploy phase will bundle
-# the adapter too.
+# it with the system `node`, and one bundle serves every platform.
 "$BUN" build --minify --target=node \
   --outfile "$OUTDIR/acp-worker.js" \
   src/providers/acp-worker/worker-main.ts
 echo "$VERSION" > "$OUTDIR/acp-worker.js.version"
+
+# What a remote deploy puts beside daemon.cjs so that host runs ACP engines itself
+# (src/providers/acp-host-artifacts.ts ACP_HOST_FILES). The worker gets its own
+# name: the compiled walnut file keeps a placeholder at acp-worker.js
+# (src/binary/bundled-modules.ts). codex-acp is one self-contained ESM file; with
+# CODEX_PATH set it needs nothing else.
+cp "$OUTDIR/acp-worker.js" "$OUTDIR/acp-worker.mjs"
+cp node_modules/@agentclientprotocol/codex-acp/dist/index.js "$OUTDIR/codex-acp.mjs"
+cp node_modules/@agentclientprotocol/codex-acp/LICENSE "$OUTDIR/codex-acp.LICENSE"
 
 # ACP supervision sidecar — the same acp-daemon.ts the binary compiles in, as a
 # CJS bundle for the source template. The npm package ships no daemon binaries,

@@ -34,7 +34,6 @@
   cursor: pointer;
 }
 .engine-switch-btn:disabled { opacity: 0.5; cursor: default; }
-.engine-switch-btn-primary { background: var(--accent, var(--fg)); color: var(--bg, #fff); border-color: transparent; }
 .engine-switch-spinner {
   width: 10px;
   height: 10px;

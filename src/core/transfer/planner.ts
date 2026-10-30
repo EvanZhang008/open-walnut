@@ -90,8 +90,12 @@ export function normalizeHost(host: string | undefined | null): string {
  * through the local worker only (web/routes/engines.ts localOnly).
  */
 export function engineHostBlocker(engine: SessionEngine, host: string): string | null {
-  if (isAcpEngine(engine) && normalizeHost(host) !== LOCAL_HOST) {
-    return `${engineCaps(engine).displayName} runs on this machine only for now`;
+  // Every ACP engine runs on another host through that host's daemon, which finds the
+  // engine's CLI there (providers/acp-host-artifacts.ts). Not the custom engine: its
+  // adapter command is this machine's config. Whether the host HAS the CLI is the
+  // host's answer (agents/host-engines.ts), not this rule's.
+  if (isAcpEngine(engine) && engineCaps(engine).acpAdapter?.source === 'config' && normalizeHost(host) !== LOCAL_HOST) {
+    return `${engineCaps(engine).displayName} runs on this machine only: its adapter command is this machine's config`;
   }
   return null;
 }

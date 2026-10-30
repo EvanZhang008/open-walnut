@@ -71,6 +71,7 @@ import {
   engineDisplayName,
   engineEntry,
   engineLockReason,
+  hostEngineLockReason,
   engineTitle,
   isSessionEngine,
   launchEngineForHost,
@@ -123,7 +124,7 @@ describe('compiled-in default catalog', () => {
     });
     const codex = engineEntry(DEFAULT_ENGINE_CATALOG, 'codex');
     expect(codex.isDefault).toBe(false);
-    expect(codex.localOnly).toBe(true);
+    expect(codex.localOnly).toBe(false);
     expect(codex.capabilities).toMatchObject({
       rewind: false, fork: false, modelCatalog: 'provider-advertised',
       modeControl: 'config-options', idProvisioning: 'provider-issued',
@@ -163,11 +164,26 @@ describe('engine value normalization', () => {
 describe('resolveEngineForHost (the one local-only rule)', () => {
   const catalog: EngineCatalog = DEFAULT_ENGINE_CATALOG;
 
-  it('downgrades a local-only engine on a remote host tab', () => {
-    expect(resolveEngineForHost('codex', 'clouddev', catalog)).toBe('claude');
-    expect(launchEngineForHost('codex', 'clouddev', catalog)).toBeUndefined();
-    expect(engineLockReason(engineEntry(catalog, 'codex'), 'clouddev'))
-      .toBe('Codex sessions are local-only for now');
+  it('downgrades a local-only engine on a remote host tab, and keeps one that runs there', () => {
+    const custom: EngineCatalog = [...catalog, { ...engineEntry(catalog, 'custom'), displayName: 'Custom', localOnly: true, availability: { installed: true, version: null, reason: null } }];
+    expect(resolveEngineForHost('custom', 'clouddev', custom)).toBe('claude');
+    expect(launchEngineForHost('custom', 'clouddev', custom)).toBeUndefined();
+    expect(engineLockReason(engineEntry(custom, 'custom'), 'clouddev')).toBe('Custom runs on this Mac only');
+    // Codex runs on another host through that host's daemon.
+    expect(resolveEngineForHost('codex', 'clouddev', catalog)).toBe('codex');
+    expect(engineLockReason(engineEntry(catalog, 'codex'), 'clouddev')).toBeNull();
+  });
+
+  it('greys out an engine the host reported missing, and only that', () => {
+    const codex = engineEntry(catalog, 'codex');
+    expect(hostEngineLockReason(codex, 'clouddev', { codex: { installed: false, version: null, reason: 'codex is not installed' } }))
+      .toBe('Not available on clouddev: codex is not installed');
+    expect(hostEngineLockReason(codex, 'clouddev', { codex: { installed: true, version: '1', reason: null } })).toBeNull();
+    // No answer yet, or a probe still running: not locked (the start says why).
+    expect(hostEngineLockReason(codex, 'clouddev', null)).toBeNull();
+    expect(hostEngineLockReason(codex, 'clouddev', { codex: { installed: false, version: null, reason: 'still checking availability' } })).toBeNull();
+    // This machine reads the catalog's own availability.
+    expect(hostEngineLockReason({ ...codex, availability: { installed: false, version: null, reason: 'not here' } }, '__local__', null)).toBe('not here');
   });
 
   it('keeps it on the local machine, however local is spelled', () => {

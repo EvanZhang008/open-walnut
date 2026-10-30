@@ -10654,6 +10654,7 @@ export class SessionRunner {
         cwd: record.cwd || process.env.HOME || process.cwd(),
         mode: (record.mode as SessionMode | undefined) ?? 'default',
         engine: recordEngine,
+        ...(record.host && record.host !== '__local__' ? { host: record.host } : {}),
         providerSessionId: record.claudeSessionId,
         runtimeId: record.acpRuntimeId,
         acpConfig: record.acpConfig,
@@ -10954,12 +10955,11 @@ export class SessionRunner {
     if (data.forkedFromSessionId) {
       throw new AcpForkUnsupportedError(data.forkedFromSessionId, engine)
     }
-    if (data.host && data.host !== '__local__') {
-      // Local-only for every ACP engine — the worker/adapter run beside walnut.
-      throw new Error(
-        `${engineCaps(engine).displayName} (ACP) sessions are local-only for now `
-          + '— remote host support is a later phase',
-      )
+    // Another host runs the engine through its own daemon (acp-host-artifacts.ts);
+    // this machine's HOME means nothing there, so such a start names its directory.
+    const remoteHost = data.host && data.host !== '__local__' ? data.host : undefined
+    if (remoteHost && !data.cwd) {
+      throw new Error(`${engineCaps(engine).displayName} on ${remoteHost} needs a working directory on that host`)
     }
     const cwd = data.cwd || process.env.HOME || process.cwd()
     // Draft-picked model → standard ACP config, applied by replayPersistedConfig
@@ -10981,6 +10981,7 @@ export class SessionRunner {
       cwd,
       mode: (data.mode as SessionMode | undefined) ?? 'default',
       engine,
+      ...(remoteHost ? { host: remoteHost } : {}),
       ...(draftAcpConfig ? { acpConfig: draftAcpConfig } : {}),
       ...(await buildAcpStartExtras(data)),
       directWsUrl: this._testDaemonUrl,

@@ -76,8 +76,10 @@ describe('planning a transfer', () => {
     expect(() => planTransfer(task, claudeSession, { taskId: 'task-1', engine: 'codex', permissionMode: 'yolo' as never }, hosts)).toThrow(TransferError);
   });
 
-  it('refuses Codex on a remote host with a reason the UI can show', () => {
-    expect(() => planTransfer(task, claudeSession, { taskId: 'task-1', engine: 'codex', host: 'devbox' }, hosts))
+  it('plans Codex on a remote host (that host runs it), and refuses only the custom engine there', () => {
+    expect(planTransfer(task, claudeSession, { taskId: 'task-1', engine: 'codex', host: 'devbox' }, hosts).target)
+      .toMatchObject({ engine: 'codex', host: 'devbox' });
+    expect(() => planTransfer(task, claudeSession, { taskId: 'task-1', engine: 'custom', host: 'devbox' }, hosts))
       .toThrow(/runs on this machine only/);
   });
 
@@ -94,13 +96,15 @@ describe('planning a transfer', () => {
     expect(planTransfer(task, claudeSession, { taskId: 'task-1', cwd: '/work/other/' }, hosts).target.cwd).toBe('/work/other');
   });
 
-  it('lists every engine and host pair, blocking ACP engines off this machine', () => {
-    const options = transferOptions(['claude', 'codex'], ['devbox']);
+  it('lists every engine and host pair, blocking only the custom engine off this machine', () => {
+    const options = transferOptions(['claude', 'codex', 'custom'], ['devbox']);
     expect(options).toEqual([
       { engine: 'claude', host: '__local__' },
       { engine: 'claude', host: 'devbox' },
       { engine: 'codex', host: '__local__' },
-      { engine: 'codex', host: 'devbox', blockedReason: expect.stringContaining('this machine only') },
+      { engine: 'codex', host: 'devbox' },
+      { engine: 'custom', host: '__local__' },
+      { engine: 'custom', host: 'devbox', blockedReason: expect.stringContaining('this machine only') },
     ]);
   });
 });

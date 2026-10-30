@@ -70,6 +70,8 @@ const DAEMON_SOURCE_FILES = [
   // ACP worker stack — compiled into the daemon deploy unit (worker artifact
   // ships with the daemon; version skew impossible by construction).
   'src/providers/acp-daemon.ts',
+  'src/providers/acp-host-artifacts.ts',
+  'node_modules/@agentclientprotocol/codex-acp/package.json',
   'src/providers/codex-model-probe.ts',
   // Unified agent.* command routing table (agent-commands-v1) — bundled into
   // the standalone twin and inlined in the source twin; a routing-table-only

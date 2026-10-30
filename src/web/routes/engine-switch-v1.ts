@@ -4,9 +4,11 @@
  *
  *   GET    /tasks/:id/sessions         { taskId, activeSessionId, sessions: [...] } every session
  *                                      of the task in order (the active one last, `active: true`)
- *   POST   /tasks/:id/switch-engine    { engine, text, model?, effort?, permission_mode?, confirm_move? }
+ *   POST   /tasks/:id/switch-engine    { engine, text, model?, effort?, permission_mode? }
  *                                      → 200 done (the new session), 202 pending (the running turn
- *                                      ends first) or switching (still starting after wait_ms)
+ *                                      ends first) or switching (still starting after wait_ms);
+ *                                      409 engine_not_on_host when the task's host cannot run it
+ *                                      (a switch never moves the work to another host)
  *   DELETE /tasks/:id/switch-engine    cancel a pending switch; `deliver: true` sends its message
  *                                      to the current session instead
  */
@@ -105,7 +107,7 @@ engineSwitchV1Router.post('/tasks/:id/switch-engine', async (req: Request, res: 
       ...(typeof body.model === 'string' && body.model ? { model: body.model } : {}),
       ...(typeof body.effort === 'string' ? { effort: body.effort as SessionEffort } : {}),
       ...(typeof body.permission_mode === 'string' ? { permissionMode: body.permission_mode as SessionMode } : {}),
-      confirmMove: body.confirm_move === true, callerSid: callerSid(req), source: 'api',
+      callerSid: callerSid(req), source: 'api',
     })
     let timer: ReturnType<typeof setTimeout> | undefined
     const outcome = await Promise.race([

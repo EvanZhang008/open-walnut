@@ -33,6 +33,10 @@ const required = [
   'dist/daemon-binaries/acp-daemon-core.cjs',
   'dist/daemon-binaries/pi-acp.js',
   'dist/daemon-binaries/pi-acp.LICENSE',
+  // What a remote source-twin host runs ACP engines with (acp-host-artifacts.ts ACP_HOST_FILES).
+  'dist/daemon-binaries/acp-worker.mjs',
+  'dist/daemon-binaries/codex-acp.mjs',
+  'dist/daemon-binaries/codex-acp.LICENSE',
   'dist/daemon-binaries/daemon-cron-runtime.cjs',
   'dist/daemon-binaries/daemon-instance-lock.cjs',
   'dist/daemon-binaries/daemon-service-cli.cjs',

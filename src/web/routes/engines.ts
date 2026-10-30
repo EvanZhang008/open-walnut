@@ -40,9 +40,10 @@ function toCatalogEntry(caps: EngineCapabilities, availability: EngineAvailabili
     displayName: caps.displayName,
     runtimeKind: caps.runtimeKind,
     isDefault: caps.id === DEFAULT_ENGINE,
-    // Every ACP engine runs through the local acp-worker today; remote hosts
-    // reject them in claude-code-session. Registry-derived, not a vendor list.
-    localOnly: caps.runtimeKind === 'acp',
+    // Every ACP engine runs on another host through that host's daemon
+    // (providers/acp-host-artifacts.ts), except one whose adapter command is this
+    // machine's config. Whether a host has the CLI: GET /availability?host=.
+    localOnly: caps.acpAdapter?.source === 'config',
     capabilities: {
       rewind: caps.rewind !== 'unsupported',
       fork: caps.fork,
@@ -68,6 +69,21 @@ enginesRouter.get('/', async (_req: Request, res: Response) => {
   }
   const engines = [...ENGINE_REGISTRY.values()].map((caps) => toCatalogEntry(caps, availability.get(caps.id) ?? PROBE_UNKNOWN))
   res.json({ engines })
+})
+
+// GET /api/engines/availability?host=<key> — which engines that host can run
+// (core/agents/host-engines.ts): an engine missing there is greyed out in the
+// picker. Answers within the host probe's deadline; an engine the host did not
+// report in time is absent (unknown), never "not installed".
+enginesRouter.get('/availability', async (req: Request, res: Response) => {
+  const host = typeof req.query.host === 'string' && req.query.host ? req.query.host : '__local__'
+  try {
+    const { hostEnginesAvailability } = await import('../../core/agents/host-engines.js')
+    res.json({ host, engines: await hostEnginesAvailability(host, { dial: false }) })
+  } catch (err) {
+    log.web.warn('host engine availability failed', { host, error: err instanceof Error ? err.message : String(err) })
+    res.json({ host, engines: {} })
+  }
 })
 
 // GET /api/engines/:id/models — the engine's provider-advertised model catalog

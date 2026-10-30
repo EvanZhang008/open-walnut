@@ -1628,17 +1628,17 @@ session instead.
   transcript_path }, resumed?: { session_id, engine, at, carried_turns } }],
   legacySessionIds, engineSwitch? }`, oldest first.
 - `POST /api/v1/tasks/:id/switch-engine { engine, text, model?, effort?,
-  permission_mode?, confirm_move?, wait_ms? }`: `text` is the message the new
-  session starts with. While the task's session is in a turn the switch waits
+  permission_mode?, wait_ms? }`: `text` is the message the new session starts
+  with, on the same host as the old one (a switch never moves the work). While the task's session is in a turn the switch waits
   for that turn to end: `202 { state: "pending", switchId, fromSessionId,
   engine, host }`, and it then runs by itself. Otherwise it waits up to
   `wait_ms` (default 25000): `200 { state: "done", taskId, switchId,
   fromSessionId, sessionId, engine, host, carriedTurns, trimmedTurns,
   transcriptPath?, resumed? }` or `202 { state: "switching" }`. Refusals: `400 bad_engine`,
   `400 message_required`, `400 same_engine` (change the model instead), `409
-  moves_to_this_mac` (every engine other than Claude Code runs on the Mac only;
-  a task on another host needs `confirm_move: true`, and its workspace is then
-  copied to the Mac as a transfer does), `502 start_failed` (the old session is
+  engine_not_on_host` (the task's host cannot run that engine: its CLI is not
+  installed there, or it is the custom engine, which runs on the Mac only; move
+  the work with a transfer), `502 start_failed` (the old session is
   the task's session again), `409 switch_in_progress` (one is running) and `409
   switch_pending` (one already waits for this turn; cancel it first). A task with no conversation yet just starts on the
   engine. The write answers `501 not_supported_cloud` on the companion.

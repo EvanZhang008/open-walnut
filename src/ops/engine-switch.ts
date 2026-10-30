@@ -16,7 +16,8 @@ defineOp({
     + '(same host and directory, same model, nothing compacted or changed since, keeping its prompt cache); otherwise it starts a new session too. A task has one active session at a time; '
     + 'its earlier sessions stay its history. text is the message the new session starts with. '
     + 'While the task\'s session is in a turn the switch waits for that turn to end (state pending). '
-    + 'Every engine other than Claude Code (Codex included) runs on the primary machine only: a remote task switching to one moves its work to the primary machine and needs confirm_move:true. '
+    + 'The new session runs on the same host as the old one: a switch never moves the work. An engine that host cannot run (its CLI is not installed there; the custom engine runs on the primary machine only) is refused with 409 engine_not_on_host; '
+    + 'moving the work to another host is task_transfer. '
     + 'To change only the model, use the session\'s model switch instead. Only switch when the user asked for another engine; '
     + 'task_transfer (a NEW task) is only for when the user asks for a new task.',
   input: {
@@ -26,7 +27,7 @@ defineOp({
     model: z.string().min(1).optional().describe('Model for the new session; omit for the engine default'),
     effort: z.enum(['low', 'medium', 'high', 'xhigh', 'max']).optional().describe('Reasoning effort for a new Claude Code session'),
     permission_mode: z.enum(['plan', 'default', 'dontAsk', 'accept', 'auto', 'bypass']).optional().describe('Permission mode the new session starts in; omit to keep the current one'),
-    confirm_move: z.boolean().optional().describe('A remote task switching to an engine only the primary machine runs: confirm that its work moves there'),
+    confirm_move: z.boolean().optional().describe('Ignored: a switch never moves the work (kept so older callers still switch)'),
     wait_ms: z.number().int().min(0).max(25_000).optional().describe('How long to wait for the new session before answering "switching" (default 25000)'),
   },
   bind: { method: 'POST', path: '/tasks/:id/switch-engine' },

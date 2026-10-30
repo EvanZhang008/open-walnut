@@ -88,11 +88,12 @@ describe('GET /api/engines', () => {
       settings: true,
     })
 
-    // Every ACP engine is local-only today and shares codex's capability axes;
+    // Every ACP engine shares codex's capability axes and runs on any host that has
+    // its CLI, except the custom engine (its command is this machine's config);
     // only codex declares a settings surface (its own config.toml).
     for (const engine of engines.filter((e) => e.runtimeKind === 'acp')) {
       expect(engine.isDefault, engine.id).toBe(false)
-      expect(engine.localOnly, engine.id).toBe(true)
+      expect(engine.localOnly, engine.id).toBe(engine.id === 'custom')
       expect(engine.capabilities, engine.id).toEqual({
         rewind: false,
         fork: false,

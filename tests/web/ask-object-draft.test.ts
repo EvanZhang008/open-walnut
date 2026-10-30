@@ -91,14 +91,16 @@ describe('the launch in Start Task mode', () => {
 
   it('drops a local-only engine on a remote host, and the model picked under it', () => {
     const base = inFolder(leaveWalnutDraft(initialAskDraft(ID)), '/work/marina-app', 'devbox');
-    const draft = { ...base, meta: { ...base.meta, engine: 'codex' as const, model: 'codex-model' } };
+    const draft = { ...base, meta: { ...base.meta, engine: 'custom' as const, model: 'custom-model' } };
     const launch = body(draft);
     expect(launch.engine).toBeUndefined();
     expect(launch.model).toBeUndefined();
     // The same pick on this machine rides as is.
     const local = body({ ...draft, host: null });
-    expect(local.engine).toBe('codex');
-    expect(local.model).toBe('codex-model');
+    expect(local.engine).toBe('custom');
+    expect(local.model).toBe('custom-model');
+    // Codex runs on the remote host itself.
+    expect(body({ ...draft, meta: { ...draft.meta, engine: 'codex' as const, model: 'codex-model' } }).engine).toBe('codex');
   });
 });
 

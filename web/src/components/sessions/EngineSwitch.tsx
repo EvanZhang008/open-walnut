@@ -4,16 +4,18 @@
  * The picker's engine rail is unlocked for a task session. Picking another
  * engine changes nothing yet: the composer says the next message switches, and
  * that message starts the task's NEW session on the engine (a running turn
- * finishes first). Picking the session's own engine again undoes the pick. An
- * engine this Mac alone runs, on a task that runs on another host, asks once
- * that the work moves to this Mac.
+ * finishes first). Picking the session's own engine again undoes the pick. The
+ * new session runs on the same host (2026-10-30, the user: "default it only
+ * switch to the same machine"), so an engine that host cannot run is greyed out
+ * in the rail, with the host's reason.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Task } from '@open-walnut/core';
 import type { SessionRecord } from '@/types/session';
 import { cancelEngineSwitch } from '@/api/engine-switch';
-import { engineEntry, engineLockReason, isRemoteHost, resolveEngine } from '@/utils/engines';
+import { engineEntry, hostEngineLockReason, resolveEngine } from '@/utils/engines';
 import type { EngineCatalogEntry } from '@/utils/engines';
+import { useHostEngineAvailability } from '@/hooks/useHostEngineAvailability';
 import type { SessionSendOptions } from '@/hooks/useSessionSend';
 import { log } from '@/utils/log';
 import '@/styles/engine-switch.css';
@@ -22,8 +24,6 @@ export interface EngineSwitchPick {
   engine: string;
   model?: string;
   effort?: string;
-  /** The user confirmed that the work moves to this Mac. */
-  confirmMove?: boolean;
 }
 
 type ServerSwitch = NonNullable<Task['engine_switch']>;
@@ -44,18 +44,15 @@ export function useEngineSwitchPick(opts: {
   const onProviderSwitch = useCallback((provider: string) => {
     setPick(resolveEngine(provider) === current ? null : { engine: resolveEngine(provider) });
   }, [current]);
-  const entry = pick ? engineEntry(catalog as never, pick.engine) : null;
-  const movesToThisMac = !!entry && !!entry.localOnly && isRemoteHost(session?.host);
-  // The rail keeps the availability lock (not installed); local-only is a confirm, not a lock.
-  const providerLockReason = useCallback((provider: string) => {
-    const e = engineEntry(catalog as never, provider);
-    return engineLockReason(e, undefined);
-  }, [catalog]);
-  const armed = !!pick && (!movesToThisMac || pick.confirmMove === true);
-  const sendOptions: SessionSendOptions | undefined = armed && pick ? {
+  // Greyed out: an engine the session's host cannot run (this Mac: its own probe).
+  const hostEngines = useHostEngineAvailability(session?.host);
+  const providerLockReason = useCallback((provider: string) => (
+    hostEngineLockReason(engineEntry(catalog as never, provider), session?.host, hostEngines)
+  ), [catalog, session?.host, hostEngines]);
+  const armed = !!pick;
+  const sendOptions: SessionSendOptions | undefined = pick ? {
     switchEngine: {
       engine: pick.engine, ...(pick.model ? { model: pick.model } : {}), ...(pick.effort ? { effort: pick.effort } : {}),
-      ...(movesToThisMac ? { confirmMove: true } : {}),
     },
   } : undefined;
 
@@ -78,7 +75,7 @@ export function useEngineSwitchPick(opts: {
   }, [onSessionReplaced, newSid, sessionId, server?.state, server?.session_id, task?.id]);
 
   return {
-    enabled, pick, setPick, onProviderSwitch, providerLockReason, movesToThisMac, armed, sendOptions, server, markSent,
+    enabled, pick, setPick, onProviderSwitch, providerLockReason, armed, sendOptions, server, markSent,
     clear: useCallback(() => setPick(null), []),
   };
 }
@@ -88,14 +85,11 @@ function engineName(catalog: readonly EngineCatalogEntry[], engine: string | und
 }
 
 /** The composer's line about a switch: picked, waiting for the turn, starting, or failed. */
-export function EngineSwitchLine({ pick, server, movesToThisMac, host, catalog, taskId, onConfirmMove, onUndo }: {
+export function EngineSwitchLine({ pick, server, catalog, taskId, onUndo }: {
   pick: EngineSwitchPick | null;
   server: ServerSwitch | undefined;
-  movesToThisMac: boolean;
-  host?: string | null;
   catalog: readonly EngineCatalogEntry[];
   taskId?: string;
-  onConfirmMove: () => void;
   onUndo: () => void;
 }) {
   const [busy, setBusy] = useState(false);
@@ -142,21 +136,10 @@ export function EngineSwitchLine({ pick, server, movesToThisMac, host, catalog, 
     );
   }
   if (!pick) return null;
-  if (movesToThisMac && !pick.confirmMove) {
-    return (
-      <div className="engine-switch-line engine-switch-line-confirm" role="status" data-testid="engine-switch-line" data-state="confirm">
-        <span className="engine-switch-text">
-          {toName} runs on this Mac only. Switching moves this task&apos;s work from {host || 'its host'} to this Mac.
-        </span>
-        <button type="button" className="engine-switch-btn engine-switch-btn-primary" onClick={onConfirmMove}>Move to this Mac</button>
-        <button type="button" className="engine-switch-btn" onClick={onUndo}>Cancel</button>
-      </div>
-    );
-  }
   return (
     <div className="engine-switch-line" role="status" data-testid="engine-switch-line" data-state="picked">
       <span className="engine-switch-text">
-        Your next message switches this task to <strong>{toName}</strong>{movesToThisMac ? ' on this Mac' : ''}, with this conversation.
+        Your next message switches this task to <strong>{toName}</strong>, with this conversation.
       </span>
       <button type="button" className="engine-switch-btn" onClick={onUndo}>Undo</button>
     </div>

@@ -216,7 +216,7 @@ export function getDaemonSource(): string {
   // external-scan-core.cjs, path-resolve-core.cjs) and daemonCapabilities() in
   // the template adds the capability back at runtime only when that sidecar
   // actually loads.
-  const SIDECAR_GATED_CAPABILITIES = new Set(['changes-v1', 'external-scan-v1', 'external-scan-filter-v1', 'external-describe-v1', 'external-human-v1', 'path-resolve-v1', 'task-dir-v1', 'vscode-v1', 'rewind-probe-v1', 'triggers-v1', 'trigger-claim-v1', 'trigger-host-resume-v1', 'offline-triggers-v1', 'clock-routine-v1', 'clock-host-start-v1', 'acp-model-catalog-v1', 'usage-scan-v1', 'session-cost-v1', 'session-cost-day-v1', 'budget-v2'])
+  const SIDECAR_GATED_CAPABILITIES = new Set(['changes-v1', 'external-scan-v1', 'external-scan-filter-v1', 'external-describe-v1', 'external-human-v1', 'path-resolve-v1', 'task-dir-v1', 'vscode-v1', 'rewind-probe-v1', 'triggers-v1', 'trigger-claim-v1', 'trigger-host-resume-v1', 'offline-triggers-v1', 'clock-routine-v1', 'clock-host-start-v1', 'acp-model-catalog-v1', 'acp-host-v1', 'usage-scan-v1', 'session-cost-v1', 'session-cost-day-v1', 'budget-v2'])
   const capsLiteral = JSON.stringify(
     [...ADVERTISED_DAEMON_CAPABILITIES].filter((c) => !SIDECAR_GATED_CAPABILITIES.has(c)),
   )
@@ -3874,6 +3874,13 @@ function dispatchCommand(ws, id, cmd) {
     case 'acpState': return acp ? cmdAcpOp(ws, id, cmd, 'getState') : acpUnsupported(ws, id);
     case 'acpNewSession': return acp ? cmdAcpOp(ws, id, cmd, 'newSession') : acpUnsupported(ws, id);
     case 'acpStop': return acp ? cmdAcpStop(ws, id, cmd) : acpUnsupported(ws, id);
+    // Which engines this host can run ('acp-host-v1', acp-host-artifacts.ts).
+    case 'acpHostEngines': {
+      if (!acp || typeof acp.hostEngines !== 'function') return acpUnsupported(ws, id);
+      if (!Array.isArray(cmd.specs)) return sendError(ws, id, 'acpHostEngines: missing specs');
+      return acp.hostEngines(cmd.specs)
+        .then(function (engines) { sendOk(ws, id, { engines: engines }); }, function (error) { sendError(ws, id, error.message); });
+    }
     case 'acpSubscribe': return acp ? cmdAcpSubscribe(ws, id, cmd) : acpUnsupported(ws, id);
     // Unified agent.* family (agent-commands-v1): one namespace, engine-routed
     // onto the legacy per-engine handlers (see resolveAgentCommand above).
@@ -11812,10 +11819,10 @@ let triggerCheckCore = null;
 try { triggerCheckCore = require(path.join(__dirname, 'trigger-check-core.cjs')); } catch (err) { triggerCheckCore = null; }
 
 // ACP supervision sidecar (acp-daemon-core.cjs): the same acp-daemon.ts the binary
-// twin compiles in. Only a local daemon gets it (local-daemon.ts copies it; remote
-// deploys leave it out, ACP engines are local-only). Without it the npm package,
-// which ships no daemon binary, could not start Codex, Gemini, OpenCode, Goose or
-// Pi at all: every acp* command answered acp_unsupported.
+// twin compiles in. The local daemon gets it from local-daemon.ts; a remote deploy
+// ships it with the worker and the bundled adapters (acp-host-artifacts.ts), so this
+// host runs Codex, OpenCode, Goose, Pi and the rest itself, finding each engine's
+// CLI on its own PATH. Without it every acp* command answers acp_unsupported.
 let acp = null;
 try {
   const acpDaemonCore = require(path.join(__dirname, 'acp-daemon-core.cjs'));
@@ -11826,6 +11833,7 @@ try {
     isWsOpen: function (ws) { return ws.readyState === 1; },
     log: logMsg,
     onTurnEnd: function (sid) { if (usageBudget) usageBudget.observeRuntime(sid); },
+    artifactDir: __dirname,
   });
 } catch (err) {
   acp = null;
@@ -11859,6 +11867,7 @@ function daemonCapabilities() {
     if (cronIndex !== -1) caps.splice(cronIndex, 1);
   }
   if (acp && typeof acp.modelCatalog === 'function') caps.push('acp-model-catalog-v1');
+  if (acp && typeof acp.hostEngines === 'function' && fs.existsSync(path.join(__dirname, 'acp-worker.mjs'))) caps.push('acp-host-v1');
   if (changesCore) caps.push('changes-v1');
   if (usageCore) caps.push('usage-scan-v1');
   if (usageCore && typeof usageCore.scanSessionCost === 'function') caps.push('session-cost-v1');

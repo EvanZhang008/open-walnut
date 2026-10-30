@@ -62,8 +62,9 @@ export interface EngineCatalogEntry {
   displayName: string;
   runtimeKind: 'native' | 'acp';
   isDefault: boolean;
-  /** Sessions on this engine can only spawn on the local machine (every ACP
-   *  engine today — the worker is not deployed to remote daemons). */
+  /** Sessions on this engine can only spawn on this machine (the custom engine:
+   *  its adapter command is this machine's config). Every other engine runs on
+   *  a host that has its CLI; GET /api/engines/availability?host= says which. */
   localOnly: boolean;
   capabilities: EngineCatalogCapabilities;
   availability: EngineAvailability;
@@ -111,7 +112,7 @@ export const DEFAULT_ENGINE_CATALOG: EngineCatalog = [
     displayName: 'Codex',
     runtimeKind: 'acp',
     isDefault: false,
-    localOnly: true,
+    localOnly: false,
     capabilities: ACP_CAPABILITIES,
     availability: { installed: true, version: null, reason: null },
   },
@@ -219,7 +220,30 @@ export function engineLockReason(
     return entry.availability.reason ?? `${entry.displayName} is not installed`;
   }
   if (entry.localOnly && isRemoteHost(host)) {
-    return `${entry.displayName} sessions are local-only for now`;
+    return `${entry.displayName} runs on this Mac only`;
   }
   return null;
+}
+
+/** One engine's availability as a host reported it (GET /api/engines/availability). */
+export type HostEngineAvailability = Partial<Record<string, EngineAvailability>>;
+
+/** The probe has not answered yet: no lock (the start itself says why it cannot run). */
+const PENDING_REASONS: ReadonlySet<string> = new Set(['still checking availability', 'availability check unavailable']);
+
+/**
+ * Why `entry` cannot run on `host`, or null. This machine reads the catalog's own
+ * availability; another host reads what that host reported (`hostAvailability`),
+ * and an engine it did not report is not locked.
+ */
+export function hostEngineLockReason(
+  entry: EngineCatalogEntry,
+  host: string | null | undefined,
+  hostAvailability: HostEngineAvailability | null | undefined,
+): string | null {
+  if (!isRemoteHost(host)) return engineLockReason(entry, undefined);
+  if (entry.localOnly) return `${entry.displayName} runs on this Mac only`;
+  const row = hostAvailability?.[entry.id];
+  if (!row || row.installed || (row.reason && PENDING_REASONS.has(row.reason))) return null;
+  return `Not available on ${host}${row.reason ? `: ${row.reason}` : ''}`;
 }

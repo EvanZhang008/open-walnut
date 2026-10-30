@@ -1812,7 +1812,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
       effort: switchPick.effort as SessionEffort | undefined,
       onPick: (model: string | undefined) => engineSwitch.setPick((p) => (p ? { ...p, model } : p)),
       onPickEffort: (effort: SessionEffort) => engineSwitch.setPick((p) => (p ? { ...p, effort } : p)),
-      host: engineSwitch.movesToThisMac ? undefined : session.host,
+      host: session.host,
       cwd: session.cwd,
     } : undefined;
     // Labels come from the ONE mode registry (core/types.ts) so a mode added
@@ -2872,11 +2872,8 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
           <EngineSwitchLine
             pick={engineSwitch.pick}
             server={engineSwitch.server}
-            movesToThisMac={engineSwitch.movesToThisMac}
-            host={session?.host}
             catalog={engineCatalog}
             taskId={session?.taskId}
-            onConfirmMove={() => engineSwitch.setPick((p) => (p ? { ...p, confirmMove: true } : p))}
             onUndo={engineSwitch.clear}
           />
           <SessionBudgetStatus data={budgetUsage.data} onOpen={openUsageDialog} />

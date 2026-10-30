@@ -1730,10 +1730,10 @@ export class SessionHealthMonitor {
         const hostKey = s.host ?? '__local__'
         let wasStopped = false
         if (s.process_status === 'error') {
-          // Local codex/ACP records keep their pre-existing exclusion (`!s.host`
-          // skipped them): their liveness is acpState-keyed, not `status`/sid —
-          // a sid probe always answers dead and would relabel a resumable one.
-          if (!s.host && !engineCaps(s.engine).sidLivenessProbe) continue
+          // ACP records, on this machine or another host: their liveness is
+          // acpState-keyed, not `status`/sid; a sid probe always answers dead and
+          // would relabel a resumable one.
+          if (!engineCaps(s.engine).sidLivenessProbe) continue
           const errorClass = classifySessionError(s)
           if (errorClass === 'terminal') continue
           if (errorClass === 'unknown' && s.errorMessage) continue

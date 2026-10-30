@@ -23,6 +23,7 @@
  */
 
 import crypto from 'node:crypto'
+import os from 'node:os'
 import path from 'node:path'
 import fsModule from 'node:fs'
 import { fileURLToPath } from 'node:url'
@@ -48,7 +49,9 @@ import {
   resolveOverridePath,
 } from '../core/agents/engine-probe.js'
 import { localDaemon } from './local-daemon.js'
-import { getDirectDaemonConnection, DaemonConnection, type DaemonEvent } from './daemon-connection.js'
+import { getDaemonConnection, getDirectDaemonConnection, DaemonConnection, type DaemonEvent } from './daemon-connection.js'
+import type { AcpHostAdapterSpec } from './acp-host-artifacts.js'
+import { hostAdapterSpec } from '../core/agents/host-adapter-spec.js'
 import { AcpJournalProjector } from './acp-journal-projector.js'
 import { AcpStreamNormalizer } from './acp-stream-normalizer.js'
 import { AcpTurnSpeedMeter } from '../core/sessions/acp-turn-speed.js'
@@ -119,6 +122,35 @@ const SESSION_CONTEXT_LEAD = 'Your standing instructions for this whole session.
 export function acpStartEnv(env: Record<string, string> | undefined, info: SingleFile | null = singleFile()): Record<string, string> | undefined {
   if (!info) return env
   return { ...(env ?? {}), WALNUT_RUNTIME_DIR: path.dirname(info.root) }
+}
+
+/** Keys that only name this machine's files, which another host's daemon finds for itself. */
+const HOST_LOCAL_ENV_KEYS = new Set(['PATH', 'HOME', 'NODE_PATH', 'CODEX_PATH', 'PI_ACP_PI_COMMAND', 'WALNUT_RUNTIME_DIR'])
+
+/**
+ * The adapter env for a session on another host: without this machine's paths
+ * (the keys above, and any value inside this machine's home), so what that host's
+ * daemon found (its CODEX_PATH, its PATH) is what runs.
+ */
+export function hostAdapterEnv(env: Record<string, string> | undefined, home: string = os.homedir()): Record<string, string> | undefined {
+  if (!env) return env
+  const out: Record<string, string> = {}
+  for (const [k, v] of Object.entries(env)) {
+    if (HOST_LOCAL_ENV_KEYS.has(k)) continue
+    if (typeof v === 'string' && home && (v === home || v.startsWith(home + '/'))) continue
+    out[k] = v
+  }
+  return out
+}
+
+/** How a session on another host reaches that host's daemon (config.hosts). */
+async function remoteSshTarget(host: string): Promise<{ hostname: string; user?: string; port?: number; shell_setup?: string }> {
+  const { getConfig } = await import('../core/config-manager.js')
+  const hostDef = (await getConfig()).hosts?.[host]
+  if (!hostDef) throw new Error(`Unknown host: ${host}`)
+  const hostname = hostDef.hostname ?? (hostDef as Record<string, unknown>).ssh as string | undefined
+  if (!hostname) throw new Error(`Host ${host} has no hostname`)
+  return { hostname, user: hostDef.user, port: hostDef.port, shell_setup: hostDef.shell_setup }
 }
 
 export function resolveAcpArtifacts(
@@ -594,6 +626,12 @@ export interface AcpSessionConfig {
   developerInstructions?: string
   /** Walnut MCP command for a Main Agent lane, independent of the global ACP opt-in. */
   walnutMcpServer?: AcpMcpServer
+  /**
+   * The host the session runs on (a key of config.hosts); absent or '__local__' =
+   * this machine. On another host the host's daemon builds the worker and adapter
+   * commands itself from `hostAdapterSpec` (acp-host-artifacts.ts).
+   */
+  host?: string
   /** Test override: direct daemon ws URL (MockDaemon / ephemeral daemon). */
   directWsUrl?: string
   /** Test override: worker/adapter command vectors. */
@@ -732,7 +770,9 @@ export class AcpSession {
   get active(): boolean { return this._active }
   get mode(): SessionMode { return this._mode }
   get cwd(): string { return this.cfg.cwd }
-  get host(): string { return '__local__' }
+  get host(): string { return this.cfg.host && this.cfg.host !== '__local__' ? this.cfg.host : '__local__' }
+  /** The session runs on another host's daemon (AcpSessionConfig.host). */
+  private get remote(): boolean { return this.host !== '__local__' }
   get activity(): 'processing' | 'idle' { return this._turnActive ? 'processing' : 'idle' }
   get hasPendingPermission(): boolean { return this._pendingPermissions.size > 0 }
   /** True while we hold a live daemon connection and an established worker —
@@ -789,13 +829,17 @@ export class AcpSession {
 
   private async ensureConn(): Promise<DaemonConnection> {
     if (this.conn?.connected) return this.conn
+    if (this.remote && !this.cfg.directWsUrl) return this.adoptConn(await getDaemonConnection(this.host, await remoteSshTarget(this.host)))
     const wsUrl = this.cfg.directWsUrl || localDaemon.wsUrl
     if (!wsUrl) {
       await localDaemon.ensureRunning()
     }
     const finalUrl = this.cfg.directWsUrl || localDaemon.wsUrl
     if (!finalUrl) throw new Error('AcpSession: local daemon not running')
-    const conn = await getDirectDaemonConnection('__local__', finalUrl)
+    return this.adoptConn(await getDirectDaemonConnection('__local__', finalUrl))
+  }
+
+  private adoptConn(conn: DaemonConnection): DaemonConnection {
     // Daemon restart replaces the pooled connection — re-register the event
     // handler on the NEW instance or journal frames never reach us again.
     if (conn !== this.conn) {
@@ -1107,6 +1151,9 @@ export class AcpSession {
    * set per-session would need record-level persistence like SessionProfile.
    */
   private async resolveMcpServers(): Promise<AcpMcpServer[]> {
+    // Both mounts are commands of this machine's install. A session on another host
+    // reaches Walnut through the `walnut` CLI its daemon puts on PATH instead.
+    if (this.remote) return []
     return withWalnutApiEnv(await this.resolveMcpServerSet(), walnutApiEnvForSession(this.host))
   }
 
@@ -1197,7 +1244,7 @@ export class AcpSession {
       return { ...(overlay ?? {}), ...(provider ?? {}), ...(managed ?? {}) }
     }
     const parsedBaseConfig = parseCodexBaseConfig(
-      overlay && Object.hasOwn(overlay, 'CODEX_CONFIG') ? overlay.CODEX_CONFIG : process.env.CODEX_CONFIG,
+      overlay && Object.hasOwn(overlay, 'CODEX_CONFIG') ? overlay.CODEX_CONFIG : (this.remote ? undefined : process.env.CODEX_CONFIG),
     )
     // Startup approval preset: the session's OWN persisted choice wins (it is
     // replayed post-establish by replayPersistedConfig); only a session with
@@ -1216,7 +1263,8 @@ export class AcpSession {
         const config = await getConfig()
         walnutDefault = (config.session as { codex_default_mode?: string } | undefined)?.codex_default_mode
       } catch { /* config unreadable — codex config.toml still applies */ }
-      initialAgentMode = resolveCodexInitialMode({ walnutDefault })
+      // ~/.codex/config.toml of THIS machine says nothing about another host's codex.
+      initialAgentMode = resolveCodexInitialMode({ walnutDefault, ...(this.remote ? { env: {} } : {}) })
     }
     // Non-lane codex sessions get the same walnut context every native claude
     // session gets (walnut gateway + skill pointer); lanes get the self-knowledge
@@ -1227,7 +1275,7 @@ export class AcpSession {
     } else {
       try {
         const { buildSessionContext } = await import('../core/sessions/session-context.js')
-        defaultInstructions = (await buildSessionContext(this.taskId, this.cfg.cwd)).systemPrompt || undefined
+        defaultInstructions = (await buildSessionContext(this.taskId, this.cfg.cwd, this.remote ? this.host : undefined)).systemPrompt || undefined
       } catch { /* context is additive — never block establish */ }
     }
     const managed = buildAcpAdapterEnv(providerExecutable, {
@@ -1265,7 +1313,7 @@ export class AcpSession {
     if (!context) {
       try {
         const { buildSessionContext } = await import('../core/sessions/session-context.js')
-        context = (await buildSessionContext(this.taskId, this.cfg.cwd)).systemPrompt?.trim() ?? ''
+        context = (await buildSessionContext(this.taskId, this.cfg.cwd, this.remote ? this.host : undefined)).systemPrompt?.trim() ?? ''
       } catch (error) {
         log.session.warn('acp: session context unavailable for the first prompt', {
           runtimeId: this.runtimeId, engine: this.engineId, error: error instanceof Error ? error.message : String(error),
@@ -1287,8 +1335,14 @@ export class AcpSession {
     }
   }
 
-  private async resolveArtifacts(): Promise<{ workerCmd: string[]; adapterCmd: string[] }> {
+  private async resolveArtifacts(): Promise<{ workerCmd: string[]; adapterCmd: string[] } | { hostAdapter: AcpHostAdapterSpec }> {
     if (this.cfg.artifacts) return this.cfg.artifacts
+    if (this.remote) {
+      // The host's daemon builds both commands from what that host has (acp-host-artifacts.ts).
+      const spec = hostAdapterSpec(this.engineId)
+      if (!spec) throw new Error(`${engineCaps(this.engineId).displayName} runs on this machine only: its adapter command is this machine's config`)
+      return { hostAdapter: spec }
+    }
     const artifacts = resolveAcpArtifacts(this.engineId, {
       configuredAdapterCmd: await this.resolveConfiguredAdapterCmd(),
     })
@@ -1306,7 +1360,7 @@ export class AcpSession {
   private async establishProviderSession(): Promise<string> {
     const threadBefore = this._providerSessionId
     await this.seedReplayCursor()
-    const { workerCmd, adapterCmd } = await this.resolveArtifacts()
+    const artifacts = await this.resolveArtifacts()
     // Fail closed BEFORE touching the daemon: a missing provider executable is
     // a configuration error, not a transport one. 'cli' engines already got
     // this check inside resolveArtifacts; codex needs its own because the path
@@ -1314,10 +1368,10 @@ export class AcpSession {
     // Production always passes a validated system Codex path — omitting
     // CODEX_PATH would make codex-acp silently use its bundled dependency.
     // Tests that inject a mock adapter do not need a Codex executable.
+    // On another host the daemon finds the engine's CLI there and sets CODEX_PATH itself.
     const overlay = await this.resolveConfiguredEngineEnv()
-    const configuredEnv = mergeAcpSpawnEnv(process.env, overlay)
-    const providerExecutable = !this.cfg.artifacts && engineCaps(this.engineId).acpAdapter?.source === 'bundled'
-      ? resolveEngineExecutable({ engine: this.engineId, cwd: this.cfg.cwd, env: configuredEnv })
+    const providerExecutable = !this.cfg.artifacts && !this.remote && engineCaps(this.engineId).acpAdapter?.source === 'bundled'
+      ? resolveEngineExecutable({ engine: this.engineId, cwd: this.cfg.cwd, env: mergeAcpSpawnEnv(process.env, overlay) })
       : undefined
 
     // Concurrent with ensureConn: the mount list is a small config read and must
@@ -1327,6 +1381,15 @@ export class AcpSession {
       this.resolveMcpServers(),
       this.ensureConn(),
     ])
+    if ('hostAdapter' in artifacts && !conn.hasCapability('acp-host-v1')) {
+      throw new Error(`${engineCaps(this.engineId).displayName} cannot run on ${this.host}: its daemon does not run ACP engines (it is older than this Walnut, or runs without bun)`)
+    }
+    // A test server's copied records name production's ACP workers, and an ACP start
+    // cannot check who owns a worker yet: on a shared host it would attach to (or load
+    // a second process on) production's thread. Only an isolated daemon there is safe.
+    if (this.remote && conn.readOnlyRemote) {
+      throw new Error(`${engineCaps(this.engineId).displayName} on ${this.host} is not started from a test server: that host's daemon is shared with the real Walnut`)
+    }
     const adapterEnv = await this.buildAdapterEnv(providerExecutable, { overlay })
     // Adapters that answer `loadSession: false` (gemini) can NEVER resume a
     // provider thread: acpStart would run session/load, get load_failed, and
@@ -1346,9 +1409,9 @@ export class AcpSession {
     const startResp = await conn.send('acpStart', {
       sid: this.runtimeId,
       cwd: this.cfg.cwd,
-      workerCmd,
-      adapterCmd,
-      env: acpStartEnv(adapterEnv),
+      ...artifacts,
+      // The runtime tree named here is this machine's; another host runs its own files.
+      env: this.remote ? hostAdapterEnv(adapterEnv) : acpStartEnv(adapterEnv),
       providerSessionId: preemptFreshSession ? undefined : (this._providerSessionId ?? undefined),
       fromOffset: this._seenV,
       mcpServers,
@@ -1594,6 +1657,7 @@ export class AcpSession {
           messageCount: 0,
           engine: this.persistedEngine,
           ...(this.cfg.lane ? { lane: this.cfg.lane } : {}),
+          ...(this.remote ? { host: this.host } : {}),
           acpRuntimeId: this.runtimeId,
           acpJournalPath: this._journalPath,
           acpCapabilities: this._capabilities,

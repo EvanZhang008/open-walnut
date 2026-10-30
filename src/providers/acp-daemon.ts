@@ -28,6 +28,7 @@ import readline from 'node:readline'
 import { StringDecoder } from 'node:string_decoder'
 import { mergeAcpSpawnEnv, type AcpMcpServer } from './acp-worker/protocol.js'
 import { probeCodexModels } from './codex-model-probe.js'
+import { createHostEngineProbe, resolveHostAcpArtifacts, type AcpHostAdapterSpec } from './acp-host-artifacts.js'
 
 const ACP_IDLE_KILL_MS = 2 * 60 * 60 * 1000   // mirror native SESSION_IDLE_KILL_MS
 // A turn parked on a permission request produces ZERO journal/RPC traffic, so
@@ -94,6 +95,12 @@ export interface AcpDaemonDeps<W> {
   groupCommands?: (pgid: number) => Promise<string[] | null>
   /** This host's boot (tests stub it). */
   bootMinute?: () => number
+  /**
+   * Where the remote deploy put the ACP worker and bundled adapters
+   * (acp-host-artifacts.ts). Set = this daemon resolves a session's commands itself
+   * when the primary sends `hostAdapter` instead of paths of its own install.
+   */
+  artifactDir?: string
 }
 
 function psField(pid: number, field: string): Promise<string | null | undefined> {
@@ -135,9 +142,11 @@ export interface AcpStartParams {
   sid: string
   cwd: string
   /** Full command vector for the worker process, e.g. [nodePath, workerMainJs]. */
-  workerCmd: string[]
+  workerCmd?: string[]
   /** Full command vector for the adapter, e.g. [nodePath, codexAcpIndexJs]. */
-  adapterCmd: string[]
+  adapterCmd?: string[]
+  /** Instead of the two commands: the adapter's description, resolved on this host (acp-host-artifacts.ts). */
+  hostAdapter?: AcpHostAdapterSpec
   env?: Record<string, string>
   /** Present = resume: worker loadSession(providerSessionId); absent = newSession. */
   providerSessionId?: string
@@ -348,7 +357,8 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
   }
 
   async function acpStart(ws: W, params: AcpStartParams): Promise<{ ok: boolean; result?: Record<string, unknown>; error?: string; errorKind?: string }> {
-    const { sid, cwd, workerCmd, adapterCmd, env, providerSessionId, mcpServers } = params
+    const { sid, cwd, providerSessionId, mcpServers } = params
+    let { workerCmd, adapterCmd, env } = params
     const existing = workers.get(sid)
     if (existing && existing.state === 'running') {
       existing.subscribers.add(ws)
@@ -364,6 +374,15 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
       }
     }
 
+    if ((!Array.isArray(workerCmd) || workerCmd.length === 0) && params.hostAdapter) {
+      const resolved = resolveHostAcpArtifacts(params.hostAdapter, { artifactDir: deps.artifactDir })
+      if (!resolved.ok) return { ok: false, error: resolved.error, errorKind: resolved.errorKind }
+      workerCmd = resolved.workerCmd
+      adapterCmd = resolved.adapterCmd
+      // What this host found (CODEX_PATH) wins over anything the primary sent.
+      env = { ...(env ?? {}), ...resolved.env }
+      log('info', 'acp: commands resolved on this host', { sid, engine: params.hostAdapter.engine, adapter: adapterCmd.join(' ') })
+    }
     if (!Array.isArray(workerCmd) || workerCmd.length === 0) return { ok: false, error: 'acpStart: missing workerCmd' }
     if (!Array.isArray(adapterCmd) || adapterCmd.length === 0) return { ok: false, error: 'acpStart: missing adapterCmd' }
 
@@ -863,7 +882,10 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
     }) + '\n')
   }
 
+  const hostProbe = createHostEngineProbe({ artifactDir: deps.artifactDir })
   return {
+    /** Which engines this host can run (acp-host-artifacts.ts); only a daemon with `artifactDir` answers. */
+    hostEngines: deps.artifactDir ? (specs: AcpHostAdapterSpec[]) => hostProbe.probe(specs) : undefined,
     modelCatalog: (binary: string, options: { cwd?: string; env?: Record<string, string> }) =>
       probeCodexModels(binary, { cwd: options.cwd, env: mergeAcpSpawnEnv(process.env, options.env) }),
     acpStart,

@@ -18,6 +18,11 @@ const edges = vi.hoisted(() => ({
   nextSid: 0,
   history: {} as Record<string, Array<Record<string, unknown>>>,
   gate: undefined as Promise<void> | undefined,
+  /** What a remote host says it can run (core/agents/host-engines.ts). */
+  hostEngines: {} as Record<string, Record<string, { installed: boolean; version: string | null; reason: string | null }>>,
+}));
+vi.mock('../../../src/core/agents/host-engines.js', () => ({
+  hostEngineAvailability: async (host: string, engine: string) => edges.hostEngines[host]?.[engine] ?? null,
 }));
 
 vi.mock('../../../src/constants.js', () => createMockConstants('engine-switch'));
@@ -358,7 +363,7 @@ describe('engine switch inside a task', () => {
     expect((await getTask(taskId)).engine_switch?.message).toBeUndefined();
   });
 
-  it('refuses the same engine, and a Mac-only engine on a remote task until the move is confirmed', async () => {
+  it('refuses the same engine, and an engine the task\'s host cannot run; a switch never moves the work', async () => {
     const local = await taskOn('claude');
     await expect(requestEngineSwitch({ taskId: local.taskId, engine: 'claude', message: 'x', source: 'test' }))
       .rejects.toMatchObject({ code: 'same_engine', status: 400 });
@@ -368,9 +373,19 @@ describe('engine switch inside a task', () => {
     const { task } = await addTask({ title: 'Remote work', project: 'Marina', cwd: '/home/me/repo' } as never);
     await createSessionRecord('remote-sid', task.id, 'Marina', '/home/me/repo');
     await updateSessionRecord('remote-sid', { process_status: 'idle', host: 'devbox', messageCount: 2 } as never);
+    edges.hostEngines = { devbox: { codex: { installed: false, version: null, reason: 'codex is not installed' } } };
     await expect(requestEngineSwitch({ taskId: task.id, engine: 'codex', message: 'x', source: 'test' }))
-      .rejects.toMatchObject({ code: 'moves_to_this_mac', status: 409 });
+      .rejects.toMatchObject({ code: 'engine_not_on_host', status: 409, message: expect.stringContaining('not available on devbox: codex is not installed') });
+    await expect(requestEngineSwitch({ taskId: task.id, engine: 'custom', message: 'x', source: 'test' }))
+      .rejects.toMatchObject({ code: 'engine_not_on_host', status: 409 });
     expect(edges.starts).toHaveLength(0);
+
+    // The host has it: the new session starts THERE, in the same directory.
+    edges.hostEngines = { devbox: { codex: { installed: true, version: '1', reason: null } } };
+    const res = await requestEngineSwitch({ taskId: task.id, engine: 'codex', message: 'Go on.', source: 'test' });
+    expect(res).toMatchObject({ state: 'done', host: 'devbox' });
+    expect(edges.starts[0]).toMatchObject({ engine: 'codex', host: 'devbox', cwd: '/home/me/repo' });
+    edges.hostEngines = {};
   });
 
   it('a task with no conversation yet just starts on the engine', async () => {

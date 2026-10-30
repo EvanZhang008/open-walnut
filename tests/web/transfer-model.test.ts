@@ -18,7 +18,7 @@ const options: TransferOptions = {
   hosts: [{ alias: '__local__', kind: 'laptop', probedAt: null }, { alias: 'devbox', kind: 'dev-box', probedAt: null }],
   options: [
     { engine: 'claude', host: '__local__' }, { engine: 'claude', host: 'devbox' },
-    { engine: 'codex', host: '__local__' }, { engine: 'codex', host: 'devbox', blockedReason: 'Codex runs on this machine only for now' },
+    { engine: 'codex', host: '__local__' }, { engine: 'codex', host: 'devbox', blockedReason: 'codex is not installed on devbox' },
   ],
 };
 

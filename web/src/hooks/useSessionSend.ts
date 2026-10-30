@@ -31,7 +31,7 @@ export interface SessionSendOptions {
    * The composer picked another engine: this message starts the task's NEW
    * session on it (core/sessions/engine-switch.ts) instead of reaching this one.
    */
-  switchEngine?: { engine: string; model?: string; effort?: string; confirmMove?: boolean };
+  switchEngine?: { engine: string; model?: string; effort?: string };
 }
 
 interface UseSessionSendReturn {

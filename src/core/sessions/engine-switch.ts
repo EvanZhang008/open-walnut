@@ -11,8 +11,9 @@
  *               (`engine_switch.state = 'pending'`, engine-switch-watch.ts), then runs
  *   2. read:    the old session's active context, the harness's way (engine-switch-context.ts)
  *   3. write:   the task's full transcript (every session, oldest first) on the target host
- *   4. move:    only for a remote task going to an engine this Mac alone runs, after
- *               the user confirmed it (the workspace is packed and copied, as a transfer does)
+ *   4. stay:    the new session runs on the old one's host, in its directory: a switch
+ *               never moves the work (an engine that host cannot run is refused;
+ *               moving to another host is task_transfer)
  *   5. retire:  the old session is archived `engine_switched:<engine>` BEFORE its process
  *               stops, so no stop path treats it as the task's session (no hand-back, no
  *               settled request, no notice to the leader); its queued rows are held
@@ -50,8 +51,6 @@ export interface EngineSwitchRequest {
   message: string;
   /** What the user typed, when it differs from `message`. */
   displayText?: string;
-  /** A remote task moving to an engine only this Mac runs: the user confirmed the move. */
-  confirmMove?: boolean;
   /** The session asking (an agent), or undefined for a person. */
   callerSid?: string;
   source: string;
@@ -94,11 +93,21 @@ export async function sessionBusy(rec: Pick<SessionRecord, 'claudeSessionId' | '
   return rows.some((r) => r.status === 'pending' || r.status === 'processing');
 }
 
-/** Where the new session runs: the old session's host, unless the engine runs on this Mac only. */
-export function switchTarget(old: Pick<SessionRecord, 'host'>, engine: SessionEngine): { host: string; movesToThisMac: boolean } {
-  const host = normalizeHost(old.host);
-  if (engineHostBlocker(engine, host)) return { host: LOCAL_HOST, movesToThisMac: host !== LOCAL_HOST };
-  return { host, movesToThisMac: false };
+/**
+ * Where the new session runs: always the old session's host (2026-10-30, the user:
+ * "default it only switch to the same machine"). An engine that host cannot run is
+ * refused; moving the work to another host is a separate step (task_transfer).
+ */
+export async function switchHostBlocker(host: string, engine: SessionEngine): Promise<string | null> {
+  const rule = engineHostBlocker(engine, host);
+  if (rule) return rule;
+  const { hostEngineAvailability } = await import('../agents/host-engines.js');
+  const availability = await hostEngineAvailability(host, engine).catch(() => null);
+  // A probe still running is no answer: the start itself says why it cannot run.
+  if (availability && !availability.installed && !/^(still checking availability|availability check unavailable)$/.test(availability.reason ?? '')) {
+    return `${engineCaps(engine).displayName} is not available on ${host === LOCAL_HOST ? 'this Mac' : host}${availability.reason ? `: ${availability.reason}` : ''}`;
+  }
+  return null;
 }
 
 /**
@@ -130,11 +139,10 @@ export async function requestEngineSwitch(req: EngineSwitchRequest): Promise<Eng
   if (resolveEngine(old.engine) === engine) {
     throw new EngineSwitchError(`This task already runs on ${engineCaps(engine).displayName}; change its model in the session instead`, 400, 'same_engine');
   }
-  const target = switchTarget(old, engine);
-  if (target.movesToThisMac && !req.confirmMove) {
-    throw new EngineSwitchError(
-      `${engineCaps(engine).displayName} runs on this Mac only, so this switch moves the task's work from ${old.host} to this Mac. Confirm the move to switch.`,
-      409, 'moves_to_this_mac');
+  const host = normalizeHost(old.host);
+  const blocker = await switchHostBlocker(host, engine);
+  if (blocker) {
+    throw new EngineSwitchError(`${blocker}. A switch keeps the task on its host; to move the work, use task_transfer.`, 409, 'engine_not_on_host');
   }
   const waiting = task.engine_switch?.state === 'pending' ? task.engine_switch : undefined;
   const busy = await sessionBusy(old);
@@ -154,10 +162,9 @@ export async function requestEngineSwitch(req: EngineSwitchRequest): Promise<Eng
     from_session_id: old.claudeSessionId, ...(old.engine ? { from_engine: old.engine } : {}),
     to: {
       engine, ...(req.model ? { model: req.model } : {}), ...(req.effort ? { effort: req.effort } : {}),
-      ...(req.permissionMode ? { permission_mode: req.permissionMode } : {}), host: target.host,
+      ...(req.permissionMode ? { permission_mode: req.permissionMode } : {}), host,
     },
     message: req.message, ...(req.displayText && req.displayText !== req.message ? { display_text: req.displayText } : {}),
-    ...(req.confirmMove ? { confirm_move: true } : {}),
     by: by(req.callerSid, caller.kind === 'session' ? caller.record.taskId : undefined),
   };
   if (busy) {
@@ -165,11 +172,11 @@ export async function requestEngineSwitch(req: EngineSwitchRequest): Promise<Eng
     const { watchPendingSwitch } = await import('./engine-switch-watch.js');
     watchPendingSwitch(task.id, old.claudeSessionId);
     log.session.info('engine switch: pending until the turn ends', { taskId: task.id, switchId, from: old.claudeSessionId, to: engine });
-    return { state: 'pending', taskId: task.id, switchId, fromSessionId: old.claudeSessionId, engine, host: target.host };
+    return { state: 'pending', taskId: task.id, switchId, fromSessionId: old.claudeSessionId, engine, host };
   }
   if (req.detach) {
     void runEngineSwitch(task.id, state).catch(() => { /* recorded on the task (engine_switch.error) */ });
-    return { state: 'switching', taskId: task.id, switchId, fromSessionId: old.claudeSessionId, engine, host: target.host };
+    return { state: 'switching', taskId: task.id, switchId, fromSessionId: old.claudeSessionId, engine, host };
   }
   return runEngineSwitch(task.id, state);
 }
@@ -269,7 +276,8 @@ async function execute(taskId: string, state: EngineSwitchState): Promise<Engine
     throw err;
   }
   const engine = resolveEngine(state.to.engine);
-  const host = normalizeHost(state.to.host ?? switchTarget(old, engine).host);
+  // Always the old session's host; a pending switch an older Walnut recorded with a move stays put too.
+  const host = normalizeHost(old.host);
   if (await sessionBusy(old)) {
     // A turn started after the check (a trigger, a peer): the switch waits for it.
     let parked = false;
@@ -399,22 +407,7 @@ async function execute(taskId: string, state: EngineSwitchState): Promise<Engine
 /** Everything the new session needs, computed while nothing has changed yet. */
 async function prepare(task: Task, old: SessionRecord, rows: SessionRecord[], state: EngineSwitchState, engine: SessionEngine, host: string) {
   const oldHost = normalizeHost(old.host);
-  const moves = host !== oldHost;
-  let cwd = old.cwd ?? task.cwd ?? undefined;
-  let workspace = '';
-  if (moves) {
-    if (!cwd) throw new EngineSwitchError('The task\'s session has no working directory to move', 400, 'no_source_cwd');
-    const transfer = await import('../transfer/transfer.js');
-    const ws = await import('../transfer/workspace.js');
-    const profile = await transfer.freshProfile(host);
-    const moved = await ws.moveWorkspace({ transferId: state.id, sourceHost: oldHost, sourceCwd: cwd, targetHost: host });
-    const place = ws.chooseTargetCwd(moved.meta, cwd, profile);
-    cwd = transfer.expandHome(place.cwd, host, profile);
-    const repoRoot = transfer.expandHome(place.repoRoot, host, profile);
-    workspace = ws.workspaceInstructions(moved, { repoRoot, known: place.known });
-    const { ensureCwd } = await import('./ensure-cwd.js');
-    await ensureCwd(cwd, host === LOCAL_HOST ? undefined : host);
-  }
+  const cwd = old.cwd ?? task.cwd ?? undefined;
 
   const ctx = await readActiveContext(old);
   const left = await contextFingerprint(ctx.messages);
@@ -424,7 +417,7 @@ async function prepare(task: Task, old: SessionRecord, rows: SessionRecord[], st
   });
   const window = await targetWindowTokens(engine, state.to.model, host, rows);
   // Back to an engine the task used before: resume that session when its history is still a prefix.
-  const planned = moves ? { reason: 'the work moves to another host' } : await planResume({
+  const planned = await planResume({
     active: old, activeCtx: ctx, rows, engine, host, cwd, model: state.to.model, windowTokens: window,
     ...(transcriptPath ? { transcriptPath } : {}),
   }).catch((err: unknown) => ({ reason: `the check failed: ${err instanceof Error ? err.message : String(err)}` }));
@@ -440,9 +433,6 @@ async function prepare(task: Task, old: SessionRecord, rows: SessionRecord[], st
   }, Math.floor(window * CARRY_WINDOW_SHARE));
   const { composeHinted, renderHintBlock } = await import('../hints/hint-format.js');
   const blocks = [renderHintBlock(ENGINE_SWITCH_HINT, carried.text)];
-  if (workspace) {
-    blocks.push(renderHintBlock(ENGINE_SWITCH_HINT, `The switch moved the work from ${old.host} to this Mac, into ${cwd}. ${workspace} Set it up first, then continue.`));
-  }
   if (carried.trimmedTurns > 0) {
     // The user is told in the session (a system row) as well as the model in its context.
     log.session.info('engine switch: carried context trimmed to fit the target window', {

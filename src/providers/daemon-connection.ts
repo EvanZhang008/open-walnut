@@ -20,6 +20,7 @@
  *   Events: { ev, ...data } (no id — unsolicited)
  */
 
+import { ACP_HOST_FILES } from './acp-host-artifacts.js'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { WebSocket } from '#ws'
 import fs from 'node:fs'
@@ -727,6 +728,9 @@ export class DaemonConnection {
    * deploying/restarting it is what caused the crash loop. Local daemons are exempt:
    * same machine + same binary version means ensureRunning() reuses rather than fights.
    */
+  /** A test server's view of a host whose daemon the real Walnut shares (never true outside a test server). */
+  get readOnlyRemote(): boolean { return this.isReadOnlyRemote }
+
   private get isReadOnlyRemote(): boolean {
     return IS_EPHEMERAL && this.hostKey !== '__local__' && !this.ephemeralReplica.lifted
   }
@@ -4287,9 +4291,16 @@ export class DaemonConnection {
       // Best-effort per file — a missing sidecar (npm-package install without
       // dist/daemon-binaries) just means that host keeps the server-side
       // fallback (changes) or reports no external sessions (external-scan).
-      for (const sidecarFile of ['changes-core.cjs', 'usage-core.cjs', 'external-scan-core.cjs', 'path-resolve-core.cjs', 'task-dir-core.cjs', 'vscode-server-core.cjs', 'transcript-rewind-core.cjs', 'daemon-cron-runtime.cjs', 'daemon-instance-lock.cjs', 'daemon-service-cli.cjs', 'trigger-check-core.cjs']) {
+      // The ACP files (acp-host-artifacts.ts ACP_HOST_FILES) let this host run Codex,
+      // OpenCode, Goose and Pi itself; the daemon says 'acp-host-v1' once they are there.
+      const sidecars: Array<[string, string]> = [
+        ...['changes-core.cjs', 'usage-core.cjs', 'external-scan-core.cjs', 'path-resolve-core.cjs', 'task-dir-core.cjs', 'vscode-server-core.cjs', 'transcript-rewind-core.cjs', 'daemon-cron-runtime.cjs', 'daemon-instance-lock.cjs', 'daemon-service-cli.cjs', 'trigger-check-core.cjs', 'acp-daemon-core.cjs']
+          .map((f): [string, string] => [f, f]),
+        ...Object.entries(ACP_HOST_FILES),
+      ]
+      for (const [sidecarFile, distFile] of sidecars) {
         try {
-          const sidecar = fs.readFileSync(path.join(DAEMON_BINARIES_DIR, sidecarFile), 'utf-8')
+          const sidecar = fs.readFileSync(path.join(DAEMON_BINARIES_DIR, distFile), 'utf-8')
           const upload = (args: string[]) => runSshBounded([...args, this.sshHostString, markedUploadCommand(`${dir}/${sidecarFile}`, Buffer.byteLength(sidecar))], { input: sidecar, timeoutMs: SOURCE_UPLOAD_TIMEOUT_MS })
           let sc = await upload(sshArgs)
           // One ssh in a burst of uploads fails now and then (exit 255 on the shared

@@ -56,9 +56,10 @@ import { useEnabledModes } from '@/hooks/useEnabledModes';
 import { nextSessionMode } from './session-mode-cycle';
 import { DEFAULT_SESSION_MODE, SESSION_MODES, SESSION_MODE_LABELS, type SessionMode } from '@open-walnut/core';
 import { useEngineCatalog } from '@/hooks/useEngineCatalog';
+import { useHostEngineAvailability } from '@/hooks/useHostEngineAvailability';
 import {
   engineEntry,
-  engineLockReason,
+  hostEngineLockReason,
   normalizeEngine,
   resolveEngineForHost,
 } from '@/utils/engines';
@@ -158,9 +159,11 @@ function DraftModelPill({ meta, onMetaChange, host, cwd, walnut, fork }: {
   const pillRef = useRef<HTMLElement | null>(null);
   const { options, autoResolved } = useModelOptions(host);
   const catalog = useEngineCatalog();
+  // What the draft's host can run: an engine it lacks is greyed out in the rail.
+  const hostEngines = useHostEngineAvailability(host);
   // The engine that will actually launch — a remote tab launches the default
-  // engine (ACP engines are local-only; quick-start drops a stale flag). Same
-  // rule as MainPage's launch payload: resolveEngineForHost.
+  // engine for one that runs on this Mac only (quick-start drops a stale flag).
+  // Same rule as MainPage's launch payload: resolveEngineForHost.
   // Walnut mode pins claude outright: the launch payload drops meta.engine, so
   // showing a remembered ACP engine here would be the pill lying about launch.
   const engine = walnut ? 'claude' : resolveEngineForHost(meta.engine, host, catalog);
@@ -235,7 +238,7 @@ function DraftModelPill({ meta, onMetaChange, host, cwd, walnut, fork }: {
             ? 'A fork keeps the source session provider'
             : walnut && provider !== 'claude'
               ? 'Ask Walnut runs on the claude engine (the Personal AI profile rides its system prompt)'
-              : engineLockReason(engineEntry(catalog, provider), host))}
+              : hostEngineLockReason(engineEntry(catalog, provider), host, hostEngines))}
           autoRow={{ resolvedLabel: autoResolved, active: isAuto }}
           // ACP draft: selection lands in meta.model (same field the claude
           // pane uses — the launch payload already carries it) and rides the

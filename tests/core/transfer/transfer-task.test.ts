@@ -215,10 +215,10 @@ describe('transferTask', () => {
     expect(edges.starts).toHaveLength(0);
   });
 
-  it('Codex to a remote host is refused before anything moves', async () => {
+  it('the custom engine to a remote host is refused before anything moves', async () => {
     edges.hosts = { devbox: { hostname: 'devbox.example.org' } };
     const src = await taskWithConversation();
-    await expect(transferTask({ taskId: src, engine: 'codex', host: 'devbox' })).rejects.toMatchObject({ code: 'engine_host_unsupported' });
+    await expect(transferTask({ taskId: src, engine: 'custom', host: 'devbox' })).rejects.toMatchObject({ code: 'engine_host_unsupported' });
     expect(edges.writes).toHaveLength(0);
     expect((await getTask(src)).phase).not.toBe('COMPLETE');
   });

@@ -515,6 +515,11 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // the queue-until-turn-end path (pre-steering behavior).
   'acpSteer',
   'acp-model-catalog-v1',
+  // 'acp-host-v1' is NOT listed here: only the source twin says it, once the ACP files
+  // a source deploy puts beside daemon.cjs are there (daemonCapabilities() in
+  // daemon-source.ts). acpStart then takes `hostAdapter` instead of the primary's paths,
+  // and `acpHostEngines` says which engines the host can run (acp-host-artifacts.ts).
+  // The binary twin has no ACP files and never says it.
   // 'send-markers-v1': send accepts markers and writes them after the body enters the pipe but before the newline; an old daemon ignores the field and keeps using the appendUserMarker RPC after delivery.
   'send-markers-v1',
   // 'send-dedupe-v1': send accepts `dedupe:true` (a resend of a line that may already

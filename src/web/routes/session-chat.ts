@@ -286,7 +286,7 @@ export function registerSessionChatRpc(): void {
     // Engine switch (core/sessions/engine-switch.ts): the composer picked another
     // engine, so this message starts the task's new session instead of reaching
     // this one. The switch answers once it is checked; the panel follows the task.
-    const switchTo = data.switchEngine as { engine?: unknown; model?: unknown; effort?: unknown; permissionMode?: unknown; confirmMove?: unknown } | undefined
+    const switchTo = data.switchEngine as { engine?: unknown; model?: unknown; effort?: unknown; permissionMode?: unknown } | undefined
     if (switchTo && typeof switchTo.engine === 'string' && record?.taskId) {
       const { requestEngineSwitch } = await import('../../core/sessions/engine-switch.js')
       const out = await requestEngineSwitch({
@@ -294,7 +294,7 @@ export function registerSessionChatRpc(): void {
         ...(typeof switchTo.model === 'string' && switchTo.model ? { model: switchTo.model } : {}),
         ...(typeof switchTo.effort === 'string' ? { effort: switchTo.effort as SessionEffort } : {}),
         ...(typeof switchTo.permissionMode === 'string' ? { permissionMode: switchTo.permissionMode as SessionMode } : {}),
-        confirmMove: switchTo.confirmMove === true, source: 'ui', detach: true,
+        source: 'ui', detach: true,
       })
       log.web.info('session:send RPC engine switch', { sessionId: data.sessionId, taskId: record.taskId, engine: switchTo.engine, state: out.state })
       return { messageId: out.switchId, engineSwitch: out }
