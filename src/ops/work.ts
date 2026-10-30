@@ -251,8 +251,9 @@ defineOp({
     'Unfinished subtasks of your task, replies you are still waiting for, requests to you that you have not answered, ' +
     'and where your task stands now (project, folder, leader). Walnut also puts this into your context after every compaction.',
   input: {
-    hook: z.enum(['compact']).optional().describe(
-      'Set by Walnut\'s post-compaction hook: answer in the JSON shape a Claude Code SessionStart hook prints'),
+    hook: z.enum(['compact', 'stop']).optional().describe(
+      'Set by Walnut\'s own hooks: compact = after a compaction, in the JSON shape a Claude Code SessionStart hook prints; '
+      + 'stop = at a turn end, only whether a request to you is still unanswered, as a Stop hook\'s block answer'),
   },
   bind: { method: 'GET', path: '/me/open' },
   mapResult: ({ body, args }) => {
@@ -260,6 +261,10 @@ defineOp({
     const text = typeof open.text === 'string' ? open.text : '';
     // The hook's stdout becomes context: `additionalContext` when something is
     // open, and `{}` (nothing injected, no error row) when nothing is.
+    if (args.hook === 'stop') {
+      const stop = open.stop as { reason?: unknown } | null | undefined;
+      return stop && typeof stop.reason === 'string' ? { decision: 'block', reason: stop.reason } : {};
+    }
     if (args.hook === 'compact') {
       return text ? { hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: text } } : {};
     }

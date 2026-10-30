@@ -324,7 +324,9 @@ describe('buildSessionContext (identity note)', () => {
     // 7050 → 7150 (2026-10-29) for answering a request: the result goes to the
     // asker alone, a letter only when the user asked; finished work had reached the
     // user twice, a worker's letter and Main's chat a minute apart. 7,102.
-    expect(systemPrompt.length).toBeLessThan(7150)
+    // 7150 → 7400 (2026-10-29) for the charter's bug line: three bugs reported fixed
+    // came back the same day, each checked on another build and fixed for one case.
+    expect(systemPrompt.length).toBeLessThan(7400)
   })
 
   it('asks for the agent acknowledgement line alone, only for agent messages, never after words', async () => {

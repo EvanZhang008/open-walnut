@@ -70,6 +70,12 @@ function sentenceFor(subtype: string, sys: Record<string, unknown>): SystemEvent
     const why = str(sys.api_refusal_explanation) ?? str(sys.apiRefusalExplanation)
     return { show: true, variant: 'error', message: 'The model declined this request.', ...(why ? { detail: why.slice(0, DETAIL_MAX) } : {}) }
   }
+  // A Stop hook that held the turn (Walnut's unanswered-request reminder, or the user's own):
+  // the CLI's words are "Stop hook error occurred · ctrl+o to see", a key for its own screen;
+  // the hook's words follow as the turn's next input row.
+  if (subtype === 'notification' && sys.key === 'stop-hook-error') {
+    return { show: true, variant: 'info', message: 'A Stop hook held the turn; its note follows.' }
+  }
   if (subtype === 'plugin_install') {
     const error = str(sys.error)
     if (!error && sys.status !== 'failed') return { show: false, why: 'no-words' }

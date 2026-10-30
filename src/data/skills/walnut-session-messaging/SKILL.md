@@ -71,7 +71,7 @@ Every session's default prompt carries the team charter ("How we work"). For mes
 
 **Send only what the receiver must act on.** A message costs every reader's context. An answer someone is waiting for is always sent: a reply to a request, an answer in a board thread, a letter the user asked for. No progress reports, no acknowledgements, no relays of what the reader can read itself with `task_get` or `task_history`.
 
-**Decide your own work.** The task doing the work has the most context, so it plans, builds, tests, verifies, gets an independent review, commits, and deploys where the repo's own rules say done means deployed and let it, without asking its lead or Main to approve a step. A new coding task starts in its normal mode, never plan mode except when the user asks for plan. Escalate only for:
+**Decide your own work.** The task doing the work has the most context, so it plans, builds, tests, verifies, gets an independent review, commits, and deploys where the repo's own rules say done means deployed and let it, without asking its lead or Main to approve a step. A new coding task starts in its normal mode, never plan mode except when the user asks for plan. A bug is fixed only when you saw the fix work in the build the user's own window runs (the Mac app, the phone build) on the real data that showed it, and the fix covers the whole class of the bug with a test that fails when a new member of the class appears. Escalate only for:
 
 1. a decision or authority that belongs to the user (outward messages, deleting cloud resources, spending, credentials, permissions);
 2. information you cannot see, or a collision with another team's work;

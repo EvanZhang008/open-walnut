@@ -873,6 +873,12 @@ reconcile, `NOTES_UPDATED` events) with the web UI's `/api/notes-v2`.
   atTurnEnd, kept: [{ taskId, sessionId, why }], pausedTriggers, clocksOff, tasks }`;
   `POST /tasks/:id/team-resume` turns those triggers and clocks back on and answers
   `{ root, resumedTriggers, clocksOn, skipped }`. Sessions resume on their next message.
+  `sessions: 'keep'` on the stop (added 2026-10-29) pauses only the routines, triggers and
+  clocks and stops no session (`team_stop.keptSessions: true` while in force).
+  `GET /tasks/:id/wake-sources?team=0|1` (added 2026-10-29, read only, `team` defaults to 1)
+  answers what would wake the task (and every open task under it): `{ root, members: [{ id,
+  title }], routines: [{ id, name?, target, enabled, kind: 'trigger' | 'routine' }], clocks:
+  [{ taskId, kind: 'wait_until' | 'promise_alarm', at }], stopped? }`.
   `user_status` (added 2026-10) is the ONE status the user sees, present on open
   tasks: `{ state, kind?, ask?, source?, waitingOn?, until?, now?, next?, at?, stale? }`.
   `state` is `needs` (only what the user alone can decide, approve or do; `ask`
@@ -1659,6 +1665,10 @@ session instead.
   `text` is the short block the session reads right after a compaction, through
   the CLI's SessionStart hook (the `open_items` op in hook mode); `''` when
   nothing is open. A caller with no task gets empty lists and `''`.
+  `?hook=stop` (added 2026-10-29) answers only `{ "stop": { reason, requests } | null }`:
+  whether the calling session holds a request it has not answered as its turn ends
+  (read by the CLI's Stop hook through `open_items` hook `stop`, which prints a Stop hook
+  `block` answer, or `{}`).
 - `GET /api/v1/sessions?status=running|idle|stopped|error&scope=folder|project|all` →
   `{ "sessions": [ProjectedSession], "you"?: ProjectedSession, "scope": "folder|project|all", "syncedAt": "<ISO>" }`
 - `ProjectedSession`: `{ id, title?, task_id?, task_title?,

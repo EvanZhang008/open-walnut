@@ -339,7 +339,7 @@ taskV1Router.post('/tasks/:id/not-done', async (req: Request, res: Response, nex
   }
 })
 
-// POST /api/v1/tasks/:id/team-stop { when?: 'now' | 'turn_end', include_self? } → TeamStopResult:
+// POST /api/v1/tasks/:id/team-stop { when?: 'now' | 'turn_end', include_self?, sessions?: 'stop' | 'keep' } → TeamStopResult:
 // stop every open task under it (its own session too unless include_self is false; never the
 // caller's own), pause their armed triggers and take off their wake clocks (core/sessions/team-stop.ts).
 // POST /api/v1/tasks/:id/team-resume → TeamResumeResult: turn those triggers and clocks back on.
@@ -357,12 +357,31 @@ taskV1Router.post('/tasks/:id/team-stop', async (req: Request, res: Response, ne
     if (role() === 'replica') { sendError(res, 501, 'not_supported_cloud', 'A team stop runs on the primary box'); return }
     const b = (req.body ?? {}) as Record<string, unknown>
     if (b.when !== undefined && b.when !== 'now' && b.when !== 'turn_end') { sendError(res, 400, 'bad_request', "when must be 'now' or 'turn_end'"); return }
+    if (b.sessions !== undefined && b.sessions !== 'stop' && b.sessions !== 'keep') { sendError(res, 400, 'bad_request', "sessions must be 'stop' or 'keep'"); return }
     const { stopTeam } = await import('../../core/sessions/team-stop.js')
     try {
       const out = await stopTeam(paramStr(req.params.id), {
         ...(await callerBy(req)), when: b.when as 'now' | 'turn_end' | undefined, includeRoot: b.include_self !== false,
+        keepSessions: b.sessions === 'keep',
       })
       res.json(out)
+    } catch (err) {
+      if (sendTaskManagerError(res, err)) return
+      throw err
+    }
+  } catch (err) {
+    next(err)
+  }
+})
+
+// GET /api/v1/tasks/:id/wake-sources?team=0|1 (default 1) → WakeSources: the routines and
+// triggers aimed at the task (and every open task under it), paused or not, and the clocks that
+// would wake one. Read only (core/sessions/team-stop.ts wakeSourcesOf).
+taskV1Router.get('/tasks/:id/wake-sources', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { wakeSourcesOf } = await import('../../core/sessions/team-stop.js')
+    try {
+      res.json(await wakeSourcesOf(paramStr(req.params.id), { team: req.query.team !== '0' && req.query.team !== 'false' }))
     } catch (err) {
       if (sendTaskManagerError(res, err)) return
       throw err

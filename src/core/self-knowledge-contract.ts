@@ -40,7 +40,11 @@ import { TASK_ROUTING_CONTRACT } from './task-routing-contract.js';
 // Raised to 8,100 on 2026-10-27 for the charter's relay rule (team-charter.ts): Main
 // passed on the user's request in its own words, narrowed it, and a worker shipped the
 // narrowed version, so a relay now quotes the user first.
-export const SELF_KNOWLEDGE_PROMPT_MAX_CHARS = 8_100;
+//
+// Raised to 8,300 on 2026-10-29 for the charter's bug line: three bugs reported fixed
+// came back the same day, each checked on another build and fixed for the one case
+// seen. It renders 8,246 characters with it.
+export const SELF_KNOWLEDGE_PROMPT_MAX_CHARS = 8_300;
 
 // The phase LIST comes from PHASE_ORDER, so adding or removing a phase updates
 // this prompt with no second edit. The phases the prompt names are typed

@@ -942,6 +942,10 @@ export interface Task {
   /** The last re-check Walnut asked of this task's open decision letters to the user
    *  (sessions/letter-recheck.ts); null clears it. */
   letter_recheck?: import('./sessions/letter-recheck.js').LetterRecheck | null;
+  /** Triggers its session armed to watch its ask of the user or one of its letters
+   *  (trigger_create `watches`): the 4-hour re-checks skip what a live one watches
+   *  (sessions/recheck-watch.ts). */
+  recheck_watch?: import('./sessions/recheck-watch.js').RecheckWatch[] | null;
   /** The agent's own MEMORY.md (Main, a lead, a leader): its working memory, not shown to the
    *  user by default and not Walnut's global MEMORY.md (src/core/sessions/agent-memory.ts).
    *  `by` / `by_name` / `by_at`: the latest write by someone other than the task's own session (the

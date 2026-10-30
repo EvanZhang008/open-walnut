@@ -10,7 +10,8 @@
  *   - an open task whose decision letter nobody wrote in for NEEDS_RECHECK_MS gets ONE note in its
  *     session naming those letters: check whether each still needs the user, settle the ones that
  *     do not, keep the rest. Not a parked (WAITING) task, whose note would end its wait, and not
- *     one whose own "needs you" the needs re-check covers (its note asks it to settle the letter). At most MAX_RECHECKS in a row while letters stay open, recorded on the
+ *     one whose own "needs you" the needs re-check covers (its note asks it to settle the letter), and
+ *     not a letter a trigger the session armed for it watches while it polls (recheck-watch.ts). At most MAX_RECHECKS in a row while letters stay open, recorded on the
  *     task first (`letter_recheck`), so a failed wake never repeats every scan.
  *
  * Primary only; an ephemeral server never wakes a task for a letter it copied from the real Walnut.
@@ -38,7 +39,8 @@ export function letterRecheckBody(letters: readonly LetterRecord[], nowMs: numbe
     ...lines,
     'The user may have done it outside Walnut, or the blocker may have cleared on its own. Check each one now yourself (human_inbox_get reads it).',
     'No longer needed: settle it with one line the user reads, walnut tools call human_inbox_mark \'{"id":"<letter id>","settled":"<why nobody needs to answer>"}\', and carry on. '
-      + 'Still needed: leave it; if a script can tell when it is done, arm a trigger on it (trigger_create, wait:false).',
+      + 'Still needed and nothing changed: leave it, and answer with only the agent-ack line, <walnut-turn status="agent-ack"/>, so the user\'s chat does not repeat the same status. '
+      + 'If a script can tell when it is done, arm a trigger on it (trigger_create, wait:false, watches:"<letter id>"); this re-check stays quiet about that letter while the trigger is armed.',
   ].join('\n');
 }
 
@@ -75,15 +77,24 @@ export async function runLetterRecheck(
 
     // A count left from letters that are all answered or settled now starts over.
     const stillOpen = new Set(open.filter((l) => !gone.has(l.id)).map((l) => l.sender.taskId!));
-    for (const t of await listTasks()) {
+    const all = await listTasks();
+    // A team stopped or quieted in one step (team-stop.ts) is not woken by a timer until it is resumed.
+    const quieted = new Set(all.flatMap((t) => (t.team_stop?.members ?? []).map((m) => m.id)));
+    for (const t of all) {
       if (t.letter_recheck && !stillOpen.has(t.id)) {
         await updateTaskRaw(t.id, { letter_recheck: null }, { push: false, source: 'needs-recheck' }).catch(() => null);
       }
     }
 
+    // A letter a live trigger of its task watches is that trigger's (recheck-watch.ts).
+    const { liveTriggerIds, watchedBy } = await import('./recheck-watch.js');
+    const watching = [...tasks.values()].some((t) => t.recheck_watch?.length)
+      ? await liveTriggerIds().catch(() => new Set<string>()) : new Set<string>();
     const byTask = new Map<string, LetterRecord[]>();
     for (const l of open) {
       if (gone.has(l.id)) continue;
+      const owner = tasks.get(l.sender.taskId!);
+      if (owner && watchedBy(owner, l.id, watching)) continue;
       const at = letterActivityAt(l);
       if (nowMs - at < NEEDS_RECHECK_MS || (opts.notBefore !== undefined && at < opts.notBefore)) continue;
       const tid = l.sender.taskId!;
@@ -95,7 +106,7 @@ export async function runLetterRecheck(
       // Parked: it waits on something (its own trigger, a clock that asks it to check on waking),
       // and this note would end that wait. A "needs you" of its own gets the needs re-check, which
       // asks it to settle such a letter too: one note, not two.
-      if (task.phase === 'WAITING') continue;
+      if (task.phase === 'WAITING' || quieted.has(taskId)) continue;
       if (task.user_status?.state === 'needs' && task.user_status.source === 'session' && task.user_status.ask) continue;
       const { getSessionsForTask } = await import('../session-tracker.js');
       const { pickDeliverySession } = await import('../routines/session-target.js');

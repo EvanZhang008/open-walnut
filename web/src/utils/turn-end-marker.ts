@@ -67,6 +67,7 @@ export function readTurnMarker(text: string | undefined): TurnMarker {
  * held back too, so the tag never flashes up character by character.
  */
 export function stripTurnMarker(text: string, streaming = false): string {
+  text = stripSelfReportBlock(text);
   const read = readTurnMarker(text);
   if (read.noAction) return read.text;
   if (!streaming) return text;
@@ -74,6 +75,36 @@ export function stripTurnMarker(text: string, streaming = false): string {
   const tail = text.slice(cut + 1).trim();
   // Even a lone `<`: the tag's first chunk flashed on its own until the next one arrived.
   return tail.length >= 1 && TAGS.some((t) => t.startsWith(tail)) ? text.slice(0, Math.max(0, cut)) : text;
+}
+
+/**
+ * A turn-end self-report field the model wrote into its own reply (2026-10-29: after a compaction
+ * the summary turned "Walnut asks you for the Brief" into "write the Brief at every turn end", and
+ * a lead's answer ended with a bare `FOR_USER_BRIEF` line and the whole list again). Walnut asks
+ * for it in a separate question; in a reply it only prints the same thing twice. A line that is
+ * exactly the field name (`FOR_USER_BRIEF`, `FOR_USER_BRIEF:`), outside a code block, cuts the text
+ * there. Only that field, the one the Brief rule names: another field alone on a line stays, as
+ * does a mention of the name inside a sentence.
+ */
+const SELF_REPORT_FIELD = /^\s{0,3}(?:\*\*)?FOR_USER_BRIEF:?(?:\*\*)?:?\s*$/;
+
+export function stripSelfReportBlock(text: string): string {
+  if (!text.includes('FOR_USER_BRIEF')) return text;
+  const lines = text.split('\n');
+  let open: string | null = null;
+  for (let i = 0; i < lines.length; i++) {
+    const m = FENCE.exec(lines[i]);
+    if (m) {
+      const mark = m[1];
+      if (open === null) open = mark;
+      else if (mark[0] === open[0] && mark.length >= open.length && !m[2].trim()) open = null;
+      continue;
+    }
+    if (open !== null || INDENTED_CODE.test(lines[i])) continue;
+    // Not the first line: a reply that is only the field is the model answering Walnut's ask.
+    if (i > 0 && SELF_REPORT_FIELD.test(lines[i])) return lines.slice(0, i).join('\n').replace(/\s+$/, '');
+  }
+  return text;
 }
 
 /** The shape the turn rule reads (SessionHistoryMessage). */

@@ -99,7 +99,8 @@ start, after a compaction, on a change, and its short reminder every 5 messages;
 and for Main and the leads on every message a person did not write (a notice, a
 worker's reply, a trigger), because the user reads their chat whoever started the
 turn (2026-10-29; dropped once the triggers are set by hand). A lead's reply to
-such a turn is judged for drift like Main's.
+such a turn is judged for drift like Main's. Walnut adds one clause after the user's sentence: it covers every
+line the user reads, the short progress lines between tool calls included.
 
 After a compaction the CLI's SessionStart hook (`open_items`) states every hint
 with `after_compaction` right away and records it, so the rest of an interrupted

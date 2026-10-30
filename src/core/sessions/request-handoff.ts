@@ -38,12 +38,17 @@ export async function holdHandedOn(
   });
 }
 
-/** The tasks `request` was handed on to, as its notice names them; undefined when it was not. */
-export async function handedOnFor(request: SessionRequest): Promise<EnvelopeHandedOn[] | undefined> {
+/**
+ * The tasks `request` was handed on to, as its notice names them; undefined when it was not.
+ * `words` (the overdue notice): also each task's phase, and the latest message of the one
+ * still on it (else the newest), which that notice quotes instead of the target's own.
+ */
+export async function handedOnFor(request: SessionRequest, opts: { words?: boolean } = {}): Promise<EnvelopeHandedOn[] | undefined> {
   if (!request.carriedBy?.length) return undefined;
   try {
     const { listAllSessionRequests, handedOnOf } = await import('../session-requests.js');
-    const handed = handedOnOf(request, await listAllSessionRequests());
+    const rows = await listAllSessionRequests();
+    const handed = handedOnOf(request, rows);
     const ids = [...new Set(handed.map((h) => h.taskId).filter((id): id is string => !!id))];
     const { listTasksByIds } = await import('../task-manager.js');
     const tasks = await listTasksByIds(ids).catch(() => null);
@@ -59,7 +64,25 @@ export async function handedOnFor(request: SessionRequest): Promise<EnvelopeHand
             : 'unknown';
       byTask.set(h.taskId ?? h.id, { ...(h.taskId ? { taskId: h.taskId } : {}), ...(h.taskId && titles.get(h.taskId) ? { title: titles.get(h.taskId) } : {}), state });
     }
-    return [...byTask.values()];
+    const out = [...byTask.values()];
+    if (opts.words) {
+      const byId = new Map((tasks ?? []).map((t) => [t.id, t] as const));
+      for (const h of out) {
+        const phase = h.taskId ? byId.get(h.taskId)?.phase : undefined;
+        if (phase) h.phase = phase;
+      }
+      // One transcript read (each may wait seconds): the task still on it, else the newest.
+      const focus = out.find((h) => h.state === 'working') ?? out[out.length - 1];
+      const ask = [...handed].reverse().find((x) => (x.taskId ?? x.id) === (focus?.taskId ?? ''));
+      const sessionId = rows.find((r) => r.id === ask?.id)?.toSessionId
+        ?? (focus?.taskId ? byId.get(focus.taskId)?.session_id ?? undefined : undefined);
+      if (focus && sessionId) {
+        const { readLastWords } = await import('./session-request-notify.js');
+        const words = await readLastWords(sessionId).catch(() => undefined);
+        if (words) focus.lastMessage = words;
+      }
+    }
+    return out;
   } catch (err) {
     log.session.warn('request notice: could not read where the work was handed on', {
       requestId: request.id, error: err instanceof Error ? err.message : String(err),

@@ -13,6 +13,8 @@
  * (the host's graceful stop, the same as Stop in the panel; never the caller's own session);
  * with `when: 'turn_end'` a session running a turn finishes it first. `resumeTeam(root)` turns
  * exactly those back on (a session resumes on its next message, as after any stop).
+ * `keepSessions` pauses only those wake sources and leaves every session running (quiet the team
+ * for a while without cutting a turn); `wakeSourcesOf` lists them without changing anything.
  *
  * A person and an agent use the same core (route POST /api/v1/tasks/:id/team-stop, ops
  * team_stop / team_resume). The subtask notices a stop would cause ("your subtask stopped") are
@@ -39,6 +41,8 @@ export interface TeamStopRecord {
   /** "human" or "task:<id>". */
   by: string;
   when: 'now' | 'turn_end';
+  /** Only the wake sources were paused; the sessions kept running. */
+  keptSessions?: boolean;
   members: TeamStopMember[];
 }
 
@@ -183,8 +187,63 @@ async function inBatches<T>(items: readonly T[], size: number, run: (item: T) =>
   for (let i = 0; i < items.length; i += size) await Promise.all(items.slice(i, i + size).map(run));
 }
 
+/** A routine or trigger aimed at a team member, as wakeSourcesOf lists it. */
+export interface WakeRoutine { id: string; name?: string; target: string; enabled: boolean; kind: 'trigger' | 'routine' }
+
+export interface WakeSources {
+  root: { id: string; title: string };
+  /** The open tasks looked at: the task, and with `team` every open task under it. */
+  members: { id: string; title: string }[];
+  /** Every routine and trigger whose session executor targets one of them, paused or not. */
+  routines: WakeRoutine[];
+  /** The clocks that would wake one of them: a WAITING task's wait_until, a follow-up alarm. */
+  clocks: { taskId: string; kind: 'wait_until' | 'promise_alarm'; at: string }[];
+  /** A team stop not resumed yet on the task. */
+  stopped?: { at: string; by: string; keptSessions?: boolean };
+}
+
+/**
+ * What would start the task (and with `team`, every open task under it) again by itself.
+ * 2026-10-29: to quiet a team during the user's meeting, Main read the whole routine list to find
+ * the 3 triggers and 1 routine aimed at it (trigger_list task / team_stop sessions:"keep").
+ */
+export async function wakeSourcesOf(rootRef: string, opts: { team?: boolean } = {}): Promise<WakeSources> {
+  const { getTask, listTasks } = await import('../task-manager.js');
+  const root = await getTask(rootRef);
+  const members = opts.team === false ? (root.phase === 'COMPLETE' ? [] : [root]) : teamOf(root, await listTasks(), true);
+  const ids = new Set(members.map((t) => t.id));
+  const routines: WakeRoutine[] = [];
+  try {
+    const { listRoutines } = await import('../routines/routines-core.js');
+    const { jobs } = await listRoutines(true);
+    for (const job of jobs as { id: string; name?: string; enabled?: boolean; check?: { run?: unknown }; executor?: { type?: string; config?: { target?: unknown } } }[]) {
+      const target = job.executor?.type === 'session' && typeof job.executor.config?.target === 'string' ? job.executor.config.target.trim() : '';
+      if (!target || !ids.has(target)) continue;
+      routines.push({
+        id: job.id, ...(job.name ? { name: job.name } : {}), target, enabled: job.enabled !== false,
+        kind: typeof job.check?.run === 'string' ? 'trigger' : 'routine',
+      });
+    }
+  } catch (err) {
+    log.session.warn('wake sources: routines not listed', { rootId: root.id, error: err instanceof Error ? err.message : String(err) });
+  }
+  const clocks: WakeSources['clocks'] = [];
+  for (const t of members) {
+    if (t.wait_until && t.phase === 'WAITING') clocks.push({ taskId: t.id, kind: 'wait_until', at: t.wait_until });
+    if (t.promise_alarm?.at) clocks.push({ taskId: t.id, kind: 'promise_alarm', at: t.promise_alarm.at });
+  }
+  return {
+    root: { id: root.id, title: root.title },
+    members: members.map((t) => ({ id: t.id, title: t.title })),
+    routines, clocks,
+    ...(root.team_stop ? { stopped: { at: root.team_stop.at, by: root.team_stop.by, ...(root.team_stop.keptSessions ? { keptSessions: true } : {}) } } : {}),
+  };
+}
+
 export async function stopTeam(rootRef: string, opts: {
   by: string; callerSid?: string; when?: 'now' | 'turn_end'; includeRoot?: boolean;
+  /** Pause only what would wake the team (routines, triggers, clocks); its sessions keep running. */
+  keepSessions?: boolean;
 }): Promise<TeamStopResult> {
   const { getTask, listTasks, updateTaskRaw } = await import('../task-manager.js');
   const root = await getTask(rootRef);
@@ -222,7 +281,8 @@ export async function stopTeam(rootRef: string, opts: {
       const res = await updateTaskRaw(task.id, clocks as Partial<Task>, { emitEvent: true, push: false, source: 'team-stop' }).catch(() => null);
       if (res?.changed) result.clocksOff++;
     }
-    const sessions = await getSessionsForTask(task.id).catch(() => [] as SessionRecord[]);
+    // Sessions kept: their asks and notices go on as usual; only the wake sources are off.
+    const sessions = opts.keepSessions ? [] : await getSessionsForTask(task.id).catch(() => [] as SessionRecord[]);
     for (const s of sessions) {
       // Its asks of other members: a stopped member's turn end would settle them with a notice
       // that resumes this (stopped) asker. Withdrawn, kept here, put back on resume.
@@ -241,7 +301,7 @@ export async function stopTeam(rootRef: string, opts: {
   }
 
   // 2. The record, merged with a stop not resumed yet (theirs and ours both come back on resume).
-  const record: TeamStopRecord = { at, by: opts.by, when, members: recorded };
+  const record: TeamStopRecord = { at, by: opts.by, when, ...(opts.keepSessions ? { keptSessions: true } : {}), members: recorded };
   await updateTaskRaw(root.id, (cur) => {
     const byId = new Map((cur.team_stop?.members ?? []).map((m) => [m.id, { ...m }] as const));
     for (const m of recorded) {
@@ -254,7 +314,10 @@ export async function stopTeam(rootRef: string, opts: {
         promise_alarm: was.promise_alarm ?? m.promise_alarm,
       } : m);
     }
-    return { team_stop: { ...record, members: [...byId.values()] } };
+    // A full stop over a pause of the wake sources is a full stop.
+    const kept = record.keptSessions && (!cur.team_stop || cur.team_stop.keptSessions);
+    const { keptSessions: _k, ...base } = record;
+    return { team_stop: { ...base, ...(kept ? { keptSessions: true } : {}), members: [...byId.values()] } };
   }, { emitEvent: true, push: false, source: 'team-stop' });
 
   // 3. The sessions.
@@ -272,7 +335,7 @@ export async function stopTeam(rootRef: string, opts: {
     if (why) result.kept.push({ ...ref, why }); else result.stopped.push(ref);
   });
   if (result.atTurnEnd.length) await watchTurnEnds();
-  log.session.info('team stopped', {
+  log.session.info(opts.keepSessions ? 'team wake sources paused, sessions kept' : 'team stopped', {
     rootId: root.id, by: opts.by, when, tasks: members.length, stopped: result.stopped.length,
     atTurnEnd: result.atTurnEnd.length, kept: result.kept.length, pausedTriggers: result.pausedTriggers, clocksOff: result.clocksOff,
   });

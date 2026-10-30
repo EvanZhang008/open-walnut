@@ -186,7 +186,7 @@ export const LEAD_DECISION_LINE =
 export const BRIEF_LINE =
   'Your Brief is the short letter the user reads at the top of your chat (the Brief view on the Org page) '
   + 'instead of scrolling it; they answer in your chat. At the end of every turn Walnut asks you for it '
-  + '(FOR_USER_BRIEF) and lists what moved in your teams since the last one: rewrite it whole each time, '
+  + 'in a separate question of its own (FOR_USER_BRIEF); never write the Brief or that field into your replies. It lists what moved in your teams since the last one: rewrite it whole each time, '
   + 'what needs the user first, then one line per piece of work, what is done and what it waits on now, on whom; '
   + 'one thing per line, each line starting with the <task-ref/> of the task it is about (your own task for your own work; '
   + 'Main names the VP who leads it right after), saying enough to act on without the chat. Walnut checks these rules, shows each task it names with its live status and marks what moved after '
@@ -202,8 +202,8 @@ export const BRIEF_LINE =
  */
 export const ORG_REPLY_LANGUAGE_LINE =
   'The user reads your chat (the Org page, the phone), so every reply you write here is to them, whoever started '
-  + 'the turn (the user, a Walnut notice, a worker\'s message, a trigger): write it in the language they asked replies '
-  + 'in (their reply-language note and standing rules). What you send to other tasks (task_send, org_send) stays in English.\n\n'
+  + 'the turn (the user, a Walnut notice, a worker\'s message, a trigger): write it, every line down to a short progress '
+  + 'note between tool calls, in the language they asked replies in (their reply-language note and standing rules). What you send to other tasks (task_send, org_send) stays in English.\n\n'
 
 /**
  * 2d. The org above the work (src/core/org/): the main agent talks to one

@@ -213,6 +213,9 @@ or a file only that host has), and never paste one inline as `curl -H
    if it has gone quiet by then). `cwd` and `host` default to this session's.
    This also **parks this task as Waiting** (see "Waiting is the default"
    below). Pass `"wait":false` while you still have work to do here.
+   Watching something you asked the user (your status's ask, or a letter you
+   sent them)? Add `"watches":"ask"` or `"watches":"<letter id>"`: Walnut's
+   4-hour re-check of it then stays quiet while this trigger is armed.
 5. **Report the id and the cadence.** Then stop; do not poll the trigger yourself.
 
 Default cadence when the user gave none: **every 5 minutes**. Never poll faster

@@ -29,7 +29,9 @@ describe('the Brief rule', () => {
     for (const re of [
       /the short letter the user reads at the top of your chat/,
       /they answer in your chat/,
-      /At the end of every turn Walnut asks you for it \(FOR_USER_BRIEF\)/,
+      /At the end of every turn Walnut asks you for it in a separate question of its own \(FOR_USER_BRIEF\)/,
+      // 2026-10-29: after a compaction a lead wrote the Brief into its reply.
+      /never write the Brief or that field into your replies/,
       /rewrite it whole each time/,
       /what needs the user first/,
       /one thing per line, each line starting with the <task-ref\/> of the task it is about/,

@@ -1157,6 +1157,8 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
       }
     }
     const text = deps.openItems!.format(items, now)
+    // The Stop hook (unanswered-at-stop.ts) is the server's call; this host's copy never holds a turn.
+    if (args.hook === 'stop') return ok({})
     if (args.hook === 'compact') {
       const context = withTaskRouting(home, callerSid, text, true).text
       return ok(context ? { hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: context } } : {})

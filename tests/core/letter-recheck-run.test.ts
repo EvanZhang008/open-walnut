@@ -17,12 +17,14 @@ vi.mock('../../src/core/session-tracker.js', () => ({
   getSessionsForTask: async (id: string) => [{ claudeSessionId: `s-${id}`, taskId: id, process_status: 'stopped' } as SessionRecord],
 }))
 vi.mock('../../src/core/routines/session-target.js', () => ({ pickDeliverySession: (rows: SessionRecord[]) => rows[0] ?? null }))
+let routines: { id: string; enabled: boolean }[] = []
+vi.mock('../../src/core/routines/routines-core.js', () => ({ listRoutines: async () => ({ jobs: routines }) }))
 vi.mock('../../src/core/session-message-queue.js', () => ({
   sendMessageToSession: async (sid: string, text: string, o: { source?: string }) => { sends.push({ sid, text, source: o.source }) },
 }))
 
 import { WALNUT_HOME } from '../../src/constants.js'
-import { addTask, completeTask, getTask } from '../../src/core/task-manager.js'
+import { addTask, completeTask, getTask, updateTaskRaw } from '../../src/core/task-manager.js'
 import { answerLetter, getLetter, sendLetter } from '../../src/core/human-inbox/store.js'
 import { runLetterRecheck } from '../../src/core/sessions/letter-recheck.js'
 import { NEEDS_RECHECK_MS } from '../../src/core/user-status.js'
@@ -34,7 +36,7 @@ const ask = (taskId: string, subject: string) => sendLetter({
 
 beforeAll(async () => { await fs.rm(WALNUT_HOME, { recursive: true, force: true }); await fs.mkdir(WALNUT_HOME, { recursive: true }) })
 afterAll(async () => { await fs.rm(WALNUT_HOME, { recursive: true, force: true }) })
-beforeEach(() => { sends.length = 0 })
+beforeEach(() => { sends.length = 0; routines = [] })
 
 describe('a letter re-check pass', () => {
   it('settles a completed task\'s decision, wakes an open task once per period, leaves the rest', async () => {
@@ -80,5 +82,18 @@ describe('a letter re-check pass', () => {
     await ask(t.id, 'Old ask')
     const now = Date.now()
     expect((await runLetterRecheck(now + NEEDS_RECHECK_MS + 60_000, { notBefore: now + 1 })).woken).toEqual([])
+  })
+
+  it('a letter a live trigger of its task watches is left to that trigger', async () => {
+    const t = (await addTask({ title: 'Fluent bit bump' })).task
+    const watched = await ask(t.id, 'Approve the bump')
+    await updateTaskRaw(t.id, { recheck_watch: [{ trigger: 'tr-w', watches: watched.id, at: new Date().toISOString() }] })
+    routines = [{ id: 'tr-w', enabled: true }]
+    const later = Date.now() + NEEDS_RECHECK_MS + 60_000
+    expect((await runLetterRecheck(later)).woken).not.toContain(t.id)
+    // Its trigger paused: the re-check is back, and it offers agent-ack for no change.
+    routines = [{ id: 'tr-w', enabled: false }]
+    expect((await runLetterRecheck(later)).woken).toContain(t.id)
+    expect(sends.at(-1)!.text).toContain('<walnut-turn status="agent-ack"/>')
   })
 })

@@ -52,7 +52,9 @@ export function createWalnutMcpServer(options: McpOptions = {}): McpServer {
         'request needs task_create and a fresh session even in the same project; questions alone need an answer. Hand work back ' +
         'with task_update phase=NEED_ACTION when work is done and awaiting review; ' +
         'COMPLETE means the whole task is finished. ' +
-        'Never delete tasks unless the user explicitly asked.',
+        'Never delete tasks unless the user explicitly asked. ' +
+        'These tools were read when your session started: after a Walnut update, a field or tool that Walnut\'s ' +
+        'words name may be missing here, and `walnut tools call <tool> \'<json>\'` always runs the current one.',
     },
   )
   registerWalnutTools(server, options)

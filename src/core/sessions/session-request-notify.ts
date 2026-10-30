@@ -285,13 +285,16 @@ export async function notifyRequesterFallback(
       });
       return true;
     }
-    // So is the quote: the turn's own result when the edge carried it, else the transcript.
-    const lastMessage = (context.lastMessage ? clipNoticeMessage(context.lastMessage) : undefined)
-      ?? context.lastWords
-      ?? await readLastWords(targetSessionId);
-
     // Where the work went, when the target handed it on (request-handoff.ts).
-    const handedOn = context.handedOn ?? await (await import('./request-handoff.js')).handedOnFor(settled);
+    // An overdue one quotes that task's latest message and state, not the target's.
+    const handedOn = (outcome === 'timeout' ? undefined : context.handedOn)
+      ?? await (await import('./request-handoff.js')).handedOnFor(settled, { words: outcome === 'timeout' });
+    // The quote: the turn's own result when the edge carried it, else the transcript.
+    // Not read for an overdue request handed on: its notice quotes the task it went to.
+    const lastMessage = outcome === 'timeout' && handedOn?.length ? undefined
+      : (context.lastMessage ? clipNoticeMessage(context.lastMessage) : undefined)
+        ?? context.lastWords
+        ?? await readLastWords(targetSessionId);
     const text = buildRequestNotification(settled, outcome, {
       title: targetTitle,
       sessionId: request.toSessionId,

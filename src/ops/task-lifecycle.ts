@@ -90,24 +90,30 @@ defineOp({
     'Stop a task\'s whole team in one step, the same as "Stop the team" on the board: every open task under it (every level, ' +
     'and the task itself unless include_self is false) has its live sessions stopped (the host\'s graceful stop, never a kill; ' +
     'never your own session), its armed triggers paused and its wake clocks (wait_until, a follow-up) taken off, so nothing ' +
-    'starts it again by itself. when:"turn_end" lets a turn that is running finish first. team_resume turns those triggers and ' +
+    'starts it again by itself. "Triggers" here means every routine aimed at those tasks: trigger checks and plain timed routines (cron) alike. ' +
+    'when:"turn_end" lets a turn that is running finish first. sessions:"keep" pauses only those wake sources (routines, triggers, ' +
+    'clocks) and leaves every session running, for quieting a team for a while (the user in a meeting) without cutting a turn. ' +
+    'trigger_list with task (and team:true) shows what would wake them first, without changing anything. team_resume turns those triggers and ' +
     'clocks back on; a stopped session resumes on its next message. Only when the user asked, or the work needs it (a team ' +
     'going the wrong way, work that must not go on).',
   input: {
     id: z.string().min(1).describe('Task id or unique prefix: the top of the team'),
     when: z.enum(['now', 'turn_end']).optional().describe('now (default): stop at once; turn_end: a running turn finishes first'),
     include_self: z.boolean().optional().describe('Stop the task itself too (default true); false stops only what it handed out'),
+    sessions: z.enum(['stop', 'keep']).optional().describe('stop (default): stop the live sessions too; keep: pause only the routines, triggers and clocks that would wake the team'),
   },
-  handler: async ({ id, when, include_self: includeSelf }, call) => {
+  handler: async ({ id, when, include_self: includeSelf, sessions }, call) => {
     const out = await call('POST', `/tasks/${encodeURIComponent(String(id))}/team-stop`, {
-      ...(when ? { when } : {}), ...(includeSelf === false ? { include_self: false } : {}),
+      ...(when ? { when } : {}), ...(includeSelf === false ? { include_self: false } : {}), ...(sessions ? { sessions } : {}),
     }) as { root?: { id: string; title: string }; stopped?: unknown[]; atTurnEnd?: unknown[]; kept?: { taskId: string; why: string }[]; pausedTriggers?: number; clocksOff?: number; tasks?: number } | undefined
     const kept = out?.kept ?? []
     return withOutcome(
       out ?? {},
-      `Team of ${out?.root?.id ?? id} stopped: ${out?.stopped?.length ?? 0} session(s) stopped now`
-        + `${out?.atTurnEnd?.length ? `, ${out.atTurnEnd.length} at the end of their running turn` : ''}, `
-        + `${out?.pausedTriggers ?? 0} trigger(s) paused, ${out?.clocksOff ?? 0} clock(s) off, across ${out?.tasks ?? 0} open task(s).`
+      (sessions === 'keep'
+        ? `Wake sources of the team of ${out?.root?.id ?? id} paused, sessions kept running: `
+        : `Team of ${out?.root?.id ?? id} stopped: ${out?.stopped?.length ?? 0} session(s) stopped now`
+          + `${out?.atTurnEnd?.length ? `, ${out.atTurnEnd.length} at the end of their running turn` : ''}, `)
+        + `${out?.pausedTriggers ?? 0} routine(s) and trigger(s) paused, ${out?.clocksOff ?? 0} clock(s) off, across ${out?.tasks ?? 0} open task(s).`
         + (kept.length ? ` Kept running: ${kept.map((k) => `${k.taskId} (${k.why})`).join('; ')}.` : ''),
       `team_resume ${out?.root?.id ?? id} turns the triggers and clocks back on; task_send resumes a session.`,
     )

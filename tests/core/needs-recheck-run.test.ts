@@ -27,6 +27,10 @@ vi.mock('../../src/core/session-tracker.js', () => ({
 vi.mock('../../src/core/routines/session-target.js', () => ({
   pickDeliverySession: (rows: SessionRecord[]) => rows[0] ?? null,
 }))
+let routines: { id: string; enabled: boolean; state?: Record<string, unknown> }[] = []
+vi.mock('../../src/core/routines/routines-core.js', () => ({
+  listRoutines: async () => ({ jobs: routines }),
+}))
 vi.mock('../../src/core/session-message-queue.js', () => ({
   sendMessageToSession: async (sid: string, text: string, o: { source?: string }) => { sends.push({ sid, text, source: o.source }) },
 }))
@@ -41,7 +45,7 @@ const needs = (id: string, checkedAt: string): Task => ({
 }) as Task
 
 beforeEach(() => {
-  tasks.clear(); writes.length = 0; sends.length = 0
+  tasks.clear(); writes.length = 0; sends.length = 0; routines = []
   for (const t of [needs('old', ago(NEEDS_RECHECK_MS + 60_000)), needs('fresh', ago(60_000)), needs('nosess', ago(10 * NEEDS_RECHECK_MS))]) tasks.set(t.id, t)
 })
 
@@ -74,5 +78,32 @@ describe('a re-check pass', () => {
     tasks.set('old', { ...tasks.get('old')!, user_status: { state: 'waiting', kind: 'task', waitingOn: 'The review' } } as Task)
     await runNeedsRecheck(NOW + 2 * 60_000)
     expect(tasks.get('old')!.needs_recheck).toBeNull()
+  })
+})
+
+describe('a trigger armed to watch the ask (trigger_create watches:"ask")', () => {
+  it('keeps the re-check quiet while it is armed; paused, stopped or gone, the re-check comes back', async () => {
+    tasks.set('old', { ...tasks.get('old')!, recheck_watch: [{ trigger: 'tr-1', watches: 'ask', at: ago(1000) }] })
+    routines = [{ id: 'tr-1', enabled: true }]
+    expect(await runNeedsRecheck(NOW)).toEqual([])
+    routines = [{ id: 'tr-1', enabled: false, state: { consecutiveErrors: 5 } }]
+    expect(await runNeedsRecheck(NOW)).toEqual(['old'])
+  })
+
+  it('a watch of a letter does not cover the ask, and the note offers agent-ack for no change', async () => {
+    tasks.set('old', { ...tasks.get('old')!, recheck_watch: [{ trigger: 'tr-1', watches: 'lt-abcd-1234', at: ago(1000) }] })
+    routines = [{ id: 'tr-1', enabled: true }]
+    expect(await runNeedsRecheck(NOW)).toEqual(['old'])
+    expect(sends[0].text).toContain('<walnut-turn status="agent-ack"/>')
+    expect(sends[0].text).toContain('watches:"ask"')
+  })
+})
+
+describe('a team stopped or quieted in one step', () => {
+  it('is not woken by the re-check until it is resumed', async () => {
+    tasks.set('lead', { id: 'lead', title: 'Lead', phase: 'IN_PROGRESS', status: 'in_progress', team_stop: { at: ago(1000), by: 'human', when: 'now', keptSessions: true, members: [{ id: 'old', title: 'T old' }] } } as Task)
+    expect(await runNeedsRecheck(NOW)).toEqual([])
+    tasks.set('lead', { ...tasks.get('lead')!, team_stop: null })
+    expect(await runNeedsRecheck(NOW)).toEqual(['old'])
   })
 })

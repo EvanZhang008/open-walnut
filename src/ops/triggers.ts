@@ -122,6 +122,8 @@ defineOp({
     maxFiresPerDay: z.number().int().min(0).optional().describe('Fire budget: up to this many fires in a burst, refilling at this many per 24h (default 24, so once an hour once spent; a held fire comes later, never lost). For a busy source checked often (chat, mail) set it to the checks per day, e.g. 288 for every 5m. 0 = unlimited'),
     wait: z.boolean().optional().describe('Park the task the fire lands in (Waiting) until it fires. Default true for your own task, '
       + 'false for another task. Pass false while you or the user still have work on this task'),
+    watches: z.string().optional().describe('What this trigger watches for you, so Walnut\'s 4-hour re-check of it stays quiet while '
+      + 'the trigger is armed: "ask" = your status\'s ask of the user, or a letter id (lt-...) you sent them'),
     wait_until: z.string().optional().describe('When the parked task comes back by itself if nothing fired: an ISO datetime or a duration '
       + 'from now ("2h", "1d"). Set it to when you expect the event, kept short: it is the check that the trigger works. '
       + 'Default 1 day; "" = no clock (only when the user asked for no time limit)'),
@@ -242,10 +244,23 @@ defineOp({
     + 'failed 5 times in a row), how many times it has fired, the last check the daemon reported (fired with '
     + 'an item count / quiet with a reason / the error text) and the recent check history. Use it to answer '
     + '"what are you watching?" and to check whether a trigger you created is healthy; one that has never '
-    + 'fired may be a script that never says fire.',
-  input: {},
+    + 'fired may be a script that never says fire. With task: only what would wake that task (and with team:true every '
+    + 'open task under it): its triggers, its plain timed routines (cron, kind "routine"), and its wake clocks; '
+    + 'team_stop with sessions:"keep" pauses all of them at once.',
+  input: {
+    task: z.string().optional().describe('Task id or unique prefix: list only the triggers, routines and clocks that would wake it'),
+    team: z.boolean().optional().describe('With task: every open task under it too (default false)'),
+  },
   bind: TRIGGER_LIST_BINDING,
-  handler: async (_args, call) => {
+  handler: async (args, call) => {
+    const taskRef = typeof args.task === 'string' ? args.task.trim() : ''
+    const wake = taskRef
+      ? await call('GET', `/tasks/${encodeURIComponent(taskRef)}/wake-sources?team=${args.team === true ? '1' : '0'}`) as {
+        root?: { id: string; title: string }; members?: { id: string; title: string }[]
+        routines?: { id: string; target: string; kind: string }[]; clocks?: unknown[]; stopped?: unknown
+      } | undefined
+      : undefined
+    const aimed = wake ? new Map((wake.routines ?? []).map((r) => [r.id, r] as const)) : undefined
     // includeDisabled is pinned rather than exposed: a trigger that was
     // auto-disabled for check errors is exactly what a caller needs to see.
     const body = await call('GET', '/routines?includeDisabled=true') as { jobs?: unknown[] } | undefined
@@ -260,10 +275,12 @@ defineOp({
           consecutiveErrors?: number; checkLog?: Array<Record<string, unknown>>
         }
       })
-      .filter((job) => job.check && typeof job.check.run === 'string')
+      // A task's view lists its plain routines too: they wake it just the same.
+      .filter((job) => aimed ? aimed.has(String(job.id)) : !!job.check && typeof job.check.run === 'string')
       .map((job) => ({
         id: job.id,
         name: job.name,
+        ...(aimed ? { kind: aimed.get(String(job.id))?.kind, target: aimed.get(String(job.id))?.target } : {}),
         ...(job.description ? { description: job.description } : {}),
         every: everyLabel(job.schedule?.everyMs),
         host: job.check?.host ?? '__local__',
@@ -290,6 +307,19 @@ defineOp({
           }
           : {}),
       }))
+    if (wake) {
+      return {
+        task: wake.root,
+        ...(args.team === true ? { members: wake.members ?? [] } : {}),
+        count: triggers.length,
+        triggers,
+        clocks: wake.clocks ?? [],
+        ...(wake.stopped ? { teamStop: wake.stopped } : {}),
+        hint: triggers.length || (wake.clocks ?? []).length
+          ? `team_stop '{"id":"${wake.root?.id ?? taskRef}","sessions":"keep"}' pauses all of these (team_resume turns them back on).`
+          : 'Nothing would wake it by itself.',
+      }
+    }
     return {
       count: triggers.length,
       triggers,

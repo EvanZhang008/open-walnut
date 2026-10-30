@@ -9,7 +9,8 @@
  * older than NEEDS_RECHECK_MS, its session gets ONE note: check whether the user did it outside
  * Walnut, carry on if so, and arm a check if one can be scripted. Its turn-end report then states
  * the ask again (checked now) or moves on. A trigger of the task does not exempt it: it watches
- * the task, maybe not this ask. At most MAX_RECHECKS in a row while it keeps asking the user
+ * the task, maybe not this ask; one the session armed to watch it (trigger_create watches:"ask")
+ * does, while it is armed (recheck-watch.ts). At most MAX_RECHECKS in a row while it keeps asking the user
  * (reworded or not); after that it shows as not verified until someone looks. Primary only; an
  * ephemeral server never wakes a task for a status it copied from the real Walnut. The task's open
  * decision letters to the user ride the same clock (letter-recheck.ts).
@@ -40,7 +41,9 @@ export function recheckBody(ask: string, checkedAt: string | undefined, nowMs: n
   return [
     `Your status asks the user: "${ask}"${Number.isFinite(at) ? `, last checked ${agoWords(nowMs - at)}` : ''}.`,
     'The user may have done it outside Walnut (a sign-in in a terminal, a tap on the phone, a review), and nothing told you. Check it now yourself: run the command, look for the file, read the letter, the review or the state it needed.',
-    'Done: carry on with the work, and your report no longer asks it; if a letter of yours asked it, settle that letter (human_inbox_mark with "settled": one line saying why). Still needed: say so in your report (that counts as checked now). If a script can tell when it is done, arm a trigger on it (trigger_create, wait:false) so you hear the moment it is, and no timer has to ask again.',
+    'Done: carry on with the work, and your report no longer asks it; if a letter of yours asked it, settle that letter (human_inbox_mark with "settled": one line saying why). '
+      + 'Still needed and nothing changed: answer with only the agent-ack line, <walnut-turn status="agent-ack"/>, so the user\'s chat does not repeat the same status; your report still counts as checked now. '
+      + 'If a script can tell when it is done, arm a trigger on it (trigger_create, wait:false, watches:"ask") so you hear the moment it is, and this re-check stays quiet while it is armed.',
   ].join('\n');
 }
 
@@ -70,9 +73,14 @@ let ephemeral = false;
 /** One pass: wake each task due a re-check. Exported for tests. */
 export async function runNeedsRecheck(nowMs = Date.now()): Promise<string[]> {
   const woken: string[] = [];
+  // The triggers polling now, read once a pass and only when a task names one.
+  let live: Set<string> | undefined;
   try {
     const { listTasks, updateTaskRaw } = await import('../task-manager.js');
-    for (const task of await listTasks()) {
+    const all = await listTasks();
+    // A team stopped or quieted in one step (team-stop.ts) is not woken by a timer until it is resumed.
+    const quieted = new Set(all.flatMap((t) => (t.team_stop?.members ?? []).map((m) => m.id)));
+    for (const task of all) {
       // It no longer asks the user (it waits on something else, or is done): the next ask starts a
       // fresh count. Working is not that: a re-check turn runs as Working.
       const left = task.user_status?.state === 'waiting' || task.user_status?.state === 'done' || task.phase === 'COMPLETE';
@@ -81,8 +89,19 @@ export async function runNeedsRecheck(nowMs = Date.now()): Promise<string[]> {
         continue;
       }
       if (task.plugin_only || task.user_status?.state !== 'needs' || task.user_status.source !== 'session') continue;
-      // A trigger of the task does not exempt it: it watches the task, maybe not this ask.
+      // A trigger of the task does not exempt it (it watches the task, maybe not this ask), unless
+      // the session armed it to watch this ask (trigger_create watches:"ask", recheck-watch.ts).
       if (!recheckDue(task, { nowMs, ...(ephemeral ? { notBefore: startedAt } : {}) })) continue;
+      if (quieted.has(task.id)) continue;
+      if (task.recheck_watch?.length) {
+        const { liveTriggerIds, watchedBy } = await import('./recheck-watch.js');
+        live ??= await liveTriggerIds().catch(() => new Set<string>());
+        const watch = watchedBy(task, 'ask', live);
+        if (watch) {
+          log.task.debug('needs-you re-check skipped: a trigger watches the ask', { taskId: task.id, trigger: watch.trigger });
+          continue;
+        }
+      }
       const ask = task.user_status!.ask!;
       const { getSessionsForTask } = await import('../session-tracker.js');
       const { pickDeliverySession } = await import('../routines/session-target.js');

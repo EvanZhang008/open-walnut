@@ -3507,8 +3507,14 @@ apiV1Router.get('/me', async (req: Request, res: Response, next: NextFunction) =
 // Empty lists and text '' for a caller with no task. Registry + store reads only.
 apiV1Router.get('/me/open', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { collectOpenItems } = await import('../../core/sessions/open-items.js')
     const rawSid = req.headers['x-walnut-caller-sid']
+    // The Stop hook asks only whether a request it holds is still unanswered (unanswered-at-stop.ts).
+    if (req.query.hook === 'stop') {
+      const { unansweredAtStop } = await import('../../core/sessions/unanswered-at-stop.js')
+      res.json({ stop: await unansweredAtStop(Array.isArray(rawSid) ? rawSid[0] : rawSid) })
+      return
+    }
+    const { collectOpenItems } = await import('../../core/sessions/open-items.js')
     res.json(await collectOpenItems(Array.isArray(rawSid) ? rawSid[0] : rawSid, Date.now(), {
       afterCompaction: req.query.hook === 'compact',
     }))

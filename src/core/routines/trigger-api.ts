@@ -308,6 +308,12 @@ export async function createTriggerRoutine(body: unknown, callerSid?: string, or
       400,
     );
   }
+  // What it stands in for: the task's ask of the user, or one of its letters (sessions/recheck-watch.ts).
+  const { validWatch } = await import('../sessions/recheck-watch.js');
+  const watches = b.watches === undefined || b.watches === null || b.watches === '' ? null : validWatch(b.watches);
+  if (b.watches !== undefined && b.watches !== null && b.watches !== '' && !watches) {
+    throw new SessionControlError('watches must be "ask" (your status\'s ask of the user) or a letter id (lt-...)', 400);
+  }
   if (description.length > TRIGGER_DESCRIPTION_MAX) {
     throw new SessionControlError(
       `description is ${description.length} characters; the limit is ${TRIGGER_DESCRIPTION_MAX} (one or two sentences)`,
@@ -359,6 +365,19 @@ export async function createTriggerRoutine(body: unknown, callerSid?: string, or
     },
     executor: { type: 'session', config: { target: resolved.target, prompt } },
   }, origin);
+
+  if (watches) {
+    const jobId = (created.job as { id?: string } | undefined)?.id;
+    if (jobId) {
+      const { updateTaskRaw } = await import('../task-manager.js');
+      const { withWatch } = await import('../sessions/recheck-watch.js');
+      const at = new Date().toISOString();
+      await updateTaskRaw(resolved.target, (cur) => ({ recheck_watch: withWatch(cur.recheck_watch, { trigger: jobId, watches, at }) }),
+        { push: false, source: 'trigger-watch' }).catch((err) => log.web.warn('trigger watch not recorded', {
+        target: resolved.target, jobId, error: err instanceof Error ? err.message : String(err),
+      }));
+    }
+  }
 
   // A session's trigger parks its own task by default: the work is waiting on
   // the thing the trigger watches, so the task leaves the user's list until it

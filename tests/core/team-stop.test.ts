@@ -179,3 +179,45 @@ describe('stopTeam / resumeTeam', () => {
     }
   });
 });
+
+describe('wake sources only (sessions:"keep") and wakeSourcesOf', () => {
+  it('lists what would wake the team, paused or not, without changing anything', async () => {
+    triggers = [{ id: 'tr-b', target: 'b', state: 'armed' }, { id: 'tr-a1', target: 'a1', state: 'paused' }, { id: 'tr-o', target: 'other', state: 'armed' }];
+    tasks.set('lead', { ...tasks.get('lead')!, promise_alarm: { at: '2026-10-29T00:00:00.000Z', words: 'the review', set_at: '2026-10-28T00:00:00.000Z' } });
+    const { wakeSourcesOf } = await import('../../src/core/sessions/team-stop.js');
+    const team = await wakeSourcesOf('lead');
+    expect(team.members.map((m) => m.id)).toEqual(['lead', 'a', 'a1', 'b']);
+    expect(team.routines.map((r) => [r.id, r.target, r.enabled]).sort()).toEqual([['tr-a1', 'a1', false], ['tr-b', 'b', true]]);
+    expect(team.clocks).toEqual(expect.arrayContaining([
+      { taskId: 'b', kind: 'wait_until', at: '2026-11-01T00:00:00.000Z' },
+      { taskId: 'lead', kind: 'promise_alarm', at: '2026-10-29T00:00:00.000Z' },
+    ]));
+    // The task alone: only what aims at it.
+    const alone = await wakeSourcesOf('b', { team: false });
+    expect(alone.members.map((m) => m.id)).toEqual(['b']);
+    expect(alone.routines.map((r) => r.id)).toEqual(['tr-b']);
+    expect(patched).toEqual([]);
+  });
+
+  it('pauses the routines and clocks, stops no session, keeps the asks; resume restores them', async () => {
+    sessions = [sess('s-a', 'a', 'running'), sess('s-a1', 'a1')];
+    triggers = [{ id: 'tr-b', target: 'b', state: 'armed' }];
+    asks = [{ id: 'rq-a-a1', fromSessionId: 's-a', toTaskId: 'a1', status: 'pending' }];
+    const out = await stopTeam('lead', { by: 'task:main', keepSessions: true });
+    expect(terminated).toEqual([]);
+    expect(out.stopped).toEqual([]);
+    expect(out.pausedTriggers).toBe(1);
+    expect(out.clocksOff).toBe(1);
+    expect(asks[0].status).toBe('pending');
+    expect(stoppedByTeam('a')).toBe(false);
+    expect(tasks.get('lead')!.team_stop).toMatchObject({ keptSessions: true });
+    const { wakeSourcesOf } = await import('../../src/core/sessions/team-stop.js');
+    expect((await wakeSourcesOf('lead')).stopped).toMatchObject({ keptSessions: true, by: 'task:main' });
+    // A full stop on top of it is a full stop.
+    await stopTeam('lead', { by: 'human' });
+    expect(tasks.get('lead')!.team_stop!.keptSessions).toBeUndefined();
+    const back = await resumeTeam('lead', { by: 'human' });
+    expect(back.resumedTriggers).toBe(1);
+    expect(tasks.get('b')!.wait_until).toBe('2026-11-01T00:00:00.000Z');
+  });
+});

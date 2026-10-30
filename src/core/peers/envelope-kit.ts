@@ -66,6 +66,13 @@ export interface EnvelopeHandedOn {
   title?: string;
   taskId?: string;
   state: 'answered' | 'stopped' | 'working' | 'unknown';
+  /** Its task's phase now; read for an overdue notice. */
+  phase?: string;
+  /**
+   * Its latest message: an overdue notice quotes this instead of the target's own,
+   * which is about other work once the request moved on.
+   */
+  lastMessage?: EnvelopeLastMessage;
 }
 
 /** What a subtask's turn end tells its parent (subtask-notices.ts); rides the `outcome` attribute. */
@@ -344,8 +351,59 @@ export function createEnvelopeKit(): EnvelopeKit {
     return `It handed your request on to ${list}.`;
   }
 
+  /**
+   * The overdue notice of a request the target handed on: who has the work, each one's
+   * state, and the latest message of the one still on it (else the newest one).
+   */
+  function buildOverdueHandedOn(request: EnvelopeRequest, target: EnvelopeTarget): string {
+    const handed = target.handedOn ?? [];
+    const focus = handed.find((h) => h.state === 'working' && (h.lastMessage?.text.trim() || h.lastMessage?.actions?.length))
+      ?? [...handed].reverse().find((h) => h.lastMessage?.text.trim() || h.lastMessage?.actions?.length);
+    const name = (h: EnvelopeHandedOn) => `"${sessionHandle(h.title, undefined) || 'untitled'}"${h.taskId ? ` (${h.taskId})` : ''}`;
+    const how = (h: EnvelopeHandedOn) => h.state === 'answered' ? 'answered it'
+      : h.state === 'stopped' ? 'finished without an explicit answer'
+        : h.state === 'working' ? 'still has it, no answer yet'
+          : 'state unknown';
+    const states = handed.map((h) => `- ${name(h)}: ${how(h)}${h.phase ? `; its task is ${h.phase} now` : ''}`);
+    const next = [
+      ...handed.filter((h) => h.taskId).slice(0, 3)
+        .map((h) => `  walnut tools call task_get '{"id":"${h.taskId}"}'          # the task it handed your request on to`),
+      ...(target.taskId ? [`  walnut tools call task_get '{"id":"${target.taskId}"}'          # the task you asked`] : []),
+    ];
+    let quote: string | undefined;
+    if (focus?.lastMessage) {
+      const body = quoteLastMessage(focus.lastMessage, 'timeout');
+      quote = `${name(focus)}, its latest message so far:\n\n${body}`;
+    }
+    return buildWalnutMessage({
+      kind: 'notification',
+      attrs: {
+        from: 'Walnut',
+        about: sessionHandle(target.title, target.sessionId),
+        'about-session': target.sessionId,
+        'about-task': target.taskId,
+        request: request.id,
+        asked: request.preview,
+        outcome: 'timeout',
+        note: NOTE_NOTIFICATION,
+      },
+      body: [
+        'No reply by your deadline. The task you asked handed your request on, so the work is here:',
+        states.join('\n'),
+        quote ?? 'Its latest message could not be read (or it wrote none yet).',
+        'The request stays open as OVERDUE: a reply from either task still settles it, and you get one reminder at twice the deadline.',
+        ...(next.length > 0 ? [`Next:\n${next.join('\n')}`] : []),
+      ].join('\n\n'),
+    });
+  }
+
   /** What the ASKER reads when Walnut (not the target) ends the wait (see session-requests.ts). */
   function buildRequestNotification(request: EnvelopeRequest, outcome: EnvelopeOutcome, target: EnvelopeTarget): string {
+    // Overdue and handed on: the work is in the task it went to, so that task's latest
+    // message and state are the news. The target's own latest message is about other
+    // work by then (2026-10-29: four overdue notices to Main quoted a lead's unrelated fix).
+    const movedOn = outcome === 'timeout' && !!target.handedOn?.length;
+    if (movedOn) return buildOverdueHandedOn(request, target);
     const said = Boolean(target.lastMessage?.text.trim());
     const did = Boolean(target.lastMessage?.actions?.length);
     const last = said || did ? target.lastMessage : undefined;

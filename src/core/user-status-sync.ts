@@ -409,7 +409,8 @@ export async function syncUserStatuses(ids: ReadonlySet<string> | null, nowMs = 
     facts.openWorkers.set(t.parent_task_id, (facts.openWorkers.get(t.parent_task_id) ?? 0) + 1);
   }
   facts.teamStopped = new Map();
-  for (const t of everything) for (const m of t.team_stop?.members ?? []) facts.teamStopped.set(m.id, t.team_stop!.at);
+  // A pause of the wake sources only (sessions:"keep") leaves the sessions running: not a stop to show.
+  for (const t of everything) if (!t.team_stop?.keptSessions) for (const m of t.team_stop?.members ?? []) facts.teamStopped.set(m.id, t.team_stop!.at);
   facts.projectLeads = new Set();
   for (const t of everything) {
     if (t.org_role !== 'lead' || t.phase === 'COMPLETE' || t.status === 'done') continue;

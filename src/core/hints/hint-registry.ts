@@ -117,9 +117,11 @@ const BUILT_IN: readonly HintSpec[] = [
     // 2026-10-29: leads answered Walnut notices in English in the chats the user reads on the Org page.
     agentTurnRoles: ['main', 'lead'],
     identity: (i) => replyLanguageText(i.config),
+    // 2026-10-29: after the user wrote Chinese, a worker's progress lines between its tool calls
+    // stayed English; the rule covers every line the user reads, not only the final reply.
     render: (i) => {
       const text = replyLanguageText(i.config);
-      return text ? { text } : null;
+      return text ? { text: `${text} ${REPLY_LANGUAGE_SCOPE}` } : null;
     },
     drifted: (config, reply) => {
       const rule = replyLanguageText(config);
@@ -136,6 +138,9 @@ const BUILT_IN: readonly HintSpec[] = [
     render: (i) => (i.request ? { text: VOICE_REPLY_TEXT } : null),
   },
 ];
+
+/** Walnut's own clause after the user's reply-language sentence. */
+export const REPLY_LANGUAGE_SCOPE = 'This covers every line the user reads, the short progress lines between your tool calls included.';
 
 const BUILT_IN_BY_KIND = new Map(BUILT_IN.map((s) => [s.kind, s]));
 
