@@ -283,6 +283,22 @@ struct ServerConfigInfo: Codable {
         let provider: Provider?
         let agent: Agent?
         let hosts: [String: HostInfo]?
+        /// Additive 2026-10-29; a `var` so the memberwise shape stays as it was.
+        var ui: UI? = nil
+    }
+
+    /// The server's `ui.show_walnut_additions`; false when it does not say (an
+    /// older server), which is the server's own default.
+    var showWalnutAdditions: Bool { config.ui?.showWalnutAdditions == true }
+
+    /// `config.ui`: how the chat draws (additive 2026-10-29). nil on an older server.
+    struct UI: Codable {
+        /// Show what Walnut added to a person's message on every message.
+        let showWalnutAdditions: Bool?
+
+        private enum CodingKeys: String, CodingKey {
+            case showWalnutAdditions = "show_walnut_additions"
+        }
     }
 
     let config: Payload

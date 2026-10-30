@@ -186,7 +186,7 @@ final class TimelineRowBuilder {
                                     expandedRowIDs: expandedRowIDs)]
         case nil:
             if message.isUser {
-                return userRows(message, namespace: namespace, width: width, queued: queued)
+                return userRows(message, namespace: namespace, width: width, queued: queued, scope: scope)
             }
             // The agent acknowledgement line never prints (TimelineTurnMarker).
             let shown = TimelineTurnMarker.strip(message.text)
@@ -217,7 +217,12 @@ final class TimelineRowBuilder {
     // MARK: - User bubble
 
     private func userRows(_ message: ChatMessage, namespace: String,
-                          width: CGFloat, queued: QueuedSend.Status? = nil) -> [TimelineRow] {
+                          width: CGFloat, queued: QueuedSend.Status? = nil,
+                          scope: String = TimelineScope.unscoped) -> [TimelineRow] {
+        let addedMenu = message.walnutAddedToggle.map {
+            TimelineAddedMenu(count: $0.count, shown: $0.shown,
+                              toggleRowID: TimelineTurnFold.revealRowID(scope: scope, key: $0.key))
+        }
         var rows: [TimelineRow] = []
         var index = 0
         func nextID() -> String { defer { index += 1 }; return "\(namespace)#\(index)" }
@@ -280,7 +285,7 @@ final class TimelineRowBuilder {
                     // revision so the cell reloads when pending settles / fails.
                     revision: (failed ? 2 : 0) + (message.pending == true ? 1 : 0),
                     content: .userBubble(text: text, textSize: size, failed: failed,
-                                         pending: message.pending == true),
+                                         pending: message.pending == true, added: addedMenu),
                     height: height
                 ))
             }
@@ -1009,6 +1014,45 @@ final class TimelineRowBuilder {
                               badgeStacked: Self.stacksRunBadge(failCount: failCount)),
             height: runRowHeight(phrase: phrase, failCount: failCount, width: width)
         )
+    }
+
+    /// What Walnut added to a person's message, shown (`TimelineTurnFold.Part.added`):
+    /// a fold row reading "Walnut added: Rich output · Context", and,
+    /// open, one text row per item under it with the item's label and its whole
+    /// text. The fold row is the turn fold's capsule (same look, same wrapping
+    /// height); each item is a TextKit text row, measured by the measurer the text
+    /// cell lays it out with, so neither can draw past the height reserved for it.
+    func addedRows(id: String, items: [WalnutAddedItem], expanded: Bool, width: CGFloat) -> [TimelineRow] {
+        var rows = [foldRow(id: id, phrase: TimelineTurnFold.addedPhrase(items), failCount: 0,
+                            expanded: expanded, width: width)]
+        guard expanded else { return rows }
+        for (n, item) in items.enumerated() {
+            let text = Self.addedItemText(item)
+            var hasher = Hasher()
+            hasher.combine(text.string)
+            rows.append(textRow(id: "\(id)#\(n)", revision: hasher.finalize(), attributed: text, width: width))
+        }
+        return rows
+    }
+
+    /// One added item as the opened row draws it: its label on a line of its own,
+    /// then its words, in the footnote styles the rest of the row uses.
+    static func addedItemText(_ item: WalnutAddedItem) -> NSAttributedString {
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.paragraphSpacing = 2
+        let out = NSMutableAttributedString(string: item.label, attributes: [
+            .font: UIFont.systemFont(ofSize: TimelineTextStyler.footnoteFont.pointSize, weight: .semibold),
+            .foregroundColor: UIColor.label,
+            .paragraphStyle: paragraph,
+        ])
+        let words = item.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !words.isEmpty {
+            out.append(NSAttributedString(string: "\n" + words, attributes: [
+                .font: TimelineTextStyler.footnoteFont,
+                .foregroundColor: UIColor.label,
+            ]))
+        }
+        return out
     }
 
     /// Where a turn inside an opened fold ended with the acknowledgement line alone.

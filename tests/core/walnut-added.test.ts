@@ -18,7 +18,7 @@ describe('walnutAddedOf', () => {
     const text = `${note}\n\n${context}Please tidy the notes.`;
     const added = walnutAddedOf(text, [rich, { kind: 'question', arg: '4', text: 'Tag your reply [Q4].' }]);
     expect(added.items).toEqual([
-      { kind: 'context', name: 'Conversation context', label: 'Context Walnut added', text: 'Earlier: the review was done.' },
+      { kind: 'context', name: 'Conversation context', label: 'Context', text: 'Earlier: the review was done.' },
       { kind: 'hint', name: 'rich-output', label: 'Rich output', text: 'rich output mode is still on.' },
       { kind: 'hint', name: 'question', label: 'Question Q4', text: 'Tag your reply [Q4].' },
     ]);

@@ -70,6 +70,17 @@ final class PeerMessageUITests: XCTestCase {
         XCTAssertTrue(element(app, "chat.composer").waitForExistence(timeout: 25))
     }
 
+    /// Shows what Walnut added to one person's message: a long press on the bubble's
+    /// padding (the text view takes a press on the words for selection), then its item.
+    @MainActor private func revealWalnutAdded(_ app: XCUIApplication, bubble words: String, count: Int) throws {
+        let text = app.textViews.matching(NSPredicate(format: "value CONTAINS %@", words)).firstMatch
+        XCTAssertTrue(text.waitForExistence(timeout: 10), words)
+        text.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0)).withOffset(CGVector(dx: 0, dy: -6))
+            .press(forDuration: 1)
+        let item = app.buttons["Show what Walnut added (\(count))"]
+        XCTAssertTrue(item.waitForExistence(timeout: 10)); item.tap()
+    }
+
     @MainActor private func descriptions(_ app: XCUIApplication) -> XCUIElementQuery {
         app.descendants(matching: .any).matching(identifier: "chat.peerMessage")
     }
@@ -303,6 +314,9 @@ final class PeerMessageUITests: XCTestCase {
         // The list may not fit one screen: each line is looked for, scrolling down as needed.
         let timeline = app.collectionViews.firstMatch
         for _ in 0..<3 { timeline.swipeDown() }
+        // Walnut's note in front of the person's words is hidden until the bubble asks for it.
+        XCTAssertFalse(descriptions(app).matching(NSPredicate(format: "label == 'Walnut: Task moved'")).firstMatch.exists)
+        try revealWalnutAdded(app, bubble: "Please draft the notes.", count: 1)
         for label in ["Walnut: Task moved", "Docs lead: Completed",
                       "Walnut: wait until: the time this task was waiting for has passed"] {
             let line = descriptions(app).matching(NSPredicate(format: "label == %@", label)).firstMatch
@@ -346,8 +360,11 @@ final class PeerMessageUITests: XCTestCase {
         XCTAssertTrue(answer.waitForExistence(timeout: 20))
         checkPrivateTextIsAbsent(app); try capture(app, "shapes-accessible-bottom")
         let list = app.collectionViews.firstMatch
+        let words = app.textViews.matching(NSPredicate(format: "value CONTAINS 'Please draft the notes.'")).firstMatch
+        for _ in 0..<12 where !words.waitForExistence(timeout: 3) { list.swipeDown() }
+        try revealWalnutAdded(app, bubble: "Please draft the notes.", count: 1)
         let rider = descriptions(app).matching(NSPredicate(format: "label == 'Walnut: Task moved'")).firstMatch
-        for _ in 0..<12 where !rider.waitForExistence(timeout: 3) { list.swipeDown() }
+        for _ in 0..<4 where !rider.waitForExistence(timeout: 3) { list.swipeDown() }
         XCTAssertTrue(rider.waitForExistence(timeout: 10))
         checkPrivateTextIsAbsent(app); try capture(app, "shapes-accessible-top")
     }

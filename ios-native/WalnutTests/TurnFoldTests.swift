@@ -50,9 +50,13 @@ final class TurnFoldTests: XCTestCase {
     }
     private var line: ChatMessage { said(tag) }
 
-    private func plan(_ rows: [ChatMessage]) -> [TimelineTurnFold.Part] {
-        TimelineTurnFold.plan(rows, turns: TimelineTurnShape.shape(rows, streaming: false))
+    private func plan(_ rows: [ChatMessage],
+                      additions: TimelineTurnFold.Additions = .init()) -> [TimelineTurnFold.Part] {
+        TimelineTurnFold.plan(rows, turns: TimelineTurnShape.shape(rows, streaming: false), additions: additions)
     }
+
+    /// The server's "always show what Walnut added".
+    private let showAll = TimelineTurnFold.Additions(showAll: true)
 
     /// A readable outline of a plan: "fold:<kind>:<phrase>[members]", "bubble", "text", …
     private func outline(_ parts: [TimelineTurnFold.Part]) -> [String] {
@@ -63,6 +67,7 @@ final class TurnFoldTests: XCTestCase {
             case .inbound: return "inbound"
             case .ack: return "ack"
             case .fold(let f): return "fold:\(f.kind):\(f.phrase)\(outline(f.members))"
+            case .added(_, let items): return "added:" + items.map(\.label).joined(separator: ",")
             }
         }
     }
@@ -94,7 +99,7 @@ final class TurnFoldTests: XCTestCase {
         rows.map { row -> String in
             switch row.content {
             case .text(let s): return s.string
-            case .userBubble(let s, _, _, _): return s.string
+            case .userBubble(let s, _, _, _, _): return s.string
             case .notification(_, _, _, let body, _, _, _, _): return body.string
             case .peerMessage(let description): return description.accessibilityLabel
             case .chip(_, let text): return text
@@ -145,8 +150,11 @@ final class TurnFoldTests: XCTestCase {
 
     func testWalnutsNotesInFrontOfAPersonsWordsReadAsTheirLinesAboveTheBubble() {
         let rider = "<walnut-message kind=\"notification\" from=\"Walnut\" outcome=\"moved\">\nThis task moved.\n</walnut-message>"
-        let parts = plan([person("\(rider)\n\nPlease draft the notes."), said("Drafted.")])
-        XCTAssertEqual(outline(parts), [
+        let rows = [person("\(rider)\n\nPlease draft the notes."), said("Drafted.")]
+        // Hidden by default: the bubble holds the words and offers the note on a long press.
+        XCTAssertEqual(outline(plan(rows)), ["bubble:Please draft the notes.", "text"])
+        // Shown (the server's setting): the note's line above the bubble.
+        XCTAssertEqual(outline(plan(rows, additions: showAll)), [
             "inbound", "bubble:Please draft the notes.", "text",
         ])
     }
@@ -160,8 +168,11 @@ final class TurnFoldTests: XCTestCase {
             + "note=\"status changes of tasks you follow, not a work request\">\n"
             + "A task you follow changed its status (Walnut's record, not a report):\n"
             + "- \"Sample lead\" (task-a): Working \u{2192} Waiting at 21:05 UTC.\n</walnut-message>"
-        XCTAssertEqual(outline(plan([person("\(status)\n\nYes, go for it."), said("Started.")])), [
+        XCTAssertEqual(outline(plan([person("\(status)\n\nYes, go for it."), said("Started.")], additions: showAll)), [
             "inbound", "bubble:Yes, go for it.", "text",
+        ])
+        XCTAssertEqual(outline(plan([person("\(status)\n\nYes, go for it."), said("Started.")])), [
+            "bubble:Yes, go for it.", "text",
         ])
         for outcome in ["moved", "restarted", "org-update", "status", "waiting", "handed-over", "task-routing-policy"] {
             let note = "<walnut-message kind=\"notification\" from=\"Walnut\" outcome=\"\(outcome)\">\nA note.\n</walnut-message>"

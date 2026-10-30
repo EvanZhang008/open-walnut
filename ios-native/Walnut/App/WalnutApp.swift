@@ -188,6 +188,8 @@ struct RootView: View {
                 // The tag rules are read before any task is opened, so a first open
                 // draws its pills already decided instead of the raw tags for a moment.
                 Task { await TagDisplayStore.shared.refreshIfStale() }
+                // Whether the session chat always shows what Walnut added to a message.
+                Task { await WalnutAdditionsSetting.shared.refreshIfStale() }
                 // "The app is on screen" — only read by the server in
                 // `when-inactive` mode, where it's what keeps a letter quiet
                 // while the user is already looking at Walnut.

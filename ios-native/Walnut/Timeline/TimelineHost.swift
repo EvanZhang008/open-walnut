@@ -43,6 +43,9 @@ struct TimelineHost: UIViewControllerRepresentable {
     var queuedMessageStates: [String: QueuedSend.Status] = [:]
     /// See `TimelineInput.afterLiveMessageIDs`.
     var afterLiveMessageIDs: Set<String> = []
+    /// See `TimelineInput.showWalnutAdditions`. Defaulted off: a surface that does
+    /// not pass it hides what Walnut added behind the bubble's long-press item.
+    var showWalnutAdditions: Bool = false
     /// Bumped by the store when a layout-shifting mutation should re-assert
     /// the pinned bottom (send, turn-end, streaming re-assert).
     var scrollToBottomSignal: Int
@@ -107,7 +110,8 @@ struct TimelineHost: UIViewControllerRepresentable {
             expandedRowIDs: coordinator.expandedRowIDs,
             queuedMessageStates: queuedMessageStates,
             afterLiveMessageIDs: afterLiveMessageIDs,
-            scope: TimelineScope.sanitize(scope)
+            scope: TimelineScope.sanitize(scope),
+            showWalnutAdditions: showWalnutAdditions
         )
         coordinator.resubmit()
         if scrollToBottomSignal != coordinator.lastScrollSignal {

@@ -207,7 +207,7 @@ final class PeerMessagePresentationTests: XCTestCase {
         let message = ChatMessage(id: "image", role: "user", text: raw, createdAt: "", kind: nil)
         let rows = TimelineRowBuilder().rows(for: message, width: 393, expandedRowIDs: [])
         XCTAssertEqual(rows.map(\.content.reuseKind), ["peerMessage", "image", "bubble"])
-        if case .userBubble(let text, _, _, _) = rows.last?.content { XCTAssertEqual(text.string, "Normal caption") }
+        if case .userBubble(let text, _, _, _, _) = rows.last?.content { XCTAssertEqual(text.string, "Normal caption") }
         else { XCTFail("Expected caption bubble") }
     }
 
@@ -231,7 +231,7 @@ final class PeerMessagePresentationTests: XCTestCase {
             message.pending = false
             let rows = builder.rows(for: message, width: 393, expandedRowIDs: [])
             XCTAssertEqual(rows.map(\.content.reuseKind), ["bubble"])
-            guard case .userBubble(let text, _, _, _) = rows[0].content else { return XCTFail("Expected user bubble") }
+            guard case .userBubble(let text, _, _, _, _) = rows[0].content else { return XCTFail("Expected user bubble") }
             XCTAssertTrue(text.string.contains("INTERNAL_BODY"))
         }
     }

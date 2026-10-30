@@ -76,7 +76,16 @@ final class TimelineUserBubbleCell: UICollectionViewCell {
     private var messageID: String?
     private var failed = false
     private var rawText: String = ""
+    /// The long-press item that shows or hides what Walnut added to this message.
+    private var added: TimelineAddedMenu?
     private weak var delegate: TimelineCellActionDelegate?
+    /// True from the menu's appearance until its closing animation ends.
+    private var menuOnScreen = false
+    /// A chosen item that changes the rows (show/hide, retry, delete), sent only
+    /// once the menu has closed: reloading the list under the closing animation
+    /// reuses this cell for another message, and the shrinking preview then reads
+    /// that message's words over this bubble.
+    private var heldAction: (() -> Void)?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -92,14 +101,24 @@ final class TimelineUserBubbleCell: UICollectionViewCell {
     required init?(coder: NSCoder) { fatalError() }
 
     func configure(text: NSAttributedString, textSize: CGSize, failed: Bool,
-                   pending: Bool, messageID: String, delegate: TimelineCellActionDelegate?) {
+                   pending: Bool, messageID: String, added: TimelineAddedMenu? = nil,
+                   delegate: TimelineCellActionDelegate?) {
         textView.attributedText = text
         textView.actionDelegate = delegate
         self.textSize = textSize
         self.messageID = messageID
         self.failed = failed
         self.rawText = text.string
+        self.added = added
         self.delegate = delegate
+        // VoiceOver reads the text view, not the bubble: the same item is offered
+        // there as an action, since a long press is not how it opens menus.
+        textView.accessibilityCustomActions = added.map { added in
+            [UIAccessibilityCustomAction(name: added.title) { [weak self] _ in
+                self?.delegate?.timelineCell(didRequest: .toggleExpanded(rowID: added.toggleRowID))
+                return true
+            }]
+        }
         bubble.backgroundColor = failed
             ? UIColor(Theme.danger).withAlphaComponent(0.08)
             : UIColor(Theme.tintSoft)
@@ -131,28 +150,63 @@ extension TimelineUserBubbleCell: UIContextMenuInteractionDelegate {
         let messageID = self.messageID
         let failed = self.failed
         let rawText = self.rawText
-        let delegate = self.delegate
+        let added = self.added
+        weak var delegate = self.delegate
+        let afterClose: (TimelineRowAction) -> Void = { [weak self] action in
+            self?.sendAfterMenuCloses { delegate?.timelineCell(didRequest: action) }
+        }
         return UIContextMenuConfiguration(identifier: nil, previewProvider: nil) { _ in
             var actions: [UIAction] = []
             if failed, let messageID {
                 actions.append(UIAction(title: "Retry",
                                         image: UIImage(systemName: "arrow.clockwise")) { _ in
-                    delegate?.timelineCell(didRequest: .retry(messageID: messageID))
+                    afterClose(.retry(messageID: messageID))
                 })
             }
             actions.append(UIAction(title: "Copy",
                                     image: UIImage(systemName: "doc.on.doc")) { _ in
                 UIPasteboard.general.string = rawText
             })
+            if let added {
+                // What Walnut put around the person's words, for this message only.
+                actions.append(UIAction(title: added.title,
+                                        image: UIImage(systemName: added.shown ? "eye.slash" : "eye")) { _ in
+                    afterClose(.toggleExpanded(rowID: added.toggleRowID))
+                })
+            }
             if failed, let messageID {
                 actions.append(UIAction(title: "Delete",
                                         image: UIImage(systemName: "trash"),
                                         attributes: .destructive) { _ in
-                    delegate?.timelineCell(didRequest: .discard(messageID: messageID))
+                    afterClose(.discard(messageID: messageID))
                 })
             }
             return UIMenu(children: actions)
         }
+    }
+
+    func contextMenuInteraction(_ interaction: UIContextMenuInteraction,
+                                willDisplayMenuFor configuration: UIContextMenuConfiguration,
+                                animator: UIContextMenuInteractionAnimating?) {
+        menuOnScreen = true
+    }
+
+    func contextMenuInteraction(_ interaction: UIContextMenuInteraction,
+                                willEndFor configuration: UIContextMenuConfiguration,
+                                animator: UIContextMenuInteractionAnimating?) {
+        let finish: () -> Void = { [weak self] in
+            guard let self else { return }
+            self.menuOnScreen = false
+            let held = self.heldAction
+            self.heldAction = nil
+            held?()
+        }
+        if let animator { animator.addCompletion(finish) } else { DispatchQueue.main.async(execute: finish) }
+    }
+
+    /// Run `send` now, or when the menu's closing animation ends if it is still on screen.
+    private func sendAfterMenuCloses(_ send: @escaping () -> Void) {
+        if menuOnScreen { heldAction = send } else { send() }
     }
 }
 

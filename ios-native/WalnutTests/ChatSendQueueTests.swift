@@ -1014,7 +1014,7 @@ final class ChatSendQueueTests: XCTestCase {
         XCTAssertTrue(banked.contains { $0.content.reuseKind == "queuedNotice" })
         XCTAssertTrue(
             banked.contains {
-                if case .userBubble(_, _, _, let pending) = $0.content { return pending }
+                if case .userBubble(_, _, _, let pending, _) = $0.content { return pending }
                 return false
             },
             "…and the bubble itself stays pending, which is the 0.65 treatment"

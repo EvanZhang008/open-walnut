@@ -131,7 +131,10 @@ enum TimelineRowContent {
     case text(NSAttributedString)
     /// Right-aligned user bubble. `width` is the measured text width so the
     /// bubble hugs its content like the SwiftUI original.
-    case userBubble(text: NSAttributedString, textSize: CGSize, failed: Bool, pending: Bool)
+    /// `added`: the long-press item that shows or hides what Walnut added to this
+    /// message (`TimelineTurnFold`), nil when there is none to offer.
+    case userBubble(text: NSAttributedString, textSize: CGSize, failed: Bool, pending: Bool,
+                    added: TimelineAddedMenu? = nil)
     case peerMessage(PeerMessageDescription)
     /// Undelivered-send row under a failed bubble. `notice` non-nil = an
     /// automatic retry is still pending ("Waiting for Mac… retrying"); nil =
@@ -257,6 +260,17 @@ enum TimelineRowContent {
     case loadEarlier(TimelineLoadEarlierState)
 }
 
+/// The bubble's "Show what Walnut added (N)" / "Hide what Walnut added" item: the
+/// count it names, whether the additions show now, and the row id its tap toggles
+/// in `expandedRowIDs` (`TimelineTurnFold.revealRowID`).
+struct TimelineAddedMenu: Hashable {
+    let count: Int
+    let shown: Bool
+    let toggleRowID: String
+
+    var title: String { shown ? "Hide what Walnut added" : "Show what Walnut added (\(count))" }
+}
+
 /// What the Load earlier row says. One height for all three, so a tap never
 /// moves the rows below it.
 enum TimelineLoadEarlierState: Int, Hashable {
@@ -318,10 +332,13 @@ extension TimelineRowContent {
         switch self {
         case .text(let attributed):
             hasher.combine(attributed.string)
-        case .userBubble(let text, _, let failed, let pending):
+        case .userBubble(let text, _, let failed, let pending, let added):
             hasher.combine(text.string)
             hasher.combine(failed)
             hasher.combine(pending)
+            // Drawn in the long-press menu (its title flips Show/Hide) under an
+            // unchanged id and height: without it the cell would keep the old menu.
+            hasher.combine(added)
         case .peerMessage(let description):
             hasher.combine(description.sender)
             hasher.combine(description.title)
@@ -506,6 +523,10 @@ struct TimelineInput {
     /// `.unspecified` = "whatever the system says", the default for direct
     /// builder/actor use in tests.
     var sizeCategory: UIContentSizeCategory = .unspecified
+    /// The server's `ui.show_walnut_additions`: what Walnut added to a person's
+    /// message shows on every message, with no long-press step
+    /// (`TimelineTurnFold.Additions`). Defaulted off, the server's own default.
+    var showWalnutAdditions: Bool = false
 }
 
 /// The actor's output: a complete row array (never a delta — latest wins).

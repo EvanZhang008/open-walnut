@@ -25,6 +25,16 @@ export function hintLabel(h: Pick<CarriedHint, 'kind' | 'arg'>): string {
   return h.arg ? `${base} ${h.kind === 'question' ? `Q${h.arg}` : h.arg}` : base;
 }
 
+/**
+ * A context block's name in the "Walnut added: …" row, which already says who
+ * added it: "Context", not the chat banner's "Context Walnut added".
+ */
+function contextLabel(name: string): string {
+  if (/^conversation context$/i.test(name)) return 'Context';
+  if (/^task context$/i.test(name)) return 'Task context';
+  return name;
+}
+
 /** The question-number banner: the turn's label already shows the number, so it is no addition to show. */
 const QUESTION_BANNER = /^Question Q\d{1,5}$/;
 
@@ -52,7 +62,7 @@ export function walnutAddedOf(text: string, hints?: readonly CarriedHint[]): Wal
   if (banners) {
     for (const b of banners.banners) {
       if (QUESTION_BANNER.test(b.name.trim())) continue;
-      items.push({ kind: 'context', name: b.name.trim(), label: b.label, text: b.body });
+      items.push({ kind: 'context', name: b.name.trim(), label: contextLabel(b.name.trim()), text: b.body });
     }
     textWithoutContext = text.slice(0, text.length - own.length) + banners.body;
   }

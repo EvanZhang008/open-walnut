@@ -162,7 +162,7 @@ final class TimelineEngineTests: XCTestCase {
         let kinds = snapshot.rows.map(\.content.reuseKind)
         XCTAssertTrue(kinds.contains("image"), "image row missing: \(kinds)")
         XCTAssertTrue(kinds.contains("bubble"), "text bubble missing: \(kinds)")
-        if case .userBubble(let text, _, _, _)? = snapshot.rows.first(where: { $0.content.reuseKind == "bubble" })?.content {
+        if case .userBubble(let text, _, _, _, _)? = snapshot.rows.first(where: { $0.content.reuseKind == "bubble" })?.content {
             XCTAssertEqual(text.string, "看下这个截图哪里不对?")
         }
     }

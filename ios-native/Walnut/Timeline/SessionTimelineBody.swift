@@ -59,6 +59,9 @@ struct SessionTimelineBody: View {
                 showLoadEarlier: store.showsLoadEarlier,
                 loadEarlierState: store.loadEarlierState,
                 afterLiveMessageIDs: store.afterLiveMessageIDs,
+                // The server's "always show what Walnut added"; off, each bubble's
+                // long-press item shows it for that message (TimelineTurnFold).
+                showWalnutAdditions: WalnutAdditionsSetting.shared.showAll,
                 scrollToBottomSignal: store.scrollToBottomSignal + repinSignal,
                 isPinned: { store.bottomPinned },
                 setPinned: { store.bottomPinned = $0 },
@@ -128,6 +131,7 @@ struct SessionTimelineBody: View {
         .sheet(item: $activityDetail) { detail in
             TimelineActivitySheet(detail: detail)
         }
+        .task { await WalnutAdditionsSetting.shared.refreshIfStale() }
     }
 }
 

@@ -1006,6 +1006,8 @@ final class SessionConversationStore {
                                   agent: m.agent, thinkingText: m.thinkingText,
                                   inputPreview: m.inputPreview, isError: m.isError)
             row.sentBy = m.sentBy
+            row.added = m.added
+            row.textWithoutContext = m.textWithoutContext
             return row
         }
     }
@@ -1032,18 +1034,23 @@ final class SessionConversationStore {
             m.kind == nil && m.text.unicodeScalars.last == "\u{2026}"
         }
         guard messages.contains(where: clipped) else { return messages.map { row(from: $0) } }
-        var whole: [String: [String]] = [:]
+        var whole: [String: [ChatMessage]] = [:]
         for m in held where m.kind == nil && !isProvisional(m) && m.text.utf16.count > slimTextMax {
-            whole["\(m.role)|\(m.createdAt)", default: []].append(m.text)
+            whole["\(m.role)|\(m.createdAt)", default: []].append(m)
         }
         guard !whole.isEmpty else { return messages.map { row(from: $0) } }
         return messages.map { m in
             guard clipped(m), let candidates = whole["\(m.role)|\(m.timestamp)"] else { return row(from: m) }
             let head = m.text.unicodeScalars.dropLast()
-            let longer = candidates.first {
-                $0.utf8.count > m.text.utf8.count && $0.unicodeScalars.starts(with: head)
-            }
-            return row(from: m, text: longer)
+            guard let longer = candidates.first(where: {
+                $0.text.utf8.count > m.text.utf8.count && $0.text.unicodeScalars.starts(with: head)
+            }) else { return row(from: m) }
+            // What Walnut added was read off that whole text too: the clipped read's
+            // copy of it may be cut the same way.
+            var kept = row(from: m, text: longer.text)
+            kept.added = longer.added ?? m.added
+            kept.textWithoutContext = longer.textWithoutContext ?? m.textWithoutContext
+            return kept
         }
     }
 
@@ -1064,6 +1071,8 @@ final class SessionConversationStore {
             isError: m.isError
         )
         row.sentBy = m.sentBy
+        row.added = m.added
+        row.textWithoutContext = m.textWithoutContext
         return row
     }
 

@@ -36,6 +36,7 @@ struct TimelineHarnessView: View {
                 liveTools: store.liveTools,
                 activity: store.activity,
                 scope: "harness",
+                showWalnutAdditions: store.showWalnutAdditions,
                 scrollToBottomSignal: store.scrollToBottomSignal,
                 isPinned: { store.bottomPinned },
                 setPinned: { store.bottomPinned = $0 },
@@ -157,6 +158,10 @@ final class TimelineHarnessStore {
     var scrollToBottomSignal = 0
     /// Texts an island's "Send to AI" handed the page (see `onAction`).
     var islandSends: [String] = []
+    /// The server's "always show what Walnut added", as
+    /// `--timeline-harness-additions-shown` sets it (off: each bubble's long press).
+    var showWalnutAdditions = ProcessInfo.processInfo.arguments
+        .contains { $0.contains("timeline-harness-additions-shown") }
     @ObservationIgnored var bottomPinned = true
     @ObservationIgnored var streamOn = false
     @ObservationIgnored private var streamTask: Task<Void, Never>?

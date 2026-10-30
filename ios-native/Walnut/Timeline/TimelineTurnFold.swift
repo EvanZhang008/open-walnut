@@ -12,9 +12,13 @@ import Foundation
 ///    before an answer, received and sent messages, finished steps, reasoning
 ///    alone. Its line counts what came in, went out and ran ("Received 12
 ///    messages · Sent 3 · Ran 8 tools ›", `TimelineFoldSteps`);
-///  · a person's own message is always the user's bubble, and Walnut's notes that
-///    ride in front of it in the same row each read as their one-line description
-///    above it, the bubble holding only the person's words;
+///  · a person's own message is always the user's bubble, holding only the
+///    person's words. What Walnut added to it (its notes in front, the context
+///    blocks it put first, its message hints) is hidden unless the person asked to
+///    see it, for this message (the bubble's long-press item) or always (the
+///    server's `ui.show_walnut_additions`); shown, each note reads as its one-line
+///    description above the bubble and the rest as one "Walnut added: …" row under
+///    it, which opens to each item's words (`Additions`);
 ///  · received messages with no step or send beside them are each their one-line
 ///    description, with nothing to open.
 /// Every fold starts closed and opens to its members, which keep their own rows;
@@ -47,6 +51,48 @@ enum TimelineTurnFold {
         /// An answer that was the ack line alone, inside an opened fold.
         case ack(ChatMessage)
         case fold(Fold)
+        /// What Walnut added to the person's message just above (hints, context
+        /// blocks), shown: one "Walnut added: …" row that opens to each item.
+        /// `key` names the message's place (`addedKey`), never its payload.
+        case added(key: String, items: [WalnutAddedItem])
+    }
+
+    /// Whether what Walnut added to a person's message shows. `showAll` is the
+    /// server's `ui.show_walnut_additions`; otherwise a message shows it only
+    /// once the person revealed it from the bubble (`isRevealed` of its key).
+    struct Additions {
+        var showAll = false
+        var isRevealed: (String) -> Bool = { _ in false }
+
+        /// Read off a build's input: the setting, and the reveals the view keeps
+        /// among its expanded row ids (`revealRowID`).
+        static func of(_ input: TimelineInput) -> Additions {
+            let expanded = input.expandedRowIDs
+            let scope = input.scope
+            return Additions(showAll: input.showWalnutAdditions,
+                             isRevealed: { expanded.contains(TimelineTurnFold.revealRowID(scope: scope, key: $0)) })
+        }
+    }
+
+    /// The row id a message's reveal is remembered under in `expandedRowIDs`
+    /// (the bubble's long-press item toggles it). Not a drawn row.
+    static func revealRowID(scope: String, key: String) -> String {
+        "\(TimelineScope.namespace(scope, key))#reveal"
+    }
+
+    /// The words "Walnut added: Rich output · Context" the shown row reads.
+    static func addedPhrase(_ items: [WalnutAddedItem]) -> String {
+        "Walnut added: " + items.map(\.label).joined(separator: " \u{00B7} ")
+    }
+
+    /// The person's own text of a row: without the context blocks when the server
+    /// took them off (`textWithoutContext`), Walnut's notes in front still in it.
+    /// The whole text when nothing came off, or when nothing of the person's is
+    /// left without them (a row that is only Walnut's context is drawn as before).
+    static func ownText(_ m: ChatMessage) -> String {
+        guard let own = m.textWithoutContext,
+              !own.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return m.text }
+        return own
     }
 
     /// The fold's row id; `expandedRowIDs` remembers it across rebuilds and refetches.
@@ -54,8 +100,9 @@ enum TimelineTurnFold {
         "\(TimelineScope.namespace(scope, key))#fold"
     }
 
-    static func plan(_ messages: [ChatMessage], turns: [TimelineTurnShape.Turn]) -> [Part] {
-        Planner(messages: messages).run(turns, liveTail: false).parts
+    static func plan(_ messages: [ChatMessage], turns: [TimelineTurnShape.Turn],
+                     additions: Additions = Additions()) -> [Part] {
+        Planner(messages: messages, additions: additions).run(turns, liveTail: false).parts
     }
 
     /// The live turn a received message started, while it runs: that message (and
@@ -73,8 +120,9 @@ enum TimelineTurnFold {
     /// `plan`, with the list's trailing received message(s) and finished runs held
     /// back as a `LiveTail` when there is one; the caller asks only while the live
     /// turn is making calls.
-    static func planLive(_ messages: [ChatMessage], turns: [TimelineTurnShape.Turn]) -> (parts: [Part], tail: LiveTail?) {
-        Planner(messages: messages).run(turns, liveTail: true)
+    static func planLive(_ messages: [ChatMessage], turns: [TimelineTurnShape.Turn],
+                         additions: Additions = Additions()) -> (parts: [Part], tail: LiveTail?) {
+        Planner(messages: messages, additions: additions).run(turns, liveTail: true)
     }
 
     /// A row's place, never its payload: a session row's id hashes its content,
@@ -130,12 +178,14 @@ enum TimelineTurnFold {
 private final class Planner {
     typealias Part = TimelineTurnFold.Part
     let messages: [ChatMessage]
+    let additions: TimelineTurnFold.Additions
     /// The list's parts with the index of their first row.
     private var parts: [(start: Int, part: TimelineToolRunFold.Part)] = []
     private var keyCounts: [String: Int] = [:]
 
-    init(messages: [ChatMessage]) {
+    init(messages: [ChatMessage], additions: TimelineTurnFold.Additions) {
         self.messages = messages
+        self.additions = additions
         var at = 0
         for part in TimelineToolRunFold.fold(messages) {
             parts.append((at, part))
@@ -253,25 +303,52 @@ private final class Planner {
         }
     }
 
-    /// A row the person reads, as itself; a person's row with Walnut's riders
-    /// splits into each rider's one-line description and the bubble.
+    /// A row the person reads, as itself. A person's row draws only the person's
+    /// words in its bubble; what Walnut added to it (its notes in front, `added`)
+    /// shows only when `additions` says so: each note as its one-line description
+    /// above the bubble, the rest as one row under it. Hidden, the bubble carries
+    /// the long-press item that shows them (`walnutAddedToggle`).
     private func defaultParts(_ items: [TimelineToolRunFold.Part]) -> [Part] {
         var out: [Part] = []
         for item in items {
-            if case .message(let m) = item, TimelineTurnShape.isPerson(m), m.sentBy != nil,
-               let split = TimelineInboundMessage.splitRiders(m.text) {
-                let riders = split.riders.enumerated().map { n, rider in
+            guard case .message(let m) = item, TimelineTurnShape.isPerson(m), m.sentBy != nil else {
+                out.append(member(item))
+                continue
+            }
+            let own = TimelineTurnFold.ownText(m)
+            let split = TimelineInboundMessage.splitRiders(own)
+            let added = m.added ?? []
+            let count = (split?.riders.count ?? 0) + added.count
+            guard count > 0 else {
+                out.append(.message(own == m.text ? m : m.replacingText(own)))
+                continue
+            }
+            let key = addedKey(m)
+            let shown = additions.showAll || additions.isRevealed(key)
+            var bubble = m.replacingText(split?.body ?? own)
+            if !additions.showAll {
+                bubble.walnutAddedToggle = WalnutAddedToggle(count: count, shown: shown, key: key)
+            }
+            if shown {
+                out += (split?.riders ?? []).enumerated().map { n, rider in
                     // Named by place: the row's own id hashes its text, which a rich read replaces.
                     Part.inbound(ChatMessage(id: "rider|\(m.createdAt)|\(n)", role: "user", text: rider,
                                              createdAt: m.createdAt, kind: nil))
                 }
-                out += riders
-                out.append(.message(m.replacingText(split.body)))
-            } else {
-                out.append(member(item))
             }
+            out.append(.message(bubble))
+            if shown, !added.isEmpty { out.append(.added(key: key, items: added)) }
         }
         return out
+    }
+
+    /// A person's message's place, for its reveal and its "Walnut added" row: the
+    /// row's own id hashes its text, which a rich read replaces.
+    private func addedKey(_ m: ChatMessage) -> String {
+        let base = "added|\(TimelineTurnFold.locationKey(m))"
+        let n = keyCounts[base, default: 0]
+        keyCounts[base] = n + 1
+        return "\(base)#\(n)"
     }
 
     /// Parts that are all received messages: no step and no send to merge them with.
@@ -328,6 +405,9 @@ extension ChatMessage {
         copy.uploadHeld = uploadHeld
         copy.clientMessageId = clientMessageId
         copy.retryNotice = retryNotice
+        copy.added = added
+        copy.textWithoutContext = textWithoutContext
+        copy.walnutAddedToggle = walnutAddedToggle
         return copy
     }
 }

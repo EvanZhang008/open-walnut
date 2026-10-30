@@ -177,6 +177,20 @@ struct ChatMessage: Codable, Identifiable, Equatable {
     /// phone never guesses it from a clipped preview. nil on an older server, and
     /// a list with no sender at all is drawn exactly as before (`TimelineTurnShape`).
     var sentBy: String? = nil
+    /// Session transcript user rows only: what Walnut added to the row besides its
+    /// notes in front (additive 2026-10-29, server `src/lib/walnut-added.ts`): the
+    /// message hints taken off the text and the context blocks it put first. The
+    /// chat hides them by default and shows them on request
+    /// (`TimelineTurnFold.Additions`). nil on a row with none and on an older server.
+    var added: [WalnutAddedItem]? = nil
+    /// With context blocks in `added`: `text` without them, Walnut's notes in front
+    /// kept (additive 2026-10-29). `text` stays whole for older apps. nil when no
+    /// block came off and on an older server.
+    var textWithoutContext: String? = nil
+
+    /// The bubble's long-press item that shows or hides what Walnut added to this
+    /// message (set by `TimelineTurnFold` on the copy it draws; never on the wire).
+    var walnutAddedToggle: WalnutAddedToggle? = nil
 
     // Client-only flags for optimistic user bubbles (not part of the wire format).
     var pending: Bool? = nil
@@ -210,7 +224,7 @@ struct ChatMessage: Codable, Identifiable, Equatable {
     private enum CodingKeys: String, CodingKey {
         case id, role, text, createdAt, kind, source, detail, resultPreview, agent
         case thinkingText, inputPreview, detailRef, inFlight, answeredBy, isError
-        case messageId, sentBy
+        case messageId, sentBy, added, textWithoutContext
     }
 
     init(id: String, role: String, text: String, createdAt: String, kind: Kind?, source: String? = nil,
@@ -238,6 +252,45 @@ struct ChatMessage: Codable, Identifiable, Equatable {
 
     /// An assistant reply the cloud companion computed, not the Mac.
     var answeredOnCloud: Bool { !isUser && kind == nil && answeredBy == "cloud" }
+}
+
+/// One thing Walnut added to a person's message (`added` on a transcript user row):
+/// a message hint (`kind` "hint", `name` its kind, e.g. "rich-output") or a context
+/// block it put first (`kind` "context", `name` the block's name). `label` is how
+/// it is named to the person ("Rich output", "Context"). Every field
+/// decodes leniently, so a row a newer server shapes differently still reads.
+struct WalnutAddedItem: Codable, Equatable, Hashable {
+    let kind: String
+    let name: String
+    let label: String
+    let text: String
+
+    init(kind: String, name: String, label: String, text: String) {
+        self.kind = kind
+        self.name = name
+        self.label = label
+        self.text = text
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        kind = (try? c.decodeIfPresent(String.self, forKey: .kind)) ?? ""
+        name = (try? c.decodeIfPresent(String.self, forKey: .name)) ?? ""
+        let label = (try? c.decodeIfPresent(String.self, forKey: .label)) ?? ""
+        self.label = label.isEmpty ? name : label
+        text = (try? c.decodeIfPresent(String.self, forKey: .text)) ?? ""
+    }
+
+    private enum CodingKeys: String, CodingKey { case kind, name, label, text }
+}
+
+/// The bubble's "Show what Walnut added (N)" / "Hide what Walnut added" item:
+/// how many things it stands for, whether they show now, and the place key the
+/// reveal is remembered under (`TimelineTurnFold.revealRowID`).
+struct WalnutAddedToggle: Equatable, Hashable {
+    let count: Int
+    let shown: Bool
+    let key: String
 }
 
 struct NoteTreeNode: Codable, Identifiable, Equatable {
@@ -781,11 +834,17 @@ struct SessionTranscript: Codable {
         /// User rows only: who sent the row, "person" | "agent" | "cli"
         /// (additive 2026-10; nil on an older server). See `ChatMessage.sentBy`.
         let sentBy: String?
+        /// User rows only: what Walnut added besides its notes in front (additive
+        /// 2026-10-29). See `ChatMessage.added`.
+        var added: [WalnutAddedItem]? = nil
+        /// User rows only: `text` without the context blocks (additive 2026-10-29).
+        /// See `ChatMessage.textWithoutContext`.
+        var textWithoutContext: String? = nil
 
         init(role: String, text: String, timestamp: String, kind: String?,
              detail: String? = nil, resultPreview: String? = nil, agent: String? = nil,
              thinkingText: String? = nil, inputPreview: String? = nil, isError: Bool? = nil,
-             sentBy: String? = nil) {
+             sentBy: String? = nil, added: [WalnutAddedItem]? = nil, textWithoutContext: String? = nil) {
             self.role = role
             self.text = text
             self.timestamp = timestamp
@@ -797,6 +856,8 @@ struct SessionTranscript: Codable {
             self.inputPreview = inputPreview
             self.isError = isError
             self.sentBy = sentBy
+            self.added = added
+            self.textWithoutContext = textWithoutContext
         }
     }
 

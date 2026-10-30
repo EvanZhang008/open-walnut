@@ -75,7 +75,7 @@ final class TimelineIdentityTests: XCTestCase {
     private func renderedText(_ row: TimelineRow) -> String? {
         switch row.content {
         case .text(let attributed): return attributed.string
-        case .userBubble(let text, _, _, _): return text.string
+        case .userBubble(let text, _, _, _, _): return text.string
         default: return nil
         }
     }

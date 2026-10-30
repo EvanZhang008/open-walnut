@@ -453,10 +453,10 @@ final class TimelineCollectionController: UIViewController {
         switch row.content {
         case .text(let text):
             (cell as? TimelineTextCell)?.configure(text: text, delegate: self)
-        case .userBubble(let text, let size, let failed, let pending):
+        case .userBubble(let text, let size, let failed, let pending, let added):
             (cell as? TimelineUserBubbleCell)?.configure(
                 text: text, textSize: size, failed: failed, pending: pending,
-                messageID: messageID(fromRowID: row.id), delegate: self
+                messageID: messageID(fromRowID: row.id), added: added, delegate: self
             )
         case .code(let text, let contentSize):
             (cell as? TimelineCodeCell)?.configure(text: text, contentSize: contentSize)

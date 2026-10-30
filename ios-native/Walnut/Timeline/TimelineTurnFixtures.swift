@@ -4,7 +4,7 @@ import Foundation
 /// A session transcript in every turn shape (`TimelineTurnShape`), for the DEBUG
 /// timeline harness: the device pass that looks at the quiet steps between answers
 /// as one row that says what they were, Walnut's notes folded above a person's
-/// words, and no tag printing. Rows carry `sentBy` the way a current server sends
+/// words (hidden until revealed, like what else Walnut added), and no tag printing. Rows carry `sentBy` the way a current server sends
 /// it. Neutral, invented content.
 enum TimelineTurnFixtures {
     static func messages() -> [ChatMessage] {
@@ -71,6 +71,20 @@ enum TimelineTurnFixtures {
                 + "\n\nYes, that plan works. Go for it.", sentBy: "person")
         add("assistant", "mcp__walnut__task_send", kind: .tool, detail: "Docs lead", result: "sent")
         add("assistant", "Started. The docs lead has the plan.")
+        // What Walnut added to a person's words (2026-10-29): a context block it put
+        // first and a message hint it took off the text. The bubble holds only the
+        // words; its long-press item shows "Walnut added: …" under it, which opens.
+        add("user", "[Conversation context]\nEarlier today the docs lead finished the style review "
+                + "and asked for a shorter heading.\n[/Conversation context]\n\nWhat changed since yesterday?",
+            sentBy: "person")
+        rows[rows.count - 1].textWithoutContext = "What changed since yesterday?"
+        rows[rows.count - 1].added = [
+            WalnutAddedItem(kind: "context", name: "Conversation context", label: "Context",
+                            text: "Earlier today the docs lead finished the style review and asked for a shorter heading."),
+            WalnutAddedItem(kind: "hint", name: "rich-output", label: "Rich output",
+                            text: "Rich output mode is on: answer with a diagram when a picture says it better."),
+        ]
+        add("assistant", "Only the heading changed. The rest of the page reads the same.")
         // A reply whose turn ended in a failed call: open, the received message folded.
         add("user", envelope("kind=\"reply\" from=\"Build helper [5e6f7a8b]\" title=\"Cache cleared\"",
                              "I cleared the build cache."), sentBy: "agent")

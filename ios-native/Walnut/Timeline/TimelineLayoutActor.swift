@@ -210,6 +210,11 @@ actor TimelineLayoutActor {
                                                 failCount: fold.failCount, expanded: expanded,
                                                 width: input.width))
                     if expanded { appendPlan(fold.members) }
+                case .added(let key, let items):
+                    let id = TimelineTurnFold.rowID(scope: input.scope, key: key)
+                    rows.append(contentsOf: builder.addedRows(id: id, items: items,
+                                                              expanded: input.expandedRowIDs.contains(id),
+                                                              width: input.width))
                 }
             }
         }
@@ -258,6 +263,7 @@ actor TimelineLayoutActor {
         }
         /// Set when the live run rides a received message's fold (see below).
         var runFoldedElsewhere = false
+        let additions = TimelineTurnFold.Additions.of(input)
         if TimelineTurnShape.knowsSenders(inline) {
             let turns = TimelineTurnShape.settle(
                 TimelineTurnShape.shape(inline, streaming: false), in: inline,
@@ -292,7 +298,7 @@ actor TimelineLayoutActor {
                 liveCalls.isEmpty ? nil
                 : TimelineTurnFold.planLive(head, turns: input.streaming ? turns : TimelineTurnShape.settle(
                     TimelineTurnShape.shape(head, streaming: false), in: head, streaming: true,
-                    settled: &settledTurnKinds))
+                    settled: &settledTurnKinds), additions: additions)
             if input.streaming || liveCalls.isEmpty { liveTailKey = input.streaming ? planned?.tail?.key : nil }
             if let planned, input.streaming || (planned.tail != nil && planned.tail?.key == liveTailKey) {
                 // The live turn a received message started: that message and the
@@ -309,10 +315,11 @@ actor TimelineLayoutActor {
                     rows.append(contentsOf: memoizedRows(for: message, queued: input.queuedMessageStates[message.id]))
                 }
                 if !later.isEmpty {
-                    appendPlan(TimelineTurnFold.plan(later, turns: TimelineTurnShape.shape(later, streaming: false)))
+                    appendPlan(TimelineTurnFold.plan(later, turns: TimelineTurnShape.shape(later, streaming: false),
+                                                     additions: additions))
                 }
             } else {
-                appendPlan(TimelineTurnFold.plan(inline, turns: turns))
+                appendPlan(TimelineTurnFold.plan(inline, turns: turns, additions: additions))
             }
         } else {
             for part in TimelineToolRunFold.fold(inline) {
