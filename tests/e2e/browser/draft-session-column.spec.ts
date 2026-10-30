@@ -117,17 +117,13 @@ test('"+" opens a focused draft column with no network in the open path', async 
   // ordering check. Details of each row live in `expectV4Stack`.
   await expectV4Stack(panel)
 
-  // The launch bar carries NO task-meta controls: no pin-tier group, no More menu,
-  // no model select, no engine toggle (2026-09-15: the tier · More row went, "too
-  // complicated for people"; the model and the provider live in the composer's
-  // model picker, see expectV4Stack). What the user can configure without the
-  // folder picker is exactly the two pills above — folder and project.
+  // The launch bar carries NO inline task-meta controls: no pin-tier group, no
+  // model pill, no provider rail (2026-09-15: the tier row went, "too complicated
+  // for people"; the task fields sit behind the draft's More menu and its chips,
+  // the model and the provider in the composer's model picker, see expectV4Stack).
   const bar = draftLaunchBar(panel)
-  await expect(bar.locator('.sps-meta-footer')).toHaveCount(0)
-  await expect(bar.locator('.pin-tier-options')).toHaveCount(0)
-  await expect(bar.locator('.sps-meta-more-btn')).toHaveCount(0)
-  await expect(bar.locator('.sps-meta-model-select')).toHaveCount(0)
-  await expect(bar.locator('.sps-engine-toggle')).toHaveCount(0)
+  await expect(bar.locator('.pin-tier-options, .task-kebab-tier-btn')).toHaveCount(0)
+  await expect(bar.locator('.draft-model-select, .provider-rail-item')).toHaveCount(0)
 
   // The caret is in THIS draft COLUMN's composer — a "+" you then have to click
   // into is not the "instant open" being shipped. Scoped through

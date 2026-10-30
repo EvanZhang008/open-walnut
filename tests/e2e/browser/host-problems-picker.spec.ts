@@ -314,7 +314,7 @@ test.describe('twelve hosts', () => {
   })
   test.afterAll(async ({ request }) => { await resetServerHostFixture(request) })
 
-  test('C39 / C84: every tab caps at 10em, long names end in an ellipsis, one title per tab, the selected tab is scrolled into view', async ({ page }) => {
+  test('C39 / C84: every tab caps at 10em, long names end in an ellipsis, one title per tab, every tab wholly in view', async ({ page }) => {
     await loadHome(page)
     const panel = await openPicker(page, 'box12')
     const tabs = picker(page).locator('.sps-host-tab[data-host^="box"]')
@@ -350,15 +350,26 @@ test.describe('twelve hosts', () => {
       expect(f.overflowX).toBe('hidden')
       expect(f.whiteSpace).toBe('nowrap')
     }
-    // The long names really are cut; the short ones are not. One row, never wrapped.
+    // The long names really are cut; the short ones are not. The row WRAPS and
+    // never scrolls (2026-10-29: a scrolling row's scrollbar took the clicks on
+    // the chips' lower edge in WebKit, and its far chips hung half outside).
     const byHost = new Map(facts.map((f) => [f.host, f]))
     expect(byHost.get('box03')!.overflows).toBe(true)
     expect(byHost.get('box09')!.overflows).toBe(true)
     expect(byHost.get('box01')!.overflows).toBe(false)
-    expect(new Set(facts.map((f) => f.top)).size).toBe(1)
+    expect(new Set(facts.map((f) => f.top)).size).toBeGreaterThan(1)
+    const strip = picker(page).locator('.sps-host-filter')
+    const allInside = () => strip.evaluate((el) => {
+      const s = el.getBoundingClientRect()
+      return el.scrollWidth <= el.clientWidth + 1 && [...el.querySelectorAll('.sps-host-tab')].every((t) => {
+        const r = t.getBoundingClientRect()
+        return r.left >= s.left - 0.5 && r.right <= s.right + 0.5 && r.top >= s.top - 0.5 && r.bottom <= s.bottom + 0.5
+      })
+    })
+    expect(await allInside()).toBe(true)
     await hostTab(page, 'box03').screenshot({ path: `${SHOTS}/c84-tab-ellipsis-${test.info().project.name}.png` })
 
-    // Pick a folder on Box 09 (far right), then reopen: its tab is selected and in view.
+    // Pick a folder on Box 09 (a later line), then reopen: its tab is selected and in view.
     await hostTab(page, 'box09').click()
     await expect(hostTab(page, 'box09')).toHaveClass(/active/)
     await input(page).fill('~/work/')
@@ -367,16 +378,7 @@ test.describe('twelve hosts', () => {
     await expect(picker(page)).toHaveCount(0)
     await draftCwdPill(panel).click()
     await expect(hostTab(page, 'box09')).toHaveClass(/active/)
-    const strip = picker(page).locator('.sps-host-filter')
-    await expect.poll(() => strip.evaluate((el) => {
-      const s = el.getBoundingClientRect()
-      const t = el.querySelector('.sps-host-tab.active')!.getBoundingClientRect()
-      return t.left >= s.left - 0.5 && t.right <= s.right + 0.5
-    })).toBe(true)
-    // It had to scroll to get there (the tab sits past the strip's first screen).
-    const where = await strip.evaluate((el) => ({ scrollLeft: el.scrollLeft, tabLeft: (el.querySelector('.sps-host-tab.active') as HTMLElement).offsetLeft, width: el.clientWidth }))
-    expect(where.tabLeft).toBeGreaterThan(where.width / 2)
-    expect(where.scrollLeft).toBeGreaterThan(0)
+    expect(await allInside()).toBe(true)
     await strip.screenshot({ path: `${SHOTS}/c84-selected-in-view-${test.info().project.name}.png` })
   })
 })

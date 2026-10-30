@@ -1,22 +1,22 @@
 /**
- * Per-directory launch memory in the Quick Start picker.
+ * Per-directory launch memory, applied by the folder picker to a draft column.
  *
  * working-dirs is mocked to carry `lastLaunch` for one dir; verifies:
- *  1. highlighting that dir previews its remembered model in the footer select
- *  2. highlighting a dir WITHOUT memory shows Auto (no leak between rows)
+ *  1. picking that dir puts its remembered model on the draft's model pill, and
+ *     picking a dir WITHOUT memory puts Auto back (no leak between folders)
+ *  2. the memory follows the TYPED path when a row click drills into edit mode
  *  3. confirming the remembered dir sends the model on /quick-start
- *  4. a user's explicit model pick beats the memory of a later-highlighted row
+ *  4. a user's explicit model pick on the composer pill beats the folder's memory
  *
- * The picker is now reached through a DRAFT session column ("+" grows the column,
- * its cwd pill opens this same popover — `.sps-*` markup unchanged). Two knock-on
- * differences from the old chat-pill route, both mechanical:
- *  - a confirmed pick lands on the DRAFT's cwd pill, not the chat `.quick-start-bar`
- *    (which that route no longer creates), and the remembered model shows in the
- *    picker's own footer select rather than the bar's `.qsb-model-chip`;
- *  - the launching composer is the draft column's, not the main chat's.
+ * The folder picker only picks a folder and a host now: its task-meta footer
+ * (and with it the live preview of the highlighted row's memory) is gone. The
+ * model the draft carries is read where the user reads it, on the composer's
+ * model pill (`data-model` = the alias the launch sends, its text the human
+ * label), and the explicit pick is made there too: a pill pick sets the draft's
+ * `metaTouched`, which locks the folder memory out (`lockLaunchMemory`).
  */
 import { test, expect, type Locator, type Page, type Route } from '@playwright/test'
-import { openDraft } from './draft-helpers'
+import { draftModelPicker, draftModelPill, openDraft } from './draft-helpers'
 
 const rememberedCwd = '/Users/playwright/memory-fixture/projects/walnut'
 const plainCwd = '/Users/playwright/memory-fixture/projects/scratch'
@@ -54,7 +54,8 @@ async function clickOutsideUntilClosed(page: Page): Promise<void> {
   }).toPass({ timeout: 10_000 })
 }
 
-async function openPicker(page: Page): Promise<Locator> {
+/** Stub the folder lists, then "+" a fresh draft column (no folder picked). */
+async function openStubbedDraft(page: Page): Promise<Locator> {
   await page.route('**/api/sessions/working-dirs', fulfillWorkingDirs)
   // The fixture paths don't exist on the test machine's disk — mock the live
   // listing so pathValidity sees them as real (dismiss-confirm requires a
@@ -72,8 +73,7 @@ async function openPicker(page: Page): Promise<Locator> {
   })
   // A draft column seeds its cwd from the launch memory, and a seeded cwd opens
   // the picker straight into EDIT mode — the browse-mode ROW HIGHLIGHT is what
-  // drives every model preview below, so this spec needs the never-launched
-  // state. `removeItem` would be the wrong reset: the key is `open-walnut-`
+  // Shift+Enter confirms below, so this spec needs the never-launched state. `removeItem` would be the wrong reset: the key is `open-walnut-`
   // prefixed, so ui-prefs-sync's boot merge adopts the SHARED fixture server's
   // copy whenever the local one is null, letting another spec's launch decide
   // what this one sees. Seed a value readLastLaunchPath rejects (empty cwd →
@@ -82,12 +82,20 @@ async function openPicker(page: Page): Promise<Locator> {
     try { localStorage.setItem(key as string, '{"cwd":"","host":null}') } catch { /* storage disabled */ }
   }, LAST_PATH_KEY)
   await page.goto('/')
-  // "+" grows the draft column; its cwd pill (first chip — the project pill sits
-  // after it) opens the picker.
-  const panel = await openDraft(page)
-  await panel.locator('.draft-composer-bar .session-action-chip').first().click()
+  return openDraft(page)
+}
+
+/** Open the draft's folder picker from its cwd pill (first chip — the project
+ *  pill sits after it) and wait for the two stubbed history rows. */
+async function openFolderPicker(page: Page, panel: Locator): Promise<void> {
+  await cwdPill(panel).click()
   await expect(page.locator('.session-path-selector')).toBeVisible({ timeout: 10_000 })
   await expect(page.locator('.sps-path-item')).toHaveCount(2, { timeout: 20_000 })
+}
+
+async function openPicker(page: Page): Promise<Locator> {
+  const panel = await openStubbedDraft(page)
+  await openFolderPicker(page, panel)
   return panel
 }
 
@@ -108,74 +116,63 @@ async function expectPickedCwd(panel: Locator, cwd: string): Promise<void> {
 }
 
 /**
- * The model the draft is CARRYING after a confirm, read the way a user would:
- * re-open its picker, whose footer is seeded from the draft's stored meta
- * (`initialMeta`). This replaces the old `.qsb-model-chip` check — the chat
- * quick-start bar isn't part of this route — and is still a real-UI read rather
- * than a peek at state.
- *
- * Both halves of the old chip assertion are kept: the model survived as an ID
- * (`value`), and the UI names it in human words (`label`) instead of showing
- * Auto. The label is asserted on the option carrying that value, not on
- * `option:checked`, so the two claims can't collapse into one.
+ * The model the draft is CARRYING, read the way a user would: the composer's
+ * model pill. Both halves of the old chip assertion are kept: the model survived
+ * as an ID (`data-model`, what the launch sends), and the UI names it in human
+ * words (the pill's text) instead of showing Auto.
  */
-async function expectDraftModel(page: Page, panel: Locator, value: string, label: RegExp): Promise<void> {
-  await cwdPill(panel).click()
-  const picker = page.locator('.session-path-selector')
-  await expect(picker).toBeVisible({ timeout: 10_000 })
-  const select = picker.getByRole('combobox', { name: 'Session model' })
-  await expect(select).toHaveValue(value)
-  await expect(select.locator(`option[value="${value}"]`)).toHaveText(label)
-  // Dismiss-confirm re-applies the SAME path + seeded meta, so this read-back
-  // leaves the draft exactly as it found it.
-  await clickOutsideUntilClosed(page)
+async function expectDraftModel(panel: Locator, value: string, label: RegExp): Promise<void> {
+  await expect(draftModelPill(panel)).toHaveAttribute('data-model', value)
+  await expect(draftModelPill(panel)).toHaveText(label)
 }
 
-test('highlighted dir previews its remembered model; plain dir shows Auto', async ({ page }) => {
-  await openPicker(page)
+/** Shift+Enter in the picker's own input (the draft column focuses its composer
+ *  on mount, so page.keyboard is not unambiguously the picker's). */
+async function confirmHighlighted(page: Page): Promise<void> {
+  await page.locator('.sps-search-input').press('Shift+Enter')
+  await expect(page.locator('.session-path-selector')).toBeHidden()
+}
 
-  // Scoped to the picker: the draft composer's own model select shares the
-  // accessible name, so a page-level read is ambiguous (strict-mode violation).
-  const modelSelect = page.locator('.session-path-selector').getByRole('combobox', { name: 'Session model' })
+test('a picked folder brings its remembered model; a folder without memory puts Auto back', async ({ page }) => {
+  const panel = await openPicker(page)
   const rows = page.locator('.sps-path-item')
-  // Keys go to the picker's own input rather than page.keyboard: the draft column
-  // focuses its composer on mount, so "whatever has focus" is no longer
-  // unambiguously the picker (it focuses this input on a 50ms timer after open).
-  const search = page.locator('.sps-search-input')
-
-  // Row 0 = remembered dir (highest count) — footer previews its model
+  // Row 0 = remembered dir (highest count).
   await expect(rows.nth(0).locator('.sps-path-cwd')).toHaveAttribute('title', rememberedCwd)
-  await expect(modelSelect).toHaveValue(rememberedModel)
+  await expectDraftModel(panel, '', /Auto/)
 
-  // Move highlight to the plain dir → preview resets to Auto
-  await search.press('ArrowDown')
-  await expect(rows.nth(1)).toHaveClass(/active/)
-  await expect(modelSelect).toHaveValue('')
+  await confirmHighlighted(page)
+  await expectPickedCwd(panel, rememberedCwd)
+  await expectDraftModel(panel, rememberedModel, rememberedModelLabel)
 
-  // Back to the remembered dir → preview returns
-  await search.press('ArrowUp')
-  await expect(modelSelect).toHaveValue(rememberedModel)
+  // The plain dir has no memory: the previous folder's model must not leak onto
+  // it. The draft has a folder now, so the picker reopens in edit mode on it:
+  // type the other path rather than moving a row highlight.
+  await cwdPill(panel).click()
+  await expect(page.locator('.session-path-selector')).toBeVisible({ timeout: 10_000 })
+  await page.locator('.sps-search-input').fill(plainCwd)
+  await confirmHighlighted(page)
+  await expectPickedCwd(panel, plainCwd)
+  await expectDraftModel(panel, '', /Auto/)
 
-  await page.screenshot({ path: '/tmp/quick-start-launch-memory/preview.png' })
+  await page.screenshot({ path: '/tmp/quick-start-launch-memory/memory-follows-folder.png' })
 })
 
-test('CLICKING the remembered dir (drill into edit mode) keeps the model preview', async ({ page }) => {
+test('CLICKING the remembered dir (drill into edit mode) then confirming still applies its model', async ({ page }) => {
   // Regression: clicking a history row enters edit mode where the highlight
-  // moves to live CHILD dirs — the preview must follow the TYPED path (the
-  // launch target), not the highlighted child, else it resets to Auto and
-  // reads as "my model wasn't remembered".
-  await openPicker(page)
-
-  const modelSelect = page.locator('.session-path-selector').getByRole('combobox', { name: 'Session model' })
-  await expect(modelSelect).toHaveValue(rememberedModel)
+  // moves to live CHILD dirs — the memory must follow the TYPED path (the launch
+  // target), not the highlighted child, else it resets to Auto and reads as "my
+  // model wasn't remembered".
+  const panel = await openPicker(page)
 
   await page.locator('.sps-path-item', {
     has: page.locator(`.sps-path-cwd[title="${rememberedCwd}"]`),
   }).first().click()
 
-  // Now in edit mode with the path filled — preview must survive
-  await expect(page.locator('.sps-search-input, .sps-path-input, input').first()).toBeVisible()
-  await expect(modelSelect).toHaveValue(rememberedModel)
+  // Now in edit mode with the path filled; confirm it.
+  await expect(page.locator('.sps-search-input')).toHaveValue(new RegExp(`^${rememberedCwd}`))
+  await confirmHighlighted(page)
+  await expectPickedCwd(panel, rememberedCwd)
+  await expectDraftModel(panel, rememberedModel, rememberedModelLabel)
 })
 
 test('confirming the remembered dir sends its model on quick-start', async ({ page }) => {
@@ -192,12 +189,11 @@ test('confirming the remembered dir sends its model on quick-start', async ({ pa
   })
 
   // Shift+Enter on the highlighted remembered row = select directly
-  await page.locator('.sps-search-input').press('Shift+Enter')
-  await expect(page.locator('.session-path-selector')).toBeHidden()
+  await confirmHighlighted(page)
   // The pick landed on THIS draft, carrying the remembered model (Sonnet 1M, not
   // Auto) — the draft's stored meta is what the launch below reads from.
   await expectPickedCwd(panel, rememberedCwd)
-  await expectDraftModel(page, panel, rememberedModel, rememberedModelLabel)
+  await expectDraftModel(panel, rememberedModel, rememberedModelLabel)
 
   await panel.locator('.chat-input-textarea').fill('hello from memory test')
   await panel.locator('.chat-input-textarea').press('Enter')
@@ -221,7 +217,7 @@ test('dismissing (outside click) after picking a path confirms it as the launch 
   // poll-click until the popover actually closes.
   await clickOutsideUntilClosed(page)
   await expectPickedCwd(panel, rememberedCwd)
-  await expectDraftModel(page, panel, rememberedModel, rememberedModelLabel)
+  await expectDraftModel(panel, rememberedModel, rememberedModelLabel)
 })
 
 test('dismissing with no path picked still just closes (no path adopted)', async ({ page }) => {
@@ -251,21 +247,22 @@ test('panel height is fixed — drilling into a dir with few children must not s
   expect(Math.abs(editBox!.height - browseBox!.height)).toBeLessThan(1)
 })
 
-test('explicit user pick beats the remembered model', async ({ page }) => {
-  const panel = await openPicker(page)
+test('explicit user pick on the model pill beats the remembered model', async ({ page }) => {
+  const panel = await openStubbedDraft(page)
+  const picker = draftModelPicker(page)
+  const models = picker.getByRole('listbox', { name: 'Model', exact: true })
 
-  const modelSelect = page.locator('.session-path-selector').getByRole('combobox', { name: 'Session model' })
-  await expect(modelSelect).toHaveValue(rememberedModel)
-
-  // User explicitly resets to Auto — memory must NOT re-apply on highlight moves.
-  // Arrow keys go to the picker's input, not page.keyboard: selectOption left
-  // focus on the <select>, where ArrowDown would change the model instead of the
-  // highlighted row (and silently make this assertion vacuous).
-  const search = page.locator('.sps-search-input')
-  await modelSelect.selectOption('')
-  await search.press('ArrowDown')
-  await search.press('ArrowUp')
-  await expect(modelSelect).toHaveValue('')
+  // The user picks a model on the composer pill (the picker closes on a pick)…
+  await draftModelPill(panel).click()
+  await models.locator('[role="option"]:not([data-testid="picker-auto-row"]):not([disabled])').first().click()
+  await expect(picker).toHaveCount(0)
+  await expect(draftModelPill(panel)).not.toHaveAttribute('data-model', '')
+  // …then explicitly resets to Auto. Both are the user's choices: the folder's
+  // memory must NOT re-apply on the folder pick below.
+  await draftModelPill(panel).click()
+  await models.getByTestId('picker-auto-row').click()
+  await expect(picker).toHaveCount(0)
+  await expectDraftModel(panel, '', /Auto/)
 
   let sentBody: Record<string, unknown> | null = null
   await page.route('**/api/sessions/quick-start', async route => {
@@ -277,12 +274,12 @@ test('explicit user pick beats the remembered model', async ({ page }) => {
     })
   })
 
-  await search.press('Shift+Enter')
-  await expect(page.locator('.session-path-selector')).toBeHidden()
+  await openFolderPicker(page, panel)
+  await confirmHighlighted(page)
   await expectPickedCwd(panel, rememberedCwd)
-  // The explicit Auto survived onto the draft: re-opening its picker shows Auto,
-  // not the directory's remembered Sonnet 1M.
-  await expectDraftModel(page, panel, '', /Auto/)
+  // The explicit Auto survived onto the draft, not the directory's remembered
+  // Sonnet 1M.
+  await expectDraftModel(panel, '', /Auto/)
 
   await panel.locator('.chat-input-textarea').fill('explicit auto wins')
   await panel.locator('.chat-input-textarea').press('Enter')

@@ -1303,11 +1303,11 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
    *
    * model / engine come VERBATIM from `meta`: every caller has already resolved
    * the launch-memory question for the directory it hands over (re-resolving here
-   * would restore the folder's model over the user's explicit Auto in the picker).
+   * would restore the folder's model over the user's explicit Auto on the pill).
    * `metaTouched` STICKS once they diverge from the picked directory's memory
    * (launchDivergesFromDirMemory), the only thing that can mean "the user chose
    * this". Task fields are rebased per field (applyDraftPathPick): only what the
-   * picker footer actually changed becomes the user's.
+   * picker changed becomes the user's (it hands the row's fields back as they were).
    *
    * The PROJECT follows the folder in the same write ("a folder is a project"):
    * projectForFolderPick owns the rules (never over a 'user'/'seed' pick, never on

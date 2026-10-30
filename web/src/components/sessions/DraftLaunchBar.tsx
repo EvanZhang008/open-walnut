@@ -40,14 +40,18 @@
  *   replaced it (2026-09-23) are both gone: a decision is shown only once one
  *   was made, and questioned where it is shown.
  *   Ask Walnut (with its tab) gets its own row, `.draft-walnut-meta-row`, with
- *   the chips the user set and More, and no folder/project pills. Bound, fork,
- *   repair and pinned-walnut drafts get neither (the owner omits
- *   onTaskFieldChange): a bound draft's task already exists and its header shows
- *   the real task's kebab; a fork inherits the source task's meta. The folder
- *   picker's footer (SessionPathSelector, MetaFooter) edits the same meta and is
- *   rebased per field on confirm (the snapshot taken when it opened rides along
- *   as onPathChange's 4th argument). The permission mode and the model stay in
- *   the composer's controls row, where a real session's mode and model pills sit.
+ *   the chips the user set and More, and no folder/project pills. Bound, fork
+ *   and pinned-walnut drafts get neither (the owner omits onTaskFieldChange): a
+ *   bound draft's task already exists and its header shows the real task's
+ *   kebab; a fork inherits the source task's meta. A repair (Customize Walnut)
+ *   gets More without its Project row: the server files it under 'Walnut'. The folder
+ *   picker (SessionPathSelector) picks only a folder and a host (user,
+ *   2026-10-29: the engine and Pin rows it used to carry moved out); it hands
+ *   back the row's meta plus the folder's launch memory, rebased per field on
+ *   confirm (the snapshot taken when it opened rides along as onPathChange's 4th
+ *   argument). Tier, priority and dates live in More; the permission mode and
+ *   the model + engine stay in the composer's controls row, where a real
+ *   session's mode and model pills sit.
  *
  * The pills keep their original class names AND the `.draft-composer-bar`
  * container marker: that pair is the documented DOM hook the browser specs use to
@@ -78,9 +82,6 @@ import { DraftFolderPill, DraftPillsBreak, DraftProjectChip } from './DraftLaunc
 import { DraftWorkspaceRow } from '@/components/workspaces/DraftWorkspaceRow';
 import { DraftWorkspaceMenuItem } from '@/components/workspaces/DraftWorkspaceMenuItem';
 import { draftProjectChip, draftProjectIsNew, draftProjectProvenance } from './draft-project-chip';
-
-/** The owner map of a draft whose task fields nobody owns yet. */
-const NO_OWNERS: NonNullable<DraftColumn['fieldOwner']> = Object.freeze({});
 
 /** `host::cwd`: one directory's identity (same as draft-column's dirKey). */
 function chipKey(d: { cwd: string; host: string | null }): string {
@@ -138,7 +139,7 @@ export function DraftLaunchBar({
   // The row's meta at the moment the folder picker opened: the owner rebases
   // the picker's returned meta against it field by field (onPathChange's 4th
   // argument). Captured in the commit that opens it, the same one whose
-  // `initialMeta` the picker seeds its footer from.
+  // `initialMeta` the picker hands back.
   const pickerOpenMetaRef = useRef<QuickStartTaskMeta | null>(null);
   useLayoutEffect(() => {
     pickerOpenMetaRef.current = pickerOpen ? draft.meta : null;
@@ -198,12 +199,16 @@ export function DraftLaunchBar({
   // Ask Walnut: folder and project are server-owned facts (WALNUT_HOME /
   // 'Walnut'), so the pills render read-only, the same treatment as a fork.
   const isWalnut = !!draft.walnut;
-  const projectChip = draftProjectChip(draft, { isKnownProject, hasMenu: decisionsOn });
+  // Customize Walnut: the server files the repair under 'Walnut' whatever the
+  // client sends, so its More edits the task fields but offers no project.
+  const isRepair = draft.intent === 'fix-walnut';
+  const projectMenu = decisionsOn && !isRepair;
+  const projectChip = draftProjectChip(draft, { isKnownProject, hasMenu: projectMenu });
   const pickProject = useCallback((project: string) => {
     if (draft.taskId) onBoundProjectMove?.(project);
     else onProjectChange(draft.id, project);
   }, [draft.taskId, draft.id, onBoundProjectMove, onProjectChange]);
-  const menuProject = decisionsOn && !isWalnut ? {
+  const menuProject = projectMenu && !isWalnut ? {
     value: draft.project ?? '',
     isNew: draftProjectIsNew(draft, isKnownProject),
     why: draftProjectProvenance(draft, isKnownProject),
@@ -313,13 +318,13 @@ export function DraftLaunchBar({
           {projectChip && (
             <DraftProjectChip
               chip={projectChip}
-              menu={decisionsOn ? menu : undefined}
+              menu={projectMenu ? menu : undefined}
               project={draft.project ?? ''}
               onPick={pickProject}
             />
           )}
           {/* LAST element child of the row, unwrapped (the specs assert it). */}
-          {decisionsOn && <DraftMoreButton menu={menu} moreRef={moreRef} priorityVisible={priorityVisible} withProject />}
+          {decisionsOn && <DraftMoreButton menu={menu} moreRef={moreRef} priorityVisible={priorityVisible} withProject={!isRepair} />}
         </div>
       )}
 
@@ -370,10 +375,6 @@ export function DraftLaunchBar({
         // gating on the path would freeze the model at the first folder's memory
         // and every later folder change would launch with it.
         lockLaunchMemory={!!draft.metaTouched}
-        // The footer's More badge counts only fields the user owns (C65). A
-        // draft nobody has edited has no owner map yet: that is "owns nothing",
-        // never "no ownership", which would count every AI-written date.
-        ownedFields={draft.fieldOwner ?? NO_OWNERS}
       />
     </div>
   );

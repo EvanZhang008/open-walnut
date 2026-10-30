@@ -1,15 +1,14 @@
 /**
  * Shared task-metadata constants (tier + priority options).
- * Used by TaskQuickActions kebab menu and SessionPathSelector meta footer.
+ * Used by the TaskQuickActions kebab menu and the draft column's launch meta.
  */
 
 import type { TaskPriority } from '@open-walnut/core';
 import type { FocusTier } from '@/api/focus';
 import type { QuickStartTaskMeta } from './SessionPathSelector';
 
-/** Quick-start defaults. Lives here (not in SessionPathSelector) so MetaFooter's
- *  "More · N" changed-from-default badge can import it without a runtime import
- *  cycle — both it and the picker share one definition of "default". */
+/** Quick-start defaults. Lives here (not in SessionPathSelector) so every
+ *  consumer imports one definition of "default" without a runtime import cycle. */
 export const DEFAULT_META: QuickStartTaskMeta = {
   unread: false,         // the phase machine marks it unread when the turn ends
   priority: 'none',
@@ -93,10 +92,10 @@ export function rememberLaunchPath(path: LastLaunchPath): void {
  * urgent session made months of ordinary sessions open on Focus, which is exactly
  * how the pinned working set filled up with things nobody was working on. Nothing
  * is remembered between launches on purpose; moving a task off the default is a
- * per-task decision made where the tiers are visible (the board, or the folder
- * picker's footer for a launch). The background parse never writes the tier
- * (applyDraftParse): with no tier control in the draft column there is nothing
- * the user could check a guess against.
+ * per-task decision made where the tiers are visible (the board, or the draft's
+ * More for a launch). The background parse never writes the tier
+ * (applyDraftParse): with no tier control in sight on the draft column there is
+ * nothing the user could check a guess against.
  *
  * Still a function, not a const: callers mutate the object they get back.
  */

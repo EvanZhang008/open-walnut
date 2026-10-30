@@ -368,18 +368,19 @@ describe('draft decision menu controller', () => {
     expect(more().classList.contains('draft-more-btn-active')).toBe(true);
   });
 
-  it('no Start, Due or "Start unread" rows unless the value is set (2026-09-25)', async () => {
+  it('no Start, Due or "Start unread" rows unless a value is set (2026-09-25); a set date brings Start, Due and End (2026-10-29)', async () => {
     await render();
     await press(more(), 1);
     expect(menuEl()!.querySelector('.draft-task-menu-unread')).toBeNull();
     expect(menuEl()!.querySelectorAll('.task-kebab-date-toggle').length).toBe(0);
     await press(more(), 1);
     // A set value keeps its row, so it can be cleared; clearing unread closes.
+    // Any set date brings the whole Start / Due set, and a start its End (the
+    // folder picker's footer, which used to carry them, is gone).
     await render({ meta: { unread: true, startDate: '2026-09-27' } });
     await press(more(), 1);
     const dates = [...menuEl()!.querySelectorAll('.task-kebab-date-toggle')].map((b) => b.textContent ?? '');
-    expect(dates.length).toBe(1);
-    expect(dates[0]).toMatch(/^Start/);
+    expect(dates.map((d) => d.match(/^(Start|Due|End)/)?.[1])).toEqual(['Start', 'Due', 'End']);
     const row = menuEl()!.querySelector('.draft-task-menu-unread')!;
     expect(row.textContent).toContain('Start unread');
     await press(row, 1);

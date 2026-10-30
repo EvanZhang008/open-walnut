@@ -1,12 +1,13 @@
 /**
  * Every writer of a draft's task fields other than the parse itself: More, the
- * folder picker footer, the tier "+" seed, the Ask Walnut tab, the visibility
- * re-derivation. Pure (no React), and each returns the SAME object on a no-op.
+ * folder picker's confirm (it hands the row's meta back with the folder's launch
+ * memory), the tier "+" seed, the Ask Walnut tab, the visibility re-derivation.
+ * Pure (no React), and each returns the SAME object on a no-op.
  *
  * Ownership is per FIELD (DraftColumn.fieldOwner): a human edit owns that field
  * only, a tier "+" seed owns the tier, and an owned field is final against the
  * AI. None of these writers sets `metaTouched`, which stays the model/engine
- * launch-memory switch only (the footer still latches it from model/engine).
+ * launch-memory switch only (the composer's model pill latches it).
  *
  * Imports draft-column.ts one way; draft-column.ts never imports this file.
  */
@@ -85,11 +86,14 @@ function commit(
  * A More edit of task fields: each key in `patch` is written, owned by the user
  * and loses its ✦. `userTouched` latches (the user configured this column, so a
  * seed opens its own); `metaTouched` does NOT (it is model/engine memory only).
- * Editing the start drops the end with it (the menu has no end row).
+ * Editing the start drops the end with it; an edit of the end (More's End row)
+ * keeps the start and makes the pair the user's, as the start's owner slot
+ * covers both.
  */
 export function applyDraftTaskFieldEdit(draft: DraftColumn, patch: DraftTaskFieldPatch): DraftColumn {
   const keys = (Object.keys(patch) as DraftOwnedField[]).filter((k) => OWNED_FIELDS.includes(k));
-  if (!keys.length) return draft;
+  const endEdit = 'endDate' in patch && !!(draft.meta.startDate || patch.startDate);
+  if (!keys.length && !endEdit) return draft;
   const meta = { ...draft.meta };
   const owners: Owners = { ...draft.fieldOwner };
   const ai = new Set(draft.aiFields ?? []);
@@ -98,6 +102,12 @@ export function applyDraftTaskFieldEdit(draft: DraftColumn, patch: DraftTaskFiel
     if (k === 'startDate') delete meta.endDate;
     owners[k] = 'user';
     if (k !== 'unread') ai.delete(k);
+  }
+  if (endEdit) {
+    if (patch.endDate === undefined) delete meta.endDate;
+    else meta.endDate = patch.endDate;
+    owners.startDate = 'user';
+    ai.delete('startDate');
   }
   return commit(draft, meta, owners, ai, { userTouched: true });
 }

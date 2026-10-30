@@ -3,7 +3,7 @@
  *
  * The draft's background parse decides tier, priority and dates and shows every
  * decision as a chip (`✦` = Walnut decided). Ownership is per FIELD: a human edit
- * (the More menu, the folder picker footer) or a tier "+" seed owns that one field
+ * (the More menu or a chip's menu) or a tier "+" seed owns that one field
  * and the AI never writes it again, while the AI keeps deciding the rest. An AI
  * field a NEWER trailing parse no longer proposes goes back to its default and its
  * chip leaves, but only when the leg that owns the field answered `ok` (`legs`).
@@ -218,7 +218,12 @@ test('quick folders still apply their remembered model after AI writes and after
   await expectUserChip(panel, 'pinTier', 'Parked')
 })
 
-// ── C18 C19 C18b: the folder picker footer rebases per field ──────────────────
+// ── C18 C19 C18b: a folder pick keeps every task field, whoever decided it ──
+//
+// The folder picker only picks a folder and a host (its task-meta footer went,
+// the fields live in More). What the pick must still never do is write the task
+// fields back from the meta it OPENED with: a user's edit and an AI write that
+// landed while it was open both survive the confirm.
 
 /** Open the full picker from the cwd pill and wait for its rows. */
 async function openPicker(page: Page, panel: Locator): Promise<Locator> {
@@ -227,6 +232,8 @@ async function openPicker(page: Page, panel: Locator): Promise<Locator> {
   await expect(picker.locator('.sps-path-item').first()).toBeVisible({ timeout: 20_000 })
   const localTab = picker.locator('.sps-host-tab', { hasText: 'Local' })
   if (await localTab.isVisible()) await localTab.click()
+  // No task fields in the picker any more: the tier lives in More.
+  await expect(picker.locator('.pin-tier-options, .task-kebab-tier-btn')).toHaveCount(0)
   return picker
 }
 async function confirmPath(page: Page, picker: Locator, cwd: string): Promise<void> {
@@ -236,7 +243,7 @@ async function confirmPath(page: Page, picker: Locator, cwd: string): Promise<vo
   await expect(picker).toBeHidden()
 }
 
-test('a footer tier edit owns the tier only; an AI due that landed while the picker was open survives', async ({ page }) => {
+test('a More tier edit owns the tier only, and an AI due that landed while the picker was open survives its confirm', async ({ page }) => {
   const first = isoDay(3)
   const second = isoDay(5)
   const later = 'close the audit ticket by sunday'
@@ -247,49 +254,56 @@ test('a footer tier edit owns the tier only; an AI due that landed while the pic
   await typeAndSettle(page, mock, 'close the audit ticket by wednesday')
   await expectAiChip(panel, 'dueDate', `Due ${dayWords(3)}`)
 
+  // C18: the tier is the user's from More; the due stays Walnut's.
+  const menu = await openDraftSettings(panel, 'more')
+  await tierRow(menu, 'Parked').click()
+  await expect(draftTaskMenu(page)).toHaveCount(0)
+  await expectUserChip(panel, 'pinTier', 'Parked')
+  await expectAiChip(panel, 'dueDate', `Due ${dayWords(3)}`)
+
   // C19: the next parse is slow and lands while the picker is open.
   const t0 = Date.now()
   await draftComposer(page).fill(later)
   const picker = await openPicker(page, panel)
-  // C18: the footer's tier group, the one tier control the picker has.
-  await picker.getByRole('group', { name: 'Pin new task to tier' }).getByRole('button', { name: 'Parked' }).click()
   await expect.poll(() => mock.calls.some((c) => c.text === later && c.at - t0 >= 300), { timeout: 15_000 }).toBe(true)
   await page.waitForTimeout(2_900)
   await confirmPath(page, picker, `${fixtureRoot}/projects/mcps`)
 
   await expectUserChip(panel, 'pinTier', 'Parked')
   await expectAiChip(panel, 'dueDate', `Due ${dayWords(5)}`)
-  await page.screenshot({ path: `${SHOT_DIR}/c18-c19-footer-rebase.png` })
+  await page.screenshot({ path: `${SHOT_DIR}/c18-c19-folder-pick-keeps-fields.png` })
 })
 
-test('an End set in the footer takes over Start and End together, and a later parse keeps both', async ({ page }) => {
+test('a Start set in More takes over Start and its End together, and neither a folder pick nor a later parse brings the AI\'s back', async ({ page }) => {
+  // The parse proposes a start with an end; the user's start (More has no End
+  // row) owns the pair, so the AI's end goes with the AI's start.
   const start = `${isoDay(2)}T15:00:00`
-  const mock = await boot(page, { start_date: start })
+  const end = `${isoDay(2)}T17:00:00`
+  const mock = await boot(page, { start_date: start, end_date: end })
   const log = await captureDraftRequests(page, { blockQuickStart: true })
   const panel = await openDraft(page)
-  await typeAndSettle(page, mock, 'pair on the release notes the day after tomorrow at 3pm')
-  await expectAiChip(panel, 'startDate', /^Start /)
+  await typeAndSettle(page, mock, 'pair on the release notes the day after tomorrow 3 to 5pm')
+  await expectAiChip(panel, 'startDate', / to /)
+
+  // Walnut's start keeps its row in More (a date row shows only while set).
+  const menu = await openDraftSettings(panel, 'startDate')
+  await menu.locator('.task-kebab-date-toggle').filter({ hasText: /Start/ }).click()
+  await menu.locator(`.task-kebab-date.open .dp-pill[title="${isoDay(4)}"]`).click()
+  await expect(draftTaskMenu(page)).toHaveCount(0)
+  await expectUserChip(panel, 'startDate', `Start ${dayWords(4)}`)
+  await expect(draftDecisionChip(panel, 'startDate')).not.toContainText(' to ')
 
   const picker = await openPicker(page, panel)
-  await picker.locator('.sps-meta-footer').getByRole('button', { name: /More/ }).click()
-  const more = page.getByRole('dialog', { name: 'More task settings' })
-  await expect(more).toBeVisible()
-  // The dates trio is Start, End, Due; End is the second trigger.
-  await more.locator('.sps-meta-dates .dp-trigger').nth(1).click()
-  await page.locator(`.dp-popover .dp-pill[title="${isoDay(3)}"]`).click()
-  await page.keyboard.press('Escape')
-  await expect(more).toHaveCount(0)
   await confirmPath(page, picker, `${fixtureRoot}/projects/walnut`)
-
-  // Start is the user's now (no ✦) and reads as a range because End is set.
-  await expectUserChip(panel, 'startDate', / to /)
-  await typeAndSettle(page, mock, 'pair on the release notes the day after tomorrow at 3pm sharp')
-  await expectUserChip(panel, 'startDate', / to /)
+  await expectUserChip(panel, 'startDate', `Start ${dayWords(4)}`)
+  await typeAndSettle(page, mock, 'pair on the release notes the day after tomorrow 3 to 5pm sharp')
+  await expectUserChip(panel, 'startDate', `Start ${dayWords(4)}`)
+  await expect(draftDecisionChip(panel, 'startDate')).not.toContainText(' to ')
 
   await draftSend(panel).click()
   const body = await nthRequest(log, 'quickStart')
-  expect(body.taskMeta?.start_date).toBe(start)
-  expect(body.taskMeta?.end_date).toBe(isoDay(3))
+  expect(body.taskMeta?.start_date).toBe(isoDay(4))
+  expect(body.taskMeta?.end_date).toBeUndefined()
 })
 
 // ── C24: the Ask Walnut tab drops AI task fields; Start Task brings them back ─
@@ -383,7 +397,8 @@ test('Save as todo sends the chips\' tier, priority and due', async ({ page }) =
 
 // ── C59: priority follows ui.show_priority, and a flip re-derives the chip ────
 
-/** Real fixture write (merging the rest of `ui`), same as quick-start-footer-more-menu. */
+/** Real fixture write (merging the rest of `ui`): GET /api/config wraps the file
+ *  under `config`, and the merge keeps sibling keys alive. */
 async function setFixtureShowPriority(page: Page, on: boolean): Promise<void> {
   const body = (await (await page.request.get('/api/config')).json()) as { config?: { ui?: Record<string, unknown> } }
   const res = await page.request.put('/api/config', { data: { ui: { ...(body.config?.ui ?? {}), show_priority: on } } })
@@ -412,6 +427,9 @@ test('with priority hidden an "urgent" parse writes no priority; turning the set
     await expect(draftDecisionChip(panel2, 'priority')).toHaveCount(0)
     await setFixtureShowPriority(page, true)
     await expectAiChip(panel2, 'priority', 'Immediate')
+    // The draft's More draws its Priority row from the same live setting.
+    const menu = await openDraftSettings(panel2, 'more')
+    await expect(menu.locator('.task-kebab-priority-options button')).toHaveCount(4)
   } finally {
     await setFixtureShowPriority(page, false)
   }

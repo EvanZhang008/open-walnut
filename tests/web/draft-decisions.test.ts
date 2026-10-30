@@ -287,29 +287,3 @@ describe('legend and Walnut picks', () => {
     expect(dec.draftSuggestionLabel('dueDate', '2026-09-26', c)).toBe('Sat');
   });
 });
-
-describe('folder picker footer badge (C65)', () => {
-  it('counts a non-default field only when the user owns it, or edited it in this open', async () => {
-    const { metaFooterEditCount, withFooterEdits } = await import('@/components/sessions/path-selector/MetaFooter');
-    const aiDates = { ...DEFAULT_META, dueDate: '2026-09-26', startDate: '2026-09-25', priority: 'important' as const };
-    // No ownership map (a plain session launcher): every non-default field counts.
-    expect(metaFooterEditCount(aiDates, true)).toBe(3);
-    // A draft whose dates and priority the AI wrote: nothing is the user's.
-    expect(metaFooterEditCount(aiDates, true, {})).toBe(0);
-    expect(metaFooterEditCount(aiDates, true, { dueDate: 'user' })).toBe(1);
-    // Priority hidden: never counted, owned or not.
-    expect(metaFooterEditCount(aiDates, false, { priority: 'user' })).toBe(0);
-    // A toggle made in the footer during this open is the user's.
-    const edited = { ...aiDates, unread: true };
-    const owned = withFooterEdits({}, aiDates, edited);
-    expect(owned).toEqual({ unread: 'user' });
-    expect(metaFooterEditCount(edited, true, owned)).toBe(1);
-    // A footer date edit counts; start and end share the startDate owner.
-    const moved = { ...aiDates, startDate: '2026-09-28', endDate: '2026-09-29' };
-    expect(withFooterEdits({ dueDate: 'user' }, aiDates, moved)).toEqual({ dueDate: 'user', startDate: 'user' });
-    // Without a map or an open snapshot the map passes through unchanged.
-    expect(withFooterEdits(undefined, aiDates, edited)).toBeUndefined();
-    const seed = { pinTier: 'seed' as const };
-    expect(withFooterEdits(seed, null, edited)).toBe(seed);
-  });
-});

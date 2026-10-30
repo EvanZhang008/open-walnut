@@ -21,7 +21,7 @@ import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import type { WorkingDirEntry } from '@/api/sessions';
 import type { SessionMode, TaskPriority } from '@open-walnut/core';
 import type { FocusTier } from '@/api/focus';
-import { usedEngineIds, type LaunchEngine, type LaunchMemory } from '@/utils/engines';
+import type { LaunchEngine, LaunchMemory } from '@/utils/engines';
 import { classifyInput, resolveSpaceAmbiguity, deleteLastSegment, ghostSuffix, segmentCompletion, pathValidity, liveListingPrefix, HOME_LISTING_DIR, type InputState } from './path-selector/input-model';
 import { enterAction } from './path-selector/enter-action';
 import { buildQuickAccessSections } from './path-selector/quick-access';
@@ -38,9 +38,7 @@ import { capHistorySections, isMoreRow } from './path-selector/history-cap';
 import { useHistoryCap } from './path-selector/useHistoryCap';
 import { GhostTextInput } from './path-selector/GhostTextInput';
 import { PathList } from './path-selector/PathList';
-import { MetaFooter, withFooterEdits } from './path-selector/MetaFooter';
 import { freshLauncherMeta } from './task-meta-constants';
-import type { DraftFieldOwner, DraftOwnedField } from './draft-column';
 
 export interface QuickStartPath {
   cwd: string;
@@ -52,7 +50,7 @@ export interface QuickStartPath {
   createCwd?: boolean;
 }
 
-/** Task metadata the user sets in the session-launcher footer. Applied to the new task on quick-start.
+/** Task metadata of a launch (the draft row's meta). Applied to the new task on quick-start.
  *  This is the UI state shape (all fields required so React controlled inputs stay stable).
  *  The wire-format counterpart in `@/api/sessions` has every field optional — see that file. */
 export interface QuickStartTaskMeta {
@@ -85,7 +83,7 @@ interface Props {
   open: boolean;
   onClose: () => void;
   onSelect: (path: QuickStartPath, taskMeta: QuickStartTaskMeta) => void;
-  /** Meta to seed the footer with on open — the host row's CURRENT meta, so a tier
+  /** Meta the picker hands back on confirm: the host row's CURRENT meta, so a tier
    *  "+" seed, an AI-filled date or a prior pick survives the trip through the
    *  picker instead of silently resetting to the defaults (the draft column draws
    *  no meta of its own any more, so a reset there would be invisible).
@@ -94,7 +92,7 @@ interface Props {
   initialMeta?: QuickStartTaskMeta;
   /** The user already chose the model/engine on the host row (the draft's
    *  `metaTouched`): keep their pick, never apply a directory's remembered launch
-   *  config on top of it. Default false — launch memory previews and applies. */
+   *  config on top of it. Default false: the picked folder's launch memory applies. */
   lockLaunchMemory?: boolean;
   /** Path to seed on open (e.g. re-opening to edit an already-confirmed Quick Start).
    *  When set, the picker opens directly in edit mode with this cwd pre-filled and the
@@ -114,22 +112,17 @@ interface Props {
    *  simply escapes the ~300px column that can't contain it. Must be
    *  referentially stable. Omit → the classic `bottom: 100%` popover. */
   popoutAnchor?: RefObject<HTMLElement | null>;
-  /** Per-field owners of the host draft's task fields, passed through to the
-   *  footer so its More badge counts only what the user changed (MetaFooter). */
-  ownedFields?: Readonly<Partial<Record<DraftOwnedField, DraftFieldOwner>>>;
 }
 
 
 export function SessionPathSelector({
   open, onClose, onSelect, initialMeta, lockLaunchMemory = false, initialPath, confirmOnDismiss = true, popoutAnchor,
-  ownedFields,
 }: Props) {
   const navigate = useNavigate();
   // History + all hosts from config.hosts (a freshly added remote host must show
   // as a tab even before its first session exists, else the user can't ever start
   // one). Cached answer at once, refetched on every open and on a host change.
   const { dirs, hosts: configuredHosts, loading, error } = useWorkingDirs(open);
-  const usedEngines = useMemo(() => usedEngineIds(dirs), [dirs]);
   const [query, setQuery] = useState('');
   const [selectedIdx, setSelectedIdx] = useState(0);
   // How the current highlight was placed. Mouse hover must NOT expand the row
@@ -140,24 +133,14 @@ export function SessionPathSelector({
   const [editMode, setEditMode] = useState(false);
   const [editingPath, setEditingPath] = useState('');
 
-  // Task metadata the user picks in the footer — applied to the new task when the session starts.
-  // Each open starts from the host row's current meta (initialMeta) or, without a
-  // host, from the plain defaults (freshLauncherMeta — nothing is sticky).
+  // Task metadata handed back on confirm. The picker only picks a folder and a
+  // host (user, 2026-10-29: engine and pin live in the draft's More and the
+  // composer's model pill), so this is the host row's meta as it was at open
+  // (initialMeta) or the plain defaults, plus the picked folder's launch memory.
   const [meta, setMeta] = useState<QuickStartTaskMeta>(initialMeta ?? freshLauncherMeta);
-  // True once the user touches the model/engine controls during THIS open —
-  // their explicit pick (including an explicit reset to Auto) beats the
-  // per-directory launch memory applied at confirm time.
-  const launchTouchedRef = useRef(false);
   // Same read-latest-without-deps pattern as initialMetaRef below.
   const lockLaunchMemoryRef = useRef(lockLaunchMemory);
   lockLaunchMemoryRef.current = lockLaunchMemory;
-  const handleMetaChange = useCallback((updater: (m: QuickStartTaskMeta) => QuickStartTaskMeta) => {
-    setMeta(prev => {
-      const next = updater(prev);
-      if (next.model !== prev.model || next.engine !== prev.engine) launchTouchedRef.current = true;
-      return next;
-    });
-  }, []);
   // Read latest initialMeta inside the open effect without adding it to that effect's
   // deps (which would re-trigger the history fetch/pre-warm on every parent re-render).
   const initialMetaRef = useRef(initialMeta);
@@ -165,13 +148,6 @@ export function SessionPathSelector({
   // Same ref pattern for initialPath — read in the open effect, kept out of its deps.
   const initialPathRef = useRef(initialPath);
   initialPathRef.current = initialPath;
-  // The meta this open started from. A footer edit made during the open is the
-  // user's too: the More badge counts it before the confirm rebases it in.
-  const openedMetaRef = useRef<QuickStartTaskMeta | null>(null);
-  const footerOwned = useMemo(
-    () => withFooterEdits(ownedFields, openedMetaRef.current, meta),
-    [ownedFields, meta],
-  );
 
   const searchRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -208,10 +184,7 @@ export function SessionPathSelector({
     if (!open) return;
     setQuery('');
     setSelectedIdx(0);
-    const startMeta = initialMetaRef.current ?? freshLauncherMeta();
-    openedMetaRef.current = startMeta;
-    setMeta(startMeta);
-    launchTouchedRef.current = false;
+    setMeta(initialMetaRef.current ?? freshLauncherMeta());
     // Re-opening to edit a confirmed selection: open straight into edit mode with the
     // path pre-filled and its host tab active — an "edit this selection" view. Without
     // a seed path, fall back to the blank browse view (fresh /session invocation).
@@ -551,41 +524,15 @@ export function SessionPathSelector({
   }, [selectedIdx]);
 
   // Per-directory launch memory: merge the remembered model/engine of the picked
-  // directory into the footer meta — unless the user explicitly touched those
-  // controls this open (their pick wins, including an explicit reset to Auto),
-  // or the host row says they already chose (lockLaunchMemory). Only model and
-  // engine move: the rest of the meta (tier, dates, priority, unread) is the
-  // host row's and rides through untouched.
-  // No memory on the picked dir → reset to Auto/Claude so a preview from a
-  // previously highlighted row can't leak onto an unrelated directory.
+  // directory into the meta, unless the host row says the user already chose
+  // (lockLaunchMemory). Only model and engine move: the rest of the meta (tier,
+  // dates, priority, unread) is the host row's and rides through untouched.
+  // No memory on the picked dir → reset to Auto/Claude, so the previous folder's
+  // memory never leaks onto an unrelated directory.
   const withLaunchMemory = useCallback((launch: LaunchMemory | undefined): QuickStartTaskMeta => {
-    if (launchTouchedRef.current || lockLaunchMemoryRef.current) return meta;
+    if (lockLaunchMemoryRef.current) return meta;
     return { ...meta, model: launch?.model, engine: launch?.engine };
   }, [meta]);
-
-  // Live preview: the footer shows the remembered launch config of the CURRENT
-  // TARGET directory — what you see is what will launch. The target is:
-  //  - browse mode: the highlighted row
-  //  - edit mode: the typed path itself (clicking a history row drills into
-  //    edit mode where the highlight moves to live CHILD dirs — previewing
-  //    those would wrongly reset the footer to Auto; the launch target is the
-  //    typed path, so its memory drives the preview). Host match mirrors
-  //    handleConfirm: the explicit tab is host authority, All infers.
-  useEffect(() => {
-    if (!open || launchTouchedRef.current || lockLaunchMemoryRef.current) return;
-    let launch: LaunchMemory | undefined;
-    if (editMode) {
-      const trimmed = editingPath.replace(/\/+$/, '') || '/';
-      const match = tabInfersHost(hostFilter)
-        ? historyForTab(dirs, hostFilter, tabsModel.removedHosts).find(d => d.cwd === trimmed)
-        : dirs.find(d => d.cwd === trimmed && (d.host ?? null) === currentHost);
-      launch = match?.lastLaunch;
-    } else {
-      launch = flatItems[selectedIdx]?.history?.lastLaunch;
-    }
-    setMeta(m => (m.model === launch?.model && m.engine === launch?.engine)
-      ? m : { ...m, model: launch?.model, engine: launch?.engine });
-  }, [open, editMode, editingPath, dirs, hostFilter, currentHost, flatItems, selectedIdx, tabsModel.removedHosts]);
 
   const handleSelect = useCallback((d: RankedItem) => {
     onSelect({
@@ -625,8 +572,8 @@ export function SessionPathSelector({
       host,
       hostLabel: hostTabs.find(t => t.key === createTarget)?.label,
       createCwd: true,
-      // Brand-new dir → no launch memory; withLaunchMemory(undefined) clears any
-      // leaked highlight preview (user-touched picks still win inside it).
+      // Brand-new dir → no launch memory; withLaunchMemory(undefined) resets the
+      // model/engine to Auto/Claude (unless the host row locked them).
     }, withLaunchMemory(undefined));
   }, [createOption, createTarget, onSelect, hostTabs, withLaunchMemory]);
 
@@ -808,10 +755,6 @@ export function SessionPathSelector({
     if (!open) return;
     const handler = (e: MouseEvent) => {
       const t = e.target as HTMLElement;
-      // The footer's More menu and its date calendars are <body> portals —
-      // NOT descendants of popoverRef. Without these exemptions a click inside
-      // either (picking a priority, choosing a date) dismissed the whole picker.
-      if (t.closest?.('.sps-meta-more-popover') || t.closest?.('.dp-popover')) return;
       if (popoverRef.current && !popoverRef.current.contains(t)) {
         handleDismiss();
       }
@@ -969,11 +912,6 @@ export function SessionPathSelector({
         <kbd>↑↓</kbd> navigate · <kbd>Enter</kbd> select or use path · <kbd>→</kbd> complete · <kbd>⇧Enter</kbd> start session · <kbd>Esc</kbd> close
       </div>
 
-      {/* Task metadata footer — applied to the new task on quick-start.
-          Compact single row in edit mode: space goes back to the path list.
-          host: the active tab's host drives which catalog fills the model
-          dropdown ('all' tab → local catalog, the overwhelmingly common case). */}
-      <MetaFooter meta={meta} onChange={handleMetaChange} compact={editMode} host={currentHost} ownedFields={footerOwned} usedEngines={usedEngines} />
     </div>
   );
 

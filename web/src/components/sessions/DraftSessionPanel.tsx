@@ -51,7 +51,7 @@ import { useQuickParseEnabled, setQuickParseEnabled, ensureQuickParseLoaded } fr
 import { useSlashCommands } from '@/hooks/useSlashCommands';
 import { DraftLaunchBar } from './DraftLaunchBar';
 import { HostGateErrorBar, useRestoreImages, type DraftGateError } from './HostGateErrorBar';
-import { useModelOptions } from './path-selector/MetaFooter';
+import { useModelOptions } from './path-selector/model-options';
 import { useEnabledModes } from '@/hooks/useEnabledModes';
 import { nextSessionMode } from './session-mode-cycle';
 import { DEFAULT_SESSION_MODE, SESSION_MODES, SESSION_MODE_LABELS, type SessionMode } from '@open-walnut/core';
@@ -160,7 +160,7 @@ function DraftModelPill({ meta, onMetaChange, host, cwd, walnut, fork }: {
   const catalog = useEngineCatalog();
   // The engine that will actually launch — a remote tab launches the default
   // engine (ACP engines are local-only; quick-start drops a stale flag). Same
-  // rule as EngineToggle and MainPage's launch payload: resolveEngineForHost.
+  // rule as MainPage's launch payload: resolveEngineForHost.
   // Walnut mode pins claude outright: the launch payload drops meta.engine, so
   // showing a remembered ACP engine here would be the pill lying about launch.
   const engine = walnut ? 'claude' : resolveEngineForHost(meta.engine, host, catalog);
@@ -301,8 +301,8 @@ interface Props {
    *  slot's session switcher), so the draft header reads like the session header
    *  it is about to become. */
   headerLeading?: ReactNode;
-  /** A folder pick. `openedMeta` is the meta the full picker opened with (its
-   *  footer edits are rebased per field against it); a quick folder chip omits it. */
+  /** A folder pick. `openedMeta` is the meta the full picker opened with (what it
+   *  returns is rebased per field against it); a quick folder chip omits it. */
   onPathChange: (draftId: string, path: QuickStartPath, meta: QuickStartTaskMeta, openedMeta?: QuickStartTaskMeta) => void;
   onProjectChange: (draftId: string, project: string) => void;
   /** Model / engine edit from the composer's model pill. Takes an UPDATER (not a
@@ -440,9 +440,10 @@ export function DraftSessionPanel({
 
   // A bound draft's task EXISTS: the header gets its real kebab (live writes; pin
   // state from the Focus Bar store). A plain draft edits its task fields from the
-  // launch bar (chips + More). Fork (inherits its meta), repair (server-filed) and
+  // launch bar (chips + More), and so does a repair (its project is the server's,
+  // so its More has no Project row: DraftLaunchBar). Fork (inherits its meta) and
   // the chat slot's fixed-walnut draft (no toggle, minimal by design) get neither.
-  const showDraftMenu = !isBound && !isFork && !isRepair && (!!onWalnutToggle || !isWalnut);
+  const showDraftMenu = !isBound && !isFork && (!!onWalnutToggle || !isWalnut);
   // Mod+. in the composer opens More (keyboard focus rules): the Mac app's web
   // view skips buttons on Tab without Full Keyboard Access.
   const [openMenuNonce, setOpenMenuNonce] = useState(0);

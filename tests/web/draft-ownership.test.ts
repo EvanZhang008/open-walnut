@@ -297,6 +297,23 @@ describe('More: an edit owns that field only', () => {
     expect(next.aiSuggested?.pinTier).toBe('wait');
   });
 
+  it('an End edit keeps the start and makes the pair the user\'s; with no start it is a no-op', () => {
+    const ai = applyDraftParse(draft(), { start_date: '2026-08-14T15:00', end_date: '2026-08-14T17:00', legs: OK }, noDefaults);
+    const moved = own.applyDraftTaskFieldEdit(ai, { endDate: '2026-08-14T18:00' });
+    expect(moved.meta.startDate).toBe('2026-08-14T15:00');
+    expect(moved.meta.endDate).toBe('2026-08-14T18:00');
+    expect(moved.fieldOwner).toEqual({ startDate: 'user' });
+    expect(aiOf(moved)).not.toContain('startDate');
+    // A later parse leaves the user's pair alone.
+    const later = applyDraftParse(moved, { start_date: '2026-08-16T09:00', end_date: '2026-08-16T10:00', legs: OK }, noDefaults);
+    expect([later.meta.startDate, later.meta.endDate]).toEqual(['2026-08-14T15:00', '2026-08-14T18:00']);
+    const cleared = own.applyDraftTaskFieldEdit(moved, { endDate: undefined });
+    expect(cleared.meta.startDate).toBe('2026-08-14T15:00');
+    expect(cleared.meta.endDate).toBeUndefined();
+    const none = draft();
+    expect(own.applyDraftTaskFieldEdit(none, { endDate: '2026-08-14T18:00' })).toBe(none);
+  });
+
   it('clearing is an edit too (owned, empty, no chip value); a start edit drops the end', () => {
     const ai = applyDraftParse(draft(), { start_date: '2026-08-14T15:00', end_date: '2026-08-14T17:00', legs: OK }, noDefaults);
     const cleared = own.applyDraftTaskFieldEdit(ai, { startDate: undefined, priority: undefined, pinTier: undefined });

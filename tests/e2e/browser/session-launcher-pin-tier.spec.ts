@@ -2,7 +2,7 @@
  * Session launcher pin tier — the default and its deliberate NON-stickiness,
  * driven through the real UI.
  *
- * Three rounds of history. First the launcher always opened pinned to Focus with
+ * Four rounds of history. First the launcher always opened pinned to Focus with
  * the tier picker buried in "More", so every launch cost a trip into the menu to
  * move the task out of Focus. The fix that replaced it (remember the last tier
  * picked, mirrored across browsers) had the same shape of bug one level up: one
@@ -10,139 +10,136 @@
  * on Focus. So the default became Satellite with a visible one-click picker in the
  * draft column. Then (2026-09-15) the user asked for that picker row to go
  * altogether ("complicated for people") and for every new task to land in Focus:
- * the default is Focus again, but this time NOTHING is remembered and the only
- * up-front override left is the folder picker's footer, which this spec drives.
+ * the default is Focus again, and NOTHING is remembered. The folder picker's
+ * footer kept a tier row for a while; it is gone too, so the one place a launch's
+ * tier is changed is the draft's More menu (or the tier chip, same menu), which
+ * this spec drives.
  *
  * Asserts what the user sees:
- *   1. the tier picker sits in the picker footer's PRIMARY row (no More click),
- *   2. every launcher defaults to Focus,
- *   3. a pick applies to THAT launch only — a fresh "+" is back on Focus,
- *   4. the picked tier reaches the quick-start payload,
- *   5. an explicit unpin reaches it as `null`, not as an omitted field.
+ *   1. every launcher defaults to Focus,
+ *   2. a pick applies to THAT launch only — a fresh "+" is back on Focus,
+ *   3. the default and a More pick both reach the quick-start payload,
+ *   4. an explicit unpin reaches it as `null`, not as an omitted field.
+ *
+ * No pref seeding anywhere in this file. That was pure defence against a synced
+ * sticky-tier value the SHARED fixture server carried between specs — with the
+ * stickiness gone there is no such value, which is itself part of the win: one
+ * spec's tier pick can no longer decide what another spec calls "a fresh browser".
  */
 
 import { test, expect, type Locator, type Page } from '@playwright/test'
-import { draftPanel, draftPanels, openDraft } from './draft-helpers'
+import { draftCwdPill, draftPanel, draftPanels, draftTaskMenu, openDraft, openDraftSettings } from './draft-helpers'
 
-/**
- * Open a FRESH launcher: "+" grows a draft session column, and its cwd pill opens
- * the same picker (unchanged `.sps-*` markup, footer included).
- *
- * Both handles are returned because the two live in different places: the tier
- * picker is inside the popover, while the message that actually launches is typed
- * in the draft column's own composer.
- *
- * No pref seeding anywhere in this file any more. That was pure defence against a
- * synced sticky-tier value the SHARED fixture server carried between specs — with
- * the stickiness gone there is no such value, which is itself part of the win: one
- * spec's tier pick can no longer decide what another spec calls "a fresh browser".
- */
-async function openLauncher(page: Page): Promise<{ panel: Locator; selector: Locator }> {
-  const panel = await openDraft(page)
-  await panel.locator('.draft-composer-bar .session-action-chip').first().click()
-  const selector = page.locator('.session-path-selector')
-  await expect(selector).toBeVisible({ timeout: 10_000 })
-  return { panel, selector }
+const TIERS = ['Focus', 'Satellite', 'Parked'] as const
+
+/** One tier button of the open More menu (the label sits after an icon span). */
+const tierBtn = (menu: Locator, label: string): Locator =>
+  menu.locator('.task-kebab-tier-btn').filter({ hasText: label })
+
+/** Open the draft's More menu, check which tier is lit (null = unpinned), close it. */
+async function expectLitTier(panel: Locator, lit: (typeof TIERS)[number] | null): Promise<void> {
+  const menu = await openDraftSettings(panel, 'more')
+  for (const label of TIERS) {
+    // Only the lit tier carries aria-pressed; the others have no attribute at all.
+    if (label === lit) await expect(tierBtn(menu, label)).toHaveAttribute('aria-pressed', 'true')
+    else await expect(tierBtn(menu, label)).not.toHaveAttribute('aria-pressed', 'true')
+  }
+  await expect(menu.locator('.task-kebab-tier-btn[aria-pressed="true"]')).toHaveCount(lit ? 1 : 0)
+  await panel.page().keyboard.press('Escape')
+  await expect(draftTaskMenu(panel.page())).toHaveCount(0)
+}
+
+/** Click one tier in the draft's More menu (the menu closes on the pick). */
+async function pickTier(panel: Locator, label: (typeof TIERS)[number]): Promise<void> {
+  const menu = await openDraftSettings(panel, 'more')
+  await tierBtn(menu, label).click()
+  await expect(draftTaskMenu(panel.page())).toHaveCount(0)
 }
 
 /**
- * Discard the launcher, popover AND draft column.
- *
- * The column has to go, not just the popover: a draft snapshots its launch meta
- * ONCE, when it is created (freshLauncherMeta), and the picker is seeded from that
- * snapshot (initialMeta). Re-opening the picker on the SAME draft replays the
- * snapshot, so only a fresh "+" is really "open the launcher again". Closing the
- * draft is also the gesture a user has for "never mind", so this stays real UI.
+ * Discard the draft column. A draft snapshots its launch meta ONCE, when it is
+ * created (freshLauncherMeta), so only a fresh "+" is really "open the launcher
+ * again". Closing the draft is also the gesture a user has for "never mind", so
+ * this stays real UI.
  */
 async function closeLauncher(page: Page) {
-  // Dismiss the popout picker FIRST — anchored to the pill it can float over
-  // the draft's ✕ (Playwright then reports the panel intercepting the click).
-  // A raw click outside the panel is the dismiss gesture; the outside-click
-  // listener attaches on a 100ms timer, so poll until it lands.
-  await expect(async () => {
-    if (await page.locator('.session-path-selector').count() > 0) {
-      await page.mouse.click(10, 10)
-    }
-    await expect(page.locator('.session-path-selector')).toHaveCount(0, { timeout: 500 })
-  }).toPass({ timeout: 10_000 })
   await draftPanel(page).locator('.session-panel-close').click()
   await expect(draftPanels(page)).toHaveCount(0)
+}
+
+/**
+ * Point the draft at /tmp through the folder picker, send one message from the
+ * draft's own composer, and return the quick-start body. The composer is the
+ * DRAFT column's, not the main chat's — the latter would message the Personal AI
+ * and the launch would never fire.
+ */
+async function launchAndCapture(page: Page, panel: Locator, text: string): Promise<{ taskMeta?: Record<string, unknown> }> {
+  await draftCwdPill(panel).click()
+  const selector = page.locator('.session-path-selector')
+  await expect(selector).toBeVisible({ timeout: 10_000 })
+  // The picker picks a folder and a host only: no tier row in it any more.
+  await expect(selector.locator('.pin-tier-options, .task-kebab-tier-btn')).toHaveCount(0)
+  const input = selector.locator('.sps-search input').first()
+  await input.click()
+  await input.fill('/tmp/')
+  const go = selector.locator('.sps-status-btn')
+  await expect(go).toBeVisible({ timeout: 10_000 })
+  await go.click()
+  await expect(selector).toBeHidden()
+
+  const launchRequest = page.waitForRequest(req =>
+    req.url().includes('/api/sessions/quick-start') && req.method() === 'POST', { timeout: 20_000 })
+  const chatInput = panel.locator('.chat-input-textarea')
+  await expect(chatInput).toBeVisible({ timeout: 10_000 })
+  await chatInput.click()
+  await chatInput.fill(text)
+  await chatInput.press('Enter')
+  return (await launchRequest).postDataJSON() as { taskMeta?: Record<string, unknown> }
 }
 
 test('launcher defaults to Focus, and a pick lasts exactly one launch', async ({ page }) => {
   await page.goto('/')
 
-  let { selector } = await openLauncher(page)
-  let tiers = selector.getByRole('group', { name: 'Pin new task to tier' })
-
-  // 1 + 2: visible in the primary row (no More menu click) and defaulting to Focus.
-  await expect(tiers).toBeVisible()
-  await expect(tiers.getByRole('button', { name: 'Focus' })).toHaveAttribute('aria-pressed', 'true')
-  await expect(tiers.getByRole('button', { name: 'Satellite' })).toHaveAttribute('aria-pressed', 'false')
+  let panel = await openDraft(page)
+  // 1: a fresh draft is on Focus.
+  await expectLitTier(panel, 'Focus')
   await page.screenshot({ path: '/tmp/launcher-pin-tier/default-focus.png' })
 
   // The pick lands on THIS draft.
-  await tiers.getByRole('button', { name: 'Parked' }).click()
-  await expect(tiers.getByRole('button', { name: 'Parked' })).toHaveAttribute('aria-pressed', 'true')
-  await expect(tiers.getByRole('button', { name: 'Focus' })).toHaveAttribute('aria-pressed', 'false')
+  await pickTier(panel, 'Parked')
+  await expectLitTier(panel, 'Parked')
 
-  // 3: THE regression guard. A fresh launcher is back on Focus — the previous
+  // 2: THE regression guard. A fresh launcher is back on Focus — the previous
   // pick was for that launch, not a preference. This is the assertion that once
   // read the other way round (expecting Wait), and flipping it was the whole change.
   await closeLauncher(page)
-  ;({ selector } = await openLauncher(page))
-  tiers = selector.getByRole('group', { name: 'Pin new task to tier' })
-  await expect(tiers.getByRole('button', { name: 'Focus' })).toHaveAttribute('aria-pressed', 'true')
-  await expect(tiers.getByRole('button', { name: 'Parked' })).toHaveAttribute('aria-pressed', 'false')
+  panel = await openDraft(page)
+  await expectLitTier(panel, 'Focus')
   await page.screenshot({ path: '/tmp/launcher-pin-tier/fresh-back-to-focus.png' })
 
   // Clicking the active tier unpins — and THAT does not persist either.
-  await tiers.getByRole('button', { name: 'Focus' }).click()
-  for (const label of ['Focus', 'Satellite', 'Parked']) {
-    await expect(tiers.getByRole('button', { name: label })).toHaveAttribute('aria-pressed', 'false')
-  }
+  await pickTier(panel, 'Focus')
+  await expectLitTier(panel, null)
   await closeLauncher(page)
-  ;({ selector } = await openLauncher(page))
-  tiers = selector.getByRole('group', { name: 'Pin new task to tier' })
-  await expect(tiers.getByRole('button', { name: 'Focus' })).toHaveAttribute('aria-pressed', 'true')
+  panel = await openDraft(page)
+  await expectLitTier(panel, 'Focus')
 })
 
-test('the launcher sends the picked tier in the quick-start payload', async ({ page }) => {
+test('the launcher sends the default tier in the quick-start payload', async ({ page }) => {
   await page.goto('/')
-
-  const { panel, selector } = await openLauncher(page)
-  const tiers = selector.getByRole('group', { name: 'Pin new task to tier' })
-  await expect(tiers.getByRole('button', { name: 'Focus' })).toHaveAttribute('aria-pressed', 'true')
-
-  // Pick a folder → the popover closes onto the draft's cwd pill, and the first
-  // message launches. The payload is the contract the server pins from.
-  const input = selector.locator('.sps-search input').first()
-  await input.click()
-  await input.fill('/tmp/')
-  const firstRow = selector.locator('.sps-path-item').first()
-  if (await firstRow.count() > 0) {
-    await firstRow.click()
-  }
-  const go = selector.locator('.sps-status-btn')
-  await expect(go).toBeVisible({ timeout: 10_000 })
-
-  const launchRequest = page.waitForRequest(req =>
-    req.url().includes('/api/sessions/quick-start') && req.method() === 'POST', { timeout: 20_000 })
-  await go.click()
-  await expect(selector).toBeHidden()
-
-  // The DRAFT column's composer, not the main chat's — the latter would message
-  // the Personal AI and this spec would wait 20s for a quick-start that never fires.
-  const chatInput = panel.locator('.chat-input-textarea')
-  await expect(chatInput).toBeVisible({ timeout: 10_000 })
-  await chatInput.click()
-  await chatInput.fill(`pin tier payload probe ${Date.now()}`)
-  await chatInput.press('Enter')
-
-  const payload = (await launchRequest).postDataJSON() as {
-    taskMeta?: { pinTier?: string | null }
-  }
+  const panel = await openDraft(page)
+  const payload = await launchAndCapture(page, panel, `pin tier payload probe ${Date.now()}`)
   expect(payload.taskMeta?.pinTier).toBe('focus')
+})
+
+test('a tier picked in More rides the quick-start payload, through the folder pick', async ({ page }) => {
+  await page.goto('/')
+  const panel = await openDraft(page)
+  // Picked BEFORE the folder: the folder pick must not write the tier back.
+  await pickTier(panel, 'Parked')
+  const payload = await launchAndCapture(page, panel, `pin tier pick probe ${Date.now()}`)
+  // Parked is the board's `wait` tier.
+  expect(payload.taskMeta?.pinTier).toBe('wait')
 })
 
 /**
@@ -153,35 +150,12 @@ test('the launcher sends the picked tier in the quick-start payload', async ({ p
  */
 test('an explicit unpin is sent as null, not dropped from the payload', async ({ page }) => {
   await page.goto('/')
-
-  const { panel, selector } = await openLauncher(page)
-  const tiers = selector.getByRole('group', { name: 'Pin new task to tier' })
+  const panel = await openDraft(page)
   // Click the ACTIVE tier to toggle it off — the "don't pin this one" gesture.
-  await tiers.getByRole('button', { name: 'Focus' }).click()
-  await expect(tiers.getByRole('button', { name: 'Focus' })).toHaveAttribute('aria-pressed', 'false')
+  await pickTier(panel, 'Focus')
+  await expectLitTier(panel, null)
 
-  const input = selector.locator('.sps-search input').first()
-  await input.click()
-  await input.fill('/tmp/')
-  const go = selector.locator('.sps-status-btn')
-  await expect(go).toBeVisible({ timeout: 10_000 })
-
-  const launchRequest = page.waitForRequest(req =>
-    req.url().includes('/api/sessions/quick-start') && req.method() === 'POST', { timeout: 20_000 })
-  await go.click()
-  await expect(selector).toBeHidden()
-
-  // Scoped to the draft column (see the sibling test) — the main chat composer
-  // does not launch sessions.
-  const chatInput = panel.locator('.chat-input-textarea')
-  await expect(chatInput).toBeVisible({ timeout: 10_000 })
-  await chatInput.click()
-  await chatInput.fill(`explicit unpin probe ${Date.now()}`)
-  await chatInput.press('Enter')
-
-  const raw = (await launchRequest).postDataJSON() as {
-    taskMeta?: Record<string, unknown>
-  }
+  const raw = await launchAndCapture(page, panel, `explicit unpin probe ${Date.now()}`)
   // The KEY must be present and null — `toBeUndefined()` would also pass on a
   // dropped field, which is exactly the bug.
   expect(raw.taskMeta).toBeDefined()

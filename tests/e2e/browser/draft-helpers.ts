@@ -10,8 +10,9 @@
  *
  * Driving idiom copied verbatim from tests/e2e/browser/session-path-selector.spec.ts
  * and codex-lifecycle.spec.ts: switch to the Local host tab when the fixture is in
- * multi-host mode, optionally flip the engine toggle, fill `.sps-search-input`
- * with the absolute path, then Shift+Enter to confirm. The only difference is
+ * multi-host mode, fill `.sps-search-input` with the absolute path, then
+ * Shift+Enter to confirm (an engine is picked afterwards on the composer's model
+ * pill, `pickDraftEngine`: the picker only picks a folder and a host). The only difference is
  * SCOPE — every locator is rooted at the draft panel, because several draft
  * columns (plus the chat-anchored picker) can be mounted at once and a bare
  * document-level `.sps-search-input` would grab whichever renders first.
@@ -321,9 +322,10 @@ export async function expectV4Stack(panel: Locator): Promise<void> {
   //    Read as top edges so the assertion survives restyling. The chips are the
   //    TOP row — that row's CONTENT churns (top-4 by use + 4 most recent), so it
   //    must not sit where the user aims for the fixed controls; the pills stay
-  //    glued to the composer. There is NO tier/More row between them any more
-  //    (removed 2026-09-15, "complicated for people"); the count assertions
-  //    below keep it from growing back under its old class names.
+  //    glued to the composer. There is NO tier row between them any more
+  //    (removed 2026-09-15, "complicated for people"; the tier lives in the
+  //    draft's More menu); the count assertion below keeps the shared tier
+  //    picker from growing back into the bar.
   const [hintY, chipsY, pillsY, composerY] = await Promise.all([
     topOf(body.locator('.draft-intent-stack, .draft-quick-hint'), 'the body block'),
     // The whole quick GROUP (its caption + the chips), which is what row 1 is now.
@@ -334,7 +336,7 @@ export async function expectV4Stack(panel: Locator): Promise<void> {
   expect(hintY, 'the body block sits above the launch stack').toBeLessThan(chipsY)
   expect(chipsY, 'quick-access chips are the TOP row of the stack').toBeLessThan(pillsY)
   expect(pillsY, 'the pills are the LAST row before the composer').toBeLessThan(composerY)
-  await expect(bar.locator('.sps-meta-footer, .pin-tier-options, .sps-meta-more-btn')).toHaveCount(0)
+  await expect(bar.locator('.pin-tier-options')).toHaveCount(0)
 
   // 4. The folder pill starts at the row's left edge. The project chip (present
   //    once there is a project) follows it: on the same line in a wide column,
@@ -370,9 +372,9 @@ export async function expectV4Stack(panel: Locator): Promise<void> {
     .toBeLessThan(firstChip.y)
 
   // 4c. The provider question is asked ONCE, in the composer's model picker: the
-  //     model pill below opens a provider rail, so no segmented engine toggle
-  //     anywhere in the bar (user feedback, back when the meta row still existed).
-  await expect(bar.locator('.sps-engine-toggle')).toHaveCount(0)
+  //     model pill below opens a provider rail (`draftEngineButton`), so neither
+  //     the rail nor the model pill is drawn in the bar itself.
+  await expect(bar.locator('.provider-rail-item, .draft-model-select')).toHaveCount(0)
 
   // 5. The launch controls moved into the COMPOSER's controls row, in a running
   //    session's order: the permission-mode pill first (2026-10-01: a launch
@@ -414,8 +416,9 @@ export async function openDraft(page: Page): Promise<Locator> {
  * Open a draft column and point it at `cwd` through the real folder picker.
  *
  * Steps, all real UI: toolbar "+" → the cwd pill in the draft's launch stack →
- * (optional) engine toggle → type the path → Shift+Enter to confirm. Returns the
- * draft panel so callers can keep working inside it.
+ * type the path → Shift+Enter to confirm → (optional) the engine on the
+ * composer's model pill. Returns the draft panel so callers can keep working
+ * inside it.
  *
  * `cwd` must be an ABSOLUTE path that exists on disk (specs derive it from the
  * fixture root via /api/sessions/working-dirs): a path the live listing calls
@@ -435,6 +438,12 @@ export async function openDraftOnCwd(
  * Point an OPEN draft at `cwd` through the full folder picker (cwd pill → type →
  * Shift+Enter). The picker's onSelect meta replaces the row's wholesale, so this
  * is also the path a seeded tier or an AI-filled date has to survive.
+ *
+ * `opts.engine` is picked AFTER the folder, on the composer's model pill (the
+ * folder picker only picks a folder and a host). After, not before: the pick
+ * lands on the folder's host (Local here), where an engine that is local-only is
+ * never locked, and a pill pick sets `metaTouched`, so it also wins over the
+ * folder's launch memory that the folder pick just applied.
  */
 export async function pickDraftFolder(
   page: Page,
@@ -465,9 +474,9 @@ export async function pickDraftFolder(
   const localTab = picker.locator('.sps-host-tab', { hasText: 'Local' })
   if (await localTab.isVisible()) await localTab.click()
 
-  if (opts.engine === 'Codex') {
-    await picker.locator('.sps-engine-toggle .sps-engine-btn', { hasText: 'Codex' }).click()
-  }
+  // The picker picks a folder and a host, nothing else: the task fields live in
+  // the draft's More menu and the engine on the composer's model pill.
+  await expect(picker.locator('.pin-tier-options, .provider-rail-item')).toHaveCount(0)
 
   const input = picker.locator('.sps-search-input')
   await input.fill(cwd)
@@ -478,6 +487,8 @@ export async function pickDraftFolder(
   // landed on THIS draft (a stale pill means onPathChange never fired).
   await expect(picker).toBeHidden()
   await expect(draftCwdPill(panel)).toContainText(basenameOf(cwd))
+
+  if (opts.engine === 'Codex') await pickDraftEngine(page, panel, 'codex')
 }
 
 /** Folder basename — the cwd pill's label, and (in v4) the WHOLE label of a
@@ -906,19 +917,47 @@ export async function typeAndSettle(page: Page, mock: ParseMock, text: string): 
   await page.waitForTimeout(250)
 }
 
+/** The composer model picker (portalled to <body>, so PAGE scoped). Only one
+ *  can be open at a time. */
+export const draftModelPicker = (page: Page): Locator => page.locator('.model-picker')
+
 /**
- * An engine button in the folder picker's footer. Claude, Codex, engines used
- * before and the current pick sit in the footer row; every other engine sits in
- * the footer's More (2026-09-25). Opens More when the engine is not up front.
- * Waits for the engine catalog first: before it lands only the compiled-in pair
- * exists, and More (engines beyond the pair) is not drawn yet.
+ * One engine's button in the provider rail of the draft composer's model picker
+ * (`.provider-rail-item[data-provider=<engineId>]`, role tab, `aria-selected`
+ * when it is the engine the launch will use). Opens the picker from the model
+ * pill when it is not open yet, and leaves it open.
+ *
+ * Waits for the button itself: before GET /api/engines lands only the
+ * compiled-in pair (claude, codex) has a row, the rest appear one commit later.
+ * A locked engine (not installed, local-only on a remote host, a fork, Ask
+ * Walnut) is still drawn: `provider-rail-item-locked`, `aria-disabled="true"`,
+ * and the reason as its `title`.
  */
-export async function footerEngineButton(page: Page, picker: Locator, name: string | RegExp): Promise<Locator> {
-  const primary = picker.locator('.sps-meta-footer .sps-engine-toggle .sps-engine-btn', { hasText: name })
-  const moreBtn = picker.locator('.sps-meta-more-btn')
-  await expect.poll(async () => (await primary.count()) > 0 || (await moreBtn.count()) > 0, { timeout: 15_000 }).toBe(true)
-  if (await primary.count()) return primary
-  const dialog = page.getByRole('dialog', { name: 'More task settings' })
-  if (!(await dialog.isVisible())) await moreBtn.click()
-  return dialog.getByRole('group', { name: 'Other coding agent engines' }).locator('.sps-engine-btn', { hasText: name })
+export async function draftEngineButton(page: Page, panel: Locator, engineId: string): Promise<Locator> {
+  const picker = draftModelPicker(page)
+  if (!(await picker.isVisible())) await draftModelPill(panel).click()
+  await expect(picker).toBeVisible({ timeout: 10_000 })
+  const button = picker.locator(`.provider-rail-item[data-provider="${engineId}"]`)
+  await expect(button).toBeVisible({ timeout: 15_000 })
+  return button
+}
+
+/** Close the composer model picker with its × and wait until it is gone. */
+export async function closeDraftModelPicker(page: Page): Promise<void> {
+  const picker = draftModelPicker(page)
+  if (await picker.count()) await picker.locator('.model-picker-close').click()
+  await expect(picker).toHaveCount(0)
+}
+
+/**
+ * Pick `engineId` for the draft's launch on the composer's model pill, then close
+ * the picker. Fails loudly when the engine is locked (the fixture's probe override
+ * did not apply, or the draft sits on a remote host).
+ */
+export async function pickDraftEngine(page: Page, panel: Locator, engineId: string): Promise<void> {
+  const button = await draftEngineButton(page, panel, engineId)
+  await expect(button, `${engineId} is locked on this draft`).not.toHaveClass(/provider-rail-item-locked/)
+  if ((await button.getAttribute('aria-selected')) !== 'true') await button.click()
+  await expect(button).toHaveAttribute('aria-selected', 'true')
+  await closeDraftModelPicker(page)
 }

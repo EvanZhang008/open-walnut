@@ -403,8 +403,7 @@ test('AI-suggested dates ride BOTH exits onto the task', async ({ page }) => {
   const parsed = armParse(page)
   await draftComposer(page).type(`Ship the launch checklist ${stamp} by friday 3-5pm`)
   await parsed()
-  // The old meta row stays gone; the dates are chips instead.
-  await expect(panel.locator('.sps-meta-more-btn')).toHaveCount(0)
+  // The dates are chips (the old meta row is gone).
   await expect(draftDecisionChip(panel, 'dueDate').locator('.draft-ai-badge')).toHaveCount(1)
   await expect(draftDecisionChip(panel, 'dueDate')).toHaveClass(/draft-decision-chip-overdue/)
   await expect(draftDecisionChip(panel, 'startDate')).toHaveText(/^Start /)
@@ -421,7 +420,6 @@ test('AI-suggested dates ride BOTH exits onto the task', async ({ page }) => {
   const parsed2 = armParse(page)
   await draftComposer(page).type(`start the checklist ${stamp} friday`)
   await parsed2()
-  await expect(panel2.locator('.sps-meta-more-btn')).toHaveCount(0)
   const launched = page.waitForResponse((res) =>
     res.request().method() === 'POST'
     && new URL(res.url()).pathname === '/api/sessions/quick-start' && res.ok())
@@ -468,7 +466,7 @@ test('Fork opens a pre-bound draft: pinned folder/project, no chips/meta/task-ex
   // No folder chips, no tier/priority row, no task exit — only message + model.
   // C22: and no More and no decision chips either.
   await expect(panel.locator('.draft-quick-chips')).toHaveCount(0)
-  await expect(panel.locator('.pin-tier-options, .sps-meta-more-btn')).toHaveCount(0)
+  await expect(panel.locator('.pin-tier-options')).toHaveCount(0)
   await expect(panel.locator('.draft-more-btn, .draft-decision-row')).toHaveCount(0)
   await expect(draftDecisionChips(panel)).toHaveCount(0)
   await expect(panel.locator('.draft-later-btn')).toHaveCount(0)

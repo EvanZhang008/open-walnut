@@ -18376,99 +18376,21 @@ a.task-kebab-info:hover {
   background: var(--bg-secondary);
 }
 
-/* Task metadata footer — model / engine / Pin tier in the primary row, the rest
-   in the More menu. `container-type: inline-size` lets the primary row drop its
-   least-informative bits (the "Pin" caption) when the launcher is anchored in
-   the narrow todo panel instead of the wide chat column. */
-.sps-meta-footer {
-  position: relative;
-  flex-shrink: 0;
-  border-top: 1px solid var(--border);
-  padding: 8px 10px;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  background: var(--bg-secondary, transparent);
-  container: sps-footer / inline-size;
-}
-/* Edit mode only tightens padding; both modes share the same control layout. */
-.sps-meta-footer.compact {
-  padding: 4px 10px;
-}
-.sps-meta-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-.sps-meta-label {
-  font-size: 11px;
-  color: var(--fg-muted);
-  width: 60px;
-  flex-shrink: 0;
-}
-.sps-meta-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 3px 10px;
-  border-radius: 12px;
-  border: 1px solid var(--border);
-  background: transparent;
-  color: var(--fg-muted);
-  font-size: 11px;
-  cursor: pointer;
-  transition: all 0.12s;
-}
-.sps-meta-toggle:hover { background: var(--bg); }
-.sps-meta-toggle.active {
-  background: var(--accent-subtle);
-  border-color: var(--accent);
-  color: var(--accent);
-}
-.sps-meta-toggle.active.unread {
-  background: #fdecea;
-  border-color: var(--error);
-  color: var(--error);
-}
-[data-theme="dark"] .sps-meta-toggle.active.unread {
-  background: #3a1e1b;
-}
-.sps-meta-toggle-icon {
-  font-size: 12px;
-  line-height: 1;
-}
-
-.sps-meta-priority-options {
-  display: flex;
-  gap: 4px;
-  align-items: center;
-}
-
 /* ── Shared pin-tier picker (PinTierPicker) ──
-   One control for every create surface — the session launcher footer and the
-   Quick Task confirm panel — so the "pinned area" can't drift between them. */
+   One control for every create surface that shows a tier row (the Quick Task
+   confirm panel), so the "pinned area" can't drift between them. */
 .pin-tier-options {
   display: flex;
   gap: 4px;
   align-items: center;
   flex-wrap: wrap;
 }
-/* Inline "Pin" caption (launcher footer only) — the menu version used a
-   fixed-width .sps-meta-label column, which would eat the footer's single row.
-   Hidden below ~520px of footer width: in the narrow todo-anchored launcher the
-   caption is what tips the row into wrapping, and each wrapped row costs a
-   directory-history row (the popover height is fixed at min(44vh, 460px)). The
-   three tier labels are self-explanatory; the group still has an aria-label. */
 .pin-tier-label {
   font-size: 11px;
   color: var(--fg-muted);
   flex-shrink: 0;
 }
-@container sps-footer (max-width: 520px) {
-  .pin-tier-label { display: none; }
-}
-/* ONE segmented control (same shape as .sps-engine-toggle): the tiers are
+/* ONE segmented control: the tiers are
    mutually exclusive answers to one question, so they share a frame with
    hairline dividers instead of reading as a row of unrelated pills. */
 .pin-tier-seg {
@@ -18501,106 +18423,6 @@ a.task-kebab-info:hover {
   background: color-mix(in srgb, currentColor 12%, transparent);
   font-weight: 600;
 }
-.sps-meta-model-select {
-  padding: 2px 22px 2px 8px;
-  border-radius: 10px;
-  border: 1px solid var(--border);
-  background-color: transparent;
-  color: var(--fg);
-  font-size: 11px;
-  font-weight: 500;
-  cursor: pointer;
-  background-position: right 6px center;
-}
-.sps-meta-model-select:hover { background-color: var(--accent-subtle); }
-.sps-meta-more {
-  position: relative;
-  margin-left: auto;
-}
-.sps-meta-more-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  padding: 2px 9px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: transparent;
-  color: var(--fg-muted);
-  font-size: 11px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: background 0.12s, border-color 0.12s, color 0.12s;
-}
-.sps-meta-more-btn:hover { background: var(--accent-subtle); }
-.sps-meta-more-btn.active {
-  background: var(--accent-subtle);
-  border-color: var(--accent);
-  color: var(--accent);
-}
-.sps-meta-more-badge {
-  font-weight: 600;
-}
-/* POPPED OUT (portalled to <body>): position/top/right/maxHeight/z-index all
-   arrive INLINE from useMenuPlacement, so this rule supplies only the free
-   panel's own size — a fixed width regardless of which column hosts the More
-   button (it used to stretch to the host row: full column width in a draft).
-   NO bottom/right offsets here: any stylesheet offset would over-constrain the
-   inline fixed placement (top + bottom with auto height = 0-height panel). */
-.sps-meta-more-popover {
-  width: min(320px, calc(100vw - 24px));
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 10px;
-  background: var(--card-bg);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  box-shadow: var(--card-shadow-hover);
-}
-.sps-meta-more-popover .sps-meta-row {
-  flex-wrap: nowrap;
-}
-/* Start / End / Due pills inside the More menu — same DatePicker trio as the
-   Quick Task form. Wraps (unlike the toggle rows): three dated pills can exceed
-   the popover's min-width and must not force it wide. */
-.sps-meta-dates {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  flex-wrap: wrap;
-  min-width: 0;
-}
-/* One button per engine in the catalog (was hardcoded to two). It WRAPS and is
-   capped at the row width: a six-engine catalog must not push the footer wider
-   than the column hosting it, and a horizontally scrolling segmented control
-   clips its own labels. */
-.sps-engine-toggle {
-  display: inline-flex;
-  flex-wrap: wrap;
-  max-width: 100%;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  overflow: hidden;
-}
-.sps-engine-btn {
-  padding: 2px 10px;
-  border: none;
-  background: transparent;
-  color: var(--fg-muted);
-  font-size: 11px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: background 0.12s, color 0.12s;
-}
-.sps-engine-btn + .sps-engine-btn { border-left: 1px solid var(--border); }
-.sps-engine-btn:hover:not(:disabled) { background: var(--accent-subtle); }
-.sps-engine-btn.active {
-  background: color-mix(in srgb, var(--accent) 15%, transparent);
-  color: var(--fg);
-  font-weight: 600;
-}
-.sps-engine-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
 /* ===== Model Picker ===== */
 
@@ -22657,9 +22479,9 @@ a.tag-chip:focus-visible,
   border-color: var(--accent);
   color: var(--accent);
 }
-/* No MetaFooter lives inside the stack any more (the tier · More row was removed
-   2026-09-15, see DraftLaunchBar); the picker's own footer renders in the POPOUT
-   below, outside this bar, with its regular popover chrome. */
+/* No task-meta row lives inside the stack (the tier · More row was removed
+   2026-09-15, see DraftLaunchBar); the folder picker below picks a folder and a
+   host only (2026-10-29). */
 
 /* The draft's picker no longer anchors inside the column — it POPS OUT
    (`.sps-popout` below): position/top/right/maxHeight arrive inline from

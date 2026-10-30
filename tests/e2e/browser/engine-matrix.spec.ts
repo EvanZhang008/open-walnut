@@ -3,14 +3,14 @@
  * pi, DeepSeek Harness.
  *
  * Same shape as codex-engine.spec.ts, one flow per engine: real UI clicks grow a
- * draft column, open its folder picker, click THAT engine's button in the
- * catalog-driven `.sps-engine-toggle`, confirm a path, send a message — then the
- * real POST body must carry `engine: '<id>'` and the mock ACP agent's reply must
- * stream into the session panel.
+ * draft column, confirm a path in its folder picker, click THAT engine's button
+ * on the catalog-driven provider rail of the composer's model pill, send a
+ * message — then the real POST body must carry `engine: '<id>'` and the mock ACP
+ * agent's reply must stream into the session panel.
  *
  * Why one file for every engine instead of one codex-shaped file each: every ACP
  * engine rides the SAME transport (acp-worker + the fixture's mock adapter), so
- * the per-engine question is only "does the toggle offer it, does the launch carry
+ * the per-engine question is only "does the rail offer it, does the launch carry
  * it, does the panel render it as an ACP session". The deep per-scenario suites
  * (lifecycle, recovery, status parity, model picker) stay codex-only on purpose:
  * they exercise the transport, and duplicating them per engine would multiply
@@ -23,7 +23,9 @@
  */
 import { test, expect, type Locator, type Page } from '@playwright/test'
 import { discoverBrowserFixture, installBrowserAudit } from './codex-test-audit'
-import { REAL_PANEL, basenameOf, draftCwdPill, footerEngineButton, openDraft } from './draft-helpers'
+import {
+  REAL_PANEL, basenameOf, closeDraftModelPicker, draftCwdPill, draftEngineButton, openDraft,
+} from './draft-helpers'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 let fixtureRoot = ''
@@ -36,7 +38,7 @@ test.beforeAll(async () => {
 interface EngineCase {
   /** Wire id, as it must appear in the quick-start body. */
   id: string
-  /** Registry displayName, which is the toggle button's label. */
+  /** Registry displayName (the rail button's tooltip, the session pill's fallback label). */
   displayName: string
 }
 
@@ -49,18 +51,21 @@ const ENGINE_CASES: readonly EngineCase[] = [
 ]
 
 /**
- * "+" → draft column pointed at `cwd` with `displayName`'s engine button clicked.
+ * "+" → draft column pointed at `cwd`, then engine `id` picked on the composer's
+ * model pill.
  *
  * Deliberately NOT `openDraftOnCwd(page, cwd, { engine })`: that helper's engine
- * option is typed to the labels that shipped before the catalog existed, and it
- * has no wait for catalog hydration. The steps are otherwise identical (cwd pill →
- * picker → Local host tab → engine → path → Shift+Enter).
+ * option is typed to the engines that shipped before the catalog existed. The
+ * steps are otherwise identical (cwd pill → picker → Local host tab → path →
+ * Shift+Enter → model pill → provider rail).
  *
- * The hydration wait is the load-bearing difference: the first paint renders the
- * compiled-in default catalog (claude + codex only), and these engines appear one
- * commit later, when GET /api/engines lands.
+ * The folder comes first so the pick lands on the Local host: every engine here
+ * is local-only, and a remote host would lock its rail button. `draftEngineButton`
+ * waits for the button itself, which is the catalog-hydration wait: the first
+ * paint renders the compiled-in default catalog (claude + codex only), and these
+ * engines appear one commit later, when GET /api/engines lands.
  */
-async function openDraftWithEngine(page: Page, cwd: string, displayName: string): Promise<Locator> {
+async function openDraftWithEngine(page: Page, cwd: string, id: string): Promise<Locator> {
   await page.setContent('<a href="/">Open Walnut</a>')
   await page.getByRole('link', { name: 'Open Walnut' }).evaluate((link, url) => { (link as HTMLAnchorElement).href = url }, `http://localhost:${TEST_PORT}/`)
   await page.getByRole('link', { name: 'Open Walnut' }).click()
@@ -77,28 +82,22 @@ async function openDraftWithEngine(page: Page, cwd: string, displayName: string)
   const localTab = picker.locator('.sps-host-tab', { hasText: 'Local' })
   if (await localTab.isVisible()) await localTab.click()
 
-  // Exact label: a substring match would let a short name ("pi") ride inside
-  // another engine's label the day one is added.
-  const exact = new RegExp(`^\\s*${displayName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*$`)
-  // Claude and Codex sit in the footer row; the rest are in its More until used.
-  const button = await footerEngineButton(page, picker, exact)
-  await expect(button).toBeVisible({ timeout: 15_000 })
-  // Enabled = the catalog reports it installed AND the picked host is local; a
-  // disabled button here would mean the fixture's probe override never applied.
-  await expect(button).toBeEnabled()
-  await button.click()
-  // The pick is up front now, lit, whichever list it came from.
-  const picked = picker.locator('.sps-meta-footer .sps-engine-toggle .sps-engine-btn', { hasText: exact })
-  await expect(picked).toHaveClass(/active/)
-  const more = page.getByRole('dialog', { name: 'More task settings' })
-  if (await more.isVisible()) await page.keyboard.press('Escape')
-  await expect(more).toHaveCount(0)
-
   const input = picker.locator('.sps-search-input')
   await input.fill(cwd)
   await input.press('Shift+Enter')
   await expect(picker).toBeHidden()
   await expect(draftCwdPill(panel)).toContainText(basenameOf(cwd))
+
+  // Exact id (`data-provider`), so a short id ("pi") can never ride inside
+  // another engine's name the day one is added.
+  const button = await draftEngineButton(page, panel, id)
+  // Unlocked = the catalog reports it installed AND the picked host is local; a
+  // locked button here would mean the fixture's probe override never applied.
+  await expect(button).not.toHaveClass(/provider-rail-item-locked/)
+  await expect(button).not.toHaveAttribute('aria-disabled', 'true')
+  await button.click()
+  await expect(button).toHaveAttribute('aria-selected', 'true')
+  await closeDraftModelPicker(page)
   return panel
 }
 
@@ -106,7 +105,7 @@ for (const { id, displayName } of ENGINE_CASES) {
   test(`${displayName} quick-start sends engine:${id} and streams the mock-acp reply`, async ({ page }) => {
     test.setTimeout(90_000)
     const audit = await installBrowserAudit(page, walnutHome)
-    const draft = await openDraftWithEngine(page, `${fixtureRoot}/projects/walnut`, displayName)
+    const draft = await openDraftWithEngine(page, `${fixtureRoot}/projects/walnut`, id)
 
     // No route mock: the real POST goes SessionRunner → AcpSession → MockDaemon
     // (real createAcpDaemon) → acp-worker → mock-acp-agent.
@@ -128,8 +127,8 @@ for (const { id, displayName } of ENGINE_CASES) {
 
     expect((await quickStartResponse).status()).toBe(200)
     await expect.poll(() => capturedBody, { timeout: 5000 }).not.toBeNull()
-    // The engine choice survived the confirm, and picking a non-default engine
-    // clears the model (its catalog belongs to the provider).
+    // The engine choice rode the launch, and picking a non-default engine clears
+    // the model (its catalog belongs to the provider).
     expect(capturedBody!.engine).toBe(id)
     expect(capturedBody!.model).toBeUndefined()
 
@@ -154,7 +153,7 @@ for (const { id, displayName } of ENGINE_CASES) {
 test('OpenCode draft lists probed models and the pick rides the launch payload', async ({ page }) => {
   test.setTimeout(90_000)
   const audit = await installBrowserAudit(page, walnutHome)
-  const draft = await openDraftWithEngine(page, `${fixtureRoot}/projects/walnut`, 'OpenCode')
+  const draft = await openDraftWithEngine(page, `${fixtureRoot}/projects/walnut`, 'opencode')
 
   // The draft model pill opens the ACP pane, which must list the PROBED
   // catalog (GET /api/engines/opencode/models — the fixture answers the mock
@@ -250,7 +249,7 @@ test('status updates during native input preserve the draft and the real send pa
     if (data.type === 'req' && data.method === 'session:send') sends.push(data.payload)
   }))
   const audit = await installBrowserAudit(page, walnutHome)
-  const draft = await openDraftWithEngine(page, `${fixtureRoot}/projects/walnut`, 'DeepSeek Harness')
+  const draft = await openDraftWithEngine(page, `${fixtureRoot}/projects/walnut`, 'dsh')
   const launch = page.waitForResponse(response => response.request().method() === 'POST'
     && new URL(response.url()).pathname === '/api/sessions/quick-start')
   await draft.locator('.chat-input-textarea').fill('Start an input regression session')
@@ -302,7 +301,7 @@ test('status updates during native input preserve the draft and the real send pa
 
 test('provider reasoning controls live in the model picker, refresh after model switches, and keep the empty default', async ({ page }) => {
   test.setTimeout(60_000)
-  const draft = await openDraftWithEngine(page, `${fixtureRoot}/projects/walnut`, 'DeepSeek Harness')
+  const draft = await openDraftWithEngine(page, `${fixtureRoot}/projects/walnut`, 'dsh')
   let reasoning = false
   let effort = ''
   let rejectNext = false
@@ -382,7 +381,7 @@ test('provider reasoning controls live in the model picker, refresh after model 
 test('a newly typed path never confirms a stale listing parent or remembered engine', async ({ page }) => {
   const oldPath = `${fixtureRoot}/projects/walnut`
   const nextPath = `${fixtureRoot}/projects/another-workspace`
-  const draft = await openDraftWithEngine(page, oldPath, 'Pi')
+  const draft = await openDraftWithEngine(page, oldPath, 'pi')
   await draftCwdPill(draft).click()
   const picker = page.locator('.session-path-selector')
   const input = picker.locator('.sps-search-input')
@@ -400,9 +399,12 @@ test('a newly typed path never confirms a stale listing parent or remembered eng
     await expect(input).toHaveValue(nextPath)
     await input.press('Shift+Enter')
     await expect(picker).toBeHidden()
+    // The engine picked before the move is still the launch's, not the new
+    // folder's remembered one (a model pill pick owns the engine).
+    await expect(await draftEngineButton(page, draft, 'pi')).toHaveAttribute('aria-selected', 'true')
+    await closeDraftModelPicker(page)
     await draftCwdPill(draft).click()
     await expect(input).toHaveValue(nextPath)
-    await expect(picker.getByRole('button', { name: 'Pi', exact: true })).toHaveClass(/active/)
   } finally {
     release()
     await page.unrouteAll({ behavior: 'wait' })
@@ -414,7 +416,7 @@ test('an engine the server cannot run renders disabled with its reason', async (
   // The fixture forces every engine "installed" (WALNUT_ENGINE_PROBE_ALL=1), which
   // is what makes the launch specs above deterministic — so the unavailable case
   // is driven by stubbing the catalog endpoint instead. Real UI either way: the
-  // toggle renders from whatever GET /api/engines answers.
+  // model pill's provider rail renders from whatever GET /api/engines answers.
   const reason = 'configure engines.custom.adapter_cmd (the ACP adapter argv) to use Custom (ACP)'
   const acpCapabilities = {
     rewind: false,
@@ -472,18 +474,25 @@ test('an engine the server cannot run renders disabled with its reason', async (
   await page.getByRole('link', { name: 'Open Walnut' }).click()
   await expect(page.locator('.main-page')).toBeVisible({ timeout: 30_000 })
   const panel = await openDraft(page)
-  await draftCwdPill(panel).click()
-  const picker = page.locator('.session-path-selector')
-  await expect(picker).toBeVisible({ timeout: 10_000 })
 
-  const unconfigured = await footerEngineButton(page, picker, 'Custom (ACP)')
-  await expect(unconfigured).toBeVisible({ timeout: 15_000 })
-  await expect(unconfigured).toBeDisabled()
+  // The rail draws a locked engine (greyed, a lock badge) instead of hiding it,
+  // and a click on it does nothing.
+  const unconfigured = await draftEngineButton(page, panel, 'custom')
+  await expect(unconfigured).toHaveClass(/provider-rail-item-locked/)
+  await expect(unconfigured).toHaveAttribute('aria-disabled', 'true')
   // The tooltip is the server's actionable reason, not a generic "unavailable".
   await expect(unconfigured).toHaveAttribute('title', reason)
+  // force: Playwright's actionability check treats aria-disabled as disabled and
+  // would wait forever; the click a user can still make must not switch.
+  await unconfigured.click({ force: true })
+  await expect(unconfigured).toHaveAttribute('aria-selected', 'false')
+  await expect(await draftEngineButton(page, panel, 'claude')).toHaveAttribute('aria-selected', 'true')
 
   // Same catalog, installed engine: still clickable. Proves the lock is per-row
   // data, not a blanket "everything new is off".
-  await expect(await footerEngineButton(page, picker, 'Gemini')).toBeEnabled()
+  const gemini = await draftEngineButton(page, panel, 'gemini')
+  await expect(gemini).not.toHaveClass(/provider-rail-item-locked/)
+  await expect(gemini).not.toHaveAttribute('aria-disabled', 'true')
+  await closeDraftModelPicker(page)
   await audit.assertClean()
 })

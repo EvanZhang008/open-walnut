@@ -330,13 +330,20 @@ test('the Ask Walnut tab gets a More-only row that never parses; Fix Walnut and 
   await panel.locator('.session-panel-close').click()
   await expect(draftPanels(page)).toHaveCount(0)
 
-  // C22: the Fix Walnut repair draft has no More and no decision chips.
+  // C22: the Fix Walnut repair draft has no decision chips (no parse writes it),
+  // and since 2026-10-29 it has More for its task fields: the folder picker's
+  // footer, which used to carry them, is gone. No Project row: the server files
+  // every repair under 'Walnut'.
   const drawer = await openAskWalnutDrawer(page)
   await drawer.locator('[data-testid="ask-walnut-fix"]').click()
   const fix = draftPanel(page)
   await expect(fix).toBeVisible({ timeout: 20_000 })
-  await expect(fix.locator('.draft-more-btn')).toHaveCount(0)
   await expect(fix.locator('.draft-decision-chip, .draft-decision-row, .draft-walnut-meta-row')).toHaveCount(0)
+  const fixMenu = await openDraftSettings(fix, 'more')
+  await expect(fixMenu.locator('.task-kebab-tier-btn').filter({ hasText: 'Parked' })).toBeVisible()
+  await expect(fixMenu.locator('[data-testid="draft-menu-project"]')).toHaveCount(0)
+  await page.keyboard.press('Escape')
+  await expect(draftTaskMenu(page)).toHaveCount(0)
   await fix.locator('.session-panel-close').click()
   await expect(draftPanels(page)).toHaveCount(0)
 

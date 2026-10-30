@@ -1,11 +1,10 @@
 /**
  * PinTierPicker — the shared "which tier does this new task land in" control.
  *
- * ONE definition for every create surface (session launcher footer, Quick Task
+ * ONE definition for every create surface that shows a tier row (the Quick Task
  * confirm panel) so the pinned area can't drift between them again: tiers are
  * always visible, one click pins, clicking the active tier unpins. Callers own
- * any stickiness — the session launcher remembers its pick as the next launch's
- * default, the quick-task panel deliberately does not.
+ * any stickiness; the quick-task panel deliberately has none.
  */
 
 import { PIN_TIER_POLICY } from '@open-walnut/core';

@@ -30,17 +30,19 @@ import type { HostLiveState } from './useLiveDirs';
 import { REMOVED_TAB, tabTitle, type HostTab } from './host-tabs';
 import '@/styles/host-picker-settings.css';
 
-/** The tab row: scrolls sideways (never wraps), one title per tab, the selected tab kept in view. */
+/**
+ * The host row: a "Host" caption, then one chip per host, one title per chip.
+ * It WRAPS and never scrolls (2026-10-29, the Mac app: "I could not click a
+ * host"). As a sideways scroller its scrollbar sat over the chips' lower edge,
+ * and WebKit hands a press there to the scrollbar, not the chip; and the last
+ * chips hung half outside the row, clickable only on the visible part.
+ */
 export function HostTabBar({ tabs, selected, dots, onSelect }: {
   tabs: HostTab[]; selected: string; dots: ReadonlyMap<string, HostDot>; onSelect: (key: string) => void;
 }) {
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const el = ref.current?.querySelector<HTMLElement>('.sps-host-tab.active');
-    el?.scrollIntoView?.({ inline: 'nearest', block: 'nearest' });
-  }, [selected]);
   return (
-    <div className="sps-host-filter" ref={ref}>
+    <div className="sps-host-filter" role="group" aria-label="Host">
+      <span className="sps-host-filter-label" aria-hidden>Host</span>
       {tabs.map((tab) => {
         const dot = tab.kind === 'host' ? dots.get(tab.key) : undefined;
         const title = tabTitle(tab, dot);
@@ -49,6 +51,7 @@ export function HostTabBar({ tabs, selected, dots, onSelect }: {
             key={tab.key}
             type="button"
             className={`sps-host-tab${selected === tab.key ? ' active' : ''}${tab.kind === 'removed' ? ' sps-host-tab-removed' : ''}`}
+            aria-pressed={selected === tab.key}
             data-host={tab.kind === 'host' ? tab.key : tab.kind === 'removed' ? REMOVED_TAB : undefined}
             title={title}
             // One accessible name, '{L}: {state}': the dot inside is decorative (it

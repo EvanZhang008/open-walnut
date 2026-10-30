@@ -27,12 +27,12 @@ import type { DraftAiField, DraftColumn } from './draft-column';
  *  `endDate` is not one: it only rides along with an AI start (see applyDraftParse). */
 export type DraftTaskField = 'pinTier' | 'priority' | 'startDate' | 'dueDate';
 
-/** Who owns a task field: 'user' = an edit through More or the picker footer,
+/** Who owns a task field: 'user' = an edit through More (or a chip's menu),
  *  'seed' = a tier "+" header click. An owned field is never written by the AI. */
 export type DraftFieldOwner = 'user' | 'seed';
 
 /** Fields with an owner slot. `unread` is never proposed by the parse, but More
- *  and the footer can own it, and the footer rebase compares it like the rest. */
+ *  can own it, and the picker-confirm rebase compares it like the rest. */
 export type DraftOwnedField = DraftTaskField | 'unread';
 
 /** How a parse reached the draft. 'eager' = mid-typing (may add or change a chip,
@@ -40,9 +40,10 @@ export type DraftOwnedField = DraftTaskField | 'unread';
  *  the composer was emptied (reverts every AI field, legs ignored). */
 export type DraftParseKind = 'eager' | 'trailing' | 'clear';
 
-/** A More / footer edit of task fields. A key PRESENT means edited; an undefined
- *  value means cleared (date) or unpinned (tier). */
-export type DraftTaskFieldPatch = Partial<Pick<QuickStartTaskMeta, 'pinTier' | 'priority' | 'startDate' | 'dueDate' | 'unread'>>;
+/** A More edit of task fields. A key PRESENT means edited; an undefined
+ *  value means cleared (date) or unpinned (tier). `endDate` has no owner slot
+ *  of its own: an edit of it is owned as the start's (applyDraftTaskFieldEdit). */
+export type DraftTaskFieldPatch = Partial<Pick<QuickStartTaskMeta, 'pinTier' | 'priority' | 'startDate' | 'endDate' | 'dueDate' | 'unread'>>;
 
 /** What applyDraftParse accepts: a quick-parse response with the title optional
  *  (the draft never uses it) and every field optional (`{}` = nothing proposed). */
@@ -226,7 +227,7 @@ export function foldTaskFields(
     }
   }
   // The end only lands with an AI start, and goes when the dates leg says the
-  // start no longer has one. An owned start (footer End takeover) owns the end.
+  // start no longer has one. An owned start owns the end.
   if (!draft.fieldOwner?.startDate && ai.has('startDate')) {
     const end = kind === 'clear' ? undefined : parse.end_date || undefined;
     if (end) {

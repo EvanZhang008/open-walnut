@@ -2,8 +2,8 @@
  * Playwright specs for the Codex engine option in Quick Start.
  *
  * Real UI clicks only (no page.goto beyond initial load): open a draft session
- * column from the Homepage "+", open its folder picker, flip the engine toggle
- * to Codex in the MetaFooter, confirm a path, send a message — then verify the
+ * column from the Homepage "+", confirm a path in its folder picker, pick Codex
+ * on the provider rail of the composer's model pill, send a message — then verify the
  * request body carries engine:'codex' and (in the live flow) the mock-acp-agent
  * streams a reply into the session panel with the Codex pill visible.
  *
@@ -19,7 +19,9 @@
 import fs from 'node:fs/promises'
 import { test, expect, type Locator, type Page } from '@playwright/test'
 import { discoverBrowserFixture, installBrowserAudit } from './codex-test-audit'
-import { REAL_PANEL, openDraft, openDraftOnCwd } from './draft-helpers'
+import {
+  REAL_PANEL, closeDraftModelPicker, draftEngineButton, draftModelPicker, draftModelPill, openDraft, openDraftOnCwd,
+} from './draft-helpers'
 
 const SCREENSHOT_DIR = '/tmp/codex-customer-matrix-ui-final'
 const ENGINE_LABEL_SCREENSHOT_DIR = '/tmp/session-engine-labels'
@@ -34,24 +36,23 @@ test.beforeAll(async () => {
 })
 
 /**
- * Open ONLY the picker (no path confirmed): "+" → the draft column's cwd pill.
- * Both locators are scoped to that draft panel, because a picker can be mounted
- * in every open column at once. Use this when a test asserts on picker state
- * BEFORE a path is confirmed; otherwise use `openCodexDraft`.
+ * "+" → a fresh draft column, with NO path confirmed, on a STUBBED working-dirs
+ * list. Use this when a test asserts on the draft's engine before (or right
+ * after) a path is confirmed by hand; otherwise use `openCodexDraft`.
  *
- * The working-dirs response is STUBBED, and that is load-bearing for the two
- * "Claude is the default engine" assertions in this file. Launch memory is
- * per-directory and lives on the SERVER (`frequent-directories.json`
- * `lastLaunch`), written by every quick-start: the Codex tests here launch on
- * `<fixture>/projects/walnut` with engine codex, so that row comes back carrying
- * `lastLaunch:{engine:'codex'}` and the picker — correctly — previews Codex for
- * the highlighted row. Asserting "Claude" against a directory the user last ran
- * Codex in would be asserting a bug. Stubbing with a memory-free directory keeps
- * the claim honest (a fresh dir defaults to Claude) and makes it independent of
- * whatever the other tests in the run have launched. Only the LIST is faked; the
- * picker, the toggle and every downstream launch stay real.
+ * The stub is load-bearing for the two "Claude is the default engine" assertions
+ * in this file. Launch memory is per-directory and lives on the SERVER
+ * (`frequent-directories.json` `lastLaunch`), written by every quick-start: the
+ * Codex tests here launch on `<fixture>/projects/walnut` with engine codex, so
+ * that row comes back carrying `lastLaunch:{engine:'codex'}` and picking that
+ * folder — correctly — switches the draft to Codex. Asserting "Claude" against a
+ * directory the user last ran Codex in would be asserting a bug. Stubbing with a
+ * memory-free directory keeps the claim honest (a fresh dir defaults to Claude)
+ * and makes it independent of whatever the other tests in the run have launched.
+ * Only the LIST is faked; the picker, the model pill and every downstream launch
+ * stay real.
  */
-async function openPicker(page: Page): Promise<{ panel: Locator; picker: Locator }> {
+async function openStubbedDraft(page: Page): Promise<Locator> {
   await page.route('**/api/sessions/working-dirs', async (route) => {
     await route.fulfill({
       status: 200,
@@ -70,7 +71,13 @@ async function openPicker(page: Page): Promise<{ panel: Locator; picker: Locator
   })
   await page.goto('/')
   await expect(page.locator('.main-page')).toBeVisible()
-  const panel = await openDraft(page)
+  return openDraft(page)
+}
+
+/** `openStubbedDraft`, then its folder picker (cwd pill). PAGE scoped: the
+ *  picker portals to <body>, and only one can be open at a time. */
+async function openPicker(page: Page): Promise<{ panel: Locator; picker: Locator }> {
+  const panel = await openStubbedDraft(page)
   await panel.locator('.draft-composer-bar .session-action-chip').first().click()
   const picker = page.locator('.session-path-selector')
   await expect(picker).toBeVisible()
@@ -98,46 +105,45 @@ async function sessionIdForTask(page: Page, taskId: string): Promise<string> {
   return sessionId
 }
 
-test('engine toggle renders in the footer; Codex click hides the Claude model select', async ({ page }) => {
+test('the model pill offers the engines; a Codex click swaps the Claude model list for the Codex pane', async ({ page }) => {
   const audit = await installBrowserAudit(page, walnutHome)
-  const { picker } = await openPicker(page)
+  const panel = await openStubbedDraft(page)
 
-  const toggle = picker.locator('.sps-engine-toggle')
-  await expect(toggle).toBeVisible()
-  // Claude is the default active engine
-  await expect(toggle.locator('.sps-engine-btn', { hasText: 'Claude' })).toHaveClass(/active/)
+  // Claude is the default active engine on the composer's provider rail.
+  const claude = await draftEngineButton(page, panel, 'claude')
+  await expect(claude).toHaveAttribute('aria-selected', 'true')
+  const codex = await draftEngineButton(page, panel, 'codex')
+  await expect(codex).toHaveAttribute('aria-selected', 'false')
 
-  // Model select visible for Claude…
-  await expect(picker.locator('.sps-meta-model-select')).toBeVisible()
+  // The Claude pane lists Claude's own models…
+  const picker = draftModelPicker(page)
+  await expect(picker).not.toHaveClass(/model-picker-acp/)
+  await expect(picker.getByRole('listbox', { name: 'Model', exact: true })).toBeVisible()
 
-  // …flip to Codex → model select disappears (codex models are discovered at
-  // session start; we hide the Claude control instead of emulating it).
-  await toggle.locator('.sps-engine-btn', { hasText: 'Codex' }).click()
-  await expect(toggle.locator('.sps-engine-btn', { hasText: 'Codex' })).toHaveClass(/active/)
-  await expect(picker.locator('.sps-meta-model-select')).not.toBeVisible()
+  // …flip to Codex → the picker swaps to the Codex (ACP) pane, starting on the
+  // engine's own default, and the Claude model the draft held is cleared (the
+  // catalogs don't overlap).
+  await codex.click()
+  await expect(codex).toHaveAttribute('aria-selected', 'true')
+  await expect(claude).toHaveAttribute('aria-selected', 'false')
+  await expect(picker).toHaveClass(/model-picker-acp/)
+  await expect(picker.getByTestId('acp-default-row')).toHaveAttribute('aria-selected', 'true')
+  await expect(draftModelPill(panel)).toHaveAttribute('data-model', '')
+  await closeDraftModelPicker(page)
   await audit.assertClean()
 })
 
 test('quick-start with Codex engine sends engine:codex and shows the Codex chip', async ({ page }) => {
   const audit = await installBrowserAudit(page, walnutHome)
-  // Engine is picked BEFORE the path is confirmed (the footer lives in the picker).
+  // The path is confirmed first, then Codex is picked on the composer's model pill.
   const panel = await openCodexDraft(page)
 
   // The engine choice STUCK to this draft. The collapsed Quick Start bar's Codex
   // chip was the old proof of that, but the chat bar is not on this route — the
-  // draft holds the launch meta itself, so re-open its picker and read the
-  // toggle back (same fact: the confirm did not reset the engine to Claude).
-  await panel.locator('.draft-composer-bar .session-action-chip').first().click()
-  const reopened = page.locator('.session-path-selector')
-  await expect(reopened).toBeVisible()
-  await expect(reopened.locator('.sps-engine-btn', { hasText: 'Codex' })).toHaveClass(/active/)
-  // Esc twice = edit mode → browse → closed. Deliberately NOT an outside click:
-  // dismissing with a path typed re-confirms it, and closing must not be the
-  // thing that keeps the cwd alive here.
-  const reopenedInput = reopened.locator('.sps-search-input')
-  await reopenedInput.press('Escape')
-  await reopenedInput.press('Escape')
-  await expect(reopened).toBeHidden()
+  // draft holds the launch meta itself, so re-open the model pill and read the
+  // provider rail back (same fact: closing the picker did not reset the engine).
+  await expect(await draftEngineButton(page, panel, 'codex')).toHaveAttribute('aria-selected', 'true')
+  await closeDraftModelPicker(page)
 
   // Observe the real quick-start request body. Letting it reach the test server
   // keeps this spec on the same real route/runner path as the live-flow spec.
@@ -323,13 +329,15 @@ test('live Claude Code session uses its engine name on Homepage', async ({ page 
   const localTab = picker.locator('.sps-host-tab', { hasText: 'Local' })
   if (await localTab.isVisible()) await localTab.click()
 
-  // Keep the default Claude engine selected — asserted BEFORE the confirm, which
-  // is why this one drives the picker by hand instead of using openDraftOnCwd.
-  await expect(picker.locator('.sps-engine-btn', { hasText: 'Claude' })).toHaveClass(/active/)
+  // Keep the default Claude engine selected. Driven by hand on the stubbed,
+  // memory-free folder list (see openStubbedDraft) instead of openDraftOnCwd,
+  // whose real list may remember Codex for this folder.
   const pickerInput = picker.locator('.sps-search-input')
   await pickerInput.fill(`${fixtureRoot}/projects/walnut`)
   await pickerInput.press('Shift+Enter')
   await expect(picker).toBeHidden()
+  await expect(await draftEngineButton(page, draft, 'claude')).toHaveAttribute('aria-selected', 'true')
+  await closeDraftModelPicker(page)
 
   const quickStartResponse = page.waitForResponse((response) =>
     response.request().method() === 'POST'

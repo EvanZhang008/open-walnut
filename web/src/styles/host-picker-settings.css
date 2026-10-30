@@ -4,11 +4,19 @@
  * (.settings-addons-ellipsis, .rh-status, .rh-status-error) are not touched.
  */
 
-/* ── Picker: tabs scroll sideways, never wrap; each label caps at 10em ── */
+/* ── Picker: the host chips WRAP and never scroll; each label caps at 10em ──
+   A sideways-scrolling row put its scrollbar over the chips' lower edge, where
+   WebKit gives the press to the scrollbar (see HostTabBar). */
 .session-path-selector .sps-host-filter {
-  flex-wrap: nowrap;
-  overflow-x: auto;
-  scrollbar-width: thin;
+  flex-wrap: wrap;
+  row-gap: 4px;
+}
+.sps-host-filter-label {
+  flex: none;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--fg-muted);
+  margin-right: 2px;
 }
 .session-path-selector .sps-host-tab {
   flex: none;

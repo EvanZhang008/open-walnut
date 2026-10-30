@@ -7,9 +7,10 @@
  * and this is where the user overrides it (2026-09-24).
  *
  * Dates and "start unread" are not launch questions (user, 2026-09-25: nothing
- * to put there at launch). Their rows show only while the value is SET, for
+ * to put there at launch). Their rows show only while a value is SET, for
  * instance a date Walnut read from the text, so its chip still leads somewhere
- * the value can be changed or cleared; once cleared the row goes away.
+ * the value can be changed or cleared; once cleared the row goes away. Any set
+ * date brings the Start and Due rows, and a start its End row.
  *
  * History: until 2026-09-24 this was a "⋮" in the draft HEADER. Walnut's own
  * decisions (the background parse) then became visible chips next to the folder
@@ -33,7 +34,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import type { TaskPriority } from '@open-walnut/core';
-import { ProjectPickerFlyout, TaskActionMenuItems } from '@/components/tasks/TaskKebabMenu';
+import { KebabDateRow, ProjectPickerFlyout, TaskActionMenuItems } from '@/components/tasks/TaskKebabMenu';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import type { QuickStartTaskMeta } from './SessionPathSelector';
 import type { DraftTaskField, DraftTaskFieldPatch } from './draft-column';
@@ -155,6 +156,11 @@ export function DraftTaskMenuPopover({
 
   if (!open || !anchorEl) return null;
   const hasTier = !!meta.pinTier;
+  // Dates are not launch questions: no row until one is set (Walnut read one
+  // from the text). Once one is, the whole Start / End / Due set is here, as it
+  // was in the folder picker's footer before the picker became folder + host
+  // only (2026-10-29): add a due to a start, or move the end Walnut read.
+  const hasDates = !!(meta.startDate || meta.endDate || meta.dueDate);
   return createPortal(
     <div
       ref={menuRef}
@@ -190,14 +196,23 @@ export function DraftTaskMenuPopover({
         onSetPriority={priorityVisible === true
           ? (p) => onChange({ priority: p as QuickStartTaskMeta['priority'] })
           : undefined}
-        onSetStartDate={meta.startDate ? (date) => onChange({ startDate: date ?? undefined }) : undefined}
-        onSetDate={meta.dueDate ? (date) => onChange({ dueDate: date ?? undefined }) : undefined}
+        onSetStartDate={hasDates ? (date) => onChange({ startDate: date ?? undefined }) : undefined}
+        onSetDate={hasDates ? (date) => onChange({ dueDate: date ?? undefined }) : undefined}
         afterAction={() => onClose('select')}
         formatDate={(iso) => formatDraftDate(iso)}
         showPriorityLabels
         litClickAccepts
         walnutPick={walnutPick}
       />
+      {meta.startDate && (
+        <KebabDateRow
+          label="End"
+          testId="draft-task-menu-end"
+          date={meta.endDate}
+          display={meta.endDate ? formatDraftDate(meta.endDate) : ''}
+          onChange={(date) => { onChange({ endDate: date ?? undefined }); onClose('select'); }}
+        />
+      )}
       {meta.unread && (
         <>
           <div className="task-kebab-divider" />

@@ -196,8 +196,9 @@ test('7b. an engine whose modes are its own config options (Codex, ACP) draws no
   await loadHome(page)
   const panel = await openDraft(page)
   await expect(modePill(panel)).toBeVisible()
-  // The folder picker's footer switches the engine; the pill follows the engine
-  // that will actually spawn, the same rule the model pill reads.
+  // The model pill's provider rail switches the engine (pickDraftFolder picks it
+  // after the folder); the mode pill follows the engine that will actually spawn,
+  // the same rule the model pill reads.
   await pickDraftFolder(page, panel, cwd, { engine: 'Codex' })
   await expect(modePill(panel)).toHaveCount(0)
   await expect(modelPill(panel)).toBeVisible()
