@@ -144,7 +144,13 @@ describe('the walls on this machine', () => {
       p.stderr.on('data', (b: Buffer) => { err += b })
       const code2 = await new Promise<number | null>((r) => p.once('exit', r))
       expect(code2, err).toBe(0)
-      expect(JSON.parse(out.trim())).toEqual(['connected', 'EPERM', 'EPERM', 'EPERM', 'EPERM'])
+      // The kernel refuses with EPERM; bun 1.4.4 reports that refusal as ECONNREFUSED
+      // (Node and Python say EPERM). Either is the wall: the denied ports have a
+      // listener, and the allowed one on the same loopback connects.
+      const [first, ...walled] = JSON.parse(out.trim()) as string[]
+      expect(first).toBe('connected')
+      expect(walled).toHaveLength(4)
+      for (const got of walled) expect(['EPERM', 'ECONNREFUSED']).toContain(got)
     } finally { for (const s of [allowed, denied, denied6]) s.close() }
   })
 

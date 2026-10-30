@@ -49,12 +49,19 @@ describe('sqlite on bun', () => {
 
   it('a connection entering WAL mode syncs at checkpoints, as on better-sqlite3, unless it chose its own level', () => {
     // better-sqlite3 (and the built dylib) compile DEFAULT_WAL_SYNCHRONOUS=1; bun's own SQLite on Linux does not.
+    // Read the level after a statement: the compiled-in default (the built dylib)
+    // takes effect when the next transaction opens the WAL database, before that
+    // transaction commits, so `PRAGMA synchronous` right after the switch still
+    // says 2 there (2026-10-30, red on macOS since this test landed). The wrapper's
+    // own NORMAL (bun's SQLite on Linux) is in place at once either way.
     expect(db.pragma('journal_mode = WAL', { simple: true })).toBe('wal')
+    db.prepare('INSERT INTO t (name) VALUES (?)').run('wal')
     expect(db.pragma('synchronous', { simple: true })).toBe(1)
     const own = new Database(path.join(dir, 'own.db'))
     try {
       own.pragma('synchronous = FULL')
       expect(own.pragma('journal_mode = WAL')).toEqual([{ journal_mode: 'wal' }])
+      own.prepare('SELECT count(*) FROM sqlite_master').get()
       expect(own.pragma('synchronous', { simple: true })).toBe(2)
     } finally {
       own.close()
