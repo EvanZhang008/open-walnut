@@ -135,8 +135,14 @@ test.describe('The comment card in Conversation Mode', () => {
     await expect(card(panel).locator('.thread-card-body')).not.toContainText(T.tool2)
     await expect(card(panel).locator('.thread-card-body .tool-run-row')).toHaveCount(0)
     expect(await card(panel).locator('.thread-card-body').innerText()).not.toMatch(/Thinking/)
-    // The timeline still has the step.
+    // The timeline still has the step: inside its turn's fold, the work before
+    // the answer, which opens to it.
+    const stepFold = history(panel).locator('.process-fold', { hasText: 'Ran 1 tool' })
+    await expect(stepFold).toHaveCount(1)
+    await expect(history(panel)).not.toContainText(T.step2)
+    await stepFold.locator('.tool-run-toggle').first().click()
     await expect(history(panel)).toContainText(T.step2)
+    await stepFold.locator('.tool-run-toggle').first().click()
     // A click on plain text, away from the card (and from any turn label,
     // which would open another card), closes it.
     await row(panel, IDS.R1.a).click({ position: { x: 12, y: 10 } })
