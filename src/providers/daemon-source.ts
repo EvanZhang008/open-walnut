@@ -1887,12 +1887,15 @@ function broadcastSessionState(sid, state, extra) {
 // precheck, send-enxio) can't see the true exit code because the process
 // was adopted or died between SIGCHLD and our poll. Tail the JSONL as the
 // authoritative signal — clean completion should not be reported as error.
-function isTurnCompleteExit(jsonlPath) {
+// Only lines this process wrote count: a resume appends to the previous
+// process's stream (outputStartOffset, set at spawn). Keep in sync with
+// daemon-core.ts isTurnCompleteExit.
+function isTurnCompleteExit(jsonlPath, fromOffset = 0) {
   try {
     const stat = fs.statSync(jsonlPath);
-    if (stat.size === 0) return false;
-    const readLen = Math.min(stat.size, 8192);
-    const start = Math.max(0, stat.size - readLen);
+    if (stat.size <= fromOffset) return false;
+    const readLen = Math.min(stat.size - fromOffset, 8192);
+    const start = Math.max(fromOffset, stat.size - readLen);
     const fd = fs.openSync(jsonlPath, 'r');
     const buf = Buffer.alloc(readLen);
     fs.readSync(fd, buf, 0, readLen, start);
@@ -1926,7 +1929,7 @@ function reapSession(sid, code, reason, groupExited = false) {
   // every time claude -p naturally exits at the end of a turn.
   let jsonlAgeMs = null;
   try { jsonlAgeMs = Date.now() - fs.statSync(session.jsonlPath).mtimeMs; } catch {}
-  const cleanExit = isTurnCompleteExit(session.jsonlPath);
+  const cleanExit = isTurnCompleteExit(session.jsonlPath, session.outputStartOffset ?? 0);
   // A DELIBERATE stop is not a failure, and the JSONL tail cannot tell us it
   // happened. Both writers (our idle scanner, and any stop RPC via cmdStop)
   // stamp intentionalStopAt before signalling; the death then lands here through
@@ -2028,9 +2031,11 @@ function reapSession(sid, code, reason, groupExited = false) {
   let stderrTail;
   try {
     const errStat = fs.statSync(session.jsonlPath + '.err');
-    if (errStat.size > 0) {
-      const readLen = Math.min(errStat.size, 4096);
-      const start = Math.max(0, errStat.size - readLen);
+    // What this process wrote (a resume appends to the previous process's).
+    const errFrom = Math.min(session.stderrStartOffset ?? 0, errStat.size);
+    if (errStat.size > errFrom) {
+      const readLen = Math.min(errStat.size - errFrom, 4096);
+      const start = Math.max(errFrom, errStat.size - readLen);
       const fd = fs.openSync(session.jsonlPath + '.err', 'r');
       const buf = Buffer.alloc(readLen);
       fs.readSync(fd, buf, 0, readLen, start);
@@ -6429,6 +6434,7 @@ async function startSessionProcess(cmd, isCurrent, canStart) {
   const cronStartOffset = fs.fstatSync(outputFd).size;
   const cronStartedAt = Date.now();
   const stderrFd = fs.openSync(stderrPath, resume ? 'a' : 'w');
+  const stderrStartOffset = fs.fstatSync(stderrFd).size;
 
   // Touch output file on resume so health checks see fresh mtime
   if (resume) {
@@ -6587,6 +6593,9 @@ async function startSessionProcess(cmd, isCurrent, canStart) {
     reapSession(sid, code == null ? 1 : code, 'proc-exit');
   });
 
+  // What this process writes starts here (reapSession reads only that).
+  sessionData.outputStartOffset = cronStartOffset;
+  sessionData.stderrStartOffset = stderrStartOffset;
   sessionData.cronMetadataOrigin = { identity: cronProcess(sessionData).identity, offset: cronStartOffset, startedAt: cronStartedAt, fresh: !resume };
   sessions.set(sid, sessionData);
   // The command to start it again with, for a host resume (host-resume-core.ts).

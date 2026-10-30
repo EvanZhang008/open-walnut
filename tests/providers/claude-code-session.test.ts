@@ -4395,6 +4395,38 @@ describe('handleRemoteProcessExit — daemon-reported exit is not always an erro
 
     expect(errorOf(busErrors[0])).toContain('Remote session exited with code 1');
   });
+
+  // Claude Code 2.1.314 (2026-10-30) exits 1 and prints the error whenever startup
+  // fails; before, it exited 0 with no output and read as a quiet turn end.
+  it('a CLI that exits before its init line with a message reads "could not start", with the message', () => {
+    const session = makeRemoteSession('startup-fail');
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (session as any)._initSeenThisProcess = false;
+    exit(session, 1, 'Error: Invalid MCP configuration:\nMCP config is not a valid JSON');
+
+    expect(busErrors).toHaveLength(1);
+    const err = errorOf(busErrors[0]);
+    expect(err).toContain('Claude Code could not start (exit code 1)');
+    expect(err).toContain('MCP config is not a valid JSON');
+    expect(session.processStatus).toBe('error');
+  });
+
+  it('the same exit after the CLI started is a plain exit, and a silent exit 0 before init is no error', () => {
+    exit(makeRemoteSession('after-init'), 1, 'Error: something actually broke');
+    expect(errorOf(busErrors[0])).toContain('Session process exited with code 1');
+    expect(errorOf(busErrors[0])).not.toContain('could not start');
+
+    const quiet = makeRemoteSession('quiet-before-init');
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (quiet as any)._initSeenThisProcess = false;
+    exit(quiet, 0, MANAGED_SETTINGS_NOISE);
+    expect(busErrors).toHaveLength(1);
+  });
+
+  it('a startup failure marks its record terminal, so automatic recovery never respawns it', () => {
+    const src = fs.readFileSync(path.join(import.meta.dirname, '../../src/providers/claude-code-session.ts'), 'utf-8');
+    expect(src).toMatch(/if \(startupFailure\) \{\s*await updateSessionRecord\(sid, \{ errorKind: 'terminal', errorMessage: errMsg \}/);
+  });
 });
 
 describe('CLI startup advisories are classified as noise, not failure', () => {

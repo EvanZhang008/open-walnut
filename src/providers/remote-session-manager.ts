@@ -1609,7 +1609,10 @@ export class RemoteSessionManager implements SessionManager {
             this._lastEventAt = Date.now()
             if (this._hasPipe) {
               this._hasPipe = false
-              this._onExit?.((event.exitCode as number | undefined) ?? 1)
+              // The daemon's stderr tail rides this broadcast too: without it a CLI
+              // that failed at startup (exit 1 and its message) read as a bare code.
+              this._onExit?.((event.exitCode as number | undefined) ?? 1,
+                typeof event.stderr === 'string' ? event.stderr : undefined)
             }
           }
         }

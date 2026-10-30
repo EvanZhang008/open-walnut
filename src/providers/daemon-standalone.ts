@@ -5567,6 +5567,7 @@ async function startSessionProcess(cmd: Record<string, unknown>, isCurrent?: () 
   const cronStartOffset = fs.fstatSync(outputFd).size
   const cronStartedAt = Date.now()
   const stderrFd = fs.openSync(stderrPath, resume ? 'a' : 'w')
+  const stderrStartOffset = fs.fstatSync(stderrFd).size
 
   // Touch output file on resume so health checks see fresh mtime
   if (resume) {
@@ -5774,6 +5775,9 @@ async function startSessionProcess(cmd: Record<string, unknown>, isCurrent?: () 
     reapSession(sid, code ?? 1, 'proc-exit')
   })
 
+  // What this process writes starts here (reapSession reads only that).
+  sessionData.outputStartOffset = cronStartOffset
+  sessionData.stderrStartOffset = stderrStartOffset
   sessionData.cronMetadataOrigin = { identity: cronProcess(sessionData).identity, offset: cronStartOffset, startedAt: cronStartedAt, fresh: !resume }
   sessions.set(sid, sessionData)
   // The command to start it again with, for a host resume (host-resume-core.ts).

@@ -107,6 +107,15 @@ export interface CoreSessionData {
    *  Presence means reapSession reports exit code 0 (see the normalization
    *  block there). Optional so adapters and test fixtures stay type-compatible. */
   intentionalStopAt?: number | null
+  /** Bytes the stream file and its `.err` held when THIS daemon spawned the
+   *  process (a `--resume` appends to both). The clean-exit check and the
+   *  stderr tail read only what this process wrote: a resumed CLI that fails at
+   *  startup writes only to stderr, so the whole-file tail was the previous
+   *  turn's `result` and its exit 1 was reported as a clean 0 (Claude Code
+   *  2.1.314 now exits 1 with a message on every startup failure). Unset for an
+   *  adopted process: its start is unknown, and the whole tail is read as before. */
+  outputStartOffset?: number
+  stderrStartOffset?: number
   /** Budget stops retain CLI stop hooks; their owner confirms SIGINT/SIGTERM without a force kill. */
   budgetGracefulStop?: boolean
   /** Turn-retry streak — see decideTurnRetry. Optional so adapters that don't
@@ -421,12 +430,13 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
    * is the authoritative signal that the process died because the turn was
    * over, not because of a crash, OOM, or other failure.
    */
-  function isTurnCompleteExit(jsonlPath: string): boolean {
+  function isTurnCompleteExit(jsonlPath: string, fromOffset = 0): boolean {
     try {
       const stat = fs.statSync(jsonlPath)
-      if (stat.size === 0) return false
-      const readLen = Math.min(stat.size, 8192)
-      const start = Math.max(0, stat.size - readLen)
+      // Only lines this process wrote count (see outputStartOffset).
+      if (stat.size <= fromOffset) return false
+      const readLen = Math.min(stat.size - fromOffset, 8192)
+      const start = Math.max(fromOffset, stat.size - readLen)
       const fd = fs.openSync(jsonlPath, 'r')
       const buf = Buffer.alloc(readLen)
       fs.readSync(fd, buf, 0, readLen, start)
@@ -551,7 +561,7 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
     // SIGCHLD and our poll. Inspect JSONL tail as the authoritative signal —
     // if the CLI finished a turn cleanly, report code=0 so the walnut client
     // treats this as a normal turn boundary, not an error.
-    const cleanExit = isTurnCompleteExit(session.jsonlPath)
+    const cleanExit = isTurnCompleteExit(session.jsonlPath, session.outputStartOffset ?? 0)
     // Age of JSONL matters: a fresh spawn that dies within a few seconds
     // almost certainly never wrote its own type:result, so `cleanExit=true`
     // would be reading the previous turn's residue. Log it so we can spot
@@ -682,9 +692,11 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
     try {
       const errPath = session.jsonlPath + '.err'
       const errStat = fs.statSync(errPath)
-      if (errStat.size > 0) {
-        const readLen = Math.min(errStat.size, 4096)
-        const start = Math.max(0, errStat.size - readLen)
+      // What this process wrote (a resume appends to the previous process's).
+      const errFrom = Math.min(session.stderrStartOffset ?? 0, errStat.size)
+      if (errStat.size > errFrom) {
+        const readLen = Math.min(errStat.size - errFrom, 4096)
+        const start = Math.max(errFrom, errStat.size - readLen)
         const fd = fs.openSync(errPath, 'r')
         const buf = Buffer.alloc(readLen)
         fs.readSync(fd, buf, 0, readLen, start)

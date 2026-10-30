@@ -333,6 +333,40 @@ describe('daemon-source template: reapSession honors the intentional-stop intent
     expect(session.exitCode).toBe(0)
     expect(session.exitReason).toBe('orphan-poll-dead+turn-complete')
   })
+
+  // 2026-10-30: Claude Code 2.1.314 exits 1 with its message whenever startup fails
+  // (before, 0 and no output). A resume appends to the previous process's stream, whose
+  // last line is that process's turn result; read whole, the failure became a clean 0.
+  // The JS twin; tests/providers/daemon-startup-failure-exit.test.ts covers the core.
+  it('a resumed CLI that fails at startup keeps its exit 1 and reports only its own stderr', () => {
+    const h = buildHarness()
+    const session = makeSession('resume-fail', RESULT_TAIL, null)
+    const errPath = session.jsonlPath + '.err'
+    fs.writeFileSync(errPath, 'an advisory the previous process printed\n')
+    Object.assign(session, { outputStartOffset: fs.statSync(session.jsonlPath).size, stderrStartOffset: fs.statSync(errPath).size })
+    fs.appendFileSync(errPath, 'Error: Invalid MCP configuration\n')
+    h.sessions.set('sid-resume-fail', session)
+
+    h.reapSession('sid-resume-fail', 1, 'proc-exit')
+
+    expect(session.exitCode).toBe(1)
+    expect(session.exitReason).toBe('proc-exit')
+    expect(h.broadcastSessionState).toHaveBeenCalledWith('sid-resume-fail', 'dead',
+      expect.objectContaining({ exitCode: 1, stderr: 'Error: Invalid MCP configuration' }))
+  })
+
+  it('a resumed CLI whose own turn ended still reads as a clean end', () => {
+    const h = buildHarness()
+    const session = makeSession('resume-ok', RESULT_TAIL, null)
+    Object.assign(session, { outputStartOffset: fs.statSync(session.jsonlPath).size, stderrStartOffset: 0 })
+    fs.appendFileSync(session.jsonlPath, '{"type":"system","subtype":"init"}\n' + RESULT_TAIL)
+    h.sessions.set('sid-resume-ok', session)
+
+    h.reapSession('sid-resume-ok', -1, 'orphan-poll-dead')
+
+    expect(session.exitCode).toBe(0)
+    expect(session.exitReason).toBe('orphan-poll-dead+turn-complete')
+  })
 })
 
 // ── Parity: the intent stamp must exist in all three twins, once, at the scan ──

@@ -5305,6 +5305,12 @@ export class ClaudeCodeSession {
       return
     }
 
+    // Claude Code could not start this process and said why: it exited before its
+    // init line with a message (2.1.314 exits 1 with the error on every startup
+    // failure; before, it exited 0 with no output). The same spawn fails the same
+    // way, so the record says TERMINAL and nothing resumes it by itself; the next
+    // message the user sends tries again.
+    const startupFailure = !this._initSeenThisProcess && code !== 0 && code !== -1 && !!cleanStderr
     const parts: string[] = []
     if (code === 127) {
       // 127 = the spawn shell could not run the CLI. Its stderr says which half
@@ -5316,9 +5322,11 @@ export class ClaudeCodeSession {
       // "Remote" ONLY when there is an actual remote host — the __local__ daemon
       // takes this path too, and telling a local user to "check remote host
       // configuration" sent them to the wrong settings page (2026-08-10).
-      parts.push(this._host
-        ? `Remote session exited with code ${code}`
-        : `Session process exited with code ${code}`)
+      parts.push(startupFailure
+        ? `Claude Code could not start (exit code ${code})`
+        : this._host
+          ? `Remote session exited with code ${code}`
+          : `Session process exited with code ${code}`)
     }
     if (this._host) parts.push(`[${this._host}]`)
     if (cleanStderr) parts.push(cleanStderr.slice(0, 500))
@@ -5361,6 +5369,12 @@ export class ClaudeCodeSession {
             archive_reason: 'remote_conversation_lost',
             errorMessage: errMsg,
           } as Record<string, unknown>)
+        }
+        // Its own patch for the same reason as the archive: the status write below
+        // is dropped whole in enforce mode, and errorKind is what keeps automatic
+        // recovery from respawning a CLI that cannot start (session-error-kind.ts).
+        if (startupFailure) {
+          await updateSessionRecord(sid, { errorKind: 'terminal', errorMessage: errMsg } as Record<string, unknown>)
         }
         await updateSessionRecord(sid, {
           process_status: 'error',

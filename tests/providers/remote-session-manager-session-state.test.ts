@@ -95,8 +95,15 @@ describe('L2.1 RemoteSessionManager session_state wire-level contract', () => {
     daemon.emitSessionState('sid-test', 'dead', { exitCode: 42 })
     // Poll, never a fixed sleep: the frame crosses a real socket, so a busy event
     // loop runs an expired 30ms timer before it reads the frame.
-    await vi.waitFor(() => expect(onExit).toHaveBeenCalledWith(42))
+    await vi.waitFor(() => expect(onExit).toHaveBeenCalledWith(42, undefined))
     expect(mgr.hasPipe).toBe(false)
+  })
+
+  // A CLI that failed at startup: the daemon's stderr tail rides the broadcast,
+  // so the session shows the message, not a bare exit code.
+  it('M1b: session_state=dead hands the daemon stderr tail to _onExit', async () => {
+    daemon.emitSessionState('sid-test', 'dead', { exitCode: 1, stderr: 'Error: MCP config is not a valid JSON' })
+    await vi.waitFor(() => expect(onExit).toHaveBeenCalledWith(1, 'Error: MCP config is not a valid JSON'))
   })
 
   // M2 — two session_state=dead in a row → _onExit only called once (dedup via _hasPipe)
@@ -105,7 +112,7 @@ describe('L2.1 RemoteSessionManager session_state wire-level contract', () => {
     daemon.emitSessionState('sid-test', 'dead', { exitCode: 99 })
     await framesHandled()
     expect(onExit).toHaveBeenCalledTimes(1)
-    expect(onExit).toHaveBeenCalledWith(7)
+    expect(onExit).toHaveBeenCalledWith(7, undefined)
   })
 
   // M3 — sid mismatch → event ignored
@@ -122,7 +129,7 @@ describe('L2.1 RemoteSessionManager session_state wire-level contract', () => {
     mgr.renameForSession('sid-real')
     daemon.emitSessionState('sid-test', 'dead', { exitCode: 5 })
     await framesHandled()
-    expect(onExit).toHaveBeenCalledWith(5)
+    expect(onExit).toHaveBeenCalledWith(5, undefined)
   })
 
   // M5 — session_state=running {adopted:true} does NOT fire _onExit
@@ -153,7 +160,7 @@ describe('L2.1 RemoteSessionManager session_state wire-level contract', () => {
   it('M7: session_state=dead without exitCode falls back to 1', async () => {
     daemon.emitSessionState('sid-test', 'dead')
     await framesHandled()
-    expect(onExit).toHaveBeenCalledWith(1)
+    expect(onExit).toHaveBeenCalledWith(1, undefined)
   })
 
   // M8 — receiving both legacy `exit` and session_state=dead → only one onExit fire
@@ -177,7 +184,7 @@ describe('L2.1 RemoteSessionManager session_state wire-level contract', () => {
     const ok = await mgr.writeMessage('next turn')
     await new Promise((r) => setTimeout(r, 20))
     expect(ok).toBe(false)                 // send failed → caller falls back to --resume
-    expect(onExit).toHaveBeenCalledWith(0) // real code, NOT hardcoded 1
+    expect(onExit).toHaveBeenCalledWith(0, undefined) // real code, NOT hardcoded 1
     expect(mgr.hasPipe).toBe(false)        // cleanup still ran
   })
 
@@ -188,7 +195,7 @@ describe('L2.1 RemoteSessionManager session_state wire-level contract', () => {
     const ok = await mgr.writeMessage('next turn')
     await new Promise((r) => setTimeout(r, 20))
     expect(ok).toBe(false)
-    expect(onExit).toHaveBeenCalledWith(137)
+    expect(onExit).toHaveBeenCalledWith(137, undefined)
   })
 
   it.each([true, false])('sends markers once using daemon capability=%s', async (supportsMarkers) => {

@@ -103,7 +103,7 @@ describe('RemoteSessionManager.attach() hasPipe seeding', () => {
     await waitFor(() => onExit.mock.calls.length > 0)
 
     expect(onExit).toHaveBeenCalledTimes(1)
-    expect(onExit).toHaveBeenCalledWith(3)
+    expect(onExit).toHaveBeenCalledWith(3, undefined)
     expect(mgr.hasPipe).toBe(false)
   })
 })
