@@ -1821,15 +1821,15 @@ async function askAndApplyTitle(
 
     // Mirror onto the session record so the session panel header and search
     // index pick it up too. Guard: only replace a record title that carries no
-    // human signal — the exact placeholder or empty ("Untitled session" in the
-    // UI is a render-time fallback for empty, never a stored value; a stored
-    // "untitled" would be user-typed and must be kept). A record the user (or
-    // another writer) titled is never clobbered.
+    // human signal: empty, the placeholder, or a title the launch minted from
+    // the first message ("Untitled session" in the UI is a render-time fallback
+    // for empty, never a stored value; a stored "untitled" would be user-typed
+    // and must be kept). A record the user (or another writer) titled is never
+    // clobbered.
     try {
       const { getSessionByClaudeId, updateSessionRecord } = await import('../session-tracker.js');
       const record = await getSessionByClaudeId(sessionId);
-      const recordTitle = (record?.title ?? '').trim();
-      if (record && (recordTitle === '' || recordTitle === placeholder)) {
+      if (record && isLaunchMintedRecordTitle(record, placeholder)) {
         await updateSessionRecord(sessionId, { title });
       }
     } catch { /* record mirror is best-effort; the task title is the visible one */ }
@@ -1847,6 +1847,25 @@ async function askAndApplyTitle(
   } finally {
     autoTitleInFlight.delete(sessionId);
   }
+}
+
+/**
+ * A session record title that carries no human signal: empty, the task's
+ * placeholder, or one of the forms the launch mints from the first message,
+ * which it also stores as the record's description (naming.slice(0, 500)): an
+ * ACP launch's `naming.slice(0, 120)` and a native launch's
+ * `${taskTitle} — ${naming.slice(0, 80)}` (claude-code-session.ts). 2026-10-30:
+ * every OpenCode session kept its prompt's first 120 characters as its title,
+ * because only the placeholder and '' were replaced.
+ */
+export function isLaunchMintedRecordTitle(
+  record: { title?: string; description?: string }, placeholder: string,
+): boolean {
+  const title = (record.title ?? '').trim();
+  if (title === '' || title === placeholder) return true;
+  const naming = record.description ?? '';
+  if (!naming) return false;
+  return title === naming.slice(0, 120).trim() || title === `${placeholder} — ${naming.slice(0, 80)}`.trim();
 }
 
 /**
