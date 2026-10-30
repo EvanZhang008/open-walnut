@@ -206,6 +206,20 @@ export const ORG_REPLY_LANGUAGE_LINE =
   + 'note between tool calls, in the language they asked replies in (their reply-language note and standing rules). What you send to other tasks (task_send, org_send) stays in English.\n\n'
 
 /**
+ * News reaches the user once (2026-10-30 org review: a lead passed a finished result to Main and
+ * wrote the full summary in its own chat, and Main posted it again a minute later; the user read
+ * every piece of news twice). Main announces; the lead's own chat gets one line.
+ */
+export const LEAD_NEWS_ONCE_LINE =
+  'News reaches the user once. When you pass a result up to the main agent (your reply to its request, or a '
+  + 'task_send or org_send to it), the main agent tells the user: end your own turn with one line saying what you '
+  + 'passed and to whom, never the summary again. Tell the user directly only what only you know and they must act on.\n\n'
+
+export const MAIN_NEWS_ONCE_LINE =
+  'News reaches the user once: a result a lead passes up to you is yours to tell, because the lead writes only one '
+  + 'line about it in its own chat.\n\n'
+
+/**
  * 2d. The org above the work (src/core/org/): the main agent talks to one
  * contact per project (its lead, or its one team), never to every task, so its
  * chat stays short. Roles follow the team charter (team-charter.ts): Main sets
@@ -228,6 +242,7 @@ export function orgRoleLine(task: { org_role?: string; project?: string; org_lea
       + 'when work moved: background, mention it only when it matters to what the user says.\n\n'
       + DECISION_CONTEXT_LINE + MAIN_DECISION_LINE
       + ORG_REPLY_LANGUAGE_LINE
+      + MAIN_NEWS_ONCE_LINE
       + BRIEF_LINE
       + MAIN_DELEGATES_LINE
       + MAIN_TRACKING_LINE
@@ -266,6 +281,7 @@ export function orgRoleLine(task: { org_role?: string; project?: string; org_lea
       + 'Walnut wakes you with it under "Waiting on you"; read it and answer or close it.\n\n'
       + DECISION_CONTEXT_LINE + LEAD_DECISION_LINE
       + ORG_REPLY_LANGUAGE_LINE
+      + LEAD_NEWS_ONCE_LINE
       + BRIEF_LINE
       + TASK_ROUTING_CONTRACT + '\n\n'
   }

@@ -13,7 +13,8 @@ import { createMockConstants } from '../../helpers/mock-constants.js'
 
 vi.mock('../../../src/constants.js', () => createMockConstants('walnut-org-messaging-rules'))
 
-import { ORG_REPLY_LANGUAGE_LINE, defaultInstructions } from '../../../src/core/sessions/session-context.js'
+import { LEAD_NEWS_ONCE_LINE, MAIN_NEWS_ONCE_LINE, ORG_REPLY_LANGUAGE_LINE, WALNUT_PROMPT_MARK, defaultInstructions } from '../../../src/core/sessions/session-context.js'
+import { instructionNoticeFor } from '../../../src/core/sessions/instruction-notice.js'
 
 describe('the org messaging rules ride the default instructions', () => {
   it('Main and a lead write their chat in the user\'s language; a worker is not told so', () => {
@@ -31,4 +32,33 @@ describe('the org messaging rules ride the default instructions', () => {
       expect(text).toMatch(/only if the user themself asked this task for a letter or report/)
     }
   })
+
+  // 2026-10-30 org review: a lead passed a result to Main, wrote the whole summary in its own chat,
+  // and Main posted it again; the user read the same news twice.
+  it('news reaches the user once: a lead that passed a result up says one line, Main tells the user', () => {
+    expect(LEAD_NEWS_ONCE_LINE).toMatch(/end your own turn with one line saying what you passed and to whom/)
+    expect(LEAD_NEWS_ONCE_LINE).toMatch(/Tell the user directly only what only you know and they must act on/)
+    expect(MAIN_NEWS_ONCE_LINE).toMatch(/a result a lead passes up to you is yours to tell/)
+    const lead = defaultInstructions({ org_role: 'lead', project: 'Walnut' })
+    const main = defaultInstructions({ org_role: 'main', project: 'Main' })
+    expect(lead).toContain(LEAD_NEWS_ONCE_LINE.trim())
+    expect(lead).not.toContain(MAIN_NEWS_ONCE_LINE.trim())
+    expect(main).toContain(MAIN_NEWS_ONCE_LINE.trim())
+    expect(main).not.toContain(LEAD_NEWS_ONCE_LINE.trim())
+    expect(defaultInstructions({ project: 'Walnut' })).not.toMatch(/News reaches the user once/)
+  })
+
+  it('a running lead and Main spawned before the rule hear it through the instruction notice', () => {
+    for (const [task, line] of [
+      [{ org_role: 'lead', project: 'Walnut' }, LEAD_NEWS_ONCE_LINE],
+      [{ org_role: 'main', project: 'Main' }, MAIN_NEWS_ONCE_LINE],
+    ] as const) {
+      const old = `${WALNUT_PROMPT_MARK}\n` + defaultInstructions(task).split('\n').filter((l) => l.trim() !== line.trim()).join('\n')
+      const notice = instructionNoticeFor({ appliedAppendSystemPrompt: old } as never, task)
+      expect(notice).toContain(line.trim())
+      const current = `${WALNUT_PROMPT_MARK}\n` + defaultInstructions(task)
+      expect(instructionNoticeFor({ appliedAppendSystemPrompt: current } as never, task)).toBeNull()
+    }
+  })
 })
+
