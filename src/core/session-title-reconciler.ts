@@ -28,11 +28,10 @@
  */
 
 import { log } from '../logging/index.js';
-import { withoutAttachmentHeaders } from './sessions/session-uploads.js';
 import { bootPolicy } from './boot-policy.js';
 import { backgroundAiDisabled } from './cheap-model.js';
 import { engineCaps } from './agents/engine-registry.js';
-import { withoutLeadingRiders } from '../lib/history-walnut-riders.js';
+import { ownWordsOf } from './sessions/own-words.js';
 
 const SWEEP_INTERVAL_MS = 5 * 60_000;
 /** First sweep waits for boot to settle (session reconnects, daemon dials). */
@@ -231,7 +230,8 @@ function pickTitleSource(texts: string[]): string {
   const notSlash = (t: string) => {
     // Walnut's notices in front of the words (place note, org digest…) carry no
     // titling signal either.
-    const stripped = withoutAttachmentHeaders(withoutLeadingRiders(t)).trim();
+    // Walnut's own blocks around them (an Ask agent's profile, a recap, hints) neither.
+    const stripped = ownWordsOf(t);
     return stripped && !/^\/[a-z][\w-]*(\s|$)/i.test(stripped) ? stripped : '';
   };
   const substantive = texts.find((t) => {

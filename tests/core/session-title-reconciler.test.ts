@@ -462,4 +462,28 @@ describe('sweepPlaceholderTitles', () => {
       attach.mockRestore();
     }
   });
+
+  // 2026-10-30: an Ask Walnut chat on OpenCode was titled "Walnut agent profile":
+  // an ACP ask's first message opens with the agent's profile block.
+  it('titles from the words after an ACP ask\'s agent profile and hints, never from them', async () => {
+    const { buildAskProfilePrefix } = await import('../../src/core/sessions/ask-profile-prefix.js');
+    const { renderHintBlock } = await import('../../src/core/hints/hint-format.js');
+    const sid = nextSid();
+    const task = await makeTaskAndSession(sid, PLACEHOLDER, { engine: 'codex' });
+    const first = renderHintBlock('session-context', 'You are a Walnut task session.') + '\n\n'
+      + buildAskProfilePrefix({ systemPrompt: 'You are Walnut, a personal AI.\nBe brief.' })
+      + 'fix the docx preview renderer';
+    acpHistoryMock.mockResolvedValue([{ role: 'user', text: first, timestamp: 't1' }]);
+    const attach = vi.spyOn(sessionRunner, 'findOrAttachAcpSession').mockResolvedValue(undefined);
+    try {
+      await sweepPlaceholderTitles();
+      expect(promptAt(0)).toContain('fix the docx preview renderer');
+      expect(promptAt(0)).not.toContain('Walnut agent profile');
+      expect(promptAt(0)).not.toContain('personal AI');
+      expect(promptAt(0)).not.toContain('task session');
+      expect((await getTask(task.id)).title).toBe('Docx preview support');
+    } finally {
+      attach.mockRestore();
+    }
+  });
 });

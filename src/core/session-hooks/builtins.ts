@@ -31,9 +31,7 @@ import { isAwaitingTurnEnd } from '../sessions/self-complete-stop.js';
 import { briefMoveLines, briefNeedsLines, briefPrompt, briefStillOpenLines, keepsBrief, overdueAsks, readBrief } from '../sessions/brief.js';
 import { briefFixPrompt, briefIssues, briefNeedsRewrite, briefVpLines, completeBriefRefs, formatBriefIssues, type BriefIssue } from '../sessions/brief-rules.js';
 import { agentMemoryPrompt, applyAgentMemoryAnswer, keepsAgentMemory, readAgentMemoryField, splitAgentMemory } from '../sessions/agent-memory.js';
-import { withoutLeadingRiders } from '../../lib/history-walnut-riders.js';
 import { setReportPending, __resetReportPending } from '../sessions/report-pending.js';
-import { withoutAttachmentHeaders } from '../sessions/session-uploads.js';
 
 // ── Triage dedup state ──
 // Prevents burst triage dispatches when daemon replays old JSONL events after
@@ -1639,6 +1637,11 @@ async function askAndApplyTitle(
   opts: { maxAttempts?: number; noColdAttach?: boolean; preferBackend?: boolean } = {},
 ): Promise<boolean> {
   const maxAttempts = opts.maxAttempts ?? AUTO_TITLE_MAX_ATTEMPTS;
+  // Every trigger funnels here: the title is read off the person's words, never
+  // off what Walnut put around them (an Ask agent's profile, a recap, hints).
+  const { ownWordsOf } = await import('../sessions/own-words.js');
+  message = ownWordsOf(message);
+  if (!message) return false;
   if (autoTitleInFlight.has(sessionId)) return false;
   if (autoTitleAttemptCount(sessionId) >= maxAttempts) return false;
   autoTitleInFlight.add(sessionId);
@@ -1950,9 +1953,8 @@ export async function autoTitleFromObservedMessage(
   // the notices Walnut put in front of the words (lib/history-walnut-riders.ts).
   // This sees the RAW observed message, so it cannot rely on the history
   // projection's strip. An image-only message leaves nothing.
-  const message = toDisplayedUserText(
-    withoutAttachmentHeaders(withoutLeadingRiders(rawMessage)),
-  ).trim();
+  const { ownWordsOf } = await import('../sessions/own-words.js');
+  const message = toDisplayedUserText(ownWordsOf(rawMessage)).trim();
   if (!message) return false;
   if (/^\/[a-z][\w-]*(\s|$)/i.test(message)) return false; // slash command
 
